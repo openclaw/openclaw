@@ -175,6 +175,36 @@ When validation fails:
 
   </Accordion>
 
+  <Accordion title="Tune gateway channel health monitoring">
+    Control how aggressively the gateway restarts channels that look stale:
+
+    ```json5
+    {
+      gateway: {
+        channelHealthCheckMinutes: 5,
+        channelStaleEventThresholdMinutes: 30,
+        channelMaxRestartsPerHour: 10,
+      },
+      channels: {
+        telegram: {
+          healthMonitor: { enabled: false },
+          accounts: {
+            alerts: {
+              healthMonitor: { enabled: true },
+            },
+          },
+        },
+      },
+    }
+    ```
+
+    - Set `gateway.channelHealthCheckMinutes: 0` to disable health-monitor restarts globally.
+    - `channelStaleEventThresholdMinutes` should be greater than or equal to the check interval.
+    - Use `channels.<provider>.healthMonitor.enabled` or `channels.<provider>.accounts.<id>.healthMonitor.enabled` to disable auto-restarts for one channel or account without disabling the global monitor.
+    - See [Health Checks](/gateway/health) for operational debugging and the [full reference](/gateway/configuration-reference#gateway) for all fields.
+
+  </Accordion>
+
   <Accordion title="Configure sessions and resets">
     Sessions control conversation continuity and isolation:
 

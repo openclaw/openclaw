@@ -1,4 +1,4 @@
-{"generatedBy":"scripts/generate-config-doc-baseline.ts","recordType":"meta","totalPaths":4733}
+{"generatedBy":"scripts/generate-config-doc-baseline.ts","recordType":"meta","totalPaths":4889}
 {"recordType":"path","path":"acp","kind":"core","type":"object","required":false,"deprecated":false,"sensitive":false,"tags":["advanced"],"label":"ACP","help":"ACP runtime controls for enabling dispatch, selecting backends, constraining allowed agent targets, and tuning streamed turn projection behavior.","hasChildren":true}
 {"recordType":"path","path":"acp.allowedAgents","kind":"core","type":"array","required":false,"deprecated":false,"sensitive":false,"tags":["access"],"label":"ACP Allowed Agents","help":"Allowlist of ACP target agent ids permitted for ACP runtime sessions. Empty means no additional allowlist restriction.","hasChildren":true}
 {"recordType":"path","path":"acp.allowedAgents.*","kind":"core","type":"string","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
@@ -101,6 +101,7 @@
 {"recordType":"path","path":"agents.defaults.compaction.recentTurnsPreserve","kind":"core","type":"integer","required":false,"deprecated":false,"sensitive":false,"tags":["advanced"],"label":"Compaction Preserve Recent Turns","help":"Number of most recent user/assistant turns kept verbatim outside safeguard summarization (default: 3). Raise this to preserve exact recent dialogue context, or lower it to maximize compaction savings.","hasChildren":false}
 {"recordType":"path","path":"agents.defaults.compaction.reserveTokens","kind":"core","type":"integer","required":false,"deprecated":false,"sensitive":false,"tags":["auth","security"],"label":"Compaction Reserve Tokens","help":"Token headroom reserved for reply generation and tool output after compaction runs. Use higher reserves for verbose/tool-heavy sessions, and lower reserves when maximizing retained history matters more.","hasChildren":false}
 {"recordType":"path","path":"agents.defaults.compaction.reserveTokensFloor","kind":"core","type":"integer","required":false,"deprecated":false,"sensitive":false,"tags":["auth","security"],"label":"Compaction Reserve Token Floor","help":"Minimum floor enforced for reserveTokens in Pi compaction paths (0 disables the floor guard). Use a non-zero floor to avoid over-aggressive compression under fluctuating token estimates.","hasChildren":false}
+{"recordType":"path","path":"agents.defaults.compaction.timeoutSeconds","kind":"core","type":"integer","required":false,"deprecated":false,"sensitive":false,"tags":["performance"],"label":"Compaction Timeout (Seconds)","help":"Maximum time in seconds allowed for a single compaction operation before it is aborted (default: 900). Increase this for very large sessions that need more time to summarize, or decrease it to fail faster on unresponsive models.","hasChildren":false}
 {"recordType":"path","path":"agents.defaults.contextPruning","kind":"core","type":"object","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":true}
 {"recordType":"path","path":"agents.defaults.contextPruning.hardClear","kind":"core","type":"object","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":true}
 {"recordType":"path","path":"agents.defaults.contextPruning.hardClear.enabled","kind":"core","type":"boolean","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
@@ -143,7 +144,7 @@
 {"recordType":"path","path":"agents.defaults.heartbeat.prompt","kind":"core","type":"string","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
 {"recordType":"path","path":"agents.defaults.heartbeat.session","kind":"core","type":"string","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
 {"recordType":"path","path":"agents.defaults.heartbeat.suppressToolErrorWarnings","kind":"core","type":"boolean","required":false,"deprecated":false,"sensitive":false,"tags":["automation"],"label":"Heartbeat Suppress Tool Error Warnings","help":"Suppress tool error warning payloads during heartbeat runs.","hasChildren":false}
-{"recordType":"path","path":"agents.defaults.heartbeat.target","kind":"core","type":"string","required":false,"deprecated":false,"sensitive":false,"tags":["automation"],"help":"Delivery target (\"last\", \"none\", or a channel id). Known channels: telegram, whatsapp, discord, irc, googlechat, slack, signal, imessage, line, zalouser, zalo, tlon, feishu, nextcloud-talk, msteams, bluebubbles, synology-chat, mattermost, twitch, matrix, nostr.","hasChildren":false}
+{"recordType":"path","path":"agents.defaults.heartbeat.target","kind":"core","type":"string","required":false,"deprecated":false,"sensitive":false,"tags":["automation"],"help":"Delivery target (\"last\", \"none\", or a channel id). Known channels: telegram, whatsapp, discord, irc, googlechat, slack, signal, imessage, line, bluebubbles, feishu, matrix, mattermost, msteams, nextcloud-talk, nostr, synology-chat, tlon, twitch, zalo, zalouser.","hasChildren":false}
 {"recordType":"path","path":"agents.defaults.heartbeat.to","kind":"core","type":"string","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
 {"recordType":"path","path":"agents.defaults.humanDelay","kind":"core","type":"object","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":true}
 {"recordType":"path","path":"agents.defaults.humanDelay.maxMs","kind":"core","type":"integer","required":false,"deprecated":false,"sensitive":false,"tags":["performance"],"label":"Human Delay Max (ms)","help":"Maximum delay in ms for custom humanDelay (default: 2500).","hasChildren":false}
@@ -347,7 +348,7 @@
 {"recordType":"path","path":"agents.list.*.heartbeat.prompt","kind":"core","type":"string","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
 {"recordType":"path","path":"agents.list.*.heartbeat.session","kind":"core","type":"string","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
 {"recordType":"path","path":"agents.list.*.heartbeat.suppressToolErrorWarnings","kind":"core","type":"boolean","required":false,"deprecated":false,"sensitive":false,"tags":["automation"],"label":"Agent Heartbeat Suppress Tool Error Warnings","help":"Suppress tool error warning payloads during heartbeat runs.","hasChildren":false}
-{"recordType":"path","path":"agents.list.*.heartbeat.target","kind":"core","type":"string","required":false,"deprecated":false,"sensitive":false,"tags":["automation"],"help":"Delivery target (\"last\", \"none\", or a channel id). Known channels: telegram, whatsapp, discord, irc, googlechat, slack, signal, imessage, line, zalouser, zalo, tlon, feishu, nextcloud-talk, msteams, bluebubbles, synology-chat, mattermost, twitch, matrix, nostr.","hasChildren":false}
+{"recordType":"path","path":"agents.list.*.heartbeat.target","kind":"core","type":"string","required":false,"deprecated":false,"sensitive":false,"tags":["automation"],"help":"Delivery target (\"last\", \"none\", or a channel id). Known channels: telegram, whatsapp, discord, irc, googlechat, slack, signal, imessage, line, bluebubbles, feishu, matrix, mattermost, msteams, nextcloud-talk, nostr, synology-chat, tlon, twitch, zalo, zalouser.","hasChildren":false}
 {"recordType":"path","path":"agents.list.*.heartbeat.to","kind":"core","type":"string","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
 {"recordType":"path","path":"agents.list.*.humanDelay","kind":"core","type":"object","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":true}
 {"recordType":"path","path":"agents.list.*.humanDelay.maxMs","kind":"core","type":"integer","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
@@ -912,6 +913,8 @@
 {"recordType":"path","path":"channels.discord.accounts.*.guilds.*.toolsBySender.*.deny.*","kind":"channel","type":"string","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
 {"recordType":"path","path":"channels.discord.accounts.*.guilds.*.users","kind":"channel","type":"array","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":true}
 {"recordType":"path","path":"channels.discord.accounts.*.guilds.*.users.*","kind":"channel","type":["number","string"],"required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
+{"recordType":"path","path":"channels.discord.accounts.*.healthMonitor","kind":"channel","type":"object","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":true}
+{"recordType":"path","path":"channels.discord.accounts.*.healthMonitor.enabled","kind":"channel","type":"boolean","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
 {"recordType":"path","path":"channels.discord.accounts.*.heartbeat","kind":"channel","type":"object","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":true}
 {"recordType":"path","path":"channels.discord.accounts.*.heartbeat.showAlerts","kind":"channel","type":"boolean","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
 {"recordType":"path","path":"channels.discord.accounts.*.heartbeat.showOk","kind":"channel","type":"boolean","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
@@ -1165,6 +1168,8 @@
 {"recordType":"path","path":"channels.discord.guilds.*.toolsBySender.*.deny.*","kind":"channel","type":"string","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
 {"recordType":"path","path":"channels.discord.guilds.*.users","kind":"channel","type":"array","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":true}
 {"recordType":"path","path":"channels.discord.guilds.*.users.*","kind":"channel","type":["number","string"],"required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
+{"recordType":"path","path":"channels.discord.healthMonitor","kind":"channel","type":"object","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":true}
+{"recordType":"path","path":"channels.discord.healthMonitor.enabled","kind":"channel","type":"boolean","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
 {"recordType":"path","path":"channels.discord.heartbeat","kind":"channel","type":"object","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":true}
 {"recordType":"path","path":"channels.discord.heartbeat.showAlerts","kind":"channel","type":"boolean","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
 {"recordType":"path","path":"channels.discord.heartbeat.showOk","kind":"channel","type":"boolean","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
@@ -1280,61 +1285,182 @@
 {"recordType":"path","path":"channels.feishu","kind":"channel","type":"object","required":false,"deprecated":false,"sensitive":false,"tags":["channels","network"],"label":"Feishu","help":"飞书/Lark enterprise messaging.","hasChildren":true}
 {"recordType":"path","path":"channels.feishu.accounts","kind":"channel","type":"object","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":true}
 {"recordType":"path","path":"channels.feishu.accounts.*","kind":"channel","type":"object","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":true}
+{"recordType":"path","path":"channels.feishu.accounts.*.actions","kind":"channel","type":"object","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":true}
+{"recordType":"path","path":"channels.feishu.accounts.*.actions.reactions","kind":"channel","type":"boolean","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
+{"recordType":"path","path":"channels.feishu.accounts.*.allowFrom","kind":"channel","type":"array","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":true}
+{"recordType":"path","path":"channels.feishu.accounts.*.allowFrom.*","kind":"channel","type":["number","string"],"required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
 {"recordType":"path","path":"channels.feishu.accounts.*.appId","kind":"channel","type":"string","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
 {"recordType":"path","path":"channels.feishu.accounts.*.appSecret","kind":"channel","type":["object","string"],"required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":true}
 {"recordType":"path","path":"channels.feishu.accounts.*.appSecret.id","kind":"channel","type":"string","required":true,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
 {"recordType":"path","path":"channels.feishu.accounts.*.appSecret.provider","kind":"channel","type":"string","required":true,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
-{"recordType":"path","path":"channels.feishu.accounts.*.appSecret.source","kind":"channel","type":"string","required":true,"enumValues":["env","file","exec"],"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
+{"recordType":"path","path":"channels.feishu.accounts.*.appSecret.source","kind":"channel","type":"string","required":true,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
+{"recordType":"path","path":"channels.feishu.accounts.*.blockStreamingCoalesce","kind":"channel","type":"object","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":true}
+{"recordType":"path","path":"channels.feishu.accounts.*.blockStreamingCoalesce.enabled","kind":"channel","type":"boolean","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
+{"recordType":"path","path":"channels.feishu.accounts.*.blockStreamingCoalesce.maxDelayMs","kind":"channel","type":"integer","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
+{"recordType":"path","path":"channels.feishu.accounts.*.blockStreamingCoalesce.minDelayMs","kind":"channel","type":"integer","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
+{"recordType":"path","path":"channels.feishu.accounts.*.capabilities","kind":"channel","type":"array","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":true}
+{"recordType":"path","path":"channels.feishu.accounts.*.capabilities.*","kind":"channel","type":"string","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
+{"recordType":"path","path":"channels.feishu.accounts.*.chunkMode","kind":"channel","type":"string","required":false,"enumValues":["length","newline"],"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
+{"recordType":"path","path":"channels.feishu.accounts.*.configWrites","kind":"channel","type":"boolean","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
 {"recordType":"path","path":"channels.feishu.accounts.*.connectionMode","kind":"channel","type":"string","required":false,"enumValues":["websocket","webhook"],"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
+{"recordType":"path","path":"channels.feishu.accounts.*.dmHistoryLimit","kind":"channel","type":"integer","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
+{"recordType":"path","path":"channels.feishu.accounts.*.dmPolicy","kind":"channel","type":"string","required":false,"enumValues":["open","pairing","allowlist"],"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
+{"recordType":"path","path":"channels.feishu.accounts.*.dms","kind":"channel","type":"object","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":true}
+{"recordType":"path","path":"channels.feishu.accounts.*.dms.*","kind":"channel","type":"object","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":true}
+{"recordType":"path","path":"channels.feishu.accounts.*.dms.*.enabled","kind":"channel","type":"boolean","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
+{"recordType":"path","path":"channels.feishu.accounts.*.dms.*.systemPrompt","kind":"channel","type":"string","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
 {"recordType":"path","path":"channels.feishu.accounts.*.domain","kind":"channel","type":"string","required":false,"enumValues":["feishu","lark"],"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
 {"recordType":"path","path":"channels.feishu.accounts.*.enabled","kind":"channel","type":"boolean","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
 {"recordType":"path","path":"channels.feishu.accounts.*.encryptKey","kind":"channel","type":["object","string"],"required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":true}
 {"recordType":"path","path":"channels.feishu.accounts.*.encryptKey.id","kind":"channel","type":"string","required":true,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
 {"recordType":"path","path":"channels.feishu.accounts.*.encryptKey.provider","kind":"channel","type":"string","required":true,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
-{"recordType":"path","path":"channels.feishu.accounts.*.encryptKey.source","kind":"channel","type":"string","required":true,"enumValues":["env","file","exec"],"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
+{"recordType":"path","path":"channels.feishu.accounts.*.encryptKey.source","kind":"channel","type":"string","required":true,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
+{"recordType":"path","path":"channels.feishu.accounts.*.groupAllowFrom","kind":"channel","type":"array","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":true}
+{"recordType":"path","path":"channels.feishu.accounts.*.groupAllowFrom.*","kind":"channel","type":["number","string"],"required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
+{"recordType":"path","path":"channels.feishu.accounts.*.groupPolicy","kind":"channel","type":"string","required":false,"enumValues":["open","allowlist","disabled"],"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
+{"recordType":"path","path":"channels.feishu.accounts.*.groups","kind":"channel","type":"object","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":true}
+{"recordType":"path","path":"channels.feishu.accounts.*.groups.*","kind":"channel","type":"object","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":true}
+{"recordType":"path","path":"channels.feishu.accounts.*.groups.*.allowFrom","kind":"channel","type":"array","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":true}
+{"recordType":"path","path":"channels.feishu.accounts.*.groups.*.allowFrom.*","kind":"channel","type":["number","string"],"required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
+{"recordType":"path","path":"channels.feishu.accounts.*.groups.*.enabled","kind":"channel","type":"boolean","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
+{"recordType":"path","path":"channels.feishu.accounts.*.groups.*.groupSessionScope","kind":"channel","type":"string","required":false,"enumValues":["group","group_sender","group_topic","group_topic_sender"],"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
+{"recordType":"path","path":"channels.feishu.accounts.*.groups.*.replyInThread","kind":"channel","type":"string","required":false,"enumValues":["disabled","enabled"],"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
+{"recordType":"path","path":"channels.feishu.accounts.*.groups.*.requireMention","kind":"channel","type":"boolean","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
+{"recordType":"path","path":"channels.feishu.accounts.*.groups.*.skills","kind":"channel","type":"array","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":true}
+{"recordType":"path","path":"channels.feishu.accounts.*.groups.*.skills.*","kind":"channel","type":"string","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
+{"recordType":"path","path":"channels.feishu.accounts.*.groups.*.systemPrompt","kind":"channel","type":"string","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
+{"recordType":"path","path":"channels.feishu.accounts.*.groups.*.tools","kind":"channel","type":"object","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":true}
+{"recordType":"path","path":"channels.feishu.accounts.*.groups.*.tools.allow","kind":"channel","type":"array","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":true}
+{"recordType":"path","path":"channels.feishu.accounts.*.groups.*.tools.allow.*","kind":"channel","type":"string","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
+{"recordType":"path","path":"channels.feishu.accounts.*.groups.*.tools.deny","kind":"channel","type":"array","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":true}
+{"recordType":"path","path":"channels.feishu.accounts.*.groups.*.tools.deny.*","kind":"channel","type":"string","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
+{"recordType":"path","path":"channels.feishu.accounts.*.groups.*.topicSessionMode","kind":"channel","type":"string","required":false,"enumValues":["disabled","enabled"],"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
+{"recordType":"path","path":"channels.feishu.accounts.*.groupSenderAllowFrom","kind":"channel","type":"array","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":true}
+{"recordType":"path","path":"channels.feishu.accounts.*.groupSenderAllowFrom.*","kind":"channel","type":["number","string"],"required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
+{"recordType":"path","path":"channels.feishu.accounts.*.groupSessionScope","kind":"channel","type":"string","required":false,"enumValues":["group","group_sender","group_topic","group_topic_sender"],"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
+{"recordType":"path","path":"channels.feishu.accounts.*.heartbeat","kind":"channel","type":"object","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":true}
+{"recordType":"path","path":"channels.feishu.accounts.*.heartbeat.intervalMs","kind":"channel","type":"integer","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
+{"recordType":"path","path":"channels.feishu.accounts.*.heartbeat.visibility","kind":"channel","type":"string","required":false,"enumValues":["visible","hidden"],"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
+{"recordType":"path","path":"channels.feishu.accounts.*.historyLimit","kind":"channel","type":"integer","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
+{"recordType":"path","path":"channels.feishu.accounts.*.httpTimeoutMs","kind":"channel","type":"integer","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
+{"recordType":"path","path":"channels.feishu.accounts.*.markdown","kind":"channel","type":"object","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":true}
+{"recordType":"path","path":"channels.feishu.accounts.*.markdown.mode","kind":"channel","type":"string","required":false,"enumValues":["native","escape","strip"],"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
+{"recordType":"path","path":"channels.feishu.accounts.*.markdown.tableMode","kind":"channel","type":"string","required":false,"enumValues":["native","ascii","simple"],"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
+{"recordType":"path","path":"channels.feishu.accounts.*.mediaMaxMb","kind":"channel","type":"number","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
 {"recordType":"path","path":"channels.feishu.accounts.*.name","kind":"channel","type":"string","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
+{"recordType":"path","path":"channels.feishu.accounts.*.reactionNotifications","kind":"channel","type":"string","required":false,"enumValues":["off","own","all"],"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
+{"recordType":"path","path":"channels.feishu.accounts.*.renderMode","kind":"channel","type":"string","required":false,"enumValues":["auto","raw","card"],"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
+{"recordType":"path","path":"channels.feishu.accounts.*.replyInThread","kind":"channel","type":"string","required":false,"enumValues":["disabled","enabled"],"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
+{"recordType":"path","path":"channels.feishu.accounts.*.requireMention","kind":"channel","type":"boolean","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
+{"recordType":"path","path":"channels.feishu.accounts.*.resolveSenderNames","kind":"channel","type":"boolean","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
+{"recordType":"path","path":"channels.feishu.accounts.*.streaming","kind":"channel","type":"boolean","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
+{"recordType":"path","path":"channels.feishu.accounts.*.textChunkLimit","kind":"channel","type":"integer","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
+{"recordType":"path","path":"channels.feishu.accounts.*.tools","kind":"channel","type":"object","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":true}
+{"recordType":"path","path":"channels.feishu.accounts.*.tools.chat","kind":"channel","type":"boolean","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
+{"recordType":"path","path":"channels.feishu.accounts.*.tools.doc","kind":"channel","type":"boolean","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
+{"recordType":"path","path":"channels.feishu.accounts.*.tools.drive","kind":"channel","type":"boolean","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
+{"recordType":"path","path":"channels.feishu.accounts.*.tools.perm","kind":"channel","type":"boolean","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
+{"recordType":"path","path":"channels.feishu.accounts.*.tools.scopes","kind":"channel","type":"boolean","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
+{"recordType":"path","path":"channels.feishu.accounts.*.tools.wiki","kind":"channel","type":"boolean","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
+{"recordType":"path","path":"channels.feishu.accounts.*.topicSessionMode","kind":"channel","type":"string","required":false,"enumValues":["disabled","enabled"],"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
+{"recordType":"path","path":"channels.feishu.accounts.*.typingIndicator","kind":"channel","type":"boolean","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
 {"recordType":"path","path":"channels.feishu.accounts.*.verificationToken","kind":"channel","type":["object","string"],"required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":true}
 {"recordType":"path","path":"channels.feishu.accounts.*.verificationToken.id","kind":"channel","type":"string","required":true,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
 {"recordType":"path","path":"channels.feishu.accounts.*.verificationToken.provider","kind":"channel","type":"string","required":true,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
-{"recordType":"path","path":"channels.feishu.accounts.*.verificationToken.source","kind":"channel","type":"string","required":true,"enumValues":["env","file","exec"],"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
+{"recordType":"path","path":"channels.feishu.accounts.*.verificationToken.source","kind":"channel","type":"string","required":true,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
 {"recordType":"path","path":"channels.feishu.accounts.*.webhookHost","kind":"channel","type":"string","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
 {"recordType":"path","path":"channels.feishu.accounts.*.webhookPath","kind":"channel","type":"string","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
 {"recordType":"path","path":"channels.feishu.accounts.*.webhookPort","kind":"channel","type":"integer","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
+{"recordType":"path","path":"channels.feishu.actions","kind":"channel","type":"object","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":true}
+{"recordType":"path","path":"channels.feishu.actions.reactions","kind":"channel","type":"boolean","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
 {"recordType":"path","path":"channels.feishu.allowFrom","kind":"channel","type":"array","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":true}
 {"recordType":"path","path":"channels.feishu.allowFrom.*","kind":"channel","type":["number","string"],"required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
 {"recordType":"path","path":"channels.feishu.appId","kind":"channel","type":"string","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
 {"recordType":"path","path":"channels.feishu.appSecret","kind":"channel","type":["object","string"],"required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":true}
 {"recordType":"path","path":"channels.feishu.appSecret.id","kind":"channel","type":"string","required":true,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
 {"recordType":"path","path":"channels.feishu.appSecret.provider","kind":"channel","type":"string","required":true,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
-{"recordType":"path","path":"channels.feishu.appSecret.source","kind":"channel","type":"string","required":true,"enumValues":["env","file","exec"],"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
+{"recordType":"path","path":"channels.feishu.appSecret.source","kind":"channel","type":"string","required":true,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
+{"recordType":"path","path":"channels.feishu.blockStreamingCoalesce","kind":"channel","type":"object","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":true}
+{"recordType":"path","path":"channels.feishu.blockStreamingCoalesce.enabled","kind":"channel","type":"boolean","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
+{"recordType":"path","path":"channels.feishu.blockStreamingCoalesce.maxDelayMs","kind":"channel","type":"integer","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
+{"recordType":"path","path":"channels.feishu.blockStreamingCoalesce.minDelayMs","kind":"channel","type":"integer","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
+{"recordType":"path","path":"channels.feishu.capabilities","kind":"channel","type":"array","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":true}
+{"recordType":"path","path":"channels.feishu.capabilities.*","kind":"channel","type":"string","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
 {"recordType":"path","path":"channels.feishu.chunkMode","kind":"channel","type":"string","required":false,"enumValues":["length","newline"],"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
-{"recordType":"path","path":"channels.feishu.connectionMode","kind":"channel","type":"string","required":false,"enumValues":["websocket","webhook"],"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
+{"recordType":"path","path":"channels.feishu.configWrites","kind":"channel","type":"boolean","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
+{"recordType":"path","path":"channels.feishu.connectionMode","kind":"channel","type":"string","required":true,"enumValues":["websocket","webhook"],"defaultValue":"websocket","deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
 {"recordType":"path","path":"channels.feishu.defaultAccount","kind":"channel","type":"string","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
 {"recordType":"path","path":"channels.feishu.dmHistoryLimit","kind":"channel","type":"integer","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
-{"recordType":"path","path":"channels.feishu.dmPolicy","kind":"channel","type":"string","required":false,"enumValues":["open","pairing","allowlist"],"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
-{"recordType":"path","path":"channels.feishu.domain","kind":"channel","type":"string","required":false,"enumValues":["feishu","lark"],"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
+{"recordType":"path","path":"channels.feishu.dmPolicy","kind":"channel","type":"string","required":true,"enumValues":["open","pairing","allowlist"],"defaultValue":"pairing","deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
+{"recordType":"path","path":"channels.feishu.dms","kind":"channel","type":"object","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":true}
+{"recordType":"path","path":"channels.feishu.dms.*","kind":"channel","type":"object","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":true}
+{"recordType":"path","path":"channels.feishu.dms.*.enabled","kind":"channel","type":"boolean","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
+{"recordType":"path","path":"channels.feishu.dms.*.systemPrompt","kind":"channel","type":"string","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
+{"recordType":"path","path":"channels.feishu.domain","kind":"channel","type":"string","required":true,"enumValues":["feishu","lark"],"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
+{"recordType":"path","path":"channels.feishu.dynamicAgentCreation","kind":"channel","type":"object","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":true}
+{"recordType":"path","path":"channels.feishu.dynamicAgentCreation.agentDirTemplate","kind":"channel","type":"string","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
+{"recordType":"path","path":"channels.feishu.dynamicAgentCreation.enabled","kind":"channel","type":"boolean","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
+{"recordType":"path","path":"channels.feishu.dynamicAgentCreation.maxAgents","kind":"channel","type":"integer","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
+{"recordType":"path","path":"channels.feishu.dynamicAgentCreation.workspaceTemplate","kind":"channel","type":"string","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
 {"recordType":"path","path":"channels.feishu.enabled","kind":"channel","type":"boolean","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
 {"recordType":"path","path":"channels.feishu.encryptKey","kind":"channel","type":["object","string"],"required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":true}
 {"recordType":"path","path":"channels.feishu.encryptKey.id","kind":"channel","type":"string","required":true,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
 {"recordType":"path","path":"channels.feishu.encryptKey.provider","kind":"channel","type":"string","required":true,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
-{"recordType":"path","path":"channels.feishu.encryptKey.source","kind":"channel","type":"string","required":true,"enumValues":["env","file","exec"],"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
+{"recordType":"path","path":"channels.feishu.encryptKey.source","kind":"channel","type":"string","required":true,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
 {"recordType":"path","path":"channels.feishu.groupAllowFrom","kind":"channel","type":"array","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":true}
 {"recordType":"path","path":"channels.feishu.groupAllowFrom.*","kind":"channel","type":["number","string"],"required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
-{"recordType":"path","path":"channels.feishu.groupPolicy","kind":"channel","type":"string","required":false,"enumValues":["open","allowlist","disabled"],"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
+{"recordType":"path","path":"channels.feishu.groupPolicy","kind":"channel","type":"string","required":true,"enumValues":["open","allowlist","disabled"],"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
+{"recordType":"path","path":"channels.feishu.groups","kind":"channel","type":"object","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":true}
+{"recordType":"path","path":"channels.feishu.groups.*","kind":"channel","type":"object","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":true}
+{"recordType":"path","path":"channels.feishu.groups.*.allowFrom","kind":"channel","type":"array","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":true}
+{"recordType":"path","path":"channels.feishu.groups.*.allowFrom.*","kind":"channel","type":["number","string"],"required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
+{"recordType":"path","path":"channels.feishu.groups.*.enabled","kind":"channel","type":"boolean","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
+{"recordType":"path","path":"channels.feishu.groups.*.groupSessionScope","kind":"channel","type":"string","required":false,"enumValues":["group","group_sender","group_topic","group_topic_sender"],"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
+{"recordType":"path","path":"channels.feishu.groups.*.replyInThread","kind":"channel","type":"string","required":false,"enumValues":["disabled","enabled"],"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
+{"recordType":"path","path":"channels.feishu.groups.*.requireMention","kind":"channel","type":"boolean","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
+{"recordType":"path","path":"channels.feishu.groups.*.skills","kind":"channel","type":"array","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":true}
+{"recordType":"path","path":"channels.feishu.groups.*.skills.*","kind":"channel","type":"string","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
+{"recordType":"path","path":"channels.feishu.groups.*.systemPrompt","kind":"channel","type":"string","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
+{"recordType":"path","path":"channels.feishu.groups.*.tools","kind":"channel","type":"object","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":true}
+{"recordType":"path","path":"channels.feishu.groups.*.tools.allow","kind":"channel","type":"array","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":true}
+{"recordType":"path","path":"channels.feishu.groups.*.tools.allow.*","kind":"channel","type":"string","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
+{"recordType":"path","path":"channels.feishu.groups.*.tools.deny","kind":"channel","type":"array","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":true}
+{"recordType":"path","path":"channels.feishu.groups.*.tools.deny.*","kind":"channel","type":"string","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
+{"recordType":"path","path":"channels.feishu.groups.*.topicSessionMode","kind":"channel","type":"string","required":false,"enumValues":["disabled","enabled"],"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
+{"recordType":"path","path":"channels.feishu.groupSenderAllowFrom","kind":"channel","type":"array","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":true}
+{"recordType":"path","path":"channels.feishu.groupSenderAllowFrom.*","kind":"channel","type":["number","string"],"required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
 {"recordType":"path","path":"channels.feishu.groupSessionScope","kind":"channel","type":"string","required":false,"enumValues":["group","group_sender","group_topic","group_topic_sender"],"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
+{"recordType":"path","path":"channels.feishu.heartbeat","kind":"channel","type":"object","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":true}
+{"recordType":"path","path":"channels.feishu.heartbeat.intervalMs","kind":"channel","type":"integer","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
+{"recordType":"path","path":"channels.feishu.heartbeat.visibility","kind":"channel","type":"string","required":false,"enumValues":["visible","hidden"],"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
 {"recordType":"path","path":"channels.feishu.historyLimit","kind":"channel","type":"integer","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
+{"recordType":"path","path":"channels.feishu.httpTimeoutMs","kind":"channel","type":"integer","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
+{"recordType":"path","path":"channels.feishu.markdown","kind":"channel","type":"object","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":true}
+{"recordType":"path","path":"channels.feishu.markdown.mode","kind":"channel","type":"string","required":false,"enumValues":["native","escape","strip"],"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
+{"recordType":"path","path":"channels.feishu.markdown.tableMode","kind":"channel","type":"string","required":false,"enumValues":["native","ascii","simple"],"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
 {"recordType":"path","path":"channels.feishu.mediaMaxMb","kind":"channel","type":"number","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
+{"recordType":"path","path":"channels.feishu.reactionNotifications","kind":"channel","type":"string","required":true,"enumValues":["off","own","all"],"defaultValue":"own","deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
 {"recordType":"path","path":"channels.feishu.renderMode","kind":"channel","type":"string","required":false,"enumValues":["auto","raw","card"],"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
 {"recordType":"path","path":"channels.feishu.replyInThread","kind":"channel","type":"string","required":false,"enumValues":["disabled","enabled"],"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
-{"recordType":"path","path":"channels.feishu.requireMention","kind":"channel","type":"boolean","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
+{"recordType":"path","path":"channels.feishu.requireMention","kind":"channel","type":"boolean","required":true,"defaultValue":true,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
+{"recordType":"path","path":"channels.feishu.resolveSenderNames","kind":"channel","type":"boolean","required":true,"defaultValue":true,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
+{"recordType":"path","path":"channels.feishu.streaming","kind":"channel","type":"boolean","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
 {"recordType":"path","path":"channels.feishu.textChunkLimit","kind":"channel","type":"integer","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
+{"recordType":"path","path":"channels.feishu.tools","kind":"channel","type":"object","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":true}
+{"recordType":"path","path":"channels.feishu.tools.chat","kind":"channel","type":"boolean","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
+{"recordType":"path","path":"channels.feishu.tools.doc","kind":"channel","type":"boolean","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
+{"recordType":"path","path":"channels.feishu.tools.drive","kind":"channel","type":"boolean","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
+{"recordType":"path","path":"channels.feishu.tools.perm","kind":"channel","type":"boolean","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
+{"recordType":"path","path":"channels.feishu.tools.scopes","kind":"channel","type":"boolean","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
+{"recordType":"path","path":"channels.feishu.tools.wiki","kind":"channel","type":"boolean","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
 {"recordType":"path","path":"channels.feishu.topicSessionMode","kind":"channel","type":"string","required":false,"enumValues":["disabled","enabled"],"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
+{"recordType":"path","path":"channels.feishu.typingIndicator","kind":"channel","type":"boolean","required":true,"defaultValue":true,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
 {"recordType":"path","path":"channels.feishu.verificationToken","kind":"channel","type":["object","string"],"required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":true}
 {"recordType":"path","path":"channels.feishu.verificationToken.id","kind":"channel","type":"string","required":true,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
 {"recordType":"path","path":"channels.feishu.verificationToken.provider","kind":"channel","type":"string","required":true,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
-{"recordType":"path","path":"channels.feishu.verificationToken.source","kind":"channel","type":"string","required":true,"enumValues":["env","file","exec"],"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
+{"recordType":"path","path":"channels.feishu.verificationToken.source","kind":"channel","type":"string","required":true,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
 {"recordType":"path","path":"channels.feishu.webhookHost","kind":"channel","type":"string","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
-{"recordType":"path","path":"channels.feishu.webhookPath","kind":"channel","type":"string","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
+{"recordType":"path","path":"channels.feishu.webhookPath","kind":"channel","type":"string","required":true,"defaultValue":"/feishu/events","deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
 {"recordType":"path","path":"channels.feishu.webhookPort","kind":"channel","type":"integer","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
 {"recordType":"path","path":"channels.googlechat","kind":"channel","type":"object","required":false,"deprecated":false,"sensitive":false,"tags":["channels","network"],"label":"Google Chat","help":"Google Workspace Chat app with HTTP webhook.","hasChildren":true}
 {"recordType":"path","path":"channels.googlechat.accounts","kind":"channel","type":"object","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":true}
@@ -1342,6 +1468,7 @@
 {"recordType":"path","path":"channels.googlechat.accounts.*.actions","kind":"channel","type":"object","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":true}
 {"recordType":"path","path":"channels.googlechat.accounts.*.actions.reactions","kind":"channel","type":"boolean","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
 {"recordType":"path","path":"channels.googlechat.accounts.*.allowBots","kind":"channel","type":"boolean","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
+{"recordType":"path","path":"channels.googlechat.accounts.*.appPrincipal","kind":"channel","type":"string","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
 {"recordType":"path","path":"channels.googlechat.accounts.*.audience","kind":"channel","type":"string","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
 {"recordType":"path","path":"channels.googlechat.accounts.*.audienceType","kind":"channel","type":"string","required":false,"enumValues":["app-url","project-number"],"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
 {"recordType":"path","path":"channels.googlechat.accounts.*.blockStreaming","kind":"channel","type":"boolean","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
@@ -1377,6 +1504,8 @@
 {"recordType":"path","path":"channels.googlechat.accounts.*.groups.*.systemPrompt","kind":"channel","type":"string","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
 {"recordType":"path","path":"channels.googlechat.accounts.*.groups.*.users","kind":"channel","type":"array","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":true}
 {"recordType":"path","path":"channels.googlechat.accounts.*.groups.*.users.*","kind":"channel","type":["number","string"],"required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
+{"recordType":"path","path":"channels.googlechat.accounts.*.healthMonitor","kind":"channel","type":"object","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":true}
+{"recordType":"path","path":"channels.googlechat.accounts.*.healthMonitor.enabled","kind":"channel","type":"boolean","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
 {"recordType":"path","path":"channels.googlechat.accounts.*.historyLimit","kind":"channel","type":"integer","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
 {"recordType":"path","path":"channels.googlechat.accounts.*.mediaMaxMb","kind":"channel","type":"number","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
 {"recordType":"path","path":"channels.googlechat.accounts.*.name","kind":"channel","type":"string","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
@@ -1401,6 +1530,7 @@
 {"recordType":"path","path":"channels.googlechat.actions","kind":"channel","type":"object","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":true}
 {"recordType":"path","path":"channels.googlechat.actions.reactions","kind":"channel","type":"boolean","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
 {"recordType":"path","path":"channels.googlechat.allowBots","kind":"channel","type":"boolean","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
+{"recordType":"path","path":"channels.googlechat.appPrincipal","kind":"channel","type":"string","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
 {"recordType":"path","path":"channels.googlechat.audience","kind":"channel","type":"string","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
 {"recordType":"path","path":"channels.googlechat.audienceType","kind":"channel","type":"string","required":false,"enumValues":["app-url","project-number"],"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
 {"recordType":"path","path":"channels.googlechat.blockStreaming","kind":"channel","type":"boolean","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
@@ -1437,6 +1567,8 @@
 {"recordType":"path","path":"channels.googlechat.groups.*.systemPrompt","kind":"channel","type":"string","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
 {"recordType":"path","path":"channels.googlechat.groups.*.users","kind":"channel","type":"array","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":true}
 {"recordType":"path","path":"channels.googlechat.groups.*.users.*","kind":"channel","type":["number","string"],"required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
+{"recordType":"path","path":"channels.googlechat.healthMonitor","kind":"channel","type":"object","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":true}
+{"recordType":"path","path":"channels.googlechat.healthMonitor.enabled","kind":"channel","type":"boolean","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
 {"recordType":"path","path":"channels.googlechat.historyLimit","kind":"channel","type":"integer","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
 {"recordType":"path","path":"channels.googlechat.mediaMaxMb","kind":"channel","type":"number","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
 {"recordType":"path","path":"channels.googlechat.name","kind":"channel","type":"string","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
@@ -1504,6 +1636,8 @@
 {"recordType":"path","path":"channels.imessage.accounts.*.groups.*.toolsBySender.*.alsoAllow.*","kind":"channel","type":"string","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
 {"recordType":"path","path":"channels.imessage.accounts.*.groups.*.toolsBySender.*.deny","kind":"channel","type":"array","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":true}
 {"recordType":"path","path":"channels.imessage.accounts.*.groups.*.toolsBySender.*.deny.*","kind":"channel","type":"string","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
+{"recordType":"path","path":"channels.imessage.accounts.*.healthMonitor","kind":"channel","type":"object","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":true}
+{"recordType":"path","path":"channels.imessage.accounts.*.healthMonitor.enabled","kind":"channel","type":"boolean","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
 {"recordType":"path","path":"channels.imessage.accounts.*.heartbeat","kind":"channel","type":"object","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":true}
 {"recordType":"path","path":"channels.imessage.accounts.*.heartbeat.showAlerts","kind":"channel","type":"boolean","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
 {"recordType":"path","path":"channels.imessage.accounts.*.heartbeat.showOk","kind":"channel","type":"boolean","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
@@ -1565,6 +1699,8 @@
 {"recordType":"path","path":"channels.imessage.groups.*.toolsBySender.*.alsoAllow.*","kind":"channel","type":"string","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
 {"recordType":"path","path":"channels.imessage.groups.*.toolsBySender.*.deny","kind":"channel","type":"array","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":true}
 {"recordType":"path","path":"channels.imessage.groups.*.toolsBySender.*.deny.*","kind":"channel","type":"string","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
+{"recordType":"path","path":"channels.imessage.healthMonitor","kind":"channel","type":"object","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":true}
+{"recordType":"path","path":"channels.imessage.healthMonitor.enabled","kind":"channel","type":"boolean","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
 {"recordType":"path","path":"channels.imessage.heartbeat","kind":"channel","type":"object","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":true}
 {"recordType":"path","path":"channels.imessage.heartbeat.showAlerts","kind":"channel","type":"boolean","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
 {"recordType":"path","path":"channels.imessage.heartbeat.showOk","kind":"channel","type":"boolean","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
@@ -1969,6 +2105,8 @@
 {"recordType":"path","path":"channels.msteams.groupAllowFrom","kind":"channel","type":"array","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":true}
 {"recordType":"path","path":"channels.msteams.groupAllowFrom.*","kind":"channel","type":"string","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
 {"recordType":"path","path":"channels.msteams.groupPolicy","kind":"channel","type":"string","required":true,"enumValues":["open","disabled","allowlist"],"defaultValue":"allowlist","deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
+{"recordType":"path","path":"channels.msteams.healthMonitor","kind":"channel","type":"object","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":true}
+{"recordType":"path","path":"channels.msteams.healthMonitor.enabled","kind":"channel","type":"boolean","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
 {"recordType":"path","path":"channels.msteams.heartbeat","kind":"channel","type":"object","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":true}
 {"recordType":"path","path":"channels.msteams.heartbeat.showAlerts","kind":"channel","type":"boolean","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
 {"recordType":"path","path":"channels.msteams.heartbeat.showOk","kind":"channel","type":"boolean","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
@@ -2214,6 +2352,8 @@
 {"recordType":"path","path":"channels.signal.accounts.*.groups.*.toolsBySender.*.alsoAllow.*","kind":"channel","type":"string","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
 {"recordType":"path","path":"channels.signal.accounts.*.groups.*.toolsBySender.*.deny","kind":"channel","type":"array","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":true}
 {"recordType":"path","path":"channels.signal.accounts.*.groups.*.toolsBySender.*.deny.*","kind":"channel","type":"string","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
+{"recordType":"path","path":"channels.signal.accounts.*.healthMonitor","kind":"channel","type":"object","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":true}
+{"recordType":"path","path":"channels.signal.accounts.*.healthMonitor.enabled","kind":"channel","type":"boolean","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
 {"recordType":"path","path":"channels.signal.accounts.*.heartbeat","kind":"channel","type":"object","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":true}
 {"recordType":"path","path":"channels.signal.accounts.*.heartbeat.showAlerts","kind":"channel","type":"boolean","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
 {"recordType":"path","path":"channels.signal.accounts.*.heartbeat.showOk","kind":"channel","type":"boolean","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
@@ -2282,6 +2422,8 @@
 {"recordType":"path","path":"channels.signal.groups.*.toolsBySender.*.alsoAllow.*","kind":"channel","type":"string","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
 {"recordType":"path","path":"channels.signal.groups.*.toolsBySender.*.deny","kind":"channel","type":"array","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":true}
 {"recordType":"path","path":"channels.signal.groups.*.toolsBySender.*.deny.*","kind":"channel","type":"string","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
+{"recordType":"path","path":"channels.signal.healthMonitor","kind":"channel","type":"object","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":true}
+{"recordType":"path","path":"channels.signal.healthMonitor.enabled","kind":"channel","type":"boolean","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
 {"recordType":"path","path":"channels.signal.heartbeat","kind":"channel","type":"object","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":true}
 {"recordType":"path","path":"channels.signal.heartbeat.showAlerts","kind":"channel","type":"boolean","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
 {"recordType":"path","path":"channels.signal.heartbeat.showOk","kind":"channel","type":"boolean","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
@@ -2386,6 +2528,8 @@
 {"recordType":"path","path":"channels.slack.accounts.*.dms.*.historyLimit","kind":"channel","type":"integer","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
 {"recordType":"path","path":"channels.slack.accounts.*.enabled","kind":"channel","type":"boolean","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
 {"recordType":"path","path":"channels.slack.accounts.*.groupPolicy","kind":"channel","type":"string","required":false,"enumValues":["open","disabled","allowlist"],"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
+{"recordType":"path","path":"channels.slack.accounts.*.healthMonitor","kind":"channel","type":"object","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":true}
+{"recordType":"path","path":"channels.slack.accounts.*.healthMonitor.enabled","kind":"channel","type":"boolean","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
 {"recordType":"path","path":"channels.slack.accounts.*.heartbeat","kind":"channel","type":"object","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":true}
 {"recordType":"path","path":"channels.slack.accounts.*.heartbeat.showAlerts","kind":"channel","type":"boolean","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
 {"recordType":"path","path":"channels.slack.accounts.*.heartbeat.showOk","kind":"channel","type":"boolean","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
@@ -2509,6 +2653,8 @@
 {"recordType":"path","path":"channels.slack.dms.*.historyLimit","kind":"channel","type":"integer","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
 {"recordType":"path","path":"channels.slack.enabled","kind":"channel","type":"boolean","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
 {"recordType":"path","path":"channels.slack.groupPolicy","kind":"channel","type":"string","required":true,"enumValues":["open","disabled","allowlist"],"defaultValue":"allowlist","deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
+{"recordType":"path","path":"channels.slack.healthMonitor","kind":"channel","type":"object","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":true}
+{"recordType":"path","path":"channels.slack.healthMonitor.enabled","kind":"channel","type":"boolean","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
 {"recordType":"path","path":"channels.slack.heartbeat","kind":"channel","type":"object","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":true}
 {"recordType":"path","path":"channels.slack.heartbeat.showAlerts","kind":"channel","type":"boolean","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
 {"recordType":"path","path":"channels.slack.heartbeat.showOk","kind":"channel","type":"boolean","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
@@ -2688,6 +2834,8 @@
 {"recordType":"path","path":"channels.telegram.accounts.*.groups.*.topics.*.skills","kind":"channel","type":"array","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":true}
 {"recordType":"path","path":"channels.telegram.accounts.*.groups.*.topics.*.skills.*","kind":"channel","type":"string","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
 {"recordType":"path","path":"channels.telegram.accounts.*.groups.*.topics.*.systemPrompt","kind":"channel","type":"string","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
+{"recordType":"path","path":"channels.telegram.accounts.*.healthMonitor","kind":"channel","type":"object","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":true}
+{"recordType":"path","path":"channels.telegram.accounts.*.healthMonitor.enabled","kind":"channel","type":"boolean","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
 {"recordType":"path","path":"channels.telegram.accounts.*.heartbeat","kind":"channel","type":"object","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":true}
 {"recordType":"path","path":"channels.telegram.accounts.*.heartbeat.showAlerts","kind":"channel","type":"boolean","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
 {"recordType":"path","path":"channels.telegram.accounts.*.heartbeat.showOk","kind":"channel","type":"boolean","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
@@ -2862,6 +3010,8 @@
 {"recordType":"path","path":"channels.telegram.groups.*.topics.*.skills","kind":"channel","type":"array","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":true}
 {"recordType":"path","path":"channels.telegram.groups.*.topics.*.skills.*","kind":"channel","type":"string","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
 {"recordType":"path","path":"channels.telegram.groups.*.topics.*.systemPrompt","kind":"channel","type":"string","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
+{"recordType":"path","path":"channels.telegram.healthMonitor","kind":"channel","type":"object","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":true}
+{"recordType":"path","path":"channels.telegram.healthMonitor.enabled","kind":"channel","type":"boolean","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
 {"recordType":"path","path":"channels.telegram.heartbeat","kind":"channel","type":"object","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":true}
 {"recordType":"path","path":"channels.telegram.heartbeat.showAlerts","kind":"channel","type":"boolean","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
 {"recordType":"path","path":"channels.telegram.heartbeat.showOk","kind":"channel","type":"boolean","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
@@ -3032,6 +3182,8 @@
 {"recordType":"path","path":"channels.whatsapp.accounts.*.groups.*.toolsBySender.*.alsoAllow.*","kind":"channel","type":"string","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
 {"recordType":"path","path":"channels.whatsapp.accounts.*.groups.*.toolsBySender.*.deny","kind":"channel","type":"array","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":true}
 {"recordType":"path","path":"channels.whatsapp.accounts.*.groups.*.toolsBySender.*.deny.*","kind":"channel","type":"string","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
+{"recordType":"path","path":"channels.whatsapp.accounts.*.healthMonitor","kind":"channel","type":"object","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":true}
+{"recordType":"path","path":"channels.whatsapp.accounts.*.healthMonitor.enabled","kind":"channel","type":"boolean","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
 {"recordType":"path","path":"channels.whatsapp.accounts.*.heartbeat","kind":"channel","type":"object","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":true}
 {"recordType":"path","path":"channels.whatsapp.accounts.*.heartbeat.showAlerts","kind":"channel","type":"boolean","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
 {"recordType":"path","path":"channels.whatsapp.accounts.*.heartbeat.showOk","kind":"channel","type":"boolean","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
@@ -3095,6 +3247,8 @@
 {"recordType":"path","path":"channels.whatsapp.groups.*.toolsBySender.*.alsoAllow.*","kind":"channel","type":"string","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
 {"recordType":"path","path":"channels.whatsapp.groups.*.toolsBySender.*.deny","kind":"channel","type":"array","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":true}
 {"recordType":"path","path":"channels.whatsapp.groups.*.toolsBySender.*.deny.*","kind":"channel","type":"string","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
+{"recordType":"path","path":"channels.whatsapp.healthMonitor","kind":"channel","type":"object","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":true}
+{"recordType":"path","path":"channels.whatsapp.healthMonitor.enabled","kind":"channel","type":"boolean","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
 {"recordType":"path","path":"channels.whatsapp.heartbeat","kind":"channel","type":"object","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":true}
 {"recordType":"path","path":"channels.whatsapp.heartbeat.showAlerts","kind":"channel","type":"boolean","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
 {"recordType":"path","path":"channels.whatsapp.heartbeat.showOk","kind":"channel","type":"boolean","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
@@ -3330,6 +3484,8 @@
 {"recordType":"path","path":"gateway.auth.trustedProxy.userHeader","kind":"core","type":"string","required":true,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
 {"recordType":"path","path":"gateway.bind","kind":"core","type":"string","required":false,"deprecated":false,"sensitive":false,"tags":["network"],"label":"Gateway Bind Mode","help":"Network bind profile: \"auto\", \"lan\", \"loopback\", \"custom\", or \"tailnet\" to control interface exposure. Keep \"loopback\" or \"auto\" for safest local operation unless external clients must connect.","hasChildren":false}
 {"recordType":"path","path":"gateway.channelHealthCheckMinutes","kind":"core","type":"integer","required":false,"deprecated":false,"sensitive":false,"tags":["network","reliability"],"label":"Gateway Channel Health Check Interval (min)","help":"Interval in minutes for automatic channel health probing and status updates. Use lower intervals for faster detection, or higher intervals to reduce periodic probe noise.","hasChildren":false}
+{"recordType":"path","path":"gateway.channelMaxRestartsPerHour","kind":"core","type":"integer","required":false,"deprecated":false,"sensitive":false,"tags":["network","performance"],"label":"Gateway Channel Max Restarts Per Hour","help":"Maximum number of health-monitor-initiated channel restarts allowed within a rolling one-hour window. Once hit, further restarts are skipped until the window expires. Default: 10.","hasChildren":false}
+{"recordType":"path","path":"gateway.channelStaleEventThresholdMinutes","kind":"core","type":"integer","required":false,"deprecated":false,"sensitive":false,"tags":["network"],"label":"Gateway Channel Stale Event Threshold (min)","help":"How many minutes a connected channel can go without receiving any event before the health monitor treats it as a stale socket and triggers a restart. Default: 30.","hasChildren":false}
 {"recordType":"path","path":"gateway.controlUi","kind":"core","type":"object","required":false,"deprecated":false,"sensitive":false,"tags":["network"],"label":"Control UI","help":"Control UI hosting settings including enablement, pathing, and browser-origin/auth hardening behavior. Keep UI exposure minimal and pair with strong auth controls before internet-facing deployments.","hasChildren":true}
 {"recordType":"path","path":"gateway.controlUi.allowedOrigins","kind":"core","type":"array","required":false,"deprecated":false,"sensitive":false,"tags":["access","network"],"label":"Control UI Allowed Origins","help":"Allowed browser origins for Control UI/WebChat websocket connections (full origins only, e.g. https://control.example.com). Required for non-loopback Control UI deployments unless dangerous Host-header fallback is explicitly enabled.","hasChildren":true}
 {"recordType":"path","path":"gateway.controlUi.allowedOrigins.*","kind":"core","type":"string","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
@@ -3584,7 +3740,7 @@
 {"recordType":"path","path":"messages.ackReactionScope","kind":"core","type":"string","required":false,"enumValues":["group-mentions","group-all","direct","all","off","none"],"deprecated":false,"sensitive":false,"tags":["advanced"],"label":"Ack Reaction Scope","help":"When to send ack reactions (\"group-mentions\", \"group-all\", \"direct\", \"all\", \"off\", \"none\"). \"off\"/\"none\" disables ack reactions entirely.","hasChildren":false}
 {"recordType":"path","path":"messages.groupChat","kind":"core","type":"object","required":false,"deprecated":false,"sensitive":false,"tags":["advanced"],"label":"Group Chat Rules","help":"Group-message handling controls including mention triggers and history window sizing. Keep mention patterns narrow so group channels do not trigger on every message.","hasChildren":true}
 {"recordType":"path","path":"messages.groupChat.historyLimit","kind":"core","type":"integer","required":false,"deprecated":false,"sensitive":false,"tags":["performance"],"label":"Group History Limit","help":"Maximum number of prior group messages loaded as context per turn for group sessions. Use higher values for richer continuity, or lower values for faster and cheaper responses.","hasChildren":false}
-{"recordType":"path","path":"messages.groupChat.mentionPatterns","kind":"core","type":"array","required":false,"deprecated":false,"sensitive":false,"tags":["advanced"],"label":"Group Mention Patterns","help":"Regex-like patterns used to detect explicit mentions/trigger phrases in group chats. Use precise patterns to reduce false positives in high-volume channels.","hasChildren":true}
+{"recordType":"path","path":"messages.groupChat.mentionPatterns","kind":"core","type":"array","required":false,"deprecated":false,"sensitive":false,"tags":["advanced"],"label":"Group Mention Patterns","help":"Safe case-insensitive regex patterns used to detect explicit mentions/trigger phrases in group chats. Use precise patterns to reduce false positives in high-volume channels; invalid or unsafe nested-repetition patterns are ignored.","hasChildren":true}
 {"recordType":"path","path":"messages.groupChat.mentionPatterns.*","kind":"core","type":"string","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
 {"recordType":"path","path":"messages.inbound","kind":"core","type":"object","required":false,"deprecated":false,"sensitive":false,"tags":["advanced"],"label":"Inbound Debounce","help":"Direct inbound debounce settings used before queue/turn processing starts. Configure this for provider-specific rapid message bursts from the same sender.","hasChildren":true}
 {"recordType":"path","path":"messages.inbound.byChannel","kind":"core","type":"object","required":false,"deprecated":false,"sensitive":false,"tags":["advanced"],"label":"Inbound Debounce by Channel (ms)","help":"Per-channel inbound debounce overrides keyed by provider id in milliseconds. Use this where some providers send message fragments more aggressively than others.","hasChildren":true}
