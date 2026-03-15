@@ -229,7 +229,13 @@ export const ModelProviderSchema = z
     baseUrl: z.string().min(1),
     apiKey: SecretInputSchema.optional().register(sensitive),
     auth: z
-      .union([z.literal("api-key"), z.literal("aws-sdk"), z.literal("oauth"), z.literal("token")])
+      .union([
+        z.literal("api-key"),
+        z.literal("aws-sdk"),
+        z.literal("gcp-adc"),
+        z.literal("oauth"),
+        z.literal("token"),
+      ])
       .optional(),
     api: ModelApiSchema.optional(),
     injectNumCtxForOpenAICompat: z.boolean().optional(),

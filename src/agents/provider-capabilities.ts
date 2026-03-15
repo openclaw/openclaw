@@ -35,6 +35,9 @@ const PROVIDER_CAPABILITIES: Record<string, Partial<ProviderCapabilities>> = {
     providerFamily: "anthropic",
     dropThinkingBlockModelHints: ["claude"],
   },
+  "anthropic-vertex": {
+    providerFamily: "anthropic",
+  },
   // kimi-coding natively supports Anthropic tool framing (input_schema);
   // converting to OpenAI format causes XML text fallback instead of tool_use blocks.
   "kimi-coding": {

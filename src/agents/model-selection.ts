@@ -80,6 +80,9 @@ export function normalizeProviderId(provider: string): string {
   if (normalized === "bedrock" || normalized === "aws-bedrock") {
     return "amazon-bedrock";
   }
+  if (normalized === "vertex-anthropic" || normalized === "google-vertex-anthropic") {
+    return "anthropic-vertex";
+  }
   // Backward compatibility for older provider naming.
   if (normalized === "bytedance" || normalized === "doubao") {
     return "volcengine";

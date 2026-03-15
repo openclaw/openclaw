@@ -34,6 +34,7 @@ import { isReasoningTagProvider } from "../../../utils/provider-utils.js";
 import { resolveOpenClawAgentDir } from "../../agent-paths.js";
 import { resolveSessionAgentIds } from "../../agent-scope.js";
 import { createAnthropicPayloadLogger } from "../../anthropic-payload-log.js";
+import { resolveAnthropicVertexStreamFn } from "../../anthropic-vertex-stream.js";
 import {
   analyzeBootstrapBudget,
   buildBootstrapPromptWarning,
@@ -1897,6 +1898,14 @@ export async function runEmbeddedAttempt(
         });
         activeSession.agent.streamFn = ollamaStreamFn;
         ensureCustomApiRegistered(params.model.api, ollamaStreamFn);
+      } else if (normalizeProviderId(params.provider) === "anthropic-vertex") {
+        const vertexStreamFn = resolveAnthropicVertexStreamFn();
+        if (vertexStreamFn) {
+          activeSession.agent.streamFn = vertexStreamFn;
+        } else {
+          log.warn(`anthropic-vertex: missing project/region config; using default stream`);
+          activeSession.agent.streamFn = streamSimple;
+        }
       } else if (params.model.api === "openai-responses" && params.provider === "openai") {
         const wsApiKey = await params.authStorage.getApiKey(params.provider);
         if (wsApiKey) {

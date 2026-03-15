@@ -360,3 +360,7 @@ export function isAnthropicBedrockModel(modelId: string): boolean {
   const normalized = modelId.toLowerCase();
   return normalized.includes("anthropic.claude") || normalized.includes("anthropic/claude");
 }
+
+export function isAnthropicVertexProvider(provider: string): boolean {
+  return provider === "anthropic-vertex";
+}
