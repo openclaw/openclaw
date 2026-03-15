@@ -54,6 +54,26 @@ describe("convertToOllamaMessages", () => {
     ]);
   });
 
+  it("parses JSON string arguments to objects for Ollama tool calls (#46679)", () => {
+    const messages = [
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "toolCall",
+            id: "call_2",
+            name: "exec",
+            arguments: '{"command":"ls -la"}',
+          },
+        ],
+      },
+    ];
+    const result = convertToOllamaMessages(messages);
+    expect(result[0].tool_calls).toEqual([
+      { function: { name: "exec", arguments: { command: "ls -la" } } },
+    ]);
+  });
+
   it("converts tool result messages with 'tool' role", () => {
     const messages = [{ role: "tool", content: "file1.txt\nfile2.txt" }];
     const result = convertToOllamaMessages(messages);
