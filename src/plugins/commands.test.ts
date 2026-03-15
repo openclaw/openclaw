@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it } from "vitest";
 import {
+  __testing,
   clearPluginCommands,
   getPluginCommandSpecs,
   listPluginCommands,
@@ -93,5 +94,34 @@ describe("registerPluginCommand", () => {
         acceptsArgs: false,
       },
     ]);
+  });
+
+  it("resolves Discord DM command bindings with the user target prefix intact", () => {
+    expect(
+      __testing.resolveBindingConversationFromCommand({
+        channel: "discord",
+        from: "discord:1177378744822943744",
+        to: "slash:1177378744822943744",
+        accountId: "default",
+      }),
+    ).toEqual({
+      channel: "discord",
+      accountId: "default",
+      conversationId: "user:1177378744822943744",
+    });
+  });
+
+  it("resolves Discord guild command bindings with the channel target prefix intact", () => {
+    expect(
+      __testing.resolveBindingConversationFromCommand({
+        channel: "discord",
+        from: "discord:channel:1480554272859881494",
+        accountId: "default",
+      }),
+    ).toEqual({
+      channel: "discord",
+      accountId: "default",
+      conversationId: "channel:1480554272859881494",
+    });
   });
 });

@@ -287,11 +287,12 @@ function resolveBindingConversationFromCommand(params: {
     };
   }
   if (params.channel === "discord") {
-    const rawTarget =
-      stripPrefix(params.from, "discord:") ??
-      stripPrefix(params.to, "discord:") ??
-      params.from ??
-      params.to;
+    const source = params.from ?? params.to;
+    const rawTarget = source?.startsWith("discord:channel:")
+      ? stripPrefix(source, "discord:")
+      : source?.startsWith("discord:user:")
+        ? stripPrefix(source, "discord:")
+        : source;
     if (!rawTarget || rawTarget.startsWith("slash:")) {
       return null;
     }
@@ -302,7 +303,7 @@ function resolveBindingConversationFromCommand(params: {
     return {
       channel: "discord",
       accountId,
-      conversationId: target.id,
+      conversationId: `${target.kind}:${target.id}`,
     };
   }
   const rawTarget = params.to ?? params.from;
@@ -469,3 +470,7 @@ export function getPluginCommandSpecs(provider?: string): Array<{
     acceptsArgs: cmd.acceptsArgs ?? false,
   }));
 }
+
+export const __testing = {
+  resolveBindingConversationFromCommand,
+};
