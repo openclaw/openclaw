@@ -49,6 +49,12 @@ describe("isChatStopCommandText", () => {
     expect(isChatStopCommandText("stop please")).toBe(true);
     expect(isChatStopCommandText("do not do that")).toBe(true);
     expect(isChatStopCommandText("停止")).toBe(true);
+    expect(isChatStopCommandText("停")).toBe(true);
+    expect(isChatStopCommandText("停下")).toBe(true);
+    expect(isChatStopCommandText("停下来")).toBe(true);
+    expect(isChatStopCommandText("别做了")).toBe(true);
+    expect(isChatStopCommandText("终止")).toBe(true);
+    expect(isChatStopCommandText("给我住手")).toBe(true);
     expect(isChatStopCommandText("やめて")).toBe(true);
     expect(isChatStopCommandText("توقف")).toBe(true);
     expect(isChatStopCommandText("остановись")).toBe(true);
