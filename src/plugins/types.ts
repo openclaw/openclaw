@@ -399,6 +399,11 @@ export type OpenClawPluginApi = {
     id: string,
     factory: import("../context-engine/registry.js").ContextEngineFactory,
   ) => void;
+  /**
+   * Register a synchronous text transform applied to all outbound messages
+   * (including streamed previews). Transforms run in registration order.
+   */
+  registerOutboundTransform: (transform: (text: string) => string) => void;
   resolvePath: (input: string) => string;
   /** Register a lifecycle hook handler */
   on: <K extends PluginHookName>(

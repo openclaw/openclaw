@@ -113,6 +113,21 @@ describe("buildReplyPayloads media filter integration", () => {
     expect(replyPayloads).toHaveLength(0);
   });
 
+  it("dedupes against transformed text instead of raw payload text", async () => {
+    const { replyPayloads } = await buildReplyPayloads({
+      ...baseParams,
+      payloads: [{ text: "secret world!" }],
+      messagingToolSentTexts: ["secret world!"],
+      transformPayload: (payload) =>
+        typeof payload.text === "string"
+          ? { ...payload, text: payload.text.replace("secret", "public") }
+          : payload,
+    });
+
+    expect(replyPayloads).toHaveLength(1);
+    expect(replyPayloads[0]?.text).toBe("public world!");
+  });
+
   it("does not dedupe text for cross-target messaging sends", async () => {
     const { replyPayloads } = await buildReplyPayloads({
       ...baseParams,

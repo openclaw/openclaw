@@ -25,6 +25,7 @@ export const createTestRegistry = (channels: TestChannelRegistration[] = []): Pl
   services: [],
   commands: [],
   diagnostics: [],
+  outboundTransforms: [],
 });
 
 export const createChannelTestPluginBase = (params: {

@@ -87,6 +87,7 @@ const createRegistry = (channels: PluginRegistry["channels"]): PluginRegistry =>
   cliRegistrars: [],
   services: [],
   diagnostics: [],
+  outboundTransforms: [],
 });
 
 const createMSTeamsOutbound = (): ChannelOutboundAdapter => ({

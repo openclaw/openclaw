@@ -23,6 +23,7 @@ import {
 } from "../../config/sessions.js";
 import { logVerbose } from "../../globals.js";
 import { emitAgentEvent, registerAgentRunContext } from "../../infra/agent-events.js";
+import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { defaultRuntime } from "../../runtime.js";
 import {
   isMarkdownCapableMessageChannel,
@@ -196,6 +197,10 @@ export async function runAgentTurnWithFallback(params: {
         await params.typingSignals.signalTextDelta(text);
         return text;
       };
+      const applyOutboundTransforms = (text: string): string => {
+        const hookRunner = getGlobalHookRunner();
+        return hookRunner ? hookRunner.runOutboundTransforms(text) : text;
+      };
       const blockReplyPipeline = params.blockReplyPipeline;
       const onToolResult = params.opts?.onToolResult;
       const fallbackResult = await runWithModelFallback({
@@ -260,7 +265,7 @@ export async function runAgentTurnWithFallback(params: {
                   emitAgentEvent({
                     runId,
                     stream: "assistant",
-                    data: { text: cliText },
+                    data: { text: applyOutboundTransforms(cliText) },
                   });
                 }
 
@@ -355,7 +360,7 @@ export async function runAgentTurnWithFallback(params: {
                     return;
                   }
                   await params.opts.onPartialReply({
-                    text: textForTyping,
+                    text: applyOutboundTransforms(textForTyping),
                     mediaUrls: payload.mediaUrls,
                   });
                 },
@@ -367,8 +372,15 @@ export async function runAgentTurnWithFallback(params: {
                   params.typingSignals.shouldStartOnReasoning || params.opts?.onReasoningStream
                     ? async (payload) => {
                         await params.typingSignals.signalReasoningDelta();
-                        await params.opts?.onReasoningStream?.({
-                          text: payload.text,
+                        if (!params.opts?.onReasoningStream) {
+                          return;
+                        }
+                        const transformedText =
+                          typeof payload.text === "string"
+                            ? applyOutboundTransforms(payload.text)
+                            : payload.text;
+                        await params.opts.onReasoningStream({
+                          text: transformedText,
                           mediaUrls: payload.mediaUrls,
                         });
                       }

@@ -47,6 +47,7 @@ function fakeApi(overrides: Partial<OpenClawPluginApi> = {}): OpenClawPluginApi 
     registerHttpRoute() {},
     registerCommand() {},
     registerContextEngine() {},
+    registerOutboundTransform() {},
     on() {},
     resolvePath: (p) => p,
     ...overrides,

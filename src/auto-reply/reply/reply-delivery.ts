@@ -1,4 +1,5 @@
 import { logVerbose } from "../../globals.js";
+import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { SILENT_REPLY_TOKEN } from "../tokens.js";
 import type { BlockReplyContext, ReplyPayload } from "../types.js";
 import type { BlockReplyPipeline } from "./block-reply-pipeline.js";
@@ -115,22 +116,33 @@ export function createBlockReplyDeliveryHandler(params: {
     if (normalized.isSilent && !blockHasMedia) {
       return;
     }
+    // When block streaming is disabled entirely, blocks are accumulated in final text instead.
+    if (!params.blockStreamingEnabled) {
+      return;
+    }
 
-    if (blockPayload.text) {
-      void params.typingSignals.signalTextDelta(blockPayload.text).catch((err) => {
+    // Apply plugin outbound transforms to block-streamed text for delivery,
+    // but use the pre-transform payload for dedup keys so they match final payloads.
+    const hookRunner = getGlobalHookRunner();
+    const deliveryPayload =
+      hookRunner && typeof blockPayload.text === "string"
+        ? { ...blockPayload, text: hookRunner.runOutboundTransforms(blockPayload.text) }
+        : blockPayload;
+
+    if (deliveryPayload.text) {
+      void params.typingSignals.signalTextDelta(deliveryPayload.text).catch((err) => {
         logVerbose(`block reply typing signal failed: ${String(err)}`);
       });
     }
 
     // Use pipeline if available (block streaming enabled), otherwise send directly.
     if (params.blockStreamingEnabled && params.blockReplyPipeline) {
-      params.blockReplyPipeline.enqueue(blockPayload);
+      params.blockReplyPipeline.enqueue(deliveryPayload);
     } else if (params.blockStreamingEnabled) {
       // Send directly when flushing before tool execution (no pipeline but streaming enabled).
-      // Track sent key to avoid duplicate in final payloads.
+      // Track sent key from pre-transform text to avoid duplicate in final payloads.
       params.directlySentBlockKeys.add(createBlockReplyContentKey(blockPayload));
-      await params.onBlockReply(blockPayload);
+      await params.onBlockReply(deliveryPayload);
     }
-    // When streaming is disabled entirely, blocks are accumulated in final text instead.
   };
 }

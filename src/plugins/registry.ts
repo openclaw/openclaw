@@ -127,6 +127,11 @@ export type PluginRecord = {
   configJsonSchema?: Record<string, unknown>;
 };
 
+export type OutboundTransformRegistration = {
+  pluginId: string;
+  transform: (text: string) => string;
+};
+
 export type PluginRegistry = {
   plugins: PluginRecord[];
   tools: PluginToolRegistration[];
@@ -139,6 +144,7 @@ export type PluginRegistry = {
   cliRegistrars: PluginCliRegistration[];
   services: PluginServiceRegistration[];
   commands: PluginCommandRegistration[];
+  outboundTransforms: OutboundTransformRegistration[];
   diagnostics: PluginDiagnostic[];
 };
 
@@ -179,6 +185,7 @@ export function createEmptyPluginRegistry(): PluginRegistry {
     cliRegistrars: [],
     services: [],
     commands: [],
+    outboundTransforms: [],
     diagnostics: [],
   };
 }
@@ -612,6 +619,9 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       registerService: (service) => registerService(record, service),
       registerCommand: (command) => registerCommand(record, command),
       registerContextEngine: (id, factory) => registerContextEngine(id, factory),
+      registerOutboundTransform: (transform: (text: string) => string) => {
+        registry.outboundTransforms.push({ pluginId: record.id, transform });
+      },
       resolvePath: (input: string) => resolveUserPath(input),
       on: (hookName, handler, opts) =>
         registerTypedHook(record, hookName, handler, opts, params.hookPolicy),

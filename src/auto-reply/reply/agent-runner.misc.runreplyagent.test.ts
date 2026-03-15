@@ -15,6 +15,11 @@ const runEmbeddedPiAgentMock = vi.fn();
 const runCliAgentMock = vi.fn();
 const runWithModelFallbackMock = vi.fn();
 const runtimeErrorMock = vi.fn();
+const hookRunnerMocks = vi.hoisted(() => ({
+  getGlobalHookRunner: vi.fn<() => { runOutboundTransforms: (text: string) => string } | null>(
+    () => null,
+  ),
+}));
 
 vi.mock("../../agents/model-fallback.js", () => ({
   runWithModelFallback: (params: {
@@ -58,6 +63,10 @@ vi.mock("../../runtime.js", async () => {
   };
 });
 
+vi.mock("../../plugins/hook-runner-global.js", () => ({
+  getGlobalHookRunner: () => hookRunnerMocks.getGlobalHookRunner(),
+}));
+
 vi.mock("./queue.js", async () => {
   const actual = await vi.importActual<typeof import("./queue.js")>("./queue.js");
   return {
@@ -89,6 +98,8 @@ beforeEach(() => {
   runCliAgentMock.mockClear();
   runWithModelFallbackMock.mockClear();
   runtimeErrorMock.mockClear();
+  hookRunnerMocks.getGlobalHookRunner.mockClear();
+  hookRunnerMocks.getGlobalHookRunner.mockReturnValue(null);
   loadCronStoreMock.mockClear();
   // Default: no cron jobs in store.
   loadCronStoreMock.mockResolvedValue({ version: 1, jobs: [] });
@@ -831,6 +842,83 @@ describe("runReplyAgent auto-compaction token update", () => {
 });
 
 describe("runReplyAgent block streaming", () => {
+  it("skips block transforms when block streaming is disabled", async () => {
+    const onBlockReply = vi.fn();
+    const runOutboundTransforms = vi.fn((text: string) => text.toUpperCase());
+    hookRunnerMocks.getGlobalHookRunner.mockReturnValue({
+      runOutboundTransforms,
+    });
+    runEmbeddedPiAgentMock.mockImplementationOnce(async (params) => {
+      const block = params.onBlockReply as ((payload: { text?: string }) => void) | undefined;
+      block?.({ text: "Chunk" });
+      return {
+        payloads: [{ text: "Final message" }],
+        meta: {},
+      };
+    });
+
+    const typing = createMockTypingController();
+    const sessionCtx = {
+      Provider: "discord",
+      OriginatingTo: "channel:C1",
+      AccountId: "primary",
+      MessageSid: "msg",
+    } as unknown as TemplateContext;
+    const resolvedQueue = { mode: "interrupt" } as unknown as QueueSettings;
+    const followupRun = {
+      prompt: "hello",
+      summaryLine: "hello",
+      enqueuedAt: Date.now(),
+      run: {
+        sessionId: "session",
+        sessionKey: "main",
+        messageProvider: "discord",
+        sessionFile: "/tmp/session.jsonl",
+        workspaceDir: "/tmp",
+        config: {},
+        skillsSnapshot: {},
+        provider: "anthropic",
+        model: "claude",
+        thinkLevel: "low",
+        verboseLevel: "off",
+        elevatedLevel: "off",
+        bashElevated: {
+          enabled: false,
+          allowed: false,
+          defaultLevel: "off",
+        },
+        timeoutMs: 1_000,
+        blockReplyBreak: "text_end",
+      },
+    } as unknown as FollowupRun;
+
+    const result = await runReplyAgent({
+      commandBody: "hello",
+      followupRun,
+      queueKey: "main",
+      resolvedQueue,
+      shouldSteer: false,
+      shouldFollowup: false,
+      isActive: false,
+      isStreaming: false,
+      opts: { onBlockReply },
+      typing,
+      sessionCtx,
+      defaultModel: "anthropic/claude-opus-4-5",
+      resolvedVerboseLevel: "off",
+      isNewSession: false,
+      blockStreamingEnabled: false,
+      resolvedBlockStreamingBreak: "text_end",
+      shouldInjectGroupIntro: false,
+      typingMode: "instant",
+    });
+
+    expect(runOutboundTransforms).toHaveBeenCalledTimes(1);
+    expect(runOutboundTransforms).toHaveBeenCalledWith("Final message");
+    expect(onBlockReply).not.toHaveBeenCalled();
+    expect(result).toMatchObject({ text: "FINAL MESSAGE" });
+  });
+
   it("coalesces duplicate text_end block replies", async () => {
     const onBlockReply = vi.fn();
     runEmbeddedPiAgentMock.mockImplementationOnce(async (params) => {
@@ -1116,6 +1204,42 @@ describe("runReplyAgent claude-cli routing", () => {
     expect(runEmbeddedPiAgentMock).not.toHaveBeenCalled();
     expect(lifecyclePhases).toEqual(["start", "end"]);
     expect(result).toMatchObject({ text: "ok" });
+  });
+
+  it("applies outbound transforms to CLI assistant stream events", async () => {
+    const runId = "00000000-0000-0000-0000-000000000002";
+    const randomSpy = vi.spyOn(crypto, "randomUUID").mockReturnValue(runId);
+    const assistantTexts: string[] = [];
+    const unsubscribe = onAgentEvent((evt) => {
+      if (evt.runId !== runId || evt.stream !== "assistant") {
+        return;
+      }
+      const text = evt.data?.text;
+      if (typeof text === "string") {
+        assistantTexts.push(text);
+      }
+    });
+    hookRunnerMocks.getGlobalHookRunner.mockReturnValue({
+      runOutboundTransforms: (text: string) => text.replaceAll("secret", "public"),
+    });
+    runCliAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "secret answer" }],
+      meta: {
+        agentMeta: {
+          provider: "claude-cli",
+          model: "opus-4.5",
+        },
+      },
+    });
+
+    try {
+      await createRun();
+    } finally {
+      unsubscribe();
+      randomSpy.mockRestore();
+    }
+
+    expect(assistantTexts).toEqual(["public answer"]);
   });
 });
 
@@ -1787,6 +1911,152 @@ describe("runReplyAgent response usage footer", () => {
   });
 });
 
+describe("runReplyAgent outbound transforms", () => {
+  function createRun(params?: {
+    responseUsage?: "tokens" | "full";
+    resolvedVerboseLevel?: "off" | "on";
+    isNewSession?: boolean;
+    typingMode?: "instant" | "thinking";
+    opts?: {
+      onReasoningStream?: (payload: { text?: string }) => Promise<void> | void;
+    };
+  }) {
+    const typing = createMockTypingController();
+    const sessionCtx = {
+      Provider: "whatsapp",
+      OriginatingTo: "+15550001111",
+      AccountId: "primary",
+      MessageSid: "msg",
+    } as unknown as TemplateContext;
+    const resolvedQueue = { mode: "interrupt" } as unknown as QueueSettings;
+
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: Date.now(),
+      responseUsage: params?.responseUsage,
+    };
+
+    const followupRun = {
+      prompt: "hello",
+      summaryLine: "hello",
+      enqueuedAt: Date.now(),
+      run: {
+        agentId: "main",
+        agentDir: "/tmp/agent",
+        sessionId: "session",
+        sessionKey: "agent:main:whatsapp:dm:+1000",
+        messageProvider: "whatsapp",
+        sessionFile: "/tmp/session.jsonl",
+        workspaceDir: "/tmp",
+        config: {},
+        skillsSnapshot: {},
+        provider: "anthropic",
+        model: "claude",
+        thinkLevel: "low",
+        verboseLevel: params?.resolvedVerboseLevel ?? "off",
+        elevatedLevel: "off",
+        bashElevated: {
+          enabled: false,
+          allowed: false,
+          defaultLevel: "off",
+        },
+        timeoutMs: 1_000,
+        blockReplyBreak: "message_end",
+      },
+    } as unknown as FollowupRun;
+
+    return runReplyAgent({
+      commandBody: "hello",
+      followupRun,
+      queueKey: "main",
+      resolvedQueue,
+      shouldSteer: false,
+      shouldFollowup: false,
+      isActive: false,
+      isStreaming: false,
+      opts: params?.opts,
+      typing,
+      sessionCtx,
+      sessionEntry,
+      sessionKey: "agent:main:whatsapp:dm:+1000",
+      defaultModel: "anthropic/claude-opus-4-5",
+      resolvedVerboseLevel: params?.resolvedVerboseLevel ?? "off",
+      isNewSession: params?.isNewSession ?? false,
+      blockStreamingEnabled: false,
+      resolvedBlockStreamingBreak: "message_end",
+      shouldInjectGroupIntro: false,
+      typingMode: params?.typingMode ?? "instant",
+    });
+  }
+
+  it("applies outbound transforms to streamed reasoning previews", async () => {
+    const onReasoningStream = vi.fn();
+    hookRunnerMocks.getGlobalHookRunner.mockReturnValue({
+      runOutboundTransforms: (text: string) => text.replaceAll("secret", "public"),
+    });
+    runEmbeddedPiAgentMock.mockImplementationOnce(async (paramsUnknown: unknown) => {
+      const params = paramsUnknown as {
+        onReasoningStream?: (payload: { text?: string }) => Promise<void>;
+      };
+      await params.onReasoningStream?.({ text: "Reasoning:\nsecret step" });
+      return { payloads: [{ text: "final" }], meta: {} };
+    });
+
+    await createRun({ opts: { onReasoningStream } });
+
+    expect(onReasoningStream).toHaveBeenCalledWith({ text: "Reasoning:\npublic step" });
+  });
+
+  it("does not apply outbound transforms to verbose notices or usage lines", async () => {
+    hookRunnerMocks.getGlobalHookRunner.mockReturnValue({
+      runOutboundTransforms: (text: string) => text.toUpperCase(),
+    });
+    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "ok" }],
+      meta: {
+        agentMeta: {
+          provider: "anthropic",
+          model: "claude",
+          usage: { input: 12, output: 3 },
+        },
+      },
+    });
+
+    const res = await createRun({
+      responseUsage: "tokens",
+      resolvedVerboseLevel: "on",
+      isNewSession: true,
+    });
+
+    expect(Array.isArray(res)).toBe(true);
+    const payloads = res as Array<{ text?: string }>;
+    expect(payloads).toHaveLength(2);
+    expect(payloads[0]?.text).toBe("🧭 New session: session");
+    expect(payloads[1]?.text).toContain("OK");
+    expect(payloads[1]?.text).toContain("Usage:");
+    expect(payloads[1]?.text).not.toContain("USAGE:");
+  });
+
+  it("skips reasoning transforms when no preview sink is configured", async () => {
+    const runOutboundTransforms = vi.fn((text: string) => text.toUpperCase());
+    hookRunnerMocks.getGlobalHookRunner.mockReturnValue({
+      runOutboundTransforms,
+    });
+    runEmbeddedPiAgentMock.mockImplementationOnce(async (paramsUnknown: unknown) => {
+      const params = paramsUnknown as {
+        onReasoningStream?: (payload: { text?: string }) => Promise<void>;
+      };
+      await params.onReasoningStream?.({ text: "Reasoning:\nsecret step" });
+      return { payloads: [{ text: "final" }], meta: {} };
+    });
+
+    await createRun({ typingMode: "thinking" });
+
+    expect(runOutboundTransforms).toHaveBeenCalledTimes(1);
+    expect(runOutboundTransforms).toHaveBeenCalledWith("final");
+  });
+});
+
 describe("runReplyAgent transient HTTP retry", () => {
   it("retries once after transient 521 HTML failure and then succeeds", async () => {
     vi.useFakeTimers();
@@ -1933,5 +2203,71 @@ describe("runReplyAgent billing error classification", () => {
     const payload = Array.isArray(result) ? result[0] : result;
     expect(payload?.text).toContain("billing error");
     expect(payload?.text).not.toContain("Context overflow");
+  });
+
+  it("applies outbound transforms to final fallback payloads", async () => {
+    runEmbeddedPiAgentMock.mockRejectedValueOnce(
+      new Error("402 Payment Required: request token limit exceeded for this billing plan"),
+    );
+    hookRunnerMocks.getGlobalHookRunner.mockReturnValue({
+      runOutboundTransforms: (text: string) => text.replace("billing error", "account issue"),
+    });
+
+    const typing = createMockTypingController();
+    const sessionCtx = {
+      Provider: "telegram",
+      MessageSid: "msg",
+    } as unknown as TemplateContext;
+    const resolvedQueue = { mode: "interrupt" } as unknown as QueueSettings;
+    const followupRun = {
+      prompt: "hello",
+      summaryLine: "hello",
+      enqueuedAt: Date.now(),
+      run: {
+        sessionId: "session",
+        sessionKey: "main",
+        messageProvider: "telegram",
+        sessionFile: "/tmp/session.jsonl",
+        workspaceDir: "/tmp",
+        config: {},
+        skillsSnapshot: {},
+        provider: "anthropic",
+        model: "claude",
+        thinkLevel: "low",
+        verboseLevel: "off",
+        elevatedLevel: "off",
+        bashElevated: {
+          enabled: false,
+          allowed: false,
+          defaultLevel: "off",
+        },
+        timeoutMs: 1_000,
+        blockReplyBreak: "message_end",
+      },
+    } as unknown as FollowupRun;
+
+    const result = await runReplyAgent({
+      commandBody: "hello",
+      followupRun,
+      queueKey: "main",
+      resolvedQueue,
+      shouldSteer: false,
+      shouldFollowup: false,
+      isActive: false,
+      isStreaming: false,
+      typing,
+      sessionCtx,
+      defaultModel: "anthropic/claude",
+      resolvedVerboseLevel: "off",
+      isNewSession: false,
+      blockStreamingEnabled: false,
+      resolvedBlockStreamingBreak: "message_end",
+      shouldInjectGroupIntro: false,
+      typingMode: "instant",
+    });
+
+    const payload = Array.isArray(result) ? result[0] : result;
+    expect(payload?.text).toContain("account issue");
+    expect(payload?.text).not.toContain("billing error");
   });
 });

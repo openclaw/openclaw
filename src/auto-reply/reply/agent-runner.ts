@@ -19,6 +19,7 @@ import { emitAgentEvent } from "../../infra/agent-events.js";
 import { emitDiagnosticEvent, isDiagnosticsEnabled } from "../../infra/diagnostic-events.js";
 import { generateSecureUuid } from "../../infra/secure-random.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
+import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { defaultRuntime } from "../../runtime.js";
 import { estimateUsageCost, resolveModelCostConfig } from "../../utils/usage-format.js";
 import {
@@ -139,6 +140,12 @@ export async function runReplyAgent(params: {
     storePath,
     resolvedVerboseLevel,
   });
+  const applyOutboundTransformsToPayload = (payload: ReplyPayload): ReplyPayload => {
+    const hookRunner = getGlobalHookRunner();
+    return hookRunner && typeof payload.text === "string"
+      ? { ...payload, text: hookRunner.runOutboundTransforms(payload.text) }
+      : payload;
+  };
 
   const pendingToolTasks = new Set<Promise<void>>();
   const blockReplyTimeoutMs = opts?.blockReplyTimeoutMs ?? BLOCK_REPLY_SEND_TIMEOUT_MS;
@@ -369,7 +376,11 @@ export async function runReplyAgent(params: {
     });
 
     if (runOutcome.kind === "final") {
-      return finalizeWithFollowup(runOutcome.payload, queueKey, runFollowupTurn);
+      return finalizeWithFollowup(
+        applyOutboundTransformsToPayload(runOutcome.payload),
+        queueKey,
+        runFollowupTurn,
+      );
     }
 
     const {
@@ -506,6 +517,7 @@ export async function runReplyAgent(params: {
       }),
       accountId: sessionCtx.AccountId,
       normalizeMediaPaths: normalizeReplyMediaPaths,
+      transformPayload: applyOutboundTransformsToPayload,
     });
     const { replyPayloads } = payloadResult;
     didLogHeartbeatStrip = payloadResult.didLogHeartbeatStrip;
