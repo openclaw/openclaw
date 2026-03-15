@@ -17,6 +17,12 @@ export function applyModelOverrideToSessionEntry(params: {
   let updated = false;
   let selectionUpdated = false;
 
+  // Guard against empty/whitespace-only provider or model IDs that can result
+  // from truncated picker payloads or malformed directive parsing (#46700).
+  if (!selection.isDefault && (!selection.provider.trim() || !selection.model.trim())) {
+    return { updated: false };
+  }
+
   if (selection.isDefault) {
     if (entry.providerOverride) {
       delete entry.providerOverride;
