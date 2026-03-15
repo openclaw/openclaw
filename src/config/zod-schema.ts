@@ -54,6 +54,7 @@ const MemoryQmdSessionSchema = z
     enabled: z.boolean().optional(),
     exportDir: z.string().optional(),
     retentionDays: z.number().int().nonnegative().optional(),
+    includeResetArchives: z.boolean().optional(),
   })
   .strict();
 

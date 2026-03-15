@@ -326,8 +326,28 @@ describe("memory search config", () => {
     expect(resolved?.sync.sessions).toEqual({
       deltaBytes: 100000,
       deltaMessages: 50,
+      includeResetArchives: false,
       postCompactionForce: true,
     });
+  });
+
+  it("resolves reset archive indexing flag from sync session config", () => {
+    const cfg = asConfig({
+      agents: {
+        defaults: {
+          memorySearch: {
+            provider: "openai",
+            sync: {
+              sessions: {
+                includeResetArchives: true,
+              },
+            },
+          },
+        },
+      },
+    });
+    const resolved = resolveMemorySearchConfig(cfg, "main");
+    expect(resolved?.sync.sessions.includeResetArchives).toBe(true);
   });
 
   it("merges remote defaults with agent overrides", () => {
