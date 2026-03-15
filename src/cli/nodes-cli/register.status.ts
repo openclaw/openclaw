@@ -1,13 +1,14 @@
 import type { Command } from "commander";
-import type { NodesRpcOpts } from "./types.js";
 import { formatTimeAgo } from "../../infra/format-time/format-relative.ts";
 import { defaultRuntime } from "../../runtime.js";
-import { renderTable } from "../../terminal/table.js";
+import { getTerminalTableWidth, renderTable } from "../../terminal/table.js";
 import { shortenHomeInString } from "../../utils.js";
 import { parseDurationMs } from "../parse-duration.js";
 import { getNodesTheme, runNodesCommand } from "./cli-utils.js";
 import { formatPermissions, parseNodeList, parsePairingList } from "./format.js";
+import { renderPendingPairingRequestsTable } from "./pairing-render.js";
 import { callGatewayCli, nodesCallOpts, resolveNodeId } from "./rpc.js";
+import type { NodesRpcOpts } from "./types.js";
 
 function formatVersionLabel(raw: string) {
   const trimmed = raw.trim();
@@ -111,7 +112,7 @@ export function registerNodesStatusCommands(nodes: Command) {
           const obj: Record<string, unknown> =
             typeof result === "object" && result !== null ? result : {};
           const { ok, warn, muted } = getNodesTheme();
-          const tableWidth = Math.max(60, (process.stdout.columns ?? 120) - 1);
+          const tableWidth = getTerminalTableWidth();
           const now = Date.now();
           const nodes = parseNodeList(result);
           const lastConnectedById =
@@ -255,7 +256,7 @@ export function registerNodesStatusCommands(nodes: Command) {
           const status = `${paired ? ok("paired") : warn("unpaired")} · ${
             connected ? ok("connected") : muted("disconnected")
           }`;
-          const tableWidth = Math.max(60, (process.stdout.columns ?? 120) - 1);
+          const tableWidth = getTerminalTableWidth();
           const rows = [
             { Field: "ID", Value: nodeId },
             displayName ? { Field: "Name", Value: displayName } : null,
@@ -306,7 +307,7 @@ export function registerNodesStatusCommands(nodes: Command) {
           const result = await callGatewayCli("node.pair.list", opts, {});
           const { pending, paired } = parsePairingList(result);
           const { heading, muted, warn } = getNodesTheme();
-          const tableWidth = Math.max(60, (process.stdout.columns ?? 120) - 1);
+          const tableWidth = getTerminalTableWidth();
           const now = Date.now();
           const hasFilters = connectedOnly || sinceMs !== undefined;
           const pendingRows = hasFilters ? [] : pending;
@@ -356,31 +357,15 @@ export function registerNodesStatusCommands(nodes: Command) {
           }
 
           if (pendingRows.length > 0) {
-            const pendingRowsRendered = pendingRows.map((r) => ({
-              Request: r.requestId,
-              Node: r.displayName?.trim() ? r.displayName.trim() : r.nodeId,
-              IP: r.remoteIp ?? "",
-              Requested:
-                typeof r.ts === "number"
-                  ? formatTimeAgo(Math.max(0, now - r.ts))
-                  : muted("unknown"),
-              Repair: r.isRepair ? warn("yes") : "",
-            }));
+            const rendered = renderPendingPairingRequestsTable({
+              pending: pendingRows,
+              now,
+              tableWidth,
+              theme: { heading, warn, muted },
+            });
             defaultRuntime.log("");
-            defaultRuntime.log(heading("Pending"));
-            defaultRuntime.log(
-              renderTable({
-                width: tableWidth,
-                columns: [
-                  { key: "Request", header: "Request", minWidth: 8 },
-                  { key: "Node", header: "Node", minWidth: 14, flex: true },
-                  { key: "IP", header: "IP", minWidth: 10 },
-                  { key: "Requested", header: "Requested", minWidth: 12 },
-                  { key: "Repair", header: "Repair", minWidth: 6 },
-                ],
-                rows: pendingRowsRendered,
-              }).trimEnd(),
-            );
+            defaultRuntime.log(rendered.heading);
+            defaultRuntime.log(rendered.table);
           }
 
           if (filteredPaired.length > 0) {

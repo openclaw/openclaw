@@ -43,3 +43,24 @@ export function resolveControlCommandGate(params: {
   const shouldBlock = params.allowTextCommands && params.hasControlCommand && !commandAuthorized;
   return { commandAuthorized, shouldBlock };
 }
+
+export function resolveDualTextControlCommandGate(params: {
+  useAccessGroups: boolean;
+  primaryConfigured: boolean;
+  primaryAllowed: boolean;
+  secondaryConfigured: boolean;
+  secondaryAllowed: boolean;
+  hasControlCommand: boolean;
+  modeWhenAccessGroupsOff?: CommandGatingModeWhenAccessGroupsOff;
+}): { commandAuthorized: boolean; shouldBlock: boolean } {
+  return resolveControlCommandGate({
+    useAccessGroups: params.useAccessGroups,
+    authorizers: [
+      { configured: params.primaryConfigured, allowed: params.primaryAllowed },
+      { configured: params.secondaryConfigured, allowed: params.secondaryAllowed },
+    ],
+    allowTextCommands: true,
+    hasControlCommand: params.hasControlCommand,
+    modeWhenAccessGroupsOff: params.modeWhenAccessGroupsOff,
+  });
+}

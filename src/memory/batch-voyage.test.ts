@@ -1,7 +1,8 @@
 import { ReadableStream } from "node:stream/web";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import type { VoyageBatchOutputLine, VoyageBatchRequest } from "./batch-voyage.js";
 import type { VoyageEmbeddingClient } from "./embeddings-voyage.js";
+import { mockPublicPinnedHostname } from "./test-helpers/ssrf.js";
 
 // Mock internal.js if needed, but runWithConcurrency is simple enough to keep real.
 // We DO need to mock retryAsync to avoid actual delays/retries logic complicating tests
@@ -10,6 +11,12 @@ vi.mock("../infra/retry.js", () => ({
 }));
 
 describe("runVoyageEmbeddingBatches", () => {
+  let runVoyageEmbeddingBatches: typeof import("./batch-voyage.js").runVoyageEmbeddingBatches;
+
+  beforeAll(async () => {
+    ({ runVoyageEmbeddingBatches } = await import("./batch-voyage.js"));
+  });
+
   afterEach(() => {
     vi.resetAllMocks();
     vi.unstubAllGlobals();
@@ -29,6 +36,7 @@ describe("runVoyageEmbeddingBatches", () => {
   it("successfully submits batch, waits, and streams results", async () => {
     const fetchMock = vi.fn();
     vi.stubGlobal("fetch", fetchMock);
+    mockPublicPinnedHostname();
 
     // Sequence of fetch calls:
     // 1. Upload file
@@ -84,8 +92,6 @@ describe("runVoyageEmbeddingBatches", () => {
       body: stream,
     });
 
-    const { runVoyageEmbeddingBatches } = await import("./batch-voyage.js");
-
     const results = await runVoyageEmbeddingBatches({
       client: mockClient,
       agentId: "agent-1",
@@ -126,6 +132,7 @@ describe("runVoyageEmbeddingBatches", () => {
   it("handles empty lines and stream chunks correctly", async () => {
     const fetchMock = vi.fn();
     vi.stubGlobal("fetch", fetchMock);
+    mockPublicPinnedHostname();
 
     // 1. Upload
     fetchMock.mockResolvedValueOnce({ ok: true, json: async () => ({ id: "f1" }) });
@@ -155,8 +162,6 @@ describe("runVoyageEmbeddingBatches", () => {
     });
 
     fetchMock.mockResolvedValueOnce({ ok: true, body: stream });
-
-    const { runVoyageEmbeddingBatches } = await import("./batch-voyage.js");
 
     const results = await runVoyageEmbeddingBatches({
       client: mockClient,

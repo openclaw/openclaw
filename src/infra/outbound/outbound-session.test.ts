@@ -2,53 +2,12 @@ import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import { resolveOutboundSessionRoute } from "./outbound-session.js";
 
-const baseConfig = {} as OpenClawConfig;
-
 describe("resolveOutboundSessionRoute", () => {
-  it("builds Slack thread session keys", async () => {
-    const route = await resolveOutboundSessionRoute({
-      cfg: baseConfig,
-      channel: "slack",
-      agentId: "main",
-      target: "channel:C123",
-      replyToId: "456",
-    });
+  const baseConfig = {} as OpenClawConfig;
 
-    expect(route?.sessionKey).toBe("agent:main:slack:channel:c123:thread:456");
-    expect(route?.from).toBe("slack:channel:C123");
-    expect(route?.to).toBe("channel:C123");
-    expect(route?.threadId).toBe("456");
-  });
-
-  it("uses Telegram topic ids in group session keys", async () => {
-    const route = await resolveOutboundSessionRoute({
-      cfg: baseConfig,
-      channel: "telegram",
-      agentId: "main",
-      target: "-100123456:topic:42",
-    });
-
-    expect(route?.sessionKey).toBe("agent:main:telegram:group:-100123456:topic:42");
-    expect(route?.from).toBe("telegram:group:-100123456:topic:42");
-    expect(route?.to).toBe("telegram:-100123456");
-    expect(route?.threadId).toBe(42);
-  });
-
-  it("treats Telegram usernames as DMs when unresolved", async () => {
-    const cfg = { session: { dmScope: "per-channel-peer" } } as OpenClawConfig;
-    const route = await resolveOutboundSessionRoute({
-      cfg,
-      channel: "telegram",
-      agentId: "main",
-      target: "@alice",
-    });
-
-    expect(route?.sessionKey).toBe("agent:main:telegram:direct:@alice");
-    expect(route?.chatType).toBe("direct");
-  });
-
-  it("honors dmScope identity links", async () => {
-    const cfg = {
+  it("resolves provider-specific session routes", async () => {
+    const perChannelPeerCfg = { session: { dmScope: "per-channel-peer" } } as OpenClawConfig;
+    const identityLinksCfg = {
       session: {
         dmScope: "per-peer",
         identityLinks: {
@@ -56,44 +15,7 @@ describe("resolveOutboundSessionRoute", () => {
         },
       },
     } as OpenClawConfig;
-
-    const route = await resolveOutboundSessionRoute({
-      cfg,
-      channel: "discord",
-      agentId: "main",
-      target: "user:123",
-    });
-
-    expect(route?.sessionKey).toBe("agent:main:direct:alice");
-  });
-
-  it("strips chat_* prefixes for BlueBubbles group session keys", async () => {
-    const route = await resolveOutboundSessionRoute({
-      cfg: baseConfig,
-      channel: "bluebubbles",
-      agentId: "main",
-      target: "chat_guid:ABC123",
-    });
-
-    expect(route?.sessionKey).toBe("agent:main:bluebubbles:group:abc123");
-    expect(route?.from).toBe("group:ABC123");
-  });
-
-  it("treats Zalo Personal DM targets as direct sessions", async () => {
-    const cfg = { session: { dmScope: "per-channel-peer" } } as OpenClawConfig;
-    const route = await resolveOutboundSessionRoute({
-      cfg,
-      channel: "zalouser",
-      agentId: "main",
-      target: "123456",
-    });
-
-    expect(route?.sessionKey).toBe("agent:main:zalouser:direct:123456");
-    expect(route?.chatType).toBe("direct");
-  });
-
-  it("uses group session keys for Slack mpim allowlist entries", async () => {
-    const cfg = {
+    const slackMpimCfg = {
       channels: {
         slack: {
           dm: {
@@ -102,15 +24,236 @@ describe("resolveOutboundSessionRoute", () => {
         },
       },
     } as OpenClawConfig;
+    const cases: Array<{
+      name: string;
+      cfg: OpenClawConfig;
+      channel: string;
+      target: string;
+      replyToId?: string;
+      threadId?: string;
+      expected: {
+        sessionKey: string;
+        from?: string;
+        to?: string;
+        threadId?: string | number;
+        chatType?: "direct" | "group";
+      };
+    }> = [
+      {
+        name: "Slack thread",
+        cfg: baseConfig,
+        channel: "slack",
+        target: "channel:C123",
+        replyToId: "456",
+        expected: {
+          sessionKey: "agent:main:slack:channel:c123:thread:456",
+          from: "slack:channel:C123",
+          to: "channel:C123",
+          threadId: "456",
+        },
+      },
+      {
+        name: "Telegram topic group",
+        cfg: baseConfig,
+        channel: "telegram",
+        target: "-100123456:topic:42",
+        expected: {
+          sessionKey: "agent:main:telegram:group:-100123456:topic:42",
+          from: "telegram:group:-100123456:topic:42",
+          to: "telegram:-100123456",
+          threadId: 42,
+        },
+      },
+      {
+        name: "Telegram DM with topic",
+        cfg: perChannelPeerCfg,
+        channel: "telegram",
+        target: "123456789:topic:99",
+        expected: {
+          sessionKey: "agent:main:telegram:direct:123456789:thread:99",
+          from: "telegram:123456789:topic:99",
+          to: "telegram:123456789",
+          threadId: 99,
+          chatType: "direct",
+        },
+      },
+      {
+        name: "Telegram unresolved username DM",
+        cfg: perChannelPeerCfg,
+        channel: "telegram",
+        target: "@alice",
+        expected: {
+          sessionKey: "agent:main:telegram:direct:@alice",
+          chatType: "direct",
+        },
+      },
+      {
+        name: "Telegram DM scoped threadId fallback",
+        cfg: perChannelPeerCfg,
+        channel: "telegram",
+        target: "12345",
+        threadId: "12345:99",
+        expected: {
+          sessionKey: "agent:main:telegram:direct:12345:thread:99",
+          from: "telegram:12345:topic:99",
+          to: "telegram:12345",
+          threadId: 99,
+          chatType: "direct",
+        },
+      },
+      {
+        name: "identity-links per-peer",
+        cfg: identityLinksCfg,
+        channel: "discord",
+        target: "user:123",
+        expected: {
+          sessionKey: "agent:main:direct:alice",
+        },
+      },
+      {
+        name: "BlueBubbles chat_* prefix stripping",
+        cfg: baseConfig,
+        channel: "bluebubbles",
+        target: "chat_guid:ABC123",
+        expected: {
+          sessionKey: "agent:main:bluebubbles:group:abc123",
+          from: "group:ABC123",
+        },
+      },
+      {
+        name: "Zalo Personal DM target",
+        cfg: perChannelPeerCfg,
+        channel: "zalouser",
+        target: "123456",
+        expected: {
+          sessionKey: "agent:main:zalouser:direct:123456",
+          chatType: "direct",
+        },
+      },
+      {
+        name: "Slack mpim allowlist -> group key",
+        cfg: slackMpimCfg,
+        channel: "slack",
+        target: "channel:G123",
+        expected: {
+          sessionKey: "agent:main:slack:group:g123",
+          from: "slack:group:G123",
+        },
+      },
+      {
+        name: "Feishu explicit group prefix keeps group routing",
+        cfg: baseConfig,
+        channel: "feishu",
+        target: "group:oc_group_chat",
+        expected: {
+          sessionKey: "agent:main:feishu:group:oc_group_chat",
+          from: "feishu:group:oc_group_chat",
+          to: "oc_group_chat",
+          chatType: "group",
+        },
+      },
+      {
+        name: "Feishu explicit dm prefix keeps direct routing",
+        cfg: perChannelPeerCfg,
+        channel: "feishu",
+        target: "dm:oc_dm_chat",
+        expected: {
+          sessionKey: "agent:main:feishu:direct:oc_dm_chat",
+          from: "feishu:oc_dm_chat",
+          to: "oc_dm_chat",
+          chatType: "direct",
+        },
+      },
+      {
+        name: "Feishu bare oc_ target defaults to direct routing",
+        cfg: perChannelPeerCfg,
+        channel: "feishu",
+        target: "oc_ambiguous_chat",
+        expected: {
+          sessionKey: "agent:main:feishu:direct:oc_ambiguous_chat",
+          from: "feishu:oc_ambiguous_chat",
+          to: "oc_ambiguous_chat",
+          chatType: "direct",
+        },
+      },
+    ];
 
+    for (const testCase of cases) {
+      const route = await resolveOutboundSessionRoute({
+        cfg: testCase.cfg,
+        channel: testCase.channel,
+        agentId: "main",
+        target: testCase.target,
+        replyToId: testCase.replyToId,
+        threadId: testCase.threadId,
+      });
+      expect(route?.sessionKey, testCase.name).toBe(testCase.expected.sessionKey);
+      if (testCase.expected.from !== undefined) {
+        expect(route?.from, testCase.name).toBe(testCase.expected.from);
+      }
+      if (testCase.expected.to !== undefined) {
+        expect(route?.to, testCase.name).toBe(testCase.expected.to);
+      }
+      if (testCase.expected.threadId !== undefined) {
+        expect(route?.threadId, testCase.name).toBe(testCase.expected.threadId);
+      }
+      if (testCase.expected.chatType !== undefined) {
+        expect(route?.chatType, testCase.name).toBe(testCase.expected.chatType);
+      }
+    }
+  });
+
+  it("uses resolved Discord user targets to route bare numeric ids as DMs", async () => {
     const route = await resolveOutboundSessionRoute({
-      cfg,
-      channel: "slack",
+      cfg: { session: { dmScope: "per-channel-peer" } } as OpenClawConfig,
+      channel: "discord",
       agentId: "main",
-      target: "channel:G123",
+      target: "123",
+      resolvedTarget: {
+        to: "user:123",
+        kind: "user",
+        source: "directory",
+      },
     });
 
-    expect(route?.sessionKey).toBe("agent:main:slack:group:g123");
-    expect(route?.from).toBe("slack:group:G123");
+    expect(route).toMatchObject({
+      sessionKey: "agent:main:discord:direct:123",
+      from: "discord:123",
+      to: "user:123",
+      chatType: "direct",
+    });
+  });
+
+  it("uses resolved Mattermost user targets to route bare ids as DMs", async () => {
+    const userId = "dthcxgoxhifn3pwh65cut3ud3w";
+    const route = await resolveOutboundSessionRoute({
+      cfg: { session: { dmScope: "per-channel-peer" } } as OpenClawConfig,
+      channel: "mattermost",
+      agentId: "main",
+      target: userId,
+      resolvedTarget: {
+        to: `user:${userId}`,
+        kind: "user",
+        source: "directory",
+      },
+    });
+
+    expect(route).toMatchObject({
+      sessionKey: `agent:main:mattermost:direct:${userId}`,
+      from: `mattermost:${userId}`,
+      to: `user:${userId}`,
+      chatType: "direct",
+    });
+  });
+
+  it("rejects bare numeric Discord targets when the caller has no kind hint", async () => {
+    await expect(
+      resolveOutboundSessionRoute({
+        cfg: { session: { dmScope: "per-channel-peer" } } as OpenClawConfig,
+        channel: "discord",
+        agentId: "main",
+        target: "123",
+      }),
+    ).rejects.toThrow(/Ambiguous Discord recipient/);
   });
 });

@@ -1,102 +1,6 @@
-import fs from "node:fs/promises";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
-import { ensureOpenClawModelsJson } from "./models-config.js";
 import { getDmHistoryLimitFromSessionKey } from "./pi-embedded-runner.js";
-
-vi.mock("@mariozechner/pi-ai", async () => {
-  const actual = await vi.importActual<typeof import("@mariozechner/pi-ai")>("@mariozechner/pi-ai");
-  return {
-    ...actual,
-    streamSimple: (model: { api: string; provider: string; id: string }) => {
-      if (model.id === "mock-error") {
-        throw new Error("boom");
-      }
-      const stream = new actual.AssistantMessageEventStream();
-      queueMicrotask(() => {
-        stream.push({
-          type: "done",
-          reason: "stop",
-          message: {
-            role: "assistant",
-            content: [{ type: "text", text: "ok" }],
-            stopReason: "stop",
-            api: model.api,
-            provider: model.provider,
-            model: model.id,
-            usage: {
-              input: 1,
-              output: 1,
-              cacheRead: 0,
-              cacheWrite: 0,
-              totalTokens: 2,
-              cost: {
-                input: 0,
-                output: 0,
-                cacheRead: 0,
-                cacheWrite: 0,
-                total: 0,
-              },
-            },
-            timestamp: Date.now(),
-          },
-        });
-      });
-      return stream;
-    },
-  };
-});
-
-const _makeOpenAiConfig = (modelIds: string[]) =>
-  ({
-    models: {
-      providers: {
-        openai: {
-          api: "openai-responses",
-          apiKey: "sk-test",
-          baseUrl: "https://example.com",
-          models: modelIds.map((id) => ({
-            id,
-            name: `Mock ${id}`,
-            reasoning: false,
-            input: ["text"],
-            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-            contextWindow: 16_000,
-            maxTokens: 2048,
-          })),
-        },
-      },
-    },
-  }) satisfies OpenClawConfig;
-
-const _ensureModels = (cfg: OpenClawConfig, agentDir: string) =>
-  ensureOpenClawModelsJson(cfg, agentDir) as unknown;
-
-const _textFromContent = (content: unknown) => {
-  if (typeof content === "string") {
-    return content;
-  }
-  if (Array.isArray(content) && content[0]?.type === "text") {
-    return (content[0] as { text?: string }).text;
-  }
-  return undefined;
-};
-
-const _readSessionMessages = async (sessionFile: string) => {
-  const raw = await fs.readFile(sessionFile, "utf-8");
-  return raw
-    .split(/\r?\n/)
-    .filter(Boolean)
-    .map(
-      (line) =>
-        JSON.parse(line) as {
-          type?: string;
-          message?: { role?: string; content?: unknown };
-        },
-    )
-    .filter((entry) => entry.type === "message")
-    .map((entry) => entry.message as { role?: string; content?: unknown });
-};
 
 describe("getDmHistoryLimitFromSessionKey", () => {
   it("returns undefined when sessionKey is undefined", () => {
@@ -143,14 +47,23 @@ describe("getDmHistoryLimitFromSessionKey", () => {
       9,
     );
   });
-  it("returns undefined for non-dm session kinds", () => {
+  it("returns historyLimit for channel session kinds when configured", () => {
     const config = {
       channels: {
-        telegram: { dmHistoryLimit: 15 },
-        slack: { dmHistoryLimit: 10 },
+        slack: { historyLimit: 10, dmHistoryLimit: 15 },
+        discord: { historyLimit: 8 },
       },
     } as OpenClawConfig;
-    expect(getDmHistoryLimitFromSessionKey("agent:beta:slack:channel:c1", config)).toBeUndefined();
+    expect(getDmHistoryLimitFromSessionKey("agent:beta:slack:channel:c1", config)).toBe(10);
+    expect(getDmHistoryLimitFromSessionKey("discord:channel:123456", config)).toBe(8);
+  });
+  it("returns undefined for non-dm/channel/group session kinds", () => {
+    const config = {
+      channels: {
+        telegram: { dmHistoryLimit: 15, historyLimit: 10 },
+      },
+    } as OpenClawConfig;
+    // "slash" is not dm, channel, or group
     expect(getDmHistoryLimitFromSessionKey("telegram:slash:123", config)).toBeUndefined();
   });
   it("returns undefined for unknown provider", () => {
@@ -227,6 +140,46 @@ describe("getDmHistoryLimitFromSessionKey", () => {
       },
     } as OpenClawConfig;
     expect(getDmHistoryLimitFromSessionKey("telegram:dm:123", config)).toBe(5);
+  });
+  it("returns historyLimit for channel sessions for all providers", () => {
+    const providers = [
+      "telegram",
+      "whatsapp",
+      "discord",
+      "slack",
+      "signal",
+      "imessage",
+      "msteams",
+      "nextcloud-talk",
+    ] as const;
+
+    for (const provider of providers) {
+      const config = {
+        channels: { [provider]: { historyLimit: 12 } },
+      } as OpenClawConfig;
+      expect(getDmHistoryLimitFromSessionKey(`${provider}:channel:123`, config)).toBe(12);
+      expect(getDmHistoryLimitFromSessionKey(`agent:main:${provider}:channel:456`, config)).toBe(
+        12,
+      );
+    }
+  });
+  it("returns historyLimit for group sessions", () => {
+    const config = {
+      channels: {
+        discord: { historyLimit: 15 },
+        slack: { historyLimit: 10 },
+      },
+    } as OpenClawConfig;
+    expect(getDmHistoryLimitFromSessionKey("discord:group:123", config)).toBe(15);
+    expect(getDmHistoryLimitFromSessionKey("agent:main:slack:group:abc", config)).toBe(10);
+  });
+  it("returns undefined for channel sessions when historyLimit is not configured", () => {
+    const config = {
+      channels: {
+        discord: { dmHistoryLimit: 10 }, // only dmHistoryLimit, no historyLimit
+      },
+    } as OpenClawConfig;
+    expect(getDmHistoryLimitFromSessionKey("discord:channel:123", config)).toBeUndefined();
   });
 
   describe("backward compatibility", () => {

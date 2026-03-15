@@ -2,6 +2,17 @@ import crypto from "node:crypto";
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { detectMime } from "../media/mime.js";
+import { runTasksWithConcurrency } from "../utils/run-with-concurrency.js";
+import { estimateStructuredEmbeddingInputBytes } from "./embedding-input-limits.js";
+import { buildTextEmbeddingInput, type EmbeddingInput } from "./embedding-inputs.js";
+import { isFileMissingError } from "./fs-utils.js";
+import {
+  buildMemoryMultimodalLabel,
+  classifyMemoryMultimodalPath,
+  type MemoryMultimodalModality,
+  type MemoryMultimodalSettings,
+} from "./multimodal.js";
 
 export type MemoryFileEntry = {
   path: string;
@@ -9,6 +20,11 @@ export type MemoryFileEntry = {
   mtimeMs: number;
   size: number;
   hash: string;
+  dataHash?: string;
+  kind?: "markdown" | "multimodal";
+  contentText?: string;
+  modality?: MemoryMultimodalModality;
+  mimeType?: string;
 };
 
 export type MemoryChunk = {
@@ -16,6 +32,18 @@ export type MemoryChunk = {
   endLine: number;
   text: string;
   hash: string;
+  embeddingInput?: EmbeddingInput;
+};
+
+export type MultimodalMemoryChunk = {
+  chunk: MemoryChunk;
+  structuredInputBytes: number;
+};
+
+const DISABLED_MULTIMODAL_SETTINGS: MemoryMultimodalSettings = {
+  enabled: false,
+  modalities: [],
+  maxFileBytes: 0,
 };
 
 export function ensureDir(dir: string): string {
@@ -54,7 +82,16 @@ export function isMemoryPath(relPath: string): boolean {
   return normalized.startsWith("memory/");
 }
 
-async function walkDir(dir: string, files: string[]) {
+function isAllowedMemoryFilePath(filePath: string, multimodal?: MemoryMultimodalSettings): boolean {
+  if (filePath.endsWith(".md")) {
+    return true;
+  }
+  return (
+    classifyMemoryMultimodalPath(filePath, multimodal ?? DISABLED_MULTIMODAL_SETTINGS) !== null
+  );
+}
+
+async function walkDir(dir: string, files: string[], multimodal?: MemoryMultimodalSettings) {
   const entries = await fs.readdir(dir, { withFileTypes: true });
   for (const entry of entries) {
     const full = path.join(dir, entry.name);
@@ -62,13 +99,13 @@ async function walkDir(dir: string, files: string[]) {
       continue;
     }
     if (entry.isDirectory()) {
-      await walkDir(full, files);
+      await walkDir(full, files, multimodal);
       continue;
     }
     if (!entry.isFile()) {
       continue;
     }
-    if (!entry.name.endsWith(".md")) {
+    if (!isAllowedMemoryFilePath(full, multimodal)) {
       continue;
     }
     files.push(full);
@@ -78,6 +115,7 @@ async function walkDir(dir: string, files: string[]) {
 export async function listMemoryFiles(
   workspaceDir: string,
   extraPaths?: string[],
+  multimodal?: MemoryMultimodalSettings,
 ): Promise<string[]> {
   const result: string[] = [];
   const memoryFile = path.join(workspaceDir, "MEMORY.md");
@@ -115,10 +153,10 @@ export async function listMemoryFiles(
           continue;
         }
         if (stat.isDirectory()) {
-          await walkDir(inputPath, result);
+          await walkDir(inputPath, result, multimodal);
           continue;
         }
-        if (stat.isFile() && inputPath.endsWith(".md")) {
+        if (stat.isFile() && isAllowedMemoryFilePath(inputPath, multimodal)) {
           result.push(inputPath);
         }
       } catch {}
@@ -150,16 +188,146 @@ export function hashText(value: string): string {
 export async function buildFileEntry(
   absPath: string,
   workspaceDir: string,
-): Promise<MemoryFileEntry> {
-  const stat = await fs.stat(absPath);
-  const content = await fs.readFile(absPath, "utf-8");
+  multimodal?: MemoryMultimodalSettings,
+): Promise<MemoryFileEntry | null> {
+  let stat;
+  try {
+    stat = await fs.stat(absPath);
+  } catch (err) {
+    if (isFileMissingError(err)) {
+      return null;
+    }
+    throw err;
+  }
+  const normalizedPath = path.relative(workspaceDir, absPath).replace(/\\/g, "/");
+  const multimodalSettings = multimodal ?? DISABLED_MULTIMODAL_SETTINGS;
+  const modality = classifyMemoryMultimodalPath(absPath, multimodalSettings);
+  if (modality) {
+    if (stat.size > multimodalSettings.maxFileBytes) {
+      return null;
+    }
+    let buffer: Buffer;
+    try {
+      buffer = await fs.readFile(absPath);
+    } catch (err) {
+      if (isFileMissingError(err)) {
+        return null;
+      }
+      throw err;
+    }
+    const mimeType = await detectMime({ buffer: buffer.subarray(0, 512), filePath: absPath });
+    if (!mimeType || !mimeType.startsWith(`${modality}/`)) {
+      return null;
+    }
+    const contentText = buildMemoryMultimodalLabel(modality, normalizedPath);
+    const dataHash = crypto.createHash("sha256").update(buffer).digest("hex");
+    const chunkHash = hashText(
+      JSON.stringify({
+        path: normalizedPath,
+        contentText,
+        mimeType,
+        dataHash,
+      }),
+    );
+    return {
+      path: normalizedPath,
+      absPath,
+      mtimeMs: stat.mtimeMs,
+      size: stat.size,
+      hash: chunkHash,
+      dataHash,
+      kind: "multimodal",
+      contentText,
+      modality,
+      mimeType,
+    };
+  }
+  let content: string;
+  try {
+    content = await fs.readFile(absPath, "utf-8");
+  } catch (err) {
+    if (isFileMissingError(err)) {
+      return null;
+    }
+    throw err;
+  }
   const hash = hashText(content);
   return {
-    path: path.relative(workspaceDir, absPath).replace(/\\/g, "/"),
+    path: normalizedPath,
     absPath,
     mtimeMs: stat.mtimeMs,
     size: stat.size,
     hash,
+    kind: "markdown",
+  };
+}
+
+async function loadMultimodalEmbeddingInput(
+  entry: Pick<
+    MemoryFileEntry,
+    "absPath" | "contentText" | "mimeType" | "kind" | "size" | "dataHash"
+  >,
+): Promise<EmbeddingInput | null> {
+  if (entry.kind !== "multimodal" || !entry.contentText || !entry.mimeType) {
+    return null;
+  }
+  let stat;
+  try {
+    stat = await fs.stat(entry.absPath);
+  } catch (err) {
+    if (isFileMissingError(err)) {
+      return null;
+    }
+    throw err;
+  }
+  if (stat.size !== entry.size) {
+    return null;
+  }
+  let buffer: Buffer;
+  try {
+    buffer = await fs.readFile(entry.absPath);
+  } catch (err) {
+    if (isFileMissingError(err)) {
+      return null;
+    }
+    throw err;
+  }
+  const dataHash = crypto.createHash("sha256").update(buffer).digest("hex");
+  if (entry.dataHash && entry.dataHash !== dataHash) {
+    return null;
+  }
+  return {
+    text: entry.contentText,
+    parts: [
+      { type: "text", text: entry.contentText },
+      {
+        type: "inline-data",
+        mimeType: entry.mimeType,
+        data: buffer.toString("base64"),
+      },
+    ],
+  };
+}
+
+export async function buildMultimodalChunkForIndexing(
+  entry: Pick<
+    MemoryFileEntry,
+    "absPath" | "contentText" | "mimeType" | "kind" | "hash" | "size" | "dataHash"
+  >,
+): Promise<MultimodalMemoryChunk | null> {
+  const embeddingInput = await loadMultimodalEmbeddingInput(entry);
+  if (!embeddingInput) {
+    return null;
+  }
+  return {
+    chunk: {
+      startLine: 1,
+      endLine: 1,
+      text: entry.contentText ?? embeddingInput.text,
+      hash: entry.hash,
+      embeddingInput,
+    },
+    structuredInputBytes: estimateStructuredEmbeddingInputBytes(embeddingInput),
   };
 }
 
@@ -195,6 +363,7 @@ export function chunkMarkdown(
       endLine,
       text,
       hash: hashText(text),
+      embeddingInput: buildTextEmbeddingInput(text),
     });
   };
 
@@ -246,6 +415,27 @@ export function chunkMarkdown(
   return chunks;
 }
 
+/**
+ * Remap chunk startLine/endLine from content-relative positions to original
+ * source file positions using a lineMap.  Each entry in lineMap gives the
+ * 1-indexed source line for the corresponding 0-indexed content line.
+ *
+ * This is used for session JSONL files where buildSessionEntry() flattens
+ * messages into a plain-text string before chunking.  Without remapping the
+ * stored line numbers would reference positions in the flattened text rather
+ * than the original JSONL file.
+ */
+export function remapChunkLines(chunks: MemoryChunk[], lineMap: number[] | undefined): void {
+  if (!lineMap || lineMap.length === 0) {
+    return;
+  }
+  for (const chunk of chunks) {
+    // startLine/endLine are 1-indexed; lineMap is 0-indexed by content line
+    chunk.startLine = lineMap[chunk.startLine - 1] ?? chunk.startLine;
+    chunk.endLine = lineMap[chunk.endLine - 1] ?? chunk.endLine;
+  }
+}
+
 export function parseEmbedding(raw: string): number[] {
   try {
     const parsed = JSON.parse(raw) as number[];
@@ -280,35 +470,12 @@ export async function runWithConcurrency<T>(
   tasks: Array<() => Promise<T>>,
   limit: number,
 ): Promise<T[]> {
-  if (tasks.length === 0) {
-    return [];
-  }
-  const resolvedLimit = Math.max(1, Math.min(limit, tasks.length));
-  const results: T[] = Array.from({ length: tasks.length });
-  let next = 0;
-  let firstError: unknown = null;
-
-  const workers = Array.from({ length: resolvedLimit }, async () => {
-    while (true) {
-      if (firstError) {
-        return;
-      }
-      const index = next;
-      next += 1;
-      if (index >= tasks.length) {
-        return;
-      }
-      try {
-        results[index] = await tasks[index]();
-      } catch (err) {
-        firstError = err;
-        return;
-      }
-    }
+  const { results, firstError, hasError } = await runTasksWithConcurrency({
+    tasks,
+    limit,
+    errorMode: "stop",
   });
-
-  await Promise.allSettled(workers);
-  if (firstError) {
+  if (hasError) {
     throw firstError;
   }
   return results;

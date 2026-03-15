@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "./types.js";
 import { findDuplicateAgentDirs } from "./agent-dirs.js";
+import type { OpenClawConfig } from "./types.js";
 
 afterEach(() => {
   vi.unstubAllEnvs();

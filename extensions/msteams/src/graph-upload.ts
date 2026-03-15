@@ -21,25 +21,34 @@ export interface OneDriveUploadResult {
   name: string;
 }
 
-/**
- * Upload a file to the user's OneDrive root folder.
- * For larger files, this uses the simple upload endpoint (up to 4MB).
- * TODO: For files >4MB, implement resumable upload session.
- */
-export async function uploadToOneDrive(params: {
+function parseUploadedDriveItem(
+  data: { id?: string; webUrl?: string; name?: string },
+  label: "OneDrive" | "SharePoint",
+): OneDriveUploadResult {
+  if (!data.id || !data.webUrl || !data.name) {
+    throw new Error(`${label} upload response missing required fields`);
+  }
+
+  return {
+    id: data.id,
+    webUrl: data.webUrl,
+    name: data.name,
+  };
+}
+
+async function uploadDriveItem(params: {
   buffer: Buffer;
   filename: string;
   contentType?: string;
   tokenProvider: MSTeamsAccessTokenProvider;
   fetchFn?: typeof fetch;
+  url: string;
+  label: "OneDrive" | "SharePoint";
 }): Promise<OneDriveUploadResult> {
   const fetchFn = params.fetchFn ?? fetch;
   const token = await params.tokenProvider.getAccessToken(GRAPH_SCOPE);
 
-  // Use "OpenClawShared" folder to organize bot-uploaded files
-  const uploadPath = `/OpenClawShared/${encodeURIComponent(params.filename)}`;
-
-  const res = await fetchFn(`${GRAPH_ROOT}/me/drive/root:${uploadPath}:/content`, {
+  const res = await fetchFn(params.url, {
     method: "PUT",
     headers: {
       Authorization: `Bearer ${token}`,
@@ -50,24 +59,33 @@ export async function uploadToOneDrive(params: {
 
   if (!res.ok) {
     const body = await res.text().catch(() => "");
-    throw new Error(`OneDrive upload failed: ${res.status} ${res.statusText} - ${body}`);
+    throw new Error(`${params.label} upload failed: ${res.status} ${res.statusText} - ${body}`);
   }
 
-  const data = (await res.json()) as {
-    id?: string;
-    webUrl?: string;
-    name?: string;
-  };
+  return parseUploadedDriveItem(
+    (await res.json()) as { id?: string; webUrl?: string; name?: string },
+    params.label,
+  );
+}
 
-  if (!data.id || !data.webUrl || !data.name) {
-    throw new Error("OneDrive upload response missing required fields");
-  }
-
-  return {
-    id: data.id,
-    webUrl: data.webUrl,
-    name: data.name,
-  };
+/**
+ * Upload a file to the user's OneDrive root folder.
+ * For larger files, this uses the simple upload endpoint (up to 4MB).
+ */
+export async function uploadToOneDrive(params: {
+  buffer: Buffer;
+  filename: string;
+  contentType?: string;
+  tokenProvider: MSTeamsAccessTokenProvider;
+  fetchFn?: typeof fetch;
+}): Promise<OneDriveUploadResult> {
+  // Use "OpenClawShared" folder to organize bot-uploaded files
+  const uploadPath = `/OpenClawShared/${encodeURIComponent(params.filename)}`;
+  return await uploadDriveItem({
+    ...params,
+    url: `${GRAPH_ROOT}/me/drive/root:${uploadPath}:/content`,
+    label: "OneDrive",
+  });
 }
 
 export interface OneDriveSharingLink {
@@ -176,44 +194,13 @@ export async function uploadToSharePoint(params: {
   siteId: string;
   fetchFn?: typeof fetch;
 }): Promise<OneDriveUploadResult> {
-  const fetchFn = params.fetchFn ?? fetch;
-  const token = await params.tokenProvider.getAccessToken(GRAPH_SCOPE);
-
   // Use "OpenClawShared" folder to organize bot-uploaded files
   const uploadPath = `/OpenClawShared/${encodeURIComponent(params.filename)}`;
-
-  const res = await fetchFn(
-    `${GRAPH_ROOT}/sites/${params.siteId}/drive/root:${uploadPath}:/content`,
-    {
-      method: "PUT",
-      headers: {
-        Authorization: `Bearer ${token}`,
-        "Content-Type": params.contentType ?? "application/octet-stream",
-      },
-      body: new Uint8Array(params.buffer),
-    },
-  );
-
-  if (!res.ok) {
-    const body = await res.text().catch(() => "");
-    throw new Error(`SharePoint upload failed: ${res.status} ${res.statusText} - ${body}`);
-  }
-
-  const data = (await res.json()) as {
-    id?: string;
-    webUrl?: string;
-    name?: string;
-  };
-
-  if (!data.id || !data.webUrl || !data.name) {
-    throw new Error("SharePoint upload response missing required fields");
-  }
-
-  return {
-    id: data.id,
-    webUrl: data.webUrl,
-    name: data.name,
-  };
+  return await uploadDriveItem({
+    ...params,
+    url: `${GRAPH_ROOT}/sites/${params.siteId}/drive/root:${uploadPath}:/content`,
+    label: "SharePoint",
+  });
 }
 
 export interface ChatMember {

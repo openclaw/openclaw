@@ -2,8 +2,8 @@ import type {
   ChannelMessageActionAdapter,
   ChannelMessageActionName,
   OpenClawConfig,
-} from "openclaw/plugin-sdk";
-import { jsonResult, readStringParam } from "openclaw/plugin-sdk";
+} from "openclaw/plugin-sdk/zalo";
+import { extractToolSend, jsonResult, readStringParam } from "openclaw/plugin-sdk/zalo";
 import { listEnabledZaloAccounts } from "./accounts.js";
 import { sendMessageZalo } from "./send.js";
 
@@ -25,18 +25,7 @@ export const zaloMessageActions: ChannelMessageActionAdapter = {
     return Array.from(actions);
   },
   supportsButtons: () => false,
-  extractToolSend: ({ args }) => {
-    const action = typeof args.action === "string" ? args.action.trim() : "";
-    if (action !== "sendMessage") {
-      return null;
-    }
-    const to = typeof args.to === "string" ? args.to : undefined;
-    if (!to) {
-      return null;
-    }
-    const accountId = typeof args.accountId === "string" ? args.accountId.trim() : undefined;
-    return { to, accountId };
-  },
+  extractToolSend: ({ args }) => extractToolSend(args, "sendMessage"),
   handleAction: async ({ action, params, cfg, accountId }) => {
     if (action === "send") {
       const to = readStringParam(params, "to", { required: true });

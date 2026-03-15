@@ -1,17 +1,24 @@
-import type { ReplyPayload } from "../types.js";
 import { sanitizeUserFacingText } from "../../agents/pi-embedded-helpers.js";
 import { stripHeartbeatToken } from "../heartbeat.js";
-import { HEARTBEAT_TOKEN, isSilentReplyText, SILENT_REPLY_TOKEN } from "../tokens.js";
+import {
+  HEARTBEAT_TOKEN,
+  isSilentReplyText,
+  SILENT_REPLY_TOKEN,
+  stripSilentToken,
+} from "../tokens.js";
+import type { ReplyPayload } from "../types.js";
 import { hasLineDirectives, parseLineDirectives } from "./line-directives.js";
 import {
   resolveResponsePrefixTemplate,
   type ResponsePrefixContext,
 } from "./response-prefix-template.js";
+import { hasSlackDirectives, parseSlackDirectives } from "./slack-directives.js";
 
 export type NormalizeReplySkipReason = "empty" | "silent" | "heartbeat";
 
 export type NormalizeReplyOptions = {
   responsePrefix?: string;
+  enableSlackInteractiveReplies?: boolean;
   /** Context for template variable interpolation in responsePrefix */
   responsePrefixContext?: ResponsePrefixContext;
   onHeartbeatStrip?: () => void;
@@ -42,6 +49,16 @@ export function normalizeReplyPayload(
       return null;
     }
     text = "";
+  }
+  // Strip NO_REPLY from mixed-content messages (e.g. "😄 NO_REPLY") so the
+  // token never leaks to end users.  If stripping leaves nothing, treat it as
+  // silent just like the exact-match path above.  (#30916, #30955)
+  if (text && text.includes(silentToken) && !isSilentReplyText(text, silentToken)) {
+    text = stripSilentToken(text, silentToken);
+    if (!text && !hasMedia && !hasChannelData) {
+      opts.onSkip?.("silent");
+      return null;
+    }
   }
   if (text && !trimmed) {
     // Keep empty text when media exists so media-only replies still send.
@@ -90,5 +107,10 @@ export function normalizeReplyPayload(
     text = `${effectivePrefix} ${text}`;
   }
 
-  return { ...enrichedPayload, text };
+  enrichedPayload = { ...enrichedPayload, text };
+  if (opts.enableSlackInteractiveReplies && text && hasSlackDirectives(text)) {
+    enrichedPayload = parseSlackDirectives(enrichedPayload);
+  }
+
+  return enrichedPayload;
 }

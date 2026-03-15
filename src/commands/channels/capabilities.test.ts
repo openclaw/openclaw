@@ -1,9 +1,9 @@
 process.env.NO_COLOR = "1";
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { ChannelPlugin } from "../../channels/plugins/types.js";
+import { fetchSlackScopes } from "../../../extensions/slack/src/scopes.js";
 import { getChannelPlugin, listChannelPlugins } from "../../channels/plugins/index.js";
-import { fetchSlackScopes } from "../../slack/scopes.js";
+import type { ChannelPlugin } from "../../channels/plugins/types.js";
 import { channelsCapabilitiesCommand } from "./capabilities.js";
 
 const logs: string[] = [];
@@ -21,13 +21,17 @@ vi.mock("../../channels/plugins/index.js", () => ({
   getChannelPlugin: vi.fn(),
 }));
 
-vi.mock("../../slack/scopes.js", () => ({
+vi.mock("../../../extensions/slack/src/scopes.js", () => ({
   fetchSlackScopes: vi.fn(),
 }));
 
 const runtime = {
-  log: (value: string) => logs.push(value),
-  error: (value: string) => errors.push(value),
+  log: (...args: unknown[]) => {
+    logs.push(args.map(String).join(" "));
+  },
+  error: (...args: unknown[]) => {
+    errors.push(args.map(String).join(" "));
+  },
   exit: (code: number) => {
     throw new Error(`exit:${code}`);
   },
@@ -86,6 +90,7 @@ describe("channelsCapabilitiesCommand", () => {
       account: {
         accountId: "default",
         botToken: "xoxb-bot",
+        userToken: "xoxp-user",
         config: { userToken: "xoxp-user" },
       },
       probe: { ok: true, bot: { name: "openclaw" }, team: { name: "team" } },

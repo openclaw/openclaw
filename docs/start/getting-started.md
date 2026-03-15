@@ -19,7 +19,7 @@ Docs: [Dashboard](/web/dashboard) and [Control UI](/web/control-ui).
 
 ## Prereqs
 
-- Node 22 or newer
+- Node 24 recommended (Node 22 LTS, currently `22.16+`, still supported for compatibility)
 
 <Tip>
 Check your Node version with `node --version` if you are unsure.
@@ -34,6 +34,11 @@ Check your Node version with `node --version` if you are unsure.
         ```bash
         curl -fsSL https://openclaw.ai/install.sh | bash
         ```
+        <img
+  src="/assets/install-script.svg"
+  alt="Install Script Process"
+  className="rounded-lg"
+/>
       </Tab>
       <Tab title="Windows (PowerShell)">
         ```powershell

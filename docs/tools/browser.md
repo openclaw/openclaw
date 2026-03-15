@@ -18,8 +18,8 @@ Beginner view:
 - Think of it as a **separate, agent-only browser**.
 - The `openclaw` profile does **not** touch your personal browser profile.
 - The agent can **open tabs, read pages, click, and type** in a safe lane.
-- The default `chrome` profile uses the **system default Chromium browser** via the
-  extension relay; switch to `openclaw` for the isolated managed browser.
+- The built-in `user` profile attaches to your real signed-in Chrome session;
+  `chrome-relay` is the explicit extension-relay profile.
 
 ## What you get
 
@@ -43,11 +43,22 @@ openclaw browser --browser-profile openclaw snapshot
 If you get “Browser disabled”, enable it in config (see below) and restart the
 Gateway.
 
-## Profiles: `openclaw` vs `chrome`
+## Profiles: `openclaw` vs `user` vs `chrome-relay`
 
 - `openclaw`: managed, isolated browser (no extension required).
-- `chrome`: extension relay to your **system browser** (requires the OpenClaw
-  extension to be attached to a tab).
+- `user`: built-in Chrome MCP attach profile for your **real signed-in Chrome**
+  session.
+- `chrome-relay`: extension relay to your **system browser** (requires the
+  OpenClaw extension to be attached to a tab).
+
+For agent browser tool calls:
+
+- Default: use the isolated `openclaw` browser.
+- Prefer `profile="user"` when existing logged-in sessions matter and the user
+  is at the computer to click/approve any attach prompt.
+- Use `profile="chrome-relay"` only when the user explicitly wants the Chrome
+  extension / toolbar-button attach flow.
+- `profile` is the explicit override when you want a specific browser mode.
 
 Set `browser.defaultProfile: "openclaw"` if you want managed mode by default.
 
@@ -59,10 +70,16 @@ Browser settings live in `~/.openclaw/openclaw.json`.
 {
   browser: {
     enabled: true, // default: true
+    ssrfPolicy: {
+      dangerouslyAllowPrivateNetwork: true, // default trusted-network mode
+      // allowPrivateNetwork: true, // legacy alias
+      // hostnameAllowlist: ["*.example.com", "example.com"],
+      // allowedHostnames: ["localhost"],
+    },
     // cdpUrl: "http://127.0.0.1:18792", // legacy single-profile override
     remoteCdpTimeoutMs: 1500, // remote CDP HTTP timeout (ms)
     remoteCdpHandshakeTimeoutMs: 3000, // remote CDP WebSocket handshake timeout (ms)
-    defaultProfile: "chrome",
+    defaultProfile: "openclaw",
     color: "#FF4500",
     headless: false,
     noSandbox: false,
@@ -71,6 +88,16 @@ Browser settings live in `~/.openclaw/openclaw.json`.
     profiles: {
       openclaw: { cdpPort: 18800, color: "#FF4500" },
       work: { cdpPort: 18801, color: "#0066CC" },
+      user: {
+        driver: "existing-session",
+        attachOnly: true,
+        color: "#00AA00",
+      },
+      "chrome-relay": {
+        driver: "extension",
+        cdpUrl: "http://127.0.0.1:18792",
+        color: "#00AA00",
+      },
       remote: { cdpUrl: "http://10.0.0.42:9222", color: "#00AA00" },
     },
   },
@@ -86,11 +113,17 @@ Notes:
 - `cdpUrl` defaults to the relay port when unset.
 - `remoteCdpTimeoutMs` applies to remote (non-loopback) CDP reachability checks.
 - `remoteCdpHandshakeTimeoutMs` applies to remote CDP WebSocket reachability checks.
+- Browser navigation/open-tab is SSRF-guarded before navigation and best-effort re-checked on final `http(s)` URL after navigation.
+- In strict SSRF mode, remote CDP endpoint discovery/probes (`cdpUrl`, including `/json/version` lookups) are checked too.
+- `browser.ssrfPolicy.dangerouslyAllowPrivateNetwork` defaults to `true` (trusted-network model). Set it to `false` for strict public-only browsing.
+- `browser.ssrfPolicy.allowPrivateNetwork` remains supported as a legacy alias for compatibility.
 - `attachOnly: true` means “never launch a local browser; only attach if it is already running.”
 - `color` + per-profile `color` tint the browser UI so you can see which profile is active.
-- Default profile is `chrome` (extension relay). Use `defaultProfile: "openclaw"` for the managed browser.
+- Default profile is `openclaw` (OpenClaw-managed standalone browser). Use `defaultProfile: "user"` to opt into the signed-in user browser, or `defaultProfile: "chrome-relay"` for the extension relay.
 - Auto-detect order: system default browser if Chromium-based; otherwise Chrome → Brave → Edge → Chromium → Chrome Canary.
 - Local `openclaw` profiles auto-assign `cdpPort`/`cdpUrl` — set those only for remote CDP.
+- `driver: "existing-session"` uses Chrome DevTools MCP instead of raw CDP. Do
+  not set `cdpUrl` for that driver.
 
 ## Use Brave (or another Chromium-based browser)
 
@@ -187,17 +220,65 @@ Notes:
 - Replace `<BROWSERLESS_API_KEY>` with your real Browserless token.
 - Choose the region endpoint that matches your Browserless account (see their docs).
 
+## Direct WebSocket CDP providers
+
+Some hosted browser services expose a **direct WebSocket** endpoint rather than
+the standard HTTP-based CDP discovery (`/json/version`). OpenClaw supports both:
+
+- **HTTP(S) endpoints** (e.g. Browserless) — OpenClaw calls `/json/version` to
+  discover the WebSocket debugger URL, then connects.
+- **WebSocket endpoints** (`ws://` / `wss://`) — OpenClaw connects directly,
+  skipping `/json/version`. Use this for services like
+  [Browserbase](https://www.browserbase.com) or any provider that hands you a
+  WebSocket URL.
+
+### Browserbase
+
+[Browserbase](https://www.browserbase.com) is a cloud platform for running
+headless browsers with built-in CAPTCHA solving, stealth mode, and residential
+proxies.
+
+```json5
+{
+  browser: {
+    enabled: true,
+    defaultProfile: "browserbase",
+    remoteCdpTimeoutMs: 3000,
+    remoteCdpHandshakeTimeoutMs: 5000,
+    profiles: {
+      browserbase: {
+        cdpUrl: "wss://connect.browserbase.com?apiKey=<BROWSERBASE_API_KEY>",
+        color: "#F97316",
+      },
+    },
+  },
+}
+```
+
+Notes:
+
+- [Sign up](https://www.browserbase.com/sign-up) and copy your **API Key**
+  from the [Overview dashboard](https://www.browserbase.com/overview).
+- Replace `<BROWSERBASE_API_KEY>` with your real Browserbase API key.
+- Browserbase auto-creates a browser session on WebSocket connect, so no
+  manual session creation step is needed.
+- The free tier allows one concurrent session and one browser hour per month.
+  See [pricing](https://www.browserbase.com/pricing) for paid plan limits.
+- See the [Browserbase docs](https://docs.browserbase.com) for full API
+  reference, SDK guides, and integration examples.
+
 ## Security
 
 Key ideas:
 
 - Browser control is loopback-only; access flows through the Gateway’s auth or node pairing.
+- If browser control is enabled and no auth is configured, OpenClaw auto-generates `gateway.auth.token` on startup and persists it to config.
 - Keep the Gateway and any node hosts on a private network (Tailscale); avoid public exposure.
 - Treat remote CDP URLs/tokens as secrets; prefer env vars or a secrets manager.
 
 Remote CDP tips:
 
-- Prefer HTTPS endpoints and short-lived tokens where possible.
+- Prefer encrypted endpoints (HTTPS or WSS) and short-lived tokens where possible.
 - Avoid embedding long-lived tokens directly in config files.
 
 ## Profiles (multi-browser)
@@ -207,11 +288,13 @@ OpenClaw supports multiple named profiles (routing configs). Profiles can be:
 - **openclaw-managed**: a dedicated Chromium-based browser instance with its own user data directory + CDP port
 - **remote**: an explicit CDP URL (Chromium-based browser running elsewhere)
 - **extension relay**: your existing Chrome tab(s) via the local relay + Chrome extension
+- **existing session**: your existing Chrome profile via Chrome DevTools MCP auto-connect
 
 Defaults:
 
 - The `openclaw` profile is auto-created if missing.
-- The `chrome` profile is built-in for the Chrome extension relay (points at `http://127.0.0.1:18792` by default).
+- The `chrome-relay` profile is built-in for the Chrome extension relay (points at `http://127.0.0.1:18792` by default).
+- Existing-session profiles are opt-in; create them with `--driver existing-session`.
 - Local CDP ports allocate from **18800–18899** by default.
 - Deleting a profile moves its local data directory to Trash.
 
@@ -254,8 +337,8 @@ openclaw browser extension install
 
 2. Use it:
 
-- CLI: `openclaw browser --browser-profile chrome tabs`
-- Agent tool: `browser` with `profile="chrome"`
+- CLI: `openclaw browser --browser-profile chrome-relay tabs`
+- Agent tool: `browser` with `profile="chrome-relay"`
 
 Optional: if you want a different name or relay port, create your own profile:
 
@@ -271,6 +354,94 @@ Notes:
 
 - This mode relies on Playwright-on-CDP for most operations (screenshots/snapshots/actions).
 - Detach by clicking the extension icon again.
+- Agent use: prefer `profile="user"` for logged-in sites. Use `profile="chrome-relay"`
+  only when you specifically want the extension flow. The user must be present
+  to click the extension and attach the tab.
+
+## Chrome existing-session via MCP
+
+OpenClaw can also attach to a running Chrome profile through the official
+Chrome DevTools MCP server. This reuses the tabs and login state already open in
+that Chrome profile.
+
+Official background and setup references:
+
+- [Chrome for Developers: Use Chrome DevTools MCP with your browser session](https://developer.chrome.com/blog/chrome-devtools-mcp-debug-your-browser-session)
+- [Chrome DevTools MCP README](https://github.com/ChromeDevTools/chrome-devtools-mcp)
+
+Built-in profile:
+
+- `user`
+
+Optional: create your own custom existing-session profile if you want a
+different name or color.
+
+Then in Chrome:
+
+1. Open `chrome://inspect/#remote-debugging`
+2. Enable remote debugging
+3. Keep Chrome running and approve the connection prompt when OpenClaw attaches
+
+Live attach smoke test:
+
+```bash
+openclaw browser --browser-profile user start
+openclaw browser --browser-profile user status
+openclaw browser --browser-profile user tabs
+openclaw browser --browser-profile user snapshot --format ai
+```
+
+What success looks like:
+
+- `status` shows `driver: existing-session`
+- `status` shows `transport: chrome-mcp`
+- `status` shows `running: true`
+- `tabs` lists your already-open Chrome tabs
+- `snapshot` returns refs from the selected live tab
+
+What to check if attach does not work:
+
+- Chrome is version `144+`
+- remote debugging is enabled at `chrome://inspect/#remote-debugging`
+- Chrome showed and you accepted the attach consent prompt
+
+Agent use:
+
+- Use `profile="user"` when you need the user’s logged-in browser state.
+- If you use a custom existing-session profile, pass that explicit profile name.
+- Prefer `profile="user"` over `profile="chrome-relay"` unless the user
+  explicitly wants the extension / attach-tab flow.
+- Only choose this mode when the user is at the computer to approve the attach
+  prompt.
+- the Gateway or node host can spawn `npx chrome-devtools-mcp@latest --autoConnect`
+
+Notes:
+
+- This path is higher-risk than the isolated `openclaw` profile because it can
+  act inside your signed-in browser session.
+- OpenClaw does not launch Chrome for this driver; it attaches to an existing
+  session only.
+- OpenClaw uses the official Chrome DevTools MCP `--autoConnect` flow here, not
+  the legacy default-profile remote debugging port workflow.
+- Existing-session screenshots support page captures and `--ref` element
+  captures from snapshots, but not CSS `--element` selectors.
+- Existing-session `wait --url` supports exact, substring, and glob patterns
+  like other browser drivers. `wait --load networkidle` is not supported yet.
+- Some features still require the extension relay or managed browser path, such
+  as PDF export and download interception.
+- Leave the relay loopback-only by default. If the relay must be reachable from a different network namespace (for example Gateway in WSL2, Chrome on Windows), set `browser.relayBindHost` to an explicit bind address such as `0.0.0.0` while keeping the surrounding network private and authenticated.
+
+WSL2 / cross-namespace example:
+
+```json5
+{
+  browser: {
+    enabled: true,
+    relayBindHost: "0.0.0.0",
+    defaultProfile: "chrome-relay",
+  },
+}
+```
 
 ## Isolation guarantees
 
@@ -314,6 +485,11 @@ For local integrations only, the Gateway exposes a small loopback HTTP API:
 - Settings: `POST /set/offline`, `POST /set/headers`, `POST /set/credentials`, `POST /set/geolocation`, `POST /set/media`, `POST /set/timezone`, `POST /set/locale`, `POST /set/device`
 
 All endpoints accept `?profile=<name>`.
+
+If gateway auth is configured, browser HTTP routes require auth too:
+
+- `Authorization: Bearer <gateway token>`
+- `x-openclaw-password: <gateway password>` or HTTP Basic auth with that password
 
 ### Playwright requirement
 
@@ -403,9 +579,9 @@ Actions:
 - `openclaw browser scrollintoview e12`
 - `openclaw browser drag 10 11`
 - `openclaw browser select 9 OptionA OptionB`
-- `openclaw browser download e12 /tmp/report.pdf`
-- `openclaw browser waitfordownload /tmp/report.pdf`
-- `openclaw browser upload /tmp/file.pdf`
+- `openclaw browser download e12 report.pdf`
+- `openclaw browser waitfordownload report.pdf`
+- `openclaw browser upload /tmp/openclaw/uploads/file.pdf`
 - `openclaw browser fill --fields '[{"ref":"1","type":"text","value":"Ada"}]'`
 - `openclaw browser dialog --accept`
 - `openclaw browser wait --text "Done"`
@@ -424,7 +600,7 @@ State:
 - `openclaw browser storage local set theme dark`
 - `openclaw browser storage session clear`
 - `openclaw browser set offline on`
-- `openclaw browser set headers --json '{"X-Debug":"1"}'`
+- `openclaw browser set headers --headers-json '{"X-Debug":"1"}'`
 - `openclaw browser set credentials user pass`
 - `openclaw browser set credentials --clear`
 - `openclaw browser set geo 37.7749 -122.4194 --origin "https://example.com"`
@@ -438,6 +614,11 @@ Notes:
 
 - `upload` and `dialog` are **arming** calls; run them before the click/press
   that triggers the chooser/dialog.
+- Download and trace output paths are constrained to OpenClaw temp roots:
+  - traces: `/tmp/openclaw` (fallback: `${os.tmpdir()}/openclaw`)
+  - downloads: `/tmp/openclaw/downloads` (fallback: `${os.tmpdir()}/openclaw/downloads`)
+- Upload paths are constrained to an OpenClaw temp uploads root:
+  - uploads: `/tmp/openclaw/uploads` (fallback: `${os.tmpdir()}/openclaw/uploads`)
 - `upload` can also set file inputs directly via `--input-ref` or `--element`.
 - `snapshot`:
   - `--format ai` (default when Playwright is installed): returns an AI snapshot with numeric refs (`aria-ref="<n>"`).
@@ -531,7 +712,7 @@ These are useful for “make the site behave like X” workflows:
 - Cookies: `cookies`, `cookies set`, `cookies clear`
 - Storage: `storage local|session get|set|clear`
 - Offline: `set offline on|off`
-- Headers: `set headers --json '{"X-Debug":"1"}'` (or `--clear`)
+- Headers: `set headers --headers-json '{"X-Debug":"1"}'` (legacy `set headers --json '{"X-Debug":"1"}'` remains supported)
 - HTTP basic auth: `set credentials user pass` (or `--clear`)
 - Geolocation: `set geo <lat> <lon> --origin "https://example.com"` (or `--clear`)
 - Media: `set media dark|light|no-preference|none`
@@ -550,10 +731,27 @@ These are useful for “make the site behave like X” workflows:
 - Keep the Gateway/node host private (loopback or tailnet-only).
 - Remote CDP endpoints are powerful; tunnel and protect them.
 
+Strict-mode example (block private/internal destinations by default):
+
+```json5
+{
+  browser: {
+    ssrfPolicy: {
+      dangerouslyAllowPrivateNetwork: false,
+      hostnameAllowlist: ["*.example.com", "example.com"],
+      allowedHostnames: ["localhost"], // optional exact allow
+    },
+  },
+}
+```
+
 ## Troubleshooting
 
 For Linux-specific issues (especially snap Chromium), see
 [Browser troubleshooting](/tools/browser-linux-troubleshooting).
+
+For WSL2 Gateway + Windows Chrome split-host setups, see
+[WSL2 + Windows + remote Chrome CDP troubleshooting](/tools/browser-wsl2-windows-remote-cdp-troubleshooting).
 
 ## Agent tools + how control works
 

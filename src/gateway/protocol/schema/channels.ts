@@ -1,10 +1,86 @@
 import { Type } from "@sinclair/typebox";
-import { NonEmptyString } from "./primitives.js";
+import { NonEmptyString, SecretInputSchema } from "./primitives.js";
 
 export const TalkModeParamsSchema = Type.Object(
   {
     enabled: Type.Boolean(),
     phase: Type.Optional(Type.String()),
+  },
+  { additionalProperties: false },
+);
+
+export const TalkConfigParamsSchema = Type.Object(
+  {
+    includeSecrets: Type.Optional(Type.Boolean()),
+  },
+  { additionalProperties: false },
+);
+
+const talkProviderFieldSchemas = {
+  voiceId: Type.Optional(Type.String()),
+  voiceAliases: Type.Optional(Type.Record(Type.String(), Type.String())),
+  modelId: Type.Optional(Type.String()),
+  outputFormat: Type.Optional(Type.String()),
+  apiKey: Type.Optional(SecretInputSchema),
+};
+
+const TalkProviderConfigSchema = Type.Object(talkProviderFieldSchemas, {
+  additionalProperties: true,
+});
+
+const ResolvedTalkConfigSchema = Type.Object(
+  {
+    provider: Type.String(),
+    config: TalkProviderConfigSchema,
+  },
+  { additionalProperties: false },
+);
+
+const LegacyTalkConfigSchema = Type.Object(
+  {
+    ...talkProviderFieldSchemas,
+    interruptOnSpeech: Type.Optional(Type.Boolean()),
+    silenceTimeoutMs: Type.Optional(Type.Integer({ minimum: 1 })),
+  },
+  { additionalProperties: false },
+);
+
+const NormalizedTalkConfigSchema = Type.Object(
+  {
+    provider: Type.Optional(Type.String()),
+    providers: Type.Optional(Type.Record(Type.String(), TalkProviderConfigSchema)),
+    resolved: ResolvedTalkConfigSchema,
+    ...talkProviderFieldSchemas,
+    interruptOnSpeech: Type.Optional(Type.Boolean()),
+    silenceTimeoutMs: Type.Optional(Type.Integer({ minimum: 1 })),
+  },
+  { additionalProperties: false },
+);
+
+export const TalkConfigResultSchema = Type.Object(
+  {
+    config: Type.Object(
+      {
+        talk: Type.Optional(Type.Union([LegacyTalkConfigSchema, NormalizedTalkConfigSchema])),
+        session: Type.Optional(
+          Type.Object(
+            {
+              mainKey: Type.Optional(Type.String()),
+            },
+            { additionalProperties: false },
+          ),
+        ),
+        ui: Type.Optional(
+          Type.Object(
+            {
+              seamColor: Type.Optional(Type.String()),
+            },
+            { additionalProperties: false },
+          ),
+        ),
+      },
+      { additionalProperties: false },
+    ),
   },
   { additionalProperties: false },
 );
@@ -35,6 +111,9 @@ export const ChannelAccountSnapshotSchema = Type.Object(
     lastStopAt: Type.Optional(Type.Integer({ minimum: 0 })),
     lastInboundAt: Type.Optional(Type.Integer({ minimum: 0 })),
     lastOutboundAt: Type.Optional(Type.Integer({ minimum: 0 })),
+    busy: Type.Optional(Type.Boolean()),
+    activeRuns: Type.Optional(Type.Integer({ minimum: 0 })),
+    lastRunActivityAt: Type.Optional(Type.Integer({ minimum: 0 })),
     lastProbeAt: Type.Optional(Type.Integer({ minimum: 0 })),
     mode: Type.Optional(Type.String()),
     dmPolicy: Type.Optional(Type.String()),

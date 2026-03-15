@@ -4,13 +4,31 @@ export type BrowserProfileConfig = {
   /** CDP URL for this profile (use for remote Chrome). */
   cdpUrl?: string;
   /** Profile driver (default: openclaw). */
-  driver?: "openclaw" | "extension";
+  driver?: "openclaw" | "clawd" | "extension" | "existing-session";
+  /** If true, never launch a browser for this profile; only attach. Falls back to browser.attachOnly. */
+  attachOnly?: boolean;
   /** Profile color (hex). Auto-assigned at creation. */
   color: string;
 };
 export type BrowserSnapshotDefaults = {
   /** Default snapshot mode (applies when mode is not provided). */
   mode?: "efficient";
+};
+export type BrowserSsrFPolicyConfig = {
+  /** Legacy alias for private-network access. Prefer dangerouslyAllowPrivateNetwork. */
+  allowPrivateNetwork?: boolean;
+  /** If true, permit browser navigation to private/internal networks. Default: true */
+  dangerouslyAllowPrivateNetwork?: boolean;
+  /**
+   * Explicitly allowed hostnames (exact-match), including blocked names like localhost.
+   * Example: ["localhost", "metadata.internal"]
+   */
+  allowedHostnames?: string[];
+  /**
+   * Hostname allowlist patterns for browser navigation.
+   * Supports exact hosts and "*.example.com" wildcard subdomains.
+   */
+  hostnameAllowlist?: string[];
 };
 export type BrowserConfig = {
   enabled?: boolean;
@@ -32,10 +50,26 @@ export type BrowserConfig = {
   noSandbox?: boolean;
   /** If true: never launch; only attach to an existing browser. Default: false */
   attachOnly?: boolean;
+  /** Starting local CDP port for auto-assigned browser profiles. Default derives from gateway port. */
+  cdpPortRangeStart?: number;
   /** Default profile to use when profile param is omitted. Default: "chrome" */
   defaultProfile?: string;
   /** Named browser profiles with explicit CDP ports or URLs. */
   profiles?: Record<string, BrowserProfileConfig>;
   /** Default snapshot options (applied by the browser tool/CLI when unset). */
   snapshotDefaults?: BrowserSnapshotDefaults;
+  /** SSRF policy for browser navigation/open-tab operations. */
+  ssrfPolicy?: BrowserSsrFPolicyConfig;
+  /**
+   * Additional Chrome launch arguments.
+   * Useful for stealth flags, window size overrides, or custom user-agent strings.
+   * Example: ["--window-size=1920,1080", "--disable-infobars"]
+   */
+  extraArgs?: string[];
+  /**
+   * Bind address for the Chrome extension relay server.
+   * Default: "127.0.0.1". Set to "0.0.0.0" for WSL2 or other environments where
+   * the relay must be reachable from a different network namespace.
+   */
+  relayBindHost?: string;
 };

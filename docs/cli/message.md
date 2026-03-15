@@ -59,15 +59,17 @@ Name lookup:
   - Required: `--target`, plus `--message` or `--media`
   - Optional: `--media`, `--reply-to`, `--thread-id`, `--gif-playback`
   - Telegram only: `--buttons` (requires `channels.telegram.capabilities.inlineButtons` to allow it)
+  - Telegram only: `--force-document` (send images and GIFs as documents to avoid Telegram compression)
   - Telegram only: `--thread-id` (forum topic id)
   - Slack only: `--thread-id` (thread timestamp; `--reply-to` uses the same field)
   - WhatsApp only: `--gif-playback`
 
 - `poll`
-  - Channels: WhatsApp/Discord/MS Teams
+  - Channels: WhatsApp/Telegram/Discord/Matrix/MS Teams
   - Required: `--target`, `--poll-question`, `--poll-option` (repeat)
   - Optional: `--poll-multi`
-  - Discord only: `--poll-duration-hours`, `--message`
+  - Discord only: `--poll-duration-hours`, `--silent`, `--message`
+  - Telegram only: `--poll-duration-seconds` (5-600), `--silent`, `--poll-anonymous` / `--poll-public`, `--thread-id`
 
 - `react`
   - Channels: Discord/Google Chat/Slack/Telegram/WhatsApp/Signal
@@ -190,6 +192,16 @@ openclaw message send --channel discord \
   --target channel:123 --message "hi" --reply-to 456
 ```
 
+Send a Discord message with components:
+
+```
+openclaw message send --channel discord \
+  --target channel:123 --message "Choose:" \
+  --components '{"text":"Choose a path","blocks":[{"type":"actions","buttons":[{"label":"Approve","style":"success"},{"label":"Decline","style":"danger"}]}]}'
+```
+
+See [Discord components](/channels/discord#interactive-components) for the full schema.
+
 Create a Discord poll:
 
 ```
@@ -198,6 +210,16 @@ openclaw message poll --channel discord \
   --poll-question "Snack?" \
   --poll-option Pizza --poll-option Sushi \
   --poll-multi --poll-duration-hours 48
+```
+
+Create a Telegram poll (auto-close in 2 minutes):
+
+```
+openclaw message poll --channel telegram \
+  --target @mychat \
+  --poll-question "Lunch?" \
+  --poll-option Pizza --poll-option Sushi \
+  --poll-duration-seconds 120 --silent
 ```
 
 Send a Teams proactive message:
@@ -236,4 +258,11 @@ Send Telegram inline buttons:
 ```
 openclaw message send --channel telegram --target @mychat --message "Choose:" \
   --buttons '[ [{"text":"Yes","callback_data":"cmd:yes"}], [{"text":"No","callback_data":"cmd:no"}] ]'
+```
+
+Send a Telegram image as a document to avoid compression:
+
+```bash
+openclaw message send --channel telegram --target @mychat \
+  --media ./diagram.png --force-document
 ```

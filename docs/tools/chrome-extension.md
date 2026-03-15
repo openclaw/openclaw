@@ -13,6 +13,13 @@ The OpenClaw Chrome extension lets the agent control your **existing Chrome tabs
 
 Attach/detach happens via a **single Chrome toolbar button**.
 
+If you want Chrome’s official DevTools MCP attach flow instead of the OpenClaw
+extension relay, use an `existing-session` browser profile instead. See
+[Browser](/tools/browser#chrome-existing-session-via-mcp). For Chrome’s own
+setup docs, see [Chrome for Developers: Use Chrome DevTools MCP with your
+browser session](https://developer.chrome.com/blog/chrome-devtools-mcp-debug-your-browser-session)
+and the [Chrome DevTools MCP README](https://github.com/ChromeDevTools/chrome-devtools-mcp).
+
 ## What it is (concept)
 
 There are three parts:
@@ -53,16 +60,16 @@ After upgrading OpenClaw:
 - Re-run `openclaw browser extension install` to refresh the installed files under your OpenClaw state directory.
 - Chrome → `chrome://extensions` → click “Reload” on the extension.
 
-## Use it (no extra config)
+## Use it (set gateway token once)
 
-OpenClaw ships with a built-in browser profile named `chrome` that targets the extension relay on the default port.
+To use the extension relay, create a browser profile for it:
 
-Use it:
+Before first attach, open extension Options and set:
 
-- CLI: `openclaw browser --browser-profile chrome tabs`
-- Agent tool: `browser` with `profile="chrome"`
+- `Port` (default `18792`)
+- `Gateway token` (must match `gateway.auth.token` / `OPENCLAW_GATEWAY_TOKEN`)
 
-If you want a different name or a different relay port, create your own profile:
+Then create a profile:
 
 ```bash
 openclaw browser create-profile \
@@ -71,6 +78,23 @@ openclaw browser create-profile \
   --cdp-url http://127.0.0.1:18792 \
   --color "#00AA00"
 ```
+
+Use it:
+
+- CLI: `openclaw browser --browser-profile my-chrome tabs`
+- Agent tool: `browser` with `profile="my-chrome"`
+
+### Custom Gateway ports
+
+If you're using a custom gateway port, the extension relay port is automatically derived:
+
+**Extension Relay Port = Gateway Port + 3**
+
+Example: if `gateway.port: 19001`, then:
+
+- Extension relay port: `19004` (gateway + 3)
+
+Configure the extension to use the derived relay port in the extension Options page.
 
 ## Attach / detach (toolbar button)
 
@@ -89,12 +113,12 @@ openclaw browser create-profile \
 
 - `ON`: attached; OpenClaw can drive that tab.
 - `…`: connecting to the local relay.
-- `!`: relay not reachable (most common: browser relay server isn’t running on this machine).
+- `!`: relay not reachable/authenticated (most common: relay server not running, or gateway token missing/wrong).
 
 If you see `!`:
 
 - Make sure the Gateway is running locally (default setup), or run a node host on this machine if the Gateway runs elsewhere.
-- Open the extension Options page; it shows whether the relay is reachable.
+- Open the extension Options page; it validates relay reachability + gateway-token auth.
 
 ## Remote Gateway (use a node host)
 
@@ -144,6 +168,7 @@ Debugging: `openclaw sandbox explain`
 
 - Keep the Gateway and node host on the same tailnet; avoid exposing relay ports to LAN or public Internet.
 - Pair nodes intentionally; disable browser proxy routing if you don’t want remote control (`gateway.nodes.browser.mode="off"`).
+- Leave the relay on loopback unless you have a real cross-namespace need. For WSL2 or similar split-host setups, set `browser.relayBindHost` to an explicit bind address such as `0.0.0.0`, then keep access constrained with Gateway auth, node pairing, and a private network.
 
 ## How “extension path” works
 
@@ -169,7 +194,7 @@ Recommendations:
 - Prefer a dedicated Chrome profile (separate from your personal browsing) for extension relay usage.
 - Keep the Gateway and any node hosts tailnet-only; rely on Gateway auth + node pairing.
 - Avoid exposing relay ports over LAN (`0.0.0.0`) and avoid Funnel (public).
-- The relay blocks non-extension origins and requires an internal auth token for CDP clients.
+- The relay blocks non-extension origins and requires gateway-token auth for both `/cdp` and `/extension`.
 
 Related:
 
