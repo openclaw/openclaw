@@ -1,6 +1,9 @@
 name: CodeQL
 
 on:
+  push:
+    branches: [main]
+  pull_request:
   workflow_dispatch:
 
 concurrency:
@@ -16,8 +19,84 @@ permissions:
   security-events: write
 
 jobs:
+  # Detect docs-only changes to skip all analysis (same pattern as CI).
+  docs-scope:
+    runs-on: blacksmith-16vcpu-ubuntu-2404
+    outputs:
+      docs_only: ${{ steps.check.outputs.docs_only }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+          fetch-tags: false
+          submodules: false
+
+      - name: Ensure docs-scope base commit
+        if: github.event_name != 'workflow_dispatch'
+        uses: ./.github/actions/ensure-base-commit
+        with:
+          base-sha: ${{ github.event_name == 'push' && github.event.before || github.event.pull_request.base.sha }}
+          fetch-ref: ${{ github.event_name == 'push' && github.ref_name || github.event.pull_request.base.ref }}
+
+      - name: Detect docs-only changes
+        if: github.event_name != 'workflow_dispatch'
+        id: check
+        uses: ./.github/actions/detect-docs-changes
+
+  # Detect which areas changed so each language only runs on relevant PRs.
+  # Push to main and workflow_dispatch keep broad coverage.
+  changed-scope:
+    needs: [docs-scope]
+    if: needs.docs-scope.outputs.docs_only != 'true'
+    runs-on: blacksmith-16vcpu-ubuntu-2404
+    outputs:
+      run_node: ${{ steps.scope.outputs.run_node }}
+      run_macos: ${{ steps.scope.outputs.run_macos }}
+      run_android: ${{ steps.scope.outputs.run_android }}
+      run_skills_python: ${{ steps.scope.outputs.run_skills_python }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+          fetch-tags: false
+          submodules: false
+
+      - name: Ensure changed-scope base commit
+        if: github.event_name != 'workflow_dispatch'
+        uses: ./.github/actions/ensure-base-commit
+        with:
+          base-sha: ${{ github.event_name == 'push' && github.event.before || github.event.pull_request.base.sha }}
+          fetch-ref: ${{ github.event_name == 'push' && github.ref_name || github.event.pull_request.base.ref }}
+
+      - name: Detect changed scopes
+        id: scope
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            # Manual runs analyze everything.
+            echo "run_node=true" >> "$GITHUB_OUTPUT"
+            echo "run_macos=true" >> "$GITHUB_OUTPUT"
+            echo "run_android=true" >> "$GITHUB_OUTPUT"
+            echo "run_skills_python=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          if [ "${{ github.event_name }}" = "push" ]; then
+            BASE="${{ github.event.before }}"
+          else
+            BASE="${{ github.event.pull_request.base.sha }}"
+          fi
+
+          node scripts/ci-changed-scope.mjs --base "$BASE" --head HEAD
+
   analyze:
     name: Analyze (${{ matrix.language }})
+    needs: [docs-scope, changed-scope]
+    if: needs.docs-scope.outputs.docs_only != 'true' && needs.changed-scope.result != 'failure'
     runs-on: ${{ matrix.runs_on }}
     strategy:
       fail-fast: false
@@ -25,6 +104,7 @@ jobs:
         include:
           - language: javascript-typescript
             runs_on: blacksmith-16vcpu-ubuntu-2404
+            scope: run_node
             needs_node: true
             needs_python: false
             needs_java: false
@@ -34,6 +114,7 @@ jobs:
             config_file: ./.github/codeql/codeql-javascript-typescript.yml
           - language: actions
             runs_on: blacksmith-16vcpu-ubuntu-2404
+            scope: run_node
             needs_node: false
             needs_python: false
             needs_java: false
@@ -43,6 +124,7 @@ jobs:
             config_file: ""
           - language: python
             runs_on: blacksmith-16vcpu-ubuntu-2404
+            scope: run_skills_python
             needs_node: false
             needs_python: true
             needs_java: false
@@ -52,6 +134,7 @@ jobs:
             config_file: ""
           - language: java-kotlin
             runs_on: blacksmith-16vcpu-ubuntu-2404
+            scope: run_android
             needs_node: false
             needs_python: false
             needs_java: true
@@ -61,6 +144,7 @@ jobs:
             config_file: ""
           - language: swift
             runs_on: macos-latest
+            scope: run_macos
             needs_node: false
             needs_python: false
             needs_java: false
@@ -69,33 +153,62 @@ jobs:
             needs_autobuild: false
             config_file: ""
     steps:
+      # Skip this matrix entry when the relevant scope was not touched.
+      # Push to main and workflow_dispatch set all scopes to true (run everything).
+      - name: Check scope
+        id: scope-check
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          RUN_NODE: ${{ needs.changed-scope.outputs.run_node }}
+          RUN_MACOS: ${{ needs.changed-scope.outputs.run_macos }}
+          RUN_ANDROID: ${{ needs.changed-scope.outputs.run_android }}
+          RUN_SKILLS_PYTHON: ${{ needs.changed-scope.outputs.run_skills_python }}
+          SCOPE_KEY: ${{ matrix.scope }}
+        run: |
+          # Map the matrix scope key to the corresponding output value.
+          case "$SCOPE_KEY" in
+            run_node)           SHOULD_RUN="$RUN_NODE" ;;
+            run_macos)          SHOULD_RUN="$RUN_MACOS" ;;
+            run_android)        SHOULD_RUN="$RUN_ANDROID" ;;
+            run_skills_python)  SHOULD_RUN="$RUN_SKILLS_PYTHON" ;;
+            *)                  SHOULD_RUN="true" ;;
+          esac
+
+          if [ "$SHOULD_RUN" = "true" ] || [ "$EVENT_NAME" = "push" ] || [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Checkout
+        if: steps.scope-check.outputs.skip != 'true'
         uses: actions/checkout@v6
         with:
           submodules: false
 
       - name: Setup Node environment
-        if: matrix.needs_node
+        if: steps.scope-check.outputs.skip != 'true' && matrix.needs_node
         uses: ./.github/actions/setup-node-env
         with:
           install-bun: "false"
           use-sticky-disk: "false"
 
       - name: Setup Python
-        if: matrix.needs_python
+        if: steps.scope-check.outputs.skip != 'true' && matrix.needs_python
         uses: actions/setup-python@v6
         with:
           python-version: "3.12"
 
       - name: Setup Java
-        if: matrix.needs_java
+        if: steps.scope-check.outputs.skip != 'true' && matrix.needs_java
         uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: "21"
 
       - name: Setup Swift build tools
-        if: matrix.needs_swift_tools
+        if: steps.scope-check.outputs.skip != 'true' && matrix.needs_swift_tools
         run: |
           sudo xcode-select -s /Applications/Xcode_26.1.app
           xcodebuild -version
@@ -103,6 +216,7 @@ jobs:
           swift --version
 
       - name: Initialize CodeQL
+        if: steps.scope-check.outputs.skip != 'true'
         uses: github/codeql-action/init@v4
         with:
           languages: ${{ matrix.language }}
@@ -110,16 +224,16 @@ jobs:
           config-file: ${{ matrix.config_file || '' }}
 
       - name: Autobuild
-        if: matrix.needs_autobuild
+        if: steps.scope-check.outputs.skip != 'true' && matrix.needs_autobuild
         uses: github/codeql-action/autobuild@v4
 
       - name: Build Android for CodeQL
-        if: matrix.language == 'java-kotlin'
+        if: steps.scope-check.outputs.skip != 'true' && matrix.language == 'java-kotlin'
         working-directory: apps/android
         run: ./gradlew --no-daemon :app:assembleDebug
 
       - name: Build Swift for CodeQL
-        if: matrix.language == 'swift'
+        if: steps.scope-check.outputs.skip != 'true' && matrix.language == 'swift'
         run: |
           set -euo pipefail
           swift build --package-path apps/macos --configuration release
@@ -132,6 +246,7 @@ jobs:
             CODE_SIGNING_ALLOWED=NO
 
       - name: Analyze
+        if: steps.scope-check.outputs.skip != 'true'
         uses: github/codeql-action/analyze@v4
         with:
           category: "/language:${{ matrix.language }}"
