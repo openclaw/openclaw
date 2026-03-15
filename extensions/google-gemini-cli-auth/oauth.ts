@@ -2,7 +2,11 @@ import { createHash, randomBytes } from "node:crypto";
 import { existsSync, readFileSync, readdirSync, realpathSync } from "node:fs";
 import { createServer } from "node:http";
 import { delimiter, dirname, join } from "node:path";
-import { fetchWithSsrFGuard, isWSL2Sync } from "openclaw/plugin-sdk/google-gemini-cli-auth";
+import {
+  fetchWithSsrFGuard,
+  hasProxyEnvConfigured,
+  isWSL2Sync,
+} from "openclaw/plugin-sdk/google-gemini-cli-auth";
 
 const CLIENT_ID_KEYS = ["OPENCLAW_GEMINI_OAUTH_CLIENT_ID", "GEMINI_CLI_OAUTH_CLIENT_ID"];
 const CLIENT_SECRET_KEYS = [
@@ -245,6 +249,9 @@ async function fetchWithTimeout(
     url,
     init,
     timeoutMs,
+    // OAuth targets are trusted first-party Google endpoints; honour env proxy
+    // so users behind mandatory proxies can complete the flow.
+    ...(hasProxyEnvConfigured() ? { mode: "trusted_env_proxy" as const } : {}),
   });
   try {
     const body = await response.arrayBuffer();
