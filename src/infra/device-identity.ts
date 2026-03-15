@@ -17,6 +17,32 @@ type StoredIdentity = {
   createdAtMs: number;
 };
 
+function parseStoredIdentity(filePath: string): DeviceIdentity | null {
+  try {
+    if (!fs.existsSync(filePath)) {
+      return null;
+    }
+    const raw = fs.readFileSync(filePath, "utf8");
+    const parsed = JSON.parse(raw) as StoredIdentity;
+    if (
+      parsed?.version === 1 &&
+      typeof parsed.deviceId === "string" &&
+      typeof parsed.publicKeyPem === "string" &&
+      typeof parsed.privateKeyPem === "string"
+    ) {
+      const derivedId = fingerprintPublicKey(parsed.publicKeyPem);
+      return {
+        deviceId: derivedId || parsed.deviceId,
+        publicKeyPem: parsed.publicKeyPem,
+        privateKeyPem: parsed.privateKeyPem,
+      };
+    }
+  } catch {
+    // treat unreadable/malformed identity as missing in read-only paths
+  }
+  return null;
+}
+
 function resolveDefaultIdentityPath(): string {
   return path.join(resolveStateDir(), "identity", "device.json");
 }
@@ -62,43 +88,33 @@ function generateIdentity(): DeviceIdentity {
   return { deviceId, publicKeyPem, privateKeyPem };
 }
 
+export function loadDeviceIdentityIfExists(
+  filePath: string = resolveDefaultIdentityPath(),
+): DeviceIdentity | null {
+  return parseStoredIdentity(filePath);
+}
+
 export function loadOrCreateDeviceIdentity(
   filePath: string = resolveDefaultIdentityPath(),
 ): DeviceIdentity {
   try {
-    if (fs.existsSync(filePath)) {
+    const existing = parseStoredIdentity(filePath);
+    if (existing) {
       const raw = fs.readFileSync(filePath, "utf8");
       const parsed = JSON.parse(raw) as StoredIdentity;
-      if (
-        parsed?.version === 1 &&
-        typeof parsed.deviceId === "string" &&
-        typeof parsed.publicKeyPem === "string" &&
-        typeof parsed.privateKeyPem === "string"
-      ) {
-        const derivedId = fingerprintPublicKey(parsed.publicKeyPem);
-        if (derivedId && derivedId !== parsed.deviceId) {
-          const updated: StoredIdentity = {
-            ...parsed,
-            deviceId: derivedId,
-          };
-          fs.writeFileSync(filePath, `${JSON.stringify(updated, null, 2)}\n`, { mode: 0o600 });
-          try {
-            fs.chmodSync(filePath, 0o600);
-          } catch {
-            // best-effort
-          }
-          return {
-            deviceId: derivedId,
-            publicKeyPem: parsed.publicKeyPem,
-            privateKeyPem: parsed.privateKeyPem,
-          };
-        }
-        return {
-          deviceId: parsed.deviceId,
-          publicKeyPem: parsed.publicKeyPem,
-          privateKeyPem: parsed.privateKeyPem,
+      if (existing.deviceId !== parsed.deviceId) {
+        const updated: StoredIdentity = {
+          ...parsed,
+          deviceId: existing.deviceId,
         };
+        fs.writeFileSync(filePath, `${JSON.stringify(updated, null, 2)}\n`, { mode: 0o600 });
+        try {
+          fs.chmodSync(filePath, 0o600);
+        } catch {
+          // best-effort
+        }
       }
+      return existing;
     }
   } catch {
     // fall through to regenerate
