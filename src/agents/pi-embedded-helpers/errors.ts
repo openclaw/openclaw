@@ -39,6 +39,16 @@ export function formatBillingErrorMessage(provider?: string, model?: string): st
 
 export const BILLING_ERROR_USER_MESSAGE = formatBillingErrorMessage();
 
+export function formatAuthErrorMessage(provider?: string): string {
+  const providerName = provider?.trim();
+  if (providerName) {
+    return `⚠️ ${providerName} returned an authentication error — your API key or credentials were rejected. Verify your API key or re-authenticate with \`openclaw configure\`.`;
+  }
+  return "⚠️ API provider returned an authentication error — your API key or credentials were rejected. Verify your API key or re-authenticate with `openclaw configure`.";
+}
+
+export const AUTH_ERROR_USER_MESSAGE = formatAuthErrorMessage();
+
 const RATE_LIMIT_ERROR_USER_MESSAGE = "⚠️ API rate limit reached. Please try again later.";
 const OVERLOADED_ERROR_USER_MESSAGE =
   "The AI service is temporarily overloaded. Please try again in a moment.";
@@ -750,6 +760,10 @@ export function formatAssistantErrorText(
     return formatBillingErrorMessage(opts?.provider, opts?.model ?? msg.model);
   }
 
+  if (isAuthErrorMessage(raw)) {
+    return formatAuthErrorMessage(opts?.provider);
+  }
+
   if (isLikelyHttpErrorText(raw) || isRawApiErrorPayload(raw)) {
     return formatRawAssistantErrorForUi(raw);
   }
@@ -791,6 +805,10 @@ export function sanitizeUserFacingText(text: string, opts?: { errorContext?: boo
 
     if (isBillingErrorMessage(trimmed)) {
       return BILLING_ERROR_USER_MESSAGE;
+    }
+
+    if (isAuthErrorMessage(trimmed)) {
+      return AUTH_ERROR_USER_MESSAGE;
     }
 
     if (isRawApiErrorPayload(trimmed) || isLikelyHttpErrorText(trimmed)) {
