@@ -178,8 +178,20 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     text: string;
     addedDuringMessage: boolean;
     chunkerHasBuffered: boolean;
+    // When true, drop this message's text from assistantTexts (e.g. tool-use rounds).
+    discardThisMessage?: boolean;
   }) => {
-    const { text, addedDuringMessage, chunkerHasBuffered } = args;
+    const { text, addedDuringMessage, chunkerHasBuffered, discardThisMessage } = args;
+
+    if (discardThisMessage) {
+      // Intermediate tool-use round: remove any text added during this message.
+      assistantTexts.splice(
+        state.assistantTextBaseline,
+        assistantTexts.length - state.assistantTextBaseline,
+      );
+      state.assistantTextBaseline = assistantTexts.length;
+      return;
+    }
 
     // If we're not streaming block replies, ensure the final payload includes
     // the final text even when interim streaming was enabled.

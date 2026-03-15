@@ -279,8 +279,15 @@ export function handleMessageEnd(
     rawThinking: extractAssistantThinking(assistantMessage),
   });
 
+  const hasToolCalls =
+    Array.isArray(assistantMessage.content) &&
+    (assistantMessage.content as Array<{ type?: string }>).some(
+      (block) => block?.type === "toolCall",
+    );
+  const userFacingRawText = hasToolCalls && ctx.state.emittedAssistantUpdate ? "" : rawText;
+
   const text = resolveSilentReplyFallbackText({
-    text: ctx.stripBlockTags(rawText, { thinking: false, final: false }),
+    text: ctx.stripBlockTags(userFacingRawText, { thinking: false, final: false }),
     messagingToolSentTexts: ctx.state.messagingToolSentTexts,
   });
   const rawThinking =
@@ -295,12 +302,16 @@ export function handleMessageEnd(
   let hasMedia = Boolean(mediaUrls && mediaUrls.length > 0);
 
   if (!cleanedText && !hasMedia && !ctx.params.enforceFinalTag) {
-    const rawTrimmed = rawText.trim();
+    const rawTrimmed = userFacingRawText.trim();
     const rawStrippedFinal = rawTrimmed.replace(/<\s*\/?\s*final\s*>/gi, "").trim();
     const rawCandidate = rawStrippedFinal || rawTrimmed;
     if (rawCandidate) {
-      const parsedFallback = parseReplyDirectives(stripTrailingDirective(rawCandidate));
-      cleanedText = parsedFallback.text ?? rawCandidate;
+      const strippedCandidate = ctx.stripBlockTags(rawCandidate, {
+        thinking: false,
+        final: false,
+      });
+      const parsedFallback = parseReplyDirectives(stripTrailingDirective(strippedCandidate));
+      cleanedText = parsedFallback.text ?? strippedCandidate;
       mediaUrls = parsedFallback.mediaUrls;
       hasMedia = Boolean(mediaUrls && mediaUrls.length > 0);
     }
@@ -329,7 +340,14 @@ export function handleMessageEnd(
 
   const addedDuringMessage = ctx.state.assistantTexts.length > ctx.state.assistantTextBaseline;
   const chunkerHasBuffered = ctx.blockChunker?.hasBuffered() ?? false;
-  ctx.finalizeAssistantTexts({ text, addedDuringMessage, chunkerHasBuffered });
+  const stopReason = (assistantMessage as { stopReason?: string }).stopReason;
+  const isToolUseRound = stopReason === "toolUse";
+  ctx.finalizeAssistantTexts({
+    text,
+    addedDuringMessage,
+    chunkerHasBuffered,
+    discardThisMessage: isToolUseRound,
+  });
 
   const onBlockReply = ctx.params.onBlockReply;
   const emitBlockReplySafely = (payload: Parameters<NonNullable<typeof onBlockReply>>[0]) => {
