@@ -1589,7 +1589,7 @@ describe("createFollowupRunner media understanding", () => {
     expect(agentCall?.prompt).toContain("Run `/think high` literally in the shell example.");
   });
 
-  it("rebuilds the prompt when image understanding mutates the body without outputs", async () => {
+  it("rebuilds the prompt when image understanding mutates the body alongside existing text", async () => {
     applyMediaUnderstandingMock.mockImplementationOnce(
       async (params: { ctx: Record<string, unknown> }) => {
         params.ctx.Body = "some text\n\n[Image summary]\nA whiteboard with action items.";
