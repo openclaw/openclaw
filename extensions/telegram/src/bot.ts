@@ -375,6 +375,7 @@ export function createTelegramBot(opts: TelegramBotOptions) {
       channel: "telegram",
       accountId: account.accountId,
       groupId: String(chatId),
+      hasGroupAllowFrom: Array.isArray(groupAllowFrom) && groupAllowFrom.length > 0,
     });
   const resolveGroupActivation = (params: {
     chatId: string | number;
