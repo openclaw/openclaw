@@ -10,6 +10,21 @@ import { resolveFeishuSendTarget } from "./send-target.js";
 import type { FeishuChatType, FeishuMessageInfo, FeishuSendResult } from "./types.js";
 
 const WITHDRAWN_REPLY_ERROR_CODES = new Set([230011, 231003]);
+const FEISHU_CARD_TEMPLATES = new Set([
+  "blue",
+  "green",
+  "red",
+  "orange",
+  "purple",
+  "indigo",
+  "wathet",
+  "turquoise",
+  "yellow",
+  "grey",
+  "carmine",
+  "violet",
+  "lime",
+]);
 
 function shouldFallbackFromReplyTarget(response: { code?: number; msg?: string }): boolean {
   if (response.code !== undefined && WITHDRAWN_REPLY_ERROR_CODES.has(response.code)) {
@@ -516,6 +531,77 @@ export function buildMarkdownCard(text: string): Record<string, unknown> {
       ],
     },
   };
+}
+
+/** Header configuration for structured Feishu cards. */
+export type CardHeaderConfig = {
+  /** Header title text, e.g. "💻 Coder" */
+  title: string;
+  /** Feishu header color template (blue, green, red, orange, purple, grey, etc.). Defaults to "blue". */
+  template?: string;
+};
+
+export function resolveFeishuCardTemplate(template?: string): string | undefined {
+  const normalized = template?.trim().toLowerCase();
+  if (!normalized || !FEISHU_CARD_TEMPLATES.has(normalized)) {
+    return undefined;
+  }
+  return normalized;
+}
+
+/**
+ * Build a Feishu interactive card with optional header and note footer.
+ * When header/note are omitted, behaves identically to buildMarkdownCard.
+ */
+export function buildStructuredCard(
+  text: string,
+  options?: {
+    header?: CardHeaderConfig;
+    note?: string;
+  },
+): Record<string, unknown> {
+  const elements: Record<string, unknown>[] = [{ tag: "markdown", content: text }];
+  if (options?.note) {
+    elements.push({ tag: "hr" });
+    elements.push({ tag: "markdown", content: `<font color='grey'>${options.note}</font>` });
+  }
+  const card: Record<string, unknown> = {
+    schema: "2.0",
+    config: { wide_screen_mode: true },
+    body: { elements },
+  };
+  if (options?.header) {
+    card.header = {
+      title: { tag: "plain_text", content: options.header.title },
+      template: resolveFeishuCardTemplate(options.header.template) ?? "blue",
+    };
+  }
+  return card;
+}
+
+/**
+ * Send a message as a structured card with optional header and note.
+ */
+export async function sendStructuredCardFeishu(params: {
+  cfg: ClawdbotConfig;
+  to: string;
+  text: string;
+  replyToMessageId?: string;
+  /** When true, reply creates a Feishu topic thread instead of an inline reply */
+  replyInThread?: boolean;
+  mentions?: MentionTarget[];
+  accountId?: string;
+  header?: CardHeaderConfig;
+  note?: string;
+}): Promise<FeishuSendResult> {
+  const { cfg, to, text, replyToMessageId, replyInThread, mentions, accountId, header, note } =
+    params;
+  let cardText = text;
+  if (mentions && mentions.length > 0) {
+    cardText = buildMentionedCardContent(mentions, text);
+  }
+  const card = buildStructuredCard(cardText, { header, note });
+  return sendCardFeishu({ cfg, to, card, replyToMessageId, replyInThread, accountId });
 }
 
 /**
