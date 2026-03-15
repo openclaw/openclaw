@@ -159,7 +159,7 @@ const formatRelative = (ms: number | null | undefined, nowMs: number) => {
   return delta >= 0 ? `in ${label}` : `${label} ago`;
 };
 
-const formatSchedule = (schedule: CronSchedule) => {
+export const formatSchedule = (schedule: CronSchedule) => {
   if (schedule.kind === "at") {
     return `at ${formatIsoMinute(schedule.at)}`;
   }
@@ -169,9 +169,11 @@ const formatSchedule = (schedule: CronSchedule) => {
   const base = schedule.tz ? `cron ${schedule.expr} @ ${schedule.tz}` : `cron ${schedule.expr}`;
   const staggerMs = resolveCronStaggerMs(schedule);
   if (staggerMs <= 0) {
-    return `${base} (exact)`;
+    return schedule.tz ? `${base} (exact)` : `${base} (no tz)`;
   }
-  return `${base} (stagger ${formatDurationHuman(staggerMs)})`;
+  return schedule.tz
+    ? `${base} (stagger ${formatDurationHuman(staggerMs)})`
+    : `${base} (stagger ${formatDurationHuman(staggerMs)}, no tz)`;
 };
 
 const formatStatus = (job: CronJob) => {
