@@ -159,28 +159,28 @@ private fun TopStatusBar(
           mobileSuccessSoft,
           mobileSuccess,
           mobileSuccess,
-          Color(0xFFCFEBD8),
+          LocalMobileColors.current.chipBorderConnected,
         )
       StatusVisual.Connecting ->
         listOf(
           mobileAccentSoft,
           mobileAccent,
           mobileAccent,
-          Color(0xFFD5E2FA),
+          LocalMobileColors.current.chipBorderConnecting,
         )
       StatusVisual.Warning ->
         listOf(
           mobileWarningSoft,
           mobileWarning,
           mobileWarning,
-          Color(0xFFEED8B8),
+          LocalMobileColors.current.chipBorderWarning,
         )
       StatusVisual.Error ->
         listOf(
           mobileDangerSoft,
           mobileDanger,
           mobileDanger,
-          Color(0xFFF3C8C8),
+          LocalMobileColors.current.chipBorderError,
         )
       StatusVisual.Offline ->
         listOf(
@@ -249,7 +249,7 @@ private fun BottomTabBar(
   ) {
     Surface(
       modifier = Modifier.fillMaxWidth(),
-      color = Color.White.copy(alpha = 0.97f),
+      color = mobileCardSurface.copy(alpha = 0.97f),
       shape = RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp),
       border = BorderStroke(1.dp, mobileBorder),
       shadowElevation = 6.dp,
@@ -270,7 +270,7 @@ private fun BottomTabBar(
             modifier = Modifier.weight(1f).heightIn(min = 58.dp),
             shape = RoundedCornerShape(16.dp),
             color = if (active) mobileAccentSoft else Color.Transparent,
-            border = if (active) BorderStroke(1.dp, Color(0xFFD5E2FA)) else null,
+            border = if (active) BorderStroke(1.dp, LocalMobileColors.current.chipBorderConnecting) else null,
             shadowElevation = 0.dp,
           ) {
             Column(
