@@ -34,6 +34,26 @@ describe("resolveTranscriptPolicy", () => {
     expect(policy.toolCallIdMode).toBe("strict9");
   });
 
+  it("enables strict9 sanitization for Mistral models via openai-completions API (#28492)", () => {
+    const policy = resolveTranscriptPolicy({
+      provider: "mistral",
+      modelId: "mistral-large-latest",
+      modelApi: "openai-completions",
+    });
+    expect(policy.sanitizeToolCallIds).toBe(true);
+    expect(policy.toolCallIdMode).toBe("strict9");
+  });
+
+  it("enables strict9 sanitization for Mistral models routed through OpenAI provider (#28492)", () => {
+    const policy = resolveTranscriptPolicy({
+      provider: "openai",
+      modelId: "mistral-large-latest",
+      modelApi: "openai-completions",
+    });
+    expect(policy.sanitizeToolCallIds).toBe(true);
+    expect(policy.toolCallIdMode).toBe("strict9");
+  });
+
   it("disables sanitizeToolCallIds for OpenAI provider", () => {
     const policy = resolveTranscriptPolicy({
       provider: "openai",
