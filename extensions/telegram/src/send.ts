@@ -965,10 +965,12 @@ export async function sendTypingTelegram(
     persistTarget: to,
     verbose: opts.verbose,
   });
+  // Typing indicators are cosmetic — use a lightweight retry policy to avoid
+  // blocking the event loop for up to 90s on network failures (#45759).
   const requestWithDiag = createTelegramRequestWithDiag({
     cfg,
     account,
-    retry: opts.retry,
+    retry: opts.retry ?? { attempts: 1, maxDelayMs: 5_000 },
     verbose: opts.verbose,
     shouldRetry: (err) => isRecoverableTelegramNetworkError(err, { context: "send" }),
   });

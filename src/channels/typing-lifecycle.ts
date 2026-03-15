@@ -7,12 +7,18 @@ export type TypingKeepaliveLoop = {
   isRunning: () => boolean;
 };
 
+const DEFAULT_MAX_CONSECUTIVE_ERRORS = 3;
+
 export function createTypingKeepaliveLoop(params: {
   intervalMs: number;
   onTick: AsyncTick;
+  /** Stop the loop after this many consecutive tick errors (default: 3). */
+  maxConsecutiveErrors?: number;
 }): TypingKeepaliveLoop {
   let timer: ReturnType<typeof setInterval> | undefined;
   let tickInFlight = false;
+  let consecutiveErrors = 0;
+  const maxErrors = params.maxConsecutiveErrors ?? DEFAULT_MAX_CONSECUTIVE_ERRORS;
 
   const tick = async () => {
     if (tickInFlight) {
@@ -21,6 +27,12 @@ export function createTypingKeepaliveLoop(params: {
     tickInFlight = true;
     try {
       await params.onTick();
+      consecutiveErrors = 0;
+    } catch {
+      consecutiveErrors += 1;
+      if (consecutiveErrors >= maxErrors) {
+        stop();
+      }
     } finally {
       tickInFlight = false;
     }
@@ -30,6 +42,7 @@ export function createTypingKeepaliveLoop(params: {
     if (params.intervalMs <= 0 || timer) {
       return;
     }
+    consecutiveErrors = 0;
     timer = setInterval(() => {
       void tick();
     }, params.intervalMs);
