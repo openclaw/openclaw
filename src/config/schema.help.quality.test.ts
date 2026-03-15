@@ -265,6 +265,8 @@ const TARGET_KEYS = [
   "gateway.tls.autoGenerate",
   "gateway.http",
   "gateway.http.endpoints",
+  "gateway.mdns",
+  "gateway.mdns.enabled",
   "browser",
   "browser.enabled",
   "browser.cdpUrl",

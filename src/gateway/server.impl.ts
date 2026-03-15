@@ -669,7 +669,8 @@ export async function startGatewayServer(
       wideAreaDiscoveryEnabled: cfgAtStart.discovery?.wideArea?.enabled === true,
       wideAreaDiscoveryDomain: cfgAtStart.discovery?.wideArea?.domain,
       tailscaleMode,
-      mdnsMode: cfgAtStart.discovery?.mdns?.mode,
+      mdnsMode:
+        cfgAtStart.gateway?.mdns?.enabled === false ? "off" : cfgAtStart.discovery?.mdns?.mode,
       logDiscovery,
     });
     bonjourStop = discovery.bonjourStop;

@@ -165,7 +165,16 @@ sequences (e.g. spaces become `\032`).
 
 ## Disabling / configuration
 
-- `OPENCLAW_DISABLE_BONJOUR=1` disables advertising (legacy: `OPENCLAW_DISABLE_BONJOUR`).
+- Set `gateway.mdns.enabled` to `false` in `~/.openclaw/openclaw.json` to disable mDNS advertising entirely. This is recommended on platforms that lack multicast support (Android/Termux) to prevent watchdog retries and potential crash loops.
+
+  ```json5
+  {
+    gateway: { mdns: { enabled: false } },
+  }
+  ```
+
+- `OPENCLAW_DISABLE_BONJOUR=1` disables advertising via environment variable (highest priority, overrides config).
+- `discovery.mdns.mode` controls advertisement detail level (`"off"`, `"minimal"`, `"full"`). Setting mode to `"off"` also disables mDNS.
 - `gateway.bind` in `~/.openclaw/openclaw.json` controls the Gateway bind mode.
 - `OPENCLAW_SSH_PORT` overrides the SSH port advertised in TXT (legacy: `OPENCLAW_SSH_PORT`).
 - `OPENCLAW_TAILNET_DNS` publishes a MagicDNS hint in TXT (legacy: `OPENCLAW_TAILNET_DNS`).

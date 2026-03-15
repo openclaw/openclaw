@@ -399,6 +399,7 @@ function collectGatewayConfigFindings(
   const hasGatewayAuth = hasSharedSecret || hasTailscaleAuth;
   const allowRealIpFallback = cfg.gateway?.allowRealIpFallback === true;
   const mdnsMode = cfg.discovery?.mdns?.mode ?? "minimal";
+  const gatewayMdnsEnabled = cfg.gateway?.mdns?.enabled !== false;
 
   // HTTP /tools/invoke is intended for narrow automation, not session orchestration/admin operations.
   // If operators opt-in to re-enabling these tools over HTTP, warn loudly so the choice is explicit.
@@ -525,7 +526,7 @@ function collectGatewayConfigFindings(
     });
   }
 
-  if (mdnsMode === "full") {
+  if (mdnsMode === "full" && gatewayMdnsEnabled) {
     const exposed = bind !== "loopback";
     findings.push({
       checkId: "discovery.mdns_full_mode",
