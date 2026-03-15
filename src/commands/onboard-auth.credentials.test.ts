@@ -3,6 +3,7 @@ import {
   setByteplusApiKey,
   setCloudflareAiGatewayConfig,
   setMoonshotApiKey,
+  setOpencodeZenApiKey,
   setOpenaiApiKey,
   setVolcengineApiKey,
 } from "./onboard-auth.js";
@@ -22,6 +23,7 @@ describe("onboard auth credentials secret refs", () => {
     "CLOUDFLARE_AI_GATEWAY_API_KEY",
     "VOLCANO_ENGINE_API_KEY",
     "BYTEPLUS_API_KEY",
+    "OPENCODE_API_KEY",
   ]);
 
   afterEach(async () => {
@@ -206,5 +208,26 @@ describe("onboard auth credentials secret refs", () => {
       keyRef: { source: "env", provider: "default", id: "BYTEPLUS_API_KEY" },
     });
     expect(parsed.profiles?.["byteplus:default"]?.key).toBeUndefined();
+  });
+
+  it("stores shared OpenCode credentials for both runtime providers", async () => {
+    const env = await setupAuthTestEnv("openclaw-onboard-auth-credentials-opencode-");
+    lifecycle.setStateDir(env.stateDir);
+    process.env.OPENCODE_API_KEY = "sk-opencode-env"; // pragma: allowlist secret
+
+    await setOpencodeZenApiKey("sk-opencode-env", env.agentDir, {
+      secretInputMode: "ref", // pragma: allowlist secret
+    });
+
+    const parsed = await readAuthProfilesForAgent<{
+      profiles?: Record<string, { key?: string; keyRef?: unknown }>;
+    }>(env.agentDir);
+
+    expect(parsed.profiles?.["opencode:default"]).toMatchObject({
+      keyRef: { source: "env", provider: "default", id: "OPENCODE_API_KEY" },
+    });
+    expect(parsed.profiles?.["opencode-go:default"]).toMatchObject({
+      keyRef: { source: "env", provider: "default", id: "OPENCODE_API_KEY" },
+    });
   });
 });

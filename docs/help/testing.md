@@ -53,8 +53,8 @@ Think of the suites as “increasing realism” (and increasing flakiness/cost):
   - No real keys required
   - Should be fast and stable
 - Pool note:
-  - OpenClaw uses Vitest `vmForks` on Node 22/23 for faster unit shards.
-  - On Node 24+, OpenClaw automatically falls back to regular `forks` to avoid Node VM linking errors (`ERR_VM_MODULE_LINK_FAILURE` / `module is already linked`).
+  - OpenClaw uses Vitest `vmForks` on Node 22, 23, and 24 for faster unit shards.
+  - On Node 25+, OpenClaw automatically falls back to regular `forks` until the repo is re-validated there.
   - Override manually with `OPENCLAW_TEST_VM_FORKS=0` (force `forks`) or `OPENCLAW_TEST_VM_FORKS=1` (force `vmForks`).
 
 ### E2E (gateway smoke)
@@ -311,11 +311,11 @@ Include at least one image-capable model in `OPENCLAW_LIVE_GATEWAY_MODELS` (Clau
 If you have keys enabled, we also support testing via:
 
 - OpenRouter: `openrouter/...` (hundreds of models; use `openclaw models scan` to find tool+image capable candidates)
-- OpenCode Zen: `opencode/...` (auth via `OPENCODE_API_KEY` / `OPENCODE_ZEN_API_KEY`)
+- OpenCode: `opencode/...` for Zen and `opencode-go/...` for Go (auth via `OPENCODE_API_KEY` / `OPENCODE_ZEN_API_KEY`)
 
 More providers you can include in the live matrix (if you have creds/config):
 
-- Built-in: `openai`, `openai-codex`, `anthropic`, `google`, `google-vertex`, `google-antigravity`, `google-gemini-cli`, `zai`, `openrouter`, `opencode`, `xai`, `groq`, `cerebras`, `mistral`, `github-copilot`
+- Built-in: `openai`, `openai-codex`, `anthropic`, `google`, `google-vertex`, `google-antigravity`, `google-gemini-cli`, `zai`, `openrouter`, `opencode`, `opencode-go`, `xai`, `groq`, `cerebras`, `mistral`, `github-copilot`
 - Via `models.providers` (custom endpoints): `minimax` (cloud/API), plus any OpenAI/Anthropic-compatible proxy (LM Studio, vLLM, LiteLLM, etc.)
 
 Tip: don’t try to hardcode “all models” in docs. The authoritative list is whatever `discoverModels(...)` returns on your machine + whatever keys are available.

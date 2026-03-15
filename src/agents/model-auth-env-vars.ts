@@ -4,6 +4,7 @@ export const PROVIDER_ENV_API_KEY_CANDIDATES: Record<string, string[]> = {
   chutes: ["CHUTES_OAUTH_TOKEN", "CHUTES_API_KEY"],
   zai: ["ZAI_API_KEY", "Z_AI_API_KEY"],
   opencode: ["OPENCODE_API_KEY", "OPENCODE_ZEN_API_KEY"],
+  "opencode-go": ["OPENCODE_API_KEY", "OPENCODE_ZEN_API_KEY"],
   "qwen-portal": ["QWEN_OAUTH_TOKEN", "QWEN_PORTAL_API_KEY"],
   volcengine: ["VOLCANO_ENGINE_API_KEY"],
   "volcengine-plan": ["VOLCANO_ENGINE_API_KEY"],
@@ -34,6 +35,7 @@ export const PROVIDER_ENV_API_KEY_CANDIDATES: Record<string, string[]> = {
   qianfan: ["QIANFAN_API_KEY"],
   modelstudio: ["MODELSTUDIO_API_KEY"],
   ollama: ["OLLAMA_API_KEY"],
+  sglang: ["SGLANG_API_KEY"],
   vllm: ["VLLM_API_KEY"],
   kilocode: ["KILOCODE_API_KEY"],
 };

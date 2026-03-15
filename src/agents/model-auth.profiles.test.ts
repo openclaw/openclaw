@@ -412,4 +412,18 @@ describe("getApiKeyForModel", () => {
       },
     );
   });
+
+  it("resolveEnvApiKey('opencode-go') falls back to OPENCODE_ZEN_API_KEY", async () => {
+    await withEnvAsync(
+      {
+        OPENCODE_API_KEY: undefined,
+        OPENCODE_ZEN_API_KEY: "sk-opencode-zen-fallback", // pragma: allowlist secret
+      },
+      async () => {
+        const resolved = resolveEnvApiKey("opencode-go");
+        expect(resolved?.apiKey).toBe("sk-opencode-zen-fallback");
+        expect(resolved?.source).toContain("OPENCODE_ZEN_API_KEY");
+      },
+    );
+  });
 });

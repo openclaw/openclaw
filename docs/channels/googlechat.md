@@ -145,7 +145,7 @@ Configure your tunnel's ingress rules to only route the webhook path:
    - `audienceType: "app-url"` → audience is your HTTPS webhook URL.
    - `audienceType: "project-number"` → audience is the Cloud project number.
 3. Messages are routed by space:
-   - DMs use session key `agent:<agentId>:googlechat:dm:<spaceId>`.
+   - DMs use session key `agent:<agentId>:googlechat:direct:<spaceId>`.
    - Spaces use session key `agent:<agentId>:googlechat:group:<spaceId>`.
 4. DM access is pairing by default. Unknown senders receive a pairing code; approve with:
    - `openclaw pairing approve googlechat <code>`

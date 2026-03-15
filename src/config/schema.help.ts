@@ -1,7 +1,7 @@
 import {
   DISCORD_DEFAULT_INBOUND_WORKER_TIMEOUT_MS,
   DISCORD_DEFAULT_LISTENER_TIMEOUT_MS,
-} from "../discord/monitor/timeouts.js";
+} from "../../extensions/discord/src/monitor/timeouts.js";
 import { MEDIA_AUDIO_FIELD_HELP } from "./media-audio-field-metadata.js";
 import { IRC_FIELD_HELP } from "./schema.irc.js";
 import { describeTalkSilenceTimeoutDefaults } from "./talk-defaults.js";
@@ -292,6 +292,8 @@ export const FIELD_HELP: Record<string, string> = {
     "Wide-area discovery configuration group for exposing discovery signals beyond local-link scopes. Enable only in deployments that intentionally aggregate gateway presence across sites.",
   "discovery.wideArea.enabled":
     "Enables wide-area discovery signaling when your environment needs non-local gateway discovery. Keep disabled unless cross-network discovery is operationally required.",
+  "discovery.wideArea.domain":
+    "Optional unicast DNS-SD domain for wide-area discovery, such as openclaw.internal. Use this when you intentionally publish gateway discovery beyond local mDNS scopes.",
   "discovery.mdns":
     "mDNS discovery configuration group for local network advertisement and discovery behavior tuning. Keep minimal mode for routine LAN discovery unless extra metadata is required.",
   tools:
@@ -386,6 +388,16 @@ export const FIELD_HELP: Record<string, string> = {
     "Loosens strict browser auth checks for Control UI when you must run a non-standard setup. Keep this off unless you trust your network and proxy path, because impersonation risk is higher.",
   "gateway.controlUi.dangerouslyDisableDeviceAuth":
     "Disables Control UI device identity checks and relies on token/password only. Use only for short-lived debugging on trusted networks, then turn it off immediately.",
+  "gateway.push":
+    "Push-delivery settings used by the gateway when it needs to wake or notify paired devices. Configure relay-backed APNs here for official iOS builds; direct APNs auth remains env-based for local/manual builds.",
+  "gateway.push.apns":
+    "APNs delivery settings for iOS devices paired to this gateway. Use relay settings for official/TestFlight builds that register through the external push relay.",
+  "gateway.push.apns.relay":
+    "External relay settings for relay-backed APNs sends. The gateway uses this relay for push.test, wake nudges, and reconnect wakes after a paired official iOS build publishes a relay-backed registration.",
+  "gateway.push.apns.relay.baseUrl":
+    "Base HTTPS URL for the external APNs relay service used by official/TestFlight iOS builds. Keep this aligned with the relay URL baked into the iOS build so registration and send traffic hit the same deployment.",
+  "gateway.push.apns.relay.timeoutMs":
+    "Timeout in milliseconds for relay send requests from the gateway to the APNs relay (default: 10000). Increase for slower relays or networks, or lower to fail wake attempts faster.",
   "gateway.http.endpoints.chatCompletions.enabled":
     "Enable the OpenAI-compatible `POST /v1/chat/completions` endpoint (default: false).",
   "gateway.http.endpoints.chatCompletions.maxBodyBytes":
@@ -778,13 +790,23 @@ export const FIELD_HELP: Record<string, string> = {
   "agents.defaults.memorySearch.sources":
     'Chooses which sources are indexed: "memory" reads MEMORY.md + memory files, and "sessions" includes transcript history. Keep ["memory"] unless you need recall from prior chat transcripts.',
   "agents.defaults.memorySearch.extraPaths":
-    "Adds extra directories or .md files to the memory index beyond default memory files. Use this when key reference docs live elsewhere in your repo; keep paths small and intentional to avoid noisy recall.",
+    "Adds extra directories or .md files to the memory index beyond default memory files. Use this when key reference docs live elsewhere in your repo; when multimodal memory is enabled, matching image/audio files under these paths are also eligible for indexing.",
+  "agents.defaults.memorySearch.multimodal":
+    'Optional multimodal memory settings for indexing image and audio files from configured extra paths. Keep this off unless your embedding model explicitly supports cross-modal embeddings, and set `memorySearch.fallback` to "none" while it is enabled. Matching files are uploaded to the configured remote embedding provider during indexing.',
+  "agents.defaults.memorySearch.multimodal.enabled":
+    "Enables image/audio memory indexing from extraPaths. This currently requires Gemini embedding-2, keeps the default memory roots Markdown-only, disables memory-search fallback providers, and uploads matching binary content to the configured remote embedding provider.",
+  "agents.defaults.memorySearch.multimodal.modalities":
+    'Selects which multimodal file types are indexed from extraPaths: "image", "audio", or "all". Keep this narrow to avoid indexing large binary corpora unintentionally.',
+  "agents.defaults.memorySearch.multimodal.maxFileBytes":
+    "Sets the maximum bytes allowed per multimodal file before it is skipped during memory indexing. Use this to cap upload cost and indexing latency, or raise it for short high-quality audio clips.",
   "agents.defaults.memorySearch.experimental.sessionMemory":
     "Indexes session transcripts into memory search so responses can reference prior chat turns. Keep this off unless transcript recall is needed, because indexing cost and storage usage both increase.",
   "agents.defaults.memorySearch.provider":
     'Selects the embedding backend used to build/query memory vectors: "openai", "gemini", "voyage", "mistral", "ollama", or "local". Keep your most reliable provider here and configure fallback for resilience.',
   "agents.defaults.memorySearch.model":
     "Embedding model override used by the selected memory provider when a non-default model is required. Set this only when you need explicit recall quality/cost tuning beyond provider defaults.",
+  "agents.defaults.memorySearch.outputDimensionality":
+    "Gemini embedding-2 only: chooses the output vector size for memory embeddings. Use 768, 1536, or 3072 (default), and expect a full reindex when you change it because stored vector dimensions must stay consistent.",
   "agents.defaults.memorySearch.remote.baseUrl":
     "Overrides the embedding API endpoint, such as an OpenAI-compatible proxy or custom Gemini base URL. Use this only when routing through your own gateway or vendor endpoint; keep provider defaults otherwise.",
   "agents.defaults.memorySearch.remote.apiKey":
@@ -910,6 +932,8 @@ export const FIELD_HELP: Record<string, string> = {
     "Requires at least this many newly appended bytes before session transcript changes trigger reindex (default: 100000). Increase to reduce frequent small reindexes, or lower for faster transcript freshness.",
   "agents.defaults.memorySearch.sync.sessions.deltaMessages":
     "Requires at least this many appended transcript messages before reindex is triggered (default: 50). Lower this for near-real-time transcript recall, or raise it to reduce indexing churn.",
+  "agents.defaults.memorySearch.sync.sessions.postCompactionForce":
+    "Forces a session memory-search reindex after compaction-triggered transcript updates (default: true). Keep enabled when compacted summaries must be immediately searchable, or disable to reduce write-time indexing pressure.",
   ui: "UI presentation settings for accenting and assistant identity shown in control surfaces. Use this for branding and readability customization without changing runtime behavior.",
   "ui.seamColor":
     "Primary accent/seam color used by UI surfaces for emphasis, badges, and visual identity cues. Use high-contrast values that remain readable across light/dark themes.",
@@ -1013,6 +1037,8 @@ export const FIELD_HELP: Record<string, string> = {
     "Enables summary quality audits and regeneration retries for safeguard compaction. Default: false, so safeguard mode alone does not turn on retry behavior.",
   "agents.defaults.compaction.qualityGuard.maxRetries":
     "Maximum number of regeneration retries after a failed safeguard summary quality audit. Use small values to bound extra latency and token cost.",
+  "agents.defaults.compaction.postIndexSync":
+    'Controls post-compaction session memory reindex mode: "off", "async", or "await" (default: "async"). Use "await" for strongest freshness, "async" for lower compaction latency, and "off" only when session-memory sync is handled elsewhere.',
   "agents.defaults.compaction.postCompactionSections":
     'AGENTS.md H2/H3 section names re-injected after compaction so the agent reruns critical startup guidance. Leave unset to use "Session Startup"/"Red Lines" with legacy fallback to "Every Session"/"Safety"; set to [] to disable reinjection entirely.',
   "agents.defaults.compaction.model":
@@ -1405,6 +1431,8 @@ export const FIELD_HELP: Record<string, string> = {
     "Optional Slack user token for workflows requiring user-context API access beyond bot permissions. Use sparingly and audit scopes because this token can carry broader authority.",
   "channels.slack.userTokenReadOnly":
     "When true, treat configured Slack user token usage as read-only helper behavior where possible. Keep enabled if you only need supplemental reads without user-context writes.",
+  "channels.slack.capabilities.interactiveReplies":
+    "Enable agent-authored Slack interactive reply directives (`[[slack_buttons: ...]]`, `[[slack_select: ...]]`). Default: false.",
   "channels.mattermost.configWrites":
     "Allow Mattermost to write config in response to channel events/commands (default: true).",
   "channels.discord.configWrites":
@@ -1457,7 +1485,7 @@ export const FIELD_HELP: Record<string, string> = {
   "messages.statusReactions.enabled":
     "Enable lifecycle status reactions for Telegram. When enabled, the ack reaction becomes the initial 'queued' state and progresses through thinking, tool, done/error automatically. Default: false.",
   "messages.statusReactions.emojis":
-    "Override default status reaction emojis. Keys: thinking, tool, coding, web, done, error, stallSoft, stallHard. Must be valid Telegram reaction emojis.",
+    "Override default status reaction emojis. Keys: thinking, compacting, tool, coding, web, done, error, stallSoft, stallHard. Must be valid Telegram reaction emojis.",
   "messages.statusReactions.timing":
     "Override default timing. Keys: debounceMs (700), stallSoftMs (25000), stallHardMs (60000), doneHoldMs (1500), errorHoldMs (2500).",
   "messages.inbound.debounceMs":

@@ -15,7 +15,10 @@ import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonPrimitive
 import java.util.UUID
 
-class SecurePrefs(context: Context) {
+class SecurePrefs(
+  context: Context,
+  private val securePrefsOverride: SharedPreferences? = null,
+) {
   companion object {
     val defaultWakeWords: List<String> = listOf("openclaw", "claude")
     private const val displayNameKey = "node.displayName"
@@ -35,7 +38,7 @@ class SecurePrefs(context: Context) {
       .setKeyScheme(MasterKey.KeyScheme.AES256_GCM)
       .build()
   }
-  private val securePrefs: SharedPreferences by lazy { createSecurePrefs(appContext, securePrefsName) }
+  private val securePrefs: SharedPreferences by lazy { securePrefsOverride ?: createSecurePrefs(appContext, securePrefsName) }
 
   private val _instanceId = MutableStateFlow(loadOrCreateInstanceId())
   val instanceId: StateFlow<String> = _instanceId
@@ -75,6 +78,9 @@ class SecurePrefs(context: Context) {
 
   private val _gatewayToken = MutableStateFlow("")
   val gatewayToken: StateFlow<String> = _gatewayToken
+
+  private val _gatewayBootstrapToken = MutableStateFlow("")
+  val gatewayBootstrapToken: StateFlow<String> = _gatewayBootstrapToken
 
   private val _onboardingCompleted =
     MutableStateFlow(plainPrefs.getBoolean("onboarding.completed", false))
@@ -165,6 +171,10 @@ class SecurePrefs(context: Context) {
     saveGatewayPassword(value)
   }
 
+  fun setGatewayBootstrapToken(value: String) {
+    saveGatewayBootstrapToken(value)
+  }
+
   fun setOnboardingCompleted(value: Boolean) {
     plainPrefs.edit { putBoolean("onboarding.completed", value) }
     _onboardingCompleted.value = value
@@ -191,6 +201,26 @@ class SecurePrefs(context: Context) {
   fun saveGatewayToken(token: String) {
     val key = "gateway.token.${_instanceId.value}"
     securePrefs.edit { putString(key, token.trim()) }
+  }
+
+  fun loadGatewayBootstrapToken(): String? {
+    val key = "gateway.bootstrapToken.${_instanceId.value}"
+    val stored =
+      _gatewayBootstrapToken.value.trim().ifEmpty {
+        val persisted = securePrefs.getString(key, null)?.trim().orEmpty()
+        if (persisted.isNotEmpty()) {
+          _gatewayBootstrapToken.value = persisted
+        }
+        persisted
+      }
+    return stored.takeIf { it.isNotEmpty() }
+  }
+
+  fun saveGatewayBootstrapToken(token: String) {
+    val key = "gateway.bootstrapToken.${_instanceId.value}"
+    val trimmed = token.trim()
+    securePrefs.edit { putString(key, trimmed) }
+    _gatewayBootstrapToken.value = trimmed
   }
 
   fun loadGatewayPassword(): String? {

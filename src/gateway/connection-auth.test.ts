@@ -20,6 +20,64 @@ function cfg(input: Partial<OpenClawConfig>): OpenClawConfig {
   return input as OpenClawConfig;
 }
 
+function createRemoteModeConfig() {
+  return {
+    gateway: {
+      mode: "remote" as const,
+      auth: {
+        token: "local-token",
+        password: "local-password", // pragma: allowlist secret
+      },
+      remote: {
+        url: "wss://remote.example",
+        token: "remote-token",
+        password: "remote-password", // pragma: allowlist secret
+      },
+    },
+  };
+}
+
+function createUnresolvedLocalAuthConfig(params: {
+  mode: "token" | "password";
+  id: string;
+  remoteFallback: string;
+}) {
+  return cfg({
+    gateway: {
+      mode: "local",
+      auth: {
+        mode: params.mode,
+        [params.mode]: { source: "env", provider: "default", id: params.id },
+      },
+      remote: {
+        [params.mode]: params.remoteFallback,
+      },
+    },
+    secrets: {
+      providers: {
+        default: { source: "env" },
+      },
+    },
+  });
+}
+
+async function expectFailClosedOnUnresolvedLocalAuth(config: OpenClawConfig, path: string) {
+  await expect(
+    resolveGatewayConnectionAuth({
+      config,
+      env: {} as NodeJS.ProcessEnv,
+      includeLegacyEnv: false,
+    }),
+  ).rejects.toThrow(path);
+  expect(() =>
+    resolveGatewayConnectionAuthFromConfig({
+      cfg: config,
+      env: {} as NodeJS.ProcessEnv,
+      includeLegacyEnv: false,
+    }),
+  ).toThrow(path);
+}
+
 const DEFAULT_ENV = {
   OPENCLAW_GATEWAY_TOKEN: "env-token",
   OPENCLAW_GATEWAY_PASSWORD: "env-password", // pragma: allowlist secret
@@ -93,20 +151,7 @@ describe("resolveGatewayConnectionAuth", () => {
     },
     {
       name: "remote mode defaults to remote-first token and env-first password",
-      cfg: cfg({
-        gateway: {
-          mode: "remote",
-          auth: {
-            token: "local-token",
-            password: "local-password", // pragma: allowlist secret
-          },
-          remote: {
-            url: "wss://remote.example",
-            token: "remote-token",
-            password: "remote-password", // pragma: allowlist secret
-          },
-        },
-      }),
+      cfg: cfg(createRemoteModeConfig()),
       env: DEFAULT_ENV,
       expected: {
         token: "remote-token",
@@ -115,20 +160,7 @@ describe("resolveGatewayConnectionAuth", () => {
     },
     {
       name: "remote mode supports env-first token with remote-first password",
-      cfg: cfg({
-        gateway: {
-          mode: "remote",
-          auth: {
-            token: "local-token",
-            password: "local-password", // pragma: allowlist secret
-          },
-          remote: {
-            url: "wss://remote.example",
-            token: "remote-token",
-            password: "remote-password", // pragma: allowlist secret
-          },
-        },
-      }),
+      cfg: cfg(createRemoteModeConfig()),
       env: DEFAULT_ENV,
       options: {
         remoteTokenPrecedence: "env-first",
@@ -415,5 +447,27 @@ describe("resolveGatewayConnectionAuth", () => {
         localPasswordPrecedence: "config-first", // pragma: allowlist secret
       }),
     ).toThrow("gateway.auth.password");
+  });
+
+  it("fails closed when local token SecretRef is unresolved and remote token fallback exists", async () => {
+    await expectFailClosedOnUnresolvedLocalAuth(
+      createUnresolvedLocalAuthConfig({
+        mode: "token",
+        id: "MISSING_LOCAL_TOKEN",
+        remoteFallback: "remote-token",
+      }),
+      "gateway.auth.token",
+    );
+  });
+
+  it("fails closed when local password SecretRef is unresolved and remote password fallback exists", async () => {
+    await expectFailClosedOnUnresolvedLocalAuth(
+      createUnresolvedLocalAuthConfig({
+        mode: "password",
+        id: "MISSING_LOCAL_PASSWORD",
+        remoteFallback: "remote-password", // pragma: allowlist secret
+      }),
+      "gateway.auth.password",
+    );
   });
 });

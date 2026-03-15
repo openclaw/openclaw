@@ -50,16 +50,16 @@ export {
   applyMinimaxApiConfigCn,
   applyMinimaxApiProviderConfig,
   applyMinimaxApiProviderConfigCn,
-  applyMinimaxConfig,
-  applyMinimaxHostedConfig,
-  applyMinimaxHostedProviderConfig,
-  applyMinimaxProviderConfig,
 } from "./onboard-auth.config-minimax.js";
 
 export {
   applyOpencodeZenConfig,
   applyOpencodeZenProviderConfig,
 } from "./onboard-auth.config-opencode.js";
+export {
+  applyOpencodeGoConfig,
+  applyOpencodeGoProviderConfig,
+} from "./onboard-auth.config-opencode-go.js";
 export {
   CLOUDFLARE_AI_GATEWAY_DEFAULT_MODEL_REF,
   KILOCODE_DEFAULT_MODEL_REF,
@@ -77,6 +77,7 @@ export {
   setMinimaxApiKey,
   setMistralApiKey,
   setMoonshotApiKey,
+  setOpencodeGoApiKey,
   setOpencodeZenApiKey,
   setOpenrouterApiKey,
   setSyntheticApiKey,

@@ -409,7 +409,7 @@ export async function runOnboardingWizard(
   const { applyOnboardingLocalWorkspaceConfig } = await import("../commands/onboard-config.js");
   let nextConfig: OpenClawConfig = applyOnboardingLocalWorkspaceConfig(baseConfig, workspaceDir);
 
-  const { ensureAuthProfileStore } = await import("../agents/auth-profiles.js");
+  const { ensureAuthProfileStore } = await import("../agents/auth-profiles.runtime.js");
   const { promptAuthChoiceGrouped } = await import("../commands/auth-choice-prompt.js");
   const { promptCustomApiConfig } = await import("../commands/onboard-custom.js");
   const { applyAuthChoice, resolvePreferredProviderForAuthChoice, warnIfModelConfigLooksOff } =
@@ -426,6 +426,8 @@ export async function runOnboardingWizard(
       prompter,
       store: authStore,
       includeSkip: true,
+      config: nextConfig,
+      workspaceDir,
     }));
 
   if (authChoice === "custom-api-key") {
@@ -449,6 +451,10 @@ export async function runOnboardingWizard(
       },
     });
     nextConfig = authResult.config;
+
+    if (authResult.agentModelOverride) {
+      nextConfig = applyPrimaryModel(nextConfig, authResult.agentModelOverride);
+    }
   }
 
   if (authChoiceFromPrompt && authChoice !== "custom-api-key") {
@@ -457,8 +463,14 @@ export async function runOnboardingWizard(
       prompter,
       allowKeep: true,
       ignoreAllowlist: true,
-      includeVllm: true,
-      preferredProvider: resolvePreferredProviderForAuthChoice(authChoice),
+      includeProviderPluginSetups: true,
+      preferredProvider: resolvePreferredProviderForAuthChoice({
+        choice: authChoice,
+        config: nextConfig,
+        workspaceDir,
+      }),
+      workspaceDir,
+      runtime,
     });
     if (modelSelection.config) {
       nextConfig = modelSelection.config;

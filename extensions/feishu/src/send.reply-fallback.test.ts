@@ -25,6 +25,16 @@ describe("Feishu reply fallback for withdrawn/deleted targets", () => {
   const replyMock = vi.fn();
   const createMock = vi.fn();
 
+  async function expectFallbackResult(
+    send: () => Promise<{ messageId?: string }>,
+    expectedMessageId: string,
+  ) {
+    const result = await send();
+    expect(replyMock).toHaveBeenCalledTimes(1);
+    expect(createMock).toHaveBeenCalledTimes(1);
+    expect(result.messageId).toBe(expectedMessageId);
+  }
+
   beforeEach(() => {
     vi.clearAllMocks();
     resolveFeishuSendTargetMock.mockReturnValue({
@@ -51,16 +61,16 @@ describe("Feishu reply fallback for withdrawn/deleted targets", () => {
       data: { message_id: "om_new" },
     });
 
-    const result = await sendMessageFeishu({
-      cfg: {} as never,
-      to: "user:ou_target",
-      text: "hello",
-      replyToMessageId: "om_parent",
-    });
-
-    expect(replyMock).toHaveBeenCalledTimes(1);
-    expect(createMock).toHaveBeenCalledTimes(1);
-    expect(result.messageId).toBe("om_new");
+    await expectFallbackResult(
+      () =>
+        sendMessageFeishu({
+          cfg: {} as never,
+          to: "user:ou_target",
+          text: "hello",
+          replyToMessageId: "om_parent",
+        }),
+      "om_new",
+    );
   });
 
   it("falls back to create for withdrawn card replies", async () => {
@@ -73,16 +83,16 @@ describe("Feishu reply fallback for withdrawn/deleted targets", () => {
       data: { message_id: "om_card_new" },
     });
 
-    const result = await sendCardFeishu({
-      cfg: {} as never,
-      to: "user:ou_target",
-      card: { schema: "2.0" },
-      replyToMessageId: "om_parent",
-    });
-
-    expect(replyMock).toHaveBeenCalledTimes(1);
-    expect(createMock).toHaveBeenCalledTimes(1);
-    expect(result.messageId).toBe("om_card_new");
+    await expectFallbackResult(
+      () =>
+        sendCardFeishu({
+          cfg: {} as never,
+          to: "user:ou_target",
+          card: { schema: "2.0" },
+          replyToMessageId: "om_parent",
+        }),
+      "om_card_new",
+    );
   });
 
   it("still throws for non-withdrawn reply failures", async () => {
@@ -111,16 +121,16 @@ describe("Feishu reply fallback for withdrawn/deleted targets", () => {
       data: { message_id: "om_thrown_fallback" },
     });
 
-    const result = await sendMessageFeishu({
-      cfg: {} as never,
-      to: "user:ou_target",
-      text: "hello",
-      replyToMessageId: "om_parent",
-    });
-
-    expect(replyMock).toHaveBeenCalledTimes(1);
-    expect(createMock).toHaveBeenCalledTimes(1);
-    expect(result.messageId).toBe("om_thrown_fallback");
+    await expectFallbackResult(
+      () =>
+        sendMessageFeishu({
+          cfg: {} as never,
+          to: "user:ou_target",
+          text: "hello",
+          replyToMessageId: "om_parent",
+        }),
+      "om_thrown_fallback",
+    );
   });
 
   it("falls back to create when card reply throws a not-found AxiosError", async () => {
@@ -133,16 +143,16 @@ describe("Feishu reply fallback for withdrawn/deleted targets", () => {
       data: { message_id: "om_axios_fallback" },
     });
 
-    const result = await sendCardFeishu({
-      cfg: {} as never,
-      to: "user:ou_target",
-      card: { schema: "2.0" },
-      replyToMessageId: "om_parent",
-    });
-
-    expect(replyMock).toHaveBeenCalledTimes(1);
-    expect(createMock).toHaveBeenCalledTimes(1);
-    expect(result.messageId).toBe("om_axios_fallback");
+    await expectFallbackResult(
+      () =>
+        sendCardFeishu({
+          cfg: {} as never,
+          to: "user:ou_target",
+          card: { schema: "2.0" },
+          replyToMessageId: "om_parent",
+        }),
+      "om_axios_fallback",
+    );
   });
 
   it("re-throws non-withdrawn thrown errors for text messages", async () => {

@@ -22,7 +22,19 @@ describe("resolveProviderCapabilities", () => {
       transcriptToolCallIdMode: "default",
       transcriptToolCallIdModelHints: [],
       geminiThoughtSignatureModelHints: [],
-      dropThinkingBlockModelHints: [],
+      dropThinkingBlockModelHints: ["claude"],
+    });
+    expect(resolveProviderCapabilities("amazon-bedrock")).toEqual({
+      anthropicToolSchemaMode: "native",
+      anthropicToolChoiceMode: "native",
+      providerFamily: "anthropic",
+      preserveAnthropicThinkingSignatures: true,
+      openAiCompatTurnValidation: true,
+      geminiThoughtSignatureSanitization: false,
+      transcriptToolCallIdMode: "default",
+      transcriptToolCallIdModelHints: [],
+      geminiThoughtSignatureModelHints: [],
+      dropThinkingBlockModelHints: ["claude"],
     });
   });
 
@@ -47,6 +59,7 @@ describe("resolveProviderCapabilities", () => {
   it("flags providers that opt out of OpenAI-compatible turn validation", () => {
     expect(supportsOpenAiCompatTurnValidation("openrouter")).toBe(false);
     expect(supportsOpenAiCompatTurnValidation("opencode")).toBe(false);
+    expect(supportsOpenAiCompatTurnValidation("opencode-go")).toBe(false);
     expect(supportsOpenAiCompatTurnValidation("moonshot")).toBe(true);
   });
 
@@ -63,6 +76,12 @@ describe("resolveProviderCapabilities", () => {
         modelId: "gemini-2.0-flash",
       }),
     ).toBe(true);
+    expect(
+      shouldSanitizeGeminiThoughtSignaturesForModel({
+        provider: "opencode-go",
+        modelId: "google/gemini-2.5-pro-preview",
+      }),
+    ).toBe(true);
     expect(resolveTranscriptToolCallIdMode("mistral", "mistral-large-latest")).toBe("strict9");
   });
 
@@ -75,6 +94,18 @@ describe("resolveProviderCapabilities", () => {
   it("tracks provider families and model-specific transcript quirks in the registry", () => {
     expect(isOpenAiProviderFamily("openai")).toBe(true);
     expect(isAnthropicProviderFamily("amazon-bedrock")).toBe(true);
+    expect(
+      shouldDropThinkingBlocksForModel({
+        provider: "anthropic",
+        modelId: "claude-opus-4-6",
+      }),
+    ).toBe(true);
+    expect(
+      shouldDropThinkingBlocksForModel({
+        provider: "amazon-bedrock",
+        modelId: "anthropic.claude-3-5-sonnet-20241022-v2:0",
+      }),
+    ).toBe(true);
     expect(
       shouldDropThinkingBlocksForModel({
         provider: "github-copilot",

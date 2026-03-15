@@ -4,6 +4,7 @@ import {
   listThinkingLevels,
   normalizeReasoningLevel,
   normalizeThinkLevel,
+  resolveThinkingDefaultForModel,
   supportsXHighThinking,
 } from "./thinking.js";
 
@@ -108,6 +109,40 @@ describe("supportsXHighThinking", () => {
 
   it("does not enable xhigh for unrelated proxy model ids", () => {
     expect(supportsXHighThinking("vercel-ai-gateway", "openai/gpt-4.1-mini")).toBe(false);
+  });
+});
+
+describe("resolveThinkingDefaultForModel", () => {
+  it("defaults Claude 4.6 models to adaptive", () => {
+    expect(
+      resolveThinkingDefaultForModel({ provider: "anthropic", model: "claude-opus-4-6" }),
+    ).toBe("adaptive");
+  });
+
+  it("treats Bedrock Anthropic aliases as adaptive", () => {
+    expect(
+      resolveThinkingDefaultForModel({ provider: "aws-bedrock", model: "claude-sonnet-4-6" }),
+    ).toBe("adaptive");
+  });
+
+  it("defaults reasoning-capable catalog models to low", () => {
+    expect(
+      resolveThinkingDefaultForModel({
+        provider: "openai",
+        model: "gpt-5.4",
+        catalog: [{ provider: "openai", id: "gpt-5.4", reasoning: true }],
+      }),
+    ).toBe("low");
+  });
+
+  it("defaults to off when no adaptive or reasoning hint is present", () => {
+    expect(
+      resolveThinkingDefaultForModel({
+        provider: "openai",
+        model: "gpt-4.1-mini",
+        catalog: [{ provider: "openai", id: "gpt-4.1-mini", reasoning: false }],
+      }),
+    ).toBe("off");
   });
 });
 

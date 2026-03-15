@@ -153,5 +153,5 @@ export async function handleGatewayRequest(
   // All handlers run inside a request scope so that plugin runtime
   // subagent methods (e.g. context engine tools spawning sub-agents
   // during tool execution) can dispatch back into the gateway.
-  await withPluginRuntimeGatewayRequestScope({ context, isWebchatConnect }, invokeHandler);
+  await withPluginRuntimeGatewayRequestScope({ context, client, isWebchatConnect }, invokeHandler);
 }
