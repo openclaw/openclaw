@@ -117,6 +117,28 @@ describe("formatAssistantErrorText", () => {
     const msg = makeAssistantError("request ended without sending any chunks");
     expect(formatAssistantErrorText(msg)).toBe("LLM request timed out.");
   });
+
+  it("returns undefined for stale errorMessage metadata on non-error turns", () => {
+    const msg = makeAssistantMessageFixture({
+      stopReason: "stop",
+      errorMessage: "500 Internal Server Error",
+      content: [{ type: "text", text: "Recovered response" }],
+    });
+
+    expect(formatAssistantErrorText(msg)).toBeUndefined();
+  });
+
+  it("uses assistant text fallback for content-only role ordering errors", () => {
+    const msg = makeAssistantMessageFixture({
+      stopReason: "error",
+      errorMessage: "",
+      content: [{ type: "text", text: "400 Incorrect role information" }],
+    });
+
+    expect(
+      formatAssistantErrorText(msg, { assistantText: "400 Incorrect role information" }),
+    ).toContain("Message ordering conflict");
+  });
 });
 
 describe("formatRawAssistantErrorForUi", () => {

@@ -7,13 +7,14 @@ import { runWithModelFallback } from "../../agents/model-fallback.js";
 import { isCliProvider } from "../../agents/model-selection.js";
 import {
   BILLING_ERROR_USER_MESSAGE,
+  deriveErrorKind,
   isCompactionFailureError,
   isContextOverflowError,
   isBillingErrorMessage,
   isLikelyContextOverflowError,
-  isTransientHttpError,
+  isTransientProviderErrorMessage,
   sanitizeUserFacingText,
-} from "../../agents/pi-embedded-helpers.js";
+} from "../../agents/pi-embedded-helpers/errors.js";
 import { runEmbeddedPiAgent } from "../../agents/pi-embedded.js";
 import {
   resolveGroupSessionKey,
@@ -179,6 +180,7 @@ export async function runAgentTurnWithFallback(params: {
         }
         const sanitized = sanitizeUserFacingText(text, {
           errorContext: Boolean(payload.isError),
+          errorKind: payload.errorKind,
         });
         if (!sanitized.trim()) {
           return { skip: true };
@@ -532,7 +534,7 @@ export async function runAgentTurnWithFallback(params: {
       const isCompactionFailure = !isBilling && isCompactionFailureError(message);
       const isSessionCorruption = /function call turn comes immediately after/i.test(message);
       const isRoleOrderingError = /incorrect role information|roles must alternate/i.test(message);
-      const isTransientHttp = isTransientHttpError(message);
+      const isTransientProviderError = isTransientProviderErrorMessage(message);
 
       if (
         isCompactionFailure &&
@@ -604,7 +606,7 @@ export async function runAgentTurnWithFallback(params: {
         };
       }
 
-      if (isTransientHttp && !didRetryTransientHttpError) {
+      if (isTransientProviderError && !didRetryTransientHttpError) {
         didRetryTransientHttpError = true;
         // Retry the full runWithModelFallback() cycle — transient errors
         // (502/521/etc.) typically affect the whole provider, so falling
@@ -620,8 +622,9 @@ export async function runAgentTurnWithFallback(params: {
       }
 
       defaultRuntime.error(`Embedded agent failed before reply: ${message}`);
-      const safeMessage = isTransientHttp
-        ? sanitizeUserFacingText(message, { errorContext: true })
+      const transientErrorKind = isTransientProviderError ? deriveErrorKind(message) : undefined;
+      const safeMessage = isTransientProviderError
+        ? sanitizeUserFacingText(message, { errorContext: true, errorKind: transientErrorKind })
         : message;
       const trimmedMessage = safeMessage.replace(/\.\s*$/, "");
       const fallbackText = isBilling

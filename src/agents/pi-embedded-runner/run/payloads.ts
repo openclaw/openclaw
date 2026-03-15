@@ -4,14 +4,17 @@ import type { ReasoningLevel, VerboseLevel } from "../../../auto-reply/thinking.
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../../../auto-reply/tokens.js";
 import { formatToolAggregate } from "../../../auto-reply/tool-meta.js";
 import type { OpenClawConfig } from "../../../config/config.js";
+import { extractTextFromChatContent } from "../../../shared/chat-content.js";
 import {
   BILLING_ERROR_USER_MESSAGE,
+  deriveErrorKind,
   formatAssistantErrorText,
   formatRawAssistantErrorForUi,
   getApiErrorPayloadFingerprint,
   isRawApiErrorPayload,
   normalizeTextForComparison,
 } from "../../pi-embedded-helpers.js";
+import type { ErrorKind } from "../../pi-embedded-helpers/types.js";
 import type { ToolResultFormat } from "../../pi-embedded-subscribe.js";
 import {
   extractAssistantText,
@@ -110,6 +113,7 @@ export function buildEmbeddedRunPayloads(params: {
   replyToId?: string;
   isError?: boolean;
   isReasoning?: boolean;
+  errorKind?: ErrorKind;
   audioAsVoice?: boolean;
   replyToTag?: boolean;
   replyToCurrent?: boolean;
@@ -119,6 +123,7 @@ export function buildEmbeddedRunPayloads(params: {
     media?: string[];
     isError?: boolean;
     isReasoning?: boolean;
+    errorKind?: ErrorKind;
     audioAsVoice?: boolean;
     replyToId?: string;
     replyToTag?: boolean;
@@ -128,19 +133,32 @@ export function buildEmbeddedRunPayloads(params: {
   const useMarkdown = params.toolResultFormat === "markdown";
   const suppressAssistantArtifacts = params.didSendDeterministicApprovalPrompt === true;
   const lastAssistantErrored = params.lastAssistant?.stopReason === "error";
-  const errorText =
-    params.lastAssistant && lastAssistantErrored
-      ? suppressAssistantArtifacts
-        ? undefined
-        : formatAssistantErrorText(params.lastAssistant, {
-            cfg: params.config,
-            sessionKey: params.sessionKey,
-            provider: params.provider,
-            model: params.model,
-          })
-      : undefined;
+  const fallbackAnswerText = params.lastAssistant ? extractAssistantText(params.lastAssistant) : "";
+  const fallbackRawAnswerText = params.lastAssistant
+    ? (extractTextFromChatContent(params.lastAssistant.content, {
+        joinWith: "\n",
+        normalizeText: (text) => text.trim(),
+      }) ?? "")
+    : "";
+  const effectiveErrorSource = lastAssistantErrored
+    ? params.lastAssistant?.errorMessage?.trim() || fallbackRawAnswerText.trim() || undefined
+    : undefined;
+  const errorText = params.lastAssistant
+    ? !lastAssistantErrored || suppressAssistantArtifacts
+      ? undefined
+      : formatAssistantErrorText(params.lastAssistant, {
+          cfg: params.config,
+          sessionKey: params.sessionKey,
+          provider: params.provider,
+          model: params.model,
+          assistantText: fallbackAnswerText,
+        })
+    : undefined;
   const rawErrorMessage = lastAssistantErrored
     ? params.lastAssistant?.errorMessage?.trim() || undefined
+    : undefined;
+  const errorKind: ErrorKind | undefined = effectiveErrorSource
+    ? deriveErrorKind(effectiveErrorSource)
     : undefined;
   const rawErrorFingerprint = rawErrorMessage
     ? getApiErrorPayloadFingerprint(rawErrorMessage)
@@ -158,7 +176,7 @@ export function buildEmbeddedRunPayloads(params: {
   const normalizedGenericBillingErrorText = normalizeTextForComparison(BILLING_ERROR_USER_MESSAGE);
   const genericErrorText = "The AI service returned an error. Please try again.";
   if (errorText) {
-    replyItems.push({ text: errorText, isError: true });
+    replyItems.push({ text: errorText, isError: true, errorKind });
   }
 
   const inlineToolResults =
@@ -198,7 +216,6 @@ export function buildEmbeddedRunPayloads(params: {
     replyItems.push({ text: reasoningText, isReasoning: true });
   }
 
-  const fallbackAnswerText = params.lastAssistant ? extractAssistantText(params.lastAssistant) : "";
   const shouldSuppressRawErrorText = (text: string) => {
     if (!lastAssistantErrored) {
       return false;
@@ -212,7 +229,7 @@ export function buildEmbeddedRunPayloads(params: {
       if (normalized && normalizedErrorText && normalized === normalizedErrorText) {
         return true;
       }
-      if (trimmed === genericErrorText) {
+      if (trimmed === genericErrorText || trimmed === "LLM request failed with an unknown error.") {
         return true;
       }
       if (
@@ -229,6 +246,9 @@ export function buildEmbeddedRunPayloads(params: {
     if (formattedRawErrorMessage && trimmed === formattedRawErrorMessage) {
       return true;
     }
+    if (effectiveErrorSource && trimmed === effectiveErrorSource) {
+      return true;
+    }
     if (normalizedRawErrorText) {
       const normalized = normalizeTextForComparison(trimmed);
       if (normalized && normalized === normalizedRawErrorText) {
@@ -238,6 +258,17 @@ export function buildEmbeddedRunPayloads(params: {
     if (normalizedFormattedRawErrorMessage) {
       const normalized = normalizeTextForComparison(trimmed);
       if (normalized && normalized === normalizedFormattedRawErrorMessage) {
+        return true;
+      }
+    }
+    if (effectiveErrorSource) {
+      const normalized = normalizeTextForComparison(trimmed);
+      const normalizedEffectiveErrorSource = normalizeTextForComparison(effectiveErrorSource);
+      if (
+        normalized &&
+        normalizedEffectiveErrorSource &&
+        normalized === normalizedEffectiveErrorSource
+      ) {
         return true;
       }
     }
@@ -330,6 +361,7 @@ export function buildEmbeddedRunPayloads(params: {
       mediaUrls: item.media?.length ? item.media : undefined,
       mediaUrl: item.media?.[0],
       isError: item.isError,
+      errorKind: item.errorKind,
       replyToId: item.replyToId,
       replyToTag: item.replyToTag,
       replyToCurrent: item.replyToCurrent,

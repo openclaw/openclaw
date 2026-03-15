@@ -147,7 +147,45 @@ describe("extractAssistantText", () => {
     const result = extractAssistantText(msg);
     expect(result).toBe(responseText);
   });
+  it("ignores stale errorMessage metadata on non-error turns", () => {
+    const msg = makeAssistantMessage({
+      role: "assistant",
+      errorMessage: "insufficient credits",
+      content: [
+        {
+          type: "text",
+          text: "Your billing issue is resolved and the deploy succeeded.",
+        },
+      ],
+      timestamp: Date.now(),
+    });
 
+    expect(extractAssistantText(msg)).toBe(
+      "Your billing issue is resolved and the deploy succeeded.",
+    );
+  });
+
+  it("classifies content-only role ordering errors for actual error turns", () => {
+    const msg = makeAssistantMessage({
+      role: "assistant",
+      stopReason: "error",
+      content: [{ type: "text", text: "400 Incorrect role information" }],
+      timestamp: Date.now(),
+    });
+
+    expect(extractAssistantText(msg)).toContain("Message ordering conflict");
+  });
+
+  it("classifies content-only context overflow errors for actual error turns", () => {
+    const msg = makeAssistantMessage({
+      role: "assistant",
+      stopReason: "error",
+      content: [{ type: "text", text: "Request size exceeds model context window" }],
+      timestamp: Date.now(),
+    });
+
+    expect(extractAssistantText(msg)).toContain("Context overflow");
+  });
   it("strips Minimax tool invocations with extra attributes", () => {
     const msg = makeAssistantMessage({
       role: "assistant",

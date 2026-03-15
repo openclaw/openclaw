@@ -13,7 +13,7 @@ import {
   isTimeoutErrorMessage,
   matchesFormatErrorPattern,
 } from "./failover-matches.js";
-import type { FailoverReason } from "./types.js";
+import type { ErrorKind, FailoverReason } from "./types.js";
 
 export {
   isAuthErrorMessage,
@@ -42,6 +42,14 @@ export const BILLING_ERROR_USER_MESSAGE = formatBillingErrorMessage();
 const RATE_LIMIT_ERROR_USER_MESSAGE = "⚠️ API rate limit reached. Please try again later.";
 const OVERLOADED_ERROR_USER_MESSAGE =
   "The AI service is temporarily overloaded. Please try again in a moment.";
+const AUTH_ERROR_USER_MESSAGE =
+  "Authentication failed. Check your API key or provider credentials and try again.";
+const MODEL_NOT_FOUND_USER_MESSAGE =
+  "The selected model is not available. Choose a different model and try again.";
+const SESSION_EXPIRED_USER_MESSAGE =
+  "The provider session expired. Use /new to start a fresh session and try again.";
+const IMAGE_SIZE_USER_MESSAGE =
+  "The image is too large for this model. Send a smaller image and try again.";
 
 function formatRateLimitOrOverloadedErrorCopy(raw: string): string | undefined {
   if (isRateLimitErrorMessage(raw)) {
@@ -63,6 +71,15 @@ function isReasoningConstraintErrorMessage(raw: string): boolean {
     lower.includes("reasoning is required") ||
     lower.includes("requires reasoning") ||
     (lower.includes("reasoning") && lower.includes("cannot be disabled"))
+  );
+}
+
+function isRoleOrderingErrorMessage(raw: string): boolean {
+  if (!raw) {
+    return false;
+  }
+  return /incorrect role information|roles must alternate|400.*role|"message".*role.*information/i.test(
+    raw,
   );
 }
 
@@ -214,10 +231,6 @@ export function extractObservedOverflowTokenCount(errorMessage?: string): number
 const ERROR_PAYLOAD_PREFIX_RE =
   /^(?:error|api\s*error|apierror|openai\s*error|anthropic\s*error|gateway\s*error)[:\s-]+/i;
 const FINAL_TAG_RE = /<\s*\/?\s*final\s*>/gi;
-const ERROR_PREFIX_RE =
-  /^(?:error|api\s*error|openai\s*error|anthropic\s*error|gateway\s*error|request failed|failed|exception)[:\s-]+/i;
-const CONTEXT_OVERFLOW_ERROR_HEAD_RE =
-  /^(?:context overflow:|request_too_large\b|request size exceeds\b|request exceeds the maximum size\b|context length exceeded\b|maximum context length\b|prompt is too long\b|exceeds model context window\b)/i;
 const HTTP_STATUS_PREFIX_RE = /^(?:http\s*)?(\d{3})\s+(.+)$/i;
 const HTTP_STATUS_CODE_PREFIX_RE = /^(?:http\s*)?(\d{3})(?:\s+([\s\S]+))?$/i;
 const HTML_ERROR_PREFIX_RE = /^\s*(?:<!doctype\s+html\b|<html\b)/i;
@@ -390,6 +403,10 @@ export function isTransientHttpError(raw: string): boolean {
   return TRANSIENT_HTTP_ERROR_CODES.has(status.code);
 }
 
+export function isTransientProviderErrorMessage(raw: string): boolean {
+  return isTransientHttpError(raw) || isJsonApiInternalServerError(raw);
+}
+
 export function classifyFailoverReasonFromHttpStatus(
   status: number | undefined,
   message?: string,
@@ -492,18 +509,6 @@ function isLikelyHttpErrorText(raw: string): boolean {
   }
   const message = match[2].toLowerCase();
   return HTTP_ERROR_HINTS.some((hint) => message.includes(hint));
-}
-
-function shouldRewriteContextOverflowText(raw: string): boolean {
-  if (!isContextOverflowError(raw)) {
-    return false;
-  }
-  return (
-    isRawApiErrorPayload(raw) ||
-    isLikelyHttpErrorText(raw) ||
-    ERROR_PREFIX_RE.test(raw) ||
-    CONTEXT_OVERFLOW_ERROR_HEAD_RE.test(raw)
-  );
 }
 
 type ErrorPayload = Record<string, unknown>;
@@ -673,20 +678,28 @@ export function formatRawAssistantErrorForUi(raw?: string): string {
 
 export function formatAssistantErrorText(
   msg: AssistantMessage,
-  opts?: { cfg?: OpenClawConfig; sessionKey?: string; provider?: string; model?: string },
+  opts?: {
+    cfg?: OpenClawConfig;
+    sessionKey?: string;
+    provider?: string;
+    model?: string;
+    assistantText?: string;
+  },
 ): string | undefined {
-  // Also format errors if errorMessage is present, even if stopReason isn't "error"
+  const isErrorTurn = msg.stopReason === "error";
   const raw = (msg.errorMessage ?? "").trim();
-  if (msg.stopReason !== "error" && !raw) {
+  if (!isErrorTurn) {
     return undefined;
   }
-  if (!raw) {
+  const fallbackAssistantText = opts?.assistantText?.trim();
+  const effectiveRaw = raw || fallbackAssistantText || "";
+  if (!effectiveRaw) {
     return "LLM request failed with an unknown error.";
   }
 
   const unknownTool =
-    raw.match(/unknown tool[:\s]+["']?([a-z0-9_-]+)["']?/i) ??
-    raw.match(/tool\s+["']?([a-z0-9_-]+)["']?\s+(?:not found|is not available)/i);
+    effectiveRaw.match(/unknown tool[:\s]+["']?([a-z0-9_-]+)["']?/i) ??
+    effectiveRaw.match(/tool\s+["']?([a-z0-9_-]+)["']?\s+(?:not found|is not available)/i);
   if (unknownTool?.[1]) {
     const rewritten = formatSandboxToolPolicyBlockedMessage({
       cfg: opts?.cfg,
@@ -698,14 +711,14 @@ export function formatAssistantErrorText(
     }
   }
 
-  if (isContextOverflowError(raw)) {
+  if (isContextOverflowError(effectiveRaw)) {
     return (
       "Context overflow: prompt too large for the model. " +
       "Try /reset (or /new) to start a fresh session, or use a larger-context model."
     );
   }
 
-  if (isReasoningConstraintErrorMessage(raw)) {
+  if (isReasoningConstraintErrorMessage(effectiveRaw)) {
     return (
       "Reasoning is required for this model endpoint. " +
       "Use /think minimal (or any non-off level) and try again."
@@ -713,18 +726,14 @@ export function formatAssistantErrorText(
   }
 
   // Catch role ordering errors - including JSON-wrapped and "400" prefix variants
-  if (
-    /incorrect role information|roles must alternate|400.*role|"message".*role.*information/i.test(
-      raw,
-    )
-  ) {
+  if (isRoleOrderingErrorMessage(effectiveRaw)) {
     return (
       "Message ordering conflict - please try again. " +
       "If this persists, use /new to start a fresh session."
     );
   }
 
-  if (isMissingToolCallInputError(raw)) {
+  if (isMissingToolCallInputError(effectiveRaw)) {
     return (
       "Session history looks corrupted (tool call input missing). " +
       "Use /new to start a fresh session. " +
@@ -732,36 +741,39 @@ export function formatAssistantErrorText(
     );
   }
 
-  const invalidRequest = raw.match(/"type":"invalid_request_error".*?"message":"([^"]+)"/);
+  const invalidRequest = effectiveRaw.match(/"type":"invalid_request_error".*?"message":"([^"]+)"/);
   if (invalidRequest?.[1]) {
     return `LLM request rejected: ${invalidRequest[1]}`;
   }
 
-  const transientCopy = formatRateLimitOrOverloadedErrorCopy(raw);
+  const transientCopy = formatRateLimitOrOverloadedErrorCopy(effectiveRaw);
   if (transientCopy) {
     return transientCopy;
   }
 
-  if (isTimeoutErrorMessage(raw)) {
+  if (isTimeoutErrorMessage(effectiveRaw)) {
     return "LLM request timed out.";
   }
 
-  if (isBillingErrorMessage(raw)) {
+  if (isBillingErrorMessage(effectiveRaw)) {
     return formatBillingErrorMessage(opts?.provider, opts?.model ?? msg.model);
   }
 
-  if (isLikelyHttpErrorText(raw) || isRawApiErrorPayload(raw)) {
-    return formatRawAssistantErrorForUi(raw);
+  if (isLikelyHttpErrorText(effectiveRaw) || isRawApiErrorPayload(effectiveRaw)) {
+    return formatRawAssistantErrorForUi(effectiveRaw);
   }
 
   // Never return raw unhandled errors - log for debugging but return safe message
-  if (raw.length > 600) {
-    log.warn(`Long error truncated: ${raw.slice(0, 200)}`);
+  if (effectiveRaw.length > 600) {
+    log.warn(`Long error truncated: ${effectiveRaw.slice(0, 200)}`);
   }
-  return raw.length > 600 ? `${raw.slice(0, 600)}…` : raw;
+  return effectiveRaw.length > 600 ? `${effectiveRaw.slice(0, 600)}…` : effectiveRaw;
 }
 
-export function sanitizeUserFacingText(text: string, opts?: { errorContext?: boolean }): string {
+export function sanitizeUserFacingText(
+  text: string,
+  opts?: { errorContext?: boolean; errorKind?: ErrorKind },
+): string {
   if (!text) {
     return text;
   }
@@ -775,36 +787,42 @@ export function sanitizeUserFacingText(text: string, opts?: { errorContext?: boo
   // Only apply error-pattern rewrites when the caller knows this text is an error payload.
   // Otherwise we risk swallowing legitimate assistant text that merely *mentions* these errors.
   if (errorContext) {
-    if (/incorrect role information|roles must alternate/i.test(trimmed)) {
-      return (
-        "Message ordering conflict - please try again. " +
-        "If this persists, use /new to start a fresh session."
-      );
-    }
-
-    if (shouldRewriteContextOverflowText(trimmed)) {
-      return (
-        "Context overflow: prompt too large for the model. " +
-        "Try /reset (or /new) to start a fresh session, or use a larger-context model."
-      );
-    }
-
-    if (isBillingErrorMessage(trimmed)) {
-      return BILLING_ERROR_USER_MESSAGE;
-    }
-
-    if (isRawApiErrorPayload(trimmed) || isLikelyHttpErrorText(trimmed)) {
-      return formatRawAssistantErrorForUi(trimmed);
-    }
-
-    if (ERROR_PREFIX_RE.test(trimmed)) {
-      const prefixedCopy = formatRateLimitOrOverloadedErrorCopy(trimmed);
-      if (prefixedCopy) {
-        return prefixedCopy;
-      }
-      if (isTimeoutErrorMessage(trimmed)) {
+    // Structured errorKind classification: the caller provides the error kind,
+    // preventing false positives (e.g. a tool returning HTTP 402 being
+    // misclassified as an LLM billing error).
+    switch (opts?.errorKind) {
+      case "billing":
+        return BILLING_ERROR_USER_MESSAGE;
+      case "rate_limit":
+        return RATE_LIMIT_ERROR_USER_MESSAGE;
+      case "overloaded":
+        return OVERLOADED_ERROR_USER_MESSAGE;
+      case "timeout":
         return "LLM request timed out.";
-      }
+      case "auth":
+      case "auth_permanent":
+        return AUTH_ERROR_USER_MESSAGE;
+      case "context_overflow":
+      case "compaction_failure":
+        return (
+          "Context overflow: prompt too large for the model. " +
+          "Try /reset (or /new) to start a fresh session, or use a larger-context model."
+        );
+      case "image_size":
+        return IMAGE_SIZE_USER_MESSAGE;
+      case "model_not_found":
+        return MODEL_NOT_FOUND_USER_MESSAGE;
+      case "role_ordering":
+        return (
+          "Message ordering conflict - please try again. " +
+          "If this persists, use /new to start a fresh session."
+        );
+      case "session_expired":
+        return SESSION_EXPIRED_USER_MESSAGE;
+    }
+
+    // For unclassified errors, format raw API payloads but don't reclassify via regex.
+    if (isRawApiErrorPayload(trimmed) || isLikelyHttpErrorText(trimmed)) {
       return formatRawAssistantErrorForUi(trimmed);
     }
   }
@@ -970,7 +988,33 @@ function isCliSessionExpiredErrorMessage(raw: string): boolean {
     lower.includes("conversation id not found")
   );
 }
-
+export function deriveErrorKind(rawErrorMessage: string): ErrorKind {
+  if (isCompactionFailureError(rawErrorMessage)) {
+    return "compaction_failure";
+  }
+  if (isLikelyContextOverflowError(rawErrorMessage)) {
+    return "context_overflow";
+  }
+  if (isRoleOrderingErrorMessage(rawErrorMessage)) {
+    return "role_ordering";
+  }
+  // Check overloaded before classifyFailoverReason, which conflates it with rate_limit.
+  if (isOverloadedErrorMessage(rawErrorMessage)) {
+    return "overloaded";
+  }
+  if (isImageDimensionErrorMessage(rawErrorMessage) || isImageSizeError(rawErrorMessage)) {
+    return "image_size";
+  }
+  if (isTransientProviderErrorMessage(rawErrorMessage)) {
+    const status = extractLeadingHttpStatus(rawErrorMessage.trim());
+    return status?.code === 529 ? "overloaded" : "unknown";
+  }
+  const failoverReason = classifyFailoverReason(rawErrorMessage);
+  if (failoverReason && failoverReason !== "unknown") {
+    return failoverReason;
+  }
+  return "unknown";
+}
 export function classifyFailoverReason(raw: string): FailoverReason | null {
   if (isImageDimensionErrorMessage(raw)) {
     return null;
