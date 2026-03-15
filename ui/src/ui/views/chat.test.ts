@@ -782,7 +782,10 @@ describe("chat view", () => {
       defaultModelProvider: "openrouter",
     });
     state.sessionsResult = {
-      ...state.sessionsResult,
+      ts: state.sessionsResult?.ts ?? 0,
+      path: state.sessionsResult?.path ?? "",
+      count: 1,
+      defaults: state.sessionsResult?.defaults ?? { model: null, contextTokens: null },
       sessions: [
         {
           key: "main",
