@@ -2,12 +2,14 @@ import { constants as fsConstants } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { ensureAuthProfileStore, listProfilesForProvider } from "../agents/auth-profiles.js";
 import { resolveApiKeyForProvider } from "../agents/model-auth.js";
 import {
   findModelInCatalog,
   loadModelCatalog,
   modelSupportsVision,
 } from "../agents/model-catalog.js";
+import { normalizeProviderId } from "../agents/model-selection.js";
 import type { MsgContext } from "../auto-reply/templating.js";
 import type { OpenClawConfig } from "../config/config.js";
 import {
@@ -35,6 +37,7 @@ import {
   AUTO_AUDIO_KEY_PROVIDERS,
   AUTO_IMAGE_KEY_PROVIDERS,
   AUTO_VIDEO_KEY_PROVIDERS,
+  DEFAULT_AUDIO_MODELS,
   DEFAULT_IMAGE_MODELS,
 } from "./defaults.js";
 import { isMediaUnderstandingSkipError } from "./errors.js";
@@ -337,6 +340,96 @@ async function resolveGeminiCliEntry(
   };
 }
 
+/**
+ * Scan auth-profiles.json for connected providers that support a given
+ * media capability. This catches API keys stored via OAuth or paste-token
+ * flows (e.g., hosted BYOK platforms) that are not reflected in environment
+ * variables or explicit config.
+ */
+function resolveAuthProfileEntry(params: {
+  capability: MediaUnderstandingCapability;
+  providerRegistry: ProviderRegistry;
+  agentDir?: string;
+}): MediaUnderstandingModelConfig | null {
+  const { capability, providerRegistry, agentDir } = params;
+  const defaultModels: Record<string, string> =
+    capability === "audio"
+      ? DEFAULT_AUDIO_MODELS
+      : capability === "image"
+        ? DEFAULT_IMAGE_MODELS
+        : {};
+
+  let store;
+  try {
+    store = ensureAuthProfileStore(agentDir);
+  } catch {
+    return null;
+  }
+
+  // Collect unique provider IDs from profiles.
+  const providerIds = new Set<string>();
+  for (const cred of Object.values(store.profiles)) {
+    const normalized = normalizeProviderId(cred.provider);
+    if (providerIds.has(normalized)) {
+      continue;
+    }
+    providerIds.add(normalized);
+  }
+
+  for (const providerId of providerIds) {
+    const provider = getMediaUnderstandingProvider(providerId, providerRegistry);
+    if (!provider) {
+      continue;
+    }
+    if (capability === "audio" && !provider.transcribeAudio) {
+      continue;
+    }
+    if (capability === "image" && !provider.describeImage) {
+      continue;
+    }
+    if (capability === "video" && !provider.describeVideo) {
+      continue;
+    }
+
+    // Verify the profile has a usable credential.
+    const profiles = listProfilesForProvider(store, providerId);
+    const hasUsable = profiles.some((profileId) => {
+      const cred = store.profiles[profileId];
+      if (!cred) {
+        return false;
+      }
+      if (cred.type === "api_key") {
+        return Boolean(cred.key?.trim());
+      }
+      if (cred.type === "token") {
+        if (!cred.token?.trim()) {
+          return false;
+        }
+        if (
+          typeof cred.expires === "number" &&
+          Number.isFinite(cred.expires) &&
+          cred.expires > 0 &&
+          Date.now() >= cred.expires
+        ) {
+          return false;
+        }
+        return true;
+      }
+      if (cred.type === "oauth") {
+        return Boolean(cred.access?.trim() || cred.refresh?.trim());
+      }
+      return false;
+    });
+    if (!hasUsable) {
+      continue;
+    }
+
+    const model = defaultModels[providerId];
+    return { type: "provider" as const, provider: providerId, model };
+  }
+  return null;
+}
+
 async function resolveKeyEntry(params: {
   cfg: OpenClawConfig;
   agentDir?: string;
@@ -385,7 +478,7 @@ async function resolveKeyEntry(params: {
         return entry;
       }
     }
-    return null;
+    return resolveAuthProfileEntry({ capability, providerRegistry, agentDir });
   }
 
   if (capability === "video") {
@@ -402,7 +495,7 @@ async function resolveKeyEntry(params: {
         return entry;
       }
     }
-    return null;
+    return resolveAuthProfileEntry({ capability, providerRegistry, agentDir });
   }
 
   const activeProvider = params.activeModel?.provider?.trim();
@@ -418,7 +511,7 @@ async function resolveKeyEntry(params: {
       return entry;
     }
   }
-  return null;
+  return resolveAuthProfileEntry({ capability, providerRegistry, agentDir });
 }
 
 function resolveImageModelFromAgentDefaults(cfg: OpenClawConfig): MediaUnderstandingModelConfig[] {
