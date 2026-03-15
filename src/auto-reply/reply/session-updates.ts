@@ -203,8 +203,12 @@ export async function ensureSkillSnapshot(params: {
       ...current,
       sessionId: sessionId ?? current.sessionId ?? crypto.randomUUID(),
       updatedAt: Date.now(),
-      systemSent: true,
       skillsSnapshot: skillSnapshot,
+      // Note: systemSent is intentionally NOT persisted here.
+      // It must only be persisted after a successful LLM response,
+      // otherwise an API error (e.g. insufficient credits) leaves
+      // systemSent=true on disk while the system prompt was never
+      // actually delivered — corrupting all subsequent sessions.
     };
     await persistSessionEntryUpdate({ sessionStore, sessionKey, storePath, nextEntry });
     systemSent = true;
