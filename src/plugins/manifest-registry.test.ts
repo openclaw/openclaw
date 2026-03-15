@@ -155,6 +155,106 @@ describe("loadPluginManifestRegistry", () => {
     expect(countDuplicateWarnings(loadRegistry(candidates))).toBe(1);
   });
 
+  it("reports explicit installed globals as the effective duplicate winner", () => {
+    const bundledDir = makeTempDir();
+    const globalDir = makeTempDir();
+    const manifest = { id: "zalouser", configSchema: { type: "object" } };
+    writeManifest(bundledDir, manifest);
+    writeManifest(globalDir, manifest);
+
+    const registry = loadPluginManifestRegistry({
+      cache: false,
+      config: {
+        plugins: {
+          installs: {
+            zalouser: {
+              source: "npm",
+              installPath: globalDir,
+            },
+          },
+        },
+      },
+      candidates: [
+        createPluginCandidate({
+          idHint: "zalouser",
+          rootDir: bundledDir,
+          origin: "bundled",
+        }),
+        createPluginCandidate({
+          idHint: "zalouser",
+          rootDir: globalDir,
+          origin: "global",
+        }),
+      ],
+    });
+
+    expect(
+      registry.diagnostics.some((diag) =>
+        diag.message.includes("bundled plugin will be overridden by global plugin"),
+      ),
+    ).toBe(true);
+  });
+
+  it("reports bundled plugins as the duplicate winner for auto-discovered globals", () => {
+    const bundledDir = makeTempDir();
+    const globalDir = makeTempDir();
+    const manifest = { id: "feishu", configSchema: { type: "object" } };
+    writeManifest(bundledDir, manifest);
+    writeManifest(globalDir, manifest);
+
+    const registry = loadPluginManifestRegistry({
+      cache: false,
+      candidates: [
+        createPluginCandidate({
+          idHint: "feishu",
+          rootDir: bundledDir,
+          origin: "bundled",
+        }),
+        createPluginCandidate({
+          idHint: "feishu",
+          rootDir: globalDir,
+          origin: "global",
+        }),
+      ],
+    });
+
+    expect(
+      registry.diagnostics.some((diag) =>
+        diag.message.includes("global plugin will be overridden by bundled plugin"),
+      ),
+    ).toBe(true);
+  });
+
+  it("reports bundled plugins as the duplicate winner for workspace duplicates", () => {
+    const bundledDir = makeTempDir();
+    const workspaceDir = makeTempDir();
+    const manifest = { id: "shadowed", configSchema: { type: "object" } };
+    writeManifest(bundledDir, manifest);
+    writeManifest(workspaceDir, manifest);
+
+    const registry = loadPluginManifestRegistry({
+      cache: false,
+      candidates: [
+        createPluginCandidate({
+          idHint: "shadowed",
+          rootDir: bundledDir,
+          origin: "bundled",
+        }),
+        createPluginCandidate({
+          idHint: "shadowed",
+          rootDir: workspaceDir,
+          origin: "workspace",
+        }),
+      ],
+    });
+
+    expect(
+      registry.diagnostics.some((diag) =>
+        diag.message.includes("workspace plugin will be overridden by bundled plugin"),
+      ),
+    ).toBe(true);
+  });
+
   it("suppresses duplicate warning when candidates share the same physical directory via symlink", () => {
     const realDir = makeTempDir();
     const manifest = { id: "feishu", configSchema: { type: "object" } };

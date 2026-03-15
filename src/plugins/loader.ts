@@ -453,6 +453,82 @@ function isTrackedByProvenance(params: {
   return matchesPathMatcher(params.index.loadPathMatcher, sourcePath);
 }
 
+function matchesExplicitInstallRule(params: {
+  pluginId: string;
+  source: string;
+  index: PluginProvenanceIndex;
+  env: NodeJS.ProcessEnv;
+}): boolean {
+  const sourcePath = resolveUserPath(params.source, params.env);
+  const installRule = params.index.installRules.get(params.pluginId);
+  if (!installRule || installRule.trackedWithoutPaths) {
+    return false;
+  }
+  return matchesPathMatcher(installRule.matcher, sourcePath);
+}
+
+function resolveCandidateDuplicateRank(params: {
+  candidate: ReturnType<typeof discoverOpenClawPlugins>["candidates"][number];
+  manifestByRoot: Map<string, ReturnType<typeof loadPluginManifestRegistry>["plugins"][number]>;
+  provenance: PluginProvenanceIndex;
+  env: NodeJS.ProcessEnv;
+}): number {
+  const manifestRecord = params.manifestByRoot.get(params.candidate.rootDir);
+  const pluginId = manifestRecord?.id;
+  const isExplicitInstall =
+    params.candidate.origin === "global" &&
+    pluginId !== undefined &&
+    matchesExplicitInstallRule({
+      pluginId,
+      source: params.candidate.source,
+      index: params.provenance,
+      env: params.env,
+    });
+
+  if (params.candidate.origin === "config") {
+    return 0;
+  }
+  if (params.candidate.origin === "global" && isExplicitInstall) {
+    return 1;
+  }
+  if (params.candidate.origin === "bundled") {
+    // Bundled plugin ids stay reserved unless the operator configured an override.
+    return 2;
+  }
+  if (params.candidate.origin === "workspace") {
+    return 3;
+  }
+  return 4;
+}
+
+function compareDuplicateCandidateOrder(params: {
+  left: ReturnType<typeof discoverOpenClawPlugins>["candidates"][number];
+  right: ReturnType<typeof discoverOpenClawPlugins>["candidates"][number];
+  manifestByRoot: Map<string, ReturnType<typeof loadPluginManifestRegistry>["plugins"][number]>;
+  provenance: PluginProvenanceIndex;
+  env: NodeJS.ProcessEnv;
+}): number {
+  const leftPluginId = params.manifestByRoot.get(params.left.rootDir)?.id;
+  const rightPluginId = params.manifestByRoot.get(params.right.rootDir)?.id;
+  if (!leftPluginId || leftPluginId !== rightPluginId) {
+    return 0;
+  }
+  return (
+    resolveCandidateDuplicateRank({
+      candidate: params.left,
+      manifestByRoot: params.manifestByRoot,
+      provenance: params.provenance,
+      env: params.env,
+    }) -
+    resolveCandidateDuplicateRank({
+      candidate: params.right,
+      manifestByRoot: params.manifestByRoot,
+      provenance: params.provenance,
+      env: params.env,
+    })
+  );
+}
+
 function warnWhenAllowlistIsOpen(params: {
   logger: PluginLogger;
   pluginsEnabled: boolean;
@@ -644,13 +720,22 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
   const manifestByRoot = new Map(
     manifestRegistry.plugins.map((record) => [record.rootDir, record]),
   );
+  const orderedCandidates = [...discovery.candidates].toSorted((left, right) => {
+    return compareDuplicateCandidateOrder({
+      left,
+      right,
+      manifestByRoot,
+      provenance,
+      env,
+    });
+  });
 
   const seenIds = new Map<string, PluginRecord["origin"]>();
   const memorySlot = normalized.slots.memory;
   let selectedMemoryPluginId: string | null = null;
   let memorySlotMatched = false;
 
-  for (const candidate of discovery.candidates) {
+  for (const candidate of orderedCandidates) {
     const manifestRecord = manifestByRoot.get(candidate.rootDir);
     if (!manifestRecord) {
       continue;
