@@ -329,6 +329,27 @@ describe("scheduleChatScroll", () => {
     expect(container.scrollTop).toBe(maxScrollTop(container));
     expect(host.chatSuppressedBlockId).toBeNull();
   });
+
+  it("stores the intended smooth-scroll destination for follow-state tracking", async () => {
+    const { host, container, threadInner } = createScrollHost({
+      scrollHeight: 2600,
+      scrollTop: 1800,
+      clientHeight: 400,
+    });
+    host.chatUserNearBottom = true;
+    host.chatAutoScrollBlockId = "stream:1";
+    host.chatAutoScrollMode = "clamp";
+    const latestBlock = createChatBlock(1700, "stream:1", { streaming: true });
+    threadInner.querySelectorAll = vi.fn(() => [latestBlock]);
+    container.scrollTo = vi.fn();
+
+    scheduleChatScroll(host, false, true);
+    await host.updateComplete;
+
+    expect(container.scrollTo).toHaveBeenCalledWith({ top: 1700, behavior: "smooth" });
+    expect(container.scrollTop).toBe(1800);
+    expect(host.chatLastScrollTop).toBe(1700);
+  });
 });
 
 /* ------------------------------------------------------------------ */
