@@ -62,4 +62,4 @@ export type {
   BaseTokenResolution,
 } from "./types.core.js";
 
-export type { ChannelPlugin } from "./types.plugin.js";
+export type { ChannelPlugin, OutboundDispatcher } from "./types.plugin.js";

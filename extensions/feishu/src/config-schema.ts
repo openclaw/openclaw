@@ -176,6 +176,7 @@ const FeishuSharedConfigShape = {
   heartbeat: ChannelHeartbeatVisibilitySchema,
   renderMode: RenderModeSchema,
   streaming: StreamingModeSchema,
+  blockStreaming: z.boolean().optional(),
   tools: FeishuToolsConfigSchema,
   actions: ChannelActionsSchema,
   replyInThread: ReplyInThreadSchema,
