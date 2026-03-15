@@ -1,6 +1,6 @@
 import { enqueueCommandInLane } from "../../process/command-queue.js";
 import { CommandLane } from "../../process/lanes.js";
-import type { CronJob, CronJobCreate, CronJobPatch } from "../types.js";
+import type { CronJob, CronJobCreate, CronJobPatch, CronRunStatus } from "../types.js";
 import { normalizeCronCreateDeliveryInput } from "./initial-delivery.js";
 import {
   applyJobPatch,
@@ -22,6 +22,7 @@ import {
   executeJobCoreWithTimeout,
   runMissedJobs,
   stopTimer,
+  triggerChainedJob,
   wake,
 } from "./timer.js";
 
@@ -456,7 +457,7 @@ async function finishPreparedManualRun(
   state: CronServiceState,
   prepared: Extract<PreparedManualRun, { ran: true }>,
   mode?: "due" | "force",
-): Promise<void> {
+): Promise<CronRunStatus> {
   const executionJob = prepared.executionJob;
   const startedAt = prepared.startedAt;
   const jobId = prepared.jobId;
@@ -467,6 +468,7 @@ async function finishPreparedManualRun(
   } catch (err) {
     coreResult = { status: "error", error: String(err) };
   }
+  const runStatus: CronRunStatus = coreResult.status;
   const endedAt = state.deps.nowMs();
 
   await locked(state, async () => {
@@ -537,6 +539,7 @@ async function finishPreparedManualRun(
     await persist(state);
     armTimer(state);
   });
+  return runStatus;
 }
 
 export async function run(state: CronServiceState, id: string, mode?: "due" | "force") {
@@ -544,8 +547,8 @@ export async function run(state: CronServiceState, id: string, mode?: "due" | "f
   if (!prepared.ok || !prepared.ran) {
     return prepared;
   }
-  await finishPreparedManualRun(state, prepared, mode);
-  return { ok: true, ran: true } as const;
+  const status = await finishPreparedManualRun(state, prepared, mode);
+  return { ok: true, ran: true, status } as const;
 }
 
 export async function enqueueRun(state: CronServiceState, id: string, mode?: "due" | "force") {
@@ -558,12 +561,29 @@ export async function enqueueRun(state: CronServiceState, id: string, mode?: "du
   void enqueueCommandInLane(
     CommandLane.Cron,
     async () => {
+      // Capture chain targets from stable config before the run (job may be
+      // deleted for one-shot jobs, so snapshot these before execution).
+      const jobEntry = state.store?.jobs.find((j) => j.id === id);
+      const successId = jobEntry?.onSuccessJobId;
+      const failureId = jobEntry?.onFailureJobId;
+
       const result = await run(state, id, mode);
       if (result.ok && "ran" in result && !result.ran) {
         state.deps.log.info(
           { jobId: id, runId, reason: result.reason },
           "cron: queued manual run skipped before execution",
         );
+        return result;
+      }
+      // Dispatch chain for user-initiated manual runs with a fresh visited set
+      // seeded with this job to break A→B→A cycles.
+      if (result.ok && result.ran) {
+        const initialVisited: ReadonlySet<string> = new Set([id]);
+        if (result.status === "ok" && successId) {
+          triggerChainedJob(state, id, successId, initialVisited);
+        } else if (result.status === "error" && failureId) {
+          triggerChainedJob(state, id, failureId, initialVisited);
+        }
       }
       return result;
     },

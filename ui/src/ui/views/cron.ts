@@ -1330,6 +1330,41 @@ export function renderCron(props: CronProps) {
                     `
                   : nothing
               }
+              <div class="cron-span-2">
+                <div class="cron-form-section__title">${t("cron.form.pipeline")}</div>
+                <div class="cron-form-section__sub">${t("cron.form.pipelineSub")}</div>
+              </div>
+              <label class="field cron-span-2">
+                ${renderFieldLabel(t("cron.form.onSuccessJobId"))}
+                <input
+                  id="cron-on-success-job-id"
+                  .value=${props.form.onSuccessJobId}
+                  list="cron-job-id-suggestions"
+                  @input=${(e: Event) =>
+                    props.onFormChange({
+                      onSuccessJobId: (e.target as HTMLInputElement).value,
+                    })}
+                  placeholder=${t("cron.form.pipelinePlaceholder")}
+                />
+                <div class="cron-help">${t("cron.form.pipelineHelp")}</div>
+              </label>
+              <label class="field cron-span-2">
+                ${renderFieldLabel(t("cron.form.onFailureJobId"))}
+                <input
+                  id="cron-on-failure-job-id"
+                  .value=${props.form.onFailureJobId}
+                  list="cron-job-id-suggestions"
+                  @input=${(e: Event) =>
+                    props.onFormChange({
+                      onFailureJobId: (e.target as HTMLInputElement).value,
+                    })}
+                  placeholder=${t("cron.form.pipelinePlaceholder")}
+                />
+                <div class="cron-help">${t("cron.form.pipelineHelp")}</div>
+              </label>
+              <datalist id="cron-job-id-suggestions">
+                ${props.jobs.map((j) => html`<option value=${j.id}>${j.name}</option>`)}
+              </datalist>
             </div>
           </details>
         </div>
@@ -1564,7 +1599,7 @@ function renderJob(job: CronJob, props: CronProps) {
               selectAnd(() => props.onRun(job, "due"));
             }}
           >
-            Run if due
+            ${t("cron.jobList.runIfDue")}
           </button>
           <button
             class="btn"
