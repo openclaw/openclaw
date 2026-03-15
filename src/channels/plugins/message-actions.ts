@@ -1,5 +1,6 @@
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
 import type { OpenClawConfig } from "../../config/config.js";
+import { defaultRuntime } from "../../runtime.js";
 import { getChannelPlugin, listChannelPlugins } from "./index.js";
 import type { ChannelMessageCapability } from "./message-capabilities.js";
 import type { ChannelMessageActionContext, ChannelMessageActionName } from "./types.js";
@@ -19,10 +20,12 @@ function requiresTrustedRequesterSender(ctx: ChannelMessageActionContext): boole
 export function listChannelMessageActions(cfg: OpenClawConfig): ChannelMessageActionName[] {
   const actions = new Set<ChannelMessageActionName>(["send", "broadcast"]);
   for (const plugin of listChannelPlugins()) {
-    const list = plugin.actions?.listActions?.({ cfg });
-    if (!list) {
-      continue;
-    }
+    const list = runSafeActionProbe({
+      pluginId: plugin.id,
+      probe: "listActions",
+      fn: () => plugin.actions?.listActions?.({ cfg }) ?? [],
+      fallback: [] as ChannelMessageActionName[],
+    });
     for (const action of list) {
       actions.add(action);
     }
@@ -40,10 +43,13 @@ function listCapabilities(
 export function listChannelMessageCapabilities(cfg: OpenClawConfig): ChannelMessageCapability[] {
   const capabilities = new Set<ChannelMessageCapability>();
   for (const plugin of listChannelPlugins()) {
-    if (!plugin.actions) {
-      continue;
-    }
-    for (const capability of listCapabilities(plugin.actions, cfg)) {
+    const list = runSafeActionProbe({
+      pluginId: plugin.id,
+      probe: "getCapabilities",
+      fn: () => (plugin.actions ? listCapabilities(plugin.actions, cfg) : []),
+      fallback: [] as readonly ChannelMessageCapability[],
+    });
+    for (const capability of list) {
       capabilities.add(capability);
     }
   }
@@ -58,7 +64,13 @@ export function listChannelMessageCapabilitiesForChannel(params: {
     return [];
   }
   const plugin = getChannelPlugin(params.channel as Parameters<typeof getChannelPlugin>[0]);
-  return plugin?.actions ? Array.from(listCapabilities(plugin.actions, params.cfg)) : [];
+  const capabilities = runSafeActionProbe({
+    pluginId: plugin?.id ?? params.channel,
+    probe: "getCapabilitiesForChannel",
+    fn: () => (plugin?.actions ? listCapabilities(plugin.actions, params.cfg) : []),
+    fallback: [] as readonly ChannelMessageCapability[],
+  });
+  return Array.from(capabilities);
 }
 
 export function channelSupportsMessageCapability(
@@ -76,6 +88,46 @@ export function channelSupportsMessageCapabilityForChannel(
   capability: ChannelMessageCapability,
 ): boolean {
   return listChannelMessageCapabilitiesForChannel(params).includes(capability);
+}
+
+const loggedActionProbeErrors = new Set<string>();
+
+export function _resetActionProbeErrorLogForTest(): void {
+  loggedActionProbeErrors.clear();
+}
+
+function isToleratedActionProbeError(err: unknown): boolean {
+  const message = err instanceof Error ? err.message : String(err);
+  return message.includes("SecretRef");
+}
+
+function runSafeActionProbe<T>(params: {
+  pluginId: string;
+  probe: string;
+  fn: () => T;
+  fallback: T;
+}): T {
+  try {
+    return params.fn();
+  } catch (err) {
+    if (!isToleratedActionProbeError(err)) {
+      throw err;
+    }
+    logActionProbeError(params.pluginId, params.probe, err);
+    return params.fallback;
+  }
+}
+
+function logActionProbeError(pluginId: string, probe: string, err: unknown) {
+  const message = err instanceof Error ? err.message : String(err);
+  const key = `${pluginId}:${probe}:${message}`;
+  if (loggedActionProbeErrors.has(key)) {
+    return;
+  }
+  loggedActionProbeErrors.add(key);
+  const stack = err instanceof Error && err.stack ? err.stack : null;
+  const details = stack ?? message;
+  defaultRuntime.error?.(`[channel-tools] ${pluginId}.actions.${probe} failed: ${details}`);
 }
 
 export async function dispatchChannelMessageAction(

@@ -94,6 +94,10 @@ Docs: https://docs.openclaw.ai
 - Node/startup: remove leftover debug `console.log("node host PATH: ...")` that printed the resolved PATH on every `openclaw node run` invocation. (#46411)
 - CLI/completion: reduce recursive completion-script string churn and fix nested PowerShell command-path matching so generated nested completions resolve on PowerShell too. (#45537) Thanks @yiShanXin and @vincentkoc.
 
+### Fixes
+
+- Message/tool schema: make channel capability probing secret-safe so unresolved Telegram or Slack SecretRefs no longer crash the whole `message` tool or block explicit sends on other channels.
+
 ## 2026.3.13
 
 ### Changes

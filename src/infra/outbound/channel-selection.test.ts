@@ -141,6 +141,50 @@ describe("resolveMessageChannelSelection", () => {
     });
   });
 
+  it("does not inspect unrelated plugins when channel is explicit", async () => {
+    mocks.listChannelPlugins.mockReturnValue([
+      makePlugin({
+        id: "telegram",
+        isConfigured: () => {
+          throw new Error("telegram should not be inspected for explicit whatsapp sends");
+        },
+      }),
+    ]);
+
+    await expect(
+      resolveMessageChannelSelection({
+        cfg: {} as never,
+        channel: "whatsapp",
+      }),
+    ).resolves.toEqual({
+      channel: "whatsapp",
+      configured: [],
+      source: "explicit",
+    });
+  });
+
+  it("does not inspect unrelated plugins when falling back to tool context channel", async () => {
+    mocks.listChannelPlugins.mockReturnValue([
+      makePlugin({
+        id: "telegram",
+        isConfigured: () => {
+          throw new Error("telegram should not be inspected for fallback slack sends");
+        },
+      }),
+    ]);
+
+    await expect(
+      resolveMessageChannelSelection({
+        cfg: {} as never,
+        fallbackChannel: "slack",
+      }),
+    ).resolves.toEqual({
+      channel: "slack",
+      configured: [],
+      source: "tool-context-fallback",
+    });
+  });
+
   it("selects single configured channel when no explicit/fallback channel exists", async () => {
     mocks.listChannelPlugins.mockReturnValue([
       makePlugin({ id: "discord", isConfigured: async () => true }),
