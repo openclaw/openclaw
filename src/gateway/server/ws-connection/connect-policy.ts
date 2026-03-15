@@ -3,6 +3,7 @@ import type { GatewayRole } from "../../role-policy.js";
 import { roleCanSkipDeviceIdentity } from "../../role-policy.js";
 
 export type ControlUiAuthPolicy = {
+  isControlUi: boolean;
   allowInsecureAuthConfigured: boolean;
   dangerouslyDisableDeviceAuth: boolean;
   allowBypass: boolean;
@@ -24,6 +25,7 @@ export function resolveControlUiAuthPolicy(params: {
   const dangerouslyDisableDeviceAuth =
     params.isControlUi && params.controlUiConfig?.dangerouslyDisableDeviceAuth === true;
   return {
+    isControlUi: params.isControlUi,
     allowInsecureAuthConfigured,
     dangerouslyDisableDeviceAuth,
     // `allowInsecureAuth` must not bypass secure-context/device-auth requirements.
@@ -36,8 +38,19 @@ export function shouldSkipControlUiPairing(
   policy: ControlUiAuthPolicy,
   role: GatewayRole,
   trustedProxyAuthOk = false,
+  authMode?: string,
 ): boolean {
   if (trustedProxyAuthOk) {
+    return true;
+  }
+  // When auth is completely disabled (mode=none), there is no shared secret
+  // or token to gate pairing. Requiring pairing in this configuration adds
+  // friction without security value since any client can already connect
+  // without credentials. Guard with policy.isControlUi because this function
+  // is called for ALL clients (not just Control UI) at the call site.
+  // Scope to operator role so node-role sessions still need device identity
+  // (#43478 was reverted for skipping ALL clients).
+  if (policy.isControlUi && role === "operator" && authMode === "none") {
     return true;
   }
   // dangerouslyDisableDeviceAuth is the break-glass path for Control UI

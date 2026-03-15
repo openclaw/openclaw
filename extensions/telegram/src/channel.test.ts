@@ -403,3 +403,30 @@ describe("telegramPlugin duplicate token guard", () => {
     );
   });
 });
+
+describe("telegramPlugin outbound sendPayload forceDocument", () => {
+  it("forwards forceDocument to the underlying send call when channelData is present", async () => {
+    const sendMessageTelegram = installSendMessageRuntime(
+      vi.fn(async () => ({ messageId: "tg-fd" })),
+    );
+
+    await telegramPlugin.outbound!.sendPayload!({
+      cfg: createCfg(),
+      to: "12345",
+      text: "",
+      payload: {
+        text: "here is an image",
+        mediaUrls: ["https://example.com/photo.png"],
+        channelData: { telegram: {} },
+      },
+      accountId: "ops",
+      forceDocument: true,
+    });
+
+    expect(sendMessageTelegram).toHaveBeenCalledWith(
+      "12345",
+      expect.any(String),
+      expect.objectContaining({ forceDocument: true }),
+    );
+  });
+});
