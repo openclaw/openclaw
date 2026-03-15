@@ -690,6 +690,18 @@ const SECRET_TARGET_REGISTRY: SecretTargetRegistryEntry[] = [
     includeInAudit: true,
   },
   {
+    id: "plugins.entries.acpx.config.mcpServers.*.env.*",
+    targetType: "plugins.entries.acpx.config.mcpServers.env",
+    targetTypeAliases: ["plugins.entries.acpx.config.mcpServers.*.env.*"],
+    configFile: "openclaw.json",
+    pathPattern: "plugins.entries.acpx.config.mcpServers.*.env.*",
+    secretShape: SECRET_INPUT_SHAPE,
+    expectedResolvedValue: "string",
+    includeInPlan: true,
+    includeInConfigure: true,
+    includeInAudit: true,
+  },
+  {
     id: "talk.apiKey",
     targetType: "talk.apiKey",
     configFile: "openclaw.json",
