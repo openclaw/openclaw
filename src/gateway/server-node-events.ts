@@ -350,11 +350,13 @@ export const handleNodeEvent = async (ctx: NodeEventContext, nodeId: string, evt
       const normalizedAttachments = normalizeRpcAttachmentsToChatAttachments(
         link?.attachments ?? undefined,
       );
+      const cfg = loadConfig();
+      const maxBytes = cfg.gateway?.webui?.attachmentMaxBytes ?? 5_000_000;
       let images: Array<{ type: "image"; data: string; mimeType: string }> = [];
       if (normalizedAttachments.length > 0) {
         try {
           const parsed = await parseMessageWithAttachments(message, normalizedAttachments, {
-            maxBytes: 5_000_000,
+            maxBytes,
             log: ctx.logGateway,
           });
           message = parsed.message.trim();
@@ -381,7 +383,6 @@ export const handleNodeEvent = async (ctx: NodeEventContext, nodeId: string, evt
 
       const sessionKeyRaw = (link?.sessionKey ?? "").trim();
       const sessionKey = sessionKeyRaw.length > 0 ? sessionKeyRaw : `node-${nodeId}`;
-      const cfg = loadConfig();
       const { storePath, entry, canonicalKey } = loadSessionEntry(sessionKey);
       const now = Date.now();
       const sessionId = entry?.sessionId ?? randomUUID();

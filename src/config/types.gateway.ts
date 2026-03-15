@@ -376,6 +376,14 @@ export type GatewayNodesConfig = {
   denyCommands?: string[];
 };
 
+export type GatewayWebuiConfig = {
+  /**
+   * Max bytes per attachment uploaded via webui agent.request.
+   * Default: 5_000_000 (5MB).
+   */
+  attachmentMaxBytes?: number;
+};
+
 export type GatewayToolsConfig = {
   /** Tools to deny via gateway HTTP /tools/invoke (extends defaults). */
   deny?: string[];
@@ -425,6 +433,8 @@ export type GatewayConfig = {
   allowRealIpFallback?: boolean;
   /** Tool access restrictions for HTTP /tools/invoke endpoint. */
   tools?: GatewayToolsConfig;
+  /** WebUI (Control UI) settings. */
+  webui?: GatewayWebuiConfig;
   /**
    * Channel health monitor interval in minutes.
    * Periodically checks channel health and restarts unhealthy channels.

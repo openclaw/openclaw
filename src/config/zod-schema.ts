@@ -831,6 +831,12 @@ export const OpenClawSchema = z
           })
           .strict()
           .optional(),
+        webui: z
+          .object({
+            attachmentMaxBytes: z.number().int().positive().optional(),
+          })
+          .strict()
+          .optional(),
       })
       .strict()
       .optional(),
