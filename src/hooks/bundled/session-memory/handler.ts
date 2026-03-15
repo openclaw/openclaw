@@ -14,7 +14,7 @@ import {
 } from "../../../agents/agent-scope.js";
 import type { OpenClawConfig } from "../../../config/config.js";
 import { resolveStateDir } from "../../../config/paths.js";
-import { writeFileWithinRoot } from "../../../infra/fs-safe.js";
+import { appendFileWithinRoot } from "../../../infra/fs-safe.js";
 import { createSubsystemLogger } from "../../../logging/subsystem.js";
 import {
   parseAgentSessionKey,
@@ -25,6 +25,25 @@ import { hasInterSessionUserProvenance } from "../../../sessions/input-provenanc
 import { resolveHookConfig } from "../../config.js";
 import type { HookHandler } from "../../hooks.js";
 import { generateSlugViaLLM } from "../../llm-slug-generator.js";
+
+function generateLocalSlug(sessionContent: string | null): string {
+  if (!sessionContent) {
+    return "session";
+  }
+  const candidate = sessionContent
+    .toLowerCase()
+    .replace(/\b(user|assistant):/g, " ")
+    .replace(/[^a-z0-9\s-]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .split(" ")
+    .filter((token) => token.length >= 3)
+    .slice(0, 2)
+    .join("-")
+    .replace(/-+/g, "-")
+    .replace(/^-|-$/g, "");
+  return candidate || "session";
+}
 
 const log = createSubsystemLogger("hooks/session-memory");
 
@@ -288,31 +307,44 @@ const saveSessionToMemory: HookHandler = async (event) => {
         messageCount,
       });
 
-      // Avoid calling the model provider in unit tests; keep hooks fast and deterministic.
+      // /new and /reset must not depend on LLM. Use local slug by default.
+      slug = generateLocalSlug(sessionContent);
+
+      // Optional enhancement: enable LLM slug explicitly via hook config.
       const isTestEnv =
         process.env.OPENCLAW_TEST_FAST === "1" ||
         process.env.VITEST === "true" ||
         process.env.VITEST === "1" ||
         process.env.NODE_ENV === "test";
-      const allowLlmSlug = !isTestEnv && hookConfig?.llmSlug !== false;
+      const allowLlmSlug = !isTestEnv && hookConfig?.llmSlug === true;
 
       if (sessionContent && cfg && allowLlmSlug) {
-        log.debug("Calling generateSlugViaLLM...");
-        // Use LLM to generate a descriptive slug
-        slug = await generateSlugViaLLM({ sessionContent, cfg });
+        const envTimeoutMs = Number(process.env.OPENCLAW_SESSION_MEMORY_SLUG_TIMEOUT_MS);
+        const configTimeoutMs = (hookConfig as Record<string, unknown> | undefined)
+          ?.slugTimeoutMs as number;
+        const configuredTimeoutMs =
+          (Number.isFinite(envTimeoutMs) ? envTimeoutMs : undefined) ||
+          (Number.isFinite(configTimeoutMs) ? configTimeoutMs : undefined) ||
+          5000;
+        log.debug("Calling generateSlugViaLLM...", { timeoutMs: configuredTimeoutMs });
+        const llmSlug = await generateSlugViaLLM({
+          sessionContent,
+          cfg,
+          timeoutMs: configuredTimeoutMs,
+        });
+        if (llmSlug) {
+          slug = llmSlug;
+        }
         log.debug("Generated slug", { slug });
       }
     }
 
-    // If no slug, use timestamp
     if (!slug) {
-      const timeSlug = now.toISOString().split("T")[1].split(".")[0].replace(/:/g, "");
-      slug = timeSlug.slice(0, 4); // HHMM
-      log.debug("Using fallback timestamp slug", { slug });
+      slug = "session";
     }
 
-    // Create filename with date and slug
-    const filename = `${dateStr}-${slug}.md`;
+    // Canonical daily filename; avoids reader/writer mismatch (YYYY-MM-DD.md).
+    const filename = `${dateStr}.md`;
     const memoryFilePath = path.join(memoryDir, filename);
     log.debug("Memory file path resolved", {
       filename,
@@ -328,7 +360,7 @@ const saveSessionToMemory: HookHandler = async (event) => {
 
     // Build Markdown entry
     const entryParts = [
-      `# Session: ${dateStr} ${timeStr} UTC`,
+      `## Session: ${dateStr} ${timeStr} UTC (${slug})`,
       "",
       `- **Session Key**: ${displaySessionKey}`,
       `- **Session ID**: ${sessionId}`,
@@ -338,19 +370,30 @@ const saveSessionToMemory: HookHandler = async (event) => {
 
     // Include conversation content if available
     if (sessionContent) {
-      entryParts.push("## Conversation Summary", "", sessionContent, "");
+      entryParts.push("### Conversation Summary", "", sessionContent, "");
     }
 
     const entry = entryParts.join("\n");
 
-    // Write under memory root with alias-safe file validation.
-    await writeFileWithinRoot({
+    const dailyHeader = `# ${dateStr}`;
+
+    // Append under memory root with alias-safe file validation.
+    // Use O_APPEND semantics to avoid lost updates when multiple sessions close concurrently.
+    const openResult = await appendFileWithinRoot({
       rootDir: memoryDir,
       relativePath: filename,
-      data: entry,
+      data: "",
       encoding: "utf-8",
     });
-    log.debug("Memory file written successfully");
+    const needsHeader = openResult.createdForWrite || openResult.openedStat.size === 0;
+
+    await appendFileWithinRoot({
+      rootDir: memoryDir,
+      relativePath: filename,
+      data: needsHeader ? `${dailyHeader}\n\n${entry}\n` : `\n\n${entry}\n`,
+      encoding: "utf-8",
+    });
+    log.debug("Memory file appended successfully");
 
     // Log completion (but don't send user-visible confirmation - it's internal housekeeping)
     const relPath = memoryFilePath.replace(os.homedir(), "~");

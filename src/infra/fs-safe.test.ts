@@ -46,7 +46,7 @@ async function expectWriteOpenRaceIsBlocked(params: {
 async function expectSymlinkWriteRaceRejectsOutside(params: {
   slotPath: string;
   outsideDir: string;
-  runWrite: (relativePath: string) => Promise<void>;
+  runWrite: (relativePath: string) => Promise<unknown>;
 }): Promise<void> {
   const relativePath = path.join("slot", "target.txt");
   await expectWriteOpenRaceIsBlocked({

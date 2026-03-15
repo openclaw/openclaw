@@ -507,7 +507,7 @@ export async function appendFileWithinRoot(params: {
   encoding?: BufferEncoding;
   mkdir?: boolean;
   prependNewlineIfNeeded?: boolean;
-}): Promise<void> {
+}): Promise<SafeWritableOpenResult> {
   const target = await openWritableFileWithinRoot({
     rootDir: params.rootDir,
     relativePath: params.relativePath,
@@ -533,12 +533,13 @@ export async function appendFileWithinRoot(params: {
 
     if (typeof params.data === "string") {
       await target.handle.appendFile(`${prefix}${params.data}`, params.encoding ?? "utf8");
-      return;
+      return target;
     }
 
     const payload =
       prefix.length > 0 ? Buffer.concat([Buffer.from(prefix, "utf8"), params.data]) : params.data;
     await target.handle.appendFile(payload);
+    return target;
   } finally {
     await target.handle.close().catch(() => {});
   }
