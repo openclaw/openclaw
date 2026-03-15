@@ -110,6 +110,12 @@ export function copyBundledPluginMetadata(params = {}) {
   }
 
   const sourcePluginDirs = new Set();
+  const removeGeneratedPluginArtifacts = (distPluginDir) => {
+    removeFileIfExists(path.join(distPluginDir, "openclaw.plugin.json"));
+    removeFileIfExists(path.join(distPluginDir, "package.json"));
+    removePathIfExists(path.join(distPluginDir, GENERATED_BUNDLED_SKILLS_DIR));
+    removePathIfExists(path.join(distPluginDir, "node_modules"));
+  };
 
   for (const dirent of fs.readdirSync(extensionsRoot, { withFileTypes: true })) {
     if (!dirent.isDirectory()) {
@@ -123,8 +129,7 @@ export function copyBundledPluginMetadata(params = {}) {
     const distManifestPath = path.join(distPluginDir, "openclaw.plugin.json");
     const distPackageJsonPath = path.join(distPluginDir, "package.json");
     if (!fs.existsSync(manifestPath)) {
-      removeFileIfExists(distManifestPath);
-      removeFileIfExists(distPackageJsonPath);
+      removeGeneratedPluginArtifacts(distPluginDir);
       continue;
     }
 
@@ -165,8 +170,7 @@ export function copyBundledPluginMetadata(params = {}) {
       continue;
     }
     const distPluginDir = path.join(distExtensionsRoot, dirent.name);
-    removeFileIfExists(path.join(distPluginDir, "openclaw.plugin.json"));
-    removeFileIfExists(path.join(distPluginDir, "package.json"));
+    removeGeneratedPluginArtifacts(distPluginDir);
   }
 }
 
