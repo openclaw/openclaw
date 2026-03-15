@@ -578,6 +578,87 @@ describe("handleFeishuMessage sender name resolution", () => {
     );
   });
 
+  it("does not poison user_id cache with a lower-priority open_id fallback", async () => {
+    const getUser = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("user_id lookup failed"))
+      .mockResolvedValueOnce({ data: { user: { name: "用户377052" } } })
+      .mockResolvedValueOnce({ data: { user: { name: "同同" } } });
+    mockCreateFeishuClient.mockReturnValue({
+      contact: {
+        user: {
+          get: getUser,
+        },
+      },
+    });
+
+    const cfg: ClawdbotConfig = {
+      channels: {
+        feishu: {
+          appId: "cli_test",
+          appSecret: "secret",
+          dmPolicy: "open",
+        },
+      },
+    } as ClawdbotConfig;
+
+    await dispatchMessage({
+      cfg,
+      event: {
+        sender: {
+          sender_id: {
+            open_id: "ou_sender_open_fallback_only",
+            user_id: "0b1a2c3d_retry_after_open_fallback",
+          },
+        },
+        message: {
+          message_id: "msg-open-fallback-only-prime",
+          chat_id: "oc-dm",
+          chat_type: "p2p",
+          message_type: "text",
+          content: JSON.stringify({ text: "第一次" }),
+        },
+      },
+    });
+
+    await dispatchMessage({
+      cfg,
+      event: {
+        sender: {
+          sender_id: {
+            open_id: "ou_sender_open_fallback_only",
+            user_id: "0b1a2c3d_retry_after_open_fallback",
+          },
+        },
+        message: {
+          message_id: "msg-open-fallback-only-retry",
+          chat_id: "oc-dm",
+          chat_type: "p2p",
+          message_type: "text",
+          content: JSON.stringify({ text: "第二次" }),
+        },
+      },
+    });
+
+    expect(getUser).toHaveBeenNthCalledWith(1, {
+      path: { user_id: "0b1a2c3d_retry_after_open_fallback" },
+      params: { user_id_type: "user_id" },
+    });
+    expect(getUser).toHaveBeenNthCalledWith(2, {
+      path: { user_id: "ou_sender_open_fallback_only" },
+      params: { user_id_type: "open_id" },
+    });
+    expect(getUser).toHaveBeenNthCalledWith(3, {
+      path: { user_id: "0b1a2c3d_retry_after_open_fallback" },
+      params: { user_id_type: "user_id" },
+    });
+    expect(mockFinalizeInboundContext).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        BodyForAgent: expect.stringContaining("同同: 第二次"),
+      }),
+    );
+  });
+
   it("keeps sender-name lookup best-effort when Feishu client creation throws", async () => {
     mockCreateFeishuClient.mockImplementation(() => {
       throw new Error("client init failed");

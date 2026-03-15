@@ -171,11 +171,15 @@ async function resolveFeishuSenderName(params: {
     return { name: cachedResults[0].name };
   }
 
-  const cacheResolvedName = (name: string) => {
+  const cacheResolvedName = (name: string, resolvedIndex: number) => {
     const entry = { name, expireAt: now + SENDER_NAME_TTL_MS };
-    for (const knownCandidate of lookupCandidates) {
-      senderNameCache.set(knownCandidate.id, entry);
+    if (resolvedIndex <= 0) {
+      for (const knownCandidate of lookupCandidates) {
+        senderNameCache.set(knownCandidate.id, entry);
+      }
+      return;
     }
+    senderNameCache.set(lookupCandidates[resolvedIndex]!.id, entry);
   };
 
   for (let i = 0; i < lookupCandidates.length; i++) {
@@ -211,7 +215,7 @@ async function resolveFeishuSenderName(params: {
         res?.data?.user?.en_name;
 
       if (name && typeof name === "string") {
-        cacheResolvedName(name);
+        cacheResolvedName(name, i);
         return { name };
       }
     } catch (err) {
