@@ -76,7 +76,9 @@ const ACP_TURN_TIMEOUT_GRACE_MS = 1_000;
 const ACP_TURN_TIMEOUT_CLEANUP_GRACE_MS = 2_000;
 const ACP_TURN_TIMEOUT_REASON = "turn-timeout";
 
-const ACPX_EXIT_ERROR_RE = /\bacpx exited with code\s+\d+\b/i;
+// Defensive fallback only: the runtime should normally surface an AcpRuntimeError
+// or a structured event code before manager-level handling gets involved.
+const ACPX_EXIT_ERROR_RE = /\bacpx exited with code\s+[1-9]\d*\b/i;
 
 function resolveTurnFailureFallbackCode(error: unknown): AcpRuntimeError["code"] {
   if (error instanceof Error && !(error instanceof AcpRuntimeError)) {
