@@ -326,6 +326,7 @@ describe("gateway server cron", () => {
         name: "patch merge",
         enabled: true,
         schedule: { kind: "every", everyMs: 60_000 },
+        reuseSession: true,
         sessionTarget: "isolated",
         wakeMode: "next-heartbeat",
         payload: { kind: "agentTurn", message: "hello", model: "opus" },
@@ -364,10 +365,12 @@ describe("gateway server cron", () => {
       expect(mergeUpdateRes.ok).toBe(true);
       const merged = mergeUpdateRes.payload as
         | {
+            reuseSession?: unknown;
             payload?: { kind?: unknown; message?: unknown; model?: unknown };
             delivery?: { mode?: unknown; channel?: unknown; to?: unknown };
           }
         | undefined;
+      expect(merged?.reuseSession).toBe(true);
       expect(merged?.payload?.kind).toBe("agentTurn");
       expect(merged?.payload?.message).toBe("hello");
       expect(merged?.payload?.model).toBe("opus");
@@ -378,6 +381,7 @@ describe("gateway server cron", () => {
       const modelOnlyPatchRes = await rpcReq(ws, "cron.update", {
         id: mergeJobId,
         patch: {
+          reuseSession: false,
           payload: {
             model: "anthropic/claude-sonnet-4-5",
           },
@@ -386,6 +390,7 @@ describe("gateway server cron", () => {
       expect(modelOnlyPatchRes.ok).toBe(true);
       const modelOnlyPatched = modelOnlyPatchRes.payload as
         | {
+            reuseSession?: unknown;
             payload?: {
               kind?: unknown;
               message?: unknown;
@@ -393,6 +398,7 @@ describe("gateway server cron", () => {
             };
           }
         | undefined;
+      expect(modelOnlyPatched?.reuseSession).toBeUndefined();
       expect(modelOnlyPatched?.payload?.kind).toBe("agentTurn");
       expect(modelOnlyPatched?.payload?.message).toBe("hello");
       expect(modelOnlyPatched?.payload?.model).toBe("anthropic/claude-sonnet-4-5");

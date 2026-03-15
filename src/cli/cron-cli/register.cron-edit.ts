@@ -40,6 +40,8 @@ export function registerCronEditCommand(cron: Command) {
       .option("--clear-agent", "Unset agent and use default", false)
       .option("--session-key <key>", "Set session key for job routing")
       .option("--clear-session-key", "Unset session key", false)
+      .option("--reuse-session", "Reuse the same isolated cron session across runs")
+      .option("--no-reuse-session", "Force a fresh isolated session on every run")
       .option("--wake <mode>", "Wake mode (now|next-heartbeat)")
       .option("--at <when>", "Set one-shot time (ISO) or duration like 20m")
       .option("--every <duration>", "Set interval duration like 10m")
@@ -152,6 +154,9 @@ export function registerCronEditCommand(cron: Command) {
           }
           if (opts.clearSessionKey) {
             patch.sessionKey = null;
+          }
+          if (typeof opts.reuseSession === "boolean") {
+            patch.reuseSession = opts.reuseSession;
           }
 
           const scheduleChosen = [opts.at, opts.every, opts.cron].filter(Boolean).length;

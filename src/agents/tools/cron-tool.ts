@@ -232,6 +232,7 @@ JOB SCHEMA (for add action):
   "payload": { ... },       // Required: what to execute
   "delivery": { ... },      // Optional: announce summary (isolated/current/session:xxx only) or webhook POST
   "sessionTarget": "main" | "isolated" | "current" | "session:<custom-id>",  // Optional, defaults based on context
+  "reuseSession": true,     // Optional: reuse the same isolated cron session across runs
   "enabled": true | false   // Optional, default true
 }
 
@@ -240,6 +241,7 @@ SESSION TARGET OPTIONS:
 - "isolated": Run in an ephemeral isolated session (requires payload.kind="agentTurn")
 - "current": Bind to the current session where the cron is created (resolved at creation time)
 - "session:<custom-id>": Run in a persistent named session (e.g., "session:project-alpha-daily")
+- "reuseSession: true" is only for "isolated" jobs; current/custom sessions are already persistent by design.
 
 DEFAULT BEHAVIOR (unchanged for backward compatibility):
 - payload.kind="systemEvent" → defaults to "main"
@@ -317,6 +319,7 @@ Use jobId as the canonical identifier; id is accepted for compatibility. Use con
               "name",
               "schedule",
               "sessionTarget",
+              "reuseSession",
               "wakeMode",
               "payload",
               "delivery",
@@ -465,6 +468,7 @@ Use jobId as the canonical identifier; id is accepted for compatibility. Use con
               "schedule",
               "payload",
               "delivery",
+              "reuseSession",
               "enabled",
               "description",
               "deleteAfterRun",

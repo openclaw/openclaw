@@ -19,6 +19,8 @@ Tip: run `openclaw cron --help` for the full command surface.
 Note: isolated `cron add` jobs default to `--announce` delivery. Use `--no-deliver` to keep
 output internal. `--deliver` remains as a deprecated alias for `--announce`.
 
+Note: isolated jobs start fresh by default. Use `--reuse-session` when you want a recurring isolated job to keep its own running context across invocations until the session reset policy expires.
+
 Note: one-shot (`--at`) jobs delete after success by default. Use `--keep-after-run` to keep them.
 
 Note: recurring jobs now use exponential retry backoff after consecutive errors (30s → 1m → 5m → 15m → 60m), then return to normal schedule after the next successful run.
@@ -75,3 +77,15 @@ openclaw cron add \
 ```
 
 `--light-context` applies to isolated agent-turn jobs only. For cron runs, lightweight mode keeps bootstrap context empty instead of injecting the full workspace bootstrap set.
+
+Reuse the same isolated cron session across runs:
+
+```bash
+openclaw cron add \
+  --name "Daily standup prep" \
+  --cron "0 8 * * 1-5" \
+  --session isolated \
+  --message "Review yesterday's notes and prepare today's standup bullets." \
+  --reuse-session \
+  --no-deliver
+```

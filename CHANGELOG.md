@@ -9,6 +9,9 @@ Docs: https://docs.openclaw.ai
 - Commands/btw: add `/btw` side questions for quick tool-less answers about the current session without changing future session context, with dismissible in-session TUI answers and explicit BTW replies on external channels. (#45444) Thanks @ngutman.
 - Refactor/channels: remove the legacy channel shim directories and point channel-specific imports directly at the extension-owned implementations. (#45967) thanks @scoootscooob.
 - Feishu/streaming: add `onReasoningStream` and `onReasoningEnd` support to streaming cards, so `/reasoning stream` renders thinking tokens as markdown blockquotes in the same card — matching the Telegram channel's reasoning lane behavior.
+- Docs/Kubernetes: Add a starter K8s install path with raw manifests, Kind setup, and deployment docs. Thanks @sallyom @dzianisv @egkristi
+- Cron/isolated sessions: add opt-in session reuse for isolated cron jobs so recurring agentTurn automations can carry context forward across runs instead of always starting from a fresh session.
+- Agents/subagents: add `sessions_yield` so orchestrators can end the current turn immediately, skip queued tool work, and carry a hidden follow-up payload into the next session turn. (#36537) thanks @jriff
 - Feishu/cards: add identity-aware structured card headers and note footers for Feishu replies and direct sends, while keeping that presentation wired through the shared outbound identity path. (#29938) Thanks @nszhsl.
 - Gateway/health monitor: add configurable stale-event thresholds and restart limits, plus per-channel and per-account `healthMonitor.enabled` overrides, while keeping the existing global disable path on `gateway.channelHealthCheckMinutes=0`. (#42107) Thanks @rstar327.
 

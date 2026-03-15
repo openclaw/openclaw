@@ -3,6 +3,7 @@ export type CronJobBase<TSchedule, TSessionTarget, TWakeMode, TPayload, TDeliver
     id: string;
     agentId?: string;
     sessionKey?: string;
+    reuseSession?: boolean;
     name: string;
     description?: string;
     enabled: boolean;

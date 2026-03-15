@@ -162,8 +162,10 @@ Isolated jobs run a dedicated agent turn in session `cron:<jobId>` or a custom s
 Key behaviors:
 
 - Prompt is prefixed with `[cron:<jobId> <job name>]` for traceability.
+- By default, each run starts a **fresh session id** (no prior conversation carry-over). Set `reuseSession: true` to let recurring isolated jobs carry context forward until the session reset policy expires.
 - Each run starts a **fresh session id** (no prior conversation carry-over), unless using a custom session.
 - Custom sessions (`session:xxx`) persist context across runs, enabling workflows like daily standups that build on previous summaries.
+- `reuseSession: true` keeps recurring `sessionTarget: "isolated"` jobs on the same session until the normal session reset policy expires.
 - Default behavior: if `delivery` is omitted, isolated jobs announce a summary (`delivery.mode = "announce"`).
 - `delivery.mode` chooses what happens:
   - `announce`: deliver a summary to the target channel and post a brief summary to the main session.

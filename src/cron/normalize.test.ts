@@ -402,6 +402,24 @@ describe("normalizeCronJobCreate", () => {
     expect(normalized.wakeMode).toBe("now");
   });
 
+  it("coerces reuseSession booleans and strings", () => {
+    const direct = normalizeCronJobCreate({
+      name: "reuse direct",
+      schedule: { kind: "cron", expr: "* * * * *" },
+      payload: { kind: "agentTurn", message: "hello" },
+      reuseSession: true,
+    }) as unknown as Record<string, unknown>;
+    expect(direct.reuseSession).toBe(true);
+
+    const stringy = normalizeCronJobCreate({
+      name: "reuse string",
+      schedule: { kind: "cron", expr: "* * * * *" },
+      payload: { kind: "agentTurn", message: "hello" },
+      reuseSession: " false ",
+    }) as unknown as Record<string, unknown>;
+    expect(stringy.reuseSession).toBe(false);
+  });
+
   it("strips invalid delivery mode from partial delivery objects", () => {
     const normalized = normalizeCronJobCreate({
       name: "delivery mode",
@@ -489,6 +507,18 @@ describe("normalizeCronJobPatch", () => {
       sessionKey: null,
     }) as unknown as Record<string, unknown>;
     expect(cleared.sessionKey).toBeNull();
+  });
+
+  it("coerces reuseSession patch booleans and strings", () => {
+    const enabled = normalizeCronJobPatch({
+      reuseSession: true,
+    }) as unknown as Record<string, unknown>;
+    expect(enabled.reuseSession).toBe(true);
+
+    const disabled = normalizeCronJobPatch({
+      reuseSession: " false ",
+    }) as unknown as Record<string, unknown>;
+    expect(disabled.reuseSession).toBe(false);
   });
 
   it("normalizes cron stagger values in patch schedules", () => {

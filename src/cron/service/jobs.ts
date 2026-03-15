@@ -144,6 +144,12 @@ export function assertSupportedJobSpec(job: Pick<CronJob, "sessionTarget" | "pay
   }
 }
 
+function assertSessionReuseSupport(job: Pick<CronJob, "sessionTarget" | "reuseSession">) {
+  if (job.reuseSession === true && job.sessionTarget !== "isolated") {
+    throw new Error('cron reuseSession is only supported for sessionTarget="isolated"');
+  }
+}
+
 function assertMainSessionAgentId(
   job: Pick<CronJob, "sessionTarget" | "agentId">,
   defaultAgentId: string | undefined,
@@ -544,6 +550,7 @@ export function createJob(state: CronServiceState, input: CronJobCreate): CronJo
     id,
     agentId: normalizeOptionalAgentId(input.agentId),
     sessionKey: normalizeOptionalSessionKey((input as { sessionKey?: unknown }).sessionKey),
+    reuseSession: input.reuseSession === true ? true : undefined,
     name: normalizeRequiredName(input.name),
     description: normalizeOptionalText(input.description),
     enabled,
@@ -561,6 +568,7 @@ export function createJob(state: CronServiceState, input: CronJobCreate): CronJo
     },
   };
   assertSupportedJobSpec(job);
+  assertSessionReuseSupport(job);
   assertMainSessionAgentId(job, state.deps.defaultAgentId);
   assertDeliverySupport(job);
   assertFailureDestinationSupport(job);
@@ -573,87 +581,103 @@ export function applyJobPatch(
   patch: CronJobPatch,
   opts?: { defaultAgentId?: string },
 ) {
+  const nextJob = structuredClone(job);
   if ("name" in patch) {
-    job.name = normalizeRequiredName(patch.name);
+    nextJob.name = normalizeRequiredName(patch.name);
   }
   if ("description" in patch) {
-    job.description = normalizeOptionalText(patch.description);
+    nextJob.description = normalizeOptionalText(patch.description);
   }
   if (typeof patch.enabled === "boolean") {
-    job.enabled = patch.enabled;
+    nextJob.enabled = patch.enabled;
   }
   if (typeof patch.deleteAfterRun === "boolean") {
-    job.deleteAfterRun = patch.deleteAfterRun;
+    nextJob.deleteAfterRun = patch.deleteAfterRun;
   }
   if (patch.schedule) {
     if (patch.schedule.kind === "cron") {
       const explicitStaggerMs = normalizeCronStaggerMs(patch.schedule.staggerMs);
       if (explicitStaggerMs !== undefined) {
-        job.schedule = { ...patch.schedule, staggerMs: explicitStaggerMs };
-      } else if (job.schedule.kind === "cron") {
-        job.schedule = { ...patch.schedule, staggerMs: job.schedule.staggerMs };
+        nextJob.schedule = { ...patch.schedule, staggerMs: explicitStaggerMs };
+      } else if (nextJob.schedule.kind === "cron") {
+        nextJob.schedule = { ...patch.schedule, staggerMs: nextJob.schedule.staggerMs };
       } else {
         const defaultStaggerMs = resolveDefaultCronStaggerMs(patch.schedule.expr);
-        job.schedule =
+        nextJob.schedule =
           defaultStaggerMs !== undefined
             ? { ...patch.schedule, staggerMs: defaultStaggerMs }
             : patch.schedule;
       }
     } else {
-      job.schedule = patch.schedule;
+      nextJob.schedule = patch.schedule;
     }
   }
   if (patch.sessionTarget) {
-    job.sessionTarget = patch.sessionTarget;
+    nextJob.sessionTarget = patch.sessionTarget;
   }
   if (patch.wakeMode) {
-    job.wakeMode = patch.wakeMode;
+    nextJob.wakeMode = patch.wakeMode;
   }
   if (patch.payload) {
-    job.payload = mergeCronPayload(job.payload, patch.payload);
+    nextJob.payload = mergeCronPayload(nextJob.payload, patch.payload);
   }
   if (!patch.delivery && patch.payload?.kind === "agentTurn") {
     // Back-compat: legacy clients still update delivery via payload fields.
     const legacyDeliveryPatch = buildLegacyDeliveryPatch(patch.payload);
-    const isIsolatedLike =
-      job.sessionTarget === "isolated" ||
-      job.sessionTarget === "current" ||
-      job.sessionTarget.startsWith("session:");
-    if (legacyDeliveryPatch && isIsolatedLike && job.payload.kind === "agentTurn") {
-      job.delivery = mergeCronDelivery(job.delivery, legacyDeliveryPatch);
+    if (
+      legacyDeliveryPatch &&
+      (nextJob.sessionTarget === "isolated" ||
+        nextJob.sessionTarget === "current" ||
+        nextJob.sessionTarget.startsWith("session:")) &&
+      nextJob.payload.kind === "agentTurn"
+    ) {
+      nextJob.delivery = mergeCronDelivery(nextJob.delivery, legacyDeliveryPatch);
     }
   }
   if (patch.delivery) {
-    job.delivery = mergeCronDelivery(job.delivery, patch.delivery);
+    nextJob.delivery = mergeCronDelivery(nextJob.delivery, patch.delivery);
   }
   if ("failureAlert" in patch) {
-    job.failureAlert = mergeCronFailureAlert(job.failureAlert, patch.failureAlert);
+    nextJob.failureAlert = mergeCronFailureAlert(nextJob.failureAlert, patch.failureAlert);
   }
   if (
-    job.sessionTarget === "main" &&
-    job.delivery?.mode !== "webhook" &&
-    job.delivery?.failureDestination
+    nextJob.sessionTarget === "main" &&
+    nextJob.delivery?.mode !== "webhook" &&
+    nextJob.delivery?.failureDestination
   ) {
     throw new Error(
       'cron delivery.failureDestination is only supported for sessionTarget="isolated" unless delivery.mode="webhook"',
     );
   }
-  if (job.sessionTarget === "main" && job.delivery?.mode !== "webhook") {
-    job.delivery = undefined;
+  if (nextJob.sessionTarget === "main" && nextJob.delivery?.mode !== "webhook") {
+    nextJob.delivery = undefined;
   }
   if (patch.state) {
-    job.state = { ...job.state, ...patch.state };
+    nextJob.state = { ...nextJob.state, ...patch.state };
   }
   if ("agentId" in patch) {
-    job.agentId = normalizeOptionalAgentId((patch as { agentId?: unknown }).agentId);
+    nextJob.agentId = normalizeOptionalAgentId((patch as { agentId?: unknown }).agentId);
   }
   if ("sessionKey" in patch) {
-    job.sessionKey = normalizeOptionalSessionKey((patch as { sessionKey?: unknown }).sessionKey);
+    nextJob.sessionKey = normalizeOptionalSessionKey(
+      (patch as { sessionKey?: unknown }).sessionKey,
+    );
   }
-  assertSupportedJobSpec(job);
-  assertMainSessionAgentId(job, opts?.defaultAgentId);
-  assertDeliverySupport(job);
-  assertFailureDestinationSupport(job);
+  const nextReuseSession =
+    "reuseSession" in patch
+      ? patch.reuseSession === true
+        ? true
+        : undefined
+      : nextJob.sessionTarget === "isolated"
+        ? nextJob.reuseSession
+        : undefined;
+  nextJob.reuseSession = nextReuseSession;
+  assertSupportedJobSpec(nextJob);
+  assertSessionReuseSupport(nextJob);
+  assertMainSessionAgentId(nextJob, opts?.defaultAgentId);
+  assertDeliverySupport(nextJob);
+  assertFailureDestinationSupport(nextJob);
+  Object.assign(job, nextJob);
 }
 
 function mergeCronPayload(existing: CronPayload, patch: CronPayloadPatch): CronPayload {

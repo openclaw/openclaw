@@ -21,6 +21,20 @@ describe("cron protocol validators", () => {
     expect(validateCronAddParams(minimalAddParams)).toBe(true);
   });
 
+  it("accepts reuseSession on isolated add and patch", () => {
+    expect(
+      validateCronAddParams({
+        name: "daily-summary",
+        schedule: { kind: "every", everyMs: 60_000 },
+        sessionTarget: "isolated",
+        wakeMode: "next-heartbeat",
+        reuseSession: true,
+        payload: { kind: "agentTurn", message: "tick" },
+      }),
+    ).toBe(true);
+    expect(validateCronUpdateParams({ id: "job-1", patch: { reuseSession: true } })).toBe(true);
+  });
+
   it("accepts current and custom session targets", () => {
     expect(
       validateCronAddParams({

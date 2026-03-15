@@ -342,8 +342,9 @@ export async function runCronIsolatedAgentTurn(params: {
     sessionKey: agentSessionKey,
     agentId,
     nowMs: now,
-    // Isolated cron runs must not carry prior turn context across executions.
-    forceNew: params.job.sessionTarget === "isolated",
+    // Isolated cron runs stay fresh by default; reuseSession opt-in keeps
+    // the same session alive across invocations for accumulated context.
+    forceNew: params.job.sessionTarget === "isolated" && params.job.reuseSession !== true,
   });
   const runSessionId = cronSession.sessionEntry.sessionId;
   const runSessionKey = baseSessionKey.startsWith("cron:")

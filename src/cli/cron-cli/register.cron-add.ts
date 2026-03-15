@@ -72,6 +72,11 @@ export function registerCronAddCommand(cron: Command) {
       .option("--agent <id>", "Agent id for this job")
       .option("--session <target>", "Session target (main|isolated)")
       .option("--session-key <key>", "Session key for job routing (e.g. agent:my-agent:my-session)")
+      .option(
+        "--reuse-session",
+        "Reuse the same isolated cron session across runs (carry context forward)",
+        false,
+      )
       .option("--wake <mode>", "Wake mode (now|next-heartbeat)", "now")
       .option("--at <when>", "Run once at time (ISO) or +duration (e.g. 20m)")
       .option("--every <duration>", "Run every duration (e.g. 10m, 1h)")
@@ -228,6 +233,12 @@ export function registerCronAddCommand(cron: Command) {
           if (accountId && (!isIsolatedLikeSessionTarget || payload.kind !== "agentTurn")) {
             throw new Error("--account requires a non-main agentTurn job with delivery.");
           }
+          if (
+            opts.reuseSession === true &&
+            (sessionTarget !== "isolated" || payload.kind !== "agentTurn")
+          ) {
+            throw new Error("--reuse-session requires an isolated agentTurn job.");
+          }
 
           const deliveryMode =
             isIsolatedLikeSessionTarget && payload.kind === "agentTurn"
@@ -261,6 +272,7 @@ export function registerCronAddCommand(cron: Command) {
             deleteAfterRun: opts.deleteAfterRun ? true : opts.keepAfterRun ? false : undefined,
             agentId,
             sessionKey,
+            reuseSession: opts.reuseSession === true ? true : undefined,
             schedule,
             sessionTarget,
             wakeMode,

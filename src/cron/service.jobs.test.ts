@@ -70,6 +70,22 @@ describe("applyJobPatch", () => {
     expect(job.delivery).toEqual({ mode: "webhook", to: "https://example.invalid/cron" });
   });
 
+  it("clears reuseSession when switching to main session", () => {
+    const job = createIsolatedAgentTurnJob(
+      "job-reuse-switch",
+      {
+        mode: "announce",
+        channel: "telegram",
+        to: "123",
+      },
+      { reuseSession: true },
+    );
+
+    expect(() => applyJobPatch(job, switchToMainPatch())).not.toThrow();
+    expect(job.sessionTarget).toBe("main");
+    expect(job.reuseSession).toBeUndefined();
+  });
+
   it("maps legacy payload delivery updates onto delivery", () => {
     const job = createIsolatedAgentTurnJob("job-2", {
       mode: "announce",
@@ -495,6 +511,15 @@ describe("applyJobPatch rejects sessionTarget main for non-default agents", () =
       }),
     ).not.toThrow();
   });
+
+  it("rejects enabling reuseSession on a main-session job", () => {
+    const job = createMainJob();
+    expect(() =>
+      applyJobPatch(job, { name: "changed-name", reuseSession: true } as CronJobPatch),
+    ).toThrow('cron reuseSession is only supported for sessionTarget="isolated"');
+    expect(job.name).toBe("main-agent-check");
+    expect(job.reuseSession).toBeUndefined();
+  });
 });
 
 describe("cron stagger defaults", () => {
@@ -612,6 +637,20 @@ describe("createJob delivery defaults", () => {
     expect(job.delivery).toEqual({ mode: "none" });
   });
 
+  it("stores reuseSession for isolated agentTurn jobs", () => {
+    const state = createMockState(now);
+    const job = createJob(state, {
+      name: "isolated-reuse",
+      enabled: true,
+      schedule: { kind: "every", everyMs: 60_000 },
+      sessionTarget: "isolated",
+      wakeMode: "now",
+      payload: { kind: "agentTurn", message: "hello" },
+      reuseSession: true,
+    });
+    expect(job.reuseSession).toBe(true);
+  });
+
   it("does not set delivery for main systemEvent jobs without explicit delivery", () => {
     const state = createMockState(now, { defaultAgentId: "main" });
     const job = createJob(state, {
@@ -623,5 +662,20 @@ describe("createJob delivery defaults", () => {
       payload: { kind: "systemEvent", text: "ping" },
     });
     expect(job.delivery).toBeUndefined();
+  });
+
+  it("rejects reuseSession for main systemEvent jobs", () => {
+    const state = createMockState(now, { defaultAgentId: "main" });
+    expect(() =>
+      createJob(state, {
+        name: "main-reuse",
+        enabled: true,
+        schedule: { kind: "every", everyMs: 60_000 },
+        sessionTarget: "main",
+        wakeMode: "now",
+        payload: { kind: "systemEvent", text: "ping" },
+        reuseSession: true,
+      }),
+    ).toThrow('cron reuseSession is only supported for sessionTarget="isolated"');
   });
 });
