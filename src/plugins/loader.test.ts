@@ -1,8 +1,6 @@
-import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { pathToFileURL } from "node:url";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { withEnv } from "../test-utils/env.js";
 async function importFreshPluginTestModules() {
@@ -1955,7 +1953,7 @@ describe("loadOpenClawPlugins", () => {
     expect(record?.status).toBe("loaded");
   });
 
-  it("supports legacy plugins importing monolithic plugin-sdk root", async () => {
+  it("supports legacy plugins importing monolithic plugin-sdk root", () => {
     useNoBundledPlugins();
     const plugin = writePlugin({
       id: "legacy-root-import",
@@ -1967,38 +1965,14 @@ describe("loadOpenClawPlugins", () => {
 };`,
     });
 
-    const loaderModuleUrl = pathToFileURL(
-      path.join(process.cwd(), "src", "plugins", "loader.ts"),
-    ).href;
-    const script = `
-      import { loadOpenClawPlugins } from ${JSON.stringify(loaderModuleUrl)};
-      const registry = loadOpenClawPlugins({
-        cache: false,
-        workspaceDir: ${JSON.stringify(plugin.dir)},
-        config: {
-          plugins: {
-            load: { paths: [${JSON.stringify(plugin.file)}] },
-            allow: ["legacy-root-import"],
-          },
-        },
-      });
-      const record = registry.plugins.find((entry) => entry.id === "legacy-root-import");
-      if (!record || record.status !== "loaded") {
-        console.error(record?.error ?? "legacy-root-import missing");
-        process.exit(1);
-      }
-    `;
-
-    execFileSync(process.execPath, ["--import", "tsx", "--input-type=module", "-e", script], {
-      cwd: process.cwd(),
-      env: {
-        ...process.env,
-        OPENCLAW_HOME: undefined,
-        OPENCLAW_BUNDLED_PLUGINS_DIR: "/nonexistent/bundled/plugins",
+    const registry = loadRegistryFromSinglePlugin({
+      plugin,
+      pluginConfig: {
+        allow: ["legacy-root-import"],
       },
-      encoding: "utf-8",
-      stdio: "pipe",
     });
+    const record = registry.plugins.find((entry) => entry.id === "legacy-root-import");
+    expect(record?.status).toBe("loaded");
   });
 
   it("prefers dist plugin-sdk alias when loader runs from dist", () => {
