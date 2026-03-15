@@ -30,7 +30,7 @@ In all three paths, the API key check is skipped entirely.
 
 **File:** `src/commands/doctor-memory-search.ts`
 
-Insert after the `local` branch (line 81) and before the `// Remote provider` comment (line 82):
+Insert after the closing `return;` of the `local` branch, before the `// Remote provider` comment:
 
 ```typescript
 if (resolved.provider === "ollama") {
@@ -63,11 +63,11 @@ if (resolved.provider === "ollama") {
 
 Three new test cases:
 
-| Test                     | Config               | Probe                                       | Expected                                                                                                         |
-| ------------------------ | -------------------- | ------------------------------------------- | ---------------------------------------------------------------------------------------------------------------- |
-| ollama + probe ready     | `provider: "ollama"` | `ready: true`                               | `note` not called                                                                                                |
-| ollama + probe not ready | `provider: "ollama"` | `ready: false, error: "connection refused"` | `note` called, contains "does not require an API key" and error detail, does NOT contain "API key was not found" |
-| ollama + no probe        | `provider: "ollama"` | (none)                                      | `note` called, contains "does not require an API key", does NOT contain "API key was not found"                  |
+| Test                     | Config                                      | Probe                                       | Expected                                                                                                         |
+| ------------------------ | ------------------------------------------- | ------------------------------------------- | ---------------------------------------------------------------------------------------------------------------- |
+| ollama + probe ready     | `provider: "ollama", local: {}, remote: {}` | `ready: true`                               | `note` not called                                                                                                |
+| ollama + probe not ready | `provider: "ollama", local: {}, remote: {}` | `ready: false, error: "connection refused"` | `note` called, contains "does not require an API key" and error detail, does NOT contain "API key was not found" |
+| ollama + no probe        | `provider: "ollama", local: {}, remote: {}` | (none)                                      | `note` called, contains "does not require an API key", does NOT contain "API key was not found"                  |
 
 Key regression assertion: none of the ollama paths should ever output "API key was not found".
 
@@ -77,3 +77,4 @@ Key regression assertion: none of the ollama paths should ever output "API key w
 - **Lines added:** ~35 (15 logic + 20 test)
 - **Lines removed:** 0
 - **Risk:** Minimal -- only affects doctor diagnostic output for `provider: "ollama"`, no runtime behavior change.
+- **`auto` mode unaffected:** `ollama` is not in the auto-mode provider detection loop (`["openai", "gemini", "voyage", "mistral"]`), so the new branch is never reached when `provider: "auto"`. No additional changes needed.
