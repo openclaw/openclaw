@@ -108,6 +108,22 @@ describe("buildWorkspaceSkillStatus", () => {
     expect(skill?.bundled).toBe(true);
   });
 
+  it("does not mark workspace overrides as bundled when names collide", async () => {
+    const entry = makeEntry({
+      name: "video-frames",
+      source: "openclaw-workspace",
+    });
+
+    const report = buildWorkspaceSkillStatus("/tmp/ws", {
+      entries: [entry],
+    });
+    const skill = report.skills.find((reportEntry) => reportEntry.name === "video-frames");
+
+    expect(skill).toBeDefined();
+    expect(skill?.source).toBe("openclaw-workspace");
+    expect(skill?.bundled).toBe(false);
+  });
+
   it("filters install options by OS", async () => {
     const entry = makeEntry({
       name: "install-skill",
