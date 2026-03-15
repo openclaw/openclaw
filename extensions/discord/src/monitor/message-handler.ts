@@ -246,7 +246,10 @@ export function createDiscordMessageHandler(
     }
   };
 
-  handler.deactivate = inboundWorker.deactivate;
+  handler.deactivate = () => {
+    debouncer.unregister();
+    inboundWorker.deactivate();
+  };
 
   return handler;
 }

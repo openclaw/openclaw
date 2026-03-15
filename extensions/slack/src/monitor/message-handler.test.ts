@@ -18,6 +18,8 @@ vi.mock("openclaw/plugin-sdk/channel-inbound", async () => {
       debouncer: {
         enqueue: (entry: unknown) => enqueueMock(entry),
         flushKey: (key: string) => flushKeyMock(key),
+        flushAll: async () => 0,
+        unregister: () => {},
       },
     }),
     shouldDebounceTextInbound: ({ hasMedia }: { hasMedia?: boolean }) => !hasMedia,

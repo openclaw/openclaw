@@ -19,6 +19,7 @@ export function createFeishuRuntimeMockModule(): {
           enqueue: () => Promise<void>;
           flushKey: () => Promise<boolean>;
           flushAll: () => Promise<number>;
+          unregister: () => void;
         };
       };
       text: {
@@ -36,6 +37,7 @@ export function createFeishuRuntimeMockModule(): {
             enqueue: async () => {},
             flushKey: async () => false,
             flushAll: async () => 0,
+            unregister: () => {},
           }),
         },
         text: {
