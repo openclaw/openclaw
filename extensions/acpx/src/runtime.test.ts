@@ -638,4 +638,19 @@ describe("AcpxRuntime", () => {
       delete process.env.MOCK_ACPX_NEW_EMPTY;
     }
   });
+
+  it("preserves ACP_SESSION_INIT_FAILED for silent exits during session init", async () => {
+    const { runtime } = await createMockRuntimeFixture();
+
+    await expect(
+      runtime.ensureSession({
+        sessionKey: "agent:claude:acp:silent-init",
+        agent: "claude",
+        mode: "persistent",
+      }),
+    ).rejects.toMatchObject({
+      code: "ACP_SESSION_INIT_FAILED",
+      message: "acpx exited with code 1",
+    });
+  });
 });

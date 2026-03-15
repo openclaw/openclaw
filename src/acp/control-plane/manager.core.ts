@@ -69,7 +69,9 @@ import {
 } from "./runtime-options.js";
 import { SessionActorQueue } from "./session-actor-queue.js";
 
-const ACPX_EXIT_ERROR_RE = /\bacpx exited with code\s+\d+\b/i;
+// Defensive fallback only: the runtime should normally surface an AcpRuntimeError
+// or a structured event code before manager-level handling gets involved.
+const ACPX_EXIT_ERROR_RE = /\bacpx exited with code\s+[1-9]\d*\b/i;
 
 function resolveTurnFailureFallbackCode(error: unknown): AcpRuntimeError["code"] {
   if (error instanceof Error && !(error instanceof AcpRuntimeError)) {

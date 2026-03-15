@@ -99,6 +99,18 @@ function resolveSilentAcpxExitErrorCode(exitCode: number | null | undefined): Ac
   return "ACP_BACKEND_UNAVAILABLE";
 }
 
+function resolveSilentAcpxControlExitErrorCode(params: {
+  exitCode: number | null | undefined;
+  fallbackCode: AcpRuntimeErrorCode;
+}): AcpRuntimeErrorCode {
+  if (params.exitCode === ACPX_EXIT_CODE_PERMISSION_DENIED) {
+    return params.fallbackCode;
+  }
+  return params.fallbackCode === "ACP_TURN_FAILED"
+    ? "ACP_BACKEND_UNAVAILABLE"
+    : params.fallbackCode;
+}
+
 export function encodeAcpxRuntimeHandleState(state: AcpxHandleState): string {
   const payload = Buffer.from(JSON.stringify(state), "utf8").toString("base64url");
   return `${ACPX_RUNTIME_HANDLE_PREFIX}${payload}`;
@@ -811,7 +823,10 @@ export class AcpxRuntime implements AcpRuntime {
 
     if ((result.code ?? 0) !== 0) {
       throw new AcpRuntimeError(
-        resolveSilentAcpxExitErrorCode(result.code),
+        resolveSilentAcpxControlExitErrorCode({
+          exitCode: result.code,
+          fallbackCode: params.fallbackCode,
+        }),
         formatAcpxExitMessage({
           stderr: result.stderr,
           exitCode: result.code,
