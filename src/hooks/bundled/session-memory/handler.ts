@@ -175,18 +175,6 @@ async function findPreviousSessionFile(params: {
         return path.join(params.sessionsDir, topicVariants[0]);
       }
     }
-
-    if (!params.currentSessionFile) {
-      return undefined;
-    }
-
-    const nonResetJsonl = files
-      .filter((name) => name.endsWith(".jsonl") && !name.includes(".reset."))
-      .toSorted()
-      .toReversed();
-    if (nonResetJsonl.length > 0) {
-      return path.join(params.sessionsDir, nonResetJsonl[0]);
-    }
   } catch {
     // Ignore directory read errors.
   }
@@ -239,26 +227,21 @@ const saveSessionToMemory: HookHandler = async (event) => {
     const currentSessionId = sessionEntry.sessionId as string;
     let currentSessionFile = (sessionEntry.sessionFile as string) || undefined;
 
-    // If sessionFile is empty or looks like a new/reset file, try to find the previous session file.
-    if (!currentSessionFile || currentSessionFile.includes(".reset.")) {
-      const sessionsDirs = new Set<string>();
-      if (currentSessionFile) {
-        sessionsDirs.add(path.dirname(currentSessionFile));
-      }
-      sessionsDirs.add(path.join(workspaceDir, "sessions"));
+    // If sessionFile is missing, try to find the previous session file.
+    // Note: do NOT enter recovery when sessionFile points to a .reset.* path —
+    // those files are directly readable by getRecentSessionContentWithResetFallback.
+    // The previous last-resort fallback in findPreviousSessionFile could incorrectly
+    // resolve to the newly created (empty) session file instead of the old conversation.
+    if (!currentSessionFile) {
+      const sessionsDir = path.join(workspaceDir, "sessions");
+      const recoveredSessionFile = await findPreviousSessionFile({
+        sessionsDir,
+        sessionId: currentSessionId,
+      });
 
-      for (const sessionsDir of sessionsDirs) {
-        const recoveredSessionFile = await findPreviousSessionFile({
-          sessionsDir,
-          currentSessionFile,
-          sessionId: currentSessionId,
-        });
-        if (!recoveredSessionFile) {
-          continue;
-        }
+      if (recoveredSessionFile) {
         currentSessionFile = recoveredSessionFile;
         log.debug("Found previous session file", { file: currentSessionFile });
-        break;
       }
     }
 

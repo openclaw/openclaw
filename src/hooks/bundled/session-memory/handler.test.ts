@@ -554,6 +554,49 @@ describe("session-memory hook", () => {
     });
   });
 
+  it("reads reset file when a new session file also exists in the directory", async () => {
+    const { tempDir, sessionsDir } = await createSessionMemoryWorkspace();
+
+    const oldSessionId = "old-session-id";
+    const newSessionId = "new-session-id";
+
+    // Old session was renamed to .reset.* (contains the real conversation)
+    await writeWorkspaceFile({
+      dir: sessionsDir,
+      name: `${oldSessionId}.jsonl.reset.2026-02-22T23-24-07.565Z`,
+      content: createMockSessionContent([
+        { role: "user", content: "Real conversation from old session" },
+        { role: "assistant", content: "Important context to preserve" },
+      ]),
+    });
+
+    // New session file exists (created by /new, only has bootstrap greeting)
+    await writeWorkspaceFile({
+      dir: sessionsDir,
+      name: `${newSessionId}.jsonl`,
+      content: createMockSessionContent([
+        { role: "user", content: "A new session was started via /new" },
+        { role: "assistant", content: "Hello!" },
+      ]),
+    });
+
+    const { memoryContent } = await runNewWithPreviousSessionEntry({
+      tempDir,
+      cfg: makeSessionMemoryConfig(tempDir),
+      previousSessionEntry: {
+        sessionId: oldSessionId,
+        sessionFile: path.join(sessionsDir, `${oldSessionId}.jsonl.reset.2026-02-22T23-24-07.565Z`),
+      },
+    });
+
+    expectMemoryConversation({
+      memoryContent,
+      user: "Real conversation from old session",
+      assistant: "Important context to preserve",
+      absent: "A new session was started",
+    });
+  });
+
   it("handles empty session files gracefully", async () => {
     // Should not throw
     const { files } = await runNewWithPreviousSession({ sessionContent: "" });
