@@ -38,7 +38,9 @@ What has been implemented:
 - a host-owned resolved-extension registry exists for static consumers
 - static config-baseline generation now reads bundled extension metadata through the host-owned resolved-extension registry
 - channel, provider, HTTP-route, gateway-method, tool, CLI, service, command, context-engine, and hook registration normalization now delegates through `src/extension-host/runtime-registrations.ts`
+- loader alias-wired module loader creation now routes through `src/extension-host/loader-module-loader.ts`
 - loader cache key construction and registry cache control now route through `src/extension-host/loader-cache.ts`
+- loader lazy runtime proxy creation now routes through `src/extension-host/loader-runtime-proxy.ts`
 - loader provenance helpers now route through `src/extension-host/loader-provenance.ts`
 - loader duplicate-order and record/error policy now route through `src/extension-host/loader-policy.ts`
 - loader discovery policy outcomes now route through `src/extension-host/loader-discovery-policy.ts`
@@ -66,6 +68,7 @@ How it has been implemented:
 - by starting loader/lifecycle migration with activation and SDK alias compatibility helpers while leaving discovery and policy flow unchanged
 - by moving cache-key construction, cache reads, cache writes, and cache clearing next while leaving activation-state ownership unchanged
 - by moving provenance and duplicate-order policy next, so lifecycle migration can land on host-owned policy helpers instead of loader-local utilities
+- by extracting lazy runtime proxy creation and alias-wired Jiti module-loader creation into host-owned helpers before broader bootstrap or lifecycle ownership changes
 - by moving initial candidate planning and record construction next while leaving module import and registration flow unchanged
 - by moving entry-path opening and module import next while leaving cache wiring and lifecycle orchestration unchanged
 - by moving loader runtime decisions next while preserving the current lazy-load, config-validation, and memory-slot behavior

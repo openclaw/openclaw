@@ -39,6 +39,8 @@ Relevant prerequisite work that has landed:
 - loader cache key construction and registry cache control now have a host-owned helper boundary
 - loader provenance helpers now have a host-owned helper boundary
 - loader duplicate-order policy now has a host-owned helper boundary
+- loader alias-wired module loader creation now has a host-owned helper boundary
+- loader lazy runtime proxy creation now has a host-owned helper boundary
 - loader initial candidate planning and record creation now have a host-owned helper boundary
 - loader entry-path opening and module import now have a host-owned helper boundary
 - loader module-export resolution, config validation, and memory-slot load decisions now have a host-owned helper boundary

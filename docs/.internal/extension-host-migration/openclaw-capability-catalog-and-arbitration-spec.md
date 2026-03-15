@@ -36,7 +36,9 @@ What has been implemented:
 - host-owned resolved-extension records now carry the static metadata needed for install, onboarding, and lightweight operator UX
 - config doc baseline generation now uses the same host-owned resolved-extension metadata path
 - plugin SDK alias resolution now routes through `src/extension-host/loader-compat.ts`
+- loader alias-wired module loader creation now routes through `src/extension-host/loader-module-loader.ts`
 - loader cache key construction and registry cache control now route through `src/extension-host/loader-cache.ts`
+- loader lazy runtime proxy creation now routes through `src/extension-host/loader-runtime-proxy.ts`
 - loader provenance helpers now route through `src/extension-host/loader-provenance.ts`
 - loader duplicate-order and record/error policy now route through `src/extension-host/loader-policy.ts`
 - loader discovery policy outcomes now route through `src/extension-host/loader-discovery-policy.ts`
@@ -61,6 +63,7 @@ How it has been implemented:
 - by beginning runtime registration migration with host-owned normalization helpers before attempting full canonical catalog publication
 - by moving cache-key construction and registry cache control behind host-owned helpers before attempting canonical catalog publication
 - by beginning loader-path migration with host-owned compatibility, candidate-planning, import-flow, policy, runtime, register-flow, candidate-orchestration, top-level load orchestration, record-state with compatibility lifecycle mapping, and finalization helpers before attempting canonical catalog publication
+- by extracting lazy runtime proxy creation and alias-wired Jiti module-loader creation into host-owned helpers before catalog publication work
 - by converting the compatibility record-state layer into an enforced loader lifecycle state machine before catalog publication work
 - by moving mutable activation state into a host-owned loader session before catalog publication work
 - by extracting shared provenance path matching and install-rule evaluation into `src/extension-host/loader-provenance.ts` so activation and finalization policy seams reuse one host-owned implementation

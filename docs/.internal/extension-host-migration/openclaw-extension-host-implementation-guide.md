@@ -61,7 +61,9 @@ What has been implemented so far:
 - `src/extension-host/resolved-registry.ts` now exposes a host-owned resolved-extension registry view
 - an initial Phase 0 inventory now exists in `src/extension-host/cutover-inventory.md`
 - plugin SDK alias resolution now routes through `src/extension-host/loader-compat.ts`
+- loader alias-wired module loader creation now routes through `src/extension-host/loader-module-loader.ts`
 - loader cache key construction and registry cache control now route through `src/extension-host/loader-cache.ts`
+- loader lazy runtime proxy creation now routes through `src/extension-host/loader-runtime-proxy.ts`
 - loader provenance helpers now route through `src/extension-host/loader-provenance.ts`
 - loader duplicate-order and record/error policy now route through `src/extension-host/loader-policy.ts`
 - loader discovery policy outcomes now route through `src/extension-host/loader-discovery-policy.ts`
@@ -98,6 +100,7 @@ How it has been done:
 - by keeping duplicate enforcement in legacy subsystems only where that logic has not moved yet, such as plugin commands
 - by starting loader and lifecycle migration with compatibility helpers for activation and SDK alias resolution before changing discovery or policy behavior
 - by moving cache-key construction, cache reads, cache writes, and cache clearing behind host-owned helpers before changing activation-state ownership
+- by extracting lazy runtime proxy creation and alias-wired Jiti module-loader creation into host-owned helpers before broader bootstrap or lifecycle ownership changes
 - by moving loader-owned policy helpers next, while keeping module loading and enablement flow behavior unchanged
 - by moving initial candidate planning and record construction behind host-owned helpers before changing import and registration flow
 - by moving entry-path opening and module import behind host-owned helpers before changing cache wiring or lifecycle orchestration
@@ -135,6 +138,7 @@ Committed implementation slices so far:
 - `fd7488e10a` `Plugins: add loader finalization policy`
 - `97e2af7f97` `Plugins: add loader discovery policy`
 - `83b18eab72` `Plugins: share loader provenance helpers`
+- `52495d23d5` `Plugins: extract loader runtime factories`
 - `89414ed857` `Docs: track extension host migration internally`
 - `d8af1eceaf` `Docs: refresh extension host migration status`
 
