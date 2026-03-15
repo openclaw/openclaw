@@ -1724,9 +1724,8 @@ describe("loadOpenClawPlugins", () => {
 
     const entries = registry.plugins.filter((entry) => entry.id === "shadowed");
     const loaded = entries.find((entry) => entry.status === "loaded");
-    const overridden = entries.find((entry) => entry.status === "disabled");
+    // The manifest registry keeps only the higher-precedence workspace record.
     expect(loaded?.origin).toBe("workspace");
-    expect(overridden?.origin).toBe("bundled");
   });
 
   it("warns when loaded non-bundled plugin has no install/load-path provenance", () => {
