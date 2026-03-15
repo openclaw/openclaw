@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { addOsc8Hyperlinks, extractUrls, wrapOsc8 } from "./osc8-hyperlinks.js";
+import {
+  addOsc8Hyperlinks,
+  extractLinkTextMappings,
+  extractUrls,
+  wrapOsc8,
+} from "./osc8-hyperlinks.js";
 
 describe("wrapOsc8", () => {
   it("wraps text with OSC 8 open and close sequences", () => {
@@ -147,5 +152,59 @@ describe("addOsc8Hyperlinks", () => {
       expect(line).toContain(`\x1b]8;;${fullUrl}\x07`);
       expect(line).toContain(`\x1b]8;;\x07`);
     }
+  });
+
+  it("wraps non-URL link text with OSC 8 when linkTexts provided", () => {
+    const url = "https://github.com/anthropics/claude-code/issues/16901";
+    // pi-tui renders [#16901](url) as "#16901 (url)"
+    const line = `#16901 (${url})`;
+    const linkTexts = [{ text: "#16901", url }];
+    const result = addOsc8Hyperlinks([line], [url], linkTexts);
+
+    // Both the link text and URL should be wrapped
+    expect(result[0]).toContain(`\x1b]8;;${url}\x07#16901\x1b]8;;\x07`);
+    expect(result[0]).toContain(`\x1b]8;;${url}\x07${url}\x1b]8;;\x07`);
+  });
+
+  it("does not double-wrap link text that overlaps with URL ranges", () => {
+    const url = "https://example.com";
+    // Link text IS the URL — should not get a second wrapping
+    const line = url;
+    const linkTexts = [{ text: url, url }];
+    const result = addOsc8Hyperlinks([line], [url], linkTexts);
+
+    // Should have exactly one open and one close
+    const opens = result[0].split(`\x1b]8;;${url}\x07`).length - 1;
+    const closes = result[0].split("\x1b]8;;\x07").length - 1;
+    expect(opens).toBe(1);
+    expect(closes).toBe(1);
+  });
+});
+
+describe("extractLinkTextMappings", () => {
+  it("extracts non-URL link text mappings", () => {
+    const md = "[#16901](https://github.com/org/repo/issues/16901)";
+    const mappings = extractLinkTextMappings(md);
+    expect(mappings).toEqual([{ text: "#16901", url: "https://github.com/org/repo/issues/16901" }]);
+  });
+
+  it("skips links where text is a URL", () => {
+    const md = "[https://example.com](https://example.com)";
+    const mappings = extractLinkTextMappings(md);
+    expect(mappings).toEqual([]);
+  });
+
+  it("extracts multiple mappings", () => {
+    const md = "See [#100](https://a.com/100) and [docs](https://b.com/docs)";
+    const mappings = extractLinkTextMappings(md);
+    expect(mappings).toEqual([
+      { text: "#100", url: "https://a.com/100" },
+      { text: "docs", url: "https://b.com/docs" },
+    ]);
+  });
+
+  it("returns empty array for bare URLs", () => {
+    const mappings = extractLinkTextMappings("https://example.com");
+    expect(mappings).toEqual([]);
   });
 });

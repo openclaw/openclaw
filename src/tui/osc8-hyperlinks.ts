@@ -11,6 +11,32 @@ export function wrapOsc8(url: string, text: string): string {
   return `\x1b]8;;${url}\x07${text}\x1b]8;;\x07`;
 }
 
+export type LinkTextMapping = { text: string; url: string };
+
+/**
+ * Extract link-text-to-URL mappings for markdown links whose visible text
+ * is not itself a URL (e.g. `[#16901](https://github.com/…/issues/16901)`).
+ *
+ * These mappings are used to wrap the link text with OSC 8 so that terminal
+ * autolink features (which detect patterns like `#N`) do not override the
+ * explicit URL with one resolved from the current git remote.
+ */
+export function extractLinkTextMappings(markdown: string): LinkTextMapping[] {
+  const mappings: LinkTextMapping[] = [];
+  const mdLinkRe = /\[([^\]]+)\]\(\s*<?(https?:\/\/[^)\s>]+)>?(?:\s+["'][^"']*["'])?\s*\)/g;
+  let m: RegExpExecArray | null;
+  while ((m = mdLinkRe.exec(markdown)) !== null) {
+    const text = m[1];
+    const url = m[2];
+    // Only create a mapping when the link text is not a URL itself — URL text
+    // is already handled by the standard URL-range matching.
+    if (!/^https?:\/\//.test(text)) {
+      mappings.push({ text, url });
+    }
+  }
+  return mappings;
+}
+
 /**
  * Extract all unique URLs from raw markdown text.
  * Finds both bare URLs and markdown link hrefs [text](url).
@@ -209,14 +235,68 @@ function applyOsc8Ranges(line: string, ranges: UrlRange[]): string {
 }
 
 /**
+ * Find ranges in visible text that match link-text mappings (e.g. `#16901`).
+ * Avoids overlapping with existing URL ranges.
+ */
+function findLinkTextRanges(
+  visibleText: string,
+  mappings: LinkTextMapping[],
+  existingRanges: UrlRange[],
+): UrlRange[] {
+  if (mappings.length === 0) {
+    return [];
+  }
+
+  // Build a set of positions already covered by URL ranges.
+  const covered = new Set<number>();
+  for (const r of existingRanges) {
+    for (let p = r.start; p < r.end; p++) {
+      covered.add(p);
+    }
+  }
+
+  const ranges: UrlRange[] = [];
+  for (const { text, url } of mappings) {
+    let pos = 0;
+    while (pos < visibleText.length) {
+      const idx = visibleText.indexOf(text, pos);
+      if (idx < 0) {
+        break;
+      }
+      // Only add if none of the positions overlap with existing ranges.
+      let overlaps = false;
+      for (let p = idx; p < idx + text.length; p++) {
+        if (covered.has(p)) {
+          overlaps = true;
+          break;
+        }
+      }
+      if (!overlaps) {
+        ranges.push({ start: idx, end: idx + text.length, url });
+      }
+      pos = idx + text.length;
+    }
+  }
+  return ranges;
+}
+
+/**
  * Add OSC 8 hyperlinks to rendered lines using a pre-extracted URL list.
  *
  * For each line, finds URL-like substrings in the visible text, matches them
  * against known URLs, and wraps each fragment with OSC 8 escape sequences.
  * Handles URLs broken across multiple lines by pi-tui's word wrapping.
+ *
+ * When `linkTexts` is provided, non-URL link text (e.g. `#16901` from
+ * `[#16901](url)`) is also wrapped with OSC 8 pointing to the explicit URL.
+ * This prevents terminal autolink features from overriding the intended URL.
  */
-export function addOsc8Hyperlinks(lines: string[], urls: string[]): string[] {
-  if (urls.length === 0) {
+export function addOsc8Hyperlinks(
+  lines: string[],
+  urls: string[],
+  linkTexts?: LinkTextMapping[],
+): string[] {
+  if (urls.length === 0 && (!linkTexts || linkTexts.length === 0)) {
     return lines;
   }
 
@@ -226,6 +306,11 @@ export function addOsc8Hyperlinks(lines: string[], urls: string[]): string[] {
     const visible = stripAnsi(line);
     const result = findUrlRanges(visible, urls, pending);
     pending = result.pending;
-    return applyOsc8Ranges(line, result.ranges);
+
+    // Merge link-text ranges (non-overlapping with URL ranges).
+    const linkTextRanges = linkTexts ? findLinkTextRanges(visible, linkTexts, result.ranges) : [];
+    const allRanges = [...result.ranges, ...linkTextRanges];
+
+    return applyOsc8Ranges(line, allRanges);
   });
 }
