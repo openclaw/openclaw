@@ -8,7 +8,11 @@ import {
   resolveTimedInstallModeOptions,
 } from "../infra/install-mode-options.js";
 import { installPackageDir } from "../infra/install-package-dir.js";
-import { resolveSafeInstallDir, safeDirName } from "../infra/install-safe-path.js";
+import {
+  resolveSafeInstallDir,
+  safeDirName,
+  safePathSegmentHashed,
+} from "../infra/install-safe-path.js";
 import {
   type NpmIntegrityDrift,
   type NpmSpecResolution,
@@ -80,6 +84,14 @@ function safeFileName(input: string): string {
   return safeDirName(input);
 }
 
+function encodePluginInstallDirName(pluginId: string): string {
+  const trimmed = pluginId.trim();
+  if (!trimmed.includes("/")) {
+    return safeDirName(trimmed);
+  }
+  return safePathSegmentHashed(trimmed);
+}
+
 function validatePluginId(pluginId: string): string | null {
   const trimmed = pluginId.trim();
   if (!trimmed) {
@@ -96,10 +108,16 @@ function validatePluginId(pluginId: string): string | null {
     return "invalid plugin name: reserved path segment";
   }
   if (segments.length === 1) {
+    if (trimmed.startsWith("@")) {
+      return "invalid plugin name: scoped ids must use @scope/name format";
+    }
     return null;
   }
-  if (segments.length !== 2 || !segments[0]?.startsWith("@")) {
+  if (segments.length !== 2) {
     return "invalid plugin name: path separators not allowed";
+  }
+  if (!segments[0]?.startsWith("@") || segments[0].length < 2) {
+    return "invalid plugin name: scoped ids must use @scope/name format";
   }
   return null;
 }
@@ -202,6 +220,7 @@ export function resolvePluginInstallDir(pluginId: string, extensionsDir?: string
     baseDir: extensionsBase,
     id: pluginId,
     invalidNameMessage: "invalid plugin name: path traversal detected",
+    nameEncoder: encodePluginInstallDirName,
   });
   if (!targetDirResult.ok) {
     throw new Error(targetDirResult.error);
@@ -320,6 +339,7 @@ async function installPluginFromPackageDir(
     id: pluginId,
     invalidNameMessage: "invalid plugin name: path traversal detected",
     boundaryLabel: "extensions directory",
+    nameEncoder: encodePluginInstallDirName,
   });
   if (!targetDirResult.ok) {
     return { ok: false, error: targetDirResult.error };
