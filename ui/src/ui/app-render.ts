@@ -1369,6 +1369,7 @@ export function renderApp(state: AppViewState) {
                 disabledReason: chatDisabledReason,
                 error: state.lastError,
                 sessions: state.sessionsResult,
+                showPricingThresholdNotice: state.chatContextNoticeShowPricingThreshold,
                 focusMode: chatFocus,
                 onRefresh: () => {
                   state.resetToolStream();
