@@ -89,6 +89,15 @@ function normalizeSnippet(value: string): string {
   return stripMarkdown(value).replace(/\s+/g, " ").trim().toLowerCase();
 }
 
+export function isAudioCompatibleMedia(params: { mediaType?: string; mediaUrl?: string }): boolean {
+  const mediaType = params.mediaType?.trim().toLowerCase();
+  if (mediaType?.startsWith("audio/")) {
+    return true;
+  }
+  const url = params.mediaUrl?.toLowerCase() ?? "";
+  return /\.(caf|mp3|m4a|aac|wav|ogg|opus)(?:$|[?#])/.test(url);
+}
+
 function isBlueBubblesSelfChatMessage(
   message: NormalizedWebhookMessage,
   isGroup: boolean,
@@ -1248,6 +1257,11 @@ export async function processMessage(
             : payload.mediaUrl
               ? [payload.mediaUrl]
               : [];
+          const mediaTypeList = payload.mediaTypes?.length
+            ? payload.mediaTypes
+            : payload.mediaType
+              ? [payload.mediaType]
+              : [];
           if (mediaList.length > 0) {
             const tableMode = core.channel.text.resolveMarkdownTableMode({
               cfg: config,
@@ -1258,9 +1272,11 @@ export async function processMessage(
               core.channel.text.convertMarkdownTables(payload.text ?? "", tableMode),
             );
             let first = true;
-            for (const mediaUrl of mediaList) {
+            for (const [index, mediaUrl] of mediaList.entries()) {
               const caption = first ? text : undefined;
               first = false;
+              const mediaType =
+                mediaTypeList[index] ?? (mediaList.length === 1 ? payload.mediaType : undefined);
               const cachedBody = (caption ?? "").trim() || "<media:attachment>";
               const pendingId = rememberPendingOutboundMessageId({
                 accountId: account.accountId,
@@ -1277,10 +1293,13 @@ export async function processMessage(
                   cfg: config,
                   to: outboundTarget,
                   mediaUrl,
+                  contentType: mediaType,
                   caption: caption ?? undefined,
                   replyToId: replyToMessageGuid || null,
                   accountId: account.accountId,
-                  asVoice: payload.audioAsVoice === true,
+                  asVoice:
+                    payload.audioAsVoice === true &&
+                    isAudioCompatibleMedia({ mediaType, mediaUrl }),
                 });
               } catch (err) {
                 forgetPendingOutboundMessageId(pendingId);

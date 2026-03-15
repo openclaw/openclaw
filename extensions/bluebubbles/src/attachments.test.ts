@@ -15,7 +15,7 @@ vi.mock("node:child_process", async (importOriginal) => {
 });
 
 import { downloadBlueBubblesAttachment, sendBlueBubblesAttachment } from "./attachments.js";
-import { getCachedBlueBubblesPrivateApiStatus } from "./probe.js";
+import { fetchBlueBubblesServerInfo, getCachedBlueBubblesPrivateApiStatus } from "./probe.js";
 import { setBlueBubblesRuntime } from "./runtime.js";
 import {
   BLUE_BUBBLES_PRIVATE_API_STATUS,
@@ -60,6 +60,8 @@ installBlueBubblesFetchTestHooks({
   mockFetch,
   privateApiStatusMock: vi.mocked(getCachedBlueBubblesPrivateApiStatus),
 });
+
+const fetchBlueBubblesServerInfoMock = vi.mocked(fetchBlueBubblesServerInfo);
 
 const runtimeStub = {
   channel: {
@@ -350,6 +352,9 @@ describe("sendBlueBubblesAttachment", () => {
       vi.mocked(getCachedBlueBubblesPrivateApiStatus),
       BLUE_BUBBLES_PRIVATE_API_STATUS.unknown,
     );
+    // When Private API status is unknown, probe returns enabled by default so voice tests pass.
+    fetchBlueBubblesServerInfoMock.mockReset();
+    fetchBlueBubblesServerInfoMock.mockResolvedValue({ private_api: true });
   });
 
   afterEach(() => {
@@ -492,7 +497,12 @@ describe("sendBlueBubblesAttachment", () => {
     expect(bodyText).not.toContain('name="partIndex"');
   });
 
-  it("forces private-api method for voice memos even when private API cache is stale", async () => {
+  it("downgrades voice memos when private API is disabled", async () => {
+    const runtimeLog = vi.fn();
+    setBlueBubblesRuntime({
+      ...runtimeStub,
+      log: runtimeLog,
+    } as unknown as PluginRuntime);
     mockBlueBubblesPrivateApiStatusOnce(
       vi.mocked(getCachedBlueBubblesPrivateApiStatus),
       BLUE_BUBBLES_PRIVATE_API_STATUS.disabled,
@@ -511,6 +521,42 @@ describe("sendBlueBubblesAttachment", () => {
       opts: { serverUrl: "http://localhost:1234", password: "test" },
     });
 
+    const body = mockFetch.mock.calls[0][1]?.body as Uint8Array;
+    const bodyText = decodeBody(body);
+    expect(bodyText).not.toContain('name="method"');
+    expect(bodyText).not.toContain('name="isAudioMessage"');
+    expect(runtimeLog).toHaveBeenCalledWith(
+      expect.stringContaining("Voice bubbles require Private API"),
+    );
+  });
+
+  it("probes server info before forcing private-api voice uploads when cache is unknown", async () => {
+    mockBlueBubblesPrivateApiStatusOnce(
+      vi.mocked(getCachedBlueBubblesPrivateApiStatus),
+      BLUE_BUBBLES_PRIVATE_API_STATUS.unknown,
+    );
+    fetchBlueBubblesServerInfoMock.mockResolvedValueOnce({ private_api: true });
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      text: () => Promise.resolve(JSON.stringify({ messageId: "msg-voice-private" })),
+    });
+
+    await sendBlueBubblesAttachment({
+      to: "chat_guid:iMessage;-;+15551234567",
+      buffer: new Uint8Array([1, 2, 3]),
+      filename: "voice.mp3",
+      contentType: "audio/mpeg",
+      asVoice: true,
+      opts: { serverUrl: "http://localhost:1234", password: "test", accountId: "default" },
+    });
+
+    expect(fetchBlueBubblesServerInfoMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        baseUrl: "http://localhost:1234",
+        password: "test",
+        accountId: "default",
+      }),
+    );
     const body = mockFetch.mock.calls[0][1]?.body as Uint8Array;
     const bodyText = decodeBody(body);
     expect(bodyText).toContain('name="method"');

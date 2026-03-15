@@ -7,6 +7,7 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/bluebubbles";
 import { resolveBlueBubblesServerAccount } from "./account-resolve.js";
 import { assertMultipartActionOk, postMultipartFormData } from "./multipart.js";
 import {
+  fetchBlueBubblesServerInfo,
   getCachedBlueBubblesPrivateApiStatus,
   isBlueBubblesPrivateApiStatusEnabled,
 } from "./probe.js";
@@ -236,11 +237,27 @@ export async function sendBlueBubblesAttachment(params: {
   filename = sanitizeFilename(filename, fallbackName);
   contentType = contentType?.trim() || undefined;
   const { baseUrl, password, accountId } = resolveAccount(opts);
-  const privateApiStatus = getCachedBlueBubblesPrivateApiStatus(accountId);
+  let privateApiStatus = getCachedBlueBubblesPrivateApiStatus(accountId);
+  if (wantsVoice && privateApiStatus === null) {
+    // Status not yet cached — probe server once so the method field is accurate.
+    const serverInfo = await fetchBlueBubblesServerInfo({
+      baseUrl,
+      password,
+      accountId,
+      timeoutMs: opts.timeoutMs,
+    });
+    if (typeof serverInfo?.private_api === "boolean") {
+      privateApiStatus = serverInfo.private_api;
+    }
+  }
   const privateApiEnabled = isBlueBubblesPrivateApiStatusEnabled(privateApiStatus);
 
   // Convert voice messages to iMessage-friendly CAF before upload.
   let isAudioMessage = wantsVoice;
+  if (isAudioMessage && privateApiStatus === false) {
+    warnBlueBubbles("Voice bubbles require Private API; sending as a regular attachment instead.");
+    isAudioMessage = false;
+  }
   if (isAudioMessage) {
     const voiceInfo = resolveVoiceInfo(filename, contentType);
     if (!voiceInfo.isAudio) {
@@ -320,7 +337,7 @@ export async function sendBlueBubblesAttachment(params: {
   addField("chatGuid", chatGuid);
   addField("name", filename);
   addField("tempGuid", `temp-${Date.now()}-${crypto.randomUUID().slice(0, 8)}`);
-  if (privateApiEnabled || isAudioMessage) {
+  if (privateApiEnabled) {
     addField("method", "private-api");
   }
 
