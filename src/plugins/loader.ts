@@ -1,5 +1,3 @@
-import fs from "node:fs";
-import path from "node:path";
 import { createJiti } from "jiti";
 import type { OpenClawConfig } from "../config/config.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
@@ -12,6 +10,7 @@ import {
   resolvePluginSdkAliasFile,
   resolvePluginSdkScopedAliasMap,
 } from "../extension-host/loader-compat.js";
+import { importExtensionHostPluginModule } from "../extension-host/loader-import.js";
 import {
   buildExtensionHostProvenanceIndex,
   compareExtensionHostDuplicateCandidateOrder,
@@ -35,7 +34,6 @@ import {
   setExtensionHostPluginRecordError,
 } from "../extension-host/loader-state.js";
 import type { GatewayRequestHandler } from "../gateway/server-methods/types.js";
-import { openBoundaryFileSync } from "../infra/boundary-file-read.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveUserPath } from "../utils.js";
 import { clearPluginCommands } from "./commands.js";
@@ -358,25 +356,17 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
       continue;
     }
 
-    const pluginRoot = safeRealpathOrResolve(candidate.rootDir);
-    const opened = openBoundaryFileSync({
-      absolutePath: candidate.source,
-      rootPath: pluginRoot,
-      boundaryLabel: "plugin root",
-      rejectHardlinks: candidate.origin !== "bundled",
-      skipLexicalRootCheck: true,
+    const moduleImport = importExtensionHostPluginModule({
+      rootDir: candidate.rootDir,
+      source: candidate.source,
+      origin: candidate.origin,
+      loadModule: (safeSource) => getJiti()(safeSource),
     });
-    if (!opened.ok) {
-      pushPluginLoadError("plugin entry path escapes plugin root or fails alias checks");
-      continue;
-    }
-    const safeSource = opened.path;
-    fs.closeSync(opened.fd);
-
-    let mod: OpenClawPluginModule | null = null;
-    try {
-      mod = getJiti()(safeSource) as OpenClawPluginModule;
-    } catch (err) {
+    if (!moduleImport.ok) {
+      if (moduleImport.message !== "failed to load plugin") {
+        pushPluginLoadError(moduleImport.message);
+        continue;
+      }
       recordExtensionHostPluginError({
         logger,
         registry,
@@ -384,14 +374,14 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
         seenIds,
         pluginId,
         origin: candidate.origin,
-        error: err,
+        error: moduleImport.error,
         logPrefix: `[plugins] ${record.id} failed to load from ${record.source}: `,
         diagnosticMessagePrefix: "failed to load plugin: ",
       });
       continue;
     }
 
-    const resolved = resolveExtensionHostModuleExport(mod);
+    const resolved = resolveExtensionHostModuleExport(moduleImport.module as OpenClawPluginModule);
     const definition = resolved.definition;
     const register = resolved.register;
 
@@ -502,12 +492,4 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
   }
   activateExtensionHostRegistry(registry, cacheKey);
   return registry;
-}
-
-function safeRealpathOrResolve(value: string): string {
-  try {
-    return fs.realpathSync(value);
-  } catch {
-    return path.resolve(value);
-  }
 }
