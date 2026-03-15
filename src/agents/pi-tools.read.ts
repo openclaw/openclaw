@@ -63,8 +63,14 @@ const INBOUND_MEDIA_PATH_SEGMENT = "media/inbound";
  * The path is POSIX-normalised before the check so that non-canonical forms
  * such as `media//inbound/file.txt` or `./media/inbound/file.txt` are
  * correctly classified as inbound (see #11207 P1 review).
+ *
+ * @param containerWorkdir - Optional configured container working directory
+ *   (e.g. "/work"). When provided, `file://` URLs whose pathname starts with
+ *   this directory are resolved in addition to the default "/workspace" prefix.
+ *   This ensures that non-default containerWorkdir configurations are handled
+ *   correctly (see #11207 P1 review — generalize file URL inbound detection).
  */
-export function isInboundMediaPath(filePath: string): boolean {
+export function isInboundMediaPath(filePath: string, containerWorkdir?: string): boolean {
   // Strip path aliases that the read pipeline resolves to workspace paths
   // before the inbound check so that alias forms like
   //   @/workspace/media/inbound/payload.txt
@@ -77,16 +83,30 @@ export function isInboundMediaPath(filePath: string): boolean {
   if (candidate.startsWith("@")) {
     candidate = candidate.slice(1);
   }
-  // Strip file:// URL scheme for sandbox container paths (/workspace/...)
-  // Only strip when the URL pathname starts with /workspace/ so that
-  // arbitrary file:// URLs pointing outside the sandbox are not silently
-  // reclassified.
+  // Strip file:// URL scheme for sandbox container paths.
+  // Accept both the default "/workspace" prefix and the configured
+  // containerWorkdir (if provided) so that non-default workdir setups like
+  // "/work" are handled correctly.  Arbitrary file:// URLs pointing outside
+  // a known container root are not reclassified.
   if (/^file:\/\//i.test(candidate)) {
     try {
       const parsed = new URL(candidate);
       const pathname = decodeURIComponent(parsed.pathname).replace(/\\/g, "/");
-      if (pathname === "/workspace" || pathname.startsWith("/workspace/")) {
-        candidate = pathname;
+      // Build the set of accepted container roots: always include /workspace;
+      // also include the caller-supplied containerWorkdir when it is a
+      // non-empty absolute POSIX path.
+      const containerRoots = ["/workspace"];
+      if (containerWorkdir) {
+        const normalizedWorkdir = containerWorkdir.replace(/\\/g, "/").replace(/\/+$/, "");
+        if (normalizedWorkdir.startsWith("/") && normalizedWorkdir !== "/workspace") {
+          containerRoots.push(normalizedWorkdir);
+        }
+      }
+      for (const root of containerRoots) {
+        if (pathname === root || pathname.startsWith(`${root}/`)) {
+          candidate = pathname;
+          break;
+        }
       }
     } catch {
       // Malformed URL — fall through with the original string.
@@ -123,6 +143,10 @@ export function isInboundMediaPath(filePath: string): boolean {
 type OpenClawReadToolOptions = {
   modelContextWindowTokens?: number;
   imageSanitization?: ImageSanitizationLimits;
+  /** Optional configured container working directory (e.g. "/work"). Passed to
+   * `isInboundMediaPath` so that file:// URLs using a non-default workdir are
+   * correctly classified as inbound. */
+  containerWorkdir?: string;
 };
 
 type ReadTruncationDetails = {
@@ -740,7 +764,7 @@ export function createOpenClawReadTool(
       // Wrap inbound media file content to prevent prompt injection.
       // Files staged under media/inbound/ originate from external senders and
       // must be treated as untrusted data, not as agent instructions.
-      if (isInboundMediaPath(filePath)) {
+      if (isInboundMediaPath(filePath, options?.containerWorkdir)) {
         return wrapInboundFileResult(sanitizedResult, filePath);
       }
       return sanitizedResult;

@@ -103,6 +103,24 @@ describe("isInboundMediaPath", () => {
     // Non-inbound file:// workspace URLs must not be misclassified.
     expect(isInboundMediaPath("file:///workspace/AGENTS.md")).toBe(false);
   });
+
+  it("classifies file:// URLs under a non-default containerWorkdir as inbound (regression #11207 P1)", () => {
+    // When containerWorkdir is configured to a non-default value (e.g. "/work"),
+    // file:///work/media/inbound/payload.txt must be classified as inbound.
+    // Without the containerWorkdir parameter this would return false, allowing
+    // attacker-controlled inbound text to bypass the prompt-injection guard.
+    expect(isInboundMediaPath("file:///work/media/inbound/payload.txt", "/work")).toBe(true);
+    expect(isInboundMediaPath("file:///work/media/inbound/subdir/file.txt", "/work")).toBe(true);
+    // Non-inbound file:// URLs under the custom workdir must not be misclassified.
+    expect(isInboundMediaPath("file:///work/AGENTS.md", "/work")).toBe(false);
+    // file:// URLs outside the configured workdir must not be reclassified.
+    expect(isInboundMediaPath("file:///etc/passwd", "/work")).toBe(false);
+    expect(isInboundMediaPath("file:///home/user/media/inbound/file.txt", "/work")).toBe(false);
+    // The default /workspace root must still work even when containerWorkdir is set.
+    expect(isInboundMediaPath("file:///workspace/media/inbound/payload.txt", "/work")).toBe(true);
+    // Trailing slash in containerWorkdir must be normalised away.
+    expect(isInboundMediaPath("file:///work/media/inbound/payload.txt", "/work/")).toBe(true);
+  });
 });
 
 // ---------------------------------------------------------------------------
