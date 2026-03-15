@@ -49,6 +49,7 @@ import {
 import { createDoctorPrompter, type DoctorOptions } from "./doctor-prompter.js";
 import { maybeRepairSandboxImages, noteSandboxScopeWarnings } from "./doctor-sandbox.js";
 import { noteSecurityWarnings } from "./doctor-security.js";
+import { noteSyntheticAllowlistGaps } from "./doctor-synthetic-allowlist.js";
 import { noteSessionLockHealth } from "./doctor-session-locks.js";
 import { noteStateIntegrity, noteWorkspaceBackupTip } from "./doctor-state-integrity.js";
 import {
@@ -306,6 +307,7 @@ export async function doctorCommand(
   }
 
   noteWorkspaceStatus(cfg);
+  await noteSyntheticAllowlistGaps(cfg);
   await noteBootstrapFileSize(cfg);
 
   // Check and fix shell completion
