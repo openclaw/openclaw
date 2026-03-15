@@ -63,11 +63,11 @@ function resolveCredentialsDir(env: NodeJS.ProcessEnv = process.env): string {
 function safeChannelKey(channel: PairingChannel): string {
   const raw = String(channel).trim().toLowerCase();
   if (!raw) {
-    throw new Error("invalid pairing channel");
+    throw new Error(`Invalid pairing channel: expected non-empty string, got ${typeof channel} (value: ${JSON.stringify(channel)})`);
   }
   const safe = raw.replace(/[\\/:*?"<>|]/g, "_").replace(/\.\./g, "_");
   if (!safe || safe === "_") {
-    throw new Error("invalid pairing channel");
+    throw new Error(`Invalid pairing channel: sanitized value is empty or invalid (original: "${raw}", sanitized: "${safe}")`);
   }
   return safe;
 }
@@ -79,11 +79,11 @@ function resolvePairingPath(channel: PairingChannel, env: NodeJS.ProcessEnv = pr
 function safeAccountKey(accountId: string): string {
   const raw = String(accountId).trim().toLowerCase();
   if (!raw) {
-    throw new Error("invalid pairing account id");
+    throw new Error(`Invalid pairing account ID: expected non-empty string, got ${typeof accountId} (value: ${JSON.stringify(accountId)})`);
   }
   const safe = raw.replace(/[\\/:*?"<>|]/g, "_").replace(/\.\./g, "_");
   if (!safe || safe === "_") {
-    throw new Error("invalid pairing account id");
+    throw new Error(`Invalid pairing account ID: sanitized value is empty or invalid (original: "${raw}", sanitized: "${safe}")`);
   }
   return safe;
 }
@@ -212,13 +212,14 @@ function randomCode(): string {
 }
 
 function generateUniqueCode(existing: Set<string>): string {
-  for (let attempt = 0; attempt < 500; attempt += 1) {
+  const maxAttempts = 500;
+  for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
     const code = randomCode();
     if (!existing.has(code)) {
       return code;
     }
   }
-  throw new Error("failed to generate unique pairing code");
+  throw new Error(`Failed to generate unique pairing code after ${maxAttempts} attempts. Existing codes count: ${existing.size}. This may indicate a collision issue or excessive pending pairing requests.`);
 }
 
 function normalizePairingAccountId(accountId?: string): string {
