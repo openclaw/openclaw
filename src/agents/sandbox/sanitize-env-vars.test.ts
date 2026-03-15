@@ -28,7 +28,7 @@ describe("sanitizeEnvVars", () => {
     expect(result.blocked).toEqual(expect.arrayContaining(["MY_TOKEN", "MY_SECRET"]));
   });
 
-  it("adds warnings for suspicious values", () => {
+  it("adds warnings for suspicious values only on credential-named keys", () => {
     const base64Like =
       "YWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYQ==";
     const result = sanitizeEnvVars({
@@ -39,7 +39,22 @@ describe("sanitizeEnvVars", () => {
 
     expect(result.allowed).toEqual({ USER: "alice", SAFE_TEXT: base64Like });
     expect(result.blocked).toContain("NULL");
-    expect(result.warnings).toContain("SAFE_TEXT: Value looks like base64-encoded credential data");
+    // SAFE_TEXT does not match any credential-hint pattern → no warning
+    expect(result.warnings).toEqual([]);
+  });
+
+  it("flags base64-like values when key name hints at credentials", () => {
+    const base64Like =
+      "YWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYQ==";
+    const result = sanitizeEnvVars({
+      MY_SIGNING_CERT: base64Like,
+      DEPLOY_AUTH_DATA: base64Like,
+    });
+
+    expect(result.warnings).toEqual([
+      "MY_SIGNING_CERT: Value looks like base64-encoded credential data",
+      "DEPLOY_AUTH_DATA: Value looks like base64-encoded credential data",
+    ]);
   });
 
   it("supports strict mode with explicit allowlist", () => {

@@ -42,14 +42,25 @@ export type EnvSanitizationOptions = {
   customAllowedPatterns?: ReadonlyArray<RegExp>;
 };
 
-export function validateEnvVarValue(value: string): string | undefined {
+/**
+ * Broader credential-suggestive key patterns for the base64 value heuristic.
+ * Intentionally broader than BLOCKED_ENV_VAR_PATTERNS — triggers a warning
+ * (not a block) when combined with a base64-like value.
+ */
+const CREDENTIAL_HINT_PATTERN =
+  /(?:KEY|SECRET|TOKEN|PASSWORD|CREDENTIAL|PRIVATE|AUTH|CERT|SIGNING)/i;
+
+export function validateEnvVarValue(value: string, key?: string): string | undefined {
   if (value.includes("\0")) {
     return "Contains null bytes";
   }
   if (value.length > 32768) {
     return "Value exceeds maximum length";
   }
-  if (/^[A-Za-z0-9+/=]{80,}$/.test(value)) {
+  // Only flag base64-like values when the key name suggests credential data.
+  // Without a key-name hint, skip the heuristic to avoid false positives on
+  // legitimate long alphanumeric values (config blobs, hex strings, JWTs, etc.).
+  if ((!key || CREDENTIAL_HINT_PATTERN.test(key)) && /^[A-Za-z0-9+/=]{80,}$/.test(value)) {
     return "Value looks like base64-encoded credential data";
   }
   return undefined;
@@ -86,7 +97,7 @@ export function sanitizeEnvVars(
       continue;
     }
 
-    const warning = validateEnvVarValue(value);
+    const warning = validateEnvVarValue(value, key);
     if (warning) {
       if (warning === "Contains null bytes") {
         blocked.push(key);
