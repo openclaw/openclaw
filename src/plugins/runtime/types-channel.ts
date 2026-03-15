@@ -94,9 +94,30 @@ export type PluginRuntimeChannel = {
     probeDiscord: typeof import("../../../extensions/discord/src/probe.js").probeDiscord;
     resolveChannelAllowlist: typeof import("../../../extensions/discord/src/resolve-channels.js").resolveDiscordChannelAllowlist;
     resolveUserAllowlist: typeof import("../../../extensions/discord/src/resolve-users.js").resolveDiscordUserAllowlist;
+    sendComponentMessage: typeof import("../../../extensions/discord/src/send.js").sendDiscordComponentMessage;
     sendMessageDiscord: typeof import("../../../extensions/discord/src/send.js").sendMessageDiscord;
     sendPollDiscord: typeof import("../../../extensions/discord/src/send.js").sendPollDiscord;
     monitorDiscordProvider: typeof import("../../../extensions/discord/src/monitor.js").monitorDiscordProvider;
+    typing: {
+      pulse: typeof import("../../../extensions/discord/src/send.js").sendTypingDiscord;
+      start: (params: {
+        channelId: string;
+        accountId?: string;
+        cfg?: ReturnType<typeof import("../../config/config.js").loadConfig>;
+        intervalMs?: number;
+      }) => Promise<{
+        refresh: () => Promise<void>;
+        stop: () => void;
+      }>;
+    };
+    conversationActions: {
+      editMessage: typeof import("../../../extensions/discord/src/send.js").editMessageDiscord;
+      deleteMessage: typeof import("../../../extensions/discord/src/send.js").deleteMessageDiscord;
+      pinMessage: typeof import("../../../extensions/discord/src/send.js").pinMessageDiscord;
+      unpinMessage: typeof import("../../../extensions/discord/src/send.js").unpinMessageDiscord;
+      createThread: typeof import("../../../extensions/discord/src/send.js").createThreadDiscord;
+      editChannel: typeof import("../../../extensions/discord/src/send.js").editChannelDiscord;
+    };
   };
   slack: {
     listDirectoryGroupsLive: typeof import("../../../extensions/slack/src/directory-live.js").listSlackDirectoryGroupsLive;
@@ -117,6 +138,39 @@ export type PluginRuntimeChannel = {
     sendPollTelegram: typeof import("../../../extensions/telegram/src/send.js").sendPollTelegram;
     monitorTelegramProvider: typeof import("../../../extensions/telegram/src/monitor.js").monitorTelegramProvider;
     messageActions: typeof import("../../channels/plugins/actions/telegram.js").telegramMessageActions;
+    typing: {
+      pulse: typeof import("../../../extensions/telegram/src/send.js").sendTypingTelegram;
+      start: (params: {
+        to: string;
+        accountId?: string;
+        cfg?: ReturnType<typeof import("../../config/config.js").loadConfig>;
+        intervalMs?: number;
+        messageThreadId?: number;
+      }) => Promise<{
+        refresh: () => Promise<void>;
+        stop: () => void;
+      }>;
+    };
+    conversationActions: {
+      editMessage: typeof import("../../../extensions/telegram/src/send.js").editMessageTelegram;
+      editReplyMarkup: typeof import("../../../extensions/telegram/src/send.js").editMessageReplyMarkupTelegram;
+      clearReplyMarkup: (
+        chatIdInput: string | number,
+        messageIdInput: string | number,
+        opts?: {
+          token?: string;
+          accountId?: string;
+          verbose?: boolean;
+          api?: Partial<import("grammy").Bot["api"]>;
+          retry?: import("../../infra/retry.js").RetryConfig;
+          cfg?: ReturnType<typeof import("../../config/config.js").loadConfig>;
+        },
+      ) => Promise<{ ok: true; messageId: string; chatId: string }>;
+      deleteMessage: typeof import("../../../extensions/telegram/src/send.js").deleteMessageTelegram;
+      renameTopic: typeof import("../../../extensions/telegram/src/send.js").renameForumTopicTelegram;
+      pinMessage: typeof import("../../../extensions/telegram/src/send.js").pinMessageTelegram;
+      unpinMessage: typeof import("../../../extensions/telegram/src/send.js").unpinMessageTelegram;
+    };
   };
   signal: {
     probeSignal: typeof import("../../../extensions/signal/src/probe.js").probeSignal;

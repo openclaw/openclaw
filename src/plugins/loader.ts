@@ -19,6 +19,7 @@ import {
 } from "./config-state.js";
 import { discoverOpenClawPlugins } from "./discovery.js";
 import { initializeGlobalHookRunner } from "./hook-runner-global.js";
+import { clearPluginInteractiveHandlers } from "./interactive.js";
 import { loadPluginManifestRegistry } from "./manifest-registry.js";
 import { isPathInside, safeStatSync } from "./path-safety.js";
 import { createPluginRegistry, type PluginRecord, type PluginRegistry } from "./registry.js";
@@ -317,6 +318,7 @@ function createPluginRecord(params: {
   description?: string;
   version?: string;
   source: string;
+  rootDir?: string;
   origin: PluginRecord["origin"];
   workspaceDir?: string;
   enabled: boolean;
@@ -328,6 +330,7 @@ function createPluginRecord(params: {
     description: params.description,
     version: params.version,
     source: params.source,
+    rootDir: params.rootDir,
     origin: params.origin,
     workspaceDir: params.workspaceDir,
     enabled: params.enabled,
@@ -653,6 +656,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
 
   // Clear previously registered plugin commands before reloading
   clearPluginCommands();
+  clearPluginInteractiveHandlers();
 
   // Lazily initialize the runtime so startup paths that discover/skip plugins do
   // not eagerly load every channel runtime dependency.
@@ -782,6 +786,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
         description: manifestRecord.description,
         version: manifestRecord.version,
         source: candidate.source,
+        rootDir: candidate.rootDir,
         origin: candidate.origin,
         workspaceDir: candidate.workspaceDir,
         enabled: false,
@@ -806,6 +811,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
       description: manifestRecord.description,
       version: manifestRecord.version,
       source: candidate.source,
+      rootDir: candidate.rootDir,
       origin: candidate.origin,
       workspaceDir: candidate.workspaceDir,
       enabled: enableState.enabled,
