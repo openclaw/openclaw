@@ -3,6 +3,7 @@ import type { SecretInput } from "../../../config/types.secrets.js";
 import type { RuntimeEnv } from "../../../runtime.js";
 import { applyGoogleGeminiModelDefault } from "../../google-gemini-model-default.js";
 import { applyPrimaryModel } from "../../model-picker.js";
+import type { ApiKeyStorageOptions } from "../../onboard-auth.credentials.js";
 import {
   applyAuthProfileConfig,
   applyHuggingfaceConfig,
@@ -49,10 +50,6 @@ import {
 } from "../../onboard-auth.js";
 import type { AuthChoice, OnboardOptions } from "../../onboard-types.js";
 import { applyOpenAIConfig } from "../../openai-model-default.js";
-
-type ApiKeyStorageOptions = {
-  secretInputMode: "plaintext" | "ref";
-};
 
 type SimpleApiKeyAuthChoice = {
   authChoices: AuthChoice[];

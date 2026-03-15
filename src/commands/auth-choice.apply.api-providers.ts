@@ -197,7 +197,10 @@ export async function applyAuthChoiceApiProviders(
       validate: validateApiKeyInput,
       prompter: params.prompter,
       setCredential: async (apiKey, mode) =>
-        setGeminiApiKey(apiKey, params.agentDir, { secretInputMode: mode }),
+        setGeminiApiKey(apiKey, params.agentDir, {
+          secretInputMode: mode,
+          syncSiblingAgents: true,
+        }),
     });
     nextConfig = applyAuthProfileConfig(nextConfig, {
       profileId: "google:default",

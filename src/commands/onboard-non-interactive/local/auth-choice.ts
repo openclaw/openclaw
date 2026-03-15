@@ -9,6 +9,7 @@ import { resolveDefaultSecretProviderAlias } from "../../../secrets/ref-contract
 import { normalizeSecretInput } from "../../../utils/normalize-secret-input.js";
 import { normalizeSecretInputModeInput } from "../../auth-choice.apply-helpers.js";
 import { buildTokenProfileId, validateAnthropicSetupToken } from "../../auth-token.js";
+import type { ApiKeyStorageOptions } from "../../onboard-auth.credentials.js";
 import {
   applyAuthProfileConfig,
   applyCloudflareAiGatewayConfig,
@@ -50,9 +51,9 @@ export async function applyNonInteractiveAuthChoice(params: {
     runtime.exit(1);
     return null;
   }
-  const apiKeyStorageOptions = requestedSecretInputMode
-    ? { secretInputMode: requestedSecretInputMode }
-    : undefined;
+  const apiKeyStorageOptions: ApiKeyStorageOptions = requestedSecretInputMode
+    ? { secretInputMode: requestedSecretInputMode, syncSiblingAgents: true }
+    : { syncSiblingAgents: true };
   const toStoredSecretInput = (resolved: ResolvedNonInteractiveApiKey): SecretInput | null => {
     const storePlaintextSecret = requestedSecretInputMode !== "ref"; // pragma: allowlist secret
     if (storePlaintextSecret) {

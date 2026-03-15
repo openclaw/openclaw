@@ -63,7 +63,10 @@ export async function applyAuthChoiceOpenAI(
       validate: validateApiKeyInput,
       prompter: params.prompter,
       setCredential: async (apiKey, mode) =>
-        setOpenaiApiKey(apiKey, params.agentDir, { secretInputMode: mode }),
+        setOpenaiApiKey(apiKey, params.agentDir, {
+          secretInputMode: mode,
+          syncSiblingAgents: true,
+        }),
     });
     nextConfig = applyAuthProfileConfig(nextConfig, {
       profileId: "openai:default",
