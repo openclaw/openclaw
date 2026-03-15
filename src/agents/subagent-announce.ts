@@ -14,7 +14,6 @@ import type { ConversationRef } from "../infra/outbound/session-binding-service.
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import { normalizeAccountId, normalizeMainKey } from "../routing/session-key.js";
 import { defaultRuntime } from "../runtime.js";
-import { isCronSessionKey } from "../sessions/session-key-utils.js";
 import { extractTextFromChatContent } from "../shared/chat-content.js";
 import {
   type DeliveryContext,
@@ -81,7 +80,9 @@ function resolveSubagentAnnounceTimeoutMs(cfg: ReturnType<typeof loadConfig>): n
 }
 
 function isInternalAnnounceRequesterSession(sessionKey: string | undefined): boolean {
-  return getSubagentDepthFromSessionStore(sessionKey) >= 1 || isCronSessionKey(sessionKey);
+  // Only treat nested sub-agent sessions as internal. Cron sessions are allowed
+  // to deliver externally when they provide an explicit delivery target.
+  return getSubagentDepthFromSessionStore(sessionKey) >= 1;
 }
 
 function summarizeDeliveryError(error: unknown): string {
@@ -781,9 +782,12 @@ async function sendSubagentAnnounceDirectly(params: {
       typeof effectiveDirectOrigin?.to === "string" ? effectiveDirectOrigin.to.trim() : "";
     const hasDeliverableDirectTarget =
       !params.requesterIsSubagent && Boolean(directChannel) && Boolean(directTo);
-    const shouldDeliverExternally =
-      !params.requesterIsSubagent &&
-      (!params.expectsCompletionMessage || hasDeliverableDirectTarget);
+
+    // Only attempt an external send when we have a concrete target. Cron sessions
+    // may run with delivery.channel="last" before any recipient exists (or with
+    // missing origin metadata), and in that case we must keep the announce
+    // internal/fallback-safe (avoid throwing "Action send requires a target").
+    const shouldDeliverExternally = hasDeliverableDirectTarget;
 
     const threadId =
       effectiveDirectOrigin?.threadId != null && effectiveDirectOrigin.threadId !== ""
@@ -1231,8 +1235,7 @@ export async function runSubagentAnnounceFlow(params: {
     }
 
     let requesterDepth = getSubagentDepthFromSessionStore(targetRequesterSessionKey);
-    const requesterIsInternalSession = () =>
-      requesterDepth >= 1 || isCronSessionKey(targetRequesterSessionKey);
+    const requesterIsInternalSession = () => requesterDepth >= 1;
 
     let childCompletionFindings: string | undefined;
     let subagentRegistryRuntime:

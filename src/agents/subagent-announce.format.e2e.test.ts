@@ -4,6 +4,8 @@ import {
   __testing as sessionBindingServiceTesting,
   registerSessionBindingAdapter,
 } from "../infra/outbound/session-binding-service.js";
+import { getActivePluginRegistry, setActivePluginRegistry } from "../plugins/runtime.js";
+import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
 
 type AgentCallRequest = { method?: string; params?: Record<string, unknown> };
 type RequesterResolution = {
@@ -301,6 +303,41 @@ describe("subagent announce formatting", () => {
     const call = agentSpy.mock.calls[0]?.[0] as { params?: { message?: string } };
     const msg = call?.params?.message as string;
     expect(msg).toContain("completed successfully");
+  });
+
+  it("allows cron sessions to deliver direct announce messages when an explicit target is provided", async () => {
+    const prevRegistry = getActivePluginRegistry()!;
+    try {
+      // Feishu is a plugin channel; register a stub so isDeliverableMessageChannel() accepts it.
+      setActivePluginRegistry(
+        createTestRegistry([
+          {
+            pluginId: "feishu",
+            plugin: { ...createChannelTestPluginBase({ id: "feishu" }), outbound: {} },
+            source: "test",
+          },
+        ]),
+      );
+
+      await runSubagentAnnounceFlow({
+        childSessionKey: "agent:main:subagent:test",
+        childRunId: "run-cron-announce",
+        requesterSessionKey: "cron:job-1",
+        requesterOrigin: {
+          channel: "feishu",
+          to: "ou_test",
+        },
+        requesterDisplayKey: "cron:job-1",
+        ...defaultOutcomeAnnounce,
+      });
+
+      const params = await getSingleAgentCallParams();
+      expect(params.deliver).toBe(true);
+      expect(params.channel).toBe("feishu");
+      expect(params.to).toBe("ou_test");
+    } finally {
+      setActivePluginRegistry(prevRegistry);
+    }
   });
 
   it("uses child-run announce identity for direct idempotency", async () => {
