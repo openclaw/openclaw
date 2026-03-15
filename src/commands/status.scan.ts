@@ -233,7 +233,11 @@ async function scanStatusJsonFast(opts: {
     gatewayProbeAuthWarning,
     gatewayProbe,
   } = gatewaySnapshot;
-  const gatewayReachable = gatewayProbe?.ok === true;
+  const gatewayReachable =
+    gatewayProbe?.ok === true ||
+    (gatewayProbe?.ok === false &&
+      gatewayProbe.connectLatencyMs != null &&
+      MISSING_SCOPE_PATTERN.test(gatewayProbe.error ?? ""));
   const gatewaySelf = gatewayProbe?.presence
     ? pickGatewaySelfPresence(gatewayProbe.presence)
     : null;

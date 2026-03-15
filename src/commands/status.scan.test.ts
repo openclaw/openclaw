@@ -196,4 +196,63 @@ describe("scanStatus", () => {
 
     expect(result.gatewayReachable).toBe(true);
   });
+
+  it("treats missing-scope probe failures as reachable in --json fast path", async () => {
+    mocks.readBestEffortConfig.mockResolvedValue({
+      marker: "source",
+      session: {},
+      plugins: { enabled: false },
+      gateway: {},
+    });
+    mocks.resolveCommandSecretRefsViaGateway.mockResolvedValue({
+      resolvedConfig: {
+        marker: "resolved",
+        session: {},
+        plugins: { enabled: false },
+        gateway: {},
+      },
+      diagnostics: [],
+    });
+    mocks.getUpdateCheckResult.mockResolvedValue({
+      installKind: "git",
+      git: null,
+      registry: null,
+    });
+    mocks.getAgentLocalStatuses.mockResolvedValue({
+      defaultId: "main",
+      agents: [],
+    });
+    mocks.getStatusSummary.mockResolvedValue({
+      linkChannel: { linked: false },
+      sessions: { count: 0, paths: [], defaults: {}, recent: [] },
+    });
+    mocks.buildGatewayConnectionDetails.mockReturnValue({
+      url: "ws://127.0.0.1:18789",
+      urlSource: "default",
+    });
+    mocks.resolveGatewayProbeAuthResolution.mockReturnValue({
+      auth: {},
+      warning: undefined,
+    });
+    mocks.callGateway.mockResolvedValue(null);
+    mocks.probeGateway.mockResolvedValue({
+      ok: false,
+      url: "ws://127.0.0.1:18789",
+      connectLatencyMs: 51,
+      error: "missing scope: operator.read",
+      close: null,
+      health: null,
+      status: null,
+      presence: null,
+      configSnapshot: null,
+    });
+    mocks.buildChannelsTable.mockResolvedValue({
+      rows: [],
+      details: [],
+    });
+
+    const result = await scanStatus({ json: true }, {} as never);
+
+    expect(result.gatewayReachable).toBe(true);
+  });
 });
