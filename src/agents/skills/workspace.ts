@@ -53,6 +53,60 @@ function compactSkillPaths(skills: Skill[]): Skill[] {
   }));
 }
 
+/**
+ * Rewrite skill file paths so they point to the sandbox workspace copy
+ * instead of the original host filesystem location.
+ *
+ * {@link syncSkillsToWorkspace} copies each skill directory into
+ * `{sandboxWorkspace}/skills/{dirName}/`, but the {@link Skill.filePath}
+ * values in the prompt still reference the host.  This function remaps
+ * them so the sandboxed agent can actually read the files.
+ *
+ * NOTE: Does not replicate the `-2` suffix deduplication from
+ * {@link resolveUniqueSyncedSkillDirName}. Same-basename skill collisions
+ * are rare in practice — this covers the common case.
+ */
+export function rewriteSkillPathsForSandbox(skills: Skill[], sandboxSkillsDir: string): Skill[] {
+  return skills.map((s) => {
+    const dirName = path.basename(s.baseDir);
+    const fileName = path.basename(s.filePath);
+    return {
+      ...s,
+      filePath: path.posix.join(sandboxSkillsDir, dirName, fileName),
+      baseDir: path.posix.join(sandboxSkillsDir, dirName),
+    };
+  });
+}
+
+/**
+ * Rewrite skill `<location>` paths in a pre-rendered snapshot prompt string
+ * so they point to the sandbox workspace copy.  Unlike rebuilding from
+ * {@link rewriteSkillPathsForSandbox} + {@link formatSkillsForPrompt}, this
+ * preserves the snapshot's truncation limits, ordering, and metadata notes.
+ */
+function rewriteSnapshotPromptForSandbox(
+  prompt: string,
+  resolvedSkills: Skill[],
+  sandboxSkillsDir: string,
+): string {
+  let result = prompt;
+  const home = os.homedir();
+  for (const skill of resolvedSkills) {
+    const dirName = path.basename(skill.baseDir);
+    const fileName = path.basename(skill.filePath);
+    const sandboxPath = path.posix.join(sandboxSkillsDir, dirName, fileName);
+    // Replace original host path
+    result = result.replaceAll(skill.filePath, sandboxPath);
+    // Replace compacted ~/... version (produced by compactSkillPaths)
+    if (home && skill.filePath.startsWith(home)) {
+      const prefix = home.endsWith(path.sep) ? home : home + path.sep;
+      const compacted = "~/" + skill.filePath.slice(prefix.length);
+      result = result.replaceAll(compacted, sandboxPath);
+    }
+  }
+  return result;
+}
+
 function debugSkillCommandOnce(
   messageKey: string,
   message: string,
@@ -598,6 +652,8 @@ type WorkspaceSkillBuildOptions = {
   /** If provided, only include skills with these names */
   skillFilter?: string[];
   eligibility?: SkillEligibilityContext;
+  /** When set, rewrite skill paths to point inside the sandbox workspace. */
+  sandboxSkillsDir?: string;
 };
 
 function resolveWorkspaceSkillPromptState(
@@ -627,10 +683,13 @@ function resolveWorkspaceSkillPromptState(
   const truncationNote = truncated
     ? `⚠️ Skills truncated: included ${skillsForPrompt.length} of ${resolvedSkills.length}. Run \`openclaw skills check\` to audit.`
     : "";
+  const pathAdjustedSkills = opts?.sandboxSkillsDir
+    ? rewriteSkillPathsForSandbox(skillsForPrompt, opts.sandboxSkillsDir)
+    : skillsForPrompt;
   const prompt = [
     remoteNote,
     truncationNote,
-    formatSkillsForPrompt(compactSkillPaths(skillsForPrompt)),
+    formatSkillsForPrompt(compactSkillPaths(pathAdjustedSkills)),
   ]
     .filter(Boolean)
     .join("\n");
@@ -642,15 +701,25 @@ export function resolveSkillsPromptForRun(params: {
   entries?: SkillEntry[];
   config?: OpenClawConfig;
   workspaceDir: string;
+  /** When set, rewrite skill paths to point inside the sandbox workspace. */
+  sandboxSkillsDir?: string;
 }): string {
   const snapshotPrompt = params.skillsSnapshot?.prompt?.trim();
   if (snapshotPrompt) {
+    if (params.sandboxSkillsDir && params.skillsSnapshot?.resolvedSkills?.length) {
+      return rewriteSnapshotPromptForSandbox(
+        snapshotPrompt,
+        params.skillsSnapshot.resolvedSkills,
+        params.sandboxSkillsDir,
+      );
+    }
     return snapshotPrompt;
   }
   if (params.entries && params.entries.length > 0) {
     const prompt = buildWorkspaceSkillsPrompt(params.workspaceDir, {
       entries: params.entries,
       config: params.config,
+      sandboxSkillsDir: params.sandboxSkillsDir,
     });
     return prompt.trim() ? prompt : "";
   }

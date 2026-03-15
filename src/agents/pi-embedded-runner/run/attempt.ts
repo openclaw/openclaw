@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import os from "node:os";
+import path from "node:path";
 import type { AgentMessage, StreamFn } from "@mariozechner/pi-agent-core";
 import { streamSimple } from "@mariozechner/pi-ai";
 import {
@@ -1423,11 +1424,16 @@ export async function runEmbeddedAttempt(
           config: params.config,
         });
 
+    const sandboxSkillsDir =
+      sandbox?.enabled && sandbox.workspaceAccess !== "rw"
+        ? path.posix.join(sandbox.containerWorkdir ?? "/workspace", "skills")
+        : undefined;
     const skillsPrompt = resolveSkillsPromptForRun({
       skillsSnapshot: params.skillsSnapshot,
       entries: shouldLoadSkillEntries ? skillEntries : undefined,
       config: params.config,
       workspaceDir: effectiveWorkspace,
+      sandboxSkillsDir,
     });
 
     const sessionLabel = params.sessionKey ?? params.sessionId;
