@@ -36,6 +36,7 @@
   "main": "dist/index.js",
   "exports": {
     ".": "./dist/index.js",
+    "./dist/extensionAPI.js": "./dist/extensionAPI.js",
     "./plugin-sdk": {
       "types": "./dist/plugin-sdk/index.d.ts",
       "default": "./dist/plugin-sdk/index.js"
