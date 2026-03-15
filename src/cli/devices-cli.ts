@@ -384,7 +384,13 @@ export function registerDevicesCli(program: Command) {
       .option("--latest", "Approve the most recent pending request", false)
       .action(async (requestId: string | undefined, displayName: string | undefined, opts: DevicesRpcOpts) => {
         let resolvedRequestId = requestId?.trim();
-        if (!resolvedRequestId || opts.latest) {
+        // When --latest is used and requestId is provided but displayName is empty,
+        // it means the user passed displayName as first argument, promote it
+        if (opts.latest && resolvedRequestId && !displayName) {
+          displayName = resolvedRequestId;
+          resolvedRequestId = undefined;
+        }
+        if (!resolvedRequestId) {
           const latest = selectLatestPendingRequest((await listPairingWithFallback(opts)).pending);
           resolvedRequestId = latest?.requestId?.trim();
         }
