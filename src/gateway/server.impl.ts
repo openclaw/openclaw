@@ -47,6 +47,7 @@ import { startDiagnosticHeartbeat, stopDiagnosticHeartbeat } from "../logging/di
 import { createSubsystemLogger, runtimeForLogger } from "../logging/subsystem.js";
 import { getGlobalHookRunner, runGlobalGatewayStopSafely } from "../plugins/hook-runner-global.js";
 import { createEmptyPluginRegistry } from "../plugins/registry.js";
+import { getActivePluginRegistry } from "../plugins/runtime.js";
 import { createPluginRuntime } from "../plugins/runtime/index.js";
 import type { PluginServicesHandle } from "../plugins/services.js";
 import { getTotalQueueSize } from "../process/command-queue.js";
@@ -468,15 +469,16 @@ export async function startGatewayServer(
   const defaultWorkspaceDir = resolveAgentWorkspaceDir(cfgAtStart, defaultAgentId);
   const baseMethods = listGatewayMethods();
   const emptyPluginRegistry = createEmptyPluginRegistry();
-  const { pluginRegistry, gatewayMethods: baseGatewayMethods } = minimalTestGateway
-    ? { pluginRegistry: emptyPluginRegistry, gatewayMethods: baseMethods }
-    : loadGatewayPlugins({
-        cfg: cfgAtStart,
-        workspaceDir: defaultWorkspaceDir,
-        log,
-        coreGatewayHandlers,
-        baseMethods,
-      });
+  const { pluginRegistry: initialPluginRegistry, gatewayMethods: baseGatewayMethods } =
+    minimalTestGateway
+      ? { pluginRegistry: emptyPluginRegistry, gatewayMethods: baseMethods }
+      : loadGatewayPlugins({
+          cfg: cfgAtStart,
+          workspaceDir: defaultWorkspaceDir,
+          log,
+          coreGatewayHandlers,
+          baseMethods,
+        });
   const channelLogs = Object.fromEntries(
     listChannelPlugins().map((plugin) => [plugin.id, logChannels.child(plugin.id)]),
   ) as Record<ChannelId, ReturnType<typeof createSubsystemLogger>>;
@@ -616,7 +618,7 @@ export async function startGatewayServer(
     gatewayTls,
     hooksConfig: () => hooksConfig,
     getHookClientIpConfig: () => hookClientIpConfig,
-    pluginRegistry,
+    getPluginRegistry: () => getActivePluginRegistry() ?? initialPluginRegistry,
     deps,
     canvasRuntime,
     canvasHostEnabled,
@@ -893,7 +895,7 @@ export async function startGatewayServer(
     logHealth,
     logWsControl,
     extraHandlers: {
-      ...pluginRegistry.gatewayHandlers,
+      ...initialPluginRegistry.gatewayHandlers,
       ...execApprovalHandlers,
       ...secretsHandlers,
     },
@@ -934,7 +936,7 @@ export async function startGatewayServer(
   if (!minimalTestGateway) {
     ({ browserControl, pluginServices } = await startGatewaySidecars({
       cfg: cfgAtStart,
-      pluginRegistry,
+      pluginRegistry: initialPluginRegistry,
       defaultWorkspaceDir,
       deps,
       startChannels,

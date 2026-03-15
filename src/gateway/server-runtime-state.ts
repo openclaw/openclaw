@@ -58,7 +58,7 @@ export async function createGatewayRuntimeState(params: {
   gatewayTls?: GatewayTlsRuntime;
   hooksConfig: () => HooksConfigResolved | null;
   getHookClientIpConfig: () => HookClientIpConfig;
-  pluginRegistry: PluginRegistry;
+  getPluginRegistry: () => PluginRegistry;
   deps: CliDeps;
   canvasRuntime: RuntimeEnv;
   canvasHostEnabled: boolean;
@@ -125,11 +125,11 @@ export async function createGatewayRuntimeState(params: {
   });
 
   const handlePluginRequest = createGatewayPluginRequestHandler({
-    registry: params.pluginRegistry,
+    getRegistry: params.getPluginRegistry,
     log: params.logPlugins,
   });
   const shouldEnforcePluginGatewayAuth = (pathContext: PluginRoutePathContext): boolean => {
-    return shouldEnforceGatewayAuthForPluginPath(params.pluginRegistry, pathContext);
+    return shouldEnforceGatewayAuthForPluginPath(params.getPluginRegistry(), pathContext);
   };
 
   const bindHosts = await resolveGatewayListenHosts(params.bindHost);

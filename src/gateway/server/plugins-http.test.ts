@@ -1,5 +1,6 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { describe, expect, it, vi } from "vitest";
+import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import type { PluginRuntime } from "../../plugins/runtime/types.js";
 import type { GatewayRequestContext, GatewayRequestOptions } from "../server-methods/types.js";
 import { makeMockHttpResponse } from "../test-http-response.js";
@@ -129,6 +130,14 @@ async function invokeSecureGatewayRoute(params: { gatewayAuthSatisfied: boolean 
 }
 
 describe("createGatewayPluginRequestHandler", () => {
+  it("fails fast when neither getRegistry nor registry is provided", () => {
+    expect(() =>
+      createGatewayPluginRequestHandler({
+        log: createPluginLog(),
+      } as never),
+    ).toThrow("requires getRegistry or registry");
+  });
+
   it("caps unauthenticated plugin routes to non-admin subagent scopes", async () => {
     loadOpenClawPlugins.mockReset();
     handleGatewayRequest.mockReset();
@@ -187,6 +196,60 @@ describe("createGatewayPluginRequestHandler", () => {
     const { res } = makeMockHttpResponse();
     const handled = await handler({} as IncomingMessage, res);
     expect(handled).toBe(false);
+  });
+
+  it("uses the latest injected registry for each new request", async () => {
+    const routeA = vi.fn(async () => true);
+    const routeB = vi.fn(async () => true);
+    const registryA = createTestRegistry({
+      httpRoutes: [createRoute({ path: "/hook-a", handler: routeA })],
+    });
+    const registryB = createTestRegistry({
+      httpRoutes: [createRoute({ path: "/hook-b", handler: routeB })],
+    });
+    let current = registryA;
+
+    const handler = createGatewayPluginRequestHandler({
+      getRegistry: () => current,
+      log: createPluginLog(),
+    });
+
+    const first = makeMockHttpResponse();
+    const firstHandled = await handler({ url: "/hook-a" } as IncomingMessage, first.res);
+    expect(firstHandled).toBe(true);
+    expect(routeA).toHaveBeenCalledTimes(1);
+
+    current = registryB;
+
+    const second = makeMockHttpResponse();
+    const secondHandled = await handler({ url: "/hook-b" } as IncomingMessage, second.res);
+    expect(secondHandled).toBe(true);
+    expect(routeB).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not read the global active registry when getRegistry is injected", async () => {
+    const injectedRoute = vi.fn(async () => true);
+    const injectedRegistry = createTestRegistry({
+      httpRoutes: [createRoute({ path: "/injected", handler: injectedRoute })],
+    });
+    const globalRegistry = createTestRegistry({
+      httpRoutes: [createRoute({ path: "/global", handler: async () => true })],
+    });
+    setActivePluginRegistry(globalRegistry);
+
+    const handler = createGatewayPluginRequestHandler({
+      getRegistry: () => injectedRegistry,
+      log: createPluginLog(),
+    });
+
+    const injectedReq = makeMockHttpResponse();
+    const injectedHandled = await handler({ url: "/injected" } as IncomingMessage, injectedReq.res);
+    expect(injectedHandled).toBe(true);
+    expect(injectedRoute).toHaveBeenCalledTimes(1);
+
+    const globalReq = makeMockHttpResponse();
+    const globalHandled = await handler({ url: "/global" } as IncomingMessage, globalReq.res);
+    expect(globalHandled).toBe(false);
   });
 
   it("handles exact route matches", async () => {
