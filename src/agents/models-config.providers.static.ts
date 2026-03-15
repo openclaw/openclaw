@@ -494,7 +494,14 @@ export function buildModelStudioProvider(): ProviderConfig {
   return {
     baseUrl: MODELSTUDIO_BASE_URL,
     api: "openai-completions",
-    models: MODELSTUDIO_MODEL_CATALOG.map((model) => ({ ...model })),
+    models: MODELSTUDIO_MODEL_CATALOG.map((model) => ({
+      ...model,
+      // DashScope/Bailian supports OpenAI-format usage in streaming chunks.
+      // Without this, pi-agent-core skips usage extraction for non-native
+      // OpenAI endpoints, leaving token stats null in session data.
+      // See: https://github.com/openclaw/openclaw/issues/46616
+      compat: { ...model.compat, supportsUsageInStreaming: true },
+    })),
   };
 }
 
