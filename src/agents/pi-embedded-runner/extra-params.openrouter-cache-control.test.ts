@@ -30,6 +30,29 @@ function runOpenRouterPayload(payload: StreamPayload, modelId: string) {
   void agent.streamFn?.(model, context, {});
 }
 
+function runOpenRouterPayloadWithExtraParams(
+  payload: StreamPayload,
+  modelId: string,
+  extraParams: Record<string, unknown>,
+) {
+  const baseStreamFn: StreamFn = (model, _context, options) => {
+    options?.onPayload?.(payload, model);
+    return createAssistantMessageEventStream();
+  };
+  const agent = { streamFn: baseStreamFn };
+
+  applyExtraParamsToAgent(agent, undefined, "openrouter", modelId, extraParams);
+
+  const model = {
+    api: "openai-completions",
+    provider: "openrouter",
+    id: modelId,
+  } as Model<"openai-completions">;
+  const context: Context = { messages: [] };
+
+  void agent.streamFn?.(model, context, {});
+}
+
 describe("extra-params: OpenRouter Anthropic cache_control", () => {
   it("injects cache_control into system message for OpenRouter Anthropic models", () => {
     const payload = {
@@ -89,5 +112,44 @@ describe("extra-params: OpenRouter Anthropic cache_control", () => {
     runOpenRouterPayload(payload, "anthropic/claude-opus-4-6");
 
     expect(payload.messages[0].content).toBe("Hello");
+  });
+
+  it("includes ttl in cache_control when cacheRetention is long", () => {
+    const payload = {
+      messages: [
+        { role: "system", content: "You are a helpful assistant." },
+        { role: "user", content: "Hello" },
+      ],
+    };
+
+    runOpenRouterPayloadWithExtraParams(payload, "anthropic/claude-opus-4-6", {
+      cacheRetention: "long",
+    });
+
+    expect(payload.messages[0].content).toEqual([
+      {
+        type: "text",
+        text: "You are a helpful assistant.",
+        cache_control: { type: "ephemeral", ttl: "1h" },
+      },
+    ]);
+  });
+
+  it("does not include ttl in cache_control when cacheRetention is short", () => {
+    const payload = {
+      messages: [{ role: "system", content: "You are a helpful assistant." }],
+    };
+
+    runOpenRouterPayloadWithExtraParams(payload, "anthropic/claude-opus-4-6", {
+      cacheRetention: "short",
+    });
+
+    expect(payload.messages[0].content).toEqual([
+      {
+        type: "text",
+        text: "You are a helpful assistant.",
+        cache_control: { type: "ephemeral" },
+      },
+    ]);
   });
 });

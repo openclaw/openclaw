@@ -327,6 +327,16 @@ function createParallelToolCallsWrapper(
  *
  * @internal Exported for testing
  */
+function resolveOpenRouterCacheRetention(
+  extraParams: Record<string, unknown> | undefined,
+): "none" | "short" | "long" | undefined {
+  const value = extraParams?.cacheRetention;
+  if (value === "none" || value === "short" || value === "long") {
+    return value;
+  }
+  return undefined;
+}
+
 export function applyExtraParamsToAgent(
   agent: { streamFn?: StreamFn },
   cfg: OpenClawConfig | undefined,
@@ -409,7 +419,8 @@ export function applyExtraParamsToAgent(
     const skipReasoningInjection = modelId === "auto" || isProxyReasoningUnsupported(modelId);
     const openRouterThinkingLevel = skipReasoningInjection ? undefined : thinkingLevel;
     agent.streamFn = createOpenRouterWrapper(agent.streamFn, openRouterThinkingLevel);
-    agent.streamFn = createOpenRouterSystemCacheWrapper(agent.streamFn);
+    const openRouterCacheRetention = resolveOpenRouterCacheRetention(merged);
+    agent.streamFn = createOpenRouterSystemCacheWrapper(agent.streamFn, openRouterCacheRetention);
   }
 
   if (provider === "kilocode") {
