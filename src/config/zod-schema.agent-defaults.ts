@@ -189,8 +189,20 @@ export const AgentDefaultsSchema = z
         thinking: z.string().optional(),
         runTimeoutSeconds: z.number().int().min(0).optional(),
         announceTimeoutMs: z.number().int().positive().optional(),
+        allowAgents: z.array(z.string()).optional(),
+        /** @deprecated Use `allowAgents` instead. Accepted as an alias for backward compatibility. */
+        allow: z.array(z.string()).optional(),
+        /** @deprecated Use `allowAgents` instead. Accepted as an alias for backward compatibility. */
+        allowlist: z.array(z.string()).optional(),
       })
       .strict()
+      .transform((val) => ({
+        ...val,
+        // Resolve deprecated aliases: `allow` and `allowlist` are coerced into `allowAgents`
+        // so runtime enforcement in subagent-spawn.ts and agents-list-tool.ts only needs to
+        // read the canonical `allowAgents` field.
+        allowAgents: val.allowAgents ?? val.allow ?? val.allowlist,
+      }))
       .optional(),
     sandbox: AgentSandboxSchema,
   })
