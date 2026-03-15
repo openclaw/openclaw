@@ -110,6 +110,599 @@ describe("buildFeishuAgentBody", () => {
   });
 });
 
+describe("handleFeishuMessage sender name resolution", () => {
+  const mockFinalizeInboundContext = vi.fn((ctx: unknown) => ctx);
+  const mockDispatchReplyFromConfig = vi
+    .fn()
+    .mockResolvedValue({ queuedFinal: false, counts: { final: 1 } });
+  const mockWithReplyDispatcher = vi.fn(
+    async ({
+      dispatcher,
+      run,
+      onSettled,
+    }: Parameters<PluginRuntime["channel"]["reply"]["withReplyDispatcher"]>[0]) => {
+      try {
+        return await run();
+      } finally {
+        dispatcher.markComplete();
+        try {
+          await dispatcher.waitForIdle();
+        } finally {
+          await onSettled?.();
+        }
+      }
+    },
+  );
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockGetMessageFeishu.mockReset().mockResolvedValue(null);
+    mockListFeishuThreadMessages.mockReset().mockResolvedValue([]);
+    mockReadSessionUpdatedAt.mockReturnValue(undefined);
+    mockResolveStorePath.mockReturnValue("/tmp/feishu-sessions.json");
+    mockResolveAgentRoute.mockReturnValue({
+      agentId: "main",
+      channel: "feishu",
+      accountId: "default",
+      sessionKey: "agent:main:feishu:dm:ou-sender",
+      mainSessionKey: "agent:main:main",
+      matchedBy: "default",
+    });
+    setFeishuRuntime(
+      createPluginRuntimeMock({
+        system: {
+          enqueueSystemEvent: vi.fn(),
+        },
+        channel: {
+          routing: {
+            resolveAgentRoute:
+              mockResolveAgentRoute as unknown as PluginRuntime["channel"]["routing"]["resolveAgentRoute"],
+          },
+          session: {
+            readSessionUpdatedAt:
+              mockReadSessionUpdatedAt as unknown as PluginRuntime["channel"]["session"]["readSessionUpdatedAt"],
+            resolveStorePath:
+              mockResolveStorePath as unknown as PluginRuntime["channel"]["session"]["resolveStorePath"],
+          },
+          reply: {
+            resolveEnvelopeFormatOptions: vi.fn(
+              () => ({}),
+            ) as unknown as PluginRuntime["channel"]["reply"]["resolveEnvelopeFormatOptions"],
+            formatAgentEnvelope: vi.fn((params: { body: string }) => params.body),
+            finalizeInboundContext:
+              mockFinalizeInboundContext as unknown as PluginRuntime["channel"]["reply"]["finalizeInboundContext"],
+            dispatchReplyFromConfig: mockDispatchReplyFromConfig,
+            withReplyDispatcher:
+              mockWithReplyDispatcher as unknown as PluginRuntime["channel"]["reply"]["withReplyDispatcher"],
+          },
+          commands: {
+            shouldComputeCommandAuthorized: vi.fn(() => false),
+            resolveCommandAuthorizedFromAuthorizers: vi.fn(() => false),
+          },
+          media: {
+            saveMediaBuffer: vi.fn().mockResolvedValue({
+              id: "inbound-clip.mp4",
+              path: "/tmp/inbound-clip.mp4",
+              size: Buffer.byteLength("video"),
+              contentType: "video/mp4",
+            }),
+          },
+          pairing: {
+            readAllowFromStore: vi.fn().mockResolvedValue([]),
+            upsertPairingRequest: vi.fn().mockResolvedValue({ code: "ABCDEFGH", created: false }),
+            buildPairingReply: vi.fn(() => "Pairing response"),
+          },
+        },
+        media: {
+          detectMime: vi.fn(async () => "application/octet-stream"),
+        },
+      }),
+    );
+  });
+
+  it("prefers sender user_id over open_id when resolving display names", async () => {
+    const getUser = vi
+      .fn()
+      .mockResolvedValueOnce({ data: { user: { name: "同同" } } })
+      .mockResolvedValueOnce({ data: { user: { name: "用户377052" } } });
+    mockCreateFeishuClient.mockReturnValue({
+      contact: {
+        user: {
+          get: getUser,
+        },
+      },
+    });
+
+    const cfg: ClawdbotConfig = {
+      channels: {
+        feishu: {
+          appId: "cli_test",
+          appSecret: "secret",
+          dmPolicy: "open",
+        },
+      },
+    } as ClawdbotConfig;
+
+    const event: FeishuMessageEvent = {
+      sender: {
+        sender_id: {
+          open_id: "ou_sender_open",
+          user_id: "0b1a2c3d",
+        },
+      },
+      message: {
+        message_id: "msg-user-id-preferred",
+        chat_id: "oc-dm",
+        chat_type: "p2p",
+        message_type: "text",
+        content: JSON.stringify({ text: "你好" }),
+      },
+    };
+
+    await dispatchMessage({ cfg, event });
+
+    expect(getUser).toHaveBeenCalledWith({
+      path: { user_id: "0b1a2c3d" },
+      params: { user_id_type: "user_id" },
+    });
+    expect(getUser).toHaveBeenCalledTimes(1);
+    expect(mockFinalizeInboundContext).toHaveBeenCalledWith(
+      expect.objectContaining({
+        BodyForAgent: expect.stringContaining("同同: 你好"),
+      }),
+    );
+  });
+
+  it("falls back to sender open_id when user_id lookup returns no usable name", async () => {
+    const getUser = vi
+      .fn()
+      .mockResolvedValueOnce({ data: { user: { name: "" } } })
+      .mockResolvedValueOnce({ data: { user: { name: "同同" } } });
+    mockCreateFeishuClient.mockReturnValue({
+      contact: {
+        user: {
+          get: getUser,
+        },
+      },
+    });
+
+    const cfg: ClawdbotConfig = {
+      channels: {
+        feishu: {
+          appId: "cli_test",
+          appSecret: "secret",
+          dmPolicy: "open",
+        },
+      },
+    } as ClawdbotConfig;
+
+    const event: FeishuMessageEvent = {
+      sender: {
+        sender_id: {
+          open_id: "ou_sender_open_fallback",
+          user_id: "0b1a2c3d_fallback",
+        },
+      },
+      message: {
+        message_id: "msg-open-id-fallback",
+        chat_id: "oc-dm",
+        chat_type: "p2p",
+        message_type: "text",
+        content: JSON.stringify({ text: "你好" }),
+      },
+    };
+
+    await dispatchMessage({ cfg, event });
+
+    expect(getUser).toHaveBeenNthCalledWith(1, {
+      path: { user_id: "0b1a2c3d_fallback" },
+      params: { user_id_type: "user_id" },
+    });
+    expect(getUser).toHaveBeenNthCalledWith(2, {
+      path: { user_id: "ou_sender_open_fallback" },
+      params: { user_id_type: "open_id" },
+    });
+    expect(mockFinalizeInboundContext).toHaveBeenCalledWith(
+      expect.objectContaining({
+        BodyForAgent: expect.stringContaining("同同: 你好"),
+      }),
+    );
+  });
+
+  it("does not let a cached open_id placeholder bypass a higher-priority user_id lookup", async () => {
+    const getUser = vi
+      .fn()
+      .mockResolvedValueOnce({ data: { user: { name: "用户377052" } } })
+      .mockResolvedValueOnce({ data: { user: { name: "同同" } } });
+    mockCreateFeishuClient.mockReturnValue({
+      contact: {
+        user: {
+          get: getUser,
+        },
+      },
+    });
+
+    const cfg: ClawdbotConfig = {
+      channels: {
+        feishu: {
+          appId: "cli_test",
+          appSecret: "secret",
+          dmPolicy: "open",
+        },
+      },
+    } as ClawdbotConfig;
+
+    await dispatchMessage({
+      cfg,
+      event: {
+        sender: {
+          sender_id: {
+            open_id: "ou_sender_cached_placeholder",
+          },
+        },
+        message: {
+          message_id: "msg-open-id-cache-prime",
+          chat_id: "oc-dm",
+          chat_type: "p2p",
+          message_type: "text",
+          content: JSON.stringify({ text: "prime cache" }),
+        },
+      },
+    });
+
+    await dispatchMessage({
+      cfg,
+      event: {
+        sender: {
+          sender_id: {
+            open_id: "ou_sender_cached_placeholder",
+            user_id: "0b1a2c3d_cache_bypass",
+          },
+        },
+        message: {
+          message_id: "msg-user-id-overrides-stale-open-id-cache",
+          chat_id: "oc-dm",
+          chat_type: "p2p",
+          message_type: "text",
+          content: JSON.stringify({ text: "你好" }),
+        },
+      },
+    });
+
+    expect(getUser).toHaveBeenNthCalledWith(1, {
+      path: { user_id: "ou_sender_cached_placeholder" },
+      params: { user_id_type: "open_id" },
+    });
+    expect(getUser).toHaveBeenNthCalledWith(2, {
+      path: { user_id: "0b1a2c3d_cache_bypass" },
+      params: { user_id_type: "user_id" },
+    });
+    expect(getUser).toHaveBeenCalledTimes(2);
+    expect(mockFinalizeInboundContext).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        BodyForAgent: expect.stringContaining("同同: 你好"),
+      }),
+    );
+  });
+
+  it("continues to lower-priority fallbacks when a higher-priority lookup throws", async () => {
+    const getUser = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("user_id lookup failed"))
+      .mockResolvedValueOnce({ data: { user: { name: "同同" } } });
+    mockCreateFeishuClient.mockReturnValue({
+      contact: {
+        user: {
+          get: getUser,
+        },
+      },
+    });
+
+    const cfg: ClawdbotConfig = {
+      channels: {
+        feishu: {
+          appId: "cli_test",
+          appSecret: "secret",
+          dmPolicy: "open",
+        },
+      },
+    } as ClawdbotConfig;
+
+    await dispatchMessage({
+      cfg,
+      event: {
+        sender: {
+          sender_id: {
+            open_id: "ou_sender_open_after_error",
+            user_id: "0b1a2c3d_error_first",
+          },
+        },
+        message: {
+          message_id: "msg-open-id-fallback-after-user-id-error",
+          chat_id: "oc-dm",
+          chat_type: "p2p",
+          message_type: "text",
+          content: JSON.stringify({ text: "你好" }),
+        },
+      },
+    });
+
+    expect(getUser).toHaveBeenNthCalledWith(1, {
+      path: { user_id: "0b1a2c3d_error_first" },
+      params: { user_id_type: "user_id" },
+    });
+    expect(getUser).toHaveBeenNthCalledWith(2, {
+      path: { user_id: "ou_sender_open_after_error" },
+      params: { user_id_type: "open_id" },
+    });
+    expect(mockFinalizeInboundContext).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        BodyForAgent: expect.stringContaining("同同: 你好"),
+      }),
+    );
+  });
+
+  it("caches a user_id-resolved sender name under open_id for later events", async () => {
+    const getUser = vi.fn().mockResolvedValueOnce({ data: { user: { name: "同同" } } });
+    mockCreateFeishuClient.mockReturnValue({
+      contact: {
+        user: {
+          get: getUser,
+        },
+      },
+    });
+
+    const cfg: ClawdbotConfig = {
+      channels: {
+        feishu: {
+          appId: "cli_test",
+          appSecret: "secret",
+          dmPolicy: "open",
+        },
+      },
+    } as ClawdbotConfig;
+
+    await dispatchMessage({
+      cfg,
+      event: {
+        sender: {
+          sender_id: {
+            open_id: "ou_sender_cache_all_ids",
+            user_id: "0b1a2c3d_cache_all_ids",
+          },
+        },
+        message: {
+          message_id: "msg-cache-all-ids-prime",
+          chat_id: "oc-dm",
+          chat_type: "p2p",
+          message_type: "text",
+          content: JSON.stringify({ text: "第一次你好" }),
+        },
+      },
+    });
+
+    await dispatchMessage({
+      cfg,
+      event: {
+        sender: {
+          sender_id: {
+            open_id: "ou_sender_cache_all_ids",
+          },
+        },
+        message: {
+          message_id: "msg-cache-all-ids-open-only",
+          chat_id: "oc-dm",
+          chat_type: "p2p",
+          message_type: "text",
+          content: JSON.stringify({ text: "再次你好" }),
+        },
+      },
+    });
+
+    expect(getUser).toHaveBeenCalledTimes(1);
+    expect(mockFinalizeInboundContext).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        BodyForAgent: expect.stringContaining("同同: 再次你好"),
+      }),
+    );
+  });
+
+  it("falls back to a cached lower-priority sender name when client creation later fails", async () => {
+    const getUser = vi.fn().mockResolvedValueOnce({ data: { user: { name: "同同" } } });
+    mockCreateFeishuClient
+      .mockReturnValueOnce({
+        contact: {
+          user: {
+            get: getUser,
+          },
+        },
+      })
+      .mockImplementationOnce(() => {
+        throw new Error("client init failed");
+      });
+
+    const cfg: ClawdbotConfig = {
+      channels: {
+        feishu: {
+          appId: "cli_test",
+          appSecret: "secret",
+          dmPolicy: "open",
+        },
+      },
+    } as ClawdbotConfig;
+
+    await dispatchMessage({
+      cfg,
+      event: {
+        sender: {
+          sender_id: {
+            open_id: "ou_sender_cached_fallback_after_client_failure",
+          },
+        },
+        message: {
+          message_id: "msg-cached-fallback-prime",
+          chat_id: "oc-dm",
+          chat_type: "p2p",
+          message_type: "text",
+          content: JSON.stringify({ text: "prime cache" }),
+        },
+      },
+    });
+
+    await expect(
+      dispatchMessage({
+        cfg,
+        event: {
+          sender: {
+            sender_id: {
+              open_id: "ou_sender_cached_fallback_after_client_failure",
+              user_id: "0b1a2c3d_cached_fallback_after_client_failure",
+            },
+          },
+          message: {
+            message_id: "msg-cached-fallback-client-init-failure",
+            chat_id: "oc-dm",
+            chat_type: "p2p",
+            message_type: "text",
+            content: JSON.stringify({ text: "你好" }),
+          },
+        },
+      }),
+    ).resolves.toBeDefined();
+
+    expect(getUser).toHaveBeenCalledTimes(1);
+    expect(mockFinalizeInboundContext).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        BodyForAgent: expect.stringContaining("同同: 你好"),
+      }),
+    );
+  });
+
+  it("does not poison user_id cache with a lower-priority open_id fallback", async () => {
+    const getUser = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("user_id lookup failed"))
+      .mockResolvedValueOnce({ data: { user: { name: "用户377052" } } })
+      .mockResolvedValueOnce({ data: { user: { name: "同同" } } });
+    mockCreateFeishuClient.mockReturnValue({
+      contact: {
+        user: {
+          get: getUser,
+        },
+      },
+    });
+
+    const cfg: ClawdbotConfig = {
+      channels: {
+        feishu: {
+          appId: "cli_test",
+          appSecret: "secret",
+          dmPolicy: "open",
+        },
+      },
+    } as ClawdbotConfig;
+
+    await dispatchMessage({
+      cfg,
+      event: {
+        sender: {
+          sender_id: {
+            open_id: "ou_sender_open_fallback_only",
+            user_id: "0b1a2c3d_retry_after_open_fallback",
+          },
+        },
+        message: {
+          message_id: "msg-open-fallback-only-prime",
+          chat_id: "oc-dm",
+          chat_type: "p2p",
+          message_type: "text",
+          content: JSON.stringify({ text: "第一次" }),
+        },
+      },
+    });
+
+    await dispatchMessage({
+      cfg,
+      event: {
+        sender: {
+          sender_id: {
+            open_id: "ou_sender_open_fallback_only",
+            user_id: "0b1a2c3d_retry_after_open_fallback",
+          },
+        },
+        message: {
+          message_id: "msg-open-fallback-only-retry",
+          chat_id: "oc-dm",
+          chat_type: "p2p",
+          message_type: "text",
+          content: JSON.stringify({ text: "第二次" }),
+        },
+      },
+    });
+
+    expect(getUser).toHaveBeenNthCalledWith(1, {
+      path: { user_id: "0b1a2c3d_retry_after_open_fallback" },
+      params: { user_id_type: "user_id" },
+    });
+    expect(getUser).toHaveBeenNthCalledWith(2, {
+      path: { user_id: "ou_sender_open_fallback_only" },
+      params: { user_id_type: "open_id" },
+    });
+    expect(getUser).toHaveBeenNthCalledWith(3, {
+      path: { user_id: "0b1a2c3d_retry_after_open_fallback" },
+      params: { user_id_type: "user_id" },
+    });
+    expect(mockFinalizeInboundContext).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        BodyForAgent: expect.stringContaining("同同: 第二次"),
+      }),
+    );
+  });
+
+  it("keeps sender-name lookup best-effort when Feishu client creation throws", async () => {
+    mockCreateFeishuClient.mockImplementation(() => {
+      throw new Error("client init failed");
+    });
+
+    const cfg: ClawdbotConfig = {
+      channels: {
+        feishu: {
+          appId: "cli_test",
+          appSecret: "secret",
+          dmPolicy: "open",
+        },
+      },
+    } as ClawdbotConfig;
+
+    await expect(
+      dispatchMessage({
+        cfg,
+        event: {
+          sender: {
+            sender_id: {
+              open_id: "ou_sender_client_init_failure",
+              user_id: "0b1a2c3d_client_init_failure",
+            },
+          },
+          message: {
+            message_id: "msg-client-init-failure",
+            chat_id: "oc-dm",
+            chat_type: "p2p",
+            message_type: "text",
+            content: JSON.stringify({ text: "你好" }),
+          },
+        },
+      }),
+    ).resolves.toBeDefined();
+
+    expect(mockFinalizeInboundContext).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        BodyForAgent: expect.stringContaining("ou_sender_client_init_failure: 你好"),
+      }),
+    );
+  });
+});
+
 describe("handleFeishuMessage command authorization", () => {
   const mockFinalizeInboundContext = vi.fn((ctx: unknown) => ctx);
   const mockDispatchReplyFromConfig = vi

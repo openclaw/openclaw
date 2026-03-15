@@ -109,6 +109,11 @@ type SenderNameResult = {
   permissionError?: PermissionError;
 };
 
+type SenderLookupCandidate = {
+  id: string;
+  idType: "open_id" | "user_id" | "union_id";
+};
+
 function resolveSenderLookupIdType(senderId: string): "open_id" | "user_id" | "union_id" {
   const trimmed = senderId.trim();
   if (trimmed.startsWith("ou_")) {
@@ -122,57 +127,121 @@ function resolveSenderLookupIdType(senderId: string): "open_id" | "user_id" | "u
 
 async function resolveFeishuSenderName(params: {
   account: ResolvedFeishuAccount;
-  senderId: string;
+  senderOpenId?: string;
+  senderUserId?: string;
+  senderId?: string;
   log: (...args: any[]) => void;
 }): Promise<SenderNameResult> {
-  const { account, senderId, log } = params;
+  const { account, senderOpenId, senderUserId, senderId, log } = params;
   if (!account.configured) return {};
 
-  const normalizedSenderId = senderId.trim();
-  if (!normalizedSenderId) return {};
-
-  const cached = senderNameCache.get(normalizedSenderId);
-  const now = Date.now();
-  if (cached && cached.expireAt > now) return { name: cached.name };
-
-  try {
-    const client = createFeishuClient(account);
-    const userIdType = resolveSenderLookupIdType(normalizedSenderId);
-
-    // contact/v3/users/:user_id?user_id_type=<open_id|user_id|union_id>
-    const res: any = await client.contact.user.get({
-      path: { user_id: normalizedSenderId },
-      params: { user_id_type: userIdType },
+  const lookupCandidates: SenderLookupCandidate[] = [];
+  const seen = new Set<string>();
+  const pushCandidate = (
+    rawId: string | undefined,
+    explicitType?: SenderLookupCandidate["idType"],
+  ) => {
+    const normalized = rawId?.trim();
+    if (!normalized || seen.has(normalized)) return;
+    seen.add(normalized);
+    lookupCandidates.push({
+      id: normalized,
+      idType: explicitType ?? resolveSenderLookupIdType(normalized),
     });
+  };
 
-    const name: string | undefined =
-      res?.data?.user?.name ||
-      res?.data?.user?.display_name ||
-      res?.data?.user?.nickname ||
-      res?.data?.user?.en_name;
+  // Prefer user_id when available: for some tenants/groups, open_id lookups can degrade
+  // to anonymized placeholders while user_id resolves the real internal display name.
+  pushCandidate(senderUserId, "user_id");
+  pushCandidate(senderOpenId, "open_id");
+  pushCandidate(senderId);
 
-    if (name && typeof name === "string") {
-      senderNameCache.set(normalizedSenderId, { name, expireAt: now + SENDER_NAME_TTL_MS });
-      return { name };
+  if (lookupCandidates.length === 0) return {};
+
+  const now = Date.now();
+  let deferredPermissionError: PermissionError | undefined;
+  let client: ReturnType<typeof createFeishuClient> | undefined;
+  const cachedResults = lookupCandidates.map((candidate) => {
+    const cached = senderNameCache.get(candidate.id);
+    return cached && cached.expireAt > now ? cached : undefined;
+  });
+  const cachedFallback = cachedResults.find((cached) => cached !== undefined);
+
+  if (cachedResults[0]) {
+    return { name: cachedResults[0].name };
+  }
+
+  const cacheResolvedName = (name: string, resolvedIndex: number) => {
+    const entry = { name, expireAt: now + SENDER_NAME_TTL_MS };
+    if (resolvedIndex <= 0) {
+      for (const knownCandidate of lookupCandidates) {
+        senderNameCache.set(knownCandidate.id, entry);
+      }
+      return;
+    }
+    senderNameCache.set(lookupCandidates[resolvedIndex]!.id, entry);
+  };
+
+  for (let i = 0; i < lookupCandidates.length; i++) {
+    const candidate = lookupCandidates[i];
+    const cached = cachedResults[i];
+    if (cached) {
+      return { name: cached.name };
     }
 
-    return {};
-  } catch (err) {
-    // Check if this is a permission error
-    const permErr = extractPermissionError(err);
-    if (permErr) {
-      if (shouldSuppressPermissionErrorNotice(permErr)) {
-        log(`feishu: ignoring stale permission scope error: ${permErr.message}`);
+    if (!client) {
+      try {
+        client = createFeishuClient(account);
+      } catch (err) {
+        log(`feishu: failed to initialize sender name lookup client: ${String(err)}`);
+        if (cachedFallback) {
+          return { name: cachedFallback.name };
+        }
         return {};
       }
-      log(`feishu: permission error resolving sender name: code=${permErr.code}`);
-      return { permissionError: permErr };
     }
 
-    // Best-effort. Don't fail message handling if name lookup fails.
-    log(`feishu: failed to resolve sender name for ${normalizedSenderId}: ${String(err)}`);
-    return {};
+    try {
+      // contact/v3/users/:user_id?user_id_type=<open_id|user_id|union_id>
+      const res: any = await client.contact.user.get({
+        path: { user_id: candidate.id },
+        params: { user_id_type: candidate.idType },
+      });
+
+      const name: string | undefined =
+        res?.data?.user?.name ||
+        res?.data?.user?.display_name ||
+        res?.data?.user?.nickname ||
+        res?.data?.user?.en_name;
+
+      if (name && typeof name === "string") {
+        cacheResolvedName(name, i);
+        return { name };
+      }
+    } catch (err) {
+      const permErr = extractPermissionError(err);
+      if (permErr) {
+        if (shouldSuppressPermissionErrorNotice(permErr)) {
+          log(`feishu: ignoring stale permission scope error: ${permErr.message}`);
+          continue;
+        }
+        log(`feishu: permission error resolving sender name: code=${permErr.code}`);
+        deferredPermissionError ??= permErr;
+        continue;
+      }
+
+      // Best-effort per candidate. Continue lower-priority fallbacks if one path fails.
+      log(
+        `feishu: failed to resolve sender name for ${candidate.idType}:${candidate.id}: ${String(err)}`,
+      );
+    }
   }
+
+  if (deferredPermissionError) {
+    return { permissionError: deferredPermissionError };
+  }
+
+  return {};
 }
 
 export type FeishuMessageEvent = {
@@ -794,6 +863,7 @@ export function parseFeishuMessageEvent(
     // Keep the historical field name, but fall back to user_id when open_id is unavailable
     // (common in some mobile app deliveries).
     senderOpenId: senderFallbackId,
+    senderUserId,
     chatType: event.message.chat_type,
     mentionedBot,
     hasAnyMention,
@@ -944,7 +1014,9 @@ export async function handleFeishuMessage(params: {
   if (feishuCfg?.resolveSenderNames ?? true) {
     const senderResult = await resolveFeishuSenderName({
       account,
-      senderId: ctx.senderOpenId,
+      senderOpenId: ctx.senderOpenId,
+      senderUserId: ctx.senderUserId,
+      senderId: ctx.senderId,
       log,
     });
     if (senderResult.name) ctx = { ...ctx, senderName: senderResult.name };
