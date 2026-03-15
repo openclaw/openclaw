@@ -125,6 +125,26 @@ describe("runCronIsolatedAgentTurn — skill filter", () => {
     });
   });
 
+  it("allows session reuse when freshSession is false", async () => {
+    await runSkillFilterCase({
+      job: makeSkillJob({ freshSession: false }),
+    });
+    expect(resolveCronSessionMock).toHaveBeenCalledOnce();
+    expect(resolveCronSessionMock.mock.calls[0]?.[0]).toMatchObject({
+      forceNew: false,
+    });
+  });
+
+  it("forces fresh session when freshSession is explicitly true", async () => {
+    await runSkillFilterCase({
+      job: makeSkillJob({ freshSession: true }),
+    });
+    expect(resolveCronSessionMock).toHaveBeenCalledOnce();
+    expect(resolveCronSessionMock.mock.calls[0]?.[0]).toMatchObject({
+      forceNew: true,
+    });
+  });
+
   it("reuses cached snapshot when version and normalized skillFilter are unchanged", async () => {
     resolveAgentSkillsFilterMock.mockReturnValue([" weather ", "meme-factory", "weather"]);
     resolveCronSessionMock.mockReturnValue({
