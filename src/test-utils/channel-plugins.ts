@@ -18,6 +18,12 @@ export const createTestRegistry = (channels: TestChannelRegistration[] = []): Pl
   hooks: [],
   typedHooks: [],
   channels: channels as unknown as PluginRegistry["channels"],
+  channelSetups: channels.map((entry) => ({
+    pluginId: entry.pluginId,
+    plugin: entry.plugin as PluginRegistry["channelSetups"][number]["plugin"],
+    source: entry.source,
+    enabled: true,
+  })),
   providers: [],
   gatewayHandlers: {},
   httpRoutes: [],
