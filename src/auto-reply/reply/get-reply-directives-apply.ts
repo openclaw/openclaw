@@ -152,7 +152,7 @@ export async function applyInlineDirectiveOverrides(params: {
       currentThinkLevel: resolvedDefaultThinkLevel,
       currentFastMode,
       currentVerboseLevel,
-      currentReasoningLevel,
+      currentReasoningLevel: resolvedCurrentReasoningLevel,
       currentElevatedLevel,
     } = await resolveCurrentDirectiveLevels({
       sessionEntry,
@@ -160,6 +160,8 @@ export async function applyInlineDirectiveOverrides(params: {
       resolveDefaultThinkingLevel: () => modelState.resolveDefaultThinkingLevel(),
     });
     const currentThinkLevel = resolvedDefaultThinkLevel;
+    const currentReasoningLevel =
+      resolvedCurrentReasoningLevel ?? (await modelState.resolveDefaultReasoningLevel());
     const directiveReply = await handleDirectiveOnly({
       ...createDirectiveHandlingBase(),
       currentThinkLevel,
@@ -183,9 +185,10 @@ export async function applyInlineDirectiveOverrides(params: {
         contextTokens,
         resolvedThinkLevel: resolvedDefaultThinkLevel,
         resolvedVerboseLevel: currentVerboseLevel ?? "off",
-        resolvedReasoningLevel: currentReasoningLevel ?? "off",
+        resolvedReasoningLevel: currentReasoningLevel,
         resolvedElevatedLevel,
         resolveDefaultThinkingLevel: async () => resolvedDefaultThinkLevel,
+        resolveDefaultReasoningLevel: modelState.resolveDefaultReasoningLevel,
         isGroup,
         defaultGroupActivation: defaultActivation,
         mediaDecisions: ctx.MediaUnderstandingDecisions,

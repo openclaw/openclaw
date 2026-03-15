@@ -611,6 +611,15 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).toContain("/status shows Reasoning");
   });
 
+  it("tells agents to use session_status for thinking-state questions", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+    });
+
+    expect(prompt).toContain("ALWAYS call session_status first");
+    expect(prompt).toContain("never use Reasoning for that answer");
+  });
+
   it("builds runtime line with agent and channel details", () => {
     const line = buildRuntimeLine(
       {

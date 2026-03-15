@@ -7,8 +7,8 @@ import {
   type ModelAliasIndex,
   modelKey,
   normalizeProviderId,
-  resolveModelRefFromString,
   resolveReasoningDefault,
+  resolveModelRefFromString,
   resolveThinkingDefault,
 } from "../../agents/model-selection.js";
 import type { OpenClawConfig } from "../../config/config.js";
@@ -382,6 +382,7 @@ export async function createModelSelectionState(params: {
   }
 
   let defaultThinkingLevel: ThinkLevel | undefined;
+  let defaultReasoningLevel: "on" | "off" | undefined;
   const resolveDefaultThinkingLevel = async () => {
     if (defaultThinkingLevel) {
       return defaultThinkingLevel;
@@ -402,17 +403,28 @@ export async function createModelSelectionState(params: {
     return defaultThinkingLevel;
   };
 
-  const resolveDefaultReasoningLevel = async (): Promise<"on" | "off"> => {
-    let catalogForReasoning = modelCatalog ?? allowedModelCatalog;
-    if (!catalogForReasoning || catalogForReasoning.length === 0) {
-      modelCatalog = await loadModelCatalog({ config: cfg });
-      catalogForReasoning = modelCatalog;
+  let reasoningLevelPromise: Promise<"on" | "off"> | undefined;
+  const resolveDefaultReasoningLevel = (): Promise<"on" | "off"> => {
+    if (defaultReasoningLevel) {
+      return Promise.resolve(defaultReasoningLevel);
     }
-    return resolveReasoningDefault({
-      provider,
-      model,
-      catalog: catalogForReasoning,
-    });
+    if (!reasoningLevelPromise) {
+      reasoningLevelPromise = (async () => {
+        let catalogForReasoning = modelCatalog ?? allowedModelCatalog;
+        if (!catalogForReasoning || catalogForReasoning.length === 0) {
+          modelCatalog = await loadModelCatalog({ config: cfg });
+          catalogForReasoning = modelCatalog;
+        }
+        defaultReasoningLevel = resolveReasoningDefault({
+          cfg,
+          provider,
+          model,
+          catalog: catalogForReasoning,
+        });
+        return defaultReasoningLevel;
+      })();
+    }
+    return reasoningLevelPromise;
   };
 
   return {

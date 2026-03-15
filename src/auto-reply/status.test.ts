@@ -258,6 +258,75 @@ describe("buildStatusMessage", () => {
     expect(text).toContain("elevated");
   });
 
+  it("shows reasoning as on for reasoning-capable models when not explicitly overridden", () => {
+    const text = buildStatusMessage({
+      config: {
+        models: {
+          providers: {
+            "openai-codex": {
+              baseUrl: "https://api.openai.com",
+              models: [
+                {
+                  id: "gpt-5.4",
+                  name: "gpt-5.4",
+                  reasoning: true,
+                  input: ["text"],
+                  cost: {
+                    input: 0,
+                    output: 0,
+                    cacheRead: 0,
+                    cacheWrite: 0,
+                  },
+                  contextWindow: 128000,
+                  maxTokens: 4096,
+                },
+              ],
+            },
+          },
+        },
+      } as OpenClawConfig,
+      agent: {
+        model: "openai-codex/gpt-5.4",
+      },
+      sessionEntry: { sessionId: "reasoning-default", updatedAt: 0 },
+      sessionKey: "agent:main:main",
+      sessionScope: "per-sender",
+      resolvedThink: "medium",
+      queue: { mode: "collect", depth: 0 },
+    });
+
+    expect(normalizeTestText(text)).toContain("Think: medium");
+    expect(normalizeTestText(text)).toContain("Reasoning: on");
+  });
+
+  it("uses bundled catalog reasoning defaults on the sync status path", () => {
+    const text = buildStatusMessage({
+      config: {
+        models: {
+          providers: {},
+        },
+      } as OpenClawConfig,
+      agent: {
+        model: "openai-codex/gpt-5.4",
+      },
+      sessionEntry: { sessionId: "reasoning-catalog-only", updatedAt: 0 },
+      sessionKey: "agent:main:main",
+      sessionScope: "per-sender",
+      resolvedThink: "medium",
+      queue: { mode: "collect", depth: 0 },
+      catalog: [
+        {
+          provider: "openai-codex",
+          id: "gpt-5.4",
+          name: "gpt-5.4",
+          reasoning: true,
+        },
+      ],
+    });
+
+    expect(normalizeTestText(text)).toContain("Reasoning: on");
+  });
+
   it("includes media understanding decisions when present", () => {
     const text = buildStatusMessage({
       agent: { model: "anthropic/claude-opus-4-5" },

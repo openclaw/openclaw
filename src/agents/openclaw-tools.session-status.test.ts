@@ -1,9 +1,10 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const loadSessionStoreMock = vi.fn();
 const updateSessionStoreMock = vi.fn();
 const callGatewayMock = vi.fn();
 const loadCombinedSessionStoreForGatewayMock = vi.fn();
+const loadModelCatalogMock = vi.fn();
 
 const createMockConfig = () => ({
   session: { mainKey: "main", scope: "per-sender" },
@@ -19,6 +20,20 @@ const createMockConfig = () => ({
 });
 
 let mockConfig: Record<string, unknown> = createMockConfig();
+const defaultCatalog = [
+  {
+    provider: "anthropic",
+    id: "claude-opus-4-5",
+    name: "Opus",
+    contextWindow: 200000,
+  },
+  {
+    provider: "anthropic",
+    id: "claude-sonnet-4-5",
+    name: "Sonnet",
+    contextWindow: 200000,
+  },
+];
 
 vi.mock("../config/sessions.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../config/sessions.js")>();
@@ -61,20 +76,7 @@ vi.mock("../config/config.js", async (importOriginal) => {
 });
 
 vi.mock("../agents/model-catalog.js", () => ({
-  loadModelCatalog: async () => [
-    {
-      provider: "anthropic",
-      id: "claude-opus-4-5",
-      name: "Opus",
-      contextWindow: 200000,
-    },
-    {
-      provider: "anthropic",
-      id: "claude-sonnet-4-5",
-      name: "Sonnet",
-      contextWindow: 200000,
-    },
-  ],
+  loadModelCatalog: (...args: unknown[]) => loadModelCatalogMock(...args),
 }));
 
 vi.mock("../agents/auth-profiles.js", () => ({
@@ -171,6 +173,11 @@ function getSessionStatusTool(agentSessionKey = "main", options?: { sandboxed?: 
   return tool;
 }
 
+beforeEach(() => {
+  loadModelCatalogMock.mockReset();
+  loadModelCatalogMock.mockResolvedValue(defaultCatalog);
+});
+
 describe("session_status tool", () => {
   it("returns a status card for the current session", async () => {
     resetSessionStore({
@@ -188,6 +195,52 @@ describe("session_status tool", () => {
     expect(details.statusText).toContain("OpenClaw");
     expect(details.statusText).toContain("🧠 Model:");
     expect(details.statusText).not.toContain("OAuth/token status");
+  });
+
+  it("uses bundled catalog reasoning defaults in the status card", async () => {
+    loadSessionStoreMock.mockReset();
+    updateSessionStoreMock.mockReset();
+    loadSessionStoreMock.mockReturnValue({
+      main: {
+        sessionId: "s1",
+        updatedAt: 10,
+      },
+    });
+    loadModelCatalogMock.mockResolvedValue([
+      ...defaultCatalog,
+      {
+        provider: "openai-codex",
+        id: "gpt-5.4",
+        name: "GPT-5.4",
+        contextWindow: 200000,
+        reasoning: true,
+      },
+    ]);
+
+    const tool = createOpenClawTools({
+      agentSessionKey: "main",
+      config: {
+        session: { mainKey: "main", scope: "per-sender" },
+        agents: {
+          defaults: {
+            model: { primary: "openai-codex/gpt-5.4" },
+            models: {},
+          },
+        },
+        models: {
+          providers: {},
+        },
+      },
+    }).find((candidate) => candidate.name === "session_status");
+    expect(tool).toBeDefined();
+    if (!tool) {
+      throw new Error("missing session_status tool");
+    }
+
+    const result = await tool.execute("call-reasoning", {});
+    const details = result.details as { ok?: boolean; statusText?: string };
+    expect(details.ok).toBe(true);
+    expect(details.statusText).toContain("Reasoning: on");
   });
 
   it("errors for unknown session keys", async () => {

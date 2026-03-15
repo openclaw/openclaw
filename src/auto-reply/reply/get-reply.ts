@@ -335,6 +335,7 @@ export async function getReplyFromConfig(
     blockReplyChunking,
     resolvedBlockStreamingBreak,
     resolveDefaultThinkingLevel: modelState.resolveDefaultThinkingLevel,
+    resolveDefaultReasoningLevel: modelState.resolveDefaultReasoningLevel,
     provider,
     model,
     contextTokens,

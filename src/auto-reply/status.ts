@@ -2,10 +2,12 @@ import fs from "node:fs";
 import { resolveContextTokensForModel } from "../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS, DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { resolveModelAuthMode } from "../agents/model-auth.js";
+import type { ModelCatalogEntry } from "../agents/model-catalog.js";
 import {
   buildModelAliasIndex,
   resolveConfiguredModelRef,
   resolveModelRefFromString,
+  resolveReasoningDefault,
 } from "../agents/model-selection.js";
 import { resolveSandboxRuntimeStatus } from "../agents/sandbox.js";
 import type { SkillCommandSpec } from "../agents/skills.js";
@@ -68,6 +70,7 @@ type QueueStatus = {
 
 type StatusArgs = {
   config?: OpenClawConfig;
+  catalog?: ModelCatalogEntry[];
   agent: AgentConfig;
   agentId?: string;
   sessionEntry?: SessionEntry;
@@ -512,7 +515,17 @@ export function buildStatusMessage(args: StatusArgs): string {
   const verboseLevel =
     args.resolvedVerbose ?? args.sessionEntry?.verboseLevel ?? args.agent?.verboseDefault ?? "off";
   const fastMode = args.resolvedFast ?? args.sessionEntry?.fastMode ?? false;
-  const reasoningLevel = args.resolvedReasoning ?? args.sessionEntry?.reasoningLevel ?? "off";
+  const reasoningLevel =
+    args.resolvedReasoning ??
+    args.sessionEntry?.reasoningLevel ??
+    (args.config
+      ? resolveReasoningDefault({
+          cfg: args.config,
+          provider: selectedProvider,
+          model: selectedModel,
+          catalog: args.catalog,
+        })
+      : "off");
   const elevatedLevel =
     args.resolvedElevated ??
     args.sessionEntry?.elevatedLevel ??

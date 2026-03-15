@@ -55,6 +55,7 @@ export type HandleCommandsParams = {
   blockReplyChunking?: BlockReplyChunking;
   resolvedBlockStreamingBreak?: "text_end" | "message_end";
   resolveDefaultThinkingLevel: () => Promise<ThinkLevel | undefined>;
+  resolveDefaultReasoningLevel: () => Promise<ReasoningLevel>;
   provider: string;
   model: string;
   contextTokens: number;
