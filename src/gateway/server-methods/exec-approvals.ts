@@ -112,6 +112,11 @@ function resolveNodeIdOrRespond(nodeId: string, respond: RespondFn): string | nu
   return id;
 }
 
+/**
+ * Requires a CLI client with either:
+ * (a) authenticated device identity, or
+ * (b) loopback IP with shared auth (token/password).
+ */
 function isTrustGrantCallerAllowed(client: GatewayClient | null): boolean {
   if (!isGatewayCliClient(client?.connect?.client)) {
     return false;
@@ -317,6 +322,9 @@ export const execApprovalsHandlers: GatewayRequestHandlers = {
       respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, result.error));
       return;
     }
+    context.logGateway.info(
+      `Trust window granted for agent=${result.agentId} duration=${trustParams.minutes}m`,
+    );
     respond(true, { ok: true, agentId: result.agentId, expiresAt: result.expiresAt }, undefined);
   },
   "exec.approvals.untrust": ({ params, respond, client, context }) => {
@@ -343,6 +351,7 @@ export const execApprovalsHandlers: GatewayRequestHandlers = {
       respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, result.error));
       return;
     }
+    context.logGateway.info(`Trust window revoked for agent=${result.agentId}`);
     if (untrustParams.keepAudit !== true) {
       cleanupTrustAudit(result.agentId);
     }

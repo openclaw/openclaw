@@ -4,7 +4,7 @@ import path from "node:path";
 import { DEFAULT_AGENT_ID } from "../routing/session-key.js";
 import { expandHomePrefix } from "./home-dir.js";
 import { requestJsonlSocket } from "./jsonl-socket.js";
-import { summarizeTrustAudit } from "./trust-audit.js";
+import { cleanupTrustAudit, summarizeTrustAudit } from "./trust-audit.js";
 export * from "./exec-approvals-analysis.js";
 export * from "./exec-approvals-allowlist.js";
 
@@ -167,8 +167,8 @@ const DEFAULT_SOCKET = "~/.openclaw/exec-approvals.sock";
 const DEFAULT_FILE = "~/.openclaw/exec-approvals.json";
 const TRUST_AGENT_ID_RE = /^[a-z0-9][a-z0-9_-]{0,63}$/i;
 
-export const DEFAULT_MAX_TRUST_MINUTES = 60;
-export const ABSOLUTE_MAX_TRUST_MINUTES = 480;
+export const DEFAULT_MAX_TRUST_MINUTES = 60; // 1h — conservative default
+export const ABSOLUTE_MAX_TRUST_MINUTES = 480; // 8h — absolute max with --force
 
 const trustWindowCache = new Map<string, TrustWindow>();
 
@@ -473,6 +473,11 @@ export function grantTrustWindow(params: {
   }
 
   const expiresAt = now + params.minutes * 60_000;
+  try {
+    cleanupTrustAudit(validated.agentId);
+  } catch {
+    // best-effort: stale audit from prior expired window
+  }
   trustWindowCache.set(validated.agentId, {
     status: "active",
     expiresAt,

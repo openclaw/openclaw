@@ -265,6 +265,13 @@ describe("trust window", () => {
     }
   });
 
+  it("rejects zero, negative, and non-integer minutes", () => {
+    initTrustWindowCache();
+    expect(grantTrustWindow({ agentId: "main", minutes: 0 }).ok).toBe(false);
+    expect(grantTrustWindow({ agentId: "main", minutes: -5 }).ok).toBe(false);
+    expect(grantTrustWindow({ agentId: "main", minutes: 1.5 }).ok).toBe(false);
+  });
+
   it("enforces default and absolute trust duration caps", () => {
     initTrustWindowCache();
     const aboveDefault = grantTrustWindow({
@@ -329,6 +336,12 @@ describe("trust window", () => {
     const revoked = revokeTrustWindow({ agentId: "main" });
     expect(revoked.ok).toBe(true);
     expect(getTrustWindow("main")).toBeUndefined();
+  });
+
+  it("revokeTrustWindow rejects invalid agentId", () => {
+    initTrustWindowCache();
+    const result = revokeTrustWindow({ agentId: "!bad" });
+    expect(result.ok).toBe(false);
   });
 
   it("does not revoke expired trust windows", () => {

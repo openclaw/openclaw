@@ -53,6 +53,11 @@ describe("trust audit", () => {
     expect(long.endsWith("…")).toBe(true);
   });
 
+  it("returns null for empty or whitespace-only commands", () => {
+    expect(appendTrustAuditEntry({ agentId: "main", command: "" })).toBeNull();
+    expect(appendTrustAuditEntry({ agentId: "main", command: "   " })).toBeNull();
+  });
+
   it("summarizes entries within provided window", () => {
     appendTrustAuditEntry({ agentId: "main", command: "cmd-1", exitCode: 0, now: 1_000 });
     appendTrustAuditEntry({ agentId: "main", command: "cmd-2", exitCode: 2, now: 2_000 });
@@ -73,6 +78,12 @@ describe("trust audit", () => {
   it("returns null when no audit entries exist in window", () => {
     const summary = summarizeTrustAudit({ agentId: "main" });
     expect(summary).toBeNull();
+  });
+
+  it("formats duration in hours for long trust windows", () => {
+    appendTrustAuditEntry({ agentId: "main", command: "cmd", exitCode: 0, now: 0 });
+    const summary = summarizeTrustAudit({ agentId: "main", startedAt: 0, endedAt: 90 * 60_000 });
+    expect(summary).toContain("1h 30m");
   });
 
   it("shows all commands when 10 or fewer entries", () => {
@@ -105,6 +116,26 @@ describe("trust audit", () => {
     cleanupTrustAudit("main");
     expect(fs.existsSync(filePath)).toBe(false);
     expect(path.dirname(filePath)).toContain(path.resolve(homeDir));
+  });
+
+  it("cleanupTrustAudit is a no-op when file does not exist", () => {
+    expect(() => cleanupTrustAudit("nonexistent-agent")).not.toThrow();
+  });
+
+  it("skips malformed JSONL lines during load", () => {
+    const auditPath = resolveTrustAuditPath("main");
+    fs.mkdirSync(path.dirname(auditPath), { recursive: true });
+    fs.writeFileSync(
+      auditPath,
+      [
+        JSON.stringify({ ts: 1000, cmd: "echo ok", code: 0, durationMs: null }),
+        "not-valid-json{{",
+        JSON.stringify({ ts: 2000, cmd: "echo ok2", code: 0, durationMs: null }),
+      ].join("\n"),
+    );
+    const { entries, exists } = loadTrustAudit({ agentId: "main" });
+    expect(exists).toBe(true);
+    expect(entries).toHaveLength(2);
   });
 
   it("tryAppendTrustAuditEntry does not throw when audit write fails", () => {

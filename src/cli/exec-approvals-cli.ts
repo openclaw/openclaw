@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import type { Command } from "commander";
 import JSON5 from "json5";
 import {
+  ABSOLUTE_MAX_TRUST_MINUTES,
   readExecApprovalsSnapshot,
   saveExecApprovals,
   type ExecApprovalsAgent,
@@ -499,7 +500,7 @@ export function registerExecApprovalsCli(program: Command) {
   const trustCmd = approvals
     .command("trust")
     .description("Temporarily allow all commands without approval prompts")
-    .requiredOption("--minutes <n>", "Duration in minutes (1-480)")
+    .requiredOption("--minutes <n>", `Duration in minutes (1-${ABSOLUTE_MAX_TRUST_MINUTES})`)
     .option("--agent <id>", "Agent id (defaults to main)")
     .option("--yes", "Skip confirmation prompt", false)
     .option("--force", "Allow durations above 60 minutes", false)
@@ -514,17 +515,17 @@ export function registerExecApprovalsCli(program: Command) {
 
         const minutesRaw = String(opts.minutes ?? "").trim();
         if (!/^\d+$/.test(minutesRaw)) {
-          exitWithError("minutes must be an integer between 1 and 480.");
+          exitWithError(`minutes must be an integer between 1 and ${ABSOLUTE_MAX_TRUST_MINUTES}.`);
         }
         const minutes = Number(minutesRaw);
-        if (!Number.isInteger(minutes) || minutes < 1 || minutes > 480) {
-          exitWithError("minutes must be an integer between 1 and 480.");
+        if (!Number.isInteger(minutes) || minutes < 1 || minutes > ABSOLUTE_MAX_TRUST_MINUTES) {
+          exitWithError(`minutes must be an integer between 1 and ${ABSOLUTE_MAX_TRUST_MINUTES}.`);
         }
         const agentId = opts.agent?.trim() || "main";
 
         if (!opts.yes) {
           const confirmed = await promptYesNo(
-            `Allow unrestricted exec for agent "${agentId}" for ${minutes} minutes?`,
+            `Disable all command approval prompts for agent "${agentId}" for ${minutes} minutes?`,
             false,
           );
           if (!confirmed) {
@@ -618,6 +619,7 @@ export function registerExecApprovalsCli(program: Command) {
     .option("--agent <id>", "Agent id (defaults to main)")
     .action(async (opts: TrustStatusOpts) => {
       try {
+        requireNonAgentSession("status queries");
         const agentId = opts.agent?.trim() || "main";
         const result = (await callGatewayFromCli("exec.approvals.trust.status", opts, {
           agentId,
@@ -640,6 +642,7 @@ export function registerExecApprovalsCli(program: Command) {
           defaultRuntime.log(`Trust status: inactive (agent "${result.agentId}")`);
           return;
         }
+        // Server may omit remainingMs; derive from expiresAt as fallback
         const remainingMs =
           typeof result.trustWindow.remainingMs === "number"
             ? result.trustWindow.remainingMs

@@ -56,11 +56,14 @@ export function appendTrustAuditEntry(params: {
 
   const filePath = resolveTrustAuditPath(params.agentId);
   ensureDir(filePath);
+  const existed = fs.existsSync(filePath);
   fs.appendFileSync(filePath, `${JSON.stringify(entry)}\n`, { mode: 0o600 });
-  try {
-    fs.chmodSync(filePath, 0o600);
-  } catch {
-    // Best-effort on platforms without chmod support.
+  if (!existed) {
+    try {
+      fs.chmodSync(filePath, 0o600);
+    } catch {
+      // best-effort on platforms without chmod
+    }
   }
   return entry;
 }

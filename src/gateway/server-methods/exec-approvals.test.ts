@@ -63,6 +63,7 @@ async function invokeHandler(params: {
     context: {
       logGateway: {
         warn: warnSpy,
+        info: vi.fn(),
       },
     } as unknown as GatewayRequestContext,
   });
@@ -122,6 +123,23 @@ describe("exec approvals trust handler", () => {
     expect(
       (statusResponse.payload as { trustWindow?: { grantedBy?: string } }).trustWindow?.grantedBy,
     ).toBe("cli:cli:conn-cli");
+  });
+
+  it("returns INVALID_REQUEST when trust window already active", async () => {
+    const cliClient = createClient({ id: "cli", mode: "cli", connId: "c1", deviceId: "d1" });
+    await invokeHandler({
+      method: "exec.approvals.trust",
+      payload: { agentId: "main", minutes: 5, force: false },
+      client: cliClient,
+    });
+    const dup = await invokeHandler({
+      method: "exec.approvals.trust",
+      payload: { agentId: "main", minutes: 5, force: false },
+      client: cliClient,
+    });
+    expect(dup.ok).toBe(false);
+    expect(dup.error?.code).toBe(ErrorCodes.INVALID_REQUEST);
+    expect(dup.error?.message).toContain("already active");
   });
 
   it("rejects trust grants from cli-mode callers without device identity", async () => {
@@ -307,6 +325,26 @@ describe("exec approvals trust handler", () => {
     expect(tw.ask).toBe("off");
     expect(tw.remainingMs).toBeGreaterThan(0);
     expect(tw.expiresAt).toBeGreaterThan(Date.now());
+  });
+
+  it("returns trustWindow: null for an expired window", async () => {
+    const cliClient = createClient({ id: "cli", mode: "cli", connId: "c2", deviceId: "d2" });
+    await invokeHandler({
+      method: "exec.approvals.trust",
+      payload: { agentId: "main", minutes: 5, force: false },
+      client: cliClient,
+    });
+    const tw = getTrustWindow("main");
+    if (tw) {
+      tw.expiresAt = Date.now() - 1000;
+    }
+    const status = await invokeHandler({
+      method: "exec.approvals.trust.status",
+      payload: { agentId: "main" },
+      client: cliClient,
+    });
+    expect(status.ok).toBe(true);
+    expect((status.payload as { trustWindow: unknown }).trustWindow).toBeNull();
   });
 
   it("cleans up audit file when untrust is called without keepAudit", async () => {

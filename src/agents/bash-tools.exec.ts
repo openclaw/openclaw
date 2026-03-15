@@ -567,7 +567,11 @@ export function createExecTool(
             if (yieldTimer) {
               clearTimeout(yieldTimer);
             }
-            if (host === "gateway" && trustWindowActiveAtStart) {
+            if (
+              host === "gateway" &&
+              trustWindowActiveAtStart &&
+              isTrustWindowActive(getTrustWindow(agentId))
+            ) {
               tryAppendTrustAuditEntry({
                 agentId,
                 command: params.command,
@@ -600,7 +604,11 @@ export function createExecTool(
             });
           })
           .catch((err) => {
-            if (host === "gateway" && trustWindowActiveAtStart) {
+            if (
+              host === "gateway" &&
+              trustWindowActiveAtStart &&
+              isTrustWindowActive(getTrustWindow(agentId))
+            ) {
               tryAppendTrustAuditEntry({
                 agentId,
                 command: params.command,

@@ -365,7 +365,7 @@ export async function executeNodeHostCommand(
       buildInvokeParams(false, null),
     );
   } catch (error) {
-    if (trustWindowActiveAtStart) {
+    if (trustWindowActiveAtStart && isTrustWindowActive(getTrustWindow(runAgentId))) {
       tryAppendTrustAuditEntry({
         agentId: runAgentId,
         command: params.command,
@@ -385,7 +385,7 @@ export async function executeNodeHostCommand(
   const errorText = typeof payloadObj.error === "string" ? payloadObj.error : "";
   const success = typeof payloadObj.success === "boolean" ? payloadObj.success : false;
   const exitCode = typeof payloadObj.exitCode === "number" ? payloadObj.exitCode : null;
-  if (trustWindowActiveAtStart) {
+  if (trustWindowActiveAtStart && isTrustWindowActive(getTrustWindow(runAgentId))) {
     tryAppendTrustAuditEntry({
       agentId: runAgentId,
       command: params.command,

@@ -182,10 +182,10 @@ export function resolveExecHostApprovalContext(params: {
   const trustWindowActive = approvals.trustWindowActive;
   // Trust window bypasses host-level security/ask caps.
   const hostSecurity = trustWindowActive
-    ? "full"
+    ? approvals.agent.security
     : minSecurity(params.security, approvals.agent.security);
   const hostAsk = trustWindowActive
-    ? "off"
+    ? approvals.agent.ask
     : approvals.agent.ask === "off"
       ? "off"
       : maxAsk(params.ask, approvals.agent.ask);

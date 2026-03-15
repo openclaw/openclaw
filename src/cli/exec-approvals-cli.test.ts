@@ -234,6 +234,21 @@ describe("exec approvals CLI", () => {
     expect(runtimeErrors).toHaveLength(0);
   });
 
+  it("passes force: true to gateway when --force flag provided", async () => {
+    Object.defineProperty(process.stdin, "isTTY", { value: true, configurable: true });
+    callGatewayFromCli.mockResolvedValueOnce({
+      ok: true,
+      agentId: "main",
+      expiresAt: Date.now() + 120 * 60_000,
+    });
+    await runApprovalsCommand(["approvals", "trust", "--minutes", "90", "--force", "--yes"]);
+    expect(callGatewayFromCli).toHaveBeenCalledWith(
+      "exec.approvals.trust",
+      expect.anything(),
+      expect.objectContaining({ minutes: 90, force: true }),
+    );
+  });
+
   it.each(["10foo", "1.5", "0x20"])(
     "rejects malformed trust minutes value: %s",
     async (minutes) => {
@@ -263,6 +278,16 @@ describe("exec approvals CLI", () => {
       expect.objectContaining({ agentId: "main", keepAudit: false }),
     );
     expect(runtimeErrors).toHaveLength(0);
+  });
+
+  it("passes keepAudit: true when --keep-audit flag provided", async () => {
+    callGatewayFromCli.mockResolvedValueOnce({ ok: true, agentId: "main", summary: null });
+    await runApprovalsCommand(["approvals", "untrust", "--keep-audit", "--yes"]);
+    expect(callGatewayFromCli).toHaveBeenCalledWith(
+      "exec.approvals.untrust",
+      expect.anything(),
+      expect.objectContaining({ keepAudit: true }),
+    );
   });
 
   it("routes trust-status command to gateway RPC", async () => {
