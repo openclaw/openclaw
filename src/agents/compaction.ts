@@ -5,6 +5,7 @@ import type { AgentCompactionIdentifierPolicy } from "../config/types.agent-defa
 import { retryAsync } from "../infra/retry.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { DEFAULT_CONTEXT_TOKENS } from "./defaults.js";
+import { dropThinkingBlocks } from "./pi-embedded-runner/thinking.js";
 import { repairToolUseResultPairing, stripToolResultDetails } from "./session-transcript-repair.js";
 
 const log = createSubsystemLogger("compaction");
@@ -224,7 +225,9 @@ async function summarizeChunks(params: {
   }
 
   // SECURITY: never feed toolResult.details into summarization prompts.
-  const safeMessages = stripToolResultDetails(params.messages);
+  // Strip thinking/redacted_thinking blocks before summarization — Anthropic rejects
+  // modified thinking blocks, and they carry no semantic value for the summarizer.
+  const safeMessages = dropThinkingBlocks(stripToolResultDetails(params.messages));
   const chunks = chunkMessagesByMaxTokens(safeMessages, params.maxChunkTokens);
   let summary = params.previousSummary;
   const effectiveInstructions = buildCompactionSummarizationInstructions(
