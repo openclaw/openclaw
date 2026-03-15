@@ -70,10 +70,13 @@ export async function sweepSessionArchiveFiles(params: {
     // name. This mirrors the rotation logic in rotateSessionFile().
     const bakByBase = new Map<string, string[]>();
     for (const entry of entries) {
-      // Use parseSessionArchiveTimestamp to validate the file is a genuine
-      // .bak.* archive — plain indexOf(".bak.") could false-match session
-      // IDs that contain ".bak." (e.g. "foo.bak.bar.jsonl.deleted.<ts>").
-      if (parseSessionArchiveTimestamp(entry, "bak") == null) {
+      // Match genuine .bak.* archives: either ISO-timestamped (from archive
+      // operations) or numeric (from rotateSessionFile's Date.now() suffix).
+      // Plain indexOf(".bak.") would false-match session IDs that contain
+      // ".bak." as a substring (e.g. "foo.bak.bar.jsonl.deleted.<ts>").
+      const isIsoBak = parseSessionArchiveTimestamp(entry, "bak") != null;
+      const isNumericBak = /\.bak\.\d+$/.test(entry);
+      if (!isIsoBak && !isNumericBak) {
         continue;
       }
       const bakIdx = entry.lastIndexOf(".bak.");

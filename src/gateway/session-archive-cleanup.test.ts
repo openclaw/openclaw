@@ -122,6 +122,20 @@ describe("sweepSessionArchiveFiles", () => {
     ]);
   });
 
+  it("trims legacy numeric .bak files from rotateSessionFile", async () => {
+    // rotateSessionFile() creates backups as sessions.json.bak.${Date.now()}.
+    const baseTs = Date.now();
+    for (let i = 0; i < 5; i++) {
+      fs.writeFileSync(path.join(sessionsDir, `sessions.json.bak.${baseTs + i * 1000}`), "");
+    }
+
+    const result = await sweepSessionArchiveFiles({ stateDir: tempDir });
+
+    const remaining = fs.readdirSync(sessionsDir).filter((f) => f.startsWith("sessions.json.bak."));
+    expect(remaining).toHaveLength(3);
+    expect(result.removed).toBe(2);
+  });
+
   it("returns zeros when no agent session directories exist", async () => {
     mocks.resolveAgentSessionDirs.mockResolvedValue([]);
     const result = await sweepSessionArchiveFiles({ stateDir: tempDir });
