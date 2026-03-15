@@ -18,7 +18,11 @@ import {
 import { createOllamaEmbeddingProvider, type OllamaEmbeddingClient } from "./embeddings-ollama.js";
 import { createOpenAiEmbeddingProvider, type OpenAiEmbeddingClient } from "./embeddings-openai.js";
 import { createVoyageEmbeddingProvider, type VoyageEmbeddingClient } from "./embeddings-voyage.js";
-import { importNodeLlamaCpp } from "./node-llama.js";
+import {
+  importNodeLlamaCpp,
+  isNodeLlamaMissingError,
+  resolveNodeLlamaCppInstallTarget,
+} from "./node-llama.js";
 
 export type { GeminiEmbeddingClient } from "./embeddings-gemini.js";
 export type { MistralEmbeddingClient } from "./embeddings-mistral.js";
@@ -129,8 +133,12 @@ async function createLocalEmbeddingProvider(
           llama = await getLlama({ logLevel: LlamaLogLevel.error });
         }
         if (!embeddingModel) {
+          const activeLlama = llama;
+          if (!activeLlama) {
+            throw new Error("Failed to initialize local embedding runtime");
+          }
           const resolved = await resolveModelFile(modelPath, modelCacheDir || undefined);
-          embeddingModel = await llama.loadModel({ modelPath: resolved });
+          embeddingModel = await activeLlama.loadModel({ modelPath: resolved });
         }
         if (!embeddingContext) {
           embeddingContext = await embeddingModel.createEmbeddingContext();
@@ -287,20 +295,9 @@ export async function createEmbeddingProvider(
   }
 }
 
-function isNodeLlamaCppMissing(err: unknown): boolean {
-  if (!(err instanceof Error)) {
-    return false;
-  }
-  const code = (err as Error & { code?: unknown }).code;
-  if (code === "ERR_MODULE_NOT_FOUND") {
-    return err.message.includes("node-llama-cpp");
-  }
-  return false;
-}
-
 function formatLocalSetupError(err: unknown): string {
   const detail = formatErrorMessage(err);
-  const missing = isNodeLlamaCppMissing(err);
+  const missing = isNodeLlamaMissingError(err);
   return [
     "Local embeddings unavailable.",
     missing
@@ -312,7 +309,7 @@ function formatLocalSetupError(err: unknown): string {
     "To enable local embeddings:",
     "1) Use Node 24 (recommended for installs/updates; Node 22 LTS, currently 22.16+, remains supported)",
     missing
-      ? "2) Reinstall OpenClaw (this should install node-llama-cpp): npm i -g openclaw@latest"
+      ? `2) Install node-llama-cpp next to OpenClaw (for npm globals: npm i -g ${resolveNodeLlamaCppInstallTarget()})`
       : null,
     "3) If you use pnpm: pnpm approve-builds (select node-llama-cpp), then pnpm rebuild node-llama-cpp",
     ...REMOTE_EMBEDDING_PROVIDER_IDS.map(
