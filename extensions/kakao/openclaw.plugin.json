@@ -1,0 +1,9 @@
+{
+  "id": "kakao",
+  "channels": ["kakao"],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

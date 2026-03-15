@@ -1,0 +1,27 @@
+{
+  "name": "@openclaw/kakao",
+  "version": "2026.3.14",
+  "private": true,
+  "description": "OpenClaw KakaoTalk channel plugin via Kakao i Open Builder",
+  "type": "module",
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ],
+    "channel": {
+      "id": "kakao",
+      "label": "KakaoTalk",
+      "selectionLabel": "KakaoTalk (Kakao i Open Builder)",
+      "docsPath": "/channels/kakao",
+      "docsLabel": "kakao",
+      "blurb": "KakaoTalk messaging via Kakao i Open Builder skill server webhook.",
+      "order": 76,
+      "quickstartAllowFrom": true
+    },
+    "install": {
+      "npmSpec": "@openclaw/kakao",
+      "localPath": "extensions/kakao",
+      "defaultChoice": "npm"
+    }
+  }
+}
