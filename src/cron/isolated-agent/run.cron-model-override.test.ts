@@ -308,11 +308,14 @@ describe("runCronIsolatedAgentTurn — cron model override (#21057)", () => {
       return { error: `model not allowed: ${params.raw}` };
     });
 
-    runWithModelFallbackMock.mockResolvedValueOnce(makeSuccessfulRunResult());
+    // Use rejected mock so the test asserts pre-run persist state (not the
+    // post-run setSessionRuntimeModel path which would mask a broken alias).
+    runWithModelFallbackMock.mockRejectedValueOnce(new Error("LLM provider timeout"));
 
     const result = await runCronIsolatedAgentTurn(makeParams({ job: jobWithAlias }));
 
-    expect(result.status).toBe("ok");
+    expect(result.status).toBe("error");
+    // Model set by pre-run persist, proving alias was resolved before the run:
     expect(cronSession.sessionEntry.model).toBe("claude-sonnet-4-6");
     expect(cronSession.sessionEntry.modelProvider).toBe("anthropic");
   });
