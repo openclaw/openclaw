@@ -152,6 +152,49 @@ Notes:
 - `stdin: $step.stdout` and `stdin: $step.json` pass a prior step’s output.
 - `condition` (or `when`) can gate steps on `$step.approved`.
 
+### Shell commands in workflow files
+
+The `command` field in workflow file steps runs as a **direct OS command** — it is not
+processed by the Lobster pipeline DSL. This means `exec --shell "..."` and other
+pipeline DSL syntax (`|` piping, `approve`, etc.) are only available in inline pipeline
+strings passed via the `pipeline` tool parameter, not in `.lobster` file steps.
+
+Additionally, YAML compact mappings can reject `command` strings that contain a
+colon-space (`":"`) in an unquoted value
+(e.g. `bash -c ‘curl -H Content-Type: application/json http://example.com’`),
+producing errors like `Nested mappings are not allowed in compact mappings`.
+
+**Workaround 1 — external script:** Move complex shell logic into a bash script and
+reference it from the workflow file.
+
+`deploy.sh`:
+
+```bash
+#!/bin/bash
+echo "deploying $1" | tee /tmp/deploy.log
+```
+
+```yaml
+steps:
+  - id: deploy
+    command: bash ./deploy.sh production
+```
+
+**Workaround 2 — JSON format:** Use JSON instead of YAML for the `.lobster` file.
+JSON handles embedded quotes and colons naturally via backslash escaping.
+
+```json
+{
+  "name": "deploy",
+  "steps": [
+    {
+      "id": "deploy",
+      "command": "bash ./deploy.sh production"
+    }
+  ]
+}
+```
+
 ## Install Lobster
 
 Install the Lobster CLI on the **same host** that runs the OpenClaw Gateway (see the [Lobster repo](https://github.com/openclaw/lobster)), and ensure `lobster` is on `PATH`.
