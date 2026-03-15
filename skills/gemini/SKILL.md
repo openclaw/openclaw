@@ -24,13 +24,13 @@ metadata:
 
 # Gemini CLI
 
-Use Gemini in one-shot mode with a positional prompt (avoid interactive mode).
+Use Gemini in one-shot mode with a keyword argument -p (avoid interactive mode).
 
 Quick start
 
-- `gemini "Answer this question..."`
-- `gemini --model <name> "Prompt..."`
-- `gemini --output-format json "Return JSON"`
+- `gemini -p "Answer this question..."`
+- `gemini --model <name> -p "Prompt..."`
+- `gemini --output-format json -p "Return JSON"`
 
 Extensions
 
