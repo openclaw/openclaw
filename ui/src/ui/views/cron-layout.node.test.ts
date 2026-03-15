@@ -18,5 +18,8 @@ describe("cron workspace form styles", () => {
 
     expect(rule).not.toContain("position: sticky");
     expect(rule).not.toContain("overflow-y: auto");
+    expect(rule).toContain("position: static");
+    expect(rule).toContain("max-height: none");
+    expect(rule).toContain("overflow: visible");
   });
 });
