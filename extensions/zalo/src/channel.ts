@@ -177,6 +177,7 @@ export const zaloPlugin: ChannelPlugin<ResolvedZaloAccount, ZaloProbeResult> =
             configured: Boolean(account.token?.trim()),
             extra: {
               tokenSource: account.tokenSource,
+              mode: account.config.webhookUrl ? "webhook" : "polling",
             },
           }),
       },
