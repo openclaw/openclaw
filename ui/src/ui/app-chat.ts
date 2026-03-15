@@ -3,6 +3,16 @@ import { scheduleChatScroll } from "./app-scroll.ts";
 import { setLastActiveSessionKey } from "./app-settings.ts";
 import { resetToolStream } from "./app-tool-stream.ts";
 import type { OpenClawApp } from "./app.ts";
+import {
+  handleChatDraftChange,
+  handleChatInputHistoryKey,
+  navigateChatInputHistory,
+  recordNonTranscriptInputHistory,
+  resetChatInputHistoryNavigation,
+  type ChatInputHistoryKeyInput,
+  type ChatInputHistoryKeyResult,
+  type ChatInputHistoryState,
+} from "./chat/input-history.ts";
 import { executeSlashCommand } from "./chat/slash-command-executor.ts";
 import { parseSlashCommand } from "./chat/slash-commands.ts";
 import { abortChatRun, loadChatHistory, sendChatMessage } from "./controllers/chat.ts";
@@ -14,18 +24,15 @@ import type { ModelCatalogEntry } from "./types.ts";
 import type { ChatAttachment, ChatQueueItem } from "./ui-types.ts";
 import { generateUUID } from "./uuid.ts";
 
-export type ChatHost = {
+export type ChatHost = ChatInputHistoryState & {
   client: GatewayBrowserClient | null;
-  chatMessages: unknown[];
   chatStream: string | null;
   connected: boolean;
-  chatMessage: string;
   chatAttachments: ChatAttachment[];
   chatQueue: ChatQueueItem[];
   chatRunId: string | null;
   chatSending: boolean;
   lastError?: string | null;
-  sessionKey: string;
   basePath: string;
   hello: GatewayHelloOk | null;
   chatAvatarUrl: string | null;
@@ -39,6 +46,13 @@ export type ChatHost = {
 };
 
 export const CHAT_SESSIONS_ACTIVE_MINUTES = 120;
+export {
+  handleChatDraftChange,
+  handleChatInputHistoryKey,
+  navigateChatInputHistory,
+  resetChatInputHistoryNavigation,
+};
+export type { ChatInputHistoryKeyInput, ChatInputHistoryKeyResult };
 
 export function isChatBusy(host: ChatHost) {
   return host.chatSending || Boolean(host.chatRunId);
@@ -79,6 +93,7 @@ export async function handleAbortChat(host: ChatHost) {
     return;
   }
   host.chatMessage = "";
+  resetChatInputHistoryNavigation(host);
   await abortChatRun(host as unknown as OpenClawApp);
 }
 
@@ -134,6 +149,7 @@ async function sendChatMessageNow(
       host as unknown as Parameters<typeof setLastActiveSessionKey>[0],
       host.sessionKey,
     );
+    resetChatInputHistoryNavigation(host);
   }
   if (ok && opts?.restoreDraft && opts.previousDraft?.trim()) {
     host.chatMessage = opts.previousDraft;
@@ -205,6 +221,9 @@ export async function handleSendChat(
   }
 
   if (isChatStopCommand(message)) {
+    if (messageOverride == null) {
+      recordNonTranscriptInputHistory(host, message);
+    }
     await handleAbortChat(host);
     return;
   }
@@ -214,8 +233,10 @@ export async function handleSendChat(
   if (parsed?.command.executeLocal) {
     if (isChatBusy(host) && shouldQueueLocalSlashCommand(parsed.command.name)) {
       if (messageOverride == null) {
+        recordNonTranscriptInputHistory(host, message);
         host.chatMessage = "";
         host.chatAttachments = [];
+        resetChatInputHistoryNavigation(host);
       }
       enqueueChatMessage(host, message, undefined, isChatResetCommand(message), {
         args: parsed.args,
@@ -225,8 +246,10 @@ export async function handleSendChat(
     }
     const prevDraft = messageOverride == null ? previousDraft : undefined;
     if (messageOverride == null) {
+      recordNonTranscriptInputHistory(host, message);
       host.chatMessage = "";
       host.chatAttachments = [];
+      resetChatInputHistoryNavigation(host);
     }
     await dispatchSlashCommand(host, parsed.command.name, parsed.args, {
       previousDraft: prevDraft,
@@ -239,6 +262,7 @@ export async function handleSendChat(
   if (messageOverride == null) {
     host.chatMessage = "";
     host.chatAttachments = [];
+    resetChatInputHistoryNavigation(host);
   }
 
   if (isChatBusy(host)) {

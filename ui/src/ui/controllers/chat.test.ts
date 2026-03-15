@@ -1,4 +1,14 @@
 import { describe, expect, it, vi } from "vitest";
+import { handleSendChat } from "../app-chat.ts";
+import { CHAT_HISTORY_RENDER_LIMIT } from "../chat/history-limits.ts";
+import {
+  handleChatDraftChange,
+  handleChatInputHistoryKey,
+  navigateChatInputHistory,
+  recordNonTranscriptInputHistory,
+  resetChatInputHistoryNavigation,
+  type ChatInputHistoryState,
+} from "../chat/input-history.ts";
 import { GatewayRequestError } from "../gateway.ts";
 import {
   abortChatRun,
@@ -601,6 +611,380 @@ describe("abortChatRun", () => {
   });
 });
 
+function textMessage(role: string, text: string) {
+  return {
+    role,
+    content: [{ type: "text", text }],
+    timestamp: Date.now(),
+  };
+}
+
+function createChatHistoryState(
+  overrides: Partial<ChatInputHistoryState> = {},
+): ChatInputHistoryState {
+  return {
+    chatLoading: false,
+    chatMessage: "",
+    chatMessages: [],
+    chatLocalInputHistoryBySession: {},
+    sessionKey: "main",
+    chatInputHistorySessionKey: null,
+    chatInputHistoryItems: null,
+    chatInputHistoryIndex: -1,
+    chatDraftBeforeHistory: null,
+    ...overrides,
+  };
+}
+
+describe("chat input history navigation", () => {
+  it("builds from user messages in the render window only", () => {
+    const windowMessages = Array.from({ length: CHAT_HISTORY_RENDER_LIMIT }, (_, i) =>
+      textMessage("assistant", `assistant-${i}`),
+    );
+    windowMessages[0] = textMessage("user", "inside-old");
+    windowMessages[CHAT_HISTORY_RENDER_LIMIT - 1] = textMessage("user", "inside-new");
+    const host = createChatHistoryState({
+      chatMessage: "draft",
+      chatMessages: [
+        textMessage("user", "outside-window"),
+        textMessage("assistant", "x"),
+        ...windowMessages,
+      ],
+    });
+
+    expect(navigateChatInputHistory(host, "up")).toBe(true);
+    expect(host.chatMessage).toBe("inside-new");
+
+    expect(navigateChatInputHistory(host, "up")).toBe(true);
+    expect(host.chatMessage).toBe("inside-old");
+
+    expect(navigateChatInputHistory(host, "up")).toBe(false);
+  });
+
+  it("restores draft when navigating down past latest history entry", () => {
+    const host = createChatHistoryState({
+      chatMessage: "in-progress",
+      chatMessages: [
+        textMessage("user", "older"),
+        textMessage("assistant", "a"),
+        textMessage("user", "newer"),
+      ],
+    });
+
+    expect(navigateChatInputHistory(host, "up")).toBe(true);
+    expect(host.chatMessage).toBe("newer");
+    expect(navigateChatInputHistory(host, "up")).toBe(true);
+    expect(host.chatMessage).toBe("older");
+
+    expect(navigateChatInputHistory(host, "down")).toBe(true);
+    expect(host.chatMessage).toBe("newer");
+    expect(navigateChatInputHistory(host, "down")).toBe(true);
+    expect(host.chatMessage).toBe("in-progress");
+    expect(navigateChatInputHistory(host, "down")).toBe(false);
+  });
+
+  it("resets navigation snapshot when draft changes manually", () => {
+    const host = createChatHistoryState({
+      chatMessage: "draft",
+      chatMessages: [textMessage("user", "one"), textMessage("user", "two")],
+    });
+
+    expect(navigateChatInputHistory(host, "up")).toBe(true);
+    expect(host.chatMessage).toBe("two");
+
+    handleChatDraftChange(host, "typed fresh");
+    expect(host.chatInputHistoryItems).toBeNull();
+    expect(host.chatInputHistoryIndex).toBe(-1);
+
+    expect(navigateChatInputHistory(host, "up")).toBe(true);
+    expect(host.chatMessage).toBe("two");
+  });
+
+  it("rebuilds history snapshot after session changes", () => {
+    const host = createChatHistoryState({
+      chatMessage: "draft-main",
+      chatMessages: [textMessage("user", "main-user")],
+    });
+
+    expect(navigateChatInputHistory(host, "up")).toBe(true);
+    expect(host.chatMessage).toBe("main-user");
+
+    host.sessionKey = "other";
+    host.chatMessage = "draft-other";
+    host.chatMessages = [textMessage("user", "other-user")];
+
+    expect(navigateChatInputHistory(host, "up")).toBe(true);
+    expect(host.chatMessage).toBe("other-user");
+  });
+
+  it("includes non-transcript local inputs in session history recall", () => {
+    const now = vi.spyOn(Date, "now").mockReturnValue(2_000);
+    const host = createChatHistoryState({
+      chatMessage: "",
+      chatMessages: [textMessage("user", "older-user-message")],
+    });
+
+    recordNonTranscriptInputHistory(host, "/status");
+
+    expect(navigateChatInputHistory(host, "up")).toBe(true);
+    expect(host.chatMessage).toBe("/status");
+
+    expect(navigateChatInputHistory(host, "up")).toBe(true);
+    expect(host.chatMessage).toBe("older-user-message");
+    now.mockRestore();
+  });
+
+  it("clears internal navigation state on explicit reset", () => {
+    const host = createChatHistoryState({
+      chatInputHistorySessionKey: "main",
+      chatInputHistoryItems: ["x"],
+      chatInputHistoryIndex: 0,
+      chatDraftBeforeHistory: "draft",
+    });
+
+    resetChatInputHistoryNavigation(host);
+    expect(host.chatInputHistorySessionKey).toBeNull();
+    expect(host.chatInputHistoryItems).toBeNull();
+    expect(host.chatInputHistoryIndex).toBe(-1);
+    expect(host.chatDraftBeforeHistory).toBeNull();
+  });
+
+  it("enters history on ArrowUp only when caret is at start in editing mode", () => {
+    const host = createChatHistoryState({
+      chatMessage: "draft",
+      chatMessages: [textMessage("user", "older")],
+    });
+
+    expect(
+      handleChatInputHistoryKey(host, {
+        key: "ArrowUp",
+        selectionStart: 2,
+        selectionEnd: 2,
+        valueLength: 5,
+        altKey: false,
+        ctrlKey: false,
+        metaKey: false,
+        shiftKey: false,
+        isComposing: false,
+        keyCode: 38,
+      }),
+    ).toMatchObject({
+      handled: false,
+      decision: "blocked:arrowup-not-at-start",
+      historyNavigationActiveBefore: false,
+      historyNavigationActiveAfter: false,
+    });
+    expect(host.chatInputHistoryIndex).toBe(-1);
+
+    expect(
+      handleChatInputHistoryKey(host, {
+        key: "ArrowUp",
+        selectionStart: 0,
+        selectionEnd: 0,
+        valueLength: 5,
+        altKey: false,
+        ctrlKey: false,
+        metaKey: false,
+        shiftKey: false,
+        isComposing: false,
+        keyCode: 38,
+      }),
+    ).toMatchObject({
+      handled: true,
+      preventDefault: true,
+      restoreCaret: "up",
+      decision: "handled:enter-history-up",
+      historyNavigationActiveBefore: false,
+      historyNavigationActiveAfter: true,
+    });
+    expect(host.chatInputHistoryIndex).toBe(0);
+    expect(host.chatMessage).toBe("older");
+  });
+
+  it("navigates bidirectionally once history mode is active regardless of caret edge", () => {
+    const host = createChatHistoryState({
+      chatMessage: "draft",
+      chatMessages: [textMessage("user", "oldest"), textMessage("user", "newest")],
+    });
+
+    expect(
+      handleChatInputHistoryKey(host, {
+        key: "ArrowUp",
+        selectionStart: 0,
+        selectionEnd: 0,
+        valueLength: 5,
+        altKey: false,
+        ctrlKey: false,
+        metaKey: false,
+        shiftKey: false,
+        isComposing: false,
+        keyCode: 38,
+      }),
+    ).toMatchObject({
+      handled: true,
+      decision: "handled:enter-history-up",
+      historyNavigationActiveAfter: true,
+    });
+    expect(host.chatMessage).toBe("newest");
+
+    expect(
+      handleChatInputHistoryKey(host, {
+        key: "ArrowUp",
+        selectionStart: 6,
+        selectionEnd: 6,
+        valueLength: 6,
+        altKey: false,
+        ctrlKey: false,
+        metaKey: false,
+        shiftKey: false,
+        isComposing: false,
+        keyCode: 38,
+      }),
+    ).toMatchObject({
+      handled: true,
+      decision: "handled:history-up",
+      historyNavigationActiveBefore: true,
+      historyNavigationActiveAfter: true,
+    });
+    expect(host.chatMessage).toBe("oldest");
+
+    expect(
+      handleChatInputHistoryKey(host, {
+        key: "ArrowDown",
+        selectionStart: 0,
+        selectionEnd: 0,
+        valueLength: 6,
+        altKey: false,
+        ctrlKey: false,
+        metaKey: false,
+        shiftKey: false,
+        isComposing: false,
+        keyCode: 40,
+      }),
+    ).toMatchObject({
+      handled: true,
+      decision: "handled:history-down",
+      restoreCaret: "down",
+      historyNavigationActiveBefore: true,
+      historyNavigationActiveAfter: true,
+    });
+    expect(host.chatMessage).toBe("newest");
+  });
+
+  it("blocks history recall while session history is loading", () => {
+    const host = createChatHistoryState({
+      chatLoading: true,
+      chatMessage: "",
+      chatMessages: [textMessage("user", "old-session-entry")],
+      sessionKey: "next",
+    });
+
+    expect(
+      handleChatInputHistoryKey(host, {
+        key: "ArrowUp",
+        selectionStart: 0,
+        selectionEnd: 0,
+        valueLength: 0,
+        altKey: false,
+        ctrlKey: false,
+        metaKey: false,
+        shiftKey: false,
+        isComposing: false,
+        keyCode: 38,
+      }),
+    ).toMatchObject({
+      handled: false,
+      preventDefault: false,
+      restoreCaret: null,
+      decision: "blocked:history-loading",
+      historyNavigationActiveBefore: false,
+      historyNavigationActiveAfter: false,
+    });
+    expect(host.chatInputHistoryItems).toBeNull();
+    expect(host.chatInputHistoryIndex).toBe(-1);
+    expect(host.chatMessage).toBe("");
+  });
+
+  it("drops stale history mode before handling arrow keys after external draft replacement", () => {
+    const host = createChatHistoryState({
+      chatMessage: "draft",
+      chatMessages: [textMessage("user", "older"), textMessage("user", "newer")],
+    });
+
+    expect(navigateChatInputHistory(host, "up")).toBe(true);
+    expect(host.chatInputHistoryIndex).toBe(0);
+    expect(host.chatMessage).toBe("newer");
+
+    host.chatMessage = "/focus ";
+
+    expect(
+      handleChatInputHistoryKey(host, {
+        key: "ArrowDown",
+        selectionStart: 7,
+        selectionEnd: 7,
+        valueLength: 7,
+        altKey: false,
+        ctrlKey: false,
+        metaKey: false,
+        shiftKey: false,
+        isComposing: false,
+        keyCode: 40,
+      }),
+    ).toMatchObject({
+      handled: false,
+      preventDefault: false,
+      restoreCaret: null,
+      decision: "blocked:arrowdown-editing-mode",
+      historyNavigationActiveBefore: false,
+      historyNavigationActiveAfter: false,
+    });
+    expect(host.chatInputHistoryIndex).toBe(-1);
+    expect(host.chatInputHistoryItems).toBeNull();
+    expect(host.chatDraftBeforeHistory).toBeNull();
+    expect(host.chatMessage).toBe("/focus ");
+  });
+
+  it("records locally handled slash commands for subsequent ArrowUp recall", async () => {
+    const onSlashAction = vi.fn();
+    const now = vi.spyOn(Date, "now").mockReturnValue(3_000);
+    const host = {
+      connected: true,
+      client: null,
+      chatStream: null,
+      chatLoading: false,
+      chatMessage: "/focus",
+      chatMessages: [],
+      chatLocalInputHistoryBySession: {},
+      chatInputHistorySessionKey: null,
+      chatInputHistoryItems: null,
+      chatInputHistoryIndex: -1,
+      chatDraftBeforeHistory: null,
+      chatAttachments: [],
+      chatQueue: [],
+      chatRunId: null,
+      chatSending: false,
+      lastError: null,
+      basePath: "",
+      hello: null,
+      chatAvatarUrl: null,
+      chatModelOverrides: {},
+      chatModelsLoading: false,
+      chatModelCatalog: [],
+      refreshSessionsAfterChat: new Set<string>(),
+      sessionKey: "main",
+      onSlashAction,
+    };
+
+    await handleSendChat(host, undefined, undefined);
+
+    expect(onSlashAction).toHaveBeenCalledWith("toggle-focus");
+    expect(host.chatMessage).toBe("");
+    expect(navigateChatInputHistory(host, "up")).toBe(true);
+    expect(host.chatMessage).toBe("/focus");
+    now.mockRestore();
+  });
+});
+
 describe("loadChatHistory", () => {
   it("filters assistant NO_REPLY messages and keeps user NO_REPLY messages", async () => {
     const request = vi.fn().mockResolvedValue({
@@ -629,5 +1013,67 @@ describe("loadChatHistory", () => {
     expect(state.chatThinkingLevel).toBe("low");
     expect(state.chatLoading).toBe(false);
     expect(state.lastError).toBeNull();
+  });
+
+  it("invalidates cached input-history snapshot after async history replacement", async () => {
+    const request = vi.fn().mockResolvedValue({
+      messages: [{ role: "user", content: [{ type: "text", text: "new-session-entry" }] }],
+    });
+    const state = {
+      ...createState({
+        connected: true,
+        client: { request } as unknown as ChatState["client"],
+        sessionKey: "next",
+        chatMessages: [{ role: "user", content: [{ type: "text", text: "old-session-entry" }] }],
+      }),
+      chatLocalInputHistoryBySession: {},
+      chatInputHistorySessionKey: null,
+      chatInputHistoryItems: null,
+      chatInputHistoryIndex: -1,
+      chatDraftBeforeHistory: null,
+    } as ChatState & ChatInputHistoryState;
+    state.resetChatInputHistoryNavigation = () => resetChatInputHistoryNavigation(state);
+
+    expect(navigateChatInputHistory(state, "up")).toBe(true);
+    expect(state.chatMessage).toBe("old-session-entry");
+    expect(state.chatInputHistoryItems).toEqual(["old-session-entry"]);
+
+    await loadChatHistory(state);
+
+    expect(state.chatInputHistoryItems).toBeNull();
+    expect(state.chatInputHistorySessionKey).toBeNull();
+    state.chatMessage = "";
+    expect(navigateChatInputHistory(state, "up")).toBe(true);
+    expect(state.chatMessage).toBe("new-session-entry");
+  });
+
+  it("invalidates cached input-history snapshot when history reload fails", async () => {
+    const request = vi.fn().mockRejectedValue(new Error("history failed"));
+    const state = {
+      ...createState({
+        connected: true,
+        client: { request } as unknown as ChatState["client"],
+        sessionKey: "next",
+        chatMessages: [{ role: "user", content: [{ type: "text", text: "old-session-entry" }] }],
+      }),
+      chatLocalInputHistoryBySession: {},
+      chatInputHistorySessionKey: null,
+      chatInputHistoryItems: null,
+      chatInputHistoryIndex: -1,
+      chatDraftBeforeHistory: null,
+    } as ChatState & ChatInputHistoryState;
+    state.resetChatInputHistoryNavigation = () => resetChatInputHistoryNavigation(state);
+
+    expect(navigateChatInputHistory(state, "up")).toBe(true);
+    expect(state.chatInputHistoryItems).toEqual(["old-session-entry"]);
+    expect(state.chatInputHistoryIndex).toBe(0);
+
+    await loadChatHistory(state);
+
+    expect(state.chatInputHistoryItems).toBeNull();
+    expect(state.chatInputHistorySessionKey).toBeNull();
+    expect(state.chatInputHistoryIndex).toBe(-1);
+    expect(state.chatDraftBeforeHistory).toBeNull();
+    expect(state.lastError).toContain("history failed");
   });
 });
