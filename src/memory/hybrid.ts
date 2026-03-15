@@ -30,17 +30,31 @@ export type HybridKeywordResult = {
   textScore: number;
 };
 
-export function buildFtsQuery(raw: string): string | null {
-  const tokens =
+function tokenize(raw: string): string[] {
+  return (
     raw
       .match(/[\p{L}\p{N}_]+/gu)
       ?.map((t) => t.trim())
-      .filter(Boolean) ?? [];
+      .filter(Boolean) ?? []
+  );
+}
+
+export function buildFtsQuery(raw: string): string | null {
+  const tokens = tokenize(raw);
   if (tokens.length === 0) {
     return null;
   }
   const quoted = tokens.map((t) => `"${t.replaceAll('"', "")}"`);
   return quoted.join(" AND ");
+}
+
+export function buildFtsOrQuery(raw: string): string | null {
+  const tokens = tokenize(raw);
+  if (tokens.length === 0) {
+    return null;
+  }
+  const quoted = tokens.map((t) => `"${t.replaceAll('"', "")}"`);
+  return quoted.join(" OR ");
 }
 
 export function bm25RankToScore(rank: number): number {
