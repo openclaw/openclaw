@@ -661,8 +661,10 @@ export function buildStatusMessage(args: StatusArgs): string {
     } (${fallbackState.reason ?? "selected model unavailable"})`;
   } else {
     const configuredFallbacks = resolveAgentModelFallbackValues(
-      args.config?.agents?.defaults?.model,
-    );
+      contextConfig?.agents?.defaults?.model,
+    )
+      .map((f) => String(f).trim())
+      .filter(Boolean);
     if (configuredFallbacks.length > 0) {
       fallbackLine = `↪️ Fallbacks: ${configuredFallbacks.join(", ")}`;
     }
