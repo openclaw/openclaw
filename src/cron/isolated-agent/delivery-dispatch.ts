@@ -323,14 +323,17 @@ export async function dispatchCronDelivery(
   // Guard: never deliver raw error output (provider JSON errors, runtime
   // exceptions) to user-facing channels. The error is still logged internally
   // and visible via `cron runs`, but should not be posted to channels.
-  // Check both synthesizedText and deliveryPayloads — the delivery path
-  // prefers deliveryPayloads when non-empty, so error text arriving there
-  // would bypass a synthesizedText-only guard.
+  //
+  // The delivery path prefers deliveryPayloads when non-empty, so we only
+  // suppress based on synthesizedText when there are no valid payloads that
+  // would take priority (e.g., media or structured content).  When payloads
+  // exist, we check whether ALL of them contain error text instead.
   // See: https://github.com/openclaw/openclaw/issues/42243
-  const errorInSynthesized = synthesizedText && isLikelyRawErrorOutput(synthesizedText);
+  const hasActivePayloads = deliveryPayloads.length > 0;
+  const errorInSynthesized =
+    !hasActivePayloads && synthesizedText && isLikelyRawErrorOutput(synthesizedText);
   const errorInPayloads =
-    !errorInSynthesized &&
-    deliveryPayloads.length > 0 &&
+    hasActivePayloads &&
     deliveryPayloads.every((p) => typeof p.text === "string" && isLikelyRawErrorOutput(p.text));
   if (errorInSynthesized || errorInPayloads) {
     const source = errorInSynthesized ? "synthesizedText" : "deliveryPayloads";

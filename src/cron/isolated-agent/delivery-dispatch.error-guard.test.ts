@@ -320,6 +320,22 @@ describe("dispatchCronDelivery — error output guard", () => {
     expect(deliverOutboundPayloads).not.toHaveBeenCalled();
   });
 
+  it("allows delivery when synthesizedText has error but deliveryPayloads has valid content", async () => {
+    const errorJson = JSON.stringify({
+      type: "error",
+      error: { type: "server_error", message: "fail" },
+    });
+    const params = makeBaseParams({ synthesizedText: errorJson });
+    // Override with valid structured payload — delivery path prefers these
+    params.deliveryPayloads = [{ text: "Your weekly report is attached." }];
+    const state = await dispatchCronDelivery(params);
+
+    // Valid payloads take priority; error in synthesizedText should not
+    // suppress delivery of non-error payload content.
+    expect(state.delivered).toBe(true);
+    expect(deliverOutboundPayloads).toHaveBeenCalledTimes(1);
+  });
+
   it("preserves shared-delivery flags when skipMessagingToolDelivery is true", async () => {
     const errorJson = JSON.stringify({
       type: "error",
