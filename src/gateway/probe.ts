@@ -43,7 +43,9 @@ export async function probeGateway(opts: {
 
   const disableDeviceIdentity = (() => {
     try {
-      return isLoopbackHost(new URL(opts.url).hostname);
+      const isLoopback = isLoopbackHost(new URL(opts.url).hostname);
+      const hasSharedAuth = Boolean(opts.auth?.token || opts.auth?.password);
+      return isLoopback && hasSharedAuth;
     } catch {
       return false;
     }

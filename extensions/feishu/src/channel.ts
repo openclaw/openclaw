@@ -139,10 +139,15 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount> = {
   configSchema: buildChannelConfigSchema(FeishuConfigSchema),
   config: {
     listAccountIds: (cfg) => listFeishuAccountIds(cfg),
-    resolveAccount: (cfg, accountId) => resolveFeishuAccount({ cfg, accountId }),
+    resolveAccount: (cfg, accountId) =>
+      resolveFeishuAccount({ cfg, accountId, allowUnresolvedSecretRef: true }),
     defaultAccountId: (cfg) => resolveDefaultFeishuAccountId(cfg),
     setAccountEnabled: ({ cfg, accountId, enabled }) => {
-      const account = resolveFeishuAccount({ cfg, accountId });
+      const account = resolveFeishuAccount({
+        cfg,
+        accountId,
+        allowUnresolvedSecretRef: true,
+      });
       const isDefault = accountId === DEFAULT_ACCOUNT_ID;
 
       if (isDefault) {
@@ -204,7 +209,11 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount> = {
       domain: account.domain,
     }),
     resolveAllowFrom: ({ cfg, accountId }) => {
-      const account = resolveFeishuAccount({ cfg, accountId });
+      const account = resolveFeishuAccount({
+        cfg,
+        accountId,
+        allowUnresolvedSecretRef: true,
+      });
       return mapAllowFromEntries(account.config?.allowFrom);
     },
     formatAllowFrom: ({ allowFrom }) => formatAllowFromLowercase({ allowFrom }),

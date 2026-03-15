@@ -191,6 +191,7 @@ export function resolveFeishuCredentials(
 export function resolveFeishuAccount(params: {
   cfg: ClawdbotConfig;
   accountId?: string | null;
+  allowUnresolvedSecretRef?: boolean;
 }): ResolvedFeishuAccount {
   const hasExplicitAccountId =
     typeof params.accountId === "string" && params.accountId.trim() !== "";
@@ -216,7 +217,9 @@ export function resolveFeishuAccount(params: {
   const enabled = baseEnabled && accountEnabled;
 
   // Resolve credentials from merged config
-  const creds = resolveFeishuCredentials(merged);
+  const creds = resolveFeishuCredentials(merged, {
+    allowUnresolvedSecretRef: params.allowUnresolvedSecretRef,
+  });
   const accountName = (merged as FeishuAccountConfig).name;
 
   return {
