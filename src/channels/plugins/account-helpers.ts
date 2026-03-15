@@ -43,6 +43,54 @@ export function createAccountListHelpers(
     if (ids.length === 0) {
       return [DEFAULT_ACCOUNT_ID];
     }
+    // Check whether any existing named account already normalizes to "default".
+    const normalizedIds = ids.map(normalizeAccountId);
+    if (normalizedIds.includes(DEFAULT_ACCOUNT_ID)) {
+      return ids.toSorted((a, b) => a.localeCompare(b));
+    }
+    // If the base channel config has its own tokens (botToken/appToken/token),
+    // only inject a default account when at least one named account carries its
+    // own per-account auth.  When every named account inherits the base tokens
+    // (i.e. has no per-account botToken/appToken/token override), injecting
+    // default would start a duplicate provider on the same credentials.
+    const channel = cfg.channels?.[channelKey];
+    const base = channel as Record<string, unknown> | undefined;
+    const isTruthy = (v: unknown): boolean =>
+      typeof v === "string" ? v.trim().length > 0 : Boolean(v);
+    // Identify which token fields the base config provides.
+    const baseTokenFields = (["botToken", "appToken", "token"] as const).filter((f) =>
+      isTruthy(base?.[f]),
+    );
+    if (baseTokenFields.length > 0) {
+      const accounts = (base?.accounts ?? {}) as Record<string, Record<string, unknown>>;
+      // Build reverse map from normalized ID → raw config key so we can look
+      // up the account object even when normalizeAccountId transforms the keys.
+      const rawKeys = Object.keys(accounts);
+      const normalizedToRaw = new Map<string, string>();
+      for (const key of rawKeys) {
+        const normalized = normalizeAccountId(key);
+        if (normalized && !normalizedToRaw.has(normalized)) {
+          normalizedToRaw.set(normalized, key);
+        }
+      }
+      const everyAccountHasOwnTokens = ids.every((id) => {
+        const rawKey = normalizedToRaw.get(id) ?? id;
+        const acct = accounts[rawKey];
+        if (!acct) {
+          return false;
+        }
+        // An account is only independent if it overrides *every* base token
+        // field.  Partial overrides still inherit the remaining base tokens.
+        return baseTokenFields.every((f) => isTruthy(acct[f]));
+      });
+      if (everyAccountHasOwnTokens) {
+        // Every named account has distinct credentials, so default won't
+        // collide with any of them — safe to inject.
+        return [DEFAULT_ACCOUNT_ID, ...ids].toSorted((a, b) => a.localeCompare(b));
+      }
+      // At least one named account inherits base tokens — injecting default
+      // would duplicate that account's credentials.
+    }
     return ids.toSorted((a, b) => a.localeCompare(b));
   }
 

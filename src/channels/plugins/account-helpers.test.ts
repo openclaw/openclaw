@@ -81,6 +81,129 @@ describe("createAccountListHelpers", () => {
     it("returns sorted ids", () => {
       expect(listAccountIds(cfg({ z: {}, a: {}, m: {} }))).toEqual(["a", "m", "z"]);
     });
+
+    it("includes default when ALL named accounts have their own tokens", () => {
+      const config = {
+        channels: {
+          testchannel: {
+            botToken: "xoxb-base",
+            appToken: "xapp-base",
+            accounts: { tank: { botToken: "xoxb-tank", appToken: "xapp-tank" } },
+          },
+        },
+      } as unknown as OpenClawConfig;
+      expect(listAccountIds(config)).toEqual(["default", "tank"]);
+    });
+
+    it("includes default when normalized IDs differ from raw config keys", () => {
+      const normalizedHelpers = createAccountListHelpers("testchannel", {
+        normalizeAccountId: (id: string) => id.toLowerCase().replace(/\s+/g, "-"),
+      });
+      const config = {
+        channels: {
+          testchannel: {
+            botToken: "xoxb-base",
+            accounts: {
+              "Router D": { botToken: "xoxb-router-d" },
+            },
+          },
+        },
+      } as unknown as OpenClawConfig;
+      // "Router D" normalizes to "router-d" — should still detect own token
+      expect(normalizedHelpers.listAccountIds(config)).toEqual(["default", "router-d"]);
+    });
+
+    it("does NOT inject default in mixed configs (some accounts inherit base tokens)", () => {
+      const config = {
+        channels: {
+          testchannel: {
+            botToken: "xoxb-base",
+            accounts: { teamA: { botToken: "xoxb-own" }, teamB: {} },
+          },
+        },
+      } as unknown as OpenClawConfig;
+      // teamB inherits base tokens — injecting default would duplicate teamB
+      expect(listAccountIds(config)).toEqual(["teamA", "teamB"]);
+    });
+
+    it("does NOT inject default when account partially overrides (only appToken)", () => {
+      const config = {
+        channels: {
+          testchannel: {
+            botToken: "xoxb-base",
+            appToken: "xapp-base",
+            accounts: { teamA: { appToken: "xapp-own" } },
+          },
+        },
+      } as unknown as OpenClawConfig;
+      // teamA overrides appToken but inherits botToken — still same bot identity
+      expect(listAccountIds(config)).toEqual(["teamA"]);
+    });
+
+    it("does NOT inject default when base token is whitespace-only", () => {
+      const config = {
+        channels: {
+          testchannel: {
+            botToken: "   ",
+            accounts: { teamA: {} },
+          },
+        },
+      } as unknown as OpenClawConfig;
+      expect(listAccountIds(config)).toEqual(["teamA"]);
+    });
+
+    it("does NOT inject default when named accounts inherit base tokens (avoids duplicates)", () => {
+      const config = {
+        channels: {
+          testchannel: {
+            botToken: "xoxb-base",
+            appToken: "xapp-base",
+            accounts: { tank: {} },
+          },
+        },
+      } as unknown as OpenClawConfig;
+      expect(listAccountIds(config)).toEqual(["tank"]);
+    });
+
+    it("does NOT inject default when Discord named accounts inherit base token", () => {
+      const config = {
+        channels: {
+          testchannel: {
+            token: "discord-bot-token",
+            accounts: { teamA: {} },
+          },
+        },
+      } as unknown as OpenClawConfig;
+      expect(listAccountIds(config)).toEqual(["teamA"]);
+    });
+
+    it("does not duplicate default when already in accounts (case-insensitive)", () => {
+      const config = {
+        channels: {
+          testchannel: {
+            botToken: "xoxb-base",
+            accounts: { Default: {}, tank: {} },
+          },
+        },
+      } as unknown as OpenClawConfig;
+      expect(listAccountIds(config)).toEqual(["Default", "tank"]);
+    });
+
+    it("does not duplicate default when already in accounts", () => {
+      const config = {
+        channels: {
+          testchannel: {
+            botToken: "xoxb-base",
+            accounts: { default: {}, tank: {} },
+          },
+        },
+      } as unknown as OpenClawConfig;
+      expect(listAccountIds(config)).toEqual(["default", "tank"]);
+    });
+
+    it("does not include default when base has no tokens", () => {
+      expect(listAccountIds(cfg({ tank: {} }))).toEqual(["tank"]);
+    });
   });
 
   describe("resolveDefaultAccountId", () => {
