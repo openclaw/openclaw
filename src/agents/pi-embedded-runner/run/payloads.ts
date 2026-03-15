@@ -9,6 +9,9 @@ import {
   formatAssistantErrorText,
   formatRawAssistantErrorForUi,
   getApiErrorPayloadFingerprint,
+  isBillingErrorMessage,
+  isOverloadedErrorMessage,
+  isRateLimitErrorMessage,
   isRawApiErrorPayload,
   normalizeTextForComparison,
 } from "../../pi-embedded-helpers.js";
@@ -157,7 +160,20 @@ export function buildEmbeddedRunPayloads(params: {
   const normalizedErrorText = errorText ? normalizeTextForComparison(errorText) : null;
   const normalizedGenericBillingErrorText = normalizeTextForComparison(BILLING_ERROR_USER_MESSAGE);
   const genericErrorText = "The AI service returned an error. Please try again.";
-  if (errorText) {
+  // Suppress transient API errors (rate limit, overload) when configured.
+  // Billing errors are never suppressed even if they match rate-limit patterns
+  // (e.g. "exceeded your current quota") because they require user action.
+  // Some providers leave errorMessage empty and embed the raw API payload in
+  // the assistant text instead — fall back to that so suppression still fires.
+  const rawMsgForSuppress =
+    params.lastAssistant?.errorMessage?.trim() ||
+    (lastAssistantErrored ? params.assistantTexts.join("\n").trim() : "");
+  const isTransientApiError =
+    !isBillingErrorMessage(rawMsgForSuppress) &&
+    (isRateLimitErrorMessage(rawMsgForSuppress) || isOverloadedErrorMessage(rawMsgForSuppress));
+  const suppressApiError =
+    Boolean(params.config?.messages?.suppressApiErrors) && isTransientApiError;
+  if (errorText && !suppressApiError) {
     replyItems.push({ text: errorText, isError: true });
   }
 
@@ -202,6 +218,12 @@ export function buildEmbeddedRunPayloads(params: {
   const shouldSuppressRawErrorText = (text: string) => {
     if (!lastAssistantErrored) {
       return false;
+    }
+    // When suppressApiErrors is active and errorMessage is absent, the transient
+    // error was identified from assistantTexts — suppress all of those texts so
+    // plain-text errors (e.g. "Rate limit reached") are also filtered out.
+    if (suppressApiError && !params.lastAssistant?.errorMessage?.trim()) {
+      return true;
     }
     const trimmed = text.trim();
     if (!trimmed) {
@@ -286,7 +308,12 @@ export function buildEmbeddedRunPayloads(params: {
     const warningPolicy = resolveToolErrorWarningPolicy({
       lastToolError: params.lastToolError,
       hasUserFacingReply: hasUserFacingAssistantReply,
-      suppressToolErrors: Boolean(params.config?.messages?.suppressToolErrors),
+      // suppressApiErrors also silences tool-error warnings — both are noise
+      // for non-technical users in group chats. Mutating tool errors are still
+      // shown regardless (see resolveToolErrorWarningPolicy).
+      suppressToolErrors:
+        Boolean(params.config?.messages?.suppressToolErrors) ||
+        Boolean(params.config?.messages?.suppressApiErrors),
       suppressToolErrorWarnings: params.suppressToolErrorWarnings,
       verboseLevel: params.verboseLevel,
     });

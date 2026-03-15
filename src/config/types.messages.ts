@@ -120,6 +120,14 @@ export type MessagesConfig = {
   statusReactions?: StatusReactionsConfig;
   /** When true, suppress ⚠️ tool-error warnings from being shown to the user. Default: false. */
   suppressToolErrors?: boolean;
+  /**
+   * When true, suppress transient API error messages (rate limit, overload) and
+   * non-mutating tool-error warnings from being sent to the chat surface.
+   * Useful in group chats where these messages cause confusion among non-technical users.
+   * Billing, auth, and mutating tool errors are always shown regardless.
+   * Errors are still logged internally. Default: false.
+   */
+  suppressApiErrors?: boolean;
   /** Text-to-speech settings for outbound replies. */
   tts?: TtsConfig;
 };
