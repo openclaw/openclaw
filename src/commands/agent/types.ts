@@ -27,6 +27,7 @@ export type AgentRunContext = {
   groupSpace?: string | null;
   currentChannelId?: string;
   currentThreadTs?: string;
+  currentMessageId?: string | number;
   replyToMode?: "off" | "first" | "all";
   hasRepliedRef?: { value: boolean };
 };

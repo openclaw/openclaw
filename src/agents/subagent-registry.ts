@@ -551,6 +551,7 @@ function startSubagentAnnounceCleanupFlow(runId: string, entry: SubagentRunRecor
     childRunId: entry.runId,
     requesterSessionKey: entry.requesterSessionKey,
     requesterOrigin,
+    requesterMessageId: entry.requesterMessageId,
     requesterDisplayKey: entry.requesterDisplayKey,
     task: entry.task,
     timeoutMs: SUBAGENT_ANNOUNCE_TIMEOUT_MS,
@@ -1162,6 +1163,7 @@ export function registerSubagentRun(params: {
   controllerSessionKey?: string;
   requesterSessionKey: string;
   requesterOrigin?: DeliveryContext;
+  requesterMessageId?: string;
   requesterDisplayKey: string;
   task: string;
   cleanup: "delete" | "keep";
@@ -1190,6 +1192,10 @@ export function registerSubagentRun(params: {
     controllerSessionKey: params.controllerSessionKey ?? params.requesterSessionKey,
     requesterSessionKey: params.requesterSessionKey,
     requesterOrigin,
+    requesterMessageId:
+      typeof params.requesterMessageId === "string" && params.requesterMessageId.trim()
+        ? params.requesterMessageId.trim()
+        : undefined,
     requesterDisplayKey: params.requesterDisplayKey,
     task: params.task,
     cleanup: params.cleanup,
@@ -1220,64 +1226,126 @@ export function registerSubagentRun(params: {
 
 async function waitForSubagentCompletion(runId: string, waitTimeoutMs: number) {
   try {
-    const timeoutMs = Math.max(1, Math.floor(waitTimeoutMs));
-    const wait = await callGateway<{
-      status?: string;
-      startedAt?: number;
-      endedAt?: number;
-      error?: string;
-    }>({
-      method: "agent.wait",
-      params: {
+    const startedAt = Date.now();
+    const hardTimeoutMs = Math.max(1, Math.floor(waitTimeoutMs));
+    // Very large timeout values represent "effectively no hard deadline" (e.g., runTimeoutSeconds=0
+    // mapped through timer-safe max values). Keep polling in that mode instead of forcing timeout.
+    const hasHardTimeout = hardTimeoutMs < 2_147_000_000;
+    const deadlineAt = hasHardTimeout ? startedAt + hardTimeoutMs : Number.POSITIVE_INFINITY;
+    const pollTimeoutMs = 60_000;
+    const progressEveryMs = 15 * 60_000;
+    const stalledWarnAtMs = 20 * 60_000;
+    let nextProgressAt = startedAt + progressEveryMs;
+    let stalledWarned = false;
+
+    while (true) {
+      const now = Date.now();
+      const remainingMs = deadlineAt - now;
+      if (remainingMs <= 0) {
+        const entry = subagentRuns.get(runId);
+        if (!entry) {
+          return;
+        }
+        const endedAt = Date.now();
+        entry.endedAt = endedAt;
+        entry.outcome = { status: "timeout" };
+        persistSubagentRuns();
+        await completeSubagentRun({
+          runId,
+          endedAt,
+          outcome: { status: "timeout" },
+          reason: SUBAGENT_ENDED_REASON_COMPLETE,
+          sendFarewell: true,
+          accountId: entry.requesterOrigin?.accountId,
+          triggerCleanup: true,
+        });
+        return;
+      }
+
+      const timeoutMs = Math.max(1, Math.min(pollTimeoutMs, remainingMs));
+      const wait = await callGateway<{
+        status?: string;
+        startedAt?: number;
+        endedAt?: number;
+        error?: string;
+      }>({
+        method: "agent.wait",
+        params: {
+          runId,
+          timeoutMs,
+        },
+        timeoutMs: timeoutMs + 10_000,
+      });
+
+      if (wait?.status === "timeout") {
+        if (!subagentRuns.has(runId)) {
+          return;
+        }
+        const elapsedMs = Date.now() - startedAt;
+        if (elapsedMs >= nextProgressAt - startedAt) {
+          defaultRuntime.log(
+            `[info] Subagent wait progress run=${runId} elapsed=${Math.round(elapsedMs / 1000)}s`,
+          );
+          nextProgressAt += progressEveryMs;
+        }
+        if (!stalledWarned && elapsedMs >= stalledWarnAtMs) {
+          stalledWarned = true;
+          defaultRuntime.log(
+            `[warn] Subagent wait appears stalled run=${runId} elapsed=${Math.round(elapsedMs / 1000)}s`,
+          );
+        }
+        continue;
+      }
+
+      if (wait?.status !== "ok" && wait?.status !== "error") {
+        defaultRuntime.log(
+          `[warn] Unexpected agent.wait status run=${runId} status=${wait?.status}`,
+        );
+        if (!subagentRuns.has(runId)) {
+          return;
+        }
+        await new Promise((resolve) => setTimeout(resolve, 5_000));
+        continue;
+      }
+      const entry = subagentRuns.get(runId);
+      if (!entry) {
+        return;
+      }
+      let mutated = false;
+      if (typeof wait.startedAt === "number") {
+        entry.startedAt = wait.startedAt;
+        mutated = true;
+      }
+      if (typeof wait.endedAt === "number") {
+        entry.endedAt = wait.endedAt;
+        mutated = true;
+      }
+      if (!entry.endedAt) {
+        entry.endedAt = Date.now();
+        mutated = true;
+      }
+      const waitError = typeof wait.error === "string" ? wait.error : undefined;
+      const outcome: SubagentRunOutcome =
+        wait.status === "error" ? { status: "error", error: waitError } : { status: "ok" };
+      if (!runOutcomesEqual(entry.outcome, outcome)) {
+        entry.outcome = outcome;
+        mutated = true;
+      }
+      if (mutated) {
+        persistSubagentRuns();
+      }
+      await completeSubagentRun({
         runId,
-        timeoutMs,
-      },
-      timeoutMs: timeoutMs + 10_000,
-    });
-    if (wait?.status !== "ok" && wait?.status !== "error" && wait?.status !== "timeout") {
+        endedAt: entry.endedAt,
+        outcome,
+        reason:
+          wait.status === "error" ? SUBAGENT_ENDED_REASON_ERROR : SUBAGENT_ENDED_REASON_COMPLETE,
+        sendFarewell: true,
+        accountId: entry.requesterOrigin?.accountId,
+        triggerCleanup: true,
+      });
       return;
     }
-    const entry = subagentRuns.get(runId);
-    if (!entry) {
-      return;
-    }
-    let mutated = false;
-    if (typeof wait.startedAt === "number") {
-      entry.startedAt = wait.startedAt;
-      mutated = true;
-    }
-    if (typeof wait.endedAt === "number") {
-      entry.endedAt = wait.endedAt;
-      mutated = true;
-    }
-    if (!entry.endedAt) {
-      entry.endedAt = Date.now();
-      mutated = true;
-    }
-    const waitError = typeof wait.error === "string" ? wait.error : undefined;
-    const outcome: SubagentRunOutcome =
-      wait.status === "error"
-        ? { status: "error", error: waitError }
-        : wait.status === "timeout"
-          ? { status: "timeout" }
-          : { status: "ok" };
-    if (!runOutcomesEqual(entry.outcome, outcome)) {
-      entry.outcome = outcome;
-      mutated = true;
-    }
-    if (mutated) {
-      persistSubagentRuns();
-    }
-    await completeSubagentRun({
-      runId,
-      endedAt: entry.endedAt,
-      outcome,
-      reason:
-        wait.status === "error" ? SUBAGENT_ENDED_REASON_ERROR : SUBAGENT_ENDED_REASON_COMPLETE,
-      sendFarewell: true,
-      accountId: entry.requesterOrigin?.accountId,
-      triggerCleanup: true,
-    });
   } catch {
     // ignore
   }

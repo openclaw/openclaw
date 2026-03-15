@@ -28,6 +28,7 @@ export type AnnounceQueueItem = {
   internalEvents?: AgentInternalEvent[];
   enqueuedAt: number;
   sessionKey: string;
+  requesterMessageId?: string;
   origin?: DeliveryContext;
   originKey?: string;
   sourceSessionKey?: string;
@@ -157,9 +158,19 @@ function scheduleAnnounceDrain(key: string) {
           if (!last) {
             break;
           }
+          const requesterMessageIds = items.map((item) => item.requesterMessageId?.trim());
+          const hasUnboundItem = requesterMessageIds.some((value) => !value);
+          const nonEmptyRequesterMessageIds = new Set(
+            requesterMessageIds.filter((value): value is string => Boolean(value)),
+          );
+          const aggregateRequesterMessageId =
+            !hasUnboundItem && nonEmptyRequesterMessageIds.size === 1
+              ? nonEmptyRequesterMessageIds.values().next().value
+              : undefined;
           await queue.send({
             ...last,
             prompt,
+            requesterMessageId: aggregateRequesterMessageId,
             internalEvents: internalEvents.length > 0 ? internalEvents : last.internalEvents,
           });
           queue.items.splice(0, items.length);

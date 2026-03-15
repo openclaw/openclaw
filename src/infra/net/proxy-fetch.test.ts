@@ -51,12 +51,7 @@ vi.mock("undici", () => ({
   fetch: undiciFetch,
 }));
 
-import {
-  getProxyUrlFromFetch,
-  makeProxyFetch,
-  PROXY_FETCH_PROXY_URL,
-  resolveProxyFetchFromEnv,
-} from "./proxy-fetch.js";
+import { getProxyUrlFromFetch, makeProxyFetch, resolveProxyFetchFromEnv } from "./proxy-fetch.js";
 
 function clearProxyEnv(): void {
   for (const key of PROXY_ENV_KEYS) {
@@ -115,14 +110,10 @@ describe("getProxyUrlFromFetch", () => {
   });
 
   it("returns undefined for plain fetch functions or blank metadata", () => {
+    const proxyUrlMetadataKey = Symbol.for("openclaw.proxyFetch.proxyUrl");
     const plainFetch = vi.fn() as unknown as typeof fetch;
-    const blankMetadataFetch = vi.fn() as unknown as typeof fetch;
-    Object.defineProperty(blankMetadataFetch, PROXY_FETCH_PROXY_URL, {
-      value: "   ",
-      enumerable: false,
-      configurable: true,
-      writable: true,
-    });
+    const blankMetadataFetch = vi.fn() as unknown as typeof fetch & Record<symbol, string>;
+    blankMetadataFetch[proxyUrlMetadataKey] = "   ";
 
     expect(getProxyUrlFromFetch(plainFetch)).toBeUndefined();
     expect(getProxyUrlFromFetch(blankMetadataFetch)).toBeUndefined();

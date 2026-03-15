@@ -9,6 +9,7 @@ export type SubagentRunRecord = {
   controllerSessionKey?: string;
   requesterSessionKey: string;
   requesterOrigin?: DeliveryContext;
+  requesterMessageId?: string;
   requesterDisplayKey: string;
   task: string;
   cleanup: "delete" | "keep";

@@ -617,6 +617,7 @@ async function sendAnnounce(item: AnnounceQueueItem) {
       threadId: requesterIsSubagent ? undefined : threadId,
       deliver: !requesterIsSubagent,
       internalEvents: item.internalEvents,
+      currentMessageId: item.requesterMessageId,
       inputProvenance: {
         kind: "inter_session",
         sourceSessionKey: item.sourceSessionKey,
@@ -663,10 +664,11 @@ function loadRequesterSessionEntry(requesterSessionKey: string) {
 
 function buildAnnounceQueueKey(sessionKey: string, origin?: DeliveryContext): string {
   const accountId = normalizeAccountId(origin?.accountId);
-  if (!accountId) {
-    return sessionKey;
+  const parts = [sessionKey];
+  if (accountId) {
+    parts.push(`acct:${accountId}`);
   }
-  return `${sessionKey}:acct:${accountId}`;
+  return parts.join(":");
 }
 
 async function maybeQueueSubagentAnnounce(params: {
@@ -676,6 +678,7 @@ async function maybeQueueSubagentAnnounce(params: {
   steerMessage: string;
   summaryLine?: string;
   requesterOrigin?: DeliveryContext;
+  requesterMessageId?: string;
   sourceSessionKey?: string;
   sourceChannel?: string;
   sourceTool?: string;
@@ -723,6 +726,7 @@ async function maybeQueueSubagentAnnounce(params: {
         internalEvents: params.internalEvents,
         enqueuedAt: Date.now(),
         sessionKey: canonicalKey,
+        requesterMessageId: params.requesterMessageId,
         origin,
         sourceSessionKey: params.sourceSessionKey,
         sourceChannel: params.sourceChannel,
@@ -744,6 +748,7 @@ async function sendSubagentAnnounceDirectly(params: {
   expectsCompletionMessage: boolean;
   bestEffortDeliver?: boolean;
   directIdempotencyKey: string;
+  requesterMessageId?: string;
   completionDirectOrigin?: DeliveryContext;
   directOrigin?: DeliveryContext;
   sourceSessionKey?: string;
@@ -810,6 +815,7 @@ async function sendSubagentAnnounceDirectly(params: {
             deliver: shouldDeliverExternally,
             bestEffortDeliver: params.bestEffortDeliver,
             internalEvents: params.internalEvents,
+            currentMessageId: params.requesterMessageId,
             channel: shouldDeliverExternally ? directChannel : undefined,
             accountId: shouldDeliverExternally ? effectiveDirectOrigin?.accountId : undefined,
             to: shouldDeliverExternally ? directTo : undefined,
@@ -848,6 +854,7 @@ async function deliverSubagentAnnouncement(params: {
   internalEvents?: AgentInternalEvent[];
   summaryLine?: string;
   requesterOrigin?: DeliveryContext;
+  requesterMessageId?: string;
   completionDirectOrigin?: DeliveryContext;
   directOrigin?: DeliveryContext;
   sourceSessionKey?: string;
@@ -871,6 +878,7 @@ async function deliverSubagentAnnouncement(params: {
         steerMessage: params.steerMessage,
         summaryLine: params.summaryLine,
         requesterOrigin: params.requesterOrigin,
+        requesterMessageId: params.requesterMessageId,
         sourceSessionKey: params.sourceSessionKey,
         sourceChannel: params.sourceChannel,
         sourceTool: params.sourceTool,
@@ -883,6 +891,7 @@ async function deliverSubagentAnnouncement(params: {
         triggerMessage: params.triggerMessage,
         internalEvents: params.internalEvents,
         directIdempotencyKey: params.directIdempotencyKey,
+        requesterMessageId: params.requesterMessageId,
         completionDirectOrigin: params.completionDirectOrigin,
         directOrigin: params.directOrigin,
         sourceSessionKey: params.sourceSessionKey,
@@ -1149,6 +1158,7 @@ export async function runSubagentAnnounceFlow(params: {
   childRunId: string;
   requesterSessionKey: string;
   requesterOrigin?: DeliveryContext;
+  requesterMessageId?: string;
   requesterDisplayKey: string;
   task: string;
   timeoutMs: number;
@@ -1442,6 +1452,7 @@ export async function runSubagentAnnounceFlow(params: {
         expectsCompletionMessage && !requesterIsSubagent
           ? completionDirectOrigin
           : targetRequesterOrigin,
+      requesterMessageId: announceType === "cron job" ? undefined : params.requesterMessageId,
       completionDirectOrigin,
       directOrigin,
       sourceSessionKey: params.childSessionKey,

@@ -87,6 +87,7 @@ export const AgentParamsSchema = Type.Object(
     accountId: Type.Optional(Type.String()),
     replyAccountId: Type.Optional(Type.String()),
     threadId: Type.Optional(Type.String()),
+    currentMessageId: Type.Optional(Type.String()),
     groupId: Type.Optional(Type.String()),
     groupChannel: Type.Optional(Type.String()),
     groupSpace: Type.Optional(Type.String()),

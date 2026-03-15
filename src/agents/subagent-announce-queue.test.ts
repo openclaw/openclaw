@@ -118,6 +118,41 @@ describe("subagent-announce-queue", () => {
     expect(sender.prompts[1]).toContain("queued item two");
   });
 
+  it("clears reply binding for collect batches with mixed requester message ids", async () => {
+    const sentItems: Array<{ requesterMessageId?: string; prompt: string }> = [];
+    const send = vi.fn(async (item: { requesterMessageId?: string; prompt: string }) => {
+      sentItems.push(item);
+    });
+
+    enqueueAnnounce({
+      key: "announce:test:collect-mixed-message-id",
+      item: {
+        prompt: "queued item one",
+        enqueuedAt: Date.now(),
+        sessionKey: "agent:main:telegram:dm:u1",
+        requesterMessageId: "msg-1",
+      },
+      settings: { mode: "collect", debounceMs: 0 },
+      send,
+    });
+    enqueueAnnounce({
+      key: "announce:test:collect-mixed-message-id",
+      item: {
+        prompt: "queued item two",
+        enqueuedAt: Date.now(),
+        sessionKey: "agent:main:telegram:dm:u1",
+        requesterMessageId: "msg-2",
+      },
+      settings: { mode: "collect", debounceMs: 0 },
+      send,
+    });
+
+    await vi.waitFor(() => expect(send).toHaveBeenCalledTimes(1));
+    expect(sentItems[0]?.requesterMessageId).toBeUndefined();
+    expect(sentItems[0]?.prompt).toContain("Queued #1");
+    expect(sentItems[0]?.prompt).toContain("Queued #2");
+  });
+
   it("uses debounce floor for retries when debounce exceeds backoff", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-01-01T00:00:00.000Z"));

@@ -71,6 +71,7 @@ export type SpawnSubagentContext = {
   agentAccountId?: string;
   agentTo?: string;
   agentThreadId?: string | number;
+  currentMessageId?: string | number;
   agentGroupId?: string | null;
   agentGroupChannel?: string | null;
   agentGroupSpace?: string | null;
@@ -700,6 +701,10 @@ export async function spawnSubagentDirect(
       requesterSessionKey: requesterInternalKey,
       requesterOrigin,
       requesterDisplayKey,
+      requesterMessageId:
+        ctx.currentMessageId != null && ctx.currentMessageId !== ""
+          ? String(ctx.currentMessageId)
+          : undefined,
       task,
       cleanup,
       label: label || undefined,

@@ -67,6 +67,50 @@ export type TelegramCustomCommand = {
   description: string;
 };
 
+export type TelegramReplyAdaptiveLearningConfig = {
+  /** Enable EMA-based adaptive window learning. Default: false. */
+  enabled?: boolean;
+  /** EMA alpha for inter-message gap updates (0..1). Default: 0.25. */
+  alphaGap?: number;
+  /** EMA alpha for short-message ratio updates (0..1). Default: 0.2. */
+  alphaShort?: number;
+  /** Additional base-window multiplier weight from short-message ratio. Default: 0.8. */
+  shortMessageWeight?: number;
+  /** Minimum learned base window (ms). Default: 6000. */
+  baseMinMs?: number;
+  /** Maximum learned base window (ms). Default: 30000. */
+  baseMaxMs?: number;
+  /** Multiplier for dense window over learned base. Default: 2.0. */
+  denseMultiplier?: number;
+  /** Multiplier for very-dense window over learned base. Default: 2.5. */
+  veryDenseMultiplier?: number;
+};
+
+export type TelegramReplyAdaptiveConfig = {
+  /** Master switch for adaptive burst reply logic. Default: true. */
+  enabled?: boolean;
+  /** Fixed base window in ms when learning is disabled. Default: 10000. */
+  baseWindowMs?: number;
+  /** Fixed dense window in ms when learning is disabled. Default: 20000. */
+  denseWindowMs?: number;
+  /** Fixed very-dense window in ms when learning is disabled. Default: 25000. */
+  veryDenseWindowMs?: number;
+  /** Short-message count threshold for dense window. Default: 2. */
+  denseShortMinCount?: number;
+  /** Short-message count threshold for very-dense window. Default: 4. */
+  veryDenseShortMinCount?: number;
+  /** Short-message max chars threshold. Default: 48. */
+  shortMessageMaxChars?: number;
+  /** Scope used to build burst keys by chat type. */
+  scope?: {
+    private?: "sender" | "chat";
+    group?: "sender" | "chat";
+    supergroup?: "sender" | "chat";
+  };
+  /** EMA learning configuration. */
+  learning?: TelegramReplyAdaptiveLearningConfig;
+};
+
 export type TelegramAccountConfig = {
   /** Optional display name for this account (used in CLI/UI lists). */
   name?: string;
@@ -97,6 +141,8 @@ export type TelegramAccountConfig = {
   tokenFile?: string;
   /** Control reply threading when reply tags are present (off|first|all). */
   replyToMode?: ReplyToMode;
+  /** Adaptive burst reply-threading behavior and optional EMA learning. */
+  replyAdaptive?: TelegramReplyAdaptiveConfig;
   groups?: Record<string, TelegramGroupConfig>;
   /** Per-DM configuration for Telegram DM topics (key is chat ID). */
   direct?: Record<string, TelegramDirectConfig>;

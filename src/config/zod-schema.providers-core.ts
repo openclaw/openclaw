@@ -117,6 +117,40 @@ const TelegramCustomCommandSchema = z
   })
   .strict();
 
+const TelegramReplyAdaptiveLearningSchema = z
+  .object({
+    enabled: z.boolean().optional(),
+    alphaGap: z.number().min(0).max(1).optional(),
+    alphaShort: z.number().min(0).max(1).optional(),
+    shortMessageWeight: z.number().min(0).optional(),
+    baseMinMs: z.number().int().positive().optional(),
+    baseMaxMs: z.number().int().positive().optional(),
+    denseMultiplier: z.number().positive().optional(),
+    veryDenseMultiplier: z.number().positive().optional(),
+  })
+  .strict();
+
+const TelegramReplyAdaptiveSchema = z
+  .object({
+    enabled: z.boolean().optional(),
+    baseWindowMs: z.number().int().positive().optional(),
+    denseWindowMs: z.number().int().positive().optional(),
+    veryDenseWindowMs: z.number().int().positive().optional(),
+    denseShortMinCount: z.number().int().nonnegative().optional(),
+    veryDenseShortMinCount: z.number().int().nonnegative().optional(),
+    shortMessageMaxChars: z.number().int().nonnegative().optional(),
+    scope: z
+      .object({
+        private: z.enum(["sender", "chat"]).optional(),
+        group: z.enum(["sender", "chat"]).optional(),
+        supergroup: z.enum(["sender", "chat"]).optional(),
+      })
+      .strict()
+      .optional(),
+    learning: TelegramReplyAdaptiveLearningSchema.optional(),
+  })
+  .strict();
+
 const validateTelegramCustomCommands = (
   value: { customCommands?: Array<{ command?: string; description?: string }> },
   ctx: z.RefinementCtx,
@@ -181,6 +215,7 @@ export const TelegramAccountSchemaBase = z
     botToken: SecretInputSchema.optional().register(sensitive),
     tokenFile: z.string().optional(),
     replyToMode: ReplyToModeSchema.optional(),
+    replyAdaptive: TelegramReplyAdaptiveSchema.optional(),
     groups: z.record(z.string(), TelegramGroupSchema.optional()).optional(),
     allowFrom: z.array(z.union([z.string(), z.number()])).optional(),
     defaultTo: z.union([z.string(), z.number()]).optional(),
