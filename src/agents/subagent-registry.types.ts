@@ -55,4 +55,6 @@ export type SubagentRunRecord = {
   attachmentsDir?: string;
   attachmentsRootDir?: string;
   retainAttachmentsOnKeep?: boolean;
+  /** Maximum character limit for announce message delivery (truncates with marker if exceeded). */
+  maxAnnounceChars?: number;
 };

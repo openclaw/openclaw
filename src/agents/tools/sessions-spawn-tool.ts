@@ -63,6 +63,13 @@ const SessionsSpawnToolSchema = Type.Object({
       mountPath: Type.Optional(Type.String()),
     }),
   ),
+  maxAnnounceChars: Type.Optional(
+    Type.Number({
+      minimum: 1,
+      description:
+        "Maximum character limit for the sub-agent completion announce message. If exceeded, the message is truncated with a marker.",
+    }),
+  ),
 });
 
 export function createSessionsSpawnTool(
@@ -81,7 +88,7 @@ export function createSessionsSpawnTool(
     label: "Sessions",
     name: "sessions_spawn",
     description:
-      'Spawn an isolated session (runtime="subagent" or runtime="acp"). mode="run" is one-shot and mode="session" is persistent/thread-bound. Subagents inherit the parent workspace directory automatically.',
+      'Spawn an isolated session (runtime="subagent" or runtime="acp"). mode="run" is one-shot and mode="session" is persistent/thread-bound. Subagents inherit the parent workspace directory automatically. Use maxAnnounceChars to limit completion message length for platforms with character limits (e.g., Telegram 4096 chars).',
     parameters: SessionsSpawnToolSchema,
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;
@@ -118,6 +125,10 @@ export function createSessionsSpawnTool(
           ? Math.max(0, Math.floor(timeoutSecondsCandidate))
           : undefined;
       const thread = params.thread === true;
+      const maxAnnounceCharsCandidate =
+        typeof params.maxAnnounceChars === "number" && Number.isFinite(params.maxAnnounceChars)
+          ? Math.max(1, Math.floor(params.maxAnnounceChars))
+          : undefined;
       const attachments = Array.isArray(params.attachments)
         ? (params.attachments as Array<{
             name: string;
@@ -186,6 +197,7 @@ export function createSessionsSpawnTool(
           cleanup,
           sandbox,
           expectsCompletionMessage: true,
+          maxAnnounceChars: maxAnnounceCharsCandidate,
           attachments,
           attachMountPath:
             params.attachAs && typeof params.attachAs === "object"

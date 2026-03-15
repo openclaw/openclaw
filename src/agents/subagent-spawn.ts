@@ -56,6 +56,7 @@ export type SpawnSubagentParams = {
   cleanup?: "delete" | "keep";
   sandbox?: SpawnSubagentSandboxMode;
   expectsCompletionMessage?: boolean;
+  maxAnnounceChars?: number;
   attachments?: Array<{
     name: string;
     content: string;
@@ -708,6 +709,7 @@ export async function spawnSubagentDirect(
       runTimeoutSeconds,
       expectsCompletionMessage,
       spawnMode,
+      maxAnnounceChars: params.maxAnnounceChars,
       attachmentsDir: attachmentAbsDir,
       attachmentsRootDir: attachmentRootDir,
       retainAttachmentsOnKeep: retainOnSessionKeep,
