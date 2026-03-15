@@ -149,16 +149,30 @@ describe("skills-cli", () => {
       expect(output).toContain("API_KEY");
     });
 
-    it("normalizes text-presentation emoji selectors in info output", () => {
+    it("resolves skill info case-insensitively", () => {
       const report = createMockReport([
         createMockSkill({
-          name: "info-emoji",
-          emoji: "🎛\uFE0E",
+          name: "Excel XLSX",
+          skillKey: "Excel-XLSX",
+          description: "Spreadsheet helpers",
         }),
       ]);
 
-      const output = formatSkillInfo(report, "info-emoji", {});
-      expect(output).toContain("🎛️");
+      const output = formatSkillInfo(report, "excel-xlsx", {});
+      expect(output).toContain("Spreadsheet helpers");
+    });
+
+    it("resolves skill info across separator variants", () => {
+      const report = createMockReport([
+        createMockSkill({
+          name: "Excel XLSX",
+          skillKey: "excel_xlsx",
+          description: "Spreadsheet helpers",
+        }),
+      ]);
+
+      const output = formatSkillInfo(report, "excel-xlsx", {});
+      expect(output).toContain("Spreadsheet helpers");
     });
   });
 

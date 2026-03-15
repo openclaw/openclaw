@@ -94,6 +94,52 @@ function formatSkillMissingSummary(skill: SkillStatusEntry): string {
   return missing.join("; ");
 }
 
+function normalizeSkillLookupToken(value: string): string {
+  return value
+    .trim()
+    .toLowerCase()
+    .replace(/[\s_/]+/g, "-")
+    .replace(/[^a-z0-9-]+/g, "")
+    .replace(/-+/g, "-")
+    .replace(/^-+|-+$/g, "");
+}
+
+function resolveSkillByName(
+  report: SkillStatusReport,
+  requestedName: string,
+): SkillStatusEntry | null {
+  const raw = requestedName.trim();
+  if (!raw) {
+    return null;
+  }
+
+  const direct = report.skills.find((s) => s.name === raw || s.skillKey === raw);
+  if (direct) {
+    return direct;
+  }
+
+  const lower = raw.toLowerCase();
+  const caseInsensitive = report.skills.find(
+    (s) => s.name.toLowerCase() === lower || s.skillKey.toLowerCase() === lower,
+  );
+  if (caseInsensitive) {
+    return caseInsensitive;
+  }
+
+  const normalized = normalizeSkillLookupToken(raw);
+  if (!normalized) {
+    return null;
+  }
+
+  return (
+    report.skills.find(
+      (s) =>
+        normalizeSkillLookupToken(s.name) === normalized ||
+        normalizeSkillLookupToken(s.skillKey) === normalized,
+    ) ?? null
+  );
+}
+
 export function formatSkillsList(report: SkillStatusReport, opts: SkillsListOptions): string {
   const skills = opts.eligible ? report.skills.filter((s) => s.eligible) : report.skills;
 
@@ -168,14 +214,15 @@ export function formatSkillInfo(
   skillName: string,
   opts: SkillInfoOptions,
 ): string {
-  const skill = report.skills.find((s) => s.name === skillName || s.skillKey === skillName);
+  const requestedName = skillName.trim();
+  const skill = resolveSkillByName(report, requestedName);
 
   if (!skill) {
     if (opts.json) {
-      return JSON.stringify({ error: "not found", skill: skillName }, null, 2);
+      return JSON.stringify({ error: "not found", skill: requestedName }, null, 2);
     }
     return appendClawHubHint(
-      `Skill "${skillName}" not found. Run \`${formatCliCommand("openclaw skills list")}\` to see available skills.`,
+      `Skill "${requestedName}" not found. Run \`${formatCliCommand("openclaw skills list")}\` to see available skills.`,
       opts.json,
     );
   }
