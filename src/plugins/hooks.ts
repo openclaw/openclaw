@@ -219,7 +219,9 @@ function namespaceMessageMeta(
   if (!result?.messageMeta || Object.keys(result.messageMeta).length === 0) {
     return;
   }
-  result.messageMeta = { [pluginId]: result.messageMeta };
+  // Shallow-copy the original meta before wrapping so we never mutate the
+  // plugin's returned object (which may be a reused module-level constant).
+  result.messageMeta = { [pluginId]: { ...result.messageMeta } };
 }
 
 /**
