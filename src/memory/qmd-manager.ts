@@ -166,6 +166,7 @@ export class QmdMemoryManager implements MemorySearchManager {
   private readonly sessionExporter: SessionExporterConfig | null;
   private updateTimer: NodeJS.Timeout | null = null;
   private pendingUpdate: Promise<void> | null = null;
+  private pendingUpdateStartedAt: number | null = null;
   private queuedForcedUpdate: Promise<void> | null = null;
   private queuedForcedRuns = 0;
   private closed = false;
@@ -967,6 +968,7 @@ export class QmdMemoryManager implements MemorySearchManager {
       this.updateTimer = null;
     }
     this.queuedForcedRuns = 0;
+    this.pendingUpdateStartedAt = null;
     await this.pendingUpdate?.catch(() => undefined);
     await this.queuedForcedUpdate?.catch(() => undefined);
     if (this.db) {
@@ -984,10 +986,18 @@ export class QmdMemoryManager implements MemorySearchManager {
       return;
     }
     if (this.pendingUpdate) {
-      if (force) {
-        return this.enqueueForcedUpdate(reason);
+      if (this.isPendingUpdateStale()) {
+        log.warn(
+          `qmd pending update stale (started ${Date.now() - (this.pendingUpdateStartedAt ?? 0)}ms ago); abandoning`,
+        );
+        this.pendingUpdate = null;
+        this.pendingUpdateStartedAt = null;
+      } else {
+        if (force) {
+          return this.enqueueForcedUpdate(reason);
+        }
+        return this.pendingUpdate;
       }
-      return this.pendingUpdate;
     }
     if (this.queuedForcedUpdate && !opts?.fromForcedQueue) {
       if (force) {
@@ -1021,8 +1031,10 @@ export class QmdMemoryManager implements MemorySearchManager {
       this.lastUpdateAt = Date.now();
       this.docPathCache.clear();
     };
+    this.pendingUpdateStartedAt = Date.now();
     this.pendingUpdate = run().finally(() => {
       this.pendingUpdate = null;
+      this.pendingUpdateStartedAt = null;
     });
     await this.pendingUpdate;
   }
@@ -1891,6 +1903,14 @@ export class QmdMemoryManager implements MemorySearchManager {
       return false;
     }
     return Date.now() - this.lastUpdateAt < debounceMs;
+  }
+
+  private isPendingUpdateStale(): boolean {
+    if (!this.pendingUpdateStartedAt) {
+      return false;
+    }
+    const maxDurationMs = (this.qmd.update.updateTimeoutMs + this.qmd.update.embedTimeoutMs) * 2;
+    return Date.now() - this.pendingUpdateStartedAt > maxDurationMs;
   }
 
   private isSqliteBusyError(err: unknown): boolean {
