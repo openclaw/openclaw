@@ -9,7 +9,8 @@ describe("buildInboundMediaNote", () => {
       MediaType: "image/png",
       MediaUrl: "/tmp/a.png",
     });
-    expect(note).toBe("[media attached: /tmp/a.png (image/png) | /tmp/a.png]");
+    // Local path url identical to path should not be duplicated (issue #42791)
+    expect(note).toBe("[media attached: /tmp/a.png (image/png)]");
   });
 
   it("formats multiple MediaPaths as numbered media notes", () => {
@@ -17,12 +18,13 @@ describe("buildInboundMediaNote", () => {
       MediaPaths: ["/tmp/a.png", "/tmp/b.png", "/tmp/c.png"],
       MediaUrls: ["/tmp/a.png", "/tmp/b.png", "/tmp/c.png"],
     });
+    // Local path urls identical to paths should not be duplicated (issue #42791)
     expect(note).toBe(
       [
         "[media attached: 3 files]",
-        "[media attached 1/3: /tmp/a.png | /tmp/a.png]",
-        "[media attached 2/3: /tmp/b.png | /tmp/b.png]",
-        "[media attached 3/3: /tmp/c.png | /tmp/c.png]",
+        "[media attached 1/3: /tmp/a.png]",
+        "[media attached 2/3: /tmp/b.png]",
+        "[media attached 3/3: /tmp/c.png]",
       ].join("\n"),
     );
   });
@@ -175,5 +177,28 @@ describe("buildInboundMediaNote", () => {
     });
     // No transcription = keep audio attachment as fallback
     expect(note).toBe("[media attached: /tmp/voice.ogg (audio/ogg)]");
+  });
+
+  it("does not duplicate local path as url (issue #42791)", () => {
+    const note = buildInboundMediaNote({
+      MediaPath: "/Users/zooey/.openclaw/media/inbound/file_17.jpg",
+      MediaType: "image/jpeg",
+      MediaUrl: "/Users/zooey/.openclaw/media/inbound/file_17.jpg",
+    });
+    // url is same local path as path — should not appear after |
+    expect(note).toBe(
+      "[media attached: /Users/zooey/.openclaw/media/inbound/file_17.jpg (image/jpeg)]",
+    );
+  });
+
+  it("appends url when it is a distinct HTTP URL", () => {
+    const note = buildInboundMediaNote({
+      MediaPath: "/tmp/photo.jpg",
+      MediaType: "image/jpeg",
+      MediaUrl: "https://example.com/photo.jpg",
+    });
+    expect(note).toBe(
+      "[media attached: /tmp/photo.jpg (image/jpeg) | https://example.com/photo.jpg]",
+    );
   });
 });

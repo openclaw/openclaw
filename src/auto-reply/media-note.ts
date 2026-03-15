@@ -13,7 +13,9 @@ function formatMediaAttachedLine(params: {
       : "[media attached: ";
   const typePart = params.type?.trim() ? ` (${params.type.trim()})` : "";
   const urlRaw = params.url?.trim();
-  const urlPart = urlRaw ? ` | ${urlRaw}` : "";
+  // Only append url when it differs from path to avoid duplication (issue #42791)
+  const isDistinctUrl = urlRaw && urlRaw !== params.path;
+  const urlPart = isDistinctUrl ? ` | ${urlRaw}` : "";
   return `${prefix}${params.path}${typePart}${urlPart}]`;
 }
 
