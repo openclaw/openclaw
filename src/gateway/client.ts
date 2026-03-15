@@ -216,6 +216,23 @@ export class GatewayClient {
         return undefined;
         // oxlint-disable-next-line typescript/no-explicit-any
       }) as any;
+    } else if (url.startsWith("wss://")) {
+      // Accept self-signed certs only for local TLS connections where the gateway
+      // auto-generates a self-signed cert. Remote connections keep default CA validation.
+      try {
+        const host = new URL(url).hostname.toLowerCase();
+        if (
+          host === "localhost" ||
+          host === "127.0.0.1" ||
+          host === "::1" ||
+          host === "[::1]" ||
+          host === "0.0.0.0"
+        ) {
+          wsOptions.rejectUnauthorized = false;
+        }
+      } catch {
+        // Invalid URL — leave default TLS verification intact
+      }
     }
     this.ws = new WebSocket(url, wsOptions);
 
