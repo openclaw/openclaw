@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   __testing,
   clearPluginCommands,
+  executePluginCommand,
   getPluginCommandSpecs,
   listPluginCommands,
   registerPluginCommand,
@@ -94,6 +95,7 @@ describe("registerPluginCommand", () => {
         acceptsArgs: false,
       },
     ]);
+    expect(getPluginCommandSpecs("slack")).toEqual([]);
   });
 
   it("resolves Discord DM command bindings with the user target prefix intact", () => {
@@ -123,5 +125,85 @@ describe("registerPluginCommand", () => {
       accountId: "default",
       conversationId: "channel:1480554272859881494",
     });
+  });
+
+  it("does not resolve binding conversations for unsupported command channels", () => {
+    expect(
+      __testing.resolveBindingConversationFromCommand({
+        channel: "slack",
+        from: "slack:U123",
+        to: "C456",
+        accountId: "default",
+      }),
+    ).toBeNull();
+  });
+
+  it("does not expose binding APIs to plugin commands on unsupported channels", async () => {
+    registerPluginCommand(
+      "demo-plugin",
+      {
+        name: "bindcheck",
+        description: "Demo command",
+        acceptsArgs: false,
+        handler: async (ctx) => {
+          const requested = await ctx.requestConversationBinding({
+            summary: "Bind this conversation.",
+          });
+          const current = await ctx.getCurrentConversationBinding();
+          const detached = await ctx.detachConversationBinding();
+          return {
+            text: JSON.stringify({
+              requested,
+              current,
+              detached,
+            }),
+          };
+        },
+      },
+      { pluginRoot: "/plugins/demo-plugin" },
+    );
+
+    const result = await executePluginCommand({
+      command: {
+        name: "bindcheck",
+        description: "Demo command",
+        acceptsArgs: false,
+        handler: async (ctx) => {
+          const requested = await ctx.requestConversationBinding({
+            summary: "Bind this conversation.",
+          });
+          const current = await ctx.getCurrentConversationBinding();
+          const detached = await ctx.detachConversationBinding();
+          return {
+            text: JSON.stringify({
+              requested,
+              current,
+              detached,
+            }),
+          };
+        },
+        pluginId: "demo-plugin",
+        pluginRoot: "/plugins/demo-plugin",
+      },
+      channel: "slack",
+      senderId: "U123",
+      isAuthorizedSender: true,
+      commandBody: "/bindcheck",
+      config: {} as never,
+      from: "slack:U123",
+      to: "C456",
+      accountId: "default",
+    });
+
+    expect(result.text).toBe(
+      JSON.stringify({
+        requested: {
+          status: "error",
+          message: "This command cannot bind the current conversation.",
+        },
+        current: null,
+        detached: { removed: false },
+      }),
+    );
   });
 });

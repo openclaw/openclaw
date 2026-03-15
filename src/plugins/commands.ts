@@ -306,15 +306,7 @@ function resolveBindingConversationFromCommand(params: {
       conversationId: `${target.kind}:${target.id}`,
     };
   }
-  const rawTarget = params.to ?? params.from;
-  if (!rawTarget) {
-    return null;
-  }
-  return {
-    channel: params.channel,
-    accountId,
-    conversationId: rawTarget,
-  };
+  return null;
 }
 
 /**
@@ -464,6 +456,10 @@ export function getPluginCommandSpecs(provider?: string): Array<{
   description: string;
   acceptsArgs: boolean;
 }> {
+  const providerName = provider?.trim().toLowerCase();
+  if (providerName && providerName !== "telegram" && providerName !== "discord") {
+    return [];
+  }
   return Array.from(pluginCommands.values()).map((cmd) => ({
     name: resolvePluginNativeName(cmd, provider),
     description: cmd.description,
