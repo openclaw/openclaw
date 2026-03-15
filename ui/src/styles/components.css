@@ -2236,11 +2236,36 @@
 /* New messages indicator */
 .chat-new-messages {
   align-self: center;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
   margin: 8px auto 0;
   border-radius: 999px;
-  padding: 6px 12px;
-  font-size: 12px;
+  padding: 6px 14px;
+  font-size: 13px;
   line-height: 1;
+  background: var(--panel-strong);
+  border: 1px solid var(--border);
+  color: var(--text);
+  white-space: nowrap;
+  z-index: 10;
+  transition: background 150ms ease-out, border-color 150ms ease-out;
+}
+
+.chat-new-messages:hover {
+  background: var(--panel);
+  border-color: var(--accent);
+}
+
+.chat-new-messages svg {
+  width: 16px;
+  height: 16px;
+  stroke: currentColor;
+  fill: none;
+  stroke-width: 1.5px;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  flex-shrink: 0;
 }
 
 /* Chat lines */
