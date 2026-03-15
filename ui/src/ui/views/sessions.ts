@@ -182,6 +182,8 @@ function paginateRows<T>(rows: T[], page: number, pageSize: number): T[] {
 
 export function renderSessions(props: SessionsProps) {
   const rawRows = props.result?.sessions ?? [];
+  // Client-side guard: hides archived rows immediately on toggle while the
+  // server request (triggered by onFiltersChange) is in-flight.
   const visibleRows = props.includeArchived
     ? rawRows
     : rawRows.filter((row) => typeof row.archivedAt !== "number");
