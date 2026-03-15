@@ -59,6 +59,22 @@ describe("agent delivery helpers", () => {
     expect(resolved.resolvedTo).toBe("+1999");
   });
 
+  it("keeps webchat channel for non-delivery runs even when last channel is deliverable", () => {
+    const plan = resolveAgentDeliveryPlan({
+      sessionEntry: {
+        sessionId: "s4",
+        updatedAt: 4,
+        deliveryContext: { channel: "whatsapp", to: "+1555" },
+      },
+      requestedChannel: "last",
+      explicitTo: undefined,
+      accountId: undefined,
+      wantsDelivery: false,
+    });
+
+    expect(plan.resolvedChannel).toBe("webchat");
+    expect(plan.deliveryTargetMode).toBeUndefined();
+  });
   it("does not inject a default deliverable channel when session has none", () => {
     const plan = resolveAgentDeliveryPlan({
       sessionEntry: undefined,

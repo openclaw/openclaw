@@ -91,6 +91,9 @@ export function resolveAgentDeliveryPlan(params: {
       return INTERNAL_MESSAGE_CHANNEL;
     }
     if (requestedChannel === "last") {
+      if (!params.wantsDelivery) {
+        return INTERNAL_MESSAGE_CHANNEL;
+      }
       if (baseDelivery.channel && baseDelivery.channel !== INTERNAL_MESSAGE_CHANNEL) {
         return baseDelivery.channel;
       }
