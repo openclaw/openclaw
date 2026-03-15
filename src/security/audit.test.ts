@@ -134,6 +134,8 @@ const zalouserPlugin = stubChannelPlugin({
 function successfulProbeResult(url: string) {
   return {
     ok: true,
+    rpcOk: true,
+    scopeLimited: false,
     url,
     connectLatencyMs: 1,
     error: null,
@@ -2660,6 +2662,8 @@ description: test skill
         name: "probe returns failed result",
         probeGatewayFn: async () => ({
           ok: false,
+          rpcOk: false,
+          scopeLimited: false,
           url: "ws://127.0.0.1:18789",
           connectLatencyMs: null,
           error: "connect failed",

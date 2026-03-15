@@ -240,6 +240,8 @@ describe("probe reachability classification", () => {
   it("treats missing-scope RPC failures as scope-limited and reachable", () => {
     const probe = {
       ok: false,
+      rpcOk: false,
+      scopeLimited: true,
       url: "ws://127.0.0.1:18789",
       connectLatencyMs: 51,
       error: "missing scope: operator.read",
@@ -258,6 +260,8 @@ describe("probe reachability classification", () => {
   it("keeps non-scope RPC failures as unreachable", () => {
     const probe = {
       ok: false,
+      rpcOk: false,
+      scopeLimited: false,
       url: "ws://127.0.0.1:18789",
       connectLatencyMs: 43,
       error: "unknown method: status",

@@ -39,6 +39,8 @@ const probeGateway = vi.fn(async (opts: { url: string }): Promise<GatewayProbeRe
   if (url.includes("127.0.0.1")) {
     return {
       ok: true,
+      rpcOk: true,
+      scopeLimited: false,
       url,
       connectLatencyMs: 12,
       error: null,
@@ -77,6 +79,8 @@ const probeGateway = vi.fn(async (opts: { url: string }): Promise<GatewayProbeRe
   }
   return {
     ok: true,
+    rpcOk: true,
+    scopeLimited: false,
     url,
     connectLatencyMs: 34,
     error: null,
@@ -230,6 +234,8 @@ describe("gateway-status command", () => {
     } as never);
     probeGateway.mockResolvedValueOnce({
       ok: false,
+      rpcOk: false,
+      scopeLimited: true,
       url: "ws://127.0.0.1:18789",
       connectLatencyMs: 51,
       error: "missing scope: operator.read",
@@ -414,6 +420,8 @@ describe("gateway-status command", () => {
     const previousProbeImpl = probeGateway.getMockImplementation();
     probeGateway.mockImplementation(async (opts: { url: string }) => ({
       ok: true,
+      rpcOk: true,
+      scopeLimited: false,
       url: opts.url,
       connectLatencyMs: 20,
       error: null,
