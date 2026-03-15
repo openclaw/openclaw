@@ -529,9 +529,9 @@ function validateConfigObjectWithPluginsBase(
   }
 
   // The default memory slot is inferred; only a user-configured slot should block startup.
+  const pluginSlots = pluginsConfig?.slots;
   const hasExplicitMemorySlot =
-    Boolean(pluginsConfig?.slots) &&
-    Object.prototype.hasOwnProperty.call(pluginsConfig.slots, "memory");
+    pluginSlots !== undefined && Object.prototype.hasOwnProperty.call(pluginSlots, "memory");
   const memorySlot = normalizedPlugins.slots.memory;
   if (
     hasExplicitMemorySlot &&
