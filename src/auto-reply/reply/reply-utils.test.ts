@@ -11,6 +11,7 @@ import {
   resolveResponsePrefixTemplate,
 } from "./response-prefix-template.js";
 import { createStreamingDirectiveAccumulator } from "./streaming-directives.js";
+import { hasSuspiciousReplyLeakage } from "./suspicious-reply.js";
 import { createMockTypingController } from "./test-helpers.js";
 import { createTypingSignaler, resolveTypingMode } from "./typing-mode.js";
 import { createTypingController } from "./typing.js";
@@ -210,6 +211,241 @@ describe("normalizeReplyPayload", () => {
         ],
       },
     });
+  });
+
+  it("suppresses suspicious internal orchestration leakage", () => {
+    const reasons: string[] = [];
+    const result = normalizeReplyPayload(
+      {
+        text: [
+          "NO_REPLY",
+          "assistant to=functions.exec commentary to=functions.exec ＿json",
+          '{"command":"ls ~/.openclaw/agents/main/sessions/ | head -20","yieldMs":10000}',
+        ].join("\n"),
+      },
+      { onSkip: (reason) => reasons.push(reason) },
+    );
+    expect(result).toBeNull();
+    expect(reasons).toEqual(["suspicious"]);
+  });
+
+  it("strips suspicious text but keeps media payload", () => {
+    const result = normalizeReplyPayload({
+      text: [
+        "NO_REPLY",
+        "assistant to=functions.exec commentary to=functions.exec ＿json",
+        '{"command":"ls ~/.openclaw/agents/main/sessions/ | head -20","yieldMs":10000}',
+      ].join("\n"),
+      mediaUrl: "https://example.com/img.png",
+    });
+    expect(result).not.toBeNull();
+    expect(result!.text).toBe("");
+    expect(result!.mediaUrl).toBe("https://example.com/img.png");
+  });
+
+  it("keeps explanatory text that merely mentions leaked markers", () => {
+    const result = normalizeReplyPayload({
+      text: "The leaked prefix was assistant to=functions.exec, which should never be sent.",
+    });
+    expect(result).not.toBeNull();
+    expect(result!.text).toContain("assistant to=functions.exec");
+  });
+
+  it("keeps explanatory text that starts with a route marker mention", () => {
+    const result = normalizeReplyPayload({
+      text: "assistant to=functions.exec is an internal prefix and should never reach users.",
+    });
+    expect(result).not.toBeNull();
+    expect(result!.text).toContain("assistant to=functions.exec");
+  });
+
+  it("keeps route-marker explanations with inline JSON examples", () => {
+    const result = normalizeReplyPayload({
+      text: 'assistant to=functions.exec is internal; example: {"path":"/tmp"}',
+    });
+    expect(result).not.toBeNull();
+    expect(result!.text).toContain('{"path":"/tmp"}');
+  });
+
+  it("keeps NO_REPLY explanations with tool-style JSON examples", () => {
+    const result = normalizeReplyPayload({
+      text: ['NO_REPLY means "do not answer". Example:', '{"command":"ls","yieldMs":1000}'].join(
+        "\n",
+      ),
+    });
+    expect(result).not.toBeNull();
+    expect(result!.text).toContain('NO_REPLY means "do not answer".');
+    expect(result!.text).toContain('{"command":"ls","yieldMs":1000}');
+  });
+
+  it("keeps multiline route-marker examples when prose explains them", () => {
+    const result = normalizeReplyPayload({
+      text: [
+        "assistant to=functions.exec",
+        '{"command":"ls","yieldMs":1000}',
+        "This is an example of leaked orchestration text.",
+      ].join("\n"),
+    });
+    expect(result).not.toBeNull();
+    expect(result!.text).toContain("assistant to=functions.exec");
+    expect(result!.text).toContain("This is an example of leaked orchestration text.");
+  });
+
+  it("keeps single-line JSON examples when prose follows on the same line", () => {
+    const result = normalizeReplyPayload({
+      text: [
+        "assistant to=functions.exec",
+        '{"command":"ls","yieldMs":1000} is an example payload.',
+      ].join("\n"),
+    });
+    expect(result).not.toBeNull();
+    expect(result!.text).toContain('{"command":"ls","yieldMs":1000} is an example payload.');
+  });
+
+  it("suppresses suspicious leakage when using a custom silent token", () => {
+    const reasons: string[] = [];
+    const result = normalizeReplyPayload(
+      {
+        text: [
+          "QUIET_MODE",
+          "assistant to=functions.exec commentary to=functions.exec",
+          '{"command":"ls","yieldMs":1000}',
+        ].join("\n"),
+      },
+      {
+        silentToken: "QUIET_MODE",
+        onSkip: (reason) => reasons.push(reason),
+      },
+    );
+    expect(result).toBeNull();
+    expect(reasons).toEqual(["suspicious"]);
+  });
+
+  it("suppresses standalone route-marker leakage without tool JSON", () => {
+    const reasons: string[] = [];
+    const result = normalizeReplyPayload(
+      {
+        text: "assistant to=functions.exec",
+      },
+      {
+        onSkip: (reason) => reasons.push(reason),
+      },
+    );
+    expect(result).toBeNull();
+    expect(reasons).toEqual(["suspicious"]);
+  });
+
+  it("suppresses multiple standalone route-marker leakage lines", () => {
+    const reasons: string[] = [];
+    const result = normalizeReplyPayload(
+      {
+        text: [
+          "assistant to=functions.exec",
+          "commentary to=functions.exec",
+          "user to=functions.exec",
+        ].join("\n"),
+      },
+      {
+        onSkip: (reason) => reasons.push(reason),
+      },
+    );
+    expect(result).toBeNull();
+    expect(reasons).toEqual(["suspicious"]);
+  });
+
+  it("does not flag fenced code samples as suspicious by default", () => {
+    expect(
+      hasSuspiciousReplyLeakage(
+        ["```text", "assistant to=functions.exec", '{"command":"ls","yieldMs":1000}', "```"].join(
+          "\n",
+        ),
+      ),
+    ).toBe(false);
+  });
+
+  it("flags structured route marker text paired with tool JSON lines", () => {
+    expect(
+      hasSuspiciousReplyLeakage(
+        [
+          "assistant to=functions.exec commentary to=functions.exec",
+          '{"command":"ls","yieldMs":1000}',
+        ].join("\n"),
+      ),
+    ).toBe(true);
+  });
+
+  it("flags structured route marker text paired with pretty-printed tool JSON", () => {
+    expect(
+      hasSuspiciousReplyLeakage(
+        [
+          "assistant to=functions.exec commentary to=functions.exec",
+          "{",
+          '"command":"ls",',
+          '"yieldMs":1000',
+          "}",
+        ].join("\n"),
+      ),
+    ).toBe(true);
+  });
+
+  it("flags structured route marker text paired with array values in tool JSON", () => {
+    expect(
+      hasSuspiciousReplyLeakage(
+        [
+          "assistant to=functions.exec commentary to=functions.exec",
+          "{",
+          '"command":"ls",',
+          '"paths": [',
+          '"a",',
+          '"b"',
+          "]",
+          "}",
+        ].join("\n"),
+      ),
+    ).toBe(true);
+  });
+
+  it("flags standalone route-marker leakage without tool JSON", () => {
+    expect(hasSuspiciousReplyLeakage("assistant to=functions.exec")).toBe(true);
+    expect(
+      hasSuspiciousReplyLeakage(
+        ["assistant to=functions.exec", "commentary to=functions.exec"].join("\n"),
+      ),
+    ).toBe(true);
+  });
+
+  it("does not flag NO_REPLY explanations with tool JSON lines", () => {
+    expect(
+      hasSuspiciousReplyLeakage(
+        ['NO_REPLY means "do not answer". Example:', '{"command":"ls","yieldMs":1000}'].join("\n"),
+      ),
+    ).toBe(false);
+  });
+
+  it("does not flag route-marker examples when prose follows the JSON block", () => {
+    expect(
+      hasSuspiciousReplyLeakage(
+        [
+          "assistant to=functions.exec",
+          "{",
+          '"command":"ls",',
+          '"yieldMs":1000',
+          "}",
+          "This is an example of leaked orchestration text.",
+        ].join("\n"),
+      ),
+    ).toBe(false);
+  });
+
+  it("does not flag route-marker examples when prose follows single-line JSON", () => {
+    expect(
+      hasSuspiciousReplyLeakage(
+        [
+          "assistant to=functions.exec",
+          '{"command":"ls","yieldMs":1000} is an example payload.',
+        ].join("\n"),
+      ),
+    ).toBe(false);
   });
 });
 

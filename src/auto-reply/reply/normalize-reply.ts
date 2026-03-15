@@ -13,8 +13,9 @@ import {
   type ResponsePrefixContext,
 } from "./response-prefix-template.js";
 import { hasSlackDirectives, parseSlackDirectives } from "./slack-directives.js";
+import { hasSuspiciousReplyLeakage } from "./suspicious-reply.js";
 
-export type NormalizeReplySkipReason = "empty" | "silent" | "heartbeat";
+export type NormalizeReplySkipReason = "empty" | "silent" | "heartbeat" | "suspicious";
 
 export type NormalizeReplyOptions = {
   responsePrefix?: string;
@@ -80,6 +81,13 @@ export function normalizeReplyPayload(
 
   if (text) {
     text = sanitizeUserFacingText(text, { errorContext: Boolean(payload.isError) });
+  }
+  if (text && hasSuspiciousReplyLeakage(text, { silentToken })) {
+    if (!hasMedia && !hasChannelData) {
+      opts.onSkip?.("suspicious");
+      return null;
+    }
+    text = "";
   }
   if (!text?.trim() && !hasMedia && !hasChannelData) {
     opts.onSkip?.("empty");

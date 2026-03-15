@@ -1745,7 +1745,7 @@ describe("followup queue drain restart after idle window", () => {
 const emptyCfg = {} as OpenClawConfig;
 
 describe("createReplyDispatcher", () => {
-  it("drops empty payloads and exact silent tokens without media", async () => {
+  it("drops empty payloads, exact silent tokens, and suspicious leaked orchestration", async () => {
     const deliver = vi.fn().mockResolvedValue(undefined);
     const dispatcher = createReplyDispatcher({ deliver });
 
@@ -1754,6 +1754,11 @@ describe("createReplyDispatcher", () => {
     expect(dispatcher.sendFinalReply({ text: SILENT_REPLY_TOKEN })).toBe(false);
     expect(dispatcher.sendFinalReply({ text: `${SILENT_REPLY_TOKEN} -- nope` })).toBe(true);
     expect(dispatcher.sendFinalReply({ text: `interject.${SILENT_REPLY_TOKEN}` })).toBe(true);
+    expect(
+      dispatcher.sendFinalReply({
+        text: `${SILENT_REPLY_TOKEN}\nassistant to=functions.exec\n{"command":"ls","yieldMs":1000}`,
+      }),
+    ).toBe(false);
 
     await dispatcher.waitForIdle();
     expect(deliver).toHaveBeenCalledTimes(2);
