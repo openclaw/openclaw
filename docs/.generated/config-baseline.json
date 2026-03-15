@@ -38235,6 +38235,147 @@
       "hasChildren": false
     },
     {
+      "path": "messages.tts.minimax",
+      "kind": "core",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": true
+    },
+    {
+      "path": "messages.tts.minimax.apiKey",
+      "kind": "core",
+      "type": ["object", "string"],
+      "required": false,
+      "deprecated": false,
+      "sensitive": true,
+      "tags": ["auth", "media", "security"],
+      "hasChildren": true
+    },
+    {
+      "path": "messages.tts.minimax.apiKey.id",
+      "kind": "core",
+      "type": "string",
+      "required": true,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "messages.tts.minimax.apiKey.provider",
+      "kind": "core",
+      "type": "string",
+      "required": true,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "messages.tts.minimax.apiKey.source",
+      "kind": "core",
+      "type": "string",
+      "required": true,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "messages.tts.minimax.baseUrl",
+      "kind": "core",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "messages.tts.minimax.emotion",
+      "kind": "core",
+      "type": "string",
+      "required": false,
+      "enumValues": [
+        "happy",
+        "sad",
+        "angry",
+        "fearful",
+        "disgusted",
+        "surprised",
+        "calm",
+        "fluent",
+        "whisper"
+      ],
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "messages.tts.minimax.languageBoost",
+      "kind": "core",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "messages.tts.minimax.model",
+      "kind": "core",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "messages.tts.minimax.pitch",
+      "kind": "core",
+      "type": "integer",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "messages.tts.minimax.speed",
+      "kind": "core",
+      "type": "number",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "messages.tts.minimax.voiceId",
+      "kind": "core",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "messages.tts.minimax.vol",
+      "kind": "core",
+      "type": "number",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
       "path": "messages.tts.openai",
       "kind": "core",
       "type": "object",
@@ -38349,7 +38490,7 @@
       "kind": "core",
       "type": "string",
       "required": false,
-      "enumValues": ["elevenlabs", "openai", "edge"],
+      "enumValues": ["elevenlabs", "openai", "edge", "minimax"],
       "deprecated": false,
       "sensitive": false,
       "tags": [],
@@ -43065,6 +43206,121 @@
       "hasChildren": false
     },
     {
+      "path": "plugins.entries.voice-call.config.tts.minimax",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.voice-call.config.tts.minimax.apiKey",
+      "kind": "plugin",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": true,
+      "tags": ["advanced", "auth", "media", "security"],
+      "label": "MiniMax API Key",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.voice-call.config.tts.minimax.baseUrl",
+      "kind": "plugin",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": ["advanced", "media"],
+      "label": "MiniMax Base URL",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.voice-call.config.tts.minimax.emotion",
+      "kind": "plugin",
+      "type": "string",
+      "required": false,
+      "enumValues": [
+        "happy",
+        "sad",
+        "angry",
+        "fearful",
+        "disgusted",
+        "surprised",
+        "calm",
+        "fluent",
+        "whisper"
+      ],
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.voice-call.config.tts.minimax.languageBoost",
+      "kind": "plugin",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.voice-call.config.tts.minimax.model",
+      "kind": "plugin",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": ["advanced", "media", "models"],
+      "label": "MiniMax TTS Model",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.voice-call.config.tts.minimax.pitch",
+      "kind": "plugin",
+      "type": "integer",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.voice-call.config.tts.minimax.speed",
+      "kind": "plugin",
+      "type": "number",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.voice-call.config.tts.minimax.voiceId",
+      "kind": "plugin",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": ["advanced", "media"],
+      "label": "MiniMax Voice ID",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.voice-call.config.tts.minimax.vol",
+      "kind": "plugin",
+      "type": "number",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
       "path": "plugins.entries.voice-call.config.tts.openai",
       "kind": "plugin",
       "type": "object",
@@ -43152,7 +43408,7 @@
       "kind": "plugin",
       "type": "string",
       "required": false,
-      "enumValues": ["openai", "elevenlabs", "edge"],
+      "enumValues": ["openai", "elevenlabs", "edge", "minimax"],
       "deprecated": false,
       "sensitive": false,
       "tags": ["advanced", "media"],

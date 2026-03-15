@@ -3672,6 +3672,19 @@
 {"recordType":"path","path":"messages.tts.modelOverrides.allowVoice","kind":"core","type":"boolean","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
 {"recordType":"path","path":"messages.tts.modelOverrides.allowVoiceSettings","kind":"core","type":"boolean","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
 {"recordType":"path","path":"messages.tts.modelOverrides.enabled","kind":"core","type":"boolean","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
+{"recordType":"path","path":"messages.tts.minimax","kind":"core","type":"object","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":true}
+{"recordType":"path","path":"messages.tts.minimax.apiKey","kind":"core","type":["object","string"],"required":false,"deprecated":false,"sensitive":true,"tags":["auth","media","security"],"hasChildren":true}
+{"recordType":"path","path":"messages.tts.minimax.apiKey.id","kind":"core","type":"string","required":true,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
+{"recordType":"path","path":"messages.tts.minimax.apiKey.provider","kind":"core","type":"string","required":true,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
+{"recordType":"path","path":"messages.tts.minimax.apiKey.source","kind":"core","type":"string","required":true,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
+{"recordType":"path","path":"messages.tts.minimax.baseUrl","kind":"core","type":"string","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
+{"recordType":"path","path":"messages.tts.minimax.emotion","kind":"core","type":"string","required":false,"enumValues":["happy","sad","angry","fearful","disgusted","surprised","calm","fluent","whisper"],"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
+{"recordType":"path","path":"messages.tts.minimax.languageBoost","kind":"core","type":"string","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
+{"recordType":"path","path":"messages.tts.minimax.model","kind":"core","type":"string","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
+{"recordType":"path","path":"messages.tts.minimax.pitch","kind":"core","type":"integer","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
+{"recordType":"path","path":"messages.tts.minimax.speed","kind":"core","type":"number","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
+{"recordType":"path","path":"messages.tts.minimax.voiceId","kind":"core","type":"string","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
+{"recordType":"path","path":"messages.tts.minimax.vol","kind":"core","type":"number","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
 {"recordType":"path","path":"messages.tts.openai","kind":"core","type":"object","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":true}
 {"recordType":"path","path":"messages.tts.openai.apiKey","kind":"core","type":["object","string"],"required":false,"deprecated":false,"sensitive":true,"tags":["auth","media","security"],"hasChildren":true}
 {"recordType":"path","path":"messages.tts.openai.apiKey.id","kind":"core","type":"string","required":true,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
@@ -3683,7 +3696,7 @@
 {"recordType":"path","path":"messages.tts.openai.speed","kind":"core","type":"number","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
 {"recordType":"path","path":"messages.tts.openai.voice","kind":"core","type":"string","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
 {"recordType":"path","path":"messages.tts.prefsPath","kind":"core","type":"string","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
-{"recordType":"path","path":"messages.tts.provider","kind":"core","type":"string","required":false,"enumValues":["elevenlabs","openai","edge"],"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
+{"recordType":"path","path":"messages.tts.provider","kind":"core","type":"string","required":false,"enumValues":["elevenlabs","openai","edge","minimax"],"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
 {"recordType":"path","path":"messages.tts.summaryModel","kind":"core","type":"string","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
 {"recordType":"path","path":"messages.tts.timeoutMs","kind":"core","type":"integer","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
 {"recordType":"path","path":"meta","kind":"core","type":"object","required":false,"deprecated":false,"sensitive":false,"tags":["advanced"],"label":"Metadata","help":"Metadata fields automatically maintained by OpenClaw to record write/version history for this config file. Keep these values system-managed and avoid manual edits unless debugging migration history.","hasChildren":true}
@@ -4099,6 +4112,16 @@
 {"recordType":"path","path":"plugins.entries.voice-call.config.tts.modelOverrides.allowVoice","kind":"plugin","type":"boolean","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
 {"recordType":"path","path":"plugins.entries.voice-call.config.tts.modelOverrides.allowVoiceSettings","kind":"plugin","type":"boolean","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
 {"recordType":"path","path":"plugins.entries.voice-call.config.tts.modelOverrides.enabled","kind":"plugin","type":"boolean","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
+{"recordType":"path","path":"plugins.entries.voice-call.config.tts.minimax","kind":"plugin","type":"object","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":true}
+{"recordType":"path","path":"plugins.entries.voice-call.config.tts.minimax.apiKey","kind":"plugin","type":"string","required":false,"deprecated":false,"sensitive":true,"tags":["advanced","auth","media","security"],"label":"MiniMax API Key","hasChildren":false}
+{"recordType":"path","path":"plugins.entries.voice-call.config.tts.minimax.baseUrl","kind":"plugin","type":"string","required":false,"deprecated":false,"sensitive":false,"tags":["advanced","media"],"label":"MiniMax Base URL","hasChildren":false}
+{"recordType":"path","path":"plugins.entries.voice-call.config.tts.minimax.emotion","kind":"plugin","type":"string","required":false,"enumValues":["happy","sad","angry","fearful","disgusted","surprised","calm","fluent","whisper"],"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
+{"recordType":"path","path":"plugins.entries.voice-call.config.tts.minimax.languageBoost","kind":"plugin","type":"string","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
+{"recordType":"path","path":"plugins.entries.voice-call.config.tts.minimax.model","kind":"plugin","type":"string","required":false,"deprecated":false,"sensitive":false,"tags":["advanced","media","models"],"label":"MiniMax TTS Model","hasChildren":false}
+{"recordType":"path","path":"plugins.entries.voice-call.config.tts.minimax.pitch","kind":"plugin","type":"integer","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
+{"recordType":"path","path":"plugins.entries.voice-call.config.tts.minimax.speed","kind":"plugin","type":"number","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
+{"recordType":"path","path":"plugins.entries.voice-call.config.tts.minimax.voiceId","kind":"plugin","type":"string","required":false,"deprecated":false,"sensitive":false,"tags":["advanced","media"],"label":"MiniMax Voice ID","hasChildren":false}
+{"recordType":"path","path":"plugins.entries.voice-call.config.tts.minimax.vol","kind":"plugin","type":"number","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
 {"recordType":"path","path":"plugins.entries.voice-call.config.tts.openai","kind":"plugin","type":"object","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":true}
 {"recordType":"path","path":"plugins.entries.voice-call.config.tts.openai.apiKey","kind":"plugin","type":"string","required":false,"deprecated":false,"sensitive":true,"tags":["advanced","auth","media","security"],"label":"OpenAI API Key","hasChildren":false}
 {"recordType":"path","path":"plugins.entries.voice-call.config.tts.openai.baseUrl","kind":"plugin","type":"string","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
@@ -4107,7 +4130,7 @@
 {"recordType":"path","path":"plugins.entries.voice-call.config.tts.openai.speed","kind":"plugin","type":"number","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
 {"recordType":"path","path":"plugins.entries.voice-call.config.tts.openai.voice","kind":"plugin","type":"string","required":false,"deprecated":false,"sensitive":false,"tags":["advanced","media"],"label":"OpenAI TTS Voice","hasChildren":false}
 {"recordType":"path","path":"plugins.entries.voice-call.config.tts.prefsPath","kind":"plugin","type":"string","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
-{"recordType":"path","path":"plugins.entries.voice-call.config.tts.provider","kind":"plugin","type":"string","required":false,"enumValues":["openai","elevenlabs","edge"],"deprecated":false,"sensitive":false,"tags":["advanced","media"],"label":"TTS Provider Override","help":"Deep-merges with messages.tts (Edge is ignored for calls).","hasChildren":false}
+{"recordType":"path","path":"plugins.entries.voice-call.config.tts.provider","kind":"plugin","type":"string","required":false,"enumValues":["openai","elevenlabs","edge","minimax"],"deprecated":false,"sensitive":false,"tags":["advanced","media"],"label":"TTS Provider Override","help":"Deep-merges with messages.tts (Edge is ignored for calls).","hasChildren":false}
 {"recordType":"path","path":"plugins.entries.voice-call.config.tts.summaryModel","kind":"plugin","type":"string","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
 {"recordType":"path","path":"plugins.entries.voice-call.config.tts.timeoutMs","kind":"plugin","type":"integer","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
 {"recordType":"path","path":"plugins.entries.voice-call.config.tunnel","kind":"plugin","type":"object","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":true}
