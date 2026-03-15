@@ -149,7 +149,7 @@ We are currently prioritizing:
 - **Skills**: For skill contributions, head to [ClawHub](https://clawhub.ai/) — the community hub for OpenClaw skills.
 - **Performance**: Optimizing token usage and compaction logic.
 
-Check the [GitHub Issues](https://github.com/openclaw/openclaw/issues) for "good first issue" labels!
+Check the [good first issues](https://github.com/openclaw/openclaw/issues?q=is%3Aissue+is%3Aopen+label%3A%22good+first+issue%22) to get started!
 
 ## Maintainers
 

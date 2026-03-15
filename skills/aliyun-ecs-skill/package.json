@@ -1,0 +1,25 @@
+{
+  "name": "aliyun-ecs-skill",
+  "version": "1.0.0",
+  "description": "Aliyun ECS management skill for OpenClaw",
+  "main": "src/index.js",
+  "bin": {
+    "aliyun-ecs": "./src/index.js"
+  },
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [
+    "openclaw",
+    "aliyun",
+    "ecs",
+    "cloud",
+    "skill"
+  ],
+  "author": "Leo & AI Agent",
+  "license": "MIT",
+  "dependencies": {
+    "@alicloud/openapi-client": "^0.4.10",
+    "@alicloud/ecs20140526": "^7.0.0"
+  }
+}
