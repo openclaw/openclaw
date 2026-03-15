@@ -385,11 +385,10 @@ describe("QmdMemoryManager", () => {
       if (args[0] !== "collection" || args[1] !== "add") {
         return false;
       }
-      const nameIdx = args.indexOf("--name");
-      return nameIdx >= 0 && args[nameIdx + 1] === sessionCollectionName;
+      return args[2] === sessionCollectionName;
     });
     expect(addSessions).toBeDefined();
-    expect(addSessions?.[2]).toBe(path.join(stateDir, "agents", devAgentId, "qmd", "sessions"));
+    expect(addSessions?.[3]).toBe(path.join(stateDir, "agents", devAgentId, "qmd", "sessions"));
   });
 
   it("avoids destructive rebind when qmd only reports collection names", async () => {
@@ -483,9 +482,9 @@ describe("QmdMemoryManager", () => {
       }
       if (args[0] === "collection" && args[1] === "add") {
         const child = createMockChild({ autoClose: false });
-        const pathArg = args[2] ?? "";
-        const name = args[args.indexOf("--name") + 1] ?? "";
-        const mask = args[args.indexOf("--mask") + 1] ?? "";
+        const name = args[2] ?? "";
+        const pathArg = args[3] ?? "";
+        const mask = args[args.indexOf("--pattern") + 1] ?? "";
         const hasConflict = [...legacyCollections.entries()].some(
           ([existingName, info]) =>
             existingName !== name && info.path === pathArg && info.mask === mask,
@@ -561,9 +560,9 @@ describe("QmdMemoryManager", () => {
       }
       if (args[0] === "collection" && args[1] === "add") {
         const child = createMockChild({ autoClose: false });
-        const pathArg = args[2] ?? "";
-        const name = args[args.indexOf("--name") + 1] ?? "";
-        const mask = args[args.indexOf("--mask") + 1] ?? "";
+        const name = args[2] ?? "";
+        const pathArg = args[3] ?? "";
+        const mask = args[args.indexOf("--pattern") + 1] ?? "";
         const hasConflict = [...listedCollections.entries()].some(
           ([existingName, info]) =>
             existingName !== name && info.path === pathArg && info.mask === mask,
@@ -668,7 +667,7 @@ describe("QmdMemoryManager", () => {
       }
       if (args[0] === "collection" && args[1] === "add") {
         const child = createMockChild({ autoClose: false });
-        addCalls.push(args[args.indexOf("--name") + 1] ?? "");
+        addCalls.push(args[2] ?? "");
         queueMicrotask(() => child.closeWith(0));
         return child;
       }
@@ -812,7 +811,7 @@ describe("QmdMemoryManager", () => {
     const addCalls = spawnMock.mock.calls
       .map((call: unknown[]) => call[1] as string[])
       .filter((args: string[]) => args[0] === "collection" && args[1] === "add")
-      .map((args) => args[args.indexOf("--name") + 1]);
+      .map((args) => args[2]);
 
     expect(updateCalls).toBe(2);
     expect(removeCalls).toEqual(["memory-root-main", "memory-alt-main", "memory-dir-main"]);
@@ -869,7 +868,7 @@ describe("QmdMemoryManager", () => {
     const addCalls = spawnMock.mock.calls
       .map((call: unknown[]) => call[1] as string[])
       .filter((args: string[]) => args[0] === "collection" && args[1] === "add")
-      .map((args) => args[args.indexOf("--name") + 1]);
+      .map((args) => args[2]);
 
     expect(updateCalls).toBe(2);
     expect(removeCalls).toEqual(["memory-root-main", "memory-alt-main", "memory-dir-main"]);
@@ -994,7 +993,8 @@ describe("QmdMemoryManager", () => {
     expect(searchCall?.[1]).toEqual([
       "search",
       "test",
-      "--json",
+      "--format",
+      "json",
       "-n",
       String(resolved.qmd?.limits.maxResults),
       "-c",
@@ -1179,7 +1179,8 @@ describe("QmdMemoryManager", () => {
     expect(searchCall?.[1]).toEqual([
       "search",
       "記憶 憶系 系統 統升 升級 qmd",
-      "--json",
+      "--format",
+      "json",
       "-n",
       String(maxResults),
       "-c",
@@ -1299,8 +1300,8 @@ describe("QmdMemoryManager", () => {
         (args): args is string[] => Array.isArray(args) && ["search", "query"].includes(args[0]),
       );
     expect(searchAndQueryCalls).toEqual([
-      ["search", "test", "--json", "-n", String(maxResults), "-c", "workspace-main"],
-      ["query", "test", "--json", "-n", String(maxResults), "-c", "workspace-main"],
+      ["search", "test", "--format", "json", "-n", String(maxResults), "-c", "workspace-main"],
+      ["query", "test", "--format", "json", "-n", String(maxResults), "-c", "workspace-main"],
     ]);
     await manager.close();
   });
@@ -1461,8 +1462,8 @@ describe("QmdMemoryManager", () => {
       .map((call: unknown[]) => call[1] as string[])
       .filter((args: string[]) => args[0] === "search");
     expect(searchCalls).toEqual([
-      ["search", "test", "--json", "-n", String(maxResults), "-c", "workspace-main"],
-      ["search", "test", "--json", "-n", String(maxResults), "-c", "notes-main"],
+      ["search", "test", "--format", "json", "-n", String(maxResults), "-c", "workspace-main"],
+      ["search", "test", "--format", "json", "-n", String(maxResults), "-c", "notes-main"],
     ]);
     await manager.close();
   });
@@ -1507,8 +1508,8 @@ describe("QmdMemoryManager", () => {
       .map((call: unknown[]) => call[1] as string[])
       .filter((args: string[]) => args[0] === "query");
     expect(queryCalls).toEqual([
-      ["query", "test", "--json", "-n", String(maxResults), "-c", "workspace-main"],
-      ["query", "test", "--json", "-n", String(maxResults), "-c", "notes-main"],
+      ["query", "test", "--format", "json", "-n", String(maxResults), "-c", "workspace-main"],
+      ["query", "test", "--format", "json", "-n", String(maxResults), "-c", "notes-main"],
     ]);
     await manager.close();
   });
@@ -1558,9 +1559,9 @@ describe("QmdMemoryManager", () => {
       .map((call: unknown[]) => call[1] as string[])
       .filter((args: string[]) => args[0] === "search" || args[0] === "query");
     expect(searchAndQueryCalls).toEqual([
-      ["search", "test", "--json", "-n", String(maxResults), "-c", "workspace-main"],
-      ["query", "test", "--json", "-n", String(maxResults), "-c", "workspace-main"],
-      ["query", "test", "--json", "-n", String(maxResults), "-c", "notes-main"],
+      ["search", "test", "--format", "json", "-n", String(maxResults), "-c", "workspace-main"],
+      ["query", "test", "--format", "json", "-n", String(maxResults), "-c", "workspace-main"],
+      ["query", "test", "--format", "json", "-n", String(maxResults), "-c", "notes-main"],
     ]);
     await manager.close();
   });

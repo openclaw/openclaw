@@ -334,7 +334,7 @@ export class QmdMemoryManager implements MemorySearchManager {
   private async listCollectionsBestEffort(): Promise<Map<string, ListedCollection>> {
     const existing = new Map<string, ListedCollection>();
     try {
-      const result = await this.runQmd(["collection", "list", "--json"], {
+      const result = await this.runQmd(["collection", "list", "--format", "json"], {
         timeoutMs: this.qmd.update.commandTimeoutMs,
       });
       const parsed = this.parseListedCollections(result.stdout);
@@ -342,7 +342,7 @@ export class QmdMemoryManager implements MemorySearchManager {
         existing.set(name, details);
       }
     } catch {
-      // ignore; older qmd versions might not support list --json.
+      // ignore; older qmd versions might not support list --format json.
     }
     return existing;
   }
@@ -522,7 +522,7 @@ export class QmdMemoryManager implements MemorySearchManager {
   }
 
   private async addCollection(pathArg: string, name: string, pattern: string): Promise<void> {
-    await this.runQmd(["collection", "add", pathArg, "--name", name, "--mask", pattern], {
+    await this.runQmd(["collection", "add", name, pathArg, "--pattern", pattern], {
       timeoutMs: this.qmd.update.commandTimeoutMs,
     });
   }
@@ -570,7 +570,7 @@ export class QmdMemoryManager implements MemorySearchManager {
         return listed;
       }
     } catch {
-      // Some qmd builds ignore `--json` and still print table output.
+      // Some qmd builds ignore `--format json` and still print table output.
     }
 
     let currentName: string | null = null;
@@ -621,7 +621,7 @@ export class QmdMemoryManager implements MemorySearchManager {
 
   private shouldRebindCollection(collection: ManagedCollection, listed: ListedCollection): boolean {
     if (!listed.path) {
-      // Older qmd versions may only return names from `collection list --json`.
+      // Older qmd versions may only return names from `collection list --format json`.
       // Do not perform destructive rebinds when metadata is incomplete: remove+add
       // can permanently drop collections if add fails (for example on timeout).
       return false;
@@ -2062,8 +2062,8 @@ export class QmdMemoryManager implements MemorySearchManager {
   ): string[] {
     const normalizedQuery = command === "search" ? normalizeHanBm25Query(query) : query;
     if (command === "query") {
-      return ["query", normalizedQuery, "--json", "-n", String(limit)];
+      return ["query", normalizedQuery, "--format", "json", "-n", String(limit)];
     }
-    return [command, normalizedQuery, "--json", "-n", String(limit)];
+    return [command, normalizedQuery, "--format", "json", "-n", String(limit)];
   }
 }
