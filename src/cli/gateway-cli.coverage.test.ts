@@ -223,7 +223,21 @@ describe("gateway-cli coverage", () => {
     }
   });
 
-  it("prints stop hints on GatewayLockError when service is loaded", async () => {
+  it("exits 0 on GatewayLockError when lock holder PID is confirmed", async () => {
+    resetRuntimeCapture();
+    serviceIsLoaded.mockResolvedValue(true);
+    startGatewayServer.mockRejectedValueOnce(
+      new GatewayLockError("gateway already running (pid 12345); lock timeout after 5000ms"),
+    );
+    await expect(
+      runGatewayCommand(["gateway", "--token", "test-token", "--allow-unconfigured"]),
+    ).rejects.toThrow("__exit__:0");
+
+    expect(startGatewayServer).toHaveBeenCalled();
+    expect(runtimeErrors.join("\n")).toContain("already running");
+  });
+
+  it("exits 1 on GatewayLockError from EADDRINUSE without confirmed PID", async () => {
     resetRuntimeCapture();
     serviceIsLoaded.mockResolvedValue(true);
     startGatewayServer.mockRejectedValueOnce(
@@ -233,7 +247,6 @@ describe("gateway-cli coverage", () => {
 
     expect(startGatewayServer).toHaveBeenCalled();
     expect(runtimeErrors.join("\n")).toContain("Gateway failed to start:");
-    expect(runtimeErrors.join("\n")).toContain("gateway stop");
   });
 
   it("uses env/config port when --port is omitted", async () => {
