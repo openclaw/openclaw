@@ -347,6 +347,7 @@ vi.mock("../config/config.js", async (importOriginal) => {
   return {
     ...actual,
     loadConfig: mocks.loadConfig,
+    readBestEffortConfig: mocks.loadConfig,
   };
 });
 vi.mock("../daemon/service.js", () => ({
@@ -488,25 +489,43 @@ describe("statusCommand", () => {
   });
 
   it("warns instead of crashing when gateway auth SecretRef is unresolved for probe auth", async () => {
-    mocks.loadConfig.mockReturnValue({
-      session: {},
-      gateway: {
-        auth: {
-          mode: "token",
-          token: { source: "env", provider: "default", id: "MISSING_GATEWAY_TOKEN" },
+    // Clear gateway token env vars so the SecretRef resolution path is exercised
+    const savedToken = process.env.OPENCLAW_GATEWAY_TOKEN;
+    const savedLegacy = process.env.CLAWDBOT_GATEWAY_TOKEN;
+    delete process.env.OPENCLAW_GATEWAY_TOKEN;
+    delete process.env.CLAWDBOT_GATEWAY_TOKEN;
+    try {
+      mocks.loadConfig.mockReturnValue({
+        session: {},
+        gateway: {
+          auth: {
+            mode: "token",
+            token: { source: "env", provider: "default", id: "MISSING_GATEWAY_TOKEN" },
+          },
         },
-      },
-      secrets: {
-        providers: {
-          default: { source: "env" },
+        secrets: {
+          providers: {
+            default: { source: "env" },
+          },
         },
-      },
-    });
+      });
 
-    await statusCommand({ json: true }, runtime as never);
-    const payload = JSON.parse(String(runtimeLogMock.mock.calls.at(-1)?.[0]));
-    expect(payload.gateway.error).toContain("gateway.auth.token");
-    expect(payload.gateway.error).toContain("SecretRef");
+      await statusCommand({ json: true }, runtime as never);
+      const payload = JSON.parse(String(runtimeLogMock.mock.calls.at(-1)?.[0]));
+      expect(payload.gateway.error).toContain("gateway.auth.token");
+      expect(payload.gateway.error).toContain("SecretRef");
+    } finally {
+      if (savedToken !== undefined) {
+        process.env.OPENCLAW_GATEWAY_TOKEN = savedToken;
+      } else {
+        delete process.env.OPENCLAW_GATEWAY_TOKEN;
+      }
+      if (savedLegacy !== undefined) {
+        process.env.CLAWDBOT_GATEWAY_TOKEN = savedLegacy;
+      } else {
+        delete process.env.CLAWDBOT_GATEWAY_TOKEN;
+      }
+    }
   });
 
   it("surfaces channel runtime errors from the gateway", async () => {
