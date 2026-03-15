@@ -10,6 +10,7 @@ type ScrollHost = {
   chatHasAutoScrolled: boolean;
   chatUserNearBottom: boolean;
   chatNewMessagesBelow: boolean;
+  chatUserScrolledUp: boolean;
   logsScrollFrame: number | null;
   logsAtBottom: boolean;
   topbarObserver: ResizeObserver | null;
@@ -50,6 +51,14 @@ export function scheduleChatScroll(host: ScrollHost, force = false, smooth = fal
       // force=true only overrides when we haven't auto-scrolled yet (initial load).
       // After initial load, respect the user's scroll position.
       const effectiveForce = force && !host.chatHasAutoScrolled;
+
+      // If the user has explicitly scrolled up during streaming, do not
+      // auto-scroll regardless of the DOM distance from the bottom.
+      if (host.chatUserScrolledUp && !effectiveForce) {
+        host.chatNewMessagesBelow = true;
+        return;
+      }
+
       const shouldStick =
         effectiveForce || host.chatUserNearBottom || distanceFromBottom < NEAR_BOTTOM_THRESHOLD;
 
@@ -85,8 +94,8 @@ export function scheduleChatScroll(host: ScrollHost, force = false, smooth = fal
           latest.scrollHeight - latest.scrollTop - latest.clientHeight;
         const shouldStickRetry =
           effectiveForce ||
-          host.chatUserNearBottom ||
-          latestDistanceFromBottom < NEAR_BOTTOM_THRESHOLD;
+          (!host.chatUserScrolledUp && host.chatUserNearBottom) ||
+          (!host.chatUserScrolledUp && latestDistanceFromBottom < NEAR_BOTTOM_THRESHOLD);
         if (!shouldStickRetry) {
           return;
         }
@@ -125,10 +134,16 @@ export function handleChatScroll(host: ScrollHost, event: Event) {
     return;
   }
   const distanceFromBottom = container.scrollHeight - container.scrollTop - container.clientHeight;
-  host.chatUserNearBottom = distanceFromBottom < NEAR_BOTTOM_THRESHOLD;
-  // Clear the "new messages below" indicator when user scrolls back to bottom.
-  if (host.chatUserNearBottom) {
+  const isNearBottom = distanceFromBottom < NEAR_BOTTOM_THRESHOLD;
+  host.chatUserNearBottom = isNearBottom;
+
+  if (isNearBottom) {
+    // User reached the bottom — resume auto-scroll and clear indicators.
+    host.chatUserScrolledUp = false;
     host.chatNewMessagesBelow = false;
+  } else if (!host.chatUserScrolledUp) {
+    // User scrolled up: lock the scroll position from now on.
+    host.chatUserScrolledUp = true;
   }
 }
 
@@ -145,6 +160,7 @@ export function resetChatScroll(host: ScrollHost) {
   host.chatHasAutoScrolled = false;
   host.chatUserNearBottom = true;
   host.chatNewMessagesBelow = false;
+  host.chatUserScrolledUp = false;
 }
 
 export function exportLogs(lines: string[], label: string) {
