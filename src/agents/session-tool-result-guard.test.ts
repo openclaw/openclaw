@@ -180,6 +180,27 @@ describe("installSessionToolResultGuard", () => {
     expect(messages[1]?.toolName).toBe("read");
   });
 
+  it("sets toolName to 'unknown' when toolName is entirely missing", () => {
+    const sm = SessionManager.inMemory();
+    installSessionToolResultGuard(sm);
+
+    // Tool result without any toolName property and no matching pending tool call
+    sm.appendMessage(
+      asAppendMessage({
+        role: "toolResult",
+        toolCallId: "call_orphan",
+        content: [{ type: "text", text: "ok" }],
+        isError: false,
+      }),
+    );
+
+    const messages = expectPersistedRoles(sm, ["toolResult"]) as Array<{
+      role: string;
+      toolName?: string;
+    }>;
+    expect(messages[0]?.toolName).toBe("unknown");
+  });
+
   it("preserves ordering with multiple tool calls and partial results", () => {
     const sm = SessionManager.inMemory();
     const guard = installSessionToolResultGuard(sm);
