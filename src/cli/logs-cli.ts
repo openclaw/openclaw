@@ -2,7 +2,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import type { Command } from "commander";
 import { buildGatewayConnectionDetails } from "../gateway/call.js";
 import { parseLogLine } from "../logging/parse-log-line.js";
-import { formatLocalIsoWithOffset, isValidTimeZone } from "../logging/timestamps.js";
+import { formatLocalIsoWithOffset } from "../logging/timestamps.js";
 import { formatDocsLink } from "../terminal/links.js";
 import { clearActiveProgressLine } from "../terminal/progress-line.js";
 import { createSafeStreamWriter } from "../terminal/stream-writer.js";
@@ -28,6 +28,7 @@ type LogsCliOptions = {
   plain?: boolean;
   color?: boolean;
   localTime?: boolean;
+  utc?: boolean;
   url?: string;
   token?: string;
   timeout?: string;
@@ -206,7 +207,8 @@ export function registerLogsCli(program: Command) {
     .option("--json", "Emit JSON log lines", false)
     .option("--plain", "Plain text output (no ANSI styling)", false)
     .option("--no-color", "Disable ANSI colors")
-    .option("--local-time", "Display timestamps in local timezone", false)
+    .option("--local-time", "Display timestamps in local timezone (default)", true)
+    .option("--utc", "Display timestamps in UTC", false)
     .addHelpText(
       "after",
       () =>
@@ -223,8 +225,9 @@ export function registerLogsCli(program: Command) {
     const jsonMode = Boolean(opts.json);
     const pretty = !jsonMode && Boolean(process.stdout.isTTY) && !opts.plain;
     const rich = isRich() && opts.color !== false;
-    const localTime =
-      Boolean(opts.localTime) || (!!process.env.TZ && isValidTimeZone(process.env.TZ));
+    // Default to local time display. Users in non-UTC timezones expect local
+    // timestamps without needing to pass --local-time or set TZ explicitly.
+    const localTime = !opts.utc;
 
     while (true) {
       let payload: LogsTailPayload;
