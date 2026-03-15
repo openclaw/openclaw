@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { spawnSubagentDirect } from "./subagent-spawn.js";
+import { installAcceptedSubagentGatewayMock } from "./test-helpers/subagent-gateway.js";
 
 type TestAgentConfig = {
   id?: string;
@@ -100,26 +101,34 @@ function createConfigOverride(overrides?: Record<string, unknown>) {
 }
 
 function setupGatewayMock() {
-  hoisted.callGatewayMock.mockImplementation(
-    async (opts: { method?: string; params?: Record<string, unknown> }) => {
-      if (opts.method === "sessions.patch") {
-        return { ok: true };
-      }
-      if (opts.method === "sessions.delete") {
-        return { ok: true };
-      }
-      if (opts.method === "agent") {
-        return { runId: "run-1" };
-      }
-      return {};
-    },
-  );
+  installAcceptedSubagentGatewayMock(hoisted.callGatewayMock);
 }
 
 function getRegisteredRun() {
   return hoisted.registerSubagentRunMock.mock.calls.at(0)?.[0] as
     | Record<string, unknown>
     | undefined;
+}
+
+async function expectAcceptedWorkspace(params: { agentId: string; expectedWorkspaceDir: string }) {
+  const result = await spawnSubagentDirect(
+    {
+      task: "inspect workspace",
+      agentId: params.agentId,
+    },
+    {
+      agentSessionKey: "agent:main:main",
+      agentChannel: "telegram",
+      agentAccountId: "123",
+      agentTo: "456",
+      workspaceDir: "/tmp/requester-workspace",
+    },
+  );
+
+  expect(result.status).toBe("accepted");
+  expect(getRegisteredRun()).toMatchObject({
+    workspaceDir: params.expectedWorkspaceDir,
+  });
 }
 
 describe("spawnSubagentDirect workspace inheritance", () => {
@@ -149,44 +158,16 @@ describe("spawnSubagentDirect workspace inheritance", () => {
       },
     });
 
-    const result = await spawnSubagentDirect(
-      {
-        task: "inspect workspace",
-        agentId: "ops",
-      },
-      {
-        agentSessionKey: "agent:main:main",
-        agentChannel: "telegram",
-        agentAccountId: "123",
-        agentTo: "456",
-        workspaceDir: "/tmp/requester-workspace",
-      },
-    );
-
-    expect(result.status).toBe("accepted");
-    expect(getRegisteredRun()).toMatchObject({
-      workspaceDir: "/tmp/workspace-ops",
+    await expectAcceptedWorkspace({
+      agentId: "ops",
+      expectedWorkspaceDir: "/tmp/workspace-ops",
     });
   });
 
   it("preserves the inherited workspace for same-agent spawns", async () => {
-    const result = await spawnSubagentDirect(
-      {
-        task: "inspect workspace",
-        agentId: "main",
-      },
-      {
-        agentSessionKey: "agent:main:main",
-        agentChannel: "telegram",
-        agentAccountId: "123",
-        agentTo: "456",
-        workspaceDir: "/tmp/requester-workspace",
-      },
-    );
-
-    expect(result.status).toBe("accepted");
-    expect(getRegisteredRun()).toMatchObject({
-      workspaceDir: "/tmp/requester-workspace",
+    await expectAcceptedWorkspace({
+      agentId: "main",
+      expectedWorkspaceDir: "/tmp/requester-workspace",
     });
   });
 });

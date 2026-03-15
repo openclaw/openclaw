@@ -32,8 +32,14 @@ vi.mock("./probe.js", () => ({
   probeFeishu: probeFeishuMock,
 }));
 
-vi.mock("./client.js", () => createFeishuClientMockModule());
-vi.mock("./runtime.js", () => createFeishuRuntimeMockModule());
+vi.mock("./client.js", async () => {
+  const { createFeishuClientMockModule } = await import("./monitor.test-mocks.js");
+  return createFeishuClientMockModule();
+});
+vi.mock("./runtime.js", async () => {
+  const { createFeishuRuntimeMockModule } = await import("./monitor.test-mocks.js");
+  return createFeishuRuntimeMockModule();
+});
 
 function buildMultiAccountWebsocketConfig(accountIds: string[]): ClawdbotConfig {
   return {

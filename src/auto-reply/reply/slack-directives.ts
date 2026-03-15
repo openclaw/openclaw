@@ -1,4 +1,5 @@
-import { parseSlackBlocksInput } from "../../slack/blocks-input.js";
+import { parseSlackBlocksInput } from "../../../extensions/slack/src/blocks-input.js";
+import { truncateSlackText } from "../../../extensions/slack/src/truncate.js";
 import type { ReplyPayload } from "../types.js";
 
 const SLACK_REPLY_BUTTON_ACTION_ID = "openclaw:reply_button";
@@ -20,17 +21,6 @@ type SlackChoice = {
   label: string;
   value: string;
 };
-
-function truncateSlackText(value: string, max: number): string {
-  const trimmed = value.trim();
-  if (trimmed.length <= max) {
-    return trimmed;
-  }
-  if (max <= 1) {
-    return trimmed.slice(0, max);
-  }
-  return `${trimmed.slice(0, max - 1)}…`;
-}
 
 function parseChoice(raw: string): SlackChoice | null {
   const trimmed = raw.trim();

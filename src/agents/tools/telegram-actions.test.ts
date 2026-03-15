@@ -30,7 +30,7 @@ const createForumTopicTelegram = vi.fn(async () => ({
 }));
 let envSnapshot: ReturnType<typeof captureEnv>;
 
-vi.mock("../../telegram/send.js", () => ({
+vi.mock("../../../extensions/telegram/src/send.js", () => ({
   reactMessageTelegram: (...args: Parameters<typeof reactMessageTelegram>) =>
     reactMessageTelegram(...args),
   sendMessageTelegram: (...args: Parameters<typeof sendMessageTelegram>) =>
