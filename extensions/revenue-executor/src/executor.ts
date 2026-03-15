@@ -65,14 +65,23 @@ export async function executeRevenueCommand(
       locationId,
     }));
 
-  let opportunityId: string | undefined;
-  let opportunityError: string | undefined;
-  try {
-    const opp = await deps.ghl.createOpportunity({
-      contactId: contact.id,
-      name: parsed.opportunityName,
-      amount: parsed.price,
-      locationId,
+    let opportunityId: string | undefined;
+    let opportunityError: string | undefined;
+    try {
+      console.log(
+        "[debug] createOpportunity payload:",
+        JSON.stringify({
+          contactId: contact.id,
+          name: parsed.opportunityName,
+          amount: parsed.price,
+          locationId,
+        }),
+      );
+      const opp = await deps.ghl.createOpportunity({
+        contactId: contact.id,
+        name: parsed.opportunityName,
+        amount: parsed.price,
+        locationId,
     });
     opportunityId = opp.id;
   } catch (error) {
