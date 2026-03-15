@@ -1,7 +1,7 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 
 type AnthropicContentBlock = {
-  type: "text" | "toolUse" | "toolResult";
+  type: "text" | "toolUse" | "toolCall" | "toolResult";
   text?: string;
   id?: string;
   name?: string;
@@ -9,8 +9,10 @@ type AnthropicContentBlock = {
 };
 
 /**
- * Strips dangling tool_use blocks from assistant messages when the immediately
- * following user message does not contain a matching tool_result block.
+ * Strips dangling tool-use blocks from assistant messages when the immediately
+ * following user message does not contain a matching tool-result block.
+ *
+ * Handles both `toolUse` and the alias `toolCall` block types.
  * This fixes the "tool_use ids found without tool_result blocks" error from Anthropic.
  */
 function stripDanglingAnthropicToolUses(messages: AgentMessage[]): AgentMessage[] {
@@ -59,16 +61,16 @@ function stripDanglingAnthropicToolUses(messages: AgentMessage[]): AgentMessage[
       }
     }
 
-    // Filter out tool_use blocks that don't have matching tool_result
+    // Filter out tool-use/tool-call blocks that don't have matching tool_result
     const originalContent = Array.isArray(assistantMsg.content) ? assistantMsg.content : [];
     const filteredContent = originalContent.filter((block) => {
       if (!block) {
         return false;
       }
-      if (block.type !== "toolUse") {
+      if (block.type !== "toolUse" && block.type !== "toolCall") {
         return true;
       }
-      // Keep tool_use if its id is in the valid set
+      // Keep tool calls only when a following tool_result references them.
       return validToolUseIds.has(block.id || "");
     });
 
@@ -187,7 +189,9 @@ export function mergeConsecutiveUserTurns(
  * Validates and fixes conversation turn sequences for Anthropic API.
  * Anthropic requires strict alternating user→assistant pattern.
  * Merges consecutive user messages together.
- * Also strips dangling tool_use blocks that lack corresponding tool_result blocks.
+ *
+ * Also strips dangling tool-use blocks (`toolUse` / `toolCall`) that lack corresponding
+ * tool-result blocks (`toolResult`).
  */
 export function validateAnthropicTurns(messages: AgentMessage[]): AgentMessage[] {
   // First, strip dangling tool_use blocks from assistant messages

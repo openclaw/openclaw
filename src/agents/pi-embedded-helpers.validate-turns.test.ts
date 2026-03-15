@@ -383,6 +383,26 @@ describe("validateAnthropicTurns strips dangling tool_use blocks", () => {
     expect(assistantContent).toEqual([{ type: "text", text: "I'll check that" }]);
   });
 
+  it("should also strip dangling toolCall blocks without matching tool_result", () => {
+    const msgs = asMessages([
+      { role: "user", content: [{ type: "text", text: "Use tool" }] },
+      {
+        role: "assistant",
+        content: [
+          { type: "toolCall", id: "call-1", name: "read", arguments: {} },
+          { type: "text", text: "I'll check that" },
+        ],
+      },
+      { role: "user", content: [{ type: "text", text: "Hello" }] },
+    ]);
+
+    const result = validateAnthropicTurns(msgs);
+
+    expect(result).toHaveLength(3);
+    const assistantContent = (result[1] as { content?: unknown[] }).content;
+    expect(assistantContent).toEqual([{ type: "text", text: "I'll check that" }]);
+  });
+
   it("should preserve tool_use blocks with matching tool_result", () => {
     const msgs = asMessages([
       { role: "user", content: [{ type: "text", text: "Use tool" }] },
@@ -409,6 +429,35 @@ describe("validateAnthropicTurns strips dangling tool_use blocks", () => {
     const assistantContent = (result[1] as { content?: unknown[] }).content;
     expect(assistantContent).toEqual([
       { type: "toolUse", id: "tool-1", name: "test", input: {} },
+      { type: "text", text: "Here's result" },
+    ]);
+  });
+
+  it("should preserve toolCall blocks with matching tool_result", () => {
+    const msgs = asMessages([
+      { role: "user", content: [{ type: "text", text: "Use tool" }] },
+      {
+        role: "assistant",
+        content: [
+          { type: "toolCall", id: "call-1", name: "read", arguments: {} },
+          { type: "text", text: "Here's result" },
+        ],
+      },
+      {
+        role: "user",
+        content: [
+          { type: "toolResult", toolUseId: "call-1", content: [{ type: "text", text: "Result" }] },
+          { type: "text", text: "Thanks" },
+        ],
+      },
+    ]);
+
+    const result = validateAnthropicTurns(msgs);
+
+    expect(result).toHaveLength(3);
+    const assistantContent = (result[1] as { content?: unknown[] }).content;
+    expect(assistantContent).toEqual([
+      { type: "toolCall", id: "call-1", name: "read", arguments: {} },
       { type: "text", text: "Here's result" },
     ]);
   });
