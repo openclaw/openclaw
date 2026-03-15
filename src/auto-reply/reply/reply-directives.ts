@@ -15,24 +15,30 @@ export type ReplyDirectiveParseResult = {
   sticker?: { raw: string };
 };
 
-/** Extract STICKER: directives from text, removing them from the output text. Case-insensitive. Only first sticker is used. */
+/**
+ * Extract STICKER: directives from text. Valid non-empty directives are removed
+ * from output text, while empty directives are kept as plain text.
+ */
 function extractStickerDirective(text: string): { text: string; sticker?: { raw: string } } {
   const lines = text.split("\n");
   let sticker: { raw: string } | undefined;
   const remaining: string[] = [];
 
   for (const line of lines) {
-    if (/^sticker:/i.test(line.trim())) {
-      if (!sticker) {
-        const raw = line.slice(line.toLowerCase().indexOf("sticker:") + "sticker:".length).trim();
-        if (raw) {
-          sticker = { raw };
-        }
-      }
-      // Drop STICKER: lines from the output text
-    } else {
+    const trimmed = line.trim();
+    if (!/^sticker:/i.test(trimmed)) {
       remaining.push(line);
+      continue;
     }
+    const raw = trimmed.slice(trimmed.toLowerCase().indexOf("sticker:") + "sticker:".length).trim();
+    if (raw) {
+      if (!sticker) {
+        sticker = { raw };
+      }
+      continue;
+    }
+    // Keep empty STICKER: directives visible so malformed output is not silently dropped.
+    remaining.push(line);
   }
 
   return { text: remaining.join("\n"), sticker };

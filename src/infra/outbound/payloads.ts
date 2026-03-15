@@ -122,6 +122,7 @@ function createOutboundPayloadPlanEntry(payload: ReplyPayload): OutboundPayloadP
     replyToTag: payload.replyToTag || parsed.replyToTag,
     replyToCurrent: payload.replyToCurrent || parsed.replyToCurrent,
     audioAsVoice: Boolean(payload.audioAsVoice || parsed.audioAsVoice),
+    sticker: payload.sticker ?? parsed.sticker,
   };
   if (!isRenderablePayload(normalizedPayload)) {
     return null;

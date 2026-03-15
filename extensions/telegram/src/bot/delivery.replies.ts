@@ -628,9 +628,14 @@ export async function deliverReplies(params: {
         ? [reply.mediaUrl]
         : [];
     const hasMedia = mediaList.length > 0;
+    const hasUnsupportedSticker = Boolean(reply?.sticker?.raw?.trim());
     if (!reply?.text && !hasMedia) {
       if (reply?.audioAsVoice) {
         logVerbose("telegram reply has audioAsVoice without media/text; skipping");
+        continue;
+      }
+      if (hasUnsupportedSticker) {
+        logVerbose("telegram reply has unsupported sticker-only payload; skipping");
         continue;
       }
       params.runtime.error?.(danger("reply missing text/media"));

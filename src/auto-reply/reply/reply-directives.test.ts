@@ -24,10 +24,10 @@ describe("parseReplyDirectives - sticker directive", () => {
     expect(result.sticker).toEqual({ raw: "446:1988" });
   });
 
-  it("ignores empty STICKER: directive", () => {
+  it("keeps empty STICKER: directive as text", () => {
     const result = parseReplyDirectives("テスト\nSTICKER:");
     expect(result.sticker).toBeUndefined();
-    expect(result.text).toBe("テスト");
+    expect(result.text).toBe("テスト\nSTICKER:");
   });
 
   it("takes only first sticker if multiple present", () => {

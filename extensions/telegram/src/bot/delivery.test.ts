@@ -150,6 +150,20 @@ describe("deliverReplies", () => {
     expect(runtime.error).not.toHaveBeenCalled();
   });
 
+  it("skips sticker-only payloads without logging an error", async () => {
+    const runtime = createRuntime(false);
+    const sendMessage = vi.fn();
+
+    await deliverWith({
+      replies: [{ sticker: { raw: "11537:52002734" } }],
+      runtime,
+      bot: createBot({ sendMessage }),
+    });
+
+    expect(runtime.error).not.toHaveBeenCalled();
+    expect(sendMessage).not.toHaveBeenCalled();
+  });
+
   it("skips malformed replies and continues with valid entries", async () => {
     const runtime = createRuntime(false);
     const sendMessage = vi.fn().mockResolvedValue({ message_id: 1, chat: { id: "123" } });

@@ -126,12 +126,20 @@ export async function routeReply(params: RouteReplyParams): Promise<RouteReplyRe
           }) ?? nextPayload
       : undefined,
   });
-  if (!normalized) {
+  const normalizedPayload =
+    normalized ??
+    (payload.sticker
+      ? {
+          ...payload,
+          text: payload.text ?? "",
+        }
+      : null);
+  if (!normalizedPayload) {
     return { ok: true };
   }
   const externalPayload: ReplyPayload = {
-    ...normalized,
-    text: formatBtwTextForExternalDelivery(normalized),
+    ...normalizedPayload,
+    text: formatBtwTextForExternalDelivery(normalizedPayload),
   };
 
   let text = externalPayload.text ?? "";
@@ -144,6 +152,7 @@ export async function routeReply(params: RouteReplyParams): Promise<RouteReplyRe
   const hasChannelData = messaging?.hasStructuredReplyPayload?.({
     payload: externalPayload,
   });
+  const hasSticker = Boolean(externalPayload.sticker?.raw?.trim());
 
   // Skip empty replies.
   if (
@@ -155,6 +164,7 @@ export async function routeReply(params: RouteReplyParams): Promise<RouteReplyRe
       },
       {
         hasChannelData,
+        extraContent: hasSticker,
       },
     )
   ) {
