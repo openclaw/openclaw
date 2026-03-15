@@ -29,3 +29,15 @@ test("exec sets OPENCLAW_SHELL in pty mode", async () => {
   const text = result.content?.find((item) => item.type === "text")?.text ?? "";
   expect(text).toContain("exec");
 });
+
+test("exec sets NO_DNA in pty mode", async () => {
+  const tool = createExecTool({ allowBackground: false, security: "full", ask: "off" });
+  const result = await tool.execute("toolcall-no-dna", {
+    command: "node -e \"process.stdout.write('NO_DNA=' + (process.env.NO_DNA || ''))\"",
+    pty: true,
+  });
+
+  expect(result.details.status).toBe("completed");
+  const text = result.content?.find((item) => item.type === "text")?.text ?? "";
+  expect(text).toContain("NO_DNA=1");
+});

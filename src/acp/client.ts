@@ -14,6 +14,7 @@ import {
   type SessionNotification,
 } from "@agentclientprotocol/sdk";
 import { isKnownCoreToolId } from "../agents/tool-catalog.js";
+import { markOpenClawChildCommandEnv } from "../infra/openclaw-exec-env.js";
 import { ensureOpenClawCliOnPath } from "../infra/path-env.js";
 import {
   materializeWindowsSpawnProgram,
@@ -373,7 +374,9 @@ export function resolveAcpClientSpawnEnv(
   baseEnv: NodeJS.ProcessEnv = process.env,
   options: AcpClientSpawnEnvOptions = {},
 ): NodeJS.ProcessEnv {
-  const env = omitEnvKeysCaseInsensitive(baseEnv, options.stripKeys ?? []);
+  const env = markOpenClawChildCommandEnv(
+    omitEnvKeysCaseInsensitive(baseEnv, options.stripKeys ?? []),
+  );
   env.OPENCLAW_SHELL = "acp-client";
   return env;
 }

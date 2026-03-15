@@ -1,5 +1,9 @@
 import HOST_ENV_SECURITY_POLICY_JSON from "./host-env-security-policy.json" with { type: "json" };
-import { markOpenClawExecEnv } from "./openclaw-exec-env.js";
+import {
+  markOpenClawChildCommandEnv,
+  markOpenClawCliEnv,
+  NO_DNA_ENV_VAR,
+} from "./openclaw-exec-env.js";
 
 const PORTABLE_ENV_VAR_KEY = /^[A-Za-z_][A-Za-z0-9_]*$/;
 
@@ -101,25 +105,34 @@ export function sanitizeHostExecEnv(params?: {
   baseEnv?: Record<string, string | undefined>;
   overrides?: Record<string, string> | null;
   blockPathOverrides?: boolean;
+  includeNoDna?: boolean;
 }): Record<string, string> {
   const baseEnv = params?.baseEnv ?? process.env;
   const overrides = params?.overrides ?? undefined;
   const blockPathOverrides = params?.blockPathOverrides ?? true;
+  const markExecEnv =
+    params?.includeNoDna === false ? markOpenClawCliEnv : markOpenClawChildCommandEnv;
 
   const merged: Record<string, string> = {};
   for (const [key, value] of listNormalizedPortableEnvEntries(baseEnv)) {
     if (isDangerousHostEnvVarName(key)) {
       continue;
     }
+    if (params?.includeNoDna === false && key.toUpperCase() === NO_DNA_ENV_VAR) {
+      continue;
+    }
     merged[key] = value;
   }
 
   if (!overrides) {
-    return markOpenClawExecEnv(merged);
+    return markExecEnv(merged);
   }
 
   for (const [key, value] of listNormalizedPortableEnvEntries(overrides)) {
     const upper = key.toUpperCase();
+    if (params?.includeNoDna === false && upper === NO_DNA_ENV_VAR) {
+      continue;
+    }
     // PATH is part of the security boundary (command resolution + safe-bin checks). Never allow
     // request-scoped PATH overrides from agents/gateways.
     if (blockPathOverrides && upper === "PATH") {
@@ -131,7 +144,7 @@ export function sanitizeHostExecEnv(params?: {
     merged[key] = value;
   }
 
-  return markOpenClawExecEnv(merged);
+  return markExecEnv(merged);
 }
 
 export function sanitizeSystemRunEnvOverrides(params?: {

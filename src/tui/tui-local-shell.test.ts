@@ -1,5 +1,6 @@
 import { EventEmitter } from "node:events";
 import { describe, expect, it, vi } from "vitest";
+import { NO_DNA_ENV_VALUE, OPENCLAW_CLI_ENV_VALUE } from "../infra/openclaw-exec-env.js";
 import { createLocalShellRunner } from "./tui-local-shell.js";
 
 const createSelector = () => {
@@ -97,6 +98,8 @@ describe("createLocalShellRunner", () => {
     expect(harness.createSelectorSpy).toHaveBeenCalledTimes(1);
     expect(spawnCommand).toHaveBeenCalledTimes(1);
     const spawnOptions = spawnCommand.mock.calls[0]?.[1] as { env?: Record<string, string> };
+    expect(spawnOptions.env?.NO_DNA).toBe(NO_DNA_ENV_VALUE);
+    expect(spawnOptions.env?.OPENCLAW_CLI).toBe(OPENCLAW_CLI_ENV_VALUE);
     expect(spawnOptions.env?.OPENCLAW_SHELL).toBe("tui-local");
     expect(spawnOptions.env?.PATH).toBe("/tmp/bin");
     expect(harness.messages).toContain("local shell: enabled for this session");
