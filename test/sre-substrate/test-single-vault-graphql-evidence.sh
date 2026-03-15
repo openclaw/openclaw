@@ -10,8 +10,20 @@ BIN_WITH_CAST="${TMP}/bin-with-cast"
 BIN_NO_CAST="${TMP}/bin-no-cast"
 mkdir -p "$BIN_WITH_CAST" "$BIN_NO_CAST"
 
-ln -sf "$(command -v jq)" "${BIN_WITH_CAST}/jq"
-ln -sf "$(command -v jq)" "${BIN_NO_CAST}/jq"
+REAL_JQ="$(command -v jq)"
+cat >"${BIN_WITH_CAST}/jq" <<EOF
+#!/usr/bin/env bash
+set -euo pipefail
+
+if [[ "\${MOCK_JQ_FAIL_ARGJSON_RESPONSE:-0}" == "1" && " \$* " == *" --argjson response "* ]]; then
+  printf '%s\n' 'mock jq response_summary failure' >&2
+  exit 91
+fi
+
+exec "${REAL_JQ}" "\$@"
+EOF
+chmod +x "${BIN_WITH_CAST}/jq"
+ln -sf "${BIN_WITH_CAST}/jq" "${BIN_NO_CAST}/jq"
 
 cat >"${BIN_WITH_CAST}/curl" <<'EOF'
 #!/usr/bin/env bash
@@ -139,6 +151,7 @@ printf '%s\n' "$strict_cast_output" | jq -e '.probes.direct_rpc.status == "ok"' 
 help_output="$(bash "$SCRIPT_PATH" --help)"
 printf '%s\n' "$help_output" | grep -F -- '--query ' >/dev/null
 printf '%s\n' "$help_output" | grep -F -- '--variables-json ' >/dev/null
+printf '%s\n' "$help_output" | grep -F -- 'SINGLE_VAULT_CURL_TIMEOUT_SECONDS' >/dev/null
 
 missing_address_status=0
 env PATH="${BIN_NO_CAST}:/usr/bin:/bin" bash "$SCRIPT_PATH" --chain-id 8453 --query "$QUERY" >/dev/null 2>&1 || missing_address_status=$?
@@ -155,6 +168,12 @@ test "$missing_query_status" = "2"
 non_numeric_chain_status=0
 env PATH="${BIN_NO_CAST}:/usr/bin:/bin" bash "$SCRIPT_PATH" --address 0x123 --chain-id not-a-number --query "$QUERY" >/dev/null 2>&1 || non_numeric_chain_status=$?
 test "$non_numeric_chain_status" = "2"
+
+leading_zero_chain_stderr="${TMP}/leading-zero-chain.stderr"
+leading_zero_chain_status=0
+env PATH="${BIN_NO_CAST}:/usr/bin:/bin" bash "$SCRIPT_PATH" --address 0x123 --chain-id 007 --query "$QUERY" > /dev/null 2>"$leading_zero_chain_stderr" || leading_zero_chain_status=$?
+test "$leading_zero_chain_status" = "2"
+grep -F 'without leading zeros' "$leading_zero_chain_stderr" >/dev/null
 
 missing_cast_output="$(
   env PATH="${BIN_NO_CAST}:/usr/bin:/bin" \
@@ -215,6 +234,23 @@ printf '%s\n' "$request_failed_output" | jq -e '
   .probes.exact_query_replay.ok == "request_failed"
   and (.probes.exact_query_replay.first_error | contains("operation timed out"))
 ' >/dev/null
+
+jq_failure_tmp="${TMP}/jq-failure-tmp"
+mkdir -p "$jq_failure_tmp"
+response_summary_failure_stderr="${TMP}/response-summary-failure.stderr"
+response_summary_failure_status=0
+env PATH="${BIN_NO_CAST}:/usr/bin:/bin" \
+  TMPDIR="$jq_failure_tmp" \
+  MOCK_CURL_MODE=success \
+  MOCK_JQ_FAIL_ARGJSON_RESPONSE=1 \
+  bash "$SCRIPT_PATH" \
+    --address 0x123 \
+    --chain-id 8453 \
+    --query "$QUERY" \
+    --variables-json "$VARIABLES" >/dev/null 2>"$response_summary_failure_stderr" || response_summary_failure_status=$?
+test "$response_summary_failure_status" != "0"
+grep -F 'mock jq response_summary failure' "$response_summary_failure_stderr" >/dev/null
+test -z "$(find "$jq_failure_tmp" -type f -print -quit)"
 
 partial_surface_output="$(
   env PATH="${BIN_NO_CAST}:/usr/bin:/bin" \

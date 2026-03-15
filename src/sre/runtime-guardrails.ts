@@ -124,6 +124,24 @@ export function buildSreRuntimeGuardrailContextFromTranscript(params: {
     `${params.prompt}\n${latestDataIncidentText ?? ""}\n${currentArtifactText}`,
   );
   const hasExactArtifactSignal = EXACT_ARTIFACT_RE.test(currentArtifactText);
+  const userResolver = extractResolverFamily(currentArtifactText);
+  let priorResolverMismatchMessage: string | undefined;
+
+  if (latestUserArtifact && userResolver) {
+    const otherResolver =
+      userResolver === "vaultV2ByAddress" ? "vaultByAddress" : "vaultV2ByAddress";
+    const userResolverRe = new RegExp(`\\b${userResolver}\\b`);
+    const otherResolverRe = new RegExp(`\\b${otherResolver}\\b`);
+    const priorResolverMismatch = assistantOrToolLines.some(
+      (entry) =>
+        entry.line < latestUserArtifact.line &&
+        otherResolverRe.test(entry.text) &&
+        !userResolverRe.test(entry.text),
+    );
+    if (priorResolverMismatch) {
+      priorResolverMismatchMessage = `- Resolver mismatch detected: older thread content mentions \`${otherResolver}\` while the latest user artifact is \`${userResolver}\`. Re-prove the path from the latest query before naming a cause.`;
+    }
+  }
 
   if (latestHumanCorrection) {
     guidance.push(
@@ -131,7 +149,7 @@ export function buildSreRuntimeGuardrailContextFromTranscript(params: {
     );
   }
 
-  if (latestHumanCorrection && hasExactArtifactSignal) {
+  if (hasExactArtifactSignal && (latestHumanCorrection || priorResolverMismatchMessage)) {
     guidance.push(
       "- New evidence contradicted an older theory. Explicitly retract the outdated theory in-thread before continuing from fresh live evidence.",
     );
@@ -161,23 +179,8 @@ export function buildSreRuntimeGuardrailContextFromTranscript(params: {
     );
   }
 
-  const userResolver = extractResolverFamily(currentArtifactText);
-  if (latestUserArtifact && userResolver) {
-    const otherResolver =
-      userResolver === "vaultV2ByAddress" ? "vaultByAddress" : "vaultV2ByAddress";
-    const userResolverRe = new RegExp(`\\b${userResolver}\\b`);
-    const otherResolverRe = new RegExp(`\\b${otherResolver}\\b`);
-    const priorResolverMismatch = assistantOrToolLines.some(
-      (entry) =>
-        entry.line < latestUserArtifact.line &&
-        otherResolverRe.test(entry.text) &&
-        !userResolverRe.test(entry.text),
-    );
-    if (priorResolverMismatch) {
-      guidance.push(
-        `- Resolver mismatch detected: older thread content mentions \`${otherResolver}\` while the latest user artifact is \`${userResolver}\`. Re-prove the path from the latest query before naming a cause.`,
-      );
-    }
+  if (priorResolverMismatchMessage) {
+    guidance.push(priorResolverMismatchMessage);
   }
 
   const repeatedFamilies = [...failureCounts.entries()].filter(([, count]) => count >= 2);

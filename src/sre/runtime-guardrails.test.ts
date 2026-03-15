@@ -86,6 +86,22 @@ describe("buildSreRuntimeGuardrailContextFromTranscript", () => {
     expect(context).toContain("Explicitly retract the outdated theory");
   });
 
+  it("requires retraction for resolver contradictions even without a human correction", () => {
+    const transcriptText = `
+{"type":"message","message":{"role":"assistant","content":[{"type":"text","text":"Root cause: vaultByAddress factory.chain is null"}]}}
+{"type":"message","message":{"role":"user","content":[{"type":"text","text":"query VaultV2ByAddress { vaultV2ByAddress(address: \\"0xE18d7f0C6aaba1E600fF680459a357C3B3CfdB34\\", chainId: 999) { apy netApy } } traceId=abc123"}]}}
+`;
+    const context = buildSreRuntimeGuardrailContextFromTranscript({
+      agentId: "sre",
+      prompt: "look into this vault v2 graphql apy issue",
+      transcriptText,
+    });
+
+    expect(context).toContain("Explicitly retract the outdated theory");
+    expect(context).toContain("Resolver mismatch detected");
+    expect(context).not.toContain("Latest human correction overrides older bot theories");
+  });
+
   it("does not require retraction without an exact artifact", () => {
     const transcriptText = `
 {"type":"message","message":{"role":"assistant","content":[{"type":"text","text":"Root cause: prior theory"}]}}

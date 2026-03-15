@@ -35,6 +35,9 @@ Captures a compact evidence bundle for one-address GraphQL incidents:
 - one same-chain control replay
 - public-surface split (`vaultV2ByAddress`, `vaultV2s`, `vaultV2transactions`)
 - optional direct RPC facts via `cast`
+
+Environment:
+- `SINGLE_VAULT_CURL_TIMEOUT_SECONDS` overrides curl `--max-time` (default: 20)
 EOF
 }
 
@@ -114,8 +117,8 @@ require_cmd jq
   printf 'chain id is required\n' >&2
   exit 2
 }
-[[ "$CHAIN_ID" =~ ^[0-9]+$ ]] || {
-  printf 'chain id must be numeric\n' >&2
+[[ "$CHAIN_ID" =~ ^(0|[1-9][0-9]*)$ ]] || {
+  printf 'chain id must be numeric without leading zeros\n' >&2
   exit 2
 }
 
@@ -198,28 +201,29 @@ response_summary() {
 }
 
 run_probe() {
-  local name="${1:?name required}"
-  local query_text="${2:?query required}"
-  local variables_text="${3:?variables required}"
-  local raw stderr_file err
-  stderr_file="$(mktemp)"
-  if raw="$(graphql_request "$query_text" "$variables_text" 2>"$stderr_file")"; then
-    rm -f "$stderr_file"
-    response_summary "$name" "$raw"
-    return 0
-  fi
-  err="$(cat "$stderr_file")"
-  rm -f "$stderr_file"
-  jq -nc \
-    --arg name "$name" \
-    --arg err "$err" \
-    '{
-      name: $name,
-      ok: "request_failed",
-      error_count: 1,
-      first_error: (if $err == "" then "request_failed" else $err end),
-      data: null
-    }'
+  (
+    local name="${1:?name required}"
+    local query_text="${2:?query required}"
+    local variables_text="${3:?variables required}"
+    local raw stderr_file err
+    stderr_file="$(mktemp)"
+    trap "rm -f -- '$stderr_file'" EXIT
+    if raw="$(graphql_request "$query_text" "$variables_text" 2>"$stderr_file")"; then
+      response_summary "$name" "$raw"
+      exit 0
+    fi
+    err="$(cat "$stderr_file")"
+    jq -nc \
+      --arg name "$name" \
+      --arg err "$err" \
+      '{
+        name: $name,
+        ok: "request_failed",
+        error_count: 1,
+        first_error: (if $err == "" then "request_failed" else $err end),
+        data: null
+      }'
+  )
 }
 
 same_chain_control_variables() {
