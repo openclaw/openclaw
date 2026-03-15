@@ -149,10 +149,59 @@ export function isTelegramPollingNetworkError(err: unknown): boolean {
   return getTelegramNetworkErrorOrigin(err)?.method === "getupdates";
 }
 
+function hasTelegramRetryAfterParameter(err: unknown): boolean {
+  if (!err || typeof err !== "object") {
+    return false;
+  }
+  const isValidRetryAfter = (v: unknown): boolean =>
+    typeof v === "number" && Number.isFinite(v) && v >= 0;
+
+  if ("parameters" in err && err.parameters && typeof err.parameters === "object") {
+    if (isValidRetryAfter((err.parameters as { retry_after?: unknown }).retry_after)) {
+      return true;
+    }
+  }
+  if (
+    "response" in err &&
+    err.response &&
+    typeof err.response === "object" &&
+    "parameters" in err.response &&
+    (err.response as { parameters?: unknown }).parameters &&
+    typeof (err.response as { parameters?: unknown }).parameters === "object"
+  ) {
+    if (
+      isValidRetryAfter(
+        (err.response as { parameters: { retry_after?: unknown } }).parameters.retry_after,
+      )
+    ) {
+      return true;
+    }
+  }
+  if (
+    "error" in err &&
+    err.error &&
+    typeof err.error === "object" &&
+    "parameters" in err.error &&
+    (err.error as { parameters?: unknown }).parameters &&
+    typeof (err.error as { parameters?: unknown }).parameters === "object"
+  ) {
+    if (
+      isValidRetryAfter(
+        (err.error as { parameters: { retry_after?: unknown } }).parameters.retry_after,
+      )
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
 /**
  * Returns true if the error is safe to retry for a non-idempotent Telegram send operation
- * (e.g. sendMessage). Only matches errors that are guaranteed to have occurred *before*
- * the request reached Telegram's servers, preventing duplicate message delivery.
+ * (e.g. sendMessage). Only matches errors where the message is guaranteed not to have been
+ * delivered — either before reaching Telegram's servers (pre-connect errors) or server-side
+ * rejections that explicitly indicate no delivery occurred (e.g. 429 rate-limit with
+ * retry_after).
  *
  * Use this instead of isRecoverableTelegramNetworkError for sendMessage/sendPhoto/etc.
  * calls where a retry would create a duplicate visible message.
@@ -164,6 +213,19 @@ export function isSafeToRetrySendError(err: unknown): boolean {
   for (const candidate of collectTelegramErrorCandidates(err)) {
     const code = normalizeCode(getErrorCode(candidate));
     if (code && PRE_CONNECT_ERROR_CODES.has(code)) {
+      return true;
+    }
+
+    // 429 rate-limit with retry_after: Telegram explicitly rejected the
+    // request without delivering it — safe to retry after the indicated delay.
+    if (hasTelegramRetryAfterParameter(candidate)) {
+      return true;
+    }
+
+    // grammY "Network request for X failed after N attempts" indicates a
+    // transport-level failure — the request never reached Telegram.
+    const message = formatErrorMessage(candidate).trim().toLowerCase();
+    if (message && GRAMMY_NETWORK_REQUEST_FAILED_AFTER_RE.test(message)) {
       return true;
     }
   }
