@@ -134,7 +134,8 @@ export function resolveInternalBackendClientAttestation(params: {
     params.authMethod === "token" ||
     params.authMethod === "password" ||
     params.authMethod === "device-token" ||
-    params.authMethod === "tailscale"
+    params.authMethod === "tailscale" ||
+    params.authMethod === "trusted-proxy"
   ) {
     return true;
   }

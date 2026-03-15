@@ -713,7 +713,7 @@ describe("ws connect policy", () => {
       maxProtocol: 1,
     };
 
-    for (const authMethod of ["token", "password", "device-token", "tailscale"] as const) {
+    for (const authMethod of ["token", "password", "device-token", "tailscale", "trusted-proxy"] as const) {
       expect(
         resolveInternalBackendClientAttestation({
           connectParams: backendConnect,
