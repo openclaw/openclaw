@@ -40,7 +40,7 @@ export type WebInboundMessage = {
   mediaType?: string;
   mediaFileName?: string;
   mediaUrl?: string;
-  reactionEmoji?: string;       // the emoji used in the reaction
-  reactionMessageId?: string;   // ID of the message that was reacted to
+  reactionEmoji?: string; // the emoji used in the reaction
+  reactionMessageId?: string; // ID of the message that was reacted to
   wasMentioned?: boolean;
 };

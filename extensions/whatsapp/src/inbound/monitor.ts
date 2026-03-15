@@ -560,7 +560,9 @@ export async function monitorWebInbox(options: {
         const connectionUpdateHandler = handleConnectionUpdate as unknown as (
           ...args: unknown[]
         ) => void;
-        const messagesReactionHandler = handleMessagesReaction as unknown as (...args: unknown[]) => void;
+        const messagesReactionHandler = handleMessagesReaction as unknown as (
+          ...args: unknown[]
+        ) => void;
         if (typeof ev.off === "function") {
           ev.off("messages.upsert", messagesUpsertHandler);
           ev.off("connection.update", connectionUpdateHandler);
