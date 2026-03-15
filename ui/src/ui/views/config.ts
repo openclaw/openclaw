@@ -520,6 +520,15 @@ function renderDiffValue(path: string, value: unknown, _uiHints: ConfigUiHints):
   return truncateValue(value);
 }
 
+function renderRawDiffValue(path: string, value: unknown, uiHints: ConfigUiHints): string {
+  const sensitiveCount = countSensitiveConfigValues(value, path.split("."), uiHints);
+  const blurred = sensitiveCount > 0 && !cvs.rawRevealed;
+  if (blurred) {
+    return REDACTED_PLACEHOLDER;
+  }
+  return truncateValue(value);
+}
+
 type ThemeOption = { id: ThemeName; label: string; description: string; icon: TemplateResult };
 const THEME_OPTIONS: ThemeOption[] = [
   { id: "claw", label: "Claw", description: "Chroma family", icon: icons.zap },
@@ -980,6 +989,7 @@ export function renderConfig(props: ConfigProps) {
               <details class="config-diff" ?open=${cvs.rawDiffRevealed} @toggle=${(e: Event) => {
                 const details = e.target as HTMLDetailsElement;
                 cvs.rawDiffRevealed = details.open;
+                props.onRawChange(props.raw);
               }}>
                 <summary class="config-diff__summary">
                   <span>View pending changes</span>
@@ -1002,11 +1012,11 @@ export function renderConfig(props: ConfigProps) {
                               <div class="config-diff__path">${change.path}</div>
                               <div class="config-diff__values">
                                 <span class="config-diff__from"
-                                  >${renderDiffValue(change.path, change.from, props.uiHints)}</span
+                                  >${renderRawDiffValue(change.path, change.from, props.uiHints)}</span
                                 >
                                 <span class="config-diff__arrow">→</span>
                                 <span class="config-diff__to"
-                                  >${renderDiffValue(change.path, change.to, props.uiHints)}</span
+                                  >${renderRawDiffValue(change.path, change.to, props.uiHints)}</span
                                 >
                               </div>
                             </div>
