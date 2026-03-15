@@ -103,4 +103,35 @@ describe("applyExclusiveSlotSelection", () => {
     expect(result.warnings).toHaveLength(0);
     expect(result.config).toBe(config);
   });
+
+  it("switches context-engine slot and disables competing context engines", () => {
+    const config: OpenClawConfig = {
+      plugins: {
+        slots: { contextEngine: "legacy" },
+        entries: {
+          legacy: { enabled: true },
+          "structured-context": { enabled: true },
+        },
+      },
+    };
+
+    const result = applyExclusiveSlotSelection({
+      config,
+      selectedId: "structured-context",
+      selectedKind: "context-engine",
+      registry: {
+        plugins: [
+          { id: "legacy", kind: "context-engine" },
+          { id: "structured-context", kind: "context-engine" },
+        ],
+      },
+    });
+
+    expect(result.changed).toBe(true);
+    expect(result.config.plugins?.slots?.contextEngine).toBe("structured-context");
+    expect(result.config.plugins?.entries?.legacy?.enabled).toBe(false);
+    expect(result.warnings).toContain(
+      'Exclusive slot "contextEngine" switched from "legacy" to "structured-context".',
+    );
+  });
 });

@@ -244,6 +244,10 @@
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/acpx/**"
+"extensions: structured-context":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/structured-context/**"
 "extensions: minimax-portal-auth":
   - changed-files:
       - any-glob-to-any-file:

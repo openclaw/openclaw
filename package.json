@@ -84,6 +84,10 @@
       "types": "./dist/plugin-sdk/acpx.d.ts",
       "default": "./dist/plugin-sdk/acpx.js"
     },
+    "./plugin-sdk/structured-context": {
+      "types": "./dist/plugin-sdk/structured-context.d.ts",
+      "default": "./dist/plugin-sdk/structured-context.js"
+    },
     "./plugin-sdk/bluebubbles": {
       "types": "./dist/plugin-sdk/bluebubbles.d.ts",
       "default": "./dist/plugin-sdk/bluebubbles.js"

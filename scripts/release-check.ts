@@ -45,6 +45,8 @@ const requiredPathGroups = [
   "dist/plugin-sdk/msteams.d.ts",
   "dist/plugin-sdk/acpx.js",
   "dist/plugin-sdk/acpx.d.ts",
+  "dist/plugin-sdk/structured-context.js",
+  "dist/plugin-sdk/structured-context.d.ts",
   "dist/plugin-sdk/bluebubbles.js",
   "dist/plugin-sdk/bluebubbles.d.ts",
   "dist/plugin-sdk/copilot-proxy.js",

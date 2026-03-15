@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   normalizePluginsConfig,
+  resolveContextEngineSlotDecision,
   resolveEffectiveEnableState,
   resolveEnableState,
 } from "./config-state.js";
@@ -9,13 +10,15 @@ describe("normalizePluginsConfig", () => {
   it("uses default memory slot when not specified", () => {
     const result = normalizePluginsConfig({});
     expect(result.slots.memory).toBe("memory-core");
+    expect(result.slots.contextEngine).toBe("legacy");
   });
 
   it("respects explicit memory slot value", () => {
     const result = normalizePluginsConfig({
-      slots: { memory: "custom-memory" },
+      slots: { memory: "custom-memory", contextEngine: "custom-context" },
     });
     expect(result.slots.memory).toBe("custom-memory");
+    expect(result.slots.contextEngine).toBe("custom-context");
   });
 
   it("disables memory slot when set to 'none' (case insensitive)", () => {
@@ -50,6 +53,7 @@ describe("normalizePluginsConfig", () => {
       slots: { memory: "   " },
     });
     expect(result.slots.memory).toBe("memory-core");
+    expect(result.slots.contextEngine).toBe("legacy");
   });
 
   it("normalizes plugin hook policy flags", () => {
@@ -191,6 +195,41 @@ describe("resolveEnableState", () => {
     expect(state).toEqual({
       enabled: false,
       reason: "workspace plugin (disabled by default)",
+    });
+  });
+
+  it("keeps the selected context-engine plugin enabled when omitted from plugins.allow", () => {
+    const state = resolveEnableState(
+      "structured-context",
+      "bundled",
+      normalizePluginsConfig({
+        allow: ["telegram"],
+        slots: { contextEngine: "structured-context" },
+      }),
+    );
+    expect(state).toEqual({ enabled: true });
+  });
+});
+
+describe("resolveContextEngineSlotDecision", () => {
+  it("selects only the configured context-engine plugin", () => {
+    const selected = resolveContextEngineSlotDecision({
+      id: "structured-context",
+      kind: "context-engine",
+      slot: "structured-context",
+      selectedId: null,
+    });
+    const disabled = resolveContextEngineSlotDecision({
+      id: "other-engine",
+      kind: "context-engine",
+      slot: "structured-context",
+      selectedId: "structured-context",
+    });
+
+    expect(selected).toEqual({ enabled: true, selected: true });
+    expect(disabled).toEqual({
+      enabled: false,
+      reason: 'context-engine slot set to "structured-context"',
     });
   });
 });

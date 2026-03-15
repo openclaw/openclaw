@@ -11,6 +11,10 @@ import { describe, expect, it } from "vitest";
 
 const bundledExtensionSubpathLoaders = [
   { id: "acpx", load: () => import("openclaw/plugin-sdk/acpx") },
+  {
+    id: "structured-context",
+    load: () => import("openclaw/plugin-sdk/structured-context"),
+  },
   { id: "bluebubbles", load: () => import("openclaw/plugin-sdk/bluebubbles") },
   { id: "copilot-proxy", load: () => import("openclaw/plugin-sdk/copilot-proxy") },
   { id: "device-pair", load: () => import("openclaw/plugin-sdk/device-pair") },

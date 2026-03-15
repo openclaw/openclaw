@@ -14,6 +14,7 @@ import {
   applyTestPluginDefaults,
   normalizePluginsConfig,
   resolveEffectiveEnableState,
+  resolveContextEngineSlotDecision,
   resolveMemorySlotDecision,
   type NormalizedPluginsConfig,
 } from "./config-state.js";
@@ -647,8 +648,11 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
 
   const seenIds = new Map<string, PluginRecord["origin"]>();
   const memorySlot = normalized.slots.memory;
+  const contextEngineSlot = normalized.slots.contextEngine;
   let selectedMemoryPluginId: string | null = null;
+  let selectedContextEnginePluginId: string | null = null;
   let memorySlotMatched = false;
+  let contextEngineSlotMatched = false;
 
   for (const candidate of discovery.candidates) {
     const manifestRecord = manifestByRoot.get(candidate.rootDir);
@@ -735,6 +739,22 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
         continue;
       }
     }
+    if (candidate.origin === "bundled" && manifestRecord.kind === "context-engine") {
+      const earlyContextEngineDecision = resolveContextEngineSlotDecision({
+        id: record.id,
+        kind: "context-engine",
+        slot: contextEngineSlot,
+        selectedId: selectedContextEnginePluginId,
+      });
+      if (!earlyContextEngineDecision.enabled) {
+        record.enabled = false;
+        record.status = "disabled";
+        record.error = earlyContextEngineDecision.reason;
+        registry.plugins.push(record);
+        seenIds.set(pluginId, candidate.origin);
+        continue;
+      }
+    }
 
     if (!manifestRecord.configSchema) {
       pushPluginLoadError("missing config schema");
@@ -803,6 +823,9 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
     if (record.kind === "memory" && memorySlot === record.id) {
       memorySlotMatched = true;
     }
+    if (record.kind === "context-engine" && contextEngineSlot === record.id) {
+      contextEngineSlotMatched = true;
+    }
 
     const memoryDecision = resolveMemorySlotDecision({
       id: record.id,
@@ -822,6 +845,24 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
 
     if (memoryDecision.selected && record.kind === "memory") {
       selectedMemoryPluginId = record.id;
+    }
+
+    const contextEngineDecision = resolveContextEngineSlotDecision({
+      id: record.id,
+      kind: record.kind,
+      slot: contextEngineSlot,
+      selectedId: selectedContextEnginePluginId,
+    });
+    if (!contextEngineDecision.enabled) {
+      record.enabled = false;
+      record.status = "disabled";
+      record.error = contextEngineDecision.reason;
+      registry.plugins.push(record);
+      seenIds.set(pluginId, candidate.origin);
+      continue;
+    }
+    if (contextEngineDecision.selected && record.kind === "context-engine") {
+      selectedContextEnginePluginId = record.id;
     }
 
     const validatedConfig = validatePluginConfig({
@@ -885,6 +926,17 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
     registry.diagnostics.push({
       level: "warn",
       message: `memory slot plugin not found or not marked as memory: ${memorySlot}`,
+    });
+  }
+  if (
+    typeof contextEngineSlot === "string" &&
+    contextEngineSlot.trim() &&
+    contextEngineSlot !== "legacy" &&
+    !contextEngineSlotMatched
+  ) {
+    registry.diagnostics.push({
+      level: "warn",
+      message: `context-engine slot plugin not found or not marked as context-engine: ${contextEngineSlot}`,
     });
   }
 

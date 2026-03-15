@@ -1469,6 +1469,61 @@ describe("loadOpenClawPlugins", () => {
     expect(entry?.status).toBe("disabled");
   });
 
+  it("enforces context-engine slot selection", () => {
+    process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = "/nonexistent/bundled/plugins";
+    const contextA = writePlugin({
+      id: "context-a",
+      body: `module.exports = { id: "context-a", kind: "context-engine", register(api) { api.registerContextEngine("context-a", () => ({ info: { id: "context-a", name: "A" }, ingest: async () => ({ ingested: false }), assemble: async (p) => ({ messages: p.messages, estimatedTokens: 0 }), compact: async () => ({ ok: true, compacted: false }) })); } };`,
+    });
+    const contextB = writePlugin({
+      id: "context-b",
+      body: `module.exports = { id: "context-b", kind: "context-engine", register(api) { api.registerContextEngine("context-b", () => ({ info: { id: "context-b", name: "B" }, ingest: async () => ({ ingested: false }), assemble: async (p) => ({ messages: p.messages, estimatedTokens: 0 }), compact: async () => ({ ok: true, compacted: false }) })); } };`,
+    });
+
+    fs.writeFileSync(
+      path.join(contextA.dir, "openclaw.plugin.json"),
+      JSON.stringify(
+        {
+          id: "context-a",
+          kind: "context-engine",
+          configSchema: EMPTY_PLUGIN_SCHEMA,
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+    fs.writeFileSync(
+      path.join(contextB.dir, "openclaw.plugin.json"),
+      JSON.stringify(
+        {
+          id: "context-b",
+          kind: "context-engine",
+          configSchema: EMPTY_PLUGIN_SCHEMA,
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+
+    const registry = loadOpenClawPlugins({
+      cache: false,
+      config: {
+        plugins: {
+          load: { paths: [contextA.file, contextB.file] },
+          slots: { contextEngine: "context-b" },
+        },
+      },
+    });
+
+    const a = registry.plugins.find((entry) => entry.id === "context-a");
+    const b = registry.plugins.find((entry) => entry.id === "context-b");
+    expect(b?.status).toBe("loaded");
+    expect(a?.status).toBe("disabled");
+    expect(String(a?.error ?? "")).toContain('context-engine slot set to "context-b"');
+  });
+
   it("prefers higher-precedence plugins with the same id", () => {
     const bundledDir = makeTempDir();
     writePlugin({

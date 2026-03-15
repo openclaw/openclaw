@@ -1,0 +1,387 @@
+[
+  {
+    "taskId": "cd_gateway_heartbeat_timeout",
+    "taskType": "code_debugging",
+    "title": "Fix gateway heartbeat timeout regression",
+    "objective": "Identify why gateway RPC heartbeats time out after idle and propose a minimal code fix.",
+    "inputArtifacts": [
+      "src/gateway/rpc-client.ts",
+      "src/gateway/heartbeat.ts",
+      "Issue #24810",
+      "PR #24877"
+    ],
+    "hardConstraints": [
+      "Do not change public CLI flags",
+      "Preserve exact file paths and issue numbers",
+      "Add a regression test case"
+    ],
+    "deliverables": ["Root cause summary", "Minimal patch plan", "Regression test command"],
+    "primaryIdentifiers": [
+      "src/gateway/rpc-client.ts",
+      "Issue #24810",
+      "OPENCLAW_TEST_PROFILE=low"
+    ],
+    "toolProfile": "light"
+  },
+  {
+    "taskId": "cd_signal_reconnect_loop",
+    "taskType": "code_debugging",
+    "title": "Stop Signal reconnect loop",
+    "objective": "Debug repeated reconnect behavior in Signal channel and define a safe retry backoff fix.",
+    "inputArtifacts": ["src/signal/channel.ts", "src/channels/retry-policy.ts", "Issue #24761"],
+    "hardConstraints": [
+      "Do not disable retry globally",
+      "Keep channel-specific behavior isolated",
+      "Retain existing metrics keys"
+    ],
+    "deliverables": [
+      "Failure reproduction steps",
+      "Backoff adjustment proposal",
+      "Verification checklist"
+    ],
+    "primaryIdentifiers": ["src/signal/channel.ts", "Issue #24761", "signal.reconnect.attempt"],
+    "toolProfile": "light"
+  },
+  {
+    "taskId": "cd_context_compaction_identifier_loss",
+    "taskType": "code_debugging",
+    "title": "Fix identifier loss during compaction",
+    "objective": "Investigate why identifiers are rewritten after context compaction and ensure exact identifier preservation.",
+    "inputArtifacts": [
+      "extensions/structured-context/src/context-engine.ts",
+      "test/context-engine/layer0-matrix/cases.json",
+      "Issue #24902"
+    ],
+    "hardConstraints": [
+      "Never rewrite file paths, env keys, or issue IDs",
+      "Keep deterministic behavior for tests",
+      "Do not modify OpenClaw core runtime"
+    ],
+    "deliverables": [
+      "Identifier failure matrix",
+      "Preservation patch strategy",
+      "Before vs after evidence"
+    ],
+    "primaryIdentifiers": [
+      "Issue #24902",
+      "OPENAI_API_KEY",
+      "extensions/structured-context/src/context-engine.ts"
+    ],
+    "toolProfile": "light"
+  },
+  {
+    "taskId": "cd_plugin_slot_resolution",
+    "taskType": "code_debugging",
+    "title": "Validate contextEngine slot resolution",
+    "objective": "Debug plugin loader behavior when multiple context-engine plugins are enabled and confirm deterministic slot resolution.",
+    "inputArtifacts": [
+      "src/plugins/loader.ts",
+      "src/plugins/config-state.ts",
+      "src/plugins/slots.test.ts"
+    ],
+    "hardConstraints": [
+      "Preserve default legacy behavior",
+      "No fallback compatibility shim",
+      "Keep config validation strict"
+    ],
+    "deliverables": [
+      "Resolution order explanation",
+      "Failing scenario and fix",
+      "Targeted test updates"
+    ],
+    "primaryIdentifiers": ["plugins.slots.contextEngine", "legacy", "structured-context"],
+    "toolProfile": "light"
+  },
+  {
+    "taskId": "rs_model_pricing_source_of_truth",
+    "taskType": "research",
+    "title": "Build model pricing source-of-truth note",
+    "objective": "Compile a verified comparison table of model pricing sources and highlight stale references.",
+    "inputArtifacts": [
+      "docs/reference/models.md",
+      "plans/context-compaction-audit.md",
+      "Issue #24680"
+    ],
+    "hardConstraints": [
+      "Cite official docs only",
+      "Separate assumptions from verified facts",
+      "Mark unknown values explicitly"
+    ],
+    "deliverables": ["Comparison table", "Staleness findings", "Update recommendation"],
+    "primaryIdentifiers": ["docs/reference/models.md", "Issue #24680", "pricing-last-verified"],
+    "toolProfile": "light"
+  },
+  {
+    "taskId": "rs_macos_gateway_crash_timeline",
+    "taskType": "research",
+    "title": "Analyze macOS gateway crash timeline",
+    "objective": "Produce a timeline of gateway crash incidents on macOS and correlate likely trigger classes.",
+    "inputArtifacts": ["docs/platforms/mac/release.md", "scripts/clawlog.sh", "Issue #24798"],
+    "hardConstraints": [
+      "Do not claim root cause without evidence",
+      "Preserve exact timestamps",
+      "Differentiate symptom vs trigger"
+    ],
+    "deliverables": ["Incident timeline", "Trigger buckets", "Data quality notes"],
+    "primaryIdentifiers": [
+      "scripts/clawlog.sh",
+      "Issue #24798",
+      "gateway status --deep --require-rpc"
+    ],
+    "toolProfile": "light"
+  },
+  {
+    "taskId": "rs_competitor_gap_mapping",
+    "taskType": "research",
+    "title": "Map competitor feature gaps",
+    "objective": "Compare OpenClaw context continuity capabilities against selected tools and identify clear gap statements.",
+    "inputArtifacts": ["plans/README.md", "plans/context-compaction-tests.md", "docs/testing.md"],
+    "hardConstraints": [
+      "No marketing language",
+      "Use feature-level evidence",
+      "Keep comparisons falsifiable"
+    ],
+    "deliverables": ["Gap matrix", "Evidence citations", "Priority shortlist"],
+    "primaryIdentifiers": ["plans/README.md", "Layer0", "state-aware context engineering"],
+    "toolProfile": "light"
+  },
+  {
+    "taskId": "rs_docs_coverage_audit",
+    "taskType": "research",
+    "title": "Audit docs coverage for context engine",
+    "objective": "Audit whether docs cover context engine slot config, rollout, and rollback paths.",
+    "inputArtifacts": ["docs/configuration.md", "plans/layer0-context-eval.md", "Issue #24911"],
+    "hardConstraints": [
+      "Use repo-local evidence only",
+      "Flag missing sections explicitly",
+      "Keep recommendations actionable"
+    ],
+    "deliverables": ["Coverage checklist", "Missing section list", "Patch suggestions"],
+    "primaryIdentifiers": [
+      "plugins.entries.structured-context.config.context.enabled",
+      "Issue #24911",
+      "plans/layer0-context-eval.md"
+    ],
+    "toolProfile": "light"
+  },
+  {
+    "taskId": "op_release_gate_runbook",
+    "taskType": "operations",
+    "title": "Prepare release gate runbook",
+    "objective": "Create an execution runbook for release gates with deterministic checks and fallback actions.",
+    "inputArtifacts": [
+      "scripts/release-check.ts",
+      "docs/reference/RELEASING.md",
+      "docs/testing.md"
+    ],
+    "hardConstraints": [
+      "Do not change release semantics",
+      "Keep command list copy-pastable",
+      "Separate blocking vs warning gates"
+    ],
+    "deliverables": ["Gate sequence", "Failure handling table", "Operator checklist"],
+    "primaryIdentifiers": ["pnpm tsgo", "pnpm test", "docs/reference/RELEASING.md"],
+    "toolProfile": "light"
+  },
+  {
+    "taskId": "op_oncall_incident_triage",
+    "taskType": "operations",
+    "title": "Design on-call incident triage flow",
+    "objective": "Define a triage flow for channel outages with escalation thresholds and ownership mapping.",
+    "inputArtifacts": ["src/channels", "docs/channels/", "Issue #24755"],
+    "hardConstraints": [
+      "List owner handoff points",
+      "Do not hide unresolved risks",
+      "Keep max response times explicit"
+    ],
+    "deliverables": ["Triage decision tree", "Escalation table", "Ops handoff template"],
+    "primaryIdentifiers": ["Issue #24755", "src/channels", "channel-health-check"],
+    "toolProfile": "light"
+  },
+  {
+    "taskId": "op_daily_status_digest",
+    "taskType": "operations",
+    "title": "Define daily status digest process",
+    "objective": "Plan a repeatable process that aggregates gateway and plugin health into a daily digest.",
+    "inputArtifacts": [
+      "openclaw channels status --probe",
+      "openclaw gateway status --deep --require-rpc",
+      "plans/layer0-context-eval.md"
+    ],
+    "hardConstraints": [
+      "Digest must be deterministic",
+      "Explicitly include failed probes",
+      "No hidden auto-retries"
+    ],
+    "deliverables": ["Digest template", "Data collection commands", "SLO alert thresholds"],
+    "primaryIdentifiers": [
+      "openclaw channels status --probe",
+      "openclaw gateway status --deep --require-rpc",
+      "SLO_P95_LATENCY"
+    ],
+    "toolProfile": "light"
+  },
+  {
+    "taskId": "op_dependency_risk_review",
+    "taskType": "operations",
+    "title": "Run dependency risk review",
+    "objective": "Review dependency changes for release and classify risk with mitigation actions.",
+    "inputArtifacts": ["package.json", "pnpm-lock.yaml", "SECURITY.md"],
+    "hardConstraints": [
+      "Never change Carbon dependency",
+      "Call out patchedDependencies explicitly",
+      "No publish-step changes without approval"
+    ],
+    "deliverables": ["Risk inventory", "Mitigation plan", "Approval checklist"],
+    "primaryIdentifiers": ["pnpm.patchedDependencies", "SECURITY.md", "Carbon"],
+    "toolProfile": "light"
+  },
+  {
+    "taskId": "wp_launch_blog_outline",
+    "taskType": "writing_planning",
+    "title": "Draft launch blog outline",
+    "objective": "Plan a launch blog outline for Layer0 context engine with clear sections and evidence links.",
+    "inputArtifacts": ["plans/README.md", "plans/layer0-context-eval.md", "docs/testing.md"],
+    "hardConstraints": [
+      "No hype wording",
+      "Every claim maps to evidence",
+      "Keep section order logical"
+    ],
+    "deliverables": ["Blog outline", "Claim-to-evidence map", "Open questions"],
+    "primaryIdentifiers": ["Layer0", "A/B report", "zero regression"],
+    "toolProfile": "light"
+  },
+  {
+    "taskId": "wp_docs_migration_plan",
+    "taskType": "writing_planning",
+    "title": "Plan docs migration",
+    "objective": "Create a migration plan for moving context-engine docs into Mintlify IA with anchor-safe headings.",
+    "inputArtifacts": ["docs/", "docs/.i18n/README.md", "Issue #24856"],
+    "hardConstraints": [
+      "Use root-relative Mintlify links",
+      "Avoid apostrophes in headings",
+      "Do not edit docs/zh-CN without request"
+    ],
+    "deliverables": ["Migration phases", "Risk and rollback", "Validation checklist"],
+    "primaryIdentifiers": [
+      "docs/zh-CN",
+      "docs/.i18n/README.md",
+      "https://docs.openclaw.ai/configuration"
+    ],
+    "toolProfile": "light"
+  },
+  {
+    "taskId": "wp_feature_spec_revision",
+    "taskType": "writing_planning",
+    "title": "Revise feature spec",
+    "objective": "Revise a feature spec for context-engine plugin rollout with config contract and failure modes.",
+    "inputArtifacts": [
+      "extensions/structured-context/openclaw.plugin.json",
+      "src/config/validation.ts",
+      "plans/context-compaction-audit.md"
+    ],
+    "hardConstraints": [
+      "Keep plugin-only scope",
+      "Describe rollback in one step",
+      "Include acceptance gates"
+    ],
+    "deliverables": ["Spec sections", "Config contract", "Failure mode table"],
+    "primaryIdentifiers": [
+      "plugins.entries.structured-context.config.context",
+      "qualityGuardEnabled",
+      "oversizedToolOutputPolicy"
+    ],
+    "toolProfile": "light"
+  },
+  {
+    "taskId": "wp_onboarding_email_series",
+    "taskType": "writing_planning",
+    "title": "Plan onboarding email series",
+    "objective": "Plan a 4-part onboarding email sequence explaining context engine rollout and user controls.",
+    "inputArtifacts": ["docs/install/updating.md", "docs/configuration.md", "Issue #24931"],
+    "hardConstraints": [
+      "Keep copy concise",
+      "Mention opt-out control explicitly",
+      "No unsupported promises"
+    ],
+    "deliverables": ["Email sequence outline", "CTA map", "FAQ inserts"],
+    "primaryIdentifiers": ["plugins.slots.contextEngine", "enabled=true", "legacy rollback"],
+    "toolProfile": "light"
+  },
+  {
+    "taskId": "mx_incident_rca_bundle",
+    "taskType": "mixed_tool_dense",
+    "title": "Assemble incident RCA bundle",
+    "objective": "Process large logs, command outputs, and issue comments to build a complete RCA package.",
+    "inputArtifacts": [
+      "/tmp/incident-logs/*.log",
+      "gh issue view #24840",
+      "scripts/context-engine/layer0-eval.ts"
+    ],
+    "hardConstraints": [
+      "Externalize oversized tool output as artifact refs",
+      "Retain command IDs and log file names",
+      "Summaries must stay under token budget"
+    ],
+    "deliverables": ["RCA timeline", "Top 3 root-cause hypotheses", "Follow-up action list"],
+    "primaryIdentifiers": ["call-mx-incident", "artifact://incident/log-001", "Issue #24840"],
+    "toolProfile": "mixed_dense"
+  },
+  {
+    "taskId": "mx_repo_audit_patch_plan",
+    "taskType": "mixed_tool_dense",
+    "title": "Run repo audit and patch planning",
+    "objective": "Aggregate lint, test, and plugin diagnostics output into a prioritized patch execution plan.",
+    "inputArtifacts": [
+      "pnpm check",
+      "pnpm test -- src/plugins/loader.test.ts",
+      "extensions/structured-context/src/context-engine.test.ts"
+    ],
+    "hardConstraints": [
+      "Keep failing command output externally referenced",
+      "Do not drop stack traces",
+      "Prioritize by user impact"
+    ],
+    "deliverables": ["Failure cluster summary", "Patch order", "Verification commands"],
+    "primaryIdentifiers": [
+      "pnpm check",
+      "pnpm test -- src/plugins/loader.test.ts",
+      "artifact://repo-audit/failures"
+    ],
+    "toolProfile": "mixed_dense"
+  },
+  {
+    "taskId": "mx_support_ticket_batch",
+    "taskType": "mixed_tool_dense",
+    "title": "Resolve support ticket batch",
+    "objective": "Triage a large support ticket batch and produce deterministic resolution notes with references.",
+    "inputArtifacts": ["ticket-export-2026-03.csv", "docs/channels/", "Issue #24891"],
+    "hardConstraints": [
+      "Do not invent ticket IDs",
+      "Preserve escalation status",
+      "Externalize oversized ticket transcripts"
+    ],
+    "deliverables": [
+      "Ticket priority queue",
+      "Escalation decisions",
+      "Customer response draft points"
+    ],
+    "primaryIdentifiers": ["TICKET-9301", "TICKET-9307", "Issue #24891"],
+    "toolProfile": "mixed_dense"
+  },
+  {
+    "taskId": "mx_growth_report_pack",
+    "taskType": "mixed_tool_dense",
+    "title": "Produce growth report pack",
+    "objective": "Combine analytics exports, experiment notes, and incident impact into a weekly growth report pack.",
+    "inputArtifacts": ["growth-metrics-week11.json", "experiment-notes.md", "incident-impact.csv"],
+    "hardConstraints": [
+      "Keep metric IDs exact",
+      "Separate measured vs estimated values",
+      "Attach artifact refs for raw exports"
+    ],
+    "deliverables": ["Executive summary", "Metric delta table", "Risk and next actions"],
+    "primaryIdentifiers": ["METRIC_D7_RETENTION", "EXP-221", "artifact://growth/raw-week11"],
+    "toolProfile": "mixed_dense"
+  }
+]

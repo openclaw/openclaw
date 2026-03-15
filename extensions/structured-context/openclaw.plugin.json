@@ -1,0 +1,63 @@
+{
+  "id": "structured-context",
+  "kind": "context-engine",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "context": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "enabled": {
+            "type": "boolean",
+            "default": true
+          },
+          "recentTurns": {
+            "type": "number",
+            "minimum": 1,
+            "maximum": 200,
+            "default": 5
+          },
+          "preserveTypes": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "user_instruction",
+                "assistant_decision",
+                "constraint",
+                "pending_user_ask",
+                "artifact_reference",
+                "error"
+              ]
+            },
+            "default": [
+              "user_instruction",
+              "assistant_decision",
+              "constraint",
+              "pending_user_ask",
+              "artifact_reference",
+              "error"
+            ]
+          },
+          "qualityGuardEnabled": {
+            "type": "boolean",
+            "default": true
+          },
+          "qualityGuardMaxRetries": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 3,
+            "default": 1
+          },
+          "oversizedToolOutputPolicy": {
+            "type": "string",
+            "enum": ["artifact_ref", "truncate"],
+            "default": "artifact_ref"
+          }
+        }
+      }
+    }
+  }
+}

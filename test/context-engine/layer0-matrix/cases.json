@@ -1,0 +1,432 @@
+[
+  {
+    "id": "TC01",
+    "lengthBucket": "M",
+    "turnCount": 60,
+    "taskType": "code_debugging",
+    "dialogueForm": "linear_qa",
+    "seed": 101,
+    "taskId": "cd_gateway_heartbeat_timeout",
+    "taskObjective": "定位 gateway 心跳超时回归的根因并给出最小修复方案。",
+    "acceptanceChecks": [
+      "保留 src/gateway/rpc-client.ts 与 Issue #24810 原样标识符",
+      "给出可执行的回归测试命令",
+      "最终结论不引入未验证事实"
+    ]
+  },
+  {
+    "id": "TC02",
+    "lengthBucket": "L",
+    "turnCount": 150,
+    "taskType": "code_debugging",
+    "dialogueForm": "clarification_branch",
+    "seed": 102,
+    "taskId": "cd_signal_reconnect_loop",
+    "taskObjective": "排查 Signal 重连循环并在两个修复分支中选出可落地方案。",
+    "acceptanceChecks": [
+      "明确比较两个 backoff 策略分支",
+      "保持 signal.reconnect.attempt 指标键不变",
+      "输出最终采用分支与放弃分支理由"
+    ]
+  },
+  {
+    "id": "TC03",
+    "lengthBucket": "M",
+    "turnCount": 60,
+    "taskType": "code_debugging",
+    "dialogueForm": "interruption_resume",
+    "seed": 103,
+    "taskId": "cd_context_compaction_identifier_loss",
+    "taskObjective": "在多次打断后仍恢复到 identifier 保真问题修复任务。",
+    "acceptanceChecks": [
+      "打断恢复后继续围绕 Issue #24902",
+      "保留 OPENAI_API_KEY 等关键标识符",
+      "最终方案仍限定为插件层修改"
+    ]
+  },
+  {
+    "id": "TC04",
+    "lengthBucket": "L",
+    "turnCount": 150,
+    "taskType": "code_debugging",
+    "dialogueForm": "goal_redirect",
+    "seed": 104,
+    "taskId": "cd_plugin_slot_resolution",
+    "taskObjective": "任务中途从 loader 异常转向 slot 决策路径验证并完成收敛。",
+    "acceptanceChecks": [
+      "正确处理目标重定向后的最新 ask",
+      "保留 plugins.slots.contextEngine 与 legacy 标识",
+      "结果不回退到兼容层方案"
+    ]
+  },
+  {
+    "id": "TC05",
+    "lengthBucket": "M",
+    "turnCount": 60,
+    "taskType": "code_debugging",
+    "dialogueForm": "conflicting_instruction_fix",
+    "seed": 105,
+    "taskId": "cd_gateway_heartbeat_timeout",
+    "taskObjective": "经历冲突指令后以修正后的 heartbeat 修复目标为准。",
+    "acceptanceChecks": [
+      "过期指令不应继续注入最终上下文",
+      "修正后的目标与回归测试要求完整保留",
+      "Issue 与路径标识符保持原样"
+    ]
+  },
+  {
+    "id": "TC06",
+    "lengthBucket": "L",
+    "turnCount": 150,
+    "taskType": "research",
+    "dialogueForm": "linear_qa",
+    "seed": 106,
+    "taskId": "rs_model_pricing_source_of_truth",
+    "taskObjective": "线性调研模型定价来源并输出可核验对照表。",
+    "acceptanceChecks": [
+      "区分已验证与待确认来源",
+      "保留 docs/reference/models.md 标识",
+      "结论附带更新时间字段"
+    ]
+  },
+  {
+    "id": "TC07",
+    "lengthBucket": "M",
+    "turnCount": 60,
+    "taskType": "research",
+    "dialogueForm": "clarification_branch",
+    "seed": 107,
+    "taskId": "rs_macos_gateway_crash_timeline",
+    "taskObjective": "在多轮澄清分支下完成 macOS crash 时间线归并。",
+    "acceptanceChecks": [
+      "澄清后仍保留关键时间戳",
+      "区分 symptom 与 trigger",
+      "保留 scripts/clawlog.sh 与 Issue #24798"
+    ]
+  },
+  {
+    "id": "TC08",
+    "lengthBucket": "L",
+    "turnCount": 150,
+    "taskType": "research",
+    "dialogueForm": "interruption_resume",
+    "seed": 108,
+    "taskId": "rs_competitor_gap_mapping",
+    "taskObjective": "在中断后恢复并完成竞品能力差距矩阵。",
+    "acceptanceChecks": [
+      "恢复后继续使用证据化比较",
+      "不出现营销化表述",
+      "最终保留 plans/README.md 作为来源"
+    ]
+  },
+  {
+    "id": "TC09",
+    "lengthBucket": "M",
+    "turnCount": 60,
+    "taskType": "research",
+    "dialogueForm": "goal_redirect",
+    "seed": 109,
+    "taskId": "rs_docs_coverage_audit",
+    "taskObjective": "从文档缺口盘点重定向到 rollout/rollback 覆盖性审计。",
+    "acceptanceChecks": [
+      "最终目标应以重定向后的审计为准",
+      "明确列出缺失章节",
+      "保留 config 键名原文"
+    ]
+  },
+  {
+    "id": "TC10",
+    "lengthBucket": "L",
+    "turnCount": 150,
+    "taskType": "research",
+    "dialogueForm": "conflicting_instruction_fix",
+    "seed": 110,
+    "taskId": "rs_model_pricing_source_of_truth",
+    "taskObjective": "冲突指令修正后，仅保留官方来源的定价结论。",
+    "acceptanceChecks": [
+      "被撤销的来源不进入最终结论",
+      "官方来源优先级保留",
+      "最终摘要含 source-of-truth 标记"
+    ]
+  },
+  {
+    "id": "TC11",
+    "lengthBucket": "M",
+    "turnCount": 60,
+    "taskType": "operations",
+    "dialogueForm": "linear_qa",
+    "seed": 111,
+    "taskId": "op_release_gate_runbook",
+    "taskObjective": "整理 release gate runbook 并输出可直接执行步骤。",
+    "acceptanceChecks": [
+      "保留 pnpm tsgo 与 pnpm test 命令",
+      "区分阻断门与告警门",
+      "提供失败回退动作"
+    ]
+  },
+  {
+    "id": "TC12",
+    "lengthBucket": "L",
+    "turnCount": 150,
+    "taskType": "operations",
+    "dialogueForm": "clarification_branch",
+    "seed": 112,
+    "taskId": "op_oncall_incident_triage",
+    "taskObjective": "在多分支澄清下形成 on-call 事件分级处置流程。",
+    "acceptanceChecks": [
+      "每个分支都有清晰升级阈值",
+      "保留 owner handoff 信息",
+      "输出最终统一决策树"
+    ]
+  },
+  {
+    "id": "TC13",
+    "lengthBucket": "M",
+    "turnCount": 60,
+    "taskType": "operations",
+    "dialogueForm": "interruption_resume",
+    "seed": 113,
+    "taskId": "op_daily_status_digest",
+    "taskObjective": "被打断后恢复 daily digest 流程并完成 SLO 规则定义。",
+    "acceptanceChecks": [
+      "恢复后仍包含失败 probe",
+      "保留 gateway status --deep --require-rpc",
+      "SLO 阈值表达可执行"
+    ]
+  },
+  {
+    "id": "TC14",
+    "lengthBucket": "L",
+    "turnCount": 150,
+    "taskType": "operations",
+    "dialogueForm": "goal_redirect",
+    "seed": 114,
+    "taskId": "op_dependency_risk_review",
+    "taskObjective": "从日常巡检重定向到依赖风险审查并完成风险分级。",
+    "acceptanceChecks": [
+      "重定向后以 dependency risk 为主目标",
+      "必须显式提及 patchedDependencies",
+      "不得建议无审批发布"
+    ]
+  },
+  {
+    "id": "TC15",
+    "lengthBucket": "M",
+    "turnCount": 60,
+    "taskType": "operations",
+    "dialogueForm": "conflicting_instruction_fix",
+    "seed": 115,
+    "taskId": "op_release_gate_runbook",
+    "taskObjective": "冲突流程修正后产出唯一版本的 release runbook。",
+    "acceptanceChecks": ["过时 runbook 步骤需被剔除", "最终流程包含回滚路径", "命令清单保持可复制"]
+  },
+  {
+    "id": "TC16",
+    "lengthBucket": "L",
+    "turnCount": 150,
+    "taskType": "writing_planning",
+    "dialogueForm": "linear_qa",
+    "seed": 116,
+    "taskId": "wp_launch_blog_outline",
+    "taskObjective": "规划 Layer0 发布博客提纲与证据映射。",
+    "acceptanceChecks": ["提纲结构完整且顺序清晰", "每个主张有证据来源", "避免夸张营销措辞"]
+  },
+  {
+    "id": "TC17",
+    "lengthBucket": "M",
+    "turnCount": 60,
+    "taskType": "writing_planning",
+    "dialogueForm": "clarification_branch",
+    "seed": 117,
+    "taskId": "wp_docs_migration_plan",
+    "taskObjective": "在多轮澄清后形成 docs migration 分阶段计划。",
+    "acceptanceChecks": [
+      "保留 root-relative 链接约束",
+      "明确 zh-CN 文档处理边界",
+      "输出阶段化迁移顺序"
+    ]
+  },
+  {
+    "id": "TC18",
+    "lengthBucket": "L",
+    "turnCount": 150,
+    "taskType": "writing_planning",
+    "dialogueForm": "interruption_resume",
+    "seed": 118,
+    "taskId": "wp_feature_spec_revision",
+    "taskObjective": "多次中断后恢复并完成插件 rollout spec 修订。",
+    "acceptanceChecks": ["恢复后保留配置契约字段", "输出一键回滚说明", "包含 failure mode 表"]
+  },
+  {
+    "id": "TC19",
+    "lengthBucket": "M",
+    "turnCount": 60,
+    "taskType": "writing_planning",
+    "dialogueForm": "goal_redirect",
+    "seed": 119,
+    "taskId": "wp_onboarding_email_series",
+    "taskObjective": "中途从文档计划重定向到 onboarding 邮件序列设计。",
+    "acceptanceChecks": [
+      "重定向后最终交付为 4 封邮件序列",
+      "明确用户可关闭插件入口",
+      "不出现无法兑现承诺"
+    ]
+  },
+  {
+    "id": "TC20",
+    "lengthBucket": "L",
+    "turnCount": 150,
+    "taskType": "writing_planning",
+    "dialogueForm": "conflicting_instruction_fix",
+    "seed": 120,
+    "taskId": "wp_feature_spec_revision",
+    "taskObjective": "冲突编辑意见修正后保留单一 spec 方向与验收门。",
+    "acceptanceChecks": ["旧版段落不应进入最终提要", "验收门描述完整且一致", "配置键名保持精确"]
+  },
+  {
+    "id": "TC21",
+    "lengthBucket": "M",
+    "turnCount": 60,
+    "taskType": "mixed_tool_dense",
+    "dialogueForm": "linear_qa",
+    "seed": 121,
+    "taskId": "mx_incident_rca_bundle",
+    "taskObjective": "在工具输出密集场景下汇总 RCA 套件并保留 artifact 引用。",
+    "acceptanceChecks": [
+      "超大输出必须外置为 artifact 引用",
+      "保留 call-mx-incident 与 Issue #24840",
+      "最终摘要仍可回放关键证据"
+    ]
+  },
+  {
+    "id": "TC22",
+    "lengthBucket": "L",
+    "turnCount": 150,
+    "taskType": "mixed_tool_dense",
+    "dialogueForm": "clarification_branch",
+    "seed": 122,
+    "taskId": "mx_repo_audit_patch_plan",
+    "taskObjective": "在多个澄清分支下收敛 repo audit 的补丁执行顺序。",
+    "acceptanceChecks": [
+      "每个分支保留失败命令证据",
+      "大输出通过 artifact://repo-audit/failures 关联",
+      "产出统一 patch 顺序"
+    ]
+  },
+  {
+    "id": "TC23",
+    "lengthBucket": "M",
+    "turnCount": 60,
+    "taskType": "mixed_tool_dense",
+    "dialogueForm": "interruption_resume",
+    "seed": 123,
+    "taskId": "mx_support_ticket_batch",
+    "taskObjective": "被打断后恢复 support ticket 批处理并保持引用完整。",
+    "acceptanceChecks": ["恢复后继续沿用原 ticket ID", "超长工单内容外置引用", "升级状态不得丢失"]
+  },
+  {
+    "id": "TC24",
+    "lengthBucket": "L",
+    "turnCount": 150,
+    "taskType": "mixed_tool_dense",
+    "dialogueForm": "goal_redirect",
+    "seed": 124,
+    "taskId": "mx_growth_report_pack",
+    "taskObjective": "从实验复盘重定向到周度 growth report 并保持指标 ID 精确。",
+    "acceptanceChecks": [
+      "最终目标以 growth report 为准",
+      "METRIC_D7_RETENTION 与 EXP-221 不得改写",
+      "原始导出文件可通过 artifact refs 回读"
+    ]
+  },
+  {
+    "id": "TC25",
+    "lengthBucket": "M",
+    "turnCount": 60,
+    "taskType": "mixed_tool_dense",
+    "dialogueForm": "conflicting_instruction_fix",
+    "seed": 125,
+    "taskId": "mx_incident_rca_bundle",
+    "taskObjective": "冲突指令修正后只保留最终 RCA 结构与关键证据引用。",
+    "acceptanceChecks": [
+      "撤销的结论不应进入最终摘要",
+      "artifact 引用必须可解析",
+      "最终交付包含 follow-up action list"
+    ]
+  },
+  {
+    "id": "TC26",
+    "lengthBucket": "S",
+    "turnCount": 15,
+    "taskType": "code_debugging",
+    "dialogueForm": "linear_qa",
+    "seed": 126,
+    "taskId": "cd_context_compaction_identifier_loss",
+    "taskObjective": "短会话边界下验证 identifier 保真任务的压缩恢复。",
+    "acceptanceChecks": [
+      "短上下文仍保留关键约束",
+      "Issue #24902 与 OPENAI_API_KEY 保真",
+      "最新 ask 可完整恢复"
+    ]
+  },
+  {
+    "id": "TC27",
+    "lengthBucket": "XL",
+    "turnCount": 300,
+    "taskType": "research",
+    "dialogueForm": "clarification_branch",
+    "seed": 127,
+    "taskId": "rs_macos_gateway_crash_timeline",
+    "taskObjective": "超长会话下验证 crash timeline 调研在澄清分支中的连续性。",
+    "acceptanceChecks": [
+      "300 轮后仍可恢复最新研究目标",
+      "关键时间线事实不被旧摘要污染",
+      "保持脚本与 issue 标识符"
+    ]
+  },
+  {
+    "id": "TC28",
+    "lengthBucket": "S",
+    "turnCount": 15,
+    "taskType": "operations",
+    "dialogueForm": "interruption_resume",
+    "seed": 128,
+    "taskId": "op_daily_status_digest",
+    "taskObjective": "短会话打断恢复场景下验证 daily digest 任务不丢关键信息。",
+    "acceptanceChecks": [
+      "打断恢复后继续执行 digest 目标",
+      "status 命令标识准确保留",
+      "最终输出保留失败 probe 要求"
+    ]
+  },
+  {
+    "id": "TC29",
+    "lengthBucket": "XL",
+    "turnCount": 300,
+    "taskType": "writing_planning",
+    "dialogueForm": "goal_redirect",
+    "seed": 129,
+    "taskId": "wp_onboarding_email_series",
+    "taskObjective": "超长会话重定向场景下验证邮件规划任务目标收敛。",
+    "acceptanceChecks": [
+      "重定向后的目标优先于旧目标",
+      "插件开关与回滚说明仍保留",
+      "4-part 序列完整可恢复"
+    ]
+  },
+  {
+    "id": "TC30",
+    "lengthBucket": "XL",
+    "turnCount": 300,
+    "taskType": "mixed_tool_dense",
+    "dialogueForm": "conflicting_instruction_fix",
+    "seed": 130,
+    "taskId": "mx_repo_audit_patch_plan",
+    "taskObjective": "超长密集工具输出与冲突修正并存时验证 artifact 与最终指令一致性。",
+    "acceptanceChecks": [
+      "冲突修正后的 patch 顺序是唯一来源",
+      "artifact 引用 100% 可解析可回读",
+      "超长会话后仍保留关键命令标识"
+    ]
+  }
+]
