@@ -9,7 +9,7 @@ import { openBoundaryFileSync } from "../infra/boundary-file-read.js";
 import { resolveOpenClawPackageRootSync } from "../infra/openclaw-root.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveUserPath } from "../utils.js";
-import { clearPluginCommands } from "./commands.js";
+import { clearPluginCommands, registerPluginCommand } from "./commands.js";
 import {
   applyTestPluginDefaults,
   normalizePluginsConfig,
@@ -526,6 +526,18 @@ function activatePluginRegistry(registry: PluginRegistry, cacheKey: string): voi
   initializeGlobalHookRunner(registry);
 }
 
+function syncPluginCommandsFromRegistry(registry: PluginRegistry): void {
+  clearPluginCommands();
+  for (const entry of registry.commands) {
+    const result = registerPluginCommand(entry.pluginId, entry.command);
+    if (!result.ok) {
+      throw new Error(
+        `cached plugin command registration failed for "${entry.command.name}" (${entry.pluginId}): ${result.error}`,
+      );
+    }
+  }
+}
+
 export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegistry {
   const env = options.env ?? process.env;
   // Test env: default-disable plugins unless explicitly configured.
@@ -546,6 +558,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
     const cached = getCachedPluginRegistry(cacheKey);
     if (cached) {
       if (shouldActivate) {
+        syncPluginCommandsFromRegistry(cached);
         activatePluginRegistry(cached, cacheKey);
       }
       return cached;

@@ -26,7 +26,6 @@ export function registerPluginCliCommands(
     workspaceDir,
     env,
     logger,
-    activate: false,
   });
 
   const existingCommands = new Set(program.commands.map((cmd) => cmd.name()));

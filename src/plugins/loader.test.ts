@@ -606,6 +606,45 @@ describe("loadOpenClawPlugins", () => {
     expect(matchPluginCommand("/inspectcmd")).toBeNull();
   });
 
+  it("re-registers cached plugin commands when a read-only load becomes active", () => {
+    const plugin = writePlugin({
+      id: "cached-command",
+      filename: "cached-command.cjs",
+      body: `module.exports = {
+        id: "cached-command",
+        register(api) {
+          api.registerCommand({
+            name: "cachedcmd",
+            description: "Cached command",
+            handler: async () => ({ text: "ok" }),
+          });
+        },
+      };`,
+    });
+
+    const options = {
+      workspaceDir: plugin.dir,
+      config: {
+        plugins: {
+          load: { paths: [plugin.file] },
+          allow: ["cached-command"],
+        },
+      },
+    };
+
+    const inactiveRegistry = loadOpenClawPlugins({
+      ...options,
+      activate: false,
+    });
+    expect(inactiveRegistry.commands).toHaveLength(1);
+    expect(matchPluginCommand("/cachedcmd")).toBeNull();
+
+    const activeRegistry = loadOpenClawPlugins(options);
+
+    expect(activeRegistry).toBe(inactiveRegistry);
+    expect(matchPluginCommand("/cachedcmd")).not.toBeNull();
+  });
+
   it("does not reuse cached bundled plugin registries across env changes", () => {
     const bundledA = makeTempDir();
     const bundledB = makeTempDir();
