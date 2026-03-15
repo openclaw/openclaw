@@ -7,15 +7,15 @@
  * Cache layers (checked in order):
  * 1. In-memory Map (instant, cleared on process restart)
  * 2. On-disk JSON file (<stateDir>/cache/openrouter-models.json)
- * 3. OpenRouter API fetch (fire-and-forget, populates both layers)
+ * 3. OpenRouter API fetch (populates both layers)
  *
  * Model capabilities are assumed stable — the cache has no TTL expiry.
  * A background refresh is triggered only when a model is not found in
  * the cache (i.e. a newly added model on OpenRouter).
  *
- * All public APIs are synchronous. The first lookup for an unknown model may
- * return `undefined` (cache miss while fetch is in-flight), but subsequent
- * calls will hit the populated cache.
+ * Sync callers can read whatever is already cached. Async callers can await a
+ * one-time fetch so the first unknown-model lookup resolves with real
+ * capabilities instead of the text-only fallback.
  */
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
@@ -245,11 +245,27 @@ export function ensureOpenRouterModelCache(): void {
 }
 
 /**
- * Synchronously look up model capabilities from the cache.
+ * Ensure capabilities for a specific model are available before first use.
  *
- * If the cache has not been populated yet, this kicks off a background fetch
- * and returns `undefined` for the current call.  The next call (after the
- * fetch completes) will return the cached data.
+ * Known cached entries return immediately. Unknown entries wait for at most
+ * one catalog fetch, then leave sync resolution to read from the populated
+ * cache on the same request.
+ */
+export async function loadOpenRouterModelCapabilities(modelId: string): Promise<void> {
+  ensureOpenRouterModelCache();
+  if (cache?.has(modelId)) {
+    return;
+  }
+  let fetchPromise = fetchInFlight;
+  if (!fetchPromise) {
+    triggerFetch();
+    fetchPromise = fetchInFlight;
+  }
+  await fetchPromise;
+}
+
+/**
+ * Synchronously look up model capabilities from the cache.
  *
  * If a model is not found but the cache exists, a background refresh is
  * triggered in case it's a newly added model not yet in the cache.

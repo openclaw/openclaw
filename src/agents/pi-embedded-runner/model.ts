@@ -14,7 +14,10 @@ import {
 } from "../model-suppression.js";
 import { discoverAuthStorage, discoverModels } from "../pi-model-discovery.js";
 import { normalizeResolvedProviderModel } from "./model.provider-normalization.js";
-import { getOpenRouterModelCapabilities } from "./openrouter-model-capabilities.js";
+import {
+  getOpenRouterModelCapabilities,
+  loadOpenRouterModelCapabilities,
+} from "./openrouter-model-capabilities.js";
 
 type InlineModelEntry = ModelDefinitionConfig & {
   provider: string;
@@ -157,7 +160,7 @@ export function buildInlineProviderModels(
   });
 }
 
-export function resolveModelWithRegistry(params: {
+function resolveExplicitModelWithRegistry(params: {
   provider: string;
   modelId: string;
   modelRegistry: ModelRegistry;
@@ -204,6 +207,24 @@ export function resolveModelWithRegistry(params: {
       }),
     });
   }
+
+  return undefined;
+}
+
+export function resolveModelWithRegistry(params: {
+  provider: string;
+  modelId: string;
+  modelRegistry: ModelRegistry;
+  cfg?: OpenClawConfig;
+}): Model<Api> | undefined {
+  const explicitModel = resolveExplicitModelWithRegistry(params);
+  if (explicitModel) {
+    return explicitModel;
+  }
+
+  const { provider, modelId, cfg } = params;
+  const normalizedProvider = normalizeProviderId(provider);
+  const providerConfig = resolveConfiguredProviderConfig(cfg, provider);
 
   // OpenRouter is a pass-through proxy - any model ID available on OpenRouter
   // should work without being pre-registered in the local catalog.
@@ -280,6 +301,37 @@ export function resolveModel(
   const authStorage = discoverAuthStorage(resolvedAgentDir);
   const modelRegistry = discoverModels(authStorage, resolvedAgentDir);
   const model = resolveModelWithRegistry({ provider, modelId, modelRegistry, cfg });
+  if (model) {
+    return { model, authStorage, modelRegistry };
+  }
+
+  return {
+    error: buildUnknownModelError(provider, modelId),
+    authStorage,
+    modelRegistry,
+  };
+}
+
+export async function resolveModelAsync(
+  provider: string,
+  modelId: string,
+  agentDir?: string,
+  cfg?: OpenClawConfig,
+): Promise<{
+  model?: Model<Api>;
+  error?: string;
+  authStorage: AuthStorage;
+  modelRegistry: ModelRegistry;
+}> {
+  const resolvedAgentDir = agentDir ?? resolveOpenClawAgentDir();
+  const authStorage = discoverAuthStorage(resolvedAgentDir);
+  const modelRegistry = discoverModels(authStorage, resolvedAgentDir);
+  const explicitModel = resolveExplicitModelWithRegistry({ provider, modelId, modelRegistry, cfg });
+  if (!explicitModel && normalizeProviderId(provider) === "openrouter") {
+    await loadOpenRouterModelCapabilities(modelId);
+  }
+  const model =
+    explicitModel ?? resolveModelWithRegistry({ provider, modelId, modelRegistry, cfg });
   if (model) {
     return { model, authStorage, modelRegistry };
   }

@@ -10,12 +10,17 @@ import type { OpenRouterModelCapabilities } from "./openrouter-model-capabilitie
 const mockGetOpenRouterModelCapabilities = vi.fn<
   (modelId: string) => OpenRouterModelCapabilities | undefined
 >(() => undefined);
+const mockLoadOpenRouterModelCapabilities = vi.fn<(modelId: string) => Promise<void>>(
+  async () => {},
+);
 vi.mock("./openrouter-model-capabilities.js", () => ({
   getOpenRouterModelCapabilities: (modelId: string) => mockGetOpenRouterModelCapabilities(modelId),
+  loadOpenRouterModelCapabilities: (modelId: string) =>
+    mockLoadOpenRouterModelCapabilities(modelId),
 }));
 
 import type { OpenClawConfig } from "../../config/config.js";
-import { buildInlineProviderModels, resolveModel } from "./model.js";
+import { buildInlineProviderModels, resolveModel, resolveModelAsync } from "./model.js";
 import {
   buildOpenAICodexForwardCompatExpectation,
   makeModel,
@@ -26,7 +31,10 @@ import {
 
 beforeEach(() => {
   resetMockDiscoverModels();
+  mockGetOpenRouterModelCapabilities.mockReset();
   mockGetOpenRouterModelCapabilities.mockReturnValue(undefined);
+  mockLoadOpenRouterModelCapabilities.mockReset();
+  mockLoadOpenRouterModelCapabilities.mockResolvedValue();
 });
 
 function buildForwardCompatTemplate(params: {
@@ -461,6 +469,69 @@ describe("resolveModel", () => {
       id: "openrouter/healer-alpha",
       reasoning: false,
       input: ["text"],
+    });
+  });
+
+  it("preloads OpenRouter capabilities before first async resolve of an unknown model", async () => {
+    mockLoadOpenRouterModelCapabilities.mockImplementation(async (modelId) => {
+      if (modelId === "google/gemini-3.1-flash-image-preview") {
+        mockGetOpenRouterModelCapabilities.mockReturnValue({
+          name: "Google: Nano Banana 2 (Gemini 3.1 Flash Image Preview)",
+          input: ["text", "image"],
+          reasoning: true,
+          contextWindow: 65536,
+          maxTokens: 65536,
+          cost: { input: 0.5, output: 3, cacheRead: 0, cacheWrite: 0 },
+        });
+      }
+    });
+
+    const result = await resolveModelAsync(
+      "openrouter",
+      "google/gemini-3.1-flash-image-preview",
+      "/tmp/agent",
+    );
+
+    expect(mockLoadOpenRouterModelCapabilities).toHaveBeenCalledWith(
+      "google/gemini-3.1-flash-image-preview",
+    );
+    expect(result.error).toBeUndefined();
+    expect(result.model).toMatchObject({
+      provider: "openrouter",
+      id: "google/gemini-3.1-flash-image-preview",
+      reasoning: true,
+      input: ["text", "image"],
+      contextWindow: 65536,
+      maxTokens: 65536,
+    });
+  });
+
+  it("skips OpenRouter preload for models already present in the registry", async () => {
+    mockDiscoveredModel({
+      provider: "openrouter",
+      modelId: "openrouter/healer-alpha",
+      templateModel: {
+        id: "openrouter/healer-alpha",
+        name: "Healer Alpha",
+        api: "openai-completions",
+        provider: "openrouter",
+        baseUrl: "https://openrouter.ai/api/v1",
+        reasoning: true,
+        input: ["text", "image"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 262144,
+        maxTokens: 65536,
+      },
+    });
+
+    const result = await resolveModelAsync("openrouter", "openrouter/healer-alpha", "/tmp/agent");
+
+    expect(mockLoadOpenRouterModelCapabilities).not.toHaveBeenCalled();
+    expect(result.error).toBeUndefined();
+    expect(result.model).toMatchObject({
+      provider: "openrouter",
+      id: "openrouter/healer-alpha",
+      input: ["text", "image"],
     });
   });
 
