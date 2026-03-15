@@ -1,3 +1,4 @@
+import type { SsrFPolicy } from "openclaw/plugin-sdk";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/account-id";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/matrix";
 import { getMatrixRuntime } from "../../runtime.js";
@@ -9,6 +10,18 @@ import type { CoreConfig } from "../../types.js";
 import { loadMatrixSdk } from "../sdk-runtime.js";
 import { ensureMatrixSdkLoggingConfigured } from "./logging.js";
 import type { MatrixAuth, MatrixResolvedConfig } from "./types.js";
+
+export function resolveMatrixLoginSsrFPolicy(cfg?: CoreConfig): SsrFPolicy | undefined {
+  const browser = cfg?.browser;
+  if (!browser || typeof browser !== "object") {
+    return undefined;
+  }
+  const ssrfPolicy = (browser as { ssrfPolicy?: SsrFPolicy }).ssrfPolicy;
+  if (!ssrfPolicy || typeof ssrfPolicy !== "object") {
+    return undefined;
+  }
+  return ssrfPolicy;
+}
 
 function clean(value: unknown, path: string): string {
   return normalizeResolvedSecretInputString({ value, path }) ?? "";
@@ -108,6 +121,7 @@ export async function resolveMatrixAuth(params?: {
   const cfg = params?.cfg ?? (getMatrixRuntime().config.loadConfig() as CoreConfig);
   const env = params?.env ?? process.env;
   const resolved = resolveMatrixConfigForAccount(cfg, params?.accountId, env);
+  const loginSsrFPolicy = resolveMatrixLoginSsrFPolicy(cfg);
   if (!resolved.homeserver) {
     throw new Error("Matrix homeserver is required (matrix.homeserver)");
   }
@@ -198,6 +212,7 @@ export async function resolveMatrixAuth(params?: {
         initial_device_display_name: resolved.deviceName ?? "OpenClaw Gateway",
       }),
     },
+    policy: loginSsrFPolicy,
     auditContext: "matrix.login",
   });
   const login = await (async () => {
