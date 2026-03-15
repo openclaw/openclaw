@@ -315,13 +315,13 @@ export async function tryDispatchAcpReply(params: {
     const ttsMode = resolveTtsConfig(params.cfg).mode ?? "final";
     const accumulatedBlockText = delivery.getAccumulatedBlockText();
     const routedCounts = delivery.getRoutedCounts();
-    const blockCount = delivery.getBlockCount();
-    // Skip fallback if any delivery has already happened (block or final).
-    // This prevents duplicate output in normal ACP flows where blocks are sent first.
+    // Only deliver final TTS/text if no final reply has been sent yet.
+    // Check routedCounts.final because block delivery is expected during streaming
+    // and should not prevent the final fallback.
     // See analogous guard in dispatch-from-config.ts (replies.length === 0).
-    const hasAlreadyDelivered = blockCount > 0 || routedCounts.final > 0;
+    const hasFinalDelivered = routedCounts.final > 0;
     // Skip fallback for ttsMode="all" because blocks were already processed with TTS.
-    const shouldSkipFallback = hasAlreadyDelivered || ttsMode === "all";
+    const shouldSkipFallback = hasFinalDelivered || ttsMode === "all";
     if (!shouldSkipFallback && accumulatedBlockText.trim()) {
       let ttsSucceeded = false;
       // Only attempt final TTS synthesis for ttsMode="final".
@@ -354,9 +354,9 @@ export async function tryDispatchAcpReply(params: {
         }
       }
       // Fallback to text-only delivery (no TTS) if TTS didn't succeed.
-      // Use dispatcher directly to bypass TTS (which already failed).
+      // Use delivery.deliver to ensure proper routing in cross-provider ACP turns.
       if (!ttsSucceeded) {
-        const delivered = params.dispatcher.sendFinalReply({ text: accumulatedBlockText });
+        const delivered = await delivery.deliver("final", { text: accumulatedBlockText });
         queuedFinal = queuedFinal || delivered;
       }
     }
