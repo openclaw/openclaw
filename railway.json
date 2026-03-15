@@ -1,0 +1,27 @@
+{ 
+   "$schema": "https://railway.app/schemas/config.v1", 
+   "build": { 
+     "builder": "railpack", 
+     "buildCommand": "npm install --production" 
+   }, 
+   "deploy": { 
+     "startCommand": "npm start", 
+     "restartPolicy": "on-failure" 
+   }, 
+   "networking": { 
+     "port": "${{PORT}}", // 使用 Railway 自动分配的端口 
+     "publicNetworking": true, 
+     "tcpProxy": true // 必须开启 TCP 代理支持 WebSocket 
+   }, 
+   "volumes": [ 
+     { 
+       "name": "openclaw-data", 
+       "path": "/data" // 持久化存储配置和工作区 
+     } 
+   ], 
+   "env": { 
+     "NODE_ENV": "production", 
+     "OPENCLAW_GATEWAY_TOKEN": "hesclawsgatewaytokenhe@770221", 
+     "NVIDIA_API_KEY": "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" 
+   } 
+ }
