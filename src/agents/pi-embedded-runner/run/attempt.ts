@@ -2727,7 +2727,6 @@ export async function runEmbeddedAttempt(
             `CRITICAL: unsubscribe failed, possible resource leak: runId=${params.runId} ${String(err)}`,
           );
         }
-        clearActiveEmbeddedRun(params.sessionId, queueHandle, params.sessionKey);
         params.abortSignal?.removeEventListener?.("abort", onAbort);
       }
 
@@ -2813,6 +2812,12 @@ export async function runEmbeddedAttempt(
         sessionManager,
         clearPendingOnTimeout: true,
       });
+      // Clear embedded run AFTER flushing pending tool results so that all concurrent
+      // tool executions (e.g. sessions_spawn) complete before the run is considered ended.
+      // This prevents premature announce when sessions_yield runs in parallel with
+      // sessions_spawn — the announce flow's waitForEmbeddedPiRunEnd won't resolve
+      // until spawn registrations are committed to the subagent registry.
+      clearActiveEmbeddedRun(params.sessionId, queueHandle, params.sessionKey);
       session?.dispose();
       releaseWsSession(params.sessionId);
       await sessionLock.release();
