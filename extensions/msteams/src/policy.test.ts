@@ -6,6 +6,27 @@ import {
   resolveMSTeamsRouteConfig,
 } from "./policy.js";
 
+function resolveNamedTeamRouteConfig(allowNameMatching = false) {
+  const cfg: MSTeamsConfig = {
+    teams: {
+      "My Team": {
+        requireMention: true,
+        channels: {
+          "General Chat": { requireMention: false },
+        },
+      },
+    },
+  };
+
+  return resolveMSTeamsRouteConfig({
+    cfg,
+    teamName: "My Team",
+    channelName: "General Chat",
+    conversationId: "ignored",
+    allowNameMatching,
+  });
+}
+
 describe("msteams policy", () => {
   describe("resolveMSTeamsRouteConfig", () => {
     it("returns team and channel config when present", () => {
@@ -50,24 +71,16 @@ describe("msteams policy", () => {
       expect(res.allowed).toBe(false);
     });
 
-    it("matches team and channel by name", () => {
-      const cfg: MSTeamsConfig = {
-        teams: {
-          "My Team": {
-            requireMention: true,
-            channels: {
-              "General Chat": { requireMention: false },
-            },
-          },
-        },
-      };
+    it("blocks team and channel name matches by default", () => {
+      const res = resolveNamedTeamRouteConfig();
 
-      const res = resolveMSTeamsRouteConfig({
-        cfg,
-        teamName: "My Team",
-        channelName: "General Chat",
-        conversationId: "ignored",
-      });
+      expect(res.teamConfig).toBeUndefined();
+      expect(res.channelConfig).toBeUndefined();
+      expect(res.allowed).toBe(false);
+    });
+
+    it("matches team and channel by name when dangerous name matching is enabled", () => {
+      const res = resolveNamedTeamRouteConfig(true);
 
       expect(res.teamConfig?.requireMention).toBe(true);
       expect(res.channelConfig?.requireMention).toBe(false);

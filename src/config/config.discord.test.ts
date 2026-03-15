@@ -36,7 +36,7 @@ describe("config discord", () => {
                 requireMention: false,
                 users: ["steipete"],
                 channels: {
-                  general: { allow: true },
+                  general: { allow: true, autoThread: true },
                 },
               },
             },
@@ -54,6 +54,7 @@ describe("config discord", () => {
         expect(cfg.channels?.discord?.actions?.channels).toBe(true);
         expect(cfg.channels?.discord?.guilds?.["123"]?.slug).toBe("friends-of-openclaw");
         expect(cfg.channels?.discord?.guilds?.["123"]?.channels?.general?.allow).toBe(true);
+        expect(cfg.channels?.discord?.guilds?.["123"]?.channels?.general?.autoThread).toBe(true);
       },
     );
   });
