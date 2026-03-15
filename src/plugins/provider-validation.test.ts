@@ -124,4 +124,33 @@ describe("normalizeRegisteredProvider", () => {
       'provider "demo" model-picker metadata ignored because it has no auth methods',
     ]);
   });
+
+  it("prefers catalog when a provider registers both catalog and discovery", () => {
+    const { diagnostics, pushDiagnostic } = collectDiagnostics();
+
+    const provider = normalizeRegisteredProvider({
+      pluginId: "demo-plugin",
+      source: "/tmp/demo/index.ts",
+      provider: makeProvider({
+        catalog: {
+          run: async () => null,
+        },
+        discovery: {
+          run: async () => ({
+            provider: {
+              baseUrl: "http://127.0.0.1:8000/v1",
+              models: [],
+            },
+          }),
+        },
+      }),
+      pushDiagnostic,
+    });
+
+    expect(provider?.catalog).toBeDefined();
+    expect(provider?.discovery).toBeUndefined();
+    expect(diagnostics.map((diag) => diag.message)).toEqual([
+      'provider "demo" registered both catalog and discovery; using catalog',
+    ]);
+  });
 });

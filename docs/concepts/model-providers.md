@@ -16,6 +16,46 @@ For model selection rules, see [/concepts/models](/concepts/models).
 - Model refs use `provider/model` (example: `opencode/claude-opus-4-6`).
 - If you set `agents.defaults.models`, it becomes the allowlist.
 - CLI helpers: `openclaw onboard`, `openclaw models list`, `openclaw models set <provider/model>`.
+- Provider plugins can inject model catalogs via `registerProvider({ catalog })`;
+  OpenClaw merges that output into `models.providers` before writing
+  `models.json`.
+- Provider plugins can also own provider runtime behavior via
+  `resolveDynamicModel`, `prepareDynamicModel`, `normalizeResolvedModel`,
+  `capabilities`, `prepareExtraParams`, `wrapStreamFn`,
+  `isCacheTtlEligible`, and `prepareRuntimeAuth`.
+
+## Plugin-owned provider behavior
+
+Provider plugins can now own most provider-specific logic while OpenClaw keeps
+the generic inference loop.
+
+Typical split:
+
+- `catalog`: provider appears in `models.providers`
+- `resolveDynamicModel`: provider accepts model ids not present in the local
+  static catalog yet
+- `prepareDynamicModel`: provider needs a metadata refresh before retrying
+  dynamic resolution
+- `normalizeResolvedModel`: provider needs transport or base URL rewrites
+- `capabilities`: provider publishes transcript/tooling/provider-family quirks
+- `prepareExtraParams`: provider defaults or normalizes per-model request params
+- `wrapStreamFn`: provider applies request headers/body/model compat wrappers
+- `isCacheTtlEligible`: provider decides which upstream model ids support prompt-cache TTL
+- `prepareRuntimeAuth`: provider turns a configured credential into a short
+  lived runtime token
+
+Current bundled examples:
+
+- `openrouter`: pass-through model ids, request wrappers, provider capability
+  hints, and cache-TTL policy
+- `github-copilot`: forward-compat model fallback, Claude-thinking transcript
+  hints, and runtime token exchange
+- `openai-codex`: forward-compat model fallback, transport normalization, and
+  default transport params
+
+That covers providers that still fit OpenClaw's normal transports. A provider
+that needs a totally custom request executor is a separate, deeper extension
+surface.
 
 ## API key rotation
 

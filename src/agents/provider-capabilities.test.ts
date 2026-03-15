@@ -1,4 +1,31 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+
+const resolveProviderCapabilitiesWithPluginMock = vi.fn((params: { provider: string }) => {
+  switch (params.provider) {
+    case "openrouter":
+      return {
+        openAiCompatTurnValidation: false,
+        geminiThoughtSignatureSanitization: true,
+        geminiThoughtSignatureModelHints: ["gemini"],
+      };
+    case "openai-codex":
+      return {
+        providerFamily: "openai",
+      };
+    case "github-copilot":
+      return {
+        dropThinkingBlockModelHints: ["claude"],
+      };
+    default:
+      return undefined;
+  }
+});
+
+vi.mock("../plugins/provider-runtime.js", () => ({
+  resolveProviderCapabilitiesWithPlugin: (params: { provider: string }) =>
+    resolveProviderCapabilitiesWithPluginMock(params),
+}));
+
 import {
   isAnthropicProviderFamily,
   isOpenAiProviderFamily,
