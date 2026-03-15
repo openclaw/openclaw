@@ -16,15 +16,17 @@ import {
 import { setupIsolatedAgentTurnMocks } from "./isolated-agent.test-setup.js";
 
 /**
- * Reproduction tests for issue #13915:
- * Verify that explicit Signal delivery targets survive the full
+ * Regression tests for issue #13915:
+ * Confirms that explicit Signal delivery targets survive the full
  * isolated-cron announce pipeline (resolveCronDeliveryPlan →
  * resolveDeliveryTarget → dispatchCronDelivery → deliverOutboundPayloads).
  *
- * Signal has a distinct code path in deliverOutboundPayloadsCore —
- * text delivery uses sendSignalTextChunks → sendSignalText → sendSignal(to, ...)
- * rather than the generic plugin handler sendText. This test confirms the
- * explicit `to` flows through that path.
+ * All tests pass on current HEAD without production changes, confirming
+ * the reported bug (delivery target not passed to Signal send) does not
+ * reproduce through this code path. These tests remain as regression
+ * guards for the Signal-specific delivery branch in deliverOutboundPayloadsCore,
+ * which routes through sendSignalTextChunks → sendSignalText → sendSignal(to, ...)
+ * rather than the generic plugin handler sendText.
  */
 describe("runCronIsolatedAgentTurn Signal announce delivery (#13915)", () => {
   beforeEach(() => {
@@ -198,10 +200,9 @@ describe("runCronIsolatedAgentTurn Signal announce delivery (#13915)", () => {
   it("reports delivery-target error when channel='last' with no session history", async () => {
     await withTempCronHome(async (home) => {
       // Empty session store — no last channel to fall back to.
-      // With both telegram + signal registered, resolveMessageChannelSelection
-      // should fail as ambiguous (>1 channel) or succeed if only one is
-      // configured. Either way, the target is unresolvable without session
-      // history or explicit channel/to.
+      // This is a separate edge case from #13915: without an explicit
+      // channel/to and no session history, delivery-target resolution
+      // correctly fails with errorKind="delivery-target".
       const storePath = await writeSessionStore(home, { lastProvider: "", lastTo: "" });
       const deps = createCliDeps();
       mockAgentPayloads([{ text: "output" }]);
@@ -222,9 +223,12 @@ describe("runCronIsolatedAgentTurn Signal announce delivery (#13915)", () => {
       });
 
       // Without session history or explicit target, delivery should fail
-      // with a delivery-target error rather than silently dropping the message.
+      // with a specific delivery-target error rather than silently dropping.
       expect(res.status).toBe("error");
-      expect(res.error).toBeDefined();
+      expect(res.errorKind).toBe("delivery-target");
+      expect(res.error).toContain(
+        "Set delivery.channel explicitly or use a main session with a previous channel",
+      );
     });
   });
 
