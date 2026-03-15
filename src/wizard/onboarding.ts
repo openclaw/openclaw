@@ -406,15 +406,25 @@ export async function runOnboardingWizard(
 
   const workspaceDir = resolveUserPath(workspaceInput.trim() || onboardHelpers.DEFAULT_WORKSPACE);
 
-  const { applyOnboardingLocalWorkspaceConfig } = await import("../commands/onboard-config.js");
-  let nextConfig: OpenClawConfig = applyOnboardingLocalWorkspaceConfig(baseConfig, workspaceDir);
+  const loadProgress = prompter.progress("Loading…");
+  const [
+    { applyOnboardingLocalWorkspaceConfig },
+    { ensureAuthProfileStore },
+    { promptAuthChoiceGrouped },
+    { promptCustomApiConfig },
+    { applyAuthChoice, resolvePreferredProviderForAuthChoice, warnIfModelConfigLooksOff },
+    { applyPrimaryModel, promptDefaultModel },
+  ] = await Promise.all([
+    import("../commands/onboard-config.js"),
+    import("../agents/auth-profiles.runtime.js"),
+    import("../commands/auth-choice-prompt.js"),
+    import("../commands/onboard-custom.js"),
+    import("../commands/auth-choice.js"),
+    import("../commands/model-picker.js"),
+  ]);
+  loadProgress.stop();
 
-  const { ensureAuthProfileStore } = await import("../agents/auth-profiles.runtime.js");
-  const { promptAuthChoiceGrouped } = await import("../commands/auth-choice-prompt.js");
-  const { promptCustomApiConfig } = await import("../commands/onboard-custom.js");
-  const { applyAuthChoice, resolvePreferredProviderForAuthChoice, warnIfModelConfigLooksOff } =
-    await import("../commands/auth-choice.js");
-  const { applyPrimaryModel, promptDefaultModel } = await import("../commands/model-picker.js");
+  let nextConfig: OpenClawConfig = applyOnboardingLocalWorkspaceConfig(baseConfig, workspaceDir);
 
   const authStore = ensureAuthProfileStore(undefined, {
     allowKeychainPrompt: false,

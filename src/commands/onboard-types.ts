@@ -8,6 +8,7 @@ export type BuiltInAuthChoice =
   | "setup-token"
   | "claude-cli"
   | "token"
+  | "anthropic-azure-api-key"
   | "chutes"
   | "openai-codex"
   | "openai-api-key"
@@ -56,6 +57,7 @@ export type AuthChoice = BuiltInAuthChoice | (string & {});
 export type BuiltInAuthChoiceGroupId =
   | "openai"
   | "anthropic"
+  | "anthropic-azure"
   | "chutes"
   | "google"
   | "copilot"
@@ -114,6 +116,9 @@ export type OnboardOptions = {
   /** API key persistence mode for onboarding flows (default: plaintext). */
   secretInputMode?: SecretInputMode;
   anthropicApiKey?: string;
+  anthropicAzureApiKey?: string;
+  anthropicAzureBaseUrl?: string;
+  anthropicAzureModelId?: string;
   openaiApiKey?: string;
   mistralApiKey?: string;
   openrouterApiKey?: string;

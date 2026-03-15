@@ -3,7 +3,7 @@ import type { OpenClawConfig } from "../config/config.js";
 import { resolveUserPath } from "../utils.js";
 import { normalizePluginsConfig, type NormalizedPluginsConfig } from "./config-state.js";
 import { discoverOpenClawPlugins, type PluginCandidate } from "./discovery.js";
-import { loadPluginManifest, type PluginManifest } from "./manifest.js";
+import { loadPluginManifest, type PluginManifest, type PluginManifestWizard } from "./manifest.js";
 import { isPathInside, safeRealpathSync } from "./path-safety.js";
 import { resolvePluginCacheInputs } from "./roots.js";
 import type { PluginConfigUiHint, PluginDiagnostic, PluginKind, PluginOrigin } from "./types.js";
@@ -38,6 +38,7 @@ export type PluginManifestRecord = {
   schemaCacheKey?: string;
   configSchema?: Record<string, unknown>;
   configUiHints?: Record<string, PluginConfigUiHint>;
+  wizard?: PluginManifestWizard;
 };
 
 export type PluginManifestRegistry = {
@@ -133,6 +134,7 @@ function buildRecord(params: {
     schemaCacheKey: params.schemaCacheKey,
     configSchema: params.configSchema,
     configUiHints: params.manifest.uiHints,
+    wizard: params.manifest.wizard,
   };
 }
 

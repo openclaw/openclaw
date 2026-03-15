@@ -186,7 +186,43 @@ Note: Anthropic currently rejects `context-1m-*` beta requests when using
 OAuth/subscription tokens (`sk-ant-oat-*`). OpenClaw automatically skips the
 context1m beta header for OAuth auth and keeps the required OAuth betas.
 
-## Option B: Claude setup-token
+## Option B: Azure Claude (Azure AI Foundry)
+
+**Best for:** running Claude Sonnet/Opus deployments that live behind Azure AI Foundry.
+
+During onboarding pick **Azure Claude (AI Foundry)** when the auth screen appears, then provide:
+
+1. **Resource name or base URL** – either the bare resource (`fabric-hub`) or the full
+   `https://fabric-hub.services.ai.azure.com/anthropic` endpoint.
+2. **Default deployment** – choose one of the pre-populated IDs (`claude-sonnet-4-6`,
+   `claude-opus-4-6`) or enter any custom deployment you created in AI Studio.
+3. **API key** – paste `ANTHROPIC_FOUNDRY_API_KEY` / `AZURE_CLAUDE_API_KEY` from the
+   Azure portal (AI Foundry → Claude connection → _Keys & Endpoint_).
+
+### CLI setup
+
+```bash
+# Interactive
+openclaw onboard --auth-choice anthropic-azure-api-key
+
+# Non-interactive example
+openclaw onboard --non-interactive --accept-risk \
+  --auth-choice anthropic-azure-api-key \
+  --anthropic-azure-base-url fabric-hub \
+  --anthropic-azure-model-id claude-sonnet-4-6 \
+  --anthropic-azure-api-key "$ANTHROPIC_FOUNDRY_API_KEY"
+```
+
+Supported env vars (picked up automatically when set):
+
+- `ANTHROPIC_FOUNDRY_BASE_URL` / `AZURE_CLAUDE_BASE_URL`
+- `ANTHROPIC_FOUNDRY_RESOURCE` / `AZURE_CLAUDE_RESOURCE`
+- `ANTHROPIC_FOUNDRY_API_KEY` / `AZURE_CLAUDE_API_KEY`
+
+OpenClaw stores the base URL, resource, and deployment metadata with the
+`anthropic-azure:default` auth profile so future doctor runs can surface it.
+
+## Option C: Claude setup-token
 
 **Best for:** using your Claude subscription.
 

@@ -1,4 +1,11 @@
 import { upsertAuthProfile } from "../agents/auth-profiles.js";
+import {
+  ANTHROPIC_AZURE_MODEL_CHOICES,
+  DEFAULT_ANTHROPIC_AZURE_MODEL_ID,
+  normalizeAnthropicAzureBaseUrl,
+  resolveAnthropicAzureBaseUrlFromEnv,
+  resolveAnthropicAzureResourceName,
+} from "./anthropic-azure-utils.js";
 import { normalizeApiKeyInput, validateApiKeyInput } from "./auth-choice.api-key.js";
 import {
   normalizeSecretInputModeInput,
@@ -9,9 +16,28 @@ import {
 import type { ApplyAuthChoiceParams, ApplyAuthChoiceResult } from "./auth-choice.apply.js";
 import { buildTokenProfileId, validateAnthropicSetupToken } from "./auth-token.js";
 import { applyAgentDefaultModelPrimary } from "./onboard-auth.config-shared.js";
-import { applyAuthProfileConfig, setAnthropicApiKey } from "./onboard-auth.js";
+import {
+  applyAnthropicAzureProviderConfig,
+  applyAuthProfileConfig,
+  setAnthropicApiKey,
+  setAnthropicAzureApiKey,
+} from "./onboard-auth.js";
 
 const DEFAULT_ANTHROPIC_MODEL = "anthropic/claude-sonnet-4-6";
+
+function formatUnknownError(error: unknown): string {
+  if (error instanceof Error) {
+    return error.message;
+  }
+  if (typeof error === "string") {
+    return error;
+  }
+  try {
+    return JSON.stringify(error);
+  } catch {
+    return String(error);
+  }
+}
 
 export async function applyAuthChoiceAnthropic(
   params: ApplyAuthChoiceParams,
@@ -127,6 +153,111 @@ export async function applyAuthChoiceAnthropic(
     if (params.setDefaultModel) {
       nextConfig = applyAgentDefaultModelPrimary(nextConfig, DEFAULT_ANTHROPIC_MODEL);
     }
+    return { config: nextConfig };
+  }
+
+  if (params.authChoice === "anthropic-azure-api-key") {
+    let nextConfig = params.config;
+    const baseUrlCandidate = params.opts?.anthropicAzureBaseUrl?.trim();
+    const envBaseUrl = resolveAnthropicAzureBaseUrlFromEnv(process.env);
+
+    const resolveOrPromptBaseUrl = async (): Promise<string> => {
+      if (baseUrlCandidate) {
+        return normalizeAnthropicAzureBaseUrl(baseUrlCandidate);
+      }
+      if (envBaseUrl) {
+        return envBaseUrl;
+      }
+      const baseUrlRaw = await params.prompter.text({
+        message: "Azure Claude resource name or base URL",
+        placeholder: "fabric-hub or https://fabric-hub.services.ai.azure.com/anthropic",
+        validate: (value) => {
+          try {
+            normalizeAnthropicAzureBaseUrl(String(value ?? ""));
+            return undefined;
+          } catch (error) {
+            return formatUnknownError(error);
+          }
+        },
+      });
+      return normalizeAnthropicAzureBaseUrl(String(baseUrlRaw ?? ""));
+    };
+
+    const normalizedBaseUrl = await resolveOrPromptBaseUrl();
+
+    const resolveModelId = async (): Promise<string> => {
+      const provided = params.opts?.anthropicAzureModelId?.trim();
+      if (provided) {
+        return provided;
+      }
+      if (typeof params.prompter.select === "function") {
+        const options = [
+          ...ANTHROPIC_AZURE_MODEL_CHOICES.map((choice) => ({
+            value: choice.value,
+            label: choice.label,
+          })),
+          { value: "__custom__", label: "Custom deployment ID" },
+        ];
+        const selection = await params.prompter.select<string>({
+          message: "Default Azure Claude deployment",
+          initialValue: DEFAULT_ANTHROPIC_AZURE_MODEL_ID,
+          options,
+        });
+        if (selection === "__custom__") {
+          const customId = await params.prompter.text({
+            message: "Enter Azure Claude deployment ID",
+            placeholder: "claude-sonnet-4-6",
+          });
+          const normalized = String(customId ?? "").trim();
+          return normalized || DEFAULT_ANTHROPIC_AZURE_MODEL_ID;
+        }
+        return selection?.trim() || DEFAULT_ANTHROPIC_AZURE_MODEL_ID;
+      }
+      return DEFAULT_ANTHROPIC_AZURE_MODEL_ID;
+    };
+
+    const resolvedModelId = await resolveModelId();
+    const resource = resolveAnthropicAzureResourceName(normalizedBaseUrl);
+
+    const metadata = {
+      baseUrl: normalizedBaseUrl,
+      modelId: resolvedModelId,
+      ...(resource ? { resource } : {}),
+    };
+
+    await ensureApiKeyFromOptionEnvOrPrompt({
+      token: params.opts?.anthropicAzureApiKey,
+      tokenProvider: params.opts?.tokenProvider ?? "anthropic-azure",
+      secretInputMode: requestedSecretInputMode,
+      config: nextConfig,
+      expectedProviders: ["anthropic-azure"],
+      provider: "anthropic-azure",
+      envLabel: "ANTHROPIC_FOUNDRY_API_KEY / AZURE_CLAUDE_API_KEY",
+      promptMessage: "Enter Azure Claude API key",
+      normalize: normalizeApiKeyInput,
+      validate: validateApiKeyInput,
+      prompter: params.prompter,
+      setCredential: async (apiKey, mode) =>
+        setAnthropicAzureApiKey(apiKey, params.agentDir, metadata, {
+          secretInputMode: mode,
+        }),
+    });
+
+    nextConfig = applyAuthProfileConfig(nextConfig, {
+      profileId: "anthropic-azure:default",
+      provider: "anthropic-azure",
+      mode: "api_key",
+    });
+
+    nextConfig = applyAnthropicAzureProviderConfig(nextConfig, {
+      baseUrl: normalizedBaseUrl,
+      modelId: resolvedModelId,
+    });
+
+    if (params.setDefaultModel) {
+      nextConfig = applyAgentDefaultModelPrimary(nextConfig, `anthropic-azure/${resolvedModelId}`);
+    }
+
     return { config: nextConfig };
   }
 

@@ -38,6 +38,12 @@ const AUTH_CHOICE_GROUP_DEFS: {
     choices: ["token", "apiKey"],
   },
   {
+    value: "anthropic-azure",
+    label: "Azure Claude (AI Foundry)",
+    hint: "Anthropic Claude via Microsoft Azure",
+    choices: ["anthropic-azure-api-key"],
+  },
+  {
     value: "chutes",
     label: "Chutes",
     hint: "OAuth",
@@ -190,6 +196,7 @@ const AUTH_CHOICE_GROUP_DEFS: {
 ];
 
 const PROVIDER_AUTH_CHOICE_OPTION_HINTS: Partial<Record<AuthChoice, string>> = {
+  "anthropic-azure-api-key": "Azure AI Foundry (Claude via Microsoft)",
   "litellm-api-key": "Unified gateway for 100+ LLM providers",
   "cloudflare-ai-gateway-api-key": "Account ID + Gateway ID + API key",
   "venice-api-key": "Privacy-focused inference (uncensored models)",
@@ -200,6 +207,7 @@ const PROVIDER_AUTH_CHOICE_OPTION_HINTS: Partial<Record<AuthChoice, string>> = {
 };
 
 const PROVIDER_AUTH_CHOICE_OPTION_LABELS: Partial<Record<AuthChoice, string>> = {
+  "anthropic-azure-api-key": "Azure Claude (AI Foundry)",
   "moonshot-api-key": "Kimi API key (.ai)",
   "moonshot-api-key-cn": "Kimi API key (.cn)",
   "kimi-code-api-key": "Kimi Code API key (subscription)",
@@ -297,6 +305,11 @@ const BASE_AUTH_CHOICE_OPTIONS: ReadonlyArray<AuthChoiceOption> = [
     hint: "Local proxy for VS Code Copilot models",
   },
   { value: "apiKey", label: "Anthropic API key" },
+  {
+    value: "anthropic-azure-api-key",
+    label: "Azure Claude (AI Foundry)",
+    hint: "Azure AI Foundry resource + Claude API key",
+  },
   {
     value: "opencode-zen",
     label: "OpenCode Zen catalog",

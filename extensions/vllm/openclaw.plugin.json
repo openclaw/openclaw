@@ -1,6 +1,22 @@
 {
   "id": "vllm",
   "providers": ["vllm"],
+  "wizard": {
+    "onboarding": {
+      "choiceId": "vllm",
+      "choiceLabel": "vLLM",
+      "choiceHint": "Local/self-hosted OpenAI-compatible server",
+      "groupId": "vllm",
+      "groupLabel": "vLLM",
+      "groupHint": "Local/self-hosted OpenAI-compatible",
+      "methodId": "custom"
+    },
+    "modelPicker": {
+      "label": "vLLM (custom)",
+      "hint": "Enter vLLM URL + API key + model",
+      "methodId": "custom"
+    }
+  },
   "configSchema": {
     "type": "object",
     "additionalProperties": false,

@@ -8,6 +8,27 @@ import type { PluginConfigUiHint, PluginKind } from "./types.js";
 export const PLUGIN_MANIFEST_FILENAME = "openclaw.plugin.json";
 export const PLUGIN_MANIFEST_FILENAMES = [PLUGIN_MANIFEST_FILENAME] as const;
 
+export type PluginManifestWizardOnboarding = {
+  choiceId?: string;
+  choiceLabel?: string;
+  choiceHint?: string;
+  groupId?: string;
+  groupLabel?: string;
+  groupHint?: string;
+  methodId?: string;
+};
+
+export type PluginManifestWizardModelPicker = {
+  label?: string;
+  hint?: string;
+  methodId?: string;
+};
+
+export type PluginManifestWizard = {
+  onboarding?: PluginManifestWizardOnboarding;
+  modelPicker?: PluginManifestWizardModelPicker;
+};
+
 export type PluginManifest = {
   id: string;
   configSchema: Record<string, unknown>;
@@ -19,6 +40,7 @@ export type PluginManifest = {
   description?: string;
   version?: string;
   uiHints?: Record<string, PluginConfigUiHint>;
+  wizard?: PluginManifestWizard;
 };
 
 export type PluginManifestLoadResult =
@@ -100,6 +122,36 @@ export function loadPluginManifest(
     uiHints = raw.uiHints as Record<string, PluginConfigUiHint>;
   }
 
+  let wizard: PluginManifestWizard | undefined;
+  if (isRecord(raw.wizard)) {
+    const rawWizard = raw.wizard;
+    let onboarding: PluginManifestWizardOnboarding | undefined;
+    let modelPicker: PluginManifestWizardModelPicker | undefined;
+    if (isRecord(rawWizard.onboarding)) {
+      const o = rawWizard.onboarding;
+      onboarding = {
+        choiceId: typeof o.choiceId === "string" ? o.choiceId : undefined,
+        choiceLabel: typeof o.choiceLabel === "string" ? o.choiceLabel : undefined,
+        choiceHint: typeof o.choiceHint === "string" ? o.choiceHint : undefined,
+        groupId: typeof o.groupId === "string" ? o.groupId : undefined,
+        groupLabel: typeof o.groupLabel === "string" ? o.groupLabel : undefined,
+        groupHint: typeof o.groupHint === "string" ? o.groupHint : undefined,
+        methodId: typeof o.methodId === "string" ? o.methodId : undefined,
+      };
+    }
+    if (isRecord(rawWizard.modelPicker)) {
+      const mp = rawWizard.modelPicker;
+      modelPicker = {
+        label: typeof mp.label === "string" ? mp.label : undefined,
+        hint: typeof mp.hint === "string" ? mp.hint : undefined,
+        methodId: typeof mp.methodId === "string" ? mp.methodId : undefined,
+      };
+    }
+    if (onboarding ?? modelPicker) {
+      wizard = { onboarding, modelPicker };
+    }
+  }
+
   return {
     ok: true,
     manifest: {
@@ -113,6 +165,7 @@ export function loadPluginManifest(
       description,
       version,
       uiHints,
+      wizard,
     },
     manifestPath,
   };
