@@ -1087,10 +1087,18 @@ export function startHeartbeatRunner(opts: {
       return;
     }
     const delay = Math.max(0, nextDue - now);
+    const MAX_SAFE_TIMEOUT_MS = 2_147_483_647;
+    const safeDelay = Math.min(delay, MAX_SAFE_TIMEOUT_MS);
+    if (delay > MAX_SAFE_TIMEOUT_MS) {
+      log.warn(
+        `heartbeat: interval exceeds 32-bit setTimeout limit (~24.8 days), clamping to ${MAX_SAFE_TIMEOUT_MS}ms`,
+        { requestedMs: delay, clampedMs: safeDelay },
+      );
+    }
     state.timer = setTimeout(() => {
       state.timer = null;
       requestHeartbeatNow({ reason: "interval", coalesceMs: 0 });
-    }, delay);
+    }, safeDelay);
     state.timer.unref?.();
   };
 
