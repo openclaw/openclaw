@@ -1,4 +1,4 @@
-import type { OutboundSendDeps } from "../infra/outbound/deliver.js";
+import type { OutboundSendDeps } from "../infra/outbound/send-deps.js";
 
 /**
  * CLI-internal send function sources, keyed by channel ID.

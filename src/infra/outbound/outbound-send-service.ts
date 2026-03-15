@@ -6,10 +6,10 @@ import { appendAssistantMessageToSessionTranscript } from "../../config/sessions
 import { getAgentScopedMediaLocalRoots } from "../../media/local-roots.js";
 import type { GatewayClientMode, GatewayClientName } from "../../utils/message-channel.js";
 import { throwIfAborted } from "./abort.js";
-import type { OutboundSendDeps } from "./deliver.js";
 import type { MessagePollResult, MessageSendResult } from "./message.js";
 import { sendMessage, sendPoll } from "./message.js";
 import type { OutboundMirror } from "./mirror.js";
+import type { OutboundSendDeps } from "./send-deps.js";
 import { extractToolPayload } from "./tool-payload.js";
 
 export type OutboundGatewayContext = {

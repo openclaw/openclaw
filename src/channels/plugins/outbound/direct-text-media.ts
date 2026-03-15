@@ -1,6 +1,6 @@
 import { chunkText } from "../../../auto-reply/chunk.js";
 import type { OpenClawConfig } from "../../../config/config.js";
-import type { OutboundSendDeps } from "../../../infra/outbound/deliver.js";
+import type { OutboundSendDeps } from "../../../infra/outbound/send-deps.js";
 import { resolveChannelMediaMaxBytes } from "../media-limits.js";
 import type { ChannelOutboundAdapter } from "../types.js";
 

@@ -24,7 +24,6 @@ import {
   listConfiguredMessageChannels,
   resolveMessageChannelSelection,
 } from "./channel-selection.js";
-import type { OutboundSendDeps } from "./deliver.js";
 import { normalizeMessageActionInput } from "./message-action-normalization.js";
 import {
   hydrateAttachmentParamsForAction,
@@ -48,6 +47,7 @@ import {
 } from "./outbound-policy.js";
 import { executePollAction, executeSendAction } from "./outbound-send-service.js";
 import { ensureOutboundSessionEntry, resolveOutboundSessionRoute } from "./outbound-session.js";
+import type { OutboundSendDeps } from "./send-deps.js";
 import { resolveChannelTarget, type ResolvedMessagingTarget } from "./target-resolver.js";
 import { extractToolPayload } from "./tool-payload.js";
 
