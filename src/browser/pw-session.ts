@@ -108,6 +108,8 @@ const contextStates = new WeakMap<BrowserContext, ContextState>();
 const observedContexts = new WeakSet<BrowserContext>();
 const observedPages = new WeakSet<Page>();
 const neutralizedExtensionRelayPages = new WeakSet<Page>();
+const inFlightExtensionRelayPageNeutralizations = new WeakMap<Page, Promise<void>>();
+const extensionRelayPageNeutralizationCooldownUntil = new WeakMap<Page, number>();
 
 // Best-effort cache to make role refs stable even if Playwright returns a different Page object
 // for the same CDP target across requests.
@@ -118,6 +120,7 @@ const MAX_CONSOLE_MESSAGES = 500;
 const MAX_PAGE_ERRORS = 200;
 const MAX_NETWORK_REQUESTS = 500;
 const EXTENSION_RELAY_PAGE_NEUTRALIZE_TIMEOUT_MS = 1_000;
+const EXTENSION_RELAY_PAGE_NEUTRALIZE_RETRY_COOLDOWN_MS = 5_000;
 
 const cachedByCdpUrl = new Map<string, ConnectedBrowser>();
 const connectingByCdpUrl = new Map<string, Promise<ConnectedBrowser>>();
@@ -394,19 +397,58 @@ function hasKnownExtensionRelayAuthHint(cdpUrl: string): boolean {
   return Object.keys(getChromeExtensionRelayAuthHeaders(cdpUrl)).length > 0;
 }
 
+function isExtensionRelayPageNeutralizationCoolingDown(page: Page): boolean {
+  const cooldownUntil = extensionRelayPageNeutralizationCooldownUntil.get(page);
+  if (cooldownUntil === undefined) {
+    return false;
+  }
+  if (cooldownUntil <= Date.now()) {
+    extensionRelayPageNeutralizationCooldownUntil.delete(page);
+    return false;
+  }
+  return true;
+}
+
 async function neutralizeExtensionRelayPageMedia(page: Page, timeoutMs?: number): Promise<void> {
   if (neutralizedExtensionRelayPages.has(page)) {
     return;
   }
+  if (isExtensionRelayPageNeutralizationCoolingDown(page)) {
+    return;
+  }
+  if (inFlightExtensionRelayPageNeutralizations.has(page)) {
+    return;
+  }
+  const work = Promise.resolve().then(async () => {
+    await page.emulateMedia({ colorScheme: null });
+  });
+  inFlightExtensionRelayPageNeutralizations.set(page, work);
+  void work
+    .then(() => {
+      neutralizedExtensionRelayPages.add(page);
+      extensionRelayPageNeutralizationCooldownUntil.delete(page);
+    })
+    .catch(() => {
+      // Best-effort only; timeout callers may already have moved on.
+    })
+    .finally(() => {
+      if (inFlightExtensionRelayPageNeutralizations.get(page) === work) {
+        inFlightExtensionRelayPageNeutralizations.delete(page);
+      }
+    });
   try {
-    const work = page.emulateMedia({ colorScheme: null });
     if (typeof timeoutMs === "number" && timeoutMs > 0) {
       await withTimeout(work, timeoutMs, "Extension relay neutralization timed out");
     } else {
       await work;
     }
-    neutralizedExtensionRelayPages.add(page);
-  } catch {
+  } catch (error) {
+    if (error instanceof Error && error.message === "Extension relay neutralization timed out") {
+      extensionRelayPageNeutralizationCooldownUntil.set(
+        page,
+        Date.now() + EXTENSION_RELAY_PAGE_NEUTRALIZE_RETRY_COOLDOWN_MS,
+      );
+    }
     // Best-effort only. If the page is mid-navigation or the target is gone,
     // the next request can retry.
   }
