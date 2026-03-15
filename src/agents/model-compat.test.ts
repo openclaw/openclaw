@@ -32,6 +32,10 @@ function supportsStrictMode(model: Model<Api>): boolean | undefined {
   return (model.compat as { supportsStrictMode?: boolean } | undefined)?.supportsStrictMode;
 }
 
+function supportsStore(model: Model<Api>): boolean | undefined {
+  return (model.compat as { supportsStore?: boolean } | undefined)?.supportsStore;
+}
+
 function createTemplateModel(provider: string, id: string): Model<Api> {
   return {
     id,
@@ -306,6 +310,29 @@ describe("normalizeModelCompat", () => {
     expect(supportsDeveloperRole(normalized)).toBe(false);
     expect(supportsUsageInStreaming(normalized)).toBe(false);
     expect(supportsStrictMode(normalized)).toBe(false);
+    expect(supportsStore(normalized)).toBe(false);
+  });
+
+  it("forces supportsStore off for Google AI OpenAI-compatible endpoint", () => {
+    const model = {
+      ...baseModel(),
+      provider: "google-ai",
+      baseUrl: "https://generativelanguage.googleapis.com/v1beta/openai/",
+    };
+    delete (model as { compat?: unknown }).compat;
+    const normalized = normalizeModelCompat(model);
+    expect(supportsStore(normalized)).toBe(false);
+  });
+
+  it("respects explicit supportsStore true on non-native endpoints", () => {
+    const model = {
+      ...baseModel(),
+      provider: "custom-cpa",
+      baseUrl: "https://proxy.example.com/v1",
+      compat: { supportsStore: true },
+    };
+    const normalized = normalizeModelCompat(model);
+    expect(supportsStore(normalized)).toBe(true);
   });
 
   it("respects explicit supportsStrictMode true on non-native endpoints", () => {

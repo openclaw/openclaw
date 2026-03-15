@@ -67,11 +67,13 @@ export function normalizeModelCompat(model: Model<Api>): Model<Api> {
   }
   const forcedDeveloperRole = compat?.supportsDeveloperRole === true;
   const forcedUsageStreaming = compat?.supportsUsageInStreaming === true;
+  const forcedStore = compat?.supportsStore === true;
   const targetStrictMode = compat?.supportsStrictMode ?? false;
   if (
     compat?.supportsDeveloperRole !== undefined &&
     compat?.supportsUsageInStreaming !== undefined &&
-    compat?.supportsStrictMode !== undefined
+    compat?.supportsStrictMode !== undefined &&
+    compat?.supportsStore !== undefined
   ) {
     return model;
   }
@@ -84,11 +86,13 @@ export function normalizeModelCompat(model: Model<Api>): Model<Api> {
           ...compat,
           supportsDeveloperRole: forcedDeveloperRole || false,
           supportsUsageInStreaming: forcedUsageStreaming || false,
+          supportsStore: forcedStore || false,
           supportsStrictMode: targetStrictMode,
         }
       : {
           supportsDeveloperRole: false,
           supportsUsageInStreaming: false,
+          supportsStore: false,
           supportsStrictMode: false,
         },
   } as typeof model;
