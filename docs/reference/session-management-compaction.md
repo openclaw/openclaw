@@ -160,6 +160,36 @@ The store is safe to edit, but the Gateway is the authority: it may rewrite or r
 
 ---
 
+## Targeted recovery on a self-hosted gateway
+
+If one auxiliary agent gets wedged with stale token counts or an obviously oversized transcript, use the built-in maintenance path first:
+
+```bash
+openclaw sessions cleanup --enforce
+```
+
+If that still leaves a single helper agent stuck, a targeted reset is safe: back up the agent's `sessions.json`, remove only that `sessionKey`, and let the Gateway recreate it on the next run. This resets the current session pointer, not the transcript history; the old `*.jsonl` file stays on disk.
+
+Prefer this for non-primary agents such as `github-scout`, `evomap-scout`, or `ops-optimizer`. Avoid deleting `agent:main:main` unless you intentionally want to start a fresh main conversation.
+
+Example:
+
+```bash
+STORE="$HOME/.openclaw/agents/github-scout/sessions/sessions.json"
+cp "$STORE" "$STORE.bak"
+node -e '
+const fs = require("fs");
+const [storePath, sessionKey] = process.argv.slice(2);
+const data = JSON.parse(fs.readFileSync(storePath, "utf8"));
+delete data[sessionKey];
+fs.writeFileSync(storePath, JSON.stringify(data, null, 2) + "\n");
+' "$STORE" "agent:github-scout:main"
+```
+
+Disabled isolated cron jobs can also leave behind lots of old `agent:main:cron:<jobId>` entries. In that case, `openclaw sessions cleanup --enforce` is preferable to manual surgery because it applies retention to the whole store in one pass.
+
+---
+
 ## Transcript structure (`*.jsonl`)
 
 Transcripts are managed by `@mariozechner/pi-coding-agent`’s `SessionManager`.
