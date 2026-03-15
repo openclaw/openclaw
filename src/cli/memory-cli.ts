@@ -6,6 +6,7 @@ import type { Command } from "commander";
 import { resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { loadConfig } from "../config/config.js";
 import { resolveStateDir } from "../config/paths.js";
+import { resolveAgentMainSessionKey } from "../config/sessions.js";
 import { resolveSessionTranscriptsDirForAgent } from "../config/sessions/paths.js";
 import { setVerbose } from "../globals.js";
 import { getMemorySearchManager, type MemorySearchManagerResult } from "../memory/index.js";
@@ -778,9 +779,11 @@ export function registerMemoryCli(program: Command) {
           run: async (manager) => {
             let results: Awaited<ReturnType<typeof manager.search>>;
             try {
+              const sessionKey = resolveAgentMainSessionKey({ cfg, agentId });
               results = await manager.search(query, {
                 maxResults: opts.maxResults,
                 minScore: opts.minScore,
+                sessionKey,
               });
             } catch (err) {
               const message = formatErrorMessage(err);
