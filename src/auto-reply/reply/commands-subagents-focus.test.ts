@@ -401,6 +401,6 @@ describe("/focus, /unfocus, /agents", () => {
   it("/focus rejects unsupported channels", async () => {
     const params = buildCommandTestParams("/focus codex-acp", baseCfg);
     const result = await handleSubagentsCommand(params, true);
-    expect(result?.reply?.text).toContain("only available on Discord and Telegram");
+    expect(result?.reply?.text).toContain("only available on Discord, Telegram, and Feishu");
   });
 });
