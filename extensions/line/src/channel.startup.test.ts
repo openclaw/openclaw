@@ -129,3 +129,25 @@ describe("linePlugin gateway.startAccount", () => {
     await task;
   });
 });
+
+describe("linePlugin status.collectStatusIssues", () => {
+  it("reports no issues when snapshot is configured", () => {
+    const collect = linePlugin.status!.collectStatusIssues!;
+    const issues = collect([{ accountId: "default", configured: true, enabled: true }]);
+    expect(issues).toHaveLength(0);
+  });
+
+  it("reports one issue when snapshot is not configured", () => {
+    const collect = linePlugin.status!.collectStatusIssues!;
+    const issues = collect([{ accountId: "default", configured: false, enabled: true }]);
+    expect(issues).toHaveLength(1);
+    expect(issues[0].message).toContain("LINE channel not configured");
+    expect(issues[0].channel).toBe("line");
+  });
+
+  it("uses snapshot.configured only (no token/secret in snapshot)", () => {
+    const collect = linePlugin.status!.collectStatusIssues!;
+    const issues = collect([{ accountId: "default", configured: true } as ChannelAccountSnapshot]);
+    expect(issues).toHaveLength(0);
+  });
+});
