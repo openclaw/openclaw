@@ -1175,40 +1175,53 @@ export class AcpSessionManager {
 
     let reclaimed = 0;
     for (const candidate of candidates) {
-      const cached = this.runtimeCache.peek(candidate.actorKey);
-      if (!cached) {
-        continue;
-      }
-      let isStale = false;
-      if (cached.runtime.getStatus) {
-        const controller = new AbortController();
-        const timeout = setTimeout(() => controller.abort(), 5_000);
-        try {
-          await cached.runtime.getStatus({ handle: cached.handle, signal: controller.signal });
-        } catch {
-          isStale = true;
-        } finally {
-          clearTimeout(timeout);
+      const evicted = await this.actorQueue.run(candidate.actorKey, async () => {
+        if (this.activeTurnBySession.has(candidate.actorKey)) {
+          return false;
         }
-      } else if (candidate.idleMs >= BLIND_IDLE_MS) {
-        isStale = true;
-      }
-      if (!isStale) {
-        continue;
-      }
-      this.runtimeCache.clear(candidate.actorKey);
-      reclaimed += 1;
-      logVerbose(
-        `acp-manager: back-pressure evicted stale session ${candidate.actorKey} (idle ${Math.round(candidate.idleMs / 1000)}s)`,
-      );
-      try {
-        await cached.runtime.close({ handle: cached.handle, reason: "stale-pressure-evicted" });
-      } catch (error) {
+        const cached = this.runtimeCache.peek(candidate.actorKey);
+        if (!cached) {
+          return false;
+        }
+        let isStale = false;
+        if (cached.runtime.getStatus) {
+          const controller = new AbortController();
+          const timeout = setTimeout(() => controller.abort(), 5_000);
+          try {
+            await cached.runtime.getStatus({ handle: cached.handle, signal: controller.signal });
+          } catch {
+            isStale = true;
+          } finally {
+            clearTimeout(timeout);
+          }
+        } else if (candidate.idleMs >= BLIND_IDLE_MS) {
+          isStale = true;
+        }
+        if (!isStale) {
+          return false;
+        }
+        if (this.activeTurnBySession.has(candidate.actorKey)) {
+          return false;
+        }
+        this.runtimeCache.clear(candidate.actorKey);
+        this.evictedRuntimeCount += 1;
+        this.lastEvictedAt = Date.now();
         logVerbose(
-          `acp-manager: stale pressure eviction close failed for ${candidate.state.handle.sessionKey}: ${String(error)}`,
+          `acp-manager: back-pressure evicted stale session ${candidate.actorKey} (idle ${Math.round(candidate.idleMs / 1000)}s)`,
         );
+        try {
+          await cached.runtime.close({ handle: cached.handle, reason: "stale-pressure-evicted" });
+        } catch (error) {
+          logVerbose(
+            `acp-manager: stale pressure eviction close failed for ${candidate.state.handle.sessionKey}: ${String(error)}`,
+          );
+        }
+        return true;
+      });
+      if (evicted) {
+        reclaimed += 1;
+        break;
       }
-      break;
     }
     return reclaimed;
   }
