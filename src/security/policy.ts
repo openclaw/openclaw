@@ -6,9 +6,17 @@ import type {
   SkillSecurityVerdict,
 } from "./skill-security-types.js";
 
-export type SkillSecurityPolicyConfig = typeof DEFAULT_SECURITY_POLICY_JSON;
+export type SkillSecurityPolicyConfig = {
+  version: number;
+  defaults: Record<SkillSecurityVerdict, SkillSecurityPolicyAction>;
+  thresholds: {
+    allowMinConfidence: number;
+    suspiciousManualReviewMinConfidence: number;
+    blockMinConfidence: number;
+  };
+};
 
-const DEFAULT_POLICY = DEFAULT_SECURITY_POLICY_JSON;
+const DEFAULT_POLICY = DEFAULT_SECURITY_POLICY_JSON as SkillSecurityPolicyConfig;
 
 export function mapVerdictToAction(params: {
   verdict: SkillSecurityVerdict;
