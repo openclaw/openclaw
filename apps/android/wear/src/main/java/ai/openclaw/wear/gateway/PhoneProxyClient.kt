@@ -134,11 +134,19 @@ class PhoneProxyClient internal constructor(
     val statusText: String?,
   )
 
+  private data class PendingProbe(
+    val generation: Long,
+    val nodeId: String,
+    val result: CompletableDeferred<ProxyHandshake>,
+  )
+
   private val json = Json { ignoreUnknownKeys = true }
   private val pendingRequests = ConcurrentHashMap<String, CompletableDeferred<String>>()
   private val messageListener = ProxyMessageListener(::onMessageReceived)
+  private val probeLock = Any()
 
   private var phoneNodeId: String? = null
+  private var pendingProbe: PendingProbe? = null
   private var reconnectJob: Job? = null
   private var livenessJob: Job? = null
   private var connectionGeneration = 0L
@@ -160,6 +168,7 @@ class PhoneProxyClient internal constructor(
     _statusText.value = stringResolver(R.string.wear_status_finding_phone)
     val generation = connectionGeneration + 1
     connectionGeneration = generation
+    clearPendingProbe()
     lastPongReceivedAtNanos = 0L
     scope.launch {
       findPhoneAndPing(generation)
@@ -173,6 +182,7 @@ class PhoneProxyClient internal constructor(
     livenessJob?.cancel()
     livenessJob = null
     connectionGeneration += 1
+    clearPendingProbe()
     phoneNodeId = null
     _connected.value = false
     _statusText.value = stringResolver(R.string.wear_status_phone_proxy_offline)
@@ -239,8 +249,20 @@ class PhoneProxyClient internal constructor(
   private fun shouldAcceptMessage(sourceNodeId: String, path: String): Boolean {
     val activeNodeId = phoneNodeId
     return when (path) {
-      PONG_PATH -> activeNodeId == null || activeNodeId == sourceNodeId
+      PONG_PATH -> shouldAcceptPong(sourceNodeId, activeNodeId)
       RPC_RESPONSE_PATH, EVENT_PATH -> activeNodeId != null && activeNodeId == sourceNodeId
+      else -> false
+    }
+  }
+
+  private fun shouldAcceptPong(sourceNodeId: String, activeNodeId: String?): Boolean {
+    val activeProbe =
+      synchronized(probeLock) {
+        pendingProbe
+      }
+    return when {
+      activeProbe != null -> activeProbe.nodeId == sourceNodeId
+      activeNodeId != null -> activeNodeId == sourceNodeId
       else -> false
     }
   }
@@ -282,6 +304,17 @@ class PhoneProxyClient internal constructor(
 
   private fun handlePong(sourceNodeId: String, data: String) {
     val handshake = parseProxyHandshake(data)
+    val probe =
+      synchronized(probeLock) {
+        pendingProbe?.takeIf {
+          it.generation == connectionGeneration && it.nodeId == sourceNodeId
+        }
+      }
+    if (probe != null) {
+      probe.result.complete(handshake)
+      return
+    }
+
     if (!handshake.ready) {
       livenessJob?.cancel()
       livenessJob = null
@@ -294,6 +327,81 @@ class PhoneProxyClient internal constructor(
       return
     }
 
+    acceptConnectedPhoneNode(sourceNodeId, connectionGeneration)
+  }
+
+  private suspend fun findPhoneAndPing(generation: Long) {
+    if (generation != connectionGeneration) return
+    try {
+      val nodes = prioritizeProxyNodes(nodeFinder.connectedNodes())
+      if (generation != connectionGeneration) return
+      if (nodes.isEmpty()) {
+        _connected.value = false
+        phoneNodeId = null
+        _statusText.value = stringResolver(R.string.wear_status_no_phone_found)
+        scheduleReconnect(delayMs = 5_000, generation = generation)
+        return
+      }
+
+      var lastFailureStatus = stringResolver(R.string.wear_status_phone_not_responding)
+      for (phone in nodes) {
+        if (generation != connectionGeneration) return
+        val handshake = probePhoneNode(phone, generation)
+        if (handshake == null) {
+          lastFailureStatus = stringResolver(R.string.wear_status_phone_not_responding)
+          continue
+        }
+        if (!handshake.ready) {
+          lastFailureStatus =
+            handshake.statusText?.takeIf { it.isNotBlank() }
+              ?: stringResolver(R.string.wear_status_phone_gateway_unavailable)
+          continue
+        }
+        acceptConnectedPhoneNode(phone.id, generation)
+        return
+      }
+
+      if (generation != connectionGeneration) return
+      _connected.value = false
+      phoneNodeId = null
+      _statusText.value = lastFailureStatus
+      scheduleReconnect(generation = generation)
+    } catch (e: Throwable) {
+      if (generation != connectionGeneration) return
+      Log.w(TAG, "Failed to find phone: ${e.message}")
+      _connected.value = false
+      _statusText.value = formattedStringResolver(R.string.wear_status_failed, arrayOf(e.message ?: ""))
+      scheduleReconnect(delayMs = 5_000, generation = generation)
+    }
+  }
+
+  private suspend fun probePhoneNode(phone: ProxyNode, generation: Long): ProxyHandshake? {
+    val probe = PendingProbe(generation = generation, nodeId = phone.id, result = CompletableDeferred())
+    synchronized(probeLock) {
+      pendingProbe = probe
+    }
+    _statusText.value = stringResolver(R.string.wear_status_pinging_phone)
+    return try {
+      val sent =
+        withTimeoutOrNull(MESSAGE_SEND_TIMEOUT_MS) {
+          messageTransport.sendMessage(phone.id, PING_PATH, ByteArray(0))
+        }
+      if (sent == null) {
+        Log.w(TAG, "Timed out sending ping to phone ${phone.displayName ?: phone.id}")
+        return null
+      }
+      withTimeoutOrNull(PHONE_PONG_TIMEOUT_MS) { probe.result.await() }
+    } finally {
+      synchronized(probeLock) {
+        if (pendingProbe === probe) {
+          pendingProbe = null
+        }
+      }
+    }
+  }
+
+  private fun acceptConnectedPhoneNode(sourceNodeId: String, generation: Long) {
+    if (generation != connectionGeneration) return
     val wasConnected = _connected.value && phoneNodeId == sourceNodeId
     reconnectJob?.cancel()
     reconnectJob = null
@@ -305,51 +413,7 @@ class PhoneProxyClient internal constructor(
       // Emit mainSessionKey request so the chat loads.
       _events.tryEmit(GatewayEvent("proxy.connected", null))
     }
-    startLivenessChecks(sourceNodeId, connectionGeneration)
-  }
-
-  private suspend fun findPhoneAndPing(generation: Long) {
-    if (generation != connectionGeneration) return
-    try {
-      val nodes = nodeFinder.connectedNodes()
-      if (generation != connectionGeneration) return
-      val phone = nodes.firstOrNull { it.isNearby } ?: nodes.firstOrNull()
-      if (phone == null) {
-        _connected.value = false
-        phoneNodeId = null
-        _statusText.value = stringResolver(R.string.wear_status_no_phone_found)
-        scheduleReconnect(delayMs = 5_000, generation = generation)
-        return
-      }
-      phoneNodeId = phone.id
-      _statusText.value = stringResolver(R.string.wear_status_pinging_phone)
-      val sent = withTimeoutOrNull(MESSAGE_SEND_TIMEOUT_MS) {
-        messageTransport.sendMessage(phone.id, PING_PATH, ByteArray(0))
-      }
-      if (sent == null) {
-        Log.w(TAG, "Timed out sending ping to phone ${phone.displayName ?: phone.id}")
-        phoneNodeId = null
-        _connected.value = false
-        _statusText.value = stringResolver(R.string.wear_status_phone_ping_timed_out)
-        scheduleReconnect(generation = generation)
-        return
-      }
-      // If we don't get a pong in time, retry.
-      scope.launch {
-        delay(PHONE_PONG_TIMEOUT_MS)
-        if (generation == connectionGeneration && !_connected.value) {
-          phoneNodeId = null
-          _statusText.value = stringResolver(R.string.wear_status_phone_not_responding)
-          scheduleReconnect(delayMs = 0, generation = generation)
-        }
-      }
-    } catch (e: Throwable) {
-      if (generation != connectionGeneration) return
-      Log.w(TAG, "Failed to find phone: ${e.message}")
-      _connected.value = false
-      _statusText.value = formattedStringResolver(R.string.wear_status_failed, arrayOf(e.message ?: ""))
-      scheduleReconnect(delayMs = 5_000, generation = generation)
-    }
+    startLivenessChecks(sourceNodeId, generation)
   }
 
   private suspend fun sendMessageWithTimeout(
@@ -377,6 +441,7 @@ class PhoneProxyClient internal constructor(
     if (generation != connectionGeneration) return
     livenessJob?.cancel()
     livenessJob = null
+    clearPendingProbe()
     phoneNodeId = null
     _connected.value = false
     _statusText.value = statusText
@@ -432,4 +497,16 @@ class PhoneProxyClient internal constructor(
       ProxyHandshake(ready = true, statusText = null)
     }
   }
+
+  private fun clearPendingProbe() {
+    val probe =
+      synchronized(probeLock) {
+        pendingProbe.also { pendingProbe = null }
+      }
+    probe?.result?.cancel()
+  }
+}
+
+internal fun prioritizeProxyNodes(nodes: List<ProxyNode>): List<ProxyNode> {
+  return nodes.sortedWith(compareByDescending<ProxyNode> { it.isNearby }.thenBy { it.displayName ?: it.id })
 }
