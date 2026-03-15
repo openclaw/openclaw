@@ -40,12 +40,16 @@ export async function probeGateway(opts: {
   let connectLatencyMs: number | null = null;
   let connectError: string | null = null;
   let close: GatewayProbeClose | null = null;
-
-  const disableDeviceIdentity = (() => {
+  const attachDeviceIdentity = (() => {
+    if (!(opts.auth?.token || opts.auth?.password)) {
+      return true;
+    }
     try {
+      // Keep device identity on loopback probes so local scope diagnostics are accurate.
       return isLoopbackHost(new URL(opts.url).hostname);
     } catch {
-      return false;
+      // Fail open on malformed URLs; probe connection will fail anyway.
+      return true;
     }
   })();
 
@@ -70,7 +74,7 @@ export async function probeGateway(opts: {
       clientVersion: "dev",
       mode: GATEWAY_CLIENT_MODES.PROBE,
       instanceId,
-      deviceIdentity: disableDeviceIdentity ? null : undefined,
+      deviceIdentity: attachDeviceIdentity ? undefined : null,
       onConnectError: (err) => {
         connectError = formatErrorMessage(err);
       },
