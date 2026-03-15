@@ -63,6 +63,7 @@ What has been implemented:
 - low-risk runtime compatibility writes for channel, provider, gateway-method, HTTP-route, tool, CLI, service, command, context-engine, and hook registrations now route through `src/extension-host/registry-writes.ts` ahead of broader catalog-backed registry ownership
 - legacy internal-hook bridging and typed prompt-injection compatibility policy now route through `src/extension-host/hook-compat.ts` ahead of broader catalog-backed registry ownership
 - compatibility `OpenClawPluginApi` composition and logger shaping now route through `src/extension-host/plugin-api.ts` ahead of broader catalog-backed registry ownership
+- compatibility plugin-registry facade ownership now routes through `src/extension-host/plugin-registry.ts` ahead of broader catalog-backed registry ownership
 
 How it has been implemented:
 
@@ -88,6 +89,7 @@ How it has been implemented:
 - by turning provenance-based untracked-extension warnings and final memory-slot warnings into explicit host-owned finalization-policy results before catalog publication work
 - by extracting legacy internal-hook bridging and typed prompt-injection compatibility policy into a host-owned hook-compat helper while leaving actual hook execution ownership unchanged
 - by extracting compatibility `OpenClawPluginApi` composition and logger shaping into a host-owned plugin-api helper while keeping the concrete registration callbacks in the legacy registry surface
+- by extracting the remaining compatibility plugin-registry facade into a host-owned helper so `src/plugins/registry.ts` becomes a thin wrapper instead of the real owner
 
 What remains pending:
 

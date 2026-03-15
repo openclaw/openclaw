@@ -62,11 +62,12 @@ Relevant prerequisite work that has landed:
 - low-risk channel, provider, gateway-method, HTTP-route, tool, CLI, service, command, context-engine, and hook compatibility writes now have a host-owned helper boundary in `src/extension-host/registry-writes.ts`
 - legacy internal-hook bridging and typed prompt-injection compatibility policy now have a host-owned helper boundary in `src/extension-host/hook-compat.ts`
 - compatibility `OpenClawPluginApi` composition and logger shaping now have a host-owned helper boundary in `src/extension-host/plugin-api.ts`
+- compatibility plugin-registry facade ownership now has a host-owned helper boundary in `src/extension-host/plugin-registry.ts`
 
 Why this matters for this spec:
 
 - event work should land on top of a host-owned boundary and normalized contribution model rather than on top of more plugin-era runtime seams
-- the current implementation has deliberately not started canonical bridge or stage work before those earlier boundaries were in place, including the first loader-runtime, record-state, discovery-policy, activation-policy, finalization-policy, low-risk registry-write, hook-compat, and plugin-api seams
+- the current implementation has deliberately not started canonical bridge or stage work before those earlier boundaries were in place, including the first loader-runtime, record-state, discovery-policy, activation-policy, finalization-policy, low-risk registry-write, hook-compat, plugin-api, and plugin-registry seams
 
 ## Design Goals
 
