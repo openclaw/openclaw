@@ -68,6 +68,8 @@ export type SkillEntry = {
   frontmatter: ParsedSkillFrontmatter;
   metadata?: OpenClawSkillMetadata;
   invocation?: SkillInvocationPolicy;
+  /** Error encountered while reading or parsing the SKILL.md file. */
+  parseError?: string;
 };
 
 export type SkillEligibilityContext = {

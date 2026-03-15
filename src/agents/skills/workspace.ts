@@ -510,17 +510,19 @@ function loadSkillEntries(
 
   const skillEntries: SkillEntry[] = Array.from(merged.values()).map((skill) => {
     let frontmatter: ParsedSkillFrontmatter = {};
+    let parseError: string | undefined;
     try {
       const raw = fs.readFileSync(skill.filePath, "utf-8");
       frontmatter = parseFrontmatter(raw);
-    } catch {
-      // ignore malformed skills
+    } catch (err) {
+      parseError = err instanceof Error ? err.message : String(err);
     }
     return {
       skill,
       frontmatter,
       metadata: resolveOpenClawMetadata(frontmatter),
       invocation: resolveSkillInvocationPolicy(frontmatter),
+      parseError,
     };
   });
   return skillEntries;
