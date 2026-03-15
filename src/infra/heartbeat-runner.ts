@@ -392,9 +392,52 @@ async function pruneHeartbeatTranscript(params: {
   }
   try {
     const stat = await fs.stat(transcriptPath);
-    // Only truncate if the file has grown during the heartbeat run
-    if (stat.size > preHeartbeatSize) {
-      await fs.truncate(transcriptPath, preHeartbeatSize);
+    if (stat.size <= preHeartbeatSize) {
+      return;
+    }
+    const snapshotSize = stat.size;
+    // Open with r+ to keep a single handle for read, stat, and truncate,
+    // narrowing the window between safety checks and the actual truncate.
+    const fd = await fs.open(transcriptPath, "r+");
+    try {
+      // Early bail if the file changed since our first stat.
+      const earlyCheck = await fd.stat();
+      if (earlyCheck.size !== snapshotSize) {
+        return;
+      }
+
+      const buf = Buffer.alloc(snapshotSize - preHeartbeatSize);
+      await fd.read(buf, 0, buf.length, preHeartbeatSize);
+      const appended = buf.toString("utf8");
+
+      // Verify the first role entry in appended content is "user".
+      // The heartbeat user prompt is the first thing written after
+      // preHeartbeatSize.  If the first role is "assistant" or "tool",
+      // a concurrent turn was still writing output when the heartbeat
+      // started — bail to preserve that in-flight data.
+      const firstRole = appended.match(/"role"\s*:\s*"(\w+)"/);
+      if (firstRole && firstRole[1] !== "user") {
+        return;
+      }
+
+      // Count user turn markers. The heartbeat adds exactly one user
+      // prompt, so more than 1 means a concurrent writer appended
+      // additional user content — bail out to preserve it.
+      const userTurnCount = (appended.match(/"role"\s*:\s*"user"/g) ?? []).length;
+      if (userTurnCount > 1) {
+        return;
+      }
+
+      // Re-check the file size to guard against writes that occurred
+      // between the read and this truncate.  If the file grew further,
+      // another writer appended content we did not inspect — bail out.
+      const recheck = await fd.stat();
+      if (recheck.size !== snapshotSize) {
+        return;
+      }
+      await fd.truncate(preHeartbeatSize);
+    } finally {
+      await fd.close();
     }
   } catch {
     // File may not exist or may have been removed - ignore errors
@@ -916,6 +959,8 @@ export async function runHeartbeatOnce(opts: {
       : normalized.text;
 
     if (delivery.channel === "none" || !delivery.to) {
+      // Prune heartbeat transcript even when there's no delivery target
+      await pruneHeartbeatTranscript(transcriptState);
       emitHeartbeatEvent({
         status: "skipped",
         reason: delivery.reason ?? "no-target",
@@ -933,6 +978,8 @@ export async function runHeartbeatOnce(opts: {
         sessionKey,
         updatedAt: previousUpdatedAt,
       });
+      // Prune heartbeat transcript to prevent tool_use blocks from leaking
+      await pruneHeartbeatTranscript(transcriptState);
       emitHeartbeatEvent({
         status: "skipped",
         reason: "alerts-disabled",
@@ -955,6 +1002,8 @@ export async function runHeartbeatOnce(opts: {
         deps: opts.deps,
       });
       if (!readiness.ok) {
+        // Prune heartbeat transcript to prevent tool_use blocks from leaking
+        await pruneHeartbeatTranscript(transcriptState);
         emitHeartbeatEvent({
           status: "skipped",
           reason: readiness.reason,
@@ -971,6 +1020,13 @@ export async function runHeartbeatOnce(opts: {
         return { status: "skipped", reason: readiness.reason };
       }
     }
+
+    // Prune heartbeat transcript to remove tool_use/tool_result blocks that
+    // were written during the heartbeat run. Without this, orphaned tool_use
+    // blocks leak into the parent session and corrupt Anthropic API calls.
+    // Prune before delivery to minimize the race window with concurrent
+    // user messages that may append to the transcript during the await.
+    await pruneHeartbeatTranscript(transcriptState);
 
     await deliverOutboundPayloads({
       cfg,
