@@ -132,6 +132,7 @@ import { flushPendingToolResultsAfterIdle } from "../wait-for-idle-before-flush.
 import { waitForCompactionRetryWithAggregateTimeout } from "./compaction-retry-aggregate-timeout.js";
 import {
   resolveRunTimeoutDuringCompaction,
+  resolveRunTimeoutWithCompactionGraceMs,
   selectCompactionTimeoutSnapshot,
   shouldFlagCompactionTimeout,
 } from "./compaction-timeout.js";
@@ -1708,7 +1709,10 @@ export async function runEmbeddedAttempt(
     const sessionLock = await acquireSessionWriteLock({
       sessionFile: params.sessionFile,
       maxHoldMs: resolveSessionLockMaxHoldFromTimeout({
-        timeoutMs: params.timeoutMs,
+        timeoutMs: resolveRunTimeoutWithCompactionGraceMs({
+          runTimeoutMs: params.timeoutMs,
+          compactionTimeoutMs: resolveCompactionTimeoutMs(params.config),
+        }),
       }),
     });
 

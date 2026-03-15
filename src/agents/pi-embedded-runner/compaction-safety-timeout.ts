@@ -37,7 +37,12 @@ export async function compactWithSafetyTimeout<T>(
       return;
     }
     canceled = true;
-    opts?.onCancel?.();
+    try {
+      opts?.onCancel?.();
+    } catch {
+      // Best-effort cancellation hook. Keep the timeout/abort path intact even
+      // if the underlying compaction cancel operation throws.
+    }
   };
 
   return await withTimeout(
