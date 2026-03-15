@@ -271,4 +271,26 @@ describe("resolveEffectiveToolPolicy", () => {
     const result = resolveEffectiveToolPolicy({ config: cfg, agentId: "coder" });
     expect(result.profileAlsoAllow).toEqual(["read", "write", "edit"]);
   });
+
+  it("resolves main agent config when no sessionKey is provided", () => {
+    const cfg = {
+      tools: {
+        profile: "messaging",
+      },
+      agents: {
+        list: [
+          {
+            id: "main",
+            tools: {
+              fs: { workspaceOnly: true },
+            },
+          },
+        ],
+      },
+    } as OpenClawConfig;
+    // When no sessionKey is provided, agentId should still resolve to the default agent
+    const result = resolveEffectiveToolPolicy({ config: cfg });
+    expect(result.agentId).toBe("main");
+    expect(result.profileAlsoAllow).toEqual(["read", "write", "edit"]);
+  });
 });
