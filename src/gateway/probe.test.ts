@@ -82,6 +82,17 @@ describe("probeGateway", () => {
     expect(gatewayClientState.options?.deviceIdentity).toBeNull();
   });
 
+  it("passes tls fingerprints through to the gateway client", async () => {
+    await probeGateway({
+      url: "wss://gateway.example/ws",
+      auth: { token: "secret" },
+      tlsFingerprint: "sha256:11:22:33:44",
+      timeoutMs: 1_000,
+    });
+
+    expect(gatewayClientState.options?.tlsFingerprint).toBe("sha256:11:22:33:44");
+  });
+
   it("skips detail RPCs for lightweight reachability probes", async () => {
     const result = await probeGateway({
       url: "ws://127.0.0.1:18789",

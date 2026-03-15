@@ -37,6 +37,12 @@ const readServiceCommand = vi.hoisted(() =>
   >(async () => null),
 );
 const probeGateway = vi.hoisted(() => vi.fn());
+const loadGatewayTlsRuntime = vi.hoisted(() =>
+  vi.fn(async () => ({
+    enabled: false,
+    required: false,
+  })),
+);
 const resolveGatewayProbeAuthSafe = vi.hoisted(() =>
   vi.fn(() => ({
     auth: { token: "main-token" },
@@ -82,6 +88,10 @@ vi.mock("../gateway/probe.js", () => ({
   probeGateway,
 }));
 
+vi.mock("../infra/tls/gateway.js", () => ({
+  loadGatewayTlsRuntime,
+}));
+
 vi.mock("../gateway/probe-auth.js", () => ({
   resolveGatewayProbeAuthSafe,
 }));
@@ -105,6 +115,11 @@ describe("runRescueWatchdogJob", () => {
     readServiceCommand.mockReset();
     readServiceCommand.mockResolvedValue(null);
     probeGateway.mockReset();
+    loadGatewayTlsRuntime.mockReset();
+    loadGatewayTlsRuntime.mockResolvedValue({
+      enabled: false,
+      required: false,
+    });
     resolveGatewayProbeAuthSafe.mockReset();
     resolveGatewayProbeAuthSafe.mockReturnValue({
       auth: { token: "main-token" },
@@ -207,6 +222,11 @@ describe("runRescueWatchdogJob", () => {
         },
       },
     });
+    loadGatewayTlsRuntime.mockResolvedValue({
+      enabled: true,
+      required: true,
+      fingerprintSha256: "sha256:11:22:33:44",
+    });
     probeGateway.mockResolvedValue({
       ok: true,
       close: null,
@@ -230,6 +250,7 @@ describe("runRescueWatchdogJob", () => {
     expect(probeGateway).toHaveBeenCalledWith(
       expect.objectContaining({
         disableDeviceIdentity: true,
+        tlsFingerprint: "sha256:11:22:33:44",
         url: "wss://gateway.internal:18789",
       }),
     );

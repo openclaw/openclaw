@@ -8,6 +8,7 @@ import type { GatewayService } from "../daemon/service.js";
 import { resolveGatewayBindHost } from "../gateway/net.js";
 import { resolveGatewayProbeAuthSafe } from "../gateway/probe-auth.js";
 import { probeGateway } from "../gateway/probe.js";
+import { loadGatewayTlsRuntime } from "../infra/tls/gateway.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import {
   buildRescueProfileEnv,
@@ -128,7 +129,7 @@ async function resolveProfileGatewayProbeUrl(
     gateway?: {
       bind?: import("../config/config.js").GatewayBindMode;
       customBindHost?: string;
-      tls?: { enabled?: boolean };
+      tls?: import("../config/types.gateway.js").GatewayTlsConfig;
     };
   },
   port: number,
@@ -141,16 +142,29 @@ async function resolveProfileGatewayProbeUrl(
   return `${scheme}://${formatGatewayProbeHost(host)}:${port}`;
 }
 
+async function resolveProfileGatewayProbeTlsFingerprint(cfg: {
+  gateway?: {
+    tls?: import("../config/types.gateway.js").GatewayTlsConfig;
+  };
+}): Promise<string | undefined> {
+  if (cfg.gateway?.tls?.enabled !== true) {
+    return undefined;
+  }
+  const tlsRuntime = await loadGatewayTlsRuntime(cfg.gateway.tls);
+  return tlsRuntime.enabled ? tlsRuntime.fingerprintSha256 : undefined;
+}
+
 async function probeProfileGateway(params: {
   cfg: {
     gateway?: {
       bind?: import("../config/config.js").GatewayBindMode;
       customBindHost?: string;
-      tls?: { enabled?: boolean };
+      tls?: import("../config/types.gateway.js").GatewayTlsConfig;
     };
   };
   port: number;
   auth: { token?: string; password?: string };
+  tlsFingerprint?: string;
   timeoutMs?: number;
 }): Promise<{ healthy: boolean; detail?: string }> {
   const url = await resolveProfileGatewayProbeUrl(params.cfg, params.port);
@@ -160,6 +174,7 @@ async function probeProfileGateway(params: {
     auth: hasSharedProbeAuth
       ? { token: params.auth.token, password: params.auth.password }
       : undefined,
+    tlsFingerprint: params.tlsFingerprint,
     timeoutMs:
       typeof params.timeoutMs === "number"
         ? Math.max(1, Math.min(PROBE_TIMEOUT_MS, params.timeoutMs))
@@ -179,11 +194,12 @@ async function waitForProfileGateway(params: {
     gateway?: {
       bind?: import("../config/config.js").GatewayBindMode;
       customBindHost?: string;
-      tls?: { enabled?: boolean };
+      tls?: import("../config/types.gateway.js").GatewayTlsConfig;
     };
   };
   port: number;
   auth: { token?: string; password?: string };
+  tlsFingerprint?: string;
   abortSignal?: AbortSignal;
   timeoutMs?: number;
 }): Promise<{ healthy: boolean; detail?: string }> {
@@ -360,8 +376,9 @@ export async function runRescueWatchdogJob(params: {
   }
   const port = await resolveManagedGatewayProbePort({ cfg, env, service });
   const actions: string[] = [];
+  const tlsFingerprint = await resolveProfileGatewayProbeTlsFingerprint(cfg);
 
-  const initialProbe = await probeProfileGateway({ cfg, port, auth });
+  const initialProbe = await probeProfileGateway({ cfg, port, auth, tlsFingerprint });
   if (initialProbe.healthy) {
     return {
       status: "ok",
@@ -410,6 +427,7 @@ export async function runRescueWatchdogJob(params: {
     cfg,
     port,
     auth,
+    tlsFingerprint,
     abortSignal: params.abortSignal,
     timeoutMs: (() => {
       const remaining = resolveRemainingJobBudgetMs({
