@@ -2239,6 +2239,62 @@ describe("QmdMemoryManager", () => {
     }
   });
 
+  it("falls back to qmd get for missing qmd files (slugified paths)", async () => {
+    spawnMock.mockImplementation((_cmd: string, args: string[]) => {
+      if (args[0] === "get" && args[1] === "qmd://workspace-main/slugified-note.md") {
+        const child = createMockChild({ autoClose: false });
+        emitAndClose(child, "stdout", "hello from qmd get\n");
+        return child;
+      }
+      return createMockChild();
+    });
+
+    const { manager } = await createManager();
+    const result = await manager.readFile({ relPath: "qmd/workspace-main/slugified-note.md" });
+    expect(result).toEqual({
+      text: "hello from qmd get\n",
+      path: "qmd/workspace-main/slugified-note.md",
+    });
+    await manager.close();
+  });
+
+  it("falls back to qmd get and applies from/lines slicing", async () => {
+    const content = "line-1\nline-2\nline-3\nline-4\nline-5\n";
+    spawnMock.mockImplementation((_cmd: string, args: string[]) => {
+      if (args[0] === "get") {
+        const child = createMockChild({ autoClose: false });
+        emitAndClose(child, "stdout", content);
+        return child;
+      }
+      return createMockChild();
+    });
+
+    const { manager } = await createManager();
+    const result = await manager.readFile({
+      relPath: "qmd/workspace-main/sliced.md",
+      from: 2,
+      lines: 2,
+    });
+    expect(result).toEqual({ text: "line-2\nline-3", path: "qmd/workspace-main/sliced.md" });
+    await manager.close();
+  });
+
+  it("returns empty text when qmd get fallback also fails", async () => {
+    spawnMock.mockImplementation((_cmd: string, args: string[]) => {
+      if (args[0] === "get") {
+        const child = createMockChild({ autoClose: false });
+        emitAndClose(child, "stderr", "not found", 1);
+        return child;
+      }
+      return createMockChild();
+    });
+
+    const { manager } = await createManager();
+    const result = await manager.readFile({ relPath: "qmd/workspace-main/no-such-doc.md" });
+    expect(result).toEqual({ text: "", path: "qmd/workspace-main/no-such-doc.md" });
+    await manager.close();
+  });
+
   it("reuses exported session markdown files when inputs are unchanged", async () => {
     const sessionsDir = path.join(stateDir, "agents", agentId, "sessions");
     await fs.mkdir(sessionsDir, { recursive: true });
