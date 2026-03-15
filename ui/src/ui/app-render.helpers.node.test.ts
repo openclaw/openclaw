@@ -310,10 +310,13 @@ describe("buildChatModelOptions", () => {
     expect(options.filter((o) => o.value === "gpt-5.4")).toHaveLength(1);
   });
 
-  it("does not add a duplicate when currentOverride is the provider-qualified ref", () => {
-    // "openai-codex/gpt-5.4" is the qualified form of the same catalog entry.
+  it("keeps the qualified override value selectable when currentOverride is the provider-qualified ref", () => {
+    // "openai-codex/gpt-5.4" resolves to the same catalog entry as bare "gpt-5.4".
+    // The option must use the qualified value so entry.value === currentOverride holds.
     const options = buildChatModelOptions(catalog, "openai-codex/gpt-5.4", "");
     expect(options).toHaveLength(2);
+    expect(options[0].value).toBe("openai-codex/gpt-5.4");
+    expect(options[0].label).toBe("gpt-5.4 · openai-codex");
   });
 
   it("does not add a duplicate when defaultModel is the bare catalog id", () => {
@@ -322,6 +325,9 @@ describe("buildChatModelOptions", () => {
   });
 
   it("does not add a duplicate when defaultModel is the qualified form", () => {
+    // Qualified defaultModel resolves to the same catalog entry — no extra option.
+    // The option value stays as the bare catalog id; only currentOverride needs
+    // exact-value matching for the select element.
     const options = buildChatModelOptions(catalog, "", "openai-codex/gpt-5.4");
     expect(options).toHaveLength(2);
   });
@@ -332,11 +338,18 @@ describe("buildChatModelOptions", () => {
   });
 
   it("does not duplicate when override is bare and defaultModel is qualified (or vice versa)", () => {
+    // bare override + qualified default: override is bare, catalog entry already has value="gpt-5.4",
+    // no in-place update needed, so option stays as bare id
     const a = buildChatModelOptions(catalog, "gpt-5.4", "openai-codex/gpt-5.4");
     expect(a).toHaveLength(2);
+    // option value stays as the catalog bare id; override "gpt-5.4" matches it exactly
+    expect(a[0].value).toBe("gpt-5.4");
 
+    // qualified override + bare default: override is qualified, option value becomes qualified
+    // so that entry.value === currentOverride holds in the select element
     const b = buildChatModelOptions(catalog, "openai-codex/gpt-5.4", "gpt-5.4");
     expect(b).toHaveLength(2);
+    expect(b[0].value).toBe("openai-codex/gpt-5.4");
   });
 
   it("adds an unknown override as a new entry (not in catalog)", () => {

@@ -568,6 +568,10 @@ function buildCatalogNormalizationMap(catalog: ModelCatalogEntry[]): Map<string,
     // Both the bare id and the qualified form map to the same canonical key.
     map.set(id.toLowerCase(), qualified);
     map.set(qualified.toLowerCase(), qualified);
+    // NOTE: If two catalog entries produce the same `provider/id` string
+    // (e.g. { id: "A/B", provider: "" } vs. { id: "B", provider: "A" }),
+    // only the first one processed will appear in the picker.
+    // This is an acceptable trade-off for the common case; see PR #47655.
   }
   return map;
 }
@@ -579,6 +583,10 @@ export function buildChatModelOptions(
 ): Array<{ value: string; label: string }> {
   const normMap = buildCatalogNormalizationMap(catalog);
   const seen = new Set<string>();
+  // Maps canonical dedup key → index in `options`, so that a provider-qualified
+  // override can update the stored value of its matching catalog entry to remain
+  // selectable via `entry.value === currentOverride`.
+  const seenIndex = new Map<string, number>();
   const options: Array<{ value: string; label: string }> = [];
 
   const dedupeKey = (value: string): string => {
@@ -597,7 +605,33 @@ export function buildChatModelOptions(
       return;
     }
     seen.add(key);
+    seenIndex.set(key, options.length);
     options.push({ value: trimmed, label: label ?? trimmed });
+  };
+
+  // Add the currentOverride value. If it resolves to an already-catalogued
+  // canonical key (e.g. "openai-codex/gpt-5.4" and bare "gpt-5.4" refer to
+  // the same catalog entry), update the existing option's `value` in-place to
+  // the qualified ref so that `entry.value === currentOverride` holds in the
+  // select element.
+  const addCurrentOverrideOption = (value: string) => {
+    const trimmed = value.trim();
+    if (!trimmed) {
+      return;
+    }
+    const key = dedupeKey(trimmed);
+    if (!seen.has(key)) {
+      // Not a catalog duplicate — add as a new option normally.
+      addOption(trimmed);
+      return;
+    }
+    // The canonical key was already seen (from a catalog entry). If the
+    // stored option's value is a different string (e.g. bare id vs. qualified),
+    // update it in-place so that the picker can select it by exact value.
+    const idx = seenIndex.get(key);
+    if (idx !== undefined && options[idx].value !== trimmed) {
+      options[idx] = { value: trimmed, label: options[idx].label };
+    }
   };
 
   for (const entry of catalog) {
@@ -606,9 +640,11 @@ export function buildChatModelOptions(
   }
 
   if (currentOverride) {
-    addOption(currentOverride);
+    addCurrentOverrideOption(currentOverride);
   }
   if (defaultModel) {
+    // defaultModel is only used for deduplication; the picker selects by
+    // currentOverride, so we do not need to update option values in-place here.
     addOption(defaultModel);
   }
   return options;
