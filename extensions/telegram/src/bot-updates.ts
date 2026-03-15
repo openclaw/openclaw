@@ -3,8 +3,11 @@ import { createDedupeCache } from "../../../src/infra/dedupe.js";
 import type { TelegramContext } from "./bot/types.js";
 
 const MEDIA_GROUP_TIMEOUT_MS = 500;
-const RECENT_TELEGRAM_UPDATE_TTL_MS = 5 * 60_000;
-const RECENT_TELEGRAM_UPDATE_MAX = 2000;
+// Dedup cache TTL must survive the longest possible polling restart cycle
+// (backoff up to 30s × multiple attempts + 90s stall threshold + 15s grace).
+// 30 minutes keeps entries alive well past any realistic restart window (#46674).
+const RECENT_TELEGRAM_UPDATE_TTL_MS = 30 * 60_000;
+const RECENT_TELEGRAM_UPDATE_MAX = 5000;
 
 export type MediaGroupEntry = {
   messages: Array<{
