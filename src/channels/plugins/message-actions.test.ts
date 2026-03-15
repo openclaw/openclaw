@@ -6,6 +6,7 @@ import {
   createTestRegistry,
 } from "../../test-utils/channel-plugins.js";
 import {
+  listChannelMessageActions,
   supportsChannelMessageButtons,
   supportsChannelMessageButtonsForChannel,
   supportsChannelMessageCards,
@@ -83,5 +84,43 @@ describe("message action capability checks", () => {
       supportsChannelMessageCardsForChannel({ cfg: {} as OpenClawConfig, channel: "telegram" }),
     ).toBe(true);
     expect(supportsChannelMessageCardsForChannel({ cfg: {} as OpenClawConfig })).toBe(false);
+  });
+
+  it("ignores plugin action probe failures while aggregating capabilities", () => {
+    const brokenPlugin: ChannelPlugin = {
+      ...createChannelTestPluginBase({
+        id: "telegram",
+        label: "Telegram",
+        capabilities: { chatTypes: ["direct", "group"] },
+        config: {
+          listAccountIds: () => ["default"],
+        },
+      }),
+      actions: {
+        listActions: () => {
+          throw new Error("unresolved SecretRef");
+        },
+        supportsButtons: () => {
+          throw new Error("unresolved SecretRef");
+        },
+        supportsCards: () => {
+          throw new Error("unresolved SecretRef");
+        },
+      },
+    };
+
+    setActivePluginRegistry(
+      createTestRegistry([
+        { pluginId: "discord", source: "test", plugin: buttonsPlugin },
+        { pluginId: "telegram", source: "test", plugin: brokenPlugin },
+      ]),
+    );
+
+    expect(listChannelMessageActions({} as OpenClawConfig)).toEqual(["send", "broadcast"]);
+    expect(supportsChannelMessageButtons({} as OpenClawConfig)).toBe(true);
+    expect(supportsChannelMessageCards({} as OpenClawConfig)).toBe(false);
+    expect(
+      supportsChannelMessageButtonsForChannel({ cfg: {} as OpenClawConfig, channel: "telegram" }),
+    ).toBe(false);
   });
 });

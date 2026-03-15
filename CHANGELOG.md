@@ -8,6 +8,10 @@ Docs: https://docs.openclaw.ai
 
 - Placeholder: replace with the first 2026.3.14 user-facing change.
 
+### Fixes
+
+- Message/tool schema: make channel capability probing secret-safe so unresolved Telegram or Slack SecretRefs no longer crash the whole `message` tool or block explicit sends on other channels.
+
 ## 2026.3.13
 
 ### Changes
