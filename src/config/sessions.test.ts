@@ -258,6 +258,38 @@ describe("sessions", () => {
     expect(store[mainSessionKey]?.compactionCount).toBe(2);
   });
 
+  it("updateLastRoute preserves updatedAt for daily reset freshness (#46539)", async () => {
+    const sessionKey = "agent:main:telegram:direct:12345";
+    const oldUpdatedAt = Date.now() - 24 * 60 * 60 * 1000; // 24 hours ago
+    const { storePath } = await createSessionStoreFixture({
+      prefix: "updateLastRoute-preserve-updatedAt",
+      entries: {
+        [sessionKey]: buildMainSessionEntry({
+          systemSent: true,
+          updatedAt: oldUpdatedAt,
+        }),
+      },
+    });
+
+    await updateLastRoute({
+      storePath,
+      sessionKey,
+      deliveryContext: {
+        channel: "telegram",
+        to: "12345",
+      },
+    });
+
+    const store = loadSessionStore(storePath);
+    // updatedAt must NOT be bumped to Date.now(); it must remain at the
+    // original value so daily-reset freshness evaluation sees the session
+    // as stale when the reset hour has passed.
+    expect(store[sessionKey]?.updatedAt).toBe(oldUpdatedAt);
+    // Route fields should still be updated
+    expect(store[sessionKey]?.lastChannel).toBe("telegram");
+    expect(store[sessionKey]?.lastTo).toBe("12345");
+  });
+
   it("updateLastRoute prefers explicit deliveryContext", async () => {
     const mainSessionKey = "agent:main:main";
     const { storePath } = await createSessionStoreFixture({
