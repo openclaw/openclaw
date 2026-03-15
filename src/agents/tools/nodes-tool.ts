@@ -639,6 +639,23 @@ export function createNodesTool(options?: {
             const env = parseEnvPairs(params.env);
             const commandTimeoutMs = parseTimeoutMs(params.commandTimeoutMs);
             const invokeTimeoutMs = parseTimeoutMs(params.invokeTimeoutMs);
+            // Compute the effective gateway timeout for long-running node commands.
+            // invokeTimeoutMs takes priority; fall back to commandTimeoutMs + 15s buffer.
+            // Without this, callGatewayTool uses gatewayOpts.timeoutMs (default 30s),
+            // which kills any node command that takes longer than 30 seconds.
+            const derivedTimeout =
+              invokeTimeoutMs ?? (commandTimeoutMs ? commandTimeoutMs + 15_000 : undefined);
+            // Ensure the gateway timeout always covers commandTimeoutMs even when
+            // invokeTimeoutMs is set to an explicit (but shorter) value, and never
+            // drops below the 30s default needed for node wake/reconnect flows.
+            const commandBuffer = commandTimeoutMs ? commandTimeoutMs + 15_000 : 0;
+            const runGatewayTimeout =
+              derivedTimeout !== undefined
+                ? Math.max(derivedTimeout, commandBuffer, 30_000)
+                : undefined;
+            const runGatewayOpts = runGatewayTimeout
+              ? { ...gatewayOpts, timeoutMs: runGatewayTimeout }
+              : gatewayOpts;
             const needsScreenRecording =
               typeof params.needsScreenRecording === "boolean"
                 ? params.needsScreenRecording
@@ -676,11 +693,11 @@ export function createNodesTool(options?: {
 
             // First attempt without approval flags.
             try {
-              const raw = await callGatewayTool<{ payload?: unknown }>("node.invoke", gatewayOpts, {
+              const raw = await callGatewayTool<{ payload?: unknown }>("node.invoke", runGatewayOpts, {
                 nodeId,
                 command: "system.run",
                 params: runParams,
-                timeoutMs: invokeTimeoutMs,
+                timeoutMs: runGatewayTimeout,
                 idempotencyKey: crypto.randomUUID(),
               });
               return jsonResult(raw?.payload ?? {});
@@ -731,7 +748,7 @@ export function createNodesTool(options?: {
             }
 
             // Retry with the approval decision.
-            const raw = await callGatewayTool<{ payload?: unknown }>("node.invoke", gatewayOpts, {
+            const raw = await callGatewayTool<{ payload?: unknown }>("node.invoke", runGatewayOpts, {
               nodeId,
               command: "system.run",
               params: {
@@ -740,7 +757,7 @@ export function createNodesTool(options?: {
                 approved: true,
                 approvalDecision,
               },
-              timeoutMs: invokeTimeoutMs,
+              timeoutMs: runGatewayTimeout,
               idempotencyKey: crypto.randomUUID(),
             });
             return jsonResult(raw?.payload ?? {});
