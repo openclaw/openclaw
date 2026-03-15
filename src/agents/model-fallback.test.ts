@@ -1402,6 +1402,33 @@ describe("runWithModelFallback", () => {
 });
 
 describe("runWithImageModelFallback", () => {
+  it("uses configured primary model provider for unprefixed image model refs", async () => {
+    const cfg = makeCfg({
+      agents: {
+        defaults: {
+          model: "ollama/llama3",
+          imageModel: {
+            primary: "moondream",
+            fallbacks: ["qwen2.5vl:7b"],
+          },
+        },
+      },
+    });
+    const run = vi.fn().mockRejectedValueOnce(new Error("timeout")).mockResolvedValueOnce("ok");
+
+    const result = await runWithImageModelFallback({
+      cfg,
+      run,
+    });
+
+    expect(result.result).toBe("ok");
+    // "moondream" should resolve to "ollama/moondream" (not "anthropic/moondream")
+    expect(run.mock.calls).toEqual([
+      ["ollama", "moondream"],
+      ["ollama", "qwen2.5vl:7b"],
+    ]);
+  });
+
   it("keeps explicit image fallbacks reachable when models allowlist is present", async () => {
     const cfg = makeCfg({
       agents: {
