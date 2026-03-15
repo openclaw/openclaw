@@ -35,6 +35,7 @@ Docs: https://docs.openclaw.ai
 - WhatsApp/reconnect: restore the append recency filter in the extension inbox monitor and handle protobuf `Long` timestamps correctly, so fresh post-reconnect append messages are processed while stale history sync stays suppressed. (#42588) thanks @MonkeyLeeT.
 - WhatsApp/login: wait for pending creds writes before reopening after Baileys `515` pairing restarts in both QR login and `channels login` flows, and keep the restart coverage pinned to the real wrapped error shape plus per-account creds queues. (#27910) Thanks @asyncjason.
 - Agents/openai-compatible tool calls: deduplicate repeated tool call ids across live assistant messages and replayed history so OpenAI-compatible backends no longer reject duplicate `tool_call_id` values with HTTP 400. (#40996) Thanks @xaeon2026.
+- Security/device pairing: harden `device.token.rotate` deny handling by keeping public failures generic while logging internal deny reasons and preserving approved-baseline enforcement. (`GHSA-7jrw-x62h-64p8`)
 
 ### Fixes
 
