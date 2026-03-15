@@ -17,6 +17,7 @@ import {
   syncThemeWithSettings,
 } from "./app-settings.ts";
 import { loadControlUiBootstrapConfig } from "./controllers/control-ui-bootstrap.ts";
+import { setupNavDragScroll } from "./nav-drag-scroll.ts";
 import type { Tab } from "./navigation.ts";
 
 type LifecycleHost = {
@@ -39,6 +40,7 @@ type LifecycleHost = {
   logsAtBottom: boolean;
   logsEntries: unknown[];
   popStateHandler: () => void;
+  navDragCleanup: (() => void) | null;
   topbarObserver: ResizeObserver | null;
 };
 
@@ -68,6 +70,7 @@ export function handleConnected(host: LifecycleHost) {
 
 export function handleFirstUpdated(host: LifecycleHost) {
   observeTopbar(host as unknown as Parameters<typeof observeTopbar>[0]);
+  host.navDragCleanup = setupNavDragScroll(host as unknown as HTMLElement);
 }
 
 export function handleDisconnected(host: LifecycleHost) {
@@ -80,6 +83,8 @@ export function handleDisconnected(host: LifecycleHost) {
   host.client = null;
   host.connected = false;
   detachThemeListener(host as unknown as Parameters<typeof detachThemeListener>[0]);
+  host.navDragCleanup?.();
+  host.navDragCleanup = null;
   host.topbarObserver?.disconnect();
   host.topbarObserver = null;
 }
