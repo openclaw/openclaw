@@ -108,6 +108,24 @@ describe("resolveTextChunkLimit", () => {
     ).toBe(2000);
   });
 
+  it("uses higher default for webchat", () => {
+    // Webchat uses higher default since there's no upstream API limit
+    expect(resolveTextChunkLimit(undefined, "webchat")).toBe(20000);
+    expect(resolveTextChunkLimit(undefined)).toBe(20000); // undefined provider = webchat
+  });
+
+  it("supports webchat config override", () => {
+    const cfg = { webchat: { textChunkLimit: 50000 } };
+    expect(resolveTextChunkLimit(cfg, "webchat")).toBe(50000);
+    expect(resolveTextChunkLimit(cfg)).toBe(50000);
+  });
+
+  it("supports webchat chunkMode config", () => {
+    const cfg = { webchat: { chunkMode: "newline" as const } };
+    expect(resolveChunkMode(cfg, "webchat")).toBe("newline");
+    expect(resolveChunkMode(cfg)).toBe("newline");
+  });
+
   it("supports provider overrides", () => {
     const cfg = { channels: { telegram: { textChunkLimit: 1234 } } };
     expect(resolveTextChunkLimit(cfg, "whatsapp")).toBe(4000);

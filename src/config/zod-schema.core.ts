@@ -334,6 +334,17 @@ export const ReplyRuntimeConfigSchemaShape = {
   mediaMaxMb: z.number().positive().optional(),
 };
 
+/** Webchat configuration for control UI message chunking. */
+export const WebchatConfigSchema = z
+  .object({
+    /** Max characters per message chunk for webchat (default: 20000). */
+    textChunkLimit: z.number().int().positive().optional(),
+    /** Chunking mode: "length" (default) splits by size; "newline" splits on paragraph boundaries. */
+    chunkMode: z.enum(["length", "newline"]).optional(),
+  })
+  .strict()
+  .optional();
+
 export const BlockStreamingChunkSchema = z
   .object({
     minChars: z.number().int().positive().optional(),

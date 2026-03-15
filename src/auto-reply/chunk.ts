@@ -22,12 +22,19 @@ export type TextChunkProvider = ChannelId | typeof INTERNAL_MESSAGE_CHANNEL;
 export type ChunkMode = "length" | "newline";
 
 const DEFAULT_CHUNK_LIMIT = 4000;
+/** Webchat default is higher since there's no upstream API limit. */
+const DEFAULT_WEBCHAT_CHUNK_LIMIT = 20000;
 const DEFAULT_CHUNK_MODE: ChunkMode = "length";
 
 type ProviderChunkConfig = {
   textChunkLimit?: number;
   chunkMode?: ChunkMode;
   accounts?: Record<string, { textChunkLimit?: number; chunkMode?: ChunkMode }>;
+};
+
+type WebchatChunkConfig = {
+  textChunkLimit?: number;
+  chunkMode?: ChunkMode;
 };
 
 function resolveChunkLimitForProvider(
@@ -54,19 +61,26 @@ export function resolveTextChunkLimit(
   accountId?: string | null,
   opts?: { fallbackLimit?: number },
 ): number {
+  const isWebchat = !provider || provider === INTERNAL_MESSAGE_CHANNEL;
+  const defaultLimit = isWebchat ? DEFAULT_WEBCHAT_CHUNK_LIMIT : DEFAULT_CHUNK_LIMIT;
   const fallback =
     typeof opts?.fallbackLimit === "number" && opts.fallbackLimit > 0
       ? opts.fallbackLimit
-      : DEFAULT_CHUNK_LIMIT;
-  const providerOverride = (() => {
-    if (!provider || provider === INTERNAL_MESSAGE_CHANNEL) {
-      return undefined;
+      : defaultLimit;
+
+  // Check for webchat-specific config override
+  if (isWebchat) {
+    const webchatConfig = cfg?.webchat as WebchatChunkConfig | undefined;
+    if (typeof webchatConfig?.textChunkLimit === "number" && webchatConfig.textChunkLimit > 0) {
+      return webchatConfig.textChunkLimit;
     }
-    const channelsConfig = cfg?.channels as Record<string, unknown> | undefined;
-    const providerConfig = (channelsConfig?.[provider] ??
-      (cfg as Record<string, unknown> | undefined)?.[provider]) as ProviderChunkConfig | undefined;
-    return resolveChunkLimitForProvider(providerConfig, accountId);
-  })();
+    return fallback;
+  }
+
+  const channelsConfig = cfg?.channels as Record<string, unknown> | undefined;
+  const providerConfig = (channelsConfig?.[provider] ??
+    (cfg as Record<string, unknown> | undefined)?.[provider]) as ProviderChunkConfig | undefined;
+  const providerOverride = resolveChunkLimitForProvider(providerConfig, accountId);
   if (typeof providerOverride === "number" && providerOverride > 0) {
     return providerOverride;
   }
@@ -96,9 +110,17 @@ export function resolveChunkMode(
   provider?: TextChunkProvider,
   accountId?: string | null,
 ): ChunkMode {
-  if (!provider || provider === INTERNAL_MESSAGE_CHANNEL) {
+  const isWebchat = !provider || provider === INTERNAL_MESSAGE_CHANNEL;
+
+  // Check for webchat-specific config override
+  if (isWebchat) {
+    const webchatConfig = cfg?.webchat as WebchatChunkConfig | undefined;
+    if (webchatConfig?.chunkMode) {
+      return webchatConfig.chunkMode;
+    }
     return DEFAULT_CHUNK_MODE;
   }
+
   const channelsConfig = cfg?.channels as Record<string, unknown> | undefined;
   const providerConfig = (channelsConfig?.[provider] ??
     (cfg as Record<string, unknown> | undefined)?.[provider]) as ProviderChunkConfig | undefined;

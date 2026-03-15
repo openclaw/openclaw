@@ -351,6 +351,12 @@ export const FIELD_HELP: Record<string, string> = {
     "Randomization factor (0-1) applied to reconnect delays to desynchronize clients after outage events. Keep non-zero jitter in multi-client deployments to reduce synchronized spikes.",
   "web.reconnect.maxAttempts":
     "Maximum reconnect attempts before giving up for the current failure sequence (0 means no retries). Use finite caps for controlled failure handling in automation-sensitive environments.",
+  webchat:
+    "Webchat configuration for control UI message chunking. Webchat has no upstream API limits, so defaults are higher than external channels.",
+  "webchat.textChunkLimit":
+    "Max characters per message chunk for webchat/control-UI (default: 20000). Increase for longer responses or decrease for slower clients.",
+  "webchat.chunkMode":
+    'Chunking mode for webchat: "length" (default) splits by size limit; "newline" splits on paragraph boundaries for more natural breaks.',
   canvasHost:
     "Canvas host settings for serving canvas assets and local live-reload behavior used by canvas-enabled workflows. Keep disabled unless canvas-hosted assets are actively used.",
   "canvasHost.enabled":

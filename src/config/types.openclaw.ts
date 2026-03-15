@@ -28,6 +28,14 @@ import type { SecretsConfig } from "./types.secrets.js";
 import type { SkillsConfig } from "./types.skills.js";
 import type { ToolsConfig } from "./types.tools.js";
 
+/** Webchat configuration for control UI message chunking. */
+export type WebchatConfig = {
+  /** Max characters per message chunk for webchat (default: 20000). */
+  textChunkLimit?: number;
+  /** Chunking mode: "length" (default) splits by size; "newline" splits on paragraph boundaries. */
+  chunkMode?: "length" | "newline";
+};
+
 export type OpenClawConfig = {
   meta?: {
     /** Last OpenClaw version that wrote this config. */
@@ -112,6 +120,8 @@ export type OpenClawConfig = {
   approvals?: ApprovalsConfig;
   session?: SessionConfig;
   web?: WebConfig;
+  /** Webchat configuration for control UI message chunking. */
+  webchat?: WebchatConfig;
   channels?: ChannelsConfig;
   cron?: CronConfig;
   hooks?: HooksConfig;
