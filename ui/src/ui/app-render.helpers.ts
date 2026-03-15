@@ -541,7 +541,25 @@ function resolveModelOverrideValue(state: AppViewState): string {
         return `${provider}/${model}`;
       }
     }
-    return model;
+    // modelProvider absent — scan the catalog to infer provider so the
+    // returned value matches the `provider/model` option values that
+    // buildChatModelOptions now emits.  Without this, legacy sessions that
+    // the server returns without modelProvider would silently fall back to
+    // the "Default model" placeholder because no bare-id option exists.
+    if (model) {
+      const catalog = state.chatModelCatalog ?? [];
+      const match = catalog.find(
+        (entry) => entry.id === model || `${entry.provider}/${entry.id}` === model,
+      );
+      if (match?.provider) {
+        const inferredProvider = match.provider.trim();
+        const firstSegment = model.split("/")[0];
+        if (!model.includes("/") || firstSegment !== inferredProvider) {
+          return `${inferredProvider}/${model}`;
+        }
+      }
+      return model;
+    }
   }
   return "";
 }
@@ -585,7 +603,19 @@ function buildChatModelOptions(
     addOption(currentOverride);
   }
   if (defaultModel) {
-    addOption(defaultModel);
+    // Qualify the default model value using the catalog so it matches the
+    // provider/model-id format of the catalog options above.  Without this,
+    // an OpenRouter default like `anthropic/claude-…` (provider=openrouter)
+    // would be added as a bare `anthropic/claude-…` option, reintroducing
+    // an ambiguous value that the gateway would reject as "model not allowed".
+    const defaultMatch = catalog.find(
+      (entry) => entry.id === defaultModel || `${entry.provider}/${entry.id}` === defaultModel,
+    );
+    const qualifiedDefault =
+      defaultMatch?.provider && !defaultModel.startsWith(`${defaultMatch.provider}/`)
+        ? `${defaultMatch.provider}/${defaultModel}`
+        : defaultModel;
+    addOption(qualifiedDefault);
   }
   return options;
 }

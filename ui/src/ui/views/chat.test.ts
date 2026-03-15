@@ -625,6 +625,30 @@ describe("chat view", () => {
     vi.unstubAllGlobals();
   });
 
+  it("pre-selects model from catalog when session row has no modelProvider", () => {
+    // Simulate a legacy session row returned by the server without modelProvider
+    // (valid per GatewaySessionRow where modelProvider?: string).
+    // resolveModelOverrideValue should infer the provider from the catalog so
+    // the dropdown pre-selects the correct "provider/model" option instead of
+    // silently falling back to "Default model".
+    const { state } = createChatHeaderState({ model: "gpt-5-mini" });
+    // Strip modelProvider from the session row to simulate a legacy server response.
+    const sessionRow = state.sessionsResult?.sessions[0];
+    if (sessionRow) {
+      delete (sessionRow as Partial<typeof sessionRow>).modelProvider;
+    }
+    const container = document.createElement("div");
+    render(renderChatSessionSelect(state), container);
+
+    const modelSelect = container.querySelector<HTMLSelectElement>(
+      'select[data-chat-model-select="true"]',
+    );
+    expect(modelSelect).not.toBeNull();
+    // Catalog has { id: "gpt-5-mini", provider: "openai" } so the inferred
+    // value should be "openai/gpt-5-mini", matching the catalog option value.
+    expect(modelSelect?.value).toBe("openai/gpt-5-mini");
+  });
+
   it("disables the chat header model picker while a run is active", () => {
     const { state } = createChatHeaderState();
     state.chatRunId = "run-123";
