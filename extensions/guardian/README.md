@@ -52,13 +52,31 @@ For better resilience, use a **different provider** than your main model:
       "guardian": {
         "enabled": true,
         "config": {
-          "model": "anthropic/claude-opus-4-20250514"
+          "model": "anthropic/claude-sonnet-4-20250514"
         }
       }
     }
   }
 }
 ```
+
+### Choosing a guardian model
+
+The guardian makes a binary ALLOW/BLOCK decision — it doesn't need to be
+smart, it needs to **follow instructions precisely**. Use a model with strong
+instruction following. Coding-specific models (e.g. `kimi-coding/*`) tend to
+ignore the strict output format and echo conversation content instead.
+
+| Model                                | Notes                                   |
+| ------------------------------------ | --------------------------------------- |
+| `anthropic/claude-sonnet-4-20250514` | Reliable, good instruction following    |
+| `anthropic/claude-haiku-4-5`         | Fast, cheap, good format compliance     |
+| `openai/gpt-4o-mini`                 | Fast (~200ms), low cost                 |
+| `kimi/moonshot-v1-8k`                | Good for Chinese-language conversations |
+| `ollama/llama3.1:8b`                 | Free, runs locally                      |
+
+Avoid coding-focused models — they prioritize code generation over strict
+format compliance.
 
 ## Config
 
