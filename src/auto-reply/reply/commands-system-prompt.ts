@@ -1,5 +1,5 @@
 import type { AgentTool } from "@mariozechner/pi-agent-core";
-import { resolveSessionAgentIds } from "../../agents/agent-scope.js";
+import { resolveAgentSkillsFilter, resolveSessionAgentIds } from "../../agents/agent-scope.js";
 import { resolveBootstrapContextForRun } from "../../agents/bootstrap-files.js";
 import { resolveDefaultModelForAgent } from "../../agents/model-selection.js";
 import type { EmbeddedContextFile } from "../../agents/pi-embedded-helpers.js";
@@ -34,12 +34,16 @@ export async function resolveCommandsSystemPromptBundle(
     sessionKey: params.sessionKey,
     sessionId: params.sessionEntry?.sessionId,
   });
+  const skillFilter = params.agentId
+    ? resolveAgentSkillsFilter(params.cfg, params.agentId)
+    : undefined;
   const skillsSnapshot = (() => {
     try {
       return buildWorkspaceSkillSnapshot(workspaceDir, {
         config: params.cfg,
         eligibility: { remote: getRemoteSkillEligibility() },
         snapshotVersion: getSkillsSnapshotVersion(workspaceDir),
+        skillFilter,
       });
     } catch {
       return { prompt: "", skills: [], resolvedSkills: [] };
