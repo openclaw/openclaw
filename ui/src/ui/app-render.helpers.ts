@@ -531,7 +531,17 @@ function resolveModelOverrideValue(state: AppViewState): string {
   // No local override recorded yet — fall back to server data.
   const activeRow = resolveActiveSessionRow(state);
   if (activeRow) {
-    return typeof activeRow.model === "string" ? activeRow.model.trim() : "";
+    const model = typeof activeRow.model === "string" ? activeRow.model.trim() : "";
+    if (model && !model.includes("/")) {
+      const provider =
+        typeof (activeRow as { modelProvider?: string }).modelProvider === "string"
+          ? (activeRow as { modelProvider?: string }).modelProvider!.trim()
+          : "";
+      if (provider) {
+        return `${provider}/${model}`;
+      }
+    }
+    return model;
   }
   return "";
 }
