@@ -243,7 +243,7 @@ describe("ensurePlatformPathDefaults", () => {
       "darwin",
     );
 
-    expect(env.PATH?.split(path.delimiter)).toEqual([
+    expect(env.PATH?.split(":")).toEqual([
       "/usr/local/bin",
       "/usr/bin",
       "/bin",
@@ -260,7 +260,7 @@ describe("ensurePlatformPathDefaults", () => {
       "darwin",
     );
 
-    expect(env.PATH?.split(path.delimiter)).toEqual([
+    expect(env.PATH?.split(":")).toEqual([
       "/usr/local/bin",
       "/usr/sbin",
       "/usr/bin",

@@ -1,6 +1,5 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { existsSync } from "node:fs";
-import path from "node:path";
 import type {
   WindowsSpawnProgram,
   WindowsSpawnProgramCandidate,
@@ -131,7 +130,7 @@ export function ensurePlatformPathDefaults(
   if (runtimePlatform === "darwin") {
     const current = nextEnv.PATH ?? "";
     const parts = current
-      .split(path.delimiter)
+      .split(":")
       .map((part) => part.trim())
       .filter(Boolean);
     for (const required of ["/usr/sbin", "/sbin"]) {
@@ -139,7 +138,7 @@ export function ensurePlatformPathDefaults(
         parts.push(required);
       }
     }
-    nextEnv.PATH = parts.join(path.delimiter);
+    nextEnv.PATH = parts.join(":");
   }
   return nextEnv;
 }
