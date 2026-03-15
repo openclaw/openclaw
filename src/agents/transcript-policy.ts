@@ -5,7 +5,6 @@ import {
   isOpenAiProviderFamily,
   preservesAnthropicThinkingSignatures,
   resolveTranscriptToolCallIdMode,
-  shouldDropThinkingBlocksForModel,
   shouldSanitizeGeminiThoughtSignaturesForModel,
   supportsOpenAiCompatTurnValidation,
 } from "./provider-capabilities.js";
@@ -80,10 +79,11 @@ export function resolveTranscriptPolicy(params: {
     });
   const requiresOpenAiCompatibleToolIdSanitization = params.modelApi === "openai-completions";
 
-  // Anthropic Claude endpoints can reject replayed `thinking` blocks unless the
-  // original signatures are preserved byte-for-byte. Drop them at send-time to
-  // keep persisted sessions usable across follow-up turns.
-  const dropThinkingBlocks = shouldDropThinkingBlocksForModel({ provider, modelId });
+  // Anthropic endpoints reject replayed thinking blocks with stale signatures,
+  // so always drop them.  OpenAI needs reasoning blocks for tool-id pairing,
+  // so keep them.  Drop for all other providers (Gemini, Mistral, etc.) that
+  // do not understand thinking blocks.
+  const dropThinkingBlocks = !isOpenAi;
 
   const needsNonImageSanitize =
     isGoogle || isAnthropic || isMistral || shouldSanitizeGeminiThoughtSignaturesForProvider;

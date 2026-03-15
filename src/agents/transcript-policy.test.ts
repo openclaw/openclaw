@@ -155,6 +155,57 @@ describe("resolveTranscriptPolicy", () => {
   });
 
   it.each([
+    {
+      title: "OpenAI provider with GPT model",
+      provider: "openai",
+      modelId: "gpt-4o",
+      modelApi: "openai" as const,
+      expected: true,
+    },
+    {
+      title: "Google provider with Gemini model",
+      provider: "google",
+      modelId: "gemini-2.0-flash",
+      modelApi: "google-generative-ai" as const,
+      expected: true,
+    },
+    {
+      title: "Mistral provider",
+      provider: "mistral",
+      modelId: "mistral-large-latest",
+      modelApi: undefined,
+      expected: true,
+    },
+    {
+      title: "github-copilot with non-Claude model",
+      provider: "github-copilot",
+      modelId: "gpt-4o",
+      modelApi: "openai-completions" as const,
+      expected: true,
+    },
+    {
+      title: "Anthropic provider with Claude model",
+      provider: "anthropic",
+      modelId: "claude-opus-4-5",
+      modelApi: "anthropic-messages" as const,
+      expected: false,
+    },
+    {
+      title: "Bedrock Anthropic provider with Claude model",
+      provider: "amazon-bedrock",
+      modelId: "us.anthropic.claude-opus-4-6-v1",
+      modelApi: "bedrock-converse-stream" as const,
+      expected: false,
+    },
+  ])(
+    "sets dropThinkingBlocks=$expected for $title (#37314)",
+    ({ expected, title: _title, ...input }) => {
+      const policy = resolveTranscriptPolicy(input);
+      expect(policy.dropThinkingBlocks).toBe(expected);
+    },
+  );
+
+  it.each([
     { provider: "openrouter", modelId: "google/gemini-2.5-pro-preview" },
     { provider: "opencode", modelId: "google/gemini-2.5-flash" },
     { provider: "kilocode", modelId: "gemini-2.0-flash" },
