@@ -279,9 +279,28 @@ function isExtensionFile(filePath: string): boolean {
   return !filePath.endsWith(".d.ts");
 }
 
+const IGNORED_SCAN_DIRS = new Set([
+  "node_modules",
+  ".git",
+  ".venv",
+  "venv",
+  "__pycache__",
+  ".mypy_cache",
+  ".pytest_cache",
+  "browser_data",
+  ".cache",
+  "dist",
+  "build",
+  ".next",
+  ".nuxt",
+]);
+
 function shouldIgnoreScannedDirectory(dirName: string): boolean {
   const normalized = dirName.trim().toLowerCase();
   if (!normalized) {
+    return true;
+  }
+  if (IGNORED_SCAN_DIRS.has(normalized)) {
     return true;
   }
   if (normalized.endsWith(".bak")) {
