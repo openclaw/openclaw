@@ -1593,11 +1593,6 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
             runtime.log?.(
               `stream-patch skipping already-delivered turn (${streamedTurnCount} remaining)`,
             );
-            // Clear streamMessageId so that if this turn's finalization had failed
-            // and was re-queued via the catch-block decrement, a later re-delivery
-            // of this turn lands as a new post rather than patching whatever
-            // streaming post is currently active for a newer turn.
-            streamMessageId = null;
             return;
           }
 
@@ -1867,7 +1862,8 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
                     await new Promise<void>((r) => setTimeout(r, 20));
                   }
                   try {
-                    await updateMattermostPost(blockStreamingClient, finalizeId, {
+                    await patchMattermostPost(blockStreamingClient, {
+                      postId: finalizeId,
                       message: finalizeText,
                     });
                     runtime.log?.(`stream-patch finalized turn ${finalizeId}`);
