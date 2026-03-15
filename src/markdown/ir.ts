@@ -51,7 +51,11 @@ export type MarkdownTableData = {
   headers: string[];
   /** Row data – each row is an array of cell texts. */
   rows: string[][];
-  /** Character offset in the IR text where a placeholder was inserted. */
+  /**
+   * Character offset in the IR text where this table occurred.
+   * Currently used for ordering; a future enhancement could use this to
+   * interleave table blocks at their correct positions within split text chunks.
+   */
   placeholderOffset: number;
 };
 
@@ -108,7 +112,7 @@ export type MarkdownParseOptions = {
   headingStyle?: "none" | "bold";
   blockquotePrefix?: string;
   autolink?: boolean;
-  /** How to render tables (off|bullets|code). Default: off. */
+  /** How to render tables (off|bullets|code|block). Default: off. */
   tableMode?: MarkdownTableMode;
 };
 

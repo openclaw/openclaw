@@ -354,13 +354,28 @@ export async function sendMessageSlack(
       threadTs: opts.threadTs,
       maxBytes: mediaMaxBytes,
     });
-    for (const chunk of rest) {
+    for (let i = 0; i < rest.length; i++) {
+      const isLastChunk = i === rest.length - 1;
       const response = await postSlackMessageBestEffort({
         client,
         channelId,
-        text: chunk,
+        text: rest[i] ?? "",
         threadTs: opts.threadTs,
         identity: opts.identity,
+        ...(isLastChunk && tableAttachments ? { attachments: tableAttachments } : {}),
+      });
+      lastMessageId = response.ts ?? lastMessageId;
+    }
+    // If there were no follow-up chunks but we have table attachments,
+    // send them as a separate message.
+    if (rest.length === 0 && tableAttachments) {
+      const response = await postSlackMessageBestEffort({
+        client,
+        channelId,
+        text: "",
+        threadTs: opts.threadTs,
+        identity: opts.identity,
+        attachments: tableAttachments,
       });
       lastMessageId = response.ts ?? lastMessageId;
     }
