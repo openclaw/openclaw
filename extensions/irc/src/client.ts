@@ -36,6 +36,7 @@ export type IrcClientOptions = {
   onNotice?: (text: string, target?: string) => void;
   onError?: (error: Error) => void;
   onLine?: (line: string) => void;
+  onClose?: () => void;
 };
 
 export type IrcNickServOptions = {
@@ -404,6 +405,7 @@ export async function connectIrcClient(options: IrcClientOptions): Promise<IrcCl
   });
 
   socket.once("close", () => {
+    options.onClose?.();
     if (!closed) {
       closed = true;
       if (!ready) {
