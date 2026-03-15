@@ -378,6 +378,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
     target: prepared.replyTarget,
     token: ctx.botToken,
     accountId: account.accountId,
+    identity: slackIdentity,
     maxChars: Math.min(ctx.textLimit, 4000),
     resolveThreadTs: () => {
       const ts = replyPlan.nextThreadTs();

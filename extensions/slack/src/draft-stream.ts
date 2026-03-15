@@ -19,6 +19,7 @@ export function createSlackDraftStream(params: {
   target: string;
   token: string;
   accountId?: string;
+  identity?: import("./send.js").SlackSendIdentity;
   maxChars?: number;
   throttleMs?: number;
   resolveThreadTs?: () => string | undefined;
@@ -69,6 +70,7 @@ export function createSlackDraftStream(params: {
         token: params.token,
         accountId: params.accountId,
         threadTs: params.resolveThreadTs?.(),
+        identity: params.identity,
       });
       streamChannelId = sent.channelId || streamChannelId;
       streamMessageId = sent.messageId || streamMessageId;
