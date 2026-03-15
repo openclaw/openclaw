@@ -186,20 +186,37 @@ describe("nodes camera helpers", () => {
     }
   });
 
-  it("rejects private/internal IP addresses (SSRF protection)", async () => {
+  it("allows private IPs when they match the node's own expectedHost", async () => {
+    stubFetchResponse(new Response("ok", { status: 200 }));
+    await withCameraTempDir(async (dir) => {
+      const out = path.join(dir, "priv.bin");
+      // A node on 192.168.1.100 should be able to serve its own camera feed
+      await writeUrlToFile(out, "https://192.168.1.100/cam.jpg", {
+        expectedHost: "192.168.1.100",
+      });
+      await expect(readFileUtf8AndCleanup(out)).resolves.toBe("ok");
+    });
+  });
+
+  it("blocks SSRF to other private hosts via hostnameAllowlist", async () => {
     stubFetchResponse(new Response("should-not-reach", { status: 200 }));
-    const privateHosts = [
-      "192.168.1.100",
-      "10.0.0.1",
-      "172.16.0.1",
-      "127.0.0.1",
-      "169.254.169.254",
-    ];
-    for (const host of privateHosts) {
+    // Node is at 192.168.1.100, but URL points to a different private host
+    await expect(
+      writeUrlToFile("/tmp/ignored", "https://192.168.1.200/secret", {
+        expectedHost: "192.168.1.100",
+      }),
+    ).rejects.toThrow(/must match node host/i);
+  });
+
+  it("rejects loopback and IPv6 addresses when they differ from expectedHost", async () => {
+    stubFetchResponse(new Response("should-not-reach", { status: 200 }));
+    for (const loopback of ["127.0.0.1", "[::1]"]) {
       await expect(
-        writeUrlToFile("/tmp/ignored", `https://${host}/secret`, { expectedHost: host }),
-        `should block ${host}`,
-      ).rejects.toThrow(/blocked/i);
+        writeUrlToFile("/tmp/ignored", `https://${loopback}/secret`, {
+          expectedHost: "93.184.216.34",
+        }),
+        `should block ${loopback}`,
+      ).rejects.toThrow(/must match node host/i);
     }
   });
 

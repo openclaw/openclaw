@@ -94,8 +94,10 @@ export async function writeUrlToFile(
     );
   }
 
+  // Allow private networks: nodes commonly serve camera feeds from LAN IPs.
+  // SSRF to other hosts is blocked by hostnameAllowlist + hostname equality checks.
   const policy = {
-    allowPrivateNetwork: false,
+    allowPrivateNetwork: true,
     hostnameAllowlist: [expectedHost],
   };
 

@@ -6,6 +6,15 @@ import {
   isGatewaySigusr1RestartExternallyAllowed,
 } from "../../infra/restart.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { closeAllMemorySearchManagers } from "../../memory/search-manager.js";
+import {
+  getActiveTaskCount,
+  markGatewayDraining,
+  resetAllLanes,
+  waitForActiveTasks,
+} from "../../process/command-queue.js";
+import { createRestartIterationHook } from "../../process/restart-recovery.js";
+import type { defaultRuntime } from "../../runtime.js";
 
 const gatewayLog = createSubsystemLogger("gateway");
 
@@ -47,6 +56,9 @@ export async function runGatewayLoop(params: {
           reason: isRestart ? "gateway restarting" : "gateway stopping",
           restartExpectedMs: isRestart ? 1500 : null,
         });
+        await closeAllMemorySearchManagers().catch((err) =>
+          gatewayLog.warn(`memory cleanup error: ${String(err)}`),
+        );
       } catch (err) {
         gatewayLog.error(`shutdown error: ${String(err)}`);
       } finally {
