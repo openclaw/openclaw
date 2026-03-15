@@ -57,9 +57,7 @@ type ResolveUrlResult = {
   error?: string;
 };
 
-type ResolveAuthResult = {
-  token?: string;
-  password?: string;
+type ResolveAuthLabelResult = {
   label?: "token" | "password";
   error?: string;
 };
@@ -165,7 +163,10 @@ function resolveGatewayPasswordFromEnv(env: NodeJS.ProcessEnv): string | undefin
   );
 }
 
-function resolveAuth(cfg: OpenClawConfig, env: NodeJS.ProcessEnv): ResolveAuthResult {
+function resolvePairingSetupAuthLabel(
+  cfg: OpenClawConfig,
+  env: NodeJS.ProcessEnv,
+): ResolveAuthLabelResult {
   const mode = cfg.gateway?.auth?.mode;
   const defaults = cfg.secrets?.defaults;
   const tokenRef = resolveSecretInputRef({
@@ -188,19 +189,19 @@ function resolveAuth(cfg: OpenClawConfig, env: NodeJS.ProcessEnv): ResolveAuthRe
     if (!password) {
       return { error: "Gateway auth is set to password, but no password is configured." };
     }
-    return { password, label: "password" };
+    return { label: "password" };
   }
   if (mode === "token") {
     if (!token) {
       return { error: "Gateway auth is set to token, but no token is configured." };
     }
-    return { token, label: "token" };
+    return { label: "token" };
   }
   if (token) {
-    return { token, label: "token" };
+    return { label: "token" };
   }
   if (password) {
-    return { password, label: "password" };
+    return { label: "password" };
   }
   return { error: "Gateway auth is not configured (no token or password)." };
 }
@@ -287,6 +288,14 @@ async function resolveGatewayPasswordSecretRef(
   };
 }
 
+async function materializePairingSetupAuthConfig(
+  cfg: OpenClawConfig,
+  env: NodeJS.ProcessEnv,
+): Promise<OpenClawConfig> {
+  const cfgWithToken = await resolveGatewayTokenSecretRef(cfg, env);
+  return await resolveGatewayPasswordSecretRef(cfgWithToken, env);
+}
+
 async function resolveGatewayUrl(
   cfg: OpenClawConfig,
   opts: {
@@ -361,11 +370,10 @@ export async function resolvePairingSetupFromConfig(
 ): Promise<PairingSetupResolution> {
   assertExplicitGatewayAuthModeWhenBothConfigured(cfg);
   const env = options.env ?? process.env;
-  const cfgWithToken = await resolveGatewayTokenSecretRef(cfg, env);
-  const cfgForAuth = await resolveGatewayPasswordSecretRef(cfgWithToken, env);
-  const auth = resolveAuth(cfgForAuth, env);
-  if (auth.error) {
-    return { ok: false, error: auth.error };
+  const cfgForAuth = await materializePairingSetupAuthConfig(cfg, env);
+  const authLabel = resolvePairingSetupAuthLabel(cfgForAuth, env);
+  if (authLabel.error) {
+    return { ok: false, error: authLabel.error };
   }
 
   const urlResult = await resolveGatewayUrl(cfgForAuth, {
@@ -381,7 +389,7 @@ export async function resolvePairingSetupFromConfig(
     return { ok: false, error: urlResult.error ?? "Gateway URL unavailable." };
   }
 
-  if (!auth.label) {
+  if (!authLabel.label) {
     return { ok: false, error: "Gateway auth is not configured (no token or password)." };
   }
 
@@ -395,7 +403,7 @@ export async function resolvePairingSetupFromConfig(
         })
       ).token,
     },
-    authLabel: auth.label,
+    authLabel: authLabel.label,
     urlSource: urlResult.source ?? "unknown",
   };
 }

@@ -17,10 +17,6 @@ export type DeviceBootstrapTokenRecord = {
   publicKey?: string;
   roles?: string[];
   scopes?: string[];
-  channel?: string;
-  senderId?: string;
-  accountId?: string;
-  threadId?: string;
   issuedAtMs: number;
   lastUsedAtMs?: number;
 };
@@ -29,45 +25,31 @@ type DeviceBootstrapStateFile = Record<string, DeviceBootstrapTokenRecord>;
 
 const withLock = createAsyncLock();
 
-function normalizeOptionalString(value: string | undefined): string | undefined {
-  const trimmed = value?.trim();
-  return trimmed ? trimmed : undefined;
-}
-
-function mergeRoles(existing: string[] | undefined, role: string): string[] {
-  const out = new Set<string>(existing ?? []);
-  const trimmed = role.trim();
-  if (trimmed) {
-    out.add(trimmed);
-  }
-  return [...out];
-}
-
-function mergeScopes(
-  existing: string[] | undefined,
-  scopes: readonly string[],
-): string[] | undefined {
-  const out = new Set<string>(existing ?? []);
-  for (const scope of scopes) {
-    const trimmed = scope.trim();
-    if (trimmed) {
-      out.add(trimmed);
-    }
-  }
-  return out.size > 0 ? [...out] : undefined;
-}
-
 function resolveBootstrapPath(baseDir?: string): string {
   return path.join(resolvePairingPaths(baseDir, "devices").dir, "bootstrap.json");
 }
 
 async function loadState(baseDir?: string): Promise<DeviceBootstrapStateFile> {
   const bootstrapPath = resolveBootstrapPath(baseDir);
-  const state = (await readJsonFile<DeviceBootstrapStateFile>(bootstrapPath)) ?? {};
-  for (const entry of Object.values(state)) {
-    if (typeof entry.ts !== "number") {
-      entry.ts = entry.issuedAtMs;
+  const rawState = (await readJsonFile<DeviceBootstrapStateFile>(bootstrapPath)) ?? {};
+  const state: DeviceBootstrapStateFile = {};
+  if (!rawState || typeof rawState !== "object" || Array.isArray(rawState)) {
+    return state;
+  }
+  for (const [tokenKey, entry] of Object.entries(rawState)) {
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+      continue;
     }
+    const record = entry as Partial<DeviceBootstrapTokenRecord>;
+    const token =
+      typeof record.token === "string" && record.token.trim().length > 0 ? record.token : tokenKey;
+    const issuedAtMs = typeof record.issuedAtMs === "number" ? record.issuedAtMs : 0;
+    state[tokenKey] = {
+      ...record,
+      token,
+      issuedAtMs,
+      ts: typeof record.ts === "number" ? record.ts : issuedAtMs,
+    };
   }
   pruneExpiredPending(state, Date.now(), DEVICE_BOOTSTRAP_TOKEN_TTL_MS);
   return state;
@@ -80,10 +62,6 @@ async function persistState(state: DeviceBootstrapStateFile, baseDir?: string): 
 
 export async function issueDeviceBootstrapToken(
   params: {
-    channel?: string;
-    senderId?: string;
-    accountId?: string;
-    threadId?: string;
     baseDir?: string;
   } = {},
 ): Promise<{ token: string; expiresAtMs: number }> {
@@ -94,10 +72,6 @@ export async function issueDeviceBootstrapToken(
     state[token] = {
       token,
       ts: issuedAtMs,
-      channel: normalizeOptionalString(params.channel),
-      senderId: normalizeOptionalString(params.senderId),
-      accountId: normalizeOptionalString(params.accountId),
-      threadId: normalizeOptionalString(params.threadId),
       issuedAtMs,
     };
     await persistState(state, params.baseDir);
@@ -133,19 +107,9 @@ export async function verifyDeviceBootstrapToken(params: {
       return { ok: false, reason: "bootstrap_token_invalid" };
     }
 
-    if (entry.deviceId && entry.deviceId !== deviceId) {
-      return { ok: false, reason: "bootstrap_token_invalid" };
-    }
-    if (entry.publicKey && entry.publicKey !== publicKey) {
-      return { ok: false, reason: "bootstrap_token_invalid" };
-    }
-
-    entry.deviceId = deviceId;
-    entry.publicKey = publicKey;
-    entry.roles = mergeRoles(entry.roles, role);
-    entry.scopes = mergeScopes(entry.scopes, params.scopes);
-    entry.lastUsedAtMs = Date.now();
-    state[entry.token] = entry;
+    // Bootstrap setup codes are single-use. Consume the record before returning
+    // success so the same token cannot be replayed to mutate a pending request.
+    delete state[entry.token];
     await persistState(state, params.baseDir);
     return { ok: true };
   });

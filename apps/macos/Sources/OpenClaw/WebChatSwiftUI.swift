@@ -65,7 +65,23 @@ struct MacGatewayChatTransport: OpenClawChatTransport {
             method: "sessions.list",
             params: params,
             timeoutMs: 15000)
-        return try JSONDecoder().decode(OpenClawChatSessionsListResponse.self, from: data)
+        let decoded = try JSONDecoder().decode(OpenClawChatSessionsListResponse.self, from: data)
+        let mainSessionKey = await GatewayConnection.shared.cachedMainSessionKey()
+        let defaults = decoded.defaults.map {
+            OpenClawChatSessionsDefaults(
+                model: $0.model,
+                contextTokens: $0.contextTokens,
+                mainSessionKey: mainSessionKey)
+        } ?? OpenClawChatSessionsDefaults(
+            model: nil,
+            contextTokens: nil,
+            mainSessionKey: mainSessionKey)
+        return OpenClawChatSessionsListResponse(
+            ts: decoded.ts,
+            path: decoded.path,
+            count: decoded.count,
+            defaults: defaults,
+            sessions: decoded.sessions)
     }
 
     func setSessionModel(sessionKey: String, model: String?) async throws {
@@ -107,6 +123,13 @@ struct MacGatewayChatTransport: OpenClawChatTransport {
 
     func requestHealth(timeoutMs: Int) async throws -> Bool {
         try await self.connection.healthOK(timeoutMs: timeoutMs)
+    }
+
+    func resetSession(sessionKey: String) async throws {
+        _ = try await GatewayConnection.shared.request(
+            method: "sessions.reset",
+            params: ["key": AnyCodable(sessionKey)],
+            timeoutMs: 10000)
     }
 
     func events() -> AsyncStream<OpenClawChatTransportEvent> {

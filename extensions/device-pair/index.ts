@@ -41,10 +41,8 @@ type ResolveUrlResult = {
   error?: string;
 };
 
-type ResolveAuthResult = {
-  token?: string;
-  password?: string;
-  label?: string;
+type ResolveAuthLabelResult = {
+  label?: "token" | "password";
   error?: string;
 };
 
@@ -110,13 +108,21 @@ function resolveScheme(
   return cfg.gateway?.tls?.enabled === true ? "wss" : "ws";
 }
 
-function isPrivateIPv4(address: string): boolean {
+function parseIPv4Octets(address: string): [number, number, number, number] | null {
   const parts = address.split(".");
-  if (parts.length != 4) {
-    return false;
+  if (parts.length !== 4) {
+    return null;
   }
   const octets = parts.map((part) => Number.parseInt(part, 10));
   if (octets.some((value) => !Number.isFinite(value) || value < 0 || value > 255)) {
+    return null;
+  }
+  return octets as [number, number, number, number];
+}
+
+function isPrivateIPv4(address: string): boolean {
+  const octets = parseIPv4Octets(address);
+  if (!octets) {
     return false;
   }
   const [a, b] = octets;
@@ -133,12 +139,8 @@ function isPrivateIPv4(address: string): boolean {
 }
 
 function isTailnetIPv4(address: string): boolean {
-  const parts = address.split(".");
-  if (parts.length !== 4) {
-    return false;
-  }
-  const octets = parts.map((part) => Number.parseInt(part, 10));
-  if (octets.some((value) => !Number.isFinite(value) || value < 0 || value > 255)) {
+  const octets = parseIPv4Octets(address);
+  if (!octets) {
     return false;
   }
   const [a, b] = octets;
@@ -187,7 +189,7 @@ async function resolveTailnetHost(): Promise<string | null> {
   );
 }
 
-function resolveAuth(cfg: OpenClawPluginApi["config"]): ResolveAuthResult {
+function resolveAuthLabel(cfg: OpenClawPluginApi["config"]): ResolveAuthLabelResult {
   const mode = cfg.gateway?.auth?.mode;
   const token =
     pickFirstDefined([
@@ -203,13 +205,13 @@ function resolveAuth(cfg: OpenClawPluginApi["config"]): ResolveAuthResult {
     ]) ?? undefined;
 
   if (mode === "token" || mode === "password") {
-    return resolveRequiredAuth(mode, { token, password });
+    return resolveRequiredAuthLabel(mode, { token, password });
   }
   if (token) {
-    return { token, label: "token" };
+    return { label: "token" };
   }
   if (password) {
-    return { password, label: "password" };
+    return { label: "password" };
   }
   return { error: "Gateway auth is not configured (no token or password)." };
 }
@@ -227,17 +229,17 @@ function pickFirstDefined(candidates: Array<unknown>): string | null {
   return null;
 }
 
-function resolveRequiredAuth(
+function resolveRequiredAuthLabel(
   mode: "token" | "password",
   values: { token?: string; password?: string },
-): ResolveAuthResult {
+): ResolveAuthLabelResult {
   if (mode === "token") {
     return values.token
-      ? { token: values.token, label: "token" }
+      ? { label: "token" }
       : { error: "Gateway auth is set to token, but no token is configured." };
   }
   return values.password
-    ? { password: values.password, label: "password" }
+    ? { label: "password" }
     : { error: "Gateway auth is set to password, but no password is configured." };
 }
 
@@ -393,9 +395,9 @@ export default function register(api: OpenClawPluginApi) {
         return { text: `✅ Paired ${label}${platformLabel}.` };
       }
 
-      const auth = resolveAuth(api.config);
-      if (auth.error) {
-        return { text: `Error: ${auth.error}` };
+      const authLabelResult = resolveAuthLabel(api.config);
+      if (authLabelResult.error) {
+        return { text: `Error: ${authLabelResult.error}` };
       }
 
       const urlResult = await resolveGatewayUrl(api);
@@ -405,20 +407,13 @@ export default function register(api: OpenClawPluginApi) {
 
       const payload: SetupPayload = {
         url: urlResult.url,
-        bootstrapToken: (
-          await issueDeviceBootstrapToken({
-            channel: ctx.channel,
-            senderId: ctx.senderId ?? ctx.from ?? ctx.to,
-            accountId: ctx.accountId,
-            threadId: ctx.messageThreadId != null ? String(ctx.messageThreadId) : undefined,
-          })
-        ).token,
+        bootstrapToken: (await issueDeviceBootstrapToken()).token,
       };
 
       if (action === "qr") {
         const setupCode = encodeSetupCode(payload);
         const qrAscii = await renderQrAscii(setupCode);
-        const authLabel = auth.label ?? "auth";
+        const authLabel = authLabelResult.label ?? "auth";
 
         const channel = ctx.channel;
         const target = ctx.senderId?.trim() || ctx.from?.trim() || ctx.to?.trim() || "";
@@ -509,7 +504,7 @@ export default function register(api: OpenClawPluginApi) {
 
       const channel = ctx.channel;
       const target = ctx.senderId?.trim() || ctx.from?.trim() || ctx.to?.trim() || "";
-      const authLabel = auth.label ?? "auth";
+      const authLabel = authLabelResult.label ?? "auth";
 
       if (channel === "telegram" && target) {
         try {

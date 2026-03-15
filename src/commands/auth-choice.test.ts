@@ -22,7 +22,6 @@ import {
 } from "./test-wizard-helpers.js";
 
 type DetectZaiEndpoint = typeof import("./zai-endpoint-detect.js").detectZaiEndpoint;
-type PromptAndConfigureOllama = typeof import("./ollama-setup.js").promptAndConfigureOllama;
 
 vi.mock("../providers/github-copilot-auth.js", () => ({
   githubCopilotLoginCommand: vi.fn(async () => {}),
@@ -43,16 +42,6 @@ vi.mock("../plugins/providers.js", () => ({
 const detectZaiEndpoint = vi.hoisted(() => vi.fn<DetectZaiEndpoint>(async () => null));
 vi.mock("./zai-endpoint-detect.js", () => ({
   detectZaiEndpoint,
-}));
-
-const promptAndConfigureOllama = vi.hoisted(() =>
-  vi.fn<PromptAndConfigureOllama>(async ({ cfg }) => ({
-    config: cfg,
-    defaultModelId: "qwen3.5:35b",
-  })),
-);
-vi.mock("./ollama-setup.js", () => ({
-  promptAndConfigureOllama,
 }));
 
 type StoredAuthProfile = {
@@ -142,11 +131,6 @@ describe("applyAuthChoice", () => {
     detectZaiEndpoint.mockResolvedValue(null);
     loginOpenAICodexOAuth.mockReset();
     loginOpenAICodexOAuth.mockResolvedValue(null);
-    promptAndConfigureOllama.mockReset();
-    promptAndConfigureOllama.mockImplementation(async ({ cfg }) => ({
-      config: cfg,
-      defaultModelId: "qwen3.5:35b",
-    }));
     await lifecycle.cleanup();
     activeStateDir = null;
   });
@@ -301,7 +285,7 @@ describe("applyAuthChoice", () => {
       expectedBaseUrl: string;
       expectedModel?: string;
       shouldPromptForEndpoint: boolean;
-      shouldAssertDetectCall?: boolean;
+      expectedDetectCall?: { apiKey: string; endpoint?: "coding-global" | "coding-cn" };
     }> = [
       {
         authChoice: "zai-api-key",
@@ -314,8 +298,16 @@ describe("applyAuthChoice", () => {
       {
         authChoice: "zai-coding-global",
         token: "zai-test-key",
+        detectResult: {
+          endpoint: "coding-global",
+          modelId: "glm-4.7",
+          baseUrl: ZAI_CODING_GLOBAL_BASE_URL,
+          note: "Detected coding-global endpoint with GLM-4.7 fallback",
+        },
         expectedBaseUrl: ZAI_CODING_GLOBAL_BASE_URL,
+        expectedModel: "zai/glm-4.7",
         shouldPromptForEndpoint: false,
+        expectedDetectCall: { apiKey: "zai-test-key", endpoint: "coding-global" },
       },
       {
         authChoice: "zai-api-key",
@@ -329,7 +321,7 @@ describe("applyAuthChoice", () => {
         expectedBaseUrl: ZAI_CODING_GLOBAL_BASE_URL,
         expectedModel: "zai/glm-4.5",
         shouldPromptForEndpoint: false,
-        shouldAssertDetectCall: true,
+        expectedDetectCall: { apiKey: "zai-detected-key" },
       },
     ];
     for (const scenario of scenarios) {
@@ -360,8 +352,8 @@ describe("applyAuthChoice", () => {
         setDefaultModel: true,
       });
 
-      if (scenario.shouldAssertDetectCall) {
-        expect(detectZaiEndpoint).toHaveBeenCalledWith({ apiKey: scenario.token });
+      if (scenario.expectedDetectCall) {
+        expect(detectZaiEndpoint).toHaveBeenCalledWith(scenario.expectedDetectCall);
       }
       if (scenario.shouldPromptForEndpoint) {
         expect(select).toHaveBeenCalledWith(

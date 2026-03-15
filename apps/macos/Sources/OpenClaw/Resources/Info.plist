@@ -15,9 +15,36 @@
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleShortVersionString</key>
-    <string>1.0</string>
+    <string>2026.3.14</string>
     <key>CFBundleVersion</key>
-    <string>1</string>
+    <string>202603140</string>
+    <key>CFBundleIconFile</key>
+    <string>OpenClaw</string>
+    <key>CFBundleURLTypes</key>
+    <array>
+        <dict>
+            <key>CFBundleURLName</key>
+            <string>ai.openclaw.mac.deeplink</string>
+            <key>CFBundleURLSchemes</key>
+            <array>
+                <string>openclaw</string>
+            </array>
+        </dict>
+    </array>
+    <key>LSMinimumSystemVersion</key>
+    <string>15.0</string>
+    <key>LSUIElement</key>
+    <true/>
+
+    <key>OpenClawBuildTimestamp</key>
+    <string></string>
+    <key>OpenClawGitCommit</key>
+    <string></string>
+
+    <key>NSUserNotificationUsageDescription</key>
+    <string>OpenClaw needs notification permission to show alerts for agent actions.</string>
+    <key>NSScreenCaptureDescription</key>
+    <string>OpenClaw captures the screen when the agent needs screenshots for context.</string>
     <key>NSCameraUsageDescription</key>
     <string>OpenClaw uses the camera to capture photos and short videos for camera tools and node capabilities.</string>
     <key>NSLocationAlwaysAndWhenInUseUsageDescription</key>

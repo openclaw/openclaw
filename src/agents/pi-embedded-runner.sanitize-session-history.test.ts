@@ -1,9 +1,8 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import type { AssistantMessage, UserMessage, Usage } from "@mariozechner/pi-ai";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import * as helpers from "./pi-embedded-helpers.js";
 import {
-  expectGoogleModelApiFullSanitizeCall,
+  expectOpenAIResponsesStrictSanitizeCall,
   loadSanitizeSessionHistoryWithCleanMocks,
   makeMockSessionManager,
   makeInMemorySessionManager,
@@ -11,6 +10,7 @@ import {
   makeReasoningAssistantMessages,
   makeSimpleUserMessages,
   sanitizeSnapshotChangedOpenAIReasoning,
+  type SanitizeSessionHistoryHarness,
   type SanitizeSessionHistoryFn,
   sanitizeWithOpenAIResponses,
   TEST_SESSION_ID,
@@ -25,6 +25,7 @@ vi.mock("./pi-embedded-helpers.js", async () => ({
 }));
 
 let sanitizeSessionHistory: SanitizeSessionHistoryFn;
+let mockedHelpers: SanitizeSessionHistoryHarness["mockedHelpers"];
 let testTimestamp = 1;
 const nextTimestamp = () => testTimestamp++;
 
@@ -35,7 +36,7 @@ describe("sanitizeSessionHistory", () => {
   const mockSessionManager = makeMockSessionManager();
   const mockMessages = makeSimpleUserMessages();
   const setNonGoogleModelApi = () => {
-    vi.mocked(helpers.isGoogleModelApi).mockReturnValue(false);
+    vi.mocked(mockedHelpers.isGoogleModelApi).mockReturnValue(false);
   };
 
   const sanitizeGithubCopilotHistory = async (params: {
@@ -48,6 +49,21 @@ describe("sanitizeSessionHistory", () => {
       modelApi: params.modelApi ?? "openai-completions",
       provider: "github-copilot",
       modelId: params.modelId ?? "claude-opus-4.6",
+      sessionManager: makeMockSessionManager(),
+      sessionId: TEST_SESSION_ID,
+    });
+
+  const sanitizeAnthropicHistory = async (params: {
+    messages: AgentMessage[];
+    provider?: string;
+    modelApi?: string;
+    modelId?: string;
+  }) =>
+    sanitizeSessionHistory({
+      messages: params.messages,
+      modelApi: params.modelApi ?? "anthropic-messages",
+      provider: params.provider ?? "anthropic",
+      modelId: params.modelId ?? "claude-opus-4-6",
       sessionManager: makeMockSessionManager(),
       sessionId: TEST_SESSION_ID,
     });
@@ -162,23 +178,39 @@ describe("sanitizeSessionHistory", () => {
       AgentMessage & { usage?: unknown; content?: unknown }
     >;
 
+  const getSingleAssistantUsage = async (messages: AgentMessage[]) => {
+    vi.mocked(mockedHelpers.isGoogleModelApi).mockReturnValue(false);
+    const result = await sanitizeOpenAIHistory(messages);
+    return result.find((message) => message.role === "assistant") as
+      | (AgentMessage & { usage?: unknown })
+      | undefined;
+  };
+
   beforeEach(async () => {
     testTimestamp = 1;
-    sanitizeSessionHistory = await loadSanitizeSessionHistoryWithCleanMocks();
+    const harness = await loadSanitizeSessionHistoryWithCleanMocks();
+    sanitizeSessionHistory = harness.sanitizeSessionHistory;
+    mockedHelpers = harness.mockedHelpers;
   });
 
-  it("sanitizes tool call ids for Google model APIs", async () => {
-    await expectGoogleModelApiFullSanitizeCall({
-      sanitizeSessionHistory,
+  it("passes simple user-only history through for Google model APIs", async () => {
+    vi.mocked(mockedHelpers.isGoogleModelApi).mockReturnValue(true);
+
+    const result = await sanitizeSessionHistory({
       messages: mockMessages,
+      modelApi: "google-generative-ai",
+      provider: "google-vertex",
       sessionManager: mockSessionManager,
+      sessionId: TEST_SESSION_ID,
     });
+
+    expect(result).toEqual(mockMessages);
   });
 
-  it("sanitizes tool call ids with strict9 for Mistral models", async () => {
+  it("passes simple user-only history through for Mistral models", async () => {
     setNonGoogleModelApi();
 
-    await sanitizeSessionHistory({
+    const result = await sanitizeSessionHistory({
       messages: mockMessages,
       modelApi: "openai-responses",
       provider: "openrouter",
@@ -187,21 +219,13 @@ describe("sanitizeSessionHistory", () => {
       sessionId: TEST_SESSION_ID,
     });
 
-    expect(helpers.sanitizeSessionMessagesImages).toHaveBeenCalledWith(
-      mockMessages,
-      "session:history",
-      expect.objectContaining({
-        sanitizeMode: "full",
-        sanitizeToolCallIds: true,
-        toolCallIdMode: "strict9",
-      }),
-    );
+    expect(result).toEqual(mockMessages);
   });
 
-  it("sanitizes tool call ids for Anthropic APIs", async () => {
+  it("passes simple user-only history through for Anthropic APIs", async () => {
     setNonGoogleModelApi();
 
-    await sanitizeSessionHistory({
+    const result = await sanitizeSessionHistory({
       messages: mockMessages,
       modelApi: "anthropic-messages",
       provider: "anthropic",
@@ -209,33 +233,42 @@ describe("sanitizeSessionHistory", () => {
       sessionId: TEST_SESSION_ID,
     });
 
-    expect(helpers.sanitizeSessionMessagesImages).toHaveBeenCalledWith(
-      mockMessages,
-      "session:history",
-      expect.objectContaining({ sanitizeMode: "full", sanitizeToolCallIds: true }),
-    );
+    expect(result).toEqual(mockMessages);
   });
 
-  it("does not sanitize tool call ids for openai-responses", async () => {
+  it("passes simple user-only history through for openai-responses", async () => {
     setNonGoogleModelApi();
 
-    await sanitizeWithOpenAIResponses({
+    const result = await sanitizeWithOpenAIResponses({
       sanitizeSessionHistory,
       messages: mockMessages,
       sessionManager: mockSessionManager,
     });
 
-    expect(helpers.sanitizeSessionMessagesImages).toHaveBeenCalledWith(
+    expect(result).toEqual(mockMessages);
+  });
+
+  it("sanitizes tool call ids for OpenAI-compatible responses providers", async () => {
+    setNonGoogleModelApi();
+
+    await sanitizeSessionHistory({
+      messages: mockMessages,
+      modelApi: "openai-responses",
+      provider: "custom",
+      sessionManager: mockSessionManager,
+      sessionId: TEST_SESSION_ID,
+    });
+
+    expectOpenAIResponsesStrictSanitizeCall(
+      mockedHelpers.sanitizeSessionMessagesImages,
       mockMessages,
-      "session:history",
-      expect.objectContaining({ sanitizeMode: "images-only", sanitizeToolCallIds: false }),
     );
   });
 
   it("sanitizes tool call ids for openai-completions", async () => {
     setNonGoogleModelApi();
 
-    await sanitizeSessionHistory({
+    const result = await sanitizeSessionHistory({
       messages: mockMessages,
       modelApi: "openai-completions",
       provider: "openai",
@@ -244,15 +277,7 @@ describe("sanitizeSessionHistory", () => {
       sessionId: TEST_SESSION_ID,
     });
 
-    expect(helpers.sanitizeSessionMessagesImages).toHaveBeenCalledWith(
-      mockMessages,
-      "session:history",
-      expect.objectContaining({
-        sanitizeMode: "images-only",
-        sanitizeToolCallIds: true,
-        toolCallIdMode: "strict",
-      }),
-    );
+    expect(result).toEqual(mockMessages);
   });
 
   it("prepends a bootstrap user turn for strict OpenAI-compatible assistant-first history", async () => {
@@ -314,7 +339,7 @@ describe("sanitizeSessionHistory", () => {
   });
 
   it("drops stale assistant usage snapshots kept before latest compaction summary", async () => {
-    vi.mocked(helpers.isGoogleModelApi).mockReturnValue(false);
+    vi.mocked(mockedHelpers.isGoogleModelApi).mockReturnValue(false);
 
     const messages = castAgentMessages([
       { role: "user", content: "old context" },
@@ -335,7 +360,7 @@ describe("sanitizeSessionHistory", () => {
   });
 
   it("preserves fresh assistant usage snapshots created after latest compaction summary", async () => {
-    vi.mocked(helpers.isGoogleModelApi).mockReturnValue(false);
+    vi.mocked(mockedHelpers.isGoogleModelApi).mockReturnValue(false);
 
     const messages = castAgentMessages([
       makeAssistantUsageMessage({
@@ -359,43 +384,33 @@ describe("sanitizeSessionHistory", () => {
   });
 
   it("adds a zeroed assistant usage snapshot when usage is missing", async () => {
-    vi.mocked(helpers.isGoogleModelApi).mockReturnValue(false);
-
-    const messages = castAgentMessages([
-      { role: "user", content: "question" },
-      {
-        role: "assistant",
-        content: [{ type: "text", text: "answer without usage" }],
-      },
-    ]);
-
-    const result = await sanitizeOpenAIHistory(messages);
-    const assistant = result.find((message) => message.role === "assistant") as
-      | (AgentMessage & { usage?: unknown })
-      | undefined;
+    const assistant = await getSingleAssistantUsage(
+      castAgentMessages([
+        { role: "user", content: "question" },
+        {
+          role: "assistant",
+          content: [{ type: "text", text: "answer without usage" }],
+        },
+      ]),
+    );
 
     expect(assistant?.usage).toEqual(makeZeroUsageSnapshot());
   });
 
   it("normalizes mixed partial assistant usage fields to numeric totals", async () => {
-    vi.mocked(helpers.isGoogleModelApi).mockReturnValue(false);
-
-    const messages = castAgentMessages([
-      { role: "user", content: "question" },
-      {
-        role: "assistant",
-        content: [{ type: "text", text: "answer with partial usage" }],
-        usage: {
-          output: 3,
-          cache_read_input_tokens: 9,
+    const assistant = await getSingleAssistantUsage(
+      castAgentMessages([
+        { role: "user", content: "question" },
+        {
+          role: "assistant",
+          content: [{ type: "text", text: "answer with partial usage" }],
+          usage: {
+            output: 3,
+            cache_read_input_tokens: 9,
+          },
         },
-      },
-    ]);
-
-    const result = await sanitizeOpenAIHistory(messages);
-    const assistant = result.find((message) => message.role === "assistant") as
-      | (AgentMessage & { usage?: unknown })
-      | undefined;
+      ]),
+    );
 
     expect(assistant?.usage).toEqual({
       input: 0,
@@ -407,31 +422,26 @@ describe("sanitizeSessionHistory", () => {
   });
 
   it("preserves existing usage cost while normalizing token fields", async () => {
-    vi.mocked(helpers.isGoogleModelApi).mockReturnValue(false);
-
-    const messages = castAgentMessages([
-      { role: "user", content: "question" },
-      {
-        role: "assistant",
-        content: [{ type: "text", text: "answer with partial usage and cost" }],
-        usage: {
-          output: 3,
-          cache_read_input_tokens: 9,
-          cost: {
-            input: 1.25,
-            output: 2.5,
-            cacheRead: 0.25,
-            cacheWrite: 0,
-            total: 4,
+    const assistant = await getSingleAssistantUsage(
+      castAgentMessages([
+        { role: "user", content: "question" },
+        {
+          role: "assistant",
+          content: [{ type: "text", text: "answer with partial usage and cost" }],
+          usage: {
+            output: 3,
+            cache_read_input_tokens: 9,
+            cost: {
+              input: 1.25,
+              output: 2.5,
+              cacheRead: 0.25,
+              cacheWrite: 0,
+              total: 4,
+            },
           },
         },
-      },
-    ]);
-
-    const result = await sanitizeOpenAIHistory(messages);
-    const assistant = result.find((message) => message.role === "assistant") as
-      | (AgentMessage & { usage?: unknown })
-      | undefined;
+      ]),
+    );
 
     expect(assistant?.usage).toEqual({
       ...makeZeroUsageSnapshot(),
@@ -451,27 +461,22 @@ describe("sanitizeSessionHistory", () => {
   });
 
   it("preserves unknown cost when token fields already match", async () => {
-    vi.mocked(helpers.isGoogleModelApi).mockReturnValue(false);
-
-    const messages = castAgentMessages([
-      { role: "user", content: "question" },
-      {
-        role: "assistant",
-        content: [{ type: "text", text: "answer with complete numeric usage but no cost" }],
-        usage: {
-          input: 1,
-          output: 2,
-          cacheRead: 3,
-          cacheWrite: 4,
-          totalTokens: 10,
+    const assistant = await getSingleAssistantUsage(
+      castAgentMessages([
+        { role: "user", content: "question" },
+        {
+          role: "assistant",
+          content: [{ type: "text", text: "answer with complete numeric usage but no cost" }],
+          usage: {
+            input: 1,
+            output: 2,
+            cacheRead: 3,
+            cacheWrite: 4,
+            totalTokens: 10,
+          },
         },
-      },
-    ]);
-
-    const result = await sanitizeOpenAIHistory(messages);
-    const assistant = result.find((message) => message.role === "assistant") as
-      | (AgentMessage & { usage?: unknown })
-      | undefined;
+      ]),
+    );
 
     expect(assistant?.usage).toEqual({
       input: 1,
@@ -484,7 +489,7 @@ describe("sanitizeSessionHistory", () => {
   });
 
   it("drops stale usage when compaction summary appears before kept assistant messages", async () => {
-    vi.mocked(helpers.isGoogleModelApi).mockReturnValue(false);
+    vi.mocked(mockedHelpers.isGoogleModelApi).mockReturnValue(false);
 
     const compactionTs = Date.parse("2026-02-26T12:00:00.000Z");
     const messages = castAgentMessages([
@@ -505,7 +510,7 @@ describe("sanitizeSessionHistory", () => {
   });
 
   it("keeps fresh usage after compaction timestamp in summary-first ordering", async () => {
-    vi.mocked(helpers.isGoogleModelApi).mockReturnValue(false);
+    vi.mocked(mockedHelpers.isGoogleModelApi).mockReturnValue(false);
 
     const compactionTs = Date.parse("2026-02-26T12:00:00.000Z");
     const messages = castAgentMessages([
@@ -776,22 +781,30 @@ describe("sanitizeSessionHistory", () => {
     expect(types).not.toContain("thinking");
   });
 
-  it("does not drop thinking blocks for non-copilot providers", async () => {
+  it("drops assistant thinking blocks for anthropic replay", async () => {
     setNonGoogleModelApi();
 
     const messages = makeThinkingAndTextAssistantMessages();
 
-    const result = await sanitizeSessionHistory({
+    const result = await sanitizeAnthropicHistory({ messages });
+
+    const assistant = getAssistantMessage(result);
+    expect(assistant.content).toEqual([{ type: "text", text: "hi" }]);
+  });
+
+  it("drops assistant thinking blocks for amazon-bedrock replay", async () => {
+    setNonGoogleModelApi();
+
+    const messages = makeThinkingAndTextAssistantMessages();
+
+    const result = await sanitizeAnthropicHistory({
       messages,
-      modelApi: "anthropic-messages",
-      provider: "anthropic",
-      modelId: "claude-opus-4-6",
-      sessionManager: makeMockSessionManager(),
-      sessionId: TEST_SESSION_ID,
+      provider: "amazon-bedrock",
+      modelApi: "bedrock-converse-stream",
     });
 
-    const types = getAssistantContentTypes(result);
-    expect(types).toContain("thinking");
+    const assistant = getAssistantMessage(result);
+    expect(assistant.content).toEqual([{ type: "text", text: "hi" }]);
   });
 
   it("does not drop thinking blocks for non-claude copilot models", async () => {
