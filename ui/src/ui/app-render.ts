@@ -8,6 +8,7 @@ import { refreshChatAvatar } from "./app-chat.ts";
 import { renderUsageTab } from "./app-render-usage-tab.ts";
 import {
   renderChatControls,
+  renderChatMobileToggle,
   renderChatSessionSelect,
   renderTab,
   renderSidebarConnectionStatus,
@@ -308,6 +309,7 @@ export function renderApp(state: AppViewState) {
   const navDrawerOpen = Boolean(state.navDrawerOpen && !chatFocus && !state.onboarding);
   const navCollapsed = Boolean(state.settings.navCollapsed && !navDrawerOpen);
   const showThinking = state.onboarding ? false : state.settings.chatShowThinking;
+  const showToolCalls = state.onboarding ? true : state.settings.chatShowToolCalls;
   const assistantAvatarUrl = resolveAssistantAvatarUrl(state);
   const chatAvatarUrl = state.chatAvatarUrl ?? assistantAvatarUrl ?? null;
   const configValue =
@@ -439,7 +441,10 @@ export function renderApp(state: AppViewState) {
               <span class="topbar-search__label">${t("common.search")}</span>
               <kbd class="topbar-search__kbd">⌘K</kbd>
             </button>
-            <div class="topbar-status">${renderTopbarThemeModeToggle(state)}</div>
+            <div class="topbar-status">
+              ${isChat ? renderChatMobileToggle(state) : nothing}
+              ${renderTopbarThemeModeToggle(state)}
+            </div>
           </div>
         </div>
       </header>
@@ -1347,6 +1352,7 @@ export function renderApp(state: AppViewState) {
                 },
                 thinkingLevel: state.chatThinkingLevel,
                 showThinking,
+                showToolCalls,
                 loading: state.chatLoading,
                 sending: state.chatSending,
                 compactionStatus: state.compactionStatus,

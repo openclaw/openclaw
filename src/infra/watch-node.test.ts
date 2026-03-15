@@ -11,40 +11,50 @@ const createFakeProcess = () =>
 
 const createWatchHarness = () => {
   const child = Object.assign(new EventEmitter(), {
-    kill: vi.fn(),
+    kill: vi.fn(() => {}),
   });
   const spawn = vi.fn(() => child);
+  const watcher = Object.assign(new EventEmitter(), {
+    close: vi.fn(async () => {}),
+  });
+  const createWatcher = vi.fn(() => watcher);
   const fakeProcess = createFakeProcess();
-  return { child, spawn, fakeProcess };
+  return { child, spawn, watcher, createWatcher, fakeProcess };
 };
 
 describe("watch-node script", () => {
-  it("wires node watch to run-node with watched source/config paths", async () => {
-    const { child, spawn, fakeProcess } = createWatchHarness();
+  it("wires chokidar watch to run-node with watched source/config paths", async () => {
+    const { child, spawn, watcher, createWatcher, fakeProcess } = createWatchHarness();
 
     const runPromise = runWatchMain({
       args: ["gateway", "--force"],
       cwd: "/tmp/openclaw",
+      createWatcher,
       env: { PATH: "/usr/bin" },
       now: () => 1700000000000,
       process: fakeProcess,
       spawn,
     });
 
-    queueMicrotask(() => child.emit("exit", 0, null));
-    const exitCode = await runPromise;
+    expect(createWatcher).toHaveBeenCalledTimes(1);
+    const firstWatcherCall = createWatcher.mock.calls[0];
+    expect(firstWatcherCall).toBeDefined();
+    const [watchPaths, watchOptions] = firstWatcherCall as unknown as [
+      string[],
+      { ignoreInitial: boolean; ignored: (watchPath: string) => boolean },
+    ];
+    expect(watchPaths).toEqual(runNodeWatchedPaths);
+    expect(watchOptions.ignoreInitial).toBe(true);
+    expect(watchOptions.ignored("src/infra/watch-node.test.ts")).toBe(true);
+    expect(watchOptions.ignored("src/infra/watch-node.test.tsx")).toBe(true);
+    expect(watchOptions.ignored("src/infra/watch-node-test-helpers.ts")).toBe(true);
+    expect(watchOptions.ignored("src/infra/watch-node.ts")).toBe(false);
+    expect(watchOptions.ignored("tsconfig.json")).toBe(false);
 
-    expect(exitCode).toBe(0);
     expect(spawn).toHaveBeenCalledTimes(1);
     expect(spawn).toHaveBeenCalledWith(
       "/usr/local/bin/node",
-      [
-        ...runNodeWatchedPaths.flatMap((watchPath) => ["--watch-path", watchPath]),
-        "--watch-preserve-output",
-        "scripts/run-node.mjs",
-        "gateway",
-        "--force",
-      ],
+      ["scripts/run-node.mjs", "gateway", "--force"],
       expect.objectContaining({
         cwd: "/tmp/openclaw",
         stdio: "inherit",
@@ -56,13 +66,19 @@ describe("watch-node script", () => {
         }),
       }),
     );
+    fakeProcess.emit("SIGINT");
+    const exitCode = await runPromise;
+    expect(exitCode).toBe(130);
+    expect(child.kill).toHaveBeenCalledWith("SIGTERM");
+    expect(watcher.close).toHaveBeenCalledTimes(1);
   });
 
   it("terminates child on SIGINT and returns shell interrupt code", async () => {
-    const { child, spawn, fakeProcess } = createWatchHarness();
+    const { child, spawn, watcher, createWatcher, fakeProcess } = createWatchHarness();
 
     const runPromise = runWatchMain({
       args: ["gateway", "--force"],
+      createWatcher,
       process: fakeProcess,
       spawn,
     });
@@ -72,15 +88,17 @@ describe("watch-node script", () => {
 
     expect(exitCode).toBe(130);
     expect(child.kill).toHaveBeenCalledWith("SIGTERM");
+    expect(watcher.close).toHaveBeenCalledTimes(1);
     expect(fakeProcess.listenerCount("SIGINT")).toBe(0);
     expect(fakeProcess.listenerCount("SIGTERM")).toBe(0);
   });
 
   it("terminates child on SIGTERM and returns shell terminate code", async () => {
-    const { child, spawn, fakeProcess } = createWatchHarness();
+    const { child, spawn, watcher, createWatcher, fakeProcess } = createWatchHarness();
 
     const runPromise = runWatchMain({
       args: ["gateway", "--force"],
+      createWatcher,
       process: fakeProcess,
       spawn,
     });
@@ -90,7 +108,74 @@ describe("watch-node script", () => {
 
     expect(exitCode).toBe(143);
     expect(child.kill).toHaveBeenCalledWith("SIGTERM");
+    expect(watcher.close).toHaveBeenCalledTimes(1);
     expect(fakeProcess.listenerCount("SIGINT")).toBe(0);
     expect(fakeProcess.listenerCount("SIGTERM")).toBe(0);
+  });
+
+  it("ignores test-only changes and restarts on non-test source changes", async () => {
+    const childA = Object.assign(new EventEmitter(), {
+      kill: vi.fn(function () {
+        queueMicrotask(() => childA.emit("exit", 0, null));
+      }),
+    });
+    const childB = Object.assign(new EventEmitter(), {
+      kill: vi.fn(() => {}),
+    });
+    const spawn = vi.fn().mockReturnValueOnce(childA).mockReturnValueOnce(childB);
+    const watcher = Object.assign(new EventEmitter(), {
+      close: vi.fn(async () => {}),
+    });
+    const createWatcher = vi.fn(() => watcher);
+    const fakeProcess = createFakeProcess();
+
+    const runPromise = runWatchMain({
+      args: ["gateway", "--force"],
+      createWatcher,
+      process: fakeProcess,
+      spawn,
+    });
+
+    watcher.emit("change", "src/infra/watch-node.test.ts");
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(spawn).toHaveBeenCalledTimes(1);
+    expect(childA.kill).not.toHaveBeenCalled();
+
+    watcher.emit("change", "src/infra/watch-node.test.tsx");
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(spawn).toHaveBeenCalledTimes(1);
+    expect(childA.kill).not.toHaveBeenCalled();
+
+    watcher.emit("change", "src/infra/watch-node-test-helpers.ts");
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(spawn).toHaveBeenCalledTimes(1);
+    expect(childA.kill).not.toHaveBeenCalled();
+
+    watcher.emit("change", "src/infra/watch-node.ts");
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(childA.kill).toHaveBeenCalledWith("SIGTERM");
+    expect(spawn).toHaveBeenCalledTimes(2);
+
+    fakeProcess.emit("SIGINT");
+    const exitCode = await runPromise;
+    expect(exitCode).toBe(130);
+  });
+
+  it("kills child and exits when watcher emits an error", async () => {
+    const { child, spawn, watcher, createWatcher, fakeProcess } = createWatchHarness();
+
+    const runPromise = runWatchMain({
+      args: ["gateway", "--force"],
+      createWatcher,
+      process: fakeProcess,
+      spawn,
+    });
+
+    watcher.emit("error", new Error("watch failed"));
+    const exitCode = await runPromise;
+
+    expect(exitCode).toBe(1);
+    expect(child.kill).toHaveBeenCalledWith("SIGTERM");
+    expect(watcher.close).toHaveBeenCalledTimes(1);
   });
 });

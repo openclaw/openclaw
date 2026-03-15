@@ -10,7 +10,7 @@ import {
   buildXiaomiProvider,
   QIANFAN_DEFAULT_MODEL_ID,
   XIAOMI_DEFAULT_MODEL_ID,
-} from "../agents/models-config.providers.js";
+} from "../agents/models-config.providers.static.js";
 import {
   buildSyntheticModelDefinition,
   SYNTHETIC_BASE_URL,
@@ -126,6 +126,7 @@ export function applyZaiProviderConfig(
 
   const defaultModels = [
     buildZaiModelDefinition({ id: "glm-5" }),
+    buildZaiModelDefinition({ id: "glm-5-turbo" }),
     buildZaiModelDefinition({ id: "glm-4.7" }),
     buildZaiModelDefinition({ id: "glm-4.7-flash" }),
     buildZaiModelDefinition({ id: "glm-4.7-flashx" }),

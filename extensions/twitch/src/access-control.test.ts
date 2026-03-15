@@ -160,6 +160,13 @@ describe("checkTwitchAccessControl", () => {
       });
     });
 
+    it("blocks everyone when allowFrom is explicitly empty", () => {
+      expectAllowFromBlocked({
+        allowFrom: [],
+        reason: "allowFrom",
+      });
+    });
+
     it("blocks messages without userId", () => {
       expectAllowFromBlocked({
         allowFrom: ["123456"],
