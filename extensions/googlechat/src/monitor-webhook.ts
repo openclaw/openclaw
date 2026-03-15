@@ -21,6 +21,9 @@ function extractBearerToken(header: unknown): string {
     : "";
 }
 
+const ADD_ON_PREAUTH_MAX_BYTES = 16 * 1024;
+const ADD_ON_PREAUTH_TIMEOUT_MS = 3_000;
+
 type ParsedGoogleChatInboundPayload =
   | { ok: true; event: GoogleChatEvent; addOnBearerToken: string }
   | { ok: false };
@@ -112,6 +115,12 @@ export function createGoogleChatWebhookRequestHandler(params: {
             req,
             res,
             profile,
+            ...(profile === "pre-auth"
+              ? {
+                  maxBytes: ADD_ON_PREAUTH_MAX_BYTES,
+                  timeoutMs: ADD_ON_PREAUTH_TIMEOUT_MS,
+                }
+              : {}),
             emptyObjectOnEmpty: false,
             invalidJsonMessage: "invalid payload",
           });
