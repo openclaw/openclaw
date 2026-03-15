@@ -1219,16 +1219,15 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
           const normalizedAllowed = allowedShips.map(normalizeShip);
           if (!normalizedAllowed.includes(senderShip)) {
             // If owner is configured, queue approval request
-            const messageText = rawText;
             if (effectiveOwnerShip) {
               const approval = createPendingApproval({
                 type: "channel",
                 requestingShip: senderShip,
                 channelNest: nest,
-                messagePreview: messageText.substring(0, 100),
+                messagePreview: rawText.substring(0, 100),
                 originalMessage: {
                   messageId: messageId ?? "",
-                  messageText,
+                  messageText: rawText,
                   messageContent: content.content,
                   timestamp: content.sent || Date.now(),
                   parentId: parentId ?? undefined,
@@ -1371,6 +1370,8 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
       if (!rawText.trim()) {
         return;
       }
+      const citedContent = await resolveAllCites(essay.content);
+      const resolvedMessageText = citedContent + rawText;
 
       // Check if this is the owner sending an approval response
       const messageText = rawText;
@@ -1397,7 +1398,7 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
         await processMessage({
           messageId: messageId ?? "",
           senderShip,
-          messageText,
+          messageText: resolvedMessageText,
           messageContent: essay.content,
           isGroup: false,
           timestamp: essay.sent || Date.now(),
@@ -1426,9 +1427,6 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
         }
         return;
       }
-
-      const citedContent = await resolveAllCites(essay.content);
-      const resolvedMessageText = citedContent + rawText;
 
       await processMessage({
         messageId: messageId ?? "",
