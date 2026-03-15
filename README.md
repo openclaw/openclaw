@@ -73,6 +73,21 @@ This fork packages those concerns into a deterministic review surface that can b
 
 The stubs are local, deterministic, and artifact-based. They do not perform remote execution, crawling, or offensive actions.
 
+## Skill Security Pipeline
+
+This fork now includes a Radar-first defensive skill security pipeline designed around:
+
+- deterministic ZIP packaging
+- SHA-256 fingerprinting
+- scanner abstraction (`mock`, future `virustotal`, future local providers)
+- verdict-based policy gating
+- versioned scan metadata
+- daily re-scan scaffolding
+
+The goal is simple: a skill should be packaged, fingerprinted, scanned, classified, and policy-gated before it is trusted.
+
+This pipeline is defensive-only. It is meant for packaging, metadata, classification, auditability, and re-evaluation, not for offensive tooling or exploit execution.
+
 ## Design principles
 
 - scope lock over breadth

@@ -1,0 +1,217 @@
+openapi: 3.1.0
+info:
+  title: radar-claw-defender Skill Security API
+  version: 0.1.0
+  summary: Minimal defensive API for skill packaging and trust decisions
+servers:
+  - url: https://api.example.com
+security:
+  - bearerAuth: []
+paths:
+  /skills/package:
+    post:
+      summary: Package a skill deterministically
+      operationId: packageSkill
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PackageSkillRequest'
+      responses:
+        '200':
+          description: Package metadata and SHA-256 fingerprint
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SkillSecurityResponse'
+  /skills/scan:
+    post:
+      summary: Scan a packaged skill through the configured provider
+      operationId: scanSkill
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ScanSkillRequest'
+      responses:
+        '200':
+          description: Scan result and policy decision
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SkillSecurityResponse'
+  /skills/{id}/security:
+    get:
+      summary: Get the latest security view for a skill
+      operationId: getSkillSecurity
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Security summary
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SkillSecurityResponse'
+  /skills/rescan:
+    post:
+      summary: Trigger a re-scan job for active skills
+      operationId: rescanSkills
+      responses:
+        '200':
+          description: Re-scan job result
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RescanResponse'
+  /skills/{id}/versions:
+    get:
+      summary: List version security history for a skill
+      operationId: listSkillVersions
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Version history
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  versions:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/VersionRecord'
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: API key
+  schemas:
+    Publisher:
+      type: object
+      required: [publisherId]
+      properties:
+        publisherId:
+          type: string
+        displayName:
+          type: string
+        contact:
+          type: string
+        url:
+          type: string
+        trustLevel:
+          type: string
+          enum: [first_party, known, unknown]
+    PackageSkillRequest:
+      type: object
+      required: [skillName, version, publisher]
+      properties:
+        skillName:
+          type: string
+        version:
+          type: string
+        publisher:
+          $ref: '#/components/schemas/Publisher'
+        createdAt:
+          type: string
+          format: date-time
+    ScanSkillRequest:
+      type: object
+      required: [packageHashSha256]
+      properties:
+        packageHashSha256:
+          type: string
+        provider:
+          type: string
+          enum: [mock, virustotal, local]
+    Finding:
+      type: object
+      properties:
+        ruleId:
+          type: string
+        severity:
+          type: string
+          enum: [info, warn, critical]
+        file:
+          type: string
+        line:
+          type: integer
+        message:
+          type: string
+        evidence:
+          type: string
+    ScanRecord:
+      type: object
+      properties:
+        provider:
+          type: string
+        status:
+          type: string
+        verdict:
+          type: string
+          enum: [benign, suspicious, malicious, unknown, error]
+        confidence:
+          type: number
+        scannedAt:
+          type: string
+          format: date-time
+        reportUrl:
+          type: string
+          nullable: true
+        findings:
+          type: array
+          items:
+            $ref: '#/components/schemas/Finding'
+    VersionRecord:
+      type: object
+      properties:
+        version:
+          type: string
+        packageHashSha256:
+          type: string
+        latestVerdict:
+          type: string
+        latestPolicyAction:
+          type: string
+        lastScannedAt:
+          type: string
+          nullable: true
+        lastRescannedAt:
+          type: string
+          nullable: true
+    SkillSecurityResponse:
+      type: object
+      properties:
+        packageHashSha256:
+          type: string
+        metadata:
+          type: object
+          additionalProperties: true
+        scan:
+          $ref: '#/components/schemas/ScanRecord'
+        policy:
+          type: object
+          additionalProperties: true
+    RescanResponse:
+      type: object
+      properties:
+        processed:
+          type: integer
+        rescanned:
+          type: integer
+        warnings:
+          type: array
+          items:
+            type: string
