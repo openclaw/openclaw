@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import type { OAuthCredentials } from "@mariozechner/pi-ai";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
+import { expectedOpenAICodexProfileId, makeJwt } from "../test-utils/openai-codex-profile-id.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 import { applyAuthChoice, resolvePreferredProviderForAuthChoice } from "./auth-choice.js";
 import { GOOGLE_GEMINI_DEFAULT_MODEL } from "./google-gemini-model-default.js";
@@ -154,14 +155,25 @@ describe("applyAuthChoice", () => {
     ).resolves.toEqual({ config: {} });
   });
 
-  it("stores openai-codex OAuth with email profile id", async () => {
+  it("stores openai-codex OAuth with canonical oidc profile id", async () => {
     await setupTempState();
+
+    const canonicalProfileId = expectedOpenAICodexProfileId({
+      accountId: "acct-choice",
+      iss: "https://auth.openai.com",
+      sub: "sub-choice",
+    });
 
     loginOpenAICodexOAuth.mockResolvedValueOnce({
       email: "user@example.com",
       refresh: "refresh-token",
-      access: "access-token",
+      access: makeJwt({
+        iss: "https://auth.openai.com",
+        sub: "sub-choice",
+        "https://api.openai.com/auth": { chatgpt_account_id: "acct-choice" },
+      }),
       expires: Date.now() + 60_000,
+      accountId: "acct-choice",
     });
 
     const prompter = createPrompter({});
@@ -175,18 +187,65 @@ describe("applyAuthChoice", () => {
       setDefaultModel: false,
     });
 
-    expect(result.config.auth?.profiles?.["openai-codex:user@example.com"]).toMatchObject({
+    expect(result.config.auth?.profiles?.[canonicalProfileId]).toMatchObject({
       provider: "openai-codex",
       mode: "oauth",
     });
     expect(result.config.auth?.profiles?.["openai-codex:default"]).toBeUndefined();
-    expect(await readAuthProfile("openai-codex:user@example.com")).toMatchObject({
+    expect(await readAuthProfile(canonicalProfileId)).toMatchObject({
       type: "oauth",
       provider: "openai-codex",
       refresh: "refresh-token",
-      access: "access-token",
       email: "user@example.com",
+      accountId: "acct-choice",
     });
+  });
+
+  it("pins a fresh openai-codex re-login ahead of a legacy default profile", async () => {
+    await setupTempState();
+
+    const canonicalProfileId = expectedOpenAICodexProfileId({
+      accountId: "acct-upgrade",
+      iss: "https://auth.openai.com",
+      sub: "sub-upgrade",
+    });
+
+    loginOpenAICodexOAuth.mockResolvedValueOnce({
+      email: "user@example.com",
+      refresh: "refresh-token",
+      access: makeJwt({
+        iss: "https://auth.openai.com",
+        sub: "sub-upgrade",
+        "https://api.openai.com/auth": { chatgpt_account_id: "acct-upgrade" },
+      }),
+      expires: Date.now() + 60_000,
+      accountId: "acct-upgrade",
+    });
+
+    const prompter = createPrompter({});
+    const runtime = createExitThrowingRuntime();
+
+    const result = await applyAuthChoice({
+      authChoice: "openai-codex",
+      config: {
+        auth: {
+          profiles: {
+            "openai-codex:default": {
+              provider: "openai-codex",
+              mode: "oauth",
+            },
+          },
+        },
+      },
+      prompter,
+      runtime,
+      setDefaultModel: false,
+    });
+
+    expect(result.config.auth?.order?.["openai-codex"]).toEqual([
+      canonicalProfileId,
+      "openai-codex:default",
+    ]);
   });
 
   it("prompts and writes provider API key for common providers", async () => {

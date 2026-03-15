@@ -9,6 +9,7 @@ import {
   resolveAgentModelPrimaryValue,
 } from "../config/model-input.js";
 import type { ModelApi } from "../config/types.models.js";
+import { expectedOpenAICodexProfileId, makeJwt } from "../test-utils/openai-codex-profile-id.js";
 import {
   applyAuthProfileConfig,
   applyLitellmProviderConfig,
@@ -139,8 +140,50 @@ describe("writeOAuthCredentials", () => {
 
     const creds = {
       refresh: "refresh-token",
-      access: "access-token",
+      access: makeJwt({
+        iss: "https://auth.openai.com",
+        sub: "sub-main",
+        "https://api.openai.com/auth": { chatgpt_account_id: "acct-main" },
+      }),
       expires: Date.now() + 60_000,
+      accountId: "acct-main",
+    } satisfies OAuthCredentials;
+
+    const canonicalProfileId = expectedOpenAICodexProfileId({
+      accountId: "acct-main",
+      iss: "https://auth.openai.com",
+      sub: "sub-main",
+    });
+
+    await writeOAuthCredentials("openai-codex", creds);
+
+    const parsed = await readAuthProfilesForAgent<{
+      profiles?: Record<string, OAuthCredentials & { type?: string }>;
+    }>(env.agentDir);
+    expect(parsed.profiles?.[canonicalProfileId]).toMatchObject({
+      refresh: "refresh-token",
+      type: "oauth",
+    });
+
+    await expect(
+      fs.readFile(path.join(env.stateDir, "agents", "main", "agent", "auth-profiles.json"), "utf8"),
+    ).rejects.toThrow();
+  });
+
+  it("falls back to the legacy profile id when codex accountId is not safe", async () => {
+    const env = await setupAuthTestEnv("openclaw-oauth-unsafe-account-");
+    lifecycle.setStateDir(env.stateDir);
+
+    const creds = {
+      email: "unsafe@example.com",
+      refresh: "refresh-token",
+      access: makeJwt({
+        iss: "https://auth.openai.com",
+        sub: "sub-unsafe",
+        "https://api.openai.com/auth": { chatgpt_account_id: "acct / unsafe" },
+      }),
+      expires: Date.now() + 60_000,
+      accountId: "acct / unsafe",
     } satisfies OAuthCredentials;
 
     await writeOAuthCredentials("openai-codex", creds);
@@ -148,15 +191,11 @@ describe("writeOAuthCredentials", () => {
     const parsed = await readAuthProfilesForAgent<{
       profiles?: Record<string, OAuthCredentials & { type?: string }>;
     }>(env.agentDir);
-    expect(parsed.profiles?.["openai-codex:default"]).toMatchObject({
+    expect(parsed.profiles?.["openai-codex:unsafe@example.com"]).toMatchObject({
+      email: "unsafe@example.com",
       refresh: "refresh-token",
-      access: "access-token",
       type: "oauth",
     });
-
-    await expect(
-      fs.readFile(path.join(env.stateDir, "agents", "main", "agent", "auth-profiles.json"), "utf8"),
-    ).rejects.toThrow();
   });
 
   it("writes OAuth credentials to all sibling agent dirs when syncSiblingAgents=true", async () => {
@@ -175,9 +214,20 @@ describe("writeOAuthCredentials", () => {
 
     const creds = {
       refresh: "refresh-sync",
-      access: "access-sync",
+      access: makeJwt({
+        iss: "https://auth.openai.com",
+        sub: "sub-sync",
+        "https://api.openai.com/auth": { chatgpt_account_id: "acct-sync" },
+      }),
       expires: Date.now() + 60_000,
+      accountId: "acct-sync",
     } satisfies OAuthCredentials;
+
+    const canonicalProfileId = expectedOpenAICodexProfileId({
+      accountId: "acct-sync",
+      iss: "https://auth.openai.com",
+      sub: "sub-sync",
+    });
 
     await writeOAuthCredentials("openai-codex", creds, undefined, {
       syncSiblingAgents: true,
@@ -188,9 +238,8 @@ describe("writeOAuthCredentials", () => {
       const parsed = JSON.parse(raw) as {
         profiles?: Record<string, OAuthCredentials & { type?: string }>;
       };
-      expect(parsed.profiles?.["openai-codex:default"]).toMatchObject({
+      expect(parsed.profiles?.[canonicalProfileId]).toMatchObject({
         refresh: "refresh-sync",
-        access: "access-sync",
         type: "oauth",
       });
     }
@@ -210,9 +259,20 @@ describe("writeOAuthCredentials", () => {
 
     const creds = {
       refresh: "refresh-kid",
-      access: "access-kid",
+      access: makeJwt({
+        iss: "https://auth.openai.com",
+        sub: "sub-kid",
+        "https://api.openai.com/auth": { chatgpt_account_id: "acct-kid" },
+      }),
       expires: Date.now() + 60_000,
+      accountId: "acct-kid",
     } satisfies OAuthCredentials;
+
+    const canonicalProfileId = expectedOpenAICodexProfileId({
+      accountId: "acct-kid",
+      iss: "https://auth.openai.com",
+      sub: "sub-kid",
+    });
 
     await writeOAuthCredentials("openai-codex", creds, kidAgentDir);
 
@@ -220,8 +280,7 @@ describe("writeOAuthCredentials", () => {
     const kidParsed = JSON.parse(kidRaw) as {
       profiles?: Record<string, OAuthCredentials & { type?: string }>;
     };
-    expect(kidParsed.profiles?.["openai-codex:default"]).toMatchObject({
-      access: "access-kid",
+    expect(kidParsed.profiles?.[canonicalProfileId]).toMatchObject({
       type: "oauth",
     });
 
@@ -243,9 +302,20 @@ describe("writeOAuthCredentials", () => {
 
     const creds = {
       refresh: "refresh-ext",
-      access: "access-ext",
+      access: makeJwt({
+        iss: "https://auth.openai.com",
+        sub: "sub-ext",
+        "https://api.openai.com/auth": { chatgpt_account_id: "acct-ext" },
+      }),
       expires: Date.now() + 60_000,
+      accountId: "acct-ext",
     } satisfies OAuthCredentials;
+
+    const canonicalProfileId = expectedOpenAICodexProfileId({
+      accountId: "acct-ext",
+      iss: "https://auth.openai.com",
+      sub: "sub-ext",
+    });
 
     await writeOAuthCredentials("openai-codex", creds, extKid, {
       syncSiblingAgents: true,
@@ -257,9 +327,8 @@ describe("writeOAuthCredentials", () => {
       const parsed = JSON.parse(raw) as {
         profiles?: Record<string, OAuthCredentials & { type?: string }>;
       };
-      expect(parsed.profiles?.["openai-codex:default"]).toMatchObject({
+      expect(parsed.profiles?.[canonicalProfileId]).toMatchObject({
         refresh: "refresh-ext",
-        access: "access-ext",
         type: "oauth",
       });
     }
@@ -359,6 +428,36 @@ describe("applyAuthProfileConfig", () => {
     );
 
     expect(next.auth?.order).toBeUndefined();
+  });
+
+  it("creates provider order for openai-codex re-login without explicit order", () => {
+    const next = applyAuthProfileConfig(
+      {
+        auth: {
+          profiles: {
+            "openai-codex:default": { provider: "openai-codex", mode: "oauth" },
+          },
+        },
+      },
+      {
+        profileId: expectedOpenAICodexProfileId({
+          accountId: "acct-new",
+          iss: "https://auth.openai.com",
+          sub: "sub-new",
+        }),
+        provider: "openai-codex",
+        mode: "oauth",
+      },
+    );
+
+    expect(next.auth?.order?.["openai-codex"]).toEqual([
+      expectedOpenAICodexProfileId({
+        accountId: "acct-new",
+        iss: "https://auth.openai.com",
+        sub: "sub-new",
+      }),
+      "openai-codex:default",
+    ]);
   });
 });
 
