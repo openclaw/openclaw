@@ -258,6 +258,8 @@ export interface OpenAIWebSocketManagerOptions {
   maxRetries?: number;
   /** Custom backoff delays in ms (default: [1000, 2000, 4000, 8000, 16000]) */
   backoffDelaysMs?: readonly number[];
+  /** Custom headers for the WebSocket connection (e.g. User-Agent) */
+  headers?: Record<string, string>;
 }
 
 type InternalEvents = {
@@ -297,12 +299,14 @@ export class OpenAIWebSocketManager extends EventEmitter<InternalEvents> {
   private readonly wsUrl: string;
   private readonly maxRetries: number;
   private readonly backoffDelaysMs: readonly number[];
+  private readonly headers?: Record<string, string>;
 
   constructor(options: OpenAIWebSocketManagerOptions = {}) {
     super();
     this.wsUrl = options.url ?? OPENAI_WS_URL;
     this.maxRetries = options.maxRetries ?? MAX_RETRIES;
     this.backoffDelaysMs = options.backoffDelaysMs ?? BACKOFF_DELAYS_MS;
+    this.headers = options.headers;
   }
 
   // ─── Public API ────────────────────────────────────────────────────────────
@@ -384,6 +388,7 @@ export class OpenAIWebSocketManager extends EventEmitter<InternalEvents> {
 
       const socket = new WebSocket(this.wsUrl, {
         headers: {
+          ...this.headers,
           Authorization: `Bearer ${this.apiKey}`,
           "OpenAI-Beta": "responses-websocket=v1",
         },
