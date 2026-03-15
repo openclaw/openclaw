@@ -544,7 +544,7 @@ export function createTelegramThreadBindingManager(
         resolveBindingKey({ accountId, conversationId }),
         record,
       );
-      void persistBindingsToDisk({ accountId, persist: manager.shouldPersistMutations() });
+      await persistBindingsToDisk({ accountId, persist: manager.shouldPersistMutations() });
       logVerbose(
         `telegram: bound conversation ${conversationId} -> ${targetSessionKey} (${summarizeLifecycleForLog(
           record,
@@ -604,6 +604,9 @@ export function createTelegramThreadBindingManager(
           reason: input.reason,
           sendFarewell: false,
         });
+        if (removed.length > 0) {
+          await persistBindingsToDisk({ accountId, persist: manager.shouldPersistMutations() });
+        }
         return removed.map((entry) =>
           toSessionBindingRecord(entry, {
             idleTimeoutMs,
@@ -623,6 +626,9 @@ export function createTelegramThreadBindingManager(
         reason: input.reason,
         sendFarewell: false,
       });
+      if (removed) {
+        await persistBindingsToDisk({ accountId, persist: manager.shouldPersistMutations() });
+      }
       return removed
         ? [
             toSessionBindingRecord(removed, {
