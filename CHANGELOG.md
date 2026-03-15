@@ -30,6 +30,9 @@ Docs: https://docs.openclaw.ai
 - macOS/canvas actions: keep unattended local agent actions on trusted in-app canvas surfaces only, and stop exposing the deep-link fallback key to arbitrary page scripts. Thanks @vincentkoc.
 - Agents/compaction: extend the enclosing run deadline once while compaction is actively in flight, and abort the underlying SDK compaction on timeout/cancel so large-session compactions stop freezing mid-run. (#46889) Thanks @asyncjason.
 - Models/openai-completions: default non-native OpenAI-compatible providers to omit tool-definition `strict` fields unless users explicitly opt back in, so tool calling keeps working on providers that reject that option. (#45497) Thanks @sahancava.
+- WhatsApp/reconnect: restore the append recency filter in the extension inbox monitor and handle protobuf `Long` timestamps correctly, so fresh post-reconnect append messages are processed while stale history sync stays suppressed. (#42588) thanks @MonkeyLeeT.
+- WhatsApp/login: wait for pending creds writes before reopening after Baileys `515` pairing restarts in both QR login and `channels login` flows, and keep the restart coverage pinned to the real wrapped error shape plus per-account creds queues. (#27910) Thanks @asyncjason.
+- Agents/openai-compatible tool calls: deduplicate repeated tool call ids across live assistant messages and replayed history so OpenAI-compatible backends no longer reject duplicate `tool_call_id` values with HTTP 400. (#40996) Thanks @xaeon2026.
 
 ### Fixes
 
