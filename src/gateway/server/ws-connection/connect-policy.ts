@@ -36,10 +36,19 @@ export function shouldSkipControlUiPairing(
   policy: ControlUiAuthPolicy,
   role: GatewayRole,
   trustedProxyAuthOk = false,
+  tailscaleAuthOk = false,
 ): boolean {
   if (trustedProxyAuthOk) {
     return true;
   }
+  // When the connection was authenticated via Tailscale identity, the Tailscale
+  // network has already vouched for the user. Requiring a separate device
+  // pairing round-trip adds no security benefit and is confusing to operators
+  // who set allowTailscale: true expecting seamless Control UI access.
+  if (tailscaleAuthOk) {
+    return true;
+  }
+  return policy.allowBypass && sharedAuthOk;
   // dangerouslyDisableDeviceAuth is the break-glass path for Control UI
   // operators. Keep pairing aligned with the missing-device bypass, including
   // open-auth deployments where there is no shared token/password to prove.

@@ -220,6 +220,13 @@ describe("ws connect policy", () => {
       controlUiConfig: undefined,
       deviceRaw: null,
     });
+    expect(shouldSkipControlUiPairing(bypass, true, false)).toBe(true);
+    expect(shouldSkipControlUiPairing(bypass, false, false)).toBe(false);
+    expect(shouldSkipControlUiPairing(strict, true, false)).toBe(false);
+    expect(shouldSkipControlUiPairing(strict, false, true)).toBe(true);
+    // Tailscale identity auth skips pairing regardless of policy/sharedAuthOk
+    expect(shouldSkipControlUiPairing(strict, false, false, true)).toBe(true);
+    expect(shouldSkipControlUiPairing(bypass, false, false, true)).toBe(true);   
     expect(shouldSkipControlUiPairing(bypass, "operator", false)).toBe(true);
     expect(shouldSkipControlUiPairing(bypass, "node", false)).toBe(false);
     expect(shouldSkipControlUiPairing(strict, "operator", false)).toBe(false);
