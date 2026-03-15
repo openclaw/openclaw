@@ -455,9 +455,104 @@ function validateConfigObjectWithPluginsBase(
     config.agents?.defaults?.heartbeat?.target,
     "agents.defaults.heartbeat.target",
   );
+
+  const knownMemoryProviders = new Set([
+    "openai",
+    "local",
+    "gemini",
+    "voyage",
+    "mistral",
+    "ollama",
+  ]);
+  const knownMemoryFallbacks = new Set([...knownMemoryProviders, "none"]);
+
+  const getKnownPluginIds = (): Set<string> => {
+    return ensureKnownIds();
+  };
+
+  const validateMemorySearchProvider = (
+    provider: string | undefined,
+    path: string,
+    knownPluginIds: Set<string>,
+  ) => {
+    if (typeof provider !== "string") {
+      return;
+    }
+    if (knownMemoryProviders.has(provider) || knownPluginIds.has(provider)) {
+      return;
+    }
+    // Note: We validate against plugin IDs here. The runtime will further
+    // verify that the plugin actually provides embedding capability and throw
+    // "Unknown embedding provider" if not. This is a two-layer validation:
+    // 1. Config time: plugin must be loaded
+    // 2. Runtime: plugin must provide embedding capability
+    issues.push({ path, message: `unknown memorySearch provider: ${provider}` });
+  };
+
+  const validateMemorySearchFallback = (
+    fallback: string | undefined,
+    path: string,
+    knownPluginIds: Set<string>,
+  ) => {
+    if (typeof fallback !== "string") {
+      return;
+    }
+    if (knownMemoryFallbacks.has(fallback) || knownPluginIds.has(fallback)) {
+      return;
+    }
+    issues.push({ path, message: `unknown memorySearch fallback: ${fallback}` });
+  };
+
+  const defaultMemorySearch = config.agents?.defaults?.memorySearch;
+  if (defaultMemorySearch) {
+    // Only load plugin registry if provider/fallback is not a known built-in
+    // This avoids loading plugin manifests when only using built-in memory providers
+    const provider = defaultMemorySearch.provider;
+    const fallback = defaultMemorySearch.fallback;
+    const knownPluginIds =
+      provider &&
+      !knownMemoryProviders.has(provider) &&
+      fallback &&
+      !knownMemoryFallbacks.has(fallback)
+        ? getKnownPluginIds()
+        : new Set<string>();
+    validateMemorySearchProvider(
+      defaultMemorySearch.provider,
+      "agents.defaults.memorySearch.provider",
+      knownPluginIds,
+    );
+    validateMemorySearchFallback(
+      defaultMemorySearch.fallback,
+      "agents.defaults.memorySearch.fallback",
+      knownPluginIds,
+    );
+  }
+
   if (Array.isArray(config.agents?.list)) {
     for (const [index, entry] of config.agents.list.entries()) {
       validateHeartbeatTarget(entry?.heartbeat?.target, `agents.list.${index}.heartbeat.target`);
+      const memorySearch = entry?.memorySearch;
+      if (memorySearch) {
+        const provider = memorySearch.provider;
+        const fallback = memorySearch.fallback;
+        const knownPluginIds =
+          provider &&
+          !knownMemoryProviders.has(provider) &&
+          fallback &&
+          !knownMemoryFallbacks.has(fallback)
+            ? getKnownPluginIds()
+            : new Set<string>();
+        validateMemorySearchProvider(
+          memorySearch.provider,
+          `agents.list.${index}.memorySearch.provider`,
+          knownPluginIds,
+        );
+        validateMemorySearchFallback(
+          memorySearch.fallback,
+          `agents.list.${index}.memorySearch.fallback`,
+          knownPluginIds,
+        );
+      }
     }
   }
 

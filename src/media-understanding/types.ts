@@ -106,6 +106,26 @@ export type ImageDescriptionResult = {
   model?: string;
 };
 
+export type TextToSpeechRequest = {
+  text: string;
+  model?: string;
+  modelId?: string;
+  voice?: string;
+  voiceId?: string;
+  apiKey: string;
+  baseUrl?: string;
+  headers?: Record<string, string>;
+  timeoutMs: number;
+  fetchFn?: typeof fetch;
+  telephony?: boolean;
+};
+
+export type TextToSpeechResult = {
+  audio: Buffer;
+  mime: string;
+  sampleRate?: number;
+};
+
 export type MediaUnderstandingProvider = {
   id: string;
   capabilities?: MediaUnderstandingCapability[];
