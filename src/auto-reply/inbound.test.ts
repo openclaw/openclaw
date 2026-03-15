@@ -209,6 +209,20 @@ describe("inbound dedupe", () => {
       shouldSkipDuplicateInbound({ ...base, SessionKey: "agent:alpha:main" }, { now: 300 }),
     ).toBe(true);
   });
+
+  it("normalizes synthetic permission-error message ids to the original inbound id", () => {
+    resetInboundDedupe();
+    const base: MsgContext = {
+      Provider: "feishu",
+      OriginatingChannel: "feishu",
+      OriginatingTo: "chat:oc_123",
+      SessionKey: "agent:main:main",
+    };
+    expect(shouldSkipDuplicateInbound({ ...base, MessageSid: "msg-42" }, { now: 100 })).toBe(false);
+    expect(
+      shouldSkipDuplicateInbound({ ...base, MessageSid: "msg-42:permission-error" }, { now: 200 }),
+    ).toBe(true);
+  });
 });
 
 describe("createInboundDebouncer", () => {

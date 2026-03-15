@@ -1,7 +1,7 @@
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { FollowupRun, QueueSettings } from "./queue.js";
-import { enqueueFollowupRun, scheduleFollowupDrain } from "./queue.js";
+import { enqueueFollowupRun, resetRecentQueuedMessageIdDedupe, scheduleFollowupDrain } from "./queue.js";
 
 function createRun(params: {
   prompt: string;
@@ -35,6 +35,10 @@ function createRun(params: {
 }
 
 describe("followup queue deduplication", () => {
+  beforeEach(() => {
+    resetRecentQueuedMessageIdDedupe();
+  });
+
   it("deduplicates messages with same Discord message_id", async () => {
     const key = `test-dedup-message-id-${Date.now()}`;
     const calls: FollowupRun[] = [];
@@ -201,6 +205,42 @@ describe("followup queue deduplication", () => {
       }),
       settings,
       "prompt",
+    );
+    expect(second).toBe(false);
+  });
+
+  it("treats synthetic permission-error suffixes as the same Feishu message", async () => {
+    const key = `test-dedup-feishu-permission-${Date.now()}`;
+    const settings: QueueSettings = {
+      mode: "collect",
+      debounceMs: 0,
+      cap: 50,
+      dropPolicy: "summarize",
+    };
+
+    const first = enqueueFollowupRun(
+      key,
+      createRun({
+        prompt: "原始飞书消息",
+        messageId: "msg-feishu-1",
+        originatingChannel: "feishu",
+        originatingTo: "chat:oc-group",
+        originatingAccountId: "default",
+      }),
+      settings,
+    );
+    expect(first).toBe(true);
+
+    const second = enqueueFollowupRun(
+      key,
+      createRun({
+        prompt: "权限错误包装消息",
+        messageId: "msg-feishu-1:permission-error",
+        originatingChannel: "feishu",
+        originatingTo: "chat:oc-group",
+        originatingAccountId: "default",
+      }),
+      settings,
     );
     expect(second).toBe(false);
   });

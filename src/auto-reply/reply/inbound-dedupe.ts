@@ -11,13 +11,15 @@ const inboundDedupeCache = createDedupeCache({
 });
 
 const normalizeProvider = (value?: string | null) => value?.trim().toLowerCase() || "";
+const normalizeMessageId = (value?: string | null) =>
+  value?.trim().replace(/:permission-error$/i, "") || "";
 
 const resolveInboundPeerId = (ctx: MsgContext) =>
   ctx.OriginatingTo ?? ctx.To ?? ctx.From ?? ctx.SessionKey;
 
 export function buildInboundDedupeKey(ctx: MsgContext): string | null {
   const provider = normalizeProvider(ctx.OriginatingChannel ?? ctx.Provider ?? ctx.Surface);
-  const messageId = ctx.MessageSid?.trim();
+  const messageId = normalizeMessageId(ctx.MessageSid);
   if (!provider || !messageId) {
     return null;
   }
