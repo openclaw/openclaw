@@ -288,6 +288,12 @@ export type AgentDefaultsConfig = {
     runTimeoutSeconds?: number;
     /** Gateway timeout in ms for sub-agent announce delivery calls (default: 90000). */
     announceTimeoutMs?: number;
+    /** Default allowlist of agent ids that can be spawned (use "*" to allow any). */
+    allowAgents?: string[];
+    /** @deprecated Use `allowAgents` instead. Accepted as an alias for backward compatibility. */
+    allow?: string[];
+    /** @deprecated Use `allowAgents` instead. Accepted as an alias for backward compatibility. */
+    allowlist?: string[];
   };
   /** Optional sandbox settings for non-main sessions. */
   sandbox?: AgentSandboxConfig;
