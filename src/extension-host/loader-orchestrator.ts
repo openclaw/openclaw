@@ -6,24 +6,15 @@ import {
   getCachedExtensionHostRegistry,
   setCachedExtensionHostRegistry,
 } from "../extension-host/loader-cache.js";
-import {
-  buildExtensionHostProvenanceIndex,
-  compareExtensionHostDuplicateCandidateOrder,
-  pushExtensionHostDiagnostics,
-} from "../extension-host/loader-policy.js";
 import type { GatewayRequestHandler } from "../gateway/server-methods/types.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { clearPluginCommands } from "../plugins/commands.js";
 import { applyTestPluginDefaults, normalizePluginsConfig } from "../plugins/config-state.js";
-import { createPluginRegistry, type PluginRegistry } from "../plugins/registry.js";
+import type { PluginRegistry } from "../plugins/registry.js";
 import { createPluginRuntime, type CreatePluginRuntimeOptions } from "../plugins/runtime/index.js";
 import type { PluginLogger } from "../plugins/types.js";
-import { bootstrapExtensionHostPluginLoad } from "./loader-bootstrap.js";
-import { resolveExtensionHostDiscoveryPolicy } from "./loader-discovery-policy.js";
-import { createExtensionHostModuleLoader } from "./loader-module-loader.js";
+import { prepareExtensionHostLoaderExecution } from "./loader-execution.js";
 import { runExtensionHostLoaderSession } from "./loader-run.js";
-import { createExtensionHostLazyRuntime } from "./loader-runtime-proxy.js";
-import { createExtensionHostLoaderSession } from "./loader-session.js";
 
 export type ExtensionHostPluginLoadOptions = {
   config?: OpenClawConfig;
@@ -73,54 +64,30 @@ export function loadExtensionHostPluginRegistry(
   // Clear previously registered plugin commands before reloading.
   clearPluginCommands();
 
-  const runtime = createExtensionHostLazyRuntime({
-    runtimeOptions: options.runtimeOptions,
-    createRuntime: createPluginRuntime,
-  });
-  const { registry, createApi } = createPluginRegistry({
-    logger,
-    runtime,
-    coreGatewayHandlers: options.coreGatewayHandlers as Record<string, GatewayRequestHandler>,
-  });
-
-  const bootstrap = bootstrapExtensionHostPluginLoad({
+  const execution = prepareExtensionHostLoaderExecution({
     config: cfg,
     workspaceDir: options.workspaceDir,
     env,
-    warningCacheKey: cacheKey,
-    warningCache: openAllowlistWarningCache,
     cache: options.cache,
+    cacheKey,
     normalizedConfig: normalized,
     logger,
-    registry,
-    pushDiagnostics: pushExtensionHostDiagnostics,
-    resolveDiscoveryPolicy: resolveExtensionHostDiscoveryPolicy,
-    buildProvenanceIndex: buildExtensionHostProvenanceIndex,
-    compareDuplicateCandidateOrder: compareExtensionHostDuplicateCandidateOrder,
-  });
-
-  const loadModule = createExtensionHostModuleLoader();
-
-  const session = createExtensionHostLoaderSession({
-    registry,
-    logger,
-    env,
-    provenance: bootstrap.provenance,
-    cacheEnabled,
-    cacheKey,
-    memorySlot: normalized.slots.memory,
+    coreGatewayHandlers: options.coreGatewayHandlers as Record<string, GatewayRequestHandler>,
+    runtimeOptions: options.runtimeOptions,
+    warningCache: openAllowlistWarningCache,
     setCachedRegistry: setCachedExtensionHostRegistry,
     activateRegistry: activateExtensionHostRegistry,
+    createRuntime: createPluginRuntime,
   });
 
   return runExtensionHostLoaderSession({
-    session,
-    orderedCandidates: bootstrap.orderedCandidates,
-    manifestByRoot: bootstrap.manifestByRoot,
+    session: execution.session,
+    orderedCandidates: execution.orderedCandidates,
+    manifestByRoot: execution.manifestByRoot,
     normalizedConfig: normalized,
     rootConfig: cfg,
     validateOnly,
-    createApi,
-    loadModule,
+    createApi: execution.createApi,
+    loadModule: execution.loadModule,
   });
 }
