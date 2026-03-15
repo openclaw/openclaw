@@ -28,7 +28,7 @@ const MAX_SEARCH_COUNT = 10;
 
 // Blink Search — calls Blink AI Gateway /api/v1/search, billed through Blink credits.
 // Auto-detected when BLINK_API_KEY is set (always present in Blink Claw containers).
-const DEFAULT_BLINK_APIS_URL = "https://api.blink.new";
+const DEFAULT_BLINK_APIS_URL = "https://core.blink.new";
 
 const BRAVE_SEARCH_ENDPOINT = "https://api.search.brave.com/res/v1/web/search";
 const BRAVE_LLM_CONTEXT_ENDPOINT = "https://api.search.brave.com/res/v1/llm/context";

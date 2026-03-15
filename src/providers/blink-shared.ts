@@ -13,7 +13,7 @@
  * at 20% markup. OpenClaw must not attempt local cost tracking.
  */
 
-const DEFAULT_BLINK_APIS_URL = "https://api.blink.new";
+const DEFAULT_BLINK_APIS_URL = "https://core.blink.new";
 
 /** Base URL for the Blink AI Gateway chat completions endpoint. */
 export function getBlinkGatewayBaseUrl(): string {

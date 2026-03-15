@@ -70,7 +70,7 @@ Injected per-container at Fly.io machine creation by Blink's Claw Manager:
 | Variable | Value | Purpose |
 |----------|-------|---------|
 | `BLINK_API_KEY` | `blnk_ak_{random48}` | Workspace API key for Blink AI Gateway. Fully opaque — no IDs encoded in the key. Same concept as `OPENAI_API_KEY`. Activates the Blink provider. |
-| `BLINK_APIS_URL` | `https://api.blink.new` | Blink AI Gateway base URL |
+| `BLINK_APIS_URL` | `https://core.blink.new` | Blink AI Gateway base URL |
 | `BLINK_AGENT_ID` | `clw_xxxxxxxx` | For per-agent usage tracking in Tinybird |
 | `OPENCLAW_STATE_DIR` | `/data` | All state goes here (Fly Volume mounted at `/data`) |
 | `OPENCLAW_GATEWAY_TOKEN` | random 32-char hex | Secures the gateway HTTP server |
@@ -87,7 +87,7 @@ Injected per-container at Fly.io machine creation by Blink's Claw Manager:
 ```
 OpenClaw agent receives message (Telegram/Discord/Slack via outbound polling)
   → calls LLM via blink provider
-  → POST https://api.blink.new/api/v1/ai/chat/completions
+  → POST https://core.blink.new/api/v1/ai/chat/completions
      Authorization: Bearer {BLINK_API_KEY}
      Body: { model: "anthropic/claude-sonnet-4.6", messages: [...], stream: true }
   → blink-apis validates token → resolves workspace_id → calls gateway()
