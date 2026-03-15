@@ -223,6 +223,34 @@ describe("pw-session getPageForTargetId", () => {
     }
   });
 
+  it("bounds single-page relay neutralization when the selected page is stuck", async () => {
+    vi.useFakeTimers();
+    extensionRelayMocks.getChromeExtensionRelayAuthHeaders.mockReturnValue({
+      "x-openclaw-relay-token": "test-token",
+    });
+    const { pageEmulateMediaSpies, pages } = createExtensionFallbackBrowserHarness({
+      urls: ["https://alpha.example"],
+      emulateMediaImplementations: [() => new Promise(() => {})],
+    });
+    const [page] = pages;
+
+    try {
+      const pending = getPageForTargetId({
+        cdpUrl: "http://127.0.0.1:19998",
+      });
+      await Promise.resolve();
+      await Promise.resolve();
+      await vi.advanceTimersByTimeAsync(2_001);
+
+      await expect(pending).resolves.toBe(page);
+      expect(pageEmulateMediaSpies[0]).toHaveBeenCalledTimes(2);
+      expect(pageEmulateMediaSpies[0]).toHaveBeenNthCalledWith(1, { colorScheme: null });
+      expect(pageEmulateMediaSpies[0]).toHaveBeenNthCalledWith(2, { colorScheme: null });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("keeps relay appearance neutralization when relay probing transiently fails but auth hint exists", async () => {
     extensionRelayMocks.getChromeExtensionRelayAuthHeaders.mockReturnValue({
       "x-openclaw-relay-token": "test-token",

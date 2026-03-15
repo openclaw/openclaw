@@ -122,6 +122,7 @@ const EXTENSION_RELAY_PAGE_NEUTRALIZE_TIMEOUT_MS = 1_000;
 const cachedByCdpUrl = new Map<string, ConnectedBrowser>();
 const connectingByCdpUrl = new Map<string, Promise<ConnectedBrowser>>();
 const connectGenerationByCdpUrl = new Map<string, number>();
+const activeConnectCountByCdpUrl = new Map<string, number>();
 
 function normalizeCdpUrl(raw: string) {
   return raw.replace(/\/$/, "");
@@ -139,6 +140,34 @@ function bumpConnectGeneration(normalized: string): number {
 
 function hasConnectGenerationChanged(normalized: string, generation: number): boolean {
   return getConnectGeneration(normalized) !== generation;
+}
+
+function getActiveConnectCount(normalized: string): number {
+  return activeConnectCountByCdpUrl.get(normalized) ?? 0;
+}
+
+function beginActiveConnect(normalized: string): void {
+  activeConnectCountByCdpUrl.set(normalized, getActiveConnectCount(normalized) + 1);
+}
+
+function endActiveConnect(normalized: string): void {
+  const next = getActiveConnectCount(normalized) - 1;
+  if (next > 0) {
+    activeConnectCountByCdpUrl.set(normalized, next);
+    return;
+  }
+  activeConnectCountByCdpUrl.delete(normalized);
+}
+
+function pruneConnectGenerationIfIdle(normalized: string): void {
+  if (
+    cachedByCdpUrl.has(normalized) ||
+    connectingByCdpUrl.has(normalized) ||
+    getActiveConnectCount(normalized) > 0
+  ) {
+    return;
+  }
+  connectGenerationByCdpUrl.delete(normalized);
 }
 
 async function withTimeout<T>(work: Promise<T>, ms: number, timeoutMessage: string): Promise<T> {
@@ -437,6 +466,7 @@ async function connectBrowser(cdpUrl: string): Promise<ConnectedBrowser> {
           if (current?.browser === browser) {
             cachedByCdpUrl.delete(normalized);
           }
+          pruneConnectGenerationIfIdle(normalized);
         };
         const connected: ConnectedBrowser = { browser, cdpUrl: normalized, onDisconnected };
         browser.on("disconnected", onDisconnected);
@@ -484,8 +514,11 @@ async function connectBrowser(cdpUrl: string): Promise<ConnectedBrowser> {
     throw new Error(message);
   };
 
+  beginActiveConnect(normalized);
   const pending = connectWithRetry().finally(() => {
     connectingByCdpUrl.delete(normalized);
+    endActiveConnect(normalized);
+    pruneConnectGenerationIfIdle(normalized);
   });
   connectingByCdpUrl.set(normalized, pending);
 
@@ -621,7 +654,11 @@ export async function getPageForTargetId(opts: {
   }
   const first = pages[0];
   if (!opts.targetId) {
-    await maybeNeutralizeExtensionRelayPages({ cdpUrl: opts.cdpUrl, pages: [first] });
+    await maybeNeutralizeExtensionRelayPages({
+      cdpUrl: opts.cdpUrl,
+      pages: [first],
+      timeoutMs: EXTENSION_RELAY_PAGE_NEUTRALIZE_TIMEOUT_MS,
+    });
     return first;
   }
   const found = await findPageByTargetId(browser, opts.targetId, opts.cdpUrl);
@@ -630,12 +667,20 @@ export async function getPageForTargetId(opts: {
     // which prevents us from resolving a page's targetId via newCDPSession(). If Playwright
     // only exposes a single Page, use it as a best-effort fallback.
     if (pages.length === 1) {
-      await maybeNeutralizeExtensionRelayPages({ cdpUrl: opts.cdpUrl, pages: [first] });
+      await maybeNeutralizeExtensionRelayPages({
+        cdpUrl: opts.cdpUrl,
+        pages: [first],
+        timeoutMs: EXTENSION_RELAY_PAGE_NEUTRALIZE_TIMEOUT_MS,
+      });
       return first;
     }
     throw new BrowserTabNotFoundError();
   }
-  await maybeNeutralizeExtensionRelayPages({ cdpUrl: opts.cdpUrl, pages: [found] });
+  await maybeNeutralizeExtensionRelayPages({
+    cdpUrl: opts.cdpUrl,
+    pages: [found],
+    timeoutMs: EXTENSION_RELAY_PAGE_NEUTRALIZE_TIMEOUT_MS,
+  });
   return found;
 }
 
@@ -682,24 +727,33 @@ export async function closePlaywrightBrowserConnection(opts?: { cdpUrl?: string 
   const normalized = opts?.cdpUrl ? normalizeCdpUrl(opts.cdpUrl) : null;
 
   if (normalized) {
-    bumpConnectGeneration(normalized);
+    const hasCached = cachedByCdpUrl.has(normalized);
+    const hasConnecting = connectingByCdpUrl.has(normalized);
+    const hasActiveSetup = getActiveConnectCount(normalized) > 0;
+    if (hasCached || hasConnecting || hasActiveSetup) {
+      bumpConnectGeneration(normalized);
+    }
     const cur = cachedByCdpUrl.get(normalized);
     cachedByCdpUrl.delete(normalized);
     connectingByCdpUrl.delete(normalized);
     if (!cur) {
+      if (!hasActiveSetup) {
+        pruneConnectGenerationIfIdle(normalized);
+      }
       return;
     }
     if (cur.onDisconnected && typeof cur.browser.off === "function") {
       cur.browser.off("disconnected", cur.onDisconnected);
     }
     await cur.browser.close().catch(() => {});
+    pruneConnectGenerationIfIdle(normalized);
     return;
   }
 
   const generationsToBump = new Set([
     ...cachedByCdpUrl.keys(),
     ...connectingByCdpUrl.keys(),
-    ...connectGenerationByCdpUrl.keys(),
+    ...activeConnectCountByCdpUrl.keys(),
   ]);
   for (const key of generationsToBump) {
     bumpConnectGeneration(key);
@@ -712,6 +766,9 @@ export async function closePlaywrightBrowserConnection(opts?: { cdpUrl?: string 
       cur.browser.off("disconnected", cur.onDisconnected);
     }
     await cur.browser.close().catch(() => {});
+  }
+  for (const key of Array.from(connectGenerationByCdpUrl.keys())) {
+    pruneConnectGenerationIfIdle(key);
   }
 }
 
