@@ -34,6 +34,11 @@ export type BrowserConfig = {
   enabled?: boolean;
   /** If false, disable browser act:evaluate (arbitrary JS). Default: true */
   evaluateEnabled?: boolean;
+  /** If true, reject browser actions that target a specific tab when targetId is not provided.
+   *  Prevents multi-agent race conditions where agents accidentally interact with each other's tabs.
+   *  Does not apply to: status, start, stop, profiles, tabs, open (which creates a new tab).
+   *  Default: false */
+  requireTargetId?: boolean;
   /** Base URL of the CDP endpoint (for remote browsers). Default: loopback CDP on the derived port. */
   cdpUrl?: string;
   /** Remote CDP HTTP timeout (ms). Default: 1500. */

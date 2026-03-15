@@ -381,6 +381,39 @@ export function createBrowserTool(opts?: {
           }
         : null;
 
+      // Enforce requireTargetId: reject tab-targeting actions that omit targetId.
+      // Does not apply to: status, start, stop, profiles, tabs, open (which creates a new tab).
+      const ACTIONS_EXEMPT_FROM_TARGET_ID = new Set([
+        "status",
+        "start",
+        "stop",
+        "profiles",
+        "tabs",
+        "open",
+      ]);
+      {
+        const cfg = loadConfig();
+        if (
+          cfg.browser?.requireTargetId &&
+          !ACTIONS_EXEMPT_FROM_TARGET_ID.has(action) &&
+          !params.targetId
+        ) {
+          const actTargetId =
+            action === "act" &&
+            typeof params.request === "object" &&
+            params.request !== null &&
+            "targetId" in params.request
+              ? (params.request as Record<string, unknown>).targetId
+              : undefined;
+          if (!actTargetId) {
+            throw new Error(
+              `browser.requireTargetId is enabled: action "${action}" requires a targetId. ` +
+                `Use action="tabs" to list open tabs and their targetIds, or action="open" to create a new tab.`,
+            );
+          }
+        }
+      }
+
       switch (action) {
         case "status":
           if (proxyRequest) {

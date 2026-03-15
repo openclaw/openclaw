@@ -513,6 +513,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "ui.assistant.name": "Assistant Name",
   "ui.assistant.avatar": "Assistant Avatar",
   "browser.evaluateEnabled": "Browser Evaluate Enabled",
+  "browser.requireTargetId": "Browser Require Target ID",
   "browser.snapshotDefaults": "Browser Snapshot Defaults",
   "browser.snapshotDefaults.mode": "Browser Snapshot Mode",
   "browser.ssrfPolicy": "Browser SSRF Policy",
