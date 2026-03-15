@@ -190,7 +190,9 @@ function warnEscapedSkillPath(params: {
   candidatePath: string;
   candidateRealPath: string;
 }) {
-  skillsLogger.warn("Skipping skill path that resolves outside its configured root.", {
+  // Use debug level to avoid polluting stderr/err.log with false-positive warnings
+  // for symlinks that resolve outside the root but still load correctly from another source.
+  skillsLogger.debug("Skipping skill path that resolves outside its configured root.", {
     source: params.source,
     rootDir: params.rootDir,
     path: params.candidatePath,
