@@ -310,10 +310,35 @@ async function persistAcpSpawnSessionFileBestEffort(params: {
   }
 }
 
-function resolveConversationIdForThreadBinding(params: {
+function resolveTelegramConversationIdForThreadBinding(params: {
   to?: string;
   threadId?: string | number;
 }): string | undefined {
+  const rawTarget = typeof params.to === "string" ? params.to.trim() : "";
+  const target = rawTarget.startsWith("channel:") ? rawTarget.slice("channel:".length) : rawTarget;
+  const telegramMatch = target.match(/^telegram:(-?\d+)$/);
+  const chatId = telegramMatch?.[1]?.trim();
+  if (!chatId) {
+    return undefined;
+  }
+  if (params.threadId == null) {
+    return chatId;
+  }
+  const threadId = String(params.threadId).trim();
+  return threadId ? `${chatId}:topic:${threadId}` : chatId;
+}
+
+function resolveConversationIdForThreadBinding(params: {
+  channel?: string;
+  to?: string;
+  threadId?: string | number;
+}): string | undefined {
+  if (params.channel?.trim().toLowerCase() === "telegram") {
+    return resolveTelegramConversationIdForThreadBinding({
+      to: params.to,
+      threadId: params.threadId,
+    });
+  }
   return resolveConversationIdFromTargets({
     threadId: params.threadId,
     targets: [params.to],
@@ -380,6 +405,7 @@ function prepareAcpThreadBinding(params: {
     };
   }
   const conversationId = resolveConversationIdForThreadBinding({
+    channel: policy.channel,
     to: params.to,
     threadId: params.threadId,
   });
