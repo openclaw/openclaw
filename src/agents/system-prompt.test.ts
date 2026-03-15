@@ -226,6 +226,9 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).toContain(
       "When a first-class tool exists for an action, use the tool directly instead of asking the user to run equivalent CLI or slash commands.",
     );
+    expect(prompt).toContain(
+      "For file or directory discovery, prefer scoped searches under the workspace; avoid broad shell `find` scans over $HOME or / without an explicit timeout.",
+    );
   });
 
   it("lists available tools when provided", () => {
