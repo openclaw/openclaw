@@ -17,7 +17,9 @@ interface Session {
   questions: Question[];
   answers: Record<string, string>;
   spec: string | null;
-  status: 'clarifying' | 'drafting' | 'approved' | 'executing' | 'done';
+  design: string | null;
+  tasks: string | null;
+  status: 'clarifying' | 'drafting' | 'approved' | 'designing' | 'tasking' | 'executing' | 'done';
 }
 
 interface Question {
@@ -44,6 +46,8 @@ function createSession(request: string): Session {
     questions: [],
     answers: {},
     spec: null,
+    design: null,
+    tasks: null,
     status: 'clarifying'
   };
   sessions.set(id, session);
@@ -152,6 +156,124 @@ Generate a simple spec in this format:
 - [ ] Criterion 2
 
 Keep it simple and actionable.`,
+    mode: 'run'
+  });
+
+  return result.output;
+}
+
+// ============================================
+// Design Generation
+// ============================================
+
+async function generateDesign(session: Session): Promise<string> {
+  const result = await sessions_spawn({
+    runtime: 'subagent',
+    label: 'generate-design',
+    task: `Generate a detailed design document from the approved spec.
+
+Spec:
+${session.spec}
+
+Generate a design document in this format:
+
+# Design: <title>
+
+## Overview
+<Brief overview of the solution>
+
+## Architecture
+<High-level architecture description>
+<Components and their responsibilities>
+<Data flow diagrams if applicable>
+
+## Technical Approach
+<Technical decisions and rationale>
+<Patterns and practices to follow>
+
+## Implementation Plan
+<Phase-by-phase implementation approach>
+<Dependencies between components>
+
+## Data Models
+<Database schema or data structures>
+
+## API Design
+<Endpoints, request/response formats>
+
+## Security Considerations
+<Authentication, authorization, data protection>
+
+## Testing Strategy
+<Unit tests, integration tests, E2E tests>
+
+## Risks and Mitigations
+<Potential risks and how to address them>
+
+## References
+<Links to documentation, examples, etc.>
+
+Be detailed and actionable. This is the blueprint for implementation.`,
+    mode: 'run'
+  });
+
+  return result.output;
+}
+
+// ============================================
+// Tasks Generation
+// ============================================
+
+async function generateTasks(session: Session): Promise<string> {
+  const result = await sessions_spawn({
+    runtime: 'subagent',
+    label: 'generate-tasks',
+    task: `Generate a task checklist from the approved spec and design.
+
+Spec:
+${session.spec}
+
+Design:
+${session.design}
+
+Generate a task checklist in this format:
+
+# Tasks: <title>
+
+## Phase 1: <Phase Name>
+- [ ] Task 1.1 - <description>
+- [ ] Task 1.2 - <description>
+- [ ] Task 1.3 - <description>
+
+## Phase 2: <Phase Name>
+- [ ] Task 2.1 - <description>
+- [ ] Task 2.2 - <description>
+
+## Phase 3: <Phase Name>
+- [ ] Task 3.1 - <description>
+- [ ] Task 3.2 - <description>
+
+## Testing
+- [ ] Write unit tests
+- [ ] Write integration tests
+- [ ] Manual testing
+
+## Documentation
+- [ ] Update README
+- [ ] Add API documentation
+- [ ] Add code comments
+
+## Deployment
+- [ ] Configure environment
+- [ ] Deploy to staging
+- [ ] Deploy to production
+
+Each task should be:
+- Specific and actionable
+- Small enough to complete in one session
+- Testable (clear acceptance criteria)
+
+Organize tasks in logical phases with dependencies.`,
     mode: 'run'
   });
 
@@ -310,7 +432,67 @@ export async function spec_approve(): Promise<string> {
   
   session.status = 'approved';
   
-  return `✅ **Spec Approved!**\n\n**Next**: \`/spec execute\` - Start execution\n`;
+  let output = `✅ **Spec Approved!**\n\n`;
+  output += `**Next Steps**:\n`;
+  output += `1. \`/spec design\` - Generate design document\n`;
+  output += `2. \`/spec tasks\` - Generate task checklist\n`;
+  output += `3. \`/spec execute\` - Start execution\n`;
+  
+  return output;
+}
+
+/**
+ * Generate design document
+ */
+export async function spec_design(): Promise<string> {
+  const session = getSession();
+  if (!session || !session.spec) {
+    return '❌ No approved spec. Run `/spec approve` first';
+  }
+  
+  if (session.status !== 'approved' && session.status !== 'designing' && session.status !== 'tasking') {
+    return '❌ Spec must be approved first. Run `/spec approve`';
+  }
+  
+  session.status = 'designing';
+  const design = await generateDesign(session);
+  session.design = design;
+  session.status = 'tasking';
+  
+  let output = `📐 **Design Document Generated**\n\n`;
+  output += '─'.repeat(60) + '\n';
+  output += design + '\n';
+  output += '─'.repeat(60) + '\n\n';
+  output += `**Next**: \`/spec tasks\` - Generate task checklist\n`;
+  
+  return output;
+}
+
+/**
+ * Generate task checklist
+ */
+export async function spec_tasks(): Promise<string> {
+  const session = getSession();
+  if (!session || !session.spec) {
+    return '❌ No approved spec. Run `/spec approve` first';
+  }
+  
+  if (!session.design) {
+    return '❌ No design document. Run `/spec design` first';
+  }
+  
+  session.status = 'tasking';
+  const tasks = await generateTasks(session);
+  session.tasks = tasks;
+  
+  let output = `📋 **Task Checklist Generated**\n\n`;
+  output += '─'.repeat(60) + '\n';
+  output += tasks + '\n';
+  output += '─'.repeat(60) + '\n\n';
+  output += `**Next**: \`/spec execute\` - Start execution\n\n`;
+  output += `💡 **Tip**: Copy tasks to a file and check off as you complete them!\n`;
+  
+  return output;
 }
 
 /**
@@ -349,6 +531,8 @@ export async function spec_status(): Promise<string> {
   output += `- **Intent**: ${session.intent}\n`;
   output += `- **Questions**: ${Object.keys(session.answers).length}/${session.questions.length} answered\n`;
   output += `- **Spec**: ${session.spec ? '✅ Generated' : '❌ Not yet'}\n`;
+  output += `- **Design**: ${session.design ? '✅ Generated' : '❌ Not yet'}\n`;
+  output += `- **Tasks**: ${session.tasks ? '✅ Generated' : '❌ Not yet'}\n`;
   
   return output;
 }
@@ -419,8 +603,15 @@ export async function handleMessage(message: {
 /spec defaults
 /spec draft
 /spec approve
+/spec design      # Creates design.md
+/spec tasks       # Creates tasks.md with checkboxes
 /spec execute
 \`\`\`
+
+**Output Files**:
+- \`spec.md\` - Requirements and acceptance criteria
+- \`design.md\` - Architecture and implementation plan
+- \`tasks.md\` - Task checklist with progress tracking
 `;
 }
 
@@ -467,6 +658,12 @@ async function handleSpecCommand(args: string[]): Promise<string> {
     
     case 'approve':
       return await spec_approve();
+    
+    case 'design':
+      return await spec_design();
+    
+    case 'tasks':
+      return await spec_tasks();
     
     case 'execute':
       return await spec_execute();

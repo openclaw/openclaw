@@ -1222,7 +1222,7 @@ export default function ChatPage() {
   }, []);
 
   const confirmClearChat = useCallback(async () => {
-    if (!selectedSessionKey) return;
+    if (!selectedSessionKey) {return;}
 
     try {
       // Clear local messages
