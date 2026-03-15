@@ -43,6 +43,11 @@ extension OnboardingView {
         self.updatePermissionMonitoring(for: pageIndex)
         self.updateDiscoveryMonitoring(for: pageIndex)
         self.maybeKickoffOnboardingChat(for: pageIndex)
+        if pageIndex == self.cliPageIndex {
+            Task { @MainActor in
+                await self.refreshCLIInstallerReadiness()
+            }
+        }
     }
 
     func stopPermissionMonitoring() {
@@ -57,18 +62,49 @@ extension OnboardingView {
 
     func installCLI() async {
         guard !self.installingCLI else { return }
+        await self.refreshCLIInstallerReadiness()
+
+        if self.cliNeedsCommandLineTools {
+            await self.requestCommandLineToolsInstall()
+            return
+        }
+
         self.installingCLI = true
         defer { installingCLI = false }
         await CLIInstaller.install { message in
             self.cliStatus = message
         }
         self.refreshCLIStatus()
+        await self.refreshCLIInstallerReadiness()
     }
 
     func refreshCLIStatus() {
         let installLocation = CLIInstaller.installedLocation()
         self.cliInstallLocation = installLocation
         self.cliInstalled = installLocation != nil
+    }
+
+    @MainActor
+    func refreshCLIInstallerReadiness() async {
+        self.refreshCLIStatus()
+
+        if self.cliInstalled {
+            self.cliNeedsCommandLineTools = false
+            self.cliPreflightStatus = nil
+            return
+        }
+
+        let preflight = await CLIInstaller.preflight()
+        self.cliNeedsCommandLineTools = preflight.needsCommandLineTools
+        self.cliPreflightStatus = preflight.message
+    }
+
+    @MainActor
+    func requestCommandLineToolsInstall() async {
+        await CLIInstaller.requestCommandLineToolsInstall { message in
+            self.cliPreflightStatus = message
+        }
+        await self.refreshCLIInstallerReadiness()
     }
 
     func refreshLocalGatewayProbe() async {

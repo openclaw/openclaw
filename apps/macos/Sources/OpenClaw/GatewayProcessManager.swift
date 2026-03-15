@@ -1,5 +1,6 @@
 import Foundation
 import Observation
+import OpenClawKit
 
 @MainActor
 @Observable
@@ -196,13 +197,9 @@ final class GatewayProcessManager {
         let instanceText = instance.map { self.describe(instance: $0) }
         let hasListener = instance != nil
 
-        let attemptAttach = {
-            try await self.connection.requestRaw(method: .health, timeoutMs: 2000)
-        }
-
         for attempt in 0..<(hasListener ? 3 : 1) {
             do {
-                let data = try await attemptAttach()
+                let data = try await self.probeLocalGatewayHealth(timeoutMs: 2000)
                 let snap = decodeHealthSnapshot(from: data)
                 let details = self.describe(details: instanceText, port: port, snap: snap)
                 self.existingGatewayDetails = details
@@ -337,7 +334,7 @@ final class GatewayProcessManager {
         while Date() < deadline {
             if !self.desiredActive { return }
             do {
-                _ = try await self.connection.requestRaw(method: .health, timeoutMs: 1500)
+                _ = try await self.probeLocalGatewayHealth(timeoutMs: 1500)
                 let instance = await PortGuardian.shared.describe(port: port)
                 let details = instance.map { "pid \($0.pid)" }
                 self.clearLastFailure()
@@ -380,7 +377,7 @@ final class GatewayProcessManager {
         while Date() < deadline {
             if !self.desiredActive { return false }
             do {
-                _ = try await self.connection.requestRaw(method: .health, timeoutMs: 1500)
+                _ = try await self.probeLocalGatewayHealth(timeoutMs: 1500)
                 self.clearLastFailure()
                 return true
             } catch {
@@ -412,6 +409,20 @@ final class GatewayProcessManager {
         let text = String(data: data, encoding: .utf8) ?? ""
         if text.count <= limit { return text }
         return String(text.suffix(limit))
+    }
+
+    private func probeLocalGatewayHealth(timeoutMs: Double) async throws -> Data {
+        let config = GatewayEndpointStore.localConfig()
+        let channel = GatewayChannelActor(
+            url: config.url,
+            token: config.token,
+            password: config.password)
+        defer {
+            Task {
+                await channel.shutdown()
+            }
+        }
+        return try await channel.request(method: GatewayConnection.Method.health.rawValue, params: nil, timeoutMs: timeoutMs)
     }
 }
 

@@ -38,21 +38,15 @@ const AUTH_CHOICE_GROUP_DEFS: {
     choices: ["token", "apiKey"],
   },
   {
-    value: "chutes",
-    label: "Chutes",
-    hint: "OAuth",
-    choices: ["chutes"],
-  },
-  {
     value: "minimax",
     label: "MiniMax",
-    hint: "M2.5 (recommended)",
+    hint: "OAuth or API key · M2.5",
     choices: ["minimax-global-oauth", "minimax-global-api", "minimax-cn-oauth", "minimax-cn-api"],
   },
   {
     value: "moonshot",
     label: "Moonshot AI (Kimi K2.5)",
-    hint: "Kimi K2.5 + Kimi Coding",
+    hint: "API key · Kimi K2.5 + Kimi Coding",
     choices: ["moonshot-api-key", "moonshot-api-key-cn", "kimi-code-api-key"],
   },
   {
@@ -66,6 +60,12 @@ const AUTH_CHOICE_GROUP_DEFS: {
     label: "xAI (Grok)",
     hint: "API key",
     choices: ["xai-api-key"],
+  },
+  {
+    value: "chutes",
+    label: "Chutes",
+    hint: "OAuth",
+    choices: ["chutes"],
   },
   {
     value: "mistral",
@@ -106,7 +106,7 @@ const AUTH_CHOICE_GROUP_DEFS: {
   {
     value: "zai",
     label: "Z.AI",
-    hint: "GLM Coding Plan / Global / CN",
+    hint: "API key · GLM Coding Plan / Global / CN",
     choices: ["zai-coding-global", "zai-coding-cn", "zai-global", "zai-cn"],
   },
   {
@@ -124,7 +124,7 @@ const AUTH_CHOICE_GROUP_DEFS: {
   {
     value: "copilot",
     label: "Copilot",
-    hint: "GitHub + local proxy",
+    hint: "OAuth (GitHub device flow) or local proxy",
     choices: ["github-copilot", "copilot-proxy"],
   },
   {
@@ -148,7 +148,7 @@ const AUTH_CHOICE_GROUP_DEFS: {
   {
     value: "synthetic",
     label: "Synthetic",
-    hint: "Anthropic-compatible (multi-model)",
+    hint: "API key · Anthropic-compatible (multi-model)",
     choices: ["synthetic-api-key"],
   },
   {
@@ -166,13 +166,13 @@ const AUTH_CHOICE_GROUP_DEFS: {
   {
     value: "venice",
     label: "Venice AI",
-    hint: "Privacy-focused (uncensored models)",
+    hint: "API key · privacy-focused",
     choices: ["venice-api-key"],
   },
   {
     value: "litellm",
     label: "LiteLLM",
-    hint: "Unified LLM gateway (100+ providers)",
+    hint: "API key · 100+ providers",
     choices: ["litellm-api-key"],
   },
   {

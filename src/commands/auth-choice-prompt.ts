@@ -28,7 +28,7 @@ export async function promptAuthChoiceGrouped(params: {
     ];
 
     const providerSelection = (await params.prompter.select({
-      message: "Model/auth provider",
+      message: "Choose how you want to connect.",
       options: providerOptions,
     })) as string;
 

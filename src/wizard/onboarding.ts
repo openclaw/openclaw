@@ -122,7 +122,7 @@ export async function runOnboardingWizard(
   let flow: WizardFlow =
     explicitFlow ??
     (await prompter.select({
-      message: "Onboarding mode",
+      message: "Setup mode",
       options: [
         { value: "quickstart", label: "QuickStart", hint: quickstartHint },
         { value: "advanced", label: "Manual", hint: manualHint },

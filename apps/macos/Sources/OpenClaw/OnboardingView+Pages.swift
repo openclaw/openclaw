@@ -33,7 +33,7 @@ extension OnboardingView {
             VStack(spacing: 22) {
                 Text("Welcome to OpenClaw")
                     .font(.largeTitle.weight(.semibold))
-                Text("OpenClaw is a powerful personal AI assistant that can connect to WhatsApp or Telegram.")
+                Text("OpenClaw is a powerful personal AI assistant that connects to the apps you already use — WhatsApp, Telegram, Slack, and more.")
                     .font(.body)
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
@@ -64,6 +64,13 @@ extension OnboardingView {
                         }
                     }
                 }
+                .background(
+                    RoundedRectangle(cornerRadius: 16, style: .continuous)
+                        .fill(Color(NSColor.controlBackgroundColor))
+                        .shadow(color: .black.opacity(0.06), radius: 8, y: 3))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 16, style: .continuous)
+                        .fill(Color.orange.opacity(0.06)))
                 .frame(maxWidth: 520)
             }
             .padding(.top, 16)
@@ -633,57 +640,92 @@ extension OnboardingView {
         self.onboardingPage {
             Text("Install the CLI")
                 .font(.largeTitle.weight(.semibold))
-            Text("Required for local mode: installs `openclaw` so launchd can run the gateway.")
+            Text(
+                self.cliNeedsCommandLineTools
+                    ? "OpenClaw needs Apple Developer Tools first. Install those, then come back to install the CLI."
+                    : "Installs the OpenClaw command-line tool so the gateway can run in the background.")
                 .font(.body)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
                 .frame(maxWidth: 520)
                 .fixedSize(horizontal: false, vertical: true)
 
-            self.onboardingCard(spacing: 10) {
-                HStack(spacing: 12) {
-                    Button {
-                        Task { await self.installCLI() }
-                    } label: {
-                        let title = self.cliInstalled ? "Reinstall CLI" : "Install CLI"
-                        ZStack {
-                            Text(title)
-                                .opacity(self.installingCLI ? 0 : 1)
-                            if self.installingCLI {
-                                ProgressView()
-                                    .controlSize(.mini)
+            self.onboardingCard(spacing: 12) {
+                Button {
+                    Task {
+                        if self.cliNeedsCommandLineTools {
+                            await self.requestCommandLineToolsInstall()
+                        } else {
+                            await self.installCLI()
+                        }
+                    }
+                } label: {
+                    let title: String = if self.cliNeedsCommandLineTools {
+                        "Install Apple Developer Tools"
+                    } else if self.cliInstalled {
+                        "Reinstall CLI"
+                    } else {
+                        "Install CLI"
+                    }
+                    ZStack {
+                        Text(title)
+                            .opacity(self.installingCLI ? 0 : 1)
+                        if self.installingCLI {
+                            ProgressView()
+                                .controlSize(.mini)
+                        }
+                    }
+                    .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(self.installingCLI)
+
+                if self.cliNeedsCommandLineTools {
+                    HStack(spacing: 10) {
+                        Button("I've Installed It, Recheck") {
+                            Task { await self.refreshCLIInstallerReadiness() }
+                        }
+                        .buttonStyle(.bordered)
+
+                        Button("Open Software Update") {
+                            if let url = URL(string: "x-apple.systempreferences:com.apple.preferences.softwareupdate") {
+                                NSWorkspace.shared.open(url)
                             }
                         }
-                        .frame(minWidth: 120)
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .disabled(self.installingCLI)
-
-                    Button(self.copied ? "Copied" : "Copy install command") {
-                        self.copyToPasteboard(self.devLinkCommand)
-                    }
-                    .disabled(self.installingCLI)
-
-                    if self.cliInstalled, let loc = self.cliInstallLocation {
-                        Label("Installed at \(loc)", systemImage: "checkmark.circle.fill")
-                            .font(.footnote)
-                            .foregroundStyle(.green)
+                        .buttonStyle(.bordered)
                     }
                 }
 
-                if let cliStatus {
+                if self.cliInstalled, let loc = self.cliInstallLocation {
+                    Label("Installed at \(loc)", systemImage: "checkmark.circle.fill")
+                        .font(.footnote)
+                        .foregroundStyle(.green)
+                }
+
+                if let cliPreflightStatus, self.cliNeedsCommandLineTools {
+                    Text(cliPreflightStatus)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                } else if let cliStatus {
                     Text(cliStatus)
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 } else if !self.cliInstalled, self.cliInstallLocation == nil {
-                    Text(
-                        """
-                        Installs a user-space Node 22+ runtime and the CLI (no Homebrew).
-                        Rerun anytime to reinstall or update.
-                        """)
+                    Text("Installs a user-space Node 22+ runtime (no Homebrew required).")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                 }
+
+                Divider()
+
+                Text("Prefer to install manually?")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                Button(self.copied ? "Copied" : "Copy install command") {
+                    self.copyToPasteboard(self.devLinkCommand)
+                }
+                .buttonStyle(.bordered)
+                .disabled(self.installingCLI)
             }
         }
     }

@@ -193,27 +193,12 @@ final class OnboardingWizardModel {
 
     private func shouldSkipWizard() -> Bool {
         let root = OpenClawConfigFile.loadDict()
+        return Self.shouldSkipWizard(root: root)
+    }
+
+    static func shouldSkipWizard(root: [String: Any]) -> Bool {
         if let wizard = root["wizard"] as? [String: Any], !wizard.isEmpty {
             return true
-        }
-        if let gateway = root["gateway"] as? [String: Any],
-           let auth = gateway["auth"] as? [String: Any]
-        {
-            if let mode = auth["mode"] as? String,
-               !mode.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            {
-                return true
-            }
-            if let token = auth["token"] as? String,
-               !token.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            {
-                return true
-            }
-            if let password = auth["password"] as? String,
-               !password.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            {
-                return true
-            }
         }
         return false
     }
@@ -254,17 +239,19 @@ struct OnboardingWizardStepView: View {
     }
 
     var body: some View {
+        Group {
+            if wizardStepType(self.step) == "select" {
+                self.selectStepLayout
+            } else {
+                self.standardStepLayout
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private var standardStepLayout: some View {
         VStack(alignment: .leading, spacing: 12) {
-            if let title = step.title, !title.isEmpty {
-                Text(title)
-                    .font(.title2.weight(.semibold))
-            }
-            if let message = step.message, !message.isEmpty {
-                Text(message)
-                    .font(.body)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
+            self.stepHeader
 
             switch wizardStepType(self.step) {
             case "note":
@@ -274,8 +261,6 @@ struct OnboardingWizardStepView: View {
             case "confirm":
                 Toggle("", isOn: self.$confirmValue)
                     .toggleStyle(.switch)
-            case "select":
-                self.selectOptions
             case "multiselect":
                 self.multiselectOptions
             case "progress":
@@ -288,14 +273,63 @@ struct OnboardingWizardStepView: View {
                     .foregroundStyle(.secondary)
             }
 
-            Button(action: self.submit) {
-                Text(wizardStepType(self.step) == "action" ? "Run" : "Continue")
-                    .frame(minWidth: 120)
-            }
-            .buttonStyle(.borderedProminent)
-            .disabled(self.isSubmitting || self.isBlocked)
+            self.primaryActionButton
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private var selectStepLayout: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            self.stepHeader
+
+            ScrollView {
+                self.selectOptions
+                    .padding(.vertical, 2)
+            }
+            .frame(minHeight: 220, maxHeight: 320)
+
+            Divider()
+
+            HStack(alignment: .center, spacing: 12) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Selected: \(self.selectedOptionLabel)")
+                        .font(.subheadline.weight(.medium))
+                    if let hint = self.selectedOptionHint {
+                        Text(hint)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                            .truncationMode(.tail)
+                    }
+                }
+
+                Spacer(minLength: 12)
+
+                self.primaryActionButton
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var stepHeader: some View {
+        if let title = step.title, !title.isEmpty {
+            Text(title)
+                .font(.title2.weight(.semibold))
+        }
+        if let message = step.message, !message.isEmpty {
+            Text(message)
+                .font(.body)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    private var primaryActionButton: some View {
+        Button(action: self.submit) {
+            Text(wizardStepType(self.step) == "action" ? "Run" : "Continue")
+                .frame(minWidth: 120)
+        }
+        .buttonStyle(.borderedProminent)
+        .disabled(self.isSubmitting || self.isBlocked)
     }
 
     @ViewBuilder
@@ -332,11 +366,12 @@ struct OnboardingWizardStepView: View {
         Button {
             self.selectedIndex = item.index
         } label: {
-            HStack(alignment: .top, spacing: 8) {
+            HStack(alignment: .top, spacing: 10) {
                 Image(systemName: self.selectedIndex == item.index ? "largecircle.fill.circle" : "circle")
                     .foregroundStyle(Color.accentColor)
                 VStack(alignment: .leading, spacing: 2) {
                     Text(item.option.label)
+                        .font(.body.weight(self.selectedIndex == item.index ? .semibold : .regular))
                         .foregroundStyle(.primary)
                     if let hint = item.option.hint, !hint.isEmpty {
                         Text(hint)
@@ -344,7 +379,10 @@ struct OnboardingWizardStepView: View {
                             .foregroundStyle(.secondary)
                     }
                 }
+                Spacer(minLength: 0)
             }
+            .padding(.vertical, 6)
+            .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
     }
@@ -379,6 +417,22 @@ struct OnboardingWizardStepView: View {
         if type == "select" { return self.optionItems.isEmpty }
         if type == "multiselect" { return self.optionItems.isEmpty }
         return false
+    }
+
+    private var selectedOptionLabel: String {
+        guard self.optionItems.indices.contains(self.selectedIndex) else {
+            return "None"
+        }
+        return self.optionItems[self.selectedIndex].option.label
+    }
+
+    private var selectedOptionHint: String? {
+        guard self.optionItems.indices.contains(self.selectedIndex) else {
+            return nil
+        }
+        let hint = self.optionItems[self.selectedIndex].option.hint?.trimmingCharacters(
+            in: .whitespacesAndNewlines)
+        return hint?.isEmpty == false ? hint : nil
     }
 
     private func submit() {

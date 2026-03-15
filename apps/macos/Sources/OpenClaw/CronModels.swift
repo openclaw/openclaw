@@ -14,6 +14,10 @@ enum CronCustomSessionTarget: Codable, Equatable {
     case predefined(CronSessionTarget)
     case session(id: String)
 
+    static let main: CronCustomSessionTarget = .predefined(.main)
+    static let isolated: CronCustomSessionTarget = .predefined(.isolated)
+    static let current: CronCustomSessionTarget = .predefined(.current)
+
     var rawValue: String {
         switch self {
         case .predefined(let target):
@@ -252,6 +256,38 @@ struct CronJob: Identifiable, Codable, Equatable {
         case payload
         case delivery
         case state
+    }
+
+    init(
+        id: String,
+        agentId: String?,
+        name: String,
+        description: String?,
+        enabled: Bool,
+        deleteAfterRun: Bool?,
+        createdAtMs: Int,
+        updatedAtMs: Int,
+        schedule: CronSchedule,
+        sessionTarget: CronCustomSessionTarget,
+        wakeMode: CronWakeMode,
+        payload: CronPayload,
+        delivery: CronDelivery?,
+        state: CronJobState
+    ) {
+        self.id = id
+        self.agentId = agentId
+        self.name = name
+        self.description = description
+        self.enabled = enabled
+        self.deleteAfterRun = deleteAfterRun
+        self.createdAtMs = createdAtMs
+        self.updatedAtMs = updatedAtMs
+        self.schedule = schedule
+        self.sessionTargetRaw = sessionTarget.rawValue
+        self.wakeMode = wakeMode
+        self.payload = payload
+        self.delivery = delivery
+        self.state = state
     }
 
     /// Parsed session target (predefined or custom session ID)

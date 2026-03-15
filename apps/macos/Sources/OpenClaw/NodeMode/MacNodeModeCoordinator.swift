@@ -33,6 +33,7 @@ final class MacNodeModeCoordinator {
         var retryDelay: UInt64 = 1_000_000_000
         var lastCameraEnabled: Bool?
         var lastBrowserControlEnabled: Bool?
+        var lastBlockedOnOnboarding = false
         let defaults = UserDefaults.standard
 
         while !Task.isCancelled {
@@ -40,6 +41,20 @@ final class MacNodeModeCoordinator {
                 try? await Task.sleep(nanoseconds: 1_000_000_000)
                 continue
             }
+
+            let onboardingComplete = Self.shouldConnectNodeMode(
+                onboardingSeen: defaults.bool(forKey: onboardingSeenKey),
+                onboardingVersion: defaults.integer(forKey: onboardingVersionKey))
+            if !onboardingComplete {
+                if !lastBlockedOnOnboarding {
+                    self.logger.info("mac node waiting for onboarding completion")
+                    lastBlockedOnOnboarding = true
+                }
+                await self.session.disconnect()
+                try? await Task.sleep(nanoseconds: 1_000_000_000)
+                continue
+            }
+            lastBlockedOnOnboarding = false
 
             let cameraEnabled = defaults.object(forKey: cameraEnabledKey) as? Bool ?? false
             if lastCameraEnabled == nil {
@@ -114,6 +129,10 @@ final class MacNodeModeCoordinator {
                 retryDelay = min(retryDelay * 2, 10_000_000_000)
             }
         }
+    }
+
+    static func shouldConnectNodeMode(onboardingSeen: Bool, onboardingVersion: Int) -> Bool {
+        onboardingSeen && onboardingVersion >= currentOnboardingVersion
     }
 
     private func currentCaps() -> [String] {

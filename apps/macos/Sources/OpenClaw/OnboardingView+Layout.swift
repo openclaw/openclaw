@@ -4,7 +4,10 @@ import SwiftUI
 extension OnboardingView {
     var body: some View {
         VStack(spacing: 0) {
-            GlowingOpenClawIcon(size: 130, glowIntensity: 0.28)
+            Image(nsImage: NSApp.applicationIconImage)
+                .resizable()
+                .frame(width: 130, height: 130)
+                .clipShape(RoundedRectangle(cornerRadius: 130 * 0.22, style: .continuous))
                 .offset(y: 10)
                 .frame(height: 145)
 
@@ -46,10 +49,6 @@ extension OnboardingView {
                 self.currentPage = max(0, self.pageOrder.count - 1)
             }
         }
-        .onChange(of: self.onboardingWizard.isComplete) { _, newValue in
-            guard newValue, self.activePageIndex == self.wizardPageIndex else { return }
-            self.handleNext()
-        }
         .onDisappear {
             self.stopPermissionMonitoring()
             self.stopDiscovery()
@@ -57,7 +56,7 @@ extension OnboardingView {
         }
         .task {
             await self.refreshPerms()
-            self.refreshCLIStatus()
+            await self.refreshCLIInstallerReadiness()
             await self.loadWorkspaceDefaults()
             await self.ensureDefaultWorkspace()
             self.refreshBootstrapStatus()
@@ -156,6 +155,16 @@ extension OnboardingView {
         .frame(width: self.pageWidth, alignment: .top)
     }
 
+    func onboardingFixedPage(@ViewBuilder _ content: () -> some View) -> some View {
+        VStack(spacing: 16) {
+            content()
+            Spacer(minLength: 0)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        .padding(.horizontal, 28)
+        .frame(width: self.pageWidth, alignment: .top)
+    }
+
     func onboardingCard(
         spacing: CGFloat = 12,
         padding: CGFloat = 16,
@@ -166,10 +175,6 @@ extension OnboardingView {
         }
         .padding(padding)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .fill(Color(NSColor.controlBackgroundColor))
-                .shadow(color: .black.opacity(0.06), radius: 8, y: 3))
     }
 
     func onboardingGlassCard(

@@ -90,7 +90,18 @@ enum GatewayEnvironment {
     }
 
     static func expectedGatewayVersionString() -> String? {
-        let bundleVersion = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String
+        self.expectedGatewayVersionString(
+            bundleVersion: Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String,
+            bundleIdentifier: Bundle.main.bundleIdentifier)
+    }
+
+    static func expectedGatewayVersionString(bundleVersion: String?, bundleIdentifier: String?) -> String? {
+        if let bundleIdentifier,
+           bundleIdentifier.trimmingCharacters(in: .whitespacesAndNewlines).hasSuffix(".debug")
+        {
+            return nil
+        }
+
         let trimmed = bundleVersion?.trimmingCharacters(in: .whitespacesAndNewlines)
         return (trimmed?.isEmpty == false) ? trimmed : nil
     }

@@ -67,6 +67,8 @@ struct OnboardingView: View {
     @State var isRequesting = false
     @State var installingCLI = false
     @State var cliStatus: String?
+    @State var cliPreflightStatus: String?
+    @State var cliNeedsCommandLineTools = false
     @State var copied = false
     @State var monitoringPermissions = false
     @State var monitoringDiscovery = false
@@ -97,6 +99,7 @@ struct OnboardingView: View {
     let pageWidth: CGFloat = Self.windowWidth
     let contentHeight: CGFloat = 460
     let connectionPageIndex = 1
+    let cliPageIndex = 6
     let wizardPageIndex = 3
     let onboardingChatPageIndex = 8
 
@@ -113,7 +116,7 @@ struct OnboardingView: View {
         case .unconfigured:
             showOnboardingChat ? [0, 1, 8, 9] : [0, 1, 9]
         case .local:
-            showOnboardingChat ? [0, 1, 3, 5, 8, 9] : [0, 1, 3, 5, 9]
+            showOnboardingChat ? [0, 1, 6, 3, 5, 8, 9] : [0, 1, 6, 3, 5, 9]
         }
     }
 
@@ -146,7 +149,10 @@ struct OnboardingView: View {
     }
 
     var canAdvance: Bool {
-        !self.isWizardBlocking
+        if self.activePageIndex == self.cliPageIndex {
+            return self.cliInstalled && !self.installingCLI
+        }
+        return !self.isWizardBlocking
     }
 
     var devLinkCommand: String {
