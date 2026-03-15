@@ -57,4 +57,20 @@ describe("buildPluginStatusReport", () => {
       }),
     );
   });
+
+  it("forwards validate mode to plugin loading", () => {
+    buildPluginStatusReport({
+      config: {},
+      workspaceDir: "/workspace",
+      mode: "validate",
+    });
+
+    expect(loadOpenClawPluginsMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        config: {},
+        workspaceDir: "/workspace",
+        mode: "validate",
+      }),
+    );
+  });
 });

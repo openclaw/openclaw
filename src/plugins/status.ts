@@ -17,6 +17,8 @@ export function buildPluginStatusReport(params?: {
   workspaceDir?: string;
   /** Use an explicit env when plugin roots should resolve independently from process.env. */
   env?: NodeJS.ProcessEnv;
+  /** Skip plugin register/activate and only validate metadata/config. */
+  mode?: "validate";
 }): PluginStatusReport {
   const config = params?.config ?? loadConfig();
   const workspaceDir = params?.workspaceDir
@@ -28,6 +30,7 @@ export function buildPluginStatusReport(params?: {
     config,
     workspaceDir,
     env: params?.env,
+    mode: params?.mode,
     logger: createPluginLoaderLogger(log),
   });
 

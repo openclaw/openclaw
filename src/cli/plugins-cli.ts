@@ -123,7 +123,9 @@ function applySlotSelectionForPlugin(
   config: OpenClawConfig,
   pluginId: string,
 ): { config: OpenClawConfig; warnings: string[] } {
-  const report = buildPluginStatusReport({ config });
+  // Slot selection only needs plugin metadata/kind; avoid running existing
+  // plugin registration, which may require resolved runtime secrets.
+  const report = buildPluginStatusReport({ config, mode: "validate" });
   const plugin = report.plugins.find((entry) => entry.id === pluginId);
   if (!plugin) {
     return { config, warnings: [] };
