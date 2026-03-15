@@ -108,6 +108,7 @@ type ChannelHandlerParams = {
   deps?: OutboundSendDeps;
   gifPlayback?: boolean;
   forceDocument?: boolean;
+  toolContext?: ChannelThreadingToolContext;
   silent?: boolean;
   mediaLocalRoots?: readonly string[];
 };
