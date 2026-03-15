@@ -57,6 +57,18 @@ export function shouldUseShellForCommand(cmd, platform = process.platform) {
   if (platform !== "win32") {
     return false;
   }
+  // When `which()` resolves to an absolute path like
+  // `C:\Program Files\nodejs\pnpm.CMD`, spawning that directly works
+  // without `shell: true`. Using `shell: true` with such paths causes
+  // Windows to split on the space (`C:\Program`) and fail.
+  //
+  // To avoid this, only route through the shell for bare command names
+  // (no path separators). Anything that already contains a path is
+  // executed directly.
+  const hasPathSeparator = cmd.includes("\\") || cmd.includes("/");
+  if (hasPathSeparator) {
+    return false;
+  }
   const extension = path.extname(cmd).toLowerCase();
   return WINDOWS_SHELL_EXTENSIONS.has(extension);
 }
@@ -69,30 +81,44 @@ export function assertSafeWindowsShellArgs(args, platform = process.platform) {
   if (!unsafeArg) {
     return;
   }
-  // SECURITY: `shell: true` routes through cmd.exe; reject risky metacharacters
-  // in forwarded args to prevent shell control-flow/env-expansion injection.
+  // Reject risky metacharacters when we have to construct a cmd.exe
+  // command line to avoid shell injection issues.
   throw new Error(
     `Unsafe Windows shell argument: ${unsafeArg}. Remove shell metacharacters (" & | < > ^ % !).`,
   );
 }
 
-function createSpawnOptions(cmd, args, envOverride) {
-  const useShell = shouldUseShellForCommand(cmd);
-  if (useShell) {
-    assertSafeWindowsShellArgs(args);
-  }
+function createSpawnOptions(_cmd, _args, envOverride) {
   return {
     cwd: uiDir,
     stdio: "inherit",
     env: envOverride ?? process.env,
-    ...(useShell ? { shell: true } : {}),
   };
+}
+
+function normalizeWindowsCommand(cmd, args) {
+  if (process.platform !== "win32") {
+    return { command: cmd, commandArgs: args };
+  }
+  const extension = path.extname(cmd).toLowerCase();
+  if (!WINDOWS_SHELL_EXTENSIONS.has(extension)) {
+    return { command: cmd, commandArgs: args };
+  }
+
+  const hasPathSeparator = cmd.includes("\\") || cmd.includes("/");
+  const quotedCmd = hasPathSeparator ? `"${cmd}"` : cmd;
+  const commandLine = args.length > 0 ? `${quotedCmd} ${args.join(" ")}` : quotedCmd;
+
+  const command = process.env.comspec || "cmd.exe";
+  const commandArgs = ["/d", "/s", "/c", commandLine];
+  return { command, commandArgs };
 }
 
 function run(cmd, args) {
   let child;
+  const { command, commandArgs } = normalizeWindowsCommand(cmd, args);
   try {
-    child = spawn(cmd, args, createSpawnOptions(cmd, args));
+    child = spawn(command, commandArgs, createSpawnOptions(command, commandArgs));
   } catch (err) {
     console.error(`Failed to launch ${cmd}:`, err);
     process.exit(1);
@@ -112,8 +138,9 @@ function run(cmd, args) {
 
 function runSync(cmd, args, envOverride) {
   let result;
+  const { command, commandArgs } = normalizeWindowsCommand(cmd, args);
   try {
-    result = spawnSync(cmd, args, createSpawnOptions(cmd, args, envOverride));
+    result = spawnSync(command, commandArgs, createSpawnOptions(command, commandArgs, envOverride));
   } catch (err) {
     console.error(`Failed to launch ${cmd}:`, err);
     process.exit(1);

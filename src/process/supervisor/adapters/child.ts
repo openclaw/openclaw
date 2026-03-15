@@ -2,6 +2,7 @@ import type { ChildProcessWithoutNullStreams, SpawnOptions } from "node:child_pr
 import { killProcessTree } from "../../kill-tree.js";
 import { spawnWithFallback } from "../../spawn-utils.js";
 import { resolveWindowsCommandShim } from "../../windows-command.js";
+import { resolveWindowsConsoleEncoding } from "../../windows-console-encoding.js";
 import type { ManagedRunStdin, SpawnProcessAdapter } from "../types.js";
 import { toStringEnv } from "./env.js";
 
@@ -100,15 +101,33 @@ export async function createChildAdapter(params: {
       }
     : undefined;
 
+  const windowsEncoding = resolveWindowsConsoleEncoding();
+  const stdoutDecoder =
+    process.platform === "win32" && windowsEncoding && windowsEncoding.toLowerCase() !== "utf-8"
+      ? new TextDecoder(windowsEncoding)
+      : null;
+  const stderrDecoder =
+    process.platform === "win32" && windowsEncoding && windowsEncoding.toLowerCase() !== "utf-8"
+      ? new TextDecoder(windowsEncoding)
+      : null;
+
   const onStdout = (listener: (chunk: string) => void) => {
     child.stdout.on("data", (chunk) => {
-      listener(chunk.toString());
+      if (stdoutDecoder) {
+        listener(stdoutDecoder.decode(chunk as Buffer, { stream: true }));
+        return;
+      }
+      listener((chunk as Buffer).toString());
     });
   };
 
   const onStderr = (listener: (chunk: string) => void) => {
     child.stderr.on("data", (chunk) => {
-      listener(chunk.toString());
+      if (stderrDecoder) {
+        listener(stderrDecoder.decode(chunk as Buffer, { stream: true }));
+        return;
+      }
+      listener((chunk as Buffer).toString());
     });
   };
 

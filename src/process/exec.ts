@@ -8,6 +8,7 @@ import { markOpenClawExecEnv } from "../infra/openclaw-exec-env.js";
 import { logDebug, logError } from "../logger.js";
 import { resolveCommandStdio } from "./spawn-utils.js";
 import { resolveWindowsCommandShim } from "./windows-command.js";
+import { resolveWindowsConsoleEncoding } from "./windows-console-encoding.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -224,6 +225,15 @@ export async function runCommandWithTimeout(
   const finalArgv = process.platform === "win32" ? (resolveNpmArgvForWindows(argv) ?? argv) : argv;
   const resolvedCommand = finalArgv !== argv ? (finalArgv[0] ?? "") : resolveCommand(argv[0] ?? "");
   const useCmdWrapper = isWindowsBatchCommand(resolvedCommand);
+  const windowsEncoding = resolveWindowsConsoleEncoding();
+  const stdoutDecoder =
+    process.platform === "win32" && windowsEncoding && windowsEncoding.toLowerCase() !== "utf-8"
+      ? new TextDecoder(windowsEncoding)
+      : null;
+  const stderrDecoder =
+    process.platform === "win32" && windowsEncoding && windowsEncoding.toLowerCase() !== "utf-8"
+      ? new TextDecoder(windowsEncoding)
+      : null;
   const child = spawn(
     useCmdWrapper ? (process.env.ComSpec ?? "cmd.exe") : resolvedCommand,
     useCmdWrapper
@@ -290,11 +300,13 @@ export async function runCommandWithTimeout(
     }
 
     child.stdout?.on("data", (d) => {
-      stdout += d.toString();
+      const chunk = d as Buffer;
+      stdout += stdoutDecoder ? stdoutDecoder.decode(chunk, { stream: true }) : chunk.toString();
       armNoOutputTimer();
     });
     child.stderr?.on("data", (d) => {
-      stderr += d.toString();
+      const chunk = d as Buffer;
+      stderr += stderrDecoder ? stderrDecoder.decode(chunk, { stream: true }) : chunk.toString();
       armNoOutputTimer();
     });
     child.on("error", (err) => {
