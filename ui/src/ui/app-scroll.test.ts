@@ -58,6 +58,8 @@ function createScrollHost(
     chatScrollTimeout: null as number | null,
     chatHasAutoScrolled: false,
     chatLastScrollTop: null as number | null,
+    chatProgrammaticScrollFrom: null as number | null,
+    chatProgrammaticScrollTarget: null as number | null,
     chatAutoScrollBlockId: null as string | null,
     chatAutoScrollMode: "bottom" as ChatAutoScrollMode,
     chatBottomFollowPinned: false,
@@ -378,6 +380,7 @@ describe("scheduleChatScroll", () => {
     expect(host.chatSuppressedBlockId).toBeNull();
 
     container.scrollHeight = 2800;
+    container.scrollTo = undefined;
     scheduleChatScroll(host);
     await host.updateComplete;
 
@@ -426,6 +429,40 @@ describe("scheduleChatScroll", () => {
     expect(container.scrollTo).toHaveBeenCalledWith({ top: 1700, behavior: "smooth" });
     expect(container.scrollTop).toBe(1800);
     expect(host.chatLastScrollTop).toBe(1700);
+    expect(host.chatProgrammaticScrollFrom).toBe(1800);
+    expect(host.chatProgrammaticScrollTarget).toBe(1700);
+  });
+
+  it("does not suppress follow mode during a smooth jump-to-bottom animation", async () => {
+    const { host, container, threadInner } = createScrollHost({
+      scrollHeight: 2600,
+      scrollTop: 500,
+      clientHeight: 400,
+    });
+    host.chatHasAutoScrolled = false;
+    host.chatUserNearBottom = false;
+    const latestBlock = createChatBlock(1700, "stream:1", { streaming: true });
+    threadInner.querySelectorAll = vi.fn(() => [latestBlock]);
+    container.scrollTo = vi.fn();
+
+    scheduleChatScroll(host, true, true);
+    await host.updateComplete;
+
+    container.scrollTop = 1000;
+    handleChatScroll(host, {
+      currentTarget: container,
+    } as unknown as Event);
+
+    expect(host.chatSuppressedBlockId).toBeNull();
+    expect(host.chatBottomFollowPinned).toBe(true);
+
+    container.scrollHeight = 2800;
+    container.scrollTo = undefined;
+    scheduleChatScroll(host);
+    await host.updateComplete;
+
+    expect(host.chatNewMessagesBelow).toBe(false);
+    expect(container.scrollTop).toBe(maxScrollTop(container));
   });
 });
 
@@ -492,6 +529,8 @@ describe("resetChatScroll", () => {
     const { host } = createScrollHost({});
     host.chatHasAutoScrolled = true;
     host.chatLastScrollTop = 1700;
+    host.chatProgrammaticScrollFrom = 1800;
+    host.chatProgrammaticScrollTarget = 1700;
     host.chatAutoScrollBlockId = "stream:1";
     host.chatAutoScrollMode = "clamp";
     host.chatBottomFollowPinned = true;
@@ -502,6 +541,8 @@ describe("resetChatScroll", () => {
 
     expect(host.chatHasAutoScrolled).toBe(false);
     expect(host.chatLastScrollTop).toBeNull();
+    expect(host.chatProgrammaticScrollFrom).toBeNull();
+    expect(host.chatProgrammaticScrollTarget).toBeNull();
     expect(host.chatAutoScrollBlockId).toBeNull();
     expect(host.chatAutoScrollMode).toBe("bottom");
     expect(host.chatBottomFollowPinned).toBe(false);
