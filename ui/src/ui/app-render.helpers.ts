@@ -540,7 +540,7 @@ function resolveUniqueCatalogProvider(
   model: string,
 ): string | undefined {
   const modelValue = model.trim();
-  if (!modelValue) {
+  if (!modelValue || modelValue.includes("/")) {
     return undefined;
   }
   const normalizedModel = modelValue.toLowerCase();
@@ -571,6 +571,9 @@ function resolveModelOverrideValue(state: AppViewState): string {
     const cachedValue = cached.trim();
     if (!cachedValue) {
       return "";
+    }
+    if (cachedValue.includes("/")) {
+      return cachedValue;
     }
     const activeRow = resolveActiveSessionRow(state);
     const activeModel = typeof activeRow?.model === "string" ? activeRow.model.trim() : "";
