@@ -141,7 +141,7 @@ export async function createConfigBackup(
     ? `${configPath}.bak.${timestamp}${label}`
     : `${configPath}.bak`;
 
-  await ioFs.writeFile(backupPath, configContent);
+  await fs.writeFile(backupPath, configContent, { mode: 0o600 });
 
   // Prune old backups if keepBackups is set
   if (keepBackups > 0) {
@@ -190,12 +190,22 @@ export async function restoreConfigBackup(
 ): Promise<{ success: boolean; backupPath: string; error?: string }> {
   // Determine backup path
   const backupPath = options.backupPath || `${configPath}.bak`;
+  const isExplicitPath = options.backupPath !== undefined;
 
   // Check if backup exists
   try {
     await ioFs.stat(backupPath);
   } catch {
-    // Try numbered backups if primary doesn't exist
+    // If user explicitly requested a specific backup path, fail immediately
+    if (isExplicitPath) {
+      return {
+        success: false,
+        backupPath,
+        error: `Backup not found: ${backupPath}`,
+      };
+    }
+
+    // For default path, try numbered backups as fallback
     const backups = await listConfigBackups(configPath, ioFs);
     if (backups.length === 0) {
       return {

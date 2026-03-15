@@ -273,6 +273,29 @@ describe("config-backup-restore", () => {
       });
     });
 
+    it("fails when explicit backup path does not exist, even if other backups exist", async () => {
+      await withTempHome(async () => {
+        const configPath = resolveConfigPathFromTempState();
+
+        // Create current config and a backup
+        await fs.writeFile(configPath, JSON.stringify({ token: "current" }), "utf-8");
+        await fs.writeFile(`${configPath}.bak`, JSON.stringify({ token: "backup" }), "utf-8");
+
+        // Request a non-existent backup path explicitly
+        const result = await restoreConfigBackup(configPath, {
+          backupPath: `${configPath}.bak.nonexistent`,
+        });
+
+        expect(result.success).toBe(false);
+        expect(result.error).toContain("Backup not found");
+        expect(result.error).toContain(".bak.nonexistent");
+
+        // Verify original content unchanged
+        const current = JSON.parse(await fs.readFile(configPath, "utf-8"));
+        expect(current.token).toBe("current");
+      });
+    });
+
     it("dry run does not modify config", async () => {
       await withTempHome(async () => {
         const configPath = resolveConfigPathFromTempState();
