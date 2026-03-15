@@ -732,6 +732,11 @@ export function formatAssistantErrorText(
     );
   }
 
+  // Catch tool_use/tool_result mismatch errors (transcript corruption)
+  if (/tool_use_id|tool_result.*corresponding.*tool_use|unexpected.*tool.*block/i.test(raw)) {
+    return "Conversation history corruption detected. Use /new to start a fresh session.";
+  }
+
   const invalidRequest = raw.match(/"type":"invalid_request_error".*?"message":"([^"]+)"/);
   if (invalidRequest?.[1]) {
     return `LLM request rejected: ${invalidRequest[1]}`;
@@ -780,6 +785,11 @@ export function sanitizeUserFacingText(text: string, opts?: { errorContext?: boo
         "Message ordering conflict - please try again. " +
         "If this persists, use /new to start a fresh session."
       );
+    }
+
+    // Catch tool_use/tool_result mismatch errors (transcript corruption)
+    if (/tool_use_id|tool_result.*corresponding.*tool_use|unexpected.*tool.*block/i.test(trimmed)) {
+      return "Conversation history corruption detected. Use /new to start a fresh session.";
     }
 
     if (shouldRewriteContextOverflowText(trimmed)) {
