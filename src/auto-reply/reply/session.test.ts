@@ -1732,6 +1732,37 @@ describe("persistSessionUsageUpdate", () => {
     expect(stored[sessionKey].outputTokens).toBe(456);
   });
 
+  it("preserves an existing context window when model resolution is unresolved", async () => {
+    const storePath = await createStorePath("openclaw-usage-");
+    const sessionKey = "main";
+    await seedSessionStore({
+      storePath,
+      sessionKey,
+      entry: {
+        sessionId: "s1",
+        updatedAt: Date.now(),
+        contextTokens: 1_048_576,
+      },
+    });
+
+    await persistSessionUsageUpdate({
+      storePath,
+      sessionKey,
+      usage: { input: 50_000, output: 5_000, total: 55_000 },
+      lastCallUsage: { input: 42_000, output: 2_000, total: 44_000 },
+      contextTokensUsed: undefined,
+      modelUsed: "my-custom-model-v1",
+      providerUsed: "custom-provider",
+    });
+
+    const stored = JSON.parse(await fs.readFile(storePath, "utf-8"));
+    expect(stored[sessionKey].model).toBe("my-custom-model-v1");
+    expect(stored[sessionKey].modelProvider).toBe("custom-provider");
+    expect(stored[sessionKey].contextTokens).toBe(1_048_576);
+    expect(stored[sessionKey].totalTokens).toBe(42_000);
+    expect(stored[sessionKey].totalTokensFresh).toBe(true);
+  });
+
   it("keeps non-clamped lastCallUsage totalTokens when exceeding context window", async () => {
     const storePath = await createStorePath("openclaw-usage-");
     const sessionKey = "main";

@@ -11,6 +11,18 @@ import {
 } from "../../config/sessions.js";
 import { logVerbose } from "../../globals.js";
 
+function resolvePersistedContextTokens(
+  contextTokensUsed: number | undefined,
+  existingContextTokens: number | undefined,
+): number | undefined {
+  if (typeof contextTokensUsed === "number" && contextTokensUsed > 0) {
+    return contextTokensUsed;
+  }
+  // Unknown/unresolved models must not synthesize DEFAULT_CONTEXT_TOKENS here.
+  // Display-only boundaries apply that fallback separately.
+  return existingContextTokens;
+}
+
 function applyCliSessionIdToSessionPatch(
   params: {
     providerUsed?: string;
@@ -70,7 +82,10 @@ export async function persistSessionUsageUpdate(params: {
         storePath,
         sessionKey,
         update: async (entry) => {
-          const resolvedContextTokens = params.contextTokensUsed ?? entry.contextTokens;
+          const resolvedContextTokens = resolvePersistedContextTokens(
+            params.contextTokensUsed,
+            entry.contextTokens,
+          );
           // Use last-call usage for totalTokens when available. The accumulated
           // `usage.input` sums input tokens from every API call in the run
           // (tool-use loops, compaction retries), overstating actual context.
@@ -121,7 +136,10 @@ export async function persistSessionUsageUpdate(params: {
           const patch: Partial<SessionEntry> = {
             modelProvider: params.providerUsed ?? entry.modelProvider,
             model: params.modelUsed ?? entry.model,
-            contextTokens: params.contextTokensUsed ?? entry.contextTokens,
+            contextTokens: resolvePersistedContextTokens(
+              params.contextTokensUsed,
+              entry.contextTokens,
+            ),
             systemPromptReport: params.systemPromptReport ?? entry.systemPromptReport,
             updatedAt: Date.now(),
           };
