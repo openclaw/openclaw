@@ -440,8 +440,8 @@ describe("tryDispatchAcpReply", () => {
     setReadyAcpResolution();
     // Configure TTS mode as "final" but TTS synthesis returns no mediaUrl
     ttsMocks.resolveTtsConfig.mockReturnValue({ mode: "final" });
-    // Mock TTS to return no mediaUrl for all calls
-    ttsMocks.maybeApplyTtsToPayload.mockResolvedValue(
+    // Mock TTS to return no mediaUrl for this test only (use Once to avoid cross-test leak)
+    ttsMocks.maybeApplyTtsToPayload.mockResolvedValueOnce(
       {} as ReturnType<typeof ttsMocks.maybeApplyTtsToPayload>,
     );
 

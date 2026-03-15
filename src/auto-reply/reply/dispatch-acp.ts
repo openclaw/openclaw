@@ -362,10 +362,10 @@ export async function tryDispatchAcpReply(params: {
         : blockCount > 0);
     if (!shouldSkipTextFallback && accumulatedBlockText.trim()) {
       // Fallback to text-only delivery (no TTS).
-      // For routed flows, use delivery.deliver for proper routing.
+      // For routed flows, use delivery.deliver with skipTts to bypass TTS re-entry.
       // For non-routed flows, use dispatcher directly to bypass TTS.
       const delivered = params.shouldRouteToOriginating
-        ? await delivery.deliver("final", { text: accumulatedBlockText })
+        ? await delivery.deliver("final", { text: accumulatedBlockText }, { skipTts: true })
         : params.dispatcher.sendFinalReply({ text: accumulatedBlockText });
       queuedFinal = queuedFinal || delivered;
     }
