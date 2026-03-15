@@ -307,7 +307,6 @@ describe("runRescueWatchdogJob", () => {
     expect(probeCall?.url).toBe("ws://100.64.0.10:18789");
     expect(probeCall).not.toHaveProperty("disableDeviceIdentity");
   });
-
   it("brackets IPv6 custom bind hosts in the watchdog probe URL", async () => {
     loadConfig.mockReturnValue({
       gateway: {
