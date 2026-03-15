@@ -87,6 +87,13 @@ export async function monitorWebSocket({
 
   return new Promise((resolve, reject) => {
     const cleanup = () => {
+      try {
+        wsClient.close({ force: true });
+        log(`feishu[${accountId}]: WebSocket client closed`);
+      } catch (err) {
+        const error = runtime?.error ?? console.error;
+        error(`feishu[${accountId}]: error closing WebSocket client: ${String(err)}`);
+      }
       wsClients.delete(accountId);
       botOpenIds.delete(accountId);
       botNames.delete(accountId);
