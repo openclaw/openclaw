@@ -424,10 +424,14 @@
     "vitest": "^4.1.0"
   },
   "peerDependencies": {
+    "@boxlite-ai/boxlite": "^0.4.2",
     "@napi-rs/canvas": "^0.1.89",
     "node-llama-cpp": "3.16.2"
   },
   "peerDependenciesMeta": {
+    "@boxlite-ai/boxlite": {
+      "optional": true
+    },
     "node-llama-cpp": {
       "optional": true
     }

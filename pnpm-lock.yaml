@@ -32,6 +32,9 @@ importers:
       '@aws-sdk/client-bedrock':
         specifier: ^3.1009.0
         version: 3.1009.0
+      '@boxlite-ai/boxlite':
+        specifier: ^0.4.2
+        version: 0.4.2(playwright-core@1.58.2)
       '@buape/carbon':
         specifier: 0.0.0-beta-20260216184201
         version: 0.0.0-beta-20260216184201(@discordjs/opus@0.10.0)(hono@4.12.7)(opusscript@0.1.1)
@@ -994,6 +997,27 @@ packages:
 
   '@borewit/text-codec@0.2.2':
     resolution: {integrity: sha512-DDaRehssg1aNrH4+2hnj1B7vnUGEjU6OIlyRdkMd0aUdIUvKXrJfXsy8LVtXAy7DRvYVluWbMspsRhz2lcW0mQ==}
+
+  '@boxlite-ai/boxlite-darwin-arm64@0.4.2':
+    resolution: {integrity: sha512-FwTfA8AyDXwoDb7nE7vGo04uBt2VDAiEl5leNNzroGSUKoTuCxNy8JfEbwwHb54UrIp/q7GNq7hG0JtmyxuubQ==}
+    engines: {node: '>=18.0.0'}
+    cpu: [arm64]
+    os: [darwin]
+
+  '@boxlite-ai/boxlite-linux-x64-gnu@0.4.2':
+    resolution: {integrity: sha512-UIRiTKl1L0cx2igDiikEiBfpNbTZ0W3lft5ow7I2mkDnjtBVIQYSm+PmVXBupTYivAuPh38g9WhqJH44C1RJdQ==}
+    engines: {node: '>=18.0.0'}
+    cpu: [x64]
+    os: [linux]
+
+  '@boxlite-ai/boxlite@0.4.2':
+    resolution: {integrity: sha512-LVxG0feP1sBGbYz/VOm11VsU8PyUv7rvXOQJqKrfBgI9oRVyqycpY39PCJ1oC+FFho7w7d61q8VCVDlDdj8i6Q==}
+    engines: {node: '>=18.0.0'}
+    peerDependencies:
+      playwright-core: '>=1.58.0'
+    peerDependenciesMeta:
+      playwright-core:
+        optional: true
 
   '@bramus/specificity@2.4.2':
     resolution: {integrity: sha512-ctxtJ/eA+t+6q2++vj5j7FYX3nRu311q1wfYH3xjlLOsczhlhxAg2FWNUXhpGvAw3BWo1xBcvOV6/YLc2r5FJw==}
@@ -7801,6 +7825,18 @@ snapshots:
   '@blazediff/core@1.9.1': {}
 
   '@borewit/text-codec@0.2.2': {}
+
+  '@boxlite-ai/boxlite-darwin-arm64@0.4.2':
+    optional: true
+
+  '@boxlite-ai/boxlite-linux-x64-gnu@0.4.2':
+    optional: true
+
+  '@boxlite-ai/boxlite@0.4.2(playwright-core@1.58.2)':
+    optionalDependencies:
+      '@boxlite-ai/boxlite-darwin-arm64': 0.4.2
+      '@boxlite-ai/boxlite-linux-x64-gnu': 0.4.2
+      playwright-core: 1.58.2
 
   '@bramus/specificity@2.4.2':
     dependencies:

@@ -1,4 +1,5 @@
 import type {
+  BoxLiteSettings,
   SandboxBrowserSettings,
   SandboxDockerSettings,
   SandboxPruneSettings,
@@ -15,6 +16,8 @@ export type AgentModelConfig =
 
 export type AgentSandboxConfig = {
   mode?: "off" | "non-main" | "all";
+  /** Sandbox provider: "docker" (default) or "boxlite" (micro-VM). */
+  provider?: "docker" | "boxlite";
   /** Agent workspace access inside the sandbox. */
   workspaceAccess?: "none" | "ro" | "rw";
   /**
@@ -30,6 +33,8 @@ export type AgentSandboxConfig = {
   workspaceRoot?: string;
   /** Docker-specific sandbox settings. */
   docker?: SandboxDockerSettings;
+  /** BoxLite micro-VM settings (used when provider is "boxlite"). */
+  boxlite?: BoxLiteSettings;
   /** Optional sandboxed browser settings. */
   browser?: SandboxBrowserSettings;
   /** Auto-prune sandbox settings. */

@@ -574,6 +574,7 @@ describe("Agent-specific tool filtering", () => {
       agentDir: "/tmp/agent-restricted",
       sandbox: {
         enabled: true,
+        provider: "docker" as const,
         sessionKey: "agent:restricted:main",
         workspaceDir: "/tmp/sandbox",
         agentWorkspaceDir: "/tmp/test-restricted",

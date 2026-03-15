@@ -1,7 +1,10 @@
+import type { BoxLiteSettings } from "../../config/types.sandbox.js";
 import type { SandboxFsBridge } from "./fs-bridge.js";
 import type { SandboxDockerConfig } from "./types.docker.js";
 
 export type { SandboxDockerConfig } from "./types.docker.js";
+
+export type SandboxProvider = "docker" | "boxlite";
 
 export type SandboxToolPolicy = {
   allow?: string[];
@@ -54,10 +57,12 @@ export type SandboxScope = "session" | "agent" | "shared";
 
 export type SandboxConfig = {
   mode: "off" | "non-main" | "all";
+  provider: SandboxProvider;
   scope: SandboxScope;
   workspaceAccess: SandboxWorkspaceAccess;
   workspaceRoot: string;
   docker: SandboxDockerConfig;
+  boxlite?: BoxLiteSettings;
   browser: SandboxBrowserConfig;
   tools: SandboxToolPolicy;
   prune: SandboxPruneConfig;
@@ -71,6 +76,7 @@ export type SandboxBrowserContext = {
 
 export type SandboxContext = {
   enabled: boolean;
+  provider: SandboxProvider;
   sessionKey: string;
   workspaceDir: string;
   agentWorkspaceDir: string;

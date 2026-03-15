@@ -493,15 +493,29 @@ const ToolLoopDetectionSchema = z
   })
   .optional();
 
+const BoxLiteSchema = z
+  .object({
+    image: z.string().optional(),
+    memoryMib: z.number().int().positive().optional(),
+    cpus: z.number().int().positive().optional(),
+    workdir: z.string().optional(),
+    env: z.record(z.string(), z.string()).optional(),
+    setupCommand: z.string().optional(),
+  })
+  .strict()
+  .optional();
+
 export const AgentSandboxSchema = z
   .object({
     mode: z.union([z.literal("off"), z.literal("non-main"), z.literal("all")]).optional(),
+    provider: z.union([z.literal("docker"), z.literal("boxlite")]).optional(),
     workspaceAccess: z.union([z.literal("none"), z.literal("ro"), z.literal("rw")]).optional(),
     sessionToolsVisibility: z.union([z.literal("spawned"), z.literal("all")]).optional(),
     scope: z.union([z.literal("session"), z.literal("agent"), z.literal("shared")]).optional(),
     perSession: z.boolean().optional(),
     workspaceRoot: z.string().optional(),
     docker: SandboxDockerSchema,
+    boxlite: BoxLiteSchema,
     browser: SandboxBrowserSchema,
     prune: SandboxPruneSchema,
   })

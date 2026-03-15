@@ -91,6 +91,7 @@ function createSandboxConfig(
 ): SandboxConfig {
   return {
     mode: "all",
+    provider: "docker",
     scope: "shared",
     workspaceAccess,
     workspaceRoot: "~/.openclaw/sandboxes",

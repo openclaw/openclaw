@@ -85,6 +85,12 @@ async function pruneSandboxBrowsers(cfg: SandboxConfig) {
 }
 
 export async function maybePruneSandboxes(cfg: SandboxConfig) {
+  // BoxLite provider: boxes are managed in-memory and cleaned up on stop.
+  // No registry-based prune needed.
+  if (cfg.provider === "boxlite") {
+    return;
+  }
+
   const now = Date.now();
   if (now - lastPruneAtMs < 5 * 60 * 1000) {
     return;

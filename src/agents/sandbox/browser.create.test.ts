@@ -48,6 +48,7 @@ vi.mock("../../browser/bridge-server.js", () => ({
 function buildConfig(enableNoVnc: boolean): SandboxConfig {
   return {
     mode: "all",
+    provider: "docker",
     scope: "session",
     workspaceAccess: "none",
     workspaceRoot: "/tmp/openclaw-sandboxes",

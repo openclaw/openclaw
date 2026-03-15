@@ -187,12 +187,17 @@ export function resolveSandboxConfigForAgent(
 
   const toolPolicy = resolveSandboxToolPolicyForAgent(cfg, agentId);
 
+  const rawProvider = agentSandbox?.provider ?? agent?.provider;
+  const provider = rawProvider === "boxlite" ? "boxlite" : "docker";
+
   return {
     mode: agentSandbox?.mode ?? agent?.mode ?? "off",
+    provider,
     scope,
     workspaceAccess: agentSandbox?.workspaceAccess ?? agent?.workspaceAccess ?? "none",
     workspaceRoot:
       agentSandbox?.workspaceRoot ?? agent?.workspaceRoot ?? DEFAULT_SANDBOX_WORKSPACE_ROOT,
+    boxlite: provider === "boxlite" ? (agentSandbox?.boxlite ?? agent?.boxlite) : undefined,
     docker: resolveSandboxDockerConfig({
       scope,
       globalDocker: agent?.docker,

@@ -94,3 +94,18 @@ export type SandboxPruneSettings = {
   /** Prune if older than N days (0 disables). */
   maxAgeDays?: number;
 };
+
+export type BoxLiteSettings = {
+  /** OCI image for BoxLite micro-VM (default: "alpine:latest"). */
+  image?: string;
+  /** Memory in MiB for the micro-VM (default: 512). */
+  memoryMib?: number;
+  /** Number of CPU cores (default: 2). */
+  cpus?: number;
+  /** Working directory inside the micro-VM (default: /workspace). */
+  workdir?: string;
+  /** Extra environment variables for BoxLite exec. */
+  env?: Record<string, string>;
+  /** Optional setup command run once after box creation. */
+  setupCommand?: string;
+};

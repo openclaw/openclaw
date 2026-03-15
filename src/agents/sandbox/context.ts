@@ -125,6 +125,32 @@ export async function resolveSandboxContext(params: {
     workspaceDir: params.workspaceDir,
   });
 
+  // BoxLite provider: create/reuse a micro-VM instead of a Docker container.
+  if (cfg.provider === "boxlite") {
+    const { ensureBoxLiteBox, resolveBoxLiteWorkdir } = await import("../boxlite/runtime.js");
+    await ensureBoxLiteBox(scopeKey, cfg.boxlite);
+    const containerWorkdir = resolveBoxLiteWorkdir(cfg.boxlite);
+
+    const sandboxContext: SandboxContext = {
+      enabled: true,
+      provider: "boxlite",
+      sessionKey: rawSessionKey,
+      workspaceDir,
+      agentWorkspaceDir,
+      workspaceAccess: cfg.workspaceAccess,
+      containerName: scopeKey, // Reuse containerName for box scope key.
+      containerWorkdir,
+      docker: cfg.docker, // Keep docker config for type compatibility.
+      tools: cfg.tools,
+      browserAllowHostControl: cfg.browser.allowHostControl,
+    };
+
+    // Skip fs-bridge for BoxLite — SandboxFsBridgeImpl uses `docker exec` internally.
+    // BoxLite file operations go through the exec runtime instead.
+    return sandboxContext;
+  }
+
+  // Docker provider (default).
   const docker = await resolveSandboxDockerUser({
     docker: cfg.docker,
     workspaceDir,
@@ -168,6 +194,7 @@ export async function resolveSandboxContext(params: {
 
   const sandboxContext: SandboxContext = {
     enabled: true,
+    provider: "docker",
     sessionKey: rawSessionKey,
     workspaceDir,
     agentWorkspaceDir,

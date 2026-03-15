@@ -385,6 +385,86 @@ export async function runExecProcess(opts: {
       ? Math.floor(opts.timeoutSec * 1000)
       : undefined;
 
+  // BoxLite provider: run command via BoxLite micro-VM instead of process supervisor.
+  if (opts.sandbox?.provider === "boxlite") {
+    const boxliteScopeKey = opts.sandbox.containerName;
+    let boxliteAborted = false;
+    const boxlitePromise = (async (): Promise<ExecProcessOutcome> => {
+      try {
+        const { runBoxLiteCommand } = await import("./boxlite/runtime.js");
+
+        // Wrap with timeout if configured.
+        let resultPromise: Promise<import("./boxlite/runtime.js").BoxLiteExecResult> =
+          runBoxLiteCommand(boxliteScopeKey, "sh", ["-c", execCommand]);
+        if (timeoutMs) {
+          resultPromise = Promise.race([
+            resultPromise,
+            new Promise<never>((_, reject) => {
+              setTimeout(() => {
+                reject(new Error(`BoxLite command timed out after ${timeoutMs}ms`));
+              }, timeoutMs);
+            }),
+          ]);
+        }
+
+        const result = await resultPromise;
+        if (result.stdout) {
+          handleStdout(result.stdout);
+        }
+        if (result.stderr) {
+          handleStderr(result.stderr);
+        }
+        const durationMs = Date.now() - startedAt;
+        const exitCode = result.exitCode;
+        const isShellFailure = exitCode === 126 || exitCode === 127;
+        const status: "completed" | "failed" =
+          exitCode === 0 && !isShellFailure ? "completed" : "failed";
+        markExited(session, exitCode, null, status);
+        maybeNotifyOnExit(session, status);
+        const aggregated = session.aggregated.trim();
+        const exitMsg = exitCode !== 0 ? `\n\n(Command exited with code ${exitCode})` : "";
+        return {
+          status,
+          exitCode,
+          exitSignal: null,
+          durationMs,
+          aggregated: aggregated + exitMsg,
+          timedOut: false,
+        };
+      } catch (err) {
+        const durationMs = Date.now() - startedAt;
+        const wasTimedOut = err instanceof Error && err.message.includes("timed out");
+        if (wasTimedOut || boxliteAborted) {
+          markExited(session, null, null, "failed");
+          maybeNotifyOnExit(session, "failed");
+          const aggregated = session.aggregated.trim();
+          const suffix = wasTimedOut ? "\n\n(Command timed out)" : "\n\n(Command aborted)";
+          return {
+            status: "failed",
+            exitCode: null,
+            exitSignal: null,
+            durationMs,
+            aggregated: aggregated + suffix,
+            timedOut: wasTimedOut,
+          };
+        }
+        markExited(session, null, null, "failed");
+        maybeNotifyOnExit(session, "failed");
+        throw err;
+      }
+    })();
+
+    return {
+      session,
+      startedAt,
+      pid: undefined,
+      promise: boxlitePromise,
+      kill: () => {
+        boxliteAborted = true;
+      },
+    };
+  }
+
   const spawnSpec:
     | {
         mode: "child";
