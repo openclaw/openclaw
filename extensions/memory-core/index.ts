@@ -12,7 +12,6 @@ import { registerBuiltInMemoryEmbeddingProviders } from "./src/memory/provider-a
 import { buildPromptSection } from "./src/prompt-section.js";
 import { listMemoryCorePublicArtifacts } from "./src/public-artifacts.js";
 import { memoryRuntime } from "./src/runtime-provider.js";
-import { createMemoryGetTool, createMemorySearchTool } from "./src/tools.js";
 export {
   buildMemoryFlushPlan,
   DEFAULT_MEMORY_FLUSH_FORCE_TRANSCRIPT_BYTES,
@@ -40,21 +39,23 @@ export default definePluginEntry({
     });
 
     api.registerTool(
-      (ctx) =>
-        createMemorySearchTool({
+      (ctx) => {
+        const memorySearchTool = api.runtime.tools.createMemorySearchTool({
           config: ctx.config,
           agentSessionKey: ctx.sessionKey,
-        }),
-      { names: ["memory_search"] },
-    );
-
-    api.registerTool(
-      (ctx) =>
-        createMemoryGetTool({
+          senderId: ctx.requesterSenderId,
+        });
+        const memoryGetTool = api.runtime.tools.createMemoryGetTool({
           config: ctx.config,
           agentSessionKey: ctx.sessionKey,
-        }),
-      { names: ["memory_get"] },
+          senderId: ctx.requesterSenderId,
+        });
+        if (!memorySearchTool || !memoryGetTool) {
+          return null;
+        }
+        return [memorySearchTool, memoryGetTool];
+      },
+      { names: ["memory_search", "memory_get"] },
     );
 
     api.registerCli(
