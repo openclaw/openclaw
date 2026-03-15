@@ -32,7 +32,7 @@ If you can write a small TypeScript function, you can write a hook. Hooks are di
 
 The hooks system allows you to:
 
-- Save session context to memory when `/new` is issued
+- Save session context to memory when `/new` or `/reset` is issued
 - Log all commands for auditing
 - Trigger custom automations on agent lifecycle events
 - Extend OpenClaw's behavior without modifying core code
@@ -43,7 +43,7 @@ The hooks system allows you to:
 
 OpenClaw ships with four bundled hooks that are automatically discovered:
 
-- **💾 session-memory**: Saves session context to your agent workspace (default `~/.openclaw/workspace/memory/`) when you issue `/new`
+- **💾 session-memory**: Saves session context to your agent workspace (default `~/.openclaw/workspace/memory/`) when you issue `/new` or `/reset`
 - **📎 bootstrap-extra-files**: Injects additional workspace bootstrap files from configured glob/path patterns during `agent:bootstrap`
 - **📝 command-logger**: Logs all command events to `~/.openclaw/logs/commands.log`
 - **🚀 boot-md**: Runs `BOOT.md` when the gateway starts (requires internal hooks enabled)
@@ -404,7 +404,7 @@ metadata: { "openclaw": { "emoji": "🎯", "events": ["command:new"] } }
 
 # My Custom Hook
 
-This hook does something useful when you issue `/new`.
+This hook does something useful when you issue `/new` or `/reset`.
 ```
 
 ### 4. Create handler.ts
@@ -571,9 +571,9 @@ openclaw hooks disable command-logger
 
 ### session-memory
 
-Saves session context to memory when you issue `/new`.
+Saves session context to memory when you issue `/new` or `/reset`.
 
-**Events**: `command:new`
+**Events**: `command:new`, `command:reset`
 
 **Requirements**: `workspace.dir` must be configured
 
@@ -783,6 +783,7 @@ The gateway logs hook loading at startup:
 
 ```
 Registered hook: session-memory -> command:new
+Registered hook: session-memory -> command:reset
 Registered hook: bootstrap-extra-files -> agent:bootstrap
 Registered hook: command-logger -> command
 Registered hook: boot-md -> gateway:startup

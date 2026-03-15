@@ -432,6 +432,12 @@ export type MemorySearchConfig = {
         enabled?: boolean;
         /** Half-life in days for exponential decay (default: 30). */
         halfLifeDays?: number;
+        /** Optional importance-weighted decay: slow decay for marked important memories. */
+        importanceBoost?: {
+          enabled?: boolean;
+          boostFactor?: number;
+          patterns?: { contentMarkers?: string[]; filePatterns?: string[] };
+        };
       };
     };
   };
