@@ -445,7 +445,10 @@ export type PluginHookName =
   | "subagent_spawned"
   | "subagent_ended"
   | "gateway_start"
-  | "gateway_stop";
+  | "gateway_stop"
+  | "context_assembled"
+  | "loop_iteration_start"
+  | "loop_iteration_end";
 
 export const PLUGIN_HOOK_NAMES = [
   "before_model_resolve",
@@ -472,6 +475,9 @@ export const PLUGIN_HOOK_NAMES = [
   "subagent_ended",
   "gateway_start",
   "gateway_stop",
+  "context_assembled",
+  "loop_iteration_start",
+  "loop_iteration_end",
 ] as const satisfies readonly PluginHookName[];
 
 type MissingPluginHookNames = Exclude<PluginHookName, (typeof PLUGIN_HOOK_NAMES)[number]>;
@@ -886,6 +892,61 @@ export type PluginHookGatewayStopEvent = {
   reason?: string;
 };
 
+// ============================================================================
+// Agent Loop Observability Hooks
+// ============================================================================
+
+// context_assembled hook (void — parallel)
+// Fires once per attempt before the first LLM call with the assembled context.
+// The outer run loop may retry (overflow compaction, auth refresh, tool result
+// truncation), producing a new attempt with different context each time.
+// Use attemptIndex to distinguish initial assembly (0) from retries (1+).
+// Use loop_iteration_start/end for per-turn tracking within an attempt.
+export type PluginHookContextAssembledEvent = {
+  /** Stable run identifier — same across all attempts within one user-visible run.
+   *  Use for run-level deduplication when context_assembled fires multiple times. */
+  runId: string;
+  systemPrompt: string;
+  /** The effective user prompt for this turn (after hook modifications). */
+  prompt: string;
+  /** Deep-copy snapshot of messages at context assembly time (via structuredClone).
+   *  Both the array and individual message objects are independent copies —
+   *  handlers can freely inspect or mutate them without affecting session state. */
+  messages: AgentMessage[];
+  messageCount: number;
+  /** Number of images attached to the prompt. */
+  imageCount: number;
+  /** Zero-based attempt index within the outer run loop. 0 = initial attempt,
+   *  1+ = retry after overflow compaction, auth refresh, or tool result truncation.
+   *  Context (messages, systemPrompt) may differ between attempts due to compaction.
+   *  Plugins needing run-level deduplication should key on runId, not this event. */
+  attemptIndex: number;
+};
+
+// loop_iteration_start hook (void — parallel)
+export type PluginHookLoopIterationStartEvent = {
+  iteration: number;
+  /** Number of pending tool results awaiting processing. Always provided by the
+   *  embedded runner; may be undefined at future or custom call sites. */
+  pendingToolResults?: number;
+  messageCount: number;
+};
+
+// loop_iteration_end hook (void — parallel)
+export type PluginHookLoopIterationEndEvent = {
+  iteration: number;
+  toolCallsMade: number;
+  /** Number of new messages added this iteration (clamped to 0 if compaction
+   *  reduced message count mid-turn). Always provided by the embedded runner;
+   *  may be undefined at future or custom call sites. */
+  newMessagesAdded?: number;
+  /** True when the turn produced tool results, suggesting (but not guaranteeing)
+   *  that the loop will continue. Does not account for abort signals, timeouts,
+   *  or max-iteration limits — those are evaluated by the loop controller after
+   *  this event fires. Use `llm_output` for definitive loop-terminal detection. */
+  hasToolResults: boolean;
+};
+
 // Hook handler types mapped by hook name
 export type PluginHookHandlerMap = {
   before_model_resolve: (
@@ -983,6 +1044,18 @@ export type PluginHookHandlerMap = {
   gateway_stop: (
     event: PluginHookGatewayStopEvent,
     ctx: PluginHookGatewayContext,
+  ) => Promise<void> | void;
+  context_assembled: (
+    event: PluginHookContextAssembledEvent,
+    ctx: PluginHookAgentContext,
+  ) => Promise<void> | void;
+  loop_iteration_start: (
+    event: PluginHookLoopIterationStartEvent,
+    ctx: PluginHookAgentContext,
+  ) => Promise<void> | void;
+  loop_iteration_end: (
+    event: PluginHookLoopIterationEndEvent,
+    ctx: PluginHookAgentContext,
   ) => Promise<void> | void;
 };
 
