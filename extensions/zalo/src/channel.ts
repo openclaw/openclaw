@@ -130,6 +130,7 @@ export const zaloPlugin: ChannelPlugin<ResolvedZaloAccount> = {
       enabled: account.enabled,
       configured: Boolean(account.token?.trim()),
       tokenSource: account.tokenSource,
+      mode: account.config.webhookUrl ? "webhook" : "polling",
     }),
     resolveAllowFrom: ({ cfg, accountId }) =>
       mapAllowFromEntries(resolveZaloAccount({ cfg: cfg, accountId }).config.allowFrom),
