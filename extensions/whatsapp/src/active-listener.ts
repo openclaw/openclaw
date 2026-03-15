@@ -1,6 +1,7 @@
 import { formatCliCommand } from "../../../src/cli/command-format.js";
 import type { PollInput } from "../../../src/polls.js";
 import { DEFAULT_ACCOUNT_ID } from "../../../src/routing/session-key.js";
+import { resolveGlobalMap } from "../../../src/shared/global-singleton.js";
 
 export type ActiveWebSendOptions = {
   gifPlayback?: boolean;
@@ -28,9 +29,8 @@ export type ActiveWebListener = {
   close?: () => Promise<void>;
 };
 
-let _currentListener: ActiveWebListener | null = null;
-
-const listeners = new Map<string, ActiveWebListener>();
+const WA_LISTENERS_KEY = Symbol.for("openclaw.whatsappActiveListeners");
+const listeners = resolveGlobalMap<string, ActiveWebListener>(WA_LISTENERS_KEY);
 
 export function resolveWebAccountId(accountId?: string | null): string {
   return (accountId ?? "").trim() || DEFAULT_ACCOUNT_ID;
@@ -72,9 +72,6 @@ export function setActiveWebListener(
     listeners.delete(id);
   } else {
     listeners.set(id, listener);
-  }
-  if (id === DEFAULT_ACCOUNT_ID) {
-    _currentListener = listener;
   }
 }
 
