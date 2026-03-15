@@ -51,4 +51,27 @@ describe("resolveWorkspaceTemplateDir", () => {
     const resolved = await resolveWorkspaceTemplateDir({ cwd: distDir, moduleUrl });
     expect(path.normalize(resolved)).toBe(path.resolve("docs", "reference", "templates"));
   });
+
+  it("resolves via module-relative ../docs fallback when packageRoot is null and cwd lacks templates", async () => {
+    // Simulates the bundled dist/ layout where ../../ overshoots but ../ is correct.
+    // When resolveOpenClawPackageRoot returns null (no package.json in ancestors),
+    // the ../docs/reference/templates fallback relative to the module should work.
+    const root = await makeTempRoot();
+    // No package.json — packageRoot will be null
+
+    const distDir = path.join(root, "dist");
+    await fs.mkdir(distDir, { recursive: true });
+
+    // Create templates at ../docs (one level up from dist/) — the bundled layout
+    const templatesDir = path.join(root, "docs", "reference", "templates");
+    await fs.mkdir(templatesDir, { recursive: true });
+    await fs.writeFile(path.join(templatesDir, "AGENTS.md"), "# ok\n");
+
+    const moduleUrl = pathToFileURL(path.join(distDir, "workspace-XXXX.mjs")).toString();
+    // Use a cwd that does NOT have docs/reference/templates
+    const fakeCwd = await makeTempRoot();
+
+    const resolved = await resolveWorkspaceTemplateDir({ cwd: fakeCwd, moduleUrl });
+    expect(resolved).toBe(templatesDir);
+  });
 });
