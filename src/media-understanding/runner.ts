@@ -704,39 +704,64 @@ export async function runCapability(params: {
     };
   }
 
-  // Skip image understanding when the primary model supports vision natively.
+  // Skip image understanding when the primary model supports vision natively,
+  // UNLESS an explicit imageModel is configured (which takes precedence).
   // The image will be injected directly into the model context instead.
   const activeProvider = params.activeModel?.provider?.trim();
   if (capability === "image" && activeProvider) {
-    const catalog = await loadModelCatalog({ config: cfg });
-    const entry = findModelInCatalog(catalog, activeProvider, params.activeModel?.model ?? "");
-    if (modelSupportsVision(entry)) {
-      if (shouldLogVerbose()) {
-        logVerbose("Skipping image understanding: primary model supports vision natively");
+    // Check if imageModel is explicitly configured via agent defaults or shared media models
+    // that actually support the image capability.
+    const configuredImageModels = resolveImageModelFromAgentDefaults(cfg);
+    let hasExplicitImageModel = configuredImageModels.length > 0;
+    if (!hasExplicitImageModel) {
+      // Also check shared models, filtering to those that support image capability
+      const sharedModels = cfg.tools?.media?.models ?? [];
+      for (const entry of sharedModels) {
+        const caps =
+          entry.capabilities && entry.capabilities.length > 0
+            ? entry.capabilities
+            : normalizeMediaProviderId(entry.provider ?? "")
+              ? params.providerRegistry.get(normalizeMediaProviderId(entry.provider ?? "") ?? "")
+                  ?.capabilities
+              : undefined;
+        if (caps?.includes("image")) {
+          hasExplicitImageModel = true;
+          break;
+        }
       }
-      const model = params.activeModel?.model?.trim();
-      const reason = "primary model supports vision natively";
-      return {
-        outputs: [],
-        decision: {
-          capability,
-          outcome: "skipped",
-          attachments: selected.map((item) => {
-            const attempt = {
-              type: "provider" as const,
-              provider: activeProvider,
-              model: model || undefined,
-              outcome: "skipped" as const,
-              reason,
-            };
-            return {
-              attachmentIndex: item.index,
-              attempts: [attempt],
-              chosen: attempt,
-            };
-          }),
-        },
-      };
+    }
+
+    if (!hasExplicitImageModel) {
+      const catalog = await loadModelCatalog({ config: cfg });
+      const entry = findModelInCatalog(catalog, activeProvider, params.activeModel?.model ?? "");
+      if (modelSupportsVision(entry)) {
+        if (shouldLogVerbose()) {
+          logVerbose("Skipping image understanding: primary model supports vision natively");
+        }
+        const model = params.activeModel?.model?.trim();
+        const reason = "primary model supports vision natively";
+        return {
+          outputs: [],
+          decision: {
+            capability,
+            outcome: "skipped",
+            attachments: selected.map((item) => {
+              const attempt = {
+                type: "provider" as const,
+                provider: activeProvider,
+                model: model || undefined,
+                outcome: "skipped" as const,
+                reason,
+              };
+              return {
+                attachmentIndex: item.index,
+                attempts: [attempt],
+                chosen: attempt,
+              };
+            }),
+          },
+        };
+      }
     }
   }
 
@@ -748,12 +773,18 @@ export async function runCapability(params: {
   });
   let resolvedEntries = entries;
   if (resolvedEntries.length === 0) {
+    // When image capability is requested and explicit imageModel is configured,
+    // do not pass activeModel to resolveAutoEntries to ensure imageModel takes precedence.
+    const configuredImageModels =
+      capability === "image" ? resolveImageModelFromAgentDefaults(cfg) : [];
+    const shouldNotUseActiveModel = capability === "image" && configuredImageModels.length > 0;
+
     resolvedEntries = await resolveAutoEntries({
       cfg,
       agentDir: params.agentDir,
       providerRegistry: params.providerRegistry,
       capability,
-      activeModel: params.activeModel,
+      activeModel: shouldNotUseActiveModel ? undefined : params.activeModel,
     });
   }
   if (resolvedEntries.length === 0) {
