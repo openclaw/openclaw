@@ -391,8 +391,12 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
               queueStreamingUpdate(text, { mode: "delta" });
             }
             if (info?.kind === "final") {
-              streamText = mergeStreamingText(streamText, text);
-              await closeStreaming();
+              // Append final text to the streaming card but do NOT close it yet.
+              // Multiple finals in a single turn should merge into one card;
+              // onIdle will close the card when the entire turn is done.
+              // Use "snapshot" mode so mergeStreamingText deduplicates against
+              // content already delivered via onPartialReply.
+              queueStreamingUpdate(text, { mode: "snapshot" });
               deliveredFinalTexts.add(text);
             }
             // Send media even when streaming handled the text
