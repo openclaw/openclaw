@@ -28,9 +28,25 @@ export type ActiveWebListener = {
   close?: () => Promise<void>;
 };
 
-let _currentListener: ActiveWebListener | null = null;
+// Use globalThis to ensure a single shared instance across bundled chunks.
+// The bundler may duplicate this module into multiple output files, and each
+// copy would get its own module-scoped Map — causing setActiveWebListener
+// (in chunk A) to register a listener that requireActiveWebListener (in chunk B)
+// cannot find. Storing on globalThis avoids this.
+const GLOBAL_KEY = "__openclaw_whatsapp_listeners__" as const;
+const GLOBAL_CURRENT_KEY = "__openclaw_whatsapp_current_listener__" as const;
 
-const listeners = new Map<string, ActiveWebListener>();
+type ListenerGlobals = {
+  [GLOBAL_KEY]?: Map<string, ActiveWebListener>;
+  [GLOBAL_CURRENT_KEY]?: ActiveWebListener | null;
+};
+
+const g = globalThis as unknown as ListenerGlobals;
+if (!g[GLOBAL_KEY]) {
+  g[GLOBAL_KEY] = new Map<string, ActiveWebListener>();
+}
+
+const listeners = g[GLOBAL_KEY];
 
 export function resolveWebAccountId(accountId?: string | null): string {
   return (accountId ?? "").trim() || DEFAULT_ACCOUNT_ID;
@@ -74,7 +90,7 @@ export function setActiveWebListener(
     listeners.set(id, listener);
   }
   if (id === DEFAULT_ACCOUNT_ID) {
-    _currentListener = listener;
+    g[GLOBAL_CURRENT_KEY] = listener;
   }
 }
 
