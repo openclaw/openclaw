@@ -116,6 +116,12 @@ export async function createWaSocket(
     browser: ["openclaw", "cli", VERSION],
     syncFullHistory: false,
     markOnlineOnConnect: false,
+    // Add connection timeout options
+    connectTimeoutMs: 60000, // 60 second connection timeout
+    keepAliveIntervalMs: 30000,
+    // Add retry configuration
+    maxRetries: 3,
+    retryWaitMs: (retries) => Math.min(retries * 1000, 10000),
   });
 
   sock.ev.on("creds.update", () => enqueueSaveCreds(authDir, saveCreds, sessionLogger));
@@ -133,12 +139,22 @@ export async function createWaSocket(
         }
         if (connection === "close") {
           const status = getStatusCode(lastDisconnect?.error);
+          // Log more details for debugging
+          sessionLogger.error({
+            status,
+            error: lastDisconnect?.error,
+            reason: lastDisconnect?.reason
+          }, 'WhatsApp WebSocket closed');
+          
           if (status === DisconnectReason.loggedOut) {
             console.error(
               danger(
                 `WhatsApp session logged out. Run: ${formatCliCommand("openclaw channels login")}`,
               ),
             );
+          } else if (status === 408 || status === DisconnectReason.timedOut) {
+            // Log timeout specifically
+            sessionLogger.error({ status }, 'WhatsApp WebSocket connection timed out');
           }
         }
         if (connection === "open" && verbose) {

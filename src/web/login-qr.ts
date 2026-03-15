@@ -152,29 +152,60 @@ export async function startWebLoginWithQr(
 
   let sock: WaSocket;
   let pendingQr: string | null = null;
-  try {
-    sock = await createWaSocket(false, Boolean(opts.verbose), {
-      authDir: account.authDir,
-      onQr: (qr: string) => {
-        if (pendingQr) {
-          return;
-        }
-        pendingQr = qr;
-        const current = activeLogins.get(account.accountId);
-        if (current && !current.qr) {
-          current.qr = qr;
-        }
-        clearTimeout(qrTimer);
-        runtime.log(info("WhatsApp QR received."));
-        resolveQr?.(qr);
-      },
-    });
-  } catch (err) {
-    clearTimeout(qrTimer);
-    await resetActiveLogin(account.accountId);
-    return {
-      message: `Failed to start WhatsApp login: ${String(err)}`,
-    };
+  
+  // Add retry logic after initial createWaSocket failure
+  let retryCount = 0;
+  const maxRetries = 2;
+
+  while (retryCount <= maxRetries) {
+    try {
+      sock = await createWaSocket(false, Boolean(opts.verbose), {
+        authDir: account.authDir,
+        onQr: (qr: string) => {
+          if (pendingQr) {
+            return;
+          }
+          pendingQr = qr;
+          const current = activeLogins.get(account.accountId);
+          if (current && !current.qr) {
+            current.qr = qr;
+          }
+          clearTimeout(qrTimer);
+          runtime.log(info("WhatsApp QR received."));
+          resolveQr?.(qr);
+        },
+      });
+      break; // Success, exit retry loop
+    } catch (err) {
+      retryCount++;
+      const errStr = String(err);
+      
+      // Check if it's a timeout error that might benefit from retry
+      if (retryCount <= maxRetries && 
+          (errStr.includes('408') || errStr.includes('timeout') || errStr.includes('timed out'))) {
+        runtime.log(info(`WhatsApp login attempt ${retryCount} failed, retrying...`));
+        await new Promise(resolve => setTimeout(resolve, 2000 * retryCount));
+        continue;
+      }
+      
+      // Non-retryable error or max retries reached
+      clearTimeout(qrTimer);
+      await resetActiveLogin(account.accountId);
+      
+      // Provide more helpful messages based on error type
+      let userMessage = errStr;
+      if (errStr.includes('408') || errStr.includes('timeout') || errStr.includes('timed out')) {
+        userMessage = 'Connection to WhatsApp timed out. This may be due to network issues or WhatsApp server problems. Please try again later, or check your network connection.';
+      } else if (errStr.includes('ECONNREFUSED')) {
+        userMessage = 'Could not connect to WhatsApp servers. Please check your internet connection and try again.';
+      } else if (errStr.includes('ENOTFOUND') || errStr.includes('DNS')) {
+        userMessage = 'Could not resolve WhatsApp server address. Please check your internet connection.';
+      }
+      
+      return {
+        message: `Failed to start WhatsApp login: ${userMessage}`,
+      };
+    }
   }
   const login: ActiveLogin = {
     accountId: account.accountId,
