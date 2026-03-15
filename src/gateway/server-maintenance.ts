@@ -164,8 +164,6 @@ export function startGatewayMaintenanceTimers(params: {
     sessionArchiveCleanup = setInterval(() => {
       void runSessionArchiveCleanup();
     }, 60 * 60_000);
-
-    void runSessionArchiveCleanup();
   }
 
   if (typeof params.mediaCleanupTtlMs !== "number") {

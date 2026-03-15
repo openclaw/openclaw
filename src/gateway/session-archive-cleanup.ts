@@ -3,7 +3,7 @@ import path from "node:path";
 import { resolveAgentSessionDirs } from "../agents/session-dirs.js";
 import {
   isOrphanedSessionTmpFileName,
-  isSessionArchiveArtifactName,
+  parseSessionArchiveTimestamp,
 } from "../config/sessions/artifacts.js";
 import { resolveMaintenanceConfig } from "../config/sessions/store-maintenance.js";
 import { cleanupArchivedSessionTranscripts } from "./session-utils.fs.js";
@@ -60,21 +60,23 @@ export async function sweepSessionArchiveFiles(params: {
       if (now - stat.mtimeMs < ORPHAN_TMP_MAX_AGE_MS) {
         continue;
       }
-      await fs.promises.rm(fullPath).catch(() => undefined);
-      totalRemoved += 1;
+      totalRemoved += await fs.promises.rm(fullPath).then(
+        () => 1,
+        () => 0,
+      );
     }
 
     // Trim excess .bak.* files, keeping only the most recent ones per base
     // name. This mirrors the rotation logic in rotateSessionFile().
     const bakByBase = new Map<string, string[]>();
     for (const entry of entries) {
-      if (!isSessionArchiveArtifactName(entry)) {
+      // Use parseSessionArchiveTimestamp to validate the file is a genuine
+      // .bak.* archive — plain indexOf(".bak.") could false-match session
+      // IDs that contain ".bak." (e.g. "foo.bak.bar.jsonl.deleted.<ts>").
+      if (parseSessionArchiveTimestamp(entry, "bak") == null) {
         continue;
       }
-      const bakIdx = entry.indexOf(".bak.");
-      if (bakIdx < 0) {
-        continue;
-      }
+      const bakIdx = entry.lastIndexOf(".bak.");
       const base = entry.slice(0, bakIdx);
       let list = bakByBase.get(base);
       if (!list) {
@@ -91,8 +93,10 @@ export async function sweepSessionArchiveFiles(params: {
       // Sort descending so we keep the newest entries at the front.
       const sorted = files.toSorted().toReversed();
       for (const old of sorted.slice(MAX_BAK_FILES_PER_DIR)) {
-        await fs.promises.unlink(path.join(dir, old)).catch(() => undefined);
-        totalRemoved += 1;
+        totalRemoved += await fs.promises.unlink(path.join(dir, old)).then(
+          () => 1,
+          () => 0,
+        );
       }
     }
   }

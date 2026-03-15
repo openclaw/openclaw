@@ -47,8 +47,9 @@ export async function startGatewaySidecars(params: {
   logChannels: { info: (msg: string) => void; error: (msg: string) => void };
   logBrowser: { error: (msg: string) => void };
 }) {
+  const stateDir = resolveStateDir(process.env);
+
   try {
-    const stateDir = resolveStateDir(process.env);
     const sessionDirs = await resolveAgentSessionDirs(stateDir);
     for (const sessionsDir of sessionDirs) {
       await cleanStaleLockFiles({
@@ -63,9 +64,7 @@ export async function startGatewaySidecars(params: {
   }
 
   try {
-    const archiveResult = await sweepSessionArchiveFiles({
-      stateDir: resolveStateDir(process.env),
-    });
+    const archiveResult = await sweepSessionArchiveFiles({ stateDir });
     if (archiveResult.removed > 0) {
       params.log.warn(
         `session archive cleanup: removed ${archiveResult.removed} stale files across ${archiveResult.directories} directories`,
