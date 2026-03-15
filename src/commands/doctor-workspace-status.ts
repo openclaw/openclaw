@@ -34,6 +34,7 @@ export function noteWorkspaceStatus(cfg: OpenClawConfig) {
       error: () => {},
       debug: () => {},
     },
+    activate: false,
   });
   if (pluginRegistry.plugins.length > 0) {
     const loaded = pluginRegistry.plugins.filter((p) => p.status === "loaded");

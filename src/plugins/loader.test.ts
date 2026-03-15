@@ -1,10 +1,16 @@
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
+import type { IncomingMessage } from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
+import { createGatewayPluginRequestHandler } from "../gateway/server/plugins-http.js";
+import { makeMockHttpResponse } from "../gateway/test-http-response.js";
 import { withEnv } from "../test-utils/env.js";
+import { registerPluginHttpRoute } from "./http-registry.js";
+import { createEmptyPluginRegistry } from "./registry.js";
+import { getActivePluginRegistry, setActivePluginRegistry } from "./runtime.js";
 async function importFreshPluginTestModules() {
   vi.resetModules();
   vi.unmock("node:fs");
@@ -13,25 +19,31 @@ async function importFreshPluginTestModules() {
   vi.unmock("./hook-runner-global.js");
   vi.unmock("./hooks.js");
   vi.unmock("./loader.js");
+  vi.unmock("./commands.js");
   vi.unmock("jiti");
-  const [loader, hookRunnerGlobal, hooks] = await Promise.all([
+  const [loader, hookRunnerGlobal, hooks, commands] = await Promise.all([
     import("./loader.js"),
     import("./hook-runner-global.js"),
     import("./hooks.js"),
+    import("./commands.js"),
   ]);
   return {
     ...loader,
     ...hookRunnerGlobal,
     ...hooks,
+    ...commands,
   };
 }
 
 const {
   __testing,
   clearPluginLoaderCache,
+  clearPluginCommands,
   createHookRunner,
+  executePluginCommand,
   getGlobalHookRunner,
   loadOpenClawPlugins,
+  matchPluginCommand,
   resetGlobalHookRunner,
 } = await importFreshPluginTestModules();
 
@@ -286,6 +298,8 @@ function createPluginSdkAliasFixture(params?: {
 
 afterEach(() => {
   clearPluginLoaderCache();
+  clearPluginCommands();
+  setActivePluginRegistry(createEmptyPluginRegistry());
   if (prevBundledDir === undefined) {
     delete process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
   } else {
@@ -468,6 +482,269 @@ describe("loadOpenClawPlugins", () => {
     expect(getGlobalHookRunner()).not.toBeNull();
 
     resetGlobalHookRunner();
+  });
+
+  it("does not let read-only plugin loads steal the active registry used by dynamic http routes", async () => {
+    useNoBundledPlugins();
+    const gatewayPlugin = writePlugin({
+      id: "gateway-runtime",
+      filename: "gateway-runtime.cjs",
+      body: `module.exports = { id: "gateway-runtime", register() {} };`,
+    });
+    const inspectorPlugin = writePlugin({
+      id: "inspector-runtime",
+      filename: "inspector-runtime.cjs",
+      body: `module.exports = { id: "inspector-runtime", register() {} };`,
+    });
+
+    const gatewayRegistry = loadOpenClawPlugins({
+      cache: false,
+      workspaceDir: gatewayPlugin.dir,
+      config: {
+        plugins: {
+          load: { paths: [gatewayPlugin.file] },
+          allow: ["gateway-runtime"],
+        },
+      },
+    });
+    const handler = createGatewayPluginRequestHandler({
+      registry: gatewayRegistry,
+      log: {
+        warn: vi.fn(),
+      } as unknown as Parameters<typeof createGatewayPluginRequestHandler>[0]["log"],
+    });
+
+    const inspectionOptions = {
+      workspaceDir: inspectorPlugin.dir,
+      config: {
+        plugins: {
+          load: { paths: [inspectorPlugin.file] },
+          allow: ["inspector-runtime"],
+        },
+      },
+      activate: false,
+    };
+    const inspectionRegistry = loadOpenClawPlugins(inspectionOptions);
+    const cachedInspectionRegistry = loadOpenClawPlugins(inspectionOptions);
+
+    expect(inspectionRegistry).toBe(cachedInspectionRegistry);
+    expect(getActivePluginRegistry()).toBe(gatewayRegistry);
+
+    const routeHandler = vi.fn(async () => true);
+    registerPluginHttpRoute({
+      path: "/hook",
+      auth: "plugin",
+      handler: routeHandler,
+    });
+
+    expect(gatewayRegistry.httpRoutes).toHaveLength(1);
+    expect(inspectionRegistry.httpRoutes).toHaveLength(0);
+
+    const { res } = makeMockHttpResponse();
+    const handled = await handler({ url: "/hook" } as IncomingMessage, res);
+    expect(handled).toBe(true);
+    expect(routeHandler).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps read-only loads out of the global plugin command registry", () => {
+    useNoBundledPlugins();
+    const gatewayPlugin = writePlugin({
+      id: "gateway-command",
+      filename: "gateway-command.cjs",
+      body: `module.exports = {
+        id: "gateway-command",
+        register(api) {
+          api.registerCommand({
+            name: "gatewaycmd",
+            description: "Gateway command",
+            handler: async () => ({ text: "ok" }),
+          });
+        },
+      };`,
+    });
+    const inspectionPlugin = writePlugin({
+      id: "inspection-command",
+      filename: "inspection-command.cjs",
+      body: `module.exports = {
+        id: "inspection-command",
+        register(api) {
+          api.registerCommand({
+            name: "inspectcmd",
+            description: "Inspection command",
+            handler: async () => ({ text: "ok" }),
+          });
+        },
+      };`,
+    });
+
+    loadOpenClawPlugins({
+      cache: false,
+      workspaceDir: gatewayPlugin.dir,
+      config: {
+        plugins: {
+          load: { paths: [gatewayPlugin.file] },
+          allow: ["gateway-command"],
+        },
+      },
+    });
+    expect(matchPluginCommand("/gatewaycmd")).not.toBeNull();
+
+    const inspectionRegistry = loadOpenClawPlugins({
+      workspaceDir: inspectionPlugin.dir,
+      config: {
+        plugins: {
+          load: { paths: [inspectionPlugin.file] },
+          allow: ["inspection-command"],
+        },
+      },
+      activate: false,
+      cache: false,
+    });
+
+    expect(inspectionRegistry.commands).toHaveLength(1);
+    expect(inspectionRegistry.diagnostics).toEqual([]);
+    expect(matchPluginCommand("/gatewaycmd")).not.toBeNull();
+    expect(matchPluginCommand("/inspectcmd")).toBeNull();
+  });
+
+  it("re-registers cached plugin commands when a read-only load becomes active", () => {
+    const plugin = writePlugin({
+      id: "cached-command",
+      filename: "cached-command.cjs",
+      body: `module.exports = {
+        id: "cached-command",
+        register(api) {
+          api.registerCommand({
+            name: "cachedcmd",
+            description: "Cached command",
+            handler: async () => ({ text: "ok" }),
+          });
+        },
+      };`,
+    });
+
+    const options = {
+      workspaceDir: plugin.dir,
+      config: {
+        plugins: {
+          load: { paths: [plugin.file] },
+          allow: ["cached-command"],
+        },
+      },
+    };
+
+    const inactiveRegistry = loadOpenClawPlugins({
+      ...options,
+      activate: false,
+    });
+    expect(inactiveRegistry.commands).toHaveLength(1);
+    expect(matchPluginCommand("/cachedcmd")).toBeNull();
+
+    const activeRegistry = loadOpenClawPlugins(options);
+
+    expect(activeRegistry).toBe(inactiveRegistry);
+    expect(matchPluginCommand("/cachedcmd")).not.toBeNull();
+  });
+
+  it("keeps malformed read-only commands as diagnostics instead of cached activation failures", () => {
+    const plugin = writePlugin({
+      id: "broken-command",
+      filename: "broken-command.cjs",
+      body: `module.exports = {
+        id: "broken-command",
+        register(api) {
+          api.registerCommand({
+            name: "broken",
+            handler: async () => ({ text: "ok" }),
+          });
+        },
+      };`,
+    });
+
+    const options = {
+      workspaceDir: plugin.dir,
+      config: {
+        plugins: {
+          load: { paths: [plugin.file] },
+          allow: ["broken-command"],
+        },
+      },
+    };
+
+    const inactiveRegistry = loadOpenClawPlugins({
+      ...options,
+      activate: false,
+    });
+    expect(inactiveRegistry.commands).toHaveLength(0);
+    expect(
+      inactiveRegistry.diagnostics.some((entry) =>
+        entry.message.includes("Command description must be a string"),
+      ),
+    ).toBe(true);
+
+    const activeRegistry = loadOpenClawPlugins(options);
+
+    expect(activeRegistry).toBe(inactiveRegistry);
+    expect(matchPluginCommand("/broken")).toBeNull();
+  });
+
+  it("preserves the current command registry when cached activation collides with command execution", async () => {
+    let releaseHeldCommand: ((value: { text: string }) => void) | undefined;
+    (
+      globalThis as typeof globalThis & { __openclawHeldCommandPromise?: Promise<{ text: string }> }
+    ).__openclawHeldCommandPromise = new Promise((resolve) => {
+      releaseHeldCommand = resolve;
+    });
+
+    const plugin = writePlugin({
+      id: "held-command",
+      filename: "held-command.cjs",
+      body: `module.exports = {
+        id: "held-command",
+        register(api) {
+          api.registerCommand({
+            name: "heldcmd",
+            description: "Held command",
+            handler: async () => globalThis.__openclawHeldCommandPromise,
+          });
+        },
+      };`,
+    });
+
+    const options = {
+      workspaceDir: plugin.dir,
+      config: {
+        plugins: {
+          load: { paths: [plugin.file] },
+          allow: ["held-command"],
+        },
+      },
+    };
+
+    loadOpenClawPlugins(options);
+    const matched = matchPluginCommand("/heldcmd");
+    expect(matched).not.toBeNull();
+
+    const execution = executePluginCommand({
+      command: matched!.command,
+      channel: "test",
+      isAuthorizedSender: true,
+      commandBody: "/heldcmd",
+      config: {},
+    });
+
+    expect(() => loadOpenClawPlugins(options)).toThrow(
+      "cached plugin command registration failed: Cannot register commands while processing is in progress",
+    );
+    expect(matchPluginCommand("/heldcmd")).not.toBeNull();
+
+    releaseHeldCommand?.({ text: "ok" });
+    await expect(execution).resolves.toEqual({ text: "ok" });
+    delete (
+      globalThis as typeof globalThis & {
+        __openclawHeldCommandPromise?: Promise<{ text: string }>;
+      }
+    ).__openclawHeldCommandPromise;
   });
 
   it("does not reuse cached bundled plugin registries across env changes", () => {

@@ -102,20 +102,25 @@ export type CommandRegistrationResult = {
   error?: string;
 };
 
-/**
- * Register a plugin command.
- * Returns an error if the command name is invalid or reserved.
- */
-export function registerPluginCommand(
-  pluginId: string,
-  command: OpenClawPluginCommandDefinition,
-): CommandRegistrationResult {
-  // Prevent registration while commands are being processed
-  if (registryLocked) {
-    return { ok: false, error: "Cannot register commands while processing is in progress" };
-  }
+export type PluginCommandRegistryEntry = {
+  pluginId: string;
+  command: OpenClawPluginCommandDefinition;
+};
 
-  // Validate handler is a function
+export type CommandValidationResult =
+  | {
+      ok: true;
+      name: string;
+      description: string;
+    }
+  | {
+      ok: false;
+      error: string;
+    };
+
+export function validatePluginCommandDefinition(
+  command: OpenClawPluginCommandDefinition,
+): CommandValidationResult {
   if (typeof command.handler !== "function") {
     return { ok: false, error: "Command handler must be a function" };
   }
@@ -138,6 +143,32 @@ export function registerPluginCommand(
     return { ok: false, error: validationError };
   }
 
+  return {
+    ok: true,
+    name,
+    description,
+  };
+}
+
+/**
+ * Register a plugin command.
+ * Returns an error if the command name is invalid or reserved.
+ */
+export function registerPluginCommand(
+  pluginId: string,
+  command: OpenClawPluginCommandDefinition,
+): CommandRegistrationResult {
+  // Prevent registration while commands are being processed
+  if (registryLocked) {
+    return { ok: false, error: "Cannot register commands while processing is in progress" };
+  }
+
+  const validation = validatePluginCommandDefinition(command);
+  if (!validation.ok) {
+    return { ok: false, error: validation.error };
+  }
+  const { name, description } = validation;
+
   const key = `/${name.toLowerCase()}`;
 
   // Check for duplicate registration
@@ -151,6 +182,45 @@ export function registerPluginCommand(
 
   pluginCommands.set(key, { ...command, name, description, pluginId });
   logVerbose(`Registered plugin command: ${key} (plugin: ${pluginId})`);
+  return { ok: true };
+}
+
+export function replacePluginCommands(
+  entries: PluginCommandRegistryEntry[],
+): CommandRegistrationResult {
+  if (registryLocked) {
+    return { ok: false, error: "Cannot register commands while processing is in progress" };
+  }
+
+  const nextCommands = new Map<string, RegisteredPluginCommand>();
+  for (const entry of entries) {
+    const validation = validatePluginCommandDefinition(entry.command);
+    if (!validation.ok) {
+      return { ok: false, error: validation.error };
+    }
+
+    const { name, description } = validation;
+    const key = `/${name.toLowerCase()}`;
+    if (nextCommands.has(key)) {
+      const existing = nextCommands.get(key)!;
+      return {
+        ok: false,
+        error: `Command "${name}" already registered by plugin "${existing.pluginId}"`,
+      };
+    }
+
+    nextCommands.set(key, {
+      ...entry.command,
+      name,
+      description,
+      pluginId: entry.pluginId,
+    });
+  }
+
+  pluginCommands.clear();
+  for (const [key, command] of nextCommands) {
+    pluginCommands.set(key, command);
+  }
   return { ok: true };
 }
 

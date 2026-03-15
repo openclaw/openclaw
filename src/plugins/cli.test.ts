@@ -60,4 +60,16 @@ describe("registerPluginCliCommands", () => {
       }),
     );
   });
+
+  it("keeps plugin loading activating so pairing setup can read channel plugins", () => {
+    const program = new Command();
+
+    registerPluginCliCommands(program, {} as OpenClawConfig);
+
+    expect(mocks.loadOpenClawPlugins).toHaveBeenCalledWith(
+      expect.not.objectContaining({
+        activate: false,
+      }),
+    );
+  });
 });

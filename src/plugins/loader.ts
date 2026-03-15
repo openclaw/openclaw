@@ -9,7 +9,7 @@ import { openBoundaryFileSync } from "../infra/boundary-file-read.js";
 import { resolveOpenClawPackageRootSync } from "../infra/openclaw-root.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveUserPath } from "../utils.js";
-import { clearPluginCommands } from "./commands.js";
+import { replacePluginCommands } from "./commands.js";
 import {
   applyTestPluginDefaults,
   normalizePluginsConfig,
@@ -46,6 +46,11 @@ export type PluginLoadOptions = {
   coreGatewayHandlers?: Record<string, GatewayRequestHandler>;
   runtimeOptions?: CreatePluginRuntimeOptions;
   cache?: boolean;
+  /**
+   * When false, return the loaded registry without replacing the process-global
+   * active runtime registry.
+   */
+  activate?: boolean;
   mode?: "full" | "validate";
 };
 
@@ -593,6 +598,13 @@ function activatePluginRegistry(registry: PluginRegistry, cacheKey: string): voi
   initializeGlobalHookRunner(registry);
 }
 
+function syncPluginCommandsFromRegistry(registry: PluginRegistry): void {
+  const result = replacePluginCommands(registry.commands);
+  if (!result.ok) {
+    throw new Error(`cached plugin command registration failed: ${result.error}`);
+  }
+}
+
 export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegistry {
   const env = options.env ?? process.env;
   // Test env: default-disable plugins unless explicitly configured.
@@ -608,16 +620,17 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
     env,
   });
   const cacheEnabled = options.cache !== false;
+  const shouldActivate = options.activate !== false;
   if (cacheEnabled) {
     const cached = getCachedPluginRegistry(cacheKey);
     if (cached) {
-      activatePluginRegistry(cached, cacheKey);
+      if (shouldActivate) {
+        syncPluginCommandsFromRegistry(cached);
+        activatePluginRegistry(cached, cacheKey);
+      }
       return cached;
     }
   }
-
-  // Clear previously registered plugin commands before reloading
-  clearPluginCommands();
 
   // Lazily initialize the runtime so startup paths that discover/skip plugins do
   // not eagerly load every channel runtime dependency.
@@ -979,7 +992,10 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
   if (cacheEnabled) {
     setCachedPluginRegistry(cacheKey, registry);
   }
-  activatePluginRegistry(registry, cacheKey);
+  if (shouldActivate) {
+    syncPluginCommandsFromRegistry(registry);
+    activatePluginRegistry(registry, cacheKey);
+  }
   return registry;
 }
 
