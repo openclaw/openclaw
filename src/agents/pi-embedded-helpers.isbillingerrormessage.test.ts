@@ -619,6 +619,10 @@ describe("isFailoverErrorMessage", () => {
     expect(classifyFailoverReason(sample)).toBe(null);
     expect(isFailoverErrorMessage(sample)).toBe(false);
   });
+
+  it("matches OpenRouter generic 'Provider returned error' as timeout (#45663)", () => {
+    expectTimeoutFailoverSamples(["Provider returned error"]);
+  });
 });
 
 describe("parseImageSizeError", () => {

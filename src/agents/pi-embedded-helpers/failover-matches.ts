@@ -50,6 +50,7 @@ const ERROR_PATTERNS = {
     /\bstop reason:\s*(?:abort|error|malformed_response|network_error)\b/i,
     /\breason:\s*(?:abort|error|malformed_response|network_error)\b/i,
     /\bunhandled stop reason:\s*(?:abort|error|malformed_response|network_error)\b/i,
+    /(?<!(?:\b40[13]\b|forbidden|unauthorized|authentication).{0,20})provider returned error(?![\s\S]*(?:api.key|auth|unauth|invalid.key|forbidden|credential|permission|quota|billing|insufficient|payment|\b40[13]\b))/i,
   ],
   billing: [
     /["']?(?:status|code)["']?\s*[:=]\s*402\b|\bhttp\s*402\b|\berror(?:\s+code)?\s*[:=]?\s*402\b|\b(?:got|returned|received)\s+(?:a\s+)?402\b|^\s*402\s+payment/i,
