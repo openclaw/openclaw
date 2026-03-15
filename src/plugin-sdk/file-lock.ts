@@ -64,21 +64,22 @@ async function resolveNormalizedFilePath(filePath: string): Promise<string> {
 
 async function isStaleLock(lockPath: string, staleMs: number): Promise<boolean> {
   const payload = await readLockPayload(lockPath);
-  if (payload?.pid && !isPidAlive(payload.pid)) {
+  // A lock file with missing or unparseable content was left by a process
+  // that crashed between open("wx") (which creates the file) and the
+  // subsequent writeFile (which fills in the pid/createdAt). Treat it as
+  // stale immediately so it can be reclaimed rather than blocking every
+  // future writer until the mtime-based timeout expires.
+  if (payload === null) {
     return true;
   }
-  if (payload?.createdAt) {
-    const createdAt = Date.parse(payload.createdAt);
-    if (!Number.isFinite(createdAt) || Date.now() - createdAt > staleMs) {
-      return true;
-    }
-  }
-  try {
-    const stat = await fs.stat(lockPath);
-    return Date.now() - stat.mtimeMs > staleMs;
-  } catch {
+  if (!isPidAlive(payload.pid)) {
     return true;
   }
+  const createdAt = Date.parse(payload.createdAt);
+  if (!Number.isFinite(createdAt) || Date.now() - createdAt > staleMs) {
+    return true;
+  }
+  return false;
 }
 
 export type FileLockHandle = {
