@@ -5,6 +5,16 @@ export const EMBEDDED_COMPACTION_TIMEOUT_MS = 900_000;
 
 const MAX_SAFE_TIMEOUT_MS = 2_147_000_000;
 
+function createAbortError(signal: AbortSignal): Error {
+  const reason = "reason" in signal ? signal.reason : undefined;
+  if (reason instanceof Error) {
+    return reason;
+  }
+  const err = reason ? new Error("aborted", { cause: reason }) : new Error("aborted");
+  err.name = "AbortError";
+  return err;
+}
+
 export function resolveCompactionTimeoutMs(cfg?: OpenClawConfig): number {
   const raw = cfg?.agents?.defaults?.compaction?.timeoutSeconds;
   if (typeof raw === "number" && Number.isFinite(raw) && raw > 0) {
@@ -16,6 +26,63 @@ export function resolveCompactionTimeoutMs(cfg?: OpenClawConfig): number {
 export async function compactWithSafetyTimeout<T>(
   compact: () => Promise<T>,
   timeoutMs: number = EMBEDDED_COMPACTION_TIMEOUT_MS,
+  opts?: {
+    abortSignal?: AbortSignal;
+    onCancel?: () => void;
+  },
 ): Promise<T> {
-  return await withTimeout(() => compact(), timeoutMs, "Compaction");
+  let canceled = false;
+  const cancel = () => {
+    if (canceled) {
+      return;
+    }
+    canceled = true;
+    opts?.onCancel?.();
+  };
+
+  return await withTimeout(
+    async (timeoutSignal) => {
+      let timeoutListener: (() => void) | undefined;
+      let externalAbortListener: (() => void) | undefined;
+      let externalAbortPromise: Promise<never> | undefined;
+      const abortSignal = opts?.abortSignal;
+
+      if (timeoutSignal) {
+        timeoutListener = () => {
+          cancel();
+        };
+        timeoutSignal.addEventListener("abort", timeoutListener, { once: true });
+      }
+
+      if (abortSignal) {
+        if (abortSignal.aborted) {
+          cancel();
+          throw createAbortError(abortSignal);
+        }
+        externalAbortPromise = new Promise((_, reject) => {
+          externalAbortListener = () => {
+            cancel();
+            reject(createAbortError(abortSignal));
+          };
+          abortSignal.addEventListener("abort", externalAbortListener, { once: true });
+        });
+      }
+
+      try {
+        if (externalAbortPromise) {
+          return await Promise.race([compact(), externalAbortPromise]);
+        }
+        return await compact();
+      } finally {
+        if (timeoutListener) {
+          timeoutSignal?.removeEventListener("abort", timeoutListener);
+        }
+        if (externalAbortListener) {
+          abortSignal?.removeEventListener("abort", externalAbortListener);
+        }
+      }
+    },
+    timeoutMs,
+    "Compaction",
+  );
 }

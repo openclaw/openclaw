@@ -43,6 +43,39 @@ describe("compactWithSafetyTimeout", () => {
     ).rejects.toBe(error);
     expect(vi.getTimerCount()).toBe(0);
   });
+
+  it("calls onCancel when compaction times out", async () => {
+    vi.useFakeTimers();
+    const onCancel = vi.fn();
+
+    const compactPromise = compactWithSafetyTimeout(() => new Promise<never>(() => {}), 30, {
+      onCancel,
+    });
+    const timeoutAssertion = expect(compactPromise).rejects.toThrow("Compaction timed out");
+
+    await vi.advanceTimersByTimeAsync(30);
+    await timeoutAssertion;
+    expect(onCancel).toHaveBeenCalledTimes(1);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("aborts early on external abort signal and calls onCancel once", async () => {
+    vi.useFakeTimers();
+    const controller = new AbortController();
+    const onCancel = vi.fn();
+    const reason = new Error("request timed out");
+
+    const compactPromise = compactWithSafetyTimeout(() => new Promise<never>(() => {}), 100, {
+      abortSignal: controller.signal,
+      onCancel,
+    });
+    const abortAssertion = expect(compactPromise).rejects.toBe(reason);
+
+    controller.abort(reason);
+    await abortAssertion;
+    expect(onCancel).toHaveBeenCalledTimes(1);
+    expect(vi.getTimerCount()).toBe(0);
+  });
 });
 
 describe("resolveCompactionTimeoutMs", () => {

@@ -143,6 +143,7 @@ export type CompactEmbeddedPiSessionParams = {
   enqueue?: typeof enqueueCommand;
   extraSystemPrompt?: string;
   ownerNumbers?: string[];
+  abortSignal?: AbortSignal;
 };
 
 type CompactionMessageMetrics = {
@@ -919,6 +920,12 @@ export async function compactEmbeddedPiSessionDirect(
         const result = await compactWithSafetyTimeout(
           () => session.compact(params.customInstructions),
           compactionTimeoutMs,
+          {
+            abortSignal: params.abortSignal,
+            onCancel: () => {
+              session.abortCompaction();
+            },
+          },
         );
         await runPostCompactionSideEffects({
           config: params.config,
