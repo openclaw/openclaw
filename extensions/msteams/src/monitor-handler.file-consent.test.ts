@@ -137,7 +137,7 @@ function createConsentInvokeHarness(params: {
     contentType: "text/plain",
     conversationId: params.pendingConversationId ?? "19:victim@thread.v2",
   });
-  const handler = registerMSTeamsHandlers(createActivityHandler(), createDeps());
+  const { handler } = registerMSTeamsHandlers(createActivityHandler(), createDeps());
   const { context, sendActivity } = createInvokeContext({
     conversationId: params.invokeConversationId,
     uploadId,
