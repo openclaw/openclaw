@@ -975,6 +975,7 @@ Periodic heartbeat runs.
         model: "openai/gpt-5.2-mini",
         includeReasoning: false,
         lightContext: false, // default: false; true keeps only HEARTBEAT.md from workspace bootstrap files
+        isolatedSession: false, // default: false; true runs each heartbeat in a fresh session (no conversation history)
         session: "main",
         to: "+15555550123",
         directPolicy: "allow", // allow (default) | block
@@ -992,6 +993,7 @@ Periodic heartbeat runs.
 - `suppressToolErrorWarnings`: when true, suppresses tool error warning payloads during heartbeat runs.
 - `directPolicy`: direct/DM delivery policy. `allow` (default) permits direct-target delivery. `block` suppresses direct-target delivery and emits `reason=dm-blocked`.
 - `lightContext`: when true, heartbeat runs use lightweight bootstrap context and keep only `HEARTBEAT.md` from workspace bootstrap files.
+- `isolatedSession`: when true, each heartbeat runs in a fresh session with no prior conversation history. Same isolation pattern as cron `sessionTarget: "isolated"`. Reduces per-heartbeat token cost from ~100K to ~2-5K tokens.
 - Per-agent: set `agents.list[].heartbeat`. When any agent defines `heartbeat`, **only those agents** run heartbeats.
 - Heartbeats run full agent turns — shorter intervals burn more tokens.
 
@@ -2342,7 +2344,7 @@ See [Plugins](/tools/plugin).
   browser: {
     enabled: true,
     evaluateEnabled: true,
-    defaultProfile: "chrome",
+    defaultProfile: "user",
     ssrfPolicy: {
       dangerouslyAllowPrivateNetwork: true, // default trusted-network mode
       // allowPrivateNetwork: true, // legacy alias

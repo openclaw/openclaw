@@ -1,16 +1,14 @@
-import { randomUUID } from "node:crypto";
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
-import { afterAll, afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import type { PluginCandidate } from "./discovery.js";
 import {
   clearPluginManifestRegistryCache,
   loadPluginManifestRegistry,
 } from "./manifest-registry.js";
+import { cleanupTrackedTempDirs, makeTrackedTempDir } from "./test-helpers/fs-fixtures.js";
 
 const tempDirs: string[] = [];
-const previousUmask = process.umask(0o022);
 
 function chmodSafeDir(dir: string) {
   if (process.platform === "win32") {
@@ -25,10 +23,7 @@ function mkdirSafe(dir: string) {
 }
 
 function makeTempDir() {
-  const dir = path.join(os.tmpdir(), `openclaw-manifest-registry-${randomUUID()}`);
-  mkdirSafe(dir);
-  tempDirs.push(dir);
-  return dir;
+  return makeTrackedTempDir("openclaw-manifest-registry", tempDirs);
 }
 
 function writeManifest(dir: string, manifest: Record<string, unknown>) {
@@ -133,21 +128,7 @@ function expectUnsafeWorkspaceManifestRejected(params: {
 
 afterEach(() => {
   clearPluginManifestRegistryCache();
-  while (tempDirs.length > 0) {
-    const dir = tempDirs.pop();
-    if (!dir) {
-      break;
-    }
-    try {
-      fs.rmSync(dir, { recursive: true, force: true });
-    } catch {
-      // ignore cleanup failures
-    }
-  }
-});
-
-afterAll(() => {
-  process.umask(previousUmask);
+  cleanupTrackedTempDirs(tempDirs);
 });
 
 describe("loadPluginManifestRegistry", () => {

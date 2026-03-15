@@ -139,6 +139,22 @@ describe("msteams messenger", () => {
   });
 
   describe("sendMSTeamsMessages", () => {
+    function createRevokedThreadContext(params?: { failAfterAttempt?: number; sent?: string[] }) {
+      let attempt = 0;
+      return {
+        sendActivity: async (activity: unknown) => {
+          const { text } = activity as { text?: string };
+          const content = text ?? "";
+          attempt += 1;
+          if (params?.failAfterAttempt && attempt < params.failAfterAttempt) {
+            params.sent?.push(content);
+            return { id: `id:${content}` };
+          }
+          throw new TypeError(REVOCATION_ERROR);
+        },
+      };
+    }
+
     const baseRef: StoredConversationReference = {
       activityId: "activity123",
       user: { id: "user123", name: "User" },
@@ -305,13 +321,7 @@ describe("msteams messenger", () => {
 
     it("falls back to proactive messaging when thread context is revoked", async () => {
       const proactiveSent: string[] = [];
-
-      const ctx = {
-        sendActivity: async () => {
-          throw new TypeError(REVOCATION_ERROR);
-        },
-      };
-
+      const ctx = createRevokedThreadContext();
       const adapter = createFallbackAdapter(proactiveSent);
 
       const ids = await sendMSTeamsMessages({
@@ -331,21 +341,7 @@ describe("msteams messenger", () => {
     it("falls back only for remaining thread messages after context revocation", async () => {
       const threadSent: string[] = [];
       const proactiveSent: string[] = [];
-      let attempt = 0;
-
-      const ctx = {
-        sendActivity: async (activity: unknown) => {
-          const { text } = activity as { text?: string };
-          const content = text ?? "";
-          attempt += 1;
-          if (attempt === 1) {
-            threadSent.push(content);
-            return { id: `id:${content}` };
-          }
-          throw new TypeError(REVOCATION_ERROR);
-        },
-      };
-
+      const ctx = createRevokedThreadContext({ failAfterAttempt: 2, sent: threadSent });
       const adapter = createFallbackAdapter(proactiveSent);
 
       const ids = await sendMSTeamsMessages({
