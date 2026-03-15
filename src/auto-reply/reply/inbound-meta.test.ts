@@ -67,6 +67,20 @@ describe("buildInboundMetaSystemPrompt", () => {
     expect(payload["sender_id"]).toBeUndefined();
   });
 
+  it("falls back to MessageSidFull when MessageSid is empty", () => {
+    const prompt = buildInboundMetaSystemPrompt({
+      MessageSidFull: "full-guid-only",
+      OriginatingTo: "bluebubbles:chat_guid:any;-;+18014588887",
+      OriginatingChannel: "bluebubbles",
+      Provider: "bluebubbles",
+      Surface: "bluebubbles",
+      ChatType: "direct",
+    } as TemplateContext);
+
+    const payload = parseInboundMetaPayload(prompt);
+    expect(payload["message_id"]).toBe("full-guid-only");
+  });
+
   it("does not include per-turn flags in system metadata", () => {
     const prompt = buildInboundMetaSystemPrompt({
       ReplyToBody: "quoted",

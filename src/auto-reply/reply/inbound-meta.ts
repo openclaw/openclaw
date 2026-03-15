@@ -68,7 +68,8 @@ export function buildInboundMetaSystemPrompt(ctx: TemplateContext): string {
     // message_id is included so agents can target the triggering inbound message for
     // tool calls (e.g. tapback reactions). Safe in trusted inbound_meta block only.
     // User-role conversation-info intentionally still omits message_id for DMs.
-    message_id: safeTrim(ctx.MessageSid),
+    // Fall back to MessageSidFull when MessageSid is empty (e.g. BlueBubbles DMs).
+    message_id: safeTrim(ctx.MessageSid) ?? safeTrim(ctx.MessageSidFull),
   };
 
   // Keep the instructions local to the payload so the meaning survives prompt overrides.
