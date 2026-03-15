@@ -93,6 +93,12 @@ describe("copyBundledPluginMetadata", () => {
     );
     fs.mkdirSync(storeSkillDir, { recursive: true });
     fs.writeFileSync(path.join(storeSkillDir, "SKILL.md"), "# Tlon Skill\n", "utf8");
+    fs.mkdirSync(path.join(storeSkillDir, "node_modules", ".bin"), { recursive: true });
+    fs.writeFileSync(
+      path.join(storeSkillDir, "node_modules", ".bin", "tlon"),
+      "#!/bin/sh\n",
+      "utf8",
+    );
     fs.mkdirSync(path.join(pluginDir, "node_modules", "@tloncorp"), { recursive: true });
     fs.symlinkSync(
       storeSkillDir,
@@ -133,6 +139,7 @@ describe("copyBundledPluginMetadata", () => {
     );
     expect(fs.existsSync(path.join(copiedSkillDir, "SKILL.md"))).toBe(true);
     expect(fs.lstatSync(copiedSkillDir).isSymbolicLink()).toBe(false);
+    expect(fs.existsSync(path.join(copiedSkillDir, "node_modules"))).toBe(false);
     expect(fs.existsSync(path.join(repoRoot, "dist", "extensions", "tlon", "node_modules"))).toBe(
       false,
     );
