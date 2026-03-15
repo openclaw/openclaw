@@ -2,6 +2,13 @@ import path from "node:path";
 
 export const CONFIG_BACKUP_COUNT = 5;
 
+/**
+ * Regex pattern for timestamped backup files.
+ * Format: YYYY-MM-DD_HH-MM-SS with optional label suffix.
+ * Example: .bak.2024-01-15_10-30-45 or .bak.2024-01-15_10-30-45-migration
+ */
+export const TIMESTAMPED_BACKUP_PATTERN = /^\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2}(-[a-zA-Z0-9_-]+)?$/;
+
 export interface BackupRotationFs {
   unlink: (path: string) => Promise<void>;
   rename: (from: string, to: string) => Promise<void>;
@@ -62,12 +69,22 @@ export async function hardenBackupPermissions(
 }
 
 /**
+ * Check if a backup suffix is a valid timestamped backup.
+ * Timestamped backups use the format: YYYY-MM-DD_HH-MM-SS[-label]
+ */
+function isTimestampedBackup(suffix: string): boolean {
+  return TIMESTAMPED_BACKUP_PATTERN.test(suffix);
+}
+
+/**
  * Remove orphan .bak files that fall outside the managed rotation ring.
  * These can accumulate from interrupted writes, manual copies, or PID-stamped
  * backups (e.g. openclaw.json.bak.1772352289, openclaw.json.bak.before-marketing).
  *
- * Only files matching `<configBasename>.bak.*` are considered; the primary
- * `.bak` and numbered `.bak.1` through `.bak.{N-1}` are preserved.
+ * Only files matching `<configBasename>.bak.*` are considered; the following are preserved:
+ * - The primary `.bak` file
+ * - Numbered `.bak.1` through `.bak.{N-1}`
+ * - Timestamped backups (`.bak.YYYY-MM-DD_HH-MM-SS[-label]`)
  */
 export async function cleanOrphanBackups(
   configPath: string,
@@ -99,6 +116,10 @@ export async function cleanOrphanBackups(
     }
     const suffix = entry.slice(bakPrefix.length);
     if (validSuffixes.has(suffix)) {
+      continue;
+    }
+    // Preserve timestamped backups (manual backups with --timestamp)
+    if (isTimestampedBackup(suffix)) {
       continue;
     }
     // This is an orphan — remove it
