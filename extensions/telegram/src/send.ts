@@ -1067,6 +1067,109 @@ export async function deleteMessageTelegram(
   return { ok: true };
 }
 
+export async function pinMessageTelegram(
+  chatIdInput: string | number,
+  messageIdInput: string | number,
+  opts: TelegramDeleteOpts = {},
+): Promise<{ ok: true; messageId: string; chatId: string }> {
+  const { cfg, account, api } = resolveTelegramApiContext(opts);
+  const rawTarget = String(chatIdInput);
+  const chatId = await resolveAndPersistChatId({
+    cfg,
+    api,
+    lookupTarget: rawTarget,
+    persistTarget: rawTarget,
+    verbose: opts.verbose,
+  });
+  const messageId = normalizeMessageId(messageIdInput);
+  const requestWithDiag = createTelegramRequestWithDiag({
+    cfg,
+    account,
+    retry: opts.retry,
+    verbose: opts.verbose,
+  });
+  await requestWithDiag(
+    () => api.pinChatMessage(chatId, messageId, { disable_notification: true }),
+    "pinChatMessage",
+  );
+  logVerbose(`[telegram] Pinned message ${messageId} in chat ${chatId}`);
+  return { ok: true, messageId: String(messageId), chatId };
+}
+
+export async function unpinMessageTelegram(
+  chatIdInput: string | number,
+  messageIdInput?: string | number,
+  opts: TelegramDeleteOpts = {},
+): Promise<{ ok: true; chatId: string; messageId?: string }> {
+  const { cfg, account, api } = resolveTelegramApiContext(opts);
+  const rawTarget = String(chatIdInput);
+  const chatId = await resolveAndPersistChatId({
+    cfg,
+    api,
+    lookupTarget: rawTarget,
+    persistTarget: rawTarget,
+    verbose: opts.verbose,
+  });
+  const messageId = messageIdInput === undefined ? undefined : normalizeMessageId(messageIdInput);
+  const requestWithDiag = createTelegramRequestWithDiag({
+    cfg,
+    account,
+    retry: opts.retry,
+    verbose: opts.verbose,
+  });
+  await requestWithDiag(() => api.unpinChatMessage(chatId, messageId), "unpinChatMessage");
+  logVerbose(
+    `[telegram] Unpinned ${messageId != null ? `message ${messageId}` : "active message"} in chat ${chatId}`,
+  );
+  return {
+    ok: true,
+    chatId,
+    ...(messageId != null ? { messageId: String(messageId) } : {}),
+  };
+}
+
+export async function renameForumTopicTelegram(
+  chatIdInput: string | number,
+  messageThreadIdInput: string | number,
+  name: string,
+  opts: TelegramDeleteOpts = {},
+): Promise<{ ok: true; chatId: string; messageThreadId: number; name: string }> {
+  const trimmedName = name.trim();
+  if (!trimmedName) {
+    throw new Error("Telegram forum topic name is required");
+  }
+  if (trimmedName.length > 128) {
+    throw new Error("Telegram forum topic name must be 128 characters or fewer");
+  }
+  const { cfg, account, api } = resolveTelegramApiContext(opts);
+  const rawTarget = String(chatIdInput);
+  const chatId = await resolveAndPersistChatId({
+    cfg,
+    api,
+    lookupTarget: rawTarget,
+    persistTarget: rawTarget,
+    verbose: opts.verbose,
+  });
+  const messageThreadId = normalizeMessageId(messageThreadIdInput);
+  const requestWithDiag = createTelegramRequestWithDiag({
+    cfg,
+    account,
+    retry: opts.retry,
+    verbose: opts.verbose,
+  });
+  await requestWithDiag(
+    () => api.editForumTopic(chatId, messageThreadId, { name: trimmedName }),
+    "editForumTopic",
+  );
+  logVerbose(`[telegram] Renamed forum topic ${messageThreadId} in chat ${chatId}`);
+  return {
+    ok: true,
+    chatId,
+    messageThreadId,
+    name: trimmedName,
+  };
+}
+
 type TelegramEditOpts = {
   token?: string;
   accountId?: string;

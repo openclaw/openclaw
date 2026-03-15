@@ -100,10 +100,24 @@ export type {
   OpenClawPluginApi,
   OpenClawPluginService,
   OpenClawPluginServiceContext,
+  PluginHookInboundClaimContext,
+  PluginHookInboundClaimEvent,
+  PluginHookInboundClaimResult,
+  PluginInteractiveDiscordHandlerContext,
+  PluginInteractiveHandlerRegistration,
+  PluginInteractiveTelegramHandlerContext,
   PluginLogger,
   ProviderAuthContext,
   ProviderAuthResult,
 } from "../plugins/types.js";
+export type {
+  ConversationRef,
+  SessionBindingBindInput,
+  SessionBindingCapabilities,
+  SessionBindingRecord,
+  SessionBindingService,
+  SessionBindingUnbindInput,
+} from "../infra/outbound/session-binding-service.js";
 export type {
   GatewayRequestHandler,
   GatewayRequestHandlerOptions,

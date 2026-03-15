@@ -80,6 +80,7 @@ describe("diffs plugin registration", () => {
       registerHttpRoute(params: RegisteredHttpRouteParams) {
         registeredHttpRouteHandler = params.handler;
       },
+      on() {},
     });
 
     plugin.register?.(api as unknown as OpenClawPluginApi);
