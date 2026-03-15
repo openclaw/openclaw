@@ -494,6 +494,33 @@ describe("deliverWebReply", () => {
     expect(msg.reply).toHaveBeenNthCalledWith(2, "aaa");
   });
 
+  it("does not replay deferred audio caption after first media fallback", async () => {
+    const msg = makeMsg();
+    (
+      loadWebMedia as unknown as { mockResolvedValueOnce: (v: unknown) => void }
+    ).mockResolvedValueOnce({
+      buffer: Buffer.from("aud"),
+      contentType: "audio/mpeg",
+      kind: "audio",
+    });
+    mockFirstSendMediaFailure(msg, "upload failed");
+
+    await deliverWebReply({
+      replyResult: {
+        text: "aaaaaa",
+        mediaUrls: ["http://example.com/a.mp3"],
+      },
+      msg,
+      maxMediaBytes: 1024 * 1024,
+      textLimit: 3,
+      replyLogger,
+      skipLog: true,
+    });
+
+    expect(msg.reply).toHaveBeenCalledTimes(1);
+    expect(msg.reply).toHaveBeenNthCalledWith(1, "aaa\n⚠️ Media failed: upload failed");
+  });
+
   it("sends video media", async () => {
     const msg = makeMsg();
     (
