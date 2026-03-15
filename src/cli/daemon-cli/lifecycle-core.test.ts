@@ -99,6 +99,30 @@ describe("runServiceRestart token drift", () => {
     );
   });
 
+  it("skips drift warnings when config token SecretRef is unavailable in the CLI path", async () => {
+    loadConfig.mockReturnValue({
+      secrets: {
+        providers: {
+          default: { source: "env" },
+        },
+      },
+      gateway: {
+        auth: {
+          token: { source: "env", provider: "default", id: "OPENCLAW_GATEWAY_TOKEN" },
+        },
+      },
+    });
+    service.readCommand.mockResolvedValue({
+      programArguments: [],
+      environment: { OPENCLAW_GATEWAY_TOKEN: "service-token" },
+    });
+
+    await runServiceRestart(createServiceRunArgs(true));
+
+    const payload = readJsonLog<{ warnings?: string[] }>();
+    expect(payload.warnings).toBeUndefined();
+  });
+
   it("skips drift warning when disabled", async () => {
     await runServiceRestart({
       serviceNoun: "Node",

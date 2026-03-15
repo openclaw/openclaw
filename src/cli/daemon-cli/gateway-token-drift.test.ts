@@ -21,51 +21,51 @@ describe("resolveGatewayTokenForDriftCheck", () => {
     expect(token).toBe("config-token");
   });
 
-  it("does not fall back to caller env for unresolved config token refs", () => {
-    expect(() =>
-      resolveGatewayTokenForDriftCheck({
-        cfg: {
-          secrets: {
-            providers: {
-              default: { source: "env" },
-            },
+  it("skips drift comparison when config token SecretRef is unavailable", () => {
+    const token = resolveGatewayTokenForDriftCheck({
+      cfg: {
+        secrets: {
+          providers: {
+            default: { source: "env" },
           },
-          gateway: {
-            mode: "local",
-            auth: {
-              token: { source: "env", provider: "default", id: "OPENCLAW_GATEWAY_TOKEN" },
-            },
+        },
+        gateway: {
+          mode: "local",
+          auth: {
+            token: { source: "env", provider: "default", id: "OPENCLAW_GATEWAY_TOKEN" },
           },
-        } as OpenClawConfig,
-        env: {
-          OPENCLAW_GATEWAY_TOKEN: "env-token",
-        } as NodeJS.ProcessEnv,
-      }),
-    ).toThrow(/gateway\.auth\.token/i);
+        },
+      } as OpenClawConfig,
+      env: {
+        OPENCLAW_GATEWAY_TOKEN: "env-token",
+      } as NodeJS.ProcessEnv,
+    });
+
+    expect(token).toBeUndefined();
   });
 
-  it("does not fall back to gateway.remote token for unresolved local token refs", () => {
-    expect(() =>
-      resolveGatewayTokenForDriftCheck({
-        cfg: {
-          secrets: {
-            providers: {
-              default: { source: "env" },
-            },
+  it("does not fall back to gateway.remote token when local drift check token is unavailable", () => {
+    const token = resolveGatewayTokenForDriftCheck({
+      cfg: {
+        secrets: {
+          providers: {
+            default: { source: "env" },
           },
-          gateway: {
-            mode: "local",
-            auth: {
-              mode: "token",
-              token: { source: "env", provider: "default", id: "MISSING_LOCAL_TOKEN" },
-            },
-            remote: {
-              token: "remote-token",
-            },
+        },
+        gateway: {
+          mode: "local",
+          auth: {
+            mode: "token",
+            token: { source: "env", provider: "default", id: "MISSING_LOCAL_TOKEN" },
           },
-        } as OpenClawConfig,
-        env: {} as NodeJS.ProcessEnv,
-      }),
-    ).toThrow(/gateway\.auth\.token/i);
+          remote: {
+            token: "remote-token",
+          },
+        },
+      } as OpenClawConfig,
+      env: {} as NodeJS.ProcessEnv,
+    });
+
+    expect(token).toBeUndefined();
   });
 });
