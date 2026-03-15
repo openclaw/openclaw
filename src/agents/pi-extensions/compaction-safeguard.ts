@@ -699,15 +699,30 @@ async function readWorkspaceContextForSummary(): Promise<string> {
   }
 }
 
+const NO_REAL_MESSAGES_COOLDOWN_MS = 5 * 60 * 1000; // 5 minutes
+
 export default function compactionSafeguardExtension(api: ExtensionAPI): void {
+  let lastNoRealMessagesCancelAt = 0;
+
   api.on("session_before_compact", async (event, ctx) => {
     const { preparation, customInstructions: eventInstructions, signal } = event;
     if (!preparation.messagesToSummarize.some(isRealConversationMessage)) {
+      const now = Date.now();
+      const elapsed = now - lastNoRealMessagesCancelAt;
+      if (lastNoRealMessagesCancelAt > 0 && elapsed < NO_REAL_MESSAGES_COOLDOWN_MS) {
+        log.debug(
+          `Compaction safeguard: suppressing repeated no-real-messages cancellation (${Math.round(elapsed / 1000)}s since last).`,
+        );
+        return { cancel: true };
+      }
+      lastNoRealMessagesCancelAt = now;
       log.warn(
         "Compaction safeguard: cancelling compaction with no real conversation messages to summarize.",
       );
       return { cancel: true };
     }
+    // Reset cooldown when a real compaction proceeds.
+    lastNoRealMessagesCancelAt = 0;
     const { readFiles, modifiedFiles } = computeFileLists(preparation.fileOps);
     const fileOpsSummary = formatFileOperations(readFiles, modifiedFiles);
     const toolFailures = collectToolFailures([
