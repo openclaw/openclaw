@@ -932,6 +932,23 @@ export async function resolveImplicitCopilotProvider(params: {
     return null;
   }
 
+  const resolveCopilotTokenFromProfile = (
+    profile: ReturnType<typeof ensureAuthProfileStore>["profiles"][string] | undefined,
+  ): string => {
+    if (!profile || profile.type !== "token") {
+      return "";
+    }
+    const inlineToken = profile.token?.trim() ?? "";
+    if (inlineToken) {
+      return inlineToken;
+    }
+    const tokenRef = coerceSecretRef(profile.tokenRef);
+    if (tokenRef?.source === "env" && tokenRef.id.trim()) {
+      return (env[tokenRef.id] ?? process.env[tokenRef.id] ?? "").trim();
+    }
+    return "";
+  };
+
   let selectedGithubToken = githubToken;
   if (!selectedGithubToken && hasProfile) {
     // Use the standard profile ordering so discovery respects auth.order and
@@ -959,6 +976,7 @@ export async function resolveImplicitCopilotProvider(params: {
         : configuredOrder.length > 0
           ? configuredOrder
           : listProfilesForProvider(authStore, "github-copilot");
+    const profilesAlreadyEligible = profileIds === configuredOrder;
     const seenProfileIds = new Set<string>();
     for (const profileId of profileIds) {
       if (seenProfileIds.has(profileId)) {
@@ -966,6 +984,7 @@ export async function resolveImplicitCopilotProvider(params: {
       }
       seenProfileIds.add(profileId);
       if (
+        !profilesAlreadyEligible &&
         !resolveAuthProfileEligibility({
           cfg: params.config,
           store: authStore,
@@ -975,17 +994,7 @@ export async function resolveImplicitCopilotProvider(params: {
       ) {
         continue;
       }
-      const profile = authStore.profiles[profileId];
-      if (!profile || profile.type !== "token") {
-        continue;
-      }
-      selectedGithubToken = profile.token?.trim() ?? "";
-      if (!selectedGithubToken) {
-        const tokenRef = coerceSecretRef(profile.tokenRef);
-        if (tokenRef?.source === "env" && tokenRef.id.trim()) {
-          selectedGithubToken = (env[tokenRef.id] ?? process.env[tokenRef.id] ?? "").trim();
-        }
-      }
+      selectedGithubToken = resolveCopilotTokenFromProfile(authStore.profiles[profileId]);
       if (selectedGithubToken) {
         break;
       }
@@ -1005,17 +1014,7 @@ export async function resolveImplicitCopilotProvider(params: {
         ) {
           continue;
         }
-        const profile = authStore.profiles[profileId];
-        if (!profile || profile.type !== "token") {
-          continue;
-        }
-        selectedGithubToken = profile.token?.trim() ?? "";
-        if (!selectedGithubToken) {
-          const tokenRef = coerceSecretRef(profile.tokenRef);
-          if (tokenRef?.source === "env" && tokenRef.id.trim()) {
-            selectedGithubToken = (env[tokenRef.id] ?? process.env[tokenRef.id] ?? "").trim();
-          }
-        }
+        selectedGithubToken = resolveCopilotTokenFromProfile(authStore.profiles[profileId]);
         if (selectedGithubToken) {
           break;
         }
