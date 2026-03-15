@@ -546,8 +546,8 @@ export const dispatchTelegramMessage = async ({
         // by the typing-controller's onReplyStart merge in dispatch.ts:72-75.
         // Composes with typingCallbacks.onReplyStart to preserve typing indicator.
         onReplyStart: statusReactionController
-          ? () => {
-              void typingCallbacks?.onReplyStart?.();
+          ? async () => {
+              await typingCallbacks?.onReplyStart?.();
               void statusReactionController.setThinking();
             }
           : undefined,
