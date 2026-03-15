@@ -1,3 +1,4 @@
+import JSON5 from "json5";
 import { html, nothing, type TemplateResult } from "lit";
 import { icons } from "../icons.ts";
 import type { ThemeTransitionContext } from "../theme-transition.ts";
@@ -502,7 +503,29 @@ function truncateValue(value: unknown, maxLen = 40): string {
   return str.slice(0, maxLen - 3) + "...";
 }
 
+function computeRawDiff(
+  original: string,
+  current: string,
+): Array<{ path: string; from: unknown; to: unknown }> {
+  try {
+    const origObj = JSON5.parse(original);
+    const currObj = JSON5.parse(current);
+    return computeDiff(origObj, currObj);
+  } catch {
+    return [];
+  }
+}
+
 function renderDiffValue(path: string, value: unknown, _uiHints: ConfigUiHints): string {
+  return truncateValue(value);
+}
+
+function renderRawDiffValue(path: string, value: unknown, uiHints: ConfigUiHints): string {
+  const sensitiveCount = countSensitiveConfigValues(value, path.split("."), uiHints);
+  const blurred = sensitiveCount > 0 && !cvs.rawRevealed;
+  if (blurred) {
+    return REDACTED_PLACEHOLDER;
+  }
   return truncateValue(value);
 }
 
@@ -624,6 +647,7 @@ interface ConfigEphemeralState {
   envRevealed: boolean;
   validityDismissed: boolean;
   revealedSensitivePaths: Set<string>;
+  rawDiffRevealed: boolean;
 }
 
 function createConfigEphemeralState(): ConfigEphemeralState {
@@ -632,6 +656,7 @@ function createConfigEphemeralState(): ConfigEphemeralState {
     envRevealed: false,
     validityDismissed: false,
     revealedSensitivePaths: new Set(),
+    rawDiffRevealed: false,
   };
 }
 
@@ -719,6 +744,8 @@ export function renderConfig(props: ConfigProps) {
 
   // Compute diff for showing changes (works for both form and raw modes)
   const diff = formMode === "form" ? computeDiff(props.originalValue, props.formValue) : [];
+  const rawDiff =
+    formMode === "raw" && cvs.rawDiffRevealed ? computeRawDiff(props.originalRaw, props.raw) : [];
   const hasRawChanges = formMode === "raw" && props.raw !== props.originalRaw;
   const hasChanges = formMode === "form" ? diff.length > 0 : hasRawChanges;
 
@@ -950,6 +977,55 @@ export function renderConfig(props: ConfigProps) {
                       </div>
                     `,
                   )}
+                </div>
+              </details>
+            `
+            : nothing
+        }
+        <!-- Diff panel for raw mode - only shown when user expands it -->
+        ${
+          hasChanges && formMode === "raw"
+            ? html`
+              <details class="config-diff" ?open=${cvs.rawDiffRevealed} @toggle=${(e: Event) => {
+                const details = e.target as HTMLDetailsElement;
+                cvs.rawDiffRevealed = details.open;
+                props.onRawChange(props.raw);
+              }}>
+                <summary class="config-diff__summary">
+                  <span>View pending changes</span>
+                  <svg
+                    class="config-diff__chevron"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="2"
+                  >
+                    <polyline points="6 9 12 15 18 9"></polyline>
+                  </svg>
+                </summary>
+                <div class="config-diff__content">
+                  ${
+                    rawDiff.length > 0
+                      ? rawDiff.map(
+                          (change) => html`
+                            <div class="config-diff__item">
+                              <div class="config-diff__path">${change.path}</div>
+                              <div class="config-diff__values">
+                                <span class="config-diff__from"
+                                  >${renderRawDiffValue(change.path, change.from, props.uiHints)}</span
+                                >
+                                <span class="config-diff__arrow">→</span>
+                                <span class="config-diff__to"
+                                  >${renderRawDiffValue(change.path, change.to, props.uiHints)}</span
+                                >
+                              </div>
+                            </div>
+                          `,
+                        )
+                      : html`
+                          <div class="config-diff__item">Changes detected (JSON diff not available)</div>
+                        `
+                  }
                 </div>
               </details>
             `
