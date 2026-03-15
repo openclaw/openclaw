@@ -56,4 +56,24 @@ describe("stripInlineDirectiveTagsFromMessageForDisplay", () => {
     const result = stripInlineDirectiveTagsFromMessageForDisplay(input);
     expect(result).toEqual(input);
   });
+
+  test("returns same object reference when no directives are present", () => {
+    const input = {
+      role: "assistant",
+      content: [{ type: "text", text: "hello world" }],
+    };
+    const result = stripInlineDirectiveTagsFromMessageForDisplay(input);
+    expect(result).toBe(input);
+  });
+
+  test("preserves identity for non-text parts when some parts change", () => {
+    const imagePart = { type: "image", url: "http://example.com/img.png" };
+    const input = {
+      role: "assistant",
+      content: [imagePart, { type: "text", text: "hello [[reply_to_current]]" }],
+    };
+    const result = stripInlineDirectiveTagsFromMessageForDisplay(input);
+    expect(result).not.toBe(input);
+    expect((result?.content as unknown[])?.[0]).toBe(imagePart);
+  });
 });

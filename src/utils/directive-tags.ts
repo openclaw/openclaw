@@ -69,6 +69,7 @@ export function stripInlineDirectiveTagsFromMessageForDisplay(
   if (!Array.isArray(message.content)) {
     return message;
   }
+  let changed = false;
   const cleaned = message.content.map((part) => {
     if (!part || typeof part !== "object") {
       return part;
@@ -77,9 +78,14 @@ export function stripInlineDirectiveTagsFromMessageForDisplay(
     if (!isMessageTextPart(record)) {
       return part;
     }
-    return { ...record, text: stripInlineDirectiveTagsForDisplay(record.text).text };
+    const stripped = stripInlineDirectiveTagsForDisplay(record.text);
+    if (stripped.text === record.text) {
+      return part;
+    }
+    changed = true;
+    return { ...record, text: stripped.text };
   });
-  return { ...message, content: cleaned };
+  return changed ? { ...message, content: cleaned } : message;
 }
 
 export function parseInlineDirectives(
