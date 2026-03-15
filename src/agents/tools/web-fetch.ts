@@ -533,6 +533,9 @@ async function runWebFetch(params: WebFetchRuntimeParams): Promise<Record<string
       url: params.url,
       maxRedirects: params.maxRedirects,
       timeoutSeconds: params.timeoutSeconds,
+      // When a proxy is configured, DNS pinning is intentionally disabled because
+      // the proxy performs DNS resolution. This is a necessary tradeoff for proxy
+      // environments (e.g. corporate/K8s). SSRF protection is delegated to the proxy.
       useEnvProxy: true,
       init: {
         headers: {
