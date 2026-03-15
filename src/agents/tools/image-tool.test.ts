@@ -444,8 +444,9 @@ describe("image tool implicit imageModel config", () => {
         }>;
       };
 
-      expect(payload.messages?.map((message) => message.role)).toEqual(["user"]);
-      const userContent = payload.messages?.[0]?.content ?? [];
+      expect(payload.messages?.map((message) => message.role)).toEqual(["system", "user"]);
+      const userMessage = payload.messages?.find((m) => m.role === "user");
+      const userContent = userMessage?.content ?? [];
       expect(userContent).toEqual(
         expect.arrayContaining([
           expect.objectContaining({

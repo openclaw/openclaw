@@ -179,6 +179,10 @@ function buildImageContext(
     content.push({ type: "image", data: img.base64, mimeType: img.mimeType });
   }
   return {
+    // Provide a short system-level instruction so providers that require
+    // top-level instructions (e.g. OpenAI Codex via Responses API) have
+    // something, without duplicating the full user prompt.
+    systemPrompt: "You are an image generation assistant. Follow the user's instructions.",
     messages: [
       {
         role: "user",
