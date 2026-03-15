@@ -650,7 +650,7 @@ export async function runAgentTurnWithFallback(params: {
         : message;
       const trimmedMessage = safeMessage.replace(/\.\s*$/, "");
       const fallbackText = isBilling
-        ? BILLING_ERROR_USER_MESSAGE
+        ? formatBillingErrorMessage()
         : isContextOverflow
           ? "⚠️ Context overflow — prompt too large for this model. Try a shorter message or a larger-context model."
           : isRoleOrderingError
