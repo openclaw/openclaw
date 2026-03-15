@@ -6,6 +6,7 @@ import type { MediaUnderstandingCapability } from "./types.js";
 const providerRegistry = new Map<string, { capabilities: MediaUnderstandingCapability[] }>([
   ["openai", { capabilities: ["image"] }],
   ["groq", { capabilities: ["audio"] }],
+  ["minimax-portal", { capabilities: ["image"] }],
 ]);
 
 describe("resolveModelEntries", () => {
@@ -136,6 +137,50 @@ describe("resolveEntriesWithActiveFallback", () => {
       config: cfg.tools?.media?.audio,
       providers: ["openai"],
     });
+  });
+
+  it("passes through MiniMax model unchanged (VLM override is in runner)", () => {
+    const cfg: OpenClawConfig = {
+      tools: {
+        media: {
+          image: { enabled: true },
+        },
+      },
+    };
+
+    const entries = resolveEntriesWithActiveFallback({
+      cfg,
+      capability: "image",
+      config: cfg.tools?.media?.image,
+      providerRegistry,
+      activeModel: { provider: "minimax-portal", model: "MiniMax-M2.5" },
+    });
+    expect(entries).toHaveLength(1);
+    expect(entries[0].provider).toBe("minimax-portal");
+    expect(entries[0].model).toBe("MiniMax-M2.5");
+  });
+
+  it("does not override model for non-image MiniMax capabilities", () => {
+    const audioRegistry = new Map<string, { capabilities: MediaUnderstandingCapability[] }>([
+      ["minimax-portal", { capabilities: ["image", "audio"] }],
+    ]);
+    const cfg: OpenClawConfig = {
+      tools: {
+        media: {
+          audio: { enabled: true },
+        },
+      },
+    };
+
+    const entries = resolveEntriesWithActiveFallback({
+      cfg,
+      capability: "audio",
+      config: cfg.tools?.media?.audio,
+      providerRegistry: audioRegistry,
+      activeModel: { provider: "minimax-portal", model: "MiniMax-M2.5" },
+    });
+    expect(entries).toHaveLength(1);
+    expect(entries[0].model).toBe("MiniMax-M2.5");
   });
 
   it("skips active model when provider lacks capability", () => {
