@@ -468,6 +468,55 @@ describe("resolveModel", () => {
     });
   });
 
+  it("uses provider-level contextWindow as default override over discovered metadata", () => {
+    mockDiscoveredModel({
+      provider: "ollama",
+      modelId: "qwen3.5:9b",
+      templateModel: {
+        ...makeModel("qwen3.5:9b"),
+        provider: "ollama",
+        contextWindow: 216000,
+        maxTokens: 8192,
+      },
+    });
+
+    const cfgWithBaseUrl = {
+      models: {
+        providers: {
+          ollama: {
+            baseUrl: "http://localhost:11434",
+            contextWindow: 8192,
+            models: [{ id: "qwen3.5:9b", name: "qwen3.5:9b" }],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const resultWithBaseUrl = resolveModel("ollama", "qwen3.5:9b", "/tmp/agent", cfgWithBaseUrl);
+
+    expect(resultWithBaseUrl.error).toBeUndefined();
+    expect(resultWithBaseUrl.model?.contextWindow).toBe(8192);
+    // maxTokens still comes from discovered metadata when not explicitly overridden.
+    expect(resultWithBaseUrl.model?.maxTokens).toBe(8192);
+
+    const cfgMinimal = {
+      models: {
+        providers: {
+          ollama: {
+            contextWindow: 8192,
+            models: [{ id: "qwen3.5:9b", name: "qwen3.5:9b" }],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const resultMinimal = resolveModel("ollama", "qwen3.5:9b", "/tmp/agent", cfgMinimal);
+
+    expect(resultMinimal.error).toBeUndefined();
+    expect(resultMinimal.model?.contextWindow).toBe(8192);
+    expect(resultMinimal.model?.maxTokens).toBe(8192);
+  });
+
   it("prefers exact provider config over normalized alias match when both keys exist", () => {
     mockDiscoveredModel({
       provider: "qwen",
