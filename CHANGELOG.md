@@ -2,6 +2,7 @@
 
 Docs: https://docs.openclaw.ai
 
+- Onboarding/headless Linux daemon probe hardening: treat `systemctl --user is-enabled` probe failures as non-fatal during daemon install flow so onboarding no longer crashes on SSH/headless VPS environments before showing install guidance. (#37297) Thanks @acarbajal-web.
 ## Unreleased
 
 ### Changes
