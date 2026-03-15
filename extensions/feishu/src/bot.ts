@@ -370,6 +370,11 @@ function parseMergeForwardContent(params: {
     msg_type?: string;
     body?: { content?: string };
     sender?: { id?: string };
+    mentions?: Array<{
+      key?: string;
+      id?: string | { open_id?: string; user_id?: string };
+      name?: string;
+    }>;
     upper_message_id?: string;
     create_time?: string;
   }>;
@@ -409,7 +414,23 @@ function parseMergeForwardContent(params: {
     const msgContent = item.body?.content || "";
     const msgType = item.msg_type || "text";
     const formatted = formatSubMessageContent(msgContent, msgType);
-    lines.push(`- ${formatted}`);
+    const senderId = item.sender?.id || "unknown";
+
+    // Resolve @_user_N placeholders using item.mentions from Feishu API
+    let resolved = formatted;
+    if (item.mentions && item.mentions.length > 0) {
+      // Sort by key length descending to avoid @_user_1 matching inside @_user_10
+      const sorted = [...item.mentions].sort((a, b) => (b.key?.length ?? 0) - (a.key?.length ?? 0));
+      for (const m of sorted) {
+        if (m.key) {
+          const mId = typeof m.id === "string" ? m.id : m.id?.open_id || m.id?.user_id || "";
+          const display = m.name && mId ? `${m.name}(${mId})` : m.name || mId || m.key;
+          resolved = resolved.replaceAll(m.key, `@${display}`);
+        }
+      }
+    }
+
+    lines.push(`- [${senderId}] ${resolved}`);
   }
 
   if (subMessages.length > maxMessages) {

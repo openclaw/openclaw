@@ -980,6 +980,7 @@ describe("handleFeishuMessage command authorization", () => {
             upper_message_id: "container",
             msg_type: "file",
             body: { content: JSON.stringify({ file_name: "report.pdf" }) },
+            sender: { id: "ou-bob" },
             create_time: "2000",
           },
           {
@@ -987,6 +988,7 @@ describe("handleFeishuMessage command authorization", () => {
             upper_message_id: "container",
             msg_type: "text",
             body: { content: JSON.stringify({ text: "alpha" }) },
+            sender: { id: "ou-alice" },
             create_time: "1000",
           },
         ],
@@ -1036,7 +1038,7 @@ describe("handleFeishuMessage command authorization", () => {
     expect(mockFinalizeInboundContext).toHaveBeenCalledWith(
       expect.objectContaining({
         BodyForAgent: expect.stringContaining(
-          "[Merged and Forwarded Messages]\n- alpha\n- [File: report.pdf]",
+          "[Merged and Forwarded Messages]\n- [ou-alice] alpha\n- [ou-bob] [File: report.pdf]",
         ),
       }),
     );
