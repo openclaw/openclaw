@@ -1444,7 +1444,7 @@ export const registerTelegramHandlers = ({
       });
       await processMessage(buildSyntheticContext(ctx, syntheticMessage), [], storeAllowFrom, {
         forceWasMentioned: true,
-        messageIdOverride: callback.id,
+        messageIdOverride: `${callbackMessage.message_id}:cb:${callback.id}`,
       });
     } catch (err) {
       runtime.error?.(danger(`callback handler failed: ${String(err)}`));
