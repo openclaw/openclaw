@@ -87,6 +87,36 @@ describe("control UI routing", () => {
     expect(app.querySelector(".sidebar-brand__copy")).not.toBeNull();
   });
 
+  it("uses 16px text controls on iOS mobile to avoid Safari auto-zoom", async () => {
+    document.documentElement.setAttribute("data-ios-mobile", "");
+    const field = document.createElement("label");
+    field.className = "field";
+    field.innerHTML = `
+      <input type="text" value="alpha" />
+      <textarea>beta</textarea>
+      <select><option>gamma</option></select>
+    `;
+    document.body.append(field);
+    try {
+      const input = field.querySelector("input");
+      const textarea = field.querySelector("textarea");
+      const select = field.querySelector("select");
+      expect(input).not.toBeNull();
+      expect(textarea).not.toBeNull();
+      expect(select).not.toBeNull();
+      if (!input || !textarea || !select) {
+        return;
+      }
+
+      expect(getComputedStyle(input).fontSize).toBe("16px");
+      expect(getComputedStyle(textarea).fontSize).toBe("16px");
+      expect(getComputedStyle(select).fontSize).toBe("16px");
+    } finally {
+      field.remove();
+      document.documentElement.removeAttribute("data-ios-mobile");
+    }
+  });
+
   it("does not render a desktop sidebar resizer or inject a custom nav width", async () => {
     const app = mountApp("/chat");
     await app.updateComplete;
@@ -253,6 +283,21 @@ describe("control UI routing", () => {
     expect(getComputedStyle(search).flexGrow).toBe("1");
     expect(getComputedStyle(content).flexGrow).toBe("0");
     expect(getComputedStyle(searchShortcut).display).toBe("none");
+  });
+
+  it("removes extra top padding from the mobile chat card", async () => {
+    const app = mountApp("/chat");
+    await app.updateComplete;
+
+    expect(window.matchMedia("(max-width: 768px)").matches).toBe(true);
+
+    const chat = app.querySelector<HTMLElement>(".chat");
+    expect(chat).not.toBeNull();
+    if (!chat) {
+      return;
+    }
+
+    expect(getComputedStyle(chat).paddingTop).toBe("0px");
   });
 
   it("opens the mobile sidenav as a drawer from the topbar toggle", async () => {

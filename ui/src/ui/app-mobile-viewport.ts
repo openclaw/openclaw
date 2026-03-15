@@ -31,13 +31,30 @@ export function attachMobileViewportFixes(
   if (typeof window === "undefined" || typeof document === "undefined") {
     return { cleanup: () => {}, setShellLocked: () => {} };
   }
-  const viewport = window.visualViewport;
-  if (!viewport || !isIosDevice()) {
+
+  if (!isIosDevice()) {
     return { cleanup: () => {}, setShellLocked: () => {} };
   }
 
   const root = document.documentElement;
   const body = document.body;
+  const setIosMobile = (active: boolean) => {
+    root.toggleAttribute("data-ios-mobile", active);
+    body.toggleAttribute("data-ios-mobile", active);
+    host.toggleAttribute("data-ios-mobile", active);
+  };
+  setIosMobile(true);
+
+  const viewport = window.visualViewport;
+  if (!viewport) {
+    return {
+      cleanup: () => {
+        setIosMobile(false);
+      },
+      setShellLocked: () => {},
+    };
+  }
+
   let restoreTimer: number | null = null;
   let focusTimer: number | null = null;
   let inputObserver: ResizeObserver | null = null;
@@ -165,6 +182,7 @@ export function attachMobileViewportFixes(
       document.removeEventListener("focusout", handleFocusOut, true);
       setShellLocked(false);
       setKeyboardOpen(false);
+      setIosMobile(false);
       root.style.removeProperty("--mobile-layout-height");
       root.style.removeProperty("--mobile-viewport-height");
       root.style.removeProperty("--mobile-chat-input-height");
