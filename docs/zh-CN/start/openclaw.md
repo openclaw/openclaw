@@ -2,8 +2,8 @@
 read_when:
   - 新手引导新助手实例时
   - 审查安全/权限影响时
-summary: 将 OpenClaw 作为个人助手运行的端到端指南，包含安全注意事项
-title: 个人助手设置
+summary: 将 OpenClaw 作为聊天机器人运行的端到端指南，包含安全注意事项
+title: 聊天机器人配置
 x-i18n:
   generated_at: "2026-02-03T07:54:35Z"
   model: claude-opus-4-5
@@ -13,9 +13,9 @@ x-i18n:
   workflow: 15
 ---
 
-# 使用 OpenClaw 构建个人助手
+# 使用 OpenClaw 构建聊天机器人
 
-OpenClaw 是 **Pi** 智能体的 WhatsApp + Telegram + Discord + iMessage Gateway 网关。插件可添加 Mattermost。本指南是"个人助手"设置：一个专用的 WhatsApp 号码，表现得像你的常驻智能体。
+OpenClaw 是 **Pi** 智能体的 WhatsApp + Telegram + Discord + iMessage Gateway 网关。插件可添加 Mattermost。本指南是"聊天机器人"设置：一个专用的 WhatsApp 账号，表现得像你的常驻智能体。
 
 ## ⚠️ 安全第一
 
@@ -27,11 +27,11 @@ OpenClaw 是 **Pi** 智能体的 WhatsApp + Telegram + Discord + iMessage Gatewa
 
 从保守开始：
 
-- 始终设置 `channels.whatsapp.allowFrom`（永远不要在你的个人 Mac 上对全世界开放）。
-- 为助手使用专用的 WhatsApp 号码。
-- 心跳现在默认每 30 分钟一次。在你信任设置之前，通过设置 `agents.defaults.heartbeat.every: "0m"` 来禁用。
+- 始终设置 `channels.whatsapp.allowFrom`（永远不要将你的个人 Mac 直接暴露在别人眼皮子底下）。
+- 为助手使用专用的 WhatsApp 账号。
+- 心跳现在默认每 30 分钟一次。在你设置完成之前，通过设置 `agents.defaults.heartbeat.every: "0m"` 来禁用。
 
-## 先决条件
+## 准备工作
 
 - Node **22+**
 - OpenClaw 在 PATH 中可用（推荐：全局安装）
@@ -42,7 +42,7 @@ npm install -g openclaw@latest
 # 或：pnpm add -g openclaw@latest
 ```
 
-从源代码（开发）：
+从源代码（dev）：
 
 ```bash
 git clone https://github.com/openclaw/openclaw.git
@@ -53,12 +53,12 @@ pnpm build
 pnpm link --global
 ```
 
-## 双手机设置（推荐）
+## 双账号（设备）设置（推荐）
 
 你需要这样：
 
 ```
-你的手机（个人）               第二部手机（助手）
+你的手机（个人）               第二部手机（部署聊天机器人）
 ┌─────────────────┐           ┌─────────────────┐
 │  你的 WhatsApp  │  ──────▶  │   助手 WA       │
 │  +1-555-YOU     │  消息     │  +1-555-ASSIST  │
@@ -74,9 +74,9 @@ pnpm link --global
 
 如果你将个人 WhatsApp 关联到 OpenClaw，发给你的每条消息都会变成"智能体输入"。这通常不是你想要的。
 
-## 5 分钟快速开始
+## 快速开始
 
-1. 配对 WhatsApp Web（显示二维码；用助手手机扫描）：
+1. 配对 WhatsApp Web（显示二维码；用部署聊天机器人的手机扫描）：
 
 ```bash
 openclaw channels login
@@ -88,7 +88,7 @@ openclaw channels login
 openclaw gateway --port 18789
 ```
 
-3. 在 `~/.openclaw/openclaw.json` 中放置最小配置：
+3. 在 `~/.openclaw/openclaw.json` 中初始化最小配置文件：
 
 ```json5
 {
@@ -96,7 +96,7 @@ openclaw gateway --port 18789
 }
 ```
 
-现在从你允许列表中的手机向助手号码发消息。
+现在从你允许列表中的手机向聊天机器人的账号发消息。
 
 新手引导完成后，我们会自动打开带有 Gateway 网关令牌的仪表板并打印带令牌的链接。稍后重新打开：`openclaw dashboard`。
 
@@ -115,7 +115,7 @@ openclaw setup
 完整工作区布局 + 备份指南：[智能体工作区](/concepts/agent-workspace)
 记忆工作流：[记忆](/concepts/memory)
 
-可选：使用 `agents.defaults.workspace` 选择不同的工作区（支持 `~`）。
+可选：使用 `agents.defaults.workspace` 配置不同的工作区（支持 `~`）。
 
 ```json5
 {
@@ -135,11 +135,11 @@ openclaw setup
 }
 ```
 
-## 将其变成"助手"的配置
+## 将其转化为符合你要求的聊天机器人的配置
 
-OpenClaw 默认为良好的助手设置，但你通常需要调整：
+OpenClaw 默认为良好的聊天机器人设置，但你通常需要调整：
 
-- `SOUL.md` 中的人设/指令
+- `SOUL.md` 中的人格/指令
 - 思考默认值（如果需要）
 - 心跳（一旦你信任它）
 
@@ -181,7 +181,7 @@ OpenClaw 默认为良好的助手设置，但你通常需要调整：
 }
 ```
 
-## 会话和记忆
+## 会话与记忆的配置
 
 - 会话文件：`~/.openclaw/agents/<agentId>/sessions/{{SessionId}}.jsonl`
 - 会话元数据（token 使用量、最后路由等）：`~/.openclaw/agents/<agentId>/sessions/sessions.json`（旧版：`~/.openclaw/sessions/sessions.json`）
@@ -207,24 +207,24 @@ OpenClaw 默认为良好的助手设置，但你通常需要调整：
 }
 ```
 
-## 媒体输入和输出
+## 媒体文件的输入和输出
 
-入站附件（图片/音频/文档）可以通过模板暴露给你的命令：
+传入文件（图片/音频/文档）可以通过模板暴露给你的命令：
 
 - `{{MediaPath}}`（本地临时文件路径）
 - `{{MediaUrl}}`（伪 URL）
 - `{{Transcript}}`（如果启用了音频转录）
 
-来自智能体的出站附件：在单独一行包含 `MEDIA:<path-or-url>`（无空格）。示例：
+来自智能体的传出文件：在单独一行包含 `MEDIA:<path-or-url>`（无空格）。示例：
 
 ```
 这是截图。
 MEDIA:https://example.com/screenshot.png
 ```
 
-OpenClaw 会提取这些并将它们作为媒体与文本一起发送。
+OpenClaw 会提取这些东西并将它们作为媒体与文本一起发送。
 
-## 运维检查清单
+## 实例探活与日志记录
 
 ```bash
 openclaw status          # 本地状态（凭证、会话、排队事件）
@@ -233,9 +233,9 @@ openclaw status --deep   # 添加 Gateway 网关健康探测（Telegram + Discor
 openclaw health --json   # Gateway 网关健康快照（WS）
 ```
 
-日志位于 `/tmp/openclaw/`（默认：`openclaw-YYYY-MM-DD.log`）。
+日志文件夹是 `/tmp/openclaw/`（默认文件名格式：`openclaw-YYYY-MM-DD.log`）。
 
-## 下一步
+## 其他操作
 
 - WebChat：[WebChat](/web/webchat)
 - Gateway 网关运维：[Gateway 网关运行手册](/gateway)

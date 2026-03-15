@@ -58,7 +58,7 @@ OpenClaw 需要 Node 22 或更新版本。
 `openclaw doctor` 即可更新 Gateway 网关服务入口点。
 </Info>
 
-## 从源码安装（开发）
+## 从源码安装（dev）
 
 ```bash
 git clone https://github.com/openclaw/openclaw.git

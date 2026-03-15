@@ -2,7 +2,7 @@
 read_when:
   - 从零开始首次设置
   - 你想要从安装 → 新手引导 → 第一条消息的最快路径
-summary: 新手指南：从零到第一条消息（向导、认证、渠道、配对）
+summary: 新手指南：从零到第一条消息（引导、认证、渠道、配对）
 title: 入门指南
 x-i18n:
   generated_at: "2026-02-03T07:54:14Z"
@@ -19,7 +19,7 @@ x-i18n:
 
 最快聊天：打开 Control UI（无需渠道设置）。运行 `openclaw dashboard` 并在浏览器中聊天，或在 Gateway 网关主机上打开 `http://127.0.0.1:18789/`。文档：[Dashboard](/web/dashboard) 和 [Control UI](/web/control-ui)。
 
-推荐路径：使用 **CLI 新手引导向导**（`openclaw onboard`）。它设置：
+推荐路径：使用 **CLI 新手引导**（`openclaw onboard`）。它设置：
 
 - 模型/认证（推荐 OAuth）
 - Gateway 网关设置
@@ -28,7 +28,7 @@ x-i18n:
 - 工作区引导 + Skills
 - 可选的后台服务
 
-如果你想要更深入的参考页面，跳转到：[向导](/start/wizard)、[设置](/start/setup)、[配对](/channels/pairing)、[安全](/gateway/security)。
+如果你想要更深入的参考页面，跳转到：[引导](/start/wizard)、[设置](/start/setup)、[配对](/channels/pairing)、[安全](/gateway/security)。
 
 沙箱注意事项：`agents.defaults.sandbox.mode: "non-main"` 使用 `session.mainKey`（默认 `"main"`），因此群组/渠道会话会被沙箱隔离。如果你想要主智能体始终在主机上运行，设置显式的每智能体覆盖：
 
@@ -78,7 +78,7 @@ npm install -g openclaw@latest
 pnpm add -g openclaw@latest
 ```
 
-## 2) 运行新手引导向导（并安装服务）
+## 2) 运行新手引导（并安装服务）
 
 ```bash
 openclaw onboard --install-daemon
@@ -91,13 +91,13 @@ openclaw onboard --install-daemon
 - **提供商**：WhatsApp QR 登录、Telegram/Discord 机器人令牌、Mattermost 插件令牌等。
 - **守护进程**：后台安装（launchd/systemd；WSL2 使用 systemd）
   - **运行时**：Node（推荐；WhatsApp/Telegram 必需）。**不推荐** Bun。
-- **Gateway 网关令牌**：向导默认生成一个（即使在 loopback 上）并存储在 `gateway.auth.token`。
+- **Gateway 网关令牌**：引导默认生成一个（即使在 loopback 上）并存储在 `gateway.auth.token`。
 
-向导文档：[向导](/start/wizard)
+引导文档：[引导](/start/wizard)
 
 ### 凭证：存储位置（重要）
 
-- **推荐的 Anthropic 路径：**设置 API 密钥（向导可以为服务使用存储它）。如果你想复用 Claude Code 凭证，也支持 `claude setup-token`。
+- **推荐的 Anthropic 路径：**设置 API 密钥（引导可以为服务使用存储它）。如果你想复用 Claude Code 凭证，也支持 `claude setup-token`。
 
 - OAuth 凭证（旧版导入）：`~/.openclaw/credentials/oauth.json`
 - 认证配置文件（OAuth + API 密钥）：`~/.openclaw/agents/<agentId>/agent/auth-profiles.json`
@@ -164,9 +164,9 @@ openclaw pairing approve whatsapp <code>
 
 配对文档：[配对](/channels/pairing)
 
-## 从源代码（开发）
+## 从源代码（dev）
 
-如果你正在开发 OpenClaw 本身，从源代码运行：
+如果你正在开发 OpenClaw，从源代码运行：
 
 ```bash
 git clone https://github.com/openclaw/openclaw.git
@@ -198,7 +198,7 @@ openclaw message send --target +15555550123 --message "Hello from OpenClaw"
 提示：`openclaw status --all` 是最佳的可粘贴、只读调试报告。
 健康探测：`openclaw health`（或 `openclaw status --deep`）向运行中的 Gateway 网关请求健康快照。
 
-## 下一步（可选，但很棒）
+## 下一步（可选）
 
 - macOS 菜单栏应用 + 语音唤醒：[macOS 应用](/platforms/macos)
 - iOS/Android 节点（Canvas/相机/语音）：[节点](/nodes)

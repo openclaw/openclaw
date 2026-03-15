@@ -1,8 +1,8 @@
 ---
 read_when:
-  - 设置新机器
-  - 你想要"最新最好的"而不破坏你的个人设置
-summary: 设置指南：在保持最新的同时保持你的 OpenClaw 设置个性化
+  - 更新 OpenClaw
+  - 你想要最新版本的 OpenClaw 而不丢失你的个人设置
+summary: 设置指南：在保持版本最新的同时保留你的 OpenClaw 设置
 title: 设置
 x-i18n:
   generated_at: "2026-02-03T07:54:27Z"
@@ -23,13 +23,13 @@ x-i18n:
 - **稳定工作流：** 安装 macOS 应用；让它运行内置的 Gateway 网关。
 - **前沿工作流：** 通过 `pnpm gateway:watch` 自己运行 Gateway 网关，然后让 macOS 应用以本地模式连接。
 
-## 先决条件（从源码）
+## 前提条件（从源码）
 
 - Node `>=22`
 - `pnpm`
 - Docker（可选；仅用于容器化设置/e2e — 参阅 [Docker](/install/docker)）
 
-## 个性化策略（让更新不会造成问题）
+## 个性化设置文件配置（让更新不会造成问题）
 
 如果你想要"100% 为我定制"*并且*易于更新，将你的自定义内容保存在：
 
@@ -108,7 +108,7 @@ pnpm gateway:watch
 openclaw health
 ```
 
-### 常见陷阱
+### 常见问题
 
 - **端口错误：** Gateway 网关 WS 默认为 `ws://127.0.0.1:18789`；保持应用 + CLI 在同一端口上。
 - **状态存储位置：**
@@ -129,7 +129,7 @@ openclaw health
 - **旧版 OAuth 导入**：`~/.openclaw/credentials/oauth.json`
   更多详情：[安全](/gateway/security#credential-storage-map)。
 
-## 更新（不破坏你的设置）
+## 更新（不丢失你的设置）
 
 - 将 `~/.openclaw/workspace` 和 `~/.openclaw/` 保持为"你的东西"；不要将个人提示/配置放入 `openclaw` 仓库。
 - 更新源码：`git pull` + `pnpm install`（当锁文件更改时）+ 继续使用 `pnpm gateway:watch`。

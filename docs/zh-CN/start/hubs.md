@@ -1,8 +1,8 @@
 ---
 read_when:
-  - 你想要一份完整的文档地图
-summary: 链接到每篇 OpenClaw 文档的导航中心
-title: 文档导航中心
+  - 你想要一份完整的文档列表
+summary: 链接到每篇 OpenClaw 文档的列表
+title: 文档列表
 x-i18n:
   generated_at: "2026-02-04T17:55:29Z"
   model: claude-opus-4-5
@@ -12,9 +12,9 @@ x-i18n:
   workflow: 15
 ---
 
-# 文档导航中心
+# 文档列表
 
-使用这些导航中心发现每一个页面，包括深入解析和参考文档——它们不一定出现在左侧导航栏中。
+使用这些列表发现每一个页面，包括深入解析和参考文档——它们不一定出现在左侧导航栏中。
 
 ## 从这里开始
 
@@ -22,14 +22,14 @@ x-i18n:
 - [入门指南](/start/getting-started)
 - [快速开始](/start/quickstart)
 - [新手引导](/start/onboarding)
-- [向导](/start/wizard)
+- [引导](/start/wizard)
 - [安装配置](/start/setup)
 - [仪表盘（本地 Gateway 网关）](http://127.0.0.1:18789/)
 - [帮助](/help)
 - [文档目录](/start/docs-directory)
 - [配置](/gateway/configuration)
 - [配置示例](/gateway/configuration-examples)
-- [OpenClaw 助手](/start/openclaw)
+- [OpenClaw 聊天软件机器人](/start/openclaw)
 - [展示](/start/showcase)
 - [背景故事](/start/lore)
 
@@ -59,7 +59,7 @@ x-i18n:
 - [斜杠命令](/tools/slash-commands)
 - [RPC 适配器](/reference/rpc)
 - [TypeBox 模式](/concepts/typebox)
-- [时区处理](/concepts/timezone)
+- [时区](/concepts/timezone)
 - [在线状态](/concepts/presence)
 - [设备发现 + 传输协议](/gateway/discovery)
 - [Bonjour](/gateway/bonjour)
