@@ -90,31 +90,49 @@ export function normalizeUsage(raw?: UsageLike | null): NormalizedUsage | undefi
     return undefined;
   }
 
+  const pick = (...args: unknown[]) => {
+    for (const arg of args) {
+      const val = asFiniteNumber(arg);
+      if (val !== undefined && val > 0) {
+        return val;
+      }
+    }
+    for (const arg of args) {
+      const val = asFiniteNumber(arg);
+      if (val !== undefined) {
+        return val;
+      }
+    }
+    return undefined;
+  };
+
   // Some providers (pi-ai OpenAI-format) pre-subtract cached_tokens from
   // prompt_tokens upstream.  When cached_tokens > prompt_tokens the result is
   // negative, which is nonsensical.  Clamp to 0.
-  const rawInput = asFiniteNumber(
-    raw.input ?? raw.inputTokens ?? raw.input_tokens ?? raw.promptTokens ?? raw.prompt_tokens,
+  const rawInput = pick(
+    raw.input,
+    raw.inputTokens,
+    raw.input_tokens,
+    raw.promptTokens,
+    raw.prompt_tokens,
   );
   const input = rawInput !== undefined && rawInput < 0 ? 0 : rawInput;
-  const output = asFiniteNumber(
-    raw.output ??
-      raw.outputTokens ??
-      raw.output_tokens ??
-      raw.completionTokens ??
-      raw.completion_tokens,
+  const output = pick(
+    raw.output,
+    raw.outputTokens,
+    raw.output_tokens,
+    raw.completionTokens,
+    raw.completion_tokens,
   );
-  const cacheRead = asFiniteNumber(
-    raw.cacheRead ??
-      raw.cache_read ??
-      raw.cache_read_input_tokens ??
-      raw.cached_tokens ??
-      raw.prompt_tokens_details?.cached_tokens,
+  const cacheRead = pick(
+    raw.cacheRead,
+    raw.cache_read,
+    raw.cache_read_input_tokens,
+    raw.cached_tokens,
+    raw.prompt_tokens_details?.cached_tokens,
   );
-  const cacheWrite = asFiniteNumber(
-    raw.cacheWrite ?? raw.cache_write ?? raw.cache_creation_input_tokens,
-  );
-  const total = asFiniteNumber(raw.total ?? raw.totalTokens ?? raw.total_tokens);
+  const cacheWrite = pick(raw.cacheWrite, raw.cache_write, raw.cache_creation_input_tokens);
+  const total = pick(raw.total, raw.totalTokens, raw.total_tokens);
 
   if (
     input === undefined &&
