@@ -544,6 +544,110 @@ describe("createOllamaStreamFn", () => {
       [{ type: "text", text: "final answer" }],
     );
   });
+
+  it("emits start with empty content, then text_delta per chunk, then done", async () => {
+    await withMockNdjsonFetch(
+      [
+        '{"model":"m","created_at":"t","message":{"role":"assistant","content":"hello"},"done":false}',
+        '{"model":"m","created_at":"t","message":{"role":"assistant","content":" world"},"done":false}',
+        '{"model":"m","created_at":"t","message":{"role":"assistant","content":""},"done":true,"prompt_eval_count":1,"eval_count":2}',
+      ],
+      async () => {
+        const stream = await createOllamaTestStream({ baseUrl: "http://ollama-host:11434" });
+        const events = await collectStreamEvents(stream);
+
+        // start → text_delta → text_delta → done
+        expect(events).toHaveLength(4);
+
+        expect(events[0]?.type).toBe("start");
+        expect((events[0] as { partial: { content: unknown[] } }).partial.content).toEqual([]);
+
+        expect(events[1]).toMatchObject({ type: "text_delta", delta: "hello", contentIndex: 0 });
+        expect(events[2]).toMatchObject({ type: "text_delta", delta: " world", contentIndex: 0 });
+
+        expect(events[3]?.type).toBe("done");
+      },
+    );
+  });
+
+  it("does not emit start or text_delta for tool-call-only responses", async () => {
+    await withMockNdjsonFetch(
+      [
+        '{"model":"m","created_at":"t","message":{"role":"assistant","content":"","tool_calls":[{"function":{"name":"bash","arguments":{"command":"ls"}}}]},"done":false}',
+        '{"model":"m","created_at":"t","message":{"role":"assistant","content":""},"done":true,"prompt_eval_count":1,"eval_count":1}',
+      ],
+      async () => {
+        const stream = await createOllamaTestStream({ baseUrl: "http://ollama-host:11434" });
+        const events = await collectStreamEvents(stream);
+
+        // Only the final done event — no start or text_delta
+        expect(events).toHaveLength(1);
+        expect(events[0]?.type).toBe("done");
+        expect((events[0] as { message: { stopReason: string } }).message.stopReason).toBe(
+          "toolUse",
+        );
+      },
+    );
+  });
+
+  it("text_delta partial carries only the current chunk delta", async () => {
+    await withMockNdjsonFetch(
+      [
+        '{"model":"m","created_at":"t","message":{"role":"assistant","content":"a"},"done":false}',
+        '{"model":"m","created_at":"t","message":{"role":"assistant","content":"b"},"done":false}',
+        '{"model":"m","created_at":"t","message":{"role":"assistant","content":"c"},"done":false}',
+        '{"model":"m","created_at":"t","message":{"role":"assistant","content":""},"done":true,"prompt_eval_count":1,"eval_count":3}',
+      ],
+      async () => {
+        const stream = await createOllamaTestStream({ baseUrl: "http://ollama-host:11434" });
+        const events = await collectStreamEvents(stream);
+
+        const deltas = events.filter(
+          (
+            e,
+          ): e is { type: "text_delta"; partial: { content: { type: string; text: string }[] } } =>
+            e.type === "text_delta",
+        );
+        expect(deltas).toHaveLength(3);
+
+        // partial.content carries only the current chunk's delta text,
+        // matching the OpenAI WebSocket provider contract
+        expect(deltas[0].partial.content[0]?.text).toBe("a");
+        expect(deltas[1].partial.content[0]?.text).toBe("b");
+        expect(deltas[2].partial.content[0]?.text).toBe("c");
+      },
+    );
+  });
+
+  it("emits start and text_delta for mixed content + tool_call responses", async () => {
+    await withMockNdjsonFetch(
+      [
+        '{"model":"m","created_at":"t","message":{"role":"assistant","content":"Let me check."},"done":false}',
+        '{"model":"m","created_at":"t","message":{"role":"assistant","content":"","tool_calls":[{"function":{"name":"bash","arguments":{"command":"ls"}}}]},"done":false}',
+        '{"model":"m","created_at":"t","message":{"role":"assistant","content":""},"done":true,"prompt_eval_count":1,"eval_count":3}',
+      ],
+      async () => {
+        const stream = await createOllamaTestStream({ baseUrl: "http://ollama-host:11434" });
+        const events = await collectStreamEvents(stream);
+
+        // start → text_delta → done
+        expect(events).toHaveLength(3);
+
+        expect(events[0]?.type).toBe("start");
+        expect((events[0] as { partial: { content: unknown[] } }).partial.content).toEqual([]);
+
+        expect(events[1]).toMatchObject({
+          type: "text_delta",
+          delta: "Let me check.",
+          contentIndex: 0,
+        });
+
+        const doneEvent = events[2] as { type: string; message: { stopReason: string } };
+        expect(doneEvent.type).toBe("done");
+        expect(doneEvent.message.stopReason).toBe("toolUse");
+      },
+    );
+  });
 });
 
 describe("resolveOllamaBaseUrlForRun", () => {
