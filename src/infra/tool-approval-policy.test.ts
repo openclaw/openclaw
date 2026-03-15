@@ -24,7 +24,7 @@ describe("resolveToolApprovalPolicy", () => {
     expect(policy.askFallback).toBe("deny");
   });
 
-  it("merges global allowlist", () => {
+  it("uses global allowlist when no agent allowlist is set", () => {
     const policy = resolveToolApprovalPolicy({
       cfg: makeConfig({
         allowlist: [{ pattern: "github__list_*" }],
@@ -32,6 +32,64 @@ describe("resolveToolApprovalPolicy", () => {
     });
     expect(policy.allowlist).toHaveLength(1);
     expect(policy.allowlist[0].pattern).toBe("github__list_*");
+  });
+
+  it("per-agent allowlist overrides global allowlist", () => {
+    const policy = resolveToolApprovalPolicy({
+      cfg: makeConfig({
+        allowlist: [{ pattern: "*" }],
+        agents: {
+          ops: { allowlist: [{ pattern: "github__list_*" }] },
+        },
+      }),
+      agentId: "ops",
+    });
+    // Agent-specific allowlist replaces global, so only the agent pattern applies.
+    expect(policy.allowlist).toHaveLength(1);
+    expect(policy.allowlist[0].pattern).toBe("github__list_*");
+  });
+
+  it("wildcard agent allowlist overrides global allowlist", () => {
+    const policy = resolveToolApprovalPolicy({
+      cfg: makeConfig({
+        allowlist: [{ pattern: "*" }],
+        agents: {
+          "*": { allowlist: [{ pattern: "safe__*" }] },
+        },
+      }),
+      agentId: "any-agent",
+    });
+    expect(policy.allowlist).toHaveLength(1);
+    expect(policy.allowlist[0].pattern).toBe("safe__*");
+  });
+
+  it("per-agent allowlist overrides wildcard agent allowlist", () => {
+    const policy = resolveToolApprovalPolicy({
+      cfg: makeConfig({
+        allowlist: [{ pattern: "*" }],
+        agents: {
+          "*": { allowlist: [{ pattern: "safe__*" }] },
+          ops: { allowlist: [{ pattern: "github__list_*" }] },
+        },
+      }),
+      agentId: "ops",
+    });
+    expect(policy.allowlist).toHaveLength(1);
+    expect(policy.allowlist[0].pattern).toBe("github__list_*");
+  });
+
+  it("falls back to global allowlist when agent has no allowlist", () => {
+    const policy = resolveToolApprovalPolicy({
+      cfg: makeConfig({
+        allowlist: [{ pattern: "global__*" }],
+        agents: {
+          ops: { security: "allowlist" },
+        },
+      }),
+      agentId: "ops",
+    });
+    expect(policy.allowlist).toHaveLength(1);
+    expect(policy.allowlist[0].pattern).toBe("global__*");
   });
 
   it("applies per-agent overrides", () => {

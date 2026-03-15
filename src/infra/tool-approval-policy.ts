@@ -56,11 +56,19 @@ export function resolveToolApprovalPolicy(params: {
     normalizeToolSecurity(wildcardConfig?.askFallback) ??
     globalAskFallback;
 
-  const agentAllowlist = [
-    ...normalizeAllowlist(wildcardConfig?.allowlist),
-    ...normalizeAllowlist(agentConfig?.allowlist),
-    ...globalAllowlist,
-  ];
+  // Per-agent allowlist overrides global. If the specific agent declares its
+  // own allowlist, use it exclusively. Otherwise fall back to the wildcard
+  // agent allowlist, and finally to the global allowlist. This prevents a
+  // permissive global rule (e.g. "*") from undermining a tighter per-agent
+  // restriction.
+  const agentSpecificAllowlist = normalizeAllowlist(agentConfig?.allowlist);
+  const wildcardAllowlist = normalizeAllowlist(wildcardConfig?.allowlist);
+  const agentAllowlist =
+    agentSpecificAllowlist.length > 0
+      ? agentSpecificAllowlist
+      : wildcardAllowlist.length > 0
+        ? wildcardAllowlist
+        : globalAllowlist;
 
   return {
     security: agentSecurity,

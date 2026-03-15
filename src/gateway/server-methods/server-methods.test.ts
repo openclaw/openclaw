@@ -1055,3 +1055,37 @@ describe("logs.tail", () => {
     await fsPromises.rm(tempDir, { recursive: true, force: true });
   });
 });
+
+describe("tool approval handlers", () => {
+  it("takes no-route path when hasToolApprovalClients returns false", async () => {
+    const { createToolApprovalHandlers } = await import("./tool-approval.js");
+    const manager = new ExecApprovalManager();
+    const handlers = createToolApprovalHandlers(manager);
+    const respond = vi.fn();
+    const context = {
+      broadcast: (_event: string, _payload: unknown) => {},
+      hasToolApprovalClients: () => false,
+      hasExecApprovalClients: () => true, // exec-approval clients exist but lack tool cap
+    };
+
+    await handlers["tool.approval.request"]({
+      params: { toolName: "mcp__read_file", timeoutMs: 2000 },
+      respond: respond as unknown as Parameters<
+        (typeof handlers)["tool.approval.request"]
+      >[0]["respond"],
+      context: context as unknown as Parameters<
+        (typeof handlers)["tool.approval.request"]
+      >[0]["context"],
+      client: null,
+      req: { id: "req-1", type: "req", method: "tool.approval.request" },
+      isWebchatConnect: () => false,
+    });
+
+    // Should respond immediately with decision=null (no-route), not block.
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({ decision: null }),
+      undefined,
+    );
+  });
+});

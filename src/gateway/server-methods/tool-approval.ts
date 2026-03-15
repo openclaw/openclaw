@@ -116,7 +116,9 @@ export function createToolApprovalHandlers(
         { dropIfSlow: true },
       );
 
-      const hasApprovalClients = context.hasExecApprovalClients?.() ?? false;
+      // Use the tool-specific capability check so legacy exec-approval-only
+      // clients do not cause the request to block until timeout.
+      const hasApprovalClients = context.hasToolApprovalClients?.() ?? false;
       let forwarded = false;
       if (opts?.forwarder) {
         try {
