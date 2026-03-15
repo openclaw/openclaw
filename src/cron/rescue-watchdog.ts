@@ -501,6 +501,7 @@ export async function runRescueWatchdogJob(params: {
     cfg,
     port,
     auth,
+    tlsFingerprint,
     abortSignal: params.abortSignal,
     timeoutMs: (() => {
       const remaining = resolveRemainingJobBudgetMs({

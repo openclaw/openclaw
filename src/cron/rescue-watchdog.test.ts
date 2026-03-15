@@ -1,6 +1,17 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const originalArgv = [...process.argv];
+type MockGatewayTlsRuntime = {
+  enabled: boolean;
+  required: boolean;
+  fingerprintSha256?: string;
+};
+type MockProbeAuth = {
+  auth: {
+    token?: string;
+    password?: string;
+  };
+};
 
 const loadConfig = vi.hoisted(() =>
   vi.fn<
@@ -38,13 +49,13 @@ const readServiceCommand = vi.hoisted(() =>
 );
 const probeGateway = vi.hoisted(() => vi.fn());
 const loadGatewayTlsRuntime = vi.hoisted(() =>
-  vi.fn(async () => ({
+  vi.fn<() => Promise<MockGatewayTlsRuntime>>(async () => ({
     enabled: false,
     required: false,
   })),
 );
 const resolveGatewayProbeAuthSafe = vi.hoisted(() =>
-  vi.fn(() => ({
+  vi.fn<() => MockProbeAuth>(() => ({
     auth: { token: "main-token" },
   })),
 );
@@ -550,6 +561,65 @@ describe("runRescueWatchdogJob", () => {
       }),
     );
     expect(result.summary).toContain("ran doctor --repair --non-interactive");
+  });
+
+  it("reuses the monitored TLS fingerprint for the post-doctor health probe", async () => {
+    loadConfig.mockReturnValue({
+      gateway: {
+        port: 18_789,
+        bind: "custom",
+        customBindHost: "gateway.internal",
+        tls: { enabled: true },
+        auth: {
+          mode: "token",
+          token: "main-token",
+        },
+      },
+    });
+    loadGatewayTlsRuntime.mockResolvedValue({
+      enabled: true,
+      required: true,
+      fingerprintSha256: "sha256:aa:bb:cc:dd",
+    });
+
+    let probeCount = 0;
+    probeGateway.mockImplementation(async () => {
+      probeCount += 1;
+      if (probeCount >= 62) {
+        return {
+          ok: true,
+          close: null,
+          error: null,
+        };
+      }
+      return {
+        ok: false,
+        close: { code: 1006, reason: "down" },
+        error: "down",
+      };
+    });
+
+    const runPromise = runRescueWatchdogJob({
+      job: {
+        id: "job-doctor-post-probe-tls",
+        name: "rescue",
+        payload: {
+          kind: "rescueWatchdog",
+          monitoredProfile: "work",
+          timeoutSeconds: 120,
+        },
+      } as never,
+      monitoredProfile: "work",
+    });
+
+    await vi.advanceTimersByTimeAsync(31_000);
+    await runPromise;
+
+    const finalProbeCall = probeGateway.mock.lastCall?.[0] as
+      | { tlsFingerprint?: string; url?: string }
+      | undefined;
+    expect(finalProbeCall?.url).toBe("wss://gateway.internal:18789");
+    expect(finalProbeCall?.tlsFingerprint).toBe("sha256:aa:bb:cc:dd");
   });
 
   it("passes the job abort signal into the doctor fallback subprocess", async () => {
