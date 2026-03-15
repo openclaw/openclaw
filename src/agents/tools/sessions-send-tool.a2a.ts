@@ -99,6 +99,33 @@ export async function runSessionsSendA2AFlow(params: {
       }
     }
 
+    // Post the full target reply *after* ping-pong so the thread gets the final reply.
+    let fullReplyPosted = false;
+    if (announceTarget && latestReply && latestReply.trim()) {
+      try {
+        await callGateway({
+          method: "send",
+          params: {
+            to: announceTarget.to,
+            message: latestReply.trim(),
+            channel: announceTarget.channel,
+            accountId: announceTarget.accountId,
+            threadId: announceTarget.threadId,
+            idempotencyKey: crypto.randomUUID(),
+          },
+          timeoutMs: 10_000,
+        });
+        fullReplyPosted = true;
+      } catch (err) {
+        log.warn("sessions_send full-reply delivery to target failed", {
+          runId: runContextId,
+          channel: announceTarget.channel,
+          to: announceTarget.to,
+          error: formatErrorMessage(err),
+        });
+      }
+    }
+
     const announcePrompt = buildAgentToAgentAnnounceContext({
       requesterSessionKey: params.requesterSessionKey,
       requesterChannel: params.requesterChannel,
@@ -108,17 +135,28 @@ export async function runSessionsSendA2AFlow(params: {
       roundOneReply: primaryReply,
       latestReply,
     });
-    const announceReply = await runAgentStep({
-      sessionKey: params.targetSessionKey,
-      message: "Agent-to-agent announce step.",
-      extraSystemPrompt: announcePrompt,
-      timeoutMs: params.announceTimeoutMs,
-      lane: AGENT_LANE_NESTED,
-      sourceSessionKey: params.requesterSessionKey,
-      sourceChannel: params.requesterChannel,
-      sourceTool: "sessions_send",
-    });
-    if (announceTarget && announceReply && announceReply.trim() && !isAnnounceSkip(announceReply)) {
+    // Run announce in the *requester* session so the target (e.g. Cursor) never receives
+    // "Agent-to-agent announce step." — otherwise Cursor replies with a handoff summary.
+    let announceReply: string | undefined;
+    if (params.requesterSessionKey) {
+      announceReply = await runAgentStep({
+        sessionKey: params.requesterSessionKey,
+        message: "Agent-to-agent announce step.",
+        extraSystemPrompt: announcePrompt,
+        timeoutMs: params.announceTimeoutMs,
+        lane: AGENT_LANE_NESTED,
+        sourceSessionKey: params.targetSessionKey,
+        sourceChannel: params.requesterChannel,
+        sourceTool: "sessions_send",
+      });
+    }
+    if (
+      announceTarget &&
+      announceReply &&
+      announceReply.trim() &&
+      !isAnnounceSkip(announceReply) &&
+      !fullReplyPosted
+    ) {
       try {
         await callGateway({
           method: "send",
@@ -127,6 +165,7 @@ export async function runSessionsSendA2AFlow(params: {
             message: announceReply.trim(),
             channel: announceTarget.channel,
             accountId: announceTarget.accountId,
+            threadId: announceTarget.threadId,
             idempotencyKey: crypto.randomUUID(),
           },
           timeoutMs: 10_000,
