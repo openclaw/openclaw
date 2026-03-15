@@ -124,6 +124,7 @@ async function downloadAndSaveTelegramFile(params: {
   transport: TelegramTransport;
   maxBytes: number;
   telegramFileName?: string;
+  accountId?: string;
 }) {
   const url = `https://api.telegram.org/file/bot${params.token}/${params.filePath}`;
   const fetched = await fetchRemoteMedia({
@@ -144,6 +145,7 @@ async function downloadAndSaveTelegramFile(params: {
     "inbound",
     params.maxBytes,
     originalName,
+    params.accountId,
   );
 }
 
@@ -153,6 +155,7 @@ async function resolveStickerMedia(params: {
   maxBytes: number;
   token: string;
   transport?: TelegramTransport;
+  accountId?: string;
 }): Promise<
   | {
       path: string;
@@ -193,6 +196,7 @@ async function resolveStickerMedia(params: {
       token,
       transport: resolvedTransport,
       maxBytes,
+      accountId: params.accountId,
     });
 
     // Check sticker cache for existing description
@@ -248,6 +252,7 @@ export async function resolveMedia(
   maxBytes: number,
   token: string,
   transport?: TelegramTransport,
+  accountId?: string,
 ): Promise<{
   path: string;
   contentType?: string;
@@ -261,6 +266,7 @@ export async function resolveMedia(
     maxBytes,
     token,
     transport,
+    accountId,
   });
   if (stickerResolved !== undefined) {
     return stickerResolved;
@@ -284,6 +290,7 @@ export async function resolveMedia(
     transport: resolveRequiredTelegramTransport(transport),
     maxBytes,
     telegramFileName: resolveTelegramFileName(msg),
+    accountId,
   });
   const placeholder = resolveTelegramMediaPlaceholder(msg) ?? "<media:document>";
   return { path: saved.path, contentType: saved.contentType, placeholder };
