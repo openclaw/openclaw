@@ -74,4 +74,45 @@ describe("sanitizeToolCallInputs redacts sessions_spawn attachments", () => {
     ).toBe("__OPENCLAW_REDACTED__");
     expect(JSON.stringify(out)).not.toContain(secret);
   });
+
+  it("redacts sessions_spawn attachments even in the last assistant message with thinking blocks", () => {
+    const secret = "THINKING_SPAWN_SECRET_MUST_REDACT"; // pragma: allowlist secret
+    const input = castAgentMessages([
+      { role: "user", content: "hello" },
+      {
+        role: "assistant",
+        content: [
+          { type: "thinking", thinking: "some reasoning" },
+          {
+            type: "toolUse",
+            id: "call_spawn",
+            name: "sessions_spawn",
+            input: {
+              task: "do thing",
+              attachments: [{ name: "secret.txt", content: secret }],
+            },
+          },
+          { type: "text", text: "done" },
+        ],
+      },
+    ]);
+
+    const out = sanitizeToolCallInputs(input);
+    expect(out).toHaveLength(2);
+
+    const assistant = out[1] as { content?: unknown[] };
+    const types = (assistant.content as Array<{ type: string }>).map((b) => b.type);
+    // All blocks must be preserved (thinking message structure stays intact)
+    expect(types).toEqual(["thinking", "toolUse", "text"]);
+
+    // But the attachment content must be redacted
+    const tool = (assistant.content as unknown[])[1] as {
+      input?: { attachments?: Array<{ content?: string }> };
+      arguments?: { attachments?: Array<{ content?: string }> };
+    };
+    expect(
+      tool?.input?.attachments?.[0]?.content || tool?.arguments?.attachments?.[0]?.content,
+    ).toBe("__OPENCLAW_REDACTED__");
+    expect(JSON.stringify(out)).not.toContain(secret);
+  });
 });
