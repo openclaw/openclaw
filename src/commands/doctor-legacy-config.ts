@@ -8,7 +8,10 @@ import {
   resolveSlackStreamingMode,
   resolveTelegramPreviewStreamMode,
 } from "../config/discord-preview-streaming.js";
+import { removePluginFromConfig } from "../plugins/uninstall.js";
 import { DEFAULT_ACCOUNT_ID } from "../routing/session-key.js";
+
+const LEGACY_REMOVED_PLUGIN_IDS = ["google-antigravity-auth"] as const;
 
 export function normalizeCompatibilityConfigValues(cfg: OpenClawConfig): {
   config: OpenClawConfig;
@@ -365,6 +368,37 @@ export function normalizeCompatibilityConfigValues(cfg: OpenClawConfig): {
   normalizeProvider("slack");
   normalizeProvider("discord");
   seedMissingDefaultAccountsFromSingleAccountBase();
+
+  const removeLegacyRemovedPluginConfig = () => {
+    for (const pluginId of LEGACY_REMOVED_PLUGIN_IDS) {
+      const pruned = removePluginFromConfig(next, pluginId);
+      const affectedPaths: string[] = [];
+      if (pruned.actions.entry) {
+        affectedPaths.push("plugins.entries");
+      }
+      if (pruned.actions.install) {
+        affectedPaths.push("plugins.installs");
+      }
+      if (pruned.actions.allowlist) {
+        affectedPaths.push("plugins.allow");
+      }
+      if (pruned.actions.loadPath) {
+        affectedPaths.push("plugins.load.paths");
+      }
+      if (pruned.actions.memorySlot) {
+        affectedPaths.push("plugins.slots.memory");
+      }
+      if (affectedPaths.length === 0) {
+        continue;
+      }
+      next = pruned.config;
+      changes.push(
+        'Removed stale plugin "' + pluginId + '" from ' + affectedPaths.join(", ") + ".",
+      );
+    }
+  };
+
+  removeLegacyRemovedPluginConfig();
 
   const normalizeBrowserSsrFPolicyAlias = () => {
     const rawBrowser = next.browser;
