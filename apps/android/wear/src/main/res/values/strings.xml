@@ -65,12 +65,14 @@
     <string name="wear_connection_host">Host</string>
     <string name="wear_connection_port">Port</string>
     <string name="wear_connection_token">Token</string>
+    <string name="wear_connection_password">Password</string>
     <string name="wear_connection_use_tls">Use TLS</string>
     <string name="wear_connection_not_set">Not set</string>
     <string name="wear_connection_saved">Saved</string>
     <string name="wear_connection_gateway_host">Gateway host</string>
     <string name="wear_connection_gateway_port">Gateway port</string>
     <string name="wear_connection_gateway_token">Gateway token</string>
+    <string name="wear_connection_gateway_password">Gateway password</string>
     <string name="wear_connection_connect_wss">Connect with wss://</string>
     <string name="wear_connection_connect_ws">Connect with ws://</string>
     <string name="wear_status_offline">Offline</string>

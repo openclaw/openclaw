@@ -4,6 +4,7 @@ import ai.openclaw.wear.R
 import ai.openclaw.wear.gateway.GatewayEvent
 import ai.openclaw.android.gateway.GatewaySessionEntry
 import ai.openclaw.android.gateway.asObjectOrNull
+import ai.openclaw.android.gateway.asLongOrNull
 import ai.openclaw.android.gateway.asStringOrNull
 import ai.openclaw.wear.gateway.GatewayClientInterface
 import java.util.UUID
@@ -97,6 +98,7 @@ class WearChatController(
   private val pendingRunTimeoutJobs = mutableMapOf<String, Job>()
   private val queuedOutboundMessages = linkedMapOf<String, QueuedOutboundMessage>()
   private val dispatchJobs = mutableMapOf<String, Job>()
+  private val sideResults = mutableMapOf<String, MutableMap<String, WearChatMessage>>()
   private var lastAnnouncedAssistantId: String? = null
   private var lastSyncedHistory: List<WearChatMessage> = emptyList()
   private var hasSyncedHistory = false
@@ -120,6 +122,7 @@ class WearChatController(
     hasSyncedHistory = false
     clearPendingRuns()
     clearQueuedOutboundMessages()
+    clearSideResults()
     startEventsCollection()
   }
 
@@ -281,62 +284,59 @@ class WearChatController(
   private fun dispatchPendingMessage(runId: String, sessionKey: String, text: String) {
     synchronized(dispatchJobs) {
       if (dispatchJobs.containsKey(runId)) return
-    }
-
-    val job =
-      scope.launch {
-        try {
-          if (!client.connected.value) {
-            synchronized(queuedOutboundMessages) {
-              queuedOutboundMessages[runId] = QueuedOutboundMessage(sessionKey = sessionKey, text = text)
+      val job =
+        scope.launch {
+          try {
+            if (!client.connected.value) {
+              synchronized(queuedOutboundMessages) {
+                queuedOutboundMessages[runId] = QueuedOutboundMessage(sessionKey = sessionKey, text = text)
+              }
+              return@launch
             }
-            return@launch
-          }
 
-          synchronized(queuedOutboundMessages) {
-            queuedOutboundMessages.remove(runId)
-          }
-          armPendingRunTimeout(runId)
-          ensurePendingHistoryRefreshLoop()
+            synchronized(queuedOutboundMessages) {
+              queuedOutboundMessages.remove(runId)
+            }
+            armPendingRunTimeout(runId)
+            ensurePendingHistoryRefreshLoop()
 
-          val params = buildJsonObject {
-            put("sessionKey", JsonPrimitive(sessionKey))
-            put("message", JsonPrimitive(text))
-            put("thinking", JsonPrimitive("off"))
-            put("timeoutMs", JsonPrimitive(30_000))
-            put("idempotencyKey", JsonPrimitive(runId))
-          }
-          val response = client.request("chat.send", params.toString())
-          val actualRunId = parseRunId(response) ?: runId
-          if (actualRunId != runId) {
-            replacePendingRunId(from = runId, to = actualRunId)
-          }
-        } catch (e: Throwable) {
-          if (e.isCancelledRequest() && isPendingRun(runId)) {
-            synchronized(queuedOutboundMessages) {
-              queuedOutboundMessages[runId] = QueuedOutboundMessage(sessionKey = sessionKey, text = text)
+            val params = buildJsonObject {
+              put("sessionKey", JsonPrimitive(sessionKey))
+              put("message", JsonPrimitive(text))
+              put("thinking", JsonPrimitive("off"))
+              put("timeoutMs", JsonPrimitive(30_000))
+              put("idempotencyKey", JsonPrimitive(runId))
             }
-            return@launch
-          }
-          val shouldRetry = e.message?.contains("not connected", ignoreCase = true) == true
-          if (shouldRetry && isPendingRun(runId)) {
-            synchronized(queuedOutboundMessages) {
-              queuedOutboundMessages[runId] = QueuedOutboundMessage(sessionKey = sessionKey, text = text)
+            val response = client.request("chat.send", params.toString())
+            val actualRunId = parseRunId(response) ?: runId
+            if (actualRunId != runId) {
+              replacePendingRunId(from = runId, to = actualRunId)
             }
-            return@launch
-          }
-          if (!isPendingRun(runId)) {
-            return@launch
-          }
-          clearPendingRun(runId)
-          _errorText.value = localizedErrorMessage(e, R.string.wear_chat_error_send_failed)
-        } finally {
-          synchronized(dispatchJobs) {
-            dispatchJobs.remove(runId)
+          } catch (e: Throwable) {
+            if (e.isCancelledRequest() && isPendingRun(runId)) {
+              synchronized(queuedOutboundMessages) {
+                queuedOutboundMessages[runId] = QueuedOutboundMessage(sessionKey = sessionKey, text = text)
+              }
+              return@launch
+            }
+            val shouldRetry = e.message?.contains("not connected", ignoreCase = true) == true
+            if (shouldRetry && isPendingRun(runId)) {
+              synchronized(queuedOutboundMessages) {
+                queuedOutboundMessages[runId] = QueuedOutboundMessage(sessionKey = sessionKey, text = text)
+              }
+              return@launch
+            }
+            if (!isPendingRun(runId)) {
+              return@launch
+            }
+            clearPendingRun(runId)
+            _errorText.value = localizedErrorMessage(e, R.string.wear_chat_error_send_failed)
+          } finally {
+            synchronized(dispatchJobs) {
+              dispatchJobs.remove(runId)
+            }
           }
         }
-      }
-    synchronized(dispatchJobs) {
       dispatchJobs[runId] = job
     }
   }
@@ -350,13 +350,13 @@ class WearChatController(
           loadHistory()
         }
       }
-      "proxy.connected" -> {
-        // PhoneProxyClient established connection — load data
-        onConnected()
-      }
       "chat" -> {
         if (event.payloadJson.isNullOrBlank()) return
         handleChatEvent(event.payloadJson)
+      }
+      "chat.side_result" -> {
+        if (event.payloadJson.isNullOrBlank()) return
+        handleSideResultEvent(event.payloadJson)
       }
       "agent" -> {
         if (event.payloadJson.isNullOrBlank()) return
@@ -408,6 +408,33 @@ class WearChatController(
         refreshHistoryImmediately(emitLatestAssistantReply = state == "final")
       }
     }
+  }
+
+  private fun handleSideResultEvent(payloadJson: String) {
+    val payload = parseObject(payloadJson) ?: return
+    val sessionKey = payload.str("sessionKey")
+    if (!sessionKey.isNullOrEmpty() && sessionKey != _sessionKey.value) return
+    if (payload.str("kind") != "btw") return
+    val runId = payload.str("runId")?.trim().orEmpty()
+    if (runId.isEmpty()) return
+    val question = payload.str("question")?.trim().orEmpty()
+    val text = payload.str("text")?.trim().orEmpty()
+    if (question.isEmpty() || text.isEmpty()) return
+
+    val displayText = "BTW: $question\n$text"
+    val ts = payload["ts"].asLongOrNull() ?: System.currentTimeMillis()
+    val message =
+      WearChatMessage(
+        id = "side_result:$runId",
+        role = "assistant",
+        text = displayText,
+        timestampMs = ts,
+      )
+    if (!recordSideResult(sessionKey ?: _sessionKey.value, runId, message)) return
+
+    val merged = mergeSideResults(requestedSessionKey = _sessionKey.value, history = _messages.value)
+    _messages.value = merged
+    _assistantReplies.tryEmit(text)
   }
 
   private fun handleAgentEvent(payloadJson: String) {
@@ -476,7 +503,8 @@ class WearChatController(
     lastSyncedHistory = history
     hasSyncedHistory = true
     val resolvedPendingRuns = reconcilePendingRuns(history)
-    _messages.value = mergePendingOptimisticMessages(requestedSessionKey = requestedSessionKey, history = history)
+    val merged = mergePendingOptimisticMessages(requestedSessionKey = requestedSessionKey, history = history)
+    _messages.value = mergeSideResults(requestedSessionKey = requestedSessionKey, history = merged)
     if (emitLatestAssistantReply || resolvedPendingRuns) {
       emitLatestAssistantReplyIfNeeded(history)
     }
@@ -506,6 +534,42 @@ class WearChatController(
       }
     }
     return merged
+  }
+
+  private fun mergeSideResults(
+    requestedSessionKey: String,
+    history: List<WearChatMessage>,
+  ): List<WearChatMessage> {
+    val results =
+      synchronized(sideResults) {
+        sideResults[requestedSessionKey]?.values?.toList().orEmpty()
+      }
+    if (results.isEmpty()) return history
+    val merged = history.toMutableList()
+    for (message in results.sortedBy { it.timestampMs ?: Long.MAX_VALUE }) {
+      if (merged.none { it.id == message.id }) {
+        merged += message
+      }
+    }
+    return merged
+  }
+
+  private fun recordSideResult(sessionKey: String, runId: String, message: WearChatMessage): Boolean {
+    return synchronized(sideResults) {
+      val byRunId = sideResults.getOrPut(sessionKey) { linkedMapOf() }
+      if (byRunId.containsKey(runId)) {
+        false
+      } else {
+        byRunId[runId] = message
+        true
+      }
+    }
+  }
+
+  private fun clearSideResults() {
+    synchronized(sideResults) {
+      sideResults.clear()
+    }
   }
 
   private fun emitLatestAssistantReplyIfNeeded(history: List<WearChatMessage>) {

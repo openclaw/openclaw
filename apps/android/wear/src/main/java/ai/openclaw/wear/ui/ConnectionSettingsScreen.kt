@@ -30,6 +30,7 @@ import ai.openclaw.wear.gateway.WearGatewayConfig
 private const val HOST_KEY = "gw_host"
 private const val PORT_KEY = "gw_port"
 private const val TOKEN_KEY = "gw_token"
+private const val PASSWORD_KEY = "gw_password"
 
 @Composable
 fun ConnectionSettingsScreen(
@@ -45,6 +46,9 @@ fun ConnectionSettingsScreen(
   }
   val tokenLauncher = remoteInputLauncher(TOKEN_KEY) { value ->
     onConfigChange(config.copy(token = value))
+  }
+  val passwordLauncher = remoteInputLauncher(PASSWORD_KEY) { value ->
+    onConfigChange(config.copy(password = value))
   }
 
   val listState = rememberScalingLazyListState()
@@ -137,6 +141,24 @@ fun ConnectionSettingsScreen(
                 key = TOKEN_KEY,
                 label = context.getString(R.string.wear_connection_gateway_token),
                 launcher = tokenLauncher,
+              )
+            },
+          )
+        }
+        item {
+          SettingsField(
+            label = stringResource(R.string.wear_connection_password),
+            value =
+              if (config.password.isNotEmpty()) {
+                stringResource(R.string.wear_connection_saved)
+              } else {
+                stringResource(R.string.wear_connection_not_set)
+              },
+            onClick = {
+              launchRemoteInput(
+                key = PASSWORD_KEY,
+                label = context.getString(R.string.wear_connection_gateway_password),
+                launcher = passwordLauncher,
               )
             },
           )

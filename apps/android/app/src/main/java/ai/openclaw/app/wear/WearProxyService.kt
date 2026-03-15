@@ -34,6 +34,7 @@ class WearProxyService : WearableListenerService() {
   private val json = Json { ignoreUnknownKeys = true }
   private val messageClient: MessageClient by lazy { Wearable.getMessageClient(this) }
   private var eventForwardingJob: Job? = null
+  private var forwardingNodeId: String? = null
 
   private val runtime get() = (application as NodeApp).runtime
 
@@ -54,10 +55,9 @@ class WearProxyService : WearableListenerService() {
         messageClient.sendMessage(sourceNodeId, ProxyPaths.PONG, handshakePayload).await()
         Log.i(TAG, "Pong sent successfully to $sourceNodeId")
         if (runtime.isConnected.value) {
-          startEventForwarding(sourceNodeId)
+          ensureEventForwarding(sourceNodeId)
         } else {
-          eventForwardingJob?.cancel()
-          eventForwardingJob = null
+          stopEventForwarding()
         }
       } catch (e: Throwable) {
         Log.e(TAG, "Failed to send pong: ${e.message}", e)
@@ -104,8 +104,16 @@ class WearProxyService : WearableListenerService() {
     }
   }
 
+  private fun ensureEventForwarding(nodeId: String) {
+    if (eventForwardingJob?.isActive == true && forwardingNodeId == nodeId) {
+      return
+    }
+    startEventForwarding(nodeId)
+  }
+
   private fun startEventForwarding(nodeId: String) {
     eventForwardingJob?.cancel()
+    forwardingNodeId = nodeId
     Log.i(TAG, "Starting event forwarding to $nodeId")
     eventForwardingJob =
       WearProxyEventForwarder(
@@ -114,6 +122,12 @@ class WearProxyService : WearableListenerService() {
         events = runtime.wearProxyEvents,
         sendEvent = ::sendEvent,
       ).startIn(scope)
+  }
+
+  private fun stopEventForwarding() {
+    eventForwardingJob?.cancel()
+    eventForwardingJob = null
+    forwardingNodeId = null
   }
 
   private suspend fun sendEvent(nodeId: String, event: String, payloadJson: String?) {
