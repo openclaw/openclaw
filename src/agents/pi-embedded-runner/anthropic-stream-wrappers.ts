@@ -6,11 +6,13 @@ import {
   usesOpenAiFunctionAnthropicToolSchema,
   usesOpenAiStringModeAnthropicToolChoice,
 } from "../provider-capabilities.js";
-import { log } from "./logger.js";
 import { streamWithPayloadPatch } from "./stream-payload-utils.js";
 
-const ANTHROPIC_CONTEXT_1M_BETA = "context-1m-2025-08-07";
-const ANTHROPIC_1M_MODEL_PREFIXES = ["claude-opus-4", "claude-sonnet-4"] as const;
+// Anthropic has graduated 1M context from beta to GA — the context-1m
+// beta header is no longer required and OAuth tokens now support 1M
+// natively.  The constant is kept only for backward-compatible removal
+// of stale user-configured anthropicBeta entries that still list it.
+const ANTHROPIC_CONTEXT_1M_BETA_LEGACY = "context-1m-2025-08-07";
 const PI_AI_DEFAULT_ANTHROPIC_BETAS = [
   "fine-grained-tool-streaming-2025-05-14",
   "interleaved-thinking-2025-05-14",
@@ -23,11 +25,6 @@ const PI_AI_OAUTH_ANTHROPIC_BETAS = [
 type AnthropicServiceTier = "auto" | "standard_only";
 
 type CacheRetention = "none" | "short" | "long";
-
-function isAnthropic1MModel(modelId: string): boolean {
-  const normalized = modelId.trim().toLowerCase();
-  return ANTHROPIC_1M_MODEL_PREFIXES.some((prefix) => normalized.startsWith(prefix));
-}
 
 function parseHeaderList(value: unknown): string[] {
   if (typeof value !== "string") {
@@ -224,7 +221,7 @@ export function resolveCacheRetention(
 export function resolveAnthropicBetas(
   extraParams: Record<string, unknown> | undefined,
   provider: string,
-  modelId: string,
+  _modelId: string,
 ): string[] | undefined {
   if (provider !== "anthropic") {
     return undefined;
@@ -242,13 +239,13 @@ export function resolveAnthropicBetas(
     }
   }
 
-  if (extraParams?.context1m === true) {
-    if (isAnthropic1MModel(modelId)) {
-      betas.add(ANTHROPIC_CONTEXT_1M_BETA);
-    } else {
-      log.warn(`ignoring context1m for non-opus/sonnet model: ${provider}/${modelId}`);
-    }
-  }
+  // 1M context is now GA — silently strip the legacy beta header if a user
+  // still has it in their anthropicBeta config so it doesn't get sent.
+  betas.delete(ANTHROPIC_CONTEXT_1M_BETA_LEGACY);
+
+  // context1m param is still respected for context window sizing (in
+  // context.ts) but no longer triggers a beta header — the API accepts
+  // 1M requests without it.
 
   return betas.size > 0 ? [...betas] : undefined;
 }
@@ -260,21 +257,11 @@ export function createAnthropicBetaHeadersWrapper(
   const underlying = baseStreamFn ?? streamSimple;
   return (model, context, options) => {
     const isOauth = isAnthropicOAuthApiKey(options?.apiKey);
-    const requestedContext1m = betas.includes(ANTHROPIC_CONTEXT_1M_BETA);
-    const effectiveBetas =
-      isOauth && requestedContext1m
-        ? betas.filter((beta) => beta !== ANTHROPIC_CONTEXT_1M_BETA)
-        : betas;
-    if (isOauth && requestedContext1m) {
-      log.warn(
-        `ignoring context1m for OAuth token auth on ${model.provider}/${model.id}; Anthropic rejects context-1m beta with OAuth auth`,
-      );
-    }
 
     const piAiBetas = isOauth
       ? (PI_AI_OAUTH_ANTHROPIC_BETAS as readonly string[])
       : (PI_AI_DEFAULT_ANTHROPIC_BETAS as readonly string[]);
-    const allBetas = [...new Set([...piAiBetas, ...effectiveBetas])];
+    const allBetas = [...new Set([...piAiBetas, ...betas])];
     return underlying(model, context, {
       ...options,
       headers: mergeAnthropicBetaHeader(options?.headers, allBetas),
