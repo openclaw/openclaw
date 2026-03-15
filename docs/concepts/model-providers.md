@@ -117,7 +117,7 @@ OpenClaw ships with the pi‑ai catalog. These providers require **no**
 ### Google Vertex, Antigravity, and Gemini CLI
 
 - Providers: `google-vertex`, `google-antigravity`, `google-gemini-cli`
-- Auth: Vertex uses gcloud ADC; Antigravity/Gemini CLI use their respective auth flows
+- Auth: Vertex supports `GOOGLE_CLOUD_API_KEY` (simplest) or gcloud ADC (`GOOGLE_CLOUD_PROJECT` + `GOOGLE_CLOUD_LOCATION` + `gcloud auth application-default login` or `GOOGLE_APPLICATION_CREDENTIALS`); Antigravity/Gemini CLI use their respective auth flows
 - Caution: Antigravity and Gemini CLI OAuth in OpenClaw are unofficial integrations. Some users have reported Google account restrictions after using third-party clients. Review Google terms and use a non-critical account if you choose to proceed.
 - Antigravity OAuth is shipped as a bundled plugin (`google-antigravity-auth`, disabled by default).
   - Enable: `openclaw plugins enable google-antigravity-auth`

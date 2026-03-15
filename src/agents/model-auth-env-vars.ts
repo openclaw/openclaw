@@ -15,6 +15,7 @@ export const PROVIDER_ENV_API_KEY_CANDIDATES: Record<string, string[]> = {
   huggingface: ["HUGGINGFACE_HUB_TOKEN", "HF_TOKEN"],
   openai: ["OPENAI_API_KEY"],
   google: ["GEMINI_API_KEY"],
+  "google-vertex": ["GOOGLE_CLOUD_API_KEY"],
   voyage: ["VOYAGE_API_KEY"],
   groq: ["GROQ_API_KEY"],
   deepgram: ["DEEPGRAM_API_KEY"],
