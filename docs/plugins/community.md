@@ -34,6 +34,14 @@ Open a PR that adds your plugin to this page with:
 We prefer plugins that are useful, documented, and safe to operate.
 Low-effort wrappers, unclear ownership, or unmaintained packages may be declined.
 
+## Security expectations for LMS integrations
+
+- Use the official Canvas API and avoid scraping.
+- Do not ask users for Canvas username or password.
+- Prefer OAuth2 with a Developer Key and minimum required scopes.
+- Store tokens securely and never log or expose them in errors or UI.
+- Document required scopes, data access boundaries, and any admin setup.
+
 ## Candidate format
 
 Use this format when adding entries:
@@ -49,3 +57,8 @@ Use this format when adding entries:
   npm: `@icesword760/openclaw-wechat`
   repo: `https://github.com/icesword0760/openclaw-wechat`
   install: `openclaw plugins install @icesword760/openclaw-wechat`
+
+- **Canvas LMS** — Adds Canvas LMS tools for university workflows including courses, assignments, submissions, announcements, files, grades, and calendar events.
+  npm: `@kansodata/openclaw-canvas-lms`
+  repo: `https://github.com/Kansodata/openclaw-canvas-lms`
+  install: `openclaw plugins install @kansodata/openclaw-canvas-lms`
