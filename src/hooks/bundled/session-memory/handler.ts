@@ -194,17 +194,19 @@ async function findPreviousSessionFile(params: {
 }
 
 /**
- * Save session context to memory when /new or /reset command is triggered
+ * Save session context to memory when /new, /reset command is triggered,
+ * or when a session is archived/deleted (e.g. non-TUI channel idle timeout).
  */
 const saveSessionToMemory: HookHandler = async (event) => {
-  // Only trigger on reset/new commands
-  const isResetCommand = event.action === "new" || event.action === "reset";
-  if (event.type !== "command" || !isResetCommand) {
+  const isResetCommand =
+    event.type === "command" && (event.action === "new" || event.action === "reset");
+  const isSessionArchived = event.type === "session" && event.action === "archived";
+  if (!isResetCommand && !isSessionArchived) {
     return;
   }
 
   try {
-    log.debug("Hook triggered for reset/new command", { action: event.action });
+    log.debug("Hook triggered", { type: event.type, action: event.action });
 
     const context = event.context || {};
     const cfg = context.cfg as OpenClawConfig | undefined;

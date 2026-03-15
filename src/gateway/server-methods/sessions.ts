@@ -7,6 +7,7 @@ import {
   type SessionEntry,
   updateSessionStore,
 } from "../../config/sessions.js";
+import { createInternalHookEvent, triggerInternalHook } from "../../hooks/internal-hooks.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
 import { GATEWAY_CLIENT_IDS } from "../protocol/client-info.js";
 import {
@@ -299,6 +300,20 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       return hadEntry;
     });
 
+    const emitLifecycleHooks = p.emitLifecycleHooks !== false;
+
+    // Await session:archived hook BEFORE transcript archival so hook consumers
+    // (e.g. transcript export) complete before the data is deleted.
+    if (deleted && emitLifecycleHooks) {
+      await triggerInternalHook(
+        createInternalHookEvent("session", "archived", target.canonicalKey ?? key, {
+          sessionEntry: entry,
+          previousSessionEntry: entry,
+          cfg,
+        }),
+      );
+    }
+
     const archived =
       deleted && deleteTranscript
         ? archiveSessionTranscriptsForSession({
@@ -310,7 +325,6 @@ export const sessionsHandlers: GatewayRequestHandlers = {
           })
         : [];
     if (deleted) {
-      const emitLifecycleHooks = p.emitLifecycleHooks !== false;
       await emitSessionUnboundLifecycleEvent({
         targetSessionKey: target.canonicalKey ?? key,
         reason: "session-delete",

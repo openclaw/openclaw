@@ -1,13 +1,13 @@
 ---
 name: session-memory
-description: "Save session context to memory when /new or /reset command is issued"
+description: "Save session context to memory on /new, /reset, or session archive/delete"
 homepage: https://docs.openclaw.ai/automation/hooks#session-memory
 metadata:
   {
     "openclaw":
       {
         "emoji": "💾",
-        "events": ["command:new", "command:reset"],
+        "events": ["command:new", "command:reset", "session:archived"],
         "requires": { "config": ["workspace.dir"] },
         "install": [{ "id": "bundled", "kind": "bundled", "label": "Bundled with OpenClaw" }],
       },
@@ -16,11 +16,11 @@ metadata:
 
 # Session Memory Hook
 
-Automatically saves session context to your workspace memory when you issue `/new` or `/reset`.
+Automatically saves session context to your workspace memory when you issue `/new` or `/reset`, or when a session is archived/deleted (e.g. non-TUI channel idle timeout).
 
 ## What It Does
 
-When you run `/new` or `/reset` to start a fresh session:
+When you run `/new` or `/reset` to start a fresh session, or when a session is archived/deleted:
 
 1. **Finds the previous session** - Uses the pre-reset session entry to locate the correct transcript
 2. **Extracts conversation** - Reads the last N user/assistant messages from the session (default: 15, configurable)
