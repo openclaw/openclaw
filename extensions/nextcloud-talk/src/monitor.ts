@@ -15,6 +15,8 @@ import { extractNextcloudTalkHeaders, verifyNextcloudTalkSignature } from "./sig
 import type {
   CoreConfig,
   NextcloudTalkInboundMessage,
+  NextcloudTalkRichContent,
+  NextcloudTalkRichObjectParameter,
   NextcloudTalkWebhookHeaders,
   NextcloudTalkWebhookPayload,
   NextcloudTalkWebhookServerOptions,
@@ -149,11 +151,67 @@ function decodeWebhookCreateMessage(params: {
   return { kind: "message", message: payloadToInboundMessage(payload) };
 }
 
-function payloadToInboundMessage(
+/**
+ * Parse the JSON-encoded rich content from object.content.
+ * Returns null if parsing fails or the content is not valid rich content.
+ */
+export function parseRichContent(content: string): NextcloudTalkRichContent | null {
+  try {
+    const parsed = JSON.parse(content);
+    if (typeof parsed !== "object" || parsed === null || typeof parsed.message !== "string") {
+      return null;
+    }
+    return parsed as NextcloudTalkRichContent;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Resolve rich content message text by replacing parameter placeholders
+ * (e.g. `{file}`, `{mention-user1}`) with the parameter's display name.
+ */
+function resolveRichMessageText(
+  message: string,
+  parameters: Record<string, NextcloudTalkRichObjectParameter> | undefined,
+): string {
+  if (!parameters) return message;
+  return message.replace(/\{([\w-]+)\}/g, (match, key: string) => {
+    const param = parameters[key];
+    return param?.name ?? match;
+  });
+}
+
+/**
+ * Extract file-type parameters from rich content.
+ */
+function extractFileParameters(
+  parameters: Record<string, NextcloudTalkRichObjectParameter> | undefined,
+): NextcloudTalkRichObjectParameter[] {
+  if (!parameters) return [];
+  return Object.values(parameters).filter((p) => p.type === "file");
+}
+
+export function payloadToInboundMessage(
   payload: NextcloudTalkWebhookPayload,
 ): NextcloudTalkInboundMessage {
   // Payload doesn't indicate DM vs room; mark as group and let inbound handler refine.
   const isGroupChat = true;
+
+  const rawContent = payload.object.content || "";
+  const richContent = parseRichContent(rawContent);
+
+  let text: string;
+  let fileParameters: NextcloudTalkRichObjectParameter[] = [];
+
+  if (richContent) {
+    // Successfully parsed rich content — resolve placeholders to filenames
+    text = resolveRichMessageText(richContent.message, richContent.parameters);
+    fileParameters = extractFileParameters(richContent.parameters);
+  } else {
+    // Fallback: use raw content or name (backward compatible)
+    text = rawContent || payload.object.name || "";
+  }
 
   return {
     messageId: String(payload.object.id),
@@ -161,10 +219,11 @@ function payloadToInboundMessage(
     roomName: payload.target.name,
     senderId: payload.actor.id,
     senderName: payload.actor.name ?? "",
-    text: payload.object.content || payload.object.name || "",
+    text,
     mediaType: payload.object.mediaType || "text/plain",
     timestamp: Date.now(),
     isGroupChat,
+    fileParameters: fileParameters.length > 0 ? fileParameters : undefined,
   };
 }
 
