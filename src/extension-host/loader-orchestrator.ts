@@ -15,11 +15,10 @@ import type { GatewayRequestHandler } from "../gateway/server-methods/types.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { clearPluginCommands } from "../plugins/commands.js";
 import { applyTestPluginDefaults, normalizePluginsConfig } from "../plugins/config-state.js";
-import { discoverOpenClawPlugins } from "../plugins/discovery.js";
-import { loadPluginManifestRegistry } from "../plugins/manifest-registry.js";
 import { createPluginRegistry, type PluginRegistry } from "../plugins/registry.js";
 import { createPluginRuntime, type CreatePluginRuntimeOptions } from "../plugins/runtime/index.js";
 import type { PluginLogger } from "../plugins/types.js";
+import { bootstrapExtensionHostPluginLoad } from "./loader-bootstrap.js";
 import { resolveExtensionHostDiscoveryPolicy } from "./loader-discovery-policy.js";
 import { createExtensionHostModuleLoader } from "./loader-module-loader.js";
 import { createExtensionHostLazyRuntime } from "./loader-runtime-proxy.js";
@@ -87,61 +86,29 @@ export function loadExtensionHostPluginRegistry(
     coreGatewayHandlers: options.coreGatewayHandlers as Record<string, GatewayRequestHandler>,
   });
 
-  const discovery = discoverOpenClawPlugins({
-    workspaceDir: options.workspaceDir,
-    extraPaths: normalized.loadPaths,
-    cache: options.cache,
-    env,
-  });
-  const manifestRegistry = loadPluginManifestRegistry({
+  const bootstrap = bootstrapExtensionHostPluginLoad({
     config: cfg,
     workspaceDir: options.workspaceDir,
-    cache: options.cache,
     env,
-    candidates: discovery.candidates,
-    diagnostics: discovery.diagnostics,
-  });
-  pushExtensionHostDiagnostics(registry.diagnostics, manifestRegistry.diagnostics);
-  const discoveryPolicy = resolveExtensionHostDiscoveryPolicy({
-    pluginsEnabled: normalized.enabled,
-    allow: normalized.allow,
     warningCacheKey: cacheKey,
     warningCache: openAllowlistWarningCache,
-    discoverablePlugins: manifestRegistry.plugins.map((plugin) => ({
-      id: plugin.id,
-      source: plugin.source,
-      origin: plugin.origin,
-    })),
-  });
-  for (const warning of discoveryPolicy.warningMessages) {
-    logger.warn(warning);
-  }
-  const provenance = buildExtensionHostProvenanceIndex({
-    config: cfg,
-    normalizedLoadPaths: normalized.loadPaths,
-    env,
+    cache: options.cache,
+    normalizedConfig: normalized,
+    logger,
+    registry,
+    pushDiagnostics: pushExtensionHostDiagnostics,
+    resolveDiscoveryPolicy: resolveExtensionHostDiscoveryPolicy,
+    buildProvenanceIndex: buildExtensionHostProvenanceIndex,
+    compareDuplicateCandidateOrder: compareExtensionHostDuplicateCandidateOrder,
   });
 
   const loadModule = createExtensionHostModuleLoader();
-
-  const manifestByRoot = new Map(
-    manifestRegistry.plugins.map((record) => [record.rootDir, record]),
-  );
-  const orderedCandidates = [...discovery.candidates].toSorted((left, right) => {
-    return compareExtensionHostDuplicateCandidateOrder({
-      left,
-      right,
-      manifestByRoot,
-      provenance,
-      env,
-    });
-  });
 
   const session = createExtensionHostLoaderSession({
     registry,
     logger,
     env,
-    provenance,
+    provenance: bootstrap.provenance,
     cacheEnabled,
     cacheKey,
     memorySlot: normalized.slots.memory,
@@ -149,8 +116,8 @@ export function loadExtensionHostPluginRegistry(
     activateRegistry: activateExtensionHostRegistry,
   });
 
-  for (const candidate of orderedCandidates) {
-    const manifestRecord = manifestByRoot.get(candidate.rootDir);
+  for (const candidate of bootstrap.orderedCandidates) {
+    const manifestRecord = bootstrap.manifestByRoot.get(candidate.rootDir);
     if (!manifestRecord) {
       continue;
     }
