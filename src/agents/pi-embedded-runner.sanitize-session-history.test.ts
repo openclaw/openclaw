@@ -568,6 +568,24 @@ describe("sanitizeSessionHistory", () => {
     expect(result[1]?.role).toBe("toolResult");
   });
 
+  it("repairs structurally complete interrupted tool calls for openai-responses", async () => {
+    const messages: AgentMessage[] = [
+      makeAssistantMessage(
+        [{ type: "toolCall", id: "call_aborted", name: "read", arguments: {} }],
+        {
+          stopReason: "aborted",
+        },
+      ),
+    ];
+
+    const result = await sanitizeOpenAIHistory(messages);
+
+    expect(result).toHaveLength(2);
+    expect(result[0]?.role).toBe("assistant");
+    expect(result[1]?.role).toBe("toolResult");
+    expect((result[1] as { toolCallId?: string }).toolCallId).toBe("call_aborted");
+  });
+
   it.each([
     {
       name: "missing input or arguments",
