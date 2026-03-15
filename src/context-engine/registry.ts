@@ -48,7 +48,9 @@ function getContextEngineRegistryState(): ContextEngineRegistryState {
 function requireContextEngineOwner(owner: string): string {
   const normalizedOwner = owner.trim();
   if (!normalizedOwner) {
-    throw new Error(`registerContextEngineForOwner: owner must be a non-empty string, got ${JSON.stringify(owner)}`);
+    throw new Error(
+      `registerContextEngineForOwner: owner must be a non-empty string, got ${JSON.stringify(owner)}`,
+    );
   }
   return normalizedOwner;
 }

@@ -8,10 +8,12 @@ import { compactEmbeddedPiSessionDirect } from "../agents/pi-embedded-runner/com
 import { LegacyContextEngine, registerLegacyContextEngine } from "./legacy.js";
 import {
   registerContextEngine,
+  registerContextEngineForOwner,
   getContextEngineFactory,
   listContextEngineIds,
   resolveContextEngine,
 } from "./registry.js";
+import type { ContextEngineFactory, ContextEngineRegistrationResult } from "./registry.js";
 import type {
   ContextEngine,
   ContextEngineInfo,
@@ -235,14 +237,18 @@ describe("Registry tests", () => {
     const factory1 = () => new MockContextEngine();
     const factory2 = () => new MockContextEngine();
 
-    expect(registerContextEngine("reg-overwrite", factory1, { owner: "owner-a" })).toEqual({
-      ok: true,
-    });
+    expect(
+      registerContextEngineForOwner("reg-overwrite", factory1, "owner-a", {
+        allowSameOwnerRefresh: true,
+      }),
+    ).toEqual({ ok: true });
     expect(getContextEngineFactory("reg-overwrite")).toBe(factory1);
 
-    expect(registerContextEngine("reg-overwrite", factory2, { owner: "owner-a" })).toEqual({
-      ok: true,
-    });
+    expect(
+      registerContextEngineForOwner("reg-overwrite", factory2, "owner-a", {
+        allowSameOwnerRefresh: true,
+      }),
+    ).toEqual({ ok: true });
     expect(getContextEngineFactory("reg-overwrite")).toBe(factory2);
     expect(getContextEngineFactory("reg-overwrite")).not.toBe(factory1);
   });
@@ -251,14 +257,54 @@ describe("Registry tests", () => {
     const factory1 = () => new MockContextEngine();
     const factory2 = () => new MockContextEngine();
 
-    expect(registerContextEngine("reg-owner-guard", factory1, { owner: "owner-a" })).toEqual({
-      ok: true,
-    });
-    expect(registerContextEngine("reg-owner-guard", factory2, { owner: "owner-b" })).toEqual({
+    expect(
+      registerContextEngineForOwner("reg-owner-guard", factory1, "owner-a", {
+        allowSameOwnerRefresh: true,
+      }),
+    ).toEqual({ ok: true });
+    expect(registerContextEngineForOwner("reg-owner-guard", factory2, "owner-b")).toEqual({
       ok: false,
       existingOwner: "owner-a",
     });
     expect(getContextEngineFactory("reg-owner-guard")).toBe(factory1);
+  });
+
+  it("public registerContextEngine cannot spoof owner or refresh existing ids", () => {
+    const ownedFactory = () => new MockContextEngine();
+    expect(
+      registerContextEngineForOwner("public-owner-guard", ownedFactory, "owner-a", {
+        allowSameOwnerRefresh: true,
+      }),
+    ).toEqual({ ok: true });
+
+    const spoofAttempt = (
+      registerContextEngine as unknown as (
+        id: string,
+        factory: ContextEngineFactory,
+        opts?: { owner?: string },
+      ) => ContextEngineRegistrationResult
+    )("public-owner-guard", () => new MockContextEngine(), { owner: "owner-a" });
+
+    expect(spoofAttempt).toEqual({
+      ok: false,
+      existingOwner: "owner-a",
+    });
+    expect(getContextEngineFactory("public-owner-guard")).toBe(ownedFactory);
+  });
+
+  it("public registerContextEngine reserves the default legacy id", () => {
+    const legacyAttempt = (
+      registerContextEngine as unknown as (
+        id: string,
+        factory: ContextEngineFactory,
+        opts?: { owner?: string },
+      ) => ContextEngineRegistrationResult
+    )("legacy", () => new MockContextEngine(), { owner: "core" });
+
+    expect(legacyAttempt).toEqual({
+      ok: false,
+      existingOwner: "core",
+    });
   });
 
   it("shares registered engines across duplicate module copies", async () => {
@@ -490,6 +536,33 @@ describe("Bundle chunk isolation (#40096)", () => {
     const sdkEngineId = `sdk-registered-${ts}`;
     sdk.registerContextEngine(sdkEngineId, () => new MockContextEngine());
     expect(getContextEngineFactory(sdkEngineId)).toBeDefined();
+  });
+
+  it("plugin-sdk registerContextEngine cannot spoof privileged ownership", async () => {
+    const ts = Date.now().toString(36);
+    const engineId = `sdk-spoof-guard-${ts}`;
+    const ownedFactory = () => new MockContextEngine();
+    expect(
+      registerContextEngineForOwner(engineId, ownedFactory, "plugin:owner-a", {
+        allowSameOwnerRefresh: true,
+      }),
+    ).toEqual({ ok: true });
+
+    const sdkUrl = new URL("../plugin-sdk/index.ts", import.meta.url).href;
+    const sdk = await import(/* @vite-ignore */ `${sdkUrl}?sdk-spoof-${ts}`);
+    const spoofAttempt = (
+      sdk.registerContextEngine as unknown as (
+        id: string,
+        factory: ContextEngineFactory,
+        opts?: { owner?: string },
+      ) => ContextEngineRegistrationResult
+    )(engineId, () => new MockContextEngine(), { owner: "plugin:owner-a" });
+
+    expect(spoofAttempt).toEqual({
+      ok: false,
+      existingOwner: "plugin:owner-a",
+    });
+    expect(getContextEngineFactory(engineId)).toBe(ownedFactory);
   });
 
   it("concurrent registration from multiple chunks does not lose entries", async () => {
