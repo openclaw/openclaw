@@ -12,6 +12,7 @@ type AuthChoiceFlagOptions = Pick<
   | "anthropicApiKey"
   | "geminiApiKey"
   | "openaiApiKey"
+  | "azureOpenaiApiKey"
   | "mistralApiKey"
   | "openrouterApiKey"
   | "kilocodeApiKey"

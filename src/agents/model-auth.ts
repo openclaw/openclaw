@@ -413,6 +413,7 @@ export function resolveEnvApiKey(
     }
     return { apiKey: envKey, source: "gcloud adc" };
   }
+
   return null;
 }
 

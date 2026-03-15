@@ -14,6 +14,7 @@ export const PROVIDER_ENV_API_KEY_CANDIDATES: Record<string, string[]> = {
   "kimi-coding": ["KIMI_API_KEY", "KIMICODE_API_KEY"],
   huggingface: ["HUGGINGFACE_HUB_TOKEN", "HF_TOKEN"],
   openai: ["OPENAI_API_KEY"],
+  "azure-openai-responses": ["AZURE_OPENAI_API_KEY"],
   google: ["GEMINI_API_KEY"],
   voyage: ["VOYAGE_API_KEY"],
   groq: ["GROQ_API_KEY"],

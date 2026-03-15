@@ -78,6 +78,7 @@ export function resolveExtraParams(params: {
 type CacheRetentionStreamOptions = Partial<SimpleStreamOptions> & {
   cacheRetention?: "none" | "short" | "long";
   openaiWsWarmup?: boolean;
+  azureApiVersion?: string;
 };
 
 function createStreamFnWithExtraParams(
@@ -105,6 +106,12 @@ function createStreamFnWithExtraParams(
   }
   if (typeof extraParams.openaiWsWarmup === "boolean") {
     streamParams.openaiWsWarmup = extraParams.openaiWsWarmup;
+  }
+  if (provider === "azure-openai-responses" && typeof extraParams.azureApiVersion === "string") {
+    const normalized = extraParams.azureApiVersion.trim();
+    if (normalized) {
+      streamParams.azureApiVersion = normalized;
+    }
   }
   const cacheRetention = resolveCacheRetention(extraParams, provider);
   if (cacheRetention) {
