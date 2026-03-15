@@ -1,10 +1,12 @@
 /**
  * Spec-First Skill - Main Entry Point
- * 
+ *
  * Simple, practical spec-first task execution
  */
 
-import { sessions_spawn } from '../../src/agents/sessions-spawn';
+import { sessions_spawn } from "../../src/agents/sessions-spawn";
+import { exec } from "../../src/tools/exec";
+import { write } from "../../src/tools/write";
 
 // ============================================
 // Types
@@ -19,7 +21,7 @@ interface Session {
   spec: string | null;
   design: string | null;
   tasks: string | null;
-  status: 'clarifying' | 'drafting' | 'approved' | 'designing' | 'tasking' | 'executing' | 'done';
+  status: "clarifying" | "drafting" | "approved" | "designing" | "tasking" | "executing" | "done";
 }
 
 interface Question {
@@ -31,27 +33,84 @@ interface Question {
 }
 
 // ============================================
-// Session Store (in-memory for now)
+// Session Store & File Management
 // ============================================
 
 const sessions = new Map<string, Session>();
 let activeSessionId: string | null = null;
+
+/**
+ * Get session directory path
+ */
+function getSessionDir(session: Session): string {
+  // Extract feature name from request (first 3 words, lowercase, hyphenated)
+  const featureName = session.request
+    .split(" ")
+    .slice(0, 3)
+    .join("-")
+    .toLowerCase()
+    .replace(/[^a-z0-9-]/g, "")
+    .slice(0, 50);
+
+  return `.openclaw/.tmp/sessions/${session.id}/${featureName}`;
+}
+
+/**
+ * Create session directory
+ */
+async function createSessionDir(session: Session): Promise<string> {
+  const dir = getSessionDir(session);
+
+  try {
+    await exec(`mkdir -p ${dir}`);
+    return dir;
+  } catch (error) {
+    console.error("Failed to create session directory:", error);
+    return dir;
+  }
+}
+
+/**
+ * Write file to session directory
+ */
+async function writeSessionFile(
+  session: Session,
+  filename: string,
+  content: string,
+): Promise<void> {
+  const dir = getSessionDir(session);
+  const filePath = `${dir}/${filename}`;
+
+  try {
+    await write({
+      path: filePath,
+      content: content,
+    });
+    console.log(`Written: ${filePath}`);
+  } catch (error) {
+    console.error(`Failed to write ${filePath}:`, error);
+  }
+}
 
 function createSession(request: string): Session {
   const id = `spec-${Date.now()}`;
   const session: Session = {
     id,
     request,
-    intent: '',
+    intent: "",
     questions: [],
     answers: {},
     spec: null,
     design: null,
     tasks: null,
-    status: 'clarifying'
+    status: "clarifying",
   };
   sessions.set(id, session);
   activeSessionId = id;
+
+  // Create session directory
+  void createSessionDir(session);
+
   return session;
 }
 
@@ -69,8 +128,8 @@ async function analyzeRequest(request: string): Promise<{
   ambiguities: Array<{ type: string; description: string; suggestions: string[] }>;
 }> {
   const result = await sessions_spawn({
-    runtime: 'subagent',
-    label: 'analyze-request',
+    runtime: "subagent",
+    label: "analyze-request",
     task: `Analyze this request and identify ambiguities.
 
 Request: "${request}"
@@ -93,26 +152,28 @@ Look for:
 - Missing auth method (if building software)
 - Unclear features/scope
 - Missing constraints`,
-    mode: 'run'
+    mode: "run",
   });
 
   try {
     return JSON.parse(result.output);
   } catch {
     return {
-      intent: 'unknown',
-      ambiguities: []
+      intent: "unknown",
+      ambiguities: [],
     };
   }
 }
 
-function generateQuestions(ambiguities: Array<{ type: string; description: string; suggestions: string[] }>): Question[] {
+function generateQuestions(
+  ambiguities: Array<{ type: string; description: string; suggestions: string[] }>,
+): Question[] {
   return ambiguities.map((amb, i) => ({
     id: `q-${i}`,
     text: amb.description,
     options: amb.suggestions,
     default: amb.suggestions[0],
-    why: `This affects ${amb.type === 'missing_info' ? 'implementation' : 'design'}`
+    why: `This affects ${amb.type === "missing_info" ? "implementation" : "design"}`,
   }));
 }
 
@@ -122,14 +183,16 @@ function generateQuestions(ambiguities: Array<{ type: string; description: strin
 
 async function generateSpec(session: Session): Promise<string> {
   const result = await sessions_spawn({
-    runtime: 'subagent',
-    label: 'generate-spec',
+    runtime: "subagent",
+    label: "generate-spec",
     task: `Generate a simple spec from this request and answers.
 
 Original Request: "${session.request}"
 
 Answers:
-${Object.entries(session.answers).map(([q, a]) => `- ${q}: ${a}`).join('\n')}
+${Object.entries(session.answers)
+  .map(([q, a]) => `- ${q}: ${a}`)
+  .join("\n")}
 
 Generate a simple spec in this format:
 
@@ -156,7 +219,7 @@ Generate a simple spec in this format:
 - [ ] Criterion 2
 
 Keep it simple and actionable.`,
-    mode: 'run'
+    mode: "run",
   });
 
   return result.output;
@@ -168,8 +231,8 @@ Keep it simple and actionable.`,
 
 async function generateDesign(session: Session): Promise<string> {
   const result = await sessions_spawn({
-    runtime: 'subagent',
-    label: 'generate-design',
+    runtime: "subagent",
+    label: "generate-design",
     task: `Generate a detailed design document from the approved spec.
 
 Spec:
@@ -214,7 +277,7 @@ Generate a design document in this format:
 <Links to documentation, examples, etc.>
 
 Be detailed and actionable. This is the blueprint for implementation.`,
-    mode: 'run'
+    mode: "run",
   });
 
   return result.output;
@@ -226,8 +289,8 @@ Be detailed and actionable. This is the blueprint for implementation.`,
 
 async function generateTasks(session: Session): Promise<string> {
   const result = await sessions_spawn({
-    runtime: 'subagent',
-    label: 'generate-tasks',
+    runtime: "subagent",
+    label: "generate-tasks",
     task: `Generate a task checklist from the approved spec and design.
 
 Spec:
@@ -274,7 +337,7 @@ Each task should be:
 - Testable (clear acceptance criteria)
 
 Organize tasks in logical phases with dependencies.`,
-    mode: 'run'
+    mode: "run",
   });
 
   return result.output;
@@ -286,8 +349,8 @@ Organize tasks in logical phases with dependencies.`,
 
 async function executeSpec(spec: string): Promise<string> {
   const result = await sessions_spawn({
-    runtime: 'subagent',
-    label: 'execute-spec',
+    runtime: "subagent",
+    label: "execute-spec",
     task: `Execute this spec step by step.
 
 Spec:
@@ -299,7 +362,7 @@ For each deliverable:
 3. Report progress
 
 Return a summary of what was done.`,
-    mode: 'run'
+    mode: "run",
   });
 
   return result.output;
@@ -314,34 +377,34 @@ Return a summary of what was done.`,
  */
 export async function spec_clarify(request: string): Promise<string> {
   const session = createSession(request);
-  
+
   // Analyze request
   const analysis = await analyzeRequest(request);
   session.intent = analysis.intent;
   session.questions = generateQuestions(analysis.ambiguities);
-  
+
   let output = `📋 **Clarification Session**: ${session.id}\n\n`;
   output += `💬 **Request**: "${request}"\n\n`;
   output += `🎯 **Intent**: ${analysis.intent}\n\n`;
-  
+
   if (session.questions.length > 0) {
     output += `❓ **Questions** (${session.questions.length}):\n\n`;
     for (const q of session.questions) {
       output += `**${q.id}**. ${q.text}\n`;
       output += `   *Why*: ${q.why}\n`;
       if (q.options?.length) {
-        output += `   *Options*: ${q.options.join(', ')}${q.default ? ` (default: ${q.default})` : ''}\n`;
+        output += `   *Options*: ${q.options.join(", ")}${q.default ? ` (default: ${q.default})` : ""}\n`;
       }
-      output += '\n';
+      output += "\n";
     }
   } else {
-    output += '✅ No ambiguities found!\n\n';
+    output += "✅ No ambiguities found!\n\n";
   }
-  
+
   output += `**Next**:\n`;
   output += `- \`/spec defaults\` - Use recommended defaults\n`;
   output += `- \`/spec answer --q0 <answer>\` - Custom answers\n`;
-  
+
   return output;
 }
 
@@ -351,21 +414,21 @@ export async function spec_clarify(request: string): Promise<string> {
 export async function spec_defaults(): Promise<string> {
   const session = getSession();
   if (!session) {
-    return '❌ No active session. Start with `/spec clarify`';
+    return "❌ No active session. Start with `/spec clarify`";
   }
-  
+
   for (const q of session.questions) {
     if (q.default && !session.answers[q.id]) {
       session.answers[q.id] = q.default;
     }
   }
-  
+
   let output = `✅ **Applied ${Object.keys(session.answers).length} defaults**\n\n`;
   for (const [qId, answer] of Object.entries(session.answers)) {
     output += `- ${qId}: ${answer}\n`;
   }
   output += `\n**Next**: \`/spec draft\` - Generate spec\n`;
-  
+
   return output;
 }
 
@@ -375,15 +438,15 @@ export async function spec_defaults(): Promise<string> {
 export async function spec_answer(answers: Record<string, string>): Promise<string> {
   const session = getSession();
   if (!session) {
-    return '❌ No active session';
+    return "❌ No active session";
   }
-  
+
   for (const [qId, answer] of Object.entries(answers)) {
     session.answers[qId] = answer;
   }
-  
+
   const remaining = session.questions.length - Object.keys(session.answers).length;
-  
+
   let output = `✅ **Submitted ${Object.keys(answers).length} answers**\n\n`;
   if (remaining > 0) {
     output += `⏳ ${remaining} questions remaining\n`;
@@ -391,7 +454,7 @@ export async function spec_answer(answers: Record<string, string>): Promise<stri
     output += `✅ All questions answered!\n`;
     output += `\n**Next**: \`/spec draft\` - Generate spec\n`;
   }
-  
+
   return output;
 }
 
@@ -401,23 +464,27 @@ export async function spec_answer(answers: Record<string, string>): Promise<stri
 export async function spec_draft(): Promise<string> {
   const session = getSession();
   if (!session) {
-    return '❌ No active session';
+    return "❌ No active session";
   }
-  
+
   if (Object.keys(session.answers).length === 0) {
-    return '❌ No answers yet. Use `/spec defaults` or `/spec answer`';
+    return "❌ No answers yet. Use `/spec defaults` or `/spec answer`";
   }
-  
-  session.status = 'drafting';
+
+  session.status = "drafting";
   const spec = await generateSpec(session);
   session.spec = spec;
-  
+
+  // Write to file
+  await writeSessionFile(session, "spec.md", spec);
+
   let output = `📝 **Draft Spec Generated**\n\n`;
-  output += '─'.repeat(50) + '\n';
-  output += spec + '\n';
-  output += '─'.repeat(50) + '\n\n';
+  output += "─".repeat(50) + "\n";
+  output += spec + "\n";
+  output += "─".repeat(50) + "\n\n";
+  output += `📁 **Saved to**: \`${getSessionDir(session)}/spec.md\`\n\n`;
   output += `**Next**: \`/spec approve\` - Approve spec\n`;
-  
+
   return output;
 }
 
@@ -427,17 +494,17 @@ export async function spec_draft(): Promise<string> {
 export async function spec_approve(): Promise<string> {
   const session = getSession();
   if (!session || !session.spec) {
-    return '❌ No draft spec. Run `/spec draft` first';
+    return "❌ No draft spec. Run `/spec draft` first";
   }
-  
-  session.status = 'approved';
-  
+
+  session.status = "approved";
+
   let output = `✅ **Spec Approved!**\n\n`;
   output += `**Next Steps**:\n`;
   output += `1. \`/spec design\` - Generate design document\n`;
   output += `2. \`/spec tasks\` - Generate task checklist\n`;
   output += `3. \`/spec execute\` - Start execution\n`;
-  
+
   return output;
 }
 
@@ -447,24 +514,32 @@ export async function spec_approve(): Promise<string> {
 export async function spec_design(): Promise<string> {
   const session = getSession();
   if (!session || !session.spec) {
-    return '❌ No approved spec. Run `/spec approve` first';
+    return "❌ No approved spec. Run `/spec approve` first";
   }
-  
-  if (session.status !== 'approved' && session.status !== 'designing' && session.status !== 'tasking') {
-    return '❌ Spec must be approved first. Run `/spec approve`';
+
+  if (
+    session.status !== "approved" &&
+    session.status !== "designing" &&
+    session.status !== "tasking"
+  ) {
+    return "❌ Spec must be approved first. Run `/spec approve`";
   }
-  
-  session.status = 'designing';
+
+  session.status = "designing";
   const design = await generateDesign(session);
   session.design = design;
-  session.status = 'tasking';
-  
+  session.status = "tasking";
+
+  // Write to file
+  await writeSessionFile(session, "design.md", design);
+
   let output = `📐 **Design Document Generated**\n\n`;
-  output += '─'.repeat(60) + '\n';
-  output += design + '\n';
-  output += '─'.repeat(60) + '\n\n';
+  output += "─".repeat(60) + "\n";
+  output += design + "\n";
+  output += "─".repeat(60) + "\n\n";
+  output += `📁 **Saved to**: \`${getSessionDir(session)}/design.md\`\n\n`;
   output += `**Next**: \`/spec tasks\` - Generate task checklist\n`;
-  
+
   return output;
 }
 
@@ -474,24 +549,28 @@ export async function spec_design(): Promise<string> {
 export async function spec_tasks(): Promise<string> {
   const session = getSession();
   if (!session || !session.spec) {
-    return '❌ No approved spec. Run `/spec approve` first';
+    return "❌ No approved spec. Run `/spec approve` first";
   }
-  
+
   if (!session.design) {
-    return '❌ No design document. Run `/spec design` first';
+    return "❌ No design document. Run `/spec design` first";
   }
-  
-  session.status = 'tasking';
+
+  session.status = "tasking";
   const tasks = await generateTasks(session);
   session.tasks = tasks;
-  
+
+  // Write to file
+  await writeSessionFile(session, "tasks.md", tasks);
+
   let output = `📋 **Task Checklist Generated**\n\n`;
-  output += '─'.repeat(60) + '\n';
-  output += tasks + '\n';
-  output += '─'.repeat(60) + '\n\n';
+  output += "─".repeat(60) + "\n";
+  output += tasks + "\n";
+  output += "─".repeat(60) + "\n\n";
+  output += `📁 **Saved to**: \`${getSessionDir(session)}/tasks.md\`\n\n`;
   output += `**Next**: \`/spec execute\` - Start execution\n\n`;
-  output += `💡 **Tip**: Copy tasks to a file and check off as you complete them!\n`;
-  
+  output += `💡 **Tip**: Open \`${getSessionDir(session)}/tasks.md\` and check off [x] as you complete tasks!\n`;
+
   return output;
 }
 
@@ -501,18 +580,18 @@ export async function spec_tasks(): Promise<string> {
 export async function spec_execute(): Promise<string> {
   const session = getSession();
   if (!session || !session.spec) {
-    return '❌ No approved spec. Run `/spec approve` first';
+    return "❌ No approved spec. Run `/spec approve` first";
   }
-  
-  session.status = 'executing';
+
+  session.status = "executing";
   const result = await executeSpec(session.spec);
-  session.status = 'done';
-  
+  session.status = "done";
+
   let output = `🚀 **Execution Complete**\n\n`;
-  output += '─'.repeat(50) + '\n';
-  output += result + '\n';
-  output += '─'.repeat(50) + '\n';
-  
+  output += "─".repeat(50) + "\n";
+  output += result + "\n";
+  output += "─".repeat(50) + "\n";
+
   return output;
 }
 
@@ -522,18 +601,25 @@ export async function spec_execute(): Promise<string> {
 export async function spec_status(): Promise<string> {
   const session = getSession();
   if (!session) {
-    return '📊 No active session';
+    return "📊 No active session";
   }
-  
+
+  const sessionDir = getSessionDir(session);
+
   let output = `📊 **Session**: ${session.id}\n\n`;
   output += `- **Status**: ${session.status}\n`;
   output += `- **Request**: "${session.request}"\n`;
   output += `- **Intent**: ${session.intent}\n`;
   output += `- **Questions**: ${Object.keys(session.answers).length}/${session.questions.length} answered\n`;
-  output += `- **Spec**: ${session.spec ? '✅ Generated' : '❌ Not yet'}\n`;
-  output += `- **Design**: ${session.design ? '✅ Generated' : '❌ Not yet'}\n`;
-  output += `- **Tasks**: ${session.tasks ? '✅ Generated' : '❌ Not yet'}\n`;
-  
+  output += `- **Spec**: ${session.spec ? "✅ Generated" : "❌ Not yet"}\n`;
+  output += `- **Design**: ${session.design ? "✅ Generated" : "❌ Not yet"}\n`;
+  output += `- **Tasks**: ${session.tasks ? "✅ Generated" : "❌ Not yet"}\n`;
+  output += `\n📁 **Session Directory**: \`${sessionDir}/\`\n`;
+
+  if (session.spec) output += `   - spec.md\n`;
+  if (session.design) output += `   - design.md\n`;
+  if (session.tasks) output += `   - tasks.md\n`;
+
   return output;
 }
 
@@ -543,7 +629,7 @@ export async function spec_status(): Promise<string> {
 
 /**
  * Handle incoming messages
- * 
+ *
  * COMMAND-BASED: Clear, predictable, reliable
  * User explicitly starts workflow with /spec command
  */
@@ -553,32 +639,32 @@ export async function handleMessage(message: {
   channelId: string;
 }): Promise<string> {
   const { content } = message;
-  
+
   // Parse command
   const parts = content.trim().split(/\s+/);
   const command = parts[0]?.toLowerCase();
-  
+
   // Handle /spec commands
-  if (command === '/spec' || command === '/spec-first') {
+  if (command === "/spec" || command === "/spec-first") {
     return handleSpecCommand(parts.slice(1));
   }
-  
+
   // Handle shortcut commands (only when session is active)
   const session = getSession();
-  const shortcutCommands = ['defaults', 'draft', 'approve', 'execute', 'status', 'answer'];
-  
+  const shortcutCommands = ["defaults", "draft", "approve", "execute", "status", "answer"];
+
   if (shortcutCommands.includes(command)) {
     if (!session) {
       return '❌ No active session. Start with `/spec clarify "your request"`';
     }
     return handleSpecCommand(parts);
   }
-  
+
   // Handle /spec help
-  if (command === 'help' && (!session || parts.length === 1)) {
+  if (command === "help" && (!session || parts.length === 1)) {
     return showHelp();
   }
-  
+
   // Default: Don't auto-detect, show helpful response
   return `📋 **Spec-First Skill** - Spec-driven task execution
 
@@ -620,63 +706,63 @@ export async function handleMessage(message: {
  */
 async function handleSpecCommand(args: string[]): Promise<string> {
   const subcommand = args[0]?.toLowerCase();
-  
+
   if (!subcommand) {
     return showHelp();
   }
-  
+
   switch (subcommand) {
-    case 'clarify': {
-      const request = args.slice(1).join(' ').replace(/["']/g, '');
+    case "clarify": {
+      const request = args.slice(1).join(" ").replace(/["']/g, "");
       if (!request) {
         return '❌ Please provide a request: `/spec clarify "your request"`';
       }
       return await spec_clarify(request);
     }
-    
-    case 'defaults':
+
+    case "defaults":
       return await spec_defaults();
-    
-    case 'answer': {
+
+    case "answer": {
       // Parse --q0 value1 --q1 value2 format
       const answers: Record<string, string> = {};
       for (let i = 1; i < args.length; i += 2) {
-        if (args[i]?.startsWith('--')) {
+        if (args[i]?.startsWith("--")) {
           const qId = args[i].slice(2);
-          const value = args[i + 1] || '';
+          const value = args[i + 1] || "";
           answers[qId] = value;
         }
       }
       if (Object.keys(answers).length === 0) {
-        return '❌ Usage: `/spec answer --q0 value1 --q1 value2`';
+        return "❌ Usage: `/spec answer --q0 value1 --q1 value2`";
       }
       return await spec_answer(answers);
     }
-    
-    case 'draft':
+
+    case "draft":
       return await spec_draft();
-    
-    case 'approve':
+
+    case "approve":
       return await spec_approve();
-    
-    case 'design':
+
+    case "design":
       return await spec_design();
-    
-    case 'tasks':
+
+    case "tasks":
       return await spec_tasks();
-    
-    case 'execute':
+
+    case "execute":
       return await spec_execute();
-    
-    case 'status':
+
+    case "status":
       return await spec_status();
-    
-    case 'list':
-      return '📋 Session listing not implemented yet';
-    
-    case 'help':
+
+    case "list":
+      return "📋 Session listing not implemented yet";
+
+    case "help":
       return showHelp();
-    
+
     default:
       return `❌ Unknown command: ${subcommand}\n\n${showHelp()}`;
   }
@@ -716,8 +802,8 @@ function showHelp(): string {
 // ============================================
 
 export const skill = {
-  name: 'spec-first',
-  version: '1.0.0',
+  name: "spec-first",
+  version: "1.0.0",
   tools: {
     spec_clarify,
     spec_defaults,
@@ -725,7 +811,7 @@ export const skill = {
     spec_draft,
     spec_approve,
     spec_execute,
-    spec_status
+    spec_status,
   },
-  handleMessage
+  handleMessage,
 };
