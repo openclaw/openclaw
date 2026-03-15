@@ -1,4 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+vi.mock("node:fs", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:fs")>();
+  return { ...actual, statSync: vi.fn() };
+});
+
+import { statSync } from "node:fs";
 import {
   clearAllBootstrapSnapshots,
   clearBootstrapSnapshot,
@@ -13,6 +20,9 @@ vi.mock("./workspace.js", () => ({
 import { loadWorkspaceBootstrapFiles } from "./workspace.js";
 
 const mockLoad = vi.mocked(loadWorkspaceBootstrapFiles);
+const mockStatSync = vi.mocked(statSync);
+
+let mtimeCounter = 1;
 
 function makeFile(name: string, content: string): WorkspaceBootstrapFile {
   return {
@@ -23,12 +33,28 @@ function makeFile(name: string, content: string): WorkspaceBootstrapFile {
   };
 }
 
+/** Make statSync return a stable mtimeMs for every known file path. */
+function setupStatSync(files: WorkspaceBootstrapFile[]): void {
+  const mtimes = new Map<string, number>();
+  for (const f of files) {
+    mtimes.set(f.path, mtimeCounter++);
+  }
+  mockStatSync.mockImplementation((p: any) => {
+    const ms = mtimes.get(String(p));
+    if (ms === undefined) {
+      throw new Error(`ENOENT: ${p}`);
+    }
+    return { mtimeMs: ms } as any;
+  });
+}
+
 describe("getOrLoadBootstrapFiles", () => {
   const files = [makeFile("AGENTS.md", "# Agent"), makeFile("SOUL.md", "# Soul")];
 
   beforeEach(() => {
     clearAllBootstrapSnapshots();
     mockLoad.mockResolvedValue(files);
+    setupStatSync(files);
   });
 
   afterEach(() => {
@@ -65,12 +91,38 @@ describe("getOrLoadBootstrapFiles", () => {
     expect(r2).toBe(files2);
     expect(mockLoad).toHaveBeenCalledTimes(2);
   });
+
+  it("reloads when a file mtime changes (staleness check)", async () => {
+    await getOrLoadBootstrapFiles({ workspaceDir: "/ws", sessionKey: "session-1" });
+    expect(mockLoad).toHaveBeenCalledTimes(1);
+
+    // Simulate mtime change on AGENTS.md
+    mockStatSync.mockImplementation((p: any) => {
+      if (String(p) === "/ws/AGENTS.md") {
+        return { mtimeMs: Date.now() + 99999 } as any;
+      }
+      if (String(p) === "/ws/SOUL.md") {
+        return { mtimeMs: 0 } as any;
+      }
+      throw new Error(`ENOENT: ${p}`);
+    });
+
+    const updatedFiles = [makeFile("AGENTS.md", "# Agent v2"), makeFile("SOUL.md", "# Soul")];
+    mockLoad.mockResolvedValueOnce(updatedFiles);
+
+    const result = await getOrLoadBootstrapFiles({ workspaceDir: "/ws", sessionKey: "session-1" });
+    expect(result).toBe(updatedFiles);
+    expect(mockLoad).toHaveBeenCalledTimes(2);
+  });
 });
 
 describe("clearBootstrapSnapshot", () => {
+  const clearFiles = [makeFile("AGENTS.md", "content")];
+
   beforeEach(() => {
     clearAllBootstrapSnapshots();
-    mockLoad.mockResolvedValue([makeFile("AGENTS.md", "content")]);
+    mockLoad.mockResolvedValue(clearFiles);
+    setupStatSync(clearFiles);
   });
 
   afterEach(() => {
