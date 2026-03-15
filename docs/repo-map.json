@@ -200,6 +200,17 @@
         "src/infra/heartbeat-wake.js"
       ]
     },
+    "src/cron/service/timeout-policy.ts": {
+      "purpose": "",
+      "exports": [
+        "AGENT_TURN_SAFETY_TIMEOUT_MS",
+        "DEFAULT_JOB_TIMEOUT_MS",
+        "resolveCronJobTimeoutMs"
+      ],
+      "dependencies": [
+        "src/cron/types.js"
+      ]
+    },
     "src/cron/service/timer.ts": {
       "purpose": "",
       "exports": [
