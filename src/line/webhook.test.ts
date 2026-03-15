@@ -87,14 +87,31 @@ describe("createLineWebhookMiddleware", () => {
     expect(onEvents).not.toHaveBeenCalled();
   });
 
-  it("returns 200 for verification request (empty events, no signature)", async () => {
+  it("rejects verification-shaped requests without a signature", async () => {
     const { res, onEvents } = await invokeWebhook({
       body: JSON.stringify({ events: [] }),
       headers: {},
       autoSign: false,
     });
+    expect(res.status).toHaveBeenCalledWith(400);
+    expect(res.json).toHaveBeenCalledWith({ error: "Missing X-Line-Signature header" });
+    expect(onEvents).not.toHaveBeenCalled();
+  });
+
+  it("accepts signed verification-shaped requests without dispatching events", async () => {
+    const { res, onEvents } = await invokeWebhook({
+      body: JSON.stringify({ events: [] }),
+    });
     expect(res.status).toHaveBeenCalledWith(200);
     expect(res.json).toHaveBeenCalledWith({ status: "ok" });
+    expect(onEvents).not.toHaveBeenCalled();
+  });
+
+  it("rejects oversized signed payloads before JSON parsing", async () => {
+    const largeBody = JSON.stringify({ events: [], payload: "x".repeat(70 * 1024) });
+    const { res, onEvents } = await invokeWebhook({ body: largeBody });
+    expect(res.status).toHaveBeenCalledWith(413);
+    expect(res.json).toHaveBeenCalledWith({ error: "Payload too large" });
     expect(onEvents).not.toHaveBeenCalled();
   });
 

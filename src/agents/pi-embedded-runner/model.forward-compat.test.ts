@@ -58,6 +58,16 @@ describe("pi embedded model e2e smoke", () => {
     expect(result.model).toMatchObject(buildOpenAICodexForwardCompatExpectation("gpt-5.4"));
   });
 
+  it("builds an openai-codex forward-compat fallback for gpt-5.3-codex-spark", () => {
+    mockOpenAICodexTemplateModel();
+
+    const result = resolveModel("openai-codex", "gpt-5.3-codex-spark", "/tmp/agent");
+    expect(result.error).toBeUndefined();
+    expect(result.model).toMatchObject(
+      buildOpenAICodexForwardCompatExpectation("gpt-5.3-codex-spark"),
+    );
+  });
+
   it("keeps unknown-model errors for non-forward-compat IDs", () => {
     const result = resolveModel("openai-codex", "gpt-4.1-mini", "/tmp/agent");
     expect(result.model).toBeUndefined();

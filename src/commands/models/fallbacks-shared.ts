@@ -2,6 +2,7 @@ import { buildModelAliasIndex, resolveModelRefFromString } from "../../agents/mo
 import type { OpenClawConfig } from "../../config/config.js";
 import { logConfigUpdated } from "../../config/logging.js";
 import { resolveAgentModelFallbackValues, toAgentModelListLike } from "../../config/model-input.js";
+import type { AgentModelEntryConfig } from "../../config/types.agent-defaults.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import { loadModelsConfig } from "./load-config.js";
 import {
@@ -11,6 +12,7 @@ import {
   modelKey,
   resolveModelTarget,
   resolveModelKeysFromEntries,
+  upsertCanonicalModelConfigEntry,
   updateConfig,
 } from "./shared.js";
 
@@ -79,11 +81,10 @@ export async function addFallbackCommand(
 ) {
   const updated = await updateConfig((cfg) => {
     const resolved = resolveModelTarget({ raw: modelRaw, cfg });
-    const targetKey = modelKey(resolved.provider, resolved.model);
-    const nextModels = { ...cfg.agents?.defaults?.models } as Record<string, unknown>;
-    if (!nextModels[targetKey]) {
-      nextModels[targetKey] = {};
-    }
+    const nextModels = {
+      ...cfg.agents?.defaults?.models,
+    } as Record<string, AgentModelEntryConfig>;
+    const targetKey = upsertCanonicalModelConfigEntry(nextModels, resolved);
     const existing = getFallbacks(cfg, params.key);
     const existingKeys = resolveModelKeysFromEntries({ cfg, entries: existing });
     if (existingKeys.includes(targetKey)) {
