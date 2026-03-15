@@ -1,6 +1,63 @@
 import { describe, expect, it } from "vitest";
 import { resolveLastChannelRaw, resolveLastToRaw } from "./session-delivery.js";
 
+describe("session delivery bound channel routing", () => {
+  it("delivers to bound external channel when persistedLastTo is set", () => {
+    // Session has deliveryContext bound to Telegram channel
+    const sessionKey = "agent:main:telegram:default:channel:C123456";
+
+    expect(
+      resolveLastChannelRaw({
+        originatingChannelRaw: "INTERNAL_MESSAGE_CHANNEL",
+        persistedLastChannel: "telegram",
+        sessionKey,
+      }),
+    ).toBe("telegram");
+
+    expect(
+      resolveLastToRaw({
+        originatingChannelRaw: "INTERNAL_MESSAGE_CHANNEL",
+        originatingToRaw: "session:inter-session-123",
+        persistedLastChannel: "telegram",
+        persistedLastTo: "C123456",
+        sessionKey,
+      }),
+    ).toBe("C123456");
+  });
+
+  it("falls back to originatingToRaw when persistedLastTo is not set", () => {
+    // Session bound to external channel but lastTo not yet persisted
+    const sessionKey = "agent:main:telegram:default:channel:C123456";
+
+    expect(
+      resolveLastToRaw({
+        originatingChannelRaw: "INTERNAL_MESSAGE_CHANNEL",
+        originatingToRaw: "session:inter-session-123",
+        persistedLastChannel: "telegram",
+        persistedLastTo: undefined,
+        sessionKey,
+      }),
+    ).toBe("session:inter-session-123");
+  });
+
+  it("does not drop delivery when persistedLastTo is falsy", () => {
+    // Regression test: ensure we don't silently drop messages
+    const sessionKey = "agent:main:telegram:default:channel:C123456";
+
+    const result = resolveLastToRaw({
+      originatingChannelRaw: "INTERNAL_MESSAGE_CHANNEL",
+      originatingToRaw: "session:inter-session-123",
+      persistedLastChannel: "telegram",
+      persistedLastTo: undefined,
+      sessionKey,
+    });
+
+    // Should NOT return undefined (which would drop the message)
+    expect(result).not.toBeUndefined();
+    expect(result).toBe("session:inter-session-123");
+  });
+});
+
 describe("session delivery direct-session routing overrides", () => {
   it.each([
     "agent:main:direct:user-1",

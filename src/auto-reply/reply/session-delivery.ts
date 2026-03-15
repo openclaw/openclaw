@@ -142,6 +142,16 @@ export function resolveLastToRaw(params: {
     }
   }
 
+  // Fix #34308: When channel is INTERNAL but session has a persisted external channel
+  // (deliveryContext) AND a persisted lastTo address, use the persisted to address for reply delivery.
+  if (
+    originatingChannel === INTERNAL_MESSAGE_CHANNEL &&
+    isExternalRoutingChannel(persistedChannel) &&
+    params.persistedLastTo
+  ) {
+    return params.persistedLastTo;
+  }
+
   return params.originatingToRaw || params.toRaw || params.persistedLastTo;
 }
 
