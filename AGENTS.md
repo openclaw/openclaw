@@ -48,7 +48,7 @@ headers: { 'x-blink-agent-id': { env: 'BLINK_AGENT_ID' } }
 Export `buildBlinkProvider` from here.
 
 ### Modified: `src/agents/models-config.providers.ts`
-Auto-activate Blink provider when `BLINK_API_KEY` env var is set. Sets `anthropic/claude-sonnet-4.6` as the default model. No user config needed.
+Auto-activate Blink provider when `BLINK_API_KEY` env var is set. No user config needed. The default model is auto-selected as `anthropic/claude-sonnet-4.6` via OpenClaw's provider fallback logic (picks first model from the first available provider when the hardcoded default `anthropic` provider isn't configured).
 
 ### Modified: `src/agents/tools/web-search.ts`
 Adds `"blink"` as a first-class `web_search` provider. Auto-detected from `BLINK_API_KEY` — checked BEFORE Brave, so Blink Claw containers always get native web search.
@@ -76,7 +76,7 @@ Injected per-container at Fly.io machine creation by Blink's Claw Manager:
 | `OPENCLAW_GATEWAY_TOKEN` | random 32-char hex | Secures the gateway HTTP server |
 | `OPENCLAW_HEADLESS` | `true` | No interactive prompts |
 
-**`BLINK_API_KEY` triggers everything.** When set, OpenClaw auto-registers the `blink` provider and sets `anthropic/claude-sonnet-4.6` as the default model. No `openclaw.json` config needed.
+**`BLINK_API_KEY` triggers everything.** When set, OpenClaw auto-registers the `blink` provider. `anthropic/claude-sonnet-4.6` becomes the effective default model via OpenClaw's provider fallback (first model of the first available provider wins when `anthropic` is unconfigured). No `openclaw.json` config needed.
 
 **Key design:** `BLINK_API_KEY` is workspace-scoped (like OpenAI's `sk-...`). Agent identity is provided separately via `BLINK_AGENT_ID` env var, sent as `x-blink-agent-id` header on every API call. This means workspace-level API keys created by users (without an agent) work identically — they just don't set a `x-blink-agent-id` header.
 
@@ -87,7 +87,7 @@ Injected per-container at Fly.io machine creation by Blink's Claw Manager:
 ```
 OpenClaw agent receives message (Telegram/Discord/Slack via outbound polling)
   → calls LLM via blink provider
-  → POST https://api.blink.new/api/v1/chat/completions
+  → POST https://api.blink.new/api/v1/ai/chat/completions
      Authorization: Bearer {BLINK_API_KEY}
      Body: { model: "anthropic/claude-sonnet-4.6", messages: [...], stream: true }
   → blink-apis validates token → resolves workspace_id → calls gateway()
