@@ -497,7 +497,13 @@ async function executeSystemRunPhase(
       });
       for (const pattern of patterns) {
         if (pattern) {
-          addAllowlistEntry(phase.approvals.file, phase.agentId, pattern);
+          try {
+            addAllowlistEntry(phase.approvals.file, phase.agentId, pattern);
+          } catch (err) {
+            logWarn(
+              `exec approvals: failed to persist allow-always pattern "${pattern}" (runId=${phase.runId}): ${String(err)}`,
+            );
+          }
         }
       }
     }
@@ -510,13 +516,19 @@ async function executeSystemRunPhase(
         continue;
       }
       seen.add(match.pattern);
-      recordAllowlistUse(
-        phase.approvals.file,
-        phase.agentId,
-        match,
-        phase.commandText,
-        phase.segments[0]?.resolution?.resolvedPath,
-      );
+      try {
+        recordAllowlistUse(
+          phase.approvals.file,
+          phase.agentId,
+          match,
+          phase.commandText,
+          phase.segments[0]?.resolution?.resolvedPath,
+        );
+      } catch (err) {
+        logWarn(
+          `exec approvals: failed to record allowlist use for pattern "${match.pattern}" (runId=${phase.runId}): ${String(err)}`,
+        );
+      }
     }
   }
 
