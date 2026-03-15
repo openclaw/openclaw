@@ -32,6 +32,8 @@ import type {
   OpenClawPluginDefinition,
   OpenClawPluginModule,
   PluginDiagnostic,
+  PluginBundleFormat,
+  PluginFormat,
   PluginLogger,
 } from "./types.js";
 
@@ -317,6 +319,9 @@ function createPluginRecord(params: {
   name?: string;
   description?: string;
   version?: string;
+  format?: PluginFormat;
+  bundleFormat?: PluginBundleFormat;
+  bundleCapabilities?: string[];
   source: string;
   rootDir?: string;
   origin: PluginRecord["origin"];
@@ -329,6 +334,9 @@ function createPluginRecord(params: {
     name: params.name ?? params.id,
     description: params.description,
     version: params.version,
+    format: params.format ?? "openclaw",
+    bundleFormat: params.bundleFormat,
+    bundleCapabilities: params.bundleCapabilities,
     source: params.source,
     rootDir: params.rootDir,
     origin: params.origin,
@@ -785,6 +793,9 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
         name: manifestRecord.name ?? pluginId,
         description: manifestRecord.description,
         version: manifestRecord.version,
+        format: manifestRecord.format,
+        bundleFormat: manifestRecord.bundleFormat,
+        bundleCapabilities: manifestRecord.bundleCapabilities,
         source: candidate.source,
         rootDir: candidate.rootDir,
         origin: candidate.origin,
@@ -810,6 +821,9 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
       name: manifestRecord.name ?? pluginId,
       description: manifestRecord.description,
       version: manifestRecord.version,
+      format: manifestRecord.format,
+      bundleFormat: manifestRecord.bundleFormat,
+      bundleCapabilities: manifestRecord.bundleCapabilities,
       source: candidate.source,
       rootDir: candidate.rootDir,
       origin: candidate.origin,
@@ -836,6 +850,30 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
     if (!enableState.enabled) {
       record.status = "disabled";
       record.error = enableState.reason;
+      registry.plugins.push(record);
+      seenIds.set(pluginId, candidate.origin);
+      continue;
+    }
+
+    if (record.format === "bundle") {
+      const unsupportedCapabilities = (record.bundleCapabilities ?? []).filter(
+        (capability) =>
+          capability !== "skills" &&
+          capability !== "settings" &&
+          !(
+            capability === "commands" &&
+            (record.bundleFormat === "claude" || record.bundleFormat === "cursor")
+          ) &&
+          !(capability === "hooks" && record.bundleFormat === "codex"),
+      );
+      for (const capability of unsupportedCapabilities) {
+        registry.diagnostics.push({
+          level: "warn",
+          pluginId: record.id,
+          source: record.source,
+          message: `bundle capability detected but not wired into OpenClaw yet: ${capability}`,
+        });
+      }
       registry.plugins.push(record);
       seenIds.set(pluginId, candidate.origin);
       continue;

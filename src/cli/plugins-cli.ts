@@ -97,16 +97,21 @@ function formatPluginLine(plugin: PluginRecord, verbose = false): string {
           : plugin.description,
       )
     : theme.muted("(no description)");
+  const format = plugin.format ?? "openclaw";
 
   if (!verbose) {
-    return `${name}${idSuffix} ${status} - ${desc}`;
+    return `${name}${idSuffix} ${status} ${theme.muted(`[${format}]`)} - ${desc}`;
   }
 
   const parts = [
     `${name}${idSuffix} ${status}`,
+    `  format: ${format}`,
     `  source: ${theme.muted(shortenHomeInString(plugin.source))}`,
     `  origin: ${plugin.origin}`,
   ];
+  if (plugin.bundleFormat) {
+    parts.push(`  bundle format: ${plugin.bundleFormat}`);
+  }
   if (plugin.version) {
     parts.push(`  version: ${plugin.version}`);
   }
@@ -419,6 +424,7 @@ export function registerPluginsCli(program: Command) {
           return {
             Name: plugin.name || plugin.id,
             ID: plugin.name && plugin.name !== plugin.id ? plugin.id : "",
+            Format: plugin.format ?? "openclaw",
             Status:
               plugin.status === "loaded"
                 ? theme.success("loaded")
@@ -451,6 +457,7 @@ export function registerPluginsCli(program: Command) {
             columns: [
               { key: "Name", header: "Name", minWidth: 14, flex: true },
               { key: "ID", header: "ID", minWidth: 10, flex: true },
+              { key: "Format", header: "Format", minWidth: 9 },
               { key: "Status", header: "Status", minWidth: 10 },
               { key: "Source", header: "Source", minWidth: 26, flex: true },
               { key: "Version", header: "Version", minWidth: 8 },
@@ -499,6 +506,10 @@ export function registerPluginsCli(program: Command) {
       }
       lines.push("");
       lines.push(`${theme.muted("Status:")} ${plugin.status}`);
+      lines.push(`${theme.muted("Format:")} ${plugin.format ?? "openclaw"}`);
+      if (plugin.bundleFormat) {
+        lines.push(`${theme.muted("Bundle format:")} ${plugin.bundleFormat}`);
+      }
       lines.push(`${theme.muted("Source:")} ${shortenHomeInString(plugin.source)}`);
       lines.push(`${theme.muted("Origin:")} ${plugin.origin}`);
       if (plugin.version) {
@@ -515,6 +526,11 @@ export function registerPluginsCli(program: Command) {
       }
       if (plugin.providerIds.length > 0) {
         lines.push(`${theme.muted("Providers:")} ${plugin.providerIds.join(", ")}`);
+      }
+      if ((plugin.bundleCapabilities?.length ?? 0) > 0) {
+        lines.push(
+          `${theme.muted("Bundle capabilities:")} ${plugin.bundleCapabilities?.join(", ")}`,
+        );
       }
       if (plugin.cliCommands.length > 0) {
         lines.push(`${theme.muted("CLI commands:")} ${plugin.cliCommands.join(", ")}`);
