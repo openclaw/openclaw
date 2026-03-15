@@ -277,6 +277,70 @@ describe("pairing store", () => {
     });
   });
 
+  it("approves pairing code via crypto.timingSafeEqual", async () => {
+    const spy = vi.spyOn(crypto, "timingSafeEqual");
+    try {
+      await withTempStateDir(async () => {
+        const created = await upsertChannelPairingRequest({
+          channel: "signal",
+          id: "+15559999999",
+          accountId: DEFAULT_ACCOUNT_ID,
+        });
+        expect(created.created).toBe(true);
+
+        spy.mockClear();
+        const approved = await approveChannelPairingCode({
+          channel: "signal",
+          code: created.code.toLowerCase(),
+          accountId: DEFAULT_ACCOUNT_ID,
+        });
+        expect(approved?.id).toBe("+15559999999");
+        expect(spy).toHaveBeenCalled();
+      });
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it("rejects wrong code of same length via timing-safe path", async () => {
+    await withTempStateDir(async () => {
+      await upsertChannelPairingRequest({
+        channel: "signal",
+        id: "+15558888888",
+        accountId: DEFAULT_ACCOUNT_ID,
+      });
+      const rejected = await approveChannelPairingCode({
+        channel: "signal",
+        code: "ZZZZZZZZ",
+        accountId: DEFAULT_ACCOUNT_ID,
+      });
+      expect(rejected).toBeNull();
+    });
+  });
+
+  it("rejects wrong code of different length without timing leak", async () => {
+    const spy = vi.spyOn(crypto, "timingSafeEqual");
+    try {
+      await withTempStateDir(async () => {
+        await upsertChannelPairingRequest({
+          channel: "signal",
+          id: "+15557777777",
+          accountId: DEFAULT_ACCOUNT_ID,
+        });
+        spy.mockClear();
+        const rejected = await approveChannelPairingCode({
+          channel: "signal",
+          code: "ZZZ",
+          accountId: DEFAULT_ACCOUNT_ID,
+        });
+        expect(rejected).toBeNull();
+        expect(spy).toHaveBeenCalled();
+      });
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
   it("stores allowFrom entries per account when accountId is provided", async () => {
     await withTempStateDir(async () => {
       await addChannelAllowFromStoreEntry({
