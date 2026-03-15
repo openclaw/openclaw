@@ -1,4 +1,5 @@
 import { execFile } from "node:child_process";
+import path from "node:path";
 import { promisify } from "node:util";
 import type { Bot, Context } from "grammy";
 import { ensureConfiguredAcpRouteReady } from "../../../src/acp/persistent-bindings.route.js";
@@ -78,6 +79,30 @@ import { buildInlineKeyboard } from "./send.js";
 
 const EMPTY_RESPONSE_FALLBACK = "No response generated. Please try again.";
 const execFileAsync = promisify(execFile);
+
+async function resolveCurrentBranchName(): Promise<string> {
+  const candidateCwds = [
+    process.cwd(),
+    process.env.INIT_CWD,
+    process.env.PWD,
+    process.argv[1] ? path.dirname(process.argv[1]) : undefined,
+  ].filter((value): value is string => Boolean(value));
+  for (const cwd of candidateCwds) {
+    try {
+      const { stdout } = await execFileAsync("git", ["rev-parse", "--abbrev-ref", "HEAD"], {
+        cwd,
+        timeout: 1500,
+      });
+      const branch = stdout.trim();
+      if (branch) {
+        return branch;
+      }
+    } catch {
+      // Try next candidate cwd.
+    }
+  }
+  return "HEAD";
+}
 
 type TelegramNativeCommandContext = Context & { match?: string };
 
@@ -603,21 +628,7 @@ export const registerTelegramNativeCommands = ({
           const { threadSpec, route, mediaLocalRoots, tableMode, chunkMode } = runtimeContext;
           const threadParams = buildTelegramThreadParams(threadSpec) ?? {};
           if (command.name === "ping") {
-            const branch = await (async () => {
-              try {
-                const { stdout } = await execFileAsync(
-                  "git",
-                  ["rev-parse", "--abbrev-ref", "HEAD"],
-                  {
-                    cwd: process.cwd(),
-                    timeout: 1500,
-                  },
-                );
-                return stdout.trim() || "HEAD";
-              } catch {
-                return "HEAD";
-              }
-            })();
+            const branch = await resolveCurrentBranchName();
             const pingText = `pong (${branch})`;
             await withTelegramApiErrorLogging({
               operation: "sendMessage",
