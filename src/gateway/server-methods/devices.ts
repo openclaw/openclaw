@@ -94,7 +94,7 @@ export const deviceHandlers: GatewayRequestHandlers = {
       undefined,
     );
   },
-  "device.pair.approve": async ({ params, respond, context }) => {
+  "device.pair.approve": async ({ params, respond, context, client }) => {
     if (!validateDevicePairApproveParams(params)) {
       respond(
         false,
@@ -109,9 +109,18 @@ export const deviceHandlers: GatewayRequestHandlers = {
       return;
     }
     const { requestId } = params as { requestId: string };
-    const approved = await approveDevicePairing(requestId);
+    const callerScopes = Array.isArray(client?.connect?.scopes) ? client.connect.scopes : [];
+    const approved = await approveDevicePairing(requestId, { callerScopes });
     if (!approved) {
       respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "unknown requestId"));
+      return;
+    }
+    if (approved.status === "forbidden") {
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.INVALID_REQUEST, `missing scope: ${approved.missingScope}`),
+      );
       return;
     }
     context.logGateway.info(
