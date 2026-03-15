@@ -148,6 +148,19 @@ async function validateScriptFileForShellBleed(params: {
   }
 }
 
+function isGatewaySelfTerminationCommand(command: string): boolean {
+  const normalized = command.toLowerCase();
+  if (!normalized.includes("openclaw-gateway")) {
+    return false;
+  }
+  const directKill = /\bpkill\b|\bkillall\b/.test(normalized);
+  if (directKill) {
+    return true;
+  }
+  // Covers patterns like: kill $(pgrep -f openclaw-gateway)
+  return /\bkill\b/.test(normalized) && /\bpgrep\b/.test(normalized);
+}
+
 export function createExecTool(
   defaults?: ExecToolDefaults,
   // oxlint-disable-next-line typescript/no-explicit-any
@@ -359,6 +372,16 @@ export function createExecTool(
         containerWorkdir = resolved.containerWorkdir;
       } else {
         workdir = resolveWorkdir(rawWorkdir, warnings);
+      }
+
+      if (!sandbox && isGatewaySelfTerminationCommand(params.command)) {
+        throw new Error(
+          [
+            "Unsafe gateway self-termination command detected.",
+            "Do not kill openclaw-gateway directly from exec.",
+            "Use `gateway` tool action=`restart` or run `openclaw gateway restart` instead.",
+          ].join("\n"),
+        );
       }
 
       const inheritedBaseEnv = coerceEnv(process.env);

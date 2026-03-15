@@ -447,6 +447,13 @@ describe("exec tool backgrounding", () => {
     isWin ? 15_000 : 5_000,
   );
 
+  it("rejects gateway self-termination command chains", async () => {
+    const cmd = "pkill -f openclaw-gateway && sleep 2 && openclaw gateway run";
+    await expect(executeExecCommand(execTool, cmd)).rejects.toThrow(
+      /Do not kill openclaw-gateway directly from exec/i,
+    );
+  });
+
   it("supports explicit background and derives session name from the command", async () => {
     const sessionId = await startBackgroundCommand(execTool, COMMAND_ECHO_HELLO);
 
