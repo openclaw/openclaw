@@ -95,6 +95,7 @@ export type FeishuToolsConfig = {
   drive?: boolean;
   perm?: boolean;
   scopes?: boolean;
+  card?: boolean;
 };
 
 export type DynamicAgentCreationConfig = {
