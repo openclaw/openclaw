@@ -49,6 +49,7 @@ import {
 } from "./acp-spawn-parent-stream.js";
 import { resolveAgentConfig, resolveDefaultAgentId } from "./agent-scope.js";
 import { resolveSandboxRuntimeStatus } from "./sandbox/runtime-status.js";
+import { registerSubagentRun } from "./subagent-registry.js";
 import { resolveInternalSessionKey, resolveMainSessionAlias } from "./tools/sessions-helpers.js";
 
 const log = createSubsystemLogger("agents/acp-spawn");
@@ -726,6 +727,47 @@ export async function spawnAcpDirect(
       error: summarizeError(err),
       childSessionKey: sessionKey,
     };
+  }
+
+  // Register one-shot ACP runs in the subagent registry so the existing
+  // announce pipeline delivers a completion notification back to the
+  // requester channel (Discord, WhatsApp, etc.) when the run finishes.
+  // Session-mode ("persistent thread-bound") ACP sessions are long-lived and
+  // don't have a natural completion point, so we skip registration for those.
+  // Only register when there is an explicit requester session context (i.e.
+  // the spawn was triggered from within another agent turn, not standalone).
+  const explicitRequesterKey = ctx.agentSessionKey?.trim();
+  if (spawnMode === "run" && explicitRequesterKey && requesterInternalKey) {
+    try {
+      // cleanup: "keep" preserves the session during the normal lifecycle cleanup
+      // flow (announce, hooks, frozen result caching). The time-based sweep
+      // (archiveAtMs) is a separate safety net for orphaned/stale runs that never
+      // complete — it fires well after the configured archiveAfterMinutes and is
+      // intentionally terminal.
+      //
+      // Note: ACP run-mode registrations consume a child slot in
+      // countActiveRunsForSession. This is intentional — it prevents unbounded
+      // spawns from a single session and ensures ACP runs are visible in the
+      // subagent tree. The slot is released when the run ends or is swept.
+      registerSubagentRun({
+        runId: childRunId,
+        childSessionKey: sessionKey,
+        requesterSessionKey: requesterInternalKey,
+        requesterOrigin: requesterOrigin ?? undefined,
+        requesterDisplayKey: requesterInternalKey,
+        task: params.task,
+        cleanup: "keep",
+        label: params.label || undefined,
+        expectsCompletionMessage: true,
+        spawnMode: "run",
+      });
+    } catch (err) {
+      // Best-effort: registration failure should not prevent the spawn
+      // from succeeding. Log for diagnostics only.
+      log.warn?.(
+        `acp-spawn: failed to register run ${childRunId} for completion announce: ${String(err)}`,
+      );
+    }
   }
 
   if (effectiveStreamToParent && parentSessionKey) {

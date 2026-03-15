@@ -145,6 +145,11 @@ vi.mock("./acp-spawn-parent-stream.js", () => ({
     hoisted.resolveAcpSpawnStreamLogPathMock(...args),
 }));
 
+const registerSubagentRunMock = vi.fn();
+vi.mock("./subagent-registry.js", () => ({
+  registerSubagentRun: (...args: unknown[]) => registerSubagentRunMock(...args),
+}));
+
 const { spawnAcpDirect } = await import("./acp-spawn.js");
 
 function createSessionBindingCapabilities() {
@@ -1040,5 +1045,105 @@ describe("spawnAcpDirect", () => {
     expect(result.error).toContain('streamTo="parent"');
     expect(hoisted.callGatewayMock).not.toHaveBeenCalled();
     expect(hoisted.startAcpSpawnParentStreamRelayMock).not.toHaveBeenCalled();
+  });
+
+  describe("completion announce registration", () => {
+    beforeEach(() => {
+      registerSubagentRunMock.mockReset();
+    });
+
+    it("registers run-mode ACP spawn in subagent registry for completion announce", async () => {
+      const result = await spawnAcpDirect(
+        {
+          task: "Implement the full auth module",
+          agentId: "codex",
+          mode: "run",
+          label: "auth-impl",
+        },
+        {
+          agentSessionKey: "agent:main:main",
+          agentChannel: "discord",
+          agentAccountId: "default",
+          agentTo: "channel:1234567890",
+          agentThreadId: "987654321",
+        },
+      );
+
+      expect(result.status).toBe("accepted");
+      expect(result.mode).toBe("run");
+      expect(registerSubagentRunMock).toHaveBeenCalledOnce();
+      const call = registerSubagentRunMock.mock.calls[0][0] as Record<string, unknown>;
+      expect(call.runId).toBe(result.runId);
+      expect(call.childSessionKey).toBe(result.childSessionKey);
+      expect(call.expectsCompletionMessage).toBe(true);
+      expect(call.spawnMode).toBe("run");
+      expect(call.label).toBe("auth-impl");
+      expect(call.task).toBe("Implement the full auth module");
+      // Requester origin should include the Discord channel context
+      expect((call.requesterOrigin as Record<string, unknown>)?.channel).toBe("discord");
+      expect((call.requesterOrigin as Record<string, unknown>)?.to).toBe("channel:1234567890");
+    });
+
+    it("does NOT register session-mode ACP spawn (long-lived, no natural completion)", async () => {
+      const result = await spawnAcpDirect(
+        {
+          task: "Open a persistent coding session",
+          agentId: "codex",
+          mode: "session",
+          thread: true,
+        },
+        {
+          agentSessionKey: "agent:main:discord:guild:1234:channel:5678",
+          agentChannel: "discord",
+          agentAccountId: "default",
+          agentTo: "channel:5678",
+        },
+      );
+
+      expect(result.status).toBe("accepted");
+      expect(result.mode).toBe("session");
+      expect(registerSubagentRunMock).not.toHaveBeenCalled();
+    });
+
+    it("does NOT register when there is no requester session key", async () => {
+      const result = await spawnAcpDirect(
+        {
+          task: "Standalone task with no parent",
+          agentId: "codex",
+          mode: "run",
+        },
+        {
+          // No agentSessionKey
+          agentChannel: "discord",
+          agentAccountId: "default",
+          agentTo: "channel:1234567890",
+        },
+      );
+
+      expect(result.status).toBe("accepted");
+      expect(registerSubagentRunMock).not.toHaveBeenCalled();
+    });
+
+    it("still returns accepted even if registerSubagentRun throws", async () => {
+      registerSubagentRunMock.mockImplementationOnce(() => {
+        throw new Error("registry write failed");
+      });
+
+      const result = await spawnAcpDirect(
+        {
+          task: "Implement feature X",
+          agentId: "codex",
+          mode: "run",
+        },
+        {
+          agentSessionKey: "agent:main:main",
+          agentChannel: "discord",
+          agentAccountId: "default",
+          agentTo: "channel:1234567890",
+        },
+      );
+
+      expect(result.status).toBe("accepted");
+    });
   });
 });
