@@ -163,25 +163,32 @@ Then enable it in config:
 
 ### The ContextEngine interface
 
-Required methods:
+Required members:
 
-| Method             | Purpose                                                  |
-| ------------------ | -------------------------------------------------------- |
-| `info`             | Engine id, name, version, and whether it owns compaction |
-| `ingest(params)`   | Store a single message                                   |
-| `assemble(params)` | Build context for a model run                            |
-| `compact(params)`  | Summarize/reduce context                                 |
+| Member             | Kind     | Purpose                                                  |
+| ------------------ | -------- | -------------------------------------------------------- |
+| `info`             | Property | Engine id, name, version, and whether it owns compaction |
+| `ingest(params)`   | Method   | Store a single message                                   |
+| `assemble(params)` | Method   | Build context for a model run (returns `AssembleResult`)  |
+| `compact(params)`  | Method   | Summarize/reduce context                                 |
 
-Optional methods:
+`assemble` returns an `AssembleResult` with:
+- `messages` — the ordered messages to send to the model.
+- `estimatedTokens` (required, `number`) — the engine's estimate of total
+  tokens in the assembled context. OpenClaw uses this for compaction threshold
+  decisions and diagnostic reporting.
+- `systemPromptAddition` (optional, `string`) — prepended to the system prompt.
 
-| Method                         | Purpose                                   |
-| ------------------------------ | ----------------------------------------- |
-| `bootstrap(params)`            | Initialize engine state for a new session |
-| `ingestBatch(params)`          | Ingest a completed turn as a batch        |
-| `afterTurn(params)`            | Post-run lifecycle work                   |
-| `prepareSubagentSpawn(params)` | Set up shared state for a child session   |
-| `onSubagentEnded(params)`      | Clean up after a subagent ends            |
-| `dispose()`                    | Release resources                         |
+Optional members:
+
+| Member                         | Kind   | Purpose                                                                                                         |
+| ------------------------------ | ------ | --------------------------------------------------------------------------------------------------------------- |
+| `bootstrap(params)`            | Method | Initialize engine state for a session. Called once when the engine first sees a session (e.g., import history).  |
+| `ingestBatch(params)`          | Method | Ingest a completed turn as a batch. Called after a run completes, with all messages from that turn at once.      |
+| `afterTurn(params)`            | Method | Post-run lifecycle work (persist state, trigger background compaction).                                          |
+| `prepareSubagentSpawn(params)` | Method | Set up shared state for a child session.                                                                         |
+| `onSubagentEnded(params)`      | Method | Clean up after a subagent ends.                                                                                  |
+| `dispose()`                    | Method | Release resources. Called during gateway shutdown or plugin reload — not per-session.
 
 ### ownsCompaction
 
