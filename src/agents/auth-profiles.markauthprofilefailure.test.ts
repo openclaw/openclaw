@@ -114,6 +114,21 @@ describe("markAuthProfileFailure", () => {
       expect(reloaded.usageStats?.["anthropic:default"]?.cooldownUntil).toBe(firstCooldownUntil);
     });
   });
+  it("records the model that triggered a rate-limit cooldown", async () => {
+    await withAuthProfileStore(async ({ agentDir, store }) => {
+      await markAuthProfileFailure({
+        store,
+        profileId: "anthropic:default",
+        reason: "rate_limit",
+        modelId: "claude-opus-4-6",
+        agentDir,
+      });
+
+      const stats = store.usageStats?.["anthropic:default"];
+      expect(stats?.cooldownReason).toBe("rate_limit");
+      expect(stats?.cooldownModel).toBe("claude-opus-4-6");
+    });
+  });
   it("records overloaded failures in the cooldown bucket", async () => {
     await withAuthProfileStore(async ({ agentDir, store }) => {
       await markAuthProfileFailure({

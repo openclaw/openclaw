@@ -44,6 +44,7 @@ export function isProfileInCooldown(
   store: AuthProfileStore,
   profileId: string,
   now?: number,
+  forModel?: string,
 ): boolean {
   if (isAuthCooldownBypassedForProvider(store.profiles[profileId]?.provider)) {
     return false;
@@ -54,6 +55,17 @@ export function isProfileInCooldown(
   }
   const unusableUntil = resolveProfileUnusableUntil(stats);
   const ts = now ?? Date.now();
+  if (
+    !isActiveUnusableWindow(stats.disabledUntil, ts) &&
+    stats.cooldownReason === "rate_limit" &&
+    typeof forModel === "string" &&
+    forModel.trim().length > 0 &&
+    typeof stats.cooldownModel === "string" &&
+    stats.cooldownModel.trim().length > 0 &&
+    stats.cooldownModel.trim() !== forModel.trim()
+  ) {
+    return false;
+  }
   return unusableUntil ? ts < unusableUntil : false;
 }
 
@@ -212,6 +224,8 @@ export function clearExpiredCooldowns(store: AuthProfileStore, now?: number): bo
 
     if (cooldownExpired) {
       stats.cooldownUntil = undefined;
+      stats.cooldownReason = undefined;
+      stats.cooldownModel = undefined;
       profileMutated = true;
     }
     if (disabledExpired) {
@@ -397,6 +411,7 @@ function computeNextProfileUsageStats(params: {
   existing: ProfileUsageStats;
   now: number;
   reason: AuthProfileFailureReason;
+  modelId?: string;
   cfgResolved: ResolvedAuthCooldownConfig;
 }): ProfileUsageStats {
   const windowMs = params.cfgResolved.failureWindowMs;
@@ -442,15 +457,36 @@ function computeNextProfileUsageStats(params: {
       recomputedUntil: params.now + backoffMs,
     });
     updatedStats.disabledReason = params.reason;
+    updatedStats.cooldownReason = undefined;
+    updatedStats.cooldownModel = undefined;
   } else {
     const backoffMs = calculateAuthProfileCooldownMs(nextErrorCount);
+    const existingCooldownUntil = params.existing.cooldownUntil;
+    const keepsExistingCooldownWindow =
+      typeof existingCooldownUntil === "number" &&
+      Number.isFinite(existingCooldownUntil) &&
+      existingCooldownUntil > params.now;
     // Keep active cooldown windows immutable so retries within the window
     // cannot push recovery further out.
     updatedStats.cooldownUntil = keepActiveWindowOrRecompute({
-      existingUntil: params.existing.cooldownUntil,
+      existingUntil: existingCooldownUntil,
       now: params.now,
       recomputedUntil: params.now + backoffMs,
     });
+    if (keepsExistingCooldownWindow) {
+      // Keep metadata aligned with the preserved active window so a later
+      // transient failure cannot widen a model-scoped cooldown back to profile-wide.
+      updatedStats.cooldownReason = params.existing.cooldownReason;
+      updatedStats.cooldownModel = params.existing.cooldownModel;
+    } else {
+      updatedStats.cooldownReason = params.reason;
+      updatedStats.cooldownModel =
+        params.reason === "rate_limit" &&
+        typeof params.modelId === "string" &&
+        params.modelId.trim().length > 0
+          ? params.modelId.trim()
+          : undefined;
+    }
   }
 
   return updatedStats;
@@ -465,11 +501,12 @@ export async function markAuthProfileFailure(params: {
   store: AuthProfileStore;
   profileId: string;
   reason: AuthProfileFailureReason;
+  modelId?: string;
   cfg?: OpenClawConfig;
   agentDir?: string;
   runId?: string;
 }): Promise<void> {
-  const { store, profileId, reason, agentDir, cfg, runId } = params;
+  const { store, profileId, reason, modelId, agentDir, cfg, runId } = params;
   const profile = store.profiles[profileId];
   if (!profile || isAuthCooldownBypassedForProvider(profile.provider)) {
     return;
@@ -497,6 +534,7 @@ export async function markAuthProfileFailure(params: {
         existing: previousStats ?? {},
         now,
         reason,
+        modelId,
         cfgResolved,
       });
       nextStats = computed;
@@ -535,6 +573,7 @@ export async function markAuthProfileFailure(params: {
     existing: previousStats ?? {},
     now,
     reason,
+    modelId,
     cfgResolved,
   });
   nextStats = computed;
