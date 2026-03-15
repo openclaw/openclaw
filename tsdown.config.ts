@@ -123,6 +123,9 @@ export default defineConfig([
     outDir: "dist/plugin-sdk",
   }),
   nodeBuildConfig({
+    entry: { "gateway/server": "src/gateway/server-public.ts" },
+  }),
+  nodeBuildConfig({
     entry: "src/extensionAPI.ts",
   }),
   nodeBuildConfig({
