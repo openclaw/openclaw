@@ -1,4 +1,5 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import type { OpenClawConfig } from "../../config/config.js";
 import type { TemplateContext } from "../templating.js";
 import { buildInboundMetaSystemPrompt, buildInboundUserContextPrefix } from "./inbound-meta.js";
 
@@ -330,5 +331,131 @@ describe("buildInboundUserContextPrefix", () => {
 
     const conversationInfo = parseConversationInfoPayload(text);
     expect(conversationInfo["sender"]).toBe("user@example.com");
+  });
+});
+
+describe("buildInboundUserContextPrefix - timezone handling", () => {
+  const baseCtx = {
+    ChatType: "group",
+    MessageSid: "msg-ts-tz",
+    // 2026-02-15 13:35 UTC → 21:35 CST (Asia/Shanghai)
+    Timestamp: Date.UTC(2026, 1, 15, 13, 35),
+  } as TemplateContext;
+
+  it("uses system timezone when no cfg provided", () => {
+    const text = buildInboundUserContextPrefix(baseCtx);
+    const conversationInfo = parseConversationInfoPayload(text);
+    expect(conversationInfo["timestamp"]).toEqual(expect.any(String));
+  });
+
+  it("uses system timezone when envelopeTimezone is 'local'", () => {
+    const cfg = {
+      agents: { defaults: { envelopeTimezone: "local" } },
+    } as unknown as OpenClawConfig;
+    const text = buildInboundUserContextPrefix(baseCtx, cfg);
+    const conversationInfo = parseConversationInfoPayload(text);
+    expect(conversationInfo["timestamp"]).toEqual(expect.any(String));
+  });
+
+  it("uses system timezone when envelopeTimezone is 'host'", () => {
+    const cfg = {
+      agents: { defaults: { envelopeTimezone: "host" } },
+    } as unknown as OpenClawConfig;
+    const text = buildInboundUserContextPrefix(baseCtx, cfg);
+    const conversationInfo = parseConversationInfoPayload(text);
+    expect(conversationInfo["timestamp"]).toEqual(expect.any(String));
+  });
+
+  it("uses userTimezone when envelopeTimezone is 'user'", () => {
+    const cfg = {
+      agents: { defaults: { envelopeTimezone: "user", userTimezone: "Asia/Shanghai" } },
+    } as unknown as OpenClawConfig;
+    const text = buildInboundUserContextPrefix(baseCtx, cfg);
+    const conversationInfo = parseConversationInfoPayload(text);
+    const timestamp = conversationInfo["timestamp"] as string;
+    // 13:35 UTC = 21:35 CST
+    expect(timestamp).toContain("21:35");
+    // should contain CST or GMT+8
+    expect(timestamp).toMatch(/CST|GMT\+8/);
+  });
+
+  it("uses explicit IANA timezone from envelopeTimezone", () => {
+    const cfg = {
+      agents: { defaults: { envelopeTimezone: "Asia/Shanghai" } },
+    } as unknown as OpenClawConfig;
+    const text = buildInboundUserContextPrefix(baseCtx, cfg);
+    const conversationInfo = parseConversationInfoPayload(text);
+    const timestamp = conversationInfo["timestamp"] as string;
+    // 13:35 UTC = 21:35 CST
+    expect(timestamp).toContain("21:35");
+  });
+
+  it("uses America/New_York timezone when configured", () => {
+    const cfg = {
+      agents: { defaults: { envelopeTimezone: "America/New_York" } },
+    } as unknown as OpenClawConfig;
+    const text = buildInboundUserContextPrefix(baseCtx, cfg);
+    const conversationInfo = parseConversationInfoPayload(text);
+    const timestamp = conversationInfo["timestamp"] as string;
+    // 13:35 UTC = 08:35 EST (UTC-5) in Feb
+    expect(timestamp).toContain("08:35");
+  });
+
+  it("omits timestamp when cfg has no envelopeTimezone", () => {
+    const cfg = {
+      agents: { defaults: {} },
+    } as unknown as OpenClawConfig;
+    const ctxNoTimestamp = { ChatType: "group", MessageSid: "msg-no-ts" } as TemplateContext;
+    const text = buildInboundUserContextPrefix(ctxNoTimestamp, cfg);
+    const conversationInfo = parseConversationInfoPayload(text);
+    expect(conversationInfo["timestamp"]).toBeUndefined();
+  });
+
+  it("treats 'utc' envelopeTimezone as UTC", () => {
+    const cfg = {
+      agents: { defaults: { envelopeTimezone: "utc" } },
+    } as unknown as OpenClawConfig;
+    const text = buildInboundUserContextPrefix(baseCtx, cfg);
+    const conversationInfo = parseConversationInfoPayload(text);
+    const timestamp = conversationInfo["timestamp"] as string;
+    // 13:35 UTC stays 13:35 UTC
+    expect(timestamp).toContain("13:35");
+  });
+
+  it("treats 'gmt' envelopeTimezone as UTC", () => {
+    const cfg = {
+      agents: { defaults: { envelopeTimezone: "gmt" } },
+    } as unknown as OpenClawConfig;
+    const text = buildInboundUserContextPrefix(baseCtx, cfg);
+    const conversationInfo = parseConversationInfoPayload(text);
+    const timestamp = conversationInfo["timestamp"] as string;
+    // 13:35 UTC stays 13:35
+    expect(timestamp).toContain("13:35");
+  });
+
+  it("falls back to system timezone for invalid IANA string", () => {
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const cfg = {
+      agents: { defaults: { envelopeTimezone: "Not/A_ValidZone" } },
+    } as unknown as OpenClawConfig;
+    const text = buildInboundUserContextPrefix(baseCtx, cfg);
+    const conversationInfo = parseConversationInfoPayload(text);
+    // Invalid IANA → resolveTimezone returns undefined → falls back to system timezone → timestamp still present
+    expect(conversationInfo["timestamp"]).toEqual(expect.any(String));
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("Invalid envelopeTimezone value"));
+    warnSpy.mockRestore();
+  });
+
+  it("falls back to system timezone when userTimezone is invalid IANA string", () => {
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const cfg = {
+      agents: { defaults: { envelopeTimezone: "user", userTimezone: "Not/A_ValidZone" } },
+    } as unknown as OpenClawConfig;
+    const text = buildInboundUserContextPrefix(baseCtx, cfg);
+    const conversationInfo = parseConversationInfoPayload(text);
+    // Invalid userTimezone → resolveTimezone returns undefined → system timezone used → timestamp still present
+    expect(conversationInfo["timestamp"]).toEqual(expect.any(String));
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("Invalid userTimezone value"));
+    warnSpy.mockRestore();
   });
 });

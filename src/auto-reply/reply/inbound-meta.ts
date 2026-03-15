@@ -1,6 +1,7 @@
 import { normalizeChatType } from "../../channels/chat-type.js";
 import { resolveSenderLabel } from "../../channels/sender-label.js";
-import { formatZonedTimestamp } from "../../infra/format-time/format-datetime.js";
+import type { OpenClawConfig } from "../../config/config.js";
+import { formatZonedTimestamp, resolveTimezone } from "../../infra/format-time/format-datetime.js";
 import type { TemplateContext } from "../templating.js";
 
 function safeTrim(value: unknown): string | undefined {
@@ -11,7 +12,7 @@ function safeTrim(value: unknown): string | undefined {
   return trimmed ? trimmed : undefined;
 }
 
-function formatConversationTimestamp(value: unknown): string | undefined {
+function formatConversationTimestamp(value: unknown, timeZone?: string): string | undefined {
   if (typeof value !== "number" || !Number.isFinite(value)) {
     return undefined;
   }
@@ -19,16 +20,57 @@ function formatConversationTimestamp(value: unknown): string | undefined {
   if (Number.isNaN(date.getTime())) {
     return undefined;
   }
-  const formatted = formatZonedTimestamp(date);
+  const formatted = formatZonedTimestamp(date, timeZone ? { timeZone } : undefined);
   if (!formatted) {
     return undefined;
   }
   try {
-    const weekday = new Intl.DateTimeFormat("en-US", { weekday: "short" }).format(date);
+    const weekday = new Intl.DateTimeFormat("en-US", {
+      weekday: "short",
+      ...(timeZone ? { timeZone } : {}),
+    }).format(date);
     return weekday ? `${weekday} ${formatted}` : formatted;
   } catch {
     return formatted;
   }
+}
+
+function resolveConversationTimezone(cfg?: OpenClawConfig): string | undefined {
+  const envelopeTimezone = cfg?.agents?.defaults?.envelopeTimezone?.trim();
+
+  if (
+    !envelopeTimezone ||
+    envelopeTimezone.toLowerCase() === "local" ||
+    envelopeTimezone.toLowerCase() === "host"
+  ) {
+    return undefined; // use system timezone
+  }
+
+  if (envelopeTimezone.toLowerCase() === "utc" || envelopeTimezone.toLowerCase() === "gmt") {
+    return "UTC";
+  }
+
+  if (envelopeTimezone.toLowerCase() === "user") {
+    const userTz = cfg?.agents?.defaults?.userTimezone?.trim();
+    if (!userTz) {
+      return undefined;
+    }
+    const validated = resolveTimezone(userTz);
+    if (!validated) {
+      console.warn(
+        `[openclaw] Invalid userTimezone value: "${userTz}", falling back to system timezone`,
+      );
+    }
+    return validated;
+  }
+
+  const validated = resolveTimezone(envelopeTimezone);
+  if (!validated) {
+    console.warn(
+      `[openclaw] Invalid envelopeTimezone value: "${envelopeTimezone}", falling back to system timezone`,
+    );
+  }
+  return validated;
 }
 
 function resolveInboundChannel(ctx: TemplateContext): string | undefined {
@@ -81,7 +123,7 @@ export function buildInboundMetaSystemPrompt(ctx: TemplateContext): string {
   ].join("\n");
 }
 
-export function buildInboundUserContextPrefix(ctx: TemplateContext): string {
+export function buildInboundUserContextPrefix(ctx: TemplateContext, cfg?: OpenClawConfig): string {
   const blocks: string[] = [];
   const chatType = normalizeChatType(ctx.ChatType);
   const isDirect = !chatType || chatType === "direct";
@@ -94,7 +136,7 @@ export function buildInboundUserContextPrefix(ctx: TemplateContext): string {
   const messageId = safeTrim(ctx.MessageSid);
   const messageIdFull = safeTrim(ctx.MessageSidFull);
   const resolvedMessageId = messageId ?? messageIdFull;
-  const timestampStr = formatConversationTimestamp(ctx.Timestamp);
+  const timestampStr = formatConversationTimestamp(ctx.Timestamp, resolveConversationTimezone(cfg));
 
   const conversationInfo = {
     message_id: shouldIncludeConversationInfo ? resolvedMessageId : undefined,
