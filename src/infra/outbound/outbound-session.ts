@@ -53,7 +53,22 @@ export type ResolveOutboundSessionRouteParams = {
 };
 
 // Cache Slack channel type lookups to avoid repeated API calls.
+// Use LRU eviction to prevent unbounded memory growth in large workspaces.
+const MAX_SLACK_CHANNEL_CACHE_SIZE = 1000;
 const SLACK_CHANNEL_TYPE_CACHE = new Map<string, "channel" | "group" | "dm" | "unknown">();
+
+function setSlackChannelTypeCache(key: string, type: "channel" | "group" | "dm" | "unknown"): void {
+  // Evict oldest entry if cache is full (LRU eviction)
+  if (SLACK_CHANNEL_TYPE_CACHE.size >= MAX_SLACK_CHANNEL_CACHE_SIZE) {
+    const firstKey = SLACK_CHANNEL_TYPE_CACHE.keys().next().value;
+    if (firstKey !== undefined) {
+      SLACK_CHANNEL_TYPE_CACHE.delete(firstKey);
+    }
+  }
+  // Delete and re-add to move this entry to the end (most recently used)
+  SLACK_CHANNEL_TYPE_CACHE.delete(key);
+  SLACK_CHANNEL_TYPE_CACHE.set(key, type);
+}
 
 function normalizeThreadId(value?: string | number | null): string | undefined {
   if (value == null) {
@@ -134,12 +149,16 @@ async function resolveSlackChannelType(params: {
   if (!channelId) {
     return "unknown";
   }
-  const cached = SLACK_CHANNEL_TYPE_CACHE.get(`${params.accountId ?? "default"}:${channelId}`);
+
+  // Resolve account first to get the canonical accountId for consistent cache keys.
+  const account = resolveSlackAccount({ cfg: params.cfg, accountId: params.accountId });
+  const cacheKey = `${account.accountId}:${channelId}`;
+  const cached = SLACK_CHANNEL_TYPE_CACHE.get(cacheKey);
   if (cached) {
+    // Update recency on cache hit (move to end for LRU).
+    setSlackChannelTypeCache(cacheKey, cached);
     return cached;
   }
-
-  const account = resolveSlackAccount({ cfg: params.cfg, accountId: params.accountId });
   const groupChannels = normalizeAllowListLower(account.dm?.groupChannels);
   const channelIdLower = channelId.toLowerCase();
   if (
@@ -149,7 +168,7 @@ async function resolveSlackChannelType(params: {
     groupChannels.includes(`group:${channelIdLower}`) ||
     groupChannels.includes(`mpim:${channelIdLower}`)
   ) {
-    SLACK_CHANNEL_TYPE_CACHE.set(`${account.accountId}:${channelId}`, "group");
+    setSlackChannelTypeCache(cacheKey, "group");
     return "group";
   }
 
@@ -164,13 +183,13 @@ async function resolveSlackChannelType(params: {
       );
     })
   ) {
-    SLACK_CHANNEL_TYPE_CACHE.set(`${account.accountId}:${channelId}`, "channel");
+    setSlackChannelTypeCache(cacheKey, "channel");
     return "channel";
   }
 
   const token = account.botToken?.trim() || account.userToken || "";
   if (!token) {
-    SLACK_CHANNEL_TYPE_CACHE.set(`${account.accountId}:${channelId}`, "unknown");
+    setSlackChannelTypeCache(cacheKey, "unknown");
     return "unknown";
   }
 
@@ -179,10 +198,10 @@ async function resolveSlackChannelType(params: {
     const info = await client.conversations.info({ channel: channelId });
     const channel = info.channel as { is_im?: boolean; is_mpim?: boolean } | undefined;
     const type = channel?.is_im ? "dm" : channel?.is_mpim ? "group" : "channel";
-    SLACK_CHANNEL_TYPE_CACHE.set(`${account.accountId}:${channelId}`, type);
+    setSlackChannelTypeCache(cacheKey, type);
     return type;
   } catch {
-    SLACK_CHANNEL_TYPE_CACHE.set(`${account.accountId}:${channelId}`, "unknown");
+    setSlackChannelTypeCache(cacheKey, "unknown");
     return "unknown";
   }
 }
