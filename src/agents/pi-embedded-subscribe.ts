@@ -641,7 +641,18 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     getCompactionCount: () => compactionCount,
   };
 
-  const sessionUnsubscribe = params.session.subscribe(createEmbeddedPiSessionEventHandler(ctx));
+  const innerHandler = createEmbeddedPiSessionEventHandler(ctx);
+  const handleEvent = params.onTraceEvent
+    ? (evt: Parameters<typeof innerHandler>[0]) => {
+        try {
+          params.onTraceEvent!(evt as unknown as Record<string, unknown>);
+        } catch {
+          // best-effort trace logging
+        }
+        innerHandler(evt);
+      }
+    : innerHandler;
+  const sessionUnsubscribe = params.session.subscribe(handleEvent);
 
   const unsubscribe = () => {
     if (state.unsubscribed) {
