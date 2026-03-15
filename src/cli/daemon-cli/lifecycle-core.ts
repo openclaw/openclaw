@@ -202,17 +202,7 @@ export async function runServiceStart(params: {
   if (loaded === null) {
     return;
   }
-  if (!loaded) {
-    await handleServiceNotLoaded({
-      serviceNoun: params.serviceNoun,
-      service: params.service,
-      loaded,
-      renderStartHints: params.renderStartHints,
-      json,
-      emit,
-    });
-    return;
-  }
+
   // Pre-flight config validation (#35862)
   {
     const configError = await getConfigValidationError();
@@ -224,6 +214,81 @@ export async function runServiceStart(params: {
     }
   }
 
+  if (!loaded) {
+    // Recovery start is intentionally limited to launchd services on macOS.
+    // Other service managers may report "not loaded" via enablement semantics,
+    // where issuing restart could unexpectedly start disabled services.
+    if (params.service.label !== "LaunchAgent") {
+      await handleServiceNotLoaded({
+        serviceNoun: params.serviceNoun,
+        service: params.service,
+        loaded,
+        renderStartHints: params.renderStartHints,
+        json,
+        emit,
+      });
+      return;
+    }
+
+    // Attempt an idempotent recovery start for launchd where `bootout` can leave
+    // the plist installed on disk but unloaded in launchd.
+    try {
+      await params.service.restart({ env: process.env, stdout });
+    } catch {
+      // restart can partially succeed (e.g., bootstrap succeeded but kickstart failed).
+      // Re-check loaded state before falling back to not-loaded guidance.
+      let loadedAfterError = false;
+      try {
+        loadedAfterError = await params.service.isLoaded({ env: process.env });
+      } catch {
+        loadedAfterError = false;
+      }
+      if (loadedAfterError) {
+        emit({
+          ok: true,
+          result: "started",
+          service: buildDaemonServiceSnapshot(params.service, true),
+        });
+        return;
+      }
+
+      await handleServiceNotLoaded({
+        serviceNoun: params.serviceNoun,
+        service: params.service,
+        loaded,
+        renderStartHints: params.renderStartHints,
+        json,
+        emit,
+      });
+      return;
+    }
+
+    let started = true;
+    try {
+      started = await params.service.isLoaded({ env: process.env });
+    } catch {
+      started = true;
+    }
+
+    if (!started) {
+      await handleServiceNotLoaded({
+        serviceNoun: params.serviceNoun,
+        service: params.service,
+        loaded: false,
+        renderStartHints: params.renderStartHints,
+        json,
+        emit,
+      });
+      return;
+    }
+
+    emit({
+      ok: true,
+      result: "started",
+      service: buildDaemonServiceSnapshot(params.service, started),
+    });
+    return;
+  }
   try {
     const restartResult = await params.service.restart({ env: process.env, stdout });
     const restartStatus = describeGatewayServiceRestart(params.serviceNoun, restartResult);
