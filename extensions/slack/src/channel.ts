@@ -6,6 +6,7 @@ import {
   createScopedAccountConfigAccessors,
   formatAllowFromLowercase,
 } from "openclaw/plugin-sdk/compat";
+import { resolveOutboundSendDep } from "openclaw/plugin-sdk/compat";
 import {
   applyAccountNameToChannelSection,
   buildComputedAccountStatusSnapshot,
@@ -38,7 +39,6 @@ import {
   type ChannelPlugin,
   type ResolvedSlackAccount,
 } from "openclaw/plugin-sdk/slack";
-import { resolveOutboundSendDep } from "../../../src/infra/outbound/send-deps.js";
 import { buildPassiveProbedChannelStatusSummary } from "../../shared/channel-status-summary.js";
 import { getSlackRuntime } from "./runtime.js";
 
