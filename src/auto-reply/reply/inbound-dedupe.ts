@@ -37,14 +37,6 @@ function resolveInboundDedupeSessionScopeFromKey(sessionKey?: string | null): st
   return `agent:${parsed.agentId}`;
 }
 
-function resolveInboundDedupeSessionScope(ctx: MsgContext): string {
-  const sessionKey =
-    (ctx.CommandSource === "native" ? ctx.CommandTargetSessionKey : undefined)?.trim() ||
-    ctx.SessionKey?.trim() ||
-    "";
-  return resolveInboundDedupeSessionScopeFromKey(sessionKey);
-}
-
 export function buildInboundDedupeKeyFromParts(params: {
   provider?: string | null;
   messageId?: string | null;
