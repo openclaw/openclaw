@@ -17,6 +17,49 @@ import { getActivePluginRegistry } from "../plugins/runtime.js";
 export const INTERNAL_MESSAGE_CHANNEL = "webchat" as const;
 export type InternalMessageChannel = typeof INTERNAL_MESSAGE_CHANNEL;
 
+/**
+ * Sentinel channel used when sessions_send injects a message into a target
+ * session. Distinct from INTERNAL_MESSAGE_CHANNEL so that resolveLastChannelRaw
+ * does NOT flip the receiver's route to webchat. Instead it falls through to
+ * the persisted external channel, preserving the receiver's established route.
+ */
+export const INTER_SESSION_CHANNEL = "inter_session" as const;
+export type InterSessionChannel = typeof INTER_SESSION_CHANNEL;
+
+/**
+ * Channel IDs that are reserved for internal OpenClaw routing.
+ * No plugin may register a channel with these IDs — doing so would shadow
+ * a sentinel value and silently break cross-session message delivery.
+ * Checked in both plugin install (validatePluginId) and runtime channel
+ * registration (registerChannel) to cover all registration paths.
+ */
+const RESERVED_CHANNEL_IDS: ReadonlySet<string> = new Set([
+  INTER_SESSION_CHANNEL,
+  INTERNAL_MESSAGE_CHANNEL,
+]);
+
+export function isReservedChannelId(raw?: unknown): boolean {
+  if (typeof raw !== "string") {
+    return false;
+  }
+  const normalized = raw.trim().toLowerCase();
+  return Boolean(normalized) && RESERVED_CHANNEL_IDS.has(normalized);
+}
+
+export function listReservedChannelIds(): string[] {
+  return Array.from(RESERVED_CHANNEL_IDS);
+}
+
+export function isInterSessionChannel(raw?: string | null): boolean {
+  // Guard against collision with real deliverable plugin channels: a plugin
+  // could theoretically register a channel named "inter_session", which must
+  // not be silently treated as our sentinel.
+  if (raw?.trim().toLowerCase() !== INTER_SESSION_CHANNEL) {
+    return false;
+  }
+  return !isDeliverableMessageChannel(INTER_SESSION_CHANNEL);
+}
+
 const MARKDOWN_CAPABLE_CHANNELS = new Set<string>([
   "slack",
   "telegram",
@@ -57,8 +100,8 @@ export function normalizeMessageChannel(raw?: string | null): string | undefined
   if (!normalized) {
     return undefined;
   }
-  if (normalized === INTERNAL_MESSAGE_CHANNEL) {
-    return INTERNAL_MESSAGE_CHANNEL;
+  if (isReservedChannelId(normalized)) {
+    return normalized;
   }
   const builtIn = normalizeChatChannelId(normalized);
   if (builtIn) {
@@ -70,7 +113,7 @@ export function normalizeMessageChannel(raw?: string | null): string | undefined
       return true;
     }
     return (entry.plugin.meta.aliases ?? []).some(
-      (alias) => alias.trim().toLowerCase() === normalized,
+      (alias) => typeof alias === "string" && alias.trim().toLowerCase() === normalized,
     );
   });
   return pluginMatch?.plugin.id ?? normalized;
@@ -89,7 +132,9 @@ const listPluginChannelAliases = (): string[] => {
   if (!registry) {
     return [];
   }
-  return registry.channels.flatMap((entry) => entry.plugin.meta.aliases ?? []);
+  return registry.channels.flatMap((entry) =>
+    (entry.plugin.meta.aliases ?? []).filter((alias): alias is string => typeof alias === "string"),
+  );
 };
 
 export const listDeliverableMessageChannels = (): ChannelId[] =>
@@ -97,8 +142,15 @@ export const listDeliverableMessageChannels = (): ChannelId[] =>
 
 export type DeliverableMessageChannel = ChannelId;
 
-export type GatewayMessageChannel = DeliverableMessageChannel | InternalMessageChannel;
+export type GatewayMessageChannel =
+  | DeliverableMessageChannel
+  | InternalMessageChannel
+  | InterSessionChannel;
 
+// NOTE: INTER_SESSION_CHANNEL is intentionally excluded from the runtime list.
+// It exists in the GatewayMessageChannel type so internal tools can use it,
+// but it must not be accepted from external RPC callers or the delivery path.
+// isGatewayMessageChannel("inter_session") → false by design.
 export const listGatewayMessageChannels = (): GatewayMessageChannel[] => [
   ...listDeliverableMessageChannels(),
   INTERNAL_MESSAGE_CHANNEL,

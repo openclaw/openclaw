@@ -5,6 +5,7 @@ import { normalizeAccountId } from "../../utils/account-id.js";
 import {
   INTERNAL_MESSAGE_CHANNEL,
   isDeliverableMessageChannel,
+  isReservedChannelId,
   isGatewayMessageChannel,
   normalizeMessageChannel,
   type GatewayMessageChannel,
@@ -87,6 +88,17 @@ export function resolveAgentDeliveryPlan(params: {
   });
 
   const resolvedChannel = (() => {
+    // Internal sentinels must never resolve to a deliverable channel. Keep
+    // them on the internal/webchat path here so non-delivery flows stay
+    // internal; callers that request real delivery must reject sentinels
+    // before reaching this planner.
+    if (
+      requestedChannel &&
+      isReservedChannelId(requestedChannel) &&
+      requestedChannel !== INTERNAL_MESSAGE_CHANNEL
+    ) {
+      return INTERNAL_MESSAGE_CHANNEL;
+    }
     if (requestedChannel === INTERNAL_MESSAGE_CHANNEL) {
       return INTERNAL_MESSAGE_CHANNEL;
     }

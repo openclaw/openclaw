@@ -10,4 +10,6 @@ export type GatewayWsClient = {
   canvasHostUrl?: string;
   canvasCapability?: string;
   canvasCapabilityExpiresAtMs?: number;
+  /** Server-attested marker for gateway-created internal backend clients. */
+  isInternalBackendClient?: boolean;
 };

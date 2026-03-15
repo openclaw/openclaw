@@ -49,6 +49,7 @@ function createPluginRouteRuntimeClient(params: {
       role: "operator",
       scopes,
     },
+    isInternalBackendClient: params.requiresGatewayAuth && params.gatewayAuthSatisfied !== false,
   };
 }
 
