@@ -234,7 +234,7 @@ run_cast_probe() {
   local selector="${1:?selector required}"
   local value stderr_file err status
   stderr_file="$(mktemp)"
-  if value="$(cast call --rpc-url "$RPC_URL" "$ADDRESS" "$selector" 2>"$stderr_file")"; then
+  if value="$(cast call --rpc-url "$RPC_URL" -- "$ADDRESS" "$selector" 2>"$stderr_file")"; then
     err=""
     status="ok"
   else

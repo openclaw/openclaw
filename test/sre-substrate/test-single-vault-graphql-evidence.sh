@@ -54,6 +54,11 @@ cat >"${BIN_WITH_CAST}/cast" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
 
+if [[ "${MOCK_CAST_REQUIRE_END_OF_OPTIONS:-0}" == "1" && " $* " != *" -- ${EXPECTED_ADDRESS:-0x123} "* ]]; then
+  printf 'missing -- before address: %s\n' "$*" >&2
+  exit 95
+fi
+
 if [[ "${MOCK_CAST_MODE:-success}" == "fail" ]]; then
   printf '%s\n' "${MOCK_CAST_ERROR:-cast: rpc down}" >&2
   exit 1
@@ -114,6 +119,22 @@ printf '%s\n' "$success_output" | jq -e '
   and .probes.direct_rpc.totalAssets == "123"
   and .probes.direct_rpc.totalSupply == "456"
 ' >/dev/null
+
+strict_cast_output="$(
+  env PATH="${BIN_WITH_CAST}:/usr/bin:/bin" \
+    SINGLE_VAULT_RPC_URL='https://rpc.example' \
+    MOCK_CURL_MODE=success \
+    MOCK_CAST_MODE=success \
+    MOCK_CAST_REQUIRE_END_OF_OPTIONS=1 \
+    EXPECTED_ADDRESS=0x123 \
+    bash "$SCRIPT_PATH" \
+      --address 0x123 \
+      --chain-id 8453 \
+      --query "$QUERY" \
+      --variables-json "$VARIABLES"
+)"
+
+printf '%s\n' "$strict_cast_output" | jq -e '.probes.direct_rpc.status == "ok"' >/dev/null
 
 help_output="$(bash "$SCRIPT_PATH" --help)"
 printf '%s\n' "$help_output" | grep -F -- '--query ' >/dev/null
