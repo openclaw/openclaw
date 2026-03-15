@@ -889,6 +889,37 @@ function resolveKimiBaseUrl(kimi?: KimiConfig): string {
   return fromConfig || DEFAULT_KIMI_BASE_URL;
 }
 
+function resolveKimiChatCompletionsUrl(baseUrl: string): string {
+  const trimmed = baseUrl.trim();
+  if (!trimmed) {
+    return `${DEFAULT_KIMI_BASE_URL}/chat/completions`;
+  }
+
+  try {
+    const url = new URL(trimmed);
+    const normalizedPath = url.pathname.replace(/\/+$/, "") || "/";
+
+    if (normalizedPath.endsWith("/chat/completions")) {
+      url.pathname = normalizedPath;
+      return url.toString();
+    }
+
+    url.pathname = normalizedPath.endsWith("/v1")
+      ? `${normalizedPath}/chat/completions`
+      : `${normalizedPath === "/" ? "" : normalizedPath}/v1/chat/completions`;
+    return url.toString();
+  } catch {
+    const normalizedBaseUrl = trimmed.replace(/\/+$/, "");
+    if (normalizedBaseUrl.endsWith("/chat/completions")) {
+      return normalizedBaseUrl;
+    }
+    if (normalizedBaseUrl.endsWith("/v1")) {
+      return `${normalizedBaseUrl}/chat/completions`;
+    }
+    return `${normalizedBaseUrl}/v1/chat/completions`;
+  }
+}
+
 function resolveGeminiConfig(search?: WebSearchConfig): GeminiConfig {
   if (!search || typeof search !== "object") {
     return {};
@@ -1416,8 +1447,7 @@ async function runKimiSearch(params: {
   model: string;
   timeoutSeconds: number;
 }): Promise<{ content: string; citations: string[] }> {
-  const baseUrl = params.baseUrl.trim().replace(/\/$/, "");
-  const endpoint = `${baseUrl}/chat/completions`;
+  const endpoint = resolveKimiChatCompletionsUrl(params.baseUrl);
   const messages: Array<Record<string, unknown>> = [
     {
       role: "user",
@@ -2215,6 +2245,7 @@ export const __testing = {
   resolveKimiApiKey,
   resolveKimiModel,
   resolveKimiBaseUrl,
+  resolveKimiChatCompletionsUrl,
   extractKimiCitations,
   resolveRedirectUrl: resolveCitationRedirectUrl,
   resolveBraveMode,

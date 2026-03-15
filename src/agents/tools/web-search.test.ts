@@ -21,6 +21,7 @@ const {
   resolveKimiApiKey,
   resolveKimiModel,
   resolveKimiBaseUrl,
+  resolveKimiChatCompletionsUrl,
   extractKimiCitations,
   resolveBraveMode,
   mapBraveLlmContextResults,
@@ -344,6 +345,44 @@ describe("web_search kimi config resolution", () => {
   it("resolves default model and baseUrl", () => {
     expect(resolveKimiModel({})).toBe("moonshot-v1-128k");
     expect(resolveKimiBaseUrl({})).toBe("https://api.moonshot.ai/v1");
+  });
+});
+
+describe("resolveKimiChatCompletionsUrl", () => {
+  it("appends /chat/completions when baseUrl already includes /v1", () => {
+    expect(resolveKimiChatCompletionsUrl("https://api.moonshot.ai/v1")).toBe(
+      "https://api.moonshot.ai/v1/chat/completions",
+    );
+    expect(resolveKimiChatCompletionsUrl("https://api.moonshot.ai/v1/")).toBe(
+      "https://api.moonshot.ai/v1/chat/completions",
+    );
+  });
+
+  it("adds /v1/chat/completions when baseUrl omits the version path", () => {
+    expect(resolveKimiChatCompletionsUrl("https://api.moonshot.ai")).toBe(
+      "https://api.moonshot.ai/v1/chat/completions",
+    );
+    expect(resolveKimiChatCompletionsUrl("https://api.moonshot.ai/")).toBe(
+      "https://api.moonshot.ai/v1/chat/completions",
+    );
+  });
+
+  it("keeps explicit chat completion endpoints unchanged", () => {
+    expect(resolveKimiChatCompletionsUrl("https://api.moonshot.ai/v1/chat/completions")).toBe(
+      "https://api.moonshot.ai/v1/chat/completions",
+    );
+    expect(
+      resolveKimiChatCompletionsUrl("https://proxy.example.com/moonshot/chat/completions"),
+    ).toBe("https://proxy.example.com/moonshot/chat/completions");
+  });
+
+  it("preserves proxy subpaths while normalizing the Kimi endpoint", () => {
+    expect(resolveKimiChatCompletionsUrl("https://proxy.example.com/moonshot")).toBe(
+      "https://proxy.example.com/moonshot/v1/chat/completions",
+    );
+    expect(resolveKimiChatCompletionsUrl("https://proxy.example.com/moonshot/v1/")).toBe(
+      "https://proxy.example.com/moonshot/v1/chat/completions",
+    );
   });
 });
 
