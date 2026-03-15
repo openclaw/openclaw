@@ -414,6 +414,7 @@ export async function runOnboardingWizard(
     { promptCustomApiConfig },
     { applyAuthChoice, resolvePreferredProviderForAuthChoice, warnIfModelConfigLooksOff },
     { applyPrimaryModel, promptDefaultModel },
+    { resolvePluginProviders },
   ] = await Promise.all([
     import("../commands/onboard-config.js"),
     import("../agents/auth-profiles.runtime.js"),
@@ -421,10 +422,15 @@ export async function runOnboardingWizard(
     import("../commands/onboard-custom.js"),
     import("../commands/auth-choice.js"),
     import("../commands/model-picker.js"),
+    import("../plugins/providers.js"),
   ]);
-  loadProgress.stop();
 
   let nextConfig: OpenClawConfig = applyOnboardingLocalWorkspaceConfig(baseConfig, workspaceDir);
+  // Pre-warm the plugin registry while the "Loading…" spinner is still visible.
+  // buildAuthChoiceGroups calls loadOpenClawPlugins synchronously (jiti compiles bundled plugins).
+  // Without this, the UI freezes silently after the QuickStart note while plugins load.
+  resolvePluginProviders({ config: nextConfig, workspaceDir });
+  loadProgress.stop();
 
   const authStore = ensureAuthProfileStore(undefined, {
     allowKeychainPrompt: false,
