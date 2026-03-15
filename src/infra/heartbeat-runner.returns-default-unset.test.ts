@@ -164,6 +164,27 @@ describe("resolveHeartbeatIntervalMs", () => {
       ),
     ).toBe(5 * 60_000);
   });
+
+  it("clamps values exceeding the Node.js 32-bit timer limit", () => {
+    // "30d" = 2,592,000,000ms which exceeds 2^31-1 (2,147,483,647)
+    expect(
+      resolveHeartbeatIntervalMs({
+        agents: { defaults: { heartbeat: { every: "30d" } } },
+      }),
+    ).toBe(2_147_483_647);
+    // "25d" = 2,160,000,000ms which also exceeds the limit
+    expect(
+      resolveHeartbeatIntervalMs({
+        agents: { defaults: { heartbeat: { every: "25d" } } },
+      }),
+    ).toBe(2_147_483_647);
+    // "24d" = 2,073,600,000ms which is within the limit
+    expect(
+      resolveHeartbeatIntervalMs({
+        agents: { defaults: { heartbeat: { every: "24d" } } },
+      }),
+    ).toBe(24 * 24 * 60 * 60_000);
+  });
 });
 
 describe("resolveHeartbeatPrompt", () => {
