@@ -286,6 +286,25 @@ export class AgentWakeBridge {
     );
   }
 
+  /**
+   * Strategy discovery scan complete — wake Agent to spawn a subagent
+   * for deep LLM-driven market analysis. The wake message instructs the
+   * main Agent to use sessions_spawn with the full task prompt.
+   */
+  onDiscoveryScanComplete(info: {
+    symbolCount: number;
+    deterministicCount: number;
+    wakeMessage: string;
+  }): void {
+    this.activityLog?.append({
+      category: "discovery",
+      action: "discovery_scan_wake",
+      detail: `Discovery scan: ${info.symbolCount} symbols, ${info.deterministicCount} deterministic strategies. Waking Agent to spawn subagent.`,
+      metadata: { symbolCount: info.symbolCount, deterministicCount: info.deterministicCount },
+    });
+    this.wake(info.wakeMessage, "cron:findoo:discovery-scan");
+  }
+
   /** L2→L3 requires user approval — wake Agent to notify user. */
   onApprovalNeeded(info: { strategyId: string; strategyName: string }): void {
     this.activityLog?.append({

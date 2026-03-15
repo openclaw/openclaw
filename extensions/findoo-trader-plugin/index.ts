@@ -43,6 +43,8 @@ import { registerHttpRoutes } from "./src/core/route-handlers.js";
 import { registerSseRoutes } from "./src/core/sse-handlers.js";
 import { registerTelegramApprovalRoute } from "./src/core/telegram-approval.js";
 import { loadDashboardTemplates } from "./src/core/template-renderer.js";
+import { StrategyDiscoveryEngine } from "./src/discovery/strategy-discovery-engine.js";
+import { DEFAULT_DISCOVERY_CONFIG } from "./src/discovery/types.js";
 import { LiveExecutor } from "./src/execution/live-executor.js";
 import { LiveHealthMonitor } from "./src/execution/live-health-monitor.js";
 import { LiveReconciler } from "./src/execution/live-reconciler.js";
@@ -127,6 +129,9 @@ export { ScreeningPipeline } from "./src/alpha-factory/screening-pipeline.js";
 export { ValidationOrchestrator } from "./src/alpha-factory/validation-orchestrator.js";
 export { EvolutionScheduler } from "./src/alpha-factory/evolution-scheduler.js";
 export { GarbageCollector } from "./src/alpha-factory/garbage-collector.js";
+export { StrategyDiscoveryEngine } from "./src/discovery/strategy-discovery-engine.js";
+export { generateFromSnapshot } from "./src/discovery/deterministic-seeder.js";
+export { buildSubagentTaskPrompt } from "./src/discovery/discovery-prompt-builder.js";
 export { GradualScaleIn } from "./src/alpha-factory/gradual-scale-in.js";
 export { CapacityEstimator } from "./src/alpha-factory/capacity-estimator.js";
 export { FailureFeedbackStore } from "./src/ideation/failure-feedback-store.js";
@@ -783,12 +788,38 @@ const findooTraderPlugin = {
     // all further lifecycle decisions (backtests, promotions, demotions) via
     // HEARTBEAT.md checklist + fin_* AI tools.
 
+    // ── Strategy Discovery Engine (AI-driven cold start + daily cron) ──
+    const discoveryEngine = new StrategyDiscoveryEngine({
+      dataProviderResolver: () => {
+        try {
+          const svc = runtime.services?.get?.("fin-data-provider");
+          return svc as import("./src/ideation/market-scanner.js").DataProviderLike | undefined;
+        } catch {
+          return undefined;
+        }
+      },
+      regimeDetectorResolver: () => {
+        try {
+          const svc = runtime.services?.get?.("fin-regime-detector");
+          return svc as import("./src/ideation/market-scanner.js").RegimeDetectorLike | undefined;
+        } catch {
+          return undefined;
+        }
+      },
+      strategyRegistry,
+      backtestBridge,
+      wakeBridge,
+      eventStore,
+    });
+
     const coldStartSeeder = new ColdStartSeeder({
       strategyRegistry,
       bridge: backtestBridge,
       eventStore,
       wakeBridge,
       paperEngine,
+      discoveryEngine,
+      discoveryConfig: DEFAULT_DISCOVERY_CONFIG,
     });
     setTimeout(() => void coldStartSeeder.maybeSeed(), 500);
 
