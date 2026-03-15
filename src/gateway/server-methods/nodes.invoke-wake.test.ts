@@ -4,7 +4,7 @@ import { maybeWakeNodeWithApns, nodeHandlers } from "./nodes.js";
 
 const mocks = vi.hoisted(() => ({
   loadConfig: vi.fn(() => ({})),
-  resolveNodeCommandAllowlist: vi.fn(() => []),
+  resolveNodeCommandAllowlist: vi.fn(() => new Set<string>()),
   isNodeCommandAllowed: vi.fn(() => ({ ok: true })),
   sanitizeNodeInvokeParamsForForwarding: vi.fn(({ rawParams }: { rawParams: unknown }) => ({
     ok: true,
@@ -259,7 +259,7 @@ describe("node.invoke APNs wake path", () => {
     mocks.loadConfig.mockClear();
     mocks.loadConfig.mockReturnValue({});
     mocks.resolveNodeCommandAllowlist.mockClear();
-    mocks.resolveNodeCommandAllowlist.mockReturnValue([]);
+    mocks.resolveNodeCommandAllowlist.mockReturnValue(new Set<string>());
     mocks.isNodeCommandAllowed.mockClear();
     mocks.isNodeCommandAllowed.mockReturnValue({ ok: true });
     mocks.sanitizeNodeInvokeParamsForForwarding.mockClear();

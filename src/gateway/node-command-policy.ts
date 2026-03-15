@@ -200,8 +200,9 @@ export function isNodeCommandAllowed(params: {
   if (!params.allowlist.has(command)) {
     return { ok: false, reason: "command not allowlisted" };
   }
-  if (Array.isArray(params.declaredCommands) && params.declaredCommands.length > 0) {
-    if (!params.declaredCommands.includes(command)) {
+  const { declaredCommands } = params;
+  if (Array.isArray(declaredCommands) && declaredCommands.length > 0) {
+    if (!declaredCommands.includes(command)) {
       return { ok: false, reason: "command not declared by node" };
     }
   } else {

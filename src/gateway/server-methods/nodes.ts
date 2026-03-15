@@ -970,15 +970,16 @@ export const nodeHandlers: GatewayRequestHandlers = {
           `node wake done node=${nodeId} req=${wakeReqId} connected=true totalMs=${totalDurationMs}`,
         );
       }
+      const session = nodeSession;
       const cfg = loadConfig();
-      const allowlist = resolveNodeCommandAllowlist(cfg, nodeSession);
+      const allowlist = resolveNodeCommandAllowlist(cfg, session);
       const allowed = isNodeCommandAllowed({
         command,
-        declaredCommands: nodeSession.commands,
+        declaredCommands: session.commands,
         allowlist,
       });
       if (!allowed.ok) {
-        const hint = buildNodeCommandRejectionHint(allowed.reason, command, nodeSession);
+        const hint = buildNodeCommandRejectionHint(allowed.reason, command, session);
         respond(
           false,
           undefined,

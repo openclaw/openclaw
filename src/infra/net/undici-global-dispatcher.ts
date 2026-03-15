@@ -123,7 +123,7 @@ export function ensureGlobalUndiciStreamTimeouts(opts?: { timeoutMs?: number }):
   const connect = resolveConnectOptions(autoSelectFamily);
   try {
     if (kind === "env-proxy") {
-      const proxyConnect = { keepAlive: false, ...connect };
+      const proxyConnect = { ...connect, keepAlive: false };
       const proxyOptions = {
         bodyTimeout: timeoutMs,
         headersTimeout: timeoutMs,
