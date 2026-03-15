@@ -129,8 +129,17 @@ async function sendChatMessageNow(
   },
 ) {
   resetToolStream(host as unknown as Parameters<typeof resetToolStream>[0]);
-  if (opts?.rearmFollow !== false) {
-    const scrollState = host as ChatHost & ChatFollowState;
+  const scrollState = host as ChatHost & ChatFollowState;
+  const prevFollowState: ChatFollowState | null =
+    opts?.rearmFollow !== false
+      ? {
+          chatUserNearBottom: scrollState.chatUserNearBottom,
+          chatAutoScrollMode: scrollState.chatAutoScrollMode,
+          chatSuppressedBlockId: scrollState.chatSuppressedBlockId,
+          chatNewMessagesBelow: scrollState.chatNewMessagesBelow,
+        }
+      : null;
+  if (prevFollowState) {
     // Only immediate user-initiated sends imply "follow the latest reply".
     scrollState.chatUserNearBottom = true;
     scrollState.chatAutoScrollMode = "bottom";
@@ -139,6 +148,14 @@ async function sendChatMessageNow(
   }
   const runId = await sendChatMessage(host as unknown as OpenClawApp, message, opts?.attachments);
   const ok = Boolean(runId);
+  if (!ok && prevFollowState) {
+    // RPC failed — undo the optimistic follow-state rearm so the viewport
+    // doesn't jump and the "new messages below" signal isn't lost.
+    scrollState.chatUserNearBottom = prevFollowState.chatUserNearBottom;
+    scrollState.chatAutoScrollMode = prevFollowState.chatAutoScrollMode;
+    scrollState.chatSuppressedBlockId = prevFollowState.chatSuppressedBlockId;
+    scrollState.chatNewMessagesBelow = prevFollowState.chatNewMessagesBelow;
+  }
   if (!ok && opts?.previousDraft != null) {
     host.chatMessage = opts.previousDraft;
   }
