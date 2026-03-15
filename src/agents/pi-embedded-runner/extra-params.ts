@@ -27,6 +27,7 @@ import {
   createOpenAIFastModeWrapper,
   createOpenAIResponsesContextManagementWrapper,
   createOpenAIServiceTierWrapper,
+  createResponsesToolChoiceDefaultWrapper,
   resolveOpenAIFastMode,
   resolveOpenAIServiceTier,
 } from "./openai-stream-wrappers.js";
@@ -463,6 +464,10 @@ export function applyExtraParamsToAgent(
   // Force `store=true` for direct OpenAI Responses models and auto-enable
   // server-side compaction for compatible OpenAI Responses payloads.
   agent.streamFn = createOpenAIResponsesContextManagementWrapper(agent.streamFn, merged);
+
+  // Inject default tool_choice for openai-responses custom providers using the
+  // streamSimple HTTP path, where tool_choice is not set by pi-ai.
+  agent.streamFn = createResponsesToolChoiceDefaultWrapper(agent.streamFn);
 
   const rawParallelToolCalls = resolveAliasedParamValue(
     [resolvedExtraParams, override],

@@ -357,3 +357,38 @@ export function createOpenAIDefaultTransportWrapper(baseStreamFn: StreamFn | und
     return underlying(model, context, mergedOptions);
   };
 }
+
+/**
+ * For openai-responses on custom (non-openai) providers that use the
+ * streamSimple HTTP path, inject `tool_choice: "auto"` when tools are
+ * present but no tool_choice was set. Without this, some models return
+ * text-only responses instead of tool calls.
+ */
+export function createResponsesToolChoiceDefaultWrapper(
+  baseStreamFn: StreamFn | undefined,
+): StreamFn {
+  const underlying = baseStreamFn ?? streamSimple;
+  return (model, context, options) => {
+    if (model.api !== "openai-responses" && model.api !== "openai-codex-responses") {
+      return underlying(model, context, options);
+    }
+
+    const originalOnPayload = options?.onPayload;
+    return underlying(model, context, {
+      ...options,
+      onPayload: (payload) => {
+        if (payload && typeof payload === "object") {
+          const payloadObj = payload as Record<string, unknown>;
+          if (
+            Array.isArray(payloadObj.tools) &&
+            payloadObj.tools.length > 0 &&
+            payloadObj.tool_choice == null
+          ) {
+            payloadObj.tool_choice = "auto";
+          }
+        }
+        return originalOnPayload?.(payload, model);
+      },
+    });
+  };
+}
