@@ -108,6 +108,7 @@ export async function runCliAgent(params: {
   const { bootstrapFiles, contextFiles } = await resolveBootstrapContextForRun({
     workspaceDir,
     config: params.config,
+    agentId: params.agentId,
     sessionKey: params.sessionKey,
     sessionId: params.sessionId,
     warn: makeBootstrapWarn({ sessionLabel, warn: (message) => log.warn(message) }),

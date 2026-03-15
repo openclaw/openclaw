@@ -108,4 +108,42 @@ describe("loadExtraBootstrapFiles", () => {
     expect(files).toHaveLength(0);
     expect(diagnostics.some((d) => d.reason === "security")).toBe(true);
   });
+
+  it("reads symlinked extra bootstrap files when target is within allowedExternalPaths", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+
+    const rootDir = await createWorkspaceDir("symlink-allowed");
+    const workspaceDir = path.join(rootDir, "workspace");
+    const externalDir = path.join(rootDir, "external");
+    await fs.mkdir(workspaceDir, { recursive: true });
+    await fs.mkdir(externalDir, { recursive: true });
+    await fs.writeFile(path.join(externalDir, "TOOLS.md"), "external tools", "utf-8");
+    await fs.symlink(path.join(externalDir, "TOOLS.md"), path.join(workspaceDir, "TOOLS.md"));
+
+    const files = await loadExtraBootstrapFiles(workspaceDir, ["TOOLS.md"], [externalDir]);
+
+    expect(files).toHaveLength(1);
+    expect(files[0]?.name).toBe("TOOLS.md");
+    expect(files[0]?.content).toBe("external tools");
+  });
+
+  it("rejects symlinked extra bootstrap files when allowedExternalPaths is not set", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+
+    const rootDir = await createWorkspaceDir("symlink-rejected");
+    const workspaceDir = path.join(rootDir, "workspace");
+    const externalDir = path.join(rootDir, "external");
+    await fs.mkdir(workspaceDir, { recursive: true });
+    await fs.mkdir(externalDir, { recursive: true });
+    await fs.writeFile(path.join(externalDir, "TOOLS.md"), "external tools", "utf-8");
+    await fs.symlink(path.join(externalDir, "TOOLS.md"), path.join(workspaceDir, "TOOLS.md"));
+
+    const files = await loadExtraBootstrapFiles(workspaceDir, ["TOOLS.md"]);
+
+    expect(files).toHaveLength(0);
+  });
 });

@@ -744,6 +744,12 @@ export const AgentEntrySchema = z
     name: z.string().optional(),
     workspace: z.string().optional(),
     agentDir: z.string().optional(),
+    workspaceConfig: z
+      .object({
+        allowedExternalPaths: z.array(z.string()).optional(),
+      })
+      .strict()
+      .optional(),
     model: AgentModelSchema.optional(),
     skills: z.array(z.string()).optional(),
     memorySearch: MemorySearchSchema,

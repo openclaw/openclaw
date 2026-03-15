@@ -507,11 +507,18 @@ export async function compactEmbeddedPiSessionDirect(
 
     const sessionLabel = params.sessionKey ?? params.sessionId;
     const resolvedMessageProvider = params.messageChannel ?? params.messageProvider;
+    // Resolve agentId early so resolveBootstrapContextForRun can apply per-agent
+    // allowedExternalPaths when loading bootstrap files for this session.
+    const { sessionAgentId: bootstrapAgentId } = resolveSessionAgentIds({
+      sessionKey: params.sessionKey,
+      config: params.config,
+    });
     const { contextFiles } = await resolveBootstrapContextForRun({
       workspaceDir: effectiveWorkspace,
       config: params.config,
       sessionKey: params.sessionKey,
       sessionId: params.sessionId,
+      agentId: bootstrapAgentId,
       warn: makeBootstrapWarn({ sessionLabel, warn: (message) => log.warn(message) }),
     });
     // Apply contextTokens cap to model so pi-coding-agent's auto-compaction

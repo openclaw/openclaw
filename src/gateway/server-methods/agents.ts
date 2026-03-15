@@ -31,6 +31,7 @@ import { sameFileIdentity } from "../../infra/file-identity.js";
 import { SafeOpenError, readLocalFileSafely, writeFileWithinRoot } from "../../infra/fs-safe.js";
 import { assertNoPathAliasEscape } from "../../infra/path-alias-guards.js";
 import { isNotFoundPathError } from "../../infra/path-guards.js";
+import { logDebug } from "../../logger.js";
 import { DEFAULT_AGENT_ID, normalizeAgentId } from "../../routing/session-key.js";
 import { resolveUserPath } from "../../utils.js";
 import {
@@ -165,28 +166,50 @@ async function resolveWorkspaceRealPath(workspaceDir: string): Promise<string> {
   }
 }
 
+/**
+ * Return true if `child` is within `parent` (or is `parent` itself).
+ * Uses path.relative() to avoid hardcoded separator assumptions, making
+ * this safe on both POSIX and Windows.
+ */
+function isWithinPath(child: string, parent: string): boolean {
+  const rel = path.relative(parent, child);
+  return rel === "" || (!rel.startsWith("..") && !path.isAbsolute(rel));
+}
+
+/** Return true if realPath is within at least one of the allowed prefix directories.
+ *
+ * Relative prefixes are silently ignored — they are unsafe because they would be
+ * resolved against process.cwd() (the gateway startup directory), making the trust
+ * boundary dependent on runtime context rather than explicit operator intent.
+ * The documented contract is that entries must be absolute paths; relative ones
+ * are a misconfiguration and must not grant access.
+ */
+function isWithinAllowedPrefixes(realPath: string, prefixes: string[]): boolean {
+  return prefixes.some((prefix) => path.isAbsolute(prefix) && isWithinPath(realPath, prefix));
+}
+
+/** Merge default + per-agent allowedExternalPaths (union, no duplicates). */
+function resolveAllowedExternalPaths(
+  cfg: ReturnType<typeof loadConfig>,
+  agentId: string,
+): string[] {
+  const defaults = cfg.agents?.defaults?.workspaceConfig?.allowedExternalPaths ?? [];
+  const agentEntry = listAgentEntries(cfg).find(
+    (e) => normalizeAgentId(e.id) === normalizeAgentId(agentId),
+  );
+  const perAgent = agentEntry?.workspaceConfig?.allowedExternalPaths ?? [];
+  return [...new Set([...defaults, ...perAgent])];
+}
+
 async function resolveAgentWorkspaceFilePath(params: {
   workspaceDir: string;
   name: string;
   allowMissing: boolean;
+  allowedExternalPaths?: string[];
 }): Promise<ResolvedAgentWorkspaceFilePath> {
   const requestPath = path.join(params.workspaceDir, params.name);
   const workspaceReal = await resolveWorkspaceRealPath(params.workspaceDir);
   const candidatePath = path.resolve(workspaceReal, params.name);
-
-  try {
-    await assertNoPathAliasEscape({
-      absolutePath: candidatePath,
-      rootPath: workspaceReal,
-      boundaryLabel: "workspace root",
-    });
-  } catch (error) {
-    return {
-      kind: "invalid",
-      requestPath,
-      reason: error instanceof Error ? error.message : "path escapes workspace root",
-    };
-  }
 
   const notFoundContext = {
     allowMissing: params.allowMissing,
@@ -194,6 +217,8 @@ async function resolveAgentWorkspaceFilePath(params: {
     workspaceReal,
   } as const;
 
+  // Stat the candidate first so we can route symlinks through the allowedExternalPaths
+  // logic before assertNoPathAliasEscape (which would reject external symlinks outright).
   let candidateLstat: Awaited<ReturnType<typeof fs.lstat>>;
   try {
     candidateLstat = await fs.lstat(candidatePath);
@@ -206,6 +231,7 @@ async function resolveAgentWorkspaceFilePath(params: {
   }
 
   if (candidateLstat.isSymbolicLink()) {
+    // Fully resolve the symlink chain (handles symlink→symlink chains too).
     let targetReal: string;
     try {
       targetReal = await fs.realpath(candidatePath);
@@ -216,6 +242,26 @@ async function resolveAgentWorkspaceFilePath(params: {
         ioPath: candidatePath,
       });
     }
+
+    // Security check before stat: the resolved target must be within the workspace
+    // or within an operator-approved external prefix. This prevents reading external
+    // files even when they don't exist yet (target ENOENT would otherwise show as "missing").
+    const withinWorkspace = isWithinPath(targetReal, workspaceReal) && targetReal !== workspaceReal;
+    const allowedPrefixes = params.allowedExternalPaths ?? [];
+    if (!withinWorkspace && !isWithinAllowedPrefixes(targetReal, allowedPrefixes)) {
+      return {
+        kind: "invalid",
+        requestPath,
+        reason:
+          "symlink target is outside workspace root (add the target directory to workspaceConfig.allowedExternalPaths to permit)",
+      };
+    }
+    if (!withinWorkspace) {
+      logDebug(
+        `[agents] symlink permitted: ${candidatePath} -> ${targetReal} (within allowedExternalPaths)`,
+      );
+    }
+
     let targetStat: Awaited<ReturnType<typeof fs.stat>>;
     try {
       targetStat = await fs.stat(targetReal);
@@ -235,6 +281,21 @@ async function resolveAgentWorkspaceFilePath(params: {
     return { kind: "ready", requestPath, ioPath: targetReal, workspaceReal };
   }
 
+  // Non-symlink: run path-alias escape check to guard against directory traversal.
+  try {
+    await assertNoPathAliasEscape({
+      absolutePath: candidatePath,
+      rootPath: workspaceReal,
+      boundaryLabel: "workspace root",
+    });
+  } catch (error) {
+    return {
+      kind: "invalid",
+      requestPath,
+      reason: error instanceof Error ? error.message : "path escapes workspace root",
+    };
+  }
+
   if (!candidateLstat.isFile()) {
     return { kind: "invalid", requestPath, reason: "path is not a regular file" };
   }
@@ -246,10 +307,31 @@ async function resolveAgentWorkspaceFilePath(params: {
   return { kind: "ready", requestPath, ioPath: targetReal, workspaceReal };
 }
 
-async function statFileSafely(filePath: string): Promise<FileMeta | null> {
+async function statFileSafely(
+  filePath: string,
+  allowedExternalPaths?: string[],
+): Promise<FileMeta | null> {
   try {
     const [stat, lstat] = await Promise.all([fs.stat(filePath), fs.lstat(filePath)]);
-    if (lstat.isSymbolicLink() || !stat.isFile()) {
+    if (lstat.isSymbolicLink()) {
+      // Symlink: only allow if the fully-resolved real path falls within an operator-approved prefix.
+      const realPath = await fs.realpath(filePath);
+      if (!allowedExternalPaths || !isWithinAllowedPrefixes(realPath, allowedExternalPaths)) {
+        return null;
+      }
+      logDebug(
+        `[agents] symlink stat permitted: ${filePath} -> ${realPath} (within allowedExternalPaths)`,
+      );
+      const realStat = await fs.stat(realPath);
+      if (!realStat.isFile() || realStat.nlink > 1) {
+        return null;
+      }
+      return {
+        size: realStat.size,
+        updatedAtMs: Math.floor(realStat.mtimeMs),
+      };
+    }
+    if (!stat.isFile()) {
       return null;
     }
     if (stat.nlink > 1) {
@@ -267,7 +349,10 @@ async function statFileSafely(filePath: string): Promise<FileMeta | null> {
   }
 }
 
-async function listAgentFiles(workspaceDir: string, options?: { hideBootstrap?: boolean }) {
+async function listAgentFiles(
+  workspaceDir: string,
+  options?: { hideBootstrap?: boolean; allowedExternalPaths?: string[] },
+) {
   const files: Array<{
     name: string;
     path: string;
@@ -276,6 +361,7 @@ async function listAgentFiles(workspaceDir: string, options?: { hideBootstrap?: 
     updatedAtMs?: number;
   }> = [];
 
+  const allowedExternalPaths = options?.allowedExternalPaths;
   const bootstrapFileNames = options?.hideBootstrap
     ? BOOTSTRAP_FILE_NAMES_POST_ONBOARDING
     : BOOTSTRAP_FILE_NAMES;
@@ -284,11 +370,12 @@ async function listAgentFiles(workspaceDir: string, options?: { hideBootstrap?: 
       workspaceDir,
       name,
       allowMissing: true,
+      allowedExternalPaths,
     });
     const filePath = resolved.requestPath;
     const meta =
       resolved.kind === "ready"
-        ? await statFileSafely(resolved.ioPath)
+        ? await statFileSafely(resolved.ioPath, allowedExternalPaths)
         : resolved.kind === "missing"
           ? null
           : null;
@@ -309,9 +396,12 @@ async function listAgentFiles(workspaceDir: string, options?: { hideBootstrap?: 
     workspaceDir,
     name: DEFAULT_MEMORY_FILENAME,
     allowMissing: true,
+    allowedExternalPaths,
   });
   const primaryMeta =
-    primaryResolved.kind === "ready" ? await statFileSafely(primaryResolved.ioPath) : null;
+    primaryResolved.kind === "ready"
+      ? await statFileSafely(primaryResolved.ioPath, allowedExternalPaths)
+      : null;
   if (primaryMeta) {
     files.push({
       name: DEFAULT_MEMORY_FILENAME,
@@ -325,9 +415,12 @@ async function listAgentFiles(workspaceDir: string, options?: { hideBootstrap?: 
       workspaceDir,
       name: DEFAULT_MEMORY_ALT_FILENAME,
       allowMissing: true,
+      allowedExternalPaths,
     });
     const altMeta =
-      altMemoryResolved.kind === "ready" ? await statFileSafely(altMemoryResolved.ioPath) : null;
+      altMemoryResolved.kind === "ready"
+        ? await statFileSafely(altMemoryResolved.ioPath, allowedExternalPaths)
+        : null;
     if (altMeta) {
       files.push({
         name: DEFAULT_MEMORY_ALT_FILENAME,
@@ -416,11 +509,13 @@ async function resolveWorkspaceFilePathOrRespond(params: {
   respond: RespondFn;
   workspaceDir: string;
   name: string;
+  allowedExternalPaths?: string[];
 }): Promise<ResolvedWorkspaceFilePath | undefined> {
   const resolvedPath = await resolveAgentWorkspaceFilePath({
     workspaceDir: params.workspaceDir,
     name: params.name,
     allowMissing: true,
+    allowedExternalPaths: params.allowedExternalPaths,
   });
   if (resolvedPath.kind === "invalid") {
     respondWorkspaceFileInvalid(params.respond, params.name, resolvedPath.reason);
@@ -651,13 +746,14 @@ export const agentsHandlers: GatewayRequestHandlers = {
       return;
     }
     const workspaceDir = resolveAgentWorkspaceDir(cfg, agentId);
+    const allowedExternalPaths = resolveAllowedExternalPaths(cfg, agentId);
     let hideBootstrap = false;
     try {
       hideBootstrap = await isWorkspaceOnboardingCompleted(workspaceDir);
     } catch {
       // Fall back to showing BOOTSTRAP if workspace state cannot be read.
     }
-    const files = await listAgentFiles(workspaceDir, { hideBootstrap });
+    const files = await listAgentFiles(workspaceDir, { hideBootstrap, allowedExternalPaths });
     respond(true, { agentId, workspace: workspaceDir, files }, undefined);
   },
   "agents.files.get": async ({ params, respond }) => {
@@ -669,12 +765,14 @@ export const agentsHandlers: GatewayRequestHandlers = {
     if (!resolved) {
       return;
     }
-    const { agentId, workspaceDir, name } = resolved;
+    const { cfg, agentId, workspaceDir, name } = resolved;
+    const allowedExternalPaths = resolveAllowedExternalPaths(cfg, agentId);
     const filePath = path.join(workspaceDir, name);
     const resolvedPath = await resolveWorkspaceFilePathOrRespond({
       respond,
       workspaceDir,
       name,
+      allowedExternalPaths,
     });
     if (!resolvedPath) {
       return;
@@ -720,39 +818,84 @@ export const agentsHandlers: GatewayRequestHandlers = {
     if (!resolved) {
       return;
     }
-    const { agentId, workspaceDir, name } = resolved;
+    const { cfg, agentId, workspaceDir, name } = resolved;
+    const allowedExternalPaths = resolveAllowedExternalPaths(cfg, agentId);
     await fs.mkdir(workspaceDir, { recursive: true });
     const filePath = path.join(workspaceDir, name);
     const resolvedPath = await resolveWorkspaceFilePathOrRespond({
       respond,
       workspaceDir,
       name,
+      allowedExternalPaths,
     });
     if (!resolvedPath) {
       return;
     }
     const content = String(params.content ?? "");
+
+    // Determine whether the resolved ioPath is within the workspace root or in an
+    // operator-trusted external directory (allowedExternalPaths symlink target).
+    // For workspace-internal files: use the existing relative-path + workspaceReal root.
+    // For external symlink targets: write directly to ioPath using its parent as the
+    // root, so writeFileWithinRoot never receives a `..`-prefixed relative path that
+    // would be rejected by the root-boundary checks in openWritableFileWithinRoot.
     const relativeWritePath = path.relative(resolvedPath.workspaceReal, resolvedPath.ioPath);
-    if (
-      !relativeWritePath ||
-      relativeWritePath.startsWith("..") ||
-      path.isAbsolute(relativeWritePath)
-    ) {
-      respondWorkspaceFileUnsafe(respond, name);
-      return;
+    const isExternalSymlinkTarget =
+      relativeWritePath.startsWith("..") || path.isAbsolute(relativeWritePath);
+
+    if (isExternalSymlinkTarget) {
+      // Only allow if the target was explicitly cleared by allowedExternalPaths during
+      // resolveWorkspaceFilePathOrRespond above.  That function would have returned
+      // undefined (already responded with an error) if the target was not permitted,
+      // so reaching this point means allowedExternalPaths approved the ioPath.
+      if (!allowedExternalPaths.length) {
+        respondWorkspaceFileUnsafe(respond, name);
+        return;
+      }
+      try {
+        await writeFileWithinRoot({
+          rootDir: path.dirname(resolvedPath.ioPath),
+          relativePath: path.basename(resolvedPath.ioPath),
+          data: content,
+          encoding: "utf8",
+        });
+      } catch {
+        respondWorkspaceFileUnsafe(respond, name);
+        return;
+      }
+    } else {
+      if (!relativeWritePath) {
+        respondWorkspaceFileUnsafe(respond, name);
+        return;
+      }
+      // Reject in-workspace symlink aliases: if the resolved ioPath doesn't match
+      // the requested file name, the workspace file is a symlink pointing to a
+      // different location within the workspace.  Allow reads (for shared context
+      // files) but reject writes to prevent an agent from overwriting an arbitrary
+      // workspace file via a symlink alias.
+      const normalizedName = path.normalize(name);
+      // Use case-insensitive comparison on platforms that may have case-insensitive
+      // filesystems (e.g. default macOS HFS+/APFS volumes). A request for "MEMORY.md"
+      // should be allowed when the in-workspace file is "memory.md". The security
+      // invariant (no symlink alias writes) is still enforced — only case variation
+      // is tolerated, not path traversal or cross-directory redirects.
+      if (relativeWritePath.toLowerCase() !== normalizedName.toLowerCase()) {
+        respondWorkspaceFileUnsafe(respond, name);
+        return;
+      }
+      try {
+        await writeFileWithinRoot({
+          rootDir: resolvedPath.workspaceReal,
+          relativePath: relativeWritePath,
+          data: content,
+          encoding: "utf8",
+        });
+      } catch {
+        respondWorkspaceFileUnsafe(respond, name);
+        return;
+      }
     }
-    try {
-      await writeFileWithinRoot({
-        rootDir: resolvedPath.workspaceReal,
-        relativePath: relativeWritePath,
-        data: content,
-        encoding: "utf8",
-      });
-    } catch {
-      respondWorkspaceFileUnsafe(respond, name);
-      return;
-    }
-    const meta = await statFileSafely(resolvedPath.ioPath);
+    const meta = await statFileSafely(resolvedPath.ioPath, allowedExternalPaths);
     respond(
       true,
       {
