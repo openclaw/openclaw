@@ -444,12 +444,6 @@ export async function monitorWebInbox(options: {
       if (!remoteJid) continue;
       if (remoteJid.endsWith("@status") || remoteJid.endsWith("@broadcast")) continue;
 
-      recordChannelActivity({
-        channel: "whatsapp",
-        accountId: options.accountId,
-        direction: "inbound",
-      });
-
       const group = isJidGroup(remoteJid) === true;
       const reactorJid = userJid ?? key?.participant ?? (group ? undefined : remoteJid);
       const senderE164 = reactorJid ? await resolveInboundJid(reactorJid) : null;
@@ -459,6 +453,12 @@ export async function monitorWebInbox(options: {
       // Deduplicate reaction events (e.g. reconnect re-delivery).
       const dedupeKey = `${options.accountId}:${remoteJid}:${reactorJid ?? ""}:${emoji}:${key?.id ?? ""}`;
       if (isRecentInboundMessage(dedupeKey)) continue;
+
+      recordChannelActivity({
+        channel: "whatsapp",
+        accountId: options.accountId,
+        direction: "inbound",
+      });
 
       // Derive isFromMe from reactor identity, not key.fromMe.
       // key.fromMe on a reaction refers to whether the *reacted-to message* was from us,
