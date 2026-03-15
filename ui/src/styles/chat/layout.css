@@ -114,7 +114,7 @@
   position: absolute; 
   
   /* 2. FIX: Centered positioning with safe bottom offset */
-  bottom: 80px;
+  bottom: 120px;
   left: 50%;
   transform: translateX(-50%);
   
@@ -137,8 +137,8 @@
   cursor: pointer;
   white-space: nowrap;
   
-  /* 5. FIX: Lower z-index to stay below the compose box (z-index: 10) */
-  z-index: 9; 
+  /* 5. FIX: Lower z-index to stay below the compose box (z-index: 20) */
+  z-index: 20; 
   
   transition:
     background 150ms ease-out,
