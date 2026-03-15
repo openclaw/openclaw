@@ -46,3 +46,56 @@ describe("feishuPlugin.status.probeAccount", () => {
     expect(result).toMatchObject({ ok: true, appId: "cli_main" });
   });
 });
+
+describe("feishuPlugin actions", () => {
+  it("does not advertise reactions when disabled via actions config", () => {
+    const cfg = {
+      channels: {
+        feishu: {
+          enabled: true,
+          appId: "cli_main",
+          appSecret: "secret_main",
+          actions: {
+            reactions: false,
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    expect(feishuPlugin.actions?.listActions?.({ cfg })).toEqual([]);
+  });
+
+  it("advertises reactions when any enabled configured account allows them", () => {
+    const cfg = {
+      channels: {
+        feishu: {
+          enabled: true,
+          defaultAccount: "main",
+          actions: {
+            reactions: false,
+          },
+          accounts: {
+            main: {
+              appId: "cli_main",
+              appSecret: "secret_main",
+              enabled: true,
+              actions: {
+                reactions: false,
+              },
+            },
+            secondary: {
+              appId: "cli_secondary",
+              appSecret: "secret_secondary",
+              enabled: true,
+              actions: {
+                reactions: true,
+              },
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    expect(feishuPlugin.actions?.listActions?.({ cfg })).toEqual(["react", "reactions"]);
+  });
+});
