@@ -108,18 +108,20 @@ class WearGatewayConfigStore(context: Context) {
     val secureToken = securePrefs.getString("gw_token", null)
     val securePassword = securePrefs.getString("gw_password", null)
 
-    if ((legacyToken == null && legacyPassword == null) || (secureToken != null || securePassword != null)) {
+    if (legacyToken == null && legacyPassword == null) {
       return
     }
 
-    securePrefs.edit {
-      putString("gw_token", legacyToken ?: "")
-      putString("gw_password", legacyPassword ?: "")
+    if (legacyToken != null && secureToken == null) {
+      securePrefs.edit { putString("gw_token", legacyToken) }
+    }
+    if (legacyPassword != null && securePassword == null) {
+      securePrefs.edit { putString("gw_password", legacyPassword) }
     }
 
     prefs.edit {
-      remove("gw_token")
-      remove("gw_password")
+      if (legacyToken != null) remove("gw_token")
+      if (legacyPassword != null) remove("gw_password")
     }
   }
 
