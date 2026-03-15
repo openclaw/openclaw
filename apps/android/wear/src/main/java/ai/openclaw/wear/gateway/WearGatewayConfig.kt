@@ -4,6 +4,7 @@ package ai.openclaw.wear.gateway
 
 import android.content.Context
 import android.content.SharedPreferences
+import ai.openclaw.android.gateway.GatewayClientProfiles
 import androidx.core.content.edit
 import androidx.security.crypto.EncryptedSharedPreferences
 import androidx.security.crypto.MasterKey
@@ -47,7 +48,7 @@ data class WearGatewayConfig(
 
   fun wsUrl(): String {
     val scheme = if (useTls) "wss" else "ws"
-    return "$scheme://$host:$port"
+    return GatewayClientProfiles.buildGatewayUrl(scheme = scheme, host = host, port = port)
   }
 }
 
