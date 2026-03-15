@@ -172,6 +172,21 @@ function enhanceBrowserFetchError(url: string, err: unknown, timeoutMs: number):
   const operatorHint = resolveBrowserFetchOperatorHint(url);
   const msg = String(err);
   const msgLower = msg.toLowerCase();
+
+  // The control service is often healthy, but the targetId/tab becomes stale (e.g., after a
+  // profile restart or transient CDP disconnect). Surface that explicitly to avoid misleading
+  // users with a generic "can't reach the control service" error.
+  const looksLikeMissingTarget =
+    msgLower.includes("tab not found") ||
+    msgLower.includes("target not found") ||
+    msgLower.includes("no such target") ||
+    msgLower.includes("target closed");
+  if (looksLikeMissingTarget) {
+    return new Error(
+      `OpenClaw browser tab/target was not found (stale targetId). Re-open the page to get a new targetId and retry. (${msg})`,
+    );
+  }
+
   const looksLikeTimeout =
     msgLower.includes("timed out") ||
     msgLower.includes("timeout") ||
