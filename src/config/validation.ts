@@ -197,7 +197,8 @@ function resolveCustomConfigIssueForUnrecognizedKeys(
     if (aliasKeys.length > 0) {
       const remainingKeys = getRemainingUnrecognizedKeys(keys, aliasKeys);
       return {
-        path: aliasKeys.length === 1 && remainingKeys.length === 0 ? `${path}.${aliasKeys[0]}` : path,
+        path:
+          aliasKeys.length === 1 && remainingKeys.length === 0 ? `${path}.${aliasKeys[0]}` : path,
         message:
           `Use agents.list[].subagents.allowAgents to allow target agent ids ("*" allows any). ` +
           `${quoteIssueKeys(aliasKeys)} ${aliasKeys.length === 1 ? "is" : "are"} not valid under subagents.` +
