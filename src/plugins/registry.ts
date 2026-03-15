@@ -42,6 +42,7 @@ import type {
   PluginHookName,
   PluginHookHandlerMap,
   PluginHookRegistration as TypedPluginHookRegistration,
+  DispatchInterceptorPlugin,
 } from "./types.js";
 
 export type PluginToolRegistration = {
@@ -139,6 +140,7 @@ export type PluginRegistry = {
   cliRegistrars: PluginCliRegistration[];
   services: PluginServiceRegistration[];
   commands: PluginCommandRegistration[];
+  dispatchInterceptors: DispatchInterceptorPlugin[];
   diagnostics: PluginDiagnostic[];
 };
 
@@ -179,6 +181,7 @@ export function createEmptyPluginRegistry(): PluginRegistry {
     cliRegistrars: [],
     services: [],
     commands: [],
+    dispatchInterceptors: [],
     diagnostics: [],
   };
 }
@@ -612,6 +615,9 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       registerService: (service) => registerService(record, service),
       registerCommand: (command) => registerCommand(record, command),
       registerContextEngine: (id, factory) => registerContextEngine(id, factory),
+      registerDispatchInterceptor: (interceptor) => {
+        registry.dispatchInterceptors.push(interceptor);
+      },
       resolvePath: (input: string) => resolveUserPath(input),
       on: (hookName, handler, opts) =>
         registerTypedHook(record, hookName, handler, opts, params.hookPolicy),

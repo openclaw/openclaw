@@ -22,6 +22,9 @@ const diagnosticMocks = vi.hoisted(() => ({
   logMessageProcessed: vi.fn(),
   logSessionStateChange: vi.fn(),
 }));
+const interceptorMocks = vi.hoisted(() => ({
+  registry: null as { dispatchInterceptors: Array<{ intercept: ReturnType<typeof vi.fn> }> } | null,
+}));
 const hookMocks = vi.hoisted(() => ({
   runner: {
     hasHooks: vi.fn(() => false),
@@ -125,6 +128,7 @@ vi.mock("../../config/sessions.js", async (importOriginal) => {
 
 vi.mock("../../plugins/hook-runner-global.js", () => ({
   getGlobalHookRunner: () => hookMocks.runner,
+  getGlobalPluginRegistry: () => interceptorMocks.registry,
 }));
 vi.mock("../../hooks/internal-hooks.js", () => ({
   createInternalHookEvent: internalHookMocks.createInternalHookEvent,
@@ -2012,5 +2016,130 @@ describe("dispatchReplyFromConfig", () => {
     await dispatchReplyFromConfig({ ctx, cfg: emptyConfig, dispatcher, replyResolver });
     expect(blockReplySentTexts).not.toContain("Reasoning:\n_thinking..._");
     expect(blockReplySentTexts).toContain("The answer is 42");
+  });
+});
+
+describe("dispatch interceptors", () => {
+  beforeEach(() => {
+    resetInboundDedupe?.();
+    mocks.routeReply.mockReset();
+    mocks.tryFastAbortFromMessage.mockResolvedValue(noAbortResult);
+    interceptorMocks.registry = null;
+  });
+
+  it("skips interceptors when registry is null", async () => {
+    interceptorMocks.registry = null;
+    const dispatcher = createDispatcher();
+    const replyResolver = vi.fn(async () => ({ text: "hello" }));
+    const ctx = buildTestCtx({ Body: "hi" });
+    const result = await dispatchReplyFromConfig({
+      ctx,
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver,
+    });
+    expect(replyResolver).toHaveBeenCalled();
+    expect(result.queuedFinal).toBe(true);
+  });
+
+  it("blocks dispatch when interceptor returns intercepted: true", async () => {
+    const interceptor = {
+      intercept: vi.fn(
+        async (_text: string, _ctx: unknown, output: { sendBlock: (msg: string) => void }) => {
+          output.sendBlock("Blocked by interceptor.");
+          return { intercepted: true };
+        },
+      ),
+    };
+    interceptorMocks.registry = { dispatchInterceptors: [interceptor] };
+    const dispatcher = createDispatcher();
+    const replyResolver = vi.fn(async () => ({ text: "should not run" }));
+    const ctx = buildTestCtx({ Body: "bad content" });
+    const result = await dispatchReplyFromConfig({
+      ctx,
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver,
+    });
+    expect(interceptor.intercept).toHaveBeenCalled();
+    expect(replyResolver).not.toHaveBeenCalled();
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledWith({ text: "Blocked by interceptor." });
+    expect(result.queuedFinal).toBe(true);
+  });
+
+  it("passes through when interceptor returns intercepted: false", async () => {
+    const interceptor = {
+      intercept: vi.fn(async () => ({ intercepted: false })),
+    };
+    interceptorMocks.registry = { dispatchInterceptors: [interceptor] };
+    const dispatcher = createDispatcher();
+    const replyResolver = vi.fn(async () => ({ text: "normal reply" }));
+    const ctx = buildTestCtx({ Body: "safe content" });
+    const result = await dispatchReplyFromConfig({
+      ctx,
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver,
+    });
+    expect(interceptor.intercept).toHaveBeenCalled();
+    expect(replyResolver).toHaveBeenCalled();
+    expect(result.queuedFinal).toBe(true);
+  });
+
+  it("passes message body and context to interceptor", async () => {
+    const interceptor = {
+      intercept: vi.fn(async () => ({ intercepted: false })),
+    };
+    interceptorMocks.registry = { dispatchInterceptors: [interceptor] };
+    const dispatcher = createDispatcher();
+    const replyResolver = vi.fn(async () => ({ text: "reply" }));
+    const ctx = buildTestCtx({
+      Body: "test message",
+      SessionKey: "sess-123",
+      Surface: "telegram",
+      From: "user-456",
+    });
+    await dispatchReplyFromConfig({
+      ctx,
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver,
+    });
+    expect(interceptor.intercept).toHaveBeenCalledWith(
+      "test message",
+      expect.objectContaining({
+        sessionKey: "sess-123",
+        channelId: "telegram",
+        userId: "user-456",
+      }),
+      expect.any(Object),
+    );
+  });
+
+  it("stops at first interceptor that intercepts", async () => {
+    const first = {
+      intercept: vi.fn(
+        async (_t: string, _c: unknown, output: { sendBlock: (msg: string) => void }) => {
+          output.sendBlock("First blocked.");
+          return { intercepted: true };
+        },
+      ),
+    };
+    const second = {
+      intercept: vi.fn(async () => ({ intercepted: false })),
+    };
+    interceptorMocks.registry = { dispatchInterceptors: [first, second] };
+    const dispatcher = createDispatcher();
+    const replyResolver = vi.fn(async () => ({ text: "should not run" }));
+    const ctx = buildTestCtx({ Body: "bad" });
+    await dispatchReplyFromConfig({
+      ctx,
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver,
+    });
+    expect(first.intercept).toHaveBeenCalled();
+    expect(second.intercept).not.toHaveBeenCalled();
+    expect(replyResolver).not.toHaveBeenCalled();
   });
 });

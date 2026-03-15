@@ -17,6 +17,7 @@ import {
   type InputImageLimits,
   type InputImageSource,
 } from "../media/input-files.js";
+import { getGlobalPluginRegistry } from "../plugins/hook-runner-global.js";
 import { defaultRuntime } from "../runtime.js";
 import { resolveAssistantStreamDeltaText } from "./agent-event-assistant-text.js";
 import {
@@ -441,6 +442,87 @@ export async function handleOpenAiHttpRequest(
   });
   const activeTurnContext = resolveActiveTurnContext(payload.messages);
   const prompt = buildAgentPrompt(payload.messages, activeTurnContext.activeUserMessageIndex);
+
+  // Run registered dispatch interceptors before media resolution (fail-fast).
+  const runId = `chatcmpl_${randomUUID()}`;
+  const pluginRegistry = getGlobalPluginRegistry();
+  if (pluginRegistry && pluginRegistry.dispatchInterceptors.length > 0) {
+    for (const interceptor of pluginRegistry.dispatchInterceptors) {
+      const interceptorChunks: string[] = [];
+      let intercepted = false;
+      try {
+        const result = await interceptor.intercept(
+          prompt.message ?? "",
+          {
+            sessionKey,
+            channelId: messageChannel,
+            userId: user,
+          },
+          {
+            sendBlock: (message: string) => {
+              interceptorChunks.push(message);
+            },
+            sendStreamChunk: (text: string) => {
+              interceptorChunks.push(text);
+            },
+            sendStreamDone: () => {
+              // Collected via interceptorChunks.
+            },
+          },
+        );
+        intercepted = result.intercepted;
+      } catch (err) {
+        logWarn(`openai-compat: dispatch interceptor failed: ${String(err)}`);
+        if (interceptorChunks.length > 0) {
+          // Output already collected; treat as intercepted.
+          intercepted = true;
+        } else {
+          continue;
+        }
+      }
+      if (intercepted) {
+        const content = interceptorChunks.join("") || "Request intercepted.";
+        if (!stream) {
+          sendJson(res, 200, {
+            id: runId,
+            object: "chat.completion",
+            created: Math.floor(Date.now() / 1000),
+            model,
+            choices: [
+              {
+                index: 0,
+                message: { role: "assistant", content },
+                finish_reason: "stop",
+              },
+            ],
+            usage: { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 },
+          });
+        } else {
+          setSseHeaders(res);
+          const roleChunk = {
+            id: runId,
+            object: "chat.completion.chunk",
+            created: Math.floor(Date.now() / 1000),
+            model,
+            choices: [{ index: 0, delta: { role: "assistant" }, finish_reason: null }],
+          };
+          res.write(`data: ${JSON.stringify(roleChunk)}\n\n`);
+          const contentChunk = {
+            id: runId,
+            object: "chat.completion.chunk",
+            created: Math.floor(Date.now() / 1000),
+            model,
+            choices: [{ index: 0, delta: { content }, finish_reason: "stop" }],
+          };
+          res.write(`data: ${JSON.stringify(contentChunk)}\n\n`);
+          writeDone(res);
+          res.end();
+        }
+        return true;
+      }
+    }
+  }
+
   let images: ImageContent[] = [];
   try {
     images = await resolveImagesForRequest(activeTurnContext, limits);
@@ -465,7 +547,6 @@ export async function handleOpenAiHttpRequest(
     return true;
   }
 
-  const runId = `chatcmpl_${randomUUID()}`;
   const deps = createDefaultDeps();
   const commandInput = buildAgentCommandInput({
     prompt: {

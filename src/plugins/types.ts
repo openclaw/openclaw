@@ -240,6 +240,50 @@ export type OpenClawPluginGatewayMethod = {
 };
 
 // =============================================================================
+// Dispatch Interceptor
+// =============================================================================
+
+/**
+ * Output handler for dispatch interceptors.
+ * Abstracts Channel vs HTTP output differences so plugin code is transport-agnostic.
+ */
+export type InterceptorOutputHandler = {
+  /** Send a static replacement message and finish. */
+  sendBlock: (message: string) => void;
+  /** Send a streaming content chunk. */
+  sendStreamChunk: (text: string) => void;
+  /** Signal end of streaming content. */
+  sendStreamDone: () => void;
+};
+
+/**
+ * Context information passed to a DispatchInterceptorPlugin.
+ */
+export type DispatchInterceptorContext = {
+  sessionKey?: string;
+  channelId?: string;
+  userId?: string;
+  recentHistory?: string[];
+};
+
+/**
+ * Pre-agent dispatch interceptor.
+ *
+ * Called during the dispatch phase, before the main Agent starts.
+ * When intercept() returns { intercepted: true }, getReplyFromConfig() is NOT
+ * called — the Agent never starts and no tool calls can occur.
+ *
+ * Use cases: content moderation, rate limiting, access control, message routing.
+ */
+export type DispatchInterceptorPlugin = {
+  intercept(
+    text: string,
+    context: DispatchInterceptorContext,
+    output: InterceptorOutputHandler,
+  ): Promise<{ intercepted: boolean }>;
+};
+
+// =============================================================================
 // Plugin Commands
 // =============================================================================
 
@@ -399,6 +443,12 @@ export type OpenClawPluginApi = {
     id: string,
     factory: import("../context-engine/registry.js").ContextEngineFactory,
   ) => void;
+  /**
+   * Register a dispatch interceptor that runs before the main Agent starts.
+   * When the interceptor returns { intercepted: true }, the Agent does not start
+   * and no LLM tokens are consumed.
+   */
+  registerDispatchInterceptor: (interceptor: DispatchInterceptorPlugin) => void;
   resolvePath: (input: string) => string;
   /** Register a lifecycle hook handler */
   on: <K extends PluginHookName>(

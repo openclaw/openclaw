@@ -1050,6 +1050,7 @@
                   "plugins/zalouser",
                   "plugins/manifest",
                   "plugins/agent-tools",
+                  "plugins/dispatch-interceptor",
                   "prose"
                 ]
               },

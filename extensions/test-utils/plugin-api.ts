@@ -16,6 +16,7 @@ export function createTestPluginApi(api: TestPluginApiInput): OpenClawPluginApi 
     registerProvider() {},
     registerCommand() {},
     registerContextEngine() {},
+    registerDispatchInterceptor() {},
     resolvePath(input: string) {
       return input;
     },

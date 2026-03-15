@@ -33,6 +33,7 @@ const createRegistry = (diagnostics: PluginDiagnostic[]): PluginRegistry => ({
   cliRegistrars: [],
   services: [],
   diagnostics,
+  dispatchInterceptors: [],
 });
 
 type ServerPluginsModule = typeof import("./server-plugins.js");
