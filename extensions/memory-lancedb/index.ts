@@ -173,7 +173,7 @@ class Embeddings {
   }
 
   async embed(text: string): Promise<number[]> {
-    const params: { model: string; input: string; dimensions?: number; encoding_format: string } = {
+    const params: { model: string; input: string; dimensions?: number; encoding_format: "float" } = {
       model: this.model,
       input: text,
       encoding_format: "float",
