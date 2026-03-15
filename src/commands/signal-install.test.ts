@@ -40,6 +40,10 @@ const SAMPLE_ASSETS: ReleaseAsset[] = [
   },
 ];
 
+const SAMPLE_ASSETS_WITHOUT_MACOS_NATIVE = SAMPLE_ASSETS.filter(
+  (asset) => !asset.name?.toLowerCase().includes("macos-native"),
+);
+
 describe("looksLikeArchive", () => {
   it("recognises .tar.gz", () => {
     expect(looksLikeArchive("foo.tar.gz")).toBe(true);
@@ -94,6 +98,12 @@ describe("pickAsset", () => {
       expect(result).toBeDefined();
       expect(result!.name).toContain("macOS-native");
     });
+
+    it("falls back to the portable archive when macOS-native asset is unavailable", () => {
+      const result = pickAsset(SAMPLE_ASSETS_WITHOUT_MACOS_NATIVE, "darwin", "arm64");
+      expect(result).toBeDefined();
+      expect(result!.name).toBe("signal-cli-0.13.14.tar.gz");
+    });
   });
 
   describe("win32", () => {
@@ -128,6 +138,16 @@ describe("pickAsset", () => {
       const result = pickAsset(SAMPLE_ASSETS, "linux", "x64");
       expect(result).toBeDefined();
       expect(result!.name).not.toMatch(/\.asc$/);
+    });
+
+    it("does not fall back to Linux-native archive on macOS", () => {
+      const linuxOnlyAssets: ReleaseAsset[] = [
+        {
+          name: "signal-cli-0.13.24-Linux-native.tar.gz",
+          browser_download_url: "https://example.com/linux-native.tar.gz",
+        },
+      ];
+      expect(pickAsset(linuxOnlyAssets, "darwin", "arm64")).toBeUndefined();
     });
   });
 });
