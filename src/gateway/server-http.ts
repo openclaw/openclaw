@@ -54,6 +54,7 @@ import {
 } from "./hooks.js";
 import { sendGatewayAuthFailure, setDefaultSecurityHeaders } from "./http-common.js";
 import { getBearerToken } from "./http-utils.js";
+import type { IngressAgentDispatchResult } from "./ingress-dispatch.js";
 import { resolveRequestClientIp } from "./net.js";
 import { handleOpenAiHttpRequest } from "./openai-http.js";
 import { handleOpenResponsesHttpRequest } from "./openresponses-http.js";
@@ -80,7 +81,7 @@ const HOOK_AUTH_FAILURE_WINDOW_MS = 60_000;
 
 type HookDispatchers = {
   dispatchWakeHook: (value: { text: string; mode: "now" | "next-heartbeat" }) => void;
-  dispatchAgentHook: (value: HookAgentDispatchPayload) => string;
+  dispatchAgentHook: (value: HookAgentDispatchPayload) => IngressAgentDispatchResult;
 };
 
 export type HookClientIpConfig = Readonly<{
@@ -595,14 +596,14 @@ export function createHooksRequestHandler(
         sessionKey: sessionKey.value,
         targetAgentId,
       });
-      const runId = dispatchAgentHook({
+      const dispatch = dispatchAgentHook({
         ...normalized.value,
         idempotencyKey,
         sessionKey: normalizedDispatchSessionKey,
         agentId: targetAgentId,
       });
-      rememberHookRunId(replayKey, runId, now);
-      sendJson(res, 200, { ok: true, runId });
+      rememberHookRunId(replayKey, dispatch.runId, now);
+      sendJson(res, 200, { ok: true, runId: dispatch.runId });
       return true;
     }
 
@@ -679,7 +680,7 @@ export function createHooksRequestHandler(
             sendJson(res, 200, { ok: true, runId: cachedRunId });
             return true;
           }
-          const runId = dispatchAgentHook({
+          const dispatch = dispatchAgentHook({
             message: mapped.action.message,
             name: mapped.action.name ?? "Hook",
             idempotencyKey,
@@ -694,8 +695,8 @@ export function createHooksRequestHandler(
             timeoutSeconds: mapped.action.timeoutSeconds,
             allowUnsafeExternalContent: mapped.action.allowUnsafeExternalContent,
           });
-          rememberHookRunId(replayKey, runId, now);
-          sendJson(res, 200, { ok: true, runId });
+          rememberHookRunId(replayKey, dispatch.runId, now);
+          sendJson(res, 200, { ok: true, runId: dispatch.runId });
           return true;
         }
       } catch (err) {

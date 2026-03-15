@@ -140,6 +140,10 @@
       "types": "./dist/plugin-sdk/memory-core.d.ts",
       "default": "./dist/plugin-sdk/memory-core.js"
     },
+    "./plugin-sdk/mqtt-hooks": {
+      "types": "./dist/plugin-sdk/mqtt-hooks.d.ts",
+      "default": "./dist/plugin-sdk/mqtt-hooks.js"
+    },
     "./plugin-sdk/memory-lancedb": {
       "types": "./dist/plugin-sdk/memory-lancedb.d.ts",
       "default": "./dist/plugin-sdk/memory-lancedb.js"

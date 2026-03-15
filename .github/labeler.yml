@@ -218,6 +218,10 @@
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/memory-core/**"
+"extensions: mqtt-hooks":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/mqtt-hooks/**"
 "extensions: memory-lancedb":
   - changed-files:
       - any-glob-to-any-file:

@@ -12,14 +12,24 @@ import {
   withWindowsEnv,
   writeGatewayScript,
 } from "./test-helpers/schtasks-fixtures.js";
+const findVerifiedGatewayListenerPidsOnPortSync = vi.hoisted(() =>
+  vi.fn<(port: number) => number[]>(() => []),
+);
 const childUnref = vi.hoisted(() => vi.fn());
 const spawn = vi.hoisted(() => vi.fn(() => ({ unref: childUnref })));
+const spawnSync = vi.hoisted(() => vi.fn(() => ({ status: 0 })));
+
+vi.mock("../infra/gateway-processes.js", () => ({
+  findVerifiedGatewayListenerPidsOnPortSync: (port: number) =>
+    findVerifiedGatewayListenerPidsOnPortSync(port),
+}));
 
 vi.mock("node:child_process", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:child_process")>();
   return {
     ...actual,
     spawn,
+    spawnSync,
   };
 });
 
@@ -61,7 +71,11 @@ function expectStartupFallbackSpawn(env: Record<string, string>) {
 
 function expectGatewayTermination(pid: number) {
   if (process.platform === "win32") {
-    expect(killProcessTree).not.toHaveBeenCalled();
+    expect(spawnSync).toHaveBeenCalledWith(
+      expect.stringMatching(/^c:\\windows\\system32\\taskkill\.exe$/i),
+      ["/T", "/PID", String(pid)],
+      expect.objectContaining({ stdio: "ignore", timeout: 5_000, windowsHide: true }),
+    );
     return;
   }
   expect(killProcessTree).toHaveBeenCalledWith(pid, { graceMs: 300 });
@@ -78,7 +92,10 @@ function addStartupFallbackMissingResponses(
 }
 beforeEach(() => {
   resetSchtasksBaseMocks();
+  findVerifiedGatewayListenerPidsOnPortSync.mockReset();
+  findVerifiedGatewayListenerPidsOnPortSync.mockReturnValue([]);
   spawn.mockClear();
+  spawnSync.mockClear();
   childUnref.mockClear();
 });
 

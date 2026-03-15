@@ -3,6 +3,7 @@ import { expect, vi } from "vitest";
 import type { createSubsystemLogger } from "../logging/subsystem.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
 import { createGatewayRequest, createHooksConfig } from "./hooks-test-helpers.js";
+import type { IngressAgentDispatchResult } from "./ingress-dispatch.js";
 import { canonicalizePathVariant, isProtectedPluginRoutePath } from "./security-path.js";
 import { createGatewayHttpServer, createHooksRequestHandler } from "./server-http.js";
 import { withTempConfig } from "./test-temp-config.js";
@@ -204,7 +205,13 @@ export function createHooksHandler(
     } as unknown as ReturnType<typeof createSubsystemLogger>,
     getClientIpConfig: options.getClientIpConfig,
     dispatchWakeHook: options.dispatchWakeHook ?? (() => {}),
-    dispatchAgentHook: options.dispatchAgentHook ?? (() => "run-1"),
+    dispatchAgentHook:
+      options.dispatchAgentHook ??
+      (() =>
+        ({
+          runId: "run-1",
+          completion: Promise.resolve(),
+        }) satisfies IngressAgentDispatchResult),
   });
 }
 
