@@ -4,7 +4,7 @@ import * as secretResolve from "./resolve.js";
 import { createResolverContext } from "./runtime-shared.js";
 import { resolveRuntimeWebTools } from "./runtime-web-tools.js";
 
-type ProviderUnderTest = "brave" | "gemini" | "grok" | "kimi" | "perplexity";
+type ProviderUnderTest = "brave" | "gemini" | "grok" | "kimi" | "perplexity" | "tavily";
 
 function asConfig(value: unknown): OpenClawConfig {
   return value as OpenClawConfig;

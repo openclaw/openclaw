@@ -10,7 +10,7 @@ import {
   type SecretDefaults,
 } from "./runtime-shared.js";
 
-const WEB_SEARCH_PROVIDERS = ["brave", "gemini", "grok", "kimi", "perplexity"] as const;
+const WEB_SEARCH_PROVIDERS = ["brave", "gemini", "grok", "kimi", "perplexity", "tavily"] as const;
 const PERPLEXITY_DIRECT_BASE_URL = "https://api.perplexity.ai";
 const DEFAULT_PERPLEXITY_BASE_URL = "https://openrouter.ai/api/v1";
 const PERPLEXITY_KEY_PREFIXES = ["pplx-"];
@@ -87,7 +87,8 @@ function normalizeProvider(value: unknown): WebSearchProvider | undefined {
     normalized === "gemini" ||
     normalized === "grok" ||
     normalized === "kimi" ||
-    normalized === "perplexity"
+    normalized === "perplexity" ||
+    normalized === "tavily"
   ) {
     return normalized;
   }
