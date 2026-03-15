@@ -308,6 +308,82 @@ describe("handleFeishuMessage sender name resolution", () => {
       }),
     );
   });
+
+  it("does not let a cached open_id placeholder bypass a higher-priority user_id lookup", async () => {
+    const getUser = vi
+      .fn()
+      .mockResolvedValueOnce({ data: { user: { name: "用户377052" } } })
+      .mockResolvedValueOnce({ data: { user: { name: "同同" } } });
+    mockCreateFeishuClient.mockReturnValue({
+      contact: {
+        user: {
+          get: getUser,
+        },
+      },
+    });
+
+    const cfg: ClawdbotConfig = {
+      channels: {
+        feishu: {
+          appId: "cli_test",
+          appSecret: "secret",
+          dmPolicy: "open",
+        },
+      },
+    } as ClawdbotConfig;
+
+    await dispatchMessage({
+      cfg,
+      event: {
+        sender: {
+          sender_id: {
+            open_id: "ou_sender_cached_placeholder",
+          },
+        },
+        message: {
+          message_id: "msg-open-id-cache-prime",
+          chat_id: "oc-dm",
+          chat_type: "p2p",
+          message_type: "text",
+          content: JSON.stringify({ text: "prime cache" }),
+        },
+      },
+    });
+
+    await dispatchMessage({
+      cfg,
+      event: {
+        sender: {
+          sender_id: {
+            open_id: "ou_sender_cached_placeholder",
+            user_id: "0b1a2c3d_cache_bypass",
+          },
+        },
+        message: {
+          message_id: "msg-user-id-overrides-stale-open-id-cache",
+          chat_id: "oc-dm",
+          chat_type: "p2p",
+          message_type: "text",
+          content: JSON.stringify({ text: "你好" }),
+        },
+      },
+    });
+
+    expect(getUser).toHaveBeenNthCalledWith(1, {
+      path: { user_id: "ou_sender_cached_placeholder" },
+      params: { user_id_type: "open_id" },
+    });
+    expect(getUser).toHaveBeenNthCalledWith(2, {
+      path: { user_id: "0b1a2c3d_cache_bypass" },
+      params: { user_id_type: "user_id" },
+    });
+    expect(getUser).toHaveBeenCalledTimes(2);
+    expect(mockFinalizeInboundContext).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        BodyForAgent: expect.stringContaining("同同: 你好"),
+      }),
+    );
+  });
 });
 
 describe("handleFeishuMessage command authorization", () => {

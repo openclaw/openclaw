@@ -159,17 +159,16 @@ async function resolveFeishuSenderName(params: {
   if (lookupCandidates.length === 0) return {};
 
   const now = Date.now();
-  for (const candidate of lookupCandidates) {
-    const cached = senderNameCache.get(candidate.id);
-    if (cached && cached.expireAt > now) {
-      return { name: cached.name };
-    }
-  }
 
   try {
     const client = createFeishuClient(account);
 
     for (const candidate of lookupCandidates) {
+      const cached = senderNameCache.get(candidate.id);
+      if (cached && cached.expireAt > now) {
+        return { name: cached.name };
+      }
+
       // contact/v3/users/:user_id?user_id_type=<open_id|user_id|union_id>
       const res: any = await client.contact.user.get({
         path: { user_id: candidate.id },
