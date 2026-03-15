@@ -1,0 +1,71 @@
+# OTel Collector configuration snippet for ingesting Tetragon JSON logs.
+#
+# This config reads Tetragon's JSON event log, parses it, and exports
+# to an OTLP-compatible backend. Merge this into your existing
+# otel-collector-config.yaml or use it standalone.
+
+receivers:
+  filelog/tetragon:
+    include:
+      - /var/log/tetragon/tetragon.log
+    start_at: end
+    operators:
+      # Parse each line as JSON
+      - type: json_parser
+        id: tetragon_json
+        timestamp:
+          parse_from: attributes.time
+          layout: "%Y-%m-%dT%H:%M:%S.%LZ"
+
+      # Extract the Tetragon event type (process_exec, process_kprobe, etc.)
+      - type: move
+        from: attributes.process_exec
+        to: attributes.tetragon.process_exec
+        if: attributes.process_exec != nil
+
+      - type: move
+        from: attributes.process_kprobe
+        to: attributes.tetragon.process_kprobe
+        if: attributes.process_kprobe != nil
+
+      # Add severity based on Tetragon action field
+      - type: regex_parser
+        regex: '"action":"(?P<action>[^"]*)"'
+        parse_from: body
+        if: body != nil
+
+      - type: severity_parser
+        parse_from: attributes.action
+        preset: none
+        mapping:
+          warn: post
+          error: sigkill
+          info: ""
+
+processors:
+  resource/tetragon:
+    attributes:
+      - key: service.name
+        value: openclaw-security
+        action: upsert
+      - key: source
+        value: tetragon
+        action: upsert
+
+  batch:
+    send_batch_size: 100
+    timeout: 5s
+
+exporters:
+  # Replace with your OTLP endpoint
+  otlp:
+    endpoint: "${OTEL_EXPORTER_OTLP_ENDPOINT}"
+    headers:
+      Authorization: "Bearer ${OTEL_EXPORTER_OTLP_HEADERS_AUTH}"
+
+service:
+  pipelines:
+    logs/tetragon:
+      receivers: [filelog/tetragon]
+      processors: [resource/tetragon, batch]
+      exporters: [otlp]

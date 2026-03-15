@@ -1,0 +1,71 @@
+# TracingPolicy: Alert on access to sensitive files
+#
+# Monitors open/openat syscalls targeting credential files, SSH keys,
+# environment files, and other sensitive paths. Fires regardless of
+# which process reads the file, so it covers both direct access and
+# child processes spawned by OpenClaw.
+apiVersion: cilium.io/v1alpha1
+kind: TracingPolicy
+metadata:
+  name: openclaw-sensitive-files
+spec:
+  kprobes:
+    - call: fd_install
+      args:
+        - index: 0
+          type: int     # fd
+        - index: 1
+          type: file    # file struct (Tetragon resolves the path)
+      selectors:
+        - matchArgs:
+            - index: 1
+              operator: Prefix
+              values:
+                - /etc/passwd
+                - /etc/shadow
+                - /etc/gshadow
+                - /etc/sudoers
+        - matchArgs:
+            - index: 1
+              operator: Postfix
+              values:
+                - .env
+                - .pem
+                - .key
+                - id_rsa
+                - id_ed25519
+                - id_ecdsa
+                - id_dsa
+                - authorized_keys
+                - known_hosts
+        - matchArgs:
+            - index: 1
+              operator: Prefix
+              values:
+                - /root/.ssh/
+        # Match .ssh paths under /home/<user>/ — both conditions
+        # must hold so we don't fire on every file under /home.
+        - matchArgs:
+            - index: 1
+              operator: Regex
+              values:
+                - /home/[^/]+/\.ssh/
+                - /home/[^/]+/\.gnupg/
+                - /home/[^/]+/\.aws/
+                - /home/[^/]+/\.kube/config
+                - /home/[^/]+/\.docker/config\.json
+    - call: security_file_open
+      args:
+        - index: 0
+          type: file
+        - index: 1
+          type: int     # open flags
+      selectors:
+        - matchArgs:
+            - index: 0
+              operator: Prefix
+              values:
+                - /etc/shadow
+                - /etc/gshadow
+          matchActions:
+            - action: Post

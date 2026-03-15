@@ -1,0 +1,88 @@
+# TracingPolicy: Detect privilege escalation attempts
+#
+# Monitors setuid, setgid, and capability changes that could indicate
+# an agent or spawned process attempting to escalate privileges.
+apiVersion: cilium.io/v1alpha1
+kind: TracingPolicy
+metadata:
+  name: openclaw-privilege-escalation
+spec:
+  kprobes:
+    # Detect setuid calls
+    # x86_64: __x64_sys_setuid | arm64: __arm64_sys_setuid
+    - call: __x64_sys_setuid
+      syscall: true
+      args:
+        - index: 0
+          type: int     # uid
+      selectors:
+        - matchArgs:
+            - index: 0
+              operator: Equal
+              values:
+                - "0"   # setuid(0) = become root
+          matchActions:
+            - action: Post
+
+    # Detect setgid calls
+    # x86_64: __x64_sys_setgid | arm64: __arm64_sys_setgid
+    - call: __x64_sys_setgid
+      syscall: true
+      args:
+        - index: 0
+          type: int     # gid
+      selectors:
+        - matchArgs:
+            - index: 0
+              operator: Equal
+              values:
+                - "0"   # setgid(0)
+          matchActions:
+            - action: Post
+
+    # Detect setresuid (set real, effective, saved UID)
+    # x86_64: __x64_sys_setresuid | arm64: __arm64_sys_setresuid
+    - call: __x64_sys_setresuid
+      syscall: true
+      args:
+        - index: 0
+          type: int     # ruid
+        - index: 1
+          type: int     # euid
+        - index: 2
+          type: int     # suid
+      selectors:
+        - matchArgs:
+            - index: 1
+              operator: Equal
+              values:
+                - "0"   # effective UID = root
+          matchActions:
+            - action: Post
+
+    # Detect capability changes via capset
+    # NOTE: cap_capable is a check hook and can be very noisy. It fires
+    # every time the kernel checks whether a process has a capability,
+    # not only when capabilities are actually changed. For lower noise,
+    # consider hooking sys_capset instead (actual capability mutation).
+    # We keep cap_capable here for maximum visibility; tune with
+    # matchBinaries or matchPIDs if the volume is too high.
+    - call: cap_capable
+      args:
+        - index: 0
+          type: nop     # cred (not captured)
+        - index: 1
+          type: int     # ns (user namespace)
+        - index: 2
+          type: int     # cap (capability number)
+        - index: 3
+          type: int     # opts
+      selectors:
+        - matchArgs:
+            # CAP_SYS_ADMIN=21, CAP_SYS_PTRACE=19, CAP_NET_ADMIN=12
+            - index: 2
+              operator: In
+              values:
+                - "21"
+                - "19"
+                - "12"
