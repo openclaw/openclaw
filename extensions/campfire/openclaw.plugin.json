@@ -1,0 +1,9 @@
+{
+  "id": "campfire",
+  "channels": ["campfire"],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

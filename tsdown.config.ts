@@ -54,6 +54,7 @@ const pluginSdkEntrypoints = [
   "msteams",
   "acpx",
   "bluebubbles",
+  "campfire",
   "copilot-proxy",
   "device-pair",
   "diagnostics-otel",
