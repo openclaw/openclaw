@@ -350,8 +350,9 @@ export function stripMarkdown(text: string): string {
 
   // Remove italic: *text* or _text_ (but not already processed)
   // Only match underscores at word boundaries to avoid stripping intra-word underscores
+  // Allow punctuation/quotes as boundaries to handle (_italic_) and "_italic_"
   result = result.replace(/(?<!\*)\*(?!\*)(.+?)(?<!\*)\*(?!\*)/g, "$1");
-  result = result.replace(/(?<=\s|^)_(?!_)(.+?)(?<!_)_(?=\s|$|[.,;:!?()])/g, "$1");
+  result = result.replace(/(?<=\s|^|[("'])_(?!_)(.+?)(?<!_)_(?=\s|$|[.,;:!?"')])/g, "$1");
 
   // Remove strikethrough: ~~text~~
   result = result.replace(/~~(.+?)~~/g, "$1");
