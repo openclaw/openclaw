@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
+import { createHostSandboxFsBridge } from "../test-helpers/host-sandbox-fs-bridge.js";
 import {
   coercePdfAssistantText,
   coercePdfModelConfig,
@@ -26,6 +27,21 @@ async function withTempAgentDir<T>(run: (agentDir: string) => Promise<T>): Promi
     return await run(agentDir);
   } finally {
     await fs.rm(agentDir, { recursive: true, force: true });
+  }
+}
+
+async function withTempSandboxState(
+  run: (ctx: { stateDir: string; agentDir: string; sandboxRoot: string }) => Promise<void>,
+) {
+  const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-pdf-sandbox-"));
+  const agentDir = path.join(stateDir, "agent");
+  const sandboxRoot = path.join(stateDir, "sandbox");
+  await fs.mkdir(agentDir, { recursive: true });
+  await fs.mkdir(sandboxRoot, { recursive: true });
+  try {
+    await run({ stateDir, agentDir, sandboxRoot });
+  } finally {
+    await fs.rm(stateDir, { recursive: true, force: true });
   }
 }
 
@@ -393,12 +409,49 @@ describe("createPdfTool", () => {
         await fs.writeFile(outsidePdf, "%PDF-1.4 fake");
 
         await expect(tool.execute("t1", { prompt: "test", pdf: outsidePdf })).rejects.toThrow(
-          /not under an allowed directory/i,
+          /(not under an allowed directory|outside the workspace root)/i,
         );
       } finally {
         await fs.rm(workspaceDir, { recursive: true, force: true });
         await fs.rm(outsideDir, { recursive: true, force: true });
       }
+    });
+  });
+
+  it("applies sandbox allowedPaths glob for pdf tool", async () => {
+    await withTempSandboxState(async ({ agentDir, sandboxRoot }) => {
+      vi.stubEnv("ANTHROPIC_API_KEY", "anthropic-test");
+      await fs.mkdir(path.join(sandboxRoot, "docs"), { recursive: true });
+      await fs.mkdir(path.join(sandboxRoot, "misc"), { recursive: true });
+      const allowedPdf = path.join(sandboxRoot, "docs", "guide.pdf");
+      const blockedPdf = path.join(sandboxRoot, "misc", "other.pdf");
+      await fs.writeFile(allowedPdf, "%PDF-1.4 allowed");
+      await fs.writeFile(blockedPdf, "%PDF-1.4 blocked");
+
+      await stubPdfToolInfra(agentDir, { provider: "anthropic", input: ["text", "document"] });
+      const nativeProviders = await import("./pdf-native-providers.js");
+      vi.spyOn(nativeProviders, "anthropicAnalyzePdf").mockResolvedValue("sandbox allowed");
+
+      const cfg = withDefaultModel(ANTHROPIC_PDF_MODEL);
+      const sandbox = { root: sandboxRoot, bridge: createHostSandboxFsBridge(sandboxRoot) };
+      const tool = requirePdfTool(
+        createPdfTool({
+          config: cfg,
+          agentDir,
+          sandbox,
+          workspaceDir: sandboxRoot,
+          fsPolicy: { workspaceOnly: false, allowedPaths: ["docs/**/*.pdf"] },
+        }),
+      );
+
+      await expect(
+        tool.execute("t-allow", { prompt: "test", pdf: allowedPdf }),
+      ).resolves.toMatchObject({
+        content: [{ type: "text", text: "sandbox allowed" }],
+      });
+      await expect(tool.execute("t-deny", { prompt: "test", pdf: blockedPdf })).rejects.toThrow(
+        /not in the allowedPaths list/i,
+      );
     });
   });
 

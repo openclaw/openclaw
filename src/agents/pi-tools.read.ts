@@ -12,6 +12,7 @@ import {
 } from "../infra/fs-safe.js";
 import { detectMime } from "../media/mime.js";
 import { sniffMimeFromBase64 } from "../media/sniff-mime-from-base64.js";
+import { checkPathGuardStrict } from "../security/path-guard.js";
 import type { ImageSanitizationLimits } from "./image-sanitization.js";
 import { toRelativeWorkspacePath } from "./path-policy.js";
 import { wrapHostEditToolWithPostWriteRecovery } from "./pi-tools.host-edit.js";
@@ -25,6 +26,7 @@ import {
 import type { AnyAgentTool } from "./pi-tools.types.js";
 import { assertSandboxPath } from "./sandbox-paths.js";
 import type { SandboxFsBridge } from "./sandbox/fs-bridge.js";
+import type { ToolFsPolicy } from "./tool-fs-policy.js";
 import { sanitizeToolResultImages } from "./tool-images.js";
 
 export {
@@ -567,6 +569,7 @@ export function wrapToolWorkspaceRootGuardWithOptions(
   root: string,
   options?: {
     containerWorkdir?: string;
+    policy?: ToolFsPolicy;
   },
 ): AnyAgentTool {
   return {
@@ -583,7 +586,12 @@ export function wrapToolWorkspaceRootGuardWithOptions(
           root,
           containerWorkdir: options?.containerWorkdir,
         });
-        await assertSandboxPath({ filePath: sandboxPath, cwd: root, root });
+
+        if (options?.policy) {
+          await checkPathGuardStrict(sandboxPath, options.policy, root);
+        } else {
+          await assertSandboxPath({ filePath: sandboxPath, cwd: root, root });
+        }
       }
       return tool.execute(toolCallId, normalized ?? args, signal, onUpdate);
     },

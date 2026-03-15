@@ -2,6 +2,7 @@ import { type Context, complete } from "@mariozechner/pi-ai";
 import { Type } from "@sinclair/typebox";
 import { loadWebMedia } from "../../../extensions/whatsapp/src/media.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import { checkPathGuardStrict } from "../../security/path-guard.js";
 import { resolveUserPath } from "../../utils.js";
 import { isMinimaxVlmModel, isMinimaxVlmProvider, minimaxUnderstandImage } from "../minimax-vlm.js";
 import {
@@ -299,7 +300,7 @@ export function createImageTool(options?: {
     : "Analyze one or more images with the configured image model (agents.defaults.imageModel). Use image for a single path/URL, or images for multiple (up to 20). Provide a prompt describing what to analyze.";
 
   const localRoots = resolveMediaToolLocalRoots(options?.workspaceDir, {
-    workspaceOnly: options?.fsPolicy?.workspaceOnly === true,
+    fsPolicy: options?.fsPolicy,
   });
 
   return {
@@ -448,6 +449,13 @@ export function createImageTool(options?: {
                   : resolvedImage,
               };
         const resolvedPath = isDataUrl ? null : resolvedPathInfo.resolved;
+
+        if (resolvedPath && !isHttpUrl && !isDataUrl && options?.fsPolicy) {
+          const policyRoot = sandboxConfig?.root ?? options.workspaceDir;
+          if (policyRoot) {
+            await checkPathGuardStrict(resolvedPath, options.fsPolicy, policyRoot);
+          }
+        }
 
         const media = isDataUrl
           ? decodeDataUrl(resolvedImage)

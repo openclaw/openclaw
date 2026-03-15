@@ -3,6 +3,7 @@ import { Type } from "@sinclair/typebox";
 import { loadWebMediaRaw } from "../../../extensions/whatsapp/src/media.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { extractPdfContent, type PdfExtractedContent } from "../../media/pdf-extract.js";
+import { checkPathGuardStrict } from "../../security/path-guard.js";
 import { resolveUserPath } from "../../utils.js";
 import {
   coerceImageModelConfig,
@@ -328,7 +329,7 @@ export function createPdfTool(options?: {
       : DEFAULT_MAX_PAGES;
 
   const localRoots = resolveMediaToolLocalRoots(options?.workspaceDir, {
-    workspaceOnly: options?.fsPolicy?.workspaceOnly === true,
+    fsPolicy: options?.fsPolicy,
   });
 
   const description =
@@ -471,6 +472,13 @@ export function createPdfTool(options?: {
                 ? resolvedPdf.slice("file://".length)
                 : resolvedPdf,
             };
+
+        if (!isHttpUrl && !isDataUrl && options?.fsPolicy) {
+          const policyRoot = sandboxConfig?.root ?? options.workspaceDir;
+          if (policyRoot) {
+            await checkPathGuardStrict(resolvedPathInfo.resolved, options.fsPolicy, policyRoot);
+          }
+        }
 
         const media = sandboxConfig
           ? await loadWebMediaRaw(resolvedPathInfo.resolved, {

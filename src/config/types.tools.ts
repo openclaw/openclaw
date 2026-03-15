@@ -280,6 +280,10 @@ export type FsToolsConfig = {
    * Default: false (unrestricted, matches legacy behavior).
    */
   workspaceOnly?: boolean;
+  /** Allowlisted absolute paths or workspace-relative paths. */
+  allowedPaths?: string[];
+  /** Denylisted absolute paths or workspace-relative paths. */
+  denyPaths?: string[];
 };
 
 export type AgentToolsConfig = {
