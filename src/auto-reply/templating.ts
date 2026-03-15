@@ -109,6 +109,13 @@ export type MsgContext = {
   Sticker?: StickerContextMetadata;
   /** True when current-turn sticker media is present in MediaPaths (false for cached-description path). */
   StickerMediaIncluded?: boolean;
+  /** Channel-agnostic structured sticker info for received stickers. */
+  StickerInfo?: {
+    raw?: string;
+    keywords?: string[];
+    description?: string;
+    channel: string;
+  };
   OutputDir?: string;
   OutputBase?: string;
   /** Remote host for SCP when media lives on a different machine (e.g., openclaw@192.168.64.3). */

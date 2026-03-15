@@ -1,0 +1,105 @@
+{
+  "name": "shock",
+  "description": "Shock / Despair / Disbelief",
+  "count": 17,
+  "lang_distribution": {
+    "universal": 6,
+    "ja": 4,
+    "th": 1,
+    "zh-tw": 5,
+    "en": 1
+  },
+  "stickers": [
+    {
+      "id": "446:2010",
+      "lang": "universal",
+      "desc": "round white face（白い丸顔）, パソコンの前で絶望し、口を大きく開けて叫んでいる, text:\"NOOO!!\"",
+      "text": "NOOO!!"
+    },
+    {
+      "id": "446:2021",
+      "lang": "universal",
+      "desc": "round white face（白い丸顔）, 顔が青ざめ、ショックで打ちひしがれている表情（縦線、冷や汗）"
+    },
+    {
+      "id": "446:2025",
+      "lang": "universal",
+      "desc": "round white face, 顔に影（縦線）が入り、がっくりと肩を落としてひどく落ち込んでいるポーズ"
+    },
+    {
+      "id": "789:10887",
+      "lang": "universal",
+      "desc": "yellow chick, うつ伏せに倒れ込み、ショックで落ち込んでいる様子"
+    },
+    {
+      "id": "1070:17854",
+      "lang": "universal",
+      "desc": "round white face, 驚いた表情で勢いよく立ち上がる様子, text:\"ガタッ\"",
+      "text": "ガタッ"
+    },
+    {
+      "id": "1070:17878",
+      "lang": "universal",
+      "desc": "round white face, 椅子に座り、目を見開いて冷や汗をかきながら驚いている姿, text:\"えーっ！\"",
+      "text": "えーっ！"
+    },
+    {
+      "id": "6136:10551377",
+      "lang": "ja",
+      "desc": "white rabbit、brown bear、yellow chick, 絶望して嘆く様子。叫び声を上げるコニー、顔を覆うブラウン、力尽きて倒れるサリー。"
+    },
+    {
+      "id": "6136:10551385",
+      "lang": "ja",
+      "desc": "round white face, 地面に突っ伏して絶望しているポーズ, text:\"あああああ\"",
+      "text": "あああああ"
+    },
+    {
+      "id": "6325:10979922",
+      "lang": "ja",
+      "desc": "white rabbit（白いうさぎ）とyellow chick（黄色いひよこ）, 巨大なサリーに圧倒され、驚きと恐怖で腰を抜かしている"
+    },
+    {
+      "id": "6359:11069866",
+      "lang": "th",
+      "desc": "white rabbit、yellow chick, 巨大なサリーを前にして、コニーが口を開けて驚愕し、圧倒されている表情。"
+    },
+    {
+      "id": "6632:11825375",
+      "lang": "zh-tw",
+      "desc": "white rabbit、brown bear、yellow chick, 絶叫するコニー、顔を覆って悲しむブラウン、力尽きて倒れるサリー"
+    },
+    {
+      "id": "6632:11825377",
+      "lang": "zh-tw",
+      "desc": "brown bear（茶色いクマ）, 地面にめり込むほど激しく倒れ込み、周囲に石が飛び散っている"
+    },
+    {
+      "id": "6632:11825383",
+      "lang": "zh-tw",
+      "desc": "white rabbit, 地面に突っ伏して絶望し、叫んでいる様子, text:\"呃啊啊啊啊啊\"",
+      "text": "呃啊啊啊啊啊"
+    },
+    {
+      "id": "6632:11825394",
+      "lang": "zh-tw",
+      "desc": "brown bear, 無表情でどんよりと落ち込み、背景に縦線が入っている様子, text:\"...\"",
+      "text": "..."
+    },
+    {
+      "id": "8515:16581262",
+      "lang": "ja",
+      "desc": "green frog（緑色のカエル）, 大泣きしている、ひどく落ち込んでいる表情"
+    },
+    {
+      "id": "8522:16581286",
+      "lang": "en",
+      "desc": "green frog（緑色のカエル）, 雨に打たれながら泣いている、悲しみ、絶望"
+    },
+    {
+      "id": "8525:16581310",
+      "lang": "zh-tw",
+      "desc": "green frog（緑のカエル）, 大泣きしている、雨に打たれてひどく落ち込んでいる"
+    }
+  ]
+}

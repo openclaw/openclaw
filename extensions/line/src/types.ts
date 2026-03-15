@@ -138,4 +138,9 @@ export type LineChannelData = {
   };
   flexMessage?: LineFlexMessagePayload;
   templateMessage?: LineTemplateMessagePayload;
+  /** Send a sticker directly by packageId and stickerId (bypasses directive parsing). */
+  sticker?: {
+    packageId: string;
+    stickerId: string;
+  };
 };

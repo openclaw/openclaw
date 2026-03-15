@@ -295,4 +295,24 @@ describe("LINE send helpers", () => {
     ];
     expect(firstCall[0].messages[0].quickReply?.items).toHaveLength(13);
   });
+
+  describe("createStickerMessage", () => {
+    it("creates valid LINE sticker message object", () => {
+      const msg = sendModule.createStickerMessage("446", "1988");
+      expect(msg).toEqual({
+        type: "sticker",
+        packageId: "446",
+        stickerId: "1988",
+      });
+    });
+
+    it("preserves numeric string ids as-is", () => {
+      const msg = sendModule.createStickerMessage("11537", "52002734");
+      expect(msg).toEqual({
+        type: "sticker",
+        packageId: "11537",
+        stickerId: "52002734",
+      });
+    });
+  });
 });

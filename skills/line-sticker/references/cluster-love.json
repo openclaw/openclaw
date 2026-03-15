@@ -1,0 +1,96 @@
+{
+  "name": "love",
+  "description": "Love / Affection / Heart",
+  "count": 15,
+  "lang_distribution": {
+    "universal": 4,
+    "ja": 3,
+    "th": 2,
+    "zh-tw": 3,
+    "en": 3
+  },
+  "stickers": [
+    {
+      "id": "446:1997",
+      "lang": "universal",
+      "desc": "white rabbit（白いうさぎ）, 笑顔で目を閉じ、大きなハートを抱えている, text:\"LUV YA\"",
+      "text": "LUV YA"
+    },
+    {
+      "id": "446:1998",
+      "lang": "universal",
+      "desc": "brown bear, 穏やかな表情で、頭の上に大きなピンクのハートが浮かんでいる"
+    },
+    {
+      "id": "446:2026",
+      "lang": "universal",
+      "desc": "brown bear, 目を閉じて頭の上で手でハートを作っている, text:\"LOVE\"",
+      "text": "LOVE"
+    },
+    {
+      "id": "1070:17870",
+      "lang": "universal",
+      "desc": "yellow chick, 笑顔で大きなハートを抱えている, text:\"LOVE\"",
+      "text": "LOVE"
+    },
+    {
+      "id": "6325:10979918",
+      "lang": "ja",
+      "desc": "white rabbit、brown bear, コニーは笑顔で照れており、ブラウンは穏やかな表情。赤いハートが飛び交い、二人でピンクのマグカップに入, text:\"I♥U\"",
+      "text": "I♥U"
+    },
+    {
+      "id": "6325:10979919",
+      "lang": "ja",
+      "desc": "white rabbit、brown bear, パスタを前にして抱き合い、キスをしている。頭上にハートが浮かび、コニーは目を閉じて幸せそうな表情。"
+    },
+    {
+      "id": "6359:11069862",
+      "lang": "th",
+      "desc": "white rabbit、brown bear, 二人がピンクのマグカップに入り、周囲にハートが舞っている。コニーは嬉しそうに口を開け、ブラウンは穏や, text:\"I ♥ U\"",
+      "text": "I ♥ U"
+    },
+    {
+      "id": "6359:11069863",
+      "lang": "th",
+      "desc": "brown bear、white rabbit, パスタを前にハグをしている、幸せそうに目を閉じる、頭上にハート"
+    },
+    {
+      "id": "6362:11087934",
+      "lang": "zh-tw",
+      "desc": "brown bear、white rabbit, 「I♥U」と書かれたマグカップに二人で入り、コニーは満面の笑み、ブラウンは無表情ながら寄り添い、周囲, text:\"I♥U\"",
+      "text": "I♥U"
+    },
+    {
+      "id": "6362:11087935",
+      "lang": "zh-tw",
+      "desc": "brown bear、white rabbit, パスタを前に抱き合い、キスをするようなポーズ、幸せそうに目を閉じる、ハート"
+    },
+    {
+      "id": "6370:11088030",
+      "lang": "en",
+      "desc": "brown bear、white rabbit, 二人が仲良くピンクのマグカップに入り、周囲にハートが舞っている。コニーは嬉しそうに笑い、ブラウンは穏, text:\"I ♥ U\"",
+      "text": "I ♥ U"
+    },
+    {
+      "id": "6370:11088031",
+      "lang": "en",
+      "desc": "brown bear、white rabbit, 抱き合い、幸せそうな表情、頭上にハート"
+    },
+    {
+      "id": "8515:16581253",
+      "lang": "ja",
+      "desc": "brown bear, 大きなハートに顔を押し付けている"
+    },
+    {
+      "id": "8522:16581277",
+      "lang": "en",
+      "desc": "brown bear, 大きなハートに顔を押し付けて、頬がむぎゅっとなっている"
+    },
+    {
+      "id": "8525:16581301",
+      "lang": "zh-tw",
+      "desc": "brown bear, 大きなハートに顔を押し付けて頬を膨らませている"
+    }
+  ]
+}

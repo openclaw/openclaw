@@ -24,6 +24,10 @@ export type ReplyPayload = {
   isCompactionNotice?: boolean;
   /** Channel-specific payload data (per-channel envelope). */
   channelData?: Record<string, unknown>;
+  /** Sticker to send. Raw content is passed as-is to the channel plugin for interpretation. */
+  sticker?: {
+    raw: string;
+  };
 };
 
 export type ReplyPayloadMetadata = {

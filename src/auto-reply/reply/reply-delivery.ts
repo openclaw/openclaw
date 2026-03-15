@@ -27,7 +27,8 @@ export function normalizeReplyPayloadDirectives(params: {
     (parseMode === "auto" &&
       (sourceText.includes("[[") ||
         sourceText.includes("MEDIA:") ||
-        sourceText.includes(silentToken)));
+        sourceText.includes(silentToken) ||
+        /sticker:/i.test(sourceText)));
 
   const parsed = shouldParse
     ? parseReplyDirectives(sourceText, {
@@ -54,6 +55,8 @@ export function normalizeReplyPayloadDirectives(params: {
       replyToTag: params.payload.replyToTag || parsed?.replyToTag,
       replyToCurrent: params.payload.replyToCurrent || parsed?.replyToCurrent,
       audioAsVoice: Boolean(params.payload.audioAsVoice || parsed?.audioAsVoice),
+      // Propagate sticker from directives parser; preserve any pre-existing value.
+      sticker: params.payload.sticker ?? parsed?.sticker,
     },
     isSilent: parsed?.isSilent ?? false,
   };

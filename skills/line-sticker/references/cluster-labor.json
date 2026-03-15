@@ -1,0 +1,86 @@
+{
+  "name": "labor",
+  "description": "Gratitude for effort / Good work today",
+  "count": 12,
+  "lang_distribution": {
+    "universal": 3,
+    "ja": 4,
+    "th": 1,
+    "zh-tw": 2,
+    "en": 2
+  },
+  "stickers": [
+    {
+      "id": "446:1999",
+      "lang": "universal",
+      "desc": "yellow chick, 栄養ドリンクの瓶を持って差し出している, text:\"お疲れさま\"",
+      "text": "お疲れさま"
+    },
+    {
+      "id": "1070:17867",
+      "lang": "universal",
+      "desc": "brown bear, サムズアップ, text:\"おつかれさま\"",
+      "text": "おつかれさま"
+    },
+    {
+      "id": "1070:17877",
+      "lang": "universal",
+      "desc": "brown bear, 目を閉じてリラックスした表情、頭にタオルを乗せて桶を持っている, text:\"お疲れ様です\"",
+      "text": "お疲れ様です"
+    },
+    {
+      "id": "6136:10551394",
+      "lang": "ja",
+      "desc": "yellow chick, 座布団に座ってお茶を飲みながら、落ち着いた表情, text:\"はい、おつー\"",
+      "text": "はい、おつー"
+    },
+    {
+      "id": "6325:10979910",
+      "lang": "ja",
+      "desc": "brown bear, 茶碗の中でリラックスしてお風呂のように浸かっている, text:\"ふう～\"",
+      "text": "ふう～"
+    },
+    {
+      "id": "6325:10979914",
+      "lang": "ja",
+      "desc": "brown bear, 両手を上げて伸びをしているリラックスしたポーズ, text:\"おつかれ〜\"",
+      "text": "おつかれ〜"
+    },
+    {
+      "id": "6359:11069858",
+      "lang": "th",
+      "desc": "brown bear, 両手を上げて伸びをしているようなポーズ、無表情。横に和菓子が置かれている。, text:\"พักหน่อยมั้ย\"",
+      "text": "พักหน่อยมั้ย"
+    },
+    {
+      "id": "6362:11087930",
+      "lang": "zh-tw",
+      "desc": "brown bear, 和菓子の横で両手を挙げて伸びをしている, text:\"休息一下吧\"",
+      "text": "休息一下吧"
+    },
+    {
+      "id": "6370:11088026",
+      "lang": "en",
+      "desc": "brown bear, 無表情で両手を頭の後ろに添え、和菓子の横に立っている, text:\"Take a break\"",
+      "text": "Take a break"
+    },
+    {
+      "id": "8515:16581252",
+      "lang": "ja",
+      "desc": "brown bear, コーヒーの中に描かれた無表情なラテアート, text:\"お疲れ様です\"",
+      "text": "お疲れ様です"
+    },
+    {
+      "id": "8522:16581276",
+      "lang": "en",
+      "desc": "brown bear, コーヒーのラテアートとして描かれた穏やかな表情, text:\"GOOD WORK TODAY\"",
+      "text": "GOOD WORK TODAY"
+    },
+    {
+      "id": "8525:16581300",
+      "lang": "zh-tw",
+      "desc": "brown bear, コーヒーカップの中に描かれた無表情なラテアート, text:\"辛苦了\"",
+      "text": "辛苦了"
+    }
+  ]
+}

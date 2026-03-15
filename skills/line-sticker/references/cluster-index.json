@@ -1,0 +1,192 @@
+{
+  "total_stickers": 330,
+  "total_clusters": 15,
+  "clusters": [
+    {
+      "name": "labor",
+      "description": "Gratitude for effort / Good work today",
+      "count": 12,
+      "file": "cluster-labor.json",
+      "lang_distribution": {
+        "universal": 3,
+        "ja": 4,
+        "th": 1,
+        "zh-tw": 2,
+        "en": 2
+      }
+    },
+    {
+      "name": "confused",
+      "description": "Confused / Nervous / Wondering",
+      "count": 44,
+      "file": "cluster-confused.json",
+      "lang_distribution": {
+        "universal": 14,
+        "ja": 9,
+        "th": 3,
+        "zh-tw": 9,
+        "en": 9
+      }
+    },
+    {
+      "name": "cheer-up",
+      "description": "Encouragement / Cheering (Brown style)",
+      "count": 26,
+      "file": "cluster-cheer-up.json",
+      "lang_distribution": {
+        "universal": 3,
+        "ja": 6,
+        "th": 5,
+        "zh-tw": 6,
+        "en": 6
+      }
+    },
+    {
+      "name": "agree-misc",
+      "description": "Agreement / OK (various characters)",
+      "count": 19,
+      "file": "cluster-agree-misc.json",
+      "lang_distribution": {
+        "universal": 9,
+        "ja": 3,
+        "en": 4,
+        "zh-tw": 3
+      }
+    },
+    {
+      "name": "cheer-up-sally",
+      "description": "Encouragement / Cheering (Sally style)",
+      "count": 41,
+      "file": "cluster-cheer-up-sally.json",
+      "lang_distribution": {
+        "universal": 41
+      }
+    },
+    {
+      "name": "shock",
+      "description": "Shock / Despair / Disbelief",
+      "count": 17,
+      "file": "cluster-shock.json",
+      "lang_distribution": {
+        "universal": 6,
+        "ja": 4,
+        "th": 1,
+        "zh-tw": 5,
+        "en": 1
+      }
+    },
+    {
+      "name": "sorry-formal",
+      "description": "Apology (formal / dramatic)",
+      "count": 20,
+      "file": "cluster-sorry-formal.json",
+      "lang_distribution": {
+        "universal": 1,
+        "ja": 9,
+        "zh-tw": 8,
+        "en": 2
+      }
+    },
+    {
+      "name": "thanks",
+      "description": "Thanks / Joy / Celebration",
+      "count": 31,
+      "file": "cluster-thanks.json",
+      "lang_distribution": {
+        "universal": 8,
+        "ja": 8,
+        "th": 1,
+        "zh-tw": 9,
+        "en": 5
+      }
+    },
+    {
+      "name": "action",
+      "description": "Action / Eating / Entrance / Farewell",
+      "count": 27,
+      "file": "cluster-action.json",
+      "lang_distribution": {
+        "universal": 3,
+        "ja": 7,
+        "th": 4,
+        "zh-tw": 7,
+        "en": 6
+      }
+    },
+    {
+      "name": "angry",
+      "description": "Angry / Punishment / Rejection",
+      "count": 16,
+      "file": "cluster-angry.json",
+      "lang_distribution": {
+        "universal": 2,
+        "ja": 4,
+        "th": 2,
+        "zh-tw": 5,
+        "en": 3
+      }
+    },
+    {
+      "name": "sorry-casual",
+      "description": "Apology (casual / cute)",
+      "count": 13,
+      "file": "cluster-sorry-casual.json",
+      "lang_distribution": {
+        "universal": 2,
+        "ja": 5,
+        "zh-tw": 5,
+        "en": 1
+      }
+    },
+    {
+      "name": "love",
+      "description": "Love / Affection / Heart",
+      "count": 15,
+      "file": "cluster-love.json",
+      "lang_distribution": {
+        "universal": 4,
+        "ja": 3,
+        "th": 2,
+        "zh-tw": 3,
+        "en": 3
+      }
+    },
+    {
+      "name": "goodnight",
+      "description": "Good night / Sleepy / Bedtime",
+      "count": 14,
+      "file": "cluster-goodnight.json",
+      "lang_distribution": {
+        "universal": 6,
+        "ja": 2,
+        "th": 2,
+        "zh-tw": 2,
+        "en": 2
+      }
+    },
+    {
+      "name": "please",
+      "description": "Please / Request / Begging (Moon style)",
+      "count": 14,
+      "file": "cluster-please.json",
+      "lang_distribution": {
+        "universal": 6,
+        "ja": 4,
+        "zh-tw": 4
+      }
+    },
+    {
+      "name": "agree-brown",
+      "description": "Agreement / OK (Brown style)",
+      "count": 21,
+      "file": "cluster-agree-brown.json",
+      "lang_distribution": {
+        "universal": 6,
+        "ja": 4,
+        "th": 3,
+        "zh-tw": 4,
+        "en": 4
+      }
+    }
+  ]
+}

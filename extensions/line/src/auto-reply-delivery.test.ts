@@ -206,4 +206,133 @@ describe("deliverLineAutoReply", () => {
       { accountId: "acc" },
     );
   });
+
+  describe("sticker delivery", () => {
+    it("sends sticker only when payload has valid sticker (text is dropped)", async () => {
+      const { deps, replyMessageLine, pushMessagesLine } = createDeps();
+
+      const result = await deliverLineAutoReply({
+        ...baseDeliveryParams,
+        payload: { text: "おはよう！", sticker: { raw: "11537:52002734" } },
+        lineData: {},
+        deps,
+      });
+
+      expect(result.replyTokenUsed).toBe(true);
+      expect(replyMessageLine).toHaveBeenCalledTimes(1);
+      expect(replyMessageLine).toHaveBeenCalledWith(
+        "token",
+        [{ type: "sticker", packageId: "11537", stickerId: "52002734" }],
+        { accountId: "acc" },
+      );
+      // Text should not be sent
+      expect(pushMessagesLine).not.toHaveBeenCalled();
+    });
+
+    it("sends sticker alone when no text", async () => {
+      const { deps, replyMessageLine } = createDeps();
+
+      await deliverLineAutoReply({
+        ...baseDeliveryParams,
+        payload: { sticker: { raw: "446:1988" } },
+        lineData: {},
+        deps,
+      });
+
+      expect(replyMessageLine).toHaveBeenCalledWith(
+        "token",
+        [{ type: "sticker", packageId: "446", stickerId: "1988" }],
+        { accountId: "acc" },
+      );
+    });
+
+    it("falls back to text only when sticker raw is invalid (non-numeric)", async () => {
+      const { deps, replyMessageLine, pushMessagesLine } = createDeps();
+
+      await deliverLineAutoReply({
+        ...baseDeliveryParams,
+        payload: { text: "テスト", sticker: { raw: "not-valid" } },
+        lineData: {},
+        deps,
+      });
+
+      // Should send text, not sticker
+      expect(replyMessageLine).toHaveBeenCalledWith("token", [{ type: "text", text: "テスト" }], {
+        accountId: "acc",
+      });
+      expect(pushMessagesLine).not.toHaveBeenCalled();
+    });
+
+    it("sends text normally when no sticker", async () => {
+      const { deps, replyMessageLine } = createDeps();
+
+      await deliverLineAutoReply({
+        ...baseDeliveryParams,
+        payload: { text: "普通のメッセージ" },
+        lineData: {},
+        deps,
+      });
+
+      expect(replyMessageLine).toHaveBeenCalledWith(
+        "token",
+        [{ type: "text", text: "普通のメッセージ" }],
+        { accountId: "acc" },
+      );
+    });
+
+    it("sends error text via push when sticker reply fails and push also fails", async () => {
+      const failReplyMock = vi.fn(async (_token: string, messages: unknown[]) => {
+        const first = (messages as Array<{ type: string }>)[0];
+        if (first?.type === "sticker") {
+          throw new Error("400 Bad Request");
+        }
+      });
+      const pushMessagesMock = vi.fn(async (_to: string, messages: unknown[]) => {
+        const first = (messages as Array<{ type: string }>)[0];
+        if (first?.type === "sticker") {
+          throw new Error("400 Bad Request");
+        }
+        return { messageId: "push", chatId: "u1" };
+      });
+      const { deps } = createDeps({
+        replyMessageLine: failReplyMock as LineAutoReplyDeps["replyMessageLine"],
+        pushMessagesLine: pushMessagesMock as LineAutoReplyDeps["pushMessagesLine"],
+      });
+
+      await deliverLineAutoReply({
+        ...baseDeliveryParams,
+        payload: { sticker: { raw: "99999:00000" } },
+        lineData: {},
+        deps,
+      });
+
+      expect(pushMessagesMock).toHaveBeenLastCalledWith(
+        "line:user:1",
+        [
+          expect.objectContaining({
+            type: "text",
+            text: expect.stringContaining("スタンプ送信エラー"),
+          }),
+        ],
+        { accountId: "acc" },
+      );
+    });
+
+    it("sends sticker via lineData.sticker (channelData path)", async () => {
+      const { deps, replyMessageLine } = createDeps();
+
+      await deliverLineAutoReply({
+        ...baseDeliveryParams,
+        payload: {},
+        lineData: { sticker: { packageId: "446", stickerId: "1988" } },
+        deps,
+      });
+
+      expect(replyMessageLine).toHaveBeenCalledWith(
+        "token",
+        [{ type: "sticker", packageId: "446", stickerId: "1988" }],
+        { accountId: "acc" },
+      );
+    });
+  });
 });

@@ -1,9 +1,12 @@
 import type { messagingApi } from "@line/bot-sdk";
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
+import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import type { FlexContainer } from "./flex-templates.js";
 import type { ProcessedLineMessage } from "./markdown-to-line.js";
 import type { SendLineReplyChunksParams } from "./reply-chunks.js";
+import { createStickerMessage } from "./send.js";
+import { parseLineStickerRaw } from "./sticker-utils.js";
 import type { LineChannelData, LineTemplateMessagePayload } from "./types.js";
 
 export type LineAutoReplyDeps = {
@@ -90,6 +93,37 @@ export async function deliverLineAutoReply(params: {
       await pushLineMessages(remaining);
     }
   };
+
+  // Sticker-only sending policy: if a valid sticker is present, send only the sticker (drop text).
+  // payload.sticker comes from the common STICKER: directive parser.
+  if (payload.sticker) {
+    const parsed = parseLineStickerRaw(payload.sticker.raw);
+    if (parsed) {
+      const stickerMsg = createStickerMessage(parsed.packageId, parsed.stickerId);
+      try {
+        await sendLineMessages([stickerMsg], true);
+      } catch (err) {
+        logVerbose(`line: sticker send failed (${payload.sticker.raw}): ${String(err)}`);
+        await pushLineMessages([
+          { type: "text", text: `[スタンプ送信エラー: ${payload.sticker.raw}]` },
+        ]);
+      }
+      return { replyTokenUsed };
+    }
+    // Sticker raw is invalid for LINE (e.g. non-numeric) — fall through to normal text delivery.
+  }
+
+  // lineData.sticker: direct channelData path (packageId/stickerId already parsed).
+  if (lineData.sticker) {
+    const stickerMsg = createStickerMessage(lineData.sticker.packageId, lineData.sticker.stickerId);
+    try {
+      await sendLineMessages([stickerMsg], true);
+    } catch (err) {
+      logVerbose(`line: sticker send failed (channelData): ${String(err)}`);
+      await pushLineMessages([{ type: "text", text: "[スタンプ送信エラー]" }]);
+    }
+    return { replyTokenUsed };
+  }
 
   const richMessages: messagingApi.Message[] = [];
   const hasQuickReplies = Boolean(lineData.quickReplies?.length);

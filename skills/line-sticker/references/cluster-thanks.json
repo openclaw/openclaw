@@ -1,0 +1,196 @@
+{
+  "name": "thanks",
+  "description": "Thanks / Joy / Celebration",
+  "count": 31,
+  "lang_distribution": {
+    "universal": 8,
+    "ja": 8,
+    "th": 1,
+    "zh-tw": 9,
+    "en": 5
+  },
+  "stickers": [
+    {
+      "id": "446:1992",
+      "lang": "universal",
+      "desc": "white rabbit, ウインクをしてサムズアップをしている笑顔, text:\"GOOD\"",
+      "text": "GOOD"
+    },
+    {
+      "id": "446:1994",
+      "lang": "universal",
+      "desc": "white rabbit（白いうさぎ）, 満面の笑みでピースサインをし、照れている, text:\"おつかれさま\"",
+      "text": "おつかれさま"
+    },
+    {
+      "id": "446:2005",
+      "lang": "universal",
+      "desc": "white rabbit（白いうさぎ）, 満面の笑みで片手を挙げたポーズ, text:\"了解です！\"",
+      "text": "了解です！"
+    },
+    {
+      "id": "446:2007",
+      "lang": "universal",
+      "desc": "white rabbit（白いうさぎ）, 笑顔で照れながら花束を抱えているポーズ"
+    },
+    {
+      "id": "446:2011",
+      "lang": "universal",
+      "desc": "yellow chick, 目を閉じて微笑みながら、小さな花束を抱えている, text:\"THANK YOU\"",
+      "text": "THANK YOU"
+    },
+    {
+      "id": "446:2022",
+      "lang": "universal",
+      "desc": "white rabbit（白いうさぎ）, 笑顔でリラックスしながら、温かい飲み物を持っている, text:\"お疲れさま\"",
+      "text": "お疲れさま"
+    },
+    {
+      "id": "446:2027",
+      "lang": "universal",
+      "desc": "white rabbit, 笑顔で目を閉じ、温かい飲み物を持ってホッとしている様子, text:\"お疲れさま\"",
+      "text": "お疲れさま"
+    },
+    {
+      "id": "1070:17855",
+      "lang": "universal",
+      "desc": "yellow chick, 目を閉じて口を開け、ハートに囲まれて飛び跳ねる笑顔"
+    },
+    {
+      "id": "6136:10551378",
+      "lang": "ja",
+      "desc": "white rabbit, 満面の笑みで喜んでいる、手を合わせてときめいている表情"
+    },
+    {
+      "id": "6136:10551381",
+      "lang": "ja",
+      "desc": "white rabbit, 湯呑みを持ち、満面の笑みで後光が差している, text:\"許す\"",
+      "text": "許す"
+    },
+    {
+      "id": "6325:10979912",
+      "lang": "ja",
+      "desc": "brown bear、white rabbit, プレゼント箱から飛び出し、笑顔で喜んでいる様子, text:\"ありがとー\"",
+      "text": "ありがとー"
+    },
+    {
+      "id": "6359:11069856",
+      "lang": "th",
+      "desc": "white rabbit、brown bear, プレゼントボックスから飛び出し、笑顔で手を上げている様子, text:\"Thank you~\"",
+      "text": "Thank you~"
+    },
+    {
+      "id": "6362:11087928",
+      "lang": "zh-tw",
+      "desc": "brown bear、white rabbit, プレゼント箱から飛び出し、笑顔で喜ぶ姿と舞い上がる紙吹雪, text:\"感激不盡\"",
+      "text": "感激不盡"
+    },
+    {
+      "id": "6370:11088024",
+      "lang": "en",
+      "desc": "white rabbit、brown bear, ギフトボックスから飛び出し、笑顔で手を挙げて喜ぶ様子, text:\"Thank you~\"",
+      "text": "Thank you~"
+    },
+    {
+      "id": "6632:11825376",
+      "lang": "zh-tw",
+      "desc": "white rabbit（白いうさぎ）, 満面の笑みで目を閉じ、手を合わせて喜んでいる。ハートとキラキラが舞っている。"
+    },
+    {
+      "id": "6632:11825379",
+      "lang": "zh-tw",
+      "desc": "white rabbit, 満面の笑みでお茶を持ち、背景がキラキラしている, text:\"原諒你了\"",
+      "text": "原諒你了"
+    },
+    {
+      "id": "8515:16581243",
+      "lang": "ja",
+      "desc": "white rabbit（白いうさぎ）, 満面の笑みで嬉しそうに駆け寄る様子, text:\"ありがとうございます！\"",
+      "text": "ありがとうございます！"
+    },
+    {
+      "id": "8515:16581247",
+      "lang": "ja",
+      "desc": "white rabbit, 両手を上げて目を閉じ、満面の笑みを浮かべている, text:\"大丈夫です！！\"",
+      "text": "大丈夫です！！"
+    },
+    {
+      "id": "8515:16581254",
+      "lang": "ja",
+      "desc": "panda, 笑顔で両手を上げ、紙吹雪の中で喜んでいる様子, text:\"さすがです!!\"",
+      "text": "さすがです!!"
+    },
+    {
+      "id": "8515:16581255",
+      "lang": "ja",
+      "desc": "brown bear girl（茶色いクマの女の子）, 頬を赤らめて喜び、ハートに囲まれて飛び跳ねている様子, text:\"うれしいです！\"",
+      "text": "うれしいです！"
+    },
+    {
+      "id": "8515:16581264",
+      "lang": "ja",
+      "desc": "白黒のぶち猫, 笑顔で手を合わせ、満足そうに頬を赤らめている, text:\"ごちそうさまでした\"",
+      "text": "ごちそうさまでした"
+    },
+    {
+      "id": "8522:16581267",
+      "lang": "en",
+      "desc": "white rabbit, 目を細めて口を大きく開けた満面の笑みで、黄色い物体を抱えながら弾んでいる様子, text:\"THANK YOU!\"",
+      "text": "THANK YOU!"
+    },
+    {
+      "id": "8522:16581271",
+      "lang": "en",
+      "desc": "white rabbit, 両手を上げて大喜びしている満面の笑み, text:\"ALL GOOD!\"",
+      "text": "ALL GOOD!"
+    },
+    {
+      "id": "8522:16581279",
+      "lang": "en",
+      "desc": "brown bear girl, 頬を赤らめて両手を口元に寄せ、嬉しそうにしている, text:\"SO HAPPY!\"",
+      "text": "SO HAPPY!"
+    },
+    {
+      "id": "8522:16581288",
+      "lang": "en",
+      "desc": "白黒のぶち猫, 満面の笑みで照れながら手を合わせ、尻尾を振って喜んでいる, text:\"THANKS FOR THE TREAT\"",
+      "text": "THANKS FOR THE TREAT"
+    },
+    {
+      "id": "8525:16581291",
+      "lang": "zh-tw",
+      "desc": "white rabbit（白いうさぎ）、yellow chick（黄色いひよこ）, 満面の笑みでサリーを小脇に抱えながら走る、嬉しそうな様子, text:\"謝謝你！\"",
+      "text": "謝謝你！"
+    },
+    {
+      "id": "8525:16581292",
+      "lang": "zh-tw",
+      "desc": "brown bear, 潤んだ瞳で手を合わせ、頬を赤らめて感激している表情, text:\"你是我的救星！\"",
+      "text": "你是我的救星！"
+    },
+    {
+      "id": "8525:16581295",
+      "lang": "zh-tw",
+      "desc": "white rabbit, 両手を高く上げて満面の笑みを浮かべている様子, text:\"没問題!!\"",
+      "text": "没問題!!"
+    },
+    {
+      "id": "8525:16581302",
+      "lang": "zh-tw",
+      "desc": "panda, 目を細めて（> <）口を大きく開けた満面の笑み。周囲に紙吹雪が舞い、大喜びしているポーズ。, text:\"超厲害的啦！\"",
+      "text": "超厲害的啦！"
+    },
+    {
+      "id": "8525:16581303",
+      "lang": "zh-tw",
+      "desc": "brown bear girl（茶色いクマの女の子）, 頬を赤らめて嬉しそうに飛び跳ねている、周囲にハートが舞っている, text:\"超開心！\"",
+      "text": "超開心！"
+    },
+    {
+      "id": "8525:16581312",
+      "lang": "zh-tw",
+      "desc": "白地に黒い模様のある猫のキャラクター, 満面の笑みで両手を合わせ、感謝を伝えているポーズ, text:\"謝謝招待\"",
+      "text": "謝謝招待"
+    }
+  ]
+}

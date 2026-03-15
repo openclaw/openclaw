@@ -11,14 +11,40 @@ export type ReplyDirectiveParseResult = {
   replyToTag: boolean;
   audioAsVoice?: boolean;
   isSilent: boolean;
+  /** Sticker directive extracted from the text. Raw value is channel-agnostic. */
+  sticker?: { raw: string };
 };
+
+/** Extract STICKER: directives from text, removing them from the output text. Case-insensitive. Only first sticker is used. */
+function extractStickerDirective(text: string): { text: string; sticker?: { raw: string } } {
+  const lines = text.split("\n");
+  let sticker: { raw: string } | undefined;
+  const remaining: string[] = [];
+
+  for (const line of lines) {
+    if (/^sticker:/i.test(line.trimEnd())) {
+      if (!sticker) {
+        const raw = line.slice(line.toLowerCase().indexOf("sticker:") + "sticker:".length).trim();
+        if (raw) {
+          sticker = { raw };
+        }
+      }
+      // Drop STICKER: lines from the output text
+    } else {
+      remaining.push(line);
+    }
+  }
+
+  return { text: remaining.join("\n"), sticker };
+}
 
 export function parseReplyDirectives(
   raw: string,
   options: { currentMessageId?: string; silentToken?: string } = {},
 ): ReplyDirectiveParseResult {
   const split = splitMediaFromOutput(raw);
-  let text = split.text ?? "";
+  const { text: textAfterSticker, sticker } = extractStickerDirective(split.text ?? "");
+  let text = textAfterSticker;
 
   const replyParsed = parseInlineDirectives(text, {
     currentMessageId: options.currentMessageId,
@@ -45,5 +71,6 @@ export function parseReplyDirectives(
     replyToTag: replyParsed.hasReplyTag,
     audioAsVoice: split.audioAsVoice,
     isSilent,
+    sticker,
   };
 }

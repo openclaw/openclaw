@@ -501,6 +501,18 @@ export async function buildLineMessageContext(params: BuildLineMessageContextPar
     inboundHistory,
   });
 
+  // Attach structured sticker info for received sticker messages (parallel to existing text description).
+  if (message.type === "sticker") {
+    const sticker = message;
+    const keywords = (sticker as StickerEventMessage & { keywords?: string[] }).keywords;
+    ctxPayload.StickerInfo = {
+      raw: `${sticker.packageId}:${sticker.stickerId}`,
+      keywords: keywords ?? [],
+      description: extractMessageText(message),
+      channel: "line",
+    };
+  }
+
   return {
     ctxPayload,
     event,

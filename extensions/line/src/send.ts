@@ -105,6 +105,17 @@ function createTextMessage(text: string): TextMessage {
   return { type: "text", text };
 }
 
+export function createStickerMessage(
+  packageId: string,
+  stickerId: string,
+): messagingApi.StickerMessage {
+  return {
+    type: "sticker",
+    packageId,
+    stickerId,
+  };
+}
+
 export function createImageMessage(
   originalContentUrl: string,
   previewImageUrl?: string,
