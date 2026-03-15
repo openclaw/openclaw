@@ -19,6 +19,8 @@ Goal: Gmail watch -> Pub/Sub push -> `gog gmail watch serve` -> OpenClaw webhook
   Other tunnel services can work, but are DIY/unsupported and require manual wiring.
   Right now, Tailscale is what we support.
 
+For **Gmail push to OpenClaw** this flow uses **gog** only. For other Google Workspace automation (Gmail read/send, Drive, Calendar, Sheets, Docs, Chat), you can also use the community [Google Workspace CLI (gws)](https://github.com/googleworkspace/cli) (not an officially supported Google product); see the `gws` skill in OpenClaw.
+
 Example hook config (enable Gmail preset mapping):
 
 ```json5
