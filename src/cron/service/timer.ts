@@ -72,20 +72,47 @@ export async function executeJobCoreWithTimeout(
   }
 
   const runAbortController = new AbortController();
-  let timeoutId: NodeJS.Timeout | undefined;
+  let executionTimeoutId: ReturnType<typeof setTimeout> | undefined;
+  let safetyTimeoutId: ReturnType<typeof setTimeout> | undefined;
+  // Defer the execution timeout timer until executeJobCore signals that
+  // actual execution has begun.  This prevents queue wait time (lane
+  // acquisition inside the embedded runner) from consuming the execution
+  // timeout budget.  (#41783)
+  let rejectRace: ((err: Error) => void) | undefined;
+  let armed = false;
+  const fireTimeout = () => {
+    runAbortController.abort(timeoutErrorMessage());
+    rejectRace?.(new Error(timeoutErrorMessage()));
+  };
+  const armExecutionTimeout = () => {
+    if (armed) {
+      return;
+    }
+    armed = true;
+    // Cancel the safety backstop and start the real execution timer.
+    if (safetyTimeoutId) {
+      clearTimeout(safetyTimeoutId);
+      safetyTimeoutId = undefined;
+    }
+    executionTimeoutId = setTimeout(fireTimeout, jobTimeoutMs);
+  };
   try {
     return await Promise.race([
-      executeJobCore(state, job, runAbortController.signal),
+      executeJobCore(state, job, runAbortController.signal, armExecutionTimeout),
       new Promise<never>((_, reject) => {
-        timeoutId = setTimeout(() => {
-          runAbortController.abort(timeoutErrorMessage());
-          reject(new Error(timeoutErrorMessage()));
-        }, jobTimeoutMs);
+        rejectRace = reject;
+        // Safety backstop: if executeJobCore returns early without arming
+        // (e.g. skipped/error before real work), this generous ceiling
+        // ensures we never hang forever.  2× the configured timeout.
+        safetyTimeoutId = setTimeout(fireTimeout, jobTimeoutMs * 2);
       }),
     ]);
   } finally {
-    if (timeoutId) {
-      clearTimeout(timeoutId);
+    if (executionTimeoutId) {
+      clearTimeout(executionTimeoutId);
+    }
+    if (safetyTimeoutId) {
+      clearTimeout(safetyTimeoutId);
     }
   }
 }
@@ -1006,6 +1033,9 @@ export async function executeJobCore(
   state: CronServiceState,
   job: CronJob,
   abortSignal?: AbortSignal,
+  /** Called by the job just before starting real work (e.g. LLM call) so the
+   *  caller can defer the timeout timer until after lane/queue wait.  (#41783) */
+  onExecutionStart?: () => void,
 ): Promise<
   CronRunOutcome & CronRunTelemetry & { delivered?: boolean; deliveryAttempted?: boolean }
 > {
@@ -1039,6 +1069,8 @@ export async function executeJobCore(
     return resolveAbortError();
   }
   if (job.sessionTarget === "main") {
+    // Arm execution timeout for main session jobs too.
+    onExecutionStart?.();
     const text = resolveJobPayloadTextForMain(job);
     if (!text) {
       const kind = job.payload.kind;
@@ -1129,6 +1161,10 @@ export async function executeJobCore(
   if (abortSignal?.aborted) {
     return resolveAbortError();
   }
+
+  // Arm the execution timeout now — the job is about to start real work.
+  // This excludes lane queue wait time from the timeout budget.  (#41783)
+  onExecutionStart?.();
 
   const res = await state.deps.runIsolatedAgentJob({
     job,
