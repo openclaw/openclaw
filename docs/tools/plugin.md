@@ -164,12 +164,29 @@ Important trust note:
 - [Nostr](/channels/nostr) — `@openclaw/nostr`
 - [Zalo](/channels/zalo) — `@openclaw/zalo`
 - [Microsoft Teams](/channels/msteams) — `@openclaw/msteams`
+- BytePlus provider catalog — bundled as `byteplus` (enabled by default)
+- Cloudflare AI Gateway provider catalog — bundled as `cloudflare-ai-gateway` (enabled by default)
 - Google Antigravity OAuth (provider auth) — bundled as `google-antigravity-auth` (disabled by default)
 - Gemini CLI OAuth (provider auth) — bundled as `google-gemini-cli-auth` (disabled by default)
 - GitHub Copilot provider runtime — bundled as `github-copilot` (enabled by default)
+- Hugging Face provider catalog — bundled as `huggingface` (enabled by default)
+- Kilo Gateway provider runtime — bundled as `kilocode` (enabled by default)
+- Kimi Coding provider catalog — bundled as `kimi-coding` (enabled by default)
+- MiniMax provider catalog — bundled as `minimax` (enabled by default)
+- MiniMax OAuth (provider auth + catalog) — bundled as `minimax-portal-auth` (enabled by default)
+- Model Studio provider catalog — bundled as `modelstudio` (enabled by default)
+- Moonshot provider runtime — bundled as `moonshot` (enabled by default)
+- NVIDIA provider catalog — bundled as `nvidia` (enabled by default)
 - OpenAI Codex provider runtime — bundled as `openai-codex` (enabled by default)
 - OpenRouter provider runtime — bundled as `openrouter` (enabled by default)
-- Qwen OAuth (provider auth) — bundled as `qwen-portal-auth` (disabled by default)
+- Qianfan provider catalog — bundled as `qianfan` (enabled by default)
+- Qwen OAuth (provider auth + catalog) — bundled as `qwen-portal-auth` (enabled by default)
+- Synthetic provider catalog — bundled as `synthetic` (enabled by default)
+- Together provider catalog — bundled as `together` (enabled by default)
+- Venice provider catalog — bundled as `venice` (enabled by default)
+- Vercel AI Gateway provider catalog — bundled as `vercel-ai-gateway` (enabled by default)
+- Volcengine provider catalog — bundled as `volcengine` (enabled by default)
+- Xiaomi provider catalog — bundled as `xiaomi` (enabled by default)
 - Copilot Proxy (provider auth) — local VS Code Copilot Proxy bridge; distinct from built-in `github-copilot` device login (bundled, disabled by default)
 
 Native OpenClaw plugins are **TypeScript modules** loaded at runtime via jiti.
@@ -323,6 +340,16 @@ api.registerProvider({
 - OpenRouter uses `capabilities`, `wrapStreamFn`, and `isCacheTtlEligible`
   to keep provider-specific request headers, routing metadata, reasoning
   patches, and prompt-cache policy out of core.
+- Moonshot uses `catalog` plus `wrapStreamFn` because it still uses the shared
+  OpenAI transport but needs provider-owned thinking payload normalization.
+- Kilocode uses `catalog`, `capabilities`, `wrapStreamFn`, and
+  `isCacheTtlEligible` because it needs provider-owned request headers,
+  reasoning payload normalization, Gemini transcript hints, and Anthropic
+  cache-TTL gating.
+- Catalog-only bundled providers such as `byteplus`, `cloudflare-ai-gateway`,
+  `huggingface`, `kimi-coding`, `minimax`, `minimax-portal`, `modelstudio`,
+  `nvidia`, `qianfan`, `qwen-portal`, `synthetic`, `together`, `venice`,
+  `vercel-ai-gateway`, `volcengine`, and `xiaomi` use `catalog` only.
 
 ## Load pipeline
 
@@ -561,18 +588,44 @@ OpenClaw scans, in order:
 - `~/.openclaw/extensions/*.ts`
 - `~/.openclaw/extensions/*/index.ts`
 
-4. Bundled extensions (shipped with OpenClaw, mostly disabled by default)
+4. Bundled extensions (shipped with OpenClaw; mixed default-on/default-off)
 
 - `<openclaw>/extensions/*`
 
-Most bundled plugins must be enabled explicitly via
-`plugins.entries.<id>.enabled` or `openclaw plugins enable <id>`.
+Many bundled provider plugins are enabled by default so model catalogs/runtime
+hooks stay available without extra setup. Others still require explicit
+enablement via `plugins.entries.<id>.enabled` or
+`openclaw plugins enable <id>`.
 
-Default-on bundled plugin exceptions:
+Default-on bundled plugin examples:
 
+- `byteplus`
+- `cloudflare-ai-gateway`
 - `device-pair`
+- `github-copilot`
+- `huggingface`
+- `kilocode`
+- `kimi-coding`
+- `minimax`
+- `minimax-portal-auth`
+- `modelstudio`
+- `moonshot`
+- `nvidia`
+- `ollama`
+- `openai-codex`
+- `openrouter`
 - `phone-control`
+- `qianfan`
+- `qwen-portal-auth`
+- `sglang`
+- `synthetic`
 - `talk-voice`
+- `together`
+- `venice`
+- `vercel-ai-gateway`
+- `vllm`
+- `volcengine`
+- `xiaomi`
 - active memory slot plugin (default slot: `memory-core`)
 
 Installed plugins are enabled by default, but can be disabled the same way.
@@ -628,9 +681,8 @@ Enablement is resolved after discovery:
   - channel config implicitly enables the bundled channel plugin
 - exclusive slots can force-enable the selected plugin for that slot
 
-In current core, bundled default-on ids include local/provider helpers such as
-`ollama`, `sglang`, `vllm`, plus `device-pair`, `phone-control`, and
-`talk-voice`.
+In current core, bundled default-on ids include the local/provider helpers
+above plus the active memory slot plugin.
 
 ### Package packs
 

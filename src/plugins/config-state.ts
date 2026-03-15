@@ -24,15 +24,33 @@ export type NormalizedPluginsConfig = {
 };
 
 export const BUNDLED_ENABLED_BY_DEFAULT = new Set<string>([
+  "byteplus",
+  "cloudflare-ai-gateway",
   "device-pair",
   "github-copilot",
+  "huggingface",
+  "kilocode",
+  "kimi-coding",
+  "minimax",
+  "minimax-portal-auth",
+  "modelstudio",
+  "moonshot",
+  "nvidia",
   "ollama",
   "openai-codex",
   "openrouter",
   "phone-control",
+  "qianfan",
+  "qwen-portal-auth",
   "sglang",
+  "synthetic",
   "talk-voice",
+  "together",
+  "venice",
+  "vercel-ai-gateway",
   "vllm",
+  "volcengine",
+  "xiaomi",
 ]);
 
 const normalizeList = (value: unknown): string[] => {

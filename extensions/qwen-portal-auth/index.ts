@@ -5,6 +5,8 @@ import {
   type ProviderAuthContext,
   type ProviderCatalogContext,
 } from "openclaw/plugin-sdk/qwen-portal-auth";
+import { ensureAuthProfileStore, listProfilesForProvider } from "../../src/agents/auth-profiles.js";
+import { QWEN_OAUTH_MARKER } from "../../src/agents/model-auth-markers.js";
 import { loginQwenPortalOAuth } from "./oauth.js";
 
 const PROVIDER_ID = "qwen-portal";
@@ -58,9 +60,14 @@ function buildProviderCatalog(params: { baseUrl: string; apiKey: string }) {
 
 function resolveCatalog(ctx: ProviderCatalogContext) {
   const explicitProvider = ctx.config.models?.providers?.[PROVIDER_ID];
-  const apiKey =
-    ctx.resolveProviderApiKey(PROVIDER_ID).apiKey ??
-    (typeof explicitProvider?.apiKey === "string" ? explicitProvider.apiKey.trim() : undefined);
+  const envApiKey = ctx.resolveProviderApiKey(PROVIDER_ID).apiKey;
+  const authStore = ensureAuthProfileStore(ctx.agentDir, {
+    allowKeychainPrompt: false,
+  });
+  const hasProfiles = listProfilesForProvider(authStore, PROVIDER_ID).length > 0;
+  const explicitApiKey =
+    typeof explicitProvider?.apiKey === "string" ? explicitProvider.apiKey.trim() : undefined;
+  const apiKey = envApiKey ?? explicitApiKey ?? (hasProfiles ? QWEN_OAUTH_MARKER : undefined);
   if (!apiKey) {
     return null;
   }

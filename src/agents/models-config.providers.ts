@@ -4,35 +4,9 @@ import { isRecord } from "../utils.js";
 import { normalizeOptionalSecretInput } from "../utils/normalize-secret-input.js";
 import { ensureAuthProfileStore, listProfilesForProvider } from "./auth-profiles.js";
 import { discoverBedrockModels } from "./bedrock-discovery.js";
-import {
-  buildCloudflareAiGatewayModelDefinition,
-  resolveCloudflareAiGatewayBaseUrl,
-} from "./cloudflare-ai-gateway.js";
 import { normalizeGoogleModelId } from "./model-id-normalization.js";
+import { resolveOllamaApiBase } from "./models-config.providers.discovery.js";
 import {
-  buildHuggingfaceProvider,
-  buildKilocodeProviderWithDiscovery,
-  buildVeniceProvider,
-  buildVercelAiGatewayProvider,
-  resolveOllamaApiBase,
-} from "./models-config.providers.discovery.js";
-import {
-  buildBytePlusCodingProvider,
-  buildBytePlusProvider,
-  buildDoubaoCodingProvider,
-  buildDoubaoProvider,
-  buildKimiCodingProvider,
-  buildKilocodeProvider,
-  buildMinimaxPortalProvider,
-  buildMinimaxProvider,
-  buildModelStudioProvider,
-  buildMoonshotProvider,
-  buildNvidiaProvider,
-  buildQianfanProvider,
-  buildQwenPortalProvider,
-  buildSyntheticProvider,
-  buildTogetherProvider,
-  buildXiaomiProvider,
   QIANFAN_BASE_URL,
   QIANFAN_DEFAULT_MODEL_ID,
   XIAOMI_DEFAULT_MODEL_ID,
@@ -57,8 +31,6 @@ import {
   runProviderCatalog,
 } from "../plugins/provider-discovery.js";
 import {
-  MINIMAX_OAUTH_MARKER,
-  QWEN_OAUTH_MARKER,
   isNonSecretApiKeyMarker,
   resolveNonEnvSecretRefApiKeyMarker,
   resolveNonEnvSecretRefHeaderValueMarker,
@@ -647,47 +619,6 @@ type ImplicitProviderContext = ImplicitProviderParams & {
   resolveProviderApiKey: ProviderApiKeyResolver;
 };
 
-type ImplicitProviderLoader = (
-  ctx: ImplicitProviderContext,
-) => Promise<Record<string, ProviderConfig> | undefined>;
-
-function withApiKey(
-  providerKey: string,
-  build: (params: {
-    apiKey: string;
-    discoveryApiKey?: string;
-    explicitProvider?: ProviderConfig;
-  }) => ProviderConfig | Promise<ProviderConfig>,
-): ImplicitProviderLoader {
-  return async (ctx) => {
-    const { apiKey, discoveryApiKey } = ctx.resolveProviderApiKey(providerKey);
-    if (!apiKey) {
-      return undefined;
-    }
-    return {
-      [providerKey]: await build({
-        apiKey,
-        discoveryApiKey,
-        explicitProvider: ctx.explicitProviders?.[providerKey],
-      }),
-    };
-  };
-}
-
-function withProfilePresence(
-  providerKey: string,
-  build: () => ProviderConfig | Promise<ProviderConfig>,
-): ImplicitProviderLoader {
-  return async (ctx) => {
-    if (listProfilesForProvider(ctx.authStore, providerKey).length === 0) {
-      return undefined;
-    }
-    return {
-      [providerKey]: await build(),
-    };
-  };
-}
-
 function mergeImplicitProviderSet(
   target: Record<string, ProviderConfig>,
   additions: Record<string, ProviderConfig> | undefined,
@@ -698,155 +629,6 @@ function mergeImplicitProviderSet(
   for (const [key, value] of Object.entries(additions)) {
     target[key] = value;
   }
-}
-
-const SIMPLE_IMPLICIT_PROVIDER_LOADERS: ImplicitProviderLoader[] = [
-  withApiKey("minimax", async ({ apiKey }) => ({ ...buildMinimaxProvider(), apiKey })),
-  withApiKey("moonshot", async ({ apiKey, explicitProvider }) => {
-    const explicitBaseUrl = explicitProvider?.baseUrl;
-    return {
-      ...buildMoonshotProvider(),
-      ...(typeof explicitBaseUrl === "string" && explicitBaseUrl.trim()
-        ? { baseUrl: explicitBaseUrl.trim() }
-        : {}),
-      apiKey,
-    };
-  }),
-  withApiKey("kimi-coding", async ({ apiKey, explicitProvider }) => {
-    const builtInProvider = buildKimiCodingProvider();
-    const explicitBaseUrl = explicitProvider?.baseUrl;
-    const explicitHeaders = isRecord(explicitProvider?.headers)
-      ? (explicitProvider.headers as ProviderConfig["headers"])
-      : undefined;
-    return {
-      ...builtInProvider,
-      ...(typeof explicitBaseUrl === "string" && explicitBaseUrl.trim()
-        ? { baseUrl: explicitBaseUrl.trim() }
-        : {}),
-      ...(explicitHeaders
-        ? {
-            headers: {
-              ...builtInProvider.headers,
-              ...explicitHeaders,
-            },
-          }
-        : {}),
-      apiKey,
-    };
-  }),
-  withApiKey("synthetic", async ({ apiKey }) => ({ ...buildSyntheticProvider(), apiKey })),
-  withApiKey("venice", async ({ apiKey }) => ({ ...(await buildVeniceProvider()), apiKey })),
-  withApiKey("xiaomi", async ({ apiKey }) => ({ ...buildXiaomiProvider(), apiKey })),
-  withApiKey("vercel-ai-gateway", async ({ apiKey }) => ({
-    ...(await buildVercelAiGatewayProvider()),
-    apiKey,
-  })),
-  withApiKey("together", async ({ apiKey }) => ({ ...buildTogetherProvider(), apiKey })),
-  withApiKey("huggingface", async ({ apiKey, discoveryApiKey }) => ({
-    ...(await buildHuggingfaceProvider(discoveryApiKey)),
-    apiKey,
-  })),
-  withApiKey("qianfan", async ({ apiKey }) => ({ ...buildQianfanProvider(), apiKey })),
-  withApiKey("modelstudio", async ({ apiKey, explicitProvider }) => {
-    const explicitBaseUrl = explicitProvider?.baseUrl;
-    return {
-      ...buildModelStudioProvider(),
-      ...(typeof explicitBaseUrl === "string" && explicitBaseUrl.trim()
-        ? { baseUrl: explicitBaseUrl.trim() }
-        : {}),
-      apiKey,
-    };
-  }),
-  withApiKey("nvidia", async ({ apiKey }) => ({ ...buildNvidiaProvider(), apiKey })),
-  withApiKey("kilocode", async ({ apiKey }) => ({
-    ...(await buildKilocodeProviderWithDiscovery()),
-    apiKey,
-  })),
-];
-
-const PROFILE_IMPLICIT_PROVIDER_LOADERS: ImplicitProviderLoader[] = [
-  async (ctx) => {
-    const envKey = resolveEnvApiKeyVarName("minimax-portal", ctx.env);
-    const hasProfiles = listProfilesForProvider(ctx.authStore, "minimax-portal").length > 0;
-    if (!envKey && !hasProfiles) {
-      return undefined;
-    }
-    return {
-      "minimax-portal": {
-        ...buildMinimaxPortalProvider(),
-        apiKey: MINIMAX_OAUTH_MARKER,
-      },
-    };
-  },
-  withProfilePresence("qwen-portal", async () => ({
-    ...buildQwenPortalProvider(),
-    apiKey: QWEN_OAUTH_MARKER,
-  })),
-];
-
-const PAIRED_IMPLICIT_PROVIDER_LOADERS: ImplicitProviderLoader[] = [
-  async (ctx) => {
-    const volcengineKey = ctx.resolveProviderApiKey("volcengine").apiKey;
-    if (!volcengineKey) {
-      return undefined;
-    }
-    return {
-      volcengine: { ...buildDoubaoProvider(), apiKey: volcengineKey },
-      "volcengine-plan": {
-        ...buildDoubaoCodingProvider(),
-        apiKey: volcengineKey,
-      },
-    };
-  },
-  async (ctx) => {
-    const byteplusKey = ctx.resolveProviderApiKey("byteplus").apiKey;
-    if (!byteplusKey) {
-      return undefined;
-    }
-    return {
-      byteplus: { ...buildBytePlusProvider(), apiKey: byteplusKey },
-      "byteplus-plan": {
-        ...buildBytePlusCodingProvider(),
-        apiKey: byteplusKey,
-      },
-    };
-  },
-];
-
-async function resolveCloudflareAiGatewayImplicitProvider(
-  ctx: ImplicitProviderContext,
-): Promise<Record<string, ProviderConfig> | undefined> {
-  const cloudflareProfiles = listProfilesForProvider(ctx.authStore, "cloudflare-ai-gateway");
-  for (const profileId of cloudflareProfiles) {
-    const cred = ctx.authStore.profiles[profileId];
-    if (cred?.type !== "api_key") {
-      continue;
-    }
-    const accountId = cred.metadata?.accountId?.trim();
-    const gatewayId = cred.metadata?.gatewayId?.trim();
-    if (!accountId || !gatewayId) {
-      continue;
-    }
-    const baseUrl = resolveCloudflareAiGatewayBaseUrl({ accountId, gatewayId });
-    if (!baseUrl) {
-      continue;
-    }
-    const envVarApiKey = resolveEnvApiKeyVarName("cloudflare-ai-gateway", ctx.env);
-    const profileApiKey = resolveApiKeyFromCredential(cred, ctx.env)?.apiKey;
-    const apiKey = envVarApiKey ?? profileApiKey ?? "";
-    if (!apiKey) {
-      continue;
-    }
-    return {
-      "cloudflare-ai-gateway": {
-        baseUrl,
-        api: "anthropic-messages",
-        apiKey,
-        models: [buildCloudflareAiGatewayModelDefinition()],
-      },
-    };
-  }
-  return undefined;
 }
 
 async function resolvePluginImplicitProviders(
@@ -860,10 +642,23 @@ async function resolvePluginImplicitProviders(
   });
   const byOrder = groupPluginDiscoveryProvidersByOrder(providers);
   const discovered: Record<string, ProviderConfig> = {};
+  const catalogConfig =
+    ctx.explicitProviders && Object.keys(ctx.explicitProviders).length > 0
+      ? {
+          ...ctx.config,
+          models: {
+            ...ctx.config?.models,
+            providers: {
+              ...ctx.config?.models?.providers,
+              ...ctx.explicitProviders,
+            },
+          },
+        }
+      : (ctx.config ?? {});
   for (const provider of byOrder[order]) {
     const result = await runProviderCatalog({
       provider,
-      config: ctx.config ?? {},
+      config: catalogConfig,
       agentDir: ctx.agentDir,
       workspaceDir: ctx.workspaceDir,
       env: ctx.env,
@@ -912,19 +707,9 @@ export async function resolveImplicitProviders(
     resolveProviderApiKey,
   };
 
-  for (const loader of SIMPLE_IMPLICIT_PROVIDER_LOADERS) {
-    mergeImplicitProviderSet(providers, await loader(context));
-  }
   mergeImplicitProviderSet(providers, await resolvePluginImplicitProviders(context, "simple"));
-  for (const loader of PROFILE_IMPLICIT_PROVIDER_LOADERS) {
-    mergeImplicitProviderSet(providers, await loader(context));
-  }
   mergeImplicitProviderSet(providers, await resolvePluginImplicitProviders(context, "profile"));
-  for (const loader of PAIRED_IMPLICIT_PROVIDER_LOADERS) {
-    mergeImplicitProviderSet(providers, await loader(context));
-  }
   mergeImplicitProviderSet(providers, await resolvePluginImplicitProviders(context, "paired"));
-  mergeImplicitProviderSet(providers, await resolveCloudflareAiGatewayImplicitProvider(context));
   mergeImplicitProviderSet(providers, await resolvePluginImplicitProviders(context, "late"));
 
   const implicitBedrock = await resolveImplicitBedrockProvider({
