@@ -1,5 +1,12 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { describe, expect, it, vi } from "vitest";
+import { registerPluginHttpRoute } from "../../plugins/http-registry.js";
+import { createEmptyPluginRegistry } from "../../plugins/registry.js";
+import {
+  pinActivePluginHttpRouteRegistry,
+  releasePinnedPluginHttpRouteRegistry,
+  setActivePluginRegistry,
+} from "../../plugins/runtime.js";
 import type { PluginRuntime } from "../../plugins/runtime/types.js";
 import type { GatewayRequestContext, GatewayRequestOptions } from "../server-methods/types.js";
 import { makeMockHttpResponse } from "../test-http-response.js";
@@ -281,6 +288,81 @@ describe("createGatewayPluginRequestHandler", () => {
     const handled = await handler({ url: "/API//demo" } as IncomingMessage, res);
     expect(handled).toBe(true);
     expect(routeHandler).toHaveBeenCalledTimes(1);
+  });
+
+  it("handles routes registered into the pinned startup registry after the active registry changes", async () => {
+    const startupRegistry = createTestRegistry();
+    const laterActiveRegistry = createTestRegistry();
+    const routeHandler = vi.fn(async (_req, res: ServerResponse) => {
+      res.statusCode = 202;
+      return true;
+    });
+
+    setActivePluginRegistry(startupRegistry);
+    pinActivePluginHttpRouteRegistry(startupRegistry);
+    setActivePluginRegistry(laterActiveRegistry);
+
+    const unregister = registerPluginHttpRoute({
+      path: "/bluebubbles-webhook",
+      auth: "plugin",
+      handler: routeHandler,
+    });
+
+    try {
+      const handler = createGatewayPluginRequestHandler({
+        registry: startupRegistry,
+        log: createPluginLog(),
+      });
+
+      const { res } = makeMockHttpResponse();
+      const handled = await handler({ url: "/bluebubbles-webhook" } as IncomingMessage, res);
+      expect(handled).toBe(true);
+      expect(routeHandler).toHaveBeenCalledTimes(1);
+      expect(laterActiveRegistry.httpRoutes).toHaveLength(0);
+    } finally {
+      unregister();
+      releasePinnedPluginHttpRouteRegistry(startupRegistry);
+      setActivePluginRegistry(createEmptyPluginRegistry());
+    }
+  });
+
+  it("dispatches using the pinned route registry when both startup and active registries are stale", async () => {
+    const startupRegistry = createTestRegistry();
+    const routeRegistry = createTestRegistry();
+    const laterActiveRegistry = createTestRegistry();
+    const routeHandler = vi.fn(async (_req, res: ServerResponse) => {
+      res.statusCode = 204;
+      return true;
+    });
+
+    setActivePluginRegistry(startupRegistry);
+    pinActivePluginHttpRouteRegistry(routeRegistry);
+    setActivePluginRegistry(laterActiveRegistry);
+
+    const unregister = registerPluginHttpRoute({
+      path: "/bluebubbles-webhook",
+      auth: "plugin",
+      handler: routeHandler,
+    });
+
+    try {
+      const handler = createGatewayPluginRequestHandler({
+        registry: startupRegistry,
+        log: createPluginLog(),
+      });
+
+      const { res } = makeMockHttpResponse();
+      const handled = await handler({ url: "/bluebubbles-webhook" } as IncomingMessage, res);
+      expect(handled).toBe(true);
+      expect(routeHandler).toHaveBeenCalledTimes(1);
+      expect(startupRegistry.httpRoutes).toHaveLength(0);
+      expect(laterActiveRegistry.httpRoutes).toHaveLength(0);
+      expect(routeRegistry.httpRoutes).toHaveLength(1);
+    } finally {
+      unregister();
+      releasePinnedPluginHttpRouteRegistry(routeRegistry);
+      setActivePluginRegistry(createEmptyPluginRegistry());
+    }
   });
 
   it("logs and responds with 500 when a route throws", async () => {

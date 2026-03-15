@@ -1,6 +1,7 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { PluginRegistry } from "../../plugins/registry.js";
+import { getActivePluginHttpRouteRegistry } from "../../plugins/runtime.js";
 import { withPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gateway-request-scope.js";
 import { ADMIN_SCOPE, APPROVALS_SCOPE, PAIRING_SCOPE, WRITE_SCOPE } from "../method-scopes.js";
 import { GATEWAY_CLIENT_IDS, GATEWAY_CLIENT_MODES } from "../protocol/client-info.js";
@@ -59,12 +60,26 @@ export type PluginHttpRequestHandler = (
   dispatchContext?: { gatewayAuthSatisfied?: boolean },
 ) => Promise<boolean>;
 
+function resolveCurrentPluginRegistry(fallback: PluginRegistry): PluginRegistry {
+  const routeRegistry = getActivePluginHttpRouteRegistry();
+  if (!routeRegistry) {
+    return fallback;
+  }
+  const routeCount = routeRegistry.httpRoutes?.length ?? 0;
+  const fallbackRouteCount = fallback.httpRoutes?.length ?? 0;
+  if (routeCount === 0 && fallbackRouteCount > 0) {
+    return fallback;
+  }
+  return routeRegistry;
+}
+
 export function createGatewayPluginRequestHandler(params: {
   registry: PluginRegistry;
   log: SubsystemLogger;
 }): PluginHttpRequestHandler {
-  const { registry, log } = params;
+  const { log } = params;
   return async (req, res, providedPathContext, dispatchContext) => {
+    const registry = resolveCurrentPluginRegistry(params.registry);
     const routes = registry.httpRoutes ?? [];
     if (routes.length === 0) {
       return false;

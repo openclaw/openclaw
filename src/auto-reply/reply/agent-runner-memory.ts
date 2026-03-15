@@ -23,6 +23,7 @@ import {
 } from "../../config/sessions.js";
 import { logVerbose } from "../../globals.js";
 import { registerAgentRunContext } from "../../infra/agent-events.js";
+import { isSubagentSessionKey } from "../../routing/session-key.js";
 import type { TemplateContext } from "../templating.js";
 import type { VerboseLevel } from "../thinking.js";
 import type { GetReplyOptions } from "../types.js";
@@ -65,6 +66,20 @@ export function resolveEffectivePromptTokens(
   // Flush gating projects the next input context by adding the previous
   // completion and the current user prompt estimate.
   return base + output + estimate;
+}
+
+export function shouldAttemptMemoryFlushRun(params: {
+  memoryFlushWritable: boolean;
+  isHeartbeat: boolean;
+  isCli: boolean;
+  sessionKey?: string;
+}): boolean {
+  return (
+    params.memoryFlushWritable &&
+    !params.isHeartbeat &&
+    !params.isCli &&
+    !isSubagentSessionKey(params.sessionKey)
+  );
 }
 
 export type SessionTranscriptUsageSnapshot = {
@@ -266,14 +281,15 @@ export async function runMemoryFlushIfNeeded(params: {
   if (!memoryFlushSettings) {
     return params.sessionEntry;
   }
+  const effectiveSessionKey = params.sessionKey ?? params.followupRun.run.sessionKey;
 
   const memoryFlushWritable = (() => {
-    if (!params.sessionKey) {
+    if (!effectiveSessionKey) {
       return true;
     }
     const runtime = resolveSandboxRuntimeStatus({
       cfg: params.cfg,
-      sessionKey: params.sessionKey,
+      sessionKey: effectiveSessionKey,
     });
     if (!runtime.sandboxed) {
       return true;
@@ -283,10 +299,16 @@ export async function runMemoryFlushIfNeeded(params: {
   })();
 
   const isCli = isCliProvider(params.followupRun.run.provider, params.cfg);
-  const canAttemptFlush = memoryFlushWritable && !params.isHeartbeat && !isCli;
+  const canAttemptFlush = shouldAttemptMemoryFlushRun({
+    memoryFlushWritable,
+    isHeartbeat: params.isHeartbeat,
+    isCli,
+    sessionKey: effectiveSessionKey,
+  });
+  const isSubagentSession = isSubagentSessionKey(effectiveSessionKey);
   let entry =
     params.sessionEntry ??
-    (params.sessionKey ? params.sessionStore?.[params.sessionKey] : undefined);
+    (effectiveSessionKey ? params.sessionStore?.[effectiveSessionKey] : undefined);
   const contextWindowTokens = resolveMemoryFlushContextWindowTokens({
     modelId: params.followupRun.run.model ?? params.defaultModel,
     agentCfgContextTokens: params.agentCfgContextTokens,
@@ -341,7 +363,7 @@ export async function runMemoryFlushIfNeeded(params: {
     ? await readSessionLogSnapshot({
         sessionId: params.followupRun.run.sessionId,
         sessionEntry: entry,
-        sessionKey: params.sessionKey ?? params.followupRun.run.sessionKey,
+        sessionKey: effectiveSessionKey,
         opts: { storePath: params.storePath },
         includeByteSize: shouldCheckTranscriptSizeForForcedFlush,
         includeUsage: shouldReadTranscript,
@@ -370,20 +392,20 @@ export async function runMemoryFlushIfNeeded(params: {
       totalTokensFresh: true,
     };
     entry = nextEntry;
-    if (params.sessionKey && params.sessionStore) {
-      params.sessionStore[params.sessionKey] = nextEntry;
+    if (effectiveSessionKey && params.sessionStore) {
+      params.sessionStore[effectiveSessionKey] = nextEntry;
     }
-    if (params.storePath && params.sessionKey) {
+    if (params.storePath && effectiveSessionKey) {
       try {
         const updatedEntry = await updateSessionStoreEntry({
           storePath: params.storePath,
-          sessionKey: params.sessionKey,
+          sessionKey: effectiveSessionKey,
           update: async () => ({ totalTokens: transcriptPromptTokens, totalTokensFresh: true }),
         });
         if (updatedEntry) {
           entry = updatedEntry;
           if (params.sessionStore) {
-            params.sessionStore[params.sessionKey] = updatedEntry;
+            params.sessionStore[effectiveSessionKey] = updatedEntry;
           }
         }
       } catch (err) {
@@ -420,6 +442,7 @@ export async function runMemoryFlushIfNeeded(params: {
       `tokenCount=${tokenCountForFlush ?? "undefined"} ` +
       `contextWindow=${contextWindowTokens} threshold=${flushThreshold} ` +
       `isHeartbeat=${params.isHeartbeat} isCli=${isCli} memoryFlushWritable=${memoryFlushWritable} ` +
+      `isSubagentSession=${isSubagentSession} ` +
       `compactionCount=${entry?.compactionCount ?? 0} memoryFlushCompactionCount=${entry?.memoryFlushCompactionCount ?? "undefined"} ` +
       `persistedPromptTokens=${persistedPromptTokens ?? "undefined"} persistedFresh=${entry?.totalTokensFresh === true} ` +
       `promptTokensEst=${promptTokenEstimate ?? "undefined"} transcriptPromptTokens=${transcriptPromptTokens ?? "undefined"} transcriptOutputTokens=${transcriptOutputTokens ?? "undefined"} ` +
@@ -455,12 +478,14 @@ export async function runMemoryFlushIfNeeded(params: {
   const activeSessionStore = params.sessionStore;
   let bootstrapPromptWarningSignaturesSeen = resolveBootstrapWarningSignaturesSeen(
     activeSessionEntry?.systemPromptReport ??
-      (params.sessionKey ? activeSessionStore?.[params.sessionKey]?.systemPromptReport : undefined),
+      (effectiveSessionKey
+        ? activeSessionStore?.[effectiveSessionKey]?.systemPromptReport
+        : undefined),
   );
   const flushRunId = crypto.randomUUID();
-  if (params.sessionKey) {
+  if (effectiveSessionKey) {
     registerAgentRunContext(flushRunId, {
-      sessionKey: params.sessionKey,
+      sessionKey: effectiveSessionKey,
       verboseLevel: params.resolvedVerboseLevel,
     });
   }
@@ -522,24 +547,24 @@ export async function runMemoryFlushIfNeeded(params: {
     });
     let memoryFlushCompactionCount =
       activeSessionEntry?.compactionCount ??
-      (params.sessionKey ? activeSessionStore?.[params.sessionKey]?.compactionCount : 0) ??
+      (effectiveSessionKey ? activeSessionStore?.[effectiveSessionKey]?.compactionCount : 0) ??
       0;
     if (memoryCompactionCompleted) {
       const nextCount = await incrementCompactionCount({
         sessionEntry: activeSessionEntry,
         sessionStore: activeSessionStore,
-        sessionKey: params.sessionKey,
+        sessionKey: effectiveSessionKey,
         storePath: params.storePath,
       });
       if (typeof nextCount === "number") {
         memoryFlushCompactionCount = nextCount;
       }
     }
-    if (params.storePath && params.sessionKey) {
+    if (params.storePath && effectiveSessionKey) {
       try {
         const updatedEntry = await updateSessionStoreEntry({
           storePath: params.storePath,
-          sessionKey: params.sessionKey,
+          sessionKey: effectiveSessionKey,
           update: async () => ({
             memoryFlushAt: Date.now(),
             memoryFlushCompactionCount,

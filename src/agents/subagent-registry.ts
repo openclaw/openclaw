@@ -11,8 +11,9 @@ import {
 import { ensureContextEnginesInitialized } from "../context-engine/init.js";
 import { resolveContextEngine } from "../context-engine/registry.js";
 import type { SubagentEndReason } from "../context-engine/types.js";
-import { callGateway } from "../gateway/call.js";
+import { callGateway, randomIdempotencyKey } from "../gateway/call.js";
 import { onAgentEvent } from "../infra/agent-events.js";
+import { AGENT_LANE_SUBAGENT } from "./lanes.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { defaultRuntime } from "../runtime.js";
 import { type DeliveryContext, normalizeDeliveryContext } from "../utils/delivery-context.js";
@@ -578,6 +579,88 @@ function startSubagentAnnounceCleanupFlow(runId: string, entry: SubagentRunRecor
   return true;
 }
 
+/**
+ * Re-trigger a subagent whose agent turn was killed during gateway restart.
+ * Sends a continuation message to the subagent's existing session so it gets
+ * a fresh agent turn to finish its work.  The new runId replaces the old one
+ * in the registry so completion tracking continues seamlessly.
+ */
+async function retriggerSubagentAfterRestart(
+  runId: string,
+  entry: SubagentRunRecord,
+): Promise<void> {
+  const childSessionKey = entry.childSessionKey;
+  const requesterOrigin = normalizeDeliveryContext(entry.requesterOrigin);
+
+  try {
+    const cfg = loadConfig();
+    const runTimeoutSeconds = entry.runTimeoutSeconds ?? 0;
+
+    const continuationMessage = [
+      "[System] The gateway process restarted while you were working.",
+      "Any exec processes you had running were terminated.",
+      "Your conversation history is intact. Continue your task from where you left off.",
+      "If you were waiting on a process, check if it needs to be re-run.",
+    ].join("\n");
+
+    const response = await callGateway<{ runId?: string }>({
+      method: "agent",
+      params: {
+        message: continuationMessage,
+        sessionKey: childSessionKey,
+        channel: requesterOrigin?.channel,
+        to: requesterOrigin?.to ?? undefined,
+        accountId: requesterOrigin?.accountId ?? undefined,
+        threadId:
+          requesterOrigin?.threadId != null ? String(requesterOrigin.threadId) : undefined,
+        idempotencyKey: randomIdempotencyKey(),
+        deliver: false,
+        lane: AGENT_LANE_SUBAGENT,
+        timeout: runTimeoutSeconds,
+        label: entry.label || undefined,
+      },
+      timeoutMs: 10_000,
+    });
+
+    const newRunId = response?.runId;
+    if (typeof newRunId !== "string" || !newRunId.trim()) {
+      // Agent call didn't return a runId, fall back to waiting on old run.
+      defaultRuntime.log(
+        `[warn] Subagent restart recovery: agent call returned no runId for ${childSessionKey}, falling back to wait`,
+      );
+      const waitTimeoutMs = resolveSubagentWaitTimeoutMs(cfg, runTimeoutSeconds);
+      void waitForSubagentCompletion(runId, waitTimeoutMs);
+      return;
+    }
+
+    // Replace the old run entry with the new runId.
+    replaceSubagentRunAfterSteer({
+      previousRunId: runId,
+      nextRunId: newRunId,
+      fallback: entry,
+      runTimeoutSeconds,
+    });
+
+    defaultRuntime.log(
+      `[info] Subagent restart recovery: retriggered ${childSessionKey} old=${runId} new=${newRunId}`,
+    );
+  } catch (err) {
+    defaultRuntime.log(
+      `[warn] Subagent restart recovery failed for ${childSessionKey}: ${String(err)}`,
+    );
+    // Mark the run as failed so it doesn't hang forever.
+    void completeSubagentRun({
+      runId,
+      endedAt: Date.now(),
+      outcome: { status: "error", error: `restart recovery failed: ${String(err)}` },
+      reason: SUBAGENT_ENDED_REASON_ERROR,
+      sendFarewell: true,
+      accountId: requesterOrigin?.accountId,
+      triggerCleanup: true,
+    });
+  }
+}
+
 function resumeSubagentRun(runId: string) {
   if (!runId || resumedRuns.has(runId)) {
     return;
@@ -650,11 +733,10 @@ function resumeSubagentRun(runId: string) {
     return;
   }
 
-  // Wait for completion again after restart.
-  const cfg = loadConfig();
-  const waitTimeoutMs = resolveSubagentWaitTimeoutMs(cfg, entry.runTimeoutSeconds);
-  void waitForSubagentCompletion(runId, waitTimeoutMs);
+  // After gateway restart, the agent turn that was mid-execution was killed.
+  // Re-trigger the subagent with a continuation message so it can resume work.
   resumedRuns.add(runId);
+  void retriggerSubagentAfterRestart(runId, entry);
 }
 
 function restoreSubagentRunsOnce() {
