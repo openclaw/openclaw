@@ -79,6 +79,7 @@ import {
 } from "../../config/group-policy.js";
 import { resolveMarkdownTableMode } from "../../config/markdown-tables.js";
 import {
+  readSessionRecentMessages,
   readSessionUpdatedAt,
   recordSessionMetaFromInbound,
   resolveStorePath,
@@ -175,6 +176,7 @@ export function createRuntimeChannel(): PluginRuntime["channel"] {
       recordSessionMetaFromInbound,
       recordInboundSession,
       updateLastRoute,
+      readRecentMessages: readSessionRecentMessages,
     },
     mentions: {
       buildMentionRegexes,

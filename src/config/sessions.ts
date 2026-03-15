@@ -12,3 +12,4 @@ export * from "./sessions/session-file.js";
 export * from "./sessions/delivery-info.js";
 export * from "./sessions/disk-budget.js";
 export * from "./sessions/targets.js";
+export * from "./sessions/history.js";

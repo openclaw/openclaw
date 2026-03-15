@@ -480,6 +480,7 @@ export {
   recordPendingHistoryEntryIfEnabled,
 } from "../auto-reply/reply/history.js";
 export type { HistoryEntry } from "../auto-reply/reply/history.js";
+export type { SessionHistoryMessage } from "../config/sessions/history.js";
 export { mergeAllowlist, summarizeMapping } from "../channels/allowlists/resolve-utils.js";
 export {
   resolveMentionGating,

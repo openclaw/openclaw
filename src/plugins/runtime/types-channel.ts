@@ -62,6 +62,7 @@ export type PluginRuntimeChannel = {
     recordSessionMetaFromInbound: typeof import("../../config/sessions.js").recordSessionMetaFromInbound;
     recordInboundSession: typeof import("../../channels/session.js").recordInboundSession;
     updateLastRoute: typeof import("../../config/sessions.js").updateLastRoute;
+    readRecentMessages: typeof import("../../config/sessions.js").readSessionRecentMessages;
   };
   mentions: {
     buildMentionRegexes: typeof import("../../auto-reply/reply/mentions.js").buildMentionRegexes;
