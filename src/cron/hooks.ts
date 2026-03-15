@@ -4,7 +4,7 @@ import type { CronConfig, CronHookEntry, CronLifecycleHookPoint } from "../confi
 import { importFileModule, resolveFunctionModuleExport } from "../hooks/module-loader.js";
 import { resolveUserPath } from "../utils.js";
 import type { Logger } from "./service/state.js";
-import type { CronJob } from "./types.js";
+import type { CronJob, CronPayload } from "./types.js";
 
 const DEFAULT_PRIORITY = 10;
 const HOOK_TIMEOUT_MS = 10_000;
@@ -13,6 +13,8 @@ export type CronHookContext = {
   hookPoint: CronLifecycleHookPoint;
   workflow: string;
   job: Pick<CronJob, "id" | "name" | "agentId" | "schedule">;
+  /** The job's payload for this run. Hook scripts can inspect kind/command/message to make decisions. */
+  payload: CronPayload;
   error?: string;
   status?: string;
   durationMs?: number;

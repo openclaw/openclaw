@@ -35,6 +35,7 @@ beforeEach(() => {
 
 function makeCtx(
   hookPoint: "beforeRun" | "afterComplete" | "onFailure" | "afterRun",
+  payload: CronHookContext["payload"] = { kind: "agentTurn", message: "hello" },
 ): CronHookContext {
   return {
     hookPoint,
@@ -45,6 +46,7 @@ function makeCtx(
       agentId: "test-agent",
       schedule: { kind: "every", everyMs: 60_000 },
     },
+    payload,
     meta: {},
     log: noopLog,
   };
@@ -319,5 +321,45 @@ describe("runCronHooks", () => {
     const entries = [{ script, priority: 10 }];
     const result = await runCronHooks("afterRun", makeCtx("afterRun"), entries);
     expect(result.aborted).toBe(false);
+  });
+
+  it("exposes payload.kind to hook via ctx.payload", async () => {
+    // Hook reads ctx.payload.kind and aborts only when it is "agentTurn".
+    const script = inlineHook(
+      `async function(ctx) { return ctx.payload.kind === "agentTurn" ? { abort: true, reason: "kind-check" } : {}; }`,
+    );
+    const entries = [{ script, priority: 10 }];
+    const result = await runCronHooks(
+      "beforeRun",
+      makeCtx("beforeRun", { kind: "agentTurn", message: "hi" }),
+      entries,
+    );
+    expect(result.aborted).toBe(true);
+    expect(result.reason).toBe("kind-check");
+  });
+
+  it("does not abort when payload.kind does not match hook condition", async () => {
+    const script = inlineHook(
+      `async function(ctx) { return ctx.payload.kind === "agentTurn" ? { abort: true } : {}; }`,
+    );
+    const entries = [{ script, priority: 10 }];
+    // systemEvent payload — hook condition should not trigger abort.
+    const result = await runCronHooks(
+      "beforeRun",
+      makeCtx("beforeRun", { kind: "systemEvent", text: "ping" }),
+      entries,
+    );
+    expect(result.aborted).toBe(false);
+  });
+
+  it("exposes all payload fields to the hook", async () => {
+    // Hook reads nested payload fields and signals via meta to verify they are accessible.
+    const script = inlineHook(
+      `async function(ctx) { ctx.meta.seenMessage = ctx.payload.message; }`,
+    );
+    const entries = [{ script, priority: 10 }];
+    const ctx = makeCtx("afterRun", { kind: "agentTurn", message: "check-fields" });
+    await runCronHooks("afterRun", ctx, entries);
+    expect(ctx.meta.seenMessage).toBe("check-fields");
   });
 });
