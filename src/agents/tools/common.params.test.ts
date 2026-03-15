@@ -63,6 +63,13 @@ describe("readNumberParam", () => {
     expect(readNumberParam(params, "messageId", { integer: true })).toBe(42);
   });
 
+  it("rejects fractional values when strictInteger is true", () => {
+    const params = { messageId: "42.9" };
+    expect(() =>
+      readNumberParam(params, "messageId", { integer: true, strictInteger: true }),
+    ).toThrow(/messageId must be an integer/);
+  });
+
   it("accepts snake_case aliases for camelCase keys", () => {
     const params = { message_id: "42" };
     expect(readNumberParam(params, "messageId")).toBe(42);

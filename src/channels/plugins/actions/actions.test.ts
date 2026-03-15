@@ -778,6 +778,48 @@ describe("telegramMessageActions", () => {
         },
       },
       {
+        name: "delete maps to deleteMessage when messageId is provided",
+        action: "delete" as const,
+        params: {
+          to: "-1001234567890",
+          messageId: 42,
+        },
+        expectedPayload: {
+          action: "deleteMessage",
+          chatId: "-1001234567890",
+          messageId: 42,
+          accountId: undefined,
+        },
+      },
+      {
+        name: "topic-delete maps to deleteForumTopic when threadId is provided",
+        action: "topic-delete" as const,
+        params: {
+          to: "-1001234567890",
+          threadId: 271,
+        },
+        expectedPayload: {
+          action: "deleteForumTopic",
+          chatId: "-1001234567890",
+          topicId: 271,
+          accountId: undefined,
+        },
+      },
+      {
+        name: "delete keeps backward compatibility for explicit topic ids",
+        action: "delete" as const,
+        params: {
+          to: "-1001234567890",
+          topicId: 271,
+        },
+        expectedPayload: {
+          action: "deleteForumTopic",
+          chatId: "-1001234567890",
+          topicId: 271,
+          accountId: undefined,
+        },
+      },
+      {
         name: "topic-create maps to createForumTopic",
         action: "topic-create" as const,
         params: {
@@ -804,6 +846,162 @@ describe("telegramMessageActions", () => {
         expect.objectContaining({ mediaLocalRoots: undefined }),
       );
     }
+  });
+
+  it("rejects delete when messageId is not provided", async () => {
+    const cfg = telegramCfg();
+    const handleAction = telegramMessageActions.handleAction;
+    if (!handleAction) {
+      throw new Error("telegram handleAction unavailable");
+    }
+
+    await expect(
+      handleAction({
+        channel: "telegram",
+        action: "delete",
+        params: {
+          to: "-1001234567890",
+        },
+        cfg,
+      }),
+    ).rejects.toThrow(/messageId is required for action=delete/i);
+
+    expect(handleTelegramAction).not.toHaveBeenCalled();
+  });
+
+  it("rejects invalid delete messageId instead of falling back to topic deletion", async () => {
+    const cfg = telegramCfg();
+    const handleAction = telegramMessageActions.handleAction;
+    if (!handleAction) {
+      throw new Error("telegram handleAction unavailable");
+    }
+
+    await expect(
+      handleAction({
+        channel: "telegram",
+        action: "delete",
+        params: {
+          to: "-1001234567890",
+          messageId: "oops",
+          topicId: 271,
+        },
+        cfg,
+      }),
+    ).rejects.toThrow(/messageId must be a valid number for action=delete/i);
+
+    expect(handleTelegramAction).not.toHaveBeenCalled();
+  });
+
+  it("rejects invalid snake_case delete message_id instead of falling back to topic deletion", async () => {
+    const cfg = telegramCfg();
+    const handleAction = telegramMessageActions.handleAction;
+    if (!handleAction) {
+      throw new Error("telegram handleAction unavailable");
+    }
+
+    await expect(
+      handleAction({
+        channel: "telegram",
+        action: "delete",
+        params: {
+          to: "-1001234567890",
+          message_id: "oops",
+          topicId: 271,
+        },
+        cfg,
+      }),
+    ).rejects.toThrow(/messageId must be a valid number for action=delete/i);
+
+    expect(handleTelegramAction).not.toHaveBeenCalled();
+  });
+
+  it("rejects topic-delete when threadId/topicId is missing", async () => {
+    const cfg = telegramCfg();
+    const handleAction = telegramMessageActions.handleAction;
+    if (!handleAction) {
+      throw new Error("telegram handleAction unavailable");
+    }
+
+    await expect(
+      handleAction({
+        channel: "telegram",
+        action: "topic-delete",
+        params: {
+          to: "-1001234567890",
+        },
+        cfg,
+      }),
+    ).rejects.toThrow(/threadId\/topicId is required for action=topic-delete/i);
+
+    expect(handleTelegramAction).not.toHaveBeenCalled();
+  });
+
+  it("rejects non-integer topic-delete ids before telegram-actions", async () => {
+    const cfg = telegramCfg();
+    const handleAction = telegramMessageActions.handleAction;
+    if (!handleAction) {
+      throw new Error("telegram handleAction unavailable");
+    }
+
+    await expect(
+      handleAction({
+        channel: "telegram",
+        action: "topic-delete",
+        params: {
+          to: "-1001234567890",
+          topicId: "271abc",
+        },
+        cfg,
+      }),
+    ).rejects.toThrow(/topicId must be a valid integer when provided/i);
+
+    expect(handleTelegramAction).not.toHaveBeenCalled();
+  });
+
+  it("rejects malformed topicId even when threadId alias is valid", async () => {
+    const cfg = telegramCfg();
+    const handleAction = telegramMessageActions.handleAction;
+    if (!handleAction) {
+      throw new Error("telegram handleAction unavailable");
+    }
+
+    await expect(
+      handleAction({
+        channel: "telegram",
+        action: "topic-delete",
+        params: {
+          to: "-1001234567890",
+          topicId: "oops",
+          threadId: 271,
+        },
+        cfg,
+      }),
+    ).rejects.toThrow(/topicId must be a valid integer when provided/i);
+
+    expect(handleTelegramAction).not.toHaveBeenCalled();
+  });
+
+  it("rejects malformed delete topicId even when threadId alias is valid", async () => {
+    const cfg = telegramCfg();
+    const handleAction = telegramMessageActions.handleAction;
+    if (!handleAction) {
+      throw new Error("telegram handleAction unavailable");
+    }
+
+    await expect(
+      handleAction({
+        channel: "telegram",
+        action: "delete",
+        params: {
+          to: "-1001234567890",
+          topicId: "oops",
+          threadId: 271,
+        },
+        cfg,
+      }),
+    ).rejects.toThrow(/topicId must be a valid integer when provided/i);
+
+    expect(handleTelegramAction).not.toHaveBeenCalled();
   });
 
   it("forwards trusted mediaLocalRoots for send", async () => {

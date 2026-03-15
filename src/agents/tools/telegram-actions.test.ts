@@ -28,6 +28,7 @@ const createForumTopicTelegram = vi.fn(async () => ({
   name: "Topic",
   chatId: "123",
 }));
+const deleteForumTopicTelegram = vi.fn(async () => ({ ok: true }));
 let envSnapshot: ReturnType<typeof captureEnv>;
 
 vi.mock("../../../extensions/telegram/src/send.js", () => ({
@@ -44,6 +45,8 @@ vi.mock("../../../extensions/telegram/src/send.js", () => ({
     editMessageTelegram(...args),
   createForumTopicTelegram: (...args: Parameters<typeof createForumTopicTelegram>) =>
     createForumTopicTelegram(...args),
+  deleteForumTopicTelegram: (...args: Parameters<typeof deleteForumTopicTelegram>) =>
+    deleteForumTopicTelegram(...args),
 }));
 
 describe("handleTelegramAction", () => {
@@ -106,6 +109,7 @@ describe("handleTelegramAction", () => {
     deleteMessageTelegram.mockClear();
     editMessageTelegram.mockClear();
     createForumTopicTelegram.mockClear();
+    deleteForumTopicTelegram.mockClear();
     process.env.TELEGRAM_BOT_TOKEN = "tok";
   });
 
@@ -592,6 +596,75 @@ describe("handleTelegramAction", () => {
       456,
       expect.objectContaining({ token: "tok" }),
     );
+  });
+
+  it("rejects malformed message ids for deleteMessage", async () => {
+    const cfg = {
+      channels: { telegram: { botToken: "tok" } },
+    } as OpenClawConfig;
+    await expect(
+      handleTelegramAction(
+        {
+          action: "deleteMessage",
+          chatId: "123",
+          messageId: "456oops",
+        },
+        cfg,
+      ),
+    ).rejects.toThrow(/messageId required/);
+  });
+
+  it("deletes a forum topic", async () => {
+    const cfg = {
+      channels: { telegram: { botToken: "tok" } },
+    } as OpenClawConfig;
+    await handleTelegramAction(
+      {
+        action: "deleteForumTopic",
+        chatId: "-100123",
+        topicId: 271,
+      },
+      cfg,
+    );
+    expect(deleteForumTopicTelegram).toHaveBeenCalledWith(
+      "-100123",
+      271,
+      expect.objectContaining({ cfg, token: "tok" }),
+    );
+  });
+
+  it("rejects malformed topic ids for deleteForumTopic", async () => {
+    const cfg = {
+      channels: { telegram: { botToken: "tok" } },
+    } as OpenClawConfig;
+    await expect(
+      handleTelegramAction(
+        {
+          action: "deleteForumTopic",
+          chatId: "-100123",
+          topicId: "271abc",
+        },
+        cfg,
+      ),
+    ).rejects.toThrow(/topicId required/);
+  });
+
+  it("respects deleteMessage gating for deleteForumTopic", async () => {
+    const cfg = {
+      channels: {
+        telegram: { botToken: "tok", actions: { deleteMessage: false } },
+      },
+    } as OpenClawConfig;
+    await expect(
+      handleTelegramAction(
+        {
+          action: "deleteForumTopic",
+          chatId: "-100123",
+          topicId: 271,
+        },
+        cfg,
+      ),
+    ).rejects.toThrow(/Telegram forum topic deletion is disabled/);
   });
 
   it("respects deleteMessage gating", async () => {

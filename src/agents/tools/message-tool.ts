@@ -194,6 +194,12 @@ function buildSendSchema(options: {
     filePath: Type.Optional(Type.String()),
     replyTo: Type.Optional(Type.String()),
     threadId: Type.Optional(Type.String()),
+    topicId: Type.Optional(
+      Type.String({
+        description:
+          "Topic/thread id alias for forum-style channels (e.g., Telegram). Supported for topic deletion paths.",
+      }),
+    ),
     asVoice: Type.Optional(Type.Boolean()),
     silent: Type.Optional(Type.Boolean()),
     quoteText: Type.Optional(

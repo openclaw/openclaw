@@ -1439,6 +1439,49 @@ export async function sendPollTelegram(
 }
 
 // ---------------------------------------------------------------------------
+// Forum topic deletion
+// ---------------------------------------------------------------------------
+
+type TelegramDeleteForumTopicOpts = {
+  cfg?: ReturnType<typeof loadConfig>;
+  token?: string;
+  accountId?: string;
+  verbose?: boolean;
+  api?: TelegramApiOverride;
+  retry?: RetryConfig;
+};
+
+export async function deleteForumTopicTelegram(
+  chatIdInput: string | number,
+  topicIdInput: string | number,
+  opts: TelegramDeleteForumTopicOpts = {},
+): Promise<{ ok: true }> {
+  const { cfg, account, api } = resolveTelegramApiContext(opts);
+  const parsedTarget = parseTelegramTarget(String(chatIdInput));
+  const chatId = await resolveAndPersistChatId({
+    cfg,
+    api,
+    lookupTarget: parsedTarget.chatId,
+    persistTarget: String(chatIdInput),
+    verbose: opts.verbose,
+  });
+  const topicId = normalizeMessageId(topicIdInput);
+  const requestWithDiag = createTelegramRequestWithDiag({
+    cfg,
+    account,
+    retry: opts.retry,
+    verbose: opts.verbose,
+    shouldRetry: (err) => isRecoverableTelegramNetworkError(err, { context: "send" }),
+  });
+  if (typeof api.deleteForumTopic !== "function") {
+    throw new Error("Telegram forum topic deletion is unavailable in this bot API.");
+  }
+  await requestWithDiag(() => api.deleteForumTopic(chatId, topicId), "deleteForumTopic");
+  logVerbose(`[telegram] Deleted forum topic ${topicId} from chat ${chatId}`);
+  return { ok: true };
+}
+
+// ---------------------------------------------------------------------------
 // Forum topic creation
 // ---------------------------------------------------------------------------
 

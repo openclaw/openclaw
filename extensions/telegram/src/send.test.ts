@@ -15,6 +15,7 @@ const { botApi, botCtorSpy, loadConfig, loadWebMedia, maybePersistResolvedTelegr
 const {
   buildInlineKeyboard,
   createForumTopicTelegram,
+  deleteForumTopicTelegram,
   editMessageTelegram,
   reactMessageTelegram,
   sendMessageTelegram,
@@ -1948,6 +1949,38 @@ describe("sendPollTelegram", () => {
       ),
     ).rejects.toThrow(/returned no message_id/i);
   });
+});
+
+describe("deleteForumTopicTelegram", () => {
+  const cases = [
+    {
+      name: "uses base chat id when target includes topic suffix",
+      target: "telegram:group:-1001234567890:topic:271",
+      topicId: 271,
+      expectedCall: ["-1001234567890", 271] as const,
+    },
+    {
+      name: "accepts plain chat ids",
+      target: "-1001234567890",
+      topicId: 300,
+      expectedCall: ["-1001234567890", 300] as const,
+    },
+  ] as const;
+
+  for (const testCase of cases) {
+    it(testCase.name, async () => {
+      const deleteForumTopic = vi.fn().mockResolvedValue(true);
+      const api = { deleteForumTopic } as unknown as Bot["api"];
+
+      const result = await deleteForumTopicTelegram(testCase.target, testCase.topicId, {
+        token: "tok",
+        api,
+      });
+
+      expect(deleteForumTopic).toHaveBeenCalledWith(...testCase.expectedCall);
+      expect(result).toEqual({ ok: true });
+    });
+  }
 });
 
 describe("createForumTopicTelegram", () => {

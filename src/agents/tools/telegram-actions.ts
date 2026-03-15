@@ -14,6 +14,7 @@ import {
 import { resolveTelegramReactionLevel } from "../../../extensions/telegram/src/reaction-level.js";
 import {
   createForumTopicTelegram,
+  deleteForumTopicTelegram,
   deleteMessageTelegram,
   editMessageTelegram,
   reactMessageTelegram,
@@ -135,6 +136,8 @@ export async function handleTelegramAction(
     });
     const messageId = readNumberParam(params, "messageId", {
       integer: true,
+      strict: true,
+      strictInteger: true,
     });
     if (typeof messageId !== "number" || !Number.isFinite(messageId) || messageId <= 0) {
       return jsonResult({
@@ -326,6 +329,8 @@ export async function handleTelegramAction(
     const messageId = readNumberParam(params, "messageId", {
       required: true,
       integer: true,
+      strict: true,
+      strictInteger: true,
     });
     const token = resolveTelegramToken(cfg, { accountId }).token;
     if (!token) {
@@ -341,6 +346,35 @@ export async function handleTelegramAction(
     return jsonResult({ ok: true, deleted: true });
   }
 
+  if (action === "deleteForumTopic") {
+    if (!isActionEnabled("deleteMessage")) {
+      throw new Error(
+        "Telegram forum topic deletion is disabled. Set channels.telegram.actions.deleteMessage to true.",
+      );
+    }
+    const chatId = readStringOrNumberParam(params, "chatId", {
+      required: true,
+    });
+    const topicId = readNumberParam(params, "topicId", {
+      required: true,
+      integer: true,
+      strict: true,
+      strictInteger: true,
+    });
+    const token = resolveTelegramToken(cfg, { accountId }).token;
+    if (!token) {
+      throw new Error(
+        "Telegram bot token missing. Set TELEGRAM_BOT_TOKEN or channels.telegram.botToken.",
+      );
+    }
+    await deleteForumTopicTelegram(chatId ?? "", topicId ?? 0, {
+      cfg,
+      token,
+      accountId: accountId ?? undefined,
+    });
+    return jsonResult({ ok: true, deleted: true, topicId });
+  }
+
   if (action === "editMessage") {
     if (!isActionEnabled("editMessage")) {
       throw new Error("Telegram editMessage is disabled.");
@@ -351,6 +385,8 @@ export async function handleTelegramAction(
     const messageId = readNumberParam(params, "messageId", {
       required: true,
       integer: true,
+      strict: true,
+      strictInteger: true,
     });
     const content = readStringParam(params, "content", {
       required: true,
