@@ -51,6 +51,8 @@ Where does the **Gateway** run?
   credentials must exist on the gateway host.
 - **Configure later:** skip setup and leave the app unconfigured.
 
+<!-- markdownlint-disable MD032 -->
+
 <Tip>
 **Gateway auth tip:**
 
@@ -59,6 +61,9 @@ Where does the **Gateway** run?
 - Use a **token** for multi‑machine access or non‑loopback binds.
 
 </Tip>
+
+<!-- markdownlint-enable MD032 -->
+
 </Step>
 <Step title="Permissions">
 <Frame caption="Choose what permissions do you want to give OpenClaw">

@@ -12,4 +12,10 @@ describe("typing mode schema reuse", () => {
     expect(() => SessionSchema.parse({ typingMode: "always" })).toThrow();
     expect(() => AgentDefaultsSchema.parse({ typingMode: "soon" })).toThrow();
   });
+
+  it("accepts bootstrapInjectMemory boolean and rejects non-boolean values", () => {
+    expect(() => AgentDefaultsSchema.parse({ bootstrapInjectMemory: true })).not.toThrow();
+    expect(() => AgentDefaultsSchema.parse({ bootstrapInjectMemory: false })).not.toThrow();
+    expect(() => AgentDefaultsSchema.parse({ bootstrapInjectMemory: "false" })).toThrow();
+  });
 });

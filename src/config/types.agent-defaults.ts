@@ -141,6 +141,12 @@ export type AgentDefaultsConfig = {
   /** Max total chars across all injected bootstrap files (default: 150000). */
   bootstrapTotalMaxChars?: number;
   /**
+   * Inject MEMORY.md / memory.md into Project Context bootstrap files.
+   * Set false to rely on memory_search/memory_get recall without always preloading memory files.
+   * Default: true.
+   */
+  bootstrapInjectMemory?: boolean;
+  /**
    * Agent-visible bootstrap truncation warning mode:
    * - off: do not inject warning text
    * - once: inject once per unique truncation signature (default)

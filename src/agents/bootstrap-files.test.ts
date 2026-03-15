@@ -1,12 +1,13 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import type { OpenClawConfig } from "../config/config.js";
 import {
   clearInternalHooks,
   registerInternalHook,
   type AgentBootstrapHookContext,
 } from "../hooks/internal-hooks.js";
-import { makeTempWorkspace } from "../test-helpers/workspace.js";
+import { makeTempWorkspace, writeWorkspaceFile } from "../test-helpers/workspace.js";
 import { resolveBootstrapContextForRun, resolveBootstrapFilesForRun } from "./bootstrap-files.js";
 import type { WorkspaceBootstrapFile } from "./workspace.js";
 
@@ -81,6 +82,19 @@ describe("resolveBootstrapFilesForRun", () => {
     expect(warnings).toHaveLength(3);
     expect(warnings[0]).toContain('missing or invalid "path" field');
   });
+
+  it("skips MEMORY bootstrap files when bootstrapInjectMemory is false", async () => {
+    const workspaceDir = await makeTempWorkspace("openclaw-bootstrap-");
+    await writeWorkspaceFile({ dir: workspaceDir, name: "MEMORY.md", content: "memory content" });
+
+    const cfg = {
+      agents: { defaults: { bootstrapInjectMemory: false } },
+    } as OpenClawConfig;
+    const files = await resolveBootstrapFilesForRun({ workspaceDir, config: cfg });
+
+    expect(files.some((file) => file.name === "MEMORY.md")).toBe(false);
+    expect(files.some((file) => file.name === "AGENTS.md")).toBe(true);
+  });
 });
 
 describe("resolveBootstrapContextForRun", () => {
@@ -97,6 +111,22 @@ describe("resolveBootstrapContextForRun", () => {
     );
 
     expect(extra?.content).toBe("extra");
+  });
+
+  it("omits MEMORY.md from project context when bootstrapInjectMemory is false", async () => {
+    const workspaceDir = await makeTempWorkspace("openclaw-bootstrap-");
+    const memoryPath = await writeWorkspaceFile({
+      dir: workspaceDir,
+      name: "MEMORY.md",
+      content: "memory content",
+    });
+    const cfg = {
+      agents: { defaults: { bootstrapInjectMemory: false } },
+    } as OpenClawConfig;
+
+    const result = await resolveBootstrapContextForRun({ workspaceDir, config: cfg });
+
+    expect(result.contextFiles.some((file) => file.path === memoryPath)).toBe(false);
   });
 
   it("uses heartbeat-only bootstrap files in lightweight heartbeat mode", async () => {
