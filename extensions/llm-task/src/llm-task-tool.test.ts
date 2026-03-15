@@ -141,7 +141,15 @@ describe("llm-task tool (json-only)", () => {
   });
 
   it("throws on unsupported xhigh thinking level", async () => {
-    const tool = createLlmTaskTool(fakeApi());
+    const tool = createLlmTaskTool(
+      fakeApi({
+        config: {
+          agents: {
+            defaults: { workspace: "/tmp", model: { primary: "anthropic/claude-4-sonnet" } },
+          },
+        },
+      }),
+    );
     await expect(tool.execute("id", { prompt: "x", thinking: "xhigh" })).rejects.toThrow(
       /only supported/i,
     );
