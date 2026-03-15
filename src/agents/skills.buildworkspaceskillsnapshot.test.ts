@@ -273,6 +273,35 @@ describe("buildWorkspaceSkillSnapshot", () => {
     });
   });
 
+  it("keeps scanning candidates until it finds real skills", async () => {
+    const workspaceDir = await fixtureSuite.createCaseDir("workspace");
+
+    for (const name of ["000-nope", "001-nope"]) {
+      await fs.mkdir(path.join(workspaceDir, "skills", name), { recursive: true });
+    }
+
+    await writeSkill({
+      dir: path.join(workspaceDir, "skills", "zzz-real-skill"),
+      name: "zzz-real-skill",
+      description: "Discovered after non-skill directories",
+    });
+
+    const snapshot = buildSnapshot(workspaceDir, {
+      config: {
+        skills: {
+          limits: {
+            maxCandidatesPerRoot: 3,
+            maxSkillsLoadedPerSource: 2,
+          },
+        },
+      },
+    });
+
+    expectSnapshotNamesAndPrompt(snapshot, {
+      contains: ["zzz-real-skill"],
+    });
+  });
+
   it("enforces maxSkillFileBytes for root-level SKILL.md", async () => {
     const workspaceDir = await fixtureSuite.createCaseDir("workspace");
     const rootSkillDir = await fixtureSuite.createCaseDir("root-skill");

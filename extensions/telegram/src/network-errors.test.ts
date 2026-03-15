@@ -184,6 +184,21 @@ describe("isSafeToRetrySendError", () => {
     const wrapped = Object.assign(new Error("fetch failed"), { cause: root });
     expect(isSafeToRetrySendError(wrapped)).toBe(true);
   });
+
+  it("allows retry when Telegram returns retry_after", () => {
+    const rateLimited = Object.assign(new Error("429"), {
+      parameters: { retry_after: 0.5 },
+    });
+    expect(isSafeToRetrySendError(rateLimited)).toBe(true);
+  });
+
+  it("does not widen safe-send retries to grammY failed-after envelopes", () => {
+    expect(
+      isSafeToRetrySendError(
+        new Error("Network request for 'sendMessage' failed after 1 attempts."),
+      ),
+    ).toBe(false);
+  });
 });
 
 describe("isTelegramServerError", () => {

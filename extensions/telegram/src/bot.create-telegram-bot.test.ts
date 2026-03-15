@@ -344,7 +344,11 @@ describe("createTelegramBot", () => {
     const getFileSpy = vi.fn(async () => ({ file_path: "photos/p1.jpg" }));
 
     try {
-      createTelegramBot({ token: "tok", testTimings: TELEGRAM_TEST_TIMINGS });
+      createTelegramBot({
+        token: "tok",
+        proxyFetch: globalThis.fetch,
+        testTimings: TELEGRAM_TEST_TIMINGS,
+      });
       const handler = getOnHandler("message") as (ctx: Record<string, unknown>) => Promise<void>;
 
       await handler({
@@ -1864,7 +1868,11 @@ describe("createTelegramBot", () => {
 
     const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
     try {
-      createTelegramBot({ token: "tok", testTimings: TELEGRAM_TEST_TIMINGS });
+      createTelegramBot({
+        token: "tok",
+        proxyFetch: globalThis.fetch,
+        testTimings: TELEGRAM_TEST_TIMINGS,
+      });
       const handler = getOnHandler("channel_post") as (
         ctx: Record<string, unknown>,
       ) => Promise<void>;
@@ -1938,7 +1946,11 @@ describe("createTelegramBot", () => {
 
     useFrozenTime("2026-02-20T00:00:00.000Z");
     try {
-      createTelegramBot({ token: "tok", testTimings: TELEGRAM_TEST_TIMINGS });
+      createTelegramBot({
+        token: "tok",
+        proxyFetch: globalThis.fetch,
+        testTimings: TELEGRAM_TEST_TIMINGS,
+      });
       const handler = getOnHandler("channel_post") as (
         ctx: Record<string, unknown>,
       ) => Promise<void>;
@@ -2059,7 +2071,7 @@ describe("createTelegramBot", () => {
       fetchSpy.mockRestore();
     }
   });
-  it("processes remaining media group photos when one photo download fails", async () => {
+  it("keeps the album caption when one photo download fails", async () => {
     onSpy.mockReset();
     replySpy.mockReset();
 

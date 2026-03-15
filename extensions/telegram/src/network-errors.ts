@@ -166,6 +166,16 @@ export function isSafeToRetrySendError(err: unknown): boolean {
     if (code && PRE_CONNECT_ERROR_CODES.has(code)) {
       return true;
     }
+    if (
+      candidate &&
+      typeof candidate === "object" &&
+      "parameters" in candidate &&
+      candidate.parameters &&
+      typeof candidate.parameters === "object" &&
+      typeof (candidate.parameters as { retry_after?: unknown }).retry_after === "number"
+    ) {
+      return true;
+    }
   }
   return false;
 }

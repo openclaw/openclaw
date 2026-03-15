@@ -256,7 +256,10 @@ export function createBackspaceDeduper(params?: { dedupeWindowMs?: number; now?:
   let lastBackspaceAt = -1;
 
   return (data: string): string => {
-    if (!matchesKey(data, Key.backspace)) {
+    // Some terminals report backspace as DEL (\x7f) while others emit BS (\x08).
+    // Check both raw bytes first so dedupe stays stable across platforms.
+    const isBackspaceData = data === "\x7f" || data === "\x08" || matchesKey(data, Key.backspace);
+    if (!isBackspaceData) {
       return data;
     }
     const ts = now();
