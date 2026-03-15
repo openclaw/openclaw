@@ -1,5 +1,5 @@
 import { DEFAULT_PROVIDER } from "../../agents/defaults.js";
-import { buildAllowedModelSet } from "../../agents/model-selection.js";
+import { buildAllowedModelSet, normalizeProviderId } from "../../agents/model-selection.js";
 import { loadConfig } from "../../config/config.js";
 import {
   ErrorCodes,
@@ -25,12 +25,30 @@ export const modelsHandlers: GatewayRequestHandlers = {
     try {
       const catalog = await context.loadGatewayModelCatalog();
       const cfg = loadConfig();
-      const { allowedCatalog } = buildAllowedModelSet({
+      const { allowAny, allowedCatalog } = buildAllowedModelSet({
         cfg,
         catalog,
         defaultProvider: DEFAULT_PROVIDER,
       });
-      const models = allowedCatalog.length > 0 ? allowedCatalog : catalog;
+      // When an explicit model allowlist is configured, use it. Otherwise
+      // filter the full catalog to providers that have at least one auth
+      // profile so the picker isn't overwhelmed with 600+ unconfigured models.
+      let models: typeof catalog;
+      if (!allowAny) {
+        models = allowedCatalog;
+      } else {
+        const profiles = cfg?.auth?.profiles;
+        const providerSet = new Set(
+          Object.values(profiles ?? {})
+            .map((p) => (p as { provider?: string }).provider)
+            .filter(Boolean)
+            .map((p) => normalizeProviderId(p as string)),
+        );
+        models =
+          providerSet.size > 0
+            ? catalog.filter((m) => providerSet.has(normalizeProviderId(m.provider)))
+            : catalog;
+      }
       respond(true, { models }, undefined);
     } catch (err) {
       respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, String(err)));
