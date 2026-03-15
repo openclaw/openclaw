@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { isPidAlive } from "../shared/pid-alive.js";
+import { getProcessStartTime, isPidAlive } from "../shared/pid-alive.js";
 import { resolveProcessScopedMap } from "../shared/process-scoped-map.js";
 
 export type FileLockOptions = {
@@ -17,6 +17,11 @@ export type FileLockOptions = {
 type LockFilePayload = {
   pid: number;
   createdAt: string;
+  // /proc/{pid}/stat field 22 (clock ticks since boot), recorded at lock
+  // creation.  Present only on Linux; omitted (undefined) on other platforms.
+  // Used to detect PID recycling: if the same PID is later alive but has a
+  // different startTime, it belongs to a different process.
+  startTime?: number;
 };
 
 type HeldLock = {
@@ -44,7 +49,11 @@ async function readLockPayload(lockPath: string): Promise<LockFilePayload | null
     if (typeof parsed.pid !== "number" || typeof parsed.createdAt !== "string") {
       return null;
     }
-    return { pid: parsed.pid, createdAt: parsed.createdAt };
+    return {
+      pid: parsed.pid,
+      createdAt: parsed.createdAt,
+      ...(typeof parsed.startTime === "number" && { startTime: parsed.startTime }),
+    };
   } catch {
     return null;
   }
@@ -64,20 +73,49 @@ async function resolveNormalizedFilePath(filePath: string): Promise<string> {
 
 async function isStaleLock(lockPath: string, staleMs: number): Promise<boolean> {
   const payload = await readLockPayload(lockPath);
-  if (payload?.pid && !isPidAlive(payload.pid)) {
-    return true;
-  }
-  if (payload?.createdAt) {
+
+  if (payload !== null) {
+    // PID liveness alone is not enough: the OS can recycle a PID after the
+    // original holder exits.  Three complementary checks handle this:
+    //
+    //   1. isPidAlive: fast path — if the PID is gone, the lock is stale.
+    //
+    //   2. startTime (Linux only): /proc/{pid}/stat field 22 records how long
+    //      after boot the process started.  If the current holder's startTime
+    //      differs from the stored value, the PID was recycled by an unrelated
+    //      process and the lock can be reclaimed immediately.
+    //
+    //   3. createdAt age: a reused PID inherits the old creation timestamp, so
+    //      once it exceeds staleMs the lock is reclaimed on any platform.
+    if (!isPidAlive(payload.pid)) {
+      return true;
+    }
+    if (payload.startTime !== undefined) {
+      const currentStartTime = getProcessStartTime(payload.pid);
+      if (currentStartTime !== null && currentStartTime !== payload.startTime) {
+        return true; // PID was recycled by a different process
+      }
+    }
     const createdAt = Date.parse(payload.createdAt);
     if (!Number.isFinite(createdAt) || Date.now() - createdAt > staleMs) {
       return true;
     }
+    return false;
   }
+
+  // payload is null: the lock file exists but its content is empty or
+  // unparseable.  The most likely cause is a crash in the narrow window
+  // between open("wx") (file created, empty) and writeFile (payload written).
+  // A live writer still in that window is indistinguishable from a crashed
+  // one by content alone, so we fall back to the file's mtime: a young file
+  // (mtime < staleMs ago) may belong to a live writer; an old file was
+  // definitely orphaned.  Treating null as immediately stale would steal the
+  // lock from a live writer and break mutual exclusion.
   try {
     const stat = await fs.stat(lockPath);
     return Date.now() - stat.mtimeMs > staleMs;
   } catch {
-    return true;
+    return true; // file vanished: another waiter already handled it
   }
 }
 
@@ -119,8 +157,19 @@ export async function acquireFileLock(
   for (let attempt = 0; attempt < attempts; attempt += 1) {
     try {
       const handle = await fs.open(lockPath, "wx");
+      const startTime = getProcessStartTime(process.pid);
       await handle.writeFile(
-        JSON.stringify({ pid: process.pid, createdAt: new Date().toISOString() }, null, 2),
+        JSON.stringify(
+          {
+            pid: process.pid,
+            createdAt: new Date().toISOString(),
+            // Omit startTime on non-Linux where it is null so the field is
+            // absent from the JSON rather than present as null.
+            ...(startTime !== null && { startTime }),
+          },
+          null,
+          2,
+        ),
         "utf8",
       );
       HELD_LOCKS.set(normalizedFile, { count: 1, handle, lockPath });
@@ -133,10 +182,41 @@ export async function acquireFileLock(
       if (code !== "EEXIST") {
         throw err;
       }
-      if (await isStaleLock(lockPath, options.stale)) {
-        await fs.rm(lockPath, { force: true }).catch(() => undefined);
+
+      // Snapshot the inode of the existing lock file *before* checking
+      // staleness.  We compare it again just before unlinking; if the inode
+      // has changed in the interim, another waiter already reclaimed the
+      // stale file and created a fresh lock — deleting it would silently
+      // break that holder's mutual exclusion guarantee.
+      const staleIno = await fs
+        .stat(lockPath)
+        .then((s) => s.ino)
+        .catch(() => -1);
+
+      // staleIno === -1 means the file vanished between open(EEXIST) and
+      // stat — another process already removed it.  Skip straight to the
+      // next open(O_EXCL) attempt.
+      const isStale = staleIno === -1 || (await isStaleLock(lockPath, options.stale));
+
+      if (isStale) {
+        if (staleIno !== -1) {
+          // Re-verify the path still maps to the same inode we deemed stale.
+          // If it changed, a concurrent waiter beat us to the reclaim and has
+          // already written its own fresh lock; leave that file alone.
+          const currentIno = await fs
+            .stat(lockPath)
+            .then((s) => s.ino)
+            .catch(() => -1);
+          if (currentIno === staleIno) {
+            await fs.rm(lockPath, { force: true }).catch(() => undefined);
+          }
+        }
+        // Retry open(O_EXCL) regardless: either we removed the stale lock or
+        // a concurrent waiter already handled it; either way, the path is now
+        // either free or holds a fresh lock that isStaleLock will reject.
         continue;
       }
+
       if (attempt >= attempts - 1) {
         break;
       }

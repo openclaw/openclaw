@@ -3,6 +3,11 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 
+# Resolve node when not in PATH (e.g. nvm environments). Picks the newest
+# installed nvm version using version-aware sort.
+# shellcheck source=resolve-node.sh
+source "$ROOT_DIR/scripts/pre-commit/resolve-node.sh"
+
 if [[ $# -lt 1 ]]; then
   echo "usage: run-node-tool.sh <tool> [args...]" >&2
   exit 2

@@ -93,6 +93,7 @@ import { sanitizeToolCallIdsForCloudCodeAssist } from "../../tool-call-id.js";
 import { resolveEffectiveToolFsWorkspaceOnly } from "../../tool-fs-policy.js";
 import { normalizeToolName } from "../../tool-policy.js";
 import { resolveTranscriptPolicy } from "../../transcript-policy.js";
+import { recordTokenUsage } from "../../usage-log.js";
 import { DEFAULT_BOOTSTRAP_FILENAME } from "../../workspace.js";
 import { isRunnerAbortError } from "../abort.js";
 import { appendCacheTtlTimestamp, isCacheTtlEligibleProvider } from "../cache-ttl.js";
@@ -2819,6 +2820,19 @@ export async function runEmbeddedAttempt(
             log.warn(`llm_output hook failed: ${String(err)}`);
           });
       }
+
+      recordTokenUsage({
+        workspaceDir: params.workspaceDir,
+        runId: params.runId,
+        sessionId: params.sessionId,
+        sessionKey: params.sessionKey,
+        provider: params.provider,
+        model: params.modelId,
+        label: "llm_output",
+        usage: getUsageTotals(),
+      }).catch((err) => {
+        log.warn(`token usage log failed: ${String(err)}`);
+      });
 
       return {
         aborted,

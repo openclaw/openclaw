@@ -3,6 +3,16 @@
 set -euo pipefail
 
 ROOT_DIR="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
+
+# Resolve node when not in PATH (e.g. nvm environments where the shell
+# profile hasn't been sourced by the git hook). Picks the newest installed
+# nvm version using version-aware sort so that v22 is preferred over v18.
+_resolve_node_sh="$ROOT_DIR/scripts/pre-commit/resolve-node.sh"
+if [[ -f "$_resolve_node_sh" ]]; then
+  # shellcheck source=scripts/pre-commit/resolve-node.sh
+  source "$_resolve_node_sh"
+fi
+unset _resolve_node_sh
 RUN_NODE_TOOL="$ROOT_DIR/scripts/pre-commit/run-node-tool.sh"
 FILTER_FILES="$ROOT_DIR/scripts/pre-commit/filter-staged-files.mjs"
 
