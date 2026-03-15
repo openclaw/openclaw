@@ -382,6 +382,7 @@ function loadAuthProfileStoreForAgent(
     // Fix #41634: Prune ghost profiles that are not in the configured order.
     // This prevents profiles from accumulating indefinitely when repairOAuthProfileIdMismatch
     // or other code creates new profile entries without cleaning up old ones.
+    let pruned = false;
     if (asStore.order && typeof asStore.order === "object") {
       const validProfileIds = new Set<string>();
       for (const profiles of Object.values(asStore.order)) {
@@ -397,8 +398,16 @@ function loadAuthProfileStoreForAgent(
           validProfileIds.add(profileId);
         }
       }
+      // Collect providers that are explicitly managed in order
+      const managedProviders = new Set<string>(Object.keys(asStore.order));
       // Remove ghost profiles not in any valid list
-      for (const profileId of Object.keys(asStore.profiles)) {
+      for (const [profileId, credential] of Object.entries(asStore.profiles)) {
+        // Skip deletion if this profile's provider is not managed in order
+        // This prevents silent data loss for profiles added via upsertAuthProfile
+        // that don't have a corresponding order entry yet
+        if (credential.provider && !managedProviders.has(credential.provider)) {
+          continue;
+        }
         if (!validProfileIds.has(profileId)) {
           delete asStore.profiles[profileId];
           // Also clean up orphaned usageStats entries
@@ -406,13 +415,15 @@ function loadAuthProfileStoreForAgent(
             delete asStore.usageStats[profileId];
           }
           log.info("pruned ghost auth profile", { profileId, agentDir });
+          pruned = true;
         }
       }
     }
     // Runtime secret activation must remain read-only:
     // sync external CLI credentials in-memory, but never persist while readOnly.
     const synced = syncExternalCliCredentials(asStore);
-    if (synced && !readOnly) {
+    // Save when either external credentials synced OR we pruned ghost profiles
+    if ((synced || pruned) && !readOnly) {
       saveJsonFile(authPath, asStore);
     }
     return asStore;
