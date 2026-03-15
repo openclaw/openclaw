@@ -706,6 +706,18 @@ export const MemorySearchSchema = z
       })
       .strict()
       .optional(),
+    autoRecall: z
+      .union([
+        z.boolean(),
+        z
+          .object({
+            enabled: z.boolean().optional(),
+            maxResults: z.number().int().positive().optional(),
+            minScore: z.number().min(0).max(1).optional(),
+          })
+          .strict(),
+      ])
+      .optional(),
   })
   .strict()
   .optional();
