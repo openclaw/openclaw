@@ -30,13 +30,47 @@ async function resolveProfileHint(shell: ShellCompletionStatus["shell"]): Promis
   if (shell === "fish") {
     return "~/.config/fish/config.fish";
   }
-  // Best-effort. PowerShell profile path varies; restart hint is still correct.
+  // Resolve PowerShell profile path from known default locations.
+  // Note: PowerShell's $PROFILE is an automatic variable, not an env var,
+  // so we cannot read it from process.env.
+  if (shell === "powershell") {
+    // On macOS/Linux (pwsh), the profile lives under ~/.config/powershell.
+    if (process.platform !== "win32") {
+      const xdgProfile = path.join(
+        home,
+        ".config",
+        "powershell",
+        "Microsoft.PowerShell_profile.ps1",
+      );
+      return xdgProfile;
+    }
+    const docsDir = process.env.USERPROFILE
+      ? path.join(process.env.USERPROFILE, "Documents")
+      : path.join(home, "Documents");
+    // Prefer PowerShell 7+ path, fall back to Windows PowerShell 5.x path.
+    const ps7Profile = path.join(docsDir, "PowerShell", "Microsoft.PowerShell_profile.ps1");
+    if (await pathExists(ps7Profile)) {
+      return ps7Profile;
+    }
+    const ps5Profile = path.join(docsDir, "WindowsPowerShell", "Microsoft.PowerShell_profile.ps1");
+    if (await pathExists(ps5Profile)) {
+      return ps5Profile;
+    }
+    return ps7Profile;
+  }
   return "$PROFILE";
 }
 
-function formatReloadHint(shell: ShellCompletionStatus["shell"], profileHint: string): string {
+function formatReloadHint(
+  shell: ShellCompletionStatus["shell"],
+  profileHint: string,
+  profileExists: boolean,
+): string {
   if (shell === "powershell") {
-    return "Restart your shell (or reload your PowerShell profile).";
+    if (!profileExists) {
+      return "Restart your shell to activate completions.";
+    }
+    return `Restart your shell or run: . "${profileHint}"`;
   }
   return `Restart your shell or run: source ${profileHint}`;
 }
@@ -100,8 +134,9 @@ export async function setupOnboardingShellCompletion(params: {
     await deps.installCompletion(completionStatus.shell, true, cliName);
 
     const profileHint = await resolveProfileHint(completionStatus.shell);
+    const profileExists = await pathExists(profileHint);
     await params.prompter.note(
-      `Shell completion installed. ${formatReloadHint(completionStatus.shell, profileHint)}`,
+      `Shell completion installed. ${formatReloadHint(completionStatus.shell, profileHint, profileExists)}`,
       "Shell completion",
     );
   }
