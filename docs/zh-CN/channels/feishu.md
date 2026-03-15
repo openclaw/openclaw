@@ -638,7 +638,7 @@ OpenClaw 默认会在需要时发送 Markdown 卡片；如果你需要完整的 
       agentId: "main",
       match: {
         channel: "feishu",
-        peer: { kind: "dm", id: "ou_28b31a88..." },
+        peer: { kind: "direct", id: "ou_28b31a88..." },
       },
     },
     {
@@ -646,7 +646,7 @@ OpenClaw 默认会在需要时发送 Markdown 卡片；如果你需要完整的 
       agentId: "clawd-fan",
       match: {
         channel: "feishu",
-        peer: { kind: "dm", id: "ou_0fe6b1c9..." },
+        peer: { kind: "direct", id: "ou_0fe6b1c9..." },
       },
     },
     {
@@ -663,12 +663,12 @@ OpenClaw 默认会在需要时发送 Markdown 卡片；如果你需要完整的 
 
 匹配规则说明：
 
-| 字段              | 说明                                          |
-| ----------------- | --------------------------------------------- |
-| `agentId`         | 目标 Agent 的 ID，需要在 `agents.list` 中定义 |
-| `match.channel`   | 渠道类型，这里固定为 `"feishu"`               |
-| `match.peer.kind` | 对话类型：`"dm"`（私聊）或 `"group"`（群组）  |
-| `match.peer.id`   | 用户 Open ID（`ou_xxx`）或群组 ID（`oc_xxx`） |
+| 字段              | 说明                                             |
+| ----------------- | ------------------------------------------------ |
+| `agentId`         | 目标 Agent 的 ID，需要在 `agents.list` 中定义    |
+| `match.channel`   | 渠道类型，这里固定为 `"feishu"`                  |
+| `match.peer.kind` | 对话类型：`"direct"`（私聊）或 `"group"`（群组） |
+| `match.peer.id`   | 用户 Open ID（`ou_xxx`）或群组 ID（`oc_xxx`）    |
 
 > 获取 ID 的方法：参见上文 [获取群组/用户 ID](#获取群组用户-id) 章节。
 
