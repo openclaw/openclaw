@@ -460,6 +460,11 @@ export async function monitorWebInbox(options: {
       const dedupeKey = `${options.accountId}:${remoteJid}:${reactorJid ?? ""}:${emoji}:${key?.id ?? ""}`;
       if (isRecentInboundMessage(dedupeKey)) continue;
 
+      // Derive isFromMe from reactor identity, not key.fromMe.
+      // key.fromMe on a reaction refers to whether the *reacted-to message* was from us,
+      // not whether the reactor is us. Compare JIDs directly instead.
+      const isFromMe = reactorJid != null && selfJid != null && reactorJid === selfJid;
+
       const access = await checkInboundAccessControl({
         accountId: options.accountId,
         from,
@@ -467,7 +472,7 @@ export async function monitorWebInbox(options: {
         senderE164,
         group,
         pushName: undefined,
-        isFromMe: Boolean(key?.fromMe),
+        isFromMe,
         messageTimestampMs: Date.now(),
         connectedAtMs,
         sock: { sendMessage: (jid, content) => sock.sendMessage(jid, content) },
@@ -496,7 +501,7 @@ export async function monitorWebInbox(options: {
         senderE164: senderE164 ?? undefined,
         selfJid,
         selfE164,
-        fromMe: Boolean(key?.fromMe),
+        fromMe: isFromMe,
         reactionEmoji: emoji,
         reactionMessageId: reactedMessageId,
         sendComposing: async () => {
