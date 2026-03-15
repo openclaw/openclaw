@@ -218,6 +218,7 @@ export async function initSessionState(params: {
   let persistedModelOverride: string | undefined;
   let persistedProviderOverride: string | undefined;
   let persistedLabel: string | undefined;
+  let persistedLabelAutoSet: boolean | undefined;
 
   const normalizedChatType = normalizeChatType(ctx.ChatType);
   const isGroup =
@@ -354,6 +355,7 @@ export async function initSessionState(params: {
     persistedModelOverride = entry.modelOverride;
     persistedProviderOverride = entry.providerOverride;
     persistedLabel = entry.label;
+    persistedLabelAutoSet = entry.labelAutoSet;
   } else {
     sessionId = crypto.randomUUID();
     isNewSession = true;
@@ -370,6 +372,7 @@ export async function initSessionState(params: {
       persistedModelOverride = entry.modelOverride;
       persistedProviderOverride = entry.providerOverride;
       persistedLabel = entry.label;
+      persistedLabelAutoSet = entry.labelAutoSet;
     }
   }
 
@@ -421,6 +424,7 @@ export async function initSessionState(params: {
     modelOverride: persistedModelOverride ?? baseEntry?.modelOverride,
     providerOverride: persistedProviderOverride ?? baseEntry?.providerOverride,
     label: persistedLabel ?? baseEntry?.label,
+    labelAutoSet: persistedLabelAutoSet ?? baseEntry?.labelAutoSet,
     sendPolicy: baseEntry?.sendPolicy,
     queueMode: baseEntry?.queueMode,
     queueDebounceMs: baseEntry?.queueDebounceMs,
@@ -445,6 +449,10 @@ export async function initSessionState(params: {
     sessionKey,
     existing: sessionEntry,
     groupResolution,
+    isLabelTaken: (label) =>
+      Object.entries(sessionStore).some(
+        ([key, entry]) => key !== sessionKey && entry?.label === label,
+      ),
   });
   if (metaPatch) {
     sessionEntry = { ...sessionEntry, ...metaPatch };
@@ -524,6 +532,17 @@ export async function initSessionState(params: {
   await updateSessionStore(
     storePath,
     (store) => {
+      // Re-check auto-set label uniqueness under the write lock to prevent
+      // concurrent inbound turns from persisting duplicate labels.
+      if (sessionEntry.label && (sessionEntry as Record<string, unknown>).labelAutoSet) {
+        const labelTaken = Object.entries(store).some(
+          ([key, entry]) => key !== sessionKey && entry?.label === sessionEntry.label,
+        );
+        if (labelTaken) {
+          delete sessionEntry.label;
+          delete (sessionEntry as Record<string, unknown>).labelAutoSet;
+        }
+      }
       // Preserve per-session overrides while resetting compaction state on /new.
       store[sessionKey] = { ...store[sessionKey], ...sessionEntry };
       if (retiredLegacyMainDelivery) {
