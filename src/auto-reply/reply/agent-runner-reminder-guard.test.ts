@@ -74,6 +74,11 @@ describe("hasUnbackedReminderCommitment", () => {
     it("returns false for third-person reminder mentions", () => {
       expect(hasUnbackedReminderCommitment("She'll remind you later")).toBe(false);
     });
+
+    it("matches curly/typographic apostrophes", () => {
+      // U+2019 RIGHT SINGLE QUOTATION MARK (most common typographic apostrophe)
+      expect(hasUnbackedReminderCommitment("I\u2019ll remind you tomorrow")).toBe(true);
+    });
   });
 });
 
@@ -96,10 +101,22 @@ describe("appendUnscheduledReminderNote", () => {
     expect(result[0].text).not.toContain(UNSCHEDULED_REMINDER_NOTE);
   });
 
-  it("only appends once across multiple payloads", () => {
+  it("only appends once across multiple payloads, to the first match", () => {
     const payloads = [{ text: "I'll remind you about A." }, { text: "I'll remind you about B." }];
     const result = appendUnscheduledReminderNote(payloads as unknown as ReplyPayload[]);
     const count = result.filter((p) => p.text?.includes(UNSCHEDULED_REMINDER_NOTE)).length;
     expect(count).toBe(1);
+    expect(result[0].text).toContain(UNSCHEDULED_REMINDER_NOTE);
+    expect(result[1].text).not.toContain(UNSCHEDULED_REMINDER_NOTE);
+  });
+
+  it("appends note to the first non-error payload with a commitment", () => {
+    const payloads = [
+      { text: "I'll remind you tomorrow!", isError: true },
+      { text: "I'll remind you again!" },
+    ];
+    const result = appendUnscheduledReminderNote(payloads as unknown as ReplyPayload[]);
+    expect(result[0].text).not.toContain(UNSCHEDULED_REMINDER_NOTE);
+    expect(result[1].text).toContain(UNSCHEDULED_REMINDER_NOTE);
   });
 });
