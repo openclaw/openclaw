@@ -36,6 +36,7 @@ import {
   createOpenRouterWrapper,
   isProxyReasoningUnsupported,
 } from "./proxy-stream-wrappers.js";
+import { createEmptyToolChoiceSanitizer } from "./stream-payload-utils.js";
 
 /**
  * Resolve provider-specific extra params from model config.
@@ -482,4 +483,8 @@ export function applyExtraParamsToAgent(
       log.warn(`ignoring invalid parallel_tool_calls param: ${summary}`);
     }
   }
+
+  // Strip tool_choice when no tools are present to avoid 400 errors on
+  // providers that reject tool_choice without tool definitions.
+  agent.streamFn = createEmptyToolChoiceSanitizer(agent.streamFn);
 }
