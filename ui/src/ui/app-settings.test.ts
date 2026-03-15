@@ -60,6 +60,8 @@ type SettingsHost = {
   themeMediaHandler: ((event: MediaQueryListEvent) => void) | null;
   logsPollInterval: number | null;
   debugPollInterval: number | null;
+  pendingGatewayUrl?: string | null;
+  pendingGatewayToken?: string | null;
 };
 
 function createStorageMock(): Storage {
@@ -84,6 +86,49 @@ function createStorageMock(): Storage {
       store.set(key, String(value));
     },
   };
+}
+
+function setTestWindowUrl(urlString: string) {
+  const current = new URL(urlString);
+  const history = {
+    replaceState: vi.fn((_state: unknown, _title: string, nextUrl: string | URL) => {
+      const next = new URL(String(nextUrl), current.toString());
+      current.href = next.toString();
+      current.protocol = next.protocol;
+      current.host = next.host;
+      current.pathname = next.pathname;
+      current.search = next.search;
+      current.hash = next.hash;
+    }),
+  };
+  const locationLike = {
+    get href() {
+      return current.toString();
+    },
+    get protocol() {
+      return current.protocol;
+    },
+    get host() {
+      return current.host;
+    },
+    get pathname() {
+      return current.pathname;
+    },
+    get search() {
+      return current.search;
+    },
+    get hash() {
+      return current.hash;
+    },
+  };
+  vi.stubGlobal("window", {
+    location: locationLike,
+    history,
+    setInterval,
+    clearInterval,
+  } as unknown as Window & typeof globalThis);
+  vi.stubGlobal("location", locationLike as Location);
+  return { history, location: locationLike };
 }
 
 const createHost = (tab: Tab): SettingsHost => ({
@@ -222,5 +267,50 @@ describe("setTabFromRoute", () => {
     expect(host.themeResolved).toBe("dash-light");
     expect(root.dataset.theme).toBe("dash-light");
     expect(root.style.colorScheme).toBe("light");
+  });
+});
+
+describe("applySettingsFromUrl", () => {
+  let appSettings: AppSettingsModule;
+
+  beforeEach(() => {
+    vi.resetModules();
+    vi.stubGlobal("localStorage", createStorageMock());
+    vi.stubGlobal("sessionStorage", createStorageMock());
+    vi.stubGlobal("navigator", { language: "en-US" } as Navigator);
+    setTestWindowUrl("https://control.example/ui/overview");
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  });
+
+  it("hydrates query token params and strips them from the URL", async () => {
+    appSettings ??= await import("./app-settings.ts");
+    setTestWindowUrl("https://control.example/ui/overview?token=abc123");
+    const host = createHost("overview");
+    host.settings.gatewayUrl = "wss://control.example/openclaw";
+
+    appSettings.applySettingsFromUrl(host);
+
+    expect(host.settings.token).toBe("abc123");
+    expect(window.location.search).toBe("");
+  });
+
+  it("keeps query token params pending when a gatewayUrl confirmation is required", async () => {
+    appSettings ??= await import("./app-settings.ts");
+    setTestWindowUrl(
+      "https://control.example/ui/overview?gatewayUrl=wss://other-gateway.example/openclaw&token=abc123",
+    );
+    const host = createHost("overview");
+    host.settings.gatewayUrl = "wss://control.example/openclaw";
+
+    appSettings.applySettingsFromUrl(host);
+
+    expect(host.settings.token).toBe("");
+    expect(host.pendingGatewayUrl).toBe("wss://other-gateway.example/openclaw");
+    expect(host.pendingGatewayToken).toBe("abc123");
+    expect(window.location.search).toBe("");
   });
 });
