@@ -25,6 +25,7 @@ export {
   extractObservedOverflowTokenCount,
   parseApiErrorInfo,
   sanitizeUserFacingText,
+  hasRateLimitHeaders,
   isBillingErrorMessage,
   isCloudflareOrHtmlErrorPage,
   isCloudCodeAssistFormatError,
