@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { AnyAgentTool } from "../agents/tools/common.js";
 import { createEmptyPluginRegistry } from "../plugins/registry.js";
+import { addExtensionHostToolRegistration } from "./runtime-registry.js";
 import { getExtensionHostPluginToolMeta, resolveExtensionHostPluginTools } from "./tool-runtime.js";
 
 function makeTool(name: string): AnyAgentTool {
@@ -28,7 +29,7 @@ function createContext() {
 describe("resolveExtensionHostPluginTools", () => {
   it("allows optional tools through tool, plugin, and plugin-group allowlists", () => {
     const registry = createEmptyPluginRegistry();
-    registry.tools.push({
+    addExtensionHostToolRegistration(registry, {
       pluginId: "optional-demo",
       optional: true,
       source: "/tmp/optional-demo.js",
@@ -68,14 +69,14 @@ describe("resolveExtensionHostPluginTools", () => {
   it("records conflict diagnostics and preserves tool metadata", () => {
     const registry = createEmptyPluginRegistry();
     const extraTool = makeTool("other_tool");
-    registry.tools.push({
+    addExtensionHostToolRegistration(registry, {
       pluginId: "message",
       optional: false,
       source: "/tmp/message.js",
       factory: () => makeTool("optional_tool"),
       names: ["optional_tool"],
     });
-    registry.tools.push({
+    addExtensionHostToolRegistration(registry, {
       pluginId: "multi",
       optional: false,
       source: "/tmp/multi.js",
@@ -104,7 +105,7 @@ describe("resolveExtensionHostPluginTools", () => {
     const factory = vi.fn(() => {
       throw new Error("boom");
     });
-    registry.tools.push({
+    addExtensionHostToolRegistration(registry, {
       pluginId: "broken",
       optional: false,
       source: "/tmp/broken.js",

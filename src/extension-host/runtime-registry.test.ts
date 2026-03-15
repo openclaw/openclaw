@@ -3,7 +3,9 @@ import { createEmptyPluginRegistry } from "../plugins/registry.js";
 import {
   addExtensionHostCliRegistration,
   addExtensionHostHttpRoute,
+  addExtensionHostProviderRegistration,
   addExtensionHostServiceRegistration,
+  addExtensionHostToolRegistration,
   getExtensionHostGatewayHandlers,
   hasExtensionHostRuntimeEntries,
   listExtensionHostCliRegistrations,
@@ -19,7 +21,7 @@ import {
 describe("extension host runtime registry accessors", () => {
   it("detects runtime entries across non-tool surfaces", () => {
     const providerRegistry = createEmptyPluginRegistry();
-    providerRegistry.providers.push({
+    addExtensionHostProviderRegistration(providerRegistry, {
       pluginId: "provider-demo",
       source: "test",
       provider: {
@@ -82,7 +84,7 @@ describe("extension host runtime registry accessors", () => {
 
   it("projects existing registry collections without copying them", () => {
     const registry = createEmptyPluginRegistry();
-    registry.tools.push({
+    addExtensionHostToolRegistration(registry, {
       pluginId: "tool-demo",
       optional: false,
       source: "test",
@@ -95,6 +97,15 @@ describe("extension host runtime registry accessors", () => {
           return { content: [{ type: "text", text: "ok" }] };
         },
       }),
+    });
+    addExtensionHostProviderRegistration(registry, {
+      pluginId: "provider-demo",
+      source: "test",
+      provider: {
+        id: "provider-demo",
+        label: "Provider Demo",
+        auth: [],
+      },
     });
     addExtensionHostServiceRegistration(registry, {
       pluginId: "svc-demo",
@@ -125,7 +136,8 @@ describe("extension host runtime registry accessors", () => {
       handler,
     });
 
-    expect(listExtensionHostToolRegistrations(registry)).toBe(registry.tools);
+    expect(listExtensionHostToolRegistrations(registry)).toEqual(registry.tools);
+    expect(listExtensionHostProviderRegistrations(registry)).toEqual(registry.providers);
     expect(listExtensionHostServiceRegistrations(registry)).toEqual(registry.services);
     expect(listExtensionHostCliRegistrations(registry)).toEqual(registry.cliRegistrars);
     expect(listExtensionHostHttpRoutes(registry)).toEqual(registry.httpRoutes);
@@ -188,5 +200,33 @@ describe("extension host runtime registry accessors", () => {
     expect(listExtensionHostCliRegistrations(registry)).toEqual(registry.cliRegistrars);
     expect(registry.services[0]?.service).toBe(service);
     expect(registry.cliRegistrars[0]?.register).toBe(register);
+  });
+
+  it("keeps legacy tool and provider mirrors synchronized with host-owned state", () => {
+    const registry = createEmptyPluginRegistry();
+    const factory = (() => ({}) as never) as never;
+    const provider = {
+      id: "provider-demo",
+      label: "Provider Demo",
+      auth: [],
+    };
+
+    addExtensionHostToolRegistration(registry, {
+      pluginId: "tool-demo",
+      optional: false,
+      source: "test",
+      names: ["tool_demo"],
+      factory,
+    });
+    addExtensionHostProviderRegistration(registry, {
+      pluginId: "provider-demo",
+      source: "test",
+      provider,
+    });
+
+    expect(listExtensionHostToolRegistrations(registry)).toEqual(registry.tools);
+    expect(listExtensionHostProviderRegistrations(registry)).toEqual(registry.providers);
+    expect(registry.tools[0]?.factory).toBe(factory);
+    expect(registry.providers[0]?.provider).toBe(provider);
   });
 });

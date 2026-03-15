@@ -12,6 +12,7 @@ import {
   resolveExtensionCommandRegistration,
   resolveExtensionProviderRegistration,
 } from "./runtime-registrations.js";
+import { listExtensionHostProviderRegistrations } from "./runtime-registry.js";
 
 export function pushExtensionHostRegistryDiagnostic(params: {
   registry: PluginRegistry;
@@ -54,7 +55,7 @@ export function resolveExtensionHostProviderCompatibility(params: {
   }
 
   const result = resolveExtensionProviderRegistration({
-    existing: params.registry.providers,
+    existing: [...listExtensionHostProviderRegistrations(params.registry)],
     ownerPluginId: params.record.id,
     ownerSource: params.record.source,
     provider: normalizedProvider,

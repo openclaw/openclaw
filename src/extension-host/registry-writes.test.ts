@@ -154,6 +154,7 @@ describe("extension host registry writes", () => {
     expect(registry.httpRoutes).toHaveLength(1);
     expect(registry.channels).toHaveLength(1);
     expect(registry.providers).toHaveLength(1);
+    expect(registry.providers[0]?.pluginId).toBe("demo");
   });
 
   it("writes legacy hooks, typed hooks, and context engines through host helpers", () => {

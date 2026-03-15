@@ -27,7 +27,9 @@ import type {
 import {
   addExtensionHostCliRegistration,
   addExtensionHostHttpRoute,
+  addExtensionHostProviderRegistration,
   addExtensionHostServiceRegistration,
+  addExtensionHostToolRegistration,
   replaceExtensionHostHttpRoute,
   setExtensionHostGatewayHandler,
 } from "./runtime-registry.js";
@@ -86,7 +88,7 @@ export function addExtensionProviderRegistration(params: {
   entry: ExtensionHostProviderRegistration;
 }): void {
   params.record.providerIds.push(params.providerId);
-  params.registry.providers.push(params.entry as PluginProviderRegistration);
+  addExtensionHostProviderRegistration(params.registry, params.entry as PluginProviderRegistration);
 }
 
 export function addExtensionLegacyHookRegistration(params: {
@@ -123,7 +125,7 @@ export function addExtensionToolRegistration(params: {
   if (params.names.length > 0) {
     params.record.toolNames.push(...params.names);
   }
-  params.registry.tools.push(params.entry as PluginToolRegistration);
+  addExtensionHostToolRegistration(params.registry, params.entry as PluginToolRegistration);
 }
 
 export function addExtensionCliRegistration(params: {
