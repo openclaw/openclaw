@@ -36,12 +36,15 @@ import ai.openclaw.app.MainViewModel
 import ai.openclaw.app.chat.ChatSessionEntry
 import ai.openclaw.app.chat.OutgoingAttachment
 import ai.openclaw.app.ui.mobileAccent
+import ai.openclaw.app.ui.mobileAccentBorderStrong
 import ai.openclaw.app.ui.mobileBorder
 import ai.openclaw.app.ui.mobileBorderStrong
 import ai.openclaw.app.ui.mobileCallout
+import ai.openclaw.app.ui.mobileCardSurface
 import ai.openclaw.app.ui.mobileCaption1
 import ai.openclaw.app.ui.mobileCaption2
 import ai.openclaw.app.ui.mobileDanger
+import ai.openclaw.app.ui.mobileDangerSoft
 import ai.openclaw.app.ui.mobileText
 import ai.openclaw.app.ui.mobileTextSecondary
 import java.io.ByteArrayOutputStream
@@ -168,8 +171,8 @@ private fun ChatThreadSelector(
       Surface(
         onClick = { onSelectSession(entry.key) },
         shape = RoundedCornerShape(14.dp),
-        color = if (active) mobileAccent else Color.White,
-        border = BorderStroke(1.dp, if (active) Color(0xFF154CAD) else mobileBorderStrong),
+        color = if (active) mobileAccent else mobileCardSurface,
+        border = BorderStroke(1.dp, if (active) mobileAccentBorderStrong else mobileBorderStrong),
         tonalElevation = 0.dp,
         shadowElevation = 0.dp,
       ) {
@@ -190,7 +193,7 @@ private fun ChatThreadSelector(
 private fun ChatErrorRail(errorText: String) {
   Surface(
     modifier = Modifier.fillMaxWidth(),
-    color = androidx.compose.ui.graphics.Color.White,
+    color = mobileDangerSoft,
     shape = RoundedCornerShape(12.dp),
     border = androidx.compose.foundation.BorderStroke(1.dp, mobileDanger),
   ) {
