@@ -390,6 +390,100 @@ example
     expect(logs?.[0]?.content).toBe("hello there");
   });
 
+  it("includes OpenAI-style tool call markers, estimates missing assistant cost, and keeps the most recent logs", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-logs-openai-tools-"));
+    const sessionsDir = path.join(root, "agents", "main", "sessions");
+    await fs.mkdir(sessionsDir, { recursive: true });
+    const sessionFile = path.join(sessionsDir, "sess-openai-tools.jsonl");
+
+    await fs.writeFile(
+      sessionFile,
+      [
+        JSON.stringify({
+          type: "message",
+          timestamp: "2026-02-21T09:59:00.000Z",
+          message: {
+            role: "user",
+            content: "too old",
+          },
+        }),
+        JSON.stringify({
+          type: "message",
+          timestamp: "2026-02-21T10:00:00.000Z",
+          message: {
+            role: "assistant",
+            provider: "openai",
+            model: "gpt-5.2",
+            content: "working",
+            tool_calls: [{ name: "weather" }, { function: { name: "search" } }],
+            usage: {
+              input: 100_000,
+              output: 50_000,
+              cacheRead: 50_000,
+            },
+          },
+        }),
+        JSON.stringify({
+          type: "message",
+          timestamp: "2026-02-21T10:01:00.000Z",
+          message: {
+            role: "assistant",
+            function_call: {
+              name: "calculator",
+            },
+          },
+        }),
+        JSON.stringify({
+          type: "message",
+          timestamp: "2026-02-21T10:02:00.000Z",
+          message: {
+            role: "user",
+            content: "latest user",
+          },
+        }),
+      ].join("\n"),
+      "utf-8",
+    );
+
+    const config = {
+      models: {
+        providers: {
+          openai: {
+            models: [
+              {
+                id: "gpt-5.2",
+                cost: {
+                  input: 1,
+                  output: 2,
+                  cacheRead: 3,
+                  cacheWrite: 0,
+                },
+              },
+            ],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const logs = await loadSessionLogs({ sessionFile, config, limit: 3 });
+    expect(logs).toHaveLength(3);
+    expect(logs?.map((entry) => entry.timestamp)).toEqual([
+      new Date("2026-02-21T10:00:00.000Z").getTime(),
+      new Date("2026-02-21T10:01:00.000Z").getTime(),
+      new Date("2026-02-21T10:02:00.000Z").getTime(),
+    ]);
+    expect(logs?.[0]).toMatchObject({
+      role: "assistant",
+      tokens: 200_000,
+    });
+    expect(logs?.[0]?.cost).toBeCloseTo(0.35, 8);
+    expect(logs?.[0]?.content).toContain("working");
+    expect(logs?.[0]?.content).toContain("[Tool: weather]");
+    expect(logs?.[0]?.content).toContain("[Tool: search]");
+    expect(logs?.[1]?.content).toBe("[Tool: calculator]");
+    expect(logs?.[2]?.content).toBe("latest user");
+  });
+
   it("preserves totals and cumulative values when downsampling timeseries", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-timeseries-downsample-"));
     const sessionsDir = path.join(root, "agents", "main", "sessions");
