@@ -43,6 +43,7 @@ Relevant prerequisite work that has landed:
 - loader module-export resolution, config validation, and memory-slot load decisions now have a host-owned helper boundary
 - loader post-import planning and `register(...)` execution now have a host-owned helper boundary
 - loader per-candidate orchestration now has a host-owned helper boundary
+- loader top-level load orchestration now has a host-owned helper boundary
 - loader record-state transitions now have a host-owned helper boundary, including explicit compatibility `lifecycleState` mapping
 - loader final cache, warning, and activation finalization now has a host-owned helper boundary
 

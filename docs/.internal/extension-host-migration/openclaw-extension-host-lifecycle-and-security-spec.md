@@ -44,6 +44,7 @@ What has been implemented:
 - loader module-export resolution, config validation, and memory-slot load decisions now route through `src/extension-host/loader-runtime.ts`
 - loader post-import planning and `register(...)` execution now route through `src/extension-host/loader-register.ts`
 - loader per-candidate orchestration now routes through `src/extension-host/loader-flow.ts`
+- loader top-level load orchestration now routes through `src/extension-host/loader-orchestrator.ts`
 - loader record-state transitions now route through `src/extension-host/loader-state.ts`, including explicit compatibility `lifecycleState` mapping
 - loader final cache, warning, and activation finalization now routes through `src/extension-host/loader-finalize.ts`
 
@@ -64,6 +65,7 @@ How it has been implemented:
 - by moving loader runtime decisions next while preserving the current lazy-load, config-validation, and memory-slot behavior
 - by moving post-import planning and `register(...)` execution next while leaving entry-path and import flow unchanged
 - by composing those seams into one host-owned per-candidate loader orchestrator before moving final lifecycle-state behavior
+- by moving the remaining top-level loader orchestration into a host-owned module while leaving the full lifecycle state machine itself unimplemented
 - by moving record-state transitions next while leaving the lifecycle state machine itself unimplemented
 - by moving cache writes, provenance warnings, final memory-slot warnings, and activation into a host-owned loader finalizer before introducing an explicit lifecycle state machine
 - by adding explicit compatibility `lifecycleState` mapping on loader-owned plugin records before introducing the full lifecycle state machine
