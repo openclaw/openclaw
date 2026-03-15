@@ -347,12 +347,30 @@ describe("scheduleChatScroll", () => {
     host.chatUserNearBottom = true;
     host.chatFollowLocked = false;
     host.chatSmoothAutoScrolling = true;
-    host.chatLastScrollTop = 1600;
+    host.chatLastScrollTop = 1200;
 
     handleChatScroll(host, createScrollEvent(2000, 1300, 400));
 
     expect(host.chatUserNearBottom).toBe(true);
     expect(host.chatFollowLocked).toBe(false);
+  });
+
+  it("releases follow when the user scrolls upward during smooth auto-scroll", () => {
+    const { host } = createScrollHost({
+      scrollHeight: 2000,
+      scrollTop: 1200,
+      clientHeight: 400,
+    });
+    host.chatUserNearBottom = true;
+    host.chatFollowLocked = false;
+    host.chatSmoothAutoScrolling = true;
+    host.chatLastScrollTop = 1600;
+
+    handleChatScroll(host, createScrollEvent(2000, 1100, 400));
+
+    expect(host.chatSmoothAutoScrolling).toBe(false);
+    expect(host.chatUserNearBottom).toBe(false);
+    expect(host.chatFollowLocked).toBe(true);
   });
 });
 

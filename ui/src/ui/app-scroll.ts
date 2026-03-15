@@ -144,7 +144,11 @@ export function handleChatScroll(host: ScrollHost, event: Event) {
   const backAtBottom = distanceFromBottom <= FOLLOW_REACQUIRE_THRESHOLD;
 
   if (host.chatSmoothAutoScrolling) {
-    if (backAtBottom || !scrollingUp) {
+    if (scrollingUp && distanceFromBottom > MANUAL_SCROLL_RELEASE_THRESHOLD) {
+      host.chatSmoothAutoScrolling = false;
+      host.chatUserNearBottom = false;
+      host.chatFollowLocked = true;
+    } else if (backAtBottom || !scrollingUp) {
       host.chatSmoothAutoScrolling = false;
     }
   } else if (
