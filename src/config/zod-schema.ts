@@ -113,9 +113,20 @@ const MemoryQmdSchema = z
 
 const MemorySchema = z
   .object({
-    backend: z.union([z.literal("builtin"), z.literal("qmd")]).optional(),
+    backend: z.union([z.literal("builtin"), z.literal("qmd"), z.literal("graph")]).optional(),
     citations: z.union([z.literal("auto"), z.literal("on"), z.literal("off")]).optional(),
     qmd: MemoryQmdSchema.optional(),
+    graph: z
+      .object({
+        dbPath: z.string().optional(),
+        fts: z.boolean().optional(),
+        anchorBoost: z.number().optional(),
+        transitionBoost: z.number().optional(),
+        autoReinforce: z.boolean().optional(),
+        fallbackToBuiltin: z.boolean().optional(),
+      })
+      .strict()
+      .optional(),
   })
   .strict()
   .optional();

@@ -75,6 +75,40 @@ export async function getMemorySearchManager(params: {
     }
   }
 
+  if (resolved.backend === "graph") {
+    try {
+      const { GraphMemoryManager, resolveGraphConfig } = await import("./graph-manager.js");
+      const { resolveAgentWorkspaceDir } = await import("../agents/agent-scope.js");
+      const workspaceDir = resolveAgentWorkspaceDir(params.cfg, params.agentId);
+      const graphConfig = resolveGraphConfig({
+        workspaceDir,
+        raw: params.cfg.memory?.graph,
+      });
+      const primary = GraphMemoryManager.create(graphConfig);
+      if (primary) {
+        const fallbackToBuiltin = params.cfg.memory?.graph?.fallbackToBuiltin !== false;
+        if (fallbackToBuiltin) {
+          const wrapper = new FallbackMemoryManager(
+            {
+              primary,
+              fallbackFactory: async () => {
+                const { MemoryIndexManager } = await loadManagerRuntime();
+                return await MemoryIndexManager.get(params);
+              },
+            },
+            undefined,
+          );
+          return { manager: wrapper };
+        }
+        return { manager: primary };
+      }
+      log.warn("graph memory: db not found or invalid; falling back to builtin");
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      log.warn(`graph memory unavailable; falling back to builtin: ${message}`);
+    }
+  }
+
   try {
     const { MemoryIndexManager } = await loadManagerRuntime();
     const manager = await MemoryIndexManager.get(params);

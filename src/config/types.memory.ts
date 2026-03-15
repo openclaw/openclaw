@@ -1,6 +1,6 @@
 import type { SessionSendPolicyConfig } from "./types.base.js";
 
-export type MemoryBackend = "builtin" | "qmd";
+export type MemoryBackend = "builtin" | "qmd" | "graph";
 export type MemoryCitationsMode = "auto" | "on" | "off";
 export type MemoryQmdSearchMode = "query" | "search" | "vsearch";
 
@@ -8,6 +8,7 @@ export type MemoryConfig = {
   backend?: MemoryBackend;
   citations?: MemoryCitationsMode;
   qmd?: MemoryQmdConfig;
+  graph?: MemoryGraphConfig;
 };
 
 export type MemoryQmdConfig = {
@@ -64,4 +65,19 @@ export type MemoryQmdLimitsConfig = {
   maxSnippetChars?: number;
   maxInjectedChars?: number;
   timeoutMs?: number;
+};
+
+export type MemoryGraphConfig = {
+  /** Path to SQLite database file (absolute or relative to workspace). Default: "memory/graph/tommy_memory.db" */
+  dbPath?: string;
+  /** Enable FTS5 search. Default: true */
+  fts?: boolean;
+  /** Weight multiplier for anchor-tier results. Default: 1.5 */
+  anchorBoost?: number;
+  /** Weight multiplier for transition-tier results. Default: 1.2 */
+  transitionBoost?: number;
+  /** Auto-increment reinforcement counter on search hits. Default: true */
+  autoReinforce?: boolean;
+  /** Fall back to builtin if graph DB not found. Default: true */
+  fallbackToBuiltin?: boolean;
 };

@@ -865,7 +865,7 @@ export const FIELD_HELP: Record<string, string> = {
     "Caches computed chunk embeddings in SQLite so reindexing and incremental updates run faster (default: true). Keep this enabled unless investigating cache correctness or minimizing disk usage.",
   memory: "Memory backend configuration (global).",
   "memory.backend":
-    'Selects the global memory engine: "builtin" uses OpenClaw memory internals, while "qmd" uses the QMD sidecar pipeline. Keep "builtin" unless you intentionally operate QMD.',
+    'Selects the global memory engine: "builtin" uses OpenClaw memory internals, "qmd" uses the QMD sidecar pipeline, and "graph" uses a SQLite knowledge graph with FTS5 search. Keep "builtin" unless you intentionally operate QMD or have a memory-graph skill database.',
   "memory.citations":
     'Controls citation visibility in replies: "auto" shows citations when useful, "on" always shows them, and "off" hides them. Keep "auto" for a balanced signal-to-noise default.',
   "memory.qmd.command":
@@ -922,6 +922,17 @@ export const FIELD_HELP: Record<string, string> = {
     "Sets per-query QMD search timeout in milliseconds (default: 4000). Increase for larger indexes or slower environments, and lower to keep request latency bounded.",
   "memory.qmd.scope":
     "Defines which sessions/channels are eligible for QMD recall using session.sendPolicy-style rules. Keep default direct-only scope unless you intentionally want cross-chat memory sharing.",
+  "memory.graph.dbPath":
+    "Path to the SQLite knowledge graph database file (absolute or relative to workspace). Default: memory/graph/tommy_memory.db. Created by the memory-graph skill.",
+  "memory.graph.fts": "Enable FTS5 full-text search over the graph. Default: true.",
+  "memory.graph.anchorBoost":
+    "Score multiplier for anchor-tier nodes (identity-critical memories). Default: 1.5.",
+  "memory.graph.transitionBoost":
+    "Score multiplier for transition-tier nodes (identity-forming events). Default: 1.2.",
+  "memory.graph.autoReinforce":
+    "Auto-increment reinforcement counter and update last_accessed on search hits. Default: true.",
+  "memory.graph.fallbackToBuiltin":
+    "Fall back to builtin markdown embedding search if the graph database is not found. Default: true.",
   "agents.defaults.memorySearch.cache.maxEntries":
     "Sets a best-effort upper bound on cached embeddings kept in SQLite for memory search. Use this when controlling disk growth matters more than peak reindex speed.",
   "agents.defaults.memorySearch.sync.onSessionStart":
