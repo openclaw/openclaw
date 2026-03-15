@@ -258,7 +258,7 @@ describe("compaction-safeguard tool failures", () => {
 
 describe("compaction-safeguard toolResult trimming", () => {
   it("truncates oversized tool results and compacts older entries to stay within budget", () => {
-    const messages: AgentMessage[] = Array.from({ length: 7 }, (_unused, index) => ({
+    const messages: AgentMessage[] = Array.from({ length: 9 }, (_unused, index) => ({
       role: "toolResult",
       toolCallId: `call-${index}`,
       toolName: "read",
@@ -273,13 +273,15 @@ describe("compaction-safeguard toolResult trimming", () => {
 
     const trimmed = trimToolResultsForSummarization(messages);
 
-    expect(trimmed.stats.truncatedCount).toBe(7);
+    expect(trimmed.stats.truncatedCount).toBe(9);
     expect(trimmed.stats.compactedCount).toBe(1);
     expect(readTextBlocks(trimmed.messages[0])).toBe("");
     expect(trimmed.stats.afterChars).toBeLessThan(trimmed.stats.beforeChars);
-    expect(readTextBlocks(trimmed.messages[6])).toContain("head-6");
-    expect(readTextBlocks(trimmed.messages[6])).toContain("[truncated for compaction stability]");
-    expect(readTextBlocks(trimmed.messages[6])).toContain("tail-6");
+    expect(readTextBlocks(trimmed.messages[8])).toContain("head-8");
+    expect(readTextBlocks(trimmed.messages[8])).toContain(
+      "[...tool result truncated for compaction budget...]",
+    );
+    expect(readTextBlocks(trimmed.messages[8])).toContain("tail-8");
   });
 
   it("restores kept tool results after prune for both toolCallId and toolUseId", () => {
