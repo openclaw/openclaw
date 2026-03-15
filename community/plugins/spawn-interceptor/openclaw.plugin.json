@@ -1,0 +1,14 @@
+{
+  "id": "spawn-interceptor",
+  "kind": "extension",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "enabled": {
+        "type": "boolean"
+      }
+    },
+    "required": []
+  }
+}
