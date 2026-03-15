@@ -16,10 +16,12 @@ vi.mock("../plugins/providers.js", () => ({
 const resolveProviderPluginChoice = vi.hoisted(() =>
   vi.fn<() => { provider: ProviderPlugin; method: ProviderAuthMethod } | null>(),
 );
-const runProviderModelSelectedHook = vi.hoisted(() => vi.fn(async () => {}));
+const runExtensionHostProviderModelSelectedHook = vi.hoisted(() => vi.fn(async () => {}));
 vi.mock("../plugins/provider-wizard.js", () => ({
   resolveProviderPluginChoice,
-  runProviderModelSelectedHook,
+}));
+vi.mock("../extension-host/provider-model-selection.js", () => ({
+  runExtensionHostProviderModelSelectedHook,
 }));
 
 const upsertAuthProfile = vi.hoisted(() => vi.fn());
@@ -130,7 +132,7 @@ describe("applyAuthChoiceLoadedPluginProvider", () => {
       config: {},
       agentModelOverride: "ollama/qwen3:4b",
     });
-    expect(runProviderModelSelectedHook).not.toHaveBeenCalled();
+    expect(runExtensionHostProviderModelSelectedHook).not.toHaveBeenCalled();
   });
 
   it("applies the default model and runs provider post-setup hooks", async () => {
@@ -155,7 +157,7 @@ describe("applyAuthChoiceLoadedPluginProvider", () => {
       },
       agentDir: "/tmp/agent",
     });
-    expect(runProviderModelSelectedHook).toHaveBeenCalledWith({
+    expect(runExtensionHostProviderModelSelectedHook).toHaveBeenCalledWith({
       config: result?.config,
       model: "ollama/qwen3:4b",
       prompter: expect.objectContaining({ note: expect.any(Function) }),
@@ -279,7 +281,7 @@ describe("applyAuthChoiceLoadedPluginProvider", () => {
         },
       },
     });
-    expect(runProviderModelSelectedHook).not.toHaveBeenCalled();
+    expect(runExtensionHostProviderModelSelectedHook).not.toHaveBeenCalled();
     expect(note).toHaveBeenCalledWith(
       'Default model set to ollama/qwen3:4b for agent "worker".',
       "Model configured",

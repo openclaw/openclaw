@@ -15,10 +15,7 @@ import { createVpsAwareOAuthHandlers } from "../commands/oauth-flow.js";
 import { applyAuthProfileConfig } from "../commands/onboard-auth.js";
 import { openUrl } from "../commands/onboard-helpers.js";
 import { enablePluginInConfig } from "../plugins/enable.js";
-import {
-  resolveProviderPluginChoice,
-  runProviderModelSelectedHook,
-} from "../plugins/provider-wizard.js";
+import { resolveProviderPluginChoice } from "../plugins/provider-wizard.js";
 import { resolvePluginProviders } from "../plugins/providers.js";
 import type { ProviderAuthMethod } from "../plugins/types.js";
 import {
@@ -27,6 +24,7 @@ import {
   pickExtensionHostAuthMethod,
   resolveExtensionHostProviderMatch,
 } from "./provider-auth.js";
+import { runExtensionHostProviderModelSelectedHook } from "./provider-model-selection.js";
 
 export type ExtensionHostPluginProviderAuthChoiceOptions = {
   authChoice: string;
@@ -135,7 +133,7 @@ export async function applyExtensionHostLoadedPluginProvider(
   if (applied.defaultModel) {
     if (params.setDefaultModel) {
       const nextConfig = applyExtensionHostDefaultModel(applied.config, applied.defaultModel);
-      await runProviderModelSelectedHook({
+      await runExtensionHostProviderModelSelectedHook({
         config: nextConfig,
         model: applied.defaultModel,
         prompter: params.prompter,
@@ -211,7 +209,7 @@ export async function applyExtensionHostPluginProvider(
   if (applied.defaultModel) {
     if (params.setDefaultModel) {
       nextConfig = applyExtensionHostDefaultModel(nextConfig, applied.defaultModel);
-      await runProviderModelSelectedHook({
+      await runExtensionHostProviderModelSelectedHook({
         config: nextConfig,
         model: applied.defaultModel,
         prompter: params.prompter,

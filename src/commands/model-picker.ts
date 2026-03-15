@@ -11,10 +11,10 @@ import {
 } from "../agents/model-selection.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
+import { runExtensionHostProviderModelSelectedHook } from "../extension-host/provider-model-selection.js";
 import {
   resolveProviderPluginChoice,
   resolveProviderModelPickerEntries,
-  runProviderModelSelectedHook,
 } from "../plugins/provider-wizard.js";
 import { resolvePluginProviders } from "../plugins/providers.js";
 import type { WizardPrompter, WizardSelectOption } from "../wizard/prompts.js";
@@ -385,7 +385,7 @@ export async function promptDefaultModel(
       workspaceDir: params.workspaceDir,
     });
     if (applied.defaultModel) {
-      await runProviderModelSelectedHook({
+      await runExtensionHostProviderModelSelectedHook({
         config: applied.config,
         model: applied.defaultModel,
         prompter: params.prompter,
@@ -397,7 +397,7 @@ export async function promptDefaultModel(
     return { model: applied.defaultModel, config: applied.config };
   }
   const model = String(selection);
-  await runProviderModelSelectedHook({
+  await runExtensionHostProviderModelSelectedHook({
     config: cfg,
     model,
     prompter: params.prompter,
