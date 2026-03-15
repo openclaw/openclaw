@@ -384,6 +384,13 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
             }
           }
 
+          // Wait for streaming to start (if pending) before checking isActive.
+          // This prevents race condition where streaming is starting but not yet active,
+          // which would cause fallback to non-streaming path and result in duplicate messages.
+          if (streamingStartPromise) {
+            await streamingStartPromise;
+          }
+
           if (streaming?.isActive()) {
             if (info?.kind === "block") {
               // Some runtimes emit block payloads without onPartial/final callbacks.
