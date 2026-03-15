@@ -408,7 +408,7 @@ describe("exec approvals", () => {
     expect(calls).toContain("exec.approval.waitDecision");
   });
 
-  it("starts a direct agent follow-up after approved gateway exec completes", async () => {
+  it("keeps exec approval follow-up internal for webchat sessions without an explicit target", async () => {
     const agentCalls: Array<Record<string, unknown>> = [];
 
     mockAcceptedApprovalFlow({
@@ -422,10 +422,11 @@ describe("exec approvals", () => {
       ask: "always",
       approvalRunningNoticeMs: 0,
       sessionKey: "agent:main:main",
+      messageProvider: "webchat",
       elevated: { enabled: true, allowed: true, defaultLevel: "ask" },
     });
 
-    const result = await tool.execute("call-gw-followup", {
+    const result = await tool.execute("call-gw-followup-webchat", {
       command: "echo ok",
       workdir: process.cwd(),
       gatewayUrl: undefined,
@@ -437,7 +438,9 @@ describe("exec approvals", () => {
     expect(agentCalls[0]).toEqual(
       expect.objectContaining({
         sessionKey: "agent:main:main",
-        deliver: true,
+        channel: "webchat",
+        deliver: false,
+        to: undefined,
         idempotencyKey: expect.stringContaining("exec-approval-followup:"),
       }),
     );

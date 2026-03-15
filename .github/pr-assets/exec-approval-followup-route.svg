@@ -1,0 +1,100 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="860" viewBox="0 0 1200 860" fill="none">
+  <defs>
+    <style>
+      .title { font: 700 28px ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #0f172a; }
+      .subtitle { font: 600 18px ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #0f172a; }
+      .label { font: 600 16px ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #0f172a; }
+      .body { font: 500 15px ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #334155; }
+      .mono { font: 600 14px ui-monospace, "SFMono-Regular", Consolas, monospace; fill: #0f172a; }
+      .small { font: 500 13px ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #475569; }
+      .lane { stroke: #cbd5e1; stroke-width: 2; stroke-dasharray: 6 8; }
+      .arrow-red { stroke: #dc2626; stroke-width: 3; fill: none; marker-end: url(#arrow-red); }
+      .arrow-green { stroke: #15803d; stroke-width: 3; fill: none; marker-end: url(#arrow-green); }
+      .arrow-gray { stroke: #64748b; stroke-width: 2.5; fill: none; marker-end: url(#arrow-gray); }
+    </style>
+    <marker id="arrow-red" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto">
+      <path d="M0 0L10 5L0 10Z" fill="#dc2626"/>
+    </marker>
+    <marker id="arrow-green" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto">
+      <path d="M0 0L10 5L0 10Z" fill="#15803d"/>
+    </marker>
+    <marker id="arrow-gray" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto">
+      <path d="M0 0L10 5L0 10Z" fill="#64748b"/>
+    </marker>
+  </defs>
+
+  <rect width="1200" height="860" fill="#f8fafc"/>
+  <rect x="24" y="24" width="1152" height="812" rx="24" fill="#ffffff" stroke="#e2e8f0"/>
+
+  <text x="56" y="74" class="title">Exec approval follow-up route</text>
+  <text x="56" y="106" class="body">Why the old flow dropped approved exec results, and why the new flow keeps Web UI / TUI follow-ups inside the originating session.</text>
+
+  <rect x="56" y="136" width="1088" height="300" rx="20" fill="#fff1f2" stroke="#fecdd3"/>
+  <text x="84" y="176" class="subtitle">Before</text>
+  <text x="84" y="202" class="body">The approval itself succeeds, but the follow-up always re-enters outbound delivery with no concrete channel target.</text>
+
+  <rect x="92" y="236" width="180" height="74" rx="16" fill="#ffffff" stroke="#cbd5e1"/>
+  <text x="120" y="268" class="label">Web UI / TUI</text>
+  <text x="120" y="292" class="small">approved exec turn</text>
+
+  <rect x="332" y="236" width="228" height="74" rx="16" fill="#ffffff" stroke="#cbd5e1"/>
+  <text x="360" y="268" class="label">Gateway approval wait</text>
+  <text x="360" y="292" class="mono">exec.approval.waitDecision ✓</text>
+
+  <rect x="620" y="236" width="212" height="74" rx="16" fill="#ffffff" stroke="#cbd5e1"/>
+  <text x="648" y="268" class="label">Follow-up agent call</text>
+  <text x="648" y="292" class="mono">deliver: true</text>
+
+  <rect x="892" y="236" width="212" height="74" rx="16" fill="#ffffff" stroke="#fca5a5"/>
+  <text x="920" y="268" class="label">Channel selection</text>
+  <text x="920" y="292" class="mono">Channel is required</text>
+
+  <path d="M272 273H332" class="arrow-gray"/>
+  <path d="M560 273H620" class="arrow-gray"/>
+  <path d="M832 273H892" class="arrow-red"/>
+
+  <text x="649" y="340" class="small">follow-up params</text>
+  <text x="649" y="362" class="mono">sessionKey=agent:main:main</text>
+  <text x="649" y="384" class="mono">channel=undefined</text>
+  <text x="649" y="406" class="mono">to=undefined</text>
+
+  <rect x="92" y="332" width="1012" height="72" rx="16" fill="#ffffff" stroke="#fecaca"/>
+  <text x="120" y="362" class="body">Result: the user approved the exec, but the completion message never made it back to the active session because outbound routing was invoked without a deliverable channel + recipient.</text>
+  <text x="120" y="388" class="mono">approval resolves → follow-up agent request → outbound channel selection error</text>
+
+  <rect x="56" y="468" width="1088" height="320" rx="20" fill="#f0fdf4" stroke="#bbf7d0"/>
+  <text x="84" y="508" class="subtitle">After</text>
+  <text x="84" y="534" class="body">The follow-up only re-enters outbound delivery when the originating turn still has a deliverable channel and an explicit recipient target.</text>
+
+  <rect x="92" y="570" width="180" height="74" rx="16" fill="#ffffff" stroke="#cbd5e1"/>
+  <text x="120" y="602" class="label">Web UI / TUI</text>
+  <text x="120" y="626" class="small">approved exec turn</text>
+
+  <rect x="332" y="570" width="228" height="74" rx="16" fill="#ffffff" stroke="#cbd5e1"/>
+  <text x="360" y="602" class="label">Gateway approval wait</text>
+  <text x="360" y="626" class="mono">exec.approval.waitDecision ✓</text>
+
+  <rect x="620" y="570" width="212" height="74" rx="16" fill="#ffffff" stroke="#86efac"/>
+  <text x="648" y="602" class="label">Follow-up agent call</text>
+  <text x="648" y="626" class="mono">deliver: false</text>
+
+  <rect x="892" y="570" width="212" height="74" rx="16" fill="#ffffff" stroke="#86efac"/>
+  <text x="920" y="602" class="label">Current session</text>
+  <text x="920" y="626" class="mono">append result in-place</text>
+
+  <path d="M272 607H332" class="arrow-gray"/>
+  <path d="M560 607H620" class="arrow-gray"/>
+  <path d="M832 607H892" class="arrow-green"/>
+
+  <text x="649" y="674" class="small">route guard</text>
+  <text x="649" y="696" class="mono">webchat → channel=webchat, deliver=false</text>
+  <text x="649" y="718" class="mono">tui → channel=undefined, deliver=false</text>
+  <text x="649" y="740" class="mono">telegram/slack/etc + explicit target → deliver=true</text>
+
+  <rect x="92" y="666" width="472" height="88" rx="16" fill="#ffffff" stroke="#bbf7d0"/>
+  <text x="120" y="696" class="body">Internal clients stay internal:</text>
+  <text x="120" y="722" class="mono">actual output: followup-fix-check</text>
+  <text x="120" y="744" class="mono">approval-followup-ok</text>
+
+  <rect x="84" y="806" width="1032" height="1" fill="#dbeafe"/>
+</svg>
