@@ -42,6 +42,23 @@ export type EnvSanitizationOptions = {
   customAllowedPatterns?: ReadonlyArray<RegExp>;
 };
 
+/**
+ * Checks whether a value looks like base64-encoded credential data.
+ * Requires valid base64 structure: charset [A-Za-z0-9+/], length divisible
+ * by 4, and at most 2 trailing '=' padding characters.
+ */
+function looksLikeBase64Credential(value: string): boolean {
+  if (value.length < 80 || value.length % 4 !== 0) {
+    return false;
+  }
+  // Must contain at least one of +, /, or = to distinguish from plain alphanumeric strings.
+  // Accepts ~7.7% false-negative rate: valid base64 using only [A-Za-z0-9] bypasses detection.
+  if (!/[+/=]/.test(value)) {
+    return false;
+  }
+  return /^[A-Za-z0-9+/]+={0,2}$/.test(value);
+}
+
 export function validateEnvVarValue(value: string): string | undefined {
   if (value.includes("\0")) {
     return "Contains null bytes";
@@ -49,7 +66,7 @@ export function validateEnvVarValue(value: string): string | undefined {
   if (value.length > 32768) {
     return "Value exceeds maximum length";
   }
-  if (/^[A-Za-z0-9+/=]{80,}$/.test(value)) {
+  if (looksLikeBase64Credential(value)) {
     return "Value looks like base64-encoded credential data";
   }
   return undefined;
