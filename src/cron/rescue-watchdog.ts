@@ -2,6 +2,7 @@ import net from "node:net";
 import { isValidProfileName } from "../cli/profile-utils.js";
 import { createConfigIO } from "../config/io.js";
 import { resolveGatewayPort } from "../config/paths.js";
+import { resolveCurrentCliProgramArguments } from "../daemon/program-args.js";
 import { resolveGatewayService } from "../daemon/service.js";
 import type { GatewayService } from "../daemon/service.js";
 import { resolveGatewayBindHost } from "../gateway/net.js";
@@ -464,9 +465,7 @@ export async function runRescueWatchdogJob(params: {
   // resolved without relying on PATH (managed service environments often run
   // with a minimized PATH that omits the CLI binary).
   const doctorArgs = ["--profile", monitoredProfile, "doctor", "--repair", "--non-interactive"];
-  const doctorArgv = process.argv[1]
-    ? [process.execPath, process.argv[1], ...doctorArgs]
-    : [process.execPath, ...doctorArgs];
+  const doctorArgv = await resolveCurrentCliProgramArguments(doctorArgs);
   const doctorResult = await runCommandWithTimeout(doctorArgv, {
     timeoutMs:
       typeof remainingJobBudgetMs === "number"

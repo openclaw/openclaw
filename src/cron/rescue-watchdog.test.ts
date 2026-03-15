@@ -1,5 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+const originalArgv = [...process.argv];
+
 const loadConfig = vi.hoisted(() =>
   vi.fn<
     () => {
@@ -97,18 +99,23 @@ describe("runRescueWatchdogJob", () => {
   beforeEach(() => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-03-10T00:00:00.000Z"));
+    process.argv = ["/usr/local/bin/openclaw", "gateway"];
     loadConfig.mockClear();
     restartService.mockClear();
     readServiceCommand.mockReset();
     readServiceCommand.mockResolvedValue(null);
     probeGateway.mockReset();
-    resolveGatewayProbeAuthSafe.mockClear();
+    resolveGatewayProbeAuthSafe.mockReset();
+    resolveGatewayProbeAuthSafe.mockReturnValue({
+      auth: { token: "main-token" },
+    });
     resolveGatewayBindHost.mockClear();
     runCommandWithTimeout.mockClear();
   });
 
   afterEach(() => {
     vi.useRealTimers();
+    process.argv = [...originalArgv];
   });
 
   it("returns without repair when the monitored gateway is already healthy", async () => {
@@ -569,6 +576,53 @@ describe("runRescueWatchdogJob", () => {
         timeoutMs: expect.any(Number),
       }),
     );
+  });
+
+  it("reconstructs doctor argv without re-inserting a CLI subcommand token", async () => {
+    process.argv = ["/usr/local/bin/openclaw", "gateway"];
+
+    let probeCount = 0;
+    probeGateway.mockImplementation(async () => {
+      probeCount += 1;
+      if (probeCount >= 62) {
+        return {
+          ok: true,
+          close: null,
+          error: null,
+        };
+      }
+      return {
+        ok: false,
+        close: { code: 1006, reason: "down" },
+        error: "down",
+      };
+    });
+
+    const runPromise = runRescueWatchdogJob({
+      job: {
+        id: "job-doctor-cli-binary",
+        name: "rescue",
+        payload: {
+          kind: "rescueWatchdog",
+          monitoredProfile: "work",
+          timeoutSeconds: 120,
+        },
+      } as never,
+      monitoredProfile: "work",
+    });
+
+    await vi.advanceTimersByTimeAsync(31_000);
+    await runPromise;
+
+    const doctorArgv = ((runCommandWithTimeout.mock.lastCall ?? [undefined])[0] ?? []) as string[];
+    expect(doctorArgv).toEqual([
+      process.execPath,
+      "--profile",
+      "work",
+      "doctor",
+      "--repair",
+      "--non-interactive",
+    ]);
   });
 
   it("runs doctor with the rescue profile env only, without inheriting parent service identity", async () => {

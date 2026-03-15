@@ -12,7 +12,10 @@ vi.mock("node:fs/promises", () => ({
   realpath: fsMocks.realpath,
 }));
 
-import { resolveGatewayProgramArguments } from "./program-args.js";
+import {
+  resolveCurrentCliProgramArguments,
+  resolveGatewayProgramArguments,
+} from "./program-args.js";
 
 const originalArgv = [...process.argv];
 
@@ -86,5 +89,29 @@ describe("resolveGatewayProgramArguments", () => {
       "--port",
       "18789",
     ]);
+  });
+});
+
+describe("resolveCurrentCliProgramArguments", () => {
+  it("omits argv[1] when the current process is already the CLI binary", async () => {
+    process.argv = ["/usr/local/bin/openclaw", "gateway"];
+
+    const result = await resolveCurrentCliProgramArguments([
+      "--profile",
+      "work",
+      "doctor",
+      "--repair",
+      "--non-interactive",
+    ]);
+
+    expect(result).toEqual([
+      process.execPath,
+      "--profile",
+      "work",
+      "doctor",
+      "--repair",
+      "--non-interactive",
+    ]);
+    expect(fsMocks.access).not.toHaveBeenCalled();
   });
 });

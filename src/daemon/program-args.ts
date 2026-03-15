@@ -9,6 +9,18 @@ type GatewayProgramArgs = {
 
 type GatewayRuntimePreference = "auto" | "node" | "bun";
 
+function looksLikeCliEntrypointPath(argv1: string | undefined): boolean {
+  if (!argv1) {
+    return false;
+  }
+  return (
+    argv1.includes("/") ||
+    argv1.includes("\\") ||
+    argv1.startsWith(".") ||
+    /\.(?:[cm]?[jt]s)$/i.test(argv1)
+  );
+}
+
 async function resolveCliEntrypointPathForService(): Promise<string> {
   const argv1 = process.argv[1];
   if (!argv1) {
@@ -230,6 +242,15 @@ async function resolveCliProgramArguments(params: {
     programArguments: [bunPath, devCliPath, ...params.args],
     workingDirectory: repoRoot,
   };
+}
+
+export async function resolveCurrentCliProgramArguments(args: string[]): Promise<string[]> {
+  if (!looksLikeCliEntrypointPath(process.argv[1])) {
+    return [process.execPath, ...args];
+  }
+
+  const cliEntrypointPath = await resolveCliEntrypointPathForService();
+  return [process.execPath, cliEntrypointPath, ...args];
 }
 
 export async function resolveGatewayProgramArguments(params: {
