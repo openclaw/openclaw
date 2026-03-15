@@ -952,4 +952,29 @@ describe("monitorDiscordProvider", () => {
     expect(hasReactionListener).toBe(true);
     expect(hasReactionRemoveListener).toBe(true)
   });
+
+  it("registers reaction listeners when dm config is omitted (default dmEnabled=true)", async () => {
+    const { monitorDiscordProvider } = await import("./provider.js");
+    const { registerDiscordListener, DiscordReactionListener, DiscordReactionRemoveListener } =
+      await import("./listeners.js");
+
+    // No dm override — dmEnabled defaults to true.
+    mockResolvedDiscordAccountConfig({});
+    resolveDiscordAllowlistConfigMock.mockResolvedValue({
+      guildEntries: {
+        "guild-1": { reactionNotifications: "off" as const },
+      },
+      allowFrom: undefined,
+    });
+    vi.mocked(registerDiscordListener).mockClear();
+
+    await monitorDiscordProvider({
+      config: baseConfig(),
+      runtime: baseRuntime(),
+    });
+
+    const registeredListeners = vi.mocked(registerDiscordListener).mock.calls.map((c) => c[1]);
+    expect(registeredListeners.some((l) => l instanceof DiscordReactionListener)).toBe(true);
+    expect(registeredListeners.some((l) => l instanceof DiscordReactionRemoveListener)).toBe(true);
+  });
 });
