@@ -613,6 +613,31 @@ function renderChatModelSelect(state: AppViewState) {
   `;
 }
 
+/**
+ * Build a qualified `provider/model` string from a bare catalog model id.
+ * When the picker sends a bare id the gateway falls back to DEFAULT_PROVIDER
+ * ("anthropic"), which breaks every non-Anthropic model.  This helper looks up
+ * the provider in the loaded catalog so the RPC always carries the correct
+ * provider prefix.  If the model is not in the catalog it is returned as-is
+ * (graceful fallback to current behaviour).
+ */
+function qualifyModelFromCatalog(catalog: ModelCatalogEntry[] | null, bareModel: string): string {
+  if (!bareModel || !catalog) {
+    return bareModel;
+  }
+  const entry = catalog.find((e) => e.id === bareModel);
+  if (!entry?.provider) {
+    return bareModel;
+  }
+  // Avoid double-prefixing when the id already starts with the provider
+  // (e.g. OpenRouter ids like "deepseek/deepseek-v3" with provider "openrouter"
+  // would NOT match, so we correctly produce "openrouter/deepseek/deepseek-v3").
+  if (bareModel.toLowerCase().startsWith(`${entry.provider.toLowerCase()}/`)) {
+    return bareModel;
+  }
+  return `${entry.provider}/${bareModel}`;
+}
+
 async function switchChatModel(state: AppViewState, nextModel: string) {
   if (!state.client || !state.connected) {
     return;
@@ -625,14 +650,19 @@ async function switchChatModel(state: AppViewState, nextModel: string) {
   const prevOverride = state.chatModelOverrides[targetSessionKey];
   state.lastError = null;
   // Write the override cache immediately so the picker stays in sync during the RPC round-trip.
+  // The cache stores the bare model id so it stays consistent with sessions.list responses.
   state.chatModelOverrides = {
     ...state.chatModelOverrides,
     [targetSessionKey]: nextModel || null,
   };
+  // Qualify the model with its catalog provider before sending to the gateway.
+  const qualifiedModel = nextModel
+    ? qualifyModelFromCatalog(state.chatModelCatalog, nextModel)
+    : null;
   try {
     await state.client.request("sessions.patch", {
       key: targetSessionKey,
-      model: nextModel || null,
+      model: qualifiedModel,
     });
     await refreshSessionOptions(state);
   } catch (err) {

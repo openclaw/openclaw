@@ -571,10 +571,54 @@ describe("chat view", () => {
 
     expect(request).toHaveBeenCalledWith("sessions.patch", {
       key: "main",
-      model: "gpt-5-mini",
+      model: "openai/gpt-5-mini",
     });
     expect(request).not.toHaveBeenCalledWith("chat.history", expect.anything());
-    expect(state.sessionsResult?.sessions[0]?.model).toBe("gpt-5-mini");
+    expect(state.sessionsResult?.sessions[0]?.model).toBe("openai/gpt-5-mini");
+    vi.unstubAllGlobals();
+  });
+
+  it("qualifies the model with its catalog provider when switching (regression #46859)", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: false,
+      } satisfies Partial<Response>),
+    );
+    const { state, request } = createChatHeaderState({
+      models: [
+        { id: "gpt-5", name: "GPT-5", provider: "openai" },
+        { id: "claude-opus-4-6", name: "Claude Opus 4.6", provider: "anthropic" },
+        { id: "deepseek-r1:8b", name: "DeepSeek R1 8B", provider: "ollama" },
+      ],
+    });
+    const container = document.createElement("div");
+    render(renderChatSessionSelect(state), container);
+
+    const modelSelect = container.querySelector<HTMLSelectElement>(
+      'select[data-chat-model-select="true"]',
+    );
+
+    // Switch to an Ollama model — the RPC must carry "ollama/" not "anthropic/"
+    modelSelect!.value = "deepseek-r1:8b";
+    modelSelect!.dispatchEvent(new Event("change", { bubbles: true }));
+    await flushTasks();
+
+    expect(request).toHaveBeenCalledWith("sessions.patch", {
+      key: "main",
+      model: "ollama/deepseek-r1:8b",
+    });
+
+    // Switch to an Anthropic model
+    request.mockClear();
+    modelSelect!.value = "claude-opus-4-6";
+    modelSelect!.dispatchEvent(new Event("change", { bubbles: true }));
+    await flushTasks();
+
+    expect(request).toHaveBeenCalledWith("sessions.patch", {
+      key: "main",
+      model: "anthropic/claude-opus-4-6",
+    });
     vi.unstubAllGlobals();
   });
 
