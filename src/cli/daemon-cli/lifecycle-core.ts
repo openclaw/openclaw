@@ -348,6 +348,7 @@ export async function runServiceRestart(params: {
   const { stdout, emit, fail } = createActionIO({ action: "restart", json });
   const warnings: string[] = [];
   let handledNotLoaded: NotLoadedActionResult | null = null;
+  let cleanupPreparedRestart = false;
   const emitScheduledRestart = async (
     restartStatus: ReturnType<typeof describeGatewayServiceRestart>,
     serviceLoaded: boolean,
@@ -408,6 +409,7 @@ export async function runServiceRestart(params: {
     if (handledNotLoaded.warnings?.length) {
       warnings.push(...handledNotLoaded.warnings);
     }
+    cleanupPreparedRestart = handledNotLoaded.result === "restarted";
   }
 
   if (loaded && params.checkTokenDrift) {
@@ -442,7 +444,6 @@ export async function runServiceRestart(params: {
     }
   }
 
-  let cleanupPreparedRestart = false;
   try {
     let restartResult: GatewayServiceRestartResult = { outcome: "completed" };
     if (loaded) {

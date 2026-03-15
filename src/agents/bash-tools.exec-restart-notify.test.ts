@@ -9,6 +9,9 @@ describe("bash-tools exec restart notify", () => {
   it("detects direct openclaw gateway restart commands", () => {
     expect(isOpenClawGatewayRestartCommand("openclaw gateway restart")).toBe(true);
     expect(isOpenClawGatewayRestartCommand("openclaw --profile prod gateway restart")).toBe(true);
+    expect(isOpenClawGatewayRestartCommand("openclaw --log-level debug gateway restart")).toBe(
+      true,
+    );
     expect(isOpenClawGatewayRestartCommand("openclaw.cmd gateway restart")).toBe(true);
     expect(isOpenClawGatewayRestartCommand("openclaw gateway status")).toBe(false);
     expect(isOpenClawGatewayRestartCommand("echo hi && openclaw gateway restart")).toBe(false);

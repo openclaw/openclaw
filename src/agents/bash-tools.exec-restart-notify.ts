@@ -7,7 +7,13 @@ const RESTART_NOTIFY_MESSAGE =
   "OpenClaw restarted after an in-chat restart command. I'm back online.";
 
 function isTopLevelOpenClawOption(arg: string): boolean {
-  return arg === "--profile" || arg === "-p" || arg === "--config" || arg === "-c";
+  return (
+    arg === "--profile" ||
+    arg === "-p" ||
+    arg === "--config" ||
+    arg === "-c" ||
+    arg === "--log-level"
+  );
 }
 
 function isDirectSessionKey(sessionKey: string): boolean {

@@ -156,6 +156,30 @@ describe("runServiceRestart token drift", () => {
     expect(payload.message).toContain("unmanaged process");
   });
 
+  it("invokes the restart-failed hook when unmanaged restart checks fail", async () => {
+    const onRestartFailed = vi.fn();
+    service.isLoaded.mockResolvedValue(false);
+
+    await expect(
+      runServiceRestart({
+        serviceNoun: "Gateway",
+        service,
+        renderStartHints: () => [],
+        opts: { json: true },
+        onNotLoaded: async () => ({
+          result: "restarted",
+          message: "Gateway restart signal sent to unmanaged process on port 18789: 4200.",
+        }),
+        postRestartCheck: async ({ fail }) => {
+          fail("unmanaged restart health check failed");
+        },
+        onRestartFailed,
+      }),
+    ).rejects.toThrow("__exit__:1");
+
+    expect(onRestartFailed).toHaveBeenCalledTimes(1);
+  });
+
   it("skips restart health checks when restart is only scheduled", async () => {
     const postRestartCheck = vi.fn(async () => {});
     service.restart.mockResolvedValue({ outcome: "scheduled" });
