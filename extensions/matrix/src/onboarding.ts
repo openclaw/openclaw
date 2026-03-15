@@ -365,6 +365,13 @@ export const matrixOnboardingAdapter: ChannelOnboardingAdapter = {
       initialValue: existing.encryption ?? false,
     });
 
+    if (enableEncryption) {
+      prompter.note(
+        "After setup, verify the bot device for E2EE.\n" +
+          "See: https://docs.openclaw.ai/channels/matrix#device-verification",
+      );
+    }
+
     next = {
       ...next,
       channels: {
