@@ -561,7 +561,7 @@ function inferToolNameFromToolCallId(
     candidateTokens.add(normalizedDelimiter.replace(/[:._-]\d+$/, ""));
     candidateTokens.add(normalizedDelimiter.replace(/\d+$/, ""));
 
-    for (const prefixPattern of [/^functions?[._-]?/i, /^tools?[._-]?/i]) {
+    for (const prefixPattern of [/^functions?[._-]?/i, /^tools?[._-]?/i, /^call_?auto_?/i]) {
       const stripped = normalizedDelimiter.replace(prefixPattern, "");
       if (stripped !== normalizedDelimiter) {
         candidateTokens.add(stripped);
@@ -594,7 +594,7 @@ function inferToolNameFromToolCallId(
 function looksLikeMalformedToolNameCounter(rawName: string): boolean {
   const normalizedDelimiter = rawName.trim().replace(/\//g, ".");
   return (
-    /^(?:functions?|tools?)[._-]?/i.test(normalizedDelimiter) &&
+    /^(?:functions?|tools?|call_?auto)[._-]?/i.test(normalizedDelimiter) &&
     /(?:[:._-]\d+|\d+)$/.test(normalizedDelimiter)
   );
 }
@@ -691,7 +691,7 @@ function normalizeToolCallIdsInMessage(message: unknown): void {
 
     let fallbackId = "";
     while (!fallbackId || usedIds.has(fallbackId) || assignedIds.has(fallbackId)) {
-      fallbackId = `call_auto_${fallbackIndex++}`;
+      fallbackId = `callauto${fallbackIndex++}`;
     }
     typedBlock.id = fallbackId;
     usedIds.add(fallbackId);

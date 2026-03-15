@@ -500,7 +500,7 @@ describe("wrapStreamFnTrimToolCallNames", () => {
     await stream.result();
 
     expect(finalToolCall.name).toBe("");
-    expect(finalToolCall.id).toBe("call_auto_1");
+    expect(finalToolCall.id).toBe("callauto1");
   });
 
   it("assigns fallback ids when both name and id are missing", async () => {
@@ -517,7 +517,7 @@ describe("wrapStreamFnTrimToolCallNames", () => {
     await stream.result();
 
     expect(finalToolCall.name).toBeUndefined();
-    expect(finalToolCall.id).toBe("call_auto_1");
+    expect(finalToolCall.id).toBe("callauto1");
   });
 
   it("prefers explicit canonical names over conflicting canonical ids", async () => {
@@ -631,6 +631,94 @@ describe("wrapStreamFnTrimToolCallNames", () => {
 
     expect(finalToolCall.name).toBe("");
   });
+  it("infers tool names from callauto-prefixed ids (sanitized fallback round-trip)", async () => {
+    const finalToolCallA = { type: "toolCall", id: "callautoread3", name: "" };
+    const finalToolCallB = { type: "toolCall", id: "callautoexec", name: "" };
+    const finalMessage = {
+      role: "assistant",
+      content: [finalToolCallA, finalToolCallB],
+    };
+    const baseFn = vi.fn(() =>
+      createFakeStream({
+        events: [],
+        resultMessage: finalMessage,
+      }),
+    );
+
+    const stream = await invokeWrappedStream(baseFn, new Set(["read", "write", "exec"]));
+    await stream.result();
+
+    expect(finalToolCallA.name).toBe("read");
+    expect(finalToolCallB.name).toBe("exec");
+  });
+
+  it("infers tool names from call_auto-prefixed ids (pre-sanitization format)", async () => {
+    const finalToolCall = { type: "toolCall", id: "call_auto_read_1", name: "" };
+    const finalMessage = { role: "assistant", content: [finalToolCall] };
+    const baseFn = vi.fn(() =>
+      createFakeStream({
+        events: [],
+        resultMessage: finalMessage,
+      }),
+    );
+
+    const stream = await invokeWrappedStream(baseFn, new Set(["read", "write"]));
+    await stream.result();
+
+    expect(finalToolCall.name).toBe("read");
+  });
+
+  it("normalizes callauto-prefixed malformed tool names against the allowlist", async () => {
+    const finalToolCall = { type: "toolCall", id: "xyz123", name: "callautoread3" };
+    const finalMessage = { role: "assistant", content: [finalToolCall] };
+    const baseFn = vi.fn(() =>
+      createFakeStream({
+        events: [],
+        resultMessage: finalMessage,
+      }),
+    );
+
+    const stream = await invokeWrappedStream(baseFn, new Set(["read", "write"]));
+    await stream.result();
+
+    expect(finalToolCall.name).toBe("read");
+  });
+
+  it("treats bare callauto with numeric suffix as malformed counter, not a tool name", async () => {
+    const finalToolCall = { type: "toolCall", id: "callauto3", name: "callauto3" };
+    const finalMessage = { role: "assistant", content: [finalToolCall] };
+    const baseFn = vi.fn(() =>
+      createFakeStream({
+        events: [],
+        resultMessage: finalMessage,
+      }),
+    );
+
+    const stream = await invokeWrappedStream(baseFn, new Set(["read", "write"]));
+    await stream.result();
+
+    // callauto3 cannot be mapped to any allowlisted tool — fail closed
+    expect(finalToolCall.name).toBe("callauto3");
+  });
+
+  it("fallback ids are already alphanumeric and survive strict sanitization", async () => {
+    const finalToolCall = { type: "toolCall", name: " read ", id: "" };
+    const finalMessage = { role: "assistant", content: [finalToolCall] };
+    const baseFn = vi.fn(() =>
+      createFakeStream({
+        events: [],
+        resultMessage: finalMessage,
+      }),
+    );
+
+    const stream = await invokeWrappedStream(baseFn);
+    await stream.result();
+
+    // Fallback ID should be purely alphanumeric (no underscores/special chars)
+    expect(finalToolCall.id).toBe("callauto1");
+    expect(/^[a-zA-Z0-9]+$/.test(finalToolCall.id)).toBe(true);
+  });
+
   it("does not collapse whitespace-only tool names to empty strings", async () => {
     const partialToolCall = { type: "toolCall", name: "   " };
     const finalToolCall = { type: "toolCall", name: "\t  " };
@@ -678,11 +766,11 @@ describe("wrapStreamFnTrimToolCallNames", () => {
     const result = await stream.result();
 
     expect(partialToolCall.name).toBe("read");
-    expect(partialToolCall.id).toBe("call_auto_1");
+    expect(partialToolCall.id).toBe("callauto1");
     expect(finalToolCallA.name).toBe("exec");
-    expect(finalToolCallA.id).toBe("call_auto_1");
+    expect(finalToolCallA.id).toBe("callauto1");
     expect(finalToolCallB.name).toBe("write");
-    expect(finalToolCallB.id).toBe("call_auto_2");
+    expect(finalToolCallB.id).toBe("callauto2");
     expect(result).toBe(finalMessage);
   });
 
@@ -720,7 +808,7 @@ describe("wrapStreamFnTrimToolCallNames", () => {
     expect(finalToolCallA.name).toBe("read");
     expect(finalToolCallB.name).toBe("write");
     expect(finalToolCallA.id).toBe("edit:22");
-    expect(finalToolCallB.id).toBe("call_auto_1");
+    expect(finalToolCallB.id).toBe("callauto1");
   });
 });
 
