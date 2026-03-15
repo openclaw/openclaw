@@ -64,8 +64,10 @@ const baseAccount: ResolvedFeishuAccount = {
   config: {} as FeishuConfig,
 };
 
-function firstWsClientOptions(): { agent?: unknown } {
-  const calls = wsClientCtorMock.mock.calls as unknown as Array<[options: { agent?: unknown }]>;
+function firstWsClientOptions(): { agent?: unknown; autoReconnect?: boolean } {
+  const calls = wsClientCtorMock.mock.calls as unknown as Array<
+    [options: { agent?: unknown; autoReconnect?: boolean }]
+  >;
   return calls[0]?.[0] ?? {};
 }
 
@@ -257,6 +259,13 @@ describe("createFeishuClient HTTP timeout", () => {
 });
 
 describe("createFeishuWSClient proxy handling", () => {
+  it("enables autoReconnect for WebSocket resilience", () => {
+    createFeishuWSClient(baseAccount);
+
+    const options = firstWsClientOptions();
+    expect(options.autoReconnect).toBe(true);
+  });
+
   it("does not set a ws proxy agent when proxy env is absent", () => {
     createFeishuWSClient(baseAccount);
 
