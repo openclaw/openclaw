@@ -30,9 +30,12 @@ export function collectPluginConfigAssignments(params: {
     if (!isRecord(pluginConfig)) {
       continue;
     }
+    // Skip disabled plugin entries (same pattern as skills/providers)
+    const pluginActive = entry.enabled !== false;
     collectMcpServerEnvAssignments({
       pluginId,
       pluginConfig,
+      active: pluginActive,
       defaults: params.defaults,
       context: params.context,
     });
@@ -42,6 +45,7 @@ export function collectPluginConfigAssignments(params: {
 function collectMcpServerEnvAssignments(params: {
   pluginId: string;
   pluginConfig: Record<string, unknown>;
+  active: boolean;
   defaults: SecretDefaults | undefined;
   context: ResolverContext;
 }): void {
@@ -66,6 +70,8 @@ function collectMcpServerEnvAssignments(params: {
         expected: "string",
         defaults: params.defaults,
         context: params.context,
+        active: params.active,
+        inactiveReason: "plugin entry is disabled.",
         apply: (value) => {
           env[envKey] = value;
         },

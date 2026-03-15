@@ -90,6 +90,9 @@ describe("exec SecretRef id parity", () => {
     if (id.startsWith("models.providers.")) {
       return "models.apiKey";
     }
+    if (id.startsWith("plugins.entries.")) {
+      return "plugins";
+    }
     if (id.startsWith("skills.entries.")) {
       return "skills";
     }
