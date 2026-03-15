@@ -27,7 +27,7 @@ Host-managed install, onboarding, and lightweight channel catalogs remain separa
 Current status against this spec:
 
 - canonical catalogs and arbitration have not started
-- only the earliest host-managed static metadata work has landed
+- host-managed static metadata work and early runtime/lifecycle boundary extraction have landed
 
 What has been implemented:
 
@@ -66,6 +66,7 @@ What has been implemented:
 - compatibility plugin-registry facade ownership now routes through `src/extension-host/plugin-registry.ts` ahead of broader catalog-backed registry ownership
 - compatibility plugin-registry policy now routes through `src/extension-host/plugin-registry-compat.ts` ahead of broader catalog-backed registry ownership
 - compatibility plugin-registry registration actions now route through `src/extension-host/plugin-registry-registrations.ts` ahead of broader catalog-backed registry ownership
+- service startup, stop ordering, service-context creation, and failure logging now route through `src/extension-host/service-lifecycle.ts` ahead of broader catalog-backed lifecycle ownership
 
 How it has been implemented:
 
@@ -94,6 +95,7 @@ How it has been implemented:
 - by extracting the remaining compatibility plugin-registry facade into a host-owned helper so `src/plugins/registry.ts` becomes a thin wrapper instead of the real owner
 - by extracting provider normalization, command duplicate enforcement, and registry-local diagnostic shaping into a host-owned registry-compat helper while leaving the underlying provider-validation and plugin-command subsystems unchanged
 - by extracting low-risk registry registration actions into a host-owned registry-registrations helper so the compatibility facade composes host-owned actions instead of implementing them inline
+- by extracting service startup, stop ordering, service-context creation, and failure logging into a host-owned service-lifecycle helper before broader catalog-backed service ownership
 
 What remains pending:
 

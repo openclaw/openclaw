@@ -27,7 +27,7 @@ Current status against this spec:
 
 - registry ownership and the first compatibility-preserving loader slices have landed
 - a loader-scoped lifecycle state machine has landed
-- broader lifecycle orchestration, policy gates, and activation-state management have not landed
+- broader lifecycle orchestration, policy gates, and activation-state management beyond the current loader and service seams have not landed
 
 What has been implemented:
 
@@ -44,6 +44,7 @@ What has been implemented:
 - compatibility plugin-registry facade ownership now delegates through `src/extension-host/plugin-registry.ts`
 - compatibility plugin-registry policy now delegates through `src/extension-host/plugin-registry-compat.ts`
 - compatibility plugin-registry registration actions now delegate through `src/extension-host/plugin-registry-registrations.ts`
+- service startup, stop ordering, service-context creation, and failure logging now delegate through `src/extension-host/service-lifecycle.ts`
 - loader alias-wired module loader creation now routes through `src/extension-host/loader-module-loader.ts`
 - loader cache key construction and registry cache control now route through `src/extension-host/loader-cache.ts`
 - loader lazy runtime proxy creation now routes through `src/extension-host/loader-runtime-proxy.ts`
@@ -108,10 +109,11 @@ How it has been implemented:
 - by extracting the remaining compatibility plugin-registry facade into a host-owned helper so `src/plugins/registry.ts` becomes a thin wrapper instead of the real owner
 - by extracting provider normalization, command duplicate enforcement, and registry-local diagnostic shaping into a host-owned registry-compat helper while leaving the underlying provider-validation and plugin-command subsystems unchanged
 - by extracting low-risk registry registration actions into a host-owned registry-registrations helper so the compatibility facade composes host-owned actions instead of implementing them inline
+- by extracting service startup, stop ordering, service-context creation, and failure logging into a host-owned service-lifecycle helper while `src/plugins/services.ts` remains the compatibility entry point
 
 What is still pending from this spec:
 
-- broader extension-host lifecycle ownership beyond the loader state machine, session-owned activation state, and explicit discovery-policy, activation-policy, and finalization-policy outcomes
+- broader extension-host lifecycle ownership beyond the loader state machine, service-lifecycle boundary, session-owned activation state, and explicit discovery-policy, activation-policy, and finalization-policy outcomes
 - activation pipeline ownership
 - host-owned registries for setup, CLI, routes, services, slots, and backends
 - permission-mode enforcement
