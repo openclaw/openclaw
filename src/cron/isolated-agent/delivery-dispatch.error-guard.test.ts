@@ -319,4 +319,21 @@ describe("dispatchCronDelivery — error output guard", () => {
     expect(state.deliveryAttempted).toBe(false);
     expect(deliverOutboundPayloads).not.toHaveBeenCalled();
   });
+
+  it("preserves shared-delivery flags when skipMessagingToolDelivery is true", async () => {
+    const errorJson = JSON.stringify({
+      type: "error",
+      error: { type: "server_error", message: "fail" },
+    });
+    const params = makeBaseParams({ synthesizedText: errorJson });
+    // Simulate shared-delivery path: agent already sent via message tool
+    (params as Record<string, unknown>).skipMessagingToolDelivery = true;
+    const state = await dispatchCronDelivery(params);
+
+    // Error guard should suppress announce delivery but preserve the
+    // existing message-tool delivery state.
+    expect(state.delivered).toBe(true);
+    expect(state.deliveryAttempted).toBe(true);
+    expect(deliverOutboundPayloads).not.toHaveBeenCalled();
+  });
 });

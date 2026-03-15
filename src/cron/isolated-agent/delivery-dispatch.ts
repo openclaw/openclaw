@@ -340,9 +340,13 @@ export async function dispatchCronDelivery(
     logWarn(
       `[cron:${params.job.id}] suppressed announce delivery of raw error output (${source}, ${chars} chars)`,
     );
+    // Preserve shared-delivery state: when skipMessagingToolDelivery is true,
+    // the agent already sent via the message tool — suppressing the error
+    // guard's announce delivery should not overwrite that existing delivery
+    // state in cron logs/metadata.
     return {
-      delivered: false,
-      deliveryAttempted: false,
+      delivered: skipMessagingToolDelivery,
+      deliveryAttempted: skipMessagingToolDelivery,
       summary,
       outputText,
       synthesizedText,
