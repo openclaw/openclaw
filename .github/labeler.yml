@@ -222,6 +222,10 @@
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/memory-lancedb/**"
+"extensions: memory-memoria":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/memory-memoria/**"
 "extensions: open-prose":
   - changed-files:
       - any-glob-to-any-file:

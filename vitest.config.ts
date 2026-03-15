@@ -36,6 +36,7 @@ const pluginSdkSubpaths = [
   "mattermost",
   "memory-core",
   "memory-lancedb",
+  "memory-memoria",
   "minimax-portal-auth",
   "nextcloud-talk",
   "nostr",

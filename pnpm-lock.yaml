@@ -425,6 +425,12 @@ importers:
         specifier: ^6.29.0
         version: 6.29.0(ws@8.19.0)(zod@4.3.6)
 
+  extensions/memory-memoria:
+    dependencies:
+      '@sinclair/typebox':
+        specifier: 0.34.48
+        version: 0.34.48
+
   extensions/minimax-portal-auth: {}
 
   extensions/msteams:

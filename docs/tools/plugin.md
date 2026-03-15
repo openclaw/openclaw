@@ -97,6 +97,7 @@ Important trust note:
 - Microsoft Teams is plugin-only as of 2026.1.15; install `@openclaw/msteams` if you use Teams.
 - Memory (Core) — bundled memory search plugin (enabled by default via `plugins.slots.memory`)
 - Memory (LanceDB) — bundled long-term memory plugin (auto-recall/capture; set `plugins.slots.memory = "memory-lancedb"`)
+- Memory (Memoria) — bundled Memoria-backed memory plugin (HTTP-first; set `plugins.slots.memory = "memory-memoria"`)
 - [Voice Call](/plugins/voice-call) — `@openclaw/voice-call`
 - [Zalo Personal](/plugins/zalouser) — `@openclaw/zalouser`
 - [Matrix](/channels/matrix) — `@openclaw/matrix`
@@ -258,7 +259,7 @@ authoring plugins:
   `openclaw/plugin-sdk/irc`, `openclaw/plugin-sdk/llm-task`,
   `openclaw/plugin-sdk/lobster`, `openclaw/plugin-sdk/matrix`,
   `openclaw/plugin-sdk/mattermost`, `openclaw/plugin-sdk/memory-core`,
-  `openclaw/plugin-sdk/memory-lancedb`,
+  `openclaw/plugin-sdk/memory-lancedb`, `openclaw/plugin-sdk/memory-memoria`,
   `openclaw/plugin-sdk/minimax-portal-auth`,
   `openclaw/plugin-sdk/nextcloud-talk`, `openclaw/plugin-sdk/nostr`,
   `openclaw/plugin-sdk/open-prose`, `openclaw/plugin-sdk/phone-control`,
