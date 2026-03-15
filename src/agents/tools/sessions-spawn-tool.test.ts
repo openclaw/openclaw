@@ -224,7 +224,7 @@ describe("sessions_spawn tool", () => {
     expect(hoisted.spawnSubagentDirectMock).not.toHaveBeenCalled();
   });
 
-  it('rejects streamTo when runtime is not "acp"', async () => {
+  it("silently ignores streamTo when runtime is not acp", async () => {
     const tool = createSessionsSpawnTool({
       agentSessionKey: "agent:main:main",
     });
@@ -235,13 +235,12 @@ describe("sessions_spawn tool", () => {
       streamTo: "parent",
     });
 
+    // streamTo is silently ignored for non-ACP runtimes instead of erroring,
+    // because schema-following models may include it automatically.
     expect(result.details).toMatchObject({
-      status: "error",
+      status: "accepted",
     });
-    const details = result.details as { error?: string };
-    expect(details.error).toContain("streamTo is only supported for runtime=acp");
-    expect(hoisted.spawnAcpDirectMock).not.toHaveBeenCalled();
-    expect(hoisted.spawnSubagentDirectMock).not.toHaveBeenCalled();
+    expect(hoisted.spawnSubagentDirectMock).toHaveBeenCalled();
   });
 
   it("keeps attachment content schema unconstrained for llama.cpp grammar safety", () => {
