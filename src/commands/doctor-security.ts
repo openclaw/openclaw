@@ -189,8 +189,20 @@ export async function noteSecurityWarnings(cfg: OpenClawConfig) {
     if (!plugin.security) {
       continue;
     }
-    const { defaultAccountId, account, enabled, configured } =
-      await resolveDefaultChannelAccountContext(plugin, cfg);
+    let ctx: Awaited<ReturnType<typeof resolveDefaultChannelAccountContext>>;
+    try {
+      ctx = await resolveDefaultChannelAccountContext(plugin, cfg);
+    } catch {
+      // Unresolved SecretRefs (e.g. env-based tokens) are expected in
+      // read-only doctor flows — skip the plugin but surface a warning
+      // so the user knows security diagnostics were incomplete.
+      const label = plugin.meta.label ?? plugin.id;
+      warnings.push(
+        `- ${label}: skipped security checks (account could not be resolved — likely unresolved SecretRef).`,
+      );
+      continue;
+    }
+    const { defaultAccountId, account, enabled, configured } = ctx;
     if (!enabled) {
       continue;
     }
