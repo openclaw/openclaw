@@ -258,6 +258,15 @@ function pathEquals(path: PathSegment[], expected: PathSegment[]): boolean {
   );
 }
 
+/**
+ * Returns true when the given dot-path targets a model ref config key.
+ * Exported for testing.
+ */
+export function detectModelConfigPath(raw: string): boolean {
+  const path = parsePath(raw);
+  return isModelConfigPath(path);
+}
+
 function isModelConfigPath(path: PathSegment[]): boolean {
   // agents.defaults.model or agents.defaults.model.primary
   if (
@@ -294,13 +303,10 @@ async function warnIfModelNotInCatalog(
       );
       return;
     }
+    const { findModelInCatalog } = await import("../agents/model-catalog.js");
     const catalog = await loadModelCatalog();
+    const found = !!findModelInCatalog(catalog, ref.provider, ref.model);
     const modelKey = `${ref.provider}/${ref.model}`;
-    const found = catalog.some(
-      (entry) =>
-        `${entry.provider}/${entry.id}` === modelKey ||
-        `${entry.provider}/${entry.name}` === modelKey,
-    );
     if (!found) {
       runtime.error(
         warn(
