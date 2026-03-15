@@ -33,6 +33,9 @@ const runtimeStub: PluginRuntime = {
       resolveInboundDebounceMs: () => 0,
       createInboundDebouncer: () => ({
         enqueue: async () => {},
+        flushKey: async () => false,
+        flushAll: async () => 0,
+        unregister: () => {},
       }),
     },
   },

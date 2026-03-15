@@ -438,6 +438,37 @@ describe("flushAllInboundDebouncers", () => {
     vi.useRealTimers();
   });
 
+  it("counts only buffers that were delivered successfully", async () => {
+    vi.useFakeTimers();
+    const calls: Array<string[]> = [];
+    const errors: Array<string[]> = [];
+
+    const debouncer = createInboundDebouncer<{ key: string; id: string }>({
+      debounceMs: 5000,
+      buildKey: (item) => item.key,
+      onFlush: async (items) => {
+        const ids = items.map((entry) => entry.id);
+        if (ids.includes("msg-1")) {
+          throw new Error("dispatch failed");
+        }
+        calls.push(ids);
+      },
+      onError: (_err, items) => {
+        errors.push(items.map((entry) => entry.id));
+      },
+    });
+
+    await debouncer.enqueue({ key: "session-1", id: "msg-1" });
+    await debouncer.enqueue({ key: "session-2", id: "msg-2" });
+
+    const flushed = await flushAllInboundDebouncers();
+    expect(flushed).toBe(1);
+    expect(calls).toEqual([["msg-2"]]);
+    expect(errors).toEqual([["msg-1"]]);
+
+    vi.useRealTimers();
+  });
+
   it("keeps flushing until no buffered keys remain", async () => {
     vi.useFakeTimers();
     const calls: Array<string[]> = [];
@@ -466,9 +497,69 @@ describe("flushAllInboundDebouncers", () => {
     vi.useRealTimers();
   });
 
+  it("keeps timed-out debouncers registered for a later global sweep", async () => {
+    vi.useFakeTimers();
+    const calls: Array<string[]> = [];
+    let now = 0;
+    const nowSpy = vi.spyOn(Date, "now").mockImplementation(() => now);
+
+    let debouncer: ReturnType<typeof createInboundDebouncer<{ key: string; id: string }>>;
+    debouncer = createInboundDebouncer<{ key: string; id: string }>({
+      debounceMs: 5000,
+      buildKey: (item) => item.key,
+      onFlush: async (items) => {
+        calls.push(items.map((entry) => entry.id));
+        if (items[0]?.id === "msg-1") {
+          await debouncer.enqueue({ key: "session-2", id: "msg-2" });
+          now = 20;
+        }
+      },
+    });
+
+    try {
+      await debouncer.enqueue({ key: "session-1", id: "msg-1" });
+
+      const flushed = await flushAllInboundDebouncers({ timeoutMs: 10 });
+      expect(flushed).toBe(1);
+      expect(calls).toEqual([["msg-1"]]);
+
+      now = 0;
+      const flushedLater = await flushAllInboundDebouncers({ timeoutMs: 10 });
+      expect(flushedLater).toBe(1);
+      expect(calls).toEqual([["msg-1"], ["msg-2"]]);
+    } finally {
+      nowSpy.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+
   it("returns 0 when no debouncers are registered", async () => {
     const flushed = await flushAllInboundDebouncers();
     expect(flushed).toBe(0);
+  });
+
+  it("lets callers unregister a debouncer from the global registry", async () => {
+    vi.useFakeTimers();
+    const calls: Array<string[]> = [];
+
+    const debouncer = createInboundDebouncer<{ key: string; id: string }>({
+      debounceMs: 5000,
+      buildKey: (item) => item.key,
+      onFlush: async (items) => {
+        calls.push(items.map((entry) => entry.id));
+      },
+    });
+
+    await debouncer.enqueue({ key: "session-1", id: "msg-1" });
+    debouncer.unregister();
+
+    expect(await flushAllInboundDebouncers()).toBe(0);
+    expect(calls).toEqual([]);
+
+    await debouncer.flushAll();
+    expect(calls).toEqual([["msg-1"]]);
+
+    vi.useRealTimers();
   });
 
   it("deregisters debouncers from global registry after flush", async () => {

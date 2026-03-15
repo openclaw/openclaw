@@ -5,10 +5,17 @@ import { resolveGlobalMap } from "../shared/global-singleton.js";
 /**
  * Global registry of all active inbound debouncers so they can be flushed
  * collectively during gateway restart (SIGUSR1). Each debouncer registers
- * itself on creation and deregisters after the next global flush sweep.
+ * itself on creation and stays registered until a complete global flush
+ * drains it or the owner explicitly unregisters it during teardown.
  */
+type DebouncerFlushResult = {
+  flushedCount: number;
+  drained: boolean;
+};
+
 type DebouncerFlushHandle = {
-  flushAll: (options?: { deadlineMs?: number }) => Promise<number>;
+  flushAll: (options?: { deadlineMs?: number }) => Promise<DebouncerFlushResult>;
+  unregister: () => void;
 };
 const INBOUND_DEBOUNCERS_KEY = Symbol.for("openclaw.inboundDebouncers");
 const INBOUND_DEBOUNCERS = resolveGlobalMap<symbol, DebouncerFlushHandle>(INBOUND_DEBOUNCERS_KEY);
@@ -36,12 +43,12 @@ export async function flushAllInboundDebouncers(options?: { timeoutMs?: number }
       ? Date.now() + Math.max(0, Math.trunc(options.timeoutMs))
       : undefined;
   const flushedCounts = await Promise.all(
-    entries.map(async ([key, handle]) => {
-      try {
-        return await handle.flushAll({ deadlineMs });
-      } finally {
-        INBOUND_DEBOUNCERS.delete(key);
+    entries.map(async ([_key, handle]) => {
+      const result = await handle.flushAll({ deadlineMs });
+      if (result.drained) {
+        handle.unregister();
       }
+      return result.flushedCount;
     }),
   );
   return flushedCounts.reduce((total, count) => total + count, 0);
@@ -106,7 +113,7 @@ export function createInboundDebouncer<T>(params: InboundDebounceCreateParams<T>
     return Math.max(0, Math.trunc(resolved));
   };
 
-  // Returns true when the buffer had pending messages that were flushed.
+  // Returns true when the buffer had pending messages that were delivered.
   const flushBuffer = async (key: string, buffer: DebounceBuffer<T>) => {
     buffers.delete(key);
     if (buffer.timeout) {
@@ -116,12 +123,14 @@ export function createInboundDebouncer<T>(params: InboundDebounceCreateParams<T>
     if (buffer.items.length === 0) {
       return false;
     }
+    let delivered = false;
     try {
       await params.onFlush(buffer.items);
+      delivered = true;
     } catch (err) {
       params.onError?.(err, buffer.items);
     }
-    return true;
+    return delivered;
   };
 
   const flushKey = async (key: string) => {
@@ -176,7 +185,9 @@ export function createInboundDebouncer<T>(params: InboundDebounceCreateParams<T>
     scheduleFlush(key, buffer);
   };
 
-  const flushAll = async (options?: { deadlineMs?: number }) => {
+  const flushAllInternal = async (options?: {
+    deadlineMs?: number;
+  }): Promise<DebouncerFlushResult> => {
     let flushedBufferCount = 0;
 
     // Keep sweeping until no debounced keys remain. A flush callback can race
@@ -184,12 +195,18 @@ export function createInboundDebouncer<T>(params: InboundDebounceCreateParams<T>
     // global registry deregisters this debouncer during restart.
     while (buffers.size > 0) {
       if (options?.deadlineMs !== undefined && Date.now() >= options.deadlineMs) {
-        break;
+        return {
+          flushedCount: flushedBufferCount,
+          drained: buffers.size === 0,
+        };
       }
       const keys = [...buffers.keys()];
       for (const key of keys) {
         if (options?.deadlineMs !== undefined && Date.now() >= options.deadlineMs) {
-          return flushedBufferCount;
+          return {
+            flushedCount: flushedBufferCount,
+            drained: buffers.size === 0,
+          };
         }
         if (!buffers.has(key)) {
           continue;
@@ -206,14 +223,26 @@ export function createInboundDebouncer<T>(params: InboundDebounceCreateParams<T>
       }
     }
 
-    return flushedBufferCount;
+    return {
+      flushedCount: flushedBufferCount,
+      drained: buffers.size === 0,
+    };
+  };
+
+  const flushAll = async (options?: { deadlineMs?: number }) => {
+    const result = await flushAllInternal(options);
+    return result.flushedCount;
   };
 
   // Register in global registry for SIGUSR1 flush.
   const registryKey = Symbol();
+  const unregister = () => {
+    INBOUND_DEBOUNCERS.delete(registryKey);
+  };
   INBOUND_DEBOUNCERS.set(registryKey, {
-    flushAll,
+    flushAll: flushAllInternal,
+    unregister,
   });
 
-  return { enqueue, flushKey, flushAll };
+  return { enqueue, flushKey, flushAll, unregister };
 }
