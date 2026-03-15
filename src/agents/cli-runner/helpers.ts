@@ -158,6 +158,8 @@ function collectText(value: unknown): string {
   return "";
 }
 
+const ERROR_SENTINEL_RE = /\s|error|fail|exception|timeout|refused/i;
+
 function pickSessionId(
   parsed: Record<string, unknown>,
   backend: CliBackendConfig,
@@ -171,7 +173,12 @@ function pickSessionId(
   for (const field of fields) {
     const value = parsed[field];
     if (typeof value === "string" && value.trim()) {
-      return value.trim();
+      const trimmed = value.trim();
+      // Reject values that look like error sentinels rather than session tokens
+      if (ERROR_SENTINEL_RE.test(trimmed)) {
+        continue;
+      }
+      return trimmed;
     }
   }
   return undefined;
