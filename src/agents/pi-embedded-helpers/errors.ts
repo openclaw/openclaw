@@ -425,6 +425,9 @@ export function classifyFailoverReasonFromHttpStatus(
     }
     return "timeout";
   }
+  if (status === 500) {
+    return "timeout";
+  }
   if (status === 502 || status === 504) {
     return "timeout";
   }
