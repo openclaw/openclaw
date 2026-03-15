@@ -39,7 +39,9 @@ import {
   fetchMattermostMe,
   fetchMattermostUser,
   fetchMattermostUserTeams,
+  deleteMattermostPost,
   normalizeMattermostBaseUrl,
+  patchMattermostPost,
   sendMattermostTyping,
   updateMattermostPost,
   type MattermostChannel,
@@ -1735,12 +1737,179 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
         });
       },
     });
+    // ── P4: Edit-in-place streaming state ──────────────────────────────────────
+    // Uses onPartialReply (full cumulative text each tick) + 200ms throttled
+    // setInterval to progressively edit a single Mattermost post in-place.
+    let streamMessageId: string | null = null;
+    let pendingPatchText = "";
+    let lastSentText = "";
+    let patchInterval: ReturnType<typeof setInterval> | null = null;
+    let patchSending = false; // prevents concurrent network calls
+    // Count of turns already posted via streaming (flushed at assistant message boundaries).
+    // Used to skip re-delivery of those turns in the final reply array.
+    let streamedTurnCount = 0;
+    const STREAM_PATCH_INTERVAL_MS = 200;
+
+    const streamingEnabled = account.blockStreaming !== false;
+    const blockStreamingClient =
+      streamingEnabled && baseUrl && botToken
+        ? createMattermostClient({ baseUrl, botToken })
+        : null;
+
+    const stopPatchInterval = () => {
+      if (patchInterval) {
+        clearInterval(patchInterval);
+        patchInterval = null;
+      }
+    };
+
+    const flushPendingPatch = async () => {
+      stopPatchInterval();
+      if (!blockStreamingClient) return;
+      const text = pendingPatchText;
+      if (!text || text === lastSentText) return;
+      lastSentText = text;
+      if (!streamMessageId) {
+        try {
+          const result = await sendMessageMattermost(to, text, {
+            accountId: account.accountId,
+            replyToId: effectiveReplyToId,
+          });
+          streamMessageId = result.messageId;
+          runtime.log?.(`stream-patch started ${streamMessageId}`);
+        } catch (err) {
+          logVerboseMessage(`mattermost stream-patch flush send failed: ${String(err)}`);
+        }
+      } else {
+        try {
+          await patchMattermostPost(blockStreamingClient, {
+            postId: streamMessageId,
+            message: text,
+          });
+          runtime.log?.(`stream-patch flushed ${streamMessageId}`);
+        } catch (err) {
+          logVerboseMessage(`mattermost stream-patch flush failed: ${String(err)}`);
+        }
+      }
+    };
+
+    const schedulePatch = (fullText: string) => {
+      if (!blockStreamingClient) return;
+      pendingPatchText = fullText;
+      if (patchInterval) return;
+      patchInterval = setInterval(() => {
+        const text = pendingPatchText;
+        if (!text || text === lastSentText || patchSending) return;
+        lastSentText = text;
+        patchSending = true;
+        void (async () => {
+          try {
+            if (!streamMessageId) {
+              try {
+                const result = await sendMessageMattermost(to, text, {
+                  accountId: account.accountId,
+                  replyToId: effectiveReplyToId,
+                });
+                streamMessageId = result.messageId;
+                runtime.log?.(`stream-patch started ${streamMessageId}`);
+              } catch (err) {
+                logVerboseMessage(`mattermost stream-patch send failed: ${String(err)}`);
+              }
+            } else {
+              try {
+                await patchMattermostPost(blockStreamingClient, {
+                  postId: streamMessageId,
+                  message: text,
+                });
+                runtime.log?.(`stream-patch edited ${streamMessageId}`);
+              } catch (err) {
+                logVerboseMessage(`mattermost stream-patch edit failed: ${String(err)}`);
+              }
+            }
+          } finally {
+            patchSending = false;
+          }
+        })();
+      }, STREAM_PATCH_INTERVAL_MS);
+    };
+    // ── End P4 streaming state ────────────────────────────────────────────────
+
     const { dispatcher, replyOptions, markDispatchIdle } =
       core.channel.reply.createReplyDispatcherWithTyping({
         ...prefixOptions,
         humanDelay: core.channel.reply.resolveHumanDelayConfig(cfg, route.agentId),
         typingCallbacks,
-        deliver: async (payload: ReplyPayload) => {
+        deliver: async (payload: ReplyPayload, info) => {
+          const isFinal = info.kind === "final";
+
+          // Skip turns that were already posted via streaming.
+          // onAssistantMessageStart flushes each completed turn's streaming message
+          // before the next turn starts. The core still returns all turns as final
+          // replies, so we skip the ones we already delivered.
+          if (isFinal && streamedTurnCount > 0) {
+            streamedTurnCount--;
+            runtime.log?.(
+              `stream-patch skipping already-delivered turn (${streamedTurnCount} remaining)`,
+            );
+            return;
+          }
+
+          // Flush any pending partial-reply patch before final delivery.
+          if (isFinal && blockStreamingClient) {
+            await flushPendingPatch();
+          }
+
+          // Final + streaming active: patch the streamed message with authoritative
+          // complete text, or fall back to a new message (with orphan cleanup).
+          if (isFinal && streamMessageId && payload.text) {
+            const text = core.channel.text.convertMarkdownTables(payload.text, tableMode);
+            try {
+              await patchMattermostPost(blockStreamingClient!, {
+                postId: streamMessageId,
+                message: text,
+              });
+              runtime.log?.(`stream-patch final edit ${streamMessageId}`);
+            } catch (err) {
+              logVerboseMessage(
+                `mattermost stream-patch final edit failed: ${String(err)}, sending new message`,
+              );
+              const orphanId = streamMessageId;
+              streamMessageId = null;
+              try {
+                await deleteMattermostPost(blockStreamingClient!, orphanId);
+              } catch {
+                // Ignore delete failure — delivering the complete message takes priority
+              }
+              await deliverMattermostReplyPayload({
+                core,
+                cfg,
+                payload,
+                to,
+                accountId: account.accountId,
+                agentId: route.agentId,
+                replyToId: resolveMattermostReplyRootId({
+                  threadRootId: effectiveReplyToId,
+                  replyToId: payload.replyToId,
+                }),
+                textLimit,
+                tableMode,
+                sendMessage: sendMessageMattermost,
+              });
+              return;
+            }
+            streamMessageId = null;
+            return;
+          }
+
+          if (isFinal) {
+            stopPatchInterval();
+            streamMessageId = null;
+            pendingPatchText = "";
+            lastSentText = "";
+            patchSending = false;
+          }
+
+          // Normal delivery — streaming not active or non-final partial.
           await deliverMattermostReplyPayload({
             core,
             cfg,
@@ -1775,8 +1944,69 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
           dispatcher,
           replyOptions: {
             ...replyOptions,
-            disableBlockStreaming:
-              typeof account.blockStreaming === "boolean" ? !account.blockStreaming : undefined,
+            // Use onPartialReply (full cumulative text) for edit-in-place streaming.
+            onPartialReply: blockStreamingClient
+              ? (payload: ReplyPayload) => {
+                  const rawText = payload.text ?? "";
+                  const fullText = core.channel.text.convertMarkdownTables(rawText, tableMode);
+                  if (fullText) {
+                    schedulePatch(fullText);
+                  }
+                }
+              : undefined,
+            // Finalize the current streaming message when a new assistant turn starts
+            // (after a tool call). This ensures each turn gets its own streamed post
+            // instead of overwriting the previous one. See GH issue #43020.
+            onAssistantMessageStart: blockStreamingClient
+              ? async () => {
+                  if (!streamMessageId) return;
+
+                  // Stop interval immediately to prevent further patches to the old message.
+                  stopPatchInterval();
+
+                  // Capture state before reset so we can finalize the old message async.
+                  const finalizeId = streamMessageId;
+                  const finalizeText = pendingPatchText;
+
+                  // Reset immediately — new onPartialReply calls will create a fresh message.
+                  streamMessageId = null;
+                  pendingPatchText = "";
+                  lastSentText = "";
+                  // Guard: pendingPatchText is set only by the interval which requires
+                  // non-empty text, so finalizeText is always non-empty here in practice.
+                  // Moving the guard before the increment avoids any ambiguity about
+                  // whether streamedTurnCount could be left inflated without a matching
+                  // finalization (the concern raised in review).
+                  if (!finalizeText) return;
+                  streamedTurnCount++;
+
+                  // Wait for any in-flight patch to complete before finalizing.
+                  const deadline = Date.now() + 2000;
+                  while (patchSending && Date.now() < deadline) {
+                    await new Promise<void>((r) => setTimeout(r, 20));
+                  }
+                  try {
+                    await patchMattermostPost(blockStreamingClient, {
+                      postId: finalizeId,
+                      message: finalizeText,
+                    });
+                    runtime.log?.(`stream-patch finalized turn ${finalizeId}`);
+                  } catch (err) {
+                    // Undo the increment so deliver() can re-deliver this turn's
+                    // content rather than silently skipping it.
+                    streamedTurnCount--;
+                    logVerboseMessage(
+                      `mattermost stream-patch turn finalize failed: ${String(err)}`,
+                    );
+                  }
+                }
+              : undefined,
+            // Disable core block streaming since we handle streaming via onPartialReply.
+            disableBlockStreaming: blockStreamingClient
+              ? true
+              : typeof account.blockStreaming === "boolean"
+                ? !account.blockStreaming
+                : false,
             onModelSelected,
           },
         }),

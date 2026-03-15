@@ -276,3 +276,29 @@ export async function uploadMattermostFile(
   }
   return info;
 }
+
+/**
+ * Update an existing Mattermost post (partial patch).
+ * Requires edit_post (own) or edit_others_posts permission.
+ */
+export async function patchMattermostPost(
+  client: MattermostClient,
+  params: { postId: string; message: string },
+): Promise<void> {
+  await client.request<void>(`/posts/${params.postId}/patch`, {
+    method: "PUT",
+    body: JSON.stringify({ message: params.message }),
+  });
+}
+
+/**
+ * Delete a Mattermost post (soft delete).
+ */
+export async function deleteMattermostPost(
+  client: MattermostClient,
+  postId: string,
+): Promise<void> {
+  await client.request<void>(`/posts/${postId}`, {
+    method: "DELETE",
+  });
+}
