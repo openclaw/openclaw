@@ -283,4 +283,34 @@ describe("startHeartbeatRunner", () => {
 
     runner.stop();
   });
+
+  it("re-arms timer after runOnce rejects with an unhandled promise rejection (#45772)", async () => {
+    useFakeHeartbeatTime();
+
+    let callCount = 0;
+    const runSpy = vi.fn().mockImplementation(async () => {
+      callCount++;
+      if (callCount === 1) {
+        // Simulate an unhandled rejection that escapes the inner try/catch
+        // (e.g. from session resolution or preflight code outside the
+        // existing error handling). Before the fix, this would permanently
+        // kill the heartbeat timer.
+        return Promise.reject(new Error("unexpected async failure"));
+      }
+      return { status: "ran", durationMs: 1 };
+    });
+
+    const runner = startDefaultRunner(runSpy);
+
+    // First heartbeat fires and rejects
+    await vi.advanceTimersByTimeAsync(30 * 60_000 + 1_000);
+    expect(runSpy).toHaveBeenCalledTimes(1);
+
+    // Second heartbeat MUST still fire — the timer must have been re-armed
+    // despite the rejection. This is the core assertion for #45772.
+    await vi.advanceTimersByTimeAsync(30 * 60_000 + 1_000);
+    expect(runSpy).toHaveBeenCalledTimes(2);
+
+    runner.stop();
+  });
 });
