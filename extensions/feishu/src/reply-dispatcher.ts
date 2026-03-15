@@ -2,9 +2,8 @@ import {
   createReplyPrefixContext,
   createTypingCallbacks,
   logTypingFailure,
-  resolveAgentIdentity,
   type ClawdbotConfig,
-  type IdentityConfig,
+  type OutboundIdentity,
   type ReplyPayload,
   type RuntimeEnv,
 } from "openclaw/plugin-sdk/feishu";
@@ -46,7 +45,7 @@ function normalizeEpochMs(timestamp: number | undefined): number | undefined {
 /** Build a card header from agent identity config. */
 function resolveCardHeader(
   agentId: string,
-  identity: IdentityConfig | undefined,
+  identity: OutboundIdentity | undefined,
 ): CardHeaderConfig {
   const name = identity?.name?.trim() || agentId;
   const emoji = identity?.emoji?.trim();
@@ -59,7 +58,7 @@ function resolveCardHeader(
 /** Build a card note footer from agent identity and model context. */
 function resolveCardNote(
   agentId: string,
-  identity: IdentityConfig | undefined,
+  identity: OutboundIdentity | undefined,
   prefixCtx: { model?: string; provider?: string },
 ): string {
   const name = identity?.name?.trim() || agentId;
@@ -87,6 +86,7 @@ export type CreateFeishuReplyDispatcherParams = {
   rootId?: string;
   mentionTargets?: MentionTarget[];
   accountId?: string;
+  identity?: OutboundIdentity;
   /** Epoch ms when the inbound message was created. Used to suppress typing
    *  indicators on old/replayed messages after context compaction (#30418). */
   messageCreateTimeMs?: number;
@@ -105,13 +105,13 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
     rootId,
     mentionTargets,
     accountId,
+    identity,
   } = params;
   const sendReplyToMessageId = skipReplyToInMessages ? undefined : replyToMessageId;
   const threadReplyMode = threadReply === true;
   const effectiveReplyInThread = threadReplyMode ? true : replyInThread;
   const account = resolveFeishuAccount({ cfg, accountId });
   const prefixContext = createReplyPrefixContext({ cfg, agentId });
-  const identity = resolveAgentIdentity(cfg, agentId);
 
   let typingState: TypingIndicatorState | null = null;
   const typingCallbacks = createTypingCallbacks({
