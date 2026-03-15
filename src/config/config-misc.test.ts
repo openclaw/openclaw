@@ -468,6 +468,34 @@ describe("config strict validation", () => {
     });
   });
 
+  it("accepts plugin entries with extra provider-specific keys (#43551)", () => {
+    const res = validateConfigObject({
+      agents: { list: [{ id: "pi" }] },
+      plugins: {
+        enabled: true,
+        entries: {
+          "openclaw-mem0": {
+            enabled: true,
+            mode: "qdrant",
+            userId: "test-user",
+            autoRecall: true,
+            oss: { apiUrl: "http://localhost:6333" },
+          },
+        },
+      },
+    });
+    expect(res.ok).toBe(true);
+    if (res.ok) {
+      const entry = res.config.plugins?.entries?.["openclaw-mem0"] as Record<string, unknown>;
+      expect(entry.enabled).toBe(true);
+      // Passthrough keys must be preserved (not stripped) so plugins can read them.
+      expect(entry.mode).toBe("qdrant");
+      expect(entry.userId).toBe("test-user");
+      expect(entry.autoRecall).toBe(true);
+      expect(entry.oss).toEqual({ apiUrl: "http://localhost:6333" });
+    }
+  });
+
   it("still marks literal gateway.bind host aliases as legacy", async () => {
     await withTempHome(async (home) => {
       await writeOpenClawConfig(home, {
