@@ -332,6 +332,21 @@ async function scanMemorySources(params: {
   return { sources: scans, totalFiles, issues };
 }
 
+function getDisplayedTotalFiles(params: {
+  backend: "builtin" | "qmd";
+  indexedFiles: number;
+  scannedTotalFiles: number | null;
+}): number | null {
+  const { backend, indexedFiles, scannedTotalFiles } = params;
+  if (scannedTotalFiles === null) {
+    return null;
+  }
+  if (backend === "qmd" && indexedFiles > scannedTotalFiles) {
+    return indexedFiles;
+  }
+  return scannedTotalFiles;
+}
+
 export async function runMemoryStatus(opts: MemoryCommandOptions) {
   setVerbose(Boolean(opts.verbose));
   const { config: cfg, diagnostics } = await loadMemoryCommandConfig("memory status");
@@ -439,7 +454,11 @@ export async function runMemoryStatus(opts: MemoryCommandOptions) {
     const { agentId, status, embeddingProbe, indexError, scan } = result;
     const filesIndexed = status.files ?? 0;
     const chunksIndexed = status.chunks ?? 0;
-    const totalFiles = scan?.totalFiles ?? null;
+    const totalFiles = getDisplayedTotalFiles({
+      backend: status.backend,
+      indexedFiles: filesIndexed,
+      scannedTotalFiles: scan?.totalFiles ?? null,
+    });
     const indexedLabel =
       totalFiles === null
         ? `${filesIndexed}/? files · ${chunksIndexed} chunks`
@@ -478,9 +497,13 @@ export async function runMemoryStatus(opts: MemoryCommandOptions) {
     if (status.sourceCounts?.length) {
       lines.push(label("By source"));
       for (const entry of status.sourceCounts) {
-        const total = scan?.sources?.find(
-          (scanEntry) => scanEntry.source === entry.source,
-        )?.totalFiles;
+        const total = getDisplayedTotalFiles({
+          backend: status.backend,
+          indexedFiles: entry.files,
+          scannedTotalFiles:
+            scan?.sources?.find((scanEntry) => scanEntry.source === entry.source)?.totalFiles ??
+            null,
+        });
         const counts =
           total === null
             ? `${entry.files}/? files · ${entry.chunks} chunks`

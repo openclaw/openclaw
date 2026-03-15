@@ -147,6 +147,15 @@ describe("memory cli", () => {
     }
   }
 
+  async function withTempWorkspace(run: (workspaceDir: string) => Promise<void>) {
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "memory-cli-workspace-"));
+    try {
+      await run(tmpDir);
+    } finally {
+      await fs.rm(tmpDir, { recursive: true, force: true });
+    }
+  }
+
   async function expectCloseFailureAfterCommand(params: {
     args: string[];
     manager: Record<string, unknown>;
@@ -430,6 +439,38 @@ describe("memory cli", () => {
     expect(close).toHaveBeenCalled();
     expect(error).toHaveBeenCalledWith(expect.stringContaining("Memory search failed: boom"));
     expect(process.exitCode).toBe(1);
+  });
+
+  it("prints qmd status counts without impossible scanned denominators", async () => {
+    await withTempWorkspace(async (workspaceDir) => {
+      await fs.mkdir(path.join(workspaceDir, "memory"), { recursive: true });
+      await fs.writeFile(path.join(workspaceDir, "MEMORY.md"), "root\n", "utf-8");
+
+      const close = vi.fn(async () => {});
+      mockManager({
+        probeVectorAvailability: vi.fn(async () => true),
+        status: () =>
+          makeMemoryStatus({
+            backend: "qmd",
+            provider: "qmd",
+            model: "qmd",
+            requestedProvider: "qmd",
+            workspaceDir,
+            files: 5,
+            chunks: 5,
+            sourceCounts: [{ source: "memory", files: 5, chunks: 5 }],
+          }),
+        close,
+      });
+
+      const log = spyRuntimeLogs();
+      await runMemoryCli(["status"]);
+
+      const output = log.mock.calls.map((call) => String(call[0])).join("\n");
+      expect(output).toContain("Indexed: 5/5 files · 5 chunks");
+      expect(output).toContain("memory · 5/5 files · 5 chunks");
+      expect(close).toHaveBeenCalled();
+    });
   });
 
   it("prints status json output when requested", async () => {
