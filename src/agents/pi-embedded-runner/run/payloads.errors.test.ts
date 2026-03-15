@@ -325,18 +325,41 @@ describe("buildEmbeddedRunPayloads", () => {
     expectSingleToolErrorPayload(payloads, { title, absentDetail });
   });
 
-  it("shows mutating tool errors even when assistant output exists", () => {
+  it("suppresses mutating tool errors when assistant already replied (#39631)", () => {
+    const payloads = buildPayloads({
+      assistantTexts: ["The edit failed because the match was not unique."],
+      lastAssistant: { stopReason: "end_turn" } as unknown as AssistantMessage,
+      lastToolError: { toolName: "edit", error: "old_string is not unique" },
+    });
+
+    expect(payloads).toHaveLength(1);
+    expect(payloads[0]?.text).toBe("The edit failed because the match was not unique.");
+    expect(payloads[0]?.isError).toBeUndefined();
+  });
+
+  it("shows mutating tool errors when assistant reply does not acknowledge failure", () => {
     const payloads = buildPayloads({
       assistantTexts: ["Done."],
       lastAssistant: { stopReason: "end_turn" } as unknown as AssistantMessage,
-      lastToolError: { toolName: "write", error: "file missing" },
+      lastToolError: { toolName: "write", error: "connection timeout" },
     });
 
-    expect(payloads).toHaveLength(2);
-    expect(payloads[0]?.text).toBe("Done.");
-    expect(payloads[1]?.isError).toBe(true);
-    expect(payloads[1]?.text).toContain("Write");
-    expect(payloads[1]?.text).not.toContain("missing");
+    // The reply "Done." does not acknowledge the failure, so the warning
+    // must still be shown to the user.
+    const warningPayload = payloads.find((p) => p.isError);
+    expect(warningPayload).toBeDefined();
+    expect(warningPayload?.text).toContain("Write");
+  });
+
+  it("still shows mutating tool errors when no assistant reply exists", () => {
+    const payloads = buildPayloads({
+      lastToolError: { toolName: "write", error: "connection timeout" },
+    });
+
+    expectSingleToolErrorPayload(payloads, {
+      title: "Write",
+      absentDetail: "connection timeout",
+    });
   });
 
   it("does not treat session_status read failures as mutating when explicitly flagged", () => {
