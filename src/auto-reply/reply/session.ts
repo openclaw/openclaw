@@ -442,7 +442,7 @@ export async function initSessionState(params: {
     archivedAt: baseEntry?.archivedAt,
   };
   if (typeof sessionEntry.archivedAt === "number") {
-    delete sessionEntry.archivedAt;
+    sessionEntry.archivedAt = null;
   }
   const metaPatch = deriveSessionMetaPatch({
     ctx: sessionCtxForState,
