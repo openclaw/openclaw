@@ -5,7 +5,7 @@ import type { ToolCard } from "../types/chat-types.ts";
 import { TOOL_INLINE_THRESHOLD } from "./constants.ts";
 import { extractTextCached } from "./message-extract.ts";
 import { isToolResultMessage } from "./message-normalizer.ts";
-import { formatToolOutputForSidebar, getTruncatedPreview } from "./tool-helpers.ts";
+import { getTruncatedPreview } from "./tool-helpers.ts";
 
 export function extractToolCards(message: unknown): ToolCard[] {
   const m = message as Record<string, unknown>;
@@ -48,24 +48,14 @@ export function extractToolCards(message: unknown): ToolCard[] {
   return cards;
 }
 
-export function renderToolCardSidebar(card: ToolCard, onOpenSidebar?: (content: string) => void) {
+export function renderToolCardSidebar(card: ToolCard, _onOpenSidebar?: (content: string) => void) {
   const display = resolveToolDisplay({ name: card.name, args: card.args });
   const detail = formatToolDetail(display);
   const hasText = Boolean(card.text?.trim());
 
-  const canClick = Boolean(onOpenSidebar);
-  const handleClick = canClick
-    ? () => {
-        if (hasText) {
-          onOpenSidebar!(formatToolOutputForSidebar(card.text!));
-          return;
-        }
-        const info = `## ${display.label}\n\n${
-          detail ? `**Command:** \`${detail}\`\n\n` : ""
-        }*No output — tool completed successfully.*`;
-        onOpenSidebar!(info);
-      }
-    : undefined;
+  // Issue #45040: Remove auto-open sidebar behavior to prevent blocking popup
+  // Users can now expand/collapse tool output inline instead
+  const canClick = false;
 
   const isShort = hasText && (card.text?.length ?? 0) <= TOOL_INLINE_THRESHOLD;
   const showCollapsed = hasText && !isShort;
@@ -75,20 +65,10 @@ export function renderToolCardSidebar(card: ToolCard, onOpenSidebar?: (content: 
   return html`
     <div
       class="chat-tool-card ${canClick ? "chat-tool-card--clickable" : ""}"
-      @click=${handleClick}
+      @click=${nothing}
       role=${canClick ? "button" : nothing}
       tabindex=${canClick ? "0" : nothing}
-      @keydown=${
-        canClick
-          ? (e: KeyboardEvent) => {
-              if (e.key !== "Enter" && e.key !== " ") {
-                return;
-              }
-              e.preventDefault();
-              handleClick?.();
-            }
-          : nothing
-      }
+      @keydown=${nothing}
     >
       <div class="chat-tool-card__header">
         <div class="chat-tool-card__title">
@@ -112,7 +92,22 @@ export function renderToolCardSidebar(card: ToolCard, onOpenSidebar?: (content: 
       }
       ${
         showCollapsed
-          ? html`<div class="chat-tool-card__preview mono">${getTruncatedPreview(card.text!)}</div>`
+          ? html`
+              <details class="chat-tool-card__details">
+                <summary class="chat-tool-card__summary">
+                  <div class="chat-tool-card__preview mono">${getTruncatedPreview(card.text!)}</div>
+                  <div class="chat-tool-card__summary-content">
+                    <span class="chat-tool-card__toggle-text">
+                      <span class="chat-tool-card__toggle-icon">${icons.chevronRight}</span>
+                      <span>Show full output</span>
+                    </span>
+                  </div>
+                </summary>
+                <div class="chat-tool-card__output">
+                  <div class="chat-tool-card__full mono">${card.text}</div>
+                </div>
+              </details>
+            `
           : nothing
       }
       ${showInline ? html`<div class="chat-tool-card__inline mono">${card.text}</div>` : nothing}
