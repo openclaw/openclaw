@@ -132,6 +132,7 @@ function createProps(overrides: Partial<ChatProps> = {}): ChatProps {
     messages: [],
     toolMessages: [],
     streamSegments: [],
+    streamSegmentOffset: 0,
     stream: null,
     streamStartedAt: null,
     assistantAvatarUrl: null,
@@ -767,5 +768,35 @@ describe("chat view", () => {
       "Subagent: cron-config-check · subagent:6fb8b84b-c31f-410f-b7df-1553c82e43c9",
     );
     expect(labels).not.toContain("Subagent: cron-config-check");
+  });
+
+  it("strips segment offset from stream text to prevent duplicate growing bubbles (#47188)", () => {
+    const container = document.createElement("div");
+    // Simulate: 1 segment with "Hello " (text before tool call),
+    // then the current stream has full accumulated text "Hello world"
+    // with offset = 6 (length of "Hello ").
+    // The stream bubble should show only "world" (the delta).
+    render(
+      renderChat(
+        createProps({
+          messages: [],
+          streamSegments: [{ text: "Hello ", ts: 1000 }],
+          streamSegmentOffset: 6,
+          stream: "Hello world",
+          streamStartedAt: 2000,
+          assistantName: "Assistant",
+        }),
+      ),
+      container,
+    );
+
+    const streamBubbles = container.querySelectorAll(".chat-group.assistant .chat-bubble");
+    // Should have exactly 2 bubbles: one for the segment "Hello " and one for the stream "world"
+    expect(streamBubbles.length).toBe(2);
+
+    // The second bubble (current stream) should NOT contain the full accumulated text
+    const lastBubble = streamBubbles[streamBubbles.length - 1];
+    expect(lastBubble?.textContent).toContain("world");
+    expect(lastBubble?.textContent).not.toContain("Hello world");
   });
 });

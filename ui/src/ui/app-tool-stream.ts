@@ -31,6 +31,7 @@ type ToolStreamHost = {
   chatStream: string | null;
   chatStreamStartedAt: number | null;
   chatStreamSegments: Array<{ text: string; ts: number }>;
+  chatStreamSegmentOffset: number;
   toolStreamById: Map<string, ToolStreamEntry>;
   toolStreamOrder: string[];
   chatToolMessages: Record<string, unknown>[];
@@ -242,6 +243,7 @@ export function resetToolStream(host: ToolStreamHost) {
   host.toolStreamOrder = [];
   host.chatToolMessages = [];
   host.chatStreamSegments = [];
+  host.chatStreamSegmentOffset = 0;
 }
 
 export type CompactionStatus = {
@@ -437,8 +439,17 @@ export function handleAgentEvent(host: ToolStreamHost, payload?: AgentEventPaylo
   if (!entry) {
     // Commit any in-progress streaming text as a segment so it renders
     // above the tool card instead of below it.
+    // The server sends the full accumulated assistant text in each delta,
+    // so chatStream contains text already represented by previous segments.
+    // We strip the known prefix to avoid showing duplicate growing bubbles.
+    // See: https://github.com/openclaw/openclaw/issues/47188
     if (host.chatStream && host.chatStream.trim().length > 0) {
-      host.chatStreamSegments = [...host.chatStreamSegments, { text: host.chatStream, ts: now }];
+      const offset = host.chatStreamSegmentOffset ?? 0;
+      const deltaText = host.chatStream.slice(offset);
+      if (deltaText.trim().length > 0) {
+        host.chatStreamSegments = [...host.chatStreamSegments, { text: deltaText, ts: now }];
+      }
+      host.chatStreamSegmentOffset = host.chatStream.length;
       host.chatStream = null;
       host.chatStreamStartedAt = null;
     }
