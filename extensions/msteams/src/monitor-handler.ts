@@ -7,7 +7,6 @@ import { createMSTeamsMessageHandler } from "./monitor-handler/message-handler.j
 import type { MSTeamsMonitorLogger } from "./monitor-types.js";
 import { getPendingUpload, removePendingUpload } from "./pending-uploads.js";
 import type { MSTeamsPollStore } from "./polls.js";
-import { withRevokedProxyFallback } from "./revoked-context.js";
 import type { MSTeamsTurnContext } from "./sdk-types.js";
 
 export type MSTeamsAccessTokenProvider = {
@@ -42,6 +41,7 @@ export type MSTeamsMessageHandlerDeps = {
  */
 async function handleFileConsentInvoke(
   context: MSTeamsTurnContext,
+  sendActivity: (activity: string | object) => Promise<unknown>,
   log: MSTeamsMonitorLogger,
 ): Promise<boolean> {
   const expiredUploadMessage =
@@ -72,7 +72,7 @@ async function handleFileConsentInvoke(
         receivedConversationId: invokeConversationId || undefined,
       });
       if (consentResponse.action === "accept") {
-        await context.sendActivity(expiredUploadMessage);
+        await sendActivity(expiredUploadMessage);
       }
       return true;
     }
@@ -102,7 +102,7 @@ async function handleFileConsentInvoke(
           fileType: consentResponse.uploadInfo.fileType,
         });
 
-        await context.sendActivity({
+        await sendActivity({
           type: "message",
           attachments: [fileInfoCard],
         });
@@ -114,13 +114,13 @@ async function handleFileConsentInvoke(
         });
       } catch (err) {
         log.debug?.("file upload failed", { uploadId, error: String(err) });
-        await context.sendActivity(`File upload failed: ${String(err)}`);
+        await sendActivity(`File upload failed: ${String(err)}`);
       } finally {
         removePendingUpload(uploadId);
       }
     } else {
       log.debug?.("pending file not found for consent", { uploadId });
-      await context.sendActivity(expiredUploadMessage);
+      await sendActivity(expiredUploadMessage);
     }
   } else {
     // User declined
@@ -147,16 +147,44 @@ export function registerMSTeamsHandlers<T extends MSTeamsActivityHandler>(
         // Send invoke response IMMEDIATELY to prevent Teams timeout
         await ctx.sendActivity({ type: "invokeResponse", value: { status: 200 } });
 
-        try {
-          await withRevokedProxyFallback({
-            run: async () => await handleFileConsentInvoke(ctx, deps.log),
-            onRevoked: async () => true,
-            onRevokedLog: () => {
-              deps.log.debug?.(
-                "turn context revoked during file consent invoke; skipping delayed response",
-              );
+        // After the invoke response, the Bot Framework SDK revokes the
+        // TurnContext proxy. Use proactive messaging for subsequent sends
+        // so the FileInfoCard (or error message) reaches the user.
+        const activity = ctx.activity;
+        const proactiveRef = {
+          user: activity.from
+            ? {
+                id: activity.from.id,
+                name: activity.from.name,
+                aadObjectId: activity.from.aadObjectId,
+              }
+            : undefined,
+          agent: activity.recipient
+            ? { id: activity.recipient.id, name: activity.recipient.name }
+            : undefined,
+          conversation: {
+            id: normalizeMSTeamsConversationId(activity.conversation?.id ?? ""),
+            conversationType: activity.conversation?.conversationType,
+            tenantId: activity.conversation?.tenantId,
+          },
+          channelId: activity.channelId ?? "msteams",
+          serviceUrl: activity.serviceUrl,
+          locale: activity.locale,
+        };
+        const sendProactive = async (activityToSend: string | object): Promise<unknown> => {
+          let result: unknown;
+          await deps.adapter.continueConversation(
+            deps.appId,
+            proactiveRef,
+            async (proactiveCtx) => {
+              result = await proactiveCtx.sendActivity(activityToSend);
             },
-          });
+          );
+          return result;
+        };
+
+        try {
+          await handleFileConsentInvoke(ctx, sendProactive, deps.log);
         } catch (err) {
           deps.log.debug?.("file consent handler error", { error: String(err) });
         }
