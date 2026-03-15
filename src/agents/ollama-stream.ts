@@ -253,12 +253,36 @@ function extractToolCalls(content: unknown): OllamaToolCall[] {
   const result: OllamaToolCall[] = [];
   for (const part of parts) {
     if (part.type === "toolCall") {
-      result.push({ function: { name: part.name, arguments: part.arguments } });
+      result.push({ function: { name: part.name, arguments: parseToolArguments(part.arguments) } });
     } else if (part.type === "tool_use") {
-      result.push({ function: { name: part.name, arguments: part.input } });
+      result.push({ function: { name: part.name, arguments: parseToolArguments(part.input) } });
     }
   }
   return result;
+}
+
+/**
+ * Ensure tool call arguments are a plain object. The pi-ai SDK stores
+ * arguments as `Record<string, any>`, but after JSONL round-trip or from
+ * certain providers the value may arrive as a JSON string. Ollama's native
+ * `/api/chat` API requires arguments as an object, not a string.
+ */
+function parseToolArguments(args: unknown): Record<string, unknown> {
+  if (typeof args === "string") {
+    try {
+      const parsed = JSON.parse(args);
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+        return parsed as Record<string, unknown>;
+      }
+    } catch {
+      // Not valid JSON; return empty object
+    }
+    return {};
+  }
+  if (args && typeof args === "object" && !Array.isArray(args)) {
+    return args as Record<string, unknown>;
+  }
+  return {};
 }
 
 export function convertToOllamaMessages(
