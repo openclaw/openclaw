@@ -81,10 +81,20 @@ function copyDeclaredPluginSkillPaths(params) {
     const targetPath = ensurePathInsideRoot(params.distPluginDir, target.outputPath);
     removePathIfExists(targetPath);
     fs.mkdirSync(path.dirname(targetPath), { recursive: true });
+    const shouldExcludeNestedNodeModules = /^node_modules(?:\/|$)/u.test(
+      normalizeManifestRelativePath(raw),
+    );
     fs.cpSync(sourcePath, targetPath, {
       dereference: true,
       force: true,
       recursive: true,
+      filter: (candidatePath) => {
+        if (!shouldExcludeNestedNodeModules || candidatePath === sourcePath) {
+          return true;
+        }
+        const relativeCandidate = path.relative(sourcePath, candidatePath).replaceAll("\\", "/");
+        return !relativeCandidate.split("/").includes("node_modules");
+      },
     });
     copiedSkills.push(target.manifestPath);
   }
