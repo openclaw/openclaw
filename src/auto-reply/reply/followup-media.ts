@@ -64,6 +64,40 @@ function findFirstOccurrenceBeforeFileBlocks(value: string, search: string): num
   return bodyRegion.indexOf(search);
 }
 
+function findLastOccurrenceBeforeFileBlocks(value: string, search: string): number {
+  if (!search) {
+    return -1;
+  }
+  const fileBlockIndex = value.search(FILE_BLOCK_RE);
+  const bodyRegion = fileBlockIndex >= 0 ? value.slice(0, fileBlockIndex) : value;
+  const index = bodyRegion.lastIndexOf(search);
+  if (index >= 0) {
+    return index;
+  }
+  // Fallback: search string itself contains file blocks — it can't appear in the
+  // body-only region.  Search the full value with lastIndexOf to pick the trailing
+  // (most recent) occurrence when thread/history has identical <file> bodies.
+  if (FILE_BLOCK_RE.test(search)) {
+    return value.lastIndexOf(search);
+  }
+  return -1;
+}
+
+function replaceLastOccurrenceBeforeFileBlocks(
+  value: string,
+  search: string,
+  replacement: string,
+): string | undefined {
+  if (!search) {
+    return undefined;
+  }
+  const index = findLastOccurrenceBeforeFileBlocks(value, search);
+  if (index < 0) {
+    return undefined;
+  }
+  return `${value.slice(0, index)}${replacement}${value.slice(index + search.length)}`;
+}
+
 function replaceFirstOccurrenceBeforeFileBlocks(
   value: string,
   search: string,
@@ -101,7 +135,8 @@ function normalizeUpdatedBody(params: { originalBody?: string; updatedBody?: str
     return cleanedOriginalBody;
   }
   return (
-    replaceLastOccurrence(updatedBody, originalBody, cleanedOriginalBody) ?? updatedBody
+    replaceLastOccurrenceBeforeFileBlocks(updatedBody, originalBody, cleanedOriginalBody) ??
+    updatedBody
   ).trim();
 }
 
@@ -214,6 +249,13 @@ function snapshotUpdatedMediaContext(params: {
       params.original.DeferredFileBlocksExtracted || params.appliedFile || undefined,
   };
 }
+
+// Exported for unit testing — these are pure string helpers with no side effects.
+export {
+  findLastOccurrenceBeforeFileBlocks as _findLastOccurrenceBeforeFileBlocks,
+  normalizeUpdatedBody as _normalizeUpdatedBody,
+  rebuildQueuedPromptWithMediaUnderstanding as _rebuildQueuedPromptWithMediaUnderstanding,
+};
 
 export async function applyDeferredMediaUnderstandingToQueuedRun(
   queued: FollowupRun,
