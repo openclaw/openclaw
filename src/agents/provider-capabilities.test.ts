@@ -86,8 +86,11 @@ describe("resolveProviderCapabilities", () => {
   });
 
   it("treats kimi aliases as native anthropic tool payload providers", () => {
+    // kimi-coding uses native Anthropic tool format (input_schema)
+    // Legacy compat.requiresOpenAiAnthropicToolPayload=true is ignored by the wrapper guard
     expect(requiresOpenAiCompatibleAnthropicToolPayload("kimi-coding")).toBe(false);
     expect(requiresOpenAiCompatibleAnthropicToolPayload("kimi-code")).toBe(false);
+    // anthropic native does not require OpenAI-compatible payloads
     expect(requiresOpenAiCompatibleAnthropicToolPayload("anthropic")).toBe(false);
   });
 

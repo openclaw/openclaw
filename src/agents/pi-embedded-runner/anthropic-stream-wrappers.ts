@@ -1,6 +1,7 @@
 import type { StreamFn } from "@mariozechner/pi-agent-core";
 import { streamSimple } from "@mariozechner/pi-ai";
 import { resolveFastModeParam } from "../fast-mode.js";
+import { normalizeProviderId } from "../model-selection.js";
 import {
   requiresOpenAiCompatibleAnthropicToolPayload,
   usesOpenAiFunctionAnthropicToolSchema,
@@ -95,11 +96,18 @@ function requiresAnthropicToolPayloadCompatibilityForModel(model: {
     return false;
   }
 
-  if (
-    typeof model.provider === "string" &&
-    requiresOpenAiCompatibleAnthropicToolPayload(model.provider)
-  ) {
-    return true;
+  if (typeof model.provider === "string") {
+    const normalizedProvider = normalizeProviderId(model.provider);
+    // Legacy configs may still contain compat.requiresOpenAiAnthropicToolPayload=true
+    // from old kimi-coding defaults. That marker is now invalid for kimi-coding
+    // and causes textual pseudo tool calls (for example [[read:0]]{...}) instead
+    // of native tool_use blocks, so we must ignore the stale override.
+    if (normalizedProvider === "kimi-coding") {
+      return false;
+    }
+    if (requiresOpenAiCompatibleAnthropicToolPayload(model.provider)) {
+      return true;
+    }
   }
   return hasOpenAiAnthropicToolPayloadCompatFlag(model);
 }
