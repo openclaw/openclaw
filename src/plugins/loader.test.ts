@@ -1692,7 +1692,37 @@ describe("loadOpenClawPlugins", () => {
     expect(workspacePlugin?.status).toBe("loaded");
   });
 
-  it("lets an explicitly trusted workspace plugin shadow a bundled plugin with the same id", () => {
+  it("keeps scoped and unscoped plugin ids distinct", () => {
+    useNoBundledPlugins();
+    const scoped = writePlugin({
+      id: "@team/shadowed",
+      body: `module.exports = { id: "@team/shadowed", register() {} };`,
+      filename: "scoped.cjs",
+    });
+    const unscoped = writePlugin({
+      id: "shadowed",
+      body: `module.exports = { id: "shadowed", register() {} };`,
+      filename: "unscoped.cjs",
+    });
+
+    const registry = loadOpenClawPlugins({
+      cache: false,
+      config: {
+        plugins: {
+          load: { paths: [scoped.file, unscoped.file] },
+          allow: ["@team/shadowed", "shadowed"],
+        },
+      },
+    });
+
+    expect(registry.plugins.find((entry) => entry.id === "@team/shadowed")?.status).toBe("loaded");
+    expect(registry.plugins.find((entry) => entry.id === "shadowed")?.status).toBe("loaded");
+    expect(
+      registry.diagnostics.some((diag) => String(diag.message).includes("duplicate plugin id")),
+    ).toBe(false);
+  });
+
+  it("keeps bundled plugins ahead of trusted workspace duplicates with the same id", () => {
     const bundledDir = makeTempDir();
     writePlugin({
       id: "shadowed",
@@ -1719,6 +1749,9 @@ describe("loadOpenClawPlugins", () => {
         plugins: {
           enabled: true,
           allow: ["shadowed"],
+          entries: {
+            shadowed: { enabled: true },
+          },
         },
       },
     });
@@ -1726,8 +1759,9 @@ describe("loadOpenClawPlugins", () => {
     const entries = registry.plugins.filter((entry) => entry.id === "shadowed");
     const loaded = entries.find((entry) => entry.status === "loaded");
     const overridden = entries.find((entry) => entry.status === "disabled");
-    expect(loaded?.origin).toBe("workspace");
-    expect(overridden?.origin).toBe("bundled");
+    expect(loaded?.origin).toBe("bundled");
+    expect(overridden?.origin).toBe("workspace");
+    expect(overridden?.error).toContain("overridden by bundled plugin");
   });
 
   it("warns when loaded non-bundled plugin has no install/load-path provenance", () => {

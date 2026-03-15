@@ -13,7 +13,8 @@ type SeenIdEntry = {
   recordIndex: number;
 };
 
-// Precedence: config > workspace > explicit-install global > bundled > auto-discovered global
+// Canonicalize identical physical plugin roots with the most explicit source.
+// This only applies when multiple candidates resolve to the same on-disk plugin.
 const PLUGIN_ORIGIN_RANK: Readonly<Record<PluginOrigin, number>> = {
   config: 0,
   workspace: 1,
@@ -167,17 +168,28 @@ function resolveDuplicatePrecedenceRank(params: {
   config?: OpenClawConfig;
   env: NodeJS.ProcessEnv;
 }): number {
-  if (params.candidate.origin === "global") {
-    return matchesInstalledPluginRecord({
+  if (params.candidate.origin === "config") {
+    return 0;
+  }
+  if (
+    params.candidate.origin === "global" &&
+    matchesInstalledPluginRecord({
       pluginId: params.pluginId,
       candidate: params.candidate,
       config: params.config,
       env: params.env,
     })
-      ? 2
-      : 4;
+  ) {
+    return 1;
   }
-  return PLUGIN_ORIGIN_RANK[params.candidate.origin];
+  if (params.candidate.origin === "bundled") {
+    // Bundled plugin ids are reserved unless the operator explicitly overrides them.
+    return 2;
+  }
+  if (params.candidate.origin === "workspace") {
+    return 3;
+  }
+  return 4;
 }
 
 export function loadPluginManifestRegistry(params: {
