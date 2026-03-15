@@ -77,11 +77,114 @@
   word-break: keep-all;
 }
 
+/* Code block wrapper (markdown fenced blocks) */
+.code-block-wrapper {
+  position: relative;
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.code-block-wrapper pre {
+  margin: 0;
+}
+
+.code-block-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 4px 6px 4px 12px;
+  font-size: 12px;
+  background: rgba(0, 0, 0, 0.22);
+  color: var(--muted);
+  min-height: 28px;
+}
+
+:root[data-theme-mode="light"] .code-block-header {
+  background: rgba(0, 0, 0, 0.08);
+}
+
+.code-block-lang {
+  font-family: var(--mono);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+  user-select: none;
+}
+
+.code-block-copy {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--muted);
+  font-family: var(--font-body);
+  font-size: 11px;
+  line-height: 1;
+  cursor: pointer;
+  opacity: 0;
+  transition:
+    opacity 120ms ease-out,
+    background 120ms ease-out,
+    border-color 120ms ease-out,
+    color 120ms ease-out;
+}
+
+.code-block-wrapper:hover .code-block-copy {
+  opacity: 1;
+}
+
+.code-block-copy:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+
+/* Idle / Done text toggle */
+.code-block-copy__done {
+  display: none;
+}
+
+.code-block-copy.copied .code-block-copy__idle {
+  display: none;
+}
+
+.code-block-copy.copied .code-block-copy__done {
+  display: inline;
+}
+
+.code-block-copy.copied {
+  opacity: 1;
+  border-color: var(--ok-subtle, rgba(34, 197, 94, 0.3));
+  color: var(--ok, #22c55e);
+}
+
+.code-block-copy:focus-visible {
+  opacity: 1;
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+@media (hover: none) {
+  .code-block-copy {
+    opacity: 1;
+  }
+}
+
 .chat-text :where(pre) {
   background: rgba(0, 0, 0, 0.15);
   border-radius: 6px;
   padding: 10px 12px;
   overflow-x: auto;
+}
+
+/* When pre is inside a code-block-wrapper, the wrapper handles the border-radius
+   and header provides top context, so remove duplicate radius/spacing */
+.code-block-wrapper pre {
+  border-radius: 0;
+  border: none;
 }
 
 .chat-text :where(pre code) {
