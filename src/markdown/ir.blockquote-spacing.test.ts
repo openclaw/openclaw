@@ -146,6 +146,41 @@ describe("blockquote spacing", () => {
       expect(result.text).toBe("> quote\n\nparagraph");
       expect(result.text).not.toContain("\n\n\n");
     });
+
+    it("prefixes continuation lines inside a blockquote", () => {
+      const input = "> Line 1\n> Line 2";
+      const result = markdownToIR(input, { blockquotePrefix: "> " });
+
+      expect(result.text).toBe("> Line 1\n> Line 2");
+    });
+
+    it("prefixes continuation lines on hard break inside a blockquote", () => {
+      const input = "> Line 1  \n> Line 2";
+      const result = markdownToIR(input, { blockquotePrefix: "> " });
+
+      expect(result.text).toBe("> Line 1\n> Line 2");
+    });
+
+    it("prefixes the next paragraph inside a blockquote", () => {
+      const input = "> Line 1\n>\n> Line 2";
+      const result = markdownToIR(input, { blockquotePrefix: "> " });
+
+      expect(result.text).toBe("> Line 1\n\n> Line 2");
+    });
+
+    it("repeats the prefix for nested blockquote continuation lines", () => {
+      const input = "> > Line 1\n> > Line 2";
+      const result = markdownToIR(input, { blockquotePrefix: "> " });
+
+      expect(result.text).toBe("> > Line 1\n> > Line 2");
+    });
+
+    it("preserves the outer prefix after a nested blockquote paragraph", () => {
+      const input = "> > inner\n>\n> outer";
+      const result = markdownToIR(input, { blockquotePrefix: "> " });
+
+      expect(result.text).toBe("> > inner\n\n> outer");
+    });
   });
 
   describe("edge cases", () => {
