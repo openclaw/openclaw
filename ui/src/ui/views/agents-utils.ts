@@ -581,7 +581,7 @@ function resolveConfiguredModels(
           ? (modelRaw as { alias?: string }).alias?.trim()
           : undefined
         : undefined;
-    const displayLabel = alias ? `${alias}` : modelOnly;
+    const displayLabel = alias ? alias : modelOnly;
     const providerLabel = provider ? `${displayLabel} · ${provider}` : displayLabel;
     options.push({ value: modelOnly, label: providerLabel });
   }

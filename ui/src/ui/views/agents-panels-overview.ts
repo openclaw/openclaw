@@ -66,7 +66,9 @@ export function renderAgentOverview(params: {
   // Normalize provider-qualified model values for dropdown matching.
   // Option values in buildModelOptions are unprefixed model IDs.
   const normalizeDropdownValue = (v: string | null): string => {
-    if (!v) return "";
+    if (!v) {
+      return "";
+    }
     const slash = v.indexOf("/");
     return slash > 0 ? v.slice(slash + 1).trim() : v.trim();
   };
