@@ -22,10 +22,11 @@ import {
 } from "../product/defaults";
 import { buildFrontendPrompt, defaultFrontendPrompt } from "../product/prompt";
 import { loadInitialGatewayToken, persistGatewayToken } from "../product/auth";
-import { loadPreferenceMemory, savePreferenceMemory } from "../product/storage";
+import { loadPreferenceMemory, savePreferenceMemory, loadLanguagePreference, saveLanguagePreference } from "../product/storage";
 import { AppState } from "../core/app-state";
 import { extractText, inferMessageKind, defaultGatewayUrl, CHAT_COLLAPSE_THRESHOLD } from "../core/utils";
 import type { ConnectionState, ChatMessageKind, ChatFilter, ChatMessage, UsageVariant, SessionRow } from "../core/types";
+import { type Language, getTranslation, detectBrowserLanguage } from "../core/i18n";
 
 type ChatEventPayload = {
   runId: string;
@@ -438,6 +439,18 @@ export class ControlModeView extends LitElement {
   @state() sessionsLoading = false;
   @state() sessionsError: string | null = null;
   @state() sessionRows: SessionRow[] = [];
+  @state() checkpointHistory: Array<{ ref: string; timestamp: Date; name: string }> = [];
+  @state() checkpointHistoryLoading = false;
+  @state() language: Language = loadLanguagePreference() ?? detectBrowserLanguage();
+
+  private t(key: string): string {
+    return getTranslation(this.language, key as any);
+  }
+
+  private toggleLanguage() {
+    this.language = this.language === "zh" ? "en" : "zh";
+    saveLanguagePreference(this.language);
+  }
 
   connectedCallback(): void {
     super.connectedCallback();
@@ -451,6 +464,7 @@ export class ControlModeView extends LitElement {
     });
     persistGatewayToken(this.gatewayToken);
     this.connect();
+    void this.loadCheckpointHistory();
   }
 
   disconnectedCallback(): void {
@@ -720,6 +734,81 @@ export class ControlModeView extends LitElement {
     await this.sendRawMessage(userText, outbound);
   }
 
+  private async loadCheckpointHistory() {
+    if (!this.client || this.connectionState !== "connected") {
+      return;
+    }
+    this.checkpointHistoryLoading = true;
+    try {
+      const result = await this.client.request<{ output?: string }>("shell.exec", {
+        command: "pwsh",
+        args: ["./scripts/web-control-ui-list-checkpoints.ps1"],
+        cwd: "C:\\Users\\24045\\clawd\\openclaw-src",
+      });
+      const output = result.output ?? "";
+      const lines = output.split("\n").map(line => line.trim()).filter(Boolean);
+      const parsed = lines
+        .map(ref => {
+          const match = ref.match(/checkpoint\/web-control-ui-(\d{8})-(\d{6})-(.+)$/);
+          if (!match) return null;
+          const [, dateStr, timeStr, name] = match;
+          const year = parseInt(dateStr.slice(0, 4), 10);
+          const month = parseInt(dateStr.slice(4, 6), 10) - 1;
+          const day = parseInt(dateStr.slice(6, 8), 10);
+          const hour = parseInt(timeStr.slice(0, 2), 10);
+          const minute = parseInt(timeStr.slice(2, 4), 10);
+          const second = parseInt(timeStr.slice(4, 6), 10);
+          const timestamp = new Date(year, month, day, hour, minute, second);
+          return { ref, timestamp, name };
+        })
+        .filter((item): item is { ref: string; timestamp: Date; name: string } => item !== null);
+      this.checkpointHistory = parsed;
+    } catch (error) {
+      this.errorMessage = `${this.t("loadCheckpointError")}：${String(error)}`;
+    } finally {
+      this.checkpointHistoryLoading = false;
+    }
+  }
+
+  private formatCheckpointTime(timestamp: Date): string {
+    const now = new Date();
+    const diffMs = now.getTime() - timestamp.getTime();
+    const diffMinutes = Math.floor(diffMs / 60000);
+    const diffHours = Math.floor(diffMs / 3600000);
+    const diffDays = Math.floor(diffMs / 86400000);
+
+    if (diffMinutes < 1) {
+      return this.t("justNow");
+    }
+    if (diffMinutes < 60) {
+      return `${diffMinutes} ${this.t("minutesAgo")}`;
+    }
+    if (diffHours < 24) {
+      return `${diffHours} ${this.t("hoursAgo")}`;
+    }
+    if (diffDays === 1) {
+      const locale = this.language === "zh" ? "zh-CN" : "en-US";
+      const timeStr = timestamp.toLocaleTimeString(locale, { hour: "2-digit", minute: "2-digit", hour12: false });
+      return `${this.t("yesterday")} ${timeStr}`;
+    }
+    if (diffDays < 7) {
+      return `${diffDays} ${this.t("daysAgo")}`;
+    }
+    const locale = this.language === "zh" ? "zh-CN" : "en-US";
+    return timestamp.toLocaleString(locale, {
+      month: "short",
+      day: "numeric",
+      hour: "2-digit",
+      minute: "2-digit",
+      hour12: false
+    });
+  }
+
+  private async restoreToCheckpoint(ref: string) {
+    this.restoreRef = ref;
+    await this.triggerRestore();
+  }
+
   private savePreferenceDraft() {
     this.preferenceMemory = fromDraft(this.preferenceDraft);
     savePreferenceMemory(this.preferenceMemory);
@@ -868,7 +957,17 @@ export class ControlModeView extends LitElement {
       <div class="page">
         <div class="stack">
           <section class="hero">
-            <h1>Frontend Co-Creation Agent</h1>
+            <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 16px;">
+              <h1 style="margin: 0;">Frontend Co-Creation Agent</h1>
+              <button
+                class="secondary"
+                type="button"
+                @click=${() => this.toggleLanguage()}
+                style="padding: 8px 16px; font-size: 14px; white-space: nowrap;"
+              >
+                ${this.language === "zh" ? "English" : "中文"}
+              </button>
+            </div>
             <p>
               现在主线已经收束成 4 件事：一份可持续迭代的前端提示词、一套用户偏好记忆、一条由 OpenClaw 原生执行代码修改的链路、一个最小但可靠的版本回退机制。
             </p>
@@ -1221,7 +1320,7 @@ export class ControlModeView extends LitElement {
               </section>
 
               <section class="panel">
-                <h2>Rollback First</h2>
+                <h2>${this.t("rollbackFirst")}</h2>
                 <p class="subtitle">最小但可靠的回退机制，不复杂，但够用，而且现在已经有快捷触发入口。</p>
                 <div class="recommendation">
                   <p><strong>做 checkpoint：</strong><code>pwsh ./scripts/web-control-ui-checkpoint.ps1 -Name before-change</code></p>
@@ -1239,21 +1338,76 @@ export class ControlModeView extends LitElement {
                   />
                 </div>
                 <div class="memory-actions" style="margin-top: 12px;">
-                  <button type="button" @click=${() => this.triggerCheckpoint()} ?disabled=${this.chatSending}>${this.chatSending ? "执行中..." : "创建 checkpoint"}</button>
-                  <button class="secondary" type="button" @click=${() => this.triggerListCheckpoints()} ?disabled=${this.chatSending}>${this.chatSending ? "执行中..." : "查看最近 checkpoint"}</button>
+                  <button type="button" @click=${() => this.triggerCheckpoint()} ?disabled=${this.chatSending}>${this.chatSending ? this.t("executing") : "创建 checkpoint"}</button>
+                  <button class="secondary" type="button" @click=${() => this.triggerListCheckpoints()} ?disabled=${this.chatSending}>${this.chatSending ? this.t("executing") : "查看最近 checkpoint"}</button>
                 </div>
                 <div class="memory-item" style="margin-top: 12px;">
-                  <span class="label">恢复的 checkpoint ref</span>
+                  <span class="label">${this.t("checkpointRef")}</span>
                   <input
                     .value=${this.restoreRef}
                     @input=${(event: InputEvent) => {
                       this.restoreRef = (event.target as HTMLInputElement).value;
                     }}
-                    placeholder="checkpoint/web-control-ui-YYYYMMDD-HHMMSS-before-change"
+                    placeholder=${this.t("checkpointRefPlaceholder")}
                   />
                 </div>
                 <div class="memory-actions" style="margin-top: 12px;">
-                  <button class="secondary" type="button" @click=${() => this.triggerRestore()} ?disabled=${this.chatSending}>${this.chatSending ? "执行中..." : "恢复 checkpoint"}</button>
+                  <button class="secondary" type="button" @click=${() => this.triggerRestore()} ?disabled=${this.chatSending}>${this.chatSending ? this.t("executing") : this.t("restoreCheckpoint")}</button>
+                </div>
+
+                <div style="margin-top: 24px; padding-top: 24px; border-top: 1px solid rgba(148, 163, 184, 0.18);">
+                  <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
+                    <h3 style="margin: 0; font-size: 18px;">${this.t("recentVersions")}</h3>
+                    <button
+                      class="secondary"
+                      type="button"
+                      @click=${() => this.loadCheckpointHistory()}
+                      ?disabled=${this.checkpointHistoryLoading}
+                      style="padding: 6px 12px; font-size: 13px;"
+                    >
+                      ${this.checkpointHistoryLoading ? this.t("loading") : this.t("refresh")}
+                    </button>
+                  </div>
+
+                  ${this.checkpointHistory.length === 0 && !this.checkpointHistoryLoading
+                    ? html`<p class="muted" style="text-align: center; padding: 20px 0;">${this.t("noCheckpointHistory")}</p>`
+                    : html`
+                      <div style="display: flex; flex-direction: column; gap: 12px;">
+                        ${this.checkpointHistory.map(
+                          (item) => html`
+                            <div style="
+                              background: rgba(30, 41, 59, 0.5);
+                              border: 1px solid rgba(148, 163, 184, 0.12);
+                              border-radius: 12px;
+                              padding: 14px 16px;
+                              display: flex;
+                              justify-content: space-between;
+                              align-items: center;
+                              gap: 16px;
+                            ">
+                              <div style="flex: 1; min-width: 0;">
+                                <div style="font-size: 15px; font-weight: 500; color: #dbeafe; margin-bottom: 4px;">
+                                  ${item.name}
+                                </div>
+                                <div style="font-size: 13px; color: #94a3b8;">
+                                  ${this.formatCheckpointTime(item.timestamp)}
+                                </div>
+                              </div>
+                              <button
+                                class="secondary"
+                                type="button"
+                                @click=${() => this.restoreToCheckpoint(item.ref)}
+                                ?disabled=${this.chatSending}
+                                style="padding: 8px 16px; font-size: 13px; white-space: nowrap;"
+                              >
+                                ${this.t("restoreToThisVersion")}
+                              </button>
+                            </div>
+                          `
+                        )}
+                      </div>
+                    `
+                  }
                 </div>
               </section>
             </div>

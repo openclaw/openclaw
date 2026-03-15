@@ -3,6 +3,29 @@ import {
   defaultPreferenceMemory,
 } from "./defaults";
 import type { PreferenceMemory } from "./agent-contract";
+import type { Language } from "../core/i18n";
+
+const LANGUAGE_STORAGE_KEY = "openclaw:web-control-ui:language";
+
+export function loadLanguagePreference(): Language | null {
+  try {
+    const stored = window.localStorage.getItem(LANGUAGE_STORAGE_KEY);
+    if (stored === "zh" || stored === "en") {
+      return stored;
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+export function saveLanguagePreference(lang: Language): void {
+  try {
+    window.localStorage.setItem(LANGUAGE_STORAGE_KEY, lang);
+  } catch {
+    // Ignore storage errors
+  }
+}
 
 export function loadPreferenceMemory(): PreferenceMemory {
   try {
