@@ -11,8 +11,8 @@ import {
   isAnthropicBedrockModel,
   resolveAnthropicFastMode,
   resolveAnthropicBetas,
-  resolveCacheRetention,
 } from "./anthropic-stream-wrappers.js";
+import { resolveCacheRetention } from "./cache-retention.js";
 import { log } from "./logger.js";
 import {
   createMoonshotThinkingWrapper,
