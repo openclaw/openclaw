@@ -106,6 +106,7 @@ describe("ensureGlobalUndiciStreamTimeouts", () => {
     expect(next.options?.bodyTimeout).toBe(DEFAULT_UNDICI_STREAM_TIMEOUT_MS);
     expect(next.options?.headersTimeout).toBe(DEFAULT_UNDICI_STREAM_TIMEOUT_MS);
     expect(next.options?.connect).toEqual({
+      keepAlive: false,
       autoSelectFamily: false,
       autoSelectFamilyAttemptTimeout: 300,
     });

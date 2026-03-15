@@ -89,13 +89,18 @@ vi.mock("https-proxy-agent", () => ({
 vi.mock("undici", () => ({
   ProxyAgent: class {
     proxyUrl: string;
-    constructor(proxyUrl: string) {
+    constructor(opts: string | { uri: string }) {
+      const proxyUrl = typeof opts === "string" ? opts : opts.uri;
       this.proxyUrl = proxyUrl;
       undiciProxyAgentSpy(proxyUrl);
       restProxyAgentSpy(proxyUrl);
     }
   },
   fetch: undiciFetchMock,
+}));
+
+vi.mock("../../../../src/infra/net/proxy-env.js", () => ({
+  resolveEnvHttpProxyUrl: () => undefined,
 }));
 
 vi.mock("ws", () => ({
