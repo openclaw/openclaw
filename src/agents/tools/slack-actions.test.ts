@@ -1,5 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
+import { ToolInputError } from "./common.js";
+import type { SlackActionContext } from "./slack-actions.js";
 import { handleSlackAction } from "./slack-actions.js";
 
 const deleteSlackMessage = vi.fn(async (..._args: unknown[]) => ({}));
@@ -119,6 +121,33 @@ describe("handleSlackAction", () => {
         emoji: "✅",
       },
       slackConfig(),
+    );
+    expect(reactSlackMessage).toHaveBeenCalledWith("C1", "123.456", "✅");
+  });
+
+  it("falls back to context.currentChannelId when channelId param is omitted", async () => {
+    await handleSlackAction(
+      {
+        action: "react",
+        messageId: "123.456",
+        emoji: "✅",
+      },
+      slackConfig(),
+      { currentChannelId: "C99", hasRepliedRef: { value: false } },
+    );
+    expect(reactSlackMessage).toHaveBeenCalledWith("C99", "123.456", "✅");
+  });
+
+  it("prefers explicit channelId over context.currentChannelId", async () => {
+    await handleSlackAction(
+      {
+        action: "react",
+        channelId: "C1",
+        messageId: "123.456",
+        emoji: "✅",
+      },
+      slackConfig(),
+      { currentChannelId: "C99", hasRepliedRef: { value: false } },
     );
     expect(reactSlackMessage).toHaveBeenCalledWith("C1", "123.456", "✅");
   });
@@ -613,6 +642,32 @@ describe("handleSlackAction", () => {
     const payload = result.details as { ok: boolean; emojis: { emoji: Record<string, string> } };
     expect(payload.ok).toBe(true);
     expect(Object.keys(payload.emojis.emoji)).toHaveLength(3);
+  });
+
+  it("throws ToolInputError when both explicit channelId and context channelId are absent", async () => {
+    const cfg = { channels: { slack: { botToken: "tok" } } } as OpenClawConfig;
+    await expect(
+      handleSlackAction({ action: "react", emoji: "thumbsup", messageId: "ts-1" }, cfg, undefined),
+    ).rejects.toThrow(ToolInputError);
+  });
+
+  it("throws ToolInputError when accountId is set but channelId is not explicit", async () => {
+    const cfg = {
+      channels: {
+        slack: {
+          botToken: "tok-default",
+          accounts: [{ accountId: "workspace-b", botToken: "tok-b" }],
+        },
+      },
+    } as unknown as OpenClawConfig;
+    const context = { currentChannelId: "C-from-workspace-a" } as SlackActionContext;
+    await expect(
+      handleSlackAction(
+        { action: "react", emoji: "thumbsup", messageId: "ts-1", accountId: "workspace-b" },
+        cfg,
+        context,
+      ),
+    ).rejects.toThrow(/channelId is required when accountId is specified/);
   });
 
   it("applies limit to emoji-list results", async () => {
