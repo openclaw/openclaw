@@ -2668,6 +2668,27 @@ description: test skill
     );
   });
 
+  it("emits probe_scope_limited info finding when operator.read scope is missing", async () => {
+    const cfg: OpenClawConfig = { gateway: { mode: "local" } };
+    const res = await audit(cfg, {
+      deep: true,
+      deepTimeoutMs: 50,
+      probeGatewayFn: async () => ({
+        ok: false,
+        url: "ws://127.0.0.1:18789",
+        connectLatencyMs: null,
+        error: "missing scope: operator.read",
+        close: null,
+        health: null,
+        status: null,
+        presence: null,
+        configSnapshot: null,
+      }),
+    });
+    expect(hasFinding(res, "gateway.probe_scope_limited", "info")).toBe(true);
+    expect(hasFinding(res, "gateway.probe_failed", "warn")).toBe(false);
+  });
+
   it("classifies legacy and weak-tier model identifiers", async () => {
     const cases: Array<{
       name: string;

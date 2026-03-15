@@ -1,8 +1,19 @@
 import { describe, expect, it, vi } from "vitest";
+import { loadOrCreateDeviceIdentity } from "../infra/device-identity.js";
 
 const gatewayClientState = vi.hoisted(() => ({
   options: null as Record<string, unknown> | null,
   requests: [] as string[],
+}));
+
+const mockIdentity = vi.hoisted(() => ({
+  deviceId: "mock-device-id",
+  publicKeyPem: "mock-public-key",
+  privateKeyPem: "mock-private-key",
+}));
+
+vi.mock("../infra/device-identity.js", () => ({
+  loadOrCreateDeviceIdentity: vi.fn(() => mockIdentity),
 }));
 
 class MockGatewayClient {
@@ -51,7 +62,7 @@ describe("probeGateway", () => {
     });
 
     expect(gatewayClientState.options?.scopes).toEqual(["operator.read"]);
-    expect(gatewayClientState.options?.deviceIdentity).toBeUndefined();
+    expect(gatewayClientState.options?.deviceIdentity).toEqual(mockIdentity);
     expect(gatewayClientState.requests).toEqual([
       "health",
       "status",
@@ -68,7 +79,20 @@ describe("probeGateway", () => {
       timeoutMs: 1_000,
     });
 
-    expect(gatewayClientState.options?.deviceIdentity).toBeUndefined();
+    expect(gatewayClientState.options?.deviceIdentity).toEqual(mockIdentity);
+  });
+
+  it("skips device identity when loadOrCreateDeviceIdentity throws (read-only environment)", async () => {
+    vi.mocked(loadOrCreateDeviceIdentity).mockImplementationOnce(() => {
+      throw new Error("EROFS: read-only file system");
+    });
+    await probeGateway({
+      url: "ws://127.0.0.1:18789",
+      auth: { token: "secret" },
+      timeoutMs: 1_000,
+    });
+    // null signals GatewayClient to skip device auth rather than throwing
+    expect(gatewayClientState.options?.deviceIdentity).toBeNull();
   });
 
   it("skips detail RPCs for lightweight reachability probes", async () => {

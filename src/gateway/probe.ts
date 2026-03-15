@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { loadOrCreateDeviceIdentity } from "../infra/device-identity.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import type { SystemPresence } from "../infra/system-presence.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
@@ -61,11 +62,16 @@ export async function probeGateway(opts: {
       clientVersion: "dev",
       mode: GATEWAY_CLIENT_MODES.PROBE,
       instanceId,
-      // Keep device identity enabled even on loopback so local probes can use
-      // the paired operator device token and get full operator.read diagnostics.
-      // Loopback-only probe auth still remains local because the target URL is
-      // local; this just avoids artificial scope-limited deep probes.
-      deviceIdentity: undefined,
+      // Prefer using the operator device identity so loopback probes can get
+      // full operator.read diagnostics. Fall back to null (skip device auth) if
+      // the identity file cannot be read or created (e.g. read-only HOME).
+      deviceIdentity: (() => {
+        try {
+          return loadOrCreateDeviceIdentity();
+        } catch {
+          return null;
+        }
+      })(),
       onConnectError: (err) => {
         connectError = formatErrorMessage(err);
       },
