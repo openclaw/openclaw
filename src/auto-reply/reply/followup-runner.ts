@@ -16,6 +16,7 @@ import type { OriginatingChannelType } from "../templating.js";
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../tokens.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import { resolveRunAuthProfile } from "./agent-runner-utils.js";
+import { applyDeferredMediaUnderstandingToQueuedRun } from "./followup-media.js";
 import {
   resolveOriginAccountId,
   resolveOriginMessageProvider,
@@ -154,6 +155,8 @@ export function createFollowupRunner(params: {
       let bootstrapPromptWarningSignaturesSeen = resolveBootstrapWarningSignaturesSeen(
         activeSessionEntry?.systemPromptReport,
       );
+      await applyDeferredMediaUnderstandingToQueuedRun(queued, { logLabel: "followup" });
+
       try {
         const fallbackResult = await runWithModelFallback({
           cfg: queued.run.config,

@@ -6,7 +6,6 @@ Quick validation script for skills - minimal version
 import re
 import sys
 from pathlib import Path
-from typing import Optional
 
 try:
     import yaml
@@ -16,7 +15,7 @@ except ModuleNotFoundError:
 MAX_SKILL_NAME_LENGTH = 64
 
 
-def _extract_frontmatter(content: str) -> Optional[str]:
+def _extract_frontmatter(content: str) -> str | None:
     lines = content.splitlines()
     if not lines or lines[0].strip() != "---":
         return None
@@ -26,13 +25,13 @@ def _extract_frontmatter(content: str) -> Optional[str]:
     return None
 
 
-def _parse_simple_frontmatter(frontmatter_text: str) -> Optional[dict[str, str]]:
+def _parse_simple_frontmatter(frontmatter_text: str) -> dict[str, str] | None:
     """
     Minimal fallback parser used when PyYAML is unavailable.
     Supports simple `key: value` mappings used by SKILL.md frontmatter.
     """
     parsed: dict[str, str] = {}
-    current_key: Optional[str] = None
+    current_key: str | None = None
     for raw_line in frontmatter_text.splitlines():
         stripped = raw_line.strip()
         if not stripped or stripped.startswith("#"):
@@ -43,9 +42,7 @@ def _parse_simple_frontmatter(frontmatter_text: str) -> Optional[dict[str, str]]
             if current_key is None:
                 return None
             current_value = parsed[current_key]
-            parsed[current_key] = (
-                f"{current_value}\n{stripped}" if current_value else stripped
-            )
+            parsed[current_key] = f"{current_value}\n{stripped}" if current_value else stripped
             continue
 
         if ":" not in stripped:
@@ -55,9 +52,7 @@ def _parse_simple_frontmatter(frontmatter_text: str) -> Optional[dict[str, str]]
         value = value.strip()
         if not key:
             return None
-        if (value.startswith('"') and value.endswith('"')) or (
-            value.startswith("'") and value.endswith("'")
-        ):
+        if (value.startswith('"') and value.endswith('"')) or (value.startswith("'") and value.endswith("'")):
             value = value[1:-1]
         parsed[key] = value
         current_key = key
@@ -129,8 +124,7 @@ def validate_skill(skill_path):
         if len(name) > MAX_SKILL_NAME_LENGTH:
             return (
                 False,
-                f"Name is too long ({len(name)} characters). "
-                f"Maximum is {MAX_SKILL_NAME_LENGTH} characters.",
+                f"Name is too long ({len(name)} characters). Maximum is {MAX_SKILL_NAME_LENGTH} characters.",
             )
 
     description = frontmatter.get("description", "")

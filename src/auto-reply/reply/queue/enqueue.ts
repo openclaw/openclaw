@@ -1,8 +1,8 @@
 import { createDedupeCache } from "../../../infra/dedupe.js";
 import { resolveGlobalSingleton } from "../../../shared/global-singleton.js";
-import { applyQueueDropPolicy, shouldSkipQueueItem } from "../../../utils/queue-helpers.js";
+import { buildQueueSummaryLine, shouldSkipQueueItem } from "../../../utils/queue-helpers.js";
 import { kickFollowupDrainIfIdle } from "./drain.js";
-import { getExistingFollowupQueue, getFollowupQueue } from "./state.js";
+import { getExistingFollowupQueue, getFollowupQueue, type FollowupQueueState } from "./state.js";
 import type { FollowupRun, QueueDedupeMode, QueueSettings } from "./types.js";
 
 /**
@@ -57,6 +57,34 @@ function isRunAlreadyQueued(
   return items.some((item) => item.prompt === run.prompt && hasSameRouting(item));
 }
 
+function applyFollowupQueueDropPolicy(queue: FollowupQueueState): boolean {
+  const cap = queue.cap;
+  if (cap <= 0 || queue.items.length < cap) {
+    return true;
+  }
+  if (queue.dropPolicy === "new") {
+    return false;
+  }
+
+  const dropCount = queue.items.length - cap + 1;
+  const dropped = queue.items.splice(0, dropCount);
+  if (queue.dropPolicy === "summarize") {
+    for (const item of dropped) {
+      queue.droppedCount += 1;
+      queue.summaryItems.push(item);
+      queue.summaryLines.push(
+        buildQueueSummaryLine(item.summaryLine?.trim() || item.prompt.trim()),
+      );
+    }
+    const limit = Math.max(0, cap);
+    while (queue.summaryLines.length > limit) {
+      queue.summaryLines.shift();
+      queue.summaryItems.shift();
+    }
+  }
+  return true;
+}
+
 export function enqueueFollowupRun(
   key: string,
   run: FollowupRun,
@@ -83,10 +111,7 @@ export function enqueueFollowupRun(
   queue.lastEnqueuedAt = Date.now();
   queue.lastRun = run.run;
 
-  const shouldEnqueue = applyQueueDropPolicy({
-    queue,
-    summarize: (item) => item.summaryLine?.trim() || item.prompt.trim(),
-  });
+  const shouldEnqueue = applyFollowupQueueDropPolicy(queue);
   if (!shouldEnqueue) {
     return false;
   }
