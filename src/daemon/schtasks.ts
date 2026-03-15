@@ -4,6 +4,7 @@ import path from "node:path";
 import { isGatewayArgv } from "../infra/gateway-process-argv.js";
 import { findVerifiedGatewayListenerPidsOnPortSync } from "../infra/gateway-processes.js";
 import { inspectPortUsage } from "../infra/ports.js";
+import { relaunchGatewayScheduledTask } from "../infra/windows-task-restart.js";
 import { killProcessTree } from "../process/kill-tree.js";
 import { sleep } from "../utils.js";
 import { parseCmdScriptCommandLine, quoteCmdScriptArg } from "./cmd-argv.js";
@@ -710,23 +711,23 @@ export async function restartScheduledTask({
     }
   }
   const taskName = resolveTaskName(effectiveEnv);
-  await execSchtasks(["/End", "/TN", taskName]);
   const restartPort = await resolveScheduledTaskPort(effectiveEnv);
+  // Spawn the restart script in a detached process BEFORE stopping the task,
+  // because `schtasks /End` will kill the current agent process on Windows.
+  // The script waits 1 s and then calls `schtasks /Run` (with retries) once
+  // the port is free again.
+  const attempt = relaunchGatewayScheduledTask(effectiveEnv);
+  if (!attempt.ok) {
+    throw new Error(`failed to prepare restart script: ${attempt.detail ?? "unknown error"}`);
+  }
+  await execSchtasks(["/End", "/TN", taskName]);
   await terminateScheduledTaskGatewayListeners(effectiveEnv);
   await terminateInstalledStartupRuntime(effectiveEnv);
   if (restartPort) {
     const released = await waitForGatewayPortRelease(restartPort);
     if (!released) {
       await terminateBusyPortListeners(restartPort);
-      const releasedAfterForce = await waitForGatewayPortRelease(restartPort, 2_000);
-      if (!releasedAfterForce) {
-        throw new Error(`gateway port ${restartPort} is still busy before restart`);
-      }
     }
-  }
-  const res = await execSchtasks(["/Run", "/TN", taskName]);
-  if (res.code !== 0) {
-    throw new Error(`schtasks run failed: ${res.stderr || res.stdout}`.trim());
   }
   stdout.write(`${formatLine("Restarted Scheduled Task", taskName)}\n`);
   return { outcome: "completed" };
