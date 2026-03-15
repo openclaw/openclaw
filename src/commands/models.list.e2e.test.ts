@@ -94,19 +94,23 @@ vi.mock("../agents/pi-model-discovery.js", () => {
   };
 });
 
-vi.mock("../agents/pi-embedded-runner/model.js", () => ({
-  resolveModelWithRegistry: ({
-    provider,
-    modelId,
-    modelRegistry,
-  }: {
-    provider: string;
-    modelId: string;
-    modelRegistry: { find: (provider: string, id: string) => unknown };
-  }) => {
-    return modelRegistry.find(provider, modelId);
-  },
-}));
+vi.mock("../agents/pi-embedded-runner/model.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../agents/pi-embedded-runner/model.js")>();
+  return {
+    ...actual,
+    resolveModelWithRegistry: ({
+      provider,
+      modelId,
+      modelRegistry,
+    }: {
+      provider: string;
+      modelId: string;
+      modelRegistry: { find: (provider: string, id: string) => unknown };
+    }) => {
+      return modelRegistry.find(provider, modelId);
+    },
+  };
+});
 
 function makeRuntime() {
   return {
@@ -147,6 +151,11 @@ afterEach(() => {
 });
 
 describe("models list/status", () => {
+  it("preserves non-overridden model exports for cross-suite compatibility", async () => {
+    const modelModule = await import("../agents/pi-embedded-runner/model.js");
+    expect(typeof modelModule.resolveModelAsync).toBe("function");
+  });
+
   const ZAI_MODEL = {
     provider: "zai",
     id: "glm-4.7",
