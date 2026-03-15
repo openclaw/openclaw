@@ -231,16 +231,34 @@ describe("Registry tests", () => {
     expect(Array.isArray(ids)).toBe(true);
   });
 
-  it("registering the same id overwrites the previous factory", () => {
+  it("registering the same id with the same owner refreshes the factory", () => {
     const factory1 = () => new MockContextEngine();
     const factory2 = () => new MockContextEngine();
 
-    registerContextEngine("reg-overwrite", factory1);
+    expect(registerContextEngine("reg-overwrite", factory1, { owner: "owner-a" })).toEqual({
+      ok: true,
+    });
     expect(getContextEngineFactory("reg-overwrite")).toBe(factory1);
 
-    registerContextEngine("reg-overwrite", factory2);
+    expect(registerContextEngine("reg-overwrite", factory2, { owner: "owner-a" })).toEqual({
+      ok: true,
+    });
     expect(getContextEngineFactory("reg-overwrite")).toBe(factory2);
     expect(getContextEngineFactory("reg-overwrite")).not.toBe(factory1);
+  });
+
+  it("rejects context engine registrations from a different owner", () => {
+    const factory1 = () => new MockContextEngine();
+    const factory2 = () => new MockContextEngine();
+
+    expect(registerContextEngine("reg-owner-guard", factory1, { owner: "owner-a" })).toEqual({
+      ok: true,
+    });
+    expect(registerContextEngine("reg-owner-guard", factory2, { owner: "owner-b" })).toEqual({
+      ok: false,
+      existingOwner: "owner-a",
+    });
+    expect(getContextEngineFactory("reg-owner-guard")).toBe(factory1);
   });
 
   it("shares registered engines across duplicate module copies", async () => {
