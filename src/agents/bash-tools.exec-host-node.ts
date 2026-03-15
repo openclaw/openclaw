@@ -5,6 +5,8 @@ import {
   type ExecAsk,
   type ExecSecurity,
   evaluateShellAllowlist,
+  maxAsk,
+  minSecurity,
   requiresExecApproval,
   resolveExecApprovalsFromFile,
 } from "../infra/exec-approvals.js";
@@ -129,24 +131,34 @@ export async function executeNodeHostCommand(
   });
   let analysisOk = baseAllowlistEval.analysisOk;
   let allowlistSatisfied = false;
-  if (hostAsk === "on-miss" && hostSecurity === "allowlist" && analysisOk) {
-    try {
-      const approvalsSnapshot = await callGatewayTool<{ file: string }>(
-        "exec.approvals.node.get",
-        { timeoutMs: 10_000 },
-        { nodeId },
-      );
-      const approvalsFile =
-        approvalsSnapshot && typeof approvalsSnapshot === "object"
-          ? approvalsSnapshot.file
-          : undefined;
-      if (approvalsFile && typeof approvalsFile === "object") {
-        const resolved = resolveExecApprovalsFromFile({
-          file: approvalsFile as ExecApprovalsFile,
-          agentId: params.agentId,
-          overrides: { security: "allowlist" },
-        });
-        // Allowlist-only precheck; safe bins are node-local and may diverge.
+  
+  // Always fetch node exec-approvals.json to respect node-level policy settings (security, ask)
+  // This ensures that node policy like ask=off and security=full are properly applied
+  let nodeHostSecurity = hostSecurity;
+  let nodeHostAsk = hostAsk;
+  try {
+    const approvalsSnapshot = await callGatewayTool<{ file: string }>(
+      "exec.approvals.node.get",
+      { timeoutMs: 10_000 },
+      { nodeId },
+    );
+    const approvalsFile =
+      approvalsSnapshot && typeof approvalsSnapshot === "object"
+        ? approvalsSnapshot.file
+        : undefined;
+    if (approvalsFile && typeof approvalsFile === "object") {
+      const resolved = resolveExecApprovalsFromFile({
+        file: approvalsFile as ExecApprovalsFile,
+        agentId: params.agentId,
+        overrides: { security: params.security, ask: params.ask },
+      });
+      
+      // Apply node-level policy settings
+      nodeHostSecurity = minSecurity(hostSecurity, resolved.agent.security);
+      nodeHostAsk = resolved.agent.ask === "off" ? "off" : maxAsk(hostAsk, resolved.agent.ask);
+      
+      // Only perform allowlist evaluation when relevant for the approval decision
+      if (nodeHostAsk === "on-miss" && nodeHostSecurity === "allowlist" && analysisOk) {
         const allowlistEval = evaluateShellAllowlist({
           command: params.command,
           allowlist: resolved.allowlist,
@@ -159,9 +171,9 @@ export async function executeNodeHostCommand(
         allowlistSatisfied = allowlistEval.allowlistSatisfied;
         analysisOk = allowlistEval.analysisOk;
       }
-    } catch {
-      // Fall back to requiring approval if node approvals cannot be fetched.
     }
+  } catch {
+    // Fall back to using the host-resolved settings if node approvals cannot be fetched.
   }
   const obfuscation = detectCommandObfuscation(params.command);
   if (obfuscation.detected) {
@@ -172,8 +184,8 @@ export async function executeNodeHostCommand(
   }
   const requiresAsk =
     requiresExecApproval({
-      ask: hostAsk,
-      security: hostSecurity,
+      ask: nodeHostAsk,
+      security: nodeHostSecurity,
       analysisOk,
       allowlistSatisfied,
     }) || obfuscation.detected;
