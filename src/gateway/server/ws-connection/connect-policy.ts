@@ -130,6 +130,14 @@ export function resolveInternalBackendClientAttestation(params: {
   if (!isGatewayBackendClient || params.hasBrowserOriginHeader) {
     return false;
   }
+  if (
+    params.authMethod === "token" ||
+    params.authMethod === "password" ||
+    params.authMethod === "device-token" ||
+    params.authMethod === "tailscale"
+  ) {
+    return true;
+  }
   return params.authMethod === "bootstrap-token" && params.deviceTokenIssued;
 }
 
