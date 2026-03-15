@@ -2,8 +2,25 @@ import type { DiscordComponentEntry, DiscordModalEntry } from "./components.js";
 
 const DEFAULT_COMPONENT_TTL_MS = 30 * 60 * 1000;
 
-const componentEntries = new Map<string, DiscordComponentEntry>();
-const modalEntries = new Map<string, DiscordModalEntry>();
+// Use globalThis singletons to survive Rolldown chunk splitting.
+// Without this, registering in one chunk and looking up in another fails. Refs #40923.
+const COMPONENT_ENTRIES_KEY = Symbol.for("openclaw.discordComponentEntries");
+const MODAL_ENTRIES_KEY = Symbol.for("openclaw.discordModalEntries");
+
+type GlobalWithEntries = typeof globalThis & {
+  [COMPONENT_ENTRIES_KEY]?: Map<string, DiscordComponentEntry>;
+  [MODAL_ENTRIES_KEY]?: Map<string, DiscordModalEntry>;
+};
+
+const g = globalThis as GlobalWithEntries;
+if (!g[COMPONENT_ENTRIES_KEY]) {
+  g[COMPONENT_ENTRIES_KEY] = new Map<string, DiscordComponentEntry>();
+}
+if (!g[MODAL_ENTRIES_KEY]) {
+  g[MODAL_ENTRIES_KEY] = new Map<string, DiscordModalEntry>();
+}
+const componentEntries = g[COMPONENT_ENTRIES_KEY];
+const modalEntries = g[MODAL_ENTRIES_KEY];
 
 function isExpired(entry: { expiresAt?: number }, now: number) {
   return typeof entry.expiresAt === "number" && entry.expiresAt <= now;
