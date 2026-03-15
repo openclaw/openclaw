@@ -28,6 +28,17 @@ const fx = installEmbeddingManagerFixture({
 const { embedBatch } = fx;
 
 describe("memory embedding batches", () => {
+  async function expectSyncWithFastTimeouts(manager: {
+    sync: (params: { reason: string }) => Promise<void>;
+  }) {
+    const restoreFastTimeouts = useFastShortTimeouts();
+    try {
+      await manager.sync({ reason: "test" });
+    } finally {
+      restoreFastTimeouts();
+    }
+  }
+
   it("splits large files across multiple embedding batches", async () => {
     const memoryDir = fx.getMemoryDir();
     const managerLarge = fx.getManagerLarge();
@@ -93,12 +104,7 @@ describe("memory embedding batches", () => {
       return texts.map(() => [0, 1, 0]);
     });
 
-    const restoreFastTimeouts = useFastShortTimeouts();
-    try {
-      await managerSmall.sync({ reason: "test" });
-    } finally {
-      restoreFastTimeouts();
-    }
+    await expectSyncWithFastTimeouts(managerSmall);
 
     expect(calls).toBe(3);
   }, 10000);
@@ -119,12 +125,7 @@ describe("memory embedding batches", () => {
       return texts.map(() => [0, 1, 0]);
     });
 
-    const restoreFastTimeouts = useFastShortTimeouts();
-    try {
-      await managerSmall.sync({ reason: "test" });
-    } finally {
-      restoreFastTimeouts();
-    }
+    await expectSyncWithFastTimeouts(managerSmall);
 
     expect(calls).toBe(2);
   }, 10000);

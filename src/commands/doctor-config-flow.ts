@@ -1,11 +1,16 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { normalizeChatChannelId } from "../channels/registry.js";
+import { inspectTelegramAccount } from "../../extensions/telegram/src/account-inspect.js";
+import {
+  listTelegramAccountIds,
+  resolveTelegramAccount,
+} from "../../extensions/telegram/src/accounts.js";
 import {
   isNumericTelegramUserId,
   normalizeTelegramAllowFromEntry,
-} from "../channels/telegram/allow-from.js";
-import { fetchTelegramChatId } from "../channels/telegram/api.js";
+} from "../../extensions/telegram/src/allow-from.js";
+import { fetchTelegramChatId } from "../../extensions/telegram/src/api-fetch.js";
+import { normalizeChatChannelId } from "../channels/registry.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { resolveCommandSecretRefsViaGateway } from "../cli/command-secret-gateway.js";
 import { getChannelsCommandSecretTargetIds } from "../cli/command-secret-targets.js";
@@ -44,9 +49,8 @@ import {
   isMSTeamsMutableAllowEntry,
   isMattermostMutableAllowEntry,
   isSlackMutableAllowEntry,
+  isZalouserMutableGroupEntry,
 } from "../security/mutable-allowlist-detectors.js";
-import { inspectTelegramAccount } from "../telegram/account-inspect.js";
-import { listTelegramAccountIds, resolveTelegramAccount } from "../telegram/accounts.js";
 import { note } from "../terminal/note.js";
 import { resolveHomeDir } from "../utils.js";
 import {
@@ -880,6 +884,27 @@ function scanMutableAllowlistEntries(cfg: OpenClawConfig): MutableAllowlistHit[]
         list: group.allowFrom,
         detector: isIrcMutableAllowEntry,
         channel: "irc",
+        dangerousFlagPath: scope.dangerousFlagPath,
+      });
+    }
+  }
+
+  for (const scope of collectProviderDangerousNameMatchingScopes(cfg, "zalouser")) {
+    if (scope.dangerousNameMatchingEnabled) {
+      continue;
+    }
+    const groups = asObjectRecord(scope.account.groups);
+    if (!groups) {
+      continue;
+    }
+    for (const entry of Object.keys(groups)) {
+      if (!isZalouserMutableGroupEntry(entry)) {
+        continue;
+      }
+      hits.push({
+        channel: "zalouser",
+        path: `${scope.prefix}.groups`,
+        entry,
         dangerousFlagPath: scope.dangerousFlagPath,
       });
     }

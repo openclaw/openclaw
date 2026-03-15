@@ -36,6 +36,12 @@ openclaw onboard --openai-api-key "$OPENAI_API_KEY"
 
 OpenAI's current API model docs list `gpt-5.4` and `gpt-5.4-pro` for direct
 OpenAI API usage. OpenClaw forwards both through the `openai/*` Responses path.
+OpenClaw intentionally suppresses the stale `openai/gpt-5.3-codex-spark` row,
+because direct OpenAI API calls reject it in live traffic.
+
+OpenClaw does **not** expose `openai/gpt-5.3-codex-spark` on the direct OpenAI
+API path. `pi-ai` still ships a built-in row for that model, but live OpenAI API
+requests currently reject it. Spark is treated as Codex-only in OpenClaw.
 
 ## Option B: OpenAI Code (Codex) subscription
 
@@ -62,6 +68,18 @@ openclaw models auth login --provider openai-codex
 
 OpenAI's current Codex docs list `gpt-5.4` as the current Codex model. OpenClaw
 maps that to `openai-codex/gpt-5.4` for ChatGPT/Codex OAuth usage.
+
+If your Codex account is entitled to Codex Spark, OpenClaw also supports:
+
+- `openai-codex/gpt-5.3-codex-spark`
+
+OpenClaw treats Codex Spark as Codex-only. It does not expose a direct
+`openai/gpt-5.3-codex-spark` API-key path.
+
+OpenClaw also preserves `openai-codex/gpt-5.3-codex-spark` when `pi-ai`
+discovers it. Treat it as entitlement-dependent and experimental: Codex Spark is
+separate from GPT-5.4 `/fast`, and availability depends on the signed-in Codex /
+ChatGPT account.
 
 ### Transport default
 
