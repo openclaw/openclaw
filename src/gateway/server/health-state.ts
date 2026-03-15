@@ -16,6 +16,35 @@ let healthRefresh: Promise<HealthSummary> | null = null;
 let broadcastHealthUpdate: ((snap: HealthSummary) => void) | null = null;
 let healthRuntimeSnapshotProvider: (() => ChannelRuntimeSnapshot) | null = null;
 
+function hasNewerRuntimeState(cache: HealthSummary): boolean {
+  const runtimeSnapshot = healthRuntimeSnapshotProvider?.();
+  if (!runtimeSnapshot) {
+    return false;
+  }
+  for (const [channelId, runtime] of Object.entries(runtimeSnapshot.channels)) {
+    if (!runtime) {
+      continue;
+    }
+    const cached = cache.channels?.[channelId];
+    if (!cached) {
+      return true;
+    }
+    const runtimeRunning = runtime.running === true;
+    const cachedRunning = cached.running === true;
+    if (runtimeRunning && !cachedRunning) {
+      return true;
+    }
+    const runtimeLastStartAt =
+      typeof runtime.lastStartAt === "number" ? runtime.lastStartAt : null;
+    const cachedLastStartAt =
+      typeof cached.lastStartAt === "number" ? cached.lastStartAt : null;
+    if (runtimeLastStartAt !== cachedLastStartAt) {
+      return true;
+    }
+  }
+  return false;
+}
+
 export function buildGatewaySnapshot(): Snapshot {
   const cfg = loadConfig();
   const configPath = createConfigIO().configPath;
@@ -54,6 +83,13 @@ export function getHealthCache(): HealthSummary | null {
 
 export function getHealthVersion(): number {
   return healthVersion;
+}
+
+export function isGatewayHealthCacheStale(cache: HealthSummary | null): boolean {
+  if (!cache) {
+    return true;
+  }
+  return hasNewerRuntimeState(cache);
 }
 
 export function incrementPresenceVersion(): number {

@@ -63,4 +63,54 @@ describe("refreshGatewayHealthSnapshot", () => {
       runtimeSnapshot,
     });
   });
+
+  it("treats cached health as stale when runtime is newer", async () => {
+    const mod = await import("./health-state.js");
+    const runtimeSnapshot: ChannelRuntimeSnapshot = {
+      channels: {
+        telegram: {
+          accountId: "default",
+          running: true,
+          lastStartAt: 456,
+        },
+      },
+      channelAccounts: {
+        telegram: {
+          default: {
+            accountId: "default",
+            running: true,
+            lastStartAt: 456,
+          },
+        },
+      },
+    };
+
+    mod.setHealthRuntimeSnapshotProvider(() => runtimeSnapshot);
+
+    expect(
+      mod.isGatewayHealthCacheStale({
+        ok: true,
+        ts: Date.now(),
+        durationMs: 1,
+        channels: {
+          telegram: {
+            accountId: "default",
+            configured: true,
+            running: false,
+            lastStartAt: null,
+          },
+        },
+        channelOrder: ["telegram"],
+        channelLabels: { telegram: "Telegram" },
+        heartbeatSeconds: 0,
+        defaultAgentId: "main",
+        agents: [],
+        sessions: {
+          path: "/tmp/sessions.json",
+          count: 0,
+          recent: [],
+        },
+      }),
+    ).toBe(true);
+  });
 });
