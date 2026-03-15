@@ -1,4 +1,5 @@
 import type { OpenClawConfig } from "../../config/config.js";
+import type { SandboxBackendKind } from "../../config/types.sandbox.js";
 import { resolveAgentConfig } from "../agent-scope.js";
 import {
   DEFAULT_SANDBOX_BROWSER_AUTOSTART_TIMEOUT_MS,
@@ -187,12 +188,30 @@ export function resolveSandboxConfigForAgent(
 
   const toolPolicy = resolveSandboxToolPolicyForAgent(cfg, agentId);
 
+  // Resolve backend kind: agent config > global config > env var > default.
+  const agentRecord = agentSandbox as Record<string, unknown> | undefined;
+  const globalRecord = agent as Record<string, unknown> | undefined;
+  const backendKind: SandboxBackendKind =
+    (agentRecord?.backendKind as SandboxBackendKind | undefined) ??
+    (globalRecord?.backendKind as SandboxBackendKind | undefined) ??
+    (process.env.OPENCLAW_SANDBOX_BACKEND === "opensandbox" ? "opensandbox" : undefined) ??
+    "docker";
+
+  // Resolve OpenSandbox settings when applicable.
+  const globalOpenSandbox =
+    (globalRecord?.opensandbox as Record<string, unknown> | undefined) ?? {};
+  const agentOpenSandbox = (agentRecord?.opensandbox as Record<string, unknown> | undefined) ?? {};
+  const opensandbox =
+    backendKind === "opensandbox" ? { ...globalOpenSandbox, ...agentOpenSandbox } : undefined;
+
   return {
     mode: agentSandbox?.mode ?? agent?.mode ?? "off",
     scope,
     workspaceAccess: agentSandbox?.workspaceAccess ?? agent?.workspaceAccess ?? "none",
     workspaceRoot:
       agentSandbox?.workspaceRoot ?? agent?.workspaceRoot ?? DEFAULT_SANDBOX_WORKSPACE_ROOT,
+    backendKind,
+    ...(opensandbox ? { opensandbox } : {}),
     docker: resolveSandboxDockerConfig({
       scope,
       globalDocker: agent?.docker,

@@ -94,3 +94,22 @@ export type SandboxPruneSettings = {
   /** Prune if older than N days (0 disables). */
   maxAgeDays?: number;
 };
+
+export type SandboxBackendKind = "docker" | "opensandbox";
+
+export type SandboxOpenSandboxSettings = {
+  /** Direct execd endpoint URL (mutually exclusive with lifecycleUrl). */
+  execdUrl?: string;
+  /** Access token for execd authentication. */
+  accessToken?: string;
+  /** Lifecycle service URL for automatic sandbox provisioning. */
+  lifecycleUrl?: string;
+  /** API key for lifecycle service authentication. */
+  apiKey?: string;
+  /** Existing sandbox ID (skip creation via lifecycle). */
+  sandboxId?: string;
+  /** execd port when using lifecycle discovery (default: 44772). */
+  execdPort?: number;
+  /** Command execution timeout in seconds (default: 1800). */
+  timeoutSec?: number;
+};

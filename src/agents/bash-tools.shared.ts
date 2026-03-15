@@ -2,8 +2,10 @@ import { existsSync, statSync } from "node:fs";
 import fs from "node:fs/promises";
 import { homedir } from "node:os";
 import path from "node:path";
+import type { SandboxBackendKind } from "../config/types.sandbox.js";
 import { sliceUtf16Safe } from "../utils.js";
 import { assertSandboxPath } from "./sandbox-paths.js";
+import type { SandboxBackend } from "./sandbox/backend.js";
 
 const CHUNK_LIMIT = 8 * 1024;
 
@@ -12,6 +14,10 @@ export type BashSandboxConfig = {
   workspaceDir: string;
   containerWorkdir: string;
   env?: Record<string, string>;
+  /** Sandbox backend kind (default: "docker"). */
+  backendKind?: SandboxBackendKind;
+  /** Pluggable backend for non-Docker execution. */
+  backend?: SandboxBackend;
 };
 
 export function buildSandboxEnv(params: {

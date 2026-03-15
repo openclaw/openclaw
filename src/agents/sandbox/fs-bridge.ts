@@ -249,6 +249,35 @@ class SandboxFsBridgeImpl implements SandboxFsBridge {
     script: string,
     options: RunCommandOptions = {},
   ): Promise<ExecDockerRawResult> {
+    // OpenSandbox backend: execute shell commands via the backend API instead
+    // of spawning `docker exec`.
+    if (this.sandbox.backendKind === "opensandbox" && this.sandbox.backend) {
+      const fullCommand = options.args?.length
+        ? `${script} ${options.args.map((a) => `'${a.replace(/'/g, "'\\''")}'`).join(" ")}`
+        : script;
+      try {
+        const result = await this.sandbox.backend.exec({
+          command: fullCommand,
+          signal: options.signal,
+        });
+        return {
+          stdout: Buffer.from(result.stdout, "utf8"),
+          stderr: Buffer.from(result.stderr, "utf8"),
+          code: result.exitCode,
+        };
+      } catch (error) {
+        if (options.allowFailure) {
+          return {
+            stdout: Buffer.alloc(0),
+            stderr: Buffer.from(String(error), "utf8"),
+            code: 1,
+          };
+        }
+        throw error;
+      }
+    }
+
+    // Docker backend: existing logic.
     const dockerArgs = [
       "exec",
       "-i",
@@ -269,6 +298,20 @@ class SandboxFsBridgeImpl implements SandboxFsBridge {
   }
 
   private async readPinnedFile(target: SandboxResolvedFsPath): Promise<Buffer> {
+    // OpenSandbox backend: read file via shell command since we cannot open
+    // host file descriptors for a remote sandbox.
+    if (this.sandbox.backendKind === "opensandbox" && this.sandbox.backend) {
+      const result = await this.sandbox.backend.exec({
+        command: `cat '${target.containerPath.replace(/'/g, "'\\''")}'`,
+      });
+      if (result.exitCode !== 0) {
+        throw new Error(
+          `Failed to read file ${target.containerPath}: ${result.stderr || `exit code ${result.exitCode}`}`,
+        );
+      }
+      return Buffer.from(result.stdout, "utf8");
+    }
+
     const opened = await this.pathGuard.openReadableFile(target);
     try {
       return fs.readFileSync(opened.fd);

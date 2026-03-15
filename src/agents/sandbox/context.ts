@@ -7,6 +7,7 @@ import { defaultRuntime } from "../../runtime.js";
 import { resolveUserPath } from "../../utils.js";
 import { syncSkillsToWorkspace } from "../skills.js";
 import { DEFAULT_AGENT_WORKSPACE_DIR } from "../workspace.js";
+import { OpenSandboxBackend, resolveOpenSandboxConfig } from "./backend-opensandbox.js";
 import { ensureSandboxBrowser } from "./browser.js";
 import { resolveSandboxConfigForAgent } from "./config.js";
 import { ensureSandboxContainer } from "./docker.js";
@@ -116,6 +117,8 @@ export async function resolveSandboxContext(params: {
   }
   const { rawSessionKey, cfg } = resolved;
 
+  const backendKind = cfg.backendKind ?? "docker";
+
   await maybePruneSandboxes(cfg);
 
   const { agentWorkspaceDir, scopeKey, workspaceDir } = await ensureSandboxWorkspaceLayout({
@@ -125,6 +128,38 @@ export async function resolveSandboxContext(params: {
     workspaceDir: params.workspaceDir,
   });
 
+  // ---------------------------------------------------------------------------
+  // OpenSandbox backend: skip Docker container management entirely.
+  // ---------------------------------------------------------------------------
+  if (backendKind === "opensandbox") {
+    const osConfig = resolveOpenSandboxConfig(cfg.opensandbox);
+    const backend = new OpenSandboxBackend(osConfig);
+
+    const sandboxContext: SandboxContext = {
+      enabled: true,
+      sessionKey: rawSessionKey,
+      workspaceDir,
+      agentWorkspaceDir,
+      workspaceAccess: cfg.workspaceAccess,
+      containerName: "opensandbox", // placeholder – no Docker container
+      containerWorkdir: cfg.docker.workdir, // reuse workdir setting
+      backendKind: "opensandbox",
+      docker: cfg.docker,
+      backend,
+      tools: cfg.tools,
+      browserAllowHostControl: cfg.browser.allowHostControl,
+    };
+
+    // OpenSandbox fsBridge uses the backend to execute shell commands for
+    // file operations (same approach as Docker fsBridge uses `docker exec`).
+    sandboxContext.fsBridge = createSandboxFsBridge({ sandbox: sandboxContext });
+
+    return sandboxContext;
+  }
+
+  // ---------------------------------------------------------------------------
+  // Docker backend: existing logic unchanged.
+  // ---------------------------------------------------------------------------
   const docker = await resolveSandboxDockerUser({
     docker: cfg.docker,
     workspaceDir,
@@ -174,6 +209,7 @@ export async function resolveSandboxContext(params: {
     workspaceAccess: resolvedCfg.workspaceAccess,
     containerName,
     containerWorkdir: resolvedCfg.docker.workdir,
+    backendKind: "docker",
     docker: resolvedCfg.docker,
     tools: resolvedCfg.tools,
     browserAllowHostControl: resolvedCfg.browser.allowHostControl,
