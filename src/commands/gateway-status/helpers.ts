@@ -13,6 +13,9 @@ const MISSING_SCOPE_PATTERN = /\bmissing scope:\s*[a-z0-9._-]+/i;
 
 type TargetKind = "explicit" | "configRemote" | "localLoopback" | "sshTunnel";
 
+const REMOTE_PROBE_BUDGET_MS = 1_500;
+const SSH_TUNNEL_PROBE_BUDGET_MS = 2_000;
+
 export type GatewayStatusTarget = {
   id: string;
   kind: TargetKind;
@@ -117,15 +120,16 @@ export function resolveTargets(cfg: OpenClawConfig, explicitUrl?: string): Gatew
 }
 
 export function resolveProbeBudgetMs(overallMs: number, kind: TargetKind): number {
-  if (kind === "localLoopback") {
-    // Let the local probe use the caller's full budget. Slow local shells/containers can
-    // exceed the old fixed cap and produce false "unreachable" results.
-    return overallMs;
+  switch (kind) {
+    case "localLoopback":
+      // Let the local probe use the caller's full budget. Slow local shells/containers can
+      // exceed the old fixed cap and produce false "unreachable" results.
+      return overallMs;
+    case "sshTunnel":
+      return Math.min(SSH_TUNNEL_PROBE_BUDGET_MS, overallMs);
+    default:
+      return Math.min(REMOTE_PROBE_BUDGET_MS, overallMs);
   }
-  if (kind === "sshTunnel") {
-    return Math.min(2000, overallMs);
-  }
-  return Math.min(1500, overallMs);
 }
 
 export function sanitizeSshTarget(value: unknown): string | null {
