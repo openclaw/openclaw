@@ -100,6 +100,15 @@ function supportsMessageFeatureForChannel(
 
 const loggedActionProbeErrors = new Set<string>();
 
+export function _resetActionProbeErrorLogForTest(): void {
+  loggedActionProbeErrors.clear();
+}
+
+function isToleratedActionProbeError(err: unknown): boolean {
+  const message = err instanceof Error ? err.message : String(err);
+  return message.includes("SecretRef");
+}
+
 function runSafeActionProbe<T>(params: {
   pluginId: string;
   probe: string;
@@ -109,6 +118,9 @@ function runSafeActionProbe<T>(params: {
   try {
     return params.fn();
   } catch (err) {
+    if (!isToleratedActionProbeError(err)) {
+      throw err;
+    }
     logActionProbeError(params.pluginId, params.probe, err);
     return params.fallback;
   }
