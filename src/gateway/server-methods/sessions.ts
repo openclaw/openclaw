@@ -217,14 +217,16 @@ export const sessionsHandlers: GatewayRequestHandlers = {
     const wasArchived = typeof applied.previous?.archivedAt === "number";
     const isArchived = typeof applied.entry.archivedAt === "number";
     if (!wasArchived && isArchived) {
-      void writeSessionArchiveSummary({
-        cfg,
-        key: target.canonicalKey ?? key,
-        entry: applied.entry,
-        storePath,
-        archivedAt: applied.entry.archivedAt ?? undefined,
-      }).catch((err) => {
-        console.warn(`sessions.patch archive summary failed: ${String(err)}`);
+      setImmediate(() => {
+        void writeSessionArchiveSummary({
+          cfg,
+          key: target.canonicalKey ?? key,
+          entry: applied.entry,
+          storePath,
+          archivedAt: applied.entry.archivedAt ?? undefined,
+        }).catch((err) => {
+          console.warn(`sessions.patch archive summary failed: ${String(err)}`);
+        });
       });
     }
 
