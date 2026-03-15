@@ -1,4 +1,5 @@
 import * as compatSdk from "openclaw/plugin-sdk/compat";
+import type { GatewayBindUrlResult } from "openclaw/plugin-sdk/device-pair";
 import * as discordSdk from "openclaw/plugin-sdk/discord";
 import * as imessageSdk from "openclaw/plugin-sdk/imessage";
 import * as lineSdk from "openclaw/plugin-sdk/line";
@@ -7,7 +8,7 @@ import * as signalSdk from "openclaw/plugin-sdk/signal";
 import * as slackSdk from "openclaw/plugin-sdk/slack";
 import * as telegramSdk from "openclaw/plugin-sdk/telegram";
 import * as whatsappSdk from "openclaw/plugin-sdk/whatsapp";
-import { describe, expect, it } from "vitest";
+import { describe, expect, expectTypeOf, it } from "vitest";
 
 const bundledExtensionSubpathLoaders = [
   { id: "acpx", load: () => import("openclaw/plugin-sdk/acpx") },
@@ -111,6 +112,17 @@ describe("plugin-sdk subpath exports", () => {
       expect(typeof mod).toBe("object");
       expect(mod, `subpath ${id} should resolve`).toBeTruthy();
     }
+  });
+
+  it("exports the device-pair gateway bind result type", () => {
+    expectTypeOf<GatewayBindUrlResult>().toEqualTypeOf<
+      | {
+          url: string;
+          source: "gateway.bind=custom" | "gateway.bind=tailnet" | "gateway.bind=lan";
+        }
+      | { error: string }
+      | null
+    >();
   });
 
   it("keeps the newly added bundled plugin-sdk contracts available", async () => {
