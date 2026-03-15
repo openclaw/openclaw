@@ -162,9 +162,15 @@ type RegisterEventHandlersContext = {
  */
 function createChatQueue() {
   const queues = new Map<string, Promise<void>>();
-  return (chatId: string, task: () => Promise<void>): Promise<void> => {
+  const generations = new Map<string, number>();
+  const enqueue = (chatId: string, task: () => Promise<void>): Promise<void> => {
+    const gen = generations.get(chatId) ?? 0;
     const prev = queues.get(chatId) ?? Promise.resolve();
-    const next = prev.then(task, task);
+    const guarded = async () => {
+      if ((generations.get(chatId) ?? 0) !== gen) return;
+      await task();
+    };
+    const next = prev.then(guarded, guarded);
     queues.set(chatId, next);
     void next.finally(() => {
       if (queues.get(chatId) === next) {
@@ -173,6 +179,10 @@ function createChatQueue() {
     });
     return next;
   };
+  enqueue.clear = (chatId: string): void => {
+    generations.set(chatId, (generations.get(chatId) ?? 0) + 1);
+  };
+  return enqueue;
 }
 
 function mergeFeishuDebounceMentions(
@@ -434,6 +444,8 @@ function registerEventHandlers(
       const text = resolveDebounceText(event);
       if (isDestructiveCommand(text)) {
         inboundDebouncer.dropKey(key);
+        const chatId = event.message.chat_id?.trim() || "unknown";
+        enqueue.clear(chatId);
       }
     }
     await invokeHandler(event);
