@@ -49,7 +49,12 @@ import {
 } from "./acp-spawn-parent-stream.js";
 import { resolveAgentConfig, resolveDefaultAgentId } from "./agent-scope.js";
 import { resolveSandboxRuntimeStatus } from "./sandbox/runtime-status.js";
-import { resolveInternalSessionKey, resolveMainSessionAlias } from "./tools/sessions-helpers.js";
+import { registerSubagentRun } from "./subagent-registry.js";
+import {
+  resolveDisplaySessionKey,
+  resolveInternalSessionKey,
+  resolveMainSessionAlias,
+} from "./tools/sessions-helpers.js";
 
 const log = createSubsystemLogger("agents/acp-spawn");
 
@@ -269,16 +274,17 @@ function summarizeError(err: unknown): string {
 function resolveRequesterInternalSessionKey(params: {
   cfg: OpenClawConfig;
   requesterSessionKey?: string;
-}): string {
+}): { key: string; mainKey: string; alias: string } {
   const { mainKey, alias } = resolveMainSessionAlias(params.cfg);
   const requesterSessionKey = params.requesterSessionKey?.trim();
-  return requesterSessionKey
+  const key = requesterSessionKey
     ? resolveInternalSessionKey({
         key: requesterSessionKey,
         alias,
         mainKey,
       })
     : alias;
+  return { key, mainKey, alias };
 }
 
 async function persistAcpSpawnSessionFileBestEffort(params: {
@@ -405,7 +411,11 @@ export async function spawnAcpDirect(
   ctx: SpawnAcpContext,
 ): Promise<SpawnAcpResult> {
   const cfg = loadConfig();
-  const requesterInternalKey = resolveRequesterInternalSessionKey({
+  const {
+    key: requesterInternalKey,
+    mainKey,
+    alias,
+  } = resolveRequesterInternalSessionKey({
     cfg,
     requesterSessionKey: ctx.agentSessionKey,
   });
@@ -726,6 +736,38 @@ export async function spawnAcpDirect(
       error: summarizeError(err),
       childSessionKey: sessionKey,
     };
+  }
+
+  // Register ACP run in the subagent registry so lifecycle events (including
+  // subagent_ended) are emitted when the ACP session completes or exits.
+  // Without this, ACP sessions are invisible to the registry and their
+  // completion is never propagated back to the requester.
+  // Wrapped in try/catch: registration failure after a successful dispatch must
+  // not surface as an error to the caller, since the ACP session is already live.
+  try {
+    const requesterDisplayKey = resolveDisplaySessionKey({
+      key: requesterInternalKey,
+      alias,
+      mainKey,
+    });
+    registerSubagentRun({
+      runId: childRunId,
+      childSessionKey: sessionKey,
+      controllerSessionKey: requesterInternalKey,
+      requesterSessionKey: requesterInternalKey,
+      requesterOrigin,
+      requesterDisplayKey,
+      task: params.task,
+      cleanup: "keep",
+      label: params.label || undefined,
+      spawnMode,
+    });
+  } catch (err) {
+    log.warn("Failed to register ACP run in subagent registry (session is still live)", {
+      runId: childRunId,
+      childSessionKey: sessionKey,
+      error: summarizeError(err),
+    });
   }
 
   if (effectiveStreamToParent && parentSessionKey) {
