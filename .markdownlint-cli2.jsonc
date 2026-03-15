@@ -41,6 +41,10 @@
         "source",
         "Tooltip",
         "Check",
+        "table",
+        "tr",
+        "td",
+        "th",
       ],
     },
 
