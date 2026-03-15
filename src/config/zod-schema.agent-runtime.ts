@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { splitSandboxBindSpec } from "../agents/sandbox/bind-spec.js";
 import { getBlockedNetworkModeReason } from "../agents/sandbox/network-mode.js";
 import { parseDurationMs } from "../cli/parse-duration.js";
 import { AgentModelSchema } from "./zod-schema.agent-model.js";
@@ -149,9 +150,11 @@ export const SandboxDockerSchema = z
           });
           continue;
         }
-        const firstColon = bind.indexOf(":");
-        const source = (firstColon <= 0 ? bind : bind.slice(0, firstColon)).trim();
-        if (!source.startsWith("/")) {
+
+        const windowsPrefix = /^[A-Za-z]:/;
+        const parsed = splitSandboxBindSpec(bind);
+        const source = (parsed ? parsed.host : bind).trim();
+        if (!source.startsWith("/") && !windowsPrefix.test(source)) {
           ctx.addIssue({
             code: z.ZodIssueCode.custom,
             path: ["binds", i],

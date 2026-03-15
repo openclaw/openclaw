@@ -81,6 +81,7 @@ export function parseBindTargetPath(bind: string): string {
 
 /**
  * Normalize a POSIX path: resolve `.`, `..`, collapse `//`, strip trailing `/`.
+ * If it starts with the drive letter, convert it to the upper case.
  */
 export function normalizeHostPath(raw: string): string {
   return normalizeSandboxHostPath(raw);
@@ -95,10 +96,10 @@ export function normalizeHostPath(raw: string): string {
  */
 export function getBlockedBindReason(bind: string): BlockedBindReason | null {
   const sourceRaw = parseBindSourcePath(bind);
-  if (!sourceRaw.startsWith("/")) {
+  const windowsPrefix = /^[A-Za-z]:/;
+  if (!sourceRaw.startsWith("/") && !windowsPrefix.test(sourceRaw)) {
     return { kind: "non_absolute", sourcePath: sourceRaw };
   }
-
   const normalized = normalizeHostPath(sourceRaw);
   return getBlockedReasonForSourcePath(normalized);
 }
@@ -120,9 +121,10 @@ function normalizeAllowedRoots(roots: string[] | undefined): string[] {
   if (!roots?.length) {
     return [];
   }
+  const windowsPrefix = /^[A-Za-z]:/;
   const normalized = roots
     .map((entry) => entry.trim())
-    .filter((entry) => entry.startsWith("/"))
+    .filter((entry) => entry.startsWith("/") || windowsPrefix.test(entry))
     .map(normalizeHostPath);
   const expanded = new Set<string>();
   for (const root of normalized) {
