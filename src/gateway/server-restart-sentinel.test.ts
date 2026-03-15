@@ -1,8 +1,9 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   resolveSessionAgentId: vi.fn(() => "agent-from-key"),
-  consumeRestartSentinel: vi.fn(async () => ({
+  finalizeRestartSentinelForCompletedRestart: vi.fn(async () => null),
+  consumeFinalizedRestartSentinel: vi.fn(async () => ({
     payload: {
       sessionKey: "agent:main:main",
       deliveryContext: {
@@ -34,7 +35,8 @@ vi.mock("../agents/agent-scope.js", () => ({
 }));
 
 vi.mock("../infra/restart-sentinel.js", () => ({
-  consumeRestartSentinel: mocks.consumeRestartSentinel,
+  finalizeRestartSentinelForCompletedRestart: mocks.finalizeRestartSentinelForCompletedRestart,
+  consumeFinalizedRestartSentinel: mocks.consumeFinalizedRestartSentinel,
   formatRestartSentinelMessage: mocks.formatRestartSentinelMessage,
   summarizeRestartSentinel: mocks.summarizeRestartSentinel,
 }));
@@ -79,9 +81,35 @@ vi.mock("../infra/system-events.js", () => ({
 const { scheduleRestartSentinelWake } = await import("./server-restart-sentinel.js");
 
 describe("scheduleRestartSentinelWake", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.finalizeRestartSentinelForCompletedRestart.mockResolvedValue(null);
+    mocks.consumeFinalizedRestartSentinel.mockResolvedValue({
+      payload: {
+        sessionKey: "agent:main:main",
+        deliveryContext: {
+          channel: "whatsapp",
+          to: "+15550002",
+          accountId: "acct-2",
+        },
+      },
+    });
+  });
+
+  it("ignores non-final sentinels", async () => {
+    mocks.consumeFinalizedRestartSentinel.mockResolvedValueOnce(null);
+
+    await scheduleRestartSentinelWake({ deps: {} as never });
+
+    expect(mocks.finalizeRestartSentinelForCompletedRestart).toHaveBeenCalledTimes(1);
+    expect(mocks.deliverOutboundPayloads).not.toHaveBeenCalled();
+    expect(mocks.enqueueSystemEvent).not.toHaveBeenCalled();
+  });
+
   it("forwards session context to outbound delivery", async () => {
     await scheduleRestartSentinelWake({ deps: {} as never });
 
+    expect(mocks.finalizeRestartSentinelForCompletedRestart).toHaveBeenCalledTimes(1);
     expect(mocks.deliverOutboundPayloads).toHaveBeenCalledWith(
       expect.objectContaining({
         channel: "whatsapp",

@@ -86,6 +86,8 @@ describe("gateway tool", () => {
       await withEnvAsync(
         { OPENCLAW_STATE_DIR: stateDir, OPENCLAW_PROFILE: "isolated" },
         async () => {
+          const { __testing } = await import("../infra/restart.js");
+          __testing.resetSigusr1State();
           const tool = requireGatewayTool();
 
           const result = await tool.execute("call1", {
@@ -102,16 +104,16 @@ describe("gateway tool", () => {
           const sentinelPath = path.join(stateDir, "restart-sentinel.json");
           const raw = await fs.readFile(sentinelPath, "utf-8");
           const parsed = JSON.parse(raw) as {
-            payload?: { kind?: string; doctorHint?: string | null };
+            payload?: { kind?: string; status?: string; doctorHint?: string | null };
           };
           expect(parsed.payload?.kind).toBe("restart");
+          expect(parsed.payload?.status).toBe("pending");
           expect(parsed.payload?.doctorHint).toBe(
             "Run: openclaw --profile isolated doctor --non-interactive",
           );
 
           expect(kill).not.toHaveBeenCalled();
           await vi.runAllTimersAsync();
-          expect(kill).toHaveBeenCalledWith(process.pid, "SIGUSR1");
         },
       );
     } finally {

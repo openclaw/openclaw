@@ -6,6 +6,7 @@ import { extractDeliveryInfo } from "../../config/sessions.js";
 import {
   formatDoctorNonInteractiveHint,
   type RestartSentinelPayload,
+  transitionRestartSentinelStatus,
   writeRestartSentinel,
 } from "../../infra/restart-sentinel.js";
 import { scheduleGatewaySigusr1Restart } from "../../infra/restart.js";
@@ -104,7 +105,7 @@ export function createGatewayTool(opts?: {
         const { deliveryContext, threadId } = extractDeliveryInfo(sessionKey);
         const payload: RestartSentinelPayload = {
           kind: "restart",
-          status: "ok",
+          status: "pending",
           ts: Date.now(),
           sessionKey,
           deliveryContext,
@@ -127,6 +128,11 @@ export function createGatewayTool(opts?: {
         const scheduled = scheduleGatewaySigusr1Restart({
           delayMs,
           reason,
+          beforeRestart: async () => {
+            await transitionRestartSentinelStatus("in-progress", {
+              allowedCurrentStatuses: ["pending"],
+            });
+          },
         });
         return jsonResult(scheduled);
       }

@@ -29,6 +29,7 @@ import type { ConfigValidationIssue, OpenClawConfig } from "../../config/types.o
 import {
   formatDoctorNonInteractiveHint,
   type RestartSentinelPayload,
+  transitionRestartSentinelStatus,
   writeRestartSentinel,
 } from "../../infra/restart-sentinel.js";
 import { scheduleGatewaySigusr1Restart } from "../../infra/restart.js";
@@ -218,7 +219,7 @@ function buildConfigRestartSentinelPayload(params: {
   const configPath = createConfigIO().configPath;
   return {
     kind: params.kind,
-    status: "ok",
+    status: "pending",
     ts: Date.now(),
     sessionKey: params.sessionKey,
     deliveryContext: params.deliveryContext,
@@ -443,6 +444,15 @@ export const configHandlers: GatewayRequestHandlers = {
     const restart = scheduleGatewaySigusr1Restart({
       delayMs: restartDelayMs,
       reason: "config.patch",
+      ...(sentinelPath
+        ? {
+            beforeRestart: async () => {
+              await transitionRestartSentinelStatus("in-progress", {
+                allowedCurrentStatuses: ["pending"],
+              });
+            },
+          }
+        : {}),
       audit: {
         actor: actor.actor,
         deviceId: actor.deviceId,
@@ -503,6 +513,15 @@ export const configHandlers: GatewayRequestHandlers = {
     const restart = scheduleGatewaySigusr1Restart({
       delayMs: restartDelayMs,
       reason: "config.apply",
+      ...(sentinelPath
+        ? {
+            beforeRestart: async () => {
+              await transitionRestartSentinelStatus("in-progress", {
+                allowedCurrentStatuses: ["pending"],
+              });
+            },
+          }
+        : {}),
       audit: {
         actor: actor.actor,
         deviceId: actor.deviceId,

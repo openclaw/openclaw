@@ -38,18 +38,22 @@ let lastRestartEmittedAt = 0;
 let pendingRestartTimer: ReturnType<typeof setTimeout> | null = null;
 let pendingRestartDueAt = 0;
 let pendingRestartReason: string | undefined;
+let pendingBeforeRestartHooks: Array<() => void | Promise<void>> = [];
 
 function hasUnconsumedRestartSignal(): boolean {
   return emittedRestartToken > consumedRestartToken;
 }
 
-function clearPendingScheduledRestart(): void {
+function clearPendingScheduledRestart(opts?: { keepHooks?: boolean }): void {
   if (pendingRestartTimer) {
     clearTimeout(pendingRestartTimer);
   }
   pendingRestartTimer = null;
   pendingRestartDueAt = 0;
   pendingRestartReason = undefined;
+  if (!opts?.keepHooks) {
+    pendingBeforeRestartHooks = [];
+  }
 }
 
 export type RestartAuditInfo = {
@@ -407,7 +411,9 @@ export function scheduleGatewaySigusr1Restart(opts?: {
   delayMs?: number;
   reason?: string;
   audit?: RestartAuditInfo;
+  beforeRestart?: () => void | Promise<void>;
 }): ScheduledRestart {
+  const beforeRestartHook = opts?.beforeRestart;
   const delayMsRaw =
     typeof opts?.delayMs === "number" && Number.isFinite(opts.delayMs)
       ? Math.floor(opts.delayMs)
@@ -445,8 +451,11 @@ export function scheduleGatewaySigusr1Restart(opts?: {
       restartLog.warn(
         `restart request rescheduled earlier reason=${reason ?? "unspecified"} pendingReason=${pendingRestartReason ?? "unspecified"} oldDelayMs=${remainingMs} newDelayMs=${Math.max(0, requestedDueAt - nowMs)} ${formatRestartAudit(opts?.audit)}`,
       );
-      clearPendingScheduledRestart();
+      clearPendingScheduledRestart({ keepHooks: true });
     } else {
+      if (beforeRestartHook) {
+        pendingBeforeRestartHooks.push(beforeRestartHook);
+      }
       restartLog.warn(
         `restart request coalesced (already scheduled) reason=${reason ?? "unspecified"} pendingReason=${pendingRestartReason ?? "unspecified"} delayMs=${remainingMs} ${formatRestartAudit(opts?.audit)}`,
       );
@@ -463,19 +472,34 @@ export function scheduleGatewaySigusr1Restart(opts?: {
     }
   }
 
+  if (beforeRestartHook) {
+    pendingBeforeRestartHooks.push(beforeRestartHook);
+  }
+
   pendingRestartDueAt = requestedDueAt;
   pendingRestartReason = reason;
   pendingRestartTimer = setTimeout(
     () => {
-      pendingRestartTimer = null;
-      pendingRestartDueAt = 0;
-      pendingRestartReason = undefined;
-      const pendingCheck = preRestartCheck;
-      if (!pendingCheck) {
-        emitGatewayRestart();
-        return;
-      }
-      deferGatewayRestartUntilIdle({ getPendingCount: pendingCheck });
+      void (async () => {
+        const beforeRestartHooks = pendingBeforeRestartHooks;
+        pendingBeforeRestartHooks = [];
+        for (const hook of beforeRestartHooks) {
+          try {
+            await hook();
+          } catch (err) {
+            restartLog.warn(`restart preflight hook failed: ${String(err)}`);
+          }
+        }
+        pendingRestartTimer = null;
+        pendingRestartDueAt = 0;
+        pendingRestartReason = undefined;
+        const pendingCheck = preRestartCheck;
+        if (!pendingCheck) {
+          emitGatewayRestart();
+          return;
+        }
+        deferGatewayRestartUntilIdle({ getPendingCount: pendingCheck });
+      })();
     },
     Math.max(0, requestedDueAt - nowMs),
   );
