@@ -367,7 +367,7 @@ export async function spawnSubagentDirect(
       const allowedText = allowSet.size > 0 ? Array.from(allowSet).join(", ") : "none";
       return {
         status: "forbidden",
-        error: `agentId is not allowed for sessions_spawn (allowed: ${allowedText})`,
+        error: `agentId "${targetAgentId}" is not allowed for sessions_spawn from agent "${requesterAgentId}". Configure agents.${requesterAgentId}.subagents.allowAgents in config.yaml to allow cross-agent spawns. Use ["*"] to allow all agents or list specific agent IDs. Currently allowed: ${allowedText}`,
       };
     }
   }
