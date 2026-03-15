@@ -185,6 +185,22 @@ describe("exec approvals CLI", () => {
     expect(runtimeErrors).toHaveLength(0);
   });
 
+  it.each(["10foo", "1.5", "0x20"])(
+    "rejects malformed trust minutes value: %s",
+    async (minutes) => {
+      Object.defineProperty(process.stdin, "isTTY", { value: true, configurable: true });
+      await expect(
+        runApprovalsCommand(["approvals", "trust", "--minutes", minutes, "--yes"]),
+      ).rejects.toThrow(/__exit__:1/);
+      expect(runtimeErrors.some((entry) => entry.includes("minutes must be an integer"))).toBe(true);
+      expect(callGatewayFromCli).not.toHaveBeenCalledWith(
+        "exec.approvals.trust",
+        expect.anything(),
+        expect.anything(),
+      );
+    },
+  );
+
   it("routes untrust command to gateway RPC", async () => {
     callGatewayFromCli.mockResolvedValueOnce({ ok: true, agentId: "main", summary: null });
 

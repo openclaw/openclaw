@@ -508,7 +508,11 @@ export function registerExecApprovalsCli(program: Command) {
           );
         }
 
-        const minutes = Number.parseInt(String(opts.minutes ?? ""), 10);
+        const minutesRaw = String(opts.minutes ?? "").trim();
+        if (!/^\d+$/.test(minutesRaw)) {
+          exitWithError("minutes must be an integer between 1 and 480.");
+        }
+        const minutes = Number(minutesRaw);
         if (!Number.isInteger(minutes) || minutes < 1 || minutes > 480) {
           exitWithError("minutes must be an integer between 1 and 480.");
         }
