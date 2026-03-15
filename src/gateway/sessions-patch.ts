@@ -4,7 +4,7 @@ import type { ModelCatalogEntry } from "../agents/model-catalog.js";
 import {
   resolveAllowedModelRef,
   resolveDefaultModelForAgent,
-  resolveSubagentConfiguredModelSelection,
+  resolveSubagentSpawnModelSelection,
 } from "../agents/model-selection.js";
 import { normalizeGroupActivation } from "../auto-reply/group-activation.js";
 import {
@@ -97,7 +97,7 @@ export async function applySessionsPatchToStore(params: {
   const sessionAgentId = normalizeAgentId(parsedAgent?.agentId ?? resolveDefaultAgentId(cfg));
   const resolvedDefault = resolveDefaultModelForAgent({ cfg, agentId: sessionAgentId });
   const subagentModelHint = isSubagentSessionKey(storeKey)
-    ? resolveSubagentConfiguredModelSelection({ cfg, agentId: sessionAgentId })
+    ? resolveSubagentSpawnModelSelection({ cfg, agentId: sessionAgentId })
     : undefined;
 
   const existing = store[storeKey];
