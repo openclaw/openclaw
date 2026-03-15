@@ -3,6 +3,8 @@ import path from "node:path";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveAgentModelFallbackValues } from "../config/model-input.js";
 import { resolveStateDir } from "../config/paths.js";
+import type { ChatType } from "../channels/chat-type.js";
+import { resolveEffectiveModelForChatType } from "../config/model-input.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
   DEFAULT_AGENT_ID,
@@ -335,4 +337,30 @@ export function resolveAgentDir(cfg: OpenClawConfig, agentId: string) {
   }
   const root = resolveStateDir(process.env);
   return path.join(root, "agents", id, "agent");
+}
+
+/**
+ * Resolve the effective model for a given agent, considering chat type.
+ * If byChatType is configured, returns the model for the specified chat type.
+ * Otherwise falls back to primary model.
+ */
+export function resolveAgentModelForChatType(
+  cfg: OpenClawConfig,
+  agentId: string,
+  chatType?: ChatType,
+): string | undefined {
+  // First check agent-specific model config
+  const agentConfig = resolveAgentConfig(cfg, agentId);
+  if (agentConfig?.model) {
+    const effective = resolveEffectiveModelForChatType(agentConfig.model, chatType);
+    if (effective) {
+      return effective;
+    }
+  }
+  // Fall back to defaults model
+  const defaults = cfg.agents?.defaults;
+  if (defaults?.model) {
+    return resolveEffectiveModelForChatType(defaults.model, chatType);
+  }
+  return undefined;
 }
