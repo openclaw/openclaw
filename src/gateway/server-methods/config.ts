@@ -540,7 +540,9 @@ export const configHandlers: GatewayRequestHandlers = {
     // must use `cmd /c start` there.  On other platforms `open`/`xdg-open`
     // are real executables and execFile (shell: false) avoids injection.
     const cmd = platform === "win32" ? "cmd" : platform === "darwin" ? "open" : "xdg-open";
-    const args = platform === "win32" ? ["/c", "start", "", configPath] : [configPath];
+    // On Windows, cmd /c concatenates args into a single command string, so
+    // paths containing cmd metacharacters (& ^ | etc.) must be quoted.
+    const args = platform === "win32" ? ["/c", "start", "", `"${configPath}"`] : [configPath];
     execFile(cmd, args, (err) => {
       if (err) {
         respond(true, { ok: false, path: configPath, error: err.message }, undefined);
