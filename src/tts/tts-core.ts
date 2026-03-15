@@ -704,8 +704,9 @@ export async function edgeTTS(params: {
 }): Promise<void> {
   const { text, outputPath, config, timeoutMs } = params;
 
-  const safeText =
-    text && text.trim().length > 0 ? text : " ";
+  if (!text || text.trim().length === 0) {
+    throw new Error("TTS text cannot be empty");
+  }
 
   const tts = new EdgeTTS({
     voice: config.voice,
@@ -719,12 +720,12 @@ export async function edgeTTS(params: {
     timeout: config.timeoutMs ?? timeoutMs,
   });
 
-  await tts.ttsPromise(safeText, outputPath);
+  await tts.ttsPromise(text, outputPath);
 
   let { size } = statSync(outputPath);
 
   if (size === 0) {
-    await tts.ttsPromise(safeText, outputPath);
+    await tts.ttsPromise(text, outputPath);
     ({ size } = statSync(outputPath));
 
     if (size === 0) {
