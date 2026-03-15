@@ -1,3 +1,4 @@
+import { URL } from "node:url";
 import type { VoiceCallConfig } from "./config.js";
 import { resolveVoiceCallConfig, validateProviderConfig } from "./config.js";
 import type { CoreConfig } from "./core-bridge.js";
@@ -78,6 +79,30 @@ function isLoopbackBind(bind: string | undefined): boolean {
     return false;
   }
   return bind === "127.0.0.1" || bind === "::1" || bind === "localhost";
+}
+
+function providerRequiresReachableWebhook(providerName: VoiceCallProvider["name"]): boolean {
+  return providerName === "twilio" || providerName === "telnyx" || providerName === "plivo";
+}
+
+function isProviderUnreachableWebhookUrl(webhookUrl: string): boolean {
+  try {
+    const parsed = new URL(webhookUrl);
+    const host = parsed.hostname.trim().toLowerCase();
+
+    // External telephony providers cannot call back into loopback or wildcard
+    // listener addresses. Failing closed here prevents "call placed, then dropped"
+    // behavior when tunnel/public URL setup is missing or broken.
+    return (
+      host === "127.0.0.1" ||
+      host === "localhost" ||
+      host === "::1" ||
+      host === "0.0.0.0" ||
+      host === "::"
+    );
+  } catch {
+    return false;
+  }
 }
 
 function resolveProvider(config: VoiceCallConfig): VoiceCallProvider {
@@ -201,6 +226,17 @@ export async function createVoiceCallRuntime(params: {
     }
 
     const webhookUrl = publicUrl ?? localUrl;
+
+    if (
+      providerRequiresReachableWebhook(provider.name) &&
+      isProviderUnreachableWebhookUrl(webhookUrl)
+    ) {
+      throw new Error(
+        `[voice-call] ${provider.name} requires a publicly reachable webhook URL. ` +
+          `Refusing to use local-only webhook ${webhookUrl}. ` +
+          "Set plugins.entries.voice-call.config.publicUrl or enable tunnel/tailscale exposure.",
+      );
+    }
 
     if (publicUrl && provider.name === "twilio") {
       (provider as TwilioProvider).setPublicUrl(publicUrl);

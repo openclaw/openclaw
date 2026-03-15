@@ -14,9 +14,14 @@ import { normalizeProviderId } from "../model-selection.js";
 import { AUTH_STORE_LOCK_OPTIONS, log } from "./constants.js";
 import { resolveTokenExpiryState } from "./credential-state.js";
 import { formatAuthDoctorHint } from "./doctor.js";
+import { cleanupOAuthProfiles } from "./oauth-cleanup.js";
 import { ensureAuthStoreFile, resolveAuthStorePath } from "./paths.js";
 import { suggestOAuthProfileIdForLegacyDefault } from "./repair.js";
-import { ensureAuthProfileStore, saveAuthProfileStore } from "./store.js";
+import {
+  ensureAuthProfileStore,
+  saveAuthProfileStore,
+  updateAuthProfileStoreWithLock,
+} from "./store.js";
 import type { AuthProfileStore } from "./types.js";
 
 const OAUTH_PROVIDER_IDS = new Set<string>(getOAuthProviders().map((provider) => provider.id));
@@ -306,6 +311,59 @@ async function resolveProfileSecretString(params: {
   return resolvedValue;
 }
 
+function isRefreshTokenReusedError(error: unknown): boolean {
+  const seen = new Set<unknown>();
+  const texts: string[] = [];
+
+  const collect = (value: unknown) => {
+    if (!value || seen.has(value)) {
+      return;
+    }
+    seen.add(value);
+    if (typeof value === "string") {
+      texts.push(value);
+      return;
+    }
+    if (value instanceof Error) {
+      texts.push(value.message);
+      collect((value as Error & { cause?: unknown }).cause);
+      return;
+    }
+    if (value === undefined) {
+      texts.push("undefined");
+      return;
+    }
+    if (typeof value === "number" || typeof value === "boolean" || typeof value === "bigint") {
+      texts.push(value.toString());
+      return;
+    }
+    if (typeof value === "symbol") {
+      texts.push(value.description ?? "symbol");
+      return;
+    }
+    if (typeof value === "function") {
+      texts.push(value.name || "function");
+      return;
+    }
+    const record = value as Record<string, unknown>;
+    for (const key of ["error", "error_code", "message", "code"]) {
+      const field = record[key];
+      if (typeof field === "string") {
+        texts.push(field);
+      }
+    }
+    collect(record.cause);
+    try {
+      texts.push(JSON.stringify(record));
+    } catch {
+      // ignore non-serializable objects
+    }
+  };
+
+  collect(error);
+  return texts.some((text) => /\brefresh_token_reused\b/i.test(text));
+}
+
 export async function resolveApiKeyForProfile(
   params: ResolveApiKeyForProfileParams,
 ): Promise<{ apiKey: string; provider: string; email?: string } | null> {
@@ -471,6 +529,36 @@ export async function resolveApiKeyForProfile(
         apiKey: cred.access,
         provider: cred.provider,
         email: cred.email,
+      });
+    }
+
+    const refreshTokenReused = isRefreshTokenReusedError(error);
+    let cleanupChanged = false;
+    let removedProfileIds: string[] = [];
+    let resetProfileIds: string[] = [];
+    await updateAuthProfileStoreWithLock({
+      agentDir: params.agentDir,
+      updater: (lockedStore) => {
+        const result = cleanupOAuthProfiles({
+          store: lockedStore,
+          provider: cred.provider,
+          keepProfileIds: [profileId],
+          resetUsageForProfileIds: [profileId],
+        });
+        cleanupChanged = result.changed;
+        removedProfileIds = result.removedProfileIds;
+        resetProfileIds = result.resetProfileIds;
+        return result.changed;
+      },
+    });
+    if (cleanupChanged) {
+      log.warn("OAuth refresh failed; cleaned oauth profile state", {
+        provider: cred.provider,
+        profileId,
+        refreshTokenReused,
+        removedProfileIds,
+        resetProfileIds,
+        agentDir: params.agentDir,
       });
     }
 

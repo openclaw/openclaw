@@ -49,6 +49,21 @@ function createBaseConfig(): VoiceCallConfig {
   return createVoiceCallBaseConfig({ tunnelProvider: "ngrok" });
 }
 
+function createTwilioConfig(params?: { publicUrl?: string }): VoiceCallConfig {
+  const config = createVoiceCallBaseConfig({
+    provider: "twilio",
+    tunnelProvider: "none",
+  });
+  config.twilio = {
+    accountSid: "AC123",
+    authToken: "secret",
+  };
+  if (params?.publicUrl) {
+    config.publicUrl = params.publicUrl;
+  }
+  return config;
+}
+
 describe("createVoiceCallRuntime lifecycle", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -103,5 +118,28 @@ describe("createVoiceCallRuntime lifecycle", () => {
     expect(tunnelStop).toHaveBeenCalledTimes(1);
     expect(mocks.cleanupTailscaleExposure).toHaveBeenCalledTimes(1);
     expect(mocks.webhookStop).toHaveBeenCalledTimes(1);
+  });
+
+  it("fails closed when Twilio falls back to a loopback-only webhook", async () => {
+    await expect(
+      createVoiceCallRuntime({
+        config: createTwilioConfig(),
+        coreConfig: {} as CoreConfig,
+      }),
+    ).rejects.toThrow(/twilio requires a publicly reachable webhook url/i);
+  });
+
+  it("uses a configured public URL for Twilio when available", async () => {
+    const runtime = await createVoiceCallRuntime({
+      config: createTwilioConfig({
+        publicUrl: "https://voice.example.com/voice/webhook",
+      }),
+      coreConfig: {} as CoreConfig,
+    });
+
+    expect(runtime.webhookUrl).toBe("https://voice.example.com/voice/webhook");
+    expect(runtime.publicUrl).toBe("https://voice.example.com/voice/webhook");
+
+    await runtime.stop();
   });
 });
