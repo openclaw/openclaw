@@ -211,18 +211,31 @@ export function registerCronEditCommand(cron: Command) {
           if (model) {
             try {
               const { loadConfig } = await import("../../config/config.js");
+              const { loadModelCatalog } = await import("../../agents/model-catalog.js");
+              const { buildAllowedModelSet, parseModelRef } =
+                await import("../../agents/model-selection.js");
+              const { DEFAULT_PROVIDER, DEFAULT_MODEL } = await import("../../agents/defaults.js");
               const cfg = loadConfig();
-              const modelsMap = cfg.agents?.defaults?.models ?? {};
-              const allowlistKeys = Object.keys(modelsMap);
-              if (allowlistKeys.length > 0 && !allowlistKeys.includes(model)) {
-                defaultRuntime.error(
-                  warn(
-                    `Warning: "${model}" is not in agents.defaults.models. This cron may fail at execution time.`,
-                  ),
-                );
+              const catalog = await loadModelCatalog({ config: cfg });
+              const { allowAny, allowedKeys } = buildAllowedModelSet({
+                cfg,
+                catalog,
+                defaultProvider: DEFAULT_PROVIDER,
+                defaultModel: DEFAULT_MODEL,
+              });
+              if (!allowAny) {
+                const ref = parseModelRef(model, DEFAULT_PROVIDER);
+                const key = ref ? `${ref.provider}/${ref.model}` : model;
+                if (!allowedKeys.has(key)) {
+                  defaultRuntime.error(
+                    warn(
+                      `Warning: "${model}" is not in the allowed model set. This cron may fail at execution time.`,
+                    ),
+                  );
+                }
               }
             } catch {
-              // Config loading can fail; don't block cron edit.
+              // Config/catalog loading can fail; don't block cron edit.
             }
           }
           const thinking =
