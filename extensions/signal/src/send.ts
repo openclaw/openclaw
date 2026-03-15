@@ -18,6 +18,16 @@ export type SignalSendOpts = {
   timeoutMs?: number;
   textMode?: "markdown" | "plain";
   textStyles?: SignalTextStyleRange[];
+  /**
+   * Message ID (timestamp string) to quote/reply-to. When provided and quoteTimestamp
+   * is not set, this is parsed as the quote timestamp and `to` is used as quote-author
+   * (best-effort; works for DM inbound replies, skipped for groups).
+   */
+  replyToId?: string;
+  /** Timestamp of the message being quoted (from replyToId). Takes precedence over replyToId. */
+  quoteTimestamp?: number;
+  /** Author of the quoted message (UUID for inbound, phone number for outbound). */
+  quoteAuthor?: string;
 };
 
 export type SignalSendResult = {
@@ -169,6 +179,35 @@ export async function sendMessageSignal(
   }
   if (attachments && attachments.length > 0) {
     params.attachments = attachments;
+  }
+  // Resolve quote params: prefer explicit quoteTimestamp/quoteAuthor, fall back to replyToId.
+  let resolvedQuoteTimestamp = opts.quoteTimestamp;
+  let resolvedQuoteAuthor = opts.quoteAuthor?.trim();
+  if (
+    (typeof resolvedQuoteTimestamp !== "number" || !resolvedQuoteAuthor) &&
+    opts.replyToId?.trim()
+  ) {
+    const parsedTs = Number(opts.replyToId.trim());
+    if (Number.isFinite(parsedTs) && parsedTs > 0) {
+      // Best-effort: use `to` as quote-author for DM cases; skip for groups.
+      const normalizedTo = to.replace(/^signal:/i, "").trim();
+      const isGroup = normalizedTo.toLowerCase().startsWith("group:");
+      if (!isGroup) {
+        if (typeof resolvedQuoteTimestamp !== "number") {
+          resolvedQuoteTimestamp = parsedTs;
+        }
+        resolvedQuoteAuthor = resolvedQuoteAuthor || normalizedTo;
+      }
+    }
+  }
+  if (
+    typeof resolvedQuoteTimestamp === "number" &&
+    Number.isFinite(resolvedQuoteTimestamp) &&
+    resolvedQuoteTimestamp > 0 &&
+    resolvedQuoteAuthor
+  ) {
+    params["quote-timestamp"] = resolvedQuoteTimestamp;
+    params["quote-author"] = resolvedQuoteAuthor;
   }
 
   const targetParams = buildTargetParams(target, {

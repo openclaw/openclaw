@@ -33,6 +33,9 @@ import {
 import { resolveOutboundSendDep } from "../../../src/infra/outbound/send-deps.js";
 import { getSignalRuntime } from "./runtime.js";
 
+/** Default text chunk size for Signal outbound messages (chars). */
+const SIGNAL_TEXT_CHUNK_LIMIT = 4000;
+
 const signalMessageActions: ChannelMessageActionAdapter = {
   listActions: (ctx) => getSignalRuntime().channel.signal.messageActions?.listActions?.(ctx) ?? [],
   supportsAction: (ctx) =>
@@ -78,6 +81,36 @@ function buildSignalSetupPatch(input: {
 
 type SignalSendFn = ReturnType<typeof getSignalRuntime>["channel"]["signal"]["sendMessageSignal"];
 
+function resolveSignalQuoteParams(
+  to: string,
+  replyToId: string | null | undefined,
+  accountPhone: string | undefined,
+): { quoteTimestamp?: number; quoteAuthor?: string } {
+  if (!replyToId) {
+    return {};
+  }
+  const quoteTimestamp = Number(replyToId);
+  if (!Number.isFinite(quoteTimestamp) || quoteTimestamp <= 0) {
+    return {};
+  }
+  // Resolve quote-author: strip signal: prefix from `to` to get the contact identifier.
+  // For DM replies the `to` value is the inbound sender (UUID or E.164 phone), which
+  // signal-cli requires as quote-author when quoting an inbound message.
+  // For bot's own outbound messages the caller should pass accountPhone instead, but
+  // since `replyToId` in practice always refers to inbound messages, using `to` is correct.
+  const normalizedTo = to.replace(/^signal:/i, "").trim();
+  const isGroup = normalizedTo.toLowerCase().startsWith("group:");
+  if (isGroup) {
+    // Groups require knowing the original sender UUID; skip quote for groups.
+    return {};
+  }
+  const quoteAuthor = normalizedTo || accountPhone;
+  if (!quoteAuthor) {
+    return {};
+  }
+  return { quoteTimestamp, quoteAuthor };
+}
+
 async function sendSignalOutbound(params: {
   cfg: Parameters<typeof resolveSignalAccount>[0]["cfg"];
   to: string;
@@ -85,23 +118,31 @@ async function sendSignalOutbound(params: {
   mediaUrl?: string;
   mediaLocalRoots?: readonly string[];
   accountId?: string;
+  replyToId?: string | null;
   deps?: { [channelId: string]: unknown };
 }) {
   const send =
     resolveOutboundSendDep<SignalSendFn>(params.deps, "signal") ??
     getSignalRuntime().channel.signal.sendMessageSignal;
+  const accountInfo = resolveSignalAccount({ cfg: params.cfg, accountId: params.accountId });
   const maxBytes = resolveChannelMediaMaxBytes({
     cfg: params.cfg,
     resolveChannelLimitMb: ({ cfg, accountId }) =>
       cfg.channels?.signal?.accounts?.[accountId]?.mediaMaxMb ?? cfg.channels?.signal?.mediaMaxMb,
     accountId: params.accountId,
   });
+  const quoteParams = resolveSignalQuoteParams(
+    params.to,
+    params.replyToId,
+    accountInfo.config.account ?? undefined,
+  );
   return await send(params.to, params.text, {
     cfg: params.cfg,
     ...(params.mediaUrl ? { mediaUrl: params.mediaUrl } : {}),
     ...(params.mediaLocalRoots?.length ? { mediaLocalRoots: params.mediaLocalRoots } : {}),
     maxBytes,
     accountId: params.accountId ?? undefined,
+    ...quoteParams,
   });
 }
 
@@ -263,18 +304,67 @@ export const signalPlugin: ChannelPlugin<ResolvedSignalAccount> = {
     deliveryMode: "direct",
     chunker: (text, limit) => getSignalRuntime().channel.text.chunkText(text, limit),
     chunkerMode: "text",
-    textChunkLimit: 4000,
-    sendText: async ({ cfg, to, text, accountId, deps }) => {
+    textChunkLimit: SIGNAL_TEXT_CHUNK_LIMIT,
+    sendPayload: async (ctx) => {
+      const text = ctx.payload.text ?? "";
+      const urls: string[] = ctx.payload.mediaUrls?.length
+        ? ctx.payload.mediaUrls
+        : ctx.payload.mediaUrl
+          ? [ctx.payload.mediaUrl]
+          : [];
+      if (!text && urls.length === 0) {
+        return { channel: "signal", messageId: "" };
+      }
+      if (urls.length > 0) {
+        let lastResult: { channel: string; messageId: string } | undefined;
+        for (let i = 0; i < urls.length; i++) {
+          const mediaUrl = urls[i];
+          if (!mediaUrl) continue;
+          const result = await sendSignalOutbound({
+            cfg: ctx.cfg,
+            to: ctx.to,
+            text: i === 0 ? text : "",
+            mediaUrl,
+            mediaLocalRoots: ctx.mediaLocalRoots,
+            accountId: ctx.accountId ?? undefined,
+            replyToId: i === 0 ? (ctx.replyToId ?? undefined) : undefined,
+            deps: ctx.deps,
+          });
+          lastResult = { channel: "signal", ...result };
+        }
+        return lastResult ?? { channel: "signal", messageId: "" };
+      }
+      // Text-only: chunk and send; only first chunk carries the quote.
+      const limit = SIGNAL_TEXT_CHUNK_LIMIT;
+      const chunks = getSignalRuntime().channel.text.chunkText(text, limit);
+      let lastResult: { channel: string; messageId: string } | undefined;
+      for (let i = 0; i < chunks.length; i++) {
+        const chunk = chunks[i];
+        if (!chunk) continue;
+        const result = await sendSignalOutbound({
+          cfg: ctx.cfg,
+          to: ctx.to,
+          text: chunk,
+          accountId: ctx.accountId ?? undefined,
+          replyToId: i === 0 ? (ctx.replyToId ?? undefined) : undefined,
+          deps: ctx.deps,
+        });
+        lastResult = { channel: "signal", ...result };
+      }
+      return lastResult ?? { channel: "signal", messageId: "" };
+    },
+    sendText: async ({ cfg, to, text, accountId, deps, replyToId }) => {
       const result = await sendSignalOutbound({
         cfg,
         to,
         text,
         accountId: accountId ?? undefined,
+        replyToId: replyToId ?? undefined,
         deps,
       });
       return { channel: "signal", ...result };
     },
-    sendMedia: async ({ cfg, to, text, mediaUrl, mediaLocalRoots, accountId, deps }) => {
+    sendMedia: async ({ cfg, to, text, mediaUrl, mediaLocalRoots, accountId, deps, replyToId }) => {
       const result = await sendSignalOutbound({
         cfg,
         to,
@@ -282,6 +372,7 @@ export const signalPlugin: ChannelPlugin<ResolvedSignalAccount> = {
         mediaUrl,
         mediaLocalRoots,
         accountId: accountId ?? undefined,
+        replyToId: replyToId ?? undefined,
         deps,
       });
       return { channel: "signal", ...result };
