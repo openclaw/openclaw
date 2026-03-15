@@ -57,6 +57,7 @@ export type AuthChoice = BuiltInAuthChoice | (string & {});
 export type BuiltInAuthChoiceGroupId =
   | "openai"
   | "anthropic"
+  | "anthropic-azure"
   | "chutes"
   | "google"
   | "copilot"

@@ -34,8 +34,14 @@ const AUTH_CHOICE_GROUP_DEFS: {
   {
     value: "anthropic",
     label: "Anthropic",
-    hint: "setup-token + API key + Azure",
-    choices: ["token", "apiKey", "anthropic-azure-api-key"],
+    hint: "setup-token + API key",
+    choices: ["token", "apiKey"],
+  },
+  {
+    value: "anthropic-azure",
+    label: "Azure Claude (AI Foundry)",
+    hint: "Anthropic Claude via Microsoft Azure",
+    choices: ["anthropic-azure-api-key"],
   },
   {
     value: "chutes",
