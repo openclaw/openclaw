@@ -78,7 +78,7 @@ Add to your `~/.openclaw/config.json`:
             "id": "ernie-5.0-thinking-preview",
             "name": "ERNIE 5.0",
             "reasoning": true,
-            "input": ["text"],
+            "input": ["text", "image"],
             "contextWindow": 128000,
             "maxTokens": 65536
           }
