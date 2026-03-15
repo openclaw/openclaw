@@ -1,4 +1,7 @@
-import type { StickerMetadata } from "../../extensions/telegram/src/bot/types.js";
+import type {
+  AnimationMetadata,
+  StickerMetadata,
+} from "../../extensions/telegram/src/bot/types.js";
 import type { ChannelId } from "../channels/plugins/types.js";
 import type {
   MediaUnderstandingDecision,
@@ -95,6 +98,8 @@ export type MsgContext = {
   MediaTypes?: string[];
   /** Telegram sticker metadata (emoji, set name, file IDs, cached description). */
   Sticker?: StickerMetadata;
+  /** Telegram animation metadata (filename, file IDs, mime type, duration). */
+  Animation?: AnimationMetadata;
   /** True when current-turn sticker media is present in MediaPaths (false for cached-description path). */
   StickerMediaIncluded?: boolean;
   OutputDir?: string;

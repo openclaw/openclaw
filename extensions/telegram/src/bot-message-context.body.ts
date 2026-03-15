@@ -56,6 +56,20 @@ export type TelegramInboundBodyResult = {
   locationData?: NormalizedLocation;
 };
 
+function sanitizeInlineMediaLabel(value: string | undefined): string | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const collapsed = value
+    .replace(/[\r\n\t]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!collapsed) {
+    return undefined;
+  }
+  return collapsed.replace(/["<>]/g, "_");
+}
+
 async function resolveStickerVisionSupport(params: {
   cfg: OpenClawConfig;
   agentId?: string;
@@ -141,16 +155,35 @@ export async function resolveTelegramInboundBody(params: {
   const historyKey = isGroup ? buildTelegramGroupPeerId(chatId, resolvedThreadId) : undefined;
 
   let placeholder = resolveTelegramMediaPlaceholder(msg) ?? "";
+  // Enrich animation (GIF) placeholder with file name if available
+  const safeAnimationName = msg.animation
+    ? sanitizeInlineMediaLabel(allMedia[0]?.animationMetadata?.fileName)
+    : undefined;
+  if (safeAnimationName) {
+    placeholder = `<media:gif "${safeAnimationName}">`;
+  }
   const cachedStickerDescription = allMedia[0]?.stickerMetadata?.cachedDescription;
   const stickerSupportsVision = msg.sticker
     ? await resolveStickerVisionSupport({ cfg, agentId: routeAgentId })
     : false;
   const stickerCacheHit = Boolean(cachedStickerDescription) && !stickerSupportsVision;
-  if (stickerCacheHit) {
+
+  // For animated/video stickers (metadata-only, no media file), format with emoji/setName context
+  const isMetadataOnlySticker = msg.sticker && allMedia[0]?.stickerMetadata && !allMedia[0]?.path;
+  if (isMetadataOnlySticker) {
     const emoji = allMedia[0]?.stickerMetadata?.emoji;
-    const setName = allMedia[0]?.stickerMetadata?.setName;
+    const setName = sanitizeInlineMediaLabel(allMedia[0]?.stickerMetadata?.setName);
     const stickerContext = [emoji, setName ? `from "${setName}"` : null].filter(Boolean).join(" ");
-    placeholder = `[Sticker${stickerContext ? ` ${stickerContext}` : ""}] ${cachedStickerDescription}`;
+    const safeDesc = sanitizeInlineMediaLabel(cachedStickerDescription);
+    const desc = safeDesc ? ` ${safeDesc}` : "";
+    placeholder = `[Sticker${stickerContext ? ` ${stickerContext}` : ""}${desc}]`;
+  } else if (stickerCacheHit) {
+    // Format cached description with sticker context
+    const emoji = allMedia[0]?.stickerMetadata?.emoji;
+    const setName = sanitizeInlineMediaLabel(allMedia[0]?.stickerMetadata?.setName);
+    const stickerContext = [emoji, setName ? `from "${setName}"` : null].filter(Boolean).join(" ");
+    const safeDesc = sanitizeInlineMediaLabel(cachedStickerDescription);
+    placeholder = `[Sticker${stickerContext ? ` ${stickerContext}` : ""}] ${safeDesc ?? cachedStickerDescription}`;
   }
 
   const locationData = extractTelegramLocation(msg);
@@ -185,7 +218,7 @@ export async function resolveTelegramInboundBody(params: {
       const { transcribeFirstAudio } =
         await import("../../../src/media-understanding/audio-preflight.js");
       const tempCtx: MsgContext = {
-        MediaPaths: allMedia.length > 0 ? allMedia.map((m) => m.path) : undefined,
+        MediaPaths: allMedia.length > 0 ? allMedia.map((m) => m.path).filter(Boolean) : undefined,
         MediaTypes:
           allMedia.length > 0
             ? (allMedia.map((m) => m.contentType).filter(Boolean) as string[])

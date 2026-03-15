@@ -99,7 +99,15 @@ function hasInboundMedia(msg: Message): boolean {
   return (
     Boolean(msg.media_group_id) ||
     (Array.isArray(msg.photo) && msg.photo.length > 0) ||
-    Boolean(msg.video ?? msg.video_note ?? msg.document ?? msg.audio ?? msg.voice ?? msg.sticker)
+    Boolean(
+      msg.video ??
+      msg.video_note ??
+      msg.document ??
+      msg.audio ??
+      msg.voice ??
+      msg.animation ??
+      msg.sticker,
+    )
   );
 }
 
@@ -113,6 +121,7 @@ function resolveInboundMediaFileId(msg: Message): string | undefined {
   return (
     msg.sticker?.file_id ??
     msg.photo?.[msg.photo.length - 1]?.file_id ??
+    msg.animation?.file_id ??
     msg.video?.file_id ??
     msg.video_note?.file_id ??
     msg.document?.file_id ??
@@ -394,6 +403,7 @@ export const registerTelegramHandlers = ({
             path: media.path,
             contentType: media.contentType,
             stickerMetadata: media.stickerMetadata,
+            animationMetadata: media.animationMetadata,
           });
         }
       }
@@ -493,6 +503,7 @@ export const registerTelegramHandlers = ({
           path: media.path,
           contentType: media.contentType,
           stickerMetadata: media.stickerMetadata,
+          animationMetadata: media.animationMetadata,
         },
       ];
     } catch (err) {
@@ -1023,13 +1034,7 @@ export const registerTelegramHandlers = ({
       return;
     }
 
-    // Skip sticker-only messages where the sticker was skipped (animated/video)
-    // These have no media and no text content to process.
     const hasText = Boolean(getTelegramTextParts(msg).text.trim());
-    if (msg.sticker && !media && !hasText) {
-      logVerbose("telegram: skipping sticker-only message (unsupported sticker type)");
-      return;
-    }
 
     const allMedia = media
       ? [
@@ -1037,6 +1042,7 @@ export const registerTelegramHandlers = ({
             path: media.path,
             contentType: media.contentType,
             stickerMetadata: media.stickerMetadata,
+            animationMetadata: media.animationMetadata,
           },
         ]
       : [];
