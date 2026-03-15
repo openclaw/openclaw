@@ -502,6 +502,35 @@ describe("Feishu inbound debounce regressions", () => {
     expect(firstParams?.botName).toBe("OpenClaw Bot");
   });
 
+  it("skips single-entry debounce flush when the message was already persistently deduped", async () => {
+    vi.spyOn(dedup, "tryRecordMessage").mockReturnValue(true);
+    const tryRecordPersistentSpy = vi
+      .spyOn(dedup, "tryRecordMessagePersistent")
+      .mockResolvedValue(true);
+    vi.spyOn(dedup, "hasRecordedMessage").mockReturnValue(false);
+    const hasRecordedPersistentSpy = vi
+      .spyOn(dedup, "hasRecordedMessagePersistent")
+      .mockImplementation(async (messageId: string) => messageId === "om_single_dup");
+    const onMessage = await setupDebounceMonitor();
+
+    await enqueueDebouncedMessage(
+      onMessage,
+      createTextEvent({
+        messageId: "om_single_dup",
+        text: "duplicate",
+      }),
+    );
+    await vi.advanceTimersByTimeAsync(25);
+
+    expect(handleFeishuMessageMock).not.toHaveBeenCalled();
+    expect(hasRecordedPersistentSpy).toHaveBeenCalledWith(
+      "om_single_dup",
+      "default",
+      expect.any(Function),
+    );
+    expect(tryRecordPersistentSpy).not.toHaveBeenCalled();
+  });
+
   it("does not synthesize mention-forward intent across separate messages", async () => {
     setDedupPassThroughMocks();
     const onMessage = await setupDebounceMonitor();

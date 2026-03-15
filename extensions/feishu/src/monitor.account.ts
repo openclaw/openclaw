@@ -253,10 +253,16 @@ function registerEventHandlers(
   const log = runtime?.log ?? console.log;
   const error = runtime?.error ?? console.error;
   const enqueue = createChatQueue();
-  const dispatchFeishuMessage = async (event: FeishuMessageEvent) => {
+  const dispatchFeishuMessage = async (
+    event: FeishuMessageEvent,
+    opts?: { checkDedup?: boolean },
+  ) => {
     const chatId = event.message.chat_id?.trim() || "unknown";
-    const task = () =>
-      handleFeishuMessage({
+    const task = async () => {
+      if (opts?.checkDedup && (await isMessageAlreadyProcessed(event))) {
+        return;
+      }
+      await handleFeishuMessage({
         cfg,
         event,
         botOpenId: botOpenIds.get(accountId),
@@ -266,6 +272,7 @@ function registerEventHandlers(
         accountId,
         processingClaimHeld: true,
       });
+    };
     await enqueue(chatId, task);
   };
   const resolveSenderDebounceId = (event: FeishuMessageEvent): string | undefined => {
@@ -332,7 +339,7 @@ function registerEventHandlers(
         return;
       }
       if (entries.length === 1) {
-        await dispatchFeishuMessage(last);
+        await dispatchFeishuMessage(last, { checkDedup: true });
         return;
       }
       const dedupedEntries = dedupeFeishuDebounceEntriesByMessageId(entries);
