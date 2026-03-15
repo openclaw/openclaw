@@ -243,6 +243,52 @@ describe("runHeartbeatOnce ack handling", () => {
     });
   });
 
+  it("interpolates responsePrefix template variables for heartbeat alert replies", async () => {
+    await withTempTelegramHeartbeatSandbox(async ({ tmpDir, storePath, replySpy }) => {
+      const cfg = createHeartbeatConfig({
+        tmpDir,
+        storePath,
+        heartbeat: { every: "5m", target: "telegram" },
+        channels: {
+          telegram: {
+            token: "test-token",
+            allowFrom: ["*"],
+            heartbeat: { showOk: false },
+          },
+        },
+        messages: { responsePrefix: "[{model}]" },
+      });
+
+      await seedMainSessionStore(storePath, cfg, {
+        lastChannel: "telegram",
+        lastProvider: "telegram",
+        lastTo: TELEGRAM_GROUP,
+      });
+
+      replySpy.mockImplementation(async (_ctx, opts) => {
+        opts?.onModelSelected?.({
+          provider: "google",
+          model: "gemini-2.5-flash",
+          thinkLevel: "low",
+        });
+        return { text: "Check complete" };
+      });
+
+      const sendTelegram = createMessageSendSpy();
+      await runHeartbeatOnce({
+        cfg,
+        deps: makeTelegramDeps({ sendTelegram }),
+      });
+
+      expect(sendTelegram).toHaveBeenCalledTimes(1);
+      expect(sendTelegram).toHaveBeenCalledWith(
+        TELEGRAM_GROUP,
+        "[gemini-2.5-flash] Check complete",
+        expect.any(Object),
+      );
+    });
+  });
+
   it("skips heartbeat LLM calls when visibility disables all output", async () => {
     await withTempHeartbeatSandbox(async ({ tmpDir, storePath, replySpy }) => {
       const cfg = createWhatsAppHeartbeatConfig({
