@@ -255,6 +255,9 @@ export function loadSessionStore(
 
   applySessionStoreMigrations(store);
 
+  // Re-serialize after migrations so the cached string reflects migrated data.
+  const serializedStore = JSON.stringify(store);
+
   // Cache the result if caching is enabled
   if (!opts.skipCache && isSessionStoreCacheEnabled()) {
     writeSessionStoreCache({
@@ -262,11 +265,11 @@ export function loadSessionStore(
       store,
       mtimeMs,
       sizeBytes: fileStat?.sizeBytes,
-      serialized: serializedFromDisk,
+      serialized: serializedStore,
     });
   }
 
-  return structuredClone(store);
+  return JSON.parse(serializedStore);
 }
 
 export function readSessionUpdatedAt(params: {
