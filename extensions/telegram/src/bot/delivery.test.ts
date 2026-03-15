@@ -164,6 +164,36 @@ describe("deliverReplies", () => {
     expect(sendMessage).not.toHaveBeenCalled();
   });
 
+  it("sends text when payload contains both sticker and text", async () => {
+    const runtime = createRuntime(false);
+    const sendMessage = vi.fn().mockResolvedValue({ message_id: 1, chat: { id: "123" } });
+
+    await deliverWith({
+      replies: [{ text: "hello", sticker: { raw: "446:1988" } }],
+      runtime,
+      bot: createBot({ sendMessage }),
+    });
+
+    expect(runtime.error).not.toHaveBeenCalled();
+    expect(sendMessage).toHaveBeenCalledTimes(1);
+    expect(sendMessage.mock.calls[0]?.[1]).toBe("hello");
+  });
+
+  it("keeps normal text delivery behavior", async () => {
+    const runtime = createRuntime(false);
+    const sendMessage = vi.fn().mockResolvedValue({ message_id: 2, chat: { id: "123" } });
+
+    await deliverWith({
+      replies: [{ text: "plain text" }],
+      runtime,
+      bot: createBot({ sendMessage }),
+    });
+
+    expect(runtime.error).not.toHaveBeenCalled();
+    expect(sendMessage).toHaveBeenCalledTimes(1);
+    expect(sendMessage.mock.calls[0]?.[1]).toBe("plain text");
+  });
+
   it("skips malformed replies and continues with valid entries", async () => {
     const runtime = createRuntime(false);
     const sendMessage = vi.fn().mockResolvedValue({ message_id: 1, chat: { id: "123" } });

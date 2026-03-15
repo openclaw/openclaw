@@ -208,6 +208,38 @@ describe("deliverLineAutoReply", () => {
   });
 
   describe("sticker delivery", () => {
+    it.each([
+      {
+        name: "single directive sticker",
+        payload: { text: "ありがとう！", sticker: { raw: "446:1988" } },
+        expected: { packageId: "446", stickerId: "1988" },
+      },
+      {
+        name: "japanese text with sticker",
+        payload: { text: "おはよう！", sticker: { raw: "8515:16581242" } },
+        expected: { packageId: "8515", stickerId: "16581242" },
+      },
+      {
+        name: "alternative sticker package",
+        payload: { text: "テスト", sticker: { raw: "1070:17844" } },
+        expected: { packageId: "1070", stickerId: "17844" },
+      },
+    ])("sends sticker-only and drops text for $name", async ({ payload, expected }) => {
+      const { deps, replyMessageLine, pushMessagesLine } = createDeps();
+      await deliverLineAutoReply({
+        ...baseDeliveryParams,
+        payload,
+        lineData: {},
+        deps,
+      });
+      expect(replyMessageLine).toHaveBeenCalledWith(
+        "token",
+        [{ type: "sticker", packageId: expected.packageId, stickerId: expected.stickerId }],
+        { accountId: "acc" },
+      );
+      expect(pushMessagesLine).not.toHaveBeenCalled();
+    });
+
     it("sends explicit error text when sticker-only payload is invalid", async () => {
       const { deps, replyMessageLine, pushMessagesLine } = createDeps();
 
@@ -281,6 +313,24 @@ describe("deliverLineAutoReply", () => {
       expect(pushMessagesLine).not.toHaveBeenCalled();
     });
 
+    it.each(["abc", "446", "446:1988:extra"])(
+      "sends invalid-format error for sticker-only payload: %s",
+      async (raw) => {
+        const { deps, replyMessageLine } = createDeps();
+        await deliverLineAutoReply({
+          ...baseDeliveryParams,
+          payload: { sticker: { raw } },
+          lineData: {},
+          deps,
+        });
+        expect(replyMessageLine).toHaveBeenCalledWith(
+          "token",
+          [{ type: "text", text: "[Sticker send error: invalid sticker format]" }],
+          { accountId: "acc" },
+        );
+      },
+    );
+
     it("sends text normally when no sticker", async () => {
       const { deps, replyMessageLine } = createDeps();
 
@@ -332,6 +382,71 @@ describe("deliverLineAutoReply", () => {
       );
     });
 
+    it("falls back to push sticker when valid sticker reply fails", async () => {
+      const failReplyMock = vi.fn(async () => {
+        throw new Error("LINE API failure");
+      });
+      const { deps, pushMessagesLine } = createDeps({
+        replyMessageLine: failReplyMock as LineAutoReplyDeps["replyMessageLine"],
+      });
+
+      await deliverLineAutoReply({
+        ...baseDeliveryParams,
+        payload: { sticker: { raw: "446:1988" } },
+        lineData: {},
+        deps,
+      });
+
+      expect(pushMessagesLine).toHaveBeenCalledWith(
+        "line:user:1",
+        [{ type: "sticker", packageId: "446", stickerId: "1988" }],
+        { accountId: "acc" },
+      );
+    });
+
+    it("handles 0:0 by falling back to push sticker when reply fails", async () => {
+      const failReplyMock = vi.fn(async () => {
+        throw new Error("LINE invalid sticker id");
+      });
+      const { deps, pushMessagesLine } = createDeps({
+        replyMessageLine: failReplyMock as LineAutoReplyDeps["replyMessageLine"],
+      });
+
+      await deliverLineAutoReply({
+        ...baseDeliveryParams,
+        payload: { sticker: { raw: "0:0" } },
+        lineData: {},
+        deps,
+      });
+
+      expect(pushMessagesLine).toHaveBeenCalledWith(
+        "line:user:1",
+        [{ type: "sticker", packageId: "0", stickerId: "0" }],
+        { accountId: "acc" },
+      );
+    });
+
+    it("accepts very large numeric sticker ids", async () => {
+      const { deps, replyMessageLine } = createDeps();
+      await deliverLineAutoReply({
+        ...baseDeliveryParams,
+        payload: { sticker: { raw: "99999999999999:99999999999999" } },
+        lineData: {},
+        deps,
+      });
+      expect(replyMessageLine).toHaveBeenCalledWith(
+        "token",
+        [
+          {
+            type: "sticker",
+            packageId: "99999999999999",
+            stickerId: "99999999999999",
+          },
+        ],
+        { accountId: "acc" },
+      );
+    });
+
     it("sends sticker via lineData.sticker (channelData path)", async () => {
       const { deps, replyMessageLine } = createDeps();
 
@@ -344,6 +459,26 @@ describe("deliverLineAutoReply", () => {
 
       expect(replyMessageLine).toHaveBeenCalledWith(
         "token",
+        [{ type: "sticker", packageId: "446", stickerId: "1988" }],
+        { accountId: "acc" },
+      );
+    });
+
+    it("falls back to push sticker when lineData sticker reply fails", async () => {
+      const failReplyMock = vi.fn(async () => {
+        throw new Error("lineData sticker failed");
+      });
+      const { deps, pushMessagesLine } = createDeps({
+        replyMessageLine: failReplyMock as LineAutoReplyDeps["replyMessageLine"],
+      });
+      await deliverLineAutoReply({
+        ...baseDeliveryParams,
+        payload: {},
+        lineData: { sticker: { packageId: "446", stickerId: "1988" } },
+        deps,
+      });
+      expect(pushMessagesLine).toHaveBeenCalledWith(
+        "line:user:1",
         [{ type: "sticker", packageId: "446", stickerId: "1988" }],
         { accountId: "acc" },
       );

@@ -24,8 +24,16 @@ describe("parseLineStickerRaw", () => {
     expect(parseLineStickerRaw("abc:123")).toBeUndefined();
   });
 
+  it("returns undefined for plain alpha token", () => {
+    expect(parseLineStickerRaw("abc")).toBeUndefined();
+  });
+
   it("returns undefined for non-numeric stickerId", () => {
     expect(parseLineStickerRaw("123:abc")).toBeUndefined();
+  });
+
+  it("returns undefined for mixed numeric/non-numeric pair", () => {
+    expect(parseLineStickerRaw("446:abc")).toBeUndefined();
   });
 
   it("returns undefined for three tokens", () => {
@@ -42,5 +50,16 @@ describe("parseLineStickerRaw", () => {
 
   it("returns undefined when stickerId is empty", () => {
     expect(parseLineStickerRaw("446:")).toBeUndefined();
+  });
+
+  it("returns undefined for extra separators", () => {
+    expect(parseLineStickerRaw("446:1988:extra")).toBeUndefined();
+  });
+
+  it("parses very large numeric ids", () => {
+    expect(parseLineStickerRaw("99999999999999:99999999999999")).toEqual({
+      packageId: "99999999999999",
+      stickerId: "99999999999999",
+    });
   });
 });

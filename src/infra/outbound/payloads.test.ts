@@ -332,6 +332,27 @@ describe("normalizeReplyPayloadsForDelivery", () => {
       },
     ]);
   });
+
+  it("normalizes mixed text+sticker directive while preserving parsed sticker", () => {
+    expect(
+      normalizeReplyPayloadsForDelivery([
+        {
+          text: "ありがとう！\nSTICKER:446:1988",
+        },
+      ]),
+    ).toEqual([
+      {
+        text: "ありがとう！",
+        sticker: { raw: "446:1988" },
+        replyToCurrent: false,
+        replyToTag: false,
+        audioAsVoice: false,
+        mediaUrl: undefined,
+        mediaUrls: undefined,
+        replyToId: undefined,
+      },
+    ]);
+  });
 });
 
 describe("normalizeOutboundPayloadsForJson", () => {

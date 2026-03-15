@@ -39,6 +39,34 @@ describe("isRenderablePayload", () => {
   it("returns true for sticker-only payload", () => {
     expect(isRenderablePayload({ sticker: { raw: "446:1988" } })).toBe(true);
   });
+
+  it("returns true for empty text with sticker payload", () => {
+    expect(isRenderablePayload({ text: "", sticker: { raw: "446:1988" } })).toBe(true);
+  });
+
+  it("returns false for empty payload", () => {
+    expect(isRenderablePayload({})).toBe(false);
+  });
+
+  it("returns true for text-only payload", () => {
+    expect(isRenderablePayload({ text: "hello" })).toBe(true);
+  });
+
+  it("returns true for media-only payload", () => {
+    expect(isRenderablePayload({ mediaUrl: "https://example.com/a.png" })).toBe(true);
+  });
+
+  it("returns true for audioAsVoice payload", () => {
+    expect(isRenderablePayload({ audioAsVoice: true })).toBe(true);
+  });
+
+  it("returns true for channelData-only payload", () => {
+    expect(
+      isRenderablePayload({
+        channelData: { line: { flexMessage: { altText: "Card", contents: {} } } },
+      }),
+    ).toBe(true);
+  });
 });
 
 describe("filterMessagingToolMediaDuplicates", () => {

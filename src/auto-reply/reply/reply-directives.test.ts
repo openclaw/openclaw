@@ -24,8 +24,19 @@ describe("parseReplyDirectives - sticker directive", () => {
     expect(result.sticker).toEqual({ raw: "446:1988" });
   });
 
+  it("handles title-case Sticker directive", () => {
+    const result = parseReplyDirectives("テスト\nSticker:446:1988");
+    expect(result.sticker).toEqual({ raw: "446:1988" });
+  });
+
   it("keeps empty STICKER: directive as text", () => {
     const result = parseReplyDirectives("テスト\nSTICKER:");
+    expect(result.sticker).toBeUndefined();
+    expect(result.text).toBe("テスト\nSTICKER:");
+  });
+
+  it("keeps whitespace-only STICKER payload as text", () => {
+    const result = parseReplyDirectives("テスト\nSTICKER:   ");
     expect(result.sticker).toBeUndefined();
     expect(result.text).toBe("テスト\nSTICKER:");
   });
@@ -59,5 +70,37 @@ describe("parseReplyDirectives - sticker directive", () => {
     expect(result.sticker).toEqual({ raw: "446:1988" });
     expect(result.mediaUrls).toContain("https://example.com/img.png");
     expect(result.text).toBe("テスト");
+  });
+
+  it("coexists with reply_to directive", () => {
+    const result = parseReplyDirectives("テスト\n[[reply_to:msg123]]\nSTICKER:446:1988");
+    expect(result.sticker).toEqual({ raw: "446:1988" });
+    expect(result.replyToId).toBe("msg123");
+    expect(result.replyToTag).toBe(true);
+    expect(result.text).toBe("テスト");
+  });
+
+  it("parses sticker when MEDIA appears after sticker", () => {
+    const result = parseReplyDirectives(
+      "STICKER:446:1988\nMEDIA:https://example.com/img.png\nテスト",
+    );
+    expect(result.sticker).toEqual({ raw: "446:1988" });
+    expect(result.mediaUrls).toEqual(["https://example.com/img.png"]);
+    expect(result.text).toBe("テスト");
+  });
+
+  it("retains text and picks only the first sticker in mixed content", () => {
+    const result = parseReplyDirectives("STICKER:446:1988\n通常テキスト\nSTICKER:789:10858");
+    expect(result.sticker).toEqual({ raw: "446:1988" });
+    expect(result.text).toBe("通常テキスト");
+  });
+
+  it.each([
+    { input: "STICKER:abc", expectedRaw: "abc" },
+    { input: "STICKER:446", expectedRaw: "446" },
+    { input: "STICKER:446:1988:extra", expectedRaw: "446:1988:extra" },
+  ])("keeps raw sticker token as-is for invalid LINE formats: $input", ({ input, expectedRaw }) => {
+    const result = parseReplyDirectives(input);
+    expect(result.sticker).toEqual({ raw: expectedRaw });
   });
 });
