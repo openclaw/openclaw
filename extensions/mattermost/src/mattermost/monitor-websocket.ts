@@ -23,11 +23,16 @@ export type MattermostEventPayload = {
 };
 
 export type MattermostWebSocketLike = {
+  readyState: number;
+  OPEN: number;
   on(event: "open", listener: () => void): void;
   on(event: "message", listener: (data: WebSocket.RawData) => void | Promise<void>): void;
   on(event: "close", listener: (code: number, reason: Buffer) => void): void;
   on(event: "error", listener: (err: unknown) => void): void;
+  once(event: string, listener: (...args: unknown[]) => void): void;
+  removeListener(event: string, listener: (...args: unknown[]) => void): void;
   send(data: string): void;
+  ping(): void;
   close(): void;
   terminate(): void;
 };
@@ -107,6 +112,38 @@ export function createMattermostConnectOnce(
     const onAbort = () => ws.terminate();
     opts.abortSignal?.addEventListener("abort", onAbort, { once: true });
 
+    const PING_INTERVAL_MS = 30_000;
+    const PONG_TIMEOUT_MS = 10_000;
+    let pingTimer: ReturnType<typeof setInterval> | undefined;
+
+    const startPingKeepAlive = () => {
+      pingTimer = setInterval(() => {
+        if (ws.readyState !== ws.OPEN) {
+          return;
+        }
+        let pongReceived = false;
+        const onPong = () => {
+          pongReceived = true;
+        };
+        ws.once("pong", onPong);
+        ws.ping();
+        setTimeout(() => {
+          ws.removeListener("pong", onPong);
+          if (!pongReceived && ws.readyState === ws.OPEN) {
+            opts.runtime.error?.("mattermost: pong timeout, closing connection");
+            ws.terminate();
+          }
+        }, PONG_TIMEOUT_MS);
+      }, PING_INTERVAL_MS);
+    };
+
+    const stopPingKeepAlive = () => {
+      if (pingTimer !== undefined) {
+        clearInterval(pingTimer);
+        pingTimer = undefined;
+      }
+    };
+
     try {
       return await new Promise<void>((resolve, reject) => {
         let opened = false;
@@ -116,6 +153,7 @@ export function createMattermostConnectOnce(
             return;
           }
           settled = true;
+          stopPingKeepAlive();
           resolve();
         };
         const rejectOnce = (error: Error) => {
@@ -123,6 +161,7 @@ export function createMattermostConnectOnce(
             return;
           }
           settled = true;
+          stopPingKeepAlive();
           reject(error);
         };
 
@@ -140,6 +179,7 @@ export function createMattermostConnectOnce(
               data: { token: opts.botToken },
             }),
           );
+          startPingKeepAlive();
         });
 
         ws.on("message", async (data) => {
