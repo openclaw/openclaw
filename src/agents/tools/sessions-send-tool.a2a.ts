@@ -128,6 +128,9 @@ export async function runSessionsSendA2AFlow(params: {
         currentSessionKey = nextSessionKey;
         nextSessionKey = swap;
       }
+      // Ensure all queued turn hooks complete before the announce step,
+      // so users see intermediate turns before the final conclusion.
+      await _hookChain;
     }
 
     const announcePrompt = buildAgentToAgentAnnounceContext({
