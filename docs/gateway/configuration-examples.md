@@ -93,6 +93,7 @@ Save to `~/.openclaw/openclaw.json` and you can DM the bot from that number.
   // Logging
   logging: {
     level: "info",
+    dir: "/tmp/openclaw",
     file: "/tmp/openclaw/openclaw.log",
     consoleLevel: "info",
     consoleStyle: "pretty",

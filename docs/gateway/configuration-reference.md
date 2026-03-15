@@ -2819,6 +2819,7 @@ Notes:
 {
   logging: {
     level: "info",
+    dir: "/tmp/openclaw",
     file: "/tmp/openclaw/openclaw.log",
     consoleLevel: "info",
     consoleStyle: "pretty", // pretty | compact | json
@@ -2829,7 +2830,8 @@ Notes:
 ```
 
 - Default log file: `/tmp/openclaw/openclaw-YYYY-MM-DD.log`.
-- Set `logging.file` for a stable path.
+- Set `logging.dir` to change where daily rolling logs are written.
+- Set `logging.file` for an exact stable path. `logging.file` overrides `logging.dir`.
 - `consoleLevel` bumps to `debug` when `--verbose`.
 
 ---
