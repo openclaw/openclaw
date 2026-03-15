@@ -32,6 +32,28 @@ if rewards_provider_should_collect_if_available 'merkl reward campaign phantom s
   exit 1
 fi
 HAS_LIB_REWARDS_PROVIDER_EVIDENCE=1
+BETTERSTACK_CONTEXT='GraphQL vaultV2ByAddress APY null for address 0xE18d7f0C6aaba1E600fF680459a357C3B3CfdB34 sentryEventId=abc123'
+alert_rows=""
+event_rows=""
+log_signal_rows=""
+pod_rows=""
+container_state_rows=""
+rca_summary=""
+rca_root_cause=""
+collect_phase2_single_vault_graphql_context_if_available
+test "${single_vault_graphql_mode:-0}" = '1'
+test "${exact_query_replay:-0}" = '0'
+test "${job_path_simulation:-0}" = '0'
+case "${single_vault_graphql_context_note:-}" in
+  *"exact query replay"* )
+    ;;
+  *)
+    exit 1
+    ;;
+esac
+BETTERSTACK_CONTEXT='indexer lag on all markets without query artifact'
+collect_phase2_single_vault_graphql_context_if_available
+test "${single_vault_graphql_mode:-0}" = '0'
 case "$(sanitize_signal_line 'artifact Authorization: Bearer secret/token+123=')" in
   *'<redacted>'*)
     ;;
@@ -306,6 +328,16 @@ test -n "$CAP_50_LINE"
 test "$CACHE_WRITE_LINE" -gt "$CAP_60_LINE"
 test "$CACHE_WRITE_LINE" -gt "$CAP_50_LINE"
 test "$CACHE_WRITE_GUARD_LINE" -le "$CACHE_WRITE_LINE"
+
+SINGLE_VAULT_MODE_LINE="$(grep -n 'single_vault_graphql_mode=${single_vault_graphql_mode:-0}' "$TARGET_SCRIPT" | head -1 | cut -d: -f1)"
+EXACT_QUERY_LINE="$(grep -n 'exact_query_replay=${exact_query_replay:-0}' "$TARGET_SCRIPT" | head -1 | cut -d: -f1)"
+JOB_PATH_LINE="$(grep -n 'job_path_simulation=${job_path_simulation:-0}' "$TARGET_SCRIPT" | head -1 | cut -d: -f1)"
+test -n "$SINGLE_VAULT_MODE_LINE"
+test -n "$EXACT_QUERY_LINE"
+test -n "$JOB_PATH_LINE"
+test "$SINGLE_VAULT_MODE_LINE" -lt "$CACHE_WRITE_LINE"
+test "$EXACT_QUERY_LINE" -lt "$CACHE_WRITE_LINE"
+test "$JOB_PATH_LINE" -lt "$CACHE_WRITE_LINE"
 
 rca_result_json='{"merged_confidence":85,"degradation_note":"existing","hypotheses":[{"confidence":85}]}'
 rca_confidence=85
