@@ -21,6 +21,12 @@ import {
 import { formatConfigIssueLines } from "../config/issue-format.js";
 import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
 import { resolveMainSessionKey } from "../config/sessions.js";
+import {
+  registerInternalHook,
+  unregisterInternalHook,
+  isMessageReceivedEvent,
+  type InternalHookHandler,
+} from "../hooks/internal-hooks.js";
 import { clearAgentRunContext, onAgentEvent } from "../infra/agent-events.js";
 import {
   ensureControlUiAssetsBuilt,
@@ -645,6 +651,7 @@ export async function startGatewayServer(
   const broadcastVoiceWakeChanged = (triggers: string[]) => {
     broadcast("voicewake.changed", { triggers }, { dropIfSlow: true });
   };
+
   const hasMobileNodeConnected = () => hasConnectedMobileNode(nodeRegistry);
   applyGatewayLaneConcurrency(cfgAtStart);
 
@@ -945,6 +952,29 @@ export async function startGatewayServer(
     }));
   }
 
+  // Broadcast inbound channel messages to Control UI (chat.inbound).
+  // Registered AFTER startGatewaySidecars because it calls clearInternalHooks().
+  const chatInboundHookHandler: InternalHookHandler = async (event) => {
+    if (!isMessageReceivedEvent(event)) {
+      return;
+    }
+    const { channelId } = event.context;
+    // Skip webchat-originated messages — the UI already knows about those
+    if (channelId === "webchat") {
+      return;
+    }
+    broadcast(
+      "chat.inbound",
+      {
+        sessionKey: event.sessionKey,
+        channelId,
+        timestamp: event.timestamp.toISOString(),
+      },
+      { dropIfSlow: true },
+    );
+  };
+  registerInternalHook("message:received", chatInboundHookHandler);
+
   // Run gateway_start plugin hook (fire-and-forget)
   if (!minimalTestGateway) {
     const hookRunner = getGlobalHookRunner();
@@ -1082,6 +1112,7 @@ export async function startGatewayServer(
       authRateLimiter?.dispose();
       browserAuthRateLimiter.dispose();
       channelHealthMonitor?.stop();
+      unregisterInternalHook("message:received", chatInboundHookHandler);
       clearSecretsRuntimeSnapshot();
       await close(opts);
     },

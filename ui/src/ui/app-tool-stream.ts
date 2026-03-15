@@ -405,6 +405,40 @@ export function handleAgentEvent(host: ToolStreamHost, payload?: AgentEventPaylo
     return;
   }
 
+  // Stream assistant replies and thinking to the chat UI so channel-routed
+  // messages (Telegram, Discord, etc.) get real-time display. These only
+  // arrive as agent events, not chat events.
+  if (
+    (payload.stream === "assistant" || payload.stream === "thinking") &&
+    (host as unknown as { tab?: string }).tab === "chat" &&
+    payload.sessionKey === host.sessionKey &&
+    (!host.chatRunId || host.chatRunId === payload.runId)
+  ) {
+    // Respect the user's "show thinking" setting
+    const settings = (host as unknown as { settings?: { chatShowThinking?: boolean } }).settings;
+    if (payload.stream === "thinking" && settings?.chatShowThinking === false) {
+      return;
+    }
+    const text = typeof payload.data?.text === "string" ? payload.data.text : null;
+    // Filter NO_REPLY sentinel — matches isSilentReplyStream in controllers/chat.ts
+    if (text && !/^\s*NO_REPLY\s*$/.test(text)) {
+      // Detect new paragraph: if accumulated text is shorter than current
+      // chatStream, the agent started a new thinking/reply segment. Commit
+      // the previous segment so it renders above the new streaming text.
+      if (host.chatStream && text.length < host.chatStream.length) {
+        host.chatStreamSegments = [
+          ...host.chatStreamSegments,
+          { text: host.chatStream, ts: Date.now() },
+        ];
+      }
+      host.chatStream = text;
+      if (!host.chatStreamStartedAt) {
+        host.chatStreamStartedAt = Date.now();
+      }
+    }
+    return;
+  }
+
   if (payload.stream !== "tool") {
     return;
   }

@@ -45,6 +45,58 @@ import type {
   UpdateAvailable,
 } from "./types.ts";
 
+// Debounced chat history reload for chat.inbound events.
+// Two-phase refresh: first at 500ms (optimistic), second at 3500ms (guaranteed).
+// The inbound message may not be persisted to session history yet when the
+// WebSocket event arrives, so the second refresh ensures we catch it.
+// Note: module-level timers are fine — Control UI maintains a single gateway connection.
+let _chatInboundTimerFast: ReturnType<typeof setTimeout> | null = null;
+let _chatInboundTimerSlow: ReturnType<typeof setTimeout> | null = null;
+
+function clearChatInboundTimers(): void {
+  if (_chatInboundTimerFast) {
+    clearTimeout(_chatInboundTimerFast);
+    _chatInboundTimerFast = null;
+  }
+  if (_chatInboundTimerSlow) {
+    clearTimeout(_chatInboundTimerSlow);
+    _chatInboundTimerSlow = null;
+  }
+}
+
+function debouncedLoadChatHistory(host: GatewayHost, triggerSessionKey: string): void {
+  clearChatInboundTimers();
+  _chatInboundTimerFast = setTimeout(() => {
+    _chatInboundTimerFast = null;
+    // Skip if user has switched to a different session since the event
+    if (host.sessionKey !== triggerSessionKey) {
+      return;
+    }
+    // Skip if an agent run is actively streaming — reload would clear chatStream
+    if (
+      host.chatRunId ||
+      (host as unknown as { chatStreamStartedAt?: number | null }).chatStreamStartedAt
+    ) {
+      return;
+    }
+    void loadChatHistory(host as unknown as OpenClawApp);
+    // Second refresh: wait for message persistence to complete.
+    _chatInboundTimerSlow = setTimeout(() => {
+      _chatInboundTimerSlow = null;
+      if (host.sessionKey !== triggerSessionKey) {
+        return;
+      }
+      if (
+        host.chatRunId ||
+        (host as unknown as { chatStreamStartedAt?: number | null }).chatStreamStartedAt
+      ) {
+        return;
+      }
+      void loadChatHistory(host as unknown as OpenClawApp);
+    }, 3000);
+  }, 500);
+}
+
 function isGenericBrowserFetchFailure(message: string): boolean {
   return /^(?:typeerror:\s*)?(?:fetch failed|failed to fetch)$/i.test(message.trim());
 }
@@ -337,6 +389,22 @@ function handleGatewayEventUnsafe(host: GatewayHost, evt: GatewayEventFrame) {
       host as unknown as Parameters<typeof handleAgentEvent>[0],
       evt.payload as AgentEventPayload | undefined,
     );
+    // Reload history when agent run ends so both user inbound message
+    // and assistant reply appear in the UI (channel messages only emit
+    // agent events, not chat events).
+    const agentPayload = evt.payload as AgentEventPayload | undefined;
+    if (
+      agentPayload?.stream === "lifecycle" &&
+      agentPayload.data?.phase === "end" &&
+      host.tab === "chat" &&
+      agentPayload.sessionKey === host.sessionKey &&
+      (!host.chatRunId || host.chatRunId === agentPayload.runId)
+    ) {
+      // Clear streaming state only after history loads successfully to avoid
+      // a blank UI if the reload races ahead of durable writes or fails.
+      // On failure, chatStream is preserved as a graceful degradation.
+      void loadChatHistory(host as unknown as OpenClawApp);
+    }
     return;
   }
 
@@ -368,6 +436,14 @@ function handleGatewayEventUnsafe(host: GatewayHost, evt: GatewayEventFrame) {
     (host as GatewayHostWithShutdownMessage).pendingShutdownMessage = shutdownMessage;
     host.lastError = shutdownMessage;
     host.lastErrorCode = null;
+    return;
+  }
+
+  if (evt.event === "chat.inbound") {
+    const payload = evt.payload as { sessionKey?: string } | undefined;
+    if (host.tab === "chat" && payload?.sessionKey && payload.sessionKey === host.sessionKey) {
+      debouncedLoadChatHistory(host, payload.sessionKey);
+    }
     return;
   }
 
