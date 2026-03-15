@@ -6,12 +6,17 @@ import {
 } from "../providers/github-copilot-token.js";
 import { isRecord } from "../utils.js";
 import { normalizeOptionalSecretInput } from "../utils/normalize-secret-input.js";
-import { ensureAuthProfileStore, listProfilesForProvider } from "./auth-profiles.js";
+import {
+  ensureAuthProfileStore,
+  listProfilesForProvider,
+  resolveAuthProfileOrder,
+} from "./auth-profiles.js";
 import { discoverBedrockModels } from "./bedrock-discovery.js";
 import {
   buildCloudflareAiGatewayModelDefinition,
   resolveCloudflareAiGatewayBaseUrl,
 } from "./cloudflare-ai-gateway.js";
+import { findNormalizedProviderValue } from "./model-selection.js";
 import {
   buildHuggingfaceProvider,
   buildKilocodeProviderWithDiscovery,
@@ -879,6 +884,7 @@ export async function resolveImplicitProviders(
   if (!providers["github-copilot"]) {
     const implicitCopilot = await resolveImplicitCopilotProvider({
       agentDir: params.agentDir,
+      config: params.config,
       env,
     });
     if (implicitCopilot) {
@@ -910,6 +916,7 @@ export async function resolveImplicitProviders(
 
 export async function resolveImplicitCopilotProvider(params: {
   agentDir: string;
+  config?: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
 }): Promise<ProviderConfig | null> {
   const env = params.env ?? process.env;
@@ -926,9 +933,20 @@ export async function resolveImplicitCopilotProvider(params: {
 
   let selectedGithubToken = githubToken;
   if (!selectedGithubToken && hasProfile) {
-    // Use the first available profile as a default for discovery (it will be
-    // re-resolved per-run by the embedded runner).
-    const profileId = listProfilesForProvider(authStore, "github-copilot")[0];
+    // Respect auth.order when selecting the default Copilot profile instead of
+    // blindly taking the first entry from the store (#46031).
+    // Only use ordered selection when auth.order is explicitly configured to
+    // avoid changing the insertion-order default for users without auth.order.
+    const hasExplicitOrder =
+      !!findNormalizedProviderValue(authStore.order, "github-copilot") ||
+      !!findNormalizedProviderValue(params.config?.auth?.order, "github-copilot");
+    const profileId = hasExplicitOrder
+      ? (resolveAuthProfileOrder({
+          cfg: params.config,
+          store: authStore,
+          provider: "github-copilot",
+        })[0] ?? listProfilesForProvider(authStore, "github-copilot")[0])
+      : listProfilesForProvider(authStore, "github-copilot")[0];
     const profile = profileId ? authStore.profiles[profileId] : undefined;
     if (profile && profile.type === "token") {
       selectedGithubToken = profile.token?.trim() ?? "";
