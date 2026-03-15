@@ -30,7 +30,7 @@ export type ActiveWebListener = {
 
 let _currentListener: ActiveWebListener | null = null;
 
-const listeners = new Map<string, ActiveWebListener>();
+const listeners: Map<string, ActiveWebListener> = (globalThis as any).__openclaw_wa_listeners ??= new Map();
 
 export function resolveWebAccountId(accountId?: string | null): string {
   return (accountId ?? "").trim() || DEFAULT_ACCOUNT_ID;
