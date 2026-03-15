@@ -27,6 +27,47 @@ export type CronFailureDestinationConfig = {
   mode?: "announce" | "webhook";
 };
 
+/** A script to run at a cron lifecycle hook point. */
+export type CronHookEntry = {
+  /** Path to hook script (.cjs/.ts), workspace-relative or absolute. */
+  script: string;
+  /** Execution priority — lower numbers run first (default: 10). */
+  priority?: number;
+  /** Per-hook timeout in milliseconds (default: 10000). */
+  timeoutMs?: number;
+  /** Only run this hook when the filter criteria match. */
+  filter?: {
+    workflow?: string[];
+    jobId?: string[];
+    /** Match by job name (case-insensitive substring match). */
+    jobName?: string[];
+    agentId?: string[];
+  };
+};
+
+/**
+ * Lifecycle hook points for cron job execution:
+ * - `beforeRun`: fires before the job executes; may abort the job via `{ abort: true }`.
+ * - `afterComplete`: fires only when the job succeeds (status "ok").
+ * - `onFailure`: fires only when the job fails (status "error").
+ * - `afterRun`: always fires regardless of outcome (like a `finally` block),
+ *   including after `beforeRun` aborts. Use for cleanup, audit, or metrics.
+ */
+export type CronLifecycleHookPoint = "beforeRun" | "afterComplete" | "onFailure" | "afterRun";
+
+/** Global cron lifecycle hooks registered in openclaw.json cron section. */
+export type CronHooksConfig = {
+  [K in CronLifecycleHookPoint]?: CronHookEntry[];
+};
+
+/** Per-job hook overrides stored in jobs.json. */
+export type CronJobHooksConfig = {
+  [K in CronLifecycleHookPoint]?: string[];
+} & {
+  /** Hook points for which global hooks should be skipped. */
+  skipGlobal?: CronLifecycleHookPoint[];
+};
+
 export type CronConfig = {
   enabled?: boolean;
   store?: string;
@@ -57,4 +98,6 @@ export type CronConfig = {
   failureAlert?: CronFailureAlertConfig;
   /** Default destination for failure notifications across all cron jobs. */
   failureDestination?: CronFailureDestinationConfig;
+  /** Lifecycle hooks that run at defined points during cron job execution. */
+  hooks?: CronHooksConfig;
 };

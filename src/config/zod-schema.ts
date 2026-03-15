@@ -203,6 +203,23 @@ const TalkSchema = z
     }
   });
 
+const CronHookEntrySchema = z
+  .object({
+    script: z.string(),
+    priority: z.number().int().optional(),
+    timeoutMs: z.number().int().positive().optional(),
+    filter: z
+      .object({
+        workflow: z.array(z.string()).optional(),
+        jobId: z.array(z.string()).optional(),
+        jobName: z.array(z.string()).optional(),
+        agentId: z.array(z.string()).optional(),
+      })
+      .strict()
+      .optional(),
+  })
+  .strict();
+
 export const OpenClawSchema = z
   .object({
     $schema: z.string().optional(),
@@ -533,6 +550,15 @@ export const OpenClawSchema = z
             to: z.string().optional(),
             accountId: z.string().optional(),
             mode: z.enum(["announce", "webhook"]).optional(),
+          })
+          .strict()
+          .optional(),
+        hooks: z
+          .object({
+            beforeRun: z.array(CronHookEntrySchema).optional(),
+            afterComplete: z.array(CronHookEntrySchema).optional(),
+            onFailure: z.array(CronHookEntrySchema).optional(),
+            afterRun: z.array(CronHookEntrySchema).optional(),
           })
           .strict()
           .optional(),
