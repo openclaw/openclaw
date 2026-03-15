@@ -235,9 +235,10 @@ describe("executeSlashCommand directives", () => {
     const request = vi.fn(async (method: string, _payload?: unknown) => {
       if (method === "sessions.list") {
         return {
-          defaults: { model: "default-model" },
+          defaults: { model: "default-model", modelProvider: "anthropic" },
           sessions: [
             row("agent:main:main", {
+              modelProvider: "openai",
               model: "gpt-4.1-mini",
             }),
           ],
@@ -245,7 +246,10 @@ describe("executeSlashCommand directives", () => {
       }
       if (method === "models.list") {
         return {
-          models: [{ id: "gpt-4.1-mini" }, { id: "gpt-4.1" }],
+          models: [
+            { id: "gpt-4.1-mini", provider: "openai" },
+            { id: "gpt-4.1", provider: "openai" },
+          ],
         };
       }
       throw new Error(`unexpected method: ${method}`);
@@ -259,10 +263,37 @@ describe("executeSlashCommand directives", () => {
     );
 
     expect(result.content).toBe(
-      "**Current model:** `gpt-4.1-mini`\n**Available:** `gpt-4.1-mini`, `gpt-4.1`",
+      "**Current model:** `openai/gpt-4.1-mini`\n**Available:** `openai/gpt-4.1-mini`, `openai/gpt-4.1`",
     );
     expect(request).toHaveBeenNthCalledWith(1, "sessions.list", {});
     expect(request).toHaveBeenNthCalledWith(2, "models.list", {});
+  });
+
+  it("uses the resolved provider/model ref when /model succeeds", async () => {
+    const request = vi.fn(async (method: string, _payload?: unknown) => {
+      if (method === "sessions.patch") {
+        return {
+          ok: true,
+          key: "main",
+          resolved: { modelProvider: "kimi-coding", model: "k2p5" },
+        };
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+
+    const result = await executeSlashCommand(
+      { request } as unknown as GatewayBrowserClient,
+      "main",
+      "model",
+      "k2p5",
+    );
+
+    expect(result.content).toBe("Model set to `kimi-coding/k2p5`.");
+    expect(result.sessionPatch).toEqual({ model: "kimi-coding/k2p5" });
+    expect(request).toHaveBeenNthCalledWith(1, "sessions.patch", {
+      key: "main",
+      model: "k2p5",
+    });
   });
 
   it("resolves the legacy main alias for /usage", async () => {

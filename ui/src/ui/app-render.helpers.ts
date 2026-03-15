@@ -9,6 +9,7 @@ import { OpenClawApp } from "./app.ts";
 import { ChatState, loadChatHistory } from "./controllers/chat.ts";
 import { loadSessions } from "./controllers/sessions.ts";
 import { icons } from "./icons.ts";
+import { buildCanonicalModelRef, buildCanonicalModelRefFromEntry } from "./model-refs.ts";
 import { iconForTab, pathForTab, titleForTab, type Tab } from "./navigation.ts";
 import type { ThemeTransitionContext } from "./theme-transition.ts";
 import type { ThemeMode, ThemeName } from "./theme.ts";
@@ -531,14 +532,14 @@ function resolveModelOverrideValue(state: AppViewState): string {
   // No local override recorded yet — fall back to server data.
   const activeRow = resolveActiveSessionRow(state);
   if (activeRow) {
-    return typeof activeRow.model === "string" ? activeRow.model.trim() : "";
+    return buildCanonicalModelRef(activeRow.model, activeRow.modelProvider);
   }
   return "";
 }
 
 function resolveDefaultModelValue(state: AppViewState): string {
-  const model = state.sessionsResult?.defaults?.model;
-  return typeof model === "string" ? model.trim() : "";
+  const defaults = state.sessionsResult?.defaults;
+  return buildCanonicalModelRef(defaults?.model, defaults?.modelProvider);
 }
 
 function buildChatModelOptions(
@@ -563,7 +564,10 @@ function buildChatModelOptions(
 
   for (const entry of catalog) {
     const provider = entry.provider?.trim();
-    addOption(entry.id, provider ? `${entry.id} · ${provider}` : entry.id);
+    addOption(
+      buildCanonicalModelRefFromEntry(entry),
+      provider ? `${entry.id} · ${provider}` : entry.id,
+    );
   }
 
   if (currentOverride) {
