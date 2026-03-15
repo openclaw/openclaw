@@ -37,8 +37,10 @@ const PROVIDER_CAPABILITIES: Record<string, Partial<ProviderCapabilities>> = {
   },
   // kimi-coding natively supports Anthropic tool framing (input_schema);
   // converting to OpenAI format causes XML text fallback instead of tool_use blocks.
+  // Moonshot API cannot handle re-sent thinking signatures and crashes on turn 2+.
   "kimi-coding": {
     preserveAnthropicThinkingSignatures: false,
+    dropThinkingBlockModelHints: ["k2p5", "kimi-coding"],
   },
   mistral: {
     transcriptToolCallIdMode: "strict9",
