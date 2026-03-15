@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import { resolveBrowserConfig } from "../../browser/config.js";
 import {
   createBrowserControlContext,
   startBrowserControlServiceFromConfig,
@@ -6,6 +7,7 @@ import {
 import { applyBrowserProxyPaths, persistBrowserProxyFiles } from "../../browser/proxy-files.js";
 import { createBrowserRouteDispatcher } from "../../browser/routes/dispatcher.js";
 import { loadConfig } from "../../config/config.js";
+import { withTimeout } from "../../node-host/with-timeout.js";
 import { isNodeCommandAllowed, resolveNodeCommandAllowlist } from "../node-command-policy.js";
 import type { NodeSession } from "../node-registry.js";
 import { ErrorCodes, errorShape } from "../protocol/index.js";
@@ -38,6 +40,58 @@ function isPersistentBrowserProfileMutation(method: string, path: string): boole
     return true;
   }
   return method === "DELETE" && /^\/profiles\/[^/]+$/.test(normalizedPath);
+}
+
+const ABORT_AWARE_LOCAL_ACT_KINDS = new Set([
+  "click",
+  "type",
+  "press",
+  "hover",
+  "scrollIntoView",
+  "drag",
+  "select",
+  "fill",
+  "resize",
+  "wait",
+  "evaluate",
+  "close",
+]);
+
+function resolveRequestedProfileDriver(params: {
+  cfg: ReturnType<typeof loadConfig>;
+  query?: Record<string, unknown>;
+  body?: unknown;
+}): string | undefined {
+  const resolvedBrowser = resolveBrowserConfig(params.cfg.browser, params.cfg);
+  const profileName =
+    resolveRequestedProfile({ query: params.query, body: params.body }) ??
+    resolvedBrowser.defaultProfile;
+  if (!profileName) {
+    return undefined;
+  }
+  const profile = resolvedBrowser.profiles[profileName];
+  return typeof profile?.driver === "string" ? profile.driver : undefined;
+}
+
+function shouldWrapLocalBrowserRequestWithTimeout(params: {
+  cfg: ReturnType<typeof loadConfig>;
+  path: string;
+  query?: Record<string, unknown>;
+  body?: unknown;
+}) {
+  if (resolveRequestedProfileDriver(params) === "existing-session") {
+    return false;
+  }
+  const path = normalizeBrowserRequestPath(params.path);
+  if (path === "/navigate" || path === "/pdf") {
+    return true;
+  }
+  if (path !== "/act" || !params.body || typeof params.body !== "object") {
+    return false;
+  }
+  const kind =
+    "kind" in params.body && typeof params.body.kind === "string" ? params.body.kind.trim() : "";
+  return ABORT_AWARE_LOCAL_ACT_KINDS.has(kind);
 }
 
 function resolveRequestedProfile(params: {
@@ -275,12 +329,35 @@ export const browserHandlers: GatewayRequestHandlers = {
       return;
     }
 
-    const result = await dispatcher.dispatch({
-      method: methodRaw,
-      path,
-      query,
-      body,
-    });
+    const shouldApplyLocalTimeout =
+      timeoutMs !== undefined &&
+      shouldWrapLocalBrowserRequestWithTimeout({ cfg, path, query, body });
+
+    let result;
+    try {
+      result = shouldApplyLocalTimeout
+        ? await withTimeout(
+            async (signal) =>
+              await dispatcher.dispatch({
+                method: methodRaw,
+                path,
+                query,
+                body,
+                signal,
+              }),
+            timeoutMs,
+            "browser request",
+          )
+        : await dispatcher.dispatch({
+            method: methodRaw,
+            path,
+            query,
+            body,
+          });
+    } catch (err) {
+      respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, String(err)));
+      return;
+    }
 
     if (result.status >= 400) {
       const message =

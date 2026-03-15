@@ -281,7 +281,7 @@ describe("pw-tools-core", () => {
     expect(sessionMocks.refLocator).toHaveBeenCalledWith(page, "1");
     expect(scrollIntoViewIfNeeded).toHaveBeenCalledWith({ timeout: 20_000 });
   });
-  it("requires a ref for scrollIntoView", async () => {
+  it("requires a ref or selector for scrollIntoView", async () => {
     setPwToolsCoreCurrentRefLocator({ scrollIntoViewIfNeeded: vi.fn(async () => {}) });
     setPwToolsCoreCurrentPage({});
 
