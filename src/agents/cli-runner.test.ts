@@ -63,6 +63,47 @@ describe("runCliAgent with process supervisor", () => {
     requestHeartbeatNowMock.mockClear();
   });
 
+  it("does not inject hardcoded 'Tools are disabled' text into CLI arguments", async () => {
+    supervisorSpawnMock.mockResolvedValueOnce(
+      createManagedRun({
+        reason: "exit",
+        exitCode: 0,
+        exitSignal: null,
+        durationMs: 50,
+        stdout: "ok",
+        stderr: "",
+        timedOut: false,
+        noOutputTimedOut: false,
+      }),
+    );
+
+    await runCliAgent({
+      sessionId: "s1",
+      sessionFile: "/tmp/session.jsonl",
+      workspaceDir: "/tmp",
+      prompt: "Run: node script.mjs",
+      provider: "claude-cli",
+      model: "sonnet",
+      timeoutMs: 1_000,
+      runId: "run-no-tools-disabled",
+      extraSystemPrompt: "You are a helpful assistant.",
+    });
+
+    expect(supervisorSpawnMock).toHaveBeenCalledTimes(1);
+    const input = supervisorSpawnMock.mock.calls[0]?.[0] as {
+      argv?: string[];
+      input?: string;
+    };
+    // Use claude-cli because it defines systemPromptArg ("--append-system-prompt"),
+    // so the system prompt is serialized into argv. The codex-cli backend lacks
+    // systemPromptArg, meaning the prompt is dropped before reaching argv —
+    // making the assertion vacuous. See: openclaw/openclaw#44135
+    const allArgs = (input.argv ?? []).join("\n");
+    expect(allArgs).not.toContain("Tools are disabled in this session");
+    // Verify the user-supplied system prompt IS present (proves the arg path works)
+    expect(allArgs).toContain("You are a helpful assistant.");
+  });
+
   it("runs CLI through supervisor and returns payload", async () => {
     supervisorSpawnMock.mockResolvedValueOnce(
       createManagedRun({
