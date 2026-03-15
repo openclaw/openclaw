@@ -792,7 +792,7 @@ function renderSlashMenu(
   }
 
   return html`
-    <div class="slash-menu">
+    <div class="slash-menu" role="listbox" aria-label="Slash commands">
       ${sections}
       <div class="slash-menu-footer" aria-hidden="true">
         <kbd>↑↓</kbd> navigate

@@ -463,13 +463,12 @@ export function renderNode(params: {
           ${showLabel ? html`<label class="cfg-field__label">${label}</label>` : nothing}
           ${help ? html`<div class="cfg-field__help">${help}</div>` : nothing}
           ${renderTags(tags)}
-          <div class="cfg-segmented" role="radiogroup" aria-label=${label}>
+          <div class="cfg-segmented" role="group" aria-label=${label}>
             ${literals.map(
               (lit) => html`
               <button
                 type="button"
-                role="radio"
-                aria-checked=${
+                aria-pressed=${
                   // oxlint-disable typescript/no-base-to-string
                   lit === resolvedValue || String(lit) === String(resolvedValue)
                 }
@@ -548,13 +547,12 @@ export function renderNode(params: {
           ${showLabel ? html`<label class="cfg-field__label">${label}</label>` : nothing}
           ${help ? html`<div class="cfg-field__help">${help}</div>` : nothing}
           ${renderTags(tags)}
-          <div class="cfg-segmented" role="radiogroup" aria-label=${label}>
+          <div class="cfg-segmented" role="group" aria-label=${label}>
             ${options.map(
               (opt) => html`
               <button
                 type="button"
-                role="radio"
-                aria-checked=${opt === resolvedValue || String(opt) === String(resolvedValue)}
+                aria-pressed=${opt === resolvedValue || String(opt) === String(resolvedValue)}
                 class="cfg-segmented__btn ${opt === resolvedValue || String(opt) === String(resolvedValue) ? "active" : ""}"
                 ?disabled=${disabled}
                 @click=${() => onPatch(path, opt)}
