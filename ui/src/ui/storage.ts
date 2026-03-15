@@ -19,6 +19,19 @@ import { isSupportedLocale } from "../i18n/index.ts";
 import { inferBasePathFromPathname, normalizeBasePath } from "./navigation.ts";
 import { parseThemeSelection, type ThemeMode, type ThemeName } from "./theme.ts";
 
+function getEffectiveBasePath(): string {
+  const configured =
+    typeof window !== "undefined" &&
+    typeof window.__OPENCLAW_CONTROL_UI_BASE_PATH__ === "string" &&
+    window.__OPENCLAW_CONTROL_UI_BASE_PATH__.trim();
+  return configured ? normalizeBasePath(configured) : inferBasePathFromPathname(location.pathname);
+}
+
+function getStorageKey(basePath: string): string {
+  const normalized = normalizeBasePath(basePath);
+  return normalized ? `${KEY}:${normalized}` : KEY;
+}
+
 export type UiSettings = {
   gatewayUrl: string;
   token: string;
@@ -168,6 +181,8 @@ function persistSessionToken(gatewayUrl: string, token: string) {
 
 export function loadSettings(): UiSettings {
   const { pageUrl: pageDerivedUrl, effectiveUrl: defaultUrl } = deriveDefaultGatewayUrl();
+  const basePath = getEffectiveBasePath();
+  const storageKey = getStorageKey(basePath);
 
   const defaults: UiSettings = {
     gatewayUrl: defaultUrl,
@@ -186,7 +201,22 @@ export function loadSettings(): UiSettings {
   };
 
   try {
-    const raw = localStorage.getItem(KEY);
+    // Try reading from the basePath-specific key first
+    let raw = localStorage.getItem(storageKey);
+
+    // Migration: if no data in new key and basePath is non-empty, try legacy key
+    // Legacy data represents the last-accessed basePath in old versions (which had a single shared key).
+    // We migrate it to the first non-root basePath accessed after upgrade.
+    if (!raw && basePath && !localStorage.getItem(KEY + ":migrated")) {
+      raw = localStorage.getItem(KEY);
+      if (raw) {
+        // Copy old data to new key (preserve legacy key for root-path deployments)
+        localStorage.setItem(storageKey, raw);
+        // Mark migration as done to prevent migrating the same data to multiple basePaths
+        localStorage.setItem(KEY + ":migrated", "true");
+      }
+    }
+
     if (!raw) {
       return defaults;
     }
@@ -252,10 +282,12 @@ export function saveSettings(next: UiSettings) {
 
 function persistSettings(next: UiSettings) {
   persistSessionToken(next.gatewayUrl, next.token);
+  const basePath = getEffectiveBasePath();
+  const storageKey = getStorageKey(basePath);
   const scope = normalizeGatewayTokenScope(next.gatewayUrl);
   let existingSessionsByGateway: Record<string, ScopedSessionSelection> = {};
   try {
-    const raw = localStorage.getItem(KEY);
+    const raw = localStorage.getItem(storageKey);
     if (raw) {
       const parsed = JSON.parse(raw) as PersistedUiSettings;
       if (parsed.sessionsByGateway && typeof parsed.sessionsByGateway === "object") {
@@ -291,5 +323,5 @@ function persistSettings(next: UiSettings) {
     sessionsByGateway,
     ...(next.locale ? { locale: next.locale } : {}),
   };
-  localStorage.setItem(KEY, JSON.stringify(persisted));
+  localStorage.setItem(storageKey, JSON.stringify(persisted));
 }
