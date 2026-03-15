@@ -40,7 +40,6 @@ const OPENAI_GPT54_PRO_MODEL_ID = "gpt-5.4-pro";
 const OPENAI_CODEX_GPT53_MODEL_ID = "gpt-5.3-codex";
 const OPENAI_CODEX_GPT53_SPARK_MODEL_ID = "gpt-5.3-codex-spark";
 const OPENAI_CODEX_GPT54_MODEL_ID = "gpt-5.4";
-const NON_PI_NATIVE_MODEL_PROVIDERS = new Set(["kilocode"]);
 
 type SyntheticCatalogFallback = {
   provider: string;
@@ -116,9 +115,10 @@ function readConfiguredOptInProviderModels(config: OpenClawConfig): ModelCatalog
   const out: ModelCatalogEntry[] = [];
   for (const [providerRaw, providerValue] of Object.entries(providers)) {
     const provider = providerRaw.toLowerCase().trim();
-    if (!NON_PI_NATIVE_MODEL_PROVIDERS.has(provider)) {
-      continue;
-    }
+    // All configured provider models are eligible for catalog enrichment.
+    // Previously gated to NON_PI_NATIVE_MODEL_PROVIDERS (kilocode only),
+    // which silently dropped config for anthropic, openai, etc.
+    // Pi SDK-native providers still take precedence via the merge step.
     if (!providerValue || typeof providerValue !== "object") {
       continue;
     }
@@ -173,6 +173,20 @@ function mergeConfiguredOptInProviderModels(params: {
   for (const entry of configured) {
     const key = `${entry.provider.toLowerCase().trim()}::${entry.id.toLowerCase().trim()}`;
     if (seen.has(key)) {
+      // Enrich existing entries with configured fields they may be missing.
+      // The Pi SDK registry often omits `input` for models it discovers via
+      // auth profiles, causing modelSupportsVision() to return false even for
+      // vision-capable models like Claude Opus.
+      if (entry.input && entry.input.length > 0) {
+        const existing = params.models.find(
+          (m) =>
+            m.provider.toLowerCase().trim() === entry.provider.toLowerCase().trim() &&
+            m.id.toLowerCase().trim() === entry.id.toLowerCase().trim(),
+        );
+        if (existing && (!existing.input || existing.input.length === 0)) {
+          existing.input = entry.input;
+        }
+      }
       continue;
     }
     params.models.push(entry);
