@@ -145,6 +145,8 @@ export type TelegramAccountConfig = {
   /** @deprecated Legacy key; migrated automatically to `streaming`. */
   streamMode?: "off" | "partial" | "block";
   mediaMaxMb?: number;
+  /** Additional trusted local roots for outbound media loading. */
+  mediaLocalRoots?: string[];
   /** Telegram API client timeout in seconds (grammY ApiClientOptions). */
   timeoutSeconds?: number;
   /** Retry policy for outbound Telegram API calls. */

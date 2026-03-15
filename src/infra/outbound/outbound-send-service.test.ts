@@ -163,7 +163,10 @@ describe("executeSendAction", () => {
       message: "hello",
     });
 
-    expect(mocks.getAgentScopedMediaLocalRoots).toHaveBeenCalledWith({}, "agent-1");
+    expect(mocks.getAgentScopedMediaLocalRoots).toHaveBeenCalledWith({}, "agent-1", {
+      channel: "discord",
+      accountId: undefined,
+    });
     expect(mocks.dispatchChannelMessageAction).toHaveBeenCalledWith(
       expect.objectContaining({
         mediaLocalRoots: ["/tmp/agent-roots"],
