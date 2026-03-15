@@ -248,14 +248,14 @@ describe("dmPolicy security validation", () => {
         }),
       ).toEqual(["dm_user"]);
 
-      // When fallback is disabled, undefined is treated as "no override"
+      // When fallback is disabled, undefined groupAllowFrom yields empty list (no DM fallback)
       expect(
         resolveGroupAllowFromSources({
           allowFrom: ["dm_user"],
           groupAllowFrom: undefined,
           fallbackToAllowFrom: false,
         }),
-      ).toEqual(["dm_user"]);
+      ).toEqual([]);
     });
 
     it("trims whitespace from all entries", () => {
