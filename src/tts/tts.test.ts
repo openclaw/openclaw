@@ -20,13 +20,13 @@ vi.mock("@mariozechner/pi-ai/oauth", () => ({
   getOAuthApiKey: vi.fn(async () => null),
 }));
 
-function createResolvedModel(provider: string, modelId: string, api = "openai-completions") {
-  return {
+vi.mock("../agents/pi-embedded-runner/model.js", () => {
+  const resolvedModel = {
     model: {
-      provider,
-      id: modelId,
-      name: modelId,
-      api,
+      provider: "openai",
+      id: "gpt-4o-mini",
+      name: "gpt-4o-mini",
+      api: "openai-completions",
       reasoning: false,
       input: ["text"],
       cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
@@ -36,16 +36,19 @@ function createResolvedModel(provider: string, modelId: string, api = "openai-co
     authStorage: { profiles: {} },
     modelRegistry: { find: vi.fn() },
   };
-}
 
-vi.mock("../agents/pi-embedded-runner/model.js", () => ({
-  resolveModel: vi.fn((provider: string, modelId: string) =>
-    createResolvedModel(provider, modelId),
-  ),
-  resolveModelAsync: vi.fn(async (provider: string, modelId: string) =>
-    createResolvedModel(provider, modelId),
-  ),
-}));
+  return {
+    resolveModelAsync: vi.fn(async (provider: string, modelId: string) => ({
+      ...resolvedModel,
+      model: {
+        ...resolvedModel.model,
+        provider,
+        id: modelId,
+        name: modelId,
+      },
+    })),
+  };
+});
 
 vi.mock("../agents/model-auth.js", () => ({
   getApiKeyForModel: vi.fn(async () => ({
@@ -425,11 +428,20 @@ describe("tts", () => {
 
     it("registers the Ollama api before direct summarization", async () => {
       vi.mocked(resolveModelAsync).mockResolvedValue({
-        ...createResolvedModel("ollama", "qwen3:8b", "ollama"),
         model: {
-          ...createResolvedModel("ollama", "qwen3:8b", "ollama").model,
+          provider: "ollama",
+          id: "qwen3:8b",
+          name: "qwen3:8b",
+          api: "ollama",
           baseUrl: "http://127.0.0.1:11434",
+          reasoning: false,
+          input: ["text"],
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+          contextWindow: 128000,
+          maxTokens: 8192,
         },
+        authStorage: { profiles: {} } as never,
+        modelRegistry: { find: vi.fn() } as never,
       } as never);
 
       await summarizeText({
