@@ -1,3 +1,4 @@
+import * as extensionApi from "openclaw/extension-api";
 import * as compatSdk from "openclaw/plugin-sdk/compat";
 import * as discordSdk from "openclaw/plugin-sdk/discord";
 import * as imessageSdk from "openclaw/plugin-sdk/imessage";
@@ -131,5 +132,9 @@ describe("plugin-sdk subpath exports", () => {
 
     const zalo = await import("openclaw/plugin-sdk/zalo");
     expect(typeof zalo.resolveClientIp).toBe("function");
+  });
+
+  it("exports the extension api bridge", () => {
+    expect(typeof extensionApi.runEmbeddedPiAgent).toBe("function");
   });
 });
