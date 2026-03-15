@@ -199,6 +199,10 @@ export type TelegramAccountConfig = {
    * Telegram expects unicode emoji (e.g., "👀") rather than shortcodes.
    */
   ackReaction?: string;
+  /** Throttle in ms between draft preview updates (min 250ms). Lower = smoother streaming. */
+  streamThrottleMs?: number;
+  /** Minimum characters before sending first draft preview (improves push notification UX). */
+  minInitialChars?: number;
 };
 
 export type TelegramTopicConfig = {

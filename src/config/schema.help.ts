@@ -1500,6 +1500,10 @@ export const FIELD_HELP: Record<string, string> = {
     'Direct message access control ("pairing" recommended). "open" requires channels.telegram.allowFrom=["*"].',
   "channels.telegram.streaming":
     'Unified Telegram stream preview mode: "off" | "partial" | "block" | "progress" (default: "partial"). "progress" maps to "partial" on Telegram. Legacy boolean/streamMode keys are auto-mapped.',
+  "channels.telegram.streamThrottleMs":
+    "Throttle in ms between draft preview updates (min 250ms). Lower = smoother streaming.",
+  "channels.telegram.minInitialChars":
+    "Minimum characters before sending first draft preview (improves push notification UX).",
   "channels.discord.streaming":
     'Unified Discord stream preview mode: "off" | "partial" | "block" | "progress". "progress" maps to "partial" on Discord. Legacy boolean/streamMode keys are auto-mapped.',
   "channels.discord.streamMode":
