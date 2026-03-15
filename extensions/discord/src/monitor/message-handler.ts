@@ -11,6 +11,7 @@ import type { DiscordMessageEvent, DiscordMessageHandler } from "./listeners.js"
 import { preflightDiscordMessage } from "./message-handler.preflight.js";
 import type { DiscordMessagePreflightParams } from "./message-handler.preflight.types.js";
 import {
+  hasDiscordForwardedMedia,
   hasDiscordMessageStickers,
   resolveDiscordMessageChannelId,
   resolveDiscordMessageText,
@@ -76,14 +77,20 @@ export function createDiscordMessageHandler(
       if (!message) {
         return false;
       }
-      const baseText = resolveDiscordMessageText(message, { includeForwarded: false });
+      const topLevelText = resolveDiscordMessageText(message, { includeForwarded: false });
+      const hasTopLevelMedia = Boolean(
+        (message.attachments && message.attachments.length > 0) ||
+        hasDiscordMessageStickers(message),
+      );
+      // Forwarded-only messages (no top-level text or media) should be
+      // processed immediately so snapshot content is never delayed.
+      if (!topLevelText && !hasTopLevelMedia) {
+        return false;
+      }
       return shouldDebounceTextInbound({
-        text: baseText,
+        text: topLevelText,
         cfg: params.cfg,
-        hasMedia: Boolean(
-          (message.attachments && message.attachments.length > 0) ||
-          hasDiscordMessageStickers(message),
-        ),
+        hasMedia: hasTopLevelMedia || hasDiscordForwardedMedia(message),
       });
     },
     onFlush: async (entries) => {
@@ -111,17 +118,20 @@ export function createDiscordMessageHandler(
         return;
       }
       const combinedBaseText = entries
-        .map((entry) => resolveDiscordMessageText(entry.data.message, { includeForwarded: false }))
+        .map((entry) => resolveDiscordMessageText(entry.data.message, { includeForwarded: true }))
         .filter(Boolean)
         .join("\n");
+      // Forwarded text is already merged into combinedBaseText, so strip
+      // message_snapshots to prevent preflight from appending it again.
       const syntheticMessage = {
         ...last.data.message,
         content: combinedBaseText,
         attachments: [],
-        message_snapshots: (last.data.message as { message_snapshots?: unknown }).message_snapshots,
-        messageSnapshots: (last.data.message as { messageSnapshots?: unknown }).messageSnapshots,
+        message_snapshots: undefined,
+        messageSnapshots: undefined,
         rawData: {
           ...(last.data.message as { rawData?: Record<string, unknown> }).rawData,
+          message_snapshots: undefined,
         },
       };
       const syntheticData: DiscordMessageEvent = {
