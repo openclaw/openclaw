@@ -1,6 +1,12 @@
 #!/usr/bin/env node
 import process from "node:process";
 import { fileURLToPath } from "node:url";
+
+// Install warning filter early to suppress known deprecation warnings (e.g., punycode)
+// before any other modules are imported that might trigger these warnings.
+import { installProcessWarningFilter } from "./infra/warning-filter.js";
+installProcessWarningFilter();
+
 import { getReplyFromConfig } from "./auto-reply/reply.js";
 import { applyTemplate } from "./auto-reply/templating.js";
 import { monitorWebChannel } from "./channel-web.js";
