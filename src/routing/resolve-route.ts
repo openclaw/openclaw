@@ -332,13 +332,14 @@ function pushToIndexMap(
 }
 
 function peerLookupKeys(kind: ChatType, id: string): string[] {
+  const normalId = id.toLowerCase();
   if (kind === "group") {
-    return [`group:${id}`, `channel:${id}`];
+    return [`group:${normalId}`, `channel:${normalId}`];
   }
   if (kind === "channel") {
-    return [`channel:${id}`, `group:${id}`];
+    return [`channel:${normalId}`, `group:${normalId}`];
   }
-  return [`${kind}:${id}`];
+  return [`${kind}:${normalId}`];
 }
 
 function collectPeerIndexedBindings(
@@ -589,7 +590,7 @@ function matchesBindingScope(match: NormalizedBindingMatch, scope: BindingScope)
     if (
       !scope.peer ||
       !peerKindMatches(match.peer.kind, scope.peer.kind) ||
-      scope.peer.id !== match.peer.id
+      scope.peer.id.toLowerCase() !== match.peer.id.toLowerCase()
     ) {
       return false;
     }
