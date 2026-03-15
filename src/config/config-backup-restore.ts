@@ -82,11 +82,13 @@ export async function listConfigBackups(
 
   // Check numbered and timestamped backups
   try {
+    // Escape special regex characters in filename to prevent wildcard matching
+    const escapedBase = base.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
     const entries = await ioFs.readdir(dir);
     for (const entry of entries) {
       // Match both numbered backups (.bak.1, .bak.2) and timestamped backups (.bak.2024-01-15_00-00-00)
       // Exclude failed backups (.failed-*)
-      const match = entry.match(new RegExp(`^${base}\\.bak\\.(.+)$`));
+      const match = entry.match(new RegExp(`^${escapedBase}\\.bak\\.(.+)$`));
       if (match && !entry.includes(".failed-")) {
         const fullPath = path.join(dir, entry);
         try {
@@ -146,7 +148,7 @@ export async function createConfigBackup(
     ? `${configPath}.bak.${timestamp}${label}`
     : `${configPath}.bak`;
 
-  await fs.writeFile(backupPath, configContent, { mode: 0o600 });
+  await ioFs.writeFile(backupPath, configContent, { mode: 0o600 });
 
   // Prune old backups if keepBackups is set
   if (keepBackups > 0) {

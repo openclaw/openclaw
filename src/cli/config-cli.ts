@@ -560,7 +560,17 @@ async function runConfigRestore(opts: { last?: boolean; backupPath?: string; dry
       return;
     }
 
-    // Default to --last if no backup path specified
+    // Require --last flag when no backup path specified
+    if (!opts.last) {
+      runtime.error(
+        danger(
+          "Specify --last to restore from the most recent backup, or use --backup-path <path> for a specific backup.",
+        ),
+      );
+      runtime.exit(1);
+      return;
+    }
+
     const backups = await listConfigBackups(snapshot.path);
     if (backups.length === 0) {
       runtime.error(danger("No backups found."));

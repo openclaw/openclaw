@@ -44,6 +44,7 @@ export async function getMemorySearchManager(params: {
       const primary = await QmdMemoryManager.create({
         cfg: params.cfg,
         agentId: params.agentId,
+        userId: params.userId,
         resolved,
         mode: statusOnly ? "status" : "full",
       });
