@@ -37,24 +37,30 @@ export type {
   TelegramMediaRef,
 } from "./bot-message-context.types.js";
 
-// Per-chat backoff for status-reaction API calls. When Telegram returns 429,
-// all reaction updates for that chat are suppressed until the backoff expires.
-// Shared across controller instances so rapid messages don't exhaust API budget.
-const reactionBackoffByChat = new Map<number | string, number>();
+// Per-account+chat backoff for status-reaction API calls. When Telegram returns
+// 429, all reaction updates for that account+chat pair are suppressed until the
+// backoff expires. Keyed by account+chat so multi-account deployments don't
+// cross-suppress unrelated bots sharing the same chat ID.
+const reactionBackoffByKey = new Map<string, number>();
 const REACTION_BACKOFF_MS = 30_000;
 
-function isReactionBackedOff(chatId: number | string): boolean {
-  const until = reactionBackoffByChat.get(chatId);
+function reactionBackoffKey(accountId: string, chatId: number | string): string {
+  return `${accountId}:${chatId}`;
+}
+
+function isReactionBackedOff(accountId: string, chatId: number | string): boolean {
+  const key = reactionBackoffKey(accountId, chatId);
+  const until = reactionBackoffByKey.get(key);
   if (!until) return false;
   if (Date.now() >= until) {
-    reactionBackoffByChat.delete(chatId);
+    reactionBackoffByKey.delete(key);
     return false;
   }
   return true;
 }
 
-function markReactionBackoff(chatId: number | string): void {
-  reactionBackoffByChat.set(chatId, Date.now() + REACTION_BACKOFF_MS);
+function markReactionBackoff(accountId: string, chatId: number | string): void {
+  reactionBackoffByKey.set(reactionBackoffKey(accountId, chatId), Date.now() + REACTION_BACKOFF_MS);
 }
 
 export const buildTelegramMessageContext = async ({
@@ -375,7 +381,7 @@ export const buildTelegramMessageContext = async ({
           adapter: {
             setReaction: async (emoji: string) => {
               if (reactionApi) {
-                if (isReactionBackedOff(chatId)) {
+                if (isReactionBackedOff(account.accountId, chatId)) {
                   return;
                 }
                 if (!allowedStatusReactionEmojisPromise) {
@@ -406,7 +412,7 @@ export const buildTelegramMessageContext = async ({
                 } catch (err: unknown) {
                   const code = (err as { error_code?: number })?.error_code;
                   if (code === 429) {
-                    markReactionBackoff(chatId);
+                    markReactionBackoff(account.accountId, chatId);
                     logVerbose(
                       `telegram status-reaction 429 for chat ${chatId}, backing off ${REACTION_BACKOFF_MS}ms`,
                     );
