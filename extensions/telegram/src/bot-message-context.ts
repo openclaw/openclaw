@@ -37,6 +37,26 @@ export type {
   TelegramMediaRef,
 } from "./bot-message-context.types.js";
 
+// Per-chat backoff for status-reaction API calls. When Telegram returns 429,
+// all reaction updates for that chat are suppressed until the backoff expires.
+// Shared across controller instances so rapid messages don't exhaust API budget.
+const reactionBackoffByChat = new Map<number | string, number>();
+const REACTION_BACKOFF_MS = 30_000;
+
+function isReactionBackedOff(chatId: number | string): boolean {
+  const until = reactionBackoffByChat.get(chatId);
+  if (!until) return false;
+  if (Date.now() >= until) {
+    reactionBackoffByChat.delete(chatId);
+    return false;
+  }
+  return true;
+}
+
+function markReactionBackoff(chatId: number | string): void {
+  reactionBackoffByChat.set(chatId, Date.now() + REACTION_BACKOFF_MS);
+}
+
 export const buildTelegramMessageContext = async ({
   primaryCtx,
   allMedia,
@@ -355,6 +375,9 @@ export const buildTelegramMessageContext = async ({
           adapter: {
             setReaction: async (emoji: string) => {
               if (reactionApi) {
+                if (isReactionBackedOff(chatId)) {
+                  return;
+                }
                 if (!allowedStatusReactionEmojisPromise) {
                   allowedStatusReactionEmojisPromise = resolveTelegramAllowedEmojiReactions({
                     chat: msg.chat,
@@ -376,9 +399,20 @@ export const buildTelegramMessageContext = async ({
                 if (!resolvedEmoji) {
                   return;
                 }
-                await reactionApi(chatId, msg.message_id, [
-                  { type: "emoji", emoji: resolvedEmoji },
-                ]);
+                try {
+                  await reactionApi(chatId, msg.message_id, [
+                    { type: "emoji", emoji: resolvedEmoji },
+                  ]);
+                } catch (err: unknown) {
+                  const code = (err as { error_code?: number })?.error_code;
+                  if (code === 429) {
+                    markReactionBackoff(chatId);
+                    logVerbose(
+                      `telegram status-reaction 429 for chat ${chatId}, backing off ${REACTION_BACKOFF_MS}ms`,
+                    );
+                  }
+                  throw err;
+                }
               }
             },
             // Telegram replaces atomically — no removeReaction needed
