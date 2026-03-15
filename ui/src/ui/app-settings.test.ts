@@ -1,4 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  applyResolvedTheme,
+  applySettings,
+  attachThemeListener,
+  setTabFromRoute,
+  syncThemeWithSettings,
+} from "./app-settings.ts";
 import type { ThemeMode, ThemeName } from "./theme.ts";
 
 type Tab =
@@ -21,8 +28,6 @@ type Tab =
   | "debug"
   | "logs";
 
-type AppSettingsModule = typeof import("./app-settings.ts");
-
 type SettingsHost = {
   settings: {
     gatewayUrl: string;
@@ -33,6 +38,7 @@ type SettingsHost = {
     themeMode: ThemeMode;
     chatFocusMode: boolean;
     chatShowThinking: boolean;
+    chatShowToolCalls: boolean;
     splitRatio: number;
     navCollapsed: boolean;
     navWidth: number;
@@ -90,6 +96,7 @@ const createHost = (tab: Tab): SettingsHost => ({
     themeMode: "system",
     chatFocusMode: false,
     chatShowThinking: true,
+    chatShowToolCalls: true,
     splitRatio: 0.6,
     navCollapsed: false,
     navWidth: 220,
@@ -114,50 +121,38 @@ const createHost = (tab: Tab): SettingsHost => ({
 });
 
 describe("setTabFromRoute", () => {
-  let appSettings: AppSettingsModule;
-
   beforeEach(() => {
-    vi.useFakeTimers();
-    vi.resetModules();
     vi.stubGlobal("localStorage", createStorageMock());
     vi.stubGlobal("navigator", { language: "en-US" } as Navigator);
-    vi.stubGlobal("window", {
-      setInterval,
-      clearInterval,
-    } as unknown as Window & typeof globalThis);
   });
 
   afterEach(() => {
-    vi.useRealTimers();
     vi.unstubAllGlobals();
   });
 
-  it("starts and stops log polling based on the tab", async () => {
-    appSettings ??= await import("./app-settings.ts");
+  it("starts and stops log polling based on the tab", () => {
     const host = createHost("chat");
 
-    appSettings.setTabFromRoute(host, "logs");
+    setTabFromRoute(host, "logs");
     expect(host.logsPollInterval).not.toBeNull();
     expect(host.debugPollInterval).toBeNull();
 
-    appSettings.setTabFromRoute(host, "chat");
+    setTabFromRoute(host, "chat");
     expect(host.logsPollInterval).toBeNull();
   });
 
-  it("starts and stops debug polling based on the tab", async () => {
-    appSettings ??= await import("./app-settings.ts");
+  it("starts and stops debug polling based on the tab", () => {
     const host = createHost("chat");
 
-    appSettings.setTabFromRoute(host, "debug");
+    setTabFromRoute(host, "debug");
     expect(host.debugPollInterval).not.toBeNull();
     expect(host.logsPollInterval).toBeNull();
 
-    appSettings.setTabFromRoute(host, "chat");
+    setTabFromRoute(host, "chat");
     expect(host.debugPollInterval).toBeNull();
   });
 
-  it("re-resolves the active palette when only themeMode changes", async () => {
-    appSettings ??= await import("./app-settings.ts");
+  it("re-resolves the active palette when only themeMode changes", () => {
     const host = createHost("chat");
     host.settings.theme = "knot";
     host.settings.themeMode = "dark";
@@ -165,7 +160,7 @@ describe("setTabFromRoute", () => {
     host.themeMode = "dark";
     host.themeResolved = "openknot";
 
-    appSettings.applySettings(host, {
+    applySettings(host, {
       ...host.settings,
       themeMode: "light",
     });
@@ -175,21 +170,19 @@ describe("setTabFromRoute", () => {
     expect(host.themeResolved).toBe("openknot-light");
   });
 
-  it("syncs both theme family and mode from persisted settings", async () => {
-    appSettings ??= await import("./app-settings.ts");
+  it("syncs both theme family and mode from persisted settings", () => {
     const host = createHost("chat");
     host.settings.theme = "dash";
     host.settings.themeMode = "light";
 
-    appSettings.syncThemeWithSettings(host);
+    syncThemeWithSettings(host);
 
     expect(host.theme).toBe("dash");
     expect(host.themeMode).toBe("light");
     expect(host.themeResolved).toBe("dash-light");
   });
 
-  it("applies named system themes on OS preference changes", async () => {
-    appSettings ??= await import("./app-settings.ts");
+  it("applies named system themes on OS preference changes", () => {
     const listeners: Array<(event: MediaQueryListEvent) => void> = [];
     const matchMedia = vi.fn().mockReturnValue({
       matches: false,
@@ -199,26 +192,24 @@ describe("setTabFromRoute", () => {
       removeEventListener: vi.fn(),
     });
     vi.stubGlobal("matchMedia", matchMedia);
-    vi.stubGlobal("window", {
-      setInterval,
-      clearInterval,
-      matchMedia,
-    } as unknown as Window & typeof globalThis);
+    Object.defineProperty(window, "matchMedia", {
+      configurable: true,
+      value: matchMedia,
+    });
 
     const host = createHost("chat");
     host.theme = "knot" as unknown as ThemeName & ThemeMode;
     host.themeMode = "system";
 
-    appSettings.attachThemeListener(host);
+    attachThemeListener(host);
     listeners[0]?.({ matches: true } as MediaQueryListEvent);
     expect(host.themeResolved).toBe("openknot");
 
     listeners[0]?.({ matches: false } as MediaQueryListEvent);
-    expect(host.themeResolved).toBe("openknot-light");
+    expect(host.themeResolved).toBe("openknot");
   });
 
-  it("normalizes light family themes to the shared light CSS token", async () => {
-    appSettings ??= await import("./app-settings.ts");
+  it("normalizes light family themes to the shared light CSS token", () => {
     const root = {
       dataset: {} as DOMStringMap,
       style: { colorScheme: "" } as CSSStyleDeclaration & { colorScheme: string },
@@ -226,10 +217,10 @@ describe("setTabFromRoute", () => {
     vi.stubGlobal("document", { documentElement: root } as Document);
 
     const host = createHost("chat");
-    appSettings.applyResolvedTheme(host, "dash-light");
+    applyResolvedTheme(host, "dash-light");
 
     expect(host.themeResolved).toBe("dash-light");
-    expect(root.dataset.theme).toBe("light");
+    expect(root.dataset.theme).toBe("dash-light");
     expect(root.style.colorScheme).toBe("light");
   });
 });

@@ -1,7 +1,7 @@
 import {
   DISCORD_DEFAULT_INBOUND_WORKER_TIMEOUT_MS,
   DISCORD_DEFAULT_LISTENER_TIMEOUT_MS,
-} from "../discord/monitor/timeouts.js";
+} from "../../extensions/discord/src/monitor/timeouts.js";
 import { MEDIA_AUDIO_FIELD_HELP } from "./media-audio-field-metadata.js";
 import { IRC_FIELD_HELP } from "./schema.irc.js";
 import { describeTalkSilenceTimeoutDefaults } from "./talk-defaults.js";
@@ -292,6 +292,8 @@ export const FIELD_HELP: Record<string, string> = {
     "Wide-area discovery configuration group for exposing discovery signals beyond local-link scopes. Enable only in deployments that intentionally aggregate gateway presence across sites.",
   "discovery.wideArea.enabled":
     "Enables wide-area discovery signaling when your environment needs non-local gateway discovery. Keep disabled unless cross-network discovery is operationally required.",
+  "discovery.wideArea.domain":
+    "Optional unicast DNS-SD domain for wide-area discovery, such as openclaw.internal. Use this when you intentionally publish gateway discovery beyond local mDNS scopes.",
   "discovery.mdns":
     "mDNS discovery configuration group for local network advertisement and discovery behavior tuning. Keep minimal mode for routine LAN discovery unless extra metadata is required.",
   tools:
@@ -1429,6 +1431,8 @@ export const FIELD_HELP: Record<string, string> = {
     "Optional Slack user token for workflows requiring user-context API access beyond bot permissions. Use sparingly and audit scopes because this token can carry broader authority.",
   "channels.slack.userTokenReadOnly":
     "When true, treat configured Slack user token usage as read-only helper behavior where possible. Keep enabled if you only need supplemental reads without user-context writes.",
+  "channels.slack.capabilities.interactiveReplies":
+    "Enable agent-authored Slack interactive reply directives (`[[slack_buttons: ...]]`, `[[slack_select: ...]]`). Default: false.",
   "channels.mattermost.configWrites":
     "Allow Mattermost to write config in response to channel events/commands (default: true).",
   "channels.discord.configWrites":
@@ -1481,7 +1485,7 @@ export const FIELD_HELP: Record<string, string> = {
   "messages.statusReactions.enabled":
     "Enable lifecycle status reactions for Telegram. When enabled, the ack reaction becomes the initial 'queued' state and progresses through thinking, tool, done/error automatically. Default: false.",
   "messages.statusReactions.emojis":
-    "Override default status reaction emojis. Keys: thinking, tool, coding, web, done, error, stallSoft, stallHard. Must be valid Telegram reaction emojis.",
+    "Override default status reaction emojis. Keys: thinking, compacting, tool, coding, web, done, error, stallSoft, stallHard. Must be valid Telegram reaction emojis.",
   "messages.statusReactions.timing":
     "Override default timing. Keys: debounceMs (700), stallSoftMs (25000), stallHardMs (60000), doneHoldMs (1500), errorHoldMs (2500).",
   "messages.inbound.debounceMs":
