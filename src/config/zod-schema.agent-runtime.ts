@@ -751,6 +751,8 @@ export const AgentEntrySchema = z
     heartbeat: HeartbeatSchema,
     identity: IdentitySchema,
     groupChat: GroupChatSchema,
+    /** Per-agent model params (e.g. cacheRetention, temperature). Merged on top of agents.defaults.models[...].params. */
+    params: z.record(z.string(), z.unknown()).optional(),
     subagents: z
       .object({
         allowAgents: z.array(z.string()).optional(),
