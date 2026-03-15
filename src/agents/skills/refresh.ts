@@ -3,7 +3,7 @@ import path from "node:path";
 import chokidar, { type FSWatcher } from "chokidar";
 import type { OpenClawConfig } from "../../config/config.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
-import { CONFIG_DIR, resolveUserPath } from "../../utils.js";
+import { resolveConfigDir, resolveUserPath } from "../../utils.js";
 import { resolvePluginSkillDirs } from "./plugin-skills.js";
 
 type SkillsChangeEvent = {
@@ -62,7 +62,7 @@ function resolveWatchPaths(workspaceDir: string, config?: OpenClawConfig): strin
     paths.push(path.join(workspaceDir, "skills"));
     paths.push(path.join(workspaceDir, ".agents", "skills"));
   }
-  paths.push(path.join(CONFIG_DIR, "skills"));
+  paths.push(path.join(resolveConfigDir(), "skills"));
   paths.push(path.join(os.homedir(), ".agents", "skills"));
   const extraDirsRaw = config?.skills?.load?.extraDirs ?? [];
   const extraDirs = extraDirsRaw

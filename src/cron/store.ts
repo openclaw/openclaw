@@ -3,11 +3,9 @@ import fs from "node:fs";
 import path from "node:path";
 import JSON5 from "json5";
 import { expandHomePrefix } from "../infra/home-dir.js";
-import { CONFIG_DIR } from "../utils.js";
+import { resolveConfigDir } from "../utils.js";
 import type { CronStoreFile } from "./types.js";
 
-export const DEFAULT_CRON_DIR = path.join(CONFIG_DIR, "cron");
-export const DEFAULT_CRON_STORE_PATH = path.join(DEFAULT_CRON_DIR, "jobs.json");
 const serializedStoreCache = new Map<string, string>();
 
 export function resolveCronStorePath(storePath?: string) {
@@ -18,7 +16,8 @@ export function resolveCronStorePath(storePath?: string) {
     }
     return path.resolve(raw);
   }
-  return DEFAULT_CRON_STORE_PATH;
+  const cronDir = path.join(resolveConfigDir(), "cron");
+  return path.join(cronDir, "jobs.json");
 }
 
 export async function loadCronStore(storePath: string): Promise<CronStoreFile> {
