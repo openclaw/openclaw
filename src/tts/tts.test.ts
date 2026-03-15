@@ -46,6 +46,39 @@ vi.mock("../agents/pi-embedded-runner/model.js", () => ({
     createResolvedModel(provider, modelId),
   ),
 }));
+    model: {
+      provider,
+      id: modelId,
+      name: modelId,
+      api,
+      reasoning: false,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 128000,
+      maxTokens: 8192,
+    },
+    authStorage: { profiles: {} },
+    modelRegistry: { find: vi.fn() },
+<<<<<<< HEAD
+  }));
+  return {
+    resolveModel,
+    resolveModelAsync: vi.fn(async (provider: string, modelId: string) => resolveModel(provider, modelId)),
+  };
+});
+=======
+  };
+}
+
+vi.mock("../agents/pi-embedded-runner/model.js", () => ({
+  resolveModel: vi.fn((provider: string, modelId: string) =>
+    createResolvedModel(provider, modelId),
+  ),
+  resolveModelAsync: vi.fn(async (provider: string, modelId: string) =>
+    createResolvedModel(provider, modelId),
+  ),
+}));
+>>>>>>> origin/main
 
 vi.mock("../agents/model-auth.js", () => ({
   getApiKeyForModel: vi.fn(async () => ({
