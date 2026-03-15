@@ -10,6 +10,7 @@ import {
   resolveOllamaCompatNumCtxEnabled,
   resolvePromptBuildHookResult,
   resolvePromptModeForSession,
+  resolveUserNumCtx,
   shouldInjectOllamaCompatNumCtx,
   decodeHtmlEntitiesInObject,
   wrapOllamaCompatNumCtx,
@@ -1034,6 +1035,47 @@ describe("shouldInjectOllamaCompatNumCtx", () => {
         providerId: "ollama",
       }),
     ).toBe(false);
+  });
+});
+
+describe("resolveUserNumCtx", () => {
+  it("returns user-configured num_ctx from model params", () => {
+    const cfg = {
+      agents: {
+        defaults: {
+          models: {
+            "ollama/qwen2.5:14b-8k": { params: { num_ctx: 8192 } },
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+    expect(resolveUserNumCtx({ cfg, provider: "ollama", modelId: "qwen2.5:14b-8k" })).toBe(8192);
+  });
+
+  it("returns undefined when no params configured", () => {
+    const cfg = {
+      agents: { defaults: { models: {} } },
+    } as unknown as OpenClawConfig;
+    expect(resolveUserNumCtx({ cfg, provider: "ollama", modelId: "qwen2.5:14b" })).toBeUndefined();
+  });
+
+  it("returns undefined when num_ctx is not a number", () => {
+    const cfg = {
+      agents: {
+        defaults: {
+          models: {
+            "ollama/qwen2.5:14b": { params: { temperature: 0.5 } },
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+    expect(resolveUserNumCtx({ cfg, provider: "ollama", modelId: "qwen2.5:14b" })).toBeUndefined();
+  });
+
+  it("returns undefined when config is undefined", () => {
+    expect(
+      resolveUserNumCtx({ cfg: undefined, provider: "ollama", modelId: "llama3" }),
+    ).toBeUndefined();
   });
 });
 
