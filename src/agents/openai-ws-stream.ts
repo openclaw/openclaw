@@ -511,10 +511,22 @@ export interface OpenAIWebSocketStreamOptions {
   managerOptions?: OpenAIWebSocketManagerOptions;
   /** Abort signal forwarded from the run. */
   signal?: AbortSignal;
+  /** Fail the WS request if the server never sends an initial response event. */
+  firstResponseTimeoutMs?: number;
 }
 
 type WsTransport = "sse" | "websocket" | "auto";
 const WARM_UP_TIMEOUT_MS = 8_000;
+
+function createFirstResponseTimeoutError(timeoutMs: number): Error {
+  const err = new Error(`OpenAI WebSocket first response timed out after ${timeoutMs}ms`);
+  err.name = "TimeoutError";
+  return err;
+}
+
+function isResponseLifecycleEvent(event: { type: string }): boolean {
+  return event.type.startsWith("response.");
+}
 
 function resolveWsTransport(options: Parameters<StreamFn>[2]): WsTransport {
   const transport = (options as { transport?: unknown } | undefined)?.transport;
@@ -670,6 +682,12 @@ export function createOpenAIWebSocketStreamFn(
       }
 
       const signal = opts.signal ?? (options as WsOptions | undefined)?.signal;
+      const firstResponseTimeoutMs =
+        typeof opts.firstResponseTimeoutMs === "number" &&
+        Number.isFinite(opts.firstResponseTimeoutMs) &&
+        opts.firstResponseTimeoutMs > 0
+          ? Math.max(1, Math.floor(opts.firstResponseTimeoutMs))
+          : undefined;
 
       if (resolveWsWarmup(options) && !session.warmUpAttempted) {
         session.warmUpAttempted = true;
@@ -835,6 +853,20 @@ export function createOpenAIWebSocketStreamFn(
       const capturedContextLength = context.messages.length;
 
       await new Promise<void>((resolve, reject) => {
+        let firstServerEventSeen = false;
+        let firstResponseTimer: NodeJS.Timeout | undefined;
+
+        const markFirstServerEventSeen = () => {
+          if (firstServerEventSeen) {
+            return;
+          }
+          firstServerEventSeen = true;
+          if (firstResponseTimer) {
+            clearTimeout(firstResponseTimer);
+            firstResponseTimer = undefined;
+          }
+        };
+
         // Honour abort signal
         const abortHandler = () => {
           cleanup();
@@ -856,12 +888,46 @@ export function createOpenAIWebSocketStreamFn(
         session.manager.on("close", closeHandler);
 
         const cleanup = () => {
+          if (firstResponseTimer) {
+            clearTimeout(firstResponseTimer);
+            firstResponseTimer = undefined;
+          }
           signal?.removeEventListener("abort", abortHandler);
           session.manager.off("close", closeHandler);
           unsubscribe();
         };
 
+        if (firstResponseTimeoutMs) {
+          firstResponseTimer = setTimeout(() => {
+            const timeoutError = createFirstResponseTimeoutError(firstResponseTimeoutMs);
+            cleanup();
+            // Reset the session completely so a late response.completed cannot
+            // mutate previous_response_id for a turn that the caller already
+            // treated as failed.
+            session.broken = true;
+            try {
+              session.manager.close();
+            } catch {
+              /* ignore */
+            }
+            wsRegistry.delete(sessionId);
+            if (transport === "websocket") {
+              reject(timeoutError);
+              return;
+            }
+            log.warn(
+              `[ws-stream] first response timeout for session=${sessionId}; falling back to HTTP. error=${timeoutError.message}`,
+            );
+            void fallbackToHttp(model, context, options, eventStream, signal, {
+              skipInitialStart: true,
+            }).then(resolve, reject);
+          }, firstResponseTimeoutMs);
+        }
+
         const unsubscribe = session.manager.onMessage((event) => {
+          if (isResponseLifecycleEvent(event) || event.type === "error") {
+            markFirstServerEventSeen();
+          }
           if (event.type === "response.completed") {
             cleanup();
             // Update session state
@@ -940,10 +1006,16 @@ async function fallbackToHttp(
   options: Parameters<StreamFn>[2],
   eventStream: ReturnType<typeof createAssistantMessageEventStream>,
   signal?: AbortSignal,
+  opts?: { skipInitialStart?: boolean },
 ): Promise<void> {
   const mergedOptions = signal ? { ...options, signal } : options;
   const httpStream = streamSimple(model, context, mergedOptions);
+  let skippedInitialStart = false;
   for await (const event of httpStream) {
+    if (!skippedInitialStart && opts?.skipInitialStart && event.type === "start") {
+      skippedInitialStart = true;
+      continue;
+    }
     eventStream.push(event);
   }
 }

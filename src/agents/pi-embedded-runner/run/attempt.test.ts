@@ -6,6 +6,7 @@ import {
   composeSystemPromptWithHookContext,
   isOllamaCompatProvider,
   prependSystemPromptAddition,
+  resolveFirstResponseTimeoutMs,
   resolveAttemptFsWorkspaceOnly,
   resolveOllamaCompatNumCtxEnabled,
   resolvePromptBuildHookResult,
@@ -877,6 +878,25 @@ describe("wrapStreamFnRepairMalformedToolCallArguments", () => {
 
     expect(partialToolCall.arguments).toEqual({});
     expect(streamedToolCall.arguments).toEqual({});
+  });
+});
+
+describe("resolveFirstResponseTimeoutMs", () => {
+  it("caps large total timeouts to a smaller first-response guard", () => {
+    expect(resolveFirstResponseTimeoutMs(300_000)).toBe(30_000);
+    expect(resolveFirstResponseTimeoutMs(60_000)).toBe(20_000);
+  });
+
+  it("stays below the overall timeout for short runs", () => {
+    expect(resolveFirstResponseTimeoutMs(10_000)).toBe(5_000);
+    expect(resolveFirstResponseTimeoutMs(5_000)).toBe(4_000);
+    expect(resolveFirstResponseTimeoutMs(1_500)).toBe(1_200);
+  });
+
+  it("uses a stable default for non-finite or non-positive totals", () => {
+    expect(resolveFirstResponseTimeoutMs(Number.POSITIVE_INFINITY)).toBe(30_000);
+    expect(resolveFirstResponseTimeoutMs(Number.NaN)).toBe(30_000);
+    expect(resolveFirstResponseTimeoutMs(0)).toBe(30_000);
   });
 });
 

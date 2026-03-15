@@ -113,6 +113,10 @@ const { MockManager } = vi.hoisted(() => {
 
     // Test helper: simulate a server event
     simulateEvent(event: unknown): void {
+      const typedEvent = event as { type?: string; response?: { id?: string } } | null;
+      if (typedEvent?.type === "response.completed" && typedEvent.response?.id) {
+        this._previousResponseId = typedEvent.response.id;
+      }
       for (const fn of this._listeners) {
         fn(event);
       }
@@ -181,13 +185,13 @@ vi.mock("./openai-ws-connection.js", async (importOriginal) => {
 // ─────────────────────────────────────────────────────────────────────────────
 
 // Track if streamSimple (HTTP fallback) was called
-const streamSimpleCalls: Array<{ model: unknown; context: unknown }> = [];
+const streamSimpleCalls: Array<{ model: unknown; context: unknown; options: unknown }> = [];
 
 vi.mock("@mariozechner/pi-ai", async (importOriginal) => {
   const original = await importOriginal<typeof import("@mariozechner/pi-ai")>();
 
-  const mockStreamSimple = vi.fn((model: unknown, context: unknown) => {
-    streamSimpleCalls.push({ model, context });
+  const mockStreamSimple = vi.fn((model: unknown, context: unknown, options: unknown) => {
+    streamSimpleCalls.push({ model, context, options });
     // Return a minimal AssistantMessageEventStream-like async iterable
     const stream = original.createAssistantMessageEventStream();
     queueMicrotask(() => {
@@ -896,6 +900,250 @@ describe("createOpenAIWebSocketStreamFn", () => {
       | undefined;
     expect(doneEvent).toBeDefined();
     expect(doneEvent?.message.content[0]?.text).toBe("Hello back!");
+  });
+
+  it("falls back to HTTP when the auto WS request never receives a first server event", async () => {
+    const streamFn = createOpenAIWebSocketStreamFn("sk-test", "sess-first-response-timeout", {
+      firstResponseTimeoutMs: 20,
+    });
+    const stream = streamFn(
+      modelStub as Parameters<typeof streamFn>[0],
+      contextStub as Parameters<typeof streamFn>[1],
+    );
+
+    const events: unknown[] = [];
+    for await (const ev of await resolveStream(stream)) {
+      events.push(ev);
+    }
+
+    const doneEvent = events.find((e) => (e as { type?: string }).type === "done") as
+      | { type: string; message: { content: Array<{ text: string }> } }
+      | undefined;
+    const startEvents = events.filter((e) => (e as { type?: string }).type === "start");
+    expect(doneEvent?.message.content[0]?.text).toBe("http fallback response");
+    expect(startEvents).toHaveLength(1);
+    expect(hasWsSession("sess-first-response-timeout")).toBe(false);
+    expect(MockManager.lastInstance?.closeCallCount).toBeGreaterThanOrEqual(1);
+    expect(streamSimpleCalls.length).toBeGreaterThanOrEqual(1);
+  });
+
+  it("treats firstResponseTimeoutMs: 0 as disabled", async () => {
+    const streamFn = createOpenAIWebSocketStreamFn("sk-test", "sess-first-response-disabled", {
+      firstResponseTimeoutMs: 0,
+    });
+    const stream = streamFn(
+      modelStub as Parameters<typeof streamFn>[0],
+      contextStub as Parameters<typeof streamFn>[1],
+    );
+
+    const events: unknown[] = [];
+    const done = (async () => {
+      for await (const ev of await resolveStream(stream)) {
+        events.push(ev);
+      }
+    })();
+
+    await new Promise((r) => setImmediate(r));
+    await new Promise((r) => setTimeout(r, 30));
+    MockManager.lastInstance!.simulateEvent({
+      type: "response.completed",
+      response: makeResponseObject("resp_no_watchdog", "done"),
+    });
+    await done;
+
+    const errorEvent = events.find((e) => (e as { type?: string }).type === "error");
+    const doneEvent = events.find((e) => (e as { type?: string }).type === "done");
+    expect(errorEvent).toBeUndefined();
+    expect(doneEvent).toBeDefined();
+  });
+
+  it("still falls back to HTTP when close() emits synchronously during first-response timeout", async () => {
+    const streamFn = createOpenAIWebSocketStreamFn("sk-test", "sess-sync-close-timeout", {
+      firstResponseTimeoutMs: 20,
+    });
+    const stream = streamFn(
+      modelStub as Parameters<typeof streamFn>[0],
+      contextStub as Parameters<typeof streamFn>[1],
+    );
+
+    await new Promise((r) => setImmediate(r));
+    const manager = MockManager.lastInstance!;
+    const originalClose = manager.close.bind(manager);
+    manager.close = () => {
+      manager.emit("close", 1000, "sync close");
+      originalClose();
+    };
+
+    const events: unknown[] = [];
+    for await (const ev of await resolveStream(stream)) {
+      events.push(ev);
+    }
+
+    const doneEvent = events.find((e) => (e as { type?: string }).type === "done") as
+      | { type: string; message: { content: Array<{ text: string }> } }
+      | undefined;
+    const errorEvent = events.find((e) => (e as { type?: string }).type === "error");
+    expect(doneEvent?.message.content[0]?.text).toBe("http fallback response");
+    expect(errorEvent).toBeUndefined();
+  });
+
+  it("does not time out when the server sends an early response.created event", async () => {
+    const streamFn = createOpenAIWebSocketStreamFn("sk-test", "sess-first-response-created", {
+      firstResponseTimeoutMs: 20,
+    });
+    const stream = streamFn(
+      modelStub as Parameters<typeof streamFn>[0],
+      contextStub as Parameters<typeof streamFn>[1],
+    );
+
+    const events: unknown[] = [];
+    const done = (async () => {
+      for await (const ev of await resolveStream(stream)) {
+        events.push(ev);
+      }
+    })();
+
+    await new Promise((r) => setImmediate(r));
+    const manager = MockManager.lastInstance!;
+    manager.simulateEvent({
+      type: "response.created",
+      response: makeResponseObject("resp_created_only"),
+    });
+    await new Promise((r) => setTimeout(r, 30));
+    manager.simulateEvent({
+      type: "response.completed",
+      response: makeResponseObject("resp_created_only", "done"),
+    });
+
+    await done;
+
+    const errorEvent = events.find((e) => (e as { type?: string }).type === "error");
+    const doneEvent = events.find((e) => (e as { type?: string }).type === "done");
+    expect(errorEvent).toBeUndefined();
+    expect(doneEvent).toBeDefined();
+  });
+
+  it("ignores bookkeeping events for first-response timeout and still falls back in auto mode", async () => {
+    const streamFn = createOpenAIWebSocketStreamFn("sk-test", "sess-rate-limit-only", {
+      firstResponseTimeoutMs: 20,
+    });
+    const stream = streamFn(
+      modelStub as Parameters<typeof streamFn>[0],
+      contextStub as Parameters<typeof streamFn>[1],
+    );
+
+    await new Promise((r) => setImmediate(r));
+    MockManager.lastInstance!.simulateEvent({
+      type: "rate_limits.updated",
+      rate_limits: [],
+    });
+
+    const events: unknown[] = [];
+    for await (const ev of await resolveStream(stream)) {
+      events.push(ev);
+    }
+
+    const doneEvent = events.find((e) => (e as { type?: string }).type === "done") as
+      | { type: string; message: { content: Array<{ text: string }> } }
+      | undefined;
+    expect(doneEvent?.message.content[0]?.text).toBe("http fallback response");
+    expect(streamSimpleCalls.length).toBeGreaterThanOrEqual(1);
+  });
+
+  it("forwards the resolved options signal to HTTP fallback", async () => {
+    const controller = new AbortController();
+    const streamFn = createOpenAIWebSocketStreamFn("sk-test", "sess-fallback-signal", {
+      firstResponseTimeoutMs: 20,
+    });
+    const stream = streamFn(
+      modelStub as Parameters<typeof streamFn>[0],
+      contextStub as Parameters<typeof streamFn>[1],
+      { signal: controller.signal } as Parameters<typeof streamFn>[2],
+    );
+
+    for await (const _ev of await resolveStream(stream)) {
+      // consume
+    }
+
+    const fallbackCall = streamSimpleCalls.at(-1) as
+      | { options?: { signal?: AbortSignal } }
+      | undefined;
+    expect(fallbackCall?.options?.signal).toBe(controller.signal);
+  });
+
+  it("creates a fresh WS session after first-response timeout so late completions cannot poison the next turn", async () => {
+    const sessionId = "sess-timeout-recreate";
+    const streamFn = createOpenAIWebSocketStreamFn("sk-test", sessionId, {
+      firstResponseTimeoutMs: 20,
+    });
+
+    const stream1 = streamFn(
+      modelStub as Parameters<typeof streamFn>[0],
+      contextStub as Parameters<typeof streamFn>[1],
+    );
+    const manager1 = await new Promise<InstanceType<typeof MockManager>>((resolve) => {
+      queueMicrotask(() => resolve(MockManager.lastInstance!));
+    });
+
+    const events1: unknown[] = [];
+    for await (const ev of await resolveStream(stream1)) {
+      events1.push(ev);
+    }
+    expect(hasWsSession(sessionId)).toBe(false);
+
+    // Late completion from the timed-out request should only mutate the dead manager.
+    manager1.simulateEvent({
+      type: "response.completed",
+      response: makeResponseObject("resp_late_timeout", "late"),
+    });
+
+    const stream2 = streamFn(
+      modelStub as Parameters<typeof streamFn>[0],
+      contextStub as Parameters<typeof streamFn>[1],
+    );
+    await new Promise((r) => setImmediate(r));
+    const manager2 = MockManager.lastInstance!;
+    expect(manager2).not.toBe(manager1);
+
+    manager2.simulateEvent({
+      type: "response.completed",
+      response: makeResponseObject("resp_fresh", "fresh"),
+    });
+    for await (const _ev of await resolveStream(stream2)) {
+      // consume
+    }
+
+    const sent = manager2.sentEvents[0] as { previous_response_id?: string };
+    expect(sent.previous_response_id).toBeUndefined();
+    expect(manager1.previousResponseId).toBe("resp_late_timeout");
+    expect(manager2.previousResponseId).toBe("resp_fresh");
+  });
+
+  it("surfaces a timeout in forced websocket mode when no first response event arrives", async () => {
+    const streamFn = createOpenAIWebSocketStreamFn(
+      "sk-test",
+      "sess-first-response-timeout-forced",
+      {
+        firstResponseTimeoutMs: 20,
+      },
+    );
+    const stream = streamFn(
+      modelStub as Parameters<typeof streamFn>[0],
+      contextStub as Parameters<typeof streamFn>[1],
+      { transport: "websocket" } as Parameters<typeof streamFn>[2],
+    );
+
+    const events: unknown[] = [];
+    for await (const ev of await resolveStream(stream)) {
+      events.push(ev);
+    }
+
+    const errorEvent = events.find((e) => (e as { type?: string }).type === "error") as
+      | { type: string; error: { errorMessage?: string } }
+      | undefined;
+    expect(errorEvent?.error.errorMessage).toContain(
+      "OpenAI WebSocket first response timed out after 20ms",
+    );
   });
 
   it("keeps assistant phase on completed WebSocket responses", async () => {
