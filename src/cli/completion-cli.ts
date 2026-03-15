@@ -401,7 +401,7 @@ _${rootCmd}_root_completion() {
 
 ${generateZshSubcommands(program, rootCmd)}
 
-compdef _${rootCmd}_root_completion ${rootCmd}
+compdef _${rootCmd}_root_completion ${rootCmd} 2>/dev/null || true
 `;
   return script;
 }
