@@ -87,6 +87,7 @@ import { coreGatewayHandlers } from "./server-methods.js";
 import { createExecApprovalHandlers } from "./server-methods/exec-approval.js";
 import { safeParseJson } from "./server-methods/nodes.helpers.js";
 import { createSecretsHandlers } from "./server-methods/secrets.js";
+import { createToolInterruptHandlers } from "./server-methods/tool-interrupt.js";
 import { hasConnectedMobileNode } from "./server-mobile-nodes.js";
 import { loadGatewayModelCatalog } from "./server-model-catalog.js";
 import { createNodeSubscriptionManager } from "./server-node-subscriptions.js";
@@ -116,6 +117,7 @@ import {
   mergeGatewayTailscaleConfig,
 } from "./startup-auth.js";
 import { maybeSeedControlUiAllowedOriginsAtStartup } from "./startup-control-ui-origins.js";
+import { ToolInterruptManager } from "./tool-interrupt-manager.js";
 
 export { __resetModelCatalogCacheForTest } from "./server-model-catalog.js";
 
@@ -793,6 +795,9 @@ export async function startGatewayServer(
   const execApprovalHandlers = createExecApprovalHandlers(execApprovalManager, {
     forwarder: execApprovalForwarder,
   });
+  const toolInterruptManager = new ToolInterruptManager();
+  await toolInterruptManager.load();
+  const toolInterruptHandlers = createToolInterruptHandlers(toolInterruptManager);
   const secretsHandlers = createSecretsHandlers({
     reloadSecrets: async () => {
       const active = getActiveSecretsRuntimeSnapshot();
@@ -825,6 +830,7 @@ export async function startGatewayServer(
     cron,
     cronStorePath,
     execApprovalManager,
+    toolInterruptManager,
     loadGatewayModelCatalog,
     getHealthCache,
     refreshHealthSnapshot: refreshGatewayHealthSnapshot,
@@ -895,6 +901,7 @@ export async function startGatewayServer(
     extraHandlers: {
       ...pluginRegistry.gatewayHandlers,
       ...execApprovalHandlers,
+      ...toolInterruptHandlers,
       ...secretsHandlers,
     },
     broadcast,
@@ -1079,6 +1086,8 @@ export async function startGatewayServer(
         skillsRefreshTimer = null;
       }
       skillsChangeUnsub();
+      execApprovalForwarder.stop();
+      toolInterruptManager.stop();
       authRateLimiter?.dispose();
       browserAuthRateLimiter.dispose();
       channelHealthMonitor?.stop();

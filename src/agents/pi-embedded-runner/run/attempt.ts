@@ -1487,6 +1487,7 @@ export async function runEmbeddedAttempt(
     const toolsRaw = params.disableTools
       ? []
       : createOpenClawCodingTools({
+          runId: params.runId,
           agentId: sessionAgentId,
           exec: {
             ...params.execOverrides,
@@ -1508,7 +1509,6 @@ export async function runEmbeddedAttempt(
           senderIsOwner: params.senderIsOwner,
           sessionKey: sandboxSessionKey,
           sessionId: params.sessionId,
-          runId: params.runId,
           agentDir,
           workspaceDir: effectiveWorkspace,
           // When sandboxing uses a copied workspace (`ro` or `none`), effectiveWorkspace points

@@ -79,7 +79,7 @@ function getPairingStoreMocks() {
   };
 }
 
-const sock: MockSock = createMockSock();
+let sock: MockSock = createMockSock();
 
 vi.mock("../../../src/media/store.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../../src/media/store.js")>();
@@ -105,7 +105,7 @@ vi.mock("../../../src/config/config.js", async (importOriginal) => {
 vi.mock("../../../src/pairing/pairing-store.js", () => getPairingStoreMocks());
 
 vi.mock("./session.js", () => ({
-  createWaSocket: vi.fn().mockResolvedValue(sock),
+  createWaSocket: vi.fn().mockImplementation(async () => sock),
   waitForWaConnection: vi.fn().mockResolvedValue(undefined),
   getStatusCode: vi.fn(() => 500),
 }));
@@ -138,6 +138,7 @@ export function installWebMonitorInboxUnitTestHooks(opts?: { authDir?: boolean }
 
   beforeEach(async () => {
     vi.clearAllMocks();
+    sock = createMockSock();
     mockLoadConfig.mockReturnValue(DEFAULT_WEB_INBOX_CONFIG);
     readAllowFromStoreMock.mockResolvedValue([]);
     upsertPairingRequestMock.mockResolvedValue({
@@ -157,6 +158,7 @@ export function installWebMonitorInboxUnitTestHooks(opts?: { authDir?: boolean }
     resetLogger();
     setLoggerOverride(null);
     vi.useRealTimers();
+    sock.ev.removeAllListeners();
     if (authDir) {
       fsSync.rmSync(authDir, { recursive: true, force: true });
       authDir = undefined;
