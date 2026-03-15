@@ -168,6 +168,50 @@ describe("resolveExtraParams", () => {
 
     expect(result).toBeUndefined();
   });
+
+  it("resolves params when modelId already contains provider prefix", () => {
+    const result = resolveExtraParams({
+      cfg: {
+        agents: {
+          defaults: {
+            models: {
+              "openrouter/auto": {
+                params: {
+                  temperature: 0.5,
+                },
+              },
+            },
+          },
+        },
+      },
+      provider: "openrouter",
+      modelId: "openrouter/auto",
+    });
+
+    expect(result).toEqual({ temperature: 0.5 });
+  });
+
+  it("resolves params for native openrouter model with nested provider prefix", () => {
+    const result = resolveExtraParams({
+      cfg: {
+        agents: {
+          defaults: {
+            models: {
+              "openrouter/anthropic/claude-sonnet-4-6": {
+                params: {
+                  temperature: 0.3,
+                },
+              },
+            },
+          },
+        },
+      },
+      provider: "openrouter",
+      modelId: "anthropic/claude-sonnet-4-6",
+    });
+
+    expect(result).toEqual({ temperature: 0.3 });
+  });
 });
 
 describe("applyExtraParamsToAgent", () => {

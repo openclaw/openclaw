@@ -3,6 +3,7 @@ import type { SimpleStreamOptions } from "@mariozechner/pi-ai";
 import { streamSimple } from "@mariozechner/pi-ai";
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import { legacyModelKey, modelKey as canonicalModelKey } from "../model-selection.js";
 import {
   createAnthropicBetaHeadersWrapper,
   createAnthropicFastModeWrapper,
@@ -49,8 +50,10 @@ export function resolveExtraParams(params: {
   modelId: string;
   agentId?: string;
 }): Record<string, unknown> | undefined {
-  const modelKey = `${params.provider}/${params.modelId}`;
-  const modelConfig = params.cfg?.agents?.defaults?.models?.[modelKey];
+  const key = canonicalModelKey(params.provider, params.modelId);
+  const legacy = legacyModelKey(params.provider, params.modelId);
+  const configuredModels = params.cfg?.agents?.defaults?.models;
+  const modelConfig = configuredModels?.[key] ?? (legacy ? configuredModels?.[legacy] : undefined);
   const globalParams = modelConfig?.params ? { ...modelConfig.params } : undefined;
   const agentParams =
     params.agentId && params.cfg?.agents?.list
