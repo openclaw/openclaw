@@ -348,6 +348,7 @@ Notes:
 
 - `remote.baseUrl` is optional (defaults to the Gemini API base URL).
 - `remote.headers` lets you add extra headers if needed.
+- Remote memory embedding calls honor standard proxy env vars (`HTTPS_PROXY`, `HTTP_PROXY`, `ALL_PROXY`, and `NO_PROXY`) when set.
 - Default model: `gemini-embedding-001`.
 - `gemini-embedding-2-preview` is also supported: 8192 token limit and configurable dimensions (768 / 1536 / 3072, default 3072).
 
