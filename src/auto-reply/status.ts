@@ -406,7 +406,41 @@ const formatVoiceModeLine = (
   const provider = getTtsProvider(ttsConfig, prefsPath);
   const maxLength = getTtsMaxLength(prefsPath);
   const summarize = isSummarizationEnabled(prefsPath) ? "on" : "off";
-  return `🔊 Voice: ${autoMode} · provider=${provider} · limit=${maxLength} · summary=${summarize}`;
+
+  // Build provider-specific details
+  const providerDetails: string[] = [];
+  
+  if (provider === "openai") {
+    const model = ttsConfig.openai.model;
+    const voice = ttsConfig.openai.voice;
+    const baseUrl = ttsConfig.openai.baseUrl;
+    const isCustomBackend = baseUrl && baseUrl !== "https://api.openai.com";
+    
+    providerDetails.push(`model=${model}`);
+    providerDetails.push(`voice=${voice}`);
+    
+    if (isCustomBackend) {
+      providerDetails.push(`backend=custom (${baseUrl})`);
+    }
+  } else if (provider === "elevenlabs") {
+    const model = ttsConfig.elevenlabs.modelId;
+    const voiceId = ttsConfig.elevenlabs.voiceId;
+    const baseUrl = ttsConfig.elevenlabs.baseUrl;
+    const isCustomBackend = baseUrl && baseUrl !== "https://api.elevenlabs.io";
+    
+    providerDetails.push(`model=${model}`);
+    providerDetails.push(`voice=${voiceId.slice(0, 8)}...`);
+    
+    if (isCustomBackend) {
+      providerDetails.push(`backend=custom (${baseUrl})`);
+    }
+  } else if (provider === "edge") {
+    const voice = ttsConfig.edge.voice;
+    providerDetails.push(`voice=${voice}`);
+  }
+
+  const details = providerDetails.length > 0 ? ` · ${providerDetails.join(" · ")}` : "";
+  return `🔊 Voice: ${autoMode} · provider=${provider}${details} · limit=${maxLength} · summary=${summarize}`;
 };
 
 export function buildStatusMessage(args: StatusArgs): string {
