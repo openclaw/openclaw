@@ -300,6 +300,41 @@ describe("control UI routing", () => {
     expect(getComputedStyle(chat).paddingTop).toBe("0px");
   });
 
+  it("keeps mobile chat controls on one row as header actions grow", async () => {
+    const app = mountApp("/chat");
+    await app.updateComplete;
+
+    expect(window.matchMedia("(max-width: 768px)").matches).toBe(true);
+
+    const sessionRow = app.querySelector<HTMLElement>(
+      ".content--chat .content-header .chat-controls__session-row",
+    );
+    const controls = app.querySelector<HTMLElement>(
+      ".content--chat .content-header .chat-controls",
+    );
+    const session = app.querySelector<HTMLElement>(
+      ".content--chat .content-header .chat-controls__session",
+    );
+    const model = app.querySelector<HTMLElement>(
+      ".content--chat .content-header .chat-controls__model",
+    );
+    expect(sessionRow).not.toBeNull();
+    expect(controls).not.toBeNull();
+    expect(session).not.toBeNull();
+    expect(model).not.toBeNull();
+    if (!sessionRow || !controls || !session || !model) {
+      return;
+    }
+
+    expect(getComputedStyle(sessionRow).display).toBe("flex");
+    expect(getComputedStyle(sessionRow).gap).toBe("4px");
+    expect(getComputedStyle(session).flexGrow).toBe("2");
+    expect(getComputedStyle(model).flexGrow).toBe("3");
+    expect(getComputedStyle(controls).display).toBe("flex");
+    expect(getComputedStyle(controls).flexWrap).toBe("nowrap");
+    expect(getComputedStyle(controls).gap).toBe("4px");
+  });
+
   it("opens the mobile sidenav as a drawer from the topbar toggle", async () => {
     const app = mountApp("/chat");
     await app.updateComplete;
