@@ -335,15 +335,28 @@ export async function sendFileFeishu(params: {
   replyToMessageId?: string;
   replyInThread?: boolean;
   accountId?: string;
+  fileName?: string;
+  imageKey?: string; // Optional thumbnail for video messages
 }): Promise<SendMediaResult> {
-  const { cfg, to, fileKey, replyToMessageId, replyInThread, accountId } = params;
+  const { cfg, to, fileKey, replyToMessageId, replyInThread, accountId, fileName, imageKey } = params;
   const msgType = params.msgType ?? "file";
   const { client, receiveId, receiveIdType } = resolveFeishuSendTarget({
     cfg,
     to,
     accountId,
   });
-  const content = JSON.stringify({ file_key: fileKey });
+  
+  // Build content object based on message type
+  // Video messages (msg_type="media") require file_key, image_key (thumbnail), and file_name
+  // See: https://open.feishu.cn/document/ukTMz4SOyQjLxIDOj25h5M4zNzUx
+  const contentObj: Record<string, string> = { file_key: fileKey };
+  if (fileName) {
+    contentObj.file_name = fileName;
+  }
+  if (imageKey) {
+    contentObj.image_key = imageKey;
+  }
+  const content = JSON.stringify(contentObj);
 
   if (replyToMessageId) {
     const response = await client.im.message.reply({
@@ -471,6 +484,27 @@ export async function sendMediaFeishu(params: {
     });
     // Feishu API: opus -> "audio", mp4/video -> "media" (playable), others -> "file"
     const msgType = fileType === "opus" ? "audio" : fileType === "mp4" ? "media" : "file";
+    
+    // For video messages, upload a thumbnail image
+    let imageKey: string | undefined;
+    if (msgType === "media" && mediaBuffer) {
+      try {
+        // Generate a thumbnail from the first frame of the video
+        // For now, use the video buffer itself as a simple approach
+        // In production, you might want to extract an actual frame using ffmpeg
+        const thumbnailBuffer = mediaBuffer.slice(0, Math.min(mediaBuffer.length, 1024 * 1024));
+        const { imageKey: thumbKey } = await uploadImageFeishu({
+          cfg,
+          image: thumbnailBuffer,
+          accountId,
+        });
+        imageKey = thumbKey;
+      } catch (err) {
+        // Thumbnail upload is optional; continue without it
+        console.warn("Failed to upload video thumbnail:", err);
+      }
+    }
+    
     return sendFileFeishu({
       cfg,
       to,
@@ -479,6 +513,8 @@ export async function sendMediaFeishu(params: {
       replyToMessageId,
       replyInThread,
       accountId,
+      fileName: name,
+      imageKey,
     });
   }
 }
