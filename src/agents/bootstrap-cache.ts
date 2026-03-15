@@ -1,6 +1,19 @@
 import { loadWorkspaceBootstrapFiles, type WorkspaceBootstrapFile } from "./workspace.js";
 
+const MAX_CACHE_ENTRIES = 64;
+
 const cache = new Map<string, WorkspaceBootstrapFile[]>();
+
+function evictOldestIfNeeded(): void {
+  if (cache.size < MAX_CACHE_ENTRIES) {
+    return;
+  }
+  // Map iterates in insertion order; delete the oldest entry.
+  const oldest = cache.keys().next().value;
+  if (oldest !== undefined) {
+    cache.delete(oldest);
+  }
+}
 
 export async function getOrLoadBootstrapFiles(params: {
   workspaceDir: string;
@@ -12,6 +25,7 @@ export async function getOrLoadBootstrapFiles(params: {
   }
 
   const files = await loadWorkspaceBootstrapFiles(params.workspaceDir);
+  evictOldestIfNeeded();
   cache.set(params.sessionKey, files);
   return files;
 }
