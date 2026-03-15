@@ -121,3 +121,28 @@ npx openclaw config set channels.discord.guilds.'*'.users '["1385538426161467493
 ### 5.3 环境变量层面固化鉴权
 
 建议后续逐步将明文写入到 `openclaw.json` 中的关键 Token 或 Password 抽取至 `~/.profile`，或直接通过 `systemd` 的 `EnvironmentFile=/etc/openclaw/.env` 进行保护，从而满足最佳实践的 Secret 隔离要求。
+
+### 5.4 修复 "Potential multi-user setup detected" 安全体检警告
+
+**问题表现：**
+在执行 `npx openclaw security audit` 进行体检时，系统提示 `WARN: Potential multi-user setup detected (personal-assistant model warning)` 警告。
+
+**根本原因：**
+这是一个**启发式线索提示（Heuristic warning）**。因为我们在上面为 Discord 通道配置了 `allowlist` 访问机制，OpenClaw 底层安全扫描器因此判定“你的网关可能会存在多用户访问的场景”。
+由于 OpenClaw 的默认架构是“信任单一管理员（单点独占）”策略。当多用户共享或引入群组属性环境且未加隔离时，可能会互相干扰或导致 AI 误读系统级的敏感文件。
+
+**解决方案：**
+遵循“纵深防御（Defense-in-depth）”最佳实践，尽管我们在 Discord 等外层入口已经锁定您个人的 ID，但为了防范任何越权或隐私暴露可能，直接从底层网关开启强制沙盒隔离控制限制：
+
+```bash
+# 1. 强制启动沙盒引擎进行严格底线运行空间隔离
+npx openclaw config set agents.defaults.sandbox.mode "all"
+
+# 2. 限制文件系统读写，限定工具只能访问当前 Workspace，禁止越界读取宿主机外部文件
+npx openclaw config set tools.fs.workspaceOnly true
+
+# 3. 重启后端服务装载并生效最新的沙盒边界策略
+systemctl --user restart openclaw-gateway.service
+```
+
+此时再次执行 `npx openclaw security audit`，此项高风险警告将自动降解并消除。
