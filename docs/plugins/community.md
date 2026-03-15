@@ -49,3 +49,7 @@ Use this format when adding entries:
   npm: `@icesword760/openclaw-wechat`
   repo: `https://github.com/icesword0760/openclaw-wechat`
   install: `openclaw plugins install @icesword760/openclaw-wechat`
+- **openclaw-dingtalk** — The OpenClaw DingTalk (with a monthly active user base of 190 million) channel plugin enables the integration of enterprise robots using the Stream mode.
+  npm: `@largezhou/ddingtalk`
+  repo: `https://github.com/largezhou/openclaw-dingtalk`
+  install: `openclaw plugins install @largezhou/ddingtalk`
