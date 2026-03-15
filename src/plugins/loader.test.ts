@@ -40,6 +40,7 @@ const {
   clearPluginLoaderCache,
   clearPluginCommands,
   createHookRunner,
+  executePluginCommand,
   getGlobalHookRunner,
   loadOpenClawPlugins,
   matchPluginCommand,
@@ -685,6 +686,65 @@ describe("loadOpenClawPlugins", () => {
 
     expect(activeRegistry).toBe(inactiveRegistry);
     expect(matchPluginCommand("/broken")).toBeNull();
+  });
+
+  it("preserves the current command registry when cached activation collides with command execution", async () => {
+    let releaseHeldCommand: ((value: { text: string }) => void) | undefined;
+    (
+      globalThis as typeof globalThis & { __openclawHeldCommandPromise?: Promise<{ text: string }> }
+    ).__openclawHeldCommandPromise = new Promise((resolve) => {
+      releaseHeldCommand = resolve;
+    });
+
+    const plugin = writePlugin({
+      id: "held-command",
+      filename: "held-command.cjs",
+      body: `module.exports = {
+        id: "held-command",
+        register(api) {
+          api.registerCommand({
+            name: "heldcmd",
+            description: "Held command",
+            handler: async () => globalThis.__openclawHeldCommandPromise,
+          });
+        },
+      };`,
+    });
+
+    const options = {
+      workspaceDir: plugin.dir,
+      config: {
+        plugins: {
+          load: { paths: [plugin.file] },
+          allow: ["held-command"],
+        },
+      },
+    };
+
+    loadOpenClawPlugins(options);
+    const matched = matchPluginCommand("/heldcmd");
+    expect(matched).not.toBeNull();
+
+    const execution = executePluginCommand({
+      command: matched!.command,
+      channel: "test",
+      isAuthorizedSender: true,
+      commandBody: "/heldcmd",
+      config: {},
+    });
+
+    expect(() => loadOpenClawPlugins(options)).toThrow(
+      "cached plugin command registration failed: Cannot register commands while processing is in progress",
+    );
+    expect(matchPluginCommand("/heldcmd")).not.toBeNull();
+
+    releaseHeldCommand?.({ text: "ok" });
+    await expect(execution).resolves.toEqual({ text: "ok" });
+    delete (
+      globalThis as typeof globalThis & {
+        __openclawHeldCommandPromise?: Promise<{ text: string }>;
+      }
+    ).__openclawHeldCommandPromise;
   });
 
   it("does not reuse cached bundled plugin registries across env changes", () => {

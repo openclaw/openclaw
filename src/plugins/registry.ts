@@ -10,7 +10,7 @@ import type {
 import { registerInternalHook } from "../hooks/internal-hooks.js";
 import type { HookEntry } from "../hooks/types.js";
 import { resolveUserPath } from "../utils.js";
-import { registerPluginCommand, validatePluginCommandDefinition } from "./commands.js";
+import { validatePluginCommandDefinition } from "./commands.js";
 import { normalizePluginHttpPath } from "./http-path.js";
 import { findOverlappingPluginHttpRoute } from "./http-route-overlap.js";
 import { normalizeRegisteredProvider } from "./provider-validation.js";
@@ -146,7 +146,6 @@ export type PluginRegistryParams = {
   logger: PluginLogger;
   coreGatewayHandlers?: GatewayRequestHandlers;
   runtime: PluginRuntime;
-  registerGlobalCommands?: boolean;
 };
 
 type PluginTypedHookPolicy = {
@@ -509,32 +508,18 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     }
     const { name, description } = validation;
 
-    if (registryParams.registerGlobalCommands !== false) {
-      // Register with the plugin command system (validates name and checks for duplicates)
-      const result = registerPluginCommand(record.id, command);
-      if (!result.ok) {
-        pushDiagnostic({
-          level: "error",
-          pluginId: record.id,
-          source: record.source,
-          message: `command registration failed: ${result.error}`,
-        });
-        return;
-      }
-    } else {
-      const normalizedName = name.toLowerCase();
-      const duplicate = registry.commands.find(
-        (entry) => entry.command.name.trim().toLowerCase() === normalizedName,
-      );
-      if (duplicate) {
-        pushDiagnostic({
-          level: "error",
-          pluginId: record.id,
-          source: record.source,
-          message: `command registration failed: Command "${name}" already registered by plugin "${duplicate.pluginId}"`,
-        });
-        return;
-      }
+    const normalizedName = name.toLowerCase();
+    const duplicate = registry.commands.find(
+      (entry) => entry.command.name.trim().toLowerCase() === normalizedName,
+    );
+    if (duplicate) {
+      pushDiagnostic({
+        level: "error",
+        pluginId: record.id,
+        source: record.source,
+        message: `command registration failed: Command "${name}" already registered by plugin "${duplicate.pluginId}"`,
+      });
+      return;
     }
 
     record.commands.push(name);

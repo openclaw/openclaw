@@ -9,7 +9,7 @@ import { openBoundaryFileSync } from "../infra/boundary-file-read.js";
 import { resolveOpenClawPackageRootSync } from "../infra/openclaw-root.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveUserPath } from "../utils.js";
-import { clearPluginCommands, registerPluginCommand } from "./commands.js";
+import { replacePluginCommands } from "./commands.js";
 import {
   applyTestPluginDefaults,
   normalizePluginsConfig,
@@ -527,14 +527,9 @@ function activatePluginRegistry(registry: PluginRegistry, cacheKey: string): voi
 }
 
 function syncPluginCommandsFromRegistry(registry: PluginRegistry): void {
-  clearPluginCommands();
-  for (const entry of registry.commands) {
-    const result = registerPluginCommand(entry.pluginId, entry.command);
-    if (!result.ok) {
-      throw new Error(
-        `cached plugin command registration failed for "${entry.command.name}" (${entry.pluginId}): ${result.error}`,
-      );
-    }
+  const result = replacePluginCommands(registry.commands);
+  if (!result.ok) {
+    throw new Error(`cached plugin command registration failed: ${result.error}`);
   }
 }
 
@@ -563,11 +558,6 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
       }
       return cached;
     }
-  }
-
-  // Clear previously registered plugin commands before reloading the live runtime registry.
-  if (shouldActivate) {
-    clearPluginCommands();
   }
 
   // Lazily initialize the runtime so startup paths that discover/skip plugins do
@@ -607,7 +597,6 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
     logger,
     runtime,
     coreGatewayHandlers: options.coreGatewayHandlers as Record<string, GatewayRequestHandler>,
-    registerGlobalCommands: shouldActivate,
   });
 
   const discovery = discoverOpenClawPlugins({
@@ -923,6 +912,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
     setCachedPluginRegistry(cacheKey, registry);
   }
   if (shouldActivate) {
+    syncPluginCommandsFromRegistry(registry);
     activatePluginRegistry(registry, cacheKey);
   }
   return registry;
