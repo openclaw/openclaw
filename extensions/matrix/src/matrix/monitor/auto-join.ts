@@ -33,10 +33,13 @@ export function registerMatrixAutoJoin(params: {
   }
 
   // For "allowlist" mode, handle invites manually
-  client.on("room.invite", async (roomId: string, _inviteEvent: unknown) => {
-    if (autoJoin !== "allowlist") {
-      return;
-    }
+  client.on("room.invite", async (roomId: string, inviteEvent: unknown) => {
+    const sender =
+      inviteEvent && typeof inviteEvent === "object" && "sender" in inviteEvent
+        ? typeof (inviteEvent as { sender?: unknown }).sender === "string"
+          ? (inviteEvent as { sender: string }).sender.trim()
+          : ""
+        : "";
 
     // Get room alias if available
     let alias: string | undefined;
@@ -53,6 +56,7 @@ export function registerMatrixAutoJoin(params: {
 
     const allowed =
       autoJoinAllowlist.includes("*") ||
+      (sender ? autoJoinAllowlist.includes(sender) : false) ||
       autoJoinAllowlist.includes(roomId) ||
       (alias ? autoJoinAllowlist.includes(alias) : false) ||
       altAliases.some((value) => autoJoinAllowlist.includes(value));

@@ -220,6 +220,7 @@ Notes:
 - The configure wizard prompts for room allowlists (room IDs, aliases, or names) and resolves names only on an exact, unique match.
 - On startup, OpenClaw resolves room/user names in allowlists to IDs and logs the mapping; unresolved entries are ignored for allowlist matching.
 - Invites are auto-joined by default; control with `channels.matrix.autoJoin` and `channels.matrix.autoJoinAllowlist`.
+- In `allowlist` mode, `channels.matrix.autoJoinAllowlist` accepts inviter user IDs, room IDs, room aliases, or `"*"`.
 - To allow **no rooms**, set `channels.matrix.groupPolicy: "disabled"` (or keep an empty allowlist).
 - Legacy key: `channels.matrix.rooms` (same shape as `groups`).
 
@@ -298,6 +299,6 @@ Provider options:
 - `channels.matrix.replyToMode`: reply-to mode for threads/tags.
 - `channels.matrix.mediaMaxMb`: inbound/outbound media cap (MB).
 - `channels.matrix.autoJoin`: invite handling (`always | allowlist | off`, default: always).
-- `channels.matrix.autoJoinAllowlist`: allowed room IDs/aliases for auto-join.
+- `channels.matrix.autoJoinAllowlist`: allowed inviter user IDs, room IDs, room aliases, or `"*"` for auto-join.
 - `channels.matrix.accounts`: multi-account configuration keyed by account ID (each account inherits top-level settings).
 - `channels.matrix.actions`: per-action tool gating (reactions/messages/pins/memberInfo/channelInfo).
