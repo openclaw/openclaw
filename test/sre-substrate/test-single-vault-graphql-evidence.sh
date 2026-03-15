@@ -249,6 +249,23 @@ printf '%s\n' "$request_failed_output" | jq -e '
   and (.probes.exact_query_replay.first_error | contains("operation timed out"))
 ' >/dev/null
 
+invalid_variables_output="$(
+  env PATH="${BIN_NO_CAST}:/usr/bin:/bin" \
+    MOCK_CURL_MODE=success \
+    bash "$SCRIPT_PATH" \
+      --address "$ADDRESS" \
+      --chain-id 8453 \
+      --query "$QUERY" \
+      --variables-json '{"address":'
+)"
+
+printf '%s\n' "$invalid_variables_output" | jq -e '
+  .status == "ok"
+  and .probes.exact_query_replay.ok == "request_failed"
+  and .probes.exact_query_replay.first_error == "variables json must be valid JSON"
+  and .probes.minimal_by_address.ok == "yes"
+' >/dev/null
+
 jq_failure_tmp="${TMP}/jq-failure-tmp"
 mkdir -p "$jq_failure_tmp"
 response_summary_failure_stderr="${TMP}/response-summary-failure.stderr"

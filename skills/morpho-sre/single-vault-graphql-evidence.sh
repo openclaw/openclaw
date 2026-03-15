@@ -66,6 +66,10 @@ require_evm_address() {
   }
 }
 
+json_is_valid() {
+  jq -e . >/dev/null 2>&1 <<<"${1:?json text required}"
+}
+
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --address)
@@ -194,6 +198,11 @@ fi
 graphql_request() {
   local query_text="${1:?query required}"
   local variables_text="${2:?variables required}"
+
+  json_is_valid "$variables_text" || {
+    printf 'variables json must be valid JSON\n' >&2
+    return 1
+  }
 
   jq -nc --arg query "$query_text" --argjson variables "$variables_text" '{query: $query, variables: $variables}' \
     | curl -fsS \
