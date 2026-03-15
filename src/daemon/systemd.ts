@@ -390,21 +390,15 @@ async function execSystemctlUser(
   args: string[],
 ): Promise<{ stdout: string; stderr: string; code: number }> {
   const machineUser = resolveSystemctlMachineScopeUser(env);
-  const sudoUser = env.SUDO_USER?.trim();
 
-  // Under sudo, prefer the invoking non-root user's scope directly.
-  if (sudoUser && sudoUser !== "root" && machineUser) {
-    const machineScopeArgs = resolveSystemctlMachineUserScopeArgs(machineUser);
-    if (machineScopeArgs.length > 0) {
-      return await execSystemctl([...machineScopeArgs, ...args]);
-    }
-  }
-
+  // Try direct user scope first using XDG_RUNTIME_DIR. This works for both
+  // direct sessions and sudo -u <user> when XDG_RUNTIME_DIR is set.
   const directResult = await execSystemctl([...resolveSystemctlDirectUserScopeArgs(), ...args]);
   if (directResult.code === 0) {
     return directResult;
   }
 
+  // Direct method failed; check if we should fall back to --machine scope.
   const detail = `${directResult.stderr} ${directResult.stdout}`.trim();
   if (!machineUser || !shouldFallbackToMachineUserScope(detail)) {
     return directResult;

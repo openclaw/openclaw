@@ -694,13 +694,16 @@ describe("systemd service control", () => {
   });
 
   it("targets the sudo caller's user scope when SUDO_USER is set", async () => {
+    // After fix: try direct --user scope first (works when XDG_RUNTIME_DIR is set),
+    // only fall back to --machine if direct fails. Since direct succeeds for status,
+    // restart also uses direct --user scope.
     execFileMock
       .mockImplementationOnce((_cmd, args, _opts, cb) => {
-        assertMachineUserSystemctlArgs(args, "debian", "status");
-        cb(null, "", "");
+        expect(args).toEqual(["--user", "status"]);
+        cb(null, "", ""); // Direct method succeeds
       })
       .mockImplementationOnce((_cmd, args, _opts, cb) => {
-        assertMachineRestartArgs(args);
+        expect(args).toEqual(["--user", "restart", "openclaw-gateway.service"]);
         cb(null, "", "");
       });
     await assertRestartSuccess({ SUDO_USER: "debian" });
