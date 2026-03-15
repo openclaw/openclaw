@@ -103,11 +103,22 @@ describe("execCronScript", () => {
       basePath: tmpDir,
       abortSignal: controller.signal,
     });
-    // Abort after a short delay to let the process start.
-    setTimeout(() => controller.abort(), 50);
+    // Abort after a delay long enough for the process to start reliably on slow CI.
+    setTimeout(() => controller.abort(), 500);
     const result = await resultPromise;
     expect(result.status).toBe("error");
     expect(result.error).toContain("aborted");
+  });
+
+  it("runs .sh script without executable bit via sh interpreter", async () => {
+    const scriptPath = path.join(tmpDir, "no-x.sh");
+    fs.writeFileSync(scriptPath, "#!/bin/sh\necho hello-no-x", { mode: 0o644 });
+    const result = await execCronScript({
+      payload: { kind: "script", command: scriptPath },
+      basePath: tmpDir,
+    });
+    expect(result.status).toBe("ok");
+    expect(result.summary).toBe("hello-no-x");
   });
 
   it("uses cwd when provided", async () => {

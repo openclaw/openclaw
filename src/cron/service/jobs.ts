@@ -790,8 +790,12 @@ function buildPayloadFromPatch(patch: CronPayloadPatch): CronPayload {
     };
   }
 
-  if (patch.kind !== "agentTurn") {
-    throw new Error(`cron.update unsupported payload.kind: ${String(patch.kind)}`);
+  // TypeScript proves the union is exhausted above, but keep the runtime guard
+  // for forward-compatibility when new payload kinds are added without updating here.
+  if ((patch as CronPayloadPatch).kind !== "agentTurn") {
+    throw new Error(
+      `cron.update unsupported payload.kind: ${String((patch as CronPayloadPatch).kind)}`,
+    );
   }
 
   if (typeof patch.message !== "string" || patch.message.length === 0) {

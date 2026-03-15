@@ -28,6 +28,7 @@ export type CronFieldKey =
   | "payloadText"
   | "payloadModel"
   | "payloadThinking"
+  | "scriptCommand"
   | "timeoutSeconds"
   | "deliveryTo"
   | "failureAlertAfter"
@@ -84,7 +85,10 @@ export type CronModelSuggestionsState = {
 export function supportsAnnounceDelivery(
   form: Pick<CronFormState, "sessionTarget" | "payloadKind">,
 ) {
-  return form.sessionTarget !== "main" && form.payloadKind === "agentTurn";
+  return (
+    form.sessionTarget !== "main" &&
+    (form.payloadKind === "agentTurn" || form.payloadKind === "script")
+  );
 }
 
 export function normalizeCronFormState(form: CronFormState): CronFormState {
@@ -129,18 +133,31 @@ export function validateCronForm(form: CronFormState): CronFieldErrors {
       }
     }
   }
-  if (!form.payloadText.trim()) {
-    errors.payloadText =
-      form.payloadKind === "systemEvent"
-        ? "cron.errors.systemTextRequired"
-        : "cron.errors.agentMessageRequired";
-  }
-  if (form.payloadKind === "agentTurn") {
+  if (form.payloadKind === "script") {
+    if (!form.scriptCommand.trim()) {
+      errors.scriptCommand = "cron.errors.scriptCommandRequired";
+    }
     const timeoutRaw = form.timeoutSeconds.trim();
     if (timeoutRaw) {
       const timeout = toNumber(timeoutRaw, 0);
       if (timeout <= 0) {
         errors.timeoutSeconds = "cron.errors.timeoutInvalid";
+      }
+    }
+  } else {
+    if (!form.payloadText.trim()) {
+      errors.payloadText =
+        form.payloadKind === "systemEvent"
+          ? "cron.errors.systemTextRequired"
+          : "cron.errors.agentMessageRequired";
+    }
+    if (form.payloadKind === "agentTurn") {
+      const timeoutRaw = form.timeoutSeconds.trim();
+      if (timeoutRaw) {
+        const timeout = toNumber(timeoutRaw, 0);
+        if (timeout <= 0) {
+          errors.timeoutSeconds = "cron.errors.timeoutInvalid";
+        }
       }
     }
   }
@@ -450,11 +467,28 @@ function jobToForm(job: CronJob, prev: CronFormState): CronFormState {
     sessionTarget: job.sessionTarget,
     wakeMode: job.wakeMode,
     payloadKind: job.payload.kind,
-    payloadText: job.payload.kind === "systemEvent" ? job.payload.text : job.payload.message,
+    payloadText:
+      job.payload.kind === "systemEvent"
+        ? job.payload.text
+        : job.payload.kind === "agentTurn"
+          ? job.payload.message
+          : "",
     payloadModel: job.payload.kind === "agentTurn" ? (job.payload.model ?? "") : "",
     payloadThinking: job.payload.kind === "agentTurn" ? (job.payload.thinking ?? "") : "",
     payloadLightContext:
       job.payload.kind === "agentTurn" ? job.payload.lightContext === true : false,
+    scriptCommand: job.payload.kind === "script" ? job.payload.command : "",
+    scriptArgs:
+      job.payload.kind === "script" && Array.isArray(job.payload.args)
+        ? job.payload.args.join("\n")
+        : "",
+    scriptEnv:
+      job.payload.kind === "script" && job.payload.env
+        ? Object.entries(job.payload.env)
+            .map(([k, v]) => `${k}=${v}`)
+            .join("\n")
+        : "",
+    scriptCwd: job.payload.kind === "script" ? (job.payload.cwd ?? "") : "",
     deliveryMode: job.delivery?.mode ?? "none",
     deliveryChannel: job.delivery?.channel ?? CRON_CHANNEL_LAST,
     deliveryTo: job.delivery?.to ?? "",
@@ -488,7 +522,8 @@ function jobToForm(job: CronJob, prev: CronFormState): CronFormState {
     failureAlertAccountId:
       failureAlert && typeof failureAlert === "object" ? (failureAlert.accountId ?? "") : "",
     timeoutSeconds:
-      job.payload.kind === "agentTurn" && typeof job.payload.timeoutSeconds === "number"
+      (job.payload.kind === "agentTurn" || job.payload.kind === "script") &&
+      typeof job.payload.timeoutSeconds === "number"
         ? String(job.payload.timeoutSeconds)
         : "",
   };
@@ -555,6 +590,46 @@ export function buildCronPayload(form: CronFormState) {
     }
     return { kind: "systemEvent" as const, text };
   }
+
+  if (form.payloadKind === "script") {
+    const command = form.scriptCommand.trim();
+    if (!command) {
+      throw new Error(t("cron.errors.scriptCommandRequired"));
+    }
+    // Args: one per line, blank lines dropped.
+    const args = form.scriptArgs
+      .split("\n")
+      .map((s) => s.trim())
+      .filter(Boolean);
+    // Env: KEY=VALUE per line, blank lines dropped.
+    const envLines = form.scriptEnv
+      .split("\n")
+      .map((s) => s.trim())
+      .filter(Boolean);
+    const malformed = envLines.filter((e) => e.indexOf("=") <= 0);
+    if (malformed.length > 0) {
+      throw new Error(`${t("cron.errors.scriptEnvMalformed")}: ${malformed.join(", ")}`);
+    }
+    const env =
+      envLines.length > 0
+        ? Object.fromEntries(
+            envLines.map(
+              (e) => [e.slice(0, e.indexOf("=")), e.slice(e.indexOf("=") + 1)] as [string, string],
+            ),
+          )
+        : undefined;
+    const cwd = form.scriptCwd.trim() || undefined;
+    const timeoutSeconds = toNumber(form.timeoutSeconds, 0);
+    return {
+      kind: "script" as const,
+      command,
+      args: args.length > 0 ? args : undefined,
+      env,
+      cwd,
+      timeoutSeconds: timeoutSeconds > 0 ? timeoutSeconds : undefined,
+    };
+  }
+
   const message = form.payloadText.trim();
   if (!message) {
     throw new Error(t("cron.errors.agentMessageRequiredShort"));

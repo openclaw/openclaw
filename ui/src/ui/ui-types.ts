@@ -35,11 +35,16 @@ export type CronFormState = {
   staggerUnit: "seconds" | "minutes";
   sessionTarget: "main" | "isolated" | "current" | `session:${string}`;
   wakeMode: "next-heartbeat" | "now";
-  payloadKind: "systemEvent" | "agentTurn";
+  payloadKind: "systemEvent" | "agentTurn" | "script";
   payloadText: string;
   payloadModel: string;
   payloadThinking: string;
   payloadLightContext: boolean;
+  /** Script payload fields — only used when payloadKind === "script" */
+  scriptCommand: string;
+  scriptArgs: string;
+  scriptEnv: string;
+  scriptCwd: string;
   deliveryMode: "none" | "announce" | "webhook";
   deliveryChannel: string;
   deliveryTo: string;
