@@ -230,6 +230,123 @@ describe("executeSlashCommand /kill", () => {
   });
 });
 
+describe("executeSlashCommand /model subcommands", () => {
+  it("treats /model status as an info query, not a model name", async () => {
+    const request = vi.fn(async (method: string, _payload?: unknown) => {
+      if (method === "sessions.list") {
+        return {
+          defaults: { model: "default-model" },
+          sessions: [
+            row("agent:main:main", {
+              model: "openai-codex/gpt-5.4",
+            }),
+          ],
+        };
+      }
+      if (method === "models.list") {
+        return {
+          models: [{ id: "openai-codex/gpt-5.4" }],
+        };
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+
+    const result = await executeSlashCommand(
+      { request } as unknown as GatewayBrowserClient,
+      "main",
+      "model",
+      "status",
+    );
+
+    // Should show current model info, NOT try to set the model to "status"
+    expect(result.content).toContain("Current model:");
+    expect(result.content).toContain("openai-codex/gpt-5.4");
+    // Ensure sessions.patch was never called
+    expect(request).not.toHaveBeenCalledWith(
+      "sessions.patch",
+      expect.objectContaining({ model: "status" }),
+    );
+  });
+
+  it("treats /model list as an info query", async () => {
+    const request = vi.fn(async (method: string, _payload?: unknown) => {
+      if (method === "sessions.list") {
+        return {
+          defaults: { model: "default-model" },
+          sessions: [row("agent:main:main", { model: "gpt-4.1" })],
+        };
+      }
+      if (method === "models.list") {
+        return { models: [{ id: "gpt-4.1" }, { id: "gpt-4.1-mini" }] };
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+
+    const result = await executeSlashCommand(
+      { request } as unknown as GatewayBrowserClient,
+      "main",
+      "model",
+      "list",
+    );
+
+    expect(result.content).toContain("Current model:");
+    expect(request).not.toHaveBeenCalledWith(
+      "sessions.patch",
+      expect.objectContaining({ model: "list" }),
+    );
+  });
+
+  it("treats /model info as an info query", async () => {
+    const request = vi.fn(async (method: string, _payload?: unknown) => {
+      if (method === "sessions.list") {
+        return {
+          defaults: { model: "default-model" },
+          sessions: [row("agent:main:main", { model: "gpt-4.1" })],
+        };
+      }
+      if (method === "models.list") {
+        return { models: [{ id: "gpt-4.1" }] };
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+
+    const result = await executeSlashCommand(
+      { request } as unknown as GatewayBrowserClient,
+      "main",
+      "model",
+      "info",
+    );
+
+    expect(result.content).toContain("Current model:");
+    expect(request).not.toHaveBeenCalledWith(
+      "sessions.patch",
+      expect.objectContaining({ model: "info" }),
+    );
+  });
+
+  it("sets a real model name via sessions.patch (regression)", async () => {
+    const request = vi.fn(async (method: string, _payload?: unknown) => {
+      if (method === "sessions.patch") {
+        return { ok: true };
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+
+    const result = await executeSlashCommand(
+      { request } as unknown as GatewayBrowserClient,
+      "main",
+      "model",
+      "gpt-4.1",
+    );
+
+    expect(result.content).toContain("gpt-4.1");
+    expect(request).toHaveBeenCalledWith(
+      "sessions.patch",
+      expect.objectContaining({ model: "gpt-4.1" }),
+    );
+  });
+});
+
 describe("executeSlashCommand directives", () => {
   it("resolves the legacy main alias for bare /model", async () => {
     const request = vi.fn(async (method: string, _payload?: unknown) => {
