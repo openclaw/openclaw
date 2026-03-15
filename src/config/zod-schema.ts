@@ -833,6 +833,14 @@ export const OpenClawSchema = z
           })
           .strict()
           .optional(),
+        configBackup: z
+          .object({
+            enabled: z.boolean().optional(),
+            keepBackups: z.number().int().positive().optional(),
+            autoRollback: z.boolean().optional(),
+          })
+          .strict()
+          .optional(),
       })
       .strict()
       .superRefine((gateway, ctx) => {
