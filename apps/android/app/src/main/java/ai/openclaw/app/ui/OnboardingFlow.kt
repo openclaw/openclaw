@@ -455,19 +455,28 @@ fun OnboardingFlow(viewModel: MainViewModel, modifier: Modifier = Modifier) {
     val prompt = pendingTrust!!
     AlertDialog(
       onDismissRequest = { viewModel.declineGatewayTrustPrompt() },
-      title = { Text("Trust this gateway?") },
+      containerColor = onboardingSurface,
+      title = { Text("Trust this gateway?", style = onboardingHeadlineStyle, color = onboardingText) },
       text = {
         Text(
           "First-time TLS connection.\n\nVerify this SHA-256 fingerprint before trusting:\n${prompt.fingerprintSha256}",
+          style = onboardingCalloutStyle,
+          color = onboardingText,
         )
       },
       confirmButton = {
-        TextButton(onClick = { viewModel.acceptGatewayTrustPrompt() }) {
+        TextButton(
+          onClick = { viewModel.acceptGatewayTrustPrompt() },
+          colors = ButtonDefaults.textButtonColors(contentColor = onboardingAccent),
+        ) {
           Text("Trust and continue")
         }
       },
       dismissButton = {
-        TextButton(onClick = { viewModel.declineGatewayTrustPrompt() }) {
+        TextButton(
+          onClick = { viewModel.declineGatewayTrustPrompt() },
+          colors = ButtonDefaults.textButtonColors(contentColor = onboardingTextSecondary),
+        ) {
           Text("Cancel")
         }
       },

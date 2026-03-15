@@ -92,20 +92,28 @@ fun ConnectTabScreen(viewModel: MainViewModel) {
     val prompt = pendingTrust!!
     AlertDialog(
       onDismissRequest = { viewModel.declineGatewayTrustPrompt() },
-      title = { Text("Trust this gateway?") },
+      containerColor = mobileCardSurface,
+      title = { Text("Trust this gateway?", style = mobileHeadline, color = mobileText) },
       text = {
         Text(
           "First-time TLS connection.\n\nVerify this SHA-256 fingerprint before trusting:\n${prompt.fingerprintSha256}",
           style = mobileCallout,
+          color = mobileText,
         )
       },
       confirmButton = {
-        TextButton(onClick = { viewModel.acceptGatewayTrustPrompt() }) {
+        TextButton(
+          onClick = { viewModel.acceptGatewayTrustPrompt() },
+          colors = ButtonDefaults.textButtonColors(contentColor = mobileAccent),
+        ) {
           Text("Trust and continue")
         }
       },
       dismissButton = {
-        TextButton(onClick = { viewModel.declineGatewayTrustPrompt() }) {
+        TextButton(
+          onClick = { viewModel.declineGatewayTrustPrompt() },
+          colors = ButtonDefaults.textButtonColors(contentColor = mobileTextSecondary),
+        ) {
           Text("Cancel")
         }
       },
