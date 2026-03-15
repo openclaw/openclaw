@@ -11,6 +11,8 @@ const DEFAULT_TIMEOUT_MS = 5000;
 const DEFAULT_POLL_INTERVAL_MS = 100;
 const DEFAULT_STALE_MS = 30_000;
 const DEFAULT_PORT_PROBE_TIMEOUT_MS = 1000;
+const UNKNOWN_STATUS_RETRIES = 3;
+const UNKNOWN_STATUS_RETRY_DELAY_MS = 200;
 
 type LockPayload = {
   pid: number;
@@ -222,14 +224,34 @@ export async function acquireGatewayLock(
 
       lastPayload = await readLockPayload(lockPath);
       const ownerPid = lastPayload?.pid;
-      const ownerStatus = ownerPid
+      let ownerStatus: LockOwnerStatus = ownerPid
         ? await resolveGatewayOwnerStatus(ownerPid, lastPayload, platform, port)
         : "unknown";
+
+      // Retry transient "unknown" status before making any stale decision.
+      // /proc reads can fail momentarily under load; retrying avoids
+      // incorrectly treating a live gateway as stale (see #28705).
+      if (ownerStatus === "unknown" && ownerPid) {
+        for (let attempt = 0; attempt < UNKNOWN_STATUS_RETRIES; attempt++) {
+          await new Promise((r) => setTimeout(r, UNKNOWN_STATUS_RETRY_DELAY_MS));
+          ownerStatus = await resolveGatewayOwnerStatus(ownerPid, lastPayload, platform, port);
+          if (ownerStatus !== "unknown") {
+            break;
+          }
+        }
+      }
+
       if (ownerStatus === "dead" && ownerPid) {
         await fs.rm(lockPath, { force: true });
         continue;
       }
-      if (ownerStatus !== "alive") {
+
+      // If status is still "unknown" after retries, the PID passed
+      // isPidAlive so a process with that PID exists. We cannot confirm
+      // it is the original gateway, but silently stealing the lock would
+      // allow duplicate gateways (see #28705). Treat "unknown" the same
+      // as "alive" — keep waiting for the lock to be released.
+      if (ownerStatus !== "alive" && ownerStatus !== "unknown") {
         let stale = false;
         if (lastPayload?.createdAt) {
           const createdAt = Date.parse(lastPayload.createdAt);
