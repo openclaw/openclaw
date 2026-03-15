@@ -11,6 +11,7 @@ if [[ -f "$ROOT_DIR/.env" ]]; then
     _env_line="${_env_line%$'\r'}"
     [[ -z "$_env_line" || "$_env_line" == '#'* ]] && continue
     _env_key="${_env_line%%=*}"
+    [[ "$_env_line" != *'='* ]] && continue
     _env_val="${_env_line#*=}"
     # Strip unquoted inline comments BEFORE removing surrounding quotes.
     # A comment marker outside quotes (KEY=val # note) is removed here.
@@ -409,6 +410,7 @@ ENV_FILE="$ROOT_DIR/.env"
 _write_kv() {
   local _k="$1" _v="$2" _file="$3"
   if [[ "$_v" == *' '* || "$_v" == *$'\t'* ]]; then
+    _v="${_v//\\/\\\\}"
     printf '%s="%s"\n' "$_k" "${_v//"/\\"}" >>"$_file"
   else
     printf '%s=%s\n' "$_k" "$_v" >>"$_file"
