@@ -68,8 +68,11 @@ export function isInboundMediaPath(filePath: string): boolean {
   // Normalise: convert backslashes, then collapse redundant separators /
   // and resolve . / .. segments so that equivalent paths are treated
   // identically regardless of how the caller constructed the string.
+  // Case-fold after normalisation so that mixed-case paths like
+  // MEDIA/INBOUND/file.txt are correctly classified on case-insensitive
+  // filesystems (macOS, Windows) where they resolve to the same file.
   const posix = filePath.replace(/\\/g, "/");
-  const normalized = path.posix.normalize(posix);
+  const normalized = path.posix.normalize(posix).toLowerCase();
   // Relative path: media/inbound is the first directory segment.
   if (
     normalized.startsWith(`${INBOUND_MEDIA_PATH_SEGMENT}/`) ||

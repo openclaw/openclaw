@@ -68,6 +68,17 @@ describe("isInboundMediaPath", () => {
     // Exact directory match (no trailing slash)
     expect(isInboundMediaPath("/Users/alice/openclaw/media/inbound")).toBe(false);
   });
+
+  it("classifies mixed-case inbound paths on case-insensitive filesystems (regression #11207 P2)", () => {
+    // On macOS/Windows (case-insensitive), MEDIA/INBOUND/file.txt resolves to
+    // the same file as media/inbound/file.txt.  The guard must case-fold the
+    // normalised path before comparing so attackers cannot bypass it by
+    // capitalising the directory name.
+    expect(isInboundMediaPath("MEDIA/INBOUND/file.txt")).toBe(true);
+    expect(isInboundMediaPath("Media/Inbound/file.txt")).toBe(true);
+    expect(isInboundMediaPath("/workspace/MEDIA/INBOUND/file.txt")).toBe(true);
+    expect(isInboundMediaPath("C:\\workspace\\MEDIA\\INBOUND\\file.txt")).toBe(true);
+  });
 });
 
 // ---------------------------------------------------------------------------
