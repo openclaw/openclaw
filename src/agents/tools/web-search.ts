@@ -1,4 +1,5 @@
 import { Type } from "@sinclair/typebox";
+import { ProxyAgent, fetch as undiciFetch } from "undici";
 import { formatCliCommand } from "../../cli/command-format.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { normalizeResolvedSecretInputString } from "../../config/types.secrets.js";
@@ -538,6 +539,49 @@ function resolveSearchConfig(cfg?: OpenClawConfig): WebSearchConfig {
   return search as WebSearchConfig;
 }
 
+let cachedProxyAgent: { url: string; agent: ProxyAgent; fetchFn: typeof fetch } | undefined;
+
+function resolveSearchProxy(search?: WebSearchConfig): typeof fetch | undefined {
+  const proxyUrl =
+    search && "proxy" in search && typeof search.proxy === "string" ? search.proxy.trim() : "";
+  if (!proxyUrl) {
+    // Proxy removed — tear down cached agent if any
+    if (cachedProxyAgent) {
+      void cachedProxyAgent.agent.close();
+      cachedProxyAgent = undefined;
+    }
+    return undefined;
+  }
+
+  // Reuse existing agent if URL hasn't changed
+  if (cachedProxyAgent && cachedProxyAgent.url === proxyUrl) {
+    return cachedProxyAgent.fetchFn;
+  }
+
+  // URL changed — close old agent before creating a new one
+  if (cachedProxyAgent) {
+    void cachedProxyAgent.agent.close();
+    cachedProxyAgent = undefined;
+  }
+
+  try {
+    const agent = new ProxyAgent(proxyUrl);
+    const fetchFn = ((input: RequestInfo | URL, init?: RequestInit) =>
+      undiciFetch(input as string | URL, {
+        ...(init as Record<string, unknown>),
+        dispatcher: agent,
+      }) as unknown as Promise<Response>) as typeof fetch;
+    cachedProxyAgent = { url: proxyUrl, agent, fetchFn };
+    return fetchFn;
+  } catch (err) {
+    throw new Error(
+      `Invalid proxy URL in tools.web.search.proxy: "${proxyUrl}". ` +
+        "Expected a valid HTTP/HTTPS URL (e.g. http://proxy:8080).",
+      { cause: err },
+    );
+  }
+}
+
 function resolveSearchEnabled(params: { search?: WebSearchConfig; sandboxed?: boolean }): boolean {
   if (typeof params.search?.enabled === "boolean") {
     return params.search.enabled;
@@ -920,9 +964,19 @@ async function withTrustedWebSearchEndpoint<T>(
     url: string;
     timeoutSeconds: number;
     init: RequestInit;
+    fetchImpl?: typeof fetch;
   },
   run: (response: Response) => Promise<T>,
 ): Promise<T> {
+  // When a config-level proxy is set, use the custom fetch directly;
+  // otherwise route through the SSRF-guarded endpoint wrapper.
+  if (params.fetchImpl) {
+    const res = await params.fetchImpl(params.url, {
+      ...params.init,
+      signal: AbortSignal.timeout(params.timeoutSeconds * 1000),
+    });
+    return run(res);
+  }
   return withTrustedWebToolsEndpoint(
     {
       url: params.url,
@@ -938,6 +992,7 @@ async function runGeminiSearch(params: {
   apiKey: string;
   model: string;
   timeoutSeconds: number;
+  fetchImpl?: typeof fetch;
 }): Promise<{ content: string; citations: Array<{ url: string; title?: string }> }> {
   const endpoint = `${GEMINI_API_BASE}/models/${params.model}:generateContent`;
 
@@ -945,6 +1000,7 @@ async function runGeminiSearch(params: {
     {
       url: endpoint,
       timeoutSeconds: params.timeoutSeconds,
+      fetchImpl: params.fetchImpl,
       init: {
         method: "POST",
         headers: {
@@ -1173,6 +1229,7 @@ async function runPerplexitySearchApi(params: {
   searchBeforeDate?: string;
   maxTokens?: number;
   maxTokensPerPage?: number;
+  fetchImpl?: typeof fetch;
 }): Promise<
   Array<{ title: string; url: string; description: string; published?: string; siteName?: string }>
 > {
@@ -1210,6 +1267,7 @@ async function runPerplexitySearchApi(params: {
     {
       url: PERPLEXITY_SEARCH_ENDPOINT,
       timeoutSeconds: params.timeoutSeconds,
+      fetchImpl: params.fetchImpl,
       init: {
         method: "POST",
         headers: {
@@ -1308,6 +1366,7 @@ async function runGrokSearch(params: {
   model: string;
   timeoutSeconds: number;
   inlineCitations: boolean;
+  fetchImpl?: typeof fetch;
 }): Promise<{
   content: string;
   citations: string[];
@@ -1333,6 +1392,7 @@ async function runGrokSearch(params: {
     {
       url: XAI_API_ENDPOINT,
       timeoutSeconds: params.timeoutSeconds,
+      fetchImpl: params.fetchImpl,
       init: {
         method: "POST",
         headers: {
@@ -1415,6 +1475,7 @@ async function runKimiSearch(params: {
   baseUrl: string;
   model: string;
   timeoutSeconds: number;
+  fetchImpl?: typeof fetch;
 }): Promise<{ content: string; citations: string[] }> {
   const baseUrl = params.baseUrl.trim().replace(/\/$/, "");
   const endpoint = `${baseUrl}/chat/completions`;
@@ -1432,6 +1493,7 @@ async function runKimiSearch(params: {
       {
         url: endpoint,
         timeoutSeconds: params.timeoutSeconds,
+        fetchImpl: params.fetchImpl,
         init: {
           method: "POST",
           headers: {
@@ -1603,6 +1665,7 @@ async function runWebSearch(params: {
   kimiBaseUrl?: string;
   kimiModel?: string;
   braveMode?: "web" | "llm-context";
+  fetchImpl?: typeof fetch;
 }): Promise<Record<string, unknown>> {
   const effectiveBraveMode = params.braveMode ?? "web";
   const providerSpecificKey =
@@ -1669,6 +1732,7 @@ async function runWebSearch(params: {
       searchBeforeDate: params.dateBefore ? isoToPerplexityDate(params.dateBefore) : undefined,
       maxTokens: params.maxTokens,
       maxTokensPerPage: params.maxTokensPerPage,
+      fetchImpl: params.fetchImpl,
     });
 
     const payload = {
@@ -1695,6 +1759,7 @@ async function runWebSearch(params: {
       model: params.grokModel ?? DEFAULT_GROK_MODEL,
       timeoutSeconds: params.timeoutSeconds,
       inlineCitations: params.grokInlineCitations ?? false,
+      fetchImpl: params.fetchImpl,
     });
 
     const payload = {
@@ -1723,6 +1788,7 @@ async function runWebSearch(params: {
       baseUrl: params.kimiBaseUrl ?? DEFAULT_KIMI_BASE_URL,
       model: params.kimiModel ?? DEFAULT_KIMI_MODEL,
       timeoutSeconds: params.timeoutSeconds,
+      fetchImpl: params.fetchImpl,
     });
 
     const payload = {
@@ -1749,6 +1815,7 @@ async function runWebSearch(params: {
       apiKey: params.apiKey,
       model: params.geminiModel ?? DEFAULT_GEMINI_MODEL,
       timeoutSeconds: params.timeoutSeconds,
+      fetchImpl: params.fetchImpl,
     });
 
     const payload = {
@@ -1838,6 +1905,7 @@ async function runWebSearch(params: {
     {
       url: url.toString(),
       timeoutSeconds: params.timeoutSeconds,
+      fetchImpl: params.fetchImpl,
       init: {
         method: "GET",
         headers: {
@@ -2160,6 +2228,7 @@ export function createWebSearchTool(options?: {
         });
       }
 
+      const searchFetch = resolveSearchProxy(search);
       const result = await runWebSearch({
         query,
         count: resolveSearchCount(count, DEFAULT_SEARCH_COUNT),
@@ -2186,6 +2255,7 @@ export function createWebSearchTool(options?: {
         kimiBaseUrl: resolveKimiBaseUrl(kimiConfig),
         kimiModel: resolveKimiModel(kimiConfig),
         braveMode,
+        fetchImpl: searchFetch,
       });
       return jsonResult(result);
     },
@@ -2219,4 +2289,5 @@ export const __testing = {
   resolveRedirectUrl: resolveCitationRedirectUrl,
   resolveBraveMode,
   mapBraveLlmContextResults,
+  resolveSearchProxy,
 } as const;
