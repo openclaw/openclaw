@@ -40,7 +40,7 @@ function waitUntilAbort(signal?: AbortSignal, onAbort?: () => void): Promise<voi
 }
 
 export function createSynologyChatPlugin() {
-  return {
+  const plugin = {
     id: CHANNEL_ID,
 
     meta: {
@@ -194,6 +194,43 @@ export function createSynologyChatPlugin() {
     outbound: {
       deliveryMode: "gateway" as const,
       textChunkLimit: 2000,
+
+      sendPayload: async (ctx: any) => {
+        const text = ctx.payload.text ?? "";
+        const urls = ctx.payload.mediaUrls?.length
+          ? ctx.payload.mediaUrls
+          : ctx.payload.mediaUrl
+            ? [ctx.payload.mediaUrl]
+            : [];
+        if (!text && urls.length === 0) {
+          return { channel: CHANNEL_ID, messageId: "" };
+        }
+        if (urls.length > 0) {
+          let lastResult = await plugin.outbound.sendMedia!({
+            ...ctx,
+            text,
+            mediaUrl: urls[0],
+          });
+          for (let i = 1; i < urls.length; i++) {
+            lastResult = await plugin.outbound.sendMedia!({
+              ...ctx,
+              text: "",
+              mediaUrl: urls[i],
+            });
+          }
+          return lastResult;
+        }
+        const outbound = plugin.outbound;
+        const limit = outbound.textChunkLimit;
+        const chunks =
+          limit && (outbound as any).chunker ? (outbound as any).chunker(text, limit) : [text];
+        if (!chunks.length) return { channel: CHANNEL_ID, messageId: "" };
+        let lastResult: any;
+        for (const chunk of chunks) {
+          lastResult = await outbound.sendText!({ ...ctx, text: chunk });
+        }
+        return lastResult!;
+      },
 
       sendText: async ({ to, text, accountId, cfg }: any) => {
         const account: ResolvedSynologyChatAccount = resolveAccount(cfg ?? {}, accountId);
@@ -376,4 +413,5 @@ export function createSynologyChatPlugin() {
       ],
     },
   };
+  return plugin;
 }
