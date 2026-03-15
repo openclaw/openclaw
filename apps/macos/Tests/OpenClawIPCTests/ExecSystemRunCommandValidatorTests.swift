@@ -50,6 +50,37 @@ struct ExecSystemRunCommandValidatorTests {
         }
     }
 
+    @Test func `env dash shell wrapper requires canonical raw command binding`() {
+        let command = ["/usr/bin/env", "-", "bash", "-lc", "echo hi"]
+
+        let legacy = ExecSystemRunCommandValidator.resolve(command: command, rawCommand: "echo hi")
+        switch legacy {
+        case .ok:
+            Issue.record("expected rawCommand mismatch for env dash prelude")
+        case let .invalid(message):
+            #expect(message.contains("rawCommand does not match command"))
+        }
+
+        let canonicalRaw = "/usr/bin/env - bash -lc \"echo hi\""
+        let canonical = ExecSystemRunCommandValidator.resolve(command: command, rawCommand: canonicalRaw)
+        switch canonical {
+        case let .ok(resolved):
+            #expect(resolved.displayCommand == canonicalRaw)
+        case let .invalid(message):
+            Issue.record("unexpected invalid result for canonical raw command: \(message)")
+        }
+    }
+
+    @Test func `resolve keeps env dash wrapper as effective executable`() {
+        let resolution = ExecCommandResolution.resolve(
+            command: ["/usr/bin/env", "-", "/usr/bin/printf", "ok"],
+            cwd: nil,
+            env: ["PATH": "/usr/bin:/bin"])
+        #expect(resolution?.rawExecutable == "/usr/bin/env")
+        #expect(resolution?.resolvedPath == "/usr/bin/env")
+        #expect(resolution?.executableName == "env")
+    }
+
     private static func loadContractCases() throws -> [SystemRunCommandContractCase] {
         let fixtureURL = try self.findContractFixtureURL()
         let data = try Data(contentsOf: fixtureURL)

@@ -276,6 +276,17 @@ struct ExecAllowlistTests {
         #expect(resolutions.isEmpty)
     }
 
+    @Test func `resolve for allowlist fails closed for env dash shell wrappers`() {
+        let command = ["/usr/bin/env", "-", "bash", "-lc", "echo allowlisted"]
+        let canonicalRaw = "/usr/bin/env - bash -lc \"echo allowlisted\""
+        let resolutions = ExecCommandResolution.resolveForAllowlist(
+            command: command,
+            rawCommand: canonicalRaw,
+            cwd: nil,
+            env: ["PATH": "/usr/bin:/bin"])
+        #expect(resolutions.isEmpty)
+    }
+
     @Test func `resolve for allowlist unwraps env to effective direct executable`() {
         let command = ["/usr/bin/env", "FOO=bar", "/usr/bin/printf", "ok"]
         let resolutions = ExecCommandResolution.resolveForAllowlist(

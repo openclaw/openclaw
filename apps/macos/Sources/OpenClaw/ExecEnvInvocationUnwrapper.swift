@@ -101,9 +101,12 @@ enum ExecEnvInvocationUnwrapper {
                 idx += 1
                 continue
             }
-            if token == "--" || token == "-" {
+            if token == "--" {
                 idx += 1
                 break
+            }
+            if token == "-" {
+                return nil
             }
             if self.isEnvAssignment(token) {
                 return nil
