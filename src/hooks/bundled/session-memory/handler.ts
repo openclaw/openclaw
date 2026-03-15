@@ -352,6 +352,34 @@ const saveSessionToMemory: HookHandler = async (event) => {
     });
     log.debug("Memory file written successfully");
 
+    // Also append to the canonical daily file (YYYY-MM-DD.md) so the boot
+    // sequence can find it without relying on memory_search. The boot prompt
+    // in AGENTS.md instructs agents to read memory/YYYY-MM-DD.md, but the
+    // slug-named file above is invisible to that path.
+    const canonicalFilename = `${dateStr}.md`;
+    try {
+      const canonicalPath = path.join(memoryDir, canonicalFilename);
+      let existing = "";
+      try {
+        existing = await fs.readFile(canonicalPath, "utf-8");
+      } catch {
+        // File doesn't exist yet — will be created.
+      }
+      const appended = existing ? `${existing}\n${entry}` : entry;
+      await writeFileWithinRoot({
+        rootDir: memoryDir,
+        relativePath: canonicalFilename,
+        data: appended,
+        encoding: "utf-8",
+      });
+      log.debug("Appended to canonical daily memory file", { canonicalFilename });
+    } catch (canonicalErr) {
+      log.warn("Failed to append to canonical daily memory file", {
+        canonicalFilename,
+        error: canonicalErr instanceof Error ? canonicalErr.message : String(canonicalErr),
+      });
+    }
+
     // Log completion (but don't send user-visible confirmation - it's internal housekeeping)
     const relPath = memoryFilePath.replace(os.homedir(), "~");
     log.info(`Session context saved to ${relPath}`);
