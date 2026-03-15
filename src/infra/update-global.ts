@@ -57,6 +57,20 @@ function applyWindowsPackageInstallEnv(env: Record<string, string>) {
   env.NODE_LLAMA_CPP_SKIP_DOWNLOAD = "1";
 }
 
+export function resolveGlobalInstallSpec(params: {
+  packageName: string;
+  tag: string;
+  env?: NodeJS.ProcessEnv;
+}): string {
+  const override =
+    params.env?.OPENCLAW_UPDATE_PACKAGE_SPEC?.trim() ||
+    process.env.OPENCLAW_UPDATE_PACKAGE_SPEC?.trim();
+  if (override) {
+    return override;
+  }
+  return `${params.packageName}@${params.tag}`;
+}
+
 export async function createGlobalInstallEnv(
   env?: NodeJS.ProcessEnv,
 ): Promise<NodeJS.ProcessEnv | undefined> {

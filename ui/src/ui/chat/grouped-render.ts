@@ -114,6 +114,7 @@ export function renderMessageGroup(
   opts: {
     onOpenSidebar?: (content: string) => void;
     showReasoning: boolean;
+    showToolCalls?: boolean;
     assistantName?: string;
     assistantAvatar?: string | null;
     basePath?: string;
@@ -165,6 +166,7 @@ export function renderMessageGroup(
             {
               isStreaming: group.isStreaming && index === group.messages.length - 1,
               showReasoning: opts.showReasoning,
+              showToolCalls: opts.showToolCalls ?? true,
             },
             opts.onOpenSidebar,
           ),
@@ -174,7 +176,11 @@ export function renderMessageGroup(
           <span class="chat-group-timestamp">${timestamp}</span>
           ${renderMessageMeta(meta)}
           ${normalizedRole === "assistant" && isTtsSupported() ? renderTtsButton(group) : nothing}
-          ${opts.onDelete ? renderDeleteButton(opts.onDelete) : nothing}
+          ${
+            opts.onDelete
+              ? renderDeleteButton(opts.onDelete, normalizedRole === "user" ? "left" : "right")
+              : nothing
+          }
         </div>
       </div>
     </div>
@@ -312,6 +318,8 @@ function extractGroupText(group: MessageGroup): string {
 
 const SKIP_DELETE_CONFIRM_KEY = "openclaw:skipDeleteConfirm";
 
+type DeleteConfirmSide = "left" | "right";
+
 function shouldSkipDeleteConfirm(): boolean {
   try {
     return localStorage.getItem(SKIP_DELETE_CONFIRM_KEY) === "1";
@@ -320,7 +328,7 @@ function shouldSkipDeleteConfirm(): boolean {
   }
 }
 
-function renderDeleteButton(onDelete: () => void) {
+function renderDeleteButton(onDelete: () => void, side: DeleteConfirmSide) {
   return html`
     <span class="chat-delete-wrap">
       <button
@@ -340,7 +348,7 @@ function renderDeleteButton(onDelete: () => void) {
             return;
           }
           const popover = document.createElement("div");
-          popover.className = "chat-delete-confirm";
+          popover.className = `chat-delete-confirm chat-delete-confirm--${side}`;
           popover.innerHTML = `
             <p class="chat-delete-confirm__text">Delete this message?</p>
             <label class="chat-delete-confirm__remember">
@@ -613,7 +621,7 @@ function jsonSummaryLabel(parsed: unknown): string {
 
 function renderGroupedMessage(
   message: unknown,
-  opts: { isStreaming: boolean; showReasoning: boolean },
+  opts: { isStreaming: boolean; showReasoning: boolean; showToolCalls?: boolean },
   onOpenSidebar?: (content: string) => void,
 ) {
   const m = message as Record<string, unknown>;
@@ -626,7 +634,7 @@ function renderGroupedMessage(
     typeof m.toolCallId === "string" ||
     typeof m.tool_call_id === "string";
 
-  const toolCards = extractToolCards(message);
+  const toolCards = (opts.showToolCalls ?? true) ? extractToolCards(message) : [];
   const hasToolCards = toolCards.length > 0;
   const images = extractImages(message);
   const hasImages = images.length > 0;
@@ -650,7 +658,9 @@ function renderGroupedMessage(
     return renderCollapsedToolCards(toolCards, onOpenSidebar);
   }
 
-  if (!markdown && !hasToolCards && !hasImages) {
+  // Suppress empty bubbles when tool cards are the only content and toggle is off
+  const visibleToolCards = hasToolCards && (opts.showToolCalls ?? true);
+  if (!markdown && !visibleToolCards && !hasImages) {
     return nothing;
   }
 

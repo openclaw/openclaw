@@ -108,10 +108,9 @@ export const SLASH_COMMANDS: SlashCommandDef[] = [
   },
   {
     name: "status",
-    description: "Show system status",
+    description: "Show session status",
     icon: "barChart",
     category: "tools",
-    executeLocal: true,
   },
   {
     name: "export",

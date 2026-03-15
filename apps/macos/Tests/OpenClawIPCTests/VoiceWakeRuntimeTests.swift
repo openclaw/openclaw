@@ -74,4 +74,22 @@ struct VoiceWakeRuntimeTests {
         let config = WakeWordGateConfig(triggers: ["openclaw"], minPostTriggerGap: 0.3)
         #expect(WakeWordGate.match(transcript: transcript, segments: segments, config: config)?.command == "do thing")
     }
+
+    @Test func `gate command text handles foreign string ranges`() {
+        let transcript = "hey openclaw do thing"
+        let other = "do thing"
+        let foreignRange = other.range(of: "do")
+        let segments = [
+            WakeWordSegment(text: "hey", start: 0.0, duration: 0.1, range: transcript.range(of: "hey")),
+            WakeWordSegment(text: "openclaw", start: 0.2, duration: 0.1, range: transcript.range(of: "openclaw")),
+            WakeWordSegment(text: "do", start: 0.9, duration: 0.1, range: foreignRange),
+            WakeWordSegment(text: "thing", start: 1.1, duration: 0.1, range: nil),
+        ]
+
+        #expect(
+            WakeWordGate.commandText(
+                transcript: transcript,
+                segments: segments,
+                triggerEndTime: 0.3) == "do thing")
+    }
 }

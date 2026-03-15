@@ -151,7 +151,7 @@ fun ChatPendingToolsBubble(toolCalls: List<ChatPendingToolCall>) {
 
   ChatBubbleContainer(
     style = bubbleStyle("assistant"),
-    roleLabel = "TOOLS",
+    roleLabel = "Tools",
   ) {
     Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
       Text("Running tools...", style = mobileCaption1.copy(fontWeight = FontWeight.SemiBold), color = mobileTextSecondary)
@@ -188,7 +188,7 @@ fun ChatPendingToolsBubble(toolCalls: List<ChatPendingToolCall>) {
 fun ChatStreamingAssistantBubble(text: String) {
   ChatBubbleContainer(
     style = bubbleStyle("assistant").copy(borderColor = mobileAccent),
-    roleLabel = "ASSISTANT · LIVE",
+    roleLabel = "OpenClaw · Live",
   ) {
     ChatMarkdown(text = text, textColor = mobileText)
   }
@@ -224,9 +224,9 @@ private fun bubbleStyle(role: String): ChatBubbleStyle {
 
 private fun roleLabel(role: String): String {
   return when (role) {
-    "user" -> "USER"
-    "system" -> "SYSTEM"
-    else -> "ASSISTANT"
+    "user" -> "You"
+    "system" -> "System"
+    else -> "OpenClaw"
   }
 }
 
