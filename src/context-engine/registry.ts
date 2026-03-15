@@ -47,7 +47,13 @@ export function registerContextEngine(
   factory: ContextEngineFactory,
   opts?: { owner?: string },
 ): ContextEngineRegistrationResult {
-  const owner = opts?.owner?.trim() || "core";
+  const rawOwner = opts?.owner?.trim();
+  if (opts?.owner !== undefined && !rawOwner) {
+    throw new Error(
+      `registerContextEngine: owner must be a non-empty string, got ${JSON.stringify(opts.owner)}`,
+    );
+  }
+  const owner = rawOwner || "core";
   const registry = getContextEngineRegistryState().engines;
   const existing = registry.get(id);
   if (existing && existing.owner !== owner) {
