@@ -6,7 +6,7 @@ import {
   resolveDefaultAgentId,
 } from "../agents/agent-scope.js";
 import { appendCronStyleCurrentTimeLine } from "../agents/current-time.js";
-import { resolveEffectiveMessagesConfig } from "../agents/identity.js";
+import { resolveEffectiveMessagesConfig, resolveIdentityName } from "../agents/identity.js";
 import { DEFAULT_HEARTBEAT_FILENAME } from "../agents/workspace.js";
 import { resolveHeartbeatReplyPayload } from "../auto-reply/heartbeat-reply-payload.js";
 import {
@@ -17,6 +17,11 @@ import {
   stripHeartbeatToken,
 } from "../auto-reply/heartbeat.js";
 import { getReplyFromConfig } from "../auto-reply/reply.js";
+import {
+  extractShortModelName,
+  resolveResponsePrefixTemplate,
+  type ResponsePrefixContext,
+} from "../auto-reply/reply/response-prefix-template.js";
 import { HEARTBEAT_TOKEN } from "../auto-reply/tokens.js";
 import type { ReplyPayload } from "../auto-reply/types.js";
 import { getChannelPlugin } from "../channels/plugins/index.js";
@@ -707,10 +712,14 @@ export async function runHeartbeatOnce(opts: {
         })
       : { showOk: false, showAlerts: true, useIndicator: true };
   const { sender } = resolveHeartbeatSenderContext({ cfg, entry, delivery });
-  const responsePrefix = resolveEffectiveMessagesConfig(cfg, agentId, {
+  const responsePrefixTemplate = resolveEffectiveMessagesConfig(cfg, agentId, {
     channel: delivery.channel !== "none" ? delivery.channel : undefined,
     accountId: delivery.accountId,
   }).responsePrefix;
+  const responsePrefixContext: ResponsePrefixContext = {
+    identityName: resolveIdentityName(cfg, agentId),
+  };
+  let responsePrefix = responsePrefixTemplate;
 
   const canRelayToUser = Boolean(
     delivery.channel !== "none" && delivery.to && visibility.showAlerts,
@@ -745,7 +754,6 @@ export async function runHeartbeatOnce(opts: {
     return { status: "skipped", reason: "alerts-disabled" };
   }
 
-  const heartbeatOkText = responsePrefix ? `${responsePrefix} ${HEARTBEAT_TOKEN}` : HEARTBEAT_TOKEN;
   const outboundSession = buildOutboundSessionContext({
     cfg,
     agentId,
@@ -758,6 +766,9 @@ export async function runHeartbeatOnce(opts: {
     if (!canAttemptHeartbeatOk || delivery.channel === "none" || !delivery.to) {
       return false;
     }
+    const heartbeatOkText = responsePrefix
+      ? `${responsePrefix} ${HEARTBEAT_TOKEN}`
+      : HEARTBEAT_TOKEN;
     const heartbeatPlugin = getChannelPlugin(delivery.channel);
     if (heartbeatPlugin?.heartbeat?.checkReady) {
       const readiness = await heartbeatPlugin.heartbeat.checkReady({
@@ -795,15 +806,27 @@ export async function runHeartbeatOnce(opts: {
     const suppressToolErrorWarnings = heartbeat?.suppressToolErrorWarnings === true;
     const bootstrapContextMode: "lightweight" | undefined =
       heartbeat?.lightContext === true ? "lightweight" : undefined;
+    const onModelSelected = (selection: {
+      provider: string;
+      model: string;
+      thinkLevel?: string;
+    }) => {
+      responsePrefixContext.provider = selection.provider;
+      responsePrefixContext.model = extractShortModelName(selection.model);
+      responsePrefixContext.modelFull = `${selection.provider}/${selection.model}`;
+      responsePrefixContext.thinkingLevel = selection.thinkLevel ?? "off";
+    };
     const replyOpts = heartbeatModelOverride
       ? {
           isHeartbeat: true,
           heartbeatModelOverride,
           suppressToolErrorWarnings,
           bootstrapContextMode,
+          onModelSelected,
         }
-      : { isHeartbeat: true, suppressToolErrorWarnings, bootstrapContextMode };
+      : { isHeartbeat: true, suppressToolErrorWarnings, bootstrapContextMode, onModelSelected };
     const replyResult = await getReplyFromConfig(ctx, replyOpts, cfg);
+    responsePrefix = resolveResponsePrefixTemplate(responsePrefixTemplate, responsePrefixContext);
     const replyPayload = resolveHeartbeatReplyPayload(replyResult);
     const includeReasoning = heartbeat?.includeReasoning === true;
     const reasoningPayloads = includeReasoning
