@@ -45,6 +45,11 @@ Use this format when adding entries:
 
 ## Listed plugins
 
+- **Pass Manager** — OpenClaw plugin for the standard Unix password manager (`pass`), with tools to list, get, save, search, and generate OTP codes.
+  npm: `openclaw-pass-manager`
+  repo: `https://github.com/CaddyGlow/openclaw-pass-manager`
+  install: `openclaw plugins install openclaw-pass-manager`
+
 - **WeChat** — Connect OpenClaw to WeChat personal accounts via WeChatPadPro (iPad protocol). Supports text, image, and file exchange with keyword-triggered conversations.
   npm: `@icesword760/openclaw-wechat`
   repo: `https://github.com/icesword0760/openclaw-wechat`
