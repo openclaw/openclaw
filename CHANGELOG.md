@@ -13,6 +13,7 @@ Docs: https://docs.openclaw.ai
 - Feishu/streaming: add `onReasoningStream` and `onReasoningEnd` support to streaming cards, so `/reasoning stream` renders thinking tokens as markdown blockquotes in the same card — matching the Telegram channel's reasoning lane behavior.
 - Refactor/channels: remove the legacy channel shim directories and point channel-specific imports directly at the extension-owned implementations. (#45967) thanks @scoootscooob.
 - Android/nodes: add `callLog.search` plus shared Call Log permission wiring so Android nodes can search recent call history through the gateway. (#44073) Thanks @lxk7280.
+- Gateway/Control UI: add a Russian (`ru-RU`) locale pack for the Control UI and auto-detect Russian browser locales in the dashboard language picker. Thanks @vitalcc55.
 
 ### Fixes
 

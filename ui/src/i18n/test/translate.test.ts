@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { resolveNavigatorLocale } from "../lib/registry.ts";
 import { pt_BR } from "../locales/pt-BR.ts";
 import { zh_CN } from "../locales/zh-CN.ts";
 import { zh_TW } from "../locales/zh-TW.ts";
@@ -79,6 +80,17 @@ describe("i18n", () => {
     expect(translate.t("common.health")).toBe("健康状况");
   });
 
+  it("loads Russian translations", async () => {
+    await translate.i18n.setLocale("ru-RU");
+    expect(translate.t("common.health")).toBe("Состояние");
+    expect(translate.t("common.online")).toBe("В сети");
+    expect(translate.t("login.subtitle")).toBe("Панель управления шлюзом");
+    expect(translate.t("overview.connection.title")).toBe("Как подключиться");
+    expect(translate.t("chat.toolCallsToggle")).toBe(
+      "Переключить отображение вызовов инструментов и их результатов",
+    );
+  });
+
   it("loads saved non-English locale on startup", async () => {
     vi.resetModules();
     vi.stubGlobal("localStorage", createStorageMock());
@@ -96,5 +108,10 @@ describe("i18n", () => {
     expect((pt_BR.common as { version?: string }).version).toBeTruthy();
     expect((zh_CN.common as { version?: string }).version).toBeTruthy();
     expect((zh_TW.common as { version?: string }).version).toBeTruthy();
+  });
+
+  it("resolves Russian navigator locales", () => {
+    expect(resolveNavigatorLocale("ru-RU")).toBe("ru-RU");
+    expect(resolveNavigatorLocale("ru")).toBe("ru-RU");
   });
 });

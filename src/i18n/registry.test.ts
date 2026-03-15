@@ -20,7 +20,7 @@ function getNestedTranslation(map: TranslationMap | null, ...path: string[]): st
 
 describe("ui i18n locale registry", () => {
   it("lists supported locales", () => {
-    expect(SUPPORTED_LOCALES).toEqual(["en", "zh-CN", "zh-TW", "pt-BR", "de", "es"]);
+    expect(SUPPORTED_LOCALES).toEqual(["en", "zh-CN", "zh-TW", "pt-BR", "de", "es", "ru-RU"]);
     expect(DEFAULT_LOCALE).toBe("en");
   });
 
@@ -29,6 +29,8 @@ describe("ui i18n locale registry", () => {
     expect(resolveNavigatorLocale("es-ES")).toBe("es");
     expect(resolveNavigatorLocale("es-MX")).toBe("es");
     expect(resolveNavigatorLocale("pt-PT")).toBe("pt-BR");
+    expect(resolveNavigatorLocale("ru")).toBe("ru-RU");
+    expect(resolveNavigatorLocale("ru-RU")).toBe("ru-RU");
     expect(resolveNavigatorLocale("zh-HK")).toBe("zh-TW");
     expect(resolveNavigatorLocale("en-US")).toBe("en");
   });
@@ -37,12 +39,14 @@ describe("ui i18n locale registry", () => {
     const de = await loadLazyLocaleTranslation("de");
     const es = await loadLazyLocaleTranslation("es");
     const ptBR = await loadLazyLocaleTranslation("pt-BR");
+    const ruRU = await loadLazyLocaleTranslation("ru-RU");
     const zhCN = await loadLazyLocaleTranslation("zh-CN");
 
     expect(getNestedTranslation(de, "common", "health")).toBe("Status");
     expect(getNestedTranslation(es, "common", "health")).toBe("Estado");
     expect(getNestedTranslation(es, "languages", "de")).toBe("Deutsch (Alemán)");
     expect(getNestedTranslation(ptBR, "languages", "es")).toBe("Español (Espanhol)");
+    expect(getNestedTranslation(ruRU, "common", "health")).toBe("Состояние");
     expect(getNestedTranslation(zhCN, "common", "health")).toBe("\u5065\u5eb7\u72b6\u51b5");
     expect(await loadLazyLocaleTranslation("en")).toBeNull();
   });
