@@ -104,7 +104,11 @@
     },
     "src/cron/normalize.ts": {
       "purpose": "",
-      "exports": ["normalizeCronJobCreate", "normalizeCronJobInput", "normalizeCronJobPatch"],
+      "exports": [
+        "normalizeCronJobCreate",
+        "normalizeCronJobInput",
+        "normalizeCronJobPatch"
+      ],
       "dependencies": [
         "src/cron/legacy-delivery.js",
         "src/cron/parse.js",
