@@ -251,7 +251,7 @@ describe("resolveGatewayRuntimeConfig", () => {
   });
 
   describe("HTTP security headers", () => {
-    it.each([
+    const cases = [
       {
         name: "resolves strict transport security headers from config",
         strictTransportSecurity: "  max-age=31536000; includeSubDomains  ",
@@ -267,7 +267,13 @@ describe("resolveGatewayRuntimeConfig", () => {
         strictTransportSecurity: "   ",
         expected: undefined,
       },
-    ])("$name", async ({ strictTransportSecurity, expected }) => {
+    ] satisfies ReadonlyArray<{
+      name: string;
+      strictTransportSecurity: string | false;
+      expected: string | undefined;
+    }>;
+
+    it.each(cases)("$name", async ({ strictTransportSecurity, expected }) => {
       const result = await resolveGatewayRuntimeConfig({
         cfg: {
           gateway: {

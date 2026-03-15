@@ -1,87 +1,87 @@
-import fs from "node:fs/promises";
-import os from "node:os";
-import path from "node:path";
 import { PassThrough } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-
-const schtasksResponses = vi.hoisted(
-  () => [] as Array<{ code: number; stdout: string; stderr: string }>,
-);
-const schtasksCalls = vi.hoisted(() => [] as string[][]);
-const inspectPortUsage = vi.hoisted(() => vi.fn());
-const killProcessTree = vi.hoisted(() => vi.fn());
+import "./test-helpers/schtasks-base-mocks.js";
+import {
+  inspectPortUsage,
+  killProcessTree,
+  resetSchtasksBaseMocks,
+  schtasksCalls,
+  schtasksResponses,
+  withWindowsEnv,
+  writeGatewayScript,
+} from "./test-helpers/schtasks-fixtures.js";
 const findVerifiedGatewayListenerPidsOnPortSync = vi.hoisted(() =>
   vi.fn<(port: number) => number[]>(() => []),
 );
-
-vi.mock("./schtasks-exec.js", () => ({
-  execSchtasks: async (argv: string[]) => {
-    schtasksCalls.push(argv);
-    return schtasksResponses.shift() ?? { code: 0, stdout: "", stderr: "" };
-  },
-}));
-
-vi.mock("../infra/ports.js", () => ({
-  inspectPortUsage: (...args: unknown[]) => inspectPortUsage(...args),
-}));
-
-vi.mock("../process/kill-tree.js", () => ({
-  killProcessTree: (...args: unknown[]) => killProcessTree(...args),
-}));
 
 vi.mock("../infra/gateway-processes.js", () => ({
   findVerifiedGatewayListenerPidsOnPortSync: (port: number) =>
     findVerifiedGatewayListenerPidsOnPortSync(port),
 }));
 
-const { restartScheduledTask, resolveTaskScriptPath, stopScheduledTask } =
-  await import("./schtasks.js");
+const { restartScheduledTask, stopScheduledTask } = await import("./schtasks.js");
+const GATEWAY_PORT = 18789;
+const SUCCESS_RESPONSE = { code: 0, stdout: "", stderr: "" } as const;
 
-async function withWindowsEnv(
-  run: (params: { tmpDir: string; env: Record<string, string> }) => Promise<void>,
-) {
-  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-win-stop-"));
-  const env = {
-    USERPROFILE: tmpDir,
-    APPDATA: path.join(tmpDir, "AppData", "Roaming"),
-    OPENCLAW_PROFILE: "default",
-    OPENCLAW_GATEWAY_PORT: "18789",
-  };
-  try {
-    await run({ tmpDir, env });
-  } finally {
-    await fs.rm(tmpDir, { recursive: true, force: true });
+function pushSuccessfulSchtasksResponses(count: number) {
+  for (let i = 0; i < count; i += 1) {
+    schtasksResponses.push({ ...SUCCESS_RESPONSE });
   }
 }
 
-async function writeGatewayScript(env: Record<string, string>, port = 18789) {
-  const scriptPath = resolveTaskScriptPath(env);
-  await fs.mkdir(path.dirname(scriptPath), { recursive: true });
-  await fs.writeFile(
-    scriptPath,
-    [
-      "@echo off",
-      `set "OPENCLAW_GATEWAY_PORT=${port}"`,
-      `"C:\\Program Files\\nodejs\\node.exe" "C:\\Users\\steipete\\AppData\\Roaming\\npm\\node_modules\\openclaw\\dist\\index.js" gateway --port ${port}`,
-      "",
-    ].join("\r\n"),
-    "utf8",
-  );
+function freePortUsage() {
+  return {
+    port: GATEWAY_PORT,
+    status: "free" as const,
+    listeners: [],
+    hints: [],
+  };
+}
+
+function busyPortUsage(
+  pid: number,
+  options: {
+    command?: string;
+    commandLine?: string;
+  } = {},
+) {
+  return {
+    port: GATEWAY_PORT,
+    status: "busy" as const,
+    listeners: [
+      {
+        pid,
+        command: options.command ?? "node.exe",
+        ...(options.commandLine ? { commandLine: options.commandLine } : {}),
+      },
+    ],
+    hints: [],
+  };
+}
+
+function expectGatewayTermination(pid: number) {
+  if (process.platform === "win32") {
+    expect(killProcessTree).not.toHaveBeenCalled();
+    return;
+  }
+  expect(killProcessTree).toHaveBeenCalledWith(pid, { graceMs: 300 });
+}
+
+async function withPreparedGatewayTask(
+  run: (context: { env: Record<string, string>; stdout: PassThrough }) => Promise<void>,
+) {
+  await withWindowsEnv("openclaw-win-stop-", async ({ env }) => {
+    await writeGatewayScript(env, GATEWAY_PORT);
+    const stdout = new PassThrough();
+    await run({ env, stdout });
+  });
 }
 
 beforeEach(() => {
-  schtasksResponses.length = 0;
-  schtasksCalls.length = 0;
-  inspectPortUsage.mockReset();
-  killProcessTree.mockReset();
+  resetSchtasksBaseMocks();
   findVerifiedGatewayListenerPidsOnPortSync.mockReset();
   findVerifiedGatewayListenerPidsOnPortSync.mockReturnValue([]);
-  inspectPortUsage.mockResolvedValue({
-    port: 18789,
-    status: "free",
-    listeners: [],
-    hints: [],
-  });
+  inspectPortUsage.mockResolvedValue(freePortUsage());
 });
 
 afterEach(() => {
@@ -90,152 +90,79 @@ afterEach(() => {
 
 describe("Scheduled Task stop/restart cleanup", () => {
   it("kills lingering verified gateway listeners after schtasks stop", async () => {
-    await withWindowsEnv(async ({ env }) => {
-      await writeGatewayScript(env);
-      schtasksResponses.push(
-        { code: 0, stdout: "", stderr: "" },
-        { code: 0, stdout: "", stderr: "" },
-        { code: 0, stdout: "", stderr: "" },
-      );
+    await withPreparedGatewayTask(async ({ env, stdout }) => {
+      pushSuccessfulSchtasksResponses(3);
       findVerifiedGatewayListenerPidsOnPortSync.mockReturnValue([4242]);
       inspectPortUsage
-        .mockResolvedValueOnce({
-          port: 18789,
-          status: "busy",
-          listeners: [{ pid: 4242, command: "node.exe" }],
-          hints: [],
-        })
-        .mockResolvedValueOnce({
-          port: 18789,
-          status: "free",
-          listeners: [],
-          hints: [],
-        });
+        .mockResolvedValueOnce(busyPortUsage(4242))
+        .mockResolvedValueOnce(freePortUsage());
 
-      const stdout = new PassThrough();
       await stopScheduledTask({ env, stdout });
 
-      expect(findVerifiedGatewayListenerPidsOnPortSync).toHaveBeenCalledWith(18789);
-      expect(killProcessTree).toHaveBeenCalledWith(4242, { graceMs: 300 });
+      expect(findVerifiedGatewayListenerPidsOnPortSync).toHaveBeenCalledWith(GATEWAY_PORT);
+      expectGatewayTermination(4242);
       expect(inspectPortUsage).toHaveBeenCalledTimes(2);
     });
   });
 
   it("force-kills remaining busy port listeners when the first stop pass does not free the port", async () => {
-    await withWindowsEnv(async ({ env }) => {
-      await writeGatewayScript(env);
-      schtasksResponses.push(
-        { code: 0, stdout: "", stderr: "" },
-        { code: 0, stdout: "", stderr: "" },
-        { code: 0, stdout: "", stderr: "" },
-      );
+    await withPreparedGatewayTask(async ({ env, stdout }) => {
+      pushSuccessfulSchtasksResponses(3);
       findVerifiedGatewayListenerPidsOnPortSync.mockReturnValue([4242]);
-      inspectPortUsage.mockResolvedValueOnce({
-        port: 18789,
-        status: "busy",
-        listeners: [{ pid: 4242, command: "node.exe" }],
-        hints: [],
-      });
+      inspectPortUsage.mockResolvedValueOnce(busyPortUsage(4242));
       for (let i = 0; i < 20; i += 1) {
-        inspectPortUsage.mockResolvedValueOnce({
-          port: 18789,
-          status: "busy",
-          listeners: [{ pid: 4242, command: "node.exe" }],
-          hints: [],
-        });
+        inspectPortUsage.mockResolvedValueOnce(busyPortUsage(4242));
       }
       inspectPortUsage
-        .mockResolvedValueOnce({
-          port: 18789,
-          status: "busy",
-          listeners: [{ pid: 5252, command: "node.exe" }],
-          hints: [],
-        })
-        .mockResolvedValueOnce({
-          port: 18789,
-          status: "free",
-          listeners: [],
-          hints: [],
-        });
+        .mockResolvedValueOnce(busyPortUsage(5252))
+        .mockResolvedValueOnce(freePortUsage());
 
-      const stdout = new PassThrough();
       await stopScheduledTask({ env, stdout });
 
-      expect(killProcessTree).toHaveBeenNthCalledWith(1, 4242, { graceMs: 300 });
-      expect(killProcessTree).toHaveBeenNthCalledWith(2, expect.any(Number), { graceMs: 300 });
+      if (process.platform !== "win32") {
+        expect(killProcessTree).toHaveBeenNthCalledWith(1, 4242, { graceMs: 300 });
+        expect(killProcessTree).toHaveBeenNthCalledWith(2, expect.any(Number), { graceMs: 300 });
+      } else {
+        expect(killProcessTree).not.toHaveBeenCalled();
+      }
       expect(inspectPortUsage.mock.calls.length).toBeGreaterThanOrEqual(22);
     });
   });
 
   it("falls back to inspected gateway listeners when sync verification misses on Windows", async () => {
-    await withWindowsEnv(async ({ env }) => {
-      await writeGatewayScript(env);
-      schtasksResponses.push(
-        { code: 0, stdout: "", stderr: "" },
-        { code: 0, stdout: "", stderr: "" },
-        { code: 0, stdout: "", stderr: "" },
-      );
+    await withPreparedGatewayTask(async ({ env, stdout }) => {
+      pushSuccessfulSchtasksResponses(3);
       findVerifiedGatewayListenerPidsOnPortSync.mockReturnValue([]);
       inspectPortUsage
-        .mockResolvedValueOnce({
-          port: 18789,
-          status: "busy",
-          listeners: [
-            {
-              pid: 6262,
-              command: "node.exe",
-              commandLine:
-                '"C:\\Program Files\\nodejs\\node.exe" "C:\\Users\\steipete\\AppData\\Roaming\\npm\\node_modules\\openclaw\\dist\\index.js" gateway --port 18789',
-            },
-          ],
-          hints: [],
-        })
-        .mockResolvedValueOnce({
-          port: 18789,
-          status: "free",
-          listeners: [],
-          hints: [],
-        });
+        .mockResolvedValueOnce(
+          busyPortUsage(6262, {
+            commandLine:
+              '"C:\\Program Files\\nodejs\\node.exe" "C:\\Users\\steipete\\AppData\\Roaming\\npm\\node_modules\\openclaw\\dist\\index.js" gateway --port 18789',
+          }),
+        )
+        .mockResolvedValueOnce(freePortUsage());
 
-      const stdout = new PassThrough();
       await stopScheduledTask({ env, stdout });
 
-      expect(killProcessTree).toHaveBeenCalledWith(6262, { graceMs: 300 });
+      expectGatewayTermination(6262);
       expect(inspectPortUsage).toHaveBeenCalledTimes(2);
     });
   });
 
   it("kills lingering verified gateway listeners and waits for port release before restart", async () => {
-    await withWindowsEnv(async ({ env }) => {
-      await writeGatewayScript(env);
-      schtasksResponses.push(
-        { code: 0, stdout: "", stderr: "" },
-        { code: 0, stdout: "", stderr: "" },
-        { code: 0, stdout: "", stderr: "" },
-        { code: 0, stdout: "", stderr: "" },
-      );
+    await withPreparedGatewayTask(async ({ env, stdout }) => {
+      pushSuccessfulSchtasksResponses(4);
       findVerifiedGatewayListenerPidsOnPortSync.mockReturnValue([5151]);
       inspectPortUsage
-        .mockResolvedValueOnce({
-          port: 18789,
-          status: "busy",
-          listeners: [{ pid: 5151, command: "node.exe" }],
-          hints: [],
-        })
-        .mockResolvedValueOnce({
-          port: 18789,
-          status: "free",
-          listeners: [],
-          hints: [],
-        });
+        .mockResolvedValueOnce(busyPortUsage(5151))
+        .mockResolvedValueOnce(freePortUsage());
 
-      const stdout = new PassThrough();
       await expect(restartScheduledTask({ env, stdout })).resolves.toEqual({
         outcome: "completed",
       });
 
-      expect(findVerifiedGatewayListenerPidsOnPortSync).toHaveBeenCalledWith(18789);
-      expect(killProcessTree).toHaveBeenCalledWith(5151, { graceMs: 300 });
+      expect(findVerifiedGatewayListenerPidsOnPortSync).toHaveBeenCalledWith(GATEWAY_PORT);
+      expectGatewayTermination(5151);
       expect(inspectPortUsage).toHaveBeenCalledTimes(2);
       expect(schtasksCalls.at(-1)).toEqual(["/Run", "/TN", "OpenClaw Gateway"]);
     });

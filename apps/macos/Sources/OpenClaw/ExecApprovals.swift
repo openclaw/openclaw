@@ -370,6 +370,17 @@ enum ExecApprovalsStore {
 
     static func resolve(agentId: String?) -> ExecApprovalsResolved {
         let file = self.ensureFile()
+        return self.resolveFromFile(file, agentId: agentId)
+    }
+
+    /// Read-only resolve: loads file without writing (no ensureFile side effects).
+    /// Safe to call from background threads / off MainActor.
+    static func resolveReadOnly(agentId: String?) -> ExecApprovalsResolved {
+        let file = self.loadFile()
+        return self.resolveFromFile(file, agentId: agentId)
+    }
+
+    private static func resolveFromFile(_ file: ExecApprovalsFile, agentId: String?) -> ExecApprovalsResolved {
         let defaults = file.defaults ?? ExecApprovalsDefaults()
         let resolvedDefaults = ExecApprovalsResolvedDefaults(
             security: defaults.security ?? self.defaultSecurity,
@@ -777,6 +788,7 @@ actor SkillBinsCache {
     static let shared = SkillBinsCache()
 
     private var bins: Set<String> = []
+    private var trustByName: [String: Set<String>] = [:]
     private var lastRefresh: Date?
     private let refreshInterval: TimeInterval = 90
 
@@ -787,27 +799,90 @@ actor SkillBinsCache {
         return self.bins
     }
 
+    func currentTrust(force: Bool = false) async -> [String: Set<String>] {
+        if force || self.isStale() {
+            await self.refresh()
+        }
+        return self.trustByName
+    }
+
     func refresh() async {
         do {
             let report = try await GatewayConnection.shared.skillsStatus()
-            var next = Set<String>()
-            for skill in report.skills {
-                for bin in skill.requirements.bins {
-                    let trimmed = bin.trimmingCharacters(in: .whitespacesAndNewlines)
-                    if !trimmed.isEmpty { next.insert(trimmed) }
-                }
-            }
-            self.bins = next
+            let trust = Self.buildTrustIndex(report: report, searchPaths: CommandResolver.preferredPaths())
+            self.bins = trust.names
+            self.trustByName = trust.pathsByName
             self.lastRefresh = Date()
         } catch {
             if self.lastRefresh == nil {
                 self.bins = []
+                self.trustByName = [:]
             }
         }
+    }
+
+    static func normalizeSkillBinName(_ value: String) -> String? {
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        return trimmed.isEmpty ? nil : trimmed
+    }
+
+    static func normalizeResolvedPath(_ value: String?) -> String? {
+        let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard !trimmed.isEmpty else { return nil }
+        return URL(fileURLWithPath: trimmed).standardizedFileURL.path
+    }
+
+    static func buildTrustIndex(
+        report: SkillsStatusReport,
+        searchPaths: [String]) -> SkillBinTrustIndex
+    {
+        var names = Set<String>()
+        var pathsByName: [String: Set<String>] = [:]
+
+        for skill in report.skills {
+            for bin in skill.requirements.bins {
+                let trimmed = bin.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !trimmed.isEmpty else { continue }
+                names.insert(trimmed)
+
+                guard let name = self.normalizeSkillBinName(trimmed),
+                      let resolvedPath = self.resolveSkillBinPath(trimmed, searchPaths: searchPaths),
+                      let normalizedPath = self.normalizeResolvedPath(resolvedPath)
+                else {
+                    continue
+                }
+
+                var paths = pathsByName[name] ?? Set<String>()
+                paths.insert(normalizedPath)
+                pathsByName[name] = paths
+            }
+        }
+
+        return SkillBinTrustIndex(names: names, pathsByName: pathsByName)
+    }
+
+    private static func resolveSkillBinPath(_ bin: String, searchPaths: [String]) -> String? {
+        let expanded = bin.hasPrefix("~") ? (bin as NSString).expandingTildeInPath : bin
+        if expanded.contains("/") || expanded.contains("\\") {
+            return FileManager().isExecutableFile(atPath: expanded) ? expanded : nil
+        }
+        return CommandResolver.findExecutable(named: expanded, searchPaths: searchPaths)
     }
 
     private func isStale() -> Bool {
         guard let lastRefresh else { return true }
         return Date().timeIntervalSince(lastRefresh) > self.refreshInterval
     }
+
+    static func _testBuildTrustIndex(
+        report: SkillsStatusReport,
+        searchPaths: [String]) -> SkillBinTrustIndex
+    {
+        self.buildTrustIndex(report: report, searchPaths: searchPaths)
+    }
+}
+
+struct SkillBinTrustIndex {
+    let names: Set<String>
+    let pathsByName: [String: Set<String>]
 }

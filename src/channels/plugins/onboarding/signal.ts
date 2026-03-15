@@ -1,12 +1,12 @@
-import { formatCliCommand } from "../../../cli/command-format.js";
-import { detectBinary } from "../../../commands/onboard-helpers.js";
-import { installSignalCli } from "../../../commands/signal-install.js";
-import type { OpenClawConfig } from "../../../config/config.js";
 import {
   listSignalAccountIds,
   resolveDefaultSignalAccountId,
   resolveSignalAccount,
-} from "../../../signal/accounts.js";
+} from "../../../../extensions/signal/src/accounts.js";
+import { formatCliCommand } from "../../../cli/command-format.js";
+import { detectBinary } from "../../../commands/onboard-helpers.js";
+import { installSignalCli } from "../../../commands/signal-install.js";
+import type { OpenClawConfig } from "../../../config/config.js";
 import { formatDocsLink } from "../../../terminal/links.js";
 import { normalizeE164 } from "../../../utils.js";
 import type { WizardPrompter } from "../../../wizard/prompts.js";

@@ -31,13 +31,6 @@ export type ModelAliasIndex = {
   byKey: Map<string, string[]>;
 };
 
-const ANTHROPIC_MODEL_ALIASES: Record<string, string> = {
-  "opus-4.6": "claude-opus-4-6",
-  "opus-4.5": "claude-opus-4-5",
-  "sonnet-4.6": "claude-sonnet-4-6",
-  "sonnet-4.5": "claude-sonnet-4-5",
-};
-
 function normalizeAliasKey(value: string): string {
   return value.trim().toLowerCase();
 }
@@ -151,7 +144,20 @@ function normalizeAnthropicModelId(model: string): string {
     return trimmed;
   }
   const lower = trimmed.toLowerCase();
-  return ANTHROPIC_MODEL_ALIASES[lower] ?? trimmed;
+  // Keep alias resolution local so bundled startup paths cannot trip a TDZ on
+  // a module-level alias table while config parsing is still initializing.
+  switch (lower) {
+    case "opus-4.6":
+      return "claude-opus-4-6";
+    case "opus-4.5":
+      return "claude-opus-4-5";
+    case "sonnet-4.6":
+      return "claude-sonnet-4-6";
+    case "sonnet-4.5":
+      return "claude-sonnet-4-5";
+    default:
+      return trimmed;
+  }
 }
 
 function normalizeProviderModelId(provider: string, model: string): string {
@@ -165,7 +171,7 @@ function normalizeProviderModelId(provider: string, model: string): string {
       return `anthropic/${normalizedAnthropicModel}`;
     }
   }
-  if (provider === "google") {
+  if (provider === "google" || provider === "google-vertex") {
     return normalizeGoogleModelId(model);
   }
   // OpenRouter-native models (e.g. "openrouter/aurora-alpha") need the full

@@ -1358,7 +1358,8 @@ Your **workspace** (AGENTS.md, memory files, skills, etc.) is separate and confi
 These files live in the **agent workspace**, not `~/.openclaw`.
 
 - **Workspace (per agent)**: `AGENTS.md`, `SOUL.md`, `IDENTITY.md`, `USER.md`,
-  `MEMORY.md` (or `memory.md`), `memory/YYYY-MM-DD.md`, optional `HEARTBEAT.md`.
+  `MEMORY.md` (or legacy fallback `memory.md` when `MEMORY.md` is absent),
+  `memory/YYYY-MM-DD.md`, optional `HEARTBEAT.md`.
 - **State dir (`~/.openclaw`)**: config, credentials, auth profiles, sessions, logs,
   and shared skills (`~/.openclaw/skills`).
 

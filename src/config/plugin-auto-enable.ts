@@ -1,3 +1,4 @@
+import { hasAnyWhatsAppAuth } from "../../extensions/whatsapp/src/accounts.js";
 import { normalizeProviderId } from "../agents/model-selection.js";
 import {
   getChannelPluginCatalogEntry,
@@ -13,7 +14,6 @@ import {
   type PluginManifestRegistry,
 } from "../plugins/manifest-registry.js";
 import { isRecord } from "../utils.js";
-import { hasAnyWhatsAppAuth } from "../web/accounts.js";
 import type { OpenClawConfig } from "./config.js";
 import { ensurePluginAllowlisted } from "./plugins-allowlist.js";
 

@@ -83,7 +83,7 @@ export function buildExecApprovalPendingReplyPayload(
   const lines: string[] = [];
   const warningText = params.warningText?.trim();
   if (warningText) {
-    lines.push(warningText, "");
+    lines.push(warningText);
   }
   lines.push("Approval required.");
   lines.push("Run:");
@@ -133,7 +133,7 @@ export function buildExecApprovalUnavailableReplyPayload(
   const lines: string[] = [];
   const warningText = params.warningText?.trim();
   if (warningText) {
-    lines.push(warningText, "");
+    lines.push(warningText);
   }
 
   if (params.sentApproverDms) {
