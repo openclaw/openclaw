@@ -2,30 +2,32 @@ import { randomBytes } from "node:crypto";
 import {
   existsSync,
   mkdirSync,
-  readFileSync,
-  writeFileSync,
   mkdtempSync,
-  rmSync,
+  readFileSync,
   renameSync,
+  rmSync,
   unlinkSync,
+  writeFileSync,
 } from "node:fs";
 import path from "node:path";
+import { applyTemplate } from "../auto-reply/templating.js";
 import type { ReplyPayload } from "../auto-reply/types.js";
 import { normalizeChannelId } from "../channels/plugins/index.js";
 import type { ChannelId } from "../channels/plugins/types.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { normalizeResolvedSecretInputString } from "../config/types.secrets.js";
 import type {
-  TtsConfig,
   TtsAutoMode,
+  TtsConfig,
   TtsMode,
-  TtsProvider,
   TtsModelOverrideConfig,
+  TtsProvider,
 } from "../config/types.tts.js";
 import { logVerbose } from "../globals.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { stripMarkdown } from "../line/markdown-to-line.js";
 import { isVoiceCompatibleAudio } from "../media/audio.js";
+import { runCommandWithTimeout } from "../process/exec.js";
 import { CONFIG_DIR, resolveUserPath } from "../utils.js";
 import {
   DEFAULT_OPENAI_BASE_URL,
@@ -137,6 +139,10 @@ export type ResolvedTtsConfig = {
   prefsPath?: string;
   maxTextLength: number;
   timeoutMs: number;
+  local?: {
+    command: string;
+    args: string[];
+  };
 };
 
 type TtsUserPrefs = {
@@ -326,6 +332,12 @@ export function resolveTtsConfig(cfg: OpenClawConfig): ResolvedTtsConfig {
     prefsPath: raw.prefsPath,
     maxTextLength: raw.maxTextLength ?? DEFAULT_MAX_TEXT_LENGTH,
     timeoutMs: raw.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+    local: raw.local?.command?.trim()
+      ? {
+          command: raw.local.command.trim(),
+          args: raw.local.args?.map((arg) => arg.trim()).filter(Boolean) ?? [],
+        }
+      : undefined,
   };
 }
 
@@ -511,7 +523,15 @@ function resolveOutputFormat(channelId?: string | null) {
 }
 
 function resolveChannelId(channel: string | undefined): ChannelId | null {
-  return channel ? normalizeChannelId(channel) : null;
+  if (!channel) {
+    return null;
+  }
+  const normalized = normalizeChannelId(channel);
+  if (normalized) {
+    return normalized;
+  }
+  // Fall back to raw string when registry lookup fails (e.g. tts tool context)
+  return (channel.trim().toLowerCase() as ChannelId) || null;
 }
 
 function resolveEdgeOutputFormat(config: ResolvedTtsConfig): string {
@@ -531,7 +551,7 @@ export function resolveTtsApiKey(
   return undefined;
 }
 
-export const TTS_PROVIDERS = ["openai", "elevenlabs", "edge"] as const;
+export const TTS_PROVIDERS = ["openai", "elevenlabs", "edge", "local"] as const;
 
 export function resolveTtsProviderOrder(primary: TtsProvider): TtsProvider[] {
   return [primary, ...TTS_PROVIDERS.filter((provider) => provider !== primary)];
@@ -540,6 +560,9 @@ export function resolveTtsProviderOrder(primary: TtsProvider): TtsProvider[] {
 export function isTtsProviderConfigured(config: ResolvedTtsConfig, provider: TtsProvider): boolean {
   if (provider === "edge") {
     return config.edge.enabled;
+  }
+  if (provider === "local") {
+    return Boolean(config.local?.command);
   }
   return Boolean(resolveTtsApiKey(config, provider));
 }
@@ -684,6 +707,78 @@ export async function textToSpeech(params: {
         };
       }
 
+      if (provider === "local") {
+        const localCfg = config.local;
+        if (!localCfg?.command) {
+          errors.push("local: no command configured");
+          continue;
+        }
+        const tempRoot = resolvePreferredOpenClawTmpDir();
+        mkdirSync(tempRoot, { recursive: true, mode: 0o700 });
+        const tempDir = mkdtempSync(path.join(tempRoot, "tts-"));
+        const ext = output.extension === ".opus" ? ".ogg" : ".mp3";
+        const audioPath = path.join(tempDir, `voice-${Date.now()}${ext}`);
+        const ttsChannel = channelId ?? "unknown";
+        const ttsFormat = output.extension === ".opus" ? "opus" : "mp3";
+        // {{PascalCase}} placeholders in args align with media/link CLI runner convention.
+        const templCtx = {
+          Text: params.text,
+          Output: audioPath,
+          Channel: ttsChannel,
+          Format: ttsFormat,
+        };
+        const args = (localCfg.args ?? []).map((a) => applyTemplate(a, templCtx));
+        let localResult: Awaited<ReturnType<typeof runCommandWithTimeout>>;
+        try {
+          localResult = await runCommandWithTimeout([localCfg.command, ...args], {
+            timeoutMs: config.timeoutMs,
+          });
+        } catch (err) {
+          try {
+            rmSync(tempDir, { recursive: true, force: true });
+          } catch {
+            // ignore cleanup errors
+          }
+          throw err;
+        }
+        if (localResult.code !== 0) {
+          try {
+            rmSync(tempDir, { recursive: true, force: true });
+          } catch {
+            // ignore cleanup errors
+          }
+          throw new Error(localResult.stderr.trim() || "local TTS command failed");
+        }
+        // Verify the command actually wrote the expected output file.  A zero
+        // exit code is not sufficient: the command may ignore {{Output}} and
+        // write to stdout/elsewhere instead.  Without this check the caller
+        // would treat the result as successful, skip provider fallback, and
+        // later fail when it tries to open a non-existent path.
+        if (!existsSync(audioPath)) {
+          try {
+            rmSync(tempDir, { recursive: true, force: true });
+          } catch {
+            // ignore cleanup errors
+          }
+          errors.push(
+            "local: command exited 0 but did not create output file — check {{Output}} placeholder in args",
+          );
+          continue;
+        }
+        scheduleCleanup(tempDir);
+        const voiceCompatible =
+          channelId && VOICE_BUBBLE_CHANNELS.has(channelId)
+            ? isVoiceCompatibleAudio({ fileName: audioPath })
+            : false;
+        return {
+          success: true,
+          audioPath,
+          latencyMs: Date.now() - providerStart,
+          provider,
+          voiceCompatible,
+        };
+      }
+
       const apiKey = resolveTtsApiKey(config, provider);
       if (!apiKey) {
         errors.push(`${provider}: no API key`);
@@ -779,6 +874,61 @@ export async function textToSpeechTelephony(params: {
       if (provider === "edge") {
         errors.push("edge: unsupported for telephony");
         continue;
+      }
+
+      if (provider === "local") {
+        const localCfg = config.local;
+        if (!localCfg?.command) {
+          errors.push("local: no command configured");
+          continue;
+        }
+        // local telephony: script must write raw 16-bit signed LE mono PCM at
+        // 22050 Hz to {{Output}} when {{Format}}=pcm. OpenClaw resamples to
+        // 8 kHz µ-law for delivery — the same pipeline used for ElevenLabs.
+        const LOCAL_TELEPHONY_SAMPLE_RATE = 22050;
+        const tempRoot = resolvePreferredOpenClawTmpDir();
+        mkdirSync(tempRoot, { recursive: true, mode: 0o700 });
+        const tempDir = mkdtempSync(path.join(tempRoot, "tts-"));
+        const audioPath = path.join(tempDir, `voice-${Date.now()}.pcm`);
+        const templCtx = {
+          Text: params.text,
+          Output: audioPath,
+          Channel: "telephony",
+          Format: "pcm",
+        };
+        const args = (localCfg.args ?? []).map((a) => applyTemplate(a, templCtx));
+        try {
+          const localResult = await runCommandWithTimeout([localCfg.command, ...args], {
+            timeoutMs: config.timeoutMs,
+          });
+          if (localResult.code !== 0) {
+            throw new Error(localResult.stderr.trim() || "local TTS command failed");
+          }
+          if (!existsSync(audioPath)) {
+            errors.push(
+              "local: command exited 0 but did not create output file — check {{Output}} placeholder in args",
+            );
+            rmSync(tempDir, { recursive: true, force: true });
+            continue;
+          }
+          const audioBuffer = readFileSync(audioPath);
+          scheduleCleanup(tempDir);
+          return {
+            success: true,
+            audioBuffer,
+            latencyMs: Date.now() - providerStart,
+            provider,
+            outputFormat: "pcm",
+            sampleRate: LOCAL_TELEPHONY_SAMPLE_RATE,
+          };
+        } catch (err) {
+          try {
+            rmSync(tempDir, { recursive: true, force: true });
+          } catch {
+            // ignore cleanup errors
+          }
+          throw err;
+        }
       }
 
       const apiKey = resolveTtsApiKey(config, provider);

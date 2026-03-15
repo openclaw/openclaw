@@ -9,7 +9,7 @@ title: "Text-to-Speech"
 
 # Text-to-speech (TTS)
 
-OpenClaw can convert outbound replies into audio using ElevenLabs, OpenAI, or Edge TTS.
+OpenClaw can convert outbound replies into audio using ElevenLabs, OpenAI, Edge TTS, or a local command.
 It works anywhere OpenClaw can send audio; Telegram gets a round voice-note bubble.
 
 ## Supported services
@@ -17,6 +17,7 @@ It works anywhere OpenClaw can send audio; Telegram gets a round voice-note bubb
 - **ElevenLabs** (primary or fallback provider)
 - **OpenAI** (primary or fallback provider; also used for summaries)
 - **Edge TTS** (primary or fallback provider; uses `node-edge-tts`, default when no API keys)
+- **Local** (primary or fallback provider; runs a custom command on the gateway host)
 
 ### Edge TTS notes
 
@@ -139,6 +140,38 @@ Full schema is in [Gateway configuration](/gateway/configuration).
 }
 ```
 
+### Local command TTS
+
+Run any local executable for synthesis. Output path is passed via the
+`{{Output}}` placeholder.
+
+```json5
+{
+  messages: {
+    tts: {
+      auto: "always",
+      provider: "local",
+      local: {
+        command: "/usr/local/bin/my-tts",
+        args: ["--text", "{{Text}}", "--out", "{{Output}}", "--format", "{{Format}}"],
+      },
+    },
+  },
+}
+```
+
+Available placeholders for `local.args`:
+
+| Placeholder   | Value                                                     |
+| ------------- | --------------------------------------------------------- |
+| `{{Text}}`    | The text to synthesize                                    |
+| `{{Output}}`  | Absolute path where the command must write the audio file |
+| `{{Channel}}` | Channel id (e.g. `telegram`, `whatsapp`) or `unknown`     |
+| `{{Format}}`  | Target format (`opus` for Telegram, `mp3` otherwise)      |
+
+The command must write a valid audio file to `{{Output}}` and exit with code 0.
+Fallback to the next provider occurs on non-zero exit.
+
 ### Disable Edge TTS
 
 ```json5
@@ -205,9 +238,11 @@ Then run:
   - `tagged` only sends audio when the reply includes `[[tts]]` tags.
 - `enabled`: legacy toggle (doctor migrates this to `auto`).
 - `mode`: `"final"` (default) or `"all"` (includes tool/block replies).
-- `provider`: `"elevenlabs"`, `"openai"`, or `"edge"` (fallback is automatic).
+- `provider`: `"elevenlabs"`, `"openai"`, `"edge"`, or `"local"` (fallback is automatic).
 - If `provider` is **unset**, OpenClaw prefers `openai` (if key), then `elevenlabs` (if key),
   otherwise `edge`.
+- `local.command`: executable path for the local TTS command.
+- `local.args`: arguments passed to the command. Supports `{{Text}}`, `{{Output}}`, `{{Channel}}`, and `{{Format}}` placeholders (same convention as media/link CLI runners).
 - `summaryModel`: optional cheap model for auto-summary; defaults to `agents.defaults.model.primary`.
   - Accepts `provider/model` or a configured model alias.
 - `modelOverrides`: allow the model to emit TTS directives (on by default).
@@ -260,7 +295,7 @@ Here you go.
 
 Available directive keys (when enabled):
 
-- `provider` (`openai` | `elevenlabs` | `edge`, requires `allowProvider: true`)
+- `provider` (`openai` | `elevenlabs` | `edge` | `local`, requires `allowProvider: true`)
 - `voice` (OpenAI voice) or `voiceId` (ElevenLabs)
 - `model` (OpenAI TTS model or ElevenLabs model id)
 - `stability`, `similarityBoost`, `style`, `speed`, `useSpeakerBoost`

@@ -107,6 +107,11 @@ export type MsgContext = {
   LinkUnderstanding?: string[];
   Prompt?: string;
   MaxChars?: number;
+  /** Local TTS provider template variables. */
+  Text?: string;
+  Output?: string;
+  Channel?: string;
+  Format?: string;
   ChatType?: string;
   /** Human label for envelope headers (conversation label, not sender). */
   ConversationLabel?: string;

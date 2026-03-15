@@ -5,8 +5,8 @@ import {
   getTtsProvider,
   isTtsEnabled,
   isTtsProviderConfigured,
-  resolveTtsAutoMode,
   resolveTtsApiKey,
+  resolveTtsAutoMode,
   resolveTtsConfig,
   resolveTtsPrefsPath,
   resolveTtsProviderOrder,
@@ -39,6 +39,7 @@ export const ttsHandlers: GatewayRequestHandlers = {
         hasOpenAIKey: Boolean(resolveTtsApiKey(config, "openai")),
         hasElevenLabsKey: Boolean(resolveTtsApiKey(config, "elevenlabs")),
         edgeEnabled: isTtsProviderConfigured(config, "edge"),
+        localEnabled: isTtsProviderConfigured(config, "local"),
       });
     } catch (err) {
       respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, formatForLog(err)));
@@ -100,13 +101,18 @@ export const ttsHandlers: GatewayRequestHandlers = {
   },
   "tts.setProvider": async ({ params, respond }) => {
     const provider = typeof params.provider === "string" ? params.provider.trim() : "";
-    if (provider !== "openai" && provider !== "elevenlabs" && provider !== "edge") {
+    if (
+      provider !== "openai" &&
+      provider !== "elevenlabs" &&
+      provider !== "edge" &&
+      provider !== "local"
+    ) {
       respond(
         false,
         undefined,
         errorShape(
           ErrorCodes.INVALID_REQUEST,
-          "Invalid provider. Use openai, elevenlabs, or edge.",
+          "Invalid provider. Use openai, elevenlabs, edge, or local.",
         ),
       );
       return;
@@ -145,6 +151,12 @@ export const ttsHandlers: GatewayRequestHandlers = {
             id: "edge",
             name: "Edge TTS",
             configured: isTtsProviderConfigured(config, "edge"),
+            models: [],
+          },
+          {
+            id: "local",
+            name: "Local TTS",
+            configured: isTtsProviderConfigured(config, "local"),
             models: [],
           },
         ],
