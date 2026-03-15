@@ -2,10 +2,18 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ErrorCodes } from "../protocol/index.js";
 import { maybeWakeNodeWithApns, nodeHandlers } from "./nodes.js";
 
+type MockNodeCommandPolicyParams = {
+  command: string;
+  declaredCommands?: string[];
+  allowlist: Set<string>;
+};
+
 const mocks = vi.hoisted(() => ({
   loadConfig: vi.fn(() => ({})),
-  resolveNodeCommandAllowlist: vi.fn(() => []),
-  isNodeCommandAllowed: vi.fn(() => ({ ok: true })),
+  resolveNodeCommandAllowlist: vi.fn<() => Set<string>>(() => new Set()),
+  isNodeCommandAllowed: vi.fn<
+    (params: MockNodeCommandPolicyParams) => { ok: true } | { ok: false; reason: string }
+  >(() => ({ ok: true })),
   sanitizeNodeInvokeParamsForForwarding: vi.fn(({ rawParams }: { rawParams: unknown }) => ({
     ok: true,
     params: rawParams,
@@ -523,15 +531,7 @@ describe("node.invoke APNs wake path", () => {
     const allowlistedCommands = new Set(["camera.snap", "canvas.navigate"]);
     mocks.resolveNodeCommandAllowlist.mockImplementation(() => new Set(allowlistedCommands));
     mocks.isNodeCommandAllowed.mockImplementation(
-      ({
-        command,
-        declaredCommands,
-        allowlist,
-      }: {
-        command: string;
-        declaredCommands: string[];
-        allowlist: Set<string>;
-      }) => {
+      ({ command, declaredCommands, allowlist }: MockNodeCommandPolicyParams) => {
         if (!allowlist.has(command)) {
           return { ok: false, reason: "command not allowlisted" };
         }
