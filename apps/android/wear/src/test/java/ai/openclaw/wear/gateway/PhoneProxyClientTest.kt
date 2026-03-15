@@ -1,5 +1,6 @@
 package ai.openclaw.wear.gateway
 
+import ai.openclaw.android.gateway.GatewayEvent
 import ai.openclaw.wear.R
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.async

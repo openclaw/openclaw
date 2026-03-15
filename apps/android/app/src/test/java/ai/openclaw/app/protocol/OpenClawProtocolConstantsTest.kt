@@ -1,5 +1,18 @@
 package ai.openclaw.app.protocol
 
+import ai.openclaw.android.gateway.OpenClawCalendarCommand
+import ai.openclaw.android.gateway.OpenClawCameraCommand
+import ai.openclaw.android.gateway.OpenClawCanvasA2UICommand
+import ai.openclaw.android.gateway.OpenClawCanvasCommand
+import ai.openclaw.android.gateway.OpenClawCapability
+import ai.openclaw.android.gateway.OpenClawContactsCommand
+import ai.openclaw.android.gateway.OpenClawDeviceCommand
+import ai.openclaw.android.gateway.OpenClawLocationCommand
+import ai.openclaw.android.gateway.OpenClawMotionCommand
+import ai.openclaw.android.gateway.OpenClawNotificationsCommand
+import ai.openclaw.android.gateway.OpenClawPhotosCommand
+import ai.openclaw.android.gateway.OpenClawSmsCommand
+import ai.openclaw.android.gateway.OpenClawSystemCommand
 import org.junit.Assert.assertEquals
 import org.junit.Test
 

@@ -9,7 +9,7 @@ import androidx.core.content.ContextCompat
 import ai.openclaw.app.chat.ChatController
 import ai.openclaw.app.chat.ChatMessage
 import ai.openclaw.app.chat.ChatPendingToolCall
-import ai.openclaw.app.chat.ChatSessionEntry
+import ai.openclaw.android.gateway.GatewaySessionEntry
 import ai.openclaw.app.chat.OutgoingAttachment
 import ai.openclaw.app.gateway.DeviceAuthStore
 import ai.openclaw.app.gateway.DeviceIdentityStore
@@ -540,7 +540,7 @@ class NodeRuntime(context: Context) {
   val chatThinkingLevel: StateFlow<String> = chat.thinkingLevel
   val chatStreamingAssistantText: StateFlow<String?> = chat.streamingAssistantText
   val chatPendingToolCalls: StateFlow<List<ChatPendingToolCall>> = chat.pendingToolCalls
-  val chatSessions: StateFlow<List<ChatSessionEntry>> = chat.sessions
+  val chatSessions: StateFlow<List<GatewaySessionEntry>> = chat.sessions
   val pendingRunCount: StateFlow<Int> = chat.pendingRunCount
 
   init {

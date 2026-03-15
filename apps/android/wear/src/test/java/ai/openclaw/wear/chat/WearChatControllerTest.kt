@@ -2,7 +2,7 @@ package ai.openclaw.wear.chat
 
 import ai.openclaw.wear.R
 import ai.openclaw.wear.gateway.GatewayClientInterface
-import ai.openclaw.wear.gateway.GatewayEvent
+import ai.openclaw.android.gateway.GatewayEvent
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.cancel

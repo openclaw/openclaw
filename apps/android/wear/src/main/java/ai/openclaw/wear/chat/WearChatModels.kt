@@ -6,9 +6,3 @@ data class WearChatMessage(
   val text: String,
   val timestampMs: Long?,
 )
-
-data class WearSessionEntry(
-  val key: String,
-  val updatedAtMs: Long?,
-  val displayName: String?,
-)
