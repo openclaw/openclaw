@@ -11,7 +11,6 @@ import { createDefaultDeps } from "../cli/deps.js";
 import { isRestartEnabled } from "../config/commands.js";
 import {
   CONFIG_PATH,
-  STATE_DIR,
   type OpenClawConfig,
   isNixMode,
   loadConfig,
@@ -26,6 +25,7 @@ import {
   scheduleLastKnownGoodSave,
 } from "../config/crash-tracker.js";
 import { formatConfigIssueLines } from "../config/issue-format.js";
+import { resolveStateDir } from "../config/paths.js";
 import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
 import { resolveMainSessionKey } from "../config/sessions.js";
 import { clearAgentRunContext, onAgentEvent } from "../infra/agent-events.js";
@@ -275,15 +275,17 @@ export async function startGatewayServer(
   port = 18789,
   opts: GatewayServerOptions = {},
 ): Promise<GatewayServer> {
-  const isCrashLoop = recordStartupAndCheckCrashLoop(STATE_DIR);
+  const stateDir = resolveStateDir();
+  const isCrashLoop = recordStartupAndCheckCrashLoop(stateDir);
   if (isCrashLoop) {
     if (hasLastKnownGood(CONFIG_PATH)) {
       log.warn("gateway: crash loop detected; reverting to last-known-good config");
-      revertToLastKnownGood(CONFIG_PATH, STATE_DIR);
+      revertToLastKnownGood(CONFIG_PATH, stateDir);
     } else {
       log.warn("gateway: crash loop detected but no last-known-good config found");
     }
   }
+
   const minimalTestGateway =
     process.env.VITEST === "1" && process.env.OPENCLAW_TEST_MINIMAL_GATEWAY === "1";
 
@@ -1079,7 +1081,7 @@ export async function startGatewayServer(
     httpServers,
   });
 
-  scheduleLastKnownGoodSave(CONFIG_PATH, STATE_DIR);
+  scheduleLastKnownGoodSave(CONFIG_PATH, stateDir);
 
   return {
     close: async (opts) => {
