@@ -7,12 +7,20 @@ import {
   resetSessionsSpawnConfigOverride,
   setSessionsSpawnConfigOverride,
 } from "./openclaw-tools.subagents.sessions-spawn.test-harness.js";
-import { resetSubagentRegistryForTests } from "./subagent-registry.js";
-import { SUBAGENT_SPAWN_ACCEPTED_NOTE } from "./subagent-spawn.js";
 
 const callGatewayMock = getCallGatewayMock();
 type GatewayCall = { method?: string; params?: unknown };
 type SessionsSpawnConfigOverride = Parameters<typeof setSessionsSpawnConfigOverride>[0];
+
+async function getAcceptedNote() {
+  const { SUBAGENT_SPAWN_ACCEPTED_NOTE } = await import("./subagent-spawn.js");
+  return SUBAGENT_SPAWN_ACCEPTED_NOTE;
+}
+
+async function resetRegistry() {
+  const { resetSubagentRegistryForTests } = await import("./subagent-registry.js");
+  resetSubagentRegistryForTests();
+}
 
 function mockLongRunningSpawnFlow(params: {
   calls: GatewayCall[];
@@ -97,13 +105,14 @@ async function expectSpawnUsesConfiguredModel(params: {
 }
 
 describe("openclaw-tools: subagents (sessions_spawn model + thinking)", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
     resetSessionsSpawnConfigOverride();
-    resetSubagentRegistryForTests();
+    await resetRegistry();
     callGatewayMock.mockClear();
   });
 
   it("sessions_spawn applies a model to the child session", async () => {
+    const acceptedNote = await getAcceptedNote();
     const calls: GatewayCall[] = [];
     mockLongRunningSpawnFlow({ calls, acceptedAtBase: 3000 });
 
@@ -120,7 +129,7 @@ describe("openclaw-tools: subagents (sessions_spawn model + thinking)", () => {
     });
     expect(result.details).toMatchObject({
       status: "accepted",
-      note: SUBAGENT_SPAWN_ACCEPTED_NOTE,
+      note: acceptedNote,
       modelApplied: true,
     });
 

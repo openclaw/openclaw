@@ -7,9 +7,13 @@ import {
   setSessionsSpawnConfigOverride,
   setupSessionsSpawnGatewayMock,
 } from "./openclaw-tools.subagents.sessions-spawn.test-harness.js";
-import { resetSubagentRegistryForTests } from "./subagent-registry.js";
 
 const MAIN_SESSION_KEY = "agent:test:main";
+
+async function resetRegistry() {
+  const { resetSubagentRegistryForTests } = await import("./subagent-registry.js");
+  resetSubagentRegistryForTests();
+}
 
 function configureDefaultsWithoutTimeout() {
   setSessionsSpawnConfigOverride({
@@ -31,9 +35,9 @@ function readSpawnTimeout(calls: Array<{ method?: string; params?: unknown }>): 
 }
 
 describe("sessions_spawn default runTimeoutSeconds (config absent)", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
     resetSessionsSpawnConfigOverride();
-    resetSubagentRegistryForTests();
+    await resetRegistry();
     getCallGatewayMock().mockClear();
   });
 

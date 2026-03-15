@@ -6,9 +6,13 @@ import {
   resetSessionsSpawnConfigOverride,
   setSessionsSpawnConfigOverride,
 } from "./openclaw-tools.subagents.sessions-spawn.test-harness.js";
-import { resetSubagentRegistryForTests } from "./subagent-registry.js";
 
 const callGatewayMock = getCallGatewayMock();
+
+async function resetRegistry() {
+  const { resetSubagentRegistryForTests } = await import("./subagent-registry.js");
+  resetSubagentRegistryForTests();
+}
 
 describe("openclaw-tools: subagents (sessions_spawn allowlist)", () => {
   function setAllowAgents(allowAgents: string[]) {
@@ -125,9 +129,9 @@ describe("openclaw-tools: subagents (sessions_spawn allowlist)", () => {
     expect(callGatewayMock).not.toHaveBeenCalled();
   }
 
-  beforeEach(() => {
+  beforeEach(async () => {
     resetSessionsSpawnConfigOverride();
-    resetSubagentRegistryForTests();
+    await resetRegistry();
     callGatewayMock.mockClear();
   });
 

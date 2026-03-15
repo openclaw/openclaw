@@ -8,7 +8,11 @@ import {
   setupSessionsSpawnGatewayMock,
   setSessionsSpawnConfigOverride,
 } from "./openclaw-tools.subagents.sessions-spawn.test-harness.js";
-import { resetSubagentRegistryForTests } from "./subagent-registry.js";
+
+async function resetRegistry() {
+  const { resetSubagentRegistryForTests } = await import("./subagent-registry.js");
+  resetSubagentRegistryForTests();
+}
 
 const fastModeEnv = vi.hoisted(() => {
   const previous = process.env.OPENCLAW_TEST_FAST;
@@ -103,7 +107,7 @@ async function emitLifecycleEndAndFlush(params: {
 }
 
 describe("openclaw-tools: subagents (sessions_spawn lifecycle)", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
     resetSessionsSpawnConfigOverride();
     setSessionsSpawnConfigOverride({
       session: {
@@ -116,7 +120,7 @@ describe("openclaw-tools: subagents (sessions_spawn lifecycle)", () => {
         },
       },
     });
-    resetSubagentRegistryForTests();
+    await resetRegistry();
     callGatewayMock.mockClear();
   });
 

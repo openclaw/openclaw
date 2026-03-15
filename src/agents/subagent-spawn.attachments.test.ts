@@ -5,40 +5,58 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resetSubagentRegistryForTests } from "./subagent-registry.js";
 import { decodeStrictBase64, spawnSubagentDirect } from "./subagent-spawn.js";
 
-const callGatewayMock = vi.fn();
+const hoisted = vi.hoisted(() => {
+  const defaultConfigOverride: Record<string, unknown> = {
+    session: {
+      mainKey: "main",
+      scope: "per-sender",
+    },
+    tools: {
+      sessions_spawn: {
+        attachments: {
+          enabled: true,
+          maxFiles: 50,
+          maxFileBytes: 1 * 1024 * 1024,
+          maxTotalBytes: 5 * 1024 * 1024,
+        },
+      },
+    },
+    agents: {
+      defaults: {
+        workspace: "/tmp",
+      },
+    },
+  };
+  const state = {
+    configOverride: defaultConfigOverride,
+  };
+  return {
+    callGatewayMock: vi.fn(),
+    defaultConfigOverride,
+    state,
+  };
+});
+
+const callGatewayMock = hoisted.callGatewayMock;
 
 vi.mock("../gateway/call.js", () => ({
   callGateway: (opts: unknown) => callGatewayMock(opts),
 }));
 
-let configOverride: Record<string, unknown> = {
-  session: {
-    mainKey: "main",
-    scope: "per-sender",
-  },
-  tools: {
-    sessions_spawn: {
-      attachments: {
-        enabled: true,
-        maxFiles: 50,
-        maxFileBytes: 1 * 1024 * 1024,
-        maxTotalBytes: 5 * 1024 * 1024,
-      },
-    },
-  },
-  agents: {
-    defaults: {
-      workspace: os.tmpdir(),
-    },
-  },
-};
 let workspaceDirOverride = "";
-
 vi.mock("../config/config.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../config/config.js")>();
   return {
     ...actual,
-    loadConfig: () => configOverride,
+    loadConfig: () => hoisted.state.configOverride,
+  };
+});
+
+vi.mock("../../config/config.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../config/config.js")>();
+  return {
+    ...actual,
+    loadConfig: () => hoisted.state.configOverride,
   };
 });
 
@@ -144,6 +162,7 @@ describe("decodeStrictBase64", () => {
 
 describe("spawnSubagentDirect filename validation", () => {
   beforeEach(() => {
+    hoisted.state.configOverride = hoisted.defaultConfigOverride;
     resetSubagentRegistryForTests();
     callGatewayMock.mockClear();
     setupGatewayMock();

@@ -1,9 +1,13 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import "./test-helpers/fast-core-tools.js";
 import * as harness from "./openclaw-tools.subagents.sessions-spawn.test-harness.js";
-import { resetSubagentRegistryForTests } from "./subagent-registry.js";
 
 const MAIN_SESSION_KEY = "agent:test:main";
+
+async function resetRegistry() {
+  const { resetSubagentRegistryForTests } = await import("./subagent-registry.js");
+  resetSubagentRegistryForTests();
+}
 
 type ThinkingLevel = "high" | "medium" | "low";
 
@@ -60,9 +64,9 @@ async function expectThinkingPropagation(input: {
 }
 
 describe("sessions_spawn thinking defaults", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
     harness.resetSessionsSpawnConfigOverride();
-    resetSubagentRegistryForTests();
+    await resetRegistry();
     harness.getCallGatewayMock().mockClear();
     applyThinkingDefault("high");
   });

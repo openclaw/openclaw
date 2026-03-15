@@ -1,9 +1,13 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import "./test-helpers/fast-core-tools.js";
 import * as sessionsHarness from "./openclaw-tools.subagents.sessions-spawn.test-harness.js";
-import { resetSubagentRegistryForTests } from "./subagent-registry.js";
 
 const MAIN_SESSION_KEY = "agent:test:main";
+
+async function resetRegistry() {
+  const { resetSubagentRegistryForTests } = await import("./subagent-registry.js");
+  resetSubagentRegistryForTests();
+}
 
 function applySubagentTimeoutDefault(seconds: number) {
   sessionsHarness.setSessionsSpawnConfigOverride({
@@ -34,9 +38,9 @@ async function spawnSubagent(callId: string, payload: Record<string, unknown>) {
 }
 
 describe("sessions_spawn default runTimeoutSeconds", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
     sessionsHarness.resetSessionsSpawnConfigOverride();
-    resetSubagentRegistryForTests();
+    await resetRegistry();
     sessionsHarness.getCallGatewayMock().mockClear();
   });
 
