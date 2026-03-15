@@ -23,8 +23,9 @@ import {
 import { buildFrontendPrompt, defaultFrontendPrompt } from "../product/prompt";
 import { loadInitialGatewayToken, persistGatewayToken } from "../product/auth";
 import { loadPreferenceMemory, savePreferenceMemory } from "../product/storage";
+import { AppState } from "../core/app-state";
 import { extractText, inferMessageKind, defaultGatewayUrl, CHAT_COLLAPSE_THRESHOLD } from "../core/utils";
-import type { ConnectionState, ChatMessageKind, ChatFilter, ChatMessage } from "../core/types";
+import type { ConnectionState, ChatMessageKind, ChatFilter, ChatMessage, UsageVariant, SessionRow } from "../core/types";
 
 type ChatEventPayload = {
   runId: string;
@@ -253,6 +254,20 @@ export class ControlModeView extends LitElement {
       font-size: 13px;
     }
 
+    .inline-actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-top: 12px;
+    }
+
+    .compact-button {
+      height: 36px;
+      padding: 0 12px;
+      font-size: 13px;
+      border-radius: 10px;
+    }
+
     pre {
       margin: 0;
       padding: 16px;
@@ -391,6 +406,8 @@ export class ControlModeView extends LitElement {
   `;
 
   private client: GatewayBrowserClient | null = null;
+  private appState = AppState.getInstance();
+  private unsubscribeAppState?: () => void;
 
   @state() gatewayUrl = defaultGatewayUrl();
   @state() gatewayToken = "";
@@ -417,6 +434,7 @@ export class ControlModeView extends LitElement {
   @state() safeEditMode = true;
   @state() checkpointName = "before-change";
   @state() restoreRef = "checkpoint/web-control-ui-YYYYMMDD-HHMMSS-before-change";
+  @state() currentUsageVariant: UsageVariant = "native";
   @state() sessionsLoading = false;
   @state() sessionsError: string | null = null;
   @state() sessionRows: SessionRow[] = [];
@@ -427,11 +445,16 @@ export class ControlModeView extends LitElement {
     this.preferenceMemory = loaded;
     this.preferenceDraft = toDraft(loaded);
     this.gatewayToken = loadInitialGatewayToken();
+    this.currentUsageVariant = this.appState.variant;
+    this.unsubscribeAppState = this.appState.subscribe(() => {
+      this.currentUsageVariant = this.appState.variant;
+    });
     persistGatewayToken(this.gatewayToken);
     this.connect();
   }
 
   disconnectedCallback(): void {
+    this.unsubscribeAppState?.();
     this.client?.stop();
     this.client = null;
     super.disconnectedCallback();
@@ -729,6 +752,35 @@ export class ControlModeView extends LitElement {
     return "dot";
   }
 
+  private usageVariantLabel(variant: UsageVariant) {
+    switch (variant) {
+      case "mission":
+        return "Mission";
+      case "star":
+        return "Star";
+      case "blank":
+        return "Blank";
+      case "native":
+      default:
+        return "Native";
+    }
+  }
+
+  private setUsageVariant(variant: UsageVariant) {
+    this.appState.setVariant(variant);
+    this.currentUsageVariant = variant;
+  }
+
+  private acpRuntimeStatus() {
+    if (this.health?.defaultAgentId === "claude") {
+      return "Claude ready";
+    }
+    if (this.health?.defaultAgentId) {
+      return `${this.health.defaultAgentId} active`;
+    }
+    return "unverified";
+  }
+
   private renderJson(value: unknown) {
     if (value == null) {
       return html`<p class="muted">暂无数据</p>`;
@@ -832,13 +884,21 @@ export class ControlModeView extends LitElement {
                 </ul>
               </div>
               <div class="mini-panel">
-                <div class="subtitle">当前开发焦点</div>
-                <ul class="checklist">
-                  <li>前端提示词工作台</li>
-                  <li>偏好记忆编辑与沉淀</li>
-                  <li>原生改代码链路说明</li>
-                  <li>checkpoint / restore 回退机制</li>
-                </ul>
+                <div class="subtitle">当前工作态总控</div>
+                <div class="tag-list">
+                  <span class="tag">CONTROL 面板</span>
+                  <span class="tag">当前使用态：${this.usageVariantLabel(this.currentUsageVariant)}</span>
+                  <span class="tag">ACP：${this.acpRuntimeStatus()}</span>
+                </div>
+                <div class="inline-actions">
+                  <button class="secondary compact-button" type="button" @click=${() => this.setUsageVariant("native")}>Native</button>
+                  <button class="secondary compact-button" type="button" @click=${() => this.setUsageVariant("mission")}>Mission</button>
+                  <button class="secondary compact-button" type="button" @click=${() => this.setUsageVariant("star")}>Star</button>
+                  <button class="secondary compact-button" type="button" @click=${() => this.setUsageVariant("blank")}>Blank</button>
+                </div>
+                <p style="margin-top: 12px;">
+                  在这里先确认你现在正控制哪一种 usage-mode，再继续发需求、建 checkpoint、恢复版本或切会话，避免“改的是控制台，看的却是另一种使用态”。
+                </p>
               </div>
             </div>
 
@@ -968,6 +1028,18 @@ export class ControlModeView extends LitElement {
               <article class="stat">
                 <span class="label">Default Agent</span>
                 <div class="value">${this.health?.defaultAgentId ?? "-"}</div>
+              </article>
+              <article class="stat">
+                <span class="label">当前 Usage</span>
+                <div class="value">${this.usageVariantLabel(this.currentUsageVariant)}</div>
+              </article>
+              <article class="stat">
+                <span class="label">安全改动模式</span>
+                <div class="value">${this.safeEditMode ? "ON" : "OFF"}</div>
+              </article>
+              <article class="stat">
+                <span class="label">ACP Runtime</span>
+                <div class="value">${this.acpRuntimeStatus()}</div>
               </article>
               <article class="stat">
                 <span class="label">Sessions Count</span>
