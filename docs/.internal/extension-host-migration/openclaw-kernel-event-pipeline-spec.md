@@ -47,6 +47,7 @@ Relevant prerequisite work that has landed:
 - loader post-import planning and `register(...)` execution now have a host-owned helper boundary
 - loader per-candidate orchestration now has a host-owned helper boundary
 - loader top-level load orchestration now has a host-owned helper boundary
+- loader execution setup composition now has a host-owned helper boundary
 - loader discovery and manifest bootstrap now has a host-owned helper boundary
 - loader discovery policy outcomes now have a host-owned helper boundary
 - loader mutable activation state now has a host-owned helper boundary

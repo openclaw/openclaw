@@ -50,6 +50,7 @@ What has been implemented:
 - loader post-import planning and `register(...)` execution now route through `src/extension-host/loader-register.ts`
 - loader per-candidate orchestration now routes through `src/extension-host/loader-flow.ts`
 - loader top-level load orchestration now routes through `src/extension-host/loader-orchestrator.ts`
+- loader execution setup composition now routes through `src/extension-host/loader-execution.ts`
 - loader discovery and manifest bootstrap now routes through `src/extension-host/loader-bootstrap.ts`
 - loader mutable activation state now routes through `src/extension-host/loader-session.ts`
 - loader session run and finalization composition now routes through `src/extension-host/loader-run.ts`
@@ -79,6 +80,7 @@ How it has been implemented:
 - by moving post-import planning and `register(...)` execution next while leaving entry-path and import flow unchanged
 - by composing those seams into one host-owned per-candidate loader orchestrator before moving final lifecycle-state behavior
 - by moving the remaining top-level loader orchestration into a host-owned module before enforcing the loader lifecycle state machine
+- by extracting runtime creation, registry creation, bootstrap setup, module-loader creation, and session creation into a host-owned loader-execution helper before shrinking the remaining orchestrator surface
 - by moving record-state transitions first into a compatibility layer and then into an enforced loader lifecycle state machine
 - by moving cache writes, provenance warnings, final memory-slot warnings, and activation into a host-owned loader finalizer before introducing an explicit lifecycle state machine
 - by adding explicit compatibility `lifecycleState` mapping on loader-owned plugin records before enforcing the loader lifecycle state machine
