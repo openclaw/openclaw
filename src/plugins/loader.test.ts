@@ -1589,10 +1589,15 @@ describe("loadOpenClawPlugins", () => {
 
       const entries = registry.plugins.filter((entry) => entry.id === "zalouser");
       const loaded = entries.find((entry) => entry.status === "loaded");
-      const overridden = entries.find((entry) => entry.status === "disabled");
       expect(loaded?.origin).toBe("global");
-      expect(overridden?.origin).toBe("bundled");
-      expect(overridden?.error).toContain("overridden by global plugin");
+      expect(entries).toHaveLength(1);
+      expect(
+        registry.diagnostics.some(
+          (diag) =>
+            diag.message.includes("duplicate plugin id detected") &&
+            diag.message.includes("bundled plugin will be overridden by global plugin"),
+        ),
+      ).toBe(true);
     });
   });
 
