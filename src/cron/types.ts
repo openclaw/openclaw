@@ -57,12 +57,63 @@ export type CronRunTelemetry = {
   usage?: CronUsageSummary;
 };
 
+export type CronCriticScore = {
+  key: "spec_coverage" | "completeness" | "actionability";
+  score: number;
+  weight: number;
+  weighted: number;
+  note: string;
+};
+
+export type CronCriticMode = "score" | "redTeam";
+
+export type CronCriticSeverity = "none" | "low" | "medium" | "high" | "critical";
+
+export type CronCriticSeverityThreshold = Exclude<CronCriticSeverity, "none">;
+
+export type CronCriticRedTeamCategory =
+  | "leakage"
+  | "slippage_blindness"
+  | "unrealistic_assumptions"
+  | "hidden_coupling";
+
+export type CronCriticRedTeamCheck = {
+  category: CronCriticRedTeamCategory;
+  severity: CronCriticSeverity;
+  attackPrompt: string;
+  rationale: string;
+  evidence: string[];
+  recommendation: string;
+};
+
+export type CronCriticRedTeamReport = {
+  threshold: CronCriticSeverityThreshold;
+  maxSeverity: CronCriticSeverity;
+  failed: boolean;
+  checks: CronCriticRedTeamCheck[];
+  findings: CronCriticRedTeamCheck[];
+};
+
+export type CronCriticEvaluation = {
+  version: "v1";
+  mode: CronCriticMode;
+  spec: string;
+  threshold: number;
+  score: number;
+  passed: boolean;
+  outcome: "completed" | "needs_replan";
+  scores: CronCriticScore[];
+  redTeam?: CronCriticRedTeamReport;
+};
+
 export type CronRunOutcome = {
   status: CronRunStatus;
   error?: string;
   /** Optional classifier for execution errors to guide fallback behavior. */
   errorKind?: "delivery-target";
   summary?: string;
+  outcome?: "completed" | "needs_replan";
+  critic?: CronCriticEvaluation;
   sessionId?: string;
   sessionKey?: string;
 };
@@ -91,6 +142,10 @@ type CronAgentTurnPayloadFields = {
   thinking?: string;
   timeoutSeconds?: number;
   allowUnsafeExternalContent?: boolean;
+  /** Optional per-job spec used by critic-loop evaluation. */
+  criticSpec?: string;
+  /** Optional per-job threshold override (0..1) for critic-loop gating. */
+  criticThreshold?: number;
   /** If true, run with lightweight bootstrap context. */
   lightContext?: boolean;
   deliver?: boolean;

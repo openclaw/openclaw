@@ -57,6 +57,7 @@ import {
 } from "../../security/external-content.js";
 import { resolveCronDeliveryPlan } from "../delivery.js";
 import type { CronJob, CronRunOutcome, CronRunTelemetry } from "../types.js";
+import { evaluateExecutorOutputCritic } from "./critic-loop.js";
 import {
   dispatchCronDelivery,
   matchesMessagingToolDeliveryTarget,
@@ -364,13 +365,24 @@ export async function runCronIsolatedAgentTurn(params: {
       }
     });
   };
+  let criticForRun: RunCronAgentTurnResult["critic"] | undefined;
   const withRunSession = (
     result: Omit<RunCronAgentTurnResult, "sessionId" | "sessionKey">,
-  ): RunCronAgentTurnResult => ({
-    ...result,
-    sessionId: runSessionId,
-    sessionKey: runSessionKey,
-  });
+  ): RunCronAgentTurnResult => {
+    const withCritic =
+      criticForRun && result.status === "ok"
+        ? {
+            ...result,
+            outcome: result.outcome ?? criticForRun.outcome,
+            critic: result.critic ?? criticForRun,
+          }
+        : result;
+    return {
+      ...withCritic,
+      sessionId: runSessionId,
+      sessionKey: runSessionKey,
+    };
+  };
   if (!cronSession.sessionEntry.label?.trim() && baseSessionKey.startsWith("cron:")) {
     const labelSuffix =
       typeof params.job.name === "string" && params.job.name.trim()
@@ -777,6 +789,29 @@ export async function runCronIsolatedAgentTurn(params: {
   let summary = pickSummaryFromPayloads(payloads) ?? pickSummaryFromOutput(firstText);
   let outputText = pickLastNonEmptyTextFromPayloads(payloads);
   let synthesizedText = outputText?.trim() || summary?.trim() || undefined;
+
+  const criticEvaluation = evaluateExecutorOutputCritic({
+    enabled: cfgWithAgentDefaults.cron?.criticLoop?.enabled === true,
+    killSwitch: process.env.OPENCLAW_CRITIC_LOOP_DISABLED === "1",
+    mode: cfgWithAgentDefaults.cron?.criticLoop?.mode,
+    spec: agentPayload?.criticSpec ?? cfgWithAgentDefaults.cron?.criticLoop?.defaultSpec,
+    output: synthesizedText,
+    threshold: agentPayload?.criticThreshold ?? cfgWithAgentDefaults.cron?.criticLoop?.minScore,
+    redTeamSeverityThreshold: cfgWithAgentDefaults.cron?.criticLoop?.redTeamSeverityThreshold,
+  });
+  criticForRun = criticEvaluation ?? undefined;
+  const criticOutcome = criticEvaluation?.outcome;
+  if (criticOutcome === "needs_replan") {
+    return withRunSession({
+      status: "ok",
+      summary: "needs_replan",
+      outputText,
+      outcome: criticOutcome,
+      critic: criticEvaluation ?? undefined,
+      ...telemetry,
+    });
+  }
+
   const deliveryPayload = pickLastDeliverablePayload(payloads);
   let deliveryPayloads =
     deliveryPayload !== undefined

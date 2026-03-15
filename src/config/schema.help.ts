@@ -1206,9 +1206,21 @@ export const FIELD_HELP: Record<string, string> = {
   "cron.runLog":
     "Pruning controls for per-job cron run history files under `cron/runs/<jobId>.jsonl`, including size and line retention.",
   "cron.runLog.maxBytes":
-    "Maximum bytes per cron run-log file before pruning rewrites to the last keepLines entries (for example `2mb`, default `2000000`).",
+    "Maximum byte size for a run-log file before pruning trims it to `keepLines` newest entries (default `2_000_000`, accepts human strings like `2mb`).",
   "cron.runLog.keepLines":
     "How many trailing run-log lines to retain when a file exceeds maxBytes (default `2000`). Increase for longer forensic history or lower for smaller disks.",
+  "cron.criticLoop":
+    "Configures an optional deterministic critic loop that can run score-based checks or a red-team adversarial pass before approval. It can trigger a `needs_replan` outcome when quality is below threshold or adversarial severity is too high. Keep disabled by default and enable per rollout.",
+  "cron.criticLoop.enabled":
+    "Feature flag for cron critic-loop scoring and gating. Default is off; when disabled, jobs keep existing behavior with no critic evaluation.",
+  "cron.criticLoop.mode":
+    "Selects critic mode: `score` keeps deterministic weighted scoring, while `redTeam` adds adversarial checks for leakage, slippage blindness, unrealistic assumptions, and hidden coupling before approval.",
+  "cron.criticLoop.minScore":
+    "Default pass threshold between 0 and 1 for critic-loop scoring (for example `0.7`). Jobs can override this via payload.criticThreshold when finer control is needed.",
+  "cron.criticLoop.defaultSpec":
+    "Default evaluation spec text used when a job does not provide payload.criticSpec. Use concise acceptance criteria so deterministic scoring stays stable.",
+  "cron.criticLoop.redTeamSeverityThreshold":
+    "Severity threshold (`low`, `medium`, `high`, `critical`) used by red-team mode to gate approval. If any adversarial finding meets or exceeds this level, the run returns `needs_replan`.",
   hooks:
     "Inbound webhook automation surface for mapping external events into wake or agent actions in OpenClaw. Keep this locked down with explicit token/session/agent controls before exposing it beyond trusted networks.",
   "hooks.enabled":

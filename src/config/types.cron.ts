@@ -26,6 +26,22 @@ export type CronFailureDestinationConfig = {
   accountId?: string;
   mode?: "announce" | "webhook";
 };
+export type CronCriticLoopMode = "score" | "redTeam";
+
+export type CronCriticSeverityThreshold = "low" | "medium" | "high" | "critical";
+
+export type CronCriticLoopConfig = {
+  /** Feature flag for deterministic executor-output critic scoring. */
+  enabled?: boolean;
+  /** Critic mode. `redTeam` adds adversarial assumption attacks before approval gating. */
+  mode?: CronCriticLoopMode;
+  /** Default pass threshold (0..1). Jobs may override via payload.criticThreshold. */
+  minScore?: number;
+  /** Optional default spec text to evaluate against when job payload omits criticSpec. */
+  defaultSpec?: string;
+  /** Severity threshold used by red-team mode to trigger needs_replan. */
+  redTeamSeverityThreshold?: CronCriticSeverityThreshold;
+};
 
 export type CronConfig = {
   enabled?: boolean;
@@ -57,4 +73,9 @@ export type CronConfig = {
   failureAlert?: CronFailureAlertConfig;
   /** Default destination for failure notifications across all cron jobs. */
   failureDestination?: CronFailureDestinationConfig;
+  /**
+   * Optional deterministic critic-loop gate for isolated executor outputs.
+   * Disabled by default.
+   */
+  criticLoop?: CronCriticLoopConfig;
 };

@@ -188,6 +188,8 @@ Common `agentTurn` fields:
 - `message`: required text prompt.
 - `model` / `thinking`: optional overrides (see below).
 - `timeoutSeconds`: optional timeout override.
+- `criticSpec`: optional evaluation spec used by the critic loop gate.
+- `criticThreshold`: optional pass threshold override (`0..1`) for the critic loop gate.
 - `lightContext`: optional lightweight bootstrap mode for jobs that do not need workspace bootstrap file injection.
 
 Delivery config:
@@ -460,6 +462,13 @@ Configure `cron.retry` to override these defaults (see [Configuration](/automati
       maxBytes: "2mb", // default 2_000_000 bytes
       keepLines: 2000, // default 2000
     },
+    criticLoop: {
+      enabled: false, // default false (feature flag)
+      mode: "score", // "score" (default) | "redTeam"
+      minScore: 0.7, // default threshold (0..1)
+      defaultSpec: "Include risks, rollback, and verification steps", // optional
+      redTeamSeverityThreshold: "high", // optional (low|medium|high|critical)
+    },
   },
 }
 ```
@@ -469,6 +478,14 @@ Run-log pruning behavior:
 - `cron.runLog.maxBytes`: max run-log file size before pruning.
 - `cron.runLog.keepLines`: when pruning, keep only the newest N lines.
 - Both apply to `cron/runs/<jobId>.jsonl` files.
+
+Critic loop modes:
+
+- `mode: "score"` (default) keeps deterministic weighted scoring with `minScore` gating.
+- `mode: "redTeam"` adds an adversarial pass against leakage, slippage blindness,
+  unrealistic assumptions, and hidden coupling.
+- In red-team mode, `redTeamSeverityThreshold` gates approval: if any finding reaches
+  that severity, the run returns `needs_replan`.
 
 Webhook behavior:
 

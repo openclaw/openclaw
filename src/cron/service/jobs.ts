@@ -692,6 +692,12 @@ function mergeCronPayload(existing: CronPayload, patch: CronPayloadPatch): CronP
   if (typeof patch.allowUnsafeExternalContent === "boolean") {
     next.allowUnsafeExternalContent = patch.allowUnsafeExternalContent;
   }
+  if (typeof patch.criticSpec === "string") {
+    next.criticSpec = patch.criticSpec;
+  }
+  if (typeof patch.criticThreshold === "number") {
+    next.criticThreshold = patch.criticThreshold;
+  }
   if (typeof patch.deliver === "boolean") {
     next.deliver = patch.deliver;
   }
@@ -768,6 +774,8 @@ function buildPayloadFromPatch(patch: CronPayloadPatch): CronPayload {
     timeoutSeconds: patch.timeoutSeconds,
     lightContext: patch.lightContext,
     allowUnsafeExternalContent: patch.allowUnsafeExternalContent,
+    criticSpec: patch.criticSpec,
+    criticThreshold: patch.criticThreshold,
     deliver: patch.deliver,
     channel: patch.channel,
     to: patch.to,
