@@ -329,4 +329,50 @@ describe("registerTelegramNativeCommands", () => {
     expect(sendMessage).toHaveBeenCalledWith(123, `pong (${branch || "HEAD"})`, expect.any(Object));
     expect(deliveryMocks.deliverReplies).not.toHaveBeenCalled();
   });
+
+  it("registers /ping --full and replies with branch plus short sha", async () => {
+    const commandHandlers = new Map<string, (ctx: unknown) => Promise<void>>();
+    const sendMessage = vi.fn().mockResolvedValue(undefined);
+
+    registerTelegramNativeCommands({
+      ...buildParams({}),
+      bot: {
+        api: {
+          setMyCommands: vi.fn().mockResolvedValue(undefined),
+          sendMessage,
+        },
+        command: vi.fn((name: string, cb: (ctx: unknown) => Promise<void>) => {
+          commandHandlers.set(name, cb);
+        }),
+      } as unknown as Parameters<typeof registerTelegramNativeCommands>[0]["bot"],
+    });
+
+    const pingHandler = commandHandlers.get("ping");
+    expect(pingHandler).toBeTruthy();
+
+    await pingHandler?.({
+      match: "--full",
+      message: {
+        message_id: 1,
+        date: Math.floor(Date.now() / 1000),
+        chat: { id: 123, type: "private" },
+        from: { id: 456, username: "alice" },
+      },
+    });
+
+    const branch = execFileSync("git", ["rev-parse", "--abbrev-ref", "HEAD"], {
+      cwd: process.cwd(),
+      encoding: "utf8",
+    }).trim();
+    const shortSha = execFileSync("git", ["rev-parse", "--short", "HEAD"], {
+      cwd: process.cwd(),
+      encoding: "utf8",
+    }).trim();
+    expect(sendMessage).toHaveBeenCalledWith(
+      123,
+      `pong (${branch || "HEAD"}) [${shortSha || "unknown"}]`,
+      expect.any(Object),
+    );
+    expect(deliveryMocks.deliverReplies).not.toHaveBeenCalled();
+  });
 });

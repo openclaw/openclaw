@@ -104,6 +104,30 @@ async function resolveCurrentBranchName(): Promise<string> {
   return "HEAD";
 }
 
+async function resolveCurrentShortCommitSha(): Promise<string> {
+  const candidateCwds = [
+    process.cwd(),
+    process.env.INIT_CWD,
+    process.env.PWD,
+    process.argv[1] ? path.dirname(process.argv[1]) : undefined,
+  ].filter((value): value is string => Boolean(value));
+  for (const cwd of candidateCwds) {
+    try {
+      const { stdout } = await execFileAsync("git", ["rev-parse", "--short", "HEAD"], {
+        cwd,
+        timeout: 1500,
+      });
+      const shortSha = stdout.trim();
+      if (shortSha) {
+        return shortSha;
+      }
+    } catch {
+      // Try next candidate cwd.
+    }
+  }
+  return "unknown";
+}
+
 type TelegramNativeCommandContext = Context & { match?: string };
 
 type TelegramCommandAuthResult = {
@@ -627,9 +651,14 @@ export const registerTelegramNativeCommands = ({
           }
           const { threadSpec, route, mediaLocalRoots, tableMode, chunkMode } = runtimeContext;
           const threadParams = buildTelegramThreadParams(threadSpec) ?? {};
+          const rawText = ctx.match?.trim() ?? "";
           if (command.name === "ping") {
             const branch = await resolveCurrentBranchName();
-            const pingText = `pong (${branch})`;
+            // Keep legacy /ping stable and only append commit details for explicit --full.
+            const pingText =
+              rawText === "--full"
+                ? `pong (${branch}) [${await resolveCurrentShortCommitSha()}]`
+                : `pong (${branch})`;
             await withTelegramApiErrorLogging({
               operation: "sendMessage",
               runtime,
@@ -639,7 +668,6 @@ export const registerTelegramNativeCommands = ({
           }
 
           const commandDefinition = findCommandByNativeName(command.name, "telegram");
-          const rawText = ctx.match?.trim() ?? "";
           const commandArgs = commandDefinition
             ? parseCommandArgs(commandDefinition, rawText)
             : rawText
