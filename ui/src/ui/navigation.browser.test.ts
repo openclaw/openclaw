@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import "../styles.css";
 import { mountApp as mountTestApp, registerAppMountHooks } from "./test-helpers/app-mount.ts";
 
@@ -62,6 +62,27 @@ describe("control UI routing", () => {
     await app.updateComplete;
     expect(app.tab).toBe("channels");
     expect(window.location.pathname).toBe("/channels");
+  });
+
+  it("lets the user switch dashboard language from the sidebar page", async () => {
+    const app = mountApp("/language");
+    await app.updateComplete;
+
+    const button = Array.from(app.querySelectorAll<HTMLButtonElement>(".language-option")).find(
+      (entry) => entry.textContent?.includes("Português (Portugal)"),
+    );
+    expect(button).not.toBeNull();
+    button?.click();
+
+    await vi.waitFor(() => {
+      expect(localStorage.getItem("openclaw.i18n.locale")).toBe("pt-PT");
+    });
+    await vi.waitFor(() => {
+      expect(JSON.parse(localStorage.getItem("openclaw.control.settings.v1") ?? "{}").locale).toBe(
+        "pt-PT",
+      );
+      expect(app.querySelector(".page-title")?.textContent).toContain("Idioma");
+    });
   });
 
   it("renders the refreshed top navigation shell", async () => {

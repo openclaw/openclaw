@@ -1,6 +1,9 @@
+import { EventEmitter } from "node:events";
+import net from "node:net";
 import os from "node:os";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  canBindToHost,
   isLocalishHost,
   isPrivateOrLoopbackAddress,
   isPrivateOrLoopbackHost,
@@ -359,6 +362,33 @@ describe("pickPrimaryLanIPv4", () => {
       expect(pickPrimaryLanIPv4(), testCase.name).toBe(testCase.expected);
       vi.restoreAllMocks();
     }
+  });
+
+  it("returns undefined when network interface enumeration throws", () => {
+    vi.spyOn(os, "networkInterfaces").mockImplementation(() => {
+      throw new Error("uv_interface_addresses failed");
+    });
+
+    expect(pickPrimaryLanIPv4()).toBeUndefined();
+  });
+});
+
+describe("canBindToHost", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("returns false when the bind probe never resolves", async () => {
+    class NeverSettlesServer extends EventEmitter {
+      listen() {}
+      close() {}
+    }
+
+    vi.spyOn(net, "createServer").mockReturnValue(
+      new NeverSettlesServer() as unknown as net.Server,
+    );
+
+    await expect(canBindToHost("127.0.0.1")).resolves.toBe(false);
   });
 });
 

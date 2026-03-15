@@ -110,6 +110,24 @@ describe("pairing setup code", () => {
     });
   });
 
+  it("falls back cleanly when network interface enumeration throws", async () => {
+    const resolved = await resolvePairingSetupFromConfig(
+      {
+        gateway: {
+          bind: "lan",
+          auth: { mode: "token", token: "tok_123" },
+        },
+      },
+      {
+        networkInterfaces: () => {
+          throw new Error("uv_interface_addresses failed");
+        },
+      },
+    );
+
+    expectResolvedSetupError(resolved, "no private LAN IP was found");
+  });
+
   it("resolves gateway.auth.password SecretRef for pairing payload", async () => {
     const resolved = await resolvePairingSetupFromConfig(
       {

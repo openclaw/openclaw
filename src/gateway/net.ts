@@ -1,6 +1,6 @@
 import type { IncomingMessage } from "node:http";
 import net from "node:net";
-import os from "node:os";
+import { readNetworkInterfacesSafely } from "../infra/network-interfaces.js";
 import { pickPrimaryTailnetIPv4, pickPrimaryTailnetIPv6 } from "../infra/tailnet.js";
 import {
   isCanonicalDottedDecimalIPv4,
@@ -15,7 +15,7 @@ import {
  * Prefers common interface names (en0, eth0) then falls back to any external IPv4.
  */
 export function pickPrimaryLanIPv4(): string | undefined {
-  const nets = os.networkInterfaces();
+  const nets = readNetworkInterfacesSafely();
   const preferredNames = ["en0", "eth0"];
   for (const name of preferredNames) {
     const list = nets[name];
@@ -67,6 +67,8 @@ export function isLoopbackAddress(ip: string | undefined): boolean {
 export function isPrivateOrLoopbackAddress(ip: string | undefined): boolean {
   return isPrivateOrLoopbackIpAddress(ip);
 }
+
+const CAN_BIND_PROBE_TIMEOUT_MS = 1000;
 
 function normalizeIp(ip: string | undefined): string | undefined {
   return normalizeIpAddress(ip);
@@ -303,17 +305,34 @@ export async function resolveGatewayBindHost(
  * @returns True if we can successfully bind to this address
  */
 export async function canBindToHost(host: string): Promise<boolean> {
-  return new Promise((resolve) => {
+  return await new Promise((resolve) => {
     const testServer = net.createServer();
-    testServer.once("error", () => {
-      resolve(false);
-    });
-    testServer.once("listening", () => {
-      testServer.close();
-      resolve(true);
-    });
-    // Use port 0 to let OS pick an available port for testing
-    testServer.listen(0, host);
+    let settled = false;
+    const finish = (result: boolean) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      clearTimeout(timer);
+      testServer.removeAllListeners("error");
+      testServer.removeAllListeners("listening");
+      try {
+        testServer.close();
+      } catch {
+        // Ignore close errors on probe sockets.
+      }
+      resolve(result);
+    };
+    const timer = setTimeout(() => finish(false), CAN_BIND_PROBE_TIMEOUT_MS);
+    timer.unref?.();
+    testServer.once("error", () => finish(false));
+    testServer.once("listening", () => finish(true));
+    try {
+      // Use port 0 to let OS pick an available port for testing.
+      testServer.listen(0, host);
+    } catch {
+      finish(false);
+    }
   });
 }
 

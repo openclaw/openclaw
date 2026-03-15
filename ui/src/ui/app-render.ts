@@ -3,7 +3,7 @@ import {
   buildAgentMainSessionKey,
   parseAgentSessionKey,
 } from "../../../src/routing/session-key.js";
-import { t } from "../i18n/index.ts";
+import { i18n, t } from "../i18n/index.ts";
 import { refreshChatAvatar } from "./app-chat.ts";
 import { renderUsageTab } from "./app-render-usage-tab.ts";
 import {
@@ -93,6 +93,7 @@ import { renderCommandPalette } from "./views/command-palette.ts";
 import { renderConfig } from "./views/config.ts";
 import { renderExecApprovalPrompt } from "./views/exec-approval.ts";
 import { renderGatewayUrlConfirmation } from "./views/gateway-url-confirmation.ts";
+import { renderLanguage } from "./views/language.ts";
 import { renderLoginGate } from "./views/login-gate.ts";
 import { renderOverview } from "./views/overview.ts";
 
@@ -1669,6 +1670,18 @@ export function renderApp(state: AppViewState) {
                 navRootLabel: "Appearance",
                 includeSections: [...APPEARANCE_SECTION_KEYS],
                 includeVirtualSections: true,
+              })
+            : nothing
+        }
+
+        ${
+          state.tab === "language"
+            ? renderLanguage({
+                currentLocale: i18n.getLocale(),
+                onSelect: async (locale) => {
+                  await i18n.setLocale(locale);
+                  state.applySettings({ ...state.settings, locale });
+                },
               })
             : nothing
         }

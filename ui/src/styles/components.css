@@ -219,6 +219,159 @@
   line-height: 1.5;
 }
 
+.language-settings {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.language-settings__hero {
+  position: relative;
+  overflow: hidden;
+  background:
+    radial-gradient(
+      circle at top right,
+      color-mix(in srgb, var(--accent) 16%, transparent),
+      transparent 42%
+    ),
+    linear-gradient(135deg, color-mix(in srgb, var(--card) 92%, var(--bg-elevated) 8%), var(--card));
+}
+
+.language-settings__hero-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.language-settings__current-pill {
+  white-space: nowrap;
+}
+
+.language-settings__hero-note {
+  margin-top: 14px;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.language-settings__options {
+  display: grid;
+  gap: 14px;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  margin-top: 18px;
+}
+
+.language-option {
+  width: 100%;
+  display: grid;
+  gap: 18px;
+  padding: 18px;
+  text-align: left;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: linear-gradient(
+    180deg,
+    color-mix(in srgb, var(--card) 94%, white 6%),
+    color-mix(in srgb, var(--card) 98%, transparent)
+  );
+  color: inherit;
+  cursor: pointer;
+  transition:
+    transform var(--duration-fast) ease,
+    border-color var(--duration-fast) ease,
+    box-shadow var(--duration-fast) ease,
+    background var(--duration-fast) ease;
+}
+
+.language-option:hover {
+  transform: translateY(-1px);
+  border-color: color-mix(in srgb, var(--accent) 36%, var(--border));
+  box-shadow: var(--shadow-sm);
+}
+
+.language-option:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+.language-option--active {
+  border-color: color-mix(in srgb, var(--accent) 52%, var(--border));
+  box-shadow:
+    inset 0 0 0 1px color-mix(in srgb, var(--accent) 28%, transparent),
+    var(--shadow-sm);
+  background: linear-gradient(
+    180deg,
+    color-mix(in srgb, var(--accent-subtle) 56%, var(--card)),
+    var(--card)
+  );
+}
+
+.language-option__top {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 14px;
+}
+
+.language-option__copy {
+  min-width: 0;
+}
+
+.language-option__label {
+  color: var(--text-strong);
+  font-size: 16px;
+  font-weight: 650;
+  letter-spacing: -0.02em;
+}
+
+.language-option__meta {
+  margin-top: 6px;
+  color: var(--muted);
+  font-size: 12px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.language-option__badges {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.language-option__selected-pill {
+  border-color: color-mix(in srgb, var(--accent) 26%, transparent);
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  color: var(--accent);
+}
+
+.language-option__selected-icon {
+  display: inline-flex;
+  width: 14px;
+  height: 14px;
+}
+
+.language-option__selected-icon svg {
+  width: 14px;
+  height: 14px;
+  stroke: currentColor;
+  fill: none;
+}
+
+.language-option__footer {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.language-option__footer-icon,
+.language-option__footer-icon svg {
+  width: 16px;
+  height: 16px;
+}
+
 /* ===========================================
    Stats - Bold values, subtle labels
    =========================================== */

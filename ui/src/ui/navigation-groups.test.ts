@@ -46,6 +46,7 @@ describe("TAB_GROUPS", () => {
       "config",
       "communications",
       "appearance",
+      "language",
       "automation",
       "infrastructure",
       "aiAgents",
@@ -57,6 +58,7 @@ describe("TAB_GROUPS", () => {
   it("routes every published settings slice", () => {
     expect(navigation.tabFromPath("/communications")).toBe("communications");
     expect(navigation.tabFromPath("/appearance")).toBe("appearance");
+    expect(navigation.tabFromPath("/language")).toBe("language");
     expect(navigation.tabFromPath("/automation")).toBe("automation");
     expect(navigation.tabFromPath("/infrastructure")).toBe("infrastructure");
     expect(navigation.tabFromPath("/ai-agents")).toBe("aiAgents");
