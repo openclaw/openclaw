@@ -326,6 +326,44 @@ describe("web monitor inbox", () => {
 
     await listener.close();
   });
+
+  it("skips untimestamped append group messages while still marking them read", async () => {
+    const onMessage = vi.fn(async () => {
+      return;
+    });
+
+    const { listener, sock } = await startInboxMonitor(onMessage);
+    const upsert = {
+      type: "append",
+      messages: [
+        {
+          key: {
+            id: "append-group-no-ts",
+            fromMe: false,
+            remoteJid: "123@g.us",
+            participant: "444@s.whatsapp.net",
+          },
+          message: { conversation: "old ping" },
+          pushName: "Tester",
+        },
+      ],
+    };
+
+    sock.ev.emit("messages.upsert", upsert);
+    await tick();
+
+    expect(onMessage).not.toHaveBeenCalled();
+    expect(sock.readMessages).toHaveBeenCalledWith([
+      {
+        remoteJid: "123@g.us",
+        id: "append-group-no-ts",
+        participant: "444@s.whatsapp.net",
+        fromMe: false,
+      },
+    ]);
+
+    await listener.close();
+  });
   it("does not block follow-up messages when handler is pending", async () => {
     let resolveFirst: (() => void) | null = null;
     const onMessage = vi.fn(async () => {

@@ -417,9 +417,9 @@ export async function monitorWebInbox(options: {
         if (!inbound.group) {
           continue;
         }
-        // Groups can legitimately arrive as append, but skip older history sync payloads.
+        // Groups can legitimately arrive as append, but skip older or untimestamped history sync payloads.
         if (
-          typeof inbound.messageTimestampMs === "number" &&
+          typeof inbound.messageTimestampMs !== "number" ||
           inbound.messageTimestampMs < connectedAtMs - APPEND_HISTORY_GRACE_MS
         ) {
           continue;
