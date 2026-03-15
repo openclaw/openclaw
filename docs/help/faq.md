@@ -1478,7 +1478,7 @@ Set `cli.banner.taglineMode` in config:
 {
   cli: {
     banner: {
-      taglineMode: "off", // random | default | off
+      taglineMode: "off", // random | default | off | script
     },
   },
 }
@@ -1487,7 +1487,40 @@ Set `cli.banner.taglineMode` in config:
 - `off`: hides tagline text but keeps the banner title/version line.
 - `default`: uses `All your chats, one OpenClaw.` every time.
 - `random`: rotating funny/seasonal taglines (default behavior).
+- `script`: load the tagline from a JS file (see below).
 - If you want no banner at all, set env `OPENCLAW_HIDE_BANNER=1`.
+
+### How do I set a custom tagline from a script
+
+Set `taglineMode` to `"script"` and point `taglineScriptFile` at a JS file:
+
+```json5
+{
+  cli: {
+    banner: {
+      taglineMode: "script",
+      taglineScriptFile: "~/.openclaw/tagline.js",
+    },
+  },
+}
+```
+
+The file's default export may be a **string** or a **(possibly async) function** that returns a string:
+
+```js
+// tagline.js — static string
+export default "Brought to you by cowsay.";
+```
+
+```js
+// tagline.js — run cowsay on every startup
+import { execSync } from "node:child_process";
+export default function () {
+  return execSync("cowsay 'OpenClaw ready'", { encoding: "utf8" }).trim();
+}
+```
+
+If the script throws or its export is neither a string nor a function, the tagline is silently left empty.
 
 ### How do I enable web search and web fetch
 

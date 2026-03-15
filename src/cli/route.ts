@@ -13,7 +13,7 @@ async function prepareRoutedCommand(params: {
   loadPlugins?: boolean | ((argv: string[]) => boolean);
 }) {
   const suppressDoctorStdout = hasFlag(params.argv, "--json");
-  emitCliBanner(VERSION, { argv: params.argv });
+  await emitCliBanner(VERSION, { argv: params.argv });
   await ensureConfigReady({
     runtime: defaultRuntime,
     commandPath: params.commandPath,

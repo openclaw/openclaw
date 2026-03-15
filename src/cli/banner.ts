@@ -3,7 +3,12 @@ import { resolveCommitHash } from "../infra/git-commit.js";
 import { visibleWidth } from "../terminal/ansi.js";
 import { isRich, theme } from "../terminal/theme.js";
 import { hasRootVersionAlias } from "./argv.js";
-import { pickTagline, type TaglineMode, type TaglineOptions } from "./tagline.js";
+import {
+  pickTagline,
+  resolveScriptTagline,
+  type TaglineMode,
+  type TaglineOptions,
+} from "./tagline.js";
 
 type BannerOptions = TaglineOptions & {
   argv?: string[];
@@ -13,6 +18,9 @@ type BannerOptions = TaglineOptions & {
 };
 
 let bannerEmitted = false;
+// Cached script tagline resolved during emitCliBanner so that formatCliBannerLine
+// (which is sync) can still render it when called later (e.g. --help).
+let cachedScriptTagline: string | undefined;
 
 const graphemeSegmenter =
   typeof Intl !== "undefined" && "Segmenter" in Intl
@@ -37,7 +45,7 @@ const hasVersionFlag = (argv: string[]) =>
   argv.some((arg) => arg === "--version" || arg === "-V") || hasRootVersionAlias(argv);
 
 function parseTaglineMode(value: unknown): TaglineMode | undefined {
-  if (value === "random" || value === "default" || value === "off") {
+  if (value === "random" || value === "default" || value === "off" || value === "script") {
     return value;
   }
   return undefined;
@@ -56,11 +64,27 @@ function resolveTaglineMode(options: BannerOptions): TaglineMode | undefined {
   }
 }
 
+function resolveTaglineScript(options: BannerOptions): string | undefined {
+  if (options.scriptPath) {
+    return options.scriptPath;
+  }
+  try {
+    return loadConfig().cli?.banner?.taglineScriptFile;
+  } catch {
+    return undefined;
+  }
+}
+
 export function formatCliBannerLine(version: string, options: BannerOptions = {}): string {
   const commit =
     options.commit ?? resolveCommitHash({ env: options.env, moduleUrl: import.meta.url });
   const commitLabel = commit ?? "unknown";
-  const tagline = pickTagline({ ...options, mode: resolveTaglineMode(options) });
+  const resolvedMode = resolveTaglineMode(options);
+  const resolvedTagline =
+    resolvedMode === "script" && options.resolvedTagline === undefined
+      ? cachedScriptTagline
+      : options.resolvedTagline;
+  const tagline = pickTagline({ ...options, mode: resolvedMode, resolvedTagline });
   const rich = options.richTty ?? isRich();
   const title = "🦞 OpenClaw";
   const prefix = "🦞 ";
@@ -141,7 +165,7 @@ export function formatCliBannerArt(options: BannerOptions = {}): string {
   return colored.join("\n");
 }
 
-export function emitCliBanner(version: string, options: BannerOptions = {}) {
+export async function emitCliBanner(version: string, options: BannerOptions = {}) {
   if (bannerEmitted) {
     return;
   }
@@ -155,7 +179,20 @@ export function emitCliBanner(version: string, options: BannerOptions = {}) {
   if (hasVersionFlag(argv)) {
     return;
   }
-  const line = formatCliBannerLine(version, options);
+  let resolvedOptions = { ...options, mode: resolveTaglineMode(options) };
+  if (resolvedOptions.mode === "script") {
+    const scriptPath = resolveTaglineScript(options);
+    if (scriptPath) {
+      try {
+        const resolved = await resolveScriptTagline(scriptPath);
+        cachedScriptTagline = resolved;
+        resolvedOptions = { ...resolvedOptions, resolvedTagline: resolved };
+      } catch {
+        // Fall back to empty tagline if script fails.
+      }
+    }
+  }
+  const line = formatCliBannerLine(version, resolvedOptions);
   process.stdout.write(`\n${line}\n\n`);
   bannerEmitted = true;
 }

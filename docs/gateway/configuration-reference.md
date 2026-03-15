@@ -2832,7 +2832,8 @@ Notes:
 {
   cli: {
     banner: {
-      taglineMode: "off", // random | default | off
+      taglineMode: "off", // random | default | off | script
+      // taglineScriptFile: "~/.openclaw/tagline.js",  // used when taglineMode is "script"
     },
   },
 }
@@ -2842,7 +2843,35 @@ Notes:
   - `"random"` (default): rotating funny/seasonal taglines.
   - `"default"`: fixed neutral tagline (`All your chats, one OpenClaw.`).
   - `"off"`: no tagline text (banner title/version still shown).
+  - `"script"`: load tagline from a JS file (set `cli.banner.taglineScriptFile` to the file path).
+- `cli.banner.taglineScriptFile`: path to a JS file whose default export is the tagline. Supports `~` for the home directory. The export may be a plain string or a (possibly async) function returning a string. Only used when `taglineMode` is `"script"`.
 - To hide the entire banner (not just taglines), set env `OPENCLAW_HIDE_BANNER=1`.
+
+**Script tagline examples:**
+
+```js
+// tagline.js — static string
+export default "Brought to you by cowsay.";
+
+// tagline.js — run cowsay on every startup
+import { execSync } from "node:child_process";
+export default function () {
+  return execSync("cowsay 'OpenClaw ready'", { encoding: "utf8" }).trim();
+}
+```
+
+Config to activate:
+
+```json5
+{
+  cli: {
+    banner: {
+      taglineMode: "script",
+      taglineScriptFile: "~/.openclaw/tagline.js",
+    },
+  },
+}
+```
 
 ---
 
