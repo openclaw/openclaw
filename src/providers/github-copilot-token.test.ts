@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   deriveCopilotApiBaseUrlFromToken,
+  hashGithubToken,
   resolveCopilotApiToken,
 } from "./github-copilot-token.js";
 
@@ -71,5 +72,69 @@ describe("github-copilot token", () => {
     expect(res.token).toBe("fresh;proxy-ep=https://proxy.contoso.test;");
     expect(res.baseUrl).toBe("https://api.contoso.test");
     expect(saveJsonFile).toHaveBeenCalledTimes(1);
+  });
+
+  it("stores githubTokenHash in cached payload", async () => {
+    loadJsonFile.mockReturnValue(undefined);
+
+    const fetchImpl = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        token: "tok;proxy-ep=proxy.a.com;",
+        expires_at: Math.floor(Date.now() / 1000) + 3600,
+      }),
+    });
+
+    await resolveCopilotApiToken({
+      githubToken: "pat-profile-a",
+      cachePath,
+      loadJsonFileImpl: loadJsonFile,
+      saveJsonFileImpl: saveJsonFile,
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+    });
+
+    const saved = saveJsonFile.mock.calls[0]?.[1];
+    expect(saved).toBeDefined();
+    expect(saved.githubTokenHash).toBe(hashGithubToken("pat-profile-a"));
+  });
+
+  it("rejects cache when githubTokenHash does not match current profile", async () => {
+    const now = Date.now();
+    loadJsonFile.mockReturnValue({
+      token: "stale;proxy-ep=proxy.old.com;",
+      expiresAt: now + 60 * 60 * 1000,
+      updatedAt: now,
+      githubTokenHash: hashGithubToken("pat-profile-a"),
+    });
+
+    const fetchImpl = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        token: "new;proxy-ep=proxy.new.com;",
+        expires_at: Math.floor(Date.now() / 1000) + 3600,
+      }),
+    });
+
+    const res = await resolveCopilotApiToken({
+      githubToken: "pat-profile-b",
+      cachePath,
+      loadJsonFileImpl: loadJsonFile,
+      saveJsonFileImpl: saveJsonFile,
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+    });
+
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    expect(res.token).toBe("new;proxy-ep=proxy.new.com;");
+    expect(res.source).toContain("fetched:");
+  });
+
+  it("different profiles produce different hashes", () => {
+    const hashA = hashGithubToken("pat-profile-a");
+    const hashB = hashGithubToken("pat-profile-b");
+    expect(hashA).not.toBe(hashB);
+    expect(hashA).toHaveLength(12);
+    expect(hashB).toHaveLength(12);
   });
 });
