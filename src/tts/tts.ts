@@ -39,6 +39,11 @@ import {
   resolveExtensionHostTtsProvider,
   resolveExtensionHostTtsRequestSetup,
 } from "../extension-host/tts-runtime-setup.js";
+import {
+  getExtensionHostLastTtsAttempt,
+  setExtensionHostLastTtsAttempt,
+  type ExtensionHostTtsStatusEntry,
+} from "../extension-host/tts-status.js";
 import { logVerbose } from "../globals.js";
 import {
   DEFAULT_OPENAI_BASE_URL,
@@ -178,17 +183,7 @@ export type TtsTelephonyResult = {
   sampleRate?: number;
 };
 
-type TtsStatusEntry = {
-  timestamp: number;
-  success: boolean;
-  textLength: number;
-  summarized: boolean;
-  provider?: string;
-  latencyMs?: number;
-  error?: string;
-};
-
-let lastTtsAttempt: TtsStatusEntry | undefined;
+type TtsStatusEntry = ExtensionHostTtsStatusEntry;
 
 export const normalizeTtsAutoMode = normalizeExtensionHostTtsAutoMode;
 
@@ -341,11 +336,11 @@ export const isSummarizationEnabled = isExtensionHostTtsSummarizationEnabled;
 export const setSummarizationEnabled = setExtensionHostTtsSummarizationEnabled;
 
 export function getLastTtsAttempt(): TtsStatusEntry | undefined {
-  return lastTtsAttempt;
+  return getExtensionHostLastTtsAttempt();
 }
 
 export function setLastTtsAttempt(entry: TtsStatusEntry | undefined): void {
-  lastTtsAttempt = entry;
+  setExtensionHostLastTtsAttempt(entry);
 }
 
 export const TTS_PROVIDERS = EXTENSION_HOST_TTS_PROVIDER_IDS;
@@ -440,14 +435,14 @@ export async function maybeApplyTtsToPayload(params: {
   });
 
   if (result.success && result.audioPath) {
-    lastTtsAttempt = {
+    setExtensionHostLastTtsAttempt({
       timestamp: Date.now(),
       success: true,
       textLength: (params.payload.text ?? "").length,
       summarized: plan.wasSummarized,
       provider: result.provider,
       latencyMs: result.latencyMs,
-    };
+    });
 
     const shouldVoice =
       isExtensionHostTtsVoiceBubbleChannel(params.channel) && result.voiceCompatible === true;
@@ -459,13 +454,13 @@ export async function maybeApplyTtsToPayload(params: {
     return finalPayload;
   }
 
-  lastTtsAttempt = {
+  setExtensionHostLastTtsAttempt({
     timestamp: Date.now(),
     success: false,
     textLength: (params.payload.text ?? "").length,
     summarized: plan.wasSummarized,
     error: result.error,
-  };
+  });
 
   const latency = Date.now() - ttsStart;
   logVerbose(`TTS: conversion failed after ${latency}ms (${result.error ?? "unknown"}).`);

@@ -1,14 +1,12 @@
 import {
-  isExtensionHostTtsProviderConfigured,
-  resolveExtensionHostTtsApiKey,
-} from "../../extension-host/tts-runtime-registry.js";
+  formatExtensionHostTtsStatusText,
+  resolveExtensionHostTtsStatusSnapshot,
+} from "../../extension-host/tts-status.js";
 import { logVerbose } from "../../globals.js";
 import {
-  getLastTtsAttempt,
   getTtsMaxLength,
   getTtsProvider,
   isSummarizationEnabled,
-  isTtsEnabled,
   resolveTtsConfig,
   resolveTtsPrefsPath,
   setLastTtsAttempt,
@@ -161,18 +159,16 @@ export const handleTtsCommands: CommandHandler = async (params, allowTextCommand
   if (action === "provider") {
     const currentProvider = getTtsProvider(config, prefsPath);
     if (!args.trim()) {
-      const hasOpenAI = Boolean(resolveExtensionHostTtsApiKey(config, "openai"));
-      const hasElevenLabs = Boolean(resolveExtensionHostTtsApiKey(config, "elevenlabs"));
-      const hasEdge = isExtensionHostTtsProviderConfigured(config, "edge");
+      const status = resolveExtensionHostTtsStatusSnapshot({ config, prefsPath });
       return {
         shouldContinue: false,
         reply: {
           text:
             `🎙️ TTS provider\n` +
             `Primary: ${currentProvider}\n` +
-            `OpenAI key: ${hasOpenAI ? "✅" : "❌"}\n` +
-            `ElevenLabs key: ${hasElevenLabs ? "✅" : "❌"}\n` +
-            `Edge enabled: ${hasEdge ? "✅" : "❌"}\n` +
+            `OpenAI key: ${status.hasOpenAIKey ? "✅" : "❌"}\n` +
+            `ElevenLabs key: ${status.hasElevenLabsKey ? "✅" : "❌"}\n` +
+            `Edge enabled: ${status.edgeEnabled ? "✅" : "❌"}\n` +
             `Usage: /tts provider openai | elevenlabs | edge`,
         },
       };
@@ -249,32 +245,8 @@ export const handleTtsCommands: CommandHandler = async (params, allowTextCommand
   }
 
   if (action === "status") {
-    const enabled = isTtsEnabled(config, prefsPath);
-    const provider = getTtsProvider(config, prefsPath);
-    const hasKey = isExtensionHostTtsProviderConfigured(config, provider);
-    const maxLength = getTtsMaxLength(prefsPath);
-    const summarize = isSummarizationEnabled(prefsPath);
-    const last = getLastTtsAttempt();
-    const lines = [
-      "📊 TTS status",
-      `State: ${enabled ? "✅ enabled" : "❌ disabled"}`,
-      `Provider: ${provider} (${hasKey ? "✅ configured" : "❌ not configured"})`,
-      `Text limit: ${maxLength} chars`,
-      `Auto-summary: ${summarize ? "on" : "off"}`,
-    ];
-    if (last) {
-      const timeAgo = Math.round((Date.now() - last.timestamp) / 1000);
-      lines.push("");
-      lines.push(`Last attempt (${timeAgo}s ago): ${last.success ? "✅" : "❌"}`);
-      lines.push(`Text: ${last.textLength} chars${last.summarized ? " (summarized)" : ""}`);
-      if (last.success) {
-        lines.push(`Provider: ${last.provider ?? "unknown"}`);
-        lines.push(`Latency: ${last.latencyMs ?? 0}ms`);
-      } else if (last.error) {
-        lines.push(`Error: ${last.error}`);
-      }
-    }
-    return { shouldContinue: false, reply: { text: lines.join("\n") } };
+    const status = resolveExtensionHostTtsStatusSnapshot({ config, prefsPath });
+    return { shouldContinue: false, reply: { text: formatExtensionHostTtsStatusText(status) } };
   }
 
   return { shouldContinue: false, reply: ttsUsage() };

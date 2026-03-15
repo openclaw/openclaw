@@ -1,15 +1,10 @@
 import { loadConfig } from "../../config/config.js";
-import {
-  isExtensionHostTtsProviderConfigured,
-  resolveExtensionHostTtsApiKey,
-  resolveExtensionHostTtsProviderOrder,
-} from "../../extension-host/tts-runtime-registry.js";
+import { isExtensionHostTtsProviderConfigured } from "../../extension-host/tts-runtime-registry.js";
+import { resolveExtensionHostTtsStatusSnapshot } from "../../extension-host/tts-status.js";
 import {
   OPENAI_TTS_MODELS,
   OPENAI_TTS_VOICES,
   getTtsProvider,
-  isTtsEnabled,
-  resolveTtsAutoMode,
   resolveTtsConfig,
   resolveTtsPrefsPath,
   setTtsEnabled,
@@ -26,22 +21,7 @@ export const ttsHandlers: GatewayRequestHandlers = {
       const cfg = loadConfig();
       const config = resolveTtsConfig(cfg);
       const prefsPath = resolveTtsPrefsPath(config);
-      const provider = getTtsProvider(config, prefsPath);
-      const autoMode = resolveTtsAutoMode({ config, prefsPath });
-      const fallbackProviders = resolveExtensionHostTtsProviderOrder(provider)
-        .slice(1)
-        .filter((candidate) => isExtensionHostTtsProviderConfigured(config, candidate));
-      respond(true, {
-        enabled: isTtsEnabled(config, prefsPath),
-        auto: autoMode,
-        provider,
-        fallbackProvider: fallbackProviders[0] ?? null,
-        fallbackProviders,
-        prefsPath,
-        hasOpenAIKey: Boolean(resolveExtensionHostTtsApiKey(config, "openai")),
-        hasElevenLabsKey: Boolean(resolveExtensionHostTtsApiKey(config, "elevenlabs")),
-        edgeEnabled: isExtensionHostTtsProviderConfigured(config, "edge"),
-      });
+      respond(true, resolveExtensionHostTtsStatusSnapshot({ config, prefsPath }));
     } catch (err) {
       respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, formatForLog(err)));
     }
