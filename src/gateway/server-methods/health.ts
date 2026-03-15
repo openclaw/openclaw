@@ -1,11 +1,117 @@
+import type { ChannelAccountSnapshot } from "../../channels/plugins/types.js";
+import type {
+  ChannelAccountHealthSummary,
+  ChannelHealthSummary,
+  HealthSummary,
+} from "../../commands/health.js";
 import { getStatusSummary } from "../../commands/status.js";
 import { ErrorCodes, errorShape } from "../protocol/index.js";
+import type { ChannelRuntimeSnapshot } from "../server-channels.js";
 import { HEALTH_REFRESH_INTERVAL_MS } from "../server-constants.js";
 import { formatError } from "../server-utils.js";
 import { formatForLog } from "../ws-log.js";
 import type { GatewayRequestHandlers } from "./types.js";
 
 const ADMIN_SCOPE = "operator.admin";
+const RUNTIME_MIRROR_FIELDS = [
+  "running",
+  "connected",
+  "reconnectAttempts",
+  "lastConnectedAt",
+  "lastDisconnect",
+  "lastMessageAt",
+  "lastEventAt",
+  "lastError",
+  "lastStartAt",
+  "lastStopAt",
+] as const;
+
+type RuntimeMirrorField = (typeof RUNTIME_MIRROR_FIELDS)[number];
+
+function mergeRuntimeFields(
+  base: ChannelAccountHealthSummary,
+  runtime?: ChannelAccountSnapshot,
+): ChannelAccountHealthSummary {
+  if (!runtime) {
+    return base;
+  }
+  let changed = false;
+  const next: ChannelAccountHealthSummary = { ...base };
+  for (const field of RUNTIME_MIRROR_FIELDS) {
+    const runtimeValue = runtime[field as RuntimeMirrorField];
+    if (runtimeValue === undefined) {
+      continue;
+    }
+    if (next[field] === runtimeValue) {
+      continue;
+    }
+    next[field] = runtimeValue;
+    changed = true;
+  }
+  return changed ? next : base;
+}
+
+function mergeRuntimeSnapshot(
+  summary: HealthSummary,
+  runtime: ChannelRuntimeSnapshot,
+): HealthSummary {
+  const runtimeChannels = runtime.channels ?? {};
+  const runtimeAccounts = runtime.channelAccounts ?? {};
+  let channels = summary.channels;
+  let changed = false;
+
+  for (const [channelId, runtimeChannel] of Object.entries(runtimeChannels)) {
+    const currentChannel = channels[channelId];
+    if (!currentChannel || !runtimeChannel) {
+      continue;
+    }
+    const accountRuntimeMap = runtimeAccounts[channelId];
+    const hasAccountRuntimeMap = !!accountRuntimeMap && Object.keys(accountRuntimeMap).length > 0;
+    const preferredRuntimeAccount =
+      hasAccountRuntimeMap && currentChannel.accountId
+        ? accountRuntimeMap[currentChannel.accountId]
+        : undefined;
+    const channelRuntime =
+      preferredRuntimeAccount ?? (hasAccountRuntimeMap ? undefined : runtimeChannel);
+    let nextChannel = mergeRuntimeFields(currentChannel, channelRuntime) as ChannelHealthSummary;
+    if (hasAccountRuntimeMap) {
+      const currentAccounts = currentChannel.accounts ?? {};
+      let nextAccounts = currentAccounts;
+      for (const [accountId, runtimeAccount] of Object.entries(accountRuntimeMap)) {
+        if (!runtimeAccount) {
+          continue;
+        }
+        const currentAccount = currentAccounts[accountId];
+        if (!currentAccount) {
+          continue;
+        }
+        const mergedAccount = mergeRuntimeFields(currentAccount, runtimeAccount);
+        if (mergedAccount === currentAccount) {
+          continue;
+        }
+        if (nextAccounts === currentAccounts) {
+          nextAccounts = { ...currentAccounts };
+        }
+        nextAccounts[accountId] = mergedAccount;
+      }
+      if (nextAccounts !== currentAccounts) {
+        if (nextChannel === currentChannel) {
+          nextChannel = { ...nextChannel };
+        }
+        nextChannel.accounts = nextAccounts;
+      }
+    }
+    if (nextChannel !== currentChannel) {
+      if (!changed) {
+        channels = { ...channels };
+        changed = true;
+      }
+      channels[channelId] = nextChannel;
+    }
+  }
+
+  return changed ? { ...summary, channels } : summary;
+}
 
 export const healthHandlers: GatewayRequestHandlers = {
   health: async ({ respond, context, params }) => {
@@ -14,7 +120,8 @@ export const healthHandlers: GatewayRequestHandlers = {
     const now = Date.now();
     const cached = getHealthCache();
     if (!wantsProbe && cached && now - cached.ts < HEALTH_REFRESH_INTERVAL_MS) {
-      respond(true, cached, undefined, { cached: true });
+      const runtime = context.getRuntimeSnapshot();
+      respond(true, mergeRuntimeSnapshot(cached, runtime), undefined, { cached: true });
       void refreshHealthSnapshot({ probe: false }).catch((err) =>
         logHealth.error(`background health refresh failed: ${formatError(err)}`),
       );
@@ -22,7 +129,8 @@ export const healthHandlers: GatewayRequestHandlers = {
     }
     try {
       const snap = await refreshHealthSnapshot({ probe: wantsProbe });
-      respond(true, snap, undefined);
+      const runtime = context.getRuntimeSnapshot();
+      respond(true, mergeRuntimeSnapshot(snap, runtime), undefined);
     } catch (err) {
       respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, formatForLog(err)));
     }
