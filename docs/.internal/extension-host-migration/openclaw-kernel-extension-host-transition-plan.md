@@ -263,6 +263,7 @@ Committed implementation slices so far:
 - `c205208497` `Media: add runtime selection policy`
 - `a9e5d36f7e` `Runtime: share backend policy helper`
 - `8d8b9ba42d` `Memory: adopt shared backend policy`
+- `dd0c10c999` `Runtime: route backend catalog through shared policy`
 - `89414ed857` `Docs: track extension host migration internally`
 - `d8af1eceaf` `Docs: refresh extension host migration status`
 
