@@ -1,0 +1,237 @@
+import { describe, expect, it } from "vitest";
+import type { OpenClawConfig } from "../config/config.js";
+import { evaluateToolApprovalPolicy, resolveToolApprovalPolicy } from "./tool-approval-policy.js";
+
+function makeConfig(toolPolicy?: Record<string, unknown>): OpenClawConfig {
+  return { approvals: { toolPolicy } } as unknown as OpenClawConfig;
+}
+
+describe("resolveToolApprovalPolicy", () => {
+  it("returns permissive defaults when no config", () => {
+    const policy = resolveToolApprovalPolicy({ cfg: {} as OpenClawConfig });
+    expect(policy.security).toBe("full");
+    expect(policy.ask).toBe("off");
+    expect(policy.askFallback).toBe("full");
+    expect(policy.allowlist).toEqual([]);
+  });
+
+  it("reads global config values", () => {
+    const policy = resolveToolApprovalPolicy({
+      cfg: makeConfig({ security: "allowlist", ask: "on-miss", askFallback: "deny" }),
+    });
+    expect(policy.security).toBe("allowlist");
+    expect(policy.ask).toBe("on-miss");
+    expect(policy.askFallback).toBe("deny");
+  });
+
+  it("uses global allowlist when no agent allowlist is set", () => {
+    const policy = resolveToolApprovalPolicy({
+      cfg: makeConfig({
+        allowlist: [{ pattern: "github__list_*" }],
+      }),
+    });
+    expect(policy.allowlist).toHaveLength(1);
+    expect(policy.allowlist[0].pattern).toBe("github__list_*");
+  });
+
+  it("per-agent allowlist overrides global allowlist", () => {
+    const policy = resolveToolApprovalPolicy({
+      cfg: makeConfig({
+        allowlist: [{ pattern: "*" }],
+        agents: {
+          ops: { allowlist: [{ pattern: "github__list_*" }] },
+        },
+      }),
+      agentId: "ops",
+    });
+    // Agent-specific allowlist replaces global, so only the agent pattern applies.
+    expect(policy.allowlist).toHaveLength(1);
+    expect(policy.allowlist[0].pattern).toBe("github__list_*");
+  });
+
+  it("wildcard agent allowlist overrides global allowlist", () => {
+    const policy = resolveToolApprovalPolicy({
+      cfg: makeConfig({
+        allowlist: [{ pattern: "*" }],
+        agents: {
+          "*": { allowlist: [{ pattern: "safe__*" }] },
+        },
+      }),
+      agentId: "any-agent",
+    });
+    expect(policy.allowlist).toHaveLength(1);
+    expect(policy.allowlist[0].pattern).toBe("safe__*");
+  });
+
+  it("per-agent allowlist overrides wildcard agent allowlist", () => {
+    const policy = resolveToolApprovalPolicy({
+      cfg: makeConfig({
+        allowlist: [{ pattern: "*" }],
+        agents: {
+          "*": { allowlist: [{ pattern: "safe__*" }] },
+          ops: { allowlist: [{ pattern: "github__list_*" }] },
+        },
+      }),
+      agentId: "ops",
+    });
+    expect(policy.allowlist).toHaveLength(1);
+    expect(policy.allowlist[0].pattern).toBe("github__list_*");
+  });
+
+  it("falls back to global allowlist when agent has no allowlist", () => {
+    const policy = resolveToolApprovalPolicy({
+      cfg: makeConfig({
+        allowlist: [{ pattern: "global__*" }],
+        agents: {
+          ops: { security: "allowlist" },
+        },
+      }),
+      agentId: "ops",
+    });
+    expect(policy.allowlist).toHaveLength(1);
+    expect(policy.allowlist[0].pattern).toBe("global__*");
+  });
+
+  it("applies per-agent overrides", () => {
+    const policy = resolveToolApprovalPolicy({
+      cfg: makeConfig({
+        security: "full",
+        agents: {
+          ops: { security: "allowlist", ask: "always" },
+        },
+      }),
+      agentId: "ops",
+    });
+    expect(policy.security).toBe("allowlist");
+    expect(policy.ask).toBe("always");
+  });
+
+  it("applies wildcard agent overrides", () => {
+    const policy = resolveToolApprovalPolicy({
+      cfg: makeConfig({
+        agents: {
+          "*": { security: "allowlist" },
+        },
+      }),
+      agentId: "any-agent",
+    });
+    expect(policy.security).toBe("allowlist");
+  });
+
+  it("per-agent config takes priority over wildcard", () => {
+    const policy = resolveToolApprovalPolicy({
+      cfg: makeConfig({
+        agents: {
+          "*": { security: "deny" },
+          main: { security: "allowlist" },
+        },
+      }),
+      agentId: "main",
+    });
+    expect(policy.security).toBe("allowlist");
+  });
+
+  it("honors explicit empty per-agent allowlist override", () => {
+    const policy = resolveToolApprovalPolicy({
+      cfg: makeConfig({
+        allowlist: [{ pattern: "*" }],
+        agents: {
+          locked: { allowlist: [] },
+        },
+      }),
+      agentId: "locked",
+    });
+    // An explicit empty array means "no tools allowed" and must not
+    // fall back to the global wildcard allowlist.
+    expect(policy.allowlist).toEqual([]);
+  });
+
+  it("honors explicit empty wildcard agent allowlist override", () => {
+    const policy = resolveToolApprovalPolicy({
+      cfg: makeConfig({
+        allowlist: [{ pattern: "*" }],
+        agents: {
+          "*": { allowlist: [] },
+        },
+      }),
+      agentId: "any-agent",
+    });
+    expect(policy.allowlist).toEqual([]);
+  });
+});
+
+describe("evaluateToolApprovalPolicy", () => {
+  it("denies when security=deny", () => {
+    const result = evaluateToolApprovalPolicy({
+      toolName: "github__list_repos",
+      policy: { security: "deny", ask: "off", askFallback: "deny", allowlist: [] },
+    });
+    expect(result.allowed).toBe(false);
+    expect(result.requiresApproval).toBe(false);
+  });
+
+  it("allows when security=full and ask=off", () => {
+    const result = evaluateToolApprovalPolicy({
+      toolName: "github__list_repos",
+      policy: { security: "full", ask: "off", askFallback: "full", allowlist: [] },
+    });
+    expect(result.allowed).toBe(true);
+    expect(result.requiresApproval).toBe(false);
+  });
+
+  it("allows when allowlist matches", () => {
+    const result = evaluateToolApprovalPolicy({
+      toolName: "github__list_repos",
+      policy: {
+        security: "allowlist",
+        ask: "off",
+        askFallback: "deny",
+        allowlist: [{ pattern: "github__list_*" }],
+      },
+    });
+    expect(result.allowed).toBe(true);
+    expect(result.requiresApproval).toBe(false);
+  });
+
+  it("denies on allowlist miss when ask=off", () => {
+    const result = evaluateToolApprovalPolicy({
+      toolName: "github__delete_repos",
+      policy: {
+        security: "allowlist",
+        ask: "off",
+        askFallback: "deny",
+        allowlist: [{ pattern: "github__list_*" }],
+      },
+    });
+    expect(result.allowed).toBe(false);
+    expect(result.requiresApproval).toBe(false);
+  });
+
+  it("requires approval on allowlist miss when ask=on-miss", () => {
+    const result = evaluateToolApprovalPolicy({
+      toolName: "github__delete_repos",
+      policy: {
+        security: "allowlist",
+        ask: "on-miss",
+        askFallback: "deny",
+        allowlist: [{ pattern: "github__list_*" }],
+      },
+    });
+    expect(result.allowed).toBe(false);
+    expect(result.requiresApproval).toBe(true);
+  });
+
+  it("requires approval when ask=always even on match", () => {
+    const result = evaluateToolApprovalPolicy({
+      toolName: "github__list_repos",
+      policy: {
+        security: "allowlist",
+        ask: "always",
+        askFallback: "deny",
+        allowlist: [{ pattern: "github__list_*" }],
+      },
+    });
+    expect(result.allowed).toBe(false);
+    expect(result.requiresApproval).toBe(true);
+  });
+});
