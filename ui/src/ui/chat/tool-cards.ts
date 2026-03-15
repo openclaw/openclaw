@@ -5,12 +5,21 @@ import type { ToolCard } from "../types/chat-types.ts";
 import { TOOL_INLINE_THRESHOLD } from "./constants.ts";
 import { extractTextCached } from "./message-extract.ts";
 import { isToolResultMessage } from "./message-normalizer.ts";
-import { formatToolOutputForSidebar, getTruncatedPreview } from "./tool-helpers.ts";
+import {
+  formatToolArgsForSidebar,
+  formatToolOutputForSidebar,
+  getTruncatedPreview,
+} from "./tool-helpers.ts";
 
 export function extractToolCards(message: unknown): ToolCard[] {
   const m = message as Record<string, unknown>;
   const content = normalizeContent(m.content);
   const cards: ToolCard[] = [];
+
+  // Build lookup maps from tool calls for result-card arg pairing
+  const argsByToolCallId = new Map<string, unknown>();
+  // Use per-name queue for ordered matching (FIFO) instead of last-wins
+  const argsQueueByName = new Map<string, unknown[]>();
 
   for (const item of content) {
     const kind = (typeof item.type === "string" ? item.type : "").toLowerCase();
@@ -18,11 +27,24 @@ export function extractToolCards(message: unknown): ToolCard[] {
       ["toolcall", "tool_call", "tooluse", "tool_use"].includes(kind) ||
       (typeof item.name === "string" && item.arguments != null);
     if (isToolCall) {
+      const name = (item.name as string) ?? "tool";
+      const args = coerceArgs(item.arguments ?? item.args);
       cards.push({
         kind: "call",
-        name: (item.name as string) ?? "tool",
-        args: coerceArgs(item.arguments ?? item.args),
+        name,
+        args,
       });
+      // Index by toolCallId if present
+      const toolCallId =
+        (item.toolCallId as string) ?? (item.tool_call_id as string) ?? (item.id as string);
+      if (toolCallId) {
+        argsByToolCallId.set(toolCallId, args);
+      }
+      // Push to per-name queue for ordered matching
+      if (!argsQueueByName.has(name)) {
+        argsQueueByName.set(name, []);
+      }
+      argsQueueByName.get(name)!.push(args);
     }
   }
 
@@ -33,7 +55,39 @@ export function extractToolCards(message: unknown): ToolCard[] {
     }
     const text = extractToolText(item);
     const name = typeof item.name === "string" ? item.name : "tool";
-    cards.push({ kind: "result", name, text });
+    // Try to get args from the result block first, then look up paired tool call
+    let args = coerceArgs(item.arguments ?? item.args);
+    // Try matching by toolCallId first
+    const toolCallId =
+      (item.toolCallId as string) ?? (item.tool_call_id as string) ?? (item.id as string);
+    if (toolCallId && argsByToolCallId.has(toolCallId)) {
+      args = argsByToolCallId.get(toolCallId);
+    } else if (args === undefined || args === null) {
+      // Only use queue fallback if we don't have args yet
+      if (argsQueueByName.has(name)) {
+        const queue = argsQueueByName.get(name)!;
+        if (queue.length > 0) {
+          args = queue.shift();
+        }
+      }
+    }
+    // Always consume matching queue entry to keep queue in sync
+    // (for results matched by toolCallId or with their own args)
+    if (argsQueueByName.has(name)) {
+      const queue = argsQueueByName.get(name)!;
+      // Find and remove the args we matched (by reference or position)
+      // For toolCallId match, remove the first entry (FIFO preserves order)
+      // For own-args, also remove first to keep queue aligned with call order
+      if (queue.length > 0) {
+        queue.shift();
+      }
+    }
+    cards.push({
+      kind: "result",
+      name,
+      args,
+      text,
+    });
   }
 
   if (isToolResultMessage(message) && !cards.some((card) => card.kind === "result")) {
@@ -42,7 +96,15 @@ export function extractToolCards(message: unknown): ToolCard[] {
       (typeof m.tool_name === "string" && m.tool_name) ||
       "tool";
     const text = extractTextCached(message) ?? undefined;
-    cards.push({ kind: "result", name, text });
+    // Also try to look up args from any prior tool call by name (FIFO)
+    let args = coerceArgs(m.arguments ?? m.args);
+    if ((args === undefined || args === null) && argsQueueByName.has(name)) {
+      const queue = argsQueueByName.get(name)!;
+      if (queue.length > 0) {
+        args = queue.shift();
+      }
+    }
+    cards.push({ kind: "result", name, text, args });
   }
 
   return cards;
@@ -56,14 +118,22 @@ export function renderToolCardSidebar(card: ToolCard, onOpenSidebar?: (content: 
   const canClick = Boolean(onOpenSidebar);
   const handleClick = canClick
     ? () => {
+        // Lazy compute args sections only when sidebar is opened
+        const argsSections = formatToolArgsForSidebar(card.args);
+        const headerParts = [`## ${display.label}`];
+        if (argsSections.length > 0) {
+          headerParts.push(
+            ...argsSections.map((section) => `**${section.label}:**\n${section.body}`),
+          );
+        } else if (detail) {
+          headerParts.push(`**Command:** \`${detail}\``);
+        }
+        const header = `${headerParts.join("\n\n")}\n\n`;
         if (hasText) {
-          onOpenSidebar!(formatToolOutputForSidebar(card.text!));
+          onOpenSidebar!(`${header}${formatToolOutputForSidebar(card.text!)}`);
           return;
         }
-        const info = `## ${display.label}\n\n${
-          detail ? `**Command:** \`${detail}\`\n\n` : ""
-        }*No output — tool completed successfully.*`;
-        onOpenSidebar!(info);
+        onOpenSidebar!(`${header}*No output — tool completed successfully.*`);
       }
     : undefined;
 

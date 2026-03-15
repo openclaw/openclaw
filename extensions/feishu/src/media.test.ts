@@ -40,6 +40,7 @@ vi.mock("./runtime.js", () => ({
 }));
 
 import {
+  decodeFileNameFromFeishu,
   downloadImageFeishu,
   downloadMessageResourceFeishu,
   sanitizeFileNameForUpload,
@@ -462,6 +463,55 @@ describe("sanitizeFileNameForUpload", () => {
   it("strips quotes and backslashes to prevent header injection", () => {
     expect(sanitizeFileNameForUpload('file"name.txt')).toBe("file_name.txt");
     expect(sanitizeFileNameForUpload("file\\name.txt")).toBe("file_name.txt");
+  });
+});
+
+describe("decodeFileNameFromFeishu", () => {
+  it("returns empty string unchanged", () => {
+    expect(decodeFileNameFromFeishu("")).toBe("");
+  });
+
+  it("returns null/undefined unchanged", () => {
+    expect(decodeFileNameFromFeishu(null as any)).toBe(null);
+    expect(decodeFileNameFromFeishu(undefined as any)).toBe(undefined);
+  });
+
+  it("returns ASCII filenames unchanged", () => {
+    expect(decodeFileNameFromFeishu("report.pdf")).toBe("report.pdf");
+    expect(decodeFileNameFromFeishu("my-file_v2.txt")).toBe("my-file_v2.txt");
+  });
+
+  it("decodes URL-encoded Chinese characters", () => {
+    // This is what Feishu returns when file was uploaded with sanitizeFileNameForUpload
+    const encoded = encodeURIComponent("测试文件") + ".md";
+    expect(decodeFileNameFromFeishu(encoded)).toBe("测试文件.md");
+  });
+
+  it("decodes URL-encoded em-dash and full-width brackets", () => {
+    const encoded = encodeURIComponent("文件—说明（v2）") + ".pdf";
+    const result = decodeFileNameFromFeishu(encoded);
+    expect(result).toBe("文件—说明（v2）.pdf");
+  });
+
+  it("returns partially malformed encoded strings as-is", () => {
+    // %GG is not valid hex, should return unchanged
+    expect(decodeFileNameFromFeishu("test%GG.pdf")).toBe("test%GG.pdf");
+  });
+
+  it("handles filenames without encoded characters", () => {
+    expect(decodeFileNameFromFeishu("报告.pdf")).toBe("报告.pdf");
+  });
+
+  it("decodes mixed ASCII and encoded characters", () => {
+    const encoded = "Report_" + encodeURIComponent("报告") + "_2026.xlsx";
+    expect(decodeFileNameFromFeishu(encoded)).toBe("Report_报告_2026.xlsx");
+  });
+
+  it("does not decode literal percent sequences like report%20draft.txt", () => {
+    // Literal %20 should NOT be decoded to space
+    expect(decodeFileNameFromFeishu("report%20draft.txt")).toBe("report%20draft.txt");
+    // Literal %2F should NOT be decoded to /
+    expect(decodeFileNameFromFeishu("data%2F2026.csv")).toBe("data%2F2026.csv");
   });
 });
 
