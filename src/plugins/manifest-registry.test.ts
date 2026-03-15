@@ -1,6 +1,4 @@
-import { randomUUID } from "node:crypto";
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import type { PluginCandidate } from "./discovery.js";
@@ -8,14 +6,24 @@ import {
   clearPluginManifestRegistryCache,
   loadPluginManifestRegistry,
 } from "./manifest-registry.js";
+import { cleanupTrackedTempDirs, makeTrackedTempDir } from "./test-helpers/fs-fixtures.js";
 
 const tempDirs: string[] = [];
 
-function makeTempDir() {
-  const dir = path.join(os.tmpdir(), `openclaw-manifest-registry-${randomUUID()}`);
+function chmodSafeDir(dir: string) {
+  if (process.platform === "win32") {
+    return;
+  }
+  fs.chmodSync(dir, 0o755);
+}
+
+function mkdirSafe(dir: string) {
   fs.mkdirSync(dir, { recursive: true });
-  tempDirs.push(dir);
-  return dir;
+  chmodSafeDir(dir);
+}
+
+function makeTempDir() {
+  return makeTrackedTempDir("openclaw-manifest-registry", tempDirs);
 }
 
 function writeManifest(dir: string, manifest: Record<string, unknown>) {
@@ -120,17 +128,7 @@ function expectUnsafeWorkspaceManifestRejected(params: {
 
 afterEach(() => {
   clearPluginManifestRegistryCache();
-  while (tempDirs.length > 0) {
-    const dir = tempDirs.pop();
-    if (!dir) {
-      break;
-    }
-    try {
-      fs.rmSync(dir, { recursive: true, force: true });
-    } catch {
-      // ignore cleanup failures
-    }
-  }
+  cleanupTrackedTempDirs(tempDirs);
 });
 
 describe("loadPluginManifestRegistry", () => {
@@ -214,7 +212,7 @@ describe("loadPluginManifestRegistry", () => {
 
   it("prefers higher-precedence origins for the same physical directory (config > workspace > global > bundled)", () => {
     const dir = makeTempDir();
-    fs.mkdirSync(path.join(dir, "sub"), { recursive: true });
+    mkdirSafe(path.join(dir, "sub"));
     const manifest = { id: "precedence-plugin", configSchema: { type: "object" } };
     writeManifest(dir, manifest);
 
@@ -274,8 +272,8 @@ describe("loadPluginManifestRegistry", () => {
     const bundledB = makeTempDir();
     const matrixA = path.join(bundledA, "matrix");
     const matrixB = path.join(bundledB, "matrix");
-    fs.mkdirSync(matrixA, { recursive: true });
-    fs.mkdirSync(matrixB, { recursive: true });
+    mkdirSafe(matrixA);
+    mkdirSafe(matrixB);
     writeManifest(matrixA, {
       id: "matrix",
       name: "Matrix A",
@@ -317,8 +315,8 @@ describe("loadPluginManifestRegistry", () => {
     const homeB = makeTempDir();
     const demoA = path.join(homeA, "plugins", "demo");
     const demoB = path.join(homeB, "plugins", "demo");
-    fs.mkdirSync(demoA, { recursive: true });
-    fs.mkdirSync(demoB, { recursive: true });
+    mkdirSafe(demoA);
+    mkdirSafe(demoB);
     writeManifest(demoA, {
       id: "demo",
       name: "Demo A",
@@ -346,6 +344,7 @@ describe("loadPluginManifestRegistry", () => {
       env: {
         ...process.env,
         HOME: homeA,
+        OPENCLAW_HOME: undefined,
         OPENCLAW_STATE_DIR: path.join(homeA, ".state"),
       },
     });
@@ -355,6 +354,7 @@ describe("loadPluginManifestRegistry", () => {
       env: {
         ...process.env,
         HOME: homeB,
+        OPENCLAW_HOME: undefined,
         OPENCLAW_STATE_DIR: path.join(homeB, ".state"),
       },
     });

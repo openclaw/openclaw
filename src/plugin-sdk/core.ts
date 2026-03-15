@@ -4,6 +4,7 @@ export type {
   ProviderDiscoveryContext,
   OpenClawPluginService,
   ProviderAuthContext,
+  ProviderAuthMethodNonInteractiveContext,
   ProviderAuthResult,
 } from "../plugins/types.js";
 export type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
@@ -15,7 +16,10 @@ export { emptyPluginConfigSchema } from "../plugins/config-schema.js";
 export { buildOauthProviderAuthResult } from "./provider-auth-result.js";
 export {
   applyProviderDefaultModel,
+  configureOpenAICompatibleSelfHostedProviderNonInteractive,
+  discoverOpenAICompatibleSelfHostedProvider,
   promptAndConfigureOpenAICompatibleSelfHostedProvider,
+  promptAndConfigureOpenAICompatibleSelfHostedProviderAuth,
   SELF_HOSTED_DEFAULT_CONTEXT_WINDOW,
   SELF_HOSTED_DEFAULT_COST,
   SELF_HOSTED_DEFAULT_MAX_TOKENS,

@@ -1,6 +1,27 @@
 import { describe, expect, it } from "vitest";
 import { NON_ENV_SECRETREF_MARKER } from "../../agents/model-auth-markers.js";
+import { withEnv } from "../../test-utils/env.js";
 import { resolveProviderAuthOverview } from "./list.auth-overview.js";
+
+function resolveOpenAiOverview(apiKey: string) {
+  return resolveProviderAuthOverview({
+    provider: "openai",
+    cfg: {
+      models: {
+        providers: {
+          openai: {
+            baseUrl: "https://api.openai.com/v1",
+            api: "openai-completions",
+            apiKey,
+            models: [],
+          },
+        },
+      },
+    } as never,
+    store: { version: 1, profiles: {} } as never,
+    modelsPath: "/tmp/models.json",
+  });
+}
 
 describe("resolveProviderAuthOverview", () => {
   it("does not throw when token profile only has tokenRef", () => {
@@ -24,23 +45,9 @@ describe("resolveProviderAuthOverview", () => {
   });
 
   it("renders marker-backed models.json auth as marker detail", () => {
-    const overview = resolveProviderAuthOverview({
-      provider: "openai",
-      cfg: {
-        models: {
-          providers: {
-            openai: {
-              baseUrl: "https://api.openai.com/v1",
-              api: "openai-completions",
-              apiKey: NON_ENV_SECRETREF_MARKER,
-              models: [],
-            },
-          },
-        },
-      } as never,
-      store: { version: 1, profiles: {} } as never,
-      modelsPath: "/tmp/models.json",
-    });
+    const overview = withEnv({ OPENAI_API_KEY: undefined }, () =>
+      resolveOpenAiOverview(NON_ENV_SECRETREF_MARKER),
+    );
 
     expect(overview.effective.kind).toBe("missing");
     expect(overview.effective.detail).toBe("missing");
@@ -48,23 +55,9 @@ describe("resolveProviderAuthOverview", () => {
   });
 
   it("keeps env-var-shaped models.json values masked to avoid accidental plaintext exposure", () => {
-    const overview = resolveProviderAuthOverview({
-      provider: "openai",
-      cfg: {
-        models: {
-          providers: {
-            openai: {
-              baseUrl: "https://api.openai.com/v1",
-              api: "openai-completions",
-              apiKey: "OPENAI_API_KEY", // pragma: allowlist secret
-              models: [],
-            },
-          },
-        },
-      } as never,
-      store: { version: 1, profiles: {} } as never,
-      modelsPath: "/tmp/models.json",
-    });
+    const overview = withEnv({ OPENAI_API_KEY: undefined }, () =>
+      resolveOpenAiOverview("OPENAI_API_KEY"),
+    );
 
     expect(overview.effective.kind).toBe("missing");
     expect(overview.effective.detail).toBe("missing");
@@ -76,23 +69,7 @@ describe("resolveProviderAuthOverview", () => {
     const prior = process.env.OPENAI_API_KEY;
     process.env.OPENAI_API_KEY = "sk-openai-from-env"; // pragma: allowlist secret
     try {
-      const overview = resolveProviderAuthOverview({
-        provider: "openai",
-        cfg: {
-          models: {
-            providers: {
-              openai: {
-                baseUrl: "https://api.openai.com/v1",
-                api: "openai-completions",
-                apiKey: "OPENAI_API_KEY", // pragma: allowlist secret
-                models: [],
-              },
-            },
-          },
-        } as never,
-        store: { version: 1, profiles: {} } as never,
-        modelsPath: "/tmp/models.json",
-      });
+      const overview = resolveOpenAiOverview("OPENAI_API_KEY");
       expect(overview.effective.kind).toBe("env");
       expect(overview.effective.detail).not.toContain("OPENAI_API_KEY");
     } finally {

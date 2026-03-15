@@ -33,7 +33,7 @@ Choose this when:
 
 ### Option 2: Chrome extension relay
 
-Use the built-in `chrome` profile plus the OpenClaw Chrome extension.
+Use the built-in `chrome-relay` profile plus the OpenClaw Chrome extension.
 
 Choose this when:
 
@@ -155,7 +155,7 @@ Example:
 {
   browser: {
     enabled: true,
-    defaultProfile: "chrome",
+    defaultProfile: "chrome-relay",
     relayBindHost: "0.0.0.0",
   },
 }
@@ -197,7 +197,7 @@ openclaw browser tabs --browser-profile remote
 For the extension relay:
 
 ```bash
-openclaw browser tabs --browser-profile chrome
+openclaw browser tabs --browser-profile chrome-relay
 ```
 
 Good result:

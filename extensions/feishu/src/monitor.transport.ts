@@ -1,7 +1,9 @@
 import * as http from "http";
+import crypto from "node:crypto";
 import * as Lark from "@larksuiteoapi/node-sdk";
 import {
   applyBasicWebhookRequestGuards,
+  readJsonBodyWithLimit,
   type RuntimeEnv,
   installRequestBodyLimitGuard,
 } from "openclaw/plugin-sdk/feishu";
@@ -25,6 +27,50 @@ export type MonitorTransportParams = {
   abortSignal?: AbortSignal;
   eventDispatcher: Lark.EventDispatcher;
 };
+
+function isFeishuWebhookPayload(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === "object" && !Array.isArray(value);
+}
+
+function buildFeishuWebhookEnvelope(
+  req: http.IncomingMessage,
+  payload: Record<string, unknown>,
+): Record<string, unknown> {
+  return Object.assign(Object.create({ headers: req.headers }), payload) as Record<string, unknown>;
+}
+
+function isFeishuWebhookSignatureValid(params: {
+  headers: http.IncomingHttpHeaders;
+  payload: Record<string, unknown>;
+  encryptKey?: string;
+}): boolean {
+  const encryptKey = params.encryptKey?.trim();
+  if (!encryptKey) {
+    return true;
+  }
+
+  const timestampHeader = params.headers["x-lark-request-timestamp"];
+  const nonceHeader = params.headers["x-lark-request-nonce"];
+  const signatureHeader = params.headers["x-lark-signature"];
+  const timestamp = Array.isArray(timestampHeader) ? timestampHeader[0] : timestampHeader;
+  const nonce = Array.isArray(nonceHeader) ? nonceHeader[0] : nonceHeader;
+  const signature = Array.isArray(signatureHeader) ? signatureHeader[0] : signatureHeader;
+  if (!timestamp || !nonce || !signature) {
+    return false;
+  }
+
+  const computedSignature = crypto
+    .createHash("sha256")
+    .update(timestamp + nonce + encryptKey + JSON.stringify(params.payload))
+    .digest("hex");
+  return computedSignature === signature;
+}
+
+function respondText(res: http.ServerResponse, statusCode: number, body: string): void {
+  res.statusCode = statusCode;
+  res.setHeader("Content-Type", "text/plain; charset=utf-8");
+  res.end(body);
+}
 
 export async function monitorWebSocket({
   account,
@@ -88,7 +134,6 @@ export async function monitorWebhook({
   log(`feishu[${accountId}]: starting Webhook server on ${host}:${port}, path ${path}...`);
 
   const server = http.createServer();
-  const webhookHandler = Lark.adaptDefault(path, eventDispatcher, { autoChallenge: true });
 
   server.on("request", (req, res) => {
     res.on("finish", () => {
@@ -118,15 +163,68 @@ export async function monitorWebhook({
       return;
     }
 
-    void Promise.resolve(webhookHandler(req, res))
-      .catch((err) => {
+    void (async () => {
+      try {
+        const bodyResult = await readJsonBodyWithLimit(req, {
+          maxBytes: FEISHU_WEBHOOK_MAX_BODY_BYTES,
+          timeoutMs: FEISHU_WEBHOOK_BODY_TIMEOUT_MS,
+        });
+        if (guard.isTripped() || res.writableEnded) {
+          return;
+        }
+        if (!bodyResult.ok) {
+          if (bodyResult.code === "INVALID_JSON") {
+            respondText(res, 400, "Invalid JSON");
+          }
+          return;
+        }
+        if (!isFeishuWebhookPayload(bodyResult.value)) {
+          respondText(res, 400, "Invalid JSON");
+          return;
+        }
+
+        // Lark's default adapter drops invalid signatures as an empty 200. Reject here instead.
+        if (
+          !isFeishuWebhookSignatureValid({
+            headers: req.headers,
+            payload: bodyResult.value,
+            encryptKey: account.encryptKey,
+          })
+        ) {
+          respondText(res, 401, "Invalid signature");
+          return;
+        }
+
+        const { isChallenge, challenge } = Lark.generateChallenge(bodyResult.value, {
+          encryptKey: account.encryptKey ?? "",
+        });
+        if (isChallenge) {
+          res.statusCode = 200;
+          res.setHeader("Content-Type", "application/json; charset=utf-8");
+          res.end(JSON.stringify(challenge));
+          return;
+        }
+
+        const value = await eventDispatcher.invoke(
+          buildFeishuWebhookEnvelope(req, bodyResult.value),
+          { needCheck: false },
+        );
+        if (!res.headersSent) {
+          res.statusCode = 200;
+          res.setHeader("Content-Type", "application/json; charset=utf-8");
+          res.end(JSON.stringify(value));
+        }
+      } catch (err) {
         if (!guard.isTripped()) {
           error(`feishu[${accountId}]: webhook handler error: ${String(err)}`);
+          if (!res.headersSent) {
+            respondText(res, 500, "Internal Server Error");
+          }
         }
-      })
-      .finally(() => {
+      } finally {
         guard.dispose();
-      });
+      }
+    })();
   });
 
   httpServers.set(accountId, server);
