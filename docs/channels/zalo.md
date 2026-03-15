@@ -40,7 +40,6 @@ Minimal config:
         default: {
           botToken: "12345689:abc-xyz",
           dmPolicy: "pairing",
-          groupPolicy: "disabled",
         },
       },
     },
@@ -82,13 +81,14 @@ Example:
         default: {
           botToken: "12345689:abc-xyz",
           dmPolicy: "pairing",
-          groupPolicy: "disabled",
         },
       },
     },
   },
 }
 ```
+
+If you later move to a Zalo bot surface where groups are actually available, you can add group-specific config such as `groupPolicy` and `groupAllowFrom` explicitly.
 
 Env option: `ZALO_BOT_TOKEN=...` (works for the default account only).
 
@@ -173,9 +173,9 @@ If you are using a different Zalo bot product surface and have verified working 
 | Plain URLs in text          | ✅ Supported                                                         |
 | Link previews               | ⚠️ Unreliable / no reply observed in current Marketplace-bot testing |
 | Reactions                   | ❌ Not supported                                                     |
-| Stickers                    | ⚠️ Received but no normal agent reply observed                       |
-| Voice notes / audio / video | ❌ No normal agent reply observed in current Marketplace-bot testing |
-| File attachments            | ❌ No normal agent reply observed in current Marketplace-bot testing |
+| Stickers                    | ⚠️ No normal agent reply observed in current Marketplace-bot testing |
+| Voice notes / audio / video | ⚠️ No normal agent reply observed in current Marketplace-bot testing |
+| File attachments            | ⚠️ No normal agent reply observed in current Marketplace-bot testing |
 | Threads                     | ❌ Not supported                                                     |
 | Polls                       | ❌ Not supported                                                     |
 | Native commands             | ❌ Not supported                                                     |
