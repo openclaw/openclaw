@@ -23,7 +23,7 @@ describe("buildEmbeddedRunPayloads tool-error warnings", () => {
     });
   });
 
-  it("keeps non-exec mutating tool failures visible", () => {
+  it("keeps non-exec mutating tool failures visible with truncated reason", () => {
     const payloads = buildPayloads({
       lastToolError: { toolName: "write", error: "permission denied" },
       verboseLevel: "off",
@@ -31,7 +31,7 @@ describe("buildEmbeddedRunPayloads tool-error warnings", () => {
 
     expectSingleToolErrorPayload(payloads, {
       title: "Write",
-      absentDetail: "permission denied",
+      detail: "— permission denied",
     });
   });
 
@@ -58,6 +58,73 @@ describe("buildEmbeddedRunPayloads tool-error warnings", () => {
       title: "Write",
       detail,
       absentDetail,
+    });
+  });
+
+  it("includes truncated failure reason in non-verbose mode", () => {
+    const payloads = buildPayloads({
+      lastToolError: { toolName: "edit", error: "Could not find exact text match" },
+      verboseLevel: "off",
+    });
+
+    expectSingleToolErrorPayload(payloads, {
+      title: "Edit",
+      detail: "— Could not find exact text match",
+    });
+  });
+
+  it("truncates long error reasons to 120 chars with ellipsis", () => {
+    const longError = "A".repeat(200);
+    const payloads = buildPayloads({
+      lastToolError: { toolName: "write", error: longError },
+      verboseLevel: "off",
+    });
+
+    expect(payloads).toHaveLength(1);
+    expect(payloads[0]?.text).toContain("— " + "A".repeat(120) + "…");
+  });
+
+  it("uses only first line of multi-line error for truncated reason", () => {
+    const payloads = buildPayloads({
+      lastToolError: {
+        toolName: "write",
+        error: "Primary error\nStack trace line 1\nStack trace line 2",
+      },
+      verboseLevel: "off",
+    });
+
+    expectSingleToolErrorPayload(payloads, {
+      title: "Write",
+      detail: "— Primary error",
+      absentDetail: "Stack trace",
+    });
+  });
+
+  it("skips leading empty lines in multi-line error", () => {
+    const payloads = buildPayloads({
+      lastToolError: {
+        toolName: "write",
+        error: "\n\nActual error message\nMore details",
+      },
+      verboseLevel: "off",
+    });
+
+    expectSingleToolErrorPayload(payloads, {
+      title: "Write",
+      detail: "— Actual error message",
+      absentDetail: "More details",
+    });
+  });
+
+  it("uses colon separator in verbose mode for full error details", () => {
+    const payloads = buildPayloads({
+      lastToolError: { toolName: "edit", error: "Could not find exact text match" },
+      verboseLevel: "on",
+    });
+
+    expectSingleToolErrorPayload(payloads, {
+      title: "Edit",
+      detail: ": Could not find exact text match",
     });
   });
 
