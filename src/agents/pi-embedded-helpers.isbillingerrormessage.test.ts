@@ -860,4 +860,20 @@ describe("classifyFailoverReason", () => {
       ),
     ).toBe("timeout");
   });
+
+  it("classifies Codex/OpenAI server_error JSON as timeout", () => {
+    expect(
+      classifyFailoverReason(
+        '{"type":"error","error":{"type":"server_error","code":"server_error","message":"An error occurred while processing your request."}}',
+      ),
+    ).toBe("timeout");
+  });
+
+  it("classifies wrapped Codex server_error as timeout", () => {
+    expect(
+      classifyFailoverReason(
+        'Codex error: {"type":"error","error":{"type":"server_error","code":"server_error","message":"Something went wrong"}}',
+      ),
+    ).toBe("timeout");
+  });
 });
