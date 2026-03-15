@@ -13,7 +13,6 @@
   border: 1px solid var(--border);
   background: var(--panel);
   overflow: hidden;
-  overflow: clip;
   animation: config-enter 0.3s var(--ease-out);
 }
 
@@ -177,8 +176,6 @@
   min-width: 0;
   background: var(--panel);
   overflow: hidden;
-  /* fallback for older browsers */
-  overflow: clip;
 }
 
 /* Actions Bar */

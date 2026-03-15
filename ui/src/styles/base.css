@@ -107,11 +107,18 @@
   --duration-normal: 180ms;
   --duration-slow: 300ms;
 
+  /* Scrollbar thumb */
+  --scrollbar-thumb: rgba(255, 255, 255, 0.12);
+  --scrollbar-thumb-hover: rgba(255, 255, 255, 0.2);
+
   color-scheme: dark;
 }
 
 /* Light theme tokens apply to every light-mode family. */
 :root[data-theme-mode="light"] {
+  --scrollbar-thumb: rgba(0, 0, 0, 0.12);
+  --scrollbar-thumb-hover: rgba(0, 0, 0, 0.2);
+
   --bg: #f8f9fa;
   --bg-accent: #f1f3f5;
   --bg-elevated: #ffffff;
@@ -311,8 +318,8 @@ select {
 
 /* Scrollbar styling - Minimal, barely visible */
 ::-webkit-scrollbar {
-  width: 6px;
-  height: 6px;
+  width: 8px;
+  height: 8px;
 }
 
 ::-webkit-scrollbar-track {
@@ -320,12 +327,18 @@ select {
 }
 
 ::-webkit-scrollbar-thumb {
-  background: rgba(255, 255, 255, 0.08);
+  background: var(--scrollbar-thumb);
   border-radius: var(--radius-full);
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: rgba(255, 255, 255, 0.14);
+  background: var(--scrollbar-thumb-hover);
+}
+
+/* Firefox support */
+:root {
+  scrollbar-width: thin;
+  scrollbar-color: var(--scrollbar-thumb) transparent;
 }
 
 /* Animations - Polished with spring feel */
