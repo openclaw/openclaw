@@ -330,7 +330,7 @@ const saveSessionToMemory: HookHandler = async (event) => {
         timeZone: timezone,
         hour: "2-digit",
         minute: "2-digit",
-        hour12: false,
+        hourCycle: "h23",
       }).formatToParts(now);
       const hh = timeParts.find((p) => p.type === "hour")?.value ?? "00";
       const mm = timeParts.find((p) => p.type === "minute")?.value ?? "00";
@@ -346,8 +346,17 @@ const saveSessionToMemory: HookHandler = async (event) => {
       path: memoryFilePath.replace(os.homedir(), "~"),
     });
 
-    // Format time as HH:MM:SS UTC
-    const timeStr = now.toISOString().split("T")[1].split(".")[0];
+    // Format time as HH:MM:SS in the user's timezone
+    const localTimeParts = new Intl.DateTimeFormat("en-US", {
+      timeZone: timezone,
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit",
+      hourCycle: "h23",
+    }).formatToParts(now);
+    const timeStr = ["hour", "minute", "second"]
+      .map((t) => localTimeParts.find((p) => p.type === t)?.value ?? "00")
+      .join(":");
 
     // Extract context details
     const sessionId = (sessionEntry.sessionId as string) || "unknown";
@@ -355,7 +364,7 @@ const saveSessionToMemory: HookHandler = async (event) => {
 
     // Build Markdown entry
     const entryParts = [
-      `# Session: ${dateStr} ${timeStr} UTC`,
+      `# Session: ${dateStr} ${timeStr} (${timezone})`,
       "",
       `- **Session Key**: ${displaySessionKey}`,
       `- **Session ID**: ${sessionId}`,
