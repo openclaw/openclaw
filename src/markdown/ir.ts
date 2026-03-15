@@ -265,10 +265,7 @@ function closeStyle(state: RenderState, style: MarkdownStyle) {
   }
 }
 
-function appendParagraphSeparator(
-  state: RenderState,
-  options: { continueBlockquote?: boolean } = {},
-) {
+function appendParagraphSeparator(state: RenderState, options: { blockquoteDepth?: number } = {}) {
   if (state.env.listStack.length > 0) {
     return;
   }
@@ -276,8 +273,8 @@ function appendParagraphSeparator(
     return;
   }
   appendText(state, "\n\n");
-  if (options.continueBlockquote) {
-    appendBlockquotePrefix(state);
+  if (options.blockquoteDepth) {
+    appendBlockquotePrefix(state, options.blockquoteDepth);
   }
 }
 
@@ -299,20 +296,26 @@ function tokenStartsBlockquoteContent(token: MarkdownToken | undefined) {
   }
 }
 
-function shouldContinueBlockquoteAfter(tokens: MarkdownToken[], currentIndex: number) {
+function getParagraphSeparatorBlockquoteDepth(
+  tokens: MarkdownToken[],
+  currentIndex: number,
+  currentDepth: number,
+) {
+  let blockquoteDepth = currentDepth;
   for (let index = currentIndex + 1; index < tokens.length; index += 1) {
     const token = tokens[index];
     if (!token) {
       continue;
     }
     if (token.type === "blockquote_close") {
-      return false;
+      blockquoteDepth = Math.max(0, blockquoteDepth - 1);
+      continue;
     }
     if (tokenStartsBlockquoteContent(token)) {
-      return true;
+      return blockquoteDepth;
     }
   }
-  return false;
+  return 0;
 }
 
 function appendListPrefix(state: RenderState) {
@@ -670,8 +673,10 @@ function renderTokens(tokens: MarkdownToken[], state: RenderState): void {
         break;
       case "paragraph_close":
         appendParagraphSeparator(state, {
-          continueBlockquote:
-            state.blockquoteDepth > 0 && shouldContinueBlockquoteAfter(tokens, index),
+          blockquoteDepth:
+            state.blockquoteDepth > 0
+              ? getParagraphSeparatorBlockquoteDepth(tokens, index, state.blockquoteDepth)
+              : 0,
         });
         break;
       case "heading_open":
@@ -684,8 +689,10 @@ function renderTokens(tokens: MarkdownToken[], state: RenderState): void {
           closeStyle(state, "bold");
         }
         appendParagraphSeparator(state, {
-          continueBlockquote:
-            state.blockquoteDepth > 0 && shouldContinueBlockquoteAfter(tokens, index),
+          blockquoteDepth:
+            state.blockquoteDepth > 0
+              ? getParagraphSeparatorBlockquoteDepth(tokens, index, state.blockquoteDepth)
+              : 0,
         });
         break;
       case "blockquote_open":

@@ -174,6 +174,13 @@ describe("blockquote spacing", () => {
 
       expect(result.text).toBe("> > Line 1\n> > Line 2");
     });
+
+    it("preserves the outer prefix after a nested blockquote paragraph", () => {
+      const input = "> > inner\n>\n> outer";
+      const result = markdownToIR(input, { blockquotePrefix: "> " });
+
+      expect(result.text).toBe("> > inner\n\n> outer");
+    });
   });
 
   describe("edge cases", () => {
