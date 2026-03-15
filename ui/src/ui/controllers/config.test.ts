@@ -371,4 +371,52 @@ describe("runUpdate", () => {
       sessionKey: "agent:main:whatsapp:dm:+15555550123",
     });
   });
+
+  it("clears stale updateAvailable after successful update.run", async () => {
+    const request = vi.fn().mockResolvedValue({ result: { status: "ok" } });
+    const state = createState();
+    state.connected = true;
+    state.client = { request } as unknown as ConfigState["client"];
+    state.updateAvailable = {
+      currentVersion: "2026.2.23",
+      latestVersion: "2026.2.26",
+      channel: "latest",
+    };
+
+    await runUpdate(state);
+
+    expect(state.updateAvailable).toBeNull();
+  });
+
+  it("keeps updateAvailable when update.run reports failure", async () => {
+    const request = vi.fn().mockResolvedValue({ result: { status: "error" } });
+    const state = createState();
+    state.connected = true;
+    state.client = { request } as unknown as ConfigState["client"];
+    state.updateAvailable = {
+      currentVersion: "2026.2.23",
+      latestVersion: "2026.2.26",
+      channel: "latest",
+    };
+
+    await runUpdate(state);
+
+    expect(state.updateAvailable).not.toBeNull();
+  });
+
+  it("keeps updateAvailable when update.run is skipped", async () => {
+    const request = vi.fn().mockResolvedValue({ result: { status: "skipped" } });
+    const state = createState();
+    state.connected = true;
+    state.client = { request } as unknown as ConfigState["client"];
+    state.updateAvailable = {
+      currentVersion: "2026.2.23",
+      latestVersion: "2026.2.26",
+      channel: "latest",
+    };
+
+    await runUpdate(state);
+
+    expect(state.updateAvailable).not.toBeNull();
+  });
 });
