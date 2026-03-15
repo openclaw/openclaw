@@ -78,10 +78,44 @@ async function callLlm(
   if (!api?.runtime?.modelAuth) return null;
 
   // Provider list: try each in order, skip blocked ones
+  // Primary: OpenAI gpt-5.4, Fallback: Anthropic claude-sonnet-4
   const providers: Array<{
     name: string;
     call: (apiKey: string) => Promise<string | null>;
   }> = [
+    {
+      name: "openai",
+      call: async (apiKey) => {
+        const resp = await fetch("https://api.openai.com/v1/chat/completions", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${apiKey}`,
+          },
+          body: JSON.stringify({
+            model: "gpt-5.4",
+            max_completion_tokens: opts.maxTokens ?? 1024,
+            temperature: opts.temperature ?? 0.3,
+            messages: [
+              { role: "system", content: systemPrompt },
+              { role: "user", content: userPrompt },
+            ],
+          }),
+        });
+        if (resp.ok) {
+          const data = (await resp.json()) as {
+            choices?: Array<{ message?: { content?: string } }>;
+          };
+          return data.choices?.[0]?.message?.content ?? null;
+        }
+        const errBody = await resp.text().catch(() => "");
+        console.log(`[callLlm] OpenAI error (${resp.status}): ${errBody.slice(0, 200)}`);
+        if (resp.status === 401 || resp.status === 403) {
+          _blockedProviders.add("openai");
+        }
+        return null;
+      },
+    },
     {
       name: "anthropic",
       call: async (apiKey) => {
@@ -104,41 +138,10 @@ async function callLlm(
           const data = (await resp.json()) as { content?: Array<{ text?: string }> };
           return data.content?.[0]?.text ?? null;
         }
+        const errBody = await resp.text().catch(() => "");
+        console.log(`[callLlm] Anthropic error (${resp.status}): ${errBody.slice(0, 200)}`);
         if (resp.status === 401 || resp.status === 403) {
           _blockedProviders.add("anthropic");
-          console.log(`[callLlm] Anthropic blocked (${resp.status}), skipping future calls`);
-        }
-        return null;
-      },
-    },
-    {
-      name: "openai",
-      call: async (apiKey) => {
-        const resp = await fetch("https://api.openai.com/v1/chat/completions", {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            Authorization: `Bearer ${apiKey}`,
-          },
-          body: JSON.stringify({
-            model: "gpt-4o-mini",
-            max_tokens: opts.maxTokens ?? 1024,
-            temperature: opts.temperature ?? 0.3,
-            messages: [
-              { role: "system", content: systemPrompt },
-              { role: "user", content: userPrompt },
-            ],
-          }),
-        });
-        if (resp.ok) {
-          const data = (await resp.json()) as {
-            choices?: Array<{ message?: { content?: string } }>;
-          };
-          return data.choices?.[0]?.message?.content ?? null;
-        }
-        if (resp.status === 401 || resp.status === 403) {
-          _blockedProviders.add("openai");
-          console.log(`[callLlm] OpenAI blocked (${resp.status}), skipping future calls`);
         }
         return null;
       },
@@ -146,20 +149,28 @@ async function callLlm(
   ];
 
   for (const provider of providers) {
-    if (_blockedProviders.has(provider.name)) continue;
+    if (_blockedProviders.has(provider.name)) {
+      console.log(`[callLlm] ${provider.name}: skipped (blocked)`);
+      continue;
+    }
     try {
       const auth = await api.runtime.modelAuth.resolveApiKeyForProvider({
         provider: provider.name,
         cfg: api.config,
       });
+      console.log(`[callLlm] ${provider.name}: auth hasKey=${!!auth?.apiKey}`);
       if (!auth?.apiKey) continue;
       const result = await provider.call(auth.apiKey);
+      console.log(`[callLlm] ${provider.name}: result=${result ? "ok" : "null"}`);
       if (result) return result;
-    } catch {
-      /* try next provider */
+    } catch (err) {
+      console.log(
+        `[callLlm] ${provider.name}: error=${err instanceof Error ? err.message : String(err)}`,
+      );
     }
   }
 
+  console.log("[callLlm] all providers exhausted");
   return null;
 }
 
@@ -1136,8 +1147,10 @@ async function executeLlmActions(
             beliefs = `# Beliefs — ${agentId}\n\nLast updated: ${now}\n\n## Current Beliefs\n`;
           }
           const content = (action.data.content as string).replace(/^["']|["']$/g, ""); // strip quotes
-          // Deduplicate: skip if belief text already exists (case-insensitive)
-          if (beliefs.toLowerCase().includes(content.toLowerCase())) break;
+          // Deduplicate: normalize quotes in existing text too before comparing
+          const beliefsLower = beliefs.replace(/["']/g, "").toLowerCase();
+          const contentLower = content.replace(/["']/g, "").toLowerCase();
+          if (beliefsLower.includes(contentLower)) break;
           // Ensure ## Current Beliefs section exists
           if (!beliefs.includes("## Current Beliefs")) {
             // Insert before first ## section or at end
