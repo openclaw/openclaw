@@ -20,8 +20,8 @@ vi.mock("@mariozechner/pi-ai/oauth", () => ({
   getOAuthApiKey: vi.fn(async () => null),
 }));
 
-vi.mock("../agents/pi-embedded-runner/model.js", () => ({
-  resolveModel: vi.fn((provider: string, modelId: string) => ({
+vi.mock("../agents/pi-embedded-runner/model.js", () => {
+  const resolveModel = vi.fn((provider: string, modelId: string) => ({
     model: {
       provider,
       id: modelId,
@@ -35,8 +35,12 @@ vi.mock("../agents/pi-embedded-runner/model.js", () => ({
     },
     authStorage: { profiles: {} },
     modelRegistry: { find: vi.fn() },
-  })),
-}));
+  }));
+  return {
+    resolveModel,
+    resolveModelAsync: vi.fn(async (provider: string, modelId: string) => resolveModel(provider, modelId)),
+  };
+});
 
 vi.mock("../agents/model-auth.js", () => ({
   getApiKeyForModel: vi.fn(async () => ({
