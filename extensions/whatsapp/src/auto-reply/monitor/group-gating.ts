@@ -80,7 +80,11 @@ function skipGroupMessageAndStoreHistory(params: ApplyGroupGatingParams, verbose
 }
 
 export function applyGroupGating(params: ApplyGroupGatingParams) {
-  const groupPolicy = resolveGroupPolicyFor(params.cfg, params.conversationId);
+  const groupPolicy = resolveGroupPolicyFor(
+    params.cfg,
+    params.conversationId,
+    params.msg.accountId,
+  );
   if (groupPolicy.allowlistEnabled && !groupPolicy.allowed) {
     params.logVerbose(`Skipping group message ${params.conversationId} (not in allowlist)`);
     return { shouldProcess: false };
