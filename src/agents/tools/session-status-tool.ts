@@ -2,7 +2,11 @@ import { Type } from "@sinclair/typebox";
 import { normalizeGroupActivation } from "../../auto-reply/group-activation.js";
 import { getFollowupQueueDepth, resolveQueueSettings } from "../../auto-reply/reply/queue.js";
 import { buildStatusMessage } from "../../auto-reply/status.js";
-import { supportsXHighThinking } from "../../auto-reply/thinking.js";
+import {
+  normalizeThinkLevel,
+  supportsXHighThinking,
+  type ThinkLevel,
+} from "../../auto-reply/thinking.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { loadConfig } from "../../config/config.js";
 import {
@@ -369,7 +373,9 @@ export function createSessionStatusTool(opts?: {
       const agentDir = resolveAgentDir(cfg, agentId);
       const providerForCard = resolved.entry.providerOverride?.trim() || configured.provider;
       const modelForCard = resolved.entry.modelOverride?.trim() || configured.model;
-      let resolvedThinkForCard = resolved.entry.thinkingLevel;
+      let resolvedThinkForCard: ThinkLevel | undefined = normalizeThinkLevel(
+        resolved.entry.thinkingLevel,
+      );
       if (!resolvedThinkForCard) {
         const catalog = await loadModelCatalog({ config: cfg });
         resolvedThinkForCard = resolveThinkingDefault({
