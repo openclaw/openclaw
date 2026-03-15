@@ -32,7 +32,7 @@ import {
   type UsageLike,
 } from "../usage.js";
 import { log } from "./logger.js";
-import { dropThinkingBlocks } from "./thinking.js";
+import { downgradeUnsignedThinkingBlocks, dropThinkingBlocks } from "./thinking.js";
 import { describeUnknownError } from "./utils.js";
 
 const GOOGLE_TURN_ORDERING_CUSTOM_TYPE = "google-turn-ordering-bootstrap";
@@ -549,9 +549,10 @@ export async function sanitizeSessionHistory(params: {
       ...resolveImageSanitizationLimits(params.config),
     },
   );
+  const downgradedThinking = downgradeUnsignedThinkingBlocks(sanitizedImages);
   const droppedThinking = policy.dropThinkingBlocks
-    ? dropThinkingBlocks(sanitizedImages)
-    : sanitizedImages;
+    ? dropThinkingBlocks(downgradedThinking)
+    : downgradedThinking;
   const sanitizedToolCalls = sanitizeToolCallInputs(droppedThinking, {
     allowedToolNames: params.allowedToolNames,
   });
