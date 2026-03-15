@@ -32,6 +32,11 @@ function supportsStrictMode(model: Model<Api>): boolean | undefined {
   return (model.compat as { supportsStrictMode?: boolean } | undefined)?.supportsStrictMode;
 }
 
+function supportsReasoningEffort(model: Model<Api>): boolean | undefined {
+  return (model.compat as { supportsReasoningEffort?: boolean } | undefined)
+    ?.supportsReasoningEffort;
+}
+
 function createTemplateModel(provider: string, id: string): Model<Api> {
   return {
     id,
@@ -319,6 +324,27 @@ describe("normalizeModelCompat", () => {
     expect(supportsStrictMode(normalized)).toBe(true);
   });
 
+  it("forces supportsReasoningEffort off for non-native endpoints", () => {
+    const model = {
+      ...baseModel(),
+      provider: "custom-cpa",
+      baseUrl: "https://proxy.example.com/v1",
+    };
+    const normalized = normalizeModelCompat(model);
+    expect(supportsReasoningEffort(normalized)).toBe(false);
+  });
+
+  it("respects explicit supportsReasoningEffort true on non-native endpoints", () => {
+    const model = {
+      ...baseModel(),
+      provider: "custom-cpa",
+      baseUrl: "https://proxy.example.com/v1",
+      compat: { supportsReasoningEffort: true },
+    };
+    const normalized = normalizeModelCompat(model);
+    expect(supportsReasoningEffort(normalized)).toBe(true);
+  });
+
   it("does not mutate caller model when forcing supportsDeveloperRole off", () => {
     const model = {
       ...baseModel(),
@@ -331,9 +357,11 @@ describe("normalizeModelCompat", () => {
     expect(supportsDeveloperRole(model)).toBeUndefined();
     expect(supportsUsageInStreaming(model)).toBeUndefined();
     expect(supportsStrictMode(model)).toBeUndefined();
+    expect(supportsReasoningEffort(model)).toBeUndefined();
     expect(supportsDeveloperRole(normalized)).toBe(false);
     expect(supportsUsageInStreaming(normalized)).toBe(false);
     expect(supportsStrictMode(normalized)).toBe(false);
+    expect(supportsReasoningEffort(normalized)).toBe(false);
   });
 
   it("does not override explicit compat false", () => {
@@ -342,11 +370,13 @@ describe("normalizeModelCompat", () => {
       supportsDeveloperRole: false,
       supportsUsageInStreaming: false,
       supportsStrictMode: false,
+      supportsReasoningEffort: false,
     };
     const normalized = normalizeModelCompat(model);
     expect(supportsDeveloperRole(normalized)).toBe(false);
     expect(supportsUsageInStreaming(normalized)).toBe(false);
     expect(supportsStrictMode(normalized)).toBe(false);
+    expect(supportsReasoningEffort(normalized)).toBe(false);
   });
 });
 
