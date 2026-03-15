@@ -285,7 +285,10 @@ function extractSubagentOutputText(message: unknown): string {
   return "";
 }
 
-async function readLatestSubagentOutput(sessionKey: string): Promise<string | undefined> {
+async function readLatestSubagentOutput(
+  sessionKey: string,
+  opts?: { safeRolesOnly?: boolean },
+): Promise<string | undefined> {
   try {
     const latestAssistant = await readLatestAssistantReply({
       sessionKey,
@@ -304,6 +307,14 @@ async function readLatestSubagentOutput(sessionKey: string): Promise<string | un
   const messages = Array.isArray(history?.messages) ? history.messages : [];
   for (let i = messages.length - 1; i >= 0; i -= 1) {
     const msg = messages[i];
+    // When safeRolesOnly is set, skip user and null-role messages to
+    // avoid surfacing the task prompt in error announcements (#40845).
+    if (opts?.safeRolesOnly && msg && typeof msg === "object") {
+      const role = (msg as { role?: unknown }).role;
+      if (role === "user" || role == null) {
+        continue;
+      }
+    }
     const text = extractSubagentOutputText(msg);
     if (text) {
       return text;
@@ -1309,10 +1320,13 @@ export async function runSubagentAnnounceFlow(params: {
         (isAnnounceSkip(fallbackReply) || isSilentReplyText(fallbackReply, SILENT_REPLY_TOKEN));
 
       if (!reply) {
-        reply = await readLatestSubagentOutput(params.childSessionKey);
+        reply = await readLatestSubagentOutput(
+          params.childSessionKey,
+          outcome.status === "error" ? { safeRolesOnly: true } : undefined,
+        );
       }
 
-      if (!reply?.trim()) {
+      if (!reply?.trim() && outcome.status !== "error") {
         reply = await readLatestSubagentOutputWithRetry({
           sessionKey: params.childSessionKey,
           maxWaitMs: params.timeoutMs,
