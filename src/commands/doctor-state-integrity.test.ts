@@ -3,7 +3,11 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
-import { resolveStorePath, resolveSessionTranscriptsDirForAgent } from "../config/sessions.js";
+import {
+  resolveStorePath,
+  resolveSessionTranscriptsDirForAgent,
+  clearSessionStoreCacheForTest,
+} from "../config/sessions.js";
 import { note } from "../terminal/note.js";
 import { noteStateIntegrity } from "./doctor-state-integrity.js";
 
@@ -156,6 +160,28 @@ describe("doctor state integrity oauth dir checks", () => {
     );
     const files = fs.readdirSync(sessionsDir);
     expect(files.some((name) => name.startsWith("orphan-session.jsonl.deleted."))).toBe(true);
+  });
+
+  it("does not mark cron run sessions with stale sessionFile as orphans", async () => {
+    clearSessionStoreCacheForTest();
+    const sessionsDir = path.join(tempHome, ".openclaw", "agents", "main", "sessions");
+    const storePath = path.join(sessionsDir, "sessions.json");
+    fs.mkdirSync(sessionsDir, { recursive: true });
+    const sessions = {
+      "agent:main:cron:reply-bot:run:run-123": {
+        sessionId: "run-123",
+        sessionFile: "old-session.jsonl",
+        updatedAt: Date.now(),
+      } as { sessionId: string; sessionFile?: string; updatedAt: number },
+    };
+    fs.writeFileSync(storePath, JSON.stringify(sessions, null, 2));
+    fs.writeFileSync(path.join(sessionsDir, "run-123.jsonl"), '{"type":"message"}\n');
+    const filesBefore = fs.readdirSync(sessionsDir);
+    const cfg: OpenClawConfig = {};
+    const confirmSkipInNonInteractive = vi.fn(async () => false);
+    await noteStateIntegrity(cfg, { confirmSkipInNonInteractive });
+    const filesAfter = fs.readdirSync(sessionsDir);
+    expect(filesBefore.toSorted()).toEqual(filesAfter.toSorted());
   });
 
   it("prints openclaw-only verification hints when recent sessions are missing transcripts", async () => {
