@@ -70,6 +70,8 @@ export type SpawnAcpParams = {
   thread?: boolean;
   sandbox?: SpawnAcpSandboxMode;
   streamTo?: SpawnAcpStreamTarget;
+  model?: string;
+  thinking?: string;
 };
 
 export type SpawnAcpContext = {
@@ -546,6 +548,10 @@ export async function spawnAcpDirect(
         key: sessionKey,
         spawnedBy: requesterInternalKey,
         ...(params.label ? { label: params.label } : {}),
+        ...(params.model ? { model: params.model } : {}),
+        ...(params.thinking
+          ? { thinkingLevel: params.thinking === "off" ? null : params.thinking }
+          : {}),
       },
       timeoutMs: 10_000,
     });
