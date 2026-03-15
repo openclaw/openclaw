@@ -29,8 +29,8 @@ import { enqueueSystemEvent } from "../../../../src/infra/system-events.js";
 import { logDebug } from "../../../../src/logger.js";
 import { getChildLogger } from "../../../../src/logging.js";
 import { buildPairingReply } from "../../../../src/pairing/pairing-messages.js";
-import { DEFAULT_ACCOUNT_ID } from "../../../../src/routing/session-key.js";
 import { isPluginOwnedSessionBindingRecord } from "../../../../src/plugins/conversation-binding.js";
+import { DEFAULT_ACCOUNT_ID } from "../../../../src/routing/session-key.js";
 import { fetchPluralKitMessageInfo } from "../pluralkit.js";
 import { sendMessageDiscord } from "../send.js";
 import {
