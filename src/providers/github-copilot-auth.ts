@@ -160,8 +160,8 @@ export async function githubCopilotLoginCommand(
 
   const spin = spinner();
   spin.start("Requesting device code from GitHub...");
-  const deviceCodeIssuedAt = Date.now();
   const device = await requestDeviceCode({ scope: "read:user" });
+  const deviceCodeReceivedAt = Date.now();
   spin.stop("Device code ready");
 
   if (opts.wait) {
@@ -183,8 +183,8 @@ export async function githubCopilotLoginCommand(
   const expiresAt = Date.now() + device.expires_in * 1000;
   const intervalMs = Math.max(1000, device.interval * 1000);
   // Earliest the first poll may fire: respect GitHub's interval from when the
-  // device code was issued, minus time already elapsed (e.g. during --wait prompt).
-  const firstPollAfter = deviceCodeIssuedAt + intervalMs;
+  // device code was received, minus time already elapsed (e.g. during --wait prompt).
+  const firstPollAfter = deviceCodeReceivedAt + intervalMs;
 
   const polling = spinner();
   polling.start("Waiting for GitHub authorization...");
