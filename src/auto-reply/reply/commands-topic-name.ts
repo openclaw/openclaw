@@ -5,6 +5,7 @@ import type { CommandHandler } from "./commands-types.js";
 
 const COMMAND_REGEX = /^\/set_topic_name(?:\s|$)/i;
 const MAX_NAME_LEN = 64;
+const MAX_LABEL_LEN = 64;
 
 function parseTopicNameCommand(
   raw: string,
@@ -24,9 +25,42 @@ function parseTopicNameCommand(
 
 function resolveConversationLabel(params: Parameters<CommandHandler>[0]): string {
   return (
-    (typeof params.ctx.GroupSubject === "string" ? params.ctx.GroupSubject.trim() : "") ||
-    (typeof params.ctx.ConversationLabel === "string" ? params.ctx.ConversationLabel.trim() : "")
+    (typeof params.ctx.ConversationLabel === "string" ? params.ctx.ConversationLabel.trim() : "") ||
+    (typeof params.ctx.GroupSubject === "string" ? params.ctx.GroupSubject.trim() : "")
   );
+}
+
+function normalizeBaseLabel(raw: string): string {
+  return raw.replace(/^telegram\s*·\s*/i, "").trim();
+}
+
+function buildTopicLabel(baseLabel: string, name: string): string {
+  const prefix = "telegram";
+  const separator = " · ";
+  let normalizedBase = baseLabel ? normalizeBaseLabel(baseLabel) : "";
+
+  const maxNameWithoutBase = Math.max(1, MAX_LABEL_LEN - (prefix + separator).length);
+  let nextName = name.slice(0, maxNameWithoutBase).trim();
+
+  if (normalizedBase) {
+    const maxBaseLen = MAX_LABEL_LEN - (prefix + separator + separator + nextName).length;
+    if (maxBaseLen > 0) {
+      normalizedBase = normalizedBase.slice(0, maxBaseLen).trim();
+    } else {
+      normalizedBase = "";
+    }
+  }
+
+  const maxNameLen = Math.max(
+    1,
+    MAX_LABEL_LEN -
+      (prefix + separator + (normalizedBase ? normalizedBase + separator : "")).length,
+  );
+  nextName = name.slice(0, maxNameLen).trim();
+
+  return normalizedBase
+    ? `${prefix}${separator}${normalizedBase}${separator}${nextName}`
+    : `${prefix}${separator}${nextName}`;
 }
 
 export const handleSetTopicNameCommand: CommandHandler = async (params, allowTextCommands) => {
@@ -60,6 +94,7 @@ export const handleSetTopicNameCommand: CommandHandler = async (params, allowTex
     };
   }
   // Telegram topics are thread-scoped; sessionKey already includes the thread context.
+  // threadId is only used to enforce topic usage, not to disambiguate sessions.patch.
   if (!params.sessionKey) {
     return {
       shouldContinue: false,
@@ -67,9 +102,7 @@ export const handleSetTopicNameCommand: CommandHandler = async (params, allowTex
     };
   }
   const baseLabel = resolveConversationLabel(params);
-  const label = baseLabel
-    ? `telegram · ${baseLabel} · ${parsed.name}`
-    : `telegram · ${parsed.name}`;
+  const label = buildTopicLabel(baseLabel, parsed.name);
 
   try {
     await callGateway({
