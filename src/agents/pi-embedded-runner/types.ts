@@ -41,6 +41,7 @@ export type EmbeddedPiRunMeta = {
       | "compaction_failure"
       | "role_ordering"
       | "image_size"
+      | "required_tool_use"
       | "retry_limit";
     message: string;
   };

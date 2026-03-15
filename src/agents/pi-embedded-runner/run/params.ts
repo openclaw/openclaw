@@ -74,6 +74,11 @@ export type RunEmbeddedPiAgentParams = {
   clientTools?: ClientToolDefinition[];
   /** Disable built-in tools for this run (LLM-only mode). */
   disableTools?: boolean;
+  /**
+   * Require at least one tool call before treating the run as successful.
+   * When `toolNames` is provided, at least one of those tools must be called.
+   */
+  requireToolUse?: boolean | { toolNames?: string[]; reason?: string };
   provider?: string;
   model?: string;
   authProfileId?: string;
