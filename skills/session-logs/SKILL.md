@@ -17,7 +17,9 @@ Use this skill when the user asks about prior chats, parent conversations, or hi
 Session logs live at: `~/.openclaw/agents/<agentId>/sessions/` (use the `agent=<id>` value from the system prompt Runtime line).
 
 - **`sessions.json`** - Index mapping session keys to session IDs
-- **`<session-id>.jsonl`** - Full conversation transcript per session
+- **`<session-id>.jsonl`** - Active session transcript
+- **`<session-id>.jsonl.reset.<timestamp>`** - Archived session (created by `/new`, `/reset`, daily auto-reset, or idle expiry)
+- **`<session-id>.jsonl.deleted.<timestamp>`** - Deleted session
 
 ## Structure
 
@@ -34,7 +36,7 @@ Each `.jsonl` file contains messages with:
 ### List all sessions by date and size
 
 ```bash
-for f in ~/.openclaw/agents/<agentId>/sessions/*.jsonl; do
+for f in $(find ~/.openclaw/agents/<agentId>/sessions -maxdepth 1 -name "*.jsonl" -o -name "*.jsonl.reset.*" -o -name "*.jsonl.deleted.*" 2>/dev/null); do
   date=$(head -1 "$f" | jq -r '.timestamp' | cut -dT -f1)
   size=$(ls -lh "$f" | awk '{print $5}')
   echo "$date $size $(basename $f)"
@@ -44,7 +46,7 @@ done | sort -r
 ### Find sessions from a specific day
 
 ```bash
-for f in ~/.openclaw/agents/<agentId>/sessions/*.jsonl; do
+for f in $(find ~/.openclaw/agents/<agentId>/sessions -maxdepth 1 -name "*.jsonl" -o -name "*.jsonl.reset.*" -o -name "*.jsonl.deleted.*" 2>/dev/null); do
   head -1 "$f" | jq -r '.timestamp' | grep -q "2026-01-06" && echo "$f"
 done
 ```
@@ -70,7 +72,7 @@ jq -s '[.[] | .message.usage.cost.total // 0] | add' <session>.jsonl
 ### Daily cost summary
 
 ```bash
-for f in ~/.openclaw/agents/<agentId>/sessions/*.jsonl; do
+for f in $(find ~/.openclaw/agents/<agentId>/sessions -maxdepth 1 -name "*.jsonl" -o -name "*.jsonl.reset.*" -o -name "*.jsonl.deleted.*" 2>/dev/null); do
   date=$(head -1 "$f" | jq -r '.timestamp' | cut -dT -f1)
   cost=$(jq -s '[.[] | .message.usage.cost.total // 0] | add' "$f")
   echo "$date $cost"
@@ -98,7 +100,7 @@ jq -r '.message.content[]? | select(.type == "toolCall") | .name' <session>.json
 ### Search across ALL sessions for a phrase
 
 ```bash
-rg -l "phrase" ~/.openclaw/agents/<agentId>/sessions/*.jsonl
+find ~/.openclaw/agents/<agentId>/sessions -maxdepth 1 \( -name "*.jsonl" -o -name "*.jsonl.reset.*" -o -name "*.jsonl.deleted.*" \) -exec rg -l "phrase" {} +
 ```
 
 ## Tips
@@ -106,7 +108,8 @@ rg -l "phrase" ~/.openclaw/agents/<agentId>/sessions/*.jsonl
 - Sessions are append-only JSONL (one JSON object per line)
 - Large sessions can be several MB - use `head`/`tail` for sampling
 - The `sessions.json` index maps chat providers (discord, whatsapp, etc.) to session IDs
-- Deleted sessions have `.deleted.<timestamp>` suffix
+- Use `find` with `-name "*.jsonl.reset.*"` patterns to include archived (`.reset`) and deleted sessions
+- Deleted sessions have `.deleted.<timestamp>` suffix, archived have `.reset.<timestamp>`
 
 ## Fast text-only hint (low noise)
 
