@@ -1,5 +1,7 @@
+import { resolveChannelDefaultAccountId } from "../channels/plugins/helpers.js";
 import { listChannelPlugins } from "../channels/plugins/index.js";
 import type { ChannelId } from "../channels/plugins/types.js";
+import { inspectReadOnlyChannelAccount } from "../channels/read-only-account-inspect.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import type { OpenClawConfig, GatewayBindMode } from "../config/config.js";
 import type { AgentConfig } from "../config/types.agents.js";
@@ -46,6 +48,52 @@ function collectImplicitHeartbeatDirectPolicyWarnings(cfg: OpenClawConfig): stri
   }
 
   return warnings;
+}
+
+function isUnresolvedSecretRefError(error: unknown): boolean {
+  return (error instanceof Error ? error.message : String(error)).includes("unresolved SecretRef");
+}
+
+async function resolveDoctorSecurityAccountContext(params: {
+  plugin: (typeof listChannelPlugins extends () => infer T ? T : never)[number];
+  cfg: OpenClawConfig;
+}) {
+  let unresolvedSecretRefError: unknown;
+  try {
+    return await resolveDefaultChannelAccountContext(params.plugin, params.cfg);
+  } catch (error) {
+    if (!isUnresolvedSecretRefError(error)) {
+      throw error;
+    }
+    unresolvedSecretRefError = error;
+  }
+
+  const accountIds = params.plugin.config.listAccountIds(params.cfg);
+  const defaultAccountId = resolveChannelDefaultAccountId({
+    plugin: params.plugin,
+    cfg: params.cfg,
+    accountIds,
+  });
+  const account =
+    params.plugin.config.inspectAccount?.(params.cfg, defaultAccountId) ??
+    inspectReadOnlyChannelAccount({
+      channelId: params.plugin.id,
+      cfg: params.cfg,
+      accountId: defaultAccountId,
+    });
+  if (!account) {
+    throw unresolvedSecretRefError;
+  }
+  const enabled = params.plugin.config.isEnabled
+    ? params.plugin.config.isEnabled(account, params.cfg)
+    : true;
+  const configured =
+    account && typeof account === "object" && "configured" in account
+      ? Boolean((account as { configured?: unknown }).configured)
+      : params.plugin.config.isConfigured
+        ? await params.plugin.config.isConfigured(account, params.cfg)
+        : true;
+  return { accountIds, defaultAccountId, account, enabled, configured };
 }
 
 export async function noteSecurityWarnings(cfg: OpenClawConfig) {
@@ -189,8 +237,11 @@ export async function noteSecurityWarnings(cfg: OpenClawConfig) {
     if (!plugin.security) {
       continue;
     }
-    const { defaultAccountId, account, enabled, configured } =
-      await resolveDefaultChannelAccountContext(plugin, cfg);
+    const context = await resolveDoctorSecurityAccountContext({ plugin, cfg });
+    if (!context) {
+      continue;
+    }
+    const { defaultAccountId, account, enabled, configured } = context;
     if (!enabled) {
       continue;
     }

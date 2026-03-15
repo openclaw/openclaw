@@ -197,4 +197,43 @@ describe("noteSecurityWarnings gateway exposure", () => {
     expect(message).not.toContain("Heartbeat defaults");
     expect(message).not.toContain('Heartbeat agent "ops"');
   });
+
+  it("falls back to read-only channel inspection when channel credentials use unresolved SecretRefs", async () => {
+    const resolveDmPolicy = vi.fn(({ account }) => ({
+      policy: account.config.dmPolicy,
+      allowFrom: account.config.allowFrom,
+      allowFromPath: "channels.telegram.",
+      approveHint: "approve",
+    }));
+    pluginRegistry.list = [
+      {
+        id: "telegram",
+        meta: { label: "Telegram" },
+        config: {
+          listAccountIds: () => ["default"],
+          resolveAccount: () => {
+            throw new Error(
+              'channels.telegram.botToken: unresolved SecretRef "exec:default:telegram-token". Resolve this command against an active gateway runtime snapshot before reading it.',
+            );
+          },
+          inspectAccount: () => ({
+            accountId: "default",
+            enabled: true,
+            configured: true,
+            config: {
+              dmPolicy: "open",
+              allowFrom: ["*"],
+            },
+          }),
+        },
+        security: {
+          resolveDmPolicy,
+        },
+      },
+    ];
+
+    await expect(noteSecurityWarnings({} as OpenClawConfig)).resolves.toBeUndefined();
+    expect(resolveDmPolicy).toHaveBeenCalled();
+    expect(lastMessage()).toContain("Telegram DMs: OPEN");
+  });
 });
