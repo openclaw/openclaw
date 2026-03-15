@@ -23,6 +23,7 @@ const {
   resolveKimiBaseUrl,
   extractKimiCitations,
   resolveBraveMode,
+  resolveBraveBaseUrl,
   mapBraveLlmContextResults,
 } = __testing;
 
@@ -392,6 +393,82 @@ describe("resolveBraveMode", () => {
 
   it("falls back to 'web' for unrecognized mode values", () => {
     expect(resolveBraveMode({ mode: "invalid" })).toBe("web");
+  });
+});
+
+describe("resolveBraveBaseUrl", () => {
+  it("returns undefined when no config or env is provided", () => {
+    withEnv({ BRAVE_BASE_URL: undefined }, () => {
+      expect(resolveBraveBaseUrl(undefined, undefined)).toBeUndefined();
+    });
+  });
+
+  it("returns undefined when brave config has no baseUrl", () => {
+    withEnv({ BRAVE_BASE_URL: undefined }, () => {
+      expect(resolveBraveBaseUrl({}, {})).toBeUndefined();
+    });
+  });
+
+  it("returns top-level search.baseUrl when set", () => {
+    withEnv({ BRAVE_BASE_URL: undefined }, () => {
+      expect(
+        resolveBraveBaseUrl(
+          { baseUrl: "http://proxy/brave" } as unknown as Parameters<typeof resolveBraveBaseUrl>[0],
+          {},
+        ),
+      ).toBe("http://proxy/brave");
+    });
+  });
+
+  it("returns brave.baseUrl when top-level baseUrl is absent", () => {
+    withEnv({ BRAVE_BASE_URL: undefined }, () => {
+      expect(resolveBraveBaseUrl({}, { baseUrl: "http://proxy/brave" })).toBe("http://proxy/brave");
+    });
+  });
+
+  it("top-level baseUrl takes precedence over brave.baseUrl", () => {
+    withEnv({ BRAVE_BASE_URL: undefined }, () => {
+      expect(
+        resolveBraveBaseUrl(
+          { baseUrl: "http://top-level/brave" } as unknown as Parameters<
+            typeof resolveBraveBaseUrl
+          >[0],
+          { baseUrl: "http://sub-level/brave" },
+        ),
+      ).toBe("http://top-level/brave");
+    });
+  });
+
+  it("falls back to BRAVE_BASE_URL env var when no config baseUrl is set", () => {
+    withEnv({ BRAVE_BASE_URL: "http://env-proxy/brave" }, () => {
+      expect(resolveBraveBaseUrl({}, {})).toBe("http://env-proxy/brave");
+    });
+  });
+
+  it("config baseUrl takes precedence over BRAVE_BASE_URL env var", () => {
+    withEnv({ BRAVE_BASE_URL: "http://env-proxy/brave" }, () => {
+      expect(
+        resolveBraveBaseUrl(
+          { baseUrl: "http://config-proxy/brave" } as unknown as Parameters<
+            typeof resolveBraveBaseUrl
+          >[0],
+          {},
+        ),
+      ).toBe("http://config-proxy/brave");
+    });
+  });
+
+  it("trims trailing space from baseUrl", () => {
+    withEnv({ BRAVE_BASE_URL: undefined }, () => {
+      expect(
+        resolveBraveBaseUrl(
+          { baseUrl: "http://proxy/brave/ " } as unknown as Parameters<
+            typeof resolveBraveBaseUrl
+          >[0],
+          {},
+        ),
+      ).toBe("http://proxy/brave/");
+    });
   });
 });
 

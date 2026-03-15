@@ -461,6 +461,8 @@ export type ToolsConfig = {
       provider?: "brave" | "gemini" | "grok" | "kimi" | "perplexity";
       /** Brave Search API key (optional; defaults to BRAVE_API_KEY env var). */
       apiKey?: SecretInput;
+      /** Base URL for Brave Search API requests (optional; enables proxy routing). */
+      baseUrl?: string;
       /** Default search results count (1-10). */
       maxResults?: number;
       /** Timeout in seconds for search requests. */
@@ -471,6 +473,8 @@ export type ToolsConfig = {
       brave?: {
         /** Brave Search mode: "web" (standard results) or "llm-context" (pre-extracted page content). Default: "web". */
         mode?: "web" | "llm-context";
+        /** Base URL for Brave Search API requests (optional; enables proxy routing). */
+        baseUrl?: string;
       };
       /** Gemini-specific configuration (used when provider="gemini"). */
       gemini?: {

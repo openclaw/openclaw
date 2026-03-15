@@ -273,6 +273,7 @@ export const ToolsWebSearchSchema = z
       ])
       .optional(),
     apiKey: SecretInputSchema.optional().register(sensitive),
+    baseUrl: z.url().optional(),
     maxResults: z.number().int().positive().optional(),
     timeoutSeconds: z.number().int().positive().optional(),
     cacheTtlMinutes: z.number().nonnegative().optional(),
@@ -312,6 +313,7 @@ export const ToolsWebSearchSchema = z
     brave: z
       .object({
         mode: z.union([z.literal("web"), z.literal("llm-context")]).optional(),
+        baseUrl: z.url().optional(),
       })
       .strict()
       .optional(),
