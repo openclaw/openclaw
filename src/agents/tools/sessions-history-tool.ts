@@ -18,9 +18,21 @@ import {
 } from "./sessions-helpers.js";
 
 const SessionsHistoryToolSchema = Type.Object({
-  sessionKey: Type.String(),
-  limit: Type.Optional(Type.Number({ minimum: 1 })),
-  includeTools: Type.Optional(Type.Boolean()),
+  sessionKey: Type.String({ description: "Session key to fetch history for." }),
+  limit: Type.Optional(
+    Type.Number({
+      minimum: 1,
+      maximum: 100,
+      description:
+        "Max messages to return. Default: all (capped at 80KB). Start with 10-20 and increase only if needed to keep context small.",
+    }),
+  ),
+  includeTools: Type.Optional(
+    Type.Boolean({
+      description:
+        "Include tool call/result messages. Default: false (stripped). Enable only when debugging tool interactions.",
+    }),
+  ),
 });
 
 const SESSIONS_HISTORY_MAX_BYTES = 80 * 1024;
@@ -174,7 +186,8 @@ export function createSessionsHistoryTool(opts?: {
   return {
     label: "Session History",
     name: "sessions_history",
-    description: "Fetch message history for a session.",
+    description:
+      "Fetch message history for a session. Responses are capped at 80KB; large messages are truncated and images omitted. Start with limit=10 to keep context small, then increase if needed. Credentials in history are automatically redacted.",
     parameters: SessionsHistoryToolSchema,
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;

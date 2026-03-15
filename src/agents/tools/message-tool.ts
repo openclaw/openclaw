@@ -76,6 +76,7 @@ const discordComponentButtonSchema = Type.Object({
       Type.String({
         description: "Discord user ids or names allowed to interact with this button.",
       }),
+      { maxItems: 25 },
     ),
   ),
 });
@@ -83,15 +84,15 @@ const discordComponentButtonSchema = Type.Object({
 const discordComponentSelectSchema = Type.Object({
   type: Type.Optional(stringEnum(["string", "user", "role", "mentionable", "channel"])),
   placeholder: Type.Optional(Type.String()),
-  minValues: Type.Optional(Type.Number()),
-  maxValues: Type.Optional(Type.Number()),
-  options: Type.Optional(Type.Array(discordComponentOptionSchema)),
+  minValues: Type.Optional(Type.Number({ minimum: 0, maximum: 25 })),
+  maxValues: Type.Optional(Type.Number({ minimum: 1, maximum: 25 })),
+  options: Type.Optional(Type.Array(discordComponentOptionSchema, { maxItems: 25 })),
 });
 
 const discordComponentBlockSchema = Type.Object({
   type: Type.String(),
   text: Type.Optional(Type.String()),
-  texts: Type.Optional(Type.Array(Type.String())),
+  texts: Type.Optional(Type.Array(Type.String(), { maxItems: 50 })),
   accessory: Type.Optional(
     Type.Object({
       type: Type.String(),
@@ -101,7 +102,7 @@ const discordComponentBlockSchema = Type.Object({
   ),
   spacing: Type.Optional(stringEnum(["small", "large"])),
   divider: Type.Optional(Type.Boolean()),
-  buttons: Type.Optional(Type.Array(discordComponentButtonSchema)),
+  buttons: Type.Optional(Type.Array(discordComponentButtonSchema, { maxItems: 25 })),
   select: Type.Optional(discordComponentSelectSchema),
   items: Type.Optional(
     Type.Array(
@@ -110,6 +111,7 @@ const discordComponentBlockSchema = Type.Object({
         description: Type.Optional(Type.String()),
         spoiler: Type.Optional(Type.Boolean()),
       }),
+      { maxItems: 10 },
     ),
   ),
   file: Type.Optional(Type.String()),
@@ -123,11 +125,11 @@ const discordComponentModalFieldSchema = Type.Object({
   description: Type.Optional(Type.String()),
   placeholder: Type.Optional(Type.String()),
   required: Type.Optional(Type.Boolean()),
-  options: Type.Optional(Type.Array(discordComponentOptionSchema)),
-  minValues: Type.Optional(Type.Number()),
-  maxValues: Type.Optional(Type.Number()),
-  minLength: Type.Optional(Type.Number()),
-  maxLength: Type.Optional(Type.Number()),
+  options: Type.Optional(Type.Array(discordComponentOptionSchema, { maxItems: 25 })),
+  minValues: Type.Optional(Type.Number({ minimum: 0, maximum: 25 })),
+  maxValues: Type.Optional(Type.Number({ minimum: 1, maximum: 25 })),
+  minLength: Type.Optional(Type.Number({ minimum: 0, maximum: 4000 })),
+  maxLength: Type.Optional(Type.Number({ minimum: 1, maximum: 4000 })),
   style: Type.Optional(stringEnum(["short", "paragraph"])),
 });
 
@@ -135,7 +137,7 @@ const discordComponentModalSchema = Type.Object({
   title: Type.String(),
   triggerLabel: Type.Optional(Type.String()),
   triggerStyle: Type.Optional(stringEnum(["primary", "secondary", "success", "danger", "link"])),
-  fields: Type.Array(discordComponentModalFieldSchema),
+  fields: Type.Array(discordComponentModalFieldSchema, { maxItems: 5 }),
 });
 
 const discordComponentMessageSchema = Type.Object(
@@ -152,7 +154,7 @@ const discordComponentMessageSchema = Type.Object(
         spoiler: Type.Optional(Type.Boolean()),
       }),
     ),
-    blocks: Type.Optional(Type.Array(discordComponentBlockSchema)),
+    blocks: Type.Optional(Type.Array(discordComponentBlockSchema, { maxItems: 40 })),
     modal: Type.Optional(discordComponentModalSchema),
   },
   {
@@ -268,7 +270,7 @@ function buildReactionSchema() {
 
 function buildFetchSchema() {
   return {
-    limit: Type.Optional(Type.Number()),
+    limit: Type.Optional(Type.Number({ minimum: 1, maximum: 200 })),
     before: Type.Optional(Type.String()),
     after: Type.Optional(Type.String()),
     around: Type.Optional(Type.String()),
@@ -337,14 +339,14 @@ function buildChannelTargetSchema() {
       Type.String({ description: "Channel id filter (search/thread list/event create)." }),
     ),
     channelIds: Type.Optional(
-      Type.Array(Type.String({ description: "Channel id filter (repeatable)." })),
+      Type.Array(Type.String({ description: "Channel id filter (repeatable)." }), { maxItems: 25 }),
     ),
     guildId: Type.Optional(Type.String()),
     userId: Type.Optional(Type.String()),
     authorId: Type.Optional(Type.String()),
-    authorIds: Type.Optional(Type.Array(Type.String())),
+    authorIds: Type.Optional(Type.Array(Type.String(), { maxItems: 25 })),
     roleId: Type.Optional(Type.String()),
-    roleIds: Type.Optional(Type.Array(Type.String())),
+    roleIds: Type.Optional(Type.Array(Type.String(), { maxItems: 25 })),
     participant: Type.Optional(Type.String()),
   };
 }
@@ -352,7 +354,7 @@ function buildChannelTargetSchema() {
 function buildStickerSchema() {
   return {
     emojiName: Type.Optional(Type.String()),
-    stickerId: Type.Optional(Type.Array(Type.String())),
+    stickerId: Type.Optional(Type.Array(Type.String(), { maxItems: 10 })),
     stickerName: Type.Optional(Type.String()),
     stickerDesc: Type.Optional(Type.String()),
     stickerTags: Type.Optional(Type.String()),
@@ -362,8 +364,8 @@ function buildStickerSchema() {
 function buildThreadSchema() {
   return {
     threadName: Type.Optional(Type.String()),
-    autoArchiveMin: Type.Optional(Type.Number()),
-    appliedTags: Type.Optional(Type.Array(Type.String())),
+    autoArchiveMin: Type.Optional(Type.Number({ minimum: 60, maximum: 10080 })),
+    appliedTags: Type.Optional(Type.Array(Type.String(), { maxItems: 5 })),
   };
 }
 
@@ -376,7 +378,7 @@ function buildEventSchema() {
     endTime: Type.Optional(Type.String()),
     desc: Type.Optional(Type.String()),
     location: Type.Optional(Type.String()),
-    durationMin: Type.Optional(Type.Number()),
+    durationMin: Type.Optional(Type.Number({ minimum: 1, maximum: 10080 })),
     until: Type.Optional(Type.String()),
   };
 }
@@ -384,7 +386,7 @@ function buildEventSchema() {
 function buildModerationSchema() {
   return {
     reason: Type.Optional(Type.String()),
-    deleteDays: Type.Optional(Type.Number()),
+    deleteDays: Type.Optional(Type.Number({ minimum: 0, maximum: 7 })),
   };
 }
 
@@ -392,7 +394,7 @@ function buildGatewaySchema() {
   return {
     gatewayUrl: Type.Optional(Type.String()),
     gatewayToken: Type.Optional(Type.String()),
-    timeoutMs: Type.Optional(Type.Number()),
+    timeoutMs: Type.Optional(Type.Number({ minimum: 1000, maximum: 120_000 })),
   };
 }
 
@@ -429,12 +431,12 @@ function buildPresenceSchema() {
 function buildChannelManagementSchema() {
   return {
     name: Type.Optional(Type.String()),
-    type: Type.Optional(Type.Number()),
+    type: Type.Optional(Type.Number({ minimum: 0, maximum: 15 })),
     parentId: Type.Optional(Type.String()),
     topic: Type.Optional(Type.String()),
-    position: Type.Optional(Type.Number()),
+    position: Type.Optional(Type.Number({ minimum: 0, maximum: 1000 })),
     nsfw: Type.Optional(Type.Boolean()),
-    rateLimitPerUser: Type.Optional(Type.Number()),
+    rateLimitPerUser: Type.Optional(Type.Number({ minimum: 0, maximum: 21600 })),
     categoryId: Type.Optional(Type.String()),
     clearParent: Type.Optional(
       Type.Boolean({

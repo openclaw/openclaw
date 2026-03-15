@@ -11,15 +11,43 @@ import type { AnyAgentTool } from "./common.js";
 import { jsonResult, readNumberParam, readStringParam } from "./common.js";
 
 const MemorySearchSchema = Type.Object({
-  query: Type.String(),
-  maxResults: Type.Optional(Type.Number()),
-  minScore: Type.Optional(Type.Number()),
+  query: Type.String({ description: "Natural-language search query for semantic memory lookup." }),
+  maxResults: Type.Optional(
+    Type.Number({
+      minimum: 1,
+      maximum: 50,
+      description:
+        "Max snippets to return. Default: backend-defined. Keep low (5-10) to avoid bloating context.",
+    }),
+  ),
+  minScore: Type.Optional(
+    Type.Number({
+      minimum: 0,
+      maximum: 1,
+      description:
+        "Minimum relevance score (0-1). Higher values return fewer but more relevant results.",
+    }),
+  ),
 });
 
 const MemoryGetSchema = Type.Object({
-  path: Type.String(),
-  from: Type.Optional(Type.Number()),
-  lines: Type.Optional(Type.Number()),
+  path: Type.String({
+    description: 'Relative path within memory directory (e.g. "MEMORY.md" or "memory/topic.md").',
+  }),
+  from: Type.Optional(
+    Type.Number({
+      minimum: 1,
+      description: "Starting line number (1-based). Omit to read from the beginning.",
+    }),
+  ),
+  lines: Type.Optional(
+    Type.Number({
+      minimum: 1,
+      maximum: 500,
+      description:
+        "Number of lines to read. Default: entire file. Keep small to avoid bloating context.",
+    }),
+  ),
 });
 
 function resolveMemoryToolContext(options: { config?: OpenClawConfig; agentSessionKey?: string }) {
