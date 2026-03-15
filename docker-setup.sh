@@ -20,6 +20,9 @@ if [[ -f "$ROOT_DIR/.env" ]]; then
       _env_val="${_env_val#"'"}"
     fi
     # Skip invalid identifiers (indented comments, "export KEY=val" lines, keys with hyphens, etc.)
+    # Strip inline comments (e.g. KEY=val # note) and trailing whitespace.
+    _env_val="${_env_val%%\ \#*}"
+    _env_val="${_env_val%"${_env_val##*[! ]}"}"
     if [[ "$_env_key" =~ ^[a-zA-Z_][a-zA-Z0-9_]*$ && -z "${!_env_key+x}" ]]; then
       export "$_env_key=$_env_val"
     fi
@@ -397,6 +400,14 @@ for compose_file in "${COMPOSE_FILES[@]}"; do
 done
 
 ENV_FILE="$ROOT_DIR/.env"
+_write_kv() {
+  local _k="$1" _v="$2" _file="$3"
+  if [[ "$_v" == *' '* || "$_v" == *$'\t'* ]]; then
+    printf '%s="%s"\n' "$_k" "${_v//"/\\"}" >>"$_file"
+  else
+    printf '%s=%s\n' "$_k" "$_v" >>"$_file"
+  fi
+}
 upsert_env() {
   local file="$1"
   shift
@@ -406,14 +417,7 @@ upsert_env() {
   # Use a delimited string instead of an associative array so the script
   # works with Bash 3.2 (macOS default) which lacks `declare -A`.
   local seen=" "
-  _write_kv() {
-    local _k="$1" _v="$2"
-    if [[ "$_v" == *' '* || "$_v" == *$'\t'* ]]; then
-      printf '%s="%s"\n' "$_k" "${_v//"/\\"}" >>"$tmp"
-    else
-      printf '%s=%s\n' "$_k" "$_v" >>"$tmp"
-    fi
-  }
+
 
   if [[ -f "$file" ]]; then
     while IFS= read -r line || [[ -n "$line" ]]; do
@@ -421,7 +425,7 @@ upsert_env() {
       local replaced=false
       for k in "${keys[@]}"; do
         if [[ "$key" == "$k" ]]; then
-          _write_kv "$k" "${!k-}"
+          _write_kv "$k" "${!k-}" "$tmp"
           seen="$seen$k "
           replaced=true
           break
@@ -435,7 +439,7 @@ upsert_env() {
 
   for k in "${keys[@]}"; do
     if [[ "$seen" != *" $k "* ]]; then
-      _write_kv "$k" "${!k-}"
+      _write_kv "$k" "${!k-}" "$tmp"
     fi
   done
 
