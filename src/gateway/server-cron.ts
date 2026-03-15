@@ -291,18 +291,10 @@ export function buildGatewayCronService(params: {
           sessionKey = customSessionId;
         }
       }
-      const modelOverride = typeof model === "string" ? model.trim() : "";
-      const jobForRun =
-        job.payload.kind === "agentTurn" && modelOverride
-          ? {
-              ...job,
-              payload: { ...job.payload, model: modelOverride },
-            }
-          : job;
       return await runCronIsolatedAgentTurn({
         cfg: runtimeConfig,
         deps: params.deps,
-        job: jobForRun,
+        job,
         message,
         abortSignal,
         agentId,
