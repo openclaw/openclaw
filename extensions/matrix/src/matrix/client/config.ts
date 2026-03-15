@@ -185,6 +185,17 @@ export async function resolveMatrixAuth(params?: {
     );
   }
 
+  // Validate homeserver URL upfront to catch missing scheme early.
+  const homeserverUrl = (() => {
+    try {
+      return new URL(resolved.homeserver);
+    } catch {
+      throw new Error(
+        `Invalid Matrix homeserver URL: "${resolved.homeserver}". URL must include a scheme (e.g., https://matrix.example.org).`,
+      );
+    }
+  })();
+
   // Login with password using HTTP API.
   const { response: loginResponse, release: releaseLoginResponse } = await fetchWithSsrFGuard({
     url: `${resolved.homeserver}/_matrix/client/v3/login`,
@@ -198,6 +209,7 @@ export async function resolveMatrixAuth(params?: {
         initial_device_display_name: resolved.deviceName ?? "OpenClaw Gateway",
       }),
     },
+    policy: { allowedHostnames: [homeserverUrl.hostname] },
     auditContext: "matrix.login",
   });
   const login = await (async () => {
