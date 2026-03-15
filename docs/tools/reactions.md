@@ -20,4 +20,5 @@ Channel notes:
 - **Telegram**: empty `emoji` removes the bot's reactions; `remove: true` also removes reactions but still requires a non-empty `emoji` for tool validation.
 - **WhatsApp**: empty `emoji` removes the bot reaction; `remove: true` maps to empty emoji (still requires `emoji`).
 - **Zalo Personal (`zalouser`)**: requires non-empty `emoji`; `remove: true` removes that specific emoji reaction.
+- **Feishu/Lark**: Use the `feishu_reaction` tool with actions `add`, `remove`, `list`. Requires `emoji_type` for add/remove and `reaction_id` for remove. Common emoji types: `THUMBSUP`, `HEART`, `SMILE`, `FIRE`, `CLAP`.
 - **Signal**: inbound reaction notifications emit system events when `channels.signal.reactionNotifications` is enabled.
