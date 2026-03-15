@@ -252,6 +252,30 @@ struct ExecAllowlistTests {
         #expect(resolutions[0].executableName == "touch")
     }
 
+    @Test func `resolve for allowlist uses wrapper argv payload even with canonical raw command`() {
+        let command = ["/bin/sh", "-lc", "echo allowlisted && /usr/bin/touch /tmp/openclaw-allowlist-test"]
+        let canonicalRaw = "/bin/sh -lc \"echo allowlisted && /usr/bin/touch /tmp/openclaw-allowlist-test\""
+        let resolutions = ExecCommandResolution.resolveForAllowlist(
+            command: command,
+            rawCommand: canonicalRaw,
+            cwd: nil,
+            env: ["PATH": "/usr/bin:/bin"])
+        #expect(resolutions.count == 2)
+        #expect(resolutions[0].executableName == "echo")
+        #expect(resolutions[1].executableName == "touch")
+    }
+
+    @Test func `resolve for allowlist fails closed for env modified shell wrappers`() {
+        let command = ["/usr/bin/env", "BASH_ENV=/tmp/payload.sh", "bash", "-lc", "echo allowlisted"]
+        let canonicalRaw = "/usr/bin/env BASH_ENV=/tmp/payload.sh bash -lc \"echo allowlisted\""
+        let resolutions = ExecCommandResolution.resolveForAllowlist(
+            command: command,
+            rawCommand: canonicalRaw,
+            cwd: nil,
+            env: ["PATH": "/usr/bin:/bin"])
+        #expect(resolutions.isEmpty)
+    }
+
     @Test func `resolve for allowlist unwraps env to effective direct executable`() {
         let command = ["/usr/bin/env", "FOO=bar", "/usr/bin/printf", "ok"]
         let resolutions = ExecCommandResolution.resolveForAllowlist(

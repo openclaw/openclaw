@@ -52,18 +52,22 @@ enum ExecSystemRunCommandValidator {
         let envManipulationBeforeShellWrapper = self.hasEnvManipulationBeforeShellWrapper(command)
         let shellWrapperPositionalArgv = self.hasTrailingPositionalArgvAfterInlineCommand(command)
         let mustBindDisplayToFullArgv = envManipulationBeforeShellWrapper || shellWrapperPositionalArgv
-
-        let inferred: String = if let shellCommand, !mustBindDisplayToFullArgv {
+        let canonicalDisplay = ExecCommandFormatter.displayString(for: command)
+        let legacyShellDisplay: String? = if let shellCommand, !mustBindDisplayToFullArgv {
             shellCommand
         } else {
-            ExecCommandFormatter.displayString(for: command)
+            nil
         }
 
-        if let raw = normalizedRaw, raw != inferred {
-            return .invalid(message: "INVALID_REQUEST: rawCommand does not match command")
+        if let raw = normalizedRaw {
+            let matchesCanonical = raw == canonicalDisplay
+            let matchesLegacyShellText = legacyShellDisplay == raw
+            if !matchesCanonical, !matchesLegacyShellText {
+                return .invalid(message: "INVALID_REQUEST: rawCommand does not match command")
+            }
         }
 
-        return .ok(ResolvedCommand(displayCommand: normalizedRaw ?? inferred))
+        return .ok(ResolvedCommand(displayCommand: canonicalDisplay))
     }
 
     private static func normalizeRaw(_ rawCommand: String?) -> String? {
@@ -181,7 +185,7 @@ enum ExecSystemRunCommandValidator {
         return Array(argv[appletIndex...])
     }
 
-    private static func hasEnvManipulationBeforeShellWrapper(
+    static func hasEnvManipulationBeforeShellWrapper(
         _ argv: [String],
         depth: Int = 0,
         envManipulationSeen: Bool = false) -> Bool
