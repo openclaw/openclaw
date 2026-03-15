@@ -66,8 +66,12 @@ describe("executable path helpers", () => {
     await fs.chmod(pathTool, 0o755);
 
     expect(resolveExecutablePath(absoluteTool)).toBe(absoluteTool);
-    expect(resolveExecutablePath("~/home-tool", { env: { HOME: homeDir } })).toBe(homeTool);
-    expect(resolveExecutablePath("runner", { env: { Path: binDir } })).toBe(pathTool);
+    expect(
+      path.normalize(resolveExecutablePath("~/home-tool", { env: { HOME: homeDir } }) ?? ""),
+    ).toBe(path.normalize(homeTool));
+    expect(path.normalize(resolveExecutablePath("runner", { env: { Path: binDir } }) ?? "")).toBe(
+      path.normalize(pathTool),
+    );
     expect(resolveExecutablePath("~/missing-tool", { env: { HOME: homeDir } })).toBeUndefined();
   });
 });

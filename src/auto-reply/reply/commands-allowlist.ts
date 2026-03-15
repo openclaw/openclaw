@@ -1,3 +1,11 @@
+import { resolveDiscordAccount } from "../../../extensions/discord/src/accounts.js";
+import { resolveDiscordUserAllowlist } from "../../../extensions/discord/src/resolve-users.js";
+import { resolveIMessageAccount } from "../../../extensions/imessage/src/accounts.js";
+import { resolveSignalAccount } from "../../../extensions/signal/src/accounts.js";
+import { resolveSlackAccount } from "../../../extensions/slack/src/accounts.js";
+import { resolveSlackUserAllowlist } from "../../../extensions/slack/src/resolve-users.js";
+import { resolveTelegramAccount } from "../../../extensions/telegram/src/accounts.js";
+import { resolveWhatsAppAccount } from "../../../extensions/whatsapp/src/accounts.js";
 import { getChannelDock } from "../../channels/dock.js";
 import { resolveExplicitConfigWriteTarget } from "../../channels/plugins/config-writes.js";
 import { listPairingChannels } from "../../channels/plugins/pairing.js";
@@ -9,9 +17,6 @@ import {
   validateConfigObjectWithPlugins,
   writeConfigFile,
 } from "../../config/config.js";
-import { resolveDiscordAccount } from "../../discord/accounts.js";
-import { resolveDiscordUserAllowlist } from "../../discord/resolve-users.js";
-import { resolveIMessageAccount } from "../../imessage/accounts.js";
 import { isBlockedObjectKey } from "../../infra/prototype-keys.js";
 import {
   addChannelAllowFromStoreEntry,
@@ -24,11 +29,6 @@ import {
   normalizeOptionalAccountId,
 } from "../../routing/session-key.js";
 import { normalizeStringEntries } from "../../shared/string-normalization.js";
-import { resolveSignalAccount } from "../../signal/accounts.js";
-import { resolveSlackAccount } from "../../slack/accounts.js";
-import { resolveSlackUserAllowlist } from "../../slack/resolve-users.js";
-import { resolveTelegramAccount } from "../../telegram/accounts.js";
-import { resolveWhatsAppAccount } from "../../web/accounts.js";
 import { rejectUnauthorizedCommand, requireCommandFlagEnabled } from "./command-gates.js";
 import type { CommandHandler } from "./commands-types.js";
 import { resolveConfigWriteDeniedText } from "./config-write-authorization.js";

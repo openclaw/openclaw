@@ -77,15 +77,30 @@ function resolveValidatedSendContext(
   return { ok: true, chatId: trimmedChatId, token, fetcher };
 }
 
+function resolveSendContextOrFailure(
+  chatId: string,
+  options: ZaloSendOptions,
+):
+  | { context: { chatId: string; token: string; fetcher?: ZaloFetch } }
+  | { failure: ZaloSendResult } {
+  const context = resolveValidatedSendContext(chatId, options);
+  return context.ok
+    ? { context }
+    : {
+        failure: { ok: false, error: context.error },
+      };
+}
+
 export async function sendMessageZalo(
   chatId: string,
   text: string,
   options: ZaloSendOptions = {},
 ): Promise<ZaloSendResult> {
-  const context = resolveValidatedSendContext(chatId, options);
-  if (!context.ok) {
-    return { ok: false, error: context.error };
+  const resolved = resolveSendContextOrFailure(chatId, options);
+  if ("failure" in resolved) {
+    return resolved.failure;
   }
+  const { context } = resolved;
 
   if (options.mediaUrl) {
     return sendPhotoZalo(context.chatId, options.mediaUrl, {
@@ -112,10 +127,11 @@ export async function sendPhotoZalo(
   photoUrl: string,
   options: ZaloSendOptions = {},
 ): Promise<ZaloSendResult> {
-  const context = resolveValidatedSendContext(chatId, options);
-  if (!context.ok) {
-    return { ok: false, error: context.error };
+  const resolved = resolveSendContextOrFailure(chatId, options);
+  if ("failure" in resolved) {
+    return resolved.failure;
   }
+  const { context } = resolved;
 
   if (!photoUrl?.trim()) {
     return { ok: false, error: "No photo URL provided" };

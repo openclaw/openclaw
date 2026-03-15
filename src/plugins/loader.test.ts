@@ -34,7 +34,6 @@ const {
   loadOpenClawPlugins,
   resetGlobalHookRunner,
 } = await importFreshPluginTestModules();
-const previousUmask = process.umask(0o022);
 
 type TempPlugin = { dir: string; file: string; id: string };
 
@@ -300,7 +299,6 @@ afterAll(() => {
   } catch {
     // ignore cleanup failures
   } finally {
-    process.umask(previousUmask);
     cachedBundledTelegramDir = "";
     cachedBundledMemoryDir = "";
   }
@@ -825,6 +823,37 @@ describe("loadOpenClawPlugins", () => {
     expect(registry.diagnostics.some((d) => d.level === "error")).toBe(true);
   });
 
+  it("fails when plugin export id mismatches manifest id", () => {
+    useNoBundledPlugins();
+    const plugin = writePlugin({
+      id: "manifest-id",
+      filename: "manifest-id.cjs",
+      body: `module.exports = { id: "export-id", register() {} };`,
+    });
+
+    const registry = loadRegistryFromSinglePlugin({
+      plugin,
+      pluginConfig: {
+        allow: ["manifest-id"],
+      },
+    });
+
+    const loaded = registry.plugins.find((entry) => entry.id === "manifest-id");
+    expect(loaded?.status).toBe("error");
+    expect(loaded?.error).toBe(
+      'plugin id mismatch (config uses "manifest-id", export uses "export-id")',
+    );
+    expect(
+      registry.diagnostics.some(
+        (entry) =>
+          entry.level === "error" &&
+          entry.pluginId === "manifest-id" &&
+          entry.message ===
+            'plugin id mismatch (config uses "manifest-id", export uses "export-id")',
+      ),
+    ).toBe(true);
+  });
+
   it("registers channel plugins", () => {
     useNoBundledPlugins();
     const plugin = writePlugin({
@@ -861,6 +890,69 @@ describe("loadOpenClawPlugins", () => {
 
     const channel = registry.channels.find((entry) => entry.plugin.id === "demo");
     expect(channel).toBeDefined();
+  });
+
+  it("rejects duplicate channel ids during plugin registration", () => {
+    useNoBundledPlugins();
+    const plugin = writePlugin({
+      id: "channel-dup",
+      filename: "channel-dup.cjs",
+      body: `module.exports = { id: "channel-dup", register(api) {
+  api.registerChannel({
+    plugin: {
+      id: "demo",
+      meta: {
+        id: "demo",
+        label: "Demo Override",
+        selectionLabel: "Demo Override",
+        docsPath: "/channels/demo-override",
+        blurb: "override"
+      },
+      capabilities: { chatTypes: ["direct"] },
+      config: {
+        listAccountIds: () => [],
+        resolveAccount: () => ({ accountId: "default" })
+      },
+      outbound: { deliveryMode: "direct" }
+    }
+  });
+  api.registerChannel({
+    plugin: {
+      id: "demo",
+      meta: {
+        id: "demo",
+        label: "Demo Duplicate",
+        selectionLabel: "Demo Duplicate",
+        docsPath: "/channels/demo-duplicate",
+        blurb: "duplicate"
+      },
+      capabilities: { chatTypes: ["direct"] },
+      config: {
+        listAccountIds: () => [],
+        resolveAccount: () => ({ accountId: "default" })
+      },
+      outbound: { deliveryMode: "direct" }
+    }
+  });
+} };`,
+    });
+
+    const registry = loadRegistryFromSinglePlugin({
+      plugin,
+      pluginConfig: {
+        allow: ["channel-dup"],
+      },
+    });
+
+    expect(registry.channels.filter((entry) => entry.plugin.id === "demo")).toHaveLength(1);
+    expect(
+      registry.diagnostics.some(
+        (entry) =>
+          entry.level === "error" &&
+          entry.pluginId === "channel-dup" &&
+          entry.message === "channel already registered: demo (channel-dup)",
+      ),
+    ).toBe(true);
   });
 
   it("registers http routes with auth and match options", () => {
@@ -1448,6 +1540,54 @@ describe("loadOpenClawPlugins", () => {
       expect(loaded?.origin).toBe("bundled");
       expect(overridden?.origin).toBe("global");
       expect(overridden?.error).toContain("overridden by bundled plugin");
+    });
+  });
+
+  it("prefers an explicitly installed global plugin over a bundled duplicate", () => {
+    const bundledDir = makeTempDir();
+    writePlugin({
+      id: "zalouser",
+      body: `module.exports = { id: "zalouser", register() {} };`,
+      dir: bundledDir,
+      filename: "index.cjs",
+    });
+    process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = bundledDir;
+
+    const stateDir = makeTempDir();
+    withEnv({ OPENCLAW_STATE_DIR: stateDir, CLAWDBOT_STATE_DIR: undefined }, () => {
+      const globalDir = path.join(stateDir, "extensions", "zalouser");
+      mkdirSafe(globalDir);
+      writePlugin({
+        id: "zalouser",
+        body: `module.exports = { id: "zalouser", register() {} };`,
+        dir: globalDir,
+        filename: "index.cjs",
+      });
+
+      const registry = loadOpenClawPlugins({
+        cache: false,
+        config: {
+          plugins: {
+            allow: ["zalouser"],
+            installs: {
+              zalouser: {
+                source: "npm",
+                installPath: globalDir,
+              },
+            },
+            entries: {
+              zalouser: { enabled: true },
+            },
+          },
+        },
+      });
+
+      const entries = registry.plugins.filter((entry) => entry.id === "zalouser");
+      const loaded = entries.find((entry) => entry.status === "loaded");
+      const overridden = entries.find((entry) => entry.status === "disabled");
+      expect(loaded?.origin).toBe("global");
+      expect(overridden?.origin).toBe("bundled");
+      expect(overridden?.error).toContain("overridden by global plugin");
     });
   });
 

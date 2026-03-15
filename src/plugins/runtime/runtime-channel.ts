@@ -1,3 +1,36 @@
+import { auditDiscordChannelPermissions } from "../../../extensions/discord/src/audit.js";
+import {
+  listDiscordDirectoryGroupsLive,
+  listDiscordDirectoryPeersLive,
+} from "../../../extensions/discord/src/directory-live.js";
+import { monitorDiscordProvider } from "../../../extensions/discord/src/monitor.js";
+import { probeDiscord } from "../../../extensions/discord/src/probe.js";
+import { resolveDiscordChannelAllowlist } from "../../../extensions/discord/src/resolve-channels.js";
+import { resolveDiscordUserAllowlist } from "../../../extensions/discord/src/resolve-users.js";
+import { sendMessageDiscord, sendPollDiscord } from "../../../extensions/discord/src/send.js";
+import { monitorIMessageProvider } from "../../../extensions/imessage/src/monitor.js";
+import { probeIMessage } from "../../../extensions/imessage/src/probe.js";
+import { sendMessageIMessage } from "../../../extensions/imessage/src/send.js";
+import { monitorSignalProvider } from "../../../extensions/signal/src/index.js";
+import { probeSignal } from "../../../extensions/signal/src/probe.js";
+import { sendMessageSignal } from "../../../extensions/signal/src/send.js";
+import {
+  listSlackDirectoryGroupsLive,
+  listSlackDirectoryPeersLive,
+} from "../../../extensions/slack/src/directory-live.js";
+import { monitorSlackProvider } from "../../../extensions/slack/src/index.js";
+import { probeSlack } from "../../../extensions/slack/src/probe.js";
+import { resolveSlackChannelAllowlist } from "../../../extensions/slack/src/resolve-channels.js";
+import { resolveSlackUserAllowlist } from "../../../extensions/slack/src/resolve-users.js";
+import { sendMessageSlack } from "../../../extensions/slack/src/send.js";
+import {
+  auditTelegramGroupMembership,
+  collectTelegramUnmentionedGroupIds,
+} from "../../../extensions/telegram/src/audit.js";
+import { monitorTelegramProvider } from "../../../extensions/telegram/src/monitor.js";
+import { probeTelegram } from "../../../extensions/telegram/src/probe.js";
+import { sendMessageTelegram, sendPollTelegram } from "../../../extensions/telegram/src/send.js";
+import { resolveTelegramToken } from "../../../extensions/telegram/src/token.js";
 import { resolveEffectiveMessagesConfig, resolveHumanDelayConfig } from "../../agents/identity.js";
 import { handleSlackAction } from "../../agents/tools/slack-actions.js";
 import {
@@ -51,19 +84,6 @@ import {
   resolveStorePath,
   updateLastRoute,
 } from "../../config/sessions.js";
-import { auditDiscordChannelPermissions } from "../../discord/audit.js";
-import {
-  listDiscordDirectoryGroupsLive,
-  listDiscordDirectoryPeersLive,
-} from "../../discord/directory-live.js";
-import { monitorDiscordProvider } from "../../discord/monitor.js";
-import { probeDiscord } from "../../discord/probe.js";
-import { resolveDiscordChannelAllowlist } from "../../discord/resolve-channels.js";
-import { resolveDiscordUserAllowlist } from "../../discord/resolve-users.js";
-import { sendMessageDiscord, sendPollDiscord } from "../../discord/send.js";
-import { monitorIMessageProvider } from "../../imessage/monitor.js";
-import { probeIMessage } from "../../imessage/probe.js";
-import { sendMessageIMessage } from "../../imessage/send.js";
 import { getChannelActivity, recordChannelActivity } from "../../infra/channel-activity.js";
 import {
   listLineAccountIds,
@@ -93,26 +113,6 @@ import {
   upsertChannelPairingRequest,
 } from "../../pairing/pairing-store.js";
 import { buildAgentSessionKey, resolveAgentRoute } from "../../routing/resolve-route.js";
-import { monitorSignalProvider } from "../../signal/index.js";
-import { probeSignal } from "../../signal/probe.js";
-import { sendMessageSignal } from "../../signal/send.js";
-import {
-  listSlackDirectoryGroupsLive,
-  listSlackDirectoryPeersLive,
-} from "../../slack/directory-live.js";
-import { monitorSlackProvider } from "../../slack/index.js";
-import { probeSlack } from "../../slack/probe.js";
-import { resolveSlackChannelAllowlist } from "../../slack/resolve-channels.js";
-import { resolveSlackUserAllowlist } from "../../slack/resolve-users.js";
-import { sendMessageSlack } from "../../slack/send.js";
-import {
-  auditTelegramGroupMembership,
-  collectTelegramUnmentionedGroupIds,
-} from "../../telegram/audit.js";
-import { monitorTelegramProvider } from "../../telegram/monitor.js";
-import { probeTelegram } from "../../telegram/probe.js";
-import { sendMessageTelegram, sendPollTelegram } from "../../telegram/send.js";
-import { resolveTelegramToken } from "../../telegram/token.js";
 import { createRuntimeWhatsApp } from "./runtime-whatsapp.js";
 import type { PluginRuntime } from "./types.js";
 
