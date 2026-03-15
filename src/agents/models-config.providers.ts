@@ -34,6 +34,7 @@ import {
   buildOpenAICodexProvider,
   buildOpenrouterProvider,
   buildQianfanProvider,
+  buildQiniuProvider,
   buildQwenPortalProvider,
   buildSyntheticProvider,
   buildTogetherProvider,
@@ -903,6 +904,13 @@ export async function resolveImplicitProviders(
               : implicitBedrock.models,
         }
       : implicitBedrock;
+  }
+
+  const qiniuKey =
+    resolveEnvApiKeyVarName("qiniu", env) ??
+    resolveApiKeyFromProfiles({ provider: "qiniu", store: authStore, env })?.apiKey;
+  if (qiniuKey) {
+    providers.qiniu = { ...buildQiniuProvider(), apiKey: qiniuKey };
   }
 
   return providers;

@@ -7,6 +7,13 @@ import {
   KILOCODE_MODEL_CATALOG,
 } from "../providers/kilocode-shared.js";
 import {
+  QINIU_BASE_URL,
+  QINIU_DEFAULT_CONTEXT_WINDOW,
+  QINIU_DEFAULT_COST,
+  QINIU_DEFAULT_MAX_TOKENS,
+  QINIU_MODEL_CATALOG,
+} from "../providers/qiniu-shared.js";
+import {
   buildBytePlusModelDefinition,
   BYTEPLUS_BASE_URL,
   BYTEPLUS_MODEL_CATALOG,
@@ -546,6 +553,22 @@ export function buildKilocodeProvider(): ProviderConfig {
       cost: KILOCODE_DEFAULT_COST,
       contextWindow: model.contextWindow ?? KILOCODE_DEFAULT_CONTEXT_WINDOW,
       maxTokens: model.maxTokens ?? KILOCODE_DEFAULT_MAX_TOKENS,
+    })),
+  };
+}
+
+export function buildQiniuProvider(): ProviderConfig {
+  return {
+    baseUrl: QINIU_BASE_URL,
+    api: "anthropic-messages",
+    models: QINIU_MODEL_CATALOG.map((model) => ({
+      id: model.id,
+      name: model.name,
+      reasoning: model.reasoning,
+      input: model.input,
+      cost: QINIU_DEFAULT_COST,
+      contextWindow: model.contextWindow ?? QINIU_DEFAULT_CONTEXT_WINDOW,
+      maxTokens: model.maxTokens ?? QINIU_DEFAULT_MAX_TOKENS,
     })),
   };
 }

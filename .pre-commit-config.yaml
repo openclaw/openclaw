@@ -66,6 +66,10 @@ repos:
           - --exclude-lines
           - 'env: \{ MISTRAL_API_K[E]Y: "sk-\.\.\." \},'
           - --exclude-lines
+          - 'export QINIU_API_K[E]Y="sk-\.\.\."'
+          - --exclude-lines
+          - 'env: \{ QINIU_API_K[E]Y: "sk-\.\.\." \},'
+          - --exclude-lines
           - '"ap[i]Key": "xxxxx"(,)?'
           - --exclude-lines
           - 'ap[i]Key: "A[I]za\.\.\.",'
