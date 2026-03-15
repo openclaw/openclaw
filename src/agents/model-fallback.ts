@@ -63,6 +63,43 @@ function shouldRethrowAbort(err: unknown): boolean {
   return isFallbackAbortError(err) && !isTimeoutError(err);
 }
 
+const EMPTY_STREAM_ERROR_RE =
+  /request ended without sending any chunks|stream ended before first chunk/i;
+
+function isEmptyStreamError(err: unknown): boolean {
+  if (typeof err === "string") {
+    return EMPTY_STREAM_ERROR_RE.test(err);
+  }
+  if (err instanceof Error) {
+    return EMPTY_STREAM_ERROR_RE.test(err.message);
+  }
+  return false;
+}
+
+function isEmptyStreamRetryEnabled(): boolean {
+  const raw = process.env.OPENCLAW_EMPTY_STREAM_RETRY;
+  if (raw == null || raw === "") {
+    return true;
+  }
+  const normalized = String(raw).trim().toLowerCase();
+  return !["0", "false", "off", "no"].includes(normalized);
+}
+
+function resolveEmptyStreamRetryDelayMs(): number {
+  const minRaw = Number(process.env.OPENCLAW_EMPTY_STREAM_RETRY_MIN_MS);
+  const maxRaw = Number(process.env.OPENCLAW_EMPTY_STREAM_RETRY_MAX_MS);
+  const min = Number.isFinite(minRaw) && minRaw >= 0 ? Math.floor(minRaw) : 300;
+  const max = Number.isFinite(maxRaw) && maxRaw >= min ? Math.floor(maxRaw) : 800;
+  if (max <= min) {
+    return min;
+  }
+  return Math.floor(min + Math.random() * (max - min + 1));
+}
+
+async function sleepEmptyStreamRetry(ms: number): Promise<void> {
+  await new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 function createModelCandidateCollector(allowlist: Set<string> | null | undefined): {
   candidates: ModelCandidate[];
   addExplicitCandidate: (candidate: ModelCandidate) => void;
@@ -176,6 +213,35 @@ async function runFallbackAttempt<T>(params: {
       }),
     };
   }
+
+  if (isEmptyStreamError(runResult.error) && isEmptyStreamRetryEnabled()) {
+    const retryDelayMs = resolveEmptyStreamRetryDelayMs();
+    params.attempts.push({
+      provider: params.provider,
+      model: params.model,
+      error: `Empty stream before first chunk; retrying once after ${retryDelayMs}ms`,
+    });
+    await sleepEmptyStreamRetry(retryDelayMs);
+
+    const retryResult = await runFallbackCandidate({
+      run: params.run,
+      provider: params.provider,
+      model: params.model,
+      options: params.options,
+    });
+    if (retryResult.ok) {
+      return {
+        success: buildFallbackSuccess({
+          result: retryResult.result,
+          provider: params.provider,
+          model: params.model,
+          attempts: params.attempts,
+        }),
+      };
+    }
+    return { error: retryResult.error };
+  }
+
   return { error: runResult.error };
 }
 
