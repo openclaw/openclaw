@@ -41,6 +41,7 @@ type SecretsRuntimeRefreshContext = {
   env: Record<string, string | undefined>;
   explicitAgentDirs: string[] | null;
   loadAuthStore: (agentDir?: string) => AuthProfileStore;
+  loadablePluginIds?: ReadonlySet<string>;
 };
 
 let activeSnapshot: PreparedSecretsRuntimeSnapshot | null = null;
@@ -68,6 +69,7 @@ function cloneRefreshContext(context: SecretsRuntimeRefreshContext): SecretsRunt
     env: { ...context.env },
     explicitAgentDirs: context.explicitAgentDirs ? [...context.explicitAgentDirs] : null,
     loadAuthStore: context.loadAuthStore,
+    loadablePluginIds: context.loadablePluginIds,
   };
 }
 
@@ -104,6 +106,8 @@ export async function prepareSecretsRuntimeSnapshot(params: {
   env?: NodeJS.ProcessEnv;
   agentDirs?: string[];
   loadAuthStore?: (agentDir?: string) => AuthProfileStore;
+  /** When provided, plugin config entries not in this set are treated as stale. */
+  loadablePluginIds?: ReadonlySet<string>;
 }): Promise<PreparedSecretsRuntimeSnapshot> {
   const sourceConfig = structuredClone(params.config);
   const resolvedConfig = structuredClone(params.config);
@@ -115,6 +119,7 @@ export async function prepareSecretsRuntimeSnapshot(params: {
   collectConfigAssignments({
     config: resolvedConfig,
     context,
+    loadablePluginIds: params.loadablePluginIds,
   });
 
   const loadAuthStore = params.loadAuthStore ?? loadAuthProfileStoreForSecretsRuntime;
@@ -161,6 +166,7 @@ export async function prepareSecretsRuntimeSnapshot(params: {
     env: { ...(params.env ?? process.env) } as Record<string, string | undefined>,
     explicitAgentDirs: params.agentDirs?.length ? [...candidateDirs] : null,
     loadAuthStore,
+    loadablePluginIds: params.loadablePluginIds,
   });
   return snapshot;
 }
@@ -189,6 +195,7 @@ export function activateSecretsRuntimeSnapshot(snapshot: PreparedSecretsRuntimeS
         env: activeRefreshContext.env,
         agentDirs: resolveRefreshAgentDirs(sourceConfig, activeRefreshContext),
         loadAuthStore: activeRefreshContext.loadAuthStore,
+        loadablePluginIds: activeRefreshContext.loadablePluginIds,
       });
       activateSecretsRuntimeSnapshot(refreshed);
       return true;

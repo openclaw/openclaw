@@ -46,6 +46,7 @@ import { scheduleGatewayUpdateCheck } from "../infra/update-startup.js";
 import { startDiagnosticHeartbeat, stopDiagnosticHeartbeat } from "../logging/diagnostic.js";
 import { createSubsystemLogger, runtimeForLogger } from "../logging/subsystem.js";
 import { getGlobalHookRunner, runGlobalGatewayStopSafely } from "../plugins/hook-runner-global.js";
+import { loadPluginManifestRegistry } from "../plugins/manifest-registry.js";
 import { createEmptyPluginRegistry } from "../plugins/registry.js";
 import { createPluginRuntime } from "../plugins/runtime/index.js";
 import type { PluginServicesHandle } from "../plugins/services.js";
@@ -351,13 +352,26 @@ export async function startGatewayServer(
     );
     return await run;
   };
+  // Resolve the set of actually-discovered plugin IDs so the secrets
+  // collector can skip stale config entries whose plugins are no longer
+  // installed. This prevents SecretRef resolution failures for removed
+  // plugins from blocking gateway startup.
+  const resolveLoadablePluginIds = (config: OpenClawConfig): ReadonlySet<string> => {
+    // Include workspace-scoped plugins so their SecretRefs are resolved,
+    // matching the workspaceDir used by loadGatewayPlugins at startup.
+    const workspaceDir = resolveAgentWorkspaceDir(config, resolveDefaultAgentId(config));
+    const manifestRegistry = loadPluginManifestRegistry({ config, workspaceDir, cache: true });
+    return new Set(manifestRegistry.plugins.map((record) => record.id));
+  };
+
   const activateRuntimeSecrets = async (
     config: OpenClawConfig,
     params: { reason: "startup" | "reload" | "restart-check"; activate: boolean },
   ) =>
     await runWithSecretsActivationLock(async () => {
       try {
-        const prepared = await prepareSecretsRuntimeSnapshot({ config });
+        const loadablePluginIds = resolveLoadablePluginIds(config);
+        const prepared = await prepareSecretsRuntimeSnapshot({ config, loadablePluginIds });
         if (params.activate) {
           activateSecretsRuntimeSnapshot(prepared);
           logGatewayAuthSurfaceDiagnostics(prepared);

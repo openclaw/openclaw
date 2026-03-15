@@ -89,6 +89,7 @@ Scope intent:
 - `channels.zalo.accounts.*.webhookSecret`
 - `channels.googlechat.serviceAccount` via sibling `serviceAccountRef` (compatibility exception)
 - `channels.googlechat.accounts.*.serviceAccount` via sibling `serviceAccountRef` (compatibility exception)
+- `plugins.entries.acpx.config.mcpServers.*.env.*`
 
 ### `auth-profiles.json` targets (`secrets configure` + `secrets apply` + `secrets audit`)
 

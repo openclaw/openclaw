@@ -5,6 +5,8 @@ import {
   ACPX_PINNED_VERSION,
   createAcpxPluginConfigSchema,
   resolveAcpxPluginConfig,
+  toAcpMcpServers,
+  type McpServerConfig,
 } from "./config.js";
 
 describe("acpx plugin config parsing", () => {
@@ -136,5 +138,199 @@ describe("acpx plugin config parsing", () => {
         workspaceDir: "/tmp/workspace",
       }),
     ).toThrow("strictWindowsCmdWrapper must be a boolean");
+  });
+});
+
+describe("McpServerConfig SecretInput env values", () => {
+  describe("config parsing", () => {
+    it("accepts SecretRef env values", () => {
+      const schema = createAcpxPluginConfigSchema();
+      if (!schema.safeParse) {
+        throw new Error("acpx config schema missing safeParse");
+      }
+      const result = schema.safeParse({
+        mcpServers: {
+          "test-server": {
+            command: "/usr/bin/test",
+            env: {
+              API_KEY: {
+                source: "env",
+                provider: "default",
+                id: "MCP_API_KEY",
+              },
+            },
+          },
+        },
+      });
+      expect(result.success).toBe(true);
+    });
+
+    it("accepts mixed plain string and SecretRef env values", () => {
+      const schema = createAcpxPluginConfigSchema();
+      if (!schema.safeParse) {
+        throw new Error("acpx config schema missing safeParse");
+      }
+      const result = schema.safeParse({
+        mcpServers: {
+          "test-server": {
+            command: "/usr/bin/test",
+            env: {
+              PLAIN_VAR: "hello",
+              SECRET_VAR: {
+                source: "env",
+                provider: "default",
+                id: "MY_SECRET",
+              },
+            },
+          },
+        },
+      });
+      expect(result.success).toBe(true);
+    });
+
+    it("rejects SecretRef env values with extra keys", () => {
+      const schema = createAcpxPluginConfigSchema();
+      if (!schema.safeParse) {
+        throw new Error("acpx config schema missing safeParse");
+      }
+      const result = schema.safeParse({
+        mcpServers: {
+          "test-server": {
+            command: "/usr/bin/test",
+            env: {
+              API_KEY: {
+                source: "env",
+                provider: "default",
+                id: "MCP_API_KEY",
+                extra: "not-allowed",
+              },
+            },
+          },
+        },
+      });
+      expect(result.success).toBe(false);
+    });
+
+    it("rejects non-string non-SecretRef env values", () => {
+      const schema = createAcpxPluginConfigSchema();
+      if (!schema.safeParse) {
+        throw new Error("acpx config schema missing safeParse");
+      }
+      const result = schema.safeParse({
+        mcpServers: {
+          "test-server": {
+            command: "/usr/bin/test",
+            env: { BAD: 42 },
+          },
+        },
+      });
+      expect(result.success).toBe(false);
+    });
+  });
+
+  describe("resolveAcpxPluginConfig", () => {
+    it("preserves SecretRef values in resolved config", () => {
+      const secretRef = {
+        source: "env" as const,
+        provider: "default",
+        id: "MY_SECRET",
+      };
+      const resolved = resolveAcpxPluginConfig({
+        rawConfig: {
+          mcpServers: {
+            "test-server": {
+              command: "/usr/bin/test",
+              env: { API_KEY: secretRef },
+            },
+          },
+        },
+      });
+      expect(resolved.mcpServers["test-server"].env).toEqual({
+        API_KEY: secretRef,
+      });
+    });
+  });
+
+  describe("toAcpMcpServers", () => {
+    it("resolves plain string env values", () => {
+      const mcpServers: Record<string, McpServerConfig> = {
+        "test-server": {
+          command: "/usr/bin/test",
+          args: ["--flag"],
+          env: {
+            API_KEY: "sk-test-123",
+            OTHER: "value",
+          },
+        },
+      };
+      const result = toAcpMcpServers(mcpServers);
+      expect(result).toEqual([
+        {
+          name: "test-server",
+          command: "/usr/bin/test",
+          args: ["--flag"],
+          env: [
+            { name: "API_KEY", value: "sk-test-123" },
+            { name: "OTHER", value: "value" },
+          ],
+        },
+      ]);
+    });
+
+    it("throws on unresolved SecretRef", () => {
+      const mcpServers: Record<string, McpServerConfig> = {
+        "test-server": {
+          command: "/usr/bin/test",
+          env: {
+            API_KEY: {
+              source: "env",
+              provider: "default",
+              id: "MCP_API_KEY",
+            },
+          },
+        },
+      };
+      expect(() => toAcpMcpServers(mcpServers)).toThrow(/unresolved SecretRef/);
+    });
+
+    it("handles servers with no env", () => {
+      const mcpServers: Record<string, McpServerConfig> = {
+        "test-server": { command: "/usr/bin/test" },
+      };
+      const result = toAcpMcpServers(mcpServers);
+      expect(result).toEqual([
+        {
+          name: "test-server",
+          command: "/usr/bin/test",
+          args: [],
+          env: [],
+        },
+      ]);
+    });
+
+    it("preserves empty-string env values", () => {
+      const mcpServers: Record<string, McpServerConfig> = {
+        "test-server": {
+          command: "/usr/bin/test",
+          env: {
+            EMPTY: "",
+            NONEMPTY: "value",
+          },
+        },
+      };
+      const result = toAcpMcpServers(mcpServers);
+      expect(result[0].env).toEqual([
+        { name: "EMPTY", value: "" },
+        { name: "NONEMPTY", value: "value" },
+      ]);
+    });
+
+    it("handles empty env object", () => {
+      const mcpServers: Record<string, McpServerConfig> = {
+        "test-server": { command: "/usr/bin/test", env: {} },
+      };
+      const result = toAcpMcpServers(mcpServers);
+      expect(result[0].env).toEqual([]);
+    });
   });
 });

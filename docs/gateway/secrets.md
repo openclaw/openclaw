@@ -285,6 +285,38 @@ Optional per-id errors:
 }
 ```
 
+### MCP server environment variables
+
+MCP server env vars configured via `plugins.entries.acpx.config.mcpServers` support SecretRef. This keeps API keys and tokens out of plaintext config:
+
+```json5
+{
+  secrets: {
+    providers: {
+      default: { source: "env" },
+    },
+  },
+  plugins: {
+    entries: {
+      acpx: {
+        config: {
+          mcpServers: {
+            "my-mcp-server": {
+              command: "/usr/local/bin/my-mcp-server",
+              env: {
+                API_KEY: { source: "env", provider: "default", id: "MCP_SERVER_API_KEY" },
+              },
+            },
+          },
+        },
+      },
+    },
+  },
+}
+```
+
+Plaintext string values still work. SecretRefs are resolved during gateway activation before the MCP server process is spawned.
+
 ## Supported credential surface
 
 Canonical supported and unsupported credentials are listed in:

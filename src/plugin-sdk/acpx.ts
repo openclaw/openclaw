@@ -36,3 +36,5 @@ export {
   listKnownProviderAuthEnvVarNames,
   omitEnvKeysCaseInsensitive,
 } from "../secrets/provider-env-vars.js";
+export type { SecretInput } from "../config/types.secrets.js";
+export { isSecretRef, normalizeResolvedSecretInputString } from "../config/types.secrets.js";
