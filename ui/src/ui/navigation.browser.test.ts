@@ -4,8 +4,21 @@ import { mountApp as mountTestApp, registerAppMountHooks } from "./test-helpers/
 
 registerAppMountHooks();
 
+const originalVisualViewport = Object.getOwnPropertyDescriptor(window, "visualViewport");
+const originalUserAgent = Object.getOwnPropertyDescriptor(window.navigator, "userAgent");
+const originalPlatform = Object.getOwnPropertyDescriptor(window.navigator, "platform");
+const originalMaxTouchPoints = Object.getOwnPropertyDescriptor(window.navigator, "maxTouchPoints");
+
 function mountApp(pathname: string) {
   return mountTestApp(pathname);
+}
+
+function restoreProperty(target: object, key: string, descriptor?: PropertyDescriptor) {
+  if (descriptor) {
+    Object.defineProperty(target, key, descriptor);
+    return;
+  }
+  Reflect.deleteProperty(target, key);
 }
 
 function nextFrame() {
@@ -85,6 +98,62 @@ describe("control UI routing", () => {
     expect(app.querySelector(".sidebar-brand")).not.toBeNull();
     expect(app.querySelector(".sidebar-brand__logo")).not.toBeNull();
     expect(app.querySelector(".sidebar-brand__copy")).not.toBeNull();
+  });
+
+  it("uses 16px text controls on iOS mobile to avoid Safari auto-zoom", async () => {
+    document.documentElement.setAttribute("data-ios-mobile", "");
+    const field = document.createElement("label");
+    field.className = "field";
+    field.innerHTML = `
+      <input type="text" value="alpha" />
+      <textarea>beta</textarea>
+      <select><option>gamma</option></select>
+    `;
+    document.body.append(field);
+    try {
+      const input = field.querySelector("input");
+      const textarea = field.querySelector("textarea");
+      const select = field.querySelector("select");
+      expect(input).not.toBeNull();
+      expect(textarea).not.toBeNull();
+      expect(select).not.toBeNull();
+      if (!input || !textarea || !select) {
+        return;
+      }
+
+      expect(getComputedStyle(input).fontSize).toBe("16px");
+      expect(getComputedStyle(textarea).fontSize).toBe("16px");
+      expect(getComputedStyle(select).fontSize).toBe("16px");
+    } finally {
+      field.remove();
+      document.documentElement.removeAttribute("data-ios-mobile");
+    }
+  });
+
+  it("keeps the mobile shell height override scoped to the iOS viewport fix", async () => {
+    const app = mountApp("/chat");
+    await app.updateComplete;
+
+    expect(window.matchMedia("(max-width: 768px)").matches).toBe(true);
+
+    const shell = app.querySelector<HTMLElement>(".shell");
+    expect(shell).not.toBeNull();
+    if (!shell) {
+      return;
+    }
+
+    document.documentElement.style.setProperty("--mobile-layout-height", "321px");
+    await nextFrame();
+    expect(getComputedStyle(shell).height).not.toBe("321px");
+
+    document.documentElement.setAttribute("data-ios-mobile", "");
+    app.setAttribute("data-ios-mobile", "");
+    await nextFrame();
+    expect(getComputedStyle(shell).height).toBe("321px");
+
+    app.removeAttribute("data-ios-mobile");
+    document.documentElement.removeAttribute("data-ios-mobile");
+    document.documentElement.style.removeProperty("--mobile-layout-height");
   });
 
   it("does not render a desktop sidebar resizer or inject a custom nav width", async () => {
@@ -186,22 +255,25 @@ describe("control UI routing", () => {
     }
   });
 
-  it("stacks the refreshed top navigation for narrow viewports", async () => {
+  it("keeps the refreshed top navigation in a single compact row on narrow viewports", async () => {
     const app = mountApp("/chat");
     await app.updateComplete;
 
     expect(window.matchMedia("(max-width: 768px)").matches).toBe(true);
 
     const shell = app.querySelector<HTMLElement>(".topnav-shell");
+    const actions = app.querySelector<HTMLElement>(".topnav-shell__actions");
     const content = app.querySelector<HTMLElement>(".topnav-shell__content");
     expect(shell).not.toBeNull();
+    expect(actions).not.toBeNull();
     expect(content).not.toBeNull();
-    if (!shell || !content) {
+    if (!shell || !actions || !content) {
       return;
     }
 
-    expect(getComputedStyle(shell).flexWrap).toBe("wrap");
-    expect(getComputedStyle(content).width).not.toBe("auto");
+    expect(getComputedStyle(shell).flexWrap).toBe("nowrap");
+    expect(getComputedStyle(actions).order).toBe("2");
+    expect(getComputedStyle(content).order).toBe("3");
   });
 
   it("keeps the mobile topbar nav toggle visible beside the search row", async () => {
@@ -226,6 +298,122 @@ describe("control UI routing", () => {
 
     expect(toggleWidth).toBeGreaterThan(0);
     expect(actionsWidth).toBeLessThan(shellWidth);
+  });
+
+  it("lets the mobile search fill the remaining topbar space", async () => {
+    const app = mountApp("/chat");
+    await app.updateComplete;
+
+    expect(window.matchMedia("(max-width: 768px)").matches).toBe(true);
+
+    const actions = app.querySelector<HTMLElement>(".topnav-shell__actions");
+    const content = app.querySelector<HTMLElement>(".topnav-shell__content");
+    const search = app.querySelector<HTMLElement>(".topbar-search");
+    const searchShortcut = app.querySelector<HTMLElement>(".topbar-search__kbd");
+    expect(actions).not.toBeNull();
+    expect(content).not.toBeNull();
+    expect(search).not.toBeNull();
+    expect(searchShortcut).not.toBeNull();
+    if (!actions || !content || !search || !searchShortcut) {
+      return;
+    }
+
+    expect(getComputedStyle(actions).flexGrow).toBe("1");
+    expect(getComputedStyle(search).flexGrow).toBe("1");
+    expect(getComputedStyle(content).flexGrow).toBe("0");
+    expect(getComputedStyle(searchShortcut).display).toBe("none");
+  });
+
+  it("removes extra top padding from the mobile chat card", async () => {
+    const app = mountApp("/chat");
+    await app.updateComplete;
+
+    expect(window.matchMedia("(max-width: 768px)").matches).toBe(true);
+
+    const chat = app.querySelector<HTMLElement>(".chat");
+    expect(chat).not.toBeNull();
+    if (!chat) {
+      return;
+    }
+
+    expect(getComputedStyle(chat).paddingTop).toBe("0px");
+  });
+
+  it("only enables the iOS shell lock on the chat tab", async () => {
+    Object.defineProperty(window.navigator, "userAgent", {
+      configurable: true,
+      value: "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X)",
+    });
+    Object.defineProperty(window.navigator, "platform", {
+      configurable: true,
+      value: "iPhone",
+    });
+    Object.defineProperty(window.navigator, "maxTouchPoints", {
+      configurable: true,
+      value: 5,
+    });
+    Object.defineProperty(window, "visualViewport", {
+      configurable: true,
+      value: Object.assign(new EventTarget(), { width: 400, height: 800 }),
+    });
+    try {
+      const chatApp = mountApp("/chat");
+      await chatApp.updateComplete;
+
+      expect(chatApp.hasAttribute("data-ios-shell-lock")).toBe(true);
+
+      chatApp.remove();
+      const sessionsApp = mountApp("/sessions");
+      await sessionsApp.updateComplete;
+
+      expect(sessionsApp.hasAttribute("data-ios-shell-lock")).toBe(false);
+    } finally {
+      restoreProperty(window, "visualViewport", originalVisualViewport);
+      restoreProperty(window.navigator, "userAgent", originalUserAgent);
+      restoreProperty(window.navigator, "platform", originalPlatform);
+      restoreProperty(window.navigator, "maxTouchPoints", originalMaxTouchPoints);
+      document.documentElement.removeAttribute("data-ios-mobile");
+      document.documentElement.removeAttribute("data-ios-keyboard-open");
+      document.documentElement.removeAttribute("data-ios-shell-lock");
+      document.body.removeAttribute("data-ios-mobile");
+      document.body.removeAttribute("data-ios-keyboard-open");
+      document.body.removeAttribute("data-ios-shell-lock");
+    }
+  });
+
+  it("keeps mobile chat controls on one row as header actions grow", async () => {
+    const app = mountApp("/chat");
+    await app.updateComplete;
+
+    expect(window.matchMedia("(max-width: 768px)").matches).toBe(true);
+
+    const sessionRow = app.querySelector<HTMLElement>(
+      ".content--chat .content-header .chat-controls__session-row",
+    );
+    const controls = app.querySelector<HTMLElement>(
+      ".content--chat .content-header .chat-controls",
+    );
+    const session = app.querySelector<HTMLElement>(
+      ".content--chat .content-header .chat-controls__session",
+    );
+    const model = app.querySelector<HTMLElement>(
+      ".content--chat .content-header .chat-controls__model",
+    );
+    expect(sessionRow).not.toBeNull();
+    expect(controls).not.toBeNull();
+    expect(session).not.toBeNull();
+    expect(model).not.toBeNull();
+    if (!sessionRow || !controls || !session || !model) {
+      return;
+    }
+
+    expect(getComputedStyle(sessionRow).display).toBe("flex");
+    expect(getComputedStyle(sessionRow).gap).toBe("4px");
+    expect(getComputedStyle(session).flexGrow).toBe("2");
+    expect(getComputedStyle(model).flexGrow).toBe("3");
+    expect(getComputedStyle(controls).display).toBe("flex");
+    expect(getComputedStyle(controls).flexWrap).toBe("nowrap");
+    expect(getComputedStyle(controls).gap).toBe("4px");
   });
 
   it("opens the mobile sidenav as a drawer from the topbar toggle", async () => {
