@@ -231,6 +231,13 @@ Notes:
 - `channels.matrix.replyToMode` controls reply-to metadata when not replying in a thread:
   - `off` (default), `first`, `all`
 
+## Voice messages
+
+- Matrix supports native voice-message metadata for compatible audio attachments.
+- Matrix-targeted TTS replies now use OGG/Opus output so supported Matrix clients can render them as voice messages instead of generic audio files.
+- When OpenClaw sends a voice message with text, the audio is sent first and the text is delivered as a follow-up message.
+- Matrix action tools do not currently expose a dedicated voice-message toggle for direct media sends.
+
 ## Capabilities
 
 | Feature         | Status                                                                                |
