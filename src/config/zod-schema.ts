@@ -87,6 +87,31 @@ const MemoryQmdMcporterSchema = z
   })
   .strict();
 
+const McpServerEntrySchema = z
+  .object({
+    command: z.string().min(1),
+    args: z.array(z.string().min(1)).optional(),
+    description: z.string().min(1).optional(),
+  })
+  .strict();
+
+const McpSchema = z
+  .object({
+    servers: z
+      .record(
+        z
+          .string()
+          .min(1)
+          .regex(
+            /^[a-zA-Z0-9_-]+$/,
+            "Server names can only contain alphanumeric characters, hyphens, and underscores",
+          ),
+        McpServerEntrySchema,
+      )
+      .optional(),
+  })
+  .strict();
+
 const LoggingLevelSchema = z.union([
   z.literal("silent"),
   z.literal("fatal"),
@@ -918,6 +943,7 @@ export const OpenClawSchema = z
       })
       .strict()
       .optional(),
+    mcp: McpSchema.optional(),
   })
   .strict()
   .superRefine((cfg, ctx) => {

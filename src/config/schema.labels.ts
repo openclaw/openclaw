@@ -869,4 +869,9 @@ export const FIELD_LABELS: Record<string, string> = {
   "plugins.installs.*.shasum": "Plugin Resolved Shasum",
   "plugins.installs.*.resolvedAt": "Plugin Resolution Time",
   "plugins.installs.*.installedAt": "Plugin Install Time",
+  mcp: "MCP Servers",
+  "mcp.servers": "MCP Server Map",
+  "mcp.servers.*.command": "MCP Server Command",
+  "mcp.servers.*.args": "MCP Server Args",
+  "mcp.servers.*.description": "MCP Server Description",
 };

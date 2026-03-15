@@ -1608,4 +1608,13 @@ export const FIELD_HELP: Record<string, string> = {
     'Direct message access control ("pairing" recommended). "open" requires channels.slack.allowFrom=["*"] (legacy: channels.slack.dm.allowFrom).',
   "channels.slack.dmPolicy":
     'Direct message access control ("pairing" recommended). "open" requires channels.slack.allowFrom=["*"].',
+  mcp: "MCP (Model Context Protocol) server declarations keyed by a user-defined server name. Use this section to wire external MCP-compatible binaries so their tools are available to agents without manual shell-out workarounds.",
+  "mcp.servers":
+    "Named map of MCP servers this gateway can start and expose as agent tools. Keep entries stable because server names are used as tool-name prefixes (mcp__<name>__<tool>). Remove unused entries to avoid stale process launches.",
+  "mcp.servers.*.command":
+    "Executable path or binary name for the MCP server process. Use an absolute path or ensure the binary is on PATH; relative paths resolve from the gateway working directory.",
+  "mcp.servers.*.args":
+    'Optional arguments passed to the MCP server command on startup. Use this for mode flags (for example ["mcp"]) or config pointers required by the server.',
+  "mcp.servers.*.description":
+    "Optional human-readable summary of what this MCP server provides. Use this to help operators identify server purpose at a glance in diagnostics and the control UI.",
 };

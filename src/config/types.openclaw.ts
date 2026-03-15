@@ -28,6 +28,20 @@ import type { SecretsConfig } from "./types.secrets.js";
 import type { SkillsConfig } from "./types.skills.js";
 import type { ToolsConfig } from "./types.tools.js";
 
+export type McpServerEntryConfig = {
+  /** Executable path or binary name for the MCP server process. */
+  command: string;
+  /** Optional arguments passed to the MCP server command on startup. */
+  args?: string[];
+  /** Optional human-readable description of what this server provides. */
+  description?: string;
+};
+
+export type McpConfig = {
+  /** MCP servers keyed by a user-defined server name (must match /^[a-zA-Z0-9_-]+$/). */
+  servers?: Record<string, McpServerEntryConfig>;
+};
+
 export type OpenClawConfig = {
   meta?: {
     /** Last OpenClaw version that wrote this config. */
@@ -120,6 +134,7 @@ export type OpenClawConfig = {
   talk?: TalkConfig;
   gateway?: GatewayConfig;
   memory?: MemoryConfig;
+  mcp?: McpConfig;
 };
 
 export type ConfigValidationIssue = {

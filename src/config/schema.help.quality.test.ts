@@ -36,6 +36,7 @@ const ROOT_SECTIONS = [
   "gateway",
   "memory",
   "plugins",
+  "mcp",
 ] as const;
 
 const TARGET_KEYS = [
@@ -391,6 +392,11 @@ const TARGET_KEYS = [
   "agents.defaults.compaction.memoryFlush.softThresholdTokens",
   "agents.defaults.compaction.memoryFlush.prompt",
   "agents.defaults.compaction.memoryFlush.systemPrompt",
+  "mcp",
+  "mcp.servers",
+  "mcp.servers.*.command",
+  "mcp.servers.*.args",
+  "mcp.servers.*.description",
 ] as const;
 
 const ENUM_EXPECTATIONS: Record<string, string[]> = {
