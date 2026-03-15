@@ -553,7 +553,7 @@ describe("createOllamaStreamFn", () => {
       ],
       async (fetchMock) => {
         const streamFn = createOllamaStreamFn("http://ollama-host:11434");
-        const stream = streamFn(
+        const stream = await streamFn(
           {
             id: "deepseek-r1:32b",
             api: "ollama",
@@ -580,7 +580,7 @@ describe("createOllamaStreamFn", () => {
       ],
       async (fetchMock) => {
         const streamFn = createOllamaStreamFn("http://ollama-host:11434");
-        const stream = streamFn(
+        const stream = await streamFn(
           {
             id: "deepseek-r1:32b",
             api: "ollama",
