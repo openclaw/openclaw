@@ -1,5 +1,6 @@
 import { describe, it, expect, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import { fetchWithSsrFGuard } from "../infra/net/fetch-guard.js";
 import { createOllamaEmbeddingProvider } from "./embeddings-ollama.js";
 
 describe("embeddings-ollama", () => {
@@ -125,5 +126,75 @@ describe("embeddings-ollama", () => {
         }),
       }),
     );
+  });
+
+  it("allows localhost Ollama endpoints with a host-scoped private-network SSRF policy", async () => {
+    const { client } = await createOllamaEmbeddingProvider({
+      config: {} as OpenClawConfig,
+      provider: "ollama",
+      model: "nomic-embed-text",
+      fallback: "none",
+      remote: { baseUrl: "http://localhost:11434" },
+    });
+
+    expect(client.ssrfPolicy).toEqual({
+      allowPrivateNetwork: true,
+      allowedHostnames: ["localhost"],
+      hostnameAllowlist: ["localhost"],
+    });
+  });
+
+  it("allows private-network Ollama endpoints with a host-scoped private-network SSRF policy", async () => {
+    const { client } = await createOllamaEmbeddingProvider({
+      config: {} as OpenClawConfig,
+      provider: "ollama",
+      model: "nomic-embed-text",
+      fallback: "none",
+      remote: { baseUrl: "http://192.168.20.14:11434" },
+    });
+
+    expect(client.ssrfPolicy).toEqual({
+      allowPrivateNetwork: true,
+      allowedHostnames: ["192.168.20.14"],
+      hostnameAllowlist: ["192.168.20.14"],
+    });
+  });
+
+  it("keeps Ollama embedding redirects pinned to the configured host", async () => {
+    const { client } = await createOllamaEmbeddingProvider({
+      config: {} as OpenClawConfig,
+      provider: "ollama",
+      model: "nomic-embed-text",
+      fallback: "none",
+      remote: { baseUrl: "http://localhost:11434" },
+    });
+
+    const lookupFn = vi.fn(async (hostname: string) => {
+      if (hostname === "localhost") {
+        return [{ address: "127.0.0.1", family: 4 }];
+      }
+      return [{ address: "93.184.216.34", family: 4 }];
+    });
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response(null, {
+          status: 302,
+          headers: { location: "http://evil.example:11434/api/embeddings" },
+        }),
+      )
+      .mockResolvedValueOnce(new Response("ok", { status: 200 }));
+
+    await expect(
+      fetchWithSsrFGuard({
+        url: "http://localhost:11434/api/embeddings",
+        fetchImpl,
+        lookupFn: lookupFn as unknown as NonNullable<
+          Parameters<typeof fetchWithSsrFGuard>[0]["lookupFn"]
+        >,
+        policy: client.ssrfPolicy,
+      }),
+    ).rejects.toThrow(/allowlist/i);
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
   });
 });

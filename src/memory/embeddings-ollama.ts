@@ -45,6 +45,22 @@ function resolveOllamaApiKey(options: EmbeddingProviderOptions): string | undefi
   return resolveEnvApiKey("ollama")?.apiKey;
 }
 
+function buildOllamaBaseUrlPolicy(baseUrl: string): SsrFPolicy | undefined {
+  const basePolicy = buildRemoteBaseUrlPolicy(baseUrl);
+  const hostname = basePolicy?.allowedHostnames?.[0];
+  if (!hostname) {
+    return basePolicy;
+  }
+  // Ollama is commonly operator-hosted on localhost or RFC1918 networks.
+  // Keep requests pinned to the configured host while explicitly allowing
+  // private-network access for that one host.
+  return {
+    allowPrivateNetwork: true,
+    allowedHostnames: [hostname],
+    hostnameAllowlist: [hostname],
+  };
+}
+
 function resolveOllamaEmbeddingClient(
   options: EmbeddingProviderOptions,
 ): OllamaEmbeddingClientConfig {
@@ -64,7 +80,7 @@ function resolveOllamaEmbeddingClient(
   return {
     baseUrl,
     headers,
-    ssrfPolicy: buildRemoteBaseUrlPolicy(baseUrl),
+    ssrfPolicy: buildOllamaBaseUrlPolicy(baseUrl),
     model,
   };
 }
