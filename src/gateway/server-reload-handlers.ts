@@ -39,8 +39,8 @@ export function createGatewayReloadHandlers(params: {
   broadcast: (event: string, payload: unknown, opts?: { dropIfSlow?: boolean }) => void;
   getState: () => GatewayHotReloadState;
   setState: (state: GatewayHotReloadState) => void;
-  startChannel: (name: ChannelKind) => Promise<void>;
-  stopChannel: (name: ChannelKind) => Promise<void>;
+  startChannel: (name: ChannelKind, accountId?: string) => Promise<void>;
+  stopChannel: (name: ChannelKind, accountId?: string) => Promise<void>;
   logHooks: {
     info: (msg: string) => void;
     warn: (msg: string) => void;
@@ -128,7 +128,7 @@ export function createGatewayReloadHandlers(params: {
       });
     }
 
-    if (plan.restartChannels.size > 0) {
+    if (plan.restartChannelAccounts.size > 0 || plan.restartChannels.size > 0) {
       if (
         isTruthyEnvValue(process.env.OPENCLAW_SKIP_CHANNELS) ||
         isTruthyEnvValue(process.env.OPENCLAW_SKIP_PROVIDERS)
@@ -137,11 +137,21 @@ export function createGatewayReloadHandlers(params: {
           "skipping channel reload (OPENCLAW_SKIP_CHANNELS=1 or OPENCLAW_SKIP_PROVIDERS=1)",
         );
       } else {
+        const restartChannelAccount = async (name: ChannelKind, accountId: string) => {
+          params.logChannels.info(`restarting ${name} channel account ${accountId}`);
+          await params.stopChannel(name, accountId);
+          await params.startChannel(name, accountId);
+        };
         const restartChannel = async (name: ChannelKind) => {
           params.logChannels.info(`restarting ${name} channel`);
           await params.stopChannel(name);
           await params.startChannel(name);
         };
+        for (const [channel, accounts] of plan.restartChannelAccounts) {
+          for (const accountId of accounts) {
+            await restartChannelAccount(channel, accountId);
+          }
+        }
         for (const channel of plan.restartChannels) {
           await restartChannel(channel);
         }

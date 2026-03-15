@@ -130,6 +130,36 @@ describe("buildGatewayReloadPlan", () => {
     expect(plan.reloadHooks).toBe(true);
   });
 
+  it("plans account-scoped restarts for channel account config", () => {
+    const plan = buildGatewayReloadPlan(["channels.telegram.accounts.botA.token"]);
+    expect(plan.restartChannels.has("telegram")).toBe(false);
+    expect(plan.restartChannelAccounts.get("telegram")).toEqual(new Set(["botA"]));
+  });
+
+  it("keeps full channel restarts for channel-global config", () => {
+    const plan = buildGatewayReloadPlan(["channels.telegram.replyToMode"]);
+    expect(plan.restartChannels).toContain("telegram");
+    expect(plan.restartChannelAccounts.size).toBe(0);
+  });
+
+  it("prefers full channel restarts when mixed with account-scoped changes", () => {
+    const plan = buildGatewayReloadPlan([
+      "channels.telegram.accounts.botA.token",
+      "channels.telegram.replyToMode",
+    ]);
+    expect(plan.restartChannels).toContain("telegram");
+    expect(plan.restartChannelAccounts.size).toBe(0);
+  });
+
+  it("collects multiple account restarts for a channel", () => {
+    const plan = buildGatewayReloadPlan([
+      "channels.telegram.accounts.botA.token",
+      "channels.telegram.accounts.botB.enabled",
+    ]);
+    expect(plan.restartChannels.has("telegram")).toBe(false);
+    expect(plan.restartChannelAccounts.get("telegram")).toEqual(new Set(["botA", "botB"]));
+  });
+
   it("restarts providers when provider config prefixes change", () => {
     const changedPaths = ["web.enabled", "channels.telegram.botToken"];
     const plan = buildGatewayReloadPlan(changedPaths);
