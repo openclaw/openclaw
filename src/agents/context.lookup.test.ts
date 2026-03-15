@@ -90,6 +90,20 @@ describe("lookupContextTokens", () => {
     }
   });
 
+  it("skips eager warmup for logs commands that do not need model metadata at startup", async () => {
+    const loadConfigMock = vi.fn(() => ({ models: {} }));
+    mockContextModuleDeps(loadConfigMock);
+
+    const argvSnapshot = process.argv;
+    process.argv = ["node", "openclaw", "logs", "--limit", "5"];
+    try {
+      await import("./context.js");
+      expect(loadConfigMock).not.toHaveBeenCalled();
+    } finally {
+      process.argv = argvSnapshot;
+    }
+  });
+
   it("retries config loading after backoff when an initial load fails", async () => {
     vi.useFakeTimers();
     const loadConfigMock = vi
