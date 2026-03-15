@@ -79,6 +79,7 @@ GUM=""
 GUM_STATUS="skipped"
 GUM_REASON=""
 LAST_NPM_INSTALL_CMD=""
+LAST_NPM_INSTALL_EXIT_CODE=0
 
 is_non_interactive_shell() {
     if [[ "${NO_PROMPT:-0}" == "1" ]]; then
@@ -672,6 +673,153 @@ auto_install_build_tools_for_npm_failure() {
     return 0
 }
 
+get_available_memory_mb() {
+    if [[ "$OS" == "linux" ]]; then
+        # Get available memory in MB from /proc/meminfo
+        local avail_kb
+        avail_kb="$(awk '/MemAvailable/ {print $2}' /proc/meminfo 2>/dev/null || echo "0")"
+        echo $((avail_kb / 1024))
+    elif [[ "$OS" == "macos" ]]; then
+        # macOS: use vm_stat to estimate available memory
+        local pages_free pages_inactive page_size
+        pages_free="$(vm_stat | awk '/Pages free/ {print $3}' | tr -d '.')"
+        pages_inactive="$(vm_stat | awk '/Pages inactive/ {print $3}' | tr -d '.')"
+        page_size="$(pagesize 2>/dev/null || echo "4096")"
+        echo $(( (pages_free + pages_inactive) * page_size / 1024 / 1024 ))
+    else
+        echo "0"
+    fi
+}
+
+has_sufficient_swap() {
+    if [[ "$OS" != "linux" ]]; then
+        return 0  # Only check swap on Linux
+    fi
+    local swap_free_kb
+    swap_free_kb="$(awk '/SwapFree/ {print $2}' /proc/meminfo 2>/dev/null || echo "0")"
+    [[ "$swap_free_kb" -ge 1048576 ]]  # At least 1GB free swap
+}
+
+can_attempt_swap_creation() {
+    if is_root; then
+        return 0
+    fi
+
+    if ! command -v sudo >/dev/null 2>&1; then
+        ui_warn "sudo is unavailable; skipping automatic swap setup"
+        return 1
+    fi
+
+    if ! sudo -n true >/dev/null 2>&1; then
+        ui_info "Administrator privileges required to create swap; enter your password"
+        if ! sudo -v; then
+            ui_warn "Could not obtain sudo credentials; skipping automatic swap setup"
+            return 1
+        fi
+    fi
+
+    return 0
+}
+
+swapfile_is_enabled() {
+    local swap_file="$1"
+    [[ -r /proc/swaps ]] || return 1
+    awk 'NR>1 {print $1}' /proc/swaps 2>/dev/null | grep -Fxq "$swap_file"
+}
+
+has_swapfile_disk_headroom() {
+    local swap_size_mb="$1"
+    local have_kb need_kb
+
+    have_kb="$(df -Pk / 2>/dev/null | awk 'NR==2 {print $4}')"
+    if [[ ! "$have_kb" =~ ^[0-9]+$ ]]; then
+        return 1
+    fi
+
+    need_kb=$(( (swap_size_mb + 512) * 1024 ))
+    [[ "$have_kb" -ge "$need_kb" ]]
+}
+
+create_swap_file() {
+    if [[ "$OS" != "linux" ]]; then
+        return 1
+    fi
+
+    local swap_file="/swapfile-openclaw"
+    local swap_size_mb=2048  # 2GB swap
+
+    if ! can_attempt_swap_creation; then
+        return 1
+    fi
+
+    if swapfile_is_enabled "$swap_file"; then
+        ui_info "Swap file already enabled: ${swap_file}"
+        return 0
+    fi
+
+    if maybe_sudo test -L "$swap_file"; then
+        ui_warn "Refusing to use ${swap_file}: path is a symlink"
+        return 1
+    fi
+
+    if maybe_sudo test -e "$swap_file"; then
+        ui_warn "Swap file already exists at ${swap_file}; not overwriting automatically"
+        return 1
+    fi
+
+    if ! has_swapfile_disk_headroom "$swap_size_mb"; then
+        ui_warn "Not enough free disk space for ${swap_size_mb}MB swap (+512MB headroom)"
+        return 1
+    fi
+
+    ui_info "Creating ${swap_size_mb}MB swap file to improve npm install stability"
+
+    maybe_sudo dd if=/dev/zero of="$swap_file" bs=1M count="$swap_size_mb" oflag=excl status=none 2>/dev/null || return 1
+    maybe_sudo chmod 600 "$swap_file" || return 1
+    maybe_sudo mkswap "$swap_file" >/dev/null 2>&1 || return 1
+    maybe_sudo swapon "$swap_file" || return 1
+
+    ui_success "Swap file created and enabled"
+    return 0
+}
+
+setup_low_memory_environment() {
+    local available_mb
+    available_mb="$(get_available_memory_mb)"
+    
+    if [[ "$available_mb" -lt 2048 ]]; then
+        ui_warn "Low memory detected (${available_mb}MB available)"
+        
+        if ! has_sufficient_swap; then
+            ui_info "Insufficient swap space; creating swap file to prevent OOM during npm install"
+            if create_swap_file; then
+                return 0
+            else
+                ui_warn "Failed to create swap file; npm install may fail due to memory constraints"
+                ui_info "You can manually create swap with: sudo fallocate -l 2G /swapfile && sudo chmod 600 /swapfile && sudo mkswap /swapfile && sudo swapon /swapfile"
+                return 1
+            fi
+        fi
+    fi
+    return 0
+}
+
+npm_log_indicates_oom_killed() {
+    local log="$1"
+
+    # Exit 137 means the shell observed SIGKILL (commonly OOM killer).
+    if [[ "${LAST_NPM_INSTALL_EXIT_CODE:-0}" -eq 137 ]]; then
+        return 0
+    fi
+
+    if [[ ! -f "$log" ]]; then
+        return 1
+    fi
+
+    # Look for explicit OOM/SIGKILL indicators from shell/npm output.
+    grep -Eiq '(^|[[:space:]])Killed($|[[:space:]])|npm (ERR!|error) signal SIGKILL|signal SIGKILL|out of memory|(^|[^[:alnum:]_])oom([^[:alnum:]_]|$)' "$log" 2>/dev/null
+}
+
 run_npm_global_install() {
     local spec="$1"
     local log="$2"
@@ -686,9 +834,13 @@ run_npm_global_install() {
     printf -v cmd_display '%q ' "${cmd[@]}"
     LAST_NPM_INSTALL_CMD="${cmd_display% }"
 
+    local status=0
+
     if [[ "$VERBOSE" == "1" ]]; then
         "${cmd[@]}" 2>&1 | tee "$log"
-        return $?
+        status=$?
+        LAST_NPM_INSTALL_EXIT_CODE=$status
+        return $status
     fi
 
     if [[ -n "$GUM" ]] && gum_is_tty; then
@@ -697,10 +849,15 @@ run_npm_global_install() {
         printf -v cmd_quoted '%q ' "${cmd[@]}"
         printf -v log_quoted '%q' "$log"
         run_with_spinner "Installing OpenClaw package" bash -c "${cmd_quoted}>${log_quoted} 2>&1"
-        return $?
+        status=$?
+        LAST_NPM_INSTALL_EXIT_CODE=$status
+        return $status
     fi
 
     "${cmd[@]}" >"$log" 2>&1
+    status=$?
+    LAST_NPM_INSTALL_EXIT_CODE=$status
+    return $status
 }
 
 extract_npm_debug_log_path() {
@@ -786,8 +943,46 @@ install_openclaw_npm() {
     local spec="$1"
     local log
     log="$(mktempfile)"
+    
+    # Setup swap on low-memory systems before attempting npm install
+    setup_low_memory_environment || true
+    
     if ! run_npm_global_install "$spec" "$log"; then
         local attempted_build_tool_fix=false
+        local attempted_swap_fix=false
+        
+        # Check if process was OOM killed
+        if npm_log_indicates_oom_killed "$log"; then
+            ui_error "npm install was killed (likely out of memory)"
+            local available_mb
+            available_mb="$(get_available_memory_mb)"
+            ui_info "Available memory: ${available_mb}MB"
+            
+            if [[ "$available_mb" -lt 2048 ]] && ! has_sufficient_swap; then
+                ui_warn "System has insufficient memory and no swap"
+                ui_info "Creating swap file and retrying..."
+                if create_swap_file; then
+                    attempted_swap_fix=true
+                    if run_npm_global_install "$spec" "$log"; then
+                        ui_success "OpenClaw npm package installed"
+                        return 0
+                    fi
+                else
+                    ui_warn "Automatic swap setup failed or was skipped"
+                    ui_info "Manual workaround: create swap before retrying installer"
+                    echo "  sudo fallocate -l 2G /swapfile"
+                    echo "  sudo chmod 600 /swapfile"
+                    echo "  sudo mkswap /swapfile"
+                    echo "  sudo swapon /swapfile"
+                fi
+            else
+                ui_error "npm install failed due to insufficient memory"
+                ui_info "This system needs more RAM or swap space to build native modules"
+                ui_info "Consider upgrading to a droplet with at least 2GB RAM"
+                return 1
+            fi
+        fi
+        
         if auto_install_build_tools_for_npm_failure "$log"; then
             attempted_build_tool_fix=true
             ui_info "Retrying npm install after build tools setup"
@@ -802,6 +997,8 @@ install_openclaw_npm() {
         if [[ "$VERBOSE" != "1" ]]; then
             if [[ "$attempted_build_tool_fix" == "true" ]]; then
                 ui_warn "npm install still failed after build tools setup; showing last log lines"
+            elif [[ "$attempted_swap_fix" == "true" ]]; then
+                ui_warn "npm install still failed after swap setup; showing last log lines"
             else
                 ui_warn "npm install failed; showing last log lines"
             fi
