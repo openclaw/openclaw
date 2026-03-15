@@ -99,16 +99,8 @@ function getHeader(req: IncomingMessage, name: string): string | undefined {
   return headerValue(req.headers[name.toLowerCase()]);
 }
 
-function getRelayAuthTokenFromRequest(req: IncomingMessage, url?: URL): string | undefined {
-  const headerToken = getHeader(req, RELAY_AUTH_HEADER)?.trim();
-  if (headerToken) {
-    return headerToken;
-  }
-  const queryToken = url?.searchParams.get("token")?.trim();
-  if (queryToken) {
-    return queryToken;
-  }
-  return undefined;
+function getRelayAuthTokenFromRequest(req: IncomingMessage, _url?: URL): string | undefined {
+  return getHeader(req, RELAY_AUTH_HEADER)?.trim();
 }
 
 export type ChromeExtensionRelayServer = {
