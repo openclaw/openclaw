@@ -96,6 +96,8 @@ export type ChannelMeta = {
 
 export type ChannelAccountSnapshot = {
   accountId: string;
+  /** Connection model for health-monitor policy selection. */
+  connectionModel?: "stateful" | "stateless";
   name?: string;
   enabled?: boolean;
   configured?: boolean;

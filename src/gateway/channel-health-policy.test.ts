@@ -231,6 +231,45 @@ describe("evaluateChannelHealth", () => {
     );
     expect(evaluation).toEqual({ healthy: false, reason: "stale-socket" });
   });
+
+  it("treats stateless channels as healthy when running even if disconnected/idle", () => {
+    const evaluation = evaluateChannelHealth(
+      {
+        connectionModel: "stateless",
+        running: true,
+        connected: false,
+        enabled: true,
+        configured: true,
+        lastStartAt: 0,
+        lastEventAt: null,
+      },
+      {
+        channelId: "line",
+        now: 100_000,
+        channelConnectGraceMs: 10_000,
+        staleEventThresholdMs: 30_000,
+      },
+    );
+    expect(evaluation).toEqual({ healthy: true, reason: "healthy" });
+  });
+
+  it("still marks stateless channels unhealthy when not running", () => {
+    const evaluation = evaluateChannelHealth(
+      {
+        connectionModel: "stateless",
+        running: false,
+        enabled: true,
+        configured: true,
+      },
+      {
+        channelId: "line",
+        now: 100_000,
+        channelConnectGraceMs: 10_000,
+        staleEventThresholdMs: 30_000,
+      },
+    );
+    expect(evaluation).toEqual({ healthy: false, reason: "not-running" });
+  });
 });
 
 describe("resolveChannelRestartReason", () => {
