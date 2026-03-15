@@ -199,33 +199,37 @@ Gateway 侧注册 `message:received` internal hook → 广播 `chat.inbound` Web
 
 ## 时间线
 
-| 时间  | 事件                                                    |
-| ----- | ------------------------------------------------------- |
-| 09:00 | 开始开发，设计 WebSocket 事件方案                       |
-| 10:00 | 部署翻车，`openclaw.json` 被重置                        |
-| 10:30 | 写 `openclaw-dev.sh` 部署脚本                           |
-| 11:00 | 代码从零重写（第一版丢失）                              |
-| 11:30 | Claude Code review round 1-2                            |
-| 12:00 | PR-REVIEW.md/PR-SUMMARY.md 从 git 移除                  |
-| 13:00 | 首次部署测试——不工作                                    |
-| 13:30 | 误判 bundler 问题，被 Claude 纠正                       |
-| 13:55 | 找到真正 bug: `clearInternalHooks()` 时序               |
-| 14:04 | 修复后 hook 正确触发（日志确认）                        |
-| 14:25 | 发现消息持久化时序问题                                  |
-| 14:37 | 二次刷新 3000ms 方案生效，用户消息实时同步 ✅           |
-| 14:51 | 发现 agent 回复不走 `chat` event                        |
-| 15:10 | 通过 WS Messages 确认只有 `agent` event                 |
-| 15:15 | 设计 `lifecycle.end` → `loadChatHistory` 方案           |
-| 16:15 | agent lifecycle.end 刷新方案验证通过                    |
-| 17:10 | 提出流式显示需求，分析 assistant + thinking stream 格式 |
-| 19:01 | 流式打字效果验证通过，全部功能完成 🎉                   |
-| 20:17 | PR #46093 提交到 openclaw/openclaw                      |
-| 20:21 | CI check 首次通过，进入 review 阶段                     |
-| 20:35 | Review bot (Greptile/ChatGPT) 发现 5 个 bug             |
-| 20:45 | 确认 5 个问题均为真实 bug，批量修复                     |
-| 21:31 | CI 类型错误修复（`type: "event" as const`）             |
-| 22:35 | 5 个 review bug 修复完成并 push                         |
-| 22:48 | CI check 再次通过，仅剩 test:extensions（上游问题）     |
-| 23:19 | chatStream 清理时机 bug — .then() 无法区分成败          |
-| 23:42 | 修复：删掉 .then()，由 loadChatHistory 内部清理         |
-| 23:44 | lifecycle.end 加 runId 过滤，防止 sub-agent 误刷        |
+| 时间     | 事件                                                                                                           |
+| -------- | -------------------------------------------------------------------------------------------------------------- |
+| 09:00    | 开始开发，设计 WebSocket 事件方案                                                                              |
+| 10:00    | 部署翻车，`openclaw.json` 被重置                                                                               |
+| 10:30    | 写 `openclaw-dev.sh` 部署脚本                                                                                  |
+| 11:00    | 代码从零重写（第一版丢失）                                                                                     |
+| 11:30    | Claude Code review round 1-2                                                                                   |
+| 12:00    | PR-REVIEW.md/PR-SUMMARY.md 从 git 移除                                                                         |
+| 13:00    | 首次部署测试——不工作                                                                                           |
+| 13:30    | 误判 bundler 问题，被 Claude 纠正                                                                              |
+| 13:55    | 找到真正 bug: `clearInternalHooks()` 时序                                                                      |
+| 14:04    | 修复后 hook 正确触发（日志确认）                                                                               |
+| 14:25    | 发现消息持久化时序问题                                                                                         |
+| 14:37    | 二次刷新 3000ms 方案生效，用户消息实时同步 ✅                                                                  |
+| 14:51    | 发现 agent 回复不走 `chat` event                                                                               |
+| 15:10    | 通过 WS Messages 确认只有 `agent` event                                                                        |
+| 15:15    | 设计 `lifecycle.end` → `loadChatHistory` 方案                                                                  |
+| 16:15    | agent lifecycle.end 刷新方案验证通过                                                                           |
+| 17:10    | 提出流式显示需求，分析 assistant + thinking stream 格式                                                        |
+| 19:01    | 流式打字效果验证通过，全部功能完成 🎉                                                                          |
+| 20:17    | PR #46093 提交到 openclaw/openclaw                                                                             |
+| 20:21    | CI check 首次通过，进入 review 阶段                                                                            |
+| 20:35    | Review bot (Greptile/ChatGPT) 发现 5 个 bug                                                                    |
+| 20:45    | 确认 5 个问题均为真实 bug，批量修复                                                                            |
+| 21:31    | CI 类型错误修复（`type: "event" as const`）                                                                    |
+| 22:35    | 5 个 review bug 修复完成并 push                                                                                |
+| 22:48    | CI check 再次通过，仅剩 test:extensions（上游问题）                                                            |
+| 23:19    | chatStream 清理时机 bug — .then() 无法区分成败                                                                 |
+| 23:42    | 修复：删掉 .then()，由 loadChatHistory 内部清理                                                                |
+| 23:44    | lifecycle.end 加 runId 过滤，防止 sub-agent 误刷                                                               |
+| **3/15** |                                                                                                                |
+| 08:52    | Review 再收到 3 条评论（run 隔离不完整）                                                                       |
+| 08:58    | Claude 修复 3 处：debouncedLoadChatHistory 加 chatRunId 守卫，app-tool-stream assistant/thinking 加 runId 过滤 |
+| 08:59    | 诺亚 code review 确认无问题，commit + push to fork                                                             |
