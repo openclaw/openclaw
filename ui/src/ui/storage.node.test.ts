@@ -337,4 +337,158 @@ describe("loadSettings default gateway URL derivation", () => {
       navWidth: 320,
     });
   });
+
+  it("isolates settings by basePath", async () => {
+    // Setup: Save settings for gateway-a
+    setTestLocation({
+      protocol: "https:",
+      host: "gateway.example:8443",
+      pathname: "/gateway-a/chat",
+    });
+
+    const { loadSettings: loadA, saveSettings: saveA } = await import("./storage.ts");
+    saveA({
+      gatewayUrl: "wss://gateway-a.example:8001",
+      token: "token-a",
+      sessionKey: "session-a",
+      lastActiveSessionKey: "session-a",
+      theme: "claw",
+      themeMode: "dark",
+      chatFocusMode: false,
+      chatShowThinking: true,
+      chatShowToolCalls: true,
+      splitRatio: 0.5,
+      navCollapsed: false,
+      navWidth: 240,
+      navGroupsCollapsed: {},
+    });
+
+    // Verify gateway-a settings are stored with basePath-specific key
+    expect(localStorage.getItem("openclaw.control.settings.v1:/gateway-a")).toBeTruthy();
+    expect(loadA()).toMatchObject({
+      gatewayUrl: "wss://gateway-a.example:8001",
+      sessionKey: "session-a",
+      splitRatio: 0.5,
+    });
+
+    // Switch to gateway-b
+    vi.resetModules();
+    setTestLocation({
+      protocol: "https:",
+      host: "gateway.example:8443",
+      pathname: "/gateway-b/chat",
+    });
+
+    const { loadSettings: loadB, saveSettings: saveB } = await import("./storage.ts");
+    saveB({
+      gatewayUrl: "wss://gateway-b.example:8002",
+      token: "token-b",
+      sessionKey: "session-b",
+      lastActiveSessionKey: "session-b",
+      theme: "dash",
+      themeMode: "light",
+      chatFocusMode: true,
+      chatShowThinking: false,
+      chatShowToolCalls: true,
+      splitRatio: 0.7,
+      navCollapsed: true,
+      navWidth: 300,
+      navGroupsCollapsed: {},
+    });
+
+    // Verify gateway-b settings are stored separately
+    expect(localStorage.getItem("openclaw.control.settings.v1:/gateway-b")).toBeTruthy();
+    expect(loadB()).toMatchObject({
+      gatewayUrl: "wss://gateway-b.example:8002",
+      sessionKey: "session-b",
+      splitRatio: 0.7,
+    });
+
+    // Verify gateway-a settings are still intact
+    vi.resetModules();
+    setTestLocation({
+      protocol: "https:",
+      host: "gateway.example:8443",
+      pathname: "/gateway-a/overview",
+    });
+
+    const { loadSettings: loadA2 } = await import("./storage.ts");
+    expect(loadA2()).toMatchObject({
+      gatewayUrl: "wss://gateway-a.example:8001",
+      sessionKey: "session-a",
+      splitRatio: 0.5,
+    });
+  });
+
+  it("migrates legacy settings when accessing non-root basePath", async () => {
+    // Setup: legacy data in old key
+    setTestLocation({
+      protocol: "https:",
+      host: "gateway.example:8443",
+      pathname: "/apps/openclaw/chat",
+    });
+
+    localStorage.setItem(
+      "openclaw.control.settings.v1",
+      JSON.stringify({
+        gatewayUrl: "wss://gateway.example:8443/legacy",
+        sessionKey: "legacy-session",
+        theme: "claw",
+        themeMode: "system",
+        chatFocusMode: false,
+        chatShowThinking: true,
+        splitRatio: 0.6,
+        navCollapsed: false,
+        navWidth: 220,
+        navGroupsCollapsed: {},
+      }),
+    );
+
+    const { loadSettings } = await import("./storage.ts");
+    const settings = loadSettings();
+
+    // Verify settings were migrated
+    expect(settings).toMatchObject({
+      sessionKey: "legacy-session",
+    });
+
+    // Verify new key exists
+    expect(localStorage.getItem("openclaw.control.settings.v1:/apps/openclaw")).toBeTruthy();
+
+    // Verify old key was removed
+    expect(localStorage.getItem("openclaw.control.settings.v1")).toBeNull();
+  });
+
+  it("does not migrate when basePath is empty (root path)", async () => {
+    setTestLocation({
+      protocol: "https:",
+      host: "gateway.example:8443",
+      pathname: "/",
+    });
+
+    localStorage.setItem(
+      "openclaw.control.settings.v1",
+      JSON.stringify({
+        gatewayUrl: "wss://gateway.example:8443",
+        sessionKey: "root-session",
+        theme: "claw",
+        themeMode: "system",
+        chatFocusMode: false,
+        chatShowThinking: true,
+        splitRatio: 0.6,
+        navCollapsed: false,
+        navWidth: 220,
+        navGroupsCollapsed: {},
+      }),
+    );
+
+    const { loadSettings } = await import("./storage.ts");
+    const settings = loadSettings();
+
+    // Verify settings were loaded
+    expect(settings.sessionKey).toBe("root-session");
+
+    // Verify key remains unchanged (no migration)
+    expect(localStorage.getItem("openclaw.control.settings.v1")).toBeTruthy();
+  });
 });

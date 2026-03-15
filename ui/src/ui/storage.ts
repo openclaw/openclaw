@@ -8,6 +8,11 @@ import { isSupportedLocale } from "../i18n/index.ts";
 import { inferBasePathFromPathname, normalizeBasePath } from "./navigation.ts";
 import { parseThemeSelection, type ThemeMode, type ThemeName } from "./theme.ts";
 
+function getStorageKey(basePath: string): string {
+  const normalized = normalizeBasePath(basePath);
+  return normalized ? `${KEY}:${normalized}` : KEY;
+}
+
 export type UiSettings = {
   gatewayUrl: string;
   token: string;
@@ -122,6 +127,8 @@ function persistSessionToken(gatewayUrl: string, token: string) {
 
 export function loadSettings(): UiSettings {
   const { pageUrl: pageDerivedUrl, effectiveUrl: defaultUrl } = deriveDefaultGatewayUrl();
+  const basePath = inferBasePathFromPathname(location.pathname);
+  const storageKey = getStorageKey(basePath);
 
   const defaults: UiSettings = {
     gatewayUrl: defaultUrl,
@@ -140,7 +147,19 @@ export function loadSettings(): UiSettings {
   };
 
   try {
-    const raw = localStorage.getItem(KEY);
+    // Try reading from the basePath-specific key first
+    let raw = localStorage.getItem(storageKey);
+
+    // Migration: if no data in new key and basePath is non-empty, try legacy key
+    if (!raw && basePath) {
+      raw = localStorage.getItem(KEY);
+      if (raw) {
+        // Migrate: copy old data to new key, then remove old key
+        localStorage.setItem(storageKey, raw);
+        localStorage.removeItem(KEY);
+      }
+    }
+
     if (!raw) {
       return defaults;
     }
@@ -212,6 +231,8 @@ export function saveSettings(next: UiSettings) {
 
 function persistSettings(next: UiSettings) {
   persistSessionToken(next.gatewayUrl, next.token);
+  const basePath = inferBasePathFromPathname(location.pathname);
+  const storageKey = getStorageKey(basePath);
   const persisted: PersistedUiSettings = {
     gatewayUrl: next.gatewayUrl,
     sessionKey: next.sessionKey,
@@ -227,5 +248,5 @@ function persistSettings(next: UiSettings) {
     navGroupsCollapsed: next.navGroupsCollapsed,
     ...(next.locale ? { locale: next.locale } : {}),
   };
-  localStorage.setItem(KEY, JSON.stringify(persisted));
+  localStorage.setItem(storageKey, JSON.stringify(persisted));
 }
