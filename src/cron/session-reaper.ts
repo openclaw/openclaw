@@ -14,6 +14,7 @@ import {
 } from "../config/sessions.js";
 import type { CronConfig } from "../config/types.cron.js";
 import { cleanupArchivedSessionTranscripts } from "../gateway/session-utils.fs.js";
+import { parseAgentSessionKey } from "../sessions/session-key-utils.js";
 import { isCronRunSessionKey } from "../sessions/session-key-utils.js";
 import type { Logger } from "./service/state.js";
 
@@ -144,6 +145,75 @@ export async function sweepCronRunSessions(params: {
   }
 
   return { swept: true, pruned };
+}
+
+/**
+ * Purge all sessions associated with a deleted cron job.
+ * Removes both the base session and all run sessions.
+ */
+export async function purgeCronJobSessions(params: {
+  jobId: string;
+  sessionStorePath: string;
+  log: Logger;
+}): Promise<void> {
+  const storePath = params.sessionStorePath;
+  const jobId = params.jobId;
+  const removedSessions = new Map<string, string | undefined>();
+
+  try {
+    await updateSessionStore(storePath, (store) => {
+      for (const key of Object.keys(store)) {
+        const parsed = parseAgentSessionKey(key);
+        if (!parsed) {
+          continue;
+        }
+
+        // Match base session (cron:<jobId>) or run session (cron:<jobId>:run:<uuid>)
+        const isBase = parsed.rest === `cron:${jobId}`;
+        const isRun = parsed.rest.startsWith(`cron:${jobId}:run:`);
+
+        if (isBase || isRun) {
+          const entry = store[key];
+          if (entry) {
+            removedSessions.set(entry.sessionId, entry.sessionFile);
+          }
+          delete store[key];
+        }
+      }
+    });
+  } catch (err) {
+    params.log.warn({ err: String(err), jobId }, "cron-reaper: failed to purge job sessions");
+    return;
+  }
+
+  // Cleanup transcripts for purged sessions
+  if (removedSessions.size > 0) {
+    try {
+      const store = loadSessionStore(storePath, { skipCache: true });
+      const referencedSessionIds = new Set(
+        Object.values(store)
+          .map((entry) => entry?.sessionId)
+          .filter((id): id is string => Boolean(id)),
+      );
+      const archivedDirs = archiveRemovedSessionTranscripts({
+        removedSessionFiles: removedSessions,
+        referencedSessionIds,
+        storePath,
+        reason: "deleted",
+        restrictToStoreDir: true,
+      });
+      if (archivedDirs.size > 0) {
+        await cleanupArchivedSessionTranscripts({
+          directories: [...archivedDirs],
+          olderThanMs: 0, // delete immediately
+          reason: "deleted",
+          nowMs: Date.now(),
+        });
+      }
+    } catch (err) {
+      params.log.warn({ err: String(err), jobId }, "cron-reaper: purged transcript cleanup failed");
+    }
+  }
 }
 
 /** Reset the throttle timer (for tests). */
