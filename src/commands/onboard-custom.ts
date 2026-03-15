@@ -346,7 +346,9 @@ async function requestOpenAiVerification(params: {
       body: {
         model: params.modelId,
         messages: [{ role: "user", content: "Hi" }],
-        max_tokens: 1,
+        // Must be >= 1024 for providers that enforce minimum budget_tokens
+        // on Extended Thinking models (e.g. Poe with Claude).
+        max_tokens: 1024,
         stream: false,
       },
     });
@@ -374,7 +376,8 @@ async function requestAnthropicVerification(params: {
     headers: buildAnthropicHeaders(params.apiKey),
     body: {
       model: params.modelId,
-      max_tokens: 1,
+      // Must be >= 1024 for Extended Thinking models (budget_tokens minimum).
+      max_tokens: 1024,
       messages: [{ role: "user", content: "Hi" }],
       stream: false,
     },
