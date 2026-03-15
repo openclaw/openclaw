@@ -4,6 +4,7 @@ import type { ReasoningLevel, VerboseLevel } from "../../../auto-reply/thinking.
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../../../auto-reply/tokens.js";
 import { formatToolAggregate } from "../../../auto-reply/tool-meta.js";
 import type { OpenClawConfig } from "../../../config/config.js";
+import type { AssistantOutputEntry } from "../../assistant-output.js";
 import {
   BILLING_ERROR_USER_MESSAGE,
   formatAssistantErrorText,
@@ -89,6 +90,8 @@ function resolveToolErrorWarningPolicy(params: {
 
 export function buildEmbeddedRunPayloads(params: {
   assistantTexts: string[];
+  assistantOutputs?: AssistantOutputEntry[];
+  deliveredCommentarySegmentIds?: string[];
   toolMetas: ToolMetaEntry[];
   lastAssistant: AssistantMessage | undefined;
   lastToolError?: LastToolError;
@@ -249,14 +252,30 @@ export function buildEmbeddedRunPayloads(params: {
     }
     return isRawApiErrorPayload(trimmed);
   };
+  const deliveredCommentarySegmentIds = new Set(params.deliveredCommentarySegmentIds ?? []);
+  const resolvedAssistantTexts = (() => {
+    if (params.assistantOutputs && params.assistantOutputs.length > 0) {
+      const filteredAssistantOutputs = params.assistantOutputs
+        .filter((segment) => {
+          return !(
+            segment.phase === "commentary" && deliveredCommentarySegmentIds.has(segment.segmentId)
+          );
+        })
+        .map((segment) => segment.text);
+      if (filteredAssistantOutputs.length > 0) {
+        return filteredAssistantOutputs;
+      }
+      return [];
+    }
+    return params.assistantTexts.length
+      ? params.assistantTexts
+      : fallbackAnswerText
+        ? [fallbackAnswerText]
+        : [];
+  })();
   const answerTexts = suppressAssistantArtifacts
     ? []
-    : (params.assistantTexts.length
-        ? params.assistantTexts
-        : fallbackAnswerText
-          ? [fallbackAnswerText]
-          : []
-      ).filter((text) => !shouldSuppressRawErrorText(text));
+    : resolvedAssistantTexts.filter((text) => !shouldSuppressRawErrorText(text));
 
   let hasUserFacingAssistantReply = false;
   for (const text of answerTexts) {

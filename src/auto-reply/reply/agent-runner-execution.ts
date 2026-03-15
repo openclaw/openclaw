@@ -359,6 +359,7 @@ export async function runAgentTurnWithFallback(params: {
                     mediaUrls: payload.mediaUrls,
                   });
                 },
+                onCommentaryReply: params.opts?.onCommentaryReply,
                 onAssistantMessageStart: async () => {
                   await params.typingSignals.signalMessageStart();
                   await params.opts?.onAssistantMessageStart?.();
@@ -421,6 +422,7 @@ export async function runAgentTurnWithFallback(params: {
                       directlySentBlockKeys,
                     })
                   : undefined,
+                blockReplyTimeoutMs: params.opts?.blockReplyTimeoutMs,
                 onBlockReplyFlush:
                   params.blockStreamingEnabled && blockReplyPipeline
                     ? async () => {

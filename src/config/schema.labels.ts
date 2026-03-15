@@ -749,6 +749,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "channels.telegram.threadBindings.spawnAcpSessions": "Telegram Thread-Bound ACP Spawn",
   "channels.whatsapp.dmPolicy": "WhatsApp DM Policy",
   "channels.whatsapp.selfChatMode": "WhatsApp Self-Phone Mode",
+  "channels.whatsapp.commentaryDelivery": "WhatsApp Live Commentary Delivery",
   "channels.whatsapp.debounceMs": "WhatsApp Message Debounce (ms)",
   "channels.whatsapp.configWrites": "WhatsApp Config Writes",
   "channels.signal.dmPolicy": "Signal DM Policy",

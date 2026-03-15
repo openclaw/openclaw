@@ -9,7 +9,8 @@ import {
 } from "../../../../../src/auto-reply/reply/history.js";
 import { finalizeInboundContext } from "../../../../../src/auto-reply/reply/inbound-context.js";
 import { dispatchReplyWithBufferedBlockDispatcher } from "../../../../../src/auto-reply/reply/provider-dispatcher.js";
-import type { ReplyPayload } from "../../../../../src/auto-reply/types.js";
+import { normalizeReplyPayloadDirectives } from "../../../../../src/auto-reply/reply/reply-delivery.js";
+import type { BlockReplyContext, ReplyPayload } from "../../../../../src/auto-reply/types.js";
 import { toLocationContext } from "../../../../../src/channels/location.js";
 import { createReplyPrefixOptions } from "../../../../../src/channels/reply-prefix.js";
 import { resolveInboundSessionEnvelopeContext } from "../../../../../src/channels/session-envelope.js";
@@ -123,6 +124,7 @@ function resolvePinnedMainDmRecipient(params: {
   });
 }
 
+// Returns true if any reply visible to the user was delivered, including live commentary.
 export async function processMessage(params: {
   cfg: ReturnType<typeof loadConfig>;
   msg: WebInboundMsg;
@@ -275,10 +277,15 @@ export async function processMessage(params: {
     channel: "whatsapp",
     accountId: params.route.accountId,
   });
+  const whatsAppAccount = resolveWhatsAppAccount({
+    cfg: params.cfg,
+    accountId: params.route.accountId,
+  });
   const isSelfChat =
     params.msg.chatType !== "group" &&
     Boolean(params.msg.selfE164) &&
     normalizeE164(params.msg.from) === normalizeE164(params.msg.selfE164 ?? "");
+  const commentaryDelivery = whatsAppAccount.commentaryDelivery ?? "off";
   const responsePrefix =
     prefixOptions.responsePrefix ??
     (configuredResponsePrefix === undefined && isSelfChat
@@ -388,6 +395,73 @@ export async function processMessage(params: {
   });
   trackBackgroundTask(params.backgroundTasks, metaTask);
 
+  const sendWhatsAppPayload = async (
+    payload: ReplyPayload,
+    kind: "commentary" | "final",
+    context?: BlockReplyContext,
+  ): Promise<void> => {
+    if (context?.abortSignal?.aborted) {
+      throw context.abortSignal.reason instanceof Error
+        ? context.abortSignal.reason
+        : new Error(String(context.abortSignal.reason ?? "aborted"));
+    }
+    const normalized = normalizeReplyPayloadDirectives({
+      payload,
+      trimLeadingWhitespace: true,
+      parseMode: "auto",
+    });
+    const hasMedia =
+      Boolean(normalized.payload.mediaUrl) || (normalized.payload.mediaUrls?.length ?? 0) > 0;
+    if (normalized.isSilent && !hasMedia) {
+      return;
+    }
+
+    await deliverWebReply({
+      replyResult: normalized.payload,
+      msg: params.msg,
+      mediaLocalRoots,
+      maxMediaBytes: params.maxMediaBytes,
+      textLimit,
+      chunkMode,
+      replyLogger: params.replyLogger,
+      connectionId: params.connectionId,
+      abortSignal: context?.abortSignal,
+      timeoutMs: context?.timeoutMs,
+      skipLog: false,
+      tableMode,
+    });
+    didSendReply = true;
+
+    params.rememberSentText(
+      normalized.payload.text,
+      kind === "final"
+        ? {
+            combinedBody,
+            combinedBodySessionKey: params.route.sessionKey,
+            logVerboseMessage: normalized.payload.text ? true : undefined,
+          }
+        : {
+            logVerboseMessage: normalized.payload.text ? true : undefined,
+          },
+    );
+
+    const fromDisplay =
+      params.msg.chatType === "group" ? conversationId : (params.msg.from ?? "unknown");
+    if (kind === "commentary") {
+      whatsappOutboundLog.info(
+        `Sent commentary update to ${fromDisplay}${hasMedia ? " (media)" : ""}`,
+      );
+    } else {
+      whatsappOutboundLog.info(`Auto-replied to ${fromDisplay}${hasMedia ? " (media)" : ""}`);
+    }
+    if (shouldLogVerbose()) {
+      const preview =
+        normalized.payload.text != null ? elide(normalized.payload.text, 400) : "<media>";
+      const prefix = kind === "commentary" ? "Commentary body" : "Reply body";
+      whatsappOutboundLog.debug(`${prefix}: ${preview}${hasMedia ? " (media)" : ""}`);
+    }
+  };
+
   const { queuedFinal } = await dispatchReplyWithBufferedBlockDispatcher({
     ctx: ctxPayload,
     cfg: params.cfg,
@@ -408,33 +482,7 @@ export async function processMessage(params: {
           // web UI only; sending them here leaks chain-of-thought to end users.
           return;
         }
-        await deliverWebReply({
-          replyResult: payload,
-          msg: params.msg,
-          mediaLocalRoots,
-          maxMediaBytes: params.maxMediaBytes,
-          textLimit,
-          chunkMode,
-          replyLogger: params.replyLogger,
-          connectionId: params.connectionId,
-          skipLog: false,
-          tableMode,
-        });
-        didSendReply = true;
-        const shouldLog = payload.text ? true : undefined;
-        params.rememberSentText(payload.text, {
-          combinedBody,
-          combinedBodySessionKey: params.route.sessionKey,
-          logVerboseMessage: shouldLog,
-        });
-        const fromDisplay =
-          params.msg.chatType === "group" ? conversationId : (params.msg.from ?? "unknown");
-        const hasMedia = Boolean(payload.mediaUrl || payload.mediaUrls?.length);
-        whatsappOutboundLog.info(`Auto-replied to ${fromDisplay}${hasMedia ? " (media)" : ""}`);
-        if (shouldLogVerbose()) {
-          const preview = payload.text != null ? elide(payload.text, 400) : "<media>";
-          whatsappOutboundLog.debug(`Reply body: ${preview}${hasMedia ? " (media)" : ""}`);
-        }
+        await sendWhatsAppPayload(payload, "final");
       },
       onError: (err, info) => {
         const label =
@@ -453,6 +501,12 @@ export async function processMessage(params: {
       // WhatsApp delivery intentionally suppresses non-final payloads.
       // Keep block streaming disabled so final replies are still produced.
       disableBlockStreaming: true,
+      onCommentaryReply:
+        commentaryDelivery === "live"
+          ? async (payload, context) => {
+              await sendWhatsAppPayload(payload, "commentary", context);
+            }
+          : undefined,
       onModelSelected,
     },
   });
@@ -461,8 +515,10 @@ export async function processMessage(params: {
     if (shouldClearGroupHistory) {
       params.groupHistories.set(params.groupHistoryKey, []);
     }
-    logVerbose("Skipping auto-reply: silent token or no text/media returned from resolver");
-    return false;
+    if (!didSendReply) {
+      logVerbose("Skipping auto-reply: silent token or no text/media returned from resolver");
+    }
+    return didSendReply;
   }
 
   if (shouldClearGroupHistory) {

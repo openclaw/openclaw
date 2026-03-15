@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { SILENT_REPLY_TOKEN } from "../../../../../src/auto-reply/tokens.js";
 import { expectInboundContextContract } from "../../../../../test/helpers/inbound-contract.js";
 
 let capturedCtx: unknown;
@@ -63,13 +64,19 @@ function makeProcessMessageArgs(params: {
 
 function createWhatsAppDirectStreamingArgs(params?: {
   rememberSentText?: (text: string | undefined, opts: unknown) => void;
+  commentaryDelivery?: "off" | "live";
 }) {
   return makeProcessMessageArgs({
     routeSessionKey: "agent:main:whatsapp:direct:+1555",
     groupHistoryKey: "+1555",
     rememberSentText: params?.rememberSentText,
     cfg: {
-      channels: { whatsapp: { blockStreaming: true } },
+      channels: {
+        whatsapp: {
+          blockStreaming: true,
+          ...(params?.commentaryDelivery ? { commentaryDelivery: params.commentaryDelivery } : {}),
+        },
+      },
       messages: {},
       session: { store: sessionStorePath },
     } as unknown as ReturnType<typeof import("../../../../../src/config/config.js").loadConfig>,
@@ -177,6 +184,58 @@ describe("web processMessage inbound contract", () => {
     expect(capturedCtx).toBeTruthy();
     // oxlint-disable-next-line typescript/no-explicit-any
     expectInboundContextContract(capturedCtx as any);
+  });
+
+  it("strips reply directives from live commentary before WhatsApp delivery", async () => {
+    await processMessage(createWhatsAppDirectStreamingArgs({ commentaryDelivery: "live" }));
+
+    // oxlint-disable-next-line typescript/no-explicit-any
+    const onCommentaryReply = (capturedDispatchParams as any)?.replyOptions?.onCommentaryReply as
+      | ((
+          payload: { text?: string },
+          context?: { abortSignal?: AbortSignal; timeoutMs?: number },
+        ) => Promise<void>)
+      | undefined;
+
+    expect(onCommentaryReply).toBeTypeOf("function");
+
+    await onCommentaryReply?.({
+      text: "[[reply_to_current]] Step 2/3: running lint.",
+    });
+
+    expect(deliverWebReplyMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        replyResult: expect.objectContaining({
+          text: "Step 2/3: running lint.",
+          replyToCurrent: true,
+        }),
+      }),
+    );
+  });
+
+  it("skips silent commentary payloads after directive normalization", async () => {
+    const rememberSentText = vi.fn();
+    await processMessage(
+      createWhatsAppDirectStreamingArgs({
+        commentaryDelivery: "live",
+        rememberSentText,
+      }),
+    );
+
+    // oxlint-disable-next-line typescript/no-explicit-any
+    const onCommentaryReply = (capturedDispatchParams as any)?.replyOptions?.onCommentaryReply as
+      | ((
+          payload: { text?: string },
+          context?: { abortSignal?: AbortSignal; timeoutMs?: number },
+        ) => Promise<void>)
+      | undefined;
+    expect(onCommentaryReply).toBeTypeOf("function");
+
+    deliverWebReplyMock.mockClear();
+    await onCommentaryReply?.({ text: SILENT_REPLY_TOKEN });
+
+    expect(deliverWebReplyMock).not.toHaveBeenCalled();
+    expect(rememberSentText).not.toHaveBeenCalled();
   });
 
   it("falls back SenderId to SenderE164 when senderJid is empty", async () => {
@@ -298,6 +357,13 @@ describe("web processMessage inbound contract", () => {
     await deliver?.({ text: "final payload" }, { kind: "final" });
     expect(deliverWebReplyMock).toHaveBeenCalledTimes(1);
     expect(rememberSentText).toHaveBeenCalledTimes(1);
+    const [, finalRememberOptions] = rememberSentText.mock.calls[0] ?? [];
+    expect(finalRememberOptions).toEqual(
+      expect.objectContaining({
+        combinedBody: expect.any(String),
+        combinedBodySessionKey: "agent:main:whatsapp:direct:+1555",
+      }),
+    );
   });
 
   it("forces disableBlockStreaming for WhatsApp dispatch", async () => {
@@ -306,6 +372,109 @@ describe("web processMessage inbound contract", () => {
     // oxlint-disable-next-line typescript/no-explicit-any
     const replyOptions = (capturedDispatchParams as any)?.replyOptions;
     expect(replyOptions?.disableBlockStreaming).toBe(true);
+  });
+
+  it("wires live WhatsApp commentary through the normal send path", async () => {
+    const rememberSentText = vi.fn();
+    await processMessage(
+      createWhatsAppDirectStreamingArgs({
+        commentaryDelivery: "live",
+        rememberSentText,
+      }),
+    );
+
+    // oxlint-disable-next-line typescript/no-explicit-any
+    const onCommentaryReply = (capturedDispatchParams as any)?.replyOptions?.onCommentaryReply as
+      | ((
+          payload: { text?: string },
+          context?: { abortSignal?: AbortSignal; timeoutMs?: number },
+        ) => Promise<void>)
+      | undefined;
+    expect(onCommentaryReply).toBeTypeOf("function");
+
+    await onCommentaryReply?.({ text: "Checking the repo state now." });
+
+    expect(deliverWebReplyMock).toHaveBeenCalledTimes(1);
+    expect(rememberSentText).toHaveBeenCalledTimes(1);
+    const [, commentaryRememberOptions] = rememberSentText.mock.calls[0] ?? [];
+    expect(commentaryRememberOptions).toEqual(
+      expect.objectContaining({
+        logVerboseMessage: true,
+      }),
+    );
+    expect(commentaryRememberOptions).not.toEqual(
+      expect.objectContaining({
+        combinedBody: "echo",
+      }),
+    );
+  });
+
+  it("passes commentary timeout and abort context into WhatsApp delivery", async () => {
+    await processMessage(createWhatsAppDirectStreamingArgs({ commentaryDelivery: "live" }));
+
+    // oxlint-disable-next-line typescript/no-explicit-any
+    const onCommentaryReply = (capturedDispatchParams as any)?.replyOptions?.onCommentaryReply as
+      | ((
+          payload: { text?: string },
+          context?: { abortSignal?: AbortSignal; timeoutMs?: number },
+        ) => Promise<void>)
+      | undefined;
+    expect(onCommentaryReply).toBeTypeOf("function");
+
+    const abortController = new AbortController();
+    await onCommentaryReply?.(
+      { text: "Checking the repo state now." },
+      { abortSignal: abortController.signal, timeoutMs: 1234 },
+    );
+
+    expect(deliverWebReplyMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        abortSignal: abortController.signal,
+        timeoutMs: 1234,
+      }),
+    );
+  });
+
+  it("does not remember commentary as delivered when the send is already aborted", async () => {
+    const rememberSentText = vi.fn();
+    await processMessage(
+      createWhatsAppDirectStreamingArgs({
+        commentaryDelivery: "live",
+        rememberSentText,
+      }),
+    );
+
+    // oxlint-disable-next-line typescript/no-explicit-any
+    const onCommentaryReply = (capturedDispatchParams as any)?.replyOptions?.onCommentaryReply as
+      | ((
+          payload: { text?: string },
+          context?: { abortSignal?: AbortSignal; timeoutMs?: number },
+        ) => Promise<void>)
+      | undefined;
+    expect(onCommentaryReply).toBeTypeOf("function");
+
+    const abortController = new AbortController();
+    const abortError = new Error("commentary aborted");
+    abortError.name = "AbortError";
+    abortController.abort(abortError);
+
+    await expect(
+      onCommentaryReply?.(
+        { text: "Checking the repo state now." },
+        { abortSignal: abortController.signal },
+      ),
+    ).rejects.toThrow("commentary aborted");
+
+    expect(deliverWebReplyMock).not.toHaveBeenCalled();
+    expect(rememberSentText).not.toHaveBeenCalled();
+  });
+
+  it("keeps live WhatsApp commentary disabled by default", async () => {
+    await processMessage(createWhatsAppDirectStreamingArgs());
+
+    // oxlint-disable-next-line typescript/no-explicit-any
+    const replyOptions = (capturedDispatchParams as any)?.replyOptions;
+    expect(replyOptions?.onCommentaryReply).toBeUndefined();
   });
 
   it("passes sendComposing through as the reply typing callback", async () => {

@@ -233,8 +233,12 @@ type MutableSession = {
 function createSubscriptionMock() {
   return {
     assistantTexts: [] as string[],
+    assistantOutputs: [] as Array<{ segmentId: string; text: string; phase?: string | null }>,
     toolMetas: [] as Array<{ toolName: string; meta?: string }>,
     unsubscribe: () => {},
+    deliveredCommentarySegmentIds: () => [] as string[],
+    waitForCommentaryDelivery: async () => {},
+    abortCommentaryDelivery: () => {},
     waitForCompactionRetry: async () => {},
     getMessagingToolSentTexts: () => [] as string[],
     getMessagingToolSentMediaUrls: () => [] as string[],

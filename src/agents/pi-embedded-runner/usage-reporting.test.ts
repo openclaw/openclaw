@@ -1,15 +1,7 @@
 import "./run.overflow-compaction.mocks.shared.js";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-
-const runtimePluginMocks = vi.hoisted(() => ({
-  ensureRuntimePluginsLoaded: vi.fn(),
-}));
-
-vi.mock("../runtime-plugins.js", () => ({
-  ensureRuntimePluginsLoaded: runtimePluginMocks.ensureRuntimePluginsLoaded,
-}));
-
 import { runEmbeddedPiAgent } from "./run.js";
+import { mockedEnsureRuntimePluginsLoaded } from "./run.overflow-compaction.mocks.shared.js";
 import { runEmbeddedAttempt } from "./run/attempt.js";
 
 const mockedRunEmbeddedAttempt = vi.mocked(runEmbeddedAttempt);
@@ -39,7 +31,7 @@ describe("runEmbeddedPiAgent usage reporting", () => {
       runId: "run-plugin-bootstrap",
     });
 
-    expect(runtimePluginMocks.ensureRuntimePluginsLoaded).toHaveBeenCalledWith({
+    expect(mockedEnsureRuntimePluginsLoaded).toHaveBeenCalledWith({
       config: undefined,
       workspaceDir: "/tmp/workspace",
     });
@@ -75,6 +67,36 @@ describe("runEmbeddedPiAgent usage reporting", () => {
         senderName: "Josh Lehman",
         senderUsername: "josh",
         senderE164: "+15551234567",
+      }),
+    );
+  });
+
+  it("forwards live commentary callbacks into embedded attempts", async () => {
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce({
+      aborted: false,
+      promptError: null,
+      timedOut: false,
+      sessionIdUsed: "test-session",
+      assistantTexts: ["Response 1"],
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    } as any);
+
+    const onCommentaryReply = vi.fn();
+
+    await runEmbeddedPiAgent({
+      sessionId: "test-session",
+      sessionKey: "test-key",
+      sessionFile: "/tmp/session.json",
+      workspaceDir: "/tmp/workspace",
+      prompt: "hello",
+      timeoutMs: 30000,
+      runId: "run-commentary-forwarding",
+      onCommentaryReply,
+    });
+
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledWith(
+      expect.objectContaining({
+        onCommentaryReply,
       }),
     );
   });
@@ -156,5 +178,38 @@ describe("runEmbeddedPiAgent usage reporting", () => {
     // Check if total matches the last turn's total (200)
     // If the bug exists, it will likely be 350
     expect(usage?.total).toBe(200);
+  });
+
+  it("emits the timeout payload instead of replaying live-delivered commentary", async () => {
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce({
+      aborted: true,
+      promptError: null,
+      timedOut: true,
+      timedOutDuringCompaction: false,
+      sessionIdUsed: "test-session",
+      assistantTexts: ["Checking the repo state now."],
+      assistantOutputs: [
+        { segmentId: "c1", text: "Checking the repo state now.", phase: "commentary" },
+      ],
+      deliveredCommentarySegmentIds: ["c1"],
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    } as any);
+
+    const result = await runEmbeddedPiAgent({
+      sessionId: "test-session",
+      sessionKey: "test-key",
+      sessionFile: "/tmp/session.json",
+      workspaceDir: "/tmp/workspace",
+      prompt: "hello",
+      timeoutMs: 30000,
+      runId: "run-timeout-commentary-fallback",
+    });
+
+    expect(result.payloads).toHaveLength(1);
+    expect(result.payloads[0]?.isError).toBe(true);
+    expect(result.payloads[0]?.text).toContain(
+      "Request timed out before a response was generated.",
+    );
+    expect(result.payloads[0]?.text).not.toContain("Checking the repo state now.");
   });
 });

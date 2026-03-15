@@ -64,6 +64,10 @@ function mockSecondReplySuccess(msg: WebInboundMsg) {
   );
 }
 
+function createNeverSettlingPromise<T>() {
+  return new Promise<T>(() => {});
+}
+
 const replyLogger = {
   info: vi.fn(),
   warn: vi.fn(),
@@ -149,6 +153,121 @@ describe("deliverWebReply", () => {
     },
   );
 
+  it("stops sending later text chunks after commentary delivery is aborted", async () => {
+    const msg = makeMsg();
+    const abortController = new AbortController();
+    (sleep as unknown as { mockClear: () => void }).mockClear();
+    (
+      msg.reply as unknown as { mockImplementationOnce: (fn: () => Promise<void>) => void }
+    ).mockImplementationOnce(async () => {
+      const abortError = new Error("commentary aborted");
+      abortError.name = "AbortError";
+      abortController.abort(abortError);
+    });
+
+    await expect(
+      deliverWebReply({
+        replyResult: { text: "aaaaaa" },
+        msg,
+        maxMediaBytes: 1024 * 1024,
+        textLimit: 3,
+        replyLogger,
+        abortSignal: abortController.signal,
+        skipLog: true,
+      }),
+    ).rejects.toThrow("commentary aborted");
+
+    expect(msg.reply).toHaveBeenCalledTimes(1);
+  });
+
+  it("stops retry backoff once commentary delivery is aborted", async () => {
+    const msg = makeMsg();
+    const abortController = new AbortController();
+    (sleep as unknown as { mockClear: () => void }).mockClear();
+    (
+      msg.reply as unknown as { mockImplementationOnce: (fn: () => Promise<void>) => void }
+    ).mockImplementationOnce(async () => {
+      const abortError = new Error("commentary aborted");
+      abortError.name = "AbortError";
+      abortController.abort(abortError);
+      throw new Error("connection closed");
+    });
+
+    await expect(
+      deliverWebReply({
+        replyResult: { text: "hi" },
+        msg,
+        maxMediaBytes: 1024 * 1024,
+        textLimit: 200,
+        replyLogger,
+        abortSignal: abortController.signal,
+        skipLog: true,
+      }),
+    ).rejects.toThrow("commentary aborted");
+
+    expect(msg.reply).toHaveBeenCalledTimes(1);
+    expect(sleep).not.toHaveBeenCalled();
+  });
+
+  it("times out a hung text send instead of waiting forever", async () => {
+    vi.useFakeTimers();
+    try {
+      const msg = makeMsg();
+      (
+        msg.reply as unknown as { mockImplementationOnce: (fn: () => Promise<void>) => void }
+      ).mockImplementationOnce(() => createNeverSettlingPromise<void>());
+
+      const deliveryPromise = deliverWebReply({
+        replyResult: { text: "hi" },
+        msg,
+        maxMediaBytes: 1024 * 1024,
+        textLimit: 200,
+        replyLogger,
+        timeoutMs: 25,
+        skipLog: true,
+      });
+      const deliveryExpectation = expect(deliveryPromise).rejects.toThrow(
+        "delivery timed out after 25ms",
+      );
+
+      await vi.advanceTimersByTimeAsync(25);
+      await deliveryExpectation;
+      expect(msg.reply).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("times out a hung media send instead of waiting forever", async () => {
+    vi.useFakeTimers();
+    try {
+      const msg = makeMsg();
+      mockLoadedImageMedia();
+      (
+        msg.sendMedia as unknown as { mockImplementationOnce: (fn: () => Promise<void>) => void }
+      ).mockImplementationOnce(() => createNeverSettlingPromise<void>());
+
+      const deliveryPromise = deliverWebReply({
+        replyResult: { text: "caption", mediaUrl: "http://example.com/img.jpg" },
+        msg,
+        maxMediaBytes: 1024 * 1024,
+        textLimit: 200,
+        replyLogger,
+        timeoutMs: 25,
+        skipLog: true,
+      });
+      const deliveryExpectation = expect(deliveryPromise).rejects.toThrow(
+        "delivery timed out after 25ms",
+      );
+
+      await vi.advanceTimersByTimeAsync(25);
+      await deliveryExpectation;
+      expect(msg.sendMedia).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("sends image media with caption and then remaining text", async () => {
     const msg = makeMsg();
     const mediaLocalRoots = ["/tmp/workspace-work"];
@@ -224,6 +343,38 @@ describe("deliverWebReply", () => {
       expect.objectContaining({ mediaUrl: "http://example.com/img.jpg" }),
       "failed to send web media reply",
     );
+  });
+
+  it("times out a hung fallback text send after media failure", async () => {
+    vi.useFakeTimers();
+    try {
+      const msg = makeMsg();
+      mockLoadedImageMedia();
+      mockFirstSendMediaFailure(msg, "boom");
+      (
+        msg.reply as unknown as { mockImplementationOnce: (fn: () => Promise<void>) => void }
+      ).mockImplementationOnce(() => createNeverSettlingPromise<void>());
+
+      const deliveryPromise = deliverWebReply({
+        replyResult: { text: "caption", mediaUrl: "http://example.com/img.jpg" },
+        msg,
+        maxMediaBytes: 1024 * 1024,
+        textLimit: 20,
+        replyLogger,
+        timeoutMs: 25,
+        skipLog: true,
+      });
+      const deliveryExpectation = expect(deliveryPromise).rejects.toThrow(
+        "delivery timed out after 25ms",
+      );
+
+      await vi.advanceTimersByTimeAsync(25);
+      await deliveryExpectation;
+      expect(msg.sendMedia).toHaveBeenCalledTimes(1);
+      expect(msg.reply).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("sends audio media as ptt voice note", async () => {
@@ -311,5 +462,36 @@ describe("deliverWebReply", () => {
         mimetype: "application/octet-stream",
       }),
     );
+  });
+
+  it("times out a hung trailing text send after media delivery", async () => {
+    vi.useFakeTimers();
+    try {
+      const msg = makeMsg();
+      mockLoadedImageMedia();
+      (
+        msg.reply as unknown as { mockImplementationOnce: (fn: () => Promise<void>) => void }
+      ).mockImplementationOnce(() => createNeverSettlingPromise<void>());
+
+      const deliveryPromise = deliverWebReply({
+        replyResult: { text: "aaaaaa", mediaUrl: "http://example.com/img.jpg" },
+        msg,
+        maxMediaBytes: 1024 * 1024,
+        textLimit: 3,
+        replyLogger,
+        timeoutMs: 25,
+        skipLog: true,
+      });
+      const deliveryExpectation = expect(deliveryPromise).rejects.toThrow(
+        "delivery timed out after 25ms",
+      );
+
+      await vi.advanceTimersByTimeAsync(25);
+      await deliveryExpectation;
+      expect(msg.sendMedia).toHaveBeenCalledTimes(1);
+      expect(msg.reply).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

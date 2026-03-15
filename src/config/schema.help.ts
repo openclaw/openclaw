@@ -1533,6 +1533,8 @@ export const FIELD_HELP: Record<string, string> = {
   "channels.whatsapp.dmPolicy":
     'Direct message access control ("pairing" recommended). "open" requires channels.whatsapp.allowFrom=["*"].',
   "channels.whatsapp.selfChatMode": "Same-phone setup (bot uses your personal WhatsApp number).",
+  "channels.whatsapp.commentaryDelivery":
+    'WhatsApp live assistant commentary delivery. Use "live" to send interim `commentary` messages during the run; "off" keeps final-only delivery.',
   "channels.whatsapp.debounceMs":
     "Debounce window (ms) for batching rapid consecutive messages from the same sender (0 to disable).",
   "channels.signal.dmPolicy":
