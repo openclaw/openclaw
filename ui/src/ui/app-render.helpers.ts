@@ -535,8 +535,11 @@ function resolveModelOverrideValue(state: AppViewState): string {
     const model = typeof activeRow.model === "string" ? activeRow.model.trim() : "";
     const provider =
       typeof activeRow.modelProvider === "string" ? activeRow.modelProvider.trim() : "";
-    if (model && provider && !model.includes("/")) {
-      return `${provider}/${model}`;
+    if (model && provider) {
+      const firstSegment = model.split("/")[0];
+      if (!model.includes("/") || firstSegment !== provider) {
+        return `${provider}/${model}`;
+      }
     }
     return model;
   }
@@ -573,7 +576,8 @@ function buildChatModelOptions(
     // Use the full provider/model-id as the option value so the correct
     // provider is always sent to sessions.patch — never assembled from stale
     // UI state.  The label keeps the human-readable model name up front.
-    const fullId = provider ? `${provider}/${entry.id}` : entry.id;
+    const fullId =
+      provider && !entry.id.startsWith(`${provider}/`) ? `${provider}/${entry.id}` : entry.id;
     addOption(fullId, provider ? `${entry.id} · ${provider}` : entry.id);
   }
 
