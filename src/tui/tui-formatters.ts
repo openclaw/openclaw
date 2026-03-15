@@ -1,4 +1,5 @@
 import { formatRawAssistantErrorForUi } from "../agents/pi-embedded-helpers.js";
+import { stripModelSpecialTokens } from "../agents/pi-embedded-utils.js";
 import { stripLeadingInboundMetadata } from "../auto-reply/reply/strip-inbound-meta.js";
 import { stripAnsi } from "../terminal/ansi.js";
 import { formatTokenCount } from "../utils/usage-format.js";
@@ -159,12 +160,13 @@ export function resolveFinalAssistantText(params: {
   errorMessage?: string | null;
 }) {
   const finalText = params.finalText ?? "";
-  if (finalText.trim()) {
-    return finalText;
+  const sanitizedFinal = stripModelSpecialTokens(finalText);
+  if (sanitizedFinal.trim()) {
+    return sanitizedFinal;
   }
   const streamedText = params.streamedText ?? "";
   if (streamedText.trim()) {
-    return streamedText;
+    return stripModelSpecialTokens(streamedText);
   }
   const errorMessage = params.errorMessage ?? "";
   if (errorMessage.trim()) {
