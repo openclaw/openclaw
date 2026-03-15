@@ -88,7 +88,7 @@ describe("cron main job passes heartbeat target=last", () => {
     expect(callArgs?.heartbeat?.target).toBe("last");
   });
 
-  it("should not pass heartbeat target for wakeMode=next-heartbeat main jobs", async () => {
+  it("should pass heartbeat.target=last to requestHeartbeatNow for wakeMode=next-heartbeat main jobs", async () => {
     const { storePath } = await makeStorePath();
     const now = Date.now();
 
@@ -116,5 +116,12 @@ describe("cron main job passes heartbeat target=last", () => {
     expect(requestHeartbeatNow).toHaveBeenCalled();
     // runHeartbeatOnce should NOT have been called for next-heartbeat mode
     expect(runHeartbeatOnce).not.toHaveBeenCalled();
+
+    // The heartbeat override should include target: "last" so the heartbeat
+    // runner delivers the response to the last active channel.
+    const callArgs = requestHeartbeatNow.mock.calls[0]?.[0];
+    expect(callArgs).toBeDefined();
+    expect(callArgs?.heartbeat).toBeDefined();
+    expect(callArgs?.heartbeat?.target).toBe("last");
   });
 });

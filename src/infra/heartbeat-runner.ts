@@ -1141,7 +1141,12 @@ export function startHeartbeatRunner(opts: {
     scheduleNext();
   };
 
-  const run: HeartbeatWakeHandler = async (params) => {
+  const run: HeartbeatWakeHandler = async (params: {
+    reason?: string;
+    agentId?: string;
+    sessionKey?: string;
+    heartbeat?: { target?: string };
+  }) => {
     if (state.stopped) {
       return {
         status: "skipped",
@@ -1177,10 +1182,13 @@ export function startHeartbeatRunner(opts: {
         return { status: "skipped", reason: "disabled" };
       }
       try {
+        const mergedHeartbeat = params.heartbeat
+          ? { ...targetAgent.heartbeat, ...params.heartbeat }
+          : targetAgent.heartbeat;
         const res = await runOnce({
           cfg: state.cfg,
           agentId: targetAgent.agentId,
-          heartbeat: targetAgent.heartbeat,
+          heartbeat: mergedHeartbeat,
           reason,
           sessionKey: requestedSessionKey,
           deps: { runtime: state.runtime },
@@ -1250,6 +1258,7 @@ export function startHeartbeatRunner(opts: {
       reason: params.reason,
       agentId: params.agentId,
       sessionKey: params.sessionKey,
+      heartbeat: params.heartbeat,
     });
   const disposeWakeHandler = setHeartbeatWakeHandler(wakeHandler);
   updateConfig(state.cfg);
