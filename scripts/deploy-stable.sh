@@ -55,6 +55,7 @@ fi
 log "Building in dev repo..."
 cd "${REPO_DIR}"
 pnpm build
+pnpm ui:build
 
 # ── 3. Tests (optional) ───────────────────────────────────────────────────────
 if [[ "${SKIP_TESTS}" != "1" ]]; then
