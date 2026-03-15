@@ -117,8 +117,11 @@ export function resolveTargets(cfg: OpenClawConfig, explicitUrl?: string): Gatew
 }
 
 export function resolveProbeBudgetMs(overallMs: number, kind: TargetKind): number {
+  // Local loopback needs at least 4000ms to account for the gateway client's
+  // default connectChallengeTimeoutMs of 4000ms. The previous 800ms limit was
+  // too short and caused false negative timeouts on Windows.
   if (kind === "localLoopback") {
-    return Math.min(800, overallMs);
+    return Math.max(4000, Math.min(overallMs, 8000));
   }
   if (kind === "sshTunnel") {
     return Math.min(2000, overallMs);
