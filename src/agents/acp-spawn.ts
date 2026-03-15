@@ -67,6 +67,7 @@ export type SpawnAcpParams = {
   resumeSessionId?: string;
   cwd?: string;
   mode?: SpawnAcpMode;
+  model?: string;
   thread?: boolean;
   sandbox?: SpawnAcpSandboxMode;
   streamTo?: SpawnAcpStreamTarget;
