@@ -1,34 +1,26 @@
-import { discordOnboardingAdapter } from "../../../extensions/discord/src/onboarding.js";
-import { imessageOnboardingAdapter } from "../../../extensions/imessage/src/onboarding.js";
-import { signalOnboardingAdapter } from "../../../extensions/signal/src/onboarding.js";
-import { slackOnboardingAdapter } from "../../../extensions/slack/src/onboarding.js";
-import { telegramOnboardingAdapter } from "../../../extensions/telegram/src/onboarding.js";
-import { whatsappOnboardingAdapter } from "../../../extensions/whatsapp/src/onboarding.js";
-import { listChannelPlugins } from "../../channels/plugins/index.js";
+import { listChannelSetupPlugins } from "../../channels/plugins/setup-registry.js";
 import type { ChannelChoice } from "../onboard-types.js";
 import type { ChannelOnboardingAdapter } from "./types.js";
 
-const BUILTIN_ONBOARDING_ADAPTERS: ChannelOnboardingAdapter[] = [
-  telegramOnboardingAdapter,
-  whatsappOnboardingAdapter,
-  discordOnboardingAdapter,
-  slackOnboardingAdapter,
-  signalOnboardingAdapter,
-  imessageOnboardingAdapter,
-];
+function resolveChannelOnboardingAdapter(
+  plugin: (typeof listChannelSetupPlugins)[number],
+): ChannelOnboardingAdapter | undefined {
+  if (plugin.onboarding) {
+    return plugin.onboarding;
+  }
+  return undefined;
+}
 
 const CHANNEL_ONBOARDING_ADAPTERS = () => {
-  const fromRegistry = listChannelPlugins()
-    .map((plugin) => (plugin.onboarding ? ([plugin.id, plugin.onboarding] as const) : null))
-    .filter((entry): entry is readonly [ChannelChoice, ChannelOnboardingAdapter] => Boolean(entry));
-
-  // Fall back to built-in adapters to keep onboarding working even when the plugin registry
-  // fails to populate (see #25545).
-  const fromBuiltins = BUILTIN_ONBOARDING_ADAPTERS.map(
-    (adapter) => [adapter.channel, adapter] as const,
-  );
-
-  return new Map<ChannelChoice, ChannelOnboardingAdapter>([...fromBuiltins, ...fromRegistry]);
+  const adapters = new Map<ChannelChoice, ChannelOnboardingAdapter>();
+  for (const plugin of listChannelSetupPlugins()) {
+    const adapter = resolveChannelOnboardingAdapter(plugin);
+    if (!adapter) {
+      continue;
+    }
+    adapters.set(plugin.id, adapter);
+  }
+  return adapters;
 };
 
 export function getChannelOnboardingAdapter(
