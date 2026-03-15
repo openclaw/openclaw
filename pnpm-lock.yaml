@@ -516,6 +516,12 @@ importers:
         specifier: ^4.3.6
         version: 4.3.6
 
+  extensions/wecom:
+    dependencies:
+      openclaw:
+        specifier: '*'
+        version: 2026.3.2(@napi-rs/canvas@0.1.95)(@types/express@5.0.6)(audio-decode@2.2.3)(hono@4.12.5)(node-llama-cpp@3.16.2(typescript@5.9.3))
+
   extensions/whatsapp: {}
 
   extensions/zalo:
