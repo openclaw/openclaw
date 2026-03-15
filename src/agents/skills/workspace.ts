@@ -53,6 +53,27 @@ function compactSkillPaths(skills: Skill[]): Skill[] {
   }));
 }
 
+/**
+ * Rewrite skill file paths so they point to the sandbox workspace copy
+ * instead of the original host filesystem location.
+ *
+ * {@link syncSkillsToWorkspace} copies each skill directory into
+ * `{sandboxWorkspace}/skills/{dirName}/`, but the {@link Skill.filePath}
+ * values in the prompt still reference the host.  This function remaps
+ * them so the sandboxed agent can actually read the files.
+ */
+export function rewriteSkillPathsForSandbox(skills: Skill[], sandboxSkillsDir: string): Skill[] {
+  return skills.map((s) => {
+    const dirName = path.basename(s.baseDir);
+    const fileName = path.basename(s.filePath);
+    return {
+      ...s,
+      filePath: path.join(sandboxSkillsDir, dirName, fileName),
+      baseDir: path.join(sandboxSkillsDir, dirName),
+    };
+  });
+}
+
 function debugSkillCommandOnce(
   messageKey: string,
   message: string,
@@ -598,6 +619,8 @@ type WorkspaceSkillBuildOptions = {
   /** If provided, only include skills with these names */
   skillFilter?: string[];
   eligibility?: SkillEligibilityContext;
+  /** When set, rewrite skill paths to point inside the sandbox workspace. */
+  sandboxSkillsDir?: string;
 };
 
 function resolveWorkspaceSkillPromptState(
@@ -627,10 +650,13 @@ function resolveWorkspaceSkillPromptState(
   const truncationNote = truncated
     ? `⚠️ Skills truncated: included ${skillsForPrompt.length} of ${resolvedSkills.length}. Run \`openclaw skills check\` to audit.`
     : "";
+  const pathAdjustedSkills = opts?.sandboxSkillsDir
+    ? rewriteSkillPathsForSandbox(skillsForPrompt, opts.sandboxSkillsDir)
+    : skillsForPrompt;
   const prompt = [
     remoteNote,
     truncationNote,
-    formatSkillsForPrompt(compactSkillPaths(skillsForPrompt)),
+    formatSkillsForPrompt(compactSkillPaths(pathAdjustedSkills)),
   ]
     .filter(Boolean)
     .join("\n");
@@ -642,6 +668,8 @@ export function resolveSkillsPromptForRun(params: {
   entries?: SkillEntry[];
   config?: OpenClawConfig;
   workspaceDir: string;
+  /** When set, rewrite skill paths to point inside the sandbox workspace. */
+  sandboxSkillsDir?: string;
 }): string {
   const snapshotPrompt = params.skillsSnapshot?.prompt?.trim();
   if (snapshotPrompt) {
@@ -651,6 +679,7 @@ export function resolveSkillsPromptForRun(params: {
     const prompt = buildWorkspaceSkillsPrompt(params.workspaceDir, {
       entries: params.entries,
       config: params.config,
+      sandboxSkillsDir: params.sandboxSkillsDir,
     });
     return prompt.trim() ? prompt : "";
   }
