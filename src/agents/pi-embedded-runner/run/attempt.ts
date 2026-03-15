@@ -1728,6 +1728,11 @@ export async function runEmbeddedAttempt(
         provider: params.provider,
         modelId: params.modelId,
       });
+      // Override: force-drop all thinking blocks when recovering from an
+      // "Invalid signature in thinking block" API error on a previous attempt.
+      if (params.forceDropThinkingBlocks) {
+        transcriptPolicy.dropThinkingBlocks = true;
+      }
 
       await prewarmSessionFile(params.sessionFile);
       sessionManager = guardSessionManager(SessionManager.open(params.sessionFile), {

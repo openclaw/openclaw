@@ -71,6 +71,7 @@ import { runEmbeddedAttempt } from "./run/attempt.js";
 import { createFailoverDecisionLogger } from "./run/failover-observation.js";
 import type { RunEmbeddedPiAgentParams } from "./run/params.js";
 import { buildEmbeddedRunPayloads } from "./run/payloads.js";
+import { isInvalidThinkingSignatureError } from "./thinking.js";
 import {
   truncateOversizedToolResultsInSession,
   sessionLikelyHasOversizedToolResults,
@@ -755,6 +756,10 @@ export async function runEmbeddedPiAgent(
       let autoCompactionCount = 0;
       let runLoopIterations = 0;
       let overloadFailoverAttempts = 0;
+      // When true, force-drop all thinking blocks on the next attempt to recover
+      // from "Invalid signature in thinking block" API errors. This acts as a
+      // defense-in-depth fallback when pre-filtering misses corrupt signatures.
+      let forceDropThinkingOnRetry = false;
       const maybeMarkAuthProfileFailure = async (failure: {
         profileId?: string;
         reason?: AuthProfileFailureReason | null;
@@ -927,6 +932,7 @@ export async function runEmbeddedPiAgent(
             bootstrapPromptWarningSignaturesSeen,
             bootstrapPromptWarningSignature:
               bootstrapPromptWarningSignaturesSeen[bootstrapPromptWarningSignaturesSeen.length - 1],
+            forceDropThinkingBlocks: forceDropThinkingOnRetry,
           });
 
           const {
@@ -1235,6 +1241,17 @@ export async function runEmbeddedPiAgent(
             const errorText = promptErrorDetails.message || describeUnknownError(promptError);
             if (await maybeRefreshCopilotForAuthError(errorText, copilotAuthRetry)) {
               authRetryPending = true;
+              continue;
+            }
+            // Handle "Invalid signature in thinking block" by dropping all
+            // thinking blocks and retrying once. This catches corrupt signatures
+            // that passed the pre-filter (non-empty but still rejected by the API).
+            if (isInvalidThinkingSignatureError(errorText) && !forceDropThinkingOnRetry) {
+              log.warn(
+                `invalid thinking signature detected for ${provider}/${modelId}; ` +
+                  `retrying with all thinking blocks stripped`,
+              );
+              forceDropThinkingOnRetry = true;
               continue;
             }
             // Handle role ordering errors with a user-friendly message

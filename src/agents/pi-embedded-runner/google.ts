@@ -32,7 +32,7 @@ import {
   type UsageLike,
 } from "../usage.js";
 import { log } from "./logger.js";
-import { dropThinkingBlocks } from "./thinking.js";
+import { dropThinkingBlocks, stripInvalidThinkingSignatures } from "./thinking.js";
 import { describeUnknownError } from "./utils.js";
 
 const GOOGLE_TURN_ORDERING_CUSTOM_TYPE = "google-turn-ordering-bootstrap";
@@ -549,9 +549,20 @@ export async function sanitizeSessionHistory(params: {
       ...resolveImageSanitizationLimits(params.config),
     },
   );
-  const droppedThinking = policy.dropThinkingBlocks
-    ? dropThinkingBlocks(sanitizedImages)
+  // Strip thinking blocks with obviously invalid (empty/missing) signatures
+  // before replay. Bedrock can return thinking blocks with empty
+  // thinkingSignature; these cause "Invalid signature in thinking block" API
+  // errors on subsequent turns. This only catches clearly broken signatures;
+  // corrupt-but-non-empty signatures are handled by the retry logic in run.ts
+  // which catches the API error and forces dropThinkingBlocks on the next attempt.
+  // This runs before dropThinkingBlocks so it also catches cases where
+  // preserveSignatures is true (Anthropic/Bedrock providers).
+  const validatedSignatures = policy.preserveSignatures
+    ? stripInvalidThinkingSignatures(sanitizedImages)
     : sanitizedImages;
+  const droppedThinking = policy.dropThinkingBlocks
+    ? dropThinkingBlocks(validatedSignatures)
+    : validatedSignatures;
   const sanitizedToolCalls = sanitizeToolCallInputs(droppedThinking, {
     allowedToolNames: params.allowedToolNames,
   });
