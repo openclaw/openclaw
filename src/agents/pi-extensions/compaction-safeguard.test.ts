@@ -15,6 +15,25 @@ import {
 } from "./compaction-safeguard-runtime.js";
 import compactionSafeguardExtension, { __testing } from "./compaction-safeguard.js";
 
+const { mockLogger } = vi.hoisted(() => ({
+  mockLogger: {
+    subsystem: "compaction-safeguard",
+    isEnabled: vi.fn(() => true),
+    trace: vi.fn(),
+    debug: vi.fn(),
+    info: vi.fn(),
+    warn: vi.fn(),
+    error: vi.fn(),
+    fatal: vi.fn(),
+    raw: vi.fn(),
+    child: vi.fn(),
+  },
+}));
+
+vi.mock("../../logging/subsystem.js", () => ({
+  createSubsystemLogger: vi.fn(() => mockLogger),
+}));
+
 vi.mock("../compaction.js", async (importOriginal) => {
   const actual = await importOriginal<typeof compactionModule>();
   return {
@@ -1544,6 +1563,51 @@ describe("compaction-safeguard double-compaction guard", () => {
     });
     expect(result).toEqual({ cancel: true });
     expect(getApiKeyMock).toHaveBeenCalled();
+  });
+
+  it("suppresses repeated no-real-messages cancellations within cooldown window", async () => {
+    const handler = createCompactionHandler();
+    const sessionManager = stubSessionManager();
+    const model = createAnthropicModelFixture();
+    setCompactionSafeguardRuntime(sessionManager, { model });
+
+    const emptyEvent = {
+      preparation: {
+        messagesToSummarize: [] as AgentMessage[],
+        turnPrefixMessages: [] as AgentMessage[],
+        firstKeptEntryId: "entry-1",
+        tokensBefore: 1500,
+        fileOps: { read: [], edited: [], written: [] },
+      },
+      customInstructions: "",
+      signal: new AbortController().signal,
+    };
+    const mockContext = createCompactionContext({
+      sessionManager,
+      getApiKeyMock: vi.fn().mockResolvedValue("sk-test"), // pragma: allowlist secret
+    });
+
+    mockLogger.warn.mockClear();
+    mockLogger.debug.mockClear();
+
+    // First call: sets cooldown timestamp, logs warn
+    const result1 = (await handler(emptyEvent, mockContext)) as { cancel?: boolean };
+    expect(result1).toEqual({ cancel: true });
+    expect(mockLogger.warn).toHaveBeenCalledWith(
+      "Compaction safeguard: cancelling compaction with no real conversation messages to summarize.",
+    );
+    expect(mockLogger.debug).not.toHaveBeenCalled();
+
+    mockLogger.warn.mockClear();
+    mockLogger.debug.mockClear();
+
+    // Second call (within cooldown): still cancels but suppressed (debug instead of warn)
+    const result2 = (await handler(emptyEvent, mockContext)) as { cancel?: boolean };
+    expect(result2).toEqual({ cancel: true });
+    expect(mockLogger.debug).toHaveBeenCalledWith(
+      expect.stringContaining("suppressing repeated no-real-messages cancellation"),
+    );
+    expect(mockLogger.warn).not.toHaveBeenCalled();
   });
 });
 
