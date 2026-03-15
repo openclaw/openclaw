@@ -46,9 +46,9 @@ Use this format when adding entries:
 ## Listed plugins
 
 - **MemoLite** — Local long-term memory plugin for OpenClaw with search, store, recall, list, and auto-capture flows backed by the MemoLite memory service.
-  npm: `@wenrennow/openclaw-memolite`
+  npm: `@wenrennow/memolite`
   repo: `https://github.com/shaun17/MemoLite`
-  install: `openclaw plugins install @wenrennow/openclaw-memolite`
+  install: `openclaw plugins install @wenrennow/memolite`
 
 - **WeChat** — Connect OpenClaw to WeChat personal accounts via WeChatPadPro (iPad protocol). Supports text, image, and file exchange with keyword-triggered conversations.
   npm: `@icesword760/openclaw-wechat`
