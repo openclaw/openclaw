@@ -45,6 +45,11 @@ Use this format when adding entries:
 
 ## Listed plugins
 
+- **D-Chat / nMobile** — Decentralized E2E encrypted messaging over the NKN relay network. Supports DM, topics, private groups, and IPFS media.
+  npm: `@zbruceli/openclaw-dchat`
+  repo: `https://github.com/zbruceli/openclaw-dchat`
+  install: `openclaw plugins install @zbruceli/openclaw-dchat`
+
 - **WeChat** — Connect OpenClaw to WeChat personal accounts via WeChatPadPro (iPad protocol). Supports text, image, and file exchange with keyword-triggered conversations.
   npm: `@icesword760/openclaw-wechat`
   repo: `https://github.com/icesword0760/openclaw-wechat`
