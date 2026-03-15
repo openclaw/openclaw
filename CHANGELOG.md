@@ -28,6 +28,7 @@ Docs: https://docs.openclaw.ai
 - Control UI/dashboard: preserve structured gateway shutdown reasons across restart disconnects so config-triggered restarts no longer fall back to `disconnected (1006): no reason`. (#46532) Thanks @vincentkoc.
 - Feishu/topic threads: fetch full thread context, including prior bot replies, when starting a topic-thread session so follow-up turns in Feishu topics keep the right conversation state. Thanks @Coobiw.
 - Browser/profiles: drop the auto-created `chrome-relay` browser profile; users who need the Chrome extension relay must now create their own profile via `openclaw browser create-profile`. (#45777) Thanks @odysseus0.
+- Docs/Mintlify: fix MDX marker syntax on Perplexity, Model Providers, Moonshot, and exec approvals pages so local docs preview no longer breaks rendering or leaves stale pages unpublished. (#46695) Thanks @velvet-shark.
 
 ## 2026.3.13
 
