@@ -290,10 +290,10 @@ Search the web using your configured provider.
 - `tools.web.search.enabled` must not be `false` (default: enabled)
 - API key for your chosen provider:
   - **Brave**: `BRAVE_API_KEY` or `tools.web.search.apiKey`
+  - **Exa**: `EXA_API_KEY` or `tools.web.search.exa.apiKey`
   - **Gemini**: `GEMINI_API_KEY` or `tools.web.search.gemini.apiKey`
   - **Grok**: `XAI_API_KEY` or `tools.web.search.grok.apiKey`
   - **Kimi**: `KIMI_API_KEY`, `MOONSHOT_API_KEY`, or `tools.web.search.kimi.apiKey`
-  - **Exa**: `EXA_API_KEY` or `tools.web.search.exa.apiKey`
   - **Perplexity**: `PERPLEXITY_API_KEY`, `OPENROUTER_API_KEY`, or `tools.web.search.perplexity.apiKey`
 - All provider key fields above support SecretRef objects.
 
