@@ -16,6 +16,7 @@ export function resolvePluginProviders(params: {
     workspaceDir: params.workspaceDir,
     env: params.env,
     logger: createPluginLoaderLogger(log),
+    activate: false,
   });
 
   return registry.providers.map((entry) => ({

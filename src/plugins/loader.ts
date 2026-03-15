@@ -46,6 +46,11 @@ export type PluginLoadOptions = {
   coreGatewayHandlers?: Record<string, GatewayRequestHandler>;
   runtimeOptions?: CreatePluginRuntimeOptions;
   cache?: boolean;
+  /**
+   * When false, return the loaded registry without replacing the process-global
+   * active runtime registry.
+   */
+  activate?: boolean;
   mode?: "full" | "validate";
 };
 
@@ -536,10 +541,13 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
     env,
   });
   const cacheEnabled = options.cache !== false;
+  const shouldActivate = options.activate !== false;
   if (cacheEnabled) {
     const cached = getCachedPluginRegistry(cacheKey);
     if (cached) {
-      activatePluginRegistry(cached, cacheKey);
+      if (shouldActivate) {
+        activatePluginRegistry(cached, cacheKey);
+      }
       return cached;
     }
   }
@@ -898,7 +906,9 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
   if (cacheEnabled) {
     setCachedPluginRegistry(cacheKey, registry);
   }
-  activatePluginRegistry(registry, cacheKey);
+  if (shouldActivate) {
+    activatePluginRegistry(registry, cacheKey);
+  }
   return registry;
 }
 

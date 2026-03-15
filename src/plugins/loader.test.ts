@@ -1,10 +1,16 @@
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
+import type { IncomingMessage } from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
+import { createGatewayPluginRequestHandler } from "../gateway/server/plugins-http.js";
+import { makeMockHttpResponse } from "../gateway/test-http-response.js";
 import { withEnv } from "../test-utils/env.js";
+import { registerPluginHttpRoute } from "./http-registry.js";
+import { createEmptyPluginRegistry } from "./registry.js";
+import { getActivePluginRegistry, setActivePluginRegistry } from "./runtime.js";
 async function importFreshPluginTestModules() {
   vi.resetModules();
   vi.unmock("node:fs");
@@ -286,6 +292,7 @@ function createPluginSdkAliasFixture(params?: {
 
 afterEach(() => {
   clearPluginLoaderCache();
+  setActivePluginRegistry(createEmptyPluginRegistry());
   if (prevBundledDir === undefined) {
     delete process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
   } else {
@@ -468,6 +475,68 @@ describe("loadOpenClawPlugins", () => {
     expect(getGlobalHookRunner()).not.toBeNull();
 
     resetGlobalHookRunner();
+  });
+
+  it("does not let read-only plugin loads steal the active registry used by dynamic http routes", async () => {
+    useNoBundledPlugins();
+    const gatewayPlugin = writePlugin({
+      id: "gateway-runtime",
+      filename: "gateway-runtime.cjs",
+      body: `module.exports = { id: "gateway-runtime", register() {} };`,
+    });
+    const inspectorPlugin = writePlugin({
+      id: "inspector-runtime",
+      filename: "inspector-runtime.cjs",
+      body: `module.exports = { id: "inspector-runtime", register() {} };`,
+    });
+
+    const gatewayRegistry = loadOpenClawPlugins({
+      cache: false,
+      workspaceDir: gatewayPlugin.dir,
+      config: {
+        plugins: {
+          load: { paths: [gatewayPlugin.file] },
+          allow: ["gateway-runtime"],
+        },
+      },
+    });
+    const handler = createGatewayPluginRequestHandler({
+      registry: gatewayRegistry,
+      log: {
+        warn: vi.fn(),
+      } as unknown as Parameters<typeof createGatewayPluginRequestHandler>[0]["log"],
+    });
+
+    const inspectionOptions = {
+      workspaceDir: inspectorPlugin.dir,
+      config: {
+        plugins: {
+          load: { paths: [inspectorPlugin.file] },
+          allow: ["inspector-runtime"],
+        },
+      },
+      activate: false,
+    };
+    const inspectionRegistry = loadOpenClawPlugins(inspectionOptions);
+    const cachedInspectionRegistry = loadOpenClawPlugins(inspectionOptions);
+
+    expect(inspectionRegistry).toBe(cachedInspectionRegistry);
+    expect(getActivePluginRegistry()).toBe(gatewayRegistry);
+
+    const routeHandler = vi.fn(async () => true);
+    registerPluginHttpRoute({
+      path: "/hook",
+      auth: "plugin",
+      handler: routeHandler,
+    });
+
+    expect(gatewayRegistry.httpRoutes).toHaveLength(1);
+    expect(inspectionRegistry.httpRoutes).toHaveLength(0);
+
+    const { res } = makeMockHttpResponse();
+    const handled = await handler({ url: "/hook" } as IncomingMessage, res);
+    expect(handled).toBe(true);
+    expect(routeHandler).toHaveBeenCalledTimes(1);
   });
 
   it("does not reuse cached bundled plugin registries across env changes", () => {

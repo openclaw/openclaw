@@ -29,6 +29,7 @@ export function buildPluginStatusReport(params?: {
     workspaceDir,
     env: params?.env,
     logger: createPluginLoaderLogger(log),
+    activate: false,
   });
 
   return {

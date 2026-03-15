@@ -1,6 +1,7 @@
 import { exec } from "node:child_process";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../../agents/agent-scope.js";
-import { listChannelPlugins } from "../../channels/plugins/index.js";
+import type { ChannelPlugin } from "../../channels/plugins/types.js";
+import { CHAT_CHANNEL_ORDER, type ChatChannelId } from "../../channels/registry.js";
 import {
   createConfigIO,
   loadConfig,
@@ -57,6 +58,19 @@ import type { GatewayRequestHandlers, RespondFn } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
 const MAX_CONFIG_ISSUES_IN_ERROR_MESSAGE = 3;
+
+function sortChannelPluginsForConfigSchema(channels: ChannelPlugin[]): ChannelPlugin[] {
+  return channels.toSorted((a, b) => {
+    const indexA = CHAT_CHANNEL_ORDER.indexOf(a.id as ChatChannelId);
+    const indexB = CHAT_CHANNEL_ORDER.indexOf(b.id as ChatChannelId);
+    const orderA = a.meta.order ?? (indexA === -1 ? 999 : indexA);
+    const orderB = b.meta.order ?? (indexB === -1 ? 999 : indexB);
+    if (orderA !== orderB) {
+      return orderA - orderB;
+    }
+    return a.id.localeCompare(b.id);
+  });
+}
 
 function requireConfigBaseHash(
   params: unknown,
@@ -255,6 +269,7 @@ function loadSchemaWithPlugins(): ConfigSchemaResponse {
       error: () => {},
       debug: () => {},
     },
+    activate: false,
   });
   // Note: We can't easily cache this, as there are no callback that can invalidate
   // our cache. However, both loadConfig() and loadOpenClawPlugins() already cache
@@ -267,7 +282,9 @@ function loadSchemaWithPlugins(): ConfigSchemaResponse {
       configUiHints: plugin.configUiHints,
       configSchema: plugin.configJsonSchema,
     })),
-    channels: listChannelPlugins().map((entry) => ({
+    channels: sortChannelPluginsForConfigSchema(
+      pluginRegistry.channels.map((entry) => entry.plugin),
+    ).map((entry) => ({
       id: entry.id,
       label: entry.meta.label,
       description: entry.meta.blurb,
