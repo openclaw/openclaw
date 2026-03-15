@@ -169,7 +169,7 @@ const formatSchedule = (schedule: CronSchedule) => {
   const base = schedule.tz ? `cron ${schedule.expr} @ ${schedule.tz}` : `cron ${schedule.expr}`;
   const staggerMs = resolveCronStaggerMs(schedule);
   if (staggerMs <= 0) {
-    return `${base} (exact)`;
+    return schedule.tz ? `${base} (exact)` : `${base} (no tz)`;
   }
   return `${base} (stagger ${formatDurationHuman(staggerMs)})`;
 };

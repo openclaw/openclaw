@@ -863,6 +863,20 @@ async function planStartupCatchup(
   );
   return locked(state, async () => {
     await ensureLoaded(state, { skipRecompute: true });
+
+    // Warn about cron jobs without explicit timezone (they default to the
+    // gateway process timezone which may differ from the user's intent).
+    if (state.store) {
+      for (const job of state.store.jobs) {
+        if (job.schedule.kind === "cron" && !job.schedule.tz && job.enabled) {
+          state.deps.log.warn(
+            { jobId: job.id, jobName: job.name, expr: job.schedule.expr },
+            "cron: job has no explicit timezone; schedule will use the gateway process timezone (use --tz to set)",
+          );
+        }
+      }
+    }
+
     if (!state.store) {
       return { candidates: [], deferredJobIds: [] };
     }
