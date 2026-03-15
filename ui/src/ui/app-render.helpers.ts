@@ -563,7 +563,10 @@ function buildChatModelOptions(
 
   for (const entry of catalog) {
     const provider = entry.provider?.trim();
-    addOption(entry.id, provider ? `${entry.id} · ${provider}` : entry.id);
+    // Use provider/modelId format so sessions.patch receives the correct
+    // provider prefix instead of defaulting to the current provider (#46480).
+    const qualifiedId = provider && !entry.id.includes("/") ? `${provider}/${entry.id}` : entry.id;
+    addOption(qualifiedId, provider ? `${entry.id} · ${provider}` : entry.id);
   }
 
   if (currentOverride) {
