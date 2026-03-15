@@ -20,6 +20,10 @@ export const isNixMode = resolveIsNixMode();
 // Support historical (and occasionally misspelled) legacy state dirs.
 const LEGACY_STATE_DIRNAMES = [".clawdbot", ".moldbot", ".moltbot"] as const;
 const NEW_STATE_DIRNAME = ".openclaw";
+export const ALL_STATE_DIRNAMES: ReadonlySet<string> = new Set<string>([
+  NEW_STATE_DIRNAME,
+  ...LEGACY_STATE_DIRNAMES,
+]);
 const CONFIG_FILENAME = "openclaw.json";
 const LEGACY_CONFIG_FILENAMES = ["clawdbot.json", "moldbot.json", "moltbot.json"] as const;
 
@@ -65,6 +69,17 @@ export function resolveStateDir(
   const override = env.OPENCLAW_STATE_DIR?.trim() || env.CLAWDBOT_STATE_DIR?.trim();
   if (override) {
     return resolveUserPath(override, env, effectiveHomedir);
+  }
+  // When OPENCLAW_HOME already points to a known state directory (e.g.
+  // OPENCLAW_HOME=~/.openclaw), use it directly instead of appending another
+  // state-dir segment which would produce a nested path like
+  // ~/.openclaw/.openclaw (see #45765).
+  const explicitHome = env.OPENCLAW_HOME?.trim();
+  if (explicitHome) {
+    const resolved = effectiveHomedir();
+    if (ALL_STATE_DIRNAMES.has(path.basename(resolved))) {
+      return resolved;
+    }
   }
   const newDir = newStateDir(effectiveHomedir);
   if (env.OPENCLAW_TEST_FAST === "1") {
