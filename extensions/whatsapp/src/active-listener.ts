@@ -28,9 +28,32 @@ export type ActiveWebListener = {
   close?: () => Promise<void>;
 };
 
-let _currentListener: ActiveWebListener | null = null;
+// ---------------------------------------------------------------------------
+// Use a globalThis-backed Map so that every bundler chunk shares the same
+// listener registry.
+//
+// Background: tsdown / Rollup code-splits this module into several output
+// chunks.  Each chunk receives its own copy of the module-scoped `listeners`
+// Map, which means `setActiveWebListener()` writes to one Map while
+// `requireActiveWebListener()` (imported in a different chunk) reads from
+// another — causing "No active WhatsApp Web listener" errors on proactive
+// outbound sends even though the Baileys socket is connected and inbound
+// auto-replies work fine.
+//
+// Pinning the Map to `globalThis` guarantees a single shared instance
+// regardless of how many chunks the bundler produces.
+// ---------------------------------------------------------------------------
+const GLOBAL_KEY = Symbol.for("openclaw.whatsapp.activeListeners");
 
-const listeners = new Map<string, ActiveWebListener>();
+function getListeners(): Map<string, ActiveWebListener> {
+  const g = globalThis as unknown as Record<symbol, unknown>;
+  if (!g[GLOBAL_KEY]) {
+    g[GLOBAL_KEY] = new Map<string, ActiveWebListener>();
+  }
+  return g[GLOBAL_KEY] as Map<string, ActiveWebListener>;
+}
+
+let _currentListener: ActiveWebListener | null = null;
 
 export function resolveWebAccountId(accountId?: string | null): string {
   return (accountId ?? "").trim() || DEFAULT_ACCOUNT_ID;
@@ -41,7 +64,7 @@ export function requireActiveWebListener(accountId?: string | null): {
   listener: ActiveWebListener;
 } {
   const id = resolveWebAccountId(accountId);
-  const listener = listeners.get(id) ?? null;
+  const listener = getListeners().get(id) ?? null;
   if (!listener) {
     throw new Error(
       `No active WhatsApp Web listener (account: ${id}). Start the gateway, then link WhatsApp with: ${formatCliCommand(`openclaw channels login --channel whatsapp --account ${id}`)}.`,
@@ -69,9 +92,9 @@ export function setActiveWebListener(
 
   const id = resolveWebAccountId(accountId);
   if (!listener) {
-    listeners.delete(id);
+    getListeners().delete(id);
   } else {
-    listeners.set(id, listener);
+    getListeners().set(id, listener);
   }
   if (id === DEFAULT_ACCOUNT_ID) {
     _currentListener = listener;
@@ -80,5 +103,5 @@ export function setActiveWebListener(
 
 export function getActiveWebListener(accountId?: string | null): ActiveWebListener | null {
   const id = resolveWebAccountId(accountId);
-  return listeners.get(id) ?? null;
+  return getListeners().get(id) ?? null;
 }
