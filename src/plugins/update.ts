@@ -325,6 +325,43 @@ export async function updateNpmInstalledPlugins(params: {
       continue;
     }
 
+    // Probe the remote version before downloading to skip redundant installs.
+    if (currentVersion) {
+      try {
+        const probe = await installPluginFromNpmSpec({
+          spec: record.spec,
+          mode: "update",
+          dryRun: true,
+          expectedPluginId: pluginId,
+          expectedIntegrity: expectedIntegrityForUpdate(record.spec, record.integrity),
+          onIntegrityDrift: createPluginUpdateIntegrityDriftHandler({
+            pluginId,
+            dryRun: true,
+            logger,
+            onIntegrityDrift: params.onIntegrityDrift,
+          }),
+          logger,
+        });
+        if (
+          probe.ok &&
+          probe.version &&
+          probe.version === currentVersion &&
+          !probe.integrityDrift
+        ) {
+          outcomes.push({
+            pluginId,
+            status: "unchanged",
+            currentVersion,
+            nextVersion: probe.version,
+            message: `${pluginId} is up to date (${currentVersion}).`,
+          });
+          continue;
+        }
+      } catch {
+        // Probe failed — fall through to full install which will report its own error.
+      }
+    }
+
     let result: Awaited<ReturnType<typeof installPluginFromNpmSpec>>;
     try {
       result = await installPluginFromNpmSpec({
