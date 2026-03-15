@@ -2,7 +2,7 @@
 
 import { promises as fs } from "node:fs";
 import path from "node:path";
-import { __testing as layer0Testing } from "../../src/plugins/structured-context/src/context-engine.js";
+import { __testing as structuredContextTesting } from "../../src/plugins/structured-context/src/context-engine.js";
 
 type MatrixCase = {
   id: string;
@@ -50,7 +50,7 @@ type GroundTruth = {
 
 type EvalResult = {
   caseId: string;
-  mode: "legacy" | "layer0";
+  mode: "legacy" | "structured-context";
   tokensBefore: number;
   tokensAfter: number;
   compressionRate: number;
@@ -63,7 +63,7 @@ type EvalResult = {
 };
 
 type Aggregate = {
-  mode: "legacy" | "layer0";
+  mode: "legacy" | "structured-context";
   compressionRate: number;
   instructionRecallF1: number;
   decisionFidelity: number;
@@ -110,7 +110,7 @@ type ArtifactRefTrace = {
   bytes: number;
 };
 
-type Layer0EvalDetail = {
+type StructuredContextEvalDetail = {
   recentStartIndex: number;
   keptTurnIndexes: number[];
   droppedTurnIndexes: number[];
@@ -129,9 +129,9 @@ type LegacyEvaluation = {
   details: LegacyEvalDetail;
 };
 
-type Layer0Evaluation = {
+type StructuredContextEvaluation = {
   metrics: EvalResult;
-  details: Layer0EvalDetail;
+  details: StructuredContextEvalDetail;
 };
 
 type MessageContribution = {
@@ -148,7 +148,7 @@ type TurnTrace = {
   chars: number;
   tokens: number;
   legacyAction: "kept" | "dropped";
-  layer0Actions: string[];
+  structuredContextActions: string[];
   categories: string[];
   instructionFactCount: number;
   decisionFactCount: number;
@@ -167,7 +167,7 @@ type CaseTrace = {
   turnCount: number;
   metrics: {
     legacy: EvalResult;
-    layer0: EvalResult;
+    structuredContext: EvalResult;
     delta: {
       compressionRate: number;
       instructionRecallF1: number;
@@ -179,7 +179,7 @@ type CaseTrace = {
     };
   };
   legacy: LegacyEvalDetail;
-  layer0: Layer0EvalDetail;
+  structuredContext: StructuredContextEvalDetail;
   turns: TurnTrace[];
 };
 
@@ -242,19 +242,24 @@ function parseArgs(): ParsedArgs {
   return {
     matrixPath:
       flags.get("--matrix") ??
-      path.join(process.cwd(), "test", "context-engine", "layer0-matrix", "cases.json"),
+      path.join(process.cwd(), "test", "context-engine", "structured-context-matrix", "cases.json"),
     tasksPath:
       flags.get("--tasks") ??
-      path.join(process.cwd(), "test", "context-engine", "layer0-matrix", "tasks.json"),
+      path.join(process.cwd(), "test", "context-engine", "structured-context-matrix", "tasks.json"),
     outPath:
       flags.get("--out") ??
-      path.join(process.cwd(), ".artifacts", "context-engine", "layer0-eval-report.md"),
+      path.join(process.cwd(), ".artifacts", "context-engine", "structured-context-eval-report.md"),
     jsonPath:
       flags.get("--json") ??
-      path.join(process.cwd(), ".artifacts", "context-engine", "layer0-eval-report.json"),
+      path.join(
+        process.cwd(),
+        ".artifacts",
+        "context-engine",
+        "structured-context-eval-report.json",
+      ),
     traceDir:
       flags.get("--trace-dir") ??
-      path.join(process.cwd(), ".artifacts", "context-engine", "layer0-traces"),
+      path.join(process.cwd(), ".artifacts", "context-engine", "structured-context-traces"),
     traceAll: parseBooleanFlag(flags.get("--trace-all"), !hasTraceCaseFilter),
     traceCaseIds: parseCsv(flags.get("--trace-case")),
   };
@@ -565,7 +570,7 @@ function isSemanticallyMatched(candidate: string, truthValues: string[]): boolea
   });
 }
 
-function normalizeForLayer0(messages: SyntheticMessage[]) {
+function normalizeForStructuredContext(messages: SyntheticMessage[]) {
   return messages.map((message) => ({
     role: message.role,
     content: message.content,
@@ -577,9 +582,9 @@ function normalizeForLayer0(messages: SyntheticMessage[]) {
 }
 
 function buildMessageContribution(message: SyntheticMessage): MessageContribution {
-  const normalized = normalizeForLayer0([message]);
-  const singleRecord = layer0Testing.classifyMessages(normalized, []) as ContextRecord;
-  const identifiers = layer0Testing.extractIdentifiers(message.content);
+  const normalized = normalizeForStructuredContext([message]);
+  const singleRecord = structuredContextTesting.classifyMessages(normalized, []) as ContextRecord;
+  const identifiers = structuredContextTesting.extractIdentifiers(message.content);
 
   const categories: string[] = [];
   if (singleRecord.pendingUserAsks.length > 0) {
@@ -667,21 +672,27 @@ async function evaluateLegacy(params: {
   };
 }
 
-async function evaluateLayer0(params: {
+async function evaluateStructuredContext(params: {
   testCase: MatrixCase;
   messages: SyntheticMessage[];
   truth: GroundTruth;
   artifactsRoot: string;
-}): Promise<Layer0Evaluation> {
+}): Promise<StructuredContextEvaluation> {
   const started = Date.now();
-  const normalizedMessages = normalizeForLayer0(params.messages);
+  const normalizedMessages = normalizeForStructuredContext(params.messages);
 
-  const keptMessages = layer0Testing.takeRecentTurns(normalizedMessages, 5) as SyntheticMessage[];
+  const keptMessages = structuredContextTesting.takeRecentTurns(
+    normalizedMessages,
+    5,
+  ) as SyntheticMessage[];
   const recentStartIndex = Math.max(0, normalizedMessages.length - keptMessages.length);
   const keptTurnIndexes = toTurnIndexes(recentStartIndex, normalizedMessages.length);
   const droppedTurnIndexes = toTurnIndexes(0, recentStartIndex);
 
-  const oversized = layer0Testing.collectOversizedToolPayloads(normalizedMessages, 4000) as Array<{
+  const oversized = structuredContextTesting.collectOversizedToolPayloads(
+    normalizedMessages,
+    4000,
+  ) as Array<{
     text: string;
     toolName?: string;
     toolCallId?: string;
@@ -705,7 +716,10 @@ async function evaluateLayer0(params: {
     });
   }
 
-  const record = layer0Testing.classifyMessages(normalizedMessages, artifactRefs) as ContextRecord;
+  const record = structuredContextTesting.classifyMessages(
+    normalizedMessages,
+    artifactRefs,
+  ) as ContextRecord;
 
   const instructionHints = extractInstructionFacts(
     normalizedMessages
@@ -715,7 +729,7 @@ async function evaluateLayer0(params: {
   ).slice(0, 6);
 
   const summary = [
-    "Layer0 structured summary",
+    "structured-context structured summary",
     ...instructionHints.map((entry) => `instruction: ${entry}`),
     ...record.constraints.slice(0, 6).map((entry) => `constraint: ${entry}`),
     ...record.decisions.slice(0, 6).map((entry) => `decision: ${entry}`),
@@ -723,7 +737,7 @@ async function evaluateLayer0(params: {
     ...record.exactIdentifiers.slice(0, 8).map((entry) => `id: ${entry}`),
   ].join("\n");
 
-  const systemPromptAddition = layer0Testing.composeSystemPromptAddition(record);
+  const systemPromptAddition = structuredContextTesting.composeSystemPromptAddition(record);
 
   const combinedText = `${summary}\n${keptMessages.map((msg) => msg.content).join("\n")}`;
   const instructionFacts = extractInstructionFacts(combinedText);
@@ -752,7 +766,7 @@ async function evaluateLayer0(params: {
   return {
     metrics: {
       caseId: params.testCase.id,
-      mode: "layer0",
+      mode: "structured-context",
       tokensBefore,
       tokensAfter,
       compressionRate: 1 - tokensAfter / Math.max(1, tokensBefore),
@@ -796,7 +810,7 @@ function average(values: number[]): number {
   return values.reduce((sum, value) => sum + value, 0) / values.length;
 }
 
-function aggregate(results: EvalResult[], mode: "legacy" | "layer0"): Aggregate {
+function aggregate(results: EvalResult[], mode: "legacy" | "structured-context"): Aggregate {
   const selected = results.filter((entry) => entry.mode === mode);
   return {
     mode,
@@ -814,32 +828,36 @@ function toPercent(value: number): string {
   return `${(value * 100).toFixed(2)}%`;
 }
 
-function formatAggregateReport(legacy: Aggregate, layer0: Aggregate, traceDir: string): string {
+function formatAggregateReport(
+  legacy: Aggregate,
+  structuredContext: Aggregate,
+  traceDir: string,
+): string {
   const hardGatePass =
-    layer0.instructionRecallF1 >= legacy.instructionRecallF1 &&
-    layer0.decisionFidelity >= legacy.decisionFidelity &&
-    layer0.artifactIntegrity >= legacy.artifactIntegrity &&
-    layer0.recoverabilityRate >= legacy.recoverabilityRate;
+    structuredContext.instructionRecallF1 >= legacy.instructionRecallF1 &&
+    structuredContext.decisionFidelity >= legacy.decisionFidelity &&
+    structuredContext.artifactIntegrity >= legacy.artifactIntegrity &&
+    structuredContext.recoverabilityRate >= legacy.recoverabilityRate;
 
   const improvementSignals = [
-    layer0.compressionRate > legacy.compressionRate,
-    layer0.hallucinationExtensionRate < legacy.hallucinationExtensionRate,
-    layer0.latencyMs < 500,
+    structuredContext.compressionRate > legacy.compressionRate,
+    structuredContext.hallucinationExtensionRate < legacy.hallucinationExtensionRate,
+    structuredContext.latencyMs < 500,
   ].filter(Boolean).length;
   const improvementGatePass = improvementSignals >= 2;
 
   return [
-    "# Layer0 Context Engine Evaluation",
+    "# Structured Context Engine Evaluation",
     "",
-    "| Metric | Legacy | Layer0 | Delta |",
+    "| Metric | Legacy | Structured Context | Delta |",
     "|---|---:|---:|---:|",
-    `| Compression Rate | ${toPercent(legacy.compressionRate)} | ${toPercent(layer0.compressionRate)} | ${toPercent(layer0.compressionRate - legacy.compressionRate)} |`,
-    `| Instruction Recall F1 | ${legacy.instructionRecallF1.toFixed(4)} | ${layer0.instructionRecallF1.toFixed(4)} | ${(layer0.instructionRecallF1 - legacy.instructionRecallF1).toFixed(4)} |`,
-    `| Decision Fidelity | ${legacy.decisionFidelity.toFixed(4)} | ${layer0.decisionFidelity.toFixed(4)} | ${(layer0.decisionFidelity - legacy.decisionFidelity).toFixed(4)} |`,
-    `| Artifact Integrity | ${toPercent(legacy.artifactIntegrity)} | ${toPercent(layer0.artifactIntegrity)} | ${toPercent(layer0.artifactIntegrity - legacy.artifactIntegrity)} |`,
-    `| Recoverability Rate | ${toPercent(legacy.recoverabilityRate)} | ${toPercent(layer0.recoverabilityRate)} | ${toPercent(layer0.recoverabilityRate - legacy.recoverabilityRate)} |`,
-    `| Hallucination Extension Rate | ${toPercent(legacy.hallucinationExtensionRate)} | ${toPercent(layer0.hallucinationExtensionRate)} | ${toPercent(layer0.hallucinationExtensionRate - legacy.hallucinationExtensionRate)} |`,
-    `| Latency (ms/turn batch) | ${legacy.latencyMs.toFixed(2)} | ${layer0.latencyMs.toFixed(2)} | ${(layer0.latencyMs - legacy.latencyMs).toFixed(2)} |`,
+    `| Compression Rate | ${toPercent(legacy.compressionRate)} | ${toPercent(structuredContext.compressionRate)} | ${toPercent(structuredContext.compressionRate - legacy.compressionRate)} |`,
+    `| Instruction Recall F1 | ${legacy.instructionRecallF1.toFixed(4)} | ${structuredContext.instructionRecallF1.toFixed(4)} | ${(structuredContext.instructionRecallF1 - legacy.instructionRecallF1).toFixed(4)} |`,
+    `| Decision Fidelity | ${legacy.decisionFidelity.toFixed(4)} | ${structuredContext.decisionFidelity.toFixed(4)} | ${(structuredContext.decisionFidelity - legacy.decisionFidelity).toFixed(4)} |`,
+    `| Artifact Integrity | ${toPercent(legacy.artifactIntegrity)} | ${toPercent(structuredContext.artifactIntegrity)} | ${toPercent(structuredContext.artifactIntegrity - legacy.artifactIntegrity)} |`,
+    `| Recoverability Rate | ${toPercent(legacy.recoverabilityRate)} | ${toPercent(structuredContext.recoverabilityRate)} | ${toPercent(structuredContext.recoverabilityRate - legacy.recoverabilityRate)} |`,
+    `| Hallucination Extension Rate | ${toPercent(legacy.hallucinationExtensionRate)} | ${toPercent(structuredContext.hallucinationExtensionRate)} | ${toPercent(structuredContext.hallucinationExtensionRate - legacy.hallucinationExtensionRate)} |`,
+    `| Latency (ms/turn batch) | ${legacy.latencyMs.toFixed(2)} | ${structuredContext.latencyMs.toFixed(2)} | ${(structuredContext.latencyMs - legacy.latencyMs).toFixed(2)} |`,
     "",
     "## Acceptance Gates",
     `- Hard Gate (no regression): ${hardGatePass ? "PASS" : "FAIL"}`,
@@ -859,28 +877,28 @@ function buildCaseTrace(params: {
   task: TaskDefinition;
   messages: SyntheticMessage[];
   legacy: LegacyEvaluation;
-  layer0: Layer0Evaluation;
+  structuredContext: StructuredContextEvaluation;
 }): CaseTrace {
-  const { testCase, task, messages, legacy, layer0 } = params;
+  const { testCase, task, messages, legacy, structuredContext } = params;
   const legacyKept = new Set(legacy.details.keptTurnIndexes);
-  const layer0Recent = new Set(layer0.details.keptTurnIndexes);
-  const layer0Oversized = new Set(layer0.details.oversizedTurnIndexes);
+  const structuredContextRecent = new Set(structuredContext.details.keptTurnIndexes);
+  const structuredContextOversized = new Set(structuredContext.details.oversizedTurnIndexes);
 
   const turns: TurnTrace[] = messages.map((message, index) => {
     const contribution = buildMessageContribution(message);
-    const layer0Actions: string[] = [];
+    const structuredContextActions: string[] = [];
 
-    if (layer0Recent.has(index)) {
-      layer0Actions.push("recent_kept");
+    if (structuredContextRecent.has(index)) {
+      structuredContextActions.push("recent_kept");
     }
-    if (layer0Oversized.has(index)) {
-      layer0Actions.push("artifact_ref");
+    if (structuredContextOversized.has(index)) {
+      structuredContextActions.push("artifact_ref");
     }
     if (contribution.categories.length > 0) {
-      layer0Actions.push(`record:${contribution.categories.join(",")}`);
+      structuredContextActions.push(`record:${contribution.categories.join(",")}`);
     }
-    if (layer0Actions.length === 0) {
-      layer0Actions.push("dropped_as_noise");
+    if (structuredContextActions.length === 0) {
+      structuredContextActions.push("dropped_as_noise");
     }
 
     return {
@@ -889,7 +907,7 @@ function buildCaseTrace(params: {
       chars: message.content.length,
       tokens: estimateTokensFromText(message.content),
       legacyAction: legacyKept.has(index) ? "kept" : "dropped",
-      layer0Actions,
+      structuredContextActions,
       categories: contribution.categories,
       instructionFactCount: contribution.instructionFacts.length,
       decisionFactCount: contribution.decisionFacts.length,
@@ -901,7 +919,7 @@ function buildCaseTrace(params: {
   });
 
   const legacyMetrics = legacy.metrics;
-  const layer0Metrics = layer0.metrics;
+  const structuredContextMetrics = structuredContext.metrics;
 
   return {
     caseId: testCase.id,
@@ -912,20 +930,25 @@ function buildCaseTrace(params: {
     turnCount: messages.length,
     metrics: {
       legacy: legacyMetrics,
-      layer0: layer0Metrics,
+      structuredContext: structuredContextMetrics,
       delta: {
-        compressionRate: layer0Metrics.compressionRate - legacyMetrics.compressionRate,
-        instructionRecallF1: layer0Metrics.instructionRecallF1 - legacyMetrics.instructionRecallF1,
-        decisionFidelity: layer0Metrics.decisionFidelity - legacyMetrics.decisionFidelity,
-        artifactIntegrity: layer0Metrics.artifactIntegrity - legacyMetrics.artifactIntegrity,
-        recoverabilityRate: layer0Metrics.recoverabilityRate - legacyMetrics.recoverabilityRate,
+        compressionRate: structuredContextMetrics.compressionRate - legacyMetrics.compressionRate,
+        instructionRecallF1:
+          structuredContextMetrics.instructionRecallF1 - legacyMetrics.instructionRecallF1,
+        decisionFidelity:
+          structuredContextMetrics.decisionFidelity - legacyMetrics.decisionFidelity,
+        artifactIntegrity:
+          structuredContextMetrics.artifactIntegrity - legacyMetrics.artifactIntegrity,
+        recoverabilityRate:
+          structuredContextMetrics.recoverabilityRate - legacyMetrics.recoverabilityRate,
         hallucinationExtensionRate:
-          layer0Metrics.hallucinationExtensionRate - legacyMetrics.hallucinationExtensionRate,
-        latencyMs: layer0Metrics.latencyMs - legacyMetrics.latencyMs,
+          structuredContextMetrics.hallucinationExtensionRate -
+          legacyMetrics.hallucinationExtensionRate,
+        latencyMs: structuredContextMetrics.latencyMs - legacyMetrics.latencyMs,
       },
     },
     legacy: legacy.details,
-    layer0: layer0.details,
+    structuredContext: structuredContext.details,
     turns,
   };
 }
@@ -949,30 +972,30 @@ function formatCaseTraceMarkdown(trace: CaseTrace): string {
   lines.push(`- turns: ${trace.turnCount}`);
   lines.push("");
 
-  lines.push("## Metric Delta (Layer0 - Legacy)");
+  lines.push("## Metric Delta (Structured Context - Legacy)");
   lines.push("");
-  lines.push("| Metric | Legacy | Layer0 | Delta |");
+  lines.push("| Metric | Legacy | Structured Context | Delta |");
   lines.push("|---|---:|---:|---:|");
   lines.push(
-    `| Compression Rate | ${toPercent(trace.metrics.legacy.compressionRate)} | ${toPercent(trace.metrics.layer0.compressionRate)} | ${toPercent(trace.metrics.delta.compressionRate)} |`,
+    `| Compression Rate | ${toPercent(trace.metrics.legacy.compressionRate)} | ${toPercent(trace.metrics.structuredContext.compressionRate)} | ${toPercent(trace.metrics.delta.compressionRate)} |`,
   );
   lines.push(
-    `| Instruction Recall F1 | ${trace.metrics.legacy.instructionRecallF1.toFixed(4)} | ${trace.metrics.layer0.instructionRecallF1.toFixed(4)} | ${trace.metrics.delta.instructionRecallF1.toFixed(4)} |`,
+    `| Instruction Recall F1 | ${trace.metrics.legacy.instructionRecallF1.toFixed(4)} | ${trace.metrics.structuredContext.instructionRecallF1.toFixed(4)} | ${trace.metrics.delta.instructionRecallF1.toFixed(4)} |`,
   );
   lines.push(
-    `| Decision Fidelity | ${trace.metrics.legacy.decisionFidelity.toFixed(4)} | ${trace.metrics.layer0.decisionFidelity.toFixed(4)} | ${trace.metrics.delta.decisionFidelity.toFixed(4)} |`,
+    `| Decision Fidelity | ${trace.metrics.legacy.decisionFidelity.toFixed(4)} | ${trace.metrics.structuredContext.decisionFidelity.toFixed(4)} | ${trace.metrics.delta.decisionFidelity.toFixed(4)} |`,
   );
   lines.push(
-    `| Artifact Integrity | ${toPercent(trace.metrics.legacy.artifactIntegrity)} | ${toPercent(trace.metrics.layer0.artifactIntegrity)} | ${toPercent(trace.metrics.delta.artifactIntegrity)} |`,
+    `| Artifact Integrity | ${toPercent(trace.metrics.legacy.artifactIntegrity)} | ${toPercent(trace.metrics.structuredContext.artifactIntegrity)} | ${toPercent(trace.metrics.delta.artifactIntegrity)} |`,
   );
   lines.push(
-    `| Recoverability Rate | ${toPercent(trace.metrics.legacy.recoverabilityRate)} | ${toPercent(trace.metrics.layer0.recoverabilityRate)} | ${toPercent(trace.metrics.delta.recoverabilityRate)} |`,
+    `| Recoverability Rate | ${toPercent(trace.metrics.legacy.recoverabilityRate)} | ${toPercent(trace.metrics.structuredContext.recoverabilityRate)} | ${toPercent(trace.metrics.delta.recoverabilityRate)} |`,
   );
   lines.push(
-    `| Hallucination Extension Rate | ${toPercent(trace.metrics.legacy.hallucinationExtensionRate)} | ${toPercent(trace.metrics.layer0.hallucinationExtensionRate)} | ${toPercent(trace.metrics.delta.hallucinationExtensionRate)} |`,
+    `| Hallucination Extension Rate | ${toPercent(trace.metrics.legacy.hallucinationExtensionRate)} | ${toPercent(trace.metrics.structuredContext.hallucinationExtensionRate)} | ${toPercent(trace.metrics.delta.hallucinationExtensionRate)} |`,
   );
   lines.push(
-    `| Latency (ms/turn batch) | ${trace.metrics.legacy.latencyMs.toFixed(2)} | ${trace.metrics.layer0.latencyMs.toFixed(2)} | ${trace.metrics.delta.latencyMs.toFixed(2)} |`,
+    `| Latency (ms/turn batch) | ${trace.metrics.legacy.latencyMs.toFixed(2)} | ${trace.metrics.structuredContext.latencyMs.toFixed(2)} | ${trace.metrics.delta.latencyMs.toFixed(2)} |`,
   );
   lines.push("");
 
@@ -994,70 +1017,91 @@ function formatCaseTraceMarkdown(trace: CaseTrace): string {
   lines.push(...formatFactSection("Legacy Decision Facts", trace.legacy.decisionFacts));
   lines.push(...formatFactSection("Legacy Constraint Facts", trace.legacy.constraintFacts));
 
-  lines.push("## Layer0 Compression Detail");
+  lines.push("## Structured Context Compression Detail");
   lines.push("");
-  lines.push(`- recentStartIndex: ${trace.layer0.recentStartIndex}`);
-  lines.push(`- keptRecentTurns: ${trace.layer0.keptTurnIndexes.length}`);
-  lines.push(`- droppedTurns: ${trace.layer0.droppedTurnIndexes.length}`);
-  lines.push(`- oversizedTurns: ${trace.layer0.oversizedTurnIndexes.length}`);
-  lines.push(`- artifactRefs: ${trace.layer0.artifactRefs.length}`);
+  lines.push(`- recentStartIndex: ${trace.structuredContext.recentStartIndex}`);
+  lines.push(`- keptRecentTurns: ${trace.structuredContext.keptTurnIndexes.length}`);
+  lines.push(`- droppedTurns: ${trace.structuredContext.droppedTurnIndexes.length}`);
+  lines.push(`- oversizedTurns: ${trace.structuredContext.oversizedTurnIndexes.length}`);
+  lines.push(`- artifactRefs: ${trace.structuredContext.artifactRefs.length}`);
   lines.push("");
-  lines.push("### Layer0 Summary");
+  lines.push("### Structured Context Summary");
   lines.push("```");
-  lines.push(trace.layer0.summary);
+  lines.push(trace.structuredContext.summary);
   lines.push("```");
   lines.push("");
 
-  if (trace.layer0.systemPromptAddition) {
-    lines.push("### Layer0 systemPromptAddition");
+  if (trace.structuredContext.systemPromptAddition) {
+    lines.push("### Structured Context systemPromptAddition");
     lines.push("```");
-    lines.push(trace.layer0.systemPromptAddition);
+    lines.push(trace.structuredContext.systemPromptAddition);
     lines.push("```");
     lines.push("");
   }
 
-  lines.push(...formatFactSection("Layer0 Instruction Facts", trace.layer0.instructionFacts));
-  lines.push(...formatFactSection("Layer0 Decision Facts", trace.layer0.decisionFacts));
-  lines.push(...formatFactSection("Layer0 Constraint Facts", trace.layer0.constraintFacts));
+  lines.push(
+    ...formatFactSection(
+      "Structured Context Instruction Facts",
+      trace.structuredContext.instructionFacts,
+    ),
+  );
+  lines.push(
+    ...formatFactSection(
+      "Structured Context Decision Facts",
+      trace.structuredContext.decisionFacts,
+    ),
+  );
+  lines.push(
+    ...formatFactSection(
+      "Structured Context Constraint Facts",
+      trace.structuredContext.constraintFacts,
+    ),
+  );
 
-  lines.push("### Layer0 ContextRecord");
+  lines.push("### Structured Context ContextRecord");
   lines.push("- decisions:");
   lines.push(
-    ...(trace.layer0.contextRecord.decisions.length > 0
-      ? trace.layer0.contextRecord.decisions.slice(0, 10).map((value) => `  - ${value}`)
+    ...(trace.structuredContext.contextRecord.decisions.length > 0
+      ? trace.structuredContext.contextRecord.decisions.slice(0, 10).map((value) => `  - ${value}`)
       : ["  - (none)"]),
   );
   lines.push("- constraints:");
   lines.push(
-    ...(trace.layer0.contextRecord.constraints.length > 0
-      ? trace.layer0.contextRecord.constraints.slice(0, 10).map((value) => `  - ${value}`)
+    ...(trace.structuredContext.contextRecord.constraints.length > 0
+      ? trace.structuredContext.contextRecord.constraints
+          .slice(0, 10)
+          .map((value) => `  - ${value}`)
       : ["  - (none)"]),
   );
   lines.push("- pendingUserAsks:");
   lines.push(
-    ...(trace.layer0.contextRecord.pendingUserAsks.length > 0
-      ? trace.layer0.contextRecord.pendingUserAsks.slice(0, 10).map((value) => `  - ${value}`)
+    ...(trace.structuredContext.contextRecord.pendingUserAsks.length > 0
+      ? trace.structuredContext.contextRecord.pendingUserAsks
+          .slice(0, 10)
+          .map((value) => `  - ${value}`)
       : ["  - (none)"]),
   );
   lines.push("- openTodos:");
   lines.push(
-    ...(trace.layer0.contextRecord.openTodos.length > 0
-      ? trace.layer0.contextRecord.openTodos.slice(0, 10).map((value) => `  - ${value}`)
+    ...(trace.structuredContext.contextRecord.openTodos.length > 0
+      ? trace.structuredContext.contextRecord.openTodos.slice(0, 10).map((value) => `  - ${value}`)
       : ["  - (none)"]),
   );
   lines.push("- exactIdentifiers:");
   lines.push(
-    ...(trace.layer0.contextRecord.exactIdentifiers.length > 0
-      ? trace.layer0.contextRecord.exactIdentifiers.slice(0, 12).map((value) => `  - ${value}`)
+    ...(trace.structuredContext.contextRecord.exactIdentifiers.length > 0
+      ? trace.structuredContext.contextRecord.exactIdentifiers
+          .slice(0, 12)
+          .map((value) => `  - ${value}`)
       : ["  - (none)"]),
   );
   lines.push("");
 
-  lines.push("### Layer0 Artifact Refs");
-  if (trace.layer0.artifactRefs.length === 0) {
+  lines.push("### Structured Context Artifact Refs");
+  if (trace.structuredContext.artifactRefs.length === 0) {
     lines.push("- (none)");
   } else {
-    for (const ref of trace.layer0.artifactRefs) {
+    for (const ref of trace.structuredContext.artifactRefs) {
       lines.push(
         `- turn=${ref.turnIndex} toolCallId=${ref.toolCallId ?? "-"} bytes=${ref.bytes} path=${ref.path}`,
       );
@@ -1068,13 +1112,13 @@ function formatCaseTraceMarkdown(trace: CaseTrace): string {
   lines.push("## Turn-by-Turn Visualization");
   lines.push("");
   lines.push(
-    "| Turn | Role | Chars | Tokens | Legacy | Layer0 | Facts(i/d/c/id) | ToolCallId | Preview |",
+    "| Turn | Role | Chars | Tokens | Legacy | Structured Context | Facts(i/d/c/id) | ToolCallId | Preview |",
   );
   lines.push("|---:|---|---:|---:|---|---|---|---|---|");
   for (const turn of trace.turns) {
     const factSummary = `${turn.instructionFactCount}/${turn.decisionFactCount}/${turn.constraintFactCount}/${turn.identifierCount}`;
     lines.push(
-      `| ${turn.turn} | ${turn.role} | ${turn.chars} | ${turn.tokens} | ${turn.legacyAction} | ${markdownCell(turn.layer0Actions.join(" + "))} | ${factSummary} | ${turn.toolCallId ?? "-"} | ${markdownCell(turn.preview)} |`,
+      `| ${turn.turn} | ${turn.role} | ${turn.chars} | ${turn.tokens} | ${turn.legacyAction} | ${markdownCell(turn.structuredContextActions.join(" + "))} | ${factSummary} | ${turn.toolCallId ?? "-"} | ${markdownCell(turn.preview)} |`,
     );
   }
   lines.push("");
@@ -1106,7 +1150,7 @@ async function writeTraceIndex(params: {
   traces: TraceFileMeta[];
 }): Promise<void> {
   const lines: string[] = [];
-  lines.push("# Layer0 Trace Index");
+  lines.push("# Structured Context Trace Index");
   lines.push("");
   lines.push(`- generatedAt: ${new Date().toISOString()}`);
   lines.push(`- traceCount: ${params.traces.length}`);
@@ -1136,7 +1180,7 @@ async function main() {
     process.cwd(),
     ".artifacts",
     "context-engine",
-    "layer0-artifacts",
+    "structured-context-artifacts",
   );
   await fs.mkdir(artifactsRoot, { recursive: true });
 
@@ -1158,14 +1202,19 @@ async function main() {
 
     const { messages, truth } = generateTranscript({ testCase, task });
     const legacy = await evaluateLegacy({ testCase, messages, truth });
-    const layer0 = await evaluateLayer0({ testCase, messages, truth, artifactsRoot });
+    const structuredContext = await evaluateStructuredContext({
+      testCase,
+      messages,
+      truth,
+      artifactsRoot,
+    });
 
     results.push(legacy.metrics);
-    results.push(layer0.metrics);
+    results.push(structuredContext.metrics);
 
     const shouldTrace = traceAll || traceCaseSet.has(testCase.id);
     if (shouldTrace) {
-      const trace = buildCaseTrace({ testCase, task, messages, legacy, layer0 });
+      const trace = buildCaseTrace({ testCase, task, messages, legacy, structuredContext });
       traceFiles.push(
         await writeTraceFiles({
           traceDir,
@@ -1178,9 +1227,9 @@ async function main() {
   await writeTraceIndex({ traceDir, traces: traceFiles });
 
   const legacyAgg = aggregate(results, "legacy");
-  const layer0Agg = aggregate(results, "layer0");
+  const structuredContextAgg = aggregate(results, "structured-context");
 
-  const report = formatAggregateReport(legacyAgg, layer0Agg, traceDir);
+  const report = formatAggregateReport(legacyAgg, structuredContextAgg, traceDir);
 
   await fs.mkdir(path.dirname(outPath), { recursive: true });
   await fs.writeFile(outPath, report, "utf8");
@@ -1197,7 +1246,7 @@ async function main() {
         traceCases: traceFiles.map((entry) => entry.caseId),
         aggregates: {
           legacy: legacyAgg,
-          layer0: layer0Agg,
+          structuredContext: structuredContextAgg,
         },
         results,
       },

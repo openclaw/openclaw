@@ -86,7 +86,10 @@ function buildDiscoveryCacheKey(params: {
   return `${workspaceKey}::${ownershipUid ?? "none"}::${configExtensionsRoot}::${bundledRoot}::${builtInBundledRoots.join(",")}::${JSON.stringify(loadPaths)}`;
 }
 
-function resolveBuiltInBundledPluginDirs(params: { env: NodeJS.ProcessEnv }): string[] {
+function resolveBuiltInBundledPluginDirs(params: {
+  env: NodeJS.ProcessEnv;
+  modulePath?: string;
+}): string[] {
   // Explicit bundled root override fully controls discovery roots.
   if (params.env.OPENCLAW_BUNDLED_PLUGINS_DIR?.trim()) {
     return [];
@@ -94,12 +97,20 @@ function resolveBuiltInBundledPluginDirs(params: { env: NodeJS.ProcessEnv }): st
 
   const dirs: string[] = [];
   try {
-    let cursor = path.dirname(fileURLToPath(import.meta.url));
+    const modulePath = params.modulePath ?? fileURLToPath(import.meta.url);
+    let cursor = path.dirname(modulePath);
     for (let i = 0; i < 6; i += 1) {
       for (const pluginId of BUILT_IN_BUNDLED_PLUGIN_IDS) {
-        const candidate = path.join(cursor, pluginId);
-        if (fs.existsSync(path.join(candidate, "openclaw.plugin.json"))) {
-          dirs.push(candidate);
+        const candidates = [
+          path.join(cursor, pluginId),
+          path.join(cursor, "plugins", pluginId),
+          path.join(cursor, "src", "plugins", pluginId),
+          path.join(cursor, "..", "src", "plugins", pluginId),
+        ];
+        for (const candidate of candidates) {
+          if (fs.existsSync(path.join(candidate, "openclaw.plugin.json"))) {
+            dirs.push(path.resolve(candidate));
+          }
         }
       }
       const parent = path.dirname(cursor);
@@ -114,6 +125,10 @@ function resolveBuiltInBundledPluginDirs(params: { env: NodeJS.ProcessEnv }): st
 
   return [...new Set(dirs)];
 }
+
+export const __testing = {
+  resolveBuiltInBundledPluginDirs,
+};
 
 function currentUid(overrideUid?: number | null): number | null {
   if (overrideUid !== undefined) {
@@ -748,10 +763,11 @@ export function discoverOpenClawPlugins(params: {
   }
 
   for (const builtInDir of resolveBuiltInBundledPluginDirs({ env })) {
-    discoverInDirectory({
-      dir: builtInDir,
+    discoverFromPath({
+      rawPath: builtInDir,
       origin: "bundled",
       ownershipUid: params.ownershipUid,
+      env,
       candidates,
       diagnostics,
       seen,

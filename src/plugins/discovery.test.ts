@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { afterAll, afterEach, describe, expect, it } from "vitest";
-import { clearPluginDiscoveryCache, discoverOpenClawPlugins } from "./discovery.js";
+import { __testing, clearPluginDiscoveryCache, discoverOpenClawPlugins } from "./discovery.js";
 import {
   cleanupTrackedTempDirs,
   makeTrackedTempDir,
@@ -64,6 +64,17 @@ afterAll(() => {
 });
 
 describe("discoverOpenClawPlugins", () => {
+  it("finds built-in structured-context from src/plugins for dist-like runtime module paths", () => {
+    const dirs = __testing.resolveBuiltInBundledPluginDirs({
+      env: {},
+      modulePath: path.join(process.cwd(), "dist", "plugins-runtime-entry.js"),
+    });
+
+    expect(
+      dirs.some((dir) => dir.endsWith(path.join("src", "plugins", "structured-context"))),
+    ).toBe(true);
+  });
+
   it("discovers global and workspace extensions", async () => {
     const stateDir = makeTempDir();
     const workspaceDir = path.join(stateDir, "workspace");
