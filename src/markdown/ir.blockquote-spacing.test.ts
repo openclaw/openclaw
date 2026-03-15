@@ -153,6 +153,27 @@ describe("blockquote spacing", () => {
 
       expect(result.text).toBe("> Line 1\n> Line 2");
     });
+
+    it("prefixes continuation lines on hard break inside a blockquote", () => {
+      const input = "> Line 1  \n> Line 2";
+      const result = markdownToIR(input, { blockquotePrefix: "> " });
+
+      expect(result.text).toBe("> Line 1\n> Line 2");
+    });
+
+    it("prefixes the next paragraph inside a blockquote", () => {
+      const input = "> Line 1\n>\n> Line 2";
+      const result = markdownToIR(input, { blockquotePrefix: "> " });
+
+      expect(result.text).toBe("> Line 1\n\n> Line 2");
+    });
+
+    it("repeats the prefix for nested blockquote continuation lines", () => {
+      const input = "> > Line 1\n> > Line 2";
+      const result = markdownToIR(input, { blockquotePrefix: "> " });
+
+      expect(result.text).toBe("> > Line 1\n> > Line 2");
+    });
   });
 
   describe("edge cases", () => {

@@ -233,11 +233,16 @@ function appendText(state: RenderState, value: string) {
   target.text += value;
 }
 
+function appendBlockquotePrefix(state: RenderState, depth = state.blockquoteDepth) {
+  if (depth <= 0 || !state.blockquotePrefix) {
+    return;
+  }
+  appendText(state, state.blockquotePrefix.repeat(depth));
+}
+
 function appendLineBreak(state: RenderState) {
   appendText(state, "\n");
-  if (state.blockquoteDepth > 0 && state.blockquotePrefix) {
-    appendText(state, state.blockquotePrefix);
-  }
+  appendBlockquotePrefix(state);
 }
 
 function openStyle(state: RenderState, style: MarkdownStyle) {
@@ -260,14 +265,54 @@ function closeStyle(state: RenderState, style: MarkdownStyle) {
   }
 }
 
-function appendParagraphSeparator(state: RenderState) {
+function appendParagraphSeparator(
+  state: RenderState,
+  options: { continueBlockquote?: boolean } = {},
+) {
   if (state.env.listStack.length > 0) {
     return;
   }
   if (state.table) {
     return;
-  } // Don't add paragraph separators inside tables
-  state.text += "\n\n";
+  }
+  appendText(state, "\n\n");
+  if (options.continueBlockquote) {
+    appendBlockquotePrefix(state);
+  }
+}
+
+function tokenStartsBlockquoteContent(token: MarkdownToken | undefined) {
+  switch (token?.type) {
+    case "paragraph_open":
+    case "heading_open":
+    case "blockquote_open":
+    case "bullet_list_open":
+    case "ordered_list_open":
+    case "code_block":
+    case "fence":
+    case "html_block":
+    case "table_open":
+    case "hr":
+      return true;
+    default:
+      return false;
+  }
+}
+
+function shouldContinueBlockquoteAfter(tokens: MarkdownToken[], currentIndex: number) {
+  for (let index = currentIndex + 1; index < tokens.length; index += 1) {
+    const token = tokens[index];
+    if (!token) {
+      continue;
+    }
+    if (token.type === "blockquote_close") {
+      return false;
+    }
+    if (tokenStartsBlockquoteContent(token)) {
+      return true;
+    }
+  }
+  return false;
 }
 
 function appendListPrefix(state: RenderState) {
@@ -565,7 +610,8 @@ function renderTableAsCode(state: RenderState) {
 }
 
 function renderTokens(tokens: MarkdownToken[], state: RenderState): void {
-  for (const token of tokens) {
+  for (let index = 0; index < tokens.length; index += 1) {
+    const token = tokens[index];
     switch (token.type) {
       case "inline":
         if (token.children) {
@@ -623,7 +669,10 @@ function renderTokens(tokens: MarkdownToken[], state: RenderState): void {
         appendLineBreak(state);
         break;
       case "paragraph_close":
-        appendParagraphSeparator(state);
+        appendParagraphSeparator(state, {
+          continueBlockquote:
+            state.blockquoteDepth > 0 && shouldContinueBlockquoteAfter(tokens, index),
+        });
         break;
       case "heading_open":
         if (state.headingStyle === "bold") {
@@ -634,12 +683,13 @@ function renderTokens(tokens: MarkdownToken[], state: RenderState): void {
         if (state.headingStyle === "bold") {
           closeStyle(state, "bold");
         }
-        appendParagraphSeparator(state);
+        appendParagraphSeparator(state, {
+          continueBlockquote:
+            state.blockquoteDepth > 0 && shouldContinueBlockquoteAfter(tokens, index),
+        });
         break;
       case "blockquote_open":
-        if (state.blockquotePrefix) {
-          appendText(state, state.blockquotePrefix);
-        }
+        appendBlockquotePrefix(state, 1);
         state.blockquoteDepth += 1;
         openStyle(state, "blockquote");
         break;
