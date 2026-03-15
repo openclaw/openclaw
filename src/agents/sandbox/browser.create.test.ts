@@ -172,7 +172,7 @@ describe("ensureSandboxBrowser create args", () => {
     expect(result?.noVncUrl).toBeUndefined();
   });
 
-  it("mounts the main workspace read-only when workspaceAccess is none", async () => {
+  it("keeps the main workspace writable when workspaceAccess is none", async () => {
     const cfg = buildConfig(false);
     cfg.workspaceAccess = "none";
 
@@ -186,7 +186,8 @@ describe("ensureSandboxBrowser create args", () => {
     const createArgs = findDockerArgsCall(dockerMocks.execDocker.mock.calls, "create");
 
     expect(createArgs).toBeDefined();
-    expect(createArgs).toContain("/tmp/workspace:/workspace:ro");
+    expect(createArgs).toContain("/tmp/workspace:/workspace");
+    expect(createArgs).not.toContain("/tmp/workspace:/workspace:ro");
   });
 
   it("keeps the main workspace writable when workspaceAccess is rw", async () => {
