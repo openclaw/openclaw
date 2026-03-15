@@ -19,6 +19,7 @@ import {
   resolveSharedMatrixClient,
   stopSharedClientForAccount,
 } from "../client.js";
+import { startMatrixDeviceVerification, stopMatrixDeviceVerification } from "../verification.js";
 import { normalizeMatrixUserId } from "./allowlist.js";
 import { registerMatrixAutoJoin } from "./auto-join.js";
 import { createDirectRoomTracker } from "./direct.js";
@@ -381,17 +382,44 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
   // If E2EE is enabled, trigger device verification
   if (auth.encryption && client.crypto) {
     try {
-      // Request verification from other sessions
-      const verificationRequest = await (
-        client.crypto as { requestOwnUserVerification?: () => Promise<unknown> }
-      ).requestOwnUserVerification?.();
-      if (verificationRequest) {
-        logger.info("matrix: device verification requested - please verify in another client");
-      }
-    } catch (err) {
-      logger.debug?.("Device verification request failed (may already be verified)", {
-        error: String(err),
+      const formatMeta = (meta?: Record<string, unknown>) => {
+        if (!meta || Object.keys(meta).length === 0) {
+          return "";
+        }
+        try {
+          return ` ${JSON.stringify(meta)}`;
+        } catch {
+          return " [meta]";
+        }
+      };
+      const verificationLogger = {
+        debug: (message: string, meta?: Record<string, unknown>) => {
+          logger.debug?.(message, meta);
+          if (core.logging.shouldLogVerbose()) {
+            runtime.log?.(`${message}${formatMeta(meta)}`);
+          }
+        },
+        info: (message: string, meta?: Record<string, unknown>) => {
+          logger.info(message, meta);
+          runtime.log?.(`${message}${formatMeta(meta)}`);
+        },
+        warn: (message: string, meta?: Record<string, unknown>) => {
+          logger.warn(message, meta);
+          runtime.log?.(`${message}${formatMeta(meta)}`);
+        },
+        error: (message: string, meta?: Record<string, unknown>) => {
+          logger.error(message, meta);
+          runtime.error?.(`${message}${formatMeta(meta)}`);
+        },
+      };
+      await startMatrixDeviceVerification({
+        client,
+        auth,
+        logger: verificationLogger,
+        accountId: opts.accountId,
       });
+    } catch (err) {
+      logger.debug?.("matrix: device verification setup failed", { error: String(err) });
     }
   }
 
@@ -399,6 +427,7 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
     const onAbort = () => {
       try {
         logVerboseMessage("matrix: stopping client");
+        stopMatrixDeviceVerification(client);
         stopSharedClientForAccount(auth, opts.accountId);
       } finally {
         setActiveMatrixClient(null, opts.accountId);

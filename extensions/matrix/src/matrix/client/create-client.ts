@@ -114,6 +114,18 @@ export async function createMatrixClient(params: {
             "Ignoring malformed device list entries during crypto sync",
             message,
           );
+          // When crypto sync fails, the SDK may skip processing `toDeviceMessages`.
+          // Emit the raw events so higher-level handlers can still attempt to handle plaintext
+          // to-device messages (avoids double-handling when crypto sync succeeds).
+          try {
+            if (Array.isArray(toDeviceMessages)) {
+              for (const msg of toDeviceMessages) {
+                client.emit("to_device.decrypted", msg);
+              }
+            }
+          } catch {
+            // Ignore to-device emit failures.
+          }
           return;
         }
         throw err;
