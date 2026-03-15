@@ -6,4 +6,9 @@ export type ControlUiBootstrapConfig = {
   assistantAvatar: string;
   assistantAgentId: string;
   serverVersion?: string;
+  chat?: {
+    contextNotice?: {
+      showPricingThreshold?: boolean;
+    };
+  };
 };

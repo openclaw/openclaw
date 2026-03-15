@@ -75,6 +75,7 @@ export type ChatProps = {
   disabledReason: string | null;
   error: string | null;
   sessions: SessionsListResult | null;
+  showPricingThresholdNotice?: boolean;
   focusMode: boolean;
   sidebarOpen?: boolean;
   sidebarContent?: string | null;
@@ -247,38 +248,160 @@ function renderFallbackIndicator(status: FallbackIndicatorStatus | null | undefi
   `;
 }
 
+type ContextNoticeDefaults = {
+  model: string | null;
+  contextTokens: number | null;
+};
+
+type ContextThresholdMetadata = {
+  modelContextTokens?: number;
+  pricingThresholdTokens?: number;
+};
+
+const KNOWN_CONTEXT_THRESHOLDS: Record<string, ContextThresholdMetadata> = {
+  "openai/gpt-5.4": {
+    modelContextTokens: 1_050_000,
+    pricingThresholdTokens: 272_000,
+  },
+  "openai/gpt-5.4-pro": {
+    modelContextTokens: 1_050_000,
+    pricingThresholdTokens: 272_000,
+  },
+  "openai-codex/gpt-5.4": {
+    modelContextTokens: 1_050_000,
+    pricingThresholdTokens: 272_000,
+  },
+  "google/gemini-2.5-pro": {
+    pricingThresholdTokens: 200_000,
+  },
+  "google/gemini-3.1-pro-preview": {
+    pricingThresholdTokens: 200_000,
+  },
+  "google-gemini-cli/gemini-3.1-pro-preview": {
+    pricingThresholdTokens: 200_000,
+  },
+};
+
+function resolveKnownContextThresholds(
+  session: GatewaySessionRow | undefined,
+  defaults: ContextNoticeDefaults | null | undefined,
+): ContextThresholdMetadata | null {
+  const rawModel = (session?.model ?? defaults?.model ?? "").trim().toLowerCase();
+  const provider = (session?.modelProvider ?? "").trim().toLowerCase();
+  const candidates = new Set<string>();
+  if (rawModel) {
+    candidates.add(rawModel);
+    if (provider && !rawModel.includes("/")) {
+      candidates.add(`${provider}/${rawModel}`);
+    }
+  }
+  for (const key of candidates) {
+    const matched = KNOWN_CONTEXT_THRESHOLDS[key];
+    if (matched) {
+      return matched;
+    }
+  }
+  return null;
+}
+
+function resolveNoticeTone(ratio: number) {
+  if (ratio >= 0.95) {
+    return { color: "rgb(220, 38, 38)", bg: "rgba(220, 38, 38, 0.16)" };
+  }
+  if (ratio >= 0.85) {
+    return { color: "rgb(217, 119, 6)", bg: "rgba(217, 119, 6, 0.14)" };
+  }
+  return { color: "rgb(37, 99, 235)", bg: "rgba(37, 99, 235, 0.10)" };
+}
+
 /**
- * Compact notice when context usage reaches 85%+.
- * Progressively shifts from amber (85%) to red (90%+).
+ * Show separate pricing-threshold and model-context pills when we know both.
+ * Falls back to the legacy single warning when only a runtime limit is available.
  */
 function renderContextNotice(
   session: GatewaySessionRow | undefined,
-  defaultContextTokens: number | null,
+  defaults: ContextNoticeDefaults | null | undefined,
+  showPricingThresholdNotice = true,
 ) {
-  const used = session?.inputTokens ?? 0;
-  const limit = session?.contextTokens ?? defaultContextTokens ?? 0;
-  if (!used || !limit) {
+  const inputUsed = session?.inputTokens ?? 0;
+  const contextUsed = Math.max(session?.totalTokens ?? 0, inputUsed);
+  const runtimeLimit = session?.contextTokens ?? defaults?.contextTokens ?? 0;
+  const known = resolveKnownContextThresholds(session, defaults);
+  const modelLimit = known?.modelContextTokens ?? runtimeLimit;
+  if (!contextUsed || !modelLimit) {
     return nothing;
   }
-  const ratio = used / limit;
-  if (ratio < 0.85) {
+
+  const modelRatio = contextUsed / modelLimit;
+  const shouldShowPricing =
+    showPricingThresholdNotice &&
+    typeof known?.pricingThresholdTokens === "number" &&
+    inputUsed >= known.pricingThresholdTokens;
+  const shouldShowModel = modelRatio >= 0.85 || shouldShowPricing;
+  if (!shouldShowPricing && !shouldShowModel) {
     return nothing;
   }
-  const pct = Math.min(Math.round(ratio * 100), 100);
-  // Lerp from amber (#d97706) at 85% to red (#dc2626) at 95%+
-  const t = Math.min(Math.max((ratio - 0.85) / 0.1, 0), 1);
-  // RGB: amber(217,119,6) → red(220,38,38)
-  const r = Math.round(217 + (220 - 217) * t);
-  const g = Math.round(119 + (38 - 119) * t);
-  const b = Math.round(6 + (38 - 6) * t);
-  const color = `rgb(${r}, ${g}, ${b})`;
-  const bgOpacity = 0.08 + 0.08 * t;
-  const bg = `rgba(${r}, ${g}, ${b}, ${bgOpacity})`;
+
+  const runtimeDiffers = runtimeLimit > 0 && runtimeLimit !== modelLimit;
+  const tone = resolveNoticeTone(modelRatio);
+  const pricingThreshold = showPricingThresholdNotice
+    ? (known?.pricingThresholdTokens ?? null)
+    : null;
+  const shouldShowModelWarning = contextUsed >= modelLimit;
+  const shouldShow = shouldShowPricing || shouldShowModelWarning || (!known && modelRatio >= 0.85);
+  if (!shouldShow) {
+    return nothing;
+  }
+
   return html`
-    <div class="context-notice" role="status" style="--ctx-color:${color};--ctx-bg:${bg}">
-      <svg class="context-notice__icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
-      <span>${pct}% context used</span>
-      <span class="context-notice__detail">${formatTokensCompact(used)} / ${formatTokensCompact(limit)}</span>
+    <div
+      class="context-notice context-notice--stacked"
+      role="status"
+      style="--ctx-color:${tone.color};--ctx-bg:${tone.bg}"
+      title=${
+        runtimeDiffers
+          ? `Model context window is ${formatTokensCompact(modelLimit)}; runtime currently budgets ${formatTokensCompact(runtimeLimit)} for compaction.`
+          : `Model context window: ${formatTokensCompact(modelLimit)}`
+      }
+    >
+      <div class="context-notice__summary">
+        <span class="context-notice__summary-label">Model context</span>
+        <span class="context-notice__metric context-notice__metric--used">
+          Used ${formatTokensCompact(contextUsed)}
+        </span>
+        ${
+          pricingThreshold
+            ? html`
+              <span class="context-notice__separator">/</span>
+              <span class="context-notice__metric context-notice__metric--pricing">
+                Higher-rate ${formatTokensCompact(pricingThreshold)}
+              </span>
+            `
+            : nothing
+        }
+        <span class="context-notice__separator">/</span>
+        <span class="context-notice__metric context-notice__metric--limit">
+          Limit ${formatTokensCompact(modelLimit)}
+        </span>
+      </div>
+      ${
+        shouldShowPricing && pricingThreshold
+          ? html`
+              <div class="context-notice__note context-notice__note--pricing">
+                Higher-rate billing threshold crossed.
+              </div>
+            `
+          : nothing
+      }
+      ${
+        shouldShowModelWarning
+          ? html`
+              <div class="context-notice__note context-notice__note--limit">
+                Estimated model context is at or beyond the ceiling — auto-compaction or overflow is likely.
+              </div>
+            `
+          : nothing
+      }
     </div>
   `;
 }
@@ -1165,7 +1288,11 @@ export function renderChat(props: ChatProps) {
 
       ${renderFallbackIndicator(props.fallbackStatus)}
       ${renderCompactionIndicator(props.compactionStatus)}
-      ${renderContextNotice(activeSession, props.sessions?.defaults?.contextTokens ?? null)}
+      ${renderContextNotice(
+        activeSession,
+        props.sessions?.defaults ?? null,
+        props.showPricingThresholdNotice ?? true,
+      )}
 
       ${
         props.showNewMessages

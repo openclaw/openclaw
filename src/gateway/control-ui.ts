@@ -358,6 +358,12 @@ export function handleControlUiHttpRequest(
       assistantAvatar: avatarValue ?? identity.avatar,
       assistantAgentId: identity.agentId,
       serverVersion: resolveRuntimeServiceVersion(process.env),
+      chat: {
+        contextNotice: {
+          showPricingThreshold:
+            opts?.config?.gateway?.controlUi?.chat?.showPricingThreshold ?? true,
+        },
+      },
     } satisfies ControlUiBootstrapConfig);
     return true;
   }

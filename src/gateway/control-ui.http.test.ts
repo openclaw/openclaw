@@ -175,6 +175,7 @@ describe("handleControlUiHttpRequest", () => {
         expect(parsed.assistantName).toBe("</script><script>alert(1)//");
         expect(parsed.assistantAvatar).toBe("/avatar/main");
         expect(parsed.assistantAgentId).toBe("main");
+        expect(parsed.chat?.contextNotice?.showPricingThreshold).toBe(true);
       },
     });
   });
@@ -192,6 +193,7 @@ describe("handleControlUiHttpRequest", () => {
             config: {
               agents: { defaults: { workspace: tmp } },
               ui: { assistant: { name: "Ops", avatar: "ops.png" } },
+              gateway: { controlUi: { chat: { showPricingThreshold: false } } },
             },
           },
         );
@@ -201,6 +203,7 @@ describe("handleControlUiHttpRequest", () => {
         expect(parsed.assistantName).toBe("Ops");
         expect(parsed.assistantAvatar).toBe("/openclaw/avatar/main");
         expect(parsed.assistantAgentId).toBe("main");
+        expect(parsed.chat?.contextNotice?.showPricingThreshold).toBe(false);
       },
     });
   });

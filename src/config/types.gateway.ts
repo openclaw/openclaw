@@ -105,6 +105,11 @@ export type GatewayControlUiConfig = {
   root?: string;
   /** Allowed browser origins for Control UI/WebChat websocket connections. */
   allowedOrigins?: string[];
+  /** Optional Control UI chat display preferences. */
+  chat?: {
+    /** Show model-specific higher-rate pricing threshold info in chat context notices (default: true). */
+    showPricingThreshold?: boolean;
+  };
   /**
    * DANGEROUS: Keep Host-header origin fallback behavior.
    * Supported long-term for deployments that intentionally rely on this policy.
