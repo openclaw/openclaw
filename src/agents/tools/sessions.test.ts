@@ -254,6 +254,36 @@ describe("resolveAnnounceTarget", () => {
     expect(first).toBeDefined();
     expect(first?.method).toBe("sessions.list");
   });
+
+  it("hydrates Telegram threadId from sessions.list for forum topics", async () => {
+    callGatewayMock.mockResolvedValueOnce({
+      sessions: [
+        {
+          key: "agent:main:telegram:group:-1001234567890:topic:42",
+          deliveryContext: {
+            channel: "telegram",
+            to: "-1001234567890",
+            accountId: "default",
+          },
+          lastThreadId: 42,
+        },
+      ],
+    });
+
+    const target = await resolveAnnounceTarget({
+      sessionKey: "agent:main:telegram:group:-1001234567890:topic:42",
+      displayKey: "agent:main:telegram:group:-1001234567890:topic:42",
+    });
+    expect(target).toEqual({
+      channel: "telegram",
+      to: "-1001234567890",
+      accountId: "default",
+      threadId: "42",
+    });
+    expect(callGatewayMock).toHaveBeenCalledTimes(1);
+    const first = callGatewayMock.mock.calls[0]?.[0] as { method?: string } | undefined;
+    expect(first?.method).toBe("sessions.list");
+  });
 });
 
 describe("sessions_list gating", () => {

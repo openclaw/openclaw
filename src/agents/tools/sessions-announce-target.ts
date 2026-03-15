@@ -13,9 +13,11 @@ export async function resolveAnnounceTarget(params: {
   const fallback = parsed ?? parsedDisplay ?? null;
 
   if (fallback) {
-    const normalized = normalizeChannelId(fallback.channel);
+    const normalized = normalizeChannelId(fallback.channel) ?? fallback.channel.toLowerCase();
     const plugin = normalized ? getChannelPlugin(normalized) : null;
-    if (!plugin?.meta?.preferSessionLookupForAnnounceTarget) {
+    const shouldPreferSessionLookup =
+      normalized === "telegram" || plugin?.meta?.preferSessionLookupForAnnounceTarget;
+    if (!shouldPreferSessionLookup) {
       return fallback;
     }
   }
@@ -47,8 +49,12 @@ export async function resolveAnnounceTarget(params: {
     const accountId =
       (typeof deliveryContext?.accountId === "string" ? deliveryContext.accountId : undefined) ??
       (typeof match?.lastAccountId === "string" ? match.lastAccountId : undefined);
+    const threadId =
+      (typeof match?.lastThreadId === "string" || typeof match?.lastThreadId === "number"
+        ? String(match.lastThreadId)
+        : fallback?.threadId) ?? fallback?.threadId;
     if (channel && to) {
-      return { channel, to, accountId };
+      return { channel, to, accountId, threadId };
     }
   } catch {
     // ignore

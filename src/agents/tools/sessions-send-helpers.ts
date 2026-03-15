@@ -1,9 +1,11 @@
+import { parseReplyDirectives } from "../../auto-reply/reply/reply-directives.js";
 import {
   getChannelPlugin,
   normalizeChannelId as normalizeAnyChannelId,
 } from "../../channels/plugins/index.js";
 import { normalizeChannelId as normalizeChatChannelId } from "../../channels/registry.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import { parseAgentSessionKey, resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 
 const ANNOUNCE_SKIP_TOKEN = "ANNOUNCE_SKIP";
 const REPLY_SKIP_TOKEN = "REPLY_SKIP";
@@ -129,6 +131,10 @@ export function buildAgentToAgentAnnounceContext(params: {
   roundOneReply?: string;
   latestReply?: string;
 }) {
+  const sameAgentRoomMove = isSameAgentRoomMove({
+    requesterSessionKey: params.requesterSessionKey,
+    targetSessionKey: params.targetSessionKey,
+  });
   const lines = [
     "Agent-to-agent announce step:",
     ...buildAgentSessionLines(params),
@@ -137,6 +143,9 @@ export function buildAgentToAgentAnnounceContext(params: {
       ? `Round 1 reply: ${params.roundOneReply}`
       : "Round 1 reply: (not available).",
     params.latestReply ? `Latest reply: ${params.latestReply}` : "Latest reply: (not available).",
+    sameAgentRoomMove
+      ? `Same-agent room move: if the original request asked you to say or post something in the target session, output the visible text to post there. Do not reply exactly "${ANNOUNCE_SKIP_TOKEN}" unless the request is purely meta or diagnostic.`
+      : undefined,
     `If you want to remain silent, reply exactly "${ANNOUNCE_SKIP_TOKEN}".`,
     "Any other reply will be posted to the target channel.",
     "After this reply, the agent-to-agent conversation is over.",
@@ -150,6 +159,82 @@ export function isAnnounceSkip(text?: string) {
 
 export function isReplySkip(text?: string) {
   return (text ?? "").trim() === REPLY_SKIP_TOKEN;
+}
+
+function isTelegramTopicSessionKey(sessionKey?: string): boolean {
+  return Boolean(
+    sessionKey && sessionKey.includes(":telegram:group:") && sessionKey.includes(":topic:"),
+  );
+}
+
+function isSameAgentRoomMove(params: {
+  requesterSessionKey?: string;
+  targetSessionKey: string;
+}): boolean {
+  if (
+    !parseAgentSessionKey(params.requesterSessionKey) ||
+    !parseAgentSessionKey(params.targetSessionKey)
+  ) {
+    return false;
+  }
+  const requesterAgentId = params.requesterSessionKey
+    ? resolveAgentIdFromSessionKey(params.requesterSessionKey)
+    : undefined;
+  const targetAgentId = resolveAgentIdFromSessionKey(params.targetSessionKey);
+  return Boolean(
+    requesterAgentId &&
+    targetAgentId &&
+    requesterAgentId === targetAgentId &&
+    params.requesterSessionKey &&
+    params.requesterSessionKey !== params.targetSessionKey,
+  );
+}
+
+function cleanAgentToAgentVisibleText(text?: string): string {
+  const parsedReply = parseReplyDirectives(text ?? "");
+  return typeof parsedReply.text === "string" ? parsedReply.text.trim() : "";
+}
+
+export function shouldSuppressAgentToAgentPingPong(params: {
+  requesterSessionKey?: string;
+  targetSessionKey: string;
+}): boolean {
+  return (
+    isSameAgentRoomMove(params) ||
+    (isTelegramTopicSessionKey(params.requesterSessionKey) &&
+      isTelegramTopicSessionKey(params.targetSessionKey))
+  );
+}
+
+export function resolveAgentToAgentAnnounceFallback(params: {
+  requesterSessionKey?: string;
+  targetSessionKey: string;
+  roundOneReply?: string;
+  latestReply?: string;
+  originalMessage: string;
+}): string | undefined {
+  const sameAgentRoomMove = isSameAgentRoomMove(params);
+  const visibleTelegramTopicHandoff =
+    isTelegramTopicSessionKey(params.requesterSessionKey) &&
+    isTelegramTopicSessionKey(params.targetSessionKey) &&
+    /\bvisib(?:le|ly)\b/i.test(params.originalMessage);
+  if (!sameAgentRoomMove && !visibleTelegramTopicHandoff) {
+    return undefined;
+  }
+
+  const replyCandidates = sameAgentRoomMove
+    ? [params.roundOneReply, params.latestReply]
+    : [params.latestReply, params.roundOneReply];
+  for (const candidateReply of replyCandidates) {
+    if (!candidateReply || isReplySkip(candidateReply) || isAnnounceSkip(candidateReply)) {
+      continue;
+    }
+    const cleanedText = cleanAgentToAgentVisibleText(candidateReply);
+    if (cleanedText) {
+      return cleanedText;
+    }
+  }
+  return undefined;
 }
 
 export function resolvePingPongTurns(cfg?: OpenClawConfig) {
