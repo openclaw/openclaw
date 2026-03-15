@@ -1,4 +1,5 @@
 import { formatCliCommand } from "../cli/command-format.js";
+import { createUpdateProgress } from "../cli/update-cli/progress.js";
 import { isTruthyEnvValue } from "../infra/env.js";
 import { runGatewayUpdate } from "../infra/update-runner.js";
 import { runCommandWithTimeout } from "../process/exec.js";
@@ -52,10 +53,14 @@ export async function maybeOfferUpdateBeforeDoctor(params: {
       return { updated: false };
     }
     note("Running update (fetch/rebase/build/ui:build/doctor)…", "Update");
+    const progressController = createUpdateProgress(
+      Boolean(process.stdin.isTTY && process.stdout.isTTY),
+    );
     const result = await runGatewayUpdate({
       cwd: params.root,
       argv1: process.argv[1],
-    });
+      progress: progressController.progress,
+    }).finally(() => progressController.stop());
     note(
       [
         `Status: ${result.status}`,
