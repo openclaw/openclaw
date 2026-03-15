@@ -19,7 +19,6 @@ export {
 export {
   armDialogViaPlaywright,
   armFileUploadViaPlaywright,
-  batchViaPlaywright,
   clickViaPlaywright,
   closePageViaPlaywright,
   cookiesClearViaPlaywright,
