@@ -775,10 +775,11 @@ describe("sendMessageTelegram", () => {
     }
   });
 
-  it("retries on transient errors with retry_after", async () => {
+  it("retries pre-connect send errors and honors retry_after when present", async () => {
     vi.useFakeTimers();
     const chatId = "123";
-    const err = Object.assign(new Error("429"), {
+    const err = Object.assign(new Error("getaddrinfo ENOTFOUND api.telegram.org"), {
+      code: "ENOTFOUND",
       parameters: { retry_after: 0.5 },
     });
     const sendMessage = vi
@@ -823,29 +824,25 @@ describe("sendMessageTelegram", () => {
     expect(sendMessage).toHaveBeenCalledTimes(1);
   });
 
-  it("retries when grammY network envelope message includes failed-after wording", async () => {
+  it("does not retry generic grammY failed-after envelopes for non-idempotent sends", async () => {
     const chatId = "123";
     const sendMessage = vi
       .fn()
       .mockRejectedValueOnce(
         new Error("Network request for 'sendMessage' failed after 1 attempts."),
-      )
-      .mockResolvedValueOnce({
-        message_id: 7,
-        chat: { id: chatId },
-      });
+      );
     const api = { sendMessage } as unknown as {
       sendMessage: typeof sendMessage;
     };
 
-    const result = await sendMessageTelegram(chatId, "hi", {
-      token: "tok",
-      api,
-      retry: { attempts: 2, minDelayMs: 0, maxDelayMs: 0, jitter: 0 },
-    });
-
-    expect(sendMessage).toHaveBeenCalledTimes(2);
-    expect(result).toEqual({ messageId: "7", chatId });
+    await expect(
+      sendMessageTelegram(chatId, "hi", {
+        token: "tok",
+        api,
+        retry: { attempts: 2, minDelayMs: 0, maxDelayMs: 0, jitter: 0 },
+      }),
+    ).rejects.toThrow(/failed after 1 attempts/i);
+    expect(sendMessage).toHaveBeenCalledTimes(1);
   });
 
   it("sends GIF media as animation", async () => {
@@ -875,6 +872,87 @@ describe("sendMessageTelegram", () => {
       parse_mode: "HTML",
     });
     expect(res.messageId).toBe("9");
+  });
+
+  it.each([
+    {
+      name: "images",
+      buffer: Buffer.from("fake-image"),
+      contentType: "image/png",
+      fileName: "photo.png",
+      mediaUrl: "https://example.com/photo.png",
+    },
+    {
+      name: "GIFs",
+      buffer: Buffer.from("GIF89a"),
+      contentType: "image/gif",
+      fileName: "fun.gif",
+      mediaUrl: "https://example.com/fun.gif",
+    },
+  ])("sends $name as documents when forceDocument is true", async (testCase) => {
+    const chatId = "123";
+    const sendAnimation = vi.fn();
+    const sendDocument = vi.fn().mockResolvedValue({
+      message_id: 10,
+      chat: { id: chatId },
+    });
+    const sendPhoto = vi.fn();
+    const api = { sendAnimation, sendDocument, sendPhoto } as unknown as {
+      sendAnimation: typeof sendAnimation;
+      sendDocument: typeof sendDocument;
+      sendPhoto: typeof sendPhoto;
+    };
+
+    mockLoadedMedia({
+      buffer: testCase.buffer,
+      contentType: testCase.contentType,
+      fileName: testCase.fileName,
+    });
+
+    const res = await sendMessageTelegram(chatId, "caption", {
+      token: "tok",
+      api,
+      mediaUrl: testCase.mediaUrl,
+      forceDocument: true,
+    });
+
+    expect(sendDocument, testCase.name).toHaveBeenCalledWith(chatId, expect.anything(), {
+      caption: "caption",
+      parse_mode: "HTML",
+      disable_content_type_detection: true,
+    });
+    expect(sendPhoto, testCase.name).not.toHaveBeenCalled();
+    expect(sendAnimation, testCase.name).not.toHaveBeenCalled();
+    expect(res.messageId).toBe("10");
+  });
+
+  it("keeps regular document sends on the default Telegram params", async () => {
+    const chatId = "123";
+    const sendDocument = vi.fn().mockResolvedValue({
+      message_id: 11,
+      chat: { id: chatId },
+    });
+    const api = { sendDocument } as unknown as {
+      sendDocument: typeof sendDocument;
+    };
+
+    mockLoadedMedia({
+      buffer: Buffer.from("%PDF-1.7"),
+      contentType: "application/pdf",
+      fileName: "report.pdf",
+    });
+
+    const res = await sendMessageTelegram(chatId, "caption", {
+      token: "tok",
+      api,
+      mediaUrl: "https://example.com/report.pdf",
+    });
+
+    expect(sendDocument).toHaveBeenCalledWith(chatId, expect.anything(), {
+      caption: "caption",
+      parse_mode: "HTML",
+    });
+    expect(res.messageId).toBe("11");
   });
 
   it("routes audio media to sendAudio/sendVoice based on voice compatibility", async () => {
