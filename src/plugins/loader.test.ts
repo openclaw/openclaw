@@ -986,6 +986,153 @@ describe("loadOpenClawPlugins", () => {
     expect(httpPlugin?.httpRoutes).toBe(1);
   });
 
+  it("rejects duplicate plugin-visible hook names", () => {
+    useNoBundledPlugins();
+    const first = writePlugin({
+      id: "hook-owner-a",
+      filename: "hook-owner-a.cjs",
+      body: `module.exports = { id: "hook-owner-a", register(api) {
+  api.registerHook("gateway:startup", () => {}, { name: "shared-hook" });
+} };`,
+    });
+    const second = writePlugin({
+      id: "hook-owner-b",
+      filename: "hook-owner-b.cjs",
+      body: `module.exports = { id: "hook-owner-b", register(api) {
+  api.registerHook("gateway:startup", () => {}, { name: "shared-hook" });
+} };`,
+    });
+
+    const registry = loadOpenClawPlugins({
+      cache: false,
+      config: {
+        plugins: {
+          load: { paths: [first.file, second.file] },
+          allow: ["hook-owner-a", "hook-owner-b"],
+        },
+      },
+    });
+
+    expect(registry.hooks.filter((entry) => entry.entry.hook.name === "shared-hook")).toHaveLength(
+      1,
+    );
+    expect(
+      registry.diagnostics.some(
+        (diag) =>
+          diag.level === "error" &&
+          diag.pluginId === "hook-owner-b" &&
+          diag.message === "hook already registered: shared-hook (hook-owner-a)",
+      ),
+    ).toBe(true);
+  });
+
+  it("rejects duplicate plugin service ids", () => {
+    useNoBundledPlugins();
+    const first = writePlugin({
+      id: "service-owner-a",
+      filename: "service-owner-a.cjs",
+      body: `module.exports = { id: "service-owner-a", register(api) {
+  api.registerService({ id: "shared-service", start() {} });
+} };`,
+    });
+    const second = writePlugin({
+      id: "service-owner-b",
+      filename: "service-owner-b.cjs",
+      body: `module.exports = { id: "service-owner-b", register(api) {
+  api.registerService({ id: "shared-service", start() {} });
+} };`,
+    });
+
+    const registry = loadOpenClawPlugins({
+      cache: false,
+      config: {
+        plugins: {
+          load: { paths: [first.file, second.file] },
+          allow: ["service-owner-a", "service-owner-b"],
+        },
+      },
+    });
+
+    expect(registry.services.filter((entry) => entry.service.id === "shared-service")).toHaveLength(
+      1,
+    );
+    expect(
+      registry.diagnostics.some(
+        (diag) =>
+          diag.level === "error" &&
+          diag.pluginId === "service-owner-b" &&
+          diag.message === "service already registered: shared-service (service-owner-a)",
+      ),
+    ).toBe(true);
+  });
+
+  it("requires plugin CLI registrars to declare explicit command roots", () => {
+    useNoBundledPlugins();
+    const plugin = writePlugin({
+      id: "cli-missing-metadata",
+      filename: "cli-missing-metadata.cjs",
+      body: `module.exports = { id: "cli-missing-metadata", register(api) {
+  api.registerCli(() => {});
+} };`,
+    });
+
+    const registry = loadRegistryFromSinglePlugin({
+      plugin,
+      pluginConfig: {
+        allow: ["cli-missing-metadata"],
+      },
+    });
+
+    expect(registry.cliRegistrars).toHaveLength(0);
+    expect(
+      registry.diagnostics.some(
+        (diag) =>
+          diag.level === "error" &&
+          diag.pluginId === "cli-missing-metadata" &&
+          diag.message === "cli registration missing explicit commands metadata",
+      ),
+    ).toBe(true);
+  });
+
+  it("rejects duplicate plugin CLI command roots", () => {
+    useNoBundledPlugins();
+    const first = writePlugin({
+      id: "cli-owner-a",
+      filename: "cli-owner-a.cjs",
+      body: `module.exports = { id: "cli-owner-a", register(api) {
+  api.registerCli(() => {}, { commands: ["shared-cli"] });
+} };`,
+    });
+    const second = writePlugin({
+      id: "cli-owner-b",
+      filename: "cli-owner-b.cjs",
+      body: `module.exports = { id: "cli-owner-b", register(api) {
+  api.registerCli(() => {}, { commands: ["shared-cli"] });
+} };`,
+    });
+
+    const registry = loadOpenClawPlugins({
+      cache: false,
+      config: {
+        plugins: {
+          load: { paths: [first.file, second.file] },
+          allow: ["cli-owner-a", "cli-owner-b"],
+        },
+      },
+    });
+
+    expect(registry.cliRegistrars).toHaveLength(1);
+    expect(registry.cliRegistrars[0]?.pluginId).toBe("cli-owner-a");
+    expect(
+      registry.diagnostics.some(
+        (diag) =>
+          diag.level === "error" &&
+          diag.pluginId === "cli-owner-b" &&
+          diag.message === "cli command already registered: shared-cli (cli-owner-a)",
+      ),
+    ).toBe(true);
+  });
+
   it("registers http routes", () => {
     useNoBundledPlugins();
     const plugin = writePlugin({
