@@ -1163,6 +1163,7 @@ async function throwWebSearchApiError(res: Response, providerLabel: string): Pro
 async function runPerplexitySearchApi(params: {
   query: string;
   apiKey: string;
+  baseUrl: string;
   count: number;
   timeoutSeconds: number;
   country?: string;
@@ -1176,6 +1177,11 @@ async function runPerplexitySearchApi(params: {
 }): Promise<
   Array<{ title: string; url: string; description: string; published?: string; siteName?: string }>
 > {
+  const baseUrl = params.baseUrl.trim().replace(/\/$/, "");
+  const endpoint = isDirectPerplexityBaseUrl(baseUrl)
+    ? `${baseUrl}/search`
+    : PERPLEXITY_SEARCH_ENDPOINT;
+
   const body: Record<string, unknown> = {
     query: params.query,
     max_results: params.count,
@@ -1208,7 +1214,7 @@ async function runPerplexitySearchApi(params: {
 
   return withTrustedWebSearchEndpoint(
     {
-      url: PERPLEXITY_SEARCH_ENDPOINT,
+      url: endpoint,
       timeoutSeconds: params.timeoutSeconds,
       init: {
         method: "POST",
@@ -1659,6 +1665,7 @@ async function runWebSearch(params: {
     const results = await runPerplexitySearchApi({
       query: params.query,
       apiKey: params.apiKey,
+      baseUrl: params.perplexityBaseUrl ?? PERPLEXITY_DIRECT_BASE_URL,
       count: params.count,
       timeoutSeconds: params.timeoutSeconds,
       country: params.country,
