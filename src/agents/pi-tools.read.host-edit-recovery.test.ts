@@ -8,6 +8,7 @@ import os from "node:os";
 import path from "node:path";
 import type { EditToolOptions } from "@mariozechner/pi-coding-agent";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { SandboxFsBridge, SandboxFsStat } from "./sandbox/fs-bridge.js";
 
 const mocks = vi.hoisted(() => ({
   executeThrows: true,
@@ -32,7 +33,7 @@ vi.mock("@mariozechner/pi-coding-agent", async (importOriginal) => {
   };
 });
 
-const { createHostWorkspaceEditTool } = await import("./pi-tools.read.js");
+const { createHostWorkspaceEditTool, createSandboxedEditTool } = await import("./pi-tools.read.js");
 
 describe("createHostWorkspaceEditTool post-write recovery", () => {
   let tmpDir = "";
@@ -85,5 +86,44 @@ describe("createHostWorkspaceEditTool post-write recovery", () => {
     await expect(
       tool.execute("call-1", { path: filePath, oldText, newText }, undefined),
     ).rejects.toThrow("Simulated post-write failure");
+  });
+
+  it("returns success for sandbox edit when upstream throws after writing", async () => {
+    const filePath = "/workspace/MEMORY.md";
+    const oldText = "# Memory";
+    const newText = "Blog Writing";
+    const statResult: SandboxFsStat = {
+      type: "file",
+      size: newText.length,
+      mtimeMs: Date.now(),
+    };
+    const bridge: SandboxFsBridge = {
+      resolvePath: () => ({
+        hostPath: "/tmp/MEMORY.md",
+        relativePath: "MEMORY.md",
+        containerPath: filePath,
+      }),
+      readFile: vi.fn(async () => Buffer.from(`\n\n${newText}\n`, "utf-8")),
+      writeFile: vi.fn(async () => {}),
+      mkdirp: vi.fn(async () => {}),
+      remove: vi.fn(async () => {}),
+      rename: vi.fn(async () => {}),
+      stat: vi.fn(async () => statResult),
+    };
+
+    const tool = createSandboxedEditTool({ root: "/workspace", bridge });
+    const result = await tool.execute("call-1", { path: filePath, oldText, newText }, undefined);
+
+    expect(result).toBeDefined();
+    const content = Array.isArray((result as { content?: unknown }).content)
+      ? (result as { content: Array<{ type?: string; text?: string }> }).content
+      : [];
+    const textBlock = content.find((b) => b?.type === "text" && typeof b.text === "string");
+    expect(textBlock?.text).toContain("Successfully replaced text");
+    expect(bridge.readFile).toHaveBeenCalledWith({
+      filePath,
+      cwd: "/workspace",
+      signal: undefined,
+    });
   });
 });

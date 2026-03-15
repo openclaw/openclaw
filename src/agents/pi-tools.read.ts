@@ -618,7 +618,11 @@ export function createSandboxedEditTool(params: SandboxToolParams) {
   const base = createEditTool(params.root, {
     operations: createSandboxEditOperations(params),
   }) as unknown as AnyAgentTool;
-  return wrapToolParamNormalization(base, CLAUDE_PARAM_GROUPS.edit);
+  const withRecovery = wrapHostEditToolWithPostWriteRecovery(base, params.root, {
+    resolvePath: (_root, pathParam) => pathParam,
+    readFile: (filePath, signal) => params.bridge.readFile({ filePath, cwd: params.root, signal }),
+  });
+  return wrapToolParamNormalization(withRecovery, CLAUDE_PARAM_GROUPS.edit);
 }
 
 export function createHostWorkspaceWriteTool(root: string, options?: { workspaceOnly?: boolean }) {
