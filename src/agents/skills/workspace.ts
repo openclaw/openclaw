@@ -43,14 +43,30 @@ const skillCommandDebugOnce = new Set<string>();
  *
  * Saves ~5–6 tokens per skill path × N skills ≈ 400–600 tokens total.
  */
-function compactSkillPaths(skills: Skill[]): Skill[] {
+function compactSkillPaths(skills: Skill[], workspaceDir?: string): Skill[] {
   const home = os.homedir();
-  if (!home) return skills;
-  const prefix = home.endsWith(path.sep) ? home : home + path.sep;
+  const normalizedWorkspaceDir = workspaceDir ? path.resolve(workspaceDir) : null;
+  if (!home && !normalizedWorkspaceDir) return skills;
+  const prefix = home ? (home.endsWith(path.sep) ? home : home + path.sep) : null;
   return skills.map((s) => ({
     ...s,
-    filePath: s.filePath.startsWith(prefix) ? "~/" + s.filePath.slice(prefix.length) : s.filePath,
+    filePath: (() => {
+      const resolvedFilePath = path.resolve(s.filePath);
+      if (normalizedWorkspaceDir) {
+        const rel = path.relative(normalizedWorkspaceDir, resolvedFilePath);
+        if (rel && !rel.startsWith("..") && !path.isAbsolute(rel)) {
+          return rel;
+        }
+      }
+      return prefix && s.filePath.startsWith(prefix)
+        ? "~/" + s.filePath.slice(prefix.length)
+        : s.filePath;
+    })(),
   }));
+}
+
+function formatSkillsPromptBlock(skills: Skill[], workspaceDir?: string): string {
+  return formatSkillsForPrompt(compactSkillPaths(skills, workspaceDir));
 }
 
 function debugSkillCommandOnce(
@@ -526,7 +542,11 @@ function loadSkillEntries(
   return skillEntries;
 }
 
-function applySkillsPromptLimits(params: { skills: Skill[]; config?: OpenClawConfig }): {
+function applySkillsPromptLimits(params: {
+  skills: Skill[];
+  config?: OpenClawConfig;
+  workspaceDir?: string;
+}): {
   skillsForPrompt: Skill[];
   truncated: boolean;
   truncatedReason: "count" | "chars" | null;
@@ -540,7 +560,7 @@ function applySkillsPromptLimits(params: { skills: Skill[]; config?: OpenClawCon
   let truncatedReason: "count" | "chars" | null = truncated ? "count" : null;
 
   const fits = (skills: Skill[]): boolean => {
-    const block = formatSkillsForPrompt(skills);
+    const block = formatSkillsPromptBlock(skills, params.workspaceDir);
     return block.length <= limits.maxSkillsPromptChars;
   };
 
@@ -623,6 +643,7 @@ function resolveWorkspaceSkillPromptState(
   const { skillsForPrompt, truncated } = applySkillsPromptLimits({
     skills: resolvedSkills,
     config: opts?.config,
+    workspaceDir,
   });
   const truncationNote = truncated
     ? `⚠️ Skills truncated: included ${skillsForPrompt.length} of ${resolvedSkills.length}. Run \`openclaw skills check\` to audit.`
@@ -630,7 +651,7 @@ function resolveWorkspaceSkillPromptState(
   const prompt = [
     remoteNote,
     truncationNote,
-    formatSkillsForPrompt(compactSkillPaths(skillsForPrompt)),
+    formatSkillsPromptBlock(skillsForPrompt, workspaceDir),
   ]
     .filter(Boolean)
     .join("\n");
