@@ -129,8 +129,16 @@ export async function recordTokenUsage(params: {
   }
 
   const memoryDir = path.join(params.workspaceDir, "memory");
-  const file = path.join(memoryDir, "token-usage.json");
   await fs.mkdir(memoryDir, { recursive: true });
+  // Canonicalize before keying writeQueues so that different path spellings
+  // for the same physical directory (e.g. a symlink vs its target) share a
+  // single in-process queue.  Without this, two spellings produce separate
+  // queue entries and both call appendRecord concurrently; when
+  // withFileLock's HELD_LOCKS map then resolves both to the same normalised
+  // path the second caller re-entrantly joins the first — allowing concurrent
+  // read-modify-write cycles that silently drop entries.
+  const realMemoryDir = await fs.realpath(memoryDir).catch(() => memoryDir);
+  const file = path.join(realMemoryDir, "token-usage.json");
 
   const entry: TokenUsageRecord = {
     id: makeId(),

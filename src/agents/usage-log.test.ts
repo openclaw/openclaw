@@ -215,6 +215,36 @@ describe("recordTokenUsage", () => {
     expect(lockExists).toBe(false);
   });
 
+  it("different path spellings for the same workspace share one queue — no record is lost", async () => {
+    // Symlink tmpDir → another name so the same physical directory has two
+    // spellings.  Without queue-key canonicalisation both spellings create
+    // independent writeQueues entries; when one chain holds the file lock
+    // (HELD_LOCKS set) the other re-entrantly joins it and both execute the
+    // read-modify-write cycle concurrently, silently dropping entries.
+    const symlinkDir = `${tmpDir}-symlink`;
+    await fs.symlink(tmpDir, symlinkDir);
+    try {
+      // Mix canonical and symlink paths across concurrent writes.
+      const N = 6;
+      await Promise.all(
+        Array.from({ length: N }, (_, i) =>
+          recordTokenUsage({
+            workspaceDir: i % 2 === 0 ? tmpDir : symlinkDir,
+            label: "llm_output",
+            usage: { input: i + 1, output: 1, total: i + 2 },
+          }),
+        ),
+      );
+
+      // All N records must survive — none may be lost to a concurrent
+      // read-modify-write collision.
+      const records = JSON.parse(await fs.readFile(usageFile, "utf-8"));
+      expect(records).toHaveLength(N);
+    } finally {
+      await fs.unlink(symlinkDir).catch(() => {});
+    }
+  });
+
   it("serialises concurrent writes — no record is lost", async () => {
     const N = 20;
     await Promise.all(
