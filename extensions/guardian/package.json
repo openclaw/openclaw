@@ -1,0 +1,21 @@
+{
+  "name": "@openclaw/guardian",
+  "version": "2026.2.20",
+  "private": true,
+  "description": "OpenClaw guardian plugin — LLM-based intent-alignment review for tool calls",
+  "type": "module",
+  "dependencies": {
+    "@mariozechner/pi-ai": "0.58.0"
+  },
+  "devDependencies": {
+    "openclaw": "workspace:*"
+  },
+  "peerDependencies": {
+    "openclaw": ">=2026.1.26"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}
