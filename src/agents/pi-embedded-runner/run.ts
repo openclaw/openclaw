@@ -309,6 +309,7 @@ export async function runEmbeddedPiAgent(
         cfg: params.config,
         agentId: params.agentId,
         sessionKey: params.sessionKey,
+        hasSessionModelOverride: params.hasSessionModelOverride,
       });
       await ensureOpenClawModelsJson(params.config, agentDir);
 

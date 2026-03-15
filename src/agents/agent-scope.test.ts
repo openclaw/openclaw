@@ -205,9 +205,16 @@ describe("resolveAgentConfig", () => {
       resolveEffectiveModelFallbacks({
         cfg: cfgInheritDefaults,
         agentId: "linus",
+        hasSessionModelOverride: false,
+      }),
+    ).toBeUndefined();
+    expect(
+      resolveEffectiveModelFallbacks({
+        cfg: cfgInheritDefaults,
+        agentId: "linus",
         hasSessionModelOverride: true,
       }),
-    ).toEqual(["openai/gpt-4.1"]);
+    ).toEqual([]);
     expect(
       resolveEffectiveModelFallbacks({
         cfg: cfgDisable,
@@ -286,6 +293,13 @@ describe("resolveAgentConfig", () => {
         sessionKey: "agent:main:session",
       }),
     ).toBe(true);
+    expect(
+      hasConfiguredModelFallbacks({
+        cfg: cfgDefaultsOnly,
+        sessionKey: "agent:main:session",
+        hasSessionModelOverride: true,
+      }),
+    ).toBe(false);
 
     const cfgAgentOverrideOnly: OpenClawConfig = {
       agents: {
@@ -309,6 +323,14 @@ describe("resolveAgentConfig", () => {
         cfg: cfgAgentOverrideOnly,
         agentId: "support",
         sessionKey: "agent:support:session",
+      }),
+    ).toBe(true);
+    expect(
+      hasConfiguredModelFallbacks({
+        cfg: cfgAgentOverrideOnly,
+        agentId: "support",
+        sessionKey: "agent:support:session",
+        hasSessionModelOverride: true,
       }),
     ).toBe(true);
     expect(

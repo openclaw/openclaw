@@ -234,8 +234,12 @@ export function hasConfiguredModelFallbacks(params: {
   cfg: OpenClawConfig | undefined;
   agentId?: string | null;
   sessionKey?: string | null;
+  hasSessionModelOverride?: boolean;
 }): boolean {
   const fallbacksOverride = resolveRunModelFallbacksOverride(params);
+  if (params.hasSessionModelOverride) {
+    return (fallbacksOverride ?? []).length > 0;
+  }
   const defaultFallbacks = resolveAgentModelFallbackValues(params.cfg?.agents?.defaults?.model);
   return (fallbacksOverride ?? defaultFallbacks).length > 0;
 }
@@ -249,8 +253,13 @@ export function resolveEffectiveModelFallbacks(params: {
   if (!params.hasSessionModelOverride) {
     return agentFallbacksOverride;
   }
-  const defaultFallbacks = resolveAgentModelFallbackValues(params.cfg.agents?.defaults?.model);
-  return agentFallbacksOverride ?? defaultFallbacks;
+
+  // Session-level model overrides (for example /model, sessions.patch(model), or
+  // subagent spawn model routing) are expected to be sticky. Falling back to
+  // global defaults can silently swap to a higher-cost/incorrect model and make
+  // it look like the override was ignored. Keep session overrides strict by
+  // default; allow explicit per-agent fallback overrides when configured.
+  return agentFallbacksOverride ?? [];
 }
 
 export function resolveAgentWorkspaceDir(cfg: OpenClawConfig, agentId: string) {

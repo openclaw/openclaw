@@ -320,6 +320,7 @@ async function persistAcpTurnTranscript(params: {
 function runAgentAttempt(params: {
   providerOverride: string;
   modelOverride: string;
+  hasSessionModelOverride: boolean;
   cfg: ReturnType<typeof loadConfig>;
   sessionEntry: SessionEntry | undefined;
   sessionId: string;
@@ -482,6 +483,7 @@ function runAgentAttempt(params: {
     clientTools: params.opts.clientTools,
     provider: params.providerOverride,
     model: params.modelOverride,
+    hasSessionModelOverride: params.hasSessionModelOverride,
     authProfileId,
     authProfileIdSource: authProfileId ? params.sessionEntry?.authProfileOverrideSource : undefined,
     thinkLevel: params.resolvedThinkLevel,
@@ -1113,6 +1115,7 @@ async function agentCommandInternal(
           return runAgentAttempt({
             providerOverride,
             modelOverride,
+            hasSessionModelOverride: Boolean(storedModelOverride),
             cfg,
             sessionEntry,
             sessionId,
