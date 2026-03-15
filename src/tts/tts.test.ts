@@ -38,7 +38,9 @@ vi.mock("../agents/pi-embedded-runner/model.js", () => {
   });
 
   return {
-    resolveModel: vi.fn((provider: string, modelId: string) => buildResolvedModel(provider, modelId)),
+    resolveModel: vi.fn((provider: string, modelId: string) =>
+      buildResolvedModel(provider, modelId),
+    ),
     resolveModelAsync: vi.fn(async (provider: string, modelId: string) =>
       buildResolvedModel(provider, modelId),
     ),
