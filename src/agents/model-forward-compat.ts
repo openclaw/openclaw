@@ -187,6 +187,10 @@ function resolveOpenAICodexForwardCompatModel(
   } as Model<Api>);
 }
 
+// Anthropic Opus/Sonnet 4.6 support 1M context tokens, up from 200k in 4.5.
+const ANTHROPIC_46_CONTEXT_TOKENS = 1_000_000;
+const ANTHROPIC_46_MAX_TOKENS = 64_000;
+
 function resolveAnthropic46ForwardCompatModel(params: {
   provider: string;
   modelId: string;
@@ -196,6 +200,7 @@ function resolveAnthropic46ForwardCompatModel(params: {
   dashTemplateId: string;
   dotTemplateId: string;
   fallbackTemplateIds: readonly string[];
+  patch?: Partial<Model<Api>>;
 }): Model<Api> | undefined {
   const { provider, modelId, modelRegistry, dashModelId, dotModelId } = params;
   const normalizedProvider = normalizeProviderId(provider);
@@ -228,6 +233,7 @@ function resolveAnthropic46ForwardCompatModel(params: {
     trimmedModelId,
     templateIds,
     modelRegistry,
+    patch: params.patch,
   });
 }
 
@@ -245,6 +251,10 @@ function resolveAnthropicOpus46ForwardCompatModel(
     dashTemplateId: "claude-opus-4-5",
     dotTemplateId: "claude-opus-4.5",
     fallbackTemplateIds: ANTHROPIC_OPUS_TEMPLATE_MODEL_IDS,
+    patch: {
+      contextWindow: ANTHROPIC_46_CONTEXT_TOKENS,
+      maxTokens: ANTHROPIC_46_MAX_TOKENS,
+    },
   });
 }
 
@@ -262,6 +272,10 @@ function resolveAnthropicSonnet46ForwardCompatModel(
     dashTemplateId: "claude-sonnet-4-5",
     dotTemplateId: "claude-sonnet-4.5",
     fallbackTemplateIds: ANTHROPIC_SONNET_TEMPLATE_MODEL_IDS,
+    patch: {
+      contextWindow: ANTHROPIC_46_CONTEXT_TOKENS,
+      maxTokens: ANTHROPIC_46_MAX_TOKENS,
+    },
   });
 }
 
