@@ -9,6 +9,7 @@
 
 .chat-main {
   min-width: 400px;
+  min-height: 0; /* Prevent flex overflow that can hide input area */
   display: flex;
   flex-direction: column;
   overflow: hidden;

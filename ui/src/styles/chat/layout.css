@@ -363,8 +363,10 @@
   box-sizing: border-box;
 }
 
+/* Fix #45707: Ensure input always accessible, even when empty state renders */
 .agent-chat__input {
   position: relative;
+  z-index: 100; /* Force above empty state overlay */
   display: flex;
   flex-direction: column;
   margin: 0 18px 14px;
@@ -882,6 +884,7 @@
 }
 
 /* Welcome state (new session) */
+/* Fix #45707: Constrain to message area, never cover input */
 .agent-chat__welcome {
   display: flex;
   flex-direction: column;
@@ -892,6 +895,14 @@
   padding: 48px 24px;
   flex: 1;
   min-height: 0;
+  /* Ensure welcome state stays below input box in stacking context */
+  z-index: 1;
+  pointer-events: none; /* Allow clicks to pass through to input area */
+}
+
+/* Re-enable pointer events on interactive elements within welcome state */
+.agent-chat__welcome > * {
+  pointer-events: auto;
 }
 
 .agent-chat__welcome-glow {
