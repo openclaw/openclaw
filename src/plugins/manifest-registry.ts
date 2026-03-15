@@ -13,7 +13,7 @@ type SeenIdEntry = {
   recordIndex: number;
 };
 
-// Precedence: config > workspace > global > bundled
+// Precedence: config > workspace > explicit-install global > bundled > auto-discovered global
 const PLUGIN_ORIGIN_RANK: Readonly<Record<PluginOrigin, number>> = {
   config: 0,
   workspace: 1,
@@ -167,16 +167,15 @@ function resolveDuplicatePrecedenceRank(params: {
   config?: OpenClawConfig;
   env: NodeJS.ProcessEnv;
 }): number {
-  if (
-    params.candidate.origin === "global" &&
-    matchesInstalledPluginRecord({
+  if (params.candidate.origin === "global") {
+    return matchesInstalledPluginRecord({
       pluginId: params.pluginId,
       candidate: params.candidate,
       config: params.config,
       env: params.env,
     })
-  ) {
-    return 2;
+      ? 2
+      : 4;
   }
   return PLUGIN_ORIGIN_RANK[params.candidate.origin];
 }

@@ -195,6 +195,36 @@ describe("loadPluginManifestRegistry", () => {
     ).toBe(true);
   });
 
+  it("reports bundled plugins as the duplicate winner for auto-discovered globals", () => {
+    const bundledDir = makeTempDir();
+    const globalDir = makeTempDir();
+    const manifest = { id: "feishu", configSchema: { type: "object" } };
+    writeManifest(bundledDir, manifest);
+    writeManifest(globalDir, manifest);
+
+    const registry = loadPluginManifestRegistry({
+      cache: false,
+      candidates: [
+        createPluginCandidate({
+          idHint: "feishu",
+          rootDir: bundledDir,
+          origin: "bundled",
+        }),
+        createPluginCandidate({
+          idHint: "feishu",
+          rootDir: globalDir,
+          origin: "global",
+        }),
+      ],
+    });
+
+    expect(
+      registry.diagnostics.some((diag) =>
+        diag.message.includes("global plugin will be overridden by bundled plugin"),
+      ),
+    ).toBe(true);
+  });
+
   it("suppresses duplicate warning when candidates share the same physical directory via symlink", () => {
     const realDir = makeTempDir();
     const manifest = { id: "feishu", configSchema: { type: "object" } };
