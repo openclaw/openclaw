@@ -519,6 +519,47 @@ describe("gateway agent handler", () => {
     expect(callArgs?.runContext?.messageChannel).toBe("inter_session");
   });
 
+  it("rejects inter_session when it is only provided via replyChannel", async () => {
+    primeMainAgentRun();
+    mocks.agentCommand.mockClear();
+
+    const respond = await invokeAgent(
+      {
+        message: "strict delivery",
+        agentId: "main",
+        sessionKey: "agent:main:main",
+        replyChannel: "inter_session",
+        idempotencyKey: "test-inter-session-reply-only",
+      },
+      {
+        reqId: "inter-session-reply-only-1",
+        client: {
+          connect: {
+            role: "operator",
+            scopes: ["operator.write"],
+            client: {
+              id: "gateway-client",
+              mode: "backend",
+              version: "1.0.0",
+              platform: "node",
+            },
+          },
+          isInternalBackendClient: true,
+        } as unknown as AgentHandlerArgs["client"],
+      },
+    );
+
+    expect(respond).toHaveBeenCalledTimes(1);
+    const [ok, payload, error] = respond.mock.calls[0] ?? [];
+    expect(ok).toBe(false);
+    expect(payload).toBeUndefined();
+    expect(error).toMatchObject({
+      code: "INVALID_REQUEST",
+      message: expect.stringContaining("replyChannel"),
+    });
+    expect(mocks.agentCommand).not.toHaveBeenCalled();
+  });
+
   it("rejects deliver=true when backend callers use the inter_session sentinel", async () => {
     primeMainAgentRun();
     mocks.agentCommand.mockClear();
