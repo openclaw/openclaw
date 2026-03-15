@@ -416,7 +416,22 @@ export const sessionsHandlers: GatewayRequestHandlers = {
     }
 
     const archived = archiveFileOnDisk(filePath, "bak");
-    const keptLines = lines.slice(-maxLines);
+    // Preserve the session header (first line) so loadEntriesFromFile can
+    // validate the file. Without it, history is lost after compaction because
+    // loadEntriesFromFile checks entries[0].type === "session" and returns []
+    // when that header is missing.
+    let sessionHeader: string | null = null;
+    try {
+      const firstEntry = JSON.parse(lines[0] ?? "{}") as Record<string, unknown>;
+      if (firstEntry.type === "session" && typeof firstEntry.id === "string") {
+        sessionHeader = lines[0]!;
+      }
+    } catch {
+      // Not valid JSON or not a session header — proceed without preserving
+    }
+    const bodyLines = sessionHeader ? lines.slice(1) : lines;
+    const keptBodyLines = bodyLines.slice(-maxLines);
+    const keptLines = sessionHeader ? [sessionHeader, ...keptBodyLines] : keptBodyLines;
     fs.writeFileSync(filePath, `${keptLines.join("\n")}\n`, "utf-8");
 
     await updateSessionStore(storePath, (store) => {
