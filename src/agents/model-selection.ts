@@ -279,17 +279,19 @@ export function buildModelAliasIndex(params: {
 
   const rawModels = params.cfg.agents?.defaults?.models ?? {};
   for (const [keyRaw, entryRaw] of Object.entries(rawModels)) {
-    const parsed = parseModelRef(String(keyRaw ?? ""), params.defaultProvider);
-    if (!parsed) {
-      continue;
-    }
     const alias = String((entryRaw as { alias?: string } | undefined)?.alias ?? "").trim();
     if (!alias) {
       continue;
     }
+    // The object key (e.g. "google/gemini-2.5-flash") is the actual model ref.
+    // The alias field (e.g. "flash") is what the user types to select it.
+    const targetRef = parseModelRef(String(keyRaw ?? ""), params.defaultProvider);
+    if (!targetRef) {
+      continue;
+    }
     const aliasKey = normalizeAliasKey(alias);
-    byAlias.set(aliasKey, { alias, ref: parsed });
-    const key = modelKey(parsed.provider, parsed.model);
+    byAlias.set(aliasKey, { alias, ref: targetRef });
+    const key = modelKey(targetRef.provider, targetRef.model);
     const existing = byKey.get(key) ?? [];
     existing.push(alias);
     byKey.set(key, existing);
