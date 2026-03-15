@@ -1,0 +1,43 @@
+# OpenClaw Observability Stack Configuration
+# Complete monitoring setup with OTEL, Prometheus, and Grafana integration
+
+otel_collector:
+  config_file: /etc/otel-collector-config.yaml
+  endpoint: localhost:4318
+  prometheus_export: localhost:8889
+  
+prometheus_server:
+  port: 9090
+  retention: 15d
+  
+node_exporter:
+  port: 9100
+  enabled: true
+  
+openclaw_diagnostics:
+  enabled: true
+  otel_endpoint: http://localhost:4318
+  service_name: openclaw-gateway
+  metrics: true
+  traces: true
+  logs: false
+  flush_interval_ms: 5000
+
+grafana:
+  cloud_url: https://trevorbgordon.grafana.net
+  dashboards:
+    - name: Infrastructure Monitoring
+      file: infrastructure-dashboard.json
+    - name: Business Metrics  
+      file: business-dashboard.json
+    - name: System Monitoring
+      file: system-monitoring-dashboard.json
+      
+alerts:
+  critical:
+    - openclaw_gateway_down
+    - high_error_rate  
+    - model_cost_spike
+  business:
+    - daily_cost_exceeds_50
+    - low_success_rate
