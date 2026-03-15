@@ -57,7 +57,7 @@ describe("createOpenAICompatMaxTokensFieldWrapper", () => {
         provider: "mistral",
         id: "mistral-small-latest",
         compat: { maxTokensField: "max_tokens" },
-      } as Model<"openai-responses">,
+      } as unknown as Model<"openai-responses">,
       payload: { max_completion_tokens: 2048 },
     });
 

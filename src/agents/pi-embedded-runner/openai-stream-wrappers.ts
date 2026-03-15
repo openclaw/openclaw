@@ -376,7 +376,11 @@ export function createOpenAICompatMaxTokensFieldWrapper(
       return underlying(model, context, options);
     }
 
-    const preferredField = normalizeOpenAICompatMaxTokensField(model.compat?.maxTokensField);
+    const preferredField = normalizeOpenAICompatMaxTokensField(
+      model.compat && "maxTokensField" in model.compat
+        ? (model.compat as { maxTokensField?: unknown }).maxTokensField
+        : undefined,
+    );
     if (!preferredField) {
       return underlying(model, context, options);
     }
