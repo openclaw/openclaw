@@ -18,6 +18,7 @@ import {
 import { isCanonicalDottedDecimalIPv4, isLoopbackIpAddress } from "../shared/net/ip.js";
 import { isRecord } from "../utils.js";
 import { findDuplicateAgentDirs, formatDuplicateAgentDirError } from "./agent-dirs.js";
+import { validateMemorySearchProviderConfig } from "./validation.memory-search.js";
 import { appendAllowedValuesHint, summarizeAllowedValues } from "./allowed-values.js";
 import { applyAgentDefaults, applyModelDefaults, applySessionDefaults } from "./defaults.js";
 import { findLegacyConfigIssues } from "./legacy.js";
@@ -266,6 +267,13 @@ export function validateConfigObjectRaw(
   if (gatewayTailscaleBindIssues.length > 0) {
     return { ok: false, issues: gatewayTailscaleBindIssues };
   }
+
+  // Validate memorySearch provider configuration (includes per-agent configs)
+  const memorySearchIssues = validateMemorySearchProviderConfig(validated.data as OpenClawConfig);
+  if (memorySearchIssues.length > 0) {
+    return { ok: false, issues: memorySearchIssues };
+  }
+
   return {
     ok: true,
     config: validated.data as OpenClawConfig,
