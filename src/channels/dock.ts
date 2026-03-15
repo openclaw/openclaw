@@ -58,7 +58,7 @@ import type {
 } from "./plugins/types.js";
 import {
   resolveWhatsAppGroupIntroHint,
-  resolveWhatsAppMentionStripPatterns,
+  resolveWhatsAppMentionStripRegexes,
 } from "./plugins/whatsapp-shared.js";
 import { CHAT_CHANNEL_ORDER, type ChatChannelId, getChatChannelMeta } from "./registry.js";
 
@@ -303,7 +303,7 @@ const DOCKS: Record<ChatChannelId, ChannelDock> = {
       resolveGroupIntroHint: resolveWhatsAppGroupIntroHint,
     },
     mentions: {
-      stripPatterns: ({ ctx }) => resolveWhatsAppMentionStripPatterns(ctx),
+      stripRegexes: ({ ctx }) => resolveWhatsAppMentionStripRegexes(ctx),
     },
     threading: {
       buildToolContext: ({ context, hasRepliedRef }) => {
@@ -346,7 +346,7 @@ const DOCKS: Record<ChatChannelId, ChannelDock> = {
       resolveToolPolicy: resolveDiscordGroupToolPolicy,
     },
     mentions: {
-      stripPatterns: () => ["<@!?\\d+>"],
+      stripRegexes: () => [/<@!?\d+>/g],
     },
     threading: {
       resolveReplyToMode: ({ cfg }) => cfg.channels?.discord?.replyToMode ?? "off",
@@ -484,7 +484,7 @@ const DOCKS: Record<ChatChannelId, ChannelDock> = {
       resolveToolPolicy: resolveSlackGroupToolPolicy,
     },
     mentions: {
-      stripPatterns: () => ["<@[^>]+>"],
+      stripRegexes: () => [/<@[^>]+>/g],
     },
     threading: {
       resolveReplyToMode: ({ cfg, accountId, chatType }) =>
