@@ -23,7 +23,7 @@ if [[ -f "$ROOT_DIR/.env" ]]; then
     if [[ "$_env_val" == '"'*'"' ]]; then
       _env_val="${_env_val%'"'}"
       _env_val="${_env_val#'"'}"
-      _env_val="${_env_val//\"/"}"
+      _env_val="${_env_val//\\"/"}"
     elif [[ "$_env_val" == "'"*"'" ]]; then
       _env_val="${_env_val%"'"}"
       _env_val="${_env_val#"'"}"
