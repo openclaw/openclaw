@@ -1,0 +1,9 @@
+{
+  "id": "mistral",
+  "providers": ["mistral"],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

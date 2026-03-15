@@ -27,7 +27,7 @@ const DEFAULT_PROVIDER_CAPABILITIES: ProviderCapabilities = {
   dropThinkingBlockModelHints: [],
 };
 
-const PROVIDER_CAPABILITIES: Record<string, Partial<ProviderCapabilities>> = {
+const CORE_PROVIDER_CAPABILITIES: Record<string, Partial<ProviderCapabilities>> = {
   anthropic: {
     providerFamily: "anthropic",
     dropThinkingBlockModelHints: ["claude"],
@@ -36,6 +36,12 @@ const PROVIDER_CAPABILITIES: Record<string, Partial<ProviderCapabilities>> = {
     providerFamily: "anthropic",
     dropThinkingBlockModelHints: ["claude"],
   },
+  openai: {
+    providerFamily: "openai",
+  },
+};
+
+const PLUGIN_CAPABILITIES_FALLBACKS: Record<string, Partial<ProviderCapabilities>> = {
   mistral: {
     transcriptToolCallIdMode: "strict9",
     transcriptToolCallIdModelHints: [
@@ -47,9 +53,6 @@ const PROVIDER_CAPABILITIES: Record<string, Partial<ProviderCapabilities>> = {
       "ministral",
       "mistralai",
     ],
-  },
-  openai: {
-    providerFamily: "openai",
   },
   opencode: {
     openAiCompatTurnValidation: false,
@@ -70,8 +73,8 @@ export function resolveProviderCapabilities(provider?: string | null): ProviderC
     : undefined;
   return {
     ...DEFAULT_PROVIDER_CAPABILITIES,
-    ...PROVIDER_CAPABILITIES[normalized],
-    ...pluginCapabilities,
+    ...CORE_PROVIDER_CAPABILITIES[normalized],
+    ...(pluginCapabilities ?? PLUGIN_CAPABILITIES_FALLBACKS[normalized]),
   };
 }
 

@@ -1,0 +1,9 @@
+{
+  "id": "opencode",
+  "providers": ["opencode"],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}
