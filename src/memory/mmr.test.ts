@@ -30,6 +30,67 @@ describe("tokenize", () => {
         input: "hello hello world world",
         expected: ["hello", "world"],
       },
+      {
+        name: "unicode latin (Finnish)",
+        input: "päätös äänestys",
+        expected: ["päätös", "äänestys"],
+      },
+      {
+        name: "mixed ASCII and unicode",
+        input: "API päätös 123",
+        expected: ["api", "päätös", "123"],
+      },
+      {
+        name: "accented latin",
+        input: "café résumé naïve",
+        expected: ["café", "résumé", "naïve"],
+      },
+      {
+        name: "Chinese",
+        input: "机器学习 神经网络",
+        expected: ["机器学习", "神经网络"],
+      },
+      {
+        name: "Japanese (mixed scripts)",
+        input: "データベース 接続エラー",
+        expected: ["データベース", "接続エラー"],
+      },
+      {
+        name: "Korean",
+        input: "데이터베이스 연결 오류",
+        expected: ["데이터베이스", "연결", "오류"],
+      },
+      {
+        name: "Cyrillic (Russian)",
+        input: "база данных ошибка",
+        expected: ["база", "данных", "ошибка"],
+      },
+      {
+        name: "Arabic",
+        input: "قاعدة بيانات خطأ",
+        expected: ["قاعدة", "بيانات", "خطأ"],
+      },
+      {
+        name: "Hebrew",
+        input: "מסד נתונים שגיאה",
+        expected: ["מסד", "נתונים", "שגיאה"],
+      },
+      {
+        name: "Thai",
+        input: "ฐานข้อมูล ข้อผิดพลาด",
+        expected: ["ฐานข้อมูล", "ข้อผิดพลาด"],
+      },
+      {
+        name: "Hindi (Devanagari)",
+        input: "डेटाबेस त्रुटि कनेक्शन",
+        expected: ["डेटाबेस", "त्रुटि", "कनेक्शन"],
+      },
+      {
+        name: "NFC vs NFD normalization",
+        // "café" in NFD (e + combining acute) should match NFC (é)
+        input: "cafe\u0301",
+        expected: ["caf\u00E9"],
+      },
     ] as const;
 
     for (const testCase of cases) {
@@ -90,6 +151,18 @@ describe("textSimilarity", () => {
       { name: "same words reordered", left: "hello world", right: "world hello", expected: 1 },
       { name: "different text", left: "hello world", right: "foo bar", expected: 0 },
       { name: "case insensitive", left: "Hello World", right: "hello world", expected: 1 },
+      {
+        name: "unicode tokens produce meaningful similarity",
+        left: "päätös äänestys kokous",
+        right: "päätös äänestys budjetti",
+        expected: 0.5,
+      },
+      {
+        name: "different unicode texts are not similar",
+        left: "päätös äänestys kokous",
+        right: "tietokanta yhteys virhe",
+        expected: 0,
+      },
     ] as const;
 
     for (const testCase of cases) {
