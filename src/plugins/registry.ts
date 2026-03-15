@@ -38,6 +38,8 @@ import type {
   OpenClawPluginToolFactory,
   PluginConfigUiHint,
   PluginDiagnostic,
+  PluginBundleFormat,
+  PluginFormat,
   PluginLogger,
   PluginOrigin,
   PluginKind,
@@ -120,6 +122,9 @@ export type PluginRecord = {
   name: string;
   version?: string;
   description?: string;
+  format?: PluginFormat;
+  bundleFormat?: PluginBundleFormat;
+  bundleCapabilities?: string[];
   kind?: PluginKind;
   source: string;
   rootDir?: string;
