@@ -192,7 +192,7 @@ export function createGatewayTool(opts?: {
           note,
           restartDelayMs,
         });
-        return jsonResult({ ok: true, result });
+        return jsonResult({ ok: true, result: stripConfigFromResult(result) });
       }
       if (action === "config.patch") {
         const { raw, baseHash, sessionKey, note, restartDelayMs } =
@@ -204,7 +204,7 @@ export function createGatewayTool(opts?: {
           note,
           restartDelayMs,
         });
-        return jsonResult({ ok: true, result });
+        return jsonResult({ ok: true, result: stripConfigFromResult(result) });
       }
       if (action === "update.run") {
         const { sessionKey, note, restartDelayMs } = resolveGatewayWriteMeta();
@@ -225,4 +225,18 @@ export function createGatewayTool(opts?: {
       throw new Error(`Unknown action: ${action}`);
     },
   };
+}
+
+/**
+ * Strip the full `config` object from config.patch/config.apply results to
+ * avoid bloating the LLM conversation context with the entire config on every
+ * write (#28698). The agent can call config.get explicitly if it needs to
+ * re-read the config.
+ */
+function stripConfigFromResult(result: unknown): unknown {
+  if (!result || typeof result !== "object") {
+    return result;
+  }
+  const { config: _config, ...rest } = result as Record<string, unknown>;
+  return rest;
 }
