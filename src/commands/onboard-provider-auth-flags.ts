@@ -24,6 +24,7 @@ type OnboardProviderAuthOptionKey = keyof Pick<
   | "xaiApiKey"
   | "litellmApiKey"
   | "qianfanApiKey"
+  | "aipingApiKey"
   | "modelstudioApiKeyCn"
   | "modelstudioApiKey"
   | "volcengineApiKey"
@@ -193,6 +194,13 @@ export const ONBOARD_PROVIDER_AUTH_FLAGS: ReadonlyArray<OnboardProviderAuthFlag>
     cliFlag: "--qianfan-api-key",
     cliOption: "--qianfan-api-key <key>",
     description: "QIANFAN API key",
+  },
+  {
+    optionKey: "aipingApiKey",
+    authChoice: "aiping-api-key",
+    cliFlag: "--aiping-api-key",
+    cliOption: "--aiping-api-key <key>",
+    description: "AIPing API key",
   },
   {
     optionKey: "modelstudioApiKeyCn",

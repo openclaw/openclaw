@@ -4,10 +4,12 @@ import {
   HUGGINGFACE_MODEL_CATALOG,
 } from "../agents/huggingface-models.js";
 import {
+  buildAipingProvider,
   buildKilocodeProvider,
   buildKimiCodingProvider,
   buildQianfanProvider,
   buildXiaomiProvider,
+  AIPING_DEFAULT_MODEL_ID,
   QIANFAN_DEFAULT_MODEL_ID,
   XIAOMI_DEFAULT_MODEL_ID,
 } from "../agents/models-config.providers.js";
@@ -35,6 +37,7 @@ import {
   HUGGINGFACE_DEFAULT_MODEL_REF,
   KILOCODE_DEFAULT_MODEL_REF,
   MISTRAL_DEFAULT_MODEL_REF,
+  AIPING_DEFAULT_MODEL_REF,
   OPENROUTER_DEFAULT_MODEL_REF,
   TOGETHER_DEFAULT_MODEL_REF,
   XIAOMI_DEFAULT_MODEL_REF,
@@ -590,6 +593,42 @@ export function applyQianfanProviderConfig(cfg: OpenClawConfig): OpenClawConfig 
 export function applyQianfanConfig(cfg: OpenClawConfig): OpenClawConfig {
   const next = applyQianfanProviderConfig(cfg);
   return applyAgentDefaultModelPrimary(next, QIANFAN_DEFAULT_MODEL_REF);
+}
+
+export function applyAipingProviderConfig(cfg: OpenClawConfig): OpenClawConfig {
+  const models = { ...cfg.agents?.defaults?.models };
+  models[AIPING_DEFAULT_MODEL_REF] = {
+    ...models[AIPING_DEFAULT_MODEL_REF],
+    alias: models[AIPING_DEFAULT_MODEL_REF]?.alias ?? "AIPing",
+  };
+  const defaultProvider = buildAipingProvider();
+  const existingProvider = cfg.models?.providers?.aiping as
+    | {
+        baseUrl?: unknown;
+        api?: unknown;
+      }
+    | undefined;
+  const existingBaseUrl =
+    typeof existingProvider?.baseUrl === "string" ? existingProvider.baseUrl.trim() : "";
+  const resolvedBaseUrl = existingBaseUrl || defaultProvider.baseUrl;
+  const resolvedApi =
+    typeof existingProvider?.api === "string"
+      ? (existingProvider.api as ModelApi)
+      : "openai-completions";
+
+  return applyProviderConfigWithDefaultModels(cfg, {
+    agentModels: models,
+    providerId: "aiping",
+    api: resolvedApi,
+    baseUrl: resolvedBaseUrl,
+    defaultModels: defaultProvider.models ?? [],
+    defaultModelId: AIPING_DEFAULT_MODEL_ID,
+  });
+}
+
+export function applyAipingConfig(cfg: OpenClawConfig): OpenClawConfig {
+  const next = applyAipingProviderConfig(cfg);
+  return applyAgentDefaultModelPrimary(next, AIPING_DEFAULT_MODEL_REF);
 }
 
 // Alibaba Cloud Model Studio Coding Plan

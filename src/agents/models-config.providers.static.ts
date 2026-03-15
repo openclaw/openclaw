@@ -138,6 +138,17 @@ const QIANFAN_DEFAULT_COST = {
   cacheWrite: 0,
 };
 
+export const AIPING_BASE_URL = "https://aiping.cn/api/v1";
+export const AIPING_DEFAULT_MODEL_ID = "DeepSeek-V3.2";
+const AIPING_DEFAULT_CONTEXT_WINDOW = 131072;
+const AIPING_DEFAULT_MAX_TOKENS = 8192;
+const AIPING_DEFAULT_COST = {
+  input: 0,
+  output: 0,
+  cacheRead: 0,
+  cacheWrite: 0,
+};
+
 export const MODELSTUDIO_BASE_URL = "https://coding-intl.dashscope.aliyuncs.com/v1";
 export const MODELSTUDIO_DEFAULT_MODEL_ID = "qwen3.5-plus";
 const MODELSTUDIO_DEFAULT_COST = {
@@ -450,6 +461,33 @@ export function buildOpenrouterProvider(): ProviderConfig {
         cost: OPENROUTER_DEFAULT_COST,
         contextWindow: 262144,
         maxTokens: 65536,
+      },
+    ],
+  };
+}
+
+export function buildAipingProvider(): ProviderConfig {
+  return {
+    baseUrl: AIPING_BASE_URL,
+    api: "openai-completions",
+    models: [
+      {
+        id: AIPING_DEFAULT_MODEL_ID,
+        name: "DeepSeek V3.2",
+        reasoning: false,
+        input: ["text"],
+        cost: AIPING_DEFAULT_COST,
+        contextWindow: AIPING_DEFAULT_CONTEXT_WINDOW,
+        maxTokens: AIPING_DEFAULT_MAX_TOKENS,
+      },
+      {
+        id: "Auto",
+        name: "AIPing Auto",
+        reasoning: false,
+        input: ["text"],
+        cost: AIPING_DEFAULT_COST,
+        contextWindow: AIPING_DEFAULT_CONTEXT_WINDOW,
+        maxTokens: AIPING_DEFAULT_MAX_TOKENS,
       },
     ],
   };

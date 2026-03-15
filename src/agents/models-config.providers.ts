@@ -20,6 +20,9 @@ import {
   resolveOllamaApiBase,
 } from "./models-config.providers.discovery.js";
 import {
+  AIPING_BASE_URL,
+  AIPING_DEFAULT_MODEL_ID,
+  buildAipingProvider,
   buildBytePlusCodingProvider,
   buildBytePlusProvider,
   buildDoubaoCodingProvider,
@@ -43,6 +46,9 @@ import {
   XIAOMI_DEFAULT_MODEL_ID,
 } from "./models-config.providers.static.js";
 export {
+  AIPING_BASE_URL,
+  AIPING_DEFAULT_MODEL_ID,
+  buildAipingProvider,
   buildKimiCodingProvider,
   buildKilocodeProvider,
   buildNvidiaProvider,
@@ -703,6 +709,7 @@ const SIMPLE_IMPLICIT_PROVIDER_LOADERS: ImplicitProviderLoader[] = [
     ...(await buildHuggingfaceProvider(discoveryApiKey)),
     apiKey,
   })),
+  withApiKey("aiping", async ({ apiKey }) => ({ ...buildAipingProvider(), apiKey })),
   withApiKey("qianfan", async ({ apiKey }) => ({ ...buildQianfanProvider(), apiKey })),
   withApiKey("modelstudio", async ({ apiKey }) => ({ ...buildModelStudioProvider(), apiKey })),
   withApiKey("openrouter", async ({ apiKey }) => ({ ...buildOpenrouterProvider(), apiKey })),

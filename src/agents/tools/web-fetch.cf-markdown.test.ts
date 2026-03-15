@@ -132,7 +132,9 @@ describe("web_fetch Cloudflare Markdown for Agents", () => {
 
     const tool = createWebFetchTool(baseToolConfig);
 
-    await tool?.execute?.("call", { url: "https://example.com/tokens/private?token=secret" });
+    await tool?.execute?.("call", {
+      url: "https://example.com/tokens/private?token=secret", // pragma: allowlist secret
+    });
 
     expect(logSpy).toHaveBeenCalledWith(
       expect.stringContaining("x-markdown-tokens: 1500 (https://example.com/...)"),
@@ -153,7 +155,7 @@ describe("web_fetch Cloudflare Markdown for Agents", () => {
     const tool = createWebFetchTool(baseToolConfig);
 
     const result = await tool?.execute?.("call", {
-      url: "https://example.com/text-mode",
+      url: "https://example.com/text-mode", // pragma: allowlist secret
       extractMode: "text",
     });
     const details = result?.details as

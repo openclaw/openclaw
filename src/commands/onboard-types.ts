@@ -44,6 +44,7 @@ export type BuiltInAuthChoice =
   | "qwen-portal"
   | "xai-api-key"
   | "mistral-api-key"
+  | "aiping-api-key"
   | "volcengine-api-key"
   | "byteplus-api-key"
   | "qianfan-api-key"
@@ -76,6 +77,7 @@ export type BuiltInAuthChoiceGroupId =
   | "together"
   | "huggingface"
   | "qianfan"
+  | "aiping"
   | "modelstudio"
   | "xai"
   | "volcengine"
@@ -139,6 +141,7 @@ export type OnboardOptions = {
   volcengineApiKey?: string;
   byteplusApiKey?: string;
   qianfanApiKey?: string;
+  aipingApiKey?: string;
   modelstudioApiKeyCn?: string;
   modelstudioApiKey?: string;
   customBaseUrl?: string;

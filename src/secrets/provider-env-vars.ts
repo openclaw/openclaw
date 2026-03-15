@@ -19,6 +19,7 @@ export const PROVIDER_ENV_VARS: Record<string, readonly string[]> = {
   together: ["TOGETHER_API_KEY"],
   huggingface: ["HUGGINGFACE_HUB_TOKEN", "HF_TOKEN"],
   qianfan: ["QIANFAN_API_KEY"],
+  aiping: ["AIPING_API_KEY"],
   xai: ["XAI_API_KEY"],
   mistral: ["MISTRAL_API_KEY"],
   kilocode: ["KILOCODE_API_KEY"],

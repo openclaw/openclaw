@@ -116,6 +116,12 @@ const AUTH_CHOICE_GROUP_DEFS: {
     choices: ["qianfan-api-key"],
   },
   {
+    value: "aiping",
+    label: "AIPing",
+    hint: "OpenAI-compatible API key",
+    choices: ["aiping-api-key"],
+  },
+  {
     value: "modelstudio",
     label: "Alibaba Cloud Model Studio",
     hint: "Coding Plan API key (CN / Global)",

@@ -425,6 +425,14 @@ describe("onboard (non-interactive): provider auth", () => {
       envVar: "OPENROUTER_API_KEY",
     },
     {
+      name: "aiping",
+      prefix: "openclaw-onboard-ref-flag-aiping-",
+      authChoice: "aiping-api-key",
+      optionKey: "aipingApiKey",
+      flagName: "--aiping-api-key",
+      envVar: "AIPING_API_KEY",
+    },
+    {
       name: "xai",
       prefix: "openclaw-onboard-ref-flag-xai-",
       authChoice: "xai-api-key",
@@ -663,6 +671,23 @@ describe("onboard (non-interactive): provider auth", () => {
         profileId: "qianfan:default",
         provider: "qianfan",
         key: "qianfan-test-key",
+      });
+    });
+  });
+
+  it("infers AIPing auth choice from --aiping-api-key and sets default model", async () => {
+    await withOnboardEnv("openclaw-onboard-aiping-infer-", async (env) => {
+      const cfg = await runOnboardingAndReadConfig(env, {
+        aipingApiKey: "aiping-api-key", // pragma: allowlist secret
+      });
+
+      expect(cfg.auth?.profiles?.["aiping:default"]?.provider).toBe("aiping");
+      expect(cfg.auth?.profiles?.["aiping:default"]?.mode).toBe("api_key");
+      expect(cfg.agents?.defaults?.model?.primary).toBe("aiping/DeepSeek-V3.2");
+      await expectApiKeyProfile({
+        profileId: "aiping:default",
+        provider: "aiping",
+        key: "aiping-api-key",
       });
     });
   });

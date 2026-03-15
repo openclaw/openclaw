@@ -17,13 +17,17 @@ import {
   applyGoogleGeminiModelDefault,
   GOOGLE_GEMINI_DEFAULT_MODEL,
 } from "./google-gemini-model-default.js";
+import { applyPrimaryModel } from "./model-picker.js";
 import {
+  AIPING_DEFAULT_MODEL_REF,
+  applyAipingProviderConfig,
   applyAuthProfileConfig,
   applyCloudflareAiGatewayConfig,
   applyCloudflareAiGatewayProviderConfig,
   applyZaiConfig,
   applyZaiProviderConfig,
   CLOUDFLARE_AI_GATEWAY_DEFAULT_MODEL_REF,
+  setAipingApiKey,
   setCloudflareAiGatewayConfig,
   setGeminiApiKey,
   setZaiApiKey,
@@ -52,6 +56,7 @@ const API_KEY_TOKEN_PROVIDER_AUTH_CHOICE: Record<string, AuthChoice> = {
   "opencode-go": "opencode-go",
   kilocode: "kilocode-api-key",
   qianfan: "qianfan-api-key",
+  aiping: "aiping-api-key",
 };
 
 const ZAI_AUTH_CHOICE_ENDPOINT: Partial<
@@ -62,6 +67,115 @@ const ZAI_AUTH_CHOICE_ENDPOINT: Partial<
   "zai-global": "global",
   "zai-cn": "cn",
 };
+
+type AipingRoutingPreset = "default" | "latency" | "throughput" | "price";
+
+type AipingRoutingSelection = {
+  preset: AipingRoutingPreset;
+  modelRef: string;
+  alias: string;
+};
+
+const AIPING_ROUTING_PRESET_OPTIONS: Array<{
+  value: AipingRoutingPreset;
+  label: string;
+  hint: string;
+}> = [
+  {
+    value: "default",
+    label: "Balanced (provider default)",
+    hint: "DeepSeek-V3.2",
+  },
+  {
+    value: "latency",
+    label: "Low latency",
+    hint: "DeepSeek-V3.2:latency",
+  },
+  {
+    value: "throughput",
+    label: "High throughput",
+    hint: "DeepSeek-V3.2:throughput",
+  },
+  {
+    value: "price",
+    label: "Lowest input price",
+    hint: "DeepSeek-V3.2:input_price",
+  },
+];
+
+function resolveAipingRoutingSelection(preset: AipingRoutingPreset): AipingRoutingSelection {
+  if (preset === "latency") {
+    return {
+      preset,
+      modelRef: "aiping/DeepSeek-V3.2:latency",
+      alias: "AIPing (Latency)",
+    };
+  }
+  if (preset === "throughput") {
+    return {
+      preset,
+      modelRef: "aiping/DeepSeek-V3.2:throughput",
+      alias: "AIPing (Throughput)",
+    };
+  }
+  if (preset === "price") {
+    return {
+      preset,
+      modelRef: "aiping/DeepSeek-V3.2:input_price",
+      alias: "AIPing (Price)",
+    };
+  }
+  return {
+    preset: "default",
+    modelRef: AIPING_DEFAULT_MODEL_REF,
+    alias: "AIPing",
+  };
+}
+
+function applyAipingProviderConfigForModel(
+  config: ApplyAuthChoiceParams["config"],
+  selection: AipingRoutingSelection,
+): ApplyAuthChoiceParams["config"] {
+  const next = applyAipingProviderConfig(config);
+  const models = { ...next.agents?.defaults?.models };
+  models[selection.modelRef] = {
+    ...models[selection.modelRef],
+    alias: models[selection.modelRef]?.alias ?? selection.alias,
+  };
+  return {
+    ...next,
+    agents: {
+      ...next.agents,
+      defaults: {
+        ...next.agents?.defaults,
+        models,
+      },
+    },
+  };
+}
+
+async function resolveAipingRoutingPreset(params: {
+  authChoice: AuthChoice;
+  normalizedTokenProvider: string | undefined;
+  token?: string;
+  prompter: ApplyAuthChoiceParams["prompter"];
+}): Promise<AipingRoutingSelection> {
+  const tokenDrivenFlow =
+    params.authChoice === "apiKey" &&
+    params.normalizedTokenProvider === "aiping" &&
+    typeof params.token === "string" &&
+    params.token.trim().length > 0;
+  if (tokenDrivenFlow || typeof params.prompter.select !== "function") {
+    return resolveAipingRoutingSelection("default");
+  }
+
+  const selected = await params.prompter.select<AipingRoutingPreset>({
+    message: "Select AIPing routing preset",
+    initialValue: "default",
+    options: AIPING_ROUTING_PRESET_OPTIONS,
+  });
+  return resolveAipingRoutingSelection(selected ?? "default");
+}
 
 export async function applyAuthChoiceApiProviders(
   params: ApplyAuthChoiceParams,
@@ -118,6 +232,51 @@ export async function applyAuthChoiceApiProviders(
   });
   if (simpleProviderResult) {
     return simpleProviderResult;
+  }
+
+  if (authChoice === "aiping-api-key") {
+    await ensureApiKeyFromOptionEnvOrPrompt({
+      token: params.opts?.token,
+      provider: "aiping",
+      tokenProvider: normalizedTokenProvider,
+      secretInputMode: requestedSecretInputMode,
+      config: nextConfig,
+      expectedProviders: ["aiping"],
+      envLabel: "AIPING_API_KEY",
+      promptMessage: "Enter AIPing API key",
+      setCredential: async (apiKey, mode) =>
+        setAipingApiKey(apiKey, params.agentDir, {
+          secretInputMode: mode ?? requestedSecretInputMode,
+        }),
+      normalize: normalizeApiKeyInput,
+      validate: validateApiKeyInput,
+      prompter: params.prompter,
+    });
+
+    nextConfig = applyAuthProfileConfig(nextConfig, {
+      profileId: "aiping:default",
+      provider: "aiping",
+      mode: "api_key",
+    });
+
+    const routingSelection = await resolveAipingRoutingPreset({
+      authChoice: params.authChoice,
+      normalizedTokenProvider,
+      token: params.opts?.token,
+      prompter: params.prompter,
+    });
+    await applyProviderDefaultModel({
+      defaultModel: routingSelection.modelRef,
+      applyDefaultConfig: (config) =>
+        applyPrimaryModel(
+          applyAipingProviderConfigForModel(config, routingSelection),
+          routingSelection.modelRef,
+        ),
+      applyProviderConfig: (config) => applyAipingProviderConfigForModel(config, routingSelection),
+      noteDefault: routingSelection.modelRef,
+    });
+
+    return { config: nextConfig, agentModelOverride };
   }
 
   if (authChoice === "cloudflare-ai-gateway-api-key") {

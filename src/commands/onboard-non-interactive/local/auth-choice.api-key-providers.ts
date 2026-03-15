@@ -4,6 +4,7 @@ import type { RuntimeEnv } from "../../../runtime.js";
 import { applyGoogleGeminiModelDefault } from "../../google-gemini-model-default.js";
 import { applyPrimaryModel } from "../../model-picker.js";
 import {
+  applyAipingConfig,
   applyAuthProfileConfig,
   applyHuggingfaceConfig,
   applyKilocodeConfig,
@@ -25,6 +26,7 @@ import {
   applyXaiConfig,
   applyXiaomiConfig,
   setAnthropicApiKey,
+  setAipingApiKey,
   setGeminiApiKey,
   setHuggingfaceApiKey,
   setKilocodeApiKey,
@@ -215,6 +217,23 @@ function buildSimpleApiKeyAuthChoices(params: { opts: OnboardOptions }): SimpleA
           applyAuthProfileConfig(cfg, {
             profileId: "qianfan:default",
             provider: "qianfan",
+            mode: "api_key",
+          }),
+        ),
+    },
+    {
+      authChoices: ["aiping-api-key"],
+      provider: "aiping",
+      flagValue: params.opts.aipingApiKey,
+      flagName: "--aiping-api-key",
+      envVar: "AIPING_API_KEY",
+      profileId: "aiping:default",
+      setCredential: withStorage(setAipingApiKey),
+      applyConfig: (cfg) =>
+        applyAipingConfig(
+          applyAuthProfileConfig(cfg, {
+            profileId: "aiping:default",
+            provider: "aiping",
             mode: "api_key",
           }),
         ),

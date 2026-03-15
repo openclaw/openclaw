@@ -302,6 +302,20 @@ describe("getApiKeyForModel", () => {
     });
   });
 
+  it("resolves AIPing API key from env", async () => {
+    await withEnvAsync(
+      { AIPING_API_KEY: "aiping-api-key" }, // pragma: allowlist secret
+      async () => {
+        const resolved = await resolveApiKeyForProvider({
+          provider: "aiping",
+          store: { version: 1, profiles: {} },
+        });
+        expect(resolved.apiKey).toBe("aiping-api-key");
+        expect(resolved.source).toContain("AIPING_API_KEY");
+      },
+    );
+  });
+
   it("resolves Vercel AI Gateway API key from env", async () => {
     await withEnvAsync({ [envVar("AI_GATEWAY", "API", "KEY")]: "gateway-test-key" }, async () => {
       // pragma: allowlist secret

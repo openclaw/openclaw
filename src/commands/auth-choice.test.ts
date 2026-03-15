@@ -76,6 +76,7 @@ describe("applyAuthChoice", () => {
     "OPENCODE_API_KEY",
     "TOGETHER_API_KEY",
     "QIANFAN_API_KEY",
+    "AIPING_API_KEY",
     "SYNTHETIC_API_KEY",
     "SSH_TTY",
     "CHUTES_CLIENT_ID",
@@ -376,6 +377,80 @@ describe("applyAuthChoice", () => {
     }
   });
 
+  it("prompts for AIPing routing preset and applies the selected model", async () => {
+    await setupTempState();
+    process.env.AIPING_API_KEY = "";
+
+    const text = vi.fn().mockResolvedValue("sk-aiping-manual");
+    const select = vi.fn(async (params: Parameters<WizardPrompter["select"]>[0]) => {
+      if (params.message === "Select AIPing routing preset") {
+        return "throughput" as never;
+      }
+      return (params.options[0]?.value ?? "plaintext") as never;
+    });
+    const { prompter, runtime } = createApiKeyPromptHarness({
+      select,
+      text,
+    });
+
+    const result = await applyAuthChoice({
+      authChoice: "aiping-api-key",
+      config: {},
+      prompter,
+      runtime,
+      setDefaultModel: true,
+    });
+
+    expect(select).toHaveBeenCalledWith(
+      expect.objectContaining({
+        message: "Select AIPing routing preset",
+        initialValue: "default",
+      }),
+    );
+    expect(resolveAgentModelPrimaryValue(result.config.agents?.defaults?.model)).toBe(
+      "aiping/DeepSeek-V3.2:throughput",
+    );
+    expect(
+      result.config.agents?.defaults?.models?.["aiping/DeepSeek-V3.2:throughput"],
+    ).toMatchObject({
+      alias: "AIPing (Throughput)",
+    });
+    expect((await readAuthProfile("aiping:default"))?.key).toBe("sk-aiping-manual");
+  });
+
+  it("skips AIPing routing preset prompt for token-provider flow", async () => {
+    await setupTempState();
+
+    const select = vi.fn(async (params: Parameters<WizardPrompter["select"]>[0]) => {
+      return (params.options[0]?.value ?? "plaintext") as never;
+    });
+    const text = vi.fn();
+    const confirm = vi.fn(async () => false);
+    const { prompter, runtime } = createApiKeyPromptHarness({ select, text, confirm });
+
+    const result = await applyAuthChoice({
+      authChoice: "apiKey",
+      config: {},
+      prompter,
+      runtime,
+      setDefaultModel: true,
+      opts: {
+        tokenProvider: "aiping",
+        token: "sk-aiping-token",
+      },
+    });
+
+    expect(text).not.toHaveBeenCalled();
+    expect(confirm).not.toHaveBeenCalled();
+    expect(select).not.toHaveBeenCalledWith(
+      expect.objectContaining({ message: "Select AIPing routing preset" }),
+    );
+    expect(resolveAgentModelPrimaryValue(result.config.agents?.defaults?.model)).toBe(
+      "aiping/DeepSeek-V3.2",
+    );
+    expect((await readAuthProfile("aiping:default"))?.key).toBe("sk-aiping-token");
+  });
+
   it("maps apiKey tokenProvider aliases to provider flow", async () => {
     const scenarios: Array<{
       tokenProvider: string;
@@ -529,6 +604,13 @@ describe("applyAuthChoice", () => {
       profileId: "qianfan:default",
       provider: "qianfan",
       modelPrefix: "qianfan/",
+    },
+    {
+      authChoice: "aiping-api-key",
+      tokenProvider: "aiping",
+      profileId: "aiping:default",
+      provider: "aiping",
+      modelPrefix: "aiping/",
     },
     {
       authChoice: "synthetic-api-key",
@@ -1357,6 +1439,7 @@ describe("resolvePreferredProviderForAuthChoice", () => {
       { authChoice: "github-copilot" as const, expectedProvider: "github-copilot" },
       { authChoice: "qwen-portal" as const, expectedProvider: "qwen-portal" },
       { authChoice: "mistral-api-key" as const, expectedProvider: "mistral" },
+      { authChoice: "aiping-api-key" as const, expectedProvider: "aiping" },
       { authChoice: "ollama" as const, expectedProvider: "ollama" },
       { authChoice: "unknown" as AuthChoice, expectedProvider: undefined },
     ] as const;

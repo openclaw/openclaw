@@ -11,6 +11,8 @@ import {
 import type { ModelApi } from "../config/types.models.js";
 import {
   applyAuthProfileConfig,
+  applyAipingConfig,
+  applyAipingProviderConfig,
   applyLitellmProviderConfig,
   applyMistralConfig,
   applyMistralProviderConfig,
@@ -32,6 +34,7 @@ import {
   applyZaiProviderConfig,
   OPENROUTER_DEFAULT_MODEL_REF,
   MISTRAL_DEFAULT_MODEL_REF,
+  AIPING_DEFAULT_MODEL_REF,
   SYNTHETIC_DEFAULT_MODEL_ID,
   SYNTHETIC_DEFAULT_MODEL_REF,
   XAI_DEFAULT_MODEL_REF,
@@ -528,6 +531,10 @@ describe("primary model defaults", () => {
         getConfig: () => applySyntheticConfig({}),
         primaryModel: SYNTHETIC_DEFAULT_MODEL_REF,
       },
+      {
+        getConfig: () => applyAipingConfig({}),
+        primaryModel: AIPING_DEFAULT_MODEL_REF,
+      },
     ] as const;
     for (const { getConfig, primaryModel } of configCases) {
       const cfg = getConfig();
@@ -634,9 +641,49 @@ describe("applyMistralProviderConfig", () => {
   });
 });
 
+describe("applyAipingConfig", () => {
+  it("adds AIPing provider with correct settings", () => {
+    const cfg = applyAipingConfig({});
+    expect(cfg.models?.providers?.aiping).toMatchObject({
+      baseUrl: "https://aiping.cn/api/v1",
+      api: "openai-completions",
+    });
+    expect(resolveAgentModelPrimaryValue(cfg.agents?.defaults?.model)).toBe(
+      AIPING_DEFAULT_MODEL_REF,
+    );
+  });
+});
+
+describe("applyAipingProviderConfig", () => {
+  it("merges AIPing models and keeps existing provider overrides", () => {
+    const cfg = applyAipingProviderConfig(
+      createLegacyProviderConfig({
+        providerId: "aiping",
+        api: "anthropic-messages",
+        modelId: "custom-model",
+        modelName: "Custom",
+      }),
+    );
+
+    expect(cfg.models?.providers?.aiping?.baseUrl).toBe("https://old.example.com");
+    expect(cfg.models?.providers?.aiping?.api).toBe("anthropic-messages");
+    expect(cfg.models?.providers?.aiping?.apiKey).toBe("old-key");
+    expect(cfg.models?.providers?.aiping?.models.map((m) => m.id)).toEqual([
+      "custom-model",
+      "DeepSeek-V3.2",
+      "Auto",
+    ]);
+  });
+});
+
 describe("fallback preservation helpers", () => {
   it("preserves existing model fallbacks", () => {
-    const fallbackCases = [applyMinimaxApiConfig, applyXaiConfig, applyMistralConfig] as const;
+    const fallbackCases = [
+      applyMinimaxApiConfig,
+      applyXaiConfig,
+      applyMistralConfig,
+      applyAipingConfig,
+    ] as const;
     for (const applyConfig of fallbackCases) {
       const cfg = applyConfig(createConfigWithFallbacks());
       expectFallbacksPreserved(cfg);
@@ -661,6 +708,11 @@ describe("provider alias defaults", () => {
         applyConfig: () => applyMistralProviderConfig({}),
         modelRef: MISTRAL_DEFAULT_MODEL_REF,
         alias: "Mistral",
+      },
+      {
+        applyConfig: () => applyAipingProviderConfig({}),
+        modelRef: AIPING_DEFAULT_MODEL_REF,
+        alias: "AIPing",
       },
     ] as const;
     for (const testCase of aliasCases) {
