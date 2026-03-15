@@ -2,7 +2,10 @@ import crypto from "node:crypto";
 import { callGateway } from "../../gateway/call.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
-import type { GatewayMessageChannel } from "../../utils/message-channel.js";
+import {
+  isGatewayMessageChannel,
+  type GatewayMessageChannel,
+} from "../../utils/message-channel.js";
 import { AGENT_LANE_NESTED } from "../lanes.js";
 import { readLatestAssistantReply, runAgentStep } from "./agent-step.js";
 import { resolveAnnounceTarget } from "./sessions-announce-target.js";
@@ -51,11 +54,28 @@ export async function runSessionsSendA2AFlow(params: {
       return;
     }
 
-    const announceTarget = await resolveAnnounceTarget({
-      sessionKey: params.targetSessionKey,
-      displayKey: params.displayKey,
-    });
-    const targetChannel = announceTarget?.channel ?? "unknown";
+    const [announceTarget, requesterAnnounceTarget] = await Promise.all([
+      resolveAnnounceTarget({
+        sessionKey: params.targetSessionKey,
+        displayKey: params.displayKey,
+      }),
+      params.requesterSessionKey && !params.requesterChannel
+        ? resolveAnnounceTarget({
+            sessionKey: params.requesterSessionKey,
+            displayKey: params.requesterSessionKey,
+          })
+        : Promise.resolve(null),
+    ]);
+    const targetChannelRaw = announceTarget?.channel;
+    const targetChannel =
+      targetChannelRaw && isGatewayMessageChannel(targetChannelRaw) ? targetChannelRaw : undefined;
+    const requesterChannelRaw = params.requesterChannel ?? requesterAnnounceTarget?.channel;
+    const requesterChannel =
+      requesterChannelRaw && isGatewayMessageChannel(requesterChannelRaw)
+        ? requesterChannelRaw
+        : undefined;
+
+    const targetChannelForContext = targetChannel ?? "unknown";
 
     if (
       params.maxPingPongTurns > 0 &&
@@ -70,22 +90,26 @@ export async function runSessionsSendA2AFlow(params: {
           currentSessionKey === params.requesterSessionKey ? "requester" : "target";
         const replyPrompt = buildAgentToAgentReplyContext({
           requesterSessionKey: params.requesterSessionKey,
-          requesterChannel: params.requesterChannel,
+          requesterChannel,
           targetSessionKey: params.displayKey,
-          targetChannel,
+          targetChannel: targetChannelForContext,
           currentRole,
           turn,
           maxTurns: params.maxPingPongTurns,
         });
+        const currentChannel =
+          currentSessionKey === params.requesterSessionKey ? requesterChannel : targetChannel;
+        const sourceChannel =
+          nextSessionKey === params.requesterSessionKey ? requesterChannel : targetChannel;
         const replyText = await runAgentStep({
           sessionKey: currentSessionKey,
           message: incomingMessage,
           extraSystemPrompt: replyPrompt,
           timeoutMs: params.announceTimeoutMs,
+          channel: currentChannel,
           lane: AGENT_LANE_NESTED,
           sourceSessionKey: nextSessionKey,
-          sourceChannel:
-            nextSessionKey === params.requesterSessionKey ? params.requesterChannel : targetChannel,
+          sourceChannel,
           sourceTool: "sessions_send",
         });
         if (!replyText || isReplySkip(replyText)) {
@@ -101,9 +125,9 @@ export async function runSessionsSendA2AFlow(params: {
 
     const announcePrompt = buildAgentToAgentAnnounceContext({
       requesterSessionKey: params.requesterSessionKey,
-      requesterChannel: params.requesterChannel,
+      requesterChannel,
       targetSessionKey: params.displayKey,
-      targetChannel,
+      targetChannel: targetChannelForContext,
       originalMessage: params.message,
       roundOneReply: primaryReply,
       latestReply,
@@ -113,9 +137,10 @@ export async function runSessionsSendA2AFlow(params: {
       message: "Agent-to-agent announce step.",
       extraSystemPrompt: announcePrompt,
       timeoutMs: params.announceTimeoutMs,
+      channel: targetChannel,
       lane: AGENT_LANE_NESTED,
       sourceSessionKey: params.requesterSessionKey,
-      sourceChannel: params.requesterChannel,
+      sourceChannel: requesterChannel,
       sourceTool: "sessions_send",
     });
     if (announceTarget && announceReply && announceReply.trim() && !isAnnounceSkip(announceReply)) {

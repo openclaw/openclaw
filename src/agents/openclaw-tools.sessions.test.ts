@@ -616,7 +616,6 @@ describe("sessions tools", () => {
     for (const call of agentCalls) {
       expect(call.params).toMatchObject({
         lane: "nested",
-        channel: "webchat",
         inputProvenance: { kind: "inter_session" },
       });
     }
@@ -796,10 +795,20 @@ describe("sessions tools", () => {
     for (const call of agentCalls) {
       expect(call.params).toMatchObject({
         lane: "nested",
-        channel: "webchat",
         inputProvenance: { kind: "inter_session" },
       });
     }
+
+    const requesterReplyStep = agentCalls.find((call) => {
+      const params = call.params as { sessionKey?: string; extraSystemPrompt?: string } | undefined;
+      return (
+        params?.sessionKey === requesterKey &&
+        params?.extraSystemPrompt?.includes("Agent-to-agent reply step")
+      );
+    });
+    expect((requesterReplyStep?.params as { channel?: string } | undefined)?.channel).toBe(
+      "discord",
+    );
 
     const replySteps = calls.filter(
       (call) =>
@@ -815,6 +824,119 @@ describe("sessions tools", () => {
       channel: "discord",
       message: "announce now",
     });
+  });
+
+  it("sessions_send keeps requester channel context during ping-pong when requesterChannel is omitted", async () => {
+    const calls: Array<{ method?: string; params?: unknown }> = [];
+    let agentCallCount = 0;
+    let lastWaitedRunId: string | undefined;
+    const replyByRunId = new Map<string, string>();
+    const requesterKey = "agent:main:main";
+    const targetKey = "agent:main:worker";
+
+    callGatewayMock.mockImplementation(async (opts: unknown) => {
+      const request = opts as { method?: string; params?: unknown };
+      calls.push(request);
+      if (request.method === "agent") {
+        agentCallCount += 1;
+        const runId = `run-${agentCallCount}`;
+        const params = request.params as
+          | {
+              message?: string;
+              sessionKey?: string;
+              extraSystemPrompt?: string;
+            }
+          | undefined;
+        let reply = "initial";
+        if (params?.extraSystemPrompt?.includes("Agent-to-agent reply step")) {
+          reply = params.sessionKey === requesterKey ? "pong-1" : "pong-2";
+        }
+        if (params?.extraSystemPrompt?.includes("Agent-to-agent announce step")) {
+          reply = "ANNOUNCE_SKIP";
+        }
+        replyByRunId.set(runId, reply);
+        return { runId, status: "accepted", acceptedAt: 2000 + agentCallCount };
+      }
+      if (request.method === "agent.wait") {
+        const params = request.params as { runId?: string } | undefined;
+        lastWaitedRunId = params?.runId;
+        return { runId: params?.runId ?? "run-1", status: "ok" };
+      }
+      if (request.method === "chat.history") {
+        const text = (lastWaitedRunId && replyByRunId.get(lastWaitedRunId)) ?? "";
+        return {
+          messages: [
+            {
+              role: "assistant",
+              content: [{ type: "text", text }],
+              timestamp: 20,
+            },
+          ],
+        };
+      }
+      if (request.method === "sessions.list") {
+        return {
+          sessions: [
+            {
+              key: requesterKey,
+              deliveryContext: { channel: "telegram", to: "12345" },
+              lastChannel: "telegram",
+              lastTo: "12345",
+            },
+            {
+              key: targetKey,
+              deliveryContext: { channel: "telegram", to: "67890" },
+              lastChannel: "telegram",
+              lastTo: "67890",
+            },
+          ],
+        };
+      }
+      if (request.method === "send") {
+        return { messageId: "m-announce" };
+      }
+      return {};
+    });
+
+    const tool = createOpenClawTools({
+      agentSessionKey: requesterKey,
+    }).find((candidate) => candidate.name === "sessions_send");
+    expect(tool).toBeDefined();
+    if (!tool) {
+      throw new Error("missing sessions_send tool");
+    }
+
+    const waited = await tool.execute("call8", {
+      sessionKey: targetKey,
+      message: "ping",
+      timeoutSeconds: 1,
+    });
+    expect(waited.details).toMatchObject({
+      status: "ok",
+      reply: "initial",
+    });
+
+    await vi.waitFor(
+      () => {
+        expect(calls.filter((call) => call.method === "agent")).toHaveLength(4);
+      },
+      { timeout: 2_000, interval: 5 },
+    );
+
+    const requesterReplyStep = calls.find((call) => {
+      if (call.method !== "agent") {
+        return false;
+      }
+      const params = call.params as { sessionKey?: string; extraSystemPrompt?: string } | undefined;
+      return (
+        params?.sessionKey === requesterKey &&
+        params?.extraSystemPrompt?.includes("Agent-to-agent reply step")
+      );
+    });
+    expect(requesterReplyStep).toBeDefined();
+    expect((requesterReplyStep?.params as { channel?: string } | undefined)?.channel).toBe(
+      "telegram",
+    );
   });
 
   it("subagents lists active and recent runs", async () => {
