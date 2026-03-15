@@ -52,16 +52,21 @@ function safeServiceName(name: string) {
     return baseName;
   }
   
-  // Truncate safely: decode first N bytes that fit
+  // Truncate safely: walk backwards from byte 63 to find a valid UTF-8 boundary.
+  // This avoids U+FFFD heuristics which can misfire on strings that already contain
+  // the replacement character, and guarantees the result re-encodes to ≤ MAX_LABEL_BYTES.
   const decoder = new TextDecoder("utf-8", { fatal: false });
-  let truncated = decoder.decode(encoded.slice(0, MAX_LABEL_BYTES));
-  
-  // Remove trailing replacement character only if it was introduced by truncation
-  // (not if it's a valid U+FFFD in the original string)
-  if (truncated.endsWith("\uFFFD") && !baseName.slice(0, truncated.length).endsWith("\uFFFD")) {
-    truncated = truncated.slice(0, -1);
+  let sliceEnd = MAX_LABEL_BYTES;
+  // Skip back over UTF-8 continuation bytes (10xxxxxx = 0x80–0xBF)
+  while (sliceEnd > 0 && (encoded[sliceEnd] & 0xc0) === 0x80) {
+    sliceEnd--;
   }
-  
+  // If we stopped on a leading byte of a multi-byte sequence, drop it too
+  if (sliceEnd > 0 && (encoded[sliceEnd] & 0x80) !== 0) {
+    sliceEnd--;
+  }
+  const truncated = decoder.decode(encoded.slice(0, sliceEnd));
+
   const result = truncated || "OpenClaw";
   
   // Log warning if truncation occurred
