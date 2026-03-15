@@ -29,40 +29,48 @@ const mocks = vi.hoisted(() => ({
   deliverOutboundPayloads: vi.fn(),
 }));
 
-vi.mock("../../discord/send.js", () => ({
+vi.mock("../../../extensions/discord/src/send.js", () => ({
   sendMessageDiscord: mocks.sendMessageDiscord,
 }));
-vi.mock("../../imessage/send.js", () => ({
+vi.mock("../../../extensions/imessage/src/send.js", () => ({
   sendMessageIMessage: mocks.sendMessageIMessage,
 }));
-vi.mock("../../signal/send.js", () => ({
+vi.mock("../../../extensions/signal/src/send.js", () => ({
   sendMessageSignal: mocks.sendMessageSignal,
 }));
-vi.mock("../../slack/send.js", () => ({
+vi.mock("../../../extensions/slack/src/send.js", () => ({
   sendMessageSlack: mocks.sendMessageSlack,
 }));
-vi.mock("../../telegram/send.js", () => ({
+vi.mock("../../../extensions/telegram/src/send.js", () => ({
   sendMessageTelegram: mocks.sendMessageTelegram,
 }));
-vi.mock("../../web/outbound.js", () => ({
+vi.mock("../../../extensions/telegram/src/send.js", () => ({
+  sendMessageTelegram: mocks.sendMessageTelegram,
+}));
+vi.mock("../../../extensions/whatsapp/src/send.js", () => ({
   sendMessageWhatsApp: mocks.sendMessageWhatsApp,
   sendPollWhatsApp: mocks.sendMessageWhatsApp,
+}));
+vi.mock("../../../extensions/discord/src/send.js", () => ({
+  sendMessageDiscord: mocks.sendMessageDiscord,
+  sendPollDiscord: mocks.sendMessageDiscord,
+  sendWebhookMessageDiscord: vi.fn(),
 }));
 vi.mock("../../../extensions/mattermost/src/mattermost/send.js", () => ({
   sendMessageMattermost: mocks.sendMessageMattermost,
 }));
-vi.mock("../../infra/outbound/deliver.js", async () => {
-  const actual = await vi.importActual<typeof import("../../infra/outbound/deliver.js")>(
-    "../../infra/outbound/deliver.js",
+vi.mock("../../infra/outbound/deliver-runtime.js", async () => {
+  const actual = await vi.importActual<typeof import("../../infra/outbound/deliver-runtime.js")>(
+    "../../infra/outbound/deliver-runtime.js",
   );
   return {
     ...actual,
     deliverOutboundPayloads: mocks.deliverOutboundPayloads,
   };
 });
-const actualDeliver = await vi.importActual<typeof import("../../infra/outbound/deliver.js")>(
-  "../../infra/outbound/deliver.js",
-);
+const actualDeliver = await vi.importActual<
+  typeof import("../../infra/outbound/deliver-runtime.js")
+>("../../infra/outbound/deliver-runtime.js");
 
 const { routeReply } = await import("./route-reply.js");
 
@@ -291,6 +299,36 @@ describe("routeReply", () => {
       "telegram:123",
       "hi",
       expect.objectContaining({ messageThreadId: 42 }),
+    );
+  });
+
+  it("formats BTW replies prominently on routed sends", async () => {
+    mocks.sendMessageSlack.mockClear();
+    await routeReply({
+      payload: { text: "323", btw: { question: "what is 17 * 19?" } },
+      channel: "slack",
+      to: "channel:C123",
+      cfg: {} as never,
+    });
+    expect(mocks.sendMessageSlack).toHaveBeenCalledWith(
+      "channel:C123",
+      "BTW\nQuestion: what is 17 * 19?\n\n323",
+      expect.any(Object),
+    );
+  });
+
+  it("formats BTW replies prominently on routed discord sends", async () => {
+    mocks.sendMessageDiscord.mockClear();
+    await routeReply({
+      payload: { text: "323", btw: { question: "what is 17 * 19?" } },
+      channel: "discord",
+      to: "channel:123456",
+      cfg: {} as never,
+    });
+    expect(mocks.sendMessageDiscord).toHaveBeenCalledWith(
+      "channel:123456",
+      "BTW\nQuestion: what is 17 * 19?\n\n323",
+      expect.any(Object),
     );
   });
 

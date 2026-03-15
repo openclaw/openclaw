@@ -7,11 +7,7 @@ import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { createIMessageTestPlugin } from "../../test-utils/imessage-test-plugin.js";
 import { createInternalHookEventPayload } from "../../test-utils/internal-hook-event-payload.js";
-import type {
-  DeliverOutboundPayloadsParams,
-  OutboundDeliveryResult,
-  OutboundSendDeps,
-} from "./deliver.js";
+import type { DeliverOutboundPayloadsParams, OutboundDeliveryResult } from "./deliver.js";
 
 type DeliverMockState = {
   sessions: {
@@ -105,6 +101,15 @@ export const logMocks = _logMocks;
 vi.mock("../../config/sessions.js", async () => {
   const actual = await vi.importActual<typeof import("../../config/sessions.js")>(
     "../../config/sessions.js",
+  );
+  return {
+    ...actual,
+    appendAssistantMessageToSessionTranscript: _mocks.appendAssistantMessageToSessionTranscript,
+  };
+});
+vi.mock("../../config/sessions/transcript.js", async () => {
+  const actual = await vi.importActual<typeof import("../../config/sessions/transcript.js")>(
+    "../../config/sessions/transcript.js",
   );
   return {
     ...actual,
@@ -215,7 +220,9 @@ export async function runChunkedWhatsAppDelivery(params: {
   mirror?: DeliverOutboundPayloadsParams["mirror"];
 }) {
   const sendWhatsApp = vi
-    .fn<NonNullable<OutboundSendDeps["sendWhatsApp"]>>()
+    .fn<
+      (to: string, text: string, opts?: unknown) => Promise<{ messageId: string; toJid: string }>
+    >()
     .mockResolvedValueOnce({ messageId: "w1", toJid: "jid" })
     .mockResolvedValueOnce({ messageId: "w2", toJid: "jid" });
   const cfg: OpenClawConfig = {
