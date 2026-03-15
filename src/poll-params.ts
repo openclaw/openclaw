@@ -1,4 +1,4 @@
-import { readSnakeCaseParamRaw } from "./param-key.js";
+import { readSnakeCaseParamRaw, toSnakeCaseKey } from "./param-key.js";
 
 export type PollCreationParamKind = "string" | "stringArray" | "number" | "boolean";
 
@@ -20,6 +20,21 @@ export const POLL_CREATION_PARAM_DEFS: Record<string, PollCreationParamDef> = {
 export type PollCreationParamName = keyof typeof POLL_CREATION_PARAM_DEFS;
 
 export const POLL_CREATION_PARAM_NAMES = Object.keys(POLL_CREATION_PARAM_DEFS);
+
+/**
+ * Remove all poll-creation params (camelCase and snake_case variants) from a
+ * mutable params object.  LLMs frequently hallucinate poll fields when the
+ * intended action is "send"; stripping them lets the send proceed normally.
+ */
+export function stripPollCreationParams(params: Record<string, unknown>): void {
+  for (const key of POLL_CREATION_PARAM_NAMES) {
+    delete params[key];
+    const snake = toSnakeCaseKey(key);
+    if (snake !== key) {
+      delete params[snake];
+    }
+  }
+}
 
 function readPollParamRaw(params: Record<string, unknown>, key: string): unknown {
   return readSnakeCaseParamRaw(params, key);

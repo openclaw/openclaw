@@ -186,6 +186,8 @@ describe("runMessageAction context isolation", () => {
     ).rejects.toThrow(/message required/i);
   });
 
+  // LLMs frequently hallucinate poll params on send calls (#41199).
+  // The runner now silently strips them instead of rejecting.
   it.each([
     {
       name: "structured poll params",
@@ -218,14 +220,13 @@ describe("runMessageAction context isolation", () => {
         poll_public: "true",
       },
     },
-  ])("rejects send actions that include $name", async ({ actionParams }) => {
-    await expect(
-      runDrySend({
-        cfg: slackConfig,
-        actionParams,
-        toolContext: { currentChannelId: "C12345678" },
-      }),
-    ).rejects.toThrow(/use action "poll" instead of "send"/i);
+  ])("strips $name from send actions and proceeds normally", async ({ actionParams }) => {
+    const result = await runDrySend({
+      cfg: slackConfig,
+      actionParams,
+      toolContext: { currentChannelId: "C12345678" },
+    });
+    expect(result.kind).toBe("send");
   });
 
   it.each([

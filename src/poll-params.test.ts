@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { hasPollCreationParams, resolveTelegramPollVisibility } from "./poll-params.js";
+import {
+  hasPollCreationParams,
+  resolveTelegramPollVisibility,
+  stripPollCreationParams,
+} from "./poll-params.js";
 
 describe("poll params", () => {
   it("does not treat explicit false booleans as poll creation params", () => {
@@ -56,5 +60,50 @@ describe("poll params", () => {
     expect(() => resolveTelegramPollVisibility({ pollAnonymous: true, pollPublic: true })).toThrow(
       /mutually exclusive/i,
     );
+  });
+
+  describe("stripPollCreationParams", () => {
+    it("removes all camelCase poll params and preserves other keys", () => {
+      const params: Record<string, unknown> = {
+        channel: "slack",
+        message: "hello",
+        pollQuestion: "Lunch?",
+        pollOption: ["Pizza", "Sushi"],
+        pollMulti: true,
+        pollDurationHours: 1,
+        pollDurationSeconds: 60,
+        pollAnonymous: true,
+        pollPublic: false,
+      };
+      stripPollCreationParams(params);
+      expect(params).toEqual({ channel: "slack", message: "hello" });
+    });
+
+    it("removes snake_case poll params", () => {
+      const params: Record<string, unknown> = {
+        channel: "telegram",
+        poll_question: "Dinner?",
+        poll_option: ["Tacos", "Ramen"],
+        poll_multi: true,
+      };
+      stripPollCreationParams(params);
+      expect(params).toEqual({ channel: "telegram" });
+    });
+
+    it("removes both camelCase and snake_case variants simultaneously", () => {
+      const params: Record<string, unknown> = {
+        message: "test",
+        pollQuestion: "Q?",
+        poll_option: ["A", "B"],
+      };
+      stripPollCreationParams(params);
+      expect(params).toEqual({ message: "test" });
+    });
+
+    it("is a no-op when no poll params are present", () => {
+      const params: Record<string, unknown> = { channel: "slack", message: "hi" };
+      stripPollCreationParams(params);
+      expect(params).toEqual({ channel: "slack", message: "hi" });
+    });
   });
 });
