@@ -871,6 +871,16 @@ function collectFeishuAssignments(params: {
         },
       });
     }
+    if (hasOwnProperty(account, "tts") && isRecord(account.tts)) {
+      collectTtsApiKeyAssignments({
+        tts: account.tts,
+        pathPrefix: `channels.feishu.accounts.${accountId}.tts`,
+        defaults: params.defaults,
+        context: params.context,
+        active: enabled && isEnabledFlag(account),
+        inactiveReason: "Feishu account is disabled.",
+      });
+    }
     if (!hasOwnProperty(account, "verificationToken")) {
       continue;
     }
@@ -889,16 +899,6 @@ function collectFeishuAssignments(params: {
         account.verificationToken = value;
       },
     });
-    if (hasOwnProperty(account, "tts") && isRecord(account.tts)) {
-      collectTtsApiKeyAssignments({
-        tts: account.tts,
-        pathPrefix: `channels.feishu.accounts.${accountId}.tts`,
-        defaults: params.defaults,
-        context: params.context,
-        active: enabled && isEnabledFlag(account),
-        inactiveReason: "Feishu account is disabled.",
-      });
-    }
   }
 }
 
