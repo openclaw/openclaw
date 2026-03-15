@@ -54,9 +54,10 @@ export function normalizeModelCompat(model: Model<Api>): Model<Api> {
 
   // The `developer` role and stream usage chunks are OpenAI-native behaviors.
   // Many OpenAI-compatible backends reject `developer` and/or emit usage-only
-  // chunks that break strict parsers expecting choices[0]. For non-native
-  // openai-completions endpoints, force both compat flags off — unless the
-  // user has explicitly opted in via their model config.
+  // chunks that break strict parsers expecting choices[0]. Additionally, the
+  // `strict` boolean inside tools validation is rejected by several providers
+  // causing tool calls to be ignored. For non-native openai-completions endpoints,
+  // default these compat flags off unless explicitly opted in.
   const compat = model.compat ?? undefined;
   // When baseUrl is empty the pi-ai library defaults to api.openai.com, so
   // leave compat unchanged and let default native behavior apply.
@@ -64,13 +65,14 @@ export function normalizeModelCompat(model: Model<Api>): Model<Api> {
   if (!needsForce) {
     return model;
   }
-
-  // Respect explicit user overrides: if the user has set a compat flag to
-  // true in their model definition, they know their endpoint supports it.
   const forcedDeveloperRole = compat?.supportsDeveloperRole === true;
   const forcedUsageStreaming = compat?.supportsUsageInStreaming === true;
-
-  if (forcedDeveloperRole && forcedUsageStreaming) {
+  const targetStrictMode = compat?.supportsStrictMode ?? false;
+  if (
+    compat?.supportsDeveloperRole !== undefined &&
+    compat?.supportsUsageInStreaming !== undefined &&
+    compat?.supportsStrictMode !== undefined
+  ) {
     return model;
   }
 
@@ -82,7 +84,12 @@ export function normalizeModelCompat(model: Model<Api>): Model<Api> {
           ...compat,
           supportsDeveloperRole: forcedDeveloperRole || false,
           supportsUsageInStreaming: forcedUsageStreaming || false,
+          supportsStrictMode: targetStrictMode,
         }
-      : { supportsDeveloperRole: false, supportsUsageInStreaming: false },
+      : {
+          supportsDeveloperRole: false,
+          supportsUsageInStreaming: false,
+          supportsStrictMode: false,
+        },
   } as typeof model;
 }
