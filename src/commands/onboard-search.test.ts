@@ -283,9 +283,47 @@ describe("setupSearch", () => {
     expect(result.tools?.web?.search?.apiKey).toBe("BSA-plain");
   });
 
-  it("exports all 5 providers in SEARCH_PROVIDER_OPTIONS", () => {
-    expect(SEARCH_PROVIDER_OPTIONS).toHaveLength(5);
+  it("exports all 6 providers in SEARCH_PROVIDER_OPTIONS", () => {
+    expect(SEARCH_PROVIDER_OPTIONS).toHaveLength(6);
     const values = SEARCH_PROVIDER_OPTIONS.map((e) => e.value);
-    expect(values).toEqual(["brave", "gemini", "grok", "kimi", "perplexity"]);
+    expect(values).toEqual(["brave", "gemini", "grok", "kimi", "perplexity", "searxng"]);
+  });
+
+  it("sets provider and searxng url when user provides one", async () => {
+    const cfg: OpenClawConfig = {};
+    const { prompter } = createPrompter({
+      selectValue: "searxng",
+      textValue: "http://192.168.1.210:8080",
+    });
+    const result = await setupSearch(cfg, runtime, prompter);
+    expect(result.tools?.web?.search?.provider).toBe("searxng");
+    expect(result.tools?.web?.search?.enabled).toBe(true);
+    expect(result.tools?.web?.search?.searxng?.url).toBe("http://192.168.1.210:8080");
+  });
+
+  it("shows missing-url note when searxng selected with no url", async () => {
+    const cfg: OpenClawConfig = {};
+    const { prompter, notes } = createPrompter({
+      selectValue: "searxng",
+      textValue: "",
+    });
+    const result = await setupSearch(cfg, runtime, prompter);
+    expect(result.tools?.web?.search?.provider).toBe("searxng");
+    const missingNote = notes.find((n) => n.message.includes("No SearXNG URL configured"));
+    expect(missingNote).toBeDefined();
+  });
+
+  it("does not call buildSearchEnvRef for searxng in ref mode", async () => {
+    const cfg: OpenClawConfig = {};
+    const { prompter } = createPrompter({
+      selectValue: "searxng",
+      textValue: "http://localhost:8080",
+    });
+    // Should not throw — SearXNG has no envKeys so buildSearchEnvRef would throw
+    const result = await setupSearch(cfg, runtime, prompter, {
+      secretInputMode: "ref", // pragma: allowlist secret
+    });
+    expect(result.tools?.web?.search?.provider).toBe("searxng");
+    expect(result.tools?.web?.search?.searxng?.url).toBe("http://localhost:8080");
   });
 });

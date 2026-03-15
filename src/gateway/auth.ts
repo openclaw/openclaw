@@ -246,7 +246,7 @@ export function resolveGatewayAuth(params: {
     passwordPrecedence: "config-first", // pragma: allowlist secret
   });
   const token = resolvedCredentials.token;
-  const password = resolvedCredentials.password;
+  const password = resolvedCredentials.password; // pragma: allowlist secret
   const trustedProxy = authConfig.trustedProxy;
 
   let mode: ResolvedGatewayAuth["mode"];

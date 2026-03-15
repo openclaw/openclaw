@@ -10,7 +10,7 @@ import type { RuntimeEnv } from "../runtime.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 import type { SecretInputMode } from "./onboard-types.js";
 
-export type SearchProvider = "brave" | "gemini" | "grok" | "kimi" | "perplexity";
+export type SearchProvider = "brave" | "gemini" | "grok" | "kimi" | "perplexity" | "searxng";
 
 type SearchProviderEntry = {
   value: SearchProvider;
@@ -62,6 +62,14 @@ export const SEARCH_PROVIDER_OPTIONS: readonly SearchProviderEntry[] = [
     placeholder: "pplx-...",
     signupUrl: "https://www.perplexity.ai/settings/api",
   },
+  {
+    value: "searxng",
+    label: "SearXNG (self-hosted)",
+    hint: "No API key · self-hosted metasearch instance",
+    envKeys: [],
+    placeholder: "http://localhost:8080",
+    signupUrl: "https://docs.searxng.org/admin/installation.html",
+  },
 ] as const;
 
 export function hasKeyInEnv(entry: SearchProviderEntry): boolean {
@@ -81,6 +89,8 @@ function rawKeyValue(config: OpenClawConfig, provider: SearchProvider): unknown 
       return search?.kimi?.apiKey;
     case "perplexity":
       return search?.perplexity?.apiKey;
+    case "searxng":
+      return undefined;
   }
 }
 
@@ -143,6 +153,9 @@ export function applySearchKey(
       break;
     case "perplexity":
       search.perplexity = { ...search.perplexity, apiKey: key };
+      break;
+    case "searxng":
+      // SearXNG has no API key; provider is set above, URL via tools.web.search.searxng.url
       break;
   }
   return {
@@ -244,6 +257,48 @@ export async function setupSearch(
   }
 
   const entry = SEARCH_PROVIDER_OPTIONS.find((e) => e.value === choice)!;
+
+  // SearXNG requires no API key — prompt for instance URL instead.
+  if (choice === "searxng") {
+    const existingUrl = config.tools?.web?.search?.searxng?.url;
+    const urlInput = await prompter.text({
+      message: existingUrl
+        ? "SearXNG instance URL (leave blank to keep current)"
+        : "SearXNG instance URL",
+      placeholder: existingUrl ?? entry.placeholder,
+    });
+    const url = urlInput?.trim() || existingUrl;
+    const result: OpenClawConfig = {
+      ...config,
+      tools: {
+        ...config.tools,
+        web: {
+          ...config.tools?.web,
+          search: {
+            ...config.tools?.web?.search,
+            provider: "searxng" as const,
+            enabled: true,
+            searxng: {
+              ...config.tools?.web?.search?.searxng,
+              ...(url ? { url } : {}),
+            },
+          },
+        },
+      },
+    };
+    if (!url) {
+      await prompter.note(
+        [
+          "No SearXNG URL configured — web_search won't work until an instance URL is set.",
+          `Setup guide: ${entry.signupUrl}`,
+          "Docs: https://docs.openclaw.ai/tools/web#searxng",
+        ].join("\n"),
+        "Web search",
+      );
+    }
+    return preserveDisabledState(config, result);
+  }
+
   const existingKey = resolveExistingKey(config, choice);
   const keyConfigured = hasExistingKey(config, choice);
   const envAvailable = hasKeyInEnv(entry);

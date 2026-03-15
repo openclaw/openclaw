@@ -663,9 +663,10 @@ export const FIELD_HELP: Record<string, string> = {
   "tools.message.crossContext.marker.suffix":
     'Text suffix for cross-context markers (supports "{channel}").',
   "tools.message.broadcast.enabled": "Enable broadcast action (default: true).",
-  "tools.web.search.enabled": "Enable the web_search tool (requires a provider API key).",
+  "tools.web.search.enabled":
+    "Enable the web_search tool (requires a provider API key, or use SearXNG for key-free search).",
   "tools.web.search.provider":
-    'Search provider ("brave", "gemini", "grok", "kimi", or "perplexity"). Auto-detected from available API keys if omitted.',
+    'Search provider ("brave", "gemini", "grok", "kimi", "perplexity", or "searxng"). Auto-detected from available API keys if omitted. Use "searxng" for self-hosted, API-key-free search.',
   "tools.web.search.apiKey": "Brave Search API key (fallback: BRAVE_API_KEY env var).",
   "tools.web.search.maxResults": "Number of results to return (1-10).",
   "tools.web.search.timeoutSeconds": "Timeout in seconds for web_search requests.",
@@ -682,6 +683,14 @@ export const FIELD_HELP: Record<string, string> = {
   "tools.web.search.kimi.baseUrl":
     'Kimi base URL override (default: "https://api.moonshot.ai/v1").',
   "tools.web.search.kimi.model": 'Kimi model override (default: "moonshot-v1-128k").',
+  "tools.web.search.searxng.url":
+    'Base URL of your SearXNG instance (default: "http://localhost:8080"). You must run SearXNG yourself — see https://docs.searxng.org/admin/installation.html.',
+  "tools.web.search.searxng.engines":
+    'Limit search to specific engines (e.g. ["google", "duckduckgo", "bing"]). Omit to use your instance\'s configured defaults.',
+  "tools.web.search.searxng.categories":
+    'Result category filter. One of: "general", "images", "news", "videos", "files", "social media". Default: "general".',
+  "tools.web.search.searxng.language": 'Search language code (default: "en").',
+  "tools.web.search.searxng.safeSearch": "Safe search level: 0 = off, 1 = moderate, 2 = strict.",
   "tools.web.search.perplexity.apiKey":
     "Perplexity or OpenRouter API key (fallback: PERPLEXITY_API_KEY or OPENROUTER_API_KEY env var). Direct Perplexity keys default to the Search API; OpenRouter keys use Sonar chat completions.",
   "tools.web.search.perplexity.baseUrl":

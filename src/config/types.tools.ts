@@ -457,8 +457,8 @@ export type ToolsConfig = {
     search?: {
       /** Enable web search tool (default: true when API key is present). */
       enabled?: boolean;
-      /** Search provider ("brave", "gemini", "grok", "kimi", or "perplexity"). */
-      provider?: "brave" | "gemini" | "grok" | "kimi" | "perplexity";
+      /** Search provider ("brave", "gemini", "grok", "kimi", "perplexity", or "searxng"). */
+      provider?: "brave" | "gemini" | "grok" | "kimi" | "perplexity" | "searxng";
       /** Brave Search API key (optional; defaults to BRAVE_API_KEY env var). */
       apiKey?: SecretInput;
       /** Default search results count (1-10). */
@@ -505,6 +505,19 @@ export type ToolsConfig = {
         baseUrl?: string;
         /** @deprecated Legacy Sonar/OpenRouter field. Ignored by Search API. */
         model?: string;
+      };
+      /** SearXNG-specific configuration (used when provider="searxng"). No API key required. */
+      searxng?: {
+        /** Base URL of your SearXNG instance (default: "http://localhost:8080"). */
+        url?: string;
+        /** Limit queries to specific engines (e.g. ["google", "duckduckgo"]). Omit to use instance defaults. */
+        engines?: string[];
+        /** Result category. Default: "general". */
+        categories?: "general" | "images" | "news" | "videos" | "files" | "social media";
+        /** Search language code (default: "en"). */
+        language?: string;
+        /** Safe search level: 0 = off, 1 = moderate, 2 = strict. Default: 0. */
+        safeSearch?: 0 | 1 | 2;
       };
     };
     fetch?: {

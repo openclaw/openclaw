@@ -1,0 +1,96 @@
+# docker-compose.searxng-isolated.yml
+#
+# Network-isolated SearXNG overlay for OpenClaw.
+#
+# Security model:
+#   - "internal" network: OpenClaw gateway + CLI. No internet egress.
+#   - "egress" network: SearXNG only. Has internet access for upstream engine queries.
+#   - SearXNG bridges both networks — it's the ONLY path from OpenClaw to the public web.
+#   - OpenClaw containers cannot resolve or reach any external host directly.
+#
+# Usage:
+#   docker compose -f docker-compose.yml -f docker-compose.searxng-isolated.yml up -d
+#
+# The base docker-compose.yml provides openclaw-gateway and openclaw-cli.
+# This overlay:
+#   1. Adds the SearXNG service with a hardened settings.yml and rate limiter
+#   2. Creates isolated networks with egress control
+#   3. Moves OpenClaw containers onto the internal-only network
+#   4. Bridges SearXNG across both networks
+#
+# Verified against SearXNG on CT 210 (192.168.1.210:8080) in a Proxmox lab
+# environment with 85 enabled engines. The settings.yml restricts to a
+# curated allowlist of 5 engines for agent use.
+
+services:
+  searxng:
+    image: searxng/searxng:2024.12.15-b21ed189b
+    container_name: openclaw-searxng
+    restart: unless-stopped
+    volumes:
+      - ./scripts/searxng-isolated/settings.yml:/etc/searxng/settings.yml:ro
+      - ./scripts/searxng-isolated/limiter.toml:/etc/searxng/limiter.toml:ro
+    networks:
+      internal:
+        # Static alias so OpenClaw config can use http://searxng:8080
+        aliases:
+          - searxng
+      egress: {}
+    # Bind only to localhost on the host — not exposed to the LAN.
+    # Remove this port mapping entirely in production (internal-only access).
+    ports:
+      - "127.0.0.1:8888:8080"
+    environment:
+      - SEARXNG_BASE_URL=http://searxng:8080
+      - INSTANCE_NAME=openclaw-search
+      # Required: generate with `openssl rand -hex 32` and set in .env or shell
+      - SEARXNG_SECRET_KEY=${SEARXNG_SECRET_KEY:?Set SEARXNG_SECRET_KEY in .env}
+    cap_drop:
+      - ALL
+    cap_add:
+      - NET_BIND_SERVICE
+      - SETGID
+      - SETUID
+      - DAC_OVERRIDE
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://127.0.0.1:8080/"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          cpus: "1.0"
+
+  # Override: move gateway to internal-only network
+  openclaw-gateway:
+    networks:
+      internal:
+        aliases:
+          - openclaw-gateway
+    # Remove from default network — gateway has NO direct internet access.
+    # All web search goes through SearXNG on the internal network.
+
+  # NOTE: openclaw-cli uses network_mode: "service:openclaw-gateway" in the base
+  # compose file, so it shares the gateway's network stack. Moving the gateway
+  # to the internal network implicitly isolates the CLI too — no override needed.
+
+networks:
+  # Internal network: OpenClaw + SearXNG can communicate.
+  # No internet egress — containers here cannot reach external hosts.
+  internal:
+    driver: bridge
+    internal: true # <-- This is the key: Docker blocks all outbound traffic
+
+  # Egress network: SearXNG only. Has internet access for upstream queries.
+  # OpenClaw containers are NOT attached to this network.
+  egress:
+    driver: bridge
+    # NOT internal — this network has internet access

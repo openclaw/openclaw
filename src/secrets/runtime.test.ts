@@ -383,6 +383,48 @@ describe("secrets runtime snapshot", () => {
     );
   });
 
+  it("treats all web search api key refs as inactive when provider is searxng", async () => {
+    const snapshot = await prepareSecretsRuntimeSnapshot({
+      config: asConfig({
+        tools: {
+          web: {
+            search: {
+              enabled: true,
+              provider: "searxng",
+              apiKey: { source: "env", provider: "default", id: "WEB_SEARCH_API_KEY" },
+              gemini: {
+                apiKey: { source: "env", provider: "default", id: "WEB_SEARCH_GEMINI_API_KEY" },
+              },
+              grok: {
+                apiKey: { source: "env", provider: "default", id: "MISSING_GROK_API_KEY" },
+              },
+            },
+          },
+        },
+      }),
+      env: {},
+      agentDirs: ["/tmp/openclaw-agent-main"],
+      loadAuthStore: () => ({ version: 1, profiles: {} }),
+    });
+
+    expect(snapshot.warnings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          code: "SECRETS_REF_IGNORED_INACTIVE_SURFACE",
+          path: "tools.web.search.apiKey",
+        }),
+        expect.objectContaining({
+          code: "SECRETS_REF_IGNORED_INACTIVE_SURFACE",
+          path: "tools.web.search.gemini.apiKey",
+        }),
+        expect.objectContaining({
+          code: "SECRETS_REF_IGNORED_INACTIVE_SURFACE",
+          path: "tools.web.search.grok.apiKey",
+        }),
+      ]),
+    );
+  });
+
   it("resolves selected web search provider ref even when provider config is disabled", async () => {
     const snapshot = await prepareSecretsRuntimeSnapshot({
       config: asConfig({

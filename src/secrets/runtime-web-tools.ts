@@ -10,7 +10,7 @@ import {
   type SecretDefaults,
 } from "./runtime-shared.js";
 
-const WEB_SEARCH_PROVIDERS = ["brave", "gemini", "grok", "kimi", "perplexity"] as const;
+const WEB_SEARCH_PROVIDERS = ["brave", "gemini", "grok", "kimi", "perplexity", "searxng"] as const;
 const PERPLEXITY_DIRECT_BASE_URL = "https://api.perplexity.ai";
 const DEFAULT_PERPLEXITY_BASE_URL = "https://openrouter.ai/api/v1";
 const PERPLEXITY_KEY_PREFIXES = ["pplx-"];
@@ -87,7 +87,8 @@ function normalizeProvider(value: unknown): WebSearchProvider | undefined {
     normalized === "gemini" ||
     normalized === "grok" ||
     normalized === "kimi" ||
-    normalized === "perplexity"
+    normalized === "perplexity" ||
+    normalized === "searxng"
   ) {
     return normalized;
   }
@@ -329,6 +330,9 @@ function envVarsForProvider(provider: WebSearchProvider): string[] {
   if (provider === "kimi") {
     return ["KIMI_API_KEY", "MOONSHOT_API_KEY"];
   }
+  if (provider === "searxng") {
+    return [];
+  }
   return ["PERPLEXITY_API_KEY", "OPENROUTER_API_KEY"];
 }
 
@@ -398,14 +402,21 @@ export async function resolveRuntimeWebTools(params: {
   }
 
   if (searchEnabled && search) {
-    const candidates = configuredProvider ? [configuredProvider] : [...WEB_SEARCH_PROVIDERS];
+    // SearXNG requires no API key — skip the key resolution loop entirely.
+    const candidates =
+      configuredProvider === "searxng"
+        ? []
+        : configuredProvider
+          ? [configuredProvider]
+          : [...WEB_SEARCH_PROVIDERS];
     const unresolvedWithoutFallback: Array<{
       provider: WebSearchProvider;
       path: string;
       reason: string;
     }> = [];
 
-    let selectedProvider: WebSearchProvider | undefined;
+    let selectedProvider: WebSearchProvider | undefined =
+      configuredProvider === "searxng" ? "searxng" : undefined;
     let selectedResolution: SecretResolutionResult | undefined;
 
     for (const provider of candidates) {
@@ -540,6 +551,24 @@ export async function resolveRuntimeWebTools(params: {
         context: params.context,
         path,
         details: `tools.web.search auto-detected provider is "${searchMetadata.selectedProvider}".`,
+      });
+    }
+  } else if (searchEnabled && search && configuredProvider === "searxng") {
+    // SearXNG needs no API key — mark all key-based provider refs as inactive.
+    for (const provider of WEB_SEARCH_PROVIDERS) {
+      if (provider === "searxng") {
+        continue;
+      }
+      const path =
+        provider === "brave" ? "tools.web.search.apiKey" : `tools.web.search.${provider}.apiKey`;
+      const value = resolveProviderKeyValue(search, provider);
+      if (!hasConfiguredSecretRef(value, defaults)) {
+        continue;
+      }
+      pushInactiveSurfaceWarning({
+        context: params.context,
+        path,
+        details: `tools.web.search.provider is "searxng".`,
       });
     }
   } else if (search && !searchEnabled) {

@@ -1,9 +1,10 @@
 ---
-summary: "Web search + fetch tools (Brave, Gemini, Grok, Kimi, and Perplexity providers)"
+summary: "Web search + fetch tools (Brave, Gemini, Grok, Kimi, Perplexity, and SearXNG providers)"
 read_when:
   - You want to enable web_search or web_fetch
   - You need provider API key setup
   - You want to use Gemini with Google Search grounding
+  - You want to use SearXNG for self-hosted, API-key-free search
 title: "Web Tools"
 ---
 
@@ -11,7 +12,7 @@ title: "Web Tools"
 
 OpenClaw ships two lightweight web tools:
 
-- `web_search` — Search the web using Brave Search API, Gemini with Google Search grounding, Grok, Kimi, or Perplexity Search API.
+- `web_search` — Search the web using Brave Search API, Gemini with Google Search grounding, Grok, Kimi, Perplexity Search API, or a self-hosted SearXNG instance (no API key required).
 - `web_fetch` — HTTP fetch + readable extraction (HTML → markdown/text).
 
 These are **not** browser automation. For JS-heavy sites or logins, use the
@@ -36,6 +37,7 @@ See [Brave Search setup](/brave-search) and [Perplexity Search setup](/perplexit
 | **Grok**                  | AI-synthesized answers + citations | —                                            | Uses xAI web-grounded responses                                                | `XAI_API_KEY`                               |
 | **Kimi**                  | AI-synthesized answers + citations | —                                            | Uses Moonshot web search                                                       | `KIMI_API_KEY` / `MOONSHOT_API_KEY`         |
 | **Perplexity Search API** | Structured results with snippets   | `country`, `language`, time, `domain_filter` | Supports content extraction controls; OpenRouter uses Sonar compatibility path | `PERPLEXITY_API_KEY` / `OPENROUTER_API_KEY` |
+| **SearXNG**               | Structured results with snippets   | `engines`, `categories`, `language`          | Self-hosted, no API key, aggregates multiple engines                           | None                                        |
 
 ### Auto-detection
 
@@ -225,6 +227,110 @@ For a gateway install, put it in `~/.openclaw/.env`.
 - The default model (`gemini-2.5-flash`) is fast and cost-effective.
   Any Gemini model that supports grounding can be used.
 
+## Using SearXNG (self-hosted, no API key)
+
+[SearXNG](https://github.com/searxng/searxng) is a free, open-source metasearch engine that
+aggregates results from Google, Bing, DuckDuckGo, and dozens of other engines simultaneously —
+then de-duplicates and ranks them. Unlike single-provider APIs, SearXNG can return results across
+multiple categories: web, images, news, videos, files, and social media.
+
+> **License note:** SearXNG is licensed under AGPLv3. OpenClaw does not bundle or distribute
+> SearXNG. You must install and run your own instance. See the
+> [official installation guide](https://docs.searxng.org/admin/installation.html).
+
+### Why SearXNG?
+
+- **No API key required** — point OpenClaw at your instance URL and you're done
+- **Aggregated results** — combines many engines in a single query, reducing single-source bias
+- **Category filtering** — `general`, `images`, `news`, `videos`, `files`, `social media`
+- **Engine control** — restrict to specific engines (e.g. only `["google", "duckduckgo"]`)
+- **Privacy** — results are fetched server-side from your own instance
+
+### Installing SearXNG
+
+```bash
+# Docker (fastest)
+docker run -d -p 8080:8080 \
+  -e BASE_URL="http://localhost:8080" \
+  -e INSTANCE_NAME="my-searxng" \
+  searxng/searxng
+
+# Or follow the full guide:
+# https://docs.searxng.org/admin/installation.html
+```
+
+Enable JSON output in your SearXNG `settings.yml`:
+
+```yaml
+search:
+  formats:
+    - html
+    - json # required for OpenClaw integration
+```
+
+### Setting up SearXNG in OpenClaw
+
+```json5
+{
+  tools: {
+    web: {
+      search: {
+        provider: "searxng",
+        searxng: {
+          url: "http://192.168.1.210:8080", // your SearXNG instance
+        },
+      },
+    },
+  },
+}
+```
+
+### Advanced configuration
+
+```json5
+{
+  tools: {
+    web: {
+      search: {
+        provider: "searxng",
+        searxng: {
+          url: "http://192.168.1.210:8080",
+          // Restrict to specific engines (omit to use instance defaults)
+          engines: ["google", "duckduckgo", "bing"],
+          // Category: "general" | "images" | "news" | "videos" | "files" | "social media"
+          categories: "general",
+          // Language (default: "en")
+          language: "en",
+          // Safe search: 0 = off, 1 = moderate, 2 = strict
+          safeSearch: 0,
+        },
+      },
+    },
+  },
+}
+```
+
+### SearXNG notes
+
+- Results include `engine` and `category` fields in addition to title, URL, and snippet.
+- The `count` / `maxResults` config applies as normal (default: 5, max: 10).
+- SearXNG must have `format: json` enabled in its `settings.yml`.
+- A remote SearXNG instance is fully supported — just set `url` to any reachable address.
+
+### Advanced: network-isolated search (optional)
+
+SearXNG works with any deployment — bare-metal, VM, LXC, Docker, or remote.
+Just set `url` to wherever your instance is running and OpenClaw will use it.
+
+For deployments that additionally need to restrict agent internet access to
+search-only, an **optional** Docker compose overlay is provided that runs
+SearXNG as a network-isolated egress gateway. This is not required for normal
+use — it's for compliance or containment scenarios where the agent must
+provably have no direct internet access.
+
+See [SearXNG Network Isolation](/tools/web-searxng-isolation) for the
+compose overlay, hardened engine allowlist, and verification steps.
+
 ## web_search
 
 Search the web using your configured provider.
@@ -232,12 +338,13 @@ Search the web using your configured provider.
 ### Requirements
 
 - `tools.web.search.enabled` must not be `false` (default: enabled)
-- API key for your chosen provider:
+- API key or instance URL for your chosen provider:
   - **Brave**: `BRAVE_API_KEY` or `tools.web.search.apiKey`
   - **Gemini**: `GEMINI_API_KEY` or `tools.web.search.gemini.apiKey`
   - **Grok**: `XAI_API_KEY` or `tools.web.search.grok.apiKey`
   - **Kimi**: `KIMI_API_KEY`, `MOONSHOT_API_KEY`, or `tools.web.search.kimi.apiKey`
   - **Perplexity**: `PERPLEXITY_API_KEY`, `OPENROUTER_API_KEY`, or `tools.web.search.perplexity.apiKey`
+  - **SearXNG**: no API key — set `tools.web.search.searxng.url` (default: `http://localhost:8080`)
 - All provider key fields above support SecretRef objects.
 
 ### Config
@@ -260,7 +367,7 @@ Search the web using your configured provider.
 
 ### Tool parameters
 
-All parameters work for Brave and for native Perplexity Search API unless noted.
+All parameters work for Brave and for native Perplexity Search API unless noted. SearXNG supports `query`, `count`, and `language`.
 
 Perplexity's OpenRouter / Sonar compatibility path supports only `query` and `freshness`.
 If you set `tools.web.search.perplexity.baseUrl` / `model`, use `OPENROUTER_API_KEY`, or configure an `sk-or-...` key, Search API-only filters return explicit errors.

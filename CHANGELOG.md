@@ -465,6 +465,8 @@ Docs: https://docs.openclaw.ai
 - Google/Gemini 3.1 Flash-Lite: add first-class `google/gemini-3.1-flash-lite-preview` support across model-id normalization, default aliases, media-understanding image lookups, Google Gemini CLI forward-compat fallback, and docs.
 - Agents/compaction model override: allow `agents.defaults.compaction.model` to route compaction summarization through a different model than the main session, and document the override across config help/reference surfaces. (#38753) thanks @starbuck100.
 
+- Web Search/SearXNG: add `searxng` as a first-class `web_search` provider. Point OpenClaw at any self-hosted SearXNG instance for no-API-key, multi-engine aggregated search with support for category filtering (`general`, `images`, `news`, `videos`, `files`, `social media`), engine selection, language, and safe-search controls. Configure via `tools.web.search.provider: "searxng"` and `tools.web.search.searxng.url`.
+
 ### Breaking
 
 - **BREAKING:** Gateway auth now requires explicit `gateway.auth.mode` when both `gateway.auth.token` and `gateway.auth.password` are configured (including SecretRefs). Set `gateway.auth.mode` to `token` or `password` before upgrade to avoid startup/pairing/TUI failures. (#35094) Thanks @joshavant.
