@@ -209,3 +209,43 @@ describe("shouldSuppressManagedWebSearchTool", () => {
     ).toBe(false);
   });
 });
+
+describe("isCodexNativeWebSearchRelevant", () => {
+  it("treats a default model with model-level openai-codex-responses api as relevant", async () => {
+    const { isCodexNativeWebSearchRelevant } = await import("./codex-native-web-search.js");
+
+    expect(
+      isCodexNativeWebSearchRelevant({
+        config: {
+          agents: {
+            defaults: {
+              model: {
+                primary: "gateway/gpt-5.4",
+              },
+            },
+          },
+          models: {
+            providers: {
+              gateway: {
+                api: "openai-responses",
+                baseUrl: "https://gateway.example/v1",
+                models: [
+                  {
+                    id: "gpt-5.4",
+                    name: "gpt-5.4",
+                    api: "openai-codex-responses",
+                    reasoning: false,
+                    input: ["text"],
+                    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                    contextWindow: 128_000,
+                    maxTokens: 16_384,
+                  },
+                ],
+              },
+            },
+          },
+        },
+      }),
+    ).toBe(true);
+  });
+});

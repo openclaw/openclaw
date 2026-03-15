@@ -283,9 +283,12 @@ export function isCodexNativeWebSearchRelevant(params: {
     agentId: params.agentId,
   });
   const configuredProvider = params.config.models?.providers?.[defaultModel.provider];
+  const configuredModelApi = configuredProvider?.models?.find(
+    (candidate) => candidate.id === defaultModel.model,
+  )?.api;
   return isCodexNativeSearchEligibleModel({
     modelProvider: defaultModel.provider,
-    modelApi: configuredProvider?.api,
+    modelApi: configuredModelApi ?? configuredProvider?.api,
   });
 }
 
