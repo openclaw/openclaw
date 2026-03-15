@@ -1046,6 +1046,7 @@
                 "group": "Extensions",
                 "pages": [
                   "plugins/community",
+                  "plugins/bundles",
                   "plugins/voice-call",
                   "plugins/zalouser",
                   "plugins/manifest",
