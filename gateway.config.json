@@ -1,0 +1,7 @@
+{
+  "gateway": {
+    "controlUi": {
+      "allowedOrigins": ["https://marbot.fly.dev"]
+    }
+  }
+}
