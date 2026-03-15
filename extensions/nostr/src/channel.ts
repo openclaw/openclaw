@@ -7,6 +7,10 @@ import {
   mapAllowFromEntries,
   type ChannelPlugin,
 } from "openclaw/plugin-sdk/nostr";
+import {
+  buildPassiveChannelStatusSummary,
+  buildTrafficStatusSummary,
+} from "../../shared/channel-status-summary.js";
 import type { NostrProfile } from "./config-schema.js";
 import { NostrConfigSchema } from "./config-schema.js";
 import type { MetricEvent, MetricsSnapshot } from "./metrics.js";
@@ -160,14 +164,10 @@ export const nostrPlugin: ChannelPlugin<ResolvedNostrAccount> = {
   status: {
     defaultRuntime: createDefaultChannelRuntimeState(DEFAULT_ACCOUNT_ID),
     collectStatusIssues: (accounts) => collectStatusIssuesFromLastError("nostr", accounts),
-    buildChannelSummary: ({ snapshot }) => ({
-      configured: snapshot.configured ?? false,
-      publicKey: snapshot.publicKey ?? null,
-      running: snapshot.running ?? false,
-      lastStartAt: snapshot.lastStartAt ?? null,
-      lastStopAt: snapshot.lastStopAt ?? null,
-      lastError: snapshot.lastError ?? null,
-    }),
+    buildChannelSummary: ({ snapshot }) =>
+      buildPassiveChannelStatusSummary(snapshot, {
+        publicKey: snapshot.publicKey ?? null,
+      }),
     buildAccountSnapshot: ({ account, runtime }) => ({
       accountId: account.accountId,
       name: account.name,
@@ -179,8 +179,7 @@ export const nostrPlugin: ChannelPlugin<ResolvedNostrAccount> = {
       lastStartAt: runtime?.lastStartAt ?? null,
       lastStopAt: runtime?.lastStopAt ?? null,
       lastError: runtime?.lastError ?? null,
-      lastInboundAt: runtime?.lastInboundAt ?? null,
-      lastOutboundAt: runtime?.lastOutboundAt ?? null,
+      ...buildTrafficStatusSummary(runtime),
     }),
   },
 

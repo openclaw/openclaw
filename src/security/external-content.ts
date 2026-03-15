@@ -151,10 +151,18 @@ function foldMarkerChar(char: string): string {
   return char;
 }
 
+const MARKER_IGNORABLE_CHAR_RE = /\u200B|\u200C|\u200D|\u2060|\uFEFF|\u00AD/g;
+
 function foldMarkerText(input: string): string {
-  return input.replace(
-    /[\uFF21-\uFF3A\uFF41-\uFF5A\uFF1C\uFF1E\u2329\u232A\u3008\u3009\u2039\u203A\u27E8\u27E9\uFE64\uFE65\u00AB\u00BB\u300A\u300B\u27EA\u27EB\u27EC\u27ED\u27EE\u27EF\u276C\u276D\u276E\u276F\u02C2\u02C3]/g,
-    (char) => foldMarkerChar(char),
+  return (
+    input
+      // Strip invisible format characters that can split marker tokens without changing
+      // how downstream models interpret the apparent boundary text.
+      .replace(MARKER_IGNORABLE_CHAR_RE, "")
+      .replace(
+        /[\uFF21-\uFF3A\uFF41-\uFF5A\uFF1C\uFF1E\u2329\u232A\u3008\u3009\u2039\u203A\u27E8\u27E9\uFE64\uFE65\u00AB\u00BB\u300A\u300B\u27EA\u27EB\u27EC\u27ED\u27EE\u27EF\u276C\u276D\u276E\u276F\u02C2\u02C3]/g,
+        (char) => foldMarkerChar(char),
+      )
   );
 }
 

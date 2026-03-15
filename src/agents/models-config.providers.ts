@@ -551,7 +551,7 @@ export function normalizeProviders(params: {
       }
     }
 
-    if (normalizedKey === "google") {
+    if (normalizedKey === "google" || normalizedKey === "google-vertex") {
       const googleNormalized = normalizeGoogleProvider(normalizedProvider);
       if (googleNormalized !== normalizedProvider) {
         mutated = true;
