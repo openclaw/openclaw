@@ -214,6 +214,7 @@ export function createFollowupRunner(params: {
                 timeoutMs: queued.run.timeoutMs,
                 runId,
                 allowTransientCooldownProbe: runOptions?.allowTransientCooldownProbe,
+                abortSignal: runOptions?.abortSignal,
                 blockReplyBreak: queued.run.blockReplyBreak,
                 bootstrapPromptWarningSignaturesSeen,
                 bootstrapPromptWarningSignature:

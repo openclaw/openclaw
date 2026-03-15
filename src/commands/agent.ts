@@ -9,6 +9,7 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 const log = createSubsystemLogger("commands/agent");
 import {
   listAgentIds,
+  resolveAgentConfig,
   resolveAgentDir,
   resolveEffectiveModelFallbacks,
   resolveSessionAgentId,
@@ -67,6 +68,7 @@ import {
   readConfigFileSnapshotForWrite,
   setRuntimeConfigSnapshot,
 } from "../config/config.js";
+import { resolveAgentModelFallbackAttemptTimeoutMs } from "../config/model-input.js";
 import {
   mergeSessionEntry,
   resolveAgentIdFromSessionKey,
@@ -344,6 +346,7 @@ function runAgentAttempt(params: {
   sessionStore?: Record<string, SessionEntry>;
   storePath?: string;
   allowTransientCooldownProbe?: boolean;
+  abortSignal?: AbortSignal;
 }) {
   const effectivePrompt = resolveFallbackRetryPrompt({
     body: params.body,
@@ -489,7 +492,10 @@ function runAgentAttempt(params: {
     timeoutMs: params.timeoutMs,
     runId: params.runId,
     lane: params.opts.lane,
-    abortSignal: params.opts.abortSignal,
+    abortSignal:
+      params.abortSignal && params.opts.abortSignal
+        ? AbortSignal.any([params.abortSignal, params.opts.abortSignal])
+        : (params.abortSignal ?? params.opts.abortSignal),
     extraSystemPrompt: params.opts.extraSystemPrompt,
     inputProvenance: params.opts.inputProvenance,
     streamParams: params.opts.streamParams,
@@ -1107,6 +1113,10 @@ async function agentCommandInternal(
         runId,
         agentDir,
         fallbacksOverride: effectiveFallbacksOverride,
+        attemptTimeoutMs: resolveAgentModelFallbackAttemptTimeoutMs(
+          cfg ? resolveAgentConfig(cfg, sessionAgentId)?.model : undefined,
+          cfg?.agents?.defaults?.model,
+        ),
         run: (providerOverride, modelOverride, runOptions) => {
           const isFallbackRetry = fallbackAttemptIndex > 0;
           fallbackAttemptIndex += 1;
@@ -1136,6 +1146,7 @@ async function agentCommandInternal(
             sessionStore,
             storePath,
             allowTransientCooldownProbe: runOptions?.allowTransientCooldownProbe,
+            abortSignal: runOptions?.abortSignal,
             onAgentEvent: (evt) => {
               // Track lifecycle end for fallback emission below.
               if (

@@ -11,6 +11,8 @@ export type AgentModelConfig =
       primary?: string;
       /** Per-agent model fallbacks (provider/model). */
       fallbacks?: string[];
+      /** Per-attempt timeout in seconds for non-last fallback candidates. Prevents a hanging primary from starving fallbacks. */
+      fallbackAttemptTimeoutSeconds?: number;
     };
 
 export type AgentSandboxConfig = {

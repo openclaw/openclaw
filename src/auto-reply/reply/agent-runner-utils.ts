@@ -1,9 +1,14 @@
-import { resolveRunModelFallbacksOverride } from "../../agents/agent-scope.js";
+import {
+  resolveAgentConfig,
+  resolveFallbackAgentId,
+  resolveRunModelFallbacksOverride,
+} from "../../agents/agent-scope.js";
 import type { NormalizedUsage } from "../../agents/usage.js";
 import { getChannelDock } from "../../channels/dock.js";
 import type { ChannelId, ChannelThreadingToolContext } from "../../channels/plugins/types.js";
 import { normalizeAnyChannelId, normalizeChannelId } from "../../channels/registry.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import { resolveAgentModelFallbackAttemptTimeoutMs } from "../../config/model-input.js";
 import { isReasoningTagProvider } from "../../utils/provider-utils.js";
 import { estimateUsageCost, formatTokenCount, formatUsd } from "../../utils/usage-format.js";
 import type { TemplateContext } from "../templating.js";
@@ -165,6 +170,15 @@ export function resolveModelFallbackOptions(run: FollowupRun["run"]) {
       agentId: run.agentId,
       sessionKey: run.sessionKey,
     }),
+    attemptTimeoutMs: resolveAgentModelFallbackAttemptTimeoutMs(
+      run.config
+        ? resolveAgentConfig(
+            run.config,
+            resolveFallbackAgentId({ agentId: run.agentId, sessionKey: run.sessionKey }),
+          )?.model
+        : undefined,
+      run.config?.agents?.defaults?.model,
+    ),
   };
 }
 
