@@ -1,0 +1,9 @@
+{
+  "id": "openrouter",
+  "providers": ["openrouter"],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}
