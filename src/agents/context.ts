@@ -67,17 +67,16 @@ export function applyDiscoveredContextWindows(params: {
     if (!contextWindow || contextWindow <= 0) {
       continue;
     }
-    // If discovery reports a provider separately from a bare model id, cache a
-    // provider-qualified entry too (e.g. anthropic/claude-sonnet) so callers that
-    // know the provider can avoid collisions on shared bare ids.
-    const providerQualifiedModelId = toProviderQualifiedModelKey(model);
-    if (providerQualifiedModelId) {
-      setSmallerContextWindow(params.cache, providerQualifiedModelId, contextWindow);
-    }
-
-    // Keep a conservative bare-id fallback by storing the minimum window seen
-    // across providers for the same model id.
+    // Bare-id fallback remains fail-safe: keep the smallest value when duplicate
+    // ids appear across providers.
     setSmallerContextWindow(params.cache, modelId, contextWindow);
+
+    // When discovery provides a separate provider field, also store the
+    // provider-qualified key so provider-aware lookups can keep limits distinct.
+    const qualifiedKey = toProviderQualifiedModelKey(model);
+    if (qualifiedKey) {
+      setSmallerContextWindow(params.cache, qualifiedKey, contextWindow);
+    }
   }
 }
 
@@ -89,11 +88,10 @@ export function applyConfiguredContextWindows(params: {
   if (!providers || typeof providers !== "object") {
     return;
   }
-  for (const [providerNameRaw, provider] of Object.entries(providers)) {
+  for (const provider of Object.values(providers)) {
     if (!Array.isArray(provider?.models)) {
       continue;
     }
-    const providerName = providerNameRaw.trim().toLowerCase();
     for (const model of provider.models) {
       const modelId = typeof model?.id === "string" ? model.id.trim() : undefined;
       const contextWindow =
@@ -102,13 +100,6 @@ export function applyConfiguredContextWindows(params: {
         continue;
       }
       params.cache.set(modelId, contextWindow);
-
-      // Config entries are often declared as bare ids under models.providers.<provider>.
-      // Mirror those onto provider-qualified keys so provider-aware lookups still
-      // honor explicit config overrides ahead of discovered defaults.
-      if (providerName && !modelId.includes("/")) {
-        params.cache.set(`${providerName}/${modelId}`, contextWindow);
-      }
     }
   }
 }
