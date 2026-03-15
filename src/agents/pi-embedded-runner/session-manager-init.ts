@@ -42,6 +42,12 @@ export async function prepareSessionManagerForRun(params: {
   }
 
   if (params.hadSessionFile && header && !hasAssistant) {
+    // Ensure existing transcript headers inherit the effective workspace cwd.
+    // Without this, launchd/system daemons frequently write cwd="/" and downstream
+    // sandboxes interpret the session as rooted at "/".
+    header.id = params.sessionId;
+    header.cwd = params.cwd;
+    sm.sessionId = params.sessionId;
     // Reset file so the first assistant flush includes header+user+assistant in order.
     await fs.writeFile(params.sessionFile, "", "utf-8");
     sm.fileEntries = [header];
