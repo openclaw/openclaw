@@ -18,6 +18,7 @@ import {
 } from "../auto-reply/heartbeat.js";
 import { getReplyFromConfig } from "../auto-reply/reply.js";
 import { HEARTBEAT_TOKEN } from "../auto-reply/tokens.js";
+import { detectSuspiciousPatterns } from "../security/external-content.js";
 import type { ReplyPayload } from "../auto-reply/types.js";
 import { getChannelPlugin } from "../channels/plugins/index.js";
 import type { ChannelHeartbeatDeps } from "../channels/plugins/types.js";
@@ -539,6 +540,13 @@ async function resolveHeartbeatPreflight(params: {
   const heartbeatFilePath = path.join(workspaceDir, DEFAULT_HEARTBEAT_FILENAME);
   try {
     const heartbeatFileContent = await fs.readFile(heartbeatFilePath, "utf-8");
+    // SECURITY: scan HEARTBEAT.md for injection patterns before injecting into agent prompt
+    const suspiciousPatterns = detectSuspiciousPatterns(heartbeatFileContent);
+    if (suspiciousPatterns.length > 0) {
+      log.warn(
+        `[security] Suspicious patterns detected in HEARTBEAT.md (patterns=${suspiciousPatterns.length}): ${suspiciousPatterns.slice(0, 3).join(", ")}`,
+      );
+    }
     if (isHeartbeatContentEffectivelyEmpty(heartbeatFileContent)) {
       return {
         ...basePreflight,

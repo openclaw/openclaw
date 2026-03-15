@@ -21,6 +21,7 @@ import {
 } from "./frontmatter.js";
 import { resolvePluginSkillDirs } from "./plugin-skills.js";
 import { serializeByKey } from "./serialize.js";
+import { scanSource } from "../../security/skill-scanner.js";
 import type {
   ParsedSkillFrontmatter,
   SkillEligibilityContext,
@@ -512,6 +513,12 @@ function loadSkillEntries(
     let frontmatter: ParsedSkillFrontmatter = {};
     try {
       const raw = fs.readFileSync(skill.filePath, "utf-8");
+      // SECURITY: scan skill source for malicious patterns before loading
+      const findings = scanSource(raw, skill.filePath);
+      const critical = findings.filter((f) => f.severity === "critical");
+      if (critical.length > 0) {
+        skillsLogger.warn(`[security] Skill "${skill.name}" has ${critical.length} critical finding(s): ${critical.map((f) => f.ruleId).join(", ")}`);
+      }
       frontmatter = parseFrontmatter(raw);
     } catch {
       // ignore malformed skills
