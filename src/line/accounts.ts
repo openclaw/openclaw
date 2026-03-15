@@ -95,6 +95,30 @@ function resolveSecret(params: {
   return "";
 }
 
+function resolveLineAccountConfig(
+  cfg: OpenClawConfig,
+  accountId: string,
+): LineAccountConfig | undefined {
+  return resolveAccountEntry((cfg.channels?.line as LineConfig | undefined)?.accounts, accountId);
+}
+
+function mergeLineAccountConfig(
+  cfg: OpenClawConfig,
+  accountId: string,
+): LineConfig & LineAccountConfig {
+  const {
+    accounts: _ignoredAccounts,
+    defaultAccount: _ignoredDefaultAccount,
+    ...lineBase
+  } = (cfg.channels?.line ?? {}) as LineConfig &
+    LineAccountConfig & {
+      accounts?: unknown;
+      defaultAccount?: unknown;
+    };
+  const accountConfig = resolveLineAccountConfig(cfg, accountId) ?? {};
+  return { ...lineBase, ...accountConfig };
+}
+
 export function resolveLineAccount(params: {
   cfg: OpenClawConfig;
   accountId?: string;
@@ -102,9 +126,8 @@ export function resolveLineAccount(params: {
   const cfg = params.cfg;
   const accountId = normalizeSharedAccountId(params.accountId);
   const lineConfig = cfg.channels?.line as LineConfig | undefined;
-  const accounts = lineConfig?.accounts;
-  const accountConfig =
-    accountId !== DEFAULT_ACCOUNT_ID ? resolveAccountEntry(accounts, accountId) : undefined;
+  const accountConfig = resolveLineAccountConfig(cfg, accountId);
+  const mergedConfig = mergeLineAccountConfig(cfg, accountId);
 
   const { token, tokenSource } = resolveToken({
     accountId,
@@ -118,25 +141,10 @@ export function resolveLineAccount(params: {
     accountConfig,
   });
 
-  const {
-    accounts: _ignoredAccounts,
-    defaultAccount: _ignoredDefaultAccount,
-    ...lineBase
-  } = (lineConfig ?? {}) as LineConfig & {
-    accounts?: unknown;
-    defaultAccount?: unknown;
-  };
-  const mergedConfig: LineConfig & LineAccountConfig = {
-    ...lineBase,
-    ...accountConfig,
-  };
-
-  const enabled =
-    accountConfig?.enabled ??
-    (accountId === DEFAULT_ACCOUNT_ID ? (lineConfig?.enabled ?? true) : false);
-
-  const name =
-    accountConfig?.name ?? (accountId === DEFAULT_ACCOUNT_ID ? lineConfig?.name : undefined);
+  const baseEnabled = lineConfig?.enabled !== false;
+  const accountEnabled = mergedConfig.enabled !== false;
+  const enabled = baseEnabled && accountEnabled;
+  const name = mergedConfig.name?.trim() || undefined;
 
   return {
     accountId,
