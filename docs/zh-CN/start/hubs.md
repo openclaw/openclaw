@@ -127,7 +127,7 @@ x-i18n:
 - [终端界面](/web/tui)
 - [浏览器控制](/tools/browser)
 - [浏览器（Linux 故障排除）](/tools/browser-linux-troubleshooting)
-- [轮询](/automation/poll)
+- [投票](/automation/poll)
 
 ## 节点、媒体、语音
 

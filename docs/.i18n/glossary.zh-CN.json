@@ -128,6 +128,10 @@
     "target": "Doctor"
   },
   {
+    "source": "Polls",
+    "target": "投票"
+  },
+  {
     "source": "for full details",
     "target": "了解详情"
   },
