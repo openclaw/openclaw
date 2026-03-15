@@ -87,6 +87,7 @@ import type {
 import { type ChatAttachment, type ChatQueueItem, type CronFormState } from "./ui-types.ts";
 import { generateUUID } from "./uuid.ts";
 import type { NostrProfileFormState } from "./views/channels.nostr-profile-form.ts";
+import "./components/claw-computer-panel.ts";
 
 declare global {
   interface Window {
@@ -173,6 +174,9 @@ export class OpenClawApp extends LitElement {
   @state() sidebarContent: string | null = null;
   @state() sidebarError: string | null = null;
   @state() splitRatio = this.settings.splitRatio;
+
+  @state() showClawComputer = false;
+  @state() clawComputerWidth = 600;
 
   @state() nodesLoading = false;
   @state() nodes: Array<Record<string, unknown>> = [];
@@ -713,6 +717,14 @@ export class OpenClawApp extends LitElement {
     const newRatio = Math.max(0.4, Math.min(0.7, ratio));
     this.splitRatio = newRatio;
     this.applySettings({ ...this.settings, splitRatio: newRatio });
+  }
+
+  toggleClawComputer() {
+    this.showClawComputer = !this.showClawComputer;
+  }
+
+  setClawComputerWidth(width: number) {
+    this.clawComputerWidth = width;
   }
 
   render() {
