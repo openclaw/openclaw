@@ -14,6 +14,7 @@ import {
   downgradeOpenAIReasoningBlocks,
   isCompactionFailureError,
   isGoogleModelApi,
+  normalizeTextForComparison,
   sanitizeGoogleTurnOrdering,
   sanitizeSessionMessagesImages,
 } from "../pi-embedded-helpers.js";
@@ -138,6 +139,72 @@ function annotateInterSessionUserMessages(messages: AgentMessage[]): AgentMessag
     } as AgentMessage);
   }
   return touched ? out : messages;
+}
+
+function isSyntheticAssistantTranscriptMessage(message: AgentMessage): boolean {
+  if (!message || typeof message !== "object" || message.role !== "assistant") {
+    return false;
+  }
+  const provider = (message as { provider?: unknown }).provider;
+  const model = (message as { model?: unknown }).model;
+  return provider === "openclaw" && model === "delivery-mirror";
+}
+
+function getAssistantComparableText(message: AgentMessage): string | null {
+  if (!message || typeof message !== "object" || message.role !== "assistant") {
+    return null;
+  }
+  if (typeof message.content === "string") {
+    const normalized = normalizeTextForComparison(message.content);
+    return normalized || null;
+  }
+  if (!Array.isArray(message.content)) {
+    return null;
+  }
+  const text = message.content
+    .filter(
+      (block): block is { type: "text"; text: string } =>
+        !!block &&
+        typeof block === "object" &&
+        (block as { type?: unknown }).type === "text" &&
+        typeof (block as { text?: unknown }).text === "string",
+    )
+    .map((block) => block.text)
+    .join("\n");
+  const normalized = normalizeTextForComparison(text);
+  return normalized || null;
+}
+
+function isDuplicateSyntheticAssistantTranscriptMessage(
+  message: AgentMessage,
+  previousMessage: AgentMessage | undefined,
+): boolean {
+  if (!isSyntheticAssistantTranscriptMessage(message)) {
+    return false;
+  }
+  if (!previousMessage || previousMessage.role !== "assistant") {
+    return false;
+  }
+  const previousProvider = (previousMessage as { provider?: unknown }).provider;
+  if (previousProvider === "openclaw") {
+    return false;
+  }
+  const mirrorText = getAssistantComparableText(message);
+  const previousText = getAssistantComparableText(previousMessage);
+  return Boolean(mirrorText && previousText && mirrorText === previousText);
+}
+
+function dropSyntheticAssistantTranscriptMessages(messages: AgentMessage[]): AgentMessage[] {
+  let changed = false;
+  const out: AgentMessage[] = [];
+  for (const message of messages) {
+    if (isDuplicateSyntheticAssistantTranscriptMessage(message, out.at(-1))) {
+      changed = true;
+      continue;
+    }
+    out.push(message);
+  }
+  return changed ? out : messages;
 }
 
 function parseMessageTimestamp(value: unknown): number | null {
@@ -537,8 +604,9 @@ export async function sanitizeSessionHistory(params: {
       modelId: params.modelId,
     });
   const withInterSessionMarkers = annotateInterSessionUserMessages(params.messages);
+  const replayableMessages = dropSyntheticAssistantTranscriptMessages(withInterSessionMarkers);
   const sanitizedImages = await sanitizeSessionMessagesImages(
-    withInterSessionMarkers,
+    replayableMessages,
     "session:history",
     {
       sanitizeMode: policy.sanitizeMode,
