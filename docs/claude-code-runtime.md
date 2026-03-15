@@ -222,3 +222,62 @@ src/agents/
 
 - **cli-backends.ts**: 新增 `DEFAULT_CLAUDE_CODE_BACKEND` 配置
 - **sessions-spawn-tool.ts**: `SESSIONS_SPAWN_RUNTIMES` 已扩展为 `["subagent", "acp", "claude-code"]`
+
+## 错误处理与状态管理
+
+### 进程状态流转
+
+任务执行过程中状态流转如下：
+
+```
+pending → running → completed | error | timeout
+```
+
+### 中止处理
+
+当调用 `abortClaudeCodeRun(runId)` 时：
+
+1. 设置 `status = "error"` 和 `outcome = { error: "Aborted by user" }`
+2. 发送 SIGTERM 信号终止进程
+3. 进程退出时保留 abort 设置的状态（不会被覆盖）
+
+### 超时处理
+
+当任务超过 `timeoutSeconds` 时：
+
+1. 设置 `status = "timeout"` 和 `outcome = { status: "timeout" }`
+2. 发送 SIGTERM 信号终止进程
+3. 进程退出时保留 timeout 设置的状态
+
+### 通知机制
+
+任务完成后，系统会通过 `runSubagentAnnounceFlow` 发送通知：
+
+- 通知会显示正确的请求者 session 名称（`requesterDisplayKey`）
+- 通过 `resolveDisplaySessionKey` 解析用户友好的 session 标识
+- 主 session 显示为 "main"，其他 session 显示完整 key
+
+## CLI 输出解析
+
+### Session ID 提取
+
+Claude CLI 输出可能包含多个 JSON 对象，系统会逐行解析：
+
+```
+{"type":"text","text":"Hello"}        ← 跳过（无 session_id）
+{"session_id":"abc-123","result":"ok"} ← 提取 session_id
+```
+
+支持的 session ID 字段名（按优先级）：
+
+1. `session_id`
+2. `sessionId`
+3. `conversation_id`
+4. `conversationId`
+
+### 解析逻辑
+
+1. 尝试将整个输出解析为单个 JSON
+2. 失败则逐行查找以 `{` 开头的行
+3. 对每行尝试 JSON 解析并提取 session ID
+4. 返回第一个找到的有效 session ID

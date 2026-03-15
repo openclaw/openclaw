@@ -34,29 +34,30 @@ export function parseClaudeOutput(output: string): { session_id?: string } | nul
     return null;
   } catch (parseError) {
     // Output might contain multiple lines or non-JSON
-    // Try to find JSON object in the output
-    const jsonMatch = trimmed.match(/\{[\s\S]*\}/);
-    if (jsonMatch) {
+    // Try to find JSON objects line by line (handles multi-JSON output like: {"type":"text"} {"session_id":"abc"})
+    for (const line of trimmed.split("\n")) {
+      const trimmedLine = line.trim();
+      if (!trimmedLine.startsWith("{")) {
+        continue;
+      }
       try {
-        const parsed = JSON.parse(jsonMatch[0]) as Record<string, unknown>;
-        // Check all possible session ID fields
+        const parsed = JSON.parse(trimmedLine) as Record<string, unknown>;
         for (const field of SESSION_ID_FIELDS) {
           const value = parsed[field];
           if (typeof value === "string" && value) {
             log.debug(
-              `parseClaudeOutput: found session ID in field "${field}" (from extracted JSON): ${value}`,
+              `parseClaudeOutput: found session ID in field "${field}" (from line): ${value}`,
             );
             return { session_id: value };
           }
         }
-        log.debug(`parseClaudeOutput: no session ID in extracted JSON`);
-        return null;
-      } catch (extractError) {
-        log.debug(`parseClaudeOutput: failed to parse extracted JSON: ${String(extractError)}`);
-        return null;
+      } catch {
+        // not valid JSON on this line, continue to next
       }
     }
-    log.debug(`parseClaudeOutput: no JSON found in output, parse error: ${String(parseError)}`);
+    log.debug(
+      `parseClaudeOutput: no valid JSON with session ID found, parse error: ${String(parseError)}`,
+    );
     return null;
   }
 }
@@ -193,8 +194,8 @@ export function spawnClaudeCodeProcess(params: {
       record.endedAt = Date.now();
       record.output = stdout;
 
-      if (record.status === "timeout") {
-        // Already handled by timeout
+      if (record.status === "timeout" || record.status === "error") {
+        // Already finalized by timeout or abort handler — preserve existing outcome
       } else if (code === 0) {
         record.status = "completed";
         record.outcome = { status: "ok" };

@@ -166,5 +166,22 @@ describe("claude-code-registry", () => {
       // Empty string should not be considered a valid session ID
       expect(parseClaudeOutput(output)).toBeNull();
     });
+
+    it("should parse session_id from multi-line output with multiple JSON objects", () => {
+      // Simulate Claude CLI output with multiple JSON objects on separate lines
+      const output =
+        '{"type":"text","text":"Hello"}\n{"session_id":"multi-json-id","result":"done"}';
+      const result = parseClaudeOutput(output);
+      expect(result).not.toBeNull();
+      expect(result?.session_id).toBe("multi-json-id");
+    });
+
+    it("should find session_id in first valid JSON line", () => {
+      const output =
+        'invalid line\n{"session_id":"found-in-second","status":"ok"}\n{"other":"data"}';
+      const result = parseClaudeOutput(output);
+      expect(result).not.toBeNull();
+      expect(result?.session_id).toBe("found-in-second");
+    });
   });
 });

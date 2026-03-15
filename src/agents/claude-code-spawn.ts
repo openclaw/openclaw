@@ -14,6 +14,11 @@ import {
   type SpawnMode,
   SPAWN_MODES,
 } from "./spawn-utils.js";
+import {
+  resolveDisplaySessionKey,
+  resolveInternalSessionKey,
+  resolveMainSessionAlias,
+} from "./tools/sessions-helpers.js";
 
 const log = createSubsystemLogger("claude-code-spawn");
 
@@ -100,6 +105,21 @@ export async function spawnClaudeCodeDirect(
 
   const requesterOrigin = extractRequesterOrigin(ctx);
 
+  // Resolve display key for the requester session (for user-friendly notification labels)
+  const { mainKey, alias } = resolveMainSessionAlias(cfg);
+  const requesterInternalKey = parentSessionKey
+    ? resolveInternalSessionKey({
+        key: parentSessionKey,
+        alias,
+        mainKey,
+      })
+    : alias;
+  const requesterDisplayKey = resolveDisplaySessionKey({
+    key: requesterInternalKey,
+    alias,
+    mainKey,
+  });
+
   // Generate run ID
   const runId = crypto.randomUUID();
 
@@ -111,6 +131,7 @@ export async function spawnClaudeCodeDirect(
     task: params.task,
     requesterSessionKey: parentSessionKey,
     requesterOrigin,
+    requesterDisplayKey,
     label: params.label,
     cleanup: spawnMode === "run" ? "delete" : "keep",
   });

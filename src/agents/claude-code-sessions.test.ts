@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import {
   generateClaudeCodeSessionKey,
   parseClaudeCodeSessionKey,
@@ -16,21 +16,21 @@ import {
 
 describe("claude-code-sessions", () => {
   const testWorkspace = "/tmp/test-workspace";
-  const sessionsFilePath = path.join(os.homedir(), ".openclaw", "claude-code-sessions.json");
+  let tempDir: string;
 
   beforeEach(() => {
-    // Clean up any existing sessions file
-    try {
-      fs.unlinkSync(sessionsFilePath);
-    } catch {
-      // ignore
-    }
+    // Create a temporary isolated directory for each test
+    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-test-"));
+    // Mock os.homedir to return the temp directory to avoid polluting real user data
+    vi.spyOn(os, "homedir").mockReturnValue(tempDir);
   });
 
   afterEach(() => {
-    // Clean up after tests
+    // Restore all mocks
+    vi.restoreAllMocks();
+    // Clean up the temporary directory
     try {
-      fs.unlinkSync(sessionsFilePath);
+      fs.rmSync(tempDir, { recursive: true, force: true });
     } catch {
       // ignore
     }
