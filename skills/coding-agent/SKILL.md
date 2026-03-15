@@ -220,7 +220,14 @@ process action:log sessionId:XXX
 
 # 4. Create PRs after fixes
 cd /tmp/issue-78 && git push -u origin fix/issue-78
-gh pr create --repo user/repo --head fix/issue-78 --title "fix: ..." --body "..."
+cat > /tmp/pr-body.md << 'EOF'
+## Summary
+- what changed
+
+## Testing
+- how it was tested
+EOF
+gh pr create --repo user/repo --head fix/issue-78 --title "fix: ..." --body-file /tmp/pr-body.md
 
 # 5. Cleanup
 git worktree remove /tmp/issue-78
@@ -244,6 +251,18 @@ git worktree remove /tmp/issue-99
 7. **Parallel is OK** - run many Codex processes at once for batch work
 8. **NEVER start Codex in ~/.openclaw/** - it'll read your soul docs and get weird ideas about the org chart!
 9. **NEVER checkout branches in ~/Projects/openclaw/** - that's the LIVE OpenClaw instance!
+
+10. **PR bodies must use `--body-file`** - Passing a multiline string to `gh pr create --body "..."` produces literal `\n` characters in the PR body on GitHub. Always write the body to a temp file and use `--body-file`:
+    ```bash
+    cat > /tmp/pr-body.md << 'EOF'
+    ## Summary
+    - what changed and why
+
+    ## Testing
+    - how it was tested
+    EOF
+    gh pr create --title "..." --body-file /tmp/pr-body.md --base dev
+    ```
 
 ---
 
