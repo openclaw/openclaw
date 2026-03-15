@@ -50,6 +50,7 @@ What has been implemented:
 - loader post-import planning and `register(...)` execution now route through `src/extension-host/loader-register.ts`
 - loader per-candidate orchestration now routes through `src/extension-host/loader-flow.ts`
 - loader top-level load orchestration now routes through `src/extension-host/loader-orchestrator.ts`
+- loader host process state now routes through `src/extension-host/loader-host-state.ts`
 - loader preflight and cache-hit setup now routes through `src/extension-host/loader-preflight.ts`
 - loader post-preflight pipeline composition now routes through `src/extension-host/loader-pipeline.ts`
 - loader execution setup composition now routes through `src/extension-host/loader-execution.ts`
@@ -82,6 +83,7 @@ How it has been implemented:
 - by moving post-import planning and `register(...)` execution next while leaving entry-path and import flow unchanged
 - by composing those seams into one host-owned per-candidate loader orchestrator before moving final lifecycle-state behavior
 - by moving the remaining top-level loader orchestration into a host-owned module before enforcing the loader lifecycle state machine
+- by extracting shared discovery warning-cache state and loader reset behavior into a host-owned loader-host-state helper before shrinking the remaining orchestrator surface
 - by extracting test-default application, config normalization, cache-key construction, cache-hit activation, and command-clear setup into a host-owned loader-preflight helper before shrinking the remaining orchestrator surface
 - by extracting post-preflight execution setup and session-run composition into a host-owned loader-pipeline helper before shrinking the remaining orchestrator surface
 - by extracting runtime creation, registry creation, bootstrap setup, module-loader creation, and session creation into a host-owned loader-execution helper before shrinking the remaining orchestrator surface

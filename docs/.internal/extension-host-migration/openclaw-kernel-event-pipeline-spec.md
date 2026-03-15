@@ -47,6 +47,7 @@ Relevant prerequisite work that has landed:
 - loader post-import planning and `register(...)` execution now have a host-owned helper boundary
 - loader per-candidate orchestration now has a host-owned helper boundary
 - loader top-level load orchestration now has a host-owned helper boundary
+- loader host process state now has a host-owned helper boundary
 - loader preflight and cache-hit setup now has a host-owned helper boundary
 - loader post-preflight pipeline composition now has a host-owned helper boundary
 - loader execution setup composition now has a host-owned helper boundary

@@ -73,6 +73,7 @@ What has been implemented so far:
 - loader post-import planning and `register(...)` execution now route through `src/extension-host/loader-register.ts`
 - loader per-candidate orchestration now routes through `src/extension-host/loader-flow.ts`
 - loader top-level load orchestration now routes through `src/extension-host/loader-orchestrator.ts`
+- loader host process state now routes through `src/extension-host/loader-host-state.ts`
 - loader preflight and cache-hit setup now routes through `src/extension-host/loader-preflight.ts`
 - loader post-preflight pipeline composition now routes through `src/extension-host/loader-pipeline.ts`
 - loader execution setup composition now routes through `src/extension-host/loader-execution.ts`
@@ -119,6 +120,7 @@ How it has been done:
 - by adding explicit compatibility `lifecycleState` mapping on loader-owned plugin records before enforcing the loader lifecycle state machine
 - by turning that compatibility `lifecycleState` field into an enforced loader lifecycle state machine with readiness promotion during finalization
 - by moving the remaining top-level loader orchestration into a host-owned module so `src/plugins/loader.ts` becomes a compatibility facade instead of the real owner
+- by extracting shared discovery warning-cache state and loader reset behavior into a host-owned loader-host-state helper before shrinking the remaining orchestrator surface
 - by extracting test-default application, config normalization, cache-key construction, cache-hit activation, and command-clear setup into a host-owned loader-preflight helper before shrinking the remaining orchestrator surface
 - by extracting post-preflight execution setup and session-run composition into a host-owned loader-pipeline helper before shrinking the remaining orchestrator surface
 - by extracting runtime creation, registry creation, bootstrap setup, module-loader creation, and session creation into a host-owned loader-execution helper before shrinking the remaining orchestrator surface
