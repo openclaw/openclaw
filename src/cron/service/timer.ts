@@ -511,8 +511,11 @@ export function triggerChainedJob(
       const successId = jobSnapshot?.onSuccessJobId;
       const failureId = jobSnapshot?.onFailureJobId;
 
-      // Lazy-import run to avoid circular dependency (ops → timer → ops).
-      const { run } = await import("./ops.js");
+      // Lazy-import the runtime boundary (not ops.js directly) to avoid a
+      // circular dep while also keeping ops.ts in the purely-static import
+      // graph (service.ts already imports it statically — mixing static and
+      // dynamic imports of the same module creates two separate instances).
+      const { run } = await import("./ops.runtime.js");
       const result = await run(state, targetJobId, "force");
       if (!result.ok) {
         state.deps.log.warn(
@@ -523,6 +526,14 @@ export function triggerChainedJob(
       }
       // Propagate the next hop with the updated ancestry so cycles are caught.
       // We handle it here (not in finishPreparedManualRun) to carry `nextVisited`.
+      if (!result.ran) {
+        // Job was skipped (not due, not found, or already running). Log so
+        // broken pipelines are visible rather than silently stopping the chain.
+        state.deps.log.warn(
+          { sourceJobId, targetJobId, chainRunId },
+          "cron: chained job run skipped — chain stopped",
+        );
+      }
       if (result.ran) {
         if (result.status === "ok" && successId) {
           triggerChainedJob(state, targetJobId, successId, nextVisited);
