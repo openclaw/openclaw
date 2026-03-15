@@ -705,7 +705,7 @@ export async function edgeTTS(params: {
   const { text, outputPath, config, timeoutMs } = params;
 
   if (!text || text.trim().length === 0) {
-  throw new Error("Edge TTS requires non-empty text");
+    throw new Error("Edge TTS requires non-empty text");
   }
 
   const tts = new EdgeTTS({
