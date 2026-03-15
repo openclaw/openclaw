@@ -574,6 +574,22 @@ function buildChatCommands(): ChatCommandDefinition[] {
       ],
     }),
     defineChatCommand({
+      key: "learn",
+      nativeName: "learn",
+      description: "Trigger agent to learn and remember insights from the session.",
+      textAlias: "/learn",
+      acceptsArgs: true,
+      category: "session",
+      args: [
+        {
+          name: "focus",
+          description: "What to focus on learning (optional)",
+          type: "string",
+          captureRemaining: true,
+        },
+      ],
+    }),
+    defineChatCommand({
       key: "think",
       nativeName: "think",
       description: "Set thinking level.",
