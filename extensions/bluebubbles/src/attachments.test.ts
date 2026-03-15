@@ -1,6 +1,19 @@
+import fs from "node:fs/promises";
+import path from "node:path";
 import type { PluginRuntime } from "openclaw/plugin-sdk/bluebubbles";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import "./test-mocks.js";
+
+const execFileMock = vi.hoisted(() => vi.fn());
+
+vi.mock("node:child_process", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:child_process")>();
+  return {
+    ...actual,
+    execFile: execFileMock,
+  };
+});
+
 import { downloadBlueBubblesAttachment, sendBlueBubblesAttachment } from "./attachments.js";
 import { getCachedBlueBubblesPrivateApiStatus } from "./probe.js";
 import { setBlueBubblesRuntime } from "./runtime.js";
@@ -321,6 +334,17 @@ describe("sendBlueBubblesAttachment", () => {
     mockFetch.mockReset();
     fetchRemoteMediaMock.mockClear();
     setBlueBubblesRuntime(runtimeStub);
+    execFileMock.mockReset();
+    execFileMock.mockImplementation(async (_file, args, _options, callback) => {
+      const normalizedArgs = Array.isArray(args) ? [...args] : [];
+      const outputPath =
+        typeof normalizedArgs.at(-1) === "string" ? normalizedArgs.at(-1) : undefined;
+      if (typeof outputPath === "string") {
+        await fs.writeFile(outputPath, new Uint8Array([9, 8, 7]));
+      }
+      callback?.(null, "", "");
+      return {} as ReturnType<typeof execFileMock>;
+    });
     vi.mocked(getCachedBlueBubblesPrivateApiStatus).mockReset();
     mockBlueBubblesPrivateApiStatus(
       vi.mocked(getCachedBlueBubblesPrivateApiStatus),
@@ -361,6 +385,9 @@ describe("sendBlueBubblesAttachment", () => {
 
     const bodyText = expectVoiceAttachmentBody();
     expect(bodyText).toContain('filename="voice.mp3"');
+    expect(bodyText).toContain('name="method"');
+    expect(bodyText).toContain("private-api");
+    expect(execFileMock).not.toHaveBeenCalled();
   });
 
   it("normalizes mp3 filenames for voice memos", async () => {
@@ -397,18 +424,26 @@ describe("sendBlueBubblesAttachment", () => {
     expect(mockFetch).not.toHaveBeenCalled();
   });
 
-  it("throws when asVoice is true but audio is not mp3 or caf", async () => {
-    await expect(
-      sendBlueBubblesAttachment({
-        to: "chat_guid:iMessage;-;+15551234567",
-        buffer: new Uint8Array([1, 2, 3]),
-        filename: "voice.wav",
-        contentType: "audio/wav",
-        asVoice: true,
-        opts: { serverUrl: "http://localhost:1234", password: "test" },
-      }),
-    ).rejects.toThrow("require mp3 or caf");
-    expect(mockFetch).not.toHaveBeenCalled();
+  it("converts non-caf audio to CAF for voice memos", async () => {
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      text: () => Promise.resolve(JSON.stringify({ messageId: "msg-2b" })),
+    });
+
+    await sendBlueBubblesAttachment({
+      to: "chat_guid:iMessage;-;+15551234567",
+      buffer: new Uint8Array([1, 2, 3]),
+      filename: "voice.ogg",
+      contentType: "audio/ogg; codecs=opus",
+      asVoice: true,
+      opts: { serverUrl: "http://localhost:1234", password: "test" },
+    });
+
+    const body = mockFetch.mock.calls[0][1]?.body as Uint8Array;
+    const bodyText = decodeBody(body);
+    expect(bodyText).toContain('filename="voice.caf"');
+    expect(bodyText).toContain('name="isAudioMessage"');
+    expect(execFileMock.mock.calls[0]?.[1]).toEqual(expect.arrayContaining(["-f", "caf"]));
   });
 
   it("sanitizes filenames before sending", async () => {
@@ -455,6 +490,64 @@ describe("sendBlueBubblesAttachment", () => {
     expect(bodyText).not.toContain('name="method"');
     expect(bodyText).not.toContain('name="selectedMessageGuid"');
     expect(bodyText).not.toContain('name="partIndex"');
+  });
+
+  it("forces private-api method for voice memos even when private API cache is stale", async () => {
+    mockBlueBubblesPrivateApiStatusOnce(
+      vi.mocked(getCachedBlueBubblesPrivateApiStatus),
+      BLUE_BUBBLES_PRIVATE_API_STATUS.disabled,
+    );
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      text: () => Promise.resolve(JSON.stringify({ messageId: "msg-voice-private" })),
+    });
+
+    await sendBlueBubblesAttachment({
+      to: "chat_guid:iMessage;-;+15551234567",
+      buffer: new Uint8Array([1, 2, 3]),
+      filename: "voice.mp3",
+      contentType: "audio/mpeg",
+      asVoice: true,
+      opts: { serverUrl: "http://localhost:1234", password: "test" },
+    });
+
+    const body = mockFetch.mock.calls[0][1]?.body as Uint8Array;
+    const bodyText = decodeBody(body);
+    expect(bodyText).toContain('name="method"');
+    expect(bodyText).toContain("private-api");
+    expect(bodyText).toContain('name="isAudioMessage"');
+  });
+
+  it("warns and downgrades voice memos when CAF conversion fails", async () => {
+    const runtimeLog = vi.fn();
+    setBlueBubblesRuntime({
+      ...runtimeStub,
+      log: runtimeLog,
+    } as unknown as PluginRuntime);
+    execFileMock.mockImplementationOnce((_file, _args, _options, callback) => {
+      callback?.(new Error("ffmpeg missing") as NodeJS.ErrnoException, "", "");
+      return {} as ReturnType<typeof execFileMock>;
+    });
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      text: () => Promise.resolve(JSON.stringify({ messageId: "msg-voice-fallback" })),
+    });
+
+    await sendBlueBubblesAttachment({
+      to: "chat_guid:iMessage;-;+15551234567",
+      buffer: new Uint8Array([1, 2, 3]),
+      filename: "voice.ogg",
+      contentType: "audio/ogg; codecs=opus",
+      asVoice: true,
+      opts: { serverUrl: "http://localhost:1234", password: "test" },
+    });
+
+    const body = mockFetch.mock.calls[0][1]?.body as Uint8Array;
+    const bodyText = decodeBody(body);
+    expect(bodyText).not.toContain('name="isAudioMessage"');
+    expect(runtimeLog).toHaveBeenCalledWith(
+      expect.stringContaining("Voice message CAF conversion failed"),
+    );
   });
 
   it("warns and downgrades attachment reply threading when private API status is unknown", async () => {

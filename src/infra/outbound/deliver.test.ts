@@ -1044,6 +1044,49 @@ describe("deliverOutboundPayloads", () => {
     expect(results).toEqual([{ channel: "matrix", messageId: "mx-1" }]);
   });
 
+  it("passes audioAsVoice through plugin sendMedia context", async () => {
+    const sendMedia = vi.fn().mockResolvedValue({ channel: "matrix", messageId: "mx-voice" });
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "matrix",
+          source: "test",
+          plugin: createOutboundTestPlugin({
+            id: "matrix",
+            outbound: {
+              deliveryMode: "direct",
+              sendText: vi.fn().mockResolvedValue({ channel: "matrix", messageId: "mx-text" }),
+              sendMedia,
+            },
+          }),
+        },
+      ]),
+    );
+
+    const results = await deliverOutboundPayloads({
+      cfg: {},
+      channel: "matrix",
+      to: "!room:1",
+      payloads: [
+        {
+          text: "voice note",
+          mediaUrl: "https://example.com/voice.mp3",
+          audioAsVoice: true,
+        },
+      ],
+    });
+
+    expect(sendMedia).toHaveBeenCalledTimes(1);
+    expect(sendMedia).toHaveBeenCalledWith(
+      expect.objectContaining({
+        text: "voice note",
+        mediaUrl: "https://example.com/voice.mp3",
+        audioAsVoice: true,
+      }),
+    );
+    expect(results).toEqual([{ channel: "matrix", messageId: "mx-voice" }]);
+  });
+
   it("falls back to one sendText call for multi-media payloads when sendMedia is omitted", async () => {
     const sendText = vi.fn().mockResolvedValue({ channel: "matrix", messageId: "mx-2" });
     setActivePluginRegistry(
