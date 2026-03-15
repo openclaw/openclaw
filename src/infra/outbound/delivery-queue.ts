@@ -348,6 +348,11 @@ export async function recoverPendingDeliveries(opts: {
   stateDir?: string;
   /** Maximum wall-clock time for recovery in ms. Remaining entries are deferred to next restart. Default: 60 000. */
   maxRecoveryMs?: number;
+  /**
+   * Until this timestamp, startup/transient delivery errors do not consume a retry.
+   * After the deadline passes they fall back to normal retry accounting.
+   */
+  transientStartupOnlyUntilMs?: number;
 }): Promise<RecoverySummary> {
   const pending = await loadPendingDeliveries(opts.stateDir);
   if (pending.length === 0) {
@@ -424,7 +429,10 @@ export async function recoverPendingDeliveries(opts: {
     } catch (err) {
       const errMsg = err instanceof Error ? err.message : String(err);
 
-      if (isTransientStartupDeliveryError(entry.channel, errMsg)) {
+      const withinTransientStartupWindow =
+        opts.transientStartupOnlyUntilMs === undefined ||
+        Date.now() <= opts.transientStartupOnlyUntilMs;
+      if (withinTransientStartupWindow && isTransientStartupDeliveryError(entry.channel, errMsg)) {
         deferredTransient += 1;
         try {
           await noteDeliveryAttemptNoRetry(entry.id, errMsg, opts.stateDir);
