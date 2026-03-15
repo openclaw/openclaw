@@ -96,6 +96,18 @@ jobs:
             const mentionRegex = /@([A-Za-z0-9-]+)/g;
             const maintainerCache = new Map();
             const normalizeLogin = (login) => login.toLowerCase();
+            const isRateLimitExceededError = (error) => {
+              if (!error || error?.status !== 403) {
+                return false;
+              }
+              const message = String(
+                error?.response?.data?.message ?? error?.message ?? "",
+              ).toLowerCase();
+              return (
+                message.includes("rate limit exceeded") ||
+                message.includes("secondary rate limit")
+              );
+            };
             const bugSubtypeLabelSpecs = {
               regression: {
                 color: "D93F0B",
@@ -224,7 +236,14 @@ jobs:
                 });
                 isMember = membership?.data?.state === "active";
               } catch (error) {
-                if (error?.status !== 404) {
+                if (error?.status === 404) {
+                  isMember = false;
+                } else if (isRateLimitExceededError(error)) {
+                  core.warning(
+                    `Skipping maintainer membership lookup for @${normalized}: API rate limit exceeded`,
+                  );
+                  isMember = false;
+                } else {
                   throw error;
                 }
               }
