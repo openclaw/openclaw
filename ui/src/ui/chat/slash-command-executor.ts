@@ -70,6 +70,8 @@ export async function executeSlashCommand(
       return await executeVerbose(client, sessionKey, args);
     case "export":
       return { content: "Exporting session...", action: "export" };
+    case "status":
+      return await executeStatus(client, sessionKey);
     case "usage":
       return await executeUsage(client, sessionKey);
     case "agents":
@@ -164,10 +166,17 @@ async function executeThink(
 
   if (!rawLevel) {
     try {
-      const { session, models } = await loadThinkingCommandState(client, sessionKey);
+      const { session, defaults, models, catalogAvailable } = await loadThinkingCommandState(
+        client,
+        sessionKey,
+      );
+      const levelLine = `Current thinking level: ${resolveCurrentThinkingLevel(session, models, defaults?.thinkingDefault)}.`;
+      const catalogNote = catalogAvailable
+        ? ""
+        : " _(model catalog unavailable — level may be inaccurate)_";
       return {
         content: formatDirectiveOptions(
-          `Current thinking level: ${resolveCurrentThinkingLevel(session, models)}.`,
+          `${levelLine}${catalogNote}`,
           formatThinkingLevels(session?.modelProvider, session?.model),
         ),
       };
@@ -247,10 +256,10 @@ async function executeFast(
 
   if (!rawMode || rawMode === "status") {
     try {
-      const session = await loadCurrentSession(client, sessionKey);
+      const { session, defaults } = await loadThinkingCommandState(client, sessionKey);
       return {
         content: formatDirectiveOptions(
-          `Current fast mode: ${resolveCurrentFastMode(session)}.`,
+          `Current fast mode: ${resolveCurrentFastMode(session, defaults?.fastModeDefault)}.`,
           "status, on, off",
         ),
       };
@@ -273,6 +282,40 @@ async function executeFast(
     };
   } catch (err) {
     return { content: `Failed to set fast mode: ${String(err)}` };
+  }
+}
+
+async function executeStatus(
+  client: GatewayBrowserClient,
+  sessionKey: string,
+): Promise<SlashCommandResult> {
+  try {
+    const { session, defaults, models } = await loadThinkingCommandState(client, sessionKey);
+    if (!session) {
+      return { content: "No active session." };
+    }
+    const lines = ["**Session Status**"];
+    if (session.model) {
+      lines.push(`Model: \`${session.model}\``);
+    }
+    if (session.modelProvider) {
+      lines.push(`Provider: \`${session.modelProvider}\``);
+    }
+    // Use resolveCurrentThinkingLevel so the effective level (including model
+    // defaults and agents.defaults.thinkingDefault config) is shown, not just
+    // the raw persisted field which may be unset.
+    lines.push(
+      `Thinking: **${resolveCurrentThinkingLevel(session, models, defaults?.thinkingDefault)}**`,
+    );
+    const verboseLevel = normalizeVerboseLevel(session.verboseLevel) ?? "off";
+    lines.push(`Verbose: **${verboseLevel}**`);
+    lines.push(`Fast mode: **${resolveCurrentFastMode(session, defaults?.fastModeDefault)}**`);
+    if (session.abortedLastRun) {
+      lines.push("Last run: **aborted**");
+    }
+    return { content: lines.join("\n") };
+  } catch (err) {
+    return { content: `Failed to get session status: ${String(err)}` };
   }
 }
 
@@ -530,23 +573,47 @@ function resolveCurrentSession(
 }
 
 async function loadThinkingCommandState(client: GatewayBrowserClient, sessionKey: string) {
-  const [sessions, models] = await Promise.all([
+  // Use allSettled so a transient models.list failure does not prevent session
+  // data from being displayed. When models.list is unavailable the thinking
+  // level falls back to the persisted value (or "off" if unset).
+  // catalogAvailable is returned so callers that need accurate model-default
+  // resolution (e.g. /think status) can warn the user when the catalog is
+  // degraded rather than silently reporting a potentially wrong level.
+  const [sessionsResult, modelsResult] = await Promise.allSettled([
     client.request<SessionsListResult>("sessions.list", {}),
     client.request<{ models: ModelCatalogEntry[] }>("models.list", {}),
   ]);
+  if (sessionsResult.status === "rejected") {
+    throw sessionsResult.reason;
+  }
+  const sessions = sessionsResult.value;
+  const catalogAvailable = modelsResult.status === "fulfilled";
+  const models = catalogAvailable ? (modelsResult.value?.models ?? []) : [];
   return {
     session: resolveCurrentSession(sessions, sessionKey),
-    models: models?.models ?? [],
+    defaults: sessions.defaults,
+    models,
+    catalogAvailable,
   };
 }
 
 function resolveCurrentThinkingLevel(
   session: GatewaySessionRow | undefined,
   models: ModelCatalogEntry[],
+  configuredDefault?: string,
 ): string {
   const persisted = normalizeThinkLevel(session?.thinkingLevel);
   if (persisted) {
     return persisted;
+  }
+  // Honour agents.defaults.thinkingDefault from the gateway config before
+  // falling back to the model-catalog default, matching the runtime resolution
+  // order used by resolveThinkingDefault in src/agents/model-selection.ts.
+  if (configuredDefault) {
+    const normalized = normalizeThinkLevel(configuredDefault);
+    if (normalized) {
+      return normalized;
+    }
   }
   if (!session?.modelProvider || !session.model) {
     return "off";
@@ -558,8 +625,19 @@ function resolveCurrentThinkingLevel(
   });
 }
 
-function resolveCurrentFastMode(session: GatewaySessionRow | undefined): "on" | "off" {
-  return session?.fastMode === true ? "on" : "off";
+function resolveCurrentFastMode(
+  session: GatewaySessionRow | undefined,
+  configuredDefault?: boolean,
+): "on" | "off" {
+  // Prefer the persisted session override, then the config-level default
+  // (agents.defaults.models.<provider>/<model>.params.fastMode), then off.
+  if (session?.fastMode !== undefined && session.fastMode !== null) {
+    return session.fastMode ? "on" : "off";
+  }
+  if (configuredDefault !== undefined) {
+    return configuredDefault ? "on" : "off";
+  }
+  return "off";
 }
 
 function fmtTokens(n: number): string {

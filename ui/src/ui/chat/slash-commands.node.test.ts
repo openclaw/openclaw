@@ -31,9 +31,12 @@ describe("parseSlashCommand", () => {
     });
   });
 
-  it("keeps /status on the agent path", () => {
+  it("executes /status locally so a single Enter submits it", () => {
+    // Regression test for #45569: /status was missing executeLocal: true, causing
+    // the slash-command menu to intercept the first Enter (selecting the command)
+    // and requiring a second Enter to actually submit it.
     const status = SLASH_COMMANDS.find((entry) => entry.name === "status");
-    expect(status?.executeLocal).not.toBe(true);
+    expect(status?.executeLocal).toBe(true);
     expect(parseSlashCommand("/status")).toMatchObject({
       command: { name: "status" },
       args: "",

@@ -417,3 +417,151 @@ describe("executeSlashCommand directives", () => {
     });
   });
 });
+
+describe("executeSlashCommand /status", () => {
+  it("returns session status using persisted thinkingLevel when set", async () => {
+    const request = vi.fn(async (method: string) => {
+      if (method === "sessions.list") {
+        return {
+          sessions: [
+            row("agent:main:main", {
+              model: "claude-opus-4-5",
+              modelProvider: "anthropic",
+              thinkingLevel: "high",
+              verboseLevel: "on",
+              fastMode: false,
+            }),
+          ],
+        };
+      }
+      if (method === "models.list") {
+        return { models: [] };
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+
+    const result = await executeSlashCommand(
+      { request } as unknown as GatewayBrowserClient,
+      "agent:main:main",
+      "status",
+      "",
+    );
+
+    expect(result.content).toContain("**Session Status**");
+    expect(result.content).toContain("claude-opus-4-5");
+    expect(result.content).toContain("anthropic");
+    expect(result.content).toContain("Thinking: **high**");
+    expect(result.content).toContain("Verbose: **on**");
+    expect(result.content).toContain("Fast mode: **off**");
+  });
+
+  it("falls back to model-default thinking level when no per-session override is stored", async () => {
+    // Regression for P2 finding: executeStatus must use resolveCurrentThinkingLevel
+    // (same as executeThink) so it reflects the effective level, not just the raw
+    // persisted field which may be absent even when the model has a non-off default.
+    const request = vi.fn(async (method: string) => {
+      if (method === "sessions.list") {
+        return {
+          sessions: [
+            row("agent:main:main", {
+              model: "claude-opus-4-5",
+              modelProvider: "anthropic",
+              // thinkingLevel intentionally absent — model has a default
+              verboseLevel: undefined,
+              fastMode: false,
+            }),
+          ],
+        };
+      }
+      if (method === "models.list") {
+        // A catalog entry with reasoning:true causes resolveThinkingDefaultForModel
+        // to return "low" even when no per-session thinkingLevel is stored.
+        return {
+          models: [
+            {
+              id: "claude-opus-4-5",
+              name: "Claude Opus 4.5",
+              provider: "anthropic",
+              reasoning: true,
+            },
+          ],
+        };
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+
+    const result = await executeSlashCommand(
+      { request } as unknown as GatewayBrowserClient,
+      "agent:main:main",
+      "status",
+      "",
+    );
+
+    // Should show "low" (model default), not "off" (raw persisted field)
+    expect(result.content).toContain("Thinking: **low**");
+  });
+
+  it("uses agents.defaults.thinkingDefault when no per-session override or catalog default", async () => {
+    // Regression for P2 finding (comment #2934861720): /status must honour
+    // agents.defaults.thinkingDefault from the gateway config, not just the
+    // model-catalog default, so configured-default workflows show the correct level.
+    const request = vi.fn(async (method: string) => {
+      if (method === "sessions.list") {
+        return {
+          defaults: { model: null, contextTokens: null, thinkingDefault: "medium" },
+          sessions: [
+            row("agent:main:main", {
+              model: "claude-opus-4-5",
+              modelProvider: "anthropic",
+              // thinkingLevel intentionally absent
+            }),
+          ],
+        };
+      }
+      if (method === "models.list") {
+        // No reasoning:true — model catalog alone would return "off"
+        return {
+          models: [
+            {
+              id: "claude-opus-4-5",
+              name: "Claude Opus 4.5",
+              provider: "anthropic",
+            },
+          ],
+        };
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+
+    const result = await executeSlashCommand(
+      { request } as unknown as GatewayBrowserClient,
+      "agent:main:main",
+      "status",
+      "",
+    );
+
+    // Should show "medium" (agents.defaults.thinkingDefault), not "off"
+    expect(result.content).toContain("Thinking: **medium**");
+  });
+
+  it("returns 'No active session.' when session is not found", async () => {
+    const request = vi.fn(async (method: string) => {
+      if (method === "sessions.list") {
+        return { sessions: [] };
+      }
+      if (method === "models.list") {
+        return { models: [] };
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+
+    const result = await executeSlashCommand(
+      { request } as unknown as GatewayBrowserClient,
+      "agent:main:main",
+      "status",
+      "",
+    );
+
+    expect(result.content).toBe("No active session.");
+  });
+});
