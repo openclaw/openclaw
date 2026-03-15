@@ -203,6 +203,25 @@ describe("scheduleChatScroll", () => {
     expect(container.scrollTop).toBe(maxScrollTop(container));
   });
 
+  it("keeps force=true pinned to the true bottom for streaming blocks", async () => {
+    const { host, container, threadInner } = createScrollHost({
+      scrollHeight: 2600,
+      scrollTop: 500,
+      clientHeight: 400,
+    });
+    host.chatHasAutoScrolled = false;
+    host.chatUserNearBottom = false;
+    const latestBlock = createChatBlock(1700, "stream:1", { streaming: true });
+    threadInner.querySelectorAll = vi.fn(() => [latestBlock]);
+
+    scheduleChatScroll(host, true);
+    await host.updateComplete;
+
+    expect(host.chatAutoScrollMode).toBe("bottom");
+    expect(container.scrollTop).toBe(maxScrollTop(container));
+    expect(host.chatSuppressedBlockId).toBeNull();
+  });
+
   it("sets chatNewMessagesBelow when not scrolling due to user position", async () => {
     const { host } = createScrollHost({
       scrollHeight: 2000,

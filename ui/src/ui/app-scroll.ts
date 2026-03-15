@@ -143,7 +143,9 @@ export function scheduleChatScroll(host: ScrollHost, force = false, smooth = fal
           return;
         }
         host.chatAutoScrollBlockId = latestBlockId;
-        host.chatAutoScrollMode = latestBlock?.defaultMode ?? "bottom";
+        host.chatAutoScrollMode = effectiveForce
+          ? "bottom"
+          : (latestBlock?.defaultMode ?? "bottom");
       }
       const shouldStick = shouldStickToLatestBlock(host, latestBlockId, effectiveForce);
 
