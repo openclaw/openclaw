@@ -31,6 +31,7 @@ export function createOpenClawTools(
   options?: {
     sandboxBrowserBridgeUrl?: string;
     allowHostBrowserControl?: boolean;
+    agentId?: string;
     agentSessionKey?: string;
     agentChannel?: GatewayMessageChannel;
     agentAccountId?: string;
@@ -38,10 +39,17 @@ export function createOpenClawTools(
     agentTo?: string;
     /** Thread/topic identifier for routing replies to the originating thread. */
     agentThreadId?: string | number;
+    /** Group id for channel-level tool policy inheritance. */
+    agentGroupId?: string | null;
+    /** Group channel label for channel-level tool policy inheritance. */
+    agentGroupChannel?: string | null;
+    /** Group space label for channel-level tool policy inheritance. */
+    agentGroupSpace?: string | null;
     agentDir?: string;
     sandboxRoot?: string;
     sandboxFsBridge?: SandboxFsBridge;
     fsPolicy?: ToolFsPolicy;
+    workspaceDir?: string;
     sandboxed?: boolean;
     config?: OpenClawConfig;
     pluginToolAllowlist?: string[];
@@ -123,6 +131,7 @@ export function createOpenClawTools(
   const messageTool = options?.disableMessageTool
     ? null
     : createMessageTool({
+        agentId: options?.agentId,
         agentAccountId: options?.agentAccountId,
         agentSessionKey: options?.agentSessionKey,
         config: options?.config,
