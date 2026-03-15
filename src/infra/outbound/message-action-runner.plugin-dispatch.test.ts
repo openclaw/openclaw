@@ -435,5 +435,70 @@ describe("runMessageAction plugin dispatch", () => {
       expect(ctx.accountId).toBe(expectedAccountId);
       expect(ctx.params.accountId).toBe(expectedAccountId);
     });
+
+    it("falls back to the channel plugin defaultAccountId for core outbound sends", async () => {
+      const sendWhatsApp = vi.fn(async () => ({
+        messageId: "wa-1",
+        toJid: "1555@s.whatsapp.net",
+      }));
+      const plugin = createOutboundTestPlugin({
+        id: "whatsapp",
+        outbound: {
+          deliveryMode: "direct",
+          sendText: sendWhatsApp,
+        },
+      });
+      plugin.config = {
+        ...plugin.config,
+        listAccountIds: () => ["work"],
+        resolveAccount: () => ({ enabled: true }),
+        defaultAccountId: () => "work",
+      };
+      plugin.messaging = {
+        targetResolver: {
+          looksLikeId: () => true,
+        },
+      };
+
+      setActivePluginRegistry(
+        createTestRegistry([
+          {
+            pluginId: "whatsapp",
+            source: "test",
+            plugin,
+          },
+        ]),
+      );
+
+      await runMessageAction({
+        cfg: {
+          channels: {
+            whatsapp: {
+              defaultAccount: "work",
+              accounts: {
+                work: {},
+              },
+            },
+          },
+        } as OpenClawConfig,
+        action: "send",
+        params: {
+          channel: "whatsapp",
+          target: "+1555",
+          message: "hi",
+        },
+        deps: { sendWhatsApp },
+        dryRun: false,
+      });
+
+      expect(sendWhatsApp).toHaveBeenCalledWith(
+        expect.objectContaining({
+          to: "+1555",
+          text: "hi",
+          accountId: "work",
+          cfg: expect.any(Object),
+        }),
+      );
+    });
   });
 });
