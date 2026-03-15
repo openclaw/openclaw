@@ -1544,14 +1544,23 @@ export async function runEmbeddedPiAgent(
           // Timeout aborts can leave the run without any assistant payloads.
           // Emit an explicit timeout error instead of silently completing, so
           // callers do not lose the turn as an orphaned user message.
+          // Exception: memory flush triggers should still succeed when the LLM
+          // actually wrote to the memory file, so the caller can persist the
+          // report.  `systemPromptReport` alone is not sufficient because it is
+          // constructed before the model/tool run starts — we also verify that a
+          // write tool execution completed (recorded in toolMetas).
           if (timedOut && !timedOutDuringCompaction && payloads.length === 0) {
+            const memoryWriteCompleted = attempt.toolMetas.some((m) => m.toolName === "write");
+            const isMemoryFlushWithReport =
+              params.trigger === "memory" && attempt.systemPromptReport && memoryWriteCompleted;
             return {
               payloads: [
                 {
-                  text:
-                    "Request timed out before a response was generated. " +
-                    "Please try again, or increase `agents.defaults.timeoutSeconds` in your config.",
-                  isError: true,
+                  text: isMemoryFlushWithReport
+                    ? "Memory flush completed (request timed out, but memory was saved)."
+                    : "Request timed out before a response was generated. " +
+                      "Please try again, or increase `agents.defaults.timeoutSeconds` in your config.",
+                  isError: !isMemoryFlushWithReport,
                 },
               ],
               meta: {
