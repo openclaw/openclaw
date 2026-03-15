@@ -59,7 +59,7 @@ describe("config discord", () => {
     );
   });
 
-  it("rejects numeric discord allowlist entries", () => {
+  it("coerces safe-integer numeric discord allowlist entries to strings", () => {
     const res = validateConfigObject({
       channels: {
         discord: {
@@ -79,11 +79,29 @@ describe("config discord", () => {
       },
     });
 
+    expect(res.ok).toBe(true);
+    if (res.ok) {
+      expect(res.config.channels?.discord?.allowFrom).toEqual(["123"]);
+      expect(res.config.channels?.discord?.dm?.allowFrom).toEqual(["456"]);
+      expect(res.config.channels?.discord?.dm?.groupChannels).toEqual(["789"]);
+      expect(res.config.channels?.discord?.guilds?.["123"]?.users).toEqual(["111"]);
+      expect(res.config.channels?.discord?.guilds?.["123"]?.roles).toEqual(["222"]);
+      expect(res.config.channels?.discord?.execApprovals?.approvers).toEqual(["555"]);
+    }
+  });
+
+  it("rejects numeric discord IDs that exceed MAX_SAFE_INTEGER", () => {
+    const res = validateConfigObject({
+      channels: {
+        discord: {
+          allowFrom: [106232522769186816],
+        },
+      },
+    });
+
     expect(res.ok).toBe(false);
     if (!res.ok) {
-      expect(
-        res.issues.some((issue) => issue.message.includes("Discord IDs must be strings")),
-      ).toBe(true);
+      expect(res.issues.some((issue) => issue.message.includes("lost precision"))).toBe(true);
     }
   });
 });
