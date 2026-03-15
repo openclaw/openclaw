@@ -65,15 +65,26 @@ export function normalizeModelCompat(model: Model<Api>): Model<Api> {
   if (!needsForce) {
     return model;
   }
-  if (compat?.supportsDeveloperRole === false && compat?.supportsUsageInStreaming === false) {
+  // Return a new object — do not mutate the caller's model reference.
+  // Respect explicit true values from config, only override if undefined.
+  const newCompat = compat ? { ...compat } : {};
+  if (newCompat.supportsDeveloperRole === undefined) {
+    newCompat.supportsDeveloperRole = false;
+  }
+  if (newCompat.supportsUsageInStreaming === undefined) {
+    newCompat.supportsUsageInStreaming = false;
+  }
+
+  // Avoid creating a new object if nothing changed
+  if (
+    compat?.supportsDeveloperRole === newCompat.supportsDeveloperRole &&
+    compat?.supportsUsageInStreaming === newCompat.supportsUsageInStreaming
+  ) {
     return model;
   }
 
-  // Return a new object — do not mutate the caller's model reference.
   return {
     ...model,
-    compat: compat
-      ? { ...compat, supportsDeveloperRole: false, supportsUsageInStreaming: false }
-      : { supportsDeveloperRole: false, supportsUsageInStreaming: false },
+    compat: newCompat,
   } as typeof model;
 }
