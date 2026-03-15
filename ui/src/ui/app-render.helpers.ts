@@ -554,8 +554,10 @@ function resolveModelOverrideValue(state: AppViewState): string {
 }
 
 function resolveDefaultModelValue(state: AppViewState): string {
-  const model = state.sessionsResult?.defaults?.model;
-  return typeof model === "string" ? model.trim() : "";
+  return buildModelRef(
+    state.sessionsResult?.defaults?.modelProvider,
+    state.sessionsResult?.defaults?.model,
+  );
 }
 
 function buildChatModelOptions(

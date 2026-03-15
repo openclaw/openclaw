@@ -46,11 +46,15 @@ function parseSelectedModelRef(
 function createChatHeaderState(
   overrides: {
     model?: string | null;
+    defaultModel?: string | null;
+    defaultModelProvider?: string | null;
     models?: ModelCatalogEntry[];
     omitSessionFromList?: boolean;
   } = {},
 ): { state: AppViewState; request: ReturnType<typeof vi.fn> } {
   const omitSessionFromList = overrides.omitSessionFromList ?? false;
+  const defaultModel = overrides.defaultModel ?? "gpt-5";
+  const defaultModelProvider = overrides.defaultModelProvider;
   const catalog = overrides.models ?? [
     { id: "gpt-5", name: "GPT-5", provider: "openai" },
     { id: "gpt-5-mini", name: "GPT-5 Mini", provider: "openai" },
@@ -69,7 +73,7 @@ function createChatHeaderState(
         ts: 0,
         path: "",
         count: omitSessionFromList ? 0 : 1,
-        defaults: { model: "gpt-5", contextTokens: null },
+        defaults: { modelProvider: defaultModelProvider, model: defaultModel, contextTokens: null },
         sessions: omitSessionFromList
           ? []
           : [
@@ -96,7 +100,7 @@ function createChatHeaderState(
       ts: 0,
       path: "",
       count: omitSessionFromList ? 0 : 1,
-      defaults: { model: "gpt-5", contextTokens: null },
+      defaults: { modelProvider: defaultModelProvider, model: defaultModel, contextTokens: null },
       sessions: omitSessionFromList
         ? []
         : [
@@ -687,6 +691,32 @@ describe("chat view", () => {
     );
     expect(rerendered?.value).toBe("openai/gpt-5-mini");
     vi.unstubAllGlobals();
+  });
+
+  it("does not add an unqualified default-model option when the default provider is required", () => {
+    const catalog = [
+      {
+        id: "anthropic/claude-sonnet-4-5",
+        name: "Claude Sonnet 4.5",
+        provider: "openrouter",
+      },
+    ] satisfies ModelCatalogEntry[];
+    const { state } = createChatHeaderState({
+      models: catalog,
+      defaultModel: "anthropic/claude-sonnet-4-5",
+      defaultModelProvider: "openrouter",
+    });
+    const container = document.createElement("div");
+    render(renderChatSessionSelect(state), container);
+
+    const modelSelect = container.querySelector<HTMLSelectElement>(
+      'select[data-chat-model-select="true"]',
+    );
+    const optionValues = Array.from(modelSelect?.querySelectorAll("option") ?? []).map(
+      (option) => option.value,
+    );
+
+    expect(optionValues).toEqual(["", "openrouter/anthropic/claude-sonnet-4-5"]);
   });
 
   it("prefers the session label over displayName in the grouped chat session selector", () => {
