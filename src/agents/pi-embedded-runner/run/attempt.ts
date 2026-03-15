@@ -135,6 +135,7 @@ import {
 } from "./compaction-timeout.js";
 import { pruneProcessedHistoryImages } from "./history-image-prune.js";
 import { detectAndLoadPromptImages } from "./images.js";
+import { withMessagesContext } from "./stream-context.js";
 import type { EmbeddedRunAttemptParams, EmbeddedRunAttemptResult } from "./types.js";
 
 type PromptBuildHookRunner = {
@@ -1965,10 +1966,7 @@ export async function runEmbeddedAttempt(
           if (sanitized === messages) {
             return inner(model, context, options);
           }
-          const nextContext = {
-            ...(context as unknown as Record<string, unknown>),
-            messages: sanitized,
-          } as unknown;
+          const nextContext = withMessagesContext(context, sanitized as AgentMessage[]);
           return inner(model, nextContext as typeof context, options);
         };
       }
@@ -1991,10 +1989,7 @@ export async function runEmbeddedAttempt(
           if (sanitized === messages) {
             return inner(model, context, options);
           }
-          const nextContext = {
-            ...(context as unknown as Record<string, unknown>),
-            messages: sanitized,
-          } as unknown;
+          const nextContext = withMessagesContext(context, sanitized);
           return inner(model, nextContext as typeof context, options);
         };
       }
@@ -2014,10 +2009,7 @@ export async function runEmbeddedAttempt(
           if (sanitized === messages) {
             return inner(model, context, options);
           }
-          const nextContext = {
-            ...(context as unknown as Record<string, unknown>),
-            messages: sanitized,
-          } as unknown;
+          const nextContext = withMessagesContext(context, sanitized);
           return inner(model, nextContext as typeof context, options);
         };
       }
