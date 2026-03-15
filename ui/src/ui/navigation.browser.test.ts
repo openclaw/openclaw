@@ -231,21 +231,27 @@ describe("control UI routing", () => {
     expect(actionsWidth).toBeLessThan(shellWidth);
   });
 
-  it("caps the mobile topbar search width before it hides the current tab", async () => {
+  it("lets the mobile search fill the remaining topbar space", async () => {
     const app = mountApp("/chat");
     await app.updateComplete;
 
     expect(window.matchMedia("(max-width: 768px)").matches).toBe(true);
 
+    const actions = app.querySelector<HTMLElement>(".topnav-shell__actions");
+    const content = app.querySelector<HTMLElement>(".topnav-shell__content");
     const search = app.querySelector<HTMLElement>(".topbar-search");
     const searchShortcut = app.querySelector<HTMLElement>(".topbar-search__kbd");
+    expect(actions).not.toBeNull();
+    expect(content).not.toBeNull();
     expect(search).not.toBeNull();
     expect(searchShortcut).not.toBeNull();
-    if (!search || !searchShortcut) {
+    if (!actions || !content || !search || !searchShortcut) {
       return;
     }
 
-    expect(getComputedStyle(search).maxWidth).toBe("108px");
+    expect(getComputedStyle(actions).flexGrow).toBe("1");
+    expect(getComputedStyle(search).flexGrow).toBe("1");
+    expect(getComputedStyle(content).flexGrow).toBe("0");
     expect(getComputedStyle(searchShortcut).display).toBe("none");
   });
 
