@@ -268,12 +268,9 @@ export async function runPreparedReply(
   const inboundMetaPrompt = buildInboundMetaSystemPrompt(
     isNewSession ? sessionCtx : { ...sessionCtx, ThreadStarterBody: undefined },
   );
-  const extraSystemPromptParts = [
-    inboundMetaPrompt,
-    groupChatContext,
-    groupIntro,
-    groupSystemPrompt,
-  ].filter(Boolean);
+  // Keep per-session metadata out of the system prompt to preserve Anthropic prefix caching.
+  // inboundMetaPrompt is prepended to the user message instead (see baseBodyForPrompt below).
+  const extraSystemPromptParts = [groupChatContext, groupIntro, groupSystemPrompt].filter(Boolean);
   const baseBody = sessionCtx.BodyStripped ?? sessionCtx.Body ?? "";
   // Use CommandBody/RawBody for bare reset detection (clean message without structural context).
   const rawBodyTrimmed = (ctx.CommandBody ?? ctx.RawBody ?? ctx.Body ?? "").trim();
@@ -302,14 +299,14 @@ export async function runPreparedReply(
         }
       : { ...sessionCtx, ThreadStarterBody: undefined },
   );
-  const baseBodyForPrompt = isBareSessionReset
-    ? baseBodyFinal
-    : [inboundUserContext, baseBodyFinal].filter(Boolean).join("\n\n");
-  const baseBodyTrimmed = baseBodyForPrompt.trim();
   const hasMediaAttachment = Boolean(
     sessionCtx.MediaPath || (sessionCtx.MediaPaths && sessionCtx.MediaPaths.length > 0),
   );
-  if (!baseBodyTrimmed && !hasMediaAttachment) {
+  // Guard against empty inbound messages *before* prepending system-generated metadata,
+  // so that inboundMetaPrompt alone doesn't mask a truly empty user message.
+  // Bare session resets (e.g. /new, /reset) intentionally have empty baseBodyTrimmedRaw
+  // but proceed via buildBareSessionResetPrompt, so they must bypass this guard.
+  if (!baseBodyTrimmedRaw && !isBareSessionReset && !hasMediaAttachment) {
     await typing.onReplyStart();
     logVerbose("Inbound body empty after normalization; skipping agent run");
     typing.cleanup();
@@ -317,6 +314,10 @@ export async function runPreparedReply(
       text: "I didn't receive any text in your message. Please resend or add a caption.",
     };
   }
+  const baseBodyForPrompt = isBareSessionReset
+    ? [inboundMetaPrompt, baseBodyFinal].filter(Boolean).join("\n\n")
+    : [inboundMetaPrompt, inboundUserContext, baseBodyFinal].filter(Boolean).join("\n\n");
+  const baseBodyTrimmed = baseBodyForPrompt.trim();
   // When the user sends media without text, provide a minimal body so the agent
   // run proceeds and the image/document is injected by the embedded runner.
   const effectiveBaseBody = baseBodyTrimmed
