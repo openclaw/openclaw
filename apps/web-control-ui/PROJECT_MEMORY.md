@@ -89,7 +89,12 @@
      - `cc-usage-native-blank` → Native / Blank
      - `cc-usage-mission-star` → Mission / Star
    - 当前主线已支持：顶部切换 USE / CONTROL，侧边切换 Native / Mission / Star / Blank
-   - 已实际验证：主工作区 `node ./node_modules/vite/bin/vite.js build` 通过；浏览器中可见 Native 与 Mission 视图正常切换
+   - 已实际验证：主工作区 `node ./node_modules/vite/bin/vite.js build` 通过；浏览器中可见 Native / Mission / Star 视图切换
+8. **CONTROL 层总控可见性补强 + `.gitignore` 修正**（2026-03-15 16:35-16:39）
+   - `control-mode-view.ts` 已补成“当前工作态总控”：显示当前 usage-mode、safe edit 开关状态、ACP runtime/default agent，并允许在 CONTROL 内直接切换 Native / Mission / Star / Blank
+   - 这样控制台层不再只是“聊天和脚本入口”，而是能明确告诉用户当前正在控制哪一种使用态，减少“改的是 A，看的是 B”的错位
+   - 同时修正仓库 `.gitignore`：把会误伤 `apps/web-control-ui/src/core/` 的 `Core/` 改成 `/Core/`，避免 Windows 大小写不敏感路径下再次漏提核心文件
+   - 已实际验证：主工作区再次 build 通过，dev 服务保持 `4173` 在线
 ---
 ## 项目文件结构
 ```
