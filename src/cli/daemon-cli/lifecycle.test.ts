@@ -303,4 +303,55 @@ describe("runDaemonRestart health checks", () => {
 
     expect(signalVerifiedGatewayPidSync).not.toHaveBeenCalled();
   });
+
+  it("uses OPENCLAW_PROFILE to resolve target profile's service port", async () => {
+    const originalEnv = process.env.OPENCLAW_PROFILE;
+    try {
+      process.env.OPENCLAW_PROFILE = "rescue";
+      service.readCommand.mockResolvedValue({
+        programArguments: ["openclaw", "gateway", "--port", "18790"],
+        environment: { OPENCLAW_PROFILE: "rescue", OPENCLAW_LAUNCHD_LABEL: "ai.openclaw.rescue" },
+      });
+
+      const { runDaemonRestart } = await import("./lifecycle.js");
+      mockUnmanagedRestart({ runPostRestartCheck: true });
+      findVerifiedGatewayListenerPidsOnPortSync.mockReturnValue([4200]);
+
+      await runDaemonRestart({ json: true });
+
+      // Verify service.readCommand was called with profile-specific environment
+      expect(service.readCommand).toHaveBeenCalledWith(
+        expect.objectContaining({
+          OPENCLAW_PROFILE: "rescue",
+          OPENCLAW_LAUNCHD_LABEL: "ai.openclaw.rescue",
+        }),
+      );
+      expect(findVerifiedGatewayListenerPidsOnPortSync).toHaveBeenCalledWith(18790);
+    } finally {
+      process.env.OPENCLAW_PROFILE = originalEnv;
+    }
+  });
+
+  it("falls back to current process env when OPENCLAW_PROFILE is not set", async () => {
+    const originalEnv = process.env.OPENCLAW_PROFILE;
+    try {
+      delete process.env.OPENCLAW_PROFILE;
+      service.readCommand.mockResolvedValue({
+        programArguments: ["openclaw", "gateway", "--port", "18789"],
+        environment: {},
+      });
+
+      const { runDaemonRestart } = await import("./lifecycle.js");
+      mockUnmanagedRestart({ runPostRestartCheck: true });
+      findVerifiedGatewayListenerPidsOnPortSync.mockReturnValue([4200]);
+
+      await runDaemonRestart({ json: true });
+
+      // Verify service.readCommand was called with current process.env
+      expect(service.readCommand).toHaveBeenCalledWith(process.env);
+      expect(findVerifiedGatewayListenerPidsOnPortSync).toHaveBeenCalledWith(18789);
+    } finally {
+      process.env.OPENCLAW_PROFILE = originalEnv;
+    }
+  });
 });
