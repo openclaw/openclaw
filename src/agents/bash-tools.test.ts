@@ -268,9 +268,11 @@ type NotifyNoopCase = LabeledCase & {
   notifyOnExitEmptySuccess: boolean;
 };
 const NOOP_NOTIFY_CASES: NotifyNoopCase[] = [
-  withLabel("default behavior skips no-op completion events", { notifyOnExitEmptySuccess: false }),
-  withLabel("explicitly enabling no-op completion emits completion events", {
+  withLabel("default behavior emits completion events for empty-output success", {
     notifyOnExitEmptySuccess: true,
+  }),
+  withLabel("explicitly disabling no-op completion skips events", {
+    notifyOnExitEmptySuccess: false,
   }),
 ];
 const DISALLOWED_ELEVATION_CASES: DisallowedElevationCase[] = [
@@ -398,7 +400,7 @@ const runLongLogExpectationCase = async ({
 };
 const runNotifyNoopCase = async ({ label, notifyOnExitEmptySuccess }: NotifyNoopCase) => {
   const tool = createNotifyOnExitExecTool(
-    notifyOnExitEmptySuccess ? { notifyOnExitEmptySuccess: true } : {},
+    notifyOnExitEmptySuccess ? {} : { notifyOnExitEmptySuccess: false },
   );
 
   const { status } = await runBackgroundCommandToCompletion(tool, shortDelayCmd);

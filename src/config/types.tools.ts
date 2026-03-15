@@ -254,7 +254,8 @@ export type ExecToolConfig = {
   notifyOnExit?: boolean;
   /**
    * Also emit success exit notifications when a backgrounded exec has no output.
-   * Default false to reduce context noise.
+   * Default true — agents should always be notified when background tasks complete.
+   * Set to false to suppress empty-success notifications and reduce context noise.
    */
   notifyOnExitEmptySuccess?: boolean;
   /** apply_patch subtool configuration (experimental). */
