@@ -810,7 +810,7 @@ function createHostEditOperations(
         rootDir: sandboxResult.matchedRoot,
         relativePath: sandboxResult.relative,
       });
-      return safeRead.buffer.toString("utf-8");
+      return safeRead.buffer;
     },
     writeFile: async (absolutePath: string, content: string) => {
       const sandboxResult = await assertSandboxPath({
