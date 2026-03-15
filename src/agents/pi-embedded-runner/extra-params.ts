@@ -20,8 +20,8 @@ import {
 import { log } from "./logger.js";
 import {
   createMoonshotThinkingWrapper,
-  createSiliconFlowThinkingWrapper,
   resolveMoonshotThinkingType,
+  createSiliconFlowThinkingWrapper,
   shouldApplyMoonshotPayloadCompat,
   shouldApplySiliconFlowThinkingOffCompat,
 } from "./moonshot-stream-wrappers.js";
@@ -33,7 +33,6 @@ import {
   resolveOpenAIFastMode,
   resolveOpenAIServiceTier,
 } from "./openai-stream-wrappers.js";
-import { createKilocodeWrapper, isProxyReasoningUnsupported } from "./proxy-stream-wrappers.js";
 
 /**
  * Resolve provider-specific extra params from model config.
@@ -366,42 +365,33 @@ export function applyExtraParamsToAgent(
     agent.streamFn = createSiliconFlowThinkingWrapper(agent.streamFn);
   }
 
-  if (shouldApplyMoonshotPayloadCompat({ provider, modelId })) {
-    const moonshotThinkingType = resolveMoonshotThinkingType({
+  agent.streamFn = createAnthropicToolPayloadCompatibilityWrapper(agent.streamFn);
+  const providerStreamBase = agent.streamFn;
+  const pluginWrappedStreamFn = wrapProviderStreamFn({
+    provider,
+    config: cfg,
+    context: {
+      config: cfg,
+      provider,
+      modelId,
+      extraParams: effectiveExtraParams,
+      thinkingLevel,
+      streamFn: providerStreamBase,
+    },
+  });
+  agent.streamFn = pluginWrappedStreamFn ?? providerStreamBase;
+  const providerWrapperHandled =
+    pluginWrappedStreamFn !== undefined && pluginWrappedStreamFn !== providerStreamBase;
+
+  if (!providerWrapperHandled && shouldApplyMoonshotPayloadCompat({ provider, modelId })) {
+    // Preserve the legacy Moonshot compatibility path when no plugin wrapper
+    // actually handled the stream function. This covers tests/disabled plugins
+    // and Ollama Cloud Kimi models until they gain a dedicated runtime hook.
+    const thinkingType = resolveMoonshotThinkingType({
       configuredThinking: effectiveExtraParams?.thinking,
       thinkingLevel,
     });
-    if (moonshotThinkingType) {
-      log.debug(
-        `applying Moonshot thinking=${moonshotThinkingType} payload wrapper for ${provider}/${modelId}`,
-      );
-    }
-    agent.streamFn = createMoonshotThinkingWrapper(agent.streamFn, moonshotThinkingType);
-  }
-
-  agent.streamFn = createAnthropicToolPayloadCompatibilityWrapper(agent.streamFn);
-  agent.streamFn =
-    wrapProviderStreamFn({
-      provider,
-      config: cfg,
-      context: {
-        config: cfg,
-        provider,
-        modelId,
-        extraParams: effectiveExtraParams,
-        thinkingLevel,
-        streamFn: agent.streamFn,
-      },
-    }) ?? agent.streamFn;
-
-  if (provider === "kilocode") {
-    log.debug(`applying Kilocode feature header for ${provider}/${modelId}`);
-    // kilo/auto is a dynamic routing model — skip reasoning injection
-    // (same rationale as OpenRouter "auto"). See: openclaw/openclaw#24851
-    // Also skip for models known to reject reasoning.effort (e.g. x-ai/*).
-    const kilocodeThinkingLevel =
-      modelId === "kilo/auto" || isProxyReasoningUnsupported(modelId) ? undefined : thinkingLevel;
-    agent.streamFn = createKilocodeWrapper(agent.streamFn, kilocodeThinkingLevel);
+    agent.streamFn = createMoonshotThinkingWrapper(agent.streamFn, thinkingType);
   }
 
   if (provider === "amazon-bedrock" && !isAnthropicBedrockModel(modelId)) {

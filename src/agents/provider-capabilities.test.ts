@@ -16,6 +16,15 @@ const resolveProviderCapabilitiesWithPluginMock = vi.fn((params: { provider: str
       return {
         dropThinkingBlockModelHints: ["claude"],
       };
+    case "kilocode":
+      return {
+        geminiThoughtSignatureSanitization: true,
+        geminiThoughtSignatureModelHints: ["gemini"],
+      };
+    case "kimi-coding":
+      return {
+        preserveAnthropicThinkingSignatures: false,
+      };
     default:
       return undefined;
   }
