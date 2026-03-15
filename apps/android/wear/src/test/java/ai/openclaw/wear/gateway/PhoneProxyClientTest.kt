@@ -9,9 +9,10 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.advanceTimeBy
-import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -138,6 +139,144 @@ class PhoneProxyClientTest {
     scope.cancel()
   }
 
+  @Test
+  fun `connect tries the next node after a ping timeout`() = runTest {
+    val scope = TestScope(StandardTestDispatcher(testScheduler))
+    val messageTransport = FakeProxyMessageTransport()
+    val nodeFinder =
+      FakeProxyNodeFinder(
+        listOf(
+          ProxyNode(
+            id = "bad-node",
+            displayName = "Bad phone",
+            isNearby = true,
+          ),
+          ProxyNode(
+            id = "good-node",
+            displayName = "Good phone",
+            isNearby = false,
+          ),
+        ),
+      )
+    val client =
+      PhoneProxyClient(
+        stringResolver = ::testString,
+        formattedStringResolver = ::testFormattedString,
+        scope = scope,
+        messageTransport = messageTransport,
+        nodeFinder = nodeFinder,
+      )
+
+    client.connect()
+    runCurrent()
+    assertEquals(listOf("bad-node"), messageTransport.sentMessages().map { it.first })
+
+    advanceTimeBy(5_000)
+    runCurrent()
+    assertEquals(listOf("bad-node", "good-node"), messageTransport.sentMessages().map { it.first })
+
+    messageTransport.emit(
+      ProxyMessageEvent(
+        path = "/openclaw/pong",
+        sourceNodeId = "good-node",
+        data = """{"ready":true}""".toByteArray(Charsets.UTF_8),
+      ),
+    )
+    runCurrent()
+
+    assertTrue(client.connected.value)
+    assertEquals("Connected via phone", client.statusText.value)
+    scope.cancel()
+  }
+
+  @Test
+  fun `connect tries the next node after a not ready pong`() = runTest {
+    val scope = TestScope(StandardTestDispatcher(testScheduler))
+    val messageTransport = FakeProxyMessageTransport()
+    val nodeFinder =
+      FakeProxyNodeFinder(
+        listOf(
+          ProxyNode(
+            id = "bad-node",
+            displayName = "Bad phone",
+            isNearby = true,
+          ),
+          ProxyNode(
+            id = "good-node",
+            displayName = "Good phone",
+            isNearby = false,
+          ),
+        ),
+      )
+    val client =
+      PhoneProxyClient(
+        stringResolver = ::testString,
+        formattedStringResolver = ::testFormattedString,
+        scope = scope,
+        messageTransport = messageTransport,
+        nodeFinder = nodeFinder,
+      )
+
+    client.connect()
+    runCurrent()
+    messageTransport.emit(
+      ProxyMessageEvent(
+        path = "/openclaw/pong",
+        sourceNodeId = "bad-node",
+        data = """{"ready":false,"statusText":"Gateway unavailable"}""".toByteArray(Charsets.UTF_8),
+      ),
+    )
+    runCurrent()
+
+    assertEquals(listOf("bad-node", "good-node"), messageTransport.sentMessages().map { it.first })
+
+    messageTransport.emit(
+      ProxyMessageEvent(
+        path = "/openclaw/pong",
+        sourceNodeId = "good-node",
+        data = """{"ready":true}""".toByteArray(Charsets.UTF_8),
+      ),
+    )
+    runCurrent()
+
+    val requestDeferred = async { client.request("sessions.list", "{}", timeoutMs = 1_000) }
+    runCurrent()
+    val rpcMessage = messageTransport.sentMessages().last()
+    assertEquals("good-node", rpcMessage.first)
+    val requestId =
+      kotlinx.serialization.json.Json
+        .parseToJsonElement(String(rpcMessage.third))
+        .jsonObject["id"]!!
+        .jsonPrimitive
+        .content
+
+    messageTransport.emit(
+      ProxyMessageEvent(
+        path = "/openclaw/rpc-response",
+        sourceNodeId = "good-node",
+        data = """{"id":"$requestId","ok":true,"payload":{"ok":true}}""".toByteArray(Charsets.UTF_8),
+      ),
+    )
+    runCurrent()
+
+    assertEquals("""{"ok":true}""", requestDeferred.await())
+    scope.cancel()
+  }
+
+  @Test
+  fun `prioritize proxy nodes prefers nearby devices first`() {
+    val ordered =
+      prioritizeProxyNodes(
+        listOf(
+          ProxyNode(id = "2", displayName = "Tablet", isNearby = false),
+          ProxyNode(id = "3", displayName = "Alpha phone", isNearby = true),
+          ProxyNode(id = "1", displayName = "Beta phone", isNearby = true),
+        ),
+      )
+
+    assertEquals(listOf("3", "1", "2"), ordered.map { it.id })
+  }
+
   private fun connectedProxyClient(
     scope: TestScope,
     messageTransport: FakeProxyMessageTransport,
@@ -161,7 +300,7 @@ class PhoneProxyClientTest {
         nodeFinder = nodeFinder,
       )
     client.connect()
-    runCurrent()
+    scope.runCurrent()
     messageTransport.emit(
       ProxyMessageEvent(
         path = "/openclaw/pong",
@@ -169,8 +308,7 @@ class PhoneProxyClientTest {
         data = """{"ready":true}""".toByteArray(Charsets.UTF_8),
       ),
     )
-    runCurrent()
-    advanceUntilIdle()
+    scope.runCurrent()
     return client
   }
 
