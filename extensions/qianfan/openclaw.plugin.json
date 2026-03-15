@@ -1,0 +1,9 @@
+{
+  "id": "qianfan",
+  "providers": ["qianfan"],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}
