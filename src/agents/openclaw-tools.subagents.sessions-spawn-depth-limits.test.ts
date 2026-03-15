@@ -33,7 +33,9 @@ async function resetRegistry() {
   resetSubagentRegistryForTests();
 }
 
-async function addRegistryRun(run: Parameters<(typeof import("./subagent-registry.js"))["addSubagentRunForTests"]>[0]) {
+async function addRegistryRun(
+  run: Parameters<(typeof import("./subagent-registry.js"))["addSubagentRunForTests"]>[0],
+) {
   const { addSubagentRunForTests } = await import("./subagent-registry.js");
   addSubagentRunForTests(run);
 }
