@@ -675,3 +675,30 @@ describe("markAuthProfileFailure — active windows do not extend on retry", () 
     });
   }
 });
+// markAuthProfileFailure
+// ---------------------------------------------------------------------------
+
+describe("markAuthProfileFailure", () => {
+  it.each(["format", "timeout"] as const)("does not cooldown for %s errors", async (reason) => {
+    const store = makeStore({});
+    await markAuthProfileFailure({ store, profileId: "anthropic:default", reason });
+    const stats = store.usageStats?.["anthropic:default"];
+    expect(stats?.errorCount).toBe(1);
+    expect(stats?.cooldownUntil).toBeUndefined();
+    expect(isProfileInCooldown(store, "anthropic:default")).toBe(false);
+  });
+
+  it("sets cooldownUntil for rate_limit errors", async () => {
+    const store = makeStore({});
+    await markAuthProfileFailure({ store, profileId: "anthropic:default", reason: "rate_limit" });
+    expect(store.usageStats?.["anthropic:default"]?.cooldownUntil).toBeGreaterThan(Date.now());
+  });
+
+  it("sets disabledUntil for billing errors", async () => {
+    const store = makeStore({});
+    await markAuthProfileFailure({ store, profileId: "anthropic:default", reason: "billing" });
+    const stats = store.usageStats?.["anthropic:default"];
+    expect(stats?.disabledUntil).toBeGreaterThan(Date.now());
+    expect(stats?.disabledReason).toBe("billing");
+  });
+});
