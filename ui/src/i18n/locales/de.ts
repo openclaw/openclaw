@@ -127,5 +127,6 @@ export const de: TranslationMap = {
     ptBR: "Português (Brasilianisches Portugiesisch)",
     de: "Deutsch",
     es: "Spanisch (Español)",
+    koKR: "한국어 (Koreanisch)",
   },
 };
