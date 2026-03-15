@@ -37,13 +37,11 @@ import {
   type ChannelMessageActionAdapter,
   type ChannelPlugin,
   type OpenClawConfig,
+  type OutboundSendDeps,
   type ResolvedTelegramAccount,
   type TelegramProbe,
-} from "openclaw/plugin-sdk/telegram";
-import {
-  type OutboundSendDeps,
   resolveOutboundSendDep,
-} from "../../../src/infra/outbound/send-deps.js";
+} from "openclaw/plugin-sdk/telegram";
 import { getTelegramRuntime } from "./runtime.js";
 
 type TelegramSendFn = ReturnType<
