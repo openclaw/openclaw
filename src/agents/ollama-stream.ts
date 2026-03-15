@@ -414,6 +414,28 @@ export async function* parseNdjsonStream(
 
 // ── Main StreamFn factory ───────────────────────────────────────────────────
 
+/** Ollama error text patterns for models that reject tool call schemas (e.g. gemma3:1b).
+ *  Checked against both raw text and the `error` field of JSON-structured 400 bodies. */
+const OLLAMA_TOOL_UNSUPPORTED_PATTERNS = [/does not support tools/i, /tool.+not.+supported/i];
+
+/** Extract the error message from Ollama 400 response text. Handles both raw text and JSON `{"error":"..."}`. */
+function extractOllamaErrorMessage(text: string): string {
+  try {
+    const parsed = JSON.parse(text) as { error?: string };
+    if (typeof parsed.error === "string") {
+      return parsed.error;
+    }
+  } catch {
+    // not JSON — use raw text
+  }
+  return text;
+}
+
+function isOllamaToolUnsupportedError(errorText: string): boolean {
+  const msg = extractOllamaErrorMessage(errorText);
+  return OLLAMA_TOOL_UNSUPPORTED_PATTERNS.some((re) => re.test(msg));
+}
+
 function resolveOllamaChatUrl(baseUrl: string): string {
   const trimmed = baseUrl.trim().replace(/\/+$/, "");
   const normalizedBase = trimmed.replace(/\/v1$/i, "");
@@ -478,7 +500,7 @@ export function createOllamaStreamFn(
           headers.Authorization = `Bearer ${options.apiKey}`;
         }
 
-        const response = await fetch(chatUrl, {
+        let response = await fetch(chatUrl, {
           method: "POST",
           headers,
           body: JSON.stringify(body),
@@ -487,7 +509,25 @@ export function createOllamaStreamFn(
 
         if (!response.ok) {
           const errorText = await response.text().catch(() => "unknown error");
-          throw new Error(`Ollama API error ${response.status}: ${errorText}`);
+          // One-time fallback: some Ollama models (e.g. gemma3:1b) return HTTP 400
+          // when tools are included. Retry without tools so they can still respond.
+          if (response.status === 400 && body.tools && isOllamaToolUnsupportedError(errorText)) {
+            log.warn(`Model ${model.id} does not support tools; retrying without tools`);
+            const bodyWithoutTools = { ...body };
+            delete bodyWithoutTools.tools;
+            response = await fetch(chatUrl, {
+              method: "POST",
+              headers,
+              body: JSON.stringify(bodyWithoutTools),
+              signal: options?.signal,
+            });
+            if (!response.ok) {
+              const retryErrorText = await response.text().catch(() => "unknown error");
+              throw new Error(`Ollama API error ${response.status}: ${retryErrorText}`);
+            }
+          } else {
+            throw new Error(`Ollama API error ${response.status}: ${errorText}`);
+          }
         }
 
         if (!response.body) {

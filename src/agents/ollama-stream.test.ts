@@ -365,6 +365,147 @@ async function collectStreamEvents<T>(stream: AsyncIterable<T>): Promise<T[]> {
   return events;
 }
 
+// Helper to build a minimal context with tools for fallback tests
+function makeContextWithTools() {
+  return {
+    messages: [{ role: "user", content: "hi" }],
+    tools: [{ name: "bash", description: "run bash", parameters: {} }],
+  };
+}
+
+describe("createOllamaStreamFn - tools fallback", () => {
+  const successNdjson =
+    [
+      '{"model":"m","created_at":"t","message":{"role":"assistant","content":"hi"},"done":false}',
+      '{"model":"m","created_at":"t","message":{"role":"assistant","content":""},"done":true,"prompt_eval_count":1,"eval_count":1}',
+    ].join("\n") + "\n";
+
+  it("retries without tools on 400 tool-unsupported error and produces done event", async () => {
+    const originalFetch = globalThis.fetch;
+    let callCount = 0;
+    const fetchMock = vi.fn(async (_url: string, _init?: RequestInit) => {
+      callCount++;
+      if (callCount === 1) {
+        // Simulate Ollama's 400 rejection for models that don't support tools
+        return new Response('model "gemma3:1b" does not support tools', { status: 400 });
+      }
+      return new Response(successNdjson, {
+        status: 200,
+        headers: { "Content-Type": "application/x-ndjson" },
+      });
+    });
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+    try {
+      const streamFn = createOllamaStreamFn("http://localhost:11434");
+      const stream = await streamFn(
+        {
+          id: "gemma3:1b",
+          api: "ollama",
+          provider: "custom-ollama",
+          contextWindow: 65536,
+        } as unknown as Parameters<typeof streamFn>[0],
+        makeContextWithTools() as unknown as Parameters<typeof streamFn>[1],
+        {} as unknown as Parameters<typeof streamFn>[2],
+      );
+
+      const events = await collectStreamEvents(stream);
+
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+
+      // First call must include tools in the body
+      const [, firstInit] = fetchMock.mock.calls[0] as [string, RequestInit];
+      const firstBody = JSON.parse(firstInit.body as string) as { tools?: unknown };
+      expect(firstBody.tools).toBeDefined();
+
+      // Second (retry) call must omit tools
+      const [, secondInit] = fetchMock.mock.calls[1] as [string, RequestInit];
+      const secondBody = JSON.parse(secondInit.body as string) as { tools?: unknown };
+      expect(secondBody.tools).toBeUndefined();
+
+      // Stream must end with a done event (not error)
+      expect(events.at(-1)?.type).toBe("done");
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it("retries without tools when Ollama returns JSON-structured 400 error", async () => {
+    const originalFetch = globalThis.fetch;
+    let callCount = 0;
+    const fetchMock = vi.fn(async () => {
+      callCount++;
+      if (callCount === 1) {
+        // JSON-structured error payload (Ollama can return errors in this format)
+        return new Response(JSON.stringify({ error: 'model "gemma3:1b" does not support tools' }), {
+          status: 400,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+      return new Response(successNdjson, {
+        status: 200,
+        headers: { "Content-Type": "application/x-ndjson" },
+      });
+    });
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+    try {
+      const streamFn = createOllamaStreamFn("http://localhost:11434");
+      const stream = await streamFn(
+        {
+          id: "gemma3:1b",
+          api: "ollama",
+          provider: "custom-ollama",
+          contextWindow: 65536,
+        } as unknown as Parameters<typeof streamFn>[0],
+        makeContextWithTools() as unknown as Parameters<typeof streamFn>[1],
+        {} as unknown as Parameters<typeof streamFn>[2],
+      );
+
+      const events = await collectStreamEvents(stream);
+
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+      // Second call must omit tools
+      const [, secondInit] = fetchMock.mock.calls[1] as unknown as [string, RequestInit];
+      const secondBody = JSON.parse(secondInit.body as string) as { tools?: unknown };
+      expect(secondBody.tools).toBeUndefined();
+      expect(events.at(-1)?.type).toBe("done");
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it("does not retry on a 400 error unrelated to tool support", async () => {
+    const originalFetch = globalThis.fetch;
+    const fetchMock = vi.fn(async () => {
+      return new Response("bad request: invalid model name", { status: 400 });
+    });
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+    try {
+      const streamFn = createOllamaStreamFn("http://localhost:11434");
+      const stream = await streamFn(
+        {
+          id: "gemma3:1b",
+          api: "ollama",
+          provider: "custom-ollama",
+          contextWindow: 65536,
+        } as unknown as Parameters<typeof streamFn>[0],
+        makeContextWithTools() as unknown as Parameters<typeof streamFn>[1],
+        {} as unknown as Parameters<typeof streamFn>[2],
+      );
+
+      const events = await collectStreamEvents(stream);
+
+      // Only one fetch attempt — no retry
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      expect(events.at(-1)?.type).toBe("error");
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+});
+
 describe("createOllamaStreamFn", () => {
   it("normalizes /v1 baseUrl and maps maxTokens + signal", async () => {
     await withMockNdjsonFetch(
