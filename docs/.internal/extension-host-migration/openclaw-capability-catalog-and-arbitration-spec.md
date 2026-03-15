@@ -66,7 +66,7 @@ What has been implemented:
 - compatibility plugin-registry facade ownership now routes through `src/extension-host/plugin-registry.ts` ahead of broader catalog-backed registry ownership
 - compatibility plugin-registry policy now routes through `src/extension-host/plugin-registry-compat.ts` ahead of broader catalog-backed registry ownership
 - compatibility plugin-registry registration actions now route through `src/extension-host/plugin-registry-registrations.ts` ahead of broader catalog-backed registry ownership
-- host-owned runtime registry accessors now route through `src/extension-host/runtime-registry.ts` ahead of broader catalog-backed registry ownership, and the HTTP-route, gateway-method, CLI, and service slices now keep host-owned storage there with mirrored legacy compatibility views
+- host-owned runtime registry accessors now route through `src/extension-host/runtime-registry.ts` ahead of broader catalog-backed registry ownership, and the provider, tool, HTTP-route, gateway-method, CLI, and service slices now keep host-owned storage there with mirrored legacy compatibility views
 - service startup, stop ordering, service-context creation, and failure logging now route through `src/extension-host/service-lifecycle.ts` ahead of broader catalog-backed lifecycle ownership
 - CLI duplicate detection, registrar invocation, and async failure logging now route through `src/extension-host/cli-lifecycle.ts` ahead of broader catalog-backed CLI ownership
 - gateway method-id aggregation, plugin diagnostic shaping, and extra-handler composition now route through `src/extension-host/gateway-methods.ts` ahead of broader catalog-backed gateway ownership
@@ -117,7 +117,7 @@ How it has been implemented:
 - by extracting provider post-selection hook lookup and invocation into a host-owned provider-model-selection helper before broader catalog-backed provider-setup ownership
 - by extracting provider-id normalization into `src/agents/provider-id.ts` so provider-only host seams do not inherit the heavier agent and browser dependency graph from `src/agents/model-selection.ts`
 - by extracting model-ref parsing into `src/agents/model-ref.ts` and Google model-id normalization into `src/agents/google-model-id.ts` so provider auth and setup seams can be tested without pulling the heavier provider-loader and browser dependency graph
-- by introducing host-owned runtime-registry accessors for low-risk runtime consumers first, then moving HTTP-route, gateway-method, CLI, and service storage into that host-owned state while keeping mirrored legacy compatibility arrays and handler maps before broader catalog publication or arbitration work
+- by introducing host-owned runtime-registry accessors for low-risk runtime consumers first, then moving provider, tool, HTTP-route, gateway-method, CLI, and service storage into that host-owned state while keeping mirrored legacy compatibility arrays and handler maps before broader catalog publication or arbitration work
 
 What remains pending:
 
