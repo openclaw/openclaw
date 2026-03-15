@@ -7,7 +7,7 @@ import android.util.Log
 import ai.openclaw.android.gateway.GatewayClientInfo
 import ai.openclaw.android.gateway.GatewayClientProfiles
 import ai.openclaw.android.gateway.GatewayConnectProfiles
-import ai.openclaw.wear.R
+import ai.openclaw.android.gateway.GatewayEvent
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 import kotlinx.coroutines.CompletableDeferred
@@ -37,6 +37,7 @@ import okhttp3.Response
 import okhttp3.WebSocket
 import okhttp3.WebSocketListener
 import java.util.concurrent.TimeUnit
+import ai.openclaw.wear.R
 
 private const val TAG = "WearGateway"
 
@@ -48,11 +49,6 @@ internal fun isCurrentSocketFrame(
 ): Boolean {
   return frameEpoch == currentEpoch && activeSocket === sourceSocket
 }
-
-/**
- * Gateway event from the server, forwarded to the chat controller.
- */
-data class GatewayEvent(val event: String, val payloadJson: String?)
 
 /**
  * Common interface so the chat controller can work with both

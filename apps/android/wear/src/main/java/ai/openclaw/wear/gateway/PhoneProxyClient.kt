@@ -30,14 +30,11 @@ import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.buildJsonObject
+import ai.openclaw.android.gateway.GatewayEvent
+import ai.openclaw.android.gateway.ProxyPaths
 import ai.openclaw.wear.R
 
 private const val TAG = "PhoneProxy"
-private const val RPC_PATH = "/openclaw/rpc"
-private const val RPC_RESPONSE_PATH = "/openclaw/rpc-response"
-private const val EVENT_PATH = "/openclaw/event"
-private const val PING_PATH = "/openclaw/ping"
-private const val PONG_PATH = "/openclaw/pong"
 private const val MESSAGE_SEND_TIMEOUT_MS = 5_000L
 private const val PHONE_PONG_TIMEOUT_MS = 5_000L
 private const val PHONE_LIVENESS_PING_INTERVAL_MS = 30_000L
@@ -241,7 +238,7 @@ class PhoneProxyClient internal constructor(
     try {
       sendMessageWithTimeout(
         nodeId = nodeId,
-        path = RPC_PATH,
+        path = ProxyPaths.RPC,
         data = msg.toString().toByteArray(Charsets.UTF_8),
         timeoutMs = MESSAGE_SEND_TIMEOUT_MS,
       )
@@ -274,17 +271,17 @@ class PhoneProxyClient internal constructor(
     }
     val data = String(event.data, Charsets.UTF_8)
     when (event.path) {
-      RPC_RESPONSE_PATH -> handleRpcResponse(data)
-      EVENT_PATH -> handleGatewayEvent(data)
-      PONG_PATH -> handlePong(event.sourceNodeId, data)
+      ProxyPaths.RPC_RESPONSE -> handleRpcResponse(data)
+      ProxyPaths.EVENT -> handleGatewayEvent(data)
+      ProxyPaths.PONG -> handlePong(event.sourceNodeId, data)
     }
   }
 
   private fun shouldAcceptMessage(sourceNodeId: String, path: String): Boolean {
     val activeNodeId = phoneNodeId
     return when (path) {
-      PONG_PATH -> shouldAcceptPong(sourceNodeId, activeNodeId)
-      RPC_RESPONSE_PATH, EVENT_PATH -> activeNodeId != null && activeNodeId == sourceNodeId
+      ProxyPaths.PONG -> shouldAcceptPong(sourceNodeId, activeNodeId)
+      ProxyPaths.RPC_RESPONSE, ProxyPaths.EVENT -> activeNodeId != null && activeNodeId == sourceNodeId
       else -> false
     }
   }
@@ -437,7 +434,7 @@ class PhoneProxyClient internal constructor(
     return try {
       sendMessageWithTimeout(
         nodeId = phone.id,
-        path = PING_PATH,
+        path = ProxyPaths.PING,
         data = ByteArray(0),
         timeoutMs = MESSAGE_SEND_TIMEOUT_MS,
       )
@@ -510,7 +507,7 @@ class PhoneProxyClient internal constructor(
           try {
             sendMessageWithTimeout(
               nodeId = nodeId,
-              path = PING_PATH,
+              path = ProxyPaths.PING,
               data = ByteArray(0),
               timeoutMs = MESSAGE_SEND_TIMEOUT_MS,
             )

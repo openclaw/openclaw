@@ -1,6 +1,6 @@
 package ai.openclaw.app.ui.chat
 
-import ai.openclaw.app.chat.ChatSessionEntry
+import ai.openclaw.android.gateway.GatewaySessionEntry
 
 private const val RECENT_WINDOW_MS = 24 * 60 * 60 * 1000L
 
@@ -30,16 +30,16 @@ fun friendlySessionName(key: String): String {
 
 fun resolveSessionChoices(
   currentSessionKey: String,
-  sessions: List<ChatSessionEntry>,
+  sessions: List<GatewaySessionEntry>,
   mainSessionKey: String,
   nowMs: Long = System.currentTimeMillis(),
-): List<ChatSessionEntry> {
+): List<GatewaySessionEntry> {
   val mainKey = mainSessionKey.trim().ifEmpty { "main" }
   val current = currentSessionKey.trim().let { if (it == "main" && mainKey != "main") mainKey else it }
   val aliasKey = if (mainKey == "main") null else "main"
   val cutoff = nowMs - RECENT_WINDOW_MS
   val sorted = sessions.sortedByDescending { it.updatedAtMs ?: 0L }
-  val recent = mutableListOf<ChatSessionEntry>()
+  val recent = mutableListOf<GatewaySessionEntry>()
   val seen = mutableSetOf<String>()
   for (entry in sorted) {
     if (aliasKey != null && entry.key == aliasKey) continue
@@ -48,14 +48,14 @@ fun resolveSessionChoices(
     recent.add(entry)
   }
 
-  val result = mutableListOf<ChatSessionEntry>()
+  val result = mutableListOf<GatewaySessionEntry>()
   val included = mutableSetOf<String>()
   val mainEntry = sorted.firstOrNull { it.key == mainKey }
   if (mainEntry != null) {
     result.add(mainEntry)
     included.add(mainKey)
   } else if (current == mainKey) {
-    result.add(ChatSessionEntry(key = mainKey, updatedAtMs = null))
+    result.add(GatewaySessionEntry(key = mainKey, updatedAtMs = null))
     included.add(mainKey)
   }
 
@@ -66,7 +66,7 @@ fun resolveSessionChoices(
   }
 
   if (current.isNotEmpty() && !included.contains(current)) {
-    result.add(ChatSessionEntry(key = current, updatedAtMs = null))
+    result.add(GatewaySessionEntry(key = current, updatedAtMs = null))
   }
 
   return result

@@ -41,7 +41,7 @@ import androidx.wear.compose.material3.TimeText
 import androidx.wear.tooling.preview.devices.WearDevices
 import ai.openclaw.wear.R
 import ai.openclaw.wear.WearViewModel
-import ai.openclaw.wear.chat.WearSessionEntry
+import ai.openclaw.android.gateway.GatewaySessionEntry
 
 @Composable
 fun SessionPickerScreen(
@@ -67,7 +67,7 @@ fun SessionPickerScreen(
 
 @Composable
 private fun SessionPickerContent(
-  sessions: List<WearSessionEntry>,
+  sessions: List<GatewaySessionEntry>,
   currentKey: String,
   onSelectSession: (String) -> Unit,
 ) {
@@ -115,7 +115,7 @@ private fun SessionPickerContent(
 
 @Composable
 private fun SessionItem(
-  session: WearSessionEntry,
+  session: GatewaySessionEntry,
   isSelected: Boolean,
   onClick: () -> Unit,
 ) {
@@ -157,14 +157,14 @@ private fun SessionItem(
   )
 }
 
-private fun previewSessions(): List<WearSessionEntry> =
+private fun previewSessions(): List<GatewaySessionEntry> =
   listOf(
-    WearSessionEntry(
+    GatewaySessionEntry(
       key = "agent:main:main",
       updatedAtMs = 1_000,
       displayName = "Heartbeat",
     ),
-    WearSessionEntry(
+    GatewaySessionEntry(
       key = "agent:main:matrix:channel:!123456789abcdef:matrix.org",
       updatedAtMs = 2_000,
       displayName = "matrix:#cool-channel-matrix.org",
