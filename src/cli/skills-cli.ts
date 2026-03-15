@@ -1,3 +1,4 @@
+import { spinner } from "@clack/prompts";
 import type { Command } from "commander";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { loadConfig } from "../config/config.js";
@@ -72,6 +73,71 @@ export function registerSkillsCli(program: Command) {
     .option("--json", "Output as JSON", false)
     .action(async (opts) => {
       await runSkillsAction((report) => formatSkillsCheck(report, opts));
+    });
+
+  skills
+    .command("install")
+    .description("Install dependencies for a skill")
+    .argument("<name>", "Skill name")
+    .action(async (name: string) => {
+      try {
+        const config = loadConfig();
+        const workspaceDir = resolveAgentWorkspaceDir(config, resolveDefaultAgentId(config));
+        const { buildWorkspaceSkillStatus } = await import("../agents/skills-status.js");
+        const report = buildWorkspaceSkillStatus(workspaceDir, { config });
+        const skill = report.skills.find((s) => s.name === name);
+        if (!skill) {
+          defaultRuntime.error(`Skill not found: ${name}`);
+          defaultRuntime.exit(1);
+          return;
+        }
+        if (skill.install.length === 0) {
+          defaultRuntime.log(`No install specs for skill: ${name}`);
+          defaultRuntime.exit(0);
+          return;
+        }
+        const { installSkill } = await import("../agents/skills-install.js");
+        let anyFailed = false;
+        for (const option of skill.install) {
+          const spin = spinner();
+          spin.start(theme.accent(`Installing ${name} (${option.label})…`));
+          const result = await installSkill({
+            workspaceDir,
+            skillName: name,
+            installId: option.id,
+            config,
+          });
+          const warnings = result.warnings ?? [];
+          if (result.ok) {
+            spin.stop(
+              warnings.length > 0
+                ? `Installed ${name} (${option.label}) — with warnings`
+                : `Installed ${name} (${option.label})`,
+            );
+          } else {
+            const code = result.code == null ? "" : ` (exit ${result.code})`;
+            spin.stop(theme.error(`Failed: ${name} (${option.label})${code} — ${result.message}`));
+            if (result.stderr) {
+              defaultRuntime.log(result.stderr.trim());
+            } else if (result.stdout) {
+              defaultRuntime.log(result.stdout.trim());
+            }
+            anyFailed = true;
+          }
+          for (const warning of warnings) {
+            defaultRuntime.log(warning);
+          }
+        }
+        if (anyFailed) {
+          defaultRuntime.log(
+            `Tip: run \`openclaw doctor\` to review skills + requirements.`,
+          );
+          defaultRuntime.exit(1);
+        }
+      } catch (err) {
+        defaultRuntime.error(String(err));
+        defaultRuntime.exit(1);
+      }
     });
 
   // Default action (no subcommand) - show list
