@@ -178,15 +178,21 @@ RUN --mount=type=cache,id=openclaw-bookworm-apt-cache,target=/var/cache/apt,shar
 # Adds ~300MB but eliminates the 60-90s Playwright install on every container start.
 # Must run after node_modules COPY so playwright-core is available.
 ARG OPENCLAW_INSTALL_BROWSER=""
+ENV PLAYWRIGHT_BROWSERS_PATH=/opt/playwright
+# Ensure the directory exists and is writable by the node user, even if the browser isn't pre-installed.
+RUN mkdir -p $PLAYWRIGHT_BROWSERS_PATH && \
+    chmod 775 $PLAYWRIGHT_BROWSERS_PATH
+
 RUN --mount=type=cache,id=openclaw-bookworm-apt-cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,id=openclaw-bookworm-apt-lists,target=/var/lib/apt,sharing=locked \
     if [ -n "$OPENCLAW_INSTALL_BROWSER" ]; then \
       apt-get update && \
       DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends xvfb && \
-      mkdir -p /home/node/.cache/ms-playwright && \
-      PLAYWRIGHT_BROWSERS_PATH=/home/node/.cache/ms-playwright \
       node /app/node_modules/playwright-core/cli.js install --with-deps chromium && \
-      chown -R node:node /home/node/.cache/ms-playwright; \
+      chown -R node:node $PLAYWRIGHT_BROWSERS_PATH && \
+      # Clean up apt caches to reduce image size (apt-get clean is handled by the base image's configuration usually, but good practice)
+      rm -rf /var/lib/apt/lists/* && \
+      ln -sf $PLAYWRIGHT_BROWSERS_PATH/chromium-*/chrome-linux/chrome /usr/local/bin/chromium; \
     fi
 
 # Optionally install Docker CLI for sandbox container management.
