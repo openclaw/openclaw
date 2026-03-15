@@ -1,0 +1,53 @@
+import "../../provider-env-vars-BfZUtZAn.js";
+import { t as emptyPluginConfigSchema } from "../../config-schema-DpOJkOlS.js";
+import "../../resolve-route-BZ4hHpx2.js";
+import "../../logger-CRwcgB9y.js";
+import "../../tmp-openclaw-dir-Bz3ouN_i.js";
+import "../../paths-Byjx7_T6.js";
+import "../../subsystem-CsP80x3t.js";
+import "../../utils-o1tyfnZ_.js";
+import "../../fetch-Dx857jUp.js";
+import "../../retry-BY_ggjbn.js";
+import "../../agent-scope-DV_aCIyi.js";
+import "../../exec-BLi45_38.js";
+import "../../logger-Bsnck4bK.js";
+import "../../core-qWFcsWSH.js";
+import "../../paths-OqPpu-UR.js";
+import "../../auth-profiles-CuJtivJK.js";
+import "../../profiles-CV7WLKIX.js";
+import "../../fetch-D2ZOzaXt.js";
+import "../../external-content-vZzOHxnd.js";
+import "../../kilocode-shared-Ci8SRxXc.js";
+import "../../models-config.providers.static-DRBnLpDj.js";
+import "../../models-config.providers.discovery-l-LpSxGW.js";
+import "../../pairing-token-DKpN4qO0.js";
+import "../../query-expansion-txqQdNIf.js";
+import "../../redact-BefI-5cC.js";
+import "../../mime-33LCeGh-.js";
+import "../../resolve-utils-BpDGEQsl.js";
+import "../../typebox-BmZP6XXv.js";
+import "../../web-search-plugin-factory-DStYVW2B.js";
+import "../../compat-DDXNEdAm.js";
+import "../../inbound-envelope-DsNRW6ln.js";
+import "../../run-command-Psw08BkS.js";
+import "../../device-pairing-DYWF-CWB.js";
+import "../../line-iO245OTq.js";
+import "../../upsert-with-lock-CLs2bE4R.js";
+import "../../self-hosted-provider-setup-C4OZCxyb.js";
+import "../../ollama-setup-BM-G12b6.js";
+import "../../proxy-0RkxgP3l.js";
+import { t as zaloPlugin } from "../../channel-KNjrV177.js";
+import { n as setZaloRuntime } from "../../runtime-B7Se2hjr.js";
+//#region extensions/zalo/index.ts
+const plugin = {
+	id: "zalo",
+	name: "Zalo",
+	description: "Zalo channel plugin (Bot API)",
+	configSchema: emptyPluginConfigSchema(),
+	register(api) {
+		setZaloRuntime(api.runtime);
+		api.registerChannel(zaloPlugin);
+	}
+};
+//#endregion
+export { plugin as default };

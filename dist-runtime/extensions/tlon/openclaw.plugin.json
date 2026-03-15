@@ -1,0 +1,14 @@
+{
+  "id": "tlon",
+  "channels": [
+    "tlon"
+  ],
+  "skills": [
+    "./bundled-skills/@tloncorp/tlon-skill"
+  ],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}
