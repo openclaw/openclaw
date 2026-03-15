@@ -31,7 +31,7 @@ export interface ConfigBackup {
 export interface BackupRestoreFs {
   copyFile: (from: string, to: string) => Promise<void>;
   readFile: (path: string) => Promise<string>;
-  writeFile: (path: string, data: string) => Promise<void>;
+  writeFile: (path: string, data: string, options?: { mode?: number }) => Promise<void>;
   stat: (path: string) => Promise<{ size: number; mtime: Date }>;
   readdir: (path: string) => Promise<string[]>;
   unlink: (path: string) => Promise<void>;
@@ -42,7 +42,10 @@ export interface BackupRestoreFs {
 const defaultFs: BackupRestoreFs = {
   copyFile: async (from, to) => fs.copyFile(from, to),
   readFile: async (path) => fs.readFile(path, "utf-8"),
-  writeFile: async (path, data) => fs.writeFile(path, data, "utf-8"),
+  writeFile: async (path, data, options) =>
+    options?.mode !== undefined
+      ? fs.writeFile(path, data, { mode: options.mode, encoding: "utf-8" })
+      : fs.writeFile(path, data, "utf-8"),
   stat: async (path) => {
     const stats = await fs.stat(path);
     return { size: stats.size, mtime: stats.mtime };
@@ -240,7 +243,7 @@ export async function restoreConfigBackup(
   // Restore from backup
   try {
     const content = await ioFs.readFile(backupPath);
-    await ioFs.writeFile(configPath, content);
+    await ioFs.writeFile(configPath, content, { mode: 0o600 });
     return { success: true, backupPath };
   } catch (err) {
     return {
@@ -296,7 +299,7 @@ export async function attemptConfigRollback(
       }
 
       // Restore from backup
-      await ioFs.writeFile(configPath, content);
+      await ioFs.writeFile(configPath, content, { mode: 0o600 });
 
       return {
         restored: true,

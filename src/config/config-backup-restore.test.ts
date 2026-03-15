@@ -48,7 +48,7 @@ function createMockFs(): { fs: BackupRestoreFs; state: MockFs } {
       }
       return content;
     },
-    writeFile: async (path: string, data: string) => {
+    writeFile: async (path: string, data: string, _options?: { mode?: number }) => {
       state.files.set(path, data);
       state.stats.set(path, { size: data.length, mtime: new Date() });
     },
