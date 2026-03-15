@@ -92,9 +92,15 @@ primary_region = "iad"
 
 ## 3) Set secrets
 
+Set a gateway token **and save it somewhere**. You will need this exact value in the browser after deploy.
+
 ```bash
 # Required: Gateway token (for non-loopback binding)
-fly secrets set OPENCLAW_GATEWAY_TOKEN=$(openssl rand -hex 32)
+# Save this token; you'll paste it into the UI later.
+export OPENCLAW_GATEWAY_TOKEN="$(openssl rand -hex 32)"
+echo "$OPENCLAW_GATEWAY_TOKEN"
+
+fly secrets set OPENCLAW_GATEWAY_TOKEN="$OPENCLAW_GATEWAY_TOKEN"
 
 # Model provider API keys
 fly secrets set ANTHROPIC_API_KEY=sk-ant-...
@@ -112,6 +118,7 @@ fly secrets set DISCORD_BOT_TOKEN=MTQ...
 - Non-loopback binds (`--bind lan`) require `OPENCLAW_GATEWAY_TOKEN` for security.
 - Treat these tokens like passwords.
 - **Prefer env vars over config file** for all API keys and tokens. This keeps secrets out of `openclaw.json` where they could be accidentally exposed or logged.
+- Fly will not show the plaintext secret value back later, so save it now.
 
 ## 4) Deploy
 
@@ -190,7 +197,10 @@ cat > /data/openclaw.json << 'EOF'
   },
   "gateway": {
     "mode": "local",
-    "bind": "auto"
+    "bind": "auto",
+    "controlUi": {
+      "allowedOrigins": ["https://my-openclaw.fly.dev"]
+    }
   },
   "meta": {
     "lastTouchedVersion": "2026.1.29"
@@ -199,12 +209,14 @@ cat > /data/openclaw.json << 'EOF'
 EOF
 ```
 
-**Note:** With `OPENCLAW_STATE_DIR=/data`, the config path is `/data/openclaw.json`.
+**Notes:**
 
-**Note:** The Discord token can come from either:
-
-- Environment variable: `DISCORD_BOT_TOKEN` (recommended for secrets)
-- Config file: `channels.discord.token`
+- With `OPENCLAW_STATE_DIR=/data`, the config path is `/data/openclaw.json`.
+- Set `gateway.controlUi.allowedOrigins` to your exact public origin, for example `https://my-openclaw.fly.dev`.
+- If you already have a config, edit it instead of overwriting it.
+- The Discord token can come from either:
+  - environment variable: `DISCORD_BOT_TOKEN` (recommended)
+  - config file: `channels.discord.token`
 
 If using env var, no need to add token to config. The gateway reads `DISCORD_BOT_TOKEN` automatically.
 
@@ -227,7 +239,21 @@ fly open
 
 Or visit `https://my-openclaw.fly.dev/`
 
-Paste your gateway token (the one from `OPENCLAW_GATEWAY_TOKEN`) to authenticate.
+On first open:
+
+1. Go to **Overview**.
+2. In **Gateway Access**, paste the value of `OPENCLAW_GATEWAY_TOKEN` into **Gateway Token**.
+3. Click **Connect**.
+
+If you see **pairing required**, approve this browser/device once:
+
+```bash
+fly ssh console -a my-openclaw
+openclaw devices list --url ws://127.0.0.1:3000 --token "$OPENCLAW_GATEWAY_TOKEN"
+openclaw devices approve --latest --url ws://127.0.0.1:3000 --token "$OPENCLAW_GATEWAY_TOKEN"
+```
+
+Then return to the browser and click **Refresh** or **Connect** again.
 
 ### Logs
 
@@ -249,6 +275,49 @@ fly ssh console
 The gateway is binding to `127.0.0.1` instead of `0.0.0.0`.
 
 **Fix:** Add `--bind lan` to your process command in `fly.toml`.
+
+### "non-loopback Control UI requires gateway.controlUi.allowedOrigins"
+
+The gateway is public, but the Control UI origin is not explicitly allowed.
+
+**Fix:** In `/data/openclaw.json`, set:
+
+```json
+{
+  "gateway": {
+    "controlUi": {
+      "allowedOrigins": ["https://my-openclaw.fly.dev"]
+    }
+  }
+}
+```
+
+Then restart the machine.
+
+### "unauthorized: gateway token missing"
+
+The browser UI does not have a token yet.
+
+**Fix:**
+
+1. Open the app URL.
+2. Go to **Overview**.
+3. Paste `OPENCLAW_GATEWAY_TOKEN` into **Gateway Access → Gateway Token**.
+4. Click **Connect**.
+
+### "pairing required"
+
+The browser/device is authenticated but still needs one-time approval.
+
+**Fix:**
+
+```bash
+fly ssh console -a my-openclaw
+openclaw devices list --url ws://127.0.0.1:3000 --token "$OPENCLAW_GATEWAY_TOKEN"
+openclaw devices approve --latest --url ws://127.0.0.1:3000 --token "$OPENCLAW_GATEWAY_TOKEN"
+```
+
+**Tip:** If you pass `--url`, also pass `--token` explicitly.
 
 ### Health checks failing / connection refused
 
