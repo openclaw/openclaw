@@ -1,5 +1,6 @@
 import { lookup as dnsLookupCb, type LookupAddress } from "node:dns";
 import { lookup as dnsLookup } from "node:dns/promises";
+import * as net from "node:net";
 import { Agent, EnvHttpProxyAgent, ProxyAgent, type Dispatcher } from "undici";
 import {
   extractEmbeddedIpv4FromIpv6,
@@ -345,11 +346,49 @@ export async function resolvePinnedHostname(
   return await resolvePinnedHostnameWithPolicy(hostname, { lookupFn });
 }
 
+function resolveProcessAutoSelectFamily(): boolean | undefined {
+  if (typeof net.getDefaultAutoSelectFamily !== "function") {
+    return undefined;
+  }
+  try {
+    return net.getDefaultAutoSelectFamily();
+  } catch {
+    return undefined;
+  }
+}
+
+function resolveProcessAutoSelectFamilyAttemptTimeout(): number | undefined {
+  if (typeof net.getDefaultAutoSelectFamilyAttemptTimeout !== "function") {
+    return undefined;
+  }
+  try {
+    return net.getDefaultAutoSelectFamilyAttemptTimeout();
+  } catch {
+    return undefined;
+  }
+}
+
 function withPinnedLookup(
   lookup: PinnedHostname["lookup"],
   connect?: Record<string, unknown>,
 ): Record<string, unknown> {
-  return connect ? { ...connect, lookup } : { lookup };
+  const processAutoSelectFamily = resolveProcessAutoSelectFamily();
+  const processAttemptTimeout = resolveProcessAutoSelectFamilyAttemptTimeout();
+
+  // Only apply defaults when process-level autoSelectFamily is enabled.
+  // Respect both autoSelectFamily and autoSelectFamilyAttemptTimeout from:
+  // - Node.js defaults (true on Node 22+, 250ms default timeout)
+  // - CLI flags: --no-network-family-autoselection, --network-family-autoselection-attempt-timeout
+  // - API calls: net.setDefaultAutoSelectFamily(), net.setDefaultAutoSelectFamilyAttemptTimeout()
+  const defaultConnect: Record<string, unknown> =
+    processAutoSelectFamily === true
+      ? {
+          autoSelectFamilyAttemptTimeout: processAttemptTimeout ?? 300,
+        }
+      : {};
+
+  const mergedConnect = connect ? { ...defaultConnect, ...connect } : defaultConnect;
+  return { ...mergedConnect, lookup };
 }
 
 export function createPinnedDispatcher(
