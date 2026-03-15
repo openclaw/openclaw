@@ -529,9 +529,37 @@ function resolveModelOverrideValue(state: AppViewState): string {
     return "";
   }
   // No local override recorded yet — fall back to server data.
+  // Build the full provider/model reference so it matches catalog option values.
   const activeRow = resolveActiveSessionRow(state);
   if (activeRow) {
-    return typeof activeRow.model === "string" ? activeRow.model.trim() : "";
+    const model = typeof activeRow.model === "string" ? activeRow.model.trim() : "";
+    const provider =
+      typeof activeRow.modelProvider === "string" ? activeRow.modelProvider.trim() : "";
+    if (model && provider) {
+      const firstSegment = model.split("/")[0];
+      if (!model.includes("/") || firstSegment !== provider) {
+        return `${provider}/${model}`;
+      }
+    }
+    // modelProvider absent — scan the catalog to infer provider so the
+    // returned value matches the `provider/model` option values that
+    // buildChatModelOptions now emits.  Without this, legacy sessions that
+    // the server returns without modelProvider would silently fall back to
+    // the "Default model" placeholder because no bare-id option exists.
+    if (model) {
+      const catalog = state.chatModelCatalog ?? [];
+      const match = catalog.find(
+        (entry) => entry.id === model || `${entry.provider}/${entry.id}` === model,
+      );
+      if (match?.provider) {
+        const inferredProvider = match.provider.trim();
+        const firstSegment = model.split("/")[0];
+        if (!model.includes("/") || firstSegment !== inferredProvider) {
+          return `${inferredProvider}/${model}`;
+        }
+      }
+      return model;
+    }
   }
   return "";
 }
@@ -563,14 +591,31 @@ function buildChatModelOptions(
 
   for (const entry of catalog) {
     const provider = entry.provider?.trim();
-    addOption(entry.id, provider ? `${entry.id} · ${provider}` : entry.id);
+    // Use the full provider/model-id as the option value so the correct
+    // provider is always sent to sessions.patch — never assembled from stale
+    // UI state.  The label keeps the human-readable model name up front.
+    const fullId =
+      provider && !entry.id.startsWith(`${provider}/`) ? `${provider}/${entry.id}` : entry.id;
+    addOption(fullId, provider ? `${entry.id} · ${provider}` : entry.id);
   }
 
   if (currentOverride) {
     addOption(currentOverride);
   }
   if (defaultModel) {
-    addOption(defaultModel);
+    // Qualify the default model value using the catalog so it matches the
+    // provider/model-id format of the catalog options above.  Without this,
+    // an OpenRouter default like `anthropic/claude-…` (provider=openrouter)
+    // would be added as a bare `anthropic/claude-…` option, reintroducing
+    // an ambiguous value that the gateway would reject as "model not allowed".
+    const defaultMatch = catalog.find(
+      (entry) => entry.id === defaultModel || `${entry.provider}/${entry.id}` === defaultModel,
+    );
+    const qualifiedDefault =
+      defaultMatch?.provider && !defaultModel.startsWith(`${defaultMatch.provider}/`)
+        ? `${defaultMatch.provider}/${defaultModel}`
+        : defaultModel;
+    addOption(qualifiedDefault);
   }
   return options;
 }
