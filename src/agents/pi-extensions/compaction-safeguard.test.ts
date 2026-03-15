@@ -40,6 +40,9 @@ const {
   computeAdaptiveChunkRatio,
   isOversizedForSummary,
   readWorkspaceContextForSummary,
+  isRealConversationMessage,
+  hasMeaningfulText,
+  hasNearbyMeaningfulUserMessage,
   BASE_CHUNK_RATIO,
   MIN_CHUNK_RATIO,
   SAFETY_MARGIN,
@@ -1582,4 +1585,232 @@ describe("readWorkspaceContextForSummary", () => {
       });
     },
   );
+});
+
+// ---------------------------------------------------------------------------
+// isRealConversationMessage — content-aware checks (issue #40727)
+// ---------------------------------------------------------------------------
+
+describe("isRealConversationMessage", () => {
+  it("accepts a user message with meaningful text", () => {
+    const msg = castAgentMessage({ role: "user", content: "Fix the bug", timestamp: 0 });
+    expect(isRealConversationMessage(msg)).toBe(true);
+  });
+
+  it("accepts an assistant message with meaningful text", () => {
+    const msg = castAgentMessage({
+      role: "assistant",
+      content: [{ type: "text", text: "Here is the fix" }],
+      timestamp: 0,
+    });
+    expect(isRealConversationMessage(msg)).toBe(true);
+  });
+
+  it("rejects a user message with empty content", () => {
+    const msg = castAgentMessage({ role: "user", content: "", timestamp: 0 });
+    expect(isRealConversationMessage(msg)).toBe(false);
+  });
+
+  it("rejects an assistant message that is only HEARTBEAT_OK", () => {
+    const msg = castAgentMessage({
+      role: "assistant",
+      content: "HEARTBEAT_OK",
+      timestamp: 0,
+    });
+    expect(isRealConversationMessage(msg)).toBe(false);
+  });
+
+  it("rejects an assistant message that is only NO_REPLY", () => {
+    const msg = castAgentMessage({
+      role: "assistant",
+      content: "NO_REPLY",
+      timestamp: 0,
+    });
+    expect(isRealConversationMessage(msg)).toBe(false);
+  });
+
+  it("rejects a user message with only whitespace", () => {
+    const msg = castAgentMessage({ role: "user", content: "   \n  ", timestamp: 0 });
+    expect(isRealConversationMessage(msg)).toBe(false);
+  });
+
+  it("accepts an assistant message with HEARTBEAT_OK embedded in real text", () => {
+    const msg = castAgentMessage({
+      role: "assistant",
+      content: "Status: HEARTBEAT_OK — also deployed v2",
+      timestamp: 0,
+    });
+    expect(isRealConversationMessage(msg)).toBe(true);
+  });
+
+  it("rejects a system message", () => {
+    const msg = castAgentMessage({ role: "system", content: "You are helpful", timestamp: 0 });
+    expect(isRealConversationMessage(msg)).toBe(false);
+  });
+
+  it("accepts a toolResult when no window is provided (conservative)", () => {
+    const msg = castAgentMessage({
+      role: "toolResult",
+      toolCallId: "tc1",
+      toolName: "read_file",
+      content: "file contents",
+      isError: false,
+      timestamp: 0,
+    });
+    expect(isRealConversationMessage(msg)).toBe(true);
+  });
+
+  it("accepts a toolResult with a nearby meaningful user message", () => {
+    const window: AgentMessage[] = [
+      castAgentMessage({ role: "user", content: "Please read main.ts", timestamp: 0 }),
+      castAgentMessage({
+        role: "assistant",
+        content: [{ type: "text", text: "Reading..." }],
+        timestamp: 0,
+      }),
+      castAgentMessage({
+        role: "toolResult",
+        toolCallId: "tc1",
+        toolName: "read_file",
+        content: "file data",
+        isError: false,
+        timestamp: 0,
+      }),
+    ];
+    expect(isRealConversationMessage(window[2], window, 2)).toBe(true);
+  });
+
+  it("rejects a toolResult when nearby user messages are heartbeat-only", () => {
+    const window: AgentMessage[] = [
+      castAgentMessage({ role: "user", content: "", timestamp: 0 }),
+      castAgentMessage({
+        role: "assistant",
+        content: "HEARTBEAT_OK",
+        timestamp: 0,
+      }),
+      castAgentMessage({
+        role: "toolResult",
+        toolCallId: "tc1",
+        toolName: "heartbeat_check",
+        content: "ok",
+        isError: false,
+        timestamp: 0,
+      }),
+    ];
+    expect(isRealConversationMessage(window[2], window, 2)).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// hasMeaningfulText
+// ---------------------------------------------------------------------------
+
+describe("hasMeaningfulText", () => {
+  it("returns true for normal text", () => {
+    const msg = castAgentMessage({ role: "user", content: "Hello world", timestamp: 0 });
+    expect(hasMeaningfulText(msg)).toBe(true);
+  });
+
+  it("returns false for empty string", () => {
+    const msg = castAgentMessage({ role: "user", content: "", timestamp: 0 });
+    expect(hasMeaningfulText(msg)).toBe(false);
+  });
+
+  it("returns false for HEARTBEAT_OK only", () => {
+    const msg = castAgentMessage({ role: "assistant", content: "HEARTBEAT_OK", timestamp: 0 });
+    expect(hasMeaningfulText(msg)).toBe(false);
+  });
+
+  it("returns false for NO_REPLY only", () => {
+    const msg = castAgentMessage({ role: "assistant", content: "NO_REPLY", timestamp: 0 });
+    expect(hasMeaningfulText(msg)).toBe(false);
+  });
+
+  it("returns true when boilerplate is mixed with real text", () => {
+    const msg = castAgentMessage({
+      role: "assistant",
+      content: "Done. NO_REPLY",
+      timestamp: 0,
+    });
+    expect(hasMeaningfulText(msg)).toBe(true);
+  });
+
+  it("returns false for array content with no text blocks", () => {
+    const msg = castAgentMessage({
+      role: "assistant",
+      content: [{ type: "image", source: "data" }],
+      timestamp: 0,
+    });
+    expect(hasMeaningfulText(msg)).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// hasNearbyMeaningfulUserMessage
+// ---------------------------------------------------------------------------
+
+describe("hasNearbyMeaningfulUserMessage", () => {
+  it("finds a meaningful user message within lookback window", () => {
+    const window: AgentMessage[] = [
+      castAgentMessage({ role: "user", content: "Do something", timestamp: 0 }),
+      castAgentMessage({ role: "assistant", content: "ok", timestamp: 0 }),
+      castAgentMessage({
+        role: "toolResult",
+        toolCallId: "tc1",
+        toolName: "x",
+        content: "y",
+        isError: false,
+        timestamp: 0,
+      }),
+    ];
+    expect(hasNearbyMeaningfulUserMessage(window, 2)).toBe(true);
+  });
+
+  it("returns false when user messages are empty", () => {
+    const window: AgentMessage[] = [
+      castAgentMessage({ role: "user", content: "", timestamp: 0 }),
+      castAgentMessage({
+        role: "toolResult",
+        toolCallId: "tc1",
+        toolName: "x",
+        content: "y",
+        isError: false,
+        timestamp: 0,
+      }),
+    ];
+    expect(hasNearbyMeaningfulUserMessage(window, 1)).toBe(false);
+  });
+
+  it("returns false when meaningful user message is beyond lookback", () => {
+    const window: AgentMessage[] = [
+      castAgentMessage({ role: "user", content: "Real message", timestamp: 0 }),
+      // 6 filler messages (beyond lookback of 5)
+      ...Array.from({ length: 6 }, () =>
+        castAgentMessage({ role: "assistant", content: "HEARTBEAT_OK", timestamp: 0 }),
+      ),
+      castAgentMessage({
+        role: "toolResult",
+        toolCallId: "tc1",
+        toolName: "x",
+        content: "y",
+        isError: false,
+        timestamp: 0,
+      }),
+    ];
+    expect(hasNearbyMeaningfulUserMessage(window, 7)).toBe(false);
+  });
+
+  it("returns false when index is 0 (no preceding messages)", () => {
+    const window: AgentMessage[] = [
+      castAgentMessage({
+        role: "toolResult",
+        toolCallId: "tc1",
+        toolName: "x",
+        content: "y",
+        isError: false,
+        timestamp: 0,
+      }),
+    ];
+    expect(hasNearbyMeaningfulUserMessage(window, 0)).toBe(false);
+  });
 });

@@ -179,8 +179,72 @@ function formatToolFailuresSection(failures: ToolFailure[]): string {
   return `\n\n## Tool Failures\n${lines.join("\n")}`;
 }
 
-function isRealConversationMessage(message: AgentMessage): boolean {
-  return message.role === "user" || message.role === "assistant" || message.role === "toolResult";
+/** Boilerplate tokens that do not represent real user/assistant conversation. */
+const BOILERPLATE_TOKENS = new Set(["HEARTBEAT_OK", "NO_REPLY"]);
+
+/**
+ * Returns `true` when `message` represents genuine conversation content that
+ * justifies keeping a compaction window.
+ *
+ * The old implementation only checked `role`, which let heartbeat polls
+ * (empty user content) and HEARTBEAT_OK / NO_REPLY assistant replies slip
+ * through — see issue #40727.
+ *
+ * Rules:
+ *  • user / assistant — must contain meaningful text (non-empty after trimming
+ *    boilerplate tokens).
+ *  • toolResult — only counts when a nearby user message in the same window
+ *    carries meaningful text (prevents heartbeat-only tool-use chains from
+ *    being treated as real conversation).
+ */
+function isRealConversationMessage(
+  message: AgentMessage,
+  window?: AgentMessage[],
+  index?: number,
+): boolean {
+  if (message.role === "user" || message.role === "assistant") {
+    return hasMeaningfulText(message);
+  }
+  if (message.role === "toolResult") {
+    // Without a surrounding window we cannot verify context — be conservative
+    // and accept the message.
+    if (!window || index === undefined) {
+      return true;
+    }
+    return hasNearbyMeaningfulUserMessage(window, index);
+  }
+  return false;
+}
+
+/** Check whether a message carries non-boilerplate text content. */
+function hasMeaningfulText(message: AgentMessage): boolean {
+  const text = extractMessageText(message);
+  if (text.length === 0) {
+    return false;
+  }
+  // Strip known boilerplate tokens and see if anything remains.
+  let stripped = text;
+  for (const token of BOILERPLATE_TOKENS) {
+    stripped = stripped.replaceAll(token, "");
+  }
+  return stripped.trim().length > 0;
+}
+
+/**
+ * Scan backwards (up to 5 messages) from `index` looking for a user message
+ * that contains meaningful text.  This lets tool-result messages inherit
+ * "realness" from the user turn that triggered them.
+ */
+function hasNearbyMeaningfulUserMessage(window: AgentMessage[], index: number): boolean {
+  const lookback = 5;
+  const start = Math.max(0, index - lookback);
+  for (let i = index - 1; i >= start; i--) {
+    const msg = window[i];
+    if (msg.role === "user" && hasMeaningfulText(msg)) {
+      return true;
+    }
+  }
+  return false;
 }
 
 function computeFileLists(fileOps: FileOperations): {
@@ -702,7 +766,8 @@ async function readWorkspaceContextForSummary(): Promise<string> {
 export default function compactionSafeguardExtension(api: ExtensionAPI): void {
   api.on("session_before_compact", async (event, ctx) => {
     const { preparation, customInstructions: eventInstructions, signal } = event;
-    if (!preparation.messagesToSummarize.some(isRealConversationMessage)) {
+    const allMessages = [...preparation.turnPrefixMessages, ...preparation.messagesToSummarize];
+    if (!allMessages.some((msg, idx, arr) => isRealConversationMessage(msg, arr, idx))) {
       log.warn(
         "Compaction safeguard: cancelling compaction with no real conversation messages to summarize.",
       );
@@ -1005,6 +1070,9 @@ export const __testing = {
   computeAdaptiveChunkRatio,
   isOversizedForSummary,
   readWorkspaceContextForSummary,
+  isRealConversationMessage,
+  hasMeaningfulText,
+  hasNearbyMeaningfulUserMessage,
   BASE_CHUNK_RATIO,
   MIN_CHUNK_RATIO,
   SAFETY_MARGIN,
