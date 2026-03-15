@@ -562,8 +562,14 @@ function buildChatModelOptions(
   };
 
   for (const entry of catalog) {
-    const provider = entry.provider?.trim();
-    addOption(entry.id, provider ? `${entry.id} · ${provider}` : entry.id);
+    const provider = entry.provider?.trim() ?? "";
+    const id = entry.id?.trim() ?? "";
+    if (!id) {
+      continue;
+    }
+    const value = id.includes("/") ? id : provider ? `${provider}/${id}` : id;
+    const labelId = id.includes("/") ? id.split("/").slice(1).join("/") : id;
+    addOption(value, provider ? `${labelId} · ${provider}` : labelId);
   }
 
   if (currentOverride) {
