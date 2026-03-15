@@ -612,6 +612,7 @@ describe("Agent-specific tool filtering", () => {
       tools: {
         deny: ["process"],
         exec: {
+          host: "gateway",
           security: "full",
           ask: "off",
         },
@@ -636,7 +637,7 @@ describe("Agent-specific tool filtering", () => {
     expect(resultDetails?.status).toBe("completed");
   });
 
-  it("keeps sandbox as the implicit exec host default without forcing gateway approvals", async () => {
+  it("fails closed when the implicit exec host resolves to sandbox without sandbox runtime", async () => {
     const tools = createOpenClawCodingTools({
       config: {},
       sessionKey: "agent:main:main",
@@ -646,11 +647,11 @@ describe("Agent-specific tool filtering", () => {
     const execTool = tools.find((tool) => tool.name === "exec");
     expect(execTool).toBeDefined();
 
-    const result = await execTool!.execute("call-implicit-sandbox-default", {
-      command: "echo done",
-    });
-    const details = result?.details as { status?: string } | undefined;
-    expect(details?.status).toBe("completed");
+    await expect(
+      execTool!.execute("call-implicit-sandbox-default", {
+        command: "echo done",
+      }),
+    ).rejects.toThrow("exec host resolves to sandbox");
 
     await expect(
       execTool!.execute("call-implicit-sandbox-gateway", {
@@ -674,7 +675,7 @@ describe("Agent-specific tool filtering", () => {
         command: "echo done",
         host: "sandbox",
       }),
-    ).rejects.toThrow("exec host=sandbox is configured");
+    ).rejects.toThrow("exec host resolves to sandbox");
   });
 
   it("should apply agent-specific exec host defaults over global defaults", async () => {
@@ -717,14 +718,14 @@ describe("Agent-specific tool filtering", () => {
         command: "echo done",
         yieldMs: 1000,
       }),
-    ).rejects.toThrow("exec host=sandbox is configured");
+    ).rejects.toThrow("exec host resolves to sandbox");
     await expect(
       helperExecTool!.execute("call-helper", {
         command: "echo done",
         host: "sandbox",
         yieldMs: 1000,
       }),
-    ).rejects.toThrow("exec host=sandbox is configured");
+    ).rejects.toThrow("exec host resolves to sandbox");
   });
 
   it("applies explicit agentId exec defaults when sessionKey is opaque", async () => {
