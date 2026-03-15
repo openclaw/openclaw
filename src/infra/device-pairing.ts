@@ -78,6 +78,16 @@ type DevicePairingStateFile = {
 
 const PENDING_TTL_MS = 5 * 60 * 1000;
 
+export type ApproveDevicePairingResult =
+  | { status: "approved"; requestId: string; device: PairedDevice }
+  | { status: "forbidden"; missingScope: string }
+  | null;
+
+type ApprovedDevicePairingResult = Extract<
+  NonNullable<ApproveDevicePairingResult>,
+  { status: "approved" }
+>;
+
 const withLock = createAsyncLock();
 
 async function loadState(baseDir?: string): Promise<DevicePairingStateFile> {
@@ -302,15 +312,59 @@ export async function requestDevicePairing(
   });
 }
 
+function resolveMissingRequestedScope(params: {
+  role: string;
+  requestedScopes: readonly string[];
+  callerScopes: readonly string[];
+}): string | null {
+  for (const scope of params.requestedScopes) {
+    if (
+      !roleScopesAllow({
+        role: params.role,
+        requestedScopes: [scope],
+        allowedScopes: params.callerScopes,
+      })
+    ) {
+      return scope;
+    }
+  }
+  return null;
+}
+
 export async function approveDevicePairing(
   requestId: string,
   baseDir?: string,
-): Promise<{ requestId: string; device: PairedDevice } | null> {
+): Promise<ApprovedDevicePairingResult | null>;
+export async function approveDevicePairing(
+  requestId: string,
+  options: { callerScopes?: readonly string[] },
+  baseDir?: string,
+): Promise<ApproveDevicePairingResult>;
+export async function approveDevicePairing(
+  requestId: string,
+  optionsOrBaseDir?: { callerScopes?: readonly string[] } | string,
+  maybeBaseDir?: string,
+): Promise<ApproveDevicePairingResult> {
+  const options =
+    typeof optionsOrBaseDir === "string" || optionsOrBaseDir === undefined
+      ? undefined
+      : optionsOrBaseDir;
+  const baseDir = typeof optionsOrBaseDir === "string" ? optionsOrBaseDir : maybeBaseDir;
   return await withLock(async () => {
     const state = await loadState(baseDir);
     const pending = state.pendingById[requestId];
     if (!pending) {
       return null;
+    }
+    if (pending.role && options?.callerScopes) {
+      const missingScope = resolveMissingRequestedScope({
+        role: pending.role,
+        requestedScopes: normalizeDeviceAuthScopes(pending.scopes),
+        callerScopes: options.callerScopes,
+      });
+      if (missingScope) {
+        return { status: "forbidden", missingScope };
+      }
     }
     const now = Date.now();
     const existing = state.pairedByDeviceId[pending.deviceId];
@@ -364,7 +418,7 @@ export async function approveDevicePairing(
     delete state.pendingById[requestId];
     state.pairedByDeviceId[device.deviceId] = device;
     await persistState(state, baseDir);
-    return { requestId, device };
+    return { status: "approved" as const, requestId, device };
   });
 }
 
