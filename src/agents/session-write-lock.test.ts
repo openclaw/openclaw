@@ -151,6 +151,25 @@ describe("acquireSessionWriteLock", () => {
     }
   });
 
+  it("immediately reclaims a recent lock held by a dead process", async () => {
+    await withTempSessionLockFile(async ({ sessionFile, lockPath }) => {
+      // Write a lock with a dead PID and a very recent timestamp.
+      // Use a high staleMs so age-based reclaim does NOT trigger — only
+      // the dead-PID check should cause reclamation.
+      await fs.writeFile(
+        lockPath,
+        JSON.stringify({ pid: 99999999, createdAt: new Date().toISOString() }),
+        "utf8",
+      );
+
+      await expectCurrentPidOwnsLock({
+        sessionFile,
+        timeoutMs: 2000,
+        staleMs: 30 * 60 * 1000,
+      });
+    });
+  });
+
   it("does not reclaim fresh malformed lock files during contention", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-lock-"));
     try {

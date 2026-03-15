@@ -522,6 +522,15 @@ export async function acquireSessionWriteLock(params: {
         throw err;
       }
       const payload = await readLockPayload(lockPath);
+
+      // Fast path: if the stored PID is confirmed dead, immediately reclaim
+      // the stale lock without further inspection. This handles the common
+      // case where the previous lock holder crashed or was killed (SIGKILL).
+      if (payload?.pid != null && payload.pid > 0 && !isPidAlive(payload.pid)) {
+        await fs.rm(lockPath, { force: true });
+        continue;
+      }
+
       const nowMs = Date.now();
       const inspected = inspectLockPayload(payload, staleMs, nowMs);
       const orphanSelfLock = shouldTreatAsOrphanSelfLock({
