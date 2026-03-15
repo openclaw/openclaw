@@ -65,13 +65,40 @@ const INBOUND_MEDIA_PATH_SEGMENT = "media/inbound";
  * correctly classified as inbound (see #11207 P1 review).
  */
 export function isInboundMediaPath(filePath: string): boolean {
+  // Strip path aliases that the read pipeline resolves to workspace paths
+  // before the inbound check so that alias forms like
+  //   @/workspace/media/inbound/payload.txt
+  //   file:///workspace/media/inbound/payload.txt
+  // are classified identically to their canonical equivalents.
+  // This mirrors the alias-stripping done in sandbox-paths.ts
+  // (normalizeAtPrefix / mapContainerWorkspaceFileUrl).
+  let candidate = filePath;
+  // Strip leading "@" prefix (e.g. @/workspace/... → /workspace/...)
+  if (candidate.startsWith("@")) {
+    candidate = candidate.slice(1);
+  }
+  // Strip file:// URL scheme for sandbox container paths (/workspace/...)
+  // Only strip when the URL pathname starts with /workspace/ so that
+  // arbitrary file:// URLs pointing outside the sandbox are not silently
+  // reclassified.
+  if (/^file:\/\//i.test(candidate)) {
+    try {
+      const parsed = new URL(candidate);
+      const pathname = decodeURIComponent(parsed.pathname).replace(/\\/g, "/");
+      if (pathname === "/workspace" || pathname.startsWith("/workspace/")) {
+        candidate = pathname;
+      }
+    } catch {
+      // Malformed URL — fall through with the original string.
+    }
+  }
   // Normalise: convert backslashes, then collapse redundant separators /
   // and resolve . / .. segments so that equivalent paths are treated
   // identically regardless of how the caller constructed the string.
   // Case-fold after normalisation so that mixed-case paths like
   // MEDIA/INBOUND/file.txt are correctly classified on case-insensitive
   // filesystems (macOS, Windows) where they resolve to the same file.
-  const posix = filePath.replace(/\\/g, "/");
+  const posix = candidate.replace(/\\/g, "/");
   const normalized = path.posix.normalize(posix).toLowerCase();
   // Relative path: media/inbound is the first directory segment.
   if (

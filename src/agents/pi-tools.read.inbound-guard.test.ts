@@ -79,6 +79,30 @@ describe("isInboundMediaPath", () => {
     expect(isInboundMediaPath("/workspace/MEDIA/INBOUND/file.txt")).toBe(true);
     expect(isInboundMediaPath("C:\\workspace\\MEDIA\\INBOUND\\file.txt")).toBe(true);
   });
+
+  it("classifies @-prefixed alias paths as inbound (regression #11207 P1 alias)", () => {
+    // The read pipeline strips the leading "@" before resolving paths
+    // (normalizeAtPrefix in sandbox-paths.ts).  isInboundMediaPath must apply
+    // the same stripping so that alias forms cannot bypass the inbound guard.
+    expect(isInboundMediaPath("@/workspace/media/inbound/payload.txt")).toBe(true);
+    expect(isInboundMediaPath("@/workspace/media/inbound/subdir/file.txt")).toBe(true);
+    // Non-inbound @-prefixed paths must not be misclassified.
+    expect(isInboundMediaPath("@/workspace/AGENTS.md")).toBe(false);
+  });
+
+  it("classifies file:// URL alias paths as inbound (regression #11207 P1 alias)", () => {
+    // The read pipeline resolves file:///workspace/... URLs to their container
+    // path equivalents (mapContainerWorkspaceFileUrl in sandbox-paths.ts).
+    // isInboundMediaPath must apply the same resolution so that file:// aliases
+    // cannot bypass the inbound guard.
+    expect(isInboundMediaPath("file:///workspace/media/inbound/payload.txt")).toBe(true);
+    expect(isInboundMediaPath("file:///workspace/media/inbound/subdir/file.txt")).toBe(true);
+    // file:// URLs pointing outside /workspace must not be reclassified.
+    expect(isInboundMediaPath("file:///etc/passwd")).toBe(false);
+    expect(isInboundMediaPath("file:///home/user/media/inbound/file.txt")).toBe(false);
+    // Non-inbound file:// workspace URLs must not be misclassified.
+    expect(isInboundMediaPath("file:///workspace/AGENTS.md")).toBe(false);
+  });
 });
 
 // ---------------------------------------------------------------------------
