@@ -326,6 +326,20 @@ describe("VoiceCallWebhookServer start idempotency", () => {
     }
   });
 
+  it("supports concurrent start() calls without double-binding the port", async () => {
+    const { manager } = createManager([]);
+    const config = createConfig({ serve: { port: 0, bind: "127.0.0.1", path: "/voice/webhook" } });
+    const server = new VoiceCallWebhookServer(config, manager, provider);
+
+    try {
+      const [firstUrl, secondUrl] = await Promise.all([server.start(), server.start()]);
+      expect(firstUrl).toContain("/voice/webhook");
+      expect(secondUrl).toBe(firstUrl);
+    } finally {
+      await server.stop();
+    }
+  });
+
   it("can start again after stop()", async () => {
     const { manager } = createManager([]);
     const config = createConfig({ serve: { port: 0, bind: "127.0.0.1", path: "/voice/webhook" } });
