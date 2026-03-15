@@ -65,6 +65,27 @@ describe("resolveAcpClientSpawnEnv", () => {
     expect(env.OPENCLAW_SHELL).toBe("acp-client");
   });
 
+  it("preserves runtime PATH updates when preserveRuntimeKeys is provided", () => {
+    const baseEnv: NodeJS.ProcessEnv = {
+      PATH: "/snapshot/bin",
+      USER: "openclaw",
+    };
+    const runtimeEnv: NodeJS.ProcessEnv = {
+      PATH: "/runtime/bin",
+      PATHEXT: ".CMD;.EXE",
+    };
+
+    const env = resolveAcpClientSpawnEnv(baseEnv, {
+      preserveRuntimeKeys: ["PATH", "PATHEXT"],
+      runtimeEnv,
+    });
+
+    expect(env.PATH).toBe("/runtime/bin");
+    expect(env.PATHEXT).toBe(".CMD;.EXE");
+    expect(env.USER).toBe("openclaw");
+    expect(baseEnv.PATH).toBe("/snapshot/bin");
+  });
+
   it("strips skill-injected env keys when stripKeys is provided", () => {
     const openAiApiKeyEnv = envVar("OPENAI", "API", "KEY");
     const elevenLabsApiKeyEnv = envVar("ELEVENLABS", "API", "KEY");
