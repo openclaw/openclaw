@@ -279,6 +279,7 @@ export default function MemoryDebugPage() {
   // Fetch memory status on mount
   useEffect(() => {
     void fetchStatus();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const fetchStatus = useCallback(async () => {
@@ -666,7 +667,7 @@ export default function MemoryDebugPage() {
 
           {chunks.length === 0 ? (
             <div style={s.callout("info")}>
-              No chunks found. Click "List Chunks" to load or ensure memory files exist.
+              No chunks found. Click &quot;List Chunks&quot; to load or ensure memory files exist.
             </div>
           ) : (
             <div style={{ overflow: "auto" }}>
@@ -730,6 +731,7 @@ export default function MemoryDebugPage() {
                 onChange={(e) => setSearchQuery(e.target.value)}
                 onKeyDown={(e) => e.key === "Enter" && runSearch()}
                 placeholder="Enter search query..."
+                // eslint-disable-next-line react/no-unescaped-entities
                 style={{ ...s.input, flex: 1 }}
               />
               <button
@@ -817,7 +819,7 @@ export default function MemoryDebugPage() {
           )}
 
           {searchResults.length === 0 && searchQuery && !searching && (
-            <div style={s.callout("info")}>No results found for "{searchQuery}"</div>
+            <div style={s.callout("info")}>No results found for &quot;{searchQuery}&quot;</div>
           )}
         </>
       )}
