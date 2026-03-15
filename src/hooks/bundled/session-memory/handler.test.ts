@@ -250,6 +250,38 @@ describe("session-memory hook", () => {
     expect(memoryContent).toContain("assistant: Captured before reset");
   });
 
+  it("creates memory file on session:archived event", async () => {
+    const tempDir = await createCaseWorkspace("workspace");
+    const sessionsDir = path.join(tempDir, "sessions");
+    await fs.mkdir(sessionsDir, { recursive: true });
+
+    const sessionFile = await writeWorkspaceFile({
+      dir: sessionsDir,
+      name: "archived-session.jsonl",
+      content: createMockSessionContent([
+        { role: "user", content: "Chat via Feishu" },
+        { role: "assistant", content: "Session about to be archived" },
+      ]),
+    });
+
+    const event = createHookEvent("session", "archived", "agent:main:main", {
+      cfg: {
+        agents: { defaults: { workspace: tempDir } },
+      } satisfies OpenClawConfig,
+      sessionEntry: { sessionId: "archived-session", sessionFile },
+      previousSessionEntry: { sessionId: "archived-session", sessionFile },
+    });
+
+    await handler(event);
+
+    const memoryDir = path.join(tempDir, "memory");
+    const files = await fs.readdir(memoryDir);
+    expect(files.length).toBe(1);
+    const memoryContent = await fs.readFile(path.join(memoryDir, files[0]), "utf-8");
+    expect(memoryContent).toContain("user: Chat via Feishu");
+    expect(memoryContent).toContain("assistant: Session about to be archived");
+  });
+
   it("prefers workspaceDir from hook context when sessionKey points at main", async () => {
     const mainWorkspace = await createCaseWorkspace("workspace-main");
     const naviWorkspace = await createCaseWorkspace("workspace-navi");
