@@ -241,6 +241,13 @@ function cleanSchemaForGeminiWithDefs(
       const result: Record<string, unknown> = {
         ...(cleaned as Record<string, unknown>),
       };
+
+      for (const [key, value] of Object.entries(obj)) {
+        if (key !== "$ref" && value !== undefined) {
+          result[key] = value;
+        }
+      }
+
       copySchemaMeta(obj, result);
       return result;
     }
