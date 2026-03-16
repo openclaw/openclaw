@@ -171,9 +171,7 @@
       "location": "[parameters('location')]",
       "properties": {
         "addressSpace": {
-          "addressPrefixes": [
-            "[parameters('vnetAddressPrefix')]"
-          ]
+          "addressPrefixes": ["[parameters('vnetAddressPrefix')]"]
         },
         "subnets": [
           {
@@ -243,9 +241,7 @@
       "apiVersion": "2023-11-01",
       "name": "[parameters('nicName')]",
       "location": "[parameters('location')]",
-      "dependsOn": [
-        "[resourceId('Microsoft.Network/virtualNetworks', parameters('vnetName'))]"
-      ],
+      "dependsOn": ["[resourceId('Microsoft.Network/virtualNetworks', parameters('vnetName'))]"],
       "properties": {
         "ipConfigurations": [
           {
@@ -265,9 +261,7 @@
       "apiVersion": "2023-09-01",
       "name": "[parameters('vmName')]",
       "location": "[parameters('location')]",
-      "dependsOn": [
-        "[resourceId('Microsoft.Network/networkInterfaces', parameters('nicName'))]"
-      ],
+      "dependsOn": ["[resourceId('Microsoft.Network/networkInterfaces', parameters('nicName'))]"],
       "properties": {
         "hardwareProfile": {
           "vmSize": "[parameters('vmSize')]"
