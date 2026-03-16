@@ -16,6 +16,7 @@ type SecurityAuditOptions = {
   deep?: boolean;
   fix?: boolean;
   token?: string;
+  password?: string;
 };
 
 function formatSummary(summary: { critical: number; warn: number; info: number }): string {
@@ -41,6 +42,10 @@ export function registerSecurityCli(program: Command) {
           ["openclaw security audit", "Run a local security audit."],
           ["openclaw security audit --deep", "Include best-effort live Gateway probe checks."],
           ["openclaw security audit --deep --token <token>", "Use explicit token for deep probe."],
+          [
+            "openclaw security audit --deep --password <password>",
+            "Use explicit password for deep probe.",
+          ],
           ["openclaw security audit --fix", "Apply safe remediations and file-permission fixes."],
           ["openclaw security audit --json", "Output machine-readable JSON."],
         ])}\n\n${theme.muted("Docs:")} ${formatDocsLink("/cli/security", "docs.openclaw.ai/cli/security")}\n`,
@@ -51,6 +56,7 @@ export function registerSecurityCli(program: Command) {
     .description("Audit config + local state for common security foot-guns")
     .option("--deep", "Attempt live Gateway probe (best-effort)", false)
     .option("--token <token>", "Use explicit gateway token for deep probe auth")
+    .option("--password <password>", "Use explicit gateway password for deep probe auth")
     .option("--fix", "Apply safe fixes (tighten defaults + chmod state/config)", false)
     .option("--json", "Print JSON", false)
     .action(async (opts: SecurityAuditOptions) => {
@@ -70,7 +76,13 @@ export function registerSecurityCli(program: Command) {
         deep: Boolean(opts.deep),
         includeFilesystem: true,
         includeChannelSecurity: true,
-        deepProbeAuth: opts.token?.trim() ? { token: opts.token } : undefined,
+        deepProbeAuth:
+          opts.token?.trim() || opts.password?.trim()
+            ? {
+                ...(opts.token?.trim() ? { token: opts.token } : {}),
+                ...(opts.password?.trim() ? { password: opts.password } : {}),
+              }
+            : undefined,
       });
 
       if (opts.json) {

@@ -132,12 +132,7 @@ function shouldReportPortUsage(status: PortUsageStatus | undefined, rpcOk?: bool
 }
 
 function parseGatewaySecretRefPathFromError(error: unknown): string | null {
-  if (isGatewaySecretRefUnavailableError(error)) {
-    return error.path;
-  }
-  const message = error instanceof Error ? error.message : typeof error === "string" ? error : "";
-  const match = message.match(/([a-z0-9_.[\]-]+)\s+secret reference could not be resolved:/i);
-  return match?.[1] ?? null;
+  return isGatewaySecretRefUnavailableError(error) ? error.path : null;
 }
 
 async function loadDaemonConfigContext(

@@ -19,6 +19,8 @@ Related:
 ```bash
 openclaw security audit
 openclaw security audit --deep
+openclaw security audit --deep --password <password>
+openclaw security audit --deep --token <token>
 openclaw security audit --fix
 openclaw security audit --json
 ```
@@ -44,7 +46,7 @@ SecretRef behavior:
 
 - `security audit` resolves supported SecretRefs in read-only mode for its targeted paths.
 - If a SecretRef is unavailable in the current command path, audit continues and reports `secretDiagnostics` (instead of crashing).
-- `--token` only overrides deep-probe auth for that command invocation; it does not rewrite config or SecretRef mappings.
+- `--token` and `--password` only override deep-probe auth for that command invocation; they do not rewrite config or SecretRef mappings.
 
 ## JSON output
 

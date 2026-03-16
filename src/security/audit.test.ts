@@ -1805,11 +1805,7 @@ description: test skill
   it("warns when multiple DM senders share the main session", async () => {
     const cfg: OpenClawConfig = {
       session: { dmScope: "main" },
-      channels: {
-        whatsapp: {
-          enabled: true,
-        },
-      },
+      channels: { whatsapp: { enabled: true } },
     };
     const plugins: ChannelPlugin[] = [
       {
@@ -1982,6 +1978,40 @@ description: test skill
         ]),
       );
     });
+  });
+
+  it("adds a read-only resolution warning when channel account resolveAccount throws", async () => {
+    const plugin = stubChannelPlugin({
+      id: "zalouser",
+      label: "Zalo Personal",
+      listAccountIds: () => ["default"],
+      resolveAccount: () => {
+        throw new Error("missing SecretRef");
+      },
+    });
+
+    const cfg: OpenClawConfig = {
+      channels: {
+        zalouser: {
+          enabled: true,
+        },
+      },
+    };
+
+    const res = await runSecurityAudit({
+      config: cfg,
+      includeFilesystem: false,
+      includeChannelSecurity: true,
+      plugins: [plugin],
+    });
+
+    const finding = res.findings.find(
+      (entry) => entry.checkId === "channels.zalouser.account.read_only_resolution",
+    );
+    expect(finding?.severity).toBe("warn");
+    expect(finding?.title).toContain("could not be fully resolved");
+    expect(finding?.detail).toContain("zalouser:default: failed to resolve account");
+    expect(finding?.detail).toContain("missing SecretRef");
   });
 
   it("keeps Slack HTTP slash-command findings when resolved inspection only exposes signingSecret status", async () => {

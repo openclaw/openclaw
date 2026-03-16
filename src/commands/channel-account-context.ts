@@ -11,6 +11,10 @@ export type ChannelDefaultAccountContext = {
   enabled: boolean;
   configured: boolean;
   diagnostics: string[];
+  /**
+   * Indicates read-only resolution was used instead of strict full-account resolution.
+   * This is expected for read_only mode and does not necessarily mean an error occurred.
+   */
   degraded: boolean;
 };
 

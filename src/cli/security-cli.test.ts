@@ -165,4 +165,81 @@ describe("security CLI", () => {
       }),
     );
   });
+
+  it("forwards --password to deep probe auth without altering command-level resolver mode", async () => {
+    const sourceConfig = { gateway: { mode: "local" } };
+    loadConfig.mockReturnValue(sourceConfig);
+    resolveCommandSecretRefsViaGateway.mockResolvedValue({
+      resolvedConfig: sourceConfig,
+      diagnostics: [],
+      targetStatesByPath: {},
+      hadUnresolvedTargets: false,
+    });
+    runSecurityAudit.mockResolvedValue({
+      ts: 0,
+      summary: { critical: 0, warn: 0, info: 0 },
+      findings: [],
+    });
+
+    await createProgram().parseAsync(
+      ["security", "audit", "--deep", "--password", "explicit-password", "--json"],
+      {
+        from: "user",
+      },
+    );
+
+    expect(resolveCommandSecretRefsViaGateway).toHaveBeenCalledWith(
+      expect.objectContaining({
+        mode: "read_only_status",
+      }),
+    );
+    expect(runSecurityAudit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        deep: true,
+        deepProbeAuth: { password: "explicit-password" },
+      }),
+    );
+  });
+
+  it("forwards both --token and --password to deep probe auth", async () => {
+    const sourceConfig = { gateway: { mode: "local" } };
+    loadConfig.mockReturnValue(sourceConfig);
+    resolveCommandSecretRefsViaGateway.mockResolvedValue({
+      resolvedConfig: sourceConfig,
+      diagnostics: [],
+      targetStatesByPath: {},
+      hadUnresolvedTargets: false,
+    });
+    runSecurityAudit.mockResolvedValue({
+      ts: 0,
+      summary: { critical: 0, warn: 0, info: 0 },
+      findings: [],
+    });
+
+    await createProgram().parseAsync(
+      [
+        "security",
+        "audit",
+        "--deep",
+        "--token",
+        "explicit-token",
+        "--password",
+        "explicit-password",
+        "--json",
+      ],
+      {
+        from: "user",
+      },
+    );
+
+    expect(runSecurityAudit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        deep: true,
+        deepProbeAuth: {
+          token: "explicit-token",
+          password: "explicit-password",
+        },
+      }),
+    );
+  });
 });
