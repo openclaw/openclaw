@@ -5,7 +5,7 @@ const runConfigGetMock = vi.hoisted(() => vi.fn(async () => {}));
 const runConfigUnsetMock = vi.hoisted(() => vi.fn(async () => {}));
 const modelsListCommandMock = vi.hoisted(() => vi.fn(async () => {}));
 const modelsStatusCommandMock = vi.hoisted(() => vi.fn(async () => {}));
-const gatewayStatusCommandMock = vi.hoisted(() => vi.fn(async () => {}));
+const runDaemonStatusMock = vi.hoisted(() => vi.fn(async () => {}));
 const statusJsonCommandMock = vi.hoisted(() => vi.fn(async () => {}));
 
 vi.mock("../config-cli.js", () => ({
@@ -18,8 +18,8 @@ vi.mock("../../commands/models.js", () => ({
   modelsStatusCommand: modelsStatusCommandMock,
 }));
 
-vi.mock("../../commands/gateway-status.js", () => ({
-  gatewayStatusCommand: gatewayStatusCommandMock,
+vi.mock("../daemon-cli/status.js", () => ({
+  runDaemonStatus: runDaemonStatusMock,
 }));
 
 vi.mock("../../commands/status-json.js", () => ({
@@ -77,14 +77,24 @@ describe("program routes", () => {
       ["gateway", "status"],
       ["node", "openclaw", "gateway", "status", "--timeout"],
     );
-    await expectRunFalse(["gateway", "status"], ["node", "openclaw", "gateway", "status", "--ssh"]);
+  });
+
+  it("returns false for gateway status route when probe-only flags are present", async () => {
     await expectRunFalse(
       ["gateway", "status"],
-      ["node", "openclaw", "gateway", "status", "--ssh-identity"],
+      ["node", "openclaw", "gateway", "status", "--ssh", "user@host"],
+    );
+    await expectRunFalse(
+      ["gateway", "status"],
+      ["node", "openclaw", "gateway", "status", "--ssh-identity", "~/.ssh/id_test"],
+    );
+    await expectRunFalse(
+      ["gateway", "status"],
+      ["node", "openclaw", "gateway", "status", "--ssh-auto"],
     );
   });
 
-  it("passes parsed gateway status flags through", async () => {
+  it("passes parsed gateway status flags through to daemon status", async () => {
     const route = expectRoute(["gateway", "status"]);
     await expect(
       route?.run([
@@ -102,27 +112,43 @@ describe("program routes", () => {
         "def",
         "--timeout",
         "5000",
-        "--ssh",
-        "user@host",
-        "--ssh-identity",
-        "~/.ssh/id_test",
-        "--ssh-auto",
+        "--deep",
+        "--require-rpc",
         "--json",
       ]),
     ).resolves.toBe(true);
-    expect(gatewayStatusCommandMock).toHaveBeenCalledWith(
-      {
+    expect(runDaemonStatusMock).toHaveBeenCalledWith({
+      rpc: {
         url: "ws://127.0.0.1:18789",
         token: "abc",
         password: "def",
         timeout: "5000",
-        json: true,
-        ssh: "user@host",
-        sshIdentity: "~/.ssh/id_test",
-        sshAuto: true,
       },
-      expect.any(Object),
+      probe: true,
+      requireRpc: true,
+      deep: true,
+      json: true,
+    });
+  });
+
+  it("passes --no-probe through to daemon status", async () => {
+    const route = expectRoute(["gateway", "status"]);
+    await expect(route?.run(["node", "openclaw", "gateway", "status", "--no-probe"])).resolves.toBe(
+      true,
     );
+
+    expect(runDaemonStatusMock).toHaveBeenCalledWith({
+      rpc: {
+        url: undefined,
+        token: undefined,
+        password: undefined,
+        timeout: undefined,
+      },
+      probe: false,
+      requireRpc: false,
+      deep: false,
+      json: false,
+    });
   });
 
   it("returns false when status timeout flag value is missing", async () => {
