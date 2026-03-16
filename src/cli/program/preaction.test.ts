@@ -149,7 +149,7 @@ describe("registerPreActionHooks", () => {
       runtime: runtimeMock,
       commandPath: ["status"],
     });
-    expect(ensurePluginRegistryLoadedMock).toHaveBeenCalledTimes(1);
+    expect(ensurePluginRegistryLoadedMock).toHaveBeenCalledWith({ scope: "channels" });
     expect(process.title).toBe("openclaw-status");
 
     vi.clearAllMocks();
@@ -164,7 +164,7 @@ describe("registerPreActionHooks", () => {
       runtime: runtimeMock,
       commandPath: ["message", "send"],
     });
-    expect(ensurePluginRegistryLoadedMock).toHaveBeenCalledTimes(1);
+    expect(ensurePluginRegistryLoadedMock).toHaveBeenCalledWith({ scope: "all" });
   });
 
   it("skips help/version preaction and respects banner opt-out", async () => {
