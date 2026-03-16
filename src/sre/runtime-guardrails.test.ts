@@ -1,4 +1,6 @@
 import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   buildSreRuntimeGuardrailContext,
@@ -73,23 +75,27 @@ describe("buildSreRuntimeGuardrailContextFromTranscript", () => {
     expect(context).toContain("Resolver mismatch detected");
   });
 
-  it("allows overriding the single-vault helper path via env", () => {
-    vi.stubEnv(
-      "SINGLE_VAULT_GRAPHQL_EVIDENCE_SCRIPT_PATH",
-      "/tmp/custom-single-vault-graphql-evidence.sh",
-    );
-
+  it("allows overriding the single-vault helper path via env", async () => {
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "single-vault-helper-"));
+    const helperPath = path.join(tmpDir, "single-vault-graphql-evidence.sh");
+    await fs.writeFile(helperPath, "#!/usr/bin/env bash\n");
+    await fs.chmod(helperPath, 0o755);
+    vi.stubEnv("SINGLE_VAULT_GRAPHQL_EVIDENCE_SCRIPT_PATH", helperPath);
     const transcriptText = `
 {"type":"message","message":{"role":"assistant","content":[{"type":"text","text":"Root cause: vaultByAddress factory.chain is null"}]}}
 {"type":"message","message":{"role":"user","content":[{"type":"text","text":"This is wrong. query VaultV2ByAddress { vaultV2ByAddress(address: \\"0xE18d7f0C6aaba1E600fF680459a357C3B3CfdB34\\", chainId: 999) { apy netApy } } sentryEventId=abc123"}]}}
 `;
-    const context = buildSreRuntimeGuardrailContextFromTranscript({
-      agentId: "sre",
-      prompt: "look into this vault v2 graphql apy issue",
-      transcriptText,
-    });
+    try {
+      const context = buildSreRuntimeGuardrailContextFromTranscript({
+        agentId: "sre",
+        prompt: "look into this vault v2 graphql apy issue",
+        transcriptText,
+      });
 
-    expect(context).toContain("/tmp/custom-single-vault-graphql-evidence.sh");
+      expect(context).toContain(helperPath);
+    } finally {
+      await fs.rm(tmpDir, { recursive: true, force: true });
+    }
   });
 
   it("falls back to the default helper path for blank or relative env overrides", () => {
@@ -118,6 +124,27 @@ describe("buildSreRuntimeGuardrailContextFromTranscript", () => {
     });
 
     expect(relativeOverrideContext).toContain(
+      "/home/node/.openclaw/skills/morpho-sre/scripts/single-vault-graphql-evidence.sh",
+    );
+  });
+
+  it("falls back to the default helper path for missing absolute env overrides", () => {
+    vi.stubEnv(
+      "SINGLE_VAULT_GRAPHQL_EVIDENCE_SCRIPT_PATH",
+      path.join(os.tmpdir(), "missing-single-vault-graphql-evidence.sh"),
+    );
+
+    const transcriptText = `
+{"type":"message","message":{"role":"assistant","content":[{"type":"text","text":"Root cause: vaultByAddress factory.chain is null"}]}}
+{"type":"message","message":{"role":"user","content":[{"type":"text","text":"query VaultV2ByAddress { vaultV2ByAddress(address: \\"0xE18d7f0C6aaba1E600fF680459a357C3B3CfdB34\\", chainId: 999) { apy netApy } } sentryEventId=abc123"}]}}
+`;
+    const context = buildSreRuntimeGuardrailContextFromTranscript({
+      agentId: "sre",
+      prompt: "look into this vault v2 graphql apy issue",
+      transcriptText,
+    });
+
+    expect(context).toContain(
       "/home/node/.openclaw/skills/morpho-sre/scripts/single-vault-graphql-evidence.sh",
     );
   });

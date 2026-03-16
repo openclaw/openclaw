@@ -1,3 +1,4 @@
+import { accessSync, constants as fsConstants } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import {
@@ -57,6 +58,11 @@ function isErrnoCode(err: unknown, code: string): err is NodeJS.ErrnoException {
 function singleVaultGraphqlEvidenceScriptPath(): string {
   const envPath = process.env.SINGLE_VAULT_GRAPHQL_EVIDENCE_SCRIPT_PATH?.trim();
   if (!envPath || !path.isAbsolute(envPath)) {
+    return DEFAULT_SINGLE_VAULT_GRAPHQL_EVIDENCE_SCRIPT;
+  }
+  try {
+    accessSync(envPath, fsConstants.X_OK);
+  } catch {
     return DEFAULT_SINGLE_VAULT_GRAPHQL_EVIDENCE_SCRIPT;
   }
   return envPath;
