@@ -41,11 +41,21 @@ export async function listFeishuDirectoryPeersLive(params: {
       if (user.open_id) {
         const q = params.query?.trim().toLowerCase() || "";
         const name = user.name || "";
-        if (!q || user.open_id.toLowerCase().includes(q) || name.toLowerCase().includes(q)) {
+        const email = user.email || "";
+        const enterpriseEmail = user.enterprise_email || "";
+        if (
+          !q ||
+          user.open_id.toLowerCase().includes(q) ||
+          name.toLowerCase().includes(q) ||
+          email.toLowerCase().includes(q) ||
+          enterpriseEmail.toLowerCase().includes(q)
+        ) {
           peers.push({
             kind: "user",
             id: user.open_id,
             name: name || undefined,
+            email: email || undefined,
+            enterprise_email: enterpriseEmail || undefined,
           });
         }
       }

@@ -78,6 +78,47 @@ describe("feishu directory (config-backed)", () => {
     ]);
   });
 
+  it("returns email fields from live peer lookup and matches email queries", async () => {
+    resolveFeishuAccountMock.mockReturnValueOnce({
+      ...makeStaticAccount(),
+      configured: true,
+    });
+    createFeishuClientMock.mockReturnValueOnce({
+      contact: {
+        user: {
+          list: vi.fn(async () => ({
+            code: 0,
+            data: {
+              items: [
+                {
+                  open_id: "ou_1",
+                  name: "Alice",
+                  email: "alice@example.com",
+                  enterprise_email: "alice@corp.example.com",
+                },
+              ],
+            },
+          })),
+        },
+      },
+    });
+
+    const peers = await listFeishuDirectoryPeersLive({
+      cfg,
+      query: "corp.example.com",
+      fallbackToStatic: false,
+    });
+    expect(peers).toEqual([
+      {
+        kind: "user",
+        id: "ou_1",
+        name: "Alice",
+        email: "alice@example.com",
+        enterprise_email: "alice@corp.example.com",
+      },
+    ]);
+  });
+
   it("surfaces live peer lookup failures when fallback is disabled", async () => {
     resolveFeishuAccountMock.mockReturnValueOnce({
       ...makeStaticAccount(),

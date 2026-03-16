@@ -10,6 +10,8 @@ export type FeishuDirectoryPeer = {
   kind: "user";
   id: string;
   name?: string;
+  email?: string;
+  enterprise_email?: string;
 };
 
 export type FeishuDirectoryGroup = {
