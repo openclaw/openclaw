@@ -85,6 +85,7 @@ Docs: https://docs.openclaw.ai
 - Gateway/watch mode: recreate bundled plugin runtime metadata after clean or stale `dist` states, so `pnpm gateway:watch` no longer fails on missing `dist/extensions/*/openclaw.plugin.json` manifests after a rebuild. Thanks @gumadeiras.
 - Plugins/context engines: enforce owner-aware context-engine registration on both loader and public SDK paths so plugins cannot spoof privileged ownership, claim the core `legacy` engine id, or overwrite an existing engine id through direct SDK imports. (#47595) Thanks @vincentkoc.
 - Windows/gateway status: accept `schtasks` `Last Result` output as an alias for `Last Run Result`, so running scheduled-task installs no longer show `Runtime: unknown`. (#47844) Thanks @MoerAI.
+- Control UI/session routing: preserve established external delivery routes when webchat views or sends in externally originated sessions, so subagent completions still return to the original channel instead of the dashboard. (#47797) Thanks @brokemac79.
 
 ## 2026.3.13
 
