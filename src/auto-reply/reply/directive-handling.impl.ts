@@ -15,7 +15,7 @@ import {
   applyFutureThreadModelDefaultToSessionEntry,
   applyModelOverrideToSessionEntry,
 } from "../../sessions/model-overrides.js";
-import { resolveTelegramThreadParentSessionKey } from "../../sessions/session-key-utils.js";
+import { resolveFutureThreadParentSessionKey } from "../../sessions/session-key-utils.js";
 import { formatThinkingLevels, formatXHighModelHint, supportsXHighThinking } from "../thinking.js";
 import type { ReplyPayload } from "../types.js";
 import {
@@ -372,13 +372,14 @@ export async function handleDirectiveOnly(
       profileOverride,
     });
 
-    const telegramParentSessionKey = resolveTelegramThreadParentSessionKey({
+    const futureThreadParentSessionKey = resolveFutureThreadParentSessionKey({
       sessionKey,
+      parentSessionKey: params.parentSessionKey,
       channelHint: telegramChannelHint,
     });
-    if (telegramParentSessionKey) {
+    if (futureThreadParentSessionKey) {
       const parentEntry =
-        sessionStore[telegramParentSessionKey] ??
+        sessionStore[futureThreadParentSessionKey] ??
         ({
           sessionId: crypto.randomUUID(),
           updatedAt: Date.now(),
@@ -392,7 +393,7 @@ export async function handleDirectiveOnly(
         },
       });
       if (parentUpdated) {
-        sessionStore[telegramParentSessionKey] = parentEntry;
+        sessionStore[futureThreadParentSessionKey] = parentEntry;
       }
     }
   }
@@ -420,12 +421,13 @@ export async function handleDirectiveOnly(
   if (storePath) {
     await updateSessionStore(storePath, (store) => {
       store[sessionKey] = sessionEntry;
-      const telegramParentSessionKey = resolveTelegramThreadParentSessionKey({
+      const futureThreadParentSessionKey = resolveFutureThreadParentSessionKey({
         sessionKey,
+        parentSessionKey: params.parentSessionKey,
         channelHint: telegramChannelHint,
       });
-      if (telegramParentSessionKey && sessionStore[telegramParentSessionKey]) {
-        store[telegramParentSessionKey] = sessionStore[telegramParentSessionKey]!;
+      if (futureThreadParentSessionKey && sessionStore[futureThreadParentSessionKey]) {
+        store[futureThreadParentSessionKey] = sessionStore[futureThreadParentSessionKey]!;
       }
     });
   }
@@ -522,11 +524,17 @@ export async function handleDirectiveOnly(
         ? `Model reset to default (${labelWithAlias}).`
         : `Model set to ${labelWithAlias}.`,
     );
-    if (resolveTelegramThreadParentSessionKey({ sessionKey, channelHint: telegramChannelHint })) {
+    if (
+      resolveFutureThreadParentSessionKey({
+        sessionKey,
+        parentSessionKey: params.parentSessionKey,
+        channelHint: telegramChannelHint,
+      })
+    ) {
       parts.push(
         modelSelection.isDefault
-          ? "New Telegram threads in this chat now follow the default model."
-          : `New Telegram threads in this chat will default to ${labelWithAlias}.`,
+          ? "New threads in this chat now follow the default model."
+          : `New threads in this chat will default to ${labelWithAlias}.`,
       );
     }
     if (profileOverride) {

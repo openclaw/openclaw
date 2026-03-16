@@ -2276,3 +2276,34 @@ describe("initSessionState Telegram future-thread model defaults", () => {
     expect(result.sessionEntry.modelOverride).toBeUndefined();
   });
 });
+
+describe("initSessionState future-thread model defaults for explicit non-Telegram parents", () => {
+  it("seeds new thread sessions from explicit parent defaults", async () => {
+    const storePath = await createStorePath("discord-thread-future-model-default-");
+    const parentSessionKey = "agent:main:discord:channel:parent-123";
+    const threadSessionKey = "agent:main:discord:channel:thread-777";
+    await writeSessionStoreFast(storePath, {
+      [parentSessionKey]: {
+        sessionId: "parent-discord-thread",
+        updatedAt: Date.now(),
+        futureThreadProviderOverride: "openai-codex",
+        futureThreadModelOverride: "gpt-5.3-codex",
+      },
+    });
+
+    const cfg = { session: { store: storePath } } as OpenClawConfig;
+    const result = await initSessionState({
+      ctx: {
+        Body: "hello discord thread",
+        SessionKey: threadSessionKey,
+        ParentSessionKey: parentSessionKey,
+        Provider: "discord",
+      },
+      cfg,
+      commandAuthorized: true,
+    });
+
+    expect(result.sessionEntry.providerOverride).toBe("openai-codex");
+    expect(result.sessionEntry.modelOverride).toBe("gpt-5.3-codex");
+  });
+});

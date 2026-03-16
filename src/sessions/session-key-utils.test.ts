@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { resolveTelegramThreadParentSessionKey } from "./session-key-utils.js";
+import {
+  resolveFutureThreadParentSessionKey,
+  resolveTelegramThreadParentSessionKey,
+} from "./session-key-utils.js";
 
 describe("resolveTelegramThreadParentSessionKey", () => {
   it("returns the derived parent for Telegram forum topics", () => {
@@ -76,5 +79,50 @@ describe("resolveTelegramThreadParentSessionKey", () => {
         parentSessionKey: "agent:main:discord:channel:1",
       }),
     ).toBe("agent:main:telegram:group:-100123");
+  });
+});
+
+describe("resolveFutureThreadParentSessionKey", () => {
+  it("uses explicit parent session key for non-suffixed thread session keys", () => {
+    expect(
+      resolveFutureThreadParentSessionKey({
+        sessionKey: "agent:main:discord:channel:thread123",
+        parentSessionKey: "agent:main:discord:channel:parent456",
+      }),
+    ).toBe("agent:main:discord:channel:parent456");
+  });
+
+  it("falls back to suffix-derived parent for non-Telegram thread keys", () => {
+    expect(
+      resolveFutureThreadParentSessionKey({
+        sessionKey: "agent:main:slack:channel:c123:thread:1700000000.000100",
+      }),
+    ).toBe("agent:main:slack:channel:c123");
+  });
+
+  it("returns null for ambiguous main-scoped non-Telegram thread keys", () => {
+    expect(
+      resolveFutureThreadParentSessionKey({
+        sessionKey: "agent:main:main:thread:123456789:42",
+      }),
+    ).toBeNull();
+  });
+
+  it("returns null for explicit parent on ambiguous main-scoped non-Telegram thread keys", () => {
+    expect(
+      resolveFutureThreadParentSessionKey({
+        sessionKey: "agent:main:main:thread:123456789:42",
+        parentSessionKey: "agent:main:main",
+      }),
+    ).toBeNull();
+  });
+
+  it("keeps Telegram main-scoped thread behavior when channel hint is telegram", () => {
+    expect(
+      resolveFutureThreadParentSessionKey({
+        sessionKey: "agent:main:main:thread:123456789:42",
+        channelHint: "telegram",
+      }),
+    ).toBe("agent:main:main");
   });
 });

@@ -299,9 +299,7 @@ describe("handleDirectiveOnly model persist behavior (fixes #1435)", () => {
     );
 
     expect(result?.text).toContain("Model set to openai/gpt-4o");
-    expect(result?.text).toContain(
-      "New Telegram threads in this chat will default to openai/gpt-4o",
-    );
+    expect(result?.text).toContain("New threads in this chat will default to openai/gpt-4o");
     expect(sessionStore[parentSessionKey]?.futureThreadProviderOverride).toBe("openai");
     expect(sessionStore[parentSessionKey]?.futureThreadModelOverride).toBe("gpt-4o");
   });
@@ -327,9 +325,34 @@ describe("handleDirectiveOnly model persist behavior (fixes #1435)", () => {
     );
 
     expect(result?.text).toContain("Model set to openai/gpt-4o");
-    expect(result?.text).toContain(
-      "New Telegram threads in this chat will default to openai/gpt-4o",
+    expect(result?.text).toContain("New threads in this chat will default to openai/gpt-4o");
+    expect(sessionStore[parentSessionKey]?.futureThreadProviderOverride).toBe("openai");
+    expect(sessionStore[parentSessionKey]?.futureThreadModelOverride).toBe("gpt-4o");
+  });
+
+  it("stores future-thread default on explicit non-Telegram parent session", async () => {
+    const directives = parseInlineDirectives("/model openai/gpt-4o");
+    const threadSessionKey = "agent:main:discord:channel:thread-777";
+    const parentSessionKey = "agent:main:discord:channel:parent-123";
+    const sessionEntry = createSessionEntry({ channel: "discord" });
+    const parentEntry = createSessionEntry({ sessionId: "parent-discord-1" });
+    const sessionStore = {
+      [threadSessionKey]: sessionEntry,
+      [parentSessionKey]: parentEntry,
+    };
+
+    const result = await handleDirectiveOnly(
+      createHandleParams({
+        directives,
+        sessionKey: threadSessionKey,
+        parentSessionKey,
+        sessionEntry,
+        sessionStore,
+      }),
     );
+
+    expect(result?.text).toContain("Model set to openai/gpt-4o");
+    expect(result?.text).toContain("New threads in this chat will default to openai/gpt-4o");
     expect(sessionStore[parentSessionKey]?.futureThreadProviderOverride).toBe("openai");
     expect(sessionStore[parentSessionKey]?.futureThreadModelOverride).toBe("gpt-4o");
   });
@@ -362,9 +385,7 @@ describe("handleDirectiveOnly model persist behavior (fixes #1435)", () => {
     );
 
     expect(result?.text).toContain("Model reset to default");
-    expect(result?.text).toContain(
-      "New Telegram threads in this chat now follow the default model.",
-    );
+    expect(result?.text).toContain("New threads in this chat now follow the default model.");
     expect(sessionStore[parentSessionKey]?.futureThreadProviderOverride).toBeUndefined();
     expect(sessionStore[parentSessionKey]?.futureThreadModelOverride).toBeUndefined();
   });

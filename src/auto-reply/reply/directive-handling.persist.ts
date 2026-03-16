@@ -21,7 +21,7 @@ import {
   applyFutureThreadModelDefaultToSessionEntry,
   applyModelOverrideToSessionEntry,
 } from "../../sessions/model-overrides.js";
-import { resolveTelegramThreadParentSessionKey } from "../../sessions/session-key-utils.js";
+import { resolveFutureThreadParentSessionKey } from "../../sessions/session-key-utils.js";
 import { resolveProfileOverride } from "./directive-handling.auth.js";
 import type { InlineDirectives } from "./directive-handling.parse.js";
 import { enqueueModeSwitchEvents } from "./directive-handling.shared.js";
@@ -35,6 +35,7 @@ export async function persistInlineDirectives(params: {
   sessionEntry?: SessionEntry;
   sessionStore?: Record<string, SessionEntry>;
   sessionKey?: string;
+  parentSessionKey?: string;
   storePath?: string;
   elevatedEnabled: boolean;
   elevatedAllowed: boolean;
@@ -177,13 +178,14 @@ export async function persistInlineDirectives(params: {
             },
             profileOverride,
           });
-          const telegramParentSessionKey = resolveTelegramThreadParentSessionKey({
+          const futureThreadParentSessionKey = resolveFutureThreadParentSessionKey({
             sessionKey,
+            parentSessionKey: params.parentSessionKey,
             channelHint: telegramChannelHint,
           });
-          if (telegramParentSessionKey) {
+          if (futureThreadParentSessionKey) {
             const parentEntry =
-              sessionStore[telegramParentSessionKey] ??
+              sessionStore[futureThreadParentSessionKey] ??
               ({
                 sessionId: crypto.randomUUID(),
                 updatedAt: Date.now(),
@@ -197,7 +199,7 @@ export async function persistInlineDirectives(params: {
               },
             });
             if (parentUpdated) {
-              sessionStore[telegramParentSessionKey] = parentEntry;
+              sessionStore[futureThreadParentSessionKey] = parentEntry;
               updated = true;
             }
           }
@@ -228,12 +230,13 @@ export async function persistInlineDirectives(params: {
       if (storePath) {
         await updateSessionStore(storePath, (store) => {
           store[sessionKey] = sessionEntry;
-          const telegramParentSessionKey = resolveTelegramThreadParentSessionKey({
+          const futureThreadParentSessionKey = resolveFutureThreadParentSessionKey({
             sessionKey,
+            parentSessionKey: params.parentSessionKey,
             channelHint: telegramChannelHint,
           });
-          if (telegramParentSessionKey && sessionStore[telegramParentSessionKey]) {
-            store[telegramParentSessionKey] = sessionStore[telegramParentSessionKey]!;
+          if (futureThreadParentSessionKey && sessionStore[futureThreadParentSessionKey]) {
+            store[futureThreadParentSessionKey] = sessionStore[futureThreadParentSessionKey]!;
           }
         });
       }

@@ -36,7 +36,7 @@ import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { normalizeMainKey } from "../../routing/session-key.js";
 import { applyModelOverrideToSessionEntry } from "../../sessions/model-overrides.js";
-import { resolveTelegramThreadParentSessionKey } from "../../sessions/session-key-utils.js";
+import { resolveFutureThreadParentSessionKey } from "../../sessions/session-key-utils.js";
 import { normalizeSessionDeliveryFields } from "../../utils/delivery-context.js";
 import { resolveCommandAuthorization } from "../command-auth.js";
 import type { MsgContext, TemplateContext } from "../templating.js";
@@ -466,16 +466,16 @@ export async function initSessionState(params: {
     ctx.OriginatingChannel ??
     ctx.Surface ??
     ctx.Provider;
-  const telegramThreadParentSessionKey = resolveTelegramThreadParentSessionKey({
+  const futureThreadParentSessionKey = resolveFutureThreadParentSessionKey({
     sessionKey,
     parentSessionKey,
     channelHint: telegramChannelHint,
   });
-  if (!hasExistingSessionEntry && telegramThreadParentSessionKey) {
-    const parentEntry = sessionStore[telegramThreadParentSessionKey];
+  if (!hasExistingSessionEntry && futureThreadParentSessionKey) {
+    const parentEntry = sessionStore[futureThreadParentSessionKey];
     const parentProvider = parentEntry?.futureThreadProviderOverride?.trim();
     const parentModel = parentEntry?.futureThreadModelOverride?.trim();
-    // Seed brand-new Telegram thread sessions from the parent chat's
+    // Seed brand-new thread/topic sessions from the parent chat's
     // future-thread default. Existing thread sessions are intentionally left
     // untouched so model history remains stable.
     if (
