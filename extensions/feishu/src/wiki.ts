@@ -90,8 +90,17 @@ async function listNodes(client: Lark.Client, spaceId: string, parentNodeToken?:
       );
     }
     
-    // Continue fetching if there are more pages and we haven't hit the safety limit
-    if (!hasMore || !pageToken || pageCount >= maxPages) {
+    // Continue fetching if there are more pages and we haven't hit the safety limit.
+    // Log a warning if the API signals more pages but returns no page_token — this
+    // indicates an unexpected API response and avoids silent data truncation.
+    if (!hasMore || pageCount >= maxPages) {
+      break;
+    }
+    if (!pageToken) {
+      console.warn(
+        `[feishu_wiki] API returned has_more=true but no page_token — stopping pagination. ` +
+        `space_id=${spaceId}, page=${pageCount}, nodes=${allNodes.length}`
+      );
       break;
     }
   } while (true);
