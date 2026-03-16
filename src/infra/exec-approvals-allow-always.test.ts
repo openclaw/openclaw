@@ -18,6 +18,31 @@ describe("resolveAllowAlwaysPatterns", () => {
     return exe;
   }
 
+  function resolvePersistedPatterns(params: {
+    command: string;
+    dir: string;
+    env: Record<string, string | undefined>;
+    safeBins: ReturnType<typeof resolveSafeBins>;
+  }) {
+    const analysis = evaluateShellAllowlist({
+      command: params.command,
+      allowlist: [],
+      safeBins: params.safeBins,
+      cwd: params.dir,
+      env: params.env,
+      platform: process.platform,
+    });
+    return {
+      analysis,
+      persisted: resolveAllowAlwaysPatterns({
+        segments: analysis.segments,
+        cwd: params.dir,
+        env: params.env,
+        platform: process.platform,
+      }),
+    };
+  }
+
   function expectAllowAlwaysBypassBlocked(params: {
     dir: string;
     firstCommand: string;
@@ -26,19 +51,11 @@ describe("resolveAllowAlwaysPatterns", () => {
     persistedPattern: string;
   }) {
     const safeBins = resolveSafeBins(undefined);
-    const first = evaluateShellAllowlist({
+    const { persisted } = resolvePersistedPatterns({
       command: params.firstCommand,
-      allowlist: [],
+      dir: params.dir,
+      env: params.env,
       safeBins,
-      cwd: params.dir,
-      env: params.env,
-      platform: process.platform,
-    });
-    const persisted = resolveAllowAlwaysPatterns({
-      segments: first.segments,
-      cwd: params.dir,
-      env: params.env,
-      platform: process.platform,
     });
     expect(persisted).toEqual([params.persistedPattern]);
 
@@ -79,19 +96,11 @@ describe("resolveAllowAlwaysPatterns", () => {
     env: Record<string, string | undefined>;
     safeBins: ReturnType<typeof resolveSafeBins>;
   }) {
-    const first = evaluateShellAllowlist({
+    const { persisted } = resolvePersistedPatterns({
       command: params.command,
-      allowlist: [],
+      dir: params.dir,
+      env: params.env,
       safeBins: params.safeBins,
-      cwd: params.dir,
-      env: params.env,
-      platform: process.platform,
-    });
-    const persisted = resolveAllowAlwaysPatterns({
-      segments: first.segments,
-      cwd: params.dir,
-      env: params.env,
-      platform: process.platform,
     });
     expect(persisted).toEqual([params.script]);
 

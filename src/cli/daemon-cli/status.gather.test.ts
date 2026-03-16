@@ -18,7 +18,12 @@ const readLastGatewayErrorLine = vi.fn(async (_env?: NodeJS.ProcessEnv) => null)
 const auditGatewayServiceConfig = vi.fn(async (_opts?: unknown) => undefined);
 const serviceIsLoaded = vi.fn(async (_opts?: unknown) => true);
 const serviceReadRuntime = vi.fn(async (_env?: NodeJS.ProcessEnv) => ({ status: "running" }));
-const serviceReadCommand = vi.fn(async (_env?: NodeJS.ProcessEnv) => ({
+const serviceReadCommand = vi.fn<
+  (env?: NodeJS.ProcessEnv) => Promise<{
+    programArguments: string[];
+    environment?: Record<string, string>;
+  }>
+>(async (_env?: NodeJS.ProcessEnv) => ({
   programArguments: ["/bin/node", "cli", "gateway", "--port", "19001"],
   environment: {
     OPENCLAW_STATE_DIR: "/tmp/openclaw-daemon",
@@ -188,6 +193,37 @@ describe("gatherDaemonStatus", () => {
     );
     expect(status.gateway?.probeUrl).toBe("wss://override.example:18790");
     expect(status.rpc?.url).toBe("wss://override.example:18790");
+  });
+
+  it("reuses command environment when reading runtime status", async () => {
+    serviceReadCommand.mockResolvedValueOnce({
+      programArguments: ["/bin/node", "cli", "gateway", "--port", "19001"],
+      environment: {
+        OPENCLAW_GATEWAY_PORT: "19001",
+        OPENCLAW_CONFIG_PATH: "/tmp/openclaw-daemon/openclaw.json",
+        OPENCLAW_STATE_DIR: "/tmp/openclaw-daemon",
+      } as Record<string, string>,
+    });
+    serviceReadRuntime.mockImplementationOnce(async (env?: NodeJS.ProcessEnv) => ({
+      status: env?.OPENCLAW_GATEWAY_PORT === "19001" ? "running" : "unknown",
+      detail: env?.OPENCLAW_GATEWAY_PORT ?? "missing-port",
+    }));
+
+    const status = await gatherDaemonStatus({
+      rpc: {},
+      probe: false,
+      deep: false,
+    });
+
+    expect(serviceReadRuntime).toHaveBeenCalledWith(
+      expect.objectContaining({
+        OPENCLAW_GATEWAY_PORT: "19001",
+      }),
+    );
+    expect(status.service.runtime).toMatchObject({
+      status: "running",
+      detail: "19001",
+    });
   });
 
   it("resolves daemon gateway auth password SecretRef values before probing", async () => {

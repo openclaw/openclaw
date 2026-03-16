@@ -1,4 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  expectProvidedCfgSkipsRuntimeLoad,
+  expectRuntimeCfgFallback,
+} from "../../../test-utils/send-config.js";
 import { parseMattermostTarget, sendMessageMattermost } from "./send.js";
 
 const mockState = vi.hoisted(() => ({
@@ -102,8 +106,9 @@ describe("sendMessageMattermost", () => {
       accountId: "work",
     });
 
-    expect(mockState.loadConfig).not.toHaveBeenCalled();
-    expect(mockState.resolveMattermostAccount).toHaveBeenCalledWith({
+    expectProvidedCfgSkipsRuntimeLoad({
+      loadConfig: mockState.loadConfig,
+      resolveAccount: mockState.resolveMattermostAccount,
       cfg: providedCfg,
       accountId: "work",
     });
@@ -121,8 +126,9 @@ describe("sendMessageMattermost", () => {
 
     await sendMessageMattermost("channel:town-square", "hello");
 
-    expect(mockState.loadConfig).toHaveBeenCalledTimes(1);
-    expect(mockState.resolveMattermostAccount).toHaveBeenCalledWith({
+    expectRuntimeCfgFallback({
+      loadConfig: mockState.loadConfig,
+      resolveAccount: mockState.resolveMattermostAccount,
       cfg: runtimeCfg,
       accountId: undefined,
     });

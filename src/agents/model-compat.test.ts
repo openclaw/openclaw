@@ -251,7 +251,7 @@ describe("normalizeModelCompat", () => {
     });
   });
 
-  it("overrides explicit supportsDeveloperRole true on non-native endpoints", () => {
+  it("respects explicit supportsDeveloperRole true on non-native endpoints", () => {
     const model = {
       ...baseModel(),
       provider: "custom-cpa",
@@ -259,10 +259,10 @@ describe("normalizeModelCompat", () => {
       compat: { supportsDeveloperRole: true },
     };
     const normalized = normalizeModelCompat(model);
-    expect(supportsDeveloperRole(normalized)).toBe(false);
+    expect(supportsDeveloperRole(normalized)).toBe(true);
   });
 
-  it("overrides explicit supportsUsageInStreaming true on non-native endpoints", () => {
+  it("respects explicit supportsUsageInStreaming true on non-native endpoints", () => {
     const model = {
       ...baseModel(),
       provider: "custom-cpa",
@@ -270,6 +270,18 @@ describe("normalizeModelCompat", () => {
       compat: { supportsUsageInStreaming: true },
     };
     const normalized = normalizeModelCompat(model);
+    expect(supportsUsageInStreaming(normalized)).toBe(true);
+  });
+
+  it("still forces flags off when not explicitly set by user", () => {
+    const model = {
+      ...baseModel(),
+      provider: "custom-cpa",
+      baseUrl: "https://proxy.example.com/v1",
+    };
+    delete (model as { compat?: unknown }).compat;
+    const normalized = normalizeModelCompat(model);
+    expect(supportsDeveloperRole(normalized)).toBe(false);
     expect(supportsUsageInStreaming(normalized)).toBe(false);
   });
 

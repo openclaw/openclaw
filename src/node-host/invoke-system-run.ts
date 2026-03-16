@@ -33,6 +33,7 @@ import {
 } from "./invoke-system-run-plan.js";
 import type {
   ExecEventPayload,
+  ExecFinishedResult,
   ExecFinishedEventParams,
   RunResult,
   SkillBinsProvider,
@@ -176,6 +177,25 @@ async function sendSystemRunDenied(
   await opts.sendInvokeResult({
     ok: false,
     error: { code: "UNAVAILABLE", message: params.message },
+  });
+}
+
+async function sendSystemRunCompleted(
+  opts: Pick<HandleSystemRunInvokeOptions, "sendExecFinishedEvent" | "sendInvokeResult">,
+  execution: SystemRunExecutionContext,
+  result: ExecFinishedResult,
+  payloadJSON: string,
+) {
+  await opts.sendExecFinishedEvent({
+    sessionKey: execution.sessionKey,
+    runId: execution.runId,
+    commandText: execution.commandText,
+    result,
+    suppressNotifyOnExit: execution.suppressNotifyOnExit,
+  });
+  await opts.sendInvokeResult({
+    ok: true,
+    payloadJSON,
   });
 }
 
@@ -436,17 +456,7 @@ async function executeSystemRunPhase(
       return;
     } else {
       const result: ExecHostRunResult = response.payload;
-      await opts.sendExecFinishedEvent({
-        sessionKey: phase.sessionKey,
-        runId: phase.runId,
-        commandText: phase.commandText,
-        result,
-        suppressNotifyOnExit: phase.suppressNotifyOnExit,
-      });
-      await opts.sendInvokeResult({
-        ok: true,
-        payloadJSON: JSON.stringify(result),
-      });
+      await sendSystemRunCompleted(opts, phase.execution, result, JSON.stringify(result));
       return;
     }
   }
@@ -504,17 +514,11 @@ async function executeSystemRunPhase(
 
   const result = await opts.runCommand(execArgv, phase.cwd, phase.env, phase.timeoutMs);
   applyOutputTruncation(result);
-  await opts.sendExecFinishedEvent({
-    sessionKey: phase.sessionKey,
-    runId: phase.runId,
-    commandText: phase.commandText,
+  await sendSystemRunCompleted(
+    opts,
+    phase.execution,
     result,
-    suppressNotifyOnExit: phase.suppressNotifyOnExit,
-  });
-
-  await opts.sendInvokeResult({
-    ok: true,
-    payloadJSON: JSON.stringify({
+    JSON.stringify({
       exitCode: result.exitCode,
       timedOut: result.timedOut,
       success: result.success,
@@ -522,7 +526,7 @@ async function executeSystemRunPhase(
       stderr: result.stderr,
       error: result.error ?? null,
     }),
-  });
+  );
 }
 
 export async function handleSystemRunInvoke(opts: HandleSystemRunInvokeOptions): Promise<void> {

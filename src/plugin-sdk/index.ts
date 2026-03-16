@@ -391,6 +391,7 @@ export { SILENT_REPLY_TOKEN, isSilentReplyText } from "../auto-reply/tokens.js";
 export { formatInboundFromLabel } from "../auto-reply/envelope.js";
 export {
   createScopedAccountConfigAccessors,
+  createScopedDmSecurityResolver,
   formatTrimmedAllowFromEntries,
   mapAllowFromEntries,
   resolveOptionalConfigString,
@@ -550,6 +551,7 @@ export {
 } from "../channels/plugins/config-helpers.js";
 export {
   applyAccountNameToChannelSection,
+  applySetupAccountConfigPatch,
   migrateBaseNameToDefaultAccount,
 } from "../channels/plugins/setup-helpers.js";
 export {

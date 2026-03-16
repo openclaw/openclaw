@@ -30,6 +30,7 @@ import {
   summarizeMapping,
   warnMissingProviderGroupPolicyFallbackOnce,
 } from "openclaw/plugin-sdk/zalouser";
+import { createDeferred } from "../../shared/deferred.js";
 import {
   buildZalouserGroupCandidates,
   findZalouserGroupEntry,
@@ -126,16 +127,6 @@ function resolveInboundQueueKey(message: ZaloInboundMessage): string {
   }
   const senderId = message.senderId?.trim();
   return `direct:${senderId || threadId}`;
-}
-
-function createDeferred<T>() {
-  let resolve!: (value: T | PromiseLike<T>) => void;
-  let reject!: (reason?: unknown) => void;
-  const promise = new Promise<T>((res, rej) => {
-    resolve = res;
-    reject = rej;
-  });
-  return { promise, resolve, reject };
 }
 
 function resolveZalouserDmSessionScope(config: OpenClawConfig) {
