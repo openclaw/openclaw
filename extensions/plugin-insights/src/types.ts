@@ -2,10 +2,9 @@
 // OpenClaw SDK-compatible types for plugin-insights
 //
 // These types mirror the real OpenClaw plugin-sdk interfaces.
-// When integrating with the real SDK, replace these with:
-//   import type { OpenClawPluginApi, ContextEngine, ... } from "openclaw/plugin-sdk";
-//   import type { Message, ToolCall, Usage } from "@mariozechner/pi-ai";
-//   import type { AgentMessage } from "@mariozechner/pi-agent-core";
+// When integrating with the real SDK, replace these with imports
+// from openclaw/plugin-sdk/core (or /compat for broader internals),
+// @mariozechner/pi-ai, and @mariozechner/pi-agent-core.
 // ============================================================
 
 // --- pi-ai compatible message types ---
