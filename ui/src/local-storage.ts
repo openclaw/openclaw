@@ -9,7 +9,7 @@ function isStorage(value: unknown): value is Storage {
 export function getSafeLocalStorage(): Storage | null {
   const descriptor = Object.getOwnPropertyDescriptor(globalThis, "localStorage");
 
-  if (process.env.VITEST) {
+  if (typeof process !== "undefined" && process.env?.VITEST) {
     return descriptor && !descriptor.get && isStorage(descriptor.value) ? descriptor.value : null;
   }
 
