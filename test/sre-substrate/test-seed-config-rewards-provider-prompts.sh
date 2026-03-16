@@ -5,6 +5,7 @@ REPO_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"
 ROOT="$REPO_ROOT/skills/morpho-sre"
 CONFIG="$ROOT/config/openclaw.json"
 START_GATEWAY="$REPO_ROOT/scripts/sre-runtime/start-gateway.sh"
+PROMPT_LIB="$REPO_ROOT/scripts/sre-runtime/lib-prompts.sh"
 
 jq -e '
   [
@@ -16,21 +17,26 @@ jq -e '
   | length == 1
 ' "$CONFIG" >/dev/null
 
-rg -Fq '_fetchMerklSingleRates()' "$START_GATEWAY"
+PROMPT_TEXT="$(
+  OPENCLAW_SRE_SKILL_DIR="/home/node/.openclaw/skills/morpho-sre" \
+    bash -lc 'source "$1"; build_monitoring_incident_prompt' _ "$PROMPT_LIB"
+)"
+printf '%s' "$PROMPT_TEXT" | rg -F '_fetchMerklSingleRates()' >/dev/null
 
 jq -e '
   .channels.slack.channels["#bug-report"].systemPrompt
   | contains("_fetchMerklSingleRates()")
 ' "$CONFIG" >/dev/null
 
-rg -Fq 'merged reward row' "$START_GATEWAY"
+printf '%s' "$PROMPT_TEXT" | rg -F 'merged reward row' >/dev/null
 
 jq -e '
   .channels.slack.channels["#bug-report"].systemPrompt
   | contains("merged reward row")
 ' "$CONFIG" >/dev/null
 
-rg -Fq 'If current code, query output, or live evidence disproves an earlier theory' "$START_GATEWAY"
+printf '%s' "$PROMPT_TEXT" | rg -F 'If current code, query output, or live evidence disproves an earlier theory' >/dev/null
+printf '%s\n' "$PROMPT_TEXT" | grep -Fx 'Monitoring incident intake mode:' >/dev/null
 
 jq -e '
   .channels.slack.channels["#bug-report"].systemPrompt

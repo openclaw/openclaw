@@ -401,7 +401,7 @@
           "incidentDedupeWindowSeconds": 21600,
           "allowBots": true,
           "skills": ["morpho-sre"],
-          "systemPrompt": "Template: sre.promptTemplates.monitoringIncident"
+          "systemPrompt": "__START_GATEWAY_MONITORING_PROMPT__"
         },
         "#staging-infra-monitoring": {
           "enabled": true,
@@ -413,7 +413,7 @@
           "incidentDedupeWindowSeconds": 21600,
           "allowBots": true,
           "skills": ["morpho-sre"],
-          "systemPrompt": "Template: sre.promptTemplates.monitoringIncident"
+          "systemPrompt": "__START_GATEWAY_MONITORING_PROMPT__"
         },
         "#public-api-monitoring": {
           "enabled": true,
@@ -425,7 +425,7 @@
           "incidentDedupeWindowSeconds": 21600,
           "allowBots": true,
           "skills": ["morpho-sre"],
-          "systemPrompt": "Template: sre.promptTemplates.monitoringIncident"
+          "systemPrompt": "__START_GATEWAY_MONITORING_PROMPT__"
         }
       },
       "signingSecret": "${SLACK_SIGNING_SECRET}",

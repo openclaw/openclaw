@@ -3,6 +3,8 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 export PATH="/usr/local/bin:/usr/bin:/bin:${PATH:-}"
+# shellcheck source=./lib-prompts.sh
+. "${SCRIPT_DIR}/lib-prompts.sh"
 
 trim_env_var() {
   var_name="$1"
@@ -115,6 +117,7 @@ fi
 
 bootstrap_github_cli_wrappers() {
   wrapper_dir="${OPENCLAW_WRAPPER_BIN_DIR:-/home/node/.openclaw/bin}"
+  [ -n "$wrapper_dir" ] || wrapper_dir="/home/node/.openclaw/bin"
   cache_dir="${OPENCLAW_GITHUB_CACHE_DIR:-/home/node/.openclaw/state/github}"
   mkdir -p "$wrapper_dir" "$cache_dir"
 
@@ -242,7 +245,7 @@ EOF
 cat >"${wrapper_dir}/gh" <<'EOF'
 #!/bin/sh
 set -eu
-wrapper_dir="${OPENCLAW_WRAPPER_BIN_DIR:-/home/node/.openclaw/bin}"
+wrapper_dir="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
 if token="$("${wrapper_dir}/github-app-token.sh")"; then
   export GH_TOKEN="$token"
   export GITHUB_TOKEN="$token"
@@ -257,7 +260,7 @@ EOF
 cat >"${wrapper_dir}/git" <<'EOF'
 #!/bin/sh
 set -eu
-wrapper_dir="${OPENCLAW_WRAPPER_BIN_DIR:-/home/node/.openclaw/bin}"
+wrapper_dir="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
 git_cmd=""
 while [ "$#" -gt 0 ]; do
   case "$1" in
@@ -319,8 +322,6 @@ echo 'git-wrapper:warning github app token unavailable, falling back to unauthen
 exec /usr/bin/git "$@"
 EOF
   chmod +x "${wrapper_dir}/git"
-
-  export PATH="${wrapper_dir}:${PATH}"
 }
 
 bootstrap_pg_client() {
@@ -368,42 +369,13 @@ bool_from_env() {
   esac
 }
 
-build_monitoring_incident_prompt() {
-  cat <<'EOF'
-Monitoring incident intake mode:
-- Scope: configured monitoring incident channels for this runtime.
-- Auto-respond only to new incident root posts in these channels.
-- Ignore resolved/recovered updates and duplicate incident roots.
-- Always reply in the incident thread under the alert/report root; never post RCA in channel root.
-- Start every reply with <@U07KE3NALTX>.
-- First four lines must be: Incident, Customer impact, Affected services, Status.
-- Use plain language. If only monitoring/internal tooling is affected, say exactly: No confirmed customer impact. Internal observability degraded.
-- Keep fingerprints, routing hints, raw signal section names, confidence percentages, and primary/supporting namespace jargon out of the opening summary.
-- Never stream drafts or progress updates into incident threads; send one final evidence-backed reply only.
-- Never send progress-only replies (`On it`, `Found it`, `Let me verify`, `Checking...`) in any Slack thread unless it is a single non-incident acknowledgment containing a concrete ETA and expected next step. In all other cases, wait for net-new evidence, mitigation, validation, or a PR URL.
-- Never expose tool-call JSON, exec-approval warnings, or command-construction errors in-thread; retry quietly and mention only the final relevant blocked command/error inside Evidence when it changes the recommendation.
-- Put unrelated warnings under Also watching.
-- After the summary, include concise evidence, likely cause, mitigation, validation checks, next actions, suggested PRs, and the Linear ticket when follow-up work is needed.
-- For recurring indexer freshness alerts on the same workload, treat them as one ongoing RCA until disproved; answer with primary trigger, local amplifier, and the next discriminating checks.
-- If a human asks whether the issue is DB, RPC/eRPC, or queue/backpressure, answer those branches explicitly from fresh evidence before ending the update.
-- Before claiming repo/tool access is unavailable, run one live probe (`gh repo view ...` or the target helper in dry-run mode) and quote the exact error.
-- Before accepting any task that requires repo access (PR creation, code changes, repo reads), immediately run `gh repo view <owner/repo>` and verify local clone availability. If either check fails, report the blocker in the same message as the acknowledgement.
-- For rewards/provider incidents, do not name a stale-row/write-path cause or open a PR without one live DB row/provenance fact and one exact consuming code-path fact.
-- For rewards/provider incidents where the same reward token appears on both supply and borrow, prove the provider-side truth for that token, quote the live reward row/provenance, and reconcile `_fetchMerklSingleRates()` / the merged reward row before stale-row theories or PRs.
-- If a human challenges or contradicts a technical claim in any thread, immediately re-investigate with fresh live evidence. If a human questions the proposed fix or PR in-thread, re-open RCA before defending the fix.
-- If current code, query output, or live evidence disproves an earlier theory, say `Disproved theory:` before the replacement cause or PR.
-- If the fix is plausible but the PR gate is not open yet, still name 1-2 concrete PR suggestions with repo/path/title/validation.
-- Create or reuse a Linear follow-up ticket for code/config work; use the ticket `gitBranchName` as the PR branch, and attach the PR URL back to the ticket.
-- When confidence is high and fix is scoped/reversible, run /home/node/.openclaw/skills/morpho-sre/scripts/autofix-pr.sh and include the PR URL in-thread.
-- Never reveal secrets or token values.
-EOF
-}
-
 monitoring_prompt="$(build_monitoring_incident_prompt)"
+monitoring_prompt_marker="$(monitoring_incident_prompt_marker)"
 
 jq \
   --arg heartbeat_target "${OPENCLAW_HEARTBEAT_ROUTE_TARGET:-}" \
   --arg monitoring_prompt "$monitoring_prompt" \
+  --arg monitoring_prompt_marker "$monitoring_prompt_marker" \
   --arg graph_dir "${OPENCLAW_SRE_GRAPH_DIR:-/home/node/.openclaw/state/sre-graph}" \
   --arg dossiers_dir "${OPENCLAW_SRE_DOSSIERS_DIR:-/home/node/.openclaw/state/sre-dossiers}" \
   --arg index_dir "${OPENCLAW_SRE_INDEX_DIR:-/home/node/.openclaw/state/sre-index}" \
@@ -425,6 +397,15 @@ jq \
   --argjson change_intel_enabled "$(bool_from_env "${OPENCLAW_SRE_CHANGE_INTEL_ENABLED:-0}")" \
   --argjson relationship_index_enabled "$(bool_from_env "${OPENCLAW_SRE_RELATIONSHIP_INDEX_ENABLED:-0}")" \
   '
+    def prepend_unique($entry; $existing):
+      reduce ([$entry] + $existing)[] as $item
+        ([];
+          if ($item | type) != "string" or ($item | length) == 0 or index($item) != null then
+            .
+          else
+            . + [$item]
+          end
+        );
     .tools = (.tools // {})
     | .tools.exec = (
         if ((.tools.exec // null) | type) == "object" then
@@ -463,7 +444,9 @@ jq \
     | .agents.list = (
         (.agents.list // [])
         | map(
-            if (.id == "sre" or .id == "sre-verifier") then
+            .id as $agent_id
+            # Inject wrapper bin directory for SRE agents and SRE subagents only.
+            | if (["sre", "sre-k8s", "sre-observability", "sre-release", "sre-repo-runtime", "sre-repo-helm", "sre-verifier"] | index($agent_id)) != null then
               .tools = (.tools // {})
               | .tools.exec = (
                   if ((.tools.exec // null) | type) == "object" then
@@ -472,14 +455,12 @@ jq \
                     {}
                   end
                 )
-              | .tools.exec.pathPrepend = (
+              | .tools.exec.pathPrepend = prepend_unique(
+                  $wrapper_bin_dir;
                   (
                     (.tools.exec.pathPrepend // [])
                     | if type == "array" then . else [] end
-                    | map(select(type == "string"))
                   )
-                  + [$wrapper_bin_dir]
-                  | unique
                 )
             else
               .
@@ -487,7 +468,7 @@ jq \
           )
       )
     | .channels.slack.channels["#platform-monitoring"].systemPrompt =
-        (if .channels.slack.channels["#platform-monitoring"].systemPrompt == "Template: sre.promptTemplates.monitoringIncident" then $monitoring_prompt else .channels.slack.channels["#platform-monitoring"].systemPrompt end)
+        (if .channels.slack.channels["#platform-monitoring"].systemPrompt == $monitoring_prompt_marker then $monitoring_prompt else .channels.slack.channels["#platform-monitoring"].systemPrompt end)
     | .channels.slack.channels["#staging-infra-monitoring"].systemPrompt =
         ($monitoring_prompt
           | sub("^Monitoring incident intake mode:"; "Staging monitoring incident intake mode:")
