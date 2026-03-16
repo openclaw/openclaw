@@ -2,6 +2,8 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { slackPlugin } from "../../../extensions/slack/src/channel.js";
+import { telegramPlugin } from "../../../extensions/telegram/src/channel.js";
 import type { ChannelThreadingToolContext } from "../../channels/plugins/types.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import {
@@ -9,8 +11,6 @@ import {
   normalizeSandboxMediaList,
   normalizeSandboxMediaParams,
   resolveAttachmentMediaPolicy,
-  resolveSlackAutoThreadId,
-  resolveTelegramAutoThreadId,
 } from "./message-action-params.js";
 
 const cfg = {} as OpenClawConfig;
@@ -30,19 +30,25 @@ function createToolContext(
 describe("message action threading helpers", () => {
   it("resolves Slack auto-thread ids only for matching active channels", () => {
     expect(
-      resolveSlackAutoThreadId({
+      slackPlugin?.threading?.resolveAutoThreadId?.({
+        cfg,
+        accountId: undefined,
         to: "#c123",
         toolContext: createToolContext(),
       }),
     ).toBe("thread-1");
     expect(
-      resolveSlackAutoThreadId({
+      slackPlugin?.threading?.resolveAutoThreadId?.({
+        cfg,
+        accountId: undefined,
         to: "channel:C999",
         toolContext: createToolContext(),
       }),
     ).toBeUndefined();
     expect(
-      resolveSlackAutoThreadId({
+      slackPlugin?.threading?.resolveAutoThreadId?.({
+        cfg,
+        accountId: undefined,
         to: "user:U123",
         toolContext: createToolContext(),
       }),
@@ -51,7 +57,9 @@ describe("message action threading helpers", () => {
 
   it("skips Slack auto-thread ids when reply mode or context blocks them", () => {
     expect(
-      resolveSlackAutoThreadId({
+      slackPlugin?.threading?.resolveAutoThreadId?.({
+        cfg,
+        accountId: undefined,
         to: "C123",
         toolContext: createToolContext({
           replyToMode: "first",
@@ -60,13 +68,17 @@ describe("message action threading helpers", () => {
       }),
     ).toBeUndefined();
     expect(
-      resolveSlackAutoThreadId({
+      slackPlugin?.threading?.resolveAutoThreadId?.({
+        cfg,
+        accountId: undefined,
         to: "C123",
         toolContext: createToolContext({ replyToMode: "off" }),
       }),
     ).toBeUndefined();
     expect(
-      resolveSlackAutoThreadId({
+      slackPlugin?.threading?.resolveAutoThreadId?.({
+        cfg,
+        accountId: undefined,
         to: "C123",
         toolContext: createToolContext({ currentThreadTs: undefined }),
       }),
@@ -75,7 +87,9 @@ describe("message action threading helpers", () => {
 
   it("resolves Telegram auto-thread ids for matching chats across target formats", () => {
     expect(
-      resolveTelegramAutoThreadId({
+      telegramPlugin?.threading?.resolveAutoThreadId?.({
+        cfg,
+        accountId: undefined,
         to: "telegram:group:-100123:topic:77",
         toolContext: createToolContext({
           currentChannelId: "tg:group:-100123",
@@ -83,7 +97,9 @@ describe("message action threading helpers", () => {
       }),
     ).toBe("thread-1");
     expect(
-      resolveTelegramAutoThreadId({
+      telegramPlugin?.threading?.resolveAutoThreadId?.({
+        cfg,
+        accountId: undefined,
         to: "-100999:77",
         toolContext: createToolContext({
           currentChannelId: "-100123",
@@ -91,7 +107,9 @@ describe("message action threading helpers", () => {
       }),
     ).toBeUndefined();
     expect(
-      resolveTelegramAutoThreadId({
+      telegramPlugin?.threading?.resolveAutoThreadId?.({
+        cfg,
+        accountId: undefined,
         to: "-100123",
         toolContext: createToolContext({ currentChannelId: undefined }),
       }),
