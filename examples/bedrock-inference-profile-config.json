@@ -1,0 +1,70 @@
+{
+  "models": {
+    "providers": {
+      "amazon-bedrock": {
+        "baseUrl": "https://bedrock-runtime.us-east-1.amazonaws.com",
+        "api": "bedrock-converse-stream",
+        "auth": "aws-sdk",
+        "models": [
+          {
+            "id": "arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/my-claude-profile",
+            "name": "Claude 3 Opus via Application Inference Profile",
+            "reasoning": true,
+            "input": ["text", "image"],
+            "cost": { "input": 15, "output": 75, "cacheRead": 1.875, "cacheWrite": 18.75 },
+            "contextWindow": 200000,
+            "maxTokens": 8192,
+            "_comment": "This uses an Application Inference Profile ARN for cost tracking and multi-region routing"
+          },
+          {
+            "id": "my-claude-sonnet-profile",
+            "name": "Claude 3.5 Sonnet via Short Profile ID",
+            "reasoning": true,
+            "input": ["text", "image"],
+            "cost": { "input": 3, "output": 15, "cacheRead": 0.3, "cacheWrite": 3.75 },
+            "contextWindow": 200000,
+            "maxTokens": 8192,
+            "_comment": "This uses a short Application Inference Profile ID"
+          },
+          {
+            "id": "anthropic.claude-3-opus-20240229-v1:0",
+            "name": "Claude 3 Opus (Direct)",
+            "reasoning": true,
+            "input": ["text", "image"],
+            "cost": { "input": 15, "output": 75, "cacheRead": 1.875, "cacheWrite": 18.75 },
+            "contextWindow": 200000,
+            "maxTokens": 4096,
+            "_comment": "This is a standard Bedrock model ID for comparison"
+          }
+        ]
+      }
+    }
+  },
+  "agents": {
+    "defaults": {
+      "model": {
+        "primary": "amazon-bedrock/arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/my-claude-profile",
+        "fallbacks": [
+          "amazon-bedrock/my-claude-sonnet-profile",
+          "amazon-bedrock/anthropic.claude-3-opus-20240229-v1:0"
+        ]
+      },
+      "models": {
+        "amazon-bedrock/arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/my-claude-profile": {
+          "alias": "Claude Opus Profile",
+          "params": {
+            "temperature": 0.7,
+            "cacheRetention": "long"
+          }
+        },
+        "amazon-bedrock/my-claude-sonnet-profile": {
+          "alias": "Claude Sonnet Profile",
+          "params": {
+            "temperature": 0.5,
+            "cacheRetention": "short"
+          }
+        }
+      }
+    }
+  }
+}
