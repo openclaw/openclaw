@@ -6,6 +6,11 @@ import { retryAsync } from "../infra/retry.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { DEFAULT_CONTEXT_TOKENS } from "./defaults.js";
 import { repairToolUseResultPairing, stripToolResultDetails } from "./session-transcript-repair.js";
+import {
+  extractLatestAssistantThinkingBlocks,
+  restoreLatestAssistantThinkingBlocks,
+  type PreservedThinkingState,
+} from "./thinking-block-preservation.js";
 
 const log = createSubsystemLogger("compaction");
 
@@ -400,6 +405,8 @@ export function pruneHistoryForContextShare(params: {
   maxContextTokens: number;
   maxHistoryShare?: number;
   parts?: number;
+  /** Provider name for thinking block preservation (Anthropic-family providers). */
+  provider?: string;
 }): {
   messages: AgentMessage[];
   droppedMessagesList: AgentMessage[];
@@ -408,7 +415,16 @@ export function pruneHistoryForContextShare(params: {
   droppedTokens: number;
   keptTokens: number;
   budgetTokens: number;
+  /** Preserved thinking blocks from the latest assistant message (if any). */
+  preservedThinking?: PreservedThinkingState;
 } {
+  // CRITICAL: Extract thinking blocks from latest assistant BEFORE any modifications.
+  // Anthropic's API requires these blocks to remain byte-for-byte identical.
+  // See: https://github.com/openclaw/openclaw/issues/30157
+  const preservedThinking = params.provider
+    ? extractLatestAssistantThinkingBlocks(params.messages, params.provider)
+    : undefined;
+
   const maxHistoryShare = params.maxHistoryShare ?? 0.5;
   const budgetTokens = Math.max(1, Math.floor(params.maxContextTokens * maxHistoryShare));
   let keptMessages = params.messages;
@@ -448,6 +464,12 @@ export function pruneHistoryForContextShare(params: {
     keptMessages = repairedKept;
   }
 
+  // CRITICAL: Restore thinking blocks after all modifications.
+  // This ensures cryptographic signatures remain intact for Anthropic's API.
+  if (preservedThinking?.snapshot) {
+    keptMessages = restoreLatestAssistantThinkingBlocks(keptMessages, preservedThinking);
+  }
+
   return {
     messages: keptMessages,
     droppedMessagesList: allDroppedMessages,
@@ -456,6 +478,7 @@ export function pruneHistoryForContextShare(params: {
     droppedTokens,
     keptTokens: estimateMessagesTokens(keptMessages),
     budgetTokens,
+    preservedThinking,
   };
 }
 

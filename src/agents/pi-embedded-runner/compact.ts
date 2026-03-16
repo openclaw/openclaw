@@ -79,6 +79,11 @@ import {
   compactWithSafetyTimeout,
   resolveCompactionTimeoutMs,
 } from "./compaction-safety-timeout.js";
+import {
+  extractLatestAssistantThinkingBlocks,
+  restoreLatestAssistantThinkingBlocks,
+  validateThinkingBlockPreservation,
+} from "../thinking-block-preservation.js";
 import { buildEmbeddedExtensionFactories } from "./extensions.js";
 import {
   logToolSchemasForGoogle,
@@ -923,6 +928,14 @@ export async function compactEmbeddedPiSessionDirect(
           };
         }
 
+        // CRITICAL: Preserve thinking blocks from latest assistant message.
+        // Anthropic's API requires these blocks to remain byte-for-byte identical.
+        // See: https://github.com/openclaw/openclaw/issues/30157
+        const preservedThinking = extractLatestAssistantThinkingBlocks(
+          session.messages,
+          provider
+        );
+
         const compactStartedAt = Date.now();
         // Measure compactedCount from the original pre-limiting transcript so compaction
         // lifecycle metrics represent total reduction through the compaction pipeline.
@@ -948,6 +961,27 @@ export async function compactEmbeddedPiSessionDirect(
             },
           },
         );
+
+        // CRITICAL: Restore thinking blocks after compaction.
+        // This ensures cryptographic signatures remain intact for Anthropic's API.
+        if (preservedThinking.snapshot) {
+          const currentMessages = session.messages;
+          const restored = restoreLatestAssistantThinkingBlocks(currentMessages, preservedThinking);
+          if (restored !== currentMessages) {
+            session.agent.replaceMessages(restored);
+            log.info(
+              `[compaction] restored ${preservedThinking.snapshot.blocks.length} thinking block(s) ` +
+                `after compaction (provider: ${provider})`
+            );
+          }
+
+          // Validate restoration succeeded
+          const validation = validateThinkingBlockPreservation(session.messages, preservedThinking);
+          if (!validation.valid) {
+            log.error(`[compaction] thinking block restoration failed: ${validation.error}`);
+          }
+        }
+
         await runPostCompactionSideEffects({
           config: params.config,
           sessionKey: params.sessionKey,
