@@ -244,18 +244,66 @@ describe("setupSearch", () => {
   });
 
   it("stores env-backed SecretRef when secretInputMode=ref for perplexity", async () => {
+    const originalPerplexity = process.env.PERPLEXITY_API_KEY;
+    const originalOpenRouter = process.env.OPENROUTER_API_KEY;
+    delete process.env.PERPLEXITY_API_KEY;
+    delete process.env.OPENROUTER_API_KEY;
     const cfg: OpenClawConfig = {};
-    const { prompter } = createPrompter({ selectValue: "perplexity" });
-    const result = await setupSearch(cfg, runtime, prompter, {
-      secretInputMode: "ref", // pragma: allowlist secret
-    });
-    expect(result.tools?.web?.search?.provider).toBe("perplexity");
-    expect(result.tools?.web?.search?.perplexity?.apiKey).toEqual({
-      source: "env",
-      provider: "default",
-      id: "PERPLEXITY_API_KEY", // pragma: allowlist secret
-    });
-    expect(prompter.text).not.toHaveBeenCalled();
+    try {
+      const { prompter } = createPrompter({ selectValue: "perplexity" });
+      const result = await setupSearch(cfg, runtime, prompter, {
+        secretInputMode: "ref", // pragma: allowlist secret
+      });
+      expect(result.tools?.web?.search?.provider).toBe("perplexity");
+      expect(result.tools?.web?.search?.perplexity?.apiKey).toEqual({
+        source: "env",
+        provider: "default",
+        id: "PERPLEXITY_API_KEY", // pragma: allowlist secret
+      });
+      expect(prompter.text).not.toHaveBeenCalled();
+    } finally {
+      if (originalPerplexity === undefined) {
+        delete process.env.PERPLEXITY_API_KEY;
+      } else {
+        process.env.PERPLEXITY_API_KEY = originalPerplexity;
+      }
+      if (originalOpenRouter === undefined) {
+        delete process.env.OPENROUTER_API_KEY;
+      } else {
+        process.env.OPENROUTER_API_KEY = originalOpenRouter;
+      }
+    }
+  });
+
+  it("prefers detected OPENROUTER_API_KEY SecretRef for perplexity ref mode", async () => {
+    const originalPerplexity = process.env.PERPLEXITY_API_KEY;
+    const originalOpenRouter = process.env.OPENROUTER_API_KEY;
+    delete process.env.PERPLEXITY_API_KEY;
+    process.env.OPENROUTER_API_KEY = "sk-or-test";
+    const cfg: OpenClawConfig = {};
+    try {
+      const { prompter } = createPrompter({ selectValue: "perplexity" });
+      const result = await setupSearch(cfg, runtime, prompter, {
+        secretInputMode: "ref", // pragma: allowlist secret
+      });
+      expect(result.tools?.web?.search?.perplexity?.apiKey).toEqual({
+        source: "env",
+        provider: "default",
+        id: "OPENROUTER_API_KEY", // pragma: allowlist secret
+      });
+      expect(prompter.text).not.toHaveBeenCalled();
+    } finally {
+      if (originalPerplexity === undefined) {
+        delete process.env.PERPLEXITY_API_KEY;
+      } else {
+        process.env.PERPLEXITY_API_KEY = originalPerplexity;
+      }
+      if (originalOpenRouter === undefined) {
+        delete process.env.OPENROUTER_API_KEY;
+      } else {
+        process.env.OPENROUTER_API_KEY = originalOpenRouter;
+      }
+    }
   });
 
   it("stores env-backed SecretRef when secretInputMode=ref for brave", async () => {

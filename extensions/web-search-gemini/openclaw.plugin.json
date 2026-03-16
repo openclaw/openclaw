@@ -1,0 +1,8 @@
+{
+  "id": "web-search-gemini",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

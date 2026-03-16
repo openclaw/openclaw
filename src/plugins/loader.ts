@@ -359,6 +359,7 @@ function createPluginRecord(params: {
     hookNames: [],
     channelIds: [],
     providerIds: [],
+    webSearchProviderIds: [],
     gatewayMethods: [],
     cliCommands: [],
     services: [],

@@ -25,6 +25,7 @@ import type { InternalHookHandler } from "../hooks/internal-hooks.js";
 import type { HookEntry } from "../hooks/types.js";
 import type { ProviderUsageSnapshot } from "../infra/provider-usage.types.js";
 import type { RuntimeEnv } from "../runtime.js";
+import type { RuntimeWebSearchMetadata } from "../secrets/runtime-web-tools.types.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 import type { PluginRuntime } from "./runtime/types.js";
 
@@ -565,6 +566,34 @@ export type ProviderPlugin = {
   onModelSelected?: (ctx: ProviderModelSelectedContext) => Promise<void>;
 };
 
+export type WebSearchProviderId = string;
+
+export type WebSearchProviderToolDefinition = {
+  description: string;
+  parameters: Record<string, unknown>;
+  execute: (args: Record<string, unknown>) => Promise<Record<string, unknown>>;
+};
+
+export type WebSearchProviderContext = {
+  config?: OpenClawConfig;
+  searchConfig?: Record<string, unknown>;
+  runtimeMetadata?: RuntimeWebSearchMetadata;
+};
+
+export type WebSearchProviderPlugin = {
+  id: WebSearchProviderId;
+  label: string;
+  hint: string;
+  envVars: string[];
+  placeholder: string;
+  signupUrl: string;
+  docsUrl?: string;
+  autoDetectOrder?: number;
+  getCredentialValue: (searchConfig?: Record<string, unknown>) => unknown;
+  setCredentialValue: (searchConfigTarget: Record<string, unknown>, value: unknown) => void;
+  createTool: (ctx: WebSearchProviderContext) => WebSearchProviderToolDefinition | null;
+};
+
 export type OpenClawPluginGatewayMethod = {
   method: string;
   handler: GatewayRequestHandler;
@@ -868,6 +897,7 @@ export type OpenClawPluginApi = {
   registerCli: (registrar: OpenClawPluginCliRegistrar, opts?: { commands?: string[] }) => void;
   registerService: (service: OpenClawPluginService) => void;
   registerProvider: (provider: ProviderPlugin) => void;
+  registerWebSearchProvider: (provider: WebSearchProviderPlugin) => void;
   registerInteractiveHandler: (registration: PluginInteractiveHandlerRegistration) => void;
   /**
    * Register a custom command that bypasses the LLM agent.
