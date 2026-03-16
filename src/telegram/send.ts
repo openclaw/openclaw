@@ -103,7 +103,7 @@ const THREAD_NOT_FOUND_RE = /400:\s*Bad Request:\s*message thread not found/i;
 const MESSAGE_NOT_MODIFIED_RE =
   /400:\s*Bad Request:\s*message is not modified|MESSAGE_NOT_MODIFIED/i;
 const CHAT_NOT_FOUND_RE = /400: Bad Request: chat not found/i;
-const BOT_NOT_MEMBER_RE = /403:\s*Forbidden:\s*bot is not a member of the channel chat/i;
+const BOT_NOT_MEMBER_RE = /403:\s*Forbidden:\s*bot (?:is not a member|was kicked from the)/i;
 const sendLogger = createSubsystemLogger("telegram/send");
 const diagLogger = createSubsystemLogger("telegram/diagnostic");
 
