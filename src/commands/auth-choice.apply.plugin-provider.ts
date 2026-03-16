@@ -275,18 +275,15 @@ export async function applyAuthChoicePluginProvider(
         agentDir,
         workspaceDir,
       });
-      await params.prompter.note(
-        `Default model set to ${applied.defaultModel}`,
-        "Model configured",
-      );
+      await params.prompter.note(`已设置默认模型：${applied.defaultModel}`, "模型已配置");
     } else {
       nextConfig = restoreConfiguredPrimaryModel(nextConfig, params.config);
     }
     if (!params.setDefaultModel && params.agentId) {
       agentModelOverride = applied.defaultModel;
       await params.prompter.note(
-        `Default model set to ${applied.defaultModel} for agent "${params.agentId}".`,
-        "Model configured",
+        `已为智能体 "${params.agentId}" 设置默认模型：${applied.defaultModel}。`,
+        "模型已配置",
       );
     }
   }

@@ -12,11 +12,11 @@
       "choiceLabel": "OpenCode Zen catalog",
       "groupId": "opencode",
       "groupLabel": "OpenCode",
-      "groupHint": "Shared API key for Zen + Go catalogs",
+      "groupHint": "Zen + Go 目录共用 API Key",
       "optionKey": "opencodeZenApiKey",
       "cliFlag": "--opencode-zen-api-key",
       "cliOption": "--opencode-zen-api-key <key>",
-      "cliDescription": "OpenCode API key (Zen catalog)"
+      "cliDescription": "OpenCode API Key（Zen 目录）"
     }
   ],
   "configSchema": {

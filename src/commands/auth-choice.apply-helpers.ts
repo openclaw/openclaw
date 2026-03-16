@@ -107,18 +107,18 @@ export async function promptSecretRefForSetup(params: {
 
   while (true) {
     const sourceRaw: SecretRefChoice = await params.prompter.select<SecretRefChoice>({
-      message: params.copy?.sourceMessage ?? "Where is this API key stored?",
+      message: params.copy?.sourceMessage ?? "这个 API Key 存在哪里？",
       initialValue: sourceChoice,
       options: [
         {
           value: "env",
-          label: "Environment variable",
-          hint: "Reference a variable from your runtime environment",
+          label: "环境变量",
+          hint: "引用你运行环境里的变量",
         },
         {
           value: "provider",
-          label: "Configured secret provider",
-          hint: "Use a configured file or exec secret provider",
+          label: "已配置的密钥提供方",
+          hint: "使用已配置的文件或命令式密钥提供方",
         },
       ],
     });
@@ -127,7 +127,7 @@ export async function promptSecretRefForSetup(params: {
 
     if (source === "env") {
       const envVarRaw = await params.prompter.text({
-        message: params.copy?.envVarMessage ?? "Environment variable name",
+        message: params.copy?.envVarMessage ?? "环境变量名",
         initialValue: defaultEnvVar || undefined,
         placeholder: params.copy?.envVarPlaceholder ?? "OPENAI_API_KEY",
         validate: (value) => {
@@ -135,13 +135,13 @@ export async function promptSecretRefForSetup(params: {
           if (!isValidEnvSecretRefId(candidate)) {
             return (
               params.copy?.envVarFormatError ??
-              'Use an env var name like "OPENAI_API_KEY" (uppercase letters, numbers, underscores).'
+              '请使用类似 "OPENAI_API_KEY" 的环境变量名（大写字母、数字、下划线）。'
             );
           }
           if (!process.env[candidate]?.trim()) {
             return (
               params.copy?.envVarMissingError?.(candidate) ??
-              `Environment variable "${candidate}" is missing or empty in this session.`
+              `当前会话中的环境变量 "${candidate}" 不存在或为空。`
             );
           }
           return undefined;
@@ -168,8 +168,8 @@ export async function promptSecretRefForSetup(params: {
       });
       await params.prompter.note(
         params.copy?.envValidatedMessage?.(envVar) ??
-          `Validated environment variable ${envVar}. OpenClaw will store a reference, not the key value.`,
-        "Reference validated",
+          `已验证环境变量 ${envVar}。OpenClaw 将保存引用，而不是密钥值。`,
+        "引用已验证",
       );
       return { ref, resolvedValue };
     }
@@ -180,8 +180,8 @@ export async function promptSecretRefForSetup(params: {
     if (externalProviders.length === 0) {
       await params.prompter.note(
         params.copy?.noProvidersMessage ??
-          "No file/exec secret providers are configured yet. Add one under secrets.providers, or select Environment variable.",
-        "No providers configured",
+          "当前尚未配置文件/命令式密钥提供方。请先在 secrets.providers 下添加，或改用环境变量。",
+        "未配置提供方",
       );
       continue;
     }
@@ -189,28 +189,28 @@ export async function promptSecretRefForSetup(params: {
       preferFirstProviderForSource: true,
     });
     const selectedProvider = await params.prompter.select<string>({
-      message: "Select secret provider",
+      message: "选择密钥提供方",
       initialValue:
         externalProviders.find(([providerName]) => providerName === defaultProvider)?.[0] ??
         externalProviders[0]?.[0],
       options: externalProviders.map(([providerName, provider]) => ({
         value: providerName,
         label: providerName,
-        hint: provider?.source === "exec" ? "Exec provider" : "File provider",
+        hint: provider?.source === "exec" ? "命令式提供方" : "文件提供方",
       })),
     });
     const providerEntry = params.config.secrets?.providers?.[selectedProvider];
     if (!providerEntry || (providerEntry.source !== "file" && providerEntry.source !== "exec")) {
       await params.prompter.note(
-        `Provider "${selectedProvider}" is not a file/exec provider.`,
-        "Invalid provider",
+        `提供方 "${selectedProvider}" 不是文件/命令式提供方。`,
+        "提供方无效",
       );
       continue;
     }
     const idPrompt =
       providerEntry.source === "file"
-        ? "Secret id (JSON pointer for json mode, or 'value' for singleValue mode)"
-        : "Secret id for the exec provider";
+        ? "密钥 ID（json 模式使用 JSON Pointer；singleValue 模式使用 'value'）"
+        : "命令式提供方的密钥 ID";
     const idDefault =
       providerEntry.source === "file"
         ? providerEntry.mode === "singleValue"
@@ -224,21 +224,21 @@ export async function promptSecretRefForSetup(params: {
       validate: (value) => {
         const candidate = value.trim();
         if (!candidate) {
-          return "Secret id cannot be empty.";
+          return "密钥 ID 不能为空。";
         }
         if (
           providerEntry.source === "file" &&
           providerEntry.mode !== "singleValue" &&
           !isValidFileSecretRefId(candidate)
         ) {
-          return 'Use an absolute JSON pointer like "/providers/openai/apiKey".';
+          return '请使用绝对 JSON Pointer，例如 "/providers/openai/apiKey"。';
         }
         if (
           providerEntry.source === "file" &&
           providerEntry.mode === "singleValue" &&
           candidate !== "value"
         ) {
-          return 'singleValue mode expects id "value".';
+          return 'singleValue 模式要求 id 为 "value"。';
         }
         if (providerEntry.source === "exec" && !isValidExecSecretRefId(candidate)) {
           return formatExecSecretRefIdValidationMessage();
@@ -259,18 +259,18 @@ export async function promptSecretRefForSetup(params: {
       });
       await params.prompter.note(
         params.copy?.providerValidatedMessage?.(selectedProvider, id, providerEntry.source) ??
-          `Validated ${providerEntry.source} reference ${selectedProvider}:${id}. OpenClaw will store a reference, not the key value.`,
-        "Reference validated",
+          `已验证 ${providerEntry.source} 引用 ${selectedProvider}:${id}。OpenClaw 将保存引用，而不是密钥值。`,
+        "引用已验证",
       );
       return { ref, resolvedValue };
     } catch (error) {
       await params.prompter.note(
         [
-          `Could not validate provider reference ${selectedProvider}:${id}.`,
+          `无法验证提供方引用 ${selectedProvider}:${id}。`,
           formatErrorMessage(error),
-          "Check your provider configuration and try again.",
+          "请检查提供方配置后重试。",
         ].join("\n"),
-        "Reference check failed",
+        "引用校验失败",
       );
     }
   }
@@ -284,8 +284,8 @@ export function createAuthChoiceAgentModelNoter(
       return;
     }
     await params.prompter.note(
-      `Default model set to ${model} for agent "${params.agentId}".`,
-      "Model configured",
+      `已为智能体 "${params.agentId}" 设置默认模型：${model}。`,
+      "模型已配置",
     );
   };
 }
@@ -394,20 +394,18 @@ export async function resolveSecretInputModeForEnvSelection(params: {
     return "plaintext";
   }
   const selected = await params.prompter.select<SecretInputMode>({
-    message: params.copy?.modeMessage ?? "How do you want to provide this API key?",
+    message: params.copy?.modeMessage ?? "你想用哪种方式提供这个 API Key？",
     initialValue: "plaintext",
     options: [
       {
         value: "plaintext",
-        label: params.copy?.plaintextLabel ?? "Paste API key now",
-        hint: params.copy?.plaintextHint ?? "Stores the key directly in OpenClaw config",
+        label: params.copy?.plaintextLabel ?? "现在粘贴 API Key",
+        hint: params.copy?.plaintextHint ?? "会把密钥直接存进 OpenClaw 配置",
       },
       {
         value: "ref",
-        label: params.copy?.refLabel ?? "Use external secret provider",
-        hint:
-          params.copy?.refHint ??
-          "Stores a reference to env or configured external secret providers",
+        label: params.copy?.refLabel ?? "使用外部密钥提供方",
+        hint: params.copy?.refHint ?? "只保存引用，指向环境变量或已配置的外部密钥提供方",
       },
     ],
   });
@@ -518,7 +516,7 @@ export async function ensureApiKeyFromEnvOrPrompt(params: {
 
   if (envKey && selectedMode === "plaintext") {
     const useExisting = await params.prompter.confirm({
-      message: `Use existing ${params.envLabel} (${envKey.source}, ${formatApiKeyPreview(envKey.apiKey)})?`,
+      message: `使用现有的 ${params.envLabel} 吗？（${envKey.source}，${formatApiKeyPreview(envKey.apiKey)}）`,
       initialValue: true,
     });
     if (useExisting) {

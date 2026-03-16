@@ -69,14 +69,14 @@ export async function applyLiteLlmApiKeyProvider({
       expectedProviders: ["litellm"],
       provider: "litellm",
       envLabel: "LITELLM_API_KEY",
-      promptMessage: "Enter LiteLLM API key",
+      promptMessage: "输入 LiteLLM API Key",
       normalize: normalizeApiKeyInput,
       validate: validateApiKeyInput,
       prompter: params.prompter,
       setCredential: async (apiKey, mode) =>
         setLitellmApiKey(apiKey, params.agentDir, { secretInputMode: mode }),
       noteMessage:
-        "LiteLLM provides a unified API to 100+ LLM providers.\nGet your API key from your LiteLLM proxy or https://litellm.ai\nDefault proxy runs on http://localhost:4000",
+        "LiteLLM 为 100+ LLM 提供方提供统一 API。\n请从你的 LiteLLM 代理或 https://litellm.ai 获取 API Key。\n默认代理地址为 http://localhost:4000",
       noteTitle: "LiteLLM",
     });
     hasCredential = true;

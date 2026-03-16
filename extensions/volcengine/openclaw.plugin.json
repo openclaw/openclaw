@@ -9,14 +9,14 @@
       "provider": "volcengine",
       "method": "api-key",
       "choiceId": "volcengine-api-key",
-      "choiceLabel": "Volcano Engine API key",
+      "choiceLabel": "Volcano Engine API Key",
       "groupId": "volcengine",
       "groupLabel": "Volcano Engine",
-      "groupHint": "API key",
+      "groupHint": "API Key",
       "optionKey": "volcengineApiKey",
       "cliFlag": "--volcengine-api-key",
       "cliOption": "--volcengine-api-key <key>",
-      "cliDescription": "Volcano Engine API key"
+      "cliDescription": "Volcano Engine API Key"
     }
   ],
   "configSchema": {

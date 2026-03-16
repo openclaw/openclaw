@@ -9,14 +9,14 @@
       "provider": "byteplus",
       "method": "api-key",
       "choiceId": "byteplus-api-key",
-      "choiceLabel": "BytePlus API key",
+      "choiceLabel": "BytePlus API Key",
       "groupId": "byteplus",
       "groupLabel": "BytePlus",
-      "groupHint": "API key",
+      "groupHint": "API Key",
       "optionKey": "byteplusApiKey",
       "cliFlag": "--byteplus-api-key",
       "cliOption": "--byteplus-api-key <key>",
-      "cliDescription": "BytePlus API key"
+      "cliDescription": "BytePlus API Key"
     }
   ],
   "configSchema": {

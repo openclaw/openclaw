@@ -9,14 +9,14 @@
       "provider": "synthetic",
       "method": "api-key",
       "choiceId": "synthetic-api-key",
-      "choiceLabel": "Synthetic API key",
+      "choiceLabel": "Synthetic API Key",
       "groupId": "synthetic",
       "groupLabel": "Synthetic",
       "groupHint": "Anthropic-compatible (multi-model)",
       "optionKey": "syntheticApiKey",
       "cliFlag": "--synthetic-api-key",
       "cliOption": "--synthetic-api-key <key>",
-      "cliDescription": "Synthetic API key"
+      "cliDescription": "Synthetic API Key"
     }
   ],
   "configSchema": {

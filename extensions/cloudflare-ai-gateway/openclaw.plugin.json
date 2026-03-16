@@ -10,14 +10,14 @@
       "method": "api-key",
       "choiceId": "cloudflare-ai-gateway-api-key",
       "choiceLabel": "Cloudflare AI Gateway",
-      "choiceHint": "Account ID + Gateway ID + API key",
+      "choiceHint": "Account ID + Gateway ID + API Key",
       "groupId": "cloudflare-ai-gateway",
       "groupLabel": "Cloudflare AI Gateway",
-      "groupHint": "Account ID + Gateway ID + API key",
+      "groupHint": "Account ID + Gateway ID + API Key",
       "optionKey": "cloudflareAiGatewayApiKey",
       "cliFlag": "--cloudflare-ai-gateway-api-key",
       "cliOption": "--cloudflare-ai-gateway-api-key <key>",
-      "cliDescription": "Cloudflare AI Gateway API key"
+      "cliDescription": "Cloudflare AI Gateway API Key"
     }
   ],
   "configSchema": {

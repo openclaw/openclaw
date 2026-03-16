@@ -24,12 +24,12 @@ const volcenginePlugin = {
         createProviderApiKeyAuthMethod({
           providerId: PROVIDER_ID,
           methodId: "api-key",
-          label: "Volcano Engine API key",
-          hint: "API key",
+          label: "Volcano Engine API Key",
+          hint: "API Key",
           optionKey: "volcengineApiKey",
           flagName: "--volcengine-api-key",
           envVar: "VOLCANO_ENGINE_API_KEY",
-          promptMessage: "Enter Volcano Engine API key",
+          promptMessage: "输入 Volcano Engine API Key",
           defaultModel: VOLCENGINE_DEFAULT_MODEL_REF,
           expectedProviders: ["volcengine"],
           applyConfig: (cfg) =>
@@ -39,10 +39,10 @@ const volcenginePlugin = {
             }),
           wizard: {
             choiceId: "volcengine-api-key",
-            choiceLabel: "Volcano Engine API key",
+            choiceLabel: "Volcano Engine API Key",
             groupId: "volcengine",
             groupLabel: "Volcano Engine",
-            groupHint: "API key",
+            groupHint: "API Key",
           },
         }),
       ],
