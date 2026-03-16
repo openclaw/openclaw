@@ -417,7 +417,7 @@ export async function spawnSubagentDirect(
     const normalized = normalizeThinkLevel(thinkingCandidateRaw);
     if (!normalized) {
       const { provider, model } = splitModelRef(resolvedModel);
-      const hint = formatThinkingLevels(provider, model);
+      const hint = formatThinkingLevels(provider, model, ", ", { config: cfg });
       return {
         status: "error",
         error: `Invalid thinking level "${thinkingCandidateRaw}". Use one of: ${hint}.`,

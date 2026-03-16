@@ -7,7 +7,38 @@ import {
   normalizeThinkLevel,
   resolveThinkingDefaultForModel,
   supportsXHighThinking,
+  type ThinkingSupportSource,
 } from "./thinking.js";
+
+function createThinkingSupportSource(
+  provider: string,
+  supportsXHighThinking: boolean,
+): ThinkingSupportSource {
+  return {
+    config: {
+      models: {
+        providers: {
+          [provider]: {
+            baseUrl:
+              provider === "openai" ? "https://api.openai.com/v1" : "https://example.test/v1",
+            models: [
+              {
+                id: "gpt-5.4",
+                name: `${provider}/gpt-5.4`,
+                reasoning: true,
+                input: ["text"],
+                cost: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0 },
+                contextWindow: 128000,
+                maxTokens: 8192,
+                compat: { supportsXHighThinking },
+              },
+            ],
+          },
+        },
+      },
+    },
+  };
+}
 
 describe("normalizeThinkLevel", () => {
   it("accepts mid as medium", () => {
@@ -71,22 +102,7 @@ describe("listThinkingLevels", () => {
   });
 
   it("allows config-defined custom models to opt in to xhigh", () => {
-    const source = {
-      config: {
-        models: {
-          providers: {
-            robot: {
-              models: [
-                {
-                  id: "gpt-5.4",
-                  compat: { supportsXHighThinking: true },
-                },
-              ],
-            },
-          },
-        },
-      },
-    } as const;
+    const source = createThinkingSupportSource("robot", true);
 
     expect(supportsXHighThinking("robot", "gpt-5.4", source)).toBe(true);
     expect(listThinkingLevels("robot", "gpt-5.4", source)).toContain("xhigh");
@@ -94,22 +110,7 @@ describe("listThinkingLevels", () => {
   });
 
   it("allows config to explicitly disable xhigh for an otherwise supported ref", () => {
-    const source = {
-      config: {
-        models: {
-          providers: {
-            openai: {
-              models: [
-                {
-                  id: "gpt-5.4",
-                  compat: { supportsXHighThinking: false },
-                },
-              ],
-            },
-          },
-        },
-      },
-    } as const;
+    const source = createThinkingSupportSource("openai", false);
 
     expect(supportsXHighThinking("openai", "gpt-5.4", source)).toBe(false);
     expect(listThinkingLevels("openai", "gpt-5.4", source)).not.toContain("xhigh");

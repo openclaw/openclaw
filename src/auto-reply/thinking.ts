@@ -1,4 +1,4 @@
-import { getRuntimeConfigSnapshot, type OpenClawConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/types.js";
 import type { ModelCompatConfig } from "../config/types.models.js";
 
 export type ThinkLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "adaptive";
@@ -48,7 +48,9 @@ function normalizeModelRef(provider?: string | null, model?: string | null): str
 function resolveThinkingSupportConfig(
   source?: ThinkingSupportSource,
 ): Pick<OpenClawConfig, "models"> | null {
-  return source?.config ?? getRuntimeConfigSnapshot();
+  // Keep this module browser-safe: the Control UI imports it directly, so
+  // callers must pass config explicitly instead of pulling runtime config here.
+  return source?.config ?? null;
 }
 
 function resolveCatalogXHighOverride(
