@@ -57,6 +57,33 @@ type StatusContractEntry = {
   }>;
 };
 
+export type ChannelPluginSurface =
+  | "actions"
+  | "setup"
+  | "status"
+  | "outbound"
+  | "messaging"
+  | "threading"
+  | "directory"
+  | "gateway";
+
+type SurfaceContractEntry = {
+  id: string;
+  plugin: Pick<
+    ChannelPlugin,
+    | "id"
+    | "actions"
+    | "setup"
+    | "status"
+    | "outbound"
+    | "messaging"
+    | "threading"
+    | "directory"
+    | "gateway"
+  >;
+  surfaces: readonly ChannelPluginSurface[];
+};
+
 const telegramListActionsMock = vi.fn();
 const telegramGetCapabilitiesMock = vi.fn();
 const discordListActionsMock = vi.fn();
@@ -458,6 +485,190 @@ export const statusContractRegistry: StatusContractEntry[] = [
           expect(snapshot.mode).toBe("webhook");
         },
       },
+    ],
+  },
+];
+
+export const surfaceContractRegistry: SurfaceContractEntry[] = [
+  {
+    id: "bluebubbles",
+    plugin: bluebubblesPlugin,
+    surfaces: ["actions", "setup", "status", "outbound", "messaging", "threading", "gateway"],
+  },
+  {
+    id: "discord",
+    plugin: discordPlugin,
+    surfaces: [
+      "actions",
+      "setup",
+      "status",
+      "outbound",
+      "messaging",
+      "threading",
+      "directory",
+      "gateway",
+    ],
+  },
+  {
+    id: "feishu",
+    plugin: feishuPlugin,
+    surfaces: ["actions", "setup", "status", "outbound", "messaging", "directory", "gateway"],
+  },
+  {
+    id: "googlechat",
+    plugin: googlechatPlugin,
+    surfaces: [
+      "actions",
+      "setup",
+      "status",
+      "outbound",
+      "messaging",
+      "threading",
+      "directory",
+      "gateway",
+    ],
+  },
+  {
+    id: "imessage",
+    plugin: imessagePlugin,
+    surfaces: ["setup", "status", "outbound", "messaging", "gateway"],
+  },
+  {
+    id: "irc",
+    plugin: ircPlugin,
+    surfaces: ["setup", "status", "outbound", "messaging", "directory", "gateway"],
+  },
+  {
+    id: "line",
+    plugin: linePlugin,
+    surfaces: ["setup", "status", "outbound", "messaging", "directory", "gateway"],
+  },
+  {
+    id: "matrix",
+    plugin: matrixPlugin,
+    surfaces: [
+      "actions",
+      "setup",
+      "status",
+      "outbound",
+      "messaging",
+      "threading",
+      "directory",
+      "gateway",
+    ],
+  },
+  {
+    id: "mattermost",
+    plugin: mattermostPlugin,
+    surfaces: [
+      "actions",
+      "setup",
+      "status",
+      "outbound",
+      "messaging",
+      "threading",
+      "directory",
+      "gateway",
+    ],
+  },
+  {
+    id: "msteams",
+    plugin: msteamsPlugin,
+    surfaces: [
+      "actions",
+      "setup",
+      "status",
+      "outbound",
+      "messaging",
+      "threading",
+      "directory",
+      "gateway",
+    ],
+  },
+  {
+    id: "nextcloud-talk",
+    plugin: nextcloudTalkPlugin,
+    surfaces: ["setup", "status", "outbound", "messaging", "gateway"],
+  },
+  {
+    id: "nostr",
+    plugin: nostrPlugin,
+    surfaces: ["setup", "status", "outbound", "messaging", "gateway"],
+  },
+  {
+    id: "signal",
+    plugin: signalPlugin,
+    surfaces: ["actions", "setup", "status", "outbound", "messaging", "gateway"],
+  },
+  {
+    id: "slack",
+    plugin: slackPlugin,
+    surfaces: [
+      "actions",
+      "setup",
+      "status",
+      "outbound",
+      "messaging",
+      "threading",
+      "directory",
+      "gateway",
+    ],
+  },
+  {
+    id: "synology-chat",
+    plugin: synologyChatPlugin,
+    surfaces: ["setup", "outbound", "messaging", "directory", "gateway"],
+  },
+  {
+    id: "telegram",
+    plugin: telegramPlugin,
+    surfaces: [
+      "actions",
+      "setup",
+      "status",
+      "outbound",
+      "messaging",
+      "threading",
+      "directory",
+      "gateway",
+    ],
+  },
+  {
+    id: "tlon",
+    plugin: tlonPlugin,
+    surfaces: ["setup", "status", "outbound", "messaging", "gateway"],
+  },
+  {
+    id: "whatsapp",
+    plugin: whatsappPlugin,
+    surfaces: ["actions", "setup", "status", "outbound", "messaging", "directory", "gateway"],
+  },
+  {
+    id: "zalo",
+    plugin: zaloPlugin,
+    surfaces: [
+      "actions",
+      "setup",
+      "status",
+      "outbound",
+      "messaging",
+      "threading",
+      "directory",
+      "gateway",
+    ],
+  },
+  {
+    id: "zalouser",
+    plugin: zalouserPlugin,
+    surfaces: [
+      "actions",
+      "setup",
+      "status",
+      "outbound",
+      "messaging",
+      "threading",
+      "directory",
+      "gateway",
     ],
   },
 ];
