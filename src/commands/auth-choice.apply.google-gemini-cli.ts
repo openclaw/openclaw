@@ -29,7 +29,7 @@ export async function applyAuthChoiceGoogleGeminiCli(
 
   return await applyAuthChoicePluginProvider(params, {
     authChoice: "google-gemini-cli",
-    pluginId: "google-gemini-cli-auth",
+    pluginId: "google",
     providerId: "google-gemini-cli",
     methodId: "oauth",
     label: "Google Gemini CLI",

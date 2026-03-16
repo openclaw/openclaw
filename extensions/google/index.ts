@@ -5,6 +5,7 @@ import {
 } from "../../src/agents/tools/web-search-plugin-factory.js";
 import { emptyPluginConfigSchema } from "../../src/plugins/config-schema.js";
 import type { OpenClawPluginApi } from "../../src/plugins/types.js";
+import { registerGoogleGeminiCliProvider } from "./gemini-cli-provider.js";
 
 const googlePlugin = {
   id: "google",
@@ -12,6 +13,7 @@ const googlePlugin = {
   description: "Bundled Google plugin",
   configSchema: emptyPluginConfigSchema(),
   register(api: OpenClawPluginApi) {
+    registerGoogleGeminiCliProvider(api);
     api.registerWebSearchProvider(
       createPluginBackedWebSearchProvider({
         id: "gemini",
