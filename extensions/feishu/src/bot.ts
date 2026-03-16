@@ -543,6 +543,10 @@ function normalizeFeishuCommandProbeBody(text: string): string {
  */
 export function decodeFeishuFilename(filename: string | undefined): string {
   if (!filename) return "";
+  // Handle RFC 5987 format: filename*=UTF-8''encodedName
+  if (filename.startsWith("filename*=UTF-8''")) {
+    filename = filename.replace("filename*=UTF-8''", "");
+  }
   // Only decode if result contains non-ASCII characters.
   // This preserves literal percent signs like "report%202026.pdf".
   try {

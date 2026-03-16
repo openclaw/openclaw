@@ -29,3 +29,8 @@ describe("decodeFeishuFilename", () => {
     expect(decodeFeishuFilename("file with spaces.pdf")).toBe("file with spaces.pdf");
   });
 });
+
+it("decodes RFC 5987 format", () => {
+  // RFC 5987 format: filename*=UTF-8''encoded
+  expect(decodeFeishuFilename("filename*=UTF-8''%E6%B5%8B%E8%AF%95.pdf")).toBe("测试.pdf");
+});
