@@ -26,7 +26,8 @@ import {
   resolveMSTeamsUserAllowlist,
 } from "./resolve-allowlist.js";
 import { getMSTeamsRuntime } from "./runtime.js";
-import { msteamsSetupAdapter, msteamsSetupWizard } from "./setup-surface.js";
+import { msteamsSetupAdapter } from "./setup-core.js";
+import { msteamsSetupWizard } from "./setup-surface.js";
 import { resolveMSTeamsCredentials } from "./token.js";
 
 type ResolvedMSTeamsAccount = {

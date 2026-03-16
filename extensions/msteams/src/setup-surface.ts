@@ -8,7 +8,6 @@ import {
   splitOnboardingEntries,
 } from "../../../src/channels/plugins/onboarding/helpers.js";
 import type { ChannelSetupWizard } from "../../../src/channels/plugins/setup-wizard.js";
-import type { ChannelSetupAdapter } from "../../../src/channels/plugins/types.adapters.js";
 import type { OpenClawConfig } from "../../../src/config/config.js";
 import type { DmPolicy, MSTeamsTeamConfig } from "../../../src/config/types.js";
 import { DEFAULT_ACCOUNT_ID } from "../../../src/routing/session-key.js";
@@ -20,6 +19,7 @@ import {
   resolveMSTeamsUserAllowlist,
 } from "./resolve-allowlist.js";
 import { normalizeSecretInputString } from "./secret-input.js";
+import { msteamsSetupAdapter } from "./setup-core.js";
 import { hasConfiguredMSTeamsCredentials, resolveMSTeamsCredentials } from "./token.js";
 
 const channel = "msteams" as const;
@@ -201,19 +201,7 @@ const msteamsDmPolicy: ChannelOnboardingDmPolicy = {
   promptAllowFrom: promptMSTeamsAllowFrom,
 };
 
-export const msteamsSetupAdapter: ChannelSetupAdapter = {
-  resolveAccountId: () => DEFAULT_ACCOUNT_ID,
-  applyAccountConfig: ({ cfg }) => ({
-    ...cfg,
-    channels: {
-      ...cfg.channels,
-      msteams: {
-        ...cfg.channels?.msteams,
-        enabled: true,
-      },
-    },
-  }),
-};
+export { msteamsSetupAdapter } from "./setup-core.js";
 
 export const msteamsSetupWizard: ChannelSetupWizard = {
   channel,
