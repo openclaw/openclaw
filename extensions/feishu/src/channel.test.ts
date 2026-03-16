@@ -428,6 +428,20 @@ describe("feishuPlugin actions", () => {
     expect(getFeishuMemberInfoMock).toHaveBeenCalledWith({ tag: "client" }, "u_1", "user_id");
   });
 
+  it("honors explicit open_id over alias heuristics", async () => {
+    getFeishuMemberInfoMock.mockResolvedValueOnce({ member_id: "u_1", name: "Alice" });
+
+    await feishuPlugin.actions?.handleAction?.({
+      action: "member-info",
+      params: { userId: "u_1", memberIdType: "open_id" },
+      cfg,
+      accountId: undefined,
+      toolContext: {},
+    } as never);
+
+    expect(getFeishuMemberInfoMock).toHaveBeenCalledWith({ tag: "client" }, "u_1", "open_id");
+  });
+
   it("lists directory-backed peers and groups", async () => {
     listFeishuDirectoryGroupsLiveMock.mockResolvedValueOnce([{ kind: "group", id: "oc_group_1" }]);
     listFeishuDirectoryPeersLiveMock.mockResolvedValueOnce([{ kind: "user", id: "ou_1" }]);

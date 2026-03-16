@@ -55,9 +55,9 @@ export async function listFeishuDirectoryPeersLive(params: {
     }
 
     return peers;
-  } catch {
+  } catch (err) {
     if (params.fallbackToStatic === false) {
-      throw new Error("Feishu live peer lookup failed");
+      throw err instanceof Error ? err : new Error("Feishu live peer lookup failed");
     }
     return listFeishuDirectoryPeers(params);
   }
@@ -108,9 +108,9 @@ export async function listFeishuDirectoryGroupsLive(params: {
     }
 
     return groups;
-  } catch {
+  } catch (err) {
     if (params.fallbackToStatic === false) {
-      throw new Error("Feishu live group lookup failed");
+      throw err instanceof Error ? err : new Error("Feishu live group lookup failed");
     }
     return listFeishuDirectoryGroups(params);
   }

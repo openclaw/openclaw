@@ -94,7 +94,7 @@ describe("feishu directory (config-backed)", () => {
     });
 
     await expect(listFeishuDirectoryPeersLive({ cfg, fallbackToStatic: false })).rejects.toThrow(
-      "Feishu live peer lookup failed",
+      "token expired",
     );
   });
 
@@ -112,7 +112,7 @@ describe("feishu directory (config-backed)", () => {
     });
 
     await expect(listFeishuDirectoryGroupsLive({ cfg, fallbackToStatic: false })).rejects.toThrow(
-      "Feishu live group lookup failed",
+      "forbidden",
     );
   });
 });

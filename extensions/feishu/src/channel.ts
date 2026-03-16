@@ -262,7 +262,7 @@ function resolveFeishuMemberIdType(
     "userIdType",
     "user_id_type",
   ]);
-  if (raw === "user_id" || raw === "union_id") {
+  if (raw === "open_id" || raw === "user_id" || raw === "union_id") {
     return raw;
   }
   if (
