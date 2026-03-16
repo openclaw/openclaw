@@ -22,8 +22,8 @@ vi.mock("../../../extensions/github-copilot/token.js", async () => {
   };
 });
 
-vi.mock("openclaw/plugin-sdk/core", async () => {
-  const actual = await vi.importActual<object>("openclaw/plugin-sdk/core");
+vi.mock("openclaw/plugin-sdk/provider-setup", async () => {
+  const actual = await vi.importActual<object>("openclaw/plugin-sdk/provider-setup");
   return {
     ...actual,
     buildOllamaProvider: (...args: unknown[]) => buildOllamaProviderMock(...args),

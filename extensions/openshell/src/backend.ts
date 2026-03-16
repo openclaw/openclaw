@@ -11,13 +11,13 @@ import type {
   SandboxBackendHandle,
   SandboxBackendManager,
   SshSandboxSession,
-} from "openclaw/plugin-sdk/core";
+} from "openclaw/plugin-sdk/sandbox";
 import {
   createRemoteShellSandboxFsBridge,
   disposeSshSandboxSession,
   resolvePreferredOpenClawTmpDir,
   runSshSandboxCommand,
-} from "openclaw/plugin-sdk/core";
+} from "openclaw/plugin-sdk/sandbox";
 import {
   buildExecRemoteCommand,
   buildRemoteCommand,
