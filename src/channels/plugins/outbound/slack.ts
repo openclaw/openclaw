@@ -1,9 +1,9 @@
 import { parseSlackBlocksInput } from "../../../../extensions/slack/src/blocks-input.js";
-import { sendMessageSlack, type SlackSendIdentity } from "../../../../extensions/slack/src/send.js";
 import {
   buildSlackInteractiveBlocks,
   type SlackBlock,
-} from "../../../../extensions/slack/src/shared-interactive.js";
+} from "../../../../extensions/slack/src/blocks-render.js";
+import { sendMessageSlack, type SlackSendIdentity } from "../../../../extensions/slack/src/send.js";
 import type { OutboundIdentity } from "../../../infra/outbound/identity.js";
 import { resolveOutboundSendDep } from "../../../infra/outbound/send-deps.js";
 import {
@@ -121,13 +121,9 @@ function resolveSlackBlocks(payload: {
     return renderedInteractive.length > 0 ? renderedInteractive : undefined;
   }
   let existingBlocks: SlackBlock[] | undefined;
-  try {
-    existingBlocks = parseSlackBlocksInput((slackData as { blocks?: unknown }).blocks) as
-      | SlackBlock[]
-      | undefined;
-  } catch {
-    return renderedInteractive.length > 0 ? renderedInteractive : undefined;
-  }
+  existingBlocks = parseSlackBlocksInput((slackData as { blocks?: unknown }).blocks) as
+    | SlackBlock[]
+    | undefined;
   const mergedBlocks = [...(existingBlocks ?? []), ...renderedInteractive];
   if (mergedBlocks.length === 0) {
     return undefined;

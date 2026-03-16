@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildSlackInteractiveBlocks } from "./shared-interactive.js";
+import { buildSlackInteractiveBlocks } from "./blocks-render.js";
 
 describe("buildSlackInteractiveBlocks", () => {
   it("renders shared interactive blocks in authored order", () => {
@@ -50,6 +50,36 @@ describe("buildSlackInteractiveBlocks", () => {
 
     expect((section.text?.text ?? "").length).toBeLessThanOrEqual(3000);
     expect((selectBlock.elements?.[0]?.placeholder?.text ?? "").length).toBeLessThanOrEqual(75);
-    expect((buttonBlock.elements?.[0]?.value ?? "").length).toBeLessThanOrEqual(75);
+    expect(buttonBlock.elements?.[0]?.value).toBe(long);
+  });
+
+  it("preserves original callback payloads for round-tripping", () => {
+    const blocks = buildSlackInteractiveBlocks({
+      blocks: [
+        {
+          type: "buttons",
+          buttons: [{ label: "Allow", value: "pluginbind:approval-123:o" }],
+        },
+        {
+          type: "select",
+          options: [{ label: "Approve", value: "codex:approve:thread-1" }],
+        },
+      ],
+    });
+
+    const buttonBlock = blocks[0] as {
+      elements?: Array<{ action_id?: string; value?: string }>;
+    };
+    const selectBlock = blocks[1] as {
+      elements?: Array<{
+        action_id?: string;
+        options?: Array<{ value?: string }>;
+      }>;
+    };
+
+    expect(buttonBlock.elements?.[0]?.action_id).toBe("openclaw:reply_button");
+    expect(buttonBlock.elements?.[0]?.value).toBe("pluginbind:approval-123:o");
+    expect(selectBlock.elements?.[0]?.action_id).toBe("openclaw:reply_select");
+    expect(selectBlock.elements?.[0]?.options?.[0]?.value).toBe("codex:approve:thread-1");
   });
 });
