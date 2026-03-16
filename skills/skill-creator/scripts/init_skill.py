@@ -208,7 +208,7 @@ def title_case_skill_name(skill_name):
 def parse_resources(raw_resources):
     if not raw_resources:
         return []
-    resources = [item.strip() for item in raw_resources.split(",") if item.strip()]
+    resources = [item.strip().lower() for item in raw_resources.split(",") if item.strip()]
     invalid = sorted({item for item in resources if item not in ALLOWED_RESOURCES})
     if invalid:
         allowed = ", ".join(sorted(ALLOWED_RESOURCES))
