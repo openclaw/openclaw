@@ -1,10 +1,16 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/zalo";
 import { describe, expect, it } from "vitest";
-import { zaloOnboardingAdapter } from "./onboarding.js";
+import { buildChannelOnboardingAdapterFromSetupWizard } from "../../../src/channels/plugins/setup-wizard.js";
+import { zaloPlugin } from "./channel.js";
 
-describe("zalo onboarding status", () => {
+const zaloConfigureAdapter = buildChannelOnboardingAdapterFromSetupWizard({
+  plugin: zaloPlugin,
+  wizard: zaloPlugin.setupWizard!,
+});
+
+describe("zalo setup wizard status", () => {
   it("treats SecretRef botToken as configured", async () => {
-    const status = await zaloOnboardingAdapter.getStatus({
+    const status = await zaloConfigureAdapter.getStatus({
       cfg: {
         channels: {
           zalo: {

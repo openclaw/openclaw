@@ -1,10 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
+import { buildChannelOnboardingAdapterFromSetupWizard } from "../../../src/channels/plugins/setup-wizard.js";
 
 vi.mock("./probe.js", () => ({
   probeFeishu: vi.fn(async () => ({ ok: false, error: "mocked" })),
 }));
 
-import { feishuOnboardingAdapter } from "./onboarding.js";
+import { feishuPlugin } from "./channel.js";
 
 const baseConfigureContext = {
   runtime: {} as never,
@@ -42,7 +43,7 @@ async function withEnvVars(values: Record<string, string | undefined>, run: () =
 }
 
 async function getStatusWithEnvRefs(params: { appIdKey: string; appSecretKey: string }) {
-  return await feishuOnboardingAdapter.getStatus({
+  return await feishuConfigureAdapter.getStatus({
     cfg: {
       channels: {
         feishu: {
@@ -55,7 +56,12 @@ async function getStatusWithEnvRefs(params: { appIdKey: string; appSecretKey: st
   });
 }
 
-describe("feishuOnboardingAdapter.configure", () => {
+const feishuConfigureAdapter = buildChannelOnboardingAdapterFromSetupWizard({
+  plugin: feishuPlugin,
+  wizard: feishuPlugin.setupWizard!,
+});
+
+describe("feishu setup wizard", () => {
   it("does not throw when config appId/appSecret are SecretRef objects", async () => {
     const text = vi
       .fn()
@@ -73,7 +79,7 @@ describe("feishuOnboardingAdapter.configure", () => {
     } as never;
 
     await expect(
-      feishuOnboardingAdapter.configure({
+      feishuConfigureAdapter.configure({
         cfg: {
           channels: {
             feishu: {
@@ -89,9 +95,9 @@ describe("feishuOnboardingAdapter.configure", () => {
   });
 });
 
-describe("feishuOnboardingAdapter.getStatus", () => {
+describe("feishu setup wizard status", () => {
   it("does not fallback to top-level appId when account explicitly sets empty appId", async () => {
-    const status = await feishuOnboardingAdapter.getStatus({
+    const status = await feishuConfigureAdapter.getStatus({
       cfg: {
         channels: {
           feishu: {

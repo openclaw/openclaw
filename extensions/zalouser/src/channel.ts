@@ -14,8 +14,6 @@ import type {
   GroupToolPolicyConfig,
 } from "openclaw/plugin-sdk/zalouser";
 import {
-  applyAccountNameToChannelSection,
-  applySetupAccountConfigPatch,
   buildChannelSendResult,
   buildBaseAccountStatusSnapshot,
   buildChannelConfigSchema,
@@ -24,7 +22,6 @@ import {
   formatAllowFromLowercase,
   isDangerousNameMatchingEnabled,
   isNumericTargetId,
-  migrateBaseNameToDefaultAccount,
   normalizeAccountId,
   sendPayloadWithChunkedTextAndMedia,
   setAccountEnabledInConfigSection,
@@ -41,11 +38,11 @@ import {
 import { ZalouserConfigSchema } from "./config-schema.js";
 import { buildZalouserGroupCandidates, findZalouserGroupEntry } from "./group-policy.js";
 import { resolveZalouserReactionMessageIds } from "./message-sid.js";
-import { zalouserOnboardingAdapter } from "./onboarding.js";
 import { probeZalouser } from "./probe.js";
 import { writeQrDataUrlToTempFile } from "./qr-temp-file.js";
 import { getZalouserRuntime } from "./runtime.js";
 import { sendMessageZalouser, sendReactionZalouser } from "./send.js";
+import { zalouserSetupAdapter, zalouserSetupWizard } from "./setup-surface.js";
 import { collectZalouserStatusIssues } from "./status-issues.js";
 import {
   listZaloFriendsMatching,
@@ -332,7 +329,8 @@ export const zalouserDock: ChannelDock = {
 export const zalouserPlugin: ChannelPlugin<ResolvedZalouserAccount> = {
   id: "zalouser",
   meta,
-  onboarding: zalouserOnboardingAdapter,
+  setup: zalouserSetupAdapter,
+  setupWizard: zalouserSetupWizard,
   capabilities: {
     chatTypes: ["direct", "group"],
     media: true,
@@ -407,38 +405,6 @@ export const zalouserPlugin: ChannelPlugin<ResolvedZalouserAccount> = {
     resolveReplyToMode: () => "off",
   },
   actions: zalouserMessageActions,
-  setup: {
-    resolveAccountId: ({ accountId }) => normalizeAccountId(accountId),
-    applyAccountName: ({ cfg, accountId, name }) =>
-      applyAccountNameToChannelSection({
-        cfg: cfg,
-        channelKey: "zalouser",
-        accountId,
-        name,
-      }),
-    validateInput: () => null,
-    applyAccountConfig: ({ cfg, accountId, input }) => {
-      const namedConfig = applyAccountNameToChannelSection({
-        cfg: cfg,
-        channelKey: "zalouser",
-        accountId,
-        name: input.name,
-      });
-      const next =
-        accountId !== DEFAULT_ACCOUNT_ID
-          ? migrateBaseNameToDefaultAccount({
-              cfg: namedConfig,
-              channelKey: "zalouser",
-            })
-          : namedConfig;
-      return applySetupAccountConfigPatch({
-        cfg: next,
-        channelKey: "zalouser",
-        accountId,
-        patch: {},
-      });
-    },
-  },
   messaging: {
     normalizeTarget: (raw) => normalizePrefixedTarget(raw),
     targetResolver: {
