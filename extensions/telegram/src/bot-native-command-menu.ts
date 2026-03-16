@@ -135,6 +135,13 @@ function hashBotIdentity(botIdentity?: string): string {
 
 function resolveCommandHashPath(accountId?: string, botIdentity?: string): string {
   const stateDir = resolveStateDir(process.env, os.homedir);
+  // Guard against malformed state dirs such as bare Windows extended-length prefix
+  // remnants (e.g. "\?" or "\\?") that are not valid root paths.
+  // path.join would silently append "telegram/file.txt", making dirPath look like
+  // "\?\telegram" which passes isAbsolute but is still an invalid mkdir target.
+  if (/^\\{1,2}\?[/\\]?$/.test(stateDir)) {
+    throw new Error(`Invalid state dir for command hash: "${stateDir}"`);
+  }
   const normalizedAccount = accountId?.trim().replace(/[^a-z0-9._-]+/gi, "_") || "default";
   const botHash = hashBotIdentity(botIdentity);
   return path.join(stateDir, "telegram", `command-hash-${normalizedAccount}-${botHash}.txt`);
@@ -159,16 +166,9 @@ async function writeCachedCommandHash(
   const filePath = resolveCommandHashPath(accountId, botIdentity);
   try {
     const dirPath = path.dirname(filePath);
-    // Reject invalid/incomplete directory paths before calling mkdir.
-    // Covers: empty, ".", and bare Windows extended-length prefix remnants
-    // like "\?" or "\\?" that path.dirname() may produce from malformed state dirs.
-    // Note: path.win32.isAbsolute() returns true for these bare prefixes, so we
-    // cannot rely on it to reject them. The regex handles that case instead.
-    if (
-      !dirPath ||
-      dirPath === "." ||
-      /^\\{1,2}\?[/\\]?$/.test(dirPath) // bare \? or \\? with optional trailing slash
-    ) {
+    // Basic sanity check — filePath comes from resolveCommandHashPath which already
+    // validates the stateDir, so dirPath should always be a well-formed absolute path.
+    if (!dirPath || dirPath === ".") {
       throw new Error(`Invalid directory path for command hash: "${dirPath}"`);
     }
     await fs.mkdir(dirPath, { recursive: true });
