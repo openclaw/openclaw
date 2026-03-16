@@ -198,7 +198,7 @@ export type PluginRuntimeChannel = {
     sendMessageIMessage: typeof import("../../../extensions/imessage/src/send.js").sendMessageIMessage;
   };
   whatsapp: {
-    getActiveWebListener: typeof import("../../../extensions/whatsapp/src/active-listener.js").getActiveWebListener;
+    getActiveWebListener: typeof import("../../channels/whatsapp-active-listener.js").getActiveWebListener;
     getWebAuthAgeMs: typeof import("../../../extensions/whatsapp/src/auth-store.js").getWebAuthAgeMs;
     logoutWeb: typeof import("../../../extensions/whatsapp/src/auth-store.js").logoutWeb;
     logWebSelfId: typeof import("../../../extensions/whatsapp/src/auth-store.js").logWebSelfId;

@@ -1,4 +1,4 @@
-import { getActiveWebListener } from "../../../extensions/whatsapp/src/active-listener.js";
+import { getActiveWebListener } from "../../channels/whatsapp-active-listener.js";
 import {
   getWebAuthAgeMs,
   logoutWeb,
