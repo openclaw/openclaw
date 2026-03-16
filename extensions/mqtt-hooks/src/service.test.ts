@@ -8,7 +8,14 @@ class FakeMqttClient extends EventEmitter {
   subscribeErrors: Array<Error | null> = [];
   closed = false;
 
-  subscribe(topic: string, options: { qos: 0 | 1 | 2 }, callback: (err?: Error | null) => void) {
+  subscribe(
+    topic: string,
+    options: { qos: 0 | 1 | 2 },
+    callback: (
+      err: Error | null,
+      granted?: ReadonlyArray<{ topic: string; qos: 0 | 1 | 2 | 128 }>,
+    ) => void,
+  ) {
     this.subscribed.push({ topic, qos: options.qos });
     callback(this.subscribeErrors.shift() ?? null);
   }
@@ -25,12 +32,17 @@ class FakeMqttClient extends EventEmitter {
 }
 
 class DelayedSubscribeMqttClient extends FakeMqttClient {
-  subscribeCallbacks: Array<(err?: Error | null) => void> = [];
+  subscribeCallbacks: Array<
+    (err: Error | null, granted?: ReadonlyArray<{ topic: string; qos: 0 | 1 | 2 | 128 }>) => void
+  > = [];
 
   override subscribe(
     topic: string,
     options: { qos: 0 | 1 | 2 },
-    callback: (err?: Error | null) => void,
+    callback: (
+      err: Error | null,
+      granted?: ReadonlyArray<{ topic: string; qos: 0 | 1 | 2 | 128 }>,
+    ) => void,
   ) {
     this.subscribed.push({ topic, qos: options.qos });
     this.subscribeCallbacks.push(callback);

@@ -7,6 +7,11 @@ export type MqttClientMessagePacket = {
   dup?: boolean;
 };
 
+export type MqttSubscriptionGrant = {
+  topic: string;
+  qos: 0 | 1 | 2 | 128;
+};
+
 export type MqttClientLike = {
   on(event: "connect", listener: () => void): MqttClientLike;
   on(event: "reconnect", listener: () => void): MqttClientLike;
@@ -20,7 +25,7 @@ export type MqttClientLike = {
   subscribe(
     topic: string,
     options: { qos: 0 | 1 | 2 },
-    callback: (err?: Error | null) => void,
+    callback: (err: Error | null, granted?: ReadonlyArray<MqttSubscriptionGrant>) => void,
   ): void;
   end(force: boolean, callback: (err?: Error | null) => void): void;
   removeAllListeners(): MqttClientLike;
@@ -47,9 +52,14 @@ export async function subscribeTopic(
   qos: 0 | 1 | 2,
 ): Promise<void> {
   await new Promise<void>((resolve, reject) => {
-    client.subscribe(topic, { qos }, (err) => {
+    client.subscribe(topic, { qos }, (err, granted) => {
       if (err) {
         reject(err);
+        return;
+      }
+      const rejectedGrant = granted?.find((grant) => grant.qos === 128);
+      if (rejectedGrant) {
+        reject(new Error(`mqtt broker rejected subscription for topic "${rejectedGrant.topic}"`));
         return;
       }
       resolve();
