@@ -102,6 +102,16 @@ For VPS/cloud hosts, avoid third-party "1-click" marketplace images when possibl
       </Tab>
     </Tabs>
 
+    Want the current GitHub `main` head with a package-manager install?
+
+    ```bash
+    npm install -g github:openclaw/openclaw#main
+    ```
+
+    ```bash
+    pnpm add -g github:openclaw/openclaw#main
+    ```
+
   </Accordion>
 
   <Accordion title="From source" icon="github">

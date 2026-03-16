@@ -5,15 +5,11 @@ import {
   formatNormalizedAllowFromEntries,
 } from "openclaw/plugin-sdk/compat";
 import {
-  applyAccountNameToChannelSection,
-  applySetupAccountConfigPatch,
   buildComputedAccountStatusSnapshot,
   buildChannelConfigSchema,
   createAccountStatusSink,
   DEFAULT_ACCOUNT_ID,
   deleteAccountFromConfigSection,
-  migrateBaseNameToDefaultAccount,
-  normalizeAccountId,
   resolveAllowlistProviderRuntimeGroupPolicy,
   resolveDefaultGroupPolicy,
   setAccountEnabledInConfigSection,
@@ -21,6 +17,7 @@ import {
   type ChannelMessageActionName,
   type ChannelPlugin,
 } from "openclaw/plugin-sdk/mattermost";
+import { buildPassiveProbedChannelStatusSummary } from "../../shared/channel-status-summary.js";
 import { MattermostConfigSchema } from "./config-schema.js";
 import { resolveMattermostGroupRequireMention } from "./group-mentions.js";
 import {
@@ -30,7 +27,6 @@ import {
   resolveMattermostReplyToMode,
   type ResolvedMattermostAccount,
 } from "./mattermost/accounts.js";
-import { normalizeMattermostBaseUrl } from "./mattermost/client.js";
 import {
   listMattermostDirectoryGroups,
   listMattermostDirectoryPeers,
@@ -41,8 +37,9 @@ import { addMattermostReaction, removeMattermostReaction } from "./mattermost/re
 import { sendMessageMattermost } from "./mattermost/send.js";
 import { resolveMattermostOpaqueTarget } from "./mattermost/target-resolution.js";
 import { looksLikeMattermostTargetId, normalizeMattermostMessagingTarget } from "./normalize.js";
-import { mattermostOnboardingAdapter } from "./onboarding.js";
 import { getMattermostRuntime } from "./runtime.js";
+import { mattermostSetupAdapter } from "./setup-core.js";
+import { mattermostSetupWizard } from "./setup-surface.js";
 
 const mattermostMessageActions: ChannelMessageActionAdapter = {
   listActions: ({ cfg }) => {
@@ -255,7 +252,8 @@ export const mattermostPlugin: ChannelPlugin<ResolvedMattermostAccount> = {
   meta: {
     ...meta,
   },
-  onboarding: mattermostOnboardingAdapter,
+  setup: mattermostSetupAdapter,
+  setupWizard: mattermostSetupWizard,
   pairing: {
     idLabel: "mattermostUserId",
     normalizeAllowEntry: (entry) => normalizeAllowEntry(entry),
@@ -389,21 +387,30 @@ export const mattermostPlugin: ChannelPlugin<ResolvedMattermostAccount> = {
       }
       return { ok: true, to: trimmed };
     },
-    sendText: async ({ cfg, to, text, accountId, replyToId }) => {
+    sendText: async ({ cfg, to, text, accountId, replyToId, threadId }) => {
       const result = await sendMessageMattermost(to, text, {
         cfg,
         accountId: accountId ?? undefined,
-        replyToId: replyToId ?? undefined,
+        replyToId: replyToId ?? (threadId != null ? String(threadId) : undefined),
       });
       return { channel: "mattermost", ...result };
     },
-    sendMedia: async ({ cfg, to, text, mediaUrl, mediaLocalRoots, accountId, replyToId }) => {
+    sendMedia: async ({
+      cfg,
+      to,
+      text,
+      mediaUrl,
+      mediaLocalRoots,
+      accountId,
+      replyToId,
+      threadId,
+    }) => {
       const result = await sendMessageMattermost(to, text, {
         cfg,
         accountId: accountId ?? undefined,
         mediaUrl,
         mediaLocalRoots,
-        replyToId: replyToId ?? undefined,
+        replyToId: replyToId ?? (threadId != null ? String(threadId) : undefined),
       });
       return { channel: "mattermost", ...result };
     },
@@ -419,18 +426,12 @@ export const mattermostPlugin: ChannelPlugin<ResolvedMattermostAccount> = {
       lastStopAt: null,
       lastError: null,
     },
-    buildChannelSummary: ({ snapshot }) => ({
-      configured: snapshot.configured ?? false,
-      botTokenSource: snapshot.botTokenSource ?? "none",
-      running: snapshot.running ?? false,
-      connected: snapshot.connected ?? false,
-      lastStartAt: snapshot.lastStartAt ?? null,
-      lastStopAt: snapshot.lastStopAt ?? null,
-      lastError: snapshot.lastError ?? null,
-      baseUrl: snapshot.baseUrl ?? null,
-      probe: snapshot.probe,
-      lastProbeAt: snapshot.lastProbeAt ?? null,
-    }),
+    buildChannelSummary: ({ snapshot }) =>
+      buildPassiveProbedChannelStatusSummary(snapshot, {
+        botTokenSource: snapshot.botTokenSource ?? "none",
+        connected: snapshot.connected ?? false,
+        baseUrl: snapshot.baseUrl ?? null,
+      }),
     probeAccount: async ({ account, timeoutMs }) => {
       const token = account.botToken?.trim();
       const baseUrl = account.baseUrl?.trim();
@@ -456,59 +457,6 @@ export const mattermostPlugin: ChannelPlugin<ResolvedMattermostAccount> = {
         lastConnectedAt: runtime?.lastConnectedAt ?? null,
         lastDisconnect: runtime?.lastDisconnect ?? null,
       };
-    },
-  },
-  setup: {
-    resolveAccountId: ({ accountId }) => normalizeAccountId(accountId),
-    applyAccountName: ({ cfg, accountId, name }) =>
-      applyAccountNameToChannelSection({
-        cfg,
-        channelKey: "mattermost",
-        accountId,
-        name,
-      }),
-    validateInput: ({ accountId, input }) => {
-      if (input.useEnv && accountId !== DEFAULT_ACCOUNT_ID) {
-        return "Mattermost env vars can only be used for the default account.";
-      }
-      const token = input.botToken ?? input.token;
-      const baseUrl = input.httpUrl;
-      if (!input.useEnv && (!token || !baseUrl)) {
-        return "Mattermost requires --bot-token and --http-url (or --use-env).";
-      }
-      if (baseUrl && !normalizeMattermostBaseUrl(baseUrl)) {
-        return "Mattermost --http-url must include a valid base URL.";
-      }
-      return null;
-    },
-    applyAccountConfig: ({ cfg, accountId, input }) => {
-      const token = input.botToken ?? input.token;
-      const baseUrl = input.httpUrl?.trim();
-      const namedConfig = applyAccountNameToChannelSection({
-        cfg,
-        channelKey: "mattermost",
-        accountId,
-        name: input.name,
-      });
-      const next =
-        accountId !== DEFAULT_ACCOUNT_ID
-          ? migrateBaseNameToDefaultAccount({
-              cfg: namedConfig,
-              channelKey: "mattermost",
-            })
-          : namedConfig;
-      const patch = input.useEnv
-        ? {}
-        : {
-            ...(token ? { botToken: token } : {}),
-            ...(baseUrl ? { baseUrl } : {}),
-          };
-      return applySetupAccountConfigPatch({
-        cfg: next,
-        channelKey: "mattermost",
-        accountId,
-        patch,
-      });
     },
   },
   gateway: {

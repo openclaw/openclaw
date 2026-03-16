@@ -29,6 +29,7 @@ import {
 import { pickPrimaryTailnetIPv4 } from "../../infra/tailnet.js";
 import { loadGatewayTlsRuntime } from "../../infra/tls/gateway.js";
 import { probeGatewayStatus } from "./probe.js";
+import { inspectGatewayRestart } from "./restart-health.js";
 import { normalizeListenerAddress, parsePortFromArgs, pickProbeHostForBind } from "./shared.js";
 import type { GatewayRpcOpts } from "./types.js";
 
@@ -111,6 +112,10 @@ export type DaemonStatus = {
     ok: boolean;
     error?: string;
     url?: string;
+  };
+  health?: {
+    healthy: boolean;
+    staleGatewayPids: number[];
   };
   extraServices: Array<{ label: string; detail: string; scope: string }>;
 };
@@ -258,17 +263,21 @@ export async function gatherDaemonStatus(
   } & FindExtraGatewayServicesOptions,
 ): Promise<DaemonStatus> {
   const service = resolveGatewayService();
-  const [loaded, command, runtime] = await Promise.all([
-    service.isLoaded({ env: process.env }).catch(() => false),
-    service.readCommand(process.env).catch(() => null),
-    service.readRuntime(process.env).catch((err) => ({ status: "unknown", detail: String(err) })),
+  const command = await service.readCommand(process.env).catch(() => null);
+  const serviceEnv = command?.environment
+    ? ({
+        ...process.env,
+        ...command.environment,
+      } satisfies NodeJS.ProcessEnv)
+    : process.env;
+  const [loaded, runtime] = await Promise.all([
+    service.isLoaded({ env: serviceEnv }).catch(() => false),
+    service.readRuntime(serviceEnv).catch((err) => ({ status: "unknown", detail: String(err) })),
   ]);
   const configAudit = await auditGatewayServiceConfig({
     env: process.env,
     command,
   });
-
-  const serviceEnv = command?.environment ?? undefined;
   const {
     mergedDaemonEnv,
     cliCfg,
@@ -276,7 +285,7 @@ export async function gatherDaemonStatus(
     cliConfigSummary,
     daemonConfigSummary,
     configMismatch,
-  } = await loadDaemonConfigContext(serviceEnv);
+  } = await loadDaemonConfigContext(command?.environment);
   const { gateway, daemonPort, cliPort, probeUrlOverride } = await resolveGatewayStatusSummary({
     cliCfg,
     daemonCfg,
@@ -327,6 +336,14 @@ export async function gatherDaemonStatus(
         configPath: daemonConfigSummary.path,
       })
     : undefined;
+  const health =
+    opts.probe && loaded
+      ? await inspectGatewayRestart({
+          service,
+          port: daemonPort,
+          env: serviceEnv,
+        }).catch(() => undefined)
+      : undefined;
 
   let lastError: string | undefined;
   if (loaded && runtime?.status === "running" && portStatus && portStatus.status !== "busy") {
@@ -353,6 +370,14 @@ export async function gatherDaemonStatus(
     ...(portCliStatus ? { portCli: portCliStatus } : {}),
     lastError,
     ...(rpc ? { rpc: { ...rpc, url: gateway.probeUrl } } : {}),
+    ...(health
+      ? {
+          health: {
+            healthy: health.healthy,
+            staleGatewayPids: health.staleGatewayPids,
+          },
+        }
+      : {}),
     extraServices,
   };
 }

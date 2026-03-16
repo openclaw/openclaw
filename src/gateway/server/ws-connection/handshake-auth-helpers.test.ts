@@ -10,24 +10,21 @@ import {
   shouldSkipBackendSelfPairing,
 } from "./handshake-auth-helpers.js";
 
+function createRateLimiter(): AuthRateLimiter {
+  return {
+    check: () => ({ allowed: true, remaining: 1, retryAfterMs: 0 }),
+    reset: () => {},
+    recordFailure: () => {},
+    size: () => 0,
+    prune: () => {},
+    dispose: () => {},
+  };
+}
+
 describe("handshake auth helpers", () => {
   it("pins browser-origin loopback clients to the synthetic rate-limit ip", () => {
-    const rateLimiter: AuthRateLimiter = {
-      check: () => ({ allowed: true, remaining: 1, retryAfterMs: 0 }),
-      reset: () => {},
-      recordFailure: () => {},
-      size: () => 0,
-      prune: () => {},
-      dispose: () => {},
-    };
-    const browserRateLimiter: AuthRateLimiter = {
-      check: () => ({ allowed: true, remaining: 1, retryAfterMs: 0 }),
-      reset: () => {},
-      recordFailure: () => {},
-      size: () => 0,
-      prune: () => {},
-      dispose: () => {},
-    };
+    const rateLimiter = createRateLimiter();
+    const browserRateLimiter = createRateLimiter();
     const resolved = resolveHandshakeBrowserSecurityContext({
       requestOrigin: "https://app.example",
       clientIp: "127.0.0.1",
@@ -92,7 +89,7 @@ describe("handshake auth helpers", () => {
     ).toBe(false);
   });
 
-  it("skips backend self-pairing only for local shared-secret backend clients", () => {
+  it("skips backend self-pairing for local trusted backend clients", () => {
     const connectParams = {
       client: {
         id: GATEWAY_CLIENT_IDS.GATEWAY_CLIENT,
@@ -107,6 +104,15 @@ describe("handshake auth helpers", () => {
         hasBrowserOriginHeader: false,
         sharedAuthOk: true,
         authMethod: "token",
+      }),
+    ).toBe(true);
+    expect(
+      shouldSkipBackendSelfPairing({
+        connectParams,
+        isLocalClient: true,
+        hasBrowserOriginHeader: false,
+        sharedAuthOk: false,
+        authMethod: "device-token",
       }),
     ).toBe(true);
     expect(

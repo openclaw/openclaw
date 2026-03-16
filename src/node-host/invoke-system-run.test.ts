@@ -746,6 +746,14 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
         security: "full",
         ask: "off",
       });
+      if (process.platform === "win32") {
+        expect(runCommand).not.toHaveBeenCalled();
+        expectInvokeErrorMessage(sendInvokeResult, {
+          message: "SYSTEM_RUN_DENIED: approval requires a stable executable path",
+          exact: true,
+        });
+        return;
+      }
       expectCommandPinnedToCanonicalPath({
         runCommand,
         expected: fs.realpathSync(script),
@@ -779,6 +787,13 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
             ask: "off",
           });
           expect(runCommand).not.toHaveBeenCalled();
+          if (process.platform === "win32") {
+            expectInvokeErrorMessage(sendInvokeResult, {
+              message: "SYSTEM_RUN_DENIED: approval requires a stable executable path",
+              exact: true,
+            });
+            return;
+          }
           expectInvokeErrorMessage(sendInvokeResult, {
             message: "SYSTEM_RUN_DENIED: approval cwd changed before execution",
             exact: true,

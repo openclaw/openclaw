@@ -11,10 +11,6 @@ export {
 export { listDirectoryUserEntriesFromAllowFrom } from "../channels/plugins/directory-config-helpers.js";
 export { buildChannelConfigSchema } from "../channels/plugins/config-schema.js";
 export { formatPairingApproveHint } from "../channels/plugins/helpers.js";
-export type {
-  ChannelOnboardingAdapter,
-  ChannelOnboardingDmPolicy,
-} from "../channels/plugins/onboarding-types.js";
 export {
   buildSingleChannelSecretPromptState,
   addWildcardAllowFrom,
@@ -22,7 +18,6 @@ export {
   promptAccountId,
   promptSingleChannelSecretInput,
   runSingleChannelSecretStep,
-  resolveAccountIdForConfigure,
   setTopLevelChannelDmPolicyWithAllowFrom,
 } from "../channels/plugins/onboarding/helpers.js";
 export { PAIRING_APPROVED_MESSAGE } from "../channels/plugins/pairing-message.js";
@@ -61,6 +56,7 @@ export { buildSecretInputSchema } from "./secret-input-schema.js";
 export { MarkdownConfigSchema } from "../config/zod-schema.core.js";
 export { waitForAbortSignal } from "../infra/abort-signal.js";
 export { createDedupeCache } from "../infra/dedupe.js";
+export { resolveClientIp } from "../gateway/net.js";
 export { emptyPluginConfigSchema } from "../plugins/config-schema.js";
 export type { PluginRuntime } from "../plugins/runtime/types.js";
 export type { OpenClawPluginApi } from "../plugins/types.js";
@@ -68,6 +64,7 @@ export { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../routing/session-key.j
 export type { RuntimeEnv } from "../runtime.js";
 export type { WizardPrompter } from "../wizard/prompts.js";
 export { formatAllowFromLowercase, isNormalizedSenderAllowed } from "./allow-from.js";
+export { zaloSetupAdapter, zaloSetupWizard } from "../../extensions/zalo/src/setup-surface.js";
 export {
   resolveDirectDmAuthorizationOutcome,
   resolveSenderCommandAuthorizationWithRuntime,
