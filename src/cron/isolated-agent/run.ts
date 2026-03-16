@@ -620,10 +620,16 @@ export async function runCronIsolatedAgentTurn(params: {
       lookupContextTokens(modelUsed, { allowAsyncLoad: false }) ??
       DEFAULT_CONTEXT_TOKENS;
 
-    setSessionRuntimeModel(cronSession.sessionEntry, {
-      provider: providerUsed,
-      model: modelUsed,
-    });
+    // Only persist the runtime model when the primary was used. A fallback model
+    // is a transient choice; writing it back would prevent the primary from being
+    // retried on future runs once it recovers.
+    const isFromFallback = modelUsed !== model || providerUsed !== provider;
+    if (!isFromFallback) {
+      setSessionRuntimeModel(cronSession.sessionEntry, {
+        provider: providerUsed,
+        model: modelUsed,
+      });
+    }
     cronSession.sessionEntry.contextTokens = contextTokens;
     if (isCliProvider(providerUsed, cfgWithAgentDefaults)) {
       const cliSessionId = finalRunResult.meta?.agentMeta?.sessionId?.trim();
