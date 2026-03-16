@@ -35,10 +35,8 @@ export {
   resolveDiscordGroupRequireMention,
   resolveDiscordGroupToolPolicy,
 } from "../channels/plugins/group-mentions.js";
-export {
-  discordSetupAdapter,
-  discordSetupWizard,
-} from "../../extensions/discord/src/setup-surface.js";
+export { discordSetupWizard } from "../../extensions/discord/src/setup-surface.js";
+export { discordSetupAdapter } from "../../extensions/discord/src/setup-core.js";
 export { DiscordConfigSchema } from "../config/zod-schema.providers-core.js";
 
 export {
