@@ -61,8 +61,8 @@ For Claude marketplace installs, list the marketplace first, then install by
 marketplace entry name:
 
 ```bash
-openclaw plugins marketplace list claude-plugins-official
-openclaw plugins install superpowers@claude-plugins-official
+openclaw plugins marketplace list <marketplace-name>
+openclaw plugins install <plugin-name>@<marketplace-name>
 ```
 
 OpenClaw resolves known Claude marketplace names from
@@ -841,6 +841,37 @@ when a channel plugin is enabled but still unconfigured, it loads `setupEntry`
 instead of the full plugin entry. This keeps startup and setup lighter
 when your main plugin entry also wires tools, hooks, or other runtime-only
 code.
+
+Optional: `openclaw.startup.deferConfiguredChannelFullLoadUntilAfterListen`
+can opt a channel plugin into the same `setupEntry` path during the gateway's
+pre-listen startup phase, even when the channel is already configured.
+
+Use this only when `setupEntry` fully covers the startup surface that must exist
+before the gateway starts listening. In practice, that means the setup entry
+must register every channel-owned capability that startup depends on, such as:
+
+- channel registration itself
+- any HTTP routes that must be available before the gateway starts listening
+- any gateway methods, tools, or services that must exist during that same window
+
+If your full entry still owns any required startup capability, do not enable
+this flag. Keep the plugin on the default behavior and let OpenClaw load the
+full entry during startup.
+
+Example:
+
+```json
+{
+  "name": "@scope/my-channel",
+  "openclaw": {
+    "extensions": ["./index.ts"],
+    "setupEntry": "./setup-entry.ts",
+    "startup": {
+      "deferConfiguredChannelFullLoadUntilAfterListen": true
+    }
+  }
+}
+```
 
 ### Channel catalog metadata
 
@@ -1752,6 +1783,7 @@ Publishing contract:
 
 - Plugin `package.json` must include `openclaw.extensions` with one or more entry files.
 - Optional: `openclaw.setupEntry` may point at a lightweight setup-only entry for disabled or still-unconfigured channel setup.
+- Optional: `openclaw.startup.deferConfiguredChannelFullLoadUntilAfterListen` may opt a channel plugin into using `setupEntry` during pre-listen gateway startup, but only when that setup entry completely covers the plugin's startup-critical surface.
 - Entry files can be `.js` or `.ts` (jiti loads TS at runtime).
 - `openclaw plugins install <npm-spec>` uses `npm pack`, extracts into `~/.openclaw/extensions/<id>/`, and enables it in config.
 - Config key stability: scoped packages are normalized to the **unscoped** id for `plugins.entries.*`.

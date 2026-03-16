@@ -29,6 +29,8 @@
     "assets/",
     "dist/",
     "docs/",
+    "!docs/.generated/**",
+    "!docs/.i18n/zh-CN.tm.jsonl",
     "extensions/",
     "skills/"
   ],
@@ -47,6 +49,22 @@
     "./plugin-sdk/compat": {
       "types": "./dist/plugin-sdk/compat.d.ts",
       "default": "./dist/plugin-sdk/compat.js"
+    },
+    "./plugin-sdk/ollama-setup": {
+      "types": "./dist/plugin-sdk/ollama-setup.d.ts",
+      "default": "./dist/plugin-sdk/ollama-setup.js"
+    },
+    "./plugin-sdk/provider-setup": {
+      "types": "./dist/plugin-sdk/provider-setup.d.ts",
+      "default": "./dist/plugin-sdk/provider-setup.js"
+    },
+    "./plugin-sdk/sandbox": {
+      "types": "./dist/plugin-sdk/sandbox.d.ts",
+      "default": "./dist/plugin-sdk/sandbox.js"
+    },
+    "./plugin-sdk/self-hosted-provider-setup": {
+      "types": "./dist/plugin-sdk/self-hosted-provider-setup.d.ts",
+      "default": "./dist/plugin-sdk/self-hosted-provider-setup.js"
     },
     "./plugin-sdk/routing": {
       "types": "./dist/plugin-sdk/routing.d.ts",
