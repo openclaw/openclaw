@@ -1,13 +1,17 @@
+import { parseDiscordTarget } from "../../../extensions/discord/src/targets.js";
+import { parseSlackTarget } from "../../../extensions/slack/src/targets.js";
+import {
+  parseTelegramTarget,
+  resolveTelegramTargetChatType,
+} from "../../../extensions/telegram/src/targets.js";
 import { normalizeChatType, type ChatType } from "../../channels/chat-type.js";
 import type { ChannelOutboundTargetMode } from "../../channels/plugins/types.js";
 import { formatCliCommand } from "../../cli/command-format.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import type { AgentDefaultsConfig } from "../../config/types.agent-defaults.js";
-import { parseDiscordTarget } from "../../discord/targets.js";
+import { mapAllowFromEntries } from "../../plugin-sdk/channel-config-helpers.js";
 import { normalizeAccountId } from "../../routing/session-key.js";
-import { parseSlackTarget } from "../../slack/targets.js";
-import { parseTelegramTarget, resolveTelegramTargetChatType } from "../../telegram/targets.js";
 import { deliveryContextFromSession } from "../../utils/delivery-context.js";
 import type {
   DeliverableMessageChannel,
@@ -203,7 +207,7 @@ export function resolveOutboundTarget(params: {
           accountId: params.accountId ?? undefined,
         })
       : undefined);
-  const allowFrom = allowFromRaw?.map((entry) => String(entry));
+  const allowFrom = allowFromRaw ? mapAllowFromEntries(allowFromRaw) : undefined;
 
   // Fall back to per-channel defaultTo when no explicit target is provided.
   const effectiveTo =
@@ -496,9 +500,7 @@ function resolveHeartbeatSenderId(params: {
     provider && lastTo ? `${provider}:${lastTo}` : undefined,
   ].filter((val): val is string => Boolean(val?.trim()));
 
-  const allowList = allowFrom
-    .map((entry) => String(entry))
-    .filter((entry) => entry && entry !== "*");
+  const allowList = mapAllowFromEntries(allowFrom).filter((entry) => entry && entry !== "*");
   if (allowFrom.includes("*")) {
     return candidates[0] ?? "heartbeat";
   }
@@ -536,7 +538,7 @@ export function resolveHeartbeatSenderContext(params: {
         accountId,
       }) ?? [])
     : [];
-  const allowFrom = allowFromRaw.map((entry) => String(entry));
+  const allowFrom = mapAllowFromEntries(allowFromRaw);
 
   const sender = resolveHeartbeatSenderId({
     allowFrom,

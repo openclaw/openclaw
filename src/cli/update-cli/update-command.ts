@@ -10,6 +10,7 @@ import {
   resolveGatewayPort,
   writeConfigFile,
 } from "../../config/config.js";
+import { formatConfigIssueLines } from "../../config/issue-format.js";
 import { resolveGatewayService } from "../../daemon/service.js";
 import {
   channelToNpmTag,
@@ -23,8 +24,10 @@ import {
   checkUpdateStatus,
 } from "../../infra/update-check.js";
 import {
+  createGlobalInstallEnv,
   cleanupGlobalRenameDirs,
   globalInstallArgs,
+  resolveGlobalInstallSpec,
   resolveGlobalPackageRoot,
 } from "../../infra/update-global.js";
 import { runGatewayUpdate, type UpdateRunResult } from "../../infra/update-runner.js";
@@ -66,6 +69,13 @@ import { suppressDeprecations } from "./suppress-deprecations.js";
 
 const CLI_NAME = resolveCliName();
 const SERVICE_REFRESH_TIMEOUT_MS = 60_000;
+const SERVICE_REFRESH_PATH_ENV_KEYS = [
+  "OPENCLAW_HOME",
+  "OPENCLAW_STATE_DIR",
+  "CLAWDBOT_STATE_DIR",
+  "OPENCLAW_CONFIG_PATH",
+  "CLAWDBOT_CONFIG_PATH",
+] as const;
 
 const UPDATE_QUIPS = [
   "Leveled up! New skills unlocked. You're welcome.",
@@ -112,6 +122,37 @@ function formatCommandFailure(stdout: string, stderr: string): string {
     return "command returned a non-zero exit code";
   }
   return detail.split("\n").slice(-3).join("\n");
+}
+
+function tryResolveInvocationCwd(): string | undefined {
+  try {
+    return process.cwd();
+  } catch {
+    return undefined;
+  }
+}
+
+function resolveServiceRefreshEnv(
+  env: NodeJS.ProcessEnv,
+  invocationCwd?: string,
+): NodeJS.ProcessEnv {
+  const resolvedEnv: NodeJS.ProcessEnv = { ...env };
+  for (const key of SERVICE_REFRESH_PATH_ENV_KEYS) {
+    const rawValue = resolvedEnv[key]?.trim();
+    if (!rawValue) {
+      continue;
+    }
+    if (rawValue.startsWith("~") || path.isAbsolute(rawValue) || path.win32.isAbsolute(rawValue)) {
+      resolvedEnv[key] = rawValue;
+      continue;
+    }
+    if (!invocationCwd) {
+      resolvedEnv[key] = rawValue;
+      continue;
+    }
+    resolvedEnv[key] = path.resolve(invocationCwd, rawValue);
+  }
+  return resolvedEnv;
 }
 
 type UpdateDryRunPreview = {
@@ -176,6 +217,7 @@ function printDryRunPreview(preview: UpdateDryRunPreview, jsonMode: boolean): vo
 async function refreshGatewayServiceEnv(params: {
   result: UpdateRunResult;
   jsonMode: boolean;
+  invocationCwd?: string;
 }): Promise<void> {
   const args = ["gateway", "install", "--force"];
   if (params.jsonMode) {
@@ -187,6 +229,8 @@ async function refreshGatewayServiceEnv(params: {
       continue;
     }
     const res = await runCommandWithTimeout([resolveNodeRunner(), candidate, ...args], {
+      cwd: params.result.root,
+      env: resolveServiceRefreshEnv(process.env, params.invocationCwd),
       timeoutMs: SERVICE_REFRESH_TIMEOUT_MS,
     });
     if (res.code === 0) {
@@ -268,12 +312,18 @@ async function runPackageInstallUpdate(params: {
     installKind: params.installKind,
     timeoutMs: params.timeoutMs,
   });
+  const installEnv = await createGlobalInstallEnv();
   const runCommand = createGlobalCommandRunner();
 
   const pkgRoot = await resolveGlobalPackageRoot(manager, runCommand, params.timeoutMs);
   const packageName =
     (pkgRoot ? await readPackageName(pkgRoot) : await readPackageName(params.root)) ??
     DEFAULT_PACKAGE_NAME;
+  const installSpec = resolveGlobalInstallSpec({
+    packageName,
+    tag: params.tag,
+    env: installEnv,
+  });
 
   const beforeVersion = pkgRoot ? await readPackageVersion(pkgRoot) : null;
   if (pkgRoot) {
@@ -285,7 +335,8 @@ async function runPackageInstallUpdate(params: {
 
   const updateStep = await runUpdateStep({
     name: "global update",
-    argv: globalInstallArgs(manager, `${packageName}@${params.tag}`),
+    argv: globalInstallArgs(manager, installSpec),
+    env: installEnv,
     timeoutMs: params.timeoutMs,
     progress: params.progress,
   });
@@ -379,6 +430,7 @@ async function runGitUpdate(params: {
       name: "global install",
       argv: globalInstallArgs(manager, updateRoot),
       cwd: updateRoot,
+      env: await createGlobalInstallEnv(),
       timeoutMs: effectiveTimeout,
       progress: params.progress,
     });
@@ -508,6 +560,7 @@ async function maybeRestartService(params: {
   refreshServiceEnv: boolean;
   gatewayPort: number;
   restartScriptPath?: string | null;
+  invocationCwd?: string;
 }): Promise<void> {
   if (params.shouldRestart) {
     if (!params.opts.json) {
@@ -523,6 +576,7 @@ async function maybeRestartService(params: {
           await refreshGatewayServiceEnv({
             result: params.result,
             jsonMode: Boolean(params.opts.json),
+            invocationCwd: params.invocationCwd,
           });
         } catch (err) {
           if (!params.opts.json) {
@@ -628,6 +682,7 @@ async function maybeRestartService(params: {
 
 export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
   suppressDeprecations();
+  const invocationCwd = tryResolveInvocationCwd();
 
   const timeoutMs = parseTimeoutMsOrExit(opts.timeout);
   const shouldRestart = opts.restart !== false;
@@ -655,7 +710,7 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
     return;
   }
   if (opts.channel && !configSnapshot.valid) {
-    const issues = configSnapshot.issues.map((issue) => `- ${issue.path}: ${issue.message}`);
+    const issues = formatConfigIssueLines(configSnapshot.issues, "-");
     defaultRuntime.error(["Config is invalid; cannot set update channel.", ...issues].join("\n"));
     defaultRuntime.exit(1);
     return;
@@ -818,11 +873,15 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
 
   let restartScriptPath: string | null = null;
   let refreshGatewayServiceEnv = false;
+  const gatewayPort = resolveGatewayPort(
+    configSnapshot.valid ? configSnapshot.config : undefined,
+    process.env,
+  );
   if (shouldRestart) {
     try {
       const loaded = await resolveGatewayService().isLoaded({ env: process.env });
       if (loaded) {
-        restartScriptPath = await prepareRestartScript(process.env);
+        restartScriptPath = await prepareRestartScript(process.env, gatewayPort);
         refreshGatewayServiceEnv = true;
       }
     } catch {
@@ -830,28 +889,29 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
     }
   }
 
-  const result = switchToPackage
-    ? await runPackageInstallUpdate({
-        root,
-        installKind,
-        tag,
-        timeoutMs: timeoutMs ?? 20 * 60_000,
-        startedAt,
-        progress,
-      })
-    : await runGitUpdate({
-        root,
-        switchToGit,
-        installKind,
-        timeoutMs,
-        startedAt,
-        progress,
-        channel,
-        tag,
-        showProgress,
-        opts,
-        stop,
-      });
+  const result =
+    updateInstallKind === "package"
+      ? await runPackageInstallUpdate({
+          root,
+          installKind,
+          tag,
+          timeoutMs: timeoutMs ?? 20 * 60_000,
+          startedAt,
+          progress,
+        })
+      : await runGitUpdate({
+          root,
+          switchToGit,
+          installKind,
+          timeoutMs,
+          startedAt,
+          progress,
+          channel,
+          tag,
+          showProgress,
+          opts,
+          stop,
+        });
 
   stop();
   printResult(result, { ...opts, hideSteps: showProgress });
@@ -903,8 +963,9 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
     result,
     opts,
     refreshServiceEnv: refreshGatewayServiceEnv,
-    gatewayPort: resolveGatewayPort(configSnapshot.valid ? configSnapshot.config : undefined),
+    gatewayPort,
     restartScriptPath,
+    invocationCwd,
   });
 
   if (!opts.json) {

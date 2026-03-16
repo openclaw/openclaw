@@ -1,4 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { CONTEXT_WINDOW_HARD_MIN_TOKENS } from "../agents/context-window-guard.js";
+import { OLLAMA_DEFAULT_BASE_URL } from "../agents/ollama-models.js";
+import type { OpenClawConfig } from "../config/config.js";
 import { defaultRuntime } from "../runtime.js";
 import {
   applyCustomApiConfig,
@@ -75,6 +78,43 @@ function expectOpenAiCompatResult(params: {
   expect(params.result.config.models?.providers?.custom?.api).toBe("openai-completions");
 }
 
+function buildCustomProviderConfig(contextWindow?: number) {
+  if (contextWindow === undefined) {
+    return {} as OpenClawConfig;
+  }
+  return {
+    models: {
+      providers: {
+        custom: {
+          api: "openai-completions" as const,
+          baseUrl: "https://llm.example.com/v1",
+          models: [
+            {
+              id: "foo-large",
+              name: "foo-large",
+              contextWindow,
+              maxTokens: contextWindow > CONTEXT_WINDOW_HARD_MIN_TOKENS ? 4096 : 1024,
+              input: ["text"],
+              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+              reasoning: false,
+            },
+          ],
+        },
+      },
+    },
+  } as OpenClawConfig;
+}
+
+function applyCustomModelConfigWithContextWindow(contextWindow?: number) {
+  return applyCustomApiConfig({
+    config: buildCustomProviderConfig(contextWindow),
+    baseUrl: "https://llm.example.com/v1",
+    modelId: "foo-large",
+    compatibility: "openai",
+    providerId: "custom",
+  });
+}
+
 describe("promptCustomApiConfig", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
@@ -92,6 +132,23 @@ describe("promptCustomApiConfig", () => {
 
     expectOpenAiCompatResult({ prompter, textCalls: 5, selectCalls: 2, result });
     expect(result.config.agents?.defaults?.models?.["custom/llama3"]?.alias).toBe("local");
+  });
+
+  it("defaults custom onboarding to the native Ollama base URL", async () => {
+    const prompter = createTestPrompter({
+      text: ["http://localhost:11434", "", "llama3", "custom", ""],
+      select: ["plaintext", "openai"],
+    });
+    stubFetchSequence([{ ok: true }]);
+
+    await runPromptCustomApi(prompter);
+
+    expect(prompter.text).toHaveBeenCalledWith(
+      expect.objectContaining({
+        message: "API Base URL",
+        initialValue: OLLAMA_DEFAULT_BASE_URL,
+      }),
+    );
   });
 
   it("retries when verification fails", async () => {
@@ -328,6 +385,30 @@ describe("promptCustomApiConfig", () => {
 describe("applyCustomApiConfig", () => {
   it.each([
     {
+      name: "uses hard-min context window for newly added custom models",
+      existingContextWindow: undefined,
+      expectedContextWindow: CONTEXT_WINDOW_HARD_MIN_TOKENS,
+    },
+    {
+      name: "upgrades existing custom model context window when below hard minimum",
+      existingContextWindow: 4096,
+      expectedContextWindow: CONTEXT_WINDOW_HARD_MIN_TOKENS,
+    },
+    {
+      name: "preserves existing custom model context window when already above minimum",
+      existingContextWindow: 131072,
+      expectedContextWindow: 131072,
+    },
+  ])("$name", ({ existingContextWindow, expectedContextWindow }) => {
+    const result = applyCustomModelConfigWithContextWindow(existingContextWindow);
+    const model = result.config.models?.providers?.custom?.models?.find(
+      (entry) => entry.id === "foo-large",
+    );
+    expect(model?.contextWindow).toBe(expectedContextWindow);
+  });
+
+  it.each([
+    {
       name: "invalid compatibility values at runtime",
       params: {
         config: {},
@@ -366,7 +447,7 @@ describe("parseNonInteractiveCustomApiFlags", () => {
       baseUrl: "https://llm.example.com/v1",
       modelId: "foo-large",
       compatibility: "openai",
-      apiKey: "custom-test-key",
+      apiKey: "custom-test-key", // pragma: allowlist secret
       providerId: "my-custom",
     });
   });

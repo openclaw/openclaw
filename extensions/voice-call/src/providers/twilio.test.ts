@@ -21,6 +21,12 @@ function createContext(rawBody: string, query?: WebhookContext["query"]): Webhoo
   };
 }
 
+function expectStreamingTwiml(body: string) {
+  expect(body).toContain(STREAM_URL);
+  expect(body).toContain('<Parameter name="token" value="');
+  expect(body).toContain("<Connect>");
+}
+
 describe("TwilioProvider", () => {
   it("returns streaming TwiML for outbound conversation calls before in-progress", () => {
     const provider = createProvider();
@@ -30,9 +36,8 @@ describe("TwilioProvider", () => {
 
     const result = provider.parseWebhookEvent(ctx);
 
-    expect(result.providerResponseBody).toContain(STREAM_URL);
-    expect(result.providerResponseBody).toContain('<Parameter name="token" value="');
-    expect(result.providerResponseBody).toContain("<Connect>");
+    expect(result.providerResponseBody).toBeDefined();
+    expectStreamingTwiml(result.providerResponseBody ?? "");
   });
 
   it("returns empty TwiML for status callbacks", () => {
@@ -55,9 +60,78 @@ describe("TwilioProvider", () => {
 
     const result = provider.parseWebhookEvent(ctx);
 
-    expect(result.providerResponseBody).toContain(STREAM_URL);
-    expect(result.providerResponseBody).toContain('<Parameter name="token" value="');
-    expect(result.providerResponseBody).toContain("<Connect>");
+    expect(result.providerResponseBody).toBeDefined();
+    expectStreamingTwiml(result.providerResponseBody ?? "");
+  });
+
+  it("returns queue TwiML for second inbound call when first call is active", () => {
+    const provider = createProvider();
+    const firstInbound = createContext("CallStatus=ringing&Direction=inbound&CallSid=CA111");
+    const secondInbound = createContext("CallStatus=ringing&Direction=inbound&CallSid=CA222");
+
+    const firstResult = provider.parseWebhookEvent(firstInbound);
+    const secondResult = provider.parseWebhookEvent(secondInbound);
+
+    expect(firstResult.providerResponseBody).toContain("<Connect>");
+    expect(secondResult.providerResponseBody).toContain("Please hold while we connect you.");
+    expect(secondResult.providerResponseBody).toContain("<Enqueue");
+    expect(secondResult.providerResponseBody).toContain("hold-queue");
+  });
+
+  it("connects next inbound call after unregisterCallStream cleanup", () => {
+    const provider = createProvider();
+    const firstInbound = createContext("CallStatus=ringing&Direction=inbound&CallSid=CA311");
+    const secondInbound = createContext("CallStatus=ringing&Direction=inbound&CallSid=CA322");
+
+    provider.parseWebhookEvent(firstInbound);
+    provider.unregisterCallStream("CA311");
+    const secondResult = provider.parseWebhookEvent(secondInbound);
+
+    expect(secondResult.providerResponseBody).toContain("<Connect>");
+    expect(secondResult.providerResponseBody).not.toContain("hold-queue");
+  });
+
+  it("cleans up active inbound call on completed status callback", () => {
+    const provider = createProvider();
+    const firstInbound = createContext("CallStatus=ringing&Direction=inbound&CallSid=CA411");
+    const completed = createContext("CallStatus=completed&Direction=inbound&CallSid=CA411", {
+      type: "status",
+    });
+    const nextInbound = createContext("CallStatus=ringing&Direction=inbound&CallSid=CA422");
+
+    provider.parseWebhookEvent(firstInbound);
+    provider.parseWebhookEvent(completed);
+    const nextResult = provider.parseWebhookEvent(nextInbound);
+
+    expect(nextResult.providerResponseBody).toContain("<Connect>");
+    expect(nextResult.providerResponseBody).not.toContain("hold-queue");
+  });
+
+  it("cleans up active inbound call on canceled status callback", () => {
+    const provider = createProvider();
+    const firstInbound = createContext("CallStatus=ringing&Direction=inbound&CallSid=CA511");
+    const canceled = createContext("CallStatus=canceled&Direction=inbound&CallSid=CA511", {
+      type: "status",
+    });
+    const nextInbound = createContext("CallStatus=ringing&Direction=inbound&CallSid=CA522");
+
+    provider.parseWebhookEvent(firstInbound);
+    provider.parseWebhookEvent(canceled);
+    const nextResult = provider.parseWebhookEvent(nextInbound);
+
+    expect(nextResult.providerResponseBody).toContain("<Connect>");
+    expect(nextResult.providerResponseBody).not.toContain("hold-queue");
+  });
+
+  it("QUEUE_TWIML references /voice/hold-music waitUrl", () => {
+    const provider = createProvider();
+    const firstInbound = createContext("CallStatus=ringing&Direction=inbound&CallSid=CA611");
+    const secondInbound = createContext("CallStatus=ringing&Direction=inbound&CallSid=CA622");
+
+    provider.parseWebhookEvent(firstInbound);
+    const result = provider.parseWebhookEvent(secondInbound);
+
+    expect(result.providerResponseBody).toContain('waitUrl="/voice/hold-music"');
   });
 
   it("uses a stable fallback dedupeKey for identical request payloads", () => {

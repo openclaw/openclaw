@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { isValidNonNegativeByteSizeString } from "./byte-size.js";
 import {
   HeartbeatSchema,
   AgentSandboxSchema,
@@ -17,9 +18,12 @@ export const AgentDefaultsSchema = z
   .object({
     model: AgentModelSchema.optional(),
     imageModel: AgentModelSchema.optional(),
+    pdfModel: AgentModelSchema.optional(),
     auxiliaryModel: z.string().optional(),
     smallModel: z.string().optional(),
     intensiveModel: z.string().optional(),
+    pdfMaxBytesMb: z.number().positive().optional(),
+    pdfMaxPages: z.number().int().positive().optional(),
     models: z
       .record(
         z.string(),
@@ -30,39 +34,36 @@ export const AgentDefaultsSchema = z
             params: z.record(z.string(), z.unknown()).optional(),
             /** Enable streaming for this model (default: true, false for Ollama to avoid SDK issue #1205). */
             streaming: z.boolean().optional(),
-            /** Shell hook that runs before switching TO this model (also runs at startup if this is the active model). */
             beforeModelChange: z
-              .object({
-                command: z.string(),
-                timeoutSeconds: z.number().int().positive().optional(),
-              })
-              .strict()
+              .object({ command: z.string(), timeoutSeconds: z.number().optional() })
               .optional(),
-            /** Shell hook that runs before every message turn when this model is active. */
             beforeMessage: z
-              .object({
-                command: z.string(),
-                timeoutSeconds: z.number().int().positive().optional(),
-              })
-              .strict()
+              .object({ command: z.string(), timeoutSeconds: z.number().optional() })
               .optional(),
-            /** Shell hook fired fire-and-forget after each successful response from this model. */
             afterResponse: z
-              .object({
-                command: z.string(),
-                timeoutSeconds: z.number().int().positive().optional(),
-              })
-              .strict()
+              .object({ command: z.string(), timeoutSeconds: z.number().optional() })
               .optional(),
           })
           .strict(),
       )
+      .optional(),
+    beforeModelChange: z
+      .object({ command: z.string(), timeoutSeconds: z.number().optional() })
+      .optional(),
+    beforeMessage: z
+      .object({ command: z.string(), timeoutSeconds: z.number().optional() })
+      .optional(),
+    afterResponse: z
+      .object({ command: z.string(), timeoutSeconds: z.number().optional() })
       .optional(),
     workspace: z.string().optional(),
     repoRoot: z.string().optional(),
     skipBootstrap: z.boolean().optional(),
     bootstrapMaxChars: z.number().int().positive().optional(),
     bootstrapTotalMaxChars: z.number().int().positive().optional(),
+    bootstrapPromptTruncationWarning: z
+      .union([z.literal("off"), z.literal("once"), z.literal("always")])
+      .optional(),
     userTimezone: z.string().optional(),
     timeFormat: z.union([z.literal("auto"), z.literal("12"), z.literal("24")]).optional(),
     envelopeTimezone: z.string().optional(),
@@ -111,14 +112,34 @@ export const AgentDefaultsSchema = z
         keepRecentTokens: z.number().int().positive().optional(),
         reserveTokensFloor: z.number().int().nonnegative().optional(),
         maxHistoryShare: z.number().min(0.1).max(0.9).optional(),
+        customInstructions: z.string().optional(),
         identifierPolicy: z
           .union([z.literal("strict"), z.literal("off"), z.literal("custom")])
           .optional(),
         identifierInstructions: z.string().optional(),
+        recentTurnsPreserve: z.number().int().min(0).max(12).optional(),
+        qualityGuard: z
+          .object({
+            enabled: z.boolean().optional(),
+            maxRetries: z.number().int().nonnegative().optional(),
+          })
+          .strict()
+          .optional(),
+        postIndexSync: z.enum(["off", "async", "await"]).optional(),
+        postCompactionSections: z.array(z.string()).optional(),
+        model: z.string().optional(),
         memoryFlush: z
           .object({
             enabled: z.boolean().optional(),
             softThresholdTokens: z.number().int().nonnegative().optional(),
+            forceFlushTranscriptBytes: z
+              .union([
+                z.number().int().nonnegative(),
+                z
+                  .string()
+                  .refine(isValidNonNegativeByteSizeString, "Expected byte size string like 2mb"),
+              ])
+              .optional(),
             prompt: z.string().optional(),
             systemPrompt: z.string().optional(),
           })
@@ -143,6 +164,7 @@ export const AgentDefaultsSchema = z
         z.literal("medium"),
         z.literal("high"),
         z.literal("xhigh"),
+        z.literal("adaptive"),
       ])
       .optional(),
     verboseDefault: z.union([z.literal("off"), z.literal("on"), z.literal("full")]).optional(),
@@ -191,22 +213,6 @@ export const AgentDefaultsSchema = z
       .strict()
       .optional(),
     sandbox: AgentSandboxSchema,
-    /** Shell command executed before every message turn, for the active model. */
-    beforeMessage: z
-      .object({
-        command: z.string(),
-        timeoutSeconds: z.number().int().positive().optional(),
-      })
-      .strict()
-      .optional(),
-    /** Shell hook fired fire-and-forget after each successful response. */
-    afterResponse: z
-      .object({
-        command: z.string(),
-        timeoutSeconds: z.number().int().positive().optional(),
-      })
-      .strict()
-      .optional(),
   })
   .strict()
   .optional();

@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { withTempHome as withTempHomeBase } from "../../test/helpers/temp-home.js";
-import type { MoltbotConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 
 async function withTempHome<T>(fn: (home: string) => Promise<T>): Promise<T> {
   return withTempHomeBase(fn, { prefix: "moltbot-models-" });
@@ -22,10 +22,10 @@ describe("models-config copilot", () => {
   it("normalizes gemini 3 ids to preview for github-copilot providers", async () => {
     await withTempHome(async () => {
       vi.resetModules();
-      const { ensureMoltbotModelsJson } = await import("./models-config.js");
-      const { resolveMoltbotAgentDir } = await import("./agent-paths.js");
+      const { ensureOpenClawModelsJson } = await import("./models-config.js");
+      const { resolveOpenClawAgentDir } = await import("./agent-paths.js");
 
-      const cfg: MoltbotConfig = {
+      const cfg: OpenClawConfig = {
         models: {
           providers: {
             "github-copilot": {
@@ -59,9 +59,9 @@ describe("models-config copilot", () => {
         },
       };
 
-      await ensureMoltbotModelsJson(cfg);
+      await ensureOpenClawModelsJson(cfg);
 
-      const modelPath = path.join(resolveMoltbotAgentDir(), "models.json");
+      const modelPath = path.join(resolveOpenClawAgentDir(), "models.json");
       const raw = await fs.readFile(modelPath, "utf8");
       const parsed = JSON.parse(raw) as {
         providers: Record<string, { models: Array<{ id: string }> }>;

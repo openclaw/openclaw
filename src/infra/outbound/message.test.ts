@@ -10,10 +10,21 @@ const mocks = vi.hoisted(() => ({
 vi.mock("../../channels/plugins/index.js", () => ({
   normalizeChannelId: (channel?: string) => channel?.trim().toLowerCase() ?? undefined,
   getChannelPlugin: mocks.getChannelPlugin,
+  listChannelPlugins: () => [],
 }));
 
 vi.mock("../../agents/agent-scope.js", () => ({
   resolveDefaultAgentId: () => "main",
+  resolveSessionAgentId: ({
+    sessionKey,
+  }: {
+    sessionKey?: string;
+    config?: unknown;
+    agentId?: string;
+  }) => {
+    const match = sessionKey?.match(/^agent:([^:]+)/i);
+    return match?.[1] ?? "main";
+  },
   resolveAgentWorkspaceDir: () => "/tmp/openclaw-test-workspace",
 }));
 
@@ -66,6 +77,29 @@ describe("sendMessage", () => {
         session: expect.objectContaining({ agentId: "work" }),
         channel: "telegram",
         to: "123456",
+      }),
+    );
+  });
+
+  it("propagates the send idempotency key into mirrored transcript delivery", async () => {
+    await sendMessage({
+      cfg: {},
+      channel: "telegram",
+      to: "123456",
+      content: "hi",
+      idempotencyKey: "idem-send-1",
+      mirror: {
+        sessionKey: "agent:main:telegram:dm:123456",
+      },
+    });
+
+    expect(mocks.deliverOutboundPayloads).toHaveBeenCalledWith(
+      expect.objectContaining({
+        mirror: expect.objectContaining({
+          sessionKey: "agent:main:telegram:dm:123456",
+          text: "hi",
+          idempotencyKey: "idem-send-1",
+        }),
       }),
     );
   });

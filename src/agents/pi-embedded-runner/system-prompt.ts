@@ -52,6 +52,7 @@ export function buildEmbeddedSystemPrompt(params: {
   userTimeFormat?: ResolvedTimeFormat;
   contextFiles?: EmbeddedContextFile[];
   narrativeStory?: string;
+  bootstrapTruncationWarningLines?: string[];
   memoryCitationsMode?: MemoryCitationsMode;
   /** If true, skip the narrative story block (caller will handle it). */
   skipNarrative?: boolean;
@@ -84,6 +85,7 @@ export function buildEmbeddedSystemPrompt(params: {
     userTimeFormat: params.userTimeFormat,
     contextFiles: params.contextFiles,
     narrativeStory: params.narrativeStory,
+    bootstrapTruncationWarningLines: params.bootstrapTruncationWarningLines,
     memoryCitationsMode: params.memoryCitationsMode,
     skipNarrative: params.skipNarrative,
   });

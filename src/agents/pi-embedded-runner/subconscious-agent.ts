@@ -12,7 +12,10 @@ import {
   type Context,
   type ThinkingLevel,
 } from "@mariozechner/pi-ai";
-import type { AuthStorage, ModelRegistry } from "../pi-model-discovery.js";
+import type {
+  AuthStorage as PiAuthStorage,
+  ModelRegistry as PiModelRegistry,
+} from "@mariozechner/pi-coding-agent";
 
 export interface SubconsciousAgent {
   complete: (prompt: string) => Promise<{ text: string }>;
@@ -21,8 +24,8 @@ export interface SubconsciousAgent {
 
 export interface SubconsciousAgentOptions {
   model: Model<Api>;
-  authStorage: AuthStorage;
-  modelRegistry: ModelRegistry;
+  authStorage: PiAuthStorage;
+  modelRegistry: PiModelRegistry;
   debug?: boolean;
   autoBootstrapHistory?: boolean;
   fallbacks?: string[];

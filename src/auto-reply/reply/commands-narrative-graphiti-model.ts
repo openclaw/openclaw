@@ -10,6 +10,14 @@
  * /graphitimodels                  - show provider/model picker buttons
  */
 
+import {
+  buildAuxModelsKeyboard,
+  buildAuxProviderKeyboard,
+  calculateTotalPages,
+  getModelsPageSize,
+  type ModelPickerTarget,
+  type ProviderInfo,
+} from "../../../extensions/telegram/src/model-buttons.js";
 import { resolveAgentDir, resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../../agents/defaults.js";
 import {
@@ -29,14 +37,6 @@ import {
   writeConfigFile,
 } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/config.js";
-import {
-  buildAuxModelsKeyboard,
-  buildAuxProviderKeyboard,
-  calculateTotalPages,
-  getModelsPageSize,
-  type ModelPickerTarget,
-  type ProviderInfo,
-} from "../../telegram/model-buttons.js";
 import type { ReplyPayload } from "../types.js";
 import { buildModelsProviderData } from "./commands-models.js";
 import type { CommandHandler } from "./commands-types.js";

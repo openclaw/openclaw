@@ -77,6 +77,7 @@ type StatusArgs = {
   sessionStorePath?: string;
   groupActivation?: "mention" | "always";
   resolvedThink?: ThinkLevel;
+  resolvedFast?: boolean;
   resolvedVerbose?: VerboseLevel;
   resolvedReasoning?: ReasoningLevel;
   resolvedElevated?: ElevatedLevel;
@@ -506,9 +507,12 @@ export function buildStatusMessage(args: StatusArgs): string {
     }
   }
 
-  const thinkLevel = args.resolvedThink ?? args.agent?.thinkingDefault ?? "off";
-  const verboseLevel = args.resolvedVerbose ?? args.agent?.verboseDefault ?? "off";
-  const reasoningLevel = args.resolvedReasoning ?? "off";
+  const thinkLevel =
+    args.resolvedThink ?? args.sessionEntry?.thinkingLevel ?? args.agent?.thinkingDefault ?? "off";
+  const verboseLevel =
+    args.resolvedVerbose ?? args.sessionEntry?.verboseLevel ?? args.agent?.verboseDefault ?? "off";
+  const fastMode = args.resolvedFast ?? args.sessionEntry?.fastMode ?? false;
+  const reasoningLevel = args.resolvedReasoning ?? args.sessionEntry?.reasoningLevel ?? "off";
   const elevatedLevel =
     args.resolvedElevated ??
     args.sessionEntry?.elevatedLevel ??
@@ -534,9 +538,20 @@ export function buildStatusMessage(args: StatusArgs): string {
     ? (args.groupActivation ?? entry?.groupActivation ?? "mention")
     : undefined;
 
+  // Use prompt size (cached + new input) as the context fill indicator when available,
+  // since it reflects what is actually loaded in the model's context window.
+  const promptFill = (() => {
+    const cr = cacheRead ?? 0;
+    const cw = cacheWrite ?? 0;
+    const inp = inputTokens ?? 0;
+    const prompt = cr + cw + inp;
+    return prompt > totalTokens ? prompt : totalTokens;
+  })();
+  const compactionCount = entry?.compactionCount ?? 0;
+  const compactionLabel = compactionCount > 0 ? `🧹 ${compactionCount}x` : null;
   const contextLine = [
-    `Context: ${formatTokens(totalTokens, contextTokens ?? null)}`,
-    `🧹 Compactions: ${entry?.compactionCount ?? 0}`,
+    `Context: ${formatTokens(promptFill, contextTokens ?? null)}`,
+    compactionLabel,
   ]
     .filter(Boolean)
     .join(" · ");
@@ -554,6 +569,7 @@ export function buildStatusMessage(args: StatusArgs): string {
   const optionParts = [
     `Runtime: ${runtime.label}`,
     `Think: ${thinkLevel}`,
+    fastMode ? "Fast: on" : null,
     verboseLabel,
     reasoningLevel !== "off" ? `Reasoning: ${reasoningLevel}` : null,
     elevatedLabel,
@@ -653,7 +669,7 @@ export function buildStatusMessage(args: StatusArgs): string {
         showFallbackAuth ? ` · 🔑 ${activeAuthLabelValue}` : ""
       } (${fallbackState.reason ?? "selected model unavailable"})`
     : null;
-  const commit = resolveCommitHash();
+  const commit = resolveCommitHash({ moduleUrl: import.meta.url });
   const versionLine = `🦞 OpenClaw ${VERSION}${commit ? ` (${commit})` : ""}`;
   const usagePair = formatUsagePair(inputTokens, outputTokens);
   const cacheLine = formatCacheLine(inputTokens, cacheRead, cacheWrite);
@@ -726,7 +742,7 @@ export function buildHelpMessage(cfg?: OpenClawConfig): string {
   lines.push("  /new  |  /reset  |  /compact [instructions]  |  /stop");
   lines.push("");
 
-  const optionParts = ["/think <level>", "/model <id>", "/verbose on|off"];
+  const optionParts = ["/think <level>", "/model <id>", "/fast on|off", "/verbose on|off"];
   if (isCommandFlagEnabled(cfg, "config")) {
     optionParts.push("/config");
   }

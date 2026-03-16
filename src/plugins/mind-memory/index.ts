@@ -1,7 +1,10 @@
+import { spawn } from "node:child_process";
 import { access, copyFile, mkdir, readFile } from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { complete } from "@mariozechner/pi-ai";
+import type { AuthStorage as PiAuthStorage } from "@mariozechner/pi-coding-agent";
 import type { Command } from "commander";
 import { resolveOpenClawAgentDir } from "../../agents/agent-paths.js";
 import {
@@ -10,7 +13,6 @@ import {
   resolveDefaultAgentId,
 } from "../../agents/agent-scope.js";
 import { resolveModel } from "../../agents/pi-embedded-runner/model.js";
-import type { AuthStorage } from "../../agents/pi-model-discovery.js";
 import { readConfigFileSnapshot } from "../../config/config.js";
 import { emitAgentEvent } from "../../infra/agent-events.js";
 import { LlamaCppCacheService } from "../../infra/LlamaCppCacheService.js";
@@ -28,6 +30,16 @@ import type { LlamaCppServerConfig, MindMemoryPluginConfig } from "./types.js";
 
 // Use the real plugin API type so api.on() is available
 type PluginApi = OpenClawPluginApi;
+
+/** Fire-and-forget a desktop notification via ~/scripts/notify.sh. */
+function sendNotify(message: string): void {
+  const notifyScript = path.join(os.homedir(), "scripts", "notify.sh");
+  const proc = spawn(notifyScript, [message], {
+    stdio: "ignore",
+    detached: true,
+  });
+  proc.unref();
+}
 
 /** Extract the mind-memory plugin config from the global config. */
 function getMindMemoryConfig(globalConfig: Record<string, unknown>): MindMemoryPluginConfig {
@@ -65,7 +77,7 @@ export default function register(api: PluginApi) {
    * This ensures background tasks (narrative, graphiti) can authenticate
    * even if the primary model is local and hasn't triggered exchange.
    */
-  function wrapAuthStorage(base: AuthStorage): AuthStorage {
+  function wrapAuthStorage(base: PiAuthStorage): PiAuthStorage {
     return {
       getApiKey: async (provider: string) => {
         const key = await base.getApiKey(provider);
@@ -252,7 +264,10 @@ export default function register(api: PluginApi) {
               modelRegistry,
               debug,
               autoBootstrapHistory: false,
-              fallbacks: api.config.agents?.defaults?.model?.fallbacks,
+              fallbacks:
+                typeof api.config.agents?.defaults?.model === "object"
+                  ? api.config.agents.defaults.model?.fallbacks
+                  : undefined,
               reasoning: config.graphiti?.thinking as
                 | import("@mariozechner/pi-ai").ThinkingLevel
                 | undefined,
@@ -982,7 +997,7 @@ export default function register(api: PluginApi) {
                   runId: _ctx.runId,
                   sessionKey: event.sessionKey,
                   stream: evt.stream,
-                  data: evt.data,
+                  data: evt.data as Record<string, unknown>,
                 });
               }
             },
@@ -1085,6 +1100,8 @@ export default function register(api: PluginApi) {
           );
         }
 
+        sendNotify("🧠 Mind compacting session...");
+
         await consolidator.syncStoryWithSession(
           sessionMessages,
           storyPath,
@@ -1097,11 +1114,13 @@ export default function register(api: PluginApi) {
                 runId: _ctx.runId,
                 sessionKey: _ctx.sessionKey,
                 stream: evt.stream,
-                data: evt.data,
+                data: evt.data as Record<string, unknown>,
               });
             }
           },
         );
+
+        sendNotify("✅ Mind compaction complete, regenerating profile...");
 
         // Fire-and-forget QUICK.md + SUMMARY.md regeneration after story sync.
         void Promise.all([
@@ -1165,6 +1184,8 @@ export default function register(api: PluginApi) {
           );
         }
 
+        sendNotify("📖 Mind regenerating narrative...");
+
         await consolidator.syncGlobalNarrative(
           sessionsDir,
           storyPath,
@@ -1178,11 +1199,13 @@ export default function register(api: PluginApi) {
                 runId: _ctx.runId,
                 sessionKey: _ctx.sessionKey,
                 stream: evt.stream,
-                data: evt.data,
+                data: evt.data as Record<string, unknown>,
               });
             }
           },
         );
+
+        sendNotify("✅ Mind narrative updated, regenerating profile...");
 
         // Fire-and-forget QUICK.md + SUMMARY.md regeneration after story sync.
         void Promise.all([

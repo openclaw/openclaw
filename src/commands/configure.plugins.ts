@@ -1,10 +1,10 @@
+import { writeConfigFile } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.js";
 import type { PluginRecord } from "../plugins/registry.js";
-import type { RuntimeEnv } from "../runtime.js";
-import type { WizardPrompter } from "../wizard/prompts.js";
-import { writeConfigFile } from "../config/config.js";
 import { applyExclusiveSlotSelection } from "../plugins/slots.js";
 import { buildPluginStatusReport } from "../plugins/status.js";
+import type { RuntimeEnv } from "../runtime.js";
+import type { WizardPrompter } from "../wizard/prompts.js";
 import { guardCancel } from "./onboard-helpers.js";
 
 function getNestedValue(obj: Record<string, unknown>, path: string): unknown {
@@ -90,12 +90,11 @@ async function promptPluginEntryConfig(
     });
     if (slotResult.changed) {
       nextConfig = slotResult.config as unknown as OpenClawConfig;
-      nextEntry =
-        (
-          nextConfig.plugins as unknown as {
-            entries?: Record<string, { enabled?: boolean; config?: Record<string, unknown> }>;
-          }
-        )?.entries?.[pluginId] ?? nextEntry;
+      nextEntry = ((
+        nextConfig.plugins as unknown as {
+          entries?: Record<string, { enabled?: boolean; config?: Record<string, unknown> }>;
+        }
+      )?.entries?.[pluginId] ?? nextEntry) as typeof nextEntry;
       if (slotResult.warnings.length > 0) {
         for (const w of slotResult.warnings) {
           await prompter.note(w, "Slot Selection");
@@ -105,7 +104,7 @@ async function promptPluginEntryConfig(
   }
 
   if (toggleEnabled && plugin.configUiHints) {
-    const pluginConfig = entry.config ?? {};
+    const pluginConfig: Record<string, unknown> = entry.config ?? {};
     const nextPluginConfig = { ...pluginConfig };
 
     for (const [key, hint] of Object.entries(plugin.configUiHints)) {
@@ -168,7 +167,7 @@ async function promptPluginEntryConfig(
       entries: {
         ...(nextConfig.plugins as unknown as { entries?: Record<string, unknown> })?.entries,
         [pluginId]: nextEntry,
-      },
+      } as Record<string, import("../config/types.plugins.js").PluginEntryConfig>,
     },
   };
 }

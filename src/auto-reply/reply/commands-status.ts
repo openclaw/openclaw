@@ -4,6 +4,7 @@ import {
   resolveDefaultAgentId,
   resolveSessionAgentId,
 } from "../../agents/agent-scope.js";
+import { resolveFastModeState } from "../../agents/fast-mode.js";
 import { resolveModelAuthLabel } from "../../agents/model-auth-label.js";
 import { listSubagentRunsForRequester } from "../../agents/subagent-registry.js";
 import {
@@ -42,6 +43,7 @@ export async function buildStatusReply(params: {
   model: string;
   contextTokens: number;
   resolvedThinkLevel?: ThinkLevel;
+  resolvedFastMode?: boolean;
   resolvedVerboseLevel: VerboseLevel;
   resolvedReasoningLevel: ReasoningLevel;
   resolvedElevatedLevel?: ElevatedLevel;
@@ -62,6 +64,7 @@ export async function buildStatusReply(params: {
     model,
     contextTokens,
     resolvedThinkLevel,
+    resolvedFastMode,
     resolvedVerboseLevel,
     resolvedReasoningLevel,
     resolvedElevatedLevel,
@@ -162,6 +165,14 @@ export async function buildStatusReply(params: {
       })
     : selectedModelAuth;
   const agentDefaults = cfg.agents?.defaults ?? {};
+  const effectiveFastMode =
+    resolvedFastMode ??
+    resolveFastModeState({
+      cfg,
+      provider,
+      model,
+      sessionEntry,
+    }).enabled;
   const statusText = buildStatusMessage({
     config: cfg,
     agent: {
@@ -183,6 +194,7 @@ export async function buildStatusReply(params: {
     sessionStorePath: storePath,
     groupActivation,
     resolvedThink: resolvedThinkLevel ?? (await resolveDefaultThinkingLevel()),
+    resolvedFast: effectiveFastMode,
     resolvedVerbose: resolvedVerboseLevel,
     resolvedReasoning: resolvedReasoningLevel,
     resolvedElevated: resolvedElevatedLevel,

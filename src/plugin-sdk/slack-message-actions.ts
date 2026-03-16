@@ -1,7 +1,7 @@
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
+import { parseSlackBlocksInput } from "../../extensions/slack/src/blocks-input.js";
 import { readNumberParam, readStringParam } from "../agents/tools/common.js";
 import type { ChannelMessageActionContext } from "../channels/plugins/types.js";
-import { parseSlackBlocksInput } from "../slack/blocks-input.js";
 
 type SlackActionInvoke = (
   action: Record<string, unknown>,
@@ -174,6 +174,24 @@ export async function handleSlackMessageAction(params: {
   if (action === "emoji-list") {
     const limit = readNumberParam(actionParams, "limit", { integer: true });
     return await invoke({ action: "emojiList", limit, accountId }, cfg);
+  }
+
+  if (action === "download-file") {
+    const fileId = readStringParam(actionParams, "fileId", { required: true });
+    const channelId =
+      readStringParam(actionParams, "channelId") ?? readStringParam(actionParams, "to");
+    const threadId =
+      readStringParam(actionParams, "threadId") ?? readStringParam(actionParams, "replyTo");
+    return await invoke(
+      {
+        action: "downloadFile",
+        fileId,
+        channelId: channelId ?? undefined,
+        threadId: threadId ?? undefined,
+        accountId,
+      },
+      cfg,
+    );
   }
 
   throw new Error(`Action ${action} is not supported for provider ${providerId}.`);

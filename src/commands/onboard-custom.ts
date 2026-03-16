@@ -1,5 +1,7 @@
+import { CONTEXT_WINDOW_HARD_MIN_TOKENS } from "../agents/context-window-guard.js";
 import { DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { buildModelAliasIndex, modelKey } from "../agents/model-selection.js";
+import { OLLAMA_DEFAULT_BASE_URL } from "../agents/ollama-models.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { ModelProviderConfig } from "../config/types.models.js";
 import { isSecretRef, type SecretInput } from "../config/types.secrets.js";
@@ -15,10 +17,14 @@ import { applyPrimaryModel } from "./model-picker.js";
 import { normalizeAlias } from "./models/shared.js";
 import type { SecretInputMode } from "./onboard-types.js";
 
-const DEFAULT_OLLAMA_BASE_URL = "http://127.0.0.1:11434/v1";
-const DEFAULT_CONTEXT_WINDOW = 4096;
+const DEFAULT_CONTEXT_WINDOW = CONTEXT_WINDOW_HARD_MIN_TOKENS;
 const DEFAULT_MAX_TOKENS = 4096;
 const VERIFY_TIMEOUT_MS = 30_000;
+
+function normalizeContextWindowForCustomModel(value: unknown): number {
+  const parsed = typeof value === "number" && Number.isFinite(value) ? Math.floor(value) : 0;
+  return parsed >= CONTEXT_WINDOW_HARD_MIN_TOKENS ? parsed : CONTEXT_WINDOW_HARD_MIN_TOKENS;
+}
 
 /**
  * Detects if a URL is from Azure AI Foundry or Azure OpenAI.
@@ -383,7 +389,7 @@ async function promptBaseUrlAndKey(params: {
 }): Promise<{ baseUrl: string; apiKey?: SecretInput; resolvedApiKey: string }> {
   const baseUrlInput = await params.prompter.text({
     message: "API Base URL",
-    initialValue: params.initialBaseUrl ?? DEFAULT_OLLAMA_BASE_URL,
+    initialValue: params.initialBaseUrl ?? OLLAMA_DEFAULT_BASE_URL,
     placeholder: "https://api.example.com/v1",
     validate: (val) => {
       try {
@@ -600,7 +606,16 @@ export function applyCustomApiConfig(params: ApplyCustomApiConfigParams): Custom
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
     reasoning: false,
   };
-  const mergedModels = hasModel ? existingModels : [...existingModels, nextModel];
+  const mergedModels = hasModel
+    ? existingModels.map((model) =>
+        model.id === modelId
+          ? {
+              ...model,
+              contextWindow: normalizeContextWindowForCustomModel(model.contextWindow),
+            }
+          : model,
+      )
+    : [...existingModels, nextModel];
   const { apiKey: existingApiKey, ...existingProviderRest } = existingProvider ?? {};
   const normalizedApiKey =
     normalizeOptionalProviderApiKey(params.apiKey) ??

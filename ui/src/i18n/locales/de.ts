@@ -5,6 +5,7 @@ export const de: TranslationMap = {
     version: "Version",
     health: "Status",
     ok: "OK",
+    online: "Online",
     offline: "Offline",
     connect: "Verbinden",
     refresh: "Aktualisieren",
@@ -58,7 +59,7 @@ export const de: TranslationMap = {
       subtitle: "Wo sich das Dashboard verbindet und wie es sich authentifiziert.",
       wsUrl: "WebSocket-URL",
       token: "Gateway-Token",
-      password: "Passwort (nicht gespeichert)",
+      password: "Passwort (nicht gespeichert)", // pragma: allowlist secret
       sessionKey: "Standard-Sitzungsschlüssel",
       language: "Sprache",
       connectHint: "Klicken Sie auf Verbinden, um Verbindungsänderungen anzuwenden.",
@@ -114,6 +115,9 @@ export const de: TranslationMap = {
     refreshTitle: "Chat-Daten aktualisieren",
     thinkingToggle: "Ausgabe des Assistenten ein-/ausblenden",
     focusToggle: "Fokusmodus ein-/ausschalten (Seitenleiste + Kopfzeile ausblenden)",
+    hideCronSessions: "Cron-Sitzungen ausblenden",
+    showCronSessions: "Cron-Sitzungen anzeigen",
+    showCronSessionsHidden: "Cron-Sitzungen anzeigen ({count} ausgeblendet)",
     onboardingDisabled: "Während der Einrichtung deaktiviert",
   },
   languages: {
@@ -122,5 +126,6 @@ export const de: TranslationMap = {
     zhTW: "繁體中文 (Traditionelles Chinesisch)",
     ptBR: "Português (Brasilianisches Portugiesisch)",
     de: "Deutsch",
+    es: "Spanisch (Español)",
   },
 };

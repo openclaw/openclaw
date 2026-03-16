@@ -1,19 +1,10 @@
-import fs from "node:fs/promises";
-import path from "node:path";
-import {
-  resolveAgentNarrativeDir,
-  resolveDefaultAgentId,
-  resolveSessionAgentId,
-} from "../../agents/agent-scope.js";
+import { analyzeBootstrapBudget } from "../../agents/bootstrap-budget.js";
 import {
   resolveBootstrapMaxChars,
   resolveBootstrapTotalMaxChars,
 } from "../../agents/pi-embedded-helpers.js";
 import { buildSystemPromptReport } from "../../agents/system-prompt-report.js";
-import { resolveSessionFilePath } from "../../config/sessions.js";
 import type { SessionSystemPromptReport } from "../../config/sessions/types.js";
-import { resolvePreferredOpenClawTmpDir } from "../../infra/tmp-openclaw-dir.js";
-import { readModeState } from "../../plugins/mind-memory/intensive-mode.js";
 import type { ReplyPayload } from "../types.js";
 import { resolveCommandsSystemPromptBundle } from "./commands-system-prompt.js";
 import type { HandleCommandsParams } from "./commands-types.js";
@@ -83,219 +74,6 @@ async function resolveContextReport(
   });
 }
 
-async function buildMemoryLines(
-  params: HandleCommandsParams,
-): Promise<{ lines: string[]; suppressedFiles: Set<string> }> {
-  try {
-    const agentId = params.sessionKey
-      ? resolveSessionAgentId({ sessionKey: params.sessionKey, config: params.cfg })
-      : resolveDefaultAgentId(params.cfg);
-    const narrativeDir = resolveAgentNarrativeDir(params.cfg, agentId);
-    const modeState = await readModeState(narrativeDir).catch(() => ({ mode: "normal" as const }));
-    const isIntensive = modeState.mode === "intensive";
-
-    const SUPPRESS = ["SOUL.md", "USER.md", "MEMORY.md", "IDENTITY.md"];
-    const files = [
-      {
-        label: "STORY.md (narrative)",
-        file: path.join(narrativeDir, "STORY.md"),
-        active: !isIntensive,
-      },
-      {
-        label: "SUMMARY.md (compact narrative)",
-        file: path.join(narrativeDir, "SUMMARY.md"),
-        active: isIntensive,
-      },
-      {
-        label: "QUICK.md (query context)",
-        file: path.join(narrativeDir, "QUICK.md"),
-        active: true,
-      },
-    ];
-
-    const fileLines = await Promise.all(
-      files.map(async ({ label, file, active }) => {
-        const stat = await fs.stat(file).catch(() => null);
-        if (!stat) {
-          return `- ${label}: missing${active ? "" : " (inactive)"}`;
-        }
-        const chars = stat.size;
-        const tok = Math.ceil(chars / 4);
-        const status = active ? "active" : "inactive";
-        return `- ${label}: ${status} | ${formatCharsAndTokens(chars)} (~${tok} tok)`;
-      }),
-    );
-
-    const modeLabel = isIntensive ? "on" : "off";
-    const suppressLine = isIntensive ? `Suppressed: ${SUPPRESS.join(", ")}` : "";
-    const suppressedFiles = isIntensive ? new Set(SUPPRESS) : new Set<string>();
-
-    return {
-      lines: [
-        `🧠 Memory (mind-memory): hyperfocus=${modeLabel}`,
-        ...fileLines,
-        ...(suppressLine ? [suppressLine] : []),
-      ],
-      suppressedFiles,
-    };
-  } catch {
-    return { lines: [], suppressedFiles: new Set() };
-  }
-}
-
-type ContentBlock = Record<string, unknown>;
-
-function str(v: unknown): string {
-  if (typeof v === "string") {
-    return v;
-  }
-  if (v == null) {
-    return "";
-  }
-  return JSON.stringify(v);
-}
-
-function formatContentBlock(b: ContentBlock): string {
-  if (b.type === "text") {
-    return str(b.text);
-  }
-  if (b.type === "thinking") {
-    const t = str(b.thinking);
-    return `<thinking>${t.length > 300 ? `${t.slice(0, 300)}…` : t}</thinking>`;
-  }
-  if (b.type === "toolCall") {
-    const args = JSON.stringify(b.arguments, null, 2);
-    return `[tool: ${str(b.name)}]\n${args}`;
-  }
-  if (b.type === "tool_result" || b.type === "toolResult") {
-    const id = str(b.tool_use_id ?? b.toolCallId ?? "?");
-    const content = typeof b.content === "string" ? b.content : JSON.stringify(b.content);
-    const preview =
-      content.length > 800
-        ? `${content.slice(0, 800)}\n… (${content.length} chars total)`
-        : content;
-    return `[tool_result: ${id}]\n${preview}`;
-  }
-  return `[${str(b.type)}]`;
-}
-
-function formatSessionMessages(raw: string): string {
-  const parts: string[] = [];
-  let msgIndex = 0;
-  for (const line of raw.split("\n")) {
-    const trimmed = line.trim();
-    if (!trimmed) {
-      continue;
-    }
-    let entry: unknown;
-    try {
-      entry = JSON.parse(trimmed);
-    } catch {
-      continue;
-    }
-    if (!entry || typeof entry !== "object") {
-      continue;
-    }
-    const e = entry as Record<string, unknown>;
-    if (e.type !== "message") {
-      continue;
-    }
-    const msg = e.message as Record<string, unknown>;
-    const role = str(msg?.role ?? "?");
-    const content = msg?.content;
-    if (!Array.isArray(content)) {
-      continue;
-    }
-    msgIndex++;
-    parts.push(`--- [${msgIndex}] ${role} ---`);
-    for (const block of content as ContentBlock[]) {
-      const formatted = formatContentBlock(block);
-      if (formatted) {
-        parts.push(formatted);
-      }
-    }
-    parts.push("");
-  }
-  return parts.length ? parts.join("\n") : "(no messages)";
-}
-
-async function buildContextExport(params: HandleCommandsParams): Promise<ReplyPayload> {
-  // Resolve intensive mode state to get suppressedFiles and pick the right narrative file.
-  const agentId = params.sessionKey
-    ? resolveSessionAgentId({ sessionKey: params.sessionKey, config: params.cfg })
-    : resolveDefaultAgentId(params.cfg);
-  const narrativeDir = resolveAgentNarrativeDir(params.cfg, agentId);
-  const modeState = await readModeState(narrativeDir).catch(() => ({ mode: "normal" as const }));
-  const isIntensive = modeState.mode === "intensive";
-
-  const SUPPRESS = ["SOUL.md", "USER.md", "MEMORY.md", "IDENTITY.md"];
-  const suppressedFiles = isIntensive ? new Set(SUPPRESS) : new Set<string>();
-
-  // Pick the same narrative file the runner would inject.
-  const storyPath = path.join(narrativeDir, "STORY.md");
-  const summaryPath = path.join(narrativeDir, "SUMMARY.md");
-  const narrativeStory = isIntensive
-    ? await fs
-        .readFile(summaryPath, "utf-8")
-        .catch(() => fs.readFile(storyPath, "utf-8").catch(() => ""))
-    : await fs.readFile(storyPath, "utf-8").catch(() => "");
-
-  const { systemPrompt } = await resolveCommandsSystemPromptBundle(params, {
-    suppressContextFiles: suppressedFiles,
-    narrativeStory: narrativeStory || undefined,
-  });
-
-  const sessionId = params.sessionEntry?.sessionId;
-  let messagesSection = "(no active session)";
-  if (sessionId) {
-    try {
-      const sessionFilePath = resolveSessionFilePath(sessionId, params.sessionEntry, {
-        agentId: params.agentId,
-        sessionsDir: params.storePath ? path.dirname(params.storePath) : undefined,
-      });
-      const raw = await fs.readFile(sessionFilePath, "utf-8").catch(() => null);
-      messagesSection = raw ? formatSessionMessages(raw) : "(session file not found)";
-    } catch {
-      messagesSection = "(could not resolve session file)";
-    }
-  }
-
-  const narrativeFile = isIntensive ? "SUMMARY.md" : "STORY.md";
-  const intensiveNote = isIntensive
-    ? `Hyperfocus mode: ON — narrative: ${narrativeFile}, suppressed: ${SUPPRESS.join(", ")}`
-    : `Hyperfocus mode: OFF — narrative: ${narrativeFile}`;
-
-  const lines = [
-    "=== CONTEXT EXPORT ===",
-    `Generated:  ${new Date().toISOString()}`,
-    `Session:    ${sessionId ?? "none"}`,
-    `Model:      ${params.provider}/${params.model}`,
-    intensiveNote,
-    "",
-    "NOTE: Subconscious flashbacks (Graphiti resonances) are injected ephemerally",
-    "at run time and are not included in this export.",
-    "",
-    "=== SYSTEM PROMPT ===",
-    systemPrompt,
-    "",
-    "=== SESSION MESSAGES ===",
-    messagesSection,
-  ];
-
-  const content = lines.join("\n");
-  const fileName = `context-${Date.now()}.txt`;
-  const tmpDir = resolvePreferredOpenClawTmpDir();
-  await fs.mkdir(tmpDir, { recursive: true });
-  const filePath = path.join(tmpDir, fileName);
-  await fs.writeFile(filePath, content, "utf-8");
-
-  const sizeKb = Math.round(content.length / 1024);
-  return {
-    text: `Context export · ${sizeKb}KB · session: ${sessionId ?? "none"}`,
-    mediaUrl: `file://${filePath}`,
-  };
-}
-
 export async function buildContextReply(params: HandleCommandsParams): Promise<ReplyPayload> {
   const args = parseContextArgs(params.command.commandBodyNormalized);
   const sub = args.split(/\s+/).filter(Boolean)[0]?.toLowerCase() ?? "";
@@ -311,15 +89,10 @@ export async function buildContextReply(params: HandleCommandsParams): Promise<R
         "- /context list   (short breakdown)",
         "- /context detail (per-file + per-tool + per-skill + system prompt size)",
         "- /context json   (same, machine-readable)",
-        "- /context export (download system prompt + full session history as a .txt file)",
         "",
-        "Inline shortcut = a command token inside a normal message (e.g. '/hey /status'). It runs immediately (allowlisted senders only) and is stripped before the model sees the remaining text.",
+        "Inline shortcut = a command token inside a normal message (e.g. “hey /status”). It runs immediately (allowlisted senders only) and is stripped before the model sees the remaining text.",
       ].join("\n"),
     };
-  }
-
-  if (sub === "export") {
-    return buildContextExport(params);
   }
 
   const report = await resolveContextReport(params);
@@ -335,28 +108,18 @@ export async function buildContextReply(params: HandleCommandsParams): Promise<R
   }
 
   if (sub !== "list" && sub !== "show" && sub !== "detail" && sub !== "deep") {
-    // Note: "export" is handled above, so reaching here means truly unknown subcommand.
     return {
       text: [
         "Unknown /context mode.",
-        "Use: /context, /context list, /context detail, /context json, or /context export",
+        "Use: /context, /context list, /context detail, or /context json",
       ].join("\n"),
     };
   }
 
-  const { lines: memoryLines, suppressedFiles } = await buildMemoryLines(params);
-
   const fileLines = report.injectedWorkspaceFiles.map((f) => {
-    const suppressed = suppressedFiles.has(f.name);
-    const status = f.missing
-      ? "MISSING"
-      : suppressed
-        ? "SUPPRESSED"
-        : f.truncated
-          ? "TRUNCATED"
-          : "OK";
+    const status = f.missing ? "MISSING" : f.truncated ? "TRUNCATED" : "OK";
     const raw = f.missing ? "0" : formatCharsAndTokens(f.rawChars);
-    const injected = f.missing || suppressed ? "0" : formatCharsAndTokens(f.injectedChars);
+    const injected = f.missing ? "0" : formatCharsAndTokens(f.injectedChars);
     return `- ${f.name}: ${status} | raw ${raw} | injected ${injected}`;
   });
 
@@ -379,39 +142,49 @@ export async function buildContextReply(params: HandleCommandsParams): Promise<R
     : "Tools: (none)";
   const systemPromptLine = `System prompt (${report.source}): ${formatCharsAndTokens(report.systemPrompt.chars)} (Project Context ${formatCharsAndTokens(report.systemPrompt.projectContextChars)})`;
   const workspaceLabel = report.workspaceDir ?? params.workspaceDir;
-  const bootstrapMaxLabel =
-    typeof report.bootstrapMaxChars === "number"
-      ? `${formatInt(report.bootstrapMaxChars)} chars`
-      : "? chars";
-  const bootstrapTotalLabel =
-    typeof report.bootstrapTotalMaxChars === "number"
-      ? `${formatInt(report.bootstrapTotalMaxChars)} chars`
-      : "? chars";
-  const bootstrapMaxChars = report.bootstrapMaxChars;
-  const bootstrapTotalMaxChars = report.bootstrapTotalMaxChars;
-  const nonMissingBootstrapFiles = report.injectedWorkspaceFiles.filter((f) => !f.missing);
-  const truncatedBootstrapFiles = nonMissingBootstrapFiles.filter(
-    (f) => f.truncated && !suppressedFiles.has(f.name),
+  const bootstrapMaxChars =
+    typeof report.bootstrapMaxChars === "number" &&
+    Number.isFinite(report.bootstrapMaxChars) &&
+    report.bootstrapMaxChars > 0
+      ? report.bootstrapMaxChars
+      : resolveBootstrapMaxChars(params.cfg);
+  const bootstrapTotalMaxChars =
+    typeof report.bootstrapTotalMaxChars === "number" &&
+    Number.isFinite(report.bootstrapTotalMaxChars) &&
+    report.bootstrapTotalMaxChars > 0
+      ? report.bootstrapTotalMaxChars
+      : resolveBootstrapTotalMaxChars(params.cfg);
+  const bootstrapMaxLabel = `${formatInt(bootstrapMaxChars)} chars`;
+  const bootstrapTotalLabel = `${formatInt(bootstrapTotalMaxChars)} chars`;
+  const bootstrapAnalysis = analyzeBootstrapBudget({
+    files: report.injectedWorkspaceFiles,
+    bootstrapMaxChars,
+    bootstrapTotalMaxChars,
+  });
+  const truncatedBootstrapFiles = bootstrapAnalysis.truncatedFiles;
+  const truncationCauseCounts = truncatedBootstrapFiles.reduce(
+    (acc, file) => {
+      for (const cause of file.causes) {
+        if (cause === "per-file-limit") {
+          acc.perFile += 1;
+        } else if (cause === "total-limit") {
+          acc.total += 1;
+        }
+      }
+      return acc;
+    },
+    { perFile: 0, total: 0 },
   );
-  const rawBootstrapChars = nonMissingBootstrapFiles.reduce((sum, file) => sum + file.rawChars, 0);
-  const injectedBootstrapChars = nonMissingBootstrapFiles.reduce(
-    (sum, file) => sum + file.injectedChars,
-    0,
-  );
-  const perFileOverLimitCount =
-    typeof bootstrapMaxChars === "number"
-      ? nonMissingBootstrapFiles.filter((f) => f.rawChars > bootstrapMaxChars).length
-      : 0;
-  const totalOverLimit =
-    typeof bootstrapTotalMaxChars === "number" && rawBootstrapChars > bootstrapTotalMaxChars;
   const truncationCauseParts = [
-    perFileOverLimitCount > 0 ? `${perFileOverLimitCount} file(s) exceeded max/file` : null,
-    totalOverLimit ? "raw total exceeded max/total" : null,
+    truncationCauseCounts.perFile > 0
+      ? `${truncationCauseCounts.perFile} file(s) exceeded max/file`
+      : null,
+    truncationCauseCounts.total > 0 ? `${truncationCauseCounts.total} file(s) hit max/total` : null,
   ].filter(Boolean);
   const bootstrapWarningLines =
     truncatedBootstrapFiles.length > 0
       ? [
-          `⚠ Bootstrap context is over configured limits: ${truncatedBootstrapFiles.length} file(s) truncated (${formatInt(rawBootstrapChars)} raw chars -> ${formatInt(injectedBootstrapChars)} injected chars).`,
+          `⚠ Bootstrap context is over configured limits: ${truncatedBootstrapFiles.length} file(s) truncated (${formatInt(bootstrapAnalysis.totals.rawChars)} raw chars -> ${formatInt(bootstrapAnalysis.totals.injectedChars)} injected chars).`,
           ...(truncationCauseParts.length ? [`Causes: ${truncationCauseParts.join("; ")}.`] : []),
           "Tip: increase `agents.defaults.bootstrapMaxChars` and/or `agents.defaults.bootstrapTotalMaxChars` if this truncation is not intentional.",
         ]
@@ -421,6 +194,20 @@ export async function buildContextReply(params: HandleCommandsParams): Promise<R
     session.totalTokens != null
       ? `Session tokens (cached): ${formatInt(session.totalTokens)} total / ctx=${session.contextTokens ?? "?"}`
       : `Session tokens (cached): unknown / ctx=${session.contextTokens ?? "?"}`;
+  const sharedContextLines = [
+    `Workspace: ${workspaceLabel}`,
+    `Bootstrap max/file: ${bootstrapMaxLabel}`,
+    `Bootstrap max/total: ${bootstrapTotalLabel}`,
+    sandboxLine,
+    systemPromptLine,
+    ...(bootstrapWarningLines.length ? ["", ...bootstrapWarningLines] : []),
+    "",
+    "Injected workspace files:",
+    ...fileLines,
+    "",
+    skillsLine,
+    skillsNamesLine,
+  ];
 
   if (sub === "detail" || sub === "deep") {
     const perSkill = formatListTop(
@@ -444,18 +231,7 @@ export async function buildContextReply(params: HandleCommandsParams): Promise<R
     return {
       text: [
         "🧠 Context breakdown (detailed)",
-        `Workspace: ${workspaceLabel}`,
-        `Bootstrap max/file: ${bootstrapMaxLabel}`,
-        `Bootstrap max/total: ${bootstrapTotalLabel}`,
-        sandboxLine,
-        systemPromptLine,
-        ...(bootstrapWarningLines.length ? ["", ...bootstrapWarningLines] : []),
-        "",
-        "Injected workspace files:",
-        ...fileLines,
-        "",
-        skillsLine,
-        skillsNamesLine,
+        ...sharedContextLines,
         ...(perSkill.lines.length ? ["Top skills (prompt entry size):", ...perSkill.lines] : []),
         ...(perSkill.omitted ? [`… (+${perSkill.omitted} more skills)`] : []),
         "",
@@ -471,11 +247,9 @@ export async function buildContextReply(params: HandleCommandsParams): Promise<R
         ...(perToolSummary.omitted ? [`… (+${perToolSummary.omitted} more tools)`] : []),
         ...(toolPropsLines.length ? ["", "Tools (param count):", ...toolPropsLines] : []),
         "",
-        ...memoryLines,
-        "",
         totalsLine,
         "",
-        "Inline shortcut: a command token inside normal text (e.g. '/hey /status') that runs immediately (allowlisted senders only) and is stripped before the model sees the remaining message.",
+        "Inline shortcut: a command token inside normal text (e.g. “hey /status”) that runs immediately (allowlisted senders only) and is stripped before the model sees the remaining message.",
       ]
         .filter(Boolean)
         .join("\n"),
@@ -485,27 +259,14 @@ export async function buildContextReply(params: HandleCommandsParams): Promise<R
   return {
     text: [
       "🧠 Context breakdown",
-      `Workspace: ${workspaceLabel}`,
-      `Bootstrap max/file: ${bootstrapMaxLabel}`,
-      `Bootstrap max/total: ${bootstrapTotalLabel}`,
-      sandboxLine,
-      systemPromptLine,
-      ...(bootstrapWarningLines.length ? ["", ...bootstrapWarningLines] : []),
-      "",
-      "Injected workspace files:",
-      ...fileLines,
-      "",
-      skillsLine,
-      skillsNamesLine,
+      ...sharedContextLines,
       toolListLine,
       toolSchemaLine,
       toolsNamesLine,
       "",
-      ...memoryLines,
-      "",
       totalsLine,
       "",
-      "Inline shortcut: a command token inside normal text (e.g. '/hey /status') that runs immediately (allowlisted senders only) and is stripped before the model sees the remaining message.",
+      "Inline shortcut: a command token inside normal text (e.g. “hey /status”) that runs immediately (allowlisted senders only) and is stripped before the model sees the remaining message.",
     ].join("\n"),
   };
 }

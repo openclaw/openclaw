@@ -1,13 +1,20 @@
 import os from "node:os";
-import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
+import type { OpenClawPluginApi } from "openclaw/plugin-sdk/device-pair";
 import {
   approveDevicePairing,
+  issueDeviceBootstrapToken,
   listDevicePairing,
   resolveGatewayBindUrl,
   runPluginCommandWithTimeout,
   resolveTailnetHostWithRunner,
-} from "openclaw/plugin-sdk";
+} from "openclaw/plugin-sdk/device-pair";
 import qrcode from "qrcode-terminal";
+import {
+  armPairNotifyOnce,
+  formatPendingRequests,
+  handleNotifyCommand,
+  registerPairingNotifierService,
+} from "./notify.js";
 
 function renderQrAscii(data: string): Promise<string> {
   return new Promise((resolve) => {
@@ -25,8 +32,7 @@ type DevicePairPluginConfig = {
 
 type SetupPayload = {
   url: string;
-  token?: string;
-  password?: string;
+  bootstrapToken: string;
 };
 
 type ResolveUrlResult = {
@@ -35,10 +41,8 @@ type ResolveUrlResult = {
   error?: string;
 };
 
-type ResolveAuthResult = {
-  token?: string;
-  password?: string;
-  label?: string;
+type ResolveAuthLabelResult = {
+  label?: "token" | "password";
   error?: string;
 };
 
@@ -104,13 +108,21 @@ function resolveScheme(
   return cfg.gateway?.tls?.enabled === true ? "wss" : "ws";
 }
 
-function isPrivateIPv4(address: string): boolean {
+function parseIPv4Octets(address: string): [number, number, number, number] | null {
   const parts = address.split(".");
-  if (parts.length != 4) {
-    return false;
+  if (parts.length !== 4) {
+    return null;
   }
   const octets = parts.map((part) => Number.parseInt(part, 10));
   if (octets.some((value) => !Number.isFinite(value) || value < 0 || value > 255)) {
+    return null;
+  }
+  return octets as [number, number, number, number];
+}
+
+function isPrivateIPv4(address: string): boolean {
+  const octets = parseIPv4Octets(address);
+  if (!octets) {
     return false;
   }
   const [a, b] = octets;
@@ -127,12 +139,8 @@ function isPrivateIPv4(address: string): boolean {
 }
 
 function isTailnetIPv4(address: string): boolean {
-  const parts = address.split(".");
-  if (parts.length !== 4) {
-    return false;
-  }
-  const octets = parts.map((part) => Number.parseInt(part, 10));
-  if (octets.some((value) => !Number.isFinite(value) || value < 0 || value > 255)) {
+  const octets = parseIPv4Octets(address);
+  if (!octets) {
     return false;
   }
   const [a, b] = octets;
@@ -181,7 +189,7 @@ async function resolveTailnetHost(): Promise<string | null> {
   );
 }
 
-function resolveAuth(cfg: OpenClawPluginApi["config"]): ResolveAuthResult {
+function resolveAuthLabel(cfg: OpenClawPluginApi["config"]): ResolveAuthLabelResult {
   const mode = cfg.gateway?.auth?.mode;
   const token =
     pickFirstDefined([
@@ -197,20 +205,23 @@ function resolveAuth(cfg: OpenClawPluginApi["config"]): ResolveAuthResult {
     ]) ?? undefined;
 
   if (mode === "token" || mode === "password") {
-    return resolveRequiredAuth(mode, { token, password });
+    return resolveRequiredAuthLabel(mode, { token, password });
   }
   if (token) {
-    return { token, label: "token" };
+    return { label: "token" };
   }
   if (password) {
-    return { password, label: "password" };
+    return { label: "password" };
   }
   return { error: "Gateway auth is not configured (no token or password)." };
 }
 
-function pickFirstDefined(candidates: Array<string | undefined>): string | null {
+function pickFirstDefined(candidates: Array<unknown>): string | null {
   for (const value of candidates) {
-    const trimmed = value?.trim();
+    if (typeof value !== "string") {
+      continue;
+    }
+    const trimmed = value.trim();
     if (trimmed) {
       return trimmed;
     }
@@ -218,17 +229,17 @@ function pickFirstDefined(candidates: Array<string | undefined>): string | null 
   return null;
 }
 
-function resolveRequiredAuth(
+function resolveRequiredAuthLabel(
   mode: "token" | "password",
   values: { token?: string; password?: string },
-): ResolveAuthResult {
+): ResolveAuthLabelResult {
   if (mode === "token") {
     return values.token
-      ? { token: values.token, label: "token" }
+      ? { label: "token" }
       : { error: "Gateway auth is set to token, but no token is configured." };
   }
   return values.password
-    ? { password: values.password, label: "password" }
+    ? { label: "password" }
     : { error: "Gateway auth is set to password, but no password is configured." };
 }
 
@@ -314,36 +325,9 @@ function formatSetupInstructions(): string {
   ].join("\n");
 }
 
-type PendingPairingRequest = {
-  requestId: string;
-  deviceId: string;
-  displayName?: string;
-  platform?: string;
-  remoteIp?: string;
-  ts?: number;
-};
-
-function formatPendingRequests(pending: PendingPairingRequest[]): string {
-  if (pending.length === 0) {
-    return "No pending device pairing requests.";
-  }
-  const lines: string[] = ["Pending device pairing requests:"];
-  for (const req of pending) {
-    const label = req.displayName?.trim() || req.deviceId;
-    const platform = req.platform?.trim();
-    const ip = req.remoteIp?.trim();
-    const parts = [
-      `- ${req.requestId}`,
-      label ? `name=${label}` : null,
-      platform ? `platform=${platform}` : null,
-      ip ? `ip=${ip}` : null,
-    ].filter(Boolean);
-    lines.push(parts.join(" · "));
-  }
-  return lines.join("\n");
-}
-
 export default function register(api: OpenClawPluginApi) {
+  registerPairingNotifierService(api);
+
   api.registerCommand({
     name: "pair",
     description: "Generate setup codes and approve device pairing requests.",
@@ -361,6 +345,15 @@ export default function register(api: OpenClawPluginApi) {
       if (action === "status" || action === "pending") {
         const list = await listDevicePairing();
         return { text: formatPendingRequests(list.pending) };
+      }
+
+      if (action === "notify") {
+        const notifyAction = tokens[1]?.trim().toLowerCase() ?? "status";
+        return await handleNotifyCommand({
+          api,
+          ctx,
+          action: notifyAction,
+        });
       }
 
       if (action === "approve") {
@@ -402,9 +395,9 @@ export default function register(api: OpenClawPluginApi) {
         return { text: `✅ Paired ${label}${platformLabel}.` };
       }
 
-      const auth = resolveAuth(api.config);
-      if (auth.error) {
-        return { text: `Error: ${auth.error}` };
+      const authLabelResult = resolveAuthLabel(api.config);
+      if (authLabelResult.error) {
+        return { text: `Error: ${authLabelResult.error}` };
       }
 
       const urlResult = await resolveGatewayUrl(api);
@@ -414,17 +407,29 @@ export default function register(api: OpenClawPluginApi) {
 
       const payload: SetupPayload = {
         url: urlResult.url,
-        token: auth.token,
-        password: auth.password,
+        bootstrapToken: (await issueDeviceBootstrapToken()).token,
       };
 
       if (action === "qr") {
         const setupCode = encodeSetupCode(payload);
         const qrAscii = await renderQrAscii(setupCode);
-        const authLabel = auth.label ?? "auth";
+        const authLabel = authLabelResult.label ?? "auth";
 
         const channel = ctx.channel;
         const target = ctx.senderId?.trim() || ctx.from?.trim() || ctx.to?.trim() || "";
+        let autoNotifyArmed = false;
+
+        if (channel === "telegram" && target) {
+          try {
+            autoNotifyArmed = await armPairNotifyOnce({ api, ctx });
+          } catch (err) {
+            api.logger.warn?.(
+              `device-pair: failed to arm one-shot pairing notify (${String(
+                (err as Error)?.message ?? err,
+              )})`,
+            );
+          }
+        }
 
         if (channel === "telegram" && target) {
           try {
@@ -445,7 +450,15 @@ export default function register(api: OpenClawPluginApi) {
                   `Gateway: ${payload.url}`,
                   `Auth: ${authLabel}`,
                   "",
-                  "After scanning, come back here and run `/pair approve` to complete pairing.",
+                  autoNotifyArmed
+                    ? "After scanning, wait here for the pairing request ping."
+                    : "After scanning, come back here and run `/pair approve` to complete pairing.",
+                  ...(autoNotifyArmed
+                    ? [
+                        "I’ll auto-ping here when the pairing request arrives, then auto-disable.",
+                        "If the ping does not arrive, run `/pair approve latest` manually.",
+                      ]
+                    : []),
                 ].join("\n"),
               };
             }
@@ -464,7 +477,15 @@ export default function register(api: OpenClawPluginApi) {
           `Gateway: ${payload.url}`,
           `Auth: ${authLabel}`,
           "",
-          "After scanning, run `/pair approve` to complete pairing.",
+          autoNotifyArmed
+            ? "After scanning, wait here for the pairing request ping."
+            : "After scanning, run `/pair approve` to complete pairing.",
+          ...(autoNotifyArmed
+            ? [
+                "I’ll auto-ping here when the pairing request arrives, then auto-disable.",
+                "If the ping does not arrive, run `/pair approve latest` manually.",
+              ]
+            : []),
         ];
 
         // WebUI + CLI/TUI: ASCII QR
@@ -483,7 +504,7 @@ export default function register(api: OpenClawPluginApi) {
 
       const channel = ctx.channel;
       const target = ctx.senderId?.trim() || ctx.from?.trim() || ctx.to?.trim() || "";
-      const authLabel = auth.label ?? "auth";
+      const authLabel = authLabelResult.label ?? "auth";
 
       if (channel === "telegram" && target) {
         try {

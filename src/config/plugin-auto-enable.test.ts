@@ -1,7 +1,59 @@
-import { describe, expect, it } from "vitest";
-import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { afterAll, afterEach, describe, expect, it } from "vitest";
+import { clearPluginDiscoveryCache } from "../plugins/discovery.js";
+import {
+  clearPluginManifestRegistryCache,
+  type PluginManifestRegistry,
+} from "../plugins/manifest-registry.js";
 import { validateConfigObject } from "./config.js";
 import { applyPluginAutoEnable } from "./plugin-auto-enable.js";
+
+const tempDirs: string[] = [];
+const previousUmask = process.umask(0o022);
+
+function chmodSafeDir(dir: string) {
+  if (process.platform === "win32") {
+    return;
+  }
+  fs.chmodSync(dir, 0o755);
+}
+
+function mkdtempSafe(prefix: string) {
+  const dir = fs.mkdtempSync(prefix);
+  chmodSafeDir(dir);
+  return dir;
+}
+
+function mkdirSafe(dir: string) {
+  fs.mkdirSync(dir, { recursive: true });
+  chmodSafeDir(dir);
+}
+
+function makeTempDir() {
+  const dir = mkdtempSafe(path.join(os.tmpdir(), "openclaw-plugin-auto-enable-"));
+  tempDirs.push(dir);
+  return dir;
+}
+
+function writePluginManifestFixture(params: { rootDir: string; id: string; channels: string[] }) {
+  mkdirSafe(params.rootDir);
+  fs.writeFileSync(
+    path.join(params.rootDir, "openclaw.plugin.json"),
+    JSON.stringify(
+      {
+        id: params.id,
+        channels: params.channels,
+        configSchema: { type: "object" },
+      },
+      null,
+      2,
+    ),
+    "utf-8",
+  );
+  fs.writeFileSync(path.join(params.rootDir, "index.ts"), "export default {}", "utf-8");
+}
 
 /** Helper to build a minimal PluginManifestRegistry for testing. */
 function makeRegistry(plugins: Array<{ id: string; channels: string[] }>): PluginManifestRegistry {
@@ -20,15 +72,67 @@ function makeRegistry(plugins: Array<{ id: string; channels: string[] }>): Plugi
   };
 }
 
+function makeApnChannelConfig() {
+  return { channels: { apn: { someKey: "value" } } };
+}
+
+function makeBluebubblesAndImessageChannels() {
+  return {
+    bluebubbles: { serverUrl: "http://localhost:1234", password: "x" },
+    imessage: { cliPath: "/usr/local/bin/imsg" },
+  };
+}
+
+function applyWithSlackConfig(extra?: { plugins?: { allow?: string[] } }) {
+  return applyPluginAutoEnable({
+    config: {
+      channels: { slack: { botToken: "x" } },
+      ...(extra?.plugins ? { plugins: extra.plugins } : {}),
+    },
+    env: {},
+  });
+}
+
+function applyWithApnChannelConfig(extra?: {
+  plugins?: { entries?: Record<string, { enabled: boolean }> };
+}) {
+  return applyPluginAutoEnable({
+    config: {
+      ...makeApnChannelConfig(),
+      ...(extra?.plugins ? { plugins: extra.plugins } : {}),
+    },
+    env: {},
+    manifestRegistry: makeRegistry([{ id: "apn-channel", channels: ["apn"] }]),
+  });
+}
+
+function applyWithBluebubblesImessageConfig(extra?: {
+  plugins?: { entries?: Record<string, { enabled: boolean }>; deny?: string[] };
+}) {
+  return applyPluginAutoEnable({
+    config: {
+      channels: makeBluebubblesAndImessageChannels(),
+      ...(extra?.plugins ? { plugins: extra.plugins } : {}),
+    },
+    env: {},
+  });
+}
+
+afterEach(() => {
+  clearPluginDiscoveryCache();
+  clearPluginManifestRegistryCache();
+  for (const dir of tempDirs.splice(0)) {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+afterAll(() => {
+  process.umask(previousUmask);
+});
+
 describe("applyPluginAutoEnable", () => {
   it("auto-enables built-in channels and appends to existing allowlist", () => {
-    const result = applyPluginAutoEnable({
-      config: {
-        channels: { slack: { botToken: "x" } },
-        plugins: { allow: ["telegram"] },
-      },
-      env: {},
-    });
+    const result = applyWithSlackConfig({ plugins: { allow: ["telegram"] } });
 
     expect(result.config.channels?.slack?.enabled).toBe(true);
     expect(result.config.plugins?.entries?.slack).toBeUndefined();
@@ -37,12 +141,7 @@ describe("applyPluginAutoEnable", () => {
   });
 
   it("does not create plugins.allow when allowlist is unset", () => {
-    const result = applyPluginAutoEnable({
-      config: {
-        channels: { slack: { botToken: "x" } },
-      },
-      env: {},
-    });
+    const result = applyWithSlackConfig();
 
     expect(result.config.channels?.slack?.enabled).toBe(true);
     expect(result.config.plugins?.allow).toBeUndefined();
@@ -123,6 +222,80 @@ describe("applyPluginAutoEnable", () => {
     expect(result.changes.join("\n")).toContain("IRC configured, enabled automatically.");
   });
 
+  it("uses the provided env when loading plugin manifests automatically", () => {
+    const stateDir = makeTempDir();
+    const pluginDir = path.join(stateDir, "extensions", "apn-channel");
+    writePluginManifestFixture({
+      rootDir: pluginDir,
+      id: "apn-channel",
+      channels: ["apn"],
+    });
+
+    const result = applyPluginAutoEnable({
+      config: {
+        channels: { apn: { someKey: "value" } },
+      },
+      env: {
+        ...process.env,
+        OPENCLAW_HOME: undefined,
+        OPENCLAW_STATE_DIR: stateDir,
+        CLAWDBOT_STATE_DIR: undefined,
+        OPENCLAW_BUNDLED_PLUGINS_DIR: "/nonexistent/bundled/plugins",
+      },
+    });
+
+    expect(result.config.plugins?.entries?.["apn-channel"]?.enabled).toBe(true);
+    expect(result.config.plugins?.entries?.apn).toBeUndefined();
+  });
+
+  it("uses env-scoped catalog metadata for preferOver auto-enable decisions", () => {
+    const stateDir = makeTempDir();
+    const catalogPath = path.join(stateDir, "plugins", "catalog.json");
+    mkdirSafe(path.dirname(catalogPath));
+    fs.writeFileSync(
+      catalogPath,
+      JSON.stringify({
+        entries: [
+          {
+            name: "@openclaw/env-secondary",
+            openclaw: {
+              channel: {
+                id: "env-secondary",
+                label: "Env Secondary",
+                selectionLabel: "Env Secondary",
+                docsPath: "/channels/env-secondary",
+                blurb: "Env secondary entry",
+                preferOver: ["env-primary"],
+              },
+              install: {
+                npmSpec: "@openclaw/env-secondary",
+              },
+            },
+          },
+        ],
+      }),
+      "utf-8",
+    );
+
+    const result = applyPluginAutoEnable({
+      config: {
+        channels: {
+          "env-primary": { enabled: true },
+          "env-secondary": { enabled: true },
+        },
+      },
+      env: {
+        ...process.env,
+        OPENCLAW_STATE_DIR: stateDir,
+        CLAWDBOT_STATE_DIR: undefined,
+      },
+      manifestRegistry: makeRegistry([]),
+    });
+
+    expect(result.config.plugins?.entries?.["env-secondary"]?.enabled).toBe(true);
+    expect(result.config.plugins?.entries?.["env-primary"]?.enabled).toBeUndefined();
+  });
+
   it("auto-enables provider auth plugins when profiles exist", () => {
     const result = applyPluginAutoEnable({
       config: {
@@ -187,13 +360,7 @@ describe("applyPluginAutoEnable", () => {
       // Reproduces: https://github.com/openclaw/openclaw/issues/25261
       // Plugin "apn-channel" declares channels: ["apn"]. Doctor must write
       // plugins.entries["apn-channel"], not plugins.entries["apn"].
-      const result = applyPluginAutoEnable({
-        config: {
-          channels: { apn: { someKey: "value" } },
-        },
-        env: {},
-        manifestRegistry: makeRegistry([{ id: "apn-channel", channels: ["apn"] }]),
-      });
+      const result = applyWithApnChannelConfig();
 
       expect(result.config.plugins?.entries?.["apn-channel"]?.enabled).toBe(true);
       expect(result.config.plugins?.entries?.["apn"]).toBeUndefined();
@@ -201,26 +368,16 @@ describe("applyPluginAutoEnable", () => {
     });
 
     it("does not double-enable when plugin is already enabled under its plugin id", () => {
-      const result = applyPluginAutoEnable({
-        config: {
-          channels: { apn: { someKey: "value" } },
-          plugins: { entries: { "apn-channel": { enabled: true } } },
-        },
-        env: {},
-        manifestRegistry: makeRegistry([{ id: "apn-channel", channels: ["apn"] }]),
+      const result = applyWithApnChannelConfig({
+        plugins: { entries: { "apn-channel": { enabled: true } } },
       });
 
       expect(result.changes).toEqual([]);
     });
 
     it("respects explicit disable of the plugin by its plugin id", () => {
-      const result = applyPluginAutoEnable({
-        config: {
-          channels: { apn: { someKey: "value" } },
-          plugins: { entries: { "apn-channel": { enabled: false } } },
-        },
-        env: {},
-        manifestRegistry: makeRegistry([{ id: "apn-channel", channels: ["apn"] }]),
+      const result = applyWithApnChannelConfig({
+        plugins: { entries: { "apn-channel": { enabled: false } } },
       });
 
       expect(result.config.plugins?.entries?.["apn-channel"]?.enabled).toBe(false);
@@ -243,15 +400,7 @@ describe("applyPluginAutoEnable", () => {
 
   describe("preferOver channel prioritization", () => {
     it("prefers bluebubbles: skips imessage auto-configure when both are configured", () => {
-      const result = applyPluginAutoEnable({
-        config: {
-          channels: {
-            bluebubbles: { serverUrl: "http://localhost:1234", password: "x" },
-            imessage: { cliPath: "/usr/local/bin/imsg" },
-          },
-        },
-        env: {},
-      });
+      const result = applyWithBluebubblesImessageConfig();
 
       expect(result.config.plugins?.entries?.bluebubbles?.enabled).toBe(true);
       expect(result.config.plugins?.entries?.imessage?.enabled).toBeUndefined();
@@ -262,15 +411,8 @@ describe("applyPluginAutoEnable", () => {
     });
 
     it("keeps imessage enabled if already explicitly enabled (non-destructive)", () => {
-      const result = applyPluginAutoEnable({
-        config: {
-          channels: {
-            bluebubbles: { serverUrl: "http://localhost:1234", password: "x" },
-            imessage: { cliPath: "/usr/local/bin/imsg" },
-          },
-          plugins: { entries: { imessage: { enabled: true } } },
-        },
-        env: {},
+      const result = applyWithBluebubblesImessageConfig({
+        plugins: { entries: { imessage: { enabled: true } } },
       });
 
       expect(result.config.plugins?.entries?.bluebubbles?.enabled).toBe(true);
@@ -278,15 +420,8 @@ describe("applyPluginAutoEnable", () => {
     });
 
     it("allows imessage auto-configure when bluebubbles is explicitly disabled", () => {
-      const result = applyPluginAutoEnable({
-        config: {
-          channels: {
-            bluebubbles: { serverUrl: "http://localhost:1234", password: "x" },
-            imessage: { cliPath: "/usr/local/bin/imsg" },
-          },
-          plugins: { entries: { bluebubbles: { enabled: false } } },
-        },
-        env: {},
+      const result = applyWithBluebubblesImessageConfig({
+        plugins: { entries: { bluebubbles: { enabled: false } } },
       });
 
       expect(result.config.plugins?.entries?.bluebubbles?.enabled).toBe(false);
@@ -295,15 +430,8 @@ describe("applyPluginAutoEnable", () => {
     });
 
     it("allows imessage auto-configure when bluebubbles is in deny list", () => {
-      const result = applyPluginAutoEnable({
-        config: {
-          channels: {
-            bluebubbles: { serverUrl: "http://localhost:1234", password: "x" },
-            imessage: { cliPath: "/usr/local/bin/imsg" },
-          },
-          plugins: { deny: ["bluebubbles"] },
-        },
-        env: {},
+      const result = applyWithBluebubblesImessageConfig({
+        plugins: { deny: ["bluebubbles"] },
       });
 
       expect(result.config.plugins?.entries?.bluebubbles?.enabled).toBeUndefined();
@@ -320,6 +448,30 @@ describe("applyPluginAutoEnable", () => {
 
       expect(result.config.channels?.imessage?.enabled).toBe(true);
       expect(result.changes.join("\n")).toContain("iMessage configured, enabled automatically.");
+    });
+
+    it("uses the provided env when loading installed plugin manifests", () => {
+      const stateDir = makeTempDir();
+      const pluginDir = path.join(stateDir, "extensions", "apn-channel");
+      writePluginManifestFixture({
+        rootDir: pluginDir,
+        id: "apn-channel",
+        channels: ["apn"],
+      });
+
+      const result = applyPluginAutoEnable({
+        config: makeApnChannelConfig(),
+        env: {
+          ...process.env,
+          OPENCLAW_HOME: undefined,
+          OPENCLAW_STATE_DIR: stateDir,
+          CLAWDBOT_STATE_DIR: undefined,
+          OPENCLAW_BUNDLED_PLUGINS_DIR: "/nonexistent/bundled/plugins",
+        },
+      });
+
+      expect(result.config.plugins?.entries?.["apn-channel"]?.enabled).toBe(true);
+      expect(result.config.plugins?.entries?.apn).toBeUndefined();
     });
   });
 });

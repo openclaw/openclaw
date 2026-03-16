@@ -1,16 +1,17 @@
-import type { SystemRunApprovalPlanV2 } from "./exec-approvals.js";
-import { normalizeSystemRunApprovalPlanV2 } from "./system-run-approval-binding.js";
-import { formatExecCommand, resolveSystemRunCommand } from "./system-run-command.js";
+import type { SystemRunApprovalPlan } from "./exec-approvals.js";
+import { normalizeSystemRunApprovalPlan } from "./system-run-approval-binding.js";
+import { formatExecCommand, resolveSystemRunCommandRequest } from "./system-run-command.js";
+import { normalizeNonEmptyString, normalizeStringArray } from "./system-run-normalize.js";
 
 type PreparedRunPayload = {
-  cmdText: string;
-  plan: SystemRunApprovalPlanV2;
+  plan: SystemRunApprovalPlan;
 };
 
 type SystemRunApprovalRequestContext = {
-  planV2: SystemRunApprovalPlanV2 | null;
+  plan: SystemRunApprovalPlan | null;
   commandArgv: string[] | undefined;
   commandText: string;
+  commandPreview: string | null;
   cwd: string | null;
   agentId: string | null;
   sessionKey: string | null;
@@ -19,12 +20,12 @@ type SystemRunApprovalRequestContext = {
 type SystemRunApprovalRuntimeContext =
   | {
       ok: true;
-      planV2: SystemRunApprovalPlanV2 | null;
+      plan: SystemRunApprovalPlan | null;
       argv: string[];
       cwd: string | null;
       agentId: string | null;
       sessionKey: string | null;
-      rawCommand: string | null;
+      commandText: string;
     }
   | {
       ok: false;
@@ -32,79 +33,107 @@ type SystemRunApprovalRuntimeContext =
       details?: Record<string, unknown>;
     };
 
-function normalizeString(value: unknown): string | null {
-  if (typeof value !== "string") {
-    return null;
-  }
-  const trimmed = value.trim();
-  return trimmed ? trimmed : null;
-}
-
-function normalizeStringArray(value: unknown): string[] {
-  return Array.isArray(value) ? value.map((entry) => String(entry)) : [];
-}
-
 function normalizeCommandText(value: unknown): string {
   return typeof value === "string" ? value : "";
+}
+
+function normalizeCommandPreview(
+  value: string | null | undefined,
+  authoritative: string,
+): string | null {
+  const preview = normalizeNonEmptyString(value);
+  if (!preview || preview === authoritative) {
+    return null;
+  }
+  return preview;
 }
 
 export function parsePreparedSystemRunPayload(payload: unknown): PreparedRunPayload | null {
   if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
     return null;
   }
-  const raw = payload as { cmdText?: unknown; plan?: unknown };
-  const cmdText = normalizeString(raw.cmdText);
-  const plan = normalizeSystemRunApprovalPlanV2(raw.plan);
-  if (!cmdText || !plan) {
+  const raw = payload as { plan?: unknown; commandText?: unknown; cmdText?: unknown };
+  const plan = normalizeSystemRunApprovalPlan(raw.plan);
+  if (plan) {
+    return { plan };
+  }
+  if (!raw.plan || typeof raw.plan !== "object" || Array.isArray(raw.plan)) {
     return null;
   }
-  return { cmdText, plan };
+  const legacyPlan = raw.plan as Record<string, unknown>;
+  const argv = normalizeStringArray(legacyPlan.argv);
+  const commandText =
+    normalizeNonEmptyString(legacyPlan.rawCommand) ??
+    normalizeNonEmptyString(raw.commandText) ??
+    normalizeNonEmptyString(raw.cmdText);
+  if (argv.length === 0 || !commandText) {
+    return null;
+  }
+  return {
+    plan: {
+      argv,
+      cwd: normalizeNonEmptyString(legacyPlan.cwd),
+      commandText,
+      commandPreview: normalizeNonEmptyString(legacyPlan.commandPreview),
+      agentId: normalizeNonEmptyString(legacyPlan.agentId),
+      sessionKey: normalizeNonEmptyString(legacyPlan.sessionKey),
+    },
+  };
 }
 
 export function resolveSystemRunApprovalRequestContext(params: {
   host?: unknown;
   command?: unknown;
   commandArgv?: unknown;
-  systemRunPlanV2?: unknown;
+  systemRunPlan?: unknown;
   cwd?: unknown;
   agentId?: unknown;
   sessionKey?: unknown;
 }): SystemRunApprovalRequestContext {
-  const host = normalizeString(params.host) ?? "";
-  const planV2 = host === "node" ? normalizeSystemRunApprovalPlanV2(params.systemRunPlanV2) : null;
+  const host = normalizeNonEmptyString(params.host) ?? "";
+  const normalizedPlan =
+    host === "node" ? normalizeSystemRunApprovalPlan(params.systemRunPlan) : null;
   const fallbackArgv = normalizeStringArray(params.commandArgv);
   const fallbackCommand = normalizeCommandText(params.command);
+  const commandText = normalizedPlan
+    ? normalizedPlan.commandText || formatExecCommand(normalizedPlan.argv)
+    : fallbackCommand;
+  const commandPreview = normalizedPlan
+    ? normalizeCommandPreview(normalizedPlan.commandPreview ?? fallbackCommand, commandText)
+    : null;
+  const plan = normalizedPlan ? { ...normalizedPlan, commandPreview } : null;
   return {
-    planV2,
-    commandArgv: planV2?.argv ?? (fallbackArgv.length > 0 ? fallbackArgv : undefined),
-    commandText: planV2 ? (planV2.rawCommand ?? formatExecCommand(planV2.argv)) : fallbackCommand,
-    cwd: planV2?.cwd ?? normalizeString(params.cwd),
-    agentId: planV2?.agentId ?? normalizeString(params.agentId),
-    sessionKey: planV2?.sessionKey ?? normalizeString(params.sessionKey),
+    plan,
+    commandArgv: plan?.argv ?? (fallbackArgv.length > 0 ? fallbackArgv : undefined),
+    commandText,
+    commandPreview,
+    cwd: plan?.cwd ?? normalizeNonEmptyString(params.cwd),
+    agentId: plan?.agentId ?? normalizeNonEmptyString(params.agentId),
+    sessionKey: plan?.sessionKey ?? normalizeNonEmptyString(params.sessionKey),
   };
 }
 
 export function resolveSystemRunApprovalRuntimeContext(params: {
-  planV2?: unknown;
+  plan?: unknown;
   command?: unknown;
   rawCommand?: unknown;
   cwd?: unknown;
   agentId?: unknown;
   sessionKey?: unknown;
 }): SystemRunApprovalRuntimeContext {
-  const normalizedPlan = normalizeSystemRunApprovalPlanV2(params.planV2 ?? null);
+  const normalizedPlan = normalizeSystemRunApprovalPlan(params.plan ?? null);
   if (normalizedPlan) {
     return {
       ok: true,
-      planV2: normalizedPlan,
+      plan: normalizedPlan,
       argv: [...normalizedPlan.argv],
       cwd: normalizedPlan.cwd,
       agentId: normalizedPlan.agentId,
       sessionKey: normalizedPlan.sessionKey,
-      rawCommand: normalizedPlan.rawCommand,
+      commandText: normalizedPlan.commandText,
     };
   }
-  const command = resolveSystemRunCommand({
+  const command = resolveSystemRunCommandRequest({
     command: params.command,
     rawCommand: params.rawCommand,
   });
@@ -113,11 +142,11 @@ export function resolveSystemRunApprovalRuntimeContext(params: {
   }
   return {
     ok: true,
-    planV2: null,
+    plan: null,
     argv: command.argv,
-    cwd: normalizeString(params.cwd),
-    agentId: normalizeString(params.agentId),
-    sessionKey: normalizeString(params.sessionKey),
-    rawCommand: normalizeString(params.rawCommand),
+    cwd: normalizeNonEmptyString(params.cwd),
+    agentId: normalizeNonEmptyString(params.agentId),
+    sessionKey: normalizeNonEmptyString(params.sessionKey),
+    commandText: command.commandText,
   };
 }

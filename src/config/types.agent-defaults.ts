@@ -8,39 +8,25 @@ import type {
 } from "./types.base.js";
 import type { MemorySearchConfig } from "./types.tools.js";
 
+export type AgentHookConfig = {
+  /** Shell command to run (supports {provider}, {model}, {previousProvider}, {previousModel}, {sessionId}, {agentId} placeholders). */
+  command: string;
+  /** Hook timeout in seconds (default: 30). */
+  timeoutSeconds?: number;
+};
+
 export type AgentModelEntryConfig = {
   alias?: string;
   /** Provider-specific API parameters (e.g., GLM-4.7 thinking mode). */
   params?: Record<string, unknown>;
   /** Enable streaming for this model (default: true, false for Ollama to avoid SDK issue #1205). */
   streaming?: boolean;
-  /**
-   * Shell hook that runs before switching TO this model.
-   * Takes precedence over `agents.defaults.beforeModelChange` if both are set.
-   */
-  beforeModelChange?: {
-    command: string;
-    /** Timeout in seconds (default: 30). */
-    timeoutSeconds?: number;
-  };
-  /**
-   * Shell hook that runs before every message turn when this model is active.
-   * Takes precedence over `agents.defaults.beforeMessage` if both are set.
-   */
-  beforeMessage?: {
-    command: string;
-    /** Timeout in seconds (default: 30). */
-    timeoutSeconds?: number;
-  };
-  /**
-   * Shell hook fired fire-and-forget after each successful response from this model.
-   * Takes precedence over `agents.defaults.afterResponse` if both are set.
-   */
-  afterResponse?: {
-    command: string;
-    /** Timeout in seconds (default: 30). */
-    timeoutSeconds?: number;
-  };
+  /** Hook run before switching to this model (or before each model use on startup). */
+  beforeModelChange?: AgentHookConfig;
+  /** Hook run before each user message is processed (for this model entry). */
+  beforeMessage?: AgentHookConfig;
+  /** Hook run after the agent produces a response (for this model entry). */
+  afterResponse?: AgentHookConfig;
 };
 
 export type AgentModelListConfig = {
@@ -149,51 +135,26 @@ export type AgentDefaultsConfig = {
   model?: AgentModelConfig;
   /** Optional image-capable model and fallbacks (provider/model). Accepts string or {primary,fallbacks}. */
   imageModel?: AgentModelConfig;
-  /**
-   * Auxiliary model for background consolidation tasks (narrative, SUMMARY.md, QUICK.md).
-   * Format: "provider/model". Falls back to the primary model if omitted.
-   */
+  /** Optional PDF-capable model and fallbacks (provider/model). Accepts string or {primary,fallbacks}. */
+  pdfModel?: AgentModelConfig;
+  /** Auxiliary model for narrative/memory consolidation tasks (provider/model). */
   auxiliaryModel?: string;
-  /**
-   * Small/fast model for lightweight tasks (Graphiti query generation, session slug naming).
-   * Format: "provider/model". Falls back to auxiliaryModel, then primary model if omitted.
-   */
+  /** Small/lightweight model for background observer/graphiti tasks (provider/model). */
   smallModel?: string;
-  /**
-   * Model to activate automatically when entering intensive/hyperfocus mode.
-   * Format: "provider/model". If omitted, intensive mode does not change the active model.
-   */
+  /** Model override for hyperfocus/intensive mode (provider/model). */
   intensiveModel?: string;
+  /** Hook run before switching models (global default, per-model entry takes precedence). */
+  beforeModelChange?: AgentHookConfig;
+  /** Hook run before each user message is processed (global default, per-model entry takes precedence). */
+  beforeMessage?: AgentHookConfig;
+  /** Hook run after the agent produces a response (global default, per-model entry takes precedence). */
+  afterResponse?: AgentHookConfig;
+  /** Maximum PDF file size in megabytes (default: 10). */
+  pdfMaxBytesMb?: number;
+  /** Maximum number of PDF pages to process (default: 20). */
+  pdfMaxPages?: number;
   /** Model catalog with optional aliases (full provider/model keys). */
   models?: Record<string, AgentModelEntryConfig>;
-  /**
-   * Shell command executed before a model change is applied.
-   * Exit 0 = allow, non-zero = reject with stdout/stderr as the error message.
-   * Supports {provider}, {model}, {previousProvider}, {previousModel} placeholders.
-   */
-  beforeModelChange?: {
-    command: string;
-    /** Timeout in seconds (default: 30). */
-    timeoutSeconds?: number;
-  };
-  /**
-   * Shell command executed before every message turn, for the active model.
-   * Per-model `beforeMessage` takes precedence if both are set.
-   */
-  beforeMessage?: {
-    command: string;
-    /** Timeout in seconds (default: 30). */
-    timeoutSeconds?: number;
-  };
-  /**
-   * Shell hook fired fire-and-forget after each successful response.
-   * Per-model `afterResponse` takes precedence if both are set.
-   */
-  afterResponse?: {
-    command: string;
-    /** Timeout in seconds (default: 30). */
-    timeoutSeconds?: number;
-  };
   /** Agent working directory (preferred). Used as the default cwd for agent runs. */
   workspace?: string;
   /** Optional repository root for system prompt runtime line (overrides auto-detect). */
@@ -204,6 +165,13 @@ export type AgentDefaultsConfig = {
   bootstrapMaxChars?: number;
   /** Max total chars across all injected bootstrap files (default: 150000). */
   bootstrapTotalMaxChars?: number;
+  /**
+   * Agent-visible bootstrap truncation warning mode:
+   * - off: do not inject warning text
+   * - once: inject once per unique truncation signature (default)
+   * - always: inject on every run with truncation
+   */
+  bootstrapPromptTruncationWarning?: "off" | "once" | "always";
   /** Optional IANA timezone for the user (used in system prompt; defaults to host timezone). */
   userTimezone?: string;
   /** Time format in system prompt: auto (OS preference), 12-hour, or 24-hour. */
@@ -241,7 +209,7 @@ export type AgentDefaultsConfig = {
   /** Vector memory search configuration (per-agent overrides supported). */
   memorySearch?: MemorySearchConfig;
   /** Default thinking level when no /think directive is present. */
-  thinkingDefault?: "off" | "minimal" | "low" | "medium" | "high" | "xhigh";
+  thinkingDefault?: "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "adaptive";
   /** Default verbose level when no /verbose directive is present. */
   verboseDefault?: "off" | "on" | "full";
   /** Default elevated level when no /elevated directive is present. */
@@ -306,6 +274,11 @@ export type AgentDefaultsConfig = {
     /** Suppress tool error warning payloads during heartbeat runs. */
     suppressToolErrorWarnings?: boolean;
     /**
+     * If true, run heartbeat turns with lightweight bootstrap context.
+     * Lightweight mode keeps only HEARTBEAT.md from workspace bootstrap files.
+     */
+    lightContext?: boolean;
+    /**
      * When enabled, deliver the model's reasoning payload for heartbeat runs (when available)
      * as a separate message prefixed with `Reasoning:` (same as `/reasoning on`).
      *
@@ -331,7 +304,7 @@ export type AgentDefaultsConfig = {
     thinking?: string;
     /** Default run timeout in seconds for spawned sub-agents (0 = no timeout). */
     runTimeoutSeconds?: number;
-    /** Gateway timeout in ms for sub-agent announce delivery calls (default: 60000). */
+    /** Gateway timeout in ms for sub-agent announce delivery calls (default: 90000). */
     announceTimeoutMs?: number;
   };
   /** Optional sandbox settings for non-main sessions. */
@@ -339,7 +312,14 @@ export type AgentDefaultsConfig = {
 };
 
 export type AgentCompactionMode = "default" | "safeguard";
+export type AgentCompactionPostIndexSyncMode = "off" | "async" | "await";
 export type AgentCompactionIdentifierPolicy = "strict" | "off" | "custom";
+export type AgentCompactionQualityGuardConfig = {
+  /** Enable compaction summary quality audits and regeneration retries. Default: false. */
+  enabled?: boolean;
+  /** Maximum regeneration retries after a failed quality audit. Default: 1 when enabled. */
+  maxRetries?: number;
+};
 
 export type AgentCompactionConfig = {
   /** Compaction summarization mode. */
@@ -352,12 +332,30 @@ export type AgentCompactionConfig = {
   reserveTokensFloor?: number;
   /** Max share of context window for history during safeguard pruning (0.1–0.9, default 0.5). */
   maxHistoryShare?: number;
+  /** Additional compaction-summary instructions that can preserve language or persona continuity. */
+  customInstructions?: string;
+  /** Preserve this many most-recent user/assistant turns verbatim in compaction summary context. */
+  recentTurnsPreserve?: number;
   /** Identifier-preservation instruction policy for compaction summaries. */
   identifierPolicy?: AgentCompactionIdentifierPolicy;
   /** Custom identifier-preservation instructions used when identifierPolicy is "custom". */
   identifierInstructions?: string;
+  /** Optional quality-audit retries for safeguard compaction summaries. */
+  qualityGuard?: AgentCompactionQualityGuardConfig;
+  /** Post-compaction session memory index sync mode. */
+  postIndexSync?: AgentCompactionPostIndexSyncMode;
   /** Pre-compaction memory flush (agentic turn). Default: enabled. */
   memoryFlush?: AgentCompactionMemoryFlushConfig;
+  /**
+   * H2/H3 section names from AGENTS.md to inject after compaction.
+   * Defaults to ["Session Startup", "Red Lines"] when unset.
+   * Set to [] to disable post-compaction context injection entirely.
+   */
+  postCompactionSections?: string[];
+  /** Optional model override for compaction summarization (e.g. "openrouter/anthropic/claude-sonnet-4-5").
+   * When set, compaction uses this model instead of the agent's primary model.
+   * Falls back to the primary model when unset. */
+  model?: string;
 };
 
 export type AgentCompactionMemoryFlushConfig = {
@@ -365,6 +363,11 @@ export type AgentCompactionMemoryFlushConfig = {
   enabled?: boolean;
   /** Run the memory flush when context is within this many tokens of the compaction threshold. */
   softThresholdTokens?: number;
+  /**
+   * Force a memory flush when transcript size reaches this threshold
+   * (bytes, or byte-size string like "2mb"). Set to 0 to disable.
+   */
+  forceFlushTranscriptBytes?: number | string;
   /** User prompt used for the memory flush turn (NO_REPLY is enforced if missing). */
   prompt?: string;
   /** System prompt appended for the memory flush turn. */

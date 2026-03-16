@@ -4,6 +4,10 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { getMemorySearchManager, type MemoryIndexManager } from "./index.js";
+import {
+  closeAllMemoryIndexManagers,
+  MemoryIndexManager as RawMemoryIndexManager,
+} from "./manager.js";
 import "./test-runtime-mocks.js";
 
 const hoisted = vi.hoisted(() => ({
@@ -45,9 +49,8 @@ describe("memory manager cache hydration", () => {
     await fs.rm(workspaceDir, { recursive: true, force: true });
   });
 
-  it("deduplicates concurrent manager creation for the same cache key", async () => {
-    const indexPath = path.join(workspaceDir, "index.sqlite");
-    const cfg = {
+  function createMemoryConcurrencyConfig(indexPath: string): OpenClawConfig {
+    return {
       agents: {
         defaults: {
           workspace: workspaceDir,
@@ -61,6 +64,11 @@ describe("memory manager cache hydration", () => {
         list: [{ id: "main", default: true }],
       },
     } as OpenClawConfig;
+  }
+
+  it("deduplicates concurrent manager creation for the same cache key", async () => {
+    const indexPath = path.join(workspaceDir, "index.sqlite");
+    const cfg = createMemoryConcurrencyConfig(indexPath);
 
     const results = await Promise.all(
       Array.from(
@@ -77,5 +85,25 @@ describe("memory manager cache hydration", () => {
     expect(hoisted.providerCreateCalls).toBe(1);
 
     await managers[0].close();
+  });
+
+  it("drains in-flight manager creation during global teardown", async () => {
+    const indexPath = path.join(workspaceDir, "index.sqlite");
+    const cfg = createMemoryConcurrencyConfig(indexPath);
+
+    hoisted.providerDelayMs = 100;
+
+    const pendingResult = RawMemoryIndexManager.get({ cfg, agentId: "main" });
+    await closeAllMemoryIndexManagers();
+    const firstManager = await pendingResult;
+
+    const secondManager = await RawMemoryIndexManager.get({ cfg, agentId: "main" });
+
+    expect(firstManager).toBeTruthy();
+    expect(secondManager).toBeTruthy();
+    expect(Object.is(secondManager, firstManager)).toBe(false);
+    expect(hoisted.providerCreateCalls).toBe(2);
+
+    await secondManager?.close?.();
   });
 });

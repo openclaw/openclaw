@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import type { AgentTool, AgentToolResult } from "@mariozechner/pi-agent-core";
 import { detectMime } from "../../media/mime.js";
+import { readSnakeCaseParamRaw } from "../../param-key.js";
 import type { ImageSanitizationLimits } from "../image-sanitization.js";
 import { sanitizeToolResultImages } from "../tool-images.js";
 
@@ -53,22 +54,8 @@ export function createActionGate<T extends Record<string, boolean | undefined>>(
   };
 }
 
-function toSnakeCaseKey(key: string): string {
-  return key
-    .replace(/([A-Z]+)([A-Z][a-z])/g, "$1_$2")
-    .replace(/([a-z0-9])([A-Z])/g, "$1_$2")
-    .toLowerCase();
-}
-
 function readParamRaw(params: Record<string, unknown>, key: string): unknown {
-  if (Object.hasOwn(params, key)) {
-    return params[key];
-  }
-  const snakeKey = toSnakeCaseKey(key);
-  if (snakeKey !== key && Object.hasOwn(params, snakeKey)) {
-    return params[snakeKey];
-  }
-  return undefined;
+  return readSnakeCaseParamRaw(params, key);
 }
 
 export function readStringParam(
@@ -129,9 +116,9 @@ export function readStringOrNumberParam(
 export function readNumberParam(
   params: Record<string, unknown>,
   key: string,
-  options: { required?: boolean; label?: string; integer?: boolean } = {},
+  options: { required?: boolean; label?: string; integer?: boolean; strict?: boolean } = {},
 ): number | undefined {
-  const { required = false, label = key, integer = false } = options;
+  const { required = false, label = key, integer = false, strict = false } = options;
   const raw = readParamRaw(params, key);
   let value: number | undefined;
   if (typeof raw === "number" && Number.isFinite(raw)) {
@@ -139,7 +126,7 @@ export function readNumberParam(
   } else if (typeof raw === "string") {
     const trimmed = raw.trim();
     if (trimmed) {
-      const parsed = Number.parseFloat(trimmed);
+      const parsed = strict ? Number(trimmed) : Number.parseFloat(trimmed);
       if (Number.isFinite(parsed)) {
         value = parsed;
       }

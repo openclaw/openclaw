@@ -1,3 +1,4 @@
+import crypto from "node:crypto";
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveUserPath } from "../utils.js";
@@ -88,5 +89,90 @@ describe("createCacheTrace", () => {
     });
 
     expect(trace).toBeNull();
+  });
+
+  it("redacts image data from options and messages before writing", () => {
+    const lines: string[] = [];
+    const trace = createCacheTrace({
+      cfg: {
+        diagnostics: {
+          cacheTrace: {
+            enabled: true,
+          },
+        },
+      },
+      env: {},
+      writer: {
+        filePath: "memory",
+        write: (line) => lines.push(line),
+      },
+    });
+
+    trace?.recordStage("stream:context", {
+      options: {
+        images: [{ type: "image", mimeType: "image/png", data: "QUJDRA==" }],
+      },
+      messages: [
+        {
+          role: "user",
+          content: [
+            {
+              type: "image",
+              source: { type: "base64", media_type: "image/jpeg", data: "U0VDUkVU" },
+            },
+          ],
+        },
+      ] as unknown as [],
+    });
+
+    const event = JSON.parse(lines[0]?.trim() ?? "{}") as Record<string, unknown>;
+    const optionsImages = (
+      ((event.options as { images?: unknown[] } | undefined)?.images ?? []) as Array<
+        Record<string, unknown>
+      >
+    )[0];
+    expect(optionsImages?.data).toBe("<redacted>");
+    expect(optionsImages?.bytes).toBe(4);
+    expect(optionsImages?.sha256).toBe(
+      crypto.createHash("sha256").update("QUJDRA==").digest("hex"),
+    );
+
+    const firstMessage = ((event.messages as Array<Record<string, unknown>> | undefined) ?? [])[0];
+    const source = (((firstMessage?.content as Array<Record<string, unknown>> | undefined) ?? [])[0]
+      ?.source ?? {}) as Record<string, unknown>;
+    expect(source.data).toBe("<redacted>");
+    expect(source.bytes).toBe(6);
+    expect(source.sha256).toBe(crypto.createHash("sha256").update("U0VDUkVU").digest("hex"));
+  });
+
+  it("handles circular references in messages without stack overflow", () => {
+    const lines: string[] = [];
+    const trace = createCacheTrace({
+      cfg: {
+        diagnostics: {
+          cacheTrace: {
+            enabled: true,
+          },
+        },
+      },
+      env: {},
+      writer: {
+        filePath: "memory",
+        write: (line) => lines.push(line),
+      },
+    });
+
+    const parent: Record<string, unknown> = { role: "user", content: "hello" };
+    const child: Record<string, unknown> = { ref: parent };
+    parent.child = child; // circular reference
+
+    trace?.recordStage("prompt:images", {
+      messages: [parent] as unknown as [],
+    });
+
+    expect(lines.length).toBe(1);
+    const event = JSON.parse(lines[0]?.trim() ?? "{}") as Record<string, unknown>;
+    expect(event.messageCount).toBe(1);
+    expect(event.messageFingerprints).toHaveLength(1);
   });
 });

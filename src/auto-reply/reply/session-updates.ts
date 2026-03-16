@@ -13,13 +13,13 @@ import {
 import { getRemoteSkillEligibility } from "../../infra/skills-remote.js";
 import { drainSystemEventEntries } from "../../infra/system-events.js";
 
-export async function prependSystemEvents(params: {
+/** Drain queued system events, format as `System:` lines, return the block (or undefined). */
+export async function drainFormattedSystemEvents(params: {
   cfg: OpenClawConfig;
   sessionKey: string;
   isMainSession: boolean;
   isNewSession: boolean;
-  prefixedBodyBase: string;
-}): Promise<string> {
+}): Promise<string | undefined> {
   const compactSystemEvent = (line: string): string | null => {
     const trimmed = line.trim();
     if (!trimmed) {
@@ -104,11 +104,38 @@ export async function prependSystemEvents(params: {
     }
   }
   if (systemLines.length === 0) {
-    return params.prefixedBodyBase;
+    return undefined;
   }
 
-  const block = systemLines.map((l) => `System: ${l}`).join("\n");
-  return `${block}\n\n${params.prefixedBodyBase}`;
+  // Format events as trusted System: lines for the message timeline.
+  // Inbound sanitization rewrites any user-supplied "System:" to "System (untrusted):",
+  // so these gateway-originated lines are distinguishable by the model.
+  // Each sub-line of a multi-line event gets its own System: prefix so continuation
+  // lines can't be mistaken for user content.
+  return systemLines
+    .flatMap((line) => line.split("\n").map((subline) => `System: ${subline}`))
+    .join("\n");
+}
+
+async function persistSessionEntryUpdate(params: {
+  sessionStore?: Record<string, SessionEntry>;
+  sessionKey?: string;
+  storePath?: string;
+  nextEntry: SessionEntry;
+}) {
+  if (!params.sessionStore || !params.sessionKey) {
+    return;
+  }
+  params.sessionStore[params.sessionKey] = {
+    ...params.sessionStore[params.sessionKey],
+    ...params.nextEntry,
+  };
+  if (!params.storePath) {
+    return;
+  }
+  await updateSessionStore(params.storePath, (store) => {
+    store[params.sessionKey!] = { ...store[params.sessionKey!], ...params.nextEntry };
+  });
 }
 
 export async function ensureSkillSnapshot(params: {
@@ -179,12 +206,7 @@ export async function ensureSkillSnapshot(params: {
       systemSent: true,
       skillsSnapshot: skillSnapshot,
     };
-    sessionStore[sessionKey] = { ...sessionStore[sessionKey], ...nextEntry };
-    if (storePath) {
-      await updateSessionStore(storePath, (store) => {
-        store[sessionKey] = { ...store[sessionKey], ...nextEntry };
-      });
-    }
+    await persistSessionEntryUpdate({ sessionStore, sessionKey, storePath, nextEntry });
     systemSent = true;
   }
 
@@ -221,12 +243,7 @@ export async function ensureSkillSnapshot(params: {
       updatedAt: Date.now(),
       skillsSnapshot,
     };
-    sessionStore[sessionKey] = { ...sessionStore[sessionKey], ...nextEntry };
-    if (storePath) {
-      await updateSessionStore(storePath, (store) => {
-        store[sessionKey] = { ...store[sessionKey], ...nextEntry };
-      });
-    }
+    await persistSessionEntryUpdate({ sessionStore, sessionKey, storePath, nextEntry });
   }
 
   return { sessionEntry: nextEntry, skillsSnapshot, systemSent };

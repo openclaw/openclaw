@@ -1,7 +1,10 @@
+import {
+  extractSlackToolSend,
+  listSlackMessageActions,
+} from "../../../extensions/slack/src/message-actions.js";
+import { resolveSlackChannelId } from "../../../extensions/slack/src/targets.js";
 import { handleSlackAction, type SlackActionContext } from "../../agents/tools/slack-actions.js";
 import { handleSlackMessageAction } from "../../plugin-sdk/slack-message-actions.js";
-import { extractSlackToolSend, listSlackMessageActions } from "../../slack/message-actions.js";
-import { resolveSlackChannelId } from "../../slack/targets.js";
 import type { ChannelMessageActionAdapter } from "./types.js";
 
 export function createSlackActions(providerId: string): ChannelMessageActionAdapter {
@@ -15,7 +18,10 @@ export function createSlackActions(providerId: string): ChannelMessageActionAdap
         normalizeChannelId: resolveSlackChannelId,
         includeReadThreadId: true,
         invoke: async (action, cfg, toolContext) =>
-          await handleSlackAction(action, cfg, toolContext as SlackActionContext | undefined),
+          await handleSlackAction(action, cfg, {
+            ...(toolContext as SlackActionContext | undefined),
+            mediaLocalRoots: ctx.mediaLocalRoots,
+          }),
       });
     },
   };

@@ -7,13 +7,12 @@ import { loadOpenClawPlugins } from "./loader.js";
 import type { PluginLogger } from "./types.js";
 
 const log = createSubsystemLogger("plugins");
-const registrationMap = new WeakMap<Command, boolean>();
 
-export function registerPluginCliCommands(program: Command, cfg?: OpenClawConfig) {
-  if (registrationMap.has(program)) {
-    return;
-  }
-  registrationMap.set(program, true);
+export function registerPluginCliCommands(
+  program: Command,
+  cfg?: OpenClawConfig,
+  env?: NodeJS.ProcessEnv,
+) {
   const config = cfg ?? loadConfig();
   const workspaceDir = resolveAgentWorkspaceDir(config, resolveDefaultAgentId(config));
   const logger: PluginLogger = {
@@ -25,6 +24,7 @@ export function registerPluginCliCommands(program: Command, cfg?: OpenClawConfig
   const registry = loadOpenClawPlugins({
     config,
     workspaceDir,
+    env,
     logger,
   });
 
