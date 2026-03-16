@@ -3,6 +3,11 @@ import { createProviderUsageFetch, makeResponse } from "../test-utils/provider-u
 import { loadProviderUsageSummary } from "./provider-usage.load.js";
 import { ignoredErrors } from "./provider-usage.shared.js";
 
+vi.mock("../plugins/provider-runtime.js", () => ({
+  resolveProviderUsageAuthWithPlugin: vi.fn(async () => null),
+  resolveProviderUsageSnapshotWithPlugin: vi.fn(async () => null),
+}));
+
 const usageNow = Date.UTC(2026, 0, 7, 0, 0, 0);
 
 type ProviderAuth = NonNullable<
