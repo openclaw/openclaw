@@ -23,6 +23,19 @@ describe("schtasks runtime parsing", () => {
       lastRunResult: "0x0",
     });
   });
+
+  it("extracts last run result from localized (German) schtasks output", () => {
+    const output = [
+      "Aufgabenname: \\OpenClaw Gateway",
+      "Status: Wird ausgeführt",
+      "Letzte Laufzeit: 15.03.2026 10:23:45",
+      "Letztes Ergebnis: 0x41301",
+    ].join("\r\n");
+    expect(parseSchtasksQuery(output)).toEqual({
+      status: "Wird ausgeführt",
+      lastRunResult: "0x41301",
+    });
+  });
 });
 
 describe("scheduled task runtime derivation", () => {
