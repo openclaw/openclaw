@@ -7,13 +7,15 @@ import {
   buildChannelConfigSchema,
   DiscordConfigSchema,
   getChatChannelMeta,
-  inspectDiscordAccount,
+  type ChannelPlugin,
+} from "openclaw/plugin-sdk/discord";
+import { inspectDiscordAccount } from "./account-inspect.js";
+import {
   listDiscordAccountIds,
   resolveDefaultDiscordAccountId,
   resolveDiscordAccount,
-  type ChannelPlugin,
   type ResolvedDiscordAccount,
-} from "openclaw/plugin-sdk/discord";
+} from "./accounts.js";
 import { createDiscordSetupWizardProxy, discordSetupAdapter } from "./setup-core.js";
 
 async function loadDiscordChannelRuntime() {

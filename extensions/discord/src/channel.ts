@@ -17,41 +17,45 @@ import {
   buildComputedAccountStatusSnapshot,
   buildChannelConfigSchema,
   buildTokenChannelStatusSummary,
-  collectDiscordAuditChannelIds,
-  collectDiscordStatusIssues,
   DEFAULT_ACCOUNT_ID,
   DiscordConfigSchema,
   getChatChannelMeta,
-  inspectDiscordAccount,
-  listDiscordAccountIds,
   listDiscordDirectoryGroupsFromConfig,
   listDiscordDirectoryPeersFromConfig,
-  looksLikeDiscordTargetId,
-  normalizeDiscordMessagingTarget,
-  normalizeDiscordOutboundTarget,
   PAIRING_APPROVED_MESSAGE,
   projectCredentialSnapshotFields,
   resolveConfiguredFromCredentialStatuses,
-  resolveDiscordAccount,
-  resolveDefaultDiscordAccountId,
   resolveDiscordGroupRequireMention,
   resolveDiscordGroupToolPolicy,
   type ChannelMessageActionAdapter,
   type ChannelPlugin,
   type OpenClawConfig,
-  type ResolvedDiscordAccount,
 } from "openclaw/plugin-sdk/discord";
 import { resolveOutboundSendDep } from "../../../src/infra/outbound/send-deps.js";
 import { normalizeMessageChannel } from "../../../src/utils/message-channel.js";
+import { inspectDiscordAccount } from "./account-inspect.js";
+import {
+  listDiscordAccountIds,
+  resolveDiscordAccount,
+  resolveDefaultDiscordAccountId,
+  type ResolvedDiscordAccount,
+} from "./accounts.js";
+import { collectDiscordAuditChannelIds } from "./audit.js";
 import {
   isDiscordExecApprovalClientEnabled,
   shouldSuppressLocalDiscordExecApprovalPrompt,
 } from "./exec-approvals.js";
+import {
+  looksLikeDiscordTargetId,
+  normalizeDiscordMessagingTarget,
+  normalizeDiscordOutboundTarget,
+} from "./normalize.js";
 import type { DiscordProbe } from "./probe.js";
 import { resolveDiscordUserAllowlist } from "./resolve-users.js";
 import { getDiscordRuntime } from "./runtime.js";
 import { fetchChannelPermissionsDiscord } from "./send.js";
 import { createDiscordSetupWizardProxy, discordSetupAdapter } from "./setup-core.js";
+import { collectDiscordStatusIssues } from "./status-issues.js";
 import { parseDiscordTarget } from "./targets.js";
 import { DiscordUiContainer } from "./ui.js";
 

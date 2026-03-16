@@ -8,15 +8,17 @@ import {
   DEFAULT_ACCOUNT_ID,
   deleteAccountFromConfigSection,
   getChatChannelMeta,
-  listSignalAccountIds,
   normalizeE164,
-  resolveDefaultSignalAccountId,
-  resolveSignalAccount,
   setAccountEnabledInConfigSection,
   SignalConfigSchema,
   type ChannelPlugin,
-  type ResolvedSignalAccount,
 } from "openclaw/plugin-sdk/signal";
+import {
+  listSignalAccountIds,
+  resolveDefaultSignalAccountId,
+  resolveSignalAccount,
+  type ResolvedSignalAccount,
+} from "./accounts.js";
 import { createSignalSetupWizardProxy, signalSetupAdapter } from "./setup-core.js";
 
 async function loadSignalChannelRuntime() {

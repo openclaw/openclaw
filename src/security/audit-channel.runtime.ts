@@ -6,4 +6,4 @@ export {
 export {
   isNumericTelegramUserId,
   normalizeTelegramAllowFromEntry,
-} from "../plugin-sdk/telegram.js";
+} from "../plugin-sdk-internal/telegram.js";

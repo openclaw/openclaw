@@ -15,14 +15,14 @@ import {
   removeSlackReaction,
   sendSlackMessage,
   unpinSlackMessage,
-} from "../../plugin-sdk/slack.js";
+} from "../../plugin-sdk-internal/slack.js";
 import {
   parseSlackBlocksInput,
   parseSlackTarget,
   recordSlackThreadParticipation,
   resolveSlackAccount,
   resolveSlackChannelId,
-} from "../../plugin-sdk/slack.js";
+} from "../../plugin-sdk-internal/slack.js";
 import { withNormalizedTimestamp } from "../date-time.js";
 import {
   createActionGate,

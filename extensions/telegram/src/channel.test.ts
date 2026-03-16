@@ -3,10 +3,10 @@ import type {
   ChannelGatewayContext,
   OpenClawConfig,
   PluginRuntime,
-  ResolvedTelegramAccount,
 } from "openclaw/plugin-sdk/telegram";
 import { describe, expect, it, vi } from "vitest";
 import { createRuntimeEnv } from "../../test-utils/runtime-env.js";
+import type { ResolvedTelegramAccount } from "./accounts.js";
 import { telegramPlugin } from "./channel.js";
 import { setTelegramRuntime } from "./runtime.js";
 

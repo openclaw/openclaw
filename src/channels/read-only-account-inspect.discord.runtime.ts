@@ -1,2 +1,2 @@
-export { inspectDiscordAccount } from "../plugin-sdk/discord.js";
-export type { InspectedDiscordAccount } from "../plugin-sdk/discord.js";
+export { inspectDiscordAccount } from "../plugin-sdk-internal/discord.js";
+export type { InspectedDiscordAccount } from "../plugin-sdk-internal/discord.js";

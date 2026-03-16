@@ -19,32 +19,32 @@ const sendFns = vi.hoisted(() => ({
   imessage: vi.fn(async () => ({ messageId: "i1", chatId: "imessage:1" })),
 }));
 
-vi.mock("../plugin-sdk/whatsapp.js", () => {
+vi.mock("../plugin-sdk-internal/whatsapp.js", () => {
   moduleLoads.whatsapp();
   return { sendMessageWhatsApp: sendFns.whatsapp };
 });
 
-vi.mock("../plugin-sdk/telegram.js", () => {
+vi.mock("../plugin-sdk-internal/telegram.js", () => {
   moduleLoads.telegram();
   return { sendMessageTelegram: sendFns.telegram };
 });
 
-vi.mock("../plugin-sdk/discord.js", () => {
+vi.mock("../plugin-sdk-internal/discord.js", () => {
   moduleLoads.discord();
   return { sendMessageDiscord: sendFns.discord };
 });
 
-vi.mock("../plugin-sdk/slack.js", () => {
+vi.mock("../plugin-sdk-internal/slack.js", () => {
   moduleLoads.slack();
   return { sendMessageSlack: sendFns.slack };
 });
 
-vi.mock("../plugin-sdk/signal.js", () => {
+vi.mock("../plugin-sdk-internal/signal.js", () => {
   moduleLoads.signal();
   return { sendMessageSignal: sendFns.signal };
 });
 
-vi.mock("../plugin-sdk/imessage.js", () => {
+vi.mock("../plugin-sdk-internal/imessage.js", () => {
   moduleLoads.imessage();
   return { sendMessageIMessage: sendFns.imessage };
 });

@@ -6,7 +6,6 @@ export type { PluginRuntime } from "../plugins/runtime/types.js";
 export type { OpenClawPluginApi } from "../plugins/types.js";
 
 export { emptyPluginConfigSchema } from "../plugins/config-schema.js";
-
 export { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../routing/session-key.js";
 
 export {
@@ -15,7 +14,6 @@ export {
 } from "../channels/plugins/setup-helpers.js";
 export { buildChannelConfigSchema } from "../channels/plugins/config-schema.js";
 export { formatPairingApproveHint } from "../channels/plugins/helpers.js";
-
 export { getChatChannelMeta } from "../channels/registry.js";
 export {
   formatWhatsAppConfigAllowFromEntries,
@@ -26,58 +24,6 @@ export {
   listWhatsAppDirectoryGroupsFromConfig,
   listWhatsAppDirectoryPeersFromConfig,
 } from "../channels/plugins/directory-config.js";
-export {
-  hasAnyWhatsAppAuth,
-  listEnabledWhatsAppAccounts,
-  resolveWhatsAppAccount,
-} from "../../extensions/whatsapp/src/accounts.js";
-export {
-  WA_WEB_AUTH_DIR,
-  logWebSelfId,
-  logoutWeb,
-  pickWebChannel,
-  webAuthExists,
-} from "../../extensions/whatsapp/src/auth-store.js";
-export {
-  DEFAULT_WEB_MEDIA_BYTES,
-  HEARTBEAT_PROMPT,
-  HEARTBEAT_TOKEN,
-  monitorWebChannel,
-  resolveHeartbeatRecipients,
-  runWebHeartbeatOnce,
-} from "../../extensions/whatsapp/src/auto-reply.js";
-export type {
-  WebChannelStatus,
-  WebMonitorTuning,
-} from "../../extensions/whatsapp/src/auto-reply.js";
-export {
-  extractMediaPlaceholder,
-  extractText,
-  monitorWebInbox,
-} from "../../extensions/whatsapp/src/inbound.js";
-export type {
-  WebInboundMessage,
-  WebListenerCloseReason,
-} from "../../extensions/whatsapp/src/inbound.js";
-export { loginWeb } from "../../extensions/whatsapp/src/login.js";
-export {
-  getDefaultLocalRoots,
-  loadWebMedia,
-  loadWebMediaRaw,
-  optimizeImageToJpeg,
-} from "../../extensions/whatsapp/src/media.js";
-export {
-  sendMessageWhatsApp,
-  sendPollWhatsApp,
-  sendReactionWhatsApp,
-} from "../../extensions/whatsapp/src/send.js";
-export {
-  createWaSocket,
-  formatError,
-  getStatusCode,
-  waitForWaConnection,
-} from "../../extensions/whatsapp/src/session.js";
-export { createWhatsAppLoginTool } from "../../extensions/whatsapp/src/agent-tools-login.js";
 export { normalizeWhatsAppAllowFromEntries } from "../channels/plugins/normalize/whatsapp.js";
 export {
   collectAllowlistProviderGroupPolicyWarnings,
@@ -104,5 +50,4 @@ export { WhatsAppConfigSchema } from "../config/zod-schema.providers-whatsapp.js
 
 export { createActionGate, readStringParam } from "../agents/tools/common.js";
 export { createPluginRuntimeStore } from "./runtime-store.js";
-
 export { normalizeE164 } from "../utils.js";
