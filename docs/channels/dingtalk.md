@@ -350,4 +350,4 @@ OpenClaw auto-reconnects. If connections drop frequently:
 
 ---
 
-_This guide is based on production deployment experience with DingTalk Stream Mode in an enterprise environment (5-person team, 24/7 operation). Stream Mode requires no public IP or port forwarding, making it the recommended approach for most deployments._
+_This guide is based on production deployment experience with DingTalk Stream Mode in an enterprise environment. Stream Mode requires no public IP or port forwarding, making it the recommended approach for most deployments._
