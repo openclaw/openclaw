@@ -13,6 +13,7 @@ On-device speech-to-text (STT) for OpenClaw using an embedded ExecuTorch runtime
 
 Source repo:
 
+- [ExecuTorch/Parakeet](https://github.com/pytorch/executorch/tree/main/examples/models/parakeet)
 - [https://huggingface.co/younghan-meta/Parakeet-TDT-ExecuTorch-Metal](https://huggingface.co/younghan-meta/Parakeet-TDT-ExecuTorch-Metal)
 
 Required files:
