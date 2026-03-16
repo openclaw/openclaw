@@ -9,6 +9,7 @@ import { shouldSkipRespawnForArgv } from "./cli/respawn-policy.js";
 import { normalizeWindowsArgv } from "./cli/windows-argv.js";
 import { isTruthyEnvValue, normalizeEnv } from "./infra/env.js";
 import { isMainModule } from "./infra/is-main.js";
+import { ensureOpenClawExecMarkerOnProcess } from "./infra/openclaw-exec-env.js";
 import { installProcessWarningFilter } from "./infra/warning-filter.js";
 import { attachChildProcessBridge } from "./process/child-process-bridge.js";
 
@@ -40,7 +41,11 @@ if (
 ) {
   // Imported as a dependency — skip all entry-point side effects.
 } else {
+  const { installGaxiosFetchCompat } = await import("./infra/gaxios-fetch-compat.js");
+
+  installGaxiosFetchCompat();
   process.title = "openclaw";
+  ensureOpenClawExecMarkerOnProcess();
   installProcessWarningFilter();
   normalizeEnv();
   if (!isTruthyEnvValue(process.env.NODE_DISABLE_COMPILE_CACHE)) {
@@ -143,24 +148,6 @@ if (
     return true;
   }
 
-  function tryHandleRootHelpFastPath(argv: string[]): boolean {
-    if (!isRootHelpInvocation(argv)) {
-      return false;
-    }
-    import("./cli/program.js")
-      .then(({ buildProgram }) => {
-        buildProgram().outputHelp();
-      })
-      .catch((error) => {
-        console.error(
-          "[openclaw] Failed to display help:",
-          error instanceof Error ? (error.stack ?? error.message) : error,
-        );
-        process.exitCode = 1;
-      });
-    return true;
-  }
-
   process.argv = normalizeWindowsArgv(process.argv);
 
   if (!ensureExperimentalWarningSuppressed()) {
@@ -177,16 +164,58 @@ if (
       process.argv = parsed.argv;
     }
 
-    if (!tryHandleRootVersionFastPath(process.argv) && !tryHandleRootHelpFastPath(process.argv)) {
-      import("./cli/run-main.js")
-        .then(({ runCli }) => runCli(process.argv))
-        .catch((error) => {
-          console.error(
-            "[openclaw] Failed to start CLI:",
-            error instanceof Error ? (error.stack ?? error.message) : error,
-          );
-          process.exitCode = 1;
-        });
+    if (!tryHandleRootVersionFastPath(process.argv)) {
+      runMainOrRootHelp(process.argv);
     }
   }
+}
+
+export function tryHandleRootHelpFastPath(
+  argv: string[],
+  deps: {
+    outputRootHelp?: () => void;
+    onError?: (error: unknown) => void;
+  } = {},
+): boolean {
+  if (!isRootHelpInvocation(argv)) {
+    return false;
+  }
+  const handleError =
+    deps.onError ??
+    ((error: unknown) => {
+      console.error(
+        "[openclaw] Failed to display help:",
+        error instanceof Error ? (error.stack ?? error.message) : error,
+      );
+      process.exitCode = 1;
+    });
+  if (deps.outputRootHelp) {
+    try {
+      deps.outputRootHelp();
+    } catch (error) {
+      handleError(error);
+    }
+    return true;
+  }
+  import("./cli/program/root-help.js")
+    .then(({ outputRootHelp }) => {
+      outputRootHelp();
+    })
+    .catch(handleError);
+  return true;
+}
+
+function runMainOrRootHelp(argv: string[]): void {
+  if (tryHandleRootHelpFastPath(argv)) {
+    return;
+  }
+  import("./cli/run-main.js")
+    .then(({ runCli }) => runCli(argv))
+    .catch((error) => {
+      console.error(
+        "[openclaw] Failed to start CLI:",
+        error instanceof Error ? (error.stack ?? error.message) : error,
+      );
+      process.exitCode = 1;
+    });
 }

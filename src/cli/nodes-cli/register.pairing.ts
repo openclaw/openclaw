@@ -1,5 +1,6 @@
 import type { Command } from "commander";
 import { defaultRuntime } from "../../runtime.js";
+import { getTerminalTableWidth } from "../../terminal/table.js";
 import { getNodesTheme, runNodesCommand } from "./cli-utils.js";
 import { parsePairingList } from "./format.js";
 import { renderPendingPairingRequestsTable } from "./pairing-render.js";
@@ -25,7 +26,7 @@ export function registerNodesPairingCommands(nodes: Command) {
             return;
           }
           const { heading, warn, muted } = getNodesTheme();
-          const tableWidth = Math.max(60, (process.stdout.columns ?? 120) - 1);
+          const tableWidth = getTerminalTableWidth();
           const now = Date.now();
           const rendered = renderPendingPairingRequestsTable({
             pending,

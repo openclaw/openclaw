@@ -1,4 +1,5 @@
 import fsPromises from "node:fs/promises";
+import { redactCdpUrl } from "../browser/cdp.helpers.js";
 import { resolveBrowserConfig } from "../browser/config.js";
 import {
   createBrowserControlContext,
@@ -164,6 +165,7 @@ async function readBrowserProxyStatus(params: {
     const body = response.body as Record<string, unknown>;
     return {
       running: body.running,
+      transport: body.transport,
       cdpHttp: body.cdpHttp,
       cdpReady: body.cdpReady,
       cdpUrl: body.cdpUrl,
@@ -194,8 +196,11 @@ function formatBrowserProxyTimeoutMessage(params: {
       `cdpHttp=${String(params.status.cdpHttp)}`,
       `cdpReady=${String(params.status.cdpReady)}`,
     ];
+    if (typeof params.status.transport === "string" && params.status.transport.trim()) {
+      statusParts.push(`transport=${params.status.transport}`);
+    }
     if (typeof params.status.cdpUrl === "string" && params.status.cdpUrl.trim()) {
-      statusParts.push(`cdpUrl=${params.status.cdpUrl}`);
+      statusParts.push(`cdpUrl=${redactCdpUrl(params.status.cdpUrl)}`);
     }
     parts.push(`status(${statusParts.join(", ")})`);
   }

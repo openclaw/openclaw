@@ -131,7 +131,7 @@ async function stubPdfToolInfra(
     modelFound?: boolean;
   },
 ) {
-  const webMedia = await import("../../web/media.js");
+  const webMedia = await import("../../../extensions/whatsapp/src/media.js");
   const loadSpy = vi.spyOn(webMedia, "loadWebMediaRaw").mockResolvedValue(FAKE_PDF_MEDIA as never);
 
   const modelDiscovery = await import("../pi-model-discovery.js");
@@ -710,6 +710,26 @@ describe("native PDF provider API calls", () => {
     await expect(geminiAnalyzePdf(makeGeminiAnalyzeParams({ apiKey: "" }))).rejects.toThrow(
       "apiKey required",
     );
+  });
+
+  it("geminiAnalyzePdf does not duplicate /v1beta when baseUrl already includes it", async () => {
+    const { geminiAnalyzePdf } = await import("./pdf-native-providers.js");
+    const fetchMock = mockFetchResponse({
+      ok: true,
+      json: async () => ({
+        candidates: [{ content: { parts: [{ text: "ok" }] } }],
+      }),
+    });
+
+    await geminiAnalyzePdf(
+      makeGeminiAnalyzeParams({
+        baseUrl: "https://generativelanguage.googleapis.com/v1beta",
+      }),
+    );
+
+    const [url] = fetchMock.mock.calls[0];
+    expect(url).toContain("/v1beta/models/");
+    expect(url).not.toContain("/v1beta/v1beta");
   });
 });
 

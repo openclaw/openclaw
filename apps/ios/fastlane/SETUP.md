@@ -32,9 +32,9 @@ ASC_KEYCHAIN_ACCOUNT=YOUR_MAC_USERNAME
 Optional app targeting variables (helpful if Fastlane cannot auto-resolve app by bundle):
 
 ```bash
-ASC_APP_IDENTIFIER=ai.openclaw.ios
+ASC_APP_IDENTIFIER=ai.openclaw.client
 # or
-ASC_APP_ID=6760218713
+ASC_APP_ID=YOUR_APP_STORE_CONNECT_APP_ID
 ```
 
 File-based fallback (CI/non-macOS):
@@ -60,9 +60,37 @@ cd apps/ios
 fastlane ios auth_check
 ```
 
-Run:
+ASC auth is only required when:
+
+- uploading to TestFlight
+- auto-resolving the next build number from App Store Connect
+
+If you pass `--build-number` to `pnpm ios:beta:archive`, the local archive path does not need ASC auth.
+
+Archive locally without upload:
+
+```bash
+pnpm ios:beta:archive
+```
+
+Upload to TestFlight:
+
+```bash
+pnpm ios:beta
+```
+
+Direct Fastlane entry point:
 
 ```bash
 cd apps/ios
-fastlane beta
+fastlane ios beta
 ```
+
+Versioning rules:
+
+- Root `package.json.version` is the single source of truth for iOS
+- Use `YYYY.M.D` for stable versions and `YYYY.M.D-beta.N` for beta versions
+- Fastlane stamps `CFBundleShortVersionString` to `YYYY.M.D`
+- Fastlane resolves `CFBundleVersion` as the next integer TestFlight build number for that short version
+- The beta flow regenerates `apps/ios/OpenClaw.xcodeproj` from `apps/ios/project.yml` before archiving
+- Local beta signing uses a temporary generated xcconfig and leaves local development signing overrides untouched

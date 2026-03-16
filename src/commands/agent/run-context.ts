@@ -42,8 +42,8 @@ export function resolveAgentRunContext(opts: AgentCommandOpts): AgentRunContext 
     merged.currentThreadTs = String(opts.threadId);
   }
 
-  // Populate currentChannelId from the outbound target so that
-  // resolveTelegramAutoThreadId can match the originating chat.
+  // Populate currentChannelId from the outbound target so channel threading
+  // adapters can detect same-conversation auto-threading.
   if (!merged.currentChannelId && opts.to) {
     const trimmedTo = opts.to.trim();
     if (trimmedTo) {

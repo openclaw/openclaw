@@ -950,6 +950,7 @@ async function agentCommandInternal(
         catalog: modelCatalog,
         defaultProvider,
         defaultModel,
+        agentId: sessionAgentId,
       });
       allowedModelKeys = allowed.allowedKeys;
       allowedModelCatalog = allowed.allowedCatalog;
@@ -1103,6 +1104,7 @@ async function agentCommandInternal(
         cfg,
         provider,
         model,
+        runId,
         agentDir,
         fallbacksOverride: effectiveFallbacksOverride,
         run: (providerOverride, modelOverride, runOptions) => {

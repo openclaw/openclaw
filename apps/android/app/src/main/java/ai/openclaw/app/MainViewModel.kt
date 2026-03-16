@@ -116,6 +116,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     runtime.setGatewayToken(value)
   }
 
+  fun setGatewayBootstrapToken(value: String) {
+    runtime.setGatewayBootstrapToken(value)
+  }
+
   fun setGatewayPassword(value: String) {
     runtime.setGatewayPassword(value)
   }
@@ -170,6 +174,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
   fun requestCanvasRehydrate(source: String = "screen_tab") {
     runtime.requestCanvasRehydrate(source = source, force = true)
+  }
+
+  fun refreshHomeCanvasOverviewIfConnected() {
+    runtime.refreshHomeCanvasOverviewIfConnected()
   }
 
   fun loadChat(sessionKey: String) {

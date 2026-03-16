@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   classifyFailoverReason,
   classifyFailoverReasonFromHttpStatus,
+  extractObservedOverflowTokenCount,
   isAuthErrorMessage,
   isAuthPermanentErrorMessage,
   isBillingErrorMessage,
@@ -32,7 +33,7 @@ const OPENROUTER_CREDITS_MESSAGE = "Payment Required: insufficient credits";
 // Issue-backed Anthropic/OpenAI-compatible insufficient_quota payload under HTTP 400:
 // https://github.com/openclaw/openclaw/issues/23440
 const INSUFFICIENT_QUOTA_PAYLOAD =
-  '{"type":"error","error":{"type":"insufficient_quota","message":"Your account has insufficient quota balance to run this request."}}';
+  '{"type":"error","error":{"type":"insufficient_quota","message":"Your account has insufficient quota balance to run this request."}}'; // pragma: allowlist secret
 // Together AI error code examples: https://docs.together.ai/docs/error-codes
 const TOGETHER_PAYMENT_REQUIRED_MESSAGE =
   "402 Payment Required: The account associated with this API key has reached its maximum allowed monthly spending limit.";
@@ -42,94 +43,127 @@ const TOGETHER_ENGINE_OVERLOADED_MESSAGE =
 const GROQ_TOO_MANY_REQUESTS_MESSAGE =
   "429 Too Many Requests: Too many requests were sent in a given timeframe.";
 const GROQ_SERVICE_UNAVAILABLE_MESSAGE =
-  "503 Service Unavailable: The server is temporarily unable to handle the request due to overloading or maintenance.";
+  "503 Service Unavailable: The server is temporarily unable to handle the request due to overloading or maintenance."; // pragma: allowlist secret
+
+function expectMessageMatches(
+  matcher: (message: string) => boolean,
+  samples: readonly string[],
+  expected: boolean,
+) {
+  for (const sample of samples) {
+    expect(matcher(sample), sample).toBe(expected);
+  }
+}
+
+function expectTimeoutFailoverSamples(samples: readonly string[]) {
+  for (const sample of samples) {
+    expect(isTimeoutErrorMessage(sample)).toBe(true);
+    expect(classifyFailoverReason(sample)).toBe("timeout");
+    expect(isFailoverErrorMessage(sample)).toBe(true);
+  }
+}
 
 describe("isAuthPermanentErrorMessage", () => {
-  it("matches permanent auth failure patterns", () => {
-    const samples = [
-      "invalid_api_key",
-      "api key revoked",
-      "api key deactivated",
-      "key has been disabled",
-      "key has been revoked",
-      "account has been deactivated",
-      "could not authenticate api key",
-      "could not validate credentials",
-      "API_KEY_REVOKED",
-      "api_key_deleted",
-    ];
-    for (const sample of samples) {
-      expect(isAuthPermanentErrorMessage(sample)).toBe(true);
-    }
-  });
-  it("does not match transient auth errors", () => {
-    const samples = [
-      "unauthorized",
-      "invalid token",
-      "authentication failed",
-      "forbidden",
-      "access denied",
-      "token has expired",
-    ];
-    for (const sample of samples) {
-      expect(isAuthPermanentErrorMessage(sample)).toBe(false);
-    }
+  it.each([
+    {
+      name: "matches permanent auth failure patterns",
+      samples: [
+        "invalid_api_key",
+        "api key revoked",
+        "api key deactivated",
+        "key has been disabled",
+        "key has been revoked",
+        "account has been deactivated",
+        "could not authenticate api key",
+        "could not validate credentials",
+        "API_KEY_REVOKED",
+        "api_key_deleted",
+      ],
+      expected: true,
+    },
+    {
+      name: "does not match transient auth errors",
+      samples: [
+        "unauthorized",
+        "invalid token",
+        "authentication failed",
+        "forbidden",
+        "access denied",
+        "token has expired",
+      ],
+      expected: false,
+    },
+  ])("$name", ({ samples, expected }) => {
+    expectMessageMatches(isAuthPermanentErrorMessage, samples, expected);
   });
 });
 
 describe("isAuthErrorMessage", () => {
-  it("matches credential validation errors", () => {
-    const samples = [
-      'No credentials found for profile "anthropic:default".',
-      "No API key found for profile openai.",
-    ];
-    for (const sample of samples) {
-      expect(isAuthErrorMessage(sample)).toBe(true);
-    }
-  });
-  it("matches OAuth refresh failures", () => {
-    const samples = [
-      "OAuth token refresh failed for anthropic: Failed to refresh OAuth token for anthropic. Please try again or re-authenticate.",
-      "Please re-authenticate to continue.",
-    ];
-    for (const sample of samples) {
-      expect(isAuthErrorMessage(sample)).toBe(true);
-    }
+  it.each([
+    'No credentials found for profile "anthropic:default".',
+    "No API key found for profile openai.",
+    "OAuth token refresh failed for anthropic: Failed to refresh OAuth token for anthropic. Please try again or re-authenticate.",
+    "Please re-authenticate to continue.",
+  ])("matches auth errors for %j", (sample) => {
+    expect(isAuthErrorMessage(sample)).toBe(true);
   });
 });
 
 describe("isBillingErrorMessage", () => {
-  it("matches credit / payment failures", () => {
-    const samples = [
-      "Your credit balance is too low to access the Anthropic API.",
-      "insufficient credits",
-      "Payment Required",
-      "HTTP 402 Payment Required",
-      "plans & billing",
-    ];
-    for (const sample of samples) {
-      expect(isBillingErrorMessage(sample)).toBe(true);
-    }
+  it.each([
+    {
+      name: "matches credit and payment failures",
+      samples: [
+        "Your credit balance is too low to access the Anthropic API.",
+        "insufficient credits",
+        "Payment Required",
+        "HTTP 402 Payment Required",
+        "plans & billing",
+        "Insufficient USD or Diem balance to complete request. Visit https://venice.ai/settings/api to add credits.",
+        "This model requires more credits to use",
+        "This endpoint require more credits",
+      ],
+      expected: true,
+    },
+    {
+      name: "does not false-positive on issue ids and numeric references",
+      samples: [
+        "Fixed issue CHE-402 in the latest release",
+        "See ticket #402 for details",
+        "ISSUE-402 has been resolved",
+        "Room 402 is available",
+        "Error code 403 was returned, not 402-related",
+        "The building at 402 Main Street",
+        "processed 402 records",
+        "402 items found in the database",
+        "port 402 is open",
+        "Use a 402 stainless bolt",
+        "Book a 402 room",
+        "There is a 402 near me",
+      ],
+      expected: false,
+    },
+    {
+      name: "still matches real HTTP 402 billing errors",
+      samples: [
+        "HTTP 402 Payment Required",
+        "status: 402",
+        "error code 402",
+        "http 402",
+        "status=402 payment required",
+        "got a 402 from the API",
+        "returned 402",
+        "received a 402 response",
+        '{"status":402,"type":"error"}',
+        '{"code":402,"message":"payment required"}',
+        '{"error":{"code":402,"message":"billing hard limit reached"}}',
+      ],
+      expected: true,
+    },
+  ])("$name", ({ samples, expected }) => {
+    expectMessageMatches(isBillingErrorMessage, samples, expected);
   });
-  it("does not false-positive on issue IDs or text containing 402", () => {
-    const falsePositives = [
-      "Fixed issue CHE-402 in the latest release",
-      "See ticket #402 for details",
-      "ISSUE-402 has been resolved",
-      "Room 402 is available",
-      "Error code 403 was returned, not 402-related",
-      "The building at 402 Main Street",
-      "processed 402 records",
-      "402 items found in the database",
-      "port 402 is open",
-      "Use a 402 stainless bolt",
-      "Book a 402 room",
-      "There is a 402 near me",
-    ];
-    for (const sample of falsePositives) {
-      expect(isBillingErrorMessage(sample)).toBe(false);
-    }
-  });
+
   it("does not false-positive on long assistant responses mentioning billing keywords", () => {
     // Simulate a multi-paragraph assistant response that mentions billing terms
     const longResponse =
@@ -149,6 +183,11 @@ describe("isBillingErrorMessage", () => {
     expect(longResponse.length).toBeGreaterThan(512);
     expect(isBillingErrorMessage(longResponse)).toBe(false);
   });
+  it("does not false-positive on short non-billing text that mentions insufficient and balance", () => {
+    const sample = "The evidence is insufficient to reconcile the final balance after compaction.";
+    expect(isBillingErrorMessage(sample)).toBe(false);
+    expect(classifyFailoverReason(sample)).toBeNull();
+  });
   it("still matches explicit 402 markers in long payloads", () => {
     const longStructuredError =
       '{"error":{"code":402,"message":"payment required","details":"' + "x".repeat(700) + '"}}';
@@ -164,37 +203,27 @@ describe("isBillingErrorMessage", () => {
     expect(longNonError.length).toBeGreaterThan(512);
     expect(isBillingErrorMessage(longNonError)).toBe(false);
   });
-  it("still matches real HTTP 402 billing errors", () => {
-    const realErrors = [
-      "HTTP 402 Payment Required",
-      "status: 402",
-      "error code 402",
-      "http 402",
-      "status=402 payment required",
-      "got a 402 from the API",
-      "returned 402",
-      "received a 402 response",
-      '{"status":402,"type":"error"}',
-      '{"code":402,"message":"payment required"}',
-      '{"error":{"code":402,"message":"billing hard limit reached"}}',
-    ];
-    for (const sample of realErrors) {
-      expect(isBillingErrorMessage(sample)).toBe(true);
-    }
+
+  it("prefers billing when API-key and 402 hints both appear", () => {
+    const sample =
+      "402 Payment Required: The account associated with this API key has reached its maximum allowed monthly spending limit.";
+    expect(isBillingErrorMessage(sample)).toBe(true);
+    expect(classifyFailoverReason(sample)).toBe("billing");
   });
 });
 
 describe("isCloudCodeAssistFormatError", () => {
   it("matches format errors", () => {
-    const samples = [
-      "INVALID_REQUEST_ERROR: string should match pattern",
-      "messages.1.content.1.tool_use.id",
-      "tool_use.id should match pattern",
-      "invalid request format",
-    ];
-    for (const sample of samples) {
-      expect(isCloudCodeAssistFormatError(sample)).toBe(true);
-    }
+    expectMessageMatches(
+      isCloudCodeAssistFormatError,
+      [
+        "INVALID_REQUEST_ERROR: string should match pattern",
+        "messages.1.content.1.tool_use.id",
+        "tool_use.id should match pattern",
+        "invalid request format",
+      ],
+      true,
+    );
   });
 });
 
@@ -226,20 +255,24 @@ describe("isCloudflareOrHtmlErrorPage", () => {
 });
 
 describe("isCompactionFailureError", () => {
-  it("matches compaction overflow failures", () => {
-    const samples = [
-      'Context overflow: Summarization failed: 400 {"message":"prompt is too long"}',
-      "auto-compaction failed due to context overflow",
-      "Compaction failed: prompt is too long",
-      "Summarization failed: context window exceeded for this request",
-    ];
-    for (const sample of samples) {
-      expect(isCompactionFailureError(sample)).toBe(true);
-    }
-  });
-  it("ignores non-compaction overflow errors", () => {
-    expect(isCompactionFailureError("Context overflow: prompt too large")).toBe(false);
-    expect(isCompactionFailureError("rate limit exceeded")).toBe(false);
+  it.each([
+    {
+      name: "matches compaction overflow failures",
+      samples: [
+        'Context overflow: Summarization failed: 400 {"message":"prompt is too long"}',
+        "auto-compaction failed due to context overflow",
+        "Compaction failed: prompt is too long",
+        "Summarization failed: context window exceeded for this request",
+      ],
+      expected: true,
+    },
+    {
+      name: "ignores non-compaction overflow errors",
+      samples: ["Context overflow: prompt too large", "rate limit exceeded"],
+      expected: false,
+    },
+  ])("$name", ({ samples, expected }) => {
+    expectMessageMatches(isCompactionFailureError, samples, expected);
   });
 });
 
@@ -439,10 +472,46 @@ describe("isLikelyContextOverflowError", () => {
       expect(isLikelyContextOverflowError(sample)).toBe(false);
     }
   });
+
+  it("excludes billing errors even when text matches context overflow patterns", () => {
+    const samples = [
+      "402 Payment Required: request token limit exceeded for this billing plan",
+      "insufficient credits: request size exceeds your current plan limits",
+      "Your credit balance is too low. Maximum request token limit exceeded.",
+    ];
+    for (const sample of samples) {
+      expect(isBillingErrorMessage(sample)).toBe(true);
+      expect(isLikelyContextOverflowError(sample)).toBe(false);
+    }
+  });
+});
+
+describe("extractObservedOverflowTokenCount", () => {
+  it("extracts provider-reported prompt token counts", () => {
+    expect(
+      extractObservedOverflowTokenCount(
+        '400 {"type":"error","error":{"message":"prompt is too long: 277403 tokens > 200000 maximum"}}',
+      ),
+    ).toBe(277403);
+    expect(
+      extractObservedOverflowTokenCount("Context window exceeded: requested 12000 tokens"),
+    ).toBe(12000);
+    expect(
+      extractObservedOverflowTokenCount(
+        "This model's maximum context length is 128000 tokens. However, your messages resulted in 145000 tokens.",
+      ),
+    ).toBe(145000);
+  });
+
+  it("returns undefined when overflow counts are not present", () => {
+    expect(extractObservedOverflowTokenCount("Prompt too large for this model")).toBeUndefined();
+    expect(extractObservedOverflowTokenCount("rate limit exceeded")).toBeUndefined();
+  });
 });
 
 describe("isTransientHttpError", () => {
   it("returns true for retryable 5xx status codes", () => {
+    expect(isTransientHttpError("499 Client Closed Request")).toBe(true);
     expect(isTransientHttpError("500 Internal Server Error")).toBe(true);
     expect(isTransientHttpError("502 Bad Gateway")).toBe(true);
     expect(isTransientHttpError("503 Service Unavailable")).toBe(true);
@@ -454,6 +523,39 @@ describe("isTransientHttpError", () => {
   it("returns false for non-retryable or non-http text", () => {
     expect(isTransientHttpError("429 Too Many Requests")).toBe(false);
     expect(isTransientHttpError("network timeout")).toBe(false);
+  });
+});
+
+describe("classifyFailoverReasonFromHttpStatus", () => {
+  it("treats HTTP 401 permanent auth failures as auth_permanent", () => {
+    expect(classifyFailoverReasonFromHttpStatus(401, "invalid_api_key")).toBe("auth_permanent");
+  });
+
+  it("treats HTTP 422 as format error", () => {
+    expect(classifyFailoverReasonFromHttpStatus(422)).toBe("format");
+    expect(classifyFailoverReasonFromHttpStatus(422, "check open ai req parameter error")).toBe(
+      "format",
+    );
+    expect(classifyFailoverReasonFromHttpStatus(422, "Unprocessable Entity")).toBe("format");
+  });
+
+  it("treats 422 with billing message as billing instead of format", () => {
+    expect(classifyFailoverReasonFromHttpStatus(422, "insufficient credits")).toBe("billing");
+  });
+
+  it("treats HTTP 400 insufficient-quota payloads as billing instead of format", () => {
+    expect(classifyFailoverReasonFromHttpStatus(400, INSUFFICIENT_QUOTA_PAYLOAD)).toBe("billing");
+  });
+
+  it("treats HTTP 499 as transient for structured errors", () => {
+    expect(classifyFailoverReasonFromHttpStatus(499)).toBe("timeout");
+    expect(classifyFailoverReasonFromHttpStatus(499, "499 Client Closed Request")).toBe("timeout");
+    expect(
+      classifyFailoverReasonFromHttpStatus(
+        499,
+        '{"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}',
+      ),
+    ).toBe("overloaded");
   });
 });
 
@@ -473,19 +575,49 @@ describe("isFailoverErrorMessage", () => {
   });
 
   it("matches abort stop-reason timeout variants", () => {
-    const samples = [
+    expectTimeoutFailoverSamples([
       "Unhandled stop reason: abort",
       "Unhandled stop reason: error",
       "stop reason: abort",
       "stop reason: error",
       "reason: abort",
       "reason: error",
-    ];
-    for (const sample of samples) {
-      expect(isTimeoutErrorMessage(sample)).toBe(true);
-      expect(classifyFailoverReason(sample)).toBe("timeout");
-      expect(isFailoverErrorMessage(sample)).toBe(true);
-    }
+    ]);
+  });
+
+  it("matches Gemini MALFORMED_RESPONSE stop reason as timeout (#42149)", () => {
+    expectTimeoutFailoverSamples([
+      "Unhandled stop reason: MALFORMED_RESPONSE",
+      "Unhandled stop reason: malformed_response",
+      "stop reason: MALFORMED_RESPONSE",
+    ]);
+  });
+
+  it("matches network errno codes in serialized error messages", () => {
+    expectTimeoutFailoverSamples([
+      "Error: connect ETIMEDOUT 10.0.0.1:443",
+      "Error: connect ESOCKETTIMEDOUT 10.0.0.1:443",
+      "Error: connect EHOSTUNREACH 10.0.0.1:443",
+      "Error: connect ENETUNREACH 10.0.0.1:443",
+      "Error: write EPIPE",
+      "Error: read ENETRESET",
+      "Error: connect EHOSTDOWN 192.168.1.1:443",
+    ]);
+  });
+
+  it("matches z.ai network_error stop reason as timeout", () => {
+    expectTimeoutFailoverSamples([
+      "Unhandled stop reason: network_error",
+      "stop reason: network_error",
+      "reason: network_error",
+    ]);
+  });
+
+  it("does not classify MALFORMED_FUNCTION_CALL as timeout", () => {
+    const sample = "Unhandled stop reason: MALFORMED_FUNCTION_CALL";
+    expect(isTimeoutErrorMessage(sample)).toBe(false);
+    expect(classifyFailoverReason(sample)).toBe(null);
+    expect(isFailoverErrorMessage(sample)).toBe(false);
   });
 });
 
@@ -604,6 +736,14 @@ describe("classifyFailoverReason", () => {
     expect(classifyFailoverReason(TOGETHER_ENGINE_OVERLOADED_MESSAGE)).toBe("overloaded");
     expect(classifyFailoverReason(GROQ_TOO_MANY_REQUESTS_MESSAGE)).toBe("rate_limit");
     expect(classifyFailoverReason(GROQ_SERVICE_UNAVAILABLE_MESSAGE)).toBe("overloaded");
+    // Venice 402 billing error with extra words between "insufficient" and "balance"
+    expect(
+      classifyFailoverReason(
+        "Insufficient USD or Diem balance to complete request. Visit https://venice.ai/settings/api to add credits.",
+      ),
+    ).toBe("billing");
+    // OpenRouter "requires more credits" billing text
+    expect(classifyFailoverReason("This model requires more credits to use")).toBe("billing");
   });
 
   it("classifies internal and compatibility error messages", () => {
@@ -632,6 +772,12 @@ describe("classifyFailoverReason", () => {
     expect(classifyFailoverReason("402 Payment Required: Weekly/Monthly Limit Exhausted")).toBe(
       "billing",
     );
+    // Poe returns 402 without "payment required"; must be recognized for fallback
+    expect(
+      classifyFailoverReason(
+        "402 You've used up your points! Visit https://poe.com/api/keys to get more.",
+      ),
+    ).toBe("billing");
     expect(classifyFailoverReason(INSUFFICIENT_QUOTA_PAYLOAD)).toBe("billing");
     expect(classifyFailoverReason("deadline exceeded")).toBe("timeout");
     expect(classifyFailoverReason("request ended without sending any chunks")).toBe("timeout");

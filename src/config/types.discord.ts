@@ -1,4 +1,4 @@
-import type { DiscordPluralKitConfig } from "../discord/pluralkit.js";
+import type { DiscordPluralKitConfig } from "../plugin-sdk/discord.js";
 import type {
   BlockStreamingChunkConfig,
   BlockStreamingCoalesceConfig,
@@ -8,7 +8,10 @@ import type {
   OutboundRetryConfig,
   ReplyToMode,
 } from "./types.base.js";
-import type { ChannelHeartbeatVisibilityConfig } from "./types.channels.js";
+import type {
+  ChannelHealthMonitorConfig,
+  ChannelHeartbeatVisibilityConfig,
+} from "./types.channels.js";
 import type { DmConfig, ProviderCommandsConfig } from "./types.messages.js";
 import type { SecretInput } from "./types.secrets.js";
 import type { GroupToolPolicyBySenderConfig, GroupToolPolicyConfig } from "./types.tools.js";
@@ -52,6 +55,8 @@ export type DiscordGuildChannelConfig = {
   systemPrompt?: string;
   /** If false, omit thread starter context for this channel (default: true). */
   includeThreadStarter?: boolean;
+  /** If true, automatically create a thread for each new message in this channel. */
+  autoThread?: boolean;
 };
 
 export type DiscordReactionNotificationMode = "off" | "own" | "all" | "allowlist";
@@ -295,6 +300,8 @@ export type DiscordAccountConfig = {
   guilds?: Record<string, DiscordGuildEntry>;
   /** Heartbeat visibility settings for this channel. */
   heartbeat?: ChannelHeartbeatVisibilityConfig;
+  /** Channel health monitor overrides for this channel/account. */
+  healthMonitor?: ChannelHealthMonitorConfig;
   /** Exec approval forwarding configuration. */
   execApprovals?: DiscordExecApprovalConfig;
   /** Agent-controlled interactive components (buttons, select menus). */

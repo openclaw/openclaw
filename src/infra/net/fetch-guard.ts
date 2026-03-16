@@ -7,6 +7,7 @@ import {
   createPinnedDispatcher,
   resolvePinnedHostnameWithPolicy,
   type LookupFn,
+  type PinnedDispatcherPolicy,
   SsrFBlockedError,
   type SsrFPolicy,
 } from "./ssrf.js";
@@ -29,6 +30,7 @@ export type GuardedFetchOptions = {
   signal?: AbortSignal;
   policy?: SsrFPolicy;
   lookupFn?: LookupFn;
+  dispatcherPolicy?: PinnedDispatcherPolicy;
   mode?: GuardedFetchMode;
   pinDns?: boolean;
   /** @deprecated use `mode: "trusted_env_proxy"` for trusted/operator-controlled URLs. */
@@ -196,7 +198,7 @@ export async function fetchWithSsrFGuard(params: GuardedFetchOptions): Promise<G
       if (canUseTrustedEnvProxy) {
         dispatcher = new EnvHttpProxyAgent();
       } else if (params.pinDns !== false) {
-        dispatcher = createPinnedDispatcher(pinned);
+        dispatcher = createPinnedDispatcher(pinned, params.dispatcherPolicy);
       }
 
       const init: RequestInit & { dispatcher?: Dispatcher } = {
