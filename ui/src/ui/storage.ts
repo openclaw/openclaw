@@ -185,6 +185,7 @@ export function loadSettings(): UiSettings {
     navCollapsed: false,
     navWidth: 220,
     navGroupsCollapsed: {},
+    locale: "zh-CN",
   };
 
   try {
