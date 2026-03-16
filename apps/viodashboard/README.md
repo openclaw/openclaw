@@ -9,7 +9,8 @@ A thin personal wrapper UI over OpenClaw gateway chat.
 - Renders prompt/reply in a local web UI
 
 ## URL
-- `http://127.0.0.1:8791`
+- Default local URL: `http://127.0.0.1:8791`
+- Overrideable via local config / env (`src/config.mjs`)
 
 ## LaunchAgent
 Install:
@@ -112,8 +113,11 @@ Responsibilities:
 This is the dashboard composition root and one of the main change hot zones.
 
 #### 3. Environment / configuration boundary
-Primary file:
+Primary files:
 - `src/config.mjs`
+- `config/default.mjs`
+- `config/local.example.mjs`
+- `config/local.mjs` (gitignored, per-machine)
 
 Responsibilities:
 - project root and app directories
@@ -121,6 +125,7 @@ Responsibilities:
 - config source and token loading
 - runtime/support/log directories
 - camera and gesture real-path wiring
+- separating repo defaults from machine-specific overrides
 
 This is the main boundary where dashboard product logic meets machine-specific runtime reality.
 
@@ -264,13 +269,13 @@ Wrong historical runtime path:
 - `~/Library/Application Support/VioDashboardRuntime/public/styles.css`
 
 Correct live source now:
-- `/Users/visen24/MAS/openclaw_fork/apps/viodashboard/public/styles.css`
+- `<repo>/apps/viodashboard/public/styles.css`
 
 If changes appear ignored:
 1. Open `http://127.0.0.1:8791/styles.css?v=2`
 2. Confirm the response contains the rule you just added
-3. Check `~/Library/LaunchAgents/com.vio.dashboard.plist`
-4. Confirm launchd starts from `/Users/visen24/MAS/openclaw_fork/apps/viodashboard`
+3. Check `~/Library/LaunchAgents/<your launchd plist>`
+4. Confirm launchd starts from the current checkout's `apps/viodashboard`
 
 ### 2) Cache busting broke CSS
 The wrapper server must resolve `requestUrl.pathname`, not raw `req.url`, otherwise `styles.css?v=2` becomes a fake filename and returns 404.

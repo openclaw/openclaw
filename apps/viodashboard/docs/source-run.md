@@ -4,7 +4,7 @@
 
 VioDashboard now supports two launch modes:
 
-- `source` — run live directly from `/Users/visen24/MAS/openclaw_fork/apps/viodashboard`
+- `source` — run live directly from the current checkout's `apps/viodashboard` directory
 - `runtime` — run from `~/Library/Application Support/VioDashboardRuntime`
 
 The default mode is `source`.
@@ -109,4 +109,5 @@ Useful live verification steps after UI edits:
 
 - `sync-runtime.sh` is no longer the main path for source-mode development.
 - `sync-runtime.sh` remains part of runtime-mode fallback.
-- The launch agent now calls `launchd/run-dashboard.sh`, which chooses the actual run directory based on `launchd/.run-mode` (or `VIO_DASHBOARD_RUN_MODE` if set manually).
+- `launchd/install.sh` now writes the LaunchAgent plist dynamically for the current checkout path instead of committing a machine-specific absolute path.
+- The launch agent calls `launchd/run-dashboard.sh`, which chooses the actual run directory based on `launchd/.run-mode` (or `VIO_DASHBOARD_RUN_MODE` if set manually).

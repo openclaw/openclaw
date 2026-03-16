@@ -3,11 +3,11 @@
 <plist version="1.0">
   <dict>
     <key>Label</key>
-    <string>com.vio.dashboard</string>
+    <string>__LAUNCHD_LABEL__</string>
     <key>ProgramArguments</key>
     <array>
       <string>/bin/bash</string>
-      <string>/Users/visen24/MAS/openclaw_fork/apps/viodashboard/launchd/run-dashboard.sh</string>
+      <string>__RUN_SCRIPT__</string>
     </array>
     <key>RunAtLoad</key>
     <true/>
