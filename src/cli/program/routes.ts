@@ -47,6 +47,11 @@ const routeStatus: RouteSpec = {
     if (timeoutMs === null) {
       return false;
     }
+    if (json) {
+      const { statusJsonCommand } = await import("../../commands/status-json.js");
+      await statusJsonCommand({ deep, all, usage, timeoutMs }, defaultRuntime);
+      return true;
+    }
     const { statusCommand } = await import("../../commands/status.js");
     await statusCommand({ json, deep, all, usage, timeoutMs, verbose }, defaultRuntime);
     return true;
