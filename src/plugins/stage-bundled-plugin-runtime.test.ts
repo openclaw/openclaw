@@ -4,6 +4,8 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import { stageBundledPluginRuntime } from "../../scripts/stage-bundled-plugin-runtime.mjs";
+import { discoverOpenClawPlugins } from "./discovery.js";
+import { loadPluginManifestRegistry } from "./manifest-registry.js";
 
 const tempDirs: string[] = [];
 
@@ -75,15 +77,31 @@ describe("stageBundledPluginRuntime", () => {
     expect(runtimeModule.value).toBe(1);
   });
 
-  it("copies manifest files but symlinks other non-js plugin artifacts into the runtime overlay", () => {
+  it("copies package metadata files but symlinks other non-js plugin artifacts into the runtime overlay", () => {
     const repoRoot = makeRepoRoot("openclaw-stage-bundled-runtime-assets-");
     const distPluginDir = path.join(repoRoot, "dist", "extensions", "diffs");
     fs.mkdirSync(path.join(distPluginDir, "assets"), { recursive: true });
+    fs.writeFileSync(
+      path.join(distPluginDir, "package.json"),
+      JSON.stringify(
+        { name: "@openclaw/diffs", openclaw: { extensions: ["./index.js"] } },
+        null,
+        2,
+      ),
+      "utf8",
+    );
     fs.writeFileSync(path.join(distPluginDir, "openclaw.plugin.json"), "{}\n", "utf8");
     fs.writeFileSync(path.join(distPluginDir, "assets", "info.txt"), "ok\n", "utf8");
 
     stageBundledPluginRuntime({ repoRoot });
 
+    const runtimePackagePath = path.join(
+      repoRoot,
+      "dist-runtime",
+      "extensions",
+      "diffs",
+      "package.json",
+    );
     const runtimeManifestPath = path.join(
       repoRoot,
       "dist-runtime",
@@ -100,10 +118,87 @@ describe("stageBundledPluginRuntime", () => {
       "info.txt",
     );
 
+    expect(fs.lstatSync(runtimePackagePath).isSymbolicLink()).toBe(false);
+    expect(fs.readFileSync(runtimePackagePath, "utf8")).toContain('"extensions": [');
     expect(fs.lstatSync(runtimeManifestPath).isSymbolicLink()).toBe(false);
     expect(fs.readFileSync(runtimeManifestPath, "utf8")).toBe("{}\n");
     expect(fs.lstatSync(runtimeAssetPath).isSymbolicLink()).toBe(true);
     expect(fs.readFileSync(runtimeAssetPath, "utf8")).toBe("ok\n");
+  });
+
+  it("preserves package metadata needed for bundled plugin discovery from dist-runtime", () => {
+    const repoRoot = makeRepoRoot("openclaw-stage-bundled-runtime-discovery-");
+    const distPluginDir = path.join(repoRoot, "dist", "extensions", "demo");
+    const runtimeExtensionsDir = path.join(repoRoot, "dist-runtime", "extensions");
+    fs.mkdirSync(distPluginDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(distPluginDir, "package.json"),
+      JSON.stringify(
+        {
+          name: "@openclaw/demo",
+          openclaw: {
+            extensions: ["./main.js"],
+            setupEntry: "./setup.js",
+            startup: {
+              deferConfiguredChannelFullLoadUntilAfterListen: true,
+            },
+          },
+        },
+        null,
+        2,
+      ),
+      "utf8",
+    );
+    fs.writeFileSync(
+      path.join(distPluginDir, "openclaw.plugin.json"),
+      JSON.stringify(
+        {
+          id: "demo",
+          channels: ["demo"],
+          configSchema: { type: "object" },
+        },
+        null,
+        2,
+      ),
+      "utf8",
+    );
+    fs.writeFileSync(path.join(distPluginDir, "main.js"), "export default {};\n", "utf8");
+    fs.writeFileSync(path.join(distPluginDir, "setup.js"), "export default {};\n", "utf8");
+
+    stageBundledPluginRuntime({ repoRoot });
+
+    const env = {
+      ...process.env,
+      OPENCLAW_BUNDLED_PLUGINS_DIR: runtimeExtensionsDir,
+    };
+    const discovery = discoverOpenClawPlugins({
+      env,
+      cache: false,
+    });
+    const manifestRegistry = loadPluginManifestRegistry({
+      env,
+      cache: false,
+      candidates: discovery.candidates,
+      diagnostics: discovery.diagnostics,
+    });
+    const expectedRuntimeMainPath = fs.realpathSync(
+      path.join(runtimeExtensionsDir, "demo", "main.js"),
+    );
+    const expectedRuntimeSetupPath = fs.realpathSync(
+      path.join(runtimeExtensionsDir, "demo", "setup.js"),
+    );
+
+    expect(discovery.candidates).toHaveLength(1);
+    expect(fs.realpathSync(discovery.candidates[0]?.source ?? "")).toBe(expectedRuntimeMainPath);
+    expect(fs.realpathSync(discovery.candidates[0]?.setupSource ?? "")).toBe(
+      expectedRuntimeSetupPath,
+    );
+    expect(fs.realpathSync(manifestRegistry.plugins[0]?.setupSource ?? "")).toBe(
+      expectedRuntimeSetupPath,
+    );
+    expect(manifestRegistry.plugins[0]?.startupDeferConfiguredChannelFullLoadUntilAfterListen).toBe(
+      true,
+    );
   });
 
   it("removes stale runtime plugin directories that are no longer in dist", () => {

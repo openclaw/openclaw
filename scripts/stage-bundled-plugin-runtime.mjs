@@ -23,6 +23,7 @@ function shouldWrapRuntimeJsFile(sourcePath) {
 function shouldCopyRuntimeFile(sourcePath) {
   const relativePath = sourcePath.replace(/\\/g, "/");
   return (
+    relativePath.endsWith("/package.json") ||
     relativePath.endsWith("/openclaw.plugin.json") ||
     relativePath.endsWith("/.codex-plugin/plugin.json") ||
     relativePath.endsWith("/.claude-plugin/plugin.json") ||
