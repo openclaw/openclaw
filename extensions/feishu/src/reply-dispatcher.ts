@@ -182,6 +182,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
   let streamText = "";
   let lastPartial = "";
   let reasoningText = "";
+  let statusLine = "";
   const deliveredFinalTexts = new Set<string>();
   let partialUpdateQueue: Promise<void> = Promise.resolve();
   let streamingStartPromise: Promise<void> | null = null;
@@ -200,6 +201,8 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
     if (thinking) parts.push(formatReasoningPrefix(thinking));
     if (thinking && answer) parts.push("\n\n---\n\n");
     if (answer) parts.push(answer);
+    if (statusLine && !answer) parts.push(thinking ? `\n\n${statusLine}` : statusLine);
+    else if (statusLine) parts.push(`\n\n${statusLine}`);
     return parts.join("");
   };
 
@@ -282,6 +285,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
     }
     await partialUpdateQueue;
     if (streaming?.isActive()) {
+      statusLine = "";
       let text = buildCombinedStreamText(reasoningText, streamText);
       if (mentionTargets?.length) {
         text = buildMentionedCardContent(mentionTargets, text);
@@ -294,6 +298,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
     streamText = "";
     lastPartial = "";
     reasoningText = "";
+    statusLine = "";
   };
 
   const sendChunkedTextReply = async (params: {
@@ -391,8 +396,9 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
               queueStreamingUpdate(text, { mode: "delta" });
             }
             if (info?.kind === "final") {
-              streamText = mergeStreamingText(streamText, text);
-              await closeStreaming();
+              // Append final text but do NOT close yet — multiple finals in a
+              // single turn should merge into one card. onIdle closes the card.
+              queueStreamingUpdate(text, { mode: "snapshot" });
               deliveredFinalTexts.add(text);
             }
             // Send media even when streaming handled the text
@@ -496,6 +502,33 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
           }
         : undefined,
       onReasoningEnd: streamingEnabled ? () => {} : undefined,
+      onToolStart: streamingEnabled
+        ? (payload: { name?: string; phase?: string }) => {
+            const label = payload.name ?? payload.phase ?? "tool";
+            statusLine = `🔧 *Using: ${label}...*`;
+            startStreaming();
+            flushStreamingCardUpdate(buildCombinedStreamText(reasoningText, streamText));
+          }
+        : undefined,
+      onAssistantMessageStart: streamingEnabled
+        ? () => {
+            statusLine = "";
+            flushStreamingCardUpdate(buildCombinedStreamText(reasoningText, streamText));
+          }
+        : undefined,
+      onCompactionStart: streamingEnabled
+        ? () => {
+            statusLine = "📦 *Compacting context...*";
+            startStreaming();
+            flushStreamingCardUpdate(buildCombinedStreamText(reasoningText, streamText));
+          }
+        : undefined,
+      onCompactionEnd: streamingEnabled
+        ? () => {
+            statusLine = "";
+            flushStreamingCardUpdate(buildCombinedStreamText(reasoningText, streamText));
+          }
+        : undefined,
     },
     markDispatchIdle,
   };
