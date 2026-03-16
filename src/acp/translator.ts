@@ -216,7 +216,7 @@ export class AcpGatewayAgent implements Agent {
     return {};
   }
 
-  async unstable_listSessions(params: ListSessionsRequest): Promise<ListSessionsResponse> {
+  async listSessions(params: ListSessionsRequest): Promise<ListSessionsResponse> {
     const limit = readNumber(params._meta, ["limit"]) ?? 100;
     const result = await this.gateway.request<SessionsListResult>("sessions.list", { limit });
     const cwd = params.cwd ?? process.cwd();
