@@ -80,10 +80,8 @@ export async function emitPreAgentMessageHooks(params: {
       JSON.stringify(enrichedMetadata, null, 2),
       "```",
     ].join("\n");
-    if (!Array.isArray(params.ctx.UntrustedContext)) {
-      params.ctx.UntrustedContext = [];
-    }
-    params.ctx.UntrustedContext.push(enrichBlock);
+    const untrustedContext = (params.ctx.UntrustedContext ??= []);
+    untrustedContext.push(enrichBlock);
     logVerbose(`get-reply: message:enrich injected ${metadataKeys.length} metadata key(s)`);
   } catch (err) {
     logVerbose(`get-reply: message:enrich internal hook failed: ${String(err)}`);
