@@ -15,7 +15,7 @@ Current status:
 - Stage 1B complete
 - Stage 2A initial deterministic-read seam complete
 - Stage 2B startup-threaded container seam complete
-- Stage 3A in progress (startup phases extracted and covered with focused tests)
+- Stage 3A in progress (startup phases extracted, typed context threaded across early phases, startup failure classification unified)
 - Stages 3B to 5 not started
 
 ## Protected runtime slice
@@ -74,8 +74,8 @@ Do not edit these files under this plan:
 - [x] Extract control UI root resolution phase
 - [x] Extract secrets activation controller seam
 - [x] Extract runtime config reloader wiring seam
-- [ ] Pass typed context phase to phase
-- [ ] Add phase failure classification tests
+- [x] Pass typed context phase to phase (preflight, secrets precheck, auth bootstrap, runtime policy)
+- [x] Add phase failure classification tests and shared reporting (CLI startup and restart loop)
 
 ### Stage 3B: onboarding flow consolidation
 

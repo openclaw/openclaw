@@ -86,12 +86,12 @@ No user-facing CLI flag removals in stages 1 to 3.
 - Stage 1B: complete with runtime fingerprint diagnostics integrated into startup and status paths.
 - Stage 2A: complete with deterministic read and mutation seam splits in config paths.
 - Stage 2B: complete with `RuntimeStateContainer` seams threaded through startup/runtime overrides.
-- Stage 3A: in progress with startup phase extractions for config preflight, secrets precheck, auth bootstrap, runtime policy, control-ui root resolution, secrets activation controller, and runtime config reloader wiring.
+- Stage 3A: in progress with startup phase extractions for config preflight, secrets precheck, auth bootstrap, runtime policy, control-ui root resolution, secrets activation controller, and runtime config reloader wiring; early-phase typed startup context handoff and shared startup preflight failure reporting are now in place.
 - Stages 3B to 5: not started.
 
 ## Highest leverage next steps
 
-1. Stage 3A: introduce typed startup context handoff across extracted phases and centralize phase-specific failure classification.
+1. Stage 3A: extend typed startup context through runtime config and control-ui-root phase outputs, then classify additional startup-phase failures (beyond preflight) with explicit phase labels.
 2. Stage 3B: define shared `OnboardingPlan` decision graph and keep interactive and non-interactive executors separate.
 3. Stage 4: extract route index matcher and cache boundaries, then narrow plugin runtime surface behind capability subfacades.
 
