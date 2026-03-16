@@ -475,14 +475,18 @@ jq \
             .channels.slack.channels["#platform-monitoring"].systemPrompt
           end)
       else . end
-    | .channels.slack.channels["#staging-infra-monitoring"].systemPrompt =
-        ($monitoring_prompt
-          | sub("^Monitoring incident intake mode:"; "Staging monitoring incident intake mode:")
-        )
-    | .channels.slack.channels["#public-api-monitoring"].systemPrompt =
-        ($monitoring_prompt
-          | sub("^Monitoring incident intake mode:"; "Public API monitoring incident intake mode:")
-        )
+    | if .channels.slack.channels["#staging-infra-monitoring"] != null then
+        .channels.slack.channels["#staging-infra-monitoring"].systemPrompt =
+          ($monitoring_prompt
+            | sub("^Monitoring incident intake mode:"; "Staging monitoring incident intake mode:")
+          )
+      else . end
+    | if .channels.slack.channels["#public-api-monitoring"] != null then
+        .channels.slack.channels["#public-api-monitoring"].systemPrompt =
+          ($monitoring_prompt
+            | sub("^Monitoring incident intake mode:"; "Public API monitoring incident intake mode:")
+          )
+      else . end
     | .sre = (.sre // {})
     | .sre.provenance = ((.sre.provenance // {}) + {enabled: $provenance_enabled})
     | .sre.structuredEvidence = ((.sre.structuredEvidence // {}) + {enabled: $structured_evidence_enabled})
