@@ -7,6 +7,7 @@ import {
 
 afterEach(() => {
   vi.restoreAllMocks();
+  vi.unstubAllEnvs();
 });
 
 describe("buildSreRuntimeGuardrailContextFromTranscript", () => {
@@ -91,6 +92,36 @@ describe("buildSreRuntimeGuardrailContextFromTranscript", () => {
     expect(context).toContain("/tmp/custom-single-vault-graphql-evidence.sh");
   });
 
+  it("falls back to the default helper path for blank or relative env overrides", () => {
+    const transcriptText = `
+{"type":"message","message":{"role":"assistant","content":[{"type":"text","text":"Root cause: vaultByAddress factory.chain is null"}]}}
+{"type":"message","message":{"role":"user","content":[{"type":"text","text":"query VaultV2ByAddress { vaultV2ByAddress(address: \\"0xE18d7f0C6aaba1E600fF680459a357C3B3CfdB34\\", chainId: 999) { apy netApy } } sentryEventId=abc123"}]}}
+`;
+    vi.stubEnv("SINGLE_VAULT_GRAPHQL_EVIDENCE_SCRIPT_PATH", "   ");
+
+    const blankOverrideContext = buildSreRuntimeGuardrailContextFromTranscript({
+      agentId: "sre",
+      prompt: "look into this vault v2 graphql apy issue",
+      transcriptText,
+    });
+
+    expect(blankOverrideContext).toContain(
+      "/home/node/.openclaw/skills/morpho-sre/scripts/single-vault-graphql-evidence.sh",
+    );
+
+    vi.stubEnv("SINGLE_VAULT_GRAPHQL_EVIDENCE_SCRIPT_PATH", "relative/helper.sh");
+
+    const relativeOverrideContext = buildSreRuntimeGuardrailContextFromTranscript({
+      agentId: "sre",
+      prompt: "look into this vault v2 graphql apy issue",
+      transcriptText,
+    });
+
+    expect(relativeOverrideContext).toContain(
+      "/home/node/.openclaw/skills/morpho-sre/scripts/single-vault-graphql-evidence.sh",
+    );
+  });
+
   it("requires explicit retraction when new evidence contradicts an older theory", () => {
     const transcriptText = `
 {"type":"message","message":{"role":"assistant","content":[{"type":"text","text":"Root cause: vaultByAddress factory.chain is null"}]}}
@@ -119,6 +150,40 @@ describe("buildSreRuntimeGuardrailContextFromTranscript", () => {
     expect(context).toContain("Explicitly retract the outdated theory");
     expect(context).toContain("Resolver mismatch detected");
     expect(context).not.toContain("Latest human correction overrides older bot theories");
+  });
+
+  it("treats the current prompt as the newest exact artifact", () => {
+    const transcriptText = `
+{"type":"message","message":{"role":"assistant","content":[{"type":"text","text":"Root cause: vaultByAddress factory.chain is null"}]}}
+{"type":"message","message":{"role":"user","content":[{"type":"text","text":"query VaultByAddress { vaultByAddress(address: \\"0xE18d7f0C6aaba1E600fF680459a357C3B3CfdB34\\", chainId: 1) { sharePrice } }"}]}}
+`;
+    const context = buildSreRuntimeGuardrailContextFromTranscript({
+      agentId: "sre",
+      prompt:
+        'This is wrong. graphql apy is null for one vault. query VaultV2ByAddress { vaultV2ByAddress(address: "0xE18d7f0C6aaba1E600fF680459a357C3B3CfdB34", chainId: 999) { apy netApy } } traceId=abc123',
+      transcriptText,
+    });
+
+    expect(context).toContain("Latest human correction overrides older bot theories");
+    expect(context).toContain("Latest user-supplied exact artifact detected");
+    expect(context).toContain("single-vault-graphql-evidence.sh");
+    expect(context).toContain("DB row/provenance fact");
+    expect(context).toContain("`vaultByAddress`");
+    expect(context).toContain("`vaultV2ByAddress`");
+  });
+
+  it("emits single-vault guardrails on prompt-only first turns", () => {
+    const context = buildSreRuntimeGuardrailContextFromTranscript({
+      agentId: "sre",
+      prompt:
+        'This is wrong. graphql apy is null for one vault. query VaultV2ByAddress { vaultV2ByAddress(address: "0xE18d7f0C6aaba1E600fF680459a357C3B3CfdB34", chainId: 999) { apy netApy } } traceId=abc123',
+      transcriptText: "",
+    });
+
+    expect(context).toContain("Latest human correction overrides older bot theories");
+    expect(context).toContain("Latest user-supplied exact artifact detected");
+    expect(context).toContain("single-vault-graphql-evidence.sh");
+    expect(context).toContain("DB row/provenance fact");
   });
 
   it("does not require retraction without an exact artifact", () => {
@@ -165,6 +230,19 @@ describe("buildSreRuntimeGuardrailContextFromTranscript", () => {
 
     expect(context).not.toContain("db-data-incident-playbook.md");
     expect(context).toContain("Latest user-supplied exact artifact detected");
+  });
+
+  it("does not emit a retrieval gate when repo and retrieval reads share one message", () => {
+    const transcriptText = `
+{"type":"message","message":{"role":"assistant","content":[{"type":"toolCall","name":"read","arguments":{"path":"/home/node/.openclaw/repos/morpho-org/morpho-api/service.ts"}},{"type":"toolCall","name":"read","arguments":{"path":"/home/node/.openclaw/skills/morpho-sre/knowledge-index.md"}}]}}
+`;
+    const context = buildSreRuntimeGuardrailContextFromTranscript({
+      agentId: "sre",
+      prompt: "investigate",
+      transcriptText,
+    });
+
+    expect(context).toBeUndefined();
   });
 
   it("allows prompt-only data incident signals without null false positives", () => {

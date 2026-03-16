@@ -203,18 +203,34 @@ fi
 graphql_request() {
   local query_text="${1:?query required}"
   local variables_text="${2:?variables required}"
+  local response_file http_code
 
   json_is_valid "$variables_text" || {
     printf 'variables json must be valid JSON\n' >&2
     return 1
   }
 
-  jq -nc --arg query "$query_text" --argjson variables "$variables_text" '{query: $query, variables: $variables}' \
-    | curl -fsS \
-        --max-time "$CURL_TIMEOUT_SECONDS" \
-        -H 'content-type: application/json' \
-        --data @- \
-        "$GRAPHQL_URL"
+  response_file="$(mktemp)"
+  if ! http_code="$(
+    jq -nc --arg query "$query_text" --argjson variables "$variables_text" '{query: $query, variables: $variables}' \
+      | curl -sS \
+          --max-time "$CURL_TIMEOUT_SECONDS" \
+          -H 'content-type: application/json' \
+          --data @- \
+          --output "$response_file" \
+          --write-out '%{http_code}' \
+          --url "$GRAPHQL_URL"
+  )"; then
+    rm -f -- "$response_file"
+    return 1
+  fi
+  [[ "$http_code" =~ ^[0-9]{3}$ ]] || {
+    rm -f -- "$response_file"
+    printf 'curl did not report an HTTP status\n' >&2
+    return 1
+  }
+  cat "$response_file"
+  rm -f -- "$response_file"
 }
 
 response_summary() {
@@ -382,7 +398,8 @@ jq -nc \
   --argjson transactions_probe "$transactions_probe" \
   --argjson control_probe "$control_probe" \
   --argjson rpc_probe "$rpc_probe" \
-  '{
+  'def graph_probe_captured($probe): $probe.ok == "yes" or $probe.ok == "partial_or_error";
+  {
     status: "ok",
     graphql_url: $graphql_url,
     address: $address,
@@ -399,7 +416,7 @@ jq -nc \
     summary: {
       exact_query_replay: $exact_probe.ok,
       healthy_control_check: $control_probe.ok,
-      public_surface_split: (if $by_address_probe.ok != "request_failed" and $list_probe.ok != "request_failed" and $transactions_probe.ok != "request_failed" then "captured" else "failed" end),
+      public_surface_split: (if graph_probe_captured($by_address_probe) and graph_probe_captured($list_probe) and graph_probe_captured($transactions_probe) then "captured" else "failed" end),
       direct_rpc_check: ($rpc_probe.status // "skipped")
     },
     evidence_line: (
@@ -407,7 +424,7 @@ jq -nc \
       + " chainId=" + ($chain_id | tostring)
       + " exact_query_replay=" + $exact_probe.ok
       + " healthy_control_check=" + $control_probe.ok
-      + " public_surface_split=" + (if $by_address_probe.ok != "request_failed" and $list_probe.ok != "request_failed" and $transactions_probe.ok != "request_failed" then "captured" else "failed" end)
+      + " public_surface_split=" + (if graph_probe_captured($by_address_probe) and graph_probe_captured($list_probe) and graph_probe_captured($transactions_probe) then "captured" else "failed" end)
       + " direct_rpc_check=" + ($rpc_probe.status // "skipped")
     )
   }'

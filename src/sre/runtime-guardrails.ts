@@ -1,4 +1,5 @@
 import fs from "node:fs/promises";
+import path from "node:path";
 import {
   DATA_INCIDENT_RE,
   EXACT_ARTIFACT_RE,
@@ -54,10 +55,11 @@ function isErrnoCode(err: unknown, code: string): err is NodeJS.ErrnoException {
 }
 
 function singleVaultGraphqlEvidenceScriptPath(): string {
-  return (
-    process.env.SINGLE_VAULT_GRAPHQL_EVIDENCE_SCRIPT_PATH ??
-    DEFAULT_SINGLE_VAULT_GRAPHQL_EVIDENCE_SCRIPT
-  );
+  const envPath = process.env.SINGLE_VAULT_GRAPHQL_EVIDENCE_SCRIPT_PATH?.trim();
+  if (!envPath || !path.isAbsolute(envPath)) {
+    return DEFAULT_SINGLE_VAULT_GRAPHQL_EVIDENCE_SCRIPT;
+  }
+  return envPath;
 }
 
 export function buildSreRuntimeGuardrailContextFromTranscript(params: {
@@ -72,7 +74,14 @@ export function buildSreRuntimeGuardrailContextFromTranscript(params: {
     .split(/\r?\n/)
     .map((line) => line.trim())
     .filter(Boolean);
-  if (lines.length === 0) {
+  if (
+    lines.length === 0 &&
+    !(
+      DATA_INCIDENT_RE.test(params.prompt) ||
+      EXACT_ARTIFACT_RE.test(params.prompt) ||
+      HUMAN_CORRECTION_RE.test(params.prompt)
+    )
+  ) {
     return undefined;
   }
 
@@ -87,17 +96,18 @@ export function buildSreRuntimeGuardrailContextFromTranscript(params: {
 
   for (const [index, line] of lines.entries()) {
     const lineNo = index + 1;
-    if (/"name":"read"/.test(line) && /"path":"([^"]+)"/.test(line)) {
-      const pathMatch = /"path":"([^"]+)"/.exec(line);
-      const readPath = pathMatch?.[1] ?? "";
-      if (RETRIEVAL_DOC_RE.test(readPath)) {
-        sawRetrievalDoc = true;
-      }
-      if (DB_DATA_PLAYBOOK_RE.test(readPath)) {
-        sawDbDataPlaybook = true;
-      }
-      if (/\/repos\/|morpho-infra|morpho-api|openclaw-sre\//i.test(readPath)) {
-        sawRepoRead = true;
+    if (/"name":"read"/.test(line)) {
+      for (const pathMatch of line.matchAll(/"path":"([^"]+)"/g)) {
+        const readPath = pathMatch[1] ?? "";
+        if (RETRIEVAL_DOC_RE.test(readPath)) {
+          sawRetrievalDoc = true;
+        }
+        if (DB_DATA_PLAYBOOK_RE.test(readPath)) {
+          sawDbDataPlaybook = true;
+        }
+        if (/\/repos\/|morpho-infra|morpho-api|openclaw-sre\//i.test(readPath)) {
+          sawRepoRead = true;
+        }
       }
     }
 
@@ -126,7 +136,15 @@ export function buildSreRuntimeGuardrailContextFromTranscript(params: {
   }
 
   const guidance: string[] = [];
-  const currentArtifactText = latestUserArtifact?.rawText ?? params.prompt;
+  const promptPreview = cleanLine(params.prompt);
+  const promptArtifact = EXACT_ARTIFACT_RE.test(params.prompt)
+    ? { line: Number.POSITIVE_INFINITY, preview: promptPreview, rawText: params.prompt }
+    : undefined;
+  const currentUserArtifact = promptArtifact ?? latestUserArtifact;
+  const currentHumanCorrection = HUMAN_CORRECTION_RE.test(params.prompt)
+    ? promptPreview
+    : latestHumanCorrection;
+  const currentArtifactText = currentUserArtifact?.rawText ?? params.prompt;
   const hasDataIncidentSignal = DATA_INCIDENT_RE.test(
     `${params.prompt}\n${latestDataIncidentText ?? ""}\n${currentArtifactText}`,
   );
@@ -134,14 +152,14 @@ export function buildSreRuntimeGuardrailContextFromTranscript(params: {
   const userResolver = extractResolverFamily(currentArtifactText);
   let priorResolverMismatchMessage: string | undefined;
 
-  if (latestUserArtifact && userResolver) {
+  if (currentUserArtifact && userResolver) {
     const otherResolver =
       userResolver === "vaultV2ByAddress" ? "vaultByAddress" : "vaultV2ByAddress";
     const userResolverRe = new RegExp(`\\b${userResolver}\\b`);
     const otherResolverRe = new RegExp(`\\b${otherResolver}\\b`);
     const priorResolverMismatch = assistantOrToolLines.some(
       (entry) =>
-        entry.line < latestUserArtifact.line &&
+        entry.line < currentUserArtifact.line &&
         otherResolverRe.test(entry.text) &&
         !userResolverRe.test(entry.text),
     );
@@ -150,13 +168,13 @@ export function buildSreRuntimeGuardrailContextFromTranscript(params: {
     }
   }
 
-  if (latestHumanCorrection) {
+  if (currentHumanCorrection) {
     guidance.push(
-      `- Latest human correction overrides older bot theories unless disproved by newer live evidence: "${latestHumanCorrection}"`,
+      `- Latest human correction overrides older bot theories unless disproved by newer live evidence: "${currentHumanCorrection}"`,
     );
   }
 
-  if (hasExactArtifactSignal && (latestHumanCorrection || priorResolverMismatchMessage)) {
+  if (hasExactArtifactSignal && (currentHumanCorrection || priorResolverMismatchMessage)) {
     guidance.push(
       "- New evidence contradicted an older theory. Explicitly retract the outdated theory in-thread before continuing from fresh live evidence.",
     );
@@ -168,7 +186,7 @@ export function buildSreRuntimeGuardrailContextFromTranscript(params: {
     );
   }
 
-  if (latestUserArtifact && hasDataIncidentSignal) {
+  if (currentUserArtifact && hasDataIncidentSignal) {
     const singleVaultGraphqlEvidenceScript = singleVaultGraphqlEvidenceScriptPath();
     guidance.push(
       "- For single-vault API/data incidents, compare one healthy same-chain control vault, direct onchain values, and public surfaces (`vaultV2ByAddress`, `vaultV2s`, `vaultV2transactions`) before calling it chain-wide.",

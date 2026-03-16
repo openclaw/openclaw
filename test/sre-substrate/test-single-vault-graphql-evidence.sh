@@ -30,6 +30,43 @@ cat >"${BIN_WITH_CAST}/curl" <<'EOF'
 set -euo pipefail
 
 payload="$(cat)"
+url=""
+output_file=""
+write_out=""
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --url)
+      url="${2:?url value required}"
+      shift 2
+      ;;
+    --output)
+      output_file="${2:?output file required}"
+      shift 2
+      ;;
+    --write-out)
+      write_out="${2:?write-out format required}"
+      shift 2
+      ;;
+    --max-time|-H|--data)
+      shift 2
+      ;;
+    -sS|-fsS)
+      shift
+      ;;
+    *)
+      url="${url:-$1}"
+      shift
+      ;;
+  esac
+done
+
+if [[ "${MOCK_CURL_REQUIRE_URL_FLAG:-0}" == "1" && -z "$url" ]]; then
+  printf '%s\n' 'curl: missing --url' >&2
+  exit 98
+fi
+
+response_body=""
+http_code=200
 case "${MOCK_CURL_MODE:-success}" in
   success|partial-public-surface)
     if [[ "${MOCK_CURL_MODE:-success}" == "partial-public-surface" && "$payload" == *"vaultV2transactions"* ]]; then
@@ -37,27 +74,53 @@ case "${MOCK_CURL_MODE:-success}" in
       exit 28
     fi
     if [[ "$payload" == *"vaultV2transactions"* ]]; then
-      printf '%s\n' '{"data":{"vaultV2transactions":{"items":[{"hash":"0xabc","type":"deposit"}]}}}'
-      exit 0
+      response_body='{"data":{"vaultV2transactions":{"items":[{"hash":"0xabc","type":"deposit"}]}}}'
+    elif [[ "$payload" == *"vaultV2s("* ]]; then
+      response_body='{"data":{"vaultV2s":{"items":[{"address":"0x123","name":"Mock Vault"}]}}}'
+    else
+      response_body='{"data":{"vaultV2ByAddress":{"address":"0x123","apy":"1.23"}}}'
     fi
-    if [[ "$payload" == *"vaultV2s("* ]]; then
-      printf '%s\n' '{"data":{"vaultV2s":{"items":[{"address":"0x123","name":"Mock Vault"}]}}}'
-      exit 0
-    fi
-    printf '%s\n' '{"data":{"vaultV2ByAddress":{"address":"0x123","apy":"1.23"}}}'
     ;;
   invalid-json)
-    printf '%s\n' '<html>gateway timeout</html>'
+    response_body='<html>gateway timeout</html>'
+    ;;
+  http-400-json)
+    response_body='{"errors":[{"message":"mock graphql validation failed"}],"data":null}'
+    http_code=400
     ;;
   fail)
     printf '%s\n' "${MOCK_CURL_ERROR:-curl: (28) operation timed out}" >&2
     exit "${MOCK_CURL_EXIT_CODE:-28}"
+    ;;
+  option-like-url)
+    if [[ "$url" == --* ]]; then
+      printf '%s\n' 'curl: (3) URL rejected: Bad hostname' >&2
+      exit 3
+    fi
+    response_body='{"data":{"vaultV2ByAddress":{"address":"0x123","apy":"1.23"}}}'
     ;;
   *)
     printf 'unexpected MOCK_CURL_MODE: %s\n' "${MOCK_CURL_MODE:-}" >&2
     exit 97
     ;;
 esac
+
+if [[ -n "$output_file" ]]; then
+  printf '%s\n' "$response_body" >"$output_file"
+else
+  printf '%s\n' "$response_body"
+fi
+
+if [[ -n "$write_out" ]]; then
+  case "$write_out" in
+    '%{http_code}')
+      printf '%s' "$http_code"
+      ;;
+    *)
+      printf '%s' "$write_out"
+      ;;
+  esac
+fi
 EOF
 chmod +x "${BIN_WITH_CAST}/curl"
 ln -sf "${BIN_WITH_CAST}/curl" "${BIN_NO_CAST}/curl"
@@ -116,6 +179,7 @@ printf '%s\n' "$plan_output" | jq -e '
 
 success_output="$(
   env PATH="${BIN_WITH_CAST}:/usr/bin:/bin" \
+    MOCK_CURL_REQUIRE_URL_FLAG=1 \
     SINGLE_VAULT_RPC_URL='https://rpc.example' \
     MOCK_CURL_MODE=success \
     MOCK_CAST_MODE=success \
@@ -257,6 +321,25 @@ printf '%s\n' "$invalid_json_output" | jq -e '
   .status == "ok"
   and .probes.exact_query_replay.ok == "invalid_json_response"
   and .probes.exact_query_replay.first_error == "response was not valid JSON"
+  and .summary.public_surface_split == "failed"
+  and (.evidence_line | contains("public_surface_split=failed"))
+' >/dev/null
+
+http_400_json_output="$(
+  env PATH="${BIN_NO_CAST}:/usr/bin:/bin" \
+    MOCK_CURL_MODE=http-400-json \
+    bash "$SCRIPT_PATH" \
+      --address "$ADDRESS" \
+      --chain-id 8453 \
+      --query "$QUERY" \
+      --variables-json "$VARIABLES"
+)"
+
+printf '%s\n' "$http_400_json_output" | jq -e '
+  .status == "ok"
+  and .probes.exact_query_replay.ok == "partial_or_error"
+  and .probes.exact_query_replay.first_error == "mock graphql validation failed"
+  and .summary.public_surface_split == "captured"
 ' >/dev/null
 
 request_failed_output="$(
@@ -273,6 +356,25 @@ request_failed_output="$(
 printf '%s\n' "$request_failed_output" | jq -e '
   .probes.exact_query_replay.ok == "request_failed"
   and (.probes.exact_query_replay.first_error | contains("operation timed out"))
+' >/dev/null
+
+option_like_url_output="$(
+  env PATH="${BIN_NO_CAST}:/usr/bin:/bin" \
+    SINGLE_VAULT_GRAPHQL_URL='--version' \
+    MOCK_CURL_MODE=option-like-url \
+    MOCK_CURL_REQUIRE_URL_FLAG=1 \
+    bash "$SCRIPT_PATH" \
+      --address "$ADDRESS" \
+      --chain-id 8453 \
+      --query "$QUERY" \
+      --variables-json "$VARIABLES"
+)"
+
+printf '%s\n' "$option_like_url_output" | jq -e '
+  .probes.exact_query_replay.ok == "request_failed"
+  and (.probes.exact_query_replay.first_error | contains("URL rejected"))
+  and .summary.public_surface_split == "failed"
+  and (.evidence_line | contains("public_surface_split=failed"))
 ' >/dev/null
 
 invalid_variables_output="$(
