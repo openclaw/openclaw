@@ -22,4 +22,15 @@ describe("bundled plugin runtime dependencies", () => {
     expect(rootSpec).toBeTruthy();
     expect(rootSpec).toBe(feishuSpec);
   });
+
+  it("keeps bundled memory-lancedb runtime deps available from the published root package", () => {
+    const rootManifest = readJson<PackageManifest>("package.json");
+    const memoryManifest = readJson<PackageManifest>("extensions/memory-lancedb/package.json");
+    const memorySpec = memoryManifest.dependencies?.["@lancedb/lancedb"];
+    const rootSpec = rootManifest.dependencies?.["@lancedb/lancedb"];
+
+    expect(memorySpec).toBeTruthy();
+    expect(rootSpec).toBeTruthy();
+    expect(rootSpec).toBe(memorySpec);
+  });
 });
