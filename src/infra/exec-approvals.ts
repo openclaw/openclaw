@@ -177,7 +177,8 @@ export function resolveAllowlistForHost(
     if (hostBucket !== undefined) {
       return hostBucket;
     }
-    return resolved.allowlistByHost["default"] ?? [];
+    // Fall back to flat allowlist (legacy entries) when neither host nor "default" bucket exists.
+    return resolved.allowlistByHost["default"] ?? resolved.allowlist;
   }
   return resolved.allowlist;
 }
