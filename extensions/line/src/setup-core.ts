@@ -22,8 +22,20 @@ export function patchLineAccountConfig(params: {
 
   if (accountId === DEFAULT_ACCOUNT_ID) {
     const nextLine = { ...lineConfig } as Record<string, unknown>;
+    const nextDefaultAccount =
+      lineConfig.accounts?.[DEFAULT_ACCOUNT_ID] &&
+      typeof lineConfig.accounts[DEFAULT_ACCOUNT_ID] === "object"
+        ? ({ ...lineConfig.accounts[DEFAULT_ACCOUNT_ID] } as Record<string, unknown>)
+        : undefined;
     for (const field of clearFields) {
       delete nextLine[field];
+      delete nextDefaultAccount?.[field];
+    }
+    if (nextDefaultAccount) {
+      if (params.enabled) {
+        nextDefaultAccount.enabled = true;
+      }
+      Object.assign(nextDefaultAccount, params.patch);
     }
     return {
       ...params.cfg,
@@ -33,6 +45,14 @@ export function patchLineAccountConfig(params: {
           ...nextLine,
           ...(params.enabled ? { enabled: true } : {}),
           ...params.patch,
+          ...(nextDefaultAccount
+            ? {
+                accounts: {
+                  ...lineConfig.accounts,
+                  [DEFAULT_ACCOUNT_ID]: nextDefaultAccount,
+                },
+              }
+            : {}),
         },
       },
     };
