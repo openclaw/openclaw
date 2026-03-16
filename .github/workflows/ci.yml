@@ -494,20 +494,27 @@ jobs:
           use-actions-cache: "true"
 
       - name: Runtime versions
+        shell: bash
         run: |
+          set -euo pipefail
           node -v
           npm -v
           pnpm -v
 
       - name: Capture node path
-        run: echo "NODE_BIN=$(dirname \"$(node -p \"process.execPath\")\")" >> "$GITHUB_ENV"
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "NODE_BIN=$(dirname "$(command -v node)")" >> "$GITHUB_ENV"
 
       - name: Install dependencies
+        shell: bash
         env:
           CI: true
         run: |
+          set -euo pipefail
           export PATH="$NODE_BIN:$PATH"
-          which node
+          command -v node
           node -v
           pnpm -v
           # Persist Windows-native postinstall outputs in the pnpm store so restored
@@ -516,7 +523,9 @@ jobs:
 
       - name: Configure test shard (Windows)
         if: matrix.task == 'test'
+        shell: bash
         run: |
+          set -euo pipefail
           echo "OPENCLAW_TEST_SHARDS=${{ matrix.shard_count }}" >> "$GITHUB_ENV"
           echo "OPENCLAW_TEST_SHARD_INDEX=${{ matrix.shard_index }}" >> "$GITHUB_ENV"
 
