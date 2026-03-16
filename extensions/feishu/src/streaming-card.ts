@@ -167,8 +167,8 @@ export class FeishuStreamingSession {
   private log?: (msg: string) => void;
   private lastUpdateTime = 0;
   private pendingText: string | null = null;
-  private flushTimer: ReturnType<typeof setTimeout> | null = null;
-  private updateThrottleMs = 100; // Throttle updates to max 10/sec
+  private pendingTimer: ReturnType<typeof setTimeout> | null = null;
+  private updateThrottleMs = 50; // Throttle updates to max 20/sec (match CardKit print_frequency_ms)
 
   constructor(client: Client, creds: Credentials, log?: (msg: string) => void) {
     this.client = client;
@@ -202,7 +202,7 @@ export class FeishuStreamingSession {
       config: {
         streaming_mode: true,
         summary: { content: "[Generating...]" },
-        streaming_config: { print_frequency_ms: { default: 50 }, print_step: { default: 1 } },
+        streaming_config: { print_frequency_ms: { default: 50 }, print_step: { default: 3 } },
       },
       body: { elements },
     };
@@ -325,36 +325,50 @@ export class FeishuStreamingSession {
     if (!this.state || this.closed) {
       return;
     }
-    const mergedInput = mergeStreamingText(this.pendingText ?? this.state.currentText, text);
-    if (!mergedInput || mergedInput === this.state.currentText) {
+    // Treat incoming text as a full snapshot — the reply dispatcher already
+    // builds the complete combined text via buildCombinedStreamText().
+    if (!text || text === this.state.currentText) {
       return;
     }
 
-    // Throttle: skip if updated recently, but remember pending text
+    // Throttle: skip if updated recently, but remember pending text and
+    // schedule a flush so throttled content is never silently dropped.
     const now = Date.now();
     if (now - this.lastUpdateTime < this.updateThrottleMs) {
-      this.pendingText = mergedInput;
+      this.pendingText = text;
+      if (!this.pendingTimer) {
+        this.pendingTimer = setTimeout(() => {
+          this.pendingTimer = null;
+          if (this.pendingText && this.state && !this.closed) {
+            void this.flushUpdate(this.pendingText);
+          }
+        }, this.updateThrottleMs);
+      }
       return;
     }
+    void this.flushUpdate(text);
+  }
+
+  private async flushUpdate(text: string): Promise<void> {
     this.pendingText = null;
-    this.lastUpdateTime = now;
-    if (this.flushTimer) {
-      clearTimeout(this.flushTimer);
-      this.flushTimer = null;
+    this.lastUpdateTime = Date.now();
+    if (this.pendingTimer) {
+      clearTimeout(this.pendingTimer);
+      this.pendingTimer = null;
     }
 
     this.queue = this.queue.then(async () => {
       if (!this.state || this.closed) {
         return;
       }
-      const mergedText = mergeStreamingText(this.state.currentText, mergedInput);
-      if (!mergedText || mergedText === this.state.currentText) {
+      if (!text || text === this.state.currentText) {
         return;
       }
-      this.state.currentText = mergedText;
-      await this.updateCardContent(mergedText, (e) => this.log?.(`Update failed: ${String(e)}`));
+      // Direct replace — incoming text is already a complete snapshot.
+      this.state.currentText = text;
+      await this.updateCardContent(text, (e) => this.log?.(`Update failed: ${String(e)}`));
     });
-    await this.queue;
+    // Fire-and-forget: don't block the caller waiting for the HTTP round-trip.
   }
 
   private async updateNoteContent(note: string): Promise<void> {
@@ -391,9 +405,9 @@ export class FeishuStreamingSession {
       return;
     }
     this.closed = true;
-    if (this.flushTimer) {
-      clearTimeout(this.flushTimer);
-      this.flushTimer = null;
+    if (this.pendingTimer) {
+      clearTimeout(this.pendingTimer);
+      this.pendingTimer = null;
     }
     await this.queue;
 
