@@ -229,7 +229,8 @@ const silentArgs =
 const rawPassthroughArgs = process.argv.slice(2);
 const passthroughArgs =
   rawPassthroughArgs[0] === "--" ? rawPassthroughArgs.slice(1) : rawPassthroughArgs;
-const topLevelParallelEnabled = testProfile !== "low" && testProfile !== "serial";
+const topLevelParallelEnabled =
+  testProfile !== "low" && testProfile !== "serial" && !(isCI && shardCount > 1);
 const overrideWorkers = Number.parseInt(process.env.OPENCLAW_TEST_WORKERS ?? "", 10);
 const resolvedOverride =
   Number.isFinite(overrideWorkers) && overrideWorkers > 0 ? overrideWorkers : null;

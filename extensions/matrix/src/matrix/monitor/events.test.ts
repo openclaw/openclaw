@@ -70,6 +70,9 @@ describe("registerMatrixMonitorEvents", () => {
     const event = {
       event_id: "$e1",
       sender: "@alice:example.org",
+      type: "m.room.message",
+      origin_server_ts: 0,
+      content: {},
     } as MatrixRawEvent;
 
     roomMessageHandler("!room:example.org", event);
@@ -84,19 +87,38 @@ describe("registerMatrixMonitorEvents", () => {
     await expectForwardedWithoutReadReceipt({
       event_id: "$e2",
       sender: "@bot:example.org",
+      type: "m.room.message",
+      origin_server_ts: 0,
+      content: {},
     });
   });
 
   it("skips receipt when message lacks sender or event id", async () => {
     await expectForwardedWithoutReadReceipt({
       sender: "@alice:example.org",
+      event_id: "",
+      type: "m.room.message",
+      origin_server_ts: 0,
+      content: {},
     });
   });
 
   it("caches self user id across messages", async () => {
     const { getUserId, roomMessageHandler } = createHarness();
-    const first = { event_id: "$e3", sender: "@alice:example.org" } as MatrixRawEvent;
-    const second = { event_id: "$e4", sender: "@bob:example.org" } as MatrixRawEvent;
+    const first = {
+      event_id: "$e3",
+      sender: "@alice:example.org",
+      type: "m.room.message",
+      origin_server_ts: 0,
+      content: {},
+    } as MatrixRawEvent;
+    const second = {
+      event_id: "$e4",
+      sender: "@bob:example.org",
+      type: "m.room.message",
+      origin_server_ts: 0,
+      content: {},
+    } as MatrixRawEvent;
 
     roomMessageHandler("!room:example.org", first);
     roomMessageHandler("!room:example.org", second);

@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { FeishuProbeResult } from "./types.js";
 
 const createFeishuClientMock = vi.hoisted(() => vi.fn());
 
@@ -18,7 +19,7 @@ const DEFAULT_SUCCESS_RESULT = {
   appId: "cli_123",
   botName: "TestBot",
   botOpenId: "ou_abc123",
-} as const;
+} satisfies FeishuProbeResult;
 const BOT1_RESPONSE = {
   code: 0,
   bot: { bot_name: "Bot1", open_id: "ou_1" },
@@ -40,7 +41,7 @@ function setupSuccessClient() {
 
 async function expectDefaultSuccessResult(
   creds = DEFAULT_CREDS,
-  expected = DEFAULT_SUCCESS_RESULT,
+  expected: FeishuProbeResult = DEFAULT_SUCCESS_RESULT,
 ) {
   const result = await probeFeishu(creds);
   expect(result).toEqual(expected);

@@ -409,10 +409,10 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
 
       let capturedError = "";
       const runtimeWithCapture = {
-        log: () => {},
-        error: (message: string) => {
-          capturedError = message;
-          throw new Error(message);
+        log: (..._args: unknown[]) => {},
+        error: (...args: unknown[]) => {
+          capturedError = args.map(String).join(" ");
+          throw new Error(capturedError);
         },
         exit: (_code: number) => {
           throw new Error("exit should not be reached after runtime.error");

@@ -118,7 +118,7 @@ describe("createWebhookHandler", () => {
   async function expectForbiddenByPolicy(params: {
     account: Partial<ResolvedSynologyChatAccount>;
     bodyContains: string;
-    deliver?: ReturnType<typeof vi.fn>;
+    deliver?: Parameters<typeof createWebhookHandler>[0]["deliver"];
   }) {
     const deliver = params.deliver ?? vi.fn();
     const handler = createWebhookHandler({

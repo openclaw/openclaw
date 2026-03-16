@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
+import { resolvePreferredOpenClawTmpDir } from "../../infra/tmp-openclaw-dir.js";
 
 function chmodSafeDir(dir: string) {
   if (process.platform === "win32") {
@@ -16,7 +16,7 @@ export function mkdirSafeDir(dir: string) {
 }
 
 export function makeTrackedTempDir(prefix: string, trackedDirs: string[]) {
-  const dir = path.join(os.tmpdir(), `${prefix}-${randomUUID()}`);
+  const dir = path.join(resolvePreferredOpenClawTmpDir(), `${prefix}-${randomUUID()}`);
   mkdirSafeDir(dir);
   trackedDirs.push(dir);
   return dir;

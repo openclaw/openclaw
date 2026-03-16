@@ -207,6 +207,13 @@ describe("nostr-profile-http", () => {
     });
   });
 
+  function expectOkResponse(res: ReturnType<typeof createMockResponse>) {
+    expect(res._getStatusCode()).toBe(200);
+    const data = JSON.parse(res._getData());
+    expect(data.ok).toBe(true);
+    return data;
+  }
+
   describe("PUT /api/channels/nostr/:accountId/profile", () => {
     function mockPublishSuccess() {
       vi.mocked(publishNostrProfile).mockResolvedValue({
@@ -215,13 +222,6 @@ describe("nostr-profile-http", () => {
         successes: ["wss://relay.damus.io"],
         failures: [],
       });
-    }
-
-    function expectOkResponse(res: ReturnType<typeof createMockResponse>) {
-      expect(res._getStatusCode()).toBe(200);
-      const data = JSON.parse(res._getData());
-      expect(data.ok).toBe(true);
-      return data;
     }
 
     function expectBadRequestResponse(res: ReturnType<typeof createMockResponse>) {

@@ -328,11 +328,13 @@ describe("BlueBubbles webhook monitor", () => {
   }
 
   function createHangingWebhookRequest(url = "/bluebubbles-webhook?password=test-password") {
-    const req = new EventEmitter() as IncomingMessage & { destroy: ReturnType<typeof vi.fn> };
+    const req = new EventEmitter() as IncomingMessage & {
+      destroy: IncomingMessage["destroy"];
+    };
     req.method = "POST";
     req.url = url;
     req.headers = {};
-    req.destroy = vi.fn();
+    req.destroy = vi.fn((_: Error | undefined) => req) as unknown as IncomingMessage["destroy"];
     setRequestRemoteAddress(req, "127.0.0.1");
     return req;
   }
