@@ -926,6 +926,44 @@ module.exports = { id: "skipped", register() { throw new Error("skipped plugin s
     expect(third).toBe(second);
   });
 
+  it("does not reuse cached registries across gateway subagent binding modes", () => {
+    useNoBundledPlugins();
+    const plugin = writePlugin({
+      id: "cache-gateway-bindable",
+      filename: "cache-gateway-bindable.cjs",
+      body: `module.exports = { id: "cache-gateway-bindable", register() {} };`,
+    });
+
+    const options = {
+      workspaceDir: plugin.dir,
+      config: {
+        plugins: {
+          allow: ["cache-gateway-bindable"],
+          load: {
+            paths: [plugin.file],
+          },
+        },
+      },
+    };
+
+    const defaultRegistry = loadOpenClawPlugins(options);
+    const gatewayBindableRegistry = loadOpenClawPlugins({
+      ...options,
+      runtimeOptions: {
+        allowGatewaySubagentBinding: true,
+      },
+    });
+    const gatewayBindableAgain = loadOpenClawPlugins({
+      ...options,
+      runtimeOptions: {
+        allowGatewaySubagentBinding: true,
+      },
+    });
+
+    expect(gatewayBindableRegistry).not.toBe(defaultRegistry);
+    expect(gatewayBindableAgain).toBe(gatewayBindableRegistry);
+  });
+
   it("evicts least recently used registries when the loader cache exceeds its cap", () => {
     useNoBundledPlugins();
     const plugin = writePlugin({

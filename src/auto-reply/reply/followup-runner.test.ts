@@ -287,10 +287,12 @@ describe("createFollowupRunner bootstrap warning dedupe", () => {
 
     const call = runEmbeddedPiAgentMock.mock.calls.at(-1)?.[0] as
       | {
+          allowGatewaySubagentBinding?: boolean;
           bootstrapPromptWarningSignaturesSeen?: string[];
           bootstrapPromptWarningSignature?: string;
         }
       | undefined;
+    expect(call?.allowGatewaySubagentBinding).toBe(true);
     expect(call?.bootstrapPromptWarningSignaturesSeen).toEqual(["sig-a", "sig-b"]);
     expect(call?.bootstrapPromptWarningSignature).toBe("sig-b");
   });

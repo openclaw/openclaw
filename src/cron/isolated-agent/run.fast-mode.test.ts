@@ -81,6 +81,7 @@ async function runFastModeCase(params: {
     provider: "openai",
     model: "gpt-4",
     fastMode: params.expectedFastMode,
+    allowGatewaySubagentBinding: true,
   });
 }
 

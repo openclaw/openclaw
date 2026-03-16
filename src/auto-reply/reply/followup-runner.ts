@@ -171,6 +171,7 @@ export function createFollowupRunner(params: {
             let attemptCompactionCount = 0;
             try {
               const result = await runEmbeddedPiAgent({
+                allowGatewaySubagentBinding: true,
                 sessionId: queued.run.sessionId,
                 sessionKey: queued.run.sessionKey,
                 agentId: queued.run.agentId,

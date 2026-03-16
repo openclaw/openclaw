@@ -156,6 +156,19 @@ vi.mock("./model.js", () => ({
     },
     modelRegistry: {},
   })),
+  resolveModelAsync: vi.fn(async () => ({
+    model: {
+      id: "test-model",
+      provider: "anthropic",
+      contextWindow: 200000,
+      api: "messages",
+    },
+    error: null,
+    authStorage: {
+      setRuntimeApiKey: vi.fn(),
+    },
+    modelRegistry: {},
+  })),
 }));
 
 vi.mock("../model-auth.js", () => ({
