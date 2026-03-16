@@ -256,22 +256,42 @@ EOF
 cat >"${wrapper_dir}/git" <<'EOF'
 #!/bin/sh
 set -eu
-git_cmd="$1"
-case "$git_cmd" in
-  -*)
-    while [ "$#" -gt 0 ]; do
-      if [ "${1#-}" != "$1" ]; then
-        shift
-        continue
-      fi
+git_cmd=""
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    -C|-c|--git-dir|--work-tree|--namespace|--exec-path|--super-prefix|--config-env)
+      shift
+      [ "$#" -gt 0 ] && shift || break
+      ;;
+    --help)
+      git_cmd="help"
+      break
+      ;;
+    --version)
+      git_cmd="version"
+      break
+      ;;
+    --)
+      shift
+      [ "$#" -gt 0 ] && git_cmd="$1"
+      break
+      ;;
+    -*)
+      shift
+      ;;
+    *)
       git_cmd="$1"
       break
-    done
-    ;;
-esac
+      ;;
+  esac
+done
+
+if [ -z "$git_cmd" ]; then
+  exec /usr/bin/git "$@"
+fi
 
 case "$git_cmd" in
-  show|log|diff|rev-parse|status|branch|checkout|add|reset|restore|tag|config|commit|merge|rebase|stash)
+  add|branch|checkout|commit|config|diff|help|log|merge|rebase|reset|restore|rev-parse|show|stash|status|tag|version)
     require_token=0
     ;;
   *)
@@ -369,7 +389,6 @@ jq \
   --argjson relationship_index_enabled "$(bool_from_env "${OPENCLAW_SRE_RELATIONSHIP_INDEX_ENABLED:-0}")" \
   '
     .tools = (.tools // {})
-    | .tools = (.tools // {})
     | .tools.exec = (
         if ((.tools.exec // null) | type) == "object" then
           .tools.exec

@@ -37,6 +37,39 @@ pem_is_valid() {
   fi
 }
 
+parse_git_cmd() {
+  local git_cmd=""
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      -C|-c|--git-dir|--work-tree|--namespace|--exec-path|--super-prefix|--config-env)
+        shift
+        [ "$#" -gt 0 ] && shift || break
+        ;;
+      --help)
+        git_cmd="help"
+        break
+        ;;
+      --version)
+        git_cmd="version"
+        break
+        ;;
+      --)
+        shift
+        [ "$#" -gt 0 ] && git_cmd="$1"
+        break
+        ;;
+      -*)
+        shift
+        ;;
+      *)
+        git_cmd="$1"
+        break
+        ;;
+    esac
+  done
+  printf '%s' "$git_cmd"
+}
+
 assert_eq() {
   if [ "$1" != "$2" ]; then
     echo "assert_eq failed: expected [$2], got [$1]" >&2
@@ -93,5 +126,12 @@ assert_failure pem_is_valid "$(pem_to_newlines "$malformed_key")"
 
 empty_key=""
 assert_failure pem_is_valid "$(pem_to_newlines "$empty_key")"
+
+assert_eq "$(parse_git_cmd)" ""
+assert_eq "$(parse_git_cmd status)" "status"
+assert_eq "$(parse_git_cmd -C /tmp status)" "status"
+assert_eq "$(parse_git_cmd -c color.ui=always status)" "status"
+assert_eq "$(parse_git_cmd --help)" "help"
+assert_eq "$(parse_git_cmd fetch)" "fetch"
 
 printf 'test-github-app-token-helpers: ok\n'
