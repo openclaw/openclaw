@@ -397,10 +397,15 @@ function renderUsageInsights(
     stats.durationCount > 0
       ? (formatDurationCompact(stats.avgDurationMs, { spaced: true }) ?? "—")
       : "—";
+  const totalDurationLabel =
+    stats.durationSumMs > 0
+      ? (formatDurationCompact(stats.durationSumMs, { spaced: true }) ?? "—")
+      : "—";
   const cacheHint = "Cache hit rate = cache read / (input + cache read). Higher is better.";
   const errorHint = "Error rate = errors / total messages. Lower is better.";
   const throughputHint = "Throughput shows tokens per minute over active time. Higher is better.";
   const tokensHint = "Average tokens per message in this range.";
+  const durationHint = "Active time sums each session's first-to-last activity within the range.";
   const costHint = showCostHint
     ? "Average cost per message when providers report costs. Cost data is missing for some or all sessions in this range."
     : "Average cost per message when providers report costs.";
@@ -502,6 +507,14 @@ function renderUsageInsights(
         </div>
         <div class="usage-summary-card">
           <div class="usage-summary-title">
+            Active Time
+            <span class="usage-summary-hint" title=${durationHint}>?</span>
+          </div>
+          <div class="usage-summary-value">${totalDurationLabel}</div>
+          <div class="usage-summary-sub">${avgDurationLabel} avg session</div>
+        </div>
+        <div class="usage-summary-card">
+          <div class="usage-summary-title">
             Throughput
             <span class="usage-summary-hint" title=${throughputHint}>?</span>
           </div>
@@ -515,7 +528,7 @@ function renderUsageInsights(
           </div>
           <div class="usage-summary-value ${errorRatePct > 5 ? "bad" : errorRatePct > 1 ? "warn" : "good"}">${errorRatePct.toFixed(2)}%</div>
           <div class="usage-summary-sub">
-            ${aggregates.messages.errors} errors · ${avgDurationLabel} avg session
+            ${aggregates.messages.errors} errors · ${aggregates.messages.total} msgs
           </div>
         </div>
         <div class="usage-summary-card">
