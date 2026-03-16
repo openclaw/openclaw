@@ -616,6 +616,41 @@ describe("chat view", () => {
     vi.unstubAllGlobals();
   });
 
+  it("preserves the selected provider when the session model is already qualified", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: false,
+      } satisfies Partial<Response>),
+    );
+    const { state, request } = createChatHeaderState({
+      modelProvider: "openrouter",
+      model: "llamacpp/qwen3-14b.gguf",
+      catalog: [
+        { id: "hunter-alpha", name: "Hunter Alpha", provider: "openrouter" },
+        { id: "qwen3-14b.gguf", name: "Qwen3 14B", provider: "llamacpp" },
+      ],
+    });
+    const container = document.createElement("div");
+    render(renderChatSessionSelect(state), container);
+
+    const modelSelect = container.querySelector<HTMLSelectElement>(
+      'select[data-chat-model-select="true"]',
+    );
+    expect(modelSelect).not.toBeNull();
+    expect(modelSelect?.value).toBe("llamacpp/qwen3-14b.gguf");
+
+    modelSelect!.value = "openrouter/hunter-alpha";
+    modelSelect!.dispatchEvent(new Event("change", { bubbles: true }));
+    await flushTasks();
+
+    expect(request).toHaveBeenCalledWith("sessions.patch", {
+      key: "main",
+      model: "openrouter/hunter-alpha",
+    });
+    vi.unstubAllGlobals();
+  });
+
   it("clears the session model override back to the default model", async () => {
     vi.stubGlobal(
       "fetch",
