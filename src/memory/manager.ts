@@ -784,3 +784,17 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     INDEX_CACHE.delete(this.cacheKey);
   }
 }
+
+export async function closeAllMemoryIndexManagers(): Promise<void> {
+  // Close all cached MemoryIndexManager instances
+  const managers = Array.from(INDEX_CACHE.values());
+  INDEX_CACHE.clear();
+  INDEX_CACHE_PENDING.clear();
+  for (const manager of managers) {
+    try {
+      await manager.close();
+    } catch (err) {
+      log.warn(`failed to close memory index manager: ${String(err)}`);
+    }
+  }
+}
