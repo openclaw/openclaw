@@ -5,12 +5,7 @@ import {
   splitOnboardingEntries,
 } from "../../../src/channels/plugins/onboarding/helpers.js";
 import { setOnboardingChannelEnabled } from "../../../src/channels/plugins/onboarding/helpers.js";
-import {
-  applyAccountNameToChannelSection,
-  migrateBaseNameToDefaultAccount,
-} from "../../../src/channels/plugins/setup-helpers.js";
 import type { ChannelSetupWizard } from "../../../src/channels/plugins/setup-wizard.js";
-import type { ChannelSetupAdapter } from "../../../src/channels/plugins/types.adapters.js";
 import { formatCliCommand } from "../../../src/cli/command-format.js";
 import type { OpenClawConfig } from "../../../src/config/config.js";
 import { mergeWhatsAppConfig } from "../../../src/config/merge-config.js";
@@ -19,6 +14,7 @@ import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../../../src/routing/ses
 import { formatDocsLink } from "../../../src/terminal/links.js";
 import { normalizeE164, pathExists } from "../../../src/utils.js";
 import { listWhatsAppAccountIds, resolveWhatsAppAuthDir } from "./accounts.js";
+import { whatsappSetupAdapter } from "./setup-core.js";
 
 const channel = "whatsapp" as const;
 
@@ -246,50 +242,6 @@ async function promptWhatsAppDmAccess(params: {
   const parsed = parseWhatsAppAllowFromEntries(String(allowRaw));
   return setWhatsAppAllowFrom(next, parsed.entries);
 }
-
-export const whatsappSetupAdapter: ChannelSetupAdapter = {
-  resolveAccountId: ({ accountId }) => normalizeAccountId(accountId),
-  applyAccountName: ({ cfg, accountId, name }) =>
-    applyAccountNameToChannelSection({
-      cfg,
-      channelKey: channel,
-      accountId,
-      name,
-      alwaysUseAccounts: true,
-    }),
-  applyAccountConfig: ({ cfg, accountId, input }) => {
-    const namedConfig = applyAccountNameToChannelSection({
-      cfg,
-      channelKey: channel,
-      accountId,
-      name: input.name,
-      alwaysUseAccounts: true,
-    });
-    const next = migrateBaseNameToDefaultAccount({
-      cfg: namedConfig,
-      channelKey: channel,
-      alwaysUseAccounts: true,
-    });
-    const entry = {
-      ...next.channels?.whatsapp?.accounts?.[accountId],
-      ...(input.authDir ? { authDir: input.authDir } : {}),
-      enabled: true,
-    };
-    return {
-      ...next,
-      channels: {
-        ...next.channels,
-        whatsapp: {
-          ...next.channels?.whatsapp,
-          accounts: {
-            ...next.channels?.whatsapp?.accounts,
-            [accountId]: entry,
-          },
-        },
-      },
-    };
-  },
-};
 
 export const whatsappSetupWizard: ChannelSetupWizard = {
   channel,
