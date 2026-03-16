@@ -60,6 +60,8 @@ export {
   resolveAllowlistProviderRuntimeGroupPolicy,
   resolveDefaultGroupPolicy,
 } from "../config/runtime-group-policy.js";
+export { loadSessionStore } from "../config/sessions.js";
+export type { SessionEntry } from "../config/sessions.js";
 export type {
   DmPolicy,
   GroupPolicy,

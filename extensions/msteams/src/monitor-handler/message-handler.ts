@@ -18,6 +18,8 @@ import {
   formatAllowlistMatchMeta,
   resolveEffectiveAllowFromLists,
   resolveDmGroupAccessWithLists,
+  loadSessionStore,
+  type SessionEntry,
   type HistoryEntry,
 } from "openclaw/plugin-sdk/msteams";
 import {
@@ -48,6 +50,78 @@ import { getMSTeamsRuntime } from "../runtime.js";
 import type { MSTeamsTurnContext } from "../sdk-types.js";
 import { recordMSTeamsSentMessage, wasMSTeamsMessageSent } from "../sent-message-cache.js";
 import { resolveMSTeamsInboundMedia } from "./inbound-media.js";
+
+type MSTeamsRecentChannelFocus = {
+  target: string;
+  label: string;
+  teamLabel?: string;
+  channelLabel?: string;
+};
+
+function resolveSessionEntryByKey(
+  store: Record<string, SessionEntry>,
+  sessionKey: string,
+): SessionEntry | undefined {
+  const direct = store[sessionKey];
+  if (direct) {
+    return direct;
+  }
+  const lowered = sessionKey.trim().toLowerCase();
+  if (!lowered) {
+    return undefined;
+  }
+  return (
+    store[lowered] ?? Object.entries(store).find(([key]) => key.toLowerCase() === lowered)?.[1]
+  );
+}
+
+function resolveMSTeamsRecentChannelFocus(params: {
+  storePath: string;
+  mainSessionKey: string;
+}): MSTeamsRecentChannelFocus | null {
+  const entry = resolveSessionEntryByKey(loadSessionStore(params.storePath), params.mainSessionKey);
+  if (!entry) {
+    return null;
+  }
+  const provider =
+    entry.origin?.provider?.trim().toLowerCase() ?? entry.channel?.trim().toLowerCase();
+  if (provider !== "msteams") {
+    return null;
+  }
+  const target = entry.origin?.to?.trim();
+  if (!target || !/^conversation:/i.test(target)) {
+    return null;
+  }
+  const chatType =
+    entry.origin?.chatType?.trim().toLowerCase() ?? entry.chatType?.trim().toLowerCase();
+  const channelLabel = entry.groupChannel?.trim() ?? undefined;
+  const teamLabel = entry.space?.trim() ?? undefined;
+  const fallbackLabel = entry.displayName?.trim() ?? entry.origin?.label?.trim() ?? undefined;
+  const label = [teamLabel, channelLabel].filter(Boolean).join(" / ") || fallbackLabel || target;
+  if (chatType !== "channel" && !channelLabel && !teamLabel) {
+    return null;
+  }
+  return {
+    target,
+    label,
+    teamLabel,
+    channelLabel,
+  };
+}
+
+function buildMSTeamsRecentChannelFocusContext(
+  focus: MSTeamsRecentChannelFocus | null,
+): string[] | undefined {
+  if (!focus) {
+    return undefined;
+  }
+  const entries = [
+    `Recent Microsoft Teams channel focus: ${focus.label}.`,
+    `If the user explicitly asks you to post back to that channel, use target ${focus.target}.`,
+    "This is metadata only; replies in the current DM should stay in the DM unless the user explicitly asks to post elsewhere.",
+  ];
+  return entries;
+}
 
 export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
   const {
@@ -471,6 +545,21 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
       agentId: route.agentId,
       sessionKey: route.sessionKey,
     });
+    let recentChannelFocusContext: string[] | undefined;
+    if (isDirectMessage) {
+      try {
+        recentChannelFocusContext = buildMSTeamsRecentChannelFocusContext(
+          resolveMSTeamsRecentChannelFocus({
+            storePath,
+            mainSessionKey: route.mainSessionKey,
+          }),
+        );
+      } catch (err) {
+        log.debug?.("failed to load recent msteams channel focus", {
+          error: formatUnknownError(err),
+        });
+      }
+    }
     const body = core.channel.reply.formatAgentEnvelope({
       channel: "Teams",
       from: envelopeFrom,
@@ -521,8 +610,19 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
       SessionKey: route.sessionKey,
       AccountId: route.accountId,
       ChatType: isDirectMessage ? "direct" : isChannel ? "channel" : "group",
-      ConversationLabel: envelopeFrom,
-      GroupSubject: !isDirectMessage ? conversationType : undefined,
+      ConversationLabel:
+        isChannel && channelName
+          ? `#${channelName}`
+          : !isDirectMessage && teamName
+            ? teamName
+            : envelopeFrom,
+      GroupSubject: !isDirectMessage
+        ? isChannel
+          ? (teamName ?? conversationType)
+          : conversationType
+        : undefined,
+      GroupChannel: isChannel && channelName ? `#${channelName}` : undefined,
+      GroupSpace: isChannel ? (teamName ?? teamId ?? teamRuntimeId) : undefined,
       SenderName: senderName,
       SenderId: senderId,
       Provider: "msteams" as const,
@@ -543,6 +643,7 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
       CommandAuthorized: commandAuthorized,
       OriginatingChannel: "msteams" as const,
       OriginatingTo: teamsTo,
+      UntrustedContext: recentChannelFocusContext,
       ...mediaPayload,
     });
 
@@ -554,6 +655,18 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
         logVerboseMessage(`msteams: failed updating session meta: ${String(err)}`);
       },
     });
+
+    if (isChannel && route.mainSessionKey !== (ctxPayload.SessionKey ?? route.sessionKey)) {
+      try {
+        await core.channel.session.updateLastRoute({
+          storePath,
+          sessionKey: route.mainSessionKey,
+          ctx: ctxPayload,
+        });
+      } catch (err) {
+        logVerboseMessage(`msteams: failed updating recent channel focus: ${String(err)}`);
+      }
+    }
 
     logVerboseMessage(`msteams inbound: from=${ctxPayload.From} preview="${preview}"`);
 
