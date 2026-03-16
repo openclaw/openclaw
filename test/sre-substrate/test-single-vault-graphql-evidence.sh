@@ -219,6 +219,7 @@ printf '%s\n' "$strict_cast_output" | jq -e '.probes.direct_rpc.status == "ok"' 
 help_output="$(bash "$SCRIPT_PATH" --help)"
 printf '%s\n' "$help_output" | grep -F -- '--query ' >/dev/null
 printf '%s\n' "$help_output" | grep -F -- '--variables-json ' >/dev/null
+printf '%s\n' "$help_output" | grep -F -- 'SINGLE_VAULT_GRAPHQL_URL' >/dev/null
 printf '%s\n' "$help_output" | grep -F -- 'SINGLE_VAULT_CURL_TIMEOUT_SECONDS' >/dev/null
 
 missing_address_status=0
@@ -388,24 +389,42 @@ printf '%s\n' "$request_failed_output" | jq -e '
   and (.probes.exact_query_replay.first_error | contains("operation timed out"))
 ' >/dev/null
 
-option_like_url_output="$(
-  env PATH="${BIN_NO_CAST}:/usr/bin:/bin" \
-    SINGLE_VAULT_GRAPHQL_URL='--version' \
-    MOCK_CURL_MODE=option-like-url \
-    MOCK_CURL_REQUIRE_URL_FLAG=1 \
-    bash "$SCRIPT_PATH" \
-      --address "$ADDRESS" \
-      --chain-id 8453 \
-      --query "$QUERY" \
-      --variables-json "$VARIABLES"
-)"
+request_failed_tmp="${TMP}/request-failed-tmp"
+mkdir -p "$request_failed_tmp"
+env PATH="${BIN_NO_CAST}:/usr/bin:/bin" \
+  TMPDIR="$request_failed_tmp" \
+  MOCK_CURL_MODE=fail \
+  MOCK_CURL_ERROR='curl: (28) operation timed out after 20001 milliseconds' \
+  bash "$SCRIPT_PATH" \
+    --address "$ADDRESS" \
+    --chain-id 8453 \
+    --query "$QUERY" \
+    --variables-json "$VARIABLES" >/dev/null 2>&1 || true
+test -z "$(find "$request_failed_tmp" -type f -print -quit)"
 
-printf '%s\n' "$option_like_url_output" | jq -e '
-  .probes.exact_query_replay.ok == "request_failed"
-  and (.probes.exact_query_replay.first_error | contains("URL rejected"))
-  and .summary.public_surface_split == "failed"
-  and (.evidence_line | contains("public_surface_split=failed"))
-' >/dev/null
+insecure_graphql_url_stderr="${TMP}/insecure-graphql-url.stderr"
+insecure_graphql_url_status=0
+env PATH="${BIN_NO_CAST}:/usr/bin:/bin" \
+  SINGLE_VAULT_GRAPHQL_URL='http://graph.example/graphql' \
+  bash "$SCRIPT_PATH" \
+    --address "$ADDRESS" \
+    --chain-id 8453 \
+    --query "$QUERY" \
+    --variables-json "$VARIABLES" >/dev/null 2>"$insecure_graphql_url_stderr" || insecure_graphql_url_status=$?
+test "$insecure_graphql_url_status" = "2"
+grep -F 'graphql url must use HTTPS' "$insecure_graphql_url_stderr" >/dev/null
+
+option_like_url_stderr="${TMP}/option-like-url.stderr"
+option_like_url_status=0
+env PATH="${BIN_NO_CAST}:/usr/bin:/bin" \
+  SINGLE_VAULT_GRAPHQL_URL='--version' \
+  bash "$SCRIPT_PATH" \
+    --address "$ADDRESS" \
+    --chain-id 8453 \
+    --query "$QUERY" \
+    --variables-json "$VARIABLES" >/dev/null 2>"$option_like_url_stderr" || option_like_url_status=$?
+test "$option_like_url_status" = "2"
+grep -F 'graphql url must use HTTPS' "$option_like_url_stderr" >/dev/null
 
 invalid_variables_output="$(
   env PATH="${BIN_NO_CAST}:/usr/bin:/bin" \

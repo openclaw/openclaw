@@ -37,6 +37,7 @@ Captures a compact evidence bundle for one-address GraphQL incidents:
 - optional direct RPC facts via `cast`
 
 Environment:
+- `SINGLE_VAULT_GRAPHQL_URL` overrides the GraphQL endpoint (default: https://api.morpho.org/graphql)
 - `SINGLE_VAULT_CURL_TIMEOUT_SECONDS` overrides curl `--max-time` (default: 20)
 EOF
 }
@@ -62,6 +63,15 @@ require_evm_address() {
   local address="${2:?address required}"
   [[ "$address" =~ ^0x[a-fA-F0-9]{40}$ ]] || {
     printf '%s must be a valid Ethereum address (0x + 40 hex chars)\n' "$label" >&2
+    exit 2
+  }
+}
+
+require_https_url() {
+  local label="${1:?label required}"
+  local url="${2:?url required}"
+  [[ "$url" =~ ^https://[^[:space:]]+$ ]] || {
+    printf '%s must use HTTPS: %s\n' "$label" "$url" >&2
     exit 2
   }
 }
@@ -131,6 +141,7 @@ done
 
 require_cmd curl
 require_cmd jq
+require_https_url "graphql url" "$GRAPHQL_URL"
 
 [[ -n "$ADDRESS" ]] || {
   printf 'address is required\n' >&2
@@ -204,36 +215,36 @@ if [[ "$PRINT_PLAN" -eq 1 ]]; then
 fi
 
 graphql_request() {
-  local query_text="${1:?query required}"
-  local variables_text="${2:?variables required}"
-  local response_file http_code
+  (
+    local query_text="${1:?query required}"
+    local variables_text="${2:?variables required}"
+    local response_file http_code
 
-  json_is_valid "$variables_text" || {
-    printf 'variables json must be valid JSON\n' >&2
-    return 1
-  }
+    json_is_valid "$variables_text" || {
+      printf 'variables json must be valid JSON\n' >&2
+      exit 1
+    }
 
-  response_file="$(mktemp)"
-  if ! http_code="$(
-    jq -nc --arg query "$query_text" --argjson variables "$variables_text" '{query: $query, variables: $variables}' \
-      | curl -sS \
-          --max-time "$CURL_TIMEOUT_SECONDS" \
-          -H 'content-type: application/json' \
-          --data @- \
-          --output "$response_file" \
-          --write-out '%{http_code}' \
-          --url "$GRAPHQL_URL"
-  )"; then
-    rm -f -- "$response_file"
-    return 1
-  fi
-  [[ "$http_code" =~ ^[0-9]{3}$ ]] || {
-    rm -f -- "$response_file"
-    printf 'curl did not report an HTTP status\n' >&2
-    return 1
-  }
-  cat -- "$response_file"
-  rm -f -- "$response_file"
+    response_file="$(mktemp)"
+    trap "rm -f -- '$response_file'" EXIT INT TERM
+    if ! http_code="$(
+      jq -nc --arg query "$query_text" --argjson variables "$variables_text" '{query: $query, variables: $variables}' \
+        | curl -sS \
+            --max-time "$CURL_TIMEOUT_SECONDS" \
+            -H 'content-type: application/json' \
+            --data @- \
+            --output "$response_file" \
+            --write-out '%{http_code}' \
+            --url "$GRAPHQL_URL"
+    )"; then
+      exit 1
+    fi
+    [[ "$http_code" =~ ^[0-9]{3}$ ]] || {
+      printf 'curl did not report an HTTP status\n' >&2
+      exit 1
+    }
+    cat -- "$response_file"
+  )
 }
 
 response_summary() {
