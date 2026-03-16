@@ -1,4 +1,3 @@
-import { isSlackInteractiveRepliesEnabled } from "../../extensions/slack/src/interactive-replies.js";
 import { resolveEffectiveMessagesConfig, resolveIdentityName } from "../agents/identity.js";
 import {
   extractShortModelName,
@@ -55,11 +54,7 @@ export function createReplyPrefixContext(params: {
       ? (getChannelPlugin(params.channel)?.messaging?.enableInteractiveReplies?.({
           cfg,
           accountId: params.accountId,
-        }) ??
-        (params.channel === "slack"
-          ? isSlackInteractiveRepliesEnabled({ cfg, accountId: params.accountId })
-          : undefined) ??
-        undefined)
+        }) ?? undefined)
       : undefined,
     responsePrefixContextProvider: () => prefixContext,
     onModelSelected,
