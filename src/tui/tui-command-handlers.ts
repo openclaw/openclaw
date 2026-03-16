@@ -174,13 +174,18 @@ export function createCommandHandlers(context: CommandHandlerContext) {
         const formattedKey = formatSessionKey(session.key);
         // Avoid redundant "title (key)" when title matches key
         const label =
-          title && title !== formattedKey ? `${title} (${formattedKey})` : formattedKey;
+          title && title !== formattedKey
+            ? `${title} (${formattedKey})`
+            : formattedKey;
         // Build description: time + message preview
         const timePart = session.updatedAt
           ? formatRelativeTimestamp(session.updatedAt, { dateFallback: true, fallback: "" })
           : "";
         const preview = session.lastMessagePreview?.replace(/\s+/g, " ").trim();
-        const description = timePart && preview ? `${timePart} · ${preview}` : preview ?? timePart;
+        const description =
+          timePart && preview
+            ? `${timePart} · ${preview}`
+            : preview ?? timePart;
         return {
           value: session.key,
           label,
@@ -320,7 +325,9 @@ export function createCommandHandlers(context: CommandHandlerContext) {
         break;
       case "think":
         if (!args) {
-          const thinkingLevelOptions = config ? { config } : undefined;
+          const thinkingLevelOptions = config
+            ? { config }
+            : undefined;
           const levels = formatThinkingLevels(
             state.sessionInfo.modelProvider,
             state.sessionInfo.model,
@@ -362,7 +369,9 @@ export function createCommandHandlers(context: CommandHandlerContext) {
       case "fast":
         if (!args || args === "status") {
           chatLog.addSystem(
-            `fast mode: ${state.sessionInfo.fastMode ? "on" : "off"}`,
+            `fast mode: ${
+              state.sessionInfo.fastMode ? "on" : "off"
+            }`,
           );
           break;
         }

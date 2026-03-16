@@ -20,7 +20,8 @@ function createHarness(params?: {
   const sendChat = params?.sendChat ?? vi.fn().mockResolvedValue({ runId: "r1" });
   const resetSession = params?.resetSession ?? vi.fn().mockResolvedValue({ ok: true });
   const setSession =
-    params?.setSession ?? (vi.fn().mockResolvedValue(undefined) as SetSessionMock);
+    params?.setSession
+    ?? (vi.fn().mockResolvedValue(undefined) as SetSessionMock);
   const addUser = vi.fn();
   const addSystem = vi.fn();
   const requestRender = vi.fn();
