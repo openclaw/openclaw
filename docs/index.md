@@ -183,6 +183,9 @@ Example:
   <Card title="Security" href="/gateway/security" icon="shield">
     Tokens, allowlists, and safety controls.
   </Card>
+  <Card title="Monitoring" href="/gateway/monitoring" icon="activity">
+    Practical monitoring patterns and community tooling.
+  </Card>
   <Card title="Troubleshooting" href="/gateway/troubleshooting" icon="wrench">
     Gateway diagnostics and common errors.
   </Card>
