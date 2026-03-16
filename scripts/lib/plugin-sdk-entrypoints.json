@@ -2,6 +2,8 @@
   "index",
   "core",
   "compat",
+  "provider-setup",
+  "sandbox",
   "routing",
   "telegram",
   "discord",
