@@ -184,7 +184,14 @@ export function loadPluginManifestRegistry(params: {
     }
     const manifest = manifestRes.manifest;
 
-    if (candidate.idHint && candidate.idHint !== manifest.id) {
+    if (
+      candidate.idHint &&
+      candidate.idHint !== manifest.id &&
+      // Suppress known `-provider` suffix mismatches (upstream convention:
+      // directory "ollama" + package "@openclaw/ollama-provider" → idHint
+      // "ollama-provider" vs manifest.id "ollama"). These are intentional.
+      candidate.idHint !== `${manifest.id}-provider`
+    ) {
       diagnostics.push({
         level: "warn",
         pluginId: manifest.id,
