@@ -468,6 +468,23 @@ describe("handleDiscordGuildAction - channel management", () => {
     });
   });
 
+  it("forwards appliedTags to channelEdit", async () => {
+    await handleDiscordGuildAction(
+      "channelEdit",
+      {
+        channelId: "C1",
+        appliedTags: ["tag1", "tag2"],
+      },
+      channelsEnabled,
+    );
+    expect(editChannelDiscord).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channelId: "C1",
+        appliedTags: ["tag1", "tag2"],
+      }),
+    );
+  });
+
   it("deletes a channel", async () => {
     await handleDiscordGuildAction("channelDelete", { channelId: "C1" }, channelsEnabled);
     expect(deleteChannelDiscord).toHaveBeenCalledWith("C1");
