@@ -57,6 +57,18 @@ openclaw plugins install ./my-bundle
 openclaw plugins install ./my-bundle.tgz
 ```
 
+For Claude marketplace installs, list the marketplace first, then install by
+marketplace entry name:
+
+```bash
+openclaw plugins marketplace list <marketplace-name>
+openclaw plugins install <plugin-name>@<marketplace-name>
+```
+
+OpenClaw resolves known Claude marketplace names from
+`~/.claude/plugins/known_marketplaces.json`. You can also pass an explicit
+marketplace source with `--marketplace`.
+
 ## Architecture
 
 OpenClaw's plugin system has four layers:
@@ -93,6 +105,10 @@ OpenClaw also recognizes two compatible external bundle layouts:
 - Claude-style bundles: `.claude-plugin/plugin.json` or the default Claude
   component layout without a manifest
 - Cursor-style bundles: `.cursor-plugin/plugin.json`
+
+Claude marketplace entries can point at any of these compatible bundles, or at
+native OpenClaw plugin sources. OpenClaw resolves the marketplace entry first,
+then runs the normal install path for the resolved source.
 
 They are shown in the plugin list as `format=bundle`, with a subtype of
 `codex` or `claude` in verbose/info output.
