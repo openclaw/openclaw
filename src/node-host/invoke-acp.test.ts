@@ -58,6 +58,7 @@ class FakeNodeHostRuntime implements AcpRuntime {
   closeError: Error | null = null;
   cancelError: Error | null = null;
   cancelRejectAfterSettled = false;
+  cancelReleasesTurn = true;
   rewriteStopReasonOnCancel = true;
   emittedEvents: AcpRuntimeEvent[] = [
     {
@@ -135,7 +136,9 @@ class FakeNodeHostRuntime implements AcpRuntime {
     if (this.rewriteStopReasonOnCancel) {
       this.nextStopReason = input.reason ?? "cancelled";
     }
-    turn.release.resolve();
+    if (this.cancelReleasesTurn) {
+      turn.release.resolve();
+    }
     if (this.cancelRejectAfterSettled) {
       await turn.finished.promise;
     }
@@ -1698,6 +1701,141 @@ describe("handleAcpInvokeCommand", () => {
           closeReason: "cleanup",
           errorMessage: "cancel backend exploded",
         },
+      },
+    });
+  });
+
+  it("waits for active close quiescence before reporting success or deleting the session", async () => {
+    const runtime = new FakeNodeHostRuntime();
+    runtime.cancelReleasesTurn = false;
+    registerAcpRuntimeBackend({
+      id: "acpx",
+      runtime,
+    });
+    const nodeEvents: NodeEventCall[] = [];
+
+    await handleAcpInvokeCommand(
+      buildFrame({
+        command: "acp.session.ensure",
+        payload: {
+          sessionKey: "agent:main:acp:test",
+          leaseId: "lease-1",
+          leaseEpoch: 1,
+          agent: "main",
+          mode: "persistent",
+        },
+      }),
+      buildDeps(async (event, payload) => {
+        nodeEvents.push({ event, payload });
+      }),
+    );
+
+    await handleAcpInvokeCommand(
+      buildFrame({
+        command: "acp.turn.start",
+        payload: {
+          sessionKey: "agent:main:acp:test",
+          runId: "run-close-waits",
+          leaseId: "lease-1",
+          leaseEpoch: 1,
+          requestId: "req-close-waits",
+          mode: "prompt",
+          text: "close after quiescence",
+        },
+      }),
+      buildDeps(async (event, payload) => {
+        nodeEvents.push({ event, payload });
+      }),
+    );
+
+    await runtime.waitForTurnStart();
+
+    let closeResolved = false;
+    const closePromise = handleAcpInvokeCommand(
+      buildFrame({
+        command: "acp.session.close",
+        payload: {
+          sessionKey: "agent:main:acp:test",
+          leaseId: "lease-1",
+          leaseEpoch: 1,
+          reason: "cleanup",
+        },
+      }),
+      buildDeps(),
+    ).then((result) => {
+      closeResolved = true;
+      return result;
+    });
+
+    await vi.waitFor(() => {
+      expect(runtime.cancelled).toHaveLength(1);
+    });
+    expect(runtime.closed).toHaveLength(0);
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(closeResolved).toBe(false);
+
+    const inFlightStatus = await handleAcpInvokeCommand(
+      buildFrame({
+        command: "acp.session.status",
+        payload: {
+          sessionKey: "agent:main:acp:test",
+          leaseId: "lease-1",
+          leaseEpoch: 1,
+        },
+      }),
+      buildDeps(),
+    );
+    expect(inFlightStatus).toMatchObject({
+      handled: true,
+      ok: true,
+      payload: {
+        state: "cancelling",
+        nodeRuntimeSessionId: "acpx-session-1",
+        nodeWorkerRunId: expect.any(String),
+      },
+    });
+
+    runtime.releaseTurnToComplete("end_turn");
+    await runtime.waitForTurnFinish();
+
+    const closeResult = await closePromise;
+    expect(closeResult).toMatchObject({
+      handled: true,
+      ok: true,
+      payload: {
+        accepted: true,
+      },
+    });
+    expect(runtime.closed).toMatchObject([
+      {
+        reason: "cleanup",
+      },
+    ]);
+
+    await vi.waitFor(() => {
+      expect(nodeEvents).toHaveLength(3);
+    });
+    const deliveredEvents = nodeEvents.length;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(nodeEvents).toHaveLength(deliveredEvents);
+
+    const status = await handleAcpInvokeCommand(
+      buildFrame({
+        command: "acp.session.status",
+        payload: {
+          sessionKey: "agent:main:acp:test",
+          leaseId: "lease-1",
+          leaseEpoch: 1,
+        },
+      }),
+      buildDeps(),
+    );
+
+    expect(status).toMatchObject({
+      handled: true,
+      ok: true,
+      payload: {
+        state: "missing",
       },
     });
   });

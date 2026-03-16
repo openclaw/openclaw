@@ -394,9 +394,21 @@ function recordCloseFailure(session: AcpNodeSessionRecord, reason: string, error
   session.updatedAt = Date.now();
 }
 
-async function closeSessionRecord(session: AcpNodeSessionRecord, reason: string): Promise<void> {
-  if (session.activeTurn) {
-    session.activeTurn.abortController.abort();
+async function closeSessionRecord(
+  session: AcpNodeSessionRecord,
+  reason: string,
+  opts?: { requireTurnQuiescence?: boolean },
+): Promise<void> {
+  const activeTurn = session.activeTurn;
+  if (activeTurn) {
+    session.state = "cancelling";
+    session.currentRunId = activeTurn.runId;
+    session.currentRequestId = activeTurn.requestId;
+    session.nodeWorkerRunId = activeTurn.nodeWorkerRunId;
+    activeTurn.cancelRequested = true;
+    activeTurn.cancelReason = reason;
+    session.updatedAt = Date.now();
+    activeTurn.abortController.abort();
     try {
       await session.runtime.cancel({
         handle: session.handle,
@@ -405,6 +417,24 @@ async function closeSessionRecord(session: AcpNodeSessionRecord, reason: string)
     } catch (error) {
       recordCloseFailure(session, reason, error);
       throw error;
+    }
+    if (opts?.requireTurnQuiescence) {
+      await activeTurn.completion;
+      if (nodeAcpSessions.get(session.sessionKey) !== session) {
+        throw new Error(`ACP session ${session.sessionKey} was replaced while closing`);
+      }
+      if (session.activeTurn === activeTurn) {
+        const error = new Error(
+          `ACP session close could not confirm worker quiescence for run ${activeTurn.runId}`,
+        );
+        recordCloseFailure(session, reason, error);
+        throw error;
+      }
+      if (session.terminalDeliveryFailure) {
+        throw new Error(
+          `ACP session close cannot complete because run ${session.terminalDeliveryFailure.runId} terminal delivery failed on this node`,
+        );
+      }
     }
   }
   try {
@@ -1024,7 +1054,9 @@ async function handleTurnCancel(params: AcpTurnCancelParams): Promise<AcpInvokeC
 async function handleSessionClose(params: AcpSessionCloseParams): Promise<AcpInvokeCommandResult> {
   const session = assertLeaseBinding(nodeAcpSessions.get(params.sessionKey), params);
   try {
-    await closeSessionRecord(session, params.reason ?? "session-close");
+    await closeSessionRecord(session, params.reason ?? "session-close", {
+      requireTurnQuiescence: true,
+    });
     if (nodeAcpSessions.get(params.sessionKey) === session) {
       nodeAcpSessions.delete(params.sessionKey);
     }
