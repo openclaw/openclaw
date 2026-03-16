@@ -701,8 +701,6 @@ describe("preflightDiscordMessage", () => {
         id: "msg-tf-1",
         content: `Hello <@${botUserId}> please help`,
         channelId,
-        // Simulate Discord thread behavior: mentionedUsers array is empty
-        // even though message text contains a valid mention
         mentionedUsers: [],
         author: { id: "user-1", bot: false, username: "Alice" },
       });
@@ -728,7 +726,6 @@ describe("preflightDiscordMessage", () => {
       const client = createGuildTextClient(channelId);
       const message = createDiscordMessage({
         id: "msg-tf-2",
-        // Use nickname mention format <@!id>
         content: `<@!${botUserId}> can you review this?`,
         channelId,
         mentionedUsers: [],
@@ -774,7 +771,6 @@ describe("preflightDiscordMessage", () => {
         guildEntries: { [guildId]: { requireMention: true } },
       });
 
-      // Should be dropped: mention gating is on but we are not mentioned
       expect(result).toBeNull();
     });
 
@@ -786,7 +782,6 @@ describe("preflightDiscordMessage", () => {
         id: "msg-tf-4",
         content: `Hello <@${botUserId}>`,
         channelId,
-        // Both text and array present (normal non-thread case)
         mentionedUsers: [{ id: botUserId }],
         author: { id: "user-4", bot: false, username: "Dave" },
       });
@@ -829,10 +824,10 @@ describe("preflightDiscordMessage", () => {
         guildEntries: { [guildId]: { requireMention: true } },
       });
 
-      // No mention in text → mention gating fails → dropped
       expect(result).toBeNull();
     });
   });
+
 });
 
 describe("shouldIgnoreBoundThreadWebhookMessage", () => {
