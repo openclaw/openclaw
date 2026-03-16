@@ -14,6 +14,8 @@ import {
   type RobotConfig,
 } from "./robot-config-loader.js";
 
+const ABB_PLUGIN_VERSION = "1.0.1-movj.1";
+
 // ── Global state ─────────────────────────────────────────────────────────────
 
 let controller: ABBController | null = null;
@@ -63,6 +65,7 @@ export function createABBRobotTool(pluginConfig: Record<string, unknown>): AnyAg
             "set_preset", "run_sequence", "go_home", "identify_robot",
             "list_robots", "list_presets", "list_sequences", "execute_rapid",
             "load_rapid", "start_program", "stop_program", "motors_on", "motors_off",
+            "get_version",
             "movj",
             "dance_two_points", "dance_template", "get_motion_memory", "reset_motion_memory",
           ],
@@ -95,6 +98,13 @@ export function createABBRobotTool(pluginConfig: Record<string, unknown>): AnyAg
 
     execute: async (_id: string, params: Record<string, unknown>) => {
       const action = String(params["action"] ?? "");
+
+      if (action === "get_version") {
+        return {
+          content: [{ type: "text" as const, text: `abb_robot plugin version: ${ABB_PLUGIN_VERSION}` }],
+          details: { plugin: "abb-robot-control", version: ABB_PLUGIN_VERSION },
+        };
+      }
 
       // Connect action
       if (action === "connect") {

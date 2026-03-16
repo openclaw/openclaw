@@ -1,6 +1,6 @@
 {
   "name": "@openclaw/abb-robot-control",
-  "version": "1.0.0",
+  "version": "1.0.1-movj.1",
   "description": "OpenClaw MCP plugin for controlling actual ABB robots via PC SDK",
   "type": "module",
   "main": "index.js",

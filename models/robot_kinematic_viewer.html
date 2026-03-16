@@ -1687,7 +1687,6 @@
                 else if (msg.cmd === 'movj' && Array.isArray(msg.joints)) {
                     const speed = Number(msg.speed ?? 45);
                     const startJoints = Array.isArray(msg.start_joints) ? msg.start_joints : null;
-                    sendWsReply({ cmd: 'ok', action: 'movj', status: 'started' });
                     movj(msg.joints, speed, startJoints)
                         .then((result) => {
                             sendWsReply({

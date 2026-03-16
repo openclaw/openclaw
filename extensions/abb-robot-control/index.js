@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const BRIDGE_DLL_PATH = path.join(__dirname, "src", "ABBBridge.dll");
+const ABB_PLUGIN_VERSION = "1.0.1-movj.1";
 
 const state = {
   mode: "virtual",
@@ -347,6 +348,14 @@ const plugin = {
         const action = String(params?.action ?? "").trim();
         if (!action) {
           return asTextResult("Missing action.", { success: false });
+        }
+
+        if (action === "get_version") {
+          return asTextResult(`abb_robot plugin version: ${ABB_PLUGIN_VERSION}`, {
+            success: true,
+            plugin: "abb-robot-control",
+            version: ABB_PLUGIN_VERSION
+          });
         }
 
         const requestedMode = String(params?.mode ?? config?.defaultMode ?? "auto").toLowerCase();
