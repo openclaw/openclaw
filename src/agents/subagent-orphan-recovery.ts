@@ -129,25 +129,31 @@ export async function recoverOrphanedSubagentSessions(params: {
 
         log.info(`found orphaned subagent session: ${childSessionKey} (run=${runId})`);
 
-        // Clear the aborted flag before resuming
-        await updateSessionStore(storePath, (currentStore) => {
-          const current = currentStore[childSessionKey];
-          if (current) {
-            current.abortedLastRun = false;
-            current.updatedAt = Date.now();
-            currentStore[childSessionKey] = current;
-          }
-        });
-
-        // Resume the session with the original task context
+        // Resume the session with the original task context.
+        // We intentionally do NOT clear abortedLastRun before attempting
+        // the resume — if callGateway fails (e.g. gateway still booting),
+        // the flag stays true so the next restart can retry.
         const resumed = await resumeOrphanedSession({
           sessionKey: childSessionKey,
           task: runRecord.task,
         });
 
         if (resumed) {
+          // Only clear the aborted flag after confirmed successful resume.
+          await updateSessionStore(storePath, (currentStore) => {
+            const current = currentStore[childSessionKey];
+            if (current) {
+              current.abortedLastRun = false;
+              current.updatedAt = Date.now();
+              currentStore[childSessionKey] = current;
+            }
+          });
           result.recovered++;
         } else {
+          // Flag stays as abortedLastRun=true so next restart can retry
+          log.warn(
+            `resume failed for ${childSessionKey}; abortedLastRun flag preserved for retry on next restart`,
+          );
           result.failed++;
         }
       } catch (err) {
