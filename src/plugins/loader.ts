@@ -54,6 +54,10 @@ export type PluginLoadOptions = {
   mode?: "full" | "validate";
   onlyPluginIds?: string[];
   includeSetupOnlyChannelPlugins?: boolean;
+  /**
+   * Prefer `setupEntry` for configured channel plugins that explicitly opt in
+   * via package metadata because their setup entry covers the pre-listen startup surface.
+   */
   preferSetupRuntimeForChannelPlugins?: boolean;
   activate?: boolean;
 };
@@ -449,6 +453,7 @@ function resolveSetupChannelRegistration(moduleExport: unknown): {
 function shouldLoadChannelPluginInSetupRuntime(params: {
   manifestChannels: string[];
   setupSource?: string;
+  startupDeferConfiguredChannelFullLoadUntilAfterListen?: boolean;
   cfg: OpenClawConfig;
   env: NodeJS.ProcessEnv;
   preferSetupRuntimeForChannelPlugins?: boolean;
@@ -456,7 +461,10 @@ function shouldLoadChannelPluginInSetupRuntime(params: {
   if (!params.setupSource || params.manifestChannels.length === 0) {
     return false;
   }
-  if (params.preferSetupRuntimeForChannelPlugins) {
+  if (
+    params.preferSetupRuntimeForChannelPlugins &&
+    params.startupDeferConfiguredChannelFullLoadUntilAfterListen === true
+  ) {
     return true;
   }
   return !params.manifestChannels.some((channelId) =>
@@ -1076,6 +1084,8 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
         shouldLoadChannelPluginInSetupRuntime({
           manifestChannels: manifestRecord.channels,
           setupSource: manifestRecord.setupSource,
+          startupDeferConfiguredChannelFullLoadUntilAfterListen:
+            manifestRecord.startupDeferConfiguredChannelFullLoadUntilAfterListen,
           cfg,
           env,
           preferSetupRuntimeForChannelPlugins,

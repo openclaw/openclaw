@@ -242,11 +242,20 @@ export type PluginPackageInstall = {
   defaultChoice?: "npm" | "local";
 };
 
+export type OpenClawPackageStartup = {
+  /**
+   * Opt-in for channel plugins whose `setupEntry` fully covers the gateway
+   * startup surface needed before the server starts listening.
+   */
+  deferConfiguredChannelFullLoadUntilAfterListen?: boolean;
+};
+
 export type OpenClawPackageManifest = {
   extensions?: string[];
   setupEntry?: string;
   channel?: PluginPackageChannel;
   install?: PluginPackageInstall;
+  startup?: OpenClawPackageStartup;
 };
 
 export const DEFAULT_PLUGIN_ENTRY_CANDIDATES = [
