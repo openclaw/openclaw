@@ -78,6 +78,11 @@ async function readLatestSnapshot(
     if ((error as NodeJS.ErrnoException).code === "ENOENT") {
       return undefined;
     }
+    // Recover from corrupt/truncated JSON — snapshot will be rebuilt from next update
+    if (error instanceof SyntaxError) {
+      logSreMetric("relationship_index_snapshot_corrupt", { path: filePath, error: error.message });
+      return undefined;
+    }
     throw error;
   }
 }
@@ -173,7 +178,7 @@ export async function appendRelationshipIndexUpdate(
         ...Object.fromEntries(update.nodes.map((node) => [node.entityId, node])),
       },
     };
-    writes.push(fs.writeFile(paths.latestByEntityPath, JSON.stringify(latest, null, 2), "utf8"));
+    writes.push(fs.writeFile(paths.latestByEntityPath, JSON.stringify(latest), "utf8"));
     await Promise.all(writes);
     logSreMetric("relationship_index_write", {
       nodes: update.nodes.length,
