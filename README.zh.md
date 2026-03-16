@@ -18,6 +18,11 @@
   <a href="LICENSE"><img src="https://img.shields.io/badge/许可证-MIT-blue.svg?style=for-the-badge" alt="MIT 许可证"></a>
 </p>
 
+<p align="center">
+  <a href="README.md">English</a> ·
+  <strong>中文</strong>
+</p>
+
 **OpenClaw** 是一个可以在你自己设备上运行的 _个人 AI 助手_。
 它可以在你常用的渠道上回复你（WhatsApp, Telegram, Slack, Discord, Google Chat, Signal, iMessage, BlueBubbles, IRC, Microsoft Teams, Matrix, 飞书, LINE, Mattermost, Nextcloud Talk, Nostr, Synology Chat, Tlon, Twitch, Zalo, Zalo Personal, WebChat）。它可以在 macOS/iOS/Android 上进行收听和通话，并能渲染一个受你控制的实时画布（Canvas）。Gateway（网关）仅仅是控制平面 — 产品本身就是助手。
 
@@ -29,11 +34,6 @@
 该向导会引导你完成网关 (Gateway)、工作空间 (Workspace)、渠道 (Channels) 和技能 (Skills) 的设置。CLI 向导是推荐的路径，支持 **macOS, Linux, 和 Windows (强烈建议通过 WSL2)**。
 支持 npm, pnpm 或 bun。
 新安装？从这里开始：[快速入门](https://docs.openclaw.ai/start/getting-started)
-
-<p align="center">
-  <a href="README.md">English</a> ·
-  <b>中文</b>
-</p>
 
 ## 赞助商
 
