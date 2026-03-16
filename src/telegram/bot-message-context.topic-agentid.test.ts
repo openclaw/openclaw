@@ -43,6 +43,7 @@ describe("buildTelegramMessageContext per-topic agentId routing", () => {
   }) {
     return await buildTelegramMessageContextForTest({
       message: buildForumMessage(params.threadId),
+      cfg: loadConfig() as never,
       options: { forceWasMentioned: true },
       resolveGroupActivation: () => true,
       resolveTelegramGroupConfig: () => ({
@@ -115,6 +116,7 @@ describe("buildTelegramMessageContext per-topic agentId routing", () => {
 
   it("routes DM topic to specific agent when agentId is set", async () => {
     const ctx = await buildTelegramMessageContextForTest({
+      cfg: loadConfig() as never,
       message: {
         message_id: 1,
         chat: {
