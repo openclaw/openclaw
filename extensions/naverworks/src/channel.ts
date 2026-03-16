@@ -289,7 +289,12 @@ export function createNaverWorksPlugin() {
               `naverworks[${account.accountId}]: processing inbound event userId=${event.userId}${event.teamId ? ` teamId=${event.teamId}` : ""}`,
             );
             const runtime = getNaverWorksRuntime();
+            log?.info?.(`naverworks[${account.accountId}]: loading fresh config for inbound event`);
             const freshCfg = await runtime.config.loadConfig();
+            log?.info?.(`naverworks[${account.accountId}]: config load complete`);
+            log?.info?.(
+              `naverworks[${account.accountId}]: resolving route for peer=${event.userId}${event.teamId ? ` teamId=${event.teamId}` : ""}`,
+            );
             const route = runtime.channel.routing.resolveAgentRoute({
               cfg: freshCfg,
               channel: CHANNEL_ID,
@@ -310,12 +315,21 @@ export function createNaverWorksPlugin() {
 
             const inboundBody =
               event.text?.trim() || (event.mediaKind ? `<media:${event.mediaKind}>` : "<media>");
+            log?.info?.(
+              `naverworks[${account.accountId}]: preparing inbound context bodyType=${event.mediaKind ? "media" : "text"} mediaUrl=${event.mediaUrl ? "yes" : "no"}`,
+            );
+            log?.info?.(
+              `naverworks[${account.accountId}]: downloading inbound media=${event.mediaUrl ? "yes" : "no"}`,
+            );
             const downloadedMedia = await downloadInboundMedia({
               runtime,
               account,
               event,
               log,
             });
+            log?.info?.(
+              `naverworks[${account.accountId}]: inbound media download complete saved=${downloadedMedia.path ? "yes" : "no"} mediaType=${downloadedMedia.mediaType ?? "none"}`,
+            );
             const mediaPath = downloadedMedia.path;
             const mediaUrls = event.mediaUrl ? [event.mediaUrl] : undefined;
             const mediaPaths = mediaPath ? [mediaPath] : undefined;
@@ -351,6 +365,9 @@ export function createNaverWorksPlugin() {
               ...(locationContext ?? {}),
             };
 
+            log?.info?.(
+              `naverworks[${account.accountId}]: dispatching buffered reply sessionKey=${route.sessionKey}`,
+            );
             await runtime.channel.reply.dispatchReplyWithBufferedBlockDispatcher({
               ctx: msgCtx,
               cfg: freshCfg,
@@ -369,6 +386,9 @@ export function createNaverWorksPlugin() {
                   const mediaUrls = resolveOutboundMediaUrls(payload ?? {});
                   const remoteMediaUrls = mediaUrls.filter((url) => /^https?:\/\//i.test(url));
                   const localMediaPaths = mediaUrls.filter((url) => !/^https?:\/\//i.test(url));
+                  log?.info?.(
+                    `naverworks[${account.accountId}]: deliver callback text=${text ? "yes" : "no"} remoteMedia=${remoteMediaUrls.length} localMedia=${localMediaPaths.length}`,
+                  );
 
                   if (localMediaPaths.length > 0) {
                     log?.warn?.(
@@ -438,6 +458,7 @@ export function createNaverWorksPlugin() {
                 },
               },
             });
+            log?.info?.(`naverworks[${account.accountId}]: buffered reply dispatch complete`);
             log?.info?.(
               `naverworks[${account.accountId}]: inbound event handled for ${event.userId} (agent=${route.agentId})`,
             );

@@ -32,6 +32,7 @@ const SEARCH_PROVIDERS = [
   "perplexity",
   "playwright-mcp",
 ] as const;
+type SearchProvider = (typeof SEARCH_PROVIDERS)[number];
 const DEFAULT_SEARCH_COUNT = 5;
 const MAX_SEARCH_COUNT = 10;
 
@@ -688,6 +689,10 @@ function resolveSearchProvider(search?: WebSearchConfig): (typeof SEARCH_PROVIDE
   }
 
   return "brave";
+}
+
+function isSearchProvider(value: string | undefined): value is SearchProvider {
+  return Boolean(value && SEARCH_PROVIDERS.includes(value as SearchProvider));
 }
 
 function resolveBraveConfig(search?: WebSearchConfig): BraveConfig {
@@ -2231,10 +2236,12 @@ export function createWebSearchTool(options?: {
     return null;
   }
 
-  const provider =
-    options?.runtimeWebSearch?.selectedProvider ??
-    options?.runtimeWebSearch?.providerConfigured ??
-    resolveSearchProvider(search);
+  const runtimeProvider = isSearchProvider(options?.runtimeWebSearch?.selectedProvider)
+    ? options.runtimeWebSearch.selectedProvider
+    : isSearchProvider(options?.runtimeWebSearch?.providerConfigured)
+      ? options.runtimeWebSearch.providerConfigured
+      : undefined;
+  const provider = runtimeProvider ?? resolveSearchProvider(search);
   const perplexityConfig = resolvePerplexityConfig(search);
   const perplexitySchemaTransportHint =
     options?.runtimeWebSearch?.perplexityTransport ??

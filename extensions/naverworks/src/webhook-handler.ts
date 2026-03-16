@@ -535,7 +535,12 @@ export function createNaverWorksWebhookHandler(deps: NaverWorksWebhookDeps) {
     try {
       await deliver(event);
     } catch (error) {
-      log?.error?.("naverworks: async deliver failed", error);
+      const message = error instanceof Error ? error.message : String(error);
+      const stack = error instanceof Error ? error.stack : undefined;
+      log?.error?.(`naverworks: async deliver failed: ${message}`);
+      if (stack && stack !== message) {
+        log?.error?.(stack);
+      }
     }
   };
 }
