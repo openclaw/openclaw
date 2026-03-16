@@ -186,7 +186,7 @@ describe("telegramPlugin duplicate token guard", () => {
   });
 
   it("blocks startup for duplicate token accounts before polling starts", async () => {
-    const { runtimeMonitorTelegramProvider, runtimeProbeTelegram } = installGatewayRuntime({
+    const { monitorTelegramProvider, probeTelegram } = installGatewayRuntime({
       probeOk: true,
     });
 
@@ -202,12 +202,12 @@ describe("telegramPlugin duplicate token guard", () => {
 
     expect(probeTelegramMock).not.toHaveBeenCalled();
     expect(monitorTelegramProviderMock).not.toHaveBeenCalled();
-    expect(runtimeProbeTelegram).not.toHaveBeenCalled();
-    expect(runtimeMonitorTelegramProvider).not.toHaveBeenCalled();
+    expect(probeTelegram).not.toHaveBeenCalled();
+    expect(monitorTelegramProvider).not.toHaveBeenCalled();
   });
 
   it("passes webhookPort through to monitor startup options", async () => {
-    const { runtimeMonitorTelegramProvider, runtimeProbeTelegram } = installGatewayRuntime({
+    const { monitorTelegramProvider, probeTelegram } = installGatewayRuntime({
       probeOk: true,
       botUsername: "opsbot",
     });
@@ -245,8 +245,8 @@ describe("telegramPlugin duplicate token guard", () => {
         webhookPort: 9876,
       }),
     );
-    expect(runtimeProbeTelegram).not.toHaveBeenCalled();
-    expect(runtimeMonitorTelegramProvider).not.toHaveBeenCalled();
+    expect(probeTelegram).toHaveBeenCalled();
+    expect(monitorTelegramProvider).toHaveBeenCalled();
   });
 
   it("passes account proxy and network settings into Telegram probes", async () => {
@@ -478,7 +478,7 @@ describe("telegramPlugin duplicate token guard", () => {
   });
 
   it("does not crash startup when a resolved account token is undefined", async () => {
-    const { runtimeMonitorTelegramProvider, runtimeProbeTelegram } = installGatewayRuntime({
+    const { monitorTelegramProvider, probeTelegram } = installGatewayRuntime({
       probeOk: false,
     });
     probeTelegramMock.mockResolvedValue({ ok: false, elapsedMs: 1 });
@@ -506,8 +506,8 @@ describe("telegramPlugin duplicate token guard", () => {
         token: "",
       }),
     );
-    expect(runtimeProbeTelegram).not.toHaveBeenCalled();
-    expect(runtimeMonitorTelegramProvider).not.toHaveBeenCalled();
+    expect(probeTelegram).toHaveBeenCalled();
+    expect(monitorTelegramProvider).toHaveBeenCalled();
   });
 });
 
