@@ -298,6 +298,7 @@ export async function sendBlueBubblesMedia(params: {
     contentType: resolvedContentType ?? undefined,
     replyToMessageGuid,
     asVoice,
+    maxBytes,
     opts: {
       cfg,
       accountId,

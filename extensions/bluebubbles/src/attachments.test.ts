@@ -648,6 +648,33 @@ describe("sendBlueBubblesAttachment", () => {
     );
   });
 
+  it("rejects voice memos when CAF conversion exceeds the media size limit", async () => {
+    execFileMock.mockImplementationOnce(async (_file, args, _options, callback) => {
+      const normalizedArgs = Array.isArray(args) ? [...args] : [];
+      const outputPath =
+        typeof normalizedArgs.at(-1) === "string" ? normalizedArgs.at(-1) : undefined;
+      if (typeof outputPath === "string") {
+        await fs.writeFile(outputPath, new Uint8Array(2 * 1024 * 1024));
+      }
+      callback?.(null, "", "");
+      return {} as ReturnType<typeof execFileMock>;
+    });
+
+    await expect(
+      sendBlueBubblesAttachment({
+        to: "chat_guid:iMessage;-;+15551234567",
+        buffer: new Uint8Array([1, 2, 3]),
+        filename: "voice.ogg",
+        contentType: "audio/ogg; codecs=opus",
+        asVoice: true,
+        maxBytes: 1024 * 1024,
+        opts: { serverUrl: "http://localhost:1234", password: "test" },
+      }),
+    ).rejects.toThrow("Media exceeds 1MB limit");
+
+    expect(mockFetch).not.toHaveBeenCalled();
+  });
+
   it("warns and downgrades attachment reply threading when private API status is unknown", async () => {
     const runtimeLog = vi.fn();
     setBlueBubblesRuntime({

@@ -39,6 +39,7 @@ const AUDIO_MIME_WAV = new Set(["audio/wav", "audio/x-wav", "audio/wave", "audio
 const AUDIO_MIME_OPUS = new Set(["audio/ogg", "audio/ogg; codecs=opus", "audio/opus"]);
 const VOICE_FFMPEG_TIMEOUT_MS = 15_000;
 const VOICE_FFMPEG_MAX_BUFFER_BYTES = 10 * 1024 * 1024;
+const MB = 1024 * 1024;
 
 function sanitizeFilename(input: string | undefined, fallback: string): string {
   const trimmed = input?.trim() ?? "";
@@ -185,6 +186,31 @@ function readMediaFetchErrorCode(error: unknown): MediaFetchErrorCode | undefine
     : undefined;
 }
 
+function assertMediaWithinLimit(sizeBytes: number, maxBytes?: number): void {
+  if (typeof maxBytes !== "number" || maxBytes <= 0) {
+    return;
+  }
+  if (sizeBytes <= maxBytes) {
+    return;
+  }
+  const maxLabel = (maxBytes / MB).toFixed(0);
+  const sizeLabel = (sizeBytes / MB).toFixed(2);
+  const error = new Error(`Media exceeds ${maxLabel}MB limit (got ${sizeLabel}MB)`) as Error & {
+    code?: string;
+  };
+  error.code = "max_bytes";
+  throw error;
+}
+
+function isMediaLimitError(error: unknown): boolean {
+  return (
+    !!error &&
+    typeof error === "object" &&
+    "code" in error &&
+    (error as { code?: unknown }).code === "max_bytes"
+  );
+}
+
 export async function downloadBlueBubblesAttachment(
   attachment: BlueBubblesAttachment,
   opts: BlueBubblesAttachmentOpts & { maxBytes?: number } = {},
@@ -249,10 +275,12 @@ export async function sendBlueBubblesAttachment(params: {
   replyToMessageGuid?: string;
   replyToPartIndex?: number;
   asVoice?: boolean;
+  maxBytes?: number;
   opts?: BlueBubblesAttachmentOpts;
 }): Promise<SendBlueBubblesAttachmentResult> {
   const { to, caption, replyToMessageGuid, replyToPartIndex, asVoice, opts = {} } = params;
   let { buffer, filename, contentType } = params;
+  const { maxBytes } = params;
   const wantsVoice = asVoice === true;
   const fallbackName = wantsVoice ? "Audio Message" : "attachment";
   filename = sanitizeFilename(filename, fallbackName);
@@ -298,9 +326,13 @@ export async function sendBlueBubblesAttachment(params: {
           buffer,
           resolveVoiceInputExtension(filename, contentType),
         );
+        assertMediaWithinLimit(buffer.byteLength, maxBytes);
         filename = ensureExtension(filename, ".caf", fallbackName);
         contentType = "audio/x-caf";
       } catch (error) {
+        if (isMediaLimitError(error)) {
+          throw error;
+        }
         warnBlueBubbles(
           `Voice message CAF conversion failed; sending as regular attachment instead: ${
             error instanceof Error ? error.message : String(error)
