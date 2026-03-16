@@ -234,9 +234,5 @@
   {
     "source": "env var",
     "target": "环境变量"
-  },
-  {
-    "source": "Clover Stack Master Prompt",
-    "target": "Clover 堆栈主提示词"
   }
 ]
