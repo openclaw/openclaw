@@ -1,8 +1,8 @@
 {
-  "name": "@openclaw/web-search-grok",
+  "name": "@openclaw/google-plugin",
   "version": "2026.3.14",
   "private": true,
-  "description": "OpenClaw Grok web search provider plugin",
+  "description": "OpenClaw Google plugin",
   "type": "module",
   "openclaw": {
     "extensions": [
