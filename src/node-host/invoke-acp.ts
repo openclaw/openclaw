@@ -670,13 +670,12 @@ function settleCompletedTurn(session: AcpNodeSessionRecord, activeTurn: AcpNodeA
     requestId: activeTurn.requestId,
     nodeWorkerRunId: activeTurn.nodeWorkerRunId,
   });
-  session.state = "idle";
+  session.state = session.closeFailure ? "error" : "idle";
   session.currentRunId = undefined;
   session.currentRequestId = undefined;
   session.nodeWorkerRunId = undefined;
   session.activeTurn = undefined;
   session.terminalDeliveryFailure = undefined;
-  session.closeFailure = undefined;
   session.updatedAt = Date.now();
 }
 
@@ -974,10 +973,11 @@ async function handleTurnCancel(params: AcpTurnCancelParams): Promise<AcpInvokeC
       message: `ACP session ${params.sessionKey} active run is ${session.currentRunId}, not ${params.runId}`,
     };
   }
+  const activeTurn = session.activeTurn;
   session.state = "cancelling";
   session.currentRunId = params.runId;
-  session.activeTurn.cancelRequested = true;
-  session.activeTurn.cancelReason = params.reason?.trim() || session.activeTurn.cancelReason;
+  activeTurn.cancelRequested = true;
+  activeTurn.cancelReason = params.reason?.trim() || activeTurn.cancelReason;
   session.updatedAt = Date.now();
   try {
     await session.runtime.cancel({
@@ -985,9 +985,28 @@ async function handleTurnCancel(params: AcpTurnCancelParams): Promise<AcpInvokeC
       ...(params.reason ? { reason: params.reason } : {}),
     });
   } catch (error) {
+    await Promise.resolve();
+    if (
+      nodeAcpSessions.get(session.sessionKey) !== session ||
+      session.activeTurn !== activeTurn ||
+      session.currentRunId !== params.runId
+    ) {
+      return {
+        handled: true,
+        ok: true,
+        payload: {
+          ok: true,
+          sessionKey: params.sessionKey,
+          runId: params.runId,
+          leaseId: session.leaseId,
+          leaseEpoch: session.leaseEpoch,
+          accepted: true,
+        },
+      };
+    }
     session.state = "running";
-    session.activeTurn.cancelRequested = false;
-    session.activeTurn.cancelReason = undefined;
+    activeTurn.cancelRequested = false;
+    activeTurn.cancelReason = undefined;
     throw error;
   }
   return {
