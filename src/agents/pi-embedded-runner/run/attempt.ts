@@ -342,9 +342,7 @@ function stripAbortedAssistantMessages(activeSession: {
 }) {
   const strippedMessages = activeSession.messages.slice();
   while (strippedMessages.length > 0) {
-    const last = strippedMessages.at(-1) as
-      | AgentMessage
-      | { role?: string; stopReason?: string };
+    const last = strippedMessages.at(-1) as AgentMessage | { role?: string; stopReason?: string };
     if (last?.role === "assistant" && "stopReason" in last && last.stopReason === "aborted") {
       strippedMessages.pop();
       continue;
