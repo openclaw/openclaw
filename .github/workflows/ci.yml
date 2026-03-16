@@ -305,6 +305,9 @@ jobs:
       - name: Detect committed private keys
         run: pre-commit run --all-files detect-private-key
 
+      - name: Detect committed secrets against baseline
+        run: pre-commit run --all-files detect-secrets
+
       - name: Audit changed GitHub workflows with zizmor
         run: |
           set -euo pipefail
