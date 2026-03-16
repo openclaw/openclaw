@@ -101,6 +101,17 @@ async function executeSend(params: {
     | undefined;
 }
 
+async function executeMessageTool(params: {
+  action: Record<string, unknown>;
+  toolOptions?: Partial<Parameters<typeof createMessageTool>[0]>;
+}) {
+  const tool = createMessageTool({
+    config: {} as never,
+    ...params.toolOptions,
+  });
+  return tool.execute("1", params.action);
+}
+
 describe("message tool agent routing", () => {
   it("derives agentId from the session key", async () => {
     mockSendResult();
@@ -119,6 +130,47 @@ describe("message tool agent routing", () => {
     const call = mocks.runMessageAction.mock.calls[0]?.[0];
     expect(call?.agentId).toBe("alpha");
     expect(call?.sessionKey).toBe("agent:alpha:main");
+  });
+
+  it("returns error details when core send produced no delivery result", async () => {
+    mocks.runMessageAction.mockClear();
+    mocks.runMessageAction.mockResolvedValue({
+      kind: "send",
+      action: "send",
+      channel: "feishu",
+      to: "chat:oc_missing",
+      handledBy: "core",
+      payload: {
+        channel: "feishu",
+        to: "chat:oc_missing",
+        via: "direct",
+        mediaUrl: null,
+      },
+      sendResult: {
+        channel: "feishu",
+        to: "chat:oc_missing",
+        via: "direct",
+        mediaUrl: null,
+      },
+      dryRun: false,
+    } satisfies MessageActionRunResult);
+
+    const result = await executeMessageTool({
+      action: {
+        action: "send",
+        channel: "feishu",
+        target: "chat:oc_missing",
+        message: "hi",
+      },
+    });
+
+    expect(result).toMatchObject({
+      details: expect.objectContaining({
+        status: "error",
+        channel: "feishu",
+        to: "chat:oc_missing",
+      }),
+    });
   });
 });
 

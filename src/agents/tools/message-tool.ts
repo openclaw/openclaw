@@ -16,7 +16,11 @@ import { getChannelsCommandSecretTargetIds } from "../../cli/command-secret-targ
 import type { OpenClawConfig } from "../../config/config.js";
 import { loadConfig } from "../../config/config.js";
 import { GATEWAY_CLIENT_IDS, GATEWAY_CLIENT_MODES } from "../../gateway/protocol/client-info.js";
-import { getToolResult, runMessageAction } from "../../infra/outbound/message-action-runner.js";
+import {
+  getToolResult,
+  runMessageAction,
+  type MessageActionRunResult,
+} from "../../infra/outbound/message-action-runner.js";
 import { normalizeTargetForProvider } from "../../infra/outbound/target-normalization.js";
 import { POLL_CREATION_PARAM_DEFS, POLL_CREATION_PARAM_NAMES } from "../../poll-params.js";
 import { normalizeAccountId } from "../../routing/session-key.js";
@@ -782,6 +786,46 @@ function buildMessageToolDescription(options?: {
   return `${baseDescription} Supports actions: send, delete, react, poll, pin, threads, and more.`;
 }
 
+function readMessageDeliveryMessageId(result: MessageActionRunResult): string | undefined {
+  if (result.kind !== "send") {
+    return undefined;
+  }
+  const sendResult =
+    result.sendResult && typeof result.sendResult === "object"
+      ? (result.sendResult as { result?: unknown })
+      : undefined;
+  const payload =
+    result.payload && typeof result.payload === "object"
+      ? (result.payload as { result?: unknown })
+      : undefined;
+  const deliveryResult = sendResult?.result ?? payload?.result;
+  if (!deliveryResult || typeof deliveryResult !== "object") {
+    return undefined;
+  }
+  const messageId = (deliveryResult as { messageId?: unknown }).messageId;
+  return typeof messageId === "string" && messageId.trim() ? messageId : undefined;
+}
+
+function buildMissingDeliveryResultToolResult(
+  result: MessageActionRunResult,
+): ReturnType<typeof jsonResult> | undefined {
+  if (result.kind !== "send" || result.dryRun) {
+    return undefined;
+  }
+  if (readMessageDeliveryMessageId(result)) {
+    return undefined;
+  }
+  const payload =
+    result.payload && typeof result.payload === "object"
+      ? (result.payload as Record<string, unknown>)
+      : {};
+  return jsonResult({
+    ...payload,
+    status: "error",
+    error: "Message send produced no delivery result",
+  });
+}
+
 export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
   const agentAccountId = resolveAgentAccountId(options?.agentAccountId);
   const schema = options?.config
@@ -910,6 +954,10 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
       const toolResult = getToolResult(result);
       if (toolResult) {
         return toolResult;
+      }
+      const missingDeliveryResult = buildMissingDeliveryResultToolResult(result);
+      if (missingDeliveryResult) {
+        return missingDeliveryResult;
       }
       return jsonResult(result.payload);
     },
