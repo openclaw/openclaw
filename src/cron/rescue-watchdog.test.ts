@@ -38,6 +38,19 @@ const loadConfig = vi.hoisted(() =>
     },
   })),
 );
+
+function createDefaultConfig() {
+  return {
+    gateway: {
+      port: 18_789,
+      bind: "loopback",
+      auth: {
+        mode: "token",
+        token: "main-token",
+      },
+    },
+  };
+}
 const restartService = vi.hoisted(() => vi.fn(async () => {}));
 const readServiceCommand = vi.hoisted(() =>
   vi.fn<
@@ -57,6 +70,11 @@ const loadGatewayTlsRuntime = vi.hoisted(() =>
 const resolveGatewayProbeAuthSafe = vi.hoisted(() =>
   vi.fn<() => MockProbeAuth>(() => ({
     auth: { token: "main-token" },
+  })),
+);
+const createConfigIO = vi.hoisted(() =>
+  vi.fn((_params?: { env?: NodeJS.ProcessEnv }) => ({
+    loadConfig,
   })),
 );
 const runCommandWithTimeout = vi.hoisted(() =>
@@ -83,9 +101,7 @@ const resolveGatewayBindHost = vi.hoisted(() =>
 );
 
 vi.mock("../config/io.js", () => ({
-  createConfigIO: vi.fn(() => ({
-    loadConfig,
-  })),
+  createConfigIO,
 }));
 
 vi.mock("../daemon/service.js", () => ({
@@ -121,7 +137,8 @@ describe("runRescueWatchdogJob", () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-03-10T00:00:00.000Z"));
     process.argv = ["/usr/local/bin/openclaw", "gateway"];
-    loadConfig.mockClear();
+    loadConfig.mockReset();
+    loadConfig.mockReturnValue(createDefaultConfig());
     restartService.mockClear();
     readServiceCommand.mockReset();
     readServiceCommand.mockResolvedValue(null);
@@ -135,6 +152,7 @@ describe("runRescueWatchdogJob", () => {
     resolveGatewayProbeAuthSafe.mockReturnValue({
       auth: { token: "main-token" },
     });
+    createConfigIO.mockClear();
     resolveGatewayBindHost.mockClear();
     runCommandWithTimeout.mockClear();
   });
@@ -215,6 +233,54 @@ describe("runRescueWatchdogJob", () => {
         }),
       );
       expect(restartService).not.toHaveBeenCalled();
+    } finally {
+      process.env = originalEnv;
+    }
+  });
+
+  it("loads monitored config from the installed service env when custom paths are set", async () => {
+    const originalEnv = process.env;
+    process.env = {
+      ...originalEnv,
+      OPENCLAW_PROFILE: "rescue",
+      OPENCLAW_STATE_DIR: "/srv/openclaw-state/rescue",
+      OPENCLAW_CONFIG_PATH: "/srv/openclaw-state/rescue/openclaw.json",
+    };
+    readServiceCommand.mockResolvedValue({
+      programArguments: ["openclaw", "gateway", "run"],
+      environment: {
+        OPENCLAW_STATE_DIR: "/srv/openclaw-state/work-custom",
+        OPENCLAW_CONFIG_PATH: "/srv/openclaw-state/work-custom/config.json",
+      },
+    });
+    probeGateway.mockResolvedValue({
+      ok: true,
+      close: null,
+      error: null,
+    });
+
+    try {
+      const result = await runRescueWatchdogJob({
+        job: {
+          id: "job-custom-config-env",
+          name: "rescue",
+          payload: {
+            kind: "rescueWatchdog",
+            monitoredProfile: "work",
+            timeoutSeconds: 120,
+          },
+        } as never,
+        monitoredProfile: "work",
+      });
+
+      expect(result.status).toBe("ok");
+      const createConfigArgs = (createConfigIO.mock.calls[0] ?? [undefined])[0] as
+        | { env?: Record<string, string | undefined> }
+        | undefined;
+      expect(createConfigArgs?.env?.OPENCLAW_STATE_DIR).toBe("/srv/openclaw-state/work-custom");
+      expect(createConfigArgs?.env?.OPENCLAW_CONFIG_PATH).toBe(
+        "/srv/openclaw-state/work-custom/config.json",
+      );
     } finally {
       process.env = originalEnv;
     }
@@ -698,6 +764,62 @@ describe("runRescueWatchdogJob", () => {
       | undefined;
     expect(finalProbeCall?.url).toBe("wss://gateway.internal:18789");
     expect(finalProbeCall?.tlsFingerprint).toBe("sha256:aa:bb:cc:dd");
+  });
+
+  it("re-resolves the managed service port after doctor repair", async () => {
+    readServiceCommand
+      .mockResolvedValueOnce({
+        programArguments: ["openclaw", "gateway", "run"],
+        environment: {
+          OPENCLAW_GATEWAY_PORT: "19001",
+        },
+      })
+      .mockResolvedValueOnce({
+        programArguments: ["openclaw", "gateway", "run"],
+        environment: {
+          OPENCLAW_GATEWAY_PORT: "19002",
+        },
+      });
+    probeGateway.mockImplementation(async (params?: { url?: string }) => {
+      if (params?.url === "ws://127.0.0.1:19002") {
+        return {
+          ok: true,
+          close: null,
+          error: null,
+        };
+      }
+      return {
+        ok: false,
+        close: { code: 1006, reason: "down" },
+        error: "down",
+      };
+    });
+
+    let settled = false;
+    const runPromise = runRescueWatchdogJob({
+      job: {
+        id: "job-doctor-port-refresh",
+        name: "rescue",
+        payload: {
+          kind: "rescueWatchdog",
+          monitoredProfile: "work",
+          timeoutSeconds: 35,
+        },
+      } as never,
+      monitoredProfile: "work",
+    }).then((result) => {
+      settled = true;
+      return result;
+    });
+
+    await vi.advanceTimersByTimeAsync(31_000);
+    expect(settled).toBe(true);
+    const result = await runPromise;
+
+    expect(result.status).toBe("ok");
+    expect(readServiceCommand).toHaveBeenCalledTimes(2);
+    const finalProbeCall = probeGateway.mock.lastCall?.[0] as { url?: string } | undefined;
+    expect(finalProbeCall?.url).toBe("ws://127.0.0.1:19002");
   });
 
   it("passes the job abort signal into the doctor fallback subprocess", async () => {

@@ -44,6 +44,7 @@ const RESCUE_SERVICE_IDENTITY_ENV_KEYS = [
   "OPENCLAW_SYSTEMD_UNIT",
   "OPENCLAW_WINDOWS_TASK_NAME",
 ] as const;
+const RESCUE_CONTEXT_ENV_KEYS = ["OPENCLAW_STATE_DIR", "OPENCLAW_CONFIG_PATH"] as const;
 const RESCUE_SERVICE_IDENTITY_ENV_KEY_SET = new Set<string>(RESCUE_SERVICE_IDENTITY_ENV_KEYS);
 
 export function resolveMonitoredProfileName(raw = process.env.OPENCLAW_PROFILE): string {
@@ -74,6 +75,14 @@ export function buildRescueProfileEnv(
     const value = baseEnv[key];
     if (typeof value === "string" && value.length > 0) {
       env[key] = value;
+    }
+  }
+  if (preserveServiceIdentityOverrides) {
+    for (const key of RESCUE_CONTEXT_ENV_KEYS) {
+      const value = baseEnv[key];
+      if (typeof value === "string" && value.length > 0) {
+        env[key] = value;
+      }
     }
   }
   applyCliProfileEnv({ profile, env });

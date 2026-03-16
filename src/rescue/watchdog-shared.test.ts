@@ -21,6 +21,18 @@ describe("buildRescueProfileEnv", () => {
     );
   });
 
+  it("preserves explicit custom state/config paths for the current profile", () => {
+    const env = buildRescueProfileEnv("work", {
+      HOME: "/home/tester",
+      OPENCLAW_PROFILE: "work",
+      OPENCLAW_STATE_DIR: "/srv/openclaw-state/work-custom",
+      OPENCLAW_CONFIG_PATH: "/srv/openclaw-state/work-custom/config.json",
+    });
+
+    expect(env.OPENCLAW_STATE_DIR).toBe("/srv/openclaw-state/work-custom");
+    expect(env.OPENCLAW_CONFIG_PATH).toBe("/srv/openclaw-state/work-custom/config.json");
+  });
+
   it("preserves daemon service identity overrides", () => {
     const env = buildRescueProfileEnv("work", {
       HOME: "/home/tester",

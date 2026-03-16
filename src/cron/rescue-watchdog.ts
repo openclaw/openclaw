@@ -4,7 +4,7 @@ import { createConfigIO } from "../config/io.js";
 import { resolveGatewayPort } from "../config/paths.js";
 import { resolveCurrentCliProgramArguments } from "../daemon/program-args.js";
 import { resolveGatewayService } from "../daemon/service.js";
-import type { GatewayService } from "../daemon/service.js";
+import type { GatewayService, GatewayServiceCommandConfig } from "../daemon/service.js";
 import { resolveGatewayBindHost } from "../gateway/net.js";
 import { resolveGatewayProbeAuthSafe } from "../gateway/probe-auth.js";
 import { probeGateway } from "../gateway/probe.js";
@@ -114,16 +114,31 @@ async function resolveManagedGatewayProbePort(params: {
   };
   env: NodeJS.ProcessEnv;
   service: GatewayService;
+  command?: GatewayServiceCommandConfig | null;
 }): Promise<number> {
   // Cross-profile watchdog env intentionally strips service identity overrides,
   // so recover the live managed port from the installed service definition first.
-  const command = await params.service.readCommand(params.env).catch(() => null);
+  const command =
+    params.command ?? (await params.service.readCommand(params.env).catch(() => null));
   const portFromArgs = parsePortFromProgramArguments(command?.programArguments);
   if (portFromArgs) {
     return portFromArgs;
   }
   const mergedEnv = command?.environment ? { ...params.env, ...command.environment } : params.env;
   return resolveGatewayPort(params.cfg, mergedEnv);
+}
+
+function mergeManagedServiceEnv(
+  env: NodeJS.ProcessEnv,
+  command: GatewayServiceCommandConfig | null,
+): NodeJS.ProcessEnv {
+  if (!command?.environment) {
+    return env;
+  }
+  return {
+    ...env,
+    ...command.environment,
+  } as NodeJS.ProcessEnv;
 }
 
 async function resolveProfileGatewayProbeUrl(
@@ -353,7 +368,18 @@ export async function runRescueWatchdogJob(params: {
     };
   }
 
-  const env = buildRescueProfileEnv(monitoredProfile);
+  const baseEnv = buildRescueProfileEnv(monitoredProfile);
+  let service;
+  try {
+    service = resolveGatewayService();
+  } catch (error) {
+    return {
+      status: "error",
+      error: `gateway service control unavailable: ${error instanceof Error ? error.message : String(error)}`,
+    };
+  }
+  const installedCommand = await service.readCommand(baseEnv).catch(() => null);
+  const env = mergeManagedServiceEnv(baseEnv, installedCommand);
   let cfg;
   try {
     cfg = createConfigIO({ env }).loadConfig();
@@ -368,16 +394,12 @@ export async function runRescueWatchdogJob(params: {
     mode: "local",
     env,
   });
-  let service;
-  try {
-    service = resolveGatewayService();
-  } catch (error) {
-    return {
-      status: "error",
-      error: `gateway service control unavailable: ${error instanceof Error ? error.message : String(error)}`,
-    };
-  }
-  const port = await resolveManagedGatewayProbePort({ cfg, env, service });
+  const port = await resolveManagedGatewayProbePort({
+    cfg,
+    env,
+    service,
+    command: installedCommand,
+  });
   const actions: string[] = [];
   const tlsFingerprint = await resolveProfileGatewayProbeTlsFingerprint(cfg);
 
@@ -500,9 +522,20 @@ export async function runRescueWatchdogJob(params: {
     actions.push("ran doctor --repair --non-interactive");
   }
 
+  const doctorProbeCommand =
+    doctorResult.code === 0 ? await service.readCommand(env).catch(() => null) : installedCommand;
+  const doctorProbePort =
+    doctorResult.code === 0
+      ? await resolveManagedGatewayProbePort({
+          cfg,
+          env,
+          service,
+          command: doctorProbeCommand,
+        })
+      : port;
   const doctorProbe = await waitForProfileGateway({
     cfg,
-    port,
+    port: doctorProbePort,
     auth,
     tlsFingerprint,
     abortSignal: params.abortSignal,
