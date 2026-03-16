@@ -86,6 +86,7 @@ This OpenClaw plugin enables natural language control of actual ABB robots throu
 
 - `get_joints` - Get current joint positions
 - `set_joints` - Move to joint positions
+- `movj` - Continuous MoveJ from current/start joints to target with speed
 - `set_preset` - Apply named preset
 - `run_sequence` - Execute motion sequence
 - `dance_two_points` - Build and execute continuous interpolated trajectory between two joint points
@@ -184,6 +185,9 @@ AI: abb_robot action:set_preset preset:ready
 
 User: Move joint 1 to 90 degrees
 AI: abb_robot action:set_joints joints:[90,0,0,0,0,0]
+
+User: MoveJ to target joints at speed 40
+AI: abb_robot action:movj joints:[30,-20,55,15,25,10] speed:40
 ```
 
 **Execute Sequence | 执行序列:**

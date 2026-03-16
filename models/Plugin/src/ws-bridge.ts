@@ -177,7 +177,7 @@ wss.on("connection", (ws: WebSocket, req: IncomingMessage) => {
     }
 
     // ── Update cached joints ──────────────────────────────────────────────
-    if (session && (cmd === "joints" || cmd === "ok") && Array.isArray(msg["joints"])) {
+    if (session && (cmd === "joints" || cmd === "ok" || cmd === "movj_done") && Array.isArray(msg["joints"])) {
       session.joints = msg["joints"] as number[];
     }
 

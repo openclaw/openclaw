@@ -312,6 +312,91 @@ export async function handleAction(
     }
   }
 
+  // MoveJ (continuous motion from start/current to target with speed)
+  if (action === "movj") {
+    if (!controller?.isConnected()) {
+      return errorResult("Not connected. Use 'connect' action first.");
+    }
+
+    const rawTarget = params["joints"];
+    if (!Array.isArray(rawTarget)) return errorResult("joints array is required");
+    const targetNums = (rawTarget as unknown[]).map(Number);
+    if (targetNums.some(isNaN)) return errorResult("joints must all be numeric");
+
+    const rawStart = params["start_joints"];
+    if (rawStart !== undefined && !Array.isArray(rawStart)) {
+      return errorResult("start_joints must be an array when provided");
+    }
+
+    try {
+      const cfg = currentConfig || getCfg("abb-crb-15000");
+      const targetValidation = validateJointValues(cfg, targetNums);
+      const target = targetValidation.values;
+      const speed = clamp(Number(params["speed"] ?? 45), 1, 100);
+      const maxJointStep = clamp(Number(params["max_joint_step"] ?? 6), 0.25, 45);
+      const minSamples = clamp(Number(params["min_samples"] ?? 2), 2, 50);
+      const interpolationRaw = String(params["interpolation"] ?? "cosine").toLowerCase();
+      const interpolation: InterpolationMode =
+        interpolationRaw === "linear" || interpolationRaw === "smoothstep" || interpolationRaw === "cosine"
+          ? interpolationRaw
+          : "cosine";
+      const moduleName = String(params["module_name"] ?? "MoveJSegment");
+
+      let startViolations: string[] = [];
+      let start: number[];
+      if (Array.isArray(rawStart)) {
+        const startNums = (rawStart as unknown[]).map(Number);
+        if (startNums.some(isNaN)) return errorResult("start_joints must all be numeric");
+        const startValidation = validateJointValues(cfg, startNums);
+        start = startValidation.values;
+        startViolations = startValidation.violations;
+      } else if (motionState.lastTarget && motionState.lastTarget.length === target.length) {
+        start = [...motionState.lastTarget];
+      } else {
+        start = await controller.getJointPositions();
+      }
+
+      const waypoints = interpolateJoints(start, target, maxJointStep, minSamples, interpolation);
+      const rapidPoints = waypoints.map((joints, idx) => ({
+        joints,
+        speed,
+        zone: idx === waypoints.length - 1 ? "fine" : "z10",
+      }));
+      const rapidCode = controller.generateRapidSequence(rapidPoints, moduleName);
+      await controller.executeRapidProgram(rapidCode, moduleName);
+
+      pushHistory(motionState, target, "movj");
+
+      const violations = [...startViolations, ...targetValidation.violations];
+      let text =
+        `✓ MoveJ executed\n` +
+        `  Speed: v${speed}\n` +
+        `  Waypoints: ${waypoints.length}\n` +
+        `  Interpolation: ${interpolation}\n` +
+        `  End joints: [${target.map(v => v.toFixed(2)).join(", ")}]`;
+      if (violations.length > 0) {
+        text += `\n\n⚠ Clamped to limits:\n${violations.map(v => `  ${v}`).join("\n")}`;
+      }
+
+      return {
+        content: [{ type: "text" as const, text }],
+        details: {
+          speed,
+          maxJointStep,
+          minSamples,
+          interpolation,
+          start,
+          end: target,
+          waypoints: waypoints.length,
+          moduleName,
+          violations,
+        },
+      };
+    } catch (err) {
+      return errorResult(`movj failed: ${String(err)}`);
+    }
+  }
+
   // Set preset
   if (action === "set_preset") {
     if (!controller?.isConnected()) {

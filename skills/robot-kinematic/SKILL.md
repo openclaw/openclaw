@@ -28,6 +28,7 @@ Control any configured robot arm in the 3D viewer via chat.
 | "inspect pose" | `set_preset` → `inspect` |
 | "stretch up" | `set_preset` → `stretch_up` |
 | "set joint 1 to 45°" | `set_joints` with array |
+| "movj 到目标位，速度 40" | `movj` with `joints` + `speed` |
 | "which robots?" | `list_robots` |
 | "switch to robot X" | `switch_robot` |
 | "what presets exist?" | `list_presets` |
@@ -65,6 +66,17 @@ Available presets for ABB CRB 15000:
 ```
 robot_control action:set_joints joints:[45, -30, 60, 0, 30, 0]
 ```
+
+### MoveJ continuous motion (with speed)
+
+```
+robot_control action:movj joints:[30, -20, 55, 15, 25, 10] speed:40
+```
+
+Notes:
+- `movj` is continuous from current pose to target pose (or from `start_joints` when provided).
+- `speed` range is `1-100` (recommended `30-60` for visible smooth motion).
+- Optional `max_joint_step` controls interpolation density (smaller = smoother).
 
 Joints are always validated against the robot config. Out-of-range values are
 automatically clamped and the user is informed.

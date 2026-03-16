@@ -170,6 +170,20 @@ async function executeVirtual(action, params) {
         joints: state.joints
       });
     }
+    case "movj": {
+      if (!Array.isArray(params.joints)) {
+        return asTextResult("movj requires joints array.", { success: false });
+      }
+      const speed = Math.max(1, Math.min(100, Number(params.speed ?? 45) || 45));
+      state.joints = params.joints.map((x) => Number(x) || 0).slice(0, 6);
+      while (state.joints.length < 6) state.joints.push(0);
+      return asTextResult(`Virtual movj completed at speed ${speed}: [${state.joints.join(", ")}]`, {
+        mode: "virtual",
+        connected: state.connected,
+        speed,
+        joints: state.joints
+      });
+    }
     case "execute_rapid": {
       return asTextResult("Virtual RAPID executed.", {
         mode: "virtual",
@@ -253,6 +267,22 @@ async function executeReal(action, params) {
         zone: String(params.zone ?? "fine")
       }, state.host, state.port);
       return asTextResult(result.success ? "Real set_joints executed." : `Real set_joints failed: ${result.error ?? "unknown"}`, {
+        mode: "real",
+        connected: result.success,
+        result
+      });
+    }
+    case "movj": {
+      const joints = Array.isArray(params.joints) ? params.joints.map((x) => Number(x) || 0).slice(0, 6) : null;
+      if (!joints) {
+        return asTextResult("Real movj requires joints array.", { success: false, mode: "real" });
+      }
+      const result = await invokeBridgeSequence("MoveToJoints", {
+        joints,
+        speed: Number(params.speed ?? 45),
+        zone: String(params.zone ?? "fine")
+      }, state.host, state.port);
+      return asTextResult(result.success ? "Real movj executed." : `Real movj failed: ${result.error ?? "unknown"}`, {
         mode: "real",
         connected: result.success,
         result

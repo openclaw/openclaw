@@ -432,6 +432,42 @@
         // ── 状态 ──
         let jointNodes = [];
         let robotModel = null;
+        let movjAnimationId = null;
+        let movjToken = 0;
+
+        function clamp(val, min, max) {
+            return Math.max(min, Math.min(max, val));
+        }
+
+        function updateJointUi(index, value) {
+            const joint = jointNodes[index];
+            if (!joint) return;
+            const slider = document.getElementById(`jslider-${index}`);
+            if (slider) slider.value = value;
+            const unit = joint.type === 'revolute' ? '\u00B0' : 'mm';
+            const valEl = document.getElementById(`jval-${index}`);
+            if (valEl) valEl.textContent = `${value.toFixed(1)}${unit}`;
+        }
+
+        function cancelMovjAnimation() {
+            movjToken += 1;
+            if (movjAnimationId !== null) {
+                cancelAnimationFrame(movjAnimationId);
+                movjAnimationId = null;
+            }
+        }
+
+        function estimateMovjDurationMs(fromJoints, toJoints, speedPercent) {
+            let maxDelta = 0;
+            const count = Math.min(fromJoints.length, toJoints.length);
+            for (let i = 0; i < count; i++) {
+                maxDelta = Math.max(maxDelta, Math.abs((toJoints[i] ?? 0) - (fromJoints[i] ?? 0)));
+            }
+            const speed = clamp(Number(speedPercent) || 45, 1, 100);
+            const degPerSec = 6 + speed * 0.9;
+            const seconds = Math.max(0.18, maxDelta / degPerSec);
+            return Math.round(seconds * 1000);
+        }
 
         // ── IndexedDB 持久化 ──
         const DB_NAME = 'RobotViewerDB';
@@ -1475,6 +1511,7 @@
         }
 
         function goHome() {
+            cancelMovjAnimation();
             jointNodes.forEach((j, idx) => {
                 const slider = document.getElementById(`jslider-${idx}`);
                 if (slider) {
@@ -1487,17 +1524,15 @@
         }
 
         // ── 外部接口 ──
-        function setJoints(values) {
+        function setJoints(values, opts = {}) {
+            if (opts.cancelMotion !== false) {
+                cancelMovjAnimation();
+            }
             const count = Math.min(values.length, jointNodes.length);
             for (let i = 0; i < count; i++) {
                 const j = jointNodes[i];
                 j.currentValue = values[i];
-                const slider = document.getElementById(`jslider-${i}`);
-                if (slider) {
-                    slider.value = values[i];
-                    const unit = j.type === 'revolute' ? '\u00B0' : 'mm';
-                    document.getElementById(`jval-${i}`).textContent = `${values[i].toFixed(1)}${unit}`;
-                }
+                updateJointUi(i, values[i]);
             }
             // 批量更新后统一应用 FK
             if (parallelState) {
@@ -1510,9 +1545,73 @@
                 }
             }
         }
+
+        function movj(targetJoints, speed = 45, startJoints = null) {
+            if (!Array.isArray(targetJoints)) {
+                return Promise.reject(new Error('movj target joints must be an array'));
+            }
+            if (jointNodes.length === 0) {
+                return Promise.reject(new Error('No robot model loaded'));
+            }
+
+            const count = Math.min(targetJoints.length, jointNodes.length);
+            if (count === 0) {
+                return Promise.reject(new Error('No joint values provided for movj'));
+            }
+
+            const from = getJoints();
+            if (Array.isArray(startJoints) && startJoints.length > 0) {
+                const seeded = [...from];
+                for (let i = 0; i < Math.min(startJoints.length, jointNodes.length); i++) {
+                    const n = Number(startJoints[i]);
+                    if (!Number.isNaN(n)) seeded[i] = n;
+                }
+                setJoints(seeded, { cancelMotion: false });
+            }
+
+            const start = getJoints();
+            const target = [...start];
+            for (let i = 0; i < count; i++) {
+                const n = Number(targetJoints[i]);
+                target[i] = Number.isNaN(n) ? (start[i] ?? 0) : n;
+            }
+
+            const durationMs = estimateMovjDurationMs(start, target, speed);
+            const token = movjToken + 1;
+            cancelMovjAnimation();
+            movjToken = token;
+            const t0 = performance.now();
+
+            return new Promise((resolve) => {
+                const step = (now) => {
+                    if (token !== movjToken) {
+                        resolve({ cancelled: true, joints: getJoints() });
+                        return;
+                    }
+                    const t = clamp((now - t0) / durationMs, 0, 1);
+                    const eased = t * t * (3 - 2 * t);
+                    const frame = start.map((v, idx) => v + ((target[idx] ?? v) - v) * eased);
+                    setJoints(frame, { cancelMotion: false });
+
+                    if (t >= 1) {
+                        movjAnimationId = null;
+                        resolve({
+                            cancelled: false,
+                            joints: target,
+                            speed: clamp(Number(speed) || 45, 1, 100),
+                            durationMs,
+                        });
+                        return;
+                    }
+                    movjAnimationId = requestAnimationFrame(step);
+                };
+                movjAnimationId = requestAnimationFrame(step);
+            });
+        }
+
         function getJoints() { return jointNodes.map(j => j.currentValue); }
         function getJointCount() { return jointNodes.length; }
-        window.robotAPI = { setJoints, getJoints, getJointCount, goHome };
+        window.robotAPI = { setJoints, movj, getJoints, getJointCount, goHome };
 
         // ── WebSocket 客户端 ──
         let wsConnection = null, wsReconnectTimer = null;
@@ -1585,6 +1684,25 @@
                     wsStatusText.textContent = `已连接 ${rid}/${iid}`;
                 }
                 if (msg.cmd === 'set_joints' && Array.isArray(msg.joints)) { setJoints(msg.joints); sendWsReply({cmd:'ok'}); }
+                else if (msg.cmd === 'movj' && Array.isArray(msg.joints)) {
+                    const speed = Number(msg.speed ?? 45);
+                    const startJoints = Array.isArray(msg.start_joints) ? msg.start_joints : null;
+                    sendWsReply({ cmd: 'ok', action: 'movj', status: 'started' });
+                    movj(msg.joints, speed, startJoints)
+                        .then((result) => {
+                            sendWsReply({
+                                cmd: 'movj_done',
+                                action: 'movj',
+                                cancelled: !!result.cancelled,
+                                speed: result.speed,
+                                durationMs: result.durationMs,
+                                joints: getJoints(),
+                            });
+                        })
+                        .catch((err) => {
+                            sendWsReply({ cmd: 'error', action: 'movj', error: String(err) });
+                        });
+                }
                 else if (msg.cmd === 'get_joints') { sendWsReply({cmd:'joints', joints:getJoints()}); }
                 else if (msg.cmd === 'home') { goHome(); sendWsReply({cmd:'ok'}); }
                 else if (msg.cmd === 'get_info') { sendWsReply({cmd:'info', jointCount:getJointCount(), joints:getJoints(), hasModel:jointNodes.length>0}); }

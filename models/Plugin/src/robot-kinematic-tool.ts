@@ -41,6 +41,29 @@ function sleep(ms: number): Promise<void> {
   return new Promise((res) => setTimeout(res, ms));
 }
 
+function clamp(n: number, min: number, max: number): number {
+  return Math.max(min, Math.min(max, n));
+}
+
+function interpolateJoints(from: number[], to: number[], maxJointStep: number): number[][] {
+  const safeStep = Math.max(0.25, maxJointStep);
+  let maxDelta = 0;
+  for (let i = 0; i < to.length; i++) {
+    maxDelta = Math.max(maxDelta, Math.abs((to[i] ?? 0) - (from[i] ?? 0)));
+  }
+  const samples = Math.max(2, Math.ceil(maxDelta / safeStep));
+  const out: number[][] = [];
+  for (let s = 1; s <= samples; s++) {
+    const t = s / samples;
+    const eased = t * t * (3 - 2 * t);
+    out.push(to.map((target, idx) => {
+      const start = from[idx] ?? 0;
+      return start + (target - start) * eased;
+    }));
+  }
+  return out;
+}
+
 function errorResult(message: string) {
   return {
     content: [{ type: "text" as const, text: `\u274c robot_control error: ${message}` }],
@@ -88,6 +111,7 @@ export function createRobotControlTool(): AnyAgentTool {
           type: "string",
           enum: [
             "set_joints",       // set explicit joint angles
+            "movj",             // continuous MoveJ from current/start to target
             "set_preset",       // apply a named preset
             "run_sequence",     // play a named motion sequence
             "go_home",          // return all joints to home
@@ -118,6 +142,20 @@ export function createRobotControlTool(): AnyAgentTool {
           description:
             "Joint angle values in degrees (set_joints). " +
             "Out-of-range values are automatically clamped to joint limits.",
+        },
+        start_joints: {
+          type: "array",
+          items: { type: "number" },
+          description:
+            "Optional MoveJ start joint values in degrees. If omitted, uses current viewer joints.",
+        },
+        speed: {
+          type: "number",
+          description: "MoveJ speed percentage (1-100, default: 45).",
+        },
+        max_joint_step: {
+          type: "number",
+          description: "MoveJ interpolation max step per joint in degrees (default: 6).",
         },
         preset: {
           type: "string",
@@ -274,6 +312,87 @@ export function createRobotControlTool(): AnyAgentTool {
             details: { robotId, joints: values, violations, viewers: count },
           };
         } catch (err) { return errorResult(String(err)); }
+      }
+
+      // ── movj ─────────────────────────────────────────────────────────────
+      if (action === "movj") {
+        const robotId = resolveRobotId(params);
+        const rawTarget = params["joints"];
+        if (!Array.isArray(rawTarget)) return errorResult("movj requires joints array.");
+
+        const rawStart = params["start_joints"];
+        if (rawStart !== undefined && !Array.isArray(rawStart)) {
+          return errorResult("start_joints must be an array when provided.");
+        }
+
+        const speed = clamp(Number(params["speed"] ?? 45), 1, 100);
+        const maxJointStep = clamp(Number(params["max_joint_step"] ?? 6), 0.25, 45);
+
+        try {
+          const cfg = getCfg(robotId);
+
+          const targetNums = (rawTarget as unknown[]).map(Number);
+          if (targetNums.some(isNaN)) return errorResult("joints must all be numeric.");
+          const targetValidation = validateJointValues(cfg, targetNums);
+
+          let startValidated: number[] | null = null;
+          let startViolations: string[] = [];
+          if (Array.isArray(rawStart)) {
+            const startNums = (rawStart as unknown[]).map(Number);
+            if (startNums.some(isNaN)) return errorResult("start_joints must all be numeric.");
+            const sv = validateJointValues(cfg, startNums);
+            startValidated = sv.values;
+            startViolations = sv.violations;
+          }
+
+          const tgt = opts.robotId ? opts : { robotId };
+          const currentReply = JSON.parse(await sendToViewer({ cmd: "get_joints" }, tgt)) as { joints?: number[] };
+          const current = Array.isArray(currentReply.joints)
+            ? currentReply.joints
+            : cfg.joints.map((j) => j.home);
+
+          const start = startValidated ?? current;
+          const target = targetValidation.values;
+          const waypoints = interpolateJoints(start, target, maxJointStep);
+          await sendToViewer(
+            {
+              cmd: "movj",
+              joints: target,
+              start_joints: startValidated ?? undefined,
+              speed,
+              max_joint_step: maxJointStep,
+            },
+            tgt,
+            12000,
+          );
+
+          const count = (opts.robotId ? getSessionsForRobot(robotId) : getAllSessions()).length;
+          const violations = [...startViolations, ...targetValidation.violations];
+          let text =
+            `MoveJ completed on ${count} viewer(s) of ${robotId}.\n` +
+            `  Speed: ${speed}\n` +
+            `  Waypoints: ${waypoints.length}\n` +
+            `  End joints: [${target.map((v) => v.toFixed(1)).join(", ")}]`;
+          if (violations.length > 0) {
+            text += `\n\n⚠ Clamped to limits:\n${violations.map((v) => `  ${v}`).join("\n")}`;
+          }
+
+          return {
+            content: [{ type: "text" as const, text }],
+            details: {
+              robotId,
+              speed,
+              maxJointStep,
+              waypoints: waypoints.length,
+              start,
+              end: target,
+              viewers: count,
+              violations,
+            },
+          };
+        } catch (err) {
+          return errorResult(String(err));
+        }
       }
 
       // ── run_sequence ─────────────────────────────────────────────────────
