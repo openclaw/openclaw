@@ -80,6 +80,8 @@ export function createOpenClawTools(
     spawnWorkspaceDir?: string;
     /** Callback invoked when sessions_yield tool is called. */
     onYield?: (message: string) => Promise<void> | void;
+    /** Allow plugin tools for this tool set to late-bind the gateway subagent. */
+    allowGatewaySubagentBinding?: boolean;
   } & SpawnedToolContext,
 ): AnyAgentTool[] {
   const workspaceDir = resolveWorkspaceRoot(options?.workspaceDir);
@@ -235,6 +237,7 @@ export function createOpenClawTools(
     },
     existingToolNames: new Set(tools.map((tool) => tool.name)),
     toolAllowlist: options?.pluginToolAllowlist,
+    allowGatewaySubagentBinding: options?.allowGatewaySubagentBinding,
   });
 
   return [...tools, ...pluginTools];

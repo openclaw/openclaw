@@ -10,11 +10,16 @@ vi.mock("../../process/exec.js", () => ({
   runCommandWithTimeout: (...args: unknown[]) => runCommandWithTimeoutMock(...args),
 }));
 
-import { createPluginRuntime } from "./index.js";
+import {
+  clearGatewaySubagentRuntime,
+  createPluginRuntime,
+  setGatewaySubagentRuntime,
+} from "./index.js";
 
 describe("plugin runtime command execution", () => {
   beforeEach(() => {
     runCommandWithTimeoutMock.mockClear();
+    clearGatewaySubagentRuntime();
   });
 
   it("exposes runtime.system.runCommandWithTimeout by default", async () => {
@@ -81,5 +86,38 @@ describe("plugin runtime command execution", () => {
     const runtime = createPluginRuntime();
     // Wrappers should NOT be the same reference as the raw functions
     expect(runtime.modelAuth.getApiKeyForModel).not.toBe(rawGetApiKey);
+  });
+
+  it("keeps subagent unavailable by default even after gateway initialization", async () => {
+    const runtime = createPluginRuntime();
+    setGatewaySubagentRuntime({
+      run: vi.fn(),
+      waitForRun: vi.fn(),
+      getSessionMessages: vi.fn(),
+      getSession: vi.fn(),
+      deleteSession: vi.fn(),
+    });
+
+    expect(() => runtime.subagent.run({ sessionKey: "s-1", message: "hello" })).toThrow(
+      "Plugin runtime subagent methods are only available during a gateway request.",
+    );
+  });
+
+  it("late-binds to the gateway subagent when explicitly enabled", async () => {
+    const run = vi.fn().mockResolvedValue({ runId: "run-1" });
+    const runtime = createPluginRuntime({ allowGatewaySubagentBinding: true });
+
+    setGatewaySubagentRuntime({
+      run,
+      waitForRun: vi.fn(),
+      getSessionMessages: vi.fn(),
+      getSession: vi.fn(),
+      deleteSession: vi.fn(),
+    });
+
+    await expect(runtime.subagent.run({ sessionKey: "s-2", message: "hello" })).resolves.toEqual({
+      runId: "run-1",
+    });
+    expect(run).toHaveBeenCalledWith({ sessionKey: "s-2", message: "hello" });
   });
 });
