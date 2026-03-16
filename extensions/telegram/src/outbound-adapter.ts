@@ -8,10 +8,12 @@ import {
   resolveOutboundSendDep,
   type OutboundSendDeps,
 } from "../../../src/infra/outbound/send-deps.js";
+import { resolveInteractiveTextFallback } from "../../../src/interactive/payload.js";
 import type { TelegramInlineButtons } from "./button-types.js";
 import { markdownToTelegramHtmlChunks } from "./format.js";
 import { parseTelegramReplyToMessageId, parseTelegramThreadId } from "./outbound-params.js";
 import { sendMessageTelegram } from "./send.js";
+import { buildTelegramInteractiveButtons } from "./shared-interactive.js";
 
 type TelegramSendFn = typeof sendMessageTelegram;
 type TelegramSendOpts = Parameters<TelegramSendFn>[2];
@@ -59,8 +61,14 @@ export async function sendTelegramPayloadMessages(params: {
     | undefined;
   const quoteText =
     typeof telegramData?.quoteText === "string" ? telegramData.quoteText : undefined;
-  const text = params.payload.text ?? "";
+  const text =
+    resolveInteractiveTextFallback({
+      text: params.payload.text,
+      interactive: params.payload.interactive,
+    }) ?? "";
   const mediaUrls = resolvePayloadMediaUrls(params.payload);
+  const interactiveButtons = buildTelegramInteractiveButtons(params.payload.interactive);
+  const buttons = telegramData?.buttons ?? interactiveButtons;
   const payloadOpts = {
     ...params.baseOpts,
     quoteText,
@@ -69,7 +77,7 @@ export async function sendTelegramPayloadMessages(params: {
   if (mediaUrls.length === 0) {
     return await params.send(params.to, text, {
       ...payloadOpts,
-      buttons: telegramData?.buttons,
+      buttons,
     });
   }
 
@@ -81,7 +89,7 @@ export async function sendTelegramPayloadMessages(params: {
       await params.send(params.to, text, {
         ...payloadOpts,
         mediaUrl,
-        ...(isFirst ? { buttons: telegramData?.buttons } : {}),
+        ...(isFirst ? { buttons } : {}),
       }),
   });
   return finalResult ?? { messageId: "unknown", chatId: params.to };
