@@ -317,15 +317,19 @@ export function createTelegramBot(opts: TelegramBotOptions) {
     if (typeof updateId === "number") {
       pendingUpdateIds.add(updateId);
     }
+    let completedSuccessfully = false;
     try {
       await next();
+      completedSuccessfully = true;
     } finally {
       if (typeof updateId === "number") {
         pendingUpdateIds.delete(updateId);
-        if (highestCompletedUpdateId === null || updateId > highestCompletedUpdateId) {
-          highestCompletedUpdateId = updateId;
+        if (completedSuccessfully) {
+          if (highestCompletedUpdateId === null || updateId > highestCompletedUpdateId) {
+            highestCompletedUpdateId = updateId;
+          }
+          maybePersistSafeWatermark();
         }
-        maybePersistSafeWatermark();
       }
     }
   });

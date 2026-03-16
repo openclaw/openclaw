@@ -608,6 +608,65 @@ describe("createTelegramBot", () => {
     expect(replySpy).toHaveBeenCalledTimes(1);
   });
 
+  it("does not persist update offset when an update fails", async () => {
+    // For this test we need sequentialize(...) to behave like a normal middleware and call next().
+    sequentializeSpy.mockImplementationOnce(
+      () => async (_ctx: unknown, next: () => Promise<void>) => {
+        await next();
+      },
+    );
+
+    const onUpdateId = vi.fn();
+    loadConfig.mockReturnValue({
+      channels: { telegram: { dmPolicy: "open", allowFrom: ["*"] } },
+    });
+
+    createTelegramBot({
+      token: "tok",
+      updateOffset: {
+        lastUpdateId: 100,
+        onUpdateId,
+      },
+    });
+
+    type Middleware = (
+      ctx: Record<string, unknown>,
+      next: () => Promise<void>,
+    ) => Promise<void> | void;
+
+    const middlewares = middlewareUseSpy.mock.calls
+      .map((call) => call[0])
+      .filter((fn): fn is Middleware => typeof fn === "function");
+
+    const runMiddlewareChain = async (
+      ctx: Record<string, unknown>,
+      finalNext: () => Promise<void>,
+    ) => {
+      let idx = -1;
+      const dispatch = async (i: number): Promise<void> => {
+        if (i <= idx) {
+          throw new Error("middleware dispatch called multiple times");
+        }
+        idx = i;
+        const fn = middlewares[i];
+        if (!fn) {
+          await finalNext();
+          return;
+        }
+        await fn(ctx, async () => dispatch(i + 1));
+      };
+      await dispatch(0);
+    };
+
+    await expect(
+      runMiddlewareChain({ update: { update_id: 101 } }, async () => {
+        throw new Error("boom");
+      }),
+    ).rejects.toThrow("boom");
+
+    expect(onUpdateId).not.toHaveBeenCalled();
+  });
+
   it("does not persist update offset past pending updates", async () => {
     // For this test we need sequentialize(...) to behave like a normal middleware and call next().
     sequentializeSpy.mockImplementationOnce(
