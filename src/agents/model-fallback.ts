@@ -52,8 +52,8 @@ const TRANSIENT_RETRY_BACKOFF_MS = [1_000, 2_000];
  * Classify whether a failover reason represents a transient (retryable on
  * same model) error vs. a permanent error that should immediately failover.
  *
- * Transient: timeout, rate_limit, overloaded, unknown
- * Permanent: auth, auth_permanent, billing, format, model_not_found, session_expired
+ * Transient: timeout, rate_limit, overloaded
+ * Permanent: auth, auth_permanent, billing, format, model_not_found, session_expired, unknown
  */
 function isTransientFailoverReason(reason: FailoverReason | null | undefined): boolean {
   if (!reason) {
@@ -712,7 +712,6 @@ export async function runWithModelFallback<T>(params: {
     }
 
     const maxTransientRetries = params.transientRetries ?? DEFAULT_TRANSIENT_RETRY_COUNT;
-    let candidateSucceeded = false;
     for (let retryAttempt = 0; retryAttempt <= maxTransientRetries; retryAttempt += 1) {
       const attemptRun = await runFallbackAttempt({
         run: params.run,
@@ -743,7 +742,6 @@ export async function runWithModelFallback<T>(params: {
             `Model "${sanitizeForLog(notFoundAttempt.provider)}/${sanitizeForLog(notFoundAttempt.model)}" not found. Fell back to "${sanitizeForLog(candidate.provider)}/${sanitizeForLog(candidate.model)}".`,
           );
         }
-        candidateSucceeded = true;
         return attemptRun.success;
       }
       const err = attemptRun.error;
@@ -777,11 +775,7 @@ export async function runWithModelFallback<T>(params: {
         // Check if this is a transient error that should be retried on the same candidate.
         // Only retry if we haven't exhausted our retry budget for this candidate.
         const errorReason = describeFailoverError(normalized).reason ?? null;
-        if (
-          isTransientFailoverReason(errorReason) &&
-          retryAttempt < maxTransientRetries &&
-          hasFallbackCandidates
-        ) {
+        if (isTransientFailoverReason(errorReason) && retryAttempt < maxTransientRetries) {
           const delayMs = resolveTransientRetryDelay(retryAttempt);
           log.info(
             `Transient error (${errorReason}) on ${candidate.provider}/${candidate.model}, retrying in ${delayMs}ms (attempt ${retryAttempt + 1}/${maxTransientRetries})`,
@@ -836,9 +830,6 @@ export async function runWithModelFallback<T>(params: {
         break;
       }
     } // end transient retry loop
-    if (candidateSucceeded) {
-      break;
-    }
   }
 
   throwFallbackFailureSummary({

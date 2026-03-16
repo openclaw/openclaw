@@ -1628,8 +1628,8 @@ describe("runWithModelFallback", () => {
       expect(_transientRetryInternals.DEFAULT_TRANSIENT_RETRY_COUNT).toBe(2);
     });
 
-    it("does not retry transient errors when there are no fallback candidates", async () => {
-      // Single model, no fallbacks — transient retry only applies when fallbacks exist
+    it("retries transient errors even when there are no fallback candidates", async () => {
+      // Single model, no fallbacks — transient retries still apply
       const cfg = makeCfg({
         agents: {
           defaults: {
@@ -1644,7 +1644,7 @@ describe("runWithModelFallback", () => {
         reason: "timeout",
         status: 408,
       });
-      const run = vi.fn().mockRejectedValueOnce(timeoutErr);
+      const run = vi.fn().mockRejectedValue(timeoutErr);
 
       await expect(
         runWithModelFallback({
@@ -1656,8 +1656,8 @@ describe("runWithModelFallback", () => {
         }),
       ).rejects.toThrow("LLM request timed out");
 
-      // Only 1 attempt — no retries when there are no fallback candidates
-      expect(run).toHaveBeenCalledTimes(1);
+      // 1 initial + 2 retries = 3 attempts total
+      expect(run).toHaveBeenCalledTimes(3);
     });
 
     it("classifies timeout, rate_limit, and overloaded as transient", () => {
@@ -1675,6 +1675,7 @@ describe("runWithModelFallback", () => {
       expect(isTransientFailoverReason("model_not_found")).toBe(false);
       expect(isTransientFailoverReason("billing")).toBe(false);
       expect(isTransientFailoverReason("session_expired")).toBe(false);
+      expect(isTransientFailoverReason("unknown")).toBe(false);
       expect(isTransientFailoverReason(null)).toBe(false);
       expect(isTransientFailoverReason(undefined)).toBe(false);
     });
