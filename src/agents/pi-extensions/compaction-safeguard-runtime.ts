@@ -7,6 +7,7 @@ export type CompactionSafeguardRuntimeValue = {
   contextWindowTokens?: number;
   identifierPolicy?: AgentCompactionIdentifierPolicy;
   identifierInstructions?: string;
+  customInstructions?: string;
   /**
    * Model to use for compaction summarization.
    * Passed through runtime because `ctx.model` is undefined in the compact.ts workflow
@@ -14,6 +15,8 @@ export type CompactionSafeguardRuntimeValue = {
    */
   model?: Model<Api>;
   recentTurnsPreserve?: number;
+  qualityGuardEnabled?: boolean;
+  qualityGuardMaxRetries?: number;
 };
 
 const registry = createSessionManagerRuntimeRegistry<CompactionSafeguardRuntimeValue>();

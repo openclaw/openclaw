@@ -8,27 +8,14 @@ vi.mock("./probe.js", () => ({
   probeFeishu: probeFeishuMock,
 }));
 
-vi.mock("./client.js", () => ({
-  createFeishuWSClient: vi.fn(() => ({ start: vi.fn() })),
-  createEventDispatcher: vi.fn(() => ({ register: vi.fn() })),
-}));
-
-vi.mock("./runtime.js", () => ({
-  getFeishuRuntime: () => ({
-    channel: {
-      debounce: {
-        resolveInboundDebounceMs: () => 0,
-        createInboundDebouncer: () => ({
-          enqueue: async () => {},
-          flushKey: async () => {},
-        }),
-      },
-      text: {
-        hasControlCommand: () => false,
-      },
-    },
-  }),
-}));
+vi.mock("./client.js", async () => {
+  const { createFeishuClientMockModule } = await import("./monitor.test-mocks.js");
+  return createFeishuClientMockModule();
+});
+vi.mock("./runtime.js", async () => {
+  const { createFeishuRuntimeMockModule } = await import("./monitor.test-mocks.js");
+  return createFeishuRuntimeMockModule();
+});
 
 function buildMultiAccountWebsocketConfig(accountIds: string[]): ClawdbotConfig {
   return {
@@ -41,7 +28,7 @@ function buildMultiAccountWebsocketConfig(accountIds: string[]): ClawdbotConfig 
             {
               enabled: true,
               appId: `cli_${accountId}`,
-              appSecret: `secret_${accountId}`,
+              appSecret: `secret_${accountId}`, // pragma: allowlist secret
               connectionMode: "websocket",
             },
           ]),
@@ -49,6 +36,12 @@ function buildMultiAccountWebsocketConfig(accountIds: string[]): ClawdbotConfig 
       },
     },
   } as ClawdbotConfig;
+}
+
+async function waitForStartedAccount(started: string[], accountId: string) {
+  for (let i = 0; i < 10 && !started.includes(accountId); i += 1) {
+    await Promise.resolve();
+  }
 }
 
 afterEach(() => {
@@ -115,10 +108,7 @@ describe("Feishu monitor startup preflight", () => {
     });
 
     try {
-      for (let i = 0; i < 10 && !started.includes("beta"); i += 1) {
-        await Promise.resolve();
-      }
-
+      await waitForStartedAccount(started, "beta");
       expect(started).toEqual(["alpha", "beta"]);
       expect(started.filter((accountId) => accountId === "alpha")).toHaveLength(1);
     } finally {
@@ -152,10 +142,7 @@ describe("Feishu monitor startup preflight", () => {
     });
 
     try {
-      for (let i = 0; i < 10 && !started.includes("beta"); i += 1) {
-        await Promise.resolve();
-      }
-
+      await waitForStartedAccount(started, "beta");
       expect(started).toEqual(["alpha", "beta"]);
       expect(runtime.error).toHaveBeenCalledWith(
         expect.stringContaining("bot info probe timed out"),

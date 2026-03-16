@@ -1,10 +1,21 @@
-import { confirm as clackConfirm, select as clackSelect, text as clackText } from "@clack/prompts";
+import {
+  cancel,
+  confirm as clackConfirm,
+  isCancel,
+  select as clackSelect,
+  text as clackText,
+} from "@clack/prompts";
 import {
   resolveAgentDir,
   resolveAgentWorkspaceDir,
   resolveDefaultAgentId,
 } from "../../agents/agent-scope.js";
-import { upsertAuthProfile } from "../../agents/auth-profiles.js";
+import {
+  clearAuthProfileCooldown,
+  listProfilesForProvider,
+  loadAuthProfileStoreForRuntime,
+  upsertAuthProfile,
+} from "../../agents/auth-profiles.js";
 import type { AuthProfileCredential } from "../../agents/auth-profiles/types.js";
 import { normalizeProviderId } from "../../agents/model-selection.js";
 import { resolveDefaultAgentWorkspaceDir } from "../../agents/workspace.js";
@@ -19,8 +30,13 @@ import { createClackPrompter } from "../../wizard/clack-prompter.js";
 import { validateAnthropicSetupToken } from "../auth-token.js";
 import { isRemoteEnvironment } from "../oauth-env.js";
 import { createVpsAwareOAuthHandlers } from "../oauth-flow.js";
-import { applyAuthProfileConfig } from "../onboard-auth.js";
+import { applyAuthProfileConfig, writeOAuthCredentials } from "../onboard-auth.js";
 import { openUrl } from "../onboard-helpers.js";
+import {
+  applyOpenAICodexModelDefault,
+  OPENAI_CODEX_DEFAULT_MODEL,
+} from "../openai-codex-model-default.js";
+import { loginOpenAICodexOAuth } from "../openai-codex-oauth.js";
 import {
   applyDefaultModel,
   mergeConfigPatch,
@@ -29,24 +45,38 @@ import {
 } from "../provider-auth-helpers.js";
 import { loadValidConfigOrThrow, updateConfig } from "./shared.js";
 
-const confirm = (params: Parameters<typeof clackConfirm>[0]) =>
-  clackConfirm({
-    ...params,
-    message: stylePromptMessage(params.message),
-  });
-const text = (params: Parameters<typeof clackText>[0]) =>
-  clackText({
-    ...params,
-    message: stylePromptMessage(params.message),
-  });
-const select = <T>(params: Parameters<typeof clackSelect<T>>[0]) =>
-  clackSelect({
-    ...params,
-    message: stylePromptMessage(params.message),
-    options: params.options.map((opt) =>
-      opt.hint === undefined ? opt : { ...opt, hint: stylePromptHint(opt.hint) },
-    ),
-  });
+function guardCancel<T>(value: T | symbol): T {
+  if (typeof value === "symbol" || isCancel(value)) {
+    cancel("Cancelled.");
+    process.exit(0);
+  }
+  return value;
+}
+
+const confirm = async (params: Parameters<typeof clackConfirm>[0]) =>
+  guardCancel(
+    await clackConfirm({
+      ...params,
+      message: stylePromptMessage(params.message),
+    }),
+  );
+const text = async (params: Parameters<typeof clackText>[0]) =>
+  guardCancel(
+    await clackText({
+      ...params,
+      message: stylePromptMessage(params.message),
+    }),
+  );
+const select = async <T>(params: Parameters<typeof clackSelect<T>>[0]) =>
+  guardCancel(
+    await clackSelect({
+      ...params,
+      message: stylePromptMessage(params.message),
+      options: params.options.map((opt) =>
+        opt.hint === undefined ? opt : { ...opt, hint: stylePromptHint(opt.hint) },
+      ),
+    }),
+  );
 
 type TokenProvider = "anthropic";
 
@@ -160,13 +190,13 @@ export async function modelsAuthPasteTokenCommand(
 }
 
 export async function modelsAuthAddCommand(_opts: Record<string, never>, runtime: RuntimeEnv) {
-  const provider = (await select({
+  const provider = await select({
     message: "Token provider",
     options: [
       { value: "anthropic", label: "anthropic" },
       { value: "custom", label: "custom (type provider id)" },
     ],
-  })) as TokenProvider | "custom";
+  });
 
   const providerId =
     provider === "custom"
@@ -240,6 +270,24 @@ type LoginOptions = {
   setDefault?: boolean;
 };
 
+/**
+ * Clear stale cooldown/disabled state for all profiles matching a provider.
+ * When a user explicitly runs `models auth login`, they intend to fix auth —
+ * stale `auth_permanent` / `billing` lockouts should not persist across
+ * a deliberate re-authentication attempt.
+ */
+async function clearStaleProfileLockouts(provider: string, agentDir: string): Promise<void> {
+  try {
+    const store = loadAuthProfileStoreForRuntime(agentDir);
+    const profileIds = listProfilesForProvider(store, provider);
+    for (const profileId of profileIds) {
+      await clearAuthProfileCooldown({ store, profileId, agentDir });
+    }
+  } catch {
+    // Best-effort housekeeping — never block re-authentication.
+  }
+}
+
 export function resolveRequestedLoginProviderOrThrow(
   providers: ProviderPlugin[],
   rawProvider?: string,
@@ -272,6 +320,51 @@ function credentialMode(credential: AuthProfileCredential): "api_key" | "oauth" 
   return "oauth";
 }
 
+async function runBuiltInOpenAICodexLogin(params: {
+  opts: LoginOptions;
+  runtime: RuntimeEnv;
+  prompter: ReturnType<typeof createClackPrompter>;
+  agentDir: string;
+}) {
+  const creds = await loginOpenAICodexOAuth({
+    prompter: params.prompter,
+    runtime: params.runtime,
+    isRemote: isRemoteEnvironment(),
+    openUrl: async (url) => {
+      await openUrl(url);
+    },
+    localBrowserMessage: "Complete sign-in in browser…",
+  });
+  if (!creds) {
+    throw new Error("OpenAI Codex OAuth did not return credentials.");
+  }
+
+  const profileId = await writeOAuthCredentials("openai-codex", creds, params.agentDir, {
+    syncSiblingAgents: true,
+  });
+  await updateConfig((cfg) => {
+    let next = applyAuthProfileConfig(cfg, {
+      profileId,
+      provider: "openai-codex",
+      mode: "oauth",
+    });
+    if (params.opts.setDefault) {
+      next = applyOpenAICodexModelDefault(next).next;
+    }
+    return next;
+  });
+
+  logConfigUpdated(params.runtime);
+  params.runtime.log(`Auth profile: ${profileId} (openai-codex/oauth)`);
+  if (params.opts.setDefault) {
+    params.runtime.log(`Default model set to ${OPENAI_CODEX_DEFAULT_MODEL}`);
+  } else {
+    params.runtime.log(
+      `Default model available: ${OPENAI_CODEX_DEFAULT_MODEL} (use --set-default to apply)`,
+    );
+  }
+}
+
 export async function modelsAuthLoginCommand(opts: LoginOptions, runtime: RuntimeEnv) {
   if (!process.stdin.isTTY) {
     throw new Error("models auth login requires an interactive TTY.");
@@ -282,6 +375,19 @@ export async function modelsAuthLoginCommand(opts: LoginOptions, runtime: Runtim
   const agentDir = resolveAgentDir(config, defaultAgentId);
   const workspaceDir =
     resolveAgentWorkspaceDir(config, defaultAgentId) ?? resolveDefaultAgentWorkspaceDir();
+  const requestedProviderId = normalizeProviderId(String(opts.provider ?? ""));
+  const prompter = createClackPrompter();
+
+  if (requestedProviderId === "openai-codex") {
+    await clearStaleProfileLockouts("openai-codex", agentDir);
+    await runBuiltInOpenAICodexLogin({
+      opts,
+      runtime,
+      prompter,
+      agentDir,
+    });
+    return;
+  }
 
   const providers = resolvePluginProviders({ config, workspaceDir });
   if (providers.length === 0) {
@@ -290,7 +396,6 @@ export async function modelsAuthLoginCommand(opts: LoginOptions, runtime: Runtim
     );
   }
 
-  const prompter = createClackPrompter();
   const requestedProvider = resolveRequestedLoginProviderOrThrow(providers, opts.provider);
   const selectedProvider =
     requestedProvider ??
@@ -308,6 +413,8 @@ export async function modelsAuthLoginCommand(opts: LoginOptions, runtime: Runtim
   if (!selectedProvider) {
     throw new Error("Unknown provider. Use --provider <id> to pick a provider plugin.");
   }
+
+  await clearStaleProfileLockouts(selectedProvider.id, agentDir);
 
   const chosenMethod =
     pickAuthMethod(selectedProvider, opts.method) ??

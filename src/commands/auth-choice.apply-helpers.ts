@@ -1,9 +1,15 @@
 import { resolveEnvApiKey } from "../agents/model-auth.js";
 import type { OpenClawConfig } from "../config/types.js";
-import { type SecretInput, type SecretRef } from "../config/types.secrets.js";
+import {
+  isValidEnvSecretRefId,
+  type SecretInput,
+  type SecretRef,
+} from "../config/types.secrets.js";
 import { encodeJsonPointerToken } from "../secrets/json-pointer.js";
 import { PROVIDER_ENV_VARS } from "../secrets/provider-env-vars.js";
 import {
+  formatExecSecretRefIdValidationMessage,
+  isValidExecSecretRefId,
   isValidFileSecretRefId,
   resolveDefaultSecretProviderAlias,
 } from "../secrets/ref-contract.js";
@@ -15,9 +21,8 @@ import { applyDefaultModelChoice } from "./auth-choice.default-model.js";
 import type { SecretInputMode } from "./onboard-types.js";
 
 const ENV_SOURCE_LABEL_RE = /(?:^|:\s)([A-Z][A-Z0-9_]*)$/;
-const ENV_SECRET_REF_ID_RE = /^[A-Z][A-Z0-9_]{0,127}$/;
 
-type SecretRefChoice = "env" | "provider";
+type SecretRefChoice = "env" | "provider"; // pragma: allowlist secret
 
 export type SecretInputModePromptCopy = {
   modeMessage?: string;
@@ -98,7 +103,7 @@ export async function promptSecretRefForOnboarding(params: {
   const defaultEnvVar =
     params.preferredEnvVar ?? resolveDefaultProviderEnvVar(params.provider) ?? "";
   const defaultFilePointer = resolveDefaultFilePointerId(params.provider);
-  let sourceChoice: SecretRefChoice = "env";
+  let sourceChoice: SecretRefChoice = "env"; // pragma: allowlist secret
 
   while (true) {
     const sourceRaw: SecretRefChoice = await params.prompter.select<SecretRefChoice>({
@@ -127,7 +132,7 @@ export async function promptSecretRefForOnboarding(params: {
         placeholder: params.copy?.envVarPlaceholder ?? "OPENAI_API_KEY",
         validate: (value) => {
           const candidate = value.trim();
-          if (!ENV_SECRET_REF_ID_RE.test(candidate)) {
+          if (!isValidEnvSecretRefId(candidate)) {
             return (
               params.copy?.envVarFormatError ??
               'Use an env var name like "OPENAI_API_KEY" (uppercase letters, numbers, underscores).'
@@ -144,7 +149,7 @@ export async function promptSecretRefForOnboarding(params: {
       });
       const envCandidate = String(envVarRaw ?? "").trim();
       const envVar =
-        envCandidate && ENV_SECRET_REF_ID_RE.test(envCandidate) ? envCandidate : defaultEnvVar;
+        envCandidate && isValidEnvSecretRefId(envCandidate) ? envCandidate : defaultEnvVar;
       if (!envVar) {
         throw new Error(
           `No valid environment variable name provided for provider "${params.provider}".`,
@@ -234,6 +239,9 @@ export async function promptSecretRefForOnboarding(params: {
           candidate !== "value"
         ) {
           return 'singleValue mode expects id "value".';
+        }
+        if (providerEntry.source === "exec" && !isValidExecSecretRefId(candidate)) {
+          return formatExecSecretRefIdValidationMessage();
         }
         return undefined;
       },

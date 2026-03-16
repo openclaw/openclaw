@@ -1,17 +1,41 @@
+import { resolveIsNixMode } from "../../config/paths.js";
 import {
   resolveGatewayLaunchAgentLabel,
   resolveGatewaySystemdServiceName,
   resolveGatewayWindowsTaskName,
 } from "../../daemon/constants.js";
-import { resolveGatewayLogPaths } from "../../daemon/launchd.js";
 import { formatRuntimeStatus } from "../../daemon/runtime-format.js";
+import {
+  buildPlatformRuntimeLogHints,
+  buildPlatformServiceStartHints,
+} from "../../daemon/runtime-hints.js";
 import { getResolvedLoggerSettings } from "../../logging.js";
 import { colorize, isRich, theme } from "../../terminal/theme.js";
 import { formatCliCommand } from "../command-format.js";
 import { parsePort } from "../shared/parse-port.js";
+import { createDaemonActionContext } from "./response.js";
 
 export { formatRuntimeStatus };
 export { parsePort };
+
+export function createDaemonInstallActionContext(jsonFlag: unknown) {
+  const json = Boolean(jsonFlag);
+  return {
+    json,
+    ...createDaemonActionContext({ action: "install", json }),
+  };
+}
+
+export function failIfNixDaemonInstallMode(
+  fail: (message: string, hints?: string[]) => void,
+  env: NodeJS.ProcessEnv = process.env,
+): boolean {
+  if (!resolveIsNixMode(env)) {
+    return false;
+  }
+  fail("Nix mode detected; service install is disabled.");
+  return true;
+}
 
 export function createCliStatusTextStyles() {
   const rich = isRich();
@@ -144,41 +168,24 @@ export function renderRuntimeHints(
     if (fileLog) {
       hints.push(`File logs: ${fileLog}`);
     }
-    if (process.platform === "darwin") {
-      const logs = resolveGatewayLogPaths(env);
-      hints.push(`Launchd stdout (if installed): ${logs.stdoutPath}`);
-      hints.push(`Launchd stderr (if installed): ${logs.stderrPath}`);
-    } else if (process.platform === "linux") {
-      const unit = resolveGatewaySystemdServiceName(env.OPENCLAW_PROFILE);
-      hints.push(`Logs: journalctl --user -u ${unit}.service -n 200 --no-pager`);
-    } else if (process.platform === "win32") {
-      const task = resolveGatewayWindowsTaskName(env.OPENCLAW_PROFILE);
-      hints.push(`Logs: schtasks /Query /TN "${task}" /V /FO LIST`);
-    }
+    hints.push(
+      ...buildPlatformRuntimeLogHints({
+        env,
+        systemdServiceName: resolveGatewaySystemdServiceName(env.OPENCLAW_PROFILE),
+        windowsTaskName: resolveGatewayWindowsTaskName(env.OPENCLAW_PROFILE),
+      }),
+    );
   }
   return hints;
 }
 
 export function renderGatewayServiceStartHints(env: NodeJS.ProcessEnv = process.env): string[] {
-  const base = [
-    formatCliCommand("openclaw gateway install", env),
-    formatCliCommand("openclaw gateway", env),
-  ];
   const profile = env.OPENCLAW_PROFILE;
-  switch (process.platform) {
-    case "darwin": {
-      const label = resolveGatewayLaunchAgentLabel(profile);
-      return [...base, `launchctl bootstrap gui/$UID ~/Library/LaunchAgents/${label}.plist`];
-    }
-    case "linux": {
-      const unit = resolveGatewaySystemdServiceName(profile);
-      return [...base, `systemctl --user start ${unit}.service`];
-    }
-    case "win32": {
-      const task = resolveGatewayWindowsTaskName(profile);
-      return [...base, `schtasks /Run /TN "${task}"`];
-    }
-    default:
-      return base;
-  }
+  return buildPlatformServiceStartHints({
+    installCommand: formatCliCommand("openclaw gateway install", env),
+    startCommand: formatCliCommand("openclaw gateway", env),
+    launchAgentPlistPath: `~/Library/LaunchAgents/${resolveGatewayLaunchAgentLabel(profile)}.plist`,
+    systemdServiceName: resolveGatewaySystemdServiceName(profile),
+    windowsTaskName: resolveGatewayWindowsTaskName(profile),
+  });
 }

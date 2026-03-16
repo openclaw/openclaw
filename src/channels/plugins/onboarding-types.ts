@@ -2,7 +2,12 @@ import type { OpenClawConfig } from "../../config/config.js";
 import type { DmPolicy } from "../../config/types.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import type { WizardPrompter } from "../../wizard/prompts.js";
-import type { ChannelId } from "./types.js";
+import type { ChannelId, ChannelPlugin } from "./types.js";
+
+export type ChannelOnboardingSetupPlugin = Pick<
+  ChannelPlugin,
+  "id" | "meta" | "capabilities" | "config" | "setup" | "setupWizard"
+>;
 
 export type SetupChannelsOptions = {
   allowDisable?: boolean;
@@ -10,6 +15,7 @@ export type SetupChannelsOptions = {
   onSelection?: (selection: ChannelId[]) => void;
   accountIds?: Partial<Record<ChannelId, string>>;
   onAccountId?: (channel: ChannelId, accountId: string) => void;
+  onResolvedPlugin?: (channel: ChannelId, plugin: ChannelOnboardingSetupPlugin) => void;
   promptAccountIds?: boolean;
   whatsappAccountId?: string;
   promptWhatsAppAccountId?: boolean;

@@ -1,4 +1,4 @@
-import type { DiscordPluralKitConfig } from "../discord/pluralkit.js";
+import type { DiscordPluralKitConfig } from "../../extensions/discord/src/pluralkit.js";
 import type {
   BlockStreamingChunkConfig,
   BlockStreamingCoalesceConfig,
@@ -8,7 +8,10 @@ import type {
   OutboundRetryConfig,
   ReplyToMode,
 } from "./types.base.js";
-import type { ChannelHeartbeatVisibilityConfig } from "./types.channels.js";
+import type {
+  ChannelHealthMonitorConfig,
+  ChannelHeartbeatVisibilityConfig,
+} from "./types.channels.js";
 import type { DmConfig, ProviderCommandsConfig } from "./types.messages.js";
 import type { SecretInput } from "./types.secrets.js";
 import type { GroupToolPolicyBySenderConfig, GroupToolPolicyConfig } from "./types.tools.js";
@@ -52,6 +55,8 @@ export type DiscordGuildChannelConfig = {
   systemPrompt?: string;
   /** If false, omit thread starter context for this channel (default: true). */
   includeThreadStarter?: boolean;
+  /** If true, automatically create a thread for each new message in this channel. */
+  autoThread?: boolean;
 };
 
 export type DiscordReactionNotificationMode = "off" | "own" | "all" | "allowlist";
@@ -295,6 +300,8 @@ export type DiscordAccountConfig = {
   guilds?: Record<string, DiscordGuildEntry>;
   /** Heartbeat visibility settings for this channel. */
   heartbeat?: ChannelHeartbeatVisibilityConfig;
+  /** Channel health monitor overrides for this channel/account. */
+  healthMonitor?: ChannelHealthMonitorConfig;
   /** Exec approval forwarding configuration. */
   execApprovals?: DiscordExecApprovalConfig;
   /** Agent-controlled interactive components (buttons, select menus). */
@@ -331,10 +338,20 @@ export type DiscordAccountConfig = {
   /** Streaming URL (Twitch/YouTube). Required when activityType=1. */
   activityUrl?: string;
   /**
+   * In-process worker settings for queued inbound Discord runs.
+   * This is separate from Carbon's eventQueue listener budget.
+   */
+  inboundWorker?: {
+    /**
+     * Max time (ms) a queued inbound run may execute before OpenClaw aborts it.
+     * Defaults to 1800000 (30 minutes). Set 0 to disable the worker-owned timeout.
+     */
+    runTimeoutMs?: number;
+  };
+  /**
    * Carbon EventQueue configuration. Controls how Discord gateway events are processed.
-   * The most important option is `listenerTimeout` which defaults to 30s in Carbon --
-   * too short for LLM calls with extended thinking. Set a higher value (e.g. 120000)
-   * to prevent the event queue from killing long-running message handlers.
+   * `listenerTimeout` only covers gateway listener work such as normalization and enqueue.
+   * It does not control the lifetime of queued inbound agent turns.
    */
   eventQueue?: {
     /** Max time (ms) a single listener can run before being killed. Default: 120000. */

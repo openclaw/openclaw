@@ -1,10 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
+import { buildChannelOnboardingAdapterFromSetupWizard } from "../../../src/channels/plugins/setup-wizard.js";
 
 vi.mock("./probe.js", () => ({
   probeFeishu: vi.fn(async () => ({ ok: false, error: "mocked" })),
 }));
 
-import { feishuOnboardingAdapter } from "./onboarding.js";
+import { feishuPlugin } from "./channel.js";
 
 const baseConfigureContext = {
   runtime: {} as never,
@@ -17,7 +18,50 @@ const baseStatusContext = {
   accountOverrides: {},
 };
 
-describe("feishuOnboardingAdapter.configure", () => {
+async function withEnvVars(values: Record<string, string | undefined>, run: () => Promise<void>) {
+  const previous = new Map<string, string | undefined>();
+  for (const [key, value] of Object.entries(values)) {
+    previous.set(key, process.env[key]);
+    if (value === undefined) {
+      delete process.env[key];
+    } else {
+      process.env[key] = value;
+    }
+  }
+
+  try {
+    await run();
+  } finally {
+    for (const [key, prior] of previous.entries()) {
+      if (prior === undefined) {
+        delete process.env[key];
+      } else {
+        process.env[key] = prior;
+      }
+    }
+  }
+}
+
+async function getStatusWithEnvRefs(params: { appIdKey: string; appSecretKey: string }) {
+  return await feishuConfigureAdapter.getStatus({
+    cfg: {
+      channels: {
+        feishu: {
+          appId: { source: "env", id: params.appIdKey, provider: "default" },
+          appSecret: { source: "env", id: params.appSecretKey, provider: "default" },
+        },
+      },
+    } as never,
+    ...baseStatusContext,
+  });
+}
+
+const feishuConfigureAdapter = buildChannelOnboardingAdapterFromSetupWizard({
+  plugin: feishuPlugin,
+  wizard: feishuPlugin.setupWizard!,
+});
+
+describe("feishu setup wizard", () => {
   it("does not throw when config appId/appSecret are SecretRef objects", async () => {
     const text = vi
       .fn()
@@ -35,7 +79,7 @@ describe("feishuOnboardingAdapter.configure", () => {
     } as never;
 
     await expect(
-      feishuOnboardingAdapter.configure({
+      feishuConfigureAdapter.configure({
         cfg: {
           channels: {
             feishu: {
@@ -51,9 +95,9 @@ describe("feishuOnboardingAdapter.configure", () => {
   });
 });
 
-describe("feishuOnboardingAdapter.getStatus", () => {
+describe("feishu setup wizard status", () => {
   it("does not fallback to top-level appId when account explicitly sets empty appId", async () => {
-    const status = await feishuOnboardingAdapter.getStatus({
+    const status = await feishuConfigureAdapter.getStatus({
       cfg: {
         channels: {
           feishu: {
@@ -61,7 +105,7 @@ describe("feishuOnboardingAdapter.getStatus", () => {
             accounts: {
               main: {
                 appId: "",
-                appSecret: "secret_123",
+                appSecret: "sample-app-credential", // pragma: allowlist secret
               },
             },
           },
@@ -75,73 +119,31 @@ describe("feishuOnboardingAdapter.getStatus", () => {
 
   it("treats env SecretRef appId as not configured when env var is missing", async () => {
     const appIdKey = "FEISHU_APP_ID_STATUS_MISSING_TEST";
-    const appSecretKey = "FEISHU_APP_SECRET_STATUS_MISSING_TEST";
-    const prevAppId = process.env[appIdKey];
-    const prevAppSecret = process.env[appSecretKey];
-    delete process.env[appIdKey];
-    process.env[appSecretKey] = "secret_env_456";
-
-    try {
-      const status = await feishuOnboardingAdapter.getStatus({
-        cfg: {
-          channels: {
-            feishu: {
-              appId: { source: "env", id: appIdKey, provider: "default" },
-              appSecret: { source: "env", id: appSecretKey, provider: "default" },
-            },
-          },
-        } as never,
-        ...baseStatusContext,
-      });
-
-      expect(status.configured).toBe(false);
-    } finally {
-      if (prevAppId === undefined) {
-        delete process.env[appIdKey];
-      } else {
-        process.env[appIdKey] = prevAppId;
-      }
-      if (prevAppSecret === undefined) {
-        delete process.env[appSecretKey];
-      } else {
-        process.env[appSecretKey] = prevAppSecret;
-      }
-    }
+    const appSecretKey = "FEISHU_APP_CREDENTIAL_STATUS_MISSING_TEST"; // pragma: allowlist secret
+    await withEnvVars(
+      {
+        [appIdKey]: undefined,
+        [appSecretKey]: "env-credential-456", // pragma: allowlist secret
+      },
+      async () => {
+        const status = await getStatusWithEnvRefs({ appIdKey, appSecretKey });
+        expect(status.configured).toBe(false);
+      },
+    );
   });
 
   it("treats env SecretRef appId/appSecret as configured in status", async () => {
     const appIdKey = "FEISHU_APP_ID_STATUS_TEST";
-    const appSecretKey = "FEISHU_APP_SECRET_STATUS_TEST";
-    const prevAppId = process.env[appIdKey];
-    const prevAppSecret = process.env[appSecretKey];
-    process.env[appIdKey] = "cli_env_123";
-    process.env[appSecretKey] = "secret_env_456";
-
-    try {
-      const status = await feishuOnboardingAdapter.getStatus({
-        cfg: {
-          channels: {
-            feishu: {
-              appId: { source: "env", id: appIdKey, provider: "default" },
-              appSecret: { source: "env", id: appSecretKey, provider: "default" },
-            },
-          },
-        } as never,
-        ...baseStatusContext,
-      });
-
-      expect(status.configured).toBe(true);
-    } finally {
-      if (prevAppId === undefined) {
-        delete process.env[appIdKey];
-      } else {
-        process.env[appIdKey] = prevAppId;
-      }
-      if (prevAppSecret === undefined) {
-        delete process.env[appSecretKey];
-      } else {
-        process.env[appSecretKey] = prevAppSecret;
-      }
-    }
+    const appSecretKey = "FEISHU_APP_CREDENTIAL_STATUS_TEST"; // pragma: allowlist secret
+    await withEnvVars(
+      {
+        [appIdKey]: "cli_env_123",
+        [appSecretKey]: "env-credential-456", // pragma: allowlist secret
+      },
+      async () => {
+        const status = await getStatusWithEnvRefs({ appIdKey, appSecretKey });
+        expect(status.configured).toBe(true);
+      },
+    );
   });
 });

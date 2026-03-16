@@ -41,6 +41,10 @@ describe("doctor command", () => {
               api: "openai-completions",
               baseUrl: "https://opencode.ai/zen/v1",
             },
+            "opencode-go": {
+              api: "openai-completions",
+              baseUrl: "https://opencode.ai/zen/go/v1",
+            },
           },
         },
       },
@@ -53,7 +57,9 @@ describe("doctor command", () => {
 
     const warned = note.mock.calls.some(
       ([message, title]) =>
-        title === "OpenCode Zen" && String(message).includes("models.providers.opencode"),
+        title === "OpenCode" &&
+        String(message).includes("models.providers.opencode") &&
+        String(message).includes("models.providers.opencode-go"),
     );
     expect(warned).toBe(true);
   });
@@ -86,5 +92,82 @@ describe("doctor command", () => {
       String(message).includes("Gateway auth is off or missing a token"),
     );
     expect(warned).toBe(false);
+  });
+
+  it("warns when token and password are both configured and gateway.auth.mode is unset", async () => {
+    mockDoctorConfigSnapshot({
+      config: {
+        gateway: {
+          mode: "local",
+          auth: {
+            token: "token-value",
+            password: "password-value", // pragma: allowlist secret
+          },
+        },
+      },
+    });
+
+    note.mockClear();
+
+    await doctorCommand(createDoctorRuntime(), {
+      nonInteractive: true,
+      workspaceSuggestions: false,
+    });
+
+    const gatewayAuthNote = note.mock.calls.find((call) => call[1] === "Gateway auth");
+    expect(gatewayAuthNote).toBeTruthy();
+    expect(String(gatewayAuthNote?.[0])).toContain("gateway.auth.mode is unset");
+    expect(String(gatewayAuthNote?.[0])).toContain("openclaw config set gateway.auth.mode token");
+    expect(String(gatewayAuthNote?.[0])).toContain(
+      "openclaw config set gateway.auth.mode password",
+    );
+  });
+
+  it("keeps doctor read-only when gateway token is SecretRef-managed but unresolved", async () => {
+    mockDoctorConfigSnapshot({
+      config: {
+        gateway: {
+          mode: "local",
+          auth: {
+            mode: "token",
+            token: {
+              source: "env",
+              provider: "default",
+              id: "OPENCLAW_GATEWAY_TOKEN",
+            },
+          },
+        },
+        secrets: {
+          providers: {
+            default: { source: "env" },
+          },
+        },
+      },
+    });
+
+    const previousToken = process.env.OPENCLAW_GATEWAY_TOKEN;
+    delete process.env.OPENCLAW_GATEWAY_TOKEN;
+    note.mockClear();
+    try {
+      await doctorCommand(createDoctorRuntime(), {
+        nonInteractive: true,
+        workspaceSuggestions: false,
+      });
+    } finally {
+      if (previousToken === undefined) {
+        delete process.env.OPENCLAW_GATEWAY_TOKEN;
+      } else {
+        process.env.OPENCLAW_GATEWAY_TOKEN = previousToken;
+      }
+    }
+
+    const gatewayAuthNote = note.mock.calls.find((call) => call[1] === "Gateway auth");
+    expect(gatewayAuthNote).toBeTruthy();
+    expect(String(gatewayAuthNote?.[0])).toContain(
+      "Gateway token is managed via SecretRef and is currently unavailable.",
+    );
+    expect(String(gatewayAuthNote?.[0])).toContain(
+      "Doctor will not overwrite gateway.auth.token with a plaintext value.",
+    );
   });
 });

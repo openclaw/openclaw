@@ -256,7 +256,7 @@ Enable with `tools.loopDetection.enabled: true` (default is `false`).
 
 ### `web_search`
 
-Search the web using Brave Search API.
+Search the web using Perplexity, Brave, Gemini, Grok, or Kimi.
 
 Core parameters:
 
@@ -265,7 +265,7 @@ Core parameters:
 
 Notes:
 
-- Requires a Brave API key (recommended: `openclaw configure --section web`, or set `BRAVE_API_KEY`).
+- Requires an API key for the chosen provider (recommended: `openclaw configure --section web`).
 - Enable via `tools.web.search.enabled`.
 - Responses are cached (default 15 min).
 - See [Web tools](/tools/web) for setup.
@@ -316,7 +316,11 @@ Common parameters:
   Notes:
 - Requires `browser.enabled=true` (default is `true`; set `false` to disable).
 - All actions accept optional `profile` parameter for multi-instance support.
-- When `profile` is omitted, uses `browser.defaultProfile` (defaults to "chrome").
+- Omit `profile` for the safe default: isolated OpenClaw-managed browser (`openclaw`).
+- Use `profile="user"` for the real local host browser when existing logins/cookies matter and the user is present to click/approve any attach prompt.
+- Use `profile="chrome-relay"` only for the Chrome extension / toolbar-button attach flow.
+- `profile="user"` and `profile="chrome-relay"` are host-only; do not combine them with sandbox/node targets.
+- When `profile` is omitted, uses `browser.defaultProfile` (defaults to `openclaw`).
 - Profile names: lowercase alphanumeric + hyphens only (max 64 chars).
 - Port range: 18800-18899 (~100 profiles max).
 - Remote profiles are attach-only (no start/stop/reset).
@@ -453,14 +457,18 @@ Restart or apply updates to the running Gateway process (in-place).
 Core actions:
 
 - `restart` (authorizes + sends `SIGUSR1` for in-process restart; `openclaw gateway` restart in-place)
-- `config.get` / `config.schema`
+- `config.schema.lookup` (inspect one config path at a time without loading the full schema into prompt context)
+- `config.get`
 - `config.apply` (validate + write config + restart + wake)
 - `config.patch` (merge partial update + restart + wake)
 - `update.run` (run update + restart + wake)
 
 Notes:
 
+- `config.schema.lookup` expects a targeted config path such as `gateway.auth` or `agents.list.*.heartbeat`.
+- Paths may include slash-delimited plugin ids when addressing `plugins.entries.<id>`, for example `plugins.entries.pack/one.config`.
 - Use `delayMs` (defaults to 2000) to avoid interrupting an in-flight reply.
+- `config.schema` remains available to internal Control UI flows and is not exposed through the agent `gateway` tool.
 - `restart` is enabled by default; set `commands.restart: false` to disable it.
 
 ### `sessions_list` / `sessions_history` / `sessions_send` / `sessions_spawn` / `session_status`
@@ -527,6 +535,9 @@ Browser tool:
 - `profile` (optional; defaults to `browser.defaultProfile`)
 - `target` (`sandbox` | `host` | `node`)
 - `node` (optional; pin a specific node id/name)
+- Troubleshooting guides:
+  - Linux startup/CDP issues: [Browser troubleshooting (Linux)](/tools/browser-linux-troubleshooting)
+  - WSL2 Gateway + Windows remote Chrome CDP: [WSL2 + Windows + remote Chrome CDP troubleshooting](/tools/browser-wsl2-windows-remote-cdp-troubleshooting)
 
 ## Recommended agent flows
 

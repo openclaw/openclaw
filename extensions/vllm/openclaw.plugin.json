@@ -1,0 +1,12 @@
+{
+  "id": "vllm",
+  "providers": ["vllm"],
+  "providerAuthEnvVars": {
+    "vllm": ["VLLM_API_KEY"]
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

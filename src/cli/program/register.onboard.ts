@@ -1,5 +1,5 @@
 import type { Command } from "commander";
-import { formatAuthChoiceChoicesForCli } from "../../commands/auth-choice-options.js";
+import { formatStaticAuthChoiceChoicesForCli } from "../../commands/auth-choice-options.static.js";
 import type { GatewayDaemonRuntime } from "../../commands/daemon-runtime.js";
 import { ONBOARD_PROVIDER_AUTH_FLAGS } from "../../commands/onboard-provider-auth-flags.js";
 import type {
@@ -41,7 +41,7 @@ function resolveInstallDaemonFlag(
   return undefined;
 }
 
-const AUTH_CHOICE_HELP = formatAuthChoiceChoicesForCli({
+const AUTH_CHOICE_HELP = formatStaticAuthChoiceChoicesForCli({
   includeLegacyAliases: true,
   includeSkip: true,
 });
@@ -104,6 +104,10 @@ export function registerOnboardCommand(program: Command) {
     .option("--gateway-bind <mode>", "Gateway bind: loopback|tailnet|lan|auto|custom")
     .option("--gateway-auth <mode>", "Gateway auth: token|password")
     .option("--gateway-token <token>", "Gateway token (token auth)")
+    .option(
+      "--gateway-token-ref-env <name>",
+      "Gateway token SecretRef env var name (token auth; e.g. OPENCLAW_GATEWAY_TOKEN)",
+    )
     .option("--gateway-password <password>", "Gateway password (password auth)")
     .option("--remote-url <url>", "Remote Gateway WebSocket URL")
     .option("--remote-token <token>", "Remote Gateway token (optional)")
@@ -115,6 +119,7 @@ export function registerOnboardCommand(program: Command) {
     .option("--daemon-runtime <runtime>", "Daemon runtime: node|bun")
     .option("--skip-channels", "Skip channel setup")
     .option("--skip-skills", "Skip skills setup")
+    .option("--skip-search", "Skip search provider setup")
     .option("--skip-health", "Skip health check")
     .option("--skip-ui", "Skip Control UI/TUI prompts")
     .option("--node-manager <name>", "Node manager for skills: npm|pnpm|bun")
@@ -155,12 +160,15 @@ export function registerOnboardCommand(program: Command) {
           zaiApiKey: opts.zaiApiKey as string | undefined,
           xiaomiApiKey: opts.xiaomiApiKey as string | undefined,
           qianfanApiKey: opts.qianfanApiKey as string | undefined,
+          modelstudioApiKeyCn: opts.modelstudioApiKeyCn as string | undefined,
+          modelstudioApiKey: opts.modelstudioApiKey as string | undefined,
           minimaxApiKey: opts.minimaxApiKey as string | undefined,
           syntheticApiKey: opts.syntheticApiKey as string | undefined,
           veniceApiKey: opts.veniceApiKey as string | undefined,
           togetherApiKey: opts.togetherApiKey as string | undefined,
           huggingfaceApiKey: opts.huggingfaceApiKey as string | undefined,
           opencodeZenApiKey: opts.opencodeZenApiKey as string | undefined,
+          opencodeGoApiKey: opts.opencodeGoApiKey as string | undefined,
           xaiApiKey: opts.xaiApiKey as string | undefined,
           litellmApiKey: opts.litellmApiKey as string | undefined,
           volcengineApiKey: opts.volcengineApiKey as string | undefined,
@@ -177,6 +185,7 @@ export function registerOnboardCommand(program: Command) {
           gatewayBind: opts.gatewayBind as GatewayBind | undefined,
           gatewayAuth: opts.gatewayAuth as GatewayAuthChoice | undefined,
           gatewayToken: opts.gatewayToken as string | undefined,
+          gatewayTokenRefEnv: opts.gatewayTokenRefEnv as string | undefined,
           gatewayPassword: opts.gatewayPassword as string | undefined,
           remoteUrl: opts.remoteUrl as string | undefined,
           remoteToken: opts.remoteToken as string | undefined,
@@ -188,6 +197,7 @@ export function registerOnboardCommand(program: Command) {
           daemonRuntime: opts.daemonRuntime as GatewayDaemonRuntime | undefined,
           skipChannels: Boolean(opts.skipChannels),
           skipSkills: Boolean(opts.skipSkills),
+          skipSearch: Boolean(opts.skipSearch),
           skipHealth: Boolean(opts.skipHealth),
           skipUi: Boolean(opts.skipUi),
           nodeManager: opts.nodeManager as NodeManagerChoice | undefined,
