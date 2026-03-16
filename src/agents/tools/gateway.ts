@@ -1,6 +1,7 @@
 import { loadConfig, resolveGatewayPort } from "../../config/config.js";
 import { callGateway } from "../../gateway/call.js";
 import { resolveGatewayCredentialsFromConfig, trimToUndefined } from "../../gateway/credentials.js";
+import { tryLocalGatewayDispatch } from "../../gateway/local-dispatch.js";
 import { resolveLeastPrivilegeOperatorScopesForMethod } from "../../gateway/method-scopes.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../../utils/message-channel.js";
 import { readStringParam } from "./common.js";
@@ -143,6 +144,23 @@ export async function callGatewayTool<T = Record<string, unknown>>(
   params?: unknown,
   extra?: { expectFinal?: boolean },
 ) {
+  // When running inside the gateway process, dispatch directly in-process
+  // to avoid WS self-contention during active LLM sessions (#40237).
+  // Skip local dispatch when:
+  //  - caller explicitly targets a specific gateway URL (may be remote)
+  //  - caller needs expectFinal semantics (completion-waiting not supported by local dispatch)
+  const hasExplicitUrl = trimToUndefined(opts.gatewayUrl) !== undefined;
+  const needsExpectFinal = extra?.expectFinal === true;
+  if (!hasExplicitUrl && !needsExpectFinal) {
+    const localResult = tryLocalGatewayDispatch<T>(
+      method,
+      (params ?? {}) as Record<string, unknown>,
+    );
+    if (localResult !== undefined) {
+      return await localResult;
+    }
+  }
+
   const gateway = resolveGatewayOptions(opts);
   const scopes = resolveLeastPrivilegeOperatorScopesForMethod(method);
   return await callGateway<T>({
