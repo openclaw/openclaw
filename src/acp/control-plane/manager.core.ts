@@ -702,10 +702,13 @@ export class AcpSessionManager {
               try {
                 await Promise.race([input.onEvent(event), onEventAbortPromise]);
               } catch (err) {
-                // Abort fired mid-callback: stop emitting events. The caller
-                // (withTimeout) already rejected; avoid cascading errors.
+                // Abort fired mid-callback: propagate as an error so the outer
+                // catch block records the turn as failed. Previously this did
+                // `break`, which let the for-await loop exit normally and fall
+                // through to `recordTurnCompletion` + `state: "idle"` as if the
+                // turn had succeeded.
                 if (combinedSignal.aborted) {
-                  break;
+                  throw combinedSignal.reason ?? new DOMException("Turn aborted", "AbortError");
                 }
                 throw err;
               } finally {
