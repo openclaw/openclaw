@@ -13,6 +13,7 @@ let healthVersion = 1;
 let healthCache: HealthSummary | null = null;
 let healthRefresh: Promise<HealthSummary> | null = null;
 let broadcastHealthUpdate: ((snap: HealthSummary) => void) | null = null;
+let lastBroadcastStableJson: string | null = null;
 
 export function buildGatewaySnapshot(): Snapshot {
   const cfg = loadConfig();
@@ -73,8 +74,24 @@ export async function refreshGatewayHealthSnapshot(opts?: { probe?: boolean }) {
       const snap = await getHealthSnapshot({ probe: opts?.probe });
       healthCache = snap;
       healthVersion += 1;
+      // Only broadcast when the health payload has materially changed to avoid
+      // sending ~6 KB of identical JSON to every WebSocket client each cycle.
+      // Fields like ts, durationMs, age, and lastProbeAt change every refresh
+      // but carry no meaningful state change, so we strip them before comparing.
       if (broadcastHealthUpdate) {
-        broadcastHealthUpdate(snap);
+        const stableJson = JSON.stringify(snap, (key, value) =>
+          key === "ts" ||
+          key === "durationMs" ||
+          key === "age" ||
+          key === "lastProbeAt" ||
+          key === "updatedAt"
+            ? undefined
+            : value,
+        );
+        if (stableJson !== lastBroadcastStableJson) {
+          lastBroadcastStableJson = stableJson;
+          broadcastHealthUpdate(snap);
+        }
       }
       return snap;
     })().finally(() => {

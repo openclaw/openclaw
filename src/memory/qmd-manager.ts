@@ -5,7 +5,7 @@ import readline from "node:readline";
 import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveStateDir } from "../config/paths.js";
-import { writeFileWithinRoot } from "../infra/fs-safe.js";
+import { SafeOpenError, writeFileWithinRoot } from "../infra/fs-safe.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { isFileMissingError, statRegularFile } from "./fs-utils.js";
 import { resolveCliSpawnInvocation, runCliCommand } from "./qmd-process.js";
@@ -1425,12 +1425,30 @@ export class QmdMemoryManager implements MemorySearchManager {
       tracked.add(sessionFile);
       const state = this.exportedSessionState.get(sessionFile);
       if (!state || state.hash !== entry.hash || state.mtimeMs !== entry.mtimeMs) {
-        await writeFileWithinRoot({
-          rootDir: exportDir,
-          relativePath: targetName,
-          data: this.renderSessionMarkdown(entry),
-          encoding: "utf-8",
-        });
+        try {
+          await writeFileWithinRoot({
+            rootDir: exportDir,
+            relativePath: targetName,
+            data: this.renderSessionMarkdown(entry),
+            encoding: "utf-8",
+          });
+        } catch (err) {
+          // Concurrent agent writes can cause post-write verification to fail
+          // because another agent atomically replaced the same file between our
+          // rename and our verify step.  The data was written successfully by
+          // whichever agent won the race, so a single retry is sufficient.
+          if (err instanceof SafeOpenError && err.code === "path-mismatch") {
+            log.debug(`qmd session export retry for ${targetName} (concurrent write detected)`);
+            await writeFileWithinRoot({
+              rootDir: exportDir,
+              relativePath: targetName,
+              data: this.renderSessionMarkdown(entry),
+              encoding: "utf-8",
+            });
+          } else {
+            throw err;
+          }
+        }
       }
       this.exportedSessionState.set(sessionFile, {
         hash: entry.hash,
