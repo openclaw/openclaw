@@ -26,7 +26,7 @@ Status: bundled plugin that talks to the BlueBubbles macOS server over HTTP. **R
 
 1. Install the BlueBubbles server on your Mac (follow the instructions at [bluebubbles.app/install](https://bluebubbles.app/install)).
 2. In the BlueBubbles config, enable the web API and set a password.
-3. Run `openclaw setup --wizard` and select BlueBubbles, or configure manually:
+3. Run `openclaw onboard` and select BlueBubbles, or configure manually:
 
    ```json5
    {
@@ -129,7 +129,7 @@ launchctl load ~/Library/LaunchAgents/com.user.poke-messages.plist
 BlueBubbles is available in the interactive setup wizard:
 
 ```
-openclaw setup --wizard
+openclaw onboard
 ```
 
 The wizard prompts for:

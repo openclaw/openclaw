@@ -10,7 +10,7 @@ import { hasExplicitOptions } from "../command-options.js";
 export function registerSetupCommand(program: Command) {
   program
     .command("setup")
-    .description("Initialize config/workspace or run the setup wizard")
+    .description("Initialize ~/.openclaw/openclaw.json and the agent workspace")
     .addHelpText(
       "after",
       () =>
@@ -20,8 +20,8 @@ export function registerSetupCommand(program: Command) {
       "--workspace <dir>",
       "Agent workspace directory (default: ~/.openclaw/workspace; stored as agents.defaults.workspace)",
     )
-    .option("--wizard", "Run the guided setup wizard", false)
-    .option("--non-interactive", "Run the setup wizard without prompts", false)
+    .option("--wizard", "Run the interactive onboarding wizard", false)
+    .option("--non-interactive", "Run the wizard without prompts", false)
     .option("--mode <mode>", "Wizard mode: local|remote")
     .option("--remote-url <url>", "Remote Gateway WebSocket URL")
     .option("--remote-token <token>", "Remote Gateway token (optional)")

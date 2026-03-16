@@ -2,7 +2,7 @@
 summary: "Full reference for the CLI setup wizard: every step, flag, and config field"
 read_when:
   - Looking up a specific wizard step or flag
-  - Automating setup with non-interactive mode
+  - Automating onboarding with non-interactive mode
   - Debugging wizard behavior
 title: "Setup Wizard Reference"
 sidebarTitle: "Wizard Reference"
@@ -10,7 +10,7 @@ sidebarTitle: "Wizard Reference"
 
 # Setup Wizard Reference
 
-This is the full reference for the `openclaw setup --wizard` CLI wizard.
+This is the full reference for the `openclaw onboard` CLI wizard.
 For a high-level overview, see [Setup Wizard](/start/wizard).
 
 ## Flow details (local mode)
@@ -76,11 +76,11 @@ For a high-level overview, see [Setup Wizard](/start/wizard).
     - In token mode, interactive setup offers:
       - **Generate/store plaintext token** (default)
       - **Use SecretRef** (opt-in)
-      - Quickstart reuses existing `gateway.auth.token` SecretRefs across `env`, `file`, and `exec` providers for setup probe/dashboard bootstrap.
-      - If that SecretRef is configured but cannot be resolved, setup fails early with a clear fix message instead of silently degrading runtime auth.
+      - Quickstart reuses existing `gateway.auth.token` SecretRefs across `env`, `file`, and `exec` providers for onboarding probe/dashboard bootstrap.
+      - If that SecretRef is configured but cannot be resolved, onboarding fails early with a clear fix message instead of silently degrading runtime auth.
     - In password mode, interactive setup also supports plaintext or SecretRef storage.
     - Non-interactive token SecretRef path: `--gateway-token-ref-env <ENV_VAR>`.
-      - Requires a non-empty env var in the setup process environment.
+      - Requires a non-empty env var in the onboarding process environment.
       - Cannot be combined with `--gateway-token`.
     - Disable auth only if you fully trust every local process.
     - Non‑loopback binds still require auth.
@@ -137,7 +137,7 @@ If the Control UI assets are missing, the wizard attempts to build them; fallbac
 Use `--non-interactive` to automate or script onboarding:
 
 ```bash
-openclaw setup --wizard --non-interactive \
+openclaw onboard --non-interactive \
   --mode local \
   --auth-choice apiKey \
   --anthropic-api-key "$ANTHROPIC_API_KEY" \
@@ -154,7 +154,7 @@ Gateway token SecretRef in non-interactive mode:
 
 ```bash
 export OPENCLAW_GATEWAY_TOKEN="your-token"
-openclaw setup --wizard --non-interactive \
+openclaw onboard --non-interactive \
   --mode local \
   --auth-choice skip \
   --gateway-auth token \

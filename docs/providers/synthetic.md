@@ -17,7 +17,7 @@ Synthetic exposes Anthropic-compatible endpoints. OpenClaw registers it as the
 2. Run onboarding:
 
 ```bash
-openclaw setup --wizard --auth-choice synthetic-api-key
+openclaw onboard --auth-choice synthetic-api-key
 ```
 
 The default model is set to:

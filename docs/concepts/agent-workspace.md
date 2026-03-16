@@ -36,7 +36,7 @@ inside a sandbox workspace under `~/.openclaw/sandboxes`, not your host workspac
 }
 ```
 
-`openclaw setup --wizard`, `openclaw configure`, or `openclaw setup` will create the
+`openclaw onboard`, `openclaw configure`, or `openclaw setup` will create the
 workspace and seed the bootstrap files if they are missing.
 Sandbox seed copies only accept regular in-workspace files; symlink/hardlink
 aliases that resolve outside the source workspace are ignored.

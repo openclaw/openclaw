@@ -4,7 +4,7 @@ read_when:
   - Running or configuring the setup wizard
   - Setting up a new machine
 title: "Setup Wizard (CLI)"
-sidebarTitle: "Setup: CLI"
+sidebarTitle: "Onboarding: CLI"
 ---
 
 # Setup Wizard (CLI)
@@ -15,7 +15,7 @@ It configures a local Gateway or a remote Gateway connection, plus channels, ski
 and workspace defaults in one guided flow.
 
 ```bash
-openclaw setup --wizard
+openclaw onboard
 ```
 
 <Info>
@@ -52,7 +52,7 @@ The wizard starts with **QuickStart** (defaults) vs **Advanced** (full control).
     - Gateway port **18789**
     - Gateway auth **Token** (auto‑generated, even on loopback)
     - Tool policy default for new local setups: `tools.profile: "coding"` (existing explicit profile is preserved)
-    - DM isolation default: local setup writes `session.dmScope: "per-channel-peer"` when unset. Details: [CLI Setup Reference](/start/wizard-cli-reference#outputs-and-internals)
+    - DM isolation default: local onboarding writes `session.dmScope: "per-channel-peer"` when unset. Details: [CLI Setup Reference](/start/wizard-cli-reference#outputs-and-internals)
     - Tailscale exposure **Off**
     - Telegram + WhatsApp DMs default to **allowlist** (you'll be prompted for your phone number)
   </Tab>
@@ -119,7 +119,7 @@ For the deeper technical reference, including RPC details, see
 
 ## Related docs
 
-- CLI command reference: [`openclaw setup`](/cli/setup)
-- Setup overview: [Setup Overview](/start/onboarding-overview)
+- CLI command reference: [`openclaw onboard`](/cli/onboard)
+- Onboarding overview: [Onboarding Overview](/start/onboarding-overview)
 - macOS app onboarding: [Onboarding](/start/onboarding)
 - Agent first-run ritual: [Agent Bootstrapping](/start/bootstrapping)

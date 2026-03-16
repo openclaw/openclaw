@@ -39,7 +39,7 @@ Related:
 If you don’t want to hand-edit config, run the setup wizard:
 
 ```bash
-openclaw setup --wizard
+openclaw onboard
 ```
 
 It can set up model + auth for common providers, including **OpenAI Code (Codex)

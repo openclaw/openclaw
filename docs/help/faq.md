@@ -321,7 +321,7 @@ The repo recommends running from source and using the setup wizard:
 
 ```bash
 curl -fsSL https://openclaw.ai/install.sh | bash
-openclaw setup --wizard --install-daemon
+openclaw onboard --install-daemon
 ```
 
 The wizard can also build UI assets automatically. After onboarding, you typically run the Gateway on port **18789**.
@@ -334,10 +334,10 @@ cd openclaw
 pnpm install
 pnpm build
 pnpm ui:build # auto-installs UI deps on first run
-openclaw setup --wizard
+openclaw onboard
 ```
 
-If you don't have a global install yet, run it via `pnpm openclaw setup --wizard`.
+If you don't have a global install yet, run it via `pnpm openclaw onboard`.
 
 ### How do I open the dashboard after onboarding
 
@@ -687,7 +687,7 @@ Docs: [Update](/cli/update), [Updating](/install/updating).
 
 ### What does the setup wizard actually do
 
-`openclaw setup --wizard` is the recommended setup path. In **local mode** it walks you through:
+`openclaw onboard` is the recommended setup path. In **local mode** it walks you through:
 
 - **Model/auth setup** (provider OAuth/setup-token flows and API keys supported, plus local model options such as LM Studio)
 - **Workspace** location + bootstrap files
@@ -1904,7 +1904,7 @@ openclaw reset --scope full --yes --non-interactive
 Then re-run setup:
 
 ```bash
-openclaw setup --wizard --install-daemon
+openclaw onboard --install-daemon
 ```
 
 Notes:
@@ -2092,7 +2092,7 @@ Quickest setup:
 1. Install Ollama from `https://ollama.com/download`
 2. Pull a local model such as `ollama pull glm-4.7-flash`
 3. If you want Ollama Cloud too, run `ollama signin`
-4. Run `openclaw setup --wizard` and choose `Ollama`
+4. Run `openclaw onboard` and choose `Ollama`
 5. Pick `Local` or `Cloud + Local`
 
 Notes:

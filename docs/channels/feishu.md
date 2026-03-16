@@ -35,7 +35,7 @@ There are two ways to add the Feishu channel:
 If you just installed OpenClaw, run the setup wizard:
 
 ```bash
-openclaw setup --wizard
+openclaw onboard
 ```
 
 The wizard guides you through:

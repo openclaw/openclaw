@@ -58,7 +58,7 @@ export VENICE_API_KEY="vapi_xxxxxxxxxxxx"
 **Option B: Interactive Setup (Recommended)**
 
 ```bash
-openclaw setup --wizard --auth-choice venice-api-key
+openclaw onboard --auth-choice venice-api-key
 ```
 
 This will:
@@ -71,7 +71,7 @@ This will:
 **Option C: Non-interactive**
 
 ```bash
-openclaw setup --wizard --non-interactive \
+openclaw onboard --non-interactive \
   --auth-choice venice-api-key \
   --venice-api-key "vapi_xxxxxxxxxxxx"
 ```

@@ -2182,7 +2182,7 @@ Use `cerebras/zai-glm-4.7` for Cerebras; `zai/glm-4.7` for Z.AI direct.
 }
 ```
 
-Set `OPENCODE_API_KEY` (or `OPENCODE_ZEN_API_KEY`). Use `opencode/...` refs for the Zen catalog or `opencode-go/...` refs for the Go catalog. Shortcut: `openclaw setup --wizard --auth-choice opencode-zen` or `openclaw setup --wizard --auth-choice opencode-go`.
+Set `OPENCODE_API_KEY` (or `OPENCODE_ZEN_API_KEY`). Use `opencode/...` refs for the Zen catalog or `opencode-go/...` refs for the Go catalog. Shortcut: `openclaw onboard --auth-choice opencode-zen` or `openclaw onboard --auth-choice opencode-go`.
 
 </Accordion>
 
@@ -2199,7 +2199,7 @@ Set `OPENCODE_API_KEY` (or `OPENCODE_ZEN_API_KEY`). Use `opencode/...` refs for 
 }
 ```
 
-Set `ZAI_API_KEY`. `z.ai/*` and `z-ai/*` are accepted aliases. Shortcut: `openclaw setup --wizard --auth-choice zai-api-key`.
+Set `ZAI_API_KEY`. `z.ai/*` and `z-ai/*` are accepted aliases. Shortcut: `openclaw onboard --auth-choice zai-api-key`.
 
 - General endpoint: `https://api.z.ai/api/paas/v4`
 - Coding endpoint (default): `https://api.z.ai/api/coding/paas/v4`
@@ -2242,7 +2242,7 @@ Set `ZAI_API_KEY`. `z.ai/*` and `z-ai/*` are accepted aliases. Shortcut: `opencl
 }
 ```
 
-For the China endpoint: `baseUrl: "https://api.moonshot.cn/v1"` or `openclaw setup --wizard --auth-choice moonshot-api-key-cn`.
+For the China endpoint: `baseUrl: "https://api.moonshot.cn/v1"` or `openclaw onboard --auth-choice moonshot-api-key-cn`.
 
 </Accordion>
 
@@ -2260,7 +2260,7 @@ For the China endpoint: `baseUrl: "https://api.moonshot.cn/v1"` or `openclaw set
 }
 ```
 
-Anthropic-compatible, built-in provider. Shortcut: `openclaw setup --wizard --auth-choice kimi-code-api-key`.
+Anthropic-compatible, built-in provider. Shortcut: `openclaw onboard --auth-choice kimi-code-api-key`.
 
 </Accordion>
 
@@ -2299,7 +2299,7 @@ Anthropic-compatible, built-in provider. Shortcut: `openclaw setup --wizard --au
 }
 ```
 
-Base URL should omit `/v1` (Anthropic client appends it). Shortcut: `openclaw setup --wizard --auth-choice synthetic-api-key`.
+Base URL should omit `/v1` (Anthropic client appends it). Shortcut: `openclaw onboard --auth-choice synthetic-api-key`.
 
 </Accordion>
 
@@ -2339,7 +2339,7 @@ Base URL should omit `/v1` (Anthropic client appends it). Shortcut: `openclaw se
 }
 ```
 
-Set `MINIMAX_API_KEY`. Shortcut: `openclaw setup --wizard --auth-choice minimax-api`.
+Set `MINIMAX_API_KEY`. Shortcut: `openclaw onboard --auth-choice minimax-api`.
 
 </Accordion>
 

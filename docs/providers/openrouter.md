@@ -14,7 +14,7 @@ endpoint and API key. It is OpenAI-compatible, so most OpenAI SDKs work by switc
 ## CLI setup
 
 ```bash
-openclaw setup --wizard --auth-choice apiKey --token-provider openrouter --token "$OPENROUTER_API_KEY"
+openclaw onboard --auth-choice apiKey --token-provider openrouter --token "$OPENROUTER_API_KEY"
 ```
 
 ## Config snippet
