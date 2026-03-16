@@ -54,14 +54,18 @@ export function resolveProviderRuntimePlugin(params: {
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
 }): ProviderPlugin | undefined {
+  const owningPluginIds = resolveOwningPluginIdsForProvider({
+    provider: params.provider,
+    config: params.config,
+    workspaceDir: params.workspaceDir,
+    env: params.env,
+  });
+  if (!owningPluginIds || owningPluginIds.length === 0) {
+    return undefined;
+  }
   return resolveProviderPluginsForHooks({
     ...params,
-    onlyPluginIds: resolveOwningPluginIdsForProvider({
-      provider: params.provider,
-      config: params.config,
-      workspaceDir: params.workspaceDir,
-      env: params.env,
-    }),
+    onlyPluginIds: owningPluginIds,
   }).find((plugin) => matchesProviderId(plugin, params.provider));
 }
 

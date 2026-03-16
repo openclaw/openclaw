@@ -58,6 +58,7 @@ describe("provider-runtime", () => {
   });
 
   it("matches providers by alias for runtime hook lookup", () => {
+    resolveOwningPluginIdsForProviderMock.mockReturnValue(["openrouter"]);
     resolvePluginProvidersMock.mockReturnValue([
       {
         id: "openrouter",
@@ -77,13 +78,35 @@ describe("provider-runtime", () => {
     );
     expect(resolvePluginProvidersMock).toHaveBeenCalledWith(
       expect.objectContaining({
+        onlyPluginIds: ["openrouter"],
         bundledProviderAllowlistCompat: true,
         bundledProviderVitestCompat: true,
       }),
     );
   });
 
+  it("skips plugin loading when the provider has no owning plugin", () => {
+    const plugin = resolveProviderRuntimePlugin({ provider: "anthropic" });
+
+    expect(plugin).toBeUndefined();
+    expect(resolveOwningPluginIdsForProviderMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: "anthropic",
+      }),
+    );
+    expect(resolvePluginProvidersMock).not.toHaveBeenCalled();
+  });
+
   it("dispatches runtime hooks for the matched provider", async () => {
+    resolveOwningPluginIdsForProviderMock.mockImplementation((params: { provider?: string }) => {
+      if (params.provider === "demo") {
+        return ["demo"];
+      }
+      if (params.provider === "openai") {
+        return ["openai"];
+      }
+      return undefined;
+    });
     const prepareDynamicModel = vi.fn(async () => undefined);
     const prepareRuntimeAuth = vi.fn(async () => ({
       apiKey: "runtime-token",

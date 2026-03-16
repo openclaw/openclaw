@@ -2800,6 +2800,7 @@ module.exports = {
 
   it("preserves runtime reflection semantics when runtime is lazily initialized", () => {
     useNoBundledPlugins();
+    const stateDir = makeTempDir();
     const plugin = writePlugin({
       id: "runtime-introspection",
       filename: "runtime-introspection.cjs",
@@ -2818,12 +2819,17 @@ module.exports = {
 } };`,
     });
 
-    const registry = loadRegistryFromSinglePlugin({
-      plugin,
-      pluginConfig: {
-        allow: ["runtime-introspection"],
-      },
-    });
+    const registry = withEnv({ OPENCLAW_STATE_DIR: stateDir }, () =>
+      loadRegistryFromSinglePlugin({
+        plugin,
+        pluginConfig: {
+          allow: ["runtime-introspection"],
+        },
+        options: {
+          onlyPluginIds: ["runtime-introspection"],
+        },
+      }),
+    );
 
     const record = registry.plugins.find((entry) => entry.id === "runtime-introspection");
     expect(record?.status).toBe("loaded");

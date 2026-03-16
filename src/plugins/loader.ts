@@ -60,6 +60,21 @@ export type PluginLoadOptions = {
 const MAX_PLUGIN_REGISTRY_CACHE_ENTRIES = 128;
 const registryCache = new Map<string, PluginRegistry>();
 const openAllowlistWarningCache = new Set<string>();
+const LAZY_RUNTIME_REFLECTION_KEYS = [
+  "version",
+  "config",
+  "subagent",
+  "system",
+  "media",
+  "tts",
+  "stt",
+  "tools",
+  "channel",
+  "events",
+  "logging",
+  "state",
+  "modelAuth",
+] as const satisfies readonly (keyof PluginRuntime)[];
 
 export function clearPluginLoaderCache(): void {
   registryCache.clear();
@@ -870,6 +885,22 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
     resolvedRuntime ??= resolveCreatePluginRuntime()(options.runtimeOptions);
     return resolvedRuntime;
   };
+  const lazyRuntimeReflectionKeySet = new Set<PropertyKey>(LAZY_RUNTIME_REFLECTION_KEYS);
+  const resolveLazyRuntimeDescriptor = (prop: PropertyKey): PropertyDescriptor | undefined => {
+    if (!lazyRuntimeReflectionKeySet.has(prop)) {
+      return Reflect.getOwnPropertyDescriptor(resolveRuntime() as object, prop);
+    }
+    return {
+      configurable: true,
+      enumerable: true,
+      get() {
+        return Reflect.get(resolveRuntime() as object, prop);
+      },
+      set(value: unknown) {
+        Reflect.set(resolveRuntime() as object, prop, value);
+      },
+    };
+  };
   const runtime = new Proxy({} as PluginRuntime, {
     get(_target, prop, receiver) {
       return Reflect.get(resolveRuntime(), prop, receiver);
@@ -878,13 +909,13 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
       return Reflect.set(resolveRuntime(), prop, value, receiver);
     },
     has(_target, prop) {
-      return Reflect.has(resolveRuntime(), prop);
+      return lazyRuntimeReflectionKeySet.has(prop) || Reflect.has(resolveRuntime(), prop);
     },
     ownKeys() {
-      return Reflect.ownKeys(resolveRuntime() as object);
+      return [...LAZY_RUNTIME_REFLECTION_KEYS];
     },
     getOwnPropertyDescriptor(_target, prop) {
-      return Reflect.getOwnPropertyDescriptor(resolveRuntime() as object, prop);
+      return resolveLazyRuntimeDescriptor(prop);
     },
     defineProperty(_target, prop, attributes) {
       return Reflect.defineProperty(resolveRuntime() as object, prop, attributes);
