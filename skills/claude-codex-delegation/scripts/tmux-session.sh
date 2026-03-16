@@ -128,8 +128,7 @@ case "$ACTION" in
 
         # Codex requires a git repo
         if [[ "$AGENT" == "codex" ]]; then
-            cd "$WORKDIR"
-            if [[ ! -d .git ]] && ! git rev-parse --git-dir > /dev/null 2>&1; then
+            if ! (cd "$WORKDIR" && { [[ -d .git ]] || git rev-parse --git-dir > /dev/null 2>&1; }); then
                 echo "Error: Codex requires a git repository but $WORKDIR is not one." >&2
                 echo "Initialize one with: cd $WORKDIR && git init" >&2
                 exit 1

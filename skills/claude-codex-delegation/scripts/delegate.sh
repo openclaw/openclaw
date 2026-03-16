@@ -118,8 +118,7 @@ fi
 
 # Codex requires a git repository — fail fast instead of silently mutating
 if [[ "$AGENT" == "codex" ]]; then
-    cd "$WORKDIR"
-    if [[ ! -d .git ]] && ! git rev-parse --git-dir > /dev/null 2>&1; then
+    if ! (cd "$WORKDIR" && { [[ -d .git ]] || git rev-parse --git-dir > /dev/null 2>&1; }); then
         echo "Error: Codex requires a git repository but $WORKDIR is not one." >&2
         echo "Initialize one with: cd $WORKDIR && git init" >&2
         exit 1
@@ -167,9 +166,10 @@ run_delegation() {
             ;;
         codex)
             # Codex requires a PTY — use script(1) to provide one.
+            # -e: propagate child exit code (without it, script always returns 0)
             # Run through bash -c so printf '%q' quoting is interpreted correctly
             # (script passes commands to /bin/sh which may be dash, not bash).
-            script -q -c "bash -c $(printf '%q' "$(build_codex_cmd) $(printf '%q' "$PROMPT")")" "$LOG_FILE" || exit_code=$?
+            script -e -q -c "bash -c $(printf '%q' "$(build_codex_cmd) $(printf '%q' "$PROMPT")")" "$LOG_FILE" || exit_code=$?
             ;;
     esac
 

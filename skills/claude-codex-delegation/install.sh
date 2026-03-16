@@ -114,9 +114,19 @@ if ! command -v timeout &> /dev/null; then
     if [[ "$(uname)" == "Darwin" ]]; then
         echo "  Install with: brew install coreutils"
     fi
-    ((MISSING++))
+    MISSING=$((MISSING + 1))
 else
     info "timeout: available"
+fi
+
+if ! command -v script &> /dev/null; then
+    error "'script' (from util-linux) is required for Codex PTY support."
+    if [[ "$(uname)" == "Darwin" ]]; then
+        echo "  Install with: brew install util-linux"
+    fi
+    MISSING=$((MISSING + 1))
+else
+    info "script: available"
 fi
 
 if command -v tmux &> /dev/null; then
@@ -126,7 +136,7 @@ else
 fi
 
 if [[ $MISSING -gt 0 ]]; then
-    error "Missing $MISSING required system dependency. Install it and rerun."
+    error "Missing $MISSING required system dependencies. Install them and rerun."
     exit 1
 fi
 
@@ -198,35 +208,35 @@ if command -v claude &> /dev/null || $DRY_RUN; then
     info "claude CLI: OK"
 else
     error "claude CLI: not found"
-    ((ERRORS++))
+    ERRORS=$((ERRORS + 1))
 fi
 
 if command -v codex &> /dev/null || $DRY_RUN; then
     info "codex CLI: OK"
 else
     error "codex CLI: not found"
-    ((ERRORS++))
+    ERRORS=$((ERRORS + 1))
 fi
 
 if [[ -f "$SKILL_DIR/SKILL.md" ]] || $DRY_RUN; then
     info "SKILL.md: OK"
 else
     error "SKILL.md: not found at $SKILL_DIR"
-    ((ERRORS++))
+    ERRORS=$((ERRORS + 1))
 fi
 
 if [[ -x "$SKILL_DIR/scripts/delegate.sh" ]] || $DRY_RUN; then
     info "scripts/delegate.sh: OK"
 else
     error "scripts/delegate.sh: not found or not executable"
-    ((ERRORS++))
+    ERRORS=$((ERRORS + 1))
 fi
 
 if [[ -x "$SKILL_DIR/scripts/tmux-session.sh" ]] || $DRY_RUN; then
     info "scripts/tmux-session.sh: OK"
 else
     error "scripts/tmux-session.sh: not found or not executable"
-    ((ERRORS++))
+    ERRORS=$((ERRORS + 1))
 fi
 
 # --- Auth check ---
