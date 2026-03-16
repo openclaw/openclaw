@@ -601,6 +601,72 @@ describe("runMessageAction plugin dispatch", () => {
       );
     });
 
+    it("does not force the channel plugin defaultAccountId for non-WhatsApp core sends", async () => {
+      const sendDiscord: NonNullable<ChannelOutboundAdapter["sendText"]> = vi.fn(async () => ({
+        channel: "discord",
+        messageId: "dc-1",
+        channelId: "123",
+      }));
+      const plugin = createOutboundTestPlugin({
+        id: "discord",
+        outbound: {
+          deliveryMode: "direct",
+          sendText: sendDiscord,
+        },
+      });
+      plugin.config = {
+        ...plugin.config,
+        listAccountIds: () => ["work"],
+        resolveAccount: () => ({ enabled: true }),
+        defaultAccountId: () => "work",
+      };
+      plugin.messaging = {
+        targetResolver: {
+          looksLikeId: () => true,
+        },
+      };
+
+      setActivePluginRegistry(
+        createTestRegistry([
+          {
+            pluginId: "discord",
+            source: "test",
+            plugin,
+          },
+        ]),
+      );
+
+      await runMessageAction({
+        cfg: {
+          channels: {
+            discord: {
+              defaultAccount: "work",
+              accounts: {
+                work: {},
+              },
+            },
+          },
+        } as OpenClawConfig,
+        action: "send",
+        params: {
+          channel: "discord",
+          target: "123",
+          message: "hi",
+        },
+        deps: { sendDiscord },
+        dryRun: false,
+      });
+
+      expect(sendDiscord).toHaveBeenCalledWith(
+        expect.objectContaining({
+          to: "123",
+          text: "hi",
+          accountId: undefined,
+          cfg: expect.any(Object),
+        }),
+      );
+    });
+
     it("does not force the channel plugin defaultAccountId onto plugin actions", async () => {
       const reactAction = vi.fn(async () => jsonResult({ ok: true }));
       const plugin = createOutboundTestPlugin({
