@@ -84,7 +84,14 @@ You: "/upstream-sync v2026.3.12"
     │   │   (loop: if qa fails → code-guard fixes → qa reruns)
     │   │
     │   ├── Push branch, open PR, update sync-state.json
-    │   └── STOP — user reviews/merges PR before next phase
+    │   ├── STOP — present PR to user for review
+    │   │            ← USER APPROVES: "merge it" / "looks good"
+    │   ├── Merge PR (regular merge, preserve -x traceability)
+    │   ├── git checkout main && git pull
+    │   ├── Prompt user for hands-on testing on main
+    │   │            ← USER CONFIRMS: "testing passed" / "all good"
+    │   ├── Update sync-state.json phase → completed
+    │   └── Report phase complete, list remaining phases
     │
     ├── After ALL phases complete:
     │   ├── Update lastSyncedTag in sync-state.json
@@ -98,7 +105,7 @@ You: "/upstream-sync v2026.3.12"
 | Agent        | Role                                                                                                | Model  | Tools                                      |
 | ------------ | --------------------------------------------------------------------------------------------------- | ------ | ------------------------------------------ |
 | `sync-lead`  | Orchestrator — fetches, classifies into phases, coordinates, records                                | sonnet | Bash, Read, Write, Edit, Glob, Grep, Agent |
-| `code-guard` | Cherry-pick & conflict specialist — picks commits for one phase, resolves per §6, audits registries | opus   | Bash, Read, Write, Edit, Glob, Grep        |
+| `code-guard` | Cherry-pick & conflict specialist — picks commits for one phase, resolves per §6, audits registries | sonnet | Bash, Read, Write, Edit, Glob, Grep        |
 | `qa-runner`  | Validation — build, test, lint, UI, §7.1 checklist                                                  | sonnet | Bash, Read, Grep                           |
 
 ## Key Reference Files

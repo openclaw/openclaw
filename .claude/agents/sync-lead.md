@@ -395,7 +395,7 @@ EOF
 )"
 ```
 
-**Step 3.5 — Update sync-state.json phase status**
+**Step 3.5 — Update sync-state.json to pr-open**
 
 Update the phase entry:
 
@@ -411,7 +411,7 @@ git add .claude/skills/upstream-sync/state/sync-state.json
 git commit -m "chore: update sync state — <phase> PR opened for <targetTag>"
 ```
 
-**Step 3.6 — STOP and report**
+**Step 3.6 — STOP: Present PR for user review**
 
 ```
 ✅ Phase <N> (<phase>) PR ready: sync/<targetTag>-<phase>
@@ -420,23 +420,79 @@ PR: <url>
 Commits cherry-picked: N
 Build: ✅  Tests: ✅  UI: ✅
 
-→ Review and merge the PR, then run `/upstream-sync --phase next` for the next phase.
+→ Please review the PR. When ready, say "merge it" to proceed.
 → Remaining phases: <list pending phases>
 ```
 
-**Do NOT proceed to the next phase.** Wait for the user to:
+**WAIT for user to approve the merge.** Do NOT merge without explicit approval.
 
-1. Review and merge the PR
-2. **Test on main** — remind the user to do hands-on testing after merging:
-   ```
-   → After merging, please test on main before we continue:
-     1. git checkout main && git pull
-     2. pnpm install && pnpm build
-     3. Start the gateway and do a quick smoke test
-     4. Verify your key workflows still work (chat, agents, MCP, etc.)
-     5. When satisfied, run `/upstream-sync --phase next` for the next phase.
-   ```
-3. Only proceed when user confirms testing passed and invokes the next phase
+**Step 3.7 — Merge PR (after user approval)**
+
+When user says "merge it" / "looks good" / "go ahead":
+
+```bash
+# Merge with regular merge (preserves cherry-pick -x traceability)
+gh pr merge <pr-number> --merge --delete-branch
+
+# Pull merged state
+git checkout main
+git pull origin main
+```
+
+Verify merge succeeded:
+
+```bash
+gh pr view <pr-number> --json state --jq '.state'
+# Must be "MERGED"
+```
+
+**Step 3.8 — STOP: Prompt user for hands-on testing**
+
+```
+✅ Phase <N> (<phase>) merged to main.
+
+→ Please test on main before we continue:
+  1. pnpm install && pnpm build
+  2. Start the gateway and do a quick smoke test
+  3. Verify your key workflows still work (chat, agents, MCP, etc.)
+  4. When satisfied, say "testing passed" to proceed to the next phase.
+```
+
+**WAIT for user to confirm testing passed.** Do NOT proceed without confirmation.
+
+**Step 3.9 — Mark phase completed and report**
+
+After user confirms testing:
+
+Update sync-state.json phase status:
+
+```json
+{ "status": "completed", "branch": "sync/<tag>-<phase>", "pr": <pr-number>, "commits": N, "mergedAt": "<now ISO>" }
+```
+
+Commit:
+
+```bash
+git add .claude/skills/upstream-sync/state/sync-state.json
+git commit -m "chore: mark <phase> phase completed for <targetTag>"
+git push
+```
+
+Report:
+
+```
+✅ Phase <N> (<phase>) complete.
+
+PR: <url> — merged ✅
+User testing: passed ✅
+Sync state updated.
+
+→ Next phase: <next pending phase> (<N> commits)
+→ Say "next phase" to continue, or "stop" to pause the sync.
+```
+
+If user says "next phase" / "continue": loop back to Step 3.0 for the next pending phase.
+If user says "stop": halt and report remaining phases.
 
 ---
 
