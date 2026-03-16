@@ -59,9 +59,66 @@ Not sandboxed:
 `agents.defaults.sandbox.backend` controls **which runtime** provides the sandbox:
 
 - `"docker"` (default): local Docker-backed sandbox runtime.
+- `"ssh"`: generic SSH-backed remote sandbox runtime.
 - `"openshell"`: OpenShell-backed sandbox runtime.
 
+SSH-specific config lives under `agents.defaults.sandbox.ssh`.
 OpenShell-specific config lives under `plugins.entries.openshell.config`.
+
+### SSH backend
+
+Use `backend: "ssh"` when you want OpenClaw to sandbox `exec`, file tools, and media reads on
+an arbitrary SSH-accessible machine.
+
+```json5
+{
+  agents: {
+    defaults: {
+      sandbox: {
+        mode: "all",
+        backend: "ssh",
+        scope: "session",
+        workspaceAccess: "rw",
+        ssh: {
+          target: "user@gateway-host:22",
+          workspaceRoot: "/tmp/openclaw-sandboxes",
+          strictHostKeyChecking: true,
+          updateHostKeys: true,
+          identityFile: "~/.ssh/id_ed25519",
+          certificateFile: "~/.ssh/id_ed25519-cert.pub",
+          knownHostsFile: "~/.ssh/known_hosts",
+          // Or use SecretRefs / inline contents instead of local files:
+          // identityData: { source: "env", provider: "default", id: "SSH_IDENTITY" },
+          // certificateData: { source: "env", provider: "default", id: "SSH_CERTIFICATE" },
+          // knownHostsData: { source: "env", provider: "default", id: "SSH_KNOWN_HOSTS" },
+        },
+      },
+    },
+  },
+}
+```
+
+How it works:
+
+- OpenClaw creates a per-scope remote root under `sandbox.ssh.workspaceRoot`.
+- On first use after create or recreate, OpenClaw seeds that remote workspace from the local workspace once.
+- After that, `exec`, `read`, `write`, `edit`, `apply_patch`, prompt media reads, and inbound media staging run directly against the remote workspace over SSH.
+- OpenClaw does not sync remote changes back to the local workspace automatically.
+
+Authentication material:
+
+- `identityFile`, `certificateFile`, `knownHostsFile`: use existing local files and pass them through OpenSSH config.
+- `identityData`, `certificateData`, `knownHostsData`: use inline strings or SecretRefs. OpenClaw resolves them through the normal secrets runtime snapshot, writes them to temp files with `0600`, and deletes them when the SSH session ends.
+- If both `*File` and `*Data` are set for the same item, `*Data` wins for that SSH session.
+
+This is a **remote-canonical** model. The remote SSH workspace becomes the real sandbox state after the initial seed.
+
+Important consequences:
+
+- Host-local edits made outside OpenClaw after the seed step are not visible remotely until you recreate the sandbox.
+- `openclaw sandbox recreate` deletes the per-scope remote root and seeds again from local on next use.
+- Browser sandboxing is not supported on the SSH backend.
+- `sandbox.docker.*` settings do not apply to the SSH backend.
 
 ```json5
 {
@@ -95,6 +152,15 @@ OpenShell modes:
 
 - `mirror` (default): local workspace stays canonical. OpenClaw syncs local files into OpenShell before exec and syncs the remote workspace back after exec.
 - `remote`: OpenShell workspace is canonical after the sandbox is created. OpenClaw seeds the remote workspace once from the local workspace, then file tools and exec run directly against the remote sandbox without syncing changes back.
+
+OpenShell reuses the same core SSH transport and remote filesystem bridge as the generic SSH backend.
+The plugin adds OpenShell-specific lifecycle (`sandbox create/get/delete`, `sandbox ssh-config`) and the optional `mirror` mode.
+
+Remote transport details:
+
+- OpenClaw asks OpenShell for sandbox-specific SSH config via `openshell sandbox ssh-config <name>`.
+- Core writes that SSH config to a temp file, opens the SSH session, and reuses the same remote filesystem bridge used by `backend: "ssh"`.
+- In `mirror` mode only the lifecycle differs: sync local to remote before exec, then sync back after exec.
 
 Current OpenShell limitations:
 
@@ -136,6 +202,7 @@ Behavior:
 - After that, `exec`, `read`, `write`, `edit`, and `apply_patch` operate directly against the remote OpenShell workspace.
 - OpenClaw does **not** sync remote changes back into the local workspace after exec.
 - Prompt-time media reads still work because file and media tools read through the sandbox bridge instead of assuming a local host path.
+- Transport is SSH into the OpenShell sandbox returned by `openshell sandbox ssh-config`.
 
 Important consequences:
 

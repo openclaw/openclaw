@@ -172,7 +172,7 @@ function makeSymlinkStat(params?: { dev?: number; ino?: number }): import("node:
 }
 
 function mockWorkspaceStateRead(params: {
-  onboardingCompletedAt?: string;
+  setupCompletedAt?: string;
   errorCode?: string;
   rawContent?: string;
 }) {
@@ -186,7 +186,7 @@ function mockWorkspaceStateRead(params: {
         return params.rawContent;
       }
       return JSON.stringify({
-        onboardingCompletedAt: params.onboardingCompletedAt ?? "2026-02-15T14:00:00.000Z",
+        setupCompletedAt: params.setupCompletedAt ?? "2026-02-15T14:00:00.000Z",
       });
     }
     throw createEnoentError();
@@ -513,7 +513,7 @@ describe("agents.files.list", () => {
   });
 
   it("hides BOOTSTRAP.md when workspace onboarding is complete", async () => {
-    mockWorkspaceStateRead({ onboardingCompletedAt: "2026-02-15T14:00:00.000Z" });
+    mockWorkspaceStateRead({ setupCompletedAt: "2026-02-15T14:00:00.000Z" });
 
     const names = await listAgentFileNames();
     expect(names).not.toContain("BOOTSTRAP.md");

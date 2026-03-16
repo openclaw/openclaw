@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { setupOnboardingShellCompletion } from "./onboarding.completion.js";
+import { setupWizardShellCompletion } from "./setup.completion.js";
 
 function createPrompter(confirmValue = false) {
   return {
@@ -9,7 +9,7 @@ function createPrompter(confirmValue = false) {
 }
 
 function createDeps() {
-  const deps: NonNullable<Parameters<typeof setupOnboardingShellCompletion>[0]["deps"]> = {
+  const deps: NonNullable<Parameters<typeof setupWizardShellCompletion>[0]["deps"]> = {
     resolveCliName: () => "openclaw",
     checkShellCompletionStatus: vi.fn(async (_binName: string) => ({
       shell: "zsh" as const,
@@ -24,12 +24,12 @@ function createDeps() {
   return deps;
 }
 
-describe("setupOnboardingShellCompletion", () => {
+describe("setupWizardShellCompletion", () => {
   it("QuickStart: installs without prompting", async () => {
     const prompter = createPrompter();
     const deps = createDeps();
 
-    await setupOnboardingShellCompletion({ flow: "quickstart", prompter, deps });
+    await setupWizardShellCompletion({ flow: "quickstart", prompter, deps });
 
     expect(prompter.confirm).not.toHaveBeenCalled();
     expect(deps.ensureCompletionCacheExists).toHaveBeenCalledWith("openclaw");
@@ -41,7 +41,7 @@ describe("setupOnboardingShellCompletion", () => {
     const prompter = createPrompter();
     const deps = createDeps();
 
-    await setupOnboardingShellCompletion({ flow: "advanced", prompter, deps });
+    await setupWizardShellCompletion({ flow: "advanced", prompter, deps });
 
     expect(prompter.confirm).toHaveBeenCalledTimes(1);
     expect(deps.ensureCompletionCacheExists).not.toHaveBeenCalled();

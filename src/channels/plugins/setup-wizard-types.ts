@@ -90,7 +90,7 @@ export type ChannelSetupDmPolicy = {
   }) => Promise<OpenClawConfig>;
 };
 
-export type ChannelSetupFlowAdapter = {
+export type ChannelSetupWizardAdapter = {
   channel: ChannelId;
   getStatus: (ctx: ChannelSetupStatusContext) => Promise<ChannelSetupStatus>;
   configure: (ctx: ChannelSetupConfigureContext) => Promise<ChannelSetupResult>;
