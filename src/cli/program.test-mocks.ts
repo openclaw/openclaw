@@ -8,7 +8,7 @@ const programMocks = vi.hoisted(() => ({
   configureCommand: vi.fn(),
   configureCommandWithSections: vi.fn(),
   setupCommand: vi.fn(),
-  onboardCommand: vi.fn(),
+  setupWizardCommand: vi.fn(),
   callGateway: vi.fn(),
   runChannelLogin: vi.fn(),
   runChannelLogout: vi.fn(),
@@ -30,7 +30,7 @@ export const statusCommand = programMocks.statusCommand as AnyMock;
 export const configureCommand = programMocks.configureCommand as AnyMock;
 export const configureCommandWithSections = programMocks.configureCommandWithSections as AnyMock;
 export const setupCommand = programMocks.setupCommand as AnyMock;
-export const onboardCommand = programMocks.onboardCommand as AnyMock;
+export const setupWizardCommand = programMocks.setupWizardCommand as AnyMock;
 export const callGateway = programMocks.callGateway as AnyMock;
 export const runChannelLogin = programMocks.runChannelLogin as AnyMock;
 export const runChannelLogout = programMocks.runChannelLogout as AnyMock;
@@ -72,8 +72,8 @@ vi.mock("../commands/configure.js", () => ({
 }));
 vi.mock("../commands/setup.js", () => ({ setupCommand: programMocks.setupCommand }));
 vi.mock("../commands/onboard.js", () => ({
-  onboardCommand: programMocks.onboardCommand,
-  setupWizardCommand: programMocks.onboardCommand,
+  onboardCommand: programMocks.setupWizardCommand,
+  setupWizardCommand: programMocks.setupWizardCommand,
 }));
 vi.mock("../runtime.js", () => ({ defaultRuntime: programMocks.runtime }));
 vi.mock("./channel-auth.js", () => ({

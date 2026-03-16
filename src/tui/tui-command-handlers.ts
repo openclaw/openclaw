@@ -320,11 +320,12 @@ export function createCommandHandlers(context: CommandHandlerContext) {
         break;
       case "think":
         if (!args) {
+          const thinkingLevelOptions = config ? { config } : undefined;
           const levels = formatThinkingLevels(
             state.sessionInfo.modelProvider,
             state.sessionInfo.model,
             "|",
-            config ? { config } : undefined,
+            thinkingLevelOptions,
           );
           chatLog.addSystem(`usage: /think <${levels}>`);
           break;
