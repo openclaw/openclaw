@@ -114,6 +114,12 @@ describe("web_search country and language parameters", () => {
 
   beforeEach(() => {
     vi.stubEnv("BRAVE_API_KEY", "test-key");
+    vi.stubEnv("PERPLEXITY_API_KEY", "");
+    vi.stubEnv("OPENROUTER_API_KEY", "");
+    vi.stubEnv("KIMI_API_KEY", "");
+    vi.stubEnv("MOONSHOT_API_KEY", "");
+    vi.stubEnv("GEMINI_API_KEY", "");
+    vi.stubEnv("XAI_API_KEY", "");
   });
 
   afterEach(() => {
@@ -130,7 +136,10 @@ describe("web_search country and language parameters", () => {
     }>,
   ) {
     const mockFetch = installMockFetch({ web: { results: [] } });
-    const tool = createWebSearchTool({ config: undefined, sandboxed: true });
+    const tool = createWebSearchTool({
+      config: { tools: { web: { search: { provider: "brave" } } } },
+      sandboxed: true,
+    });
     expect(tool).not.toBeNull();
     await tool?.execute?.("call-1", { query: "test", ...params });
     expect(mockFetch).toHaveBeenCalled();
@@ -149,7 +158,10 @@ describe("web_search country and language parameters", () => {
 
   it("uses X-Subscription-Token for Brave API auth", async () => {
     const mockFetch = installMockFetch({ web: { results: [] } });
-    const tool = createWebSearchTool({ config: undefined, sandboxed: true });
+    const tool = createWebSearchTool({
+      config: { tools: { web: { search: { provider: "brave" } } } },
+      sandboxed: true,
+    });
     expect(tool).not.toBeNull();
 
     await tool?.execute?.("call-1", { query: "header-check" });
@@ -161,7 +173,10 @@ describe("web_search country and language parameters", () => {
 
   it("rejects invalid freshness values", async () => {
     const mockFetch = installMockFetch({ web: { results: [] } });
-    const tool = createWebSearchTool({ config: undefined, sandboxed: true });
+    const tool = createWebSearchTool({
+      config: { tools: { web: { search: { provider: "brave" } } } },
+      sandboxed: true,
+    });
     const result = await tool?.execute?.("call-1", { query: "test", freshness: "yesterday" });
 
     expect(mockFetch).not.toHaveBeenCalled();
