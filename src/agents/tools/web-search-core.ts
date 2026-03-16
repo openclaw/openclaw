@@ -23,6 +23,7 @@ import {
 } from "./web-shared.js";
 
 const SEARCH_PROVIDERS = ["brave", "gemini", "grok", "kimi", "perplexity"] as const;
+type SearchProvider = (typeof SEARCH_PROVIDERS)[number];
 const DEFAULT_SEARCH_COUNT = 5;
 const MAX_SEARCH_COUNT = 10;
 
@@ -612,6 +613,10 @@ function missingSearchKeyPayload(provider: (typeof SEARCH_PROVIDERS)[number]) {
       "web_search (perplexity) needs an API key. Set PERPLEXITY_API_KEY or OPENROUTER_API_KEY in the Gateway environment, or configure tools.web.search.perplexity.apiKey.",
     docs: "https://docs.openclaw.ai/tools/web",
   };
+}
+
+function isSearchProvider(value: string): value is SearchProvider {
+  return SEARCH_PROVIDERS.includes(value as SearchProvider);
 }
 
 function resolveSearchProvider(search?: WebSearchConfig): (typeof SEARCH_PROVIDERS)[number] {
@@ -1911,10 +1916,12 @@ export function createWebSearchTool(options?: {
     return null;
   }
 
+  const runtimeProviderCandidate =
+    options?.runtimeWebSearch?.selectedProvider ?? options?.runtimeWebSearch?.providerConfigured;
   const provider =
-    options?.runtimeWebSearch?.selectedProvider ??
-    options?.runtimeWebSearch?.providerConfigured ??
-    resolveSearchProvider(search);
+    runtimeProviderCandidate && isSearchProvider(runtimeProviderCandidate)
+      ? runtimeProviderCandidate
+      : resolveSearchProvider(search);
   const perplexityConfig = resolvePerplexityConfig(search);
   const perplexitySchemaTransportHint =
     options?.runtimeWebSearch?.perplexityTransport ??
