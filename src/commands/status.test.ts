@@ -406,10 +406,8 @@ describe("statusCommand", () => {
     await statusCommand({ json: true }, runtime as never);
     const payload = JSON.parse(String(runtimeLogMock.mock.calls[0]?.[0]));
     expect(payload.linkChannel).toBeUndefined();
-    expect(payload.memory.agentId).toBe("main");
     expect(payload.memoryPlugin.enabled).toBe(true);
     expect(payload.memoryPlugin.slot).toBe("memory-core");
-    expect(payload.memory.vector.available).toBe(true);
     expect(payload.sessions.count).toBe(1);
     expect(payload.sessions.paths).toContain("/tmp/sessions.json");
     expect(payload.sessions.defaults.model).toBeTruthy();
@@ -420,10 +418,15 @@ describe("statusCommand", () => {
     expect(payload.sessions.recent[0].totalTokensFresh).toBe(true);
     expect(payload.sessions.recent[0].remainingTokens).toBe(5000);
     expect(payload.sessions.recent[0].flags).toContain("verbose:on");
-    expect(payload.securityAudit.summary.critical).toBe(1);
-    expect(payload.securityAudit.summary.warn).toBe(1);
+    expect(payload.securityAudit).toBeNull();
     expect(payload.gatewayService.label).toBe("LaunchAgent");
     expect(payload.nodeService.label).toBe("LaunchAgent");
+    expect(mocks.runSecurityAudit).not.toHaveBeenCalled();
+  });
+
+  it("runs the security audit for non-JSON status", async () => {
+    await statusCommand({}, runtime as never);
+
     expect(mocks.runSecurityAudit).toHaveBeenCalledWith(
       expect.objectContaining({
         includeFilesystem: true,

@@ -106,7 +106,7 @@ export async function statusCommand(
       }),
     );
   const securityAudit = opts.json
-    ? await runSecurityAudit()
+    ? null
     : await withProgress(
         {
           label: "Running security audit…",
