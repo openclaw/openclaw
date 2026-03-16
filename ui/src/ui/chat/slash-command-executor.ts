@@ -302,15 +302,19 @@ async function executeUsage(
     }
     const input = session.inputTokens ?? 0;
     const output = session.outputTokens ?? 0;
-    const total = session.totalTokens ?? input + output;
+    const total =
+      session.totalTokensFresh === false || !Number.isFinite(session.totalTokens)
+        ? null
+        : (session.totalTokens ?? null);
     const ctx = session.contextTokens ?? 0;
-    const pct = ctx > 0 ? Math.round((input / ctx) * 100) : null;
+    const pct = total !== null && ctx > 0 ? Math.round((total / ctx) * 100) : null;
+    const totalDisplay = total === null ? "n/a" : fmtTokens(total);
 
     const lines = [
       "**Session Usage**",
       `Input: **${fmtTokens(input)}** tokens`,
       `Output: **${fmtTokens(output)}** tokens`,
-      `Total: **${fmtTokens(total)}** tokens`,
+      `Total: **${totalDisplay}** tokens`,
     ];
     if (pct !== null) {
       lines.push(`Context: **${pct}%** of ${fmtTokens(ctx)}`);
