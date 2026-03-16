@@ -12,6 +12,13 @@ type GetPluginCommandSpecsFn =
 type MatchPluginCommandFn = typeof import("../../../src/plugins/commands.js").matchPluginCommand;
 type ExecutePluginCommandFn =
   typeof import("../../../src/plugins/commands.js").executePluginCommand;
+type DispatchReplyWithBufferedBlockDispatcherFn =
+  typeof import("../../../src/auto-reply/reply/provider-dispatcher.js").dispatchReplyWithBufferedBlockDispatcher;
+type DispatchReplyWithBufferedBlockDispatcherResult = Awaited<
+  ReturnType<DispatchReplyWithBufferedBlockDispatcherFn>
+>;
+type RecordInboundSessionMetaSafeFn =
+  typeof import("../../../src/channels/session-meta.js").recordInboundSessionMetaSafe;
 type AnyMock = MockFn<(...args: unknown[]) => unknown>;
 type AnyAsyncMock = MockFn<(...args: unknown[]) => Promise<unknown>>;
 type NativeCommandHarness = {
@@ -41,6 +48,37 @@ vi.mock("../../../src/plugins/commands.js", () => ({
   getPluginCommandSpecs: pluginCommandMocks.getPluginCommandSpecs,
   matchPluginCommand: pluginCommandMocks.matchPluginCommand,
   executePluginCommand: pluginCommandMocks.executePluginCommand,
+}));
+
+const replyPipelineMocks = vi.hoisted(() => {
+  const dispatchReplyResult: DispatchReplyWithBufferedBlockDispatcherResult = {
+    queuedFinal: false,
+    counts: {} as DispatchReplyWithBufferedBlockDispatcherResult["counts"],
+  };
+  return {
+    finalizeInboundContext: vi.fn((ctx: unknown) => ctx),
+    dispatchReplyWithBufferedBlockDispatcher: vi.fn<DispatchReplyWithBufferedBlockDispatcherFn>(
+      async () => dispatchReplyResult,
+    ),
+    createReplyPrefixOptions: vi.fn(() => ({ onModelSelected: () => {} })),
+    recordInboundSessionMetaSafe: vi.fn<RecordInboundSessionMetaSafeFn>(async () => undefined),
+  };
+});
+export const dispatchReplyWithBufferedBlockDispatcher =
+  replyPipelineMocks.dispatchReplyWithBufferedBlockDispatcher;
+
+vi.mock("../../../src/auto-reply/reply/inbound-context.js", () => ({
+  finalizeInboundContext: replyPipelineMocks.finalizeInboundContext,
+}));
+vi.mock("../../../src/auto-reply/reply/provider-dispatcher.js", () => ({
+  dispatchReplyWithBufferedBlockDispatcher:
+    replyPipelineMocks.dispatchReplyWithBufferedBlockDispatcher,
+}));
+vi.mock("../../../src/channels/reply-prefix.js", () => ({
+  createReplyPrefixOptions: replyPipelineMocks.createReplyPrefixOptions,
+}));
+vi.mock("../../../src/channels/session-meta.js", () => ({
+  recordInboundSessionMetaSafe: replyPipelineMocks.recordInboundSessionMetaSafe,
 }));
 
 const deliveryMocks = vi.hoisted(() => ({
