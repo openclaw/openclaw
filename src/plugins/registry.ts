@@ -43,6 +43,7 @@ import type {
   PluginLogger,
   PluginOrigin,
   PluginKind,
+  PluginRegistrationMode,
   PluginHookName,
   PluginHookHandlerMap,
   PluginHookRegistration as TypedPluginHookRegistration,
@@ -185,8 +186,6 @@ export type PluginRegistryParams = {
 type PluginTypedHookPolicy = {
   allowPromptInjection?: boolean;
 };
-
-type PluginRegistrationMode = "full" | "setup-only";
 
 const constrainLegacyPromptInjectionHook = (
   handler: PluginHookHandlerMap["before_agent_start"],
@@ -734,6 +733,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       description: record.description,
       source: record.source,
       rootDir: record.rootDir,
+      registrationMode,
       config: params.config,
       pluginConfig: params.pluginConfig,
       runtime: registryParams.runtime,
