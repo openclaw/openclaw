@@ -18,10 +18,6 @@ const bundledExtensionSubpathLoaders = [
   { id: "diagnostics-otel", load: () => import("openclaw/plugin-sdk/diagnostics-otel") },
   { id: "diffs", load: () => import("openclaw/plugin-sdk/diffs") },
   { id: "feishu", load: () => import("openclaw/plugin-sdk/feishu") },
-  {
-    id: "google-gemini-cli-auth",
-    load: () => import("openclaw/plugin-sdk/google-gemini-cli-auth"),
-  },
   { id: "googlechat", load: () => import("openclaw/plugin-sdk/googlechat") },
   { id: "irc", load: () => import("openclaw/plugin-sdk/irc") },
   { id: "llm-task", load: () => import("openclaw/plugin-sdk/llm-task") },
@@ -105,6 +101,12 @@ describe("plugin-sdk subpath exports", () => {
     expect("resolveWhatsAppMentionStripPatterns" in whatsappSdk).toBe(false);
   });
 
+  it("exports Feishu helpers", async () => {
+    const feishuSdk = await import("openclaw/plugin-sdk/feishu");
+    expect(typeof feishuSdk.feishuSetupWizard).toBe("object");
+    expect(typeof feishuSdk.feishuSetupAdapter).toBe("object");
+  });
+
   it("exports LINE helpers", () => {
     expect(typeof lineSdk.processLineMessage).toBe("function");
     expect(typeof lineSdk.createInfoCard).toBe("function");
@@ -113,12 +115,26 @@ describe("plugin-sdk subpath exports", () => {
   it("exports Microsoft Teams helpers", () => {
     expect(typeof msteamsSdk.resolveControlCommandGate).toBe("function");
     expect(typeof msteamsSdk.loadOutboundMediaFromUrl).toBe("function");
+    expect(typeof msteamsSdk.msteamsSetupWizard).toBe("object");
+    expect(typeof msteamsSdk.msteamsSetupAdapter).toBe("object");
   });
 
   it("exports Google Chat helpers", async () => {
     const googlechatSdk = await import("openclaw/plugin-sdk/googlechat");
     expect(typeof googlechatSdk.googlechatSetupWizard).toBe("object");
     expect(typeof googlechatSdk.googlechatSetupAdapter).toBe("object");
+  });
+
+  it("exports Zalo helpers", async () => {
+    const zaloSdk = await import("openclaw/plugin-sdk/zalo");
+    expect(typeof zaloSdk.zaloSetupWizard).toBe("object");
+    expect(typeof zaloSdk.zaloSetupAdapter).toBe("object");
+  });
+
+  it("exports Zalouser helpers", async () => {
+    const zalouserSdk = await import("openclaw/plugin-sdk/zalouser");
+    expect(typeof zalouserSdk.zalouserSetupWizard).toBe("object");
+    expect(typeof zalouserSdk.zalouserSetupAdapter).toBe("object");
   });
 
   it("exports Tlon helpers", async () => {
@@ -146,6 +162,10 @@ describe("plugin-sdk subpath exports", () => {
     const bluebubbles = await import("openclaw/plugin-sdk/bluebubbles");
     expect(typeof bluebubbles.parseFiniteNumber).toBe("function");
 
+    const matrix = await import("openclaw/plugin-sdk/matrix");
+    expect(typeof matrix.matrixSetupWizard).toBe("object");
+    expect(typeof matrix.matrixSetupAdapter).toBe("object");
+
     const mattermost = await import("openclaw/plugin-sdk/mattermost");
     expect(typeof mattermost.parseStrictPositiveInteger).toBe("function");
 
@@ -155,6 +175,8 @@ describe("plugin-sdk subpath exports", () => {
     const twitch = await import("openclaw/plugin-sdk/twitch");
     expect(typeof twitch.DEFAULT_ACCOUNT_ID).toBe("string");
     expect(typeof twitch.normalizeAccountId).toBe("function");
+    expect(typeof twitch.twitchSetupWizard).toBe("object");
+    expect(typeof twitch.twitchSetupAdapter).toBe("object");
 
     const zalo = await import("openclaw/plugin-sdk/zalo");
     expect(typeof zalo.resolveClientIp).toBe("function");

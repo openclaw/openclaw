@@ -46,10 +46,12 @@ const {
   resolveDiscordAllowlistConfigMock,
   resolveNativeCommandsEnabledMock,
   resolveNativeSkillsEnabledMock,
+  isVerboseMock,
   shouldLogVerboseMock,
   voiceRuntimeModuleLoadedMock,
 } = vi.hoisted(() => {
   const createdBindingManagers: Array<{ stop: ReturnType<typeof vi.fn> }> = [];
+  const isVerboseMock = vi.fn(() => false);
   const shouldLogVerboseMock = vi.fn(() => false);
   return {
     clientHandleDeployRequestMock: vi.fn(async () => undefined),
@@ -112,6 +114,7 @@ const {
     })),
     resolveNativeCommandsEnabledMock: vi.fn(() => true),
     resolveNativeSkillsEnabledMock: vi.fn(() => false),
+    isVerboseMock,
     shouldLogVerboseMock,
     voiceRuntimeModuleLoadedMock: vi.fn(),
   };
@@ -213,6 +216,7 @@ vi.mock("../../../../src/config/config.js", () => ({
 
 vi.mock("../../../../src/globals.js", () => ({
   danger: (v: string) => v,
+  isVerbose: isVerboseMock,
   logVerbose: vi.fn(),
   shouldLogVerbose: shouldLogVerboseMock,
   warn: (v: string) => v,
@@ -438,6 +442,7 @@ describe("monitorDiscordProvider", () => {
     });
     resolveNativeCommandsEnabledMock.mockClear().mockReturnValue(true);
     resolveNativeSkillsEnabledMock.mockClear().mockReturnValue(false);
+    isVerboseMock.mockClear().mockReturnValue(false);
     shouldLogVerboseMock.mockClear().mockReturnValue(false);
     voiceRuntimeModuleLoadedMock.mockClear();
   });
@@ -846,7 +851,7 @@ describe("monitorDiscordProvider", () => {
       emitter.emit("debug", "WebSocket connection opened");
       return { id: "bot-1", username: "Molty" };
     });
-    shouldLogVerboseMock.mockReturnValue(true);
+    isVerboseMock.mockReturnValue(true);
 
     await monitorDiscordProvider({
       config: baseConfig(),
