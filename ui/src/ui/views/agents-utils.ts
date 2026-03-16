@@ -200,15 +200,18 @@ export function resolveAgentAvatarUrl(
   agent: { identity?: { avatar?: string; avatarUrl?: string } },
   agentIdentity?: AgentIdentityResult | null,
 ): string | null {
-  const url =
-    agentIdentity?.avatar?.trim() ??
-    agent.identity?.avatarUrl?.trim() ??
-    agent.identity?.avatar?.trim();
-  if (!url) {
-    return null;
-  }
-  if (AVATAR_URL_RE.test(url)) {
-    return url;
+  const candidates = [
+    agentIdentity?.avatar?.trim(),
+    agent.identity?.avatarUrl?.trim(),
+    agent.identity?.avatar?.trim(),
+  ];
+  for (const candidate of candidates) {
+    if (!candidate) {
+      continue;
+    }
+    if (AVATAR_URL_RE.test(candidate)) {
+      return candidate;
+    }
   }
   return null;
 }

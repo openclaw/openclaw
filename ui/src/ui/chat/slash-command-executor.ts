@@ -9,16 +9,22 @@ import {
   normalizeThinkLevel,
   normalizeVerboseLevel,
   resolveThinkingDefaultForModel,
-} from "../../../../src/auto-reply/thinking.js";
-import type { HealthSummary } from "../../../../src/commands/health.js";
+} from "../../../../src/auto-reply/thinking.shared.js";
 import {
   DEFAULT_AGENT_ID,
   DEFAULT_MAIN_KEY,
   isSubagentSessionKey,
   parseAgentSessionKey,
 } from "../../../../src/routing/session-key.js";
+import { createChatModelOverride, resolveServerChatModelValue } from "../chat-model-ref.ts";
 import type { GatewayBrowserClient } from "../gateway.ts";
-import type { AgentsListResult, GatewaySessionRow, SessionsListResult } from "../types.ts";
+import type {
+  AgentsListResult,
+  ChatModelOverride,
+  GatewaySessionRow,
+  SessionsListResult,
+  SessionsPatchResult,
+} from "../types.ts";
 import { SLASH_COMMANDS } from "./slash-commands.ts";
 
 export type SlashCommandResult = {
@@ -34,6 +40,10 @@ export type SlashCommandResult = {
     | "clear"
     | "toggle-focus"
     | "navigate-usage";
+  /** Optional session-level directive changes that the caller should mirror locally. */
+  sessionPatch?: {
+    modelOverride?: ChatModelOverride | null;
+  };
 };
 
 export async function executeSlashCommand(
@@ -45,8 +55,6 @@ export async function executeSlashCommand(
   switch (commandName) {
     case "help":
       return executeHelp();
-    case "status":
-      return await executeStatus(client);
     case "new":
       return { content: "Starting new session...", action: "new-session" };
     case "reset":
@@ -101,27 +109,6 @@ function executeHelp(): SlashCommandResult {
   return { content: lines.join("\n") };
 }
 
-async function executeStatus(client: GatewayBrowserClient): Promise<SlashCommandResult> {
-  try {
-    const health = await client.request<HealthSummary>("health", {});
-    const status = health.ok ? "Healthy" : "Degraded";
-    const agentCount = health.agents?.length ?? 0;
-    const sessionCount = health.sessions?.count ?? 0;
-    const lines = [
-      `**System Status:** ${status}`,
-      `**Agents:** ${agentCount}`,
-      `**Sessions:** ${sessionCount}`,
-      `**Default Agent:** ${health.defaultAgentId || "none"}`,
-    ];
-    if (health.durationMs) {
-      lines.push(`**Response:** ${health.durationMs}ms`);
-    }
-    return { content: lines.join("\n") };
-  } catch (err) {
-    return { content: `Failed to fetch status: ${String(err)}` };
-  }
-}
-
 async function executeCompact(
   client: GatewayBrowserClient,
   sessionKey: string,
@@ -164,8 +151,19 @@ async function executeModel(
   }
 
   try {
-    await client.request("sessions.patch", { key: sessionKey, model: args.trim() });
-    return { content: `Model set to \`${args.trim()}\`.`, action: "refresh" };
+    const patched = await client.request<SessionsPatchResult>("sessions.patch", {
+      key: sessionKey,
+      model: args.trim(),
+    });
+    const resolvedValue = resolveServerChatModelValue(
+      patched.resolved?.model ?? args.trim(),
+      patched.resolved?.modelProvider,
+    );
+    return {
+      content: `Model set to \`${args.trim()}\`.`,
+      action: "refresh",
+      sessionPatch: { modelOverride: createChatModelOverride(resolvedValue) },
+    };
   } catch (err) {
     return { content: `Failed to set model: ${String(err)}` };
   }

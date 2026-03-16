@@ -211,6 +211,13 @@ export type GatewayReloadConfig = {
   mode?: GatewayReloadMode;
   /** Debounce window for config reloads (ms). Default: 300. */
   debounceMs?: number;
+  /**
+   * Maximum time (ms) to wait for in-flight operations to complete before
+   * forcing a SIGUSR1 restart. Default: 300000 (5 minutes).
+   * Lower values risk aborting active subagent LLM calls.
+   * @see https://github.com/openclaw/openclaw/issues/47711
+   */
+  deferralTimeoutMs?: number;
 };
 
 export type GatewayHttpChatCompletionsConfig = {
@@ -431,4 +438,16 @@ export type GatewayConfig = {
    * Set to 0 to disable. Default: 5.
    */
   channelHealthCheckMinutes?: number;
+  /**
+   * Stale event threshold in minutes for the channel health monitor.
+   * A connected channel that receives no events for this duration is treated
+   * as a stale socket and restarted. Default: 30.
+   */
+  channelStaleEventThresholdMinutes?: number;
+  /**
+   * Maximum number of health-monitor-initiated channel restarts per hour.
+   * Once this limit is reached, the monitor skips further restarts until
+   * the rolling window expires. Default: 10.
+   */
+  channelMaxRestartsPerHour?: number;
 };

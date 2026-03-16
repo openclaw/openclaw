@@ -2,18 +2,6 @@ import { describe, expect, it } from "vitest";
 import { __testing } from "./monitor.js";
 
 describe("zalo group policy access", () => {
-  it("defaults missing provider config to allowlist", () => {
-    const resolved = __testing.resolveZaloRuntimeGroupPolicy({
-      providerConfigPresent: false,
-      groupPolicy: undefined,
-      defaultGroupPolicy: "open",
-    });
-    expect(resolved).toEqual({
-      groupPolicy: "allowlist",
-      providerMissingFallbackApplied: true,
-    });
-  });
-
   it("blocks all group messages when policy is disabled", () => {
     const decision = __testing.evaluateZaloGroupAccess({
       providerConfigPresent: true,

@@ -74,11 +74,14 @@ export function shouldSkipBackendSelfPairing(params: {
     return false;
   }
   const usesSharedSecretAuth = params.authMethod === "token" || params.authMethod === "password";
+  const usesDeviceTokenAuth = params.authMethod === "device-token";
+  // `authMethod === "device-token"` only reaches this helper after the caller
+  // has already accepted auth (`authOk === true`), so a separate
+  // `deviceTokenAuthOk` flag would be redundant here.
   return (
     params.isLocalClient &&
     !params.hasBrowserOriginHeader &&
-    params.sharedAuthOk &&
-    usesSharedSecretAuth
+    ((params.sharedAuthOk && usesSharedSecretAuth) || usesDeviceTokenAuth)
   );
 }
 
@@ -89,6 +92,23 @@ function resolveSignatureToken(connectParams: ConnectParams): string | null {
     connectParams.auth?.bootstrapToken ??
     null
   );
+}
+
+function buildUnauthorizedHandshakeContext(params: {
+  authProvided: AuthProvidedKind;
+  canRetryWithDeviceToken: boolean;
+  recommendedNextStep:
+    | "retry_with_device_token"
+    | "update_auth_configuration"
+    | "update_auth_credentials"
+    | "wait_then_retry"
+    | "review_auth_configuration";
+}) {
+  return {
+    authProvided: params.authProvided,
+    canRetryWithDeviceToken: params.canRetryWithDeviceToken,
+    recommendedNextStep: params.recommendedNextStep,
+  };
 }
 
 export function resolveDeviceSignaturePayloadVersion(params: {
@@ -104,7 +124,7 @@ export function resolveDeviceSignaturePayloadVersion(params: {
   nonce: string;
 }): "v3" | "v2" | null {
   const signatureToken = resolveSignatureToken(params.connectParams);
-  const payloadV3 = buildDeviceAuthPayloadV3({
+  const basePayload = {
     deviceId: params.device.id,
     clientId: params.connectParams.client.id,
     clientMode: params.connectParams.client.mode,
@@ -113,6 +133,9 @@ export function resolveDeviceSignaturePayloadVersion(params: {
     signedAtMs: params.signedAtMs,
     token: signatureToken,
     nonce: params.nonce,
+  };
+  const payloadV3 = buildDeviceAuthPayloadV3({
+    ...basePayload,
     platform: params.connectParams.client.platform,
     deviceFamily: params.connectParams.client.deviceFamily,
   });
@@ -120,16 +143,7 @@ export function resolveDeviceSignaturePayloadVersion(params: {
     return "v3";
   }
 
-  const payloadV2 = buildDeviceAuthPayload({
-    deviceId: params.device.id,
-    clientId: params.connectParams.client.id,
-    clientMode: params.connectParams.client.mode,
-    role: params.role,
-    scopes: params.scopes,
-    signedAtMs: params.signedAtMs,
-    token: signatureToken,
-    nonce: params.nonce,
-  });
+  const payloadV2 = buildDeviceAuthPayload(basePayload);
   if (verifyDeviceSignature(params.device.publicKey, payloadV2, params.device.signature)) {
     return "v2";
   }
@@ -171,41 +185,41 @@ export function resolveUnauthorizedHandshakeContext(params: {
     authProvided === "token" &&
     !params.connectAuth?.deviceToken;
   if (canRetryWithDeviceToken) {
-    return {
+    return buildUnauthorizedHandshakeContext({
       authProvided,
       canRetryWithDeviceToken,
       recommendedNextStep: "retry_with_device_token",
-    };
+    });
   }
   switch (params.failedAuth.reason) {
     case "token_missing":
     case "token_missing_config":
     case "password_missing":
     case "password_missing_config":
-      return {
+      return buildUnauthorizedHandshakeContext({
         authProvided,
         canRetryWithDeviceToken,
         recommendedNextStep: "update_auth_configuration",
-      };
+      });
     case "token_mismatch":
     case "password_mismatch":
     case "device_token_mismatch":
-      return {
+      return buildUnauthorizedHandshakeContext({
         authProvided,
         canRetryWithDeviceToken,
         recommendedNextStep: "update_auth_credentials",
-      };
+      });
     case "rate_limited":
-      return {
+      return buildUnauthorizedHandshakeContext({
         authProvided,
         canRetryWithDeviceToken,
         recommendedNextStep: "wait_then_retry",
-      };
+      });
     default:
-      return {
+      return buildUnauthorizedHandshakeContext({
         authProvided,
         canRetryWithDeviceToken,
         recommendedNextStep: "review_auth_configuration",
-      };
+      });
   }
 }

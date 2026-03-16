@@ -36,7 +36,7 @@ Quick answers plus deeper troubleshooting for real-world setups (local dev, VPS,
   - [How do I install OpenClaw on a VPS?](#how-do-i-install-openclaw-on-a-vps)
   - [Where are the cloud/VPS install guides?](#where-are-the-cloudvps-install-guides)
   - [Can I ask OpenClaw to update itself?](#can-i-ask-openclaw-to-update-itself)
-  - [What does the onboarding wizard actually do?](#what-does-the-onboarding-wizard-actually-do)
+  - [What does the setup wizard actually do?](#what-does-the-setup-wizard-actually-do)
   - [Do I need a Claude or OpenAI subscription to run this?](#do-i-need-a-claude-or-openai-subscription-to-run-this)
   - [Can I use Claude Max subscription without an API key](#can-i-use-claude-max-subscription-without-an-api-key)
   - [How does Anthropic "setup-token" auth work?](#how-does-anthropic-setuptoken-auth-work)
@@ -80,7 +80,7 @@ Quick answers plus deeper troubleshooting for real-world setups (local dev, VPS,
   - [Can OpenClaw run tasks on a schedule or continuously in the background?](#can-openclaw-run-tasks-on-a-schedule-or-continuously-in-the-background)
   - [Can I run Apple macOS-only skills from Linux?](#can-i-run-apple-macos-only-skills-from-linux)
   - [Do you have a Notion or HeyGen integration?](#do-you-have-a-notion-or-heygen-integration)
-  - [How do I install the Chrome extension for browser takeover?](#how-do-i-install-the-chrome-extension-for-browser-takeover)
+  - [How do I use my existing signed-in Chrome with OpenClaw?](#how-do-i-use-my-existing-signed-in-chrome-with-openclaw)
 - [Sandboxing and memory](#sandboxing-and-memory)
   - [Is there a dedicated sandboxing doc?](#is-there-a-dedicated-sandboxing-doc)
   - [How do I bind a host folder into the sandbox?](#how-do-i-bind-a-host-folder-into-the-sandbox)
@@ -317,7 +317,7 @@ Install docs: [Install](/install), [Installer flags](/install/installer), [Updat
 
 ### What's the recommended way to install and set up OpenClaw
 
-The repo recommends running from source and using the onboarding wizard:
+The repo recommends running from source and using the setup wizard:
 
 ```bash
 curl -fsSL https://openclaw.ai/install.sh | bash
@@ -627,7 +627,7 @@ More detail: [Install](/install) and [Installer flags](/install/installer).
 
 ### How do I install OpenClaw on Linux
 
-Short answer: follow the Linux guide, then run the onboarding wizard.
+Short answer: follow the Linux guide, then run the setup wizard.
 
 - Linux quick path + service install: [Linux](/platforms/linux).
 - Full walkthrough: [Getting Started](/start/getting-started).
@@ -685,7 +685,7 @@ openclaw gateway restart
 
 Docs: [Update](/cli/update), [Updating](/install/updating).
 
-### What does the onboarding wizard actually do
+### What does the setup wizard actually do
 
 `openclaw onboard` is the recommended setup path. In **local mode** it walks you through:
 
@@ -773,7 +773,7 @@ OpenClaw supports **OpenAI Code (Codex)** via OAuth (ChatGPT sign-in). The wizar
 
 Yes. OpenClaw fully supports **OpenAI Code (Codex) subscription OAuth**.
 OpenAI explicitly allows subscription OAuth usage in external tools/workflows
-like OpenClaw. The onboarding wizard can run the OAuth flow for you.
+like OpenClaw. The setup wizard can run the OAuth flow for you.
 
 See [OAuth](/concepts/oauth), [Model providers](/concepts/model-providers), and [Wizard](/start/wizard).
 
@@ -783,7 +783,7 @@ Gemini CLI uses a **plugin auth flow**, not a client id or secret in `openclaw.j
 
 Steps:
 
-1. Enable the plugin: `openclaw plugins enable google-gemini-cli-auth`
+1. Enable the plugin: `openclaw plugins enable google`
 2. Login: `openclaw models auth login --provider google-gemini-cli --set-default`
 
 This stores OAuth tokens in auth profiles on the gateway host. Details: [Model providers](/concepts/model-providers).
@@ -844,7 +844,7 @@ without WhatsApp/Telegram.
 
 `channels.telegram.allowFrom` is **the human sender's Telegram user ID** (numeric). It is not the bot username.
 
-The onboarding wizard accepts `@username` input and resolves it to a numeric ID, but OpenClaw authorization uses numeric IDs only.
+The setup wizard accepts `@username` input and resolves it to a numeric ID, but OpenClaw authorization uses numeric IDs only.
 
 Safer (no third-party bot):
 
@@ -1214,22 +1214,23 @@ clawhub update --all
 
 ClawHub installs into `./skills` under your current directory (or falls back to your configured OpenClaw workspace); OpenClaw treats that as `<workspace>/skills` on the next session. For shared skills across agents, place them in `~/.openclaw/skills/<name>/SKILL.md`. Some skills expect binaries installed via Homebrew; on Linux that means Linuxbrew (see the Homebrew Linux FAQ entry above). See [Skills](/tools/skills) and [ClawHub](/tools/clawhub).
 
-### How do I install the Chrome extension for browser takeover
+### How do I use my existing signed-in Chrome with OpenClaw
 
-Use the built-in installer, then load the unpacked extension in Chrome:
+Use the built-in `user` browser profile, which attaches through Chrome DevTools MCP:
 
 ```bash
-openclaw browser extension install
-openclaw browser extension path
+openclaw browser --browser-profile user tabs
+openclaw browser --browser-profile user snapshot
 ```
 
-Then Chrome → `chrome://extensions` → enable "Developer mode" → "Load unpacked" → pick that folder.
+If you want a custom name, create an explicit MCP profile:
 
-Full guide (including remote Gateway + security notes): [Chrome extension](/tools/chrome-extension)
+```bash
+openclaw browser create-profile --name chrome-live --driver existing-session
+openclaw browser --browser-profile chrome-live tabs
+```
 
-If the Gateway runs on the same machine as Chrome (default setup), you usually **do not** need anything extra.
-If the Gateway runs elsewhere, run a node host on the browser machine so the Gateway can proxy browser actions.
-You still need to click the extension button on the tab you want to control (it doesn't auto-attach).
+This path is host-local. If the Gateway runs elsewhere, either run a node host on the browser machine or use remote CDP instead.
 
 ## Sandboxing and memory
 
@@ -1358,7 +1359,8 @@ Your **workspace** (AGENTS.md, memory files, skills, etc.) is separate and confi
 These files live in the **agent workspace**, not `~/.openclaw`.
 
 - **Workspace (per agent)**: `AGENTS.md`, `SOUL.md`, `IDENTITY.md`, `USER.md`,
-  `MEMORY.md` (or `memory.md`), `memory/YYYY-MM-DD.md`, optional `HEARTBEAT.md`.
+  `MEMORY.md` (or legacy fallback `memory.md` when `MEMORY.md` is absent),
+  `memory/YYYY-MM-DD.md`, optional `HEARTBEAT.md`.
 - **State dir (`~/.openclaw`)**: config, credentials, auth profiles, sessions, logs,
   and shared skills (`~/.openclaw/skills`).
 
@@ -1664,13 +1666,12 @@ setup is an always-on host plus your laptop as a node.
 - **No inbound SSH required.** Nodes connect out to the Gateway WebSocket and use device pairing.
 - **Safer execution controls.** `system.run` is gated by node allowlists/approvals on that laptop.
 - **More device tools.** Nodes expose `canvas`, `camera`, and `screen` in addition to `system.run`.
-- **Local browser automation.** Keep the Gateway on a VPS, but run Chrome locally and relay control
-  with the Chrome extension + a node host on the laptop.
+- **Local browser automation.** Keep the Gateway on a VPS, but run Chrome locally through a node host on the laptop, or attach to local Chrome on the host via Chrome MCP.
 
 SSH is fine for ad-hoc shell access, but nodes are simpler for ongoing agent workflows and
 device automation.
 
-Docs: [Nodes](/nodes), [Nodes CLI](/cli/nodes), [Chrome extension](/tools/chrome-extension).
+Docs: [Nodes](/nodes), [Nodes CLI](/cli/nodes), [Browser](/tools/browser).
 
 ### Should I install on a second laptop or just add a node
 
@@ -1900,7 +1901,7 @@ Non-interactive full reset:
 openclaw reset --scope full --yes --non-interactive
 ```
 
-Then re-run onboarding:
+Then re-run setup:
 
 ```bash
 openclaw onboard --install-daemon
@@ -1908,7 +1909,7 @@ openclaw onboard --install-daemon
 
 Notes:
 
-- The onboarding wizard also offers **Reset** if it sees an existing config. See [Wizard](/start/wizard).
+- The setup wizard also offers **Reset** if it sees an existing config. See [Wizard](/start/wizard).
 - If you used profiles (`--profile` / `OPENCLAW_PROFILE`), reset each state dir (defaults are `~/.openclaw-<profile>`).
 - Dev reset: `openclaw gateway --dev --reset` (dev-only; wipes dev config + credentials + sessions + workspace).
 
@@ -2038,18 +2039,18 @@ Yes. Use **Multi-Agent Routing** to run multiple isolated agents and route inbou
 channel/account/peer. Slack is supported as a channel and can be bound to specific agents.
 
 Browser access is powerful but not "do anything a human can" - anti-bot, CAPTCHAs, and MFA can
-still block automation. For the most reliable browser control, use the Chrome extension relay
-on the machine that runs the browser (and keep the Gateway anywhere).
+still block automation. For the most reliable browser control, use local Chrome MCP on the host,
+or use CDP on the machine that actually runs the browser.
 
 Best-practice setup:
 
 - Always-on Gateway host (VPS/Mac mini).
 - One agent per role (bindings).
 - Slack channel(s) bound to those agents.
-- Local browser via extension relay (or a node) when needed.
+- Local browser via Chrome MCP or a node when needed.
 
 Docs: [Multi-Agent Routing](/concepts/multi-agent), [Slack](/channels/slack),
-[Browser](/tools/browser), [Chrome extension](/tools/chrome-extension), [Nodes](/nodes).
+[Browser](/tools/browser), [Nodes](/nodes).
 
 ## Models: defaults, selection, aliases, switching
 

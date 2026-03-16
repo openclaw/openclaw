@@ -84,8 +84,28 @@ vi.mock("../../commands/daemon-install-helpers.js", () => ({
 
 vi.mock("./shared.js", () => ({
   parsePort: parsePortMock,
+  createDaemonInstallActionContext: (jsonFlag: unknown) => {
+    const json = Boolean(jsonFlag);
+    return {
+      json,
+      stdout: process.stdout,
+      warnings: actionState.warnings,
+      emit: (payload: DaemonActionResponse) => {
+        actionState.emitted.push(payload);
+      },
+      fail: (message: string, hints?: string[]) => {
+        actionState.failed.push({ message, hints });
+      },
+    };
+  },
+  failIfNixDaemonInstallMode: (fail: (message: string, hints?: string[]) => void) => {
+    if (!resolveIsNixModeMock()) {
+      return false;
+    }
+    fail("Nix mode detected; service install is disabled.");
+    return true;
+  },
 }));
-
 vi.mock("../../commands/daemon-runtime.js", () => ({
   DEFAULT_GATEWAY_DAEMON_RUNTIME: "node",
   isGatewayDaemonRuntime: isGatewayDaemonRuntimeMock,
@@ -97,16 +117,6 @@ vi.mock("../../daemon/service.js", () => ({
 
 vi.mock("./response.js", () => ({
   buildDaemonServiceSnapshot: vi.fn(),
-  createDaemonActionContext: vi.fn(() => ({
-    stdout: process.stdout,
-    warnings: actionState.warnings,
-    emit: (payload: DaemonActionResponse) => {
-      actionState.emitted.push(payload);
-    },
-    fail: (message: string, hints?: string[]) => {
-      actionState.failed.push({ message, hints });
-    },
-  })),
   installDaemonServiceAndEmit: installDaemonServiceAndEmitMock,
 }));
 
@@ -124,6 +134,15 @@ function expectFirstInstallPlanCallOmitsToken() {
     (buildGatewayInstallPlanMock.mock.calls.at(0) as [Record<string, unknown>] | undefined) ?? [];
   expect(firstArg).toBeDefined();
   expect(firstArg && "token" in firstArg).toBe(false);
+}
+
+function mockResolvedGatewayTokenSecretRef() {
+  resolveSecretInputRefMock.mockReturnValue({
+    ref: { source: "env", provider: "default", id: "OPENCLAW_GATEWAY_TOKEN" },
+  });
+  resolveSecretRefValuesMock.mockResolvedValue(
+    new Map([["env:default:OPENCLAW_GATEWAY_TOKEN", "resolved-from-secretref"]]),
+  );
 }
 
 const { runDaemonInstall } = await import("./install.js");
@@ -195,12 +214,7 @@ describe("runDaemonInstall", () => {
   });
 
   it("validates token SecretRef but does not serialize resolved token into service env", async () => {
-    resolveSecretInputRefMock.mockReturnValue({
-      ref: { source: "env", provider: "default", id: "OPENCLAW_GATEWAY_TOKEN" },
-    });
-    resolveSecretRefValuesMock.mockResolvedValue(
-      new Map([["env:default:OPENCLAW_GATEWAY_TOKEN", "resolved-from-secretref"]]),
-    );
+    mockResolvedGatewayTokenSecretRef();
 
     await runDaemonInstall({ json: true });
 
@@ -219,12 +233,7 @@ describe("runDaemonInstall", () => {
     loadConfigMock.mockReturnValue({
       gateway: { auth: { mode: "token", token: "${OPENCLAW_GATEWAY_TOKEN}" } },
     });
-    resolveSecretInputRefMock.mockReturnValue({
-      ref: { source: "env", provider: "default", id: "OPENCLAW_GATEWAY_TOKEN" },
-    });
-    resolveSecretRefValuesMock.mockResolvedValue(
-      new Map([["env:default:OPENCLAW_GATEWAY_TOKEN", "resolved-from-secretref"]]),
-    );
+    mockResolvedGatewayTokenSecretRef();
 
     await runDaemonInstall({ json: true });
 

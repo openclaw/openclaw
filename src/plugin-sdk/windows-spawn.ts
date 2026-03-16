@@ -52,6 +52,7 @@ function isFilePath(candidate: string): boolean {
   }
 }
 
+/** Resolve a Windows command name through PATH and PATHEXT so wrapper inspection sees the real file. */
 export function resolveWindowsExecutablePath(command: string, env: NodeJS.ProcessEnv): string {
   if (command.includes("/") || command.includes("\\") || path.isAbsolute(command)) {
     return command;
@@ -188,6 +189,7 @@ function resolveEntrypointFromPackageJson(
   return null;
 }
 
+/** Resolve the safest direct spawn candidate for Windows wrappers, scripts, and binaries. */
 export function resolveWindowsSpawnProgramCandidate(
   params: ResolveWindowsSpawnProgramCandidateParams,
 ): WindowsSpawnProgramCandidate {
@@ -250,6 +252,7 @@ export function resolveWindowsSpawnProgramCandidate(
   };
 }
 
+/** Apply shell-fallback policy when Windows wrapper resolution could not find a direct entrypoint. */
 export function applyWindowsSpawnProgramPolicy(params: {
   candidate: WindowsSpawnProgramCandidate;
   allowShellFallback?: boolean;
@@ -275,6 +278,7 @@ export function applyWindowsSpawnProgramPolicy(params: {
   );
 }
 
+/** Resolve the final Windows spawn program after candidate discovery and fallback policy. */
 export function resolveWindowsSpawnProgram(
   params: ResolveWindowsSpawnProgramParams,
 ): WindowsSpawnProgram {
@@ -285,6 +289,7 @@ export function resolveWindowsSpawnProgram(
   });
 }
 
+/** Combine a resolved Windows spawn program with call-site argv for actual process launch. */
 export function materializeWindowsSpawnProgram(
   program: WindowsSpawnProgram,
   argv: string[],
