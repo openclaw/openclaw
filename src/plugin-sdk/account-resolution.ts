@@ -1,3 +1,4 @@
+/** Resolve an account by id, then fall back to the default account when the primary lacks credentials. */
 export function resolveAccountWithDefaultFallback<TAccount>(params: {
   accountId?: string | null;
   normalizeAccountId: (accountId?: string | null) => string;
@@ -23,6 +24,7 @@ export function resolveAccountWithDefaultFallback<TAccount>(params: {
   return fallback;
 }
 
+/** List normalized configured account ids from a raw channel account record map. */
 export function listConfiguredAccountIds(params: {
   accounts: Record<string, unknown> | undefined;
   normalizeAccountId: (accountId: string) => string;

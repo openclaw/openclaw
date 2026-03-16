@@ -1,8 +1,8 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import * as authModule from "../agents/model-auth.js";
-import * as ssrf from "../infra/net/ssrf.js";
 import { type FetchMock, withFetchPreconnect } from "../test-utils/fetch-mock.js";
 import { createVoyageEmbeddingProvider, normalizeVoyageModel } from "./embeddings-voyage.js";
+import { mockPublicPinnedHostname } from "./test-helpers/ssrf.js";
 
 vi.mock("../agents/model-auth.js", async () => {
   const { createModelAuthMockModule } = await import("../test-utils/model-auth-mock.js");
@@ -28,23 +28,12 @@ function mockVoyageApiKey() {
   });
 }
 
-function mockPublicPinnedHostname() {
-  return vi.spyOn(ssrf, "resolvePinnedHostnameWithPolicy").mockImplementation(async (hostname) => {
-    const normalized = hostname.trim().toLowerCase().replace(/\.$/, "");
-    const addresses = ["93.184.216.34"];
-    return {
-      hostname: normalized,
-      addresses,
-      lookup: ssrf.createPinnedLookup({ hostname: normalized, addresses }),
-    };
-  });
-}
-
 async function createDefaultVoyageProvider(
   model: string,
   fetchMock: ReturnType<typeof createFetchMock>,
 ) {
   vi.stubGlobal("fetch", fetchMock);
+  mockPublicPinnedHostname();
   mockVoyageApiKey();
   return createVoyageEmbeddingProvider({
     config: {} as never,

@@ -16,6 +16,7 @@ import {
 } from "./queue.js";
 import { createReplyDispatcher } from "./reply-dispatcher.js";
 import { createReplyToModeFilter, resolveReplyToMode } from "./reply-threading.js";
+import { parseSlackDirectives, hasSlackDirectives } from "./slack-directives.js";
 
 describe("normalizeInboundTextNewlines", () => {
   it("normalizes real newlines and preserves literal backslash-n sequences", () => {
@@ -196,6 +197,8 @@ describe("inbound context contract (providers + extensions)", () => {
 
 const getLineData = (result: ReturnType<typeof parseLineDirectives>) =>
   (result.channelData?.line as Record<string, unknown> | undefined) ?? {};
+const getSlackInteractive = (result: ReturnType<typeof parseSlackDirectives>) =>
+  result.interactive?.blocks ?? [];
 
 describe("hasLineDirectives", () => {
   it("matches expected detection across directive patterns", () => {
@@ -215,6 +218,24 @@ describe("hasLineDirectives", () => {
 
     for (const testCase of cases) {
       expect(hasLineDirectives(testCase.text)).toBe(testCase.expected);
+    }
+  });
+});
+
+describe("hasSlackDirectives", () => {
+  it("matches expected detection across Slack directive patterns", () => {
+    const cases: Array<{ text: string; expected: boolean }> = [
+      { text: "Pick one [[slack_buttons: Approve:approve, Reject:reject]]", expected: true },
+      {
+        text: "[[slack_select: Choose a project | Alpha:alpha, Beta:beta]]",
+        expected: true,
+      },
+      { text: "Just regular text", expected: false },
+      { text: "[[buttons: Menu | Choose | A:a]]", expected: false },
+    ];
+
+    for (const testCase of cases) {
+      expect(hasSlackDirectives(testCase.text)).toBe(testCase.expected);
     }
   });
 });
@@ -575,6 +596,151 @@ describe("parseLineDirectives", () => {
       expect(result.mediaUrl).toBe("https://example.com/image.jpg");
       expect(result.replyToId).toBe("msg123");
       expect(getLineData(result).quickReplies).toEqual(["A", "B"]);
+    });
+  });
+});
+
+describe("parseSlackDirectives", () => {
+  it("builds shared text and button blocks from slack_buttons directives", () => {
+    const result = parseSlackDirectives({
+      text: "Choose an action [[slack_buttons: Approve:approve, Reject:reject]]",
+    });
+
+    expect(result.text).toBe("Choose an action");
+    expect(getSlackInteractive(result)).toEqual([
+      {
+        type: "text",
+        text: "Choose an action",
+      },
+      {
+        type: "buttons",
+        buttons: [
+          {
+            label: "Approve",
+            value: "approve",
+          },
+          {
+            label: "Reject",
+            value: "reject",
+          },
+        ],
+      },
+    ]);
+  });
+
+  it("builds shared select blocks from slack_select directives", () => {
+    const result = parseSlackDirectives({
+      text: "[[slack_select: Choose a project | Alpha:alpha, Beta:beta]]",
+    });
+
+    expect(result.text).toBeUndefined();
+    expect(getSlackInteractive(result)).toEqual([
+      {
+        type: "select",
+        placeholder: "Choose a project",
+        options: [
+          { label: "Alpha", value: "alpha" },
+          { label: "Beta", value: "beta" },
+        ],
+      },
+    ]);
+  });
+
+  it("leaves existing slack blocks in channelData and appends shared interactive blocks", () => {
+    const result = parseSlackDirectives({
+      text: "Act now [[slack_buttons: Retry:retry]]",
+      channelData: {
+        slack: {
+          blocks: [{ type: "divider" }],
+        },
+      },
+    });
+
+    expect(result.text).toBe("Act now");
+    expect(result.channelData).toEqual({
+      slack: {
+        blocks: [{ type: "divider" }],
+      },
+    });
+    expect(getSlackInteractive(result)).toEqual([
+      {
+        type: "text",
+        text: "Act now",
+      },
+      {
+        type: "buttons",
+        buttons: [{ label: "Retry", value: "retry" }],
+      },
+    ]);
+  });
+
+  it("preserves authored order for mixed Slack directives", () => {
+    const result = parseSlackDirectives({
+      text: "[[slack_select: Pick one | Alpha:alpha]] then [[slack_buttons: Retry:retry]]",
+    });
+
+    expect(getSlackInteractive(result)).toEqual([
+      {
+        type: "select",
+        placeholder: "Pick one",
+        options: [{ label: "Alpha", value: "alpha" }],
+      },
+      {
+        type: "text",
+        text: "then",
+      },
+      {
+        type: "buttons",
+        buttons: [{ label: "Retry", value: "retry" }],
+      },
+    ]);
+  });
+
+  it("preserves long Slack directive values in the shared interactive model", () => {
+    const long = "x".repeat(120);
+    const result = parseSlackDirectives({
+      text: `${"y".repeat(3100)} [[slack_select: ${long} | ${long}:${long}]] [[slack_buttons: ${long}:${long}]]`,
+    });
+
+    expect(getSlackInteractive(result)).toEqual([
+      {
+        type: "text",
+        text: "y".repeat(3100),
+      },
+      {
+        type: "select",
+        placeholder: long,
+        options: [{ label: long, value: long }],
+      },
+      {
+        type: "buttons",
+        buttons: [{ label: long, value: long }],
+      },
+    ]);
+  });
+
+  it("keeps existing interactive blocks when compiling additional Slack directives", () => {
+    const result = parseSlackDirectives({
+      text: "Choose [[slack_buttons: Retry:retry]]",
+      interactive: {
+        blocks: [{ type: "text", text: "Existing" }],
+      },
+    });
+
+    expect(getSlackInteractive(result)).toEqual([
+      { type: "text", text: "Existing" },
+      { type: "text", text: "Choose" },
+      { type: "buttons", buttons: [{ label: "Retry", value: "retry" }] },
+    ]);
+  });
+
+  it("ignores malformed directive choices when none remain", () => {
+    const result = parseSlackDirectives({
+      text: "Choose [[slack_buttons: : , : ]]",
+    });
+
+    expect(result).toEqual({
+      text: "Choose [[slack_buttons: : , : ]]",
     });
   });
 });
@@ -1483,6 +1649,38 @@ describe("createReplyDispatcher", () => {
     expect(deliver).toHaveBeenCalledTimes(1);
     expect(deliver.mock.calls[0][0].text).toBe("PFX hello");
     expect(onHeartbeatStrip).toHaveBeenCalledTimes(2);
+  });
+
+  it("compiles Slack directives in dispatcher flows when enabled", async () => {
+    const deliver = vi.fn().mockResolvedValue(undefined);
+    const dispatcher = createReplyDispatcher({
+      deliver,
+      enableSlackInteractiveReplies: true,
+    });
+
+    expect(
+      dispatcher.sendFinalReply({
+        text: "Choose [[slack_buttons: Retry:retry]]",
+      }),
+    ).toBe(true);
+    await dispatcher.waitForIdle();
+
+    expect(deliver).toHaveBeenCalledTimes(1);
+    expect(deliver.mock.calls[0]?.[0]).toMatchObject({
+      text: "Choose",
+      interactive: {
+        blocks: [
+          {
+            type: "text",
+            text: "Choose",
+          },
+          {
+            type: "buttons",
+            buttons: [{ label: "Retry", value: "retry" }],
+          },
+        ],
+      },
+    });
   });
 
   it("avoids double-prefixing and keeps media when heartbeat is the only text", async () => {

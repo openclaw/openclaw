@@ -812,36 +812,38 @@ export function renderConfig(props: ConfigProps) {
             formMode === "form"
               ? html`
                   <div class="config-search config-search--top">
-                    <svg
-                      class="config-search__icon"
-                      viewBox="0 0 24 24"
-                      fill="none"
-                      stroke="currentColor"
-                      stroke-width="2"
-                    >
-                      <circle cx="11" cy="11" r="8"></circle>
-                      <path d="M21 21l-4.35-4.35"></path>
-                    </svg>
-                    <input
-                      type="text"
-                      class="config-search__input"
-                      placeholder="Search settings..."
-                      .value=${props.searchQuery}
-                      @input=${(e: Event) =>
-                        props.onSearchChange((e.target as HTMLInputElement).value)}
-                    />
-                    ${
-                      props.searchQuery
-                        ? html`
-                            <button
-                              class="config-search__clear"
-                              @click=${() => props.onSearchChange("")}
-                            >
-                              ×
-                            </button>
-                          `
-                        : nothing
-                    }
+                    <div class="config-search__input-row">
+                      <svg
+                        class="config-search__icon"
+                        viewBox="0 0 24 24"
+                        fill="none"
+                        stroke="currentColor"
+                        stroke-width="2"
+                      >
+                        <circle cx="11" cy="11" r="8"></circle>
+                        <path d="M21 21l-4.35-4.35"></path>
+                      </svg>
+                      <input
+                        type="text"
+                        class="config-search__input"
+                        placeholder="Search settings..."
+                        .value=${props.searchQuery}
+                        @input=${(e: Event) =>
+                          props.onSearchChange((e.target as HTMLInputElement).value)}
+                      />
+                      ${
+                        props.searchQuery
+                          ? html`
+                              <button
+                                class="config-search__clear"
+                                @click=${() => props.onSearchChange("")}
+                              >
+                                ×
+                              </button>
+                            `
+                          : nothing
+                      }
+                    </div>
                   </div>
                 `
               : nothing
