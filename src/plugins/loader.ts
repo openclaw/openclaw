@@ -54,6 +54,11 @@ export type PluginLoadOptions = {
   mode?: "full" | "validate";
   onlyPluginIds?: string[];
   includeSetupOnlyChannelPlugins?: boolean;
+  /**
+   * Prefer `setupEntry` for configured channel plugins that explicitly opt in
+   * via package metadata because their setup entry covers the pre-listen startup surface.
+   */
+  preferSetupRuntimeForChannelPlugins?: boolean;
   activate?: boolean;
 };
 
@@ -336,6 +341,7 @@ function buildCacheKey(params: {
   env: NodeJS.ProcessEnv;
   onlyPluginIds?: string[];
   includeSetupOnlyChannelPlugins?: boolean;
+  preferSetupRuntimeForChannelPlugins?: boolean;
 }): string {
   const { roots, loadPaths } = resolvePluginCacheInputs({
     workspaceDir: params.workspaceDir,
@@ -360,11 +366,13 @@ function buildCacheKey(params: {
   );
   const scopeKey = JSON.stringify(params.onlyPluginIds ?? []);
   const setupOnlyKey = params.includeSetupOnlyChannelPlugins === true ? "setup-only" : "runtime";
+  const startupChannelMode =
+    params.preferSetupRuntimeForChannelPlugins === true ? "prefer-setup" : "full";
   return `${roots.workspace ?? ""}::${roots.global ?? ""}::${roots.stock ?? ""}::${JSON.stringify({
     ...params.plugins,
     installs,
     loadPaths,
-  })}::${scopeKey}::${setupOnlyKey}`;
+  })}::${scopeKey}::${setupOnlyKey}::${startupChannelMode}`;
 }
 
 function normalizeScopedPluginIds(ids?: string[]): string[] | undefined {
@@ -445,11 +453,19 @@ function resolveSetupChannelRegistration(moduleExport: unknown): {
 function shouldLoadChannelPluginInSetupRuntime(params: {
   manifestChannels: string[];
   setupSource?: string;
+  startupDeferConfiguredChannelFullLoadUntilAfterListen?: boolean;
   cfg: OpenClawConfig;
   env: NodeJS.ProcessEnv;
+  preferSetupRuntimeForChannelPlugins?: boolean;
 }): boolean {
   if (!params.setupSource || params.manifestChannels.length === 0) {
     return false;
+  }
+  if (
+    params.preferSetupRuntimeForChannelPlugins &&
+    params.startupDeferConfiguredChannelFullLoadUntilAfterListen === true
+  ) {
+    return true;
   }
   return !params.manifestChannels.some((channelId) =>
     isChannelConfigured(params.cfg, channelId, params.env),
@@ -800,6 +816,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
   const onlyPluginIds = normalizeScopedPluginIds(options.onlyPluginIds);
   const onlyPluginIdSet = onlyPluginIds ? new Set(onlyPluginIds) : null;
   const includeSetupOnlyChannelPlugins = options.includeSetupOnlyChannelPlugins === true;
+  const preferSetupRuntimeForChannelPlugins = options.preferSetupRuntimeForChannelPlugins === true;
   const shouldActivate = options.activate !== false;
   // NOTE: `activate` is intentionally excluded from the cache key. All non-activating
   // (snapshot) callers pass `cache: false` via loadOnboardingPluginRegistry(), so they
@@ -812,6 +829,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
     env,
     onlyPluginIds,
     includeSetupOnlyChannelPlugins,
+    preferSetupRuntimeForChannelPlugins,
   });
   const cacheEnabled = options.cache !== false;
   if (cacheEnabled) {
@@ -1066,8 +1084,11 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
         shouldLoadChannelPluginInSetupRuntime({
           manifestChannels: manifestRecord.channels,
           setupSource: manifestRecord.setupSource,
+          startupDeferConfiguredChannelFullLoadUntilAfterListen:
+            manifestRecord.startupDeferConfiguredChannelFullLoadUntilAfterListen,
           cfg,
           env,
+          preferSetupRuntimeForChannelPlugins,
         })
         ? "setup-runtime"
         : "full"
