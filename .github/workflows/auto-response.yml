@@ -5,8 +5,11 @@ on:
     types: [opened, edited, labeled]
   issue_comment:
     types: [created]
-  pull_request_target:
+  pull_request_target: # zizmor: ignore[dangerous-triggers] maintainer-owned label automation; no untrusted checkout or code execution
     types: [labeled]
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
 
 permissions: {}
 
@@ -17,20 +20,20 @@ jobs:
       pull-requests: write
     runs-on: blacksmith-16vcpu-ubuntu-2404
     steps:
-      - uses: actions/create-github-app-token@d72941d797fd3113feb6b93fd0dec494b13a2547 # v1
+      - uses: actions/create-github-app-token@v2
         id: app-token
         continue-on-error: true
         with:
           app-id: "2729701"
           private-key: ${{ secrets.GH_APP_PRIVATE_KEY }}
-      - uses: actions/create-github-app-token@d72941d797fd3113feb6b93fd0dec494b13a2547 # v1
+      - uses: actions/create-github-app-token@v2
         id: app-token-fallback
         if: steps.app-token.outcome == 'failure'
         with:
           app-id: "2971289"
           private-key: ${{ secrets.GH_APP_PRIVATE_KEY_FALLBACK }}
       - name: Handle labeled items
-        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
+        uses: actions/github-script@v8
         with:
           github-token: ${{ steps.app-token.outputs.token || steps.app-token-fallback.outputs.token }}
           script: |

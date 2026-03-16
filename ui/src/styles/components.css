@@ -1302,6 +1302,14 @@
   background: var(--bg);
 }
 
+.markdown-plain-text-fallback {
+  display: block;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  font: inherit;
+}
+
 /* ===========================================
    Lists
    =========================================== */
@@ -2157,7 +2165,7 @@
 }
 
 .chat-thread {
-  margin-top: 16px;
+  margin-top: 0;
   display: flex;
   flex-direction: column;
   gap: 12px;
@@ -2165,7 +2173,7 @@
   min-height: 0;
   overflow-y: auto;
   overflow-x: hidden;
-  padding: 16px 12px;
+  padding: 0 12px 16px;
   min-width: 0;
   border-radius: 0;
   border: none;

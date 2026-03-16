@@ -1,11 +1,25 @@
 export type { ChannelMessageActionAdapter } from "../channels/plugins/types.js";
-export type { ResolvedSignalAccount } from "../signal/accounts.js";
-export * from "./channel-plugin-common.js";
+export type { SignalAccountConfig } from "../config/types.js";
+export type {
+  ChannelMessageActionContext,
+  ChannelPlugin,
+  OpenClawPluginApi,
+  PluginRuntime,
+} from "./channel-plugin-common.js";
 export {
-  listSignalAccountIds,
-  resolveDefaultSignalAccountId,
-  resolveSignalAccount,
-} from "../signal/accounts.js";
+  DEFAULT_ACCOUNT_ID,
+  PAIRING_APPROVED_MESSAGE,
+  applyAccountNameToChannelSection,
+  buildChannelConfigSchema,
+  deleteAccountFromConfigSection,
+  emptyPluginConfigSchema,
+  formatPairingApproveHint,
+  getChatChannelMeta,
+  migrateBaseNameToDefaultAccount,
+  normalizeAccountId,
+  setAccountEnabledInConfigSection,
+} from "./channel-plugin-common.js";
+
 export {
   looksLikeSignalTargetId,
   normalizeSignalMessagingTarget,
@@ -15,7 +29,6 @@ export {
   resolveAllowlistProviderRuntimeGroupPolicy,
   resolveDefaultGroupPolicy,
 } from "../config/runtime-group-policy.js";
-export { signalOnboardingAdapter } from "../channels/plugins/onboarding/signal.js";
 export { SignalConfigSchema } from "../config/zod-schema.providers-core.js";
 
 export { normalizeE164 } from "../utils.js";
