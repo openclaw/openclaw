@@ -105,23 +105,6 @@ export function resolveSessionKeyForRequest(opts: {
     }
   }
 
-  // If sessionId was provided but no matching session exists, create a new session key
-  // with that sessionId. This enables private sessions for pipelines/isolated runs.
-  if (opts.sessionId && !explicitSessionKey && storeAgentId) {
-    const normalizedSessionId = opts.sessionId.trim();
-    // Check if any existing session already has this sessionId
-    const existingKey = Object.keys(sessionStore).find(
-      (key) => sessionStore[key]?.sessionId === normalizedSessionId,
-    );
-    if (existingKey) {
-      sessionKey = existingKey;
-    } else {
-      // Create a new session key using the sessionId as part of the key
-      // Format: agent:<agentId>:session:<sessionId>
-      sessionKey = `agent:${storeAgentId}:session:${normalizedSessionId}`;
-    }
-  }
-
   return { sessionKey, sessionStore, storePath };
 }
 
