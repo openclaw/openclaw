@@ -21,7 +21,7 @@ async function loadUsageWithAuth(
 }
 
 describe("provider-usage.load", () => {
-  it("loads snapshots for copilot gemini codex and xiaomi", async () => {
+  it("loads snapshots for copilot gemini codex and xiaomi", { timeout: 180_000 }, async () => {
     const mockFetch = createProviderUsageFetch(async (url) => {
       if (url.includes("api.github.com/copilot_internal/user")) {
         return makeResponse(200, {

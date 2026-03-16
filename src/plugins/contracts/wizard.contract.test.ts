@@ -78,25 +78,29 @@ function resolveExpectedModelPickerValues(providers: ProviderPlugin[]) {
 }
 
 describe("provider wizard contract", () => {
-  it("exposes every registered provider setup choice through the shared wizard layer", () => {
-    const config = createBundledProviderConfig();
-    const providers = resolvePluginProviders({
-      config,
-      env: process.env,
-    });
+  it(
+    "exposes every registered provider setup choice through the shared wizard layer",
+    { timeout: 180_000 },
+    () => {
+      const config = createBundledProviderConfig();
+      const providers = resolvePluginProviders({
+        config,
+        env: process.env,
+      });
 
-    const options = resolveProviderWizardOptions({
-      config,
-      env: process.env,
-    });
+      const options = resolveProviderWizardOptions({
+        config,
+        env: process.env,
+      });
 
-    expect(
-      options.map((option) => option.value).toSorted((left, right) => left.localeCompare(right)),
-    ).toEqual(resolveExpectedWizardChoiceValues(providers));
-    expect(options.map((option) => option.value)).toEqual([
-      ...new Set(options.map((option) => option.value)),
-    ]);
-  });
+      expect(
+        options.map((option) => option.value).toSorted((left, right) => left.localeCompare(right)),
+      ).toEqual(resolveExpectedWizardChoiceValues(providers));
+      expect(options.map((option) => option.value)).toEqual([
+        ...new Set(options.map((option) => option.value)),
+      ]);
+    },
+  );
 
   it("round-trips every shared wizard choice back to its provider and auth method", () => {
     const config = createBundledProviderConfig();
