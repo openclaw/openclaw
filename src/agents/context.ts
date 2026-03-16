@@ -114,11 +114,13 @@ const SKIP_EAGER_WARMUP_PRIMARY_COMMANDS = new Set([
   "config",
   "directory",
   "doctor",
+  "gateway",
   "health",
   "hooks",
   "logs",
   "plugins",
   "secrets",
+  "status",
   "update",
   "webhooks",
 ]);
