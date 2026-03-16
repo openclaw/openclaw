@@ -43,14 +43,16 @@ export async function probeGateway(opts: {
   let close: GatewayProbeClose | null = null;
 
   const attachDeviceIdentity = (() => {
+    // Unauthenticated probes remain identity-free (legacy behavior and lighter handshake).
     if (!(opts.auth?.token || opts.auth?.password)) {
-      return true;
+      return false;
     }
     try {
-      // Keep device identity on loopback probes so local scope diagnostics are accurate.
-      return isLoopbackHost(new URL(opts.url).hostname);
+      // Authenticated probes stay device-bound (local + remote) so scope diagnostics stay accurate.
+      void isLoopbackHost(new URL(opts.url).hostname);
+      return true;
     } catch {
-      return false;
+      return true;
     }
   })();
 
