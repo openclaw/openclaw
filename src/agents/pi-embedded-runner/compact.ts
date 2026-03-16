@@ -58,8 +58,17 @@ import {
   validateAnthropicTurns,
   validateGeminiTurns,
 } from "../pi-embedded-helpers.js";
+import type { CompactionSafeguardCompactionDetails } from "../pi-extensions/compaction-safeguard.js";
 import { createPreparedEmbeddedPiSettingsManager } from "../pi-project-settings.js";
 import { createOpenClawCodingTools } from "../pi-tools.js";
+import {
+  validatePostCompaction,
+  type PostCompactionValidation,
+} from "../post-compaction-validator.js";
+import {
+  resolveRecommendResetDecision,
+  type RecommendResetDecision,
+} from "../recommend-reset-decision.js";
 import { ensureRuntimePluginsLoaded } from "../runtime-plugins.js";
 import { resolveSandboxContext } from "../sandbox.js";
 import { repairSessionFileIfNeeded } from "../session-file-repair.js";
@@ -364,6 +373,111 @@ async function runPostCompactionSideEffects(params: {
     sessionKey: params.sessionKey,
     sessionFile,
     mode: resolvePostCompactionIndexSyncMode(params.config),
+  });
+}
+
+type CompactionGuardDiagnostics = {
+  validation: PostCompactionValidation;
+  recommendReset: RecommendResetDecision;
+};
+
+function resolveCompactionSafeguardDetails(
+  value: unknown,
+): CompactionSafeguardCompactionDetails | null {
+  return value && typeof value === "object"
+    ? (value as CompactionSafeguardCompactionDetails)
+    : null;
+}
+
+function resolveProjectedUsageRatioAfter(params: {
+  config?: OpenClawConfig;
+  provider: string;
+  modelId: string;
+  modelContextWindow?: number;
+  tokensAfter?: number;
+}): number | undefined {
+  if (
+    typeof params.tokensAfter !== "number" ||
+    !Number.isFinite(params.tokensAfter) ||
+    params.tokensAfter < 0
+  ) {
+    return undefined;
+  }
+
+  const contextWindowTokens = resolveContextWindowInfo({
+    cfg: params.config,
+    provider: params.provider,
+    modelId: params.modelId,
+    modelContextWindow: params.modelContextWindow,
+    defaultTokens: DEFAULT_CONTEXT_TOKENS,
+  }).tokens;
+
+  return contextWindowTokens > 0 ? params.tokensAfter / contextWindowTokens : undefined;
+}
+
+function resolvePostCompactionGuardDiagnostics(params: {
+  config?: OpenClawConfig;
+  provider: string;
+  modelId: string;
+  modelContextWindow?: number;
+  tokensAfter?: number;
+  summaryText?: string;
+  details: unknown;
+}): CompactionGuardDiagnostics | undefined {
+  const safeguardDetails = resolveCompactionSafeguardDetails(params.details);
+  if (safeguardDetails?.guardEnabled !== true || !safeguardDetails.signalBefore) {
+    return undefined;
+  }
+
+  const validation = validatePostCompaction({
+    signalBefore: safeguardDetails.signalBefore,
+    compactionCountBefore: 0,
+    compactionCountAfter: 1,
+    summaryText: params.summaryText,
+    projectedUsageRatioAfter: resolveProjectedUsageRatioAfter({
+      config: params.config,
+      provider: params.provider,
+      modelId: params.modelId,
+      modelContextWindow: params.modelContextWindow,
+      tokensAfter: params.tokensAfter,
+    }),
+    latestUserGoal: safeguardDetails.latestUserGoal,
+    unresolvedItems: safeguardDetails.unresolvedItems,
+  });
+
+  return {
+    validation,
+    // Conservative by design: a reset recommendation needs both a severe pre-signal
+    // and a failed post-compaction validation that independently calls for escalation.
+    recommendReset: resolveRecommendResetDecision({
+      guardEnabled: safeguardDetails.guardEnabled,
+      escalationMode: safeguardDetails.escalationMode,
+      signalBefore: safeguardDetails.signalBefore,
+      validation,
+    }),
+  };
+}
+
+function logPostCompactionGuardDiagnostics(params: {
+  diagId: string;
+  sessionKey: string;
+  signalAction: string;
+  diagnostics: CompactionGuardDiagnostics;
+}): void {
+  if (params.diagnostics.recommendReset.severity === "none") {
+    return;
+  }
+
+  const logger = params.diagnostics.recommendReset.recommended ? log.warn : log.info;
+  logger("compaction safeguard post-compaction decision", {
+    diagId: params.diagId,
+    sessionKey: params.sessionKey,
+    signalAction: params.signalAction,
+    validationOk: params.diagnostics.validation.ok,
+    validationShouldRecommendReset: params.diagnostics.validation.shouldRecommendReset,
+    severity: params.diagnostics.recommendReset.severity,
+    recommended: params.diagnostics.recommendReset.recommended,
+    reasons: params.diagnostics.recommendReset.reasons,
   });
 }
 
@@ -979,6 +1093,24 @@ export async function compactEmbeddedPiSessionDirect(
         }
         const messageCountAfter = session.messages.length;
         const compactedCount = Math.max(0, messageCountCompactionInput - messageCountAfter);
+        const guardDiagnostics = resolvePostCompactionGuardDiagnostics({
+          config: params.config,
+          provider,
+          modelId,
+          modelContextWindow: runtimeModel.contextWindow,
+          tokensAfter,
+          summaryText: result.summary,
+          details: result.details,
+        });
+        const safeguardDetails = resolveCompactionSafeguardDetails(result.details);
+        if (guardDiagnostics && safeguardDetails?.signalBefore) {
+          logPostCompactionGuardDiagnostics({
+            diagId,
+            sessionKey: hookSessionKey,
+            signalAction: safeguardDetails.signalBefore.action,
+            diagnostics: guardDiagnostics,
+          });
+        }
         const postMetrics = diagEnabled ? summarizeCompactionMessages(session.messages) : undefined;
         if (diagEnabled && preMetrics && postMetrics) {
           log.debug(
@@ -1007,6 +1139,7 @@ export async function compactEmbeddedPiSessionDirect(
             tokensBefore: result.tokensBefore,
             tokensAfter,
             firstKeptEntryId: result.firstKeptEntryId,
+            compactionGuard: guardDiagnostics,
           });
           await triggerInternalHook(hookEvent);
         } catch (err) {

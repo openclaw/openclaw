@@ -15,6 +15,7 @@ const {
   resolveSessionAgentIdMock,
   estimateTokensMock,
   sessionAbortCompactionMock,
+  validatePostCompactionMock,
 } = vi.hoisted(() => {
   const contextEngineCompactMock = vi.fn(async () => ({
     ok: true as boolean,
@@ -67,11 +68,20 @@ const {
     resolveSessionAgentIdMock: vi.fn(() => "main"),
     estimateTokensMock: vi.fn((_message?: unknown) => 10),
     sessionAbortCompactionMock: vi.fn(),
+    validatePostCompactionMock: vi.fn(() => ({
+      ok: true,
+      reasons: [],
+      shouldRecommendReset: false,
+    })),
   };
 });
 
 vi.mock("../../plugins/hook-runner-global.js", () => ({
   getGlobalHookRunner: () => hookRunner,
+}));
+
+vi.mock("../../plugins/provider-runtime.js", () => ({
+  prepareProviderRuntimeAuth: vi.fn(async () => undefined),
 }));
 
 vi.mock("../runtime-plugins.js", () => ({
@@ -226,6 +236,10 @@ vi.mock("../transcript-policy.js", () => ({
   })),
 }));
 
+vi.mock("../post-compaction-validator.js", () => ({
+  validatePostCompaction: validatePostCompactionMock,
+}));
+
 vi.mock("./extensions.js", () => ({
   buildEmbeddedExtensionFactories: vi.fn(() => ({ factories: [] })),
 }));
@@ -307,6 +321,7 @@ vi.mock("./sandbox-info.js", () => ({
 vi.mock("./model.js", () => ({
   buildModelAliasLines: vi.fn(() => []),
   resolveModel: resolveModelMock,
+  resolveModelAsync: resolveModelMock,
 }));
 
 vi.mock("./session-manager-cache.js", () => ({
@@ -425,6 +440,12 @@ describe("compactEmbeddedPiSessionDirect hooks", () => {
     estimateTokensMock.mockReset();
     estimateTokensMock.mockReturnValue(10);
     sessionAbortCompactionMock.mockReset();
+    validatePostCompactionMock.mockReset();
+    validatePostCompactionMock.mockReturnValue({
+      ok: true,
+      reasons: [],
+      shouldRecommendReset: false,
+    });
     unregisterApiProviders(getCustomApiRegistrySourceId("ollama"));
   });
 
@@ -563,6 +584,73 @@ describe("compactEmbeddedPiSessionDirect hooks", () => {
     } finally {
       cleanup();
     }
+  });
+
+  it("emits recommend-reset diagnostics on the existing compact:after hook only", async () => {
+    sessionCompactImpl.mockResolvedValue({
+      summary: "summary",
+      firstKeptEntryId: "entry-1",
+      tokensBefore: 120,
+      details: {
+        guardEnabled: true,
+        escalationMode: "recommend-reset",
+        signalBefore: {
+          usageRatio: 0.95,
+          repeatedToolFailures: [],
+          duplicateAssistantClusters: 0,
+          staleSystemRecurrences: 0,
+          noGroundedReplyTurns: 0,
+          score: 8,
+          action: "recommend-reset",
+          reasons: ["usage>=force", "repeatedToolFailures>=threshold"],
+        },
+        latestUserGoal: "restore a clean session",
+      },
+    });
+    validatePostCompactionMock.mockReturnValue({
+      ok: false,
+      reasons: ["usage-not-improved", "failure-pattern-not-collapsed"],
+      shouldRecommendReset: true,
+    });
+
+    const result = await runDirectCompaction();
+
+    expect(result).toMatchObject({
+      ok: true,
+      compacted: true,
+      result: {
+        summary: "summary",
+      },
+    });
+    expect(validatePostCompactionMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        latestUserGoal: "restore a clean session",
+        compactionCountBefore: 0,
+        compactionCountAfter: 1,
+      }),
+    );
+    expect(sessionHook("compact:after")?.context?.compactionGuard).toEqual({
+      validation: {
+        ok: false,
+        reasons: ["usage-not-improved", "failure-pattern-not-collapsed"],
+        shouldRecommendReset: true,
+      },
+      recommendReset: {
+        recommended: true,
+        severity: "recommend-reset",
+        reasons: [
+          "usage>=force",
+          "repeatedToolFailures>=threshold",
+          "usage-not-improved",
+          "failure-pattern-not-collapsed",
+        ],
+      },
+    });
+    expect(
+      triggerInternalHook.mock.calls
+        .filter((call) => call[0]?.type === "session")
+        .map((call) => call[0]?.action),
+    ).toEqual(["compact:before", "compact:after"]);
   });
 
   it("preserves tokensAfter when full-session context exceeds result.tokensBefore", async () => {

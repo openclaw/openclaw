@@ -97,6 +97,15 @@ export const AgentDefaultsSchema = z
           .optional(),
         identifierInstructions: z.string().optional(),
         recentTurnsPreserve: z.number().int().min(0).max(12).optional(),
+        guard: z
+          .object({
+            enabled: z.boolean().optional(),
+            maxCompactionsPerWindow: z.number().int().min(2).max(20).optional(),
+            windowMinutes: z.number().int().min(1).max(1440).optional(),
+            escalation: z.enum(["recommend-reset"]).optional(),
+          })
+          .strict()
+          .optional(),
         qualityGuard: z
           .object({
             enabled: z.boolean().optional(),
