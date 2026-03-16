@@ -34,6 +34,7 @@ type AgentEntry = NonNullable<NonNullable<OpenClawConfig["agents"]>["list"]>[num
 type ResolvedAgentConfig = {
   name?: string;
   workspace?: string;
+  multipleWorkspaces?: string[];
   agentDir?: string;
   model?: AgentEntry["model"];
   thinkingDefault?: AgentEntry["thinkingDefault"];
@@ -136,6 +137,9 @@ export function resolveAgentConfig(
   return {
     name: typeof entry.name === "string" ? entry.name : undefined,
     workspace: typeof entry.workspace === "string" ? entry.workspace : undefined,
+    multipleWorkspaces: Array.isArray(entry.multipleWorkspaces)
+      ? entry.multipleWorkspaces
+      : undefined,
     agentDir: typeof entry.agentDir === "string" ? entry.agentDir : undefined,
     model:
       typeof entry.model === "string" || (entry.model && typeof entry.model === "object")
@@ -265,8 +269,29 @@ export function resolveEffectiveModelFallbacks(params: {
   return agentFallbacksOverride ?? defaultFallbacks;
 }
 
+export function resolveAgentMultipleWorkspaces(
+  cfg: OpenClawConfig,
+  agentId: string,
+): string[] | undefined {
+  const id = normalizeAgentId(agentId);
+  const agentConfig = resolveAgentConfig(cfg, id);
+  const mw = agentConfig?.multipleWorkspaces;
+  if (!Array.isArray(mw) || mw.length === 0) {
+    return undefined;
+  }
+  return mw.map((p) => stripNullBytes(resolveUserPath(p)));
+}
+
 export function resolveAgentWorkspaceDir(cfg: OpenClawConfig, agentId: string) {
   const id = normalizeAgentId(agentId);
+
+  // multipleWorkspaces takes precedence: return a composite workspace dir.
+  const multiWs = resolveAgentMultipleWorkspaces(cfg, id);
+  if (multiWs) {
+    const stateDir = resolveStateDir(process.env);
+    return stripNullBytes(path.join(stateDir, `workspace-composite-${id}`));
+  }
+
   const configured = resolveAgentConfig(cfg, id)?.workspace?.trim();
   if (configured) {
     return stripNullBytes(resolveUserPath(configured));
@@ -315,10 +340,21 @@ export function resolveAgentIdsByWorkspacePath(
   for (let index = 0; index < ids.length; index += 1) {
     const id = ids[index];
     const workspaceDir = normalizePathForComparison(resolveAgentWorkspaceDir(cfg, id));
-    if (!isPathWithinRoot(normalizedWorkspacePath, workspaceDir)) {
+    if (isPathWithinRoot(normalizedWorkspacePath, workspaceDir)) {
+      matches.push({ id, workspaceDir, order: index });
       continue;
     }
-    matches.push({ id, workspaceDir, order: index });
+    // Also match individual multipleWorkspaces entries.
+    const multiWs = resolveAgentMultipleWorkspaces(cfg, id);
+    if (multiWs) {
+      for (const ws of multiWs) {
+        const normalizedWs = normalizePathForComparison(ws);
+        if (isPathWithinRoot(normalizedWorkspacePath, normalizedWs)) {
+          matches.push({ id, workspaceDir: normalizedWs, order: index });
+          break;
+        }
+      }
+    }
   }
 
   matches.sort((left, right) => {

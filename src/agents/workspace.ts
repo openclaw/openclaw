@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { openBoundaryFile } from "../infra/boundary-file-read.js";
 import { resolveRequiredHomeDir } from "../infra/home-dir.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { isCronSessionKey, isSubagentSessionKey } from "../routing/session-key.js";
 import { resolveUserPath } from "../utils.js";
@@ -644,4 +645,88 @@ export async function loadExtraBootstrapFilesWithDiagnostics(
     });
   }
   return { files, diagnostics };
+}
+
+const compositeLog = createSubsystemLogger("composite-workspace");
+
+/**
+ * Ensure a composite workspace directory exists with symlinks to each workspace path.
+ * Stale symlinks (pointing to paths not in the current set) are removed.
+ * Basename collisions are resolved by prepending the parent directory name.
+ */
+export async function ensureCompositeWorkspace(params: {
+  compositeDir: string;
+  workspacePaths: string[];
+}): Promise<void> {
+  const { compositeDir, workspacePaths } = params;
+  await fs.mkdir(compositeDir, { recursive: true });
+
+  // Build unique link names from basenames, deduping collisions.
+  const linkEntries: Array<{ linkName: string; target: string }> = [];
+  const nameCount = new Map<string, number>();
+  for (const ws of workspacePaths) {
+    const base = path.basename(ws);
+    nameCount.set(base, (nameCount.get(base) ?? 0) + 1);
+  }
+  const nameUsed = new Map<string, number>();
+  for (const ws of workspacePaths) {
+    const base = path.basename(ws);
+    let linkName: string;
+    if ((nameCount.get(base) ?? 0) > 1) {
+      const parentName = path.basename(path.dirname(ws));
+      const candidate = `${parentName}-${base}`;
+      const usedCount = nameUsed.get(candidate) ?? 0;
+      linkName = usedCount > 0 ? `${candidate}-${usedCount}` : candidate;
+      nameUsed.set(candidate, usedCount + 1);
+    } else {
+      linkName = base;
+    }
+    linkEntries.push({ linkName, target: ws });
+  }
+
+  // Remove stale symlinks in composite dir that are not in the current set.
+  const desiredNames = new Set(linkEntries.map((e) => e.linkName));
+  try {
+    const existing = await fs.readdir(compositeDir, { withFileTypes: true });
+    for (const entry of existing) {
+      if (!entry.isSymbolicLink()) {
+        continue;
+      }
+      if (!desiredNames.has(entry.name)) {
+        const stalePath = path.join(compositeDir, entry.name);
+        compositeLog.info(`Removing stale symlink: ${stalePath}`);
+        await fs.unlink(stalePath).catch(() => {});
+      }
+    }
+  } catch {
+    // Directory may not exist yet or be unreadable.
+  }
+
+  // Create or update symlinks.
+  for (const { linkName, target } of linkEntries) {
+    const linkPath = path.join(compositeDir, linkName);
+
+    // Warn on missing targets but still create the symlink.
+    try {
+      await fs.access(target);
+    } catch {
+      compositeLog.warn(`Workspace target does not exist: ${target}`);
+    }
+
+    // Check if symlink already points to the correct target.
+    try {
+      const existingTarget = await fs.readlink(linkPath);
+      if (path.resolve(existingTarget) === path.resolve(target)) {
+        continue;
+      }
+      // Target changed — remove old symlink.
+      await fs.unlink(linkPath);
+    } catch {
+      // Symlink doesn't exist or isn't a symlink — remove whatever is there.
+      await fs.rm(linkPath, { force: true, recursive: false }).catch(() => {});
+    }
+
+    await fs.symlink(target, linkPath);
+    compositeLog.info(`Symlinked ${linkName} -> ${target}`);
+  }
 }
