@@ -172,6 +172,7 @@ export const telegramPlugin: ChannelPlugin<ResolvedTelegramAccount, TelegramProb
     self: async () => null,
     listPeers: async (params) => listTelegramDirectoryPeersFromConfig(params),
     listGroups: async (params) => listTelegramDirectoryGroupsFromConfig(params),
+    listGroupsLive: async (params) => listTelegramDirectoryGroupsFromConfig(params),
   },
   actions: telegramMessageActions,
   setup: {

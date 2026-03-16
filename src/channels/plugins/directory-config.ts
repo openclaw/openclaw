@@ -2,6 +2,7 @@ import type { OpenClawConfig } from "../../config/types.js";
 import { resolveDiscordAccount } from "../../discord/accounts.js";
 import { resolveSlackAccount } from "../../slack/accounts.js";
 import { resolveTelegramAccount } from "../../telegram/accounts.js";
+import { listObservedTelegramGroups } from "../../telegram/observed-groups.js";
 import { resolveWhatsAppAccount } from "../../web/accounts.js";
 import { isWhatsAppGroupJid, normalizeWhatsAppTarget } from "../../whatsapp/normalize.js";
 import { normalizeSlackMessagingTarget } from "./normalize/slack.js";
@@ -205,10 +206,37 @@ export async function listTelegramDirectoryGroupsFromConfig(
   params: DirectoryConfigParams,
 ): Promise<ChannelDirectoryEntry[]> {
   const account = resolveTelegramAccount({ cfg: params.cfg, accountId: params.accountId });
-  const ids = Object.keys(account.config.groups ?? {})
+  const configuredIds = Object.keys(account.config.groups ?? {})
     .map((id) => id.trim())
     .filter((id) => Boolean(id) && id !== "*");
-  return toDirectoryEntries("group", applyDirectoryQueryAndLimit(ids, params));
+  const observed = await listObservedTelegramGroups({
+    accountId: account.accountId,
+    query: null,
+    limit: null,
+  });
+  const observedById = new Map(observed.map((entry) => [entry.id, entry]));
+  const query = resolveDirectoryQuery(params.query);
+  const limit = resolveDirectoryLimit(params.limit);
+
+  const merged = [
+    ...configuredIds.map((id) => ({
+      kind: "group" as const,
+      id,
+      name: observedById.get(id)?.name,
+      handle: observedById.get(id)?.handle,
+      raw: observedById.get(id)?.raw,
+    })),
+    ...observed.filter((entry) => !configuredIds.includes(entry.id)),
+  ].filter((entry) => {
+    if (!query) {
+      return true;
+    }
+    return [entry.id, entry.name ?? "", entry.handle ?? ""].some((value) =>
+      value.toLowerCase().includes(query),
+    );
+  });
+
+  return typeof limit === "number" ? merged.slice(0, limit) : merged;
 }
 
 export async function listWhatsAppDirectoryPeersFromConfig(

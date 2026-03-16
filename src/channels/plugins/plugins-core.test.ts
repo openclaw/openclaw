@@ -9,6 +9,7 @@ import type { LineProbeResult } from "../../line/types.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import type { SignalProbe } from "../../signal/probe.js";
 import type { SlackProbe } from "../../slack/probe.js";
+import { recordObservedTelegramGroup } from "../../telegram/observed-groups.js";
 import type { TelegramProbe } from "../../telegram/probe.js";
 import type { TelegramTokenResolution } from "../../telegram/token.js";
 import { createTestRegistry } from "../../test-utils/channel-plugins.js";
@@ -322,6 +323,9 @@ describe("directory (config-backed)", () => {
   });
 
   it("lists Telegram peers/groups from config", async () => {
+    const previousStateDir = process.env.OPENCLAW_STATE_DIR;
+    const stateDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "openclaw-telegram-groups-"));
+    process.env.OPENCLAW_STATE_DIR = stateDir;
     const cfg = {
       channels: {
         telegram: {
@@ -334,21 +338,41 @@ describe("directory (config-backed)", () => {
       // oxlint-disable-next-line typescript/no-explicit-any
     } as any;
 
-    const peers = await listTelegramDirectoryPeersFromConfig({
-      cfg,
-      accountId: "default",
-      query: null,
-      limit: null,
-    });
-    expect(peers?.map((e) => e.id).toSorted()).toEqual(["123", "456", "@alice", "@bob"]);
+    try {
+      await recordObservedTelegramGroup({
+        accountId: "default",
+        chatId: -1002,
+        kind: "supergroup",
+        title: "Panama KYC Agent",
+        source: "my_chat_member",
+      });
 
-    const groups = await listTelegramDirectoryGroupsFromConfig({
-      cfg,
-      accountId: "default",
-      query: null,
-      limit: null,
-    });
-    expect(groups?.map((e) => e.id)).toEqual(["-1001"]);
+      const peers = await listTelegramDirectoryPeersFromConfig({
+        cfg,
+        accountId: "default",
+        query: null,
+        limit: null,
+      });
+      expect(peers?.map((e) => e.id).toSorted()).toEqual(["123", "456", "@alice", "@bob"]);
+
+      const groups = await listTelegramDirectoryGroupsFromConfig({
+        cfg,
+        accountId: "default",
+        query: null,
+        limit: null,
+      });
+      expect(groups).toEqual([
+        expect.objectContaining({ id: "-1001" }),
+        expect.objectContaining({ id: "-1002", name: "Panama KYC Agent" }),
+      ]);
+    } finally {
+      if (previousStateDir === undefined) {
+        delete process.env.OPENCLAW_STATE_DIR;
+      } else {
+        process.env.OPENCLAW_STATE_DIR = previousStateDir;
+      }
+      await fs.promises.rm(stateDir, { recursive: true, force: true });
+    }
   });
 
   it("lists WhatsApp peers/groups from config", async () => {

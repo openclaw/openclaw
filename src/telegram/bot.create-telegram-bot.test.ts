@@ -30,6 +30,7 @@ import {
 } from "./bot.create-telegram-bot.test-harness.js";
 import { createTelegramBot, getTelegramSequentialKey } from "./bot.js";
 import { resolveTelegramFetch } from "./fetch.js";
+import { listObservedTelegramGroups } from "./observed-groups.js";
 
 const loadConfig = getLoadConfigMock();
 const loadWebMedia = getLoadWebMediaMock();
@@ -223,6 +224,45 @@ describe("createTelegramBot", () => {
     const payload = replySpy.mock.calls[0][0];
     expect(payload.Body).toContain("cmd:option_a");
     expect(answerCallbackQuerySpy).toHaveBeenCalledWith("cbq-1");
+  });
+  it("records observed groups from my_chat_member updates", async () => {
+    const previousStateDir = process.env.OPENCLAW_STATE_DIR;
+    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-tg-my-chat-member-"));
+    process.env.OPENCLAW_STATE_DIR = stateDir;
+
+    try {
+      onSpy.mockReset();
+      createTelegramBot({ token: "tok" });
+      const handler = getOnHandler("my_chat_member");
+      await handler({
+        update: {
+          my_chat_member: {
+            chat: {
+              id: -1001234567890,
+              type: "supergroup",
+              title: "Panama KYC Agent",
+              username: "panama_kyc_agent",
+            },
+          },
+        },
+      });
+
+      const groups = await listObservedTelegramGroups({ accountId: "default" });
+      expect(groups).toEqual([
+        expect.objectContaining({
+          id: "-1001234567890",
+          name: "Panama KYC Agent",
+          handle: "@panama_kyc_agent",
+        }),
+      ]);
+    } finally {
+      if (previousStateDir === undefined) {
+        delete process.env.OPENCLAW_STATE_DIR;
+      } else {
+        process.env.OPENCLAW_STATE_DIR = previousStateDir;
+      }
+      fs.rmSync(stateDir, { recursive: true, force: true });
+    }
   });
   it("wraps inbound message with Telegram envelope", async () => {
     const originalTz = process.env.TZ;

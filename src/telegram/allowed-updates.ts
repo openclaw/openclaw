@@ -7,6 +7,9 @@ export function resolveTelegramAllowedUpdates(): ReadonlyArray<TelegramUpdateTyp
   if (!updates.includes("message_reaction")) {
     updates.push("message_reaction");
   }
+  if (!updates.includes("my_chat_member")) {
+    updates.push("my_chat_member");
+  }
   if (!updates.includes("channel_post")) {
     updates.push("channel_post");
   }

@@ -55,6 +55,7 @@ import {
   parseModelCallbackData,
   type ProviderInfo,
 } from "./model-buttons.js";
+import { recordObservedTelegramGroup } from "./observed-groups.js";
 import { buildInlineKeyboard } from "./send.js";
 import { wasSentByBot } from "./sent-message-cache.js";
 
@@ -323,6 +324,31 @@ export const registerTelegramHandlers = ({
 
   const loadStoreAllowFrom = async () =>
     readChannelAllowFromStore("telegram", process.env, accountId).catch(() => []);
+
+  const maybeRecordObservedGroup = async (params: {
+    chatId: string | number;
+    chatType?: string | null;
+    chatTitle?: string | null;
+    chatUsername?: string | null;
+    source: string;
+  }) => {
+    const chatType = params.chatType?.trim().toLowerCase();
+    if (chatType !== "group" && chatType !== "supergroup" && chatType !== "channel") {
+      return;
+    }
+    try {
+      await recordObservedTelegramGroup({
+        accountId,
+        chatId: params.chatId,
+        kind: chatType,
+        title: params.chatTitle,
+        username: params.chatUsername,
+        source: params.source,
+      });
+    } catch (err) {
+      runtime.error?.(danger(`telegram observed-group store failed: ${String(err)}`));
+    }
+  };
 
   const isAllowlistAuthorized = (
     allow: NormalizedAllowFrom,
@@ -1118,6 +1144,13 @@ export const registerTelegramHandlers = ({
     if (!msg) {
       return;
     }
+    await maybeRecordObservedGroup({
+      chatId: msg.chat.id,
+      chatType: msg.chat.type,
+      chatTitle: msg.chat.title,
+      chatUsername: msg.chat.username,
+      source: "message",
+    });
     await handleInboundMessageLike({
       ctxForDedupe: ctx,
       ctx: buildSyntheticContext(ctx, msg),
@@ -1143,6 +1176,13 @@ export const registerTelegramHandlers = ({
     if (!post) {
       return;
     }
+    await maybeRecordObservedGroup({
+      chatId: post.chat.id,
+      chatType: post.chat.type,
+      chatTitle: post.chat.title,
+      chatUsername: post.chat.username,
+      source: "channel_post",
+    });
 
     const chatId = post.chat.id;
     const syntheticFrom = post.sender_chat
@@ -1185,6 +1225,21 @@ export const registerTelegramHandlers = ({
       sendOversizeWarning: false,
       oversizeLogMessage: "channel post media exceeds size limit",
       errorMessage: "channel_post handler failed",
+    });
+  });
+
+  bot.on("my_chat_member", async (ctx) => {
+    const update = ctx.update.my_chat_member;
+    if (!update?.chat) {
+      return;
+    }
+    const chat = update.chat as { id: number; type?: string; title?: string; username?: string };
+    await maybeRecordObservedGroup({
+      chatId: chat.id,
+      chatType: chat.type,
+      chatTitle: chat.title,
+      chatUsername: chat.username,
+      source: "my_chat_member",
     });
   });
 };
