@@ -32,6 +32,7 @@ import type { GatewaySessionRow, SessionsListResult } from "../types.ts";
 import type { ChatItem, MessageGroup } from "../types/chat-types.ts";
 import type { ChatAttachment, ChatQueueItem } from "../ui-types.ts";
 import { agentLogoUrl, resolveAgentAvatarUrl } from "./agents-utils.ts";
+import { isCronSessionKey, resolveSessionDisplayName } from "../app-render.helpers.ts";
 import { renderMarkdownSidebar } from "./markdown-sidebar.ts";
 import "../components/resizable-divider.ts";
 
@@ -608,6 +609,162 @@ function renderWelcomeState(props: ChatProps): TemplateResult {
   `;
 }
 
+type RecentChatEntry = {
+  key: string;
+  title: string;
+  subtitle: string;
+  updatedAt: number;
+};
+
+function buildRecentChatEntries(props: ChatProps): RecentChatEntry[] {
+  const rows = props.sessions?.sessions ?? [];
+  const entries: RecentChatEntry[] = [];
+  const seen = new Set<string>();
+
+  for (const row of rows) {
+    if (!row?.key || seen.has(row.key)) {
+      continue;
+    }
+    if (row.key !== props.sessionKey && (row.kind === "global" || row.kind === "unknown")) {
+      continue;
+    }
+    if (row.key !== props.sessionKey && isCronSessionKey(row.key)) {
+      continue;
+    }
+
+    const derivedTitle =
+      typeof row.derivedTitle === "string" && row.derivedTitle.trim() ? row.derivedTitle.trim() : "";
+    const displayTitle =
+      derivedTitle ||
+      resolveSessionDisplayName(row.key, row) ||
+      (row.key === props.sessionKey ? "Current chat" : row.key);
+    const updatedAt = typeof row.updatedAt === "number" ? row.updatedAt : 0;
+    const subtitle = updatedAt > 0 ? formatRelativeTime(updatedAt) : row.key;
+    entries.push({
+      key: row.key,
+      title: displayTitle,
+      subtitle,
+      updatedAt,
+    });
+    seen.add(row.key);
+  }
+
+  if (!seen.has(props.sessionKey)) {
+    entries.unshift({
+      key: props.sessionKey,
+      title: "Current chat",
+      subtitle: props.sessionKey,
+      updatedAt: 0,
+    });
+  }
+
+  entries.sort((a, b) => {
+    if (a.key === props.sessionKey && b.key !== props.sessionKey) {
+      return -1;
+    }
+    if (b.key === props.sessionKey && a.key !== props.sessionKey) {
+      return 1;
+    }
+    return b.updatedAt - a.updatedAt;
+  });
+
+  return entries.slice(0, 24);
+}
+
+function formatRelativeTime(timestamp: number): string {
+  const diffMs = Date.now() - timestamp;
+  const minute = 60_000;
+  const hour = 60 * minute;
+  const day = 24 * hour;
+  if (diffMs < minute) {
+    return "Just now";
+  }
+  if (diffMs < hour) {
+    return `${Math.max(1, Math.round(diffMs / minute))}m ago`;
+  }
+  if (diffMs < day) {
+    return `${Math.max(1, Math.round(diffMs / hour))}h ago`;
+  }
+  return `${Math.max(1, Math.round(diffMs / day))}d ago`;
+}
+
+function renderRecentChatsRail(props: ChatProps): TemplateResult | typeof nothing {
+  const entries = buildRecentChatEntries(props);
+  if (!props.sessions || entries.length === 0) {
+    return nothing;
+  }
+
+  const handleSelect = (sessionKey: string) => {
+    if (sessionKey === props.sessionKey) {
+      return;
+    }
+    if (props.onSessionSelect) {
+      props.onSessionSelect(sessionKey);
+      return;
+    }
+    props.onSessionKeyChange(sessionKey);
+  };
+
+  return html`
+    <aside
+      class="chat-session-rail"
+      style="
+        width: 260px;
+        min-width: 220px;
+        max-width: 300px;
+        border-right: 1px solid var(--border);
+        padding: 12px;
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+        background: color-mix(in srgb, var(--panel) 82%, transparent);
+      "
+    >
+      <button
+        type="button"
+        class="btn"
+        style="justify-content: flex-start; gap: 8px;"
+        @click=${props.onNewSession}
+      >
+        ${icons.plus} New chat
+      </button>
+      <div style="display:flex; flex-direction:column; gap:6px; min-height:0; overflow:auto;">
+        <div style="font-size:12px; text-transform:uppercase; letter-spacing:.08em; color:var(--muted); padding:0 6px;">
+          Recent chats
+        </div>
+        ${entries.map(
+          (entry) => html`
+            <button
+              type="button"
+              class="chat-session-rail__item ${entry.key === props.sessionKey ? "chat-session-rail__item--active" : ""}"
+              style="
+                text-align:left;
+                border:1px solid ${entry.key === props.sessionKey ? "var(--accent)" : "var(--border)"};
+                background:${entry.key === props.sessionKey ? "color-mix(in srgb, var(--accent) 12%, var(--card))" : "var(--card)"};
+                border-radius:12px;
+                padding:10px 12px;
+                display:flex;
+                flex-direction:column;
+                gap:4px;
+                cursor:pointer;
+              "
+              title=${entry.key}
+              @click=${() => handleSelect(entry.key)}
+            >
+              <span style="font-size:13px; font-weight:600; color:var(--text); white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">
+                ${entry.title}
+              </span>
+              <span style="font-size:12px; color:var(--muted); white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">
+                ${entry.subtitle}
+              </span>
+            </button>
+          `,
+        )}
+      </div>
+    </aside>
+  `;
+}
+
 function renderSearchBar(requestUpdate: () => void): TemplateResult | typeof nothing {
   if (!vs.searchOpen) {
     return nothing;
@@ -1098,37 +1255,40 @@ export function renderChat(props: ChatProps) {
       ${renderSearchBar(requestUpdate)}
       ${renderPinnedSection(props, pinned, requestUpdate)}
 
-      <div class="chat-split-container ${sidebarOpen ? "chat-split-container--open" : ""}">
-        <div
-          class="chat-main"
-          style="flex: ${sidebarOpen ? `0 0 ${splitRatio * 100}%` : "1 1 100%"}"
-        >
-          ${thread}
-        </div>
+      <div class="chat-split-container ${sidebarOpen ? "chat-split-container--open" : ""}" style="display:flex; min-height:0;">
+        ${renderRecentChatsRail(props)}
+        <div style="display:flex; min-width:0; flex:1 1 auto;">
+          <div
+            class="chat-main"
+            style="flex: ${sidebarOpen ? `0 0 ${splitRatio * 100}%` : "1 1 100%"}; min-width:0;"
+          >
+            ${thread}
+          </div>
 
-        ${
-          sidebarOpen
-            ? html`
-              <resizable-divider
-                .splitRatio=${splitRatio}
-                @resize=${(e: CustomEvent) => props.onSplitRatioChange?.(e.detail.splitRatio)}
-              ></resizable-divider>
-              <div class="chat-sidebar">
-                ${renderMarkdownSidebar({
-                  content: props.sidebarContent ?? null,
-                  error: props.sidebarError ?? null,
-                  onClose: props.onCloseSidebar!,
-                  onViewRawText: () => {
-                    if (!props.sidebarContent || !props.onOpenSidebar) {
-                      return;
-                    }
-                    props.onOpenSidebar(`\`\`\`\n${props.sidebarContent}\n\`\`\``);
-                  },
-                })}
-              </div>
-            `
-            : nothing
-        }
+          ${
+            sidebarOpen
+              ? html`
+                <resizable-divider
+                  .splitRatio=${splitRatio}
+                  @resize=${(e: CustomEvent) => props.onSplitRatioChange?.(e.detail.splitRatio)}
+                ></resizable-divider>
+                <div class="chat-sidebar">
+                  ${renderMarkdownSidebar({
+                    content: props.sidebarContent ?? null,
+                    error: props.sidebarError ?? null,
+                    onClose: props.onCloseSidebar!,
+                    onViewRawText: () => {
+                      if (!props.sidebarContent || !props.onOpenSidebar) {
+                        return;
+                      }
+                      props.onOpenSidebar(`\`\`\`\n${props.sidebarContent}\n\`\`\``);
+                    },
+                  })}
+                </div>
+              `
+              : nothing
+          }
+        </div>
       </div>
 
       ${

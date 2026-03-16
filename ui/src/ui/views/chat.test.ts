@@ -196,6 +196,58 @@ function createProps(overrides: Partial<ChatProps> = {}): ChatProps {
 }
 
 describe("chat view", () => {
+  it("renders a recent chats rail and switches sessions from it", () => {
+    const onSessionSelect = vi.fn();
+    const onNewSession = vi.fn();
+    const container = document.createElement("div");
+    render(
+      renderChat(
+        createProps({
+          sessionKey: "main",
+          onSessionSelect,
+          onNewSession,
+          sessions: {
+            ts: 0,
+            path: "",
+            count: 3,
+            defaults: { modelProvider: null, model: null, contextTokens: null },
+            sessions: [
+              { key: "main", kind: "direct", updatedAt: Date.now() - 1_000, derivedTitle: "Main chat" },
+              {
+                key: "agent:main:telegram:direct:user123",
+                kind: "direct",
+                updatedAt: Date.now() - 60_000,
+                derivedTitle: "Telegram follow-up",
+              },
+              { key: "agent:main:cron:nightly-sync", kind: "direct", updatedAt: Date.now() - 120_000 },
+            ],
+          },
+        }),
+      ),
+      container,
+    );
+
+    const labels = Array.from(container.querySelectorAll(".chat-session-rail__item"))
+      .map((node) => node.textContent ?? "")
+      .join("\n");
+    expect(labels).toContain("Main chat");
+    expect(labels).toContain("Telegram follow-up");
+    expect(labels).not.toContain("nightly-sync");
+
+    const telegramButton = Array.from(container.querySelectorAll<HTMLButtonElement>(".chat-session-rail__item")).find((node) =>
+      node.textContent?.includes("Telegram follow-up"),
+    );
+    expect(telegramButton).toBeTruthy();
+    telegramButton?.click();
+    expect(onSessionSelect).toHaveBeenCalledWith("agent:main:telegram:direct:user123");
+
+    const newChatButton = Array.from(container.querySelectorAll<HTMLButtonElement>("button")).find((node) =>
+      node.textContent?.includes("New chat"),
+    );
+    newChatButton?.click();
+    expect(onNewSession).toHaveBeenCalledTimes(1);
+  });
+
   it("uses the assistant avatar URL for the welcome state when the identity avatar is only initials", () => {
     const container = document.createElement("div");
     render(
