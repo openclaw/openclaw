@@ -845,6 +845,35 @@ describe("chat view", () => {
     expect(labels).not.toContain("Subagent:");
   });
 
+  it("does not keep a missing direct session in the grouped chat session selector", () => {
+    const { state } = createChatHeaderState();
+    state.sessionKey = "agent:main:discord:channel:123";
+    state.settings.sessionKey = state.sessionKey;
+    state.sessionsResult = {
+      ts: 0,
+      path: "",
+      count: 1,
+      defaults: { modelProvider: "openai", model: "gpt-5", contextTokens: null },
+      sessions: [
+        {
+          key: "main",
+          kind: "direct",
+          updatedAt: null,
+        },
+      ],
+    };
+    const container = document.createElement("div");
+    render(renderChatSessionSelect(state), container);
+
+    const [sessionSelect] = Array.from(container.querySelectorAll<HTMLSelectElement>("select"));
+    const labels = Array.from(sessionSelect?.querySelectorAll("option") ?? []).map((option) =>
+      option.textContent?.trim(),
+    );
+
+    expect(labels).not.toContain("discord:channel:123");
+    expect(labels).toContain("main");
+  });
+
   it("keeps a unique scoped fallback when a grouped session row has no label or displayName", () => {
     const { state } = createChatHeaderState({ omitSessionFromList: true });
     state.sessionKey = "agent:main:subagent:4f2146de-887b-4176-9abe-91140082959b";

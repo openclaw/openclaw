@@ -772,6 +772,10 @@ export function isCronSessionKey(key: string): boolean {
   return rest.startsWith("cron:");
 }
 
+function shouldPreserveMissingSessionOption(key: string): boolean {
+  return key.includes(":subagent:") || isCronSessionKey(key);
+}
+
 type SessionOptionEntry = {
   key: string;
   label: string;
@@ -845,7 +849,9 @@ export function resolveSessionOptionGroups(
     }
     addOption(row.key);
   }
-  addOption(sessionKey);
+  if (byKey.has(sessionKey) || shouldPreserveMissingSessionOption(sessionKey)) {
+    addOption(sessionKey);
+  }
 
   for (const group of groups.values()) {
     const counts = new Map<string, number>();
