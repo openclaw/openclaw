@@ -10,6 +10,7 @@ import {
 import { findTailscaleBinary } from "../infra/tailscale.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { resolveDefaultSecretProviderAlias } from "../secrets/ref-contract.js";
+import { isValidIpOrCidrEntry } from "../shared/net/ip.js";
 import { validateIPv4AddressInput } from "../shared/net/ipv4.js";
 import { note } from "../terminal/note.js";
 import { buildGatewayAuthConfig } from "./configure.gateway-auth.js";
@@ -299,6 +300,14 @@ export async function promptGatewayConfig(
         validate: (value) => {
           if (!value || String(value).trim() === "") {
             return "At least one trusted proxy IP or CIDR is required";
+          }
+          const entries = String(value)
+            .split(",")
+            .map((e) => e.trim())
+            .filter(Boolean);
+          const invalid = entries.filter((e) => !isValidIpOrCidrEntry(e));
+          if (invalid.length > 0) {
+            return `Invalid IP address or CIDR block: ${invalid.join(", ")}`;
           }
           return undefined;
         },
