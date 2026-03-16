@@ -29,9 +29,9 @@ export function hasConfiguredMSTeamsCredentials(cfg?: MSTeamsConfig): boolean {
 
   switch (authType) {
     case "certificate":
-      return Boolean(cfg?.certPemFile && cfg?.certKeyFile);
     case "federatedCredential":
-      return Boolean(cfg?.ficClientId || cfg?.widAssertionFile);
+      // Auth type explicitly set — detail fields may come from SDK env fallbacks.
+      return true;
     case "clientSecret":
     default:
       return Boolean(hasConfiguredSecretInput(cfg?.appPassword));
@@ -54,28 +54,26 @@ export function resolveMSTeamsCredentials(cfg?: MSTeamsConfig): MSTeamsCredentia
 
   switch (authType) {
     case "certificate": {
-      const certPemFile = cfg?.certPemFile;
-      const certKeyFile = cfg?.certKeyFile;
-      if (!certPemFile || !certKeyFile) return undefined;
+      // Config fields are optional — the SDK's getAuthConfigWithDefaults()
+      // can also source certPemFile/certKeyFile from environment variables.
       return {
         appId,
         tenantId,
         authType,
-        certPemFile,
-        certKeyFile,
+        certPemFile: cfg?.certPemFile,
+        certKeyFile: cfg?.certKeyFile,
         sendX5C: cfg?.sendX5C,
       };
     }
     case "federatedCredential": {
-      const ficClientId = cfg?.ficClientId;
-      const widAssertionFile = cfg?.widAssertionFile;
-      if (!ficClientId && !widAssertionFile) return undefined;
+      // Config fields are optional — the SDK's getAuthConfigWithDefaults()
+      // can also source ficClientId/widAssertionFile from environment variables.
       return {
         appId,
         tenantId,
         authType,
-        ficClientId,
-        widAssertionFile,
+        ficClientId: cfg?.ficClientId,
+        widAssertionFile: cfg?.widAssertionFile,
       };
     }
     case "clientSecret":

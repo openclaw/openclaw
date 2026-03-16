@@ -1483,6 +1483,12 @@ export const MSTeamsConfigSchema = z
     configWrites: z.boolean().optional(),
     appId: z.string().optional(),
     appPassword: SecretInputSchema.optional().register(sensitive),
+    authType: z.enum(["clientSecret", "certificate", "federatedCredential"]).optional(),
+    certPemFile: z.string().optional(),
+    certKeyFile: z.string().optional(),
+    sendX5C: z.boolean().optional(),
+    ficClientId: z.string().optional(),
+    widAssertionFile: z.string().optional(),
     tenantId: z.string().optional(),
     webhook: z
       .object({
