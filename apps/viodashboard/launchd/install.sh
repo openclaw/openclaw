@@ -4,6 +4,8 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 CONFIG_JS="$ROOT/src/config.mjs"
+LOCAL_CONFIG_PATH="$ROOT/config/local.mjs"
+BOOTSTRAP_SCRIPT="$ROOT/scripts/bootstrap-local-config.mjs"
 AGENTS_DIR="$HOME/Library/LaunchAgents"
 UID_NOW="$(id -u)"
 
@@ -31,6 +33,17 @@ case "$MODE" in
     exit 1
     ;;
 esac
+
+if [[ ! -f "$LOCAL_CONFIG_PATH" ]]; then
+  echo "[viodashboard install] missing local config: $LOCAL_CONFIG_PATH" >&2
+  echo "Generate it first:" >&2
+  echo "  cd $ROOT" >&2
+  echo "  node scripts/bootstrap-local-config.mjs" >&2
+  echo "Preview only:" >&2
+  echo "  cd $ROOT" >&2
+  echo "  node scripts/bootstrap-local-config.mjs --print --yes" >&2
+  exit 1
+fi
 
 mkdir -p "$AGENTS_DIR" "$LOG_DIR"
 
