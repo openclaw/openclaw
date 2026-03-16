@@ -319,6 +319,8 @@ function buildReactionSchema() {
 function buildFetchSchema() {
   return {
     limit: Type.Optional(Type.Number()),
+    pageSize: Type.Optional(Type.Number()),
+    pageToken: Type.Optional(Type.String()),
     before: Type.Optional(Type.String()),
     after: Type.Optional(Type.String()),
     around: Type.Optional(Type.String()),
@@ -386,16 +388,27 @@ function buildChannelTargetSchema() {
     channelId: Type.Optional(
       Type.String({ description: "Channel id filter (search/thread list/event create)." }),
     ),
+    chatId: Type.Optional(
+      Type.String({ description: "Chat id for chat-scoped metadata actions." }),
+    ),
     channelIds: Type.Optional(
       Type.Array(Type.String({ description: "Channel id filter (repeatable)." })),
     ),
+    memberId: Type.Optional(Type.String()),
+    memberIdType: Type.Optional(Type.String()),
     guildId: Type.Optional(Type.String()),
     userId: Type.Optional(Type.String()),
+    openId: Type.Optional(Type.String()),
+    unionId: Type.Optional(Type.String()),
     authorId: Type.Optional(Type.String()),
     authorIds: Type.Optional(Type.Array(Type.String())),
     roleId: Type.Optional(Type.String()),
     roleIds: Type.Optional(Type.Array(Type.String())),
     participant: Type.Optional(Type.String()),
+    includeMembers: Type.Optional(Type.Boolean()),
+    members: Type.Optional(Type.Boolean()),
+    scope: Type.Optional(Type.String()),
+    kind: Type.Optional(Type.String()),
   };
 }
 

@@ -15,6 +15,105 @@ function createAlwaysConfiguredPluginConfig(account: Record<string, unknown> = {
 }
 
 describe("runMessageAction plugin dispatch", () => {
+  describe("alias-based plugin action dispatch", () => {
+    const handleAction = vi.fn(async ({ params }: { params: Record<string, unknown> }) =>
+      jsonResult({
+        ok: true,
+        params,
+      }),
+    );
+
+    const feishuLikePlugin: ChannelPlugin = {
+      id: "feishu",
+      meta: {
+        id: "feishu",
+        label: "Feishu",
+        selectionLabel: "Feishu",
+        docsPath: "/channels/feishu",
+        blurb: "Feishu action dispatch test plugin.",
+      },
+      capabilities: { chatTypes: ["direct", "channel"] },
+      config: createAlwaysConfiguredPluginConfig(),
+      actions: {
+        listActions: () => ["pin", "list-pins", "member-info"],
+        supportsAction: ({ action }) =>
+          action === "pin" || action === "list-pins" || action === "member-info",
+        handleAction,
+      },
+    };
+
+    beforeEach(() => {
+      setActivePluginRegistry(
+        createTestRegistry([
+          {
+            pluginId: "feishu",
+            source: "test",
+            plugin: feishuLikePlugin,
+          },
+        ]),
+      );
+      handleAction.mockClear();
+    });
+
+    afterEach(() => {
+      setActivePluginRegistry(createTestRegistry([]));
+      vi.clearAllMocks();
+    });
+
+    it("dispatches messageId/chatId-based Feishu actions through the shared runner", async () => {
+      await runMessageAction({
+        cfg: {
+          channels: {
+            feishu: {
+              enabled: true,
+            },
+          },
+        } as OpenClawConfig,
+        action: "pin",
+        params: {
+          channel: "feishu",
+          messageId: "om_123",
+        },
+        dryRun: false,
+      });
+
+      await runMessageAction({
+        cfg: {
+          channels: {
+            feishu: {
+              enabled: true,
+            },
+          },
+        } as OpenClawConfig,
+        action: "list-pins",
+        params: {
+          channel: "feishu",
+          chatId: "oc_123",
+        },
+        dryRun: false,
+      });
+
+      expect(handleAction).toHaveBeenNthCalledWith(
+        1,
+        expect.objectContaining({
+          action: "pin",
+          params: expect.objectContaining({
+            messageId: "om_123",
+          }),
+        }),
+      );
+      expect(handleAction).toHaveBeenNthCalledWith(
+        2,
+        expect.objectContaining({
+          action: "list-pins",
+          params: expect.objectContaining({
+            chatId: "oc_123",
+          }),
+        }),
+      );
+    });
+  });
+
   describe("media caption behavior", () => {
     afterEach(() => {
       setActivePluginRegistry(createTestRegistry([]));

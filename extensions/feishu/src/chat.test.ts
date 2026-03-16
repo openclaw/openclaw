@@ -2,21 +2,24 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { registerFeishuChatTools } from "./chat.js";
 
 const createFeishuClientMock = vi.hoisted(() => vi.fn());
+const chatGetMock = vi.hoisted(() => vi.fn());
+const chatMembersGetMock = vi.hoisted(() => vi.fn());
+const contactUserGetMock = vi.hoisted(() => vi.fn());
 
 vi.mock("./client.js", () => ({
   createFeishuClient: createFeishuClientMock,
 }));
 
 describe("registerFeishuChatTools", () => {
-  const chatGetMock = vi.hoisted(() => vi.fn());
-  const chatMembersGetMock = vi.hoisted(() => vi.fn());
-
   beforeEach(() => {
     vi.clearAllMocks();
     createFeishuClientMock.mockReturnValue({
       im: {
         chat: { get: chatGetMock },
         chatMembers: { get: chatMembersGetMock },
+      },
+      contact: {
+        user: { get: contactUserGetMock },
       },
     });
   });
@@ -64,6 +67,31 @@ describe("registerFeishuChatTools", () => {
       expect.objectContaining({
         chat_id: "oc_1",
         members: [expect.objectContaining({ member_id: "ou_1", name: "member1" })],
+      }),
+    );
+
+    contactUserGetMock.mockResolvedValueOnce({
+      code: 0,
+      data: {
+        user: {
+          open_id: "ou_1",
+          name: "member1",
+          email: "member1@example.com",
+          department_ids: ["od_1"],
+        },
+      },
+    });
+    const memberInfoResult = await tool.execute("tc_3", {
+      action: "member_info",
+      member_id: "ou_1",
+    });
+    expect(memberInfoResult.details).toEqual(
+      expect.objectContaining({
+        member_id: "ou_1",
+        open_id: "ou_1",
+        name: "member1",
+        email: "member1@example.com",
+        department_ids: ["od_1"],
       }),
     );
   });
