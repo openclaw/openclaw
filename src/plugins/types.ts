@@ -9,6 +9,7 @@ import type {
   ApiKeyCredential,
   AuthProfileCredential,
   OAuthCredential,
+  AuthProfileStore,
 } from "../agents/auth-profiles/types.js";
 import type { ModelCatalogEntry } from "../agents/model-catalog.js";
 import type { ProviderCapabilities } from "../agents/provider-capabilities.js";
@@ -365,6 +366,20 @@ export type ProviderFetchUsageSnapshotContext = {
   accountId?: string;
   timeoutMs: number;
   fetchFn: typeof fetch;
+};
+
+/**
+ * Provider-owned auth-doctor hint input.
+ *
+ * Called when OAuth refresh fails and OpenClaw wants a provider-specific repair
+ * hint to append to the generic re-auth message. Use this for legacy profile-id
+ * migrations or other provider-owned auth-store cleanup guidance.
+ */
+export type ProviderAuthDoctorHintContext = {
+  config?: OpenClawConfig;
+  store: AuthProfileStore;
+  provider: string;
+  profileId?: string;
 };
 
 /**
@@ -732,8 +747,34 @@ export type ProviderPlugin = {
    */
   isModernModelRef?: (ctx: ProviderModernModelPolicyContext) => boolean | undefined;
   wizard?: ProviderPluginWizard;
+  /**
+   * Provider-owned auth-profile API-key formatter.
+   *
+   * OpenClaw uses this when a stored auth profile is already valid and needs to
+   * be converted into the runtime `apiKey` string expected by the provider. Use
+   * this for providers whose auth profile stores extra metadata alongside the
+   * bearer token (for example Gemini CLI's `{ token, projectId }` payload).
+   */
   formatApiKey?: (cred: AuthProfileCredential) => string;
+  /**
+   * Provider-owned OAuth refresh.
+   *
+   * OpenClaw calls this before falling back to the shared `pi-ai` OAuth
+   * refreshers. Use it when the provider has a custom refresh endpoint, or when
+   * the provider needs custom refresh-failure behavior that should stay out of
+   * core auth-profile code.
+   */
   refreshOAuth?: (cred: OAuthCredential) => Promise<OAuthCredential>;
+  /**
+   * Provider-owned auth-doctor hint.
+   *
+   * Return a multiline repair hint when OAuth refresh fails and the provider
+   * wants to steer users toward a specific auth-profile migration or recovery
+   * path. Return nothing to keep OpenClaw's generic error text.
+   */
+  buildAuthDoctorHint?: (
+    ctx: ProviderAuthDoctorHintContext,
+  ) => string | Promise<string | null | undefined> | null | undefined;
   onModelSelected?: (ctx: ProviderModelSelectedContext) => Promise<void>;
 };
 
