@@ -1,4 +1,3 @@
-import type { CiaoService, Responder } from "@homebridge/ciao";
 import { logDebug, logWarn } from "../logger.js";
 import { getLogger } from "../logging.js";
 import { ignoreCiaoCancellationRejection } from "./bonjour-ciao.js";
