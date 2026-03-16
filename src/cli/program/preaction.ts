@@ -102,6 +102,16 @@ function isJsonOutputMode(commandPath: string[], argv: string[]): boolean {
   return true;
 }
 
+function shouldSkipPluginRegistryPreload(commandPath: string[], argv: string[]): boolean {
+  if (commandPath[0] !== "status") {
+    return false;
+  }
+  if (!isJsonOutputMode(commandPath, argv)) {
+    return false;
+  }
+  return !hasFlag(argv, "--all") && !hasFlag(argv, "--deep");
+}
+
 export function registerPreActionHooks(program: Command, programVersion: string) {
   program.hook("preAction", async (_thisCommand, actionCommand) => {
     setProcessTitleForCommand(actionCommand);
@@ -138,7 +148,10 @@ export function registerPreActionHooks(program: Command, programVersion: string)
       ...(suppressDoctorStdout ? { suppressDoctorStdout: true } : {}),
     });
     // Load plugins for commands that need channel access
-    if (PLUGIN_REQUIRED_COMMANDS.has(commandPath[0])) {
+    if (
+      PLUGIN_REQUIRED_COMMANDS.has(commandPath[0]) &&
+      !shouldSkipPluginRegistryPreload(commandPath, argv)
+    ) {
       const { ensurePluginRegistryLoaded } = await loadPluginRegistryModule();
       ensurePluginRegistryLoaded({ scope: resolvePluginRegistryScope(commandPath) });
     }

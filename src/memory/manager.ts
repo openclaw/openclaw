@@ -60,6 +60,7 @@ export async function closeAllMemoryIndexManagers(): Promise<void> {
 
 export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements MemorySearchManager {
   private readonly cacheKey: string;
+  private readonly statusOnly: boolean;
   protected readonly cfg: OpenClawConfig;
   protected readonly agentId: string;
   protected readonly workspaceDir: string;
@@ -153,16 +154,22 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       return pending;
     }
     const createPromise = (async () => {
-      const providerResult = await createEmbeddingProvider({
-        config: cfg,
-        agentDir: resolveAgentDir(cfg, agentId),
-        provider: settings.provider,
-        remote: settings.remote,
-        model: settings.model,
-        outputDimensionality: settings.outputDimensionality,
-        fallback: settings.fallback,
-        local: settings.local,
-      });
+      const providerResult =
+        params.purpose === "status"
+          ? {
+              provider: null,
+              requestedProvider: settings.provider,
+            }
+          : await createEmbeddingProvider({
+              config: cfg,
+              agentDir: resolveAgentDir(cfg, agentId),
+              provider: settings.provider,
+              remote: settings.remote,
+              model: settings.model,
+              outputDimensionality: settings.outputDimensionality,
+              fallback: settings.fallback,
+              local: settings.local,
+            });
       const refreshed = INDEX_CACHE.get(key);
       if (refreshed) {
         return refreshed;
@@ -200,6 +207,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
   }) {
     super();
     this.cacheKey = params.cacheKey;
+    this.statusOnly = params.purpose === "status";
     this.cfg = params.cfg;
     this.agentId = params.agentId;
     this.workspaceDir = params.workspaceDir;
@@ -232,11 +240,12 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     if (meta?.vectorDims) {
       this.vector.dims = meta.vectorDims;
     }
-    this.ensureWatcher();
-    this.ensureSessionListener();
-    this.ensureIntervalSync();
-    const statusOnly = params.purpose === "status";
-    this.dirty = this.sources.has("memory") && (statusOnly ? !meta : true);
+    if (!this.statusOnly) {
+      this.ensureWatcher();
+      this.ensureSessionListener();
+      this.ensureIntervalSync();
+    }
+    this.dirty = this.sources.has("memory") && (this.statusOnly ? !meta : true);
     this.batch = this.resolveBatchConfig();
   }
 
@@ -776,10 +785,6 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
   }
 
   async probeVectorAvailability(): Promise<boolean> {
-    // FTS-only mode: vector search not available
-    if (!this.provider) {
-      return false;
-    }
     if (!this.vector.enabled) {
       return false;
     }

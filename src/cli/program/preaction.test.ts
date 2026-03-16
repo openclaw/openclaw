@@ -213,6 +213,20 @@ describe("registerPreActionHooks", () => {
     });
   });
 
+  it("skips channel plugin preload for fast status --json", async () => {
+    await runPreAction({
+      parseArgv: ["status"],
+      processArgv: ["node", "openclaw", "status", "--json"],
+    });
+
+    expect(ensureConfigReadyMock).toHaveBeenCalledWith({
+      runtime: runtimeMock,
+      commandPath: ["status"],
+      suppressDoctorStdout: true,
+    });
+    expect(ensurePluginRegistryLoadedMock).not.toHaveBeenCalled();
+  });
+
   it("bypasses config guard for config validate", async () => {
     await runPreAction({
       parseArgv: ["config", "validate"],
