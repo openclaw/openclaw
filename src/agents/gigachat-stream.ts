@@ -77,6 +77,41 @@ export function mapToolNameFromGigaChat(name: string): string {
   return RESERVED_NAME_GIGA_TO_CLIENT[name] ?? name;
 }
 
+export function parseGigachatBasicCredentials(credentials: string): {
+  user: string;
+  password: string;
+} {
+  const separatorIndex = credentials.indexOf(":");
+  if (separatorIndex < 0) {
+    return { user: credentials, password: "" };
+  }
+  return {
+    user: credentials.slice(0, separatorIndex),
+    password: credentials.slice(separatorIndex + 1),
+  };
+}
+
+function toGigaChatToolName(name: string): string {
+  return sanitizeFunctionName(mapToolNameToGigaChat(name));
+}
+
+function rememberToolNameMapping(
+  forward: Map<string, string>,
+  reverse: Map<string, string>,
+  originalName: string,
+): string {
+  const gigaName = toGigaChatToolName(originalName);
+  forward.set(originalName, gigaName);
+  if (!reverse.has(gigaName)) {
+    reverse.set(gigaName, originalName);
+  } else if (reverse.get(gigaName) !== originalName) {
+    log.warn(
+      `GigaChat: tool name collision after sanitization: "${originalName}" and "${reverse.get(gigaName)}" both map to "${gigaName}"`,
+    );
+  }
+  return gigaName;
+}
+
 // ── Schema cleaning ─────────────────────────────────────────────────────────
 // GigaChat doesn't support many JSON Schema features. We track modifications
 // to help debug issues with tool definitions.
@@ -421,6 +456,8 @@ export function createGigachatStreamFn(opts: GigachatStreamOptions): StreamFn {
       try {
         const disableFunctions = process.env.GIGACHAT_DISABLE_FUNCTIONS?.trim().toLowerCase();
         const functionsEnabled = disableFunctions !== "1" && disableFunctions !== "true";
+        const toolNameToGiga = new Map<string, string>();
+        const gigaToToolName = new Map<string, string>();
 
         // Build messages for GigaChat format
         const messages: Message[] = [];
@@ -451,11 +488,16 @@ export function createGigachatStreamFn(opts: GigachatStreamOptions): StreamFn {
             const toolCall = contentParts.find((c): c is ToolCall => c.type === "toolCall");
 
             if (toolCall && toolCall.name && functionsEnabled) {
+              const gigaToolName = rememberToolNameMapping(
+                toolNameToGiga,
+                gigaToToolName,
+                toolCall.name,
+              );
               messages.push({
                 role: "assistant",
                 content: text ? sanitizeContent(text) : "",
                 function_call: {
-                  name: mapToolNameToGigaChat(toolCall.name),
+                  name: gigaToolName,
                   arguments: toolCall.arguments ?? {},
                 },
               });
@@ -479,10 +521,11 @@ export function createGigachatStreamFn(opts: GigachatStreamOptions): StreamFn {
               sanitizeContent(resultContent || "ok"),
               toolName,
             );
+            const gigaToolName = rememberToolNameMapping(toolNameToGiga, gigaToToolName, toolName);
             messages.push({
               role: "function",
               content: coercedContent,
-              name: mapToolNameToGigaChat(toolName),
+              name: gigaToolName,
             });
           }
         }
@@ -511,8 +554,11 @@ export function createGigachatStreamFn(opts: GigachatStreamOptions): StreamFn {
             logSchemaModifications(tool.name, modifications);
 
             // Sanitize function name and map reserved names
-            const mappedName = mapToolNameToGigaChat(tool.name);
-            const sanitizedName = sanitizeFunctionName(mappedName);
+            const sanitizedName = rememberToolNameMapping(
+              toolNameToGiga,
+              gigaToToolName,
+              tool.name,
+            );
             if (sanitizedName !== tool.name) {
               log.debug(`GigaChat: sanitized function name "${tool.name}" → "${sanitizedName}"`);
             }
@@ -543,7 +589,7 @@ export function createGigachatStreamFn(opts: GigachatStreamOptions): StreamFn {
 
         // Set credentials based on auth mode
         if (isUserPassCredentials) {
-          const [user, password] = apiKey.split(":", 2);
+          const { user, password } = parseGigachatBasicCredentials(apiKey);
           clientConfig.user = user;
           clientConfig.password = password;
           log.debug(`GigaChat auth: basic mode`);
@@ -700,7 +746,9 @@ export function createGigachatStreamFn(opts: GigachatStreamOptions): StreamFn {
               { cause: parseErr },
             );
           }
-          const clientName = mapToolNameFromGigaChat(functionCallBuffer.name);
+          const clientName =
+            gigaToToolName.get(functionCallBuffer.name) ??
+            mapToolNameFromGigaChat(functionCallBuffer.name);
           accumulatedToolCalls.push({
             type: "toolCall",
             id: randomUUID(),

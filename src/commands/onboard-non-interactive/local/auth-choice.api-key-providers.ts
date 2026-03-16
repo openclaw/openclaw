@@ -9,6 +9,7 @@ import {
   applyKilocodeConfig,
   applyKimiCodeConfig,
   applyLitellmConfig,
+  applyGigachatConfig,
   applyMistralConfig,
   applyModelStudioConfig,
   applyModelStudioConfigCn,
@@ -29,6 +30,7 @@ import {
   setHuggingfaceApiKey,
   setKilocodeApiKey,
   setKimiCodingApiKey,
+  setGigachatApiKey,
   setLitellmApiKey,
   setMistralApiKey,
   setModelStudioApiKey,
@@ -145,6 +147,28 @@ function buildSimpleApiKeyAuthChoices(params: { opts: OnboardOptions }): SimpleA
           applyAuthProfileConfig(cfg, {
             profileId: "xai:default",
             provider: "xai",
+            mode: "api_key",
+          }),
+        ),
+    },
+    {
+      authChoices: ["gigachat-api-key", "gigachat-oauth"],
+      provider: "gigachat",
+      flagValue: params.opts.gigachatApiKey,
+      flagName: "--gigachat-api-key",
+      envVar: "GIGACHAT_CREDENTIALS",
+      profileId: "gigachat:default",
+      setCredential: (value, options) =>
+        setGigachatApiKey(value, undefined, options, {
+          authMode: "oauth",
+          scope: "GIGACHAT_API_PERS",
+          insecureTls: "false",
+        }),
+      applyConfig: (cfg) =>
+        applyGigachatConfig(
+          applyAuthProfileConfig(cfg, {
+            profileId: "gigachat:default",
+            provider: "gigachat",
             mode: "api_key",
           }),
         ),
