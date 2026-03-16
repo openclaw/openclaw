@@ -210,6 +210,17 @@ export function lookupContextTokens(modelId?: string): number | undefined {
   return MODEL_CACHE.get(modelId);
 }
 
+export async function resolveContextTokensForModelAsync(params: {
+  cfg?: OpenClawConfig;
+  provider?: string;
+  model?: string;
+  contextTokensOverride?: number;
+  fallbackContextTokens?: number;
+}): Promise<number | undefined> {
+  await ensureContextWindowCacheLoaded();
+  return resolveContextTokensForModel(params);
+}
+
 if (!shouldSkipEagerContextWindowWarmup()) {
   // Keep prior behavior where model limits begin loading during startup.
   // This avoids a cold-start miss on the first context token lookup.
