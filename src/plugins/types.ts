@@ -337,8 +337,6 @@ export type ProviderResolvedUsageAuth = {
  * This hook runs after `resolveUsageAuth` succeeds. Core still owns summary
  * fan-out, timeout wrapping, filtering, and formatting; the provider plugin
  * owns the provider-specific HTTP request + response normalization.
- *
- * Return `null`/`undefined` to fall back to legacy core fetchers.
  */
 export type ProviderFetchUsageSnapshotContext = {
   config: OpenClawConfig;
@@ -499,6 +497,12 @@ export type ProviderPlugin = {
   label: string;
   docsPath?: string;
   aliases?: string[];
+  /**
+   * Provider-related env vars shown in onboarding/search/help surfaces.
+   *
+   * Keep entries in preferred display order. This can include direct auth env
+   * vars or setup inputs such as OAuth client id/secret vars.
+   */
   envVars?: string[];
   auth: ProviderAuthMethod[];
   /**
@@ -584,10 +588,9 @@ export type ProviderPlugin = {
   /**
    * Usage/billing auth resolution hook.
    *
-   * Called by provider-usage surfaces (`/usage`, status snapshots, reporting)
-   * before OpenClaw falls back to legacy core auth resolution. Use this when a
-   * provider's usage endpoint needs provider-owned token extraction, blob
-   * parsing, or alias handling.
+   * Called by provider-usage surfaces (`/usage`, status snapshots, reporting).
+   * Use this when a provider's usage endpoint needs provider-owned token
+   * extraction, blob parsing, or alias handling.
    */
   resolveUsageAuth?: (
     ctx: ProviderResolveUsageAuthContext,

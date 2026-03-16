@@ -1,6 +1,9 @@
 {
   "id": "openai",
   "providers": ["openai", "openai-codex"],
+  "providerAuthEnvVars": {
+    "openai": ["OPENAI_API_KEY"]
+  },
   "configSchema": {
     "type": "object",
     "additionalProperties": false,

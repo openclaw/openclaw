@@ -426,4 +426,45 @@ describe("getApiKeyForModel", () => {
       },
     );
   });
+
+  it("resolveEnvApiKey('qwen-portal') accepts QWEN_OAUTH_TOKEN", async () => {
+    await withEnvAsync(
+      {
+        QWEN_OAUTH_TOKEN: "qwen-oauth-token",
+        QWEN_PORTAL_API_KEY: undefined,
+      },
+      async () => {
+        const resolved = resolveEnvApiKey("qwen");
+        expect(resolved?.apiKey).toBe("qwen-oauth-token");
+        expect(resolved?.source).toContain("QWEN_OAUTH_TOKEN");
+      },
+    );
+  });
+
+  it("resolveEnvApiKey('minimax-portal') accepts MINIMAX_OAUTH_TOKEN", async () => {
+    await withEnvAsync(
+      {
+        MINIMAX_OAUTH_TOKEN: "minimax-oauth-token",
+        MINIMAX_API_KEY: undefined,
+      },
+      async () => {
+        const resolved = resolveEnvApiKey("minimax-portal");
+        expect(resolved?.apiKey).toBe("minimax-oauth-token");
+        expect(resolved?.source).toContain("MINIMAX_OAUTH_TOKEN");
+      },
+    );
+  });
+
+  it("resolveEnvApiKey('volcengine-plan') uses volcengine auth candidates", async () => {
+    await withEnvAsync(
+      {
+        VOLCANO_ENGINE_API_KEY: "volcengine-plan-key",
+      },
+      async () => {
+        const resolved = resolveEnvApiKey("volcengine-plan");
+        expect(resolved?.apiKey).toBe("volcengine-plan-key");
+        expect(resolved?.source).toContain("VOLCANO_ENGINE_API_KEY");
+      },
+    );
+  });
 });

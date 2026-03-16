@@ -33,7 +33,7 @@ vi.mock("../infra/backoff.js", () => ({
   sleepWithAbort: (ms: number, abortSignal?: AbortSignal) => sleepWithAbortMock(ms, abortSignal),
 }));
 
-vi.mock("../providers/github-copilot-token.js", () => ({
+vi.mock("../../extensions/github-copilot/token.js", () => ({
   DEFAULT_COPILOT_API_BASE_URL: "https://api.individual.githubcopilot.com",
   resolveCopilotApiToken: (...args: unknown[]) => resolveCopilotApiTokenMock(...args),
 }));

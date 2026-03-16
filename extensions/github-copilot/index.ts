@@ -8,11 +8,8 @@ import { listProfilesForProvider } from "../../src/agents/auth-profiles/profiles
 import { ensureAuthProfileStore } from "../../src/agents/auth-profiles/store.js";
 import { normalizeModelCompat } from "../../src/agents/model-compat.js";
 import { coerceSecretRef } from "../../src/config/types.secrets.js";
-import { fetchCopilotUsage } from "../../src/infra/provider-usage.fetch.js";
-import {
-  DEFAULT_COPILOT_API_BASE_URL,
-  resolveCopilotApiToken,
-} from "../../src/providers/github-copilot-token.js";
+import { DEFAULT_COPILOT_API_BASE_URL, resolveCopilotApiToken } from "./token.js";
+import { fetchCopilotUsage } from "./usage.js";
 
 const PROVIDER_ID = "github-copilot";
 const COPILOT_ENV_VARS = ["COPILOT_GITHUB_TOKEN", "GH_TOKEN", "GITHUB_TOKEN"];

@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { createProviderUsageFetch, makeResponse } from "../test-utils/provider-usage-fetch.js";
-import { fetchCopilotUsage } from "./provider-usage.fetch.copilot.js";
+import {
+  createProviderUsageFetch,
+  makeResponse,
+} from "../../src/test-utils/provider-usage-fetch.js";
+import { fetchCopilotUsage } from "./usage.js";
 
 describe("fetchCopilotUsage", () => {
   it("returns HTTP errors for failed requests", async () => {

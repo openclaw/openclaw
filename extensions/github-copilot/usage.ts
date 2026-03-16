@@ -1,6 +1,9 @@
-import { buildUsageHttpErrorSnapshot, fetchJson } from "./provider-usage.fetch.shared.js";
-import { clampPercent, PROVIDER_LABELS } from "./provider-usage.shared.js";
-import type { ProviderUsageSnapshot, UsageWindow } from "./provider-usage.types.js";
+import {
+  buildUsageHttpErrorSnapshot,
+  fetchJson,
+} from "../../src/infra/provider-usage.fetch.shared.js";
+import { clampPercent, PROVIDER_LABELS } from "../../src/infra/provider-usage.shared.js";
+import type { ProviderUsageSnapshot, UsageWindow } from "../../src/infra/provider-usage.types.js";
 
 type CopilotUsageResponse = {
   quota_snapshots?: {

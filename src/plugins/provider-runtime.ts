@@ -1,6 +1,6 @@
 import { normalizeProviderId } from "../agents/model-selection.js";
 import type { OpenClawConfig } from "../config/config.js";
-import { resolvePluginProviders } from "./providers.js";
+import { resolveOwningPluginIdsForProvider, resolvePluginProviders } from "./providers.js";
 import type {
   ProviderAugmentModelCatalogContext,
   ProviderBuildMissingAuthMessageContext,
@@ -60,9 +60,15 @@ export function resolveProviderRuntimePlugin(params: {
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
 }): ProviderPlugin | undefined {
-  return resolveProviderPluginsForHooks(params).find((plugin) =>
-    matchesProviderId(plugin, params.provider),
-  );
+  return resolveProviderPluginsForHooks({
+    ...params,
+    onlyPluginIds: resolveOwningPluginIdsForProvider({
+      provider: params.provider,
+      config: params.config,
+      workspaceDir: params.workspaceDir,
+      env: params.env,
+    }),
+  }).find((plugin) => matchesProviderId(plugin, params.provider));
 }
 
 export function runProviderDynamicModel(params: {

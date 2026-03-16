@@ -1,6 +1,3 @@
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
 import {
   dedupeProfileIds,
   ensureAuthProfileStore,
@@ -14,7 +11,6 @@ import { normalizeProviderId } from "../agents/model-selection.js";
 import { loadConfig, type OpenClawConfig } from "../config/config.js";
 import { resolveProviderUsageAuthWithPlugin } from "../plugins/provider-runtime.js";
 import { normalizeSecretInput } from "../utils/normalize-secret-input.js";
-import { resolveRequiredHomeDir } from "./home-dir.js";
 import type { UsageProviderId } from "./provider-usage.types.js";
 
 export type ProviderAuth = {
@@ -31,46 +27,6 @@ type UsageAuthState = {
   env: NodeJS.ProcessEnv;
   agentDir?: string;
 };
-
-const LEGACY_OAUTH_USAGE_PROVIDERS = new Set<UsageProviderId>([
-  "anthropic",
-  "github-copilot",
-  "google-gemini-cli",
-  "openai-codex",
-]);
-
-function parseGoogleToken(apiKey: string): { token: string } | null {
-  try {
-    const parsed = JSON.parse(apiKey) as { token?: unknown };
-    if (parsed && typeof parsed.token === "string") {
-      return { token: parsed.token };
-    }
-  } catch {
-    // ignore
-  }
-  return null;
-}
-
-function resolveLegacyZaiApiKey(state: UsageAuthState): string | undefined {
-  try {
-    const authPath = path.join(
-      resolveRequiredHomeDir(state.env, os.homedir),
-      ".pi",
-      "agent",
-      "auth.json",
-    );
-    if (!fs.existsSync(authPath)) {
-      return undefined;
-    }
-    const data = JSON.parse(fs.readFileSync(authPath, "utf-8")) as Record<
-      string,
-      { access?: string }
-    >;
-    return data["z-ai"]?.access || data.zai?.access;
-  } catch {
-    return undefined;
-  }
-}
 
 function resolveProviderApiKeyFromConfigAndStore(params: {
   state: UsageAuthState;
@@ -236,66 +192,7 @@ export async function resolveProviderAuths(params: {
     });
     if (pluginAuth) {
       auths.push(pluginAuth);
-      continue;
     }
-
-    if (provider === "zai") {
-      const apiKey =
-        resolveProviderApiKeyFromConfigAndStore({
-          state,
-          providerIds: ["zai", "z-ai"],
-          envDirect: [state.env.ZAI_API_KEY, state.env.Z_AI_API_KEY],
-        }) ?? resolveLegacyZaiApiKey(state);
-      if (apiKey) {
-        auths.push({ provider, token: apiKey });
-      }
-      continue;
-    }
-
-    if (provider === "minimax") {
-      const apiKey = resolveProviderApiKeyFromConfigAndStore({
-        state,
-        providerIds: ["minimax"],
-        envDirect: [state.env.MINIMAX_CODE_PLAN_KEY, state.env.MINIMAX_API_KEY],
-      });
-      if (apiKey) {
-        auths.push({ provider, token: apiKey });
-      }
-      continue;
-    }
-
-    if (provider === "xiaomi") {
-      const apiKey = resolveProviderApiKeyFromConfigAndStore({
-        state,
-        providerIds: ["xiaomi"],
-        envDirect: [state.env.XIAOMI_API_KEY],
-      });
-      if (apiKey) {
-        auths.push({ provider, token: apiKey });
-      }
-      continue;
-    }
-
-    if (!LEGACY_OAUTH_USAGE_PROVIDERS.has(provider)) {
-      continue;
-    }
-
-    const auth = await resolveOAuthToken({
-      state,
-      provider,
-    });
-    if (!auth) {
-      continue;
-    }
-    if (provider === "google-gemini-cli") {
-      const parsed = parseGoogleToken(auth.token);
-      auths.push({
-        ...auth,
-        token: parsed?.token ?? auth.token,
-      });
-      continue;
-    }
-    auths.push(auth);
   }
 
   return auths;

@@ -25,10 +25,15 @@ const EMPTY_REGISTRY_FALLBACK_PLUGINS = [
   linePlugin,
 ];
 
+export type ChannelOnboardingSetupPlugin = Pick<
+  ChannelPlugin,
+  "id" | "meta" | "capabilities" | "config" | "setup" | "setupWizard"
+>;
+
 const setupWizardAdapters = new WeakMap<object, ChannelOnboardingAdapter>();
 
 export function resolveChannelOnboardingAdapterForPlugin(
-  plugin?: ChannelPlugin,
+  plugin?: ChannelOnboardingSetupPlugin,
 ): ChannelOnboardingAdapter | undefined {
   if (plugin?.setupWizard) {
     const cached = setupWizardAdapters.get(plugin);
@@ -74,7 +79,7 @@ export function listChannelOnboardingAdapters(): ChannelOnboardingAdapter[] {
 
 export async function loadBundledChannelOnboardingPlugin(
   channel: ChannelChoice,
-): Promise<ChannelPlugin | undefined> {
+): Promise<ChannelOnboardingSetupPlugin | undefined> {
   switch (channel) {
     case "discord":
       return discordPlugin as ChannelPlugin;

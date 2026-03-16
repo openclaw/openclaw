@@ -2,6 +2,7 @@ import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../../agents/ag
 import { listChannelPluginCatalogEntries } from "../../channels/plugins/catalog.js";
 import { parseOptionalDelimitedEntries } from "../../channels/plugins/helpers.js";
 import { getChannelPlugin, normalizeChannelId } from "../../channels/plugins/index.js";
+import type { ChannelOnboardingSetupPlugin } from "../../channels/plugins/onboarding-types.js";
 import { moveSingleAccountChannelSectionToDefaultAccount } from "../../channels/plugins/setup-helpers.js";
 import type { ChannelId, ChannelPlugin, ChannelSetupInput } from "../../channels/plugins/types.js";
 import { writeConfigFile, type OpenClawConfig } from "../../config/config.js";
@@ -56,7 +57,7 @@ export async function channelsAddCommand(
     const prompter = createClackPrompter();
     let selection: ChannelChoice[] = [];
     const accountIds: Partial<Record<ChannelChoice, string>> = {};
-    const resolvedPlugins = new Map<ChannelChoice, ChannelPlugin>();
+    const resolvedPlugins = new Map<ChannelChoice, ChannelOnboardingSetupPlugin>();
     await prompter.intro("Channel setup");
     let nextConfig = await setupChannels(cfg, runtime, prompter, {
       allowDisable: false,

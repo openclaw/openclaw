@@ -1,6 +1,6 @@
 import {
-  DEFAULT_ACCOUNT_ID,
   applySetupAccountConfigPatch,
+  DEFAULT_ACCOUNT_ID,
   hasConfiguredSecretInput,
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/mattermost";

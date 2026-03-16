@@ -1,6 +1,9 @@
 {
   "id": "anthropic",
   "providers": ["anthropic"],
+  "providerAuthEnvVars": {
+    "anthropic": ["ANTHROPIC_OAUTH_TOKEN", "ANTHROPIC_API_KEY"]
+  },
   "configSchema": {
     "type": "object",
     "additionalProperties": false,

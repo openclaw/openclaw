@@ -3,14 +3,6 @@ import { resolveProviderUsageSnapshotWithPlugin } from "../plugins/provider-runt
 import { resolveFetch } from "./fetch.js";
 import { type ProviderAuth, resolveProviderAuths } from "./provider-usage.auth.js";
 import {
-  fetchClaudeUsage,
-  fetchCodexUsage,
-  fetchCopilotUsage,
-  fetchGeminiUsage,
-  fetchMinimaxUsage,
-  fetchZaiUsage,
-} from "./provider-usage.fetch.js";
-import {
   DEFAULT_TIMEOUT_MS,
   ignoredErrors,
   PROVIDER_LABELS,
@@ -64,44 +56,12 @@ async function fetchProviderUsageSnapshot(params: {
   if (pluginSnapshot) {
     return pluginSnapshot;
   }
-
-  switch (params.auth.provider) {
-    case "anthropic":
-      return await fetchClaudeUsage(params.auth.token, params.timeoutMs, params.fetchFn);
-    case "github-copilot":
-      return await fetchCopilotUsage(params.auth.token, params.timeoutMs, params.fetchFn);
-    case "google-gemini-cli":
-      return await fetchGeminiUsage(
-        params.auth.token,
-        params.timeoutMs,
-        params.fetchFn,
-        params.auth.provider,
-      );
-    case "openai-codex":
-      return await fetchCodexUsage(
-        params.auth.token,
-        params.auth.accountId,
-        params.timeoutMs,
-        params.fetchFn,
-      );
-    case "minimax":
-      return await fetchMinimaxUsage(params.auth.token, params.timeoutMs, params.fetchFn);
-    case "xiaomi":
-      return {
-        provider: "xiaomi",
-        displayName: PROVIDER_LABELS.xiaomi,
-        windows: [],
-      };
-    case "zai":
-      return await fetchZaiUsage(params.auth.token, params.timeoutMs, params.fetchFn);
-    default:
-      return {
-        provider: params.auth.provider,
-        displayName: PROVIDER_LABELS[params.auth.provider],
-        windows: [],
-        error: "Unsupported provider",
-      };
-  }
+  return {
+    provider: params.auth.provider,
+    displayName: PROVIDER_LABELS[params.auth.provider],
+    windows: [],
+    error: "Unsupported provider",
+  };
 }
 
 export async function loadProviderUsageSummary(
