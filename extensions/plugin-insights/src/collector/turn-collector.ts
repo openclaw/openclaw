@@ -40,10 +40,12 @@ export class TurnCollector {
     // Layer 2: Context injection detection
     const contextDetections = this.contextDetector.detect(messages);
 
-    // Merge all detected plugin IDs
+    // Merge all detected plugin IDs (Layer 1 + Layer 2 + Layer 3 peek)
     const allPluginIds = new Set<string>();
     for (const d of toolDetections) allPluginIds.add(d.pluginId);
     for (const d of contextDetections) allPluginIds.add(d.pluginId);
+    // Include Layer 3 self-report plugin IDs so plugins_triggered_json is complete
+    for (const id of this.pluginReporter.peekMatchingPluginIds(sessionId)) allPluginIds.add(id);
 
     // Insert turn record
     const turnId = this.insertTurn(

@@ -65,6 +65,18 @@ export class PluginReporter {
     this.pendingReports = toKeep;
   }
 
+  /** Peek at plugin IDs from pending reports that would match the given session.
+   *  Used to include Layer 3 plugin IDs in plugins_triggered_json before insert. */
+  peekMatchingPluginIds(sessionId?: string): Set<string> {
+    const ids = new Set<string>();
+    for (const report of this.pendingReports) {
+      if (!report.sessionId || !sessionId || report.sessionId === sessionId) {
+        ids.add(report.pluginId);
+      }
+    }
+    return ids;
+  }
+
   /** Get pending reports count (for testing) */
   getPendingCount(): number {
     return this.pendingReports.length;
