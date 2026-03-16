@@ -313,6 +313,20 @@ function handleChatGatewayEvent(host: GatewayHost, payload: ChatEventPayload | u
       payload.sessionKey,
     );
   }
+
+  // Foreign chat event: delivery targeted a different session than the one currently viewed.
+  // Instead of silently dropping, trigger a lightweight session-list refresh so the sidebar
+  // stays up to date and the user can see the new activity.
+  const isForeignSession =
+    payload?.sessionKey != null &&
+    (host as unknown as OpenClawApp).sessionKey !== payload.sessionKey;
+  if (isForeignSession && payload?.state === "final") {
+    void loadSessions(host as unknown as OpenClawApp, {
+      activeMinutes: CHAT_SESSIONS_ACTIVE_MINUTES,
+    });
+    return;
+  }
+
   const state = handleChatEvent(host as unknown as OpenClawApp, payload);
   const historyReloaded = handleTerminalChatEvent(host, payload, state);
   if (state === "final" && !historyReloaded && shouldReloadHistoryForFinalEvent(payload)) {

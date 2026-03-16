@@ -126,6 +126,22 @@ function resolveThinkLevelPatchValue(value: string, isBinary: boolean): string |
   return value;
 }
 
+/**
+ * Shorten subagent session keys for display.
+ * Converts `subagent:{uuid}` → `subagent:{short8}` when no label/displayName is set.
+ * The full key is preserved for routing — this is display-only.
+ */
+function shortenSessionKey(key: string, label?: string | null, displayName?: string | null): string {
+  if (label?.trim() || displayName?.trim()) {
+    return key;
+  }
+  const match = /^(subagent):([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/i.exec(key);
+  if (!match) {
+    return key;
+  }
+  return `${match[1]}:${match[2].slice(0, 8)}`;
+}
+
 function filterRows(rows: GatewaySessionRow[], query: string): GatewaySessionRow[] {
   const q = query.trim().toLowerCase();
   if (!q) {
@@ -416,6 +432,7 @@ function renderRow(
   const chatUrl = canLink
     ? `${pathForTab("chat", basePath)}?session=${encodeURIComponent(row.key)}`
     : null;
+  const displayKey = shortenSessionKey(row.key, row.label, row.displayName);
   const isMenuOpen = actionsOpenKey === row.key;
   const badgeClass =
     row.kind === "direct"
@@ -430,7 +447,7 @@ function renderRow(
     <tr>
       <td>
         <div class="mono session-key-cell">
-          ${canLink ? html`<a href=${chatUrl} class="session-link">${row.key}</a>` : row.key}
+          ${canLink ? html`<a href=${chatUrl} class="session-link">${displayKey}</a>` : displayKey}
           ${
             showDisplayName
               ? html`<span class="muted session-key-display-name">${displayName}</span>`
