@@ -381,7 +381,7 @@ export const handleSessionCommand: CommandHandler = async (params, allowTextComm
   const channelRuntime = getChannelRuntime();
 
   const discordManager = onDiscord
-    ? channelRuntime.discord.threadBindings.getManager(accountId)
+    ? getChannelRuntime().discord.threadBindings.getManager(accountId)
     : null;
   if (onDiscord && !discordManager) {
     return {
@@ -430,13 +430,13 @@ export const handleSessionCommand: CommandHandler = async (params, allowTextComm
   }
 
   const idleTimeoutMs = onDiscord
-    ? channelRuntime.discord.threadBindings.resolveIdleTimeoutMs({
+    ? getChannelRuntime().discord.threadBindings.resolveIdleTimeoutMs({
         record: discordBinding!,
         defaultIdleTimeoutMs: discordManager!.getIdleTimeoutMs(),
       })
     : resolveTelegramBindingDurationMs(telegramBinding!, "idleTimeoutMs", 24 * 60 * 60 * 1000);
   const idleExpiresAt = onDiscord
-    ? channelRuntime.discord.threadBindings.resolveInactivityExpiresAt({
+    ? getChannelRuntime().discord.threadBindings.resolveInactivityExpiresAt({
         record: discordBinding!,
         defaultIdleTimeoutMs: discordManager!.getIdleTimeoutMs(),
       })
@@ -444,13 +444,13 @@ export const handleSessionCommand: CommandHandler = async (params, allowTextComm
       ? resolveTelegramBindingLastActivityAt(telegramBinding!) + idleTimeoutMs
       : undefined;
   const maxAgeMs = onDiscord
-    ? channelRuntime.discord.threadBindings.resolveMaxAgeMs({
+    ? getChannelRuntime().discord.threadBindings.resolveMaxAgeMs({
         record: discordBinding!,
         defaultMaxAgeMs: discordManager!.getMaxAgeMs(),
       })
     : resolveTelegramBindingDurationMs(telegramBinding!, "maxAgeMs", 0);
   const maxAgeExpiresAt = onDiscord
-    ? channelRuntime.discord.threadBindings.resolveMaxAgeExpiresAt({
+    ? getChannelRuntime().discord.threadBindings.resolveMaxAgeExpiresAt({
         record: discordBinding!,
         defaultMaxAgeMs: discordManager!.getMaxAgeMs(),
       })
@@ -525,24 +525,24 @@ export const handleSessionCommand: CommandHandler = async (params, allowTextComm
   const updatedBindings = (() => {
     if (onDiscord) {
       return action === SESSION_ACTION_IDLE
-        ? channelRuntime.discord.threadBindings.setIdleTimeoutBySessionKey({
+        ? getChannelRuntime().discord.threadBindings.setIdleTimeoutBySessionKey({
             targetSessionKey: discordBinding!.targetSessionKey,
             accountId,
             idleTimeoutMs: durationMs,
           })
-        : channelRuntime.discord.threadBindings.setMaxAgeBySessionKey({
+        : getChannelRuntime().discord.threadBindings.setMaxAgeBySessionKey({
             targetSessionKey: discordBinding!.targetSessionKey,
             accountId,
             maxAgeMs: durationMs,
           });
     }
     return action === SESSION_ACTION_IDLE
-      ? channelRuntime.telegram.threadBindings.setIdleTimeoutBySessionKey({
+      ? getChannelRuntime().telegram.threadBindings.setIdleTimeoutBySessionKey({
           targetSessionKey: telegramBinding!.targetSessionKey,
           accountId,
           idleTimeoutMs: durationMs,
         })
-      : channelRuntime.telegram.threadBindings.setMaxAgeBySessionKey({
+      : getChannelRuntime().telegram.threadBindings.setMaxAgeBySessionKey({
           targetSessionKey: telegramBinding!.targetSessionKey,
           accountId,
           maxAgeMs: durationMs,
