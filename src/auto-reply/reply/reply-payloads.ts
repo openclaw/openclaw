@@ -4,6 +4,7 @@ import type { MessagingToolSend } from "../../agents/pi-embedded-runner.js";
 import { normalizeChannelId } from "../../channels/plugins/index.js";
 import type { ReplyToMode } from "../../config/types.js";
 import { normalizeTargetForProvider } from "../../infra/outbound/target-normalization.js";
+import { hasReplyChannelData, hasReplyContent } from "../../interactive/payload.js";
 import { normalizeOptionalAccountId } from "../../routing/account-id.js";
 import type { OriginatingChannelType } from "../templating.js";
 import type { ReplyPayload } from "../types.js";
@@ -74,14 +75,14 @@ export function applyReplyTagsToPayload(
 }
 
 export function isRenderablePayload(payload: ReplyPayload): boolean {
-  return Boolean(
-    payload.text ||
-    payload.mediaUrl ||
-    (payload.mediaUrls && payload.mediaUrls.length > 0) ||
-    payload.audioAsVoice ||
-    payload.interactive ||
-    payload.channelData,
-  );
+  return hasReplyContent({
+    text: payload.text,
+    mediaUrl: payload.mediaUrl,
+    mediaUrls: payload.mediaUrls,
+    interactive: payload.interactive,
+    hasChannelData: hasReplyChannelData(payload.channelData),
+    extraContent: payload.audioAsVoice,
+  });
 }
 
 export function shouldSuppressReasoningPayload(payload: ReplyPayload): boolean {
