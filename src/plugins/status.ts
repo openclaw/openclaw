@@ -3,6 +3,7 @@ import { resolveDefaultAgentWorkspaceDir } from "../agents/workspace.js";
 import { loadConfig } from "../config/config.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { loadOpenClawPlugins } from "./loader.js";
+import { createPluginLoaderLogger } from "./logger.js";
 import type { PluginRegistry } from "./registry.js";
 
 export type PluginStatusReport = PluginRegistry & {
@@ -14,6 +15,8 @@ const log = createSubsystemLogger("plugins");
 export function buildPluginStatusReport(params?: {
   config?: ReturnType<typeof loadConfig>;
   workspaceDir?: string;
+  /** Use an explicit env when plugin roots should resolve independently from process.env. */
+  env?: NodeJS.ProcessEnv;
 }): PluginStatusReport {
   const config = params?.config ?? loadConfig();
   const workspaceDir = params?.workspaceDir
@@ -24,12 +27,8 @@ export function buildPluginStatusReport(params?: {
   const registry = loadOpenClawPlugins({
     config,
     workspaceDir,
-    logger: {
-      info: (msg) => log.info(msg),
-      warn: (msg) => log.warn(msg),
-      error: (msg) => log.error(msg),
-      debug: (msg) => log.debug(msg),
-    },
+    env: params?.env,
+    logger: createPluginLoaderLogger(log),
   });
 
   return {

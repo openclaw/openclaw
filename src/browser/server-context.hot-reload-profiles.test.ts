@@ -1,9 +1,10 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
-import { resolveBrowserConfig } from "./config.js";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { resolveBrowserConfig, resolveProfile } from "./config.js";
 import {
   refreshResolvedBrowserConfigFromDisk,
   resolveBrowserProfileWithHotReload,
 } from "./resolved-config-refresh.js";
+import type { BrowserServerState } from "./server-context.types.js";
 
 let cfgProfiles: Record<string, { cdpPort?: number; cdpUrl?: string; color?: string }> = {};
 
@@ -29,6 +30,7 @@ vi.mock("../config/config.js", () => ({
       return buildConfig();
     },
   }),
+  getRuntimeConfigSnapshot: () => null,
   loadConfig: () => {
     // simulate stale loadConfig that doesn't see updates unless cache cleared
     if (!cachedConfig) {
@@ -40,6 +42,12 @@ vi.mock("../config/config.js", () => ({
 }));
 
 describe("server-context hot-reload profiles", () => {
+  let loadConfig: typeof import("../config/config.js").loadConfig;
+
+  beforeAll(async () => {
+    ({ loadConfig } = await import("../config/config.js"));
+  });
+
   beforeEach(() => {
     vi.clearAllMocks();
     cfgProfiles = {
@@ -49,8 +57,6 @@ describe("server-context hot-reload profiles", () => {
   });
 
   it("forProfile hot-reloads newly added profiles from config", async () => {
-    const { loadConfig } = await import("../config/config.js");
-
     // Start with only openclaw profile
     // 1. Prime the cache by calling loadConfig() first
     const cfg = loadConfig();
@@ -101,8 +107,6 @@ describe("server-context hot-reload profiles", () => {
   });
 
   it("forProfile still throws for profiles that don't exist in fresh config", async () => {
-    const { loadConfig } = await import("../config/config.js");
-
     const cfg = loadConfig();
     const resolved = resolveBrowserConfig(cfg.browser, cfg);
     const state = {
@@ -123,8 +127,6 @@ describe("server-context hot-reload profiles", () => {
   });
 
   it("forProfile refreshes existing profile config after loadConfig cache updates", async () => {
-    const { loadConfig } = await import("../config/config.js");
-
     const cfg = loadConfig();
     const resolved = resolveBrowserConfig(cfg.browser, cfg);
     const state = {
@@ -147,8 +149,6 @@ describe("server-context hot-reload profiles", () => {
   });
 
   it("listProfiles refreshes config before enumerating profiles", async () => {
-    const { loadConfig } = await import("../config/config.js");
-
     const cfg = loadConfig();
     const resolved = resolveBrowserConfig(cfg.browser, cfg);
     const state = {
@@ -167,5 +167,43 @@ describe("server-context hot-reload profiles", () => {
       mode: "cached",
     });
     expect(Object.keys(state.resolved.profiles)).toContain("desktop");
+  });
+
+  it("marks existing runtime state for reconcile when profile invariants change", async () => {
+    const cfg = loadConfig();
+    const resolved = resolveBrowserConfig(cfg.browser, cfg);
+    const openclawProfile = resolveProfile(resolved, "openclaw");
+    expect(openclawProfile).toBeTruthy();
+    const state: BrowserServerState = {
+      server: null,
+      port: 18791,
+      resolved,
+      profiles: new Map([
+        [
+          "openclaw",
+          {
+            profile: openclawProfile!,
+            running: { pid: 123 } as never,
+            lastTargetId: "tab-1",
+            reconcile: null,
+          },
+        ],
+      ]),
+    };
+
+    cfgProfiles.openclaw = { cdpPort: 19999, color: "#FF4500" };
+    cachedConfig = null;
+
+    refreshResolvedBrowserConfigFromDisk({
+      current: state,
+      refreshConfigFromDisk: true,
+      mode: "cached",
+    });
+
+    const runtime = state.profiles.get("openclaw");
+    expect(runtime).toBeTruthy();
+    expect(runtime?.profile.cdpPort).toBe(19999);
+    expect(runtime?.lastTargetId).toBeNull();
+    expect(runtime?.reconcile?.reason).toContain("cdpPort");
   });
 });

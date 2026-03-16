@@ -31,7 +31,7 @@ Local checkout (when running from a git repo):
 openclaw plugins install ./extensions/matrix
 ```
 
-If you choose Matrix during configure/onboarding and a git checkout is detected,
+If you choose Matrix during setup and a git checkout is detected,
 OpenClaw will offer the local install path automatically.
 
 Details: [Plugins](/tools/plugin)
@@ -72,7 +72,7 @@ Details: [Plugins](/tools/plugin)
    - If both are set, config takes precedence.
    - With access token: user ID is fetched automatically via `/whoami`.
    - When set, `channels.matrix.userId` should be the full Matrix ID (example: `@bot:example.org`).
-5. Restart the gateway (or finish onboarding).
+5. Restart the gateway (or finish setup).
 6. Start a DM with the bot or invite it to a room from any Matrix client
    (Element, Beeper, etc.; see [https://matrix.org/ecosystem/clients/](https://matrix.org/ecosystem/clients/)). Beeper requires E2EE,
    so set `channels.matrix.encryption: true` and verify the device.
@@ -195,6 +195,7 @@ Notes:
 ## Rooms (groups)
 
 - Default: `channels.matrix.groupPolicy = "allowlist"` (mention-gated). Use `channels.defaults.groupPolicy` to override the default when unset.
+- Runtime note: if `channels.matrix` is completely missing, runtime falls back to `groupPolicy="allowlist"` for room checks (even if `channels.defaults.groupPolicy` is set).
 - Allowlist rooms with `channels.matrix.groups` (room IDs or aliases; names are resolved to IDs when directory search finds a single exact match):
 
 ```json5

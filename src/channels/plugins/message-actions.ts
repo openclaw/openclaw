@@ -1,7 +1,20 @@
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
 import type { OpenClawConfig } from "../../config/config.js";
 import { getChannelPlugin, listChannelPlugins } from "./index.js";
+import type { ChannelMessageCapability } from "./message-capabilities.js";
 import type { ChannelMessageActionContext, ChannelMessageActionName } from "./types.js";
+
+type ChannelActions = NonNullable<NonNullable<ReturnType<typeof getChannelPlugin>>["actions"]>;
+
+function requiresTrustedRequesterSender(ctx: ChannelMessageActionContext): boolean {
+  const plugin = getChannelPlugin(ctx.channel);
+  return Boolean(
+    plugin?.actions?.requiresTrustedRequesterSender?.({
+      action: ctx.action,
+      toolContext: ctx.toolContext,
+    }),
+  );
+}
 
 export function listChannelMessageActions(cfg: OpenClawConfig): ChannelMessageActionName[] {
   const actions = new Set<ChannelMessageActionName>(["send", "broadcast"]);
@@ -17,49 +30,62 @@ export function listChannelMessageActions(cfg: OpenClawConfig): ChannelMessageAc
   return Array.from(actions);
 }
 
-export function supportsChannelMessageButtons(cfg: OpenClawConfig): boolean {
+function listCapabilities(
+  actions: ChannelActions,
+  cfg: OpenClawConfig,
+): readonly ChannelMessageCapability[] {
+  return actions.getCapabilities?.({ cfg }) ?? [];
+}
+
+export function listChannelMessageCapabilities(cfg: OpenClawConfig): ChannelMessageCapability[] {
+  const capabilities = new Set<ChannelMessageCapability>();
   for (const plugin of listChannelPlugins()) {
-    if (plugin.actions?.supportsButtons?.({ cfg })) {
-      return true;
+    if (!plugin.actions) {
+      continue;
+    }
+    for (const capability of listCapabilities(plugin.actions, cfg)) {
+      capabilities.add(capability);
     }
   }
-  return false;
+  return Array.from(capabilities);
 }
 
-export function supportsChannelMessageButtonsForChannel(params: {
+export function listChannelMessageCapabilitiesForChannel(params: {
   cfg: OpenClawConfig;
   channel?: string;
-}): boolean {
+}): ChannelMessageCapability[] {
   if (!params.channel) {
-    return false;
+    return [];
   }
   const plugin = getChannelPlugin(params.channel as Parameters<typeof getChannelPlugin>[0]);
-  return plugin?.actions?.supportsButtons?.({ cfg: params.cfg }) === true;
+  return plugin?.actions ? Array.from(listCapabilities(plugin.actions, params.cfg)) : [];
 }
 
-export function supportsChannelMessageCards(cfg: OpenClawConfig): boolean {
-  for (const plugin of listChannelPlugins()) {
-    if (plugin.actions?.supportsCards?.({ cfg })) {
-      return true;
-    }
-  }
-  return false;
+export function channelSupportsMessageCapability(
+  cfg: OpenClawConfig,
+  capability: ChannelMessageCapability,
+): boolean {
+  return listChannelMessageCapabilities(cfg).includes(capability);
 }
 
-export function supportsChannelMessageCardsForChannel(params: {
-  cfg: OpenClawConfig;
-  channel?: string;
-}): boolean {
-  if (!params.channel) {
-    return false;
-  }
-  const plugin = getChannelPlugin(params.channel as Parameters<typeof getChannelPlugin>[0]);
-  return plugin?.actions?.supportsCards?.({ cfg: params.cfg }) === true;
+export function channelSupportsMessageCapabilityForChannel(
+  params: {
+    cfg: OpenClawConfig;
+    channel?: string;
+  },
+  capability: ChannelMessageCapability,
+): boolean {
+  return listChannelMessageCapabilitiesForChannel(params).includes(capability);
 }
 
 export async function dispatchChannelMessageAction(
   ctx: ChannelMessageActionContext,
 ): Promise<AgentToolResult<unknown> | null> {
+  if (requiresTrustedRequesterSender(ctx) && !ctx.requesterSenderId?.trim()) {
+    throw new Error(
+      `Trusted sender identity is required for ${ctx.channel}:${ctx.action} in tool-driven contexts.`,
+    );
+  }
   const plugin = getChannelPlugin(ctx.channel);
   if (!plugin?.actions?.handleAction) {
     return null;

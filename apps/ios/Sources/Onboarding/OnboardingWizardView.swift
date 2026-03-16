@@ -1,10 +1,12 @@
 import CoreImage
+import Combine
 import OpenClawKit
 import PhotosUI
 import SwiftUI
 import UIKit
 
 private enum OnboardingStep: Int, CaseIterable {
+    case intro
     case welcome
     case mode
     case connect
@@ -28,7 +30,8 @@ private enum OnboardingStep: Int, CaseIterable {
 
     var title: String {
         switch self {
-        case .welcome: "Welcome"
+        case .intro: "Welcome"
+        case .welcome: "Connect Gateway"
         case .mode: "Connection Mode"
         case .connect: "Connect"
         case .auth: "Authentication"
@@ -37,17 +40,18 @@ private enum OnboardingStep: Int, CaseIterable {
     }
 
     var canGoBack: Bool {
-        self != .welcome && self != .success
+        self != .intro && self != .welcome && self != .success
     }
 }
 
 struct OnboardingWizardView: View {
     @Environment(NodeAppModel.self) private var appModel: NodeAppModel
     @Environment(GatewayConnectionController.self) private var gatewayController: GatewayConnectionController
+    @Environment(\.scenePhase) private var scenePhase
     @AppStorage("node.instanceId") private var instanceId: String = UUID().uuidString
     @AppStorage("gateway.discovery.domain") private var discoveryDomain: String = ""
     @AppStorage("onboarding.developerMode") private var developerModeEnabled: Bool = false
-    @State private var step: OnboardingStep = .welcome
+    @State private var step: OnboardingStep
     @State private var selectedMode: OnboardingConnectionMode?
     @State private var manualHost: String = ""
     @State private var manualPort: Int = 18789
@@ -56,28 +60,38 @@ struct OnboardingWizardView: View {
     @State private var gatewayToken: String = ""
     @State private var gatewayPassword: String = ""
     @State private var connectMessage: String?
-    @State private var statusLine: String = "Scan the QR code from your gateway to connect."
+    @State private var statusLine: String = "In your OpenClaw chat, run /pair qr, then scan the code here."
     @State private var connectingGatewayID: String?
     @State private var issue: GatewayConnectionIssue = .none
     @State private var didMarkCompleted = false
-    @State private var didAutoPresentQR = false
     @State private var pairingRequestId: String?
     @State private var discoveryRestartTask: Task<Void, Never>?
     @State private var showQRScanner: Bool = false
     @State private var scannerError: String?
     @State private var selectedPhoto: PhotosPickerItem?
+    @State private var lastPairingAutoResumeAttemptAt: Date?
+    private static let pairingAutoResumeTicker = Timer.publish(every: 2.0, on: .main, in: .common).autoconnect()
 
     let allowSkip: Bool
     let onClose: () -> Void
 
+    init(allowSkip: Bool, onClose: @escaping () -> Void) {
+        self.allowSkip = allowSkip
+        self.onClose = onClose
+        _step = State(
+            initialValue: OnboardingStateStore.shouldPresentFirstRunIntro() ? .intro : .welcome)
+    }
+
     private var isFullScreenStep: Bool {
-        self.step == .welcome || self.step == .success
+        self.step == .intro || self.step == .welcome || self.step == .success
     }
 
     var body: some View {
         NavigationStack {
             Group {
                 switch self.step {
+                case .intro:
+                    self.introStep
                 case .welcome:
                     self.welcomeStep
                 case .success:
@@ -130,7 +144,10 @@ struct OnboardingWizardView: View {
                     Button("Done") {
                         UIApplication.shared.sendAction(
                             #selector(UIResponder.resignFirstResponder),
-                            to: nil, from: nil, for: nil)
+                            to: nil,
+                            from: nil,
+                            for: nil
+                        )
                     }
                 }
             }
@@ -269,12 +286,97 @@ struct OnboardingWizardView: View {
         }
         .onChange(of: self.appModel.gatewayServerName) { _, newValue in
             guard newValue != nil else { return }
+            self.showQRScanner = false
             self.statusLine = "Connected."
             if !self.didMarkCompleted, let selectedMode {
                 OnboardingStateStore.markCompleted(mode: selectedMode)
                 self.didMarkCompleted = true
             }
             self.onClose()
+        }
+        .onChange(of: self.scenePhase) { _, newValue in
+            guard newValue == .active else { return }
+            self.attemptAutomaticPairingResumeIfNeeded()
+        }
+        .onReceive(Self.pairingAutoResumeTicker) { _ in
+            self.attemptAutomaticPairingResumeIfNeeded()
+        }
+    }
+
+    @ViewBuilder
+    private var introStep: some View {
+        VStack(spacing: 0) {
+            Spacer()
+
+            Image(systemName: "iphone.gen3")
+                .font(.system(size: 60, weight: .semibold))
+                .foregroundStyle(.tint)
+                .padding(.bottom, 18)
+
+            Text("Welcome to OpenClaw")
+                .font(.largeTitle.weight(.bold))
+                .multilineTextAlignment(.center)
+                .padding(.bottom, 10)
+
+            Text("Turn this iPhone into a secure OpenClaw node for chat, voice, camera, and device tools.")
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+                .padding(.horizontal, 32)
+                .padding(.bottom, 24)
+
+            VStack(alignment: .leading, spacing: 14) {
+                Label("Connect to your gateway", systemImage: "link")
+                Label("Choose device permissions", systemImage: "hand.raised")
+                Label("Use OpenClaw from your phone", systemImage: "message.fill")
+            }
+            .font(.subheadline.weight(.semibold))
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(18)
+            .background {
+                RoundedRectangle(cornerRadius: 20, style: .continuous)
+                    .fill(Color(uiColor: .secondarySystemBackground))
+            }
+            .padding(.horizontal, 24)
+            .padding(.bottom, 16)
+
+            HStack(alignment: .top, spacing: 12) {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .font(.title3.weight(.semibold))
+                    .foregroundStyle(.orange)
+                    .frame(width: 24)
+                    .padding(.top, 2)
+
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Security notice")
+                        .font(.headline)
+                    Text(
+                        "The connected OpenClaw agent can use device capabilities you enable, such as camera, microphone, photos, contacts, calendar, and location. Continue only if you trust the gateway and agent you connect to.")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(18)
+            .background {
+                RoundedRectangle(cornerRadius: 20, style: .continuous)
+                    .fill(Color(uiColor: .secondarySystemBackground))
+            }
+            .padding(.horizontal, 24)
+
+            Spacer()
+
+            Button {
+                self.advanceFromIntro()
+            } label: {
+                Text("Continue")
+                    .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(.borderedProminent)
+            .controlSize(.large)
+            .padding(.horizontal, 24)
+            .padding(.bottom, 48)
         }
     }
 
@@ -288,15 +390,36 @@ struct OnboardingWizardView: View {
                 .foregroundStyle(.tint)
                 .padding(.bottom, 20)
 
-            Text("Welcome")
+            Text("Connect Gateway")
                 .font(.largeTitle.weight(.bold))
                 .padding(.bottom, 8)
 
-            Text("Connect to your OpenClaw gateway")
+            Text("Scan a QR code from your OpenClaw gateway or continue with manual setup.")
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
                 .padding(.horizontal, 32)
+
+            VStack(alignment: .leading, spacing: 8) {
+                Text("How to pair")
+                    .font(.headline)
+                Text("In your OpenClaw chat, run")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                Text("/pair qr")
+                    .font(.system(.footnote, design: .monospaced).weight(.semibold))
+                Text("Then scan the QR code here to connect this iPhone.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(16)
+            .background {
+                RoundedRectangle(cornerRadius: 18, style: .continuous)
+                    .fill(Color(uiColor: .secondarySystemBackground))
+            }
+            .padding(.horizontal, 24)
+            .padding(.top, 20)
 
             Spacer()
 
@@ -327,8 +450,7 @@ struct OnboardingWizardView: View {
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
                 .padding(.horizontal, 24)
-            .padding(.horizontal, 24)
-            .padding(.bottom, 48)
+                .padding(.bottom, 48)
         }
     }
 
@@ -474,21 +596,7 @@ struct OnboardingWizardView: View {
             TextField("Port", text: self.$manualPortText)
                 .keyboardType(.numberPad)
             Toggle("Use TLS", isOn: self.$manualTLS)
-
-            Button {
-                Task { await self.connectManual() }
-            } label: {
-                if self.connectingGatewayID == "manual" {
-                    HStack(spacing: 8) {
-                        ProgressView()
-                            .progressViewStyle(.circular)
-                        Text("Connecting…")
-                    }
-                } else {
-                    Text("Connect")
-                }
-            }
-            .disabled(!self.canConnectManual || self.connectingGatewayID != nil)
+            self.manualConnectButton
         } header: {
             Text("Developer Local")
         } footer: {
@@ -517,27 +625,38 @@ struct OnboardingWizardView: View {
 
             if self.issue.needsPairing {
                 Section {
-                    Button("Copy: openclaw devices list") {
-                        UIPasteboard.general.string = "openclaw devices list"
+                    Button {
+                        self.resumeAfterPairingApproval()
+                    } label: {
+                        Label("Resume After Approval", systemImage: "arrow.clockwise")
                     }
-
-                    if let id = self.issue.requestId {
-                        Button("Copy: openclaw devices approve \(id)") {
-                            UIPasteboard.general.string = "openclaw devices approve \(id)"
-                        }
-                    } else {
-                        Button("Copy: openclaw devices approve <requestId>") {
-                            UIPasteboard.general.string = "openclaw devices approve <requestId>"
-                        }
-                    }
+                    .disabled(self.connectingGatewayID != nil)
                 } header: {
                     Text("Pairing Approval")
                 } footer: {
-                    Text("Approve this device on the gateway, then tap \"Resume After Approval\" below.")
+                    let requestLine: String = {
+                        if let id = self.issue.requestId, !id.isEmpty {
+                            return "Request ID: \(id)"
+                        }
+                        return "Request ID: check `openclaw devices list`."
+                    }()
+                    Text(
+                        "Approve this device on the gateway.\n"
+                            + "1) `openclaw devices approve` (or `openclaw devices approve <requestId>`)\n"
+                            + "2) `/pair approve` in your OpenClaw chat\n"
+                            + "\(requestLine)\n"
+                            + "OpenClaw will also retry automatically when you return to this app.")
                 }
             }
 
             Section {
+                Button {
+                    self.openQRScannerFromOnboarding()
+                } label: {
+                    Label("Scan QR Code Again", systemImage: "qrcode.viewfinder")
+                }
+                .disabled(self.connectingGatewayID != nil)
+
                 Button {
                     Task { await self.retryLastAttempt() }
                 } label: {
@@ -547,20 +666,6 @@ struct OnboardingWizardView: View {
                     } else {
                         Text("Retry Connection")
                     }
-                }
-                .disabled(self.connectingGatewayID != nil)
-
-                Button {
-                    self.resumeAfterPairingApproval()
-                } label: {
-                    Label("Resume After Approval", systemImage: "arrow.clockwise")
-                }
-                .disabled(self.connectingGatewayID != nil || !self.issue.needsPairing)
-
-                Button {
-                    self.openQRScannerFromOnboarding()
-                } label: {
-                    Label("Scan QR Code Again", systemImage: "qrcode.viewfinder")
                 }
                 .disabled(self.connectingGatewayID != nil)
             }
@@ -619,33 +724,42 @@ struct OnboardingWizardView: View {
             TextField("Discovery Domain (optional)", text: self.$discoveryDomain)
                 .textInputAutocapitalization(.never)
                 .autocorrectionDisabled()
-
-            Button {
-                Task { await self.connectManual() }
-            } label: {
-                if self.connectingGatewayID == "manual" {
-                    HStack(spacing: 8) {
-                        ProgressView()
-                            .progressViewStyle(.circular)
-                        Text("Connecting…")
-                    }
-                } else {
-                    Text("Connect")
-                }
-            }
-            .disabled(!self.canConnectManual || self.connectingGatewayID != nil)
+            self.manualConnectButton
         }
+    }
+
+    private var manualConnectButton: some View {
+        Button {
+            Task { await self.connectManual() }
+        } label: {
+            if self.connectingGatewayID == "manual" {
+                HStack(spacing: 8) {
+                    ProgressView()
+                        .progressViewStyle(.circular)
+                    Text("Connecting…")
+                }
+            } else {
+                Text("Connect")
+            }
+        }
+        .disabled(!self.canConnectManual || self.connectingGatewayID != nil)
     }
 
     private func handleScannedLink(_ link: GatewayConnectDeepLink) {
         self.manualHost = link.host
         self.manualPort = link.port
         self.manualTLS = link.tls
-        if let token = link.token {
+        let trimmedBootstrapToken = link.bootstrapToken?.trimmingCharacters(in: .whitespacesAndNewlines)
+        self.saveGatewayBootstrapToken(trimmedBootstrapToken)
+        if let token = link.token?.trimmingCharacters(in: .whitespacesAndNewlines), !token.isEmpty {
             self.gatewayToken = token
+        } else if trimmedBootstrapToken?.isEmpty == false {
+            self.gatewayToken = ""
         }
-        if let password = link.password {
+        if let password = link.password?.trimmingCharacters(in: .whitespacesAndNewlines), !password.isEmpty {
             self.gatewayPassword = password
+        } else if trimmedBootstrapToken?.isEmpty == false {
+            self.gatewayPassword = ""
         }
         self.saveGatewayCredentials(token: self.gatewayToken, password: self.gatewayPassword)
         self.showQRScanner = false
@@ -672,16 +786,45 @@ struct OnboardingWizardView: View {
         // We intentionally stop reconnect churn while unpaired to avoid generating multiple pending requests.
         self.appModel.gatewayAutoReconnectEnabled = true
         self.appModel.gatewayPairingPaused = false
+        self.appModel.gatewayPairingRequestId = nil
+        // Pairing state is sticky to prevent UI flip-flop during reconnect churn.
+        // Once the user explicitly resumes after approving, clear the sticky issue
+        // so new status/auth errors can surface instead of being masked as pairing.
+        self.issue = .none
         self.connectMessage = "Retrying after approval…"
         self.statusLine = "Retrying after approval…"
         Task { await self.retryLastAttempt() }
     }
 
+    private func resumeAfterPairingApprovalInBackground() {
+        // Keep the pairing issue sticky to avoid visual flicker while we probe for approval.
+        self.appModel.gatewayAutoReconnectEnabled = true
+        self.appModel.gatewayPairingPaused = false
+        self.appModel.gatewayPairingRequestId = nil
+        Task { await self.retryLastAttempt(silent: true) }
+    }
+
+    private func attemptAutomaticPairingResumeIfNeeded() {
+        guard self.scenePhase == .active else { return }
+        guard self.step == .auth else { return }
+        guard self.issue.needsPairing else { return }
+        guard self.connectingGatewayID == nil else { return }
+
+        let now = Date()
+        if let last = self.lastPairingAutoResumeAttemptAt, now.timeIntervalSince(last) < 6 {
+            return
+        }
+        self.lastPairingAutoResumeAttemptAt = now
+        self.resumeAfterPairingApprovalInBackground()
+    }
+
     private func detectQRCode(from data: Data) -> String? {
         guard let ciImage = CIImage(data: data) else { return nil }
         let detector = CIDetector(
-            ofType: CIDetectorTypeQRCode, context: nil,
-            options: [CIDetectorAccuracy: CIDetectorAccuracyHigh])
+            ofType: CIDetectorTypeQRCode,
+            context: nil,
+            options: [CIDetectorAccuracy: CIDetectorAccuracyHigh]
+        )
         let features = detector?.features(in: ciImage) ?? []
         for feature in features {
             if let qr = feature as? CIQRCodeFeature, let message = qr.messageString {
@@ -689,6 +832,12 @@ struct OnboardingWizardView: View {
             }
         }
         return nil
+    }
+
+    private func advanceFromIntro() {
+        OnboardingStateStore.markFirstRunIntroSeen()
+        self.statusLine = "In your OpenClaw chat, run /pair qr, then scan the code here."
+        self.step = .welcome
     }
 
     private func navigateBack() {
@@ -739,10 +888,8 @@ struct OnboardingWizardView: View {
         let hasSavedGateway = GatewaySettingsStore.loadLastGatewayConnection() != nil
         let hasToken = !self.gatewayToken.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         let hasPassword = !self.gatewayPassword.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-        if !self.didAutoPresentQR, !hasSavedGateway, !hasToken, !hasPassword {
-            self.didAutoPresentQR = true
-            self.statusLine = "No saved pairing found. Scan QR code to connect."
-            self.showQRScanner = true
+        if !hasSavedGateway, !hasToken, !hasPassword {
+            self.statusLine = "No saved pairing found. In your OpenClaw chat, run /pair qr, then scan the code here."
         }
     }
 
@@ -762,6 +909,13 @@ struct OnboardingWizardView: View {
         GatewaySettingsStore.saveGatewayToken(trimmedToken, instanceId: trimmedInstanceId)
         let trimmedPassword = password.trimmingCharacters(in: .whitespacesAndNewlines)
         GatewaySettingsStore.saveGatewayPassword(trimmedPassword, instanceId: trimmedInstanceId)
+    }
+
+    private func saveGatewayBootstrapToken(_ token: String?) {
+        let trimmedInstanceId = self.instanceId.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedInstanceId.isEmpty else { return }
+        let trimmedToken = token?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        GatewaySettingsStore.saveGatewayBootstrapToken(trimmedToken, instanceId: trimmedInstanceId)
     }
 
     private func connectDiscoveredGateway(_ gateway: GatewayDiscoveryModel.DiscoveredGateway) async {
@@ -816,11 +970,13 @@ struct OnboardingWizardView: View {
         await self.gatewayController.connectManual(host: host, port: self.manualPort, useTLS: self.manualTLS)
     }
 
-    private func retryLastAttempt() async {
-        self.connectingGatewayID = "retry"
+    private func retryLastAttempt(silent: Bool = false) async {
+        self.connectingGatewayID = silent ? "retry-auto" : "retry"
         // Keep current auth/pairing issue sticky while retrying to avoid Step 3 UI flip-flop.
-        self.connectMessage = "Retrying…"
-        self.statusLine = "Retrying last connection…"
+        if !silent {
+            self.connectMessage = "Retrying…"
+            self.statusLine = "Retrying last connection…"
+        }
         defer { self.connectingGatewayID = nil }
         await self.gatewayController.connectLastKnown()
     }

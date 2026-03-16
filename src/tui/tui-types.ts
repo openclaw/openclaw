@@ -18,14 +18,28 @@ export type ChatEvent = {
   errorMessage?: string;
 };
 
+export type BtwEvent = {
+  kind: "btw";
+  runId?: string;
+  sessionKey?: string;
+  question: string;
+  text: string;
+  isError?: boolean;
+  seq?: number;
+  ts?: number;
+};
+
 export type AgentEvent = {
   runId: string;
   stream: string;
   data?: Record<string, unknown>;
 };
 
+export type ResponseUsageMode = "on" | "off" | "tokens" | "full";
+
 export type SessionInfo = {
   thinkingLevel?: string;
+  fastMode?: boolean;
   verboseLevel?: string;
   reasoningLevel?: string;
   model?: string;
@@ -34,7 +48,7 @@ export type SessionInfo = {
   inputTokens?: number | null;
   outputTokens?: number | null;
   totalTokens?: number | null;
-  responseUsage?: "on" | "off" | "tokens" | "full";
+  responseUsage?: ResponseUsageMode;
   updatedAt?: number | null;
   displayName?: string;
 };
@@ -47,6 +61,7 @@ export type AgentSummary = {
 };
 
 export type GatewayStatusSummary = {
+  runtimeVersion?: string | null;
   linkChannel?: {
     id?: string;
     label?: string;

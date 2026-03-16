@@ -1,17 +1,8 @@
-import fs from "node:fs/promises";
-import os from "node:os";
-import path from "node:path";
-import { afterAll, beforeAll, vi } from "vitest";
+import { vi } from "vitest";
+import { installChromeUserDataDirHooks } from "./chrome-user-data-dir.test-harness.js";
 
 const chromeUserDataDir = { dir: "/tmp/openclaw" };
-
-beforeAll(async () => {
-  chromeUserDataDir.dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-chrome-user-data-"));
-});
-
-afterAll(async () => {
-  await fs.rm(chromeUserDataDir.dir, { recursive: true, force: true });
-});
+installChromeUserDataDirHooks(chromeUserDataDir);
 
 vi.mock("./chrome.js", () => ({
   isChromeCdpReady: vi.fn(async () => true),

@@ -1,4 +1,5 @@
 import { resolveControlUiLinks } from "../../commands/onboard-helpers.js";
+import { formatConfigIssueLine } from "../../config/issue-format.js";
 import {
   resolveGatewayLaunchAgentLabel,
   resolveGatewaySystemdServiceName,
@@ -12,13 +13,14 @@ import {
 import { isWSLEnv } from "../../infra/wsl.js";
 import { getResolvedLoggerSettings } from "../../logging.js";
 import { defaultRuntime } from "../../runtime.js";
-import { colorize, theme } from "../../terminal/theme.js";
+import { colorize } from "../../terminal/theme.js";
 import { shortenHomePath } from "../../utils.js";
 import { formatCliCommand } from "../command-format.js";
 import {
   createCliStatusTextStyles,
   filterDaemonEnv,
   formatRuntimeStatus,
+  resolveRuntimeStatusColor,
   renderRuntimeHints,
   safeDaemonEnv,
 } from "./shared.js";
@@ -109,7 +111,7 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean })
     if (!status.config.cli.valid && status.config.cli.issues?.length) {
       for (const issue of status.config.cli.issues.slice(0, 5)) {
         defaultRuntime.error(
-          `${errorText("Config issue:")} ${issue.path || "<root>"}: ${issue.message}`,
+          `${errorText("Config issue:")} ${formatConfigIssueLine(issue, "", { normalizeRoot: true })}`,
         );
       }
     }
@@ -119,7 +121,7 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean })
       if (!status.config.daemon.valid && status.config.daemon.issues?.length) {
         for (const issue of status.config.daemon.issues.slice(0, 5)) {
           defaultRuntime.error(
-            `${errorText("Service config issue:")} ${issue.path || "<root>"}: ${issue.message}`,
+            `${errorText("Service config issue:")} ${formatConfigIssueLine(issue, "", { normalizeRoot: true })}`,
           );
         }
       }
@@ -165,15 +167,7 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean })
 
   const runtimeLine = formatRuntimeStatus(service.runtime);
   if (runtimeLine) {
-    const runtimeStatus = service.runtime?.status ?? "unknown";
-    const runtimeColor =
-      runtimeStatus === "running"
-        ? theme.success
-        : runtimeStatus === "stopped"
-          ? theme.error
-          : runtimeStatus === "unknown"
-            ? theme.muted
-            : theme.warn;
+    const runtimeColor = resolveRuntimeStatusColor(service.runtime?.status);
     defaultRuntime.log(`${label("Runtime:")} ${colorize(rich, runtimeColor, runtimeLine)}`);
   }
 
@@ -187,6 +181,9 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean })
       defaultRuntime.log(`${label("RPC probe:")} ${okText("ok")}`);
     } else {
       defaultRuntime.error(`${label("RPC probe:")} ${errorText("failed")}`);
+      if (rpc.authWarning) {
+        defaultRuntime.error(`${label("RPC auth:")} ${warnText(rpc.authWarning)}`);
+      }
       if (rpc.url) {
         defaultRuntime.error(`${label("RPC target:")} ${rpc.url}`);
       }
@@ -197,6 +194,25 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean })
         defaultRuntime.error(`  ${errorText(line)}`);
       }
     }
+    spacer();
+  }
+
+  if (
+    status.health &&
+    status.health.staleGatewayPids.length > 0 &&
+    service.runtime?.status === "running" &&
+    typeof service.runtime.pid === "number"
+  ) {
+    defaultRuntime.error(
+      errorText(
+        `Gateway runtime PID does not own the listening port. Other gateway process(es) are listening: ${status.health.staleGatewayPids.join(", ")}`,
+      ),
+    );
+    defaultRuntime.error(
+      errorText(
+        `Fix: run ${formatCliCommand("openclaw gateway restart")} and re-check with ${formatCliCommand("openclaw gateway status --deep")}.`,
+      ),
+    );
     spacer();
   }
 
@@ -221,7 +237,7 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean })
     );
     for (const hint of renderRuntimeHints(
       service.runtime,
-      (service.command?.environment ?? process.env) as NodeJS.ProcessEnv,
+      service.command?.environment ?? process.env,
     )) {
       defaultRuntime.error(errorText(hint));
     }
@@ -229,7 +245,7 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean })
   }
 
   if (service.runtime?.cachedLabel) {
-    const env = (service.command?.environment ?? process.env) as NodeJS.ProcessEnv;
+    const env = service.command?.environment ?? process.env;
     const labelValue = resolveGatewayLaunchAgentLabel(env.OPENCLAW_PROFILE);
     defaultRuntime.error(
       errorText(
@@ -272,15 +288,13 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean })
       defaultRuntime.error(`${errorText("Last gateway error:")} ${status.lastError}`);
     }
     if (process.platform === "linux") {
-      const env = (service.command?.environment ?? process.env) as NodeJS.ProcessEnv;
+      const env = service.command?.environment ?? process.env;
       const unit = resolveGatewaySystemdServiceName(env.OPENCLAW_PROFILE);
       defaultRuntime.error(
         errorText(`Logs: journalctl --user -u ${unit}.service -n 200 --no-pager`),
       );
     } else if (process.platform === "darwin") {
-      const logs = resolveGatewayLogPaths(
-        (service.command?.environment ?? process.env) as NodeJS.ProcessEnv,
-      );
+      const logs = resolveGatewayLogPaths(service.command?.environment ?? process.env);
       defaultRuntime.error(`${errorText("Logs:")} ${shortenHomePath(logs.stdoutPath)}`);
       defaultRuntime.error(`${errorText("Errors:")} ${shortenHomePath(logs.stderrPath)}`);
     }

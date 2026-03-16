@@ -1,11 +1,17 @@
 export type PluginEntryConfig = {
   enabled?: boolean;
+  hooks?: {
+    /** Controls prompt mutation via before_prompt_build and prompt fields from legacy before_agent_start. */
+    allowPromptInjection?: boolean;
+  };
   config?: Record<string, unknown>;
 };
 
 export type PluginSlotsConfig = {
   /** Select which plugin owns the memory slot ("none" disables memory plugins). */
   memory?: string;
+  /** Select which plugin owns the context-engine slot. */
+  contextEngine?: string;
 };
 
 export type PluginsLoadConfig = {
@@ -13,13 +19,11 @@ export type PluginsLoadConfig = {
   paths?: string[];
 };
 
-export type PluginInstallRecord = {
-  source: "npm" | "archive" | "path";
-  spec?: string;
-  sourcePath?: string;
-  installPath?: string;
-  version?: string;
-  installedAt?: string;
+export type PluginInstallRecord = Omit<InstallRecordBase, "source"> & {
+  source: InstallRecordBase["source"] | "marketplace";
+  marketplaceName?: string;
+  marketplaceSource?: string;
+  marketplacePlugin?: string;
 };
 
 export type PluginsConfig = {
@@ -34,3 +38,4 @@ export type PluginsConfig = {
   entries?: Record<string, PluginEntryConfig>;
   installs?: Record<string, PluginInstallRecord>;
 };
+import type { InstallRecordBase } from "./types.installs.js";

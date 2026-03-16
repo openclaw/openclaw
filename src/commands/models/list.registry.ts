@@ -1,19 +1,14 @@
 import type { Api, Model } from "@mariozechner/pi-ai";
+import type { ModelRegistry } from "@mariozechner/pi-coding-agent";
 import { resolveOpenClawAgentDir } from "../../agents/agent-paths.js";
 import type { AuthProfileStore } from "../../agents/auth-profiles.js";
 import { listProfilesForProvider } from "../../agents/auth-profiles.js";
 import {
-  getCustomProviderApiKey,
+  hasUsableCustomProviderApiKey,
   resolveAwsSdkEnvVarName,
   resolveEnvApiKey,
 } from "../../agents/model-auth.js";
-import {
-  ANTIGRAVITY_OPUS_46_FORWARD_COMPAT_CANDIDATES,
-  resolveForwardCompatModel,
-} from "../../agents/model-forward-compat.js";
-import { ensureOpenClawModelsJson } from "../../agents/models-config.js";
-import { ensurePiAuthJsonFromAuthProfiles } from "../../agents/pi-auth-json.js";
-import type { ModelRegistry } from "../../agents/pi-model-discovery.js";
+import { shouldSuppressBuiltInModel } from "../../agents/model-suppression.js";
 import { discoverAuthStorage, discoverModels } from "../../agents/pi-model-discovery.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import {
@@ -41,7 +36,7 @@ const hasAuthForProvider = (
   if (resolveEnvApiKey(provider)) {
     return true;
   }
-  if (getCustomProviderApiKey(cfg, provider)) {
+  if (hasUsableCustomProviderApiKey(cfg, provider)) {
     return true;
   }
   return false;
@@ -93,32 +88,30 @@ function loadAvailableModels(registry: ModelRegistry): Model<Api>[] {
     throw normalizeAvailabilityError(err);
   }
   try {
-    return validateAvailableModels(availableModels);
+    return validateAvailableModels(availableModels).filter(
+      (model) => !shouldSuppressBuiltInModel({ provider: model.provider, id: model.id }),
+    );
   } catch (err) {
     throw normalizeAvailabilityError(err);
   }
 }
 
-export async function loadModelRegistry(cfg: OpenClawConfig) {
-  await ensureOpenClawModelsJson(cfg);
+export async function loadModelRegistry(
+  _cfg: OpenClawConfig,
+  _opts?: { sourceConfig?: OpenClawConfig },
+) {
   const agentDir = resolveOpenClawAgentDir();
-  await ensurePiAuthJsonFromAuthProfiles(agentDir);
   const authStorage = discoverAuthStorage(agentDir);
   const registry = discoverModels(authStorage, agentDir);
-  const appended = appendAntigravityForwardCompatModels(registry.getAll(), registry);
-  const models = appended.models;
-  const synthesizedForwardCompat = appended.synthesizedForwardCompat;
+  const models = registry
+    .getAll()
+    .filter((model) => !shouldSuppressBuiltInModel({ provider: model.provider, id: model.id }));
   let availableKeys: Set<string> | undefined;
   let availabilityErrorMessage: string | undefined;
 
   try {
     const availableModels = loadAvailableModels(registry);
     availableKeys = new Set(availableModels.map((model) => modelKey(model.provider, model.id)));
-    for (const synthesized of synthesizedForwardCompat) {
-      if (hasAvailableTemplate(availableKeys, synthesized.templatePrefixes)) {
-        availableKeys.add(synthesized.key);
-      }
-    }
   } catch (err) {
     if (!shouldFallbackToAuthHeuristics(err)) {
       throw err;
@@ -134,52 +127,6 @@ export async function loadModelRegistry(cfg: OpenClawConfig) {
   return { registry, models, availableKeys, availabilityErrorMessage };
 }
 
-type SynthesizedForwardCompat = {
-  key: string;
-  templatePrefixes: readonly string[];
-};
-
-function appendAntigravityForwardCompatModels(
-  models: Model<Api>[],
-  modelRegistry: ModelRegistry,
-): { models: Model<Api>[]; synthesizedForwardCompat: SynthesizedForwardCompat[] } {
-  const nextModels = [...models];
-  const synthesizedForwardCompat: SynthesizedForwardCompat[] = [];
-
-  for (const candidate of ANTIGRAVITY_OPUS_46_FORWARD_COMPAT_CANDIDATES) {
-    const key = modelKey("google-antigravity", candidate.id);
-    const hasForwardCompat = nextModels.some((model) => modelKey(model.provider, model.id) === key);
-    if (hasForwardCompat) {
-      continue;
-    }
-
-    const fallback = resolveForwardCompatModel("google-antigravity", candidate.id, modelRegistry);
-    if (!fallback) {
-      continue;
-    }
-
-    nextModels.push(fallback);
-    synthesizedForwardCompat.push({
-      key,
-      templatePrefixes: candidate.templatePrefixes,
-    });
-  }
-
-  return { models: nextModels, synthesizedForwardCompat };
-}
-
-function hasAvailableTemplate(
-  availableKeys: Set<string>,
-  templatePrefixes: readonly string[],
-): boolean {
-  for (const key of availableKeys) {
-    if (templatePrefixes.some((prefix) => key.startsWith(prefix))) {
-      return true;
-    }
-  }
-  return false;
-}
-
 export function toModelRow(params: {
   model?: Model<Api>;
   key: string;
@@ -188,8 +135,18 @@ export function toModelRow(params: {
   availableKeys?: Set<string>;
   cfg?: OpenClawConfig;
   authStore?: AuthProfileStore;
+  allowProviderAvailabilityFallback?: boolean;
 }): ModelRow {
-  const { model, key, tags, aliases = [], availableKeys, cfg, authStore } = params;
+  const {
+    model,
+    key,
+    tags,
+    aliases = [],
+    availableKeys,
+    cfg,
+    authStore,
+    allowProviderAvailabilityFallback = false,
+  } = params;
   if (!model) {
     return {
       key,
@@ -205,14 +162,15 @@ export function toModelRow(params: {
 
   const input = model.input.join("+") || "text";
   const local = isLocalBaseUrl(model.baseUrl);
+  const modelIsAvailable = availableKeys?.has(modelKey(model.provider, model.id)) ?? false;
   // Prefer model-level registry availability when present.
-  // Fall back to provider-level auth heuristics only if registry availability isn't available.
+  // Fall back to provider-level auth heuristics only if registry availability isn't available,
+  // or if the caller marks this as a synthetic/forward-compat model that won't appear in getAvailable().
   const available =
-    availableKeys !== undefined
-      ? availableKeys.has(modelKey(model.provider, model.id))
-      : cfg && authStore
-        ? hasAuthForProvider(model.provider, cfg, authStore)
-        : false;
+    availableKeys !== undefined && !allowProviderAvailabilityFallback
+      ? modelIsAvailable
+      : modelIsAvailable ||
+        (cfg && authStore ? hasAuthForProvider(model.provider, cfg, authStore) : false);
   const aliasTags = aliases.length > 0 ? [`alias:${aliases.join(",")}`] : [];
   const mergedTags = new Set(tags);
   if (aliasTags.length > 0) {

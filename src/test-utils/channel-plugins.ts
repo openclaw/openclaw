@@ -1,6 +1,7 @@
 import type {
   ChannelCapabilities,
   ChannelId,
+  ChannelMessagingAdapter,
   ChannelOutboundAdapter,
   ChannelPlugin,
 } from "../channels/plugins/types.js";
@@ -18,9 +19,15 @@ export const createTestRegistry = (channels: TestChannelRegistration[] = []): Pl
   hooks: [],
   typedHooks: [],
   channels: channels as unknown as PluginRegistry["channels"],
+  channelSetups: channels.map((entry) => ({
+    pluginId: entry.pluginId,
+    plugin: entry.plugin as PluginRegistry["channelSetups"][number]["plugin"],
+    source: entry.source,
+    enabled: true,
+  })),
   providers: [],
+  webSearchProviders: [],
   gatewayHandlers: {},
-  httpHandlers: [],
   httpRoutes: [],
   cliRegistrars: [],
   services: [],
@@ -28,13 +35,13 @@ export const createTestRegistry = (channels: TestChannelRegistration[] = []): Pl
   diagnostics: [],
 });
 
-export const createOutboundTestPlugin = (params: {
+export const createChannelTestPluginBase = (params: {
   id: ChannelId;
-  outbound: ChannelOutboundAdapter;
   label?: string;
   docsPath?: string;
   capabilities?: ChannelCapabilities;
-}): ChannelPlugin => ({
+  config?: Partial<ChannelPlugin["config"]>;
+}): Pick<ChannelPlugin, "id" | "meta" | "capabilities" | "config"> => ({
   id: params.id,
   meta: {
     id: params.id,
@@ -45,8 +52,63 @@ export const createOutboundTestPlugin = (params: {
   },
   capabilities: params.capabilities ?? { chatTypes: ["direct"] },
   config: {
-    listAccountIds: () => [],
+    listAccountIds: () => ["default"],
     resolveAccount: () => ({}),
+    ...params.config,
   },
+});
+
+export const createMSTeamsTestPluginBase = (): Pick<
+  ChannelPlugin,
+  "id" | "meta" | "capabilities" | "config"
+> => {
+  const base = createChannelTestPluginBase({
+    id: "msteams",
+    label: "Microsoft Teams",
+    docsPath: "/channels/msteams",
+    config: { listAccountIds: () => [], resolveAccount: () => ({}) },
+  });
+  return {
+    ...base,
+    meta: {
+      ...base.meta,
+      selectionLabel: "Microsoft Teams (Bot Framework)",
+      blurb: "Bot Framework; enterprise support.",
+      aliases: ["teams"],
+    },
+  };
+};
+
+export const createMSTeamsTestPlugin = (params?: {
+  aliases?: string[];
+  outbound?: ChannelOutboundAdapter;
+}): ChannelPlugin => {
+  const base = createMSTeamsTestPluginBase();
+  return {
+    ...base,
+    meta: {
+      ...base.meta,
+      ...(params?.aliases ? { aliases: params.aliases } : {}),
+    },
+    ...(params?.outbound ? { outbound: params.outbound } : {}),
+  };
+};
+
+export const createOutboundTestPlugin = (params: {
+  id: ChannelId;
+  outbound: ChannelOutboundAdapter;
+  messaging?: ChannelMessagingAdapter;
+  label?: string;
+  docsPath?: string;
+  capabilities?: ChannelCapabilities;
+}): ChannelPlugin => ({
+  ...createChannelTestPluginBase({
+    id: params.id,
+    label: params.label,
+    docsPath: params.docsPath,
+    capabilities: params.capabilities,
+    config: { listAccountIds: () => [] },
+  }),
   outbound: params.outbound,
+  ...(params.messaging ? { messaging: params.messaging } : {}),
 });

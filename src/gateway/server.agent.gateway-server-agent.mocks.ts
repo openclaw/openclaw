@@ -9,7 +9,9 @@ export const registryState: { registry: PluginRegistry } = {
     hooks: [],
     typedHooks: [],
     channels: [],
+    channelSetups: [],
     providers: [],
+    webSearchProviders: [],
     gatewayHandlers: {},
     httpHandlers: [],
     httpRoutes: [],
@@ -35,5 +37,7 @@ vi.mock("./server-plugins.js", async () => {
         gatewayMethods: params.baseMethods ?? [],
       };
     },
+    // server.impl.ts sets a fallback context before dispatch; tests only need the symbol to exist.
+    setFallbackGatewayContext: vi.fn(),
   };
 });

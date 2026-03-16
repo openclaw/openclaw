@@ -16,24 +16,26 @@ describe("channel-web barrel", () => {
 });
 
 describe("normalizeChatType", () => {
-  it("normalizes common inputs", () => {
-    expect(normalizeChatType("direct")).toBe("direct");
-    expect(normalizeChatType("dm")).toBe("direct");
-    expect(normalizeChatType("group")).toBe("group");
-    expect(normalizeChatType("channel")).toBe("channel");
-  });
+  const cases: Array<{ name: string; value: string | undefined; expected: string | undefined }> = [
+    { name: "normalizes direct", value: "direct", expected: "direct" },
+    { name: "normalizes dm alias", value: "dm", expected: "direct" },
+    { name: "normalizes group", value: "group", expected: "group" },
+    { name: "normalizes channel", value: "channel", expected: "channel" },
+    { name: "returns undefined for undefined", value: undefined, expected: undefined },
+    { name: "returns undefined for empty", value: "", expected: undefined },
+    { name: "returns undefined for unknown value", value: "nope", expected: undefined },
+    { name: "returns undefined for unsupported room", value: "room", expected: undefined },
+  ];
 
-  it("returns undefined for empty/unknown values", () => {
-    expect(normalizeChatType(undefined)).toBeUndefined();
-    expect(normalizeChatType("")).toBeUndefined();
-    expect(normalizeChatType("nope")).toBeUndefined();
-    expect(normalizeChatType("room")).toBeUndefined();
-  });
+  for (const testCase of cases) {
+    it(testCase.name, () => {
+      expect(normalizeChatType(testCase.value)).toBe(testCase.expected);
+    });
+  }
 
   describe("backward compatibility", () => {
-    it("accepts legacy 'dm' value and normalizes to 'direct'", () => {
-      // Legacy config/input may use "dm" - ensure smooth upgrade path
-      expect(normalizeChatType("dm")).toBe("direct");
+    it("accepts legacy 'dm' value shape variants and normalizes to 'direct'", () => {
+      // Legacy config/input may use "dm" with non-canonical casing/spacing.
       expect(normalizeChatType("DM")).toBe("direct");
       expect(normalizeChatType(" dm ")).toBe("direct");
     });

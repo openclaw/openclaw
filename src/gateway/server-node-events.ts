@@ -1,21 +1,26 @@
 import { randomUUID } from "node:crypto";
 import { normalizeChannelId } from "../channels/plugins/index.js";
-import { agentCommand } from "../commands/agent.js";
+import { createOutboundSendDeps } from "../cli/outbound-send-deps.js";
+import { agentCommandFromIngress } from "../commands/agent.js";
 import { loadConfig } from "../config/config.js";
 import { updateSessionStore } from "../config/sessions.js";
+import { loadOrCreateDeviceIdentity } from "../infra/device-identity.js";
 import { requestHeartbeatNow } from "../infra/heartbeat-wake.js";
+import { deliverOutboundPayloads } from "../infra/outbound/deliver.js";
+import { buildOutboundSessionContext } from "../infra/outbound/session-context.js";
+import { resolveOutboundTarget } from "../infra/outbound/targets.js";
+import { registerApnsRegistration } from "../infra/push-apns.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
-import { normalizeMainKey } from "../routing/session-key.js";
+import { normalizeMainKey, scopedHeartbeatWakeOptions } from "../routing/session-key.js";
 import { defaultRuntime } from "../runtime.js";
+import { parseMessageWithAttachments } from "./chat-attachments.js";
+import { normalizeRpcAttachmentsToChatAttachments } from "./server-methods/attachment-normalize.js";
 import type { NodeEvent, NodeEventContext } from "./server-node-events-types.js";
-import {
-  loadSessionEntry,
-  pruneLegacyStoreKeys,
-  resolveGatewaySessionStoreTarget,
-} from "./session-utils.js";
+import { loadSessionEntry, migrateAndPruneGatewaySessionStoreKey } from "./session-utils.js";
 import { formatForLog } from "./ws-log.js";
 
 const MAX_EXEC_EVENT_OUTPUT_CHARS = 180;
+const MAX_NOTIFICATION_EVENT_TEXT_CHARS = 120;
 const VOICE_TRANSCRIPT_DEDUPE_WINDOW_MS = 1500;
 const MAX_RECENT_VOICE_TRANSCRIPTS = 200;
 
@@ -115,6 +120,18 @@ function compactExecEventOutput(raw: string) {
   return `${normalized.slice(0, safe)}…`;
 }
 
+function compactNotificationEventText(raw: string) {
+  const normalized = raw.replace(/\s+/g, " ").trim();
+  if (!normalized) {
+    return "";
+  }
+  if (normalized.length <= MAX_NOTIFICATION_EVENT_TEXT_CHARS) {
+    return normalized;
+  }
+  const safe = Math.max(1, MAX_NOTIFICATION_EVENT_TEXT_CHARS - 1);
+  return `${normalized.slice(0, safe)}…`;
+}
+
 type LoadedSessionEntry = ReturnType<typeof loadSessionEntry>;
 
 async function touchSessionStore(params: {
@@ -131,20 +148,16 @@ async function touchSessionStore(params: {
     return;
   }
   await updateSessionStore(storePath, (store) => {
-    const target = resolveGatewaySessionStoreTarget({
+    const { primaryKey } = migrateAndPruneGatewaySessionStoreKey({
       cfg: params.cfg,
       key: params.sessionKey,
       store,
     });
-    pruneLegacyStoreKeys({
-      store,
-      canonicalKey: target.canonicalKey,
-      candidates: target.storeKeys,
-    });
-    store[params.canonicalKey] = {
+    store[primaryKey] = {
       sessionId: params.sessionId,
       updatedAt: params.now,
       thinkingLevel: params.entry?.thinkingLevel,
+      fastMode: params.entry?.fastMode,
       verboseLevel: params.entry?.verboseLevel,
       reasoningLevel: params.entry?.reasoningLevel,
       systemSent: params.entry?.systemSent,
@@ -193,20 +206,60 @@ function parseSessionKeyFromPayloadJSON(payloadJSON: string): string | null {
   return sessionKey.length > 0 ? sessionKey : null;
 }
 
+function parsePayloadObject(payloadJSON?: string | null): Record<string, unknown> | null {
+  if (!payloadJSON) {
+    return null;
+  }
+  let payload: unknown;
+  try {
+    payload = JSON.parse(payloadJSON) as unknown;
+  } catch {
+    return null;
+  }
+  return typeof payload === "object" && payload !== null
+    ? (payload as Record<string, unknown>)
+    : null;
+}
+
+async function sendReceiptAck(params: {
+  cfg: ReturnType<typeof loadConfig>;
+  deps: NodeEventContext["deps"];
+  sessionKey: string;
+  channel: string;
+  to: string;
+  text: string;
+}) {
+  const resolved = resolveOutboundTarget({
+    channel: params.channel,
+    to: params.to,
+    cfg: params.cfg,
+    mode: "explicit",
+  });
+  if (!resolved.ok) {
+    throw new Error(String(resolved.error));
+  }
+  const session = buildOutboundSessionContext({
+    cfg: params.cfg,
+    sessionKey: params.sessionKey,
+  });
+  await deliverOutboundPayloads({
+    cfg: params.cfg,
+    channel: params.channel,
+    to: resolved.to,
+    payloads: [{ text: params.text }],
+    session,
+    bestEffort: true,
+    deps: createOutboundSendDeps(params.deps),
+  });
+}
+
 export const handleNodeEvent = async (ctx: NodeEventContext, nodeId: string, evt: NodeEvent) => {
   switch (evt.event) {
     case "voice.transcript": {
-      if (!evt.payloadJSON) {
+      const obj = parsePayloadObject(evt.payloadJSON);
+      if (!obj) {
         return;
       }
-      let payload: unknown;
-      try {
-        payload = JSON.parse(evt.payloadJSON) as unknown;
-      } catch {
-        return;
-      }
-      const obj =
-        typeof payload === "object" && payload !== null ? (payload as Record<string, unknown>) : {};
       const text = typeof obj.text === "string" ? obj.text.trim() : "";
       if (!text) {
         return;
@@ -243,7 +296,7 @@ export const handleNodeEvent = async (ctx: NodeEventContext, nodeId: string, evt
         clientRunId: `voice-${randomUUID()}`,
       });
 
-      void agentCommand(
+      void agentCommandFromIngress(
         {
           message: text,
           sessionId,
@@ -256,6 +309,7 @@ export const handleNodeEvent = async (ctx: NodeEventContext, nodeId: string, evt
             sourceChannel: "voice",
             sourceTool: "gateway.voice.transcript",
           },
+          senderIsOwner: false,
         },
         defaultRuntime,
         ctx.deps,
@@ -273,6 +327,14 @@ export const handleNodeEvent = async (ctx: NodeEventContext, nodeId: string, evt
         sessionKey?: string | null;
         thinking?: string | null;
         deliver?: boolean;
+        attachments?: Array<{
+          type?: string;
+          mimeType?: string;
+          fileName?: string;
+          content?: unknown;
+        }> | null;
+        receipt?: boolean;
+        receiptText?: string | null;
         to?: string | null;
         channel?: string | null;
         timeoutSeconds?: number | null;
@@ -284,7 +346,23 @@ export const handleNodeEvent = async (ctx: NodeEventContext, nodeId: string, evt
       } catch {
         return;
       }
-      const message = (link?.message ?? "").trim();
+      let message = (link?.message ?? "").trim();
+      const normalizedAttachments = normalizeRpcAttachmentsToChatAttachments(
+        link?.attachments ?? undefined,
+      );
+      let images: Array<{ type: "image"; data: string; mimeType: string }> = [];
+      if (normalizedAttachments.length > 0) {
+        try {
+          const parsed = await parseMessageWithAttachments(message, normalizedAttachments, {
+            maxBytes: 5_000_000,
+            log: ctx.logGateway,
+          });
+          message = parsed.message.trim();
+          images = parsed.images;
+        } catch {
+          return;
+        }
+      }
       if (!message) {
         return;
       }
@@ -293,9 +371,13 @@ export const handleNodeEvent = async (ctx: NodeEventContext, nodeId: string, evt
       }
 
       const channelRaw = typeof link?.channel === "string" ? link.channel.trim() : "";
-      const channel = normalizeChannelId(channelRaw) ?? undefined;
-      const to = typeof link?.to === "string" && link.to.trim() ? link.to.trim() : undefined;
-      const deliver = Boolean(link?.deliver) && Boolean(channel);
+      let channel = normalizeChannelId(channelRaw) ?? undefined;
+      let to = typeof link?.to === "string" && link.to.trim() ? link.to.trim() : undefined;
+      const deliverRequested = Boolean(link?.deliver);
+      const wantsReceipt = Boolean(link?.receipt);
+      const receiptTextRaw = typeof link?.receiptText === "string" ? link.receiptText.trim() : "";
+      const receiptText =
+        receiptTextRaw || "Just received your iOS share + request, working on it.";
 
       const sessionKeyRaw = (link?.sessionKey ?? "").trim();
       const sessionKey = sessionKeyRaw.length > 0 ? sessionKeyRaw : `node-${nodeId}`;
@@ -305,24 +387,106 @@ export const handleNodeEvent = async (ctx: NodeEventContext, nodeId: string, evt
       const sessionId = entry?.sessionId ?? randomUUID();
       await touchSessionStore({ cfg, sessionKey, storePath, canonicalKey, entry, sessionId, now });
 
-      void agentCommand(
+      if (deliverRequested && (!channel || !to)) {
+        const entryChannel =
+          typeof entry?.lastChannel === "string"
+            ? normalizeChannelId(entry.lastChannel)
+            : undefined;
+        const entryTo = typeof entry?.lastTo === "string" ? entry.lastTo.trim() : "";
+        if (!channel && entryChannel) {
+          channel = entryChannel;
+        }
+        if (!to && entryTo) {
+          to = entryTo;
+        }
+      }
+      const deliver = deliverRequested && Boolean(channel && to);
+      const deliveryChannel = deliver ? channel : undefined;
+      const deliveryTo = deliver ? to : undefined;
+
+      if (deliverRequested && !deliver) {
+        ctx.logGateway.warn(
+          `agent delivery disabled node=${nodeId}: missing session delivery route (channel=${channel ?? "-"} to=${to ?? "-"})`,
+        );
+      }
+
+      if (wantsReceipt && deliveryChannel && deliveryTo) {
+        void sendReceiptAck({
+          cfg,
+          deps: ctx.deps,
+          sessionKey: canonicalKey,
+          channel: deliveryChannel,
+          to: deliveryTo,
+          text: receiptText,
+        }).catch((err) => {
+          ctx.logGateway.warn(`agent receipt failed node=${nodeId}: ${formatForLog(err)}`);
+        });
+      } else if (wantsReceipt) {
+        ctx.logGateway.warn(
+          `agent receipt skipped node=${nodeId}: missing delivery route (channel=${deliveryChannel ?? "-"} to=${deliveryTo ?? "-"})`,
+        );
+      }
+
+      void agentCommandFromIngress(
         {
           message,
+          images,
           sessionId,
           sessionKey: canonicalKey,
           thinking: link?.thinking ?? undefined,
           deliver,
-          to,
-          channel,
+          to: deliveryTo,
+          channel: deliveryChannel,
           timeout:
             typeof link?.timeoutSeconds === "number" ? link.timeoutSeconds.toString() : undefined,
           messageChannel: "node",
+          senderIsOwner: false,
         },
         defaultRuntime,
         ctx.deps,
       ).catch((err) => {
         ctx.logGateway.warn(`agent failed node=${nodeId}: ${formatForLog(err)}`);
       });
+      return;
+    }
+    case "notifications.changed": {
+      const obj = parsePayloadObject(evt.payloadJSON);
+      if (!obj) {
+        return;
+      }
+      const change = normalizeNonEmptyString(obj.change)?.toLowerCase();
+      if (change !== "posted" && change !== "removed") {
+        return;
+      }
+      const key = normalizeNonEmptyString(obj.key);
+      if (!key) {
+        return;
+      }
+      const sessionKeyRaw = normalizeNonEmptyString(obj.sessionKey) ?? `node-${nodeId}`;
+      const { canonicalKey: sessionKey } = loadSessionEntry(sessionKeyRaw);
+      const packageName = normalizeNonEmptyString(obj.packageName);
+      const title = compactNotificationEventText(normalizeNonEmptyString(obj.title) ?? "");
+      const text = compactNotificationEventText(normalizeNonEmptyString(obj.text) ?? "");
+
+      let summary = `Notification ${change} (node=${nodeId} key=${key}`;
+      if (packageName) {
+        summary += ` package=${packageName}`;
+      }
+      summary += ")";
+      if (change === "posted") {
+        const messageParts = [title, text].filter(Boolean);
+        if (messageParts.length > 0) {
+          summary += `: ${messageParts.join(" - ")}`;
+        }
+      }
+
+      const queued = enqueueSystemEvent(summary, {
+        sessionKey,
+        contextKey: `notification:${key}`,
+      });
+      if (queued) {
+        requestHeartbeatNow({ reason: "notifications-event", sessionKey });
+      }
       return;
     }
     case "chat.subscribe": {
@@ -350,22 +514,27 @@ export const handleNodeEvent = async (ctx: NodeEventContext, nodeId: string, evt
     case "exec.started":
     case "exec.finished":
     case "exec.denied": {
-      if (!evt.payloadJSON) {
+      const obj = parsePayloadObject(evt.payloadJSON);
+      if (!obj) {
         return;
       }
-      let payload: unknown;
-      try {
-        payload = JSON.parse(evt.payloadJSON) as unknown;
-      } catch {
-        return;
-      }
-      const obj =
-        typeof payload === "object" && payload !== null ? (payload as Record<string, unknown>) : {};
       const sessionKey =
         typeof obj.sessionKey === "string" ? obj.sessionKey.trim() : `node-${nodeId}`;
       if (!sessionKey) {
         return;
       }
+
+      // Respect tools.exec.notifyOnExit setting (default: true)
+      // When false, skip system event notifications for node exec events.
+      const cfg = loadConfig();
+      const notifyOnExit = cfg.tools?.exec?.notifyOnExit !== false;
+      if (!notifyOnExit) {
+        return;
+      }
+      if (obj.suppressNotifyOnExit === true) {
+        return;
+      }
+
       const runId = typeof obj.runId === "string" ? obj.runId.trim() : "";
       const command = typeof obj.command === "string" ? obj.command.trim() : "";
       const exitCode =
@@ -401,7 +570,55 @@ export const handleNodeEvent = async (ctx: NodeEventContext, nodeId: string, evt
       }
 
       enqueueSystemEvent(text, { sessionKey, contextKey: runId ? `exec:${runId}` : "exec" });
-      requestHeartbeatNow({ reason: "exec-event" });
+      // Scope wakes only for canonical agent sessions. Synthetic node-* fallback
+      // keys should keep legacy unscoped behavior so enabled non-main heartbeat
+      // agents still run when no explicit agent session is provided.
+      requestHeartbeatNow(scopedHeartbeatWakeOptions(sessionKey, { reason: "exec-event" }));
+      return;
+    }
+    case "push.apns.register": {
+      const obj = parsePayloadObject(evt.payloadJSON);
+      if (!obj) {
+        return;
+      }
+      const transport =
+        typeof obj.transport === "string" ? obj.transport.trim().toLowerCase() : "direct";
+      const topic = typeof obj.topic === "string" ? obj.topic : "";
+      const environment = obj.environment;
+      try {
+        if (transport === "relay") {
+          const gatewayDeviceId =
+            typeof obj.gatewayDeviceId === "string" ? obj.gatewayDeviceId.trim() : "";
+          const currentGatewayDeviceId = loadOrCreateDeviceIdentity().deviceId;
+          if (!gatewayDeviceId || gatewayDeviceId !== currentGatewayDeviceId) {
+            ctx.logGateway.warn(
+              `push relay register rejected node=${nodeId}: gateway identity mismatch`,
+            );
+            return;
+          }
+          await registerApnsRegistration({
+            nodeId,
+            transport: "relay",
+            relayHandle: typeof obj.relayHandle === "string" ? obj.relayHandle : "",
+            sendGrant: typeof obj.sendGrant === "string" ? obj.sendGrant : "",
+            installationId: typeof obj.installationId === "string" ? obj.installationId : "",
+            topic,
+            environment,
+            distribution: obj.distribution,
+            tokenDebugSuffix: obj.tokenDebugSuffix,
+          });
+        } else {
+          await registerApnsRegistration({
+            nodeId,
+            transport: "direct",
+            token: typeof obj.token === "string" ? obj.token : "",
+            topic,
+            environment,
+          });
+        }
+      } catch (err) {
+        ctx.logGateway.warn(`push apns register failed node=${nodeId}: ${formatForLog(err)}`);
+      }
       return;
     }
     default:

@@ -1,9 +1,15 @@
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
+import path from "node:path";
 import { Type } from "@sinclair/typebox";
 import { writeBase64ToFile } from "../../cli/nodes-camera.js";
 import { canvasSnapshotTempPath, parseCanvasSnapshotPayload } from "../../cli/nodes-canvas.js";
+import type { OpenClawConfig } from "../../config/config.js";
+import { logVerbose, shouldLogVerbose } from "../../globals.js";
+import { isInboundPathAllowed } from "../../media/inbound-path-policy.js";
+import { getDefaultMediaLocalRoots } from "../../media/local-roots.js";
 import { imageMimeFromFormat } from "../../media/mime.js";
+import { resolveImageSanitizationLimits } from "../image-sanitization.js";
 import { optionalStringEnum, stringEnum } from "../schema/typebox.js";
 import { type AnyAgentTool, imageResult, jsonResult, readStringParam } from "./common.js";
 import { callGatewayTool, readGatewayCallOptions } from "./gateway.js";
@@ -20,6 +26,29 @@ const CANVAS_ACTIONS = [
 ] as const;
 
 const CANVAS_SNAPSHOT_FORMATS = ["png", "jpg", "jpeg"] as const;
+
+async function readJsonlFromPath(jsonlPath: string): Promise<string> {
+  const trimmed = jsonlPath.trim();
+  if (!trimmed) {
+    return "";
+  }
+  const resolved = path.resolve(trimmed);
+  const roots = getDefaultMediaLocalRoots();
+  if (!isInboundPathAllowed({ filePath: resolved, roots })) {
+    if (shouldLogVerbose()) {
+      logVerbose(`Blocked canvas jsonlPath outside allowed roots: ${resolved}`);
+    }
+    throw new Error("jsonlPath outside allowed roots");
+  }
+  const canonical = await fs.realpath(resolved).catch(() => resolved);
+  if (!isInboundPathAllowed({ filePath: canonical, roots })) {
+    if (shouldLogVerbose()) {
+      logVerbose(`Blocked canvas jsonlPath outside allowed roots: ${canonical}`);
+    }
+    throw new Error("jsonlPath outside allowed roots");
+  }
+  return await fs.readFile(canonical, "utf8");
+}
 
 // Flattened schema: runtime validates per-action requirements.
 const CanvasToolSchema = Type.Object({
@@ -48,7 +77,8 @@ const CanvasToolSchema = Type.Object({
   jsonlPath: Type.Optional(Type.String()),
 });
 
-export function createCanvasTool(): AnyAgentTool {
+export function createCanvasTool(options?: { config?: OpenClawConfig }): AnyAgentTool {
+  const imageSanitization = resolveImageSanitizationLimits(options?.config);
   return {
     label: "Canvas",
     name: "canvas",
@@ -158,6 +188,7 @@ export function createCanvasTool(): AnyAgentTool {
             base64: payload.base64,
             mimeType,
             details: { format: payload.format },
+            imageSanitization,
           });
         }
         case "a2ui_push": {
@@ -165,7 +196,7 @@ export function createCanvasTool(): AnyAgentTool {
             typeof params.jsonl === "string" && params.jsonl.trim()
               ? params.jsonl
               : typeof params.jsonlPath === "string" && params.jsonlPath.trim()
-                ? await fs.readFile(params.jsonlPath.trim(), "utf8")
+                ? await readJsonlFromPath(params.jsonlPath)
                 : "";
           if (!jsonl.trim()) {
             throw new Error("jsonl or jsonlPath required");

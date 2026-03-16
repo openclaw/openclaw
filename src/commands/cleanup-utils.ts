@@ -10,6 +10,14 @@ export type RemovalResult = {
   skipped?: boolean;
 };
 
+export type CleanupResolvedPaths = {
+  stateDir: string;
+  configPath: string;
+  oauthDir: string;
+  configInsideState: boolean;
+  oauthInsideState: boolean;
+};
+
 export function collectWorkspaceDirs(cfg: OpenClawConfig | undefined): string[] {
   const dirs = new Set<string>();
   const defaults = cfg?.agents?.defaults;
@@ -93,6 +101,42 @@ export async function removePath(
   } catch (err) {
     runtime.error(`Failed to remove ${displayLabel}: ${String(err)}`);
     return { ok: false };
+  }
+}
+
+export async function removeStateAndLinkedPaths(
+  cleanup: CleanupResolvedPaths,
+  runtime: RuntimeEnv,
+  opts?: { dryRun?: boolean },
+): Promise<void> {
+  await removePath(cleanup.stateDir, runtime, {
+    dryRun: opts?.dryRun,
+    label: cleanup.stateDir,
+  });
+  if (!cleanup.configInsideState) {
+    await removePath(cleanup.configPath, runtime, {
+      dryRun: opts?.dryRun,
+      label: cleanup.configPath,
+    });
+  }
+  if (!cleanup.oauthInsideState) {
+    await removePath(cleanup.oauthDir, runtime, {
+      dryRun: opts?.dryRun,
+      label: cleanup.oauthDir,
+    });
+  }
+}
+
+export async function removeWorkspaceDirs(
+  workspaceDirs: readonly string[],
+  runtime: RuntimeEnv,
+  opts?: { dryRun?: boolean },
+): Promise<void> {
+  for (const workspace of workspaceDirs) {
+    await removePath(workspace, runtime, {
+      dryRun: opts?.dryRun,
+      label: workspace,
+    });
   }
 }
 

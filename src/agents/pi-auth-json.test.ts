@@ -5,31 +5,45 @@ import { describe, expect, it } from "vitest";
 import { saveAuthProfileStore } from "./auth-profiles.js";
 import { ensurePiAuthJsonFromAuthProfiles } from "./pi-auth-json.js";
 
+type AuthProfileStore = Parameters<typeof saveAuthProfileStore>[0];
+
+async function createAgentDir() {
+  return fs.mkdtemp(path.join(os.tmpdir(), "openclaw-agent-"));
+}
+
+function writeProfiles(agentDir: string, profiles: AuthProfileStore["profiles"]) {
+  saveAuthProfileStore(
+    {
+      version: 1,
+      profiles,
+    },
+    agentDir,
+  );
+}
+
+async function readAuthJson(agentDir: string) {
+  const authPath = path.join(agentDir, "auth.json");
+  return JSON.parse(await fs.readFile(authPath, "utf8")) as Record<string, unknown>;
+}
+
 describe("ensurePiAuthJsonFromAuthProfiles", () => {
   it("writes openai-codex oauth credentials into auth.json for pi-coding-agent discovery", async () => {
-    const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-agent-"));
+    const agentDir = await createAgentDir();
 
-    saveAuthProfileStore(
-      {
-        version: 1,
-        profiles: {
-          "openai-codex:default": {
-            type: "oauth",
-            provider: "openai-codex",
-            access: "access-token",
-            refresh: "refresh-token",
-            expires: Date.now() + 60_000,
-          },
-        },
+    writeProfiles(agentDir, {
+      "openai-codex:default": {
+        type: "oauth",
+        provider: "openai-codex",
+        access: "access-token",
+        refresh: "refresh-token",
+        expires: Date.now() + 60_000,
       },
-      agentDir,
-    );
+    });
 
     const first = await ensurePiAuthJsonFromAuthProfiles(agentDir);
     expect(first.wrote).toBe(true);
 
-    const authPath = path.join(agentDir, "auth.json");
-    const auth = JSON.parse(await fs.readFile(authPath, "utf8")) as Record<string, unknown>;
+    const auth = await readAuthJson(agentDir);
     expect(auth["openai-codex"]).toMatchObject({
       type: "oauth",
       access: "access-token",
@@ -41,27 +55,20 @@ describe("ensurePiAuthJsonFromAuthProfiles", () => {
   });
 
   it("writes api_key credentials into auth.json", async () => {
-    const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-agent-"));
+    const agentDir = await createAgentDir();
 
-    saveAuthProfileStore(
-      {
-        version: 1,
-        profiles: {
-          "openrouter:default": {
-            type: "api_key",
-            provider: "openrouter",
-            key: "sk-or-v1-test-key",
-          },
-        },
+    writeProfiles(agentDir, {
+      "openrouter:default": {
+        type: "api_key",
+        provider: "openrouter",
+        key: "sk-or-v1-test-key",
       },
-      agentDir,
-    );
+    });
 
     const result = await ensurePiAuthJsonFromAuthProfiles(agentDir);
     expect(result.wrote).toBe(true);
 
-    const authPath = path.join(agentDir, "auth.json");
-    const auth = JSON.parse(await fs.readFile(authPath, "utf8")) as Record<string, unknown>;
+    const auth = await readAuthJson(agentDir);
     expect(auth["openrouter"]).toMatchObject({
       type: "api_key",
       key: "sk-or-v1-test-key",
@@ -69,27 +76,20 @@ describe("ensurePiAuthJsonFromAuthProfiles", () => {
   });
 
   it("writes token credentials as api_key into auth.json", async () => {
-    const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-agent-"));
+    const agentDir = await createAgentDir();
 
-    saveAuthProfileStore(
-      {
-        version: 1,
-        profiles: {
-          "anthropic:default": {
-            type: "token",
-            provider: "anthropic",
-            token: "sk-ant-test-token",
-          },
-        },
+    writeProfiles(agentDir, {
+      "anthropic:default": {
+        type: "token",
+        provider: "anthropic",
+        token: "sk-ant-test-token",
       },
-      agentDir,
-    );
+    });
 
     const result = await ensurePiAuthJsonFromAuthProfiles(agentDir);
     expect(result.wrote).toBe(true);
 
-    const authPath = path.join(agentDir, "auth.json");
-    const auth = JSON.parse(await fs.readFile(authPath, "utf8")) as Record<string, unknown>;
+    const auth = await readAuthJson(agentDir);
     expect(auth["anthropic"]).toMatchObject({
       type: "api_key",
       key: "sk-ant-test-token",
@@ -97,39 +97,32 @@ describe("ensurePiAuthJsonFromAuthProfiles", () => {
   });
 
   it("syncs multiple providers at once", async () => {
-    const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-agent-"));
+    const agentDir = await createAgentDir();
 
-    saveAuthProfileStore(
-      {
-        version: 1,
-        profiles: {
-          "openrouter:default": {
-            type: "api_key",
-            provider: "openrouter",
-            key: "sk-or-key",
-          },
-          "anthropic:default": {
-            type: "token",
-            provider: "anthropic",
-            token: "sk-ant-token",
-          },
-          "openai-codex:default": {
-            type: "oauth",
-            provider: "openai-codex",
-            access: "access",
-            refresh: "refresh",
-            expires: Date.now() + 60_000,
-          },
-        },
+    writeProfiles(agentDir, {
+      "openrouter:default": {
+        type: "api_key",
+        provider: "openrouter",
+        key: "sk-or-key",
       },
-      agentDir,
-    );
+      "anthropic:default": {
+        type: "token",
+        provider: "anthropic",
+        token: "sk-ant-token",
+      },
+      "openai-codex:default": {
+        type: "oauth",
+        provider: "openai-codex",
+        access: "access",
+        refresh: "refresh",
+        expires: Date.now() + 60_000,
+      },
+    });
 
     const result = await ensurePiAuthJsonFromAuthProfiles(agentDir);
     expect(result.wrote).toBe(true);
 
-    const authPath = path.join(agentDir, "auth.json");
-    const auth = JSON.parse(await fs.readFile(authPath, "utf8")) as Record<string, unknown>;
+    const auth = await readAuthJson(agentDir);
 
     expect(auth["openrouter"]).toMatchObject({ type: "api_key", key: "sk-or-key" });
     expect(auth["anthropic"]).toMatchObject({ type: "api_key", key: "sk-ant-token" });
@@ -137,102 +130,76 @@ describe("ensurePiAuthJsonFromAuthProfiles", () => {
   });
 
   it("skips profiles with empty keys", async () => {
-    const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-agent-"));
+    const agentDir = await createAgentDir();
 
-    saveAuthProfileStore(
-      {
-        version: 1,
-        profiles: {
-          "openrouter:default": {
-            type: "api_key",
-            provider: "openrouter",
-            key: "",
-          },
-        },
+    writeProfiles(agentDir, {
+      "openrouter:default": {
+        type: "api_key",
+        provider: "openrouter",
+        key: "",
       },
-      agentDir,
-    );
+    });
 
     const result = await ensurePiAuthJsonFromAuthProfiles(agentDir);
     expect(result.wrote).toBe(false);
   });
 
   it("skips expired token credentials", async () => {
-    const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-agent-"));
+    const agentDir = await createAgentDir();
 
-    saveAuthProfileStore(
-      {
-        version: 1,
-        profiles: {
-          "anthropic:default": {
-            type: "token",
-            provider: "anthropic",
-            token: "sk-ant-expired",
-            expires: Date.now() - 60_000,
-          },
-        },
+    writeProfiles(agentDir, {
+      "anthropic:default": {
+        type: "token",
+        provider: "anthropic",
+        token: "sk-ant-expired",
+        expires: Date.now() - 60_000,
       },
-      agentDir,
-    );
+    });
 
     const result = await ensurePiAuthJsonFromAuthProfiles(agentDir);
     expect(result.wrote).toBe(false);
   });
 
   it("normalizes provider ids when writing auth.json keys", async () => {
-    const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-agent-"));
+    const agentDir = await createAgentDir();
 
-    saveAuthProfileStore(
-      {
-        version: 1,
-        profiles: {
-          "z.ai:default": {
-            type: "api_key",
-            provider: "z.ai",
-            key: "sk-zai",
-          },
-        },
+    writeProfiles(agentDir, {
+      "z.ai:default": {
+        type: "api_key",
+        provider: "z.ai",
+        key: "sk-zai",
       },
-      agentDir,
-    );
+    });
 
     const result = await ensurePiAuthJsonFromAuthProfiles(agentDir);
     expect(result.wrote).toBe(true);
 
-    const authPath = path.join(agentDir, "auth.json");
-    const auth = JSON.parse(await fs.readFile(authPath, "utf8")) as Record<string, unknown>;
+    const auth = await readAuthJson(agentDir);
     expect(auth["zai"]).toMatchObject({ type: "api_key", key: "sk-zai" });
     expect(auth["z.ai"]).toBeUndefined();
   });
 
   it("preserves existing auth.json entries not in auth-profiles", async () => {
-    const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-agent-"));
+    const agentDir = await createAgentDir();
     const authPath = path.join(agentDir, "auth.json");
 
-    // Pre-populate auth.json with an entry
     await fs.mkdir(agentDir, { recursive: true });
     await fs.writeFile(
       authPath,
       JSON.stringify({ "legacy-provider": { type: "api_key", key: "legacy-key" } }),
     );
 
-    saveAuthProfileStore(
-      {
-        version: 1,
-        profiles: {
-          "openrouter:default": {
-            type: "api_key",
-            provider: "openrouter",
-            key: "new-key",
-          },
-        },
+    writeProfiles(agentDir, {
+      "openrouter:default": {
+        type: "api_key",
+        provider: "openrouter",
+        key: "new-key",
       },
-      agentDir,
-    );
+    });
 
     await ensurePiAuthJsonFromAuthProfiles(agentDir);
 
-    const auth = JSON.parse(await fs.readFile(authPath, "utf8")) as Record<string, unknown>;
+    const auth = await readAuthJson(agentDir);
     expect(auth["legacy-provider"]).toMatchObject({ type: "api_key", key: "legacy-key" });
     expect(auth["openrouter"]).toMatchObject({ type: "api_key", key: "new-key" });
   });

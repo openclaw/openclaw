@@ -4,10 +4,11 @@ import path from "node:path";
 import { resolveOAuthDir } from "./config/paths.js";
 import { logVerbose, shouldLogVerbose } from "./globals.js";
 import {
-  expandHomePrefix,
   resolveEffectiveHomeDir,
+  resolveHomeRelativePath,
   resolveRequiredHomeDir,
 } from "./infra/home-dir.js";
+import { isPlainObject } from "./infra/plain-object.js";
 
 export async function ensureDir(dir: string) {
   await fs.promises.mkdir(dir, { recursive: true });
@@ -54,18 +55,7 @@ export function safeParseJson<T>(raw: string): T | null {
   }
 }
 
-/**
- * Type guard for plain objects (not arrays, null, Date, RegExp, etc.).
- * Uses Object.prototype.toString for maximum safety.
- */
-export function isPlainObject(value: unknown): value is Record<string, unknown> {
-  return (
-    typeof value === "object" &&
-    value !== null &&
-    !Array.isArray(value) &&
-    Object.prototype.toString.call(value) === "[object Object]"
-  );
-}
+export { isPlainObject };
 
 /**
  * Type guard for Record<string, unknown> (less strict than isPlainObject).
@@ -81,17 +71,6 @@ export function assertWebChannel(input: string): asserts input is WebChannel {
   if (input !== "web") {
     throw new Error("Web channel must be 'web'");
   }
-}
-
-export function normalizePath(p: string): string {
-  if (!p.startsWith("/")) {
-    return `/${p}`;
-  }
-  return p;
-}
-
-export function withWhatsAppPrefix(number: string): string {
-  return number.startsWith("whatsapp:") ? number : `whatsapp:${number}`;
 }
 
 export function normalizeE164(number: string): string {
@@ -292,20 +271,15 @@ export function truncateUtf16Safe(input: string, maxLen: number): string {
   return sliceUtf16Safe(input, 0, limit);
 }
 
-export function resolveUserPath(input: string): string {
-  const trimmed = input.trim();
-  if (!trimmed) {
-    return trimmed;
+export function resolveUserPath(
+  input: string,
+  env: NodeJS.ProcessEnv = process.env,
+  homedir: () => string = os.homedir,
+): string {
+  if (!input) {
+    return "";
   }
-  if (trimmed.startsWith("~")) {
-    const expanded = expandHomePrefix(trimmed, {
-      home: resolveRequiredHomeDir(process.env, os.homedir),
-      env: process.env,
-      homedir: os.homedir,
-    });
-    return path.resolve(expanded);
-  }
-  return path.resolve(trimmed);
+  return resolveHomeRelativePath(input, { env, homedir });
 }
 
 export function resolveConfigDir(
@@ -314,7 +288,7 @@ export function resolveConfigDir(
 ): string {
   const override = env.OPENCLAW_STATE_DIR?.trim() || env.CLAWDBOT_STATE_DIR?.trim();
   if (override) {
-    return resolveUserPath(override);
+    return resolveUserPath(override, env, homedir);
   }
   const newDir = path.join(resolveRequiredHomeDir(env, homedir), ".openclaw");
   try {

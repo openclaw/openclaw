@@ -1,4 +1,78 @@
 import { vi } from "vitest";
+import type {
+  PluginHookAgentContext,
+  PluginHookBeforeAgentStartResult,
+  PluginHookBeforeModelResolveResult,
+  PluginHookBeforePromptBuildResult,
+} from "../../plugins/types.js";
+
+type MockCompactionResult =
+  | {
+      ok: true;
+      compacted: true;
+      result: {
+        summary: string;
+        firstKeptEntryId?: string;
+        tokensBefore?: number;
+        tokensAfter?: number;
+      };
+      reason?: string;
+    }
+  | {
+      ok: false;
+      compacted: false;
+      reason: string;
+      result?: undefined;
+    };
+
+export const mockedGlobalHookRunner = {
+  hasHooks: vi.fn((_hookName: string) => false),
+  runBeforeAgentStart: vi.fn(
+    async (
+      _event: { prompt: string; messages?: unknown[] },
+      _ctx: PluginHookAgentContext,
+    ): Promise<PluginHookBeforeAgentStartResult | undefined> => undefined,
+  ),
+  runBeforePromptBuild: vi.fn(
+    async (
+      _event: { prompt: string; messages: unknown[] },
+      _ctx: PluginHookAgentContext,
+    ): Promise<PluginHookBeforePromptBuildResult | undefined> => undefined,
+  ),
+  runBeforeModelResolve: vi.fn(
+    async (
+      _event: { prompt: string },
+      _ctx: PluginHookAgentContext,
+    ): Promise<PluginHookBeforeModelResolveResult | undefined> => undefined,
+  ),
+  runBeforeCompaction: vi.fn(async () => undefined),
+  runAfterCompaction: vi.fn(async () => undefined),
+};
+
+export const mockedContextEngine = {
+  info: { ownsCompaction: false as boolean },
+  compact: vi.fn<(params: unknown) => Promise<MockCompactionResult>>(async () => ({
+    ok: false as const,
+    compacted: false as const,
+    reason: "nothing to compact",
+  })),
+};
+
+export const mockedContextEngineCompact = vi.mocked(mockedContextEngine.compact);
+export const mockedEnsureRuntimePluginsLoaded: (...args: unknown[]) => void = vi.fn();
+
+vi.mock("../../plugins/hook-runner-global.js", () => ({
+  getGlobalHookRunner: vi.fn(() => mockedGlobalHookRunner),
+}));
+
+vi.mock("../../context-engine/index.js", () => ({
+  ensureContextEnginesInitialized: vi.fn(),
+  resolveContextEngine: vi.fn(async () => mockedContextEngine),
+}));
+
+vi.mock("../runtime-plugins.js", () => ({
+  ensureRuntimePluginsLoaded: mockedEnsureRuntimePluginsLoaded,
+}));
 
 vi.mock("../auth-profiles.js", () => ({
   isProfileInCooldown: vi.fn(() => false),
@@ -11,17 +85,13 @@ vi.mock("../usage.js", () => ({
   normalizeUsage: vi.fn((usage?: unknown) =>
     usage && typeof usage === "object" ? usage : undefined,
   ),
-  derivePromptTokens: vi.fn(
-    (usage?: { input?: number; cacheRead?: number; cacheWrite?: number }) => {
-      if (!usage) {
-        return undefined;
-      }
-      const input = usage.input ?? 0;
-      const cacheRead = usage.cacheRead ?? 0;
-      const cacheWrite = usage.cacheWrite ?? 0;
-      const sum = input + cacheRead + cacheWrite;
-      return sum > 0 ? sum : undefined;
-    },
+  derivePromptTokens: vi.fn((usage?: { input?: number; cacheRead?: number; cacheWrite?: number }) =>
+    usage
+      ? (() => {
+          const sum = (usage.input ?? 0) + (usage.cacheRead ?? 0) + (usage.cacheWrite ?? 0);
+          return sum > 0 ? sum : undefined;
+        })()
+      : undefined,
   ),
   hasNonzeroUsage: vi.fn(() => false),
 }));
@@ -39,13 +109,21 @@ vi.mock("../workspace-run.js", () => ({
 vi.mock("../pi-embedded-helpers.js", () => ({
   formatBillingErrorMessage: vi.fn(() => ""),
   classifyFailoverReason: vi.fn(() => null),
+  extractObservedOverflowTokenCount: vi.fn((msg?: string) => {
+    const match = msg?.match(/prompt is too long:\s*([\d,]+)\s+tokens\s*>\s*[\d,]+\s+maximum/i);
+    return match?.[1] ? Number(match[1].replaceAll(",", "")) : undefined;
+  }),
   formatAssistantErrorText: vi.fn(() => ""),
   isAuthAssistantError: vi.fn(() => false),
   isBillingAssistantError: vi.fn(() => false),
   isCompactionFailureError: vi.fn(() => false),
   isLikelyContextOverflowError: vi.fn((msg?: string) => {
     const lower = (msg ?? "").toLowerCase();
-    return lower.includes("request_too_large") || lower.includes("context window exceeded");
+    return (
+      lower.includes("request_too_large") ||
+      lower.includes("context window exceeded") ||
+      lower.includes("prompt is too long")
+    );
   }),
   isFailoverAssistantError: vi.fn(() => false),
   isFailoverErrorMessage: vi.fn(() => false),
@@ -113,9 +191,13 @@ vi.mock("../../process/command-queue.js", () => ({
   enqueueCommandInLane: vi.fn((_lane: string, task: () => unknown) => task()),
 }));
 
-vi.mock("../../utils/message-channel.js", () => ({
-  isMarkdownCapableMessageChannel: vi.fn(() => true),
-}));
+vi.mock(import("../../utils/message-channel.js"), async (importOriginal) => {
+  const actual = await importOriginal();
+  return {
+    ...actual,
+    isMarkdownCapableMessageChannel: vi.fn(() => true),
+  };
+});
 
 vi.mock("../agent-paths.js", () => ({
   resolveOpenClawAgentDir: vi.fn(() => "/tmp/agent-dir"),
@@ -127,9 +209,36 @@ vi.mock("../defaults.js", () => ({
   DEFAULT_PROVIDER: "anthropic",
 }));
 
+type MockFailoverErrorDescription = {
+  message: string;
+  reason: string | undefined;
+  status: number | undefined;
+  code: string | undefined;
+};
+
+type MockCoerceToFailoverError = (
+  err: unknown,
+  params?: { provider?: string; model?: string; profileId?: string },
+) => unknown;
+type MockDescribeFailoverError = (err: unknown) => MockFailoverErrorDescription;
+type MockResolveFailoverStatus = (reason: string) => number | undefined;
+
+export const mockedCoerceToFailoverError = vi.fn<MockCoerceToFailoverError>();
+export const mockedDescribeFailoverError = vi.fn<MockDescribeFailoverError>(
+  (err: unknown): MockFailoverErrorDescription => ({
+    message: err instanceof Error ? err.message : String(err),
+    reason: undefined,
+    status: undefined,
+    code: undefined,
+  }),
+);
+export const mockedResolveFailoverStatus = vi.fn<MockResolveFailoverStatus>();
+
 vi.mock("../failover-error.js", () => ({
   FailoverError: class extends Error {},
-  resolveFailoverStatus: vi.fn(),
+  coerceToFailoverError: mockedCoerceToFailoverError,
+  describeFailoverError: mockedDescribeFailoverError,
+  resolveFailoverStatus: mockedResolveFailoverStatus,
 }));
 
 vi.mock("./lanes.js", () => ({

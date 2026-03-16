@@ -16,7 +16,6 @@ const ENVELOPE_CHANNELS = [
 ];
 
 const MESSAGE_ID_LINE = /^\s*\[message_id:\s*[^\]]+\]\s*$/i;
-
 function looksLikeEnvelopeHeader(header: string): boolean {
   if (/\d{4}-\d{2}-\d{2}T\d{2}:\d{2}Z\b/.test(header)) {
     return true;
@@ -40,7 +39,7 @@ export function stripEnvelope(text: string): string {
 }
 
 export function stripMessageIdHints(text: string): string {
-  if (!text.includes("[message_id:")) {
+  if (!/\[message_id:/i.test(text)) {
     return text;
   }
   const lines = text.split(/\r?\n/);

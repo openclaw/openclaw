@@ -11,9 +11,26 @@ title: "Tests"
 
 - `pnpm test:force`: Kills any lingering gateway process holding the default control port, then runs the full Vitest suite with an isolated gateway port so server tests don’t collide with a running instance. Use this when a prior gateway run left port 18789 occupied.
 - `pnpm test:coverage`: Runs the unit suite with V8 coverage (via `vitest.unit.config.ts`). Global thresholds are 70% lines/branches/functions/statements. Coverage excludes integration-heavy entrypoints (CLI wiring, gateway/telegram bridges, webchat static server) to keep the target focused on unit-testable logic.
-- `pnpm test` on Node 24+: OpenClaw auto-disables Vitest `vmForks` and uses `forks` to avoid `ERR_VM_MODULE_LINK_FAILURE` / `module is already linked`. You can force behavior with `OPENCLAW_TEST_VM_FORKS=0|1`.
+- `pnpm test` on Node 22, 23, and 24 uses Vitest `vmForks` by default for faster startup. Node 25+ falls back to `forks` until re-validated. You can force behavior with `OPENCLAW_TEST_VM_FORKS=0|1`.
+- `pnpm test`: runs the fast core unit lane by default for quick local feedback.
+- `pnpm test:channels`: runs channel-heavy suites.
+- `pnpm test:extensions`: runs extension/plugin suites.
+- Gateway integration: opt-in via `OPENCLAW_TEST_INCLUDE_GATEWAY=1 pnpm test` or `pnpm test:gateway`.
 - `pnpm test:e2e`: Runs gateway end-to-end smoke tests (multi-instance WS/HTTP/node pairing). Defaults to `vmForks` + adaptive workers in `vitest.e2e.config.ts`; tune with `OPENCLAW_E2E_WORKERS=<n>` and set `OPENCLAW_E2E_VERBOSE=1` for verbose logs.
 - `pnpm test:live`: Runs provider live tests (minimax/zai). Requires API keys and `LIVE=1` (or provider-specific `*_LIVE_TEST=1`) to unskip.
+
+## Local PR gate
+
+For local PR land/gate checks, run:
+
+- `pnpm check`
+- `pnpm build`
+- `pnpm test`
+- `pnpm check:docs`
+
+If `pnpm test` flakes on a loaded host, rerun once before treating it as a regression, then isolate with `pnpm vitest run <path/to/test>`. For memory-constrained hosts, use:
+
+- `OPENCLAW_TEST_PROFILE=low OPENCLAW_TEST_SERIAL_GATEWAY=1 pnpm test`
 
 ## Model latency bench (local keys)
 
@@ -30,6 +47,26 @@ Last run (2025-12-31, 20 runs):
 - minimax median 1279ms (min 1114, max 2431)
 - opus median 2454ms (min 1224, max 3170)
 
+## CLI startup bench
+
+Script: [`scripts/bench-cli-startup.ts`](https://github.com/openclaw/openclaw/blob/main/scripts/bench-cli-startup.ts)
+
+Usage:
+
+- `pnpm tsx scripts/bench-cli-startup.ts`
+- `pnpm tsx scripts/bench-cli-startup.ts --runs 12`
+- `pnpm tsx scripts/bench-cli-startup.ts --entry dist/entry.js --timeout-ms 45000`
+
+This benchmarks these commands:
+
+- `--version`
+- `--help`
+- `health --json`
+- `status --json`
+- `status`
+
+Output includes avg, p50, p95, min/max, and exit-code/signal distribution for each command.
+
 ## Onboarding E2E (Docker)
 
 Docker is optional; this is only needed for containerized onboarding smoke tests.
@@ -44,7 +81,7 @@ This script drives the interactive wizard via a pseudo-tty, verifies config/work
 
 ## QR import smoke (Docker)
 
-Ensures `qrcode-terminal` loads under Node 22+ in Docker:
+Ensures `qrcode-terminal` loads under the supported Docker Node runtimes (Node 24 default, Node 22 compatible):
 
 ```bash
 pnpm test:docker:qr

@@ -102,14 +102,21 @@ export function registerBrowserStateCommands(
   set
     .command("headers")
     .description("Set extra HTTP headers (JSON object)")
-    .requiredOption("--json <json>", "JSON object of headers")
+    .argument("[headersJson]", "JSON object of headers (alternative to --headers-json)")
+    .option("--headers-json <json>", "JSON object of headers")
     .option("--target-id <id>", "CDP target id (or unique prefix)")
-    .action(async (opts, cmd) => {
+    .action(async (headersJson: string | undefined, opts, cmd) => {
       const parent = parentOpts(cmd);
       await runBrowserCommand(async () => {
-        const parsed = JSON.parse(String(opts.json)) as unknown;
+        const headersJsonValue =
+          (typeof opts.headersJson === "string" && opts.headersJson.trim()) ||
+          (headersJson?.trim() ? headersJson.trim() : undefined);
+        if (!headersJsonValue) {
+          throw new Error("Missing headers JSON (pass --headers-json or positional JSON argument)");
+        }
+        const parsed = JSON.parse(String(headersJsonValue)) as unknown;
         if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-          throw new Error("headers json must be an object");
+          throw new Error("Headers JSON must be a JSON object");
         }
         const headers: Record<string, string> = {};
         for (const [k, v] of Object.entries(parsed as Record<string, unknown>)) {
