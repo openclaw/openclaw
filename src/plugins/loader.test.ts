@@ -2043,6 +2043,9 @@ module.exports = {
           openclaw: {
             extensions: ["./index.cjs"],
             setupEntry: "./setup-entry.cjs",
+            startup: {
+              deferConfiguredChannelFullLoadUntilAfterListen: true,
+            },
           },
         },
         null,
@@ -2133,6 +2136,113 @@ module.exports = {
 
     expect(fs.existsSync(setupMarker)).toBe(true);
     expect(fs.existsSync(fullMarker)).toBe(false);
+    expect(registry.channelSetups).toHaveLength(1);
+    expect(registry.channels).toHaveLength(1);
+  });
+
+  it("does not prefer setupEntry for configured channel loads without startup opt-in", () => {
+    useNoBundledPlugins();
+    const pluginDir = makeTempDir();
+    const fullMarker = path.join(makeTempDir(), "full-loaded.txt");
+    const setupMarker = path.join(makeTempDir(), "setup-loaded.txt");
+    fs.writeFileSync(
+      path.join(pluginDir, "package.json"),
+      JSON.stringify(
+        {
+          name: "@openclaw/setup-runtime-not-preferred-test",
+          openclaw: {
+            extensions: ["./index.cjs"],
+            setupEntry: "./setup-entry.cjs",
+          },
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+    fs.writeFileSync(
+      path.join(pluginDir, "openclaw.plugin.json"),
+      JSON.stringify(
+        {
+          id: "setup-runtime-not-preferred-test",
+          configSchema: EMPTY_PLUGIN_SCHEMA,
+          channels: ["setup-runtime-not-preferred-test"],
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+    fs.writeFileSync(
+      path.join(pluginDir, "index.cjs"),
+      `require("node:fs").writeFileSync(${JSON.stringify(fullMarker)}, "loaded", "utf-8");
+module.exports = {
+  id: "setup-runtime-not-preferred-test",
+  register(api) {
+    api.registerChannel({
+      plugin: {
+        id: "setup-runtime-not-preferred-test",
+        meta: {
+          id: "setup-runtime-not-preferred-test",
+          label: "Setup Runtime Not Preferred Test",
+          selectionLabel: "Setup Runtime Not Preferred Test",
+          docsPath: "/channels/setup-runtime-not-preferred-test",
+          blurb: "full entry should still load without explicit startup opt-in",
+        },
+        capabilities: { chatTypes: ["direct"] },
+        config: {
+          listAccountIds: () => ["default"],
+          resolveAccount: () => ({ accountId: "default", token: "configured" }),
+        },
+        outbound: { deliveryMode: "direct" },
+      },
+    });
+  },
+};`,
+      "utf-8",
+    );
+    fs.writeFileSync(
+      path.join(pluginDir, "setup-entry.cjs"),
+      `require("node:fs").writeFileSync(${JSON.stringify(setupMarker)}, "loaded", "utf-8");
+module.exports = {
+  plugin: {
+    id: "setup-runtime-not-preferred-test",
+    meta: {
+      id: "setup-runtime-not-preferred-test",
+      label: "Setup Runtime Not Preferred Test",
+      selectionLabel: "Setup Runtime Not Preferred Test",
+      docsPath: "/channels/setup-runtime-not-preferred-test",
+      blurb: "setup runtime not preferred",
+    },
+    capabilities: { chatTypes: ["direct"] },
+    config: {
+      listAccountIds: () => ["default"],
+      resolveAccount: () => ({ accountId: "default", token: "configured" }),
+    },
+    outbound: { deliveryMode: "direct" },
+  },
+};`,
+      "utf-8",
+    );
+
+    const registry = loadOpenClawPlugins({
+      cache: false,
+      preferSetupRuntimeForChannelPlugins: true,
+      config: {
+        channels: {
+          "setup-runtime-not-preferred-test": {
+            enabled: true,
+          },
+        },
+        plugins: {
+          load: { paths: [pluginDir] },
+          allow: ["setup-runtime-not-preferred-test"],
+        },
+      },
+    });
+
+    expect(fs.existsSync(fullMarker)).toBe(true);
+    expect(fs.existsSync(setupMarker)).toBe(false);
     expect(registry.channelSetups).toHaveLength(1);
     expect(registry.channels).toHaveLength(1);
   });
