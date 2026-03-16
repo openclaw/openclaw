@@ -164,6 +164,7 @@ Important trust note:
 - [Nostr](/channels/nostr) — `@openclaw/nostr`
 - [Zalo](/channels/zalo) — `@openclaw/zalo`
 - [Microsoft Teams](/channels/msteams) — `@openclaw/msteams`
+- Anthropic provider runtime — bundled as `anthropic` (enabled by default)
 - BytePlus provider catalog — bundled as `byteplus` (enabled by default)
 - Cloudflare AI Gateway provider catalog — bundled as `cloudflare-ai-gateway` (enabled by default)
 - Google Antigravity OAuth (provider auth) — bundled as `google-antigravity-auth` (disabled by default)
@@ -178,6 +179,7 @@ Important trust note:
 - Model Studio provider catalog — bundled as `modelstudio` (enabled by default)
 - Moonshot provider runtime — bundled as `moonshot` (enabled by default)
 - NVIDIA provider catalog — bundled as `nvidia` (enabled by default)
+- OpenAI provider runtime — bundled as `openai` (enabled by default)
 - OpenAI Codex provider runtime — bundled as `openai-codex` (enabled by default)
 - OpenCode Go provider capabilities — bundled as `opencode-go` (enabled by default)
 - OpenCode Zen provider capabilities — bundled as `opencode` (enabled by default)
@@ -348,6 +350,13 @@ api.registerProvider({
 
 ### Built-in examples
 
+- Anthropic uses `resolveDynamicModel`, `capabilities`, `resolveUsageAuth`,
+  `fetchUsageSnapshot`, and `isCacheTtlEligible` because it owns Claude 4.6
+  forward-compat, provider-family hints, usage endpoint integration, and
+  prompt-cache eligibility.
+- OpenAI uses `resolveDynamicModel`, `normalizeResolvedModel`, and
+  `capabilities` because it owns GPT-5.4 forward-compat plus the direct OpenAI
+  `openai-completions` -> `openai-responses` normalization.
 - OpenRouter uses `catalog` plus `resolveDynamicModel` and
   `prepareDynamicModel` because the provider is pass-through and may expose new
   model ids before OpenClaw's static catalog updates.

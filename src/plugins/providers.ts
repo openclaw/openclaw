@@ -5,6 +5,7 @@ import type { ProviderPlugin } from "./types.js";
 
 const log = createSubsystemLogger("plugins");
 const BUNDLED_PROVIDER_ALLOWLIST_COMPAT_PLUGIN_IDS = [
+  "anthropic",
   "byteplus",
   "cloudflare-ai-gateway",
   "copilot-proxy",
@@ -20,6 +21,7 @@ const BUNDLED_PROVIDER_ALLOWLIST_COMPAT_PLUGIN_IDS = [
   "moonshot",
   "nvidia",
   "ollama",
+  "openai",
   "openai-codex",
   "opencode",
   "opencode-go",
