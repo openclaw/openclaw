@@ -16,14 +16,14 @@ import type {
 function createMockAPI(configOverrides?: Record<string, unknown>): {
   api: OpenClawPluginApi;
   registered: {
-    contextEngines: { id: string; factory: () => ContextEngine }[];
+    contextEngines: { id: string; factory: () => ContextEngine | Promise<ContextEngine> }[];
     tools: AgentTool[];
     commands: OpenClawPluginCommandDefinition[];
     hooks: { hookName: string; handler: Function }[];
   };
 } {
   const registered = {
-    contextEngines: [] as { id: string; factory: () => ContextEngine }[],
+    contextEngines: [] as { id: string; factory: () => ContextEngine | Promise<ContextEngine> }[],
     tools: [] as AgentTool[],
     commands: [] as OpenClawPluginCommandDefinition[],
     hooks: [] as { hookName: string; handler: Function }[],
@@ -168,7 +168,7 @@ describe("pluginDefinition.register()", () => {
 
     pluginDefinition.register!(api);
 
-    const engine = registered.contextEngines[0].factory();
+    const engine = await registered.contextEngines[0].factory();
     expect(engine.info.ownsCompaction).toBe(false);
     expect(typeof engine.afterTurn).toBe("function");
   });
@@ -191,7 +191,7 @@ describe("pluginDefinition.register()", () => {
 
     pluginDefinition.register!(api);
 
-    const engine = registered.contextEngines[0].factory();
+    const engine = await registered.contextEngines[0].factory();
 
     const messages: AgentMessage[] = [
       mkUserMessage("test"),

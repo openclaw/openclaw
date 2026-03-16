@@ -11,6 +11,7 @@ onlyBuiltDependencies:
   - "@tloncorp/api"
   - "@whiskeysockets/baileys"
   - authenticate-pam
+  - better-sqlite3
   - esbuild
   - node-llama-cpp
   - protobufjs
