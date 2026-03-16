@@ -64,11 +64,14 @@ const cases = [
 
 function parseMaxRssMb(stderr) {
   const matches = [...stderr.matchAll(new RegExp(`^${MAX_RSS_MARKER}(\\d+)\\s*$`, "gm"))];
-  const lastMatch = matches.at(-1);
-  if (!lastMatch) {
+  const valuesMb = matches.map((match) => Number(match[1]) / 1024).filter(Number.isFinite);
+  if (valuesMb.length === 0) {
     return null;
   }
-  return Number(lastMatch[1]) / 1024;
+  // Prefer the smallest reported maxRSS across process shutdown hooks.
+  // Some startup paths pull in helper processes/loaders that emit their own
+  // marker, and the CLI path under test only needs its direct process RSS.
+  return Math.min(...valuesMb);
 }
 
 function buildBenchEnv() {
