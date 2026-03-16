@@ -1,6 +1,5 @@
 import type { StreamFn } from "@mariozechner/pi-agent-core";
 import { streamSimple } from "@mariozechner/pi-ai";
-import { resolveFastModeParam } from "../fast-mode.js";
 import {
   requiresOpenAiCompatibleAnthropicToolPayload,
   usesOpenAiFunctionAnthropicToolSchema,
@@ -19,7 +18,6 @@ const PI_AI_OAUTH_ANTHROPIC_BETAS = [
   "oauth-2025-04-20",
   ...PI_AI_DEFAULT_ANTHROPIC_BETAS,
 ] as const;
-type AnthropicServiceTier = "auto" | "standard_only";
 
 type CacheRetention = "none" | "short" | "long";
 
@@ -53,25 +51,6 @@ function mergeAnthropicBetaHeader(
 
 function isAnthropicOAuthApiKey(apiKey: unknown): boolean {
   return typeof apiKey === "string" && apiKey.includes("sk-ant-oat");
-}
-
-function isAnthropicPublicApiBaseUrl(baseUrl: unknown): boolean {
-  if (baseUrl == null) {
-    return true;
-  }
-  if (typeof baseUrl !== "string" || !baseUrl.trim()) {
-    return true;
-  }
-
-  try {
-    return new URL(baseUrl).hostname.toLowerCase() === "api.anthropic.com";
-  } catch {
-    return baseUrl.toLowerCase().includes("api.anthropic.com");
-  }
-}
-
-function resolveAnthropicFastServiceTier(enabled: boolean): AnthropicServiceTier {
-  return enabled ? "auto" : "standard_only";
 }
 
 function requiresAnthropicToolPayloadCompatibilityForModel(model: {
@@ -323,44 +302,6 @@ export function createAnthropicToolPayloadCompatibilityWrapper(
       },
     });
   };
-}
-
-export function createAnthropicFastModeWrapper(
-  baseStreamFn: StreamFn | undefined,
-  enabled: boolean,
-): StreamFn {
-  const underlying = baseStreamFn ?? streamSimple;
-  const serviceTier = resolveAnthropicFastServiceTier(enabled);
-  return (model, context, options) => {
-    if (
-      model.api !== "anthropic-messages" ||
-      model.provider !== "anthropic" ||
-      !isAnthropicPublicApiBaseUrl(model.baseUrl) ||
-      isAnthropicOAuthApiKey(options?.apiKey)
-    ) {
-      return underlying(model, context, options);
-    }
-
-    const originalOnPayload = options?.onPayload;
-    return underlying(model, context, {
-      ...options,
-      onPayload: (payload) => {
-        if (payload && typeof payload === "object") {
-          const payloadObj = payload as Record<string, unknown>;
-          if (payloadObj.service_tier === undefined) {
-            payloadObj.service_tier = serviceTier;
-          }
-        }
-        return originalOnPayload?.(payload, model);
-      },
-    });
-  };
-}
-
-export function resolveAnthropicFastMode(
-  extraParams: Record<string, unknown> | undefined,
-): boolean | undefined {
-  return resolveFastModeParam(extraParams);
 }
 
 export function createBedrockNoCacheWrapper(baseStreamFn: StreamFn | undefined): StreamFn {
