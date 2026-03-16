@@ -51,9 +51,11 @@ export type PluginLoadOptions = {
 
 const MAX_PLUGIN_REGISTRY_CACHE_ENTRIES = 32;
 const registryCache = new Map<string, PluginRegistry>();
+const warnedPluginsForAllowlist = new Set<string>();
 
 export function clearPluginLoaderCache(): void {
   registryCache.clear();
+  warnedPluginsForAllowlist.clear();
 }
 
 const defaultLogger = () => createSubsystemLogger("plugins");
@@ -467,11 +469,18 @@ function warnWhenAllowlistIsOpen(params: {
   if (nonBundled.length === 0) {
     return;
   }
-  const preview = nonBundled
+  const newWarnings = nonBundled.filter((entry) => !warnedPluginsForAllowlist.has(entry.id));
+  if (newWarnings.length === 0) {
+    return;
+  }
+  for (const entry of newWarnings) {
+    warnedPluginsForAllowlist.add(entry.id);
+  }
+  const preview = newWarnings
     .slice(0, 6)
     .map((entry) => `${entry.id} (${entry.source})`)
     .join(", ");
-  const extra = nonBundled.length > 6 ? ` (+${nonBundled.length - 6} more)` : "";
+  const extra = newWarnings.length > 6 ? ` (+${newWarnings.length - 6} more)` : "";
   params.logger.warn(
     `[plugins] plugins.allow is empty; discovered non-bundled plugins may auto-load: ${preview}${extra}. Set plugins.allow to explicit trusted ids.`,
   );
