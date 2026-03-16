@@ -22,8 +22,9 @@ For model selection rules, see [/concepts/models](/concepts/models).
 - Provider plugins can also own provider runtime behavior via
   `resolveDynamicModel`, `prepareDynamicModel`, `normalizeResolvedModel`,
   `capabilities`, `prepareExtraParams`, `wrapStreamFn`,
-  `isCacheTtlEligible`, `prepareRuntimeAuth`, `resolveUsageAuth`, and
-  `fetchUsageSnapshot`.
+  `isCacheTtlEligible`, `buildMissingAuthMessage`,
+  `suppressBuiltInModel`, `augmentModelCatalog`, `prepareRuntimeAuth`,
+  `resolveUsageAuth`, and `fetchUsageSnapshot`.
 
 ## Plugin-owned provider behavior
 
@@ -42,6 +43,12 @@ Typical split:
 - `prepareExtraParams`: provider defaults or normalizes per-model request params
 - `wrapStreamFn`: provider applies request headers/body/model compat wrappers
 - `isCacheTtlEligible`: provider decides which upstream model ids support prompt-cache TTL
+- `buildMissingAuthMessage`: provider replaces the generic auth-store error
+  with a provider-specific recovery hint
+- `suppressBuiltInModel`: provider hides stale upstream rows and can return a
+  vendor-owned error for direct resolution failures
+- `augmentModelCatalog`: provider appends synthetic/final catalog rows after
+  discovery and config merging
 - `prepareRuntimeAuth`: provider turns a configured credential into a short
   lived runtime token
 - `resolveUsageAuth`: provider resolves usage/quota credentials for `/usage`
@@ -58,9 +65,8 @@ Current bundled examples:
 - `github-copilot`: forward-compat model fallback, Claude-thinking transcript
   hints, runtime token exchange, and usage endpoint fetching
 - `openai`: GPT-5.4 forward-compat fallback, direct OpenAI transport
-  normalization, and provider-family metadata
-- `openai-codex`: forward-compat model fallback, transport normalization, and
-  default transport params plus usage endpoint fetching
+  normalization, Codex-aware missing-auth hints, Spark suppression, synthetic
+  OpenAI/Codex catalog rows, and provider-family metadata
 - `google-gemini-cli`: Gemini 3.1 forward-compat fallback plus usage-token
   parsing and quota endpoint fetching for usage surfaces
 - `moonshot`: shared transport, plugin-owned thinking payload normalization
@@ -74,6 +80,9 @@ Current bundled examples:
   `synthetic`, `together`, `venice`, `vercel-ai-gateway`, and `volcengine`:
   plugin-owned catalogs only
 - `minimax` and `xiaomi`: plugin-owned catalogs plus usage auth/snapshot logic
+
+The bundled `openai` plugin now owns both provider ids: `openai` and
+`openai-codex`.
 
 That covers providers that still fit OpenClaw's normal transports. A provider
 that needs a totally custom request executor is a separate, deeper extension
