@@ -3229,6 +3229,34 @@ module.exports = {
     expect(resolved).toBe(srcFile);
   });
 
+  it("prefers dist extension-api alias when loader runs from dist", () => {
+    const { root, distFile } = createExtensionApiAliasFixture();
+
+    const resolved = __testing.resolveExtensionApiAlias({
+      modulePath: path.join(root, "dist", "plugins", "loader.js"),
+    });
+    expect(resolved).toBe(distFile);
+  });
+
+  it("prefers src extension-api alias when loader runs from src in non-production", () => {
+    const { root, srcFile } = createExtensionApiAliasFixture();
+
+    const resolved = withEnv({ NODE_ENV: undefined }, () =>
+      __testing.resolveExtensionApiAlias({
+        modulePath: path.join(root, "src", "plugins", "loader.ts"),
+      }),
+    );
+    expect(resolved).toBe(srcFile);
+  });
+
+  it("prefers dist plugin runtime module when loader runs from dist", () => {
+    const { root, distFile } = createPluginRuntimeAliasFixture();
+
+    const resolved = __testing.resolvePluginRuntimeModulePath({
+      modulePath: path.join(root, "dist", "plugins", "loader.js"),
+    });
+    expect(resolved).toBe(distFile);
+  });
   it("resolves plugin-sdk alias from package root when loader runs from transpiler cache path", () => {
     const { root, srcFile } = createPluginSdkAliasFixture();
 

@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import { stageBundledPluginRuntime } from "../../scripts/stage-bundled-plugin-runtime.mjs";
 
@@ -19,7 +20,7 @@ afterEach(() => {
 });
 
 describe("stageBundledPluginRuntime", () => {
-  it("hard-links bundled dist plugins into dist-runtime and links plugin-local node_modules", () => {
+  it("stages bundled dist plugins as runtime wrappers and links plugin-local node_modules", () => {
     const repoRoot = makeRepoRoot("openclaw-stage-bundled-runtime-");
     const distPluginDir = path.join(repoRoot, "dist", "extensions", "diffs");
     fs.mkdirSync(path.join(repoRoot, "dist"), { recursive: true });
@@ -39,14 +40,16 @@ describe("stageBundledPluginRuntime", () => {
 
     const runtimePluginDir = path.join(repoRoot, "dist-runtime", "extensions", "diffs");
     expect(fs.existsSync(path.join(runtimePluginDir, "index.js"))).toBe(true);
-    expect(fs.statSync(path.join(runtimePluginDir, "index.js")).nlink).toBeGreaterThan(1);
+    expect(fs.readFileSync(path.join(runtimePluginDir, "index.js"), "utf8")).toContain(
+      "../../../dist/extensions/diffs/index.js",
+    );
     expect(fs.lstatSync(path.join(runtimePluginDir, "node_modules")).isSymbolicLink()).toBe(true);
     expect(fs.realpathSync(path.join(runtimePluginDir, "node_modules"))).toBe(
       fs.realpathSync(sourcePluginNodeModulesDir),
     );
   });
 
-  it("hard-links top-level dist chunks so staged bundled plugins keep relative imports working", () => {
+  it("writes wrappers that forward plugin entry imports into canonical dist files", async () => {
     const repoRoot = makeRepoRoot("openclaw-stage-bundled-runtime-chunks-");
     fs.mkdirSync(path.join(repoRoot, "dist", "extensions", "diffs"), { recursive: true });
     fs.writeFileSync(
@@ -62,19 +65,45 @@ describe("stageBundledPluginRuntime", () => {
 
     stageBundledPluginRuntime({ repoRoot });
 
-    const runtimeChunkPath = path.join(repoRoot, "dist-runtime", "chunk-abc.js");
-    expect(fs.readFileSync(runtimeChunkPath, "utf8")).toContain("value = 1");
-    expect(fs.statSync(runtimeChunkPath).nlink).toBeGreaterThan(1);
-    expect(
-      fs.readFileSync(
-        path.join(repoRoot, "dist-runtime", "extensions", "diffs", "index.js"),
-        "utf8",
-      ),
-    ).toContain("../../chunk-abc.js");
-    const distChunkStats = fs.statSync(path.join(repoRoot, "dist", "chunk-abc.js"));
-    const runtimeChunkStats = fs.statSync(runtimeChunkPath);
-    expect(runtimeChunkStats.ino).toBe(distChunkStats.ino);
-    expect(runtimeChunkStats.dev).toBe(distChunkStats.dev);
+    const runtimeEntryPath = path.join(repoRoot, "dist-runtime", "extensions", "diffs", "index.js");
+    expect(fs.readFileSync(runtimeEntryPath, "utf8")).toContain(
+      "../../../dist/extensions/diffs/index.js",
+    );
+    expect(fs.existsSync(path.join(repoRoot, "dist-runtime", "chunk-abc.js"))).toBe(false);
+
+    const runtimeModule = await import(`${pathToFileURL(runtimeEntryPath).href}?t=${Date.now()}`);
+    expect(runtimeModule.value).toBe(1);
+  });
+
+  it("copies manifest files but symlinks other non-js plugin artifacts into the runtime overlay", () => {
+    const repoRoot = makeRepoRoot("openclaw-stage-bundled-runtime-assets-");
+    const distPluginDir = path.join(repoRoot, "dist", "extensions", "diffs");
+    fs.mkdirSync(path.join(distPluginDir, "assets"), { recursive: true });
+    fs.writeFileSync(path.join(distPluginDir, "openclaw.plugin.json"), "{}\n", "utf8");
+    fs.writeFileSync(path.join(distPluginDir, "assets", "info.txt"), "ok\n", "utf8");
+
+    stageBundledPluginRuntime({ repoRoot });
+
+    const runtimeManifestPath = path.join(
+      repoRoot,
+      "dist-runtime",
+      "extensions",
+      "diffs",
+      "openclaw.plugin.json",
+    );
+    const runtimeAssetPath = path.join(
+      repoRoot,
+      "dist-runtime",
+      "extensions",
+      "diffs",
+      "assets",
+      "info.txt",
+    );
+
+    expect(fs.lstatSync(runtimeManifestPath).isSymbolicLink()).toBe(false);
+    expect(fs.readFileSync(runtimeManifestPath, "utf8")).toBe("{}\n");
+    expect(fs.lstatSync(runtimeAssetPath).isSymbolicLink()).toBe(true);
+    expect(fs.readFileSync(runtimeAssetPath, "utf8")).toBe("ok\n");
   });
 
   it("removes stale runtime plugin directories that are no longer in dist", () => {
