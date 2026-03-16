@@ -46,6 +46,7 @@ Docs: https://docs.openclaw.ai
 - Gateway/config views: strip embedded credentials from URL-based endpoint fields before returning read-only account and config snapshots. Thanks @vincentkoc.
 - Tools/apply-patch: revalidate workspace-only delete and directory targets immediately before mutating host paths. Thanks @vincentkoc.
 - Webhooks/runtime: move auth earlier and tighten pre-auth body limits and timeouts across bundled webhook handlers, including slow-body handling for Mattermost slash commands. Thanks @vincentkoc.
+- Gateway/plugins: pin runtime webhook routes to the gateway startup registry so channel webhooks keep working across plugin-registry churn, and make plugin auth + dispatch resolve routes from the same live HTTP-route registry. Fixes #46924 and #47041.
 - Subagents/follow-ups: require the same controller ownership checks for `/subagents send` as other control actions, so leaf sessions cannot message nested child runs they do not control. Thanks @vincentkoc.
 - Inbound policy hardening: tighten callback and webhook sender checks across Mattermost and Google Chat, match Nextcloud Talk rooms by stable room token, and treat explicit empty Twitch allowlists as deny-all. (#46787) Thanks @zpbrent, @ijxpwastaken and @vincentkoc.
 - macOS/canvas actions: keep unattended local agent actions on trusted in-app canvas surfaces only, and stop exposing the deep-link fallback key to arbitrary page scripts. (#46790) Thanks @vincentkoc.
