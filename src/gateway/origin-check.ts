@@ -1,5 +1,65 @@
+import { createHmac } from "node:crypto";
 import { validateProtoMismatch, type ForwardedHeader } from "./forwarded-headers.js";
 import { isLoopbackHost, normalizeHostHeader } from "./net.js";
+
+export interface SignedTokenPayload {
+  sub: string;
+  origin: string;
+  iat: number;
+  exp: number;
+  nonce: string;
+}
+
+export type SignedTokenVerificationResult =
+  | { ok: true; user: string }
+  | { ok: false; reason: string };
+
+const SIGNED_TOKEN_MAX_AGE_MS = 5 * 60 * 1000;
+
+export function verifySignedOriginToken(
+  token: string,
+  sharedSecret: string,
+  expectedOrigin: string,
+): SignedTokenVerificationResult {
+  if (!token || !sharedSecret) {
+    return { ok: false, reason: "missing token or secret" };
+  }
+
+  try {
+    const parts = token.split(".");
+    if (parts.length !== 2) {
+      return { ok: false, reason: "invalid token format" };
+    }
+
+    const [payloadB64, sigB64] = parts;
+
+    const expectedSig = createHmac("sha256", sharedSecret).update(payloadB64).digest("base64url");
+
+    if (sigB64 !== expectedSig) {
+      return { ok: false, reason: "invalid signature" };
+    }
+
+    const payload: SignedTokenPayload = JSON.parse(Buffer.from(payloadB64, "base64url").toString());
+
+    if (payload.origin.toLowerCase() !== expectedOrigin.toLowerCase()) {
+      return { ok: false, reason: "origin mismatch" };
+    }
+
+    const now = Date.now();
+    const iatMs = payload.iat * 1000;
+    if (iatMs > now + 30000 || iatMs < now - SIGNED_TOKEN_MAX_AGE_MS) {
+      return { ok: false, reason: "token expired or not yet valid" };
+    }
+
+    if (payload.exp && payload.exp * 1000 < now) {
+      return { ok: false, reason: "token expired" };
+    }
+
+    return { ok: true, user: payload.sub };
+  } catch {
+    return { ok: false, reason: "token verification failed" };
+  }
+}
 
 type OriginCheckResult =
   | {

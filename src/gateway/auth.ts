@@ -20,6 +20,7 @@ import {
   isTrustedProxyAddress,
   resolveClientIp,
 } from "./net.js";
+import { verifySignedOriginToken } from "./origin-check.js";
 
 export type ResolvedGatewayAuthMode = "none" | "token" | "password" | "trusted-proxy";
 export type ResolvedGatewayAuthModeSource =
@@ -344,6 +345,24 @@ function authorizeTrustedProxy(params: {
     const value = headerValue(req.headers[header.toLowerCase()]);
     if (!value || value.trim() === "") {
       return { reason: `trusted_proxy_missing_header_${header}` };
+    }
+  }
+
+  if (trustedProxyConfig.signedTokenHeader && trustedProxyConfig.sharedSecret) {
+    const signedToken = headerValue(
+      req.headers[trustedProxyConfig.signedTokenHeader.toLowerCase()],
+    );
+    const sharedSecret = trustedProxyConfig.sharedSecret;
+    if (!signedToken) {
+      if (trustedProxyConfig.signedTokenRequired) {
+        return { reason: "trusted_proxy_signed_token_missing" };
+      }
+    } else {
+      const origin = headerValue(req.headers.origin) ?? "";
+      const tokenResult = verifySignedOriginToken(signedToken, sharedSecret, origin);
+      if (!tokenResult.ok) {
+        return { reason: `trusted_proxy_signed_token_invalid: ${tokenResult.reason}` };
+      }
     }
   }
 

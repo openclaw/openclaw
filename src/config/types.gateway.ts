@@ -145,6 +145,29 @@ export type GatewayTrustedProxyConfig = {
    * Example: ["nick@example.com", "admin@company.org"]
    */
   allowUsers?: string[];
+  /**
+   * Header containing the signed origin token from the proxy.
+   * The proxy signs a JWT-like token with HMAC-SHA256 containing:
+   * - sub: user identity
+   * - origin: origin header
+   * - iat: issued at timestamp
+   * - exp: expiration timestamp
+   * - nonce: replay protection
+   * Example: "x-proxy-signed-token"
+   */
+  signedTokenHeader?: string;
+  /**
+   * Shared secret used to sign/verify tokens.
+   * The proxy must use the same secret to sign tokens.
+   * Use SecretRef format: "env:SECRET_NAME" or plain string for development.
+   */
+  sharedSecret?: string;
+  /**
+   * Require signed token verification for all requests.
+   * When enabled, requests without a valid signed token are rejected.
+   * Default: false (opt-in)
+   */
+  signedTokenRequired?: boolean;
 };
 
 export type GatewayAuthConfig = {

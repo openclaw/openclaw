@@ -1,5 +1,6 @@
+import { createHmac } from "node:crypto";
 import { describe, expect, it } from "vitest";
-import { checkBrowserOrigin } from "./origin-check.js";
+import { checkBrowserOrigin, verifySignedOriginToken } from "./origin-check.js";
 
 describe("checkBrowserOrigin", () => {
   it.each([
@@ -713,5 +714,104 @@ describe("checkBrowserOrigin", () => {
         expect(result.reason).toBe("host header does not match origin or allowlist");
       }
     });
+  });
+});
+
+describe("verifySignedOriginToken", () => {
+  const secret = "test-secret-key";
+
+  it("accepts valid token", () => {
+    const now = Math.floor(Date.now() / 1000);
+    const payload = {
+      sub: "user@example.com",
+      origin: "https://example.com",
+      iat: now,
+      exp: now + 300,
+      nonce: "abc123",
+    };
+    const payloadB64 = Buffer.from(JSON.stringify(payload)).toString("base64url");
+    const sig = createHmac("sha256", secret).update(payloadB64).digest("base64url");
+    const token = `${payloadB64}.${sig}`;
+
+    const result = verifySignedOriginToken(token, secret, "https://example.com");
+    if (!result.ok) {
+      console.log("FAIL:", result.reason);
+    }
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.user).toBe("user@example.com");
+    }
+  });
+
+  it("rejects invalid signature", () => {
+    const payload = {
+      sub: "user@example.com",
+      origin: "https://example.com",
+      iat: Math.floor(Date.now() / 1000),
+      exp: Math.floor(Date.now() / 1000) + 300,
+      nonce: "abc123",
+    };
+    const payloadB64 = Buffer.from(JSON.stringify(payload)).toString("base64url");
+    const token = `${payloadB64}.invalid-signature`;
+
+    const result = verifySignedOriginToken(token, secret, "https://example.com");
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.reason).toBe("invalid signature");
+    }
+  });
+
+  it("rejects origin mismatch", () => {
+    const payload = {
+      sub: "user@example.com",
+      origin: "https://evil.com",
+      iat: Math.floor(Date.now() / 1000),
+      exp: Math.floor(Date.now() / 1000) + 300,
+      nonce: "abc123",
+    };
+    const payloadB64 = Buffer.from(JSON.stringify(payload)).toString("base64url");
+    const sig = createHmac("sha256", secret).update(payloadB64).digest("base64url");
+    const token = `${payloadB64}.${sig}`;
+
+    const result = verifySignedOriginToken(token, secret, "https://example.com");
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.reason).toBe("origin mismatch");
+    }
+  });
+
+  it("rejects expired token", () => {
+    const payload = {
+      sub: "user@example.com",
+      origin: "https://example.com",
+      iat: Math.floor(Date.now() / 1000) - 600,
+      exp: Math.floor(Date.now() / 1000) - 300,
+      nonce: "abc123",
+    };
+    const payloadB64 = Buffer.from(JSON.stringify(payload)).toString("base64url");
+    const sig = createHmac("sha256", secret).update(payloadB64).digest("base64url");
+    const token = `${payloadB64}.${sig}`;
+
+    const result = verifySignedOriginToken(token, secret, "https://example.com");
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.reason).toMatch(/token expired|not yet valid/);
+    }
+  });
+
+  it("rejects malformed token", () => {
+    const result = verifySignedOriginToken("not-a-valid-token", secret, "https://example.com");
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.reason).toBe("invalid token format");
+    }
+  });
+
+  it("rejects missing token", () => {
+    const result = verifySignedOriginToken("", secret, "https://example.com");
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.reason).toBe("missing token or secret");
+    }
   });
 });
