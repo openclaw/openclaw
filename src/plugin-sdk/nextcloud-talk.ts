@@ -21,10 +21,8 @@ export {
   buildSingleChannelSecretPromptState,
   addWildcardAllowFrom,
   mergeAllowFromEntries,
-  promptAccountId,
   promptSingleChannelSecretInput,
   runSingleChannelSecretStep,
-  resolveAccountIdForConfigure,
   setTopLevelChannelDmPolicyWithAllowFrom,
 } from "../channels/plugins/onboarding/helpers.js";
 export {
