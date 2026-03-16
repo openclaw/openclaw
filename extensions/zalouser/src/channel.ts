@@ -42,7 +42,8 @@ import { probeZalouser } from "./probe.js";
 import { writeQrDataUrlToTempFile } from "./qr-temp-file.js";
 import { getZalouserRuntime } from "./runtime.js";
 import { sendMessageZalouser, sendReactionZalouser } from "./send.js";
-import { zalouserSetupAdapter, zalouserSetupWizard } from "./setup-surface.js";
+import { zalouserSetupAdapter } from "./setup-core.js";
+import { zalouserSetupWizard } from "./setup-surface.js";
 import { collectZalouserStatusIssues } from "./status-issues.js";
 import {
   listZaloFriendsMatching,
