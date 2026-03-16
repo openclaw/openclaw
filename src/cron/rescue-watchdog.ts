@@ -354,7 +354,15 @@ export async function runRescueWatchdogJob(params: {
   abortSignal?: AbortSignal;
 }): Promise<CronRunOutcome & CronRunTelemetry> {
   const startedAtMs = Date.now();
-  const monitoredProfile = resolveMonitoredProfileName(params.monitoredProfile);
+  const rawMonitoredProfile =
+    typeof params.monitoredProfile === "string" ? params.monitoredProfile.trim() : "";
+  if (!rawMonitoredProfile) {
+    return {
+      status: "error",
+      error: "missing monitored profile for rescue watchdog job",
+    };
+  }
+  const monitoredProfile = resolveMonitoredProfileName(rawMonitoredProfile);
   if (monitoredProfile !== "default" && !isValidProfileName(monitoredProfile)) {
     return {
       status: "error",

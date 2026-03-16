@@ -10,6 +10,7 @@ import {
   resolveGatewaySystemdServiceName,
   resolveGatewayWindowsTaskName,
 } from "../../daemon/constants.js";
+import { resolveTrustedLaunchAgentPlistPath } from "../../daemon/launchd-paths.js";
 
 /**
  * Shell-escape a string for embedding in single-quoted shell arguments.
@@ -85,10 +86,7 @@ rm -f "$0"
       const escaped = shellEscape(label);
       // Fallback to 501 if getuid is not available (though it should be on macOS)
       const uid = process.getuid ? process.getuid() : 501;
-      // Resolve HOME at generation time via env/process.env to match launchd.ts,
-      // and shell-escape the label in the plist filename to prevent injection.
-      const home = env.HOME?.trim() || process.env.HOME || os.homedir();
-      const plistPath = path.join(home, "Library", "LaunchAgents", `${label}.plist`);
+      const plistPath = resolveTrustedLaunchAgentPlistPath(label);
       const escapedPlistPath = shellEscape(plistPath);
       filename = `openclaw-restart-${timestamp}.sh`;
       scriptContent = `#!/bin/sh

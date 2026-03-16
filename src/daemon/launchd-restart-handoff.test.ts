@@ -1,3 +1,4 @@
+import os from "node:os";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 const spawnMock = vi.hoisted(() => vi.fn());
@@ -53,5 +54,23 @@ describe("scheduleDetachedLaunchdRestartHandoff", () => {
     expect(result.ok).toBe(false);
     expect(result.detail).toContain("Invalid launchd label");
     expect(spawnMock).not.toHaveBeenCalled();
+  });
+
+  it("uses the trusted home instead of HOME overrides for the plist path", () => {
+    const userInfoSpy = vi.spyOn(os, "userInfo").mockReturnValue({
+      homedir: "/Users/trusted",
+    } as os.UserInfo<string>);
+
+    scheduleDetachedLaunchdRestartHandoff({
+      env: {
+        HOME: "/tmp/attacker-home",
+        OPENCLAW_PROFILE: "default",
+      },
+      mode: "kickstart",
+    });
+
+    const [, args] = spawnMock.mock.calls[0] as [string, string[]];
+    expect(args[5]).toBe("/Users/trusted/Library/LaunchAgents/ai.openclaw.gateway.plist");
+    userInfoSpy.mockRestore();
   });
 });

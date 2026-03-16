@@ -1,7 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { constants as fsConstants } from "node:fs";
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { parseStrictInteger, parseStrictPositiveInteger } from "../infra/parse-finite-number.js";
 import { cleanStaleGatewayProcessesSync } from "../infra/restart-stale-pids.js";
@@ -14,6 +13,10 @@ import {
 } from "./constants.js";
 import { execFileUtf8 } from "./exec-file.js";
 import {
+  resolveTrustedLaunchAgentHome,
+  resolveTrustedLaunchAgentPlistPath,
+} from "./launchd-paths.js";
+import {
   buildLaunchAgentPlist as buildLaunchAgentPlistImpl,
   readLaunchAgentProgramArgumentsFromFile,
 } from "./launchd-plist.js";
@@ -21,7 +24,7 @@ import {
   isCurrentProcessLaunchdServiceLabel,
   scheduleDetachedLaunchdRestartHandoff,
 } from "./launchd-restart-handoff.js";
-import { formatLine, toPosixPath, writeFormattedLines } from "./output.js";
+import { formatLine, writeFormattedLines } from "./output.js";
 import { resolveGatewayStateDir } from "./paths.js";
 import { parseKeyValueOutput } from "./runtime-parse.js";
 import type { GatewayServiceRuntime } from "./service-runtime.js";
@@ -39,22 +42,6 @@ const LAUNCH_AGENT_DIR_MODE = 0o755;
 const LAUNCH_AGENT_PLIST_MODE = 0o600;
 const LAUNCH_AGENT_TEMPFILE_RETRY_LIMIT = 8;
 
-function resolveTrustedLaunchAgentHome(): string {
-  const home = (() => {
-    try {
-      const fromUserInfo = os.userInfo().homedir.trim();
-      if (fromUserInfo) {
-        return fromUserInfo;
-      }
-    } catch {}
-    return os.homedir().trim();
-  })();
-  if (!home) {
-    throw new Error("Unable to resolve trusted user home for launchd operations.");
-  }
-  return toPosixPath(home);
-}
-
 function resolveLaunchAgentLabel(args?: { env?: Record<string, string | undefined> }): string {
   const envLabel = args?.env?.OPENCLAW_LAUNCHD_LABEL?.trim();
   if (envLabel) {
@@ -67,8 +54,7 @@ function resolveLaunchAgentPlistPathForLabel(
   _env: Record<string, string | undefined>,
   label: string,
 ): string {
-  const home = resolveTrustedLaunchAgentHome();
-  return path.posix.join(home, "Library", "LaunchAgents", `${label}.plist`);
+  return resolveTrustedLaunchAgentPlistPath(label);
 }
 
 export function resolveLaunchAgentPlistPath(env: GatewayServiceEnv): string {

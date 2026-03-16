@@ -631,6 +631,25 @@ describe("runRescueWatchdogJob", () => {
     expect(runCommandWithTimeout).not.toHaveBeenCalled();
   });
 
+  it("fails closed when monitoredProfile is missing", async () => {
+    const result = await runRescueWatchdogJob({
+      job: {
+        id: "job-missing-profile",
+        name: "rescue",
+        payload: {
+          kind: "rescueWatchdog",
+          timeoutSeconds: 120,
+        },
+      } as never,
+      monitoredProfile: "" as never,
+    });
+
+    expect(result.status).toBe("error");
+    expect(result.error).toContain("missing monitored profile");
+    expect(restartService).not.toHaveBeenCalled();
+    expect(runCommandWithTimeout).not.toHaveBeenCalled();
+  });
+
   it("restarts the managed service before escalating to doctor", async () => {
     probeGateway
       .mockResolvedValueOnce({
