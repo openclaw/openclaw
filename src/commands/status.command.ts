@@ -14,7 +14,6 @@ import {
   type Tone,
 } from "../memory/status-format.js";
 import type { RuntimeEnv } from "../runtime.js";
-import { runSecurityAudit } from "../security/audit.js";
 import { getTerminalTableWidth, renderTable } from "../terminal/table.js";
 import { theme } from "../terminal/theme.js";
 import { formatHealthChannelLines, type HealthSummary } from "./health.js";
@@ -37,10 +36,16 @@ import {
 } from "./status.update.js";
 
 let providerUsagePromise: Promise<typeof import("../infra/provider-usage.js")> | undefined;
+let securityAuditModulePromise: Promise<typeof import("../security/audit.runtime.js")> | undefined;
 
 function loadProviderUsage() {
   providerUsagePromise ??= import("../infra/provider-usage.js");
   return providerUsagePromise;
+}
+
+function loadSecurityAuditModule() {
+  securityAuditModulePromise ??= import("../security/audit.runtime.js");
+  return securityAuditModulePromise;
 }
 
 function resolvePairingRecoveryContext(params: {
@@ -90,28 +95,25 @@ export async function statusCommand(
     { json: opts.json, timeoutMs: opts.timeoutMs, all: opts.all },
     runtime,
   );
-  const securityAudit = opts.json
-    ? await runSecurityAudit({
+  const runSecurityAudit = async () =>
+    await loadSecurityAuditModule().then(({ runSecurityAudit }) =>
+      runSecurityAudit({
         config: scan.cfg,
         sourceConfig: scan.sourceConfig,
         deep: false,
         includeFilesystem: true,
         includeChannelSecurity: true,
-      })
+      }),
+    );
+  const securityAudit = opts.json
+    ? await runSecurityAudit()
     : await withProgress(
         {
           label: "Running security audit…",
           indeterminate: true,
           enabled: true,
         },
-        async () =>
-          await runSecurityAudit({
-            config: scan.cfg,
-            sourceConfig: scan.sourceConfig,
-            deep: false,
-            includeFilesystem: true,
-            includeChannelSecurity: true,
-          }),
+        async () => await runSecurityAudit(),
       );
   const {
     cfg,
