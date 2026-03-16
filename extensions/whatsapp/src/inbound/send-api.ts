@@ -42,7 +42,11 @@ export function createWebSendApi(params: {
             mimetype: mediaType,
           };
         } else if (mediaType.startsWith("audio/")) {
-          payload = { audio: mediaBuffer,ptt: true,mimetype: "audio/ogg; codecs=opus",seconds: 5};
+          payload = {
+            audio: mediaBuffer,
+            ptt: true,
+            mimetype: "audio/ogg; codecs=opus",
+          };
         } else if (mediaType.startsWith("video/")) {
           const gifPlayback = sendOptions?.gifPlayback;
           payload = {
