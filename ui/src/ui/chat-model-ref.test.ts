@@ -43,6 +43,12 @@ describe("chat-model-ref helpers", () => {
     expect(formatChatModelDisplay("alias-only")).toBe("alias-only");
   });
 
+  it("formats provider-qualified model ids using the first path segment as provider", () => {
+    expect(formatChatModelDisplay("openrouter/google/gemini-2.5-flash")).toBe(
+      "google/gemini-2.5-flash · openrouter",
+    );
+  });
+
   it("resolves server session data to qualified option values", () => {
     expect(resolveServerChatModelValue("gpt-5-mini", "openai")).toBe("openai/gpt-5-mini");
     expect(resolveServerChatModelValue("alias-only", null)).toBe("alias-only");
