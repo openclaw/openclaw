@@ -286,7 +286,6 @@ export function renderOverview(props: OverviewProps) {
           <label class="field">
             <span>${t("overview.access.language")}</span>
             <select
-              .value=${currentLocale}
               @change=${(e: Event) => {
                 const v = (e.target as HTMLSelectElement).value as Locale;
                 void i18n.setLocale(v);
@@ -295,7 +294,7 @@ export function renderOverview(props: OverviewProps) {
             >
               ${SUPPORTED_LOCALES.map((loc) => {
                 const key = loc.replace(/-([a-zA-Z])/g, (_, c) => c.toUpperCase());
-                return html`<option value=${loc}>${t(`languages.${key}`)}</option>`;
+                return html`<option value=${loc} ?selected=${loc === currentLocale}>${t(`languages.${key}`)}</option>`;
               })}
             </select>
           </label>
