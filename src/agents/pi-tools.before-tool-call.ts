@@ -39,6 +39,19 @@ function buildAdjustedParamsKey(params: { runId?: string; toolCallId: string }):
   return params.toolCallId;
 }
 
+function mergeParamsWithApprovalOverrides(
+  originalParams: unknown,
+  approvalParams?: unknown,
+): unknown {
+  if (approvalParams && isPlainObject(approvalParams)) {
+    if (isPlainObject(originalParams)) {
+      return { ...originalParams, ...approvalParams };
+    }
+    return approvalParams;
+  }
+  return originalParams;
+}
+
 function shouldEmitLoopWarning(state: SessionState, warningKey: string, count: number): boolean {
   if (!state.toolLoopWarningBuckets) {
     state.toolLoopWarningBuckets = new Map();
@@ -156,18 +169,18 @@ export async function runBeforeToolCallHook(args: {
     const normalizedParams = isPlainObject(params) ? params : {};
     const toolContext = {
       toolName,
-      ...(args.ctx?.agentId ? { agentId: args.ctx.agentId } : {}),
-      ...(args.ctx?.sessionKey ? { sessionKey: args.ctx.sessionKey } : {}),
-      ...(args.ctx?.sessionId ? { sessionId: args.ctx.sessionId } : {}),
-      ...(args.ctx?.runId ? { runId: args.ctx.runId } : {}),
-      ...(args.toolCallId ? { toolCallId: args.toolCallId } : {}),
+      ...(args.ctx?.agentId && { agentId: args.ctx.agentId }),
+      ...(args.ctx?.sessionKey && { sessionKey: args.ctx.sessionKey }),
+      ...(args.ctx?.sessionId && { sessionId: args.ctx.sessionId }),
+      ...(args.ctx?.runId && { runId: args.ctx.runId }),
+      ...(args.toolCallId && { toolCallId: args.toolCallId }),
     };
     const hookResult = await hookRunner.runBeforeToolCall(
       {
         toolName,
         params: normalizedParams,
-        ...(args.ctx?.runId ? { runId: args.ctx.runId } : {}),
-        ...(args.toolCallId ? { toolCallId: args.toolCallId } : {}),
+        ...(args.ctx?.runId && { runId: args.ctx.runId }),
+        ...(args.toolCallId && { toolCallId: args.toolCallId }),
       },
       toolContext,
     );
@@ -216,18 +229,14 @@ export async function runBeforeToolCallHook(args: {
         );
         const decision = waitResult?.decision;
         if (decision === "allow-once" || decision === "allow-always") {
-          if (hookResult.params && isPlainObject(hookResult.params)) {
-            if (isPlainObject(params)) {
-              return { blocked: false, params: { ...params, ...hookResult.params } };
-            }
-            return { blocked: false, params: hookResult.params };
-          }
-          return { blocked: false, params };
+          return {
+            blocked: false,
+            params: mergeParamsWithApprovalOverrides(params, hookResult.params),
+          };
         }
         if (decision === "deny") {
           return { blocked: true, reason: "Denied by user" };
         }
-        // null = timeout
         const timeoutBehavior = approval.timeoutBehavior ?? "deny";
         if (timeoutBehavior === "allow") {
           return { blocked: false, params };
@@ -250,11 +259,11 @@ export async function runBeforeToolCallHook(args: {
       };
     }
 
-    if (hookResult?.params && isPlainObject(hookResult.params)) {
-      if (isPlainObject(params)) {
-        return { blocked: false, params: { ...params, ...hookResult.params } };
-      }
-      return { blocked: false, params: hookResult.params };
+    if (hookResult?.params) {
+      return {
+        blocked: false,
+        params: mergeParamsWithApprovalOverrides(params, hookResult.params),
+      };
     }
   } catch (err) {
     const toolCallId = args.toolCallId ? ` toolCallId=${args.toolCallId}` : "";
@@ -344,5 +353,6 @@ export const __testing = {
   buildAdjustedParamsKey,
   adjustedParamsByToolCallId,
   runBeforeToolCallHook,
+  mergeParamsWithApprovalOverrides,
   isPlainObject,
 };

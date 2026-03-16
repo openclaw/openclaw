@@ -62,6 +62,9 @@ export function createPluginApprovalHandlers(
         return;
       }
 
+      const normalizeTrimmedString = (value?: string | null): string | null =>
+        value?.trim() || null;
+
       const request: PluginApprovalRequestPayload = {
         pluginId: p.pluginId ?? null,
         title: p.title,
@@ -71,11 +74,9 @@ export function createPluginApprovalHandlers(
         toolCallId: p.toolCallId ?? null,
         agentId: p.agentId ?? null,
         sessionKey: p.sessionKey ?? null,
-        turnSourceChannel:
-          typeof p.turnSourceChannel === "string" ? p.turnSourceChannel.trim() || null : null,
-        turnSourceTo: typeof p.turnSourceTo === "string" ? p.turnSourceTo.trim() || null : null,
-        turnSourceAccountId:
-          typeof p.turnSourceAccountId === "string" ? p.turnSourceAccountId.trim() || null : null,
+        turnSourceChannel: normalizeTrimmedString(p.turnSourceChannel),
+        turnSourceTo: normalizeTrimmedString(p.turnSourceTo),
+        turnSourceAccountId: normalizeTrimmedString(p.turnSourceAccountId),
         turnSourceThreadId: p.turnSourceThreadId ?? null,
       };
 
