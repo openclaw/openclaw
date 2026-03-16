@@ -1014,23 +1014,29 @@ export class AcpGatewayAgent implements Agent {
     sessionId: string,
     transcript: ReadonlyArray<GatewayTranscriptMessage>,
   ): Promise<void> {
-    for (const message of transcript) {
+    const updates = transcript.flatMap((message) => {
       const role = typeof message.role === "string" ? message.role : "";
       if (role !== "user" && role !== "assistant") {
-        continue;
+        return [];
       }
       const text = extractReplayText(message.content);
       if (!text) {
-        continue;
+        return [];
       }
-      await this.connection.sessionUpdate({
-        sessionId,
-        update: {
-          sessionUpdate: role === "user" ? "user_message_chunk" : "agent_message_chunk",
-          content: { type: "text", text },
+      return [
+        {
+          sessionId,
+          update: {
+            sessionUpdate: role === "user" ? "user_message_chunk" : "agent_message_chunk",
+            content: { type: "text", text },
+          },
         },
-      });
+      ];
+    });
+    if (updates.length === 0) {
+      return;
     }
+    await Promise.all(updates.map((update) => this.connection.sessionUpdate(update)));
   }
 
   private async sendSessionSnapshotUpdate(
