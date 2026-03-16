@@ -297,15 +297,40 @@ describe("sanitizeRenderableText", () => {
   it("preserves long tokens inside tilde-fenced code blocks verbatim", () => {
     // Use a token that would be split by normalizeLongTokenForDisplay if not inside a fence:
     // - 33 chars (meets the ≥33 threshold)
-    // - no underscores (avoids the isCopySensitiveToken FILE_LIKE_RE branch)
+    // - hyphens only (avoids the isCopySensitiveToken FILE_LIKE_RE underscore branch)
     // - no digits (avoids the TOKENISH_MIN_LENGTH credential branch)
     // Without code-fence protection this token would be rewritten as
     // "ubuntu-budgie-desktop-environmen t" (space inserted at char 32).
-    const longToken = "ubuntu-budgie-desktop-environment"; // exactly 33 chars, no underscores
+    const longToken = "ubuntu-budgie-desktop-environment"; // exactly 33 chars, hyphens only
     const input = `~~~bash\napt install ${longToken}\n~~~`;
     const sanitized = sanitizeRenderableText(input);
 
+    // Verify the token is untouched (not split at char 32)
     expect(sanitized).toBe(input);
+    expect(sanitized).toContain(longToken);
+  });
+
+  it("closes a 3-backtick fence with a longer (4-backtick) closing fence per CommonMark", () => {
+    // CommonMark spec: a closing fence must use the same character and have at least
+    // as many characters as the opening fence. A 4-backtick close is valid for a
+    // 3-backtick open and should protect the code block from token normalization.
+    const longToken = "ubuntu-budgie-desktop-environment"; // 33 chars, hyphens only
+    const input = `\`\`\`bash\napt install ${longToken}\n\`\`\`\``;
+    const sanitized = sanitizeRenderableText(input);
+
+    expect(sanitized).toContain(longToken);
+    expect(sanitized).toBe(input);
+  });
+
+  it("does not close a 4-backtick fence with a 3-backtick closing fence", () => {
+    // A 3-backtick close is NOT valid for a 4-backtick open per CommonMark.
+    // The block is unclosed so the entire remainder is treated as code (preserved verbatim).
+    const longToken = "ubuntu-budgie-desktop-environment"; // 33 chars
+    // 4-backtick open, 3-backtick "close" (invalid), token is still inside the unclosed block
+    const input = `\`\`\`\`bash\napt install ${longToken}\n\`\`\``;
+    const sanitized = sanitizeRenderableText(input);
+
+    // The token should be preserved because it is inside an unclosed code fence region
     expect(sanitized).toContain(longToken);
   });
 

@@ -18,11 +18,6 @@ const BIDI_CONTROL_RE = /[\u202a-\u202e\u2066-\u2069]/;
 const RTL_ISOLATE_START = "\u2067";
 const RTL_ISOLATE_END = "\u2069";
 
-// NOTE: CODE_FENCE_RE is intentionally NOT declared at module scope.
-// A regex with the `g` flag retains lastIndex state between calls, which causes
-// intermittent failures when the same regex object is reused across invocations.
-// The regex is created fresh inside normalizeTokensOutsideCodeFences() instead.
-
 function hasControlChars(text: string): boolean {
   for (const char of text) {
     const code = char.charCodeAt(0);
@@ -139,34 +134,108 @@ function applyRtlIsolation(text: string): string {
  *
  * Both backtick fences (```) and tilde fences (~~~) are recognized.
  *
- * The regex is created fresh on every call to avoid lastIndex state leaking
- * between invocations (a known hazard with module-scope `g`-flagged regexes).
+ * Per CommonMark spec, a closing fence must:
+ *   - use the same character as the opening fence (backtick or tilde)
+ *   - have at least as many characters as the opening fence
+ *   - contain only fence characters and optional trailing whitespace (no info string)
+ * This is implemented with a line-by-line scanner to avoid the backreference
+ * limitation of JS regexes (which can only match exact strings, not "same char,
+ * >= count" patterns).
  */
+
+// Regex to detect the start of a fenced code block per CommonMark:
+//   - optional leading spaces (up to 3)
+//   - backtick fence: 3+ backticks followed by an info string with no backticks
+//   - tilde fence: 3+ tildes followed by any info string
+// Group 1: leading indent  Group 2: fence run (chars only, no info string)
+const FENCE_OPEN_RE = /^( {0,3})(`{3,})(?:[^`\n]*)$|^( {0,3})(~{3,})(?:[^\n]*)$/;
+
+// Regex to detect a closing fence line: optional leading spaces (up to 3),
+// then fence characters and optional trailing whitespace only.
+// Group 1: fence character  Group 2: fence run
+const FENCE_CLOSE_RE = /^( {0,3})(`+|~+)[ \t]*$/;
+
+/**
+ * Find all fenced code block regions in `text` per CommonMark rules and return
+ * an array of [start, end] character-index pairs (inclusive of the fence lines).
+ */
+function findCodeFenceRegions(text: string): Array<[number, number]> {
+  const regions: Array<[number, number]> = [];
+  const lines = text.split("\n");
+
+  let i = 0;
+  let charPos = 0; // character offset of the start of lines[i]
+
+  while (i < lines.length) {
+    const line = lines[i];
+    const openMatch = FENCE_OPEN_RE.exec(line);
+    if (openMatch) {
+      // Group 2 matches backtick fence run; group 4 matches tilde fence run.
+      const fenceRun = openMatch[2] ?? openMatch[4]; // e.g. "```" or "~~~~"
+      const fenceChar = fenceRun[0]; // ` or ~
+      const fenceLen = fenceRun.length; // minimum closing length
+      const blockStart = charPos;
+
+      // Advance past the opening fence line
+      i++;
+      charPos += line.length + 1; // +1 for the '\n'
+
+      // Scan for a valid closing fence
+      let closed = false;
+      while (i < lines.length) {
+        const inner = lines[i];
+        const closeMatch = FENCE_CLOSE_RE.exec(inner);
+        if (closeMatch && closeMatch[2][0] === fenceChar && closeMatch[2].length >= fenceLen) {
+          // Found the closing fence — record the region
+          const blockEnd = charPos + inner.length;
+          regions.push([blockStart, blockEnd]);
+          charPos += inner.length + 1;
+          i++;
+          closed = true;
+          break;
+        }
+        charPos += inner.length + 1;
+        i++;
+      }
+
+      if (!closed) {
+        // Unclosed fence: treat the rest of the text as a code region
+        // (CommonMark: an unclosed fence extends to the end of the document)
+        regions.push([blockStart, text.length]);
+      }
+    } else {
+      charPos += line.length + 1;
+      i++;
+    }
+  }
+
+  return regions;
+}
+
 function normalizeTokensOutsideCodeFences(text: string): string {
   if (!LONG_TOKEN_TEST_RE.test(text)) {
     return text;
   }
 
-  // Matches fenced code blocks delimited by ``` or ~~~  (with optional language tag).
-  // Created locally to prevent lastIndex from persisting across calls.
-  const codeFenceRe = /^(`{3,}|~{3,})[^\n]*\n[\s\S]*?\n\1[ \t]*$/gm;
+  const regions = findCodeFenceRegions(text);
+
+  if (regions.length === 0) {
+    return text.replace(LONG_TOKEN_RE, normalizeLongTokenForDisplay);
+  }
 
   const parts: string[] = [];
   let lastIndex = 0;
 
-  let match: RegExpExecArray | null;
-  while ((match = codeFenceRe.exec(text)) !== null) {
-    // Process the region before this code fence (normalize long tokens)
-    const before = text.slice(lastIndex, match.index);
-    parts.push(before.replace(LONG_TOKEN_RE, normalizeLongTokenForDisplay));
-    // Preserve the code fence region exactly as-is
-    parts.push(match[0]);
-    lastIndex = match.index + match[0].length;
+  for (const [start, end] of regions) {
+    // Normalize prose before the code fence region
+    parts.push(text.slice(lastIndex, start).replace(LONG_TOKEN_RE, normalizeLongTokenForDisplay));
+    // Preserve the code fence region verbatim
+    parts.push(text.slice(start, end + 1));
+    lastIndex = end + 1;
   }
 
-  // Process any trailing region after the last code fence
-  const tail = text.slice(lastIndex);
-  parts.push(tail.replace(LONG_TOKEN_RE, normalizeLongTokenForDisplay));
+  // Normalize any trailing prose after the last code fence
+  parts.push(text.slice(lastIndex).replace(LONG_TOKEN_RE, normalizeLongTokenForDisplay));
 
   return parts.join("");
 }
