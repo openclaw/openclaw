@@ -150,4 +150,87 @@ describe("createGigachatStreamFn tool calling", () => {
     );
     expect(event.content).toEqual([{ type: "text", text: "done" }]);
   });
+
+  it("preserves all historical tool calls from a single assistant turn", async () => {
+    request.mockResolvedValueOnce({
+      status: 200,
+      data: createSseStream(['data: {"choices":[{"delta":{"content":"done"}}]}', "data: [DONE]"]),
+    });
+
+    const streamFn = createGigachatStreamFn({
+      baseUrl: "https://gigachat.devices.sberbank.ru/api/v1",
+      authMode: "oauth",
+    });
+
+    const stream = streamFn(
+      { api: "gigachat", provider: "gigachat", id: "GigaChat-2-Max" } as never,
+      {
+        messages: [
+          {
+            role: "assistant",
+            content: [
+              { type: "text", text: "Working on it" },
+              {
+                type: "toolCall",
+                id: "call_1",
+                name: "llm-task",
+                arguments: { prompt: "first" },
+              },
+              {
+                type: "toolCall",
+                id: "call_2",
+                name: "web_search",
+                arguments: { query: "second" },
+              },
+            ],
+          },
+        ],
+        tools: [
+          {
+            name: "llm-task",
+            description: "Run a task",
+            parameters: {
+              type: "object",
+              properties: {
+                prompt: { type: "string" },
+              },
+            },
+          },
+          {
+            name: "web_search",
+            description: "Search the web",
+            parameters: {
+              type: "object",
+              properties: {
+                query: { type: "string" },
+              },
+            },
+          },
+        ],
+      } as never,
+      { apiKey: "token" } as never,
+    );
+
+    const event = await stream.result();
+
+    expect(request).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          messages: [
+            expect.objectContaining({
+              role: "assistant",
+              content: "Working on it",
+              function_call: expect.objectContaining({ name: "llm_task" }),
+            }),
+            expect.objectContaining({
+              role: "assistant",
+              content: "",
+              function_call: expect.objectContaining({ name: "gpt2giga_user_search_web" }),
+            }),
+          ],
+        }),
+      }),
+    );
+    expect(event.content).toEqual([{ type: "text", text: "done" }]);
+  });
 });

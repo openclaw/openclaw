@@ -39,6 +39,10 @@ export type GigachatStreamOptions = {
   scope?: string;
 };
 
+function stripLeakedFunctionCallPrelude(text: string): string {
+  return text.replace(/^\s*assistant\s+function\s+call(?:recipient)?\{\s*/i, "");
+}
+
 // ── Function name sanitization ──────────────────────────────────────────────
 // GigaChat requires function names to be alphanumeric + underscore only.
 
@@ -485,26 +489,34 @@ export function createGigachatStreamFn(opts: GigachatStreamOptions): StreamFn {
               .filter((c): c is TextContent => c.type === "text")
               .map((c) => c.text)
               .join("");
-            const toolCall = contentParts.find((c): c is ToolCall => c.type === "toolCall");
+            const toolCalls = contentParts.filter((c): c is ToolCall => c.type === "toolCall");
 
-            if (toolCall && toolCall.name && functionsEnabled) {
-              const gigaToolName = rememberToolNameMapping(
-                toolNameToGiga,
-                gigaToToolName,
-                toolCall.name,
-              );
-              messages.push({
-                role: "assistant",
-                content: text ? sanitizeContent(text) : "",
-                function_call: {
-                  name: gigaToolName,
-                  arguments: toolCall.arguments ?? {},
-                },
-              });
+            if (toolCalls.length > 0 && functionsEnabled) {
+              for (const [index, toolCall] of toolCalls.entries()) {
+                if (!toolCall.name) {
+                  continue;
+                }
+                const gigaToolName = rememberToolNameMapping(
+                  toolNameToGiga,
+                  gigaToToolName,
+                  toolCall.name,
+                );
+                messages.push({
+                  role: "assistant",
+                  content: index === 0 && text ? sanitizeContent(text) : "",
+                  function_call: {
+                    name: gigaToolName,
+                    arguments: toolCall.arguments ?? {},
+                  },
+                });
+              }
             } else if (text) {
               messages.push({ role: "assistant", content: sanitizeContent(text) });
-            } else if (toolCall && !functionsEnabled) {
-              messages.push({ role: "assistant", content: `[Called ${toolCall.name}]` });
+            } else if (toolCalls.length > 0 && !functionsEnabled) {
+              messages.push({
+                role: "assistant",
+                content: toolCalls.map((toolCall) => `[Called ${toolCall.name}]`).join(" "),
+              });
             }
           } else if (msg.role === "toolResult" && functionsEnabled) {
             const toolName = msg.toolName ?? "unknown";
@@ -729,6 +741,7 @@ export function createGigachatStreamFn(opts: GigachatStreamOptions): StreamFn {
         }
 
         if (functionCallBuffer && functionCallBuffer.name) {
+          accumulatedContent = stripLeakedFunctionCallPrelude(accumulatedContent);
           let parsedArgs: Record<string, unknown> = {};
           try {
             if (functionCallBuffer.arguments) {
