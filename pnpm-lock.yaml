@@ -278,6 +278,8 @@ importers:
 
   extensions/anthropic: {}
 
+  extensions/baidu: {}
+
   extensions/bluebubbles:
     dependencies:
       zod:

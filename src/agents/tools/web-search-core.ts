@@ -22,7 +22,7 @@ import {
   writeCache,
 } from "./web-shared.js";
 
-const SEARCH_PROVIDERS = ["brave", "gemini", "grok", "kimi", "perplexity"] as const;
+const SEARCH_PROVIDERS = ["brave", "gemini", "grok", "kimi", "perplexity", "baidu"] as const;
 type SearchProvider = (typeof SEARCH_PROVIDERS)[number];
 const DEFAULT_SEARCH_COUNT = 5;
 const MAX_SEARCH_COUNT = 10;
@@ -40,6 +40,8 @@ const XAI_API_ENDPOINT = "https://api.x.ai/v1/responses";
 const DEFAULT_GROK_MODEL = "grok-4-1-fast";
 const DEFAULT_KIMI_BASE_URL = "https://api.moonshot.ai/v1";
 const DEFAULT_KIMI_MODEL = "moonshot-v1-128k";
+const BAIDU_SEARCH_API_ENDPOINT = "https://qianfan.baidubce.com/v2/ai_search/web_search";
+
 const KIMI_WEB_SEARCH_TOOL = {
   type: "builtin_function",
   function: { name: "$web_search" },
@@ -288,7 +290,11 @@ function createWebSearchSchema(params: {
       ),
     });
   }
-
+  if (params.provider === "baidu") {
+    return Type.Object({
+      ...querySchema,
+    });
+  }
   // grok, gemini, kimi, etc.
   return Type.Object({
     ...querySchema,
@@ -436,6 +442,21 @@ type PerplexitySearchApiResult = {
 type PerplexitySearchApiResponse = {
   results?: PerplexitySearchApiResult[];
   id?: string;
+};
+
+type BaiduConfig = {
+  apiKey?: string;
+};
+
+type BaiduSearchResult = {
+  title?: string;
+  url?: string;
+  snippet?: string;
+  date?: string;
+};
+
+type BaiduSearchResponse = {
+  references?: BaiduSearchResult[];
 };
 
 function extractPerplexityCitations(data: PerplexitySearchResponse): string[] {
@@ -607,6 +628,14 @@ function missingSearchKeyPayload(provider: (typeof SEARCH_PROVIDERS)[number]) {
       docs: "https://docs.openclaw.ai/tools/web",
     };
   }
+  if (provider === "baidu") {
+    return {
+      error: "missing_baidu_search_api_key",
+      message:
+        "web_search (baidu) needs an Baidu Search API key. Set BAIDU_SEARCH_API_KEY in the Gateway environment, or configure tools.web.search.baidu.apiKey.",
+      docs: "https://docs.openclaw.ai/tools/web",
+    };
+  }
   return {
     error: "missing_perplexity_api_key",
     message:
@@ -639,9 +668,20 @@ function resolveSearchProvider(search?: WebSearchConfig): (typeof SEARCH_PROVIDE
   if (raw === "perplexity") {
     return "perplexity";
   }
+  if (raw === "baidu") {
+    return "baidu";
+  }
 
   // Auto-detect provider from available API keys (alphabetical order)
   if (raw === "") {
+    // Baidu
+    const baiduConfig = resolveBaiduConfig(search);
+    if (resolveBaiduApiKey(baiduConfig)) {
+      logVerbose(
+        'web_search: no provider configured, auto-detected "baidu" from available API keys',
+      );
+      return "baidu";
+    }
     // Brave
     if (resolveSearchApiKey(search)) {
       logVerbose(
@@ -931,6 +971,29 @@ function resolveGeminiModel(gemini?: GeminiConfig): string {
   const fromConfig =
     gemini && "model" in gemini && typeof gemini.model === "string" ? gemini.model.trim() : "";
   return fromConfig || DEFAULT_GEMINI_MODEL;
+}
+
+function resolveBaiduConfig(search?: WebSearchConfig): BaiduConfig {
+  if (!search || typeof search !== "object") {
+    return {};
+  }
+  const baidu = "baidu" in search ? search.baidu : undefined;
+  if (!baidu || typeof baidu !== "object") {
+    return {};
+  }
+  return baidu as BaiduConfig;
+}
+
+function resolveBaiduApiKey(baidu?: BaiduConfig): string | undefined {
+  const fromConfig = normalizeApiKey(baidu?.apiKey);
+  if (fromConfig) {
+    return fromConfig;
+  }
+  const fromEnvBaidu = normalizeApiKey(process.env.BAIDU_SEARCH_API_KEY);
+  if (fromEnvBaidu) {
+    return fromEnvBaidu;
+  }
+  return undefined;
 }
 
 async function withTrustedWebSearchEndpoint<T>(
@@ -1528,6 +1591,59 @@ async function runKimiSearch(params: {
   };
 }
 
+async function runBaiduSearch(params: {
+  query: string;
+  apiKey: string;
+  timeoutSeconds: number;
+  count: number;
+}): Promise<{ results: BaiduSearchResult[] }> {
+  const body: Record<string, unknown> = {
+    resource_type_filter: [
+      { type: "web", top_k: params.count > 0 ? params.count : DEFAULT_SEARCH_COUNT },
+    ],
+    messages: [
+      {
+        role: "user",
+        content: params.query,
+      },
+    ],
+  };
+  return withTrustedWebSearchEndpoint(
+    {
+      url: BAIDU_SEARCH_API_ENDPOINT,
+      timeoutSeconds: params.timeoutSeconds,
+      init: {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${params.apiKey}`,
+          "X-Appbuilder-From": "openclaw",
+        },
+        body: JSON.stringify(body),
+      },
+    },
+    async (res) => {
+      if (!res.ok) {
+        return throwWebSearchApiError(res, "baidu");
+      }
+      const data = (await res.json()) as BaiduSearchResponse;
+      const results = Array.isArray(data.references) ? (data.references ?? []) : [];
+      const mapped = results.map((entry) => {
+        const snippet = entry.snippet ?? "";
+        const title = entry.title ?? "";
+        const url = entry.url ?? "";
+        return {
+          title: title ? wrapWebContent(title, "web_search") : "",
+          url, // Keep raw for tool chaining
+          snippet: snippet ? wrapWebContent(snippet, "web_search") : "",
+          date: entry.date || undefined,
+        };
+      });
+      return { results: mapped };
+    },
+  );
+}
+
 function mapBraveLlmContextResults(
   data: BraveLlmContextResponse,
 ): { url: string; title: string; snippets: string[]; siteName?: string }[] {
@@ -1787,6 +1903,29 @@ async function runWebSearch(params: {
     return payload;
   }
 
+  if (params.provider === "baidu") {
+    const { results } = await runBaiduSearch({
+      query: params.query,
+      apiKey: params.apiKey,
+      timeoutSeconds: params.timeoutSeconds,
+      count: params.count,
+    });
+    const payload = {
+      query: params.query,
+      provider: params.provider,
+      tookMs: Date.now() - start,
+      externalContent: {
+        untrusted: true,
+        source: "web_search",
+        provider: params.provider,
+        wrapped: true,
+      },
+      results: results,
+    };
+    writeCache(SEARCH_CACHE, cacheKey, payload, params.cacheTtlMs);
+    return payload;
+  }
+
   if (params.provider !== "brave") {
     throw new Error("Unsupported web search provider.");
   }
@@ -1931,7 +2070,7 @@ export function createWebSearchTool(options?: {
   const kimiConfig = resolveKimiConfig(search);
   const braveConfig = resolveBraveConfig(search);
   const braveMode = resolveBraveMode(braveConfig);
-
+  const baiduConfig = resolveBaiduConfig(search);
   const description =
     provider === "perplexity"
       ? perplexitySchemaTransportHint === "chat_completions"
@@ -1943,10 +2082,11 @@ export function createWebSearchTool(options?: {
           ? "Search the web using Kimi by Moonshot. Returns AI-synthesized answers with citations from native $web_search."
           : provider === "gemini"
             ? "Search the web using Gemini with Google Search grounding. Returns AI-synthesized answers with citations from Google Search."
-            : braveMode === "llm-context"
-              ? "Search the web using Brave Search LLM Context API. Returns pre-extracted page content (text chunks, tables, code blocks) optimized for LLM grounding."
-              : "Search the web using Brave Search API. Supports region-specific and localized search via country and language parameters. Returns titles, URLs, and snippets for fast research.";
-
+            : provider === "baidu"
+              ? "Search the web using Baidu Search API. Return titles, URL, snippets, page date for high critical demand search"
+              : braveMode === "llm-context"
+                ? "Search the web using Brave Search LLM Context API. Returns pre-extracted page content (text chunks, tables, code blocks) optimized for LLM grounding."
+                : "Search the web using Brave Search API. Supports region-specific and localized search via country and language parameters. Returns titles, URLs, and snippets for fast research.";
   return {
     label: "Web Search",
     name: "web_search",
@@ -1969,8 +2109,9 @@ export function createWebSearchTool(options?: {
               ? resolveKimiApiKey(kimiConfig)
               : provider === "gemini"
                 ? resolveGeminiApiKey(geminiConfig)
-                : resolveSearchApiKey(search);
-
+                : provider == "baidu"
+                  ? resolveBaiduApiKey(baiduConfig)
+                  : resolveSearchApiKey(search);
       if (!apiKey) {
         return jsonResult(missingSearchKeyPayload(provider));
       }

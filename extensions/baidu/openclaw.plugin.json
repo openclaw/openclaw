@@ -1,0 +1,8 @@
+{
+  "id": "baidu",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

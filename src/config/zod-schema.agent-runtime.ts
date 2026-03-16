@@ -271,6 +271,7 @@ export const ToolsWebSearchSchema = z
         z.literal("grok"),
         z.literal("gemini"),
         z.literal("kimi"),
+        z.literal("baidu"),
       ])
       .optional(),
     apiKey: SecretInputSchema.optional().register(sensitive),
@@ -320,6 +321,12 @@ export const ToolsWebSearchSchema = z
     brave: z
       .object({
         mode: z.union([z.literal("web"), z.literal("llm-context")]).optional(),
+      })
+      .strict()
+      .optional(),
+    baidu: z
+      .object({
+        apiKey: SecretInputSchema.optional().register(sensitive),
       })
       .strict()
       .optional(),

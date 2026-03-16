@@ -16,6 +16,7 @@ const BUNDLED_WEB_SEARCH_ALLOWLIST_COMPAT_PLUGIN_IDS = [
   "moonshot",
   "perplexity",
   "xai",
+  "baidu",
 ] as const;
 
 export function resolvePluginWebSearchProviders(params: {
