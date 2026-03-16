@@ -172,8 +172,7 @@ Important trust note:
 - Hugging Face provider catalog — bundled as `huggingface` (enabled by default)
 - Kilo Gateway provider runtime — bundled as `kilocode` (enabled by default)
 - Kimi Coding provider catalog — bundled as `kimi-coding` (enabled by default)
-- MiniMax provider catalog + usage — bundled as `minimax` (enabled by default)
-- MiniMax OAuth (provider auth + catalog) — bundled as `minimax-portal-auth` (enabled by default)
+- MiniMax provider catalog + usage + OAuth — bundled as `minimax` (enabled by default; owns `minimax` and `minimax-portal`)
 - Mistral provider capabilities — bundled as `mistral` (enabled by default)
 - Model Studio provider catalog — bundled as `modelstudio` (enabled by default)
 - Moonshot provider runtime — bundled as `moonshot` (enabled by default)
@@ -664,7 +663,7 @@ Default-on bundled plugin examples:
 - `kilocode`
 - `kimi-coding`
 - `minimax`
-- `minimax-portal-auth`
+- `minimax`
 - `modelstudio`
 - `moonshot`
 - `nvidia`
