@@ -24,8 +24,8 @@ import {
   listEnabledTelegramAccounts,
   resolveTelegramPollActionGateState,
 } from "./accounts.js";
+import { buildTelegramInteractiveButtons } from "./button-types.js";
 import { isTelegramInlineButtonsEnabled } from "./inline-buttons.js";
-import { buildTelegramInteractiveButtons } from "./shared-interactive.js";
 
 const providerId = "telegram";
 
@@ -124,23 +124,15 @@ export const telegramMessageActions: ChannelMessageActionAdapter = {
     }
     return Array.from(actions);
   },
-  supportsInteractive: ({ cfg }) => {
+  getCapabilities: ({ cfg }) => {
     const accounts = listTokenSourcedAccounts(listEnabledTelegramAccounts(cfg));
     if (accounts.length === 0) {
-      return false;
+      return [];
     }
-    return accounts.some((account) =>
+    const buttonsEnabled = accounts.some((account) =>
       isTelegramInlineButtonsEnabled({ cfg, accountId: account.accountId }),
     );
-  },
-  supportsButtons: ({ cfg }) => {
-    const accounts = listTokenSourcedAccounts(listEnabledTelegramAccounts(cfg));
-    if (accounts.length === 0) {
-      return false;
-    }
-    return accounts.some((account) =>
-      isTelegramInlineButtonsEnabled({ cfg, accountId: account.accountId }),
-    );
+    return buttonsEnabled ? (["interactive", "buttons"] as const) : [];
   },
   extractToolSend: ({ args }) => {
     return extractToolSend(args, "sendMessage");
