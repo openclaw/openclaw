@@ -1,4 +1,6 @@
+import { constants as fsConstants } from "node:fs";
 import os from "node:os";
+import path from "node:path";
 import { PassThrough } from "node:stream";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -186,11 +188,21 @@ vi.mock("node:fs/promises", async (importOriginal) => {
         error.code = "ELOOP";
         throw error;
       }
+      if ((_flags ?? 0) & fsConstants.O_EXCL && state.files.has(key)) {
+        const error = new Error(
+          `EEXIST: file already exists, open '${key}'`,
+        ) as NodeJS.ErrnoException;
+        error.code = "EEXIST";
+        throw error;
+      }
       state.fileModes.set(key, typeof mode === "number" ? mode : 0o666);
       return {
         writeFile: async (data: string) => {
           state.files.set(key, data);
           state.fileModes.set(key, typeof mode === "number" ? mode : 0o666);
+        },
+        chmod: async (nextMode: number) => {
+          state.fileModes.set(key, nextMode);
         },
         close: async () => {},
       };
@@ -454,6 +466,31 @@ describe("launchd install", () => {
     const plistPath = resolveLaunchAgentPlistPath(env);
     expect(state.dirModes.get("/Users/test/Library")).toBe(0o755);
     expect(state.dirModes.get("/Users/test/Library/LaunchAgents")).toBe(0o755);
+    expect(state.fileModes.get(plistPath)).toBe(0o600);
+  });
+
+  it("does not clobber a pre-existing temp plist file", async () => {
+    const env = createDefaultLaunchdEnv();
+    const plistPath = resolveLaunchAgentPlistPath(env);
+    const legacyTempPath = path.posix.join(
+      path.posix.dirname(plistPath),
+      `.${path.posix.basename(plistPath)}.${process.pid}.tmp`,
+    );
+    state.dirs.add("/Users/test/Library");
+    state.dirModes.set("/Users/test/Library", 0o755);
+    state.dirs.add("/Users/test/Library/LaunchAgents");
+    state.dirModes.set("/Users/test/Library/LaunchAgents", 0o755);
+    state.files.set(legacyTempPath, "keep-existing-temp");
+    state.fileModes.set(legacyTempPath, 0o644);
+
+    await installLaunchAgent({
+      env,
+      stdout: new PassThrough(),
+      programArguments: defaultProgramArguments,
+    });
+
+    expect(state.files.get(legacyTempPath)).toBe("keep-existing-temp");
+    expect(state.fileModes.get(legacyTempPath)).toBe(0o644);
     expect(state.fileModes.get(plistPath)).toBe(0o600);
   });
 

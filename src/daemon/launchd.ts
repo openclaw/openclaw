@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { constants as fsConstants } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
@@ -35,6 +36,7 @@ import type {
 
 const LAUNCH_AGENT_DIR_MODE = 0o755;
 const LAUNCH_AGENT_PLIST_MODE = 0o600;
+const LAUNCH_AGENT_TEMPFILE_RETRY_LIMIT = 8;
 
 function resolveTrustedLaunchAgentHome(): string {
   const home = (() => {
@@ -271,15 +273,36 @@ async function assertNotSymlink(targetPath: string): Promise<void> {
 async function writeLaunchAgentPlistSecure(plistPath: string, plist: string): Promise<void> {
   await assertNotSymlink(plistPath);
   const dir = path.dirname(plistPath);
-  const tempPath = path.join(dir, `.${path.basename(plistPath)}.${process.pid}.tmp`);
-  await assertNotSymlink(tempPath);
-  const handle = await fs.open(
-    tempPath,
-    fsConstants.O_WRONLY | fsConstants.O_CREAT | fsConstants.O_TRUNC | fsConstants.O_NOFOLLOW,
-    LAUNCH_AGENT_PLIST_MODE,
-  );
+  const basename = path.basename(plistPath);
+  let tempPath: string | undefined;
+  let handle: Awaited<ReturnType<typeof fs.open>> | undefined;
+
+  for (let attempt = 0; attempt < LAUNCH_AGENT_TEMPFILE_RETRY_LIMIT; attempt += 1) {
+    const candidate = path.join(dir, `.${basename}.${process.pid}.${randomUUID()}.tmp`);
+    await assertNotSymlink(candidate);
+    try {
+      handle = await fs.open(
+        candidate,
+        fsConstants.O_WRONLY | fsConstants.O_CREAT | fsConstants.O_EXCL | fsConstants.O_NOFOLLOW,
+        LAUNCH_AGENT_PLIST_MODE,
+      );
+      tempPath = candidate;
+      break;
+    } catch (error) {
+      const code =
+        typeof error === "object" && error !== null && "code" in error ? error.code : undefined;
+      if (code === "EEXIST") {
+        continue;
+      }
+      throw error;
+    }
+  }
+  if (!tempPath || !handle) {
+    throw new Error(`Unable to create temporary LaunchAgent plist in ${dir}`);
+  }
   try {
     await handle.writeFile(plist, { encoding: "utf8" });
+    await handle.chmod(LAUNCH_AGENT_PLIST_MODE);
   } catch (error) {
     await handle.close().catch(() => undefined);
     await fs.unlink(tempPath).catch(() => undefined);
