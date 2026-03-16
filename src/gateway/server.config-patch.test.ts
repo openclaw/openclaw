@@ -61,43 +61,6 @@ async function expectSchemaLookupInvalid(path: unknown) {
   expect(res.error?.message ?? "").toContain("invalid config.schema.lookup params");
 }
 
-type LiveConfig = Record<string, unknown> & {
-  commands?: { restart?: boolean };
-  logging?: { level?: string };
-};
-
-async function getLiveConfig(): Promise<{ hash: string; config: LiveConfig }> {
-  const res = await rpcReq<{
-    raw?: unknown;
-    hash?: string;
-    config?: LiveConfig;
-  }>(requireWs(), "config.get", {});
-  expect(res.ok).toBe(true);
-  expect(typeof res.payload?.hash).toBe("string");
-  expect(res.payload?.config).toBeTruthy();
-  return {
-    hash: res.payload?.hash as string,
-    config: res.payload?.config as LiveConfig,
-  };
-}
-
-async function writeLiveConfig(config: LiveConfig, baseHash: string): Promise<void> {
-  const res = await rpcReq<{
-    ok?: boolean;
-    path?: string;
-    config?: LiveConfig;
-  }>(requireWs(), "config.set", {
-    raw: JSON.stringify(config, null, 2),
-    baseHash,
-  });
-  expect(res.ok).toBe(true);
-  expect(res.payload?.config).toBeTruthy();
-}
-
-function pickAlternateLogLevel(config: LiveConfig): string {
-  return config.logging?.level === "debug" ? "info" : "debug";
-}
-
 describe("gateway config methods", () => {
   it("round-trips config.set and returns the live config path", async () => {
     const { createConfigIO } = await import("../config/config.js");
@@ -215,6 +178,43 @@ describe("gateway config methods", () => {
     expect(res.ok).toBe(false);
     expect(res.error?.message ?? "").toContain("raw must be an object");
   });
+
+  type LiveConfig = Record<string, unknown> & {
+    commands?: { restart?: boolean };
+    logging?: { level?: string };
+  };
+
+  async function getLiveConfig(): Promise<{ hash: string; config: LiveConfig }> {
+    const res = await rpcReq<{
+      raw?: unknown;
+      hash?: string;
+      config?: LiveConfig;
+    }>(requireWs(), "config.get", {});
+    expect(res.ok).toBe(true);
+    expect(typeof res.payload?.hash).toBe("string");
+    expect(res.payload?.config).toBeTruthy();
+    return {
+      hash: res.payload?.hash as string,
+      config: res.payload?.config as LiveConfig,
+    };
+  }
+
+  async function writeLiveConfig(config: LiveConfig, baseHash: string): Promise<void> {
+    const res = await rpcReq<{
+      ok?: boolean;
+      path?: string;
+      config?: LiveConfig;
+    }>(requireWs(), "config.set", {
+      raw: JSON.stringify(config, null, 2),
+      baseHash,
+    });
+    expect(res.ok).toBe(true);
+    expect(res.payload?.config).toBeTruthy();
+  }
+
+  function pickAlternateLogLevel(config: LiveConfig): string {
+    return config.logging?.level === "debug" ? "info" : "debug";
+  }
 
   it("skips automatic restart for config.patch when commands.restart is disabled", async () => {
     const original = await getLiveConfig();
