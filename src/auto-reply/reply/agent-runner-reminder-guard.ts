@@ -6,10 +6,12 @@ export const UNSCHEDULED_REMINDER_NOTE =
 
 const REMINDER_COMMITMENT_PATTERNS: RegExp[] = [
   // Match unambiguous reminder-action verbs (not bare "remember" which overlaps with memory/knowledge retention)
-  /\b(?:i\s*['‘’]?ll|i will)\s+(?:make sure to\s+)?(?:remind|ping|follow up|follow-up|check back|circle back)\b/i,
+  /\b(?:i\s*['\u2018\u2019]?ll|i will)\s+(?:make sure to\s+)?(?:remind|ping|follow up|follow-up|check back|circle back)\b/i,
   // "remember to [verb]" implies a future action/reminder, not memory storage
-  /\b(?:i\s*['‘’]?ll|i will)\s+(?:make sure to\s+)?remember\s+to\s+/i,
-  /\b(?:i\s*['‘’]?ll|i will)\s+(?:set|create|schedule)\s+(?:a\s+)?reminder\b/i,
+  /\b(?:i\s*['\u2018\u2019]?ll|i will)\s+(?:make sure to\s+)?remember\s+to\s+/i,
+  // Conjunction forms: "I'll remember and remind you", "I will remember, then follow up"
+  /\b(?:i\s*['\u2018\u2019]?ll|i will)\s+remember\b.*?\b(?:and|then|,)\s*(?:remind|ping|follow up|follow-up|check back|circle back)\b/i,
+  /\b(?:i\s*['\u2018\u2019]?ll|i will)\s+(?:set|create|schedule)\s+(?:a\s+)?reminder\b/i,
 ];
 
 export function hasUnbackedReminderCommitment(text: string): boolean {
