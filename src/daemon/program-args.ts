@@ -21,6 +21,11 @@ function looksLikeCliEntrypointPath(argv1: string | undefined): boolean {
   );
 }
 
+function looksLikeSourceCliEntrypointPath(entrypointPath: string): boolean {
+  const normalized = entrypointPath.replace(/\\/g, "/");
+  return /\/src\/.+\.(?:[cm]?[jt]s)$/i.test(normalized);
+}
+
 async function resolveCliEntrypointPathForService(): Promise<string> {
   const argv1 = process.argv[1];
   if (!argv1) {
@@ -63,6 +68,26 @@ async function resolveCliEntrypointPathForService(): Promise<string> {
   throw new Error(
     `Cannot find built CLI at ${distCandidates.join(" or ")}. Run "pnpm build" first, or use dev mode.`,
   );
+}
+
+async function resolveExistingCurrentEntrypointPath(): Promise<string> {
+  const argv1 = process.argv[1];
+  if (!argv1) {
+    throw new Error("Unable to resolve current CLI entrypoint path");
+  }
+
+  const normalized = path.resolve(argv1);
+  const resolvedPath = await resolveRealpathSafe(normalized);
+  for (const candidate of [normalized, resolvedPath]) {
+    try {
+      await fs.access(candidate);
+      return candidate;
+    } catch {
+      // Try the next current-process entrypoint candidate.
+    }
+  }
+
+  throw new Error(`Current CLI entrypoint does not exist: ${normalized}`);
 }
 
 async function resolveRealpathSafe(inputPath: string): Promise<string> {
@@ -245,11 +270,20 @@ async function resolveCliProgramArguments(params: {
 }
 
 export async function resolveCurrentCliProgramArguments(args: string[]): Promise<string[]> {
-  if (!looksLikeCliEntrypointPath(process.argv[1])) {
+  const currentArgv1 = process.argv[1];
+  if (!looksLikeCliEntrypointPath(currentArgv1)) {
     return [process.execPath, ...args];
   }
 
-  const cliEntrypointPath = await resolveCliEntrypointPathForService();
+  let cliEntrypointPath: string;
+  try {
+    cliEntrypointPath = await resolveCliEntrypointPathForService();
+  } catch (error) {
+    if (!currentArgv1 || !looksLikeSourceCliEntrypointPath(currentArgv1)) {
+      throw error;
+    }
+    cliEntrypointPath = await resolveExistingCurrentEntrypointPath();
+  }
   return [process.execPath, cliEntrypointPath, ...args];
 }
 

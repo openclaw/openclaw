@@ -114,4 +114,51 @@ describe("resolveCurrentCliProgramArguments", () => {
     ]);
     expect(fsMocks.access).not.toHaveBeenCalled();
   });
+
+  it("keeps a source entrypoint when no built dist entry exists", async () => {
+    const devEntrypoint = path.resolve("/workspaces/openclaw/src/index.ts");
+    process.argv = ["/usr/local/bin/bun", devEntrypoint];
+    fsMocks.realpath.mockResolvedValue(devEntrypoint);
+    fsMocks.access.mockImplementation(async (target: string) => {
+      if (target === devEntrypoint) {
+        return;
+      }
+      throw new Error("missing");
+    });
+
+    const result = await resolveCurrentCliProgramArguments([
+      "--profile",
+      "work",
+      "doctor",
+      "--repair",
+      "--non-interactive",
+    ]);
+
+    expect(result).toEqual([
+      process.execPath,
+      devEntrypoint,
+      "--profile",
+      "work",
+      "doctor",
+      "--repair",
+      "--non-interactive",
+    ]);
+  });
+
+  it("still fails for non-source path entrypoints without a built CLI", async () => {
+    const npxShim = path.resolve("/tmp/.npm/_npx/63c3/node_modules/.bin/openclaw");
+    process.argv = ["/usr/local/bin/node", npxShim];
+    fsMocks.realpath.mockResolvedValue(npxShim);
+    fsMocks.access.mockRejectedValue(new Error("missing"));
+
+    await expect(
+      resolveCurrentCliProgramArguments([
+        "--profile",
+        "work",
+        "doctor",
+        "--repair",
+        "--non-interactive",
+      ]),
+    ).rejects.toThrow('Run "pnpm build" first, or use dev mode.');
+  });
 });
