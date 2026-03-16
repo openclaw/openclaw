@@ -19,6 +19,14 @@ export type StoredConversationReference = {
   conversation?: { id?: string; conversationType?: string; tenantId?: string };
   /** Team ID for channel messages (when available). */
   teamId?: string;
+  /** Bot Framework runtime team id when available. */
+  teamRuntimeId?: string;
+  /** Graph team id when available. */
+  graphTeamId?: string;
+  /** Last resolved/displayed team name (mutable cache). */
+  teamName?: string;
+  /** Last resolved/displayed channel name (mutable cache). */
+  channelName?: string;
   /** Channel ID (usually "msteams") */
   channelId?: string;
   /** Service URL for sending messages back */

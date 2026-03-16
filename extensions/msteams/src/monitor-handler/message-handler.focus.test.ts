@@ -218,6 +218,11 @@ describe("msteams message handler channel focus", () => {
       label: "Team One / #General",
       teamLabel: "Team One",
       channelLabel: "#General",
+      resolution: {
+        teamLabelSource: "activity",
+        channelLabelSource: "activity",
+        graphAttempted: false,
+      },
     });
   });
 
@@ -298,7 +303,23 @@ describe("msteams message handler channel focus", () => {
       label: "Project Ops / #Release Alerts",
       teamLabel: "Project Ops",
       channelLabel: "#Release Alerts",
+      resolution: {
+        teamLabelSource: "graph",
+        channelLabelSource: "graph",
+        graphAttempted: true,
+        graphTeamLookup: "hit",
+        graphChannelLookup: "hit",
+      },
     });
+    expect(conversationStore.upsert).toHaveBeenLastCalledWith(
+      "19:channel@thread.tacv2",
+      expect.objectContaining({
+        teamName: "Project Ops",
+        channelName: "Release Alerts",
+        graphTeamId: "team-guid-1",
+        teamRuntimeId: "runtime-team-id",
+      }),
+    );
   });
 
   it("injects recent channel focus into repeated DM turns from sidecar metadata", async () => {

@@ -7,6 +7,18 @@ export type MSTeamsRecentChannelFocus = {
   label: string;
   teamLabel?: string;
   channelLabel?: string;
+  resolution?: {
+    teamLabelSource?: "activity" | "graph" | "config" | "id" | "missing";
+    channelLabelSource?: "activity" | "graph" | "config" | "missing";
+    graphTeamId?: string;
+    graphAttempted?: boolean;
+    graphTeamLookup?: "hit" | "miss" | "error" | "skipped";
+    graphChannelLookup?: "hit" | "miss" | "error" | "skipped";
+    graphChannelCandidates?: string[];
+    configuredTeamLabel?: string;
+    configuredChannelLabel?: string;
+    lastError?: string;
+  };
   teamId?: string;
   teamRuntimeId?: string;
   channelId?: string;

@@ -102,17 +102,39 @@ async function resolveMSTeamsRecentChannelDisplayLabels(params: {
   configuredTeamLabel?: string;
   configuredChannelLabel?: string;
   logDebug?: (message: string, meta?: Record<string, unknown>) => void;
-}): Promise<{ teamLabel?: string; channelLabel?: string }> {
+}): Promise<{
+  teamLabel?: string;
+  channelLabel?: string;
+  resolution: NonNullable<MSTeamsRecentChannelFocus["resolution"]>;
+}> {
   let teamLabel = params.teamName?.trim() || undefined;
   let channelLabel = params.channelName?.trim() ? `#${params.channelName.trim()}` : undefined;
+  const resolution: NonNullable<MSTeamsRecentChannelFocus["resolution"]> = {
+    teamLabelSource: teamLabel ? "activity" : "missing",
+    channelLabelSource: channelLabel ? "activity" : "missing",
+    graphTeamId: params.graphTeamId?.trim() || undefined,
+    graphAttempted: false,
+    graphTeamLookup: params.graphTeamId?.trim() ? "miss" : "skipped",
+    graphChannelLookup: params.graphTeamId?.trim() ? "miss" : "skipped",
+    graphChannelCandidates: [params.channelId?.trim(), params.conversationId.trim()].filter(
+      (value): value is string => Boolean(value),
+    ),
+    configuredTeamLabel: params.configuredTeamLabel?.trim() || undefined,
+    configuredChannelLabel: params.configuredChannelLabel?.trim() || undefined,
+  };
 
   const graphTeamId = params.graphTeamId?.trim();
   if ((!teamLabel || !channelLabel) && graphTeamId) {
+    resolution.graphAttempted = true;
     try {
       const token = await resolveGraphToken(params.cfg);
       if (!teamLabel) {
         const team = await getTeamById(token, graphTeamId);
         teamLabel = team?.displayName?.trim() || undefined;
+        resolution.graphTeamLookup = teamLabel ? "hit" : "miss";
+        if (teamLabel) {
+          resolution.teamLabelSource = "graph";
+        }
       }
       if (!channelLabel) {
         const channels = await listChannelsForTeam(token, graphTeamId);
@@ -126,20 +148,42 @@ async function resolveMSTeamsRecentChannelDisplayLabels(params: {
         const displayName = match?.displayName?.trim();
         if (displayName) {
           channelLabel = `#${displayName}`;
+          resolution.graphChannelLookup = "hit";
+          resolution.channelLabelSource = "graph";
+        } else {
+          resolution.graphChannelLookup = "miss";
         }
       }
     } catch (err) {
+      const errorText = formatUnknownError(err);
+      if (!teamLabel) {
+        resolution.graphTeamLookup = "error";
+      }
+      if (!channelLabel) {
+        resolution.graphChannelLookup = "error";
+      }
+      resolution.lastError = errorText;
       params.logDebug?.("msteams: failed resolving readable channel labels from graph", {
-        error: formatUnknownError(err),
+        error: errorText,
         graphTeamId,
         conversationId: params.conversationId,
       });
     }
   }
 
+  if (!teamLabel && params.configuredTeamLabel?.trim()) {
+    teamLabel = params.configuredTeamLabel.trim();
+    resolution.teamLabelSource = "config";
+  }
+  if (!channelLabel && params.configuredChannelLabel?.trim()) {
+    channelLabel = params.configuredChannelLabel.trim();
+    resolution.channelLabelSource = "config";
+  }
+
   return {
-    teamLabel: teamLabel ?? (params.configuredTeamLabel?.trim() || undefined),
-    channelLabel: channelLabel ?? (params.configuredChannelLabel?.trim() || undefined),
+    teamLabel,
+    channelLabel,
+    resolution,
   };
 }
 
@@ -415,7 +459,8 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
       return;
     }
 
-    // Build conversation reference for proactive replies.
+    // Build conversation reference for proactive replies. Mutable display labels
+    // are cached here and refreshed on later channel messages if names change.
     const agent = activity.recipient;
     const conversationRef: StoredConversationReference = {
       activityId: activity.id,
@@ -428,15 +473,22 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
         tenantId: conversation?.tenantId,
       },
       teamId,
+      teamRuntimeId: teamRuntimeId?.trim() || undefined,
+      graphTeamId: graphTeamId?.trim() || undefined,
+      teamName: teamName?.trim() || undefined,
+      channelName: channelName?.trim() || undefined,
       channelId: activity.channelId,
       serviceUrl: activity.serviceUrl,
       locale: activity.locale,
     };
-    conversationStore.upsert(conversationId, conversationRef).catch((err) => {
-      log.debug?.("failed to save conversation reference", {
-        error: formatUnknownError(err),
+    const persistConversationRef = (reference: StoredConversationReference) => {
+      conversationStore.upsert(conversationId, reference).catch((err) => {
+        log.debug?.("failed to save conversation reference", {
+          error: formatUnknownError(err),
+        });
       });
-    });
+    };
+    persistConversationRef(conversationRef);
 
     const pollVote = extractMSTeamsPollVote(activity);
     if (pollVote) {
@@ -684,21 +736,30 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
         const configuredChannelLabel = normalizeConfiguredChannelLabel(
           channelGate.channelMatchKey ?? channelGate.channelKey,
         );
-        const { teamLabel: resolvedTeamLabel, channelLabel: resolvedChannelLabel } =
-          await resolveMSTeamsRecentChannelDisplayLabels({
-            cfg,
-            graphTeamId,
-            conversationId,
-            channelId: activity.channelData?.channel?.id?.trim() || undefined,
-            teamName,
-            channelName,
-            configuredTeamLabel,
-            configuredChannelLabel,
-            logDebug: log.debug,
-          });
+        const {
+          teamLabel: resolvedTeamLabel,
+          channelLabel: resolvedChannelLabel,
+          resolution,
+        } = await resolveMSTeamsRecentChannelDisplayLabels({
+          cfg,
+          graphTeamId,
+          conversationId,
+          channelId: activity.channelData?.channel?.id?.trim() || undefined,
+          teamName,
+          channelName,
+          configuredTeamLabel,
+          configuredChannelLabel,
+          logDebug: log.debug,
+        });
         const teamLabel =
           resolvedTeamLabel ?? (teamId?.trim() || teamRuntimeId?.trim() || undefined);
         const channelLabel = resolvedChannelLabel;
+        if (!resolvedTeamLabel) {
+          resolution.teamLabelSource = teamLabel ? "id" : "missing";
+        }
+        if (!resolvedChannelLabel) {
+          resolution.channelLabelSource = "missing";
+        }
         await writeMSTeamsRecentChannelFocus({
           sessionStorePath: storePath,
           mainSessionKey: route.mainSessionKey,
@@ -711,12 +772,18 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
             }),
             teamLabel,
             channelLabel,
+            resolution,
             teamId: teamId?.trim() || undefined,
             teamRuntimeId: teamRuntimeId?.trim() || undefined,
             channelId: activity.channelData?.channel?.id?.trim() || undefined,
             conversationId,
             tenantId: conversation?.tenantId?.trim() || undefined,
           },
+        });
+        persistConversationRef({
+          ...conversationRef,
+          teamName: teamLabel,
+          channelName: channelLabel?.replace(/^#/, "") || undefined,
         });
       } catch (err) {
         logVerboseMessage(`msteams: failed updating recent channel focus sidecar: ${String(err)}`);
