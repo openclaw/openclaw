@@ -12,8 +12,8 @@ function hashSenderId(value: string): string {
   return `user_${hashId(value)}`;
 }
 
-/** E.164 phone number pattern: optional +, 7-15 digits, optionally followed by @... (WhatsApp JID) */
-const E164_PATTERN = /^\+?\d{7,15}(?:@.*)?$/;
+/** E.164 phone number or WhatsApp JID pattern: requires + prefix for bare numbers, or digits followed by @ for JIDs */
+const E164_PATTERN = /^(?:\+\d{7,15}|\d{7,15}@.+)$/;
 
 function redactSenderLabel(value: string | undefined): string | undefined {
   if (!value) {
@@ -88,13 +88,11 @@ export function buildInboundMetaSystemPrompt(
   // For webchat/Hub Chat sessions (when Surface is 'webchat' or undefined with no real channel),
   // omit the channel field entirely rather than falling back to an unrelated provider.
   const channelValue = resolveInboundChannel(ctx);
+  const chatId = safeTrim(ctx.OriginatingTo);
 
   const payload = {
     schema: "openclaw.inbound_meta.v1",
-    chat_id:
-      options?.redactPII && safeTrim(ctx.OriginatingTo)
-        ? hashChatId(safeTrim(ctx.OriginatingTo)!)
-        : safeTrim(ctx.OriginatingTo),
+    chat_id: options?.redactPII && chatId ? hashChatId(chatId) : chatId,
     account_id: safeTrim(ctx.AccountId),
     channel: channelValue,
     provider: safeTrim(ctx.Provider),
