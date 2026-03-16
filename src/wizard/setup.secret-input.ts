@@ -11,7 +11,7 @@ function formatSecretResolutionError(error: unknown): string {
   return String(error);
 }
 
-export async function resolveOnboardingSecretInputString(params: {
+export async function resolveSetupSecretInputString(params: {
   config: OpenClawConfig;
   value: unknown;
   path: string;

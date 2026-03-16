@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
-import { resolveOnboardingSecretInputString } from "./onboarding.secret-input.js";
+import { resolveSetupSecretInputString } from "./setup.secret-input.js";
 
 function makeConfig(): OpenClawConfig {
   return {
@@ -12,9 +12,9 @@ function makeConfig(): OpenClawConfig {
   } as OpenClawConfig;
 }
 
-describe("resolveOnboardingSecretInputString", () => {
+describe("resolveSetupSecretInputString", () => {
   it("resolves env-template SecretInput strings", async () => {
-    const resolved = await resolveOnboardingSecretInputString({
+    const resolved = await resolveSetupSecretInputString({
       config: makeConfig(),
       value: "${OPENCLAW_GATEWAY_PASSWORD}",
       path: "gateway.auth.password",
@@ -27,7 +27,7 @@ describe("resolveOnboardingSecretInputString", () => {
   });
 
   it("returns plaintext strings when value is not a SecretRef", async () => {
-    const resolved = await resolveOnboardingSecretInputString({
+    const resolved = await resolveSetupSecretInputString({
       config: makeConfig(),
       value: "plain-text",
       path: "gateway.auth.password",
@@ -38,7 +38,7 @@ describe("resolveOnboardingSecretInputString", () => {
 
   it("throws with path context when env-template SecretRef cannot resolve", async () => {
     await expect(
-      resolveOnboardingSecretInputString({
+      resolveSetupSecretInputString({
         config: makeConfig(),
         value: "${OPENCLAW_GATEWAY_PASSWORD}",
         path: "gateway.auth.password",

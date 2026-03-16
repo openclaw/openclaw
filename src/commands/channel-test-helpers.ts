@@ -6,22 +6,22 @@ import { telegramPlugin } from "../../extensions/telegram/src/channel.js";
 import { whatsappPlugin } from "../../extensions/whatsapp/src/channel.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { createTestRegistry } from "../test-utils/channel-plugins.js";
-import { getChannelSetupFlowAdapter } from "./channel-setup/registry.js";
-import type { ChannelSetupFlowAdapter } from "./channel-setup/types.js";
+import { getChannelSetupWizardAdapter } from "./channel-setup/registry.js";
+import type { ChannelSetupWizardAdapter } from "./channel-setup/types.js";
 import type { ChannelChoice } from "./onboard-types.js";
 
-type ChannelSetupFlowAdapterPatch = Partial<
+type ChannelSetupWizardAdapterPatch = Partial<
   Pick<
-    ChannelSetupFlowAdapter,
+    ChannelSetupWizardAdapter,
     "configure" | "configureInteractive" | "configureWhenConfigured" | "getStatus"
   >
 >;
 
 type PatchedSetupAdapterFields = {
-  configure?: ChannelSetupFlowAdapter["configure"];
-  configureInteractive?: ChannelSetupFlowAdapter["configureInteractive"];
-  configureWhenConfigured?: ChannelSetupFlowAdapter["configureWhenConfigured"];
-  getStatus?: ChannelSetupFlowAdapter["getStatus"];
+  configure?: ChannelSetupWizardAdapter["configure"];
+  configureInteractive?: ChannelSetupWizardAdapter["configureInteractive"];
+  configureWhenConfigured?: ChannelSetupWizardAdapter["configureWhenConfigured"];
+  getStatus?: ChannelSetupWizardAdapter["getStatus"];
 };
 
 export function setDefaultChannelPluginRegistryForTests(): void {
@@ -36,11 +36,11 @@ export function setDefaultChannelPluginRegistryForTests(): void {
   setActivePluginRegistry(createTestRegistry(channels));
 }
 
-export function patchChannelSetupFlowAdapter(
+export function patchChannelSetupWizardAdapter(
   channel: ChannelChoice,
-  patch: ChannelSetupFlowAdapterPatch,
+  patch: ChannelSetupWizardAdapterPatch,
 ): () => void {
-  const adapter = getChannelSetupFlowAdapter(channel);
+  const adapter = getChannelSetupWizardAdapter(channel);
   if (!adapter) {
     throw new Error(`missing setup adapter for ${channel}`);
   }
