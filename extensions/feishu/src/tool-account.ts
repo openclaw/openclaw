@@ -72,8 +72,9 @@ export function resolveFeishuToolAccountFromContext(params: {
       ? routedAccountId
       : undefined;
 
+  const hasExplicitAccountId = !!normalizeOptionalAccountId(params.executeParams?.accountId);
   const mergedExecuteParams: AccountAwareParams | undefined =
-    params.executeParams?.accountId || !feishuRoutedAccountId
+    hasExplicitAccountId || !feishuRoutedAccountId
       ? params.executeParams
       : { ...params.executeParams, accountId: feishuRoutedAccountId };
 
