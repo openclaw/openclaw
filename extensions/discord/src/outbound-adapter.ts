@@ -1,3 +1,4 @@
+import { chunkText } from "../../../src/auto-reply/chunk.js";
 import {
   resolvePayloadMediaUrls,
   sendPayloadMediaSequence,
@@ -72,16 +73,25 @@ async function maybeSendDiscordWebhookText(params: {
     identity: params.identity,
     binding,
   });
-  const result = await sendWebhookMessageDiscord(params.text, {
-    webhookId: binding.webhookId,
-    webhookToken: binding.webhookToken,
-    accountId: binding.accountId,
-    threadId: binding.threadId,
-    cfg: params.cfg,
-    replyTo: params.replyToId ?? undefined,
-    username: persona.username,
-    avatarUrl: persona.avatarUrl,
-  });
+  // Auto-split long text for webhook sends to avoid Discord 2000-char API rejection.
+  // See: https://github.com/openclaw/openclaw/issues/47909
+  const chunks =
+    params.text.length > DISCORD_TEXT_CHUNK_LIMIT
+      ? chunkText(params.text, DISCORD_TEXT_CHUNK_LIMIT)
+      : [params.text];
+  let result: { messageId: string; channelId: string } | null = null;
+  for (const chunk of chunks) {
+    result = await sendWebhookMessageDiscord(chunk, {
+      webhookId: binding.webhookId,
+      webhookToken: binding.webhookToken,
+      accountId: binding.accountId,
+      threadId: binding.threadId,
+      cfg: params.cfg,
+      replyTo: params.replyToId ?? undefined,
+      username: persona.username,
+      avatarUrl: persona.avatarUrl,
+    });
+  }
   return result;
 }
 
