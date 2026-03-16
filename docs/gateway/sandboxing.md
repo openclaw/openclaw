@@ -7,7 +7,7 @@ status: active
 
 # Sandboxing
 
-OpenClaw can run **tools inside Docker containers** to reduce blast radius.
+OpenClaw can run **tools inside sandbox backends** to reduce blast radius.
 This is **optional** and controlled by configuration (`agents.defaults.sandbox` or
 `agents.list[].sandbox`). If sandboxing is off, tools run on the host.
 The Gateway stays on the host; tool execution runs in an isolated sandbox
@@ -53,6 +53,54 @@ Not sandboxed:
 - `"session"` (default): one container per session.
 - `"agent"`: one container per agent.
 - `"shared"`: one container shared by all sandboxed sessions.
+
+## Backend
+
+`agents.defaults.sandbox.backend` controls **which runtime** provides the sandbox:
+
+- `"docker"` (default): local Docker-backed sandbox runtime.
+- `"openshell"`: OpenShell-backed sandbox runtime provided by the bundled `openshell` plugin.
+
+OpenShell-specific config lives under `plugins.entries.openshell.config`.
+
+```json5
+{
+  agents: {
+    defaults: {
+      sandbox: {
+        mode: "all",
+        backend: "openshell",
+        scope: "session",
+        workspaceAccess: "rw",
+      },
+    },
+  },
+  plugins: {
+    entries: {
+      openshell: {
+        enabled: true,
+        config: {
+          from: "openclaw",
+          mode: "remote", // mirror | remote
+          remoteWorkspaceDir: "/sandbox",
+          remoteAgentWorkspaceDir: "/agent",
+        },
+      },
+    },
+  },
+}
+```
+
+OpenShell modes:
+
+- `mirror` (default): local workspace stays canonical. OpenClaw syncs local files into OpenShell before exec and syncs the remote workspace back after exec.
+- `remote`: OpenShell workspace is canonical after the sandbox is created. OpenClaw seeds the remote workspace once from the local workspace, then file tools and exec run directly against the remote sandbox without syncing changes back.
+
+Current OpenShell limitations:
+
+- sandbox browser is not supported yet
+- `sandbox.docker.binds` is not supported on the OpenShell backend
+- Docker-specific runtime knobs under `sandbox.docker.*` still apply only to the Docker backend
 
 ## Workspace access
 
@@ -116,7 +164,7 @@ Security notes:
 
 ## Images + setup
 
-Default image: `openclaw-sandbox:bookworm-slim`
+Default Docker image: `openclaw-sandbox:bookworm-slim`
 
 Build it once:
 
