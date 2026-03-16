@@ -66,16 +66,48 @@ describe("resolveMSTeamsCredentials", () => {
     expect(resolved?.appPassword).toBeUndefined();
   });
 
-  it("resolves certificate auth without config cert fields (SDK env fallback)", () => {
-    const resolved = resolveMSTeamsCredentials({
-      appId: "app-id",
-      tenantId: "tenant-id",
-      authType: "certificate",
-    });
+  it("resolves certificate auth via SDK plain env vars", () => {
+    process.env.certPemFile = "/env/cert.pem";
+    process.env.certKeyFile = "/env/key.pem";
+    try {
+      const resolved = resolveMSTeamsCredentials({
+        appId: "app-id",
+        tenantId: "tenant-id",
+        authType: "certificate",
+      });
 
-    expect(resolved?.authType).toBe("certificate");
-    expect(resolved?.certPemFile).toBeUndefined();
-    expect(resolved?.certKeyFile).toBeUndefined();
+      expect(resolved?.authType).toBe("certificate");
+    } finally {
+      delete process.env.certPemFile;
+      delete process.env.certKeyFile;
+    }
+  });
+
+  it("resolves certificate auth with mixed config/env sources", () => {
+    process.env.certKeyFile = "/env/key.pem";
+    try {
+      const resolved = resolveMSTeamsCredentials({
+        appId: "app-id",
+        tenantId: "tenant-id",
+        authType: "certificate",
+        certPemFile: "/config/cert.pem",
+      });
+
+      expect(resolved?.authType).toBe("certificate");
+      expect(resolved?.certPemFile).toBe("/config/cert.pem");
+    } finally {
+      delete process.env.certKeyFile;
+    }
+  });
+
+  it("returns undefined for certificate auth with no auth material anywhere", () => {
+    expect(
+      resolveMSTeamsCredentials({
+        appId: "app-id",
+        tenantId: "tenant-id",
+        authType: "certificate",
+      }),
+    ).toBeUndefined();
   });
 
   it("resolves federated credentials with ficClientId", () => {
@@ -103,16 +135,29 @@ describe("resolveMSTeamsCredentials", () => {
     expect(resolved?.widAssertionFile).toBe("/var/run/secrets/azure/tokens/azure-identity-token");
   });
 
-  it("resolves federated auth without config fields (SDK env fallback)", () => {
-    const resolved = resolveMSTeamsCredentials({
-      appId: "app-id",
-      tenantId: "tenant-id",
-      authType: "federatedCredential",
-    });
+  it("resolves federated auth via SDK plain env vars", () => {
+    process.env.FICClientId = "env-fic-id";
+    try {
+      const resolved = resolveMSTeamsCredentials({
+        appId: "app-id",
+        tenantId: "tenant-id",
+        authType: "federatedCredential",
+      });
 
-    expect(resolved?.authType).toBe("federatedCredential");
-    expect(resolved?.ficClientId).toBeUndefined();
-    expect(resolved?.widAssertionFile).toBeUndefined();
+      expect(resolved?.authType).toBe("federatedCredential");
+    } finally {
+      delete process.env.FICClientId;
+    }
+  });
+
+  it("returns undefined for federated auth with no auth material anywhere", () => {
+    expect(
+      resolveMSTeamsCredentials({
+        appId: "app-id",
+        tenantId: "tenant-id",
+        authType: "federatedCredential",
+      }),
+    ).toBeUndefined();
   });
 
   it("throws when appPassword remains an unresolved SecretRef object", () => {
@@ -157,14 +202,31 @@ describe("hasConfiguredMSTeamsCredentials", () => {
     ).toBe(true);
   });
 
-  it("treats certificate auth as configured even without cert files (SDK env fallback)", () => {
+  it("detects certificate auth via SDK plain env vars", () => {
+    process.env.certPemFile = "/env/cert.pem";
+    process.env.certKeyFile = "/env/key.pem";
+    try {
+      expect(
+        hasConfiguredMSTeamsCredentials({
+          appId: "app-id",
+          tenantId: "tenant-id",
+          authType: "certificate",
+        }),
+      ).toBe(true);
+    } finally {
+      delete process.env.certPemFile;
+      delete process.env.certKeyFile;
+    }
+  });
+
+  it("rejects certificate auth with no auth material anywhere", () => {
     expect(
       hasConfiguredMSTeamsCredentials({
         appId: "app-id",
         tenantId: "tenant-id",
         authType: "certificate",
       }),
-    ).toBe(true);
+    ).toBe(false);
   });
 
   it("detects federated credential auth as configured", () => {
@@ -178,13 +240,28 @@ describe("hasConfiguredMSTeamsCredentials", () => {
     ).toBe(true);
   });
 
-  it("treats federated auth as configured even without config fields (SDK env fallback)", () => {
+  it("detects federated auth via SDK plain env vars", () => {
+    process.env.WIDAssertionFile = "/var/run/token";
+    try {
+      expect(
+        hasConfiguredMSTeamsCredentials({
+          appId: "app-id",
+          tenantId: "tenant-id",
+          authType: "federatedCredential",
+        }),
+      ).toBe(true);
+    } finally {
+      delete process.env.WIDAssertionFile;
+    }
+  });
+
+  it("rejects federated auth with no auth material anywhere", () => {
     expect(
       hasConfiguredMSTeamsCredentials({
         appId: "app-id",
         tenantId: "tenant-id",
         authType: "federatedCredential",
       }),
-    ).toBe(true);
+    ).toBe(false);
   });
 });
