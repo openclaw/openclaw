@@ -139,7 +139,7 @@ export async function appendStatusAllDiagnosis(params: {
       params.tailscaleMode === "off"
         ? `Tailscale: off · ${backend}${params.tailscale.dnsName ? ` · ${params.tailscale.dnsName}` : ""}`
         : `Tailscale: ${params.tailscaleMode} · ${backend}${params.tailscale.dnsName ? ` · ${params.tailscale.dnsName}` : ""}`;
-    emitCheck(label, okBackend && (params.tailscaleMode === "off" || hasDns) ? "ok" : "warn");
+    emitCheck(label, params.tailscaleMode === "off" || (okBackend && hasDns) ? "ok" : "warn");
     if (params.tailscale.error) {
       lines.push(`  ${muted(`error: ${params.tailscale.error}`)}`);
     }
