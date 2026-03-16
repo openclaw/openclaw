@@ -80,17 +80,20 @@ class FakeNodeHostRuntime implements AcpRuntime {
     this.turns.push(input);
     this.readyToEmit.resolve();
     await this.releaseTurn.promise;
-    for (const event of this.emittedEvents) {
-      if (event.type === "done") {
-        yield {
-          type: "done",
-          stopReason: this.nextStopReason,
-        };
-        continue;
+    try {
+      for (const event of this.emittedEvents) {
+        if (event.type === "done") {
+          yield {
+            type: "done",
+            stopReason: this.nextStopReason,
+          };
+          continue;
+        }
+        yield event;
       }
-      yield event;
+    } finally {
+      this.finished.resolve();
     }
-    this.finished.resolve();
   }
 
   async getStatus(): Promise<{ summary: string }> {
@@ -852,6 +855,111 @@ describe("handleAcpInvokeCommand", () => {
       ok: false,
       code: "UNAVAILABLE",
       message: expect.stringContaining("run-terminal-failure"),
+    });
+  });
+
+  it("uses the last delivered seq for terminal finalSeq after a worker event send fails", async () => {
+    const runtime = new FakeNodeHostRuntime();
+    runtime.emittedEvents = [
+      {
+        type: "text_delta",
+        stream: "output",
+        text: "hello before drop",
+      },
+      {
+        type: "done",
+        stopReason: "done-after-drop",
+      },
+    ];
+    registerAcpRuntimeBackend({
+      id: "acpx",
+      runtime,
+    });
+    const nodeEvents: NodeEventCall[] = [];
+    let dropped = false;
+
+    const sendNodeEvent = async (event: string, payload: unknown) => {
+      if (event === "acp.worker.event" && !dropped) {
+        dropped = true;
+        throw new Error("drop first worker event");
+      }
+      nodeEvents.push({ event, payload });
+    };
+
+    await handleAcpInvokeCommand(
+      buildFrame({
+        command: "acp.session.ensure",
+        payload: {
+          sessionKey: "agent:main:acp:test",
+          leaseId: "lease-1",
+          leaseEpoch: 1,
+          agent: "main",
+          mode: "persistent",
+        },
+      }),
+      buildDeps(sendNodeEvent),
+    );
+
+    await handleAcpInvokeCommand(
+      buildFrame({
+        command: "acp.turn.start",
+        payload: {
+          sessionKey: "agent:main:acp:test",
+          runId: "run-drop-event",
+          leaseId: "lease-1",
+          leaseEpoch: 1,
+          requestId: "req-drop-event",
+          mode: "prompt",
+          text: "drop first event",
+        },
+      }),
+      buildDeps(sendNodeEvent),
+    );
+
+    await runtime.waitForTurnStart();
+    runtime.releaseTurnToComplete("done-after-drop");
+    await runtime.waitForTurnFinish();
+
+    await vi.waitFor(() => {
+      expect(nodeEvents).toHaveLength(1);
+    });
+    expect(nodeEvents).toEqual([
+      {
+        event: "acp.worker.terminal",
+        payload: {
+          nodeId: "node-1",
+          sessionKey: "agent:main:acp:test",
+          runId: "run-drop-event",
+          leaseId: "lease-1",
+          leaseEpoch: 1,
+          terminalEventId: expect.any(String),
+          finalSeq: 0,
+          terminal: {
+            kind: "failed",
+            errorMessage: "drop first worker event",
+          },
+        },
+      },
+    ]);
+
+    const status = await handleAcpInvokeCommand(
+      buildFrame({
+        command: "acp.session.status",
+        payload: {
+          sessionKey: "agent:main:acp:test",
+          leaseId: "lease-1",
+          leaseEpoch: 1,
+        },
+      }),
+      buildDeps(),
+    );
+    expect(status).toMatchObject({
+      handled: true,
+      ok: true,
+      payload: {
+        state: "idle",
+        nodeRuntimeSessionId: "acpx-session-1",
+      },
     });
   });
 

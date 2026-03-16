@@ -673,7 +673,7 @@ async function runWorkerTurn(params: {
   sendNodeEvent: (event: string, payload: unknown) => Promise<void>;
 }) {
   const { nodeId, session, activeTurn, sendNodeEvent } = params;
-  let seq = 0;
+  let deliveredSeq = 0;
   let runtimeFailureTerminal:
     | {
         kind: "failed";
@@ -705,16 +705,17 @@ async function runWorkerTurn(params: {
         event.type === "tool_call" ||
         event.type === "error"
       ) {
-        seq += 1;
+        const nextSeq = deliveredSeq + 1;
         await sendNodeEvent("acp.worker.event", {
           nodeId,
           sessionKey: session.sessionKey,
           runId: activeTurn.runId,
           leaseId: session.leaseId,
           leaseEpoch: session.leaseEpoch,
-          seq,
+          seq: nextSeq,
           event,
         });
+        deliveredSeq = nextSeq;
         if (event.type === "error") {
           runtimeFailureTerminal = {
             kind: "failed",
@@ -770,7 +771,7 @@ async function runWorkerTurn(params: {
       leaseId: session.leaseId,
       leaseEpoch: session.leaseEpoch,
       terminalEventId: `node-host:${randomUUID()}`,
-      finalSeq: seq,
+      finalSeq: deliveredSeq,
       terminal,
     });
     settleCompletedTurn(session, activeTurn);
