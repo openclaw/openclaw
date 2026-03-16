@@ -707,6 +707,40 @@ describe("chat view", () => {
     expect(optionValues).not.toContain("gpt-5-mini");
   });
 
+  it("preserves a provider-qualified server model instead of reusing the active provider", () => {
+    const { state } = createChatHeaderState({
+      model: "llamacpp/qwen3-14b.gguf",
+      models: [
+        { id: "hunter-alpha", name: "Hunter Alpha", provider: "openrouter" },
+        { id: "qwen3-14b.gguf", name: "Qwen3 14B GGUF", provider: "llamacpp" },
+      ],
+    });
+    state.sessionsResult = {
+      ts: 0,
+      path: "",
+      count: 1,
+      defaults: { modelProvider: "openrouter", model: "hunter-alpha", contextTokens: null },
+      sessions: [
+        {
+          key: "main",
+          kind: "direct",
+          updatedAt: null,
+          modelProvider: "openrouter",
+          model: "llamacpp/qwen3-14b.gguf",
+        },
+      ],
+    };
+
+    const container = document.createElement("div");
+    render(renderChatSessionSelect(state), container);
+
+    const modelSelect = container.querySelector<HTMLSelectElement>(
+      'select[data-chat-model-select="true"]',
+    );
+    expect(modelSelect).not.toBeNull();
+    expect(modelSelect?.value).toBe("llamacpp/qwen3-14b.gguf");
+  });
+
   it("prefers the session label over displayName in the grouped chat session selector", () => {
     const { state } = createChatHeaderState({ omitSessionFromList: true });
     state.sessionKey = "agent:main:subagent:4f2146de-887b-4176-9abe-91140082959b";

@@ -47,4 +47,10 @@ describe("chat-model-ref helpers", () => {
     expect(resolveServerChatModelValue("gpt-5-mini", "openai")).toBe("openai/gpt-5-mini");
     expect(resolveServerChatModelValue("alias-only", null)).toBe("alias-only");
   });
+
+  it("preserves server-qualified model refs", () => {
+    expect(resolveServerChatModelValue("llamacpp/qwen3-14b.gguf", "openrouter")).toBe(
+      "llamacpp/qwen3-14b.gguf",
+    );
+  });
 });

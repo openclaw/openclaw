@@ -69,7 +69,14 @@ export function resolveServerChatModelValue(
   if (typeof model !== "string") {
     return "";
   }
-  return buildQualifiedChatModelValue(model, provider);
+  const trimmedModel = model.trim();
+  if (!trimmedModel) {
+    return "";
+  }
+  if (trimmedModel.includes("/")) {
+    return trimmedModel;
+  }
+  return buildQualifiedChatModelValue(trimmedModel, provider);
 }
 
 export function formatChatModelDisplay(value: string): string {
