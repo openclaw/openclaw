@@ -44,6 +44,7 @@ export type SessionListDeliveryContext = {
   channel?: string;
   to?: string;
   accountId?: string;
+  threadId?: string;
 };
 
 export type SessionListRow = {
@@ -66,6 +67,7 @@ export type SessionListRow = {
   lastChannel?: string;
   lastTo?: string;
   lastAccountId?: string;
+  lastThreadId?: string;
   transcriptPath?: string;
   messages?: unknown[];
 };
