@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { runSecretsApply } from "./apply.js";
 import type { SecretsApplyPlan } from "./plan.js";
+import { clearSecretsRuntimeSnapshot } from "./runtime.js";
 
 const OPENAI_API_KEY_ENV_REF = {
   source: "env",
@@ -173,11 +174,13 @@ describe("secrets apply", () => {
   let fixture: ApplyFixture;
 
   beforeEach(async () => {
+    clearSecretsRuntimeSnapshot();
     fixture = await createApplyFixture();
     await seedDefaultApplyFixture(fixture);
   });
 
   afterEach(async () => {
+    clearSecretsRuntimeSnapshot();
     await fs.rm(fixture.rootDir, { recursive: true, force: true });
   });
 

@@ -327,12 +327,16 @@ export function resolveAgentIdByWorkspacePath(
   return resolveAgentIdsByWorkspacePath(cfg, workspacePath)[0];
 }
 
-export function resolveAgentDir(cfg: OpenClawConfig, agentId: string) {
+export function resolveAgentDir(
+  cfg: OpenClawConfig,
+  agentId: string,
+  env: NodeJS.ProcessEnv = process.env,
+) {
   const id = normalizeAgentId(agentId);
   const configured = resolveAgentConfig(cfg, id)?.agentDir?.trim();
   if (configured) {
-    return resolveUserPath(configured);
+    return resolveUserPath(configured, env);
   }
-  const root = resolveStateDir(process.env);
+  const root = resolveStateDir(env);
   return path.join(root, "agents", id, "agent");
 }

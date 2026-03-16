@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import * as webSearchProviders from "../plugins/web-search-providers.js";
 import * as secretResolve from "./resolve.js";
 import { createResolverContext } from "./runtime-shared.js";
 import { resolveRuntimeWebTools } from "./runtime-web-tools.js";
@@ -86,6 +87,32 @@ function expectInactiveFirecrawlSecretRef(params: {
 describe("runtime web tools resolution", () => {
   afterEach(() => {
     vi.restoreAllMocks();
+  });
+
+  it("skips loading web search providers when search config is absent", async () => {
+    const providerSpy = vi.spyOn(webSearchProviders, "resolvePluginWebSearchProviders");
+
+    const { metadata } = await runRuntimeWebTools({
+      config: asConfig({
+        tools: {
+          web: {
+            fetch: {
+              firecrawl: {
+                apiKey: { source: "env", provider: "default", id: "FIRECRAWL_API_KEY_REF" },
+              },
+            },
+          },
+        },
+      }),
+      env: {
+        FIRECRAWL_API_KEY: "firecrawl-runtime-key", // pragma: allowlist secret
+      },
+    });
+
+    expect(providerSpy).not.toHaveBeenCalled();
+    expect(metadata.search.providerSource).toBe("none");
+    expect(metadata.fetch.firecrawl.active).toBe(true);
+    expect(metadata.fetch.firecrawl.apiKeySource).toBe("env");
   });
 
   it.each([
