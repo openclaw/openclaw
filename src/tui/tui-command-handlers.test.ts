@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import type { OpenClawConfig } from "../config/types.js";
 import { createCommandHandlers } from "./tui-command-handlers.js";
 
 type LoadHistoryMock = ReturnType<typeof vi.fn> & (() => Promise<void>);
@@ -11,8 +12,10 @@ function createHarness(params?: {
   setSession?: SetSessionMock;
   loadHistory?: LoadHistoryMock;
   setActivityStatus?: SetActivityStatusMock;
+  config?: OpenClawConfig;
   isConnected?: boolean;
   activeChatRunId?: string | null;
+  sessionInfo?: Record<string, unknown>;
 }) {
   const sendChat = params?.sendChat ?? vi.fn().mockResolvedValue({ runId: "r1" });
   const resetSession = params?.resetSession ?? vi.fn().mockResolvedValue({ ok: true });
@@ -29,7 +32,7 @@ function createHarness(params?: {
     currentSessionKey: "agent:main:main",
     activeChatRunId: params?.activeChatRunId ?? null,
     isConnected: params?.isConnected ?? true,
-    sessionInfo: {},
+    sessionInfo: params?.sessionInfo ?? {},
   };
 
   const { handleCommand } = createCommandHandlers({
@@ -37,6 +40,7 @@ function createHarness(params?: {
     chatLog: { addUser, addSystem } as never,
     tui: { requestRender } as never,
     opts: {},
+    config: params?.config,
     state: state as never,
     deliverDefault: false,
     openOverlay: vi.fn(),
@@ -201,5 +205,46 @@ describe("tui command handlers", () => {
     expect(addUser).not.toHaveBeenCalled();
     expect(addSystem).toHaveBeenCalledWith("not connected to gateway — message not sent");
     expect(setActivityStatus).toHaveBeenLastCalledWith("disconnected");
+  });
+
+  it("uses config-aware xhigh hints for help and think usage", async () => {
+    const config: OpenClawConfig = {
+      models: {
+        providers: {
+          robot: {
+            baseUrl: "https://example.test/v1",
+            models: [
+              {
+                id: "gpt-5.4",
+                name: "robot/gpt-5.4",
+                reasoning: true,
+                input: ["text"],
+                cost: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0 },
+                contextWindow: 128000,
+                maxTokens: 8192,
+                compat: { supportsXHighThinking: true },
+              },
+            ],
+          },
+        },
+      },
+    };
+
+    const { handleCommand, addSystem } = createHarness({
+      config,
+      sessionInfo: {
+        modelProvider: "robot",
+        model: "gpt-5.4",
+      },
+    });
+
+    await handleCommand("/help");
+    await handleCommand("/think");
+
+    expect(addSystem).toHaveBeenNthCalledWith(
+      1,
+      expect.stringContaining("/think <off|minimal|low|medium|high|xhigh|adaptive>"),
+    );
+    expect(addSystem).toHaveBeenNthCalledWith(2, "usage: /think <off|minimal|low|medium|high|xhigh|adaptive>");
   });
 });

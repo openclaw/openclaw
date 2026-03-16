@@ -151,10 +151,6 @@ function collectExplicitXHighRefs(
     out.set(ref, { ref, supported });
   };
 
-  for (const entry of source?.catalog ?? []) {
-    add(entry.provider, entry.id, entry.compat?.supportsXHighThinking);
-  }
-
   const config = resolveThinkingSupportConfig(source);
   const providers = config?.models?.providers;
   if (providers && typeof providers === "object") {
@@ -179,6 +175,11 @@ function collectExplicitXHighRefs(
         );
       }
     }
+  }
+
+  // Match resolveExplicitXHighOverride(): catalog entries override config for the same ref.
+  for (const entry of source?.catalog ?? []) {
+    add(entry.provider, entry.id, entry.compat?.supportsXHighThinking);
   }
 
   return [...out.values()];

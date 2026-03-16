@@ -144,6 +144,22 @@ describe("listThinkingLevels", () => {
     expect(listThinkingLevels("openai", "gpt-5.4", source)).not.toContain("xhigh");
   });
 
+  it("keeps catalog overrides aligned with xhigh hint generation", () => {
+    const source: ThinkingSupportSource = {
+      ...createThinkingSupportSource("openai", true),
+      catalog: [
+        {
+          provider: "openai",
+          id: "gpt-5.4",
+          compat: { supportsXHighThinking: false },
+        },
+      ],
+    };
+
+    expect(supportsXHighThinking("openai", "gpt-5.4", source)).toBe(false);
+    expect(formatXHighModelHint(source)).not.toContain("openai/gpt-5.4");
+  });
+
   it("always includes adaptive", () => {
     expect(listThinkingLevels(undefined, "gpt-4.1-mini")).toContain("adaptive");
     expect(listThinkingLevels("anthropic", "claude-opus-4-6")).toContain("adaptive");
