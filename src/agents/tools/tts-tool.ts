@@ -27,11 +27,25 @@ export function createTtsTool(opts?: {
       const params = args as Record<string, unknown>;
       const text = readStringParam(params, "text", { required: true });
       const channel = readStringParam(params, "channel");
+      const resolvedChannel = channel ?? opts?.agentChannel;
       const cfg = opts?.config ?? loadConfig();
+
+      if (!resolvedChannel) {
+        return {
+          content: [
+            {
+              type: "text",
+              text: "TTS requires a bound channel for audio delivery. Use sessionTarget: \"main\" or provide a channel parameter.",
+            },
+          ],
+          details: { error: "no_channel" },
+        };
+      }
+
       const result = await textToSpeech({
         text,
         cfg,
-        channel: channel ?? opts?.agentChannel,
+        channel: resolvedChannel,
       });
 
       if (result.success && result.audioPath) {
