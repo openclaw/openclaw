@@ -195,7 +195,10 @@ export async function channelsAddCommand(
       ...(pluginId ? { pluginId } : {}),
       workspaceDir: resolveWorkspaceDir(),
     });
-    return snapshot.channels.find((entry) => entry.plugin.id === channelId)?.plugin;
+    return (
+      snapshot.channels.find((entry) => entry.plugin.id === channelId)?.plugin ??
+      snapshot.channelSetups.find((entry) => entry.plugin.id === channelId)?.plugin
+    );
   };
 
   if (!channel && catalogEntry) {

@@ -23,6 +23,15 @@ export function rewritePackageExtensions(entries) {
     });
 }
 
+function rewritePackageEntry(entry) {
+  if (typeof entry !== "string" || entry.trim().length === 0) {
+    return undefined;
+  }
+  const normalized = entry.replace(/^\.\//, "");
+  const rewritten = normalized.replace(/\.[^.]+$/u, ".js");
+  return `./${rewritten}`;
+}
+
 function ensurePathInsideRoot(rootDir, rawPath) {
   const resolved = path.resolve(rootDir, rawPath);
   const relative = path.relative(rootDir, resolved);
@@ -176,6 +185,9 @@ export function copyBundledPluginMetadata(params = {}) {
       packageJson.openclaw = {
         ...packageJson.openclaw,
         extensions: rewritePackageExtensions(packageJson.openclaw.extensions),
+        ...(typeof packageJson.openclaw.setupEntry === "string"
+          ? { setupEntry: rewritePackageEntry(packageJson.openclaw.setupEntry) }
+          : {}),
       };
     }
 
