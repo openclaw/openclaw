@@ -8,6 +8,7 @@ import {
 import { createServer as createHttpsServer } from "node:https";
 import type { TlsOptions } from "node:tls";
 import type { WebSocketServer } from "ws";
+import { handleBlueBubblesWebhookRequest } from "../../extensions/bluebubbles/src/monitor.js";
 import { handleSlackHttpRequest } from "../../extensions/slack/src/http/index.js";
 import { resolveAgentAvatar } from "../agents/identity-avatar.js";
 import { CANVAS_WS_PATH, handleA2uiHttpRequest } from "../canvas-host/a2ui.js";
@@ -803,6 +804,10 @@ export function createGatewayHttpServer(opts: {
         {
           name: "slack",
           run: () => handleSlackHttpRequest(req, res),
+        },
+        {
+          name: "bluebubbles",
+          run: () => handleBlueBubblesWebhookRequest(req, res),
         },
       ];
       if (openResponsesEnabled) {

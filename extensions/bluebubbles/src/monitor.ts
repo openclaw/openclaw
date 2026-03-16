@@ -24,7 +24,21 @@ import {
 import { fetchBlueBubblesServerInfo } from "./probe.js";
 import { getBlueBubblesRuntime } from "./runtime.js";
 
-const webhookTargets = new Map<string, WebhookTarget[]>();
+const WEBHOOK_TARGETS_STATE = Symbol.for("openclaw.bluebubbles.webhookTargets");
+
+type WebhookTargetsHost = NodeJS.Process & {
+  [WEBHOOK_TARGETS_STATE]?: Map<string, WebhookTarget[]>;
+};
+
+function getSharedWebhookTargets(): Map<string, WebhookTarget[]> {
+  const host = process as WebhookTargetsHost;
+  if (!host[WEBHOOK_TARGETS_STATE]) {
+    host[WEBHOOK_TARGETS_STATE] = new Map<string, WebhookTarget[]>();
+  }
+  return host[WEBHOOK_TARGETS_STATE];
+}
+
+const webhookTargets = getSharedWebhookTargets();
 const webhookInFlightLimiter = createWebhookInFlightLimiter();
 const debounceRegistry = createBlueBubblesDebounceRegistry({ processMessage });
 
