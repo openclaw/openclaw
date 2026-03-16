@@ -207,6 +207,68 @@ describe("ws connect policy", () => {
         isLocalClient: false,
       }).kind,
     ).toBe("reject-device-required");
+
+    // Loopback node-role sessions (cron, sessions_spawn, ACP) with valid auth
+    // should be allowed without device identity — loopback has no MitM surface.
+    expect(
+      evaluateMissingDeviceIdentity({
+        hasDeviceIdentity: false,
+        role: "node",
+        isControlUi: false,
+        controlUiAuthPolicy: policy,
+        trustedProxyAuthOk: false,
+        sharedAuthOk: false,
+        authOk: true,
+        hasSharedAuth: false,
+        isLocalClient: true,
+      }).kind,
+    ).toBe("allow");
+
+    // Loopback node-role with auth.mode=token and valid token (authOk=true)
+    expect(
+      evaluateMissingDeviceIdentity({
+        hasDeviceIdentity: false,
+        role: "node",
+        isControlUi: false,
+        controlUiAuthPolicy: policy,
+        trustedProxyAuthOk: false,
+        sharedAuthOk: true,
+        authOk: true,
+        hasSharedAuth: true,
+        isLocalClient: true,
+      }).kind,
+    ).toBe("allow");
+
+    // Loopback node-role with failed auth must still be rejected.
+    expect(
+      evaluateMissingDeviceIdentity({
+        hasDeviceIdentity: false,
+        role: "node",
+        isControlUi: false,
+        controlUiAuthPolicy: policy,
+        trustedProxyAuthOk: false,
+        sharedAuthOk: false,
+        authOk: false,
+        hasSharedAuth: true,
+        isLocalClient: true,
+      }).kind,
+    ).toBe("reject-unauthorized");
+
+    // Remote node-role sessions must still require device identity,
+    // even with valid auth.
+    expect(
+      evaluateMissingDeviceIdentity({
+        hasDeviceIdentity: false,
+        role: "node",
+        isControlUi: false,
+        controlUiAuthPolicy: policy,
+        trustedProxyAuthOk: false,
+        sharedAuthOk: true,
+        authOk: true,
+        hasSharedAuth: true,
+        isLocalClient: false,
+      }).kind,
+    ).toBe("reject-device-required");
   });
 
   test("dangerouslyDisableDeviceAuth skips pairing for operator control-ui only", () => {
