@@ -53,6 +53,9 @@ export type AcpGatewayRunRecord = {
   runId: string;
   sessionKey: string;
   requestId: string;
+  startedByNodeId: string;
+  startedByLeaseId: string;
+  startedByLeaseEpoch: number;
   state: AcpGatewayRunState;
   createdAt: number;
   updatedAt: number;
@@ -88,6 +91,12 @@ export type AcpGatewayLeaseRecord = {
   nodeRuntimeSessionId?: string;
   nodeWorkerRunId?: string;
   workerProtocolVersion?: number;
+};
+
+export type AcpGatewayLeaseReconcileRecord = {
+  session: AcpGatewaySessionRecord;
+  run?: AcpGatewayRunRecord;
+  lease: AcpGatewayLeaseRecord;
 };
 
 export type AcpGatewayCheckpointRecord = {

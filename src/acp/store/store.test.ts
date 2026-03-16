@@ -102,6 +102,9 @@ describe("AcpGatewayStore", () => {
     expect(snapshot.runs["run-1"]).toMatchObject({
       runId: "run-1",
       requestId: "req-1",
+      startedByNodeId: "node-1",
+      startedByLeaseId: "lease-1",
+      startedByLeaseEpoch: 1,
       state: "completed",
       highestAcceptedSeq: 1,
       eventCount: 1,
@@ -224,5 +227,213 @@ describe("AcpGatewayStore", () => {
     expect(await store.getActiveLease("agent:main:acp:test-session")).toMatchObject({
       state: "suspect",
     });
+  });
+
+  it("binds a run to the lease epoch that started it and rejects replacement-epoch continuation", async () => {
+    const { store } = await createStore();
+    const firstLease = await store.acquireLease({
+      sessionKey: "agent:main:acp:test-session",
+      nodeId: "node-1",
+      leaseId: "lease-1",
+      now: 10,
+    });
+    await store.startRun({
+      sessionKey: "agent:main:acp:test-session",
+      runId: "run-1",
+      requestId: "req-1",
+      now: 11,
+    });
+    const secondLease = await store.acquireLease({
+      sessionKey: "agent:main:acp:test-session",
+      nodeId: "node-1",
+      leaseId: "lease-2",
+      now: 12,
+    });
+
+    await expect(
+      store.appendWorkerEvent({
+        nodeId: "node-1",
+        sessionKey: "agent:main:acp:test-session",
+        runId: "run-1",
+        leaseId: secondLease.leaseId,
+        leaseEpoch: secondLease.leaseEpoch,
+        seq: 1,
+        event: {
+          type: "status",
+          text: "wrong epoch",
+        },
+        now: 13,
+      }),
+    ).rejects.toMatchObject({
+      code: "ACP_NODE_STALE_EPOCH",
+    });
+
+    await store.reconcileSuspectLease({
+      sessionKey: "agent:main:acp:test-session",
+      nodeId: "node-1",
+      leaseId: secondLease.leaseId,
+      leaseEpoch: secondLease.leaseEpoch,
+      now: 14,
+    });
+
+    await expect(
+      store.resolveTerminal({
+        nodeId: "node-1",
+        sessionKey: "agent:main:acp:test-session",
+        runId: "run-1",
+        leaseId: secondLease.leaseId,
+        leaseEpoch: secondLease.leaseEpoch,
+        terminalEventId: "term-2",
+        finalSeq: 0,
+        terminal: {
+          kind: "completed",
+        },
+        now: 15,
+      }),
+    ).rejects.toMatchObject({
+      code: "ACP_NODE_STALE_EPOCH",
+    });
+
+    expect(firstLease.leaseEpoch).toBe(1);
+  });
+
+  it("rejects suspect-lease terminals until same-node reconcile reactivates the lease", async () => {
+    const { store } = await createStore();
+    const lease = await store.acquireLease({
+      sessionKey: "agent:main:acp:test-session",
+      nodeId: "node-1",
+      leaseId: "lease-1",
+      now: 10,
+    });
+    await store.startRun({
+      sessionKey: "agent:main:acp:test-session",
+      runId: "run-1",
+      requestId: "req-1",
+      now: 11,
+    });
+    await store.appendWorkerEvent({
+      nodeId: "node-1",
+      sessionKey: "agent:main:acp:test-session",
+      runId: "run-1",
+      leaseId: lease.leaseId,
+      leaseEpoch: lease.leaseEpoch,
+      seq: 1,
+      event: {
+        type: "text_delta",
+        stream: "output",
+        text: "hello",
+      },
+      now: 12,
+    });
+    await store.markNodeDisconnected({
+      nodeId: "node-1",
+      reason: "node_disconnected",
+      now: 13,
+    });
+
+    await expect(
+      store.resolveTerminal({
+        nodeId: "node-1",
+        sessionKey: "agent:main:acp:test-session",
+        runId: "run-1",
+        leaseId: lease.leaseId,
+        leaseEpoch: lease.leaseEpoch,
+        terminalEventId: "term-1",
+        finalSeq: 1,
+        terminal: {
+          kind: "completed",
+        },
+        now: 14,
+      }),
+    ).rejects.toMatchObject({
+      code: "ACP_NODE_ACTIVE_LEASE_MISSING",
+    });
+
+    const reconciled = await store.reconcileSuspectLease({
+      sessionKey: "agent:main:acp:test-session",
+      nodeId: "node-1",
+      leaseId: lease.leaseId,
+      leaseEpoch: lease.leaseEpoch,
+      now: 15,
+      nodeRuntimeSessionId: "runtime-1",
+      workerProtocolVersion: 1,
+    });
+
+    expect(reconciled.lease.state).toBe("active");
+    expect(reconciled.run).toMatchObject({
+      state: "running",
+    });
+
+    await expect(
+      store.resolveTerminal({
+        nodeId: "node-1",
+        sessionKey: "agent:main:acp:test-session",
+        runId: "run-1",
+        leaseId: lease.leaseId,
+        leaseEpoch: lease.leaseEpoch,
+        terminalEventId: "term-1",
+        finalSeq: 1,
+        terminal: {
+          kind: "completed",
+        },
+        now: 16,
+      }),
+    ).resolves.toMatchObject({
+      duplicate: false,
+      run: {
+        state: "completed",
+      },
+    });
+  });
+
+  it("reloads non-terminal state as recovering with gateway_restart_reconcile", async () => {
+    const { root, store } = await createStore();
+    const lease = await store.acquireLease({
+      sessionKey: "agent:main:acp:test-session",
+      nodeId: "node-1",
+      leaseId: "lease-1",
+      now: 10,
+    });
+    await store.startRun({
+      sessionKey: "agent:main:acp:test-session",
+      runId: "run-1",
+      requestId: "req-1",
+      now: 11,
+    });
+    await store.appendWorkerEvent({
+      nodeId: "node-1",
+      sessionKey: "agent:main:acp:test-session",
+      runId: "run-1",
+      leaseId: lease.leaseId,
+      leaseEpoch: lease.leaseEpoch,
+      seq: 1,
+      event: {
+        type: "status",
+        text: "running",
+      },
+      now: 12,
+    });
+
+    const reloaded = new AcpGatewayStore({
+      storePath: path.join(root, "acp", "gateway-node-runtime-store.json"),
+    });
+
+    expect(await reloaded.getSession("agent:main:acp:test-session")).toMatchObject({
+      state: "recovering",
+      lastRecoveryReason: "gateway_restart_reconcile",
+    });
+    expect(await reloaded.getRun("run-1")).toMatchObject({
+      state: "recovering",
+      recoveryReason: "gateway_restart_reconcile",
+    });
+    expect(await reloaded.getActiveLease("agent:main:acp:test-session")).toMatchObject({
+      state: "suspect",
+    });
+    expect(await reloaded.listRecoverableSessions()).toMatchObject([
+      {
+        sessionKey: "agent:main:acp:test-session",
+        state: "recovering",
+      },
+    ]);
   });
 });

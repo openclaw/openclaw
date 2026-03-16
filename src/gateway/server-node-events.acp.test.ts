@@ -213,4 +213,60 @@ describe("handleNodeEvent ACP worker ingress", () => {
     });
     expect(await runtime.store.listRunEvents("run-1")).toHaveLength(0);
   });
+
+  it("rejects suspect-lease terminals through handleNodeEvent until reconcile", async () => {
+    const runtime = await createRuntime();
+    const lease = await runtime.store.acquireLease({
+      sessionKey: "agent:main:acp:test-session",
+      nodeId: "node-1",
+      leaseId: "lease-1",
+      now: 10,
+    });
+    await runtime.store.startRun({
+      sessionKey: "agent:main:acp:test-session",
+      runId: "run-1",
+      requestId: "req-1",
+      now: 10,
+    });
+    await handleNodeEvent(buildCtx(), "node-1", {
+      event: "acp.worker.event",
+      payloadJSON: JSON.stringify({
+        nodeId: "node-1",
+        sessionKey: "agent:main:acp:test-session",
+        runId: "run-1",
+        leaseId: lease.leaseId,
+        leaseEpoch: lease.leaseEpoch,
+        seq: 1,
+        event: {
+          type: "status",
+          text: "working",
+        },
+      }),
+    });
+    await runtime.store.markNodeDisconnected({
+      nodeId: "node-1",
+      reason: "node_disconnected",
+      now: 11,
+    });
+
+    await expect(
+      handleNodeEvent(buildCtx(), "node-1", {
+        event: "acp.worker.terminal",
+        payloadJSON: JSON.stringify({
+          nodeId: "node-1",
+          sessionKey: "agent:main:acp:test-session",
+          runId: "run-1",
+          leaseId: lease.leaseId,
+          leaseEpoch: lease.leaseEpoch,
+          terminalEventId: "term-1",
+          finalSeq: 1,
+          terminal: {
+            kind: "completed",
+          },
+        }),
+      }),
+    ).rejects.toMatchObject({
+      code: "ACP_NODE_ACTIVE_LEASE_MISSING",
+    });
+  });
 });

@@ -34,7 +34,7 @@ afterEach(async () => {
 });
 
 describe("AcpGatewayNodeRuntime", () => {
-  it("rejects stale-epoch worker events and accepts the active epoch", async () => {
+  it("rejects replacement-epoch worker events for a run started by the old epoch", async () => {
     const { runtime } = await createRuntime();
     const store = runtime.store;
 
@@ -81,32 +81,31 @@ describe("AcpGatewayNodeRuntime", () => {
       code: "ACP_NODE_STALE_EPOCH",
     });
 
-    await worker.play([
-      {
-        kind: "event",
-        event: "acp.worker.event",
-        payload: {
-          nodeId: "node-1",
-          sessionKey: "agent:main:acp:test-session",
-          runId: "run-1",
-          leaseId: secondLease.leaseId,
-          leaseEpoch: secondLease.leaseEpoch,
-          seq: 1,
-          event: {
-            type: "text_delta",
-            stream: "output",
-            text: "fresh",
+    await expect(
+      worker.play([
+        {
+          kind: "event",
+          event: "acp.worker.event",
+          payload: {
+            nodeId: "node-1",
+            sessionKey: "agent:main:acp:test-session",
+            runId: "run-1",
+            leaseId: secondLease.leaseId,
+            leaseEpoch: secondLease.leaseEpoch,
+            seq: 1,
+            event: {
+              type: "text_delta",
+              stream: "output",
+              text: "fresh",
+            },
           },
         },
-      },
-    ]);
+      ]),
+    ).rejects.toMatchObject({
+      code: "ACP_NODE_STALE_EPOCH",
+    });
 
-    expect(await store.listRunEvents("run-1")).toMatchObject([
-      {
-        seq: 1,
-        leaseId: "lease-2",
-      },
-    ]);
+    expect(await store.listRunEvents("run-1")).toHaveLength(0);
   });
 
   it("keeps a single canonical terminal authority via acp.worker.terminal", async () => {
@@ -250,6 +249,103 @@ describe("AcpGatewayNodeRuntime", () => {
     expect(await store.getRun("run-1")).toMatchObject({
       state: "recovering",
       recoveryReason: "start_accepted_no_events",
+    });
+  });
+
+  it("rejects suspect-lease terminals until explicit reconcile succeeds", async () => {
+    const { runtime } = await createRuntime();
+    const store = runtime.store;
+
+    const lease = await store.acquireLease({
+      sessionKey: "agent:main:acp:test-session",
+      nodeId: "node-1",
+      leaseId: "lease-1",
+      now: 10,
+    });
+    await store.startRun({
+      sessionKey: "agent:main:acp:test-session",
+      runId: "run-1",
+      requestId: "req-1",
+      now: 10,
+    });
+    const worker = new FakeAcpNodeWorker("node-1");
+
+    await worker.play([
+      {
+        kind: "event",
+        event: "acp.worker.event",
+        payload: {
+          nodeId: "node-1",
+          sessionKey: "agent:main:acp:test-session",
+          runId: "run-1",
+          leaseId: lease.leaseId,
+          leaseEpoch: lease.leaseEpoch,
+          seq: 1,
+          event: {
+            type: "status",
+            text: "working",
+          },
+        },
+      },
+      {
+        kind: "disconnect",
+        reason: "node_disconnected",
+        now: 20,
+      },
+    ]);
+
+    await expect(
+      worker.play([
+        {
+          kind: "event",
+          event: "acp.worker.terminal",
+          payload: {
+            nodeId: "node-1",
+            sessionKey: "agent:main:acp:test-session",
+            runId: "run-1",
+            leaseId: lease.leaseId,
+            leaseEpoch: lease.leaseEpoch,
+            terminalEventId: "term-1",
+            finalSeq: 1,
+            terminal: {
+              kind: "completed",
+            },
+          },
+        },
+      ]),
+    ).rejects.toMatchObject({
+      code: "ACP_NODE_ACTIVE_LEASE_MISSING",
+    });
+
+    await worker.play([
+      {
+        kind: "reconcile",
+        sessionKey: "agent:main:acp:test-session",
+        leaseId: lease.leaseId,
+        leaseEpoch: lease.leaseEpoch,
+        now: 21,
+        workerProtocolVersion: 1,
+      },
+      {
+        kind: "event",
+        event: "acp.worker.terminal",
+        payload: {
+          nodeId: "node-1",
+          sessionKey: "agent:main:acp:test-session",
+          runId: "run-1",
+          leaseId: lease.leaseId,
+          leaseEpoch: lease.leaseEpoch,
+          terminalEventId: "term-1",
+          finalSeq: 1,
+          terminal: {
+            kind: "completed",
+          },
+        },
+      },
+    ]);
+
+    expect(await store.getRun("run-1")).toMatchObject({
+      state: "completed",
     });
   });
 });

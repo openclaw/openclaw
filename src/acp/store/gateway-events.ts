@@ -67,9 +67,10 @@ function parsePayloadObject(payloadJSON?: string | null): Record<string, unknown
   return parsed;
 }
 
-function parseBaseEnvelope(
-  payloadJSON?: string | null,
-): Record<"nodeId" | "sessionKey" | "runId" | "leaseId", string> & {
+function parseBaseEnvelope(payloadJSON?: string | null): Record<
+  "nodeId" | "sessionKey" | "runId" | "leaseId",
+  string
+> & {
   leaseEpoch: number;
   raw: Record<string, unknown>;
 } {
@@ -273,6 +274,19 @@ export class AcpGatewayNodeRuntime {
     now?: number;
   }) {
     return await this.store.markNodeDisconnected(params);
+  }
+
+  async reconcileSuspectLease(params: {
+    sessionKey: string;
+    nodeId: string;
+    leaseId: string;
+    leaseEpoch: number;
+    now?: number;
+    nodeRuntimeSessionId?: string;
+    nodeWorkerRunId?: string;
+    workerProtocolVersion?: number;
+  }) {
+    return await this.store.reconcileSuspectLease(params);
   }
 
   private assertNodeIdentity(connectionNodeId: string, payloadNodeId: string): void {

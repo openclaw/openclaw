@@ -12,6 +12,16 @@ export type FakeAcpNodeWorkerStep =
       kind: "disconnect";
       reason: AcpGatewayRecoveryReason;
       now?: number;
+    }
+  | {
+      kind: "reconcile";
+      sessionKey: string;
+      leaseId: string;
+      leaseEpoch: number;
+      now?: number;
+      nodeRuntimeSessionId?: string;
+      nodeWorkerRunId?: string;
+      workerProtocolVersion?: number;
     };
 
 export class FakeAcpNodeWorker {
@@ -26,6 +36,21 @@ export class FakeAcpNodeWorker {
         await getAcpGatewayNodeRuntime().ingestNodeEvent(this.nodeId, {
           event: step.event,
           payloadJSON: JSON.stringify(step.payload),
+        });
+        continue;
+      }
+      if (step.kind === "reconcile") {
+        await getAcpGatewayNodeRuntime().reconcileSuspectLease({
+          sessionKey: step.sessionKey,
+          nodeId: this.nodeId,
+          leaseId: step.leaseId,
+          leaseEpoch: step.leaseEpoch,
+          ...(typeof step.now === "number" ? { now: step.now } : {}),
+          ...(step.nodeRuntimeSessionId ? { nodeRuntimeSessionId: step.nodeRuntimeSessionId } : {}),
+          ...(step.nodeWorkerRunId ? { nodeWorkerRunId: step.nodeWorkerRunId } : {}),
+          ...(typeof step.workerProtocolVersion === "number"
+            ? { workerProtocolVersion: step.workerProtocolVersion }
+            : {}),
         });
         continue;
       }
