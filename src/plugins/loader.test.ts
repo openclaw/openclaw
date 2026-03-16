@@ -297,22 +297,6 @@ function createPluginSdkAliasFixture(params?: {
   return { root, srcFile, distFile };
 }
 
-function createExtensionApiAliasFixture(params?: { srcBody?: string; distBody?: string }) {
-  const root = makeTempDir();
-  const srcFile = path.join(root, "src", "extensionAPI.ts");
-  const distFile = path.join(root, "dist", "extensionAPI.js");
-  mkdirSafe(path.dirname(srcFile));
-  mkdirSafe(path.dirname(distFile));
-  fs.writeFileSync(
-    path.join(root, "package.json"),
-    JSON.stringify({ name: "openclaw", type: "module" }, null, 2),
-    "utf-8",
-  );
-  fs.writeFileSync(srcFile, params?.srcBody ?? "export {};\n", "utf-8");
-  fs.writeFileSync(distFile, params?.distBody ?? "export {};\n", "utf-8");
-  return { root, srcFile, distFile };
-}
-
 function createPluginRuntimeAliasFixture(params?: { srcBody?: string; distBody?: string }) {
   const root = makeTempDir();
   const srcFile = path.join(root, "src", "plugins", "runtime", "index.ts");
@@ -2125,6 +2109,7 @@ module.exports = {
         channels: {
           "setup-runtime-preferred-test": {
             enabled: true,
+            token: "configured",
           },
         },
         plugins: {
@@ -2232,6 +2217,7 @@ module.exports = {
         channels: {
           "setup-runtime-not-preferred-test": {
             enabled: true,
+            token: "configured",
           },
         },
         plugins: {
@@ -3205,26 +3191,6 @@ module.exports = {
     expect(resolved).toBe(srcFile);
   });
 
-  it("prefers dist extension-api alias when loader runs from dist", () => {
-    const { root, distFile } = createExtensionApiAliasFixture();
-
-    const resolved = __testing.resolveExtensionApiAlias({
-      modulePath: path.join(root, "dist", "plugins", "loader.js"),
-    });
-    expect(resolved).toBe(distFile);
-  });
-
-  it("prefers src extension-api alias when loader runs from src in non-production", () => {
-    const { root, srcFile } = createExtensionApiAliasFixture();
-
-    const resolved = withEnv({ NODE_ENV: undefined }, () =>
-      __testing.resolveExtensionApiAlias({
-        modulePath: path.join(root, "src", "plugins", "loader.ts"),
-      }),
-    );
-    expect(resolved).toBe(srcFile);
-  });
-
   it("resolves plugin-sdk alias from package root when loader runs from transpiler cache path", () => {
     const { root, srcFile } = createPluginSdkAliasFixture();
 
@@ -3232,18 +3198,6 @@ module.exports = {
       __testing.resolvePluginSdkAliasFile({
         srcFile: "index.ts",
         distFile: "index.js",
-        modulePath: "/tmp/tsx-cache/openclaw-loader.js",
-        argv1: path.join(root, "openclaw.mjs"),
-      }),
-    );
-    expect(resolved).toBe(srcFile);
-  });
-
-  it("resolves extension-api alias from package root when loader runs from transpiler cache path", () => {
-    const { root, srcFile } = createExtensionApiAliasFixture();
-
-    const resolved = withEnv({ NODE_ENV: undefined }, () =>
-      __testing.resolveExtensionApiAlias({
         modulePath: "/tmp/tsx-cache/openclaw-loader.js",
         argv1: path.join(root, "openclaw.mjs"),
       }),

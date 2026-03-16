@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../../agents/defaults.js";
 import { onAgentEvent } from "../../infra/agent-events.js";
 import { requestHeartbeatNow } from "../../infra/heartbeat-wake.js";
 import { onSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
@@ -52,6 +53,17 @@ describe("plugin runtime command execution", () => {
   it("exposes runtime.system.requestHeartbeatNow", () => {
     const runtime = createPluginRuntime();
     expect(runtime.system.requestHeartbeatNow).toBe(requestHeartbeatNow);
+  });
+
+  it("exposes runtime.agent host helpers", () => {
+    const runtime = createPluginRuntime();
+    expect(runtime.agent.defaults).toEqual({
+      model: DEFAULT_MODEL,
+      provider: DEFAULT_PROVIDER,
+    });
+    expect(typeof runtime.agent.runEmbeddedPiAgent).toBe("function");
+    expect(typeof runtime.agent.resolveAgentDir).toBe("function");
+    expect(typeof runtime.agent.session.resolveSessionFilePath).toBe("function");
   });
 
   it("exposes runtime.modelAuth with getApiKeyForModel and resolveApiKeyForProvider", () => {

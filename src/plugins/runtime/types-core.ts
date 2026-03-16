@@ -13,6 +13,25 @@ export type PluginRuntimeCore = {
     loadConfig: typeof import("../../config/config.js").loadConfig;
     writeConfigFile: typeof import("../../config/config.js").writeConfigFile;
   };
+  agent: {
+    defaults: {
+      model: typeof import("../../agents/defaults.js").DEFAULT_MODEL;
+      provider: typeof import("../../agents/defaults.js").DEFAULT_PROVIDER;
+    };
+    resolveAgentDir: typeof import("../../agents/agent-scope.js").resolveAgentDir;
+    resolveAgentWorkspaceDir: typeof import("../../agents/agent-scope.js").resolveAgentWorkspaceDir;
+    resolveAgentIdentity: typeof import("../../agents/identity.js").resolveAgentIdentity;
+    resolveThinkingDefault: typeof import("../../agents/model-selection.js").resolveThinkingDefault;
+    runEmbeddedPiAgent: typeof import("../../agents/pi-embedded.js").runEmbeddedPiAgent;
+    resolveAgentTimeoutMs: typeof import("../../agents/timeout.js").resolveAgentTimeoutMs;
+    ensureAgentWorkspace: typeof import("../../agents/workspace.js").ensureAgentWorkspace;
+    session: {
+      resolveStorePath: typeof import("../../config/sessions.js").resolveStorePath;
+      loadSessionStore: typeof import("../../config/sessions.js").loadSessionStore;
+      saveSessionStore: typeof import("../../config/sessions.js").saveSessionStore;
+      resolveSessionFilePath: typeof import("../../config/sessions.js").resolveSessionFilePath;
+    };
+  };
   system: {
     enqueueSystemEvent: typeof import("../../infra/system-events.js").enqueueSystemEvent;
     requestHeartbeatNow: typeof import("../../infra/heartbeat-wake.js").requestHeartbeatNow;

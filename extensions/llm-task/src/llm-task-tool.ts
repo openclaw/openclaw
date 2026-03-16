@@ -2,7 +2,6 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { Type } from "@sinclair/typebox";
 import Ajv from "ajv";
-import { runEmbeddedPiAgent } from "openclaw/extension-api";
 import {
   formatThinkingLevels,
   formatXHighModelHint,
@@ -179,7 +178,7 @@ export function createLlmTaskTool(api: OpenClawPluginApi) {
         const sessionId = `llm-task-${Date.now()}`;
         const sessionFile = path.join(tmpDir, "session.json");
 
-        const result = await runEmbeddedPiAgent({
+        const result = await api.runtime.agent.runEmbeddedPiAgent({
           sessionId,
           sessionFile,
           workspaceDir: api.config?.agents?.defaults?.workspace ?? process.cwd(),
