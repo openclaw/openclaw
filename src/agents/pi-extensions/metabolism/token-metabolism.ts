@@ -67,9 +67,13 @@ export class TokenMetabolismSystem {
    */
   private calculateMetabolicRate(): number {
     const baseRate = this.metabolicBaseline;
-    const loadMultiplier = 1 + this.state.cognitiveLoad * 0.5;
-    const densityMultiplier = 1 + this.state.informationDensity * 0.3;
-    const momentumMultiplier = 1 + Math.abs(this.state.momentum) * 0.2;
+
+    // Center around 0.5 so values below the midpoint reduce metabolic rate.
+    // Weight density higher than load so high density can still drive up rate even
+    // when cognitive load is low.
+    const loadMultiplier = 1 + (this.state.cognitiveLoad - 0.5) * 0.3;
+    const densityMultiplier = 1 + (this.state.informationDensity - 0.5) * 0.6;
+    const momentumMultiplier = 1 + this.state.momentum * 0.3;
 
     return Math.floor(baseRate * loadMultiplier * densityMultiplier * momentumMultiplier);
   }
@@ -103,8 +107,8 @@ export class TokenMetabolismSystem {
     let pruneAmount = 0;
     if (shouldPrune) {
       // Calculate adaptive pruning amount
-      const excessRatio = Math.max(0, utilizationRatio - this.homeostasisThreshold);
-      pruneAmount = Math.floor(this.budget.allocated * excessRatio * 0.3);
+      const targetUsage = Math.floor(this.budget.allocated * this.homeostasisThreshold);
+      pruneAmount = Math.max(0, this.budget.allocated - targetUsage);
     }
 
     // Calculate segment priorities (simplified)
@@ -164,6 +168,7 @@ export class TokenMetabolismSystem {
       momentum: 0.0,
       stabilityPeriod: 0,
     };
+    this.budget.allocated = 0;
     this.budget.metabolicRate = this.metabolicBaseline;
   }
 }
