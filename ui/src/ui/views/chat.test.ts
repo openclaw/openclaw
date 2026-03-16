@@ -812,4 +812,54 @@ describe("chat view", () => {
     expect(labels).toContain("Coding (beta) / main");
     expect(labels).not.toContain("main");
   });
+
+  it("keeps agent-prefixed labels unique when a custom label already matches the prefix", () => {
+    const { state } = createChatHeaderState({ omitSessionFromList: true });
+    state.sessionKey = "agent:alpha:main";
+    state.settings.sessionKey = state.sessionKey;
+    state.agentsList = {
+      defaultId: "alpha",
+      mainKey: "agent:alpha:main",
+      scope: "all",
+      agents: [
+        { id: "alpha", name: "Deep Chat" },
+        { id: "beta", name: "Coding" },
+      ],
+    };
+    state.sessionsResult = {
+      ts: 0,
+      path: "",
+      count: 3,
+      defaults: { model: "gpt-5", contextTokens: null },
+      sessions: [
+        {
+          key: "agent:alpha:main",
+          kind: "direct",
+          updatedAt: null,
+        },
+        {
+          key: "agent:beta:main",
+          kind: "direct",
+          updatedAt: null,
+        },
+        {
+          key: "agent:alpha:named-main",
+          kind: "direct",
+          updatedAt: null,
+          label: "Deep Chat (alpha) / main",
+        },
+      ],
+    };
+    const container = document.createElement("div");
+    render(renderChatSessionSelect(state), container);
+
+    const [sessionSelect] = Array.from(container.querySelectorAll<HTMLSelectElement>("select"));
+    const labels = Array.from(sessionSelect?.querySelectorAll("option") ?? []).map((option) =>
+      option.textContent?.trim(),
+    );
+
+    expect(labels.filter((label) => label === "Deep Chat (alpha) / main")).toHaveLength(1);
+    expect(labels).toContain("Deep Chat (alpha) / main · named-main");
+    expect(labels).toContain("Coding (beta) / main");
+  });
 });
