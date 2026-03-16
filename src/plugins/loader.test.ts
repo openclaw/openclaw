@@ -1885,6 +1885,107 @@ module.exports = {
     expect(setupRegistry.channels).toHaveLength(0);
   });
 
+  it("uses package setupEntry for enabled but unconfigured channel loads", () => {
+    useNoBundledPlugins();
+    const pluginDir = makeTempDir();
+    const fullMarker = path.join(pluginDir, "full-loaded.txt");
+    const setupMarker = path.join(pluginDir, "setup-loaded.txt");
+    fs.writeFileSync(
+      path.join(pluginDir, "package.json"),
+      JSON.stringify(
+        {
+          name: "@openclaw/setup-runtime-test",
+          openclaw: {
+            extensions: ["./index.cjs"],
+            setupEntry: "./setup-entry.cjs",
+          },
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+    fs.writeFileSync(
+      path.join(pluginDir, "openclaw.plugin.json"),
+      JSON.stringify(
+        {
+          id: "setup-runtime-test",
+          configSchema: EMPTY_PLUGIN_SCHEMA,
+          channels: ["setup-runtime-test"],
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+    fs.writeFileSync(
+      path.join(pluginDir, "index.cjs"),
+      `require("node:fs").writeFileSync(${JSON.stringify(fullMarker)}, "loaded", "utf-8");
+module.exports = {
+  id: "setup-runtime-test",
+  register(api) {
+    api.registerChannel({
+      plugin: {
+        id: "setup-runtime-test",
+        meta: {
+          id: "setup-runtime-test",
+          label: "Setup Runtime Test",
+          selectionLabel: "Setup Runtime Test",
+          docsPath: "/channels/setup-runtime-test",
+          blurb: "full entry should not run while unconfigured",
+        },
+        capabilities: { chatTypes: ["direct"] },
+        config: {
+          listAccountIds: () => [],
+          resolveAccount: () => ({ accountId: "default" }),
+        },
+        outbound: { deliveryMode: "direct" },
+      },
+    });
+  },
+};`,
+      "utf-8",
+    );
+    fs.writeFileSync(
+      path.join(pluginDir, "setup-entry.cjs"),
+      `require("node:fs").writeFileSync(${JSON.stringify(setupMarker)}, "loaded", "utf-8");
+module.exports = {
+  plugin: {
+    id: "setup-runtime-test",
+    meta: {
+      id: "setup-runtime-test",
+      label: "Setup Runtime Test",
+      selectionLabel: "Setup Runtime Test",
+      docsPath: "/channels/setup-runtime-test",
+      blurb: "setup runtime",
+    },
+    capabilities: { chatTypes: ["direct"] },
+    config: {
+      listAccountIds: () => [],
+      resolveAccount: () => ({ accountId: "default" }),
+    },
+    outbound: { deliveryMode: "direct" },
+  },
+};`,
+      "utf-8",
+    );
+
+    const registry = loadOpenClawPlugins({
+      cache: false,
+      config: {
+        plugins: {
+          load: { paths: [pluginDir] },
+          allow: ["setup-runtime-test"],
+        },
+      },
+    });
+
+    expect(fs.existsSync(setupMarker)).toBe(true);
+    expect(fs.existsSync(fullMarker)).toBe(false);
+    expect(registry.channelSetups).toHaveLength(1);
+    expect(registry.channels).toHaveLength(1);
+  });
+
   it("blocks before_prompt_build but preserves legacy model overrides when prompt injection is disabled", async () => {
     useNoBundledPlugins();
     const plugin = writePlugin({
