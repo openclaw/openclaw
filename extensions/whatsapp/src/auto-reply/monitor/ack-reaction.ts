@@ -1,7 +1,7 @@
 import { shouldAckReactionForWhatsApp } from "../../../../../src/channels/ack-reactions.js";
 import type { loadConfig } from "../../../../../src/config/config.js";
 import { logVerbose } from "../../../../../src/globals.js";
-import { sendReactionWhatsApp } from "../../send.js";
+import { hasSentMessageId, sendReactionWhatsApp } from "../../send.js";
 import { formatError } from "../../session.js";
 import type { WebInboundMsg } from "../types.js";
 import { resolveGroupActivationFor } from "./group-activation.js";
@@ -18,6 +18,12 @@ export function maybeSendAckReaction(params: {
   warn: (obj: unknown, msg: string) => void;
 }) {
   if (!params.msg.id) {
+    return;
+  }
+
+  // Skip ack for gateway-sent echoes: mirrors the primary ID guard in on-message.ts so that
+  // maybeSendAckReaction is safe to call from any future path, not just via processMessage.
+  if (hasSentMessageId(params.msg.id)) {
     return;
   }
 

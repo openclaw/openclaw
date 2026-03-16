@@ -14,6 +14,30 @@ import { loadWebMedia } from "./media.js";
 
 const outboundLog = createSubsystemLogger("gateway/channels/whatsapp").child("outbound");
 
+// Module-level bounded FIFO set for echo detection (evicts oldest-inserted entry first).
+// When sendMessageWhatsApp sends a message, WhatsApp echoes it back as an inbound event with the
+// same message ID. Recording the ID here lets the inbound handler skip that echo unconditionally,
+// regardless of message body content or the responsePrefix setting.
+const SENT_ID_MAX = 200;
+const recentlySentIds = new Set<string>();
+function trimSentIds() {
+  while (recentlySentIds.size > SENT_ID_MAX) {
+    const first = recentlySentIds.values().next().value;
+    if (first !== undefined) recentlySentIds.delete(first);
+  }
+}
+export function rememberSentMessageId(id: string): void {
+  if (!id || id === "unknown") return;
+  recentlySentIds.add(id);
+  trimSentIds();
+}
+export function hasSentMessageId(id: string): boolean {
+  return recentlySentIds.has(id);
+}
+export function forgetSentMessageId(id: string): void {
+  recentlySentIds.delete(id);
+}
+
 export async function sendMessageWhatsApp(
   to: string,
   body: string,
@@ -99,6 +123,7 @@ export async function sendMessageWhatsApp(
       ? await active.sendMessage(to, text, mediaBuffer, mediaType, sendOptions)
       : await active.sendMessage(to, text, mediaBuffer, mediaType);
     const messageId = (result as { messageId?: string })?.messageId ?? "unknown";
+    rememberSentMessageId(messageId);
     const durationMs = Date.now() - startedAt;
     outboundLog.info(
       `Sent message ${messageId} -> ${redactedJid}${options.mediaUrl ? " (media)" : ""} (${durationMs}ms)`,
@@ -186,6 +211,8 @@ export async function sendPollWhatsApp(
     );
     const result = await active.sendPoll(to, normalized);
     const messageId = (result as { messageId?: string })?.messageId ?? "unknown";
+    // Poll IDs are intentionally not tracked in recentlySentIds: poll echoes carry no plain-text
+    // body and therefore don't trigger the auto-reply loop. Update this if that assumption changes.
     const durationMs = Date.now() - startedAt;
     outboundLog.info(`Sent poll ${messageId} -> ${redactedJid} (${durationMs}ms)`);
     logger.info({ jid: redactedJid, messageId }, "sent poll");

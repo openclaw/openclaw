@@ -5,6 +5,7 @@ import { logVerbose } from "../../../../../src/globals.js";
 import { resolveAgentRoute } from "../../../../../src/routing/resolve-route.js";
 import { buildGroupHistoryKey } from "../../../../../src/routing/session-key.js";
 import { normalizeE164 } from "../../../../../src/utils.js";
+import { forgetSentMessageId, hasSentMessageId } from "../../send.js";
 import type { MentionConfig } from "../mentions.js";
 import type { WebInboundMsg } from "../types.js";
 import { maybeBroadcastMessage } from "./broadcast.js";
@@ -88,7 +89,17 @@ export function createWebOnMessageHandler(params: {
       logVerbose(`📱 Same-phone mode detected (from === to: ${msg.from})`);
     }
 
-    // Skip if this is a message we just sent (echo detection)
+    // Primary echo guard by message ID: when the gateway sends a WhatsApp message, Baileys
+    // returns a messageId which WhatsApp then echoes back as an inbound event with the same ID.
+    // Checking the ID is robust regardless of body content or responsePrefix application.
+    if (msg.id && hasSentMessageId(msg.id)) {
+      logVerbose(`Skipping auto-reply: detected echo by message ID (${msg.id})`);
+      forgetSentMessageId(msg.id);
+      return;
+    }
+
+    // Secondary echo guard by body text: catches echoes for the direct reply path where
+    // rememberText was called (e.g. msg.reply() sends). Kept as a belt-and-suspenders check.
     if (params.echoTracker.has(msg.body)) {
       logVerbose("Skipping auto-reply: detected echo (message matches recently sent text)");
       params.echoTracker.forget(msg.body);
