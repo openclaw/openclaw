@@ -29,6 +29,17 @@ function createIncidentFingerprint(normalizedRawBody: string) {
   return createHash("sha256").update(normalizedRawBody).digest("hex").slice(0, 16);
 }
 
+function canBypassIncidentRootOnly(
+  channelConfig: SlackChannelConfigResolved,
+  allowApprovedHumanThreadFollowups?: boolean,
+) {
+  return Boolean(
+    channelConfig.incidentRootOnly &&
+    channelConfig.allowHumanThreadFollowups &&
+    allowApprovedHumanThreadFollowups,
+  );
+}
+
 function pruneExpiredFingerprints(store: Map<string, number>, now: number) {
   for (const [key, expiresAt] of store) {
     if (expiresAt <= now) {
@@ -47,8 +58,13 @@ function enforceFingerprintStoreLimit(store: Map<string, number>) {
   }
 }
 
+export function isResolvedSlackIncidentUpdateText(rawBody: string | null | undefined) {
+  return Boolean(rawBody && RESOLVED_INCIDENT_REGEX.test(rawBody));
+}
+
 export function resolveSlackIncidentIngressDrop(params: {
   accountId: string;
+  allowApprovedHumanThreadFollowups?: boolean;
   channelConfig: SlackChannelConfigResolved | null;
   channelId: string;
   dedupeStore: Map<string, number>;
@@ -61,12 +77,33 @@ export function resolveSlackIncidentIngressDrop(params: {
     return { shouldDrop: false };
   }
 
-  if (channelConfig.incidentRootOnly && !isRootSlackIncidentMessage(params.message)) {
+  const isRootMessage = isRootSlackIncidentMessage(params.message);
+  const isBotMessage = Boolean(params.message.bot_id);
+  const canBypassRootOnly = canBypassIncidentRootOnly(
+    channelConfig,
+    params.allowApprovedHumanThreadFollowups,
+  );
+  const shouldApplyResolvedUpdateSuppression = isRootMessage || isBotMessage || !canBypassRootOnly;
+
+  // Run resolved/recovered suppression before the root-only guard so approved
+  // human follow-ups in root-only channels can still ask "is it resolved?".
+  // All other paths, including non-root-only channels, keep normal suppression.
+  if (
+    channelConfig.incidentIgnoreResolved &&
+    isResolvedSlackIncidentUpdateText(params.rawBody) &&
+    shouldApplyResolvedUpdateSuppression
+  ) {
+    return { shouldDrop: true, reason: "incident-resolved-update" };
+  }
+
+  // Allow non-root incident follow-ups only when the channel enables them and
+  // the per-message security gate already approved this specific human reply.
+  if (channelConfig.incidentRootOnly && !isRootMessage && !canBypassRootOnly) {
     return { shouldDrop: true, reason: "incident-non-root-update" };
   }
 
-  if (channelConfig.incidentIgnoreResolved && RESOLVED_INCIDENT_REGEX.test(params.rawBody)) {
-    return { shouldDrop: true, reason: "incident-resolved-update" };
+  if (!isRootMessage) {
+    return { shouldDrop: false };
   }
 
   if (channelConfig.incidentDedupeWindowSeconds <= 0) {

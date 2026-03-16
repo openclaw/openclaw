@@ -36,6 +36,7 @@ metadata: { "openclaw": { "emoji": "🛠️" } }
   - `repo-root-model.md`
   - relevant incident dossier / postmortem index
 - Retry on repeated asks: if same/near-identical question appears again in the same thread/session, re-run relevant live checks/tools (state may have changed); do not reuse a prior failure-only answer.
+- In monitored Slack incident threads, human follow-ups after the first bot reply must pass ingress and trigger fresh live checks; do not treat them like duplicate alert updates.
 - If an incident thread drifts into unrelated design/history questions, redirect that discussion to a DM or new thread instead of mixing it into RCA.
 - Incident threads:
   - Do not send progress-only thread replies like `On it`, `Found it`, or `Let me verify`; wait for net-new evidence, mitigation, validation, or a PR URL.
@@ -275,6 +276,7 @@ metadata: { "openclaw": { "emoji": "🛠️" } }
   - `#public-api-monitoring` (prod)
   - `#platform-monitoring` (prod)
 - Trigger on BetterStack alert/update posts (including bot-authored messages).
+- Auto-intake the incident root, then continue answering human follow-ups (when @mentioned or the bot already replied) in the same thread with fresh evidence.
 - Always answer in the incident thread under alert root; never post RCA in channel root.
 - Keep thread reply concise (8-12 lines, no prose wall).
 - Use Slack mrkdwn only:

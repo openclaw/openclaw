@@ -802,6 +802,7 @@ export const SlackChannelSchema = z
     requireMention: z.boolean().optional(),
     allowImplicitMention: z.boolean().optional(),
     incidentRootOnly: z.boolean().optional(),
+    allowHumanThreadFollowups: z.boolean().optional(),
     incidentIgnoreResolved: z.boolean().optional(),
     incidentDedupeWindowSeconds: z.number().int().min(0).optional(),
     tools: ToolPolicySchema,

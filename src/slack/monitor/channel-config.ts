@@ -13,6 +13,7 @@ export type SlackChannelConfigResolved = {
   requireMention: boolean;
   allowImplicitMention: boolean;
   incidentRootOnly: boolean;
+  allowHumanThreadFollowups: boolean;
   incidentIgnoreResolved: boolean;
   incidentDedupeWindowSeconds: number;
   allowBots?: boolean;
@@ -29,6 +30,7 @@ export type SlackChannelConfigEntry = {
   requireMention?: boolean;
   allowImplicitMention?: boolean;
   incidentRootOnly?: boolean;
+  allowHumanThreadFollowups?: boolean;
   incidentIgnoreResolved?: boolean;
   incidentDedupeWindowSeconds?: number;
   allowBots?: boolean;
@@ -40,6 +42,7 @@ export type SlackChannelConfigEntry = {
 export type SlackChannelConfigEntries = Record<string, SlackChannelConfigEntry>;
 const INCIDENT_POLICY_DEFAULTS = {
   incidentRootOnly: false,
+  allowHumanThreadFollowups: false,
   incidentIgnoreResolved: false,
   incidentDedupeWindowSeconds: 0,
 } as const;
@@ -179,6 +182,12 @@ export function resolveSlackChannelConfig(params: {
       fallback?.incidentRootOnly,
       INCIDENT_POLICY_DEFAULTS.incidentRootOnly,
     ) ?? INCIDENT_POLICY_DEFAULTS.incidentRootOnly;
+  const allowHumanThreadFollowups =
+    firstDefined(
+      resolved.allowHumanThreadFollowups,
+      fallback?.allowHumanThreadFollowups,
+      INCIDENT_POLICY_DEFAULTS.allowHumanThreadFollowups,
+    ) ?? INCIDENT_POLICY_DEFAULTS.allowHumanThreadFollowups;
   const incidentIgnoreResolved =
     firstDefined(
       resolved.incidentIgnoreResolved,
@@ -200,6 +209,7 @@ export function resolveSlackChannelConfig(params: {
     requireMention,
     allowImplicitMention,
     incidentRootOnly,
+    allowHumanThreadFollowups,
     incidentIgnoreResolved,
     incidentDedupeWindowSeconds,
     allowBots,

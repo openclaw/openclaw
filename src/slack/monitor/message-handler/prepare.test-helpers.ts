@@ -17,6 +17,7 @@ export function createInboundSlackTestContext(params: {
       requireMention?: boolean;
       allowImplicitMention?: boolean;
       incidentRootOnly?: boolean;
+      allowHumanThreadFollowups?: boolean;
       incidentIgnoreResolved?: boolean;
       incidentDedupeWindowSeconds?: number;
     }

@@ -35,6 +35,18 @@ export type SlackChannelConfig = {
   allowImplicitMention?: boolean;
   /** If true, only root incident posts trigger replies in this channel. */
   incidentRootOnly?: boolean;
+  /**
+   * If true, let human incident-thread follow-ups bypass root-only filtering
+   * in channels that already use `incidentRootOnly`.
+   * After an explicit @mention or prior bot thread participation, approved
+   * follow-ups can keep the thread alive without disabling normal resolved/
+   * recovered filtering in non-root-only channels.
+   * Useful for monitoring channels where operators may ask follow-ups like
+   * "is it resolved now?" after the bot already joined the thread.
+   * Security gate: the bypass stays inactive until one of those signals
+   * explicitly authorizes the follow-up in that thread.
+   */
+  allowHumanThreadFollowups?: boolean;
   /** If true, resolved/recovered incident updates are ignored in this channel. */
   incidentIgnoreResolved?: boolean;
   /** Cooldown window for duplicate incident ingress suppression. */

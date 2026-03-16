@@ -46,7 +46,10 @@ import { resolveSlackChannelConfig } from "../channel-config.js";
 import { stripSlackMentionsForCommandDetection } from "../commands.js";
 import { normalizeSlackChannelType, type SlackMonitorContext } from "../context.js";
 import { authorizeSlackDirectMessage } from "../dm-auth.js";
-import { resolveSlackIncidentIngressDrop } from "../incident-ingress.js";
+import {
+  isResolvedSlackIncidentUpdateText,
+  resolveSlackIncidentIngressDrop,
+} from "../incident-ingress.js";
 import { resolveSlackThreadStarter } from "../media.js";
 import { resolveSlackRoomContextHints } from "../room-context.js";
 import { resolveSlackMessageContent } from "./prepare-content.js";
@@ -391,13 +394,33 @@ export async function prepareSlackMessage(params: {
       }));
   const allowImplicitMention =
     channelConfig?.allowImplicitMention ?? ctx.defaultAllowImplicitMention;
+  const hasThreadParticipation =
+    !isDirectMessage && message.thread_ts
+      ? hasSlackThreadParticipation(account.accountId, message.channel, message.thread_ts)
+      : false;
+  const botOwnsThreadRoot = Boolean(
+    ctx.botUserId && message.thread_ts && message.parent_user_id === ctx.botUserId,
+  );
+  // Authorize incident-thread follow-ups only after an explicit summon, a
+  // bot-authored thread root, or cached proof that the bot already joined.
+  const hasApprovedIncidentThreadFollowupAuthorization =
+    explicitlyMentioned || botOwnsThreadRoot || hasThreadParticipation;
   const implicitMention = Boolean(
     allowImplicitMention &&
     !isDirectMessage &&
     ctx.botUserId &&
     message.thread_ts &&
-    (message.parent_user_id === ctx.botUserId ||
-      hasSlackThreadParticipation(account.accountId, message.channel, message.thread_ts)),
+    (botOwnsThreadRoot || hasThreadParticipation),
+  );
+  const allowApprovedHumanThreadFollowups = Boolean(
+    channelConfig?.allowHumanThreadFollowups &&
+    isThreadReply &&
+    !isBotMessage &&
+    // Security gate for the incidentRootOnly bypass: the channel must opt in,
+    // the message must be a human thread reply, and an explicit summon or
+    // prior bot participation must authorize this thread. This keeps routine
+    // incident-channel chatter from bypassing ingress.
+    hasApprovedIncidentThreadFollowupAuthorization,
   );
 
   let resolvedSenderName = message.username?.trim() || undefined;
@@ -543,8 +566,23 @@ export async function prepareSlackMessage(params: {
     return null;
   }
   const { rawBody, effectiveDirectMedia } = resolvedMessageContent;
+  if (allowApprovedHumanThreadFollowups) {
+    ctx.logger.debug(
+      {
+        channel: message.channel,
+        threadTs: message.thread_ts ?? "unknown",
+        user: message.user ?? "unknown",
+        explicitlyMentioned,
+        botOwnsThreadRoot,
+        hasThreadParticipation,
+        mentionsResolvedIncidentState: isResolvedSlackIncidentUpdateText(rawBody),
+      },
+      "approved human slack incident thread follow-up bypass active",
+    );
+  }
   const incidentIngress = resolveSlackIncidentIngressDrop({
     accountId: account.accountId,
+    allowApprovedHumanThreadFollowups,
     channelConfig,
     channelId: message.channel,
     dedupeStore: ctx.incidentIngressFingerprints,
@@ -552,14 +590,12 @@ export async function prepareSlackMessage(params: {
     rawBody,
   });
   if (incidentIngress.shouldDrop) {
-    ctx.logger.info(
-      {
-        channel: message.channel,
-        reason: incidentIngress.reason ?? "incident-filtered",
-        ts: message.ts ?? "unknown",
-      },
-      "skipping incident ingress message",
-    );
+    const dropPayload = {
+      channel: message.channel,
+      reason: incidentIngress.reason ?? "incident-filtered",
+      ts: message.ts ?? "unknown",
+    };
+    ctx.logger.info(dropPayload, "skipping incident ingress message");
     return null;
   }
 

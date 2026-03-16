@@ -21,6 +21,7 @@ describe("resolveSlackChannelConfig", () => {
       requireMention: false,
       allowImplicitMention: false,
       incidentRootOnly: false,
+      allowHumanThreadFollowups: false,
       incidentIgnoreResolved: false,
       incidentDedupeWindowSeconds: 0,
     });
@@ -36,6 +37,7 @@ describe("resolveSlackChannelConfig", () => {
       requireMention: true,
       allowImplicitMention: true,
       incidentRootOnly: false,
+      allowHumanThreadFollowups: false,
       incidentIgnoreResolved: false,
       incidentDedupeWindowSeconds: 0,
     });
@@ -62,6 +64,7 @@ describe("resolveSlackChannelConfig", () => {
       requireMention: false,
       allowImplicitMention: true,
       incidentRootOnly: false,
+      allowHumanThreadFollowups: false,
       incidentIgnoreResolved: false,
       incidentDedupeWindowSeconds: 0,
       matchKey: "*",

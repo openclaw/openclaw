@@ -73,6 +73,7 @@ HEARTBEAT_OK
 When a BetterStack alert/update arrives in monitored Slack channels (`#staging-infra-monitoring`, `#public-api-monitoring`, `#platform-monitoring`):
 
 - Reply in the same incident thread (never channel root).
+- Continue answering operator follow-ups in that incident thread after the first reply; rerun live checks instead of going silent.
 - Keep response tight (8-12 lines). Prioritize direct evidence + next action.
 - Use Slack mrkdwn only:
   - bold = `*text*`, inline code = `` `text` ``

@@ -2,12 +2,16 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import type { App } from "@slack/bolt";
-import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { expectInboundContextContract } from "../../../../test/helpers/inbound-contract.js";
 import type { OpenClawConfig } from "../../../config/config.js";
 import { resolveAgentRoute } from "../../../routing/resolve-route.js";
 import { resolveThreadSessionKeys } from "../../../routing/session-key.js";
 import type { ResolvedSlackAccount } from "../../accounts.js";
+import {
+  clearSlackThreadParticipationCache,
+  recordSlackThreadParticipation,
+} from "../../sent-thread-cache.js";
 import type { SlackMessageEvent } from "../../types.js";
 import type { SlackMonitorContext } from "../context.js";
 import { prepareSlackMessage } from "./prepare.js";
@@ -35,6 +39,10 @@ describe("slack prepareSlackMessage inbound contract", () => {
       fs.rmSync(fixtureRoot, { recursive: true, force: true });
       fixtureRoot = "";
     }
+  });
+
+  afterEach(() => {
+    clearSlackThreadParticipationCache();
   });
 
   const createInboundSlackCtx = createInboundSlackTestContext;
@@ -374,6 +382,212 @@ describe("slack prepareSlackMessage inbound contract", () => {
 
     expect(first).toBeTruthy();
     expect(second).toBeNull();
+  });
+
+  it("allows monitored human thread follow-ups after bot participation", async () => {
+    const ctx = createInboundSlackCtx({
+      cfg: {
+        channels: { slack: { enabled: true } },
+      } as OpenClawConfig,
+      channelsConfig: {
+        C123: {
+          requireMention: false,
+          incidentRootOnly: true,
+          allowHumanThreadFollowups: true,
+        },
+      },
+    });
+    recordSlackThreadParticipation("default", "C123", "1.000");
+
+    const prepared = await prepareMessageWith(
+      ctx,
+      createSlackAccount({ allowBots: true }),
+      createSlackMessage({
+        channel: "C123",
+        channel_type: "channel",
+        text: "follow-up without re-mention",
+        ts: "1.002",
+        thread_ts: "1.000",
+        user: "U1",
+      }),
+    );
+
+    expect(prepared).toBeTruthy();
+  });
+
+  it("allows monitored human thread follow-ups in bot-rooted threads", async () => {
+    const ctx = createInboundSlackCtx({
+      cfg: {
+        channels: { slack: { enabled: true } },
+      } as OpenClawConfig,
+      channelsConfig: {
+        C123: {
+          requireMention: false,
+          incidentRootOnly: true,
+          allowHumanThreadFollowups: true,
+        },
+      },
+    });
+
+    const prepared = await prepareMessageWith(
+      ctx,
+      createSlackAccount({ allowBots: true }),
+      createSlackMessage({
+        channel: "C123",
+        channel_type: "channel",
+        text: "follow-up without re-mention",
+        ts: "1.002",
+        thread_ts: "1.000",
+        parent_user_id: "B1",
+        user: "U1",
+      }),
+    );
+
+    expect(prepared).toBeTruthy();
+  });
+
+  it("allows monitored human thread follow-ups with explicit mention", async () => {
+    const ctx = createInboundSlackCtx({
+      cfg: {
+        channels: { slack: { enabled: true } },
+      } as OpenClawConfig,
+      channelsConfig: {
+        C123: {
+          requireMention: false,
+          incidentRootOnly: true,
+          allowHumanThreadFollowups: true,
+        },
+      },
+    });
+
+    const prepared = await prepareMessageWith(
+      ctx,
+      createSlackAccount({ allowBots: true }),
+      createSlackMessage({
+        channel: "C123",
+        channel_type: "channel",
+        text: "<@B1> please verify the follow-up",
+        ts: "1.002",
+        thread_ts: "1.000",
+        user: "U1",
+      }),
+    );
+
+    expect(prepared).toBeTruthy();
+  });
+
+  it("logs approved monitored human thread follow-up bypasses at debug level", async () => {
+    const ctx = createInboundSlackCtx({
+      cfg: {
+        channels: { slack: { enabled: true } },
+      } as OpenClawConfig,
+      channelsConfig: {
+        C123: {
+          requireMention: false,
+          incidentRootOnly: true,
+          allowHumanThreadFollowups: true,
+        },
+      },
+    });
+    const debug = vi.spyOn(ctx.logger, "debug").mockImplementation(() => undefined);
+
+    const prepared = await prepareMessageWith(
+      ctx,
+      createSlackAccount({ allowBots: true }),
+      createSlackMessage({
+        channel: "C123",
+        channel_type: "channel",
+        text: "<@B1> is it resolved now?",
+        ts: "1.002",
+        thread_ts: "1.000",
+        user: "U1",
+      }),
+    );
+
+    expect(prepared).toBeTruthy();
+    expect(debug).toHaveBeenCalledWith(
+      {
+        channel: "C123",
+        threadTs: "1.000",
+        user: "U1",
+        explicitlyMentioned: true,
+        botOwnsThreadRoot: false,
+        hasThreadParticipation: false,
+        mentionsResolvedIncidentState: false,
+      },
+      "approved human slack incident thread follow-up bypass active",
+    );
+  });
+
+  it("still drops monitored human thread follow-ups without mention or participation", async () => {
+    const ctx = createInboundSlackCtx({
+      cfg: {
+        channels: { slack: { enabled: true } },
+      } as OpenClawConfig,
+      channelsConfig: {
+        C123: {
+          requireMention: false,
+          incidentRootOnly: true,
+          allowHumanThreadFollowups: true,
+        },
+      },
+    });
+
+    const prepared = await prepareMessageWith(
+      ctx,
+      createSlackAccount({ allowBots: true }),
+      createSlackMessage({
+        channel: "C123",
+        channel_type: "channel",
+        text: "follow-up with no bot context",
+        ts: "1.002",
+        thread_ts: "1.000",
+        user: "U1",
+      }),
+    );
+
+    expect(prepared).toBeNull();
+  });
+
+  it("logs unapproved monitored human thread follow-up drops at info level", async () => {
+    const ctx = createInboundSlackCtx({
+      cfg: {
+        channels: { slack: { enabled: true } },
+      } as OpenClawConfig,
+      channelsConfig: {
+        C123: {
+          requireMention: false,
+          incidentRootOnly: true,
+          allowHumanThreadFollowups: true,
+        },
+      },
+    });
+    const info = vi.spyOn(ctx.logger, "info").mockImplementation(() => undefined);
+    const warn = vi.spyOn(ctx.logger, "warn").mockImplementation(() => undefined);
+
+    const prepared = await prepareMessageWith(
+      ctx,
+      createSlackAccount({ allowBots: true }),
+      createSlackMessage({
+        channel: "C123",
+        channel_type: "channel",
+        text: "follow-up with no bot context",
+        ts: "1.002",
+        thread_ts: "1.000",
+        user: "U1",
+      }),
+    );
+
+    expect(prepared).toBeNull();
+    expect(warn).not.toHaveBeenCalled();
+    expect(info).toHaveBeenCalledWith(
+      {
+        channel: "C123",
+        reason: "incident-non-root-update",
+        ts: "1.002",
+      },
+      "skipping incident ingress message",
+    );
   });
 
   it("extracts attachment text for bot messages with empty text when allowBots is true (#27616)", async () => {
