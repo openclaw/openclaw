@@ -1,0 +1,18 @@
+{
+  "name": "@openclaw/rag",
+  "version": "0.1.0",
+  "description": "Local RAG pipeline for OpenClaw workspace context injection",
+  "type": "commonjs",
+  "main": "rag-query.js",
+  "scripts": {
+    "index": "node indexer.js",
+    "index:force": "node indexer.js --force",
+    "query": "node query-cli.js",
+    "setup": "node setup.js"
+  },
+  "dependencies": {
+    "@huggingface/transformers": "^3.4.1",
+    "better-sqlite3": "^11.8.1",
+    "sqlite-vec": "^0.1.6"
+  }
+}

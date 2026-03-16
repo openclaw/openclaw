@@ -1,0 +1,15 @@
+{
+  "enabled": true,
+  "similarityThreshold": 0.35,
+  "maxInjectedTokens": 8000,
+  "maxResults": 5,
+  "embeddingModel": "Xenova/all-MiniLM-L6-v2",
+  "embeddingDims": 384,
+  "indexPaths": [
+    "skills/*/SKILL.md",
+    "skills/*/references/*.md",
+    "memory/*.md",
+    "MEMORY.md"
+  ],
+  "excludePatterns": []
+}
