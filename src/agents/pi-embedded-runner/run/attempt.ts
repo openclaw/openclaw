@@ -1956,15 +1956,19 @@ export async function runEmbeddedAttempt(
         activeSession.agent.streamFn = wrapOllamaCompatNumCtx(activeSession.agent.streamFn, numCtx);
       }
 
+      const effectiveStreamParams: Record<string, unknown> = {
+        ...params.streamParams,
+        fastMode: params.fastMode,
+      };
+      if (allowedToolNames.size === 0) {
+        effectiveStreamParams.toolChoice = undefined;
+      }
       applyExtraParamsToAgent(
         activeSession.agent,
         params.config,
         params.provider,
         params.modelId,
-        {
-          ...params.streamParams,
-          fastMode: params.fastMode,
-        },
+        effectiveStreamParams,
         params.thinkLevel,
         sessionAgentId,
       );

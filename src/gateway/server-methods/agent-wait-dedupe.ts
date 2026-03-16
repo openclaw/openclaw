@@ -5,6 +5,12 @@ export type AgentWaitTerminalSnapshot = {
   startedAt?: number;
   endedAt?: number;
   error?: string;
+  stopReason?: string;
+  pendingToolCalls?: Array<{
+    id: string;
+    name: string;
+    arguments: string;
+  }>;
 };
 
 const AGENT_WAITERS_BY_RUN_ID = new Map<string, Set<() => void>>();
@@ -21,6 +27,44 @@ function parseRunIdFromDedupeKey(key: string): string | null {
 
 function asFiniteNumber(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+function parsePendingToolCalls(value: unknown):
+  | Array<{
+      id: string;
+      name: string;
+      arguments: string;
+    }>
+  | undefined {
+  if (!Array.isArray(value)) {
+    return undefined;
+  }
+  const calls = value
+    .map((entry) => {
+      if (!entry || typeof entry !== "object") {
+        return null;
+      }
+      const record = entry as Record<string, unknown>;
+      return typeof record.id === "string" &&
+        typeof record.name === "string" &&
+        typeof record.arguments === "string"
+        ? {
+            id: record.id,
+            name: record.name,
+            arguments: record.arguments,
+          }
+        : null;
+    })
+    .filter(
+      (
+        entry,
+      ): entry is {
+        id: string;
+        name: string;
+        arguments: string;
+      } => entry !== null,
+    );
+  return calls.length > 0 ? calls : undefined;
 }
 
 function removeWaiter(runId: string, waiter: () => void): void {
@@ -72,6 +116,14 @@ export function readTerminalSnapshotFromDedupeEntry(
         endedAt?: unknown;
         error?: unknown;
         summary?: unknown;
+        stopReason?: unknown;
+        pendingToolCalls?: unknown;
+        result?: {
+          meta?: {
+            stopReason?: unknown;
+            pendingToolCalls?: unknown;
+          };
+        };
       }
     | undefined;
   const status = typeof payload?.status === "string" ? payload.status : undefined;
@@ -87,6 +139,15 @@ export function readTerminalSnapshotFromDedupeEntry(
       : typeof payload?.summary === "string"
         ? payload.summary
         : entry.error?.message;
+  const stopReason =
+    typeof payload?.result?.meta?.stopReason === "string"
+      ? payload.result.meta.stopReason
+      : typeof payload?.stopReason === "string"
+        ? payload.stopReason
+        : undefined;
+  const pendingToolCalls =
+    parsePendingToolCalls(payload?.result?.meta?.pendingToolCalls) ??
+    parsePendingToolCalls(payload?.pendingToolCalls);
 
   if (status === "ok" || status === "timeout") {
     return {
@@ -94,6 +155,8 @@ export function readTerminalSnapshotFromDedupeEntry(
       startedAt,
       endedAt,
       error: status === "timeout" ? errorMessage : undefined,
+      stopReason,
+      pendingToolCalls,
     };
   }
   if (status === "error" || !entry.ok) {
@@ -102,6 +165,8 @@ export function readTerminalSnapshotFromDedupeEntry(
       startedAt,
       endedAt,
       error: errorMessage,
+      stopReason,
+      pendingToolCalls,
     };
   }
   return null;

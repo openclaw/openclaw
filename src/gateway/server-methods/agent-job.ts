@@ -19,6 +19,12 @@ type AgentRunSnapshot = {
   startedAt?: number;
   endedAt?: number;
   error?: string;
+  stopReason?: string;
+  pendingToolCalls?: Array<{
+    id: string;
+    name: string;
+    arguments: string;
+  }>;
   ts: number;
 };
 
@@ -86,12 +92,42 @@ function createSnapshotFromLifecycleEvent(params: {
     typeof data?.startedAt === "number" ? data.startedAt : agentRunStarts.get(runId);
   const endedAt = typeof data?.endedAt === "number" ? data.endedAt : undefined;
   const error = typeof data?.error === "string" ? data.error : undefined;
+  const stopReason = typeof data?.stopReason === "string" ? data.stopReason : undefined;
+  const pendingToolCalls = Array.isArray(data?.pendingToolCalls)
+    ? data.pendingToolCalls
+        .map((value) => {
+          if (!value || typeof value !== "object") {
+            return null;
+          }
+          const record = value as Record<string, unknown>;
+          return typeof record.id === "string" &&
+            typeof record.name === "string" &&
+            typeof record.arguments === "string"
+            ? {
+                id: record.id,
+                name: record.name,
+                arguments: record.arguments,
+              }
+            : null;
+        })
+        .filter(
+          (
+            value,
+          ): value is {
+            id: string;
+            name: string;
+            arguments: string;
+          } => value !== null,
+        )
+    : undefined;
   return {
     runId,
     status: phase === "error" ? "error" : data?.aborted ? "timeout" : "ok",
     startedAt,
     endedAt,
     error,
+    stopReason,
+    pendingToolCalls: pendingToolCalls?.length ? pendingToolCalls : undefined,
     ts: Date.now(),
   };
 }

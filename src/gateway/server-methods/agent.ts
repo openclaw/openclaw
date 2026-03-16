@@ -7,6 +7,7 @@ import {
 } from "../../agents/spawned-context.js";
 import { buildBareSessionResetPrompt } from "../../auto-reply/reply/session-reset-prompt.js";
 import { agentCommandFromIngress } from "../../commands/agent.js";
+import type { AgentStreamParams } from "../../commands/agent/types.js";
 import { loadConfig } from "../../config/config.js";
 import {
   mergeSessionEntry,
@@ -193,6 +194,16 @@ export const agentHandlers: GatewayRequestHandlers = {
       lane?: string;
       extraSystemPrompt?: string;
       internalEvents?: AgentInternalEvent[];
+      clientTools?: Array<{
+        type: "function";
+        function: {
+          name: string;
+          description?: string;
+          parameters?: Record<string, unknown>;
+        };
+      }>;
+      disableTools?: boolean;
+      streamParams?: AgentStreamParams;
       idempotencyKey: string;
       timeout?: number;
       bestEffortDeliver?: boolean;
@@ -637,6 +648,9 @@ export const agentHandlers: GatewayRequestHandlers = {
         lane: request.lane,
         extraSystemPrompt: request.extraSystemPrompt,
         internalEvents: request.internalEvents,
+        clientTools: request.clientTools,
+        disableTools: request.disableTools,
+        streamParams: request.streamParams,
         inputProvenance,
         // Internal-only: allow workspace override for spawned subagent runs.
         workspaceDir: resolveIngressWorkspaceOverrideForSpawnedRun({
@@ -792,6 +806,8 @@ export const agentHandlers: GatewayRequestHandlers = {
       startedAt: snapshot.startedAt,
       endedAt: snapshot.endedAt,
       error: snapshot.error,
+      stopReason: snapshot.stopReason,
+      pendingToolCalls: snapshot.pendingToolCalls,
     });
   },
 };
