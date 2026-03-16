@@ -192,4 +192,69 @@ describe("memory manager kilocode provider wiring", () => {
     expect(fallbackCall?.provider).toBe("kilocode");
     expect(fallbackCall?.model).toBe(DEFAULT_KILOCODE_EMBEDDING_MODEL);
   });
+
+  it("includes org ID in provider key so org changes invalidate the index (SUGGESTION fix)", async () => {
+    // Two kilocode clients with different org IDs must produce different provider keys.
+    // Without this, switching KILOCODE_ORG_ID would reuse a stale vector index.
+    const clientOrgA: KilocodeEmbeddingClient = {
+      baseUrl: "https://api.kilo.ai/api/gateway/",
+      headers: {
+        authorization: "Bearer key",
+        "X-KILOCODE-ORGANIZATIONID": "org-a",
+      },
+      model: DEFAULT_KILOCODE_EMBEDDING_MODEL,
+    };
+    const clientOrgB: KilocodeEmbeddingClient = {
+      baseUrl: "https://api.kilo.ai/api/gateway/",
+      headers: {
+        authorization: "Bearer key",
+        "X-KILOCODE-ORGANIZATIONID": "org-b",
+      },
+      model: DEFAULT_KILOCODE_EMBEDDING_MODEL,
+    };
+
+    // Set up two separate managers — one per org client
+    const workspaceDirB = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-memory-kilocode-b-"));
+    const indexPathB = path.join(workspaceDirB, "index.sqlite");
+    await fs.mkdir(path.join(workspaceDirB, "memory"), { recursive: true });
+    await fs.writeFile(path.join(workspaceDirB, "MEMORY.md"), "test");
+
+    createEmbeddingProviderMock.mockResolvedValueOnce({
+      requestedProvider: "kilocode",
+      provider: createProvider("kilocode"),
+      kilocode: clientOrgA,
+    } as EmbeddingProviderResult);
+    const cfgA = buildConfig({ workspaceDir, indexPath, provider: "kilocode" });
+    const resultA = await getMemorySearchManager({ cfg: cfgA, agentId: "main" });
+    if (!resultA.manager) {
+      throw new Error(`manager A missing: ${resultA.error ?? "no error"}`);
+    }
+    const managerA = resultA.manager as unknown as MemoryIndexManager;
+
+    createEmbeddingProviderMock.mockResolvedValueOnce({
+      requestedProvider: "kilocode",
+      provider: createProvider("kilocode"),
+      kilocode: clientOrgB,
+    } as EmbeddingProviderResult);
+    const cfgB = buildConfig({
+      workspaceDir: workspaceDirB,
+      indexPath: indexPathB,
+      provider: "kilocode",
+    });
+    const resultB = await getMemorySearchManager({ cfg: cfgB, agentId: "main" });
+    if (!resultB.manager) {
+      throw new Error(`manager B missing: ${resultB.error ?? "no error"}`);
+    }
+    const managerB = resultB.manager as unknown as MemoryIndexManager;
+
+    try {
+      const keyA = (managerA as unknown as { providerKey: string }).providerKey;
+      const keyB = (managerB as unknown as { providerKey: string }).providerKey;
+      expect(keyA).not.toBe(keyB);
+    } finally {
+      await managerA.close();
+      await managerB.close();
+      await fs.rm(workspaceDirB, { recursive: true, force: true });
+    }
+  });
 });

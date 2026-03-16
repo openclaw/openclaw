@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { KILOCODE_ORG_ID_HEADER } from "../providers/kilocode-shared.js";
 import { runGeminiEmbeddingBatches, type GeminiBatchRequest } from "./batch-gemini.js";
 import {
   OPENAI_BATCH_ENDPOINT,
@@ -259,6 +260,18 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
           model: this.gemini.model,
           outputDimensionality: this.gemini.outputDimensionality,
           headers: entries,
+        }),
+      );
+    }
+    if (this.provider.id === "kilocode" && this.kilocode) {
+      // Include org ID so that switching organizations invalidates the vector index.
+      // The org ID header is not a secret — it's a tenant routing identifier.
+      return hashText(
+        JSON.stringify({
+          provider: "kilocode",
+          baseUrl: this.kilocode.baseUrl,
+          model: this.kilocode.model,
+          orgId: this.kilocode.headers[KILOCODE_ORG_ID_HEADER] ?? null,
         }),
       );
     }

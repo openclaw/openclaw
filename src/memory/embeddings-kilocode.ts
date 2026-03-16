@@ -89,8 +89,18 @@ export async function resolveKilocodeEmbeddingClient(
   const providerConfig = options.config.models?.providers?.kilocode;
   const baseUrl = remoteBaseUrl || providerConfig?.baseUrl?.trim() || KILOCODE_BASE_URL;
   const headerOverrides = Object.assign({}, providerConfig?.headers, remote?.headers);
-  // Resolve org ID: explicit remote override → provider config field/headers → KILOCODE_ORG_ID env var
-  const remoteOrgId = remote?.organizationId?.trim();
+  // Resolve org ID priority (highest → lowest):
+  //   1. remote.organizationId (dedicated field)
+  //   2. remote.headers["X-KILOCODE-ORGANIZATIONID"] (explicit header override)
+  //   3. providerConfig.organizationId / providerConfig.headers["X-KILOCODE-ORGANIZATIONID"]
+  //   4. KILOCODE_ORG_ID env var
+  // Including remote.headers in the chain prevents the env var from silently overwriting
+  // an org ID that the caller set via remote.headers.
+  const remoteHeaderOrgId =
+    typeof remote?.headers?.[KILOCODE_ORG_ID_HEADER] === "string"
+      ? remote.headers[KILOCODE_ORG_ID_HEADER].trim()
+      : undefined;
+  const remoteOrgId = remote?.organizationId?.trim() || remoteHeaderOrgId;
   const orgId = remoteOrgId || resolveKilocodeOrgId(providerConfig);
   const headers: Record<string, string> = {
     "Content-Type": "application/json",

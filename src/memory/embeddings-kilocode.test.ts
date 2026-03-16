@@ -38,6 +38,7 @@ function buildEmbeddingOptions(overrides?: {
   providerHeaders?: Record<string, string>;
   providerOrganizationId?: string;
   remoteOrganizationId?: string;
+  remoteHeaders?: Record<string, string>;
 }): EmbeddingProviderOptions {
   const hasProviderConfig = overrides?.providerHeaders || overrides?.providerOrganizationId;
   return {
@@ -62,6 +63,7 @@ function buildEmbeddingOptions(overrides?: {
     remote: {
       apiKey: overrides?.apiKey ?? "test-api-key",
       organizationId: overrides?.remoteOrganizationId,
+      headers: overrides?.remoteHeaders,
     },
   };
 }
@@ -152,5 +154,38 @@ describe("resolveKilocodeEmbeddingClient: org ID header", () => {
       }),
     );
     expect(client.headers["X-KILOCODE-ORGANIZATIONID"]).toBe("remote-org-111");
+  });
+
+  it("remote.headers org ID takes precedence over KILOCODE_ORG_ID env var (WARNING fix)", async () => {
+    // If a user explicitly sets X-KILOCODE-ORGANIZATIONID in remote.headers, it must not be
+    // overwritten by the KILOCODE_ORG_ID env var. The env var is a global default; an
+    // explicit header override is more specific.
+    process.env.KILOCODE_ORG_ID = "env-org-999";
+    const client = await resolveKilocodeEmbeddingClient(
+      buildEmbeddingOptions({
+        remoteHeaders: { "X-KILOCODE-ORGANIZATIONID": "remote-header-org" },
+      }),
+    );
+    expect(client.headers["X-KILOCODE-ORGANIZATIONID"]).toBe("remote-header-org");
+  });
+
+  it("remote.organizationId takes precedence over remote.headers org ID", async () => {
+    const client = await resolveKilocodeEmbeddingClient(
+      buildEmbeddingOptions({
+        remoteOrganizationId: "remote-field-org",
+        remoteHeaders: { "X-KILOCODE-ORGANIZATIONID": "remote-header-org" },
+      }),
+    );
+    expect(client.headers["X-KILOCODE-ORGANIZATIONID"]).toBe("remote-field-org");
+  });
+
+  it("whitespace-only remote.headers org ID falls through to env var", async () => {
+    process.env.KILOCODE_ORG_ID = "env-org-999";
+    const client = await resolveKilocodeEmbeddingClient(
+      buildEmbeddingOptions({
+        remoteHeaders: { "X-KILOCODE-ORGANIZATIONID": "   " },
+      }),
+    );
+    expect(client.headers["X-KILOCODE-ORGANIZATIONID"]).toBe("env-org-999");
   });
 });
