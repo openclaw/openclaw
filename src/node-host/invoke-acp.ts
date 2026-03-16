@@ -72,6 +72,7 @@ type AcpNodeSessionRecord = {
   resume?: Record<string, unknown>;
   lastStatusSummary?: string;
   terminalDeliveryFailure?: AcpNodeTerminalDeliveryFailure;
+  closeFailure?: AcpNodeCloseFailure;
   completedTurns: Map<string, AcpCompletedTurnRecord>;
   updatedAt: number;
 };
@@ -96,6 +97,11 @@ type AcpNodeTerminalDeliveryFailure = {
   runId: string;
   requestId: string;
   nodeWorkerRunId: string;
+  errorMessage: string;
+};
+
+type AcpNodeCloseFailure = {
+  reason: string;
   errorMessage: string;
 };
 
@@ -371,6 +377,14 @@ function resolveFailureCode(error: unknown): string | undefined {
   return typeof code === "string" && code.trim() ? code.trim() : undefined;
 }
 
+function isCancelLikeStopReason(value: string | undefined): boolean {
+  if (!value) {
+    return false;
+  }
+  const normalized = value.trim().toLowerCase();
+  return normalized === "cancelled" || normalized === "cancel" || normalized.includes("cancel");
+}
+
 async function closeSessionRecord(session: AcpNodeSessionRecord, reason: string): Promise<void> {
   if (session.activeTurn) {
     session.activeTurn.abortController.abort();
@@ -388,8 +402,14 @@ async function closeSessionRecord(session: AcpNodeSessionRecord, reason: string)
       handle: session.handle,
       reason,
     });
-  } catch {
-    // Best-effort cleanup only.
+  } catch (error) {
+    session.state = "error";
+    session.closeFailure = {
+      reason,
+      errorMessage: resolveFailureMessage(error),
+    };
+    session.updatedAt = Date.now();
+    throw error;
   }
 }
 
@@ -410,6 +430,24 @@ async function buildStatusPayload(params: {
       workerProtocolVersion: 1,
       details: {
         summary: "ACP session not present on node",
+      },
+    };
+  }
+  if (session.closeFailure) {
+    return {
+      nodeId: params.nodeId,
+      ok: true,
+      sessionKey: session.sessionKey,
+      leaseId: session.leaseId,
+      leaseEpoch: session.leaseEpoch,
+      state: "error",
+      nodeRuntimeSessionId: session.nodeRuntimeSessionId,
+      workerProtocolVersion: 1,
+      details: {
+        summary: `ACP session close failed for ${session.sessionKey}; explicit recovery required`,
+        reason: "close_failed",
+        closeReason: session.closeFailure.reason,
+        errorMessage: session.closeFailure.errorMessage,
       },
     };
   }
@@ -638,6 +676,7 @@ function settleCompletedTurn(session: AcpNodeSessionRecord, activeTurn: AcpNodeA
   session.nodeWorkerRunId = undefined;
   session.activeTurn = undefined;
   session.terminalDeliveryFailure = undefined;
+  session.closeFailure = undefined;
   session.updatedAt = Date.now();
 }
 
@@ -726,11 +765,11 @@ async function runWorkerTurn(params: {
         continue;
       }
       if (event.type === "done") {
-        terminal = activeTurn.cancelRequested
+        terminal = isCancelLikeStopReason(event.stopReason)
           ? {
               kind: "cancelled",
               stopReason:
-                activeTurn.cancelReason?.trim() || event.stopReason?.trim() || "cancelled",
+                event.stopReason?.trim() || activeTurn.cancelReason?.trim() || "cancelled",
             }
           : runtimeFailureTerminal
             ? runtimeFailureTerminal
@@ -750,13 +789,13 @@ async function runWorkerTurn(params: {
   }
 
   if (!terminal) {
-    terminal = activeTurn.cancelRequested
-      ? {
-          kind: "cancelled",
-          stopReason: activeTurn.cancelReason?.trim() || "cancelled",
-        }
-      : runtimeFailureTerminal
-        ? runtimeFailureTerminal
+    terminal = runtimeFailureTerminal
+      ? runtimeFailureTerminal
+      : activeTurn.cancelRequested
+        ? {
+            kind: "cancelled",
+            stopReason: activeTurn.cancelReason?.trim() || "cancelled",
+          }
         : {
             kind: "completed",
             stopReason: "done",
@@ -800,6 +839,14 @@ function handleTurnStart(
       ok: false,
       code: "UNAVAILABLE",
       message: `ACP run ${session.terminalDeliveryFailure.runId} finished locally but terminal delivery failed on this node; explicit recovery is required before starting another turn`,
+    };
+  }
+  if (session.closeFailure) {
+    return {
+      handled: true,
+      ok: false,
+      code: "UNAVAILABLE",
+      message: `ACP session ${params.sessionKey} is in failed-close state on this node; explicit recovery is required before starting another turn`,
     };
   }
   if (
@@ -959,9 +1006,18 @@ async function handleTurnCancel(params: AcpTurnCancelParams): Promise<AcpInvokeC
 
 async function handleSessionClose(params: AcpSessionCloseParams): Promise<AcpInvokeCommandResult> {
   const session = assertLeaseBinding(nodeAcpSessions.get(params.sessionKey), params);
-  await closeSessionRecord(session, params.reason ?? "session-close");
-  if (nodeAcpSessions.get(params.sessionKey) === session) {
-    nodeAcpSessions.delete(params.sessionKey);
+  try {
+    await closeSessionRecord(session, params.reason ?? "session-close");
+    if (nodeAcpSessions.get(params.sessionKey) === session) {
+      nodeAcpSessions.delete(params.sessionKey);
+    }
+  } catch (error) {
+    return {
+      handled: true,
+      ok: false,
+      code: "UNAVAILABLE",
+      message: `ACP session close failed for ${params.sessionKey}: ${resolveFailureMessage(error)}`,
+    };
   }
   return {
     handled: true,

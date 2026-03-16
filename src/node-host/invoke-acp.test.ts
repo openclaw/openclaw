@@ -41,6 +41,7 @@ class FakeNodeHostRuntime implements AcpRuntime {
   readonly cancelled: Array<{ handle: AcpRuntimeHandle; reason?: string }> = [];
   readonly closed: Array<{ handle: AcpRuntimeHandle; reason: string }> = [];
   statusError: Error | null = null;
+  closeError: Error | null = null;
   rewriteStopReasonOnCancel = true;
   emittedEvents: AcpRuntimeEvent[] = [
     {
@@ -115,6 +116,9 @@ class FakeNodeHostRuntime implements AcpRuntime {
 
   async close(input: { handle: AcpRuntimeHandle; reason: string }): Promise<void> {
     this.closed.push(input);
+    if (this.closeError) {
+      throw this.closeError;
+    }
   }
 
   async waitForTurnStart() {
@@ -479,6 +483,111 @@ describe("handleAcpInvokeCommand", () => {
     });
   });
 
+  it("does not rewrite a later runtime failure into cancelled just because cancel was requested", async () => {
+    const runtime = new FakeNodeHostRuntime();
+    runtime.rewriteStopReasonOnCancel = false;
+    runtime.emittedEvents = [
+      {
+        type: "error",
+        message: "runtime-error-event",
+        code: "RUNTIME_ERR",
+      },
+      {
+        type: "done",
+        stopReason: "done-after-error",
+      },
+    ];
+    registerAcpRuntimeBackend({
+      id: "acpx",
+      runtime,
+    });
+    const nodeEvents: NodeEventCall[] = [];
+
+    await handleAcpInvokeCommand(
+      buildFrame({
+        command: "acp.session.ensure",
+        payload: {
+          sessionKey: "agent:main:acp:test",
+          leaseId: "lease-1",
+          leaseEpoch: 1,
+          agent: "main",
+          mode: "persistent",
+        },
+      }),
+      buildDeps(async (event, payload) => {
+        nodeEvents.push({ event, payload });
+      }),
+    );
+
+    await handleAcpInvokeCommand(
+      buildFrame({
+        command: "acp.turn.start",
+        payload: {
+          sessionKey: "agent:main:acp:test",
+          runId: "run-cancel-error-then-done",
+          leaseId: "lease-1",
+          leaseEpoch: 1,
+          requestId: "req-cancel-error-then-done",
+          mode: "prompt",
+          text: "cancel after start",
+        },
+      }),
+      buildDeps(async (event, payload) => {
+        nodeEvents.push({ event, payload });
+      }),
+    );
+
+    await runtime.waitForTurnStart();
+
+    await expect(
+      handleAcpInvokeCommand(
+        buildFrame({
+          command: "acp.turn.cancel",
+          payload: {
+            sessionKey: "agent:main:acp:test",
+            runId: "run-cancel-error-then-done",
+            leaseId: "lease-1",
+            leaseEpoch: 1,
+            reason: "manual-cancel",
+          },
+        }),
+        buildDeps(),
+      ),
+    ).resolves.toMatchObject({
+      handled: true,
+      ok: true,
+    });
+
+    await runtime.waitForTurnFinish();
+    await vi.waitFor(() => {
+      expect(nodeEvents).toHaveLength(2);
+    });
+    expect(nodeEvents.at(0)).toMatchObject({
+      event: "acp.worker.event",
+      payload: {
+        runId: "run-cancel-error-then-done",
+        seq: 1,
+        event: {
+          type: "error",
+          message: "runtime-error-event",
+          code: "RUNTIME_ERR",
+        },
+      },
+    });
+    expect(nodeEvents.at(1)).toMatchObject({
+      event: "acp.worker.terminal",
+      payload: {
+        runId: "run-cancel-error-then-done",
+        finalSeq: 1,
+        terminal: {
+          kind: "failed",
+          errorCode: "RUNTIME_ERR",
+          errorMessage: "runtime-error-event",
+        },
+      },
+    });
+  });
+
   it("treats a replayed fast-finished start with the same runId and requestId as idempotent", async () => {
     const runtime = new FakeNodeHostRuntime();
     registerAcpRuntimeBackend({
@@ -566,7 +675,7 @@ describe("handleAcpInvokeCommand", () => {
     expect(nodeEvents).toHaveLength(3);
   });
 
-  it("classifies bare done after cancel intent as cancelled", async () => {
+  it("does not rewrite bare done after cancel intent into cancelled without an explicit cancel-like outcome", async () => {
     const runtime = new FakeNodeHostRuntime();
     runtime.rewriteStopReasonOnCancel = false;
     registerAcpRuntimeBackend({
@@ -638,8 +747,8 @@ describe("handleAcpInvokeCommand", () => {
         payload: {
           runId: "run-bare-done",
           terminal: {
-            kind: "cancelled",
-            stopReason: "manual-cancel",
+            kind: "completed",
+            stopReason: "done",
           },
         },
       });
@@ -1060,7 +1169,7 @@ describe("handleAcpInvokeCommand", () => {
     ]);
   });
 
-  it("preserves cancel classification when a runtime error event is followed by done after cancel", async () => {
+  it("keeps an explicit cancel-like done outcome as cancelled after cancel intent", async () => {
     const runtime = new FakeNodeHostRuntime();
     runtime.emittedEvents = [
       {
@@ -1070,7 +1179,7 @@ describe("handleAcpInvokeCommand", () => {
       },
       {
         type: "done",
-        stopReason: "done-after-error",
+        stopReason: "cancelled",
       },
     ];
     registerAcpRuntimeBackend({
@@ -1158,6 +1267,76 @@ describe("handleAcpInvokeCommand", () => {
         terminal: {
           kind: "cancelled",
           stopReason: "manual-cancel",
+        },
+      },
+    });
+  });
+
+  it("reports close failure instead of returning accepted success and missing state", async () => {
+    const runtime = new FakeNodeHostRuntime();
+    runtime.closeError = new Error("close backend exploded");
+    registerAcpRuntimeBackend({
+      id: "acpx",
+      runtime,
+    });
+
+    await handleAcpInvokeCommand(
+      buildFrame({
+        command: "acp.session.ensure",
+        payload: {
+          sessionKey: "agent:main:acp:test",
+          leaseId: "lease-1",
+          leaseEpoch: 1,
+          agent: "main",
+          mode: "persistent",
+        },
+      }),
+      buildDeps(),
+    );
+
+    const closeResult = await handleAcpInvokeCommand(
+      buildFrame({
+        command: "acp.session.close",
+        payload: {
+          sessionKey: "agent:main:acp:test",
+          leaseId: "lease-1",
+          leaseEpoch: 1,
+          reason: "cleanup",
+        },
+      }),
+      buildDeps(),
+    );
+
+    expect(closeResult).toMatchObject({
+      handled: true,
+      ok: false,
+      code: "UNAVAILABLE",
+      message: expect.stringContaining("close backend exploded"),
+    });
+
+    const status = await handleAcpInvokeCommand(
+      buildFrame({
+        command: "acp.session.status",
+        payload: {
+          sessionKey: "agent:main:acp:test",
+          leaseId: "lease-1",
+          leaseEpoch: 1,
+        },
+      }),
+      buildDeps(),
+    );
+
+    expect(status).toMatchObject({
+      handled: true,
+      ok: true,
+      payload: {
+        state: "error",
+        nodeRuntimeSessionId: "acpx-session-1",
+        details: {
+          reason: "close_failed",
+          closeReason: "cleanup",
+          errorMessage: "close backend exploded",
+          summary: expect.stringContaining("close failed"),
         },
       },
     });
