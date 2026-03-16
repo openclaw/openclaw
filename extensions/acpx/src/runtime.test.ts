@@ -355,6 +355,43 @@ describe("AcpxRuntime", () => {
     );
   });
 
+  it("surfaces a distinct post-done exit error when acpx exits non-zero after done", async () => {
+    const runtime = sharedFixture?.runtime;
+    expect(runtime).toBeDefined();
+    if (!runtime) {
+      throw new Error("shared runtime fixture missing");
+    }
+    const handle = await runtime.ensureSession({
+      sessionKey: "agent:codex:acp:done-then-exit-1",
+      agent: "codex",
+      mode: "persistent",
+    });
+
+    const events = [];
+    for await (const event of runtime.runTurn({
+      handle,
+      text: "done-then-exit-1",
+      mode: "prompt",
+      requestId: "req-done-exit-1",
+    })) {
+      events.push(event);
+    }
+
+    expect(events).toContainEqual({ type: "done", stopReason: "end_turn" });
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        type: "error",
+        message: expect.stringContaining("ACP backend exited after signaling done:"),
+      }),
+    );
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        type: "error",
+        message: expect.stringContaining("backend exited after done"),
+      }),
+    );
+  });
+
   it("supports cancel and close using encoded runtime handle state", async () => {
     const { runtime, logPath, config } = await createMockRuntimeFixture();
     const handle = await runtime.ensureSession({
