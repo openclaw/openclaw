@@ -785,6 +785,19 @@ export async function recordSessionMetaFromInbound(params: {
       if (!existing && !createIfMissing) {
         return null;
       }
+
+      // Copy ACP metadata from base session to thread-bound session
+      if (!existing?.acp && resolved.normalizedKey.includes(':thread:')) {
+        const threadIndex = resolved.normalizedKey.lastIndexOf(':thread:');
+        if (threadIndex > 0) {
+          const baseKey = resolved.normalizedKey.substring(0, threadIndex);
+          const baseSession = store[baseKey];
+          if (baseSession?.acp) {
+            patch.acp = baseSession.acp;
+          }
+        }
+      }
+
       const next = existing
         ? // Inbound metadata updates must not refresh activity timestamps;
           // idle reset evaluation relies on updatedAt from actual session turns.
