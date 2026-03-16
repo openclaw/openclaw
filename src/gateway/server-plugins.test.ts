@@ -162,6 +162,65 @@ describe("loadGatewayPlugins", () => {
     expect(typeof subagent?.getSession).toBe("function");
   });
 
+  test("can prefer setup-runtime channel plugins during startup loads", async () => {
+    const { loadGatewayPlugins } = await importServerPluginsModule();
+    loadOpenClawPlugins.mockReturnValue(createRegistry([]));
+
+    const log = {
+      info: vi.fn(),
+      warn: vi.fn(),
+      error: vi.fn(),
+      debug: vi.fn(),
+    };
+
+    loadGatewayPlugins({
+      cfg: {},
+      workspaceDir: "/tmp",
+      log,
+      coreGatewayHandlers: {},
+      baseMethods: [],
+      preferSetupRuntimeForChannelPlugins: true,
+    });
+
+    expect(loadOpenClawPlugins).toHaveBeenCalledWith(
+      expect.objectContaining({
+        preferSetupRuntimeForChannelPlugins: true,
+      }),
+    );
+  });
+
+  test("can suppress duplicate diagnostics when reloading full runtime plugins", async () => {
+    const { loadGatewayPlugins } = await importServerPluginsModule();
+    const diagnostics: PluginDiagnostic[] = [
+      {
+        level: "error",
+        pluginId: "telegram",
+        source: "/tmp/telegram/index.ts",
+        message: "failed to load plugin: boom",
+      },
+    ];
+    loadOpenClawPlugins.mockReturnValue(createRegistry(diagnostics));
+
+    const log = {
+      info: vi.fn(),
+      warn: vi.fn(),
+      error: vi.fn(),
+      debug: vi.fn(),
+    };
+
+    loadGatewayPlugins({
+      cfg: {},
+      workspaceDir: "/tmp",
+      log,
+      coreGatewayHandlers: {},
+      baseMethods: [],
+      logDiagnostics: false,
+    });
+
+    expect(log.error).not.toHaveBeenCalled();
+    expect(log.info).not.toHaveBeenCalled();
+  });
+
   test("shares fallback context across module reloads for existing runtimes", async () => {
     const first = await importServerPluginsModule();
     const runtime = createSubagentRuntime(first);
