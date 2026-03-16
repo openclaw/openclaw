@@ -29,6 +29,7 @@ export const BUNDLED_ENABLED_BY_DEFAULT = new Set<string>([
   "cloudflare-ai-gateway",
   "device-pair",
   "github-copilot",
+  "google",
   "huggingface",
   "kilocode",
   "kimi-coding",

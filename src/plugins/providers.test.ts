@@ -1,10 +1,15 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { resolvePluginProviders } from "./providers.js";
+import { resolveOwningPluginIdsForProvider, resolvePluginProviders } from "./providers.js";
 
 const loadOpenClawPluginsMock = vi.fn();
+const loadPluginManifestRegistryMock = vi.fn();
 
 vi.mock("./loader.js", () => ({
   loadOpenClawPlugins: (...args: unknown[]) => loadOpenClawPluginsMock(...args),
+}));
+
+vi.mock("./manifest-registry.js", () => ({
+  loadPluginManifestRegistry: (...args: unknown[]) => loadPluginManifestRegistryMock(...args),
 }));
 
 describe("resolvePluginProviders", () => {
@@ -12,6 +17,11 @@ describe("resolvePluginProviders", () => {
     loadOpenClawPluginsMock.mockReset();
     loadOpenClawPluginsMock.mockReturnValue({
       providers: [{ pluginId: "google", provider: { id: "demo-provider" } }],
+    });
+    loadPluginManifestRegistryMock.mockReset();
+    loadPluginManifestRegistryMock.mockReturnValue({
+      plugins: [],
+      diagnostics: [],
     });
   });
 
@@ -85,5 +95,19 @@ describe("resolvePluginProviders", () => {
 
     expect(allow).toContain("google");
     expect(allow).not.toContain("google-gemini-cli-auth");
+  });
+
+  it("maps provider ids to owning plugin ids via manifests", () => {
+    loadPluginManifestRegistryMock.mockReturnValue({
+      plugins: [
+        { id: "minimax", providers: ["minimax", "minimax-portal"] },
+        { id: "openai", providers: ["openai", "openai-codex"] },
+      ],
+      diagnostics: [],
+    });
+
+    expect(resolveOwningPluginIdsForProvider({ provider: "minimax-portal" })).toEqual(["minimax"]);
+    expect(resolveOwningPluginIdsForProvider({ provider: "openai-codex" })).toEqual(["openai"]);
+    expect(resolveOwningPluginIdsForProvider({ provider: "gemini-cli" })).toBeUndefined();
   });
 });

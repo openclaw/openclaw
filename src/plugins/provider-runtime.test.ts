@@ -2,9 +2,14 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ProviderPlugin, ProviderRuntimeModel } from "./types.js";
 
 const resolvePluginProvidersMock = vi.fn((_: unknown) => [] as ProviderPlugin[]);
+const resolveOwningPluginIdsForProviderMock = vi.fn(
+  (_: unknown) => undefined as string[] | undefined,
+);
 
 vi.mock("./providers.js", () => ({
   resolvePluginProviders: (params: unknown) => resolvePluginProvidersMock(params as never),
+  resolveOwningPluginIdsForProvider: (params: unknown) =>
+    resolveOwningPluginIdsForProviderMock(params as never),
 }));
 
 import {
@@ -41,6 +46,8 @@ describe("provider-runtime", () => {
   beforeEach(() => {
     resolvePluginProvidersMock.mockReset();
     resolvePluginProvidersMock.mockReturnValue([]);
+    resolveOwningPluginIdsForProviderMock.mockReset();
+    resolveOwningPluginIdsForProviderMock.mockReturnValue(undefined);
   });
 
   it("matches providers by alias for runtime hook lookup", () => {
@@ -56,9 +63,13 @@ describe("provider-runtime", () => {
     const plugin = resolveProviderRuntimePlugin({ provider: "Open Router" });
 
     expect(plugin?.id).toBe("openrouter");
-    expect(resolvePluginProvidersMock).toHaveBeenCalledWith(
+    expect(resolveOwningPluginIdsForProviderMock).toHaveBeenCalledWith(
       expect.objectContaining({
         provider: "Open Router",
+      }),
+    );
+    expect(resolvePluginProvidersMock).toHaveBeenCalledWith(
+      expect.objectContaining({
         bundledProviderAllowlistCompat: true,
         bundledProviderVitestCompat: true,
       }),

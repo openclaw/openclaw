@@ -175,6 +175,7 @@ const minimaxPlugin = {
       id: PORTAL_PROVIDER_ID,
       label: PROVIDER_LABEL,
       docsPath: "/providers/minimax",
+      envVars: ["MINIMAX_OAUTH_TOKEN", "MINIMAX_API_KEY"],
       catalog: {
         run: async (ctx) => resolvePortalCatalog(ctx),
       },

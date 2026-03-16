@@ -28,7 +28,7 @@ import { isPathInside, safeStatSync } from "./path-safety.js";
 import { createPluginRegistry, type PluginRecord, type PluginRegistry } from "./registry.js";
 import { resolvePluginCacheInputs } from "./roots.js";
 import { setActivePluginRegistry } from "./runtime.js";
-import { createPluginRuntime, type CreatePluginRuntimeOptions } from "./runtime/index.js";
+import type { CreatePluginRuntimeOptions } from "./runtime/index.js";
 import type { PluginRuntime } from "./runtime/types.js";
 import { validateJsonSchemaValue } from "./schema-validator.js";
 import type {
@@ -162,6 +162,25 @@ const resolveExtensionApiAlias = (params: { modulePath?: string } = {}): string 
   }
   return null;
 };
+
+function resolvePluginRuntimeModulePath(params: { modulePath?: string } = {}): string | null {
+  try {
+    const modulePath = params.modulePath ?? fileURLToPath(import.meta.url);
+    const moduleDir = path.dirname(modulePath);
+    const candidates = [
+      path.join(moduleDir, "runtime", "index.ts"),
+      path.join(moduleDir, "runtime", "index.js"),
+    ];
+    for (const candidate of candidates) {
+      if (fs.existsSync(candidate)) {
+        return candidate;
+      }
+    }
+  } catch {
+    // ignore
+  }
+  return null;
+}
 
 const cachedPluginSdkExportedSubpaths = new Map<string, string[]>();
 
@@ -747,11 +766,58 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
     clearPluginInteractiveHandlers();
   }
 
+  // Lazy: avoid creating the Jiti loader when all plugins are disabled (common in unit tests).
+  let jitiLoader: ReturnType<typeof createJiti> | null = null;
+  const getJiti = () => {
+    if (jitiLoader) {
+      return jitiLoader;
+    }
+    const pluginSdkAlias = resolvePluginSdkAlias();
+    const extensionApiAlias = resolveExtensionApiAlias();
+    const aliasMap = {
+      ...(extensionApiAlias ? { "openclaw/extension-api": extensionApiAlias } : {}),
+      ...(pluginSdkAlias ? { "openclaw/plugin-sdk": pluginSdkAlias } : {}),
+      ...resolvePluginSdkScopedAliasMap(),
+    };
+    jitiLoader = createJiti(import.meta.url, {
+      interopDefault: true,
+      extensions: [".ts", ".tsx", ".mts", ".cts", ".mtsx", ".ctsx", ".js", ".mjs", ".cjs", ".json"],
+      ...(Object.keys(aliasMap).length > 0
+        ? {
+            alias: aliasMap,
+          }
+        : {}),
+    });
+    return jitiLoader;
+  };
+
+  let createPluginRuntimeFactory: ((options?: CreatePluginRuntimeOptions) => PluginRuntime) | null =
+    null;
+  const resolveCreatePluginRuntime = (): ((
+    options?: CreatePluginRuntimeOptions,
+  ) => PluginRuntime) => {
+    if (createPluginRuntimeFactory) {
+      return createPluginRuntimeFactory;
+    }
+    const runtimeModulePath = resolvePluginRuntimeModulePath();
+    if (!runtimeModulePath) {
+      throw new Error("Unable to resolve plugin runtime module");
+    }
+    const runtimeModule = getJiti()(runtimeModulePath) as {
+      createPluginRuntime?: (options?: CreatePluginRuntimeOptions) => PluginRuntime;
+    };
+    if (typeof runtimeModule.createPluginRuntime !== "function") {
+      throw new Error("Plugin runtime module missing createPluginRuntime export");
+    }
+    createPluginRuntimeFactory = runtimeModule.createPluginRuntime;
+    return createPluginRuntimeFactory;
+  };
+
   // Lazily initialize the runtime so startup paths that discover/skip plugins do
-  // not eagerly load every channel runtime dependency.
+  // not eagerly load every channel/runtime dependency tree.
   let resolvedRuntime: PluginRuntime | null = null;
   const resolveRuntime = (): PluginRuntime => {
-    resolvedRuntime ??= createPluginRuntime(options.runtimeOptions);
+    resolvedRuntime ??= resolveCreatePluginRuntime()(options.runtimeOptions);
     return resolvedRuntime;
   };
   const runtime = new Proxy({} as PluginRuntime, {
@@ -780,6 +846,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
       return Reflect.getPrototypeOf(resolveRuntime() as object);
     },
   });
+
   const { registry, createApi } = createPluginRegistry({
     logger,
     runtime,
@@ -822,31 +889,6 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
     normalizedLoadPaths: normalized.loadPaths,
     env,
   });
-
-  // Lazy: avoid creating the Jiti loader when all plugins are disabled (common in unit tests).
-  let jitiLoader: ReturnType<typeof createJiti> | null = null;
-  const getJiti = () => {
-    if (jitiLoader) {
-      return jitiLoader;
-    }
-    const pluginSdkAlias = resolvePluginSdkAlias();
-    const extensionApiAlias = resolveExtensionApiAlias();
-    const aliasMap = {
-      ...(extensionApiAlias ? { "openclaw/extension-api": extensionApiAlias } : {}),
-      ...(pluginSdkAlias ? { "openclaw/plugin-sdk": pluginSdkAlias } : {}),
-      ...resolvePluginSdkScopedAliasMap(),
-    };
-    jitiLoader = createJiti(import.meta.url, {
-      interopDefault: true,
-      extensions: [".ts", ".tsx", ".mts", ".cts", ".mtsx", ".ctsx", ".js", ".mjs", ".cjs", ".json"],
-      ...(Object.keys(aliasMap).length > 0
-        ? {
-            alias: aliasMap,
-          }
-        : {}),
-    });
-    return jitiLoader;
-  };
 
   const manifestByRoot = new Map(
     manifestRegistry.plugins.map((record) => [record.rootDir, record]),

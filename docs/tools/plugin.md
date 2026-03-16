@@ -217,12 +217,19 @@ Tool authoring guide: [Plugin agent tools](/plugins/agent-tools).
 
 Provider plugins now have two layers:
 
+- manifest metadata: `providerAuthEnvVars` for cheap env-auth lookup before
+  runtime load
 - config-time hooks: `catalog` / legacy `discovery`
 - runtime hooks: `resolveDynamicModel`, `prepareDynamicModel`, `normalizeResolvedModel`, `capabilities`, `prepareExtraParams`, `wrapStreamFn`, `isCacheTtlEligible`, `buildMissingAuthMessage`, `suppressBuiltInModel`, `augmentModelCatalog`, `prepareRuntimeAuth`, `resolveUsageAuth`, `fetchUsageSnapshot`
 
 OpenClaw still owns the generic agent loop, failover, transcript handling, and
 tool policy. These hooks are the seam for provider-specific behavior without
 needing a whole custom inference transport.
+
+Use manifest `providerAuthEnvVars` when the provider has env-based credentials
+that generic auth/status/model-picker paths should see without loading plugin
+runtime. Keep provider runtime `envVars` for operator-facing hints such as
+onboarding labels or OAuth client-id/client-secret setup vars.
 
 ### Hook order
 
