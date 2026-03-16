@@ -45,7 +45,12 @@ Use this format when adding entries:
 
 ## Listed plugins
 
+- **ClawTalk** — Voice calls, SMS, and AI-driven phone missions via ClawTalk. Powered by Telnyx.
+  - npm: `clawtalk`
+  - repo: `https://github.com/team-telnyx/clawtalk-plugin`
+  - install: `openclaw plugins install clawtalk`
+
 - **WeChat** — Connect OpenClaw to WeChat personal accounts via WeChatPadPro (iPad protocol). Supports text, image, and file exchange with keyword-triggered conversations.
-  npm: `@icesword760/openclaw-wechat`
-  repo: `https://github.com/icesword0760/openclaw-wechat`
-  install: `openclaw plugins install @icesword760/openclaw-wechat`
+  - npm: `@icesword760/openclaw-wechat`
+  - repo: `https://github.com/icesword0760/openclaw-wechat`
+  - install: `openclaw plugins install @icesword760/openclaw-wechat`
