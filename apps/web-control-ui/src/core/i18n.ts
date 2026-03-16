@@ -23,6 +23,8 @@ export const translations = {
     executing: "执行中...",
     recentVersions: "最近版本",
     noCheckpointHistory: "暂无 checkpoint 历史",
+    queryViaChat: "通过对话查询",
+    checkpointHistoryUnavailableHint: "当前网关不支持直接读取版本历史，请用右上角按钮通过对话链路查询最近版本。",
     restoreToThisVersion: "恢复到此版本",
 
     // Time formatting

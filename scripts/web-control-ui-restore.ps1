@@ -8,6 +8,14 @@ $ErrorActionPreference = 'Stop'
 $repoRoot = Split-Path -Parent $PSScriptRoot
 Set-Location $repoRoot
 
-git restore --source $Ref --staged --worktree -- apps/web-control-ui
-Write-Host "Restored apps/web-control-ui from $Ref"
-Write-Host "Review with: git diff -- apps/web-control-ui"
+$restorePaths = @(
+  'apps/web-control-ui',
+  'scripts/web-control-ui-checkpoint.ps1',
+  'scripts/web-control-ui-list-checkpoints.ps1',
+  'scripts/web-control-ui-restore.ps1'
+)
+
+git restore --source $Ref --staged --worktree -- @restorePaths
+Write-Host "Restored web-control-ui app + checkpoint scripts from $Ref"
+Write-Host "Implementation note: checkpoint refs are branch-based now; legacy tag refs remain restorable."
+Write-Host "Review with: git diff -- apps/web-control-ui scripts/web-control-ui-*.ps1"

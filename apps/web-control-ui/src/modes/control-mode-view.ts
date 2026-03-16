@@ -41,6 +41,17 @@ type BoundTarget = {
   sessionKey: string;
 };
 
+type CheckpointEntry = {
+  ref: string;
+  timestamp: Date;
+  name: string;
+  label: string;
+  kind: "branch" | "legacy-tag" | "parsed";
+  shortSha?: string;
+  displayTime?: string;
+  subject?: string;
+};
+
 const BOUND_TARGET_STORAGE_KEY = "web-control-ui.bound-target";
 
 function loadBoundTarget(): BoundTarget | null {
@@ -561,7 +572,7 @@ export class ControlModeView extends LitElement {
   @state() sessionsLoading = false;
   @state() sessionsError: string | null = null;
   @state() sessionRows: SessionRow[] = [];
-  @state() checkpointHistory: Array<{ ref: string; timestamp: Date; name: string }> = [];
+  @state() checkpointHistory: CheckpointEntry[] = [];
   @state() checkpointHistoryLoading = false;
   @state() language: Language = loadLanguagePreference() ?? detectBrowserLanguage();
 
@@ -651,6 +662,7 @@ export class ControlModeView extends LitElement {
           } as ChatMessage;
         })
         .filter((item): item is ChatMessage => item !== null);
+      this.syncCheckpointHistoryFromMessages(this.chatMessages);
     } catch (error) {
       this.errorMessage = `${this.t("loadChatHistoryError")}：${String(error)}`;
     } finally {
@@ -774,11 +786,12 @@ export class ControlModeView extends LitElement {
           ...this.chatMessages,
           { role: "assistant", text, timestamp: Date.now(), kind: inferMessageKind(text, "assistant") },
         ];
+        this.syncCheckpointHistoryFromText(text);
       }
       if (this.awaitingCheckpointHistoryFromChat) {
-        this.checkpointHistory = this.parseCheckpointHistory(text);
-        if (this.checkpointHistory.length > 0) {
-          this.restoreRef = this.checkpointHistory[0].ref;
+        const entries = this.parseCheckpointHistory(text);
+        if (entries.length > 0) {
+          this.syncCheckpointHistory(entries);
         }
         this.checkpointHistoryLoading = false;
         this.awaitingCheckpointHistoryFromChat = false;
@@ -800,11 +813,12 @@ export class ControlModeView extends LitElement {
             kind: inferMessageKind(this.chatStream, "assistant"),
           },
         ];
+        this.syncCheckpointHistoryFromText(this.chatStream);
       }
       if (this.awaitingCheckpointHistoryFromChat) {
-        this.checkpointHistory = this.parseCheckpointHistory(this.chatStream);
-        if (this.checkpointHistory.length > 0) {
-          this.restoreRef = this.checkpointHistory[0].ref;
+        const entries = this.parseCheckpointHistory(this.chatStream);
+        if (entries.length > 0) {
+          this.syncCheckpointHistory(entries);
         }
         this.checkpointHistoryLoading = false;
         this.awaitingCheckpointHistoryFromChat = false;
@@ -933,10 +947,24 @@ export class ControlModeView extends LitElement {
     await this.sendRawMessage(text, outbound);
   }
 
+  private buildRollbackCommandPrompt(command: string, extraInstructions = "") {
+    const lines = [
+      "这是 web-control-ui 的版本管理辅助任务。",
+      "不要修改页面代码，不要展开解释，只执行指定命令。",
+      "工作目录：openclaw-src 仓库根目录。",
+      `执行命令：${command}`,
+      extraInstructions,
+      "最后尽量原样返回命令输出；如果输出是 JSON，就直接只返回 JSON。",
+    ].filter(Boolean);
+    return lines.join("\n\n");
+  }
+
   private async triggerCheckpoint() {
     const name = this.checkpointName.trim() || "before-change";
     const userText = `创建 checkpoint：${name}`;
-    const outbound = `${this.promptDraft.trim()}\n\n请不要修改页面代码，只执行一件事：在 openclaw-src 仓库根目录运行\n\npwsh ./scripts/web-control-ui-checkpoint.ps1 -Name ${name}\n\n执行完成后，仅回复：\n- 是否创建成功\n- 新 checkpoint ref 或 commit/tag 信息\n- 是否建议立刻开始下一轮改动`;
+    const outbound = this.buildRollbackCommandPrompt(
+      `pwsh ./scripts/web-control-ui-checkpoint.ps1 -Name \"${name.replace(/\"/g, '\\\"')}\"`,
+    );
     await this.sendRawMessage(userText, outbound);
   }
 
@@ -947,13 +975,20 @@ export class ControlModeView extends LitElement {
       return;
     }
     const userText = `恢复 checkpoint：${ref}`;
-    const outbound = `${this.promptDraft.trim()}\n\n请不要做新的页面设计改动，只执行恢复操作：在 openclaw-src 仓库根目录运行\n\npwsh ./scripts/web-control-ui-restore.ps1 -Ref ${ref}\n\n恢复后，再在 openclaw-src/apps/web-control-ui 目录运行\n\nnode .\\node_modules\\vite\\bin\\vite.js build\n\n最后只回复：\n- 恢复是否成功\n- build 是否通过\n- 当前是否适合继续迭代`;
+    const outbound = this.buildRollbackCommandPrompt(
+      `pwsh ./scripts/web-control-ui-restore.ps1 -Ref \"${ref.replace(/\"/g, '\\\"')}\"`,
+      "恢复完成后，再执行：node .\\node_modules\\vite\\bin\\vite.js build（目录：openclaw-src/apps/web-control-ui）。",
+    );
     await this.sendRawMessage(userText, outbound);
   }
 
   private async triggerListCheckpoints() {
     const userText = "查看最近 checkpoint";
-    const outbound = `${this.promptDraft.trim()}\n\n请不要修改页面代码，只执行查询：在 openclaw-src 仓库根目录运行\n\npwsh ./scripts/web-control-ui-list-checkpoints.ps1\n\n最后只回复最近的 checkpoint ref 列表（每行一个），如果没有则明确说当前为空。`;
+    const outbound = this.buildRollbackCommandPrompt(
+      "pwsh ./scripts/web-control-ui-list-checkpoints.ps1 -Json",
+      "请按原样返回 JSON 数组，不要补充说明文字。",
+    );
+    this.errorMessage = null;
     this.checkpointHistoryLoading = true;
     this.awaitingCheckpointHistoryFromChat = true;
     await this.sendRawMessage(userText, outbound);
@@ -963,27 +998,87 @@ export class ControlModeView extends LitElement {
     return this.hello?.features?.methods?.includes(method) ?? false;
   }
 
-  private parseCheckpointHistory(output: string): Array<{ ref: string; timestamp: Date; name: string }> {
+  private toCheckpointEntry(ref: string, timestamp: Date, name: string, extras?: Partial<CheckpointEntry>): CheckpointEntry {
+    const normalizedName = name.trim() || "manual";
+    return {
+      ref,
+      timestamp,
+      name: normalizedName,
+      label: extras?.label?.trim() || normalizedName.replace(/-/g, " "),
+      kind: extras?.kind ?? "parsed",
+      shortSha: extras?.shortSha,
+      displayTime: extras?.displayTime || timestamp.toLocaleString("zh-CN", { hour12: false }),
+      subject: extras?.subject,
+    };
+  }
+
+  private normalizeCheckpointHistory(items: CheckpointEntry[]): CheckpointEntry[] {
+    return [...items].sort((a, b) => b.timestamp.getTime() - a.timestamp.getTime());
+  }
+
+  private parseCheckpointHistoryJson(output: string): CheckpointEntry[] | null {
+    const jsonBlockMatch = output.match(/```(?:json)?\s*([\s\S]*?)```/i);
+    const candidate = (jsonBlockMatch?.[1] ?? output).trim();
+    const arrayStart = candidate.indexOf("[");
+    const arrayEnd = candidate.lastIndexOf("]");
+    if (arrayStart === -1 || arrayEnd === -1 || arrayEnd <= arrayStart) {
+      return null;
+    }
+    try {
+      const parsed = JSON.parse(candidate.slice(arrayStart, arrayEnd + 1)) as Array<Record<string, unknown>>;
+      const entries = parsed
+        .map((item) => {
+          const ref = typeof item.ref === "string" ? item.ref.trim() : "";
+          const name = typeof item.name === "string" ? item.name.trim() : "";
+          const label = typeof item.label === "string" ? item.label.trim() : name.replace(/-/g, " ");
+          const rawTimestamp = typeof item.timestamp === "string" ? item.timestamp.trim() : "";
+          const timestamp = rawTimestamp ? new Date(rawTimestamp) : null;
+          if (!ref || !timestamp || Number.isNaN(timestamp.getTime())) {
+            return null;
+          }
+          return this.toCheckpointEntry(ref, timestamp, name || label, {
+            label,
+            kind: item.kind === "branch" || item.kind === "legacy-tag" ? item.kind : "parsed",
+            shortSha: typeof item.shortSha === "string" ? item.shortSha.trim() : undefined,
+            displayTime: typeof item.displayTime === "string" ? item.displayTime.trim() : undefined,
+            subject: typeof item.subject === "string" ? item.subject.trim() : undefined,
+          });
+        })
+        .filter((item): item is CheckpointEntry => item !== null);
+      return entries.length > 0 ? this.normalizeCheckpointHistory(entries) : null;
+    } catch {
+      return null;
+    }
+  }
+
+  private parseCheckpointHistory(output: string): CheckpointEntry[] {
+    const jsonEntries = this.parseCheckpointHistoryJson(output);
+    if (jsonEntries) {
+      return jsonEntries;
+    }
+
     const lines = output
       .split("\n")
       .map((line) => line.trim())
       .filter(Boolean)
       .map((line) => line.replace(/^[-*•\d.\s`]+/, "").replace(/`/g, "").trim());
-    return lines
-      .map((ref) => {
-        const match = ref.match(/checkpoint\/web-control-ui-(\d{8})-(\d{6})-(.+)$/);
-        if (!match) return null;
-        const [, dateStr, timeStr, name] = match;
-        const year = parseInt(dateStr.slice(0, 4), 10);
-        const month = parseInt(dateStr.slice(4, 6), 10) - 1;
-        const day = parseInt(dateStr.slice(6, 8), 10);
-        const hour = parseInt(timeStr.slice(0, 2), 10);
-        const minute = parseInt(timeStr.slice(2, 4), 10);
-        const second = parseInt(timeStr.slice(4, 6), 10);
-        const timestamp = new Date(year, month, day, hour, minute, second);
-        return { ref, timestamp, name };
-      })
-      .filter((item): item is { ref: string; timestamp: Date; name: string } => item !== null);
+    return this.normalizeCheckpointHistory(
+      lines
+        .map((ref) => {
+          const match = ref.match(/checkpoint\/web-control-ui-(\d{8})-(\d{6})-(.+)$/);
+          if (!match) return null;
+          const [, dateStr, timeStr, name] = match;
+          const year = parseInt(dateStr.slice(0, 4), 10);
+          const month = parseInt(dateStr.slice(4, 6), 10) - 1;
+          const day = parseInt(dateStr.slice(6, 8), 10);
+          const hour = parseInt(timeStr.slice(0, 2), 10);
+          const minute = parseInt(timeStr.slice(2, 4), 10);
+          const second = parseInt(timeStr.slice(4, 6), 10);
+          const timestamp = new Date(year, month, day, hour, minute, second);
+          return this.toCheckpointEntry(ref, timestamp, name);
+        })
+        .filter((item): item is CheckpointEntry => item !== null),
+    );
   }
 
   private async loadCheckpointHistory() {
@@ -999,7 +1094,7 @@ export class ControlModeView extends LitElement {
     try {
       const result = await this.client.request<{ output?: string }>("shell.exec", {
         command: "pwsh",
-        args: ["./scripts/web-control-ui-list-checkpoints.ps1"],
+        args: ["./scripts/web-control-ui-list-checkpoints.ps1", "-Json"],
         cwd: "C:\\Users\\24045\\clawd\\openclaw-src",
       });
       const output = result.output ?? "";
@@ -1048,13 +1143,62 @@ export class ControlModeView extends LitElement {
     });
   }
 
+  private syncCheckpointHistory(entries: CheckpointEntry[]) {
+    if (entries.length === 0) {
+      return;
+    }
+    this.checkpointHistory = this.normalizeCheckpointHistory(entries);
+    if (!this.restoreRef.trim() || this.restoreRef.includes("YYYYMMDD")) {
+      this.restoreRef = this.checkpointHistory[0].ref;
+    }
+  }
+
+  private syncCheckpointHistoryFromText(text: string) {
+    const entries = this.parseCheckpointHistory(text);
+    if (entries.length > 0) {
+      this.syncCheckpointHistory(entries);
+    }
+  }
+
+  private syncCheckpointHistoryFromMessages(messages: ChatMessage[]) {
+    for (const message of [...messages].reverse()) {
+      const entries = this.parseCheckpointHistory(message.text);
+      if (entries.length > 0) {
+        this.syncCheckpointHistory(entries);
+        return;
+      }
+    }
+  }
+
+  private formatCheckpointAbsoluteTime(entry: CheckpointEntry): string {
+    if (entry.displayTime?.trim()) {
+      return entry.displayTime;
+    }
+    const locale = this.language === "zh" ? "zh-CN" : "en-US";
+    return entry.timestamp.toLocaleString(locale, { hour12: false });
+  }
+
+  private checkpointKindLabel(entry: CheckpointEntry): string {
+    if (entry.kind === "branch") {
+      return "git branch";
+    }
+    if (entry.kind === "legacy-tag") {
+      return "legacy tag";
+    }
+    return "parsed ref";
+  }
+
+  private selectCheckpoint(ref: string) {
+    this.restoreRef = ref;
+    this.errorMessage = null;
+  }
+
   private useLatestCheckpoint() {
     const latest = this.checkpointHistory[0];
     if (!latest) {
       return;
     }
-    this.restoreRef = latest.ref;
-    this.errorMessage = null;
+    this.selectCheckpoint(latest.ref);
   }
 
   private async restoreLatestCheckpoint() {
@@ -1062,12 +1206,12 @@ export class ControlModeView extends LitElement {
     if (!latest) {
       return;
     }
-    this.restoreRef = latest.ref;
+    this.selectCheckpoint(latest.ref);
     await this.triggerRestore();
   }
 
   private async restoreToCheckpoint(ref: string) {
-    this.restoreRef = ref;
+    this.selectCheckpoint(ref);
     await this.triggerRestore();
   }
 
@@ -1483,7 +1627,7 @@ export class ControlModeView extends LitElement {
             ${this.errorMessage ? html`<p style="margin-top:16px;color:#fca5a5;">${this.errorMessage}</p>` : null}
           </section>
 
-          <section class="product-grid">
+          <section class="product-grid" style="order: -1;">
             <section class="panel">
               <h2>Designer Chat</h2>
               <p class="subtitle">发送时会自动把“提示词 + 偏好记忆 + 本轮需求”拼成最终上下文，再交给 OpenClaw 原生能力去推动代码改动。</p>
@@ -1670,14 +1814,14 @@ export class ControlModeView extends LitElement {
 
               <section class="panel">
                 <h2>${this.t("rollbackFirst")}</h2>
-                <p class="subtitle">最小但可靠的回退机制，不复杂，但够用，而且现在已经有快捷触发入口。</p>
+                <p class="subtitle">回退现在按“时间线版本卡片”来呈现；每个版本点保留简短说明，底层优先使用 git branch。</p>
                 <div class="recommendation">
-                  <p><strong>做 checkpoint：</strong><code>pwsh ./scripts/web-control-ui-checkpoint.ps1 -Name before-change</code></p>
-                  <p style="margin-top: 8px;"><strong>恢复版本：</strong><code>pwsh ./scripts/web-control-ui-restore.ps1 -Ref checkpoint/web-control-ui-时间戳-before-change</code></p>
-                  <p style="margin-top: 8px;"><strong>原则：</strong>每次较大 UI 改动前先 checkpoint，改坏了就只恢复 <code>apps/web-control-ui</code>，不波及整个仓库。</p>
+                  <p><strong>创建版本点：</strong><code>pwsh ./scripts/web-control-ui-checkpoint.ps1 -Name before-change</code></p>
+                  <p style="margin-top: 8px;"><strong>恢复版本：</strong><code>pwsh ./scripts/web-control-ui-restore.ps1 -Ref checkpoint/web-control-ui-时间戳-说明</code></p>
+                  <p style="margin-top: 8px;"><strong>原则：</strong>每次较大 UI 改动前先留一个带说明的时间点；改坏了就只恢复 <code>apps/web-control-ui</code>，不波及整个仓库。</p>
                 </div>
                 <div class="memory-item" style="margin-top: 12px;">
-                  <span class="label">Checkpoint 名称</span>
+                  <span class="label">版本说明</span>
                   <input
                     .value=${this.checkpointName}
                     @input=${(event: InputEvent) => {
@@ -1687,8 +1831,8 @@ export class ControlModeView extends LitElement {
                   />
                 </div>
                 <div class="memory-actions" style="margin-top: 12px;">
-                  <button type="button" @click=${() => this.triggerCheckpoint()} ?disabled=${this.chatSending}>${this.chatSending ? this.t("executing") : "创建 checkpoint"}</button>
-                  <button class="secondary" type="button" @click=${() => this.triggerListCheckpoints()} ?disabled=${this.chatSending}>${this.chatSending ? this.t("executing") : "查看最近 checkpoint"}</button>
+                  <button type="button" @click=${() => this.triggerCheckpoint()} ?disabled=${this.chatSending}>${this.chatSending ? this.t("executing") : "创建版本点"}</button>
+                  <button class="secondary" type="button" @click=${() => this.triggerListCheckpoints()} ?disabled=${this.chatSending}>${this.chatSending ? this.t("executing") : "查看版本时间线"}</button>
                 </div>
                 <div class="memory-item" style="margin-top: 12px;">
                   <span class="label">${this.t("checkpointRef")}</span>
@@ -1708,8 +1852,11 @@ export class ControlModeView extends LitElement {
                 <p class="muted" style="margin-top: 8px;">当前准备恢复到：${this.restoreRef || "（未选择）"}</p>
 
                 <div style="margin-top: 24px; padding-top: 24px; border-top: 1px solid rgba(148, 163, 184, 0.18);">
-                  <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
-                    <h3 style="margin: 0; font-size: 18px;">${this.t("recentVersions")}</h3>
+                  <div style="display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-bottom: 12px; flex-wrap: wrap;">
+                    <div>
+                      <h3 style="margin: 0; font-size: 18px;">${this.t("recentVersions")}</h3>
+                      <p class="muted" style="margin-top: 6px;">按时间倒序展示版本点；每个版本保留一条简短说明，底层优先走 git branch。</p>
+                    </div>
                     <button
                       class="secondary"
                       type="button"
@@ -1717,50 +1864,71 @@ export class ControlModeView extends LitElement {
                       ?disabled=${this.checkpointHistoryLoading || this.chatSending}
                       style="padding: 6px 12px; font-size: 13px;"
                     >
-                      ${this.checkpointHistoryLoading ? this.t("loading") : this.supportsGatewayMethod("shell.exec") ? this.t("refresh") : "通过对话查询"}
+                      ${this.checkpointHistoryLoading ? this.t("loading") : this.supportsGatewayMethod("shell.exec") ? this.t("refresh") : this.t("queryViaChat")}
                     </button>
                   </div>
 
                   ${!this.supportsGatewayMethod("shell.exec")
-                    ? html`<p class="muted" style="text-align: center; padding: 8px 0 20px;">${this.t("checkpointHistoryUnavailableHint")}</p>`
+                    ? html`<p class="muted" style="padding: 0 0 16px;">${this.t("checkpointHistoryUnavailableHint")}</p>`
                     : null}
 
                   ${this.checkpointHistory.length === 0 && !this.checkpointHistoryLoading
                     ? html`<p class="muted" style="text-align: center; padding: 20px 0;">${this.t("noCheckpointHistory")}</p>`
                     : html`
-                      <div style="display: flex; flex-direction: column; gap: 12px;">
-                        ${this.checkpointHistory.map(
-                          (item) => html`
-                            <div style="
-                              background: rgba(30, 41, 59, 0.5);
-                              border: 1px solid rgba(148, 163, 184, 0.12);
-                              border-radius: 12px;
-                              padding: 14px 16px;
-                              display: flex;
-                              justify-content: space-between;
-                              align-items: center;
-                              gap: 16px;
-                            ">
-                              <div style="flex: 1; min-width: 0;">
-                                <div style="font-size: 15px; font-weight: 500; color: #dbeafe; margin-bottom: 4px;">
-                                  ${item.name}
+                      <div style="display: flex; flex-direction: column; gap: 14px;">
+                        ${this.checkpointHistory.map((item) => {
+                          const selected = this.restoreRef.trim() === item.ref;
+                          return html`
+                            <article
+                              style=${[
+                                "background: rgba(15, 23, 42, 0.82)",
+                                `border: 1px solid ${selected ? "rgba(96, 165, 250, 0.55)" : "rgba(148, 163, 184, 0.16)"}`,
+                                "border-radius: 16px",
+                                "padding: 16px",
+                                `box-shadow: ${selected ? "0 0 0 1px rgba(59, 130, 246, 0.28) inset" : "none"}`,
+                              ].join("; ")}
+                            >
+                              <div style="display:flex; justify-content:space-between; gap:16px; align-items:flex-start; flex-wrap:wrap;">
+                                <div style="display:flex; flex-direction:column; gap:10px; min-width:0; flex:1;">
+                                  <div style="display:flex; align-items:center; gap:10px; flex-wrap:wrap;">
+                                    <div style="font-size: 18px; font-weight: 700; color: #f8fafc; letter-spacing: 0.01em;">
+                                      ${this.formatCheckpointAbsoluteTime(item)}
+                                    </div>
+                                    <span class="tag">${this.formatCheckpointTime(item.timestamp)}</span>
+                                    <span class="tag">${this.checkpointKindLabel(item)}</span>
+                                    ${item.shortSha ? html`<span class="tag">${item.shortSha}</span>` : null}
+                                    ${selected ? html`<span class="tag" style="background: rgba(37, 99, 235, 0.22); border-color: rgba(96, 165, 250, 0.45); color: #dbeafe;">当前选中</span>` : null}
+                                  </div>
+                                  <div style="font-size: 16px; font-weight: 600; color: #dbeafe;">
+                                    ${item.label}
+                                  </div>
+                                  <div style="font-size: 12px; color: #94a3b8; word-break: break-all;">
+                                    ${item.ref}
+                                  </div>
                                 </div>
-                                <div style="font-size: 13px; color: #94a3b8;">
-                                  ${this.formatCheckpointTime(item.timestamp)}
+                                <div style="display:flex; gap:8px; flex-wrap:wrap; justify-content:flex-end;">
+                                  <button
+                                    class="secondary"
+                                    type="button"
+                                    @click=${() => this.selectCheckpoint(item.ref)}
+                                    ?disabled=${this.chatSending}
+                                    style="padding: 8px 14px; font-size: 13px; white-space: nowrap;"
+                                  >
+                                    选中这个版本
+                                  </button>
+                                  <button
+                                    type="button"
+                                    @click=${() => this.restoreToCheckpoint(item.ref)}
+                                    ?disabled=${this.chatSending}
+                                    style="padding: 8px 14px; font-size: 13px; white-space: nowrap;"
+                                  >
+                                    ${this.t("restoreToThisVersion")}
+                                  </button>
                                 </div>
                               </div>
-                              <button
-                                class="secondary"
-                                type="button"
-                                @click=${() => this.restoreToCheckpoint(item.ref)}
-                                ?disabled=${this.chatSending}
-                                style="padding: 8px 16px; font-size: 13px; white-space: nowrap;"
-                              >
-                                ${this.t("restoreToThisVersion")}
-                              </button>
-                            </div>
-                          `
-                        )}
+                            </article>
+                          `;
+                        })}
                       </div>
                     `
                   }
