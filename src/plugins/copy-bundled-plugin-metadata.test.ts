@@ -258,6 +258,11 @@ describe("copyBundledPluginMetadata", () => {
       "node_modules",
     );
     fs.mkdirSync(staleNodeModulesDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(repoRoot, "dist", "extensions", "removed-plugin", "index.js"),
+      "export default {}\n",
+      "utf8",
+    );
     writeJson(path.join(repoRoot, "dist", "extensions", "removed-plugin", "openclaw.plugin.json"), {
       id: "removed-plugin",
       configSchema: { type: "object" },
@@ -270,17 +275,26 @@ describe("copyBundledPluginMetadata", () => {
 
     copyBundledPluginMetadata({ repoRoot });
 
-    expect(
-      fs.existsSync(
-        path.join(repoRoot, "dist", "extensions", "removed-plugin", "openclaw.plugin.json"),
-      ),
-    ).toBe(false);
-    expect(
-      fs.existsSync(path.join(repoRoot, "dist", "extensions", "removed-plugin", "package.json")),
-    ).toBe(false);
-    expect(
-      fs.existsSync(path.join(repoRoot, "dist", "extensions", "removed-plugin", "bundled-skills")),
-    ).toBe(false);
-    expect(fs.existsSync(staleNodeModulesDir)).toBe(false);
+    expect(fs.existsSync(path.join(repoRoot, "dist", "extensions", "removed-plugin"))).toBe(false);
+  });
+
+  it("removes stale dist outputs when a source extension directory no longer has a manifest", () => {
+    const repoRoot = makeRepoRoot("openclaw-bundled-plugin-manifestless-source-");
+    const sourcePluginDir = path.join(repoRoot, "extensions", "google-gemini-cli-auth");
+    fs.mkdirSync(path.join(sourcePluginDir, "node_modules"), { recursive: true });
+    const staleDistDir = path.join(repoRoot, "dist", "extensions", "google-gemini-cli-auth");
+    fs.mkdirSync(staleDistDir, { recursive: true });
+    fs.writeFileSync(path.join(staleDistDir, "index.js"), "export default {}\n", "utf8");
+    writeJson(path.join(staleDistDir, "openclaw.plugin.json"), {
+      id: "google-gemini-cli-auth",
+      configSchema: { type: "object" },
+    });
+    writeJson(path.join(staleDistDir, "package.json"), {
+      name: "@openclaw/google-gemini-cli-auth",
+    });
+
+    copyBundledPluginMetadata({ repoRoot });
+
+    expect(fs.existsSync(staleDistDir)).toBe(false);
   });
 });
