@@ -34,7 +34,7 @@ export function hasMeaningfulChannelConfig(value: unknown): boolean {
   if (!isRecord(value)) {
     return false;
   }
-  return Object.keys(value).length > 0;
+  return Object.keys(value).some((key) => key !== "enabled");
 }
 
 function hasWhatsAppAuthState(env: NodeJS.ProcessEnv): boolean {

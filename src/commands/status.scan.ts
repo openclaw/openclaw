@@ -1,6 +1,22 @@
 import { existsSync } from "node:fs";
 import { resolveMemorySearchConfig } from "../agents/memory-search.js";
 import { hasPotentialConfiguredChannels } from "../channels/config-presence.js";
+
+const IGNORED_CHANNEL_KEYS = new Set(["defaults", "modelByChannel"]);
+
+/**
+ * Broader check than {@link hasPotentialConfiguredChannels}: returns true when
+ * *any* channel section exists in the config (even `{ enabled: false }`).
+ * Used for plugin-registry preloading so the status display can report on
+ * channels the user has explicitly touched.
+ */
+function hasAnyChannelConfigSection(cfg: OpenClawConfig): boolean {
+  const ch = cfg.channels;
+  if (!ch || typeof ch !== "object" || Array.isArray(ch)) {
+    return false;
+  }
+  return Object.keys(ch).some((k) => !IGNORED_CHANNEL_KEYS.has(k));
+}
 import { resolveCommandSecretRefsViaGateway } from "../cli/command-secret-gateway.js";
 import { getStatusCommandSecretTargetIds } from "../cli/command-secret-targets.js";
 import { withProgress } from "../cli/progress.js";
@@ -243,7 +259,7 @@ async function scanStatusJsonFast(opts: {
       targetIds: getStatusCommandSecretTargetIds(),
       mode: "read_only_status",
     });
-  if (hasPotentialConfiguredChannels(cfg)) {
+  if (hasAnyChannelConfigSection(cfg) || hasPotentialConfiguredChannels(cfg)) {
     const { ensurePluginRegistryLoaded } = await loadPluginRegistryModule();
     ensurePluginRegistryLoaded({ scope: "configured-channels" });
   }
