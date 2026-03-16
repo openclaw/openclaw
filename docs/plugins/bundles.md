@@ -1,7 +1,7 @@
 ---
-summary: "Compatible Codex/Claude bundle formats: detection, mapping, and current OpenClaw support"
+summary: "Unified bundle format guide for Codex, Claude, and Cursor bundles in OpenClaw"
 read_when:
-  - You want to install or debug a Codex/Claude-compatible bundle
+  - You want to install or debug a Codex, Claude, or Cursor-compatible bundle
   - You need to understand how OpenClaw maps bundle content into native features
   - You are documenting bundle compatibility or current support limits
 title: "Plugin Bundles"
@@ -9,15 +9,17 @@ title: "Plugin Bundles"
 
 # Plugin bundles
 
-OpenClaw supports three **compatible bundle formats** in addition to native
-OpenClaw plugins:
+OpenClaw supports one shared class of external plugin package: **bundle
+plugins**.
+
+Today that means three closely related ecosystems:
 
 - Codex bundles
 - Claude bundles
 - Cursor bundles
 
-OpenClaw shows both as `Format: bundle` in `openclaw plugins list`. Verbose
-output and `openclaw plugins info <id>` also show the bundle subtype
+OpenClaw shows all of them as `Format: bundle` in `openclaw plugins list`.
+Verbose output and `openclaw plugins info <id>` also show the subtype
 (`codex`, `claude`, or `cursor`).
 
 Related:
@@ -33,54 +35,36 @@ plugin.
 
 Today, OpenClaw does **not** execute bundle runtime code in-process. Instead,
 it detects known bundle files, reads the metadata, and maps supported bundle
-content into native OpenClaw surfaces such as skills, hook packs, and embedded
-Pi settings.
+content into native OpenClaw surfaces such as skills, hook packs, MCP config,
+and embedded Pi settings.
 
 That is the main trust boundary:
 
 - native OpenClaw plugin: runtime module executes in-process
 - bundle: metadata/content pack, with selective feature mapping
 
-## Supported bundle formats
+## Shared bundle model
 
-### Codex bundles
+Codex, Claude, and Cursor bundles are similar enough that OpenClaw treats them
+as one normalized model.
 
-Typical markers:
+Shared idea:
 
-- `.codex-plugin/plugin.json`
-- optional `skills/`
-- optional `hooks/`
-- optional `.mcp.json`
-- optional `.app.json`
+- a small manifest file, or a default directory layout
+- one or more content roots such as `skills/` or `commands/`
+- optional tool/runtime metadata such as MCP, hooks, agents, or LSP
+- install as a directory or archive, then enable in the normal plugin list
 
-### Claude bundles
+Common OpenClaw behavior:
 
-OpenClaw supports both:
+- detect the bundle subtype
+- normalize it into one internal bundle record
+- map supported parts into native OpenClaw features
+- report unsupported parts as detected-but-not-wired capabilities
 
-- manifest-based Claude bundles: `.claude-plugin/plugin.json`
-- manifestless Claude bundles that use the default component layout
-
-Default Claude layout markers OpenClaw recognizes:
-
-- `skills/`
-- `commands/`
-- `agents/`
-- `hooks/hooks.json`
-- `.mcp.json`
-- `.lsp.json`
-- `settings.json`
-
-### Cursor bundles
-
-Typical markers:
-
-- `.cursor-plugin/plugin.json`
-- optional `skills/`
-- optional `.cursor/commands/`
-- optional `.cursor/agents/`
-- optional `.cursor/rules/`
-- optional `.cursor/hooks.json`
-- optional `.mcp.json`
+In practice, most users do not need to think about the vendor-specific format
+first. The more useful question is: which bundle surfaces does OpenClaw map
+today?
 
 ## Detection order
 
@@ -97,19 +81,17 @@ Practical effect:
 That avoids partially installing a dual-format package as a bundle and then
 loading it later as a native plugin.
 
-## Current mapping
+## What works today
 
 OpenClaw normalizes bundle metadata into one internal bundle record, then maps
 supported surfaces into existing native behavior.
 
 ### Supported now
 
-#### Skills
+#### Skill content
 
-- Codex `skills` roots load as normal OpenClaw skill roots
-- Claude `skills` roots load as normal OpenClaw skill roots
+- bundle skill roots load as normal OpenClaw skill roots
 - Claude `commands` roots are treated as additional skill roots
-- Cursor `skills` roots load as normal OpenClaw skill roots
 - Cursor `.cursor/commands` roots are treated as additional skill roots
 
 This means Claude markdown command files work through the normal OpenClaw skill
@@ -117,10 +99,16 @@ loader. Cursor command markdown works through the same path.
 
 #### Hook packs
 
-- Codex `hooks` roots work **only** when they use the normal OpenClaw hook-pack
-  layout:
+- bundle hook roots work **only** when they use the normal OpenClaw hook-pack
+  layout. Today this is primarily the Codex-compatible case:
   - `HOOK.md`
   - `handler.ts` or `handler.js`
+
+#### MCP for CLI backends
+
+- enabled bundles can contribute MCP server config
+- current runtime wiring is used by the `claude-cli` backend
+- OpenClaw merges bundle MCP config into the backend `--mcp-config` file
 
 #### Embedded Pi settings
 
@@ -140,16 +128,94 @@ diagnostics/info output, but OpenClaw does not run them yet:
 
 - Claude `agents`
 - Claude `hooks.json` automation
-- Claude `mcpServers`
 - Claude `lspServers`
 - Claude `outputStyles`
 - Cursor `.cursor/agents`
 - Cursor `.cursor/hooks.json`
 - Cursor `.cursor/rules`
-- Cursor `mcpServers`
+- Cursor `mcpServers` outside the current mapped runtime paths
 - Codex inline/app metadata beyond capability reporting
 
-## Claude path behavior
+## Capability reporting
+
+`openclaw plugins info <id>` shows bundle capabilities from the normalized
+bundle record.
+
+Supported capabilities are loaded quietly. Unsupported capabilities produce a
+warning such as:
+
+```text
+bundle capability detected but not wired into OpenClaw yet: agents
+```
+
+Current exceptions:
+
+- Claude `commands` is considered supported because it maps to skills
+- Claude `settings` is considered supported because it maps to embedded Pi settings
+- Cursor `commands` is considered supported because it maps to skills
+- bundle MCP is considered supported where OpenClaw actually imports it
+- Codex `hooks` is considered supported only for OpenClaw hook-pack layouts
+
+## Format differences
+
+The formats are close, but not byte-for-byte identical. These are the practical
+differences that matter in OpenClaw.
+
+### Codex
+
+Typical markers:
+
+- `.codex-plugin/plugin.json`
+- optional `skills/`
+- optional `hooks/`
+- optional `.mcp.json`
+- optional `.app.json`
+
+Codex bundles fit OpenClaw best when they use skill roots and OpenClaw-style
+hook-pack directories.
+
+### Claude
+
+OpenClaw supports both:
+
+- manifest-based Claude bundles: `.claude-plugin/plugin.json`
+- manifestless Claude bundles that use the default Claude layout
+
+Default Claude layout markers OpenClaw recognizes:
+
+- `skills/`
+- `commands/`
+- `agents/`
+- `hooks/hooks.json`
+- `.mcp.json`
+- `.lsp.json`
+- `settings.json`
+
+Claude-specific notes:
+
+- `commands/` is treated like skill content
+- `settings.json` is imported into embedded Pi settings
+- `hooks/hooks.json` is detected, but not executed as Claude automation
+
+### Cursor
+
+Typical markers:
+
+- `.cursor-plugin/plugin.json`
+- optional `skills/`
+- optional `.cursor/commands/`
+- optional `.cursor/agents/`
+- optional `.cursor/rules/`
+- optional `.cursor/hooks.json`
+- optional `.mcp.json`
+
+Cursor-specific notes:
+
+- `.cursor/commands/` is treated like skill content
+- `.cursor/rules/`, `.cursor/agents/`, and `.cursor/hooks.json` are
+  detect-only today
+
+## Claude custom paths
 
 Claude bundle manifests can declare custom component paths. OpenClaw treats
 those paths as **additive**, not replacing defaults.
@@ -170,25 +236,6 @@ Examples:
   OpenClaw scans both
 - default `skills/` plus manifest `skills: ["team-skills"]` =>
   OpenClaw scans both
-
-## Capability reporting
-
-`openclaw plugins info <id>` shows bundle capabilities from the normalized
-bundle record.
-
-Supported capabilities are loaded quietly. Unsupported capabilities produce a
-warning such as:
-
-```text
-bundle capability detected but not wired into OpenClaw yet: agents
-```
-
-Current exceptions:
-
-- Claude `commands` is considered supported because it maps to skills
-- Claude `settings` is considered supported because it maps to embedded Pi settings
-- Cursor `commands` is considered supported because it maps to skills
-- Codex `hooks` is considered supported only for OpenClaw hook-pack layouts
 
 ## Security model
 

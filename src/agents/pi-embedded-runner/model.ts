@@ -13,7 +13,6 @@ import { DEFAULT_CONTEXT_TOKENS } from "../defaults.js";
 import { buildModelAliasLines } from "../model-alias-lines.js";
 import { isSecretRefHeaderValueMarker } from "../model-auth-markers.js";
 import { normalizeModelCompat } from "../model-compat.js";
-import { resolveForwardCompatModel } from "../model-forward-compat.js";
 import { findNormalizedProviderValue, normalizeProviderId } from "../model-selection.js";
 import {
   buildSuppressedBuiltInModelError,
@@ -226,25 +225,6 @@ function resolveExplicitModelWithRegistry(params: {
         cfg,
         agentDir,
         model: inlineMatch as Model<Api>,
-      }),
-    };
-  }
-
-  // Forward-compat fallbacks must be checked BEFORE the generic providerCfg fallback.
-  // Otherwise, configured providers can default to a generic API and break specific transports.
-  const forwardCompat = resolveForwardCompatModel(provider, modelId, modelRegistry);
-  if (forwardCompat) {
-    return {
-      kind: "resolved",
-      model: normalizeResolvedModel({
-        provider,
-        cfg,
-        agentDir,
-        model: applyConfiguredProviderOverrides({
-          discoveredModel: forwardCompat,
-          providerConfig,
-          modelId,
-        }),
       }),
     };
   }

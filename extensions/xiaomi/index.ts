@@ -1,5 +1,8 @@
 import { emptyPluginConfigSchema, type OpenClawPluginApi } from "openclaw/plugin-sdk/core";
 import { buildXiaomiProvider } from "../../src/agents/models-config.providers.static.js";
+import { applyXiaomiConfig, XIAOMI_DEFAULT_MODEL_REF } from "../../src/commands/onboard-auth.js";
+import { PROVIDER_LABELS } from "../../src/infra/provider-usage.shared.js";
+import { createProviderApiKeyAuthMethod } from "../../src/plugins/provider-api-key-auth.js";
 
 const PROVIDER_ID = "xiaomi";
 
@@ -14,7 +17,28 @@ const xiaomiPlugin = {
       label: "Xiaomi",
       docsPath: "/providers/xiaomi",
       envVars: ["XIAOMI_API_KEY"],
-      auth: [],
+      auth: [
+        createProviderApiKeyAuthMethod({
+          providerId: PROVIDER_ID,
+          methodId: "api-key",
+          label: "Xiaomi API key",
+          hint: "API key",
+          optionKey: "xiaomiApiKey",
+          flagName: "--xiaomi-api-key",
+          envVar: "XIAOMI_API_KEY",
+          promptMessage: "Enter Xiaomi API key",
+          defaultModel: XIAOMI_DEFAULT_MODEL_REF,
+          expectedProviders: ["xiaomi"],
+          applyConfig: (cfg) => applyXiaomiConfig(cfg),
+          wizard: {
+            choiceId: "xiaomi-api-key",
+            choiceLabel: "Xiaomi API key",
+            groupId: "xiaomi",
+            groupLabel: "Xiaomi",
+            groupHint: "API key",
+          },
+        }),
+      ],
       catalog: {
         order: "simple",
         run: async (ctx) => {
@@ -30,6 +54,17 @@ const xiaomiPlugin = {
           };
         },
       },
+      resolveUsageAuth: async (ctx) => {
+        const apiKey = ctx.resolveApiKeyFromConfigAndStore({
+          envDirect: [ctx.env.XIAOMI_API_KEY],
+        });
+        return apiKey ? { token: apiKey } : null;
+      },
+      fetchUsageSnapshot: async () => ({
+        provider: "xiaomi",
+        displayName: PROVIDER_LABELS.xiaomi,
+        windows: [],
+      }),
     });
   },
 };

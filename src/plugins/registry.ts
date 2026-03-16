@@ -1,6 +1,5 @@
 import path from "node:path";
 import type { AnyAgentTool } from "../agents/tools/common.js";
-import type { ChannelDock } from "../channels/dock.js";
 import type { ChannelPlugin } from "../channels/plugins/types.js";
 import { registerContextEngineForOwner } from "../context-engine/registry.js";
 import type {
@@ -10,7 +9,7 @@ import type {
 import { registerInternalHook } from "../hooks/internal-hooks.js";
 import type { HookEntry } from "../hooks/types.js";
 import { resolveUserPath } from "../utils.js";
-import { registerPluginCommand } from "./commands.js";
+import { registerPluginCommand, validatePluginCommandDefinition } from "./commands.js";
 import { normalizePluginHttpPath } from "./http-path.js";
 import { findOverlappingPluginHttpRoute } from "./http-route-overlap.js";
 import { registerPluginInteractiveHandler } from "./interactive.js";
@@ -43,9 +42,11 @@ import type {
   PluginLogger,
   PluginOrigin,
   PluginKind,
+  PluginRegistrationMode,
   PluginHookName,
   PluginHookHandlerMap,
   PluginHookRegistration as TypedPluginHookRegistration,
+  WebSearchProviderPlugin,
 } from "./types.js";
 
 export type PluginToolRegistration = {
@@ -80,7 +81,6 @@ export type PluginChannelRegistration = {
   pluginId: string;
   pluginName?: string;
   plugin: ChannelPlugin;
-  dock?: ChannelDock;
   source: string;
   rootDir?: string;
 };
@@ -98,6 +98,14 @@ export type PluginProviderRegistration = {
   pluginId: string;
   pluginName?: string;
   provider: ProviderPlugin;
+  source: string;
+  rootDir?: string;
+};
+
+export type PluginWebSearchProviderRegistration = {
+  pluginId: string;
+  pluginName?: string;
+  provider: WebSearchProviderPlugin;
   source: string;
   rootDir?: string;
 };
@@ -146,6 +154,7 @@ export type PluginRecord = {
   hookNames: string[];
   channelIds: string[];
   providerIds: string[];
+  webSearchProviderIds: string[];
   gatewayMethods: string[];
   cliCommands: string[];
   services: string[];
@@ -165,6 +174,7 @@ export type PluginRegistry = {
   channels: PluginChannelRegistration[];
   channelSetups: PluginChannelSetupRegistration[];
   providers: PluginProviderRegistration[];
+  webSearchProviders: PluginWebSearchProviderRegistration[];
   gatewayHandlers: GatewayRequestHandlers;
   httpRoutes: PluginHttpRouteRegistration[];
   cliRegistrars: PluginCliRegistration[];
@@ -177,13 +187,14 @@ export type PluginRegistryParams = {
   logger: PluginLogger;
   coreGatewayHandlers?: GatewayRequestHandlers;
   runtime: PluginRuntime;
+  // When true, skip writing to the global plugin command registry during register().
+  // Used by non-activating snapshot loads to avoid leaking commands into the running gateway.
+  suppressGlobalCommands?: boolean;
 };
 
 type PluginTypedHookPolicy = {
   allowPromptInjection?: boolean;
 };
-
-type PluginRegistrationMode = "full" | "setup-only";
 
 const constrainLegacyPromptInjectionHook = (
   handler: PluginHookHandlerMap["before_agent_start"],
@@ -208,6 +219,7 @@ export function createEmptyPluginRegistry(): PluginRegistry {
     channels: [],
     channelSetups: [],
     providers: [],
+    webSearchProviders: [],
     gatewayHandlers: {},
     httpRoutes: [],
     cliRegistrars: [],
@@ -467,7 +479,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       return;
     }
     const existingRuntime = registry.channels.find((entry) => entry.plugin.id === id);
-    if (mode === "full" && existingRuntime) {
+    if (mode !== "setup-only" && existingRuntime) {
       pushDiagnostic({
         level: "error",
         pluginId: record.id,
@@ -502,7 +514,6 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       pluginId: record.id,
       pluginName: record.name,
       plugin,
-      dock: normalized.dock,
       source: record.source,
       rootDir: record.rootDir,
     });
@@ -534,6 +545,37 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       pluginId: record.id,
       pluginName: record.name,
       provider: normalizedProvider,
+      source: record.source,
+      rootDir: record.rootDir,
+    });
+  };
+
+  const registerWebSearchProvider = (record: PluginRecord, provider: WebSearchProviderPlugin) => {
+    const id = provider.id.trim();
+    if (!id) {
+      pushDiagnostic({
+        level: "error",
+        pluginId: record.id,
+        source: record.source,
+        message: "web search provider registration missing id",
+      });
+      return;
+    }
+    const existing = registry.webSearchProviders.find((entry) => entry.provider.id === id);
+    if (existing) {
+      pushDiagnostic({
+        level: "error",
+        pluginId: record.id,
+        source: record.source,
+        message: `web search provider already registered: ${id} (${existing.pluginId})`,
+      });
+      return;
+    }
+    record.webSearchProviderIds.push(id);
+    registry.webSearchProviders.push({
+      pluginId: record.id,
+      pluginName: record.name,
+      provider,
       source: record.source,
       rootDir: record.rootDir,
     });
@@ -615,19 +657,37 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       return;
     }
 
-    // Register with the plugin command system (validates name and checks for duplicates)
-    const result = registerPluginCommand(record.id, command, {
-      pluginName: record.name,
-      pluginRoot: record.rootDir,
-    });
-    if (!result.ok) {
-      pushDiagnostic({
-        level: "error",
-        pluginId: record.id,
-        source: record.source,
-        message: `command registration failed: ${result.error}`,
+    // For snapshot (non-activating) loads, record the command locally without touching the
+    // global plugin command registry so running gateway commands stay intact.
+    // We still validate the command definition so diagnostics match the real activation path.
+    // NOTE: cross-plugin duplicate command detection is intentionally skipped here because
+    // snapshot registries are isolated and never write to the global command table. Conflicts
+    // will surface when the plugin is loaded via the normal activation path at gateway startup.
+    if (registryParams.suppressGlobalCommands) {
+      const validationError = validatePluginCommandDefinition(command);
+      if (validationError) {
+        pushDiagnostic({
+          level: "error",
+          pluginId: record.id,
+          source: record.source,
+          message: `command registration failed: ${validationError}`,
+        });
+        return;
+      }
+    } else {
+      const result = registerPluginCommand(record.id, command, {
+        pluginName: record.name,
+        pluginRoot: record.rootDir,
       });
-      return;
+      if (!result.ok) {
+        pushDiagnostic({
+          level: "error",
+          pluginId: record.id,
+          source: record.source,
+          message: `command registration failed: ${result.error}`,
+        });
+        return;
+      }
     }
 
     record.commands.push(name);
@@ -713,6 +773,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       description: record.description,
       source: record.source,
       rootDir: record.rootDir,
+      registrationMode,
       config: params.config,
       pluginConfig: params.pluginConfig,
       runtime: registryParams.runtime,
@@ -728,6 +789,10 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       registerChannel: (registration) => registerChannel(record, registration, registrationMode),
       registerProvider:
         registrationMode === "full" ? (provider) => registerProvider(record, provider) : () => {},
+      registerWebSearchProvider:
+        registrationMode === "full"
+          ? (provider) => registerWebSearchProvider(record, provider)
+          : () => {},
       registerGatewayMethod:
         registrationMode === "full"
           ? (method, handler) => registerGatewayMethod(record, method, handler)
@@ -797,6 +862,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     registerTool,
     registerChannel,
     registerProvider,
+    registerWebSearchProvider,
     registerGatewayMethod,
     registerCli,
     registerService,

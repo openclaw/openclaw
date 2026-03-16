@@ -2,18 +2,35 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ProviderPlugin, ProviderRuntimeModel } from "./types.js";
 
 const resolvePluginProvidersMock = vi.fn((_: unknown) => [] as ProviderPlugin[]);
+const resolveOwningPluginIdsForProviderMock = vi.fn(
+  (_: unknown) => undefined as string[] | undefined,
+);
 
 vi.mock("./providers.js", () => ({
   resolvePluginProviders: (params: unknown) => resolvePluginProvidersMock(params as never),
+  resolveOwningPluginIdsForProvider: (params: unknown) =>
+    resolveOwningPluginIdsForProviderMock(params as never),
 }));
 
 import {
+  augmentModelCatalogWithProviderPlugins,
+  buildProviderAuthDoctorHintWithPlugin,
+  buildProviderMissingAuthMessageWithPlugin,
+  formatProviderAuthProfileApiKeyWithPlugin,
   prepareProviderExtraParams,
   resolveProviderCacheTtlEligibility,
+  resolveProviderBinaryThinking,
+  resolveProviderBuiltInModelSuppression,
+  resolveProviderDefaultThinkingLevel,
+  resolveProviderModernModelRef,
+  resolveProviderUsageSnapshotWithPlugin,
   resolveProviderCapabilitiesWithPlugin,
+  resolveProviderUsageAuthWithPlugin,
+  resolveProviderXHighThinking,
   normalizeProviderResolvedModelWithPlugin,
   prepareProviderDynamicModel,
   prepareProviderRuntimeAuth,
+  refreshProviderOAuthCredentialWithPlugin,
   resolveProviderRuntimePlugin,
   runProviderDynamicModel,
   wrapProviderStreamFn,
@@ -36,6 +53,8 @@ describe("provider-runtime", () => {
   beforeEach(() => {
     resolvePluginProvidersMock.mockReset();
     resolvePluginProvidersMock.mockReturnValue([]);
+    resolveOwningPluginIdsForProviderMock.mockReset();
+    resolveOwningPluginIdsForProviderMock.mockReturnValue(undefined);
   });
 
   it("matches providers by alias for runtime hook lookup", () => {
@@ -51,10 +70,15 @@ describe("provider-runtime", () => {
     const plugin = resolveProviderRuntimePlugin({ provider: "Open Router" });
 
     expect(plugin?.id).toBe("openrouter");
-    expect(resolvePluginProvidersMock).toHaveBeenCalledWith(
+    expect(resolveOwningPluginIdsForProviderMock).toHaveBeenCalledWith(
       expect.objectContaining({
         provider: "Open Router",
+      }),
+    );
+    expect(resolvePluginProvidersMock).toHaveBeenCalledWith(
+      expect.objectContaining({
         bundledProviderAllowlistCompat: true,
+        bundledProviderVitestCompat: true,
       }),
     );
   });
@@ -66,29 +90,76 @@ describe("provider-runtime", () => {
       baseUrl: "https://runtime.example.com/v1",
       expiresAt: 123,
     }));
-    resolvePluginProvidersMock.mockReturnValue([
-      {
-        id: "demo",
-        label: "Demo",
-        auth: [],
-        resolveDynamicModel: () => MODEL,
-        prepareDynamicModel,
-        capabilities: {
-          providerFamily: "openai",
+    const refreshOAuth = vi.fn(async (cred) => ({
+      ...cred,
+      access: "refreshed-access-token",
+    }));
+    const resolveUsageAuth = vi.fn(async () => ({
+      token: "usage-token",
+      accountId: "usage-account",
+    }));
+    const fetchUsageSnapshot = vi.fn(async () => ({
+      provider: "zai" as const,
+      displayName: "Demo",
+      windows: [{ label: "Day", usedPercent: 25 }],
+    }));
+    resolvePluginProvidersMock.mockImplementation((_params: unknown) => {
+      return [
+        {
+          id: "demo",
+          label: "Demo",
+          auth: [],
+          resolveDynamicModel: () => MODEL,
+          prepareDynamicModel,
+          capabilities: {
+            providerFamily: "openai",
+          },
+          prepareExtraParams: ({ extraParams }) => ({
+            ...extraParams,
+            transport: "auto",
+          }),
+          wrapStreamFn: ({ streamFn }) => streamFn,
+          normalizeResolvedModel: ({ model }) => ({
+            ...model,
+            api: "openai-codex-responses",
+          }),
+          formatApiKey: (cred) =>
+            cred.type === "oauth" ? JSON.stringify({ token: cred.access }) : "",
+          refreshOAuth,
+          buildAuthDoctorHint: ({ provider, profileId }) =>
+            provider === "demo" ? `Repair ${profileId}` : undefined,
+          prepareRuntimeAuth,
+          resolveUsageAuth,
+          fetchUsageSnapshot,
+          isCacheTtlEligible: ({ modelId }) => modelId.startsWith("anthropic/"),
+          isBinaryThinking: () => true,
+          supportsXHighThinking: ({ modelId }) => modelId === "gpt-5.4",
+          resolveDefaultThinkingLevel: ({ reasoning }) => (reasoning ? "low" : "off"),
+          isModernModelRef: ({ modelId }) => modelId.startsWith("gpt-5"),
         },
-        prepareExtraParams: ({ extraParams }) => ({
-          ...extraParams,
-          transport: "auto",
-        }),
-        wrapStreamFn: ({ streamFn }) => streamFn,
-        normalizeResolvedModel: ({ model }) => ({
-          ...model,
-          api: "openai-codex-responses",
-        }),
-        prepareRuntimeAuth,
-        isCacheTtlEligible: ({ modelId }) => modelId.startsWith("anthropic/"),
-      },
-    ]);
+        {
+          id: "openai",
+          label: "OpenAI",
+          auth: [],
+          buildMissingAuthMessage: () =>
+            'No API key found for provider "openai". Use openai-codex/gpt-5.4.',
+          suppressBuiltInModel: ({ provider, modelId }) =>
+            provider === "azure-openai-responses" && modelId === "gpt-5.3-codex-spark"
+              ? { suppress: true, errorMessage: "openai-codex/gpt-5.3-codex-spark" }
+              : undefined,
+          augmentModelCatalog: () => [
+            { provider: "openai", id: "gpt-5.4", name: "gpt-5.4" },
+            { provider: "openai", id: "gpt-5.4-pro", name: "gpt-5.4-pro" },
+            { provider: "openai-codex", id: "gpt-5.4", name: "gpt-5.4" },
+            {
+              provider: "openai-codex",
+              id: "gpt-5.3-codex-spark",
+              name: "gpt-5.3-codex-spark",
+            },
+          ],
+        },
+      ];
+    });
 
     expect(
       runProviderDynamicModel({
@@ -177,6 +248,80 @@ describe("provider-runtime", () => {
     });
 
     expect(
+      formatProviderAuthProfileApiKeyWithPlugin({
+        provider: "demo",
+        context: {
+          type: "oauth",
+          provider: "demo",
+          access: "oauth-access",
+          refresh: "oauth-refresh",
+          expires: Date.now() + 60_000,
+        },
+      }),
+    ).toBe('{"token":"oauth-access"}');
+
+    await expect(
+      refreshProviderOAuthCredentialWithPlugin({
+        provider: "demo",
+        context: {
+          type: "oauth",
+          provider: "demo",
+          access: "oauth-access",
+          refresh: "oauth-refresh",
+          expires: Date.now() + 60_000,
+        },
+      }),
+    ).resolves.toMatchObject({
+      access: "refreshed-access-token",
+    });
+
+    await expect(
+      buildProviderAuthDoctorHintWithPlugin({
+        provider: "demo",
+        context: {
+          provider: "demo",
+          profileId: "demo:default",
+          store: { version: 1, profiles: {} },
+        },
+      }),
+    ).resolves.toBe("Repair demo:default");
+
+    await expect(
+      resolveProviderUsageAuthWithPlugin({
+        provider: "demo",
+        env: process.env,
+        context: {
+          config: {} as never,
+          env: process.env,
+          provider: "demo",
+          resolveApiKeyFromConfigAndStore: () => "source-token",
+          resolveOAuthToken: async () => null,
+        },
+      }),
+    ).resolves.toMatchObject({
+      token: "usage-token",
+      accountId: "usage-account",
+    });
+
+    await expect(
+      resolveProviderUsageSnapshotWithPlugin({
+        provider: "demo",
+        env: process.env,
+        context: {
+          config: {} as never,
+          env: process.env,
+          provider: "demo",
+          token: "usage-token",
+          timeoutMs: 5_000,
+          fetchFn: vi.fn() as never,
+        },
+      }),
+    ).resolves.toMatchObject({
+      provider: "zai",
+      windows: [{ label: "Day", usedPercent: 25 }],
+    });
+
+    expect(
       resolveProviderCacheTtlEligibility({
         provider: "demo",
         context: {
@@ -186,7 +331,100 @@ describe("provider-runtime", () => {
       }),
     ).toBe(true);
 
+    expect(
+      resolveProviderBinaryThinking({
+        provider: "demo",
+        context: {
+          provider: "demo",
+          modelId: "glm-5",
+        },
+      }),
+    ).toBe(true);
+
+    expect(
+      resolveProviderXHighThinking({
+        provider: "demo",
+        context: {
+          provider: "demo",
+          modelId: "gpt-5.4",
+        },
+      }),
+    ).toBe(true);
+
+    expect(
+      resolveProviderDefaultThinkingLevel({
+        provider: "demo",
+        context: {
+          provider: "demo",
+          modelId: "gpt-5.4",
+          reasoning: true,
+        },
+      }),
+    ).toBe("low");
+
+    expect(
+      resolveProviderModernModelRef({
+        provider: "demo",
+        context: {
+          provider: "demo",
+          modelId: "gpt-5.4",
+        },
+      }),
+    ).toBe(true);
+
+    expect(
+      buildProviderMissingAuthMessageWithPlugin({
+        provider: "openai",
+        env: process.env,
+        context: {
+          env: process.env,
+          provider: "openai",
+          listProfileIds: (providerId) => (providerId === "openai-codex" ? ["p1"] : []),
+        },
+      }),
+    ).toContain("openai-codex/gpt-5.4");
+
+    expect(
+      resolveProviderBuiltInModelSuppression({
+        env: process.env,
+        context: {
+          env: process.env,
+          provider: "azure-openai-responses",
+          modelId: "gpt-5.3-codex-spark",
+        },
+      }),
+    ).toMatchObject({
+      suppress: true,
+      errorMessage: expect.stringContaining("openai-codex/gpt-5.3-codex-spark"),
+    });
+
+    await expect(
+      augmentModelCatalogWithProviderPlugins({
+        env: process.env,
+        context: {
+          env: process.env,
+          entries: [
+            { provider: "openai", id: "gpt-5.2", name: "GPT-5.2" },
+            { provider: "openai", id: "gpt-5.2-pro", name: "GPT-5.2 Pro" },
+            { provider: "openai-codex", id: "gpt-5.3-codex", name: "GPT-5.3 Codex" },
+          ],
+        },
+      }),
+    ).resolves.toEqual([
+      { provider: "openai", id: "gpt-5.4", name: "gpt-5.4" },
+      { provider: "openai", id: "gpt-5.4-pro", name: "gpt-5.4-pro" },
+      { provider: "openai-codex", id: "gpt-5.4", name: "gpt-5.4" },
+      {
+        provider: "openai-codex",
+        id: "gpt-5.3-codex-spark",
+        name: "gpt-5.3-codex-spark",
+      },
+    ]);
+
     expect(prepareDynamicModel).toHaveBeenCalledTimes(1);
+    expect(refreshOAuth).toHaveBeenCalledTimes(1);
     expect(prepareRuntimeAuth).toHaveBeenCalledTimes(1);
+    expect(resolveUsageAuth).toHaveBeenCalledTimes(1);
+    expect(fetchUsageSnapshot).toHaveBeenCalledTimes(1);
   });
 });

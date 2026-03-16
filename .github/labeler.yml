@@ -198,14 +198,6 @@
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/diagnostics-otel/**"
-"extensions: google-antigravity-auth":
-  - changed-files:
-      - any-glob-to-any-file:
-          - "extensions/google-antigravity-auth/**"
-"extensions: google-gemini-cli-auth":
-  - changed-files:
-      - any-glob-to-any-file:
-          - "extensions/google-gemini-cli-auth/**"
 "extensions: llm-task":
   - changed-files:
       - any-glob-to-any-file:
@@ -242,6 +234,10 @@
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/byteplus/**"
+"extensions: anthropic":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/anthropic/**"
 "extensions: cloudflare-ai-gateway":
   - changed-files:
       - any-glob-to-any-file:
@@ -258,6 +254,10 @@
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/kilocode/**"
+"extensions: openai":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/openai/**"
 "extensions: kimi-coding":
   - changed-files:
       - any-glob-to-any-file:
