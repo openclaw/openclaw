@@ -362,6 +362,59 @@ export class AcpGatewayStore {
     });
   }
 
+  async markRunRecovering(params: {
+    sessionKey: string;
+    runId: string;
+    reason: AcpGatewayRecoveryReason;
+    now?: number;
+  }): Promise<AcpGatewayLeaseReconcileRecord> {
+    const now = params.now ?? Date.now();
+    return await this.mutateStore(async (store) => {
+      const session = store.sessions[params.sessionKey];
+      if (!session) {
+        throw new AcpGatewayStoreError(
+          "ACP_NODE_SESSION_NOT_FOUND",
+          `ACP session ${params.sessionKey} does not exist.`,
+        );
+      }
+      const run = store.runs[params.runId];
+      if (!run || run.sessionKey !== params.sessionKey) {
+        throw new AcpGatewayStoreError(
+          "ACP_NODE_RUN_NOT_FOUND",
+          `ACP run ${params.runId} is not known for session ${params.sessionKey}.`,
+        );
+      }
+      const lease = store.leases[params.sessionKey];
+      if (!lease) {
+        throw new AcpGatewayStoreError(
+          "ACP_NODE_ACTIVE_LEASE_MISSING",
+          `ACP session ${params.sessionKey} does not have an active lease.`,
+        );
+      }
+      if (run.terminal) {
+        return {
+          session,
+          run,
+          lease,
+        };
+      }
+      session.activeRunId = params.runId;
+      session.lastRunId = params.runId;
+      session.state = "recovering";
+      session.lastRecoveryReason = params.reason;
+      session.updatedAt = now;
+      run.state = "recovering";
+      run.recoveryReason = params.reason;
+      run.updatedAt = now;
+      lease.updatedAt = now;
+      return {
+        session,
+        run,
+        lease,
+      };
+    });
+  }
+
   async appendWorkerEvent(
     params: AcpWorkerEventEnvelope & { now?: number; leaseTtlMs?: number },
   ): Promise<{ record: AcpGatewayRunEventRecord; duplicate: boolean }> {

@@ -45,6 +45,8 @@ type AcpNodeInvokePayload = {
   message?: string;
 };
 
+const RECOVERABLE_START_ERROR_CODES = new Set(["TIMEOUT", "UNAVAILABLE"]);
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -150,6 +152,10 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+function normalizeErrorCode(code: unknown): string {
+  return typeof code === "string" ? code.trim().toUpperCase() : "";
+}
+
 function supportsAcpNode(session: NodeSession): boolean {
   const caps = new Set(session.caps ?? []);
   const commands = new Set(session.commands ?? []);
@@ -248,6 +254,7 @@ export class AcpNodeRuntime implements AcpRuntime {
       runId,
       requestId: input.requestId,
     });
+    let startRecoveredFromUnknownError = false;
     try {
       const started = await this.gatewayRuntime.startTurn({
         invokeNode: this.invokeNode,
@@ -263,17 +270,27 @@ export class AcpNodeRuntime implements AcpRuntime {
         idempotencyKey: `acp-node:turn:${state.sessionKey}:${input.requestId}`,
       });
       if (!started.ok) {
-        throw new AcpRuntimeError(
-          "ACP_TURN_FAILED",
-          started.error?.message ?? "ACP turn start failed.",
-        );
-      }
-      const payload = parseInvokePayload(started) as AcpNodeInvokePayload;
-      if (payload.accepted !== true) {
-        throw new AcpRuntimeError(
-          "ACP_TURN_FAILED",
-          payload.message ?? "ACP turn was not accepted.",
-        );
+        const errorCode = normalizeErrorCode(started.error?.code);
+        if (RECOVERABLE_START_ERROR_CODES.has(errorCode) || !errorCode) {
+          await this.recordUnknownStartOutcome({
+            state,
+            runId,
+          });
+          startRecoveredFromUnknownError = true;
+        } else {
+          throw new AcpRuntimeError(
+            "ACP_TURN_FAILED",
+            started.error?.message ?? "ACP turn start failed.",
+          );
+        }
+      } else {
+        const payload = parseInvokePayload(started) as AcpNodeInvokePayload;
+        if (payload.accepted !== true) {
+          throw new AcpRuntimeError(
+            "ACP_TURN_FAILED",
+            payload.message ?? "ACP turn was not accepted.",
+          );
+        }
       }
     } catch (error) {
       const runtimeError = toRuntimeError(error, "ACP_TURN_FAILED");
@@ -320,6 +337,9 @@ export class AcpNodeRuntime implements AcpRuntime {
       }
       if (run?.state === "cancelling" || run?.cancelRequestedAt) {
         cancelRequested = true;
+      }
+      if (startRecoveredFromUnknownError && run?.state !== "recovering") {
+        startRecoveredFromUnknownError = false;
       }
       if (input.signal?.aborted && !cancelRequested) {
         await this.requestCancel({
@@ -521,6 +541,17 @@ export class AcpNodeRuntime implements AcpRuntime {
         errorCode: "ACP_TURN_FAILED",
         errorMessage: params.message,
       },
+    });
+  }
+
+  private async recordUnknownStartOutcome(params: {
+    state: AcpNodeHandleState;
+    runId: string;
+  }): Promise<void> {
+    await this.gatewayRuntime.store.markRunRecovering({
+      sessionKey: params.state.sessionKey,
+      runId: params.runId,
+      reason: "start_unknown_transport",
     });
   }
 

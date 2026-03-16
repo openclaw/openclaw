@@ -15,6 +15,7 @@ export type AcpGatewayLeaseState = "active" | "suspect" | "lost" | "released";
 
 export type AcpGatewayRecoveryReason =
   | "start_accepted_no_events"
+  | "start_unknown_transport"
   | "node_disconnected"
   | "gateway_restart_reconcile"
   | "status_mismatch"

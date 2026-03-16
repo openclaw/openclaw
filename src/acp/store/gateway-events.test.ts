@@ -736,6 +736,153 @@ describe("AcpGatewayNodeRuntime", () => {
     expect(commands.filter((command) => command === "acp.turn.start")).toHaveLength(2);
   });
 
+  it("keeps unknown start transport failures recoverable so late worker output can still win", async () => {
+    const { runtime } = await createRuntime();
+    const sessionKey = "agent:main:acp:test-session";
+    const commands: string[] = [];
+    const lateWorkerOutput: { emit?: () => void } = {};
+
+    const backend = new AcpNodeRuntime({
+      gatewayRuntime: runtime,
+      listNodes: () =>
+        [
+          {
+            nodeId: "node-1",
+            caps: ["acp:v1"],
+            commands: [
+              "acp.session.ensure",
+              "acp.session.load",
+              "acp.turn.start",
+              "acp.turn.cancel",
+              "acp.session.close",
+              "acp.session.status",
+            ],
+          },
+        ] as never,
+      invokeNode: async ({ command, params }) => {
+        commands.push(command);
+        if (command === "acp.session.ensure") {
+          const payload = params as Record<string, unknown>;
+          return {
+            ok: true,
+            payload: {
+              ok: true,
+              sessionKey: payload.sessionKey,
+              leaseId: payload.leaseId,
+              leaseEpoch: payload.leaseEpoch,
+              nodeRuntimeSessionId: "runtime-1",
+            },
+          };
+        }
+        if (command === "acp.turn.start") {
+          const payload = params as Record<string, unknown>;
+          const runId = String(payload.runId);
+          const leaseId = String(payload.leaseId);
+          const leaseEpoch = Number(payload.leaseEpoch);
+          lateWorkerOutput.emit = () => {
+            void runtime.ingestNodeEvent("node-1", {
+              event: "acp.worker.event",
+              payloadJSON: JSON.stringify({
+                nodeId: "node-1",
+                sessionKey,
+                runId,
+                leaseId,
+                leaseEpoch,
+                seq: 1,
+                event: {
+                  type: "text_delta",
+                  stream: "output",
+                  text: "late hello",
+                },
+              }),
+            });
+            void runtime.ingestNodeEvent("node-1", {
+              event: "acp.worker.terminal",
+              payloadJSON: JSON.stringify({
+                nodeId: "node-1",
+                sessionKey,
+                runId,
+                leaseId,
+                leaseEpoch,
+                terminalEventId: "term-late",
+                finalSeq: 1,
+                terminal: {
+                  kind: "completed",
+                  stopReason: "done",
+                },
+              }),
+            });
+          };
+          return {
+            ok: false,
+            error: {
+              code: "TIMEOUT",
+              message: "invoke timeout with unknown worker state",
+            },
+          };
+        }
+        throw new Error(`unexpected command ${command}`);
+      },
+    });
+
+    const handle = await backend.ensureSession({
+      sessionKey,
+      agent: "main",
+      mode: "persistent",
+    });
+
+    const turnPromise = collectEvents(
+      backend.runTurn({
+        handle,
+        text: "maybe started",
+        mode: "prompt",
+        requestId: "run-timeout",
+      }),
+    );
+
+    await vi.waitFor(async () => {
+      const run = await runtime.store.getRun("run-timeout");
+      expect(run).toMatchObject({
+        state: "recovering",
+        recoveryReason: "start_unknown_transport",
+      });
+    });
+
+    await vi.waitFor(async () => {
+      const session = await runtime.store.getSession(sessionKey);
+      expect(session).toMatchObject({
+        state: "recovering",
+        activeRunId: "run-timeout",
+        lastRecoveryReason: "start_unknown_transport",
+      });
+    });
+
+    lateWorkerOutput.emit?.();
+
+    const events = await turnPromise;
+
+    expect(events).toEqual([
+      {
+        type: "text_delta",
+        stream: "output",
+        text: "late hello",
+      },
+      {
+        type: "done",
+        stopReason: "done",
+      },
+    ]);
+    const run = await runtime.store.getRun("run-timeout");
+    expect(run).toMatchObject({
+      state: "completed",
+      terminal: {
+        kind: "completed",
+        stopReason: "done",
+      },
+    });
+    expect(commands.filter((command) => command === "acp.turn.start")).toHaveLength(1);
+  });
+
   it("waits for the cancelled terminal on active-turn cancel instead of surfacing an abort error", async () => {
     const { runtime } = await createRuntime();
     const sessionKey = "agent:main:acp:test-session";
