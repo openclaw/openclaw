@@ -13,7 +13,7 @@
       "choiceHint": "Inference API",
       "groupId": "modelscope",
       "groupLabel": "ModelScope",
-      "groupHint": "Inference API (HF token)",
+      "groupHint": "Inference API",
       "optionKey": "modelscopeApiKey",
       "cliFlag": "--modelscope-api-key",
       "cliOption": "--modelscope-api-key <key>",
