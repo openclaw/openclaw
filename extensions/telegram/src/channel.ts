@@ -54,7 +54,6 @@ import { sendTypingTelegram } from "./send.js";
 import { telegramSetupAdapter } from "./setup-core.js";
 import { telegramSetupWizard } from "./setup-surface.js";
 import { parseTelegramTarget } from "./targets.js";
-import { deleteTelegramUpdateOffset } from "./update-offset-store.js";
 
 type TelegramSendFn = ReturnType<
   typeof getTelegramRuntime
@@ -334,10 +333,12 @@ export const telegramPlugin: ChannelPlugin<ResolvedTelegramAccount, TelegramProb
       const previousToken = resolveTelegramAccount({ cfg: prevCfg, accountId }).token.trim();
       const nextToken = resolveTelegramAccount({ cfg: nextCfg, accountId }).token.trim();
       if (previousToken !== nextToken) {
+        const { deleteTelegramUpdateOffset } = await import("./update-offset-store.js");
         await deleteTelegramUpdateOffset({ accountId });
       }
     },
     onAccountRemoved: async ({ accountId }) => {
+      const { deleteTelegramUpdateOffset } = await import("./update-offset-store.js");
       await deleteTelegramUpdateOffset({ accountId });
     },
   },
@@ -515,6 +516,30 @@ export const telegramPlugin: ChannelPlugin<ResolvedTelegramAccount, TelegramProb
         proxyUrl: account.config.proxy,
         network: account.config.network,
       }),
+    formatCapabilitiesProbe: ({ probe }) => {
+      const lines = [];
+      if (probe?.bot?.username) {
+        const botId = probe.bot.id ? ` (${probe.bot.id})` : "";
+        lines.push({ text: `Bot: @${probe.bot.username}${botId}` });
+      }
+      const flags: string[] = [];
+      if (typeof probe?.bot?.canJoinGroups === "boolean") {
+        flags.push(`joinGroups=${probe.bot.canJoinGroups}`);
+      }
+      if (typeof probe?.bot?.canReadAllGroupMessages === "boolean") {
+        flags.push(`readAllGroupMessages=${probe.bot.canReadAllGroupMessages}`);
+      }
+      if (typeof probe?.bot?.supportsInlineQueries === "boolean") {
+        flags.push(`inlineQueries=${probe.bot.supportsInlineQueries}`);
+      }
+      if (flags.length > 0) {
+        lines.push({ text: `Flags: ${flags.join(" ")}` });
+      }
+      if (probe?.webhook?.url !== undefined) {
+        lines.push({ text: `Webhook: ${probe.webhook.url || "none"}` });
+      }
+      return lines;
+    },
     auditAccount: async ({ account, timeoutMs, probe, cfg }) => {
       const groups =
         cfg.channels?.telegram?.accounts?.[account.accountId]?.groups ??

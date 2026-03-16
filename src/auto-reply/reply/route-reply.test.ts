@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { mattermostPlugin } from "../../../extensions/mattermost/src/channel.js";
+import { slackPlugin } from "../../../extensions/slack/src/channel.js";
 import { discordOutbound } from "../../channels/plugins/outbound/discord.js";
 import { imessageOutbound } from "../../channels/plugins/outbound/imessage.js";
 import { signalOutbound } from "../../channels/plugins/outbound/signal.js";
@@ -540,7 +541,11 @@ const defaultRegistry = createTestRegistry([
   },
   {
     pluginId: "slack",
-    plugin: createOutboundTestPlugin({ id: "slack", outbound: slackOutbound, label: "Slack" }),
+    plugin: {
+      ...createOutboundTestPlugin({ id: "slack", outbound: slackOutbound, label: "Slack" }),
+      messaging: slackPlugin.messaging,
+      threading: slackPlugin.threading,
+    },
     source: "test",
   },
   {

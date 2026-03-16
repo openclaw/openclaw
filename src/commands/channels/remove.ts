@@ -118,11 +118,6 @@ export async function channelsRemoveCommand(
       accountId: resolvedAccountId,
       runtime,
     });
-    if (channel === "telegram") {
-      const { deleteTelegramUpdateOffset } =
-        await import("../../../extensions/telegram/src/update-offset-store.js");
-      await deleteTelegramUpdateOffset({ accountId: resolvedAccountId });
-    }
   } else {
     if (!plugin.config.setAccountEnabled) {
       runtime.error(`Channel ${channel} does not support disable.`);
