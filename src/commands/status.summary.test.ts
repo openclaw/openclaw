@@ -92,6 +92,18 @@ describe("getStatusSummary", () => {
     expect(summary.channelSummary).toEqual(["ok"]);
   });
 
+  it("skips session runtime helpers when the profile has no sessions", async () => {
+    const { resolveContextTokensForModel } = await import("../agents/context.js");
+    const { resolveSessionModelRef } = await import("../gateway/session-utils.js");
+    const { getStatusSummary } = await import("./status.summary.js");
+
+    const summary = await getStatusSummary();
+
+    expect(summary.sessions.count).toBe(0);
+    expect(resolveContextTokensForModel).not.toHaveBeenCalled();
+    expect(resolveSessionModelRef).not.toHaveBeenCalled();
+  });
+
   it("skips channel summary imports when no channels are configured", async () => {
     const { hasPotentialConfiguredChannels } = await import("../channels/config-presence.js");
     vi.mocked(hasPotentialConfiguredChannels).mockReturnValue(false);

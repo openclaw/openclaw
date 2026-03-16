@@ -41,9 +41,6 @@ if (
 ) {
   // Imported as a dependency — skip all entry-point side effects.
 } else {
-  const { installGaxiosFetchCompat } = await import("./infra/gaxios-fetch-compat.js");
-
-  installGaxiosFetchCompat();
   process.title = "openclaw";
   ensureOpenClawExecMarkerOnProcess();
   installProcessWarningFilter();
@@ -209,8 +206,11 @@ function runMainOrRootHelp(argv: string[]): void {
   if (tryHandleRootHelpFastPath(argv)) {
     return;
   }
-  import("./cli/run-main.js")
-    .then(({ runCli }) => runCli(argv))
+  Promise.all([import("./infra/gaxios-fetch-compat.js"), import("./cli/run-main.js")])
+    .then(([{ installGaxiosFetchCompat }, { runCli }]) => {
+      installGaxiosFetchCompat();
+      return runCli(argv);
+    })
     .catch((error) => {
       console.error(
         "[openclaw] Failed to start CLI:",

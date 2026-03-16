@@ -6,6 +6,7 @@ import { isMainModule } from "../infra/is-main.js";
 import { ensureOpenClawCliOnPath } from "../infra/path-env.js";
 import { assertSupportedRuntime } from "../infra/runtime-guard.js";
 import { enableConsoleCapture } from "../logging.js";
+import { resetMemoryRuntimeUsage, wasMemoryRuntimeUsed } from "../memory/runtime-usage.js";
 import {
   getCommandPathWithRootOptions,
   getPrimaryCommand,
@@ -18,11 +19,16 @@ import { tryRouteCli } from "./route.js";
 import { normalizeWindowsArgv } from "./windows-argv.js";
 
 async function closeCliMemoryManagers(): Promise<void> {
+  if (!wasMemoryRuntimeUsed()) {
+    return;
+  }
   try {
     const { closeAllMemorySearchManagers } = await import("../memory/search-manager.js");
     await closeAllMemorySearchManagers();
   } catch {
     // Best-effort teardown for short-lived CLI processes.
+  } finally {
+    resetMemoryRuntimeUsage();
   }
 }
 

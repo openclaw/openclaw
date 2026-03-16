@@ -9,6 +9,23 @@ vi.mock("openclaw/extension-api", () => {
   };
 });
 
+vi.mock("openclaw/plugin-sdk/llm-task", () => ({
+  formatThinkingLevels: vi.fn(() => "low, medium, high"),
+  formatXHighModelHint: vi.fn(() => "select OpenClaw models"),
+  normalizeThinkLevel: vi.fn((value: string) => {
+    const normalized = value.trim().toLowerCase();
+    if (normalized === "on") {
+      return "low";
+    }
+    if (["low", "medium", "high", "xhigh"].includes(normalized)) {
+      return normalized;
+    }
+    return undefined;
+  }),
+  resolvePreferredOpenClawTmpDir: vi.fn(() => "/tmp"),
+  supportsXHighThinking: vi.fn(() => false),
+}));
+
 import { runEmbeddedPiAgent } from "openclaw/extension-api";
 import { createLlmTaskTool } from "./llm-task-tool.js";
 

@@ -2,6 +2,7 @@ import type { OpenClawConfig } from "../config/config.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import type { ResolvedQmdConfig } from "./backend-config.js";
 import { resolveMemoryBackendConfig } from "./backend-config.js";
+import { markMemoryRuntimeUsed } from "./runtime-usage.js";
 import type {
   MemoryEmbeddingProbeResult,
   MemorySearchManager,
@@ -27,6 +28,7 @@ export async function getMemorySearchManager(params: {
   agentId: string;
   purpose?: "default" | "status";
 }): Promise<MemorySearchManagerResult> {
+  markMemoryRuntimeUsed();
   const resolved = resolveMemoryBackendConfig(params);
   if (resolved.backend === "qmd" && resolved.qmd) {
     const statusOnly = params.purpose === "status";

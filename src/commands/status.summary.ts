@@ -19,6 +19,7 @@ let statusSummaryRuntimeModulePromise:
   | Promise<typeof import("./status.summary.runtime.js")>
   | undefined;
 let configIoModulePromise: Promise<typeof import("../config/io.js")> | undefined;
+type SessionStoreRow = [string, SessionEntry | undefined];
 
 function loadChannelSummaryModule() {
   channelSummaryModulePromise ??= import("../infra/channel-summary.js");
@@ -112,6 +113,9 @@ function resolveConfiguredStatusModelRef(params: {
   return { provider: params.defaultProvider, model: params.defaultModel };
 }
 
+function listSessionStoreRows(store: Record<string, SessionEntry | undefined>): SessionStoreRow[] {
+  return Object.entries(store).filter(([key]) => key !== "global" && key !== "unknown");
+}
 const buildFlags = (entry?: SessionEntry): string[] => {
   if (!entry) {
     return [];
@@ -177,8 +181,6 @@ export async function getStatusSummary(
   } = {},
 ): Promise<StatusSummary> {
   const { includeSensitive = true } = options;
-  const { classifySessionKey, resolveContextTokensForModel, resolveSessionModelRef } =
-    await loadStatusSummaryRuntimeModule();
   const cfg = options.config ?? (await loadConfigIoModule()).loadConfig();
   const needsChannelPlugins = hasPotentialConfiguredChannels(cfg);
   const linkContext = needsChannelPlugins
@@ -214,16 +216,8 @@ export async function getStatusSummary(
     defaultModel: DEFAULT_MODEL,
   });
   const configModel = resolved.model ?? DEFAULT_MODEL;
-  const configContextTokens =
-    resolveContextTokensForModel({
-      cfg,
-      provider: resolved.provider ?? DEFAULT_PROVIDER,
-      model: configModel,
-      contextTokensOverride: cfg.agents?.defaults?.contextTokens,
-      fallbackContextTokens: DEFAULT_CONTEXT_TOKENS,
-    }) ?? DEFAULT_CONTEXT_TOKENS;
-
-  const now = Date.now();
+  const resolvedProvider = resolved.provider ?? DEFAULT_PROVIDER;
+  const configContextTokensOverride = cfg.agents?.defaults?.contextTokens;
   const storeCache = new Map<string, Record<string, SessionEntry | undefined>>();
   const loadStore = (storePath: string) => {
     const cached = storeCache.get(storePath);
@@ -234,12 +228,91 @@ export async function getStatusSummary(
     storeCache.set(storePath, store);
     return store;
   };
-  const buildSessionRows = (
-    store: Record<string, SessionEntry | undefined>,
-    opts: { agentIdOverride?: string } = {},
-  ) =>
-    Object.entries(store)
-      .filter(([key]) => key !== "global" && key !== "unknown")
+
+  const storeRowsCache = new Map<string, SessionStoreRow[]>();
+  const loadStoreRows = (storePath: string) => {
+    const cached = storeRowsCache.get(storePath);
+    if (cached) {
+      return cached;
+    }
+    const rows = listSessionStoreRows(loadStore(storePath));
+    storeRowsCache.set(storePath, rows);
+    return rows;
+  };
+
+  const paths = new Set<string>();
+  const sessionStoresByAgent = agentList.agents.map((agent) => {
+    const storePath = resolveStorePath(cfg.session?.store, { agentId: agent.id });
+    paths.add(storePath);
+    return {
+      agentId: agent.id,
+      path: storePath,
+      rows: loadStoreRows(storePath),
+    };
+  });
+  const totalSessions = Array.from(paths).reduce(
+    (count, storePath) => count + loadStoreRows(storePath).length,
+    0,
+  );
+  const needsRuntimeSessionDetails = totalSessions > 0;
+  const needsRuntimeDefaultContextTokens =
+    configContextTokensOverride == null &&
+    (resolvedProvider !== DEFAULT_PROVIDER || configModel !== DEFAULT_MODEL);
+
+  // Keep bare `status --json` on the cheap path when the profile is empty and
+  // defaults are unmodified. The runtime helpers below pull in large session/model
+  // metadata code paths that are only needed once there are real sessions or
+  // model-specific context-token lookups to compute.
+  if (!needsRuntimeSessionDetails && !needsRuntimeDefaultContextTokens) {
+    const summary: StatusSummary = {
+      runtimeVersion: resolveRuntimeServiceVersion(process.env),
+      linkChannel: linkContext
+        ? {
+            id: linkContext.plugin.id,
+            label: linkContext.plugin.meta.label ?? "Channel",
+            linked: linkContext.linked,
+            authAgeMs: linkContext.authAgeMs,
+          }
+        : undefined,
+      heartbeat: {
+        defaultAgentId: agentList.defaultId,
+        agents: heartbeatAgents,
+      },
+      channelSummary,
+      queuedSystemEvents,
+      sessions: {
+        paths: Array.from(paths),
+        count: totalSessions,
+        defaults: {
+          model: configModel ?? null,
+          contextTokens: configContextTokensOverride ?? DEFAULT_CONTEXT_TOKENS,
+        },
+        recent: [],
+        byAgent: sessionStoresByAgent.map((agent) => ({
+          agentId: agent.agentId,
+          path: agent.path,
+          count: agent.rows.length,
+          recent: [],
+        })),
+      },
+    };
+    return includeSensitive ? summary : redactSensitiveStatusSummary(summary);
+  }
+
+  const { classifySessionKey, resolveContextTokensForModel, resolveSessionModelRef } =
+    await loadStatusSummaryRuntimeModule();
+  const configContextTokens =
+    resolveContextTokensForModel({
+      cfg,
+      provider: resolvedProvider,
+      model: configModel,
+      contextTokensOverride: configContextTokensOverride,
+      fallbackContextTokens: DEFAULT_CONTEXT_TOKENS,
+    }) ?? DEFAULT_CONTEXT_TOKENS;
+  const now = Date.now();
+
+  const buildSessionRows = (rows: SessionStoreRow[], opts: { agentIdOverride?: string } = {}) =>
+    rows
       .map(([key, entry]) => {
         const updatedAt = entry?.updatedAt ?? null;
         const age = updatedAt ? now - updatedAt : null;
@@ -294,25 +367,20 @@ export async function getStatusSummary(
       })
       .sort((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0));
 
-  const paths = new Set<string>();
-  const byAgent = agentList.agents.map((agent) => {
-    const storePath = resolveStorePath(cfg.session?.store, { agentId: agent.id });
-    paths.add(storePath);
-    const store = loadStore(storePath);
-    const sessions = buildSessionRows(store, { agentIdOverride: agent.id });
+  const byAgent = sessionStoresByAgent.map((agent) => {
+    const sessions = buildSessionRows(agent.rows, { agentIdOverride: agent.agentId });
     return {
-      agentId: agent.id,
-      path: storePath,
+      agentId: agent.agentId,
+      path: agent.path,
       count: sessions.length,
       recent: sessions.slice(0, 10),
     };
   });
 
   const allSessions = Array.from(paths)
-    .flatMap((storePath) => buildSessionRows(loadStore(storePath)))
+    .flatMap((storePath) => buildSessionRows(loadStoreRows(storePath)))
     .toSorted((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0));
   const recent = allSessions.slice(0, 10);
-  const totalSessions = allSessions.length;
 
   const summary: StatusSummary = {
     runtimeVersion: resolveRuntimeServiceVersion(process.env),
