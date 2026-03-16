@@ -33,7 +33,6 @@ import {
 } from "openclaw/plugin-sdk/discord";
 import { resolveOutboundSendDep } from "../../../src/infra/outbound/send-deps.js";
 import { normalizeMessageChannel } from "../../../src/utils/message-channel.js";
-import { formatDiscordAllowFromEntries } from "./allow-from.js";
 import { inspectDiscordAccount } from "./account-inspect.js";
 import {
   listDiscordAccountIds,
@@ -41,6 +40,7 @@ import {
   resolveDefaultDiscordAccountId,
   type ResolvedDiscordAccount,
 } from "./accounts.js";
+import { formatDiscordAllowFromEntries } from "./allow-from.js";
 import { collectDiscordAuditChannelIds } from "./audit.js";
 import {
   isDiscordExecApprovalClientEnabled,
