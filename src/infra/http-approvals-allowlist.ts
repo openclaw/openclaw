@@ -58,8 +58,7 @@ function compileUrlGlobRegex(pattern: string): RegExp {
   }
   regex += "$";
 
-  // Host is already lowercased before matching; path comparison is case-sensitive.
-  const compiled = new RegExp(regex);
+  const compiled = new RegExp(regex, "i");
   if (globRegexCache.size >= GLOB_REGEX_CACHE_LIMIT) {
     globRegexCache.clear();
   }
@@ -102,23 +101,9 @@ function normalizePatternForHostOnlyMatch(pattern: string): string {
   return pattern;
 }
 
-/** Lowercase only the host portion of a URL, preserving path case. */
-function lowercaseHost(s: string): string {
-  const protoEnd = s.indexOf("://");
-  if (protoEnd < 0) {
-    return s.toLowerCase();
-  }
-  const afterProto = protoEnd + 3;
-  const pathStart = s.indexOf("/", afterProto);
-  if (pathStart < 0) {
-    return s.toLowerCase();
-  }
-  return s.slice(0, pathStart).toLowerCase() + s.slice(pathStart);
-}
-
 function matchesUrlPattern(normalizedUrl: string, pattern: string): boolean {
-  const lowerUrl = lowercaseHost(normalizedUrl);
-  const lowerPattern = normalizePatternForHostOnlyMatch(lowercaseHost(pattern.trim()));
+  const lowerUrl = normalizedUrl.toLowerCase();
+  const lowerPattern = normalizePatternForHostOnlyMatch(pattern.toLowerCase().trim());
   if (!lowerPattern) {
     return false;
   }

@@ -822,14 +822,10 @@ export async function startGatewayServer(
               (httpPolicy.agents as Record<string, { allowlist?: Array<{ pattern: string }> }>) ??
               {};
             const agent = agents[target] ?? {};
-            // Use the raw per-agent allowlist. When creating a new per-agent
-            // override for the first time, seed with global entries so existing
-            // access is preserved without copying them on every subsequent write.
-            const existingAllowlist = Array.isArray(agent.allowlist) ? [...agent.allowlist] : [];
-            const allowlist =
-              existingAllowlist.length > 0
-                ? existingAllowlist
-                : [...(Array.isArray(httpPolicy.allowlist) ? httpPolicy.allowlist : [])];
+            // Append to the raw per-agent allowlist only. Do not seed from
+            // global or effective allowlist to avoid broadening access when
+            // wildcard overrides are used to narrow per-agent policy.
+            const allowlist = Array.isArray(agent.allowlist) ? [...agent.allowlist] : [];
             if (!allowlist.some((e) => e.pattern === pattern)) {
               allowlist.push({ pattern });
               agents[target] = { ...agent, allowlist };
