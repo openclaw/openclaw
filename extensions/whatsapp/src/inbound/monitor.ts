@@ -488,6 +488,8 @@ export async function monitorWebInbox(options: {
     signalClose: (reason?: WebListenerCloseReason) => {
       resolveClose(reason ?? { status: undefined, isLoggedOut: false, error: "closed" });
     },
+    /** Check if underlying WebSocket connection is open */
+    isAlive: () => sock.ws?.readyState === 1, // WebSocket.OPEN = 1
     // IPC surface (sendMessage/sendPoll/sendReaction/sendComposingTo)
     ...sendApi,
   } as const;

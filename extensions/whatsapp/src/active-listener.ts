@@ -26,6 +26,8 @@ export type ActiveWebListener = {
   ) => Promise<void>;
   sendComposingTo: (to: string) => Promise<void>;
   close?: () => Promise<void>;
+  /** Check if the underlying WebSocket connection is still open */
+  isAlive?: () => boolean;
 };
 
 let _currentListener: ActiveWebListener | null = null;
@@ -42,6 +44,18 @@ export function requireActiveWebListener(accountId?: string | null): {
 } {
   const id = resolveWebAccountId(accountId);
   const listener = listeners.get(id) ?? null;
+  
+  // Verify listener is still alive if isAlive method exists
+  if (listener && typeof listener.isAlive === 'function' && !listener.isAlive()) {
+    listeners.delete(id);
+    if (id === DEFAULT_ACCOUNT_ID) {
+      _currentListener = null;
+    }
+    throw new Error(
+      `No active WhatsApp Web listener (account: ${id}). Start the gateway, then link WhatsApp with: ${formatCliCommand(`openclaw channels login --channel whatsapp --account ${id}`)}.`,
+    );
+  }
+
   if (!listener) {
     throw new Error(
       `No active WhatsApp Web listener (account: ${id}). Start the gateway, then link WhatsApp with: ${formatCliCommand(`openclaw channels login --channel whatsapp --account ${id}`)}.`,
@@ -80,5 +94,16 @@ export function setActiveWebListener(
 
 export function getActiveWebListener(accountId?: string | null): ActiveWebListener | null {
   const id = resolveWebAccountId(accountId);
-  return listeners.get(id) ?? null;
+  const listener = listeners.get(id) ?? null;
+  
+  // Verify listener is still alive if isAlive method exists
+  if (listener && typeof listener.isAlive === 'function' && !listener.isAlive()) {
+    listeners.delete(id);
+    if (id === DEFAULT_ACCOUNT_ID) {
+      _currentListener = null;
+    }
+    return null;
+  }
+  
+  return listener;
 }
