@@ -1693,7 +1693,14 @@ export const registerTelegramHandlers = ({
       // filtered before we reach the drain guard — they must not be persisted
       // to the pending-inbound store.  This mirrors the check that
       // buildTelegramMessageContext performs in the normal (non-drain) path.
-      if (!event.isGroup && !hasInboundMedia(event.msg) && !hasReplyTargetMedia(event.msg)) {
+      //
+      // Guard behind drain mode: when NOT draining, the normal path through
+      // processInboundMessage / buildTelegramMessageContext runs
+      // enforceTelegramDmPolicy which handles pairing challenges and other
+      // policy flows.  Firing this short-circuit outside drain mode would
+      // silently drop text-only DMs from senders with dmPolicy: "pairing"
+      // before they ever reach the pairing challenge handler.
+      if (isGatewayDraining() && !event.isGroup && !hasInboundMedia(event.msg) && !hasReplyTargetMedia(event.msg)) {
         if (dmPolicy === "disabled") {
           return;
         }
