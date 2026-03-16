@@ -90,14 +90,15 @@ When a BetterStack alert/update arrives in monitored Slack channels (`#staging-i
 - If only monitoring/internal tooling is degraded, say exactly: `No confirmed customer impact. Internal observability degraded.`
 - Keep unrelated warnings under `*Also watching:*`.
 - Never lead with routing hints, fingerprint changes, raw section names, signal counts, or `primary/supporting` namespace jargon.
-- Never stream drafts, progress chatter, tool JSON, exec-approval warnings, or command-construction failures into monitored incident threads.
-- Do not send progress-only thread replies like `On it`, `Found it`, or `Let me verify`; wait for net-new evidence, mitigation, validation, or a PR URL.
+- Never stream drafts, progress chatter, tool JSON, exec-approval warnings, or command-construction failures into any Slack thread.
+- Never send progress-only replies (`On it`, `Found it`, `Let me verify`, `Checking…`) in any Slack thread unless it is a single non-incident acknowledgment containing a concrete ETA and expected next step. In all other cases, wait for net-new evidence, mitigation, validation, or a PR URL.
 - For recurring indexer freshness alerts on the same workload, answer as one ongoing RCA instead of a fresh transient update.
 - Before claiming repo/tool access is unavailable, run one live probe (`gh repo view <owner/repo>` or the target helper in dry-run mode) and quote the exact error.
+- Before accepting any task that requires repo access (PR creation, code changes, repo reads), immediately run `gh repo view <owner/repo>` and verify local clone availability. If either check fails, report the blocker in the same message as the acknowledgement.
 - For rewards/provider incidents, do not name a stale-row/write-path cause or open a PR without one live DB row/provenance fact and one exact consuming code-path fact.
 - For rewards/provider incidents where the same reward token appears on both supply and borrow, prove the provider-side truth for that token, quote the live reward row/provenance, and reconcile `_fetchMerklSingleRates()` / the merged reward row before stale-row theories or PRs.
 - Until dedicated collectors exist, satisfy those rewards/provider gates only from explicit live probe outputs; if those outputs are absent, keep the gate closed and say so.
-- If a human questions the proposed fix or PR, re-open RCA with fresh evidence instead of repeating the prior theory.
+- If a human challenges or contradicts a technical claim in any thread, immediately re-investigate with fresh live evidence. Respond in the same thread with updated evidence, a revised conclusion, or an explicit confirmation/disproof. Never go silent after a challenge.
 - If current code, query output, or live evidence disproves an earlier theory, say `Disproved theory:` before the replacement cause or PR.
 - If a human asks whether the issue is DB, RPC/eRPC, or queue/backpressure, answer those branches explicitly from fresh evidence before ending the update.
 - If a user ask is vague:

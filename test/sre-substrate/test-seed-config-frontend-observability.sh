@@ -4,6 +4,7 @@ set -euo pipefail
 REPO_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"
 ROOT="$REPO_ROOT/skills/morpho-sre"
 CONFIG="$ROOT/config/openclaw.json"
+START_GATEWAY="$REPO_ROOT/scripts/sre-runtime/start-gateway.sh"
 
 jq -e '
   .plugins.entries.acpx.config.mcpServers["posthog-prd-landing"].command == "/home/node/.openclaw/skills/morpho-sre/scripts/posthog-mcp.sh"
@@ -26,7 +27,11 @@ jq -e '
 ' "$CONFIG" >/dev/null
 
 jq -e '
-  .channels.slack.channels["#bug-report"].systemPrompt | contains("Do not send progress-only thread replies")
+  .channels.slack.channels["#bug-report"].systemPrompt | contains("Never send progress-only replies")
+' "$CONFIG" >/dev/null
+
+jq -e '
+  .channels.slack.channels["#bug-report"].systemPrompt | contains("single non-incident acknowledgment containing a concrete ETA and expected next step")
 ' "$CONFIG" >/dev/null
 
 jq -e '
@@ -34,8 +39,52 @@ jq -e '
 ' "$CONFIG" >/dev/null
 
 jq -e '
-  .channels.slack.channels["#bug-report"].systemPrompt | contains("If a human questions the proposed fix or PR, re-open RCA with fresh evidence")
+  .channels.slack.channels["#bug-report"].systemPrompt | contains("Before accepting any task that requires repo access")
 ' "$CONFIG" >/dev/null
+
+jq -e '
+  .channels.slack.channels["#bug-report"].systemPrompt | contains("If a human challenges or contradicts a technical claim in any thread")
+' "$CONFIG" >/dev/null
+
+jq -e '
+  .sre.promptTemplates.monitoringIncident | contains("Never send progress-only replies")
+' "$CONFIG" >/dev/null
+
+jq -e '
+  .sre.promptTemplates.monitoringIncident | contains("Before accepting any task that requires repo access")
+' "$CONFIG" >/dev/null
+
+jq -e '
+  .sre.promptTemplates.monitoringIncident | contains("If a human challenges or contradicts a technical claim in any thread")
+' "$CONFIG" >/dev/null
+
+jq -e '
+  .channels.slack.channels["#platform-monitoring"].systemPrompt == "Template: sre.promptTemplates.monitoringIncident"
+' "$CONFIG" >/dev/null
+
+jq -e '
+  .channels.slack.channels["#staging-infra-monitoring"].systemPrompt == "Template: sre.promptTemplates.monitoringIncident"
+' "$CONFIG" >/dev/null
+
+jq -e '
+  .channels.slack.channels["#public-api-monitoring"].systemPrompt == "Template: sre.promptTemplates.monitoringIncident"
+' "$CONFIG" >/dev/null
+
+jq -e '
+  .agents.list[] | select(.id=="sre").tools.exec.pathPrepend | not
+' "$CONFIG" >/dev/null
+
+jq -e '
+  .agents.list[] | select(.id=="sre-verifier").tools.exec.pathPrepend | not
+' "$CONFIG" >/dev/null
+
+jq -e '
+  .tools.exec.pathPrepend == ["/home/node/.openclaw/bin"]
+' "$CONFIG" >/dev/null
+
+rg -q '\.sre\.promptTemplates\.monitoringIncident as \$monitoring_prompt' "$START_GATEWAY"
+rg -q '\.channels\.slack\.channels\["#staging-infra-monitoring"\]\.systemPrompt =' "$START_GATEWAY"
+rg -q '\.channels\.slack\.channels\["#public-api-monitoring"\]\.systemPrompt =' "$START_GATEWAY"
 
 test -f "$ROOT/posthog-mcp.sh"
 test -f "$ROOT/frontend-project-resolver.sh"

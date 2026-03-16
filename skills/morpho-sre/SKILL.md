@@ -38,10 +38,10 @@ metadata: { "openclaw": { "emoji": "🛠️" } }
 - Retry on repeated asks: if same/near-identical question appears again in the same thread/session, re-run relevant live checks/tools (state may have changed); do not reuse a prior failure-only answer.
 - In monitored Slack incident threads, human follow-ups after the first bot reply must pass ingress and trigger fresh live checks; do not treat them like duplicate alert updates.
 - If an incident thread drifts into unrelated design/history questions, redirect that discussion to a DM or new thread instead of mixing it into RCA.
-- Incident threads:
-  - Do not send progress-only thread replies like `On it`, `Found it`, or `Let me verify`; wait for net-new evidence, mitigation, validation, or a PR URL.
+- Never send progress-only replies (`On it`, `Found it`, `Let me verify`, `Checking…`) in any Slack thread unless it is a single non-incident acknowledgment containing a concrete ETA and expected next step. In all other cases, wait for net-new evidence, mitigation, validation, or a PR URL.
 - Before claiming repo/tool access is unavailable, run one live probe (`gh repo view <owner/repo>` or the target helper in dry-run mode) and quote the exact error.
-- If a human questions the proposed fix or PR in-thread, re-open RCA with fresh live evidence; do not repeat the old theory or go silent.
+- Before accepting any task that requires repo access (PR creation, code changes, repo reads), immediately run `gh repo view <owner/repo>` and verify local clone availability. If either check fails, report the blocker in the same message as the acknowledgement — do not split into acknowledge-then-fail-later.
+- If a human challenges or contradicts a technical claim in any thread (incident, bug-report, or general), immediately re-investigate with fresh live evidence. If a human questions the proposed fix or PR in-thread, re-open RCA before defending the fix. Respond in the same thread with updated evidence, a revised conclusion, or an explicit confirmation/disproof statement. Never go silent after a challenge.
 - If current code, query output, or live evidence disproves an earlier theory, say `Disproved theory:` and replace it before proposing a new cause or PR.
 - Exact artifact replay:
   - if user provides an exact query, event ID, trace ID, address, or says the prior answer is wrong, replay that exact artifact before reusing any prior theory
@@ -110,6 +110,7 @@ metadata: { "openclaw": { "emoji": "🛠️" } }
 - Use `incident-dossier-consumer-app-offchain-approval-failures-2026-03-12.md`
   for consumer wallet / approval / permit regressions where the workaround narrows scope.
 - Use `incident-dossier-blue-api-hyperevm-vault-v2-state-gap-2026-03-12.md` for single-vault HyperEVM vault-v2 state gaps where metadata and transaction paths disagree with current-state paths.
+- Use `incident-dossier-consumer-app-sdk-abi-regression-2026-03-13.md` for SDK ABI decoding regressions when `cast` evidence points to interface/signature drift.
 - Helper scripts that support RCA and eRPC investigation:
   - `erpc-context.sh`
   - `wiz-mcp.sh`
@@ -334,7 +335,7 @@ metadata: { "openclaw": { "emoji": "🛠️" } }
 - Put unrelated warnings under `*Also watching:*`.
 - Do not open with routing hints, fingerprint changes, raw step names, signal counts, confidence percentages, or `primary/supporting` namespace jargon.
 - Never leak progress chatter, tool-call JSON, exec-approval warnings, or command-construction failures into the thread.
-- Do not send progress-only thread replies like `On it`, `Found it`, or `Let me verify`; wait for net-new evidence, mitigation, validation, or a PR URL.
+- Do not send progress-only replies like `On it`, `Found it`, `Let me verify`, or `Checking...` in any Slack thread unless it is a single non-incident acknowledgment containing a concrete ETA and expected next step. In all other cases, wait for net-new evidence, mitigation, validation, or a PR URL.
 - For recurring indexer freshness alerts on the same workload, answer as one ongoing RCA instead of a fresh transient update.
 - If fix is scoped/reversible and confidence >= `AUTO_PR_MIN_CONFIDENCE`, create PR via `autofix-pr.sh` and post PR URL in-thread.
 - If fix is not open-PR ready yet, still name 1-2 concrete PR candidates with repo/path/title/validation.
@@ -609,6 +610,34 @@ kubectl --context "$K8S_CONTEXT" -n <ns> rollout history deploy/<name>
 # logs + metrics
 kubectl --context "$K8S_CONTEXT" -n <ns> logs deploy/<name> --since=30m | tail -n 200
 curl -s 'http://prometheus-stack-kube-prom-prometheus.monitoring.svc.cluster.local:9090/api/v1/alerts' | jq '.data.alerts[] | select(.state=="firing")'
+```
+
+## Smart Contract / ABI Verification
+
+When investigating smart contract, ABI encoding, or SDK-level revert issues:
+
+- Never present ABI encoding theories without a live `cast call`, `cast abi-decode`, or Foundry test as evidence.
+- For revert analysis: decode actual revert data from Sentry/logs/traces before theorizing about the cause.
+- Use the `foundry-evm-debug` skill for Forge-based reproduction when available.
+- If live verification is blocked (no RPC access, no Foundry), state the blocker explicitly and mark the analysis as `*Unverified theory:*`.
+
+```bash
+# Verify ABI encoding claim with a live token call (requires $RPC_URL)
+cast call <token_address> "eip712Domain()" --rpc-url "${RPC_URL:?RPC_URL not set}"
+
+# If RPC_URL is unavailable, stop and mark the analysis as blocked / unverified.
+
+# Decode revert selector / calldata captured from logs, traces, or Sentry.
+# Modern Foundry:
+cast selectors <revert_selector>
+cast calldata-decode <abi_types> <revert_calldata>
+# Older equivalents (legacy aliases):
+cast 4byte <revert_selector>
+cast 4byte-calldata <revert_calldata>
+
+# Compare flat vs tuple encoding layouts with the return types in input position
+cast abi-encode "f(bytes1,string,string,uint256,address,bytes32,uint256[])" 0x0f "name" "version" 1 0x0000000000000000000000000000000000000001 0x0000000000000000000000000000000000000000000000000000000000000000 "[1]"
+cast abi-encode "f((bytes1,string,string,uint256,address,bytes32,uint256[]))" "(0x0f,name,version,1,0x0000000000000000000000000000000000000001,0x0000000000000000000000000000000000000000000000000000000000000000,[1])"
 ```
 
 ## Sentinel Snapshot

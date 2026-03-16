@@ -203,6 +203,57 @@ printf '%s\n' "$OUTPUT" | jq -e '.missing_optional == []' >/dev/null
 printf '%s\n' "$OUTPUT" | jq -e '.confidence_penalty == 54' >/dev/null
 
 cat >"$TMP" <<'EOF'
+sentry_event_trace=1
+abi_encoding_verification=1
+commit_diff_review=0
+affected_token_enumeration=1
+foundry_test_reproduction=0
+incident_memory=1
+ci_signal=0
+EOF
+
+OUTPUT="$(evidence_gaps_assess sdk_regression "$TMP")"
+
+printf '%s\n' "$OUTPUT" | jq -e '.category == "sdk_regression"' >/dev/null
+printf '%s\n' "$OUTPUT" | jq -e '.missing_critical == ["commit_diff_review"]' >/dev/null
+printf '%s\n' "$OUTPUT" | jq -e '.missing_optional == ["foundry_test_reproduction","ci_signal"]' >/dev/null
+printf '%s\n' "$OUTPUT" | jq -e '.confidence_penalty == 28' >/dev/null
+
+cat >"$TMP" <<'EOF'
+sentry_event_trace=0
+abi_encoding_verification=0
+commit_diff_review=0
+affected_token_enumeration=0
+foundry_test_reproduction=0
+incident_memory=0
+ci_signal=0
+EOF
+
+OUTPUT="$(evidence_gaps_assess sdk_regression "$TMP")"
+
+printf '%s\n' "$OUTPUT" | jq -e '.category == "sdk_regression"' >/dev/null
+printf '%s\n' "$OUTPUT" | jq -e '.missing_critical == ["sentry_event_trace","abi_encoding_verification","commit_diff_review"]' >/dev/null
+printf '%s\n' "$OUTPUT" | jq -e '.missing_optional == ["affected_token_enumeration","foundry_test_reproduction","incident_memory","ci_signal"]' >/dev/null
+printf '%s\n' "$OUTPUT" | jq -e '.confidence_penalty == 60' >/dev/null
+
+cat >"$TMP" <<'EOF'
+sentry_event_trace=1
+abi_encoding_verification=1
+commit_diff_review=1
+affected_token_enumeration=1
+foundry_test_reproduction=1
+incident_memory=1
+ci_signal=1
+EOF
+
+OUTPUT="$(evidence_gaps_assess sdk_regression "$TMP")"
+
+printf '%s\n' "$OUTPUT" | jq -e '.category == "sdk_regression"' >/dev/null
+printf '%s\n' "$OUTPUT" | jq -e '.missing_critical == []' >/dev/null
+printf '%s\n' "$OUTPUT" | jq -e '.missing_optional == []' >/dev/null
+printf '%s\n' "$OUTPUT" | jq -e '.confidence_penalty == 0' >/dev/null
+
+cat >"$TMP" <<'EOF'
 pod_issues=1
 prom_critical=1
 changes_in_window=1
