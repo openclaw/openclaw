@@ -287,18 +287,25 @@ function hasExplicitToolSection(section: unknown): boolean {
 function resolveImplicitProfileAlsoAllow(params: {
   globalTools?: OpenClawConfig["tools"];
   agentTools?: AgentToolsConfig;
+  /** When agent has explicit alsoAllow, skip global tool sections for implicit exposure. */
+  agentHasExplicitAlsoAllow?: boolean;
 }): string[] | undefined {
   const implicit = new Set<string>();
+  // When agent has explicit alsoAllow set, only agent-level tool sections should
+  // trigger implicit exposure. Global tool sections should not override agent's
+  // explicit restriction. This prevents tools.exec at global level from bypassing
+  // an agent's profile + alsoAllow restriction.
+  const useGlobalSections = !params.agentHasExplicitAlsoAllow;
   if (
     hasExplicitToolSection(params.agentTools?.exec) ||
-    hasExplicitToolSection(params.globalTools?.exec)
+    (useGlobalSections && hasExplicitToolSection(params.globalTools?.exec))
   ) {
     implicit.add("exec");
     implicit.add("process");
   }
   if (
     hasExplicitToolSection(params.agentTools?.fs) ||
-    hasExplicitToolSection(params.globalTools?.fs)
+    (useGlobalSections && hasExplicitToolSection(params.globalTools?.fs))
   ) {
     implicit.add("read");
     implicit.add("write");
@@ -337,9 +344,14 @@ export function resolveEffectiveToolPolicy(params: {
     modelProvider: params.modelProvider,
     modelId: params.modelId,
   });
+  const agentExplicitAlsoAllow = resolveExplicitProfileAlsoAllow(agentTools);
   const explicitProfileAlsoAllow =
-    resolveExplicitProfileAlsoAllow(agentTools) ?? resolveExplicitProfileAlsoAllow(globalTools);
-  const implicitProfileAlsoAllow = resolveImplicitProfileAlsoAllow({ globalTools, agentTools });
+    agentExplicitAlsoAllow ?? resolveExplicitProfileAlsoAllow(globalTools);
+  const implicitProfileAlsoAllow = resolveImplicitProfileAlsoAllow({
+    globalTools,
+    agentTools,
+    agentHasExplicitAlsoAllow: agentExplicitAlsoAllow !== undefined,
+  });
   const profileAlsoAllow =
     explicitProfileAlsoAllow || implicitProfileAlsoAllow
       ? Array.from(
