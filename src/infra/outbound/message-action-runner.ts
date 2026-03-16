@@ -20,6 +20,7 @@ import { buildChannelAccountBindings } from "../../routing/bindings.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import { type GatewayClientMode, type GatewayClientName } from "../../utils/message-channel.js";
 import { throwIfAborted } from "./abort.js";
+import { resolveOutboundChannelPlugin } from "./channel-resolution.js";
 import {
   listConfiguredMessageChannels,
   resolveMessageChannelSelection,
@@ -33,6 +34,7 @@ import {
   parseButtonsParam,
   parseCardParam,
   parseComponentsParam,
+  parseInteractiveParam,
   readBooleanParam,
   resolveAttachmentMediaPolicy,
   resolveSlackAutoThreadId,
@@ -402,12 +404,18 @@ async function handleSendAction(ctx: ResolvedActionContext): Promise<MessageActi
     readStringParam(params, "media", { trim: false }) ??
     readStringParam(params, "path", { trim: false }) ??
     readStringParam(params, "filePath", { trim: false });
+  const hasButtons = Array.isArray(params.buttons) && params.buttons.length > 0;
   const hasCard = params.card != null && typeof params.card === "object";
   const hasComponents = params.components != null && typeof params.components === "object";
+  const hasInteractive = params.interactive != null && typeof params.interactive === "object";
+  const hasBlocks =
+    (Array.isArray(params.blocks) && params.blocks.length > 0) ||
+    (typeof params.blocks === "string" && params.blocks.trim().length > 0);
   const caption = readStringParam(params, "caption", { allowEmpty: true }) ?? "";
   let message =
     readStringParam(params, "message", {
-      required: !mediaHint && !hasCard && !hasComponents,
+      required:
+        !mediaHint && !hasButtons && !hasCard && !hasComponents && !hasInteractive && !hasBlocks,
       allowEmpty: true,
     }) ?? "";
   if (message.includes("\\n")) {
@@ -473,11 +481,21 @@ async function handleSendAction(ctx: ResolvedActionContext): Promise<MessageActi
       message = "";
     }
   }
-  if (!message.trim() && !mediaUrl && mergedMediaUrls.length === 0 && !hasCard && !hasComponents) {
+  if (
+    !message.trim() &&
+    !mediaUrl &&
+    mergedMediaUrls.length === 0 &&
+    !hasButtons &&
+    !hasCard &&
+    !hasComponents &&
+    !hasInteractive &&
+    !hasBlocks
+  ) {
     throw new Error("send requires text or media");
   }
   params.message = message;
   const gifPlayback = readBooleanParam(params, "gifPlayback") ?? false;
+  const forceDocument = readBooleanParam(params, "forceDocument") ?? false;
   const bestEffort = readBooleanParam(params, "bestEffort");
   const silent = readBooleanParam(params, "silent");
 
@@ -547,6 +565,7 @@ async function handleSendAction(ctx: ResolvedActionContext): Promise<MessageActi
     mediaUrl: mediaUrl || undefined,
     mediaUrls: mergedMediaUrls.length ? mergedMediaUrls : undefined,
     gifPlayback,
+    forceDocument,
     bestEffort: bestEffort ?? undefined,
     replyToId: replyToId ?? undefined,
     threadId: resolvedThreadId ?? undefined,
@@ -668,6 +687,11 @@ async function handlePluginAction(ctx: ResolvedActionContext): Promise<MessageAc
     };
   }
 
+  const plugin = resolveOutboundChannelPlugin({ channel, cfg });
+  if (!plugin?.actions?.handleAction) {
+    throw new Error(`Channel ${channel} is unavailable for message actions (plugin not loaded).`);
+  }
+
   const handled = await dispatchChannelMessageAction({
     channel,
     action,
@@ -706,6 +730,7 @@ export async function runMessageAction(
   parseButtonsParam(params);
   parseCardParam(params);
   parseComponentsParam(params);
+  parseInteractiveParam(params);
 
   const action = input.action;
   if (action === "broadcast") {

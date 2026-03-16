@@ -1,5 +1,8 @@
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { parseSlackTarget } from "../../../extensions/slack/src/targets.js";
+import { parseTelegramTarget } from "../../../extensions/telegram/src/targets.js";
+import { loadWebMedia } from "../../../extensions/whatsapp/src/media.js";
 import { assertMediaNotDataUrl, resolveSandboxedMediaSource } from "../../agents/sandbox-paths.js";
 import { readStringParam } from "../../agents/tools/common.js";
 import type {
@@ -11,9 +14,6 @@ import type { OpenClawConfig } from "../../config/config.js";
 import { createRootScopedReadFile } from "../../infra/fs-safe.js";
 import { extensionForMime } from "../../media/mime.js";
 import { readBooleanParam as readBooleanParamShared } from "../../plugin-sdk/boolean-param.js";
-import { parseSlackTarget } from "../../slack/targets.js";
-import { parseTelegramTarget } from "../../telegram/targets.js";
-import { loadWebMedia } from "../../web/media.js";
 
 export const readBooleanParam = readBooleanParamShared;
 
@@ -420,5 +420,22 @@ export function parseComponentsParam(params: Record<string, unknown>): void {
     params.components = JSON.parse(trimmed) as unknown;
   } catch {
     throw new Error("--components must be valid JSON");
+  }
+}
+
+export function parseInteractiveParam(params: Record<string, unknown>): void {
+  const raw = params.interactive;
+  if (typeof raw !== "string") {
+    return;
+  }
+  const trimmed = raw.trim();
+  if (!trimmed) {
+    delete params.interactive;
+    return;
+  }
+  try {
+    params.interactive = JSON.parse(trimmed) as unknown;
+  } catch {
+    throw new Error("--interactive must be valid JSON");
   }
 }

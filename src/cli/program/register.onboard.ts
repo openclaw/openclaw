@@ -1,5 +1,6 @@
 import type { Command } from "commander";
-import { formatAuthChoiceChoicesForCli } from "../../commands/auth-choice-options.js";
+import { formatCliCommand } from "../../cli/command-format.js";
+import { formatStaticAuthChoiceChoicesForCli } from "../../commands/auth-choice-options.static.js";
 import type { GatewayDaemonRuntime } from "../../commands/daemon-runtime.js";
 import { ONBOARD_PROVIDER_AUTH_FLAGS } from "../../commands/onboard-provider-auth-flags.js";
 import type {
@@ -11,7 +12,7 @@ import type {
   SecretInputMode,
   TailscaleMode,
 } from "../../commands/onboard-types.js";
-import { onboardCommand } from "../../commands/onboard.js";
+import { setupWizardCommand } from "../../commands/onboard.js";
 import { defaultRuntime } from "../../runtime.js";
 import { formatDocsLink } from "../../terminal/links.js";
 import { theme } from "../../terminal/theme.js";
@@ -41,7 +42,7 @@ function resolveInstallDaemonFlag(
   return undefined;
 }
 
-const AUTH_CHOICE_HELP = formatAuthChoiceChoicesForCli({
+const AUTH_CHOICE_HELP = formatStaticAuthChoiceChoicesForCli({
   includeLegacyAliases: true,
   includeSkip: true,
 });
@@ -49,11 +50,14 @@ const AUTH_CHOICE_HELP = formatAuthChoiceChoicesForCli({
 export function registerOnboardCommand(program: Command) {
   const command = program
     .command("onboard")
-    .description("Interactive wizard to set up the gateway, workspace, and skills")
-    .addHelpText(
-      "after",
-      () =>
-        `\n${theme.muted("Docs:")} ${formatDocsLink("/cli/onboard", "docs.openclaw.ai/cli/onboard")}\n`,
+    .description('Legacy alias for "openclaw setup --wizard"')
+    .addHelpText("after", () =>
+      [
+        "",
+        `${theme.muted("Docs:")} ${formatDocsLink("/cli/setup", "docs.openclaw.ai/cli/setup")}`,
+        `${theme.muted("Prefer:")} ${formatCliCommand("openclaw setup --wizard")}`,
+        "",
+      ].join("\n"),
     )
     .option("--workspace <dir>", "Agent workspace directory (default: ~/.openclaw/workspace)")
     .option(
@@ -132,7 +136,7 @@ export function registerOnboardCommand(program: Command) {
       });
       const gatewayPort =
         typeof opts.gatewayPort === "string" ? Number.parseInt(opts.gatewayPort, 10) : undefined;
-      await onboardCommand(
+      await setupWizardCommand(
         {
           workspace: opts.workspace as string | undefined,
           nonInteractive: Boolean(opts.nonInteractive),

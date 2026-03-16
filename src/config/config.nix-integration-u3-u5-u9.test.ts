@@ -111,9 +111,12 @@ describe("Nix integration (U3, U5, U9)", () => {
     });
 
     it("CONFIG_PATH uses STATE_DIR when only state dir is overridden", () => {
-      expect(resolveConfigPathCandidate(envWith({ OPENCLAW_STATE_DIR: "/custom/state" }))).toBe(
-        path.join(path.resolve("/custom/state"), "openclaw.json"),
-      );
+      expect(
+        resolveConfigPathCandidate(
+          envWith({ OPENCLAW_STATE_DIR: "/custom/state", OPENCLAW_TEST_FAST: "1" }),
+          () => path.join(path.sep, "tmp", "openclaw-config-home"),
+        ),
+      ).toBe(path.join(path.resolve("/custom/state"), "openclaw.json"));
     });
   });
 

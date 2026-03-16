@@ -10,6 +10,7 @@ import {
 } from "./huggingface-models.js";
 import { discoverKilocodeModels } from "./kilocode-models.js";
 import {
+  enrichOllamaModelsWithContext,
   OLLAMA_DEFAULT_CONTEXT_WINDOW,
   OLLAMA_DEFAULT_COST,
   OLLAMA_DEFAULT_MAX_TOKENS,
@@ -30,53 +31,24 @@ const log = createSubsystemLogger("agents/model-providers");
 const OLLAMA_SHOW_CONCURRENCY = 8;
 const OLLAMA_SHOW_MAX_MODELS = 200;
 
-const VLLM_BASE_URL = "http://127.0.0.1:8000/v1";
-const VLLM_DEFAULT_CONTEXT_WINDOW = 128000;
-const VLLM_DEFAULT_MAX_TOKENS = 8192;
-const VLLM_DEFAULT_COST = {
+const OPENAI_COMPAT_LOCAL_DEFAULT_CONTEXT_WINDOW = 128000;
+const OPENAI_COMPAT_LOCAL_DEFAULT_MAX_TOKENS = 8192;
+const OPENAI_COMPAT_LOCAL_DEFAULT_COST = {
   input: 0,
   output: 0,
   cacheRead: 0,
   cacheWrite: 0,
 };
 
-type VllmModelsResponse = {
+const SGLANG_BASE_URL = "http://127.0.0.1:30000/v1";
+
+const VLLM_BASE_URL = "http://127.0.0.1:8000/v1";
+
+type OpenAICompatModelsResponse = {
   data?: Array<{
     id?: string;
   }>;
 };
-
-async function queryOllamaContextWindow(
-  apiBase: string,
-  modelName: string,
-): Promise<number | undefined> {
-  try {
-    const response = await fetch(`${apiBase}/api/show`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ name: modelName }),
-      signal: AbortSignal.timeout(3000),
-    });
-    if (!response.ok) {
-      return undefined;
-    }
-    const data = (await response.json()) as { model_info?: Record<string, unknown> };
-    if (!data.model_info) {
-      return undefined;
-    }
-    for (const [key, value] of Object.entries(data.model_info)) {
-      if (key.endsWith(".context_length") && typeof value === "number" && Number.isFinite(value)) {
-        const contextWindow = Math.floor(value);
-        if (contextWindow > 0) {
-          return contextWindow;
-        }
-      }
-    }
-    return undefined;
-  } catch {
-    return undefined;
-  }
-}
 
 async function discoverOllamaModels(
   baseUrl?: string,
@@ -107,27 +79,18 @@ async function discoverOllamaModels(
         `Capping Ollama /api/show inspection to ${OLLAMA_SHOW_MAX_MODELS} models (received ${data.models.length})`,
       );
     }
-    const discovered: ModelDefinitionConfig[] = [];
-    for (let index = 0; index < modelsToInspect.length; index += OLLAMA_SHOW_CONCURRENCY) {
-      const batch = modelsToInspect.slice(index, index + OLLAMA_SHOW_CONCURRENCY);
-      const batchDiscovered = await Promise.all(
-        batch.map(async (model) => {
-          const modelId = model.name;
-          const contextWindow = await queryOllamaContextWindow(apiBase, modelId);
-          return {
-            id: modelId,
-            name: modelId,
-            reasoning: isReasoningModelHeuristic(modelId),
-            input: ["text"],
-            cost: OLLAMA_DEFAULT_COST,
-            contextWindow: contextWindow ?? OLLAMA_DEFAULT_CONTEXT_WINDOW,
-            maxTokens: OLLAMA_DEFAULT_MAX_TOKENS,
-          } satisfies ModelDefinitionConfig;
-        }),
-      );
-      discovered.push(...batchDiscovered);
-    }
-    return discovered;
+    const discovered = await enrichOllamaModelsWithContext(apiBase, modelsToInspect, {
+      concurrency: OLLAMA_SHOW_CONCURRENCY,
+    });
+    return discovered.map((model) => ({
+      id: model.name,
+      name: model.name,
+      reasoning: isReasoningModelHeuristic(model.name),
+      input: ["text"],
+      cost: OLLAMA_DEFAULT_COST,
+      contextWindow: model.contextWindow ?? OLLAMA_DEFAULT_CONTEXT_WINDOW,
+      maxTokens: OLLAMA_DEFAULT_MAX_TOKENS,
+    }));
   } catch (error) {
     if (!opts?.quiet) {
       log.warn(`Failed to discover Ollama models: ${String(error)}`);
@@ -136,31 +99,34 @@ async function discoverOllamaModels(
   }
 }
 
-async function discoverVllmModels(
-  baseUrl: string,
-  apiKey?: string,
-): Promise<ModelDefinitionConfig[]> {
+async function discoverOpenAICompatibleLocalModels(params: {
+  baseUrl: string;
+  apiKey?: string;
+  label: string;
+  contextWindow?: number;
+  maxTokens?: number;
+}): Promise<ModelDefinitionConfig[]> {
   if (process.env.VITEST || process.env.NODE_ENV === "test") {
     return [];
   }
 
-  const trimmedBaseUrl = baseUrl.trim().replace(/\/+$/, "");
+  const trimmedBaseUrl = params.baseUrl.trim().replace(/\/+$/, "");
   const url = `${trimmedBaseUrl}/models`;
 
   try {
-    const trimmedApiKey = apiKey?.trim();
+    const trimmedApiKey = params.apiKey?.trim();
     const response = await fetch(url, {
       headers: trimmedApiKey ? { Authorization: `Bearer ${trimmedApiKey}` } : undefined,
       signal: AbortSignal.timeout(5000),
     });
     if (!response.ok) {
-      log.warn(`Failed to discover vLLM models: ${response.status}`);
+      log.warn(`Failed to discover ${params.label} models: ${response.status}`);
       return [];
     }
-    const data = (await response.json()) as VllmModelsResponse;
+    const data = (await response.json()) as OpenAICompatModelsResponse;
     const models = data.data ?? [];
     if (models.length === 0) {
-      log.warn("No vLLM models found on local instance");
+      log.warn(`No ${params.label} models found on local instance`);
       return [];
     }
 
@@ -174,13 +140,13 @@ async function discoverVllmModels(
           name: modelId,
           reasoning: isReasoningModelHeuristic(modelId),
           input: ["text"],
-          cost: VLLM_DEFAULT_COST,
-          contextWindow: VLLM_DEFAULT_CONTEXT_WINDOW,
-          maxTokens: VLLM_DEFAULT_MAX_TOKENS,
+          cost: OPENAI_COMPAT_LOCAL_DEFAULT_COST,
+          contextWindow: params.contextWindow ?? OPENAI_COMPAT_LOCAL_DEFAULT_CONTEXT_WINDOW,
+          maxTokens: params.maxTokens ?? OPENAI_COMPAT_LOCAL_DEFAULT_MAX_TOKENS,
         } satisfies ModelDefinitionConfig;
       });
   } catch (error) {
-    log.warn(`Failed to discover vLLM models: ${String(error)}`);
+    log.warn(`Failed to discover ${params.label} models: ${String(error)}`);
     return [];
   }
 }
@@ -232,7 +198,28 @@ export async function buildVllmProvider(params?: {
   apiKey?: string;
 }): Promise<ProviderConfig> {
   const baseUrl = (params?.baseUrl?.trim() || VLLM_BASE_URL).replace(/\/+$/, "");
-  const models = await discoverVllmModels(baseUrl, params?.apiKey);
+  const models = await discoverOpenAICompatibleLocalModels({
+    baseUrl,
+    apiKey: params?.apiKey,
+    label: "vLLM",
+  });
+  return {
+    baseUrl,
+    api: "openai-completions",
+    models,
+  };
+}
+
+export async function buildSglangProvider(params?: {
+  baseUrl?: string;
+  apiKey?: string;
+}): Promise<ProviderConfig> {
+  const baseUrl = (params?.baseUrl?.trim() || SGLANG_BASE_URL).replace(/\/+$/, "");
+  const models = await discoverOpenAICompatibleLocalModels({
+    baseUrl,
+    apiKey: params?.apiKey,
+    label: "SGLang",
+  });
   return {
     baseUrl,
     api: "openai-completions",

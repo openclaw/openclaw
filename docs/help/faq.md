@@ -36,7 +36,7 @@ Quick answers plus deeper troubleshooting for real-world setups (local dev, VPS,
   - [How do I install OpenClaw on a VPS?](#how-do-i-install-openclaw-on-a-vps)
   - [Where are the cloud/VPS install guides?](#where-are-the-cloudvps-install-guides)
   - [Can I ask OpenClaw to update itself?](#can-i-ask-openclaw-to-update-itself)
-  - [What does the onboarding wizard actually do?](#what-does-the-onboarding-wizard-actually-do)
+  - [What does the setup wizard actually do?](#what-does-the-setup-wizard-actually-do)
   - [Do I need a Claude or OpenAI subscription to run this?](#do-i-need-a-claude-or-openai-subscription-to-run-this)
   - [Can I use Claude Max subscription without an API key](#can-i-use-claude-max-subscription-without-an-api-key)
   - [How does Anthropic "setup-token" auth work?](#how-does-anthropic-setuptoken-auth-work)
@@ -179,7 +179,7 @@ Quick answers plus deeper troubleshooting for real-world setups (local dev, VPS,
   - [I closed my terminal on Windows - how do I restart OpenClaw?](#i-closed-my-terminal-on-windows-how-do-i-restart-openclaw)
   - [The Gateway is up but replies never arrive. What should I check?](#the-gateway-is-up-but-replies-never-arrive-what-should-i-check)
   - ["Disconnected from gateway: no reason" - what now?](#disconnected-from-gateway-no-reason-what-now)
-  - [Telegram setMyCommands fails with network errors. What should I check?](#telegram-setmycommands-fails-with-network-errors-what-should-i-check)
+  - [Telegram setMyCommands fails. What should I check?](#telegram-setmycommands-fails-what-should-i-check)
   - [TUI shows no output. What should I check?](#tui-shows-no-output-what-should-i-check)
   - [How do I completely stop then start the Gateway?](#how-do-i-completely-stop-then-start-the-gateway)
   - [ELI5: `openclaw gateway restart` vs `openclaw gateway`](#eli5-openclaw-gateway-restart-vs-openclaw-gateway)
@@ -317,11 +317,11 @@ Install docs: [Install](/install), [Installer flags](/install/installer), [Updat
 
 ### What's the recommended way to install and set up OpenClaw
 
-The repo recommends running from source and using the onboarding wizard:
+The repo recommends running from source and using the setup wizard:
 
 ```bash
 curl -fsSL https://openclaw.ai/install.sh | bash
-openclaw onboard --install-daemon
+openclaw setup --wizard --install-daemon
 ```
 
 The wizard can also build UI assets automatically. After onboarding, you typically run the Gateway on port **18789**.
@@ -334,10 +334,10 @@ cd openclaw
 pnpm install
 pnpm build
 pnpm ui:build # auto-installs UI deps on first run
-openclaw onboard
+openclaw setup --wizard
 ```
 
-If you don't have a global install yet, run it via `pnpm openclaw onboard`.
+If you don't have a global install yet, run it via `pnpm openclaw setup --wizard`.
 
 ### How do I open the dashboard after onboarding
 
@@ -627,7 +627,7 @@ More detail: [Install](/install) and [Installer flags](/install/installer).
 
 ### How do I install OpenClaw on Linux
 
-Short answer: follow the Linux guide, then run the onboarding wizard.
+Short answer: follow the Linux guide, then run the setup wizard.
 
 - Linux quick path + service install: [Linux](/platforms/linux).
 - Full walkthrough: [Getting Started](/start/getting-started).
@@ -685,9 +685,9 @@ openclaw gateway restart
 
 Docs: [Update](/cli/update), [Updating](/install/updating).
 
-### What does the onboarding wizard actually do
+### What does the setup wizard actually do
 
-`openclaw onboard` is the recommended setup path. In **local mode** it walks you through:
+`openclaw setup --wizard` is the recommended setup path. In **local mode** it walks you through:
 
 - **Model/auth setup** (provider OAuth/setup-token flows and API keys supported, plus local model options such as LM Studio)
 - **Workspace** location + bootstrap files
@@ -773,7 +773,7 @@ OpenClaw supports **OpenAI Code (Codex)** via OAuth (ChatGPT sign-in). The wizar
 
 Yes. OpenClaw fully supports **OpenAI Code (Codex) subscription OAuth**.
 OpenAI explicitly allows subscription OAuth usage in external tools/workflows
-like OpenClaw. The onboarding wizard can run the OAuth flow for you.
+like OpenClaw. The setup wizard can run the OAuth flow for you.
 
 See [OAuth](/concepts/oauth), [Model providers](/concepts/model-providers), and [Wizard](/start/wizard).
 
@@ -783,7 +783,7 @@ Gemini CLI uses a **plugin auth flow**, not a client id or secret in `openclaw.j
 
 Steps:
 
-1. Enable the plugin: `openclaw plugins enable google-gemini-cli-auth`
+1. Enable the plugin: `openclaw plugins enable google`
 2. Login: `openclaw models auth login --provider google-gemini-cli --set-default`
 
 This stores OAuth tokens in auth profiles on the gateway host. Details: [Model providers](/concepts/model-providers).
@@ -844,7 +844,7 @@ without WhatsApp/Telegram.
 
 `channels.telegram.allowFrom` is **the human sender's Telegram user ID** (numeric). It is not the bot username.
 
-The onboarding wizard accepts `@username` input and resolves it to a numeric ID, but OpenClaw authorization uses numeric IDs only.
+The setup wizard accepts `@username` input and resolves it to a numeric ID, but OpenClaw authorization uses numeric IDs only.
 
 Safer (no third-party bot):
 
@@ -1358,7 +1358,8 @@ Your **workspace** (AGENTS.md, memory files, skills, etc.) is separate and confi
 These files live in the **agent workspace**, not `~/.openclaw`.
 
 - **Workspace (per agent)**: `AGENTS.md`, `SOUL.md`, `IDENTITY.md`, `USER.md`,
-  `MEMORY.md` (or `memory.md`), `memory/YYYY-MM-DD.md`, optional `HEARTBEAT.md`.
+  `MEMORY.md` (or legacy fallback `memory.md` when `MEMORY.md` is absent),
+  `memory/YYYY-MM-DD.md`, optional `HEARTBEAT.md`.
 - **State dir (`~/.openclaw`)**: config, credentials, auth profiles, sessions, logs,
   and shared skills (`~/.openclaw/skills`).
 
@@ -1900,15 +1901,15 @@ Non-interactive full reset:
 openclaw reset --scope full --yes --non-interactive
 ```
 
-Then re-run onboarding:
+Then re-run setup:
 
 ```bash
-openclaw onboard --install-daemon
+openclaw setup --wizard --install-daemon
 ```
 
 Notes:
 
-- The onboarding wizard also offers **Reset** if it sees an existing config. See [Wizard](/start/wizard).
+- The setup wizard also offers **Reset** if it sees an existing config. See [Wizard](/start/wizard).
 - If you used profiles (`--profile` / `OPENCLAW_PROFILE`), reset each state dir (defaults are `~/.openclaw-<profile>`).
 - Dev reset: `openclaw gateway --dev --reset` (dev-only; wipes dev config + credentials + sessions + workspace).
 
@@ -2084,8 +2085,21 @@ More context: [Models](/concepts/models).
 
 ### Can I use selfhosted models llamacpp vLLM Ollama
 
-Yes. If your local server exposes an OpenAI-compatible API, you can point a
-custom provider at it. Ollama is supported directly and is the easiest path.
+Yes. Ollama is the easiest path for local models.
+
+Quickest setup:
+
+1. Install Ollama from `https://ollama.com/download`
+2. Pull a local model such as `ollama pull glm-4.7-flash`
+3. If you want Ollama Cloud too, run `ollama signin`
+4. Run `openclaw setup --wizard` and choose `Ollama`
+5. Pick `Local` or `Cloud + Local`
+
+Notes:
+
+- `Cloud + Local` gives you Ollama Cloud models plus your local Ollama models
+- cloud models such as `kimi-k2.5:cloud` do not need a local pull
+- for manual switching, use `openclaw models list` and `openclaw models set ollama/<model>`
 
 Security note: smaller or heavily quantized models are more vulnerable to prompt
 injection. We strongly recommend **large models** for any bot that can use tools.
@@ -2697,7 +2711,7 @@ openclaw logs --follow
 
 Docs: [Dashboard](/web/dashboard), [Remote access](/gateway/remote), [Troubleshooting](/gateway/troubleshooting).
 
-### Telegram setMyCommands fails with network errors What should I check
+### Telegram setMyCommands fails What should I check
 
 Start with logs and channel status:
 
@@ -2706,7 +2720,11 @@ openclaw channels status
 openclaw channels logs --channel telegram
 ```
 
-If you are on a VPS or behind a proxy, confirm outbound HTTPS is allowed and DNS works.
+Then match the error:
+
+- `BOT_COMMANDS_TOO_MUCH`: the Telegram menu has too many entries. OpenClaw already trims to the Telegram limit and retries with fewer commands, but some menu entries still need to be dropped. Reduce plugin/skill/custom commands, or disable `channels.telegram.commands.native` if you do not need the menu.
+- `TypeError: fetch failed`, `Network request for 'setMyCommands' failed!`, or similar network errors: if you are on a VPS or behind a proxy, confirm outbound HTTPS is allowed and DNS works for `api.telegram.org`.
+
 If the Gateway is remote, make sure you are looking at logs on the Gateway host.
 
 Docs: [Telegram](/channels/telegram), [Channel troubleshooting](/channels/troubleshooting).

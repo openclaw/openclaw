@@ -11,7 +11,7 @@ title: "Tests"
 
 - `pnpm test:force`: Kills any lingering gateway process holding the default control port, then runs the full Vitest suite with an isolated gateway port so server tests don’t collide with a running instance. Use this when a prior gateway run left port 18789 occupied.
 - `pnpm test:coverage`: Runs the unit suite with V8 coverage (via `vitest.unit.config.ts`). Global thresholds are 70% lines/branches/functions/statements. Coverage excludes integration-heavy entrypoints (CLI wiring, gateway/telegram bridges, webchat static server) to keep the target focused on unit-testable logic.
-- `pnpm test` on Node 24+: OpenClaw auto-disables Vitest `vmForks` and uses `forks` to avoid `ERR_VM_MODULE_LINK_FAILURE` / `module is already linked`. You can force behavior with `OPENCLAW_TEST_VM_FORKS=0|1`.
+- `pnpm test` on Node 22, 23, and 24 uses Vitest `vmForks` by default for faster startup. Node 25+ falls back to `forks` until re-validated. You can force behavior with `OPENCLAW_TEST_VM_FORKS=0|1`.
 - `pnpm test`: runs the fast core unit lane by default for quick local feedback.
 - `pnpm test:channels`: runs channel-heavy suites.
 - `pnpm test:extensions`: runs extension/plugin suites.
@@ -81,7 +81,7 @@ This script drives the interactive wizard via a pseudo-tty, verifies config/work
 
 ## QR import smoke (Docker)
 
-Ensures `qrcode-terminal` loads under Node 22+ in Docker:
+Ensures `qrcode-terminal` loads under the supported Docker Node runtimes (Node 24 default, Node 22 compatible):
 
 ```bash
 pnpm test:docker:qr

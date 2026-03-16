@@ -123,21 +123,25 @@ async function readInstalledPackageVersion(dir: string): Promise<string | undefi
   }
 }
 
-function pathsEqual(left?: string, right?: string): boolean {
+function pathsEqual(
+  left: string | undefined,
+  right: string | undefined,
+  env: NodeJS.ProcessEnv = process.env,
+): boolean {
   if (!left || !right) {
     return false;
   }
-  return resolveUserPath(left) === resolveUserPath(right);
+  return resolveUserPath(left, env) === resolveUserPath(right, env);
 }
 
-function buildLoadPathHelpers(existing: string[]) {
+function buildLoadPathHelpers(existing: string[], env: NodeJS.ProcessEnv = process.env) {
   let paths = [...existing];
-  const resolveSet = () => new Set(paths.map((entry) => resolveUserPath(entry)));
+  const resolveSet = () => new Set(paths.map((entry) => resolveUserPath(entry, env)));
   let resolved = resolveSet();
   let changed = false;
 
   const addPath = (value: string) => {
-    const normalized = resolveUserPath(value);
+    const normalized = resolveUserPath(value, env);
     if (resolved.has(normalized)) {
       return;
     }
@@ -147,11 +151,11 @@ function buildLoadPathHelpers(existing: string[]) {
   };
 
   const removePath = (value: string) => {
-    const normalized = resolveUserPath(value);
+    const normalized = resolveUserPath(value, env);
     if (!resolved.has(normalized)) {
       return;
     }
-    paths = paths.filter((entry) => resolveUserPath(entry) !== normalized);
+    paths = paths.filter((entry) => resolveUserPath(entry, env) !== normalized);
     resolved = resolveSet();
     changed = true;
   };
@@ -164,6 +168,79 @@ function buildLoadPathHelpers(existing: string[]) {
     },
     get paths() {
       return paths;
+    },
+  };
+}
+
+function replacePluginIdInList(
+  entries: string[] | undefined,
+  fromId: string,
+  toId: string,
+): string[] | undefined {
+  if (!entries || entries.length === 0 || fromId === toId) {
+    return entries;
+  }
+  const next: string[] = [];
+  for (const entry of entries) {
+    const value = entry === fromId ? toId : entry;
+    if (!next.includes(value)) {
+      next.push(value);
+    }
+  }
+  return next;
+}
+
+function migratePluginConfigId(cfg: OpenClawConfig, fromId: string, toId: string): OpenClawConfig {
+  if (fromId === toId) {
+    return cfg;
+  }
+
+  const installs = cfg.plugins?.installs;
+  const entries = cfg.plugins?.entries;
+  const slots = cfg.plugins?.slots;
+  const allow = replacePluginIdInList(cfg.plugins?.allow, fromId, toId);
+  const deny = replacePluginIdInList(cfg.plugins?.deny, fromId, toId);
+
+  const nextInstalls = installs ? { ...installs } : undefined;
+  if (nextInstalls && fromId in nextInstalls) {
+    const record = nextInstalls[fromId];
+    if (record && !(toId in nextInstalls)) {
+      nextInstalls[toId] = record;
+    }
+    delete nextInstalls[fromId];
+  }
+
+  const nextEntries = entries ? { ...entries } : undefined;
+  if (nextEntries && fromId in nextEntries) {
+    const entry = nextEntries[fromId];
+    if (entry) {
+      nextEntries[toId] = nextEntries[toId]
+        ? {
+            ...entry,
+            ...nextEntries[toId],
+          }
+        : entry;
+    }
+    delete nextEntries[fromId];
+  }
+
+  const nextSlots =
+    slots?.memory === fromId
+      ? {
+          ...slots,
+          memory: toId,
+        }
+      : slots;
+
+  return {
+    ...cfg,
+    plugins: {
+      ...cfg.plugins,
+      allow,
+      deny,
+      entries: nextEntries,
+      installs: nextInstalls,
+      slots: nextSlots,
     },
   };
 }
@@ -358,9 +435,14 @@ export async function updateNpmInstalledPlugins(params: {
       continue;
     }
 
+    const resolvedPluginId = result.pluginId;
+    if (resolvedPluginId !== pluginId) {
+      next = migratePluginConfigId(next, pluginId, resolvedPluginId);
+    }
+
     const nextVersion = result.version ?? (await readInstalledPackageVersion(result.targetDir));
     next = recordPluginInstall(next, {
-      pluginId,
+      pluginId: resolvedPluginId,
       source: "npm",
       spec: record.spec,
       installPath: result.targetDir,
@@ -397,21 +479,26 @@ export async function syncPluginsForUpdateChannel(params: {
   config: OpenClawConfig;
   channel: UpdateChannel;
   workspaceDir?: string;
+  env?: NodeJS.ProcessEnv;
   logger?: PluginUpdateLogger;
 }): Promise<PluginChannelSyncResult> {
+  const env = params.env ?? process.env;
   const summary: PluginChannelSyncSummary = {
     switchedToBundled: [],
     switchedToNpm: [],
     warnings: [],
     errors: [],
   };
-  const bundled = resolveBundledPluginSources({ workspaceDir: params.workspaceDir });
+  const bundled = resolveBundledPluginSources({
+    workspaceDir: params.workspaceDir,
+    env,
+  });
   if (bundled.size === 0) {
     return { config: params.config, changed: false, summary };
   }
 
   let next = params.config;
-  const loadHelpers = buildLoadPathHelpers(next.plugins?.load?.paths ?? []);
+  const loadHelpers = buildLoadPathHelpers(next.plugins?.load?.paths ?? [], env);
   const installs = next.plugins?.installs ?? {};
   let changed = false;
 
@@ -425,7 +512,7 @@ export async function syncPluginsForUpdateChannel(params: {
       loadHelpers.addPath(bundledInfo.localPath);
 
       const alreadyBundled =
-        record.source === "path" && pathsEqual(record.sourcePath, bundledInfo.localPath);
+        record.source === "path" && pathsEqual(record.sourcePath, bundledInfo.localPath, env);
       if (alreadyBundled) {
         continue;
       }
@@ -456,7 +543,7 @@ export async function syncPluginsForUpdateChannel(params: {
       if (record.source !== "path") {
         continue;
       }
-      if (!pathsEqual(record.sourcePath, bundledInfo.localPath)) {
+      if (!pathsEqual(record.sourcePath, bundledInfo.localPath, env)) {
         continue;
       }
       // Keep explicit bundled installs on release channels. Replacing them with
@@ -464,8 +551,8 @@ export async function syncPluginsForUpdateChannel(params: {
       loadHelpers.addPath(bundledInfo.localPath);
       const alreadyBundled =
         record.source === "path" &&
-        pathsEqual(record.sourcePath, bundledInfo.localPath) &&
-        pathsEqual(record.installPath, bundledInfo.localPath);
+        pathsEqual(record.sourcePath, bundledInfo.localPath, env) &&
+        pathsEqual(record.installPath, bundledInfo.localPath, env);
       if (alreadyBundled) {
         continue;
       }

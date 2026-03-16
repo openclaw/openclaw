@@ -555,7 +555,7 @@ describe("runWithModelFallback", () => {
       usageStat: {
         cooldownUntil: Date.now() + 5 * 60_000,
       },
-      expectedReason: "rate_limit",
+      expectedReason: "unknown",
     });
   });
 

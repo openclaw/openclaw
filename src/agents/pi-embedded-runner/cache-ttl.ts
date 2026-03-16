@@ -1,3 +1,5 @@
+import { resolveProviderCacheTtlEligibility } from "../../plugins/provider-runtime.js";
+
 type CustomEntryLike = { type?: unknown; customType?: unknown; data?: unknown };
 
 export const CACHE_TTL_CUSTOM_TYPE = "openclaw.cache-ttl";
@@ -8,28 +10,30 @@ export type CacheTtlEntryData = {
   modelId?: string;
 };
 
-const CACHE_TTL_NATIVE_PROVIDERS = new Set(["anthropic", "moonshot", "zai"]);
-const OPENROUTER_CACHE_TTL_MODEL_PREFIXES = [
-  "anthropic/",
-  "moonshot/",
-  "moonshotai/",
-  "zai/",
-] as const;
-
-function isOpenRouterCacheTtlModel(modelId: string): boolean {
-  return OPENROUTER_CACHE_TTL_MODEL_PREFIXES.some((prefix) => modelId.startsWith(prefix));
-}
+const CACHE_TTL_NATIVE_PROVIDERS = new Set(["moonshot", "zai"]);
 
 export function isCacheTtlEligibleProvider(provider: string, modelId: string): boolean {
   const normalizedProvider = provider.toLowerCase();
   const normalizedModelId = modelId.toLowerCase();
-  if (CACHE_TTL_NATIVE_PROVIDERS.has(normalizedProvider)) {
-    return true;
-  }
-  if (normalizedProvider === "openrouter" && isOpenRouterCacheTtlModel(normalizedModelId)) {
-    return true;
+  const pluginEligibility = resolveProviderCacheTtlEligibility({
+    provider: normalizedProvider,
+    context: {
+      provider: normalizedProvider,
+      modelId: normalizedModelId,
+    },
+  });
+  if (pluginEligibility !== undefined) {
+    return pluginEligibility;
   }
   if (normalizedProvider === "kilocode" && normalizedModelId.startsWith("anthropic/")) {
+    return true;
+  }
+  // Legacy fallback for tests / plugin-disabled contexts. The Anthropic plugin
+  // owns this policy in normal runtime.
+  if (normalizedProvider === "anthropic") {
+    return true;
+  }
+  if (CACHE_TTL_NATIVE_PROVIDERS.has(normalizedProvider)) {
     return true;
   }
   return false;

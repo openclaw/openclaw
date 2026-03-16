@@ -6,6 +6,7 @@ enum RemoteGatewayAuthIssue: Equatable {
     case tokenRequired
     case tokenMismatch
     case gatewayTokenNotConfigured
+    case setupCodeExpired
     case passwordRequired
     case pairingRequired
 
@@ -20,6 +21,8 @@ enum RemoteGatewayAuthIssue: Equatable {
             self = .tokenMismatch
         case .authTokenNotConfigured:
             self = .gatewayTokenNotConfigured
+        case .authBootstrapTokenInvalid:
+            self = .setupCodeExpired
         case .authPasswordMissing, .authPasswordMismatch, .authPasswordNotConfigured:
             self = .passwordRequired
         case .pairingRequired:
@@ -33,7 +36,7 @@ enum RemoteGatewayAuthIssue: Equatable {
         switch self {
         case .tokenRequired, .tokenMismatch:
             true
-        case .gatewayTokenNotConfigured, .passwordRequired, .pairingRequired:
+        case .gatewayTokenNotConfigured, .setupCodeExpired, .passwordRequired, .pairingRequired:
             false
         }
     }
@@ -46,6 +49,8 @@ enum RemoteGatewayAuthIssue: Equatable {
             "That token did not match the gateway"
         case .gatewayTokenNotConfigured:
             "This gateway host needs token setup"
+        case .setupCodeExpired:
+            "This setup code is no longer valid"
         case .passwordRequired:
             "This gateway is using unsupported auth"
         case .pairingRequired:
@@ -61,6 +66,8 @@ enum RemoteGatewayAuthIssue: Equatable {
             "Check `gateway.auth.token` or `OPENCLAW_GATEWAY_TOKEN` on the gateway host and try again."
         case .gatewayTokenNotConfigured:
             "This gateway is set to token auth, but no `gateway.auth.token` is configured on the gateway host. If the gateway uses an environment variable instead, set `OPENCLAW_GATEWAY_TOKEN` before starting the gateway."
+        case .setupCodeExpired:
+            "Scan or paste a fresh setup code from an already-paired OpenClaw client, then try again."
         case .passwordRequired:
             "This onboarding flow does not support password auth yet. Reconfigure the gateway to use token auth, then retry."
         case .pairingRequired:
@@ -72,6 +79,8 @@ enum RemoteGatewayAuthIssue: Equatable {
         switch self {
         case .tokenRequired, .gatewayTokenNotConfigured:
             "No token yet? Generate one on the gateway host with `openclaw doctor --generate-gateway-token`, then set it as `gateway.auth.token`."
+        case .setupCodeExpired:
+            nil
         case .pairingRequired:
             "If you do not have another paired OpenClaw client yet, approve the pending request on the gateway host with `openclaw devices approve`."
         case .tokenMismatch, .passwordRequired:
@@ -87,6 +96,8 @@ enum RemoteGatewayAuthIssue: Equatable {
             "Gateway token mismatch. Check gateway.auth.token or OPENCLAW_GATEWAY_TOKEN on the gateway host."
         case .gatewayTokenNotConfigured:
             "This gateway has token auth enabled, but no gateway.auth.token is configured on the host."
+        case .setupCodeExpired:
+            "Setup code expired or already used. Scan a fresh setup code, then try again."
         case .passwordRequired:
             "This gateway uses password auth. Remote onboarding on macOS cannot collect gateway passwords yet."
         case .pairingRequired:
@@ -108,6 +119,8 @@ struct RemoteGatewayProbeSuccess: Equatable {
         switch self.authSource {
         case .some(.deviceToken):
             "Connected via paired device"
+        case .some(.bootstrapToken):
+            "Connected with setup code"
         case .some(.sharedToken):
             "Connected with gateway token"
         case .some(.password):
@@ -121,6 +134,8 @@ struct RemoteGatewayProbeSuccess: Equatable {
         switch self.authSource {
         case .some(.deviceToken):
             "This Mac used a stored device token. New or unpaired devices may still need the gateway token."
+        case .some(.bootstrapToken):
+            "This Mac is still using the temporary setup code. Approve pairing to finish provisioning device-scoped auth."
         case .some(.sharedToken), .some(.password), .some(GatewayAuthSource.none), nil:
             nil
         }
