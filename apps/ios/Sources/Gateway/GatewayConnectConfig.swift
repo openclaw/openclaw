@@ -14,6 +14,7 @@ struct GatewayConnectConfig: Sendable {
     let stableID: String
     let tls: GatewayTLSParams?
     let token: String?
+    let bootstrapToken: String?
     let password: String?
     let nodeOptions: GatewayConnectOptions
 
