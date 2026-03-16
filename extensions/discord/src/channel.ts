@@ -8,6 +8,7 @@ import {
   createScopedAccountConfigAccessors,
   formatAllowFromLowercase,
 } from "openclaw/plugin-sdk/compat";
+import { resolveOutboundSendDep } from "openclaw/plugin-sdk/compat";
 import {
   buildAgentSessionKey,
   resolveThreadSessionKeys,
@@ -31,7 +32,6 @@ import {
   type ChannelPlugin,
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/discord";
-import { resolveOutboundSendDep } from "../../../src/infra/outbound/send-deps.js";
 import { normalizeMessageChannel } from "../../../src/utils/message-channel.js";
 import { inspectDiscordAccount } from "./account-inspect.js";
 import {

@@ -4,6 +4,7 @@ import {
   createScopedAccountConfigAccessors,
   collectAllowlistProviderRestrictSendersWarnings,
 } from "openclaw/plugin-sdk/compat";
+import { resolveOutboundSendDep } from "openclaw/plugin-sdk/compat";
 import { buildAgentSessionKey, type RoutePeer } from "openclaw/plugin-sdk/core";
 import {
   buildBaseAccountStatusSnapshot,
@@ -26,7 +27,6 @@ import {
 } from "openclaw/plugin-sdk/signal";
 import { resolveTextChunkLimit } from "../../../src/auto-reply/chunk.js";
 import { resolveMarkdownTableMode } from "../../../src/config/markdown-tables.js";
-import { resolveOutboundSendDep } from "../../../src/infra/outbound/send-deps.js";
 import {
   listSignalAccountIds,
   resolveDefaultSignalAccountId,

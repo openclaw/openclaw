@@ -7,6 +7,7 @@ import {
   createScopedDmSecurityResolver,
   formatAllowFromLowercase,
 } from "openclaw/plugin-sdk/compat";
+import { type OutboundSendDeps, resolveOutboundSendDep } from "openclaw/plugin-sdk/compat";
 import {
   buildAgentSessionKey,
   resolveThreadSessionKeys,
@@ -34,10 +35,6 @@ import {
 import { parseTelegramTopicConversation } from "../../../src/acp/conversation-id.js";
 import { resolveExecApprovalCommandDisplay } from "../../../src/infra/exec-approval-command-display.js";
 import { buildExecApprovalPendingReplyPayload } from "../../../src/infra/exec-approval-reply.js";
-import {
-  type OutboundSendDeps,
-  resolveOutboundSendDep,
-} from "../../../src/infra/outbound/send-deps.js";
 import { normalizeMessageChannel } from "../../../src/utils/message-channel.js";
 import { inspectTelegramAccount } from "./account-inspect.js";
 import {

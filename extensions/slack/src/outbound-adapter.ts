@@ -1,3 +1,4 @@
+import { resolveOutboundSendDep } from "openclaw/plugin-sdk/compat";
 import {
   resolvePayloadMediaUrls,
   sendPayloadMediaSequence,
@@ -5,7 +6,6 @@ import {
 } from "../../../src/channels/plugins/outbound/direct-text-media.js";
 import type { ChannelOutboundAdapter } from "../../../src/channels/plugins/types.js";
 import type { OutboundIdentity } from "../../../src/infra/outbound/identity.js";
-import { resolveOutboundSendDep } from "../../../src/infra/outbound/send-deps.js";
 import {
   resolveInteractiveTextFallback,
   type InteractiveReply,
