@@ -5,14 +5,6 @@ vi.mock("./webhook-handler.js", () => ({
   createWebhookHandler: vi.fn(() => vi.fn()),
 }));
 
-vi.mock("zod", () => ({
-  z: {
-    object: vi.fn(() => ({
-      passthrough: vi.fn(() => ({ _type: "zod-schema" })),
-    })),
-  },
-}));
-
 const { createSynologyChatPlugin } = await import("./channel.js");
 
 describe("createSynologyChatPlugin", () => {

@@ -35,6 +35,7 @@ const opencodePlugin = {
           flagName: "--opencode-zen-api-key",
           envVar: "OPENCODE_API_KEY",
           promptMessage: "Enter OpenCode API key",
+          profileIds: ["opencode:default", "opencode-go:default"],
           defaultModel: OPENCODE_ZEN_DEFAULT_MODEL,
           expectedProviders: ["opencode", "opencode-go"],
           applyConfig: (cfg) => applyOpencodeZenConfig(cfg),

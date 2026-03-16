@@ -32,7 +32,12 @@ export const waitForever = library.waitForever;
 
 // Legacy direct file entrypoint only. Package root exports now live in library.ts.
 export async function runLegacyCliEntry(argv: string[] = process.argv): Promise<void> {
-  const { runCli } = await import("./cli/run-main.js");
+  const [{ installGaxiosFetchCompat }, { runCli }] = await Promise.all([
+    import("./infra/gaxios-fetch-compat.js"),
+    import("./cli/run-main.js"),
+  ]);
+
+  installGaxiosFetchCompat();
   await runCli(argv);
 }
 

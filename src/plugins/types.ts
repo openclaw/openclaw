@@ -107,6 +107,13 @@ export type ProviderAuthKind = "oauth" | "api_key" | "token" | "device_code" | "
 
 export type ProviderAuthResult = {
   profiles: Array<{ profileId: string; credential: AuthProfileCredential }>;
+  /**
+   * Optional config patch to merge after credentials are written.
+   *
+   * Use this for provider-owned onboarding defaults such as
+   * `models.providers.<id>` entries, default aliases, or agent model helpers.
+   * The caller still persists auth-profile bindings separately.
+   */
   configPatch?: Partial<OpenClawConfig>;
   defaultModel?: string;
   notes?: string[];
@@ -840,6 +847,10 @@ export type WebSearchProviderPlugin = {
   getCredentialValue: (searchConfig?: Record<string, unknown>) => unknown;
   setCredentialValue: (searchConfigTarget: Record<string, unknown>, value: unknown) => void;
   createTool: (ctx: WebSearchProviderContext) => WebSearchProviderToolDefinition | null;
+};
+
+export type PluginWebSearchProviderEntry = WebSearchProviderPlugin & {
+  pluginId: string;
 };
 
 export type OpenClawPluginGatewayMethod = {

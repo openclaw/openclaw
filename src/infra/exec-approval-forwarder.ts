@@ -22,7 +22,6 @@ import type {
   ExecApprovalRequest,
   ExecApprovalResolved,
 } from "./exec-approvals.js";
-import { resolveBuiltInExecApprovalAdapter } from "./outbound/built-in-channel-adapters.js";
 import { deliverOutboundPayloads } from "./outbound/deliver.js";
 
 const log = createSubsystemLogger("gateway/exec-approvals");
@@ -119,8 +118,7 @@ function shouldSkipForwardingFallback(params: {
   if (!channel) {
     return false;
   }
-  const adapter =
-    getChannelPlugin(channel)?.execApprovals ?? resolveBuiltInExecApprovalAdapter(channel);
+  const adapter = getChannelPlugin(channel)?.execApprovals;
   return (
     adapter?.shouldSuppressForwardingFallback?.({
       cfg: params.cfg,
@@ -278,9 +276,7 @@ function buildRequestPayloadForTarget(
 ): ReplyPayload {
   const channel = normalizeMessageChannel(target.channel) ?? target.channel;
   const pluginPayload = channel
-    ? (
-        getChannelPlugin(channel)?.execApprovals ?? resolveBuiltInExecApprovalAdapter(channel)
-      )?.buildPendingPayload?.({
+    ? getChannelPlugin(channel)?.execApprovals?.buildPendingPayload?.({
         cfg,
         request,
         target,
@@ -415,9 +411,7 @@ export function createExecApprovalForwarder(
         if (!channel) {
           return;
         }
-        await (
-          getChannelPlugin(channel)?.execApprovals ?? resolveBuiltInExecApprovalAdapter(channel)
-        )?.beforeDeliverPending?.({
+        await getChannelPlugin(channel)?.execApprovals?.beforeDeliverPending?.({
           cfg,
           target,
           payload,
