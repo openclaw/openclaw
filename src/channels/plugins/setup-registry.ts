@@ -1,3 +1,12 @@
+import { discordSetupPlugin } from "../../../extensions/discord/src/channel.setup.js";
+import { googlechatPlugin } from "../../../extensions/googlechat/src/channel.js";
+import { imessageSetupPlugin } from "../../../extensions/imessage/src/channel.setup.js";
+import { ircPlugin } from "../../../extensions/irc/src/channel.js";
+import { lineSetupPlugin } from "../../../extensions/line/src/channel.setup.js";
+import { signalSetupPlugin } from "../../../extensions/signal/src/channel.setup.js";
+import { slackSetupPlugin } from "../../../extensions/slack/src/channel.setup.js";
+import { telegramSetupPlugin } from "../../../extensions/telegram/src/channel.setup.js";
+import { whatsappSetupPlugin } from "../../../extensions/whatsapp/src/channel.setup.js";
 import {
   getActivePluginRegistryVersion,
   requireActivePluginRegistry,
@@ -19,6 +28,18 @@ const EMPTY_CHANNEL_SETUP_CACHE: CachedChannelSetupPlugins = {
 
 let cachedChannelSetupPlugins = EMPTY_CHANNEL_SETUP_CACHE;
 
+const BUNDLED_CHANNEL_SETUP_PLUGINS = [
+  telegramSetupPlugin,
+  whatsappSetupPlugin,
+  discordSetupPlugin,
+  ircPlugin,
+  googlechatPlugin,
+  slackSetupPlugin,
+  signalSetupPlugin,
+  imessageSetupPlugin,
+  lineSetupPlugin,
+] as ChannelPlugin[];
+
 function dedupeSetupPlugins(plugins: ChannelPlugin[]): ChannelPlugin[] {
   const seen = new Set<string>();
   const resolved: ChannelPlugin[] = [];
@@ -33,17 +54,8 @@ function dedupeSetupPlugins(plugins: ChannelPlugin[]): ChannelPlugin[] {
   return resolved;
 }
 
-function resolveCachedChannelSetupPlugins(): CachedChannelSetupPlugins {
-  const registry = requireActivePluginRegistry();
-  const registryVersion = getActivePluginRegistryVersion();
-  const cached = cachedChannelSetupPlugins;
-  if (cached.registryVersion === registryVersion) {
-    return cached;
-  }
-
-  const sorted = dedupeSetupPlugins(
-    (registry.channelSetups ?? []).map((entry) => entry.plugin),
-  ).toSorted((a, b) => {
+function sortChannelSetupPlugins(plugins: ChannelPlugin[]): ChannelPlugin[] {
+  return dedupeSetupPlugins(plugins).toSorted((a, b) => {
     const indexA = CHAT_CHANNEL_ORDER.indexOf(a.id as ChatChannelId);
     const indexB = CHAT_CHANNEL_ORDER.indexOf(b.id as ChatChannelId);
     const orderA = a.meta.order ?? (indexA === -1 ? 999 : indexA);
@@ -53,6 +65,20 @@ function resolveCachedChannelSetupPlugins(): CachedChannelSetupPlugins {
     }
     return a.id.localeCompare(b.id);
   });
+}
+
+function resolveCachedChannelSetupPlugins(): CachedChannelSetupPlugins {
+  const registry = requireActivePluginRegistry();
+  const registryVersion = getActivePluginRegistryVersion();
+  const cached = cachedChannelSetupPlugins;
+  if (cached.registryVersion === registryVersion) {
+    return cached;
+  }
+
+  const registryPlugins = (registry.channelSetups ?? []).map((entry) => entry.plugin);
+  const sorted = sortChannelSetupPlugins(
+    registryPlugins.length > 0 ? registryPlugins : BUNDLED_CHANNEL_SETUP_PLUGINS,
+  );
   const byId = new Map<string, ChannelPlugin>();
   for (const plugin of sorted) {
     byId.set(plugin.id, plugin);

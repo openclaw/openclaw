@@ -5,7 +5,12 @@ import {
 import { normalizeModelCompat } from "../../src/agents/model-compat.js";
 import { normalizeProviderId } from "../../src/agents/model-selection.js";
 import type { ProviderPlugin } from "../../src/plugins/types.js";
-import { cloneFirstTemplateModel, findCatalogTemplate, isOpenAIApiBaseUrl } from "./shared.js";
+import {
+  cloneFirstTemplateModel,
+  findCatalogTemplate,
+  isOpenAIApiBaseUrl,
+  matchesExactOrPrefix,
+} from "./shared.js";
 
 const PROVIDER_ID = "openai";
 const OPENAI_GPT_54_MODEL_ID = "gpt-5.4";
@@ -14,6 +19,8 @@ const OPENAI_GPT_54_CONTEXT_TOKENS = 1_050_000;
 const OPENAI_GPT_54_MAX_TOKENS = 128_000;
 const OPENAI_GPT_54_TEMPLATE_MODEL_IDS = ["gpt-5.2"] as const;
 const OPENAI_GPT_54_PRO_TEMPLATE_MODEL_IDS = ["gpt-5.2-pro", "gpt-5.2"] as const;
+const OPENAI_XHIGH_MODEL_IDS = ["gpt-5.4", "gpt-5.4-pro", "gpt-5.2"] as const;
+const OPENAI_MODERN_MODEL_IDS = ["gpt-5.4", "gpt-5.4-pro", "gpt-5.2", "gpt-5.0"] as const;
 const OPENAI_DIRECT_SPARK_MODEL_ID = "gpt-5.3-codex-spark";
 const SUPPRESSED_SPARK_PROVIDERS = new Set(["openai", "azure-openai-responses"]);
 
@@ -93,6 +100,8 @@ export function buildOpenAIProvider(): ProviderPlugin {
     capabilities: {
       providerFamily: "openai",
     },
+    supportsXHighThinking: ({ modelId }) => matchesExactOrPrefix(modelId, OPENAI_XHIGH_MODEL_IDS),
+    isModernModelRef: ({ modelId }) => matchesExactOrPrefix(modelId, OPENAI_MODERN_MODEL_IDS),
     buildMissingAuthMessage: (ctx) => {
       if (ctx.provider !== PROVIDER_ID || ctx.listProfileIds("openai-codex").length === 0) {
         return undefined;

@@ -8,16 +8,14 @@ import { listProfilesForProvider } from "../../src/agents/auth-profiles/profiles
 import { ensureAuthProfileStore } from "../../src/agents/auth-profiles/store.js";
 import { normalizeModelCompat } from "../../src/agents/model-compat.js";
 import { coerceSecretRef } from "../../src/config/types.secrets.js";
-import { fetchCopilotUsage } from "../../src/infra/provider-usage.fetch.js";
-import {
-  DEFAULT_COPILOT_API_BASE_URL,
-  resolveCopilotApiToken,
-} from "../../src/providers/github-copilot-token.js";
+import { DEFAULT_COPILOT_API_BASE_URL, resolveCopilotApiToken } from "./token.js";
+import { fetchCopilotUsage } from "./usage.js";
 
 const PROVIDER_ID = "github-copilot";
 const COPILOT_ENV_VARS = ["COPILOT_GITHUB_TOKEN", "GH_TOKEN", "GITHUB_TOKEN"];
 const CODEX_GPT_53_MODEL_ID = "gpt-5.3-codex";
 const CODEX_TEMPLATE_MODEL_IDS = ["gpt-5.2-codex"] as const;
+const COPILOT_XHIGH_MODEL_IDS = ["gpt-5.2", "gpt-5.2-codex"] as const;
 
 function resolveFirstGithubToken(params: { agentDir?: string; env: NodeJS.ProcessEnv }): {
   githubToken: string;
@@ -120,6 +118,8 @@ const githubCopilotPlugin = {
       capabilities: {
         dropThinkingBlockModelHints: ["claude"],
       },
+      supportsXHighThinking: ({ modelId }) =>
+        COPILOT_XHIGH_MODEL_IDS.includes(modelId.trim().toLowerCase() as never),
       prepareRuntimeAuth: async (ctx) => {
         const token = await resolveCopilotApiToken({
           githubToken: ctx.apiKey,

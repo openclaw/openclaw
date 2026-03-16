@@ -316,9 +316,12 @@ export type PresenceEntry = {
 };
 
 export type GatewaySessionsDefaults = {
+  modelProvider: string | null;
   model: string | null;
   contextTokens: number | null;
 };
+
+export type ChatModelOverride = import("./chat-model-ref.ts").ChatModelOverride;
 
 export type GatewayAgentRow = SharedGatewayAgentRow;
 
@@ -402,7 +405,12 @@ export type SessionsPatchResult = SessionsPatchResultBase<{
   verboseLevel?: string;
   reasoningLevel?: string;
   elevatedLevel?: string;
-}>;
+}> & {
+  resolved?: {
+    modelProvider?: string;
+    model?: string;
+  };
+};
 
 export type {
   CostUsageDailyEntry,
