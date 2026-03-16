@@ -1,7 +1,7 @@
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { listChannelPluginCatalogEntries } from "../channels/plugins/catalog.js";
 import { resolveChannelDefaultAccountId } from "../channels/plugins/helpers.js";
-import type { ChannelOnboardingSetupPlugin } from "../channels/plugins/setup-flow-types.js";
+import type { ChannelSetupPlugin } from "../channels/plugins/setup-flow-types.js";
 import {
   getChannelSetupPlugin,
   listChannelSetupPlugins,
@@ -91,7 +91,7 @@ async function promptRemovalAccountId(params: {
   prompter: WizardPrompter;
   label: string;
   channel: ChannelChoice;
-  plugin?: ChannelOnboardingSetupPlugin;
+  plugin?: ChannelSetupPlugin;
 }): Promise<string> {
   const { cfg, prompter, label, channel } = params;
   const plugin = params.plugin ?? getChannelSetupPlugin(channel);
@@ -118,7 +118,7 @@ async function collectChannelStatus(params: {
   cfg: OpenClawConfig;
   options?: SetupChannelsOptions;
   accountOverrides: Partial<Record<ChannelChoice, string>>;
-  installedPlugins?: ChannelOnboardingSetupPlugin[];
+  installedPlugins?: ChannelSetupPlugin[];
   resolveAdapter?: (channel: ChannelChoice) => ChannelSetupFlowAdapter | undefined;
 }): Promise<ChannelStatusSummary> {
   const installedPlugins = params.installedPlugins ?? listChannelSetupPlugins();
@@ -347,19 +347,17 @@ export async function setupChannels(
   const accountOverrides: Partial<Record<ChannelChoice, string>> = {
     ...options?.accountIds,
   };
-  const scopedPluginsById = new Map<ChannelChoice, ChannelOnboardingSetupPlugin>();
+  const scopedPluginsById = new Map<ChannelChoice, ChannelSetupPlugin>();
   const resolveWorkspaceDir = () => resolveAgentWorkspaceDir(next, resolveDefaultAgentId(next));
-  const rememberScopedPlugin = (plugin: ChannelOnboardingSetupPlugin) => {
+  const rememberScopedPlugin = (plugin: ChannelSetupPlugin) => {
     const channel = plugin.id;
     scopedPluginsById.set(channel, plugin);
     options?.onResolvedPlugin?.(channel, plugin);
   };
-  const getVisibleChannelPlugin = (
-    channel: ChannelChoice,
-  ): ChannelOnboardingSetupPlugin | undefined =>
+  const getVisibleChannelPlugin = (channel: ChannelChoice): ChannelSetupPlugin | undefined =>
     scopedPluginsById.get(channel) ?? getChannelSetupPlugin(channel);
-  const listVisibleInstalledPlugins = (): ChannelOnboardingSetupPlugin[] => {
-    const merged = new Map<string, ChannelOnboardingSetupPlugin>();
+  const listVisibleInstalledPlugins = (): ChannelSetupPlugin[] => {
+    const merged = new Map<string, ChannelSetupPlugin>();
     for (const plugin of listChannelSetupPlugins()) {
       merged.set(plugin.id, plugin);
     }
@@ -371,7 +369,7 @@ export async function setupChannels(
   const loadScopedChannelPlugin = async (
     channel: ChannelChoice,
     pluginId?: string,
-  ): Promise<ChannelOnboardingSetupPlugin | undefined> => {
+  ): Promise<ChannelSetupPlugin | undefined> => {
     const existing = getVisibleChannelPlugin(channel);
     if (existing) {
       return existing;

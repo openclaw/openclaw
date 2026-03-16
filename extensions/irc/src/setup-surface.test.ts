@@ -33,7 +33,7 @@ const ircConfigureAdapter = buildChannelSetupFlowAdapterFromSetupWizard({
 });
 
 describe("irc setup wizard", () => {
-  it("configures host and nick via onboarding prompts", async () => {
+  it("configures host and nick via setup prompts", async () => {
     const prompter = createPrompter({
       text: vi.fn(async ({ message }: { message: string }) => {
         if (message === "IRC server host") {
