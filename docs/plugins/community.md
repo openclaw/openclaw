@@ -45,6 +45,11 @@ Use this format when adding entries:
 
 ## Listed plugins
 
+- **Experience Replay** — Contextual experience replay plugin for OpenClaw. Stores successful task traces in local SQLite and injects similar past wins before future runs.
+  npm: `experience-replay`
+  repo: `https://github.com/tirpitzia/openclaw-experience-replay`
+  install: `openclaw plugins install experience-replay`
+
 - **WeChat** — Connect OpenClaw to WeChat personal accounts via WeChatPadPro (iPad protocol). Supports text, image, and file exchange with keyword-triggered conversations.
   npm: `@icesword760/openclaw-wechat`
   repo: `https://github.com/icesword0760/openclaw-wechat`
