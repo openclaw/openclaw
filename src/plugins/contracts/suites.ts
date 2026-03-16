@@ -5,6 +5,8 @@ import type { ProviderPlugin, WebSearchProviderPlugin } from "../types.js";
 export function installProviderPluginContractSuite(params: { provider: ProviderPlugin }) {
   it("satisfies the base provider plugin contract", () => {
     const { provider } = params;
+    const authIds = provider.auth.map((method) => method.id);
+    const wizardChoiceIds = new Set<string>();
 
     expect(provider.id).toMatch(/^[a-z0-9][a-z0-9-]*$/);
     expect(provider.label.trim()).not.toBe("");
@@ -21,7 +23,6 @@ export function installProviderPluginContractSuite(params: { provider: ProviderP
     }
 
     expect(Array.isArray(provider.auth)).toBe(true);
-    const authIds = provider.auth.map((method) => method.id);
     expect(authIds).toEqual([...new Set(authIds)]);
     for (const method of provider.auth) {
       expect(method.id.trim()).not.toBe("");
@@ -29,7 +30,53 @@ export function installProviderPluginContractSuite(params: { provider: ProviderP
       if (method.hint !== undefined) {
         expect(method.hint.trim()).not.toBe("");
       }
+      if (method.wizard) {
+        if (method.wizard.choiceId) {
+          expect(method.wizard.choiceId.trim()).not.toBe("");
+          expect(wizardChoiceIds.has(method.wizard.choiceId)).toBe(false);
+          wizardChoiceIds.add(method.wizard.choiceId);
+        }
+        if (method.wizard.methodId) {
+          expect(authIds).toContain(method.wizard.methodId);
+        }
+        if (method.wizard.modelAllowlist?.allowedKeys) {
+          expect(method.wizard.modelAllowlist.allowedKeys).toEqual([
+            ...new Set(method.wizard.modelAllowlist.allowedKeys),
+          ]);
+        }
+        if (method.wizard.modelAllowlist?.initialSelections) {
+          expect(method.wizard.modelAllowlist.initialSelections).toEqual([
+            ...new Set(method.wizard.modelAllowlist.initialSelections),
+          ]);
+        }
+      }
       expect(typeof method.run).toBe("function");
+    }
+
+    if (provider.wizard?.setup || provider.wizard?.modelPicker) {
+      expect(provider.auth.length).toBeGreaterThan(0);
+    }
+    if (provider.wizard?.setup) {
+      if (provider.wizard.setup.choiceId) {
+        expect(provider.wizard.setup.choiceId.trim()).not.toBe("");
+        expect(wizardChoiceIds.has(provider.wizard.setup.choiceId)).toBe(false);
+      }
+      if (provider.wizard.setup.methodId) {
+        expect(authIds).toContain(provider.wizard.setup.methodId);
+      }
+      if (provider.wizard.setup.modelAllowlist?.allowedKeys) {
+        expect(provider.wizard.setup.modelAllowlist.allowedKeys).toEqual([
+          ...new Set(provider.wizard.setup.modelAllowlist.allowedKeys),
+        ]);
+      }
+      if (provider.wizard.setup.modelAllowlist?.initialSelections) {
+        expect(provider.wizard.setup.modelAllowlist.initialSelections).toEqual([
+          ...new Set(provider.wizard.setup.modelAllowlist.initialSelections),
+        ]);
+      }
+    }
+    if (provider.wizard?.modelPicker?.methodId) {
+      expect(authIds).toContain(provider.wizard.modelPicker.methodId);
     }
   });
 }
