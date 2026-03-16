@@ -179,7 +179,9 @@ You should see: `DingTalk default: enabled, configured`
 
 ### Direct messages
 
-DingTalk DMs work without any allowlist by default. Any user who can find the bot in DingTalk can send direct messages.
+By default, any user who can find the bot in DingTalk can send direct messages. DingTalk's bot visibility is controlled at the organization level — only members of the organization (or groups where the bot is added) can discover and message it.
+
+> **Note:** The `@openclaw-china/channels` plugin does not currently expose a `dmPolicy` or `allowFrom` setting for DingTalk DMs. DM access is governed by DingTalk's built-in organization-level bot visibility controls. If you need stricter DM restrictions, manage bot visibility in the DingTalk admin console.
 
 ### Group chats
 
@@ -187,6 +189,7 @@ DingTalk DMs work without any allowlist by default. Any user who can find the bo
 
 - `"open"` = allow all groups (default)
 - `"allowlist"` = only allow groups in `groupAllowFrom`
+- `"disabled"` = disable all group messages
 
 **2. Mention requirement**:
 
@@ -318,7 +321,7 @@ OpenClaw auto-reconnects. If connections drop frequently:
 | `channels.dingtalk.clientId` | DingTalk AppKey | - |
 | `channels.dingtalk.clientSecret` | DingTalk AppSecret | - |
 | `channels.dingtalk.enableAICard` | Enable AI interactive cards | `false` |
-| `channels.dingtalk.groupPolicy` | Group access policy (`open` / `allowlist`) | `open` |
+| `channels.dingtalk.groupPolicy` | Group access policy (`open` / `allowlist` / `disabled`) | `open` |
 | `channels.dingtalk.groupAllowFrom` | Allowed group conversationIds | - |
 
 ---
