@@ -1,6 +1,6 @@
 import { discordOnboardingAdapter } from "../../../extensions/discord/src/setup-surface.js";
-import { imessageOnboardingAdapter } from "../../../extensions/imessage/src/onboarding.js";
-import { signalOnboardingAdapter } from "../../../extensions/signal/src/onboarding.js";
+import { imessagePlugin } from "../../../extensions/imessage/src/channel.js";
+import { signalPlugin } from "../../../extensions/signal/src/channel.js";
 import { slackOnboardingAdapter } from "../../../extensions/slack/src/setup-surface.js";
 import { telegramPlugin } from "../../../extensions/telegram/src/channel.js";
 import { whatsappOnboardingAdapter } from "../../../extensions/whatsapp/src/onboarding.js";
@@ -12,6 +12,14 @@ import type { ChannelOnboardingAdapter } from "./types.js";
 const telegramOnboardingAdapter = buildChannelOnboardingAdapterFromSetupWizard({
   plugin: telegramPlugin,
   wizard: telegramPlugin.setupWizard!,
+});
+const signalOnboardingAdapter = buildChannelOnboardingAdapterFromSetupWizard({
+  plugin: signalPlugin,
+  wizard: signalPlugin.setupWizard!,
+});
+const imessageOnboardingAdapter = buildChannelOnboardingAdapterFromSetupWizard({
+  plugin: imessagePlugin,
+  wizard: imessagePlugin.setupWizard!,
 });
 
 const BUILTIN_ONBOARDING_ADAPTERS: ChannelOnboardingAdapter[] = [
