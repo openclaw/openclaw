@@ -143,7 +143,39 @@ describe("deliverWebReply", () => {
     expect(replyLogger.info).toHaveBeenCalledWith(expect.any(Object), "auto-reply sent (text)");
   });
 
-  it("quotes the current inbound message when replyToId matches msg.id", async () => {
+  it("quotes the current inbound message when replyToCurrent is set", async () => {
+    const msg = makeMsg();
+
+    await deliverWebReply({
+      replyResult: { text: "hi", replyToCurrent: true },
+      msg,
+      maxMediaBytes: 1024 * 1024,
+      textLimit: 200,
+      replyLogger,
+      skipLog: true,
+    });
+
+    expect(msg.reply).toHaveBeenCalledTimes(1);
+    expectReplyCalledWithQuoteCurrent(msg, 0, "hi", true);
+  });
+
+  it("quotes explicit reply tags only when they target the current inbound message", async () => {
+    const msg = makeMsg();
+
+    await deliverWebReply({
+      replyResult: { text: "hi", replyToId: "msg-1", replyToTag: true },
+      msg,
+      maxMediaBytes: 1024 * 1024,
+      textLimit: 200,
+      replyLogger,
+      skipLog: true,
+    });
+
+    expect(msg.reply).toHaveBeenCalledTimes(1);
+    expectReplyCalledWithQuoteCurrent(msg, 0, "hi", true);
+  });
+
+  it("does not quote implicit reply threading without an explicit reply directive", async () => {
     const msg = makeMsg();
 
     await deliverWebReply({
@@ -156,14 +188,14 @@ describe("deliverWebReply", () => {
     });
 
     expect(msg.reply).toHaveBeenCalledTimes(1);
-    expectReplyCalledWithQuoteCurrent(msg, 0, "hi", true);
+    expectReplyCalledWithQuoteCurrent(msg, 0, "hi", false);
   });
 
   it("does not try to quote older explicit reply ids", async () => {
     const msg = makeMsg();
 
     await deliverWebReply({
-      replyResult: { text: "hi", replyToId: "older-msg-123" },
+      replyResult: { text: "hi", replyToId: "older-msg-123", replyToTag: true },
       msg,
       maxMediaBytes: 1024 * 1024,
       textLimit: 200,
@@ -234,7 +266,11 @@ describe("deliverWebReply", () => {
     mockLoadedImageMedia();
 
     await deliverWebReply({
-      replyResult: { text: "cap", mediaUrl: "http://example.com/img.jpg", replyToId: "msg-1" },
+      replyResult: {
+        text: "cap",
+        mediaUrl: "http://example.com/img.jpg",
+        replyToCurrent: true,
+      },
       msg,
       maxMediaBytes: 1024 * 1024,
       textLimit: 200,

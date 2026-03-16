@@ -42,9 +42,13 @@ export async function deliverWebReply(params: {
 }) {
   const { replyResult, msg, maxMediaBytes, textLimit, replyLogger, connectionId, skipLog } = params;
   const replyStarted = Date.now();
-  // WhatsApp quoting needs the raw inbound message object, so only the current inbound
-  // message can be quoted here. Older explicit reply ids would need a lookup/cache layer.
-  const quoteCurrent = Boolean(replyResult.replyToId && msg.id && replyResult.replyToId === msg.id);
+  // WhatsApp quoting needs the raw inbound message object. Restrict this to explicit
+  // reply directives that target the current inbound message; older explicit reply ids
+  // would still need a lookup/cache layer to recover the original Baileys message.
+  const quoteCurrent = Boolean(
+    replyResult.replyToCurrent ||
+    (replyResult.replyToTag && replyResult.replyToId && msg.id && replyResult.replyToId === msg.id),
+  );
   if (shouldSuppressReasoningReply(replyResult)) {
     whatsappOutboundLog.debug(`Suppressed reasoning payload to ${msg.from}`);
     return;
