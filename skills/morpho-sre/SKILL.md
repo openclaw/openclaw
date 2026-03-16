@@ -21,7 +21,10 @@ metadata: { "openclaw": { "emoji": "🛠️" } }
 - In-cluster: prefer serviceaccount auth and plain `kubectl ...`; do not depend on `~/.kube/config`
 - Shell portability:
   - default command syntax must be POSIX `sh` compatible
+  - prefer direct tool commands over unnecessary `bash -lc` wrappers
   - do not use `set -o pipefail`, arrays, or other Bash-only features unless command is explicitly wrapped with `bash -lc '...'`
+  - when `bash -lc` is required and the payload contains quoted patterns (for example `rg` with `"`), wrap the outer payload in double quotes and escape inner double quotes instead of nesting raw single quotes
+  - prefer `python3 - <<'PY'`; only use `python` after a live `command -v python` check
 - Forked tests / anvil / replay / SDK repros: use Morpho cached RPC first (`skills/foundry-evm-debug/scripts/rpc-url.sh <chainId>`). Never use a repo's default RPC provider for forked simulations when the cached endpoint is available. If a forked run hits HTTP 429 or `failed to get fork block`, switch to cached Morpho RPC before concluding anything about application logic.
 - GitHub auth preflight (before any repo/PR work):
   1. Check if `/home/node/.openclaw/bin/gh` wrapper exists and is on PATH — use it (auto-mints App token)
@@ -166,7 +169,7 @@ metadata: { "openclaw": { "emoji": "🛠️" } }
 6. Cross-check k8s state + logs + metrics + traces.
 7. Clone related repo and inspect suspect commit/config only after live evidence or clear config-driven need.
 8. If fix path is clear, name the concrete follow-up PR candidate first: repo, path, title, and validation command.
-9. Create or reuse a Linear follow-up ticket before opening a PR; use that ticket's `gitBranchName` as the PR branch.
+9. Create or reuse a Linear follow-up ticket before opening a PR; use that ticket's `branchName` as the PR branch.
 10. If confidence is high and fix is scoped, create the fix PR automatically and link it back to Linear.
 11. Return evidence, hypotheses, confidence, suggested PRs, Linear ticket, and PR URL (or blocked reason).
 
@@ -349,7 +352,7 @@ metadata: { "openclaw": { "emoji": "🛠️" } }
 - If fix is scoped/reversible and confidence >= `AUTO_PR_MIN_CONFIDENCE`, create PR via `autofix-pr.sh` and post PR URL in-thread.
 - If fix is not open-PR ready yet, still name 1-2 concrete PR candidates with repo/path/title/validation.
 - For every incident follow-up that needs code/config work, create or reuse a Linear ticket first and mention it in-thread.
-- Any PR opened from incident follow-up must use the Linear ticket `gitBranchName` as the branch and add the PR URL back to the ticket.
+- Any PR opened from incident follow-up must use the Linear ticket `branchName` as the branch and add the PR URL back to the ticket.
 - If a thread question is vague/underspecified:
   - Do not refuse with “insufficient context” only.
   - Infer likely intent from latest triage sections (`impact_scope`, `signal_summary`, `rca_result`, `top_*` tables).
@@ -409,7 +412,7 @@ If `command -v` fails or PATH looks wrong, stop and reply in blocked mode instea
 # Inspect issue
 /home/node/.openclaw/skills/morpho-sre/scripts/linear-ticket-api.sh issue get PLA-318
 
-# Create issue and return identifier + gitBranchName
+# Create issue and return identifier + branchName
 /home/node/.openclaw/skills/morpho-sre/scripts/linear-ticket-api.sh issue create \
   --title "Raise public replica memory limit after DB OOM incident" \
   --file /tmp/pla-318.md \
@@ -763,7 +766,7 @@ Use this flow only when:
 - confidence threshold (`AUTO_PR_MIN_CONFIDENCE`)
 - secret-pattern scan in staged diff before push
 - create/reuse Linear ticket when missing (`AUTO_PR_LINEAR_*`)
-- branch = Linear `gitBranchName`
+- branch = Linear `branchName`
 - conventional PR title carries the Linear ticket scope token
 - authenticated push + `gh pr create`
 - tracking label `openclaw-sre` on PR (`AUTO_PR_TRACKING_LABEL`)

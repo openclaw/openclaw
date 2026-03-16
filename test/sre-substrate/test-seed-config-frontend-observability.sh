@@ -43,6 +43,18 @@ jq -e '
 ' "$CONFIG" >/dev/null
 
 jq -e '
+  .channels.slack.channels["#bug-report"].systemPrompt | contains("use the ticket `branchName` as the PR branch")
+' "$CONFIG" >/dev/null
+
+jq -e '
+  .channels.slack.channels["#bug-report"].systemPrompt | contains("prefer direct tool commands; use `bash -lc` only when the command really needs shell features")
+' "$CONFIG" >/dev/null
+
+jq -e '
+  .channels.slack.channels["#bug-report"].systemPrompt | contains("only fall back to `python` after a live `command -v python` check")
+' "$CONFIG" >/dev/null
+
+jq -e '
   .channels.slack.channels["#bug-report"].systemPrompt | contains("If a human challenges or contradicts a technical claim in any thread")
 ' "$CONFIG" >/dev/null
 
@@ -161,6 +173,10 @@ jq -e '.channels.slack.channels["#staging-infra-monitoring"].systemPrompt | star
 jq -e '.channels.slack.channels["#public-api-monitoring"].systemPrompt | startswith("Public API monitoring incident intake mode:")' "$TMP_PROMPT_CONFIG" >/dev/null
 # Verify non-monitoring channel was NOT affected
 jq -e '.channels.slack.channels["#bug-report"].systemPrompt | startswith("Monitoring") | not' "$TMP_PROMPT_CONFIG" >/dev/null
+
+jq -r '.channels.slack.channels["#platform-monitoring"].systemPrompt' "$TMP_PROMPT_CONFIG" | rg -F 'use the ticket `branchName` as the PR branch' >/dev/null
+jq -r '.channels.slack.channels["#platform-monitoring"].systemPrompt' "$TMP_PROMPT_CONFIG" | rg -F 'prefer direct tool commands; use `bash -lc` only when the command really needs shell features' >/dev/null
+jq -r '.channels.slack.channels["#platform-monitoring"].systemPrompt' "$TMP_PROMPT_CONFIG" | rg -F 'only fall back to `python` after a live `command -v python` check' >/dev/null
 
 test -f "$ROOT/posthog-mcp.sh"
 test -f "$ROOT/frontend-project-resolver.sh"

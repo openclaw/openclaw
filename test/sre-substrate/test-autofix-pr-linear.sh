@@ -68,7 +68,7 @@ case "$1 $2" in
       printf '%s\n' '<html>not-json</html>'
       exit 0
     fi
-    printf '%s\n' '{"identifier":"PLA-822","url":"https://linear.app/morpho-labs/issue/PLA-822/example?ticket=PLA-822=linked","gitBranchName":"feature/pla-822-replica-memory-fix"}'
+    printf '%s\n' '{"identifier":"PLA-822","url":"https://linear.app/morpho-labs/issue/PLA-822/example?ticket=PLA-822=linked","branchName":"feature/pla-822-replica-memory-fix"}'
     ;;
   'issue get-branch')
     if [[ "${LINEAR_FAIL_BRANCH:-0}" == "1" ]]; then

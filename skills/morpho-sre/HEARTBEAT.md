@@ -52,7 +52,7 @@ HEARTBEAT_OK
 ```
 
 Include created PR URL in the alert.
-`autofix-pr.sh` creates or reuses the linked Linear follow-up ticket first and uses the ticket `gitBranchName` as the branch.
+`autofix-pr.sh` creates or reuses the linked Linear follow-up ticket first and uses the ticket `branchName` as the branch.
 `autofix-pr.sh` sends a Slack DM warning to the configured operator user before creating the PR.
 
 3c. If `health_status` contains `state\tincident` but `incident_gate` contains `should_alert\tno`, reply exactly:
@@ -84,7 +84,7 @@ When a BetterStack alert/update arrives in monitored Slack channels (`#staging-i
 - If confidence is high and fix is scoped/reversible, run `autofix-pr.sh` and post PR URL in-thread.
 - If the fix is plausible but not open-PR ready, still name 1-2 concrete suggested PRs with repo/path/title/validation.
 - Create or reuse a Linear follow-up ticket for code/config work and mention it in-thread.
-- Any incident PR must use the Linear ticket `gitBranchName` as the branch and attach the PR URL back to the ticket.
+- Any incident PR must use the Linear ticket `branchName` as the branch and attach the PR URL back to the ticket.
 - If auto-fix is blocked, post blocked reason + exact manual next step.
 - First four lines must answer: what broke, who feels it, what services are impacted, and what is happening now.
 - If only monitoring/internal tooling is degraded, say exactly: `No confirmed customer impact. Internal observability degraded.`

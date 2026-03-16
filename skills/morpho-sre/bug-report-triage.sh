@@ -600,7 +600,8 @@ cmd_create_issue() {
       issue: {
         identifier: ($issue.identifier // null),
         url: ($issue.url // null),
-        gitBranchName: ($issue.gitBranchName // null)
+        branchName: ($issue.branchName // $issue.gitBranchName // null),
+        gitBranchName: ($issue.branchName // $issue.gitBranchName // null)
       },
       route: $plan.route,
       owner: $plan.owner,

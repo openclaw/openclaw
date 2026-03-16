@@ -1107,7 +1107,7 @@ create_linear_issue_for_pr() {
     truthy "$strict" && return 1
     return 0
   }
-  issue_branch="$(parse_linear_create_field "$output" '.gitBranchName // empty' 'branch')" || {
+  issue_branch="$(parse_linear_create_field "$output" '.branchName // .gitBranchName // empty' 'branch')" || {
     truthy "$strict" && return 1
     return 0
   }
@@ -1517,13 +1517,13 @@ if [[ -n "$PRIMARY_LINEAR_ISSUE" ]]; then
   COMMIT_MSG="$(ensure_linear_ticket_in_conventional_title "$COMMIT_MSG" "$PRIMARY_LINEAR_ISSUE")"
   if [[ -z "${PRIMARY_LINEAR_BRANCH:-}" ]]; then
     if ! capture_command_output PRIMARY_LINEAR_BRANCH resolve_linear_issue_branch_name "$PRIMARY_LINEAR_ISSUE"; then
-      echo "auto-pr blocked: failed to resolve Linear gitBranchName for ${PRIMARY_LINEAR_ISSUE}" >&2
+      echo "auto-pr blocked: failed to resolve Linear branchName for ${PRIMARY_LINEAR_ISSUE}" >&2
       exit 1
     fi
   fi
   if [[ -n "$PRIMARY_LINEAR_BRANCH" ]]; then
     if [[ -n "$HEAD_BRANCH" && "$(sanitize_branch_fragment "$HEAD_BRANCH")" != "$(sanitize_branch_fragment "$PRIMARY_LINEAR_BRANCH")" ]]; then
-      echo "auto-pr linear branch guard: --branch ${HEAD_BRANCH} does not match Linear gitBranchName ${PRIMARY_LINEAR_BRANCH}" >&2
+      echo "auto-pr linear branch guard: --branch ${HEAD_BRANCH} does not match Linear branchName ${PRIMARY_LINEAR_BRANCH}" >&2
       exit 1
     fi
     HEAD_BRANCH="$PRIMARY_LINEAR_BRANCH"

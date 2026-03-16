@@ -69,15 +69,15 @@ case "$query" in
     printf '%s\n' '{"data":{"issueLabelCreate":{"success":true,"issueLabel":{"id":"label-2","name":"new-label"}}}}'
     ;;
   *'issueCreate(input:'*)
-    printf '%s\n' '{"data":{"issueCreate":{"success":true,"issue":{"id":"issue-1","identifier":"PLA-822","title":"Replica memory fix","url":"https://linear.app/morpho-labs/issue/PLA-822/example","gitBranchName":"feature/pla-822-replica-memory-fix"}}}}'
+    printf '%s\n' '{"data":{"issueCreate":{"success":true,"issue":{"id":"issue-1","identifier":"PLA-822","title":"Replica memory fix","url":"https://linear.app/morpho-labs/issue/PLA-822/example","branchName":"feature/pla-822-replica-memory-fix","gitBranchName":"feature/pla-822-replica-memory-fix"}}}}'
     ;;
   *'issue(id:$id)'*)
     if [[ "$issue_ref_var" == "PLA-404" ]]; then
       printf '%s\n' '{"data":{"issue":null}}'
     elif [[ "${LINEAR_FAKE_EMPTY_BRANCH:-0}" == "1" ]]; then
-      printf '%s\n' '{"data":{"issue":{"id":"issue-1","identifier":"PLA-822","title":"Replica memory fix","description":"desc","url":"https://linear.app/morpho-labs/issue/PLA-822/example","gitBranchName":"","state":{"id":"state-1","name":"In Progress"},"labels":{"nodes":[{"id":"label-1","name":"openclaw-sre"}]}}}}'
+      printf '%s\n' '{"data":{"issue":{"id":"issue-1","identifier":"PLA-822","title":"Replica memory fix","description":"desc","url":"https://linear.app/morpho-labs/issue/PLA-822/example","branchName":"","gitBranchName":"","state":{"id":"state-1","name":"In Progress"},"labels":{"nodes":[{"id":"label-1","name":"openclaw-sre"}]}}}}'
     else
-      printf '%s\n' '{"data":{"issue":{"id":"issue-1","identifier":"PLA-822","title":"Replica memory fix","description":"desc","url":"https://linear.app/morpho-labs/issue/PLA-822/example","gitBranchName":"feature/pla-822-replica-memory-fix","state":{"id":"state-1","name":"In Progress"},"labels":{"nodes":[{"id":"label-1","name":"openclaw-sre"}]}}}}'
+      printf '%s\n' '{"data":{"issue":{"id":"issue-1","identifier":"PLA-822","title":"Replica memory fix","description":"desc","url":"https://linear.app/morpho-labs/issue/PLA-822/example","branchName":"feature/pla-822-replica-memory-fix","gitBranchName":"feature/pla-822-replica-memory-fix","state":{"id":"state-1","name":"In Progress"},"labels":{"nodes":[{"id":"label-1","name":"openclaw-sre"}]}}}}'
     fi
     ;;
   *'attachmentCreate(input:'*)
@@ -121,7 +121,7 @@ create_json="$(
 )"
 
 printf '%s\n' "$create_json" \
-  | jq -e '.identifier == "PLA-822" and .gitBranchName == "feature/pla-822-replica-memory-fix"' >/dev/null
+  | jq -e '.identifier == "PLA-822" and .branchName == "feature/pla-822-replica-memory-fix" and .gitBranchName == "feature/pla-822-replica-memory-fix"' >/dev/null
 
 probe_output="$(bash "$SCRIPT" probe-auth)"
 printf '%s\n' "$probe_output" | jq -e '.ok == true' >/dev/null
@@ -144,13 +144,13 @@ if LINEAR_FAKE_EMPTY_BRANCH=1 bash "$SCRIPT" issue get-branch PLA-822 >/dev/null
   echo "expected empty branch get-branch to fail" >&2
   exit 1
 fi
-rg -F 'issue missing gitBranchName: PLA-822' "$TMP/branch-empty.err" >/dev/null
+rg -F 'issue missing branchName: PLA-822' "$TMP/branch-empty.err" >/dev/null
 
 issue_json="$(
   bash "$SCRIPT" issue get PLA-822
 )"
 printf '%s\n' "$issue_json" \
-  | jq -e '.identifier == "PLA-822" and .url == "https://linear.app/morpho-labs/issue/PLA-822/example"' >/dev/null
+  | jq -e '.identifier == "PLA-822" and .url == "https://linear.app/morpho-labs/issue/PLA-822/example" and .branchName == "feature/pla-822-replica-memory-fix" and .gitBranchName == "feature/pla-822-replica-memory-fix"' >/dev/null
 
 attachment_out="$(
   bash "$SCRIPT" issue add-attachment PLA-822 https://github.com/morpho-org/openclaw-sre/pull/123 "GitHub PR" "repo branch"
