@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { getAcpGatewayNodeRuntime } from "../acp/store/gateway-events.js";
 import { normalizeChannelId } from "../channels/plugins/index.js";
 import { createOutboundSendDeps } from "../cli/outbound-send-deps.js";
 import { agentCommandFromIngress } from "../commands/agent.js";
@@ -254,6 +255,12 @@ async function sendReceiptAck(params: {
 }
 
 export const handleNodeEvent = async (ctx: NodeEventContext, nodeId: string, evt: NodeEvent) => {
+  if (evt.event.startsWith("acp.worker.")) {
+    const handled = await getAcpGatewayNodeRuntime().ingestNodeEvent(nodeId, evt);
+    if (handled) {
+      return;
+    }
+  }
   switch (evt.event) {
     case "voice.transcript": {
       const obj = parsePayloadObject(evt.payloadJSON);

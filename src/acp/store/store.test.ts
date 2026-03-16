@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { AcpGatewayStore, AcpGatewayStoreError } from "./store.js";
+import { AcpGatewayStore } from "./store.js";
 
 const tempRoots: string[] = [];
 
@@ -185,7 +185,7 @@ describe("AcpGatewayStore", () => {
         },
         now: 13,
       }),
-    ).rejects.toMatchObject<AcpGatewayStoreError>({
+    ).rejects.toMatchObject({
       code: "ACP_NODE_DUPLICATE_EVENT_MISMATCH",
     });
   });

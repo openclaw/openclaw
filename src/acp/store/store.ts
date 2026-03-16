@@ -40,6 +40,23 @@ function stableJson(value: unknown): string {
   return JSON.stringify(value);
 }
 
+function sameTerminal(
+  left: NonNullable<AcpGatewayRunRecord["terminal"]>,
+  right: NonNullable<AcpGatewayRunRecord["terminal"]>,
+): boolean {
+  return (
+    left.terminalEventId === right.terminalEventId &&
+    left.finalSeq === right.finalSeq &&
+    left.kind === right.kind &&
+    left.stopReason === right.stopReason &&
+    left.errorCode === right.errorCode &&
+    left.errorMessage === right.errorMessage &&
+    left.nodeId === right.nodeId &&
+    left.leaseId === right.leaseId &&
+    left.leaseEpoch === right.leaseEpoch
+  );
+}
+
 export class AcpGatewayStoreError extends Error {
   constructor(
     readonly code:
@@ -279,12 +296,6 @@ export class AcpGatewayStore {
     const now = params.now ?? Date.now();
     return await this.mutateStore(async (store) => {
       const { run, session, lease } = this.validateActiveLeaseBinding(store, params, now);
-      if (params.event.type === "done") {
-        throw new AcpGatewayStoreError(
-          "ACP_NODE_INVALID_EVENT",
-          "acp.worker.event does not accept terminal done events.",
-        );
-      }
       if (run.terminal) {
         throw new AcpGatewayStoreError(
           "ACP_NODE_RUN_TERMINATED",
@@ -367,7 +378,7 @@ export class AcpGatewayStore {
         leaseEpoch: params.leaseEpoch,
       } as const;
       if (run.terminal) {
-        if (stableJson(run.terminal) === stableJson(nextTerminal)) {
+        if (sameTerminal(run.terminal, nextTerminal)) {
           return { run, duplicate: true };
         }
         throw new AcpGatewayStoreError(
