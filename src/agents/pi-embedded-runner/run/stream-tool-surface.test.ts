@@ -1,6 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
 import { wrapStreamFnWithToolSurface } from "./stream-tool-surface.js";
 
+type WrappedFn = ReturnType<typeof wrapStreamFnWithToolSurface>;
+type Model = Parameters<WrappedFn>[0];
+type LlmContext = Parameters<WrappedFn>[1];
+type SimpleStreamOptions = Parameters<WrappedFn>[2];
+
 describe("wrapStreamFnWithToolSurface", () => {
   it("filters tools via hook before calling inner streamFn", async () => {
     const innerFn = vi.fn().mockResolvedValue({ type: "response" });
@@ -28,7 +33,11 @@ describe("wrapStreamFnWithToolSurface", () => {
     };
     const options = {};
 
-    await wrapped(model as unknown, context as unknown, options as unknown);
+    await wrapped(
+      model as unknown as Model,
+      context as unknown as LlmContext,
+      options as unknown as SimpleStreamOptions,
+    );
 
     expect(hookRunner.runBeforeToolSurface).toHaveBeenCalledWith(
       { tools: context.tools },
@@ -58,7 +67,11 @@ describe("wrapStreamFnWithToolSurface", () => {
       tools: [],
     };
 
-    await wrapped({} as unknown, context as unknown, {} as unknown);
+    await wrapped(
+      {} as unknown as Model,
+      context as unknown as LlmContext,
+      {} as unknown as SimpleStreamOptions,
+    );
 
     expect(hookRunner.runBeforeToolSurface).not.toHaveBeenCalled();
     expect(innerFn).toHaveBeenCalledWith({}, context, {});
@@ -83,7 +96,11 @@ describe("wrapStreamFnWithToolSurface", () => {
       tools: [{ name: "read", description: "read", parameters: {} }],
     };
 
-    await wrapped({} as unknown, context as unknown, {} as unknown);
+    await wrapped(
+      {} as unknown as Model,
+      context as unknown as LlmContext,
+      {} as unknown as SimpleStreamOptions,
+    );
 
     const passedContext = innerFn.mock.calls[0][1] as { tools: Array<{ name: string }> };
     expect(passedContext.tools).toHaveLength(1);
