@@ -188,6 +188,8 @@ export type TelegramAccountConfig = {
   healthMonitor?: ChannelHealthMonitorConfig;
   /** Controls whether link previews are shown in outbound messages. Default: true. */
   linkPreview?: boolean;
+  /** Send Telegram bot error replies silently (no notification sound). Default: false. */
+  silentErrorReplies?: boolean;
   /**
    * Per-channel outbound response prefix override.
    *

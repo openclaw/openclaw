@@ -211,6 +211,30 @@ describe("deliverReplies", () => {
     );
   });
 
+  it("sets disable_notification when silent is true", async () => {
+    const runtime = createRuntime();
+    const sendMessage = vi.fn().mockResolvedValue({
+      message_id: 5,
+      chat: { id: "123" },
+    });
+    const bot = createBot({ sendMessage });
+
+    await deliverWith({
+      replies: [{ text: "hello" }],
+      runtime,
+      bot,
+      silent: true,
+    });
+
+    expect(sendMessage).toHaveBeenCalledWith(
+      "123",
+      expect.any(String),
+      expect.objectContaining({
+        disable_notification: true,
+      }),
+    );
+  });
+
   it("emits internal message:sent when session hook context is available", async () => {
     const runtime = createRuntime(false);
     const sendMessage = vi.fn().mockResolvedValue({ message_id: 9, chat: { id: "123" } });
@@ -642,6 +666,36 @@ describe("deliverReplies", () => {
       "123",
       expect.stringContaining("Hello there"),
       expect.any(Object),
+    );
+  });
+
+  it("keeps disable_notification on voice fallback text when silent is true", async () => {
+    const runtime = createRuntime();
+    const sendVoice = vi.fn().mockRejectedValue(createVoiceMessagesForbiddenError());
+    const sendMessage = vi.fn().mockResolvedValue({
+      message_id: 5,
+      chat: { id: "123" },
+    });
+    const bot = createBot({ sendVoice, sendMessage });
+
+    mockMediaLoad("note.ogg", "audio/ogg", "voice");
+
+    await deliverWith({
+      replies: [
+        { mediaUrl: "https://example.com/note.ogg", text: "Hello there", audioAsVoice: true },
+      ],
+      runtime,
+      bot,
+      silent: true,
+    });
+
+    expect(sendVoice).toHaveBeenCalledTimes(1);
+    expect(sendMessage).toHaveBeenCalledWith(
+      "123",
+      expect.stringContaining("Hello there"),
+      expect.objectContaining({
+        disable_notification: true,
+      }),
     );
   });
 

@@ -465,6 +465,7 @@ export const dispatchTelegramMessage = async ({
     linkPreview: telegramCfg.linkPreview,
     replyQuoteText,
   };
+  const silentErrorReplies = telegramCfg.silentErrorReplies === true;
   const applyTextToPayload = (payload: ReplyPayload, text: string): ReplyPayload => {
     if (payload.text === text) {
       return payload;
@@ -476,6 +477,7 @@ export const dispatchTelegramMessage = async ({
       ...deliveryBaseOptions,
       replies: [payload],
       onVoiceRecording: sendRecordVoice,
+      silent: silentErrorReplies && payload.isError === true,
     });
     if (result.delivered) {
       deliveryState.markDelivered();
@@ -809,6 +811,7 @@ export const dispatchTelegramMessage = async ({
     const result = await deliverReplies({
       replies: [{ text: fallbackText }],
       ...deliveryBaseOptions,
+      silent: silentErrorReplies && dispatchError != null,
     });
     sentFallback = result.delivered;
   }
