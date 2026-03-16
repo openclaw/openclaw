@@ -1,10 +1,7 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-type BlueBubblesWebhookHandler = (
-  req: IncomingMessage,
-  res: ServerResponse,
-) => Promise<boolean>;
+type BlueBubblesWebhookHandler = (req: IncomingMessage, res: ServerResponse) => Promise<boolean>;
 
 const handleBlueBubblesWebhookRequest = vi.hoisted(() =>
   vi.fn<BlueBubblesWebhookHandler>(async () => false),
@@ -54,13 +51,11 @@ describe("gateway bluebubbles webhook stage", () => {
   });
 
   it("falls through to plugin handling when the bluebubbles handler does not claim the request", async () => {
-    const handlePluginRequest = vi.fn(
-      async (_req: IncomingMessage, res: ServerResponse) => {
-        res.statusCode = 204;
-        res.end();
-        return true;
-      },
-    );
+    const handlePluginRequest = vi.fn(async (_req: IncomingMessage, res: ServerResponse) => {
+      res.statusCode = 204;
+      res.end();
+      return true;
+    });
 
     await withGatewayServer({
       prefix: "bluebubbles-webhook-fallthrough",
