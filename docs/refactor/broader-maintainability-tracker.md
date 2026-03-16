@@ -78,6 +78,7 @@ Do not edit these files under this plan:
 - [x] Extract runtime config reloader wiring seam
 - [x] Pass typed context phase to phase (preflight, secrets precheck, auth bootstrap, runtime policy)
 - [x] Add phase failure classification tests and shared reporting (CLI startup and restart loop)
+- [x] Extract explicit runtime-config and control-ui-root startup phase helpers with focused tests
 
 ### Stage 3B: onboarding flow consolidation
 

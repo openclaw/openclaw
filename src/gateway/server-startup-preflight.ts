@@ -223,6 +223,18 @@ type GatewayStartupRuntimePolicyDeps = {
   seedControlUiAllowedOrigins: (config: OpenClawConfig) => Promise<OpenClawConfig>;
 };
 
+type GatewayStartupRuntimeConfigPhaseDeps = {
+  context: GatewayStartupContext;
+  resolveRuntimeConfig: (config: OpenClawConfig) => Promise<GatewayRuntimeConfig>;
+};
+
+type GatewayStartupControlUiRootPhaseDeps = {
+  context: GatewayStartupContext & { runtimeConfig: GatewayRuntimeConfig };
+  resolveControlUiRootState: (params: {
+    runtimeConfig: GatewayRuntimeConfig;
+  }) => Promise<ControlUiRootState | undefined>;
+};
+
 /**
  * Startup phase: fail-fast secrets precheck before runtime boot.
  */
@@ -320,5 +332,36 @@ export async function runGatewayStartupRuntimePolicyPhase(
     ...deps.context,
     config: await deps.seedControlUiAllowedOrigins(deps.context.config),
     diagnosticsEnabled,
+  };
+}
+
+/**
+ * Startup phase: resolve transport/runtime settings from startup config.
+ */
+export async function runGatewayStartupRuntimeConfigPhase(
+  deps: GatewayStartupRuntimeConfigPhaseDeps,
+): Promise<GatewayStartupContext & { runtimeConfig: GatewayRuntimeConfig }> {
+  return {
+    ...deps.context,
+    runtimeConfig: await deps.resolveRuntimeConfig(deps.context.config),
+  };
+}
+
+/**
+ * Startup phase: resolve control UI root state from runtime config.
+ */
+export async function runGatewayStartupControlUiRootPhase(
+  deps: GatewayStartupControlUiRootPhaseDeps,
+): Promise<
+  GatewayStartupContext & {
+    runtimeConfig: GatewayRuntimeConfig;
+    controlUiRootState: ControlUiRootState | undefined;
+  }
+> {
+  return {
+    ...deps.context,
+    controlUiRootState: await deps.resolveControlUiRootState({
+      runtimeConfig: deps.context.runtimeConfig,
+    }),
   };
 }

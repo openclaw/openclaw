@@ -88,6 +88,8 @@ import { logGatewayStartup } from "./server-startup-log.js";
 import {
   runGatewayStartupAuthBootstrap,
   runGatewayStartupConfigPreflight,
+  runGatewayStartupControlUiRootPhase,
+  runGatewayStartupRuntimeConfigPhase,
   runGatewayStartupRuntimePolicyPhase,
   runGatewayStartupSecretsPrecheck,
 } from "./server-startup-preflight.js";
@@ -395,19 +397,23 @@ export async function startGatewayServer(
   const channelMethods = listChannelPlugins().flatMap((plugin) => plugin.gatewayMethods ?? []);
   const gatewayMethods = Array.from(new Set([...baseGatewayMethods, ...channelMethods]));
   let pluginServices: PluginServicesHandle | null = null;
-  const runtimeConfig = await resolveGatewayRuntimeConfig({
-    cfg: cfgAtStart,
-    port,
-    bind: opts.bind,
-    host: opts.host,
-    controlUiEnabled: opts.controlUiEnabled,
-    openAiChatCompletionsEnabled: opts.openAiChatCompletionsEnabled,
-    openResponsesEnabled: opts.openResponsesEnabled,
-    auth: opts.auth,
-    tailscale: opts.tailscale,
+  const startupContextWithRuntimeConfig = await runGatewayStartupRuntimeConfigPhase({
+    context: startupContext,
+    resolveRuntimeConfig: async (config) =>
+      await resolveGatewayRuntimeConfig({
+        cfg: config,
+        port,
+        bind: opts.bind,
+        host: opts.host,
+        controlUiEnabled: opts.controlUiEnabled,
+        openAiChatCompletionsEnabled: opts.openAiChatCompletionsEnabled,
+        openResponsesEnabled: opts.openResponsesEnabled,
+        auth: opts.auth,
+        tailscale: opts.tailscale,
+      }),
   });
-  // Persist runtime-derived startup data so later phases/tests can assert phase outputs explicitly.
-  startupContext = { ...startupContext, runtimeConfig };
+  startupContext = startupContextWithRuntimeConfig;
+  const runtimeConfig = startupContextWithRuntimeConfig.runtimeConfig;
   const {
     bindHost,
     controlUiEnabled,
@@ -431,19 +437,23 @@ export async function startGatewayServer(
   const { rateLimiter: authRateLimiter, browserRateLimiter: browserAuthRateLimiter } =
     createGatewayAuthRateLimiters(rateLimitConfig);
 
-  const controlUiRootState = await resolveGatewayControlUiRootState({
-    controlUiEnabled,
-    controlUiRootOverride,
-    gatewayRuntime,
-    log,
-    runtimePathContext: {
-      moduleUrl: import.meta.url,
-      argv1: process.argv[1],
-      cwd: process.cwd(),
-    },
+  const startupContextWithControlUiRoot = await runGatewayStartupControlUiRootPhase({
+    context: startupContextWithRuntimeConfig,
+    resolveControlUiRootState: async () =>
+      await resolveGatewayControlUiRootState({
+        controlUiEnabled,
+        controlUiRootOverride,
+        gatewayRuntime,
+        log,
+        runtimePathContext: {
+          moduleUrl: import.meta.url,
+          argv1: process.argv[1],
+          cwd: process.cwd(),
+        },
+      }),
   });
-  // Keep resolved control-ui startup state in the shared context for deterministic phase tracking.
-  startupContext = { ...startupContext, controlUiRootState };
+  startupContext = startupContextWithControlUiRoot;
+  const controlUiRootState = startupContextWithControlUiRoot.controlUiRootState;
 
   const wizardRunner = opts.wizardRunner ?? runSetupWizard;
   const { wizardSessions, findRunningWizard, purgeWizardSession } = createWizardSessionTracker();
