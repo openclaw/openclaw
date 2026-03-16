@@ -74,13 +74,27 @@ function makeProcessArgs(sessionStorePath: string) {
   } as any;
 }
 
+async function removeDirEventually(dir: string) {
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    try {
+      await fs.rm(dir, { recursive: true, force: true });
+      return;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOTEMPTY" || attempt === 2) {
+        throw error;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+  }
+}
+
 describe("whatsapp inbound contract", () => {
   let sessionDir = "";
 
   afterEach(async () => {
     capture.ctx = undefined;
     if (sessionDir) {
-      await fs.rm(sessionDir, { recursive: true, force: true });
+      await removeDirEventually(sessionDir);
       sessionDir = "";
     }
   });
