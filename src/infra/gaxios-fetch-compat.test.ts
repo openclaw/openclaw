@@ -2,8 +2,11 @@ import { HttpsProxyAgent } from "https-proxy-agent";
 import { ProxyAgent } from "undici";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+const TEST_GAXIOS_CONSTRUCTOR_OVERRIDE = "__OPENCLAW_TEST_GAXIOS_CONSTRUCTOR__";
+
 describe("gaxios fetch compat", () => {
   afterEach(() => {
+    Reflect.deleteProperty(globalThis as object, TEST_GAXIOS_CONSTRUCTOR_OVERRIDE);
     vi.resetModules();
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
@@ -26,30 +29,24 @@ describe("gaxios fetch compat", () => {
     });
 
     vi.stubGlobal("fetch", fetchMock);
-    vi.doMock("node-fetch", () => {
-      throw new Error("node-fetch should not load");
-    });
-    vi.doMock("gaxios", () => {
-      class MockGaxios {
-        _defaultAdapter!: (config: MockRequestConfig) => Promise<Response>;
+    class MockGaxios {
+      _defaultAdapter!: (config: MockRequestConfig) => Promise<Response>;
 
-        async request(config: MockRequestConfig) {
-          const response = await this._defaultAdapter(config);
-          return {
-            ...(response as object),
-            data: await response.text(),
-          };
-        }
+      async request(config: MockRequestConfig) {
+        const response = await this._defaultAdapter(config);
+        return {
+          ...(response as object),
+          data: await response.text(),
+        };
       }
-      MockGaxiosCtor = MockGaxios;
+    }
+    MockGaxiosCtor = MockGaxios;
 
-      MockGaxios.prototype._defaultAdapter = async (config: MockRequestConfig) => {
-        const fetchImplementation = config.fetchImplementation ?? fetch;
-        return await fetchImplementation(config.url, config);
-      };
-
-      return { Gaxios: MockGaxios };
-    });
+    MockGaxios.prototype._defaultAdapter = async (config: MockRequestConfig) => {
+      const fetchImplementation = config.fetchImplementation ?? fetch;
+      return await fetchImplementation(config.url, config);
+    };
+    (globalThis as Record<string, unknown>)[TEST_GAXIOS_CONSTRUCTOR_OVERRIDE] = MockGaxios;
 
     const { installGaxiosFetchCompat } = await import("./gaxios-fetch-compat.js");
 
@@ -67,14 +64,9 @@ describe("gaxios fetch compat", () => {
 
   it("falls back to a legacy window fetch shim when gaxios is unavailable", async () => {
     const originalWindowDescriptor = Object.getOwnPropertyDescriptor(globalThis, "window");
+    vi.stubGlobal("fetch", vi.fn<typeof fetch>());
     Reflect.deleteProperty(globalThis as object, "window");
-    vi.doMock("gaxios", () => ({
-      get Gaxios() {
-        throw Object.assign(new Error("Cannot find package 'gaxios'"), {
-          code: "ERR_MODULE_NOT_FOUND",
-        });
-      },
-    }));
+    (globalThis as Record<string, unknown>)[TEST_GAXIOS_CONSTRUCTOR_OVERRIDE] = null;
     const { installGaxiosFetchCompat } = await import("./gaxios-fetch-compat.js");
 
     try {

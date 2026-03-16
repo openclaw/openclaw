@@ -35,7 +35,9 @@ type GaxiosConstructor = {
   prototype: GaxiosPrototype;
 };
 
-let installState: "not-installed" | "shimmed" | "installed" = "not-installed";
+const TEST_GAXIOS_CONSTRUCTOR_OVERRIDE = "__OPENCLAW_TEST_GAXIOS_CONSTRUCTOR__";
+
+let installState: "not-installed" | "installing" | "shimmed" | "installed" = "not-installed";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
@@ -179,6 +181,21 @@ function hasGaxiosConstructorShape(value: unknown): value is GaxiosConstructor {
   );
 }
 
+function getTestGaxiosConstructorOverride(): GaxiosConstructor | null | undefined {
+  const testGlobal = globalThis as Record<string, unknown>;
+  if (!Object.prototype.hasOwnProperty.call(testGlobal, TEST_GAXIOS_CONSTRUCTOR_OVERRIDE)) {
+    return undefined;
+  }
+  const override = testGlobal[TEST_GAXIOS_CONSTRUCTOR_OVERRIDE];
+  if (override === null) {
+    return null;
+  }
+  if (hasGaxiosConstructorShape(override)) {
+    return override;
+  }
+  throw new Error("invalid gaxios test constructor override");
+}
+
 function isDirectGaxiosImportMiss(err: unknown): boolean {
   if (!isModuleNotFoundError(err)) {
     return false;
@@ -187,6 +204,11 @@ function isDirectGaxiosImportMiss(err: unknown): boolean {
 }
 
 async function loadGaxiosConstructor(): Promise<GaxiosConstructor | null> {
+  const testOverride = getTestGaxiosConstructorOverride();
+  if (testOverride !== undefined) {
+    return testOverride;
+  }
+
   try {
     const require = createRequire(import.meta.url);
     const resolvedPath = require.resolve("gaxios");
@@ -244,29 +266,36 @@ export async function installGaxiosFetchCompat(): Promise<void> {
     return;
   }
 
-  const Gaxios = await loadGaxiosConstructor();
-  if (!Gaxios) {
-    installLegacyWindowFetchShim();
-    installState = "shimmed";
-    return;
-  }
+  installState = "installing";
 
-  const prototype = Gaxios.prototype;
-  const originalDefaultAdapter = prototype._defaultAdapter;
-  const compatFetch = createGaxiosCompatFetch();
-
-  prototype._defaultAdapter = function patchedDefaultAdapter(
-    this: unknown,
-    config: GaxiosFetchRequestInit,
-  ): Promise<unknown> {
-    if (config.fetchImplementation) {
-      return originalDefaultAdapter.call(this, config);
+  try {
+    const Gaxios = await loadGaxiosConstructor();
+    if (!Gaxios) {
+      installLegacyWindowFetchShim();
+      installState = "shimmed";
+      return;
     }
-    return originalDefaultAdapter.call(this, {
-      ...config,
-      fetchImplementation: compatFetch,
-    });
-  };
 
-  installState = "installed";
+    const prototype = Gaxios.prototype;
+    const originalDefaultAdapter = prototype._defaultAdapter;
+    const compatFetch = createGaxiosCompatFetch();
+
+    prototype._defaultAdapter = function patchedDefaultAdapter(
+      this: unknown,
+      config: GaxiosFetchRequestInit,
+    ): Promise<unknown> {
+      if (config.fetchImplementation) {
+        return originalDefaultAdapter.call(this, config);
+      }
+      return originalDefaultAdapter.call(this, {
+        ...config,
+        fetchImplementation: compatFetch,
+      });
+    };
+
+    installState = "installed";
+  } catch (err) {
+    installState = "not-installed";
+    throw err;
+  }
 }

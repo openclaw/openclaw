@@ -4,8 +4,9 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
-async function makeLauncherFixture(): Promise<string> {
+async function makeLauncherFixture(fixtureRoots: string[]): Promise<string> {
   const fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-launcher-"));
+  fixtureRoots.push(fixtureRoot);
   await fs.copyFile(
     path.resolve(process.cwd(), "openclaw.mjs"),
     path.join(fixtureRoot, "openclaw.mjs"),
@@ -26,8 +27,7 @@ describe("openclaw launcher", () => {
   });
 
   it("surfaces transitive entry import failures instead of masking them as missing dist", async () => {
-    const fixtureRoot = await makeLauncherFixture();
-    fixtureRoots.push(fixtureRoot);
+    const fixtureRoot = await makeLauncherFixture(fixtureRoots);
     await fs.writeFile(
       path.join(fixtureRoot, "dist", "entry.js"),
       'import "missing-openclaw-launcher-dep";\nexport {};\n',
@@ -45,8 +45,7 @@ describe("openclaw launcher", () => {
   });
 
   it("keeps the friendly launcher error for a truly missing entry build output", async () => {
-    const fixtureRoot = await makeLauncherFixture();
-    fixtureRoots.push(fixtureRoot);
+    const fixtureRoot = await makeLauncherFixture(fixtureRoots);
 
     const result = spawnSync(process.execPath, [path.join(fixtureRoot, "openclaw.mjs"), "--help"], {
       cwd: fixtureRoot,
