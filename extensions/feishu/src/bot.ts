@@ -542,17 +542,13 @@ export function decodeFeishuFilename(filename: string | undefined): string {
   if (!filename) return "";
   // Strip RFC 5987 prefix (case-insensitive): filename*=UTF-8'language'encoded
   const rfcMatch = /^filename\*=utf-8'[^']*'/i.exec(filename);
-  const isRfc5987 = !!rfcMatch;
-  if (rfcMatch) {
-    filename = filename.substring(rfcMatch[0].length);
+  if (!rfcMatch) {
+    return filename; // Plain filename - return as-is
   }
-  // For RFC 5987 format, always decode. For plain names, only decode if contains non-ASCII.
+  // RFC 5987 format - strip prefix and decode
+  filename = filename.substring(rfcMatch[0].length);
   try {
-    const decoded = decodeURIComponent(filename);
-    if (isRfc5987 || (decoded && /[^\x00-\x7F]/.test(decoded))) {
-      return decoded;
-    }
-    return filename;
+    return decodeURIComponent(filename);
   } catch {
     return filename;
   }
