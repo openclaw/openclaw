@@ -1,4 +1,6 @@
+import { Type } from "@sinclair/typebox";
 import type { OpenClawPluginApi } from "../../src/plugin-sdk/index.js";
+import type { OpenClawPluginToolFactory } from "../../src/plugins/types.js";
 
 /**
  * Toolkit groupings — tool name → toolkit name.
@@ -92,20 +94,16 @@ const plugin = {
     // Register the load_toolkit meta-tool via factory pattern
     // Factory receives OpenClawPluginToolContext with sessionKey/sessionId
     api.registerTool(
-      (ctx) => ({
+      ((ctx) => ({
         name: "load_toolkit",
+        label: "Load Toolkit",
         description: `Load additional tools into this session. Available toolkits:\n${catalog}`,
-        parameters: {
-          type: "object" as const,
-          properties: {
-            name: {
-              type: "string",
-              enum: Object.keys(TOOLKITS),
-              description: "Toolkit name to load",
-            },
-          },
-          required: ["name"],
-        },
+        parameters: Type.Object({
+          name: Type.String({
+            enum: Object.keys(TOOLKITS),
+            description: "Toolkit name to load",
+          }),
+        }),
         execute: async (_toolCallId: string, args: unknown) => {
           const params = args as Record<string, unknown>;
           const name = params.name as string;
@@ -116,7 +114,7 @@ const plugin = {
           }
           return { content: [{ type: "text" as const, text: result.message }] };
         },
-      }),
+      })) as OpenClawPluginToolFactory,
       { name: "load_toolkit" },
     );
 
