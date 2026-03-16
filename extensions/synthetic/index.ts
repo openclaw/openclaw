@@ -1,5 +1,10 @@
 import { emptyPluginConfigSchema, type OpenClawPluginApi } from "openclaw/plugin-sdk/core";
 import { buildSyntheticProvider } from "../../src/agents/models-config.providers.static.js";
+import {
+  applySyntheticConfig,
+  SYNTHETIC_DEFAULT_MODEL_REF,
+} from "../../src/commands/onboard-auth.js";
+import { createProviderApiKeyAuthMethod } from "../../src/plugins/provider-api-key-auth.js";
 
 const PROVIDER_ID = "synthetic";
 
@@ -14,7 +19,28 @@ const syntheticPlugin = {
       label: "Synthetic",
       docsPath: "/providers/synthetic",
       envVars: ["SYNTHETIC_API_KEY"],
-      auth: [],
+      auth: [
+        createProviderApiKeyAuthMethod({
+          providerId: PROVIDER_ID,
+          methodId: "api-key",
+          label: "Synthetic API key",
+          hint: "Anthropic-compatible (multi-model)",
+          optionKey: "syntheticApiKey",
+          flagName: "--synthetic-api-key",
+          envVar: "SYNTHETIC_API_KEY",
+          promptMessage: "Enter Synthetic API key",
+          defaultModel: SYNTHETIC_DEFAULT_MODEL_REF,
+          expectedProviders: ["synthetic"],
+          applyConfig: (cfg) => applySyntheticConfig(cfg),
+          wizard: {
+            choiceId: "synthetic-api-key",
+            choiceLabel: "Synthetic API key",
+            groupId: "synthetic",
+            groupLabel: "Synthetic",
+            groupHint: "Anthropic-compatible (multi-model)",
+          },
+        }),
+      ],
       catalog: {
         order: "simple",
         run: async (ctx) => {
