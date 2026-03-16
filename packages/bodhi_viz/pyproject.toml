@@ -1,0 +1,26 @@
+[project]
+name = "bodhi-viz"
+version = "0.1.0"
+description = "Vault visualization server for OpenBodhi — 3D force graph + Sankey flow diagram"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "bodhi-vault",
+]
+
+[project.optional-dependencies]
+snapshot = [
+    "matplotlib>=3.9.0",
+    "networkx>=3.3",
+]
+
+[project.scripts]
+bodhi-viz = "bodhi_viz.serve:main"
+
+[build-system]
+requires = ["uv_build>=0.10.9,<0.11.0"]
+build-backend = "uv_build"
+
+[tool.ruff]
+target-version = "py311"
+line-length = 100
