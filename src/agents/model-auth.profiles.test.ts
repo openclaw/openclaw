@@ -468,10 +468,10 @@ describe("getApiKeyForModel", () => {
     );
   });
 
-  it("resolveEnvApiKey('modelscope) uses modelscope auth candidates", async () => {
+  it("resolveEnvApiKey('modelscope') uses modelscope auth candidates", async () => {
     await withEnvAsync(
       {
-        MODELSCOPE_API_KEY: "modelscope-plan-key",
+        MODELSCOPE_API_KEY: "modelscope-api-key",
       },
       async () => {
         const resolved = resolveEnvApiKey("modelscope");

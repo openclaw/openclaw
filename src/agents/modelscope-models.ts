@@ -86,7 +86,7 @@ export const MODELSCOPE_MODEL_CATALOG: ModelDefinitionConfig[] = [
   },
   {
     id: "Qwen/Qwen3.5-122B-A10B",
-    name: "Qwen3.5 122B A100B",
+    name: "Qwen3.5 122B A10B",
     reasoning: true,
     input: ["text"],
     contextWindow: 262144,
