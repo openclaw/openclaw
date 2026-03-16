@@ -32,6 +32,25 @@ import {
 
 export { extractReadableContent } from "./web-fetch-utils.js";
 
+const PROXY_ENV_KEYS = [
+  "HTTPS_PROXY",
+  "HTTP_PROXY",
+  "ALL_PROXY",
+  "https_proxy",
+  "http_proxy",
+  "all_proxy",
+] as const;
+
+function hasProxyEnvConfigured(): boolean {
+  for (const key of PROXY_ENV_KEYS) {
+    const value = process.env[key];
+    if (typeof value === "string" && value.trim().length > 0) {
+      return true;
+    }
+  }
+  return false;
+}
+
 const EXTRACT_MODES = ["markdown", "text"] as const;
 
 const DEFAULT_FETCH_MAX_CHARS = 50_000;
@@ -539,9 +558,11 @@ async function runWebFetch(params: WebFetchRuntimeParams): Promise<Record<string
       url: params.url,
       maxRedirects: params.maxRedirects,
       timeoutSeconds: params.timeoutSeconds,
-      policy: {
-        allowRfc2544BenchmarkRange: true,
-      },
+      // Only allow RFC 2544 benchmark range (fake-ip proxy range) when a proxy is configured.
+      // This prevents widening SSRF protections for non-proxied environments.
+      policy: hasProxyEnvConfigured()
+        ? { allowRfc2544BenchmarkRange: true }
+        : undefined,
       init: {
         headers: {
           Accept: "text/markdown, text/html;q=0.9, */*;q=0.1",
