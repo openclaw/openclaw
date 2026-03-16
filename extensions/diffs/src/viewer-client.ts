@@ -1,4 +1,4 @@
-import { FileDiff, preloadHighlighter } from "@pierre/diffs";
+import { FileDiff, preloadHighlighter, RegisteredCustomThemes } from "@pierre/diffs";
 import type {
   FileContents,
   FileDiffMetadata,
@@ -28,6 +28,19 @@ const viewerState: ViewerState = {
   backgroundEnabled: true,
   wrapEnabled: true,
 };
+
+const PIERRE_THEME_MODULES = [
+  ["pierre-light", "@pierre/diffs/dist/themes/pierre-light.js"],
+  ["pierre-dark", "@pierre/diffs/dist/themes/pierre-dark.js"],
+] as const;
+
+function ensurePierreThemeLoaders(): void {
+  for (const [themeName, modulePath] of PIERRE_THEME_MODULES) {
+    RegisteredCustomThemes.set(themeName, () => import(modulePath));
+  }
+}
+
+ensurePierreThemeLoaders();
 
 function parsePayload(element: HTMLScriptElement): DiffViewerPayload {
   const raw = element.textContent?.trim();

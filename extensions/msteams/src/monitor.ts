@@ -344,6 +344,7 @@ export async function monitorMSTeamsProvider(
   expressApp.use(authorizeJWT(authConfig));
 
   const configuredPath = msteamsCfg.webhook?.path ?? "/api/messages";
+
   const messageHandler = (req: Request, res: Response) => {
     void adapter
       .process(req, res, (context: unknown) => handler.run!(context))
