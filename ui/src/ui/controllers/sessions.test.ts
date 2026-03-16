@@ -1,5 +1,4 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { UiSettings } from "../storage.ts";
 import {
   deleteSession,
   deleteSessionAndRefresh,
@@ -20,25 +19,6 @@ function createState(request: RequestFn, overrides: Partial<SessionsState> = {})
     sessionsFilterLimit: "0",
     sessionsIncludeGlobal: true,
     sessionsIncludeUnknown: true,
-    ...overrides,
-  };
-}
-
-function createSettings(overrides: Partial<UiSettings> = {}): UiSettings {
-  return {
-    gatewayUrl: "",
-    token: "",
-    sessionKey: "main",
-    lastActiveSessionKey: "main",
-    theme: "claw",
-    themeMode: "dark",
-    chatFocusMode: false,
-    chatShowThinking: true,
-    chatShowToolCalls: true,
-    splitRatio: 0.6,
-    navCollapsed: false,
-    navWidth: 280,
-    navGroupsCollapsed: {},
     ...overrides,
   };
 }
@@ -117,7 +97,7 @@ describe("deleteSessionAndRefresh", () => {
 });
 
 describe("loadSessions", () => {
-  it("switches away from a missing direct session after refresh", async () => {
+  it("refreshes sessions without rewriting the active selection", async () => {
     const request = vi.fn(async (method: string) => {
       if (method === "sessions.list") {
         return {
@@ -130,83 +110,12 @@ describe("loadSessions", () => {
       }
       throw new Error(`unexpected method: ${method}`);
     });
-    const applySettings = vi.fn();
-    const state = createState(request, {
-      sessionKey: "agent:main:discord:channel:123",
-      settings: createSettings({
-        sessionKey: "agent:main:discord:channel:123",
-        lastActiveSessionKey: "agent:main:discord:channel:123",
-      }),
-      applySettings,
-    });
+    const state = createState(request) as SessionsState & { sessionKey?: string };
+    state.sessionKey = "agent:main:discord:channel:123";
 
     await loadSessions(state);
 
-    expect(state.sessionKey).toBe("main");
-    expect(applySettings).toHaveBeenCalledWith(
-      expect.objectContaining({
-        sessionKey: "main",
-        lastActiveSessionKey: "main",
-      }),
-    );
-  });
-
-  it("preserves missing grouped sessions so ephemeral subagent selections stay visible", async () => {
-    const request = vi.fn(async (method: string) => {
-      if (method === "sessions.list") {
-        return {
-          ts: 0,
-          path: "",
-          count: 1,
-          defaults: { modelProvider: null, model: null, contextTokens: null },
-          sessions: [{ key: "main", kind: "direct", updatedAt: null }],
-        };
-      }
-      throw new Error(`unexpected method: ${method}`);
-    });
-    const applySettings = vi.fn();
-    const state = createState(request, {
-      sessionKey: "agent:main:subagent:child",
-      settings: createSettings({
-        sessionKey: "agent:main:subagent:child",
-        lastActiveSessionKey: "agent:main:subagent:child",
-      }),
-      applySettings,
-    });
-
-    await loadSessions(state);
-
-    expect(state.sessionKey).toBe("agent:main:subagent:child");
-    expect(applySettings).not.toHaveBeenCalled();
-  });
-
-  it("preserves missing top-level cron sessions so active cron views stay stable", async () => {
-    const request = vi.fn(async (method: string) => {
-      if (method === "sessions.list") {
-        return {
-          ts: 0,
-          path: "",
-          count: 1,
-          defaults: { modelProvider: null, model: null, contextTokens: null },
-          sessions: [{ key: "main", kind: "direct", updatedAt: null }],
-        };
-      }
-      throw new Error(`unexpected method: ${method}`);
-    });
-    const applySettings = vi.fn();
-    const state = createState(request, {
-      sessionKey: "cron:hourly-check",
-      settings: createSettings({
-        sessionKey: "cron:hourly-check",
-        lastActiveSessionKey: "cron:hourly-check",
-      }),
-      applySettings,
-    });
-
-    await loadSessions(state);
-
-    expect(state.sessionKey).toBe("cron:hourly-check");
-    expect(applySettings).not.toHaveBeenCalled();
+    expect(state.sessionKey).toBe("agent:main:discord:channel:123");
   });
 });
 

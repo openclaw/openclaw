@@ -1,6 +1,5 @@
 import { toNumber } from "../format.ts";
 import type { GatewayBrowserClient } from "../gateway.ts";
-import type { UiSettings } from "../storage.ts";
 import type { SessionsListResult } from "../types.ts";
 
 export type SessionsState = {
@@ -13,54 +12,7 @@ export type SessionsState = {
   sessionsFilterLimit: string;
   sessionsIncludeGlobal: boolean;
   sessionsIncludeUnknown: boolean;
-  sessionKey?: string;
-  settings?: UiSettings;
-  applySettings?: (next: UiSettings) => void;
 };
-
-function shouldPreserveMissingSessionKey(key: string): boolean {
-  const normalized = key.trim().toLowerCase();
-  return (
-    normalized.includes(":subagent:") ||
-    normalized.startsWith("cron:") ||
-    normalized.includes(":cron:")
-  );
-}
-
-function normalizeMissingSessionSelection(state: SessionsState, res: SessionsListResult) {
-  const currentSessionKey = state.sessionKey?.trim();
-  if (!currentSessionKey || shouldPreserveMissingSessionKey(currentSessionKey)) {
-    return;
-  }
-  if (res.sessions.some((row) => row.key === currentSessionKey)) {
-    return;
-  }
-  const preferredLastActive = state.settings?.lastActiveSessionKey?.trim();
-  const nextSessionKey =
-    (preferredLastActive &&
-    preferredLastActive !== currentSessionKey &&
-    res.sessions.some((row) => row.key === preferredLastActive)
-      ? preferredLastActive
-      : null) ??
-    res.sessions.find((row) => row.key === "main")?.key ??
-    res.sessions[0]?.key;
-  if (!nextSessionKey || nextSessionKey === currentSessionKey) {
-    return;
-  }
-  state.sessionKey = nextSessionKey;
-  if (state.settings) {
-    const nextSettings: UiSettings = {
-      ...state.settings,
-      sessionKey: nextSessionKey,
-      lastActiveSessionKey: nextSessionKey,
-    };
-    if (typeof state.applySettings === "function") {
-      state.applySettings(nextSettings);
-    } else {
-      state.settings = nextSettings;
-    }
-  }
-}
 
 export async function loadSessions(
   state: SessionsState,
@@ -97,7 +49,6 @@ export async function loadSessions(
     const res = await state.client.request<SessionsListResult | undefined>("sessions.list", params);
     if (res) {
       state.sessionsResult = res;
-      normalizeMissingSessionSelection(state, res);
     }
   } catch (err) {
     state.sessionsError = String(err);

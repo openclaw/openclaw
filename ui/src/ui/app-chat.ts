@@ -1,6 +1,6 @@
 import { parseAgentSessionKey } from "../../../src/sessions/session-key-utils.js";
 import { scheduleChatScroll, resetChatScroll } from "./app-scroll.ts";
-import { setLastActiveSessionKey } from "./app-settings.ts";
+import { setLastActiveSessionKey, syncUrlWithSessionKey } from "./app-settings.ts";
 import { resetToolStream } from "./app-tool-stream.ts";
 import type { OpenClawApp } from "./app.ts";
 import { executeSlashCommand } from "./chat/slash-command-executor.ts";
@@ -10,6 +10,8 @@ import { loadModels } from "./controllers/models.ts";
 import { loadSessions } from "./controllers/sessions.ts";
 import type { GatewayBrowserClient, GatewayHelloOk } from "./gateway.ts";
 import { normalizeBasePath } from "./navigation.ts";
+import type { UiSettings } from "./storage.ts";
+import type { SessionsListResult } from "./types.ts";
 import type { ChatModelOverride, ModelCatalogEntry } from "./types.ts";
 import type { ChatAttachment, ChatQueueItem } from "./ui-types.ts";
 import { generateUUID } from "./uuid.ts";
@@ -34,11 +36,90 @@ export type ChatHost = {
   chatModelCatalog: ModelCatalogEntry[];
   updateComplete?: Promise<unknown>;
   refreshSessionsAfterChat: Set<string>;
+  settings?: UiSettings;
+  applySettings?: (next: UiSettings) => void;
+  loadAssistantIdentity?: () => Promise<void>;
   /** Callback for slash-command side effects that need app-level access. */
   onSlashAction?: (action: string) => void;
 };
 
 export const CHAT_SESSIONS_ACTIVE_MINUTES = 120;
+
+function isCronSessionKey(key: string): boolean {
+  const normalized = key.trim().toLowerCase();
+  if (!normalized) {
+    return false;
+  }
+  if (normalized.startsWith("cron:")) {
+    return true;
+  }
+  if (!normalized.startsWith("agent:")) {
+    return false;
+  }
+  const parts = normalized.split(":").filter(Boolean);
+  if (parts.length < 3) {
+    return false;
+  }
+  const rest = parts.slice(2).join(":");
+  return rest.startsWith("cron:");
+}
+
+function shouldPreserveMissingChatSessionKey(key: string): boolean {
+  const normalized = key.trim().toLowerCase();
+  return normalized.includes(":subagent:") || isCronSessionKey(normalized);
+}
+
+function normalizeMissingChatSessionSelection(
+  host: ChatHost,
+  sessions: SessionsListResult | null,
+): string | null {
+  const currentSessionKey = host.sessionKey?.trim();
+  if (!currentSessionKey || !sessions || shouldPreserveMissingChatSessionKey(currentSessionKey)) {
+    return null;
+  }
+  if (sessions.sessions.some((row) => row.key === currentSessionKey)) {
+    return null;
+  }
+  const preferredLastActive = host.settings?.lastActiveSessionKey?.trim();
+  const nextSessionKey =
+    (preferredLastActive &&
+    preferredLastActive !== currentSessionKey &&
+    sessions.sessions.some((row) => row.key === preferredLastActive)
+      ? preferredLastActive
+      : null) ??
+    sessions.sessions.find((row) => row.key === "main")?.key ??
+    sessions.sessions[0]?.key;
+  return !nextSessionKey || nextSessionKey === currentSessionKey ? null : nextSessionKey;
+}
+
+async function switchMissingChatSession(host: ChatHost, nextSessionKey: string) {
+  host.sessionKey = nextSessionKey;
+  host.chatMessage = "";
+  host.chatStream = null;
+  host.chatRunId = null;
+  host.chatQueue = [];
+  const hostWithStream = host as ChatHost & { chatStreamStartedAt?: number | null };
+  hostWithStream.chatStreamStartedAt = null;
+  if (host.settings) {
+    const nextSettings: UiSettings = {
+      ...host.settings,
+      sessionKey: nextSessionKey,
+      lastActiveSessionKey: nextSessionKey,
+    };
+    if (typeof host.applySettings === "function") {
+      host.applySettings(nextSettings);
+    } else {
+      host.settings = nextSettings;
+    }
+  }
+  syncUrlWithSessionKey(
+    host as unknown as Parameters<typeof syncUrlWithSessionKey>[0],
+    nextSessionKey,
+    true,
+  );
+  await host.loadAssistantIdentity?.();
+  await Promise.all([loadChatHistory(host as unknown as OpenClawApp), refreshChatAvatar(host)]);
+}
 
 export function isChatBusy(host: ChatHost) {
   return host.chatSending || Boolean(host.chatRunId);
@@ -364,6 +445,13 @@ export async function refreshChat(host: ChatHost, opts?: { scheduleScroll?: bool
     refreshChatAvatar(host),
     refreshChatModels(host),
   ]);
+  const nextSessionKey = normalizeMissingChatSessionSelection(
+    host,
+    (host as unknown as OpenClawApp).sessionsResult ?? null,
+  );
+  if (nextSessionKey) {
+    await switchMissingChatSession(host, nextSessionKey);
+  }
   if (opts?.scheduleScroll !== false) {
     scheduleChatScroll(host as unknown as Parameters<typeof scheduleChatScroll>[0]);
   }
