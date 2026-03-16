@@ -678,6 +678,8 @@ function resolveNormalizedWebhookSender(params: {
   senderIdExplicit: boolean;
   isGroup: boolean;
   chatGuid?: string;
+  chatIdentifier?: string;
+  chatId?: number;
   fromMe?: boolean;
 }): string | null {
   const senderFallbackFromChatGuid =
@@ -693,9 +695,14 @@ function resolveNormalizedWebhookSender(params: {
   if (params.fromMe) {
     return "me";
   }
+  const hasStableGroupChatIdentity =
+    Boolean(params.chatGuid?.trim()) ||
+    Boolean(params.chatIdentifier?.trim()) ||
+    typeof params.chatId === "number";
   // Preserve group events with missing sender identity so processing can degrade
-  // gracefully instead of dropping the entire message or reaction.
-  return params.isGroup ? "" : null;
+  // gracefully instead of dropping the entire message or reaction. Still require
+  // a stable chat identity so unrelated degraded group events do not merge.
+  return params.isGroup && hasStableGroupChatIdentity ? "" : null;
 }
 
 export function normalizeWebhookMessage(
@@ -760,6 +767,8 @@ export function normalizeWebhookMessage(
     senderIdExplicit,
     isGroup,
     chatGuid,
+    chatIdentifier,
+    chatId,
     fromMe,
   });
   if (normalizedSender === null) {
@@ -841,6 +850,8 @@ export function normalizeWebhookReaction(
     senderIdExplicit,
     isGroup,
     chatGuid,
+    chatIdentifier,
+    chatId,
     fromMe,
   });
   if (normalizedSender === null) {

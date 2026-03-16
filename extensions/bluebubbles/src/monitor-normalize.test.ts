@@ -64,6 +64,21 @@ describe("normalizeWebhookMessage", () => {
     expect(result?.isGroup).toBe(true);
   });
 
+  it("drops group messages with missing sender and no chat identity", () => {
+    const result = normalizeWebhookMessage({
+      type: "new-message",
+      data: {
+        guid: "msg-no-chat-1",
+        text: "hello group",
+        isGroup: true,
+        isFromMe: false,
+        handle: null,
+      },
+    });
+
+    expect(result).toBeNull();
+  });
+
   it("falls back to me for fromMe messages when sender handle is missing", () => {
     const result = normalizeWebhookMessage({
       type: "new-message",
@@ -137,5 +152,21 @@ describe("normalizeWebhookReaction", () => {
     expect(result?.senderId).toBe("");
     expect(result?.senderIdExplicit).toBe(false);
     expect(result?.messageId).toBe("p:0/msg-1");
+  });
+
+  it("drops group reactions with missing sender and no chat identity", () => {
+    const result = normalizeWebhookReaction({
+      type: "updated-message",
+      data: {
+        guid: "msg-no-chat-2",
+        associatedMessageGuid: "p:0/msg-1",
+        associatedMessageType: 2000,
+        isGroup: true,
+        isFromMe: false,
+        handle: null,
+      },
+    });
+
+    expect(result).toBeNull();
   });
 });
