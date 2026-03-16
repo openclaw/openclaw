@@ -26,9 +26,13 @@ function looksLikeIntentionalPlan(text: string): boolean {
   }
   // Allow the checklist to start within the first ~500 chars (room for a heading + intro paragraph)
   const preamble = text.slice(0, firstMatch.index);
-  // Strip whitespace and short headings — a plan preamble may include a brief intro
-  const substantiveChars = preamble.replace(/^#+\s+.*$/gm, "").replace(/\s+/g, "").length;
-  return substantiveChars < 250;
+  // Strip whitespace, headings, and horizontal rules — a plan preamble may include
+  // a brief overview section with regular bullet points before the task list
+  const substantiveChars = preamble
+    .replace(/^#+\s+.*$/gm, "")
+    .replace(/^---+$/gm, "")
+    .replace(/\s+/g, "").length;
+  return substantiveChars < 500;
 }
 
 /**
