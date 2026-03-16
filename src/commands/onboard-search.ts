@@ -137,20 +137,19 @@ export function applySearchKey(
   if (providerEntry && !providerEntry.setConfiguredCredentialValue) {
     providerEntry.setCredentialValue(search, key);
   }
-  return {
+  const next = {
     ...config,
     tools: {
       ...config.tools,
       web: { ...config.tools?.web, search },
     },
   };
-  const next = providerEntry?.applySelectionConfig?.(nextBase) ?? nextBase;
   providerEntry?.setConfiguredCredentialValue?.(next, key);
   return next;
 }
 
 function applyProviderOnly(config: OpenClawConfig, provider: SearchProvider): OpenClawConfig {
-  return {
+  const next = {
     ...config,
     tools: {
       ...config.tools,
@@ -164,6 +163,10 @@ function applyProviderOnly(config: OpenClawConfig, provider: SearchProvider): Op
       },
     },
   };
+  if (provider !== "firecrawl") {
+    return next;
+  }
+  return enablePluginInConfig(next, "firecrawl").config;
 }
 
 function preserveDisabledState(original: OpenClawConfig, result: OpenClawConfig): OpenClawConfig {
