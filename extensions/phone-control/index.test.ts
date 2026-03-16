@@ -7,6 +7,7 @@ import type {
   PluginCommandContext,
 } from "openclaw/plugin-sdk/phone-control";
 import { describe, expect, it, vi } from "vitest";
+import { createTestPluginApi } from "../test-utils/plugin-api.js";
 import registerPhoneControl from "./index.js";
 
 function createApi(params: {
@@ -15,7 +16,7 @@ function createApi(params: {
   writeConfig: (next: Record<string, unknown>) => Promise<void>;
   registerCommand: (command: OpenClawPluginCommandDefinition) => void;
 }): OpenClawPluginApi {
-  return {
+  return createTestPluginApi({
     id: "phone-control",
     name: "phone-control",
     source: "test",
@@ -30,22 +31,8 @@ function createApi(params: {
         writeConfigFile: (next: Record<string, unknown>) => params.writeConfig(next),
       },
     } as OpenClawPluginApi["runtime"],
-    logger: { info() {}, warn() {}, error() {} },
-    registerTool() {},
-    registerHook() {},
-    registerHttpRoute() {},
-    registerChannel() {},
-    registerGatewayMethod() {},
-    registerCli() {},
-    registerService() {},
-    registerProvider() {},
-    registerContextEngine() {},
     registerCommand: params.registerCommand,
-    resolvePath(input: string) {
-      return input;
-    },
-    on() {},
-  };
+  }) as OpenClawPluginApi;
 }
 
 function createCommandContext(args: string): PluginCommandContext {
@@ -55,6 +42,12 @@ function createCommandContext(args: string): PluginCommandContext {
     commandBody: `/phone ${args}`,
     args,
     config: {},
+    requestConversationBinding: async () => ({
+      status: "error",
+      message: "unsupported",
+    }),
+    detachConversationBinding: async () => ({ removed: false }),
+    getCurrentConversationBinding: async () => null,
   };
 }
 

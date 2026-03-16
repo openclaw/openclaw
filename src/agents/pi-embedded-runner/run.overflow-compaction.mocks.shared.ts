@@ -209,9 +209,36 @@ vi.mock("../defaults.js", () => ({
   DEFAULT_PROVIDER: "anthropic",
 }));
 
+type MockFailoverErrorDescription = {
+  message: string;
+  reason: string | undefined;
+  status: number | undefined;
+  code: string | undefined;
+};
+
+type MockCoerceToFailoverError = (
+  err: unknown,
+  params?: { provider?: string; model?: string; profileId?: string },
+) => unknown;
+type MockDescribeFailoverError = (err: unknown) => MockFailoverErrorDescription;
+type MockResolveFailoverStatus = (reason: string) => number | undefined;
+
+export const mockedCoerceToFailoverError = vi.fn<MockCoerceToFailoverError>();
+export const mockedDescribeFailoverError = vi.fn<MockDescribeFailoverError>(
+  (err: unknown): MockFailoverErrorDescription => ({
+    message: err instanceof Error ? err.message : String(err),
+    reason: undefined,
+    status: undefined,
+    code: undefined,
+  }),
+);
+export const mockedResolveFailoverStatus = vi.fn<MockResolveFailoverStatus>();
+
 vi.mock("../failover-error.js", () => ({
   FailoverError: class extends Error {},
-  resolveFailoverStatus: vi.fn(),
+  coerceToFailoverError: mockedCoerceToFailoverError,
+  describeFailoverError: mockedDescribeFailoverError,
+  resolveFailoverStatus: mockedResolveFailoverStatus,
 }));
 
 vi.mock("./lanes.js", () => ({

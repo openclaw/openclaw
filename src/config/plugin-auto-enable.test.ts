@@ -12,14 +12,32 @@ import { applyPluginAutoEnable } from "./plugin-auto-enable.js";
 
 const tempDirs: string[] = [];
 
+function chmodSafeDir(dir: string) {
+  if (process.platform === "win32") {
+    return;
+  }
+  fs.chmodSync(dir, 0o755);
+}
+
+function mkdtempSafe(prefix: string) {
+  const dir = fs.mkdtempSync(prefix);
+  chmodSafeDir(dir);
+  return dir;
+}
+
+function mkdirSafe(dir: string) {
+  fs.mkdirSync(dir, { recursive: true });
+  chmodSafeDir(dir);
+}
+
 function makeTempDir() {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-plugin-auto-enable-"));
+  const dir = mkdtempSafe(path.join(os.tmpdir(), "openclaw-plugin-auto-enable-"));
   tempDirs.push(dir);
   return dir;
 }
 
 function writePluginManifestFixture(params: { rootDir: string; id: string; channels: string[] }) {
-  fs.mkdirSync(params.rootDir, { recursive: true });
+  mkdirSafe(params.rootDir);
   fs.writeFileSync(
     path.join(params.rootDir, "openclaw.plugin.json"),
     JSON.stringify(
@@ -44,6 +62,7 @@ function makeRegistry(plugins: Array<{ id: string; channels: string[] }>): Plugi
       channels: p.channels,
       providers: [],
       skills: [],
+      hooks: [],
       origin: "config" as const,
       rootDir: `/fake/${p.id}`,
       source: `/fake/${p.id}/index.js`,
@@ -214,6 +233,7 @@ describe("applyPluginAutoEnable", () => {
       },
       env: {
         ...process.env,
+        OPENCLAW_HOME: undefined,
         OPENCLAW_STATE_DIR: stateDir,
         CLAWDBOT_STATE_DIR: undefined,
         OPENCLAW_BUNDLED_PLUGINS_DIR: "/nonexistent/bundled/plugins",
@@ -227,7 +247,7 @@ describe("applyPluginAutoEnable", () => {
   it("uses env-scoped catalog metadata for preferOver auto-enable decisions", () => {
     const stateDir = makeTempDir();
     const catalogPath = path.join(stateDir, "plugins", "catalog.json");
-    fs.mkdirSync(path.dirname(catalogPath), { recursive: true });
+    mkdirSafe(path.dirname(catalogPath));
     fs.writeFileSync(
       catalogPath,
       JSON.stringify({
@@ -287,7 +307,26 @@ describe("applyPluginAutoEnable", () => {
       env: {},
     });
 
-    expect(result.config.plugins?.entries?.["google-gemini-cli-auth"]?.enabled).toBe(true);
+    expect(result.config.plugins?.entries?.google?.enabled).toBe(true);
+  });
+
+  it("auto-enables minimax when minimax-portal profiles exist", () => {
+    const result = applyPluginAutoEnable({
+      config: {
+        auth: {
+          profiles: {
+            "minimax-portal:default": {
+              provider: "minimax-portal",
+              mode: "oauth",
+            },
+          },
+        },
+      },
+      env: {},
+    });
+
+    expect(result.config.plugins?.entries?.minimax?.enabled).toBe(true);
+    expect(result.config.plugins?.entries?.["minimax-portal-auth"]).toBeUndefined();
   });
 
   it("auto-enables acpx plugin when ACP is configured", () => {
@@ -439,6 +478,7 @@ describe("applyPluginAutoEnable", () => {
         config: makeApnChannelConfig(),
         env: {
           ...process.env,
+          OPENCLAW_HOME: undefined,
           OPENCLAW_STATE_DIR: stateDir,
           CLAWDBOT_STATE_DIR: undefined,
           OPENCLAW_BUNDLED_PLUGINS_DIR: "/nonexistent/bundled/plugins",

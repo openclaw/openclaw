@@ -1,30 +1,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { jsonResponse, requestBodyText, requestUrl } from "../test-helpers/http.js";
 import {
   enrichOllamaModelsWithContext,
   resolveOllamaApiBase,
   type OllamaTagModel,
 } from "./ollama-models.js";
-
-function jsonResponse(body: unknown, status = 200): Response {
-  return new Response(JSON.stringify(body), {
-    status,
-    headers: { "Content-Type": "application/json" },
-  });
-}
-
-function requestUrl(input: string | URL | Request): string {
-  if (typeof input === "string") {
-    return input;
-  }
-  if (input instanceof URL) {
-    return input.toString();
-  }
-  return input.url;
-}
-
-function requestBody(body: BodyInit | null | undefined): string {
-  return typeof body === "string" ? body : "{}";
-}
 
 describe("ollama-models", () => {
   afterEach(() => {
@@ -43,7 +23,7 @@ describe("ollama-models", () => {
       if (!url.endsWith("/api/show")) {
         throw new Error(`Unexpected fetch: ${url}`);
       }
-      const body = JSON.parse(requestBody(init?.body)) as { name?: string };
+      const body = JSON.parse(requestBodyText(init?.body)) as { name?: string };
       if (body.name === "llama3:8b") {
         return jsonResponse({ model_info: { "llama.context_length": 65536 } });
       }

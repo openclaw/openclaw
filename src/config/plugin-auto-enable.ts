@@ -8,12 +8,12 @@ import {
   listChatChannels,
   normalizeChatChannelId,
 } from "../channels/registry.js";
+import { hasAnyWhatsAppAuth } from "../plugin-sdk-internal/whatsapp.js";
 import {
   loadPluginManifestRegistry,
   type PluginManifestRegistry,
 } from "../plugins/manifest-registry.js";
 import { isRecord } from "../utils.js";
-import { hasAnyWhatsAppAuth } from "../web/accounts.js";
 import type { OpenClawConfig } from "./config.js";
 import { ensurePluginAllowlisted } from "./plugins-allowlist.js";
 
@@ -28,10 +28,10 @@ export type PluginAutoEnableResult = {
 };
 
 const PROVIDER_PLUGIN_IDS: Array<{ pluginId: string; providerId: string }> = [
-  { pluginId: "google-gemini-cli-auth", providerId: "google-gemini-cli" },
+  { pluginId: "google", providerId: "google-gemini-cli" },
   { pluginId: "qwen-portal-auth", providerId: "qwen-portal" },
   { pluginId: "copilot-proxy", providerId: "copilot-proxy" },
-  { pluginId: "minimax-portal-auth", providerId: "minimax-portal" },
+  { pluginId: "minimax", providerId: "minimax-portal" },
 ];
 
 function hasNonEmptyString(value: unknown): boolean {

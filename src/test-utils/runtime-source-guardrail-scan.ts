@@ -50,7 +50,13 @@ async function readRuntimeSourceFiles(
       if (!absolutePath) {
         continue;
       }
-      const source = await fs.readFile(absolutePath, "utf8");
+      let source: string;
+      try {
+        source = await fs.readFile(absolutePath, "utf8");
+      } catch {
+        // File tracked by git but deleted on disk (e.g. pending deletion).
+        continue;
+      }
       output[index] = {
         relativePath: path.relative(repoRoot, absolutePath),
         source,

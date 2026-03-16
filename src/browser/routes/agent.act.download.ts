@@ -1,5 +1,11 @@
+import { getBrowserProfileCapabilities } from "../profile-capabilities.js";
 import type { BrowserRouteContext } from "../server-context.js";
-import { readBody, resolveTargetIdFromBody, withPlaywrightRouteContext } from "./agent.shared.js";
+import {
+  readBody,
+  requirePwAi,
+  resolveTargetIdFromBody,
+  withRouteTabContext,
+} from "./agent.shared.js";
 import { ensureOutputRootDir, resolveWritableOutputPathOrRespond } from "./output-paths.js";
 import { DEFAULT_DOWNLOAD_DIR } from "./path-output.js";
 import type { BrowserRouteRegistrar } from "./types.js";
@@ -23,13 +29,23 @@ export function registerBrowserAgentActDownloadRoutes(
     const out = toStringOrEmpty(body.path) || "";
     const timeoutMs = toNumber(body.timeoutMs);
 
-    await withPlaywrightRouteContext({
+    await withRouteTabContext({
       req,
       res,
       ctx,
       targetId,
-      feature: "wait for download",
-      run: async ({ cdpUrl, tab, pw }) => {
+      run: async ({ profileCtx, cdpUrl, tab }) => {
+        if (getBrowserProfileCapabilities(profileCtx.profile).usesChromeMcp) {
+          return jsonError(
+            res,
+            501,
+            "download waiting is not supported for existing-session profiles yet.",
+          );
+        }
+        const pw = await requirePwAi(res, "wait for download");
+        if (!pw) {
+          return;
+        }
         await ensureOutputRootDir(DEFAULT_DOWNLOAD_DIR);
         let downloadPath: string | undefined;
         if (out.trim()) {
@@ -67,13 +83,23 @@ export function registerBrowserAgentActDownloadRoutes(
       return jsonError(res, 400, "path is required");
     }
 
-    await withPlaywrightRouteContext({
+    await withRouteTabContext({
       req,
       res,
       ctx,
       targetId,
-      feature: "download",
-      run: async ({ cdpUrl, tab, pw }) => {
+      run: async ({ profileCtx, cdpUrl, tab }) => {
+        if (getBrowserProfileCapabilities(profileCtx.profile).usesChromeMcp) {
+          return jsonError(
+            res,
+            501,
+            "downloads are not supported for existing-session profiles yet.",
+          );
+        }
+        const pw = await requirePwAi(res, "download");
+        if (!pw) {
+          return;
+        }
         await ensureOutputRootDir(DEFAULT_DOWNLOAD_DIR);
         const downloadPath = await resolveWritableOutputPathOrRespond({
           res,

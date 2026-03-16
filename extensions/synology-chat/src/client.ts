@@ -27,6 +27,12 @@ type ChatUserCacheEntry = {
   cachedAt: number;
 };
 
+type ChatWebhookPayload = {
+  text?: string;
+  file_url?: string;
+  user_ids?: number[];
+};
+
 // Cache user lists per bot endpoint to avoid cross-account bleed.
 const chatUserCache = new Map<string, ChatUserCacheEntry>();
 const CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
@@ -47,16 +53,7 @@ export async function sendMessage(
 ): Promise<boolean> {
   // Synology Chat API requires user_ids (numeric) to specify the recipient
   // The @mention is optional but user_ids is mandatory
-  const payloadObj: Record<string, any> = { text };
-  if (userId) {
-    // userId can be numeric ID or username - if numeric, add to user_ids
-    const numericId = typeof userId === "number" ? userId : parseInt(userId, 10);
-    if (!isNaN(numericId)) {
-      payloadObj.user_ids = [numericId];
-    }
-  }
-  const payload = JSON.stringify(payloadObj);
-  const body = `payload=${encodeURIComponent(payload)}`;
+  const body = buildWebhookBody({ text }, userId);
 
   // Internal rate limit: min 500ms between sends
   const now = Date.now();
@@ -95,15 +92,7 @@ export async function sendFileUrl(
   userId?: string | number,
   allowInsecureSsl = true,
 ): Promise<boolean> {
-  const payloadObj: Record<string, any> = { file_url: fileUrl };
-  if (userId) {
-    const numericId = typeof userId === "number" ? userId : parseInt(userId, 10);
-    if (!isNaN(numericId)) {
-      payloadObj.user_ids = [numericId];
-    }
-  }
-  const payload = JSON.stringify(payloadObj);
-  const body = `payload=${encodeURIComponent(payload)}`;
+  const body = buildWebhookBody({ file_url: fileUrl }, userId);
 
   try {
     const ok = await doPost(incomingUrl, body, allowInsecureSsl);
@@ -213,6 +202,22 @@ export async function resolveChatUserId(
   if (byUsername) return byUsername.user_id;
 
   return undefined;
+}
+
+function buildWebhookBody(payload: ChatWebhookPayload, userId?: string | number): string {
+  const numericId = parseNumericUserId(userId);
+  if (numericId !== undefined) {
+    payload.user_ids = [numericId];
+  }
+  return `payload=${encodeURIComponent(JSON.stringify(payload))}`;
+}
+
+function parseNumericUserId(userId?: string | number): number | undefined {
+  if (userId === undefined) {
+    return undefined;
+  }
+  const numericId = typeof userId === "number" ? userId : parseInt(userId, 10);
+  return Number.isNaN(numericId) ? undefined : numericId;
 }
 
 function doPost(url: string, body: string, allowInsecureSsl = true): Promise<boolean> {
