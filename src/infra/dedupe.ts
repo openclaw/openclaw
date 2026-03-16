@@ -1,5 +1,6 @@
 export type DedupeCache = {
   check: (key: string | undefined | null, now?: number) => boolean;
+  delete: (key: string | undefined | null) => void;
   clear: () => void;
   size: () => number;
 };
@@ -54,6 +55,12 @@ export function createDedupeCache(options: DedupeCacheOptions): DedupeCache {
       touch(key, now);
       prune(now);
       return false;
+    },
+    delete: (key) => {
+      if (!key) {
+        return;
+      }
+      cache.delete(key);
     },
     clear: () => {
       cache.clear();

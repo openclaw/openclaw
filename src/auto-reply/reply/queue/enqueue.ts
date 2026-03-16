@@ -2,6 +2,75 @@ import type { FollowupRun, QueueDedupeMode, QueueSettings } from "./types.js";
 import { applyQueueDropPolicy, shouldSkipQueueItem } from "../../../utils/queue-helpers.js";
 import { FOLLOWUP_QUEUES, getFollowupQueue } from "./state.js";
 
+const RECENT_QUEUE_MESSAGE_ID_TTL_MS = 5 * 60 * 1000;
+const RECENT_QUEUE_MESSAGE_ID_MAX = 10_000;
+const recentQueueMessageIds = new Map<string, number>();
+
+function normalizeMessageId(messageId: string | undefined): string | undefined {
+  const trimmed = messageId?.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+  return trimmed.replace(/:permission-error$/i, "");
+}
+
+function buildRecentMessageIdKey(run: FollowupRun, queueKey: string): string | undefined {
+  const messageId = normalizeMessageId(run.messageId);
+  if (!messageId) {
+    return undefined;
+  }
+  return JSON.stringify([
+    "queue",
+    queueKey,
+    run.originatingChannel ?? "",
+    run.originatingTo ?? "",
+    run.originatingAccountId ?? "",
+    run.originatingThreadId == null ? "" : String(run.originatingThreadId),
+    messageId,
+  ]);
+}
+
+function pruneRecentQueueMessageIds(now: number): void {
+  const cutoff = now - RECENT_QUEUE_MESSAGE_ID_TTL_MS;
+  for (const [key, ts] of recentQueueMessageIds) {
+    if (ts < cutoff) {
+      recentQueueMessageIds.delete(key);
+    }
+  }
+  while (recentQueueMessageIds.size > RECENT_QUEUE_MESSAGE_ID_MAX) {
+    const oldestKey = recentQueueMessageIds.keys().next().value;
+    if (!oldestKey) {
+      break;
+    }
+    recentQueueMessageIds.delete(oldestKey);
+  }
+}
+
+function hasRecentQueuedMessageId(key: string | undefined, now = Date.now()): boolean {
+  if (!key) {
+    return false;
+  }
+  pruneRecentQueueMessageIds(now);
+  const existing = recentQueueMessageIds.get(key);
+  if (existing === undefined) {
+    return false;
+  }
+  if (now - existing >= RECENT_QUEUE_MESSAGE_ID_TTL_MS) {
+    recentQueueMessageIds.delete(key);
+    return false;
+  }
+  return true;
+}
+
+function recordRecentQueuedMessageId(key: string | undefined, now = Date.now()): void {
+  if (!key) {
+    return;
+  }
+  recentQueueMessageIds.delete(key);
+  recentQueueMessageIds.set(key, now);
+  pruneRecentQueueMessageIds(now);
+}
+
 function isRunAlreadyQueued(
   run: FollowupRun,
   items: FollowupRun[],
@@ -13,9 +82,11 @@ function isRunAlreadyQueued(
     item.originatingAccountId === run.originatingAccountId &&
     item.originatingThreadId === run.originatingThreadId;
 
-  const messageId = run.messageId?.trim();
+  const messageId = normalizeMessageId(run.messageId);
   if (messageId) {
-    return items.some((item) => item.messageId?.trim() === messageId && hasSameRouting(item));
+    return items.some(
+      (item) => normalizeMessageId(item.messageId) === messageId && hasSameRouting(item),
+    );
   }
   if (!allowPromptFallback) {
     return false;
@@ -30,6 +101,10 @@ export function enqueueFollowupRun(
   dedupeMode: QueueDedupeMode = "message-id",
 ): boolean {
   const queue = getFollowupQueue(key, settings);
+  const recentMessageIdKey = dedupeMode !== "none" ? buildRecentMessageIdKey(run, key) : undefined;
+  if (hasRecentQueuedMessageId(recentMessageIdKey)) {
+    return false;
+  }
   const dedupe =
     dedupeMode === "none"
       ? undefined
@@ -53,6 +128,7 @@ export function enqueueFollowupRun(
   }
 
   queue.items.push(run);
+  recordRecentQueuedMessageId(recentMessageIdKey);
   return true;
 }
 
@@ -66,4 +142,8 @@ export function getFollowupQueueDepth(key: string): number {
     return 0;
   }
   return queue.items.length;
+}
+
+export function resetRecentQueuedMessageIdDedupe(): void {
+  recentQueueMessageIds.clear();
 }

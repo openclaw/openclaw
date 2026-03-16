@@ -1,5 +1,6 @@
 import type { ClawdbotConfig, RuntimeEnv, HistoryEntry } from "openclaw/plugin-sdk";
 import * as Lark from "@larksuiteoapi/node-sdk";
+import { createDedupeCache } from "../../../src/infra/dedupe.js";
 import type { ResolvedFeishuAccount } from "./types.js";
 import { resolveFeishuAccount, listEnabledFeishuAccounts } from "./accounts.js";
 import { handleFeishuMessage, type FeishuMessageEvent, type FeishuBotAddedEvent } from "./bot.js";
@@ -16,6 +17,18 @@ export type MonitorFeishuOpts = {
 // Per-account WebSocket clients and bot info
 const wsClients = new Map<string, Lark.WSClient>();
 const botOpenIds = new Map<string, string>();
+const recentFeishuEvents = createDedupeCache({
+  ttlMs: 5 * 60 * 1000,
+  maxSize: 2_000,
+});
+
+function buildFeishuEventDedupeKey(accountId: string, messageId: string | undefined): string | null {
+  const trimmed = messageId?.trim();
+  if (!trimmed) {
+    return null;
+  }
+  return `${accountId}:${trimmed}`;
+}
 
 async function fetchBotOpenId(account: ResolvedFeishuAccount): Promise<string | undefined> {
   try {
@@ -62,8 +75,13 @@ async function monitorSingleAccount(params: {
 
   eventDispatcher.register({
     "im.message.receive_v1": async (data) => {
+      const event = data as unknown as FeishuMessageEvent;
+      const dedupeKey = buildFeishuEventDedupeKey(accountId, event.message?.message_id);
+      if (dedupeKey && recentFeishuEvents.check(dedupeKey)) {
+        log(`feishu[${accountId}]: dropping duplicate event for message ${event.message.message_id}`);
+        return;
+      }
       try {
-        const event = data as unknown as FeishuMessageEvent;
         await handleFeishuMessage({
           cfg,
           event,
@@ -73,6 +91,7 @@ async function monitorSingleAccount(params: {
           accountId,
         });
       } catch (err) {
+        recentFeishuEvents.delete(dedupeKey);
         error(`feishu[${accountId}]: error handling message: ${String(err)}`);
       }
     },
