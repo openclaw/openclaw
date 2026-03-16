@@ -22,11 +22,11 @@ export type {
 
 /**
  * Plugin-facing params for `deliverOutboundPayloads`.
- * Internal fields (`skipQueue`, `mirror`, `session`, `deps`) are excluded.
+ * Internal fields (`skipQueue`, `mirror`, `session`, `deps`, `abortSignal`) are excluded.
  */
 export type PluginDeliverOutboundParams = Omit<
   Parameters<typeof deliverOutboundPayloads>[0],
-  "skipQueue" | "mirror" | "session" | "deps"
+  "skipQueue" | "mirror" | "session" | "deps" | "abortSignal"
 >;
 
 // ── Subagent runtime types ──────────────────────────────────────────

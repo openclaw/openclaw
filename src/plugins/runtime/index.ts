@@ -63,12 +63,14 @@ export function createPluginRuntime(_options: CreatePluginRuntimeOptions = {}): 
           mirror: _mi,
           session: _se,
           deps: _de,
+          abortSignal: _as,
           ...publicParams
         } = params as typeof params & {
           skipQueue?: unknown;
           mirror?: unknown;
           session?: unknown;
           deps?: unknown;
+          abortSignal?: unknown;
         };
         return deliverOutboundPayloads(publicParams);
       },
