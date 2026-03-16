@@ -65,6 +65,7 @@ type SlackInteractiveDispatchContext = Omit<
   PluginInteractiveSlackHandlerContext,
   | "interaction"
   | "respond"
+  | "channel"
   | "requestConversationBinding"
   | "detachConversationBinding"
   | "getCurrentConversationBinding"
