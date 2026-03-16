@@ -720,7 +720,7 @@ const SIMPLE_IMPLICIT_PROVIDER_LOADERS: ImplicitProviderLoader[] = [
   // Uses openai-completions API to call blink-apis /api/v1/ai/chat/completions.
   // x-blink-agent-id header read from BLINK_AGENT_ID env var (per-agent tracking).
   withApiKey("blink", async ({ apiKey }) => ({
-    ...buildBlinkProvider(),
+    ...await buildBlinkProvider(),
     apiKey,
   })),
 ];

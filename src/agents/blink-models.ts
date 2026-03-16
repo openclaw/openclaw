@@ -16,6 +16,8 @@ import {
   BLINK_DEFAULT_COST,
   BLINK_DEFAULT_MODEL_ID,
   BLINK_MODEL_CATALOG,
+  BLINK_MODEL_CATALOG_STATIC,
+  fetchBlinkModelCatalog,
   getBlinkGatewayBaseUrl,
 } from "../providers/blink-shared.js";
 
@@ -24,13 +26,10 @@ type ProviderConfig = NonNullable<ModelsConfig["providers"]>[string];
 
 export { BLINK_DEFAULT_MODEL_ID };
 
-export function buildBlinkProvider(agentId?: string): ProviderConfig {
+function buildProviderConfig(agentId?: string, catalog = BLINK_MODEL_CATALOG): ProviderConfig {
   const headers: Record<string, string> = {};
-
-  // Inject agent identity header for per-agent Tinybird usage tracking.
-  // agentId comes from BLINK_AGENT_ID env var, separate from the API key.
   const resolvedAgentId = agentId ?? process.env.BLINK_AGENT_ID;
-  if (resolvedAgentId && resolvedAgentId.trim()) {
+  if (resolvedAgentId?.trim()) {
     headers["x-blink-agent-id"] = resolvedAgentId.trim();
   }
 
@@ -38,7 +37,7 @@ export function buildBlinkProvider(agentId?: string): ProviderConfig {
     baseUrl: getBlinkGatewayBaseUrl(),
     api: "openai-completions",
     ...(Object.keys(headers).length > 0 ? { headers } : {}),
-    models: BLINK_MODEL_CATALOG.map((model) => ({
+    models: catalog.map((model) => ({
       id: model.id,
       name: model.name,
       reasoning: model.reasoning,
@@ -48,4 +47,19 @@ export function buildBlinkProvider(agentId?: string): ProviderConfig {
       maxTokens: model.maxTokens,
     })),
   };
+}
+
+/**
+ * Build the Blink provider config.
+ * Fetches the full language model catalog from the gateway; falls back to
+ * the static list if the request fails (e.g. network unavailable at startup).
+ */
+export async function buildBlinkProvider(agentId?: string): Promise<ProviderConfig> {
+  const catalog = await fetchBlinkModelCatalog().catch(() => BLINK_MODEL_CATALOG_STATIC);
+  return buildProviderConfig(agentId, catalog);
+}
+
+/** Synchronous variant — uses whatever catalog is currently cached (static on first call). */
+export function buildBlinkProviderSync(agentId?: string): ProviderConfig {
+  return buildProviderConfig(agentId);
 }

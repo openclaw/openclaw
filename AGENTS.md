@@ -50,6 +50,15 @@ Export `buildBlinkProvider` from here.
 ### Modified: `src/agents/models-config.providers.ts`
 Auto-activate Blink provider when `BLINK_API_KEY` env var is set. No user config needed. The default model is auto-selected as `anthropic/claude-sonnet-4.6` via OpenClaw's provider fallback logic (picks first model from the first available provider when the hardcoded default `anthropic` provider isn't configured).
 
+### New: `src/agents/tools/blink-secrets.ts`
+`createBlinkSecretsTool()` — the `blink_claw_secrets` tool. Enables the agent to manage its own encrypted secret vault from chat. Auto-activates when both `BLINK_API_KEY` and `BLINK_AGENT_ID` are set (always present in Blink Claw containers).
+
+- `operation: "set"` — saves/updates a key-value secret (calls `POST /api/claw/agents/:id/secrets`)
+- `operation: "get_names"` — lists key names only (never returns values)
+- `operation: "delete"` — removes a secret
+
+After `set`, the value is available as `$KEY_NAME` in all shell commands (synced to `/data/.env`). Uses `BLINK_CLAW_URL` (defaults to `https://blink.new`) as the Claw Manager base URL, distinct from `BLINK_APIS_URL` which is the AI gateway.
+
 ### Modified: `src/agents/tools/web-search.ts`
 Adds `"blink"` as a first-class `web_search` provider. Auto-detected from `BLINK_API_KEY` — checked BEFORE Brave, so Blink Claw containers always get native web search.
 
@@ -111,7 +120,7 @@ destination = "/data"   # Fly Volume — all state persists here
 # No [http_service] block = no public URL (headless Phase 1)
 ```
 
-**Storage:** Fly Volume at `/data`. Agent CWD = `/data/agents/default/agent/`. npm installs, files, packages the agent creates all persist here across restarts.
+**Storage:** Fly Volume at `/data`. Agent CWD = `/data/agents/main/agent/`. npm installs, files, packages the agent creates all persist here across restarts.
 
 **Messaging:** Outbound polling only (no inbound ports needed). Telegram = `getUpdates` long-poll, Discord = WebSocket gateway. No webhook URL, no public IP.
 
