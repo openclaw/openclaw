@@ -1,5 +1,12 @@
 import { describe, it, expect } from "vitest";
-import { extractInboundSenderLabel, stripInboundMetadata } from "./strip-inbound-meta.js";
+import {
+  DISPLAY_HIDDEN_PREFIX_END,
+  DISPLAY_HIDDEN_PREFIX_START,
+  extractInboundSenderLabel,
+  stripInboundMetadata,
+  stripLeadingInboundMetadata,
+  wrapHiddenDisplayContext,
+} from "./strip-inbound-meta.js";
 
 const CONV_BLOCK = `Conversation info (untrusted metadata):
 \`\`\`json
@@ -117,6 +124,66 @@ Real user content`;
 name: test
 Hello from user`;
     expect(stripInboundMetadata(input)).toBe(input);
+  });
+
+  it("strips a leading UI-hidden prepend block", () => {
+    const input = `${DISPLAY_HIDDEN_PREFIX_START}
+internal prepend
+${DISPLAY_HIDDEN_PREFIX_END}
+
+Real user text`;
+    expect(stripInboundMetadata(input)).toBe("Real user text");
+  });
+
+  it("strips chained UI-hidden prepend blocks after inbound metadata", () => {
+    const input = `${CONV_BLOCK}
+
+${DISPLAY_HIDDEN_PREFIX_START}
+internal prepend A
+${DISPLAY_HIDDEN_PREFIX_END}
+
+${DISPLAY_HIDDEN_PREFIX_START}
+internal prepend B
+${DISPLAY_HIDDEN_PREFIX_END}
+
+Real user text`;
+    expect(stripInboundMetadata(input)).toBe("Real user text");
+  });
+
+  it("does not strip UI-hidden markers that appear later in user text", () => {
+    const input = `Real user text
+${DISPLAY_HIDDEN_PREFIX_START}
+keep this
+${DISPLAY_HIDDEN_PREFIX_END}`;
+    expect(stripInboundMetadata(input)).toBe(input);
+  });
+
+  it("fails open when a UI-hidden prepend block is missing the closing marker", () => {
+    const input = `${DISPLAY_HIDDEN_PREFIX_START}
+internal prepend
+Real user text`;
+    expect(stripInboundMetadata(input)).toBe(input);
+  });
+});
+
+describe("stripLeadingInboundMetadata", () => {
+  it("strips leading UI-hidden blocks when there is no inbound metadata", () => {
+    const input = `${DISPLAY_HIDDEN_PREFIX_START}
+internal prepend
+${DISPLAY_HIDDEN_PREFIX_END}
+
+Real user text`;
+    expect(stripLeadingInboundMetadata(input)).toBe("Real user text");
+  });
+});
+
+describe("wrapHiddenDisplayContext", () => {
+  it("wraps text with the UI-hidden markers", () => {
+    expect(wrapHiddenDisplayContext(" internal prepend ")).toBe(
+      `${DISPLAY_HIDDEN_PREFIX_START}
+internal prepend
+${DISPLAY_HIDDEN_PREFIX_END}`,
+    );
   });
 });
 

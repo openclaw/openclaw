@@ -1351,6 +1351,13 @@ export type PluginHookBeforePromptBuildEvent = {
 
 export type PluginHookBeforePromptBuildResult = {
   systemPrompt?: string;
+  /**
+   * Prepends text to the user prompt for this run.
+   *
+   * If part of this leading prepend should stay AI-facing but not appear in chat UIs,
+   * wrap that segment with:
+   * `<<<OPENCLAW_UI_HIDDEN>>> ... <<<END_OPENCLAW_UI_HIDDEN>>>`
+   */
   prependContext?: string;
   /**
    * Prepended to the agent system prompt so providers can cache it (e.g. prompt caching).

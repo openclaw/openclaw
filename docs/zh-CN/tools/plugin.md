@@ -1021,7 +1021,7 @@ export default function register(api) {
 
 `before_prompt_build` 结果字段：
 
-- `prependContext`：为本次运行在用户提示词前插入文本。最适合按轮次变化或动态内容。
+- `prependContext`：为本次运行在用户提示词前插入文本。最适合按轮次变化或动态内容。如果其中有一段前置内容需要只给 AI 看、不在聊天 UI 里回显，可以把这段包在 `<<<OPENCLAW_UI_HIDDEN>>>` 与 `<<<END_OPENCLAW_UI_HIDDEN>>>` 之间。
 - `systemPrompt`：完整的系统提示词覆盖。
 - `prependSystemContext`：在当前系统提示词前插入文本。
 - `appendSystemContext`：在当前系统提示词后追加文本。

@@ -1160,7 +1160,7 @@ Core-enforced hook policy:
 
 `before_prompt_build` result fields:
 
-- `prependContext`: prepends text to the user prompt for this run. Best for turn-specific or dynamic content.
+- `prependContext`: prepends text to the user prompt for this run. Best for turn-specific or dynamic content. If part of the leading prepend should stay AI-facing but not show up in chat UIs, wrap that segment with `<<<OPENCLAW_UI_HIDDEN>>>` and `<<<END_OPENCLAW_UI_HIDDEN>>>`.
 - `systemPrompt`: full system prompt override.
 - `prependSystemContext`: prepends text to the current system prompt.
 - `appendSystemContext`: appends text to the current system prompt.

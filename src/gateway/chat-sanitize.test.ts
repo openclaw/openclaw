@@ -90,4 +90,23 @@ describe("stripEnvelopeFromMessage", () => {
     const result = stripEnvelopeFromMessage(input) as { content?: string };
     expect(result.content).toBe("hello");
   });
+
+  test("strips leading UI-hidden prepend blocks from user messages", () => {
+    const input = {
+      role: "user",
+      content:
+        "<<<OPENCLAW_UI_HIDDEN>>>\ninternal prepend\n<<<END_OPENCLAW_UI_HIDDEN>>>\n\nVisible user message",
+    };
+    const result = stripEnvelopeFromMessage(input) as { content?: string };
+    expect(result.content).toBe("Visible user message");
+  });
+
+  test("does not strip malformed UI-hidden prepend blocks", () => {
+    const input = {
+      role: "user",
+      content: "<<<OPENCLAW_UI_HIDDEN>>>\ninternal prepend\nVisible user message",
+    };
+    const result = stripEnvelopeFromMessage(input) as { content?: string };
+    expect(result.content).toBe(input.content);
+  });
 });
