@@ -79,15 +79,7 @@ export function normalizeVerboseLevel(raw?: string | null): VerboseLevel | undef
   return normalizeOnOffFullLevel(raw);
 }
 
-function listThinkingLevelLabels(_provider?: string | null, _model?: string | null): string[] {
-  // Keep API compatibility with shared thinking helpers while remaining
-  // browser-safe (no provider runtime/plugin evaluation here).
-  void _provider;
-  void _model;
-
-  // Keep UI-side defaults lightweight and browser-safe.
-  return ["off", "minimal", "low", "medium", "high", "adaptive"];
-}
+  return ["off", "minimal", "low", "medium", "high", "xhigh", "adaptive"];
 
 export function formatThinkingLevels(
   provider?: string | null,
