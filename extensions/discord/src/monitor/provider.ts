@@ -38,7 +38,7 @@ import {
   warnMissingProviderGroupPolicyFallbackOnce,
 } from "../../../../src/config/runtime-group-policy.js";
 import { createConnectedChannelStatusPatch } from "../../../../src/gateway/channel-status-patches.js";
-import { danger, logVerbose, shouldLogVerbose, warn } from "../../../../src/globals.js";
+import { danger, isVerbose, logVerbose, shouldLogVerbose, warn } from "../../../../src/globals.js";
 import { formatErrorMessage } from "../../../../src/infra/errors.js";
 import { createSubsystemLogger } from "../../../../src/logging/subsystem.js";
 import { getPluginCommandSpecs } from "../../../../src/plugins/commands.js";
@@ -363,7 +363,7 @@ function logDiscordStartupPhase(params: {
   gateway?: GatewayPlugin;
   details?: string;
 }) {
-  if (!shouldLogVerbose()) {
+  if (!isVerbose()) {
     return;
   }
   const elapsedMs = Math.max(0, Date.now() - params.startAt);
@@ -775,7 +775,7 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
     const lifecycleGateway = client.getPlugin<GatewayPlugin>("gateway");
     earlyGatewayEmitter = getDiscordGatewayEmitter(lifecycleGateway);
     onEarlyGatewayDebug = (msg: unknown) => {
-      if (!shouldLogVerbose()) {
+      if (!isVerbose()) {
         return;
       }
       runtime.log?.(
