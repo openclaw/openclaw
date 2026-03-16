@@ -5,7 +5,6 @@ import type { PluginLogger } from "openclaw/plugin-sdk/executorch";
 import type { RunnerBackend } from "./native-addon.js";
 import { RunnerManager } from "./runner-manager.js";
 import { ensureRuntimeLibraryLoadable } from "./runtime-library.js";
-import { PrivateVoiceAgent } from "./voice-agent.js";
 
 export type ExecuTorchCliOptions = {
   backend: RunnerBackend;
@@ -123,54 +122,6 @@ export function registerExecuTorchCli(program: Command, options: ExecuTorchCliOp
         runner.stop();
       }
     });
-
-  et.command("voice-agent")
-    .description("Start the Private Voice Agent (Parakeet STT + Ollama LLM + Edge TTS)")
-    .option("--ollama-model <model>", "Ollama model to use", "llama3.2:3b")
-    .option("--ollama-url <url>", "Ollama base URL", "http://localhost:11434")
-    .option("--tts-voice <voice>", "Edge TTS voice", "en-US-AriaNeural")
-    .option("--record-duration <seconds>", "Recording duration per turn", "5")
-    .option("--max-turns <n>", "Maximum number of turns (0 = unlimited)", "0")
-    .action(
-      async (opts: {
-        ollamaModel: string;
-        ollamaUrl: string;
-        ttsVoice: string;
-        recordDuration: string;
-        maxTurns: string;
-      }) => {
-        const { logger } = options;
-        const agent = new PrivateVoiceAgent({
-          backend: options.backend,
-          runtimeLibraryPath: options.runtimeLibraryPath,
-          modelPath: options.modelPath,
-          tokenizerPath: options.tokenizerPath,
-          dataPath: options.dataPath,
-          ollamaModel: opts.ollamaModel,
-          ollamaBaseUrl: opts.ollamaUrl,
-          ttsVoice: opts.ttsVoice,
-          logger,
-        });
-
-        const maxTurns = Number.parseInt(opts.maxTurns, 10) || 0;
-        const recordDuration = Number.parseInt(opts.recordDuration, 10) || 5;
-
-        process.on("SIGINT", () => {
-          logger.info("\n[voice-agent] Shutting down...");
-          agent.stop();
-          process.exit(0);
-        });
-
-        try {
-          await agent.runLoop({
-            maxTurns: maxTurns > 0 ? maxTurns : undefined,
-            recordDuration,
-          });
-        } finally {
-          agent.stop();
-        }
-      },
-    );
 
   et.command("setup")
     .description("Download Parakeet-TDT Metal model/runtime files")

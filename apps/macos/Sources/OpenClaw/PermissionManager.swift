@@ -10,13 +10,6 @@ import Speech
 import UserNotifications
 
 enum PermissionManager {
-    /// True when the process is running as a proper .app bundle (e.g. dist/OpenClaw.app).
-    /// False when running as a raw executable (e.g. Swift PM from Xcode), which would crash
-    /// APIs that require a bundle (e.g. UNUserNotificationCenter).
-    private static var hasAppBundle: Bool {
-        Bundle.main.bundlePath.hasSuffix(".app")
-    }
-
     static func isLocationAuthorized(status: CLAuthorizationStatus, requireAlways: Bool) -> Bool {
         if requireAlways { return status == .authorizedAlways }
         switch status {
@@ -59,7 +52,6 @@ enum PermissionManager {
     }
 
     private static func ensureNotifications(interactive: Bool) async -> Bool {
-        guard hasAppBundle else { return false }
         let center = UNUserNotificationCenter.current()
         let settings = await center.notificationSettings()
 
@@ -198,14 +190,10 @@ enum PermissionManager {
         for cap in caps {
             switch cap {
             case .notifications:
-                if !hasAppBundle {
-                    results[cap] = false
-                } else {
-                    let center = UNUserNotificationCenter.current()
-                    let settings = await center.notificationSettings()
-                    results[cap] = settings.authorizationStatus == .authorized
-                        || settings.authorizationStatus == .provisional
-                }
+                let center = UNUserNotificationCenter.current()
+                let settings = await center.notificationSettings()
+                results[cap] = settings.authorizationStatus == .authorized
+                    || settings.authorizationStatus == .provisional
 
             case .appleScript:
                 results[cap] = await MainActor.run { AppleScriptPermission.isAuthorized() }

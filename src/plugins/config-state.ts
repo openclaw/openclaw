@@ -236,9 +236,6 @@ export function isTestDefaultMemorySlotDisabled(
   return true;
 }
 
-/** Reason used when a bundled plugin is not in BUNDLED_ENABLED_BY_DEFAULT and has no explicit enabled: true. */
-export const REASON_BUNDLED_DISABLED_BY_DEFAULT = "bundled (disabled by default)";
-
 export function resolveEnableState(
   id: string,
   origin: PluginRecord["origin"],
@@ -272,7 +269,7 @@ export function resolveEnableState(
     return { enabled: true };
   }
   if (origin === "bundled") {
-    return { enabled: false, reason: REASON_BUNDLED_DISABLED_BY_DEFAULT };
+    return { enabled: false, reason: "bundled (disabled by default)" };
   }
   return { enabled: true };
 }
@@ -306,7 +303,7 @@ export function resolveEffectiveEnableState(params: {
   const base = resolveEnableState(params.id, params.origin, params.config, params.enabledByDefault);
   if (
     !base.enabled &&
-    base.reason === REASON_BUNDLED_DISABLED_BY_DEFAULT &&
+    base.reason === "bundled (disabled by default)" &&
     isBundledChannelEnabledByChannelConfig(params.rootConfig, params.id)
   ) {
     return { enabled: true };
