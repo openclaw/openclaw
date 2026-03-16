@@ -32,11 +32,11 @@ function createRuntime() {
 }
 
 describe("applyNonInteractiveAuthChoice", () => {
-  it("resolves builtin API key auth before plugin provider resolution", async () => {
+  it("resolves plugin provider auth before builtin API key fallbacks", async () => {
     const runtime = createRuntime();
     const nextConfig = { agents: { defaults: {} } } as OpenClawConfig;
     const resolvedConfig = { auth: { profiles: { "openai:default": { mode: "api_key" } } } };
-    applySimpleNonInteractiveApiKeyChoice.mockResolvedValueOnce(resolvedConfig as never);
+    applyNonInteractivePluginProviderChoice.mockResolvedValueOnce(resolvedConfig as never);
 
     const result = await applyNonInteractiveAuthChoice({
       nextConfig,
@@ -47,7 +47,7 @@ describe("applyNonInteractiveAuthChoice", () => {
     });
 
     expect(result).toBe(resolvedConfig);
-    expect(applySimpleNonInteractiveApiKeyChoice).toHaveBeenCalledOnce();
-    expect(applyNonInteractivePluginProviderChoice).not.toHaveBeenCalled();
+    expect(applyNonInteractivePluginProviderChoice).toHaveBeenCalledOnce();
+    expect(applySimpleNonInteractiveApiKeyChoice).not.toHaveBeenCalled();
   });
 });

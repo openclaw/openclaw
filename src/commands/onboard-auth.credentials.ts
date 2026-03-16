@@ -74,7 +74,7 @@ function resolveApiKeySecretInput(
   return normalized;
 }
 
-function buildApiKeyCredential(
+export function buildApiKeyCredential(
   provider: string,
   input: SecretInput,
   metadata?: Record<string, string>,

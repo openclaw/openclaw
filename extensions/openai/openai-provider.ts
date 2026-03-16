@@ -4,6 +4,11 @@ import {
 } from "openclaw/plugin-sdk/core";
 import { normalizeModelCompat } from "../../src/agents/model-compat.js";
 import { normalizeProviderId } from "../../src/agents/model-selection.js";
+import {
+  applyOpenAIConfig,
+  OPENAI_DEFAULT_MODEL,
+} from "../../src/commands/openai-model-default.js";
+import { createProviderApiKeyAuthMethod } from "../../src/plugins/provider-api-key-auth.js";
 import type { ProviderPlugin } from "../../src/plugins/types.js";
 import {
   cloneFirstTemplateModel,
@@ -89,7 +94,28 @@ export function buildOpenAIProvider(): ProviderPlugin {
     label: "OpenAI",
     docsPath: "/providers/models",
     envVars: ["OPENAI_API_KEY"],
-    auth: [],
+    auth: [
+      createProviderApiKeyAuthMethod({
+        providerId: PROVIDER_ID,
+        methodId: "api-key",
+        label: "OpenAI API key",
+        hint: "Direct OpenAI API key",
+        optionKey: "openaiApiKey",
+        flagName: "--openai-api-key",
+        envVar: "OPENAI_API_KEY",
+        promptMessage: "Enter OpenAI API key",
+        defaultModel: OPENAI_DEFAULT_MODEL,
+        expectedProviders: ["openai"],
+        applyConfig: (cfg) => applyOpenAIConfig(cfg),
+        wizard: {
+          choiceId: "openai-api-key",
+          choiceLabel: "OpenAI API key",
+          groupId: "openai",
+          groupLabel: "OpenAI",
+          groupHint: "Codex OAuth + API key",
+        },
+      }),
+    ],
     resolveDynamicModel: (ctx) => resolveOpenAIGpt54ForwardCompatModel(ctx),
     normalizeResolvedModel: (ctx) => {
       if (normalizeProviderId(ctx.provider) !== PROVIDER_ID) {

@@ -64,6 +64,46 @@ describe("provider wizard boundaries", () => {
     });
   });
 
+  it("builds wizard options from method-level metadata", () => {
+    const provider = makeProvider({
+      id: "openai",
+      label: "OpenAI",
+      auth: [
+        {
+          id: "api-key",
+          label: "OpenAI API key",
+          kind: "api_key",
+          wizard: {
+            choiceId: "openai-api-key",
+            choiceLabel: "OpenAI API key",
+            groupId: "openai",
+            groupLabel: "OpenAI",
+          },
+          run: vi.fn(),
+        },
+      ],
+    });
+    resolvePluginProviders.mockReturnValue([provider]);
+
+    expect(resolveProviderWizardOptions({})).toEqual([
+      {
+        value: "openai-api-key",
+        label: "OpenAI API key",
+        groupId: "openai",
+        groupLabel: "OpenAI",
+      },
+    ]);
+    expect(
+      resolveProviderPluginChoice({
+        providers: [provider],
+        choice: "openai-api-key",
+      }),
+    ).toEqual({
+      provider,
+      method: provider.auth[0],
+    });
+  });
+
   it("builds model-picker entries from plugin metadata and provider-method choices", () => {
     const provider = makeProvider({
       id: "sglang",
