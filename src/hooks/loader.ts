@@ -15,19 +15,28 @@ import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { sanitizeForLog } from "../terminal/ansi.js";
 import { shouldIncludeHook } from "./config.js";
 import { buildImportUrl } from "./import-url.js";
-import type { InternalHookHandler } from "./internal-hooks.js";
-import { registerInternalHook, unregisterInternalHook } from "./internal-hooks.js";
+import type { InternalEnrichHookHandler, InternalHookHandler } from "./internal-hooks.js";
+import {
+  registerInternalEnrichHook,
+  registerInternalHook,
+  unregisterInternalEnrichHook,
+  unregisterInternalHook,
+} from "./internal-hooks.js";
 import { getLegacyInternalHookHandlers } from "./legacy-config.js";
 import { resolveFunctionModuleExport } from "./module-loader.js";
 import { loadWorkspaceHookEntries } from "./workspace.js";
 
 const log = createSubsystemLogger("hooks:loader");
+type LoadedInternalHookRegistration =
+  | { kind: "hook"; event: string; handler: InternalHookHandler }
+  | { kind: "enrich"; event: string; handler: InternalEnrichHookHandler };
 const LOADED_INTERNAL_HOOK_REGISTRATIONS_KEY = Symbol.for(
   "openclaw.loadedInternalHookRegistrations",
 );
-const loadedHookRegistrations = resolveGlobalSingleton<
-  Array<{ event: string; handler: InternalHookHandler }>
->(LOADED_INTERNAL_HOOK_REGISTRATIONS_KEY, () => []);
+const loadedHookRegistrations = resolveGlobalSingleton<LoadedInternalHookRegistration[]>(
+  LOADED_INTERNAL_HOOK_REGISTRATIONS_KEY,
+  () => [],
+);
 
 function safeLogValue(value: string): string {
   return sanitizeForLog(value);
@@ -51,6 +60,10 @@ function resetLoadedInternalHooks(): void {
   while (loadedHookRegistrations.length > 0) {
     const registration = loadedHookRegistrations.pop();
     if (!registration) {
+      continue;
+    }
+    if (registration.kind === "enrich") {
+      unregisterInternalEnrichHook(registration.event, registration.handler);
       continue;
     }
     unregisterInternalHook(registration.event, registration.handler);
@@ -154,8 +167,14 @@ export async function loadInternalHooks(
         }
 
         for (const event of events) {
-          registerInternalHook(event, handler);
-          loadedHookRegistrations.push({ event, handler });
+          if (event === "message:enrich") {
+            const enrichHandler = handler as InternalEnrichHookHandler;
+            registerInternalEnrichHook(event, enrichHandler);
+            loadedHookRegistrations.push({ kind: "enrich", event, handler: enrichHandler });
+          } else {
+            registerInternalHook(event, handler);
+            loadedHookRegistrations.push({ kind: "hook", event, handler });
+          }
         }
 
         log.debug(
@@ -240,12 +259,26 @@ export async function loadInternalHooks(
       if (!handler) {
         log.error(
           `Handler '${safeLogValue(exportName)}' from ${safeLogValue(modulePath)} is not a function`,
-        );
+          );
         continue;
       }
 
-      registerInternalHook(handlerConfig.event, handler);
-      loadedHookRegistrations.push({ event: handlerConfig.event, handler });
+      if (handlerConfig.event === "message:enrich") {
+        const enrichHandler = handler as InternalEnrichHookHandler;
+        registerInternalEnrichHook(handlerConfig.event, enrichHandler);
+        loadedHookRegistrations.push({
+          kind: "enrich",
+          event: handlerConfig.event,
+          handler: enrichHandler,
+        });
+      } else {
+        registerInternalHook(handlerConfig.event, handler);
+        loadedHookRegistrations.push({
+          kind: "hook",
+          event: handlerConfig.event,
+          handler,
+        });
+      }
       log.debug(
         `Registered hook (legacy): ${safeLogValue(handlerConfig.event)} -> ${safeLogValue(modulePath)}${exportName !== "default" ? `#${safeLogValue(exportName)}` : ""}`,
       );

@@ -208,6 +208,50 @@ const myHandler: HookHandler = async (event) => {
 export default myHandler;
 ```
 
+## Enrichment Hooks (message:enrich)
+
+Unlike standard hooks (fire-and-forget), enrichment hooks are **awaited** and can
+return metadata that gets injected into the per-message `UntrustedContext` block.
+This lets you attach contextual data (GPS location, device state, etc.) to each
+inbound message without modifying the system prompt — preserving prompt cache.
+
+### Handler Signature
+
+```typescript
+import type { MessageEnrichResult } from "../../hooks/internal-hooks.js";
+
+const enrichHandler = async (event) => {
+  // Fetch or compute per-message metadata
+  const location = await fetchCurrentLocation();
+  return {
+    metadata: {
+      latitude: location.lat,
+      longitude: location.lon,
+      velocity_mps: location.velocity,
+      source: "dawarich",
+    },
+  } satisfies MessageEnrichResult;
+};
+
+export default enrichHandler;
+```
+
+### HOOK.md Configuration
+
+```yaml
+name: location-enrich
+events:
+  - message:enrich
+handler: handler.mjs
+```
+
+### Behavior
+
+- Runs **after** `message:received` but **before** the agent run
+- Multiple enrich handlers merge their metadata (later handlers overwrite on key conflict)
+- Zero overhead when no enrich hooks are registered (`hasEnrichHooks` guard)
+- Errors in enrich hooks are caught and logged — they never block the message
+
 ## Testing
 
 Test your hooks by:

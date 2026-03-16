@@ -176,6 +176,48 @@ export type SessionPatchHookEvent = InternalHookEvent & {
   context: SessionPatchHookContext;
 };
 
+// ============================================================================
+// Enrichment Hook Types
+// ============================================================================
+
+/**
+ * Result returned by a message:enrich handler.
+ * The `metadata` record is merged into the per-message untrusted context
+ * so the agent can see it without breaking system-prompt caching.
+ */
+export type MessageEnrichResult = {
+  metadata?: Record<string, unknown>;
+};
+
+/**
+ * Handler type for enrichment hooks that can return metadata to inject.
+ * Returning void/undefined means the handler has nothing to contribute.
+ */
+export type InternalEnrichHookHandler = (
+  event: InternalHookEvent,
+) => Promise<MessageEnrichResult | void> | MessageEnrichResult | void;
+
+export type MessageEnrichHookContext = {
+  /** Canonical inbound content before media understanding enrichment */
+  content: string;
+  /** Provider account ID for multi-account setups */
+  accountId?: string;
+  /** Transcribed audio text, if the message contained audio */
+  transcript?: string;
+  /** Whether this message was sent in a group/channel context */
+  isGroup?: boolean;
+  /** Group or channel identifier, if applicable */
+  groupId?: string;
+  /** Additional provider-specific metadata */
+  metadata?: Record<string, unknown>;
+} & MessageEnrichedBodyHookContext;
+
+export type MessageEnrichHookEvent = InternalHookEvent & {
+  type: "message";
+  action: "enrich";
+  context: MessageEnrichHookContext;
+};
+
 /**
  * Registry of hook handlers by event key.
  *
@@ -190,6 +232,11 @@ const INTERNAL_HOOK_HANDLERS_KEY = Symbol.for("openclaw.internalHookHandlers");
 const handlers = resolveGlobalSingleton<Map<string, InternalHookHandler[]>>(
   INTERNAL_HOOK_HANDLERS_KEY,
   () => new Map<string, InternalHookHandler[]>(),
+);
+const INTERNAL_ENRICH_HOOK_HANDLERS_KEY = Symbol.for("openclaw.internalEnrichHookHandlers");
+const enrichHandlers = resolveGlobalSingleton<Map<string, InternalEnrichHookHandler[]>>(
+  INTERNAL_ENRICH_HOOK_HANDLERS_KEY,
+  () => new Map<string, InternalEnrichHookHandler[]>(),
 );
 const INTERNAL_HOOKS_ENABLED_KEY = Symbol.for("openclaw.internalHooksEnabled");
 const internalHooksEnabledState = resolveGlobalSingleton<{ enabled: boolean }>(
@@ -248,10 +295,47 @@ export function unregisterInternalHook(eventKey: string, handler: InternalHookHa
 }
 
 /**
+ * Register an enrichment hook handler for a specific event key.
+ *
+ * Enrichment handlers can return `{ metadata: Record<string, unknown> }` which
+ * gets merged into the per-message untrusted context block that the agent sees.
+ */
+export function registerInternalEnrichHook(
+  eventKey: string,
+  handler: InternalEnrichHookHandler,
+): void {
+  if (!enrichHandlers.has(eventKey)) {
+    enrichHandlers.set(eventKey, []);
+  }
+  enrichHandlers.get(eventKey)!.push(handler);
+}
+
+/**
+ * Unregister an enrichment hook handler
+ */
+export function unregisterInternalEnrichHook(
+  eventKey: string,
+  handler: InternalEnrichHookHandler,
+): void {
+  const eventEnrichHandlers = enrichHandlers.get(eventKey);
+  if (!eventEnrichHandlers) {
+    return;
+  }
+  const index = eventEnrichHandlers.indexOf(handler);
+  if (index !== -1) {
+    eventEnrichHandlers.splice(index, 1);
+  }
+  if (eventEnrichHandlers.length === 0) {
+    enrichHandlers.delete(eventKey);
+  }
+}
+
+/**
  * Clear all registered hooks (useful for testing)
  */
 export function clearInternalHooks(): void {
   handlers.clear();
+  enrichHandlers.clear();
 }
 
 export function setInternalHooksEnabled(enabled: boolean): void {
@@ -262,7 +346,8 @@ export function setInternalHooksEnabled(enabled: boolean): void {
  * Get all registered event keys (useful for debugging)
  */
 export function getRegisteredEventKeys(): string[] {
-  return Array.from(handlers.keys());
+  const keys = new Set([...handlers.keys(), ...enrichHandlers.keys()]);
+  return Array.from(keys);
 }
 
 export function hasInternalHookListeners(type: InternalHookEventType, action: string): boolean {
@@ -303,6 +388,69 @@ export async function triggerInternalHook(event: InternalHookEvent): Promise<voi
       log.error(`Hook error [${event.type}:${event.action}]: ${message}`);
     }
   }
+}
+
+/**
+ * Trigger enrichment hooks and collect metadata from all handlers.
+ *
+ * Unlike `triggerInternalHook` (fire-and-forget), this function awaits all
+ * handlers and merges their returned `{ metadata }` into a single record.
+ * Later handlers overwrite earlier ones on key conflicts.
+ */
+export async function triggerEnrichHook(
+  event: InternalHookEvent,
+): Promise<Record<string, unknown>> {
+  if (!internalHooksEnabledState.enabled) {
+    return {};
+  }
+
+  const typeHandlers = enrichHandlers.get(event.type) ?? [];
+  const specificHandlers = enrichHandlers.get(`${event.type}:${event.action}`) ?? [];
+  const allHandlers = [...typeHandlers, ...specificHandlers];
+
+  if (allHandlers.length === 0) {
+    return {};
+  }
+
+  const merged: Record<string, unknown> = {};
+
+  for (const handler of allHandlers) {
+    try {
+      const result = await handler(event);
+      if (result?.metadata) {
+        Object.assign(merged, result.metadata);
+      }
+    } catch (err) {
+      const message = formatErrorMessage(err);
+      log.error(`Enrich hook error [${event.type}:${event.action}]: ${message}`);
+    }
+  }
+
+  return merged;
+}
+
+/**
+ * Check whether any enrichment handlers are registered for message:enrich
+ */
+export function hasEnrichHooks(): boolean {
+  return (enrichHandlers.get("message") ?? []).length > 0 ||
+    (enrichHandlers.get("message:enrich") ?? []).length > 0;
+}
+
+/**
+ * Type guard for message:enrich events
+ */
+export function isMessageEnrichEvent(
+  event: InternalHookEvent,
+): event is MessageEnrichHookEvent {
+  if (event.type !== "message" || event.action !== "enrich") {
+    return false;
+  }
+  const context = event.context as Partial<MessageEnrichHookContext> | null;
+  if (!context || typeof context !== "object") {
+    return false;
+  }
+  return typeof context.from === "string" && typeof context.channelId === "string";
 }
 
 /**
