@@ -47,8 +47,10 @@ export function resolveSafeInstallDir(params: {
   baseDir: string;
   id: string;
   invalidNameMessage: string;
+  nameEncoder?: (id: string) => string;
 }): { ok: true; path: string } | { ok: false; error: string } {
-  const targetDir = path.join(params.baseDir, safeDirName(params.id));
+  const encodedName = (params.nameEncoder ?? safeDirName)(params.id);
+  const targetDir = path.join(params.baseDir, encodedName);
   const resolvedBase = path.resolve(params.baseDir);
   const resolvedTarget = path.resolve(targetDir);
   const relative = path.relative(resolvedBase, resolvedTarget);

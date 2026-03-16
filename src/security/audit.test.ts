@@ -27,7 +27,7 @@ const execDockerRawUnavailable: NonNullable<SecurityAuditOptions["execDockerRawF
 };
 
 function stubChannelPlugin(params: {
-  id: "discord" | "slack" | "telegram";
+  id: "discord" | "slack" | "telegram" | "zalouser";
   label: string;
   resolveAccount: (cfg: OpenClawConfig, accountId: string | null | undefined) => unknown;
   inspectAccount?: (cfg: OpenClawConfig, accountId: string | null | undefined) => unknown;
@@ -106,6 +106,27 @@ const telegramPlugin = stubChannelPlugin({
     const resolvedAccountId = typeof accountId === "string" && accountId ? accountId : "default";
     const base = cfg.channels?.telegram ?? {};
     const account = cfg.channels?.telegram?.accounts?.[resolvedAccountId] ?? {};
+    return { config: { ...base, ...account } };
+  },
+});
+
+const zalouserPlugin = stubChannelPlugin({
+  id: "zalouser",
+  label: "Zalo Personal",
+  listAccountIds: (cfg) => {
+    const channel = (cfg.channels as Record<string, unknown> | undefined)?.zalouser as
+      | { accounts?: Record<string, unknown> }
+      | undefined;
+    const ids = Object.keys(channel?.accounts ?? {});
+    return ids.length > 0 ? ids : ["default"];
+  },
+  resolveAccount: (cfg, accountId) => {
+    const resolvedAccountId = typeof accountId === "string" && accountId ? accountId : "default";
+    const channel = (cfg.channels as Record<string, unknown> | undefined)?.zalouser as
+      | { accounts?: Record<string, unknown> }
+      | undefined;
+    const base = (channel ?? {}) as Record<string, unknown>;
+    const account = channel?.accounts?.[resolvedAccountId] ?? {};
     return { config: { ...base, ...account } };
   },
 });
@@ -322,6 +343,43 @@ description: test skill
     };
 
     const res = await audit(cfg, { env: {} });
+    expectNoFinding(res, "gateway.bind_no_auth");
+  });
+
+  it("does not flag missing gateway auth when read-only scrubbed config omits unavailable auth SecretRefs", async () => {
+    const sourceConfig: OpenClawConfig = {
+      gateway: {
+        bind: "lan",
+        auth: {
+          token: {
+            source: "env",
+            provider: "default",
+            id: "OPENCLAW_GATEWAY_TOKEN",
+          },
+        },
+      },
+      secrets: {
+        providers: {
+          default: { source: "env" },
+        },
+      },
+    };
+    const resolvedConfig: OpenClawConfig = {
+      gateway: {
+        bind: "lan",
+        auth: {},
+      },
+      secrets: sourceConfig.secrets,
+    };
+
+    const res = await runSecurityAudit({
+      config: resolvedConfig,
+      sourceConfig,
+      env: {},
+      includeFilesystem: false,
+      includeChannelSecurity: false,
+    });
+
     expectNoFinding(res, "gateway.bind_no_auth");
   });
 
@@ -1357,6 +1415,32 @@ description: test skill
     expectFinding(res, "browser.remote_cdp_http", "warn");
   });
 
+  it("warns when remote CDP targets a private/internal host", async () => {
+    const cfg: OpenClawConfig = {
+      browser: {
+        profiles: {
+          remote: {
+            cdpUrl:
+              "http://169.254.169.254:9222/json/version?token=supersecrettokenvalue1234567890",
+            color: "#0066CC",
+          },
+        },
+      },
+    };
+
+    const res = await audit(cfg);
+
+    expectFinding(res, "browser.remote_cdp_private_host", "warn");
+    expect(res.findings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          checkId: "browser.remote_cdp_private_host",
+          detail: expect.stringContaining("token=supers…7890"),
+        }),
+      ]),
+    );
+  });
+
   it("warns when control UI allows insecure auth", async () => {
     const cfg: OpenClawConfig = {
       gateway: {
@@ -1756,7 +1840,10 @@ description: test skill
   });
 
   it("warns when multiple DM senders share the main session", async () => {
-    const cfg: OpenClawConfig = { session: { dmScope: "main" } };
+    const cfg: OpenClawConfig = {
+      session: { dmScope: "main" },
+      channels: { whatsapp: { enabled: true } },
+    };
     const plugins: ChannelPlugin[] = [
       {
         id: "whatsapp",
@@ -1928,6 +2015,40 @@ description: test skill
         ]),
       );
     });
+  });
+
+  it("adds a read-only resolution warning when channel account resolveAccount throws", async () => {
+    const plugin = stubChannelPlugin({
+      id: "zalouser",
+      label: "Zalo Personal",
+      listAccountIds: () => ["default"],
+      resolveAccount: () => {
+        throw new Error("missing SecretRef");
+      },
+    });
+
+    const cfg: OpenClawConfig = {
+      channels: {
+        zalouser: {
+          enabled: true,
+        },
+      },
+    };
+
+    const res = await runSecurityAudit({
+      config: cfg,
+      includeFilesystem: false,
+      includeChannelSecurity: true,
+      plugins: [plugin],
+    });
+
+    const finding = res.findings.find(
+      (entry) => entry.checkId === "channels.zalouser.account.read_only_resolution",
+    );
+    expect(finding?.severity).toBe("warn");
+    expect(finding?.title).toContain("could not be fully resolved");
+    expect(finding?.detail).toContain("zalouser:default: failed to resolve account");
+    expect(finding?.detail).toContain("missing SecretRef");
   });
 
   it("keeps Slack HTTP slash-command findings when resolved inspection only exposes signingSecret status", async () => {
@@ -2324,6 +2445,75 @@ description: test skill
     });
   });
 
+  it("warns when Zalouser group routing contains mutable group entries", async () => {
+    await withChannelSecurityStateDir(async () => {
+      const cfg: OpenClawConfig = {
+        channels: {
+          zalouser: {
+            enabled: true,
+            groups: {
+              "Ops Room": { allow: true },
+              "group:g-123": { allow: true },
+            },
+          },
+        },
+      };
+
+      const res = await runSecurityAudit({
+        config: cfg,
+        includeFilesystem: false,
+        includeChannelSecurity: true,
+        plugins: [zalouserPlugin],
+      });
+
+      const finding = res.findings.find(
+        (entry) => entry.checkId === "channels.zalouser.groups.mutable_entries",
+      );
+      expect(finding).toBeDefined();
+      expect(finding?.severity).toBe("warn");
+      expect(finding?.detail).toContain("channels.zalouser.groups:Ops Room");
+      expect(finding?.detail).not.toContain("group:g-123");
+    });
+  });
+
+  it("marks Zalouser mutable group routing as break-glass when dangerous matching is enabled", async () => {
+    await withChannelSecurityStateDir(async () => {
+      const cfg: OpenClawConfig = {
+        channels: {
+          zalouser: {
+            enabled: true,
+            dangerouslyAllowNameMatching: true,
+            groups: {
+              "Ops Room": { allow: true },
+            },
+          },
+        },
+      };
+
+      const res = await runSecurityAudit({
+        config: cfg,
+        includeFilesystem: false,
+        includeChannelSecurity: true,
+        plugins: [zalouserPlugin],
+      });
+
+      const finding = res.findings.find(
+        (entry) => entry.checkId === "channels.zalouser.groups.mutable_entries",
+      );
+      expect(finding).toBeDefined();
+      expect(finding?.severity).toBe("info");
+      expect(finding?.detail).toContain("out-of-scope");
+      expect(res.findings).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            checkId: "channels.zalouser.allowFrom.dangerous_name_matching_enabled",
+            severity: "info",
+          }),
+        ]),
+      );
+    });
+  });
+
   it("does not warn when Discord allowlists use ID-style entries only", async () => {
     await withChannelSecurityStateDir(async () => {
       const cfg: OpenClawConfig = {
@@ -2654,6 +2844,52 @@ description: test skill
     const res = await audit(cfg);
 
     expectFinding(res, "hooks.default_session_key_unset", "warn");
+  });
+
+  it("scores unrestricted hooks.allowedAgentIds by gateway exposure", async () => {
+    const baseHooks = {
+      enabled: true,
+      token: "shared-gateway-token-1234567890",
+      defaultSessionKey: "hook:ingress",
+    } satisfies NonNullable<OpenClawConfig["hooks"]>;
+    const cases: Array<{
+      name: string;
+      cfg: OpenClawConfig;
+      expectedSeverity: "warn" | "critical";
+    }> = [
+      {
+        name: "local exposure",
+        cfg: { hooks: baseHooks },
+        expectedSeverity: "warn",
+      },
+      {
+        name: "remote exposure",
+        cfg: { gateway: { bind: "lan" }, hooks: baseHooks },
+        expectedSeverity: "critical",
+      },
+    ];
+    await Promise.all(
+      cases.map(async (testCase) => {
+        const res = await audit(testCase.cfg);
+        expect(
+          hasFinding(res, "hooks.allowed_agent_ids_unrestricted", testCase.expectedSeverity),
+          testCase.name,
+        ).toBe(true);
+      }),
+    );
+  });
+
+  it("treats wildcard hooks.allowedAgentIds as unrestricted routing", async () => {
+    const res = await audit({
+      hooks: {
+        enabled: true,
+        token: "shared-gateway-token-1234567890",
+        defaultSessionKey: "hook:ingress",
+        allowedAgentIds: ["*"],
+      },
+    });
+
+    expectFinding(res, "hooks.allowed_agent_ids_unrestricted", "warn");
   });
 
   it("scores hooks request sessionKey override by gateway exposure", async () => {

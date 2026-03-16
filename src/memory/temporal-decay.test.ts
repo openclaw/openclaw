@@ -20,6 +20,37 @@ async function makeTempDir(): Promise<string> {
   return dir;
 }
 
+function createVectorMemoryEntry(params: {
+  id: string;
+  path: string;
+  snippet: string;
+  vectorScore: number;
+}) {
+  return {
+    id: params.id,
+    path: params.path,
+    startLine: 1,
+    endLine: 1,
+    source: "memory" as const,
+    snippet: params.snippet,
+    vectorScore: params.vectorScore,
+  };
+}
+
+async function mergeVectorResultsWithTemporalDecay(
+  vector: Parameters<typeof mergeHybridResults>[0]["vector"],
+) {
+  return mergeHybridResults({
+    vectorWeight: 1,
+    textWeight: 0,
+    temporalDecay: { enabled: true, halfLifeDays: 30 },
+    mmr: { enabled: false },
+    nowMs: NOW_MS,
+    vector,
+    keyword: [],
+  });
+}
+
 afterEach(async () => {
   await Promise.all(
     tempDirs.splice(0).map(async (dir) => {
@@ -75,77 +106,46 @@ describe("temporal decay", () => {
   });
 
   it("applies decay in hybrid merging before ranking", async () => {
-    const merged = await mergeHybridResults({
-      vectorWeight: 1,
-      textWeight: 0,
-      temporalDecay: { enabled: true, halfLifeDays: 30 },
-      mmr: { enabled: false },
-      nowMs: NOW_MS,
-      vector: [
-        {
-          id: "old",
-          path: "memory/2025-01-01.md",
-          startLine: 1,
-          endLine: 1,
-          source: "memory",
-          snippet: "old but high",
-          vectorScore: 0.95,
-        },
-        {
-          id: "new",
-          path: "memory/2026-02-10.md",
-          startLine: 1,
-          endLine: 1,
-          source: "memory",
-          snippet: "new and relevant",
-          vectorScore: 0.8,
-        },
-      ],
-      keyword: [],
-    });
+    const merged = await mergeVectorResultsWithTemporalDecay([
+      createVectorMemoryEntry({
+        id: "old",
+        path: "memory/2025-01-01.md",
+        snippet: "old but high",
+        vectorScore: 0.95,
+      }),
+      createVectorMemoryEntry({
+        id: "new",
+        path: "memory/2026-02-10.md",
+        snippet: "new and relevant",
+        vectorScore: 0.8,
+      }),
+    ]);
 
     expect(merged[0]?.path).toBe("memory/2026-02-10.md");
     expect(merged[0]?.score ?? 0).toBeGreaterThan(merged[1]?.score ?? 0);
   });
 
   it("handles future dates, zero age, and very old memories", async () => {
-    const merged = await mergeHybridResults({
-      vectorWeight: 1,
-      textWeight: 0,
-      temporalDecay: { enabled: true, halfLifeDays: 30 },
-      mmr: { enabled: false },
-      nowMs: NOW_MS,
-      vector: [
-        {
-          id: "future",
-          path: "memory/2099-01-01.md",
-          startLine: 1,
-          endLine: 1,
-          source: "memory",
-          snippet: "future",
-          vectorScore: 0.9,
-        },
-        {
-          id: "today",
-          path: "memory/2026-02-10.md",
-          startLine: 1,
-          endLine: 1,
-          source: "memory",
-          snippet: "today",
-          vectorScore: 0.8,
-        },
-        {
-          id: "very-old",
-          path: "memory/2000-01-01.md",
-          startLine: 1,
-          endLine: 1,
-          source: "memory",
-          snippet: "ancient",
-          vectorScore: 1,
-        },
-      ],
-      keyword: [],
-    });
+    const merged = await mergeVectorResultsWithTemporalDecay([
+      createVectorMemoryEntry({
+        id: "future",
+        path: "memory/2099-01-01.md",
+        snippet: "future",
+        vectorScore: 0.9,
+      }),
+      createVectorMemoryEntry({
+        id: "today",
+        path: "memory/2026-02-10.md",
+        snippet: "today",
+        vectorScore: 0.8,
+      }),
+      createVectorMemoryEntry({
+        id: "very-old",
+        path: "memory/2000-01-01.md",
+        snippet: "ancient",
+        vectorScore: 1,
+      }),
+    ]);
 
     const byPath = new Map(merged.map((entry) => [entry.path, entry]));
     expect(byPath.get("memory/2099-01-01.md")?.score).toBeCloseTo(0.9);

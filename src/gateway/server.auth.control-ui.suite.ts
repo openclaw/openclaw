@@ -91,6 +91,11 @@ export function registerControlUiAndPairingSuite(): void {
     expect(health.ok).toBe(true);
   };
 
+  const expectAdminRpcOk = async (ws: WebSocket) => {
+    const admin = await rpcReq(ws, "set-heartbeats", { enabled: false });
+    expect(admin.ok).toBe(true);
+  };
+
   const connectControlUiWithoutDeviceAndExpectOk = async (params: {
     ws: WebSocket;
     token?: string;
@@ -104,6 +109,7 @@ export function registerControlUiAndPairingSuite(): void {
     });
     expect(res.ok).toBe(true);
     await expectStatusAndHealthOk(params.ws);
+    await expectAdminRpcOk(params.ws);
   };
 
   const createOperatorIdentityFixture = async (identityPrefix: string) => {
@@ -217,6 +223,9 @@ export function registerControlUiAndPairingSuite(): void {
         }
         if (tc.expectStatusChecks) {
           await expectStatusAndHealthOk(ws);
+          if (tc.role === "operator") {
+            await expectAdminRpcOk(ws);
+          }
         }
         ws.close();
       });

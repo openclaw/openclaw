@@ -534,6 +534,18 @@ function startSubagentAnnounceCleanupFlow(runId: string, entry: SubagentRunRecor
     return false;
   }
   const requesterOrigin = normalizeDeliveryContext(entry.requesterOrigin);
+  const finalizeAnnounceCleanup = (didAnnounce: boolean) => {
+    void finalizeSubagentCleanup(runId, entry.cleanup, didAnnounce).catch((err) => {
+      defaultRuntime.log(`[warn] subagent cleanup finalize failed (${runId}): ${String(err)}`);
+      const current = subagentRuns.get(runId);
+      if (!current || current.cleanupCompletedAt) {
+        return;
+      }
+      current.cleanupHandled = false;
+      persistSubagentRuns();
+    });
+  };
+
   void runSubagentAnnounceFlow({
     childSessionKey: entry.childSessionKey,
     childRunId: entry.runId,
@@ -555,13 +567,13 @@ function startSubagentAnnounceCleanupFlow(runId: string, entry: SubagentRunRecor
     wakeOnDescendantSettle: entry.wakeOnDescendantSettle === true,
   })
     .then((didAnnounce) => {
-      void finalizeSubagentCleanup(runId, entry.cleanup, didAnnounce);
+      finalizeAnnounceCleanup(didAnnounce);
     })
     .catch((error) => {
       defaultRuntime.log(
         `[warn] Subagent announce flow failed during cleanup for run ${runId}: ${String(error)}`,
       );
-      void finalizeSubagentCleanup(runId, entry.cleanup, false);
+      finalizeAnnounceCleanup(false);
     });
   return true;
 }
@@ -672,6 +684,19 @@ function restoreSubagentRunsOnce() {
     for (const runId of subagentRuns.keys()) {
       resumeSubagentRun(runId);
     }
+
+    // Schedule orphan recovery for subagent sessions that were aborted
+    // by a SIGUSR1 reload. This runs after a short delay to let the
+    // gateway fully bootstrap first. Dynamic import to avoid increasing
+    // startup memory footprint. (#47711)
+    void import("./subagent-orphan-recovery.js").then(
+      ({ scheduleOrphanRecovery }) => {
+        scheduleOrphanRecovery({ getActiveRuns: () => subagentRuns });
+      },
+      () => {
+        // Ignore import failures — orphan recovery is best-effort.
+      },
+    );
   } catch {
     // ignore restore failures
   }

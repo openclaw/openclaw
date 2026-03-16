@@ -93,6 +93,8 @@ Docs: https://docs.openclaw.ai
 - Nodes/pending actions: re-check queued foreground actions against the current node command policy before returning them to the node. (#46815) Thanks @zpbrent and @vincentkoc.
 - Node/startup: remove leftover debug `console.log("node host PATH: ...")` that printed the resolved PATH on every `openclaw node run` invocation. (#46411)
 - CLI/completion: reduce recursive completion-script string churn and fix nested PowerShell command-path matching so generated nested completions resolve on PowerShell too. (#45537) Thanks @yiShanXin and @vincentkoc.
+- Slack/startup: harden `@slack/bolt` import interop across current bundled runtime shapes so Slack monitors no longer crash with `App is not a constructor` after plugin-sdk bundling changes. (#45953) thanks @merc1305.
+- Feishu/media filename: decode URL-encoded filenames from JSON payloads instead of using RFC 5987 format, fixing display of non-ASCII filenames. (#43983) Thanks @guang384.
 
 ## 2026.3.13
 
@@ -110,7 +112,6 @@ Docs: https://docs.openclaw.ai
 
 ### Breaking
 
-- Feishu/media filename: decode URL-encoded filenames from JSON payloads instead of using RFC 5987 format, fixing display of non-ASCII filenames. (#43983) Thanks @guang384.
 - **BREAKING:** Agents now load at most one root memory bootstrap file. `MEMORY.md` wins; `memory.md` is only used when `MEMORY.md` is absent. If you intentionally kept both files and depended on both being injected, merge them before upgrade. This also fixes duplicate memory injection on case-insensitive Docker mounts. (#26054) Thanks @Lanfei.
 
 ### Fixes

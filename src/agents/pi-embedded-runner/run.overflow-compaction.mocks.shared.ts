@@ -109,13 +109,21 @@ vi.mock("../workspace-run.js", () => ({
 vi.mock("../pi-embedded-helpers.js", () => ({
   formatBillingErrorMessage: vi.fn(() => ""),
   classifyFailoverReason: vi.fn(() => null),
+  extractObservedOverflowTokenCount: vi.fn((msg?: string) => {
+    const match = msg?.match(/prompt is too long:\s*([\d,]+)\s+tokens\s*>\s*[\d,]+\s+maximum/i);
+    return match?.[1] ? Number(match[1].replaceAll(",", "")) : undefined;
+  }),
   formatAssistantErrorText: vi.fn(() => ""),
   isAuthAssistantError: vi.fn(() => false),
   isBillingAssistantError: vi.fn(() => false),
   isCompactionFailureError: vi.fn(() => false),
   isLikelyContextOverflowError: vi.fn((msg?: string) => {
     const lower = (msg ?? "").toLowerCase();
-    return lower.includes("request_too_large") || lower.includes("context window exceeded");
+    return (
+      lower.includes("request_too_large") ||
+      lower.includes("context window exceeded") ||
+      lower.includes("prompt is too long")
+    );
   }),
   isFailoverAssistantError: vi.fn(() => false),
   isFailoverErrorMessage: vi.fn(() => false),
@@ -201,9 +209,36 @@ vi.mock("../defaults.js", () => ({
   DEFAULT_PROVIDER: "anthropic",
 }));
 
+type MockFailoverErrorDescription = {
+  message: string;
+  reason: string | undefined;
+  status: number | undefined;
+  code: string | undefined;
+};
+
+type MockCoerceToFailoverError = (
+  err: unknown,
+  params?: { provider?: string; model?: string; profileId?: string },
+) => unknown;
+type MockDescribeFailoverError = (err: unknown) => MockFailoverErrorDescription;
+type MockResolveFailoverStatus = (reason: string) => number | undefined;
+
+export const mockedCoerceToFailoverError = vi.fn<MockCoerceToFailoverError>();
+export const mockedDescribeFailoverError = vi.fn<MockDescribeFailoverError>(
+  (err: unknown): MockFailoverErrorDescription => ({
+    message: err instanceof Error ? err.message : String(err),
+    reason: undefined,
+    status: undefined,
+    code: undefined,
+  }),
+);
+export const mockedResolveFailoverStatus = vi.fn<MockResolveFailoverStatus>();
+
 vi.mock("../failover-error.js", () => ({
   FailoverError: class extends Error {},
-  resolveFailoverStatus: vi.fn(),
+  coerceToFailoverError: mockedCoerceToFailoverError,
+  describeFailoverError: mockedDescribeFailoverError,
+  resolveFailoverStatus: mockedResolveFailoverStatus,
 }));
 
 vi.mock("./lanes.js", () => ({

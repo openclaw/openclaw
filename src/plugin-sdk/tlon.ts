@@ -3,11 +3,6 @@
 
 export type { ReplyPayload } from "../auto-reply/types.js";
 export { buildChannelConfigSchema } from "../channels/plugins/config-schema.js";
-export type { ChannelOnboardingAdapter } from "../channels/plugins/onboarding-types.js";
-export {
-  promptAccountId,
-  resolveAccountIdForConfigure,
-} from "../channels/plugins/onboarding/helpers.js";
 export {
   applyAccountNameToChannelSection,
   patchScopedAccountConfig,
@@ -32,3 +27,5 @@ export type { RuntimeEnv } from "../runtime.js";
 export { formatDocsLink } from "../terminal/links.js";
 export type { WizardPrompter } from "../wizard/prompts.js";
 export { createLoggerBackedRuntime } from "./runtime.js";
+export { tlonSetupAdapter } from "../../extensions/tlon/src/setup-core.js";
+export { tlonSetupWizard } from "../../extensions/tlon/src/setup-surface.js";

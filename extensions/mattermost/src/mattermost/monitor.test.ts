@@ -3,7 +3,9 @@ import { describe, expect, it, vi } from "vitest";
 import { resolveMattermostAccount } from "./accounts.js";
 import {
   evaluateMattermostMentionGate,
+  resolveMattermostEffectiveReplyToId,
   resolveMattermostReplyRootId,
+  resolveMattermostThreadSessionContext,
   type MattermostMentionGateInput,
   type MattermostRequireMentionResolverInput,
 } from "./monitor.js";
@@ -152,5 +154,96 @@ describe("resolveMattermostReplyRootId", () => {
 
   it("falls back to undefined when neither reply target is available", () => {
     expect(resolveMattermostReplyRootId({})).toBeUndefined();
+  });
+});
+
+describe("resolveMattermostEffectiveReplyToId", () => {
+  it("keeps an existing thread root", () => {
+    expect(
+      resolveMattermostEffectiveReplyToId({
+        kind: "channel",
+        postId: "post-123",
+        replyToMode: "all",
+        threadRootId: "thread-root-456",
+      }),
+    ).toBe("thread-root-456");
+  });
+
+  it("starts a thread for top-level channel messages when replyToMode is all", () => {
+    expect(
+      resolveMattermostEffectiveReplyToId({
+        kind: "channel",
+        postId: "post-123",
+        replyToMode: "all",
+      }),
+    ).toBe("post-123");
+  });
+
+  it("starts a thread for top-level group messages when replyToMode is first", () => {
+    expect(
+      resolveMattermostEffectiveReplyToId({
+        kind: "group",
+        postId: "post-123",
+        replyToMode: "first",
+      }),
+    ).toBe("post-123");
+  });
+
+  it("keeps direct messages non-threaded", () => {
+    expect(
+      resolveMattermostEffectiveReplyToId({
+        kind: "direct",
+        postId: "post-123",
+        replyToMode: "all",
+      }),
+    ).toBeUndefined();
+  });
+});
+
+describe("resolveMattermostThreadSessionContext", () => {
+  it("forks channel sessions by top-level post when replyToMode is all", () => {
+    expect(
+      resolveMattermostThreadSessionContext({
+        baseSessionKey: "agent:main:mattermost:default:chan-1",
+        kind: "channel",
+        postId: "post-123",
+        replyToMode: "all",
+      }),
+    ).toEqual({
+      effectiveReplyToId: "post-123",
+      sessionKey: "agent:main:mattermost:default:chan-1:thread:post-123",
+      parentSessionKey: "agent:main:mattermost:default:chan-1",
+    });
+  });
+
+  it("keeps existing thread roots for threaded follow-ups", () => {
+    expect(
+      resolveMattermostThreadSessionContext({
+        baseSessionKey: "agent:main:mattermost:default:chan-1",
+        kind: "group",
+        postId: "post-123",
+        replyToMode: "first",
+        threadRootId: "root-456",
+      }),
+    ).toEqual({
+      effectiveReplyToId: "root-456",
+      sessionKey: "agent:main:mattermost:default:chan-1:thread:root-456",
+      parentSessionKey: "agent:main:mattermost:default:chan-1",
+    });
+  });
+
+  it("keeps direct-message sessions linear", () => {
+    expect(
+      resolveMattermostThreadSessionContext({
+        baseSessionKey: "agent:main:mattermost:default:user-1",
+        kind: "direct",
+        postId: "post-123",
+        replyToMode: "all",
+      }),
+    ).toEqual({
+      effectiveReplyToId: undefined,
+      sessionKey: "agent:main:mattermost:default:user-1",
+      parentSessionKey: undefined,
+    });
   });
 });

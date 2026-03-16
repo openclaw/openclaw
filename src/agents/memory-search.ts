@@ -61,6 +61,7 @@ export type ResolvedMemorySearchConfig = {
     sessions: {
       deltaBytes: number;
       deltaMessages: number;
+      postCompactionForce: boolean;
     };
   };
   query: {
@@ -248,6 +249,10 @@ function mergeConfig(
         overrides?.sync?.sessions?.deltaMessages ??
         defaults?.sync?.sessions?.deltaMessages ??
         DEFAULT_SESSION_DELTA_MESSAGES,
+      postCompactionForce:
+        overrides?.sync?.sessions?.postCompactionForce ??
+        defaults?.sync?.sessions?.postCompactionForce ??
+        true,
     },
   };
   const query = {
@@ -315,6 +320,7 @@ function mergeConfig(
   );
   const deltaBytes = clampInt(sync.sessions.deltaBytes, 0, Number.MAX_SAFE_INTEGER);
   const deltaMessages = clampInt(sync.sessions.deltaMessages, 0, Number.MAX_SAFE_INTEGER);
+  const postCompactionForce = sync.sessions.postCompactionForce;
   return {
     enabled,
     sources,
@@ -336,6 +342,7 @@ function mergeConfig(
       sessions: {
         deltaBytes,
         deltaMessages,
+        postCompactionForce,
       },
     },
     query: {
