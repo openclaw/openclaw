@@ -1,11 +1,14 @@
 import {
   emptyPluginConfigSchema,
   type OpenClawPluginApi,
+  type ProviderAuthContext,
   type ProviderResolveDynamicModelContext,
   type ProviderRuntimeModel,
 } from "openclaw/plugin-sdk/core";
 import { normalizeModelCompat } from "../../src/agents/model-compat.js";
+import { buildTokenProfileId, validateAnthropicSetupToken } from "../../src/commands/auth-token.js";
 import { fetchClaudeUsage } from "../../src/infra/provider-usage.fetch.js";
+import type { ProviderAuthResult } from "../../src/plugins/types.js";
 
 const PROVIDER_ID = "anthropic";
 const ANTHROPIC_OPUS_46_MODEL_ID = "claude-opus-4-6";
@@ -14,6 +17,13 @@ const ANTHROPIC_OPUS_TEMPLATE_MODEL_IDS = ["claude-opus-4-5", "claude-opus-4.5"]
 const ANTHROPIC_SONNET_46_MODEL_ID = "claude-sonnet-4-6";
 const ANTHROPIC_SONNET_46_DOT_MODEL_ID = "claude-sonnet-4.6";
 const ANTHROPIC_SONNET_TEMPLATE_MODEL_IDS = ["claude-sonnet-4-5", "claude-sonnet-4.5"] as const;
+const ANTHROPIC_MODERN_MODEL_PREFIXES = [
+  "claude-opus-4-6",
+  "claude-sonnet-4-6",
+  "claude-opus-4-5",
+  "claude-sonnet-4-5",
+  "claude-haiku-4-5",
+] as const;
 
 function cloneFirstTemplateModel(params: {
   modelId: string;
@@ -96,6 +106,51 @@ function resolveAnthropicForwardCompatModel(
   );
 }
 
+function matchesAnthropicModernModel(modelId: string): boolean {
+  const lower = modelId.trim().toLowerCase();
+  return ANTHROPIC_MODERN_MODEL_PREFIXES.some((prefix) => lower.startsWith(prefix));
+}
+
+async function runAnthropicSetupToken(ctx: ProviderAuthContext): Promise<ProviderAuthResult> {
+  await ctx.prompter.note(
+    ["Run `claude setup-token` in your terminal.", "Then paste the generated token below."].join(
+      "\n",
+    ),
+    "Anthropic setup-token",
+  );
+
+  const tokenRaw = await ctx.prompter.text({
+    message: "Paste Anthropic setup-token",
+    validate: (value) => validateAnthropicSetupToken(String(value ?? "")),
+  });
+  const token = String(tokenRaw ?? "").trim();
+  const tokenError = validateAnthropicSetupToken(token);
+  if (tokenError) {
+    throw new Error(tokenError);
+  }
+
+  const profileNameRaw = await ctx.prompter.text({
+    message: "Token name (blank = default)",
+    placeholder: "default",
+  });
+
+  return {
+    profiles: [
+      {
+        profileId: buildTokenProfileId({
+          provider: PROVIDER_ID,
+          name: String(profileNameRaw ?? ""),
+        }),
+        credential: {
+          type: "token",
+          provider: PROVIDER_ID,
+          token,
+        },
+      },
+    ],
+  };
+}
+
 const anthropicPlugin = {
   id: PROVIDER_ID,
   name: "Anthropic Provider",
@@ -107,12 +162,29 @@ const anthropicPlugin = {
       label: "Anthropic",
       docsPath: "/providers/models",
       envVars: ["ANTHROPIC_OAUTH_TOKEN", "ANTHROPIC_API_KEY"],
-      auth: [],
+      auth: [
+        {
+          id: "setup-token",
+          label: "setup-token (claude)",
+          hint: "Paste a setup-token from `claude setup-token`",
+          kind: "token",
+          run: async (ctx: ProviderAuthContext) => await runAnthropicSetupToken(ctx),
+        },
+      ],
       resolveDynamicModel: (ctx) => resolveAnthropicForwardCompatModel(ctx),
       capabilities: {
         providerFamily: "anthropic",
         dropThinkingBlockModelHints: ["claude"],
       },
+      isModernModelRef: ({ modelId }) => matchesAnthropicModernModel(modelId),
+      resolveDefaultThinkingLevel: ({ modelId }) =>
+        matchesAnthropicModernModel(modelId) &&
+        (modelId.toLowerCase().startsWith(ANTHROPIC_OPUS_46_MODEL_ID) ||
+          modelId.toLowerCase().startsWith(ANTHROPIC_OPUS_46_DOT_MODEL_ID) ||
+          modelId.toLowerCase().startsWith(ANTHROPIC_SONNET_46_MODEL_ID) ||
+          modelId.toLowerCase().startsWith(ANTHROPIC_SONNET_46_DOT_MODEL_ID))
+          ? "adaptive"
+          : undefined,
       resolveUsageAuth: async (ctx) => await ctx.resolveOAuthToken(),
       fetchUsageSnapshot: async (ctx) =>
         await fetchClaudeUsage(ctx.token, ctx.timeoutMs, ctx.fetchFn),

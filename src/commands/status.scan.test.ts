@@ -30,6 +30,11 @@ vi.mock("./status-all/channels.js", () => ({
   buildChannelsTable: mocks.buildChannelsTable,
 }));
 
+vi.mock("./status.scan.runtime.js", () => ({
+  buildChannelsTable: mocks.buildChannelsTable,
+  collectChannelStatusIssues: vi.fn(() => []),
+}));
+
 vi.mock("./status.update.js", () => ({
   getUpdateCheckResult: mocks.getUpdateCheckResult,
 }));

@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { withFetchPreconnect } from "../../../src/test-utils/fetch-mock.js";
 import { uploadToOneDrive, uploadToSharePoint } from "./graph-upload.js";
 
 describe("graph upload helpers", () => {
@@ -22,7 +23,7 @@ describe("graph upload helpers", () => {
       buffer: Buffer.from("hello"),
       filename: "a.txt",
       tokenProvider,
-      fetchFn: fetchFn as typeof fetch,
+      fetchFn: withFetchPreconnect(fetchFn),
     });
 
     expect(fetchFn).toHaveBeenCalledWith(
@@ -59,7 +60,7 @@ describe("graph upload helpers", () => {
       filename: "b.txt",
       siteId: "site-123",
       tokenProvider,
-      fetchFn: fetchFn as typeof fetch,
+      fetchFn: withFetchPreconnect(fetchFn),
     });
 
     expect(fetchFn).toHaveBeenCalledWith(
@@ -94,7 +95,7 @@ describe("graph upload helpers", () => {
         filename: "bad.txt",
         siteId: "site-123",
         tokenProvider,
-        fetchFn: fetchFn as typeof fetch,
+        fetchFn: withFetchPreconnect(fetchFn),
       }),
     ).rejects.toThrow("SharePoint upload response missing required fields");
   });
