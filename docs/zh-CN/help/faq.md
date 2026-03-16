@@ -2,10 +2,10 @@
 summary: 关于 OpenClaw 安装、配置和使用的常见问题
 title: 常见问题
 x-i18n:
-  generated_at: "2026-02-01T21:32:04Z"
+  generated_at: "2026-03-16T01:39:16Z"
   model: claude-opus-4-5
   provider: pi
-  source_hash: 5a611f2fda3325b1c7a9ec518616d87c78be41e2bfbe86244ae4f48af3815a26
+  source_hash: 6e6a4a63fb73dca24dbe77928b51c6b2e5d51ec883fb36c64e2e40ef027050e9
   source_path: help/faq.md
   workflow: 15
 ---
@@ -687,7 +687,7 @@ Gemini CLI 使用**插件认证流程**，而不是 `openclaw.json` 中的 clien
 
 步骤：
 
-1. 启用插件：`openclaw plugins enable google-gemini-cli-auth`
+1. 启用插件：`openclaw plugins enable google`
 2. 登录：`openclaw models auth login --provider google-gemini-cli --set-default`
 
 这会在 Gateway 网关主机上将 OAuth 令牌存储为认证配置文件。详情：[模型提供商](/concepts/model-providers)。
