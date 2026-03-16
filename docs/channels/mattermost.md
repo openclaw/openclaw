@@ -28,7 +28,7 @@ Local checkout (when running from a git repo):
 openclaw plugins install ./extensions/mattermost
 ```
 
-If you choose Mattermost during configure/onboarding and a git checkout is detected,
+If you choose Mattermost during setup and a git checkout is detected,
 OpenClaw will offer the local install path automatically.
 
 Details: [Plugins](/tools/plugin)

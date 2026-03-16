@@ -30,9 +30,9 @@ openclaw plugins install @openclaw/feishu
 
 There are two ways to add the Feishu channel:
 
-### Method 1: onboarding wizard (recommended)
+### Method 1: setup wizard (recommended)
 
-If you just installed OpenClaw, run the wizard:
+If you just installed OpenClaw, run the setup wizard:
 
 ```bash
 openclaw onboard

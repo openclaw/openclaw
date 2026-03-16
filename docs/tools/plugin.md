@@ -800,7 +800,7 @@ trees "pure JS/TS" and avoid packages that require `postinstall` builds.
 Optional: `openclaw.setupEntry` can point at a lightweight setup-only module.
 When OpenClaw needs setup surfaces for a disabled channel plugin, or
 when a channel plugin is enabled but still unconfigured, it loads `setupEntry`
-instead of the full plugin entry. This keeps startup and onboarding lighter
+instead of the full plugin entry. This keeps startup and setup lighter
 when your main plugin entry also wires tools, hooks, or other runtime-only
 code.
 
