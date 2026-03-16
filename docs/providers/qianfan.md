@@ -27,7 +27,7 @@ endpoint and API key. It is OpenAI-compatible, so most OpenAI SDKs work by switc
 ## CLI setup
 
 ```bash
-openclaw onboard --auth-choice qianfan-api-key
+openclaw setup --wizard --auth-choice qianfan-api-key
 ```
 
 ## Related Documentation

@@ -22,7 +22,7 @@ For Anthropic models, use your Anthropic API key.
 1. Set the provider API key and Gateway details:
 
 ```bash
-openclaw onboard --auth-choice cloudflare-ai-gateway-api-key
+openclaw setup --wizard --auth-choice cloudflare-ai-gateway-api-key
 ```
 
 2. Set a default model:
@@ -40,7 +40,7 @@ openclaw onboard --auth-choice cloudflare-ai-gateway-api-key
 ## Non-interactive example
 
 ```bash
-openclaw onboard --non-interactive \
+openclaw setup --wizard --non-interactive \
   --mode local \
   --auth-choice cloudflare-ai-gateway-api-key \
   --cloudflare-ai-gateway-account-id "your-account-id" \
