@@ -78,7 +78,6 @@ export type {
 const DISCORD_BOUND_THREAD_SYSTEM_PREFIXES = ["⚙️", "🤖", "🧰"];
 
 // Cache for bot mention regexes to avoid recompilation on every message
-// Key: botId, Value: compiled regex for <@botId> or <@!botId>
 const botMentionRegexCache = new Map<string, RegExp>();
 
 /**
@@ -425,9 +424,8 @@ export async function preflightDiscordMessage(
     return null;
   }
   const mentionRegexes = buildMentionRegexes(params.cfg, effectiveRoute.agentId);
-  // Check explicit mention via Discord's mentionedUsers array, with fallback
-  // to text-based detection for threads where mentionedUsers may be unpopulated.
   // Fixes #44183: Discord thread mentions not working
+  // Falls back to text-based detection when mentionedUsers array is empty (thread bug)
   const explicitlyMentionedViaArray = Boolean(
     botId && message.mentionedUsers?.some((user: User) => user.id === botId),
   );
@@ -435,12 +433,9 @@ export async function preflightDiscordMessage(
     botId && baseText && getBotMentionRegex(botId).test(baseText),
   );
   const explicitlyMentioned = explicitlyMentionedViaArray || explicitlyMentionedViaText;
-
-  // Log when fallback detection is used (helps diagnose Discord API issues)
   if (explicitlyMentionedViaText && !explicitlyMentionedViaArray) {
     logVerbose(
-      `discord: mention detected via text fallback (thread workaround) ` +
-      `channel=${messageChannelId} botId=${botId}`,
+      `discord: mention detected via text fallback (thread workaround) channel=${messageChannelId} botId=${botId}`,
     );
   }
   const hasAnyMention = Boolean(

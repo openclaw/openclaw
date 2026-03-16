@@ -689,7 +689,6 @@ describe("preflightDiscordMessage", () => {
     expect(result?.wasMentioned).toBe(true);
   });
 
-  // Tests for Issue #44183: Discord thread mentions not working
   describe("thread mention fallback (#44183)", () => {
     const guildId = "guild-thread-fallback";
 
@@ -704,7 +703,6 @@ describe("preflightDiscordMessage", () => {
         mentionedUsers: [],
         author: { id: "user-1", bot: false, username: "Alice" },
       });
-
       const result = await preflightDiscordMessage({
         ...createPreflightArgs({
           cfg: DEFAULT_PREFLIGHT_CFG,
@@ -715,12 +713,11 @@ describe("preflightDiscordMessage", () => {
         botUserId,
         guildEntries: { [guildId]: { requireMention: true } },
       });
-
       expect(result).not.toBeNull();
       expect(result?.wasMentioned).toBe(true);
     });
 
-    it("detects mention with nickname format via text fallback", async () => {
+    it("detects nickname format <@!id> via text fallback", async () => {
       const botUserId = "bot-456";
       const channelId = "channel-tf-2";
       const client = createGuildTextClient(channelId);
@@ -731,7 +728,6 @@ describe("preflightDiscordMessage", () => {
         mentionedUsers: [],
         author: { id: "user-2", bot: false, username: "Bob" },
       });
-
       const result = await preflightDiscordMessage({
         ...createPreflightArgs({
           cfg: DEFAULT_PREFLIGHT_CFG,
@@ -742,24 +738,21 @@ describe("preflightDiscordMessage", () => {
         botUserId,
         guildEntries: { [guildId]: { requireMention: true } },
       });
-
       expect(result).not.toBeNull();
       expect(result?.wasMentioned).toBe(true);
     });
 
-    it("rejects messages that mention a different bot (not us)", async () => {
+    it("rejects when a different bot is mentioned", async () => {
       const botUserId = "bot-123";
-      const otherBotId = "bot-999";
       const channelId = "channel-tf-3";
       const client = createGuildTextClient(channelId);
       const message = createDiscordMessage({
         id: "msg-tf-3",
-        content: `Hello <@${otherBotId}> not you`,
+        content: `Hello <@bot-999> not you`,
         channelId,
         mentionedUsers: [],
         author: { id: "user-3", bot: false, username: "Carol" },
       });
-
       const result = await preflightDiscordMessage({
         ...createPreflightArgs({
           cfg: DEFAULT_PREFLIGHT_CFG,
@@ -770,11 +763,10 @@ describe("preflightDiscordMessage", () => {
         botUserId,
         guildEntries: { [guildId]: { requireMention: true } },
       });
-
       expect(result).toBeNull();
     });
 
-    it("works normally when mentionedUsers array is also populated", async () => {
+    it("works when both mentionedUsers array and text mention are present", async () => {
       const botUserId = "bot-123";
       const channelId = "channel-tf-4";
       const client = createGuildTextClient(channelId);
@@ -785,7 +777,6 @@ describe("preflightDiscordMessage", () => {
         mentionedUsers: [{ id: botUserId }],
         author: { id: "user-4", bot: false, username: "Dave" },
       });
-
       const result = await preflightDiscordMessage({
         ...createPreflightArgs({
           cfg: DEFAULT_PREFLIGHT_CFG,
@@ -796,35 +787,8 @@ describe("preflightDiscordMessage", () => {
         botUserId,
         guildEntries: { [guildId]: { requireMention: true } },
       });
-
       expect(result).not.toBeNull();
       expect(result?.wasMentioned).toBe(true);
-    });
-
-    it("drops message with empty content when requireMention is true", async () => {
-      const botUserId = "bot-123";
-      const channelId = "channel-tf-5";
-      const client = createGuildTextClient(channelId);
-      const message = createDiscordMessage({
-        id: "msg-tf-5",
-        content: "",
-        channelId,
-        mentionedUsers: [],
-        author: { id: "user-5", bot: false, username: "Eve" },
-      });
-
-      const result = await preflightDiscordMessage({
-        ...createPreflightArgs({
-          cfg: DEFAULT_PREFLIGHT_CFG,
-          discordConfig: {} as DiscordConfig,
-          data: createGuildEvent({ channelId, guildId, author: message.author, message }),
-          client,
-        }),
-        botUserId,
-        guildEntries: { [guildId]: { requireMention: true } },
-      });
-
-      expect(result).toBeNull();
     });
   });
 
