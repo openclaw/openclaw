@@ -144,6 +144,11 @@ function shouldStripResponsesPromptCacheKey(model: {
     return true;
   }
   // Default: only allow prompt_cache_key for direct OpenAI/Azure endpoints.
+  // An empty/undefined baseUrl means the client defaults to api.openai.com directly,
+  // so treat it the same as a direct OpenAI endpoint and keep the cache fields.
+  if (typeof model.baseUrl !== "string" || !model.baseUrl.trim()) {
+    return false;
+  }
   return !isDirectOpenAIBaseUrl(model.baseUrl);
 }
 
