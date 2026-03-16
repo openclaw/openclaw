@@ -198,14 +198,6 @@
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/diagnostics-otel/**"
-"extensions: google-antigravity-auth":
-  - changed-files:
-      - any-glob-to-any-file:
-          - "extensions/google-antigravity-auth/**"
-"extensions: google-gemini-cli-auth":
-  - changed-files:
-      - any-glob-to-any-file:
-          - "extensions/google-gemini-cli-auth/**"
 "extensions: llm-task":
   - changed-files:
       - any-glob-to-any-file:
