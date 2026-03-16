@@ -515,8 +515,14 @@ function normalizeFeishuCommandProbeBody(text: string): string {
  */
 export function decodeFeishuFilename(filename: string | undefined): string {
   if (!filename) return "";
+  // Only decode if filename contains percent-encoding
+  if (!/%[0-9A-Fa-f]{2}/.test(filename)) {
+    return filename;
+  }
   try {
-    return decodeURIComponent(filename);
+    const decoded = decodeURIComponent(filename);
+    // Only use decoded if it's different and valid (not empty)
+    return decoded && decoded !== filename ? decoded : filename;
   } catch {
     return filename; // Fallback to original if decoding fails
   }

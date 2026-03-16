@@ -22,6 +22,14 @@ describe("decodeFeishuFilename", () => {
     expect(decodeFeishuFilename("invalid%")).toBe("invalid%");
   });
 
+  it("preserves literal filenames without percent-encoding", () => {
+    // Filenames that don't look URL-encoded should be preserved
+    expect(decodeFeishuFilename("test file.pdf")).toBe("test file.pdf");
+    expect(decodeFeishuFilename("plain.txt")).toBe("plain.txt");
+    // Literal % not followed by hex should be preserved
+    expect(decodeFeishuFilename("50% off.txt")).toBe("50% off.txt");
+  });
+
   it("handles filenames without encoding", () => {
     expect(decodeFeishuFilename("plain.txt")).toBe("plain.txt");
   });
