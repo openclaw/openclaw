@@ -579,7 +579,7 @@ function parseMediaKeys(
     const fileKey = normalizeFeishuExternalKey(parsed.file_key);
     switch (messageType) {
       case "image":
-        return { imageKey, fileName: parsed.file_name };
+        return { imageKey, fileName: decodeFeishuFilename(parsed.file_name) };
       case "file":
         return { fileKey, fileName: decodeFeishuFilename(parsed.file_name) };
       case "audio":
