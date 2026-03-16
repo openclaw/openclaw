@@ -1,10 +1,20 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { registerSlackInteractionEvents } from "./interactions.js";
 
 const enqueueSystemEventMock = vi.fn();
+const dispatchPluginInteractiveHandlerMock = vi.fn(async () => ({
+  matched: false,
+  handled: false,
+  duplicate: false,
+}));
 
 vi.mock("../../../../../src/infra/system-events.js", () => ({
   enqueueSystemEvent: (...args: unknown[]) => enqueueSystemEventMock(...args),
+}));
+
+vi.mock("../../../../../src/plugins/interactive.js", () => ({
+  dispatchPluginInteractiveHandler: (...args: unknown[]) =>
+    dispatchPluginInteractiveHandlerMock(...args),
 }));
 
 type RegisteredHandler = (args: {
@@ -151,8 +161,17 @@ function createContext(overrides?: {
 }
 
 describe("registerSlackInteractionEvents", () => {
-  it("enqueues structured events and updates button rows", async () => {
+  beforeEach(() => {
     enqueueSystemEventMock.mockClear();
+    dispatchPluginInteractiveHandlerMock.mockClear();
+    dispatchPluginInteractiveHandlerMock.mockResolvedValue({
+      matched: false,
+      handled: false,
+      duplicate: false,
+    });
+  });
+
+  it("enqueues structured events and updates button rows", async () => {
     const { ctx, app, getHandler, resolveSessionKey } = createContext();
     registerSlackInteractionEvents({ ctx: ctx as never });
 
@@ -226,6 +245,71 @@ describe("registerSlackInteractionEvents", () => {
       senderId: "U123",
     });
     expect(app.client.chat.update).toHaveBeenCalledTimes(1);
+  });
+
+  it("routes matching Slack actions through the shared plugin interactive dispatcher", async () => {
+    dispatchPluginInteractiveHandlerMock.mockResolvedValueOnce({
+      matched: true,
+      handled: true,
+      duplicate: false,
+    });
+    const { ctx, app, getHandler } = createContext();
+    registerSlackInteractionEvents({ ctx: ctx as never });
+
+    const handler = getHandler();
+    expect(handler).toBeTruthy();
+
+    const ack = vi.fn().mockResolvedValue(undefined);
+    const respond = vi.fn().mockResolvedValue(undefined);
+    await handler!({
+      ack,
+      respond,
+      body: {
+        user: { id: "U123" },
+        team: { id: "T9" },
+        trigger_id: "123.trigger",
+        response_url: "https://hooks.slack.test/response",
+        channel: { id: "C1" },
+        container: { channel_id: "C1", message_ts: "100.200", thread_ts: "100.100" },
+        message: {
+          ts: "100.200",
+          text: "fallback",
+          blocks: [
+            {
+              type: "actions",
+              block_id: "codex_actions",
+              elements: [{ type: "button", action_id: "codex" }],
+            },
+          ],
+        },
+      },
+      action: {
+        type: "button",
+        action_id: "codex",
+        block_id: "codex_actions",
+        value: "approve:thread-1",
+        text: { type: "plain_text", text: "Approve" },
+      },
+    });
+
+    expect(ack).toHaveBeenCalled();
+    expect(dispatchPluginInteractiveHandlerMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "slack",
+        data: "codex:approve:thread-1",
+        ctx: expect.objectContaining({
+          accountId: ctx.accountId,
+          conversationId: "C1",
+          threadId: "100.100",
+          interaction: expect.objectContaining({
+            actionId: "codex",
+            value: "approve:thread-1",
+          }),
+        }),
+      }),
+    );
+    expect(enqueueSystemEventMock).not.toHaveBeenCalled();
+    expect(app.client.chat.update).not.toHaveBeenCalled();
   });
 
   it("drops block actions when mismatch guard triggers", async () => {
