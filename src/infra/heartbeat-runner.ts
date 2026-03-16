@@ -125,14 +125,14 @@ function hasDefaultHeartbeatConfig(cfg: OpenClawConfig) {
 function resolveHeartbeatScopedAgentIds(cfg: OpenClawConfig): string[] {
   const ids = new Set<string>();
   const defaultAgentId = normalizeAgentId(resolveDefaultAgentId(cfg));
-  if (defaultAgentId) {
-    ids.add(defaultAgentId);
-  }
+  ids.add(defaultAgentId);
   for (const entry of cfg.agents?.list ?? []) {
-    const agentId = normalizeAgentId(entry?.id);
-    if (agentId) {
-      ids.add(agentId);
+    const rawId = entry?.id?.trim();
+    if (!rawId) {
+      continue;
     }
+    const agentId = normalizeAgentId(rawId);
+    ids.add(agentId);
   }
   return [...ids];
 }
