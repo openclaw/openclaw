@@ -161,7 +161,10 @@ export function applySetupAccountConfigPatch(params: {
           ...accounts,
           [accountId]: {
             ...accounts[accountId],
-            enabled: true,
+            enabled:
+              typeof accounts[accountId]?.enabled === "boolean"
+                ? accounts[accountId].enabled
+                : true,
             ...params.patch,
           },
         },
