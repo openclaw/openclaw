@@ -10,6 +10,7 @@ import {
   type FeishuBotAddedEvent,
 } from "./bot.js";
 import { handleFeishuCardAction, type FeishuCardActionEvent } from "./card-action.js";
+import { maybeHandleFeishuQuickActionMenu } from "./card-ux-launcher.js";
 import { createEventDispatcher } from "./client.js";
 import {
   hasProcessedFeishuMessage,
@@ -19,7 +20,6 @@ import {
   warmupDedupFromDisk,
 } from "./dedup.js";
 import { isMentionForwardRequest } from "./mention.js";
-import { maybeHandleFeishuQuickActionMenu } from "./card-ux-launcher.js";
 import { fetchBotIdentityForMonitor } from "./monitor.startup.js";
 import { botNames, botOpenIds } from "./monitor.state.js";
 import { monitorWebhook, monitorWebSocket } from "./monitor.transport.js";
@@ -514,7 +514,7 @@ function registerEventHandlers(
       try {
         const event = data as {
           event_key?: string;
-          timestamp?: number;
+          timestamp?: string | number;
           operator?: {
             operator_name?: string;
             operator_id?: { open_id?: string; user_id?: string; union_id?: string };

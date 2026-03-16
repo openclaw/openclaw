@@ -1,27 +1,9 @@
-import {
-  createFeishuCardInteractionEnvelope,
-  type FeishuCardInteractionEnvelope,
-} from "./card-interaction.js";
+import { createFeishuCardInteractionEnvelope } from "./card-interaction.js";
+import { buildFeishuCardButton, buildFeishuCardInteractionContext } from "./card-ux-shared.js";
 
 export const FEISHU_APPROVAL_REQUEST_ACTION = "feishu.quick_actions.request_approval";
 export const FEISHU_APPROVAL_CONFIRM_ACTION = "feishu.approval.confirm";
 export const FEISHU_APPROVAL_CANCEL_ACTION = "feishu.approval.cancel";
-
-function buildButton(params: {
-  label: string;
-  value: FeishuCardInteractionEnvelope;
-  type?: "default" | "primary" | "danger";
-}) {
-  return {
-    tag: "button",
-    text: {
-      tag: "plain_text",
-      content: params.label,
-    },
-    type: params.type ?? "default",
-    value: params.value,
-  };
-}
 
 export function createApprovalCard(params: {
   operatorOpenId: string;
@@ -34,13 +16,7 @@ export function createApprovalCard(params: {
   confirmLabel?: string;
   cancelLabel?: string;
 }): Record<string, unknown> {
-  const context = {
-    u: params.operatorOpenId,
-    ...(params.chatId ? { h: params.chatId } : {}),
-    ...(params.sessionKey ? { s: params.sessionKey } : {}),
-    e: params.expiresAt,
-    ...(params.chatType ? { t: params.chatType } : {}),
-  };
+  const context = buildFeishuCardInteractionContext(params);
 
   return {
     schema: "2.0",
@@ -63,7 +39,7 @@ export function createApprovalCard(params: {
         {
           tag: "action",
           actions: [
-            buildButton({
+            buildFeishuCardButton({
               label: params.confirmLabel ?? "Confirm",
               type: "primary",
               value: createFeishuCardInteractionEnvelope({
@@ -73,7 +49,7 @@ export function createApprovalCard(params: {
                 c: context,
               }),
             }),
-            buildButton({
+            buildFeishuCardButton({
               label: params.cancelLabel ?? "Cancel",
               value: createFeishuCardInteractionEnvelope({
                 k: "button",

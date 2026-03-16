@@ -30,17 +30,24 @@ export type FeishuCardActionEvent = {
 
 const FEISHU_APPROVAL_CARD_TTL_MS = 5 * 60_000;
 const FEISHU_CARD_ACTION_TOKEN_TTL_MS = 15 * 60_000;
-const processedCardActionTokens = new Map<string, number>();
+const processedCardActionTokens = new Map<
+  string,
+  { status: "inflight" | "completed"; expiresAt: number }
+>();
+
+export function resetProcessedFeishuCardActionTokensForTests(): void {
+  processedCardActionTokens.clear();
+}
 
 function pruneProcessedCardActionTokens(now: number): void {
-  for (const [key, expireAt] of processedCardActionTokens.entries()) {
-    if (expireAt <= now) {
+  for (const [key, entry] of processedCardActionTokens.entries()) {
+    if (entry.expiresAt <= now) {
       processedCardActionTokens.delete(key);
     }
   }
 }
 
-function claimFeishuCardActionToken(params: {
+function beginFeishuCardActionToken(params: {
   token: string;
   accountId: string;
   now?: number;
@@ -53,11 +60,35 @@ function claimFeishuCardActionToken(params: {
   }
   const key = `${params.accountId}:${normalizedToken}`;
   const existing = processedCardActionTokens.get(key);
-  if (existing && existing > now) {
+  if (existing && existing.expiresAt > now) {
     return false;
   }
-  processedCardActionTokens.set(key, now + FEISHU_CARD_ACTION_TOKEN_TTL_MS);
+  processedCardActionTokens.set(key, { status: "inflight", expiresAt: now + 60_000 });
   return true;
+}
+
+function completeFeishuCardActionToken(params: {
+  token: string;
+  accountId: string;
+  now?: number;
+}): void {
+  const now = params.now ?? Date.now();
+  const normalizedToken = params.token.trim();
+  if (!normalizedToken) {
+    return;
+  }
+  processedCardActionTokens.set(`${params.accountId}:${normalizedToken}`, {
+    status: "completed",
+    expiresAt: now + FEISHU_CARD_ACTION_TOKEN_TTL_MS,
+  });
+}
+
+function releaseFeishuCardActionToken(params: { token: string; accountId: string }): void {
+  const normalizedToken = params.token.trim();
+  if (!normalizedToken) {
+    return;
+  }
+  processedCardActionTokens.delete(`${params.accountId}:${normalizedToken}`);
 }
 
 function buildSyntheticMessageEvent(
@@ -143,7 +174,7 @@ export async function handleFeishuCardAction(params: {
   const account = resolveFeishuAccount({ cfg, accountId });
   const log = runtime?.log ?? console.log;
   const decoded = decodeFeishuCardAction({ event });
-  const claimedToken = claimFeishuCardActionToken({
+  const claimedToken = beginFeishuCardActionToken({
     token: event.token,
     accountId: account.accountId,
   });
@@ -152,112 +183,125 @@ export async function handleFeishuCardAction(params: {
     return;
   }
 
-  if (decoded.kind === "invalid") {
-    log(
-      `feishu[${account.accountId}]: rejected card action from ${event.operator.open_id}: ${decoded.reason}`,
-    );
-    await sendInvalidInteractionNotice({
-      cfg,
-      event,
-      reason: decoded.reason,
-      accountId,
-    });
-    return;
-  }
-
-  if (decoded.kind === "structured") {
-    const { envelope } = decoded;
-    log(
-      `feishu[${account.accountId}]: handling structured card action ${envelope.a} from ${event.operator.open_id}`,
-    );
-
-    if (envelope.a === FEISHU_APPROVAL_REQUEST_ACTION) {
-      const command = typeof envelope.m?.command === "string" ? envelope.m.command.trim() : "";
-      if (!command) {
-        await sendInvalidInteractionNotice({
-          cfg,
-          event,
-          reason: "malformed",
-          accountId,
-        });
-        return;
-      }
-      const prompt =
-        typeof envelope.m?.prompt === "string" && envelope.m.prompt.trim()
-          ? envelope.m.prompt
-          : `Run \`${command}\` in this Feishu conversation?`;
-      await sendCardFeishu({
-        cfg,
-        to: resolveCallbackTarget(event),
-        card: createApprovalCard({
-          operatorOpenId: event.operator.open_id,
-          chatId: event.context.chat_id || undefined,
-          command,
-          prompt,
-          sessionKey: envelope.c?.s,
-          expiresAt: Date.now() + FEISHU_APPROVAL_CARD_TTL_MS,
-          chatType: envelope.c?.t ?? (event.context.chat_id ? "group" : "p2p"),
-          confirmLabel: command === "/reset" ? "Reset" : "Confirm",
-        }),
-        accountId,
-      });
-      return;
-    }
-
-    if (envelope.a === FEISHU_APPROVAL_CANCEL_ACTION) {
-      await sendMessageFeishu({
-        cfg,
-        to: resolveCallbackTarget(event),
-        text: "Cancelled.",
-        accountId,
-      });
-      return;
-    }
-
-    if (envelope.a === FEISHU_APPROVAL_CONFIRM_ACTION || envelope.k === "quick") {
-      const command = envelope.q?.trim();
-      if (!command) {
-        await sendInvalidInteractionNotice({
-          cfg,
-          event,
-          reason: "malformed",
-          accountId,
-        });
-        return;
-      }
-      await dispatchSyntheticCommand({
+  try {
+    if (decoded.kind === "invalid") {
+      log(
+        `feishu[${account.accountId}]: rejected card action from ${event.operator.open_id}: ${decoded.reason}`,
+      );
+      await sendInvalidInteractionNotice({
         cfg,
         event,
-        command,
-        botOpenId: params.botOpenId,
-        runtime,
+        reason: decoded.reason,
         accountId,
-        chatType: envelope.c?.t ?? (event.context.chat_id ? "group" : "p2p"),
       });
+      completeFeishuCardActionToken({ token: event.token, accountId: account.accountId });
       return;
     }
 
-    await sendInvalidInteractionNotice({
+    if (decoded.kind === "structured") {
+      const { envelope } = decoded;
+      log(
+        `feishu[${account.accountId}]: handling structured card action ${envelope.a} from ${event.operator.open_id}`,
+      );
+
+      if (envelope.a === FEISHU_APPROVAL_REQUEST_ACTION) {
+        const command = typeof envelope.m?.command === "string" ? envelope.m.command.trim() : "";
+        if (!command) {
+          await sendInvalidInteractionNotice({
+            cfg,
+            event,
+            reason: "malformed",
+            accountId,
+          });
+          completeFeishuCardActionToken({ token: event.token, accountId: account.accountId });
+          return;
+        }
+        const prompt =
+          typeof envelope.m?.prompt === "string" && envelope.m.prompt.trim()
+            ? envelope.m.prompt
+            : `Run \`${command}\` in this Feishu conversation?`;
+        await sendCardFeishu({
+          cfg,
+          to: resolveCallbackTarget(event),
+          card: createApprovalCard({
+            operatorOpenId: event.operator.open_id,
+            chatId: event.context.chat_id || undefined,
+            command,
+            prompt,
+            sessionKey: envelope.c?.s,
+            expiresAt: Date.now() + FEISHU_APPROVAL_CARD_TTL_MS,
+            chatType: envelope.c?.t ?? (event.context.chat_id ? "group" : "p2p"),
+            confirmLabel: command === "/reset" ? "Reset" : "Confirm",
+          }),
+          accountId,
+        });
+        completeFeishuCardActionToken({ token: event.token, accountId: account.accountId });
+        return;
+      }
+
+      if (envelope.a === FEISHU_APPROVAL_CANCEL_ACTION) {
+        await sendMessageFeishu({
+          cfg,
+          to: resolveCallbackTarget(event),
+          text: "Cancelled.",
+          accountId,
+        });
+        completeFeishuCardActionToken({ token: event.token, accountId: account.accountId });
+        return;
+      }
+
+      if (envelope.a === FEISHU_APPROVAL_CONFIRM_ACTION || envelope.k === "quick") {
+        const command = envelope.q?.trim();
+        if (!command) {
+          await sendInvalidInteractionNotice({
+            cfg,
+            event,
+            reason: "malformed",
+            accountId,
+          });
+          completeFeishuCardActionToken({ token: event.token, accountId: account.accountId });
+          return;
+        }
+        await dispatchSyntheticCommand({
+          cfg,
+          event,
+          command,
+          botOpenId: params.botOpenId,
+          runtime,
+          accountId,
+          chatType: envelope.c?.t ?? (event.context.chat_id ? "group" : "p2p"),
+        });
+        completeFeishuCardActionToken({ token: event.token, accountId: account.accountId });
+        return;
+      }
+
+      await sendInvalidInteractionNotice({
+        cfg,
+        event,
+        reason: "malformed",
+        accountId,
+      });
+      completeFeishuCardActionToken({ token: event.token, accountId: account.accountId });
+      return;
+    }
+
+    const content = buildFeishuCardActionTextFallback(event);
+
+    log(
+      `feishu[${account.accountId}]: handling card action from ${event.operator.open_id}: ${content}`,
+    );
+
+    await dispatchSyntheticCommand({
       cfg,
       event,
-      reason: "malformed",
+      command: content,
+      botOpenId: params.botOpenId,
+      runtime,
       accountId,
     });
-    return;
+    completeFeishuCardActionToken({ token: event.token, accountId: account.accountId });
+  } catch (err) {
+    releaseFeishuCardActionToken({ token: event.token, accountId: account.accountId });
+    throw err;
   }
-
-  const content = buildFeishuCardActionTextFallback(event);
-
-  log(
-    `feishu[${account.accountId}]: handling card action from ${event.operator.open_id}: ${content}`,
-  );
-
-  await dispatchSyntheticCommand({
-    cfg,
-    event,
-    command: content,
-    botOpenId: params.botOpenId,
-    runtime,
-    accountId,
-  });
 }

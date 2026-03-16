@@ -1,46 +1,12 @@
 import type { ClawdbotConfig, RuntimeEnv } from "openclaw/plugin-sdk/feishu";
-import { sendCardFeishu } from "./send.js";
-import {
-  createFeishuCardInteractionEnvelope,
-  type FeishuCardInteractionEnvelope,
-} from "./card-interaction.js";
+import { createFeishuCardInteractionEnvelope } from "./card-interaction.js";
 import { FEISHU_APPROVAL_REQUEST_ACTION } from "./card-ux-approval.js";
+import { buildFeishuCardButton, buildFeishuCardInteractionContext } from "./card-ux-shared.js";
+import { sendCardFeishu } from "./send.js";
 
 export const FEISHU_QUICK_ACTION_CARD_TTL_MS = 10 * 60_000;
 
 const QUICK_ACTION_MENU_KEYS = new Set(["quick-actions", "quick_actions", "launcher"]);
-
-function buildButton(params: {
-  label: string;
-  value: FeishuCardInteractionEnvelope;
-  type?: "default" | "primary" | "danger";
-}) {
-  return {
-    tag: "button",
-    text: {
-      tag: "plain_text",
-      content: params.label,
-    },
-    type: params.type ?? "default",
-    value: params.value,
-  };
-}
-
-function buildInteractionContext(params: {
-  operatorOpenId: string;
-  chatId?: string;
-  expiresAt: number;
-  chatType?: "p2p" | "group";
-  sessionKey?: string;
-}) {
-  return {
-    u: params.operatorOpenId,
-    ...(params.chatId ? { h: params.chatId } : {}),
-    ...(params.sessionKey ? { s: params.sessionKey } : {}),
-    e: params.expiresAt,
-    ...(params.chatType ? { t: params.chatType } : {}),
-  };
-}
 
 export function isFeishuQuickActionMenuEventKey(eventKey: string): boolean {
   return QUICK_ACTION_MENU_KEYS.has(eventKey.trim().toLowerCase());
@@ -53,7 +19,7 @@ export function createQuickActionLauncherCard(params: {
   chatType?: "p2p" | "group";
   sessionKey?: string;
 }): Record<string, unknown> {
-  const context = buildInteractionContext(params);
+  const context = buildFeishuCardInteractionContext(params);
   return {
     schema: "2.0",
     config: {
@@ -75,7 +41,7 @@ export function createQuickActionLauncherCard(params: {
         {
           tag: "action",
           actions: [
-            buildButton({
+            buildFeishuCardButton({
               label: "Help",
               value: createFeishuCardInteractionEnvelope({
                 k: "quick",
@@ -84,7 +50,7 @@ export function createQuickActionLauncherCard(params: {
                 c: context,
               }),
             }),
-            buildButton({
+            buildFeishuCardButton({
               label: "New session",
               type: "primary",
               value: createFeishuCardInteractionEnvelope({
@@ -97,7 +63,7 @@ export function createQuickActionLauncherCard(params: {
                 c: context,
               }),
             }),
-            buildButton({
+            buildFeishuCardButton({
               label: "Reset",
               type: "danger",
               value: createFeishuCardInteractionEnvelope({

@@ -1,5 +1,9 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { handleFeishuCardAction, type FeishuCardActionEvent } from "./card-action.js";
+import {
+  handleFeishuCardAction,
+  resetProcessedFeishuCardActionTokensForTests,
+  type FeishuCardActionEvent,
+} from "./card-action.js";
 import { createFeishuCardInteractionEnvelope } from "./card-interaction.js";
 import {
   FEISHU_APPROVAL_CANCEL_ACTION,
@@ -33,6 +37,7 @@ describe("Feishu Card Action Handler", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    resetProcessedFeishuCardActionTokensForTests();
   });
 
   it("handles card action with text payload", async () => {
@@ -128,7 +133,13 @@ describe("Feishu Card Action Handler", () => {
             command: "/new",
             prompt: "Start a fresh session?",
           },
-          c: { u: "u123", h: "chat1", t: "group", s: "agent:codex:feishu:chat:chat1", e: Date.now() + 60_000 },
+          c: {
+            u: "u123",
+            h: "chat1",
+            t: "group",
+            s: "agent:codex:feishu:chat:chat1",
+            e: Date.now() + 60_000,
+          },
         }),
         tag: "button",
       },
@@ -327,5 +338,30 @@ describe("Feishu Card Action Handler", () => {
     await handleFeishuCardAction({ cfg, event, runtime });
 
     expect(handleFeishuMessage).toHaveBeenCalledTimes(1);
+  });
+
+  it("releases a claimed token when dispatch fails so retries can succeed", async () => {
+    const event: FeishuCardActionEvent = {
+      operator: { open_id: "u123", user_id: "uid1", union_id: "un1" },
+      token: "tok11",
+      action: {
+        value: createFeishuCardInteractionEnvelope({
+          k: "quick",
+          a: "feishu.quick_actions.help",
+          q: "/help",
+          c: { u: "u123", h: "chat1", t: "group", e: Date.now() + 60_000 },
+        }),
+        tag: "button",
+      },
+      context: { open_id: "u123", user_id: "uid1", chat_id: "chat1" },
+    };
+    vi.mocked(handleFeishuMessage)
+      .mockRejectedValueOnce(new Error("transient"))
+      .mockResolvedValueOnce(undefined as never);
+
+    await expect(handleFeishuCardAction({ cfg, event, runtime })).rejects.toThrow("transient");
+    await handleFeishuCardAction({ cfg, event, runtime });
+
+    expect(handleFeishuMessage).toHaveBeenCalledTimes(2);
   });
 });
