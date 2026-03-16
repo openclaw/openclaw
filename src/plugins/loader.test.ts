@@ -2153,6 +2153,9 @@ module.exports = {
           openclaw: {
             extensions: ["./index.cjs"],
             setupEntry: "./setup-entry.cjs",
+            startup: {
+              deferConfiguredChannelFullLoadUntilAfterListen: false,
+            },
           },
         },
         null,
