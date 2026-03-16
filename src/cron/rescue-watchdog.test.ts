@@ -23,7 +23,7 @@ const loadConfig = vi.hoisted(() =>
         tls?: { enabled?: boolean };
         auth: {
           mode: string;
-          token: string;
+          token?: string;
         };
       };
     }
@@ -388,6 +388,7 @@ describe("runRescueWatchdogJob", () => {
     loadConfig.mockReturnValue({
       gateway: {
         port: 18_789,
+        bind: "loopback",
         auth: {
           mode: "none",
         },
