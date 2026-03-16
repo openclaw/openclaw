@@ -28,6 +28,17 @@ const fx = installEmbeddingManagerFixture({
 const { embedBatch } = fx;
 
 describe("memory embedding batches", () => {
+  async function expectSyncWithFastTimeouts(manager: {
+    sync: (params: { reason: string }) => Promise<void>;
+  }) {
+    const restoreFastTimeouts = useFastShortTimeouts();
+    try {
+      await manager.sync({ reason: "test" });
+    } finally {
+      restoreFastTimeouts();
+    }
+  }
+
   it("splits large files across multiple embedding batches", async () => {
     const memoryDir = fx.getMemoryDir();
     const managerLarge = fx.getManagerLarge();
@@ -93,14 +104,30 @@ describe("memory embedding batches", () => {
       return texts.map(() => [0, 1, 0]);
     });
 
-    const restoreFastTimeouts = useFastShortTimeouts();
-    try {
-      await managerSmall.sync({ reason: "test" });
-    } finally {
-      restoreFastTimeouts();
-    }
+    await expectSyncWithFastTimeouts(managerSmall);
 
     expect(calls).toBe(3);
+  }, 10000);
+
+  it("retries embeddings on too-many-tokens-per-day rate limits", async () => {
+    const memoryDir = fx.getMemoryDir();
+    const managerSmall = fx.getManagerSmall();
+    const line = "e".repeat(120);
+    const content = Array.from({ length: 4 }, () => line).join("\n");
+    await fs.writeFile(path.join(memoryDir, "2026-01-08.md"), content);
+
+    let calls = 0;
+    embedBatch.mockImplementation(async (texts: string[]) => {
+      calls += 1;
+      if (calls === 1) {
+        throw new Error("AWS Bedrock embeddings failed: Too many tokens per day");
+      }
+      return texts.map(() => [0, 1, 0]);
+    });
+
+    await expectSyncWithFastTimeouts(managerSmall);
+
+    expect(calls).toBe(2);
   }, 10000);
 
   it("skips empty chunks so embeddings input stays valid", async () => {

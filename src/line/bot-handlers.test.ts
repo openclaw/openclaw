@@ -1,11 +1,13 @@
 import type { MessageEvent, PostbackEvent } from "@line/bot-sdk";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import type { LineAccountConfig } from "./types.js";
 
 // Avoid pulling in globals/pairing/media dependencies; this suite only asserts
 // allowlist/groupPolicy gating and message-context wiring.
 vi.mock("../globals.js", () => ({
   danger: (text: string) => text,
   logVerbose: () => {},
+  shouldLogVerbose: () => false,
 }));
 
 vi.mock("../pairing/pairing-labels.js", () => ({
@@ -65,8 +67,133 @@ const { readAllowFromStoreMock, upsertPairingRequestMock } = vi.hoisted(() => ({
 
 let handleLineWebhookEvents: typeof import("./bot-handlers.js").handleLineWebhookEvents;
 let createLineWebhookReplayCache: typeof import("./bot-handlers.js").createLineWebhookReplayCache;
+type LineWebhookContext = Parameters<typeof import("./bot-handlers.js").handleLineWebhookEvents>[1];
 
 const createRuntime = () => ({ log: vi.fn(), error: vi.fn(), exit: vi.fn() });
+
+function createReplayMessageEvent(params: {
+  messageId: string;
+  groupId: string;
+  userId: string;
+  webhookEventId: string;
+  isRedelivery: boolean;
+}) {
+  return {
+    type: "message",
+    message: { id: params.messageId, type: "text", text: "hello", quoteToken: "quote-token" },
+    replyToken: "reply-token",
+    timestamp: Date.now(),
+    source: { type: "group", groupId: params.groupId, userId: params.userId },
+    mode: "active",
+    webhookEventId: params.webhookEventId,
+    deliveryContext: { isRedelivery: params.isRedelivery },
+  } as MessageEvent;
+}
+
+function createTestMessageEvent(params: {
+  message: MessageEvent["message"];
+  source: MessageEvent["source"];
+  webhookEventId: string;
+  timestamp?: number;
+  replyToken?: string;
+  isRedelivery?: boolean;
+}) {
+  return {
+    type: "message",
+    message: params.message,
+    replyToken: params.replyToken ?? "reply-token",
+    timestamp: params.timestamp ?? Date.now(),
+    source: params.source,
+    mode: "active",
+    webhookEventId: params.webhookEventId,
+    deliveryContext: { isRedelivery: params.isRedelivery ?? false },
+  } as MessageEvent;
+}
+
+function createLineWebhookTestContext(params: {
+  processMessage: LineWebhookContext["processMessage"];
+  groupPolicy?: LineAccountConfig["groupPolicy"];
+  dmPolicy?: LineAccountConfig["dmPolicy"];
+  requireMention?: boolean;
+  groupHistories?: Map<string, import("../auto-reply/reply/history.js").HistoryEntry[]>;
+  replayCache?: ReturnType<typeof createLineWebhookReplayCache>;
+}): Parameters<typeof handleLineWebhookEvents>[1] {
+  const lineConfig = {
+    ...(params.groupPolicy ? { groupPolicy: params.groupPolicy } : {}),
+    ...(params.dmPolicy ? { dmPolicy: params.dmPolicy } : {}),
+  };
+  return {
+    cfg: { channels: { line: lineConfig } },
+    account: {
+      accountId: "default",
+      enabled: true,
+      channelAccessToken: "token",
+      channelSecret: "secret",
+      tokenSource: "config",
+      config: {
+        ...lineConfig,
+        ...(params.requireMention === undefined
+          ? {}
+          : { groups: { "*": { requireMention: params.requireMention } } }),
+      },
+    },
+    runtime: createRuntime(),
+    mediaMaxBytes: 1,
+    processMessage: params.processMessage,
+    ...(params.groupHistories ? { groupHistories: params.groupHistories } : {}),
+    ...(params.replayCache ? { replayCache: params.replayCache } : {}),
+  };
+}
+
+function createOpenGroupReplayContext(
+  processMessage: LineWebhookContext["processMessage"],
+  replayCache: ReturnType<typeof createLineWebhookReplayCache>,
+): Parameters<typeof handleLineWebhookEvents>[1] {
+  return createLineWebhookTestContext({
+    processMessage,
+    groupPolicy: "open",
+    requireMention: false,
+    replayCache,
+  });
+}
+
+async function expectGroupMessageBlocked(params: {
+  processMessage: LineWebhookContext["processMessage"];
+  event: MessageEvent;
+  context: Parameters<typeof handleLineWebhookEvents>[1];
+}) {
+  await handleLineWebhookEvents([params.event], params.context);
+  expect(params.processMessage).not.toHaveBeenCalled();
+  expect(buildLineMessageContextMock).not.toHaveBeenCalled();
+}
+
+async function expectRequireMentionGroupMessageProcessed(event: MessageEvent) {
+  const processMessage = vi.fn();
+  await handleLineWebhookEvents(
+    [event],
+    createLineWebhookTestContext({
+      processMessage,
+      groupPolicy: "open",
+      requireMention: true,
+    }),
+  );
+  expect(buildLineMessageContextMock).toHaveBeenCalledTimes(1);
+  expect(processMessage).toHaveBeenCalledTimes(1);
+}
+
+async function startInflightReplayDuplicate(params: {
+  event: MessageEvent;
+  processMessage: LineWebhookContext["processMessage"];
+}) {
+  const context = createOpenGroupReplayContext(
+    params.processMessage,
+    createLineWebhookReplayCache(),
+  );
+  const firstRun = handleLineWebhookEvents([params.event], context);
+  await Promise.resolve();
+  const secondRun = handleLineWebhookEvents([params.event], context);
+  return { firstRun, secondRun };
+}
 
 vi.mock("../pairing/pairing-store.js", () => ({
   readChannelAllowFromStore: readAllowFromStoreMock,
@@ -119,34 +246,18 @@ describe("handleLineWebhookEvents", () => {
 
   it("blocks group messages when allowlist is empty", async () => {
     const processMessage = vi.fn();
-    const event = {
-      type: "message",
-      message: { id: "m2", type: "text", text: "hi" },
-      replyToken: "reply-token",
-      timestamp: Date.now(),
-      source: { type: "group", groupId: "group-1", userId: "user-2" },
-      mode: "active",
-      webhookEventId: "evt-2",
-      deliveryContext: { isRedelivery: false },
-    } as MessageEvent;
-
-    await handleLineWebhookEvents([event], {
-      cfg: { channels: { line: { groupPolicy: "allowlist" } } },
-      account: {
-        accountId: "default",
-        enabled: true,
-        channelAccessToken: "token",
-        channelSecret: "secret",
-        tokenSource: "config",
-        config: { groupPolicy: "allowlist" },
-      },
-      runtime: createRuntime(),
-      mediaMaxBytes: 1,
+    await expectGroupMessageBlocked({
       processMessage,
+      event: createTestMessageEvent({
+        message: { id: "m2", type: "text", text: "hi", quoteToken: "quote-token" },
+        source: { type: "group", groupId: "group-1", userId: "user-2" },
+        webhookEventId: "evt-2",
+      }),
+      context: createLineWebhookTestContext({
+        processMessage,
+        groupPolicy: "allowlist",
+      }),
     });
-
-    expect(processMessage).not.toHaveBeenCalled();
-    expect(buildLineMessageContextMock).not.toHaveBeenCalled();
   });
 
   it("allows group messages when sender is in groupAllowFrom", async () => {
@@ -172,7 +283,11 @@ describe("handleLineWebhookEvents", () => {
         channelAccessToken: "token",
         channelSecret: "secret",
         tokenSource: "config",
-        config: { groupPolicy: "allowlist", groupAllowFrom: ["user-3"] },
+        config: {
+          groupPolicy: "allowlist",
+          groupAllowFrom: ["user-3"],
+          groups: { "*": { requireMention: false } },
+        },
       },
       runtime: createRuntime(),
       mediaMaxBytes: 1,
@@ -219,34 +334,30 @@ describe("handleLineWebhookEvents", () => {
     expect(readAllowFromStoreMock).toHaveBeenCalledWith("line", undefined, "default");
   });
 
-  it("does not authorize group messages from DM pairing-store entries when group allowlist is empty", async () => {
-    readAllowFromStoreMock.mockResolvedValueOnce(["user-5"]);
+  it("blocks group messages without sender id when groupPolicy is allowlist", async () => {
     const processMessage = vi.fn();
     const event = {
       type: "message",
-      message: { id: "m5b", type: "text", text: "hi" },
+      message: { id: "m5a", type: "text", text: "hi" },
       replyToken: "reply-token",
       timestamp: Date.now(),
-      source: { type: "group", groupId: "group-1", userId: "user-5" },
+      source: { type: "group", groupId: "group-1" },
       mode: "active",
-      webhookEventId: "evt-5b",
+      webhookEventId: "evt-5a",
       deliveryContext: { isRedelivery: false },
     } as MessageEvent;
 
     await handleLineWebhookEvents([event], {
-      cfg: { channels: { line: { groupPolicy: "allowlist" } } },
+      cfg: {
+        channels: { line: { groupPolicy: "allowlist", groupAllowFrom: ["user-5"] } },
+      },
       account: {
         accountId: "default",
         enabled: true,
         channelAccessToken: "token",
         channelSecret: "secret",
         tokenSource: "config",
-        config: {
-          dmPolicy: "pairing",
-          allowFrom: [],
-          groupPolicy: "allowlist",
-          groupAllowFrom: [],
-        },
+        config: { groupPolicy: "allowlist", groupAllowFrom: ["user-5"] },
       },
       runtime: createRuntime(),
       mediaMaxBytes: 1,
@@ -255,6 +366,38 @@ describe("handleLineWebhookEvents", () => {
 
     expect(processMessage).not.toHaveBeenCalled();
     expect(buildLineMessageContextMock).not.toHaveBeenCalled();
+  });
+
+  it("does not authorize group messages from DM pairing-store entries when group allowlist is empty", async () => {
+    readAllowFromStoreMock.mockResolvedValueOnce(["user-5"]);
+    const processMessage = vi.fn();
+    await expectGroupMessageBlocked({
+      processMessage,
+      event: createTestMessageEvent({
+        message: { id: "m5b", type: "text", text: "hi", quoteToken: "quote-token" },
+        source: { type: "group", groupId: "group-1", userId: "user-5" },
+        webhookEventId: "evt-5b",
+      }),
+      context: {
+        cfg: { channels: { line: { groupPolicy: "allowlist" } } },
+        account: {
+          accountId: "default",
+          enabled: true,
+          channelAccessToken: "token",
+          channelSecret: "secret",
+          tokenSource: "config",
+          config: {
+            dmPolicy: "pairing",
+            allowFrom: [],
+            groupPolicy: "allowlist",
+            groupAllowFrom: [],
+          },
+        },
+        runtime: createRuntime(),
+        mediaMaxBytes: 1,
+        processMessage,
+      },
+    });
   });
 
   it("blocks group messages when wildcard group config disables groups", async () => {
@@ -354,8 +497,8 @@ describe("handleLineWebhookEvents", () => {
       account: {
         accountId: "work",
         enabled: true,
-        channelAccessToken: "token-work",
-        channelSecret: "secret-work",
+        channelAccessToken: "token-work", // pragma: allowlist secret
+        channelSecret: "secret-work", // pragma: allowlist secret
         tokenSource: "config",
         config: { dmPolicy: "pairing" },
       },
@@ -377,32 +520,14 @@ describe("handleLineWebhookEvents", () => {
 
   it("deduplicates replayed webhook events by webhookEventId before processing", async () => {
     const processMessage = vi.fn();
-    const event = {
-      type: "message",
-      message: { id: "m-replay", type: "text", text: "hello" },
-      replyToken: "reply-token",
-      timestamp: Date.now(),
-      source: { type: "group", groupId: "group-replay", userId: "user-replay" },
-      mode: "active",
+    const event = createReplayMessageEvent({
+      messageId: "m-replay",
+      groupId: "group-replay",
+      userId: "user-replay",
       webhookEventId: "evt-replay-1",
-      deliveryContext: { isRedelivery: true },
-    } as MessageEvent;
-
-    const context: Parameters<typeof handleLineWebhookEvents>[1] = {
-      cfg: { channels: { line: { groupPolicy: "open" } } },
-      account: {
-        accountId: "default",
-        enabled: true,
-        channelAccessToken: "token",
-        channelSecret: "secret",
-        tokenSource: "config",
-        config: { groupPolicy: "open" },
-      },
-      runtime: createRuntime(),
-      mediaMaxBytes: 1,
-      processMessage,
-      replayCache: createLineWebhookReplayCache(),
-    };
+      isRedelivery: true,
+    });
+    const context = createOpenGroupReplayContext(processMessage, createLineWebhookReplayCache());
 
     await handleLineWebhookEvents([event], context);
     await handleLineWebhookEvents([event], context);
@@ -419,36 +544,14 @@ describe("handleLineWebhookEvents", () => {
     const processMessage = vi.fn(async () => {
       await firstDone;
     });
-    const event = {
-      type: "message",
-      message: { id: "m-inflight", type: "text", text: "hello" },
-      replyToken: "reply-token",
-      timestamp: Date.now(),
-      source: { type: "group", groupId: "group-inflight", userId: "user-inflight" },
-      mode: "active",
+    const event = createReplayMessageEvent({
+      messageId: "m-inflight",
+      groupId: "group-inflight",
+      userId: "user-inflight",
       webhookEventId: "evt-inflight-1",
-      deliveryContext: { isRedelivery: true },
-    } as MessageEvent;
-
-    const context: Parameters<typeof handleLineWebhookEvents>[1] = {
-      cfg: { channels: { line: { groupPolicy: "open" } } },
-      account: {
-        accountId: "default",
-        enabled: true,
-        channelAccessToken: "token",
-        channelSecret: "secret",
-        tokenSource: "config",
-        config: { groupPolicy: "open" },
-      },
-      runtime: createRuntime(),
-      mediaMaxBytes: 1,
-      processMessage,
-      replayCache: createLineWebhookReplayCache(),
-    };
-
-    const firstRun = handleLineWebhookEvents([event], context);
-    await Promise.resolve();
-    const secondRun = handleLineWebhookEvents([event], context);
+      isRedelivery: true,
+    });
+    const { firstRun, secondRun } = await startInflightReplayDuplicate({ event, processMessage });
     resolveFirst?.();
     await Promise.all([firstRun, secondRun]);
 
@@ -464,36 +567,14 @@ describe("handleLineWebhookEvents", () => {
     const processMessage = vi.fn(async () => {
       await firstDone;
     });
-    const event = {
-      type: "message",
-      message: { id: "m-inflight-fail", type: "text", text: "hello" },
-      replyToken: "reply-token",
-      timestamp: Date.now(),
-      source: { type: "group", groupId: "group-inflight", userId: "user-inflight" },
-      mode: "active",
+    const event = createReplayMessageEvent({
+      messageId: "m-inflight-fail",
+      groupId: "group-inflight",
+      userId: "user-inflight",
       webhookEventId: "evt-inflight-fail-1",
-      deliveryContext: { isRedelivery: true },
-    } as MessageEvent;
-
-    const context: Parameters<typeof handleLineWebhookEvents>[1] = {
-      cfg: { channels: { line: { groupPolicy: "open" } } },
-      account: {
-        accountId: "default",
-        enabled: true,
-        channelAccessToken: "token",
-        channelSecret: "secret",
-        tokenSource: "config",
-        config: { groupPolicy: "open" },
-      },
-      runtime: createRuntime(),
-      mediaMaxBytes: 1,
-      processMessage,
-      replayCache: createLineWebhookReplayCache(),
-    };
-
-    const firstRun = handleLineWebhookEvents([event], context);
-    await Promise.resolve();
-    const secondRun = handleLineWebhookEvents([event], context);
+      isRedelivery: true,
+    });
+    const { firstRun, secondRun } = await startInflightReplayDuplicate({ event, processMessage });
     rejectFirst?.(new Error("transient inflight failure"));
 
     await expect(firstRun).rejects.toThrow("transient inflight failure");
@@ -524,7 +605,11 @@ describe("handleLineWebhookEvents", () => {
         channelAccessToken: "token",
         channelSecret: "secret",
         tokenSource: "config",
-        config: { groupPolicy: "allowlist", groupAllowFrom: ["user-dup"] },
+        config: {
+          groupPolicy: "allowlist",
+          groupAllowFrom: ["user-dup"],
+          groups: { "*": { requireMention: false } },
+        },
       },
       runtime: createRuntime(),
       mediaMaxBytes: 1,
@@ -599,37 +684,202 @@ describe("handleLineWebhookEvents", () => {
     expect(processMessage).toHaveBeenCalledTimes(1);
   });
 
+  it("skips group messages by default when requireMention is not configured", async () => {
+    const processMessage = vi.fn();
+    const event = createTestMessageEvent({
+      message: { id: "m-default-skip", type: "text", text: "hi there", quoteToken: "q-default" },
+      source: { type: "group", groupId: "group-default", userId: "user-default" },
+      webhookEventId: "evt-default-skip",
+    });
+
+    await handleLineWebhookEvents(
+      [event],
+      createLineWebhookTestContext({
+        processMessage,
+        groupPolicy: "open",
+      }),
+    );
+
+    expect(processMessage).not.toHaveBeenCalled();
+    expect(buildLineMessageContextMock).not.toHaveBeenCalled();
+  });
+
+  it("records unmentioned group messages as pending history", async () => {
+    const processMessage = vi.fn();
+    const groupHistories = new Map<
+      string,
+      import("../auto-reply/reply/history.js").HistoryEntry[]
+    >();
+    const event = createTestMessageEvent({
+      message: { id: "m-hist-1", type: "text", text: "hello history", quoteToken: "q-hist-1" },
+      timestamp: 1700000000000,
+      source: { type: "group", groupId: "group-hist-1", userId: "user-hist" },
+      webhookEventId: "evt-hist-1",
+    });
+
+    await handleLineWebhookEvents(
+      [event],
+      createLineWebhookTestContext({
+        processMessage,
+        groupPolicy: "open",
+        groupHistories,
+      }),
+    );
+
+    expect(processMessage).not.toHaveBeenCalled();
+    const entries = groupHistories.get("group-hist-1");
+    expect(entries).toHaveLength(1);
+    expect(entries?.[0]).toMatchObject({
+      sender: "user:user-hist",
+      body: "hello history",
+      timestamp: 1700000000000,
+    });
+  });
+
+  it("skips group messages without mention when requireMention is set", async () => {
+    const processMessage = vi.fn();
+    const event = createTestMessageEvent({
+      message: { id: "m-mention-1", type: "text", text: "hi there", quoteToken: "q-mention-1" },
+      source: { type: "group", groupId: "group-mention", userId: "user-mention" },
+      webhookEventId: "evt-mention-1",
+    });
+
+    await handleLineWebhookEvents(
+      [event],
+      createLineWebhookTestContext({
+        processMessage,
+        groupPolicy: "open",
+        requireMention: true,
+      }),
+    );
+
+    expect(processMessage).not.toHaveBeenCalled();
+    expect(buildLineMessageContextMock).not.toHaveBeenCalled();
+  });
+
+  it("processes group messages with bot mention when requireMention is set", async () => {
+    const processMessage = vi.fn();
+    // Simulate a LINE text message with mention.mentionees containing isSelf=true
+    const event = createTestMessageEvent({
+      message: {
+        id: "m-mention-2",
+        type: "text",
+        text: "@Bot hi there",
+        mention: {
+          mentionees: [{ index: 0, length: 4, type: "user", isSelf: true }],
+        },
+      } as unknown as MessageEvent["message"],
+      source: { type: "group", groupId: "group-mention", userId: "user-mention" },
+      webhookEventId: "evt-mention-2",
+    });
+
+    await handleLineWebhookEvents(
+      [event],
+      createLineWebhookTestContext({
+        processMessage,
+        groupPolicy: "open",
+        requireMention: true,
+      }),
+    );
+
+    expect(buildLineMessageContextMock).toHaveBeenCalledTimes(1);
+    expect(processMessage).toHaveBeenCalledTimes(1);
+  });
+
+  it("processes group messages with @all mention when requireMention is set", async () => {
+    const event = createTestMessageEvent({
+      message: {
+        id: "m-mention-3",
+        type: "text",
+        text: "@All hi there",
+        mention: {
+          mentionees: [{ index: 0, length: 4, type: "all" }],
+        },
+      } as MessageEvent["message"],
+      source: { type: "group", groupId: "group-mention", userId: "user-mention" },
+      webhookEventId: "evt-mention-3",
+    });
+
+    await expectRequireMentionGroupMessageProcessed(event);
+  });
+
+  it("does not apply requireMention gating to DM messages", async () => {
+    const processMessage = vi.fn();
+    const event = createTestMessageEvent({
+      message: { id: "m-mention-dm", type: "text", text: "hi", quoteToken: "q-mention-dm" },
+      source: { type: "user", userId: "user-dm" },
+      webhookEventId: "evt-mention-dm",
+    });
+
+    await handleLineWebhookEvents(
+      [event],
+      createLineWebhookTestContext({
+        processMessage,
+        dmPolicy: "open",
+        requireMention: true,
+      }),
+    );
+
+    expect(buildLineMessageContextMock).toHaveBeenCalledTimes(1);
+    expect(processMessage).toHaveBeenCalledTimes(1);
+  });
+
+  it("allows non-text group messages through when requireMention is set (cannot detect mention)", async () => {
+    // Image message -- LINE only carries mention metadata on text messages.
+    const event = createTestMessageEvent({
+      message: {
+        id: "m-mention-img",
+        type: "image",
+        contentProvider: { type: "line" },
+        quoteToken: "q-mention-img",
+      },
+      source: { type: "group", groupId: "group-1", userId: "user-img" },
+      webhookEventId: "evt-mention-img",
+    });
+
+    await expectRequireMentionGroupMessageProcessed(event);
+  });
+
+  it("does not bypass mention gating when non-bot mention is present with control command", async () => {
+    const processMessage = vi.fn();
+    // Text message mentions another user (not bot) together with a control command.
+    const event = createTestMessageEvent({
+      message: {
+        id: "m-mention-other",
+        type: "text",
+        text: "@other !status",
+        mention: { mentionees: [{ index: 0, length: 6, type: "user", isSelf: false }] },
+      } as unknown as MessageEvent["message"],
+      source: { type: "group", groupId: "group-1", userId: "user-other" },
+      webhookEventId: "evt-mention-other",
+    });
+
+    await handleLineWebhookEvents(
+      [event],
+      createLineWebhookTestContext({
+        processMessage,
+        groupPolicy: "open",
+        requireMention: true,
+      }),
+    );
+
+    // Should be skipped because there is a non-bot mention and the bot was not mentioned.
+    expect(processMessage).not.toHaveBeenCalled();
+  });
+
   it("does not mark replay cache when event processing fails", async () => {
     const processMessage = vi
       .fn()
       .mockRejectedValueOnce(new Error("transient failure"))
       .mockResolvedValueOnce(undefined);
-    const event = {
-      type: "message",
-      message: { id: "m-fail-then-retry", type: "text", text: "hello" },
-      replyToken: "reply-token",
-      timestamp: Date.now(),
-      source: { type: "group", groupId: "group-retry", userId: "user-retry" },
-      mode: "active",
+    const event = createReplayMessageEvent({
+      messageId: "m-fail-then-retry",
+      groupId: "group-retry",
+      userId: "user-retry",
       webhookEventId: "evt-fail-then-retry",
-      deliveryContext: { isRedelivery: false },
-    } as MessageEvent;
-
-    const context: Parameters<typeof handleLineWebhookEvents>[1] = {
-      cfg: { channels: { line: { groupPolicy: "open" } } },
-      account: {
-        accountId: "default",
-        enabled: true,
-        channelAccessToken: "token",
-        channelSecret: "secret",
-        tokenSource: "config",
-        config: { groupPolicy: "open" },
-      },
-      runtime: createRuntime(),
-      mediaMaxBytes: 1,
-      processMessage,
-      replayCache: createLineWebhookReplayCache(),
-    };
+      isRedelivery: false,
+    });
+    const context = createOpenGroupReplayContext(processMessage, createLineWebhookReplayCache());
 
     await expect(handleLineWebhookEvents([event], context)).rejects.toThrow("transient failure");
     await handleLineWebhookEvents([event], context);

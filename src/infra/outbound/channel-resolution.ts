@@ -33,7 +33,10 @@ function maybeBootstrapChannelPlugin(params: {
   }
 
   const activeRegistry = getActivePluginRegistry();
-  if ((activeRegistry?.channels?.length ?? 0) > 0) {
+  const activeHasRequestedChannel = activeRegistry?.channels?.some(
+    (entry) => entry?.plugin?.id === params.channel,
+  );
+  if (activeHasRequestedChannel) {
     return;
   }
 
@@ -58,6 +61,22 @@ function maybeBootstrapChannelPlugin(params: {
   }
 }
 
+function resolveDirectFromActiveRegistry(
+  channel: DeliverableMessageChannel,
+): ChannelPlugin | undefined {
+  const activeRegistry = getActivePluginRegistry();
+  if (!activeRegistry) {
+    return undefined;
+  }
+  for (const entry of activeRegistry.channels) {
+    const plugin = entry?.plugin;
+    if (plugin?.id === channel) {
+      return plugin;
+    }
+  }
+  return undefined;
+}
+
 export function resolveOutboundChannelPlugin(params: {
   channel: string;
   cfg?: OpenClawConfig;
@@ -72,7 +91,11 @@ export function resolveOutboundChannelPlugin(params: {
   if (current) {
     return current;
   }
+  const directCurrent = resolveDirectFromActiveRegistry(normalized);
+  if (directCurrent) {
+    return directCurrent;
+  }
 
   maybeBootstrapChannelPlugin({ channel: normalized, cfg: params.cfg });
-  return resolve();
+  return resolve() ?? resolveDirectFromActiveRegistry(normalized);
 }

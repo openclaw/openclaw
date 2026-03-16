@@ -1,26 +1,116 @@
-import { resolveContextTokensForModel } from "../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS, DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
-import { resolveConfiguredModelRef } from "../agents/model-selection.js";
-import type { OpenClawConfig } from "../config/config.js";
-import { loadConfig } from "../config/config.js";
-import {
-  loadSessionStore,
-  resolveFreshSessionTotalTokens,
-  resolveMainSessionKey,
-  resolveStorePath,
-  type SessionEntry,
-} from "../config/sessions.js";
-import {
-  classifySessionKey,
-  listAgentsForGateway,
-  resolveSessionModelRef,
-} from "../gateway/session-utils.js";
-import { buildChannelSummary } from "../infra/channel-summary.js";
-import { resolveHeartbeatSummaryForAgent } from "../infra/heartbeat-runner.js";
+import { hasPotentialConfiguredChannels } from "../channels/config-presence.js";
+import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
+import { resolveMainSessionKey } from "../config/sessions/main-session.js";
+import { resolveStorePath } from "../config/sessions/paths.js";
+import { readSessionStoreReadOnly } from "../config/sessions/store-read.js";
+import { resolveFreshSessionTotalTokens, type SessionEntry } from "../config/sessions/types.js";
+import type { OpenClawConfig } from "../config/types.js";
+import { listGatewayAgentsBasic } from "../gateway/agent-list.js";
+import { resolveHeartbeatSummaryForAgent } from "../infra/heartbeat-summary.js";
 import { peekSystemEvents } from "../infra/system-events.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
-import { resolveLinkChannelContext } from "./status.link-channel.js";
+import { resolveRuntimeServiceVersion } from "../version.js";
 import type { HeartbeatStatus, SessionStatus, StatusSummary } from "./status.types.js";
+
+let channelSummaryModulePromise: Promise<typeof import("../infra/channel-summary.js")> | undefined;
+let linkChannelModulePromise: Promise<typeof import("./status.link-channel.js")> | undefined;
+let statusSummaryRuntimeModulePromise:
+  | Promise<typeof import("./status.summary.runtime.js")>
+  | undefined;
+let configIoModulePromise: Promise<typeof import("../config/io.js")> | undefined;
+
+function loadChannelSummaryModule() {
+  channelSummaryModulePromise ??= import("../infra/channel-summary.js");
+  return channelSummaryModulePromise;
+}
+
+function loadLinkChannelModule() {
+  linkChannelModulePromise ??= import("./status.link-channel.js");
+  return linkChannelModulePromise;
+}
+
+function loadStatusSummaryRuntimeModule() {
+  statusSummaryRuntimeModulePromise ??= import("./status.summary.runtime.js");
+  return statusSummaryRuntimeModulePromise;
+}
+
+function loadConfigIoModule() {
+  configIoModulePromise ??= import("../config/io.js");
+  return configIoModulePromise;
+}
+
+function parseStatusModelRef(
+  raw: string,
+  defaultProvider: string,
+): { provider: string; model: string } | null {
+  const trimmed = raw.trim();
+  if (!trimmed) {
+    return null;
+  }
+  const slash = trimmed.indexOf("/");
+  if (slash === -1) {
+    return { provider: defaultProvider, model: trimmed };
+  }
+  const provider = trimmed.slice(0, slash).trim();
+  const model = trimmed.slice(slash + 1).trim();
+  if (!provider || !model) {
+    return null;
+  }
+  return { provider, model };
+}
+
+function resolveConfiguredStatusModelRef(params: {
+  cfg: OpenClawConfig;
+  defaultProvider: string;
+  defaultModel: string;
+}): { provider: string; model: string } {
+  const rawModel = resolveAgentModelPrimaryValue(params.cfg.agents?.defaults?.model) ?? "";
+  if (rawModel) {
+    const trimmed = rawModel.trim();
+    const configuredModels = params.cfg.agents?.defaults?.models ?? {};
+    if (!trimmed.includes("/")) {
+      const aliasKey = trimmed.toLowerCase();
+      for (const [modelKey, entry] of Object.entries(configuredModels)) {
+        const aliasValue = (entry as { alias?: unknown } | undefined)?.alias;
+        const alias = typeof aliasValue === "string" ? aliasValue.trim() : "";
+        if (!alias || alias.toLowerCase() !== aliasKey) {
+          continue;
+        }
+        const parsed = parseStatusModelRef(modelKey, params.defaultProvider);
+        if (parsed) {
+          return parsed;
+        }
+      }
+      return { provider: "anthropic", model: trimmed };
+    }
+    const parsed = parseStatusModelRef(trimmed, params.defaultProvider);
+    if (parsed) {
+      return parsed;
+    }
+  }
+
+  const configuredProviders = params.cfg.models?.providers;
+  if (configuredProviders && typeof configuredProviders === "object") {
+    const hasDefaultProvider = Boolean(configuredProviders[params.defaultProvider]);
+    if (!hasDefaultProvider) {
+      const availableProvider = Object.entries(configuredProviders).find(
+        ([, providerCfg]) =>
+          providerCfg &&
+          Array.isArray(providerCfg.models) &&
+          providerCfg.models.length > 0 &&
+          providerCfg.models[0]?.id,
+      );
+      if (availableProvider) {
+        const [providerName, providerCfg] = availableProvider;
+        const firstModel = providerCfg.models[0];
+        return { provider: providerName, model: firstModel.id };
+      }
+    }
+  }
+
+  return { provider: params.defaultProvider, model: params.defaultModel };
+}
 
 const buildFlags = (entry?: SessionEntry): string[] => {
   if (!entry) {
@@ -34,6 +124,9 @@ const buildFlags = (entry?: SessionEntry): string[] => {
   const verbose = entry?.verboseLevel;
   if (typeof verbose === "string" && verbose.length > 0) {
     flags.push(`verbose:${verbose}`);
+  }
+  if (typeof entry?.fastMode === "boolean") {
+    flags.push(entry.fastMode ? "fast" : "fast:off");
   }
   const reasoning = entry?.reasoningLevel;
   if (typeof reasoning === "string" && reasoning.length > 0) {
@@ -84,9 +177,16 @@ export async function getStatusSummary(
   } = {},
 ): Promise<StatusSummary> {
   const { includeSensitive = true } = options;
-  const cfg = options.config ?? loadConfig();
-  const linkContext = await resolveLinkChannelContext(cfg);
-  const agentList = listAgentsForGateway(cfg);
+  const { classifySessionKey, resolveContextTokensForModel, resolveSessionModelRef } =
+    await loadStatusSummaryRuntimeModule();
+  const cfg = options.config ?? (await loadConfigIoModule()).loadConfig();
+  const needsChannelPlugins = hasPotentialConfiguredChannels(cfg);
+  const linkContext = needsChannelPlugins
+    ? await loadLinkChannelModule().then(({ resolveLinkChannelContext }) =>
+        resolveLinkChannelContext(cfg),
+      )
+    : null;
+  const agentList = listGatewayAgentsBasic(cfg);
   const heartbeatAgents: HeartbeatStatus[] = agentList.agents.map((agent) => {
     const summary = resolveHeartbeatSummaryForAgent(cfg, agent.id);
     return {
@@ -96,15 +196,19 @@ export async function getStatusSummary(
       everyMs: summary.everyMs,
     } satisfies HeartbeatStatus;
   });
-  const channelSummary = await buildChannelSummary(cfg, {
-    colorize: true,
-    includeAllowFrom: true,
-    sourceConfig: options.sourceConfig,
-  });
+  const channelSummary = needsChannelPlugins
+    ? await loadChannelSummaryModule().then(({ buildChannelSummary }) =>
+        buildChannelSummary(cfg, {
+          colorize: true,
+          includeAllowFrom: true,
+          sourceConfig: options.sourceConfig,
+        }),
+      )
+    : [];
   const mainSessionKey = resolveMainSessionKey(cfg);
   const queuedSystemEvents = peekSystemEvents(mainSessionKey);
 
-  const resolved = resolveConfiguredModelRef({
+  const resolved = resolveConfiguredStatusModelRef({
     cfg,
     defaultProvider: DEFAULT_PROVIDER,
     defaultModel: DEFAULT_MODEL,
@@ -126,7 +230,7 @@ export async function getStatusSummary(
     if (cached) {
       return cached;
     }
-    const store = loadSessionStore(storePath);
+    const store = readSessionStoreReadOnly(storePath);
     storeCache.set(storePath, store);
     return store;
   };
@@ -169,6 +273,7 @@ export async function getStatusSummary(
           updatedAt,
           age,
           thinkingLevel: entry?.thinkingLevel,
+          fastMode: entry?.fastMode,
           verboseLevel: entry?.verboseLevel,
           reasoningLevel: entry?.reasoningLevel,
           elevatedLevel: entry?.elevatedLevel,
@@ -210,6 +315,7 @@ export async function getStatusSummary(
   const totalSessions = allSessions.length;
 
   const summary: StatusSummary = {
+    runtimeVersion: resolveRuntimeServiceVersion(process.env),
     linkChannel: linkContext
       ? {
           id: linkContext.plugin.id,
