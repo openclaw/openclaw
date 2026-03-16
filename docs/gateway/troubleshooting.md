@@ -289,19 +289,18 @@ Look for:
 
 - Valid browser executable path.
 - CDP profile reachability.
-- Extension relay tab attachment for `profile="chrome"`.
+- Local Chrome availability for `existing-session` / `user` profiles.
 
 Common signatures:
 
 - `Failed to start Chrome CDP on port` → browser process failed to launch.
 - `browser.executablePath not found` → configured path is invalid.
-- `Chrome extension relay is running, but no tab is connected` → extension relay not attached.
+- `No Chrome tabs found for profile="user"` → the Chrome MCP attach profile has no open local Chrome tabs.
 - `Browser attachOnly is enabled ... not reachable` → attach-only profile has no reachable target.
 
 Related:
 
 - [/tools/browser-linux-troubleshooting](/tools/browser-linux-troubleshooting)
-- [/tools/chrome-extension](/tools/chrome-extension)
 - [/tools/browser](/tools/browser)
 
 ## If you upgraded and something suddenly broke

@@ -268,6 +268,7 @@ export const sendHandlers: GatewayRequestHandlers = {
                 agentId: effectiveAgentId,
                 text: mirrorText || message,
                 mediaUrls: mirrorMediaUrls.length > 0 ? mirrorMediaUrls : undefined,
+                idempotencyKey: idem,
               }
             : derivedRoute
               ? {
@@ -275,6 +276,7 @@ export const sendHandlers: GatewayRequestHandlers = {
                   agentId: effectiveAgentId,
                   text: mirrorText || message,
                   mediaUrls: mirrorMediaUrls.length > 0 ? mirrorMediaUrls : undefined,
+                  idempotencyKey: idem,
                 }
               : undefined,
         });

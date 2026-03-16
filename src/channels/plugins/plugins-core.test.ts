@@ -2,16 +2,16 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, expectTypeOf, it } from "vitest";
+import type { DiscordProbe } from "../../../extensions/discord/src/probe.js";
+import type { DiscordTokenResolution } from "../../../extensions/discord/src/token.js";
+import type { IMessageProbe } from "../../../extensions/imessage/src/probe.js";
+import type { SignalProbe } from "../../../extensions/signal/src/probe.js";
+import type { SlackProbe } from "../../../extensions/slack/src/probe.js";
+import type { TelegramProbe } from "../../../extensions/telegram/src/probe.js";
+import type { TelegramTokenResolution } from "../../../extensions/telegram/src/token.js";
 import type { OpenClawConfig } from "../../config/config.js";
-import type { DiscordProbe } from "../../discord/probe.js";
-import type { DiscordTokenResolution } from "../../discord/token.js";
-import type { IMessageProbe } from "../../imessage/probe.js";
 import type { LineProbeResult } from "../../line/types.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
-import type { SignalProbe } from "../../signal/probe.js";
-import type { SlackProbe } from "../../slack/probe.js";
-import type { TelegramProbe } from "../../telegram/probe.js";
-import type { TelegramTokenResolution } from "../../telegram/token.js";
 import {
   createChannelTestPluginBase,
   createMSTeamsTestPluginBase,
@@ -152,6 +152,50 @@ describe("channel plugin catalog", () => {
       (entry) => entry.id,
     );
     expect(ids).toContain("demo-channel");
+  });
+
+  it("preserves plugin ids when they differ from channel ids", () => {
+    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-channel-catalog-state-"));
+    const pluginDir = path.join(stateDir, "extensions", "demo-channel-plugin");
+    fs.mkdirSync(pluginDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(pluginDir, "package.json"),
+      JSON.stringify({
+        name: "@vendor/demo-channel-plugin",
+        openclaw: {
+          extensions: ["./index.js"],
+          channel: {
+            id: "demo-channel",
+            label: "Demo Channel",
+            selectionLabel: "Demo Channel",
+            docsPath: "/channels/demo-channel",
+            blurb: "Demo channel",
+          },
+          install: {
+            npmSpec: "@vendor/demo-channel-plugin",
+          },
+        },
+      }),
+    );
+    fs.writeFileSync(
+      path.join(pluginDir, "openclaw.plugin.json"),
+      JSON.stringify({
+        id: "@vendor/demo-runtime",
+        configSchema: {},
+      }),
+    );
+    fs.writeFileSync(path.join(pluginDir, "index.js"), "module.exports = {}", "utf-8");
+
+    const entry = listChannelPluginCatalogEntries({
+      env: {
+        ...process.env,
+        OPENCLAW_STATE_DIR: stateDir,
+        CLAWDBOT_STATE_DIR: undefined,
+        OPENCLAW_BUNDLED_PLUGINS_DIR: "/nonexistent/bundled/plugins",
+      },
+    }).find((item) => item.id === "demo-channel");
+
+    expect(entry?.pluginId).toBe("@vendor/demo-runtime");
   });
 
   it("uses the provided env for external catalog path resolution", () => {
@@ -410,33 +454,43 @@ describe("resolveChannelConfigWrites", () => {
 });
 
 describe("authorizeConfigWrite", () => {
-  it("blocks when a target account disables writes", () => {
-    const cfg = makeSlackConfigWritesCfg("work");
+  function expectConfigWriteBlocked(params: {
+    disabledAccountId: string;
+    reason: "target-disabled" | "origin-disabled";
+    blockedScope: "target" | "origin";
+  }) {
     expect(
       authorizeConfigWrite({
-        cfg,
+        cfg: makeSlackConfigWritesCfg(params.disabledAccountId),
         origin: { channelId: "slack", accountId: "default" },
         target: resolveExplicitConfigWriteTarget({ channelId: "slack", accountId: "work" }),
       }),
     ).toEqual({
       allowed: false,
+      reason: params.reason,
+      blockedScope: {
+        kind: params.blockedScope,
+        scope: {
+          channelId: "slack",
+          accountId: params.blockedScope === "target" ? "work" : "default",
+        },
+      },
+    });
+  }
+
+  it("blocks when a target account disables writes", () => {
+    expectConfigWriteBlocked({
+      disabledAccountId: "work",
       reason: "target-disabled",
-      blockedScope: { kind: "target", scope: { channelId: "slack", accountId: "work" } },
+      blockedScope: "target",
     });
   });
 
   it("blocks when the origin account disables writes", () => {
-    const cfg = makeSlackConfigWritesCfg("default");
-    expect(
-      authorizeConfigWrite({
-        cfg,
-        origin: { channelId: "slack", accountId: "default" },
-        target: resolveExplicitConfigWriteTarget({ channelId: "slack", accountId: "work" }),
-      }),
-    ).toEqual({
-      allowed: false,
+    expectConfigWriteBlocked({
+      disabledAccountId: "default",
       reason: "origin-disabled",
-      blockedScope: { kind: "origin", scope: { channelId: "slack", accountId: "default" } },
+      blockedScope: "origin",
     });
   });
 

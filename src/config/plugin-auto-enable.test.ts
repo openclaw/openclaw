@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterAll, afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { clearPluginDiscoveryCache } from "../plugins/discovery.js";
 import {
   clearPluginManifestRegistryCache,
@@ -11,7 +11,6 @@ import { validateConfigObject } from "./config.js";
 import { applyPluginAutoEnable } from "./plugin-auto-enable.js";
 
 const tempDirs: string[] = [];
-const previousUmask = process.umask(0o022);
 
 function chmodSafeDir(dir: string) {
   if (process.platform === "win32") {
@@ -63,6 +62,7 @@ function makeRegistry(plugins: Array<{ id: string; channels: string[] }>): Plugi
       channels: p.channels,
       providers: [],
       skills: [],
+      hooks: [],
       origin: "config" as const,
       rootDir: `/fake/${p.id}`,
       source: `/fake/${p.id}/index.js`,
@@ -124,10 +124,6 @@ afterEach(() => {
   for (const dir of tempDirs.splice(0)) {
     fs.rmSync(dir, { recursive: true, force: true });
   }
-});
-
-afterAll(() => {
-  process.umask(previousUmask);
 });
 
 describe("applyPluginAutoEnable", () => {
@@ -311,7 +307,26 @@ describe("applyPluginAutoEnable", () => {
       env: {},
     });
 
-    expect(result.config.plugins?.entries?.["google-gemini-cli-auth"]?.enabled).toBe(true);
+    expect(result.config.plugins?.entries?.google?.enabled).toBe(true);
+  });
+
+  it("auto-enables minimax when minimax-portal profiles exist", () => {
+    const result = applyPluginAutoEnable({
+      config: {
+        auth: {
+          profiles: {
+            "minimax-portal:default": {
+              provider: "minimax-portal",
+              mode: "oauth",
+            },
+          },
+        },
+      },
+      env: {},
+    });
+
+    expect(result.config.plugins?.entries?.minimax?.enabled).toBe(true);
+    expect(result.config.plugins?.entries?.["minimax-portal-auth"]).toBeUndefined();
   });
 
   it("auto-enables acpx plugin when ACP is configured", () => {
