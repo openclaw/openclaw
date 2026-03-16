@@ -42,6 +42,7 @@ function createScrollHost(
     chatHasAutoScrolled: false,
     chatUserNearBottom: true,
     chatNewMessagesBelow: false,
+    chatUserScrolledUp: false,
     logsScrollFrame: null as number | null,
     logsAtBottom: true,
     topbarObserver: null as ResizeObserver | null,
@@ -266,10 +267,120 @@ describe("resetChatScroll", () => {
     const { host } = createScrollHost({});
     host.chatHasAutoScrolled = true;
     host.chatUserNearBottom = false;
+    host.chatUserScrolledUp = true;
 
     resetChatScroll(host);
 
     expect(host.chatHasAutoScrolled).toBe(false);
     expect(host.chatUserNearBottom).toBe(true);
+    expect(host.chatUserScrolledUp).toBe(false);
+  });
+});
+
+/* ------------------------------------------------------------------ */
+/*  handleChatScroll – chatUserScrolledUp flag                         */
+/* ------------------------------------------------------------------ */
+
+describe("handleChatScroll – user scroll intent", () => {
+  it("sets chatUserScrolledUp=true when user scrolls away from bottom", () => {
+    const { host } = createScrollHost({});
+    // distanceFromBottom = 2000 - 500 - 400 = 1100 → far from bottom
+    const event = createScrollEvent(2000, 500, 400);
+    handleChatScroll(host, event);
+    expect(host.chatUserScrolledUp).toBe(true);
+  });
+
+  it("clears chatUserScrolledUp when user scrolls back to bottom", () => {
+    const { host } = createScrollHost({});
+    host.chatUserScrolledUp = true;
+    // distanceFromBottom = 2000 - 1600 - 400 = 0 → at bottom
+    const event = createScrollEvent(2000, 1600, 400);
+    handleChatScroll(host, event);
+    expect(host.chatUserScrolledUp).toBe(false);
+    expect(host.chatNewMessagesBelow).toBe(false);
+  });
+
+  it("keeps chatUserScrolledUp=true on repeated scroll events while up", () => {
+    const { host } = createScrollHost({});
+    host.chatUserScrolledUp = true;
+    // Still far from bottom
+    const event = createScrollEvent(2000, 600, 400);
+    handleChatScroll(host, event);
+    expect(host.chatUserScrolledUp).toBe(true);
+  });
+});
+
+/* ------------------------------------------------------------------ */
+/*  scheduleChatScroll – respects chatUserScrolledUp                   */
+/* ------------------------------------------------------------------ */
+
+describe("scheduleChatScroll – chatUserScrolledUp", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.spyOn(window, "requestAnimationFrame").mockImplementation((cb) => {
+      cb(0);
+      return 1;
+    });
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
+
+  it("does NOT scroll when chatUserScrolledUp=true even if near bottom", async () => {
+    const { host, container } = createScrollHost({
+      scrollHeight: 2000,
+      scrollTop: 1600,
+      clientHeight: 400,
+    });
+    host.chatUserScrolledUp = true;
+    host.chatUserNearBottom = false;
+    host.chatHasAutoScrolled = true;
+    const originalScrollTop = container.scrollTop;
+
+    scheduleChatScroll(host);
+    await host.updateComplete;
+
+    expect(container.scrollTop).toBe(originalScrollTop);
+    expect(host.chatNewMessagesBelow).toBe(true);
+  });
+
+  it("DOES scroll with force=true on initial load even if chatUserScrolledUp", async () => {
+    const { host, container } = createScrollHost({
+      scrollHeight: 2000,
+      scrollTop: 500,
+      clientHeight: 400,
+    });
+    host.chatUserScrolledUp = true;
+    host.chatUserNearBottom = false;
+    host.chatHasAutoScrolled = false; // Initial load
+
+    scheduleChatScroll(host, true);
+    await host.updateComplete;
+
+    expect(container.scrollTop).toBe(container.scrollHeight);
+  });
+
+  it("rapid streaming calls do NOT reset chatUserScrolledUp", async () => {
+    const { host, container } = createScrollHost({
+      scrollHeight: 2000,
+      scrollTop: 500,
+      clientHeight: 400,
+    });
+    host.chatUserScrolledUp = true;
+    host.chatUserNearBottom = false;
+    host.chatHasAutoScrolled = true;
+    const originalScrollTop = container.scrollTop;
+
+    // Simulate rapid streaming token updates
+    scheduleChatScroll(host);
+    scheduleChatScroll(host);
+    scheduleChatScroll(host);
+    await host.updateComplete;
+
+    expect(container.scrollTop).toBe(originalScrollTop);
+    expect(host.chatUserScrolledUp).toBe(true);
+    expect(host.chatNewMessagesBelow).toBe(true);
   });
 });
