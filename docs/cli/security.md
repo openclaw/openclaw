@@ -40,6 +40,12 @@ It warns when `gateway.auth.mode="none"` leaves Gateway HTTP APIs reachable with
 Settings prefixed with `dangerous`/`dangerously` are explicit break-glass operator overrides; enabling one is not, by itself, a security vulnerability report.
 For the complete dangerous-parameter inventory, see the "Insecure or dangerous flags summary" section in [Security](/gateway/security).
 
+SecretRef behavior:
+
+- `security audit` resolves supported SecretRefs in read-only mode for its targeted paths.
+- If a SecretRef is unavailable in the current command path, audit continues and reports `secretDiagnostics` (instead of crashing).
+- `--token` only overrides deep-probe auth for that command invocation; it does not rewrite config or SecretRef mappings.
+
 ## JSON output
 
 Use `--json` for CI/policy checks:
