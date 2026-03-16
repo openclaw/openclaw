@@ -40,7 +40,6 @@ describe("ui i18n locale registry", () => {
     const id = await loadLazyLocaleTranslation("id");
     const ptBR = await loadLazyLocaleTranslation("pt-BR");
     const zhCN = await loadLazyLocaleTranslation("zh-CN");
-    
 
     expect(getNestedTranslation(de, "common", "health")).toBe("Status");
     expect(getNestedTranslation(es, "common", "health")).toBe("Estado");

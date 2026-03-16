@@ -25,10 +25,6 @@ const LAZY_LOCALE_REGISTRY: Record<LazyLocale, LazyLocaleRegistration> = {
     exportName: "pt_BR",
     loader: () => import("../locales/pt-BR.ts"),
   },
-  id: {
-    exportName: "id",
-    loader: () => import("../locales/id.ts"),
-  },
   de: {
     exportName: "de",
     loader: () => import("../locales/de.ts"),
@@ -36,6 +32,10 @@ const LAZY_LOCALE_REGISTRY: Record<LazyLocale, LazyLocaleRegistration> = {
   es: {
     exportName: "es",
     loader: () => import("../locales/es.ts"),
+  },
+  id: {
+    exportName: "id",
+    loader: () => import("../locales/id.ts"),
   },
 };
 
