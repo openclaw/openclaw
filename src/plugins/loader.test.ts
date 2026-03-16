@@ -348,6 +348,7 @@ afterEach(() => {
 
 describe("bundle plugins", () => {
   it("reports Codex bundles as loaded bundle plugins without importing runtime code", () => {
+    useNoBundledPlugins();
     const workspaceDir = makeTempDir();
     const bundleRoot = path.join(workspaceDir, ".openclaw", "extensions", "sample-bundle");
     mkdirSafe(path.join(bundleRoot, ".codex-plugin"));
@@ -388,6 +389,7 @@ describe("bundle plugins", () => {
   });
 
   it("treats Claude command roots and settings as supported bundle surfaces", () => {
+    useNoBundledPlugins();
     const workspaceDir = makeTempDir();
     const bundleRoot = path.join(workspaceDir, ".openclaw", "extensions", "claude-skills");
     mkdirSafe(path.join(bundleRoot, "commands"));
@@ -427,6 +429,7 @@ describe("bundle plugins", () => {
   });
 
   it("treats Cursor command roots as supported bundle skill surfaces", () => {
+    useNoBundledPlugins();
     const workspaceDir = makeTempDir();
     const bundleRoot = path.join(workspaceDir, ".openclaw", "extensions", "cursor-skills");
     mkdirSafe(path.join(bundleRoot, ".cursor-plugin"));
