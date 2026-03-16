@@ -11,6 +11,7 @@ export type AgentsState = {
   agentsList: AgentsListResult | null;
   agentsSelectedId: string | null;
   toolsCatalogLoading: boolean;
+  toolsCatalogLoadingAgentId?: string | null;
   toolsCatalogError: string | null;
   toolsCatalogResult: ToolsCatalogResult | null;
 };
@@ -43,27 +44,44 @@ export async function loadAgents(state: AgentsState) {
   }
 }
 
-export async function loadToolsCatalog(state: AgentsState, agentId?: string | null) {
-  if (!state.client || !state.connected) {
+export async function loadToolsCatalog(state: AgentsState, agentId: string) {
+  const resolvedAgentId = agentId.trim();
+  if (!state.client || !state.connected || !resolvedAgentId) {
     return;
   }
-  if (state.toolsCatalogLoading) {
+  if (state.toolsCatalogLoading && state.toolsCatalogLoadingAgentId === resolvedAgentId) {
     return;
   }
   state.toolsCatalogLoading = true;
+  state.toolsCatalogLoadingAgentId = resolvedAgentId;
   state.toolsCatalogError = null;
+  state.toolsCatalogResult = null;
   try {
     const res = await state.client.request<ToolsCatalogResult>("tools.catalog", {
-      agentId: agentId ?? state.agentsSelectedId ?? undefined,
+      agentId: resolvedAgentId,
       includePlugins: true,
     });
-    if (res) {
-      state.toolsCatalogResult = res;
+    if (state.toolsCatalogLoadingAgentId !== resolvedAgentId) {
+      return;
     }
+    if (state.agentsSelectedId && state.agentsSelectedId !== resolvedAgentId) {
+      return;
+    }
+    state.toolsCatalogResult = res;
   } catch (err) {
+    if (state.toolsCatalogLoadingAgentId !== resolvedAgentId) {
+      return;
+    }
+    if (state.agentsSelectedId && state.agentsSelectedId !== resolvedAgentId) {
+      return;
+    }
+    state.toolsCatalogResult = null;
     state.toolsCatalogError = String(err);
   } finally {
-    state.toolsCatalogLoading = false;
+    if (state.toolsCatalogLoadingAgentId === resolvedAgentId) {
+      state.toolsCatalogLoadingAgentId = null;
+      state.toolsCatalogLoading = false;
+    }
   }
 }
 

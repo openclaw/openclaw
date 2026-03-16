@@ -32,8 +32,13 @@ export function findBundledPluginSourceInMap(params: {
 
 export function resolveBundledPluginSources(params: {
   workspaceDir?: string;
+  /** Use an explicit env when bundled roots should resolve independently from process.env. */
+  env?: NodeJS.ProcessEnv;
 }): Map<string, BundledPluginSource> {
-  const discovery = discoverOpenClawPlugins({ workspaceDir: params.workspaceDir });
+  const discovery = discoverOpenClawPlugins({
+    workspaceDir: params.workspaceDir,
+    env: params.env,
+  });
   const bundled = new Map<string, BundledPluginSource>();
 
   for (const candidate of discovery.candidates) {
@@ -67,8 +72,13 @@ export function resolveBundledPluginSources(params: {
 export function findBundledPluginSource(params: {
   lookup: BundledPluginLookup;
   workspaceDir?: string;
+  /** Use an explicit env when bundled roots should resolve independently from process.env. */
+  env?: NodeJS.ProcessEnv;
 }): BundledPluginSource | undefined {
-  const bundled = resolveBundledPluginSources({ workspaceDir: params.workspaceDir });
+  const bundled = resolveBundledPluginSources({
+    workspaceDir: params.workspaceDir,
+    env: params.env,
+  });
   return findBundledPluginSourceInMap({
     bundled,
     lookup: params.lookup,

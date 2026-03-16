@@ -1,0 +1,12 @@
+{
+  "id": "zai",
+  "providers": ["zai"],
+  "providerAuthEnvVars": {
+    "zai": ["ZAI_API_KEY", "Z_AI_API_KEY"]
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

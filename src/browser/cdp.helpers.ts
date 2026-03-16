@@ -1,8 +1,11 @@
 import WebSocket from "ws";
 import { isLoopbackHost } from "../gateway/net.js";
+import { type SsrFPolicy, resolvePinnedHostnameWithPolicy } from "../infra/net/ssrf.js";
 import { rawDataToString } from "../infra/ws.js";
+import { redactSensitiveText } from "../logging/redact.js";
 import { getDirectAgentForCdp, withNoProxyForCdpUrl } from "./cdp-proxy-bypass.js";
 import { CDP_HTTP_REQUEST_TIMEOUT_MS, CDP_WS_HANDSHAKE_TIMEOUT_MS } from "./cdp-timeouts.js";
+import { resolveBrowserRateLimitMessage } from "./client-fetch.js";
 import { getChromeExtensionRelayAuthHeaders } from "./extension-relay.js";
 
 export { isLoopbackHost };
@@ -18,6 +21,40 @@ export function isWebSocketUrl(url: string): boolean {
     return parsed.protocol === "ws:" || parsed.protocol === "wss:";
   } catch {
     return false;
+  }
+}
+
+export async function assertCdpEndpointAllowed(
+  cdpUrl: string,
+  ssrfPolicy?: SsrFPolicy,
+): Promise<void> {
+  if (!ssrfPolicy) {
+    return;
+  }
+  const parsed = new URL(cdpUrl);
+  if (!["http:", "https:", "ws:", "wss:"].includes(parsed.protocol)) {
+    throw new Error(`Invalid CDP URL protocol: ${parsed.protocol.replace(":", "")}`);
+  }
+  await resolvePinnedHostnameWithPolicy(parsed.hostname, {
+    policy: ssrfPolicy,
+  });
+}
+
+export function redactCdpUrl(cdpUrl: string | null | undefined): string | null | undefined {
+  if (typeof cdpUrl !== "string") {
+    return cdpUrl;
+  }
+  const trimmed = cdpUrl.trim();
+  if (!trimmed) {
+    return trimmed;
+  }
+  try {
+    const parsed = new URL(trimmed);
+    parsed.username = "";
+    parsed.password = "";
+    return redactSensitiveText(parsed.toString().replace(/\/$/, ""));
+  } catch {
+    return redactSensitiveText(trimmed);
   }
 }
 
@@ -172,6 +209,10 @@ export async function fetchCdpChecked(
       fetch(url, { ...init, headers, signal: ctrl.signal }),
     );
     if (!res.ok) {
+      if (res.status === 429) {
+        // Do not reflect upstream response text into the error surface (log/agent injection risk)
+        throw new Error(`${resolveBrowserRateLimitMessage(url)} Do NOT retry the browser tool.`);
+      }
       throw new Error(`HTTP ${res.status}`);
     }
     return res;

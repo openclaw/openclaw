@@ -42,7 +42,7 @@ Native companion apps for Windows are also planned; the Gateway is recommended v
 
 Use one of these (all supported):
 
-- Wizard (recommended): `openclaw onboard --install-daemon`
+- Wizard (recommended): `openclaw setup --wizard --install-daemon`
 - Direct: `openclaw gateway install`
 - Configure flow: `openclaw configure` → select **Gateway service**
 - Repair/migrate: `openclaw doctor` (offers to install or fix the service)

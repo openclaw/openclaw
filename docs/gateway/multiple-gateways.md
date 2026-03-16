@@ -59,7 +59,7 @@ Port spacing: leave at least 20 ports between base ports so the derived browser/
 ```bash
 # Main bot (existing or fresh, without --profile param)
 # Runs on port 18789 + Chrome CDC/Canvas/... Ports
-openclaw onboard
+openclaw setup --wizard
 openclaw gateway install
 
 # Rescue bot (isolated profile + ports)
@@ -70,7 +70,7 @@ openclaw --profile rescue onboard
 #   better choose completely different base port, like 19789,
 # - rest of the onboarding is the same as normal
 
-# To install the service (if not happened automatically during onboarding)
+# To install the service (if not happened automatically during setup)
 openclaw --profile rescue gateway install
 ```
 

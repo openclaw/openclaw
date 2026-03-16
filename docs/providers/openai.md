@@ -20,9 +20,9 @@ Get your API key from the OpenAI dashboard.
 ### CLI setup
 
 ```bash
-openclaw onboard --auth-choice openai-api-key
+openclaw setup --wizard --auth-choice openai-api-key
 # or non-interactive
-openclaw onboard --openai-api-key "$OPENAI_API_KEY"
+openclaw setup --wizard --openai-api-key "$OPENAI_API_KEY"
 ```
 
 ### Config snippet
@@ -36,6 +36,12 @@ openclaw onboard --openai-api-key "$OPENAI_API_KEY"
 
 OpenAI's current API model docs list `gpt-5.4` and `gpt-5.4-pro` for direct
 OpenAI API usage. OpenClaw forwards both through the `openai/*` Responses path.
+OpenClaw intentionally suppresses the stale `openai/gpt-5.3-codex-spark` row,
+because direct OpenAI API calls reject it in live traffic.
+
+OpenClaw does **not** expose `openai/gpt-5.3-codex-spark` on the direct OpenAI
+API path. `pi-ai` still ships a built-in row for that model, but live OpenAI API
+requests currently reject it. Spark is treated as Codex-only in OpenClaw.
 
 ## Option B: OpenAI Code (Codex) subscription
 
@@ -46,7 +52,7 @@ Codex cloud requires ChatGPT sign-in, while the Codex CLI supports ChatGPT or AP
 
 ```bash
 # Run Codex OAuth in the wizard
-openclaw onboard --auth-choice openai-codex
+openclaw setup --wizard --auth-choice openai-codex
 
 # Or run OAuth directly
 openclaw models auth login --provider openai-codex
@@ -62,6 +68,18 @@ openclaw models auth login --provider openai-codex
 
 OpenAI's current Codex docs list `gpt-5.4` as the current Codex model. OpenClaw
 maps that to `openai-codex/gpt-5.4` for ChatGPT/Codex OAuth usage.
+
+If your Codex account is entitled to Codex Spark, OpenClaw also supports:
+
+- `openai-codex/gpt-5.3-codex-spark`
+
+OpenClaw treats Codex Spark as Codex-only. It does not expose a direct
+`openai/gpt-5.3-codex-spark` API-key path.
+
+OpenClaw also preserves `openai-codex/gpt-5.3-codex-spark` when `pi-ai`
+discovers it. Treat it as entitlement-dependent and experimental: Codex Spark is
+separate from GPT-5.4 `/fast`, and availability depends on the signed-in Codex /
+ChatGPT account.
 
 ### Transport default
 
@@ -164,6 +182,46 @@ pass that field through on direct `openai/*` Responses requests.
 ```
 
 Supported values are `auto`, `default`, `flex`, and `priority`.
+
+### OpenAI fast mode
+
+OpenClaw exposes a shared fast-mode toggle for both `openai/*` and
+`openai-codex/*` sessions:
+
+- Chat/UI: `/fast status|on|off`
+- Config: `agents.defaults.models["<provider>/<model>"].params.fastMode`
+
+When fast mode is enabled, OpenClaw applies a low-latency OpenAI profile:
+
+- `reasoning.effort = "low"` when the payload does not already specify reasoning
+- `text.verbosity = "low"` when the payload does not already specify verbosity
+- `service_tier = "priority"` for direct `openai/*` Responses calls to `api.openai.com`
+
+Example:
+
+```json5
+{
+  agents: {
+    defaults: {
+      models: {
+        "openai/gpt-5.4": {
+          params: {
+            fastMode: true,
+          },
+        },
+        "openai-codex/gpt-5.4": {
+          params: {
+            fastMode: true,
+          },
+        },
+      },
+    },
+  },
+}
+```
+
+Session overrides win over config. Clearing the session override in the Sessions UI
+returns the session to the configured default.
 
 ### OpenAI Responses server-side compaction
 

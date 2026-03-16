@@ -4,10 +4,11 @@ import { resolveOpenClawAgentDir } from "../../agents/agent-paths.js";
 import type { AuthProfileStore } from "../../agents/auth-profiles.js";
 import { listProfilesForProvider } from "../../agents/auth-profiles.js";
 import {
-  getCustomProviderApiKey,
+  hasUsableCustomProviderApiKey,
   resolveAwsSdkEnvVarName,
   resolveEnvApiKey,
 } from "../../agents/model-auth.js";
+import { shouldSuppressBuiltInModel } from "../../agents/model-suppression.js";
 import { discoverAuthStorage, discoverModels } from "../../agents/pi-model-discovery.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import {
@@ -35,7 +36,7 @@ const hasAuthForProvider = (
   if (resolveEnvApiKey(provider)) {
     return true;
   }
-  if (getCustomProviderApiKey(cfg, provider)) {
+  if (hasUsableCustomProviderApiKey(cfg, provider)) {
     return true;
   }
   return false;
@@ -87,7 +88,9 @@ function loadAvailableModels(registry: ModelRegistry): Model<Api>[] {
     throw normalizeAvailabilityError(err);
   }
   try {
-    return validateAvailableModels(availableModels);
+    return validateAvailableModels(availableModels).filter(
+      (model) => !shouldSuppressBuiltInModel({ provider: model.provider, id: model.id }),
+    );
   } catch (err) {
     throw normalizeAvailabilityError(err);
   }
@@ -100,7 +103,9 @@ export async function loadModelRegistry(
   const agentDir = resolveOpenClawAgentDir();
   const authStorage = discoverAuthStorage(agentDir);
   const registry = discoverModels(authStorage, agentDir);
-  const models = registry.getAll();
+  const models = registry
+    .getAll()
+    .filter((model) => !shouldSuppressBuiltInModel({ provider: model.provider, id: model.id }));
   let availableKeys: Set<string> | undefined;
   let availabilityErrorMessage: string | undefined;
 

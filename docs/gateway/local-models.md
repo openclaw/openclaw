@@ -11,6 +11,8 @@ title: "Local Models"
 
 Local is doable, but OpenClaw expects large context + strong defenses against prompt injection. Small cards truncate context and leak safety. Aim high: **≥2 maxed-out Mac Studios or equivalent GPU rig (~$30k+)**. A single **24 GB** GPU works only for lighter prompts with higher latency. Use the **largest / full-size model variant you can run**; aggressively quantized or “small” checkpoints raise prompt-injection risk (see [Security](/gateway/security)).
 
+If you want the lowest-friction local setup, start with [Ollama](/providers/ollama) and `openclaw setup --wizard`. This page is the opinionated guide for higher-end local stacks and custom OpenAI-compatible local servers.
+
 ## Recommended: LM Studio + MiniMax M2.5 (Responses API, full-size)
 
 Best current local stack. Load MiniMax M2.5 in LM Studio, enable the local server (default `http://127.0.0.1:1234`), and use Responses API to keep reasoning separate from final text.
