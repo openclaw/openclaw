@@ -1,6 +1,6 @@
 import { normalizeStringEntries } from "../../shared/string-normalization.js";
 import { normalizeSecretInput } from "../../utils/normalize-secret-input.js";
-import { normalizeProviderId, normalizeProviderIdForAuth } from "../model-selection.js";
+import { normalizeProviderId, normalizeProviderIdForAuth } from "../provider-id.js";
 import {
   ensureAuthProfileStore,
   saveAuthProfileStore,
