@@ -38,6 +38,8 @@ Runtime model: the container assumes a shared repo root. Start with
   Repeated Arbitrum freshness lag pattern: healthy pod, stale data, internal lag blind spot, likely throughput/headroom amplifier.
 - `incident-dossier-consumer-app-offchain-approval-failures-2026-03-12.md`
   Consumer wallet / approval / permit failure playbook. Use when a workaround already narrows scope to the offchain path.
+- `incident-dossier-consumer-app-sdk-abi-regression-2026-03-13.md`
+  SDK ABI encoding regression playbook. Use when Sentry RPC reverts trace to an interface change in `blue-sdk-viem` or similar SDK packages.
 - `notion-postmortem-index.md`
   First-party postmortem index from Notion workspace sources.
 - `morpho-infra/docs/operations/incident-response.md`
@@ -103,6 +105,8 @@ investigation.
   Start `frontend-project-resolver.sh`, then the matching `posthog-<env>-<project-key>` MCP server, then `sentry-api.sh` / `sentry-cli.sh`, then `morpho-infra/docs/guides/ai-agents-incident-troubleshooting.md`, then `morpho-infra/docs/operations/incident-response.md`.
 - Consumer wallet / approval / permit / repay failure:
   Start `consumer-bug-preflight.sh`, then `incident-dossier-consumer-app-offchain-approval-failures-2026-03-12.md`, then matching PostHog/Sentry probes, then Linear / GitHub known-issue search, then Foundry/Tenderly checks.
+- Sentry RPC revert / ABI encoding mismatch / SDK interface regression:
+  Start `incident-dossier-consumer-app-sdk-abi-regression-2026-03-13.md`, then `cast call` / `cast abi-decode` live verification, then `foundry-evm-debug` skill, then commit-range diff of the suspected SDK package.
 - DB pressure / CNPG:
   Start `morpho-infra/docs/operations/incident-response.md`, `morpho-infra/docs/operations/kubernetes-database-ops.md`,
   `openclaw-sre/skills/morpho-sre/change-checklist-db-rightsizing.md`, relevant postmortem or dossier.

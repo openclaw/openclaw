@@ -116,7 +116,8 @@
           "exec": {
             "host": "gateway",
             "security": "full",
-            "ask": "off"
+            "ask": "off",
+            "pathPrepend": ["/home/node/.openclaw/bin"]
           }
         },
         "model": {
@@ -198,7 +199,8 @@
           "exec": {
             "host": "gateway",
             "security": "full",
-            "ask": "off"
+            "ask": "off",
+            "pathPrepend": ["/home/node/.openclaw/bin"]
           }
         }
       }

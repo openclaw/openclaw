@@ -38,10 +38,10 @@ metadata: { "openclaw": { "emoji": "🛠️" } }
 - Retry on repeated asks: if same/near-identical question appears again in the same thread/session, re-run relevant live checks/tools (state may have changed); do not reuse a prior failure-only answer.
 - In monitored Slack incident threads, human follow-ups after the first bot reply must pass ingress and trigger fresh live checks; do not treat them like duplicate alert updates.
 - If an incident thread drifts into unrelated design/history questions, redirect that discussion to a DM or new thread instead of mixing it into RCA.
-- Incident threads:
-  - Do not send progress-only thread replies like `On it`, `Found it`, or `Let me verify`; wait for net-new evidence, mitigation, validation, or a PR URL.
+- Never send progress-only messages (`On it`, `Found it`, `Let me verify`, `Checking…`) in any Slack thread — incident, bug-report, or general channel. Wait until you have net-new evidence, a completed action, a concrete blocker, or a PR URL before posting.
 - Before claiming repo/tool access is unavailable, run one live probe (`gh repo view <owner/repo>` or the target helper in dry-run mode) and quote the exact error.
-- If a human questions the proposed fix or PR in-thread, re-open RCA with fresh live evidence; do not repeat the old theory or go silent.
+- Before accepting any task that requires repo access (PR creation, code changes, repo reads), immediately run `gh repo view <owner/repo>` and verify local clone availability. If either check fails, report the blocker in the same message as the acknowledgement — do not split into acknowledge-then-fail-later.
+- If a human challenges or contradicts a technical claim in any thread (incident, bug-report, or general), immediately re-investigate with fresh live evidence. Respond in the same thread with updated evidence, a revised conclusion, or an explicit confirmation/disproof statement. Never go silent after a challenge.
 - If current code, query output, or live evidence disproves an earlier theory, say `Disproved theory:` and replace it before proposing a new cause or PR.
 - Exact artifact replay:
   - if user provides an exact query, event ID, trace ID, address, or says the prior answer is wrong, replay that exact artifact before reusing any prior theory
@@ -609,6 +609,27 @@ kubectl --context "$K8S_CONTEXT" -n <ns> rollout history deploy/<name>
 # logs + metrics
 kubectl --context "$K8S_CONTEXT" -n <ns> logs deploy/<name> --since=30m | tail -n 200
 curl -s 'http://prometheus-stack-kube-prom-prometheus.monitoring.svc.cluster.local:9090/api/v1/alerts' | jq '.data.alerts[] | select(.state=="firing")'
+```
+
+## Smart Contract / ABI Verification
+
+When investigating smart contract, ABI encoding, or SDK-level revert issues:
+
+- Never present ABI encoding theories without a live `cast call`, `cast abi-decode`, or Foundry test as evidence.
+- For revert analysis: decode actual revert data from Sentry/logs/traces before theorizing about the cause.
+- Use the `foundry-evm-debug` skill for Forge-based reproduction when available.
+- If live verification is blocked (no RPC access, no Foundry), state the blocker explicitly and mark the analysis as `*Unverified theory:*`.
+
+```bash
+# Verify ABI encoding claim with a live call
+cast call <contract_address> "eip712Domain()" --rpc-url "$RPC_URL"
+
+# Decode revert data
+cast 4byte-decode <revert_selector>
+
+# Compare struct vs flat return encoding
+cast abi-encode "f()(bytes1,string,string,uint256,address,bytes32,uint256[])" ...
+cast abi-encode "f()((bytes1,string,string,uint256,address,bytes32,uint256[]))" ...
 ```
 
 ## Sentinel Snapshot

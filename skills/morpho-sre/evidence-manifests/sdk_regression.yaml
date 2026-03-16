@@ -1,0 +1,10 @@
+category: sdk_regression
+critical:
+  - sentry_event_trace
+  - abi_encoding_verification
+  - commit_diff_review
+optional:
+  - affected_token_enumeration
+  - foundry_test_reproduction
+  - incident_memory
+  - ci_signal

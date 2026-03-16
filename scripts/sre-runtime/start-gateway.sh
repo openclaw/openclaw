@@ -142,7 +142,7 @@ installation_id="${GITHUB_APP_INSTALLATION_ID:-}"
 private_key="${GITHUB_APP_PRIVATE_KEY:-}"
 
 if [ -z "$app_id" ] || [ -z "$installation_id" ] || [ -z "$private_key" ]; then
-  echo "github-app-token:warning missing app credentials" >&2
+  echo "github-app-token:warning missing app credentials (GITHUB_APP_ID=${app_id:+set} GITHUB_APP_INSTALLATION_ID=${installation_id:+set} GITHUB_APP_PRIVATE_KEY=${private_key:+set})" >&2
   exit 1
 fi
 
@@ -157,7 +157,9 @@ payload_b64="$(
 unsigned_token="${header_b64}.${payload_b64}"
 private_key_file="$(mktemp)"
 trap 'rm -f "$private_key_file"' EXIT HUP INT TERM
-printf '%s\n' "$private_key" >"$private_key_file"
+# Convert literal \n sequences to real newlines (Vault may store PEM keys either way).
+printf '%s\n' "$private_key" | sed 's/\\n/\
+/g' >"$private_key_file"
 chmod 600 "$private_key_file"
 signature_b64="$(
   printf '%s' "$unsigned_token" \
