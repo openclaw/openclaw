@@ -675,6 +675,7 @@ export class GatewayClient {
       }
       const gap = Date.now() - this.lastTick;
       if (gap > this.tickIntervalMs * 2) {
+        this.flushPendingErrors(new Error("tick timeout — gateway unresponsive"));
         this.ws?.close(4000, "tick timeout");
       }
     }, interval);
