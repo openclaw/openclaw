@@ -16,7 +16,6 @@ import type { ProviderCapabilities } from "../agents/provider-capabilities.js";
 import type { AnyAgentTool } from "../agents/tools/common.js";
 import type { ThinkLevel } from "../auto-reply/thinking.js";
 import type { ReplyPayload } from "../auto-reply/types.js";
-import type { ChannelDock } from "../channels/dock.js";
 import type { ChannelId, ChannelPlugin } from "../channels/plugins/types.js";
 import type { createVpsAwareOAuthHandlers } from "../commands/oauth-flow.js";
 import type { OnboardOptions } from "../commands/onboard-types.js";
@@ -1155,7 +1154,6 @@ export type OpenClawPluginService = {
 
 export type OpenClawPluginChannelRegistration = {
   plugin: ChannelPlugin;
-  dock?: ChannelDock;
 };
 
 export type OpenClawPluginDefinition = {

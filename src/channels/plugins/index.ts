@@ -8,8 +8,8 @@ import type { ChannelId, ChannelPlugin } from "./types.js";
 // Channel plugins registry (runtime).
 //
 // This module is intentionally "heavy" (plugins may import channel monitors, web login, etc).
-// Shared code paths (reply flow, command auth, sandbox explain) should depend on `src/channels/dock.ts`
-// instead, and only call `getChannelPlugin()` at execution boundaries.
+// Shared code paths should prefer narrower adapters and helpers instead of reaching into
+// channel-specific runtime modules directly.
 //
 function dedupeChannels(channels: ChannelPlugin[]): ChannelPlugin[] {
   const seen = new Set<string>();
