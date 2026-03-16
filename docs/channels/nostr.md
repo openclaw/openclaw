@@ -40,6 +40,15 @@ openclaw plugins install --link <path-to-openclaw>/extensions/nostr
 
 Restart the Gateway after installing or enabling plugins.
 
+### Non-interactive setup
+
+```bash
+openclaw channels add --channel nostr --private-key "$NOSTR_PRIVATE_KEY"
+openclaw channels add --channel nostr --private-key "$NOSTR_PRIVATE_KEY" --relay-urls "wss://relay.damus.io,wss://relay.primal.net"
+```
+
+Use `--use-env` to keep `NOSTR_PRIVATE_KEY` in the environment instead of storing the key in config.
+
 ## Quick setup
 
 1. Generate a Nostr keypair (if needed):

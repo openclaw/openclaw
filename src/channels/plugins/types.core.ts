@@ -21,6 +21,7 @@ export type ChannelAgentToolFactory = (params: { cfg?: OpenClawConfig }) => Chan
 export type ChannelSetupInput = {
   name?: string;
   token?: string;
+  privateKey?: string;
   tokenFile?: string;
   botToken?: string;
   appToken?: string;
@@ -46,6 +47,7 @@ export type ChannelSetupInput = {
   initialSyncLimit?: number;
   ship?: string;
   url?: string;
+  relayUrls?: string;
   code?: string;
   groupChannels?: string[];
   dmAllowlist?: string[];

@@ -9,7 +9,7 @@ import {
   buildPluginSdkPackageExports,
   buildPluginSdkSpecifiers,
   pluginSdkEntrypoints,
-} from "../../scripts/lib/plugin-sdk-entries.mjs";
+} from "./entrypoints.js";
 import * as sdk from "./index.js";
 
 const pluginSdkSpecifiers = buildPluginSdkSpecifiers();
