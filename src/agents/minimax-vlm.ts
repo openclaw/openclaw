@@ -73,18 +73,27 @@ export async function minimaxUnderstandImage(params: {
   });
   const url = new URL("/v1/coding_plan/vlm", host).toString();
 
-  const res = await fetch(url, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${apiKey}`,
-      "Content-Type": "application/json",
-      "MM-API-Source": "OpenClaw",
-    },
-    body: JSON.stringify({
-      prompt,
-      image_url: imageDataUrl,
-    }),
-  });
+  let res: Response;
+  try {
+    res = await fetch(url, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        "Content-Type": "application/json",
+        "MM-API-Source": "OpenClaw",
+      },
+      body: JSON.stringify({
+        prompt,
+        image_url: imageDataUrl,
+      }),
+      signal: AbortSignal.timeout(120_000),
+    });
+  } catch (err) {
+    throw new Error(
+      `MiniMax VLM request failed: ${err instanceof Error ? err.message : String(err)}`,
+      { cause: err },
+    );
+  }
 
   const traceId = res.headers.get("Trace-Id") ?? "";
   if (!res.ok) {
