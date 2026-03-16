@@ -16,6 +16,7 @@ describe("chat context notice", () => {
         {
           key: "main",
           inputTokens: 910,
+          totalTokens: 910,
           contextTokens: 1000,
           reasoningLevel: "off",
           model: "openai/gpt-5.2",
@@ -36,7 +37,7 @@ describe("chat context notice", () => {
     expect(summary?.textContent).toContain("Limit 1k");
   });
 
-  it("shows one summary row plus a pricing note for GPT-5.4 after the pricing threshold", async () => {
+  it("shows current model context separately from cumulative usage after the pricing threshold", async () => {
     const app = mountApp("/chat");
     await app.updateComplete;
 
@@ -46,7 +47,8 @@ describe("chat context notice", () => {
       sessions: [
         {
           key: "main",
-          inputTokens: 351000,
+          inputTokens: 3_300_000,
+          totalTokens: 270_000,
           contextTokens: 272000,
           reasoningLevel: "off",
           model: "gpt-5.4",
@@ -60,12 +62,50 @@ describe("chat context notice", () => {
     const notice = app.querySelector<HTMLElement>(".context-notice");
     expect(notice).not.toBeNull();
     expect(notice?.textContent).toContain("Model context");
-    expect(notice?.textContent).toContain("Used 351k");
+    expect(notice?.textContent).toContain("Used 270k");
+    expect(notice?.textContent).not.toContain("Used 3.3M");
     expect(notice?.textContent).toContain("Higher-rate 272k");
     expect(notice?.textContent).toContain("Limit 1.1M");
     expect(notice?.textContent).toContain("Higher-rate billing threshold crossed.");
+    expect(notice?.textContent).toContain(
+      "Auto-compaction tracks current context, not cumulative session usage.",
+    );
     expect(notice?.textContent).not.toContain(
       "Estimated model context is at or beyond the ceiling",
+    );
+  });
+
+  it("keeps the 85% model warning for known models before the pricing threshold", async () => {
+    const app = mountApp("/chat");
+    await app.updateComplete;
+
+    app.sessionsResult = {
+      count: 1,
+      defaults: { contextTokens: 272000, model: "gpt-5.4" },
+      sessions: [
+        {
+          key: "main",
+          inputTokens: 200_000,
+          totalTokens: 950_000,
+          contextTokens: 272000,
+          reasoningLevel: "off",
+          model: "gpt-5.4",
+          modelProvider: "openai-codex",
+        },
+      ],
+    } as never;
+    app.requestUpdate();
+    await app.updateComplete;
+
+    const notice = app.querySelector<HTMLElement>(".context-notice");
+    expect(notice).not.toBeNull();
+    expect(notice?.textContent).toContain("Model context");
+    expect(notice?.textContent).toContain("Used 950k");
+    expect(notice?.textContent).toContain("Higher-rate 272k");
+    expect(notice?.textContent).toContain("Limit 1.1M");
+    expect(notice?.textContent).not.toContain("Higher-rate billing threshold crossed.");
+    expect(notice?.textContent).not.toContain(
+      "Auto-compaction tracks current context, not cumulative session usage.",
     );
   });
 });

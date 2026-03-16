@@ -75,6 +75,8 @@ export const FIELD_LABELS: Record<string, string> = {
   "gateway.customBindHost": "Gateway Custom Bind Host",
   "gateway.controlUi": "Control UI",
   "gateway.controlUi.enabled": "Control UI Enabled",
+  "gateway.controlUi.chat": "Control UI Chat",
+  "gateway.controlUi.chat.showPricingThreshold": "Control UI Chat Show Pricing Threshold",
   "gateway.auth": "Gateway Auth",
   "gateway.auth.mode": "Gateway Auth Mode",
   "gateway.auth.allowTailscale": "Gateway Auth Allow Tailscale Identity",
