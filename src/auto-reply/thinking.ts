@@ -6,6 +6,7 @@ import {
   normalizeProviderId,
   resolveThinkingDefaultForModel as resolveThinkingDefaultForModelFallback,
 } from "./thinking.shared.js";
+import type { ThinkLevel, ThinkingCatalogEntry } from "./thinking.shared.js";
 export {
   formatXHighModelHint,
   normalizeElevatedLevel,
@@ -50,7 +51,7 @@ export function isBinaryThinkingProvider(provider?: string | null, model?: strin
   if (typeof pluginDecision === "boolean") {
     return pluginDecision;
   }
-  return isBinaryThinkingProviderFallback(provider, model);
+  return isBinaryThinkingProviderFallback(provider);
 }
 
 export function supportsXHighThinking(provider?: string | null, model?: string | null): boolean {

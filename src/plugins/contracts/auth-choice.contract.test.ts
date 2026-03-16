@@ -14,13 +14,20 @@ import {
 import { createCapturedPluginRegistration } from "../../test-utils/plugin-registration.js";
 import type { OpenClawPluginApi, ProviderPlugin } from "../types.js";
 
+type ResolvePluginProviders =
+  typeof import("../../commands/auth-choice.apply.plugin-provider.runtime.js").resolvePluginProviders;
+type ResolveProviderPluginChoice =
+  typeof import("../../commands/auth-choice.apply.plugin-provider.runtime.js").resolveProviderPluginChoice;
+type RunProviderModelSelectedHook =
+  typeof import("../../commands/auth-choice.apply.plugin-provider.runtime.js").runProviderModelSelectedHook;
+
 const loginQwenPortalOAuthMock = vi.hoisted(() => vi.fn());
 const githubCopilotLoginCommandMock = vi.hoisted(() => vi.fn());
-const resolvePluginProvidersMock = vi.hoisted(() => vi.fn<() => ProviderPlugin[]>(() => []));
-const resolveProviderPluginChoiceMock = vi.hoisted(() =>
-  vi.fn<() => { provider: ProviderPlugin; method: ProviderPlugin["auth"][number] } | null>(),
+const resolvePluginProvidersMock = vi.hoisted(() => vi.fn<ResolvePluginProviders>(() => []));
+const resolveProviderPluginChoiceMock = vi.hoisted(() => vi.fn<ResolveProviderPluginChoice>());
+const runProviderModelSelectedHookMock = vi.hoisted(() =>
+  vi.fn<RunProviderModelSelectedHook>(async () => {}),
 );
-const runProviderModelSelectedHookMock = vi.hoisted(() => vi.fn(async () => {}));
 
 vi.mock("../../../extensions/qwen-portal-auth/oauth.js", () => ({
   loginQwenPortalOAuth: loginQwenPortalOAuthMock,
@@ -31,9 +38,9 @@ vi.mock("../../providers/github-copilot-auth.js", () => ({
 }));
 
 vi.mock("../../commands/auth-choice.apply.plugin-provider.runtime.js", () => ({
-  resolvePluginProviders: (...args: unknown[]) => resolvePluginProvidersMock(...args),
-  resolveProviderPluginChoice: (...args: unknown[]) => resolveProviderPluginChoiceMock(...args),
-  runProviderModelSelectedHook: (...args: unknown[]) => runProviderModelSelectedHookMock(...args),
+  resolvePluginProviders: resolvePluginProvidersMock,
+  resolveProviderPluginChoice: resolveProviderPluginChoiceMock,
+  runProviderModelSelectedHook: runProviderModelSelectedHookMock,
 }));
 
 type StoredAuthProfile = {
