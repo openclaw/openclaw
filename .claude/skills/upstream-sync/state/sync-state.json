@@ -17,7 +17,13 @@
         "commits": 34,
         "mergedAt": "2026-03-16T12:00:00Z"
       },
-      "bugfixes": { "status": "pending", "branch": null, "pr": null, "commits": 75 },
+      "bugfixes": {
+        "status": "completed",
+        "branch": "sync/v2026.3.12-bugfixes",
+        "pr": 3,
+        "commits": 83,
+        "mergedAt": "2026-03-16T14:00:00Z"
+      },
       "features": { "status": "pending", "branch": null, "pr": null, "commits": 11 },
       "provider-refactor": { "status": "pending", "branch": null, "pr": null, "commits": 8 },
       "review": { "status": "pending", "branch": null, "pr": null, "commits": 20 },
