@@ -48,7 +48,9 @@ export type PluginDiscoveryResult = {
 const discoveryCache = new Map<string, { expiresAt: number; result: PluginDiscoveryResult }>();
 
 // Keep a short cache window to collapse bursty reloads during startup flows.
-const DEFAULT_DISCOVERY_CACHE_MS = 1000;
+// 5 seconds covers the full gateway startup sequence while remaining short enough
+// to pick up changes during explicit config-reload scenarios.
+const DEFAULT_DISCOVERY_CACHE_MS = 5000;
 
 export function clearPluginDiscoveryCache(): void {
   discoveryCache.clear();

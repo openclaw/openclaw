@@ -689,12 +689,14 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
   if (cacheEnabled) {
     const cached = getCachedPluginRegistry(cacheKey);
     if (cached) {
+      logger.debug?.(`[plugins] registry cache hit (${cached.plugins.length} plugins)`);
       if (shouldActivate) {
         activatePluginRegistry(cached, cacheKey);
       }
       return cached;
     }
   }
+  const loadStartMs = Date.now();
 
   // Clear previously registered plugin commands before reloading.
   // Skip for non-activating (snapshot) loads to avoid wiping commands from other plugins.
@@ -1240,6 +1242,13 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
     env,
   });
 
+  if (logger.debug) {
+    const enabledCount = registry.plugins.filter((p) => p.enabled).length;
+    const cacheLabel = cacheEnabled ? "cache miss" : "cache disabled";
+    logger.debug(
+      `[plugins] loaded ${enabledCount}/${registry.plugins.length} plugins in ${Date.now() - loadStartMs}ms (${cacheLabel})`,
+    );
+  }
   if (cacheEnabled) {
     setCachedPluginRegistry(cacheKey, registry);
   }
