@@ -184,15 +184,32 @@ export class AcpSessionManager {
             sessionKey: session.sessionKey,
             meta: resolution.meta,
           });
-          const reconciled = await this.reconcileRuntimeSessionIdentifiers({
-            cfg: params.cfg,
-            sessionKey: session.sessionKey,
-            runtime,
-            handle,
-            meta,
-            failOnStatusError: false,
-          });
-          return !isSessionIdentityPending(resolveSessionIdentityFromMeta(reconciled.meta));
+          try {
+            const reconciled = await this.reconcileRuntimeSessionIdentifiers({
+              cfg: params.cfg,
+              sessionKey: session.sessionKey,
+              runtime,
+              handle,
+              meta,
+              failOnStatusError: false,
+            });
+            return !isSessionIdentityPending(resolveSessionIdentityFromMeta(reconciled.meta));
+          } finally {
+            if (meta.mode === "oneshot") {
+              try {
+                await runtime.close({
+                  handle,
+                  reason: "startup-identity-reconcile-release",
+                });
+              } catch (error) {
+                logVerbose(
+                  `acp-manager: startup reconcile close failed for ${session.sessionKey}: ${String(error)}`,
+                );
+              } finally {
+                this.clearCachedRuntimeState(session.sessionKey);
+              }
+            }
+          }
         });
         if (becameResolved) {
           resolved += 1;
@@ -1067,7 +1084,10 @@ export class AcpSessionManager {
     cached.appliedControlSignature = undefined;
   }
 
-  private async enforceConcurrentSessionLimit(params: { cfg: OpenClawConfig; sessionKey: string }): Promise<void> {
+  private async enforceConcurrentSessionLimit(params: {
+    cfg: OpenClawConfig;
+    sessionKey: string;
+  }): Promise<void> {
     const configuredLimit = params.cfg.acp?.maxConcurrentSessions;
     if (typeof configuredLimit !== "number" || !Number.isFinite(configuredLimit)) {
       return;
@@ -1079,17 +1099,23 @@ export class AcpSessionManager {
     }
     const activeCount = this.runtimeCache.size();
     if (activeCount >= limit) {
-      const reclaimed = await this.evictStaleRuntimesUnderPressure({ cfg: params.cfg });
+      const reclaimedOneshot = await this.evictDormantOneshotRuntimesUnderPressure({
+        cfg: params.cfg,
+      });
+      const reclaimedStale = await this.evictStaleRuntimesUnderPressure({ cfg: params.cfg });
+      const reclaimed = reclaimedOneshot + reclaimedStale;
       const updatedCount = this.runtimeCache.size();
       if (updatedCount >= limit) {
         throw new AcpRuntimeError(
           "ACP_SESSION_INIT_FAILED",
           `ACP max concurrent sessions reached (${updatedCount}/${limit}).` +
-            (reclaimed > 0 ? ` Reclaimed ${reclaimed} stale session(s) but still at capacity.` : ""),
+            (reclaimed > 0
+              ? ` Reclaimed ${reclaimed} stale session(s) but still at capacity.`
+              : ""),
         );
       }
       logVerbose(
-        `acp-manager: back-pressure eviction freed ${reclaimed} stale session(s) (${activeCount} -> ${updatedCount}/${limit})`,
+        `acp-manager: back-pressure eviction freed ${reclaimed} runtime(s) (${activeCount} -> ${updatedCount}/${limit})`,
       );
     }
   }
@@ -1155,13 +1181,76 @@ export class AcpSessionManager {
     }
   }
 
+  private async evictDormantOneshotRuntimesUnderPressure(params: {
+    cfg: OpenClawConfig;
+  }): Promise<number> {
+    if (this.runtimeCache.size() === 0) {
+      return 0;
+    }
+
+    let reclaimed = 0;
+    const snapshot = this.runtimeCache.snapshot();
+    for (const candidate of snapshot) {
+      if (candidate.state.mode !== "oneshot") {
+        continue;
+      }
+      if (this.activeTurnBySession.has(candidate.actorKey)) {
+        continue;
+      }
+      const sessionEntry = this.deps.readSessionEntry({
+        cfg: params.cfg,
+        sessionKey: candidate.state.handle.sessionKey,
+      });
+      const meta = sessionEntry?.acp;
+      if (!meta || meta.mode !== "oneshot" || meta.state === "running") {
+        continue;
+      }
+
+      const evicted = await this.actorQueue.run(candidate.actorKey, async () => {
+        if (this.activeTurnBySession.has(candidate.actorKey)) {
+          return false;
+        }
+        const cached = this.runtimeCache.peek(candidate.actorKey);
+        if (!cached || cached.mode !== "oneshot") {
+          return false;
+        }
+        const latestMeta = this.deps.readSessionEntry({
+          cfg: params.cfg,
+          sessionKey: cached.handle.sessionKey,
+        })?.acp;
+        if (!latestMeta || latestMeta.mode !== "oneshot" || latestMeta.state === "running") {
+          return false;
+        }
+        this.runtimeCache.clear(candidate.actorKey);
+        this.evictedRuntimeCount += 1;
+        this.lastEvictedAt = Date.now();
+        try {
+          await cached.runtime.close({
+            handle: cached.handle,
+            reason: "oneshot-pressure-evicted",
+          });
+        } catch (error) {
+          logVerbose(
+            `acp-manager: oneshot pressure eviction close failed for ${cached.handle.sessionKey}: ${String(error)}`,
+          );
+        }
+        return true;
+      });
+      if (evicted) {
+        reclaimed += 1;
+      }
+    }
+
+    return reclaimed;
+  }
+
   /**
    * Under back-pressure (all slots full), attempt to reclaim sessions that are
    * likely stale: not currently executing a turn and idle for at least a short
    * grace period. Evicts oldest-idle-first until at least one slot is freed.
    * Falls back to probing runtime status when available.
    */
-  private async evictStaleRuntimesUnderPressure(params: { cfg: OpenClawConfig }): Promise<number> {
+  private async evictStaleRuntimesUnderPressure(_params: { cfg: OpenClawConfig }): Promise<number> {
     if (this.runtimeCache.size() === 0) {
       return 0;
     }
@@ -1170,8 +1259,10 @@ export class AcpSessionManager {
     const BLIND_IDLE_MS = 30 * 60 * 1000;
     const snapshot = this.runtimeCache.snapshot({ now });
     const candidates = snapshot
-      .filter((entry) => !this.activeTurnBySession.has(entry.actorKey) && entry.idleMs >= PROBE_IDLE_MS)
-      .sort((a, b) => b.idleMs - a.idleMs);
+      .filter(
+        (entry) => !this.activeTurnBySession.has(entry.actorKey) && entry.idleMs >= PROBE_IDLE_MS,
+      )
+      .toSorted((a, b) => b.idleMs - a.idleMs);
 
     let reclaimed = 0;
     for (const candidate of candidates) {

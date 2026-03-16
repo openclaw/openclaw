@@ -383,6 +383,157 @@ describe("AcpSessionManager", () => {
     expect(runtimeState.ensureSession).toHaveBeenCalledTimes(2);
   });
 
+  it("startup identity reconciliation releases cached oneshot handles after resolving", async () => {
+    const runtimeState = createRuntime();
+    runtimeState.getStatus.mockResolvedValue({
+      summary: "status=alive",
+      acpxRecordId: "acpx-record-oneshot",
+      backendSessionId: "acpx-session-oneshot",
+      agentSessionId: "agent-session-oneshot",
+      details: { status: "alive" },
+    });
+    hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
+      id: "acpx",
+      runtime: runtimeState.runtime,
+    });
+
+    const sessionKey = "agent:claude:acp:oneshot-pending";
+    let currentMeta: SessionAcpMeta = {
+      ...readySessionMeta(),
+      agent: "claude",
+      mode: "oneshot",
+      identity: {
+        state: "pending",
+        source: "ensure",
+        acpxSessionId: "acpx-stale",
+        lastUpdatedAt: Date.now(),
+      },
+    };
+    hoisted.listAcpSessionEntriesMock.mockResolvedValue([
+      {
+        cfg: baseCfg,
+        storePath: "/tmp/sessions-acp.json",
+        sessionKey,
+        storeSessionKey: sessionKey,
+        entry: {
+          sessionId: "session-1",
+          updatedAt: Date.now(),
+          acp: currentMeta,
+        },
+        acp: currentMeta,
+      },
+    ]);
+    hoisted.readAcpSessionEntryMock.mockImplementation((paramsUnknown: unknown) => {
+      const key = (paramsUnknown as { sessionKey?: string }).sessionKey ?? "";
+      if (key !== sessionKey) {
+        return null;
+      }
+      return {
+        sessionKey,
+        storeSessionKey: sessionKey,
+        acp: currentMeta,
+      };
+    });
+    hoisted.upsertAcpSessionMetaMock.mockImplementation((paramsUnknown: unknown) => {
+      const params = paramsUnknown as {
+        mutate: (
+          current: SessionAcpMeta | undefined,
+          entry: { acp?: SessionAcpMeta } | undefined,
+        ) => SessionAcpMeta | null | undefined;
+      };
+      const next = params.mutate(currentMeta, { acp: currentMeta });
+      if (next) {
+        currentMeta = next;
+      }
+      return {
+        sessionId: "session-1",
+        updatedAt: Date.now(),
+        acp: currentMeta,
+      };
+    });
+
+    const manager = new AcpSessionManager();
+    const result = await manager.reconcilePendingSessionIdentities({ cfg: baseCfg });
+
+    expect(result).toEqual({ checked: 1, resolved: 1, failed: 0 });
+    expect(runtimeState.close).toHaveBeenCalledWith(
+      expect.objectContaining({
+        reason: "startup-identity-reconcile-release",
+        handle: expect.objectContaining({ sessionKey }),
+      }),
+    );
+    expect(manager.getObservabilitySnapshot(baseCfg).runtimeCache.activeSessions).toBe(0);
+  });
+
+  it("evicts dormant oneshot handles under pressure before rejecting new sessions", async () => {
+    const runtimeState = createRuntime();
+    hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
+      id: "acpx",
+      runtime: runtimeState.runtime,
+    });
+    hoisted.readAcpSessionEntryMock.mockImplementation((paramsUnknown: unknown) => {
+      const sessionKey = (paramsUnknown as { sessionKey?: string }).sessionKey ?? "";
+      return {
+        sessionKey,
+        storeSessionKey: sessionKey,
+        acp: {
+          ...readySessionMeta(),
+          mode:
+            sessionKey === "agent:claude:acp:oneshot-a" ||
+            sessionKey === "agent:claude:acp:oneshot-b"
+              ? "oneshot"
+              : "persistent",
+          state: "idle",
+          runtimeSessionName: `runtime:${sessionKey}`,
+        },
+      };
+    });
+    const limitedCfg = {
+      acp: {
+        ...baseCfg.acp,
+        maxConcurrentSessions: 2,
+      },
+    } as OpenClawConfig;
+    hoisted.upsertAcpSessionMetaMock.mockImplementation((paramsUnknown: unknown) => {
+      const params = paramsUnknown as { sessionKey?: string };
+      const sessionKey = params.sessionKey ?? "agent:codex:acp:session-c";
+      return {
+        sessionKey,
+        storeSessionKey: sessionKey,
+        acp: {
+          ...readySessionMeta(),
+          mode: sessionKey === "agent:codex:acp:session-c" ? "persistent" : "oneshot",
+          runtimeSessionName: `runtime:${sessionKey}`,
+        },
+      };
+    });
+
+    const manager = new AcpSessionManager();
+    await manager.getSessionStatus({
+      cfg: limitedCfg,
+      sessionKey: "agent:claude:acp:oneshot-a",
+    });
+    await manager.getSessionStatus({
+      cfg: limitedCfg,
+      sessionKey: "agent:claude:acp:oneshot-b",
+    });
+
+    expect(manager.getObservabilitySnapshot(limitedCfg).runtimeCache.activeSessions).toBe(2);
+
+    await manager.initializeSession({
+      cfg: limitedCfg,
+      sessionKey: "agent:codex:acp:session-c",
+      agent: "codex",
+      mode: "persistent",
+    });
+
+    expect(runtimeState.close).toHaveBeenCalledWith(
+      expect.objectContaining({ reason: "oneshot-pressure-evicted" }),
+    );
+    expect(manager.getObservabilitySnapshot(limitedCfg).runtimeCache.activeSessions).toBe(1);
+    expect(runtimeState.ensureSession).toHaveBeenCalledTimes(3);
+  });
+
   it("enforces acp.maxConcurrentSessions when opening new runtime handles", async () => {
     const runtimeState = createRuntime();
     hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
