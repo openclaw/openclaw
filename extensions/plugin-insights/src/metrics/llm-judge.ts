@@ -90,15 +90,20 @@ export class LLMJudgeMetric {
   computeResult(pluginId: string, days: number = 30): LLMJudgeResult {
     const since = daysAgo(days);
 
-    // Scores for turns where plugin was triggered
+    // Scores for turns where plugin was triggered.
+    // Use a subquery to deduplicate: a turn with multiple plugin_events
+    // for the same plugin should only count its LLM score once.
     const withPlugin = this.db
       .prepare(
         `SELECT AVG(ls.overall_score) as avg_score, COUNT(*) as cnt
          FROM llm_scores ls
-         JOIN plugin_events pe ON pe.turn_id = ls.turn_id
-         WHERE pe.plugin_id = ? AND ls.created_at >= ?`,
+         WHERE ls.turn_id IN (
+           SELECT DISTINCT pe.turn_id FROM plugin_events pe
+           WHERE pe.plugin_id = ? AND pe.created_at >= ?
+         )
+           AND ls.created_at >= ?`,
       )
-      .get(pluginId, since) as { avg_score: number | null; cnt: number };
+      .get(pluginId, since, since) as { avg_score: number | null; cnt: number };
 
     // Baseline scores (turns without any plugin)
     const withoutPlugin = this.db

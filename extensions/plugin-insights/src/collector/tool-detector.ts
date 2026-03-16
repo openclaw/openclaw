@@ -37,7 +37,9 @@ export class ToolDetector {
     this.loadMappingCache();
   }
 
-  /** Rebuild the tool→plugin mapping from explicit entries */
+  /** Rebuild the tool→plugin mapping from explicit entries.
+   *  Purges stale mappings that are no longer in the config so removed
+   *  tool→plugin associations don't corrupt attribution diagnostics. */
   refreshMappingFromEntries(
     entries: { toolName: string; pluginId: string; pluginName?: string }[],
   ): void {
@@ -50,7 +52,19 @@ export class ToolDetector {
         updated_at = datetime('now')
     `);
 
+    const currentToolNames = new Set(entries.map((e) => e.toolName));
+
     const tx = this.db.transaction(() => {
+      // Purge mappings no longer present in config
+      const existing = this.db.prepare("SELECT tool_name FROM tool_plugin_mapping").all() as {
+        tool_name: string;
+      }[];
+      for (const row of existing) {
+        if (!currentToolNames.has(row.tool_name)) {
+          this.db.prepare("DELETE FROM tool_plugin_mapping WHERE tool_name = ?").run(row.tool_name);
+        }
+      }
+
       for (const entry of entries) {
         upsert.run(entry.toolName, entry.pluginId, entry.pluginName ?? null);
       }

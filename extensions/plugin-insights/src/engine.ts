@@ -63,6 +63,8 @@ export function createInsightsEngine(
     config.llmJudge.enabled && config.llmJudge.apiKey
       ? new LLMJudgeMetric(db, config.llmJudge)
       : null;
+  // Guard against concurrent judge evaluations from rapid afterTurn calls
+  let judgeInFlight = false;
 
   const engine: ContextEngine = {
     info: {
@@ -120,11 +122,19 @@ export function createInsightsEngine(
         turnCollector.collect(sid, idx, newMessages);
       }
 
-      // Async LLM judge evaluation (fire-and-forget, single instance)
-      if (judge) {
-        judge.evaluate().catch(() => {
-          // Silently ignore judge errors
-        });
+      // Async LLM judge evaluation (fire-and-forget, single instance).
+      // Skip if a previous evaluation is still running to avoid
+      // concurrent budget reads that could exceed the daily limit.
+      if (judge && !judgeInFlight) {
+        judgeInFlight = true;
+        judge
+          .evaluate()
+          .catch(() => {
+            // Silently ignore judge errors
+          })
+          .finally(() => {
+            judgeInFlight = false;
+          });
       }
     },
   };

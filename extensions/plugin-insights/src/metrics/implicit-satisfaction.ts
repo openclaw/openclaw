@@ -12,16 +12,21 @@ export class ImplicitSatisfactionMetric {
   compute(pluginId: string, days: number = 30): ImplicitSatisfactionResult {
     const since = daysAgo(days);
 
-    // Get satisfaction signals for turns where this plugin was triggered
+    // Get satisfaction signals for turns where this plugin was triggered.
+    // Use a subquery to deduplicate: a turn with multiple plugin_events
+    // for the same plugin should only count its satisfaction signal once.
     const signals = this.db
       .prepare(
         `SELECT ss.signal_type, COUNT(*) as cnt
          FROM satisfaction_signals ss
-         JOIN plugin_events pe ON pe.turn_id = ss.turn_id
-         WHERE pe.plugin_id = ? AND ss.created_at >= ?
+         WHERE ss.turn_id IN (
+           SELECT DISTINCT pe.turn_id FROM plugin_events pe
+           WHERE pe.plugin_id = ? AND pe.created_at >= ?
+         )
+           AND ss.created_at >= ?
          GROUP BY ss.signal_type`,
       )
-      .all(pluginId, since) as { signal_type: string; cnt: number }[];
+      .all(pluginId, since, since) as { signal_type: string; cnt: number }[];
 
     let accepted = 0;
     let retried = 0;
