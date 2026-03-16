@@ -36,7 +36,6 @@ export type ResolvedBrowserConfig = {
   profiles: Record<string, BrowserProfileConfig>;
   ssrfPolicy?: SsrFPolicy;
   extraArgs: string[];
-  relayBindHost?: string;
 };
 
 export type ResolvedBrowserProfile = {
@@ -46,7 +45,7 @@ export type ResolvedBrowserProfile = {
   cdpHost: string;
   cdpIsLoopback: boolean;
   color: string;
-  driver: "openclaw" | "extension" | "existing-session";
+  driver: "openclaw" | "existing-session";
   attachOnly: boolean;
 };
 
@@ -279,8 +278,6 @@ export function resolveBrowserConfig(
     ? cfg.extraArgs.filter((a): a is string => typeof a === "string" && a.trim().length > 0)
     : [];
   const ssrfPolicy = resolveBrowserSsrFPolicy(cfg);
-  const relayBindHost = cfg?.relayBindHost?.trim() || undefined;
-
   return {
     enabled,
     evaluateEnabled,
@@ -301,7 +298,6 @@ export function resolveBrowserConfig(
     profiles,
     ssrfPolicy,
     extraArgs,
-    relayBindHost,
   };
 }
 
@@ -322,12 +318,7 @@ export function resolveProfile(
   let cdpHost = resolved.cdpHost;
   let cdpPort = profile.cdpPort ?? 0;
   let cdpUrl = "";
-  const driver =
-    profile.driver === "extension"
-      ? "extension"
-      : profile.driver === "existing-session"
-        ? "existing-session"
-        : "openclaw";
+  const driver = profile.driver === "existing-session" ? "existing-session" : "openclaw";
 
   if (driver === "existing-session") {
     // existing-session uses Chrome MCP auto-connect; no CDP port/URL needed
