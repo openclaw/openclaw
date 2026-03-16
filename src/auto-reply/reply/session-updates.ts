@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import { resolveUserTimezone } from "../../agents/date-time.js";
 import { buildWorkspaceSkillSnapshot } from "../../agents/skills.js";
+import { matchesSkillFilter } from "../../agents/skills/filter.js";
 import { ensureSkillsWatcher, getSkillsSnapshotVersion } from "../../agents/skills/refresh.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { type SessionEntry, updateSessionStore } from "../../config/sessions.js";
@@ -178,11 +179,14 @@ export async function ensureSkillSnapshot(params: {
 
   let nextEntry = sessionEntry;
   let systemSent = sessionEntry?.systemSent ?? false;
+  let rebuiltSnapshotThisTurn = false;
   const remoteEligibility = getRemoteSkillEligibility();
   const snapshotVersion = getSkillsSnapshotVersion(workspaceDir);
   ensureSkillsWatcher({ workspaceDir, config: cfg });
+  const existingSnapshot = nextEntry?.skillsSnapshot;
   const shouldRefreshSnapshot =
-    snapshotVersion > 0 && (nextEntry?.skillsSnapshot?.version ?? 0) < snapshotVersion;
+    (snapshotVersion > 0 && (existingSnapshot?.version ?? 0) < snapshotVersion) ||
+    !matchesSkillFilter(existingSnapshot?.skillFilter, skillFilter);
 
   if (isFirstTurnInSession && sessionStore && sessionKey) {
     const current = nextEntry ??
@@ -190,15 +194,13 @@ export async function ensureSkillSnapshot(params: {
         sessionId: sessionId ?? crypto.randomUUID(),
         updatedAt: Date.now(),
       };
-    const skillSnapshot =
-      isFirstTurnInSession || !current.skillsSnapshot || shouldRefreshSnapshot
-        ? buildWorkspaceSkillSnapshot(workspaceDir, {
-            config: cfg,
-            skillFilter,
-            eligibility: { remote: remoteEligibility },
-            snapshotVersion,
-          })
-        : current.skillsSnapshot;
+    const skillSnapshot = buildWorkspaceSkillSnapshot(workspaceDir, {
+      config: cfg,
+      skillFilter,
+      eligibility: { remote: remoteEligibility },
+      snapshotVersion,
+    });
+    rebuiltSnapshotThisTurn = true;
     nextEntry = {
       ...current,
       sessionId: sessionId ?? current.sessionId ?? crypto.randomUUID(),
@@ -210,7 +212,9 @@ export async function ensureSkillSnapshot(params: {
     systemSent = true;
   }
 
-  const skillsSnapshot = shouldRefreshSnapshot
+  const shouldRefreshAfterFirstTurn = !rebuiltSnapshotThisTurn && shouldRefreshSnapshot;
+
+  const skillsSnapshot = shouldRefreshAfterFirstTurn
     ? buildWorkspaceSkillSnapshot(workspaceDir, {
         config: cfg,
         skillFilter,
@@ -231,7 +235,7 @@ export async function ensureSkillSnapshot(params: {
     sessionStore &&
     sessionKey &&
     !isFirstTurnInSession &&
-    (!nextEntry?.skillsSnapshot || shouldRefreshSnapshot)
+    (!nextEntry?.skillsSnapshot || shouldRefreshAfterFirstTurn)
   ) {
     const current = nextEntry ?? {
       sessionId: sessionId ?? crypto.randomUUID(),
