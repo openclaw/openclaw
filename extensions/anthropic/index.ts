@@ -19,10 +19,12 @@ import {
 import { buildTokenProfileId, validateAnthropicSetupToken } from "../../src/commands/auth-token.js";
 import { applyAuthProfileConfig } from "../../src/commands/onboard-auth.js";
 import { fetchClaudeUsage } from "../../src/infra/provider-usage.fetch.js";
+import { createProviderApiKeyAuthMethod } from "../../src/plugins/provider-api-key-auth.js";
 import type { ProviderAuthResult } from "../../src/plugins/types.js";
 import { normalizeSecretInput } from "../../src/utils/normalize-secret-input.js";
 
 const PROVIDER_ID = "anthropic";
+const DEFAULT_ANTHROPIC_MODEL = "anthropic/claude-sonnet-4-6";
 const ANTHROPIC_OPUS_46_MODEL_ID = "claude-opus-4-6";
 const ANTHROPIC_OPUS_46_DOT_MODEL_ID = "claude-opus-4.6";
 const ANTHROPIC_OPUS_TEMPLATE_MODEL_IDS = ["claude-opus-4-5", "claude-opus-4.5"] as const;
@@ -313,6 +315,14 @@ const anthropicPlugin = {
           label: "setup-token (claude)",
           hint: "Paste a setup-token from `claude setup-token`",
           kind: "token",
+          wizard: {
+            choiceId: "token",
+            choiceLabel: "Anthropic token (paste setup-token)",
+            choiceHint: "Run `claude setup-token` elsewhere, then paste the token here",
+            groupId: "anthropic",
+            groupLabel: "Anthropic",
+            groupHint: "setup-token + API key",
+          },
           run: async (ctx: ProviderAuthContext) => await runAnthropicSetupToken(ctx),
           runNonInteractive: async (ctx) =>
             await runAnthropicSetupTokenNonInteractive({
@@ -322,15 +332,26 @@ const anthropicPlugin = {
               agentDir: ctx.agentDir,
             }),
         },
+        createProviderApiKeyAuthMethod({
+          providerId: PROVIDER_ID,
+          methodId: "api-key",
+          label: "Anthropic API key",
+          hint: "Direct Anthropic API key",
+          optionKey: "anthropicApiKey",
+          flagName: "--anthropic-api-key",
+          envVar: "ANTHROPIC_API_KEY",
+          promptMessage: "Enter Anthropic API key",
+          defaultModel: DEFAULT_ANTHROPIC_MODEL,
+          expectedProviders: ["anthropic"],
+          wizard: {
+            choiceId: "apiKey",
+            choiceLabel: "Anthropic API key",
+            groupId: "anthropic",
+            groupLabel: "Anthropic",
+            groupHint: "setup-token + API key",
+          },
+        }),
       ],
-      wizard: {
-        setup: {
-          choiceId: "token",
-          choiceLabel: "Anthropic token (paste setup-token)",
-          choiceHint: "Run `claude setup-token` elsewhere, then paste the token here",
-          methodId: "setup-token",
-        },
-      },
       resolveDynamicModel: (ctx) => resolveAnthropicForwardCompatModel(ctx),
       capabilities: {
         providerFamily: "anthropic",
