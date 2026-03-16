@@ -390,7 +390,31 @@ export function createBedrockNoCacheWrapper(baseStreamFn: StreamFn | undefined):
     });
 }
 
-export function isAnthropicBedrockModel(modelId: string): boolean {
+export function isAnthropicBedrockModel(modelId: string, modelName?: string): boolean {
   const normalized = modelId.toLowerCase();
-  return normalized.includes("anthropic.claude") || normalized.includes("anthropic/claude");
+
+  // Check if the model ID contains Anthropic Claude identifiers
+  if (normalized.includes("anthropic.claude") || normalized.includes("anthropic/claude")) {
+    return true;
+  }
+
+  // Check if the model ID is an Application Inference Profile ARN for a Claude model
+  // ARN format: arn:aws:bedrock:<region>:<account>:application-inference-profile/<profile-id>
+  // We check if the model name contains "claude" to identify Claude models using inference profiles
+  if (modelName) {
+    const normalizedName = modelName.toLowerCase();
+    if (normalizedName.includes("claude")) {
+      return true;
+    }
+  }
+
+  // Check if the model ID is a short Application Inference Profile ID that might be for Claude
+  // Short IDs don't contain model info, so we rely on the model name if available
+  if (modelId.startsWith("arn:aws:bedrock:") && modelId.includes(":application-inference-profile/")) {
+    // This is an Application Inference Profile ARN
+    // We can't determine if it's Claude from the ARN alone, so check the name
+    return modelName ? modelName.toLowerCase().includes("claude") : false;
+  }
+
+  return false;
 }
