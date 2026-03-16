@@ -40,6 +40,18 @@ function normalizeManifestRelativePath(rawPath) {
   return rawPath.replaceAll("\\", "/").replace(/^\.\//u, "");
 }
 
+function resolveDeclaredSkillSourcePath(params) {
+  const normalized = normalizeManifestRelativePath(params.rawPath);
+  const pluginLocalPath = ensurePathInsideRoot(params.pluginDir, normalized);
+  if (fs.existsSync(pluginLocalPath)) {
+    return pluginLocalPath;
+  }
+  if (!/^node_modules(?:\/|$)/u.test(normalized)) {
+    return pluginLocalPath;
+  }
+  return ensurePathInsideRoot(params.repoRoot, normalized);
+}
+
 function resolveBundledSkillTarget(rawPath) {
   const normalized = normalizeManifestRelativePath(rawPath);
   if (/^node_modules(?:\/|$)/u.test(normalized)) {
@@ -68,7 +80,11 @@ function copyDeclaredPluginSkillPaths(params) {
     if (typeof raw !== "string" || raw.trim().length === 0) {
       continue;
     }
-    const sourcePath = ensurePathInsideRoot(params.pluginDir, raw);
+    const sourcePath = resolveDeclaredSkillSourcePath({
+      rawPath: raw,
+      pluginDir: params.pluginDir,
+      repoRoot: params.repoRoot,
+    });
     const target = resolveBundledSkillTarget(raw);
     if (!fs.existsSync(sourcePath)) {
       // Some Docker/lightweight builds intentionally omit optional plugin-local
@@ -138,7 +154,12 @@ export function copyBundledPluginMetadata(params = {}) {
     // remove the older bad node_modules tree so release packs cannot pick it up.
     removePathIfExists(path.join(distPluginDir, GENERATED_BUNDLED_SKILLS_DIR));
     removePathIfExists(path.join(distPluginDir, "node_modules"));
-    const copiedSkills = copyDeclaredPluginSkillPaths({ manifest, pluginDir, distPluginDir });
+    const copiedSkills = copyDeclaredPluginSkillPaths({
+      manifest,
+      pluginDir,
+      distPluginDir,
+      repoRoot,
+    });
     const bundledManifest = Array.isArray(manifest.skills)
       ? { ...manifest, skills: copiedSkills }
       : manifest;
