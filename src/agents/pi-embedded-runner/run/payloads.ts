@@ -125,6 +125,7 @@ export function buildEmbeddedRunPayloads(params: {
   }> = [];
 
   const useMarkdown = params.toolResultFormat === "markdown";
+  const suppressAssistantArtifacts = params.didSendDeterministicApprovalPrompt === true;
   const lastAssistantErrored = params.lastAssistant?.stopReason === "error";
   const errorText =
     params.lastAssistant && lastAssistantErrored

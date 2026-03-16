@@ -1,6 +1,10 @@
 import { randomBytes } from "node:crypto";
 import fs from "node:fs/promises";
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
+import {
+  ensureContextEnginesInitialized,
+  resolveContextEngine,
+} from "../../context-engine/index.js";
 import { generateSecureToken } from "../../infra/secure-random.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import type { PluginHookBeforeAgentStartResult } from "../../plugins/types.js";
@@ -702,6 +706,8 @@ export async function runEmbeddedPiAgent(
       };
       const MAX_NETWORK_RETRIES = 3;
       const NETWORK_RETRY_DELAY_MS = 2_000;
+      ensureContextEnginesInitialized();
+      const contextEngine = await resolveContextEngine(params.config);
       try {
         let authRetryPending = false;
         let networkRetryCount = 0;
