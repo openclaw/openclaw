@@ -1,8 +1,9 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { NON_ENV_SECRETREF_MARKER } from "../agents/model-auth-markers.js";
+import { resetProviderRuntimeHookCacheForTest } from "../plugins/provider-runtime.js";
 import { resolveProviderAuths, type ProviderAuth } from "./provider-usage.auth.js";
 
 describe("resolveProviderAuths key normalization", () => {
@@ -18,6 +19,10 @@ describe("resolveProviderAuths key normalization", () => {
 
   beforeAll(async () => {
     suiteRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-provider-auth-suite-"));
+  });
+
+  beforeEach(() => {
+    resetProviderRuntimeHookCacheForTest();
   });
 
   afterAll(async () => {
