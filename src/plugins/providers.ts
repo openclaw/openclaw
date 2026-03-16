@@ -35,6 +35,7 @@ const BUNDLED_PROVIDER_ALLOWLIST_COMPAT_PLUGIN_IDS = [
   "venice",
   "vercel-ai-gateway",
   "volcengine",
+  "xai",
   "vllm",
   "xiaomi",
   "zai",
@@ -142,8 +143,8 @@ export function resolvePluginProviders(params: {
     workspaceDir: params.workspaceDir,
     env: params.env,
     onlyPluginIds: params.onlyPluginIds,
-    activate: params.activate,
-    cache: params.cache,
+    cache: params.cache ?? false,
+    activate: params.activate ?? false,
     logger: createPluginLoaderLogger(log),
   });
 

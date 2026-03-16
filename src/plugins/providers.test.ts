@@ -38,6 +38,8 @@ describe("resolvePluginProviders", () => {
       expect.objectContaining({
         workspaceDir: "/workspace/explicit",
         env,
+        cache: false,
+        activate: false,
       }),
     );
   });
@@ -59,6 +61,8 @@ describe("resolvePluginProviders", () => {
             allow: expect.arrayContaining(["openrouter", "google", "kilocode", "moonshot"]),
           }),
         }),
+        cache: false,
+        activate: false,
       }),
     );
   });
@@ -76,6 +80,8 @@ describe("resolvePluginProviders", () => {
             allow: expect.arrayContaining(["openai", "moonshot", "zai"]),
           }),
         }),
+        cache: false,
+        activate: false,
       }),
     );
   });

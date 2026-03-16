@@ -33,7 +33,10 @@ function maybeBootstrapChannelPlugin(params: {
   }
 
   const activeRegistry = getActivePluginRegistry();
-  if ((activeRegistry?.channels?.length ?? 0) > 0) {
+  const activeHasRequestedChannel = activeRegistry?.channels?.some(
+    (entry) => entry?.plugin?.id === params.channel,
+  );
+  if (activeHasRequestedChannel) {
     return;
   }
 

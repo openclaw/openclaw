@@ -10,7 +10,7 @@ import { normalizeModelCompat } from "../../src/agents/model-compat.js";
 import { parseDurationMs } from "../../src/cli/parse-duration.js";
 import {
   normalizeSecretInputModeInput,
-  promptSecretRefForOnboarding,
+  promptSecretRefForSetup,
   resolveSecretInputModeForEnvSelection,
 } from "../../src/commands/auth-choice.apply-helpers.js";
 import { buildTokenProfileId, validateAnthropicSetupToken } from "../../src/commands/auth-token.js";
@@ -144,7 +144,7 @@ async function runAnthropicSetupToken(ctx: ProviderAuthContext): Promise<Provide
   let token = "";
   let tokenRef: { source: "env" | "file" | "exec"; provider: string; id: string } | undefined;
   if (selectedMode === "ref") {
-    const resolved = await promptSecretRefForOnboarding({
+    const resolved = await promptSecretRefForSetup({
       provider: "anthropic-setup-token",
       config: ctx.config,
       prompter: ctx.prompter,
