@@ -586,7 +586,6 @@ export function createGigachatStreamFn(opts: GigachatStreamOptions): StreamFn {
 
         // Build auth config
         const apiKey = options?.apiKey ?? "";
-        const isUserPassCredentials = apiKey.includes(":");
 
         const clientConfig: GigaChatClientConfig = {
           baseUrl: effectiveBaseUrl,
@@ -601,7 +600,7 @@ export function createGigachatStreamFn(opts: GigachatStreamOptions): StreamFn {
         }
 
         // Set credentials based on auth mode
-        if (isUserPassCredentials) {
+        if (opts.authMode === "basic") {
           const { user, password } = parseGigachatBasicCredentials(apiKey);
           clientConfig.user = user;
           clientConfig.password = password;

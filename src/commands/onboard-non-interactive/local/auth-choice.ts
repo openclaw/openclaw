@@ -189,6 +189,21 @@ export async function applyNonInteractiveAuthChoice(params: {
     return simpleApiKeyChoice;
   }
 
+  if (
+    authChoice === "gigachat-basic" ||
+    authChoice === "gigachat-business" ||
+    authChoice === "gigachat-personal"
+  ) {
+    runtime.error(
+      [
+        `Auth choice "${authChoice}" requires interactive mode.`,
+        'Use "--gigachat-api-key" for non-interactive personal OAuth onboarding, or run interactive onboarding for business/basic GigaChat setup.',
+      ].join("\n"),
+    );
+    runtime.exit(1);
+    return null;
+  }
+
   if (authChoice === "cloudflare-ai-gateway-api-key") {
     const accountId = opts.cloudflareAiGatewayAccountId?.trim() ?? "";
     const gatewayId = opts.cloudflareAiGatewayGatewayId?.trim() ?? "";

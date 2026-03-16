@@ -638,6 +638,23 @@ describe("onboard (non-interactive): provider auth", () => {
     });
   });
 
+  it.each(["gigachat-basic", "gigachat-business", "gigachat-personal"] as const)(
+    'rejects "%s" auth choice in non-interactive mode',
+    async (authChoice) => {
+      await withOnboardEnv(
+        `openclaw-onboard-${authChoice}-non-interactive-`,
+        async ({ runtime }) => {
+          await expect(
+            runNonInteractiveOnboardingWithDefaults(runtime, {
+              authChoice,
+              skipSkills: true,
+            }),
+          ).rejects.toThrow(`Auth choice "${authChoice}" requires interactive mode.`);
+        },
+      );
+    },
+  );
+
   it("stores LiteLLM API key and sets default model", async () => {
     await withOnboardEnv("openclaw-onboard-litellm-", async (env) => {
       const cfg = await runOnboardingAndReadConfig(env, {

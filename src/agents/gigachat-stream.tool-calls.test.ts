@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const updateToken = vi.fn(async () => {});
 const request = vi.fn();
+const clientConfigs: Array<Record<string, unknown>> = [];
 
 vi.mock("gigachat", () => {
   class MockGigaChat {
@@ -10,6 +11,10 @@ vi.mock("gigachat", () => {
     _accessToken = { access_token: "test-token" };
 
     updateToken = updateToken;
+
+    constructor(config: Record<string, unknown>) {
+      clientConfigs.push(config);
+    }
   }
 
   return { GigaChat: MockGigaChat };
@@ -24,6 +29,7 @@ function createSseStream(lines: string[]): Readable {
 describe("createGigachatStreamFn tool calling", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    clientConfigs.length = 0;
   });
 
   it("round-trips sanitized tool names for streamed function calls", async () => {
@@ -272,5 +278,38 @@ describe("createGigachatStreamFn tool calling", () => {
     expect(event.content).toEqual([]);
     expect(updateToken).not.toHaveBeenCalled();
     expect(request).not.toHaveBeenCalled();
+  });
+
+  it("honors oauth auth mode even when credentials contain a colon", async () => {
+    request.mockResolvedValueOnce({
+      status: 200,
+      data: createSseStream(['data: {"choices":[{"delta":{"content":"done"}}]}', "data: [DONE]"]),
+    });
+
+    const streamFn = createGigachatStreamFn({
+      baseUrl: "https://gigachat.devices.sberbank.ru/api/v1",
+      authMode: "oauth",
+      scope: "GIGACHAT_API_PERS",
+    });
+
+    const stream = streamFn(
+      { api: "gigachat", provider: "gigachat", id: "GigaChat-2-Max" } as never,
+      {
+        messages: [],
+        tools: [],
+      } as never,
+      { apiKey: "oauth:credential:with:colon" } as never,
+    );
+
+    const event = await stream.result();
+
+    expect(event.content).toEqual([{ type: "text", text: "done" }]);
+    expect(clientConfigs).toHaveLength(1);
+    expect(clientConfigs[0]).toMatchObject({
+      credentials: "oauth:credential:with:colon",
+      scope: "GIGACHAT_API_PERS",
+    });
+    expect(clientConfigs[0]?.user).toBeUndefined();
+    expect(clientConfigs[0]?.password).toBeUndefined();
   });
 });
