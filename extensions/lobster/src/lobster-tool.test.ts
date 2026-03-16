@@ -56,6 +56,9 @@ function fakeApi(overrides: Partial<OpenClawPluginApi> = {}): OpenClawPluginApi 
     registerContextEngine() {},
     registerMemoryPromptSection() {},
     on() {},
+    onAgentEvent() {
+      return () => {};
+    },
     resolvePath: (p) => p,
     ...overrides,
   };

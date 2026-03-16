@@ -4,6 +4,7 @@ import { parseReplyDirectives } from "../auto-reply/reply/reply-directives.js";
 import { SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
 import { createInlineCodeState } from "../markdown/code-spans.js";
+import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import {
   isMessagingToolDuplicateNormalized,
   normalizeTextForComparison,
@@ -16,6 +17,7 @@ import type {
 import { appendRawStream } from "./pi-embedded-subscribe.raw-stream.js";
 import {
   extractAssistantText,
+  extractAssistantTextWithThinkingTags,
   extractAssistantThinking,
   extractThinkingFromTaggedStream,
   extractThinkingFromTaggedText,
@@ -52,6 +54,8 @@ function emitReasoningEnd(ctx: EmbeddedPiSubscribeContext) {
     return;
   }
   ctx.state.reasoningStreamOpen = false;
+  ctx.state.partialBlockState.thinking = false;
+  (ctx.state.partialBlockState as { thinkingTransitioned?: boolean }).thinkingTransitioned = false;
   void ctx.params.onReasoningEnd?.();
 }
 
@@ -179,8 +183,25 @@ export function handleMessageUpdate(
   const evtType = typeof assistantRecord?.type === "string" ? assistantRecord.type : "";
 
   if (evtType === "thinking_start" || evtType === "thinking_delta" || evtType === "thinking_end") {
+    // Mark that native thinking events are driving the lifecycle, so tagged
+    // <think> transitions in text deltas don't duplicate hooks.
+    ctx.state.nativeThinkingActive = true;
     if (evtType === "thinking_start" || evtType === "thinking_delta") {
-      ctx.state.reasoningStreamOpen = true;
+      if (!ctx.state.reasoningStreamOpen) {
+        ctx.state.reasoningStreamOpen = true;
+        ctx.state.thinkingStartedAt = Date.now();
+        // Emit thinking_start hook on first thinking event
+        const hookRunner = ctx.hookRunner ?? getGlobalHookRunner();
+        if (hookRunner?.hasHooks("thinking_start")) {
+          void hookRunner.runThinkingStart(
+            { runId: ctx.params.runId },
+            {
+              agentId: ctx.params.agentId,
+              sessionKey: ctx.params.sessionKey,
+            },
+          );
+        }
+      }
     }
     const thinkingDelta = typeof assistantRecord?.delta === "string" ? assistantRecord.delta : "";
     const thinkingContent =
@@ -194,16 +215,46 @@ export function handleMessageUpdate(
       delta: thinkingDelta,
       content: thinkingContent,
     });
-    if (ctx.state.streamReasoning) {
+    if (ctx.state.streamReasoning || ctx.params.onAgentEvent) {
       // Prefer full partial-message thinking when available; fall back to event payloads.
       const partialThinking = extractAssistantThinking(msg);
       ctx.emitReasoningStream(partialThinking || thinkingContent || thinkingDelta);
     }
     if (evtType === "thinking_end") {
+      // Ensure plugins always get a matching thinking_start before thinking_end
       if (!ctx.state.reasoningStreamOpen) {
         ctx.state.reasoningStreamOpen = true;
+        ctx.state.thinkingStartedAt = Date.now();
+        const hookRunner = ctx.hookRunner ?? getGlobalHookRunner();
+        if (hookRunner?.hasHooks("thinking_start")) {
+          void hookRunner.runThinkingStart(
+            { runId: ctx.params.runId },
+            {
+              agentId: ctx.params.agentId,
+              sessionKey: ctx.params.sessionKey,
+            },
+          );
+        }
       }
       emitReasoningEnd(ctx);
+      // Emit thinking_end hook
+      const hookRunner = ctx.hookRunner ?? getGlobalHookRunner();
+      if (hookRunner?.hasHooks("thinking_end")) {
+        const fullThinking = extractAssistantThinking(msg);
+        void hookRunner.runThinkingEnd(
+          {
+            runId: ctx.params.runId,
+            text: fullThinking || thinkingContent || undefined,
+            durationMs: ctx.state.thinkingStartedAt
+              ? Date.now() - ctx.state.thinkingStartedAt
+              : undefined,
+          },
+          {
+            agentId: ctx.params.agentId,
+            sessionKey: ctx.params.sessionKey,
+          },
+        );
+      }
     }
     return;
   }
@@ -253,7 +304,7 @@ export function handleMessageUpdate(
     }
   }
 
-  if (ctx.state.streamReasoning) {
+  if (ctx.state.streamReasoning || ctx.params.onAgentEvent) {
     // Handle partial <think> tags: stream whatever reasoning is visible so far.
     ctx.emitReasoningStream(extractThinkingFromTaggedStream(ctx.state.deltaBuffer));
   }
@@ -265,16 +316,78 @@ export function handleMessageUpdate(
       inlineCode: createInlineCodeState(),
     })
     .trim();
-  if (next) {
-    const wasThinking = ctx.state.partialBlockState.thinking;
-    const visibleDelta = chunk ? ctx.stripBlockTags(chunk, ctx.state.partialBlockState) : "";
-    if (!wasThinking && ctx.state.partialBlockState.thinking) {
+
+  // Track <think> tag transitions independently of visible text.
+  // stripBlockTags updates partialBlockState as a side effect, so we must
+  // call it even when `next` is empty (pure-thinking chunks).
+  const wasThinking = ctx.state.partialBlockState.thinking;
+  if (!chunk) {
+    (ctx.state.partialBlockState as { thinkingTransitioned?: boolean }).thinkingTransitioned =
+      false;
+  }
+  const visibleDelta = chunk ? ctx.stripBlockTags(chunk, ctx.state.partialBlockState) : "";
+
+  // Handle single-chunk transitions: if the chunk contained both <think> and </think>,
+  // partialBlockState.thinking ends as false. Detect this by checking whether
+  // stripBlockTags consumed any thinking content even though final state is not-thinking.
+  const nowThinking = ctx.state.partialBlockState.thinking;
+  const enteredThinking = !wasThinking && nowThinking;
+  const exitedThinking = wasThinking && !nowThinking;
+  // Single-chunk: was not thinking, is not thinking, but stripBlockTags found and consumed
+  // a complete thinking block (open+close in one delta). Uses the thinkingTransitioned flag
+  // set by stripBlockTags, which correctly respects code-span filtering.
+  const singleChunkThinking =
+    !wasThinking &&
+    !nowThinking &&
+    !!(ctx.state.partialBlockState as { thinkingTransitioned?: boolean }).thinkingTransitioned;
+
+  // Skip tagged transitions entirely when native thinking events already manage the lifecycle.
+  // This prevents duplicated thinking_start/thinking_end when providers mirror reasoning in
+  // both native events and <think> text tags simultaneously.
+  const nativeThinkingActive = ctx.state.nativeThinkingActive ?? false;
+
+  if ((enteredThinking || singleChunkThinking) && !nativeThinkingActive) {
+    // Only fire tagged thinking_start if native thinking hasn't already opened it
+    if (!ctx.state.reasoningStreamOpen) {
       ctx.state.reasoningStreamOpen = true;
+      ctx.state.thinkingStartedAt = Date.now();
+      // Fire thinking_start hook for <think> tag flows
+      const hookRunner = ctx.hookRunner ?? getGlobalHookRunner();
+      if (hookRunner?.hasHooks("thinking_start")) {
+        void hookRunner.runThinkingStart(
+          { runId: ctx.params.runId },
+          {
+            agentId: ctx.params.agentId,
+            sessionKey: ctx.params.sessionKey,
+          },
+        );
+      }
     }
-    // Detect when thinking block ends (</think> tag processed)
-    if (wasThinking && !ctx.state.partialBlockState.thinking) {
-      emitReasoningEnd(ctx);
+  }
+  // Detect when thinking block ends (</think> tag processed)
+  if ((exitedThinking || singleChunkThinking) && !nativeThinkingActive) {
+    emitReasoningEnd(ctx);
+    // Fire thinking_end hook for <think> tag flows
+    const hookRunner = ctx.hookRunner ?? getGlobalHookRunner();
+    if (hookRunner?.hasHooks("thinking_end")) {
+      const fullThinking = extractThinkingFromTaggedText(ctx.state.deltaBuffer);
+      void hookRunner.runThinkingEnd(
+        {
+          runId: ctx.params.runId,
+          text: fullThinking || undefined,
+          durationMs: ctx.state.thinkingStartedAt
+            ? Date.now() - ctx.state.thinkingStartedAt
+            : undefined,
+        },
+        {
+          agentId: ctx.params.agentId,
+          sessionKey: ctx.params.sessionKey,
+        },
+      );
     }
+  }
+
+  if (next) {
     const parsedDelta = visibleDelta ? ctx.consumePartialReplyDirectives(visibleDelta) : null;
     const parsedFull = parseReplyDirectives(stripTrailingDirective(next));
     const cleanedText = parsedFull.text;
@@ -339,6 +452,33 @@ export function handleMessageEnd(
   const assistantMessage = msg;
   ctx.noteLastAssistant(assistantMessage);
   ctx.recordAssistantUsage((assistantMessage as { usage?: unknown }).usage);
+
+  // Safety net: if thinking_start was fired but no thinking_end arrived (provider
+  // skipped the explicit end event), close the thinking lifecycle now so plugins
+  // don't get stuck with an unclosed thinking indicator.
+  if (ctx.state.reasoningStreamOpen) {
+    emitReasoningEnd(ctx);
+    const hookRunner = ctx.hookRunner ?? getGlobalHookRunner();
+    if (hookRunner?.hasHooks("thinking_end")) {
+      const fullThinking =
+        extractAssistantThinking(msg) ||
+        extractThinkingFromTaggedText(extractAssistantTextWithThinkingTags(msg));
+      void hookRunner.runThinkingEnd(
+        {
+          runId: ctx.params.runId,
+          text: fullThinking || undefined,
+          durationMs: ctx.state.thinkingStartedAt
+            ? Date.now() - ctx.state.thinkingStartedAt
+            : undefined,
+        },
+        {
+          agentId: ctx.params.agentId,
+          sessionKey: ctx.params.sessionKey,
+        },
+      );
+    }
+  }
+
   if (ctx.state.deterministicApprovalPromptSent) {
     return;
   }
@@ -359,7 +499,7 @@ export function handleMessageEnd(
     messagingToolSentTexts: ctx.state.messagingToolSentTexts,
   });
   const rawThinking =
-    ctx.state.includeReasoning || ctx.state.streamReasoning
+    ctx.state.includeReasoning || ctx.state.streamReasoning || Boolean(ctx.params.onAgentEvent)
       ? extractAssistantThinking(assistantMessage) || extractThinkingFromTaggedText(rawText)
       : "";
   const formattedReasoning = rawThinking ? formatReasoningMessage(rawThinking) : "";
@@ -490,7 +630,7 @@ export function handleMessageEnd(
   if (!shouldEmitReasoningBeforeAnswer) {
     maybeEmitReasoning();
   }
-  if (ctx.state.streamReasoning && rawThinking) {
+  if ((ctx.state.streamReasoning || ctx.params.onAgentEvent) && rawThinking) {
     ctx.emitReasoningStream(rawThinking);
   }
 

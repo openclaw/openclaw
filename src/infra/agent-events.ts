@@ -1,8 +1,14 @@
 import type { VerboseLevel } from "../auto-reply/thinking.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
-import { notifyListeners, registerListener } from "../shared/listeners.js";
+import { notifyListeners } from "../shared/listeners.js";
 
-export type AgentEventStream = "lifecycle" | "tool" | "assistant" | "error" | (string & {});
+export type AgentEventStream =
+  | "lifecycle"
+  | "tool"
+  | "thinking"
+  | "assistant"
+  | "error"
+  | (string & {});
 
 export type AgentEventPayload = {
   runId: string;
@@ -21,9 +27,14 @@ export type AgentRunContext = {
   isControlUiVisible?: boolean;
 };
 
+type AgentEventListenerEntry = {
+  listener: (evt: AgentEventPayload) => void;
+  sessionKey?: string;
+};
+
 type AgentEventState = {
   seqByRun: Map<string, number>;
-  listeners: Set<(evt: AgentEventPayload) => void>;
+  listeners: Set<AgentEventListenerEntry>;
   runContextById: Map<string, AgentRunContext>;
 };
 
@@ -31,7 +42,7 @@ const AGENT_EVENT_STATE_KEY = Symbol.for("openclaw.agentEvents.state");
 
 const state = resolveGlobalSingleton<AgentEventState>(AGENT_EVENT_STATE_KEY, () => ({
   seqByRun: new Map<string, number>(),
-  listeners: new Set<(evt: AgentEventPayload) => void>(),
+  listeners: new Set<AgentEventListenerEntry>(),
   runContextById: new Map<string, AgentRunContext>(),
 }));
 
@@ -77,6 +88,7 @@ export function emitAgentEvent(event: Omit<AgentEventPayload, "seq" | "ts">) {
   const isControlUiVisible = context?.isControlUiVisible ?? true;
   const eventSessionKey =
     typeof event.sessionKey === "string" && event.sessionKey.trim() ? event.sessionKey : undefined;
+  const resolvedSessionKey = eventSessionKey ?? context?.sessionKey;
   const sessionKey = isControlUiVisible ? (eventSessionKey ?? context?.sessionKey) : undefined;
   const enriched: AgentEventPayload = {
     ...event,
@@ -84,11 +96,25 @@ export function emitAgentEvent(event: Omit<AgentEventPayload, "seq" | "ts">) {
     seq: nextSeq,
     ts: Date.now(),
   };
-  notifyListeners(state.listeners, enriched);
+  notifyListeners(
+    Array.from(state.listeners, (entry) => (payload: AgentEventPayload) => {
+      if (entry.sessionKey && entry.sessionKey !== resolvedSessionKey) {
+        return;
+      }
+      entry.listener(payload);
+    }),
+    enriched,
+  );
 }
 
-export function onAgentEvent(listener: (evt: AgentEventPayload) => void) {
-  return registerListener(state.listeners, listener);
+export function onAgentEvent(
+  listener: (evt: AgentEventPayload) => void,
+  opts?: { sessionKey?: string },
+) {
+  const sessionKey = opts?.sessionKey?.trim() || undefined;
+  const entry: AgentEventListenerEntry = { listener, sessionKey };
+  state.listeners.add(entry);
+  return () => state.listeners.delete(entry);
 }
 
 export function resetAgentEventsForTest() {
