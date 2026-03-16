@@ -31,7 +31,11 @@ function getDefaultBaseUrl(region: MiniMaxRegion): string {
   return region === "cn" ? DEFAULT_BASE_URL_CN : DEFAULT_BASE_URL_GLOBAL;
 }
 
-function modelRef(modelId: string): string {
+function apiModelRef(modelId: string): string {
+  return `${API_PROVIDER_ID}/${modelId}`;
+}
+
+function portalModelRef(modelId: string): string {
   return `${PORTAL_PROVIDER_ID}/${modelId}`;
 }
 
@@ -109,7 +113,7 @@ function createOAuthHandler(region: MiniMaxRegion) {
 
       return buildOauthProviderAuthResult({
         providerId: PORTAL_PROVIDER_ID,
-        defaultModel: modelRef(DEFAULT_MODEL),
+        defaultModel: portalModelRef(DEFAULT_MODEL),
         access: result.access,
         refresh: result.refresh,
         expires: result.expires,
@@ -125,11 +129,11 @@ function createOAuthHandler(region: MiniMaxRegion) {
           agents: {
             defaults: {
               models: {
-                [modelRef("MiniMax-M2.5")]: { alias: "minimax-m2.5" },
-                [modelRef("MiniMax-M2.5-highspeed")]: {
+                [portalModelRef("MiniMax-M2.5")]: { alias: "minimax-m2.5" },
+                [portalModelRef("MiniMax-M2.5-highspeed")]: {
                   alias: "minimax-m2.5-highspeed",
                 },
-                [modelRef("MiniMax-M2.5-Lightning")]: {
+                [portalModelRef("MiniMax-M2.5-Lightning")]: {
                   alias: "minimax-m2.5-lightning",
                 },
               },
@@ -177,7 +181,8 @@ const minimaxPlugin = {
           promptMessage:
             "Enter MiniMax API key (sk-api- or sk-cp-)\nhttps://platform.minimax.io/user-center/basic-information/interface-key",
           profileId: "minimax:global",
-          defaultModel: modelRef(DEFAULT_MODEL),
+          allowProfile: false,
+          defaultModel: apiModelRef(DEFAULT_MODEL),
           expectedProviders: ["minimax"],
           applyConfig: (cfg) => applyMinimaxApiConfig(cfg),
           wizard: {
@@ -200,7 +205,8 @@ const minimaxPlugin = {
           promptMessage:
             "Enter MiniMax CN API key (sk-api- or sk-cp-)\nhttps://platform.minimaxi.com/user-center/basic-information/interface-key",
           profileId: "minimax:cn",
-          defaultModel: modelRef(DEFAULT_MODEL),
+          allowProfile: false,
+          defaultModel: apiModelRef(DEFAULT_MODEL),
           expectedProviders: ["minimax", "minimax-cn"],
           applyConfig: (cfg) => applyMinimaxApiConfigCn(cfg),
           wizard: {

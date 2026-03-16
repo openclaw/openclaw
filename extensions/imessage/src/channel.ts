@@ -3,6 +3,7 @@ import {
   buildAccountScopedDmSecurityPolicy,
   collectAllowlistProviderRestrictSendersWarnings,
 } from "openclaw/plugin-sdk/compat";
+import { buildAgentSessionKey, type RoutePeer } from "openclaw/plugin-sdk/core";
 import {
   buildChannelConfigSchema,
   collectStatusIssuesFromLastError,
@@ -11,23 +12,25 @@ import {
   formatTrimmedAllowFromEntries,
   getChatChannelMeta,
   IMessageConfigSchema,
-  listIMessageAccountIds,
   looksLikeIMessageTargetId,
   normalizeIMessageMessagingTarget,
   PAIRING_APPROVED_MESSAGE,
   resolveChannelMediaMaxBytes,
-  resolveDefaultIMessageAccountId,
-  resolveIMessageAccount,
   resolveIMessageConfigAllowFrom,
   resolveIMessageConfigDefaultTo,
   resolveIMessageGroupRequireMention,
   resolveIMessageGroupToolPolicy,
   setAccountEnabledInConfigSection,
   type ChannelPlugin,
-  type ResolvedIMessageAccount,
 } from "openclaw/plugin-sdk/imessage";
 import { resolveOutboundSendDep } from "../../../src/infra/outbound/send-deps.js";
 import { buildPassiveProbedChannelStatusSummary } from "../../shared/channel-status-summary.js";
+import {
+  listIMessageAccountIds,
+  resolveDefaultIMessageAccountId,
+  resolveIMessageAccount,
+  type ResolvedIMessageAccount,
+} from "./accounts.js";
 import { getIMessageRuntime } from "./runtime.js";
 import { createIMessageSetupWizardProxy, imessageSetupAdapter } from "./setup-core.js";
 import { normalizeIMessageHandle, parseIMessageTarget } from "./targets.js";
