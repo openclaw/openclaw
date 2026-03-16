@@ -1,6 +1,6 @@
-import type { OpenClawConfig } from "../../../config/config.js";
-import type { WizardPrompter } from "../../../wizard/prompts.js";
-import { promptChannelAccessConfig, type ChannelAccessPolicy } from "./channel-access.js";
+import type { OpenClawConfig } from "../../config/config.js";
+import type { WizardPrompter } from "../../wizard/prompts.js";
+import { promptChannelAccessConfig, type ChannelAccessPolicy } from "./setup-group-access.js";
 
 export async function configureChannelAccessWithAllowlist<TResolved>(params: {
   cfg: OpenClawConfig;
@@ -10,9 +10,10 @@ export async function configureChannelAccessWithAllowlist<TResolved>(params: {
   currentEntries: string[];
   placeholder: string;
   updatePrompt: boolean;
+  skipAllowlistEntries?: boolean;
   setPolicy: (cfg: OpenClawConfig, policy: ChannelAccessPolicy) => OpenClawConfig;
-  resolveAllowlist: (params: { cfg: OpenClawConfig; entries: string[] }) => Promise<TResolved>;
-  applyAllowlist: (params: { cfg: OpenClawConfig; resolved: TResolved }) => OpenClawConfig;
+  resolveAllowlist?: (params: { cfg: OpenClawConfig; entries: string[] }) => Promise<TResolved>;
+  applyAllowlist?: (params: { cfg: OpenClawConfig; resolved: TResolved }) => OpenClawConfig;
 }): Promise<OpenClawConfig> {
   let next = params.cfg;
   const accessConfig = await promptChannelAccessConfig({
@@ -22,12 +23,16 @@ export async function configureChannelAccessWithAllowlist<TResolved>(params: {
     currentEntries: params.currentEntries,
     placeholder: params.placeholder,
     updatePrompt: params.updatePrompt,
+    skipAllowlistEntries: params.skipAllowlistEntries,
   });
   if (!accessConfig) {
     return next;
   }
   if (accessConfig.policy !== "allowlist") {
     return params.setPolicy(next, accessConfig.policy);
+  }
+  if (params.skipAllowlistEntries || !params.resolveAllowlist || !params.applyAllowlist) {
+    return params.setPolicy(next, "allowlist");
   }
   const resolved = await params.resolveAllowlist({
     cfg: next,

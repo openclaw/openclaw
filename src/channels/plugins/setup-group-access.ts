@@ -1,5 +1,5 @@
-import type { WizardPrompter } from "../../../wizard/prompts.js";
-import { splitOnboardingEntries } from "./helpers.js";
+import type { WizardPrompter } from "../../wizard/prompts.js";
+import { splitOnboardingEntries } from "./onboarding/helpers.js";
 
 export type ChannelAccessPolicy = "allowlist" | "open" | "disabled";
 
@@ -64,6 +64,7 @@ export async function promptChannelAccessConfig(params: {
   placeholder?: string;
   allowOpen?: boolean;
   allowDisabled?: boolean;
+  skipAllowlistEntries?: boolean;
   defaultPrompt?: boolean;
   updatePrompt?: boolean;
 }): Promise<{ policy: ChannelAccessPolicy; entries: string[] } | null> {
@@ -86,6 +87,9 @@ export async function promptChannelAccessConfig(params: {
     allowDisabled: params.allowDisabled,
   });
   if (policy !== "allowlist") {
+    return { policy, entries: [] };
+  }
+  if (params.skipAllowlistEntries) {
     return { policy, entries: [] };
   }
   const entries = await promptChannelAllowlist({

@@ -251,7 +251,7 @@ export function createDiscordSetupWizardProxy(
         prompter: { note: (message: string, title?: string) => Promise<void> };
       }) => {
         const wizard = (await loadWizard()).discordSetupWizard;
-        if (!wizard.groupAccess) {
+        if (!wizard.groupAccess?.resolveAllowlist) {
           return entries.map((input) => ({ input, resolved: false }));
         }
         try {

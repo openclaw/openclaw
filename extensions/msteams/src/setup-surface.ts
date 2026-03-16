@@ -1,5 +1,4 @@
 import type { ChannelOnboardingDmPolicy } from "../../../src/channels/plugins/onboarding-types.js";
-import { promptChannelAccessConfig } from "../../../src/channels/plugins/onboarding/channel-access.js";
 import {
   mergeAllowFromEntries,
   setTopLevelChannelAllowFrom,
@@ -191,6 +190,96 @@ function setMSTeamsTeamsAllowlist(
   };
 }
 
+function listMSTeamsGroupEntries(cfg: OpenClawConfig): string[] {
+  return Object.entries(cfg.channels?.msteams?.teams ?? {}).flatMap(([teamKey, value]) => {
+    const channels = value?.channels ?? {};
+    const channelKeys = Object.keys(channels);
+    if (channelKeys.length === 0) {
+      return [teamKey];
+    }
+    return channelKeys.map((channelKey) => `${teamKey}/${channelKey}`);
+  });
+}
+
+async function resolveMSTeamsGroupAllowlist(params: {
+  cfg: OpenClawConfig;
+  entries: string[];
+  prompter: Pick<WizardPrompter, "note">;
+}): Promise<Array<{ teamKey: string; channelKey?: string }>> {
+  let resolvedEntries = params.entries
+    .map((entry) => parseMSTeamsTeamEntry(entry))
+    .filter(Boolean) as Array<{ teamKey: string; channelKey?: string }>;
+  if (params.entries.length === 0 || !resolveMSTeamsCredentials(params.cfg.channels?.msteams)) {
+    return resolvedEntries;
+  }
+  try {
+    const lookups = await resolveMSTeamsChannelAllowlist({
+      cfg: params.cfg,
+      entries: params.entries,
+    });
+    const resolvedChannels = lookups.filter(
+      (entry) => entry.resolved && entry.teamId && entry.channelId,
+    );
+    const resolvedTeams = lookups.filter(
+      (entry) => entry.resolved && entry.teamId && !entry.channelId,
+    );
+    const unresolved = lookups.filter((entry) => !entry.resolved).map((entry) => entry.input);
+    resolvedEntries = [
+      ...resolvedChannels.map((entry) => ({
+        teamKey: entry.teamId as string,
+        channelKey: entry.channelId as string,
+      })),
+      ...resolvedTeams.map((entry) => ({
+        teamKey: entry.teamId as string,
+      })),
+      ...unresolved.map((entry) => parseMSTeamsTeamEntry(entry)).filter(Boolean),
+    ] as Array<{ teamKey: string; channelKey?: string }>;
+    const summary: string[] = [];
+    if (resolvedChannels.length > 0) {
+      summary.push(
+        `Resolved channels: ${resolvedChannels
+          .map((entry) => entry.channelId)
+          .filter(Boolean)
+          .join(", ")}`,
+      );
+    }
+    if (resolvedTeams.length > 0) {
+      summary.push(
+        `Resolved teams: ${resolvedTeams
+          .map((entry) => entry.teamId)
+          .filter(Boolean)
+          .join(", ")}`,
+      );
+    }
+    if (unresolved.length > 0) {
+      summary.push(`Unresolved (kept as typed): ${unresolved.join(", ")}`);
+    }
+    if (summary.length > 0) {
+      await params.prompter.note(summary.join("\n"), "MS Teams channels");
+    }
+    return resolvedEntries;
+  } catch (err) {
+    await params.prompter.note(
+      `Channel lookup failed; keeping entries as typed. ${String(err)}`,
+      "MS Teams channels",
+    );
+    return resolvedEntries;
+  }
+}
+
+const msteamsGroupAccess: NonNullable<ChannelSetupWizard["groupAccess"]> = {
+  label: "MS Teams channels",
+  placeholder: "Team Name/Channel Name, teamId/conversationId",
+  currentPolicy: ({ cfg }) => cfg.channels?.msteams?.groupPolicy ?? "allowlist",
+  currentEntries: ({ cfg }) => listMSTeamsGroupEntries(cfg),
+  updatePrompt: ({ cfg }) => Boolean(cfg.channels?.msteams?.teams),
+  setPolicy: ({ cfg, policy }) => setMSTeamsGroupPolicy(cfg, policy),
+  resolveAllowlist: async ({ cfg, entries, prompter }) =>
+    await resolveMSTeamsGroupAllowlist({ cfg, entries, prompter }),
+  applyAllowlist: ({ cfg, resolved }) =>
+    setMSTeamsTeamsAllowlist(cfg, resolved as Array<{ teamKey: string; channelKey?: string }>),
+};
+
 const msteamsDmPolicy: ChannelOnboardingDmPolicy = {
   label: "MS Teams",
   channel,
@@ -290,96 +379,10 @@ export const msteamsSetupWizard: ChannelSetupWizard = {
       };
     }
 
-    const currentEntries = Object.entries(next.channels?.msteams?.teams ?? {}).flatMap(
-      ([teamKey, value]) => {
-        const channels = value?.channels ?? {};
-        const channelKeys = Object.keys(channels);
-        if (channelKeys.length === 0) {
-          return [teamKey];
-        }
-        return channelKeys.map((channelKey) => `${teamKey}/${channelKey}`);
-      },
-    );
-    const accessConfig = await promptChannelAccessConfig({
-      prompter,
-      label: "MS Teams channels",
-      currentPolicy: next.channels?.msteams?.groupPolicy ?? "allowlist",
-      currentEntries,
-      placeholder: "Team Name/Channel Name, teamId/conversationId",
-      updatePrompt: Boolean(next.channels?.msteams?.teams),
-    });
-    if (accessConfig) {
-      if (accessConfig.policy !== "allowlist") {
-        next = setMSTeamsGroupPolicy(next, accessConfig.policy);
-      } else {
-        let entries = accessConfig.entries
-          .map((entry) => parseMSTeamsTeamEntry(entry))
-          .filter(Boolean) as Array<{ teamKey: string; channelKey?: string }>;
-        if (accessConfig.entries.length > 0 && resolveMSTeamsCredentials(next.channels?.msteams)) {
-          try {
-            const resolvedEntries = await resolveMSTeamsChannelAllowlist({
-              cfg: next,
-              entries: accessConfig.entries,
-            });
-            const resolvedChannels = resolvedEntries.filter(
-              (entry) => entry.resolved && entry.teamId && entry.channelId,
-            );
-            const resolvedTeams = resolvedEntries.filter(
-              (entry) => entry.resolved && entry.teamId && !entry.channelId,
-            );
-            const unresolved = resolvedEntries
-              .filter((entry) => !entry.resolved)
-              .map((entry) => entry.input);
-
-            entries = [
-              ...resolvedChannels.map((entry) => ({
-                teamKey: entry.teamId as string,
-                channelKey: entry.channelId as string,
-              })),
-              ...resolvedTeams.map((entry) => ({
-                teamKey: entry.teamId as string,
-              })),
-              ...unresolved.map((entry) => parseMSTeamsTeamEntry(entry)).filter(Boolean),
-            ] as Array<{ teamKey: string; channelKey?: string }>;
-
-            if (resolvedChannels.length > 0 || resolvedTeams.length > 0 || unresolved.length > 0) {
-              const summary: string[] = [];
-              if (resolvedChannels.length > 0) {
-                summary.push(
-                  `Resolved channels: ${resolvedChannels
-                    .map((entry) => entry.channelId)
-                    .filter(Boolean)
-                    .join(", ")}`,
-                );
-              }
-              if (resolvedTeams.length > 0) {
-                summary.push(
-                  `Resolved teams: ${resolvedTeams
-                    .map((entry) => entry.teamId)
-                    .filter(Boolean)
-                    .join(", ")}`,
-                );
-              }
-              if (unresolved.length > 0) {
-                summary.push(`Unresolved (kept as typed): ${unresolved.join(", ")}`);
-              }
-              await prompter.note(summary.join("\n"), "MS Teams channels");
-            }
-          } catch (err) {
-            await prompter.note(
-              `Channel lookup failed; keeping entries as typed. ${String(err)}`,
-              "MS Teams channels",
-            );
-          }
-        }
-        next = setMSTeamsGroupPolicy(next, "allowlist");
-        next = setMSTeamsTeamsAllowlist(next, entries);
-      }
-    }
-
     return { cfg: next, accountId: DEFAULT_ACCOUNT_ID };
   },
   dmPolicy: msteamsDmPolicy,
+  groupAccess: msteamsGroupAccess,
   disable: (cfg) => ({
     ...cfg,
     channels: {

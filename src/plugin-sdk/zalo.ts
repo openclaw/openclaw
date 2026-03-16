@@ -15,7 +15,6 @@ export {
   buildSingleChannelSecretPromptState,
   addWildcardAllowFrom,
   mergeAllowFromEntries,
-  promptAccountId,
   promptSingleChannelSecretInput,
   runSingleChannelSecretStep,
   setTopLevelChannelDmPolicyWithAllowFrom,
