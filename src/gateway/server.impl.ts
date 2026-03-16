@@ -51,7 +51,6 @@ import {
 import { runSetupWizard } from "../wizard/setup.js";
 import { createAuthRateLimiter, type AuthRateLimiter } from "./auth-rate-limit.js";
 import { startChannelHealthMonitor } from "./channel-health-monitor.js";
-import type { ControlUiRootState } from "./control-ui.js";
 import {
   GATEWAY_EVENT_UPDATE_AVAILABLE,
   type GatewayUpdateAvailableEventPayload,
@@ -407,6 +406,8 @@ export async function startGatewayServer(
     auth: opts.auth,
     tailscale: opts.tailscale,
   });
+  // Persist runtime-derived startup data so later phases/tests can assert phase outputs explicitly.
+  startupContext = { ...startupContext, runtimeConfig };
   const {
     bindHost,
     controlUiEnabled,
@@ -430,19 +431,19 @@ export async function startGatewayServer(
   const { rateLimiter: authRateLimiter, browserRateLimiter: browserAuthRateLimiter } =
     createGatewayAuthRateLimiters(rateLimitConfig);
 
-  const controlUiRootState: ControlUiRootState | undefined = await resolveGatewayControlUiRootState(
-    {
-      controlUiEnabled,
-      controlUiRootOverride,
-      gatewayRuntime,
-      log,
-      runtimePathContext: {
-        moduleUrl: import.meta.url,
-        argv1: process.argv[1],
-        cwd: process.cwd(),
-      },
+  const controlUiRootState = await resolveGatewayControlUiRootState({
+    controlUiEnabled,
+    controlUiRootOverride,
+    gatewayRuntime,
+    log,
+    runtimePathContext: {
+      moduleUrl: import.meta.url,
+      argv1: process.argv[1],
+      cwd: process.cwd(),
     },
-  );
+  });
+  // Keep resolved control-ui startup state in the shared context for deterministic phase tracking.
+  startupContext = { ...startupContext, controlUiRootState };
 
   const wizardRunner = opts.wizardRunner ?? runSetupWizard;
   const { wizardSessions, findRunningWizard, purgeWizardSession } = createWizardSessionTracker();
