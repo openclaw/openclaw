@@ -865,6 +865,7 @@ export function loadCombinedSessionStoreForGateway(cfg: OpenClawConfig): {
         canonicalKey,
       });
     }
+    ensureMainSessionKey(cfg, combined);
     return { storePath, store: combined };
   }
 

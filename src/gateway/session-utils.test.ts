@@ -1738,4 +1738,28 @@ describe("listSessionsFromStore returns agent:main:main (#45754)", () => {
       );
     });
   });
+
+  test("agent:main:main included when sessions.json does not exist yet", async () => {
+    await withStateDirEnv("openclaw-no-store-file-", async ({ stateDir }) => {
+      const agentsDir = path.join(stateDir, "agents");
+      const mainDir = path.join(agentsDir, "main", "sessions");
+      // Create directory structure but do NOT create sessions.json
+      fs.mkdirSync(mainDir, { recursive: true });
+
+      const cfg = {
+        session: {
+          mainKey: "main",
+          store: path.join(stateDir, "agents", "{agentId}", "sessions", "sessions.json"),
+        },
+        agents: {
+          list: [{ id: "main", default: true }],
+        },
+      } as OpenClawConfig;
+
+      const { store } = loadCombinedSessionStoreForGateway(cfg);
+
+      // agent:main:main must be present even when store file does not exist
+      expect(store["agent:main:main"]).toBeDefined();
+    });
+  });
 });
