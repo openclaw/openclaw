@@ -107,6 +107,8 @@ export const translations = {
     executing: "Executing...",
     recentVersions: "Recent Versions",
     noCheckpointHistory: "No checkpoint history",
+    queryViaChat: "Query via chat",
+    checkpointHistoryUnavailableHint: "The current gateway does not support reading checkpoint history directly. Use the button in the top-right to query recent versions through the chat flow.",
     restoreToThisVersion: "Restore to this version",
 
     // Time formatting

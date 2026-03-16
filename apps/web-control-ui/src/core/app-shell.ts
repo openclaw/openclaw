@@ -2,7 +2,7 @@ import { LitElement, html, css } from "lit";
 import { customElement, state } from "lit/decorators.js";
 import { AppState } from "./app-state";
 import type { AppMode, UsageVariant } from "./types";
-import { type Language, getTranslation } from "./i18n";
+import { type Language, getTranslation, detectBrowserLanguage } from "./i18n";
 import { loadLanguagePreference } from "../product/storage";
 
 @customElement("app-shell")
@@ -94,7 +94,7 @@ export class AppShell extends LitElement {
 
   connectedCallback(): void {
     super.connectedCallback();
-    this.language = loadLanguagePreference();
+    this.language = loadLanguagePreference() ?? detectBrowserLanguage();
     this.mode = this.appState.mode;
     this.variant = this.appState.variant;
     this.unsubscribe = this.appState.subscribe(() => {

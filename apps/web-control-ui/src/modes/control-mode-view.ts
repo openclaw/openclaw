@@ -36,6 +36,46 @@ type ChatEventPayload = {
   errorMessage?: string;
 };
 
+type BoundTarget = {
+  agentId: string;
+  sessionKey: string;
+};
+
+const BOUND_TARGET_STORAGE_KEY = "web-control-ui.bound-target";
+
+function loadBoundTarget(): BoundTarget | null {
+  try {
+    const raw = localStorage.getItem(BOUND_TARGET_STORAGE_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as Partial<BoundTarget>;
+    const agentId = typeof parsed.agentId === "string" ? parsed.agentId.trim() : "";
+    const sessionKey = typeof parsed.sessionKey === "string" ? parsed.sessionKey.trim() : "";
+    if (!agentId && !sessionKey) return null;
+    return {
+      agentId: agentId || "testui",
+      sessionKey: sessionKey || "main",
+    };
+  } catch {
+    return null;
+  }
+}
+
+function saveBoundTarget(target: BoundTarget) {
+  try {
+    localStorage.setItem(BOUND_TARGET_STORAGE_KEY, JSON.stringify(target));
+  } catch {
+    // ignore persistence errors
+  }
+}
+
+function clearBoundTarget() {
+  try {
+    localStorage.removeItem(BOUND_TARGET_STORAGE_KEY);
+  } catch {
+    // ignore persistence errors
+  }
+}
+
 @customElement("control-mode-view")
 export class ControlModeView extends LitElement {
   static styles = css`
@@ -409,9 +449,11 @@ export class ControlModeView extends LitElement {
   private client: GatewayBrowserClient | null = null;
   private appState = AppState.getInstance();
   private unsubscribeAppState?: () => void;
+  private awaitingCheckpointHistoryFromChat = false;
 
   @state() gatewayUrl = defaultGatewayUrl();
   @state() gatewayToken = "";
+  @state() targetAgentId = "testui";
   @state() sessionKey = "main";
   @state() connectionState: ConnectionState = "idle";
   @state() hello: GatewayHelloOk | null = null;
@@ -436,6 +478,7 @@ export class ControlModeView extends LitElement {
   @state() checkpointName = "before-change";
   @state() restoreRef = "checkpoint/web-control-ui-YYYYMMDD-HHMMSS-before-change";
   @state() currentUsageVariant: UsageVariant = "native";
+  @state() sessionSearch = "";
   @state() sessionsLoading = false;
   @state() sessionsError: string | null = null;
   @state() sessionRows: SessionRow[] = [];
@@ -458,6 +501,14 @@ export class ControlModeView extends LitElement {
     this.preferenceMemory = loaded;
     this.preferenceDraft = toDraft(loaded);
     this.gatewayToken = loadInitialGatewayToken();
+    const savedBoundTarget = loadBoundTarget();
+    if (savedBoundTarget) {
+      this.boundTarget = savedBoundTarget;
+      this.targetAgentId = savedBoundTarget.agentId;
+      this.sessionKey = savedBoundTarget.sessionKey.startsWith("agent:")
+        ? savedBoundTarget.sessionKey.split(":").slice(2).join(":") || "main"
+        : savedBoundTarget.sessionKey;
+    }
     this.currentUsageVariant = this.appState.variant;
     this.unsubscribeAppState = this.appState.subscribe(() => {
       this.currentUsageVariant = this.appState.variant;
@@ -496,7 +547,7 @@ export class ControlModeView extends LitElement {
     this.chatLoading = true;
     try {
       const result = await this.client.request<{ messages?: unknown[] }>("chat.history", {
-        sessionKey: this.sessionKey,
+        sessionKey: this.getNormalizedSessionKey(),
         limit: 100,
       });
       const messages = Array.isArray(result.messages) ? result.messages : [];
@@ -544,6 +595,56 @@ export class ControlModeView extends LitElement {
     }
   }
 
+  private getNormalizedSessionKey(): string {
+    const normalized = this.sessionKey.trim();
+    return normalized || "main";
+  }
+
+  private getBoundTarget(): BoundTarget {
+    const bound = this.boundTarget ?? { agentId: "", sessionKey: "" };
+    const agentId = bound.agentId.trim() || this.targetAgentId.trim() || "testui";
+    const rawSessionKey = bound.sessionKey.trim() || this.getNormalizedSessionKey();
+    const sessionKey = rawSessionKey.startsWith("agent:") ? rawSessionKey : `agent:${agentId}:${rawSessionKey}`;
+    return {
+      agentId,
+      sessionKey,
+    };
+  }
+
+  private bindCurrentTarget() {
+    this.boundTarget = {
+      agentId: this.targetAgentId.trim() || "testui",
+      sessionKey: this.getNormalizedSessionKey(),
+    };
+    saveBoundTarget(this.boundTarget);
+    this.errorMessage = null;
+    this.chatMessages = [];
+    this.chatStream = "";
+    this.chatRunId = null;
+    this.awaitingCheckpointHistoryFromChat = false;
+    this.checkpointHistoryLoading = false;
+    void this.loadChatHistory();
+  }
+
+  private unbindCurrentTarget() {
+    this.boundTarget = { agentId: "testui", sessionKey: "main" };
+    this.targetAgentId = "testui";
+    this.sessionKey = "main";
+    clearBoundTarget();
+    this.errorMessage = null;
+    this.chatMessages = [];
+    this.chatStream = "";
+    this.chatRunId = null;
+    this.awaitingCheckpointHistoryFromChat = false;
+    this.checkpointHistoryLoading = false;
+    void this.loadChatHistory();
+  }
+
+  private getExpectedSessionKeys(): string[] {
+    const bound = this.getBoundTarget();
+    return [bound.sessionKey];
+  }
+
   private async switchSession(nextSessionKey: string) {
     if (!nextSessionKey || nextSessionKey === this.sessionKey) {
       return;
@@ -557,7 +658,8 @@ export class ControlModeView extends LitElement {
   }
 
   private handleChatEvent(payload?: ChatEventPayload) {
-    if (!payload || payload.sessionKey !== this.sessionKey) {
+    const expectedSessionKeys = this.getExpectedSessionKeys();
+    if (!payload || !expectedSessionKeys.includes(payload.sessionKey)) {
       return;
     }
     if (payload.runId && this.chatRunId && payload.runId !== this.chatRunId && payload.state !== "final") {
@@ -577,6 +679,14 @@ export class ControlModeView extends LitElement {
           { role: "assistant", text, timestamp: Date.now(), kind: inferMessageKind(text, "assistant") },
         ];
       }
+      if (this.awaitingCheckpointHistoryFromChat) {
+        this.checkpointHistory = this.parseCheckpointHistory(text);
+        if (this.checkpointHistory.length > 0) {
+          this.restoreRef = this.checkpointHistory[0].ref;
+        }
+        this.checkpointHistoryLoading = false;
+        this.awaitingCheckpointHistoryFromChat = false;
+      }
       this.chatStream = "";
       this.chatRunId = null;
       this.chatSending = false;
@@ -595,6 +705,14 @@ export class ControlModeView extends LitElement {
           },
         ];
       }
+      if (this.awaitingCheckpointHistoryFromChat) {
+        this.checkpointHistory = this.parseCheckpointHistory(this.chatStream);
+        if (this.checkpointHistory.length > 0) {
+          this.restoreRef = this.checkpointHistory[0].ref;
+        }
+        this.checkpointHistoryLoading = false;
+        this.awaitingCheckpointHistoryFromChat = false;
+      }
       this.chatStream = "";
       this.chatRunId = null;
       this.chatSending = false;
@@ -603,6 +721,10 @@ export class ControlModeView extends LitElement {
 
     if (payload.state === "error") {
       this.errorMessage = payload.errorMessage ?? "chat error";
+      if (this.awaitingCheckpointHistoryFromChat) {
+        this.checkpointHistoryLoading = false;
+        this.awaitingCheckpointHistoryFromChat = false;
+      }
       this.chatStream = "";
       this.chatRunId = null;
       this.chatSending = false;
@@ -633,7 +755,11 @@ export class ControlModeView extends LitElement {
         void this.loadSummaries();
         void this.loadSessionsList();
         void this.loadChatHistory();
-        void this.loadCheckpointHistory();
+        if (this.supportsGatewayMethod("shell.exec")) {
+          void this.loadCheckpointHistory();
+        } else {
+          this.checkpointHistory = [];
+        }
       },
       onClose: ({ code, reason, error }) => {
         if (this.client !== client) {
@@ -665,6 +791,7 @@ export class ControlModeView extends LitElement {
       return;
     }
     const runId = crypto.randomUUID();
+    const bound = this.getBoundTarget();
     this.chatMessages = [
       ...this.chatMessages,
       { role: "user", text: userText, timestamp: Date.now(), kind: "reply" },
@@ -674,7 +801,7 @@ export class ControlModeView extends LitElement {
     this.chatSending = true;
     try {
       await this.client.request("chat.send", {
-        sessionKey: this.sessionKey,
+        sessionKey: bound.sessionKey,
         message: outbound,
         deliver: false,
         idempotencyKey: runId,
@@ -731,11 +858,45 @@ export class ControlModeView extends LitElement {
   private async triggerListCheckpoints() {
     const userText = "查看最近 checkpoint";
     const outbound = `${this.promptDraft.trim()}\n\n请不要修改页面代码，只执行查询：在 openclaw-src 仓库根目录运行\n\npwsh ./scripts/web-control-ui-list-checkpoints.ps1\n\n最后只回复最近的 checkpoint ref 列表（每行一个），如果没有则明确说当前为空。`;
+    this.checkpointHistoryLoading = true;
+    this.awaitingCheckpointHistoryFromChat = true;
     await this.sendRawMessage(userText, outbound);
+  }
+
+  private supportsGatewayMethod(method: string): boolean {
+    return this.hello?.features?.methods?.includes(method) ?? false;
+  }
+
+  private parseCheckpointHistory(output: string): Array<{ ref: string; timestamp: Date; name: string }> {
+    const lines = output
+      .split("\n")
+      .map((line) => line.trim())
+      .filter(Boolean)
+      .map((line) => line.replace(/^[-*•\d.\s`]+/, "").replace(/`/g, "").trim());
+    return lines
+      .map((ref) => {
+        const match = ref.match(/checkpoint\/web-control-ui-(\d{8})-(\d{6})-(.+)$/);
+        if (!match) return null;
+        const [, dateStr, timeStr, name] = match;
+        const year = parseInt(dateStr.slice(0, 4), 10);
+        const month = parseInt(dateStr.slice(4, 6), 10) - 1;
+        const day = parseInt(dateStr.slice(6, 8), 10);
+        const hour = parseInt(timeStr.slice(0, 2), 10);
+        const minute = parseInt(timeStr.slice(2, 4), 10);
+        const second = parseInt(timeStr.slice(4, 6), 10);
+        const timestamp = new Date(year, month, day, hour, minute, second);
+        return { ref, timestamp, name };
+      })
+      .filter((item): item is { ref: string; timestamp: Date; name: string } => item !== null);
   }
 
   private async loadCheckpointHistory() {
     if (!this.client || this.connectionState !== "connected") {
+      return;
+    }
+    if (!this.supportsGatewayMethod("shell.exec")) {
+      this.checkpointHistory = [];
+      this.checkpointHistoryLoading = false;
       return;
     }
     this.checkpointHistoryLoading = true;
@@ -746,23 +907,10 @@ export class ControlModeView extends LitElement {
         cwd: "C:\\Users\\24045\\clawd\\openclaw-src",
       });
       const output = result.output ?? "";
-      const lines = output.split("\n").map(line => line.trim()).filter(Boolean);
-      const parsed = lines
-        .map(ref => {
-          const match = ref.match(/checkpoint\/web-control-ui-(\d{8})-(\d{6})-(.+)$/);
-          if (!match) return null;
-          const [, dateStr, timeStr, name] = match;
-          const year = parseInt(dateStr.slice(0, 4), 10);
-          const month = parseInt(dateStr.slice(4, 6), 10) - 1;
-          const day = parseInt(dateStr.slice(6, 8), 10);
-          const hour = parseInt(timeStr.slice(0, 2), 10);
-          const minute = parseInt(timeStr.slice(2, 4), 10);
-          const second = parseInt(timeStr.slice(4, 6), 10);
-          const timestamp = new Date(year, month, day, hour, minute, second);
-          return { ref, timestamp, name };
-        })
-        .filter((item): item is { ref: string; timestamp: Date; name: string } => item !== null);
-      this.checkpointHistory = parsed;
+      this.checkpointHistory = this.parseCheckpointHistory(output);
+      if (this.checkpointHistory.length > 0) {
+        this.restoreRef = this.checkpointHistory[0].ref;
+      }
     } catch (error) {
       this.errorMessage = `${this.t("loadCheckpointError")}：${String(error)}`;
     } finally {
@@ -802,6 +950,24 @@ export class ControlModeView extends LitElement {
       minute: "2-digit",
       hour12: false
     });
+  }
+
+  private useLatestCheckpoint() {
+    const latest = this.checkpointHistory[0];
+    if (!latest) {
+      return;
+    }
+    this.restoreRef = latest.ref;
+    this.errorMessage = null;
+  }
+
+  private async restoreLatestCheckpoint() {
+    const latest = this.checkpointHistory[0];
+    if (!latest) {
+      return;
+    }
+    this.restoreRef = latest.ref;
+    await this.triggerRestore();
   }
 
   private async restoreToCheckpoint(ref: string) {
@@ -988,6 +1154,7 @@ export class ControlModeView extends LitElement {
                   <span class="tag">CONTROL 面板</span>
                   <span class="tag">当前使用态：${this.usageVariantLabel(this.currentUsageVariant)}</span>
                   <span class="tag">ACP：${this.acpRuntimeStatus()}</span>
+                  <span class="tag">绑定目标：${this.getBoundTarget().agentId} / ${this.getBoundTarget().sessionKey}</span>
                 </div>
                 <div class="inline-actions">
                   <button class="secondary compact-button" type="button" @click=${() => this.setUsageVariant("native")}>Native</button>
@@ -1024,17 +1191,32 @@ export class ControlModeView extends LitElement {
                 />
               </div>
               <div class="field">
+                <label>Target Agent</label>
+                <input
+                  .value=${this.targetAgentId}
+                  @input=${(event: InputEvent) => {
+                    const value = (event.target as HTMLInputElement).value;
+                    this.targetAgentId = value.trim() ? value.trim() : "testui";
+                  }}
+                  placeholder="testui"
+                />
+              </div>
+              <div class="field">
                 <label>Session Key</label>
                 <input
                   .value=${this.sessionKey}
                   @input=${(event: InputEvent) => {
-                    this.sessionKey = (event.target as HTMLInputElement).value;
-                  }}
+                    const value = (event.target as HTMLInputElement).value;
+                    this.sessionKey = value.trim() ? value : "main";
+            }}
                   placeholder="main"
                 />
               </div>
+              <button class="secondary" type="button" @click=${() => this.bindCurrentTarget()}>绑定当前目标</button>
+              <button class="secondary" type="button" @click=${() => this.unbindCurrentTarget()}>解绑当前目标</button>
               <button type="submit">连接 Gateway</button>
             </form>
+            <p class="subtitle" style="margin-top: 12px;">当前绑定工作区：${this.getBoundTarget().agentId} → ${this.getBoundTarget().sessionKey}</p>
           </section>
 
           <section class="panel">
@@ -1056,7 +1238,7 @@ export class ControlModeView extends LitElement {
             <h2>Frontend Prompt Workspace</h2>
             <p class="subtitle">核心不是协议，而是一份能持续迭代的前端提示词。这里就是提示词工作台。</p>
             <div class="prompt-block">
-              <span class="label">当前前端提示词</span>
+              <span class="labs="label">当前前端提示词</span>
               <textarea
                 .value=${this.promptDraft}
                 @input=${(event: InputEvent) => {
@@ -1196,7 +1378,7 @@ export class ControlModeView extends LitElement {
                   .value=${this.chatInput}
                   @input=${(event: InputEvent) => {
                     this.chatInput = (event.target as HTMLTextAreaElement).value;
-                  }}
+            }}
                   placeholder="例如：把某个 agent 会话打开出来，并且让左侧能快速切换所有子会话。"
                 ></textarea>
                 <div class="chat-actions">
@@ -1209,11 +1391,11 @@ export class ControlModeView extends LitElement {
 
             <div class="section-stack">
               <section class="panel">
-                <h2>Session Browser</h2>
+                      <h2>Session Browser</h2>
                 <p class="subtitle">打开每个 agent / session 的入口。点一下就切到对应会话并刷新聊天记录。</p>
                 <div class="memory-actions" style="margin-bottom: 12px; justify-content: space-between;">
                   <div class="muted">当前会话：${this.sessionKey}</div>
-                  <button class="secondary" type="button" @click=${() => this.loadSessionsList()} ?disabled=${this.sessionsLoading}>${this.sessionsLoading ? "刷新中..." : "刷新会话列表"}</button>
+                  <button class="secondary" type="button" @click=${() => this.loadSessionsList()} led=${this.sessionsLoading}>${this.sessionsLoading ? "刷新中..." : "刷新会话列表"}</button>
                 </div>
                 ${this.sessionsError ? html`<p style="margin-bottom:12px;color:#fca5a5;">${this.sessionsError}</p>` : null}
                 <div class="memory-item" style="margin-bottom: 12px;">
@@ -1283,7 +1465,7 @@ export class ControlModeView extends LitElement {
                         modules: (event.target as HTMLInputElement).value,
                       };
                     }}
-                  />
+                        />
                   ${this.renderTags(this.preferenceMemory.modules)}
                 </div>
                 <div class="memory-item" style="margin-top: 12px;">
@@ -1353,7 +1535,10 @@ export class ControlModeView extends LitElement {
                 </div>
                 <div class="memory-actions" style="margin-top: 12px;">
                   <button class="secondary" type="button" @click=${() => this.triggerRestore()} ?disabled=${this.chatSending}>${this.chatSending ? this.t("executing") : this.t("restoreCheckpoint")}</button>
+                  <button class="secondary" type="button" @click=${() => this.useLatestCheckpoint()} ?disabled=${this.chatSending || this.checkpointHistory.length === 0}>使用最新 checkpoint</button>
+                  <button type="button" @click=${() => this.restoreLatestCheckpoint()} ?disabled=${this.chatSending || this.checkpointHistory.length === 0}>恢复最新 checkpoint</button>
                 </div>
+                <p class="muted" style="margin-top: 8px;">当前准备恢复到：${this.restoreRef || "（未选择）"}</p>
 
                 <div style="margin-top: 24px; padding-top: 24px; border-top: 1px solid rgba(148, 163, 184, 0.18);">
                   <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
@@ -1361,13 +1546,17 @@ export class ControlModeView extends LitElement {
                     <button
                       class="secondary"
                       type="button"
-                      @click=${() => this.loadCheckpointHistory()}
-                      ?disabled=${this.checkpointHistoryLoading}
+                      @click=${() => this.supportsGatewayMethod("shell.exec") ? this.loadCheckpointHistory() : this.triggerListCheckpoints()}
+                      ?disabled=${this.checkpointHistoryLoading || this.chatSending}
                       style="padding: 6px 12px; font-size: 13px;"
                     >
-                      ${this.checkpointHistoryLoading ? this.t("loading") : this.t("refresh")}
+                      ${this.checkpointHistoryLoading ? this.t("loading") : this.supportsGatewayMethod("shell.exec") ? this.t("refresh") : "通过对话查询"}
                     </button>
                   </div>
+
+                  ${!this.supportsGatewayMethod("shell.exec")
+                    ? html`<p class="muted" style="text-align: center; padding: 8px 0 20px;">${this.t("checkpointHistoryUnavailableHint")}</p>`
+                    : null}
 
                   ${this.checkpointHistory.length === 0 && !this.checkpointHistoryLoading
                     ? html`<p class="muted" style="text-align: center; padding: 20px 0;">${this.t("noCheckpointHistory")}</p>`
@@ -1488,6 +1677,4 @@ export class ControlModeView extends LitElement {
     `;
   }
 }
-
-
 
