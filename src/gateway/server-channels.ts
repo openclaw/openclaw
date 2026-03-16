@@ -14,6 +14,11 @@ import {
   normalizeOptionalAccountId,
 } from "../routing/session-key.js";
 import type { RuntimeEnv } from "../runtime.js";
+import {
+  DEFAULT_CHANNEL_CONNECT_GRACE_MS,
+  DEFAULT_CHANNEL_STALE_EVENT_THRESHOLD_MS,
+  isChannelOperational,
+} from "./channel-health-policy.js";
 
 const CHANNEL_RESTART_POLICY: BackoffPolicy = {
   initialMs: 5_000,
@@ -77,6 +82,11 @@ type ChannelManagerOptions = {
   loadConfig: () => OpenClawConfig;
   channelLogs: Record<ChannelId, SubsystemLogger>;
   channelRuntimeEnvs: Record<ChannelId, RuntimeEnv>;
+  onChannelRecovered?: (params: {
+    channelId: ChannelId;
+    accountId: string;
+    snapshot: ChannelAccountSnapshot;
+  }) => void | Promise<void>;
   /**
    * Optional channel runtime helpers for external channel plugins.
    *
@@ -135,8 +145,14 @@ export type ChannelManager = {
 
 // Channel docking: lifecycle hooks (`plugin.gateway`) flow through this manager.
 export function createChannelManager(opts: ChannelManagerOptions): ChannelManager {
-  const { loadConfig, channelLogs, channelRuntimeEnvs, channelRuntime, resolveChannelRuntime } =
-    opts;
+  const {
+    loadConfig,
+    channelLogs,
+    channelRuntimeEnvs,
+    channelRuntime,
+    resolveChannelRuntime,
+    onChannelRecovered,
+  } = opts;
 
   const channelStores = new Map<ChannelId, ChannelRuntimeStore>();
   // Tracks restart attempts per channel:account. Reset on successful start.
@@ -227,6 +243,25 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
     const current = getRuntime(channelId, accountId);
     const next = { ...current, ...patch, accountId };
     store.runtimes.set(accountId, next);
+    const now = Date.now();
+    const healthPolicy = {
+      channelId,
+      now,
+      channelConnectGraceMs: DEFAULT_CHANNEL_CONNECT_GRACE_MS,
+      staleEventThresholdMs: DEFAULT_CHANNEL_STALE_EVENT_THRESHOLD_MS,
+    } as const;
+    const reconnected = current.connected === false && next.connected === true;
+    const becameOperational =
+      !isChannelOperational(current, healthPolicy) && isChannelOperational(next, healthPolicy);
+    if (reconnected || becameOperational) {
+      void Promise.resolve(onChannelRecovered?.({ channelId, accountId, snapshot: next })).catch(
+        (err) => {
+          channelLogs[channelId].warn?.(
+            `[${accountId}] channel recovery hook failed: ${formatErrorMessage(err)}`,
+          );
+        },
+      );
+    }
     return next;
   };
 

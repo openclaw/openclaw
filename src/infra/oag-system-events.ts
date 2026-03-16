@@ -26,10 +26,12 @@ const MAX_NOTE_LENGTH = 96;
 const OAG_STATE_LOCK_SUFFIX = ".lock";
 const OAG_STATE_LOCK_RETRY_MS = 25;
 const OAG_STATE_LOCK_TIMEOUT_MS = 2_000;
+const OAG_STATE_LOCK_STALE_MS = 30_000;
+const OAG_STATE_LOCK_PID_FILE = "pid";
 
 function resolveLocalizedOagMessage(note: OagPendingUserNote, language?: "zh-Hans" | "en"): string {
   const fallback = String(note.message ?? "").trim();
-  if (language !== "en") {
+  if (language === "zh-Hans") {
     return fallback;
   }
   switch (note.action) {
@@ -59,6 +61,30 @@ async function sleep(ms: number): Promise<void> {
   await new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+async function isLockStale(lockPath: string): Promise<boolean> {
+  const pidPath = path.join(lockPath, OAG_STATE_LOCK_PID_FILE);
+  try {
+    const content = await fs.readFile(pidPath, "utf8");
+    const pid = Number.parseInt(content.trim(), 10);
+    if (Number.isNaN(pid) || pid <= 0) {
+      return true;
+    }
+    try {
+      // Signal 0 checks if the process exists without sending a signal.
+      process.kill(pid, 0);
+      // Process exists — check lock age as a fallback safety net.
+      const stat = await fs.stat(pidPath);
+      return Date.now() - stat.mtimeMs > OAG_STATE_LOCK_STALE_MS;
+    } catch {
+      // Process does not exist — lock is stale.
+      return true;
+    }
+  } catch {
+    // No PID file — treat as stale (legacy lock from before this fix).
+    return true;
+  }
+}
+
 async function withOagStateLock<T>(statePath: string, fn: () => Promise<T>): Promise<T> {
   const lockPath = `${statePath}${OAG_STATE_LOCK_SUFFIX}`;
   await fs.mkdir(path.dirname(lockPath), { recursive: true });
@@ -72,11 +98,21 @@ async function withOagStateLock<T>(statePath: string, fn: () => Promise<T>): Pro
       if (code !== "EEXIST") {
         throw error;
       }
+      if (await isLockStale(lockPath)) {
+        await fs.rm(lockPath, { recursive: true, force: true });
+        continue;
+      }
       if (Date.now() >= deadline) {
         throw new Error(`timed out acquiring OAG state lock for ${statePath}`, { cause: error });
       }
       await sleep(OAG_STATE_LOCK_RETRY_MS);
     }
+  }
+  // Write PID file so other processes can detect stale locks.
+  try {
+    await fs.writeFile(path.join(lockPath, OAG_STATE_LOCK_PID_FILE), String(process.pid), "utf8");
+  } catch {
+    // Best-effort — the lock itself is still held via the directory.
   }
   try {
     return await fn();
@@ -172,21 +208,20 @@ export async function consumePendingOagSystemNotes(sessionKey: string): Promise<
   if (matched.length === 0) {
     return [];
   }
-  const latest = matched
+  const sorted = matched
     .slice()
-    .toSorted((left, right) => resolveNoteTimestamp(right) - resolveNoteTimestamp(left))[0];
-  if (!latest) {
-    return [];
-  }
-  const message = normalizeNoteMessage(resolveLocalizedOagMessage(latest, replyLanguage));
-  if (!message) {
-    return [];
-  }
-  const timestamp = resolveNoteTimestamp(latest);
-  return [
-    {
+    .toSorted((left, right) => resolveNoteTimestamp(left) - resolveNoteTimestamp(right));
+  const results: Array<{ text: string; ts: number }> = [];
+  for (const note of sorted) {
+    const message = normalizeNoteMessage(resolveLocalizedOagMessage(note, replyLanguage));
+    if (!message) {
+      continue;
+    }
+    const timestamp = resolveNoteTimestamp(note);
+    results.push({
       text: `OAG: ${message}`,
       ts: timestamp > 0 ? timestamp : Date.now(),
-    },
-  ];
+    });
+  }
+  return results;
 }

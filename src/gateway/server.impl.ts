@@ -664,11 +664,63 @@ export async function startGatewayServer(
     throw new Error(gatewayTls.error ?? "gateway tls: failed to enable");
   }
   const serverStartedAt = Date.now();
+  let startupDeliveryRecovery: Promise<void> = Promise.resolve();
+  const activeChannelRecovery = new Map<string, Promise<void>>();
+  const pendingRecoveryRetrigger = new Set<string>();
   const channelManager = createChannelManager({
     loadConfig,
     channelLogs,
     channelRuntimeEnvs,
     resolveChannelRuntime: getChannelRuntime,
+    onChannelRecovered: ({ channelId, accountId }) => {
+      if (minimalTestGateway) {
+        return;
+      }
+      const key = `${String(channelId)}:${accountId}`;
+      const inFlight = activeChannelRecovery.get(key);
+      if (inFlight) {
+        // A recovery is already running. Mark that another pass is needed so
+        // deliveries queued during the current recovery are not missed.
+        pendingRecoveryRetrigger.add(key);
+        return inFlight;
+      }
+      const runRecovery = async (): Promise<void> => {
+        await startupDeliveryRecovery;
+        const { recoverPendingDeliveries } = await import("../infra/outbound/delivery-queue.js");
+        const { deliverOutboundPayloads } = await import("../infra/outbound/deliver.js");
+        const logRecovery = log.child("delivery-recovery");
+        logRecovery.info(`Channel recovered (${key}) — replaying pending deliveries`);
+        const summary = await recoverPendingDeliveries({
+          deliver: deliverOutboundPayloads,
+          log: logRecovery,
+          cfg: loadConfig(),
+          filter: {
+            channel: channelId as never,
+            accountId,
+          },
+        });
+        logRecovery.info(
+          `Channel delivery recovery finished (${key}): recovered=${summary.recovered} failed=${summary.failed} skipped=${summary.skippedMaxRetries} deferred=${summary.deferredBackoff}`,
+        );
+      };
+      const recoveryTask = (async () => {
+        await runRecovery();
+        // If another recovery trigger arrived while we were running, do one
+        // follow-up pass to catch deliveries queued during the first run.
+        if (pendingRecoveryRetrigger.delete(key)) {
+          await runRecovery();
+        }
+      })()
+        .catch((err) => log.error(`Channel delivery recovery failed (${key}): ${String(err)}`))
+        .finally(() => {
+          pendingRecoveryRetrigger.delete(key);
+          if (activeChannelRecovery.get(key) === recoveryTask) {
+            activeChannelRecovery.delete(key);
+          }
+        });
+      activeChannelRecovery.set(key, recoveryTask);
+      return recoveryTask;
+    },
   });
   const getReadiness = createReadinessChecker({
     channelManager,
@@ -1018,7 +1070,7 @@ export async function startGatewayServer(
 
   // Recover pending outbound deliveries from previous crash/restart.
   if (!minimalTestGateway) {
-    void (async () => {
+    startupDeliveryRecovery = (async () => {
       const { recoverPendingDeliveries } = await import("../infra/outbound/delivery-queue.js");
       const { deliverOutboundPayloads } = await import("../infra/outbound/deliver.js");
       const logRecovery = log.child("delivery-recovery");

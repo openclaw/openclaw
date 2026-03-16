@@ -11,6 +11,7 @@ export type ChannelHealthSnapshot = {
   lastRunActivityAt?: number | null;
   lastEventAt?: number | null;
   lastStartAt?: number | null;
+  lastInboundAt?: number | null;
   reconnectAttempts?: number;
   mode?: string;
 };
@@ -23,7 +24,8 @@ export type ChannelHealthEvaluationReason =
   | "stuck"
   | "startup-connect-grace"
   | "disconnected"
-  | "stale-socket";
+  | "stale-socket"
+  | "stale-poll";
 
 export type ChannelHealthEvaluation = {
   healthy: boolean;
@@ -41,8 +43,17 @@ export type ChannelRestartReason =
   | "gave-up"
   | "stopped"
   | "stale-socket"
+  | "stale-poll"
   | "stuck"
   | "disconnected";
+
+export function isChannelOperational(
+  snapshot: ChannelHealthSnapshot,
+  policy: ChannelHealthPolicy,
+): boolean {
+  const evaluation = evaluateChannelHealth(snapshot, policy);
+  return evaluation.healthy && evaluation.reason !== "startup-connect-grace";
+}
 
 function isManagedAccount(snapshot: ChannelHealthSnapshot): boolean {
   return snapshot.enabled !== false && snapshot.configured !== false;
@@ -53,6 +64,9 @@ const BUSY_ACTIVITY_STALE_THRESHOLD_MS = 25 * 60_000;
 // probes so both surfaces evaluate channel lifecycle windows consistently.
 export const DEFAULT_CHANNEL_STALE_EVENT_THRESHOLD_MS = 30 * 60_000;
 export const DEFAULT_CHANNEL_CONNECT_GRACE_MS = 120_000;
+// Polling/webhook channels use a more generous inbound-activity threshold
+// because poll intervals are typically longer than WebSocket event rates.
+const STALE_POLL_THRESHOLD_FACTOR = 2;
 
 export function evaluateChannelHealth(
   snapshot: ChannelHealthSnapshot,
@@ -106,16 +120,11 @@ export function evaluateChannelHealth(
   if (snapshot.connected === false) {
     return { healthy: false, reason: "disconnected" };
   }
-  // Skip stale-socket check for Telegram (long-polling mode) and any channel
-  // explicitly operating in webhook mode. In these cases, there is no persistent
-  // outgoing socket that can go half-dead, so the lack of incoming events
-  // does not necessarily indicate a connection failure.
-  if (
-    policy.channelId !== "telegram" &&
-    snapshot.mode !== "webhook" &&
-    snapshot.connected === true &&
-    snapshot.lastEventAt != null
-  ) {
+
+  const isPollOrWebhook = policy.channelId === "telegram" || snapshot.mode === "webhook";
+
+  if (!isPollOrWebhook && snapshot.connected === true && snapshot.lastEventAt != null) {
+    // WebSocket-based channels: detect half-dead sockets via lastEventAt.
     if (lastStartAt != null && snapshot.lastEventAt < lastStartAt) {
       const lifecycleEventGap = Math.max(0, policy.now - lastStartAt);
       if (lifecycleEventGap <= policy.staleEventThresholdMs) {
@@ -128,6 +137,31 @@ export function evaluateChannelHealth(
       return { healthy: false, reason: "stale-socket" };
     }
   }
+
+  if (isPollOrWebhook) {
+    // Polling/webhook channels: detect a crashed poller or stalled webhook
+    // receiver via lastInboundAt. Use a more generous threshold since poll
+    // intervals are typically longer than WebSocket event cadences.
+    const lastInboundAt =
+      typeof snapshot.lastInboundAt === "number" && Number.isFinite(snapshot.lastInboundAt)
+        ? snapshot.lastInboundAt
+        : null;
+    if (lastInboundAt != null) {
+      const stalePollThresholdMs = policy.staleEventThresholdMs * STALE_POLL_THRESHOLD_FACTOR;
+      if (lastStartAt != null && lastInboundAt < lastStartAt) {
+        const lifecycleGap = Math.max(0, policy.now - lastStartAt);
+        if (lifecycleGap <= stalePollThresholdMs) {
+          return { healthy: true, reason: "healthy" };
+        }
+        return { healthy: false, reason: "stale-poll" };
+      }
+      const inboundAge = policy.now - lastInboundAt;
+      if (inboundAge > stalePollThresholdMs) {
+        return { healthy: false, reason: "stale-poll" };
+      }
+    }
+  }
+
   return { healthy: true, reason: "healthy" };
 }
 
@@ -137,6 +171,9 @@ export function resolveChannelRestartReason(
 ): ChannelRestartReason {
   if (evaluation.reason === "stale-socket") {
     return "stale-socket";
+  }
+  if (evaluation.reason === "stale-poll") {
+    return "stale-poll";
   }
   if (evaluation.reason === "not-running") {
     return snapshot.reconnectAttempts && snapshot.reconnectAttempts >= 10 ? "gave-up" : "stopped";

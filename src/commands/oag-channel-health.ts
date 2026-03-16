@@ -107,11 +107,15 @@ export async function readOagChannelHealthSummary(): Promise<OagChannelHealthSum
           .map((item) => ({
             channel: readOptionalString(item.channel) ?? "",
             accountId: readOptionalString(item.account_id) ?? readOptionalString(item.accountId),
-            sessionKeys: Array.isArray(item.session_keys ?? item.sessionKeys)
-              ? (item.session_keys ?? item.sessionKeys)
-                  .map((entry) => readOptionalString(entry))
-                  .filter((entry) => entry.length > 0)
-              : [],
+            sessionKeys: (() => {
+              const raw = item.session_keys ?? item.sessionKeys;
+              if (!Array.isArray(raw)) {
+                return [];
+              }
+              return (raw as unknown[])
+                .map((entry) => readOptionalString(entry))
+                .filter((entry): entry is string => typeof entry === "string" && entry.length > 0);
+            })(),
             pendingDeliveries:
               typeof (item.pending_deliveries ?? item.pendingDeliveries) === "number"
                 ? Number(item.pending_deliveries ?? item.pendingDeliveries)
