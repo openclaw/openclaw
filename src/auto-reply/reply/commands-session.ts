@@ -1,11 +1,17 @@
 import { resolveFastModeState } from "../../agents/fast-mode.js";
 import { formatThreadBindingDurationLabel } from "../../channels/thread-bindings-messages.js";
 import { parseDurationMs } from "../../cli/parse-duration.js";
+import { extractDeliveryInfo } from "../../config/sessions/delivery-info.js";
 import { isRestartEnabled } from "../../config/commands.js";
 import { logVerbose } from "../../globals.js";
 import { getSessionBindingService } from "../../infra/outbound/session-binding-service.js";
 import type { SessionBindingRecord } from "../../infra/outbound/session-binding-service.js";
 import { scheduleGatewaySigusr1Restart, triggerOpenClawRestart } from "../../infra/restart.js";
+import {
+  formatDoctorNonInteractiveHint,
+  writeRestartSentinel,
+  type RestartSentinelPayload,
+} from "../../infra/restart-sentinel.js";
 import { loadCostUsageSummary, loadSessionCostSummary } from "../../infra/session-cost-usage.js";
 import { createPluginRuntime } from "../../plugins/runtime/index.js";
 import { formatTokenCount, formatUsd } from "../../utils/usage-format.js";
@@ -614,6 +620,25 @@ export const handleRestartCommand: CommandHandler = async (params, allowTextComm
   }
   const hasSigusr1Listener = process.listenerCount("SIGUSR1") > 0;
   if (hasSigusr1Listener) {
+    // Write restart sentinel for post-restart notification
+    const { deliveryContext, threadId } = extractDeliveryInfo(params.sessionKey);
+    const payload: RestartSentinelPayload = {
+      kind: "restart",
+      status: "ok",
+      ts: Date.now(),
+      sessionKey: params.sessionKey,
+      deliveryContext,
+      threadId,
+      message: "/restart slash command",
+      doctorHint: formatDoctorNonInteractiveHint(),
+      stats: {
+        mode: "gateway.restart",
+        reason: "/restart",
+      },
+    };
+    await writeRestartSentinel(payload).catch(() => {
+      // ignore: sentinel is best-effort
+    });
     scheduleGatewaySigusr1Restart({ reason: "/restart" });
     return {
       shouldContinue: false,
@@ -622,6 +647,25 @@ export const handleRestartCommand: CommandHandler = async (params, allowTextComm
       },
     };
   }
+  // Write restart sentinel for post-restart notification
+  const { deliveryContext, threadId } = extractDeliveryInfo(params.sessionKey);
+  const payload: RestartSentinelPayload = {
+    kind: "restart",
+    status: "ok",
+    ts: Date.now(),
+    sessionKey: params.sessionKey,
+    deliveryContext,
+    threadId,
+    message: "/restart slash command",
+    doctorHint: formatDoctorNonInteractiveHint(),
+    stats: {
+      mode: "gateway.restart",
+      reason: "/restart",
+    },
+  };
+  await writeRestartSentinel(payload).catch(() => {
+    // ignore: sentinel is best-effort
+  });
   const restartMethod = triggerOpenClawRestart();
   if (!restartMethod.ok) {
     const detail = restartMethod.detail ? ` Details: ${restartMethod.detail}` : "";
