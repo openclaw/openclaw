@@ -6,6 +6,7 @@ import {
   updateAuthProfileStoreWithLock,
 } from "../../agents/auth-profiles/store.js";
 import type { AuthProfileStore } from "../../agents/auth-profiles/types.js";
+import { normalizeProviderIdForAuth } from "../../agents/model-selection.js";
 import type { MediaToolsConfig, MediaUnderstandingModelConfig } from "../../config/types.tools.js";
 import { DEFAULT_AGENT_ID } from "../../routing/session-key.js";
 import type { RuntimeEnv } from "../../runtime.js";
@@ -156,9 +157,38 @@ export async function modelsAuthCleanCommand(
     }
   }
 
+  // Preserve store-fallback profiles: profiles that exist only in the store
+  // (no corresponding entry in auth.profiles, auth.order, or tools.media) but serve
+  // as active fallback credentials for their provider via resolveAuthProfileOrder's
+  // fallback to listProfilesForProvider.  When at least one *other* provider has a
+  // configured profile, the empty-config safety guard above does not fire, and these
+  // store-only profiles would be incorrectly removed.
+  //
+  // Detect them by collecting the set of providers that already have at least one
+  // explicitly-configured profile.  Any store profile whose provider is NOT in that
+  // set is a store-fallback entry and must be kept.
+  const configuredProviders = new Set<string>();
+  for (const profileId of configuredProfiles) {
+    const cred = store.profiles[profileId];
+    if (cred) {
+      configuredProviders.add(normalizeProviderIdForAuth(cred.provider));
+    }
+  }
+
   const storeProfileIds = Object.keys(store.profiles);
 
-  const toRemove = storeProfileIds.filter((id) => !configuredProfiles.has(id));
+  const toRemove = storeProfileIds.filter((id) => {
+    if (configuredProfiles.has(id)) {
+      return false;
+    }
+    // Store-fallback: this profile's provider has no explicitly-configured profile,
+    // so it is the sole credential source for that provider.  Preserve it.
+    const cred = store.profiles[id];
+    if (cred && !configuredProviders.has(normalizeProviderIdForAuth(cred.provider))) {
+      return false;
+    }
+    return true;
+  });
   const toKeep = storeProfileIds.filter((id) => configuredProfiles.has(id));
 
   // Safety guard: refuse to wipe everything when openclaw.json has no auth
