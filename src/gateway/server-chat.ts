@@ -231,11 +231,14 @@ export function createChatRunState(): ChatRunState {
   };
 }
 
-export type ToolEventRecipientRegistry = {
+export type EventRecipientRegistry = {
   add: (runId: string, connId: string) => void;
   get: (runId: string) => ReadonlySet<string> | undefined;
   markFinal: (runId: string) => void;
 };
+
+/** @deprecated Use EventRecipientRegistry */
+export type ToolEventRecipientRegistry = EventRecipientRegistry;
 
 type ToolRecipientEntry = {
   connIds: Set<string>;
@@ -246,7 +249,7 @@ type ToolRecipientEntry = {
 const TOOL_EVENT_RECIPIENT_TTL_MS = 10 * 60 * 1000;
 const TOOL_EVENT_RECIPIENT_FINAL_GRACE_MS = 30 * 1000;
 
-export function createToolEventRecipientRegistry(): ToolEventRecipientRegistry {
+export function createToolEventRecipientRegistry(): EventRecipientRegistry {
   const recipients = new Map<string, ToolRecipientEntry>();
 
   const prune = () => {
@@ -325,7 +328,8 @@ export type AgentEventHandlerOptions = {
   chatRunState: ChatRunState;
   resolveSessionKeyForRun: (runId: string) => string | undefined;
   clearAgentRunContext: (runId: string) => void;
-  toolEventRecipients: ToolEventRecipientRegistry;
+  toolEventRecipients: EventRecipientRegistry;
+  thinkingEventRecipients: EventRecipientRegistry;
 };
 
 export function createAgentEventHandler({
@@ -337,6 +341,7 @@ export function createAgentEventHandler({
   resolveSessionKeyForRun,
   clearAgentRunContext,
   toolEventRecipients,
+  thinkingEventRecipients,
 }: AgentEventHandlerOptions) {
   const emitChatDelta = (
     sessionKey: string,
@@ -563,6 +568,7 @@ export function createAgentEventHandler({
       });
     }
     agentRunSeq.set(evt.runId, evt.seq);
+    const isThinkingEvent = evt.stream === "thinking";
     if (isToolEvent) {
       const toolPhase = typeof evt.data?.phase === "string" ? evt.data.phase : "";
       // Flush pending assistant text before tool-start events so clients can
@@ -577,6 +583,12 @@ export function createAgentEventHandler({
       const recipients = toolEventRecipients.get(evt.runId);
       if (recipients && recipients.size > 0) {
         broadcastToConnIds("agent", toolPayload, recipients);
+      }
+    } else if (isThinkingEvent) {
+      // Only send thinking events to clients that registered for thinking-events capability.
+      const recipients = thinkingEventRecipients.get(evt.runId);
+      if (recipients && recipients.size > 0) {
+        broadcastToConnIds("agent", agentPayload, recipients);
       }
     } else {
       broadcast("agent", agentPayload);
@@ -635,6 +647,7 @@ export function createAgentEventHandler({
 
     if (lifecyclePhase === "end" || lifecyclePhase === "error") {
       toolEventRecipients.markFinal(evt.runId);
+      thinkingEventRecipients.markFinal(evt.runId);
       clearAgentRunContext(evt.runId);
       agentRunSeq.delete(evt.runId);
       agentRunSeq.delete(clientRunId);

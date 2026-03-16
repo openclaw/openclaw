@@ -1363,6 +1363,18 @@ export const chatHandlers: GatewayRequestHandlers = {
                 }
               }
             }
+            const wantsThinkingEvents = hasGatewayClientCap(
+              client?.connect?.caps,
+              GATEWAY_CLIENT_CAPS.THINKING_EVENTS,
+            );
+            if (connId && wantsThinkingEvents) {
+              context.registerThinkingEventRecipient(runId, connId);
+              for (const [activeRunId, active] of context.chatAbortControllers) {
+                if (activeRunId !== runId && active.sessionKey === p.sessionKey) {
+                  context.registerThinkingEventRecipient(activeRunId, connId);
+                }
+              }
+            }
           },
           onModelSelected,
         },

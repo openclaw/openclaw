@@ -47,6 +47,7 @@ describe("agent event handler", () => {
     const agentRunSeq = new Map<string, number>();
     const chatRunState = createChatRunState();
     const toolEventRecipients = createToolEventRecipientRegistry();
+    const thinkingEventRecipients = createToolEventRecipientRegistry();
 
     const handler = createAgentEventHandler({
       broadcast,
@@ -57,6 +58,7 @@ describe("agent event handler", () => {
       resolveSessionKeyForRun: params?.resolveSessionKeyForRun ?? (() => undefined),
       clearAgentRunContext: vi.fn(),
       toolEventRecipients,
+      thinkingEventRecipients,
     });
 
     return {
