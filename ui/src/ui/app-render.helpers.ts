@@ -1,5 +1,6 @@
 import { html, nothing } from "lit";
 import { repeat } from "lit/directives/repeat.js";
+import { modelKey, normalizeProviderId } from "../../../src/agents/model-selection.js";
 import { parseAgentSessionKey } from "../../../src/sessions/session-key-utils.js";
 import { t } from "../i18n/index.ts";
 import { refreshChat } from "./app-chat.ts";
@@ -541,6 +542,29 @@ function resolveDefaultModelValue(state: AppViewState): string {
   return typeof model === "string" ? model.trim() : "";
 }
 
+function resolveCatalogModelRef(entry: ModelCatalogEntry): string {
+  return modelKey(normalizeProviderId(entry.provider), entry.id);
+}
+
+function normalizeChatModelValue(value: string, catalog: ModelCatalogEntry[]): string {
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return "";
+  }
+  const normalized = trimmed.toLowerCase();
+  const exactMatch = catalog.find(
+    (entry) => resolveCatalogModelRef(entry).toLowerCase() === normalized,
+  );
+  if (exactMatch) {
+    return resolveCatalogModelRef(exactMatch);
+  }
+  const idMatches = catalog.filter((entry) => entry.id.trim().toLowerCase() === normalized);
+  if (idMatches.length === 1) {
+    return resolveCatalogModelRef(idMatches[0]);
+  }
+  return trimmed;
+}
+
 function buildChatModelOptions(
   catalog: ModelCatalogEntry[],
   currentOverride: string,
@@ -563,7 +587,7 @@ function buildChatModelOptions(
 
   for (const entry of catalog) {
     const provider = entry.provider?.trim();
-    addOption(entry.id, provider ? `${entry.id} · ${provider}` : entry.id);
+    addOption(resolveCatalogModelRef(entry), provider ? `${entry.id} · ${provider}` : entry.id);
   }
 
   if (currentOverride) {
@@ -576,13 +600,10 @@ function buildChatModelOptions(
 }
 
 function renderChatModelSelect(state: AppViewState) {
-  const currentOverride = resolveModelOverrideValue(state);
-  const defaultModel = resolveDefaultModelValue(state);
-  const options = buildChatModelOptions(
-    state.chatModelCatalog ?? [],
-    currentOverride,
-    defaultModel,
-  );
+  const catalog = state.chatModelCatalog ?? [];
+  const currentOverride = normalizeChatModelValue(resolveModelOverrideValue(state), catalog);
+  const defaultModel = normalizeChatModelValue(resolveDefaultModelValue(state), catalog);
+  const options = buildChatModelOptions(catalog, currentOverride, defaultModel);
   const defaultLabel = defaultModel ? `Default (${defaultModel})` : "Default model";
   const busy =
     state.chatLoading || state.chatSending || Boolean(state.chatRunId) || state.chatStream !== null;
