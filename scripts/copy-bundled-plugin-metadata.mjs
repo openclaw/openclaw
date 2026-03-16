@@ -8,6 +8,8 @@ import {
 } from "./runtime-postbuild-shared.mjs";
 
 const GENERATED_BUNDLED_SKILLS_DIR = "bundled-skills";
+const TRANSIENT_COPY_ERROR_CODES = new Set(["EEXIST", "ENOENT", "ENOTEMPTY", "EBUSY"]);
+const COPY_RETRY_DELAYS_MS = [10, 25, 50];
 
 export function rewritePackageExtensions(entries) {
   if (!Array.isArray(entries)) {
@@ -82,6 +84,39 @@ function resolveBundledSkillTarget(rawPath) {
   };
 }
 
+function isTransientCopyError(error) {
+  return (
+    !!error &&
+    typeof error === "object" &&
+    typeof error.code === "string" &&
+    TRANSIENT_COPY_ERROR_CODES.has(error.code)
+  );
+}
+
+function sleepSync(ms) {
+  if (!Number.isFinite(ms) || ms <= 0) {
+    return;
+  }
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+
+function copySkillPathWithRetry(params) {
+  const maxAttempts = COPY_RETRY_DELAYS_MS.length + 1;
+  for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+    try {
+      removePathIfExists(params.targetPath);
+      fs.mkdirSync(path.dirname(params.targetPath), { recursive: true });
+      fs.cpSync(params.sourcePath, params.targetPath, params.copyOptions);
+      return;
+    } catch (error) {
+      if (!isTransientCopyError(error) || attempt === maxAttempts - 1) {
+        throw error;
+      }
+      sleepSync(COPY_RETRY_DELAYS_MS[attempt] ?? 0);
+    }
+  }
+}
+
 function copyDeclaredPluginSkillPaths(params) {
   const skills = Array.isArray(params.manifest.skills) ? params.manifest.skills : [];
   const copiedSkills = [];
@@ -104,21 +139,23 @@ function copyDeclaredPluginSkillPaths(params) {
       continue;
     }
     const targetPath = ensurePathInsideRoot(params.distPluginDir, target.outputPath);
-    removePathIfExists(targetPath);
-    fs.mkdirSync(path.dirname(targetPath), { recursive: true });
     const shouldExcludeNestedNodeModules = /^node_modules(?:\/|$)/u.test(
       normalizeManifestRelativePath(raw),
     );
-    fs.cpSync(sourcePath, targetPath, {
-      dereference: true,
-      force: true,
-      recursive: true,
-      filter: (candidatePath) => {
-        if (!shouldExcludeNestedNodeModules || candidatePath === sourcePath) {
-          return true;
-        }
-        const relativeCandidate = path.relative(sourcePath, candidatePath).replaceAll("\\", "/");
-        return !relativeCandidate.split("/").includes("node_modules");
+    copySkillPathWithRetry({
+      sourcePath,
+      targetPath,
+      copyOptions: {
+        dereference: true,
+        force: true,
+        recursive: true,
+        filter: (candidatePath) => {
+          if (!shouldExcludeNestedNodeModules || candidatePath === sourcePath) {
+            return true;
+          }
+          const relativeCandidate = path.relative(sourcePath, candidatePath).replaceAll("\\", "/");
+          return !relativeCandidate.split("/").includes("node_modules");
+        },
       },
     });
     copiedSkills.push(target.manifestPath);
