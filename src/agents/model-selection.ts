@@ -549,13 +549,18 @@ export function resolveAllowedModelRef(params: {
     return { error: "invalid model: empty" };
   }
 
+  const defaultProvider = !trimmed.includes("/")
+    ? (inferUniqueProviderFromConfiguredModels({ cfg: params.cfg, model: trimmed }) ??
+      params.defaultProvider)
+    : params.defaultProvider;
+
   const aliasIndex = buildModelAliasIndex({
     cfg: params.cfg,
-    defaultProvider: params.defaultProvider,
+    defaultProvider,
   });
   const resolved = resolveModelRefFromString({
     raw: trimmed,
-    defaultProvider: params.defaultProvider,
+    defaultProvider,
     aliasIndex,
   });
   if (!resolved) {

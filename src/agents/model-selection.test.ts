@@ -476,6 +476,31 @@ describe("model-selection", () => {
         ref: { provider: "openai", model: "@cf/openai/gpt-oss-20b" },
       });
     });
+
+    it("infers provider for bare model names when allowlist has a unique match", () => {
+      const cfg: OpenClawConfig = {
+        agents: {
+          defaults: {
+            models: {
+              "ollama/deepseek-r1:7b": {},
+              "anthropic/claude-opus-4-6": {},
+            },
+          },
+        },
+      } as OpenClawConfig;
+
+      const result = resolveAllowedModelRef({
+        cfg,
+        catalog: [],
+        raw: "claude-opus-4-6",
+        defaultProvider: "ollama",
+      });
+
+      expect(result).toEqual({
+        key: "anthropic/claude-opus-4-6",
+        ref: { provider: "anthropic", model: "claude-opus-4-6" },
+      });
+    });
   });
 
   describe("resolveModelRefFromString", () => {
