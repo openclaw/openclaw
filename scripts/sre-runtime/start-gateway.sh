@@ -141,10 +141,11 @@ app_id="${GITHUB_APP_ID:-}"
 installation_id="${GITHUB_APP_INSTALLATION_ID:-}"
 private_key="${GITHUB_APP_PRIVATE_KEY:-}"
 
-if [ -z "$app_id" ] || [ -z "$installation_id" ] || [ -z "$private_key" ]; then
-  echo "github-app-token:warning missing app credentials (GITHUB_APP_ID=${app_id:+set} GITHUB_APP_INSTALLATION_ID=${installation_id:+set} GITHUB_APP_PRIVATE_KEY=${private_key:+set})" >&2
-  exit 1
-fi
+	if [ -z "$app_id" ] || [ -z "$installation_id" ] || [ -z "$private_key" ]; then
+	  key_len="${#private_key}"
+	  echo "github-app-token:error missing app credentials (GITHUB_APP_ID=${app_id:+set} GITHUB_APP_INSTALLATION_ID=${installation_id:+set} GITHUB_APP_PRIVATE_KEY=${private_key:+set}, key_len=${key_len})" >&2
+	  exit 1
+	fi
 
 header_b64="$(printf '{"alg":"RS256","typ":"JWT"}' | openssl base64 -A | tr '+/' '-_' | tr -d '=')"
 now="$(date +%s)"
@@ -157,40 +158,73 @@ payload_b64="$(
 unsigned_token="${header_b64}.${payload_b64}"
 private_key_file="$(mktemp)"
 trap 'rm -f "$private_key_file"' EXIT HUP INT TERM
-# Convert literal \n sequences to real newlines (Vault may store PEM keys either way).
-if ! node -e 'const key = process.argv[1] ?? ""; process.stdout.write(key.replace(/\\n/g, "\n"));' "$private_key" >"$private_key_file"; then
-  echo "github-app-token:error failed to process PEM key format" >&2
-  exit 1
-fi
-if ! grep -q '^-----BEGIN ' "$private_key_file" || ! grep -q '^-----END ' "$private_key_file"; then
-  echo "github-app-token:error invalid PEM key format after newline conversion" >&2
-  exit 1
-fi
+	if [ -z "$private_key" ]; then
+	  echo "github-app-token:error empty private key provided" >&2
+	  exit 1
+	fi
+
+	# Convert literal \n sequences to real newlines (Vault may store PEM keys either way).
+	if ! printf '%s' "$private_key" | sed 's/\\n/\n/g' >"$private_key_file"; then
+	  echo "github-app-token:error failed to process PEM key format" >&2
+	  exit 1
+	fi
+
+	if ! grep -q '^-----BEGIN ' "$private_key_file"; then
+	  echo "github-app-token:error PEM key missing BEGIN marker" >&2
+	  exit 1
+	fi
+
+	if ! grep -q '^-----END ' "$private_key_file"; then
+	  echo "github-app-token:error PEM key missing END marker" >&2
+	  exit 1
+	fi
 chmod 600 "$private_key_file"
-signature_b64="$(
-  printf '%s' "$unsigned_token" \
-    | openssl dgst -binary -sha256 -sign "$private_key_file" \
-    | openssl base64 -A | tr '+/' '-_' | tr -d '='
-)" || exit 1
+ if ! signature_b64="$(
+   printf '%s' "$unsigned_token" \
+     | openssl dgst -binary -sha256 -sign "$private_key_file" \
+     | openssl base64 -A | tr '+/' '-_' | tr -d '='
+ )"; then
+  echo "github-app-token:error openssl signature generation failed" >&2
+  exit 1
+fi
 rm -f "$private_key_file"
 trap - EXIT HUP INT TERM
 jwt="${unsigned_token}.${signature_b64}"
 
-response="$(
+if ! response="$(
   curl -fsSL -X POST \
     -H "Authorization: Bearer ${jwt}" \
     -H "Accept: application/vnd.github+json" \
     "https://api.github.com/app/installations/${installation_id}/access_tokens"
-)" || exit 1
+)"; then
+  echo "github-app-token:error GitHub API installation token request failed" >&2
+  exit 1
+fi
 
-token="$(printf '%s\n' "$response" | jq -r '.token // empty')" || exit 1
-expires_at_iso="$(printf '%s\n' "$response" | jq -r '.expires_at // empty')" || exit 1
-[ -n "$token" ] || exit 1
-[ -n "$expires_at_iso" ] || exit 1
+if ! token="$(printf '%s\n' "$response" | jq -r '.token // empty')"; then
+  echo "github-app-token:error failed to parse token from GitHub API response" >&2
+  exit 1
+fi
+if ! expires_at_iso="$(printf '%s\n' "$response" | jq -r '.expires_at // empty')"; then
+  echo "github-app-token:error failed to parse expires_at from GitHub API response" >&2
+  exit 1
+fi
 
-expires_epoch="$(
+if [ -z "$token" ]; then
+  echo "github-app-token:error API response missing token" >&2
+  exit 1
+fi
+if [ -z "$expires_at_iso" ]; then
+  echo "github-app-token:error API response missing expires_at" >&2
+  exit 1
+fi
+
+if ! expires_epoch="$(
   node -e 'const iso=process.argv[1]; const t=Date.parse(iso); if (!Number.isFinite(t)) process.exit(1); process.stdout.write(String(Math.floor(t / 1000)));' "$expires_at_iso"
-)" || exit 1
+)"; then
+  echo "github-app-token:error failed to parse expires_at timestamp" >&2
+  exit 1
+fi
 
 jq -n --arg token "$token" --argjson expires_at "$expires_epoch" \
   '{token:$token,expires_at:$expires_at}' >"$cache_file"
@@ -202,30 +236,31 @@ EOF
   cat >"${wrapper_dir}/gh" <<'EOF'
 #!/bin/sh
 set -eu
-if token="$(/home/node/.openclaw/bin/github-app-token.sh)"; then
-  export GH_TOKEN="$token"
-  export GITHUB_TOKEN="$token"
-else
-  echo 'gh-wrapper:warning github app token unavailable' >&2
-fi
-exec /usr/bin/gh "$@"
+	if token="$(/home/node/.openclaw/bin/github-app-token.sh)"; then
+	  export GH_TOKEN="$token"
+	  export GITHUB_TOKEN="$token"
+	else
+	  echo 'gh-wrapper:error github app token unavailable' >&2
+	  exit 1
+	fi
+	exec /usr/bin/gh "$@"
 EOF
   chmod +x "${wrapper_dir}/gh"
 
 cat >"${wrapper_dir}/git" <<'EOF'
 #!/bin/sh
 set -eu
-if token="$(/home/node/.openclaw/bin/github-app-token.sh)"; then
-  git_auth_basic="$(printf 'x-access-token:%s' "$token" | base64 | tr -d '\n')"
-  exec /usr/bin/git \
-    -c credential.helper= \
-    -c core.askPass= \
-    -c "http.https://github.com/.extraHeader=Authorization: Basic ${git_auth_basic}" \
-    "$@"
-else
-  echo 'git-wrapper:warning github app token unavailable' >&2
-fi
-exec /usr/bin/git "$@"
+	if token="$(/home/node/.openclaw/bin/github-app-token.sh)"; then
+	  git_auth_basic="$(printf 'x-access-token:%s' "$token" | base64 | tr -d '\n')"
+	else
+	  echo 'git-wrapper:error github app token unavailable' >&2
+	  exit 1
+	fi
+	exec /usr/bin/git \
+	  -c credential.helper= \
+	  -c core.askPass= \
+	  -c "http.https://github.com/.extraHeader=Authorization: Basic ${git_auth_basic}" \
+	  "$@"
 EOF
   chmod +x "${wrapper_dir}/git"
 
