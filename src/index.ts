@@ -37,7 +37,7 @@ export async function runLegacyCliEntry(argv: string[] = process.argv): Promise<
     import("./cli/run-main.js"),
   ]);
 
-  installGaxiosFetchCompat();
+  await installGaxiosFetchCompat();
   await runCli(argv);
 }
 

@@ -319,6 +319,12 @@ jobs:
       - name: Build dist
         run: pnpm build
 
+      - name: Smoke test CLI launcher help
+        run: node openclaw.mjs --help
+
+      - name: Smoke test CLI launcher status json
+        run: node openclaw.mjs status --json --timeout 1
+
       - name: Check CLI startup memory
         run: pnpm test:startup:memory
 
@@ -452,11 +458,20 @@ jobs:
         run: |
           set -euo pipefail
 
-          if [ "${{ github.event_name }}" = "push" ]; then
-            BASE="${{ github.event.before }}"
-          else
-            BASE="${{ github.event.pull_request.base.sha }}"
-          fi
+          BASE="$(
+            python - <<'PY'
+            import json
+            import os
+
+            with open(os.environ["GITHUB_EVENT_PATH"], "r", encoding="utf-8") as fh:
+                event = json.load(fh)
+
+            if os.environ["GITHUB_EVENT_NAME"] == "push":
+                print(event["before"])
+            else:
+                print(event["pull_request"]["base"]["sha"])
+            PY
+          )"
 
           mapfile -t workflow_files < <(git diff --name-only "$BASE" HEAD -- '.github/workflows/*.yml' '.github/workflows/*.yaml')
           if [ "${#workflow_files[@]}" -eq 0 ]; then
