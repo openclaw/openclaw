@@ -29,7 +29,7 @@ export function buildMSTeamsAuthConfig(
       break;
     case "clientSecret":
     default:
-      base.clientSecret = creds.appPassword;
+      if (creds.appPassword) base.clientSecret = creds.appPassword;
       break;
   }
 

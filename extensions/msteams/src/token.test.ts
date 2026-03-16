@@ -51,7 +51,7 @@ describe("resolveMSTeamsCredentials", () => {
     expect(resolved?.authType).toBe("clientSecret");
   });
 
-  it("resolves certificate credentials", () => {
+  it("resolves certificate credentials without appPassword", () => {
     const resolved = resolveMSTeamsCredentials({
       appId: "app-id",
       tenantId: "tenant-id",
@@ -63,6 +63,7 @@ describe("resolveMSTeamsCredentials", () => {
     expect(resolved?.authType).toBe("certificate");
     expect(resolved?.certPemFile).toBe("/path/to/cert.pem");
     expect(resolved?.certKeyFile).toBe("/path/to/key.pem");
+    expect(resolved?.appPassword).toBeUndefined();
   });
 
   it("returns undefined for certificate auth missing certKeyFile", () => {
@@ -86,6 +87,7 @@ describe("resolveMSTeamsCredentials", () => {
 
     expect(resolved?.authType).toBe("federatedCredential");
     expect(resolved?.ficClientId).toBe("fic-client-id");
+    expect(resolved?.appPassword).toBeUndefined();
   });
 
   it("resolves federated credentials with widAssertionFile", () => {

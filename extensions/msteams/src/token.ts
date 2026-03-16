@@ -9,7 +9,7 @@ export type MSTeamsAuthType = "clientSecret" | "certificate" | "federatedCredent
 
 export type MSTeamsCredentials = {
   appId: string;
-  appPassword: string;
+  appPassword?: string;
   tenantId: string;
   authType: MSTeamsAuthType;
   certPemFile?: string;
@@ -58,7 +58,6 @@ export function resolveMSTeamsCredentials(cfg?: MSTeamsConfig): MSTeamsCredentia
       if (!certPemFile || !certKeyFile) return undefined;
       return {
         appId,
-        appPassword: "", // not used for certificate auth
         tenantId,
         authType,
         certPemFile,
@@ -72,7 +71,6 @@ export function resolveMSTeamsCredentials(cfg?: MSTeamsConfig): MSTeamsCredentia
       if (!ficClientId && !widAssertionFile) return undefined;
       return {
         appId,
-        appPassword: "", // not used for federated auth
         tenantId,
         authType,
         ficClientId,
