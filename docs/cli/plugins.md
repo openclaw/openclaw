@@ -1,5 +1,5 @@
 ---
-summary: "CLI reference for `openclaw plugins` (list, install, uninstall, enable/disable, doctor)"
+summary: "CLI reference for `openclaw plugins` (list, install, marketplace, uninstall, enable/disable, doctor)"
 read_when:
   - You want to install or manage Gateway plugins or compatible bundles
   - You want to debug plugin load failures
@@ -28,6 +28,7 @@ openclaw plugins uninstall <id>
 openclaw plugins doctor
 openclaw plugins update <id>
 openclaw plugins update --all
+openclaw plugins marketplace list <marketplace>
 ```
 
 Bundled plugins ship with OpenClaw but start disabled. Use `plugins enable` to
@@ -46,6 +47,8 @@ capabilities.
 ```bash
 openclaw plugins install <path-or-spec>
 openclaw plugins install <npm-spec> --pin
+openclaw plugins install <plugin>@<marketplace>
+openclaw plugins install <plugin> --marketplace <marketplace>
 ```
 
 Security note: treat plugin installs like running code. Prefer pinned versions.
@@ -64,6 +67,31 @@ installs the bundled plugin directly. To install an npm package with the same
 name, use an explicit scoped spec (for example `@scope/diffs`).
 
 Supported archives: `.zip`, `.tgz`, `.tar.gz`, `.tar`.
+
+Claude marketplace installs are also supported.
+
+Use `plugin@marketplace` shorthand when the marketplace name exists in Claude's
+local registry cache at `~/.claude/plugins/known_marketplaces.json`:
+
+```bash
+openclaw plugins marketplace list claude-plugins-official
+openclaw plugins install superpowers@claude-plugins-official
+```
+
+Use `--marketplace` when you want to pass the marketplace source explicitly:
+
+```bash
+openclaw plugins install superpowers --marketplace claude-plugins-official
+openclaw plugins install superpowers --marketplace anthropics/claude-plugins-official
+openclaw plugins install superpowers --marketplace ./my-marketplace
+```
+
+Marketplace sources can be:
+
+- a Claude known-marketplace name from `~/.claude/plugins/known_marketplaces.json`
+- a local marketplace root or `marketplace.json` path
+- a GitHub repo shorthand such as `owner/repo`
+- a git URL
 
 For local paths and archives, OpenClaw auto-detects:
 
@@ -114,7 +142,8 @@ openclaw plugins update --all
 openclaw plugins update <id> --dry-run
 ```
 
-Updates only apply to plugins installed from npm (tracked in `plugins.installs`).
+Updates apply to tracked installs in `plugins.installs`, currently npm and
+marketplace installs.
 
 When a stored integrity hash exists and the fetched artifact hash changes,
 OpenClaw prints a warning and asks for confirmation before proceeding. Use
