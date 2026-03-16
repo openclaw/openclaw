@@ -21,7 +21,8 @@ export type ModelCompatConfig = {
   supportsTools?: boolean;
   supportsStrictMode?: boolean;
   maxTokensField?: "max_completion_tokens" | "max_tokens";
-  thinkingFormat?: "openai" | "zai" | "qwen";
+  thinkingFormat?: "openai" | "zai" | "qwen" | "disabled";
+  disableThinking?: boolean; // Send API param to suppress thinking at source (for MiniMax, Kimi, etc.)
   requiresToolResultName?: boolean;
   requiresAssistantAfterToolResult?: boolean;
   requiresThinkingAsText?: boolean;

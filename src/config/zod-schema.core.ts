@@ -191,7 +191,10 @@ export const ModelCompatSchema = z
     maxTokensField: z
       .union([z.literal("max_completion_tokens"), z.literal("max_tokens")])
       .optional(),
-    thinkingFormat: z.union([z.literal("openai"), z.literal("zai"), z.literal("qwen")]).optional(),
+    thinkingFormat: z
+      .union([z.literal("openai"), z.literal("zai"), z.literal("qwen"), z.literal("disabled")])
+      .optional(),
+    disableThinking: z.boolean().optional(), // Suppress thinking at API level (MiniMax, Kimi, etc.)
     requiresToolResultName: z.boolean().optional(),
     requiresAssistantAfterToolResult: z.boolean().optional(),
     requiresThinkingAsText: z.boolean().optional(),
