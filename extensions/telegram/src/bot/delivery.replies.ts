@@ -412,11 +412,22 @@ async function deliverMediaReply(params: {
               replyMarkup: params.replyMarkup,
               replyQuoteText: params.replyQuoteText,
             });
-            if (firstDeliveredMessageId == null) {
-              firstDeliveredMessageId = fallbackMessageId;
+            // Only mark as delivered if a chunk was actually sent.
+            // sendTelegramVoiceFallbackText returns undefined when all chunks
+            // are empty (e.g. formatting-only fallback text that trims to
+            // whitespace). Without this guard, reply threading advances and
+            // the reply is reported as delivered even though nothing was sent.
+            if (fallbackMessageId != null) {
+              if (firstDeliveredMessageId == null) {
+                firstDeliveredMessageId = fallbackMessageId;
+              }
+              markReplyApplied(params.progress, voiceFallbackReplyTo);
+              markDelivered(params.progress);
+            } else {
+              logVerbose(
+                "telegram voice fallback text produced no sendable chunks; skipping delivery mark",
+              );
             }
-            markReplyApplied(params.progress, voiceFallbackReplyTo);
-            markDelivered(params.progress);
             continue;
           }
           if (isCaptionTooLong(voiceErr)) {
