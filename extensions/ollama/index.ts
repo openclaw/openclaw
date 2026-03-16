@@ -13,7 +13,7 @@ const PROVIDER_ID = "ollama";
 const DEFAULT_API_KEY = "ollama-local";
 
 async function loadProviderSetup() {
-  return await import("openclaw/plugin-sdk/provider-setup");
+  return await import("openclaw/plugin-sdk/ollama-setup");
 }
 
 const ollamaPlugin = {
