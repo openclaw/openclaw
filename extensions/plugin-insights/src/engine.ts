@@ -40,8 +40,8 @@ export function createInsightsEngine(
   const pluginReporter = new PluginReporter(db);
   const turnCollector = new TurnCollector(db, toolDetector, contextDetector, pluginReporter);
 
-  // Build tool→plugin mapping if provided
-  if (toolPluginMappings && toolPluginMappings.length > 0) {
+  // Build tool→plugin mapping if provided (pass empty array to clear stale rows)
+  if (toolPluginMappings) {
     toolDetector.refreshMappingFromEntries(toolPluginMappings);
   }
 
