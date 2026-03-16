@@ -545,12 +545,16 @@ export function decodeFeishuFilename(filename: string | undefined): string {
   if (rfcMatch) {
     filename = filename.substring(rfcMatch[0].length);
   }
-  // Decode percent-encoded strings
+  // Decode only if result contains non-ASCII (likely encoded Chinese)
   if (/%[0-9A-Fa-f]{2}/.test(filename)) {
     try {
-      return decodeURIComponent(filename);
+      const decoded = decodeURIComponent(filename);
+      // Only use decoded if it contains non-ASCII characters
+      if (decoded && /[^\x00-\x7F]/.test(decoded)) {
+        return decoded;
+      }
     } catch {
-      return filename;
+      // Fall through to return original
     }
   }
   return filename;
