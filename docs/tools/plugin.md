@@ -800,7 +800,7 @@ trees "pure JS/TS" and avoid packages that require `postinstall` builds.
 Optional: `openclaw.setupEntry` can point at a lightweight setup-only module.
 When OpenClaw needs setup surfaces for a disabled channel plugin, or
 when a channel plugin is enabled but still unconfigured, it loads `setupEntry`
-instead of the full plugin entry. This keeps startup and onboarding lighter
+instead of the full plugin entry. This keeps startup and setup lighter
 when your main plugin entry also wires tools, hooks, or other runtime-only
 code.
 
@@ -1181,7 +1181,7 @@ A provider plugin can participate in five distinct phases:
    without prompts. Use this when the provider needs custom headless setup
    beyond the built-in simple API-key paths.
 3. **Wizard integration**
-   `wizard.onboarding` adds an entry to `openclaw onboard`.
+   `wizard.setup` adds an entry to `openclaw onboard`.
    `wizard.modelPicker` adds a setup entry to the model picker.
 4. **Implicit discovery**
    `discovery.run(ctx)` can contribute provider config automatically during
@@ -1247,7 +1247,7 @@ errors instead.
 
 ### Provider wizard metadata
 
-`wizard.onboarding` controls how the provider appears in grouped onboarding:
+`wizard.setup` controls how the provider appears in grouped onboarding:
 
 - `choiceId`: auth-choice value
 - `choiceLabel`: option label
@@ -1377,7 +1377,7 @@ api.registerProvider({
     },
   ],
   wizard: {
-    onboarding: {
+    setup: {
       choiceId: "acme",
       choiceLabel: "AcmeAI",
       groupId: "acme",
@@ -1413,7 +1413,7 @@ Notes:
   headless onboarding.
 - Return `configPatch` when you need to add default models or provider config.
 - Return `defaultModel` so `--set-default` can update agent defaults.
-- `wizard.onboarding` adds a provider choice to `openclaw onboard`.
+- `wizard.setup` adds a provider choice to `openclaw onboard`.
 - `wizard.modelPicker` adds a “setup this provider” entry to the model picker.
 - `discovery.run` returns either `{ provider }` for the plugin’s own provider id
   or `{ providers }` for multi-provider discovery.

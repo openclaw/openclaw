@@ -1,11 +1,11 @@
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { listChannelPluginCatalogEntries } from "../channels/plugins/catalog.js";
 import { resolveChannelDefaultAccountId } from "../channels/plugins/helpers.js";
-import type { ChannelOnboardingSetupPlugin } from "../channels/plugins/setup-flow-types.js";
 import {
   getChannelSetupPlugin,
   listChannelSetupPlugins,
 } from "../channels/plugins/setup-registry.js";
+import type { ChannelSetupPlugin } from "../channels/plugins/setup-wizard-types.js";
 import {
   formatChannelPrimerLine,
   formatChannelSelectionLine,
@@ -21,9 +21,13 @@ import type { RuntimeEnv } from "../runtime.js";
 import { formatDocsLink } from "../terminal/links.js";
 import type { WizardPrompter, WizardSelectOption } from "../wizard/prompts.js";
 import { resolveChannelSetupEntries } from "./channel-setup/discovery.js";
-import { resolveChannelSetupFlowAdapterForPlugin } from "./channel-setup/registry.js";
+import {
+  ensureChannelSetupPluginInstalled,
+  loadChannelSetupPluginRegistrySnapshotForChannel,
+} from "./channel-setup/plugin-install.js";
+import { resolveChannelSetupWizardAdapterForPlugin } from "./channel-setup/registry.js";
 import type {
-  ChannelSetupFlowAdapter,
+  ChannelSetupWizardAdapter,
   ChannelSetupConfiguredResult,
   ChannelSetupDmPolicy,
   ChannelSetupResult,
@@ -31,10 +35,6 @@ import type {
   SetupChannelsOptions,
 } from "./channel-setup/types.js";
 import type { ChannelChoice } from "./onboard-types.js";
-import {
-  ensureOnboardingPluginInstalled,
-  loadOnboardingPluginRegistrySnapshotForChannel,
-} from "./onboarding/plugin-install.js";
 
 type ConfiguredChannelAction = "update" | "disable" | "delete" | "skip";
 
@@ -91,7 +91,7 @@ async function promptRemovalAccountId(params: {
   prompter: WizardPrompter;
   label: string;
   channel: ChannelChoice;
-  plugin?: ChannelOnboardingSetupPlugin;
+  plugin?: ChannelSetupPlugin;
 }): Promise<string> {
   const { cfg, prompter, label, channel } = params;
   const plugin = params.plugin ?? getChannelSetupPlugin(channel);
@@ -118,8 +118,8 @@ async function collectChannelStatus(params: {
   cfg: OpenClawConfig;
   options?: SetupChannelsOptions;
   accountOverrides: Partial<Record<ChannelChoice, string>>;
-  installedPlugins?: ChannelOnboardingSetupPlugin[];
-  resolveAdapter?: (channel: ChannelChoice) => ChannelSetupFlowAdapter | undefined;
+  installedPlugins?: ChannelSetupPlugin[];
+  resolveAdapter?: (channel: ChannelChoice) => ChannelSetupWizardAdapter | undefined;
 }): Promise<ChannelStatusSummary> {
   const installedPlugins = params.installedPlugins ?? listChannelSetupPlugins();
   const workspaceDir = resolveAgentWorkspaceDir(params.cfg, resolveDefaultAgentId(params.cfg));
@@ -131,7 +131,7 @@ async function collectChannelStatus(params: {
   const resolveAdapter =
     params.resolveAdapter ??
     ((channel: ChannelChoice) =>
-      resolveChannelSetupFlowAdapterForPlugin(
+      resolveChannelSetupWizardAdapterForPlugin(
         installedPlugins.find((plugin) => plugin.id === channel),
       ));
   const statusEntries = await Promise.all(
@@ -271,7 +271,7 @@ async function maybeConfigureDmPolicies(params: {
   selection: ChannelChoice[];
   prompter: WizardPrompter;
   accountIdsByChannel?: Map<ChannelChoice, string>;
-  resolveAdapter?: (channel: ChannelChoice) => ChannelSetupFlowAdapter | undefined;
+  resolveAdapter?: (channel: ChannelChoice) => ChannelSetupWizardAdapter | undefined;
 }): Promise<OpenClawConfig> {
   const { selection, prompter, accountIdsByChannel } = params;
   const resolve = params.resolveAdapter ?? (() => undefined);
@@ -347,19 +347,17 @@ export async function setupChannels(
   const accountOverrides: Partial<Record<ChannelChoice, string>> = {
     ...options?.accountIds,
   };
-  const scopedPluginsById = new Map<ChannelChoice, ChannelOnboardingSetupPlugin>();
+  const scopedPluginsById = new Map<ChannelChoice, ChannelSetupPlugin>();
   const resolveWorkspaceDir = () => resolveAgentWorkspaceDir(next, resolveDefaultAgentId(next));
-  const rememberScopedPlugin = (plugin: ChannelOnboardingSetupPlugin) => {
+  const rememberScopedPlugin = (plugin: ChannelSetupPlugin) => {
     const channel = plugin.id;
     scopedPluginsById.set(channel, plugin);
     options?.onResolvedPlugin?.(channel, plugin);
   };
-  const getVisibleChannelPlugin = (
-    channel: ChannelChoice,
-  ): ChannelOnboardingSetupPlugin | undefined =>
+  const getVisibleChannelPlugin = (channel: ChannelChoice): ChannelSetupPlugin | undefined =>
     scopedPluginsById.get(channel) ?? getChannelSetupPlugin(channel);
-  const listVisibleInstalledPlugins = (): ChannelOnboardingSetupPlugin[] => {
-    const merged = new Map<string, ChannelOnboardingSetupPlugin>();
+  const listVisibleInstalledPlugins = (): ChannelSetupPlugin[] => {
+    const merged = new Map<string, ChannelSetupPlugin>();
     for (const plugin of listChannelSetupPlugins()) {
       merged.set(plugin.id, plugin);
     }
@@ -371,12 +369,12 @@ export async function setupChannels(
   const loadScopedChannelPlugin = async (
     channel: ChannelChoice,
     pluginId?: string,
-  ): Promise<ChannelOnboardingSetupPlugin | undefined> => {
+  ): Promise<ChannelSetupPlugin | undefined> => {
     const existing = getVisibleChannelPlugin(channel);
     if (existing) {
       return existing;
     }
-    const snapshot = loadOnboardingPluginRegistrySnapshotForChannel({
+    const snapshot = loadChannelSetupPluginRegistrySnapshotForChannel({
       cfg: next,
       runtime,
       channel,
@@ -395,9 +393,9 @@ export async function setupChannels(
   const getVisibleSetupFlowAdapter = (channel: ChannelChoice) => {
     const scopedPlugin = scopedPluginsById.get(channel);
     if (scopedPlugin) {
-      return resolveChannelSetupFlowAdapterForPlugin(scopedPlugin);
+      return resolveChannelSetupWizardAdapterForPlugin(scopedPlugin);
     }
-    return resolveChannelSetupFlowAdapterForPlugin(getChannelSetupPlugin(channel));
+    return resolveChannelSetupWizardAdapterForPlugin(getChannelSetupPlugin(channel));
   };
   const preloadConfiguredExternalPlugins = () => {
     // Keep setup memory bounded by snapshot-loading only configured external plugins.
@@ -737,7 +735,7 @@ export async function setupChannels(
     const installedCatalogEntry = installedCatalogById.get(channel);
     if (catalogEntry) {
       const workspaceDir = resolveWorkspaceDir();
-      const result = await ensureOnboardingPluginInstalled({
+      const result = await ensureChannelSetupPluginInstalled({
         cfg: next,
         entry: catalogEntry,
         prompter,

@@ -1,12 +1,6 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import { DEFAULT_ACCOUNT_ID } from "../../routing/session-key.js";
-
-const promptAccountIdSdkMock = vi.hoisted(() => vi.fn(async () => "default"));
-vi.mock("../../plugin-sdk/onboarding.js", () => ({
-  promptAccountId: promptAccountIdSdkMock,
-}));
-
 import {
   applySingleTokenPromptResult,
   buildSingleChannelSecretPromptState,
@@ -35,7 +29,7 @@ import {
   setLegacyChannelDmPolicyWithAllowFrom,
   setSetupChannelEnabled,
   splitSetupEntries,
-} from "./setup-flow-helpers.js";
+} from "./setup-wizard-helpers.js";
 
 function createPrompter(inputs: string[]) {
   return {
@@ -166,11 +160,6 @@ async function runPromptLegacyAllowFrom(params: {
 }
 
 describe("promptResolvedAllowFrom", () => {
-  beforeEach(() => {
-    promptAccountIdSdkMock.mockReset();
-    promptAccountIdSdkMock.mockResolvedValue("default");
-  });
-
   it("re-prompts without token until all ids are parseable", async () => {
     const prompter = createPrompter(["@alice", "123"]);
     const resolveEntries = vi.fn();
@@ -1150,11 +1139,6 @@ describe("resolveSetupAccountId", () => {
 });
 
 describe("resolveAccountIdForConfigure", () => {
-  beforeEach(() => {
-    promptAccountIdSdkMock.mockReset();
-    promptAccountIdSdkMock.mockResolvedValue("default");
-  });
-
   it("uses normalized override without prompting", async () => {
     const accountId = await resolveAccountIdForConfigure({
       cfg: {},
@@ -1183,12 +1167,16 @@ describe("resolveAccountIdForConfigure", () => {
   });
 
   it("prompts for account id when prompting is enabled and no override is provided", async () => {
-    promptAccountIdSdkMock.mockResolvedValueOnce("prompted-id");
+    const prompter = {
+      select: vi.fn(async () => "prompted-id"),
+      text: vi.fn(async () => ""),
+      note: vi.fn(async () => undefined),
+    };
 
     const accountId = await resolveAccountIdForConfigure({
       cfg: {},
       // oxlint-disable-next-line typescript/no-explicit-any
-      prompter: {} as any,
+      prompter: prompter as any,
       label: "Signal",
       shouldPromptAccountIds: true,
       listAccountIds: () => ["default", "prompted-id"],
@@ -1196,12 +1184,12 @@ describe("resolveAccountIdForConfigure", () => {
     });
 
     expect(accountId).toBe("prompted-id");
-    expect(promptAccountIdSdkMock).toHaveBeenCalledWith(
+    expect(prompter.select).toHaveBeenCalledWith(
       expect.objectContaining({
-        label: "Signal",
-        currentId: "fallback",
-        defaultAccountId: "fallback",
+        message: "Signal account",
+        initialValue: "fallback",
       }),
     );
+    expect(prompter.text).not.toHaveBeenCalled();
   });
 });

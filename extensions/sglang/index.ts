@@ -59,7 +59,7 @@ const sglangPlugin = {
           }),
       },
       wizard: {
-        onboarding: {
+        setup: {
           choiceId: "sglang",
           choiceLabel: "SGLang",
           choiceHint: "Fast self-hosted OpenAI-compatible server",

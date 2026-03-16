@@ -1,6 +1,6 @@
 import type { RuntimeEnv, WizardPrompter } from "openclaw/plugin-sdk/irc";
 import { describe, expect, it, vi } from "vitest";
-import { buildChannelSetupFlowAdapterFromSetupWizard } from "../../../src/channels/plugins/setup-wizard.js";
+import { buildChannelSetupWizardAdapterFromSetupWizard } from "../../../src/channels/plugins/setup-wizard.js";
 import { createRuntimeEnv } from "../../test-utils/runtime-env.js";
 import { ircPlugin } from "./channel.js";
 import type { CoreConfig } from "./types.js";
@@ -27,13 +27,13 @@ function createPrompter(overrides: Partial<WizardPrompter>): WizardPrompter {
   };
 }
 
-const ircConfigureAdapter = buildChannelSetupFlowAdapterFromSetupWizard({
+const ircConfigureAdapter = buildChannelSetupWizardAdapterFromSetupWizard({
   plugin: ircPlugin,
   wizard: ircPlugin.setupWizard!,
 });
 
 describe("irc setup wizard", () => {
-  it("configures host and nick via onboarding prompts", async () => {
+  it("configures host and nick via setup prompts", async () => {
     const prompter = createPrompter({
       text: vi.fn(async ({ message }: { message: string }) => {
         if (message === "IRC server host") {

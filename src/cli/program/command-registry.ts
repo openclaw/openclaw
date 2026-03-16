@@ -56,7 +56,7 @@ const coreEntries: CoreCliEntry[] = [
     commands: [
       {
         name: "onboard",
-        description: "Interactive onboarding wizard for gateway, workspace, and skills",
+        description: "Interactive setup wizard for gateway, workspace, and skills",
         hasSubcommands: false,
       },
     ],

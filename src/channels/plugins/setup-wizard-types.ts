@@ -4,7 +4,7 @@ import type { RuntimeEnv } from "../../runtime.js";
 import type { WizardPrompter } from "../../wizard/prompts.js";
 import type { ChannelId, ChannelPlugin } from "./types.js";
 
-export type ChannelOnboardingSetupPlugin = Pick<
+export type ChannelSetupPlugin = Pick<
   ChannelPlugin,
   "id" | "meta" | "capabilities" | "config" | "setup" | "setupWizard"
 >;
@@ -15,7 +15,7 @@ export type SetupChannelsOptions = {
   onSelection?: (selection: ChannelId[]) => void;
   accountIds?: Partial<Record<ChannelId, string>>;
   onAccountId?: (channel: ChannelId, accountId: string) => void;
-  onResolvedPlugin?: (channel: ChannelId, plugin: ChannelOnboardingSetupPlugin) => void;
+  onResolvedPlugin?: (channel: ChannelId, plugin: ChannelSetupPlugin) => void;
   promptAccountIds?: boolean;
   whatsappAccountId?: string;
   promptWhatsAppAccountId?: boolean;
@@ -90,7 +90,7 @@ export type ChannelSetupDmPolicy = {
   }) => Promise<OpenClawConfig>;
 };
 
-export type ChannelSetupFlowAdapter = {
+export type ChannelSetupWizardAdapter = {
   channel: ChannelId;
   getStatus: (ctx: ChannelSetupStatusContext) => Promise<ChannelSetupStatus>;
   configure: (ctx: ChannelSetupConfigureContext) => Promise<ChannelSetupResult>;

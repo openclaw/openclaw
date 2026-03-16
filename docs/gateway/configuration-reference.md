@@ -1125,7 +1125,7 @@ Optional sandboxing for the embedded agent. See [Sandboxing](/gateway/sandboxing
     defaults: {
       sandbox: {
         mode: "non-main", // off | non-main | all
-        backend: "docker", // docker | openshell
+        backend: "docker", // docker | ssh | openshell
         scope: "agent", // session | agent | shared
         workspaceAccess: "none", // none | ro | rw
         workspaceRoot: "~/.openclaw/sandboxes",
@@ -1153,6 +1153,20 @@ Optional sandboxing for the embedded agent. See [Sandboxing](/gateway/sandboxing
           dns: ["1.1.1.1", "8.8.8.8"],
           extraHosts: ["internal.service:10.0.0.5"],
           binds: ["/home/user/source:/source:rw"],
+        },
+        ssh: {
+          target: "user@gateway-host:22",
+          command: "ssh",
+          workspaceRoot: "/tmp/openclaw-sandboxes",
+          strictHostKeyChecking: true,
+          updateHostKeys: true,
+          identityFile: "~/.ssh/id_ed25519",
+          certificateFile: "~/.ssh/id_ed25519-cert.pub",
+          knownHostsFile: "~/.ssh/known_hosts",
+          // SecretRefs / inline contents also supported:
+          // identityData: { source: "env", provider: "default", id: "SSH_IDENTITY" },
+          // certificateData: { source: "env", provider: "default", id: "SSH_CERTIFICATE" },
+          // knownHostsData: { source: "env", provider: "default", id: "SSH_KNOWN_HOSTS" },
         },
         browser: {
           enabled: false,
@@ -1203,10 +1217,35 @@ Optional sandboxing for the embedded agent. See [Sandboxing](/gateway/sandboxing
 **Backend:**
 
 - `docker`: local Docker runtime (default)
+- `ssh`: generic SSH-backed remote runtime
 - `openshell`: OpenShell runtime
 
 When `backend: "openshell"` is selected, runtime-specific settings move to
 `plugins.entries.openshell.config`.
+
+**SSH backend config:**
+
+- `target`: SSH target in `user@host[:port]` form
+- `command`: SSH client command (default: `ssh`)
+- `workspaceRoot`: absolute remote root used for per-scope workspaces
+- `identityFile` / `certificateFile` / `knownHostsFile`: existing local files passed to OpenSSH
+- `identityData` / `certificateData` / `knownHostsData`: inline contents or SecretRefs that OpenClaw materializes into temp files at runtime
+- `strictHostKeyChecking` / `updateHostKeys`: OpenSSH host-key policy knobs
+
+**SSH auth precedence:**
+
+- `identityData` wins over `identityFile`
+- `certificateData` wins over `certificateFile`
+- `knownHostsData` wins over `knownHostsFile`
+- SecretRef-backed `*Data` values are resolved from the active secrets runtime snapshot before the sandbox session starts
+
+**SSH backend behavior:**
+
+- seeds the remote workspace once after create or recreate
+- then keeps the remote SSH workspace canonical
+- routes `exec`, file tools, and media paths over SSH
+- does not sync remote changes back to the host automatically
+- does not support sandbox browser containers
 
 **Workspace access:**
 
@@ -1252,6 +1291,7 @@ When `backend: "openshell"` is selected, runtime-specific settings move to
 - `remote`: seed remote once when the sandbox is created, then keep the remote workspace canonical
 
 In `remote` mode, host-local edits made outside OpenClaw are not synced into the sandbox automatically after the seed step.
+Transport is SSH into the OpenShell sandbox, but the plugin owns sandbox lifecycle and optional mirror sync.
 
 **`setupCommand`** runs once after container creation (via `sh -lc`). Needs network egress, writable root, root user.
 
