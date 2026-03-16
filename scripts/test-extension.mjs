@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { spawn } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -44,6 +44,55 @@ function collectTestFiles(rootPath) {
   }
 
   return results.toSorted((left, right) => left.localeCompare(right));
+}
+
+function listChangedPaths(base, head = "HEAD") {
+  if (!base) {
+    throw new Error("A git base revision is required to list changed extensions.");
+  }
+
+  return execFileSync("git", ["diff", "--name-only", base, head], {
+    cwd: repoRoot,
+    stdio: ["ignore", "pipe", "pipe"],
+    encoding: "utf8",
+  })
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0);
+}
+
+function hasExtensionPackage(extensionId) {
+  return fs.existsSync(path.join(repoRoot, "extensions", extensionId, "package.json"));
+}
+
+export function detectChangedExtensionIds(changedPaths) {
+  const extensionIds = new Set();
+
+  for (const rawPath of changedPaths) {
+    const relativePath = normalizeRelative(String(rawPath).trim());
+    if (!relativePath) {
+      continue;
+    }
+
+    const extensionMatch = relativePath.match(/^extensions\/([^/]+)(?:\/|$)/);
+    if (extensionMatch) {
+      extensionIds.add(extensionMatch[1]);
+      continue;
+    }
+
+    const pairedCoreMatch = relativePath.match(/^src\/([^/]+)(?:\/|$)/);
+    if (pairedCoreMatch && hasExtensionPackage(pairedCoreMatch[1])) {
+      extensionIds.add(pairedCoreMatch[1]);
+    }
+  }
+
+  return [...extensionIds].toSorted((left, right) => left.localeCompare(right));
+}
+
+export function listChangedExtensionIds(params = {}) {
+  const base = params.base;
+  const head = params.head ?? "HEAD";
+  return detectChangedExtensionIds(listChangedPaths(base, head));
 }
 
 function resolveExtensionDirectory(targetArg, cwd = process.cwd()) {
@@ -115,17 +164,66 @@ export function resolveExtensionTestPlan(params = {}) {
 function printUsage() {
   console.error("Usage: pnpm test:extension <extension-name|path> [vitest args...]");
   console.error("       node scripts/test-extension.mjs [extension-name|path] [vitest args...]");
+  console.error(
+    "       node scripts/test-extension.mjs --list-changed --base <git-ref> [--head <git-ref>]",
+  );
 }
 
 async function run() {
   const rawArgs = process.argv.slice(2);
   const dryRun = rawArgs.includes("--dry-run");
   const json = rawArgs.includes("--json");
-  const args = rawArgs.filter((arg) => arg !== "--" && arg !== "--dry-run" && arg !== "--json");
+  const listChanged = rawArgs.includes("--list-changed");
+  const args = rawArgs.filter(
+    (arg) => arg !== "--" && arg !== "--dry-run" && arg !== "--json" && arg !== "--list-changed",
+  );
+
+  let base = "";
+  let head = "HEAD";
+  const passthroughArgs = [];
+
+  if (listChanged) {
+    for (let index = 0; index < args.length; index += 1) {
+      const arg = args[index];
+      if (arg === "--base") {
+        base = args[index + 1] ?? "";
+        index += 1;
+        continue;
+      }
+      if (arg === "--head") {
+        head = args[index + 1] ?? "HEAD";
+        index += 1;
+        continue;
+      }
+      passthroughArgs.push(arg);
+    }
+  } else {
+    passthroughArgs.push(...args);
+  }
+
+  if (listChanged) {
+    let extensionIds;
+    try {
+      extensionIds = listChangedExtensionIds({ base, head });
+    } catch (error) {
+      printUsage();
+      console.error(error instanceof Error ? error.message : String(error));
+      process.exit(1);
+    }
+
+    if (json) {
+      process.stdout.write(`${JSON.stringify({ base, head, extensionIds }, null, 2)}\n`);
+    } else {
+      for (const extensionId of extensionIds) {
+        console.log(extensionId);
+      }
+    }
+    return;
+  }
 
   let targetArg;
-  if (args[0] && !args[0].startsWith("-")) {
-    targetArg = args.shift();
+  if (passthroughArgs[0] && !passthroughArgs[0].startsWith("-")) {
+    targetArg = passthroughArgs.shift();
   }
 
   let plan;
@@ -160,7 +258,7 @@ async function run() {
 
   const child = spawn(
     pnpm,
-    ["exec", "vitest", "run", "--config", plan.config, ...plan.testFiles, ...args],
+    ["exec", "vitest", "run", "--config", plan.config, ...plan.testFiles, ...passthroughArgs],
     {
       cwd: repoRoot,
       stdio: "inherit",
