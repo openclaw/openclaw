@@ -16,13 +16,19 @@ export const formatDuration = (ms: number | null | undefined) => {
 export const formatTokensCompact = (
   sess: Pick<
     SessionStatus,
-    "totalTokens" | "contextTokens" | "percentUsed" | "cacheRead" | "cacheWrite"
+    | "totalTokens"
+    | "contextTokens"
+    | "percentUsed"
+    | "cacheRead"
+    | "cacheWrite"
+    | "inputTokens"
   >,
 ) => {
   const used = sess.totalTokens;
   const ctx = sess.contextTokens;
   const cacheRead = sess.cacheRead;
   const cacheWrite = sess.cacheWrite;
+  const inputTokens = sess.inputTokens;
 
   let result = "";
   if (used == null) {
@@ -36,11 +42,11 @@ export const formatTokensCompact = (
 
   // Add cache hit rate if there are cached reads
   if (typeof cacheRead === "number" && cacheRead > 0) {
-    const total =
-      typeof used === "number"
-        ? used
-        : cacheRead + (typeof cacheWrite === "number" ? cacheWrite : 0);
-    const hitRate = Math.round((cacheRead / total) * 100);
+    const totalPromptTokens =
+      cacheRead +
+      (typeof cacheWrite === "number" ? cacheWrite : 0) +
+      (typeof inputTokens === "number" ? inputTokens : 0);
+    const hitRate = totalPromptTokens > 0 ? Math.round((cacheRead / totalPromptTokens) * 100) : 0;
     result += ` · 🗄️ ${hitRate}% cached`;
   }
 
