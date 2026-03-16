@@ -37,6 +37,7 @@ export const runWithModelFallbackMock = createMock();
 export const runEmbeddedPiAgentMock = createMock();
 export const runCliAgentMock = createMock();
 export const getCliSessionIdMock = createMock();
+export const setSessionRuntimeModelMock = createMock();
 export const updateSessionStoreMock = createMock();
 export const resolveCronSessionMock = createMock();
 export const logWarnMock = createMock();
@@ -215,7 +216,7 @@ vi.mock("../../config/sessions.js", async (importOriginal) => {
     ...actual,
     resolveAgentMainSessionKey: vi.fn().mockReturnValue("main:default"),
     resolveSessionTranscriptPath: vi.fn().mockReturnValue("/tmp/transcript.jsonl"),
-    setSessionRuntimeModel: vi.fn(),
+    setSessionRuntimeModel: setSessionRuntimeModelMock,
     updateSessionStore: updateSessionStoreMock,
   };
 });

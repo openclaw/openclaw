@@ -124,4 +124,98 @@ describe("updateSessionStoreAfterAgentRun", () => {
       "once",
     );
   });
+
+  it("does not persist fallback model into session store when isFromFallback is true", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-session-store-"));
+    const storePath = path.join(dir, "sessions.json");
+    const sessionKey = `agent:test:fallback:${randomUUID()}`;
+    const sessionId = randomUUID();
+
+    const sessionStore: Record<string, SessionEntry> = {
+      [sessionKey]: {
+        sessionId,
+        updatedAt: Date.now(),
+        model: "gpt-5.3",
+        modelProvider: "openai",
+      },
+    };
+    await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2), "utf8");
+
+    await updateSessionStoreAfterAgentRun({
+      cfg: {} as never,
+      sessionId,
+      sessionKey,
+      storePath,
+      sessionStore,
+      defaultProvider: "openai",
+      defaultModel: "gpt-5.3",
+      fallbackProvider: "anthropic",
+      fallbackModel: "claude-sonnet-4-20250514",
+      isFromFallback: true,
+      result: {
+        payloads: [],
+        meta: {
+          aborted: false,
+          agentMeta: {
+            provider: "anthropic",
+            model: "claude-sonnet-4-20250514",
+            usage: { input: 100, output: 50 },
+          },
+        },
+      } as never,
+    });
+
+    const persisted = loadSessionStore(storePath, { skipCache: true })[sessionKey];
+    // The fallback model should NOT be persisted — session keeps the original model
+    expect(persisted?.model).not.toBe("claude-sonnet-4-20250514");
+    expect(persisted?.modelProvider).not.toBe("anthropic");
+  });
+
+  it("auto-computes isFromFallback when omitted and model differs from default", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-session-store-"));
+    const storePath = path.join(dir, "sessions.json");
+    const sessionKey = `agent:test:auto-fallback:${randomUUID()}`;
+    const sessionId = randomUUID();
+
+    const sessionStore: Record<string, SessionEntry> = {
+      [sessionKey]: {
+        sessionId,
+        updatedAt: Date.now(),
+        model: "gpt-5.3",
+        modelProvider: "openai",
+      },
+    };
+    await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2), "utf8");
+
+    // isFromFallback is omitted — the function should compute it as true
+    // because the model used differs from the default
+    await updateSessionStoreAfterAgentRun({
+      cfg: {} as never,
+      sessionId,
+      sessionKey,
+      storePath,
+      sessionStore,
+      defaultProvider: "openai",
+      defaultModel: "gpt-5.3",
+      fallbackProvider: "anthropic",
+      fallbackModel: "claude-sonnet-4-20250514",
+      // isFromFallback intentionally omitted
+      result: {
+        payloads: [],
+        meta: {
+          aborted: false,
+          agentMeta: {
+            provider: "anthropic",
+            model: "claude-sonnet-4-20250514",
+            usage: { input: 100, output: 50 },
+          },
+        },
+      } as never,
+    });
+
+    const persisted = loadSessionStore(storePath, { skipCache: true })[sessionKey];
+    // The auto-computed fallback detection should prevent persisting the fallback model
+    expect(persisted?.model).not.toBe("claude-sonnet-4-20250514");
+    expect(persisted?.modelProvider).not.toBe("anthropic");
+  });
 });
