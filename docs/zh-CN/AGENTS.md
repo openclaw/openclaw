@@ -12,7 +12,7 @@
 - 目标文档：`docs/zh-CN/**/*.md`
 - 术语表：`docs/.i18n/glossary.zh-CN.json`
 - 翻译记忆库：`docs/.i18n/zh-CN.tm.jsonl`
-- 提示词规则：`scripts/docs-i18n/translator.go`
+- 提示词规则：`scripts/docs-i18n/prompt.go`
 
 常用运行方式：
 
@@ -31,6 +31,8 @@ go run scripts/docs-i18n/main.go -mode segment docs/channels/matrix.md
 注意事项：
 
 - doc 模式用于整页翻译；segment 模式用于小范围修补（依赖 TM）。
+- 新增技术术语、页面标题或短导航标签时，先更新 `docs/.i18n/glossary.zh-CN.json`，再跑 `doc` 模式；不要指望模型自行保留英文术语或固定译名。
+- `pnpm docs:check-i18n-glossary` 会检查变更过的英文文档标题和短内部链接标签是否已写入 glossary。
 - 超大文件若超时，优先做**定点替换**或拆分后再跑。
 - 翻译后检查中文引号、CJK-Latin 间距和术语一致性。
 

@@ -1,3 +1,9 @@
+import {
+  resolveProviderBinaryThinking,
+  resolveProviderDefaultThinkingLevel,
+  resolveProviderXHighThinking,
+} from "../plugins/provider-runtime.js";
+
 export type ThinkLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "adaptive";
 export type VerboseLevel = "off" | "on" | "full";
 export type NoticeLevel = "off" | "on" | "full";
@@ -10,8 +16,6 @@ export type ThinkingCatalogEntry = {
   id: string;
   reasoning?: boolean;
 };
-
-const CLAUDE_46_MODEL_RE = /claude-(?:opus|sonnet)-4(?:\.|-)6(?:$|[-.])/i;
 
 function normalizeProviderId(provider?: string | null): string {
   if (!provider) {
@@ -27,29 +31,24 @@ function normalizeProviderId(provider?: string | null): string {
   return normalized;
 }
 
-export function isBinaryThinkingProvider(provider?: string | null): boolean {
-  return normalizeProviderId(provider) === "zai";
+export function isBinaryThinkingProvider(provider?: string | null, model?: string | null): boolean {
+  const normalizedProvider = normalizeProviderId(provider);
+  if (!normalizedProvider) {
+    return false;
+  }
+
+  const pluginDecision = resolveProviderBinaryThinking({
+    provider: normalizedProvider,
+    context: {
+      provider: normalizedProvider,
+      modelId: model?.trim() ?? "",
+    },
+  });
+  if (typeof pluginDecision === "boolean") {
+    return pluginDecision;
+  }
+  return false;
 }
-
-export const XHIGH_MODEL_REFS = [
-  "openai/gpt-5.4",
-  "openai/gpt-5.4-pro",
-  "openai/gpt-5.2",
-  "openai-codex/gpt-5.4",
-  "openai-codex/gpt-5.3-codex",
-  "openai-codex/gpt-5.3-codex-spark",
-  "openai-codex/gpt-5.2-codex",
-  "openai-codex/gpt-5.1-codex",
-  "github-copilot/gpt-5.2-codex",
-  "github-copilot/gpt-5.2",
-] as const;
-
-const XHIGH_MODEL_SET = new Set(XHIGH_MODEL_REFS.map((entry) => entry.toLowerCase()));
-const XHIGH_MODEL_IDS = new Set(
-  XHIGH_MODEL_REFS.map((entry) => entry.split("/")[1]?.toLowerCase()).filter(
-    (entry): entry is string => Boolean(entry),
-  ),
-);
 
 // Normalize user-provided thinking level strings to the canonical enum.
 export function normalizeThinkLevel(raw?: string | null): ThinkLevel | undefined {
@@ -95,11 +94,20 @@ export function supportsXHighThinking(provider?: string | null, model?: string |
   if (!modelKey) {
     return false;
   }
-  const providerKey = provider?.trim().toLowerCase();
+  const providerKey = normalizeProviderId(provider);
   if (providerKey) {
-    return XHIGH_MODEL_SET.has(`${providerKey}/${modelKey}`);
+    const pluginDecision = resolveProviderXHighThinking({
+      provider: providerKey,
+      context: {
+        provider: providerKey,
+        modelId: modelKey,
+      },
+    });
+    if (typeof pluginDecision === "boolean") {
+      return pluginDecision;
+    }
   }
-  return XHIGH_MODEL_IDS.has(modelKey);
+  return false;
 }
 
 export function listThinkingLevels(provider?: string | null, model?: string | null): ThinkLevel[] {
@@ -112,7 +120,7 @@ export function listThinkingLevels(provider?: string | null, model?: string | nu
 }
 
 export function listThinkingLevelLabels(provider?: string | null, model?: string | null): string[] {
-  if (isBinaryThinkingProvider(provider)) {
+  if (isBinaryThinkingProvider(provider, model)) {
     return ["off", "on"];
   }
   return listThinkingLevels(provider, model);
@@ -127,17 +135,7 @@ export function formatThinkingLevels(
 }
 
 export function formatXHighModelHint(): string {
-  const refs = [...XHIGH_MODEL_REFS] as string[];
-  if (refs.length === 0) {
-    return "unknown model";
-  }
-  if (refs.length === 1) {
-    return refs[0];
-  }
-  if (refs.length === 2) {
-    return `${refs[0]} or ${refs[1]}`;
-  }
-  return `${refs.slice(0, -1).join(", ")} or ${refs[refs.length - 1]}`;
+  return "provider models that advertise xhigh reasoning";
 }
 
 export function resolveThinkingDefaultForModel(params: {
@@ -146,18 +144,20 @@ export function resolveThinkingDefaultForModel(params: {
   catalog?: ThinkingCatalogEntry[];
 }): ThinkLevel {
   const normalizedProvider = normalizeProviderId(params.provider);
-  const modelLower = params.model.trim().toLowerCase();
-  const isAnthropicFamilyModel =
-    normalizedProvider === "anthropic" ||
-    normalizedProvider === "amazon-bedrock" ||
-    modelLower.includes("anthropic/") ||
-    modelLower.includes(".anthropic.");
-  if (isAnthropicFamilyModel && CLAUDE_46_MODEL_RE.test(modelLower)) {
-    return "adaptive";
-  }
   const candidate = params.catalog?.find(
     (entry) => entry.provider === params.provider && entry.id === params.model,
   );
+  const pluginDecision = resolveProviderDefaultThinkingLevel({
+    provider: normalizedProvider,
+    context: {
+      provider: normalizedProvider,
+      modelId: params.model,
+      reasoning: candidate?.reasoning,
+    },
+  });
+  if (pluginDecision) {
+    return pluginDecision;
+  }
   if (candidate?.reasoning) {
     return "low";
   }
