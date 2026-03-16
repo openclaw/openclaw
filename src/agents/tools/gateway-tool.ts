@@ -117,8 +117,10 @@ export function createGatewayTool(opts?: {
             reason,
           },
         };
+        let canTransitionSentinel = false;
         try {
           await writeRestartSentinel(payload);
+          canTransitionSentinel = true;
         } catch {
           // ignore: sentinel is best-effort
         }
@@ -128,11 +130,13 @@ export function createGatewayTool(opts?: {
         const scheduled = scheduleGatewaySigusr1Restart({
           delayMs,
           reason,
-          beforeRestart: async () => {
-            await transitionRestartSentinelStatus("in-progress", {
-              allowedCurrentStatuses: ["pending"],
-            });
-          },
+          beforeRestart: canTransitionSentinel
+            ? async () => {
+                await transitionRestartSentinelStatus("in-progress", {
+                  allowedCurrentStatuses: ["pending"],
+                });
+              }
+            : undefined,
         });
         return jsonResult(scheduled);
       }

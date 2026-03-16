@@ -336,6 +336,7 @@ export async function runServiceRestart(params: {
   postRestartCheck?: (ctx: RestartPostCheckContext) => Promise<GatewayServiceRestartResult | void>;
   onBeforeRestartAction?: () => Promise<void> | void;
   onNotLoaded?: (ctx: NotLoadedActionContext) => Promise<NotLoadedActionResult | null>;
+  onScheduled?: () => void;
 }): Promise<boolean> {
   const json = Boolean(params.opts?.json);
   const { stdout, emit, fail } = createActionIO({ action: "restart", json });
@@ -345,6 +346,7 @@ export async function runServiceRestart(params: {
     restartStatus: ReturnType<typeof describeGatewayServiceRestart>,
     serviceLoaded: boolean,
   ) => {
+    params.onScheduled?.();
     emit({
       ok: true,
       result: restartStatus.daemonActionResult,

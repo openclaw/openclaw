@@ -87,8 +87,10 @@ export const updateHandlers: GatewayRequestHandlers = {
     };
 
     let sentinelPath: string | null = null;
+    let canTransitionSentinel = false;
     try {
       sentinelPath = await writeRestartSentinel(payload);
+      canTransitionSentinel = true;
     } catch {
       sentinelPath = null;
     }
@@ -101,11 +103,13 @@ export const updateHandlers: GatewayRequestHandlers = {
         ? scheduleGatewaySigusr1Restart({
             delayMs: restartDelayMs,
             reason: "update.run",
-            beforeRestart: async () => {
-              await transitionRestartSentinelStatus("in-progress", {
-                allowedCurrentStatuses: ["pending"],
-              });
-            },
+            beforeRestart: canTransitionSentinel
+              ? async () => {
+                  await transitionRestartSentinelStatus("in-progress", {
+                    allowedCurrentStatuses: ["pending"],
+                  });
+                }
+              : undefined,
             audit: {
               actor: actor.actor,
               deviceId: actor.deviceId,

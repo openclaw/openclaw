@@ -18,6 +18,7 @@ type RestartParams = {
   opts?: { json?: boolean };
   postRestartCheck?: (ctx: RestartPostCheckContext) => Promise<void>;
   onBeforeRestartAction?: () => Promise<void> | void;
+  onScheduled?: () => void;
 };
 
 const service = {
@@ -345,6 +346,26 @@ describe("runDaemonRestart health checks", () => {
     const result = await runDaemonRestart({ json: true, notify: true });
 
     expect(result).toBe(true);
+    expect(transitionRestartSentinelStatus).not.toHaveBeenCalledWith("ok", expect.anything());
+  });
+
+  it("does not finalize restart sentinel after a scheduled restart handoff", async () => {
+    runServiceRestart.mockImplementation(async (params: RestartParams) => {
+      await params.onBeforeRestartAction?.();
+      params.onScheduled?.();
+      return true;
+    });
+
+    const { runDaemonRestart } = await import("./lifecycle.js");
+    const result = await runDaemonRestart({ json: true, notify: true });
+
+    expect(result).toBe(true);
+    expect(transitionRestartSentinelStatus).toHaveBeenCalledWith(
+      "in-progress",
+      expect.objectContaining({
+        allowedCurrentStatuses: ["pending"],
+      }),
+    );
     expect(transitionRestartSentinelStatus).not.toHaveBeenCalledWith("ok", expect.anything());
   });
 

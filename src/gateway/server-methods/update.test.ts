@@ -6,7 +6,11 @@ import type { UpdateRunResult } from "../../infra/update-runner.js";
 let capturedPayload: RestartSentinelPayload | undefined;
 
 const runGatewayUpdateMock = vi.fn<() => Promise<UpdateRunResult>>();
-
+const writeRestartSentinelMock = vi.fn(async (payload: RestartSentinelPayload) => {
+  capturedPayload = payload;
+  return "/tmp/sentinel.json";
+});
+const transitionRestartSentinelStatusMock = vi.fn();
 const scheduleGatewaySigusr1RestartMock = vi.fn(() => ({ scheduled: true }));
 
 vi.mock("../../config/config.js", () => ({
@@ -40,10 +44,9 @@ vi.mock("../../infra/restart-sentinel.js", async (importOriginal) => {
   const actual = await importOriginal();
   return {
     ...(actual as Record<string, unknown>),
-    writeRestartSentinel: async (payload: RestartSentinelPayload) => {
-      capturedPayload = payload;
-      return "/tmp/sentinel.json";
-    },
+    writeRestartSentinel: (...args: unknown[]) => writeRestartSentinelMock(...args),
+    transitionRestartSentinelStatus: (...args: unknown[]) =>
+      transitionRestartSentinelStatusMock(...args),
   };
 });
 
@@ -78,6 +81,12 @@ vi.mock("./validation.js", () => ({
 beforeEach(() => {
   capturedPayload = undefined;
   runGatewayUpdateMock.mockClear();
+  writeRestartSentinelMock.mockClear();
+  writeRestartSentinelMock.mockImplementation(async (payload: RestartSentinelPayload) => {
+    capturedPayload = payload;
+    return "/tmp/sentinel.json";
+  });
+  transitionRestartSentinelStatusMock.mockReset();
   runGatewayUpdateMock.mockResolvedValue({
     status: "ok",
     mode: "npm",
@@ -168,8 +177,21 @@ describe("update.run restart scheduling", () => {
     });
 
     expect(scheduleGatewaySigusr1RestartMock).toHaveBeenCalledTimes(1);
+    const [restartRequest] = scheduleGatewaySigusr1RestartMock.mock.calls[0] ?? [];
+    expect(typeof restartRequest.beforeRestart).toBe("function");
     expect(payload?.ok).toBe(true);
     expect(payload?.restart).toEqual({ scheduled: true });
+  });
+
+  it("omits beforeRestart hook when sentinel write fails", async () => {
+    writeRestartSentinelMock.mockRejectedValueOnce(new Error("disk full"));
+
+    await invokeUpdateRun({});
+
+    expect(scheduleGatewaySigusr1RestartMock).toHaveBeenCalledTimes(1);
+    const [restartRequest] = scheduleGatewaySigusr1RestartMock.mock.calls[0] ?? [];
+    expect(restartRequest.beforeRestart).toBeUndefined();
+    expect(transitionRestartSentinelStatusMock).not.toHaveBeenCalled();
   });
 
   it("skips restart when update fails", async () => {

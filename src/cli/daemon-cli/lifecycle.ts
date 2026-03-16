@@ -230,6 +230,7 @@ export async function runDaemonRestart(opts: DaemonLifecycleOptions = {}): Promi
   }
 
   let restarted = false;
+  let restartScheduled = false;
   try {
     restarted = await runServiceRestart({
       serviceNoun: "Gateway",
@@ -237,6 +238,9 @@ export async function runDaemonRestart(opts: DaemonLifecycleOptions = {}): Promi
       renderStartHints: renderGatewayServiceStartHints,
       opts,
       checkTokenDrift: true,
+      onScheduled: () => {
+        restartScheduled = true;
+      },
       onBeforeRestartAction: markRestartSentinelInProgress,
       onNotLoaded: async (ctx) => {
         const handled = await restartGatewayWithoutServiceManager(
@@ -355,7 +359,7 @@ export async function runDaemonRestart(opts: DaemonLifecycleOptions = {}): Promi
     throw err;
   }
 
-  if (shouldNotify && restarted && restartSentinelMarkedInProgress) {
+  if (shouldNotify && restarted && restartSentinelMarkedInProgress && !restartScheduled) {
     try {
       await transitionRestartSentinelStatus("ok", {
         allowedCurrentStatuses: ["in-progress"],
