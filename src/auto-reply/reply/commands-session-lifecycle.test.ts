@@ -1,6 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { telegramPlugin } from "../../../extensions/telegram/src/channel.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionBindingRecord } from "../../infra/outbound/session-binding-service.js";
+import { setActivePluginRegistry } from "../../plugins/runtime.js";
+import { createTestRegistry } from "../../test-utils/channel-plugins.js";
 
 const hoisted = vi.hoisted(() => {
   const getThreadBindingManagerMock = vi.fn();
@@ -19,24 +22,34 @@ const hoisted = vi.hoisted(() => {
   };
 });
 
-vi.mock("../../discord/monitor/thread-bindings.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../discord/monitor/thread-bindings.js")>();
+vi.mock("../../plugins/runtime/index.js", async () => {
+  const discordThreadBindings = await vi.importActual<
+    typeof import("../../../extensions/discord/src/monitor/thread-bindings.js")
+  >("../../../extensions/discord/src/monitor/thread-bindings.js");
   return {
-    ...actual,
-    getThreadBindingManager: hoisted.getThreadBindingManagerMock,
-    setThreadBindingIdleTimeoutBySessionKey: hoisted.setThreadBindingIdleTimeoutBySessionKeyMock,
-    setThreadBindingMaxAgeBySessionKey: hoisted.setThreadBindingMaxAgeBySessionKeyMock,
-  };
-});
-
-vi.mock("../../telegram/thread-bindings.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../telegram/thread-bindings.js")>();
-  return {
-    ...actual,
-    setTelegramThreadBindingIdleTimeoutBySessionKey:
-      hoisted.setTelegramThreadBindingIdleTimeoutBySessionKeyMock,
-    setTelegramThreadBindingMaxAgeBySessionKey:
-      hoisted.setTelegramThreadBindingMaxAgeBySessionKeyMock,
+    createPluginRuntime: () => ({
+      channel: {
+        discord: {
+          threadBindings: {
+            getManager: hoisted.getThreadBindingManagerMock,
+            resolveIdleTimeoutMs: discordThreadBindings.resolveThreadBindingIdleTimeoutMs,
+            resolveInactivityExpiresAt:
+              discordThreadBindings.resolveThreadBindingInactivityExpiresAt,
+            resolveMaxAgeMs: discordThreadBindings.resolveThreadBindingMaxAgeMs,
+            resolveMaxAgeExpiresAt: discordThreadBindings.resolveThreadBindingMaxAgeExpiresAt,
+            setIdleTimeoutBySessionKey: hoisted.setThreadBindingIdleTimeoutBySessionKeyMock,
+            setMaxAgeBySessionKey: hoisted.setThreadBindingMaxAgeBySessionKeyMock,
+            unbindBySessionKey: vi.fn(),
+          },
+        },
+        telegram: {
+          threadBindings: {
+            setIdleTimeoutBySessionKey: hoisted.setTelegramThreadBindingIdleTimeoutBySessionKeyMock,
+            setMaxAgeBySessionKey: hoisted.setTelegramThreadBindingMaxAgeBySessionKeyMock,
+          },
+        },
+      },
+    }),
   };
 });
 
@@ -139,6 +152,21 @@ function createTelegramBinding(overrides?: Partial<SessionBindingRecord>): Sessi
   };
 }
 
+function expectIdleTimeoutSetReply(
+  mock: ReturnType<typeof vi.fn>,
+  text: string,
+  idleTimeoutMs: number,
+  idleTimeoutLabel: string,
+) {
+  expect(mock).toHaveBeenCalledWith({
+    targetSessionKey: "agent:main:subagent:child",
+    accountId: "default",
+    idleTimeoutMs,
+  });
+  expect(text).toContain(`Idle timeout set to ${idleTimeoutLabel}`);
+  expect(text).toContain("2026-02-20T02:00:00.000Z");
+}
+
 function createFakeThreadBindingManager(binding: FakeBinding | null) {
   return {
     getByThreadId: vi.fn((_threadId: string) => binding),
@@ -149,6 +177,9 @@ function createFakeThreadBindingManager(binding: FakeBinding | null) {
 
 describe("/session idle and /session max-age", () => {
   beforeEach(() => {
+    setActivePluginRegistry(
+      createTestRegistry([{ pluginId: "telegram", source: "test", plugin: telegramPlugin }]),
+    );
     hoisted.getThreadBindingManagerMock.mockReset();
     hoisted.setThreadBindingIdleTimeoutBySessionKeyMock.mockReset();
     hoisted.setThreadBindingMaxAgeBySessionKeyMock.mockReset();
@@ -175,13 +206,12 @@ describe("/session idle and /session max-age", () => {
     const result = await handleSessionCommand(createDiscordCommandParams("/session idle 2h"), true);
     const text = result?.reply?.text ?? "";
 
-    expect(hoisted.setThreadBindingIdleTimeoutBySessionKeyMock).toHaveBeenCalledWith({
-      targetSessionKey: "agent:main:subagent:child",
-      accountId: "default",
-      idleTimeoutMs: 2 * 60 * 60 * 1000,
-    });
-    expect(text).toContain("Idle timeout set to 2h");
-    expect(text).toContain("2026-02-20T02:00:00.000Z");
+    expectIdleTimeoutSetReply(
+      hoisted.setThreadBindingIdleTimeoutBySessionKeyMock,
+      text,
+      2 * 60 * 60 * 1000,
+      "2h",
+    );
   });
 
   it("shows active idle timeout when no value is provided", async () => {
@@ -248,13 +278,12 @@ describe("/session idle and /session max-age", () => {
     );
     const text = result?.reply?.text ?? "";
 
-    expect(hoisted.setTelegramThreadBindingIdleTimeoutBySessionKeyMock).toHaveBeenCalledWith({
-      targetSessionKey: "agent:main:subagent:child",
-      accountId: "default",
-      idleTimeoutMs: 2 * 60 * 60 * 1000,
-    });
-    expect(text).toContain("Idle timeout set to 2h");
-    expect(text).toContain("2026-02-20T02:00:00.000Z");
+    expectIdleTimeoutSetReply(
+      hoisted.setTelegramThreadBindingIdleTimeoutBySessionKeyMock,
+      text,
+      2 * 60 * 60 * 1000,
+      "2h",
+    );
   });
 
   it("reports Telegram max-age expiry from the original bind time", async () => {

@@ -1,6 +1,6 @@
 {
   "name": "@openclaw/nextcloud-talk",
-  "version": "2026.3.13",
+  "version": "2026.3.14",
   "description": "OpenClaw Nextcloud Talk channel plugin",
   "type": "module",
   "dependencies": {
@@ -10,6 +10,7 @@
     "extensions": [
       "./index.ts"
     ],
+    "setupEntry": "./setup-entry.ts",
     "channel": {
       "id": "nextcloud-talk",
       "label": "Nextcloud Talk",

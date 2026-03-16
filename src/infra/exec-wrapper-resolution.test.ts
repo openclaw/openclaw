@@ -1,9 +1,15 @@
 import { describe, expect, test } from "vitest";
 import {
   basenameLower,
+  extractShellWrapperCommand,
+  extractShellWrapperInlineCommand,
+  hasEnvManipulationBeforeShellWrapper,
   isDispatchWrapperExecutable,
   isShellWrapperExecutable,
   normalizeExecutableToken,
+  resolveDispatchWrapperExecutionPlan,
+  unwrapEnvInvocation,
+  unwrapKnownDispatchWrapperInvocation,
   unwrapKnownShellMultiplexerInvocation,
 } from "./exec-wrapper-resolution.js";
 
@@ -64,5 +70,159 @@ describe("unwrapKnownShellMultiplexerInvocation", () => {
     },
   ])("unwraps shell multiplexers for %j", ({ argv, expected }) => {
     expect(unwrapKnownShellMultiplexerInvocation(argv)).toEqual(expected);
+  });
+});
+
+describe("unwrapEnvInvocation", () => {
+  test.each([
+    {
+      argv: ["env", "FOO=bar", "bash", "-lc", "echo hi"],
+      expected: ["bash", "-lc", "echo hi"],
+    },
+    {
+      argv: ["env", "-i", "--unset", "PATH", "--", "sh", "-lc", "echo hi"],
+      expected: ["sh", "-lc", "echo hi"],
+    },
+    {
+      argv: ["env", "--chdir=/tmp", "pwsh", "-Command", "Get-Date"],
+      expected: ["pwsh", "-Command", "Get-Date"],
+    },
+    {
+      argv: ["env", "-", "bash", "-lc", "echo hi"],
+      expected: ["bash", "-lc", "echo hi"],
+    },
+    {
+      argv: ["env", "--bogus", "bash", "-lc", "echo hi"],
+      expected: null,
+    },
+    {
+      argv: ["env", "--unset"],
+      expected: null,
+    },
+  ])("unwraps env invocations for %j", ({ argv, expected }) => {
+    expect(unwrapEnvInvocation(argv)).toEqual(expected);
+  });
+});
+
+describe("unwrapKnownDispatchWrapperInvocation", () => {
+  test.each([
+    {
+      argv: ["nice", "-n", "5", "bash", "-lc", "echo hi"],
+      expected: { kind: "unwrapped", wrapper: "nice", argv: ["bash", "-lc", "echo hi"] },
+    },
+    {
+      argv: ["nohup", "--", "bash", "-lc", "echo hi"],
+      expected: { kind: "unwrapped", wrapper: "nohup", argv: ["bash", "-lc", "echo hi"] },
+    },
+    {
+      argv: ["stdbuf", "-o", "L", "bash", "-lc", "echo hi"],
+      expected: { kind: "unwrapped", wrapper: "stdbuf", argv: ["bash", "-lc", "echo hi"] },
+    },
+    {
+      argv: ["timeout", "--signal=TERM", "5s", "bash", "-lc", "echo hi"],
+      expected: { kind: "unwrapped", wrapper: "timeout", argv: ["bash", "-lc", "echo hi"] },
+    },
+    {
+      argv: ["sudo", "bash", "-lc", "echo hi"],
+      expected: { kind: "blocked", wrapper: "sudo" },
+    },
+    {
+      argv: ["timeout", "--bogus", "5s", "bash", "-lc", "echo hi"],
+      expected: { kind: "blocked", wrapper: "timeout" },
+    },
+  ])("unwraps known dispatch wrappers for %j", ({ argv, expected }) => {
+    expect(unwrapKnownDispatchWrapperInvocation(argv)).toEqual(expected);
+  });
+});
+
+describe("resolveDispatchWrapperExecutionPlan", () => {
+  test("unwraps transparent wrapper chains", () => {
+    expect(
+      resolveDispatchWrapperExecutionPlan(["nohup", "nice", "-n", "5", "bash", "-lc", "echo hi"]),
+    ).toEqual({
+      argv: ["bash", "-lc", "echo hi"],
+      wrappers: ["nohup", "nice"],
+      policyBlocked: false,
+    });
+  });
+
+  test("blocks semantic env usage even when it reaches a shell wrapper", () => {
+    expect(
+      resolveDispatchWrapperExecutionPlan(["env", "FOO=bar", "bash", "-lc", "echo hi"]),
+    ).toEqual({
+      argv: ["env", "FOO=bar", "bash", "-lc", "echo hi"],
+      wrappers: ["env"],
+      policyBlocked: true,
+      blockedWrapper: "env",
+    });
+  });
+
+  test("blocks wrapper overflow beyond the configured depth", () => {
+    expect(
+      resolveDispatchWrapperExecutionPlan(["nohup", "timeout", "5s", "bash", "-lc", "echo hi"], 1),
+    ).toEqual({
+      argv: ["timeout", "5s", "bash", "-lc", "echo hi"],
+      wrappers: ["nohup"],
+      policyBlocked: true,
+      blockedWrapper: "timeout",
+    });
+  });
+});
+
+describe("hasEnvManipulationBeforeShellWrapper", () => {
+  test.each([
+    {
+      argv: ["env", "FOO=bar", "bash", "-lc", "echo hi"],
+      expected: true,
+    },
+    {
+      argv: ["timeout", "5s", "env", "--", "bash", "-lc", "echo hi"],
+      expected: false,
+    },
+    {
+      argv: ["timeout", "5s", "env", "FOO=bar", "bash", "-lc", "echo hi"],
+      expected: true,
+    },
+    {
+      argv: ["sudo", "bash", "-lc", "echo hi"],
+      expected: false,
+    },
+  ])("detects env manipulation before shell wrappers for %j", ({ argv, expected }) => {
+    expect(hasEnvManipulationBeforeShellWrapper(argv)).toBe(expected);
+  });
+});
+
+describe("extractShellWrapperCommand", () => {
+  test.each([
+    {
+      argv: ["bash", "-lc", "echo hi"],
+      expectedInline: "echo hi",
+      expectedCommand: { isWrapper: true, command: "echo hi" },
+    },
+    {
+      argv: ["busybox", "sh", "-lc", "echo hi"],
+      expectedInline: "echo hi",
+      expectedCommand: { isWrapper: true, command: "echo hi" },
+    },
+    {
+      argv: ["env", "--", "pwsh", "-Command", "Get-Date"],
+      expectedInline: "Get-Date",
+      expectedCommand: { isWrapper: true, command: "Get-Date" },
+    },
+    {
+      argv: ["bash", "script.sh"],
+      expectedInline: null,
+      expectedCommand: { isWrapper: false, command: null },
+    },
+  ])("extracts inline commands for %j", ({ argv, expectedInline, expectedCommand }) => {
+    expect(extractShellWrapperInlineCommand(argv)).toBe(expectedInline);
+    expect(extractShellWrapperCommand(argv)).toEqual(expectedCommand);
+  });
+
+  test("prefers an explicit raw command override when provided", () => {
+    expect(extractShellWrapperCommand(["bash", "-lc", "echo hi"], "  run this instead  ")).toEqual({
+      isWrapper: true,
+      command: "run this instead",
+    });
   });
 });

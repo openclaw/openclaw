@@ -161,6 +161,12 @@ export type ScheduledTaskInfo = {
   lastRunResult?: string;
 };
 
+function hasListenerPid<T extends { pid?: number | null }>(
+  listener: T,
+): listener is T & { pid: number } {
+  return typeof listener.pid === "number";
+}
+
 export function parseSchtasksQuery(output: string): ScheduledTaskInfo {
   const entries = parseKeyValueOutput(output, ":");
   const info: ScheduledTaskInfo = {};
@@ -172,7 +178,9 @@ export function parseSchtasksQuery(output: string): ScheduledTaskInfo {
   if (lastRunTime) {
     info.lastRunTime = lastRunTime;
   }
-  const lastRunResult = entries["last run result"];
+  // Some Windows locales/versions emit "Last Result" instead of "Last Run Result".
+  // Accept both so gateway status is not falsely reported as "unknown" (#47726).
+  const lastRunResult = entries["last run result"] ?? entries["last result"];
   if (lastRunResult) {
     info.lastRunResult = lastRunResult;
   }
@@ -388,7 +396,7 @@ async function resolveScheduledTaskGatewayListenerPids(port: number): Promise<nu
     new Set(
       diagnostics.listeners
         .map((listener) => listener.pid)
-        .filter((pid): pid is number => Number.isFinite(pid) && pid > 0),
+        .filter((pid): pid is number => typeof pid === "number" && Number.isFinite(pid) && pid > 0),
     ),
   );
 }
@@ -463,8 +471,26 @@ async function waitForGatewayPortRelease(port: number, timeoutMs = 5_000): Promi
   return false;
 }
 
+async function terminateBusyPortListeners(port: number): Promise<number[]> {
+  const diagnostics = await inspectPortUsage(port).catch(() => null);
+  if (diagnostics?.status !== "busy") {
+    return [];
+  }
+  const pids = Array.from(
+    new Set(
+      diagnostics.listeners
+        .map((listener) => listener.pid)
+        .filter((pid): pid is number => typeof pid === "number" && Number.isFinite(pid) && pid > 0),
+    ),
+  );
+  for (const pid of pids) {
+    await terminateGatewayProcessTree(pid, 300);
+  }
+  return pids;
+}
+
 async function resolveFallbackRuntime(env: GatewayServiceEnv): Promise<GatewayServiceRuntime> {
-  const port = resolveConfiguredGatewayPort(env);
+  const port = (await resolveScheduledTaskPort(env)) ?? resolveConfiguredGatewayPort(env);
   if (!port) {
     return {
       status: "unknown",
@@ -478,7 +504,7 @@ async function resolveFallbackRuntime(env: GatewayServiceEnv): Promise<GatewaySe
       detail: `Startup-folder login item installed; could not inspect port ${port}.`,
     };
   }
-  const listener = diagnostics.listeners.find((item) => typeof item.pid === "number");
+  const listener = diagnostics.listeners.find(hasListenerPid);
   return {
     status: diagnostics.status === "busy" ? "running" : "stopped",
     ...(listener?.pid ? { pid: listener.pid } : {}),
@@ -655,7 +681,14 @@ export async function stopScheduledTask({ stdout, env }: GatewayServiceControlAr
   await terminateScheduledTaskGatewayListeners(effectiveEnv);
   await terminateInstalledStartupRuntime(effectiveEnv);
   if (stopPort) {
-    await waitForGatewayPortRelease(stopPort);
+    const released = await waitForGatewayPortRelease(stopPort);
+    if (!released) {
+      await terminateBusyPortListeners(stopPort);
+      const releasedAfterForce = await waitForGatewayPortRelease(stopPort, 2_000);
+      if (!releasedAfterForce) {
+        throw new Error(`gateway port ${stopPort} is still busy after stop`);
+      }
+    }
   }
   stdout.write(`${formatLine("Stopped Scheduled Task", taskName)}\n`);
 }
@@ -684,7 +717,14 @@ export async function restartScheduledTask({
   await terminateScheduledTaskGatewayListeners(effectiveEnv);
   await terminateInstalledStartupRuntime(effectiveEnv);
   if (restartPort) {
-    await waitForGatewayPortRelease(restartPort);
+    const released = await waitForGatewayPortRelease(restartPort);
+    if (!released) {
+      await terminateBusyPortListeners(restartPort);
+      const releasedAfterForce = await waitForGatewayPortRelease(restartPort, 2_000);
+      if (!releasedAfterForce) {
+        throw new Error(`gateway port ${restartPort} is still busy before restart`);
+      }
+    }
   }
   const res = await execSchtasks(["/Run", "/TN", taskName]);
   if (res.code !== 0) {

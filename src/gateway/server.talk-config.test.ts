@@ -40,6 +40,7 @@ type TalkConfigPayload = {
     ui?: { seamColor?: string };
   };
 };
+type TalkConfig = NonNullable<NonNullable<TalkConfigPayload["config"]>["talk"]>;
 const TALK_CONFIG_DEVICE_PATH = path.join(
   os.tmpdir(),
   `openclaw-talk-config-device-${process.pid}.json`,
@@ -95,7 +96,7 @@ async function fetchTalkConfig(
 }
 
 function expectElevenLabsTalkConfig(
-  talk: TalkConfigPayload["config"] extends { talk?: infer T } ? T : never,
+  talk: TalkConfig | undefined,
   expected: {
     voiceId?: string;
     apiKey?: string | SecretRef;

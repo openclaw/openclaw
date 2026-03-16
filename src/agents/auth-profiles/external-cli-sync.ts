@@ -1,4 +1,5 @@
 import {
+  readCodexCliCredentialsCached,
   readQwenCliCredentialsCached,
   readMiniMaxCliCredentialsCached,
 } from "../cli-credentials.js";
@@ -10,6 +11,12 @@ import {
   log,
 } from "./constants.js";
 import type { AuthProfileCredential, AuthProfileStore, OAuthCredential } from "./types.js";
+
+const OPENAI_CODEX_DEFAULT_PROFILE_ID = "openai-codex:default";
+
+type ExternalCliSyncOptions = {
+  log?: boolean;
+};
 
 function shallowEqualOAuthCredentials(a: OAuthCredential | undefined, b: OAuthCredential): boolean {
   if (!a) {
@@ -37,7 +44,11 @@ function isExternalProfileFresh(cred: AuthProfileCredential | undefined, now: nu
   if (cred.type !== "oauth" && cred.type !== "token") {
     return false;
   }
-  if (cred.provider !== "qwen-portal" && cred.provider !== "minimax-portal") {
+  if (
+    cred.provider !== "qwen-portal" &&
+    cred.provider !== "minimax-portal" &&
+    cred.provider !== "openai-codex"
+  ) {
     return false;
   }
   if (typeof cred.expires !== "number") {
@@ -53,6 +64,7 @@ function syncExternalCliCredentialsForProvider(
   provider: string,
   readCredentials: () => OAuthCredential | null,
   now: number,
+  options: ExternalCliSyncOptions,
 ): boolean {
   const existing = store.profiles[profileId];
   const shouldSync =
@@ -71,10 +83,12 @@ function syncExternalCliCredentialsForProvider(
 
   if (shouldUpdate && !shallowEqualOAuthCredentials(existingOAuth, creds)) {
     store.profiles[profileId] = creds;
-    log.info(`synced ${provider} credentials from external cli`, {
-      profileId,
-      expires: new Date(creds.expires).toISOString(),
-    });
+    if (options.log !== false) {
+      log.info(`synced ${provider} credentials from external cli`, {
+        profileId,
+        expires: new Date(creds.expires).toISOString(),
+      });
+    }
     return true;
   }
 
@@ -82,11 +96,15 @@ function syncExternalCliCredentialsForProvider(
 }
 
 /**
- * Sync OAuth credentials from external CLI tools (Qwen Code CLI, MiniMax CLI) into the store.
+ * Sync OAuth credentials from external CLI tools (Qwen Code CLI, MiniMax CLI, Codex CLI)
+ * into the store.
  *
  * Returns true if any credentials were updated.
  */
-export function syncExternalCliCredentials(store: AuthProfileStore): boolean {
+export function syncExternalCliCredentials(
+  store: AuthProfileStore,
+  options: ExternalCliSyncOptions = {},
+): boolean {
   let mutated = false;
   const now = Date.now();
 
@@ -111,10 +129,12 @@ export function syncExternalCliCredentials(store: AuthProfileStore): boolean {
     if (shouldUpdate && !shallowEqualOAuthCredentials(existingOAuth, qwenCreds)) {
       store.profiles[QWEN_CLI_PROFILE_ID] = qwenCreds;
       mutated = true;
-      log.info("synced qwen credentials from qwen cli", {
-        profileId: QWEN_CLI_PROFILE_ID,
-        expires: new Date(qwenCreds.expires).toISOString(),
-      });
+      if (options.log !== false) {
+        log.info("synced qwen credentials from qwen cli", {
+          profileId: QWEN_CLI_PROFILE_ID,
+          expires: new Date(qwenCreds.expires).toISOString(),
+        });
+      }
     }
   }
 
@@ -126,6 +146,19 @@ export function syncExternalCliCredentials(store: AuthProfileStore): boolean {
       "minimax-portal",
       () => readMiniMaxCliCredentialsCached({ ttlMs: EXTERNAL_CLI_SYNC_TTL_MS }),
       now,
+      options,
+    )
+  ) {
+    mutated = true;
+  }
+  if (
+    syncExternalCliCredentialsForProvider(
+      store,
+      OPENAI_CODEX_DEFAULT_PROFILE_ID,
+      "openai-codex",
+      () => readCodexCliCredentialsCached({ ttlMs: EXTERNAL_CLI_SYNC_TTL_MS }),
+      now,
+      options,
     )
   ) {
     mutated = true;

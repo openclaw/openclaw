@@ -22,7 +22,12 @@ async function prepareRoutedCommand(params: {
   const shouldLoadPlugins =
     typeof params.loadPlugins === "function" ? params.loadPlugins(params.argv) : params.loadPlugins;
   if (shouldLoadPlugins) {
-    ensurePluginRegistryLoaded();
+    ensurePluginRegistryLoaded({
+      scope:
+        params.commandPath[0] === "status" || params.commandPath[0] === "health"
+          ? "channels"
+          : "all",
+    });
   }
 }
 

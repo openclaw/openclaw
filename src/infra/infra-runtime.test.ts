@@ -1,8 +1,5 @@
 import os from "node:os";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { runExec } from "../process/exec.js";
-import type { RuntimeEnv } from "../runtime.js";
-import { ensureBinary } from "./binaries.js";
 import {
   __testing,
   consumeGatewaySigusr1RestartAuthorization,
@@ -30,35 +27,6 @@ describe("infra runtime", () => {
       __testing.resetSigusr1State();
     });
   }
-
-  describe("ensureBinary", () => {
-    it("passes through when binary exists", async () => {
-      const exec: typeof runExec = vi.fn().mockResolvedValue({
-        stdout: "",
-        stderr: "",
-      });
-      const runtime: RuntimeEnv = {
-        log: vi.fn(),
-        error: vi.fn(),
-        exit: vi.fn(),
-      };
-      await ensureBinary("node", exec, runtime);
-      expect(exec).toHaveBeenCalledWith("which", ["node"]);
-    });
-
-    it("logs and exits when missing", async () => {
-      const exec: typeof runExec = vi.fn().mockRejectedValue(new Error("missing"));
-      const error = vi.fn();
-      const exit = vi.fn(() => {
-        throw new Error("exit");
-      });
-      await expect(ensureBinary("ghost", exec, { log: vi.fn(), error, exit })).rejects.toThrow(
-        "exit",
-      );
-      expect(error).toHaveBeenCalledWith("Missing required binary: ghost. Please install it.");
-      expect(exit).toHaveBeenCalledWith(1);
-    });
-  });
 
   describe("restart authorization", () => {
     setupRestartSignalSuite();
@@ -222,8 +190,8 @@ describe("infra runtime", () => {
         await vi.advanceTimersByTimeAsync(0);
         expect(emitSpy).not.toHaveBeenCalledWith("SIGUSR1");
 
-        // Advance past the 90s max deferral wait
-        await vi.advanceTimersByTimeAsync(90_000);
+        // Advance past the 5-minute max deferral wait
+        await vi.advanceTimersByTimeAsync(300_000);
         expect(emitSpy).toHaveBeenCalledWith("SIGUSR1");
       } finally {
         process.removeListener("SIGUSR1", handler);

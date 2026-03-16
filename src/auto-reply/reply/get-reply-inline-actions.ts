@@ -1,8 +1,9 @@
 import { collectTextContentBlocks } from "../../agents/content-blocks.js";
 import { createOpenClawTools } from "../../agents/openclaw-tools.js";
+import type { BlockReplyChunking } from "../../agents/pi-embedded-block-chunker.js";
 import type { SkillCommandSpec } from "../../agents/skills.js";
 import { applyOwnerOnlyToolPolicy } from "../../agents/tool-policy.js";
-import { getChannelDock } from "../../channels/dock.js";
+import { getChannelPlugin } from "../../channels/plugins/index.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { logVerbose } from "../../globals.js";
@@ -37,6 +38,7 @@ function getBuiltinSlashCommands(): Set<string> {
     return builtinSlashCommands;
   }
   builtinSlashCommands = listReservedChatSlashCommandNames([
+    "btw",
     "think",
     "verbose",
     "reasoning",
@@ -113,6 +115,8 @@ export async function handleInlineActions(params: {
   resolvedVerboseLevel: VerboseLevel | undefined;
   resolvedReasoningLevel: ReasoningLevel;
   resolvedElevatedLevel: ElevatedLevel;
+  blockReplyChunking?: BlockReplyChunking;
+  resolvedBlockStreamingBreak?: "text_end" | "message_end";
   resolveDefaultThinkingLevel: Awaited<
     ReturnType<typeof createModelSelectionState>
   >["resolveDefaultThinkingLevel"];
@@ -152,6 +156,8 @@ export async function handleInlineActions(params: {
     resolvedVerboseLevel,
     resolvedReasoningLevel,
     resolvedElevatedLevel,
+    blockReplyChunking,
+    resolvedBlockStreamingBreak,
     resolveDefaultThinkingLevel,
     provider,
     model,
@@ -357,17 +363,21 @@ export async function handleInlineActions(params: {
       storePath,
       sessionScope,
       workspaceDir,
+      opts,
       defaultGroupActivation: defaultActivation,
       resolvedThinkLevel,
       resolvedVerboseLevel: resolvedVerboseLevel ?? "off",
       resolvedReasoningLevel,
       resolvedElevatedLevel,
+      blockReplyChunking,
+      resolvedBlockStreamingBreak,
       resolveDefaultThinkingLevel,
       provider,
       model,
       contextTokens,
       isGroup,
       skillCommands,
+      typing,
     });
 
   if (inlineCommand) {
@@ -392,7 +402,7 @@ export async function handleInlineActions(params: {
 
   const isEmptyConfig = Object.keys(cfg).length === 0;
   const skipWhenConfigEmpty = command.channelId
-    ? Boolean(getChannelDock(command.channelId)?.commands?.skipWhenConfigEmpty)
+    ? Boolean(getChannelPlugin(command.channelId)?.commands?.skipWhenConfigEmpty)
     : false;
   if (
     skipWhenConfigEmpty &&

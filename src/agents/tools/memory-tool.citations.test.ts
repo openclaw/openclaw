@@ -6,24 +6,14 @@ import {
   setMemorySearchImpl,
   type MemoryReadParams,
 } from "../../../test/helpers/memory-tool-manager-mock.js";
-import type { OpenClawConfig } from "../../config/config.js";
-import { createMemoryGetTool, createMemorySearchTool } from "./memory-tool.js";
-
-function asOpenClawConfig(config: Partial<OpenClawConfig>): OpenClawConfig {
-  return config as OpenClawConfig;
-}
-
-function createToolConfig() {
-  return asOpenClawConfig({ agents: { list: [{ id: "main", default: true }] } });
-}
-
-function createMemoryGetToolOrThrow(config: OpenClawConfig = createToolConfig()) {
-  const tool = createMemoryGetTool({ config });
-  if (!tool) {
-    throw new Error("tool missing");
-  }
-  return tool;
-}
+import {
+  asOpenClawConfig,
+  createAutoCitationsMemorySearchTool,
+  createDefaultMemoryToolConfig,
+  createMemoryGetToolOrThrow,
+  createMemorySearchToolOrThrow,
+  expectUnavailableMemorySearchDetails,
+} from "./memory-tool.test-helpers.js";
 
 beforeEach(() => {
   resetMemoryToolMockState({
@@ -49,10 +39,7 @@ describe("memory search citations", () => {
       memory: { citations: "on" },
       agents: { list: [{ id: "main", default: true }] },
     });
-    const tool = createMemorySearchTool({ config: cfg });
-    if (!tool) {
-      throw new Error("tool missing");
-    }
+    const tool = createMemorySearchToolOrThrow({ config: cfg });
     const result = await tool.execute("call_citations_on", { query: "notes" });
     const details = result.details as { results: Array<{ snippet: string; citation?: string }> };
     expect(details.results[0]?.snippet).toMatch(/Source: MEMORY.md#L5-L7/);
@@ -65,10 +52,7 @@ describe("memory search citations", () => {
       memory: { citations: "off" },
       agents: { list: [{ id: "main", default: true }] },
     });
-    const tool = createMemorySearchTool({ config: cfg });
-    if (!tool) {
-      throw new Error("tool missing");
-    }
+    const tool = createMemorySearchToolOrThrow({ config: cfg });
     const result = await tool.execute("call_citations_off", { query: "notes" });
     const details = result.details as { results: Array<{ snippet: string; citation?: string }> };
     expect(details.results[0]?.snippet).not.toMatch(/Source:/);
@@ -81,10 +65,7 @@ describe("memory search citations", () => {
       memory: { citations: "on", backend: "qmd", qmd: { limits: { maxInjectedChars: 20 } } },
       agents: { list: [{ id: "main", default: true }] },
     });
-    const tool = createMemorySearchTool({ config: cfg });
-    if (!tool) {
-      throw new Error("tool missing");
-    }
+    const tool = createMemorySearchToolOrThrow({ config: cfg });
     const result = await tool.execute("call_citations_qmd", { query: "notes" });
     const details = result.details as { results: Array<{ snippet: string; citation?: string }> };
     expect(details.results[0]?.snippet.length).toBeLessThanOrEqual(20);
@@ -92,17 +73,7 @@ describe("memory search citations", () => {
 
   it("honors auto mode for direct chats", async () => {
     setMemoryBackend("builtin");
-    const cfg = asOpenClawConfig({
-      memory: { citations: "auto" },
-      agents: { list: [{ id: "main", default: true }] },
-    });
-    const tool = createMemorySearchTool({
-      config: cfg,
-      agentSessionKey: "agent:main:discord:dm:u123",
-    });
-    if (!tool) {
-      throw new Error("tool missing");
-    }
+    const tool = createAutoCitationsMemorySearchTool("agent:main:discord:dm:u123");
     const result = await tool.execute("auto_mode_direct", { query: "notes" });
     const details = result.details as { results: Array<{ snippet: string }> };
     expect(details.results[0]?.snippet).toMatch(/Source:/);
@@ -110,17 +81,7 @@ describe("memory search citations", () => {
 
   it("suppresses citations for auto mode in group chats", async () => {
     setMemoryBackend("builtin");
-    const cfg = asOpenClawConfig({
-      memory: { citations: "auto" },
-      agents: { list: [{ id: "main", default: true }] },
-    });
-    const tool = createMemorySearchTool({
-      config: cfg,
-      agentSessionKey: "agent:main:discord:group:c123",
-    });
-    if (!tool) {
-      throw new Error("tool missing");
-    }
+    const tool = createAutoCitationsMemorySearchTool("agent:main:discord:group:c123");
     const result = await tool.execute("auto_mode_group", { query: "notes" });
     const details = result.details as { results: Array<{ snippet: string }> };
     expect(details.results[0]?.snippet).not.toMatch(/Source:/);
@@ -133,18 +94,11 @@ describe("memory tools", () => {
       throw new Error("openai embeddings failed: 429 insufficient_quota");
     });
 
-    const cfg = { agents: { list: [{ id: "main", default: true }] } };
-    const tool = createMemorySearchTool({ config: cfg });
-    expect(tool).not.toBeNull();
-    if (!tool) {
-      throw new Error("tool missing");
-    }
+    const cfg = createDefaultMemoryToolConfig();
+    const tool = createMemorySearchToolOrThrow({ config: cfg });
 
     const result = await tool.execute("call_1", { query: "hello" });
-    expect(result.details).toEqual({
-      results: [],
-      disabled: true,
-      unavailable: true,
+    expectUnavailableMemorySearchDetails(result.details, {
       error: "openai embeddings failed: 429 insufficient_quota",
       warning: "Memory search is unavailable because the embedding provider quota is exhausted.",
       action: "Top up or switch embedding provider, then retry memory_search.",

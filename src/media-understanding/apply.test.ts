@@ -12,12 +12,23 @@ import { withEnvAsync } from "../test-utils/env.js";
 import { clearMediaUnderstandingBinaryCacheForTests } from "./runner.js";
 import { createSafeAudioFixtureBuffer } from "./runner.test-utils.js";
 
-vi.mock("../agents/model-auth.js", () => ({
-  resolveApiKeyForProvider: vi.fn(async () => ({
+const resolveApiKeyForProviderMock = vi.hoisted(() =>
+  vi.fn<typeof resolveApiKeyForProvider>(async () => ({
     apiKey: "test-key", // pragma: allowlist secret
     source: "test",
     mode: "api-key",
   })),
+);
+const hasAvailableAuthForProviderMock = vi.hoisted(() =>
+  vi.fn(async (...args: Parameters<typeof resolveApiKeyForProvider>) => {
+    const resolved = await resolveApiKeyForProviderMock(...args);
+    return Boolean(resolved?.apiKey);
+  }),
+);
+
+vi.mock("../agents/model-auth.js", () => ({
+  resolveApiKeyForProvider: resolveApiKeyForProviderMock,
+  hasAvailableAuthForProvider: hasAvailableAuthForProviderMock,
   requireApiKey: (auth: { apiKey?: string; mode?: string }, provider: string) => {
     if (auth?.apiKey) {
       return auth.apiKey;
@@ -247,6 +258,7 @@ describe("applyMediaUnderstanding", () => {
       source: "test",
       mode: "api-key",
     });
+    hasAvailableAuthForProviderMock.mockClear();
     mockedFetchRemoteMedia.mockClear();
     mockedRunExec.mockReset();
     mockedFetchRemoteMedia.mockResolvedValue({

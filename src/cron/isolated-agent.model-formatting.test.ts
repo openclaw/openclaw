@@ -1,7 +1,9 @@
 import "./isolated-agent.mocks.js";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { loadModelCatalog } from "../agents/model-catalog.js";
+import * as modelSelection from "../agents/model-selection.js";
 import { runEmbeddedPiAgent } from "../agents/pi-embedded.js";
+import { createCliDeps, mockAgentPayloads } from "./isolated-agent.delivery.test-helpers.js";
 import { runCronIsolatedAgentTurn } from "./isolated-agent.js";
 import {
   makeCfg,
@@ -13,27 +15,6 @@ import type { CronJob } from "./types.js";
 
 const withTempHome = withTempCronHome;
 
-function makeDeps() {
-  return {
-    sendMessageSlack: vi.fn(),
-    sendMessageWhatsApp: vi.fn(),
-    sendMessageTelegram: vi.fn(),
-    sendMessageDiscord: vi.fn(),
-    sendMessageSignal: vi.fn(),
-    sendMessageIMessage: vi.fn(),
-  };
-}
-
-function mockEmbeddedOk() {
-  vi.mocked(runEmbeddedPiAgent).mockResolvedValue({
-    payloads: [{ text: "ok" }],
-    meta: {
-      durationMs: 5,
-      agentMeta: { sessionId: "s", provider: "p", model: "m" },
-    },
-  });
-}
-
 /**
  * Extract the provider and model from the last runEmbeddedPiAgent call.
  */
@@ -44,6 +25,8 @@ function lastEmbeddedCall(): { provider?: string; model?: string } {
 }
 
 const DEFAULT_MESSAGE = "do it";
+const DEFAULT_PROVIDER = "anthropic";
+const DEFAULT_MODEL = "claude-opus-4-5";
 
 type TurnOptions = {
   cfgOverrides?: Parameters<typeof makeCfg>[2];
@@ -62,7 +45,7 @@ async function runTurnCore(home: string, options: TurnOptions = {}) {
     },
     ...options.storeEntries,
   });
-  mockEmbeddedOk();
+  mockAgentPayloads([{ text: "ok" }]);
 
   const jobPayload = options.jobPayload ?? {
     kind: "agentTurn" as const,
@@ -72,7 +55,7 @@ async function runTurnCore(home: string, options: TurnOptions = {}) {
 
   const res = await runCronIsolatedAgentTurn({
     cfg: makeCfg(home, storePath, options.cfgOverrides),
-    deps: makeDeps(),
+    deps: createCliDeps(),
     job: makeJob(jobPayload),
     message: DEFAULT_MESSAGE,
     sessionKey: options.sessionKey ?? "cron:job-1",
@@ -93,12 +76,57 @@ async function runTurn(home: string, options: TurnOptions = {}) {
   return { res, call: lastEmbeddedCall() };
 }
 
+function expectSelectedModel(
+  call: { provider?: string; model?: string },
+  params: { provider: string; model: string },
+) {
+  expect(call.provider).toBe(params.provider);
+  expect(call.model).toBe(params.model);
+}
+
+function expectDefaultSelectedModel(call: { provider?: string; model?: string }) {
+  expectSelectedModel(call, { provider: DEFAULT_PROVIDER, model: DEFAULT_MODEL });
+}
+
+function createCronSessionOverrideStore(
+  overrides: Record<string, unknown>,
+  sessionId = "existing-session",
+) {
+  return {
+    "agent:main:cron:job-1": {
+      sessionId,
+      updatedAt: Date.now(),
+      ...overrides,
+    },
+  };
+}
+
+async function expectTurnModel(
+  home: string,
+  options: TurnOptions,
+  expected: { provider: string; model: string },
+) {
+  const { res, call } = await runTurn(home, options);
+  expect(res.status).toBe("ok");
+  expectSelectedModel(call, expected);
+}
+
+async function expectInvalidModel(home: string, model: string) {
+  const { res } = await runErrorTurn(home, {
+    jobPayload: { kind: "agentTurn", message: DEFAULT_MESSAGE, model },
+  });
+  expect(res.status).toBe("error");
+  expect(res.error).toMatch(/invalid model/i);
+  expect(vi.mocked(runEmbeddedPiAgent)).not.toHaveBeenCalled();
+}
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 
 describe("cron model formatting and precedence edge cases", () => {
   beforeEach(() => {
+    vi.spyOn(modelSelection, "resolveThinkingDefault").mockReturnValue("off");
     vi.mocked(runEmbeddedPiAgent).mockClear();
     vi.mocked(loadModelCatalog).mockResolvedValue([]);
   });
@@ -119,16 +147,17 @@ describe("cron model formatting and precedence edge cases", () => {
 
     it("handles leading/trailing whitespace in model string", async () => {
       await withTempHome(async (home) => {
-        const { res, call } = await runTurn(home, {
-          jobPayload: {
-            kind: "agentTurn",
-            message: DEFAULT_MESSAGE,
-            model: "  openai/gpt-4.1-mini  ",
+        await expectTurnModel(
+          home,
+          {
+            jobPayload: {
+              kind: "agentTurn",
+              message: DEFAULT_MESSAGE,
+              model: "  openai/gpt-4.1-mini  ",
+            },
           },
-        });
-        expect(res.status).toBe("ok");
-        expect(call.provider).toBe("openai");
-        expect(call.model).toBe("gpt-4.1-mini");
+          { provider: "openai", model: "gpt-4.1-mini" },
+        );
       });
     });
 
@@ -149,38 +178,29 @@ describe("cron model formatting and precedence edge cases", () => {
 
     it("rejects model with trailing slash (empty model name)", async () => {
       await withTempHome(async (home) => {
-        const { res } = await runErrorTurn(home, {
-          jobPayload: { kind: "agentTurn", message: DEFAULT_MESSAGE, model: "openai/" },
-        });
-        expect(res.status).toBe("error");
-        expect(res.error).toMatch(/invalid model/i);
-        expect(vi.mocked(runEmbeddedPiAgent)).not.toHaveBeenCalled();
+        await expectInvalidModel(home, "openai/");
       });
     });
 
     it("rejects model with leading slash (empty provider)", async () => {
       await withTempHome(async (home) => {
-        const { res } = await runErrorTurn(home, {
-          jobPayload: { kind: "agentTurn", message: DEFAULT_MESSAGE, model: "/gpt-4.1-mini" },
-        });
-        expect(res.status).toBe("error");
-        expect(res.error).toMatch(/invalid model/i);
-        expect(vi.mocked(runEmbeddedPiAgent)).not.toHaveBeenCalled();
+        await expectInvalidModel(home, "/gpt-4.1-mini");
       });
     });
 
     it("normalizes provider casing", async () => {
       await withTempHome(async (home) => {
-        const { res, call } = await runTurn(home, {
-          jobPayload: {
-            kind: "agentTurn",
-            message: DEFAULT_MESSAGE,
-            model: "OpenAI/gpt-4.1-mini",
+        await expectTurnModel(
+          home,
+          {
+            jobPayload: {
+              kind: "agentTurn",
+              message: DEFAULT_MESSAGE,
+              model: "OpenAI/gpt-4.1-mini",
+            },
           },
-        });
-        expect(res.status).toBe("ok");
-        expect(call.provider).toBe("openai");
-        expect(call.model).toBe("gpt-4.1-mini");
+          { provider: "openai", model: "gpt-4.1-mini" },
+        );
       });
     });
 
@@ -237,43 +257,39 @@ describe("cron model formatting and precedence edge cases", () => {
       // No model in job payload. Session store has openai override.
       // Provider must be openai, not the default anthropic.
       await withTempHome(async (home) => {
-        const { call } = await runTurn(home, {
-          jobPayload: { kind: "agentTurn", message: DEFAULT_MESSAGE, deliver: false },
-          storeEntries: {
-            "agent:main:cron:job-1": {
-              sessionId: "existing-session",
-              updatedAt: Date.now(),
+        await expectTurnModel(
+          home,
+          {
+            jobPayload: { kind: "agentTurn", message: DEFAULT_MESSAGE, deliver: false },
+            storeEntries: createCronSessionOverrideStore({
               providerOverride: "openai",
               modelOverride: "gpt-4.1-mini",
-            },
+            }),
           },
-        });
-        expect(call.provider).toBe("openai");
-        expect(call.model).toBe("gpt-4.1-mini");
+          { provider: "openai", model: "gpt-4.1-mini" },
+        );
       });
     });
 
     it("job payload model wins over conflicting session override", async () => {
       // Job payload says anthropic. Session says openai. Job must win.
       await withTempHome(async (home) => {
-        const { call } = await runTurn(home, {
-          jobPayload: {
-            kind: "agentTurn",
-            message: DEFAULT_MESSAGE,
-            model: "anthropic/claude-sonnet-4-5",
-            deliver: false,
-          },
-          storeEntries: {
-            "agent:main:cron:job-1": {
-              sessionId: "existing-session",
-              updatedAt: Date.now(),
+        await expectTurnModel(
+          home,
+          {
+            jobPayload: {
+              kind: "agentTurn",
+              message: DEFAULT_MESSAGE,
+              model: "anthropic/claude-sonnet-4-5",
+              deliver: false,
+            },
+            storeEntries: createCronSessionOverrideStore({
               providerOverride: "openai",
               modelOverride: "gpt-4.1-mini",
-            },
+            }),
           },
-        });
-        expect(call.provider).toBe("anthropic");
-        expect(call.model).toBe("claude-sonnet-4-5");
+          { provider: "anthropic", model: "claude-sonnet-4-5" },
+        );
       });
     });
 
@@ -282,9 +298,7 @@ describe("cron model formatting and precedence edge cases", () => {
         const { call } = await runTurn(home, {
           jobPayload: { kind: "agentTurn", message: DEFAULT_MESSAGE, deliver: false },
         });
-        // makeCfg default is anthropic/claude-opus-4-5
-        expect(call.provider).toBe("anthropic");
-        expect(call.model).toBe("claude-opus-4-5");
+        expectDefaultSelectedModel(call);
       });
     });
   });
@@ -310,24 +324,19 @@ describe("cron model formatting and precedence edge cases", () => {
 
         // Step 2: No job model, session store says openai
         vi.mocked(runEmbeddedPiAgent).mockClear();
-        mockEmbeddedOk();
+        mockAgentPayloads([{ text: "ok" }]);
         const step2 = await runTurn(home, {
           jobPayload: { kind: "agentTurn", message: DEFAULT_MESSAGE, deliver: false },
-          storeEntries: {
-            "agent:main:cron:job-1": {
-              sessionId: "existing-session",
-              updatedAt: Date.now(),
-              providerOverride: "openai",
-              modelOverride: "gpt-4.1-mini",
-            },
-          },
+          storeEntries: createCronSessionOverrideStore({
+            providerOverride: "openai",
+            modelOverride: "gpt-4.1-mini",
+          }),
         });
-        expect(step2.call.provider).toBe("openai");
-        expect(step2.call.model).toBe("gpt-4.1-mini");
+        expectSelectedModel(step2.call, { provider: "openai", model: "gpt-4.1-mini" });
 
         // Step 3: Job payload says anthropic, session store still says openai
         vi.mocked(runEmbeddedPiAgent).mockClear();
-        mockEmbeddedOk();
+        mockAgentPayloads([{ text: "ok" }]);
         const step3 = await runTurn(home, {
           jobPayload: {
             kind: "agentTurn",
@@ -335,17 +344,12 @@ describe("cron model formatting and precedence edge cases", () => {
             model: "anthropic/claude-opus-4-5",
             deliver: false,
           },
-          storeEntries: {
-            "agent:main:cron:job-1": {
-              sessionId: "existing-session",
-              updatedAt: Date.now(),
-              providerOverride: "openai",
-              modelOverride: "gpt-4.1-mini",
-            },
-          },
+          storeEntries: createCronSessionOverrideStore({
+            providerOverride: "openai",
+            modelOverride: "gpt-4.1-mini",
+          }),
         });
-        expect(step3.call.provider).toBe("anthropic");
-        expect(step3.call.model).toBe("claude-opus-4-5");
+        expectSelectedModel(step3.call, { provider: "anthropic", model: "claude-opus-4-5" });
       });
     });
 
@@ -365,12 +369,11 @@ describe("cron model formatting and precedence edge cases", () => {
 
         // Run 2: no override — must revert to default anthropic
         vi.mocked(runEmbeddedPiAgent).mockClear();
-        mockEmbeddedOk();
+        mockAgentPayloads([{ text: "ok" }]);
         const r2 = await runTurn(home, {
           jobPayload: { kind: "agentTurn", message: DEFAULT_MESSAGE, deliver: false },
         });
-        expect(r2.call.provider).toBe("anthropic");
-        expect(r2.call.model).toBe("claude-opus-4-5");
+        expectDefaultSelectedModel(r2.call);
       });
     });
   });
@@ -383,19 +386,20 @@ describe("cron model formatting and precedence edge cases", () => {
       // The stored modelOverride/providerOverride must still be read and applied
       // (resolveCronSession spreads ...entry before overriding core fields).
       await withTempHome(async (home) => {
-        const { call } = await runTurn(home, {
-          jobPayload: { kind: "agentTurn", message: DEFAULT_MESSAGE, deliver: false },
-          storeEntries: {
-            "agent:main:cron:job-1": {
-              sessionId: "old-session-id",
-              updatedAt: Date.now(),
-              providerOverride: "openai",
-              modelOverride: "gpt-4.1-mini",
-            },
+        await expectTurnModel(
+          home,
+          {
+            jobPayload: { kind: "agentTurn", message: DEFAULT_MESSAGE, deliver: false },
+            storeEntries: createCronSessionOverrideStore(
+              {
+                providerOverride: "openai",
+                modelOverride: "gpt-4.1-mini",
+              },
+              "old-session-id",
+            ),
           },
-        });
-        expect(call.provider).toBe("openai");
-        expect(call.model).toBe("gpt-4.1-mini");
+          { provider: "openai", model: "gpt-4.1-mini" },
+        );
       });
     });
 
@@ -403,16 +407,9 @@ describe("cron model formatting and precedence edge cases", () => {
       await withTempHome(async (home) => {
         const { call } = await runTurn(home, {
           jobPayload: { kind: "agentTurn", message: DEFAULT_MESSAGE, deliver: false },
-          storeEntries: {
-            "agent:main:cron:job-1": {
-              sessionId: "old-session-id",
-              updatedAt: Date.now(),
-              // No providerOverride or modelOverride
-            },
-          },
+          storeEntries: createCronSessionOverrideStore({}, "old-session-id"),
         });
-        expect(call.provider).toBe("anthropic");
-        expect(call.model).toBe("claude-opus-4-5");
+        expectDefaultSelectedModel(call);
       });
     });
   });
@@ -425,8 +422,7 @@ describe("cron model formatting and precedence edge cases", () => {
         const { call } = await runTurn(home, {
           jobPayload: { kind: "agentTurn", message: DEFAULT_MESSAGE, model: "   " },
         });
-        expect(call.provider).toBe("anthropic");
-        expect(call.model).toBe("claude-opus-4-5");
+        expectDefaultSelectedModel(call);
       });
     });
 
@@ -435,8 +431,7 @@ describe("cron model formatting and precedence edge cases", () => {
         const { call } = await runTurn(home, {
           jobPayload: { kind: "agentTurn", message: DEFAULT_MESSAGE, model: "" },
         });
-        expect(call.provider).toBe("anthropic");
-        expect(call.model).toBe("claude-opus-4-5");
+        expectDefaultSelectedModel(call);
       });
     });
 
@@ -444,18 +439,13 @@ describe("cron model formatting and precedence edge cases", () => {
       await withTempHome(async (home) => {
         const { call } = await runTurn(home, {
           jobPayload: { kind: "agentTurn", message: DEFAULT_MESSAGE, deliver: false },
-          storeEntries: {
-            "agent:main:cron:job-1": {
-              sessionId: "old",
-              updatedAt: Date.now(),
-              providerOverride: "openai",
-              modelOverride: "   ",
-            },
-          },
+          storeEntries: createCronSessionOverrideStore(
+            { providerOverride: "openai", modelOverride: "   " },
+            "old",
+          ),
         });
         // Whitespace modelOverride should be ignored → default
-        expect(call.provider).toBe("anthropic");
-        expect(call.model).toBe("claude-opus-4-5");
+        expectDefaultSelectedModel(call);
       });
     });
   });
@@ -465,35 +455,39 @@ describe("cron model formatting and precedence edge cases", () => {
   describe("config model format variations", () => {
     it("default model as string 'provider/model'", async () => {
       await withTempHome(async (home) => {
-        const { call } = await runTurn(home, {
-          cfgOverrides: {
-            agents: {
-              defaults: {
-                model: "openai/gpt-4.1",
+        await expectTurnModel(
+          home,
+          {
+            cfgOverrides: {
+              agents: {
+                defaults: {
+                  model: "openai/gpt-4.1",
+                },
               },
             },
+            jobPayload: { kind: "agentTurn", message: DEFAULT_MESSAGE, deliver: false },
           },
-          jobPayload: { kind: "agentTurn", message: DEFAULT_MESSAGE, deliver: false },
-        });
-        expect(call.provider).toBe("openai");
-        expect(call.model).toBe("gpt-4.1");
+          { provider: "openai", model: "gpt-4.1" },
+        );
       });
     });
 
     it("default model as object with primary field", async () => {
       await withTempHome(async (home) => {
-        const { call } = await runTurn(home, {
-          cfgOverrides: {
-            agents: {
-              defaults: {
-                model: { primary: "openai/gpt-4.1" },
+        await expectTurnModel(
+          home,
+          {
+            cfgOverrides: {
+              agents: {
+                defaults: {
+                  model: { primary: "openai/gpt-4.1" },
+                },
               },
             },
+            jobPayload: { kind: "agentTurn", message: DEFAULT_MESSAGE, deliver: false },
           },
-          jobPayload: { kind: "agentTurn", message: DEFAULT_MESSAGE, deliver: false },
-        });
-        expect(call.provider).toBe("openai");
-        expect(call.model).toBe("gpt-4.1");
+          { provider: "openai", model: "gpt-4.1" },
+        );
       });
     });
 

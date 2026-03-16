@@ -1,6 +1,17 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { withEnv } from "../test-utils/env.js";
-import { isTruthyEnvValue, normalizeZaiEnv } from "./env.js";
+
+const loggerMocks = vi.hoisted(() => ({
+  info: vi.fn(),
+}));
+
+vi.mock("../logging/subsystem.js", () => ({
+  createSubsystemLogger: () => ({
+    info: loggerMocks.info,
+  }),
+}));
+
+import { isTruthyEnvValue, logAcceptedEnvOption, normalizeEnv, normalizeZaiEnv } from "./env.js";
 
 describe("normalizeZaiEnv", () => {
   it("copies Z_AI_API_KEY to ZAI_API_KEY when missing", () => {
@@ -45,5 +56,79 @@ describe("isTruthyEnvValue", () => {
     expect(isTruthyEnvValue("false")).toBe(false);
     expect(isTruthyEnvValue("")).toBe(false);
     expect(isTruthyEnvValue(undefined)).toBe(false);
+  });
+});
+
+describe("logAcceptedEnvOption", () => {
+  it("logs accepted env options once with redaction and formatting", () => {
+    loggerMocks.info.mockClear();
+
+    withEnv(
+      {
+        VITEST: "",
+        NODE_ENV: "development",
+        OPENCLAW_TEST_ENV: "  line one\nline two  ",
+      },
+      () => {
+        logAcceptedEnvOption({
+          key: "OPENCLAW_TEST_ENV",
+          description: "test option",
+          redact: true,
+        });
+        logAcceptedEnvOption({
+          key: "OPENCLAW_TEST_ENV",
+          description: "test option",
+          redact: true,
+        });
+      },
+    );
+
+    expect(loggerMocks.info).toHaveBeenCalledTimes(1);
+    expect(loggerMocks.info).toHaveBeenCalledWith(
+      "env: OPENCLAW_TEST_ENV=<redacted> (test option)",
+    );
+  });
+
+  it("skips blank values and test-mode logging", () => {
+    loggerMocks.info.mockClear();
+
+    withEnv(
+      {
+        VITEST: "1",
+        NODE_ENV: "development",
+        OPENCLAW_BLANK_ENV: "value",
+      },
+      () => {
+        logAcceptedEnvOption({
+          key: "OPENCLAW_BLANK_ENV",
+          description: "skipped in vitest",
+        });
+      },
+    );
+
+    withEnv(
+      {
+        VITEST: "",
+        NODE_ENV: "development",
+        OPENCLAW_BLANK_ENV: "   ",
+      },
+      () => {
+        logAcceptedEnvOption({
+          key: "OPENCLAW_BLANK_ENV",
+          description: "blank value",
+        });
+      },
+    );
+
+    expect(loggerMocks.info).not.toHaveBeenCalled();
+  });
+});
+
+describe("normalizeEnv", () => {
+  it("normalizes the legacy ZAI env alias", () => {
+    withEnv({ ZAI_API_KEY: "", Z_AI_API_KEY: "zai-legacy" }, () => {
+      normalizeEnv();
+      expect(process.env.ZAI_API_KEY).toBe("zai-legacy");
+    });
   });
 });
