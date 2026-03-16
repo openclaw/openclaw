@@ -79,11 +79,20 @@ export async function applyNonInteractivePluginProviderChoice(params: {
     params.nextConfig,
     preferredProviderId,
   );
-  const { resolveProviderPluginChoice, resolvePluginProviders } = await loadPluginProviderRuntime();
+  const { resolveOwningPluginIdsForProvider, resolveProviderPluginChoice, resolvePluginProviders } =
+    await loadPluginProviderRuntime();
+  const owningPluginIds = preferredProviderId
+    ? resolveOwningPluginIdsForProvider({
+        provider: preferredProviderId,
+        config: resolutionConfig,
+        workspaceDir,
+      })
+    : undefined;
   const providerChoice = resolveProviderPluginChoice({
     providers: resolvePluginProviders({
       config: resolutionConfig,
       workspaceDir,
+      onlyPluginIds: owningPluginIds,
       bundledProviderAllowlistCompat: true,
       bundledProviderVitestCompat: true,
     }),
