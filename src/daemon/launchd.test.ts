@@ -474,6 +474,19 @@ describe("launchd install", () => {
     );
   });
 
+  it("rejects symlinked Library parents before creating LaunchAgents", async () => {
+    const env = createDefaultLaunchdEnv();
+    state.symlinks.add("/Users/test/Library");
+
+    await expect(
+      installLaunchAgent({
+        env,
+        stdout: new PassThrough(),
+        programArguments: defaultProgramArguments,
+      }),
+    ).rejects.toThrow("Refusing to use symlinked LaunchAgent path: /Users/test/Library");
+  });
+
   it("rejects symlinked launch agent plist targets", async () => {
     const env = createDefaultLaunchdEnv();
     const plistPath = resolveLaunchAgentPlistPath(env);

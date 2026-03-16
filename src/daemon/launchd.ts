@@ -259,7 +259,8 @@ async function assertNotSymlink(targetPath: string): Promise<void> {
       throw new Error(`Refusing to use symlinked LaunchAgent path: ${targetPath}`);
     }
   } catch (error) {
-    const code = (error as NodeJS.ErrnoException | undefined)?.code;
+    const code =
+      typeof error === "object" && error !== null && "code" in error ? error.code : undefined;
     if (code === "ENOENT") {
       return;
     }
@@ -550,6 +551,8 @@ export async function installLaunchAgent({
   }
 
   const plistPath = resolveLaunchAgentPlistPathForLabel(env, label);
+  const libraryDir = path.posix.dirname(path.posix.dirname(plistPath));
+  await ensureSecureDirectory(libraryDir);
   await ensureSecureDirectory(path.dirname(plistPath));
 
   const serviceDescription = resolveGatewayServiceDescription({ env, environment, description });
