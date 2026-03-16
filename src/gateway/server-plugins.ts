@@ -143,6 +143,9 @@ function createGatewaySubagentRuntime(): PluginRuntime["subagent"] {
         }),
         ...(params.extraSystemPrompt && { extraSystemPrompt: params.extraSystemPrompt }),
         ...(params.lane && { lane: params.lane }),
+        ...(params.clientTools && { clientTools: params.clientTools }),
+        ...(params.disableTools === true && { disableTools: true }),
+        ...(params.streamParams && { streamParams: params.streamParams }),
       });
       const runId = payload?.runId;
       if (typeof runId !== "string" || !runId) {
@@ -162,6 +165,9 @@ function createGatewaySubagentRuntime(): PluginRuntime["subagent"] {
         }),
         ...(params.extraSystemPrompt && { extraSystemPrompt: params.extraSystemPrompt }),
         ...(params.lane && { lane: params.lane }),
+        ...(params.clientTools && { clientTools: params.clientTools }),
+        ...(params.disableTools === true && { disableTools: true }),
+        ...(params.streamParams && { streamParams: params.streamParams }),
       });
       const runId = payload?.runId;
       if (typeof runId !== "string" || !runId) {
@@ -177,13 +183,19 @@ function createGatewaySubagentRuntime(): PluginRuntime["subagent"] {
       return { aborted: payload?.aborted === true };
     },
     async waitForRun(params) {
-      const payload = await dispatchGatewayMethod<{ status?: string; error?: string }>(
-        "agent.wait",
-        {
-          runId: params.runId,
-          ...(params.timeoutMs != null && { timeoutMs: params.timeoutMs }),
-        },
-      );
+      const payload = await dispatchGatewayMethod<{
+        status?: string;
+        error?: string;
+        stopReason?: string;
+        pendingToolCalls?: Array<{
+          id: string;
+          name: string;
+          arguments: string;
+        }>;
+      }>("agent.wait", {
+        runId: params.runId,
+        ...(params.timeoutMs != null && { timeoutMs: params.timeoutMs }),
+      });
       const status = payload?.status;
       if (status !== "ok" && status !== "error" && status !== "timeout") {
         throw new Error(`Gateway agent.wait returned unexpected status: ${status}`);
@@ -191,6 +203,12 @@ function createGatewaySubagentRuntime(): PluginRuntime["subagent"] {
       return {
         status,
         ...(typeof payload?.error === "string" && payload.error && { error: payload.error }),
+        ...(typeof payload?.stopReason === "string" &&
+          payload.stopReason && { stopReason: payload.stopReason }),
+        ...(Array.isArray(payload?.pendingToolCalls) &&
+          payload.pendingToolCalls.length > 0 && {
+            pendingToolCalls: payload.pendingToolCalls,
+          }),
       };
     },
     getSessionMessages,

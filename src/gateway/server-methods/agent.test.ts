@@ -406,6 +406,64 @@ describe("gateway agent handler", () => {
     expect(callArgs.bestEffortDeliver).toBe(false);
   });
 
+  it("forwards structured subagent options to agentCommandFromIngress", async () => {
+    primeMainAgentRun();
+
+    await invokeAgent(
+      {
+        message: "structured helper run",
+        agentId: "main",
+        sessionKey: "agent:main:main",
+        disableTools: true,
+        clientTools: [
+          {
+            type: "function",
+            function: {
+              name: "emit_structured_result",
+              description: "Return a structured result payload.",
+              parameters: {
+                type: "object",
+                properties: {
+                  entries: { type: "array" },
+                },
+              },
+            },
+          },
+        ],
+        streamParams: {
+          toolChoice: {
+            type: "function",
+            function: {
+              name: "emit_structured_result",
+            },
+          },
+        },
+        idempotencyKey: "test-structured-helper",
+      } as AgentParams,
+      { reqId: "structured-helper-1" },
+    );
+
+    await vi.waitFor(() => expect(mocks.agentCommand).toHaveBeenCalled());
+    const callArgs = mocks.agentCommand.mock.calls.at(-1)?.[0] as Record<string, unknown>;
+    expect(callArgs.disableTools).toBe(true);
+    expect(callArgs.clientTools).toEqual([
+      {
+        type: "function",
+        function: expect.objectContaining({
+          name: "emit_structured_result",
+        }),
+      },
+    ]);
+    expect(callArgs.streamParams).toEqual({
+      toolChoice: {
+        type: "function",
+        function: {
+          name: "emit_structured_result",
+        },
+      },
+    });
+  });
+
   it("rejects public spawned-run metadata fields", async () => {
     primeMainAgentRun();
     mocks.agentCommand.mockClear();

@@ -9,6 +9,7 @@ import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
 import { buildBareSessionResetPrompt } from "../../auto-reply/reply/session-reset-prompt.js";
 import type { ChannelOutboundTargetMode } from "../../channels/plugins/types.js";
 import { agentCommandFromIngress } from "../../commands/agent.js";
+import type { AgentStreamParams } from "../../commands/agent/types.js";
 import { loadConfig } from "../../config/config.js";
 import {
   mergeSessionEntry,
@@ -164,6 +165,16 @@ function startAcceptedAgentRunFromGateway(params: {
     extraSystemPrompt?: string;
     internalEvents?: AgentInternalEvent[];
     deliver?: boolean;
+    clientTools?: Array<{
+      type: "function";
+      function: {
+        name: string;
+        description?: string;
+        parameters?: Record<string, unknown>;
+      };
+    }>;
+    disableTools?: boolean;
+    streamParams?: AgentStreamParams;
   };
   message: string;
   images: Array<{ type: "image"; data: string; mimeType: string }>;
@@ -250,6 +261,9 @@ function startAcceptedAgentRunFromGateway(params: {
       lane: params.request.lane,
       extraSystemPrompt: params.request.extraSystemPrompt,
       internalEvents: params.request.internalEvents,
+      clientTools: params.request.clientTools,
+      disableTools: params.request.disableTools,
+      streamParams: params.request.streamParams,
       inputProvenance: params.inputProvenance,
       abortSignal: agentAbortController.signal,
       // Internal-only: allow workspace override for spawned subagent runs.
@@ -307,6 +321,16 @@ export const agentHandlers: GatewayRequestHandlers = {
       lane?: string;
       extraSystemPrompt?: string;
       internalEvents?: AgentInternalEvent[];
+      clientTools?: Array<{
+        type: "function";
+        function: {
+          name: string;
+          description?: string;
+          parameters?: Record<string, unknown>;
+        };
+      }>;
+      disableTools?: boolean;
+      streamParams?: AgentStreamParams;
       idempotencyKey: string;
       timeout?: number;
       bestEffortDeliver?: boolean;
@@ -829,6 +853,8 @@ export const agentHandlers: GatewayRequestHandlers = {
         startedAt: cachedGatewaySnapshot.startedAt,
         endedAt: cachedGatewaySnapshot.endedAt,
         error: cachedGatewaySnapshot.error,
+        stopReason: cachedGatewaySnapshot.stopReason,
+        pendingToolCalls: cachedGatewaySnapshot.pendingToolCalls,
       });
       return;
     }
@@ -883,6 +909,8 @@ export const agentHandlers: GatewayRequestHandlers = {
       startedAt: snapshot.startedAt,
       endedAt: snapshot.endedAt,
       error: snapshot.error,
+      stopReason: snapshot.stopReason,
+      pendingToolCalls: snapshot.pendingToolCalls,
     });
   },
 };

@@ -17,6 +17,17 @@ export type AgentStreamParams = {
   maxTokens?: number;
   /** Provider fast-mode override (best-effort). */
   fastMode?: boolean;
+  /** Provider tool-choice override (best-effort). */
+  toolChoice?:
+    | "auto"
+    | "none"
+    | "required"
+    | {
+        type: "function";
+        function: {
+          name: string;
+        };
+      };
 };
 
 export type AgentRunContext = {
@@ -37,6 +48,8 @@ export type AgentCommandOpts = {
   images?: ImageContent[];
   /** Optional client-provided tools (OpenResponses hosted tools). */
   clientTools?: ClientToolDefinition[];
+  /** Disable built-in tools for this run while still allowing clientTools. */
+  disableTools?: boolean;
   /** Agent id override (must exist in config). */
   agentId?: string;
   to?: string;

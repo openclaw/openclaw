@@ -29,6 +29,49 @@ export const AgentEventSchema = Type.Object(
   { additionalProperties: false },
 );
 
+const ClientToolDefinitionSchema = Type.Object(
+  {
+    type: Type.Literal("function"),
+    function: Type.Object(
+      {
+        name: NonEmptyString,
+        description: Type.Optional(Type.String()),
+        parameters: Type.Optional(Type.Record(Type.String(), Type.Unknown())),
+      },
+      { additionalProperties: false },
+    ),
+  },
+  { additionalProperties: false },
+);
+
+const AgentToolChoiceSchema = Type.Union([
+  Type.Literal("auto"),
+  Type.Literal("none"),
+  Type.Literal("required"),
+  Type.Object(
+    {
+      type: Type.Literal("function"),
+      function: Type.Object(
+        {
+          name: NonEmptyString,
+        },
+        { additionalProperties: false },
+      ),
+    },
+    { additionalProperties: false },
+  ),
+]);
+
+const AgentStreamParamsSchema = Type.Object(
+  {
+    temperature: Type.Optional(Type.Number()),
+    maxTokens: Type.Optional(Type.Number()),
+    fastMode: Type.Optional(Type.Boolean()),
+    toolChoice: Type.Optional(AgentToolChoiceSchema),
+  },
+  { additionalProperties: false },
+);
+
 export const SendParamsSchema = Type.Object(
   {
     to: NonEmptyString,
@@ -95,6 +138,9 @@ export const AgentParamsSchema = Type.Object(
     lane: Type.Optional(Type.String()),
     extraSystemPrompt: Type.Optional(Type.String()),
     internalEvents: Type.Optional(Type.Array(AgentInternalEventSchema)),
+    clientTools: Type.Optional(Type.Array(ClientToolDefinitionSchema)),
+    disableTools: Type.Optional(Type.Boolean()),
+    streamParams: Type.Optional(AgentStreamParamsSchema),
     inputProvenance: Type.Optional(InputProvenanceSchema),
     idempotencyKey: NonEmptyString,
     label: Type.Optional(SessionLabelString),

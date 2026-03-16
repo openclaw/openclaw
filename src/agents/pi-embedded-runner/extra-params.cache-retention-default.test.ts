@@ -151,4 +151,38 @@ describe("cacheRetention default behavior", () => {
     // Verify streamFn was set (override was applied)
     expect(agent.streamFn).toBeDefined();
   });
+
+  it("forwards toolChoice overrides to the wrapped stream options", async () => {
+    const baseStreamFn = vi.fn(async () => undefined);
+    const agent: { streamFn?: StreamFn } = { streamFn: baseStreamFn as unknown as StreamFn };
+
+    applyExtraParamsToAgent(agent, undefined, "openai", "gpt-4.1", {
+      toolChoice: {
+        type: "function",
+        function: {
+          name: "emit_structured_result",
+        },
+      },
+    });
+
+    expect(agent.streamFn).toBeDefined();
+    await agent.streamFn?.(
+      { api: "openai-responses", provider: "openai", id: "gpt-4.1", compat: {} } as never,
+      {} as never,
+      {},
+    );
+
+    expect(baseStreamFn).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.anything(),
+      expect.objectContaining({
+        toolChoice: {
+          type: "function",
+          function: {
+            name: "emit_structured_result",
+          },
+        },
+      }),
+    );
+  });
 });

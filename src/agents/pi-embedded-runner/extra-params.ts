@@ -78,6 +78,7 @@ export function resolveExtraParams(params: {
 type CacheRetentionStreamOptions = Partial<SimpleStreamOptions> & {
   cacheRetention?: "none" | "short" | "long";
   openaiWsWarmup?: boolean;
+  toolChoice?: unknown;
 };
 
 function createStreamFnWithExtraParams(
@@ -95,6 +96,9 @@ function createStreamFnWithExtraParams(
   }
   if (typeof extraParams.maxTokens === "number") {
     streamParams.maxTokens = extraParams.maxTokens;
+  }
+  if (extraParams.toolChoice !== undefined) {
+    streamParams.toolChoice = extraParams.toolChoice;
   }
   const transport = extraParams.transport;
   if (transport === "sse" || transport === "websocket" || transport === "auto") {

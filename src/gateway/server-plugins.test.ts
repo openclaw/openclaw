@@ -107,7 +107,17 @@ beforeEach(() => {
         opts.respond(true, { runId: "run-1" });
         return;
       case "agent.wait":
-        opts.respond(true, { status: "ok" });
+        opts.respond(true, {
+          status: "ok",
+          stopReason: "tool_calls",
+          pendingToolCalls: [
+            {
+              id: "call-1",
+              name: "emit_structured_result",
+              arguments: '{"entries":[]}',
+            },
+          ],
+        });
         return;
       case "sessions.get":
         opts.respond(true, { messages: [] });
@@ -355,5 +365,88 @@ describe("loadGatewayPlugins", () => {
       idempotencyKey: "plugin-enqueue-idem",
     });
     expect(getLastDispatchedRequest()?.params?.idempotencyKey).toBe("plugin-enqueue-idem");
+  });
+
+  test("forwards structured plugin subagent options to gateway agent methods", async () => {
+    const serverPlugins = await importServerPluginsModule();
+    const runtime = createSubagentRuntime(serverPlugins);
+
+    await runtime.run({
+      sessionKey: "s-structured",
+      message: "extract memories",
+      disableTools: true,
+      clientTools: [
+        {
+          type: "function",
+          function: {
+            name: "emit_structured_result",
+            description: "Return a structured result payload.",
+            parameters: {
+              type: "object",
+              properties: {
+                entries: {
+                  type: "array",
+                },
+              },
+            },
+          },
+        },
+      ],
+      streamParams: {
+        toolChoice: {
+          type: "function",
+          function: {
+            name: "emit_structured_result",
+          },
+        },
+      },
+    });
+
+    expect(getLastDispatchedRequest()).toEqual({
+      method: "agent",
+      params: expect.objectContaining({
+        sessionKey: "s-structured",
+        message: "extract memories",
+        disableTools: true,
+        clientTools: [
+          {
+            type: "function",
+            function: expect.objectContaining({
+              name: "emit_structured_result",
+            }),
+          },
+        ],
+        streamParams: {
+          toolChoice: {
+            type: "function",
+            function: {
+              name: "emit_structured_result",
+            },
+          },
+        },
+      }),
+    });
+  });
+
+  test("returns pending tool calls from gateway agent.wait", async () => {
+    const serverPlugins = await importServerPluginsModule();
+    const runtime = createSubagentRuntime(serverPlugins);
+
+    const result = await runtime.waitForRun({
+      runId: "run-1",
+      timeoutMs: 1_000,
+    });
+
+    expect(result).toEqual({
+      status: "ok",
+      stopReason: "tool_calls",
+      pendingToolCalls: [
+        {
+          id: "call-1",
+          name: "emit_structured_result",
+          arguments: '{"entries":[]}',
+        },
+      ],
+    });
   });
 });
