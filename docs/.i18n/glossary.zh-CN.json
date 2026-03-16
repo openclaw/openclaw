@@ -236,23 +236,7 @@
     "target": "环境变量"
   },
   {
-    "source": "Plugin Execution Spine Contract",
-    "target": "插件执行骨架契约"
-  },
-  {
-    "source": "Plugin Health Schema",
-    "target": "插件健康状态模式"
-  },
-  {
-    "source": "Resumable Handoff Packet Schema (v1)",
-    "target": "可恢复交接包模式（v1）"
-  },
-  {
-    "source": "Retry + Dead-letter Policy",
-    "target": "重试与死信策略"
-  },
-  {
-    "source": "Prompt Request Template: Clover Outcome (v1)",
-    "target": "提示请求模板：Clover 结果（v1）"
+    "source": "Clover Stack Master Prompt",
+    "target": "Clover 堆栈主提示词"
   }
 ]
