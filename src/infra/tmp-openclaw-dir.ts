@@ -3,7 +3,6 @@ import os from "node:os";
 import path from "node:path";
 
 export const POSIX_OPENCLAW_TMP_DIR = "/tmp/openclaw";
-const TMP_DIR_ACCESS_MODE = fs.constants.W_OK | fs.constants.X_OK;
 
 type ResolvePreferredOpenClawTmpDirOptions = {
   accessSync?: (path: string, mode?: number) => void;
@@ -49,6 +48,7 @@ export function resolvePreferredOpenClawTmpDir(
       }
     });
   const tmpdir = options.tmpdir ?? os.tmpdir;
+  const TMP_DIR_ACCESS_MODE = fs.constants.W_OK | fs.constants.X_OK;
   const uid = getuid();
 
   const isSecureDirForUser = (st: { mode?: number; uid?: number }): boolean => {
