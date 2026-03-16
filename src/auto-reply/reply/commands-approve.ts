@@ -125,44 +125,35 @@ export const handleApproveCommand: CommandHandler = async (params, allowTextComm
   }
 
   const resolvedBy = buildResolvedByLabel(params);
-  try {
+  const callApprovalMethod = async (method: string): Promise<void> => {
     await callGateway({
-      method: "exec.approval.resolve",
+      method,
       params: { id: parsed.id, decision: parsed.decision },
       clientName: GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
       clientDisplayName: `Chat approval (${resolvedBy})`,
       mode: GATEWAY_CLIENT_MODES.BACKEND,
     });
+  };
+
+  try {
+    await callApprovalMethod("exec.approval.resolve");
   } catch (err) {
-    // Fall back to plugin approval if exec approval lookup fails
-    if (String(err).includes("unknown or expired approval id")) {
+    const errMessage = String(err);
+    if (errMessage.includes("unknown or expired approval id")) {
       try {
-        await callGateway({
-          method: "plugin.approval.resolve",
-          params: { id: parsed.id, decision: parsed.decision },
-          clientName: GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
-          clientDisplayName: `Chat approval (${resolvedBy})`,
-          mode: GATEWAY_CLIENT_MODES.BACKEND,
-        });
-        return {
-          shouldContinue: false,
-          reply: { text: `✅ Approval ${parsed.decision} submitted for ${parsed.id}.` },
-        };
+        await callApprovalMethod("plugin.approval.resolve");
       } catch (pluginErr) {
         return {
           shouldContinue: false,
-          reply: {
-            text: `❌ Failed to submit approval: ${String(pluginErr)}`,
-          },
+          reply: { text: `❌ Failed to submit approval: ${String(pluginErr)}` },
         };
       }
+    } else {
+      return {
+        shouldContinue: false,
+        reply: { text: `❌ Failed to submit approval: ${errMessage}` },
+      };
     }
-    return {
-      shouldContinue: false,
-      reply: {
-        text: `❌ Failed to submit approval: ${String(err)}`,
-      },
-    };
   }
 
   return {
