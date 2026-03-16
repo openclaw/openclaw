@@ -53,8 +53,8 @@ az provider show --namespace Microsoft.Network --query registrationState -o tsv
 ```bash
 RG="rg-openclaw"
 LOCATION="westus2"
-TEMPLATE_URI="https://raw.githubusercontent.com/johnsonshi/openclaw-azure-github-copilot/main/infra/azuredeploy.json"
-PARAMS_URI="https://raw.githubusercontent.com/johnsonshi/openclaw-azure-github-copilot/main/infra/azuredeploy.parameters.json"
+TEMPLATE_URI="https://raw.githubusercontent.com/openclaw/openclaw/main/docs/install/azure/templates/azuredeploy.json"
+PARAMS_URI="https://raw.githubusercontent.com/openclaw/openclaw/main/docs/install/azure/templates/azuredeploy.parameters.json"
 ```
 
 ## 4) Select SSH key
@@ -133,7 +133,7 @@ az vm run-command invoke \
   -g "${RG}" \
   -n "${VM_NAME}" \
   --command-id RunShellScript \
-  --scripts "curl -fsSL https://raw.githubusercontent.com/johnsonshi/openclaw-azure-github-copilot/main/scripts/bootstrap-openclaw.sh | bash"
+  --scripts "curl -fsSL https://raw.githubusercontent.com/openclaw/openclaw/main/docs/install/azure/scripts/bootstrap-openclaw.sh | bash"
 ```
 
 ## 9) SSH into the VM through Azure Bastion
@@ -161,3 +161,4 @@ openclaw onboard --install-daemon
 - Set up messaging channels: [Channels](/channels)
 - Pair local devices as nodes: [Nodes](/nodes)
 - Configure the Gateway: [Gateway configuration](/gateway/configuration)
+- Azure deployment repo (credentials/context): [johnsonshi/openclaw-azure-github-copilot](https://github.com/johnsonshi/openclaw-azure-github-copilot)
