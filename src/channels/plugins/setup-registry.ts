@@ -3,6 +3,7 @@ import {
   requireActivePluginRegistry,
 } from "../../plugins/runtime.js";
 import { CHAT_CHANNEL_ORDER, type ChatChannelId } from "../registry.js";
+import { bundledChannelSetupPlugins } from "./bundled.js";
 import type { ChannelId, ChannelPlugin } from "./types.js";
 
 type CachedChannelSetupPlugins = {
@@ -33,17 +34,8 @@ function dedupeSetupPlugins(plugins: ChannelPlugin[]): ChannelPlugin[] {
   return resolved;
 }
 
-function resolveCachedChannelSetupPlugins(): CachedChannelSetupPlugins {
-  const registry = requireActivePluginRegistry();
-  const registryVersion = getActivePluginRegistryVersion();
-  const cached = cachedChannelSetupPlugins;
-  if (cached.registryVersion === registryVersion) {
-    return cached;
-  }
-
-  const sorted = dedupeSetupPlugins(
-    (registry.channelSetups ?? []).map((entry) => entry.plugin),
-  ).toSorted((a, b) => {
+function sortChannelSetupPlugins(plugins: ChannelPlugin[]): ChannelPlugin[] {
+  return dedupeSetupPlugins(plugins).toSorted((a, b) => {
     const indexA = CHAT_CHANNEL_ORDER.indexOf(a.id as ChatChannelId);
     const indexB = CHAT_CHANNEL_ORDER.indexOf(b.id as ChatChannelId);
     const orderA = a.meta.order ?? (indexA === -1 ? 999 : indexA);
@@ -53,6 +45,20 @@ function resolveCachedChannelSetupPlugins(): CachedChannelSetupPlugins {
     }
     return a.id.localeCompare(b.id);
   });
+}
+
+function resolveCachedChannelSetupPlugins(): CachedChannelSetupPlugins {
+  const registry = requireActivePluginRegistry();
+  const registryVersion = getActivePluginRegistryVersion();
+  const cached = cachedChannelSetupPlugins;
+  if (cached.registryVersion === registryVersion) {
+    return cached;
+  }
+
+  const registryPlugins = (registry.channelSetups ?? []).map((entry) => entry.plugin);
+  const sorted = sortChannelSetupPlugins(
+    registryPlugins.length > 0 ? registryPlugins : bundledChannelSetupPlugins,
+  );
   const byId = new Map<string, ChannelPlugin>();
   for (const plugin of sorted) {
     byId.set(plugin.id, plugin);

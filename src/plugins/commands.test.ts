@@ -1,4 +1,6 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { discordPlugin } from "../../extensions/discord/src/channel.js";
+import { createTestRegistry } from "../test-utils/channel-plugins.js";
 import {
   __testing,
   clearPluginCommands,
@@ -7,6 +9,13 @@ import {
   listPluginCommands,
   registerPluginCommand,
 } from "./commands.js";
+import { setActivePluginRegistry } from "./runtime.js";
+
+beforeEach(() => {
+  setActivePluginRegistry(
+    createTestRegistry([{ pluginId: "discord", source: "test", plugin: discordPlugin }]),
+  );
+});
 
 afterEach(() => {
   clearPluginCommands();

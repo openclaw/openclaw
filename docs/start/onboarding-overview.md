@@ -17,7 +17,7 @@ and how you prefer to configure providers.
 - **CLI wizard** for macOS, Linux, and Windows (via WSL2).
 - **macOS app** for a guided first run on Apple silicon or Intel Macs.
 
-## CLI onboarding wizard
+## CLI setup wizard
 
 Run the wizard in a terminal:
 
@@ -28,7 +28,7 @@ openclaw onboard
 Use the CLI wizard when you want full control of the Gateway, workspace,
 channels, and skills. Docs:
 
-- [Onboarding Wizard (CLI)](/start/wizard)
+- [Setup Wizard (CLI)](/start/wizard)
 - [`openclaw onboard` command](/cli/onboard)
 
 ## macOS app onboarding

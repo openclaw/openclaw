@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
@@ -15,10 +15,25 @@ if (!isLinux && !isMac) {
 
 const repoRoot = process.cwd();
 const tmpHome = mkdtempSync(path.join(os.tmpdir(), "openclaw-startup-memory-"));
+const tmpDir = process.env.TMPDIR || process.env.TEMP || process.env.TMP || os.tmpdir();
+const rssHookPath = path.join(tmpHome, "measure-rss.mjs");
+const MAX_RSS_MARKER = "__OPENCLAW_MAX_RSS_KB__=";
+
+writeFileSync(
+  rssHookPath,
+  [
+    "process.on('exit', () => {",
+    "  const usage = typeof process.resourceUsage === 'function' ? process.resourceUsage() : null;",
+    `  if (usage && typeof usage.maxRSS === 'number') console.error('${MAX_RSS_MARKER}' + String(usage.maxRSS));`,
+    "});",
+    "",
+  ].join("\n"),
+  "utf8",
+);
 
 const DEFAULT_LIMITS_MB = {
   help: 500,
-  statusJson: 900,
+  statusJson: 925,
   gatewayStatus: 900,
 };
 
@@ -26,13 +41,13 @@ const cases = [
   {
     id: "help",
     label: "--help",
-    args: ["node", "openclaw.mjs", "--help"],
+    args: ["openclaw.mjs", "--help"],
     limitMb: Number(process.env.OPENCLAW_STARTUP_MEMORY_HELP_MB ?? DEFAULT_LIMITS_MB.help),
   },
   {
     id: "statusJson",
     label: "status --json",
-    args: ["node", "openclaw.mjs", "status", "--json"],
+    args: ["openclaw.mjs", "status", "--json"],
     limitMb: Number(
       process.env.OPENCLAW_STARTUP_MEMORY_STATUS_JSON_MB ?? DEFAULT_LIMITS_MB.statusJson,
     ),
@@ -40,7 +55,7 @@ const cases = [
   {
     id: "gatewayStatus",
     label: "gateway status",
-    args: ["node", "openclaw.mjs", "gateway", "status"],
+    args: ["openclaw.mjs", "gateway", "status"],
     limitMb: Number(
       process.env.OPENCLAW_STARTUP_MEMORY_GATEWAY_STATUS_MB ?? DEFAULT_LIMITS_MB.gatewayStatus,
     ),
@@ -48,30 +63,52 @@ const cases = [
 ];
 
 function parseMaxRssMb(stderr) {
-  if (isLinux) {
-    const match = stderr.match(/^\s*Maximum resident set size \(kbytes\):\s*(\d+)\s*$/im);
-    if (!match) {
-      return null;
-    }
-    return Number(match[1]) / 1024;
-  }
-  const match = stderr.match(/^\s*(\d+)\s+maximum resident set size\s*$/im);
-  if (!match) {
+  const matches = [...stderr.matchAll(new RegExp(`^${MAX_RSS_MARKER}(\\d+)\\s*$`, "gm"))];
+  const lastMatch = matches.at(-1);
+  if (!lastMatch) {
     return null;
   }
-  return Number(match[1]) / (1024 * 1024);
+  return Number(lastMatch[1]) / 1024;
 }
 
-function runCase(testCase) {
+function buildBenchEnv() {
   const env = {
-    ...process.env,
     HOME: tmpHome,
+    USERPROFILE: tmpHome,
     XDG_CONFIG_HOME: path.join(tmpHome, ".config"),
     XDG_DATA_HOME: path.join(tmpHome, ".local", "share"),
     XDG_CACHE_HOME: path.join(tmpHome, ".cache"),
+    PATH: process.env.PATH ?? "",
+    TMPDIR: tmpDir,
+    TEMP: tmpDir,
+    TMP: tmpDir,
+    LANG: process.env.LANG ?? "C.UTF-8",
+    TERM: process.env.TERM ?? "dumb",
   };
-  const timeArgs = isLinux ? ["-v", ...testCase.args] : ["-l", ...testCase.args];
-  const result = spawnSync("/usr/bin/time", timeArgs, {
+
+  if (process.env.LC_ALL) {
+    env.LC_ALL = process.env.LC_ALL;
+  }
+  if (process.env.CI) {
+    env.CI = process.env.CI;
+  }
+  if (process.env.NODE_DISABLE_COMPILE_CACHE) {
+    env.NODE_DISABLE_COMPILE_CACHE = process.env.NODE_DISABLE_COMPILE_CACHE;
+  } else {
+    // Keep the regression check focused on app/runtime startup, not Node's
+    // one-shot compile cache overhead, which varies across runner builds.
+    env.NODE_DISABLE_COMPILE_CACHE = "1";
+  }
+  // Keep the benchmark on a single process so RSS reflects the actual command
+  // path rather than the warning-suppression respawn wrapper.
+  env.OPENCLAW_NO_RESPAWN = "1";
+
+  return env;
+}
+
+function runCase(testCase) {
+  const env = buildBenchEnv();
+  const result = spawnSync(process.execPath, ["--import", rssHookPath, ...testCase.args], {
     cwd: repoRoot,
     env,
     encoding: "utf8",

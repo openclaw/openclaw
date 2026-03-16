@@ -38,7 +38,8 @@ import { sendMessageMattermost } from "./mattermost/send.js";
 import { resolveMattermostOpaqueTarget } from "./mattermost/target-resolution.js";
 import { looksLikeMattermostTargetId, normalizeMattermostMessagingTarget } from "./normalize.js";
 import { getMattermostRuntime } from "./runtime.js";
-import { mattermostSetupAdapter, mattermostSetupWizard } from "./setup-surface.js";
+import { mattermostSetupAdapter } from "./setup-core.js";
+import { mattermostSetupWizard } from "./setup-surface.js";
 
 const mattermostMessageActions: ChannelMessageActionAdapter = {
   listActions: ({ cfg }) => {
@@ -70,11 +71,11 @@ const mattermostMessageActions: ChannelMessageActionAdapter = {
   supportsAction: ({ action }) => {
     return action === "send" || action === "react";
   },
-  supportsButtons: ({ cfg }) => {
+  getCapabilities: ({ cfg }) => {
     const accounts = listMattermostAccountIds(cfg)
       .map((id) => resolveMattermostAccount({ cfg, accountId: id }))
       .filter((a) => a.enabled && a.botToken?.trim() && a.baseUrl?.trim());
-    return accounts.length > 0;
+    return accounts.length > 0 ? (["buttons"] as const) : [];
   },
   handleAction: async ({ action, params, cfg, accountId }) => {
     if (action === "react") {

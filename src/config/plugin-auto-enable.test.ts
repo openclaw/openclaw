@@ -307,7 +307,26 @@ describe("applyPluginAutoEnable", () => {
       env: {},
     });
 
-    expect(result.config.plugins?.entries?.["google-gemini-cli-auth"]?.enabled).toBe(true);
+    expect(result.config.plugins?.entries?.google?.enabled).toBe(true);
+  });
+
+  it("auto-enables minimax when minimax-portal profiles exist", () => {
+    const result = applyPluginAutoEnable({
+      config: {
+        auth: {
+          profiles: {
+            "minimax-portal:default": {
+              provider: "minimax-portal",
+              mode: "oauth",
+            },
+          },
+        },
+      },
+      env: {},
+    });
+
+    expect(result.config.plugins?.entries?.minimax?.enabled).toBe(true);
+    expect(result.config.plugins?.entries?.["minimax-portal-auth"]).toBeUndefined();
   });
 
   it("auto-enables acpx plugin when ACP is configured", () => {

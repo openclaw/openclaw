@@ -8,6 +8,8 @@ import {
 } from "./runtime-postbuild-shared.mjs";
 
 const GENERATED_BUNDLED_SKILLS_DIR = "bundled-skills";
+const TRANSIENT_COPY_ERROR_CODES = new Set(["EEXIST", "ENOENT", "ENOTEMPTY", "EBUSY"]);
+const COPY_RETRY_DELAYS_MS = [10, 25, 50];
 
 export function rewritePackageExtensions(entries) {
   if (!Array.isArray(entries)) {
@@ -21,6 +23,15 @@ export function rewritePackageExtensions(entries) {
       const rewritten = normalized.replace(/\.[^.]+$/u, ".js");
       return `./${rewritten}`;
     });
+}
+
+function rewritePackageEntry(entry) {
+  if (typeof entry !== "string" || entry.trim().length === 0) {
+    return undefined;
+  }
+  const normalized = entry.replace(/^\.\//, "");
+  const rewritten = normalized.replace(/\.[^.]+$/u, ".js");
+  return `./${rewritten}`;
 }
 
 function ensurePathInsideRoot(rootDir, rawPath) {
@@ -73,6 +84,39 @@ function resolveBundledSkillTarget(rawPath) {
   };
 }
 
+function isTransientCopyError(error) {
+  return (
+    !!error &&
+    typeof error === "object" &&
+    typeof error.code === "string" &&
+    TRANSIENT_COPY_ERROR_CODES.has(error.code)
+  );
+}
+
+function sleepSync(ms) {
+  if (!Number.isFinite(ms) || ms <= 0) {
+    return;
+  }
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+
+function copySkillPathWithRetry(params) {
+  const maxAttempts = COPY_RETRY_DELAYS_MS.length + 1;
+  for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+    try {
+      removePathIfExists(params.targetPath);
+      fs.mkdirSync(path.dirname(params.targetPath), { recursive: true });
+      fs.cpSync(params.sourcePath, params.targetPath, params.copyOptions);
+      return;
+    } catch (error) {
+      if (!isTransientCopyError(error) || attempt === maxAttempts - 1) {
+        throw error;
+      }
+      sleepSync(COPY_RETRY_DELAYS_MS[attempt] ?? 0);
+    }
+  }
+}
+
 function copyDeclaredPluginSkillPaths(params) {
   const skills = Array.isArray(params.manifest.skills) ? params.manifest.skills : [];
   const copiedSkills = [];
@@ -95,21 +139,23 @@ function copyDeclaredPluginSkillPaths(params) {
       continue;
     }
     const targetPath = ensurePathInsideRoot(params.distPluginDir, target.outputPath);
-    removePathIfExists(targetPath);
-    fs.mkdirSync(path.dirname(targetPath), { recursive: true });
     const shouldExcludeNestedNodeModules = /^node_modules(?:\/|$)/u.test(
       normalizeManifestRelativePath(raw),
     );
-    fs.cpSync(sourcePath, targetPath, {
-      dereference: true,
-      force: true,
-      recursive: true,
-      filter: (candidatePath) => {
-        if (!shouldExcludeNestedNodeModules || candidatePath === sourcePath) {
-          return true;
-        }
-        const relativeCandidate = path.relative(sourcePath, candidatePath).replaceAll("\\", "/");
-        return !relativeCandidate.split("/").includes("node_modules");
+    copySkillPathWithRetry({
+      sourcePath,
+      targetPath,
+      copyOptions: {
+        dereference: true,
+        force: true,
+        recursive: true,
+        filter: (candidatePath) => {
+          if (!shouldExcludeNestedNodeModules || candidatePath === sourcePath) {
+            return true;
+          }
+          const relativeCandidate = path.relative(sourcePath, candidatePath).replaceAll("\\", "/");
+          return !relativeCandidate.split("/").includes("node_modules");
+        },
       },
     });
     copiedSkills.push(target.manifestPath);
@@ -126,13 +172,6 @@ export function copyBundledPluginMetadata(params = {}) {
   }
 
   const sourcePluginDirs = new Set();
-  const removeGeneratedPluginArtifacts = (distPluginDir) => {
-    removeFileIfExists(path.join(distPluginDir, "openclaw.plugin.json"));
-    removeFileIfExists(path.join(distPluginDir, "package.json"));
-    removePathIfExists(path.join(distPluginDir, GENERATED_BUNDLED_SKILLS_DIR));
-    removePathIfExists(path.join(distPluginDir, "node_modules"));
-  };
-
   for (const dirent of fs.readdirSync(extensionsRoot, { withFileTypes: true })) {
     if (!dirent.isDirectory()) {
       continue;
@@ -145,7 +184,7 @@ export function copyBundledPluginMetadata(params = {}) {
     const distManifestPath = path.join(distPluginDir, "openclaw.plugin.json");
     const distPackageJsonPath = path.join(distPluginDir, "package.json");
     if (!fs.existsSync(manifestPath)) {
-      removeGeneratedPluginArtifacts(distPluginDir);
+      removePathIfExists(distPluginDir);
       continue;
     }
 
@@ -176,6 +215,9 @@ export function copyBundledPluginMetadata(params = {}) {
       packageJson.openclaw = {
         ...packageJson.openclaw,
         extensions: rewritePackageExtensions(packageJson.openclaw.extensions),
+        ...(typeof packageJson.openclaw.setupEntry === "string"
+          ? { setupEntry: rewritePackageEntry(packageJson.openclaw.setupEntry) }
+          : {}),
       };
     }
 
@@ -191,7 +233,7 @@ export function copyBundledPluginMetadata(params = {}) {
       continue;
     }
     const distPluginDir = path.join(distExtensionsRoot, dirent.name);
-    removeGeneratedPluginArtifacts(distPluginDir);
+    removePathIfExists(distPluginDir);
   }
 }
 

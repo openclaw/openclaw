@@ -138,6 +138,9 @@ const plugin = {
   register(api: OpenClawPluginApi) {
     setTlonRuntime(api.runtime);
     api.registerChannel({ plugin: tlonPlugin });
+    if (api.registrationMode !== "full") {
+      return;
+    }
 
     api.logger.debug?.("[tlon] Registering tlon tool");
     api.registerTool({
