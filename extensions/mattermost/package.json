@@ -11,6 +11,7 @@
     "extensions": [
       "./index.ts"
     ],
+    "setupEntry": "./setup-entry.ts",
     "channel": {
       "id": "mattermost",
       "label": "Mattermost",

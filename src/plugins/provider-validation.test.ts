@@ -32,12 +32,21 @@ describe("normalizeRegisteredProvider", () => {
         id: " demo ",
         label: " Demo Provider ",
         aliases: [" alias-one ", "alias-one", ""],
+        deprecatedProfileIds: [" demo:legacy ", "demo:legacy", ""],
         envVars: [" DEMO_API_KEY ", "DEMO_API_KEY"],
         auth: [
           {
             id: " primary ",
             label: " Primary ",
             kind: "custom",
+            wizard: {
+              choiceId: " demo-primary ",
+              modelAllowlist: {
+                allowedKeys: [" demo/model ", "demo/model"],
+                initialSelections: [" demo/model "],
+                message: " Demo models ",
+              },
+            },
             run: async () => ({ profiles: [] }),
           },
           {
@@ -49,7 +58,7 @@ describe("normalizeRegisteredProvider", () => {
           { id: "   ", label: "Missing", kind: "custom", run: async () => ({ profiles: [] }) },
         ],
         wizard: {
-          onboarding: {
+          setup: {
             choiceId: " demo-choice ",
             methodId: " missing ",
           },
@@ -66,10 +75,24 @@ describe("normalizeRegisteredProvider", () => {
       id: "demo",
       label: "Demo Provider",
       aliases: ["alias-one"],
+      deprecatedProfileIds: ["demo:legacy"],
       envVars: ["DEMO_API_KEY"],
-      auth: [{ id: "primary", label: "Primary" }],
+      auth: [
+        {
+          id: "primary",
+          label: "Primary",
+          wizard: {
+            choiceId: "demo-primary",
+            modelAllowlist: {
+              allowedKeys: ["demo/model"],
+              initialSelections: ["demo/model"],
+              message: "Demo models",
+            },
+          },
+        },
+      ],
       wizard: {
-        onboarding: {
+        setup: {
           choiceId: "demo-choice",
         },
         modelPicker: {
@@ -89,7 +112,7 @@ describe("normalizeRegisteredProvider", () => {
       {
         level: "warn",
         message:
-          'provider "demo" onboarding method "missing" not found; falling back to available methods',
+          'provider "demo" setup method "missing" not found; falling back to available methods',
       },
       {
         level: "warn",
@@ -107,7 +130,7 @@ describe("normalizeRegisteredProvider", () => {
       source: "/tmp/demo/index.ts",
       provider: makeProvider({
         wizard: {
-          onboarding: {
+          setup: {
             choiceId: "demo",
           },
           modelPicker: {
@@ -120,7 +143,7 @@ describe("normalizeRegisteredProvider", () => {
 
     expect(provider?.wizard).toBeUndefined();
     expect(diagnostics.map((diag) => diag.message)).toEqual([
-      'provider "demo" onboarding metadata ignored because it has no auth methods',
+      'provider "demo" setup metadata ignored because it has no auth methods',
       'provider "demo" model-picker metadata ignored because it has no auth methods',
     ]);
   });
