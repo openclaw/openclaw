@@ -200,6 +200,23 @@ function normalizeOpenAiStringModeAnthropicToolChoice(toolChoice: unknown): unkn
   return toolChoice;
 }
 
+function resolveExplicitCacheRetention(
+  extraParams: Record<string, unknown> | undefined,
+): CacheRetention | undefined {
+  const newVal = extraParams?.cacheRetention;
+  if (newVal === "none" || newVal === "short" || newVal === "long") {
+    return newVal;
+  }
+  const legacy = extraParams?.cacheControlTtl;
+  if (legacy === "5m") {
+    return "short";
+  }
+  if (legacy === "1h") {
+    return "long";
+  }
+  return undefined;
+}
+
 export function resolveCacheRetention(
   extraParams: Record<string, unknown> | undefined,
   provider: string,
@@ -209,21 +226,16 @@ export function resolveCacheRetention(
     extraParams?.cacheRetention !== undefined || extraParams?.cacheControlTtl !== undefined;
   const isAnthropicBedrock = provider === "amazon-bedrock" && hasBedrockOverride;
 
-  if (!isAnthropicDirect && !isAnthropicBedrock) {
+  const explicit = resolveExplicitCacheRetention(extraParams);
+  const isOtherProviderWithExplicit =
+    !isAnthropicDirect && !isAnthropicBedrock && explicit !== undefined;
+
+  if (!isAnthropicDirect && !isAnthropicBedrock && !isOtherProviderWithExplicit) {
     return undefined;
   }
 
-  const newVal = extraParams?.cacheRetention;
-  if (newVal === "none" || newVal === "short" || newVal === "long") {
-    return newVal;
-  }
-
-  const legacy = extraParams?.cacheControlTtl;
-  if (legacy === "5m") {
-    return "short";
-  }
-  if (legacy === "1h") {
-    return "long";
+  if (explicit !== undefined) {
+    return explicit;
   }
 
   return isAnthropicDirect ? "short" : undefined;

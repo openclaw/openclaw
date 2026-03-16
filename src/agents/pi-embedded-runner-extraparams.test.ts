@@ -1429,6 +1429,64 @@ describe("applyExtraParamsToAgent", () => {
     expect(calls[0]?.cacheRetention).toBe("long");
   });
 
+  it("passes through explicit cacheRetention for OpenRouter Claude models", () => {
+    const { calls, agent } = createOptionsCaptureAgent();
+    const cfg = {
+      agents: {
+        defaults: {
+          models: {
+            "openrouter/anthropic/claude-sonnet-4-6": {
+              params: { cacheRetention: "long" },
+            },
+          },
+        },
+      },
+    };
+
+    applyExtraParamsToAgent(agent, cfg, "openrouter", "anthropic/claude-sonnet-4-6");
+
+    const model = {
+      api: "openai-completions",
+      provider: "openrouter",
+      id: "anthropic/claude-sonnet-4-6",
+    } as Model<"openai-completions">;
+    const context: Context = { messages: [] };
+
+    void agent.streamFn?.(model, context, {});
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.cacheRetention).toBe("long");
+  });
+
+  it("passes through explicit cacheRetention for any provider with Claude model id", () => {
+    const { calls, agent } = createOptionsCaptureAgent();
+    const cfg = {
+      agents: {
+        defaults: {
+          models: {
+            "kilocode/anthropic/claude-sonnet-4-6": {
+              params: { cacheRetention: "long" },
+            },
+          },
+        },
+      },
+    };
+
+    applyExtraParamsToAgent(agent, cfg, "kilocode", "anthropic/claude-sonnet-4-6");
+
+    const model = {
+      api: "openai-completions",
+      provider: "kilocode",
+      id: "anthropic/claude-sonnet-4-6",
+    } as Model<"openai-completions">;
+    const context: Context = { messages: [] };
+
+    void agent.streamFn?.(model, context, {});
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.cacheRetention).toBe("long");
+  });
+
   it("adds Anthropic 1M beta header when context1m is enabled for Opus/Sonnet", () => {
     const { calls, agent } = createOptionsCaptureAgent();
     const cfg = buildAnthropicModelConfig("anthropic/claude-opus-4-6", { context1m: true });

@@ -440,6 +440,8 @@ export function applyContextPruningDefaults(cfg: OpenClawConfig): OpenClawConfig
   if (authMode === "api_key") {
     const nextModels = defaults.models ? { ...defaults.models } : {};
     let modelsMutated = false;
+    // Any ref that points at Claude: direct Anthropic, Bedrock Claude, or proxy/aggregator
+    // (OpenRouter, Kilocode, etc.) using model id "anthropic/...".
     const isAnthropicCacheRetentionTarget = (
       parsed: { provider: string; model: string } | null | undefined,
     ): parsed is { provider: string; model: string } =>
@@ -447,7 +449,10 @@ export function applyContextPruningDefaults(cfg: OpenClawConfig): OpenClawConfig
         parsed &&
         (parsed.provider === "anthropic" ||
           (parsed.provider === "amazon-bedrock" &&
-            parsed.model.toLowerCase().includes("anthropic.claude"))),
+            parsed.model.toLowerCase().includes("anthropic.claude")) ||
+          (parsed.provider !== "anthropic" &&
+            parsed.provider !== "amazon-bedrock" &&
+            parsed.model.toLowerCase().startsWith("anthropic/"))),
       );
 
     for (const [key, entry] of Object.entries(nextModels)) {

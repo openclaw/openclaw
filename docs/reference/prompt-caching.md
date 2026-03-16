@@ -96,9 +96,25 @@ Per-agent heartbeat is supported at `agents.list[].heartbeat`.
 - Anthropic Claude model refs (`amazon-bedrock/*anthropic.claude*`) support explicit `cacheRetention` pass-through.
 - Non-Anthropic Bedrock models are forced to `cacheRetention: "none"` at runtime.
 
-### OpenRouter Anthropic models
+### OpenRouter and other providers with Claude
 
-For `openrouter/anthropic/*` model refs, OpenClaw injects Anthropic `cache_control` on system/developer prompt blocks to improve prompt-cache reuse.
+For model refs where the **model id** is `anthropic/...` (e.g. `openrouter/anthropic/claude-sonnet-4-6`, `zenmux/anthropic/claude-sonnet-4.6`, `kilocode/anthropic/claude-opus-4-6`), OpenClaw treats them as cache-capable. With Anthropic API-key auth, default `cacheRetention` is seeded (`"short"`) when unset. Set `cacheRetention: "long"` (or `"short"` / `"none"`) in that model’s params to control caching; the value is passed through to the provider. For OpenRouter in particular, `cache_control` is also injected on system messages for these models.
+
+Example (Zenmux primary + fallbacks; primary Claude gets cache support):
+
+```yaml
+agents:
+  defaults:
+    model:
+      primary: "zenmux/anthropic/claude-sonnet-4.6"
+      fallbacks:
+        - "zenmux/openai/gpt-5.2"
+        - "zenmux/google/gemini-3-pro-preview"
+    models:
+      "zenmux/anthropic/claude-sonnet-4.6":
+        params:
+          cacheRetention: "long"
+```
 
 ### Other providers
 

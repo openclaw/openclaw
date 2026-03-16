@@ -121,6 +121,82 @@ describe("config pruning defaults", () => {
     });
   });
 
+  it("adds default cacheRetention for OpenRouter Anthropic Claude models", async () => {
+    await withTempHome(async (home) => {
+      await writeConfigForTest(home, {
+        auth: {
+          profiles: {
+            "anthropic:api": { provider: "anthropic", mode: "api_key" },
+          },
+        },
+        agents: {
+          defaults: {
+            model: { primary: "openrouter/anthropic/claude-sonnet-4-6" },
+          },
+        },
+      });
+
+      const cfg = loadConfig();
+
+      expect(
+        cfg.agents?.defaults?.models?.["openrouter/anthropic/claude-sonnet-4-6"]?.params
+          ?.cacheRetention,
+      ).toBe("short");
+    });
+  });
+
+  it("adds default cacheRetention for any provider with anthropic/ model id", async () => {
+    await withTempHome(async (home) => {
+      await writeConfigForTest(home, {
+        auth: {
+          profiles: {
+            "anthropic:api": { provider: "anthropic", mode: "api_key" },
+          },
+        },
+        agents: {
+          defaults: {
+            model: { primary: "kilocode/anthropic/claude-opus-4-6" },
+          },
+        },
+      });
+
+      const cfg = loadConfig();
+
+      expect(
+        cfg.agents?.defaults?.models?.["kilocode/anthropic/claude-opus-4-6"]?.params
+          ?.cacheRetention,
+      ).toBe("short");
+    });
+  });
+
+  it("preserves explicit cacheRetention long for OpenRouter Claude", async () => {
+    await withTempHome(async (home) => {
+      await writeConfigForTest(home, {
+        auth: {
+          profiles: {
+            "anthropic:api": { provider: "anthropic", mode: "api_key" },
+          },
+        },
+        agents: {
+          defaults: {
+            models: {
+              "openrouter/anthropic/claude-sonnet-4-6": {
+                params: { cacheRetention: "long" },
+              },
+            },
+          },
+        },
+      });
+
+      const cfg = loadConfig();
+
+      expect(
+        cfg.agents?.defaults?.models?.["openrouter/anthropic/claude-sonnet-4-6"]?.params
+          ?.cacheRetention,
+      ).toBe("long");
+    });
+  });
+
   it("does not override explicit contextPruning mode", async () => {
     await withTempHome(async (home) => {
       await writeConfigForTest(home, { agents: { defaults: { contextPruning: { mode: "off" } } } });
