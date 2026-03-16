@@ -1847,6 +1847,39 @@ describe("secrets runtime snapshot", () => {
     );
   });
 
+  it("treats model provider apiKey refs as inactive when apiKeyFile is configured", async () => {
+    const snapshot = await prepareSecretsRuntimeSnapshot({
+      config: asConfig({
+        models: {
+          providers: {
+            openai: {
+              baseUrl: "https://api.openai.com/v1",
+              apiKeyFile: "/tmp/openai-api-key",
+              apiKey: {
+                source: "env",
+                provider: "default",
+                id: "MISSING_OPENAI_API_KEY",
+              },
+              models: [],
+            },
+          },
+        },
+      }),
+      env: {},
+      agentDirs: ["/tmp/openclaw-agent-main"],
+      loadAuthStore: () => ({ version: 1, profiles: {} }),
+    });
+
+    expect(snapshot.config.models?.providers?.openai?.apiKey).toEqual({
+      source: "env",
+      provider: "default",
+      id: "MISSING_OPENAI_API_KEY",
+    });
+    expect(snapshot.warnings.map((warning) => warning.path)).toContain(
+      "models.providers.openai.apiKey",
+    );
+  });
+
   it("treats top-level Telegram botToken refs as active when account botToken is blank", async () => {
     const snapshot = await prepareSecretsRuntimeSnapshot({
       config: asConfig({

@@ -52,6 +52,7 @@ export type ModelDefinitionConfig = {
 export type ModelProviderConfig = {
   baseUrl: string;
   apiKey?: SecretInput;
+  apiKeyFile?: string;
   auth?: ModelProviderAuthMode;
   api?: ModelApi;
   injectNumCtxForOpenAICompat?: boolean;

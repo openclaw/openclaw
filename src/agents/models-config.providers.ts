@@ -31,6 +31,7 @@ import {
   runProviderCatalog,
 } from "../plugins/provider-discovery.js";
 import {
+  API_KEY_FILE_MARKER,
   isNonSecretApiKeyMarker,
   resolveNonEnvSecretRefApiKeyMarker,
   resolveNonEnvSecretRefHeaderValueMarker,
@@ -473,6 +474,18 @@ export function normalizeProviders(params: {
       mutated = true;
       normalizedProvider = { ...normalizedProvider, headers: normalizedHeaders.headers };
     }
+
+    const apiKeyFile =
+      typeof normalizedProvider.apiKeyFile === "string" ? normalizedProvider.apiKeyFile.trim() : "";
+    if (apiKeyFile) {
+      if (normalizedProvider.apiKey !== API_KEY_FILE_MARKER) {
+        mutated = true;
+        normalizedProvider = { ...normalizedProvider, apiKey: API_KEY_FILE_MARKER };
+      }
+      next[normalizedKey] = normalizedProvider;
+      continue;
+    }
+
     const configuredApiKey = normalizedProvider.apiKey;
     const configuredApiKeyRef = resolveSecretInputRef({
       value: configuredApiKey,

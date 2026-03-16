@@ -10,6 +10,7 @@ import { isRecord } from "./shared.js";
 
 type ProviderLike = {
   apiKey?: unknown;
+  apiKeyFile?: unknown;
   headers?: unknown;
   enabled?: unknown;
 };
@@ -26,14 +27,18 @@ function collectModelProviderAssignments(params: {
 }): void {
   for (const [providerId, provider] of Object.entries(params.providers)) {
     const providerIsActive = provider.enabled !== false;
+    const apiKeyFileConfigured =
+      typeof provider.apiKeyFile === "string" && provider.apiKeyFile.trim().length > 0;
     collectSecretInputAssignment({
       value: provider.apiKey,
       path: `models.providers.${providerId}.apiKey`,
       expected: "string",
       defaults: params.defaults,
       context: params.context,
-      active: providerIsActive,
-      inactiveReason: "provider is disabled.",
+      active: providerIsActive && !apiKeyFileConfigured,
+      inactiveReason: apiKeyFileConfigured
+        ? "provider apiKeyFile is configured."
+        : "provider is disabled.",
       apply: (value) => {
         provider.apiKey = value;
       },

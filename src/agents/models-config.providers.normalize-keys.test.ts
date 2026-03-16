@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
-import { NON_ENV_SECRETREF_MARKER } from "./model-auth-markers.js";
+import { API_KEY_FILE_MARKER, NON_ENV_SECRETREF_MARKER } from "./model-auth-markers.js";
 import {
   enforceSourceManagedProviderSecrets,
   normalizeProviders,
@@ -135,6 +135,28 @@ describe("normalizeProviders", () => {
       });
       expect(normalized?.openai?.headers?.Authorization).toBe("secretref-env:OPENAI_HEADER_TOKEN");
       expect(normalized?.openai?.headers?.["X-Tenant-Token"]).toBe(NON_ENV_SECRETREF_MARKER);
+    } finally {
+      await fs.rm(agentDir, { recursive: true, force: true });
+    }
+  });
+
+  it("persists apiKeyFile-backed providers as marker values", async () => {
+    const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-agent-"));
+    const apiKeyFile = path.join(agentDir, "openai.key");
+    try {
+      const providers: NonNullable<NonNullable<OpenClawConfig["models"]>["providers"]> = {
+        openai: {
+          baseUrl: "https://api.openai.com/v1",
+          api: "openai-completions",
+          apiKey: "sk-inline-should-not-persist", // pragma: allowlist secret
+          apiKeyFile,
+          models: [],
+        },
+      };
+
+      const normalized = normalizeProviders({ providers, agentDir });
+      expect(normalized?.openai?.apiKey).toBe(API_KEY_FILE_MARKER);
+      expect(normalized?.openai?.apiKeyFile).toBe(apiKeyFile);
     } finally {
       await fs.rm(agentDir, { recursive: true, force: true });
     }

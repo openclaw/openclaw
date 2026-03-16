@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { API_KEY_FILE_MARKER } from "../agents/model-auth-markers.js";
 import { runSecretsAudit } from "./audit.js";
 
 type AuditFixture = {
@@ -116,6 +117,7 @@ describe("secrets audit", () => {
   async function writeModelsProvider(
     overrides: Partial<{
       apiKey: unknown;
+      apiKeyFile: string;
       headers: Record<string, unknown>;
     }> = {},
   ) {
@@ -163,6 +165,20 @@ describe("secrets audit", () => {
     expect(report.summary.shadowedRefCount).toBeGreaterThan(0);
     expect(hasFinding(report, (entry) => entry.code === "REF_SHADOWED")).toBe(true);
     expect(hasFinding(report, (entry) => entry.code === "PLAINTEXT_FOUND")).toBe(true);
+  });
+
+  it("does not flag apiKeyFile marker values in models.json as plaintext", async () => {
+    await writeModelsProvider({
+      apiKey: API_KEY_FILE_MARKER,
+      apiKeyFile: "/run/secrets/openai-api-key",
+    });
+
+    const report = await runSecretsAudit({ env: fixture.env });
+    expectModelsFinding(report, {
+      code: "PLAINTEXT_FOUND",
+      jsonPath: "providers.openai.apiKey",
+      present: false,
+    });
   });
 
   it("does not mutate legacy auth.json during audit", async () => {

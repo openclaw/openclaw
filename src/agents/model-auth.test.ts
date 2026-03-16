@@ -1,3 +1,6 @@
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { streamSimpleOpenAICompletions, type Model } from "@mariozechner/pi-ai";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { withFetchPreconnect } from "../test-utils/fetch-mock.js";
@@ -225,6 +228,87 @@ describe("resolveUsableCustomProviderApiKey", () => {
         process.env.OPENAI_API_KEY = previous;
       }
     }
+  });
+
+  it("reads custom provider api keys from apiKeyFile", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-model-auth-"));
+    const apiKeyFile = path.join(tempDir, "openai.key");
+    try {
+      await fs.writeFile(apiKeyFile, "sk-from-file\n", "utf8");
+
+      const resolved = resolveUsableCustomProviderApiKey({
+        cfg: {
+          models: {
+            providers: {
+              custom: {
+                baseUrl: "https://example.com/v1",
+                apiKeyFile,
+                models: [],
+              },
+            },
+          },
+        },
+        provider: "custom",
+      });
+
+      expect(resolved).toEqual({
+        apiKey: "sk-from-file",
+        source: "apiKeyFile",
+      });
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("prefers apiKeyFile over inline apiKey for custom providers", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-model-auth-"));
+    const apiKeyFile = path.join(tempDir, "openai.key");
+    try {
+      await fs.writeFile(apiKeyFile, "sk-from-file\n", "utf8");
+
+      const resolved = resolveUsableCustomProviderApiKey({
+        cfg: {
+          models: {
+            providers: {
+              custom: {
+                baseUrl: "https://example.com/v1",
+                apiKeyFile,
+                apiKey: "sk-inline-should-not-win", // pragma: allowlist secret
+                models: [],
+              },
+            },
+          },
+        },
+        provider: "custom",
+      });
+
+      expect(resolved).toEqual({
+        apiKey: "sk-from-file",
+        source: "apiKeyFile",
+      });
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("does not fall back to inline apiKey when configured apiKeyFile is unreadable", () => {
+    const resolved = resolveUsableCustomProviderApiKey({
+      cfg: {
+        models: {
+          providers: {
+            custom: {
+              baseUrl: "https://example.com/v1",
+              apiKeyFile: "/tmp/does-not-exist-openclaw-api-key",
+              apiKey: "sk-inline-should-not-fallback", // pragma: allowlist secret
+              models: [],
+            },
+          },
+        },
+      },
+      provider: "custom",
+    });
+
+    expect(resolved).toBeNull();
   });
 });
 

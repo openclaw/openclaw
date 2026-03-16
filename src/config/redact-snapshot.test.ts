@@ -270,6 +270,29 @@ describe("redactConfigSnapshot", () => {
     expect(nickserv.password).toBe(REDACTED_SENTINEL);
   });
 
+  it("does not redact model provider apiKeyFile path fields", () => {
+    const snapshot = makeSnapshot({
+      models: {
+        providers: {
+          openai: {
+            baseUrl: "https://api.openai.com/v1",
+            apiKeyFile: "/run/secrets/openai-api-key",
+            apiKey: "sk-openai-secret",
+            models: [],
+          },
+        },
+      },
+    });
+
+    const result = redactConfigSnapshot(snapshot);
+    const providers = result.config.models?.providers as
+      | Record<string, Record<string, unknown>>
+      | undefined;
+
+    expect(providers?.openai?.apiKeyFile).toBe("/run/secrets/openai-api-key");
+    expect(providers?.openai?.apiKey).toBe(REDACTED_SENTINEL);
+  });
+
   it("preserves hash unchanged", () => {
     const snapshot = makeSnapshot({ gateway: { auth: { token: "secret-token-value-here" } } });
     const result = redactConfigSnapshot(snapshot);

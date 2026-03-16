@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import path from "node:path";
 import { type Api, getEnvApiKey, type Model } from "@mariozechner/pi-ai";
 import { formatCliCommand } from "../cli/command-format.js";
@@ -20,6 +21,7 @@ import {
 } from "./auth-profiles.js";
 import { PROVIDER_ENV_API_KEY_CANDIDATES } from "./model-auth-env-vars.js";
 import {
+  API_KEY_FILE_MARKER,
   CUSTOM_LOCAL_AUTH_MARKER,
   isKnownEnvApiKeyMarker,
   isNonSecretApiKeyMarker,
@@ -66,12 +68,56 @@ function resolveProviderConfig(
   );
 }
 
-export function getCustomProviderApiKey(
+function resolveProviderApiKeyFilePath(
+  providerConfig: ModelProviderConfig | undefined,
+): string | undefined {
+  const filePath =
+    typeof providerConfig?.apiKeyFile === "string" ? providerConfig.apiKeyFile.trim() : "";
+  return filePath || undefined;
+}
+
+function readApiKeyFile(filePath: string): string | undefined {
+  try {
+    const value = fs.readFileSync(filePath, "utf8").trim();
+    return value || undefined;
+  } catch (err) {
+    const code = typeof err === "object" && err && "code" in err ? String(err.code) : undefined;
+    if (code === "ENOENT") {
+      log.warn(`apiKeyFile not found: ${filePath}`);
+    } else {
+      log.warn(`apiKeyFile read failed: ${filePath}: ${String(err)}`);
+    }
+    return undefined;
+  }
+}
+
+export function getCustomProviderApiKeyFilePath(
+  cfg: OpenClawConfig | undefined,
+  provider: string,
+): string | undefined {
+  return resolveProviderApiKeyFilePath(resolveProviderConfig(cfg, provider));
+}
+
+export function getCustomProviderApiKeyConfigValue(
   cfg: OpenClawConfig | undefined,
   provider: string,
 ): string | undefined {
   const entry = resolveProviderConfig(cfg, provider);
+  if (resolveProviderApiKeyFilePath(entry)) {
+    return API_KEY_FILE_MARKER;
+  }
   return normalizeOptionalSecretInput(entry?.apiKey);
+}
+
+export function getCustomProviderApiKey(
+  cfg: OpenClawConfig | undefined,
+  provider: string,
+): string | undefined {
+  const apiKeyFile = getCustomProviderApiKeyFilePath(cfg, provider);
+  if (apiKeyFile) {
+    return readApiKeyFile(apiKeyFile);
+  }
+  return getCustomProviderApiKeyConfigValue(cfg, provider);
 }
 
 type ResolvedCustomProviderApiKey = {
@@ -84,7 +130,15 @@ export function resolveUsableCustomProviderApiKey(params: {
   provider: string;
   env?: NodeJS.ProcessEnv;
 }): ResolvedCustomProviderApiKey | null {
-  const customKey = getCustomProviderApiKey(params.cfg, params.provider);
+  const apiKeyFile = getCustomProviderApiKeyFilePath(params.cfg, params.provider);
+  if (apiKeyFile) {
+    const apiKey = readApiKeyFile(apiKeyFile);
+    if (!apiKey) {
+      return null;
+    }
+    return { apiKey, source: "apiKeyFile" };
+  }
+  const customKey = getCustomProviderApiKeyConfigValue(params.cfg, params.provider);
   if (!customKey) {
     return null;
   }
@@ -147,6 +201,7 @@ function isLocalBaseUrl(baseUrl: string): boolean {
 
 function hasExplicitProviderApiKeyConfig(providerConfig: ModelProviderConfig): boolean {
   return (
+    resolveProviderApiKeyFilePath(providerConfig) !== undefined ||
     normalizeOptionalSecretInput(providerConfig.apiKey) !== undefined ||
     coerceSecretRef(providerConfig.apiKey) !== null
   );

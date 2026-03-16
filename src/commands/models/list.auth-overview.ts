@@ -8,7 +8,8 @@ import {
 } from "../../agents/auth-profiles.js";
 import { isNonSecretApiKeyMarker } from "../../agents/model-auth-markers.js";
 import {
-  getCustomProviderApiKey,
+  getCustomProviderApiKeyConfigValue,
+  getCustomProviderApiKeyFilePath,
   resolveEnvApiKey,
   resolveUsableCustomProviderApiKey,
 } from "../../agents/model-auth.js";
@@ -102,7 +103,8 @@ export function resolveProviderAuthOverview(params: {
   const apiKeyCount = profiles.filter((id) => store.profiles[id]?.type === "api_key").length;
 
   const envKey = resolveEnvApiKey(provider);
-  const customKey = getCustomProviderApiKey(cfg, provider);
+  const customKey = getCustomProviderApiKeyConfigValue(cfg, provider);
+  const customKeyFilePath = getCustomProviderApiKeyFilePath(cfg, provider);
   const usableCustomKey = resolveUsableCustomProviderApiKey({ cfg, provider });
 
   const effective: ProviderAuthOverview["effective"] = (() => {
@@ -121,7 +123,10 @@ export function resolveProviderAuthOverview(params: {
       };
     }
     if (usableCustomKey) {
-      return { kind: "models.json", detail: formatMarkerOrSecret(usableCustomKey.apiKey) };
+      return {
+        kind: usableCustomKey.source === "apiKeyFile" ? "apiKeyFile" : "models.json",
+        detail: formatMarkerOrSecret(usableCustomKey.apiKey),
+      };
     }
     return { kind: "missing", detail: "missing" };
   })();
@@ -151,7 +156,9 @@ export function resolveProviderAuthOverview(params: {
       ? {
           modelsJson: {
             value: formatMarkerOrSecret(customKey),
-            source: `models.json: ${shortenHomePath(params.modelsPath)}`,
+            source: customKeyFilePath
+              ? `apiKeyFile: ${shortenHomePath(customKeyFilePath)}`
+              : `models.json: ${shortenHomePath(params.modelsPath)}`,
           },
         }
       : {}),

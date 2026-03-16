@@ -64,7 +64,7 @@ export function resolveModelAuthLabel(params: {
     provider: providerKey,
   });
   if (customKey) {
-    return `api-key (models.json)`;
+    return `api-key (${customKey.source})`;
   }
 
   return "unknown";

@@ -4,7 +4,7 @@ import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { validateConfigObject } from "../config/validation.js";
 import { resolveOpenClawAgentDir } from "./agent-paths.js";
-import { NON_ENV_SECRETREF_MARKER } from "./model-auth-markers.js";
+import { API_KEY_FILE_MARKER, NON_ENV_SECRETREF_MARKER } from "./model-auth-markers.js";
 import {
   CUSTOM_PROXY_MODELS_CONFIG,
   installModelsConfigTestHooks,
@@ -232,6 +232,31 @@ async function expectOpenAiEnvMarkerApiKey(options?: { seedMergedProvider?: bool
       expect(result.providers.openai?.apiKey).toBe("OPENAI_API_KEY"); // pragma: allowlist secret
     });
   });
+}
+
+function createOpenAiConfigWithApiKeyFile(apiKeyFile: string): OpenClawConfig {
+  return {
+    models: {
+      providers: {
+        openai: {
+          baseUrl: "https://api.openai.com/v1",
+          apiKeyFile,
+          api: "openai-completions",
+          models: [
+            {
+              id: "gpt-4.1",
+              name: "GPT-4.1",
+              input: ["text"],
+              reasoning: false,
+              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+              contextWindow: 128000,
+              maxTokens: 16384,
+            },
+          ],
+        },
+      },
+    },
+  };
 }
 
 async function expectMoonshotTokenLimits(params: {
@@ -532,6 +557,20 @@ describe("models-config", () => {
 
   it("does not persist resolved env var value as plaintext in models.json", async () => {
     await expectOpenAiEnvMarkerApiKey();
+  });
+
+  it("persists apiKeyFile config as a non-secret marker in models.json", async () => {
+    await withTempHome(async () => {
+      const apiKeyFile = path.join(resolveOpenClawAgentDir(), "openai.key");
+
+      await ensureOpenClawModelsJson(createOpenAiConfigWithApiKeyFile(apiKeyFile));
+
+      const parsed = await readGeneratedModelsJson<{
+        providers: Record<string, { apiKey?: string; apiKeyFile?: string }>;
+      }>();
+      expect(parsed.providers.openai?.apiKey).toBe(API_KEY_FILE_MARKER);
+      expect(parsed.providers.openai?.apiKeyFile).toBe(apiKeyFile);
+    });
   });
 
   it("replaces stale merged apiKey when config key normalizes to a known env marker", async () => {

@@ -1,5 +1,8 @@
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { NON_ENV_SECRETREF_MARKER } from "../../agents/model-auth-markers.js";
+import { API_KEY_FILE_MARKER, NON_ENV_SECRETREF_MARKER } from "../../agents/model-auth-markers.js";
 import { withEnv } from "../../test-utils/env.js";
 import { resolveProviderAuthOverview } from "./list.auth-overview.js";
 
@@ -78,6 +81,39 @@ describe("resolveProviderAuthOverview", () => {
       } else {
         process.env.OPENAI_API_KEY = prior;
       }
+    }
+  });
+
+  it("reports apiKeyFile-backed auth separately from models.json", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-auth-overview-"));
+    const apiKeyFile = path.join(tempDir, "openai.key");
+    try {
+      await fs.writeFile(apiKeyFile, "sk-openai-from-file\n", "utf8");
+
+      const overview = resolveProviderAuthOverview({
+        provider: "openai",
+        cfg: {
+          models: {
+            providers: {
+              openai: {
+                baseUrl: "https://api.openai.com/v1",
+                api: "openai-completions",
+                apiKeyFile,
+                models: [],
+              },
+            },
+          },
+        } as never,
+        store: { version: 1, profiles: {} } as never,
+        modelsPath: "/tmp/models.json",
+      });
+
+      expect(overview.effective.kind).toBe("apiKeyFile");
+      expect(overview.effective.detail).not.toContain("sk-openai-from-file");
+      expect(overview.modelsJson?.value).toContain(`marker(${API_KEY_FILE_MARKER})`);
+      expect(overview.modelsJson?.source).toBe(`apiKeyFile: ${apiKeyFile}`);
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
     }
   });
 });
