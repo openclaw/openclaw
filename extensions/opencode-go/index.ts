@@ -19,6 +19,7 @@ const opencodeGoPlugin = {
         geminiThoughtSignatureSanitization: true,
         geminiThoughtSignatureModelHints: ["gemini"],
       },
+      isModernModelRef: () => true,
     });
   },
 };
