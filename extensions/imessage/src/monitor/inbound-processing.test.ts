@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../../../src/config/config.js";
 import { sanitizeTerminalText } from "../../../../src/terminal/safe-text.js";
+import { normalizeIMessageHandle } from "../targets.js";
 import {
   describeIMessageEchoDropLog,
   resolveIMessageInboundDecision,
@@ -315,5 +316,169 @@ describe("resolveIMessageInboundDecision command auth", () => {
       return;
     }
     expect(decision.commandAuthorized).toBe(true);
+  });
+});
+
+describe("resolveIMessageInboundDecision per-message account handle check", () => {
+  const cfg = {} as OpenClawConfig;
+  type InboundDecisionParams = Parameters<typeof resolveIMessageInboundDecision>[0];
+
+  function createInboundDecisionParams(
+    overrides: Omit<Partial<InboundDecisionParams>, "message"> & {
+      message?: Partial<InboundDecisionParams["message"]>;
+    } = {},
+  ): InboundDecisionParams {
+    const { message: messageOverrides, ...restOverrides } = overrides;
+    const message = {
+      id: 42,
+      sender: "+15555550123",
+      text: "ok",
+      is_from_me: false,
+      is_group: false,
+      ...messageOverrides,
+    };
+    const messageText = restOverrides.messageText ?? message.text ?? "";
+    const bodyText = restOverrides.bodyText ?? messageText;
+    const baseParams: Omit<InboundDecisionParams, "message" | "messageText" | "bodyText"> = {
+      cfg,
+      accountId: "default",
+      opts: undefined,
+      allowFrom: [],
+      groupAllowFrom: [],
+      groupPolicy: "open",
+      dmPolicy: "open",
+      storeAllowFrom: [],
+      historyLimit: 0,
+      groupHistories: new Map(),
+      echoCache: undefined,
+      selfChatCache: undefined,
+      logVerbose: undefined,
+    };
+    return {
+      ...baseParams,
+      ...restOverrides,
+      message,
+      messageText,
+      bodyText,
+    };
+  }
+
+  function resolveDecision(
+    overrides: Omit<Partial<InboundDecisionParams>, "message"> & {
+      message?: Partial<InboundDecisionParams["message"]>;
+    } = {},
+  ) {
+    return resolveIMessageInboundDecision(createInboundDecisionParams(overrides));
+  }
+
+  it("drops messages when sender matches normalizedAccountHandle", () => {
+    const decision = resolveDecision({
+      message: { sender: "+15551234567", text: "hello" },
+      normalizedAccountHandle: normalizeIMessageHandle("+15551234567"),
+    });
+
+    expect(decision).toEqual({ kind: "drop", reason: "account handle match" });
+  });
+
+  it("drops messages when sender phone format differs but normalizes to match", () => {
+    const decision = resolveDecision({
+      message: { sender: "+1 (555) 123-4567", text: "hello" },
+      normalizedAccountHandle: normalizeIMessageHandle("+15551234567"),
+    });
+
+    expect(decision).toEqual({ kind: "drop", reason: "account handle match" });
+  });
+
+  it("drops messages when sender matches normalizedAccountHandle email (case-insensitive)", () => {
+    const decision = resolveDecision({
+      message: { sender: "Bot@Example.com", text: "hello" },
+      normalizedAccountHandle: normalizeIMessageHandle("bot@example.com"),
+    });
+
+    expect(decision).toEqual({ kind: "drop", reason: "account handle match" });
+  });
+
+  it("does NOT drop messages from other senders when normalizedAccountHandle is set", () => {
+    const decision = resolveDecision({
+      message: { sender: "+15559876543", text: "hello" },
+      normalizedAccountHandle: normalizeIMessageHandle("+15551234567"),
+    });
+
+    expect(decision.kind).toBe("dispatch");
+  });
+
+  it("does NOT interfere when normalizedAccountHandle is undefined", () => {
+    const decision = resolveDecision({
+      message: { sender: "+15551234567", text: "hello" },
+      normalizedAccountHandle: undefined,
+    });
+
+    expect(decision.kind).toBe("dispatch");
+  });
+
+  it("seeds self-chat cache on account handle drop", () => {
+    const selfChatCache = createSelfChatCache();
+    const createdAt = "2026-03-02T20:58:10.649Z";
+
+    // First message: dropped by account handle match, should seed cache.
+    expect(
+      resolveDecision({
+        message: {
+          id: 9901,
+          sender: "+15551234567",
+          text: "seeded text",
+          created_at: createdAt,
+        },
+        messageText: "seeded text",
+        bodyText: "seeded text",
+        normalizedAccountHandle: normalizeIMessageHandle("+15551234567"),
+        selfChatCache,
+      }),
+    ).toEqual({ kind: "drop", reason: "account handle match" });
+
+    // Second message: same text from the same sender (multi-device sync echo)
+    // should be caught by self-chat cache since the first drop seeded it.
+    expect(
+      resolveDecision({
+        message: {
+          id: 9902,
+          sender: "+15551234567",
+          text: "seeded text",
+          created_at: createdAt,
+        },
+        messageText: "seeded text",
+        bodyText: "seeded text",
+        selfChatCache,
+        // No normalizedAccountHandle — verifying the cache alone catches it.
+      }),
+    ).toEqual({ kind: "drop", reason: "self-chat echo" });
+  });
+
+  it("is_from_me takes precedence over account handle check", () => {
+    const decision = resolveDecision({
+      message: {
+        sender: "+15551234567",
+        text: "hello",
+        is_from_me: true,
+      },
+      normalizedAccountHandle: normalizeIMessageHandle("+15551234567"),
+    });
+
+    expect(decision).toEqual({ kind: "drop", reason: "from me" });
+  });
+
+  it("works with dmPolicy open — message dropped BEFORE dmPolicy logic", () => {
+    const logVerbose = vi.fn();
+    const decision = resolveDecision({
+      message: { sender: "+15551234567", text: "hello" },
+      normalizedAccountHandle: normalizeIMessageHandle("+15551234567"),
+      dmPolicy: "open",
+      logVerbose,
+    });
+
+    expect(decision).toEqual({ kind: "drop", reason: "account handle match" });
+    expect(logVerbose).toHaveBeenCalledWith(
+      'imessage: dropping message from account handle: "+15551234567"',
+    );
   });
 });

@@ -84,6 +84,33 @@ async function detectRemoteHostFromCliPath(cliPath: string): Promise<string | un
   }
 }
 
+/**
+ * Validates that `accountHandle` (this bot's own iMessage identity) does not
+ * appear in the combined allowFrom list.  If it does, every outbound reply
+ * would be picked up as an inbound message, creating an infinite loop.
+ *
+ * @returns An error message string if validation fails, or `undefined` if OK.
+ */
+export function validateAccountHandleNotInAllowFrom(params: {
+  accountHandle: string | undefined;
+  configAllowFrom: string[];
+  storeAllowFrom: string[];
+}): string | undefined {
+  const { accountHandle, configAllowFrom, storeAllowFrom } = params;
+  if (!accountHandle) {
+    return undefined;
+  }
+  const normalizedAccountHandle = normalizeIMessageHandle(accountHandle);
+  const combinedAllowFrom = [...configAllowFrom, ...storeAllowFrom];
+  const found = combinedAllowFrom.some(
+    (entry) => normalizeIMessageHandle(entry) === normalizedAccountHandle,
+  );
+  if (found) {
+    return `iMessage: accountHandle "${accountHandle}" is also in allowFrom — this will cause an infinite message loop. Remove it from allowFrom, or use a separate iMessage account for openclaw.`;
+  }
+  return undefined;
+}
+
 export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): Promise<void> {
   const runtime = resolveRuntime(opts);
   const cfg = opts.config ?? loadConfig();
@@ -109,6 +136,27 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
       imessageCfg.groupAllowFrom ??
       (imessageCfg.allowFrom && imessageCfg.allowFrom.length > 0 ? imessageCfg.allowFrom : []),
   );
+  // Pre-normalize the account handle once for use in per-message checks.
+  const normalizedAccountHandle = imessageCfg.accountHandle
+    ? normalizeIMessageHandle(imessageCfg.accountHandle)
+    : undefined;
+  // Startup validation: if accountHandle is configured, ensure it does not
+  // appear in the combined allowFrom list. If it does, the bot would process
+  // its own outbound messages as inbound, causing an infinite message loop.
+  const storeAllowFromStartup = await readChannelAllowFromStore(
+    "imessage",
+    process.env,
+    accountInfo.accountId,
+  ).catch(() => []);
+  const accountHandleError = validateAccountHandleNotInAllowFrom({
+    accountHandle: imessageCfg.accountHandle,
+    configAllowFrom: [...allowFrom, ...groupAllowFrom],
+    storeAllowFrom: storeAllowFromStartup,
+  });
+  if (accountHandleError) {
+    throw new Error(accountHandleError);
+  }
+
   const defaultGroupPolicy = resolveDefaultGroupPolicy(cfg);
   const { groupPolicy, providerMissingFallbackApplied } = resolveOpenProviderRuntimeGroupPolicy({
     providerConfigPresent: cfg.channels?.imessage !== undefined,
@@ -256,6 +304,7 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
       echoCache: sentMessageCache,
       selfChatCache,
       logVerbose,
+      normalizedAccountHandle,
     });
 
     // Build conversation key for rate limiting (used by both drop and dispatch paths).
@@ -272,7 +321,8 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
         decision.reason === "echo" ||
         decision.reason === "self-chat echo" ||
         decision.reason === "reflected assistant content" ||
-        decision.reason === "from me";
+        decision.reason === "from me" ||
+        decision.reason === "account handle match";
       if (isLoopDrop) {
         loopRateLimiter.record(rateLimitKey);
       }

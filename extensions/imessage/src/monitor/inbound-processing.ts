@@ -108,6 +108,8 @@ export function resolveIMessageInboundDecision(params: {
   echoCache?: { has: (scope: string, lookup: { text?: string; messageId?: string }) => boolean };
   selfChatCache?: SelfChatCache;
   logVerbose?: (msg: string) => void;
+  /** Pre-normalized account handle for self-message detection. */
+  normalizedAccountHandle?: string;
 }): IMessageInboundDecision {
   const senderRaw = params.message.sender ?? "";
   const sender = senderRaw.trim();
@@ -153,6 +155,15 @@ export function resolveIMessageInboundDecision(params: {
     params.selfChatCache?.remember(selfChatLookup);
     return { kind: "drop", reason: "from me" };
   }
+
+  // Fallback: check sender against configured account handle.
+  // Catches self-messages when is_from_me is unreliable (multi-device sync).
+  if (params.normalizedAccountHandle && params.normalizedAccountHandle === senderNormalized) {
+    params.selfChatCache?.remember(selfChatLookup);
+    params.logVerbose?.(`imessage: dropping message from account handle: "${sender}"`);
+    return { kind: "drop", reason: "account handle match" };
+  }
+
   if (isGroup && !chatId) {
     return { kind: "drop", reason: "group without chat_id" };
   }

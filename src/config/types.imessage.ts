@@ -14,6 +14,12 @@ import type { GroupToolPolicyBySenderConfig, GroupToolPolicyConfig } from "./typ
 export type IMessageAccountConfig = {
   /** Optional display name for this account (used in CLI/UI lists). */
   name?: string;
+  /**
+   * The phone number or iCloud email that this openclaw instance sends iMessages from.
+   * Used at startup to reject misconfiguration (accountHandle in allowFrom) and
+   * per-message to drop self-sent messages when is_from_me is unreliable.
+   */
+  accountHandle?: string;
   /** Optional provider capability tags used for agent/runtime guidance. */
   capabilities?: string[];
   /** Markdown formatting overrides (tables). */
