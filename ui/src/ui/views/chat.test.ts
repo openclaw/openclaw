@@ -23,17 +23,20 @@ function createSessions(): SessionsListResult {
 function createChatHeaderState(
   overrides: {
     model?: string | null;
+    modelProvider?: string | null;
     models?: ModelCatalogEntry[];
+    catalog?: ModelCatalogEntry[];
     omitSessionFromList?: boolean;
   } = {},
 ): { state: AppViewState; request: ReturnType<typeof vi.fn> } {
   let currentModel = overrides.model ?? null;
-  let currentModelProvider = currentModel ? "openai" : null;
+  let currentModelProvider = overrides.modelProvider ?? (currentModel ? "openai" : null);
   const omitSessionFromList = overrides.omitSessionFromList ?? false;
-  const catalog = overrides.models ?? [
-    { id: "gpt-5", name: "GPT-5", provider: "openai" },
-    { id: "gpt-5-mini", name: "GPT-5 Mini", provider: "openai" },
-  ];
+  const catalog = overrides.catalog ??
+    overrides.models ?? [
+      { id: "gpt-5", name: "GPT-5", provider: "openai" },
+      { id: "gpt-5-mini", name: "GPT-5 Mini", provider: "openai" },
+    ];
   const request = vi.fn(async (method: string, params: Record<string, unknown>) => {
     if (method === "sessions.patch") {
       const nextModel = (params.model as string | null | undefined) ?? null;
@@ -624,8 +627,8 @@ describe("chat view", () => {
       } satisfies Partial<Response>),
     );
     const { state, request } = createChatHeaderState({
-      modelProvider: "openrouter",
-      model: "llamacpp/qwen3-14b.gguf",
+      modelProvider: "llamacpp",
+      model: "qwen3-14b.gguf",
       catalog: [
         { id: "hunter-alpha", name: "Hunter Alpha", provider: "openrouter" },
         { id: "qwen3-14b.gguf", name: "Qwen3 14B", provider: "llamacpp" },
