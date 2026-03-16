@@ -35,6 +35,7 @@ const CronToolSchema = Type.Object(
     gatewayToken: Type.Optional(Type.String()),
     timeoutMs: Type.Optional(Type.Number()),
     includeDisabled: Type.Optional(Type.Boolean()),
+    compact: Type.Optional(Type.Boolean()),
     job: Type.Optional(Type.Object({}, { additionalProperties: true })),
     jobId: Type.Optional(Type.String()),
     id: Type.Optional(Type.String()),
@@ -217,7 +218,7 @@ export function createCronTool(opts?: CronToolOptions, deps?: CronToolDeps): Any
 
 ACTIONS:
 - status: Check cron scheduler status
-- list: List jobs (use includeDisabled:true to include disabled)
+- list: List jobs (use includeDisabled:true to include disabled; use compact:true for minimal summaries — id/name/enabled/nextRunAtMs/scheduleKind/lastRunStatus — avoids token bloat with large job lists)
 - add: Create job (requires job object, see schema below)
 - update: Modify job (requires jobId + patch object)
 - remove: Delete job (requires jobId)
@@ -299,6 +300,7 @@ Use jobId as the canonical identifier; id is accepted for compatibility. Use con
           return jsonResult(
             await callGateway("cron.list", gatewayOpts, {
               includeDisabled: Boolean(params.includeDisabled),
+              ...(params.compact !== undefined ? { compact: Boolean(params.compact) } : {}),
             }),
           );
         case "add": {

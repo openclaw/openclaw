@@ -275,6 +275,7 @@ export const CronListParamsSchema = Type.Object(
     enabled: Type.Optional(CronJobsEnabledFilterSchema),
     sortBy: Type.Optional(CronJobsSortBySchema),
     sortDir: Type.Optional(CronSortDirSchema),
+    compact: Type.Optional(Type.Boolean()),
   },
   { additionalProperties: false },
 );
