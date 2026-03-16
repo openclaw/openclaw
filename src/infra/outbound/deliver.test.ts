@@ -404,6 +404,38 @@ describe("deliverOutboundPayloads", () => {
     ]);
   });
 
+  it("renders shared interactive payloads into telegram buttons", async () => {
+    const sendTelegram = vi.fn().mockResolvedValue({ messageId: "m1", chatId: "c1" });
+
+    await deliverTelegramPayload({
+      sendTelegram,
+      payload: {
+        text: "Approval required",
+        interactive: {
+          blocks: [
+            {
+              type: "buttons",
+              buttons: [
+                { label: "Allow once", value: "allow-once", style: "success" },
+                { label: "Always allow", value: "allow-always", style: "primary" },
+                { label: "Deny", value: "deny", style: "danger" },
+              ],
+            },
+          ],
+        },
+      },
+    });
+
+    const sendOpts = sendTelegram.mock.calls[0]?.[2] as { buttons?: unknown } | undefined;
+    expect(sendOpts?.buttons).toEqual([
+      [
+        { text: "Allow once", callback_data: "allow-once", style: "success" },
+        { text: "Always allow", callback_data: "allow-always", style: "primary" },
+        { text: "Deny", callback_data: "deny", style: "danger" },
+      ],
+    ]);
+  });
+
   it("scopes media local roots to the active agent workspace when agentId is provided", async () => {
     const sendTelegram = vi.fn().mockResolvedValue({ messageId: "m1", chatId: "c1" });
 
