@@ -12,6 +12,8 @@ import {
   CHANNEL_MESSAGE_ACTION_NAMES,
   type ChannelMessageActionName,
 } from "../../channels/plugins/types.js";
+import { resolveCommandSecretRefsViaGateway } from "../../cli/command-secret-gateway.js";
+import { getChannelsCommandSecretTargetIds } from "../../cli/command-secret-targets.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { loadConfig } from "../../config/config.js";
 import { GATEWAY_CLIENT_IDS, GATEWAY_CLIENT_MODES } from "../../gateway/protocol/client-info.js";
@@ -201,6 +203,11 @@ function buildSendSchema(options: {
     ),
     bestEffort: Type.Optional(Type.Boolean()),
     gifPlayback: Type.Optional(Type.Boolean()),
+    forceDocument: Type.Optional(
+      Type.Boolean({
+        description: "Send image/GIF as document to avoid Telegram compression (Telegram only).",
+      }),
+    ),
     buttons: Type.Optional(
       Type.Array(
         Type.Array(
@@ -704,7 +711,16 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
         }
       }
 
-      const cfg = options?.config ?? loadConfig();
+      const cfg = options?.config
+        ? options.config
+        : (
+            await resolveCommandSecretRefsViaGateway({
+              config: loadConfig(),
+              commandName: "tools.message",
+              targetIds: getChannelsCommandSecretTargetIds(),
+              mode: "enforce_resolved",
+            })
+          ).resolvedConfig;
       const action = readStringParam(params, "action", {
         required: true,
       }) as ChannelMessageActionName;

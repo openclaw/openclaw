@@ -2,8 +2,8 @@ import { loadConfig } from "../config/config.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveBrowserConfig } from "./config.js";
 import { ensureBrowserControlAuth } from "./control-auth.js";
+import { createBrowserRuntimeState, stopBrowserRuntime } from "./runtime-lifecycle.js";
 import { type BrowserServerState, createBrowserRouteContext } from "./server-context.js";
-import { ensureExtensionRelayForProfiles, stopKnownBrowserProfiles } from "./server-lifecycle.js";
 
 let state: BrowserServerState | null = null;
 const log = createSubsystemLogger("browser");
@@ -39,14 +39,9 @@ export async function startBrowserControlServiceFromConfig(): Promise<BrowserSer
     logService.warn(`failed to auto-configure browser auth: ${String(err)}`);
   }
 
-  state = {
+  state = await createBrowserRuntimeState({
     server: null,
     port: resolved.controlPort,
-    resolved,
-    profiles: new Map(),
-  };
-
-  await ensureExtensionRelayForProfiles({
     resolved,
     onWarn: (message) => logService.warn(message),
   });
@@ -59,22 +54,12 @@ export async function startBrowserControlServiceFromConfig(): Promise<BrowserSer
 
 export async function stopBrowserControlService(): Promise<void> {
   const current = state;
-  if (!current) {
-    return;
-  }
-
-  await stopKnownBrowserProfiles({
+  await stopBrowserRuntime({
+    current,
     getState: () => state,
+    clearState: () => {
+      state = null;
+    },
     onWarn: (message) => logService.warn(message),
   });
-
-  state = null;
-
-  // Optional: Playwright is not always available (e.g. embedded gateway builds).
-  try {
-    const mod = await import("./pw-ai.js");
-    await mod.closePlaywrightBrowserConnection();
-  } catch {
-    // ignore
-  }
 }

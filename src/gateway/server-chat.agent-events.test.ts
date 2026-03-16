@@ -470,6 +470,74 @@ describe("agent event handler", () => {
     nowSpy?.mockRestore();
   });
 
+  it("flushes buffered chat delta before tool start events", () => {
+    let now = 12_000;
+    const nowSpy = vi.spyOn(Date, "now").mockImplementation(() => now);
+    const {
+      broadcast,
+      broadcastToConnIds,
+      nodeSendToSession,
+      chatRunState,
+      toolEventRecipients,
+      handler,
+    } = createHarness({
+      resolveSessionKeyForRun: () => "session-tool-flush",
+    });
+
+    chatRunState.registry.add("run-tool-flush", {
+      sessionKey: "session-tool-flush",
+      clientRunId: "client-tool-flush",
+    });
+    registerAgentRunContext("run-tool-flush", {
+      sessionKey: "session-tool-flush",
+      verboseLevel: "off",
+    });
+    toolEventRecipients.add("run-tool-flush", "conn-1");
+
+    handler({
+      runId: "run-tool-flush",
+      seq: 1,
+      stream: "assistant",
+      ts: Date.now(),
+      data: { text: "Before tool" },
+    });
+
+    // Throttled assistant update (within 150ms window).
+    now = 12_050;
+    handler({
+      runId: "run-tool-flush",
+      seq: 2,
+      stream: "assistant",
+      ts: Date.now(),
+      data: { text: "Before tool expanded" },
+    });
+
+    handler({
+      runId: "run-tool-flush",
+      seq: 3,
+      stream: "tool",
+      ts: Date.now(),
+      data: { phase: "start", name: "read", toolCallId: "tool-flush-1" },
+    });
+
+    const chatCalls = chatBroadcastCalls(broadcast);
+    expect(chatCalls).toHaveLength(2);
+    const flushedPayload = chatCalls[1]?.[1] as {
+      state?: string;
+      message?: { content?: Array<{ text?: string }> };
+    };
+    expect(flushedPayload.state).toBe("delta");
+    expect(flushedPayload.message?.content?.[0]?.text).toBe("Before tool expanded");
+    expect(sessionChatCalls(nodeSendToSession)).toHaveLength(2);
+
+    expect(broadcastToConnIds).toHaveBeenCalledTimes(1);
+    const flushCallOrder = broadcast.mock.invocationCallOrder[1] ?? 0;
+    const toolCallOrder = broadcastToConnIds.mock.invocationCallOrder[0] ?? Number.MAX_SAFE_INTEGER;
+    expect(flushCallOrder).toBeLessThan(toolCallOrder);
+    nowSpy.mockRestore();
+    resetAgentRunContextForTest();
+  });
+
   it("routes tool events only to registered recipients when verbose is enabled", () => {
     const { broadcast, broadcastToConnIds, toolEventRecipients, handler } = createHarness({
       resolveSessionKeyForRun: () => "session-1",
@@ -610,6 +678,29 @@ describe("agent event handler", () => {
     expect(nodeCalls).toHaveLength(1);
     const nodePayload = nodeCalls[0]?.[2] as { runId?: string };
     expect(nodePayload.runId).toBe("run-fallback-client");
+  });
+
+  it("suppresses chat and node session events for non-control-UI-visible runs", () => {
+    const { broadcast, nodeSendToSession, handler } = createHarness({
+      resolveSessionKeyForRun: () => "session-hidden",
+    });
+    registerAgentRunContext("run-hidden", {
+      sessionKey: "session-hidden",
+      isControlUiVisible: false,
+      verboseLevel: "off",
+    });
+
+    handler({
+      runId: "run-hidden",
+      seq: 1,
+      stream: "assistant",
+      ts: Date.now(),
+      data: { text: "Reply from imessage" },
+    });
+    emitLifecycleEnd(handler, "run-hidden", 2);
+
+    expect(chatBroadcastCalls(broadcast)).toHaveLength(0);
+    expect(nodeSendToSession).not.toHaveBeenCalled();
   });
 
   it("uses agent event sessionKey when run-context lookup cannot resolve", () => {

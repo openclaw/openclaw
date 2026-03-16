@@ -21,6 +21,7 @@ export type ChannelAgentToolFactory = (params: { cfg?: OpenClawConfig }) => Chan
 export type ChannelSetupInput = {
   name?: string;
   token?: string;
+  privateKey?: string;
   tokenFile?: string;
   botToken?: string;
   appToken?: string;
@@ -46,6 +47,7 @@ export type ChannelSetupInput = {
   initialSyncLimit?: number;
   ship?: string;
   url?: string;
+  relayUrls?: string;
   code?: string;
   groupChannels?: string[];
   dmAllowlist?: string[];
@@ -102,6 +104,7 @@ export type ChannelAccountSnapshot = {
   linked?: boolean;
   running?: boolean;
   connected?: boolean;
+  restartPending?: boolean;
   reconnectAttempts?: number;
   lastConnectedAt?: number | null;
   lastDisconnect?:
@@ -129,6 +132,12 @@ export type ChannelAccountSnapshot = {
   tokenSource?: string;
   botTokenSource?: string;
   appTokenSource?: string;
+  signingSecretSource?: string;
+  tokenStatus?: string;
+  botTokenStatus?: string;
+  appTokenStatus?: string;
+  signingSecretStatus?: string;
+  userTokenStatus?: string;
   credentialSource?: string;
   secretSource?: string;
   audienceType?: string;
@@ -202,6 +211,11 @@ export type ChannelSecurityContext<ResolvedAccount = unknown> = {
 };
 
 export type ChannelMentionAdapter = {
+  stripRegexes?: (params: {
+    ctx: MsgContext;
+    cfg: OpenClawConfig | undefined;
+    agentId?: string;
+  }) => RegExp[];
   stripPatterns?: (params: {
     ctx: MsgContext;
     cfg: OpenClawConfig | undefined;
@@ -257,6 +271,8 @@ export type ChannelThreadingContext = {
   ReplyToIdFull?: string;
   ThreadLabel?: string;
   MessageThreadId?: string | number;
+  /** Platform-native channel/conversation id (e.g. Slack DM channel "D…" id). */
+  NativeChannelId?: string;
 };
 
 export type ChannelThreadingToolContext = {
@@ -279,6 +295,18 @@ export type ChannelMessagingAdapter = {
   targetResolver?: {
     looksLikeId?: (raw: string, normalized?: string) => boolean;
     hint?: string;
+    resolveTarget?: (params: {
+      cfg: OpenClawConfig;
+      accountId?: string | null;
+      input: string;
+      normalized: string;
+      preferredKind?: ChannelDirectoryEntryKind | "channel";
+    }) => Promise<{
+      to: string;
+      kind: ChannelDirectoryEntryKind | "channel";
+      display?: string;
+      source?: "normalized" | "directory";
+    } | null>;
   };
   formatTargetDisplay?: (params: {
     target: string;

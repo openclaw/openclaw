@@ -589,7 +589,7 @@ Gmail Pub/Sub 钩子设置 + 运行器。参见 [/automation/gmail-pubsub](/auto
 说明：
 
 - 数据直接来自提供商用量端点（非估算）。
-- 提供商：Anthropic、GitHub Copilot、OpenAI Codex OAuth，以及启用这些提供商插件时的 Gemini CLI/Antigravity。
+- 提供商：Anthropic、GitHub Copilot、OpenAI Codex OAuth，以及通过捆绑 `google` 插件提供的 Gemini CLI 和已配置的 Antigravity。
 - 如果没有匹配的凭证，用量会被隐藏。
 - 详情：参见[用量跟踪](/concepts/usage-tracking)。
 

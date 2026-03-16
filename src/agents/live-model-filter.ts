@@ -1,3 +1,5 @@
+import { resolveProviderModernModelRef } from "../plugins/provider-runtime.js";
+
 export type ModelRef = {
   provider?: string | null;
   id?: string | null;
@@ -10,8 +12,9 @@ const ANTHROPIC_PREFIXES = [
   "claude-sonnet-4-5",
   "claude-haiku-4-5",
 ];
-const OPENAI_MODELS = ["gpt-5.2", "gpt-5.0"];
+const OPENAI_MODELS = ["gpt-5.4", "gpt-5.2", "gpt-5.0"];
 const CODEX_MODELS = [
+  "gpt-5.4",
   "gpt-5.2",
   "gpt-5.2-codex",
   "gpt-5.3-codex",
@@ -40,6 +43,19 @@ export function isModernModelRef(ref: ModelRef): boolean {
     return false;
   }
 
+  const pluginDecision = resolveProviderModernModelRef({
+    provider,
+    context: {
+      provider,
+      modelId: id,
+    },
+  });
+  if (typeof pluginDecision === "boolean") {
+    return pluginDecision;
+  }
+
+  // Compatibility fallback for core-owned providers and tests that disable
+  // bundled provider runtime hooks.
   if (provider === "anthropic") {
     return matchesPrefix(id, ANTHROPIC_PREFIXES);
   }
@@ -80,7 +96,7 @@ export function isModernModelRef(ref: ModelRef): boolean {
     return false;
   }
 
-  if (provider === "openrouter" || provider === "opencode") {
+  if (provider === "openrouter" || provider === "opencode" || provider === "opencode-go") {
     // OpenRouter/opencode are pass-through proxies; accept any model ID
     // rather than restricting to a static prefix list.
     return true;

@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { importFreshModule } from "../../test/helpers/import-fresh.js";
 
 const diagnosticMocks = vi.hoisted(() => ({
   logLaneEnqueue: vi.fn(),
@@ -333,5 +334,43 @@ describe("command queue", () => {
     markGatewayDraining();
     resetAllLanes();
     await expect(enqueueCommand(async () => "ok")).resolves.toBe("ok");
+  });
+
+  it("shares lane state across distinct module instances", async () => {
+    const commandQueueA = await importFreshModule<typeof import("./command-queue.js")>(
+      import.meta.url,
+      "./command-queue.js?scope=shared-a",
+    );
+    const commandQueueB = await importFreshModule<typeof import("./command-queue.js")>(
+      import.meta.url,
+      "./command-queue.js?scope=shared-b",
+    );
+    const lane = `shared-state-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+
+    let release!: () => void;
+    const blocker = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+
+    commandQueueA.resetAllLanes();
+
+    try {
+      const task = commandQueueA.enqueueCommandInLane(lane, async () => {
+        await blocker;
+        return "done";
+      });
+
+      await vi.waitFor(() => {
+        expect(commandQueueB.getQueueSize(lane)).toBe(1);
+        expect(commandQueueB.getActiveTaskCount()).toBe(1);
+      });
+
+      release();
+      await expect(task).resolves.toBe("done");
+      expect(commandQueueB.getQueueSize(lane)).toBe(0);
+    } finally {
+      release();
+      commandQueueA.resetAllLanes();
+    }
   });
 });

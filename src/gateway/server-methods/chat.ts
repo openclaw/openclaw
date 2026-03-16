@@ -8,9 +8,11 @@ import { dispatchInboundMessage } from "../../auto-reply/dispatch.js";
 import { createReplyDispatcher } from "../../auto-reply/reply/reply-dispatcher.js";
 import type { MsgContext } from "../../auto-reply/templating.js";
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
+import type { ReplyPayload } from "../../auto-reply/types.js";
 import { createReplyPrefixOptions } from "../../channels/reply-prefix.js";
 import { resolveSessionFilePath } from "../../config/sessions.js";
 import { jsonUtf8Bytes } from "../../infra/json-utf8-bytes.js";
+import { normalizeInputProvenance, type InputProvenance } from "../../sessions/input-provenance.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
 import { parseAgentSessionKey } from "../../sessions/session-key-utils.js";
 import {
@@ -19,12 +21,12 @@ import {
 } from "../../utils/directive-tags.js";
 import {
   INTERNAL_MESSAGE_CHANNEL,
+  isGatewayCliClient,
   isWebchatClient,
   normalizeMessageChannel,
 } from "../../utils/message-channel.js";
 import {
   abortChatRunById,
-  abortChatRunsForSessionKey,
   type ChatAbortControllerEntry,
   type ChatAbortOps,
   isChatStopCommandText,
@@ -32,9 +34,11 @@ import {
 } from "../chat-abort.js";
 import { type ChatImageContent, parseMessageWithAttachments } from "../chat-attachments.js";
 import { stripEnvelopeFromMessage, stripEnvelopeFromMessages } from "../chat-sanitize.js";
+import { ADMIN_SCOPE } from "../method-scopes.js";
 import {
   GATEWAY_CLIENT_CAPS,
   GATEWAY_CLIENT_MODES,
+  GATEWAY_CLIENT_NAMES,
   hasGatewayClientCap,
 } from "../protocol/client-info.js";
 import {
@@ -46,6 +50,7 @@ import {
   validateChatInjectParams,
   validateChatSendParams,
 } from "../protocol/index.js";
+import { CHAT_SEND_SESSION_KEY_MAX_LENGTH } from "../protocol/schema/primitives.js";
 import { getMaxChatHistoryMessagesBytes } from "../server-constants.js";
 import {
   capArrayByJsonBytes,
@@ -58,7 +63,11 @@ import { injectTimestamp, timestampOptsFromConfig } from "./agent-timestamp.js";
 import { setGatewayDedupeEntry } from "./agent-wait-dedupe.js";
 import { normalizeRpcAttachmentsToChatAttachments } from "./attachment-normalize.js";
 import { appendInjectedAssistantMessageToTranscript } from "./chat-transcript-inject.js";
-import type { GatewayRequestContext, GatewayRequestHandlers } from "./types.js";
+import type {
+  GatewayRequestContext,
+  GatewayRequestHandlerOptions,
+  GatewayRequestHandlers,
+} from "./types.js";
 
 type TranscriptAppendResult = {
   ok: boolean;
@@ -74,6 +83,12 @@ type AbortedPartialSnapshot = {
   sessionId: string;
   text: string;
   abortOrigin: AbortOrigin;
+};
+
+type ChatAbortRequester = {
+  connId?: string;
+  deviceId?: string;
+  isAdmin: boolean;
 };
 
 const CHAT_HISTORY_TEXT_MAX_CHARS = 12_000;
@@ -95,6 +110,134 @@ const CHANNEL_AGNOSTIC_SESSION_SCOPES = new Set([
 ]);
 const CHANNEL_SCOPED_SESSION_SHAPES = new Set(["direct", "dm", "group", "channel"]);
 
+type ChatSendDeliveryEntry = {
+  deliveryContext?: {
+    channel?: string;
+    to?: string;
+    accountId?: string;
+    threadId?: string | number;
+  };
+  lastChannel?: string;
+  lastTo?: string;
+  lastAccountId?: string;
+  lastThreadId?: string | number;
+};
+
+type ChatSendOriginatingRoute = {
+  originatingChannel: string;
+  originatingTo?: string;
+  accountId?: string;
+  messageThreadId?: string | number;
+  explicitDeliverRoute: boolean;
+};
+
+type SideResultPayload = {
+  kind: "btw";
+  runId: string;
+  sessionKey: string;
+  question: string;
+  text: string;
+  isError?: boolean;
+  ts: number;
+};
+
+function resolveChatSendOriginatingRoute(params: {
+  client?: { mode?: string | null; id?: string | null } | null;
+  deliver?: boolean;
+  entry?: ChatSendDeliveryEntry;
+  hasConnectedClient?: boolean;
+  mainKey?: string;
+  sessionKey: string;
+}): ChatSendOriginatingRoute {
+  const shouldDeliverExternally = params.deliver === true;
+  if (!shouldDeliverExternally) {
+    return {
+      originatingChannel: INTERNAL_MESSAGE_CHANNEL,
+      explicitDeliverRoute: false,
+    };
+  }
+
+  const routeChannelCandidate = normalizeMessageChannel(
+    params.entry?.deliveryContext?.channel ?? params.entry?.lastChannel,
+  );
+  const routeToCandidate = params.entry?.deliveryContext?.to ?? params.entry?.lastTo;
+  const routeAccountIdCandidate =
+    params.entry?.deliveryContext?.accountId ?? params.entry?.lastAccountId ?? undefined;
+  const routeThreadIdCandidate =
+    params.entry?.deliveryContext?.threadId ?? params.entry?.lastThreadId;
+  if (params.sessionKey.length > CHAT_SEND_SESSION_KEY_MAX_LENGTH) {
+    return {
+      originatingChannel: INTERNAL_MESSAGE_CHANNEL,
+      explicitDeliverRoute: false,
+    };
+  }
+
+  const parsedSessionKey = parseAgentSessionKey(params.sessionKey);
+  const sessionScopeParts = (parsedSessionKey?.rest ?? params.sessionKey)
+    .split(":", 3)
+    .filter(Boolean);
+  const sessionScopeHead = sessionScopeParts[0];
+  const sessionChannelHint = normalizeMessageChannel(sessionScopeHead);
+  const normalizedSessionScopeHead = (sessionScopeHead ?? "").trim().toLowerCase();
+  const sessionPeerShapeCandidates = [sessionScopeParts[1], sessionScopeParts[2]]
+    .map((part) => (part ?? "").trim().toLowerCase())
+    .filter(Boolean);
+  const isChannelAgnosticSessionScope = CHANNEL_AGNOSTIC_SESSION_SCOPES.has(
+    normalizedSessionScopeHead,
+  );
+  const isChannelScopedSession = sessionPeerShapeCandidates.some((part) =>
+    CHANNEL_SCOPED_SESSION_SHAPES.has(part),
+  );
+  const hasLegacyChannelPeerShape =
+    !isChannelScopedSession &&
+    typeof sessionScopeParts[1] === "string" &&
+    sessionChannelHint === routeChannelCandidate;
+  const isFromWebchatClient = isWebchatClient(params.client);
+  const isFromGatewayCliClient = isGatewayCliClient(params.client);
+  const hasClientMetadata =
+    (typeof params.client?.mode === "string" && params.client.mode.trim().length > 0) ||
+    (typeof params.client?.id === "string" && params.client.id.trim().length > 0);
+  const configuredMainKey = (params.mainKey ?? "main").trim().toLowerCase();
+  const isConfiguredMainSessionScope =
+    normalizedSessionScopeHead.length > 0 && normalizedSessionScopeHead === configuredMainKey;
+  const canInheritConfiguredMainRoute =
+    isConfiguredMainSessionScope &&
+    params.hasConnectedClient &&
+    (isFromGatewayCliClient || !hasClientMetadata);
+
+  // Webchat clients never inherit external delivery routes. Configured-main
+  // sessions are stricter than channel-scoped sessions: only CLI callers, or
+  // legacy callers with no client metadata, may inherit the last external route.
+  const canInheritDeliverableRoute = Boolean(
+    !isFromWebchatClient &&
+    sessionChannelHint &&
+    sessionChannelHint !== INTERNAL_MESSAGE_CHANNEL &&
+    ((!isChannelAgnosticSessionScope && (isChannelScopedSession || hasLegacyChannelPeerShape)) ||
+      canInheritConfiguredMainRoute),
+  );
+  const hasDeliverableRoute =
+    canInheritDeliverableRoute &&
+    routeChannelCandidate &&
+    routeChannelCandidate !== INTERNAL_MESSAGE_CHANNEL &&
+    typeof routeToCandidate === "string" &&
+    routeToCandidate.trim().length > 0;
+
+  if (!hasDeliverableRoute) {
+    return {
+      originatingChannel: INTERNAL_MESSAGE_CHANNEL,
+      explicitDeliverRoute: false,
+    };
+  }
+
+  return {
+    originatingChannel: routeChannelCandidate,
+    originatingTo: routeToCandidate,
+    accountId: routeAccountIdCandidate,
+    messageThreadId: routeThreadIdCandidate,
+    explicitDeliverRoute: true,
+  };
+}
+
 function stripDisallowedChatControlChars(message: string): string {
   let output = "";
   for (const char of message) {
@@ -114,6 +257,33 @@ export function sanitizeChatSendMessageInput(
     return { ok: false, error: "message must not contain null bytes" };
   }
   return { ok: true, message: stripDisallowedChatControlChars(normalized) };
+}
+
+function normalizeOptionalChatSystemReceipt(
+  value: unknown,
+): { ok: true; receipt?: string } | { ok: false; error: string } {
+  if (value == null) {
+    return { ok: true };
+  }
+  if (typeof value !== "string") {
+    return { ok: false, error: "systemProvenanceReceipt must be a string" };
+  }
+  const sanitized = sanitizeChatSendMessageInput(value);
+  if (!sanitized.ok) {
+    return sanitized;
+  }
+  const receipt = sanitized.message.trim();
+  return { ok: true, receipt: receipt || undefined };
+}
+
+function isAcpBridgeClient(client: GatewayRequestHandlerOptions["client"]): boolean {
+  const info = client?.connect?.client;
+  return (
+    info?.id === GATEWAY_CLIENT_NAMES.CLI &&
+    info?.mode === GATEWAY_CLIENT_MODES.CLI &&
+    info?.displayName === "ACP" &&
+    info?.version === "acp"
+  );
 }
 
 function truncateChatHistoryText(text: string): { text: string; truncated: boolean } {
@@ -168,6 +338,68 @@ function sanitizeChatHistoryContentBlock(block: unknown): { block: unknown; chan
   return { block: changed ? entry : block, changed };
 }
 
+/**
+ * Validate that a value is a finite number, returning undefined otherwise.
+ */
+function toFiniteNumber(x: unknown): number | undefined {
+  return typeof x === "number" && Number.isFinite(x) ? x : undefined;
+}
+
+/**
+ * Sanitize usage metadata to ensure only finite numeric fields are included.
+ * Prevents UI crashes from malformed transcript JSON.
+ */
+function sanitizeUsage(raw: unknown): Record<string, number> | undefined {
+  if (!raw || typeof raw !== "object") {
+    return undefined;
+  }
+  const u = raw as Record<string, unknown>;
+  const out: Record<string, number> = {};
+
+  // Whitelist known usage fields and validate they're finite numbers
+  const knownFields = [
+    "input",
+    "output",
+    "totalTokens",
+    "inputTokens",
+    "outputTokens",
+    "cacheRead",
+    "cacheWrite",
+    "cache_read_input_tokens",
+    "cache_creation_input_tokens",
+  ];
+
+  for (const k of knownFields) {
+    const n = toFiniteNumber(u[k]);
+    if (n !== undefined) {
+      out[k] = n;
+    }
+  }
+
+  // Preserve nested usage.cost when present
+  if ("cost" in u && u.cost != null && typeof u.cost === "object") {
+    const sanitizedCost = sanitizeCost(u.cost);
+    if (sanitizedCost) {
+      (out as Record<string, unknown>).cost = sanitizedCost;
+    }
+  }
+
+  return Object.keys(out).length > 0 ? out : undefined;
+}
+
+/**
+ * Sanitize cost metadata to ensure only finite numeric fields are included.
+ * Prevents UI crashes from calling .toFixed() on non-numbers.
+ */
+function sanitizeCost(raw: unknown): { total?: number } | undefined {
+  if (!raw || typeof raw !== "object") {
+    return undefined;
+  }
+  const c = raw as Record<string, unknown>;
+  const total = toFiniteNumber(c.total);
+  return total !== undefined ? { total } : undefined;
+}
+
 function sanitizeChatHistoryMessage(message: unknown): { message: unknown; changed: boolean } {
   if (!message || typeof message !== "object") {
     return { message, changed: false };
@@ -179,13 +411,38 @@ function sanitizeChatHistoryMessage(message: unknown): { message: unknown; chang
     delete entry.details;
     changed = true;
   }
-  if ("usage" in entry) {
-    delete entry.usage;
-    changed = true;
-  }
-  if ("cost" in entry) {
-    delete entry.cost;
-    changed = true;
+
+  // Keep usage/cost so the chat UI can render per-message token and cost badges.
+  // Only retain usage/cost on assistant messages and validate numeric fields to prevent UI crashes.
+  if (entry.role !== "assistant") {
+    if ("usage" in entry) {
+      delete entry.usage;
+      changed = true;
+    }
+    if ("cost" in entry) {
+      delete entry.cost;
+      changed = true;
+    }
+  } else {
+    // Validate and sanitize usage/cost for assistant messages
+    if ("usage" in entry) {
+      const sanitized = sanitizeUsage(entry.usage);
+      if (sanitized) {
+        entry.usage = sanitized;
+      } else {
+        delete entry.usage;
+      }
+      changed = true;
+    }
+    if ("cost" in entry) {
+      const sanitized = sanitizeCost(entry.cost);
+      if (sanitized) {
+        entry.cost = sanitized;
+      } else {
+        delete entry.cost;
+      }
+      changed = true;
+    }
   }
 
   if (typeof entry.content === "string") {
@@ -451,12 +708,12 @@ function appendAssistantTranscriptMessage(params: {
 function collectSessionAbortPartials(params: {
   chatAbortControllers: Map<string, ChatAbortControllerEntry>;
   chatRunBuffers: Map<string, string>;
-  sessionKey: string;
+  runIds: ReadonlySet<string>;
   abortOrigin: AbortOrigin;
 }): AbortedPartialSnapshot[] {
   const out: AbortedPartialSnapshot[] = [];
   for (const [runId, active] of params.chatAbortControllers) {
-    if (active.sessionKey !== params.sessionKey) {
+    if (!params.runIds.has(runId)) {
       continue;
     }
     const text = params.chatRunBuffers.get(runId);
@@ -518,23 +775,104 @@ function createChatAbortOps(context: GatewayRequestContext): ChatAbortOps {
   };
 }
 
+function normalizeOptionalText(value?: string | null): string | undefined {
+  const trimmed = value?.trim();
+  return trimmed || undefined;
+}
+
+function resolveChatAbortRequester(
+  client: GatewayRequestHandlerOptions["client"],
+): ChatAbortRequester {
+  const scopes = Array.isArray(client?.connect?.scopes) ? client.connect.scopes : [];
+  return {
+    connId: normalizeOptionalText(client?.connId),
+    deviceId: normalizeOptionalText(client?.connect?.device?.id),
+    isAdmin: scopes.includes(ADMIN_SCOPE),
+  };
+}
+
+function canRequesterAbortChatRun(
+  entry: ChatAbortControllerEntry,
+  requester: ChatAbortRequester,
+): boolean {
+  if (requester.isAdmin) {
+    return true;
+  }
+  const ownerDeviceId = normalizeOptionalText(entry.ownerDeviceId);
+  const ownerConnId = normalizeOptionalText(entry.ownerConnId);
+  if (!ownerDeviceId && !ownerConnId) {
+    return true;
+  }
+  if (ownerDeviceId && requester.deviceId && ownerDeviceId === requester.deviceId) {
+    return true;
+  }
+  if (ownerConnId && requester.connId && ownerConnId === requester.connId) {
+    return true;
+  }
+  return false;
+}
+
+function resolveAuthorizedRunIdsForSession(params: {
+  chatAbortControllers: Map<string, ChatAbortControllerEntry>;
+  sessionKey: string;
+  requester: ChatAbortRequester;
+}) {
+  const authorizedRunIds: string[] = [];
+  let matchedSessionRuns = 0;
+  for (const [runId, active] of params.chatAbortControllers) {
+    if (active.sessionKey !== params.sessionKey) {
+      continue;
+    }
+    matchedSessionRuns += 1;
+    if (canRequesterAbortChatRun(active, params.requester)) {
+      authorizedRunIds.push(runId);
+    }
+  }
+  return {
+    matchedSessionRuns,
+    authorizedRunIds,
+  };
+}
+
 function abortChatRunsForSessionKeyWithPartials(params: {
   context: GatewayRequestContext;
   ops: ChatAbortOps;
   sessionKey: string;
   abortOrigin: AbortOrigin;
   stopReason?: string;
+  requester: ChatAbortRequester;
 }) {
+  const { matchedSessionRuns, authorizedRunIds } = resolveAuthorizedRunIdsForSession({
+    chatAbortControllers: params.context.chatAbortControllers,
+    sessionKey: params.sessionKey,
+    requester: params.requester,
+  });
+  if (authorizedRunIds.length === 0) {
+    return {
+      aborted: false,
+      runIds: [],
+      unauthorized: matchedSessionRuns > 0,
+    };
+  }
+  const authorizedRunIdSet = new Set(authorizedRunIds);
   const snapshots = collectSessionAbortPartials({
     chatAbortControllers: params.context.chatAbortControllers,
     chatRunBuffers: params.context.chatRunBuffers,
-    sessionKey: params.sessionKey,
+    runIds: authorizedRunIdSet,
     abortOrigin: params.abortOrigin,
   });
-  const res = abortChatRunsForSessionKey(params.ops, {
-    sessionKey: params.sessionKey,
-    stopReason: params.stopReason,
-  });
+  const runIds: string[] = [];
+  for (const runId of authorizedRunIds) {
+    const res = abortChatRunById(params.ops, {
+      runId,
+      sessionKey: params.sessionKey,
+      stopReason: params.stopReason,
+    });
+    if (res.aborted) {
+      runIds.push(runId);
+    }
+  }
+  const res = { aborted: runIds.length > 0, runIds, unauthorized: false };
   if (res.aborted) {
     persistAbortedPartials({
       context: params.context,
@@ -571,6 +909,33 @@ function broadcastChatFinal(params: {
   params.context.broadcast("chat", payload);
   params.context.nodeSendToSession(params.sessionKey, "chat", payload);
   params.context.agentRunSeq.delete(params.runId);
+}
+
+function isBtwReplyPayload(payload: ReplyPayload | undefined): payload is ReplyPayload & {
+  btw: { question: string };
+  text: string;
+} {
+  return (
+    typeof payload?.btw?.question === "string" &&
+    payload.btw.question.trim().length > 0 &&
+    typeof payload.text === "string" &&
+    payload.text.trim().length > 0
+  );
+}
+
+function broadcastSideResult(params: {
+  context: Pick<GatewayRequestContext, "broadcast" | "nodeSendToSession" | "agentRunSeq">;
+  payload: SideResultPayload;
+}) {
+  const seq = nextChatSeq({ agentRunSeq: params.context.agentRunSeq }, params.payload.runId);
+  params.context.broadcast("chat.side_result", {
+    ...params.payload,
+    seq,
+  });
+  params.context.nodeSendToSession(params.payload.sessionKey, "chat.side_result", {
+    ...params.payload,
+    seq,
+  });
 }
 
 function broadcastChatError(params: {
@@ -653,10 +1018,11 @@ export const chatHandlers: GatewayRequestHandlers = {
       sessionId,
       messages: bounded.messages,
       thinkingLevel,
+      fastMode: entry?.fastMode,
       verboseLevel,
     });
   },
-  "chat.abort": ({ params, respond, context }) => {
+  "chat.abort": ({ params, respond, context, client }) => {
     if (!validateChatAbortParams(params)) {
       respond(
         false,
@@ -674,6 +1040,7 @@ export const chatHandlers: GatewayRequestHandlers = {
     };
 
     const ops = createChatAbortOps(context);
+    const requester = resolveChatAbortRequester(client);
 
     if (!runId) {
       const res = abortChatRunsForSessionKeyWithPartials({
@@ -682,7 +1049,12 @@ export const chatHandlers: GatewayRequestHandlers = {
         sessionKey: rawSessionKey,
         abortOrigin: "rpc",
         stopReason: "rpc",
+        requester,
       });
+      if (res.unauthorized) {
+        respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "unauthorized"));
+        return;
+      }
       respond(true, { ok: true, aborted: res.aborted, runIds: res.runIds });
       return;
     }
@@ -698,6 +1070,10 @@ export const chatHandlers: GatewayRequestHandlers = {
         undefined,
         errorShape(ErrorCodes.INVALID_REQUEST, "runId does not match sessionKey"),
       );
+      return;
+    }
+    if (!canRequesterAbortChatRun(active, requester)) {
+      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "unauthorized"));
       return;
     }
 
@@ -751,8 +1127,21 @@ export const chatHandlers: GatewayRequestHandlers = {
         content?: unknown;
       }>;
       timeoutMs?: number;
+      systemInputProvenance?: InputProvenance;
+      systemProvenanceReceipt?: string;
       idempotencyKey: string;
     };
+    if ((p.systemInputProvenance || p.systemProvenanceReceipt) && !isAcpBridgeClient(client)) {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          "system provenance fields are reserved for the ACP bridge",
+        ),
+      );
+      return;
+    }
     const sanitizedMessageResult = sanitizeChatSendMessageInput(p.message);
     if (!sanitizedMessageResult.ok) {
       respond(
@@ -762,7 +1151,14 @@ export const chatHandlers: GatewayRequestHandlers = {
       );
       return;
     }
+    const systemReceiptResult = normalizeOptionalChatSystemReceipt(p.systemProvenanceReceipt);
+    if (!systemReceiptResult.ok) {
+      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, systemReceiptResult.error));
+      return;
+    }
     const inboundMessage = sanitizedMessageResult.message;
+    const systemInputProvenance = normalizeInputProvenance(p.systemInputProvenance);
+    const systemProvenanceReceipt = systemReceiptResult.receipt;
     const stopCommand = isChatStopCommandText(inboundMessage);
     const normalizedAttachments = normalizeRpcAttachmentsToChatAttachments(p.attachments);
     const rawMessage = inboundMessage.trim();
@@ -821,7 +1217,12 @@ export const chatHandlers: GatewayRequestHandlers = {
         sessionKey: rawSessionKey,
         abortOrigin: "stop-command",
         stopReason: "stop",
+        requester: resolveChatAbortRequester(client),
       });
+      if (res.unauthorized) {
+        respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "unauthorized"));
+        return;
+      }
       respond(true, { ok: true, aborted: res.aborted, runIds: res.runIds });
       return;
     }
@@ -851,6 +1252,8 @@ export const chatHandlers: GatewayRequestHandlers = {
         sessionKey: rawSessionKey,
         startedAtMs: now,
         expiresAtMs: resolveChatRunExpiresAtMs({ now, timeoutMs }),
+        ownerConnId: normalizeOptionalText(client?.connId),
+        ownerDeviceId: normalizeOptionalText(client?.connect?.device?.id),
       });
       const ackPayload = {
         runId: clientRunId,
@@ -863,78 +1266,42 @@ export const chatHandlers: GatewayRequestHandlers = {
         p.thinking && trimmedMessage && !trimmedMessage.startsWith("/"),
       );
       const commandBody = injectThinking ? `/think ${p.thinking} ${parsedMessage}` : parsedMessage;
+      const messageForAgent = systemProvenanceReceipt
+        ? [systemProvenanceReceipt, parsedMessage].filter(Boolean).join("\n\n")
+        : parsedMessage;
       const clientInfo = client?.connect?.client;
-      const shouldDeliverExternally = p.deliver === true;
-      const routeChannelCandidate = normalizeMessageChannel(
-        entry?.deliveryContext?.channel ?? entry?.lastChannel,
-      );
-      const routeToCandidate = entry?.deliveryContext?.to ?? entry?.lastTo;
-      const routeAccountIdCandidate =
-        entry?.deliveryContext?.accountId ?? entry?.lastAccountId ?? undefined;
-      const routeThreadIdCandidate = entry?.deliveryContext?.threadId ?? entry?.lastThreadId;
-      const parsedSessionKey = parseAgentSessionKey(sessionKey);
-      const sessionScopeParts = (parsedSessionKey?.rest ?? sessionKey).split(":").filter(Boolean);
-      const sessionScopeHead = sessionScopeParts[0];
-      const sessionChannelHint = normalizeMessageChannel(sessionScopeHead);
-      const normalizedSessionScopeHead = (sessionScopeHead ?? "").trim().toLowerCase();
-      const sessionPeerShapeCandidates = [sessionScopeParts[1], sessionScopeParts[2]]
-        .map((part) => (part ?? "").trim().toLowerCase())
-        .filter(Boolean);
-      const isChannelAgnosticSessionScope = CHANNEL_AGNOSTIC_SESSION_SCOPES.has(
-        normalizedSessionScopeHead,
-      );
-      const isChannelScopedSession = sessionPeerShapeCandidates.some((part) =>
-        CHANNEL_SCOPED_SESSION_SHAPES.has(part),
-      );
-      const hasLegacyChannelPeerShape =
-        !isChannelScopedSession &&
-        typeof sessionScopeParts[1] === "string" &&
-        sessionChannelHint === routeChannelCandidate;
-      const clientMode = client?.connect?.client?.mode;
-      const isFromWebchatClient =
-        isWebchatClient(client?.connect?.client) || clientMode === GATEWAY_CLIENT_MODES.UI;
-      const configuredMainKey = (cfg.session?.mainKey ?? "main").trim().toLowerCase();
-      const isConfiguredMainSessionScope =
-        normalizedSessionScopeHead.length > 0 && normalizedSessionScopeHead === configuredMainKey;
-      // Channel-agnostic session scopes (main, direct:<peer>, etc.) can leak
-      // stale routes across surfaces. Allow configured main sessions from
-      // non-Webchat/UI clients (e.g., CLI, backend) to keep the last external route.
-      const canInheritDeliverableRoute = Boolean(
-        sessionChannelHint &&
-        sessionChannelHint !== INTERNAL_MESSAGE_CHANNEL &&
-        ((!isChannelAgnosticSessionScope &&
-          (isChannelScopedSession || hasLegacyChannelPeerShape)) ||
-          (isConfiguredMainSessionScope && client?.connect !== undefined && !isFromWebchatClient)),
-      );
-      const hasDeliverableRoute =
-        shouldDeliverExternally &&
-        canInheritDeliverableRoute &&
-        routeChannelCandidate &&
-        routeChannelCandidate !== INTERNAL_MESSAGE_CHANNEL &&
-        typeof routeToCandidate === "string" &&
-        routeToCandidate.trim().length > 0;
-      const originatingChannel = hasDeliverableRoute
-        ? routeChannelCandidate
-        : INTERNAL_MESSAGE_CHANNEL;
-      const originatingTo = hasDeliverableRoute ? routeToCandidate : undefined;
-      const accountId = hasDeliverableRoute ? routeAccountIdCandidate : undefined;
-      const messageThreadId = hasDeliverableRoute ? routeThreadIdCandidate : undefined;
+      const {
+        originatingChannel,
+        originatingTo,
+        accountId,
+        messageThreadId,
+        explicitDeliverRoute,
+      } = resolveChatSendOriginatingRoute({
+        client: clientInfo,
+        deliver: p.deliver,
+        entry,
+        hasConnectedClient: client?.connect !== undefined,
+        mainKey: cfg.session?.mainKey,
+        sessionKey,
+      });
       // Inject timestamp so agents know the current date/time.
       // Only BodyForAgent gets the timestamp — Body stays raw for UI display.
       // See: https://github.com/moltbot/moltbot/issues/3658
-      const stampedMessage = injectTimestamp(parsedMessage, timestampOptsFromConfig(cfg));
+      const stampedMessage = injectTimestamp(messageForAgent, timestampOptsFromConfig(cfg));
 
       const ctx: MsgContext = {
-        Body: parsedMessage,
+        Body: messageForAgent,
         BodyForAgent: stampedMessage,
         BodyForCommands: commandBody,
         RawBody: parsedMessage,
         CommandBody: commandBody,
+        InputProvenance: systemInputProvenance,
         SessionKey: sessionKey,
         Provider: INTERNAL_MESSAGE_CHANNEL,
         Surface: INTERNAL_MESSAGE_CHANNEL,
         OriginatingChannel: originatingChannel,
         OriginatingTo: originatingTo,
+        ExplicitDeliverRoute: explicitDeliverRoute,
         AccountId: accountId,
         MessageThreadId: messageThreadId,
         ChatType: "direct",
@@ -955,21 +1322,17 @@ export const chatHandlers: GatewayRequestHandlers = {
         agentId,
         channel: INTERNAL_MESSAGE_CHANNEL,
       });
-      const finalReplyParts: string[] = [];
+      const deliveredReplies: Array<{ payload: ReplyPayload; kind: "block" | "final" }> = [];
       const dispatcher = createReplyDispatcher({
         ...prefixOptions,
         onError: (err) => {
           context.logGateway.warn(`webchat dispatch failed: ${formatForLog(err)}`);
         },
         deliver: async (payload, info) => {
-          if (info.kind !== "final") {
+          if (info.kind !== "block" && info.kind !== "final") {
             return;
           }
-          const text = payload.text?.trim() ?? "";
-          if (!text) {
-            return;
-          }
-          finalReplyParts.push(text);
+          deliveredReplies.push({ payload, kind: info.kind });
         },
       });
 
@@ -1006,48 +1369,78 @@ export const chatHandlers: GatewayRequestHandlers = {
       })
         .then(() => {
           if (!agentRunStarted) {
-            const combinedReply = finalReplyParts
-              .map((part) => part.trim())
+            const btwReplies = deliveredReplies
+              .map((entry) => entry.payload)
+              .filter(isBtwReplyPayload);
+            const btwText = btwReplies
+              .map((payload) => payload.text.trim())
               .filter(Boolean)
               .join("\n\n")
               .trim();
-            let message: Record<string, unknown> | undefined;
-            if (combinedReply) {
-              const { storePath: latestStorePath, entry: latestEntry } =
-                loadSessionEntry(sessionKey);
-              const sessionId = latestEntry?.sessionId ?? entry?.sessionId ?? clientRunId;
-              const appended = appendAssistantTranscriptMessage({
-                message: combinedReply,
-                sessionId,
-                storePath: latestStorePath,
-                sessionFile: latestEntry?.sessionFile,
-                agentId,
-                createIfMissing: true,
+            if (btwReplies.length > 0 && btwText) {
+              broadcastSideResult({
+                context,
+                payload: {
+                  kind: "btw",
+                  runId: clientRunId,
+                  sessionKey: rawSessionKey,
+                  question: btwReplies[0].btw.question.trim(),
+                  text: btwText,
+                  isError: btwReplies.some((payload) => payload.isError),
+                  ts: Date.now(),
+                },
               });
-              if (appended.ok) {
-                message = appended.message;
-              } else {
-                context.logGateway.warn(
-                  `webchat transcript append failed: ${appended.error ?? "unknown error"}`,
-                );
-                const now = Date.now();
-                message = {
-                  role: "assistant",
-                  content: [{ type: "text", text: combinedReply }],
-                  timestamp: now,
-                  // Keep this compatible with Pi stopReason enums even though this message isn't
-                  // persisted to the transcript due to the append failure.
-                  stopReason: "stop",
-                  usage: { input: 0, output: 0, totalTokens: 0 },
-                };
+              broadcastChatFinal({
+                context,
+                runId: clientRunId,
+                sessionKey: rawSessionKey,
+              });
+            } else {
+              const combinedReply = deliveredReplies
+                .filter((entry) => entry.kind === "final")
+                .map((entry) => entry.payload)
+                .map((part) => part.text?.trim() ?? "")
+                .filter(Boolean)
+                .join("\n\n")
+                .trim();
+              let message: Record<string, unknown> | undefined;
+              if (combinedReply) {
+                const { storePath: latestStorePath, entry: latestEntry } =
+                  loadSessionEntry(sessionKey);
+                const sessionId = latestEntry?.sessionId ?? entry?.sessionId ?? clientRunId;
+                const appended = appendAssistantTranscriptMessage({
+                  message: combinedReply,
+                  sessionId,
+                  storePath: latestStorePath,
+                  sessionFile: latestEntry?.sessionFile,
+                  agentId,
+                  createIfMissing: true,
+                });
+                if (appended.ok) {
+                  message = appended.message;
+                } else {
+                  context.logGateway.warn(
+                    `webchat transcript append failed: ${appended.error ?? "unknown error"}`,
+                  );
+                  const now = Date.now();
+                  message = {
+                    role: "assistant",
+                    content: [{ type: "text", text: combinedReply }],
+                    timestamp: now,
+                    // Keep this compatible with Pi stopReason enums even though this message isn't
+                    // persisted to the transcript due to the append failure.
+                    stopReason: "stop",
+                    usage: { input: 0, output: 0, totalTokens: 0 },
+                  };
+                }
               }
+              broadcastChatFinal({
+                context,
+                runId: clientRunId,
+                sessionKey: rawSessionKey,
+                message,
+              });
             }
-            broadcastChatFinal({
-              context,
-              runId: clientRunId,
-              sessionKey: rawSessionKey,
-              message,
-            });
           }
           setGatewayDedupeEntry({
             dedupe: context.dedupe,
@@ -1142,7 +1535,7 @@ export const chatHandlers: GatewayRequestHandlers = {
       storePath,
       sessionFile: entry?.sessionFile,
       agentId: resolveSessionAgentId({ sessionKey: rawSessionKey, config: cfg }),
-      createIfMissing: false,
+      createIfMissing: true,
     });
     if (!appended.ok || !appended.messageId || !appended.message) {
       respond(

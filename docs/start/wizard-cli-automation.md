@@ -33,7 +33,7 @@ openclaw onboard --non-interactive \
 Add `--json` for a machine-readable summary.
 
 Use `--secret-input-mode ref` to store env-backed refs in auth profiles instead of plaintext values.
-Interactive selection between env refs and configured provider refs (`file` or `exec`) is available in the onboarding wizard flow.
+Interactive selection between env refs and configured provider refs (`file` or `exec`) is available in the setup wizard flow.
 
 In non-interactive `ref` mode, provider env vars must be set in the process environment.
 Passing inline key flags without the matching env var now fails fast.
@@ -123,12 +123,24 @@ openclaw onboard --non-interactive \
       --gateway-bind loopback
     ```
   </Accordion>
-  <Accordion title="OpenCode Zen example">
+  <Accordion title="OpenCode example">
     ```bash
     openclaw onboard --non-interactive \
       --mode local \
       --auth-choice opencode-zen \
       --opencode-zen-api-key "$OPENCODE_API_KEY" \
+      --gateway-port 18789 \
+      --gateway-bind loopback
+    ```
+    Swap to `--auth-choice opencode-go --opencode-go-api-key "$OPENCODE_API_KEY"` for the Go catalog.
+  </Accordion>
+  <Accordion title="Ollama example">
+    ```bash
+    openclaw onboard --non-interactive \
+      --mode local \
+      --auth-choice ollama \
+      --custom-model-id "qwen3.5:27b" \
+      --accept-risk \
       --gateway-port 18789 \
       --gateway-bind loopback
     ```
@@ -198,6 +210,6 @@ Notes:
 
 ## Related docs
 
-- Onboarding hub: [Onboarding Wizard (CLI)](/start/wizard)
-- Full reference: [CLI Onboarding Reference](/start/wizard-cli-reference)
+- Onboarding hub: [Setup Wizard (CLI)](/start/wizard)
+- Full reference: [CLI Setup Reference](/start/wizard-cli-reference)
 - Command reference: [`openclaw onboard`](/cli/onboard)

@@ -1,14 +1,55 @@
+async function readChunkWithIdleTimeout(
+  reader: ReadableStreamDefaultReader<Uint8Array>,
+  chunkTimeoutMs: number,
+): Promise<Awaited<ReturnType<typeof reader.read>>> {
+  let timeoutId: ReturnType<typeof setTimeout> | undefined;
+  let timedOut = false;
+
+  return await new Promise((resolve, reject) => {
+    const clear = () => {
+      if (timeoutId !== undefined) {
+        clearTimeout(timeoutId);
+        timeoutId = undefined;
+      }
+    };
+
+    timeoutId = setTimeout(() => {
+      timedOut = true;
+      clear();
+      void reader.cancel().catch(() => undefined);
+      reject(new Error(`Media download stalled: no data received for ${chunkTimeoutMs}ms`));
+    }, chunkTimeoutMs);
+
+    void reader.read().then(
+      (result) => {
+        clear();
+        if (!timedOut) {
+          resolve(result);
+        }
+      },
+      (err) => {
+        clear();
+        if (!timedOut) {
+          reject(err);
+        }
+      },
+    );
+  });
+}
+
 export async function readResponseWithLimit(
   res: Response,
   maxBytes: number,
   opts?: {
     onOverflow?: (params: { size: number; maxBytes: number; res: Response }) => Error;
+    chunkTimeoutMs?: number;
   },
 ): Promise<Buffer> {
   const onOverflow =
     opts?.onOverflow ??
     ((params: { size: number; maxBytes: number }) =>
       new Error(`Content too large: ${params.size} bytes (limit: ${params.maxBytes} bytes)`));
+  const chunkTimeoutMs = opts?.chunkTimeoutMs;
 
   const body = res.body;
   if (!body || typeof body.getReader !== "function") {
@@ -24,7 +65,9 @@ export async function readResponseWithLimit(
   let total = 0;
   try {
     while (true) {
-      const { done, value } = await reader.read();
+      const { done, value } = chunkTimeoutMs
+        ? await readChunkWithIdleTimeout(reader, chunkTimeoutMs)
+        : await reader.read();
       if (done) {
         break;
       }

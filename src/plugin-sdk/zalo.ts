@@ -8,23 +8,24 @@ export {
   deleteAccountFromConfigSection,
   setAccountEnabledInConfigSection,
 } from "../channels/plugins/config-helpers.js";
+export { listDirectoryUserEntriesFromAllowFrom } from "../channels/plugins/directory-config-helpers.js";
 export { buildChannelConfigSchema } from "../channels/plugins/config-schema.js";
 export { formatPairingApproveHint } from "../channels/plugins/helpers.js";
-export type {
-  ChannelOnboardingAdapter,
-  ChannelOnboardingDmPolicy,
-} from "../channels/plugins/onboarding-types.js";
 export {
+  buildSingleChannelSecretPromptState,
   addWildcardAllowFrom,
   mergeAllowFromEntries,
-  promptAccountId,
   promptSingleChannelSecretInput,
-} from "../channels/plugins/onboarding/helpers.js";
+  runSingleChannelSecretStep,
+  setTopLevelChannelDmPolicyWithAllowFrom,
+} from "../channels/plugins/setup-wizard-helpers.js";
 export { PAIRING_APPROVED_MESSAGE } from "../channels/plugins/pairing-message.js";
 export {
   applyAccountNameToChannelSection,
+  applySetupAccountConfigPatch,
   migrateBaseNameToDefaultAccount,
 } from "../channels/plugins/setup-helpers.js";
+export { createAccountListHelpers } from "../channels/plugins/account-helpers.js";
 export type {
   BaseProbeResult,
   BaseTokenResolution,
@@ -35,6 +36,8 @@ export type {
 } from "../channels/plugins/types.js";
 export type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
 export { createReplyPrefixOptions } from "../channels/reply-prefix.js";
+export { logTypingFailure } from "../channels/logging.js";
+export { createTypingCallbacks } from "../channels/typing.js";
 export type { OpenClawConfig } from "../config/config.js";
 export {
   resolveDefaultGroupPolicy,
@@ -48,8 +51,11 @@ export {
   normalizeResolvedSecretInputString,
   normalizeSecretInputString,
 } from "../config/types.secrets.js";
+export { buildSecretInputSchema } from "./secret-input-schema.js";
 export { MarkdownConfigSchema } from "../config/zod-schema.core.js";
+export { waitForAbortSignal } from "../infra/abort-signal.js";
 export { createDedupeCache } from "../infra/dedupe.js";
+export { resolveClientIp } from "../gateway/net.js";
 export { emptyPluginConfigSchema } from "../plugins/config-schema.js";
 export type { PluginRuntime } from "../plugins/runtime/types.js";
 export type { OpenClawPluginApi } from "../plugins/types.js";
@@ -57,6 +63,8 @@ export { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../routing/session-key.j
 export type { RuntimeEnv } from "../runtime.js";
 export type { WizardPrompter } from "../wizard/prompts.js";
 export { formatAllowFromLowercase, isNormalizedSenderAllowed } from "./allow-from.js";
+export { zaloSetupAdapter } from "../../extensions/zalo/src/setup-core.js";
+export { zaloSetupWizard } from "../../extensions/zalo/src/setup-surface.js";
 export {
   resolveDirectDmAuthorizationOutcome,
   resolveSenderCommandAuthorizationWithRuntime,
@@ -66,9 +74,19 @@ export { evaluateSenderGroupAccess } from "./group-access.js";
 export type { SenderGroupAccessDecision } from "./group-access.js";
 export { resolveInboundRouteEnvelopeBuilderWithRuntime } from "./inbound-envelope.js";
 export { createScopedPairingAccess } from "./pairing-access.js";
+export { issuePairingChallenge } from "../pairing/pairing-challenge.js";
+export { buildChannelSendResult } from "./channel-send-result.js";
 export type { OutboundReplyPayload } from "./reply-payload.js";
-export { resolveOutboundMediaUrls, sendMediaWithLeadingCaption } from "./reply-payload.js";
-export { buildTokenChannelStatusSummary } from "./status-helpers.js";
+export {
+  isNumericTargetId,
+  resolveOutboundMediaUrls,
+  sendMediaWithLeadingCaption,
+  sendPayloadWithChunkedTextAndMedia,
+} from "./reply-payload.js";
+export {
+  buildBaseAccountStatusSnapshot,
+  buildTokenChannelStatusSummary,
+} from "./status-helpers.js";
 export { chunkTextForOutbound } from "./text-chunking.js";
 export { extractToolSend } from "./tool-send.js";
 export {
@@ -89,6 +107,8 @@ export type {
 export {
   registerWebhookTarget,
   registerWebhookTargetWithPluginRoute,
+  resolveWebhookTargetWithAuthOrRejectSync,
   resolveSingleWebhookTarget,
   resolveWebhookTargets,
+  withResolvedWebhookRequestPipeline,
 } from "./webhook-targets.js";

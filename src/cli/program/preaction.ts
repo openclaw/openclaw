@@ -32,9 +32,10 @@ const PLUGIN_REQUIRED_COMMANDS = new Set([
   "directory",
   "agents",
   "configure",
-  "onboard",
+  "status",
+  "health",
 ]);
-const CONFIG_GUARD_BYPASS_COMMANDS = new Set(["doctor", "completion", "secrets"]);
+const CONFIG_GUARD_BYPASS_COMMANDS = new Set(["backup", "doctor", "completion", "secrets"]);
 const JSON_PARSE_ONLY_COMMANDS = new Set(["config set"]);
 let configGuardModulePromise: Promise<typeof import("./config-guard.js")> | undefined;
 let pluginRegistryModulePromise: Promise<typeof import("../plugin-registry.js")> | undefined;
@@ -65,6 +66,24 @@ function loadPluginRegistryModule() {
   return pluginRegistryModulePromise;
 }
 
+function resolvePluginRegistryScope(commandPath: string[]): "channels" | "all" {
+  return commandPath[0] === "status" || commandPath[0] === "health" ? "channels" : "all";
+}
+
+function shouldLoadPluginsForCommand(commandPath: string[], argv: string[]): boolean {
+  const [primary, secondary] = commandPath;
+  if (!primary || !PLUGIN_REQUIRED_COMMANDS.has(primary)) {
+    return false;
+  }
+  if ((primary === "status" || primary === "health") && hasFlag(argv, "--json")) {
+    return false;
+  }
+  // Onboarding/setup should stay manifest-first and load selected plugins on demand.
+  if (primary === "onboard" || (primary === "channels" && secondary === "add")) {
+    return false;
+  }
+  return true;
+}
 function getRootCommand(command: Command): Command {
   let current = command;
   while (current.parent) {
@@ -132,9 +151,9 @@ export function registerPreActionHooks(program: Command, programVersion: string)
       ...(suppressDoctorStdout ? { suppressDoctorStdout: true } : {}),
     });
     // Load plugins for commands that need channel access
-    if (PLUGIN_REQUIRED_COMMANDS.has(commandPath[0])) {
+    if (shouldLoadPluginsForCommand(commandPath, argv)) {
       const { ensurePluginRegistryLoaded } = await loadPluginRegistryModule();
-      ensurePluginRegistryLoaded();
+      ensurePluginRegistryLoaded({ scope: resolvePluginRegistryScope(commandPath) });
     }
   });
 }

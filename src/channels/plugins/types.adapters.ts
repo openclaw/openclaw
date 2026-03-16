@@ -52,6 +52,7 @@ export type ChannelSetupAdapter = {
 export type ChannelConfigAdapter<ResolvedAccount> = {
   listAccountIds: (cfg: OpenClawConfig) => string[];
   resolveAccount: (cfg: OpenClawConfig, accountId?: string | null) => ResolvedAccount;
+  inspectAccount?: (cfg: OpenClawConfig, accountId?: string | null) => unknown;
   defaultAccountId?: (cfg: OpenClawConfig) => string;
   setAccountEnabled?: (params: {
     cfg: OpenClawConfig;
@@ -92,6 +93,8 @@ export type ChannelOutboundContext = {
   mediaUrl?: string;
   mediaLocalRoots?: readonly string[];
   gifPlayback?: boolean;
+  /** Send image as document to avoid Telegram compression. */
+  forceDocument?: boolean;
   replyToId?: string | null;
   threadId?: string | number | null;
   accountId?: string | null;

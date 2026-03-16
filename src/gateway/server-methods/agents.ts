@@ -16,7 +16,7 @@ import {
   DEFAULT_TOOLS_FILENAME,
   DEFAULT_USER_FILENAME,
   ensureAgentWorkspace,
-  isWorkspaceOnboardingCompleted,
+  isWorkspaceSetupCompleted,
 } from "../../agents/workspace.js";
 import { movePathToTrash } from "../../browser/trash.js";
 import {
@@ -653,7 +653,7 @@ export const agentsHandlers: GatewayRequestHandlers = {
     const workspaceDir = resolveAgentWorkspaceDir(cfg, agentId);
     let hideBootstrap = false;
     try {
-      hideBootstrap = await isWorkspaceOnboardingCompleted(workspaceDir);
+      hideBootstrap = await isWorkspaceSetupCompleted(workspaceDir);
     } catch {
       // Fall back to showing BOOTSTRAP if workspace state cannot be read.
     }
@@ -732,10 +732,19 @@ export const agentsHandlers: GatewayRequestHandlers = {
       return;
     }
     const content = String(params.content ?? "");
+    const relativeWritePath = path.relative(resolvedPath.workspaceReal, resolvedPath.ioPath);
+    if (
+      !relativeWritePath ||
+      relativeWritePath.startsWith("..") ||
+      path.isAbsolute(relativeWritePath)
+    ) {
+      respondWorkspaceFileUnsafe(respond, name);
+      return;
+    }
     try {
       await writeFileWithinRoot({
-        rootDir: workspaceDir,
-        relativePath: name,
+        rootDir: resolvedPath.workspaceReal,
+        relativePath: relativeWritePath,
         data: content,
         encoding: "utf8",
       });

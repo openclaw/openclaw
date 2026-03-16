@@ -174,7 +174,7 @@ export class TuiStreamAssembler {
     return state.displayText;
   }
 
-  finalize(runId: string, message: unknown, showThinking: boolean): string {
+  finalize(runId: string, message: unknown, showThinking: boolean, errorMessage?: string): string {
     const state = this.getOrCreateRun(runId);
     const streamedDisplayText = state.displayText;
     const streamedTextBlocks = [...state.contentBlocks];
@@ -192,6 +192,7 @@ export class TuiStreamAssembler {
     const finalText = resolveFinalAssistantText({
       finalText: shouldKeepStreamedText ? streamedDisplayText : finalComposed,
       streamedText: streamedDisplayText,
+      errorMessage,
     });
 
     this.runs.delete(runId);
