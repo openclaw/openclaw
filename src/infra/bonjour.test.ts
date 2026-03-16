@@ -299,9 +299,15 @@ describe("gateway bonjour advertiser", () => {
     vi.useFakeTimers();
 
     const stateRef = { value: "announcing" };
-    const destroy = vi.fn().mockResolvedValue(undefined);
+    const events: string[] = [];
+    let advertiseCount = 0;
+    const destroy = vi.fn().mockImplementation(async () => {
+      events.push("destroy");
+    });
     const advertise = vi.fn().mockImplementation(() => {
-      if (advertise.mock.calls.length === 1) {
+      advertiseCount += 1;
+      events.push(`advertise:${advertiseCount}`);
+      if (advertiseCount === 1) {
         stateRef.value = "announcing";
         return new Promise<void>(() => {});
       }
@@ -325,6 +331,7 @@ describe("gateway bonjour advertiser", () => {
     expect(advertise).toHaveBeenCalledTimes(2);
     expect(destroy).toHaveBeenCalledTimes(1);
     expect(shutdown).toHaveBeenCalledTimes(1);
+    expect(events).toEqual(["advertise:1", "destroy", "advertise:2"]);
 
     await started.stop();
     expect(destroy).toHaveBeenCalledTimes(2);
