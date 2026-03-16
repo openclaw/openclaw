@@ -1803,7 +1803,14 @@ description: test skill
   });
 
   it("warns when multiple DM senders share the main session", async () => {
-    const cfg: OpenClawConfig = { session: { dmScope: "main" } };
+    const cfg: OpenClawConfig = {
+      session: { dmScope: "main" },
+      channels: {
+        whatsapp: {
+          enabled: true,
+        },
+      },
+    };
     const plugins: ChannelPlugin[] = [
       {
         id: "whatsapp",
