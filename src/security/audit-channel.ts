@@ -144,17 +144,17 @@ export async function collectChannelSecurityFindings(params: {
   const findings: SecurityAuditFinding[] = [];
   const sourceConfig = params.sourceConfig ?? params.cfg;
 
-  const inspectChannelAccount = (
+  const inspectChannelAccount = async (
     plugin: (typeof params.plugins)[number],
     cfg: OpenClawConfig,
     accountId: string,
   ) =>
     plugin.config.inspectAccount?.(cfg, accountId) ??
-    inspectReadOnlyChannelAccount({
+    (await inspectReadOnlyChannelAccount({
       channelId: plugin.id,
       cfg,
       accountId,
-    });
+    }));
 
   const asAccountRecord = (value: unknown): Record<string, unknown> | null =>
     value && typeof value === "object" && !Array.isArray(value)
@@ -166,8 +166,8 @@ export async function collectChannelSecurityFindings(params: {
     accountId: string,
   ) => {
     const diagnostics: string[] = [];
-    const sourceInspectedAccount = inspectChannelAccount(plugin, sourceConfig, accountId);
-    const resolvedInspectedAccount = inspectChannelAccount(plugin, params.cfg, accountId);
+    const sourceInspectedAccount = await inspectChannelAccount(plugin, sourceConfig, accountId);
+    const resolvedInspectedAccount = await inspectChannelAccount(plugin, params.cfg, accountId);
     const sourceInspection = sourceInspectedAccount as {
       enabled?: boolean;
       configured?: boolean;
