@@ -15,6 +15,7 @@ import type {
   ChannelMessageActionName,
 } from "../../../src/channels/plugins/types.js";
 import type { TelegramActionConfig } from "../../../src/config/types.telegram.js";
+import { normalizeInteractiveReply } from "../../../src/interactive/payload.js";
 import { readBooleanParam } from "../../../src/plugin-sdk/boolean-param.js";
 import { extractToolSend } from "../../../src/plugin-sdk/tool-send.js";
 import { resolveTelegramPollVisibility } from "../../../src/poll-params.js";
@@ -24,6 +25,7 @@ import {
   resolveTelegramPollActionGateState,
 } from "./accounts.js";
 import { isTelegramInlineButtonsEnabled } from "./inline-buttons.js";
+import { buildTelegramInteractiveButtons } from "./shared-interactive.js";
 
 const providerId = "telegram";
 
@@ -35,7 +37,9 @@ function readTelegramSendParams(params: Record<string, unknown>) {
   const content = message || caption || "";
   const replyTo = readStringParam(params, "replyTo");
   const threadId = readStringParam(params, "threadId");
-  const buttons = params.buttons;
+  const buttons =
+    params.buttons ??
+    buildTelegramInteractiveButtons(normalizeInteractiveReply(params.interactive));
   const asVoice = readBooleanParam(params, "asVoice");
   const silent = readBooleanParam(params, "silent");
   const forceDocument = readBooleanParam(params, "forceDocument");
@@ -119,6 +123,15 @@ export const telegramMessageActions: ChannelMessageActionAdapter = {
       actions.add("topic-edit");
     }
     return Array.from(actions);
+  },
+  supportsInteractive: ({ cfg }) => {
+    const accounts = listTokenSourcedAccounts(listEnabledTelegramAccounts(cfg));
+    if (accounts.length === 0) {
+      return false;
+    }
+    return accounts.some((account) =>
+      isTelegramInlineButtonsEnabled({ cfg, accountId: account.accountId }),
+    );
   },
   supportsButtons: ({ cfg }) => {
     const accounts = listTokenSourcedAccounts(listEnabledTelegramAccounts(cfg));
