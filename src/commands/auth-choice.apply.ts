@@ -1,6 +1,7 @@
 import type { OpenClawConfig } from "../config/config.js";
 import type { RuntimeEnv } from "../runtime.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
+import { normalizeLegacyOnboardAuthChoice } from "./auth-choice-legacy.js";
 import { applyAuthChoiceAnthropic } from "./auth-choice.apply.anthropic.js";
 import { applyAuthChoiceApiProviders } from "./auth-choice.apply.api-providers.js";
 import { applyAuthChoiceMiniMax } from "./auth-choice.apply.minimax.js";
@@ -28,6 +29,12 @@ export type ApplyAuthChoiceResult = {
 export async function applyAuthChoice(
   params: ApplyAuthChoiceParams,
 ): Promise<ApplyAuthChoiceResult> {
+  const normalizedAuthChoice =
+    normalizeLegacyOnboardAuthChoice(params.authChoice) ?? params.authChoice;
+  const normalizedParams =
+    normalizedAuthChoice === params.authChoice
+      ? params
+      : { ...params, authChoice: normalizedAuthChoice };
   const handlers: Array<(p: ApplyAuthChoiceParams) => Promise<ApplyAuthChoiceResult | null>> = [
     applyAuthChoiceLoadedPluginProvider,
     applyAuthChoiceAnthropic,
@@ -38,11 +45,11 @@ export async function applyAuthChoice(
   ];
 
   for (const handler of handlers) {
-    const result = await handler(params);
+    const result = await handler(normalizedParams);
     if (result) {
       return result;
     }
   }
 
-  return { config: params.config };
+  return { config: normalizedParams.config };
 }
