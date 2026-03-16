@@ -125,13 +125,41 @@ const plugin = {
       { name: "load_toolkit" },
     );
 
-    // Hook: filter tools before surfacing to the LLM
+    // Hook 1: filter tool schemas before surfacing to the LLM (saves tokens)
     api.on("before_tool_surface", (event, ctx) => {
       const loaded = getLoadedToolkits(ctx.sessionKey, ctx.sessionId);
       return {
         tools: lazyToolsPlugin.filterTools(event.tools, loaded),
       };
     });
+
+    // Hook 2: block execution of tools whose toolkit is not loaded
+    api.on("before_tool_call", (event, ctx) => {
+      if (CORE_TOOLS.has(event.toolName)) return;
+      const tks = toolToToolkits.get(event.toolName);
+      if (!tks) return; // Unknown tool, let it through
+      const loaded = getLoadedToolkits(ctx.sessionKey, ctx.sessionId);
+      for (const tk of tks) {
+        if (loaded.has(tk)) return; // Toolkit loaded, allow
+      }
+      // Toolkit not loaded — block with helpful message
+      const owning = [...tks].join(" or ");
+      return {
+        block: true,
+        blockReason:
+          `Tool "${event.toolName}" requires loading the "${owning}" toolkit first. ` +
+          `Call load_toolkit with name="${[...tks][0]}" to enable it.`,
+      };
+    });
+
+    // Hook 3: inject toolkit guidance into system prompt
+    api.on("before_prompt_build", () => ({
+      appendSystemContext:
+        "\n\n## Tool Loading\n" +
+        "Not all tools are available by default. If you need a tool that is not currently available, " +
+        "call `load_toolkit` with the appropriate toolkit name first. Available toolkits:\n" +
+        catalog,
+    }));
 
     // Clean up session state when session ends
     api.on("session_end", (_event, ctx) => {
