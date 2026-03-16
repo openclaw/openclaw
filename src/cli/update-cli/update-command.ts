@@ -24,7 +24,6 @@ import {
   checkUpdateStatus,
 } from "../../infra/update-check.js";
 import {
-  canResolveRegistryVersionForPackageTarget,
   createGlobalInstallEnv,
   cleanupGlobalRenameDirs,
   globalInstallArgs,
@@ -110,10 +109,10 @@ function resolveGatewayInstallEntrypointCandidates(root?: string): string[] {
     return [];
   }
   return [
-    path.join(root, "dist", "entry.js"),
-    path.join(root, "dist", "entry.mjs"),
     path.join(root, "dist", "index.js"),
     path.join(root, "dist", "index.mjs"),
+    path.join(root, "dist", "entry.js"),
+    path.join(root, "dist", "entry.mjs"),
   ];
 }
 
@@ -732,31 +731,22 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
   let targetVersion: string | null = null;
   let downgradeRisk = false;
   let fallbackToLatest = false;
-  let packageInstallSpec: string | null = null;
 
   if (updateInstallKind !== "git") {
     currentVersion = switchToPackage ? null : await readPackageVersion(root);
-    if (explicitTag) {
-      targetVersion = await resolveTargetVersion(tag, timeoutMs);
-    } else {
-      targetVersion = await resolveNpmChannelTag({ channel, timeoutMs }).then((resolved) => {
-        tag = resolved.tag;
-        fallbackToLatest = channel === "beta" && resolved.tag === "latest";
-        return resolved.version;
-      });
-    }
+    targetVersion = explicitTag
+      ? await resolveTargetVersion(tag, timeoutMs)
+      : await resolveNpmChannelTag({ channel, timeoutMs }).then((resolved) => {
+          tag = resolved.tag;
+          fallbackToLatest = channel === "beta" && resolved.tag === "latest";
+          return resolved.version;
+        });
     const cmp =
       currentVersion && targetVersion ? compareSemverStrings(currentVersion, targetVersion) : null;
     downgradeRisk =
-      canResolveRegistryVersionForPackageTarget(tag) &&
       !fallbackToLatest &&
       currentVersion != null &&
       (targetVersion == null || (cmp != null && cmp > 0));
-    packageInstallSpec = resolveGlobalInstallSpec({
-      packageName: DEFAULT_PACKAGE_NAME,
-      tag,
-      env: process.env,
-    });
   }
 
   if (opts.dryRun) {
@@ -782,7 +772,7 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
     } else if (updateInstallKind === "git") {
       actions.push(`Run git update flow on channel ${channel} (fetch/rebase/build/doctor)`);
     } else {
-      actions.push(`Run global package manager update with spec ${packageInstallSpec ?? tag}`);
+      actions.push(`Run global package manager update with spec openclaw@${tag}`);
     }
     actions.push("Run plugin update sync after core update");
     actions.push("Refresh shell completion cache (if needed)");
@@ -799,9 +789,6 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
     if (fallbackToLatest) {
       notes.push("Beta channel resolves to latest for this run (fallback).");
     }
-    if (explicitTag && !canResolveRegistryVersionForPackageTarget(tag)) {
-      notes.push("Non-registry package specs skip npm version lookup and downgrade previews.");
-    }
 
     printDryRunPreview(
       {
@@ -816,7 +803,7 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
         requestedChannel,
         storedChannel,
         effectiveChannel: channel,
-        tag: packageInstallSpec ?? tag,
+        tag,
         currentVersion,
         targetVersion,
         downgradeRisk,
