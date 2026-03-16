@@ -31,6 +31,8 @@ export type {
 } from "../plugins/types.js";
 export type {
   CreateSandboxBackendParams,
+  RemoteShellSandboxHandle,
+  RunSshSandboxCommandParams,
   SandboxBackendCommandParams,
   SandboxBackendCommandResult,
   SandboxBackendExecSpec,
@@ -44,6 +46,9 @@ export type {
   SandboxBackendRuntimeInfo,
   SandboxContext,
   SandboxResolvedPath,
+  SandboxSshConfig,
+  SshSandboxSession,
+  SshSandboxSettings,
 } from "../agents/sandbox.js";
 export type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
 export type { PluginRuntime } from "../plugins/runtime/types.js";
@@ -57,9 +62,19 @@ export type {
 
 export { emptyPluginConfigSchema } from "../plugins/config-schema.js";
 export {
+  buildExecRemoteCommand,
+  buildRemoteCommand,
+  buildSshSandboxArgv,
+  createRemoteShellSandboxFsBridge,
+  createSshSandboxSessionFromConfigText,
+  createSshSandboxSessionFromSettings,
+  disposeSshSandboxSession,
   getSandboxBackendFactory,
   getSandboxBackendManager,
   registerSandboxBackend,
+  runSshSandboxCommand,
+  shellEscape,
+  uploadDirectoryToSshTarget,
   requireSandboxBackendFactory,
 } from "../agents/sandbox.js";
 export { buildOauthProviderAuthResult } from "./provider-auth-result.js";
