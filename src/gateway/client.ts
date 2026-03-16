@@ -138,6 +138,7 @@ export class GatewayClient {
   private lastTick: number | null = null;
   private tickIntervalMs = 30_000;
   private tickTimer: NodeJS.Timeout | null = null;
+  private reconnectTimer: NodeJS.Timeout | null = null;
   private readonly requestTimeoutMs: number;
 
   constructor(opts: GatewayClientOptions) {
@@ -281,6 +282,10 @@ export class GatewayClient {
     if (this.tickTimer) {
       clearInterval(this.tickTimer);
       this.tickTimer = null;
+    }
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
     }
     const ws = this.ws;
     this.ws = null;
@@ -643,7 +648,7 @@ export class GatewayClient {
     }
     const delay = this.backoffMs;
     this.backoffMs = Math.min(this.backoffMs * 2, 30_000);
-    setTimeout(() => this.start(), delay);
+    this.reconnectTimer = setTimeout(() => this.start(), delay);
   }
 
   private flushPendingErrors(err: Error) {
