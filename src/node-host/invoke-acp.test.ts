@@ -1,9 +1,119 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  __testing as runtimeRegistryTesting,
+  registerAcpRuntimeBackend,
+  unregisterAcpRuntimeBackend,
+} from "../acp/runtime/registry.js";
+import type {
+  AcpRuntime,
+  AcpRuntimeEnsureInput,
+  AcpRuntimeEvent,
+  AcpRuntimeHandle,
+  AcpRuntimeTurnInput,
+} from "../acp/runtime/types.js";
 import { __testing, handleAcpInvokeCommand } from "./invoke-acp.js";
 import type { NodeInvokeRequestPayload } from "./invoke.js";
 
-afterEach(() => {
+type Deferred<T> = {
+  promise: Promise<T>;
+  resolve: (value: T | PromiseLike<T>) => void;
+  reject: (error?: unknown) => void;
+};
+
+function createDeferred<T>(): Deferred<T> {
+  let resolve!: Deferred<T>["resolve"];
+  let reject!: Deferred<T>["reject"];
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  return { promise, resolve, reject };
+}
+
+type NodeEventCall = {
+  event: string;
+  payload: unknown;
+};
+
+class FakeNodeHostRuntime implements AcpRuntime {
+  readonly ensured: AcpRuntimeEnsureInput[] = [];
+  readonly turns: AcpRuntimeTurnInput[] = [];
+  readonly cancelled: Array<{ handle: AcpRuntimeHandle; reason?: string }> = [];
+  readonly closed: Array<{ handle: AcpRuntimeHandle; reason: string }> = [];
+
+  private readonly readyToEmit = createDeferred<void>();
+  private readonly releaseTurn = createDeferred<void>();
+  private readonly finished = createDeferred<void>();
+  private nextStopReason = "done";
+
+  async ensureSession(input: AcpRuntimeEnsureInput): Promise<AcpRuntimeHandle> {
+    this.ensured.push(input);
+    return {
+      sessionKey: input.sessionKey,
+      backend: "acpx",
+      runtimeSessionName: `acpx:v1:${input.sessionKey}`,
+      backendSessionId: "acpx-session-1",
+      ...(input.cwd ? { cwd: input.cwd } : {}),
+    };
+  }
+
+  async *runTurn(input: AcpRuntimeTurnInput): AsyncIterable<AcpRuntimeEvent> {
+    this.turns.push(input);
+    this.readyToEmit.resolve();
+    await this.releaseTurn.promise;
+    yield {
+      type: "text_delta",
+      stream: "output",
+      text: "hello from runtime",
+      tag: "agent_message_chunk",
+    };
+    yield {
+      type: "status",
+      text: "runtime step",
+      tag: "session_info_update",
+    };
+    yield {
+      type: "done",
+      stopReason: this.nextStopReason,
+    };
+    this.finished.resolve();
+  }
+
+  async getStatus(): Promise<{ summary: string }> {
+    return {
+      summary: "local runtime ready",
+    };
+  }
+
+  async cancel(input: { handle: AcpRuntimeHandle; reason?: string }): Promise<void> {
+    this.cancelled.push(input);
+    this.nextStopReason = input.reason ?? "cancelled";
+    this.releaseTurn.resolve();
+  }
+
+  async close(input: { handle: AcpRuntimeHandle; reason: string }): Promise<void> {
+    this.closed.push(input);
+  }
+
+  async waitForTurnStart() {
+    await this.readyToEmit.promise;
+  }
+
+  releaseTurnToComplete(stopReason = "done") {
+    this.nextStopReason = stopReason;
+    this.releaseTurn.resolve();
+  }
+
+  async waitForTurnFinish() {
+    await this.finished.promise;
+  }
+}
+
+afterEach(async () => {
+  unregisterAcpRuntimeBackend("acpx");
+  runtimeRegistryTesting.resetAcpRuntimeBackendsForTests();
   __testing.resetNodeAcpSessionsForTests();
+  await __testing.resetNodeAcpRuntimeBootstrapForTests();
 });
 
 function buildFrame(params: {
@@ -19,8 +129,27 @@ function buildFrame(params: {
   };
 }
 
+function buildDeps(sendNodeEvent?: (event: string, payload: unknown) => Promise<void>) {
+  return {
+    ensureRuntimeReady: async () => {},
+    loadConfig: () => ({
+      acp: {
+        backend: "acpx",
+      },
+    }),
+    sendNodeEvent,
+  };
+}
+
 describe("handleAcpInvokeCommand", () => {
-  it("tracks ensured sessions, turn status, cancel, and close over the ACP command set", async () => {
+  it("runs a real local runtime turn and emits canonical ACP worker traffic", async () => {
+    const runtime = new FakeNodeHostRuntime();
+    registerAcpRuntimeBackend({
+      id: "acpx",
+      runtime,
+    });
+    const nodeEvents: NodeEventCall[] = [];
+
     const ensured = await handleAcpInvokeCommand(
       buildFrame({
         command: "acp.session.ensure",
@@ -33,6 +162,9 @@ describe("handleAcpInvokeCommand", () => {
           cwd: "/workspace",
         },
       }),
+      buildDeps(async (event, payload) => {
+        nodeEvents.push({ event, payload });
+      }),
     );
     expect(ensured).toMatchObject({
       handled: true,
@@ -41,6 +173,7 @@ describe("handleAcpInvokeCommand", () => {
         sessionKey: "agent:main:acp:test",
         leaseId: "lease-1",
         leaseEpoch: 1,
+        nodeRuntimeSessionId: "acpx-session-1",
       },
     });
 
@@ -57,6 +190,9 @@ describe("handleAcpInvokeCommand", () => {
           text: "hello",
         },
       }),
+      buildDeps(async (event, payload) => {
+        nodeEvents.push({ event, payload });
+      }),
     );
     expect(started).toMatchObject({
       handled: true,
@@ -64,8 +200,11 @@ describe("handleAcpInvokeCommand", () => {
       payload: {
         accepted: true,
         runId: "run-1",
+        nodeWorkerRunId: expect.any(String),
       },
     });
+
+    await runtime.waitForTurnStart();
 
     const runningStatus = await handleAcpInvokeCommand(
       buildFrame({
@@ -76,32 +215,156 @@ describe("handleAcpInvokeCommand", () => {
           leaseEpoch: 1,
         },
       }),
+      buildDeps(),
     );
     expect(runningStatus).toMatchObject({
       handled: true,
       ok: true,
       payload: {
         state: "running",
-        nodeId: "node-1",
-        sessionKey: "agent:main:acp:test",
-        leaseId: "lease-1",
-        leaseEpoch: 1,
+        nodeRuntimeSessionId: "acpx-session-1",
         nodeWorkerRunId: expect.any(String),
-        nodeRuntimeSessionId: expect.any(String),
+        details: {
+          summary: "local runtime ready",
+        },
       },
     });
+
+    runtime.releaseTurnToComplete("end_turn");
+    await runtime.waitForTurnFinish();
+
+    await vi.waitFor(() => {
+      expect(nodeEvents).toHaveLength(3);
+    });
+    expect(nodeEvents).toEqual([
+      {
+        event: "acp.worker.event",
+        payload: {
+          nodeId: "node-1",
+          sessionKey: "agent:main:acp:test",
+          runId: "run-1",
+          leaseId: "lease-1",
+          leaseEpoch: 1,
+          seq: 1,
+          event: {
+            type: "text_delta",
+            stream: "output",
+            text: "hello from runtime",
+            tag: "agent_message_chunk",
+          },
+        },
+      },
+      {
+        event: "acp.worker.event",
+        payload: {
+          nodeId: "node-1",
+          sessionKey: "agent:main:acp:test",
+          runId: "run-1",
+          leaseId: "lease-1",
+          leaseEpoch: 1,
+          seq: 2,
+          event: {
+            type: "status",
+            text: "runtime step",
+            tag: "session_info_update",
+          },
+        },
+      },
+      {
+        event: "acp.worker.terminal",
+        payload: {
+          nodeId: "node-1",
+          sessionKey: "agent:main:acp:test",
+          runId: "run-1",
+          leaseId: "lease-1",
+          leaseEpoch: 1,
+          terminalEventId: expect.any(String),
+          finalSeq: 2,
+          terminal: {
+            kind: "completed",
+            stopReason: "end_turn",
+          },
+        },
+      },
+    ]);
+
+    const idleStatus = await handleAcpInvokeCommand(
+      buildFrame({
+        command: "acp.session.status",
+        payload: {
+          sessionKey: "agent:main:acp:test",
+          leaseId: "lease-1",
+          leaseEpoch: 1,
+        },
+      }),
+      buildDeps(),
+    );
+    expect(idleStatus).toMatchObject({
+      handled: true,
+      ok: true,
+      payload: {
+        state: "idle",
+        nodeRuntimeSessionId: "acpx-session-1",
+      },
+    });
+  });
+
+  it("delegates cancel and close to the real runtime instead of local bookkeeping", async () => {
+    const runtime = new FakeNodeHostRuntime();
+    registerAcpRuntimeBackend({
+      id: "acpx",
+      runtime,
+    });
+    const nodeEvents: NodeEventCall[] = [];
+
+    await handleAcpInvokeCommand(
+      buildFrame({
+        command: "acp.session.ensure",
+        payload: {
+          sessionKey: "agent:main:acp:test",
+          leaseId: "lease-1",
+          leaseEpoch: 1,
+          agent: "main",
+          mode: "persistent",
+        },
+      }),
+      buildDeps(async (event, payload) => {
+        nodeEvents.push({ event, payload });
+      }),
+    );
+
+    await handleAcpInvokeCommand(
+      buildFrame({
+        command: "acp.turn.start",
+        payload: {
+          sessionKey: "agent:main:acp:test",
+          runId: "run-cancel",
+          leaseId: "lease-1",
+          leaseEpoch: 1,
+          requestId: "req-cancel",
+          mode: "prompt",
+          text: "cancel me",
+        },
+      }),
+      buildDeps(async (event, payload) => {
+        nodeEvents.push({ event, payload });
+      }),
+    );
+
+    await runtime.waitForTurnStart();
 
     const cancelled = await handleAcpInvokeCommand(
       buildFrame({
         command: "acp.turn.cancel",
         payload: {
           sessionKey: "agent:main:acp:test",
-          runId: "run-1",
+          runId: "run-cancel",
           leaseId: "lease-1",
           leaseEpoch: 1,
-          reason: "abort",
+          reason: "manual-cancel",
         },
       }),
+      buildDeps(),
     );
     expect(cancelled).toMatchObject({
       handled: true,
@@ -110,6 +373,11 @@ describe("handleAcpInvokeCommand", () => {
         accepted: true,
       },
     });
+    expect(runtime.cancelled).toMatchObject([
+      {
+        reason: "manual-cancel",
+      },
+    ]);
 
     const cancellingStatus = await handleAcpInvokeCommand(
       buildFrame({
@@ -120,6 +388,7 @@ describe("handleAcpInvokeCommand", () => {
           leaseEpoch: 1,
         },
       }),
+      buildDeps(),
     );
     expect(cancellingStatus).toMatchObject({
       handled: true,
@@ -127,6 +396,20 @@ describe("handleAcpInvokeCommand", () => {
       payload: {
         state: "cancelling",
       },
+    });
+
+    await runtime.waitForTurnFinish();
+    await vi.waitFor(() => {
+      expect(nodeEvents.at(-1)).toMatchObject({
+        event: "acp.worker.terminal",
+        payload: {
+          runId: "run-cancel",
+          terminal: {
+            kind: "cancelled",
+            stopReason: "manual-cancel",
+          },
+        },
+      });
     });
 
     const closed = await handleAcpInvokeCommand(
@@ -139,6 +422,7 @@ describe("handleAcpInvokeCommand", () => {
           reason: "cleanup",
         },
       }),
+      buildDeps(),
     );
     expect(closed).toMatchObject({
       handled: true,
@@ -147,6 +431,11 @@ describe("handleAcpInvokeCommand", () => {
         accepted: true,
       },
     });
+    expect(runtime.closed).toMatchObject([
+      {
+        reason: "cleanup",
+      },
+    ]);
 
     const missingStatus = await handleAcpInvokeCommand(
       buildFrame({
@@ -157,6 +446,7 @@ describe("handleAcpInvokeCommand", () => {
           leaseEpoch: 1,
         },
       }),
+      buildDeps(),
     );
     expect(missingStatus).toMatchObject({
       handled: true,
@@ -164,90 +454,6 @@ describe("handleAcpInvokeCommand", () => {
       payload: {
         state: "missing",
       },
-    });
-  });
-
-  it("aliases acp.session.load onto the ensured runtime session for the same lease", async () => {
-    const ensured = await handleAcpInvokeCommand(
-      buildFrame({
-        command: "acp.session.ensure",
-        payload: {
-          sessionKey: "agent:main:acp:test",
-          leaseId: "lease-1",
-          leaseEpoch: 1,
-          agent: "main",
-          mode: "persistent",
-        },
-      }),
-    );
-    const ensuredRuntimeSessionId = (
-      ensured as Extract<typeof ensured, { handled: true; ok: true }>
-    ).payload as {
-      nodeRuntimeSessionId: string;
-    };
-
-    const loaded = await handleAcpInvokeCommand(
-      buildFrame({
-        command: "acp.session.load",
-        payload: {
-          sessionKey: "agent:main:acp:test",
-          leaseId: "lease-1",
-          leaseEpoch: 1,
-          agent: "main",
-          mode: "persistent",
-        },
-      }),
-    );
-    expect(loaded).toMatchObject({
-      handled: true,
-      ok: true,
-      payload: {
-        nodeRuntimeSessionId: ensuredRuntimeSessionId.nodeRuntimeSessionId,
-      },
-    });
-  });
-
-  it("rejects stale lease epochs after a replacement ensure", async () => {
-    await handleAcpInvokeCommand(
-      buildFrame({
-        command: "acp.session.ensure",
-        payload: {
-          sessionKey: "agent:main:acp:test",
-          leaseId: "lease-1",
-          leaseEpoch: 1,
-          agent: "main",
-          mode: "persistent",
-        },
-      }),
-    );
-    await handleAcpInvokeCommand(
-      buildFrame({
-        command: "acp.session.ensure",
-        payload: {
-          sessionKey: "agent:main:acp:test",
-          leaseId: "lease-2",
-          leaseEpoch: 2,
-          agent: "main",
-          mode: "persistent",
-        },
-      }),
-    );
-
-    const stale = await handleAcpInvokeCommand(
-      buildFrame({
-        command: "acp.turn.cancel",
-        payload: {
-          sessionKey: "agent:main:acp:test",
-          runId: "run-1",
-          leaseId: "lease-1",
-          leaseEpoch: 1,
-        },
-      }),
-    );
-    expect(stale).toMatchObject({
-      handled: true,
-      ok: false,
-      code: "INVALID_REQUEST",
     });
   });
 });

@@ -1382,4 +1382,113 @@ describe("AcpGatewayNodeRuntime", () => {
     });
     expect(commands).toContain("acp.turn.cancel");
   });
+
+  it.each([
+    {
+      name: "suppresses a cancel transport failure once a terminal is already durable",
+      cancelResult: {
+        ok: false,
+        error: {
+          message: "already completed",
+        },
+      },
+    },
+    {
+      name: "suppresses a cancel rejection payload once a terminal is already durable",
+      cancelResult: {
+        ok: true,
+        payload: {
+          ok: true,
+          accepted: false,
+          message: "already completed",
+        },
+      },
+    },
+  ])("$name", async ({ cancelResult }) => {
+    const { runtime } = await createRuntime();
+    const sessionKey = "agent:main:acp:test-session";
+    const commands: string[] = [];
+
+    const backend = new AcpNodeRuntime({
+      gatewayRuntime: runtime,
+      listNodes: () =>
+        [
+          {
+            nodeId: "node-1",
+            caps: ["acp:v1"],
+            commands: [
+              "acp.session.ensure",
+              "acp.session.load",
+              "acp.turn.start",
+              "acp.turn.cancel",
+              "acp.session.close",
+              "acp.session.status",
+            ],
+          },
+        ] as never,
+      invokeNode: async ({ command, params }) => {
+        commands.push(command);
+        if (command === "acp.session.ensure") {
+          const payload = params as Record<string, unknown>;
+          return {
+            ok: true,
+            payload: {
+              ok: true,
+              sessionKey: payload.sessionKey,
+              leaseId: payload.leaseId,
+              leaseEpoch: payload.leaseEpoch,
+              nodeRuntimeSessionId: "runtime-1",
+            },
+          };
+        }
+        if (command === "acp.turn.cancel") {
+          const lease = await runtime.store.getActiveLease(sessionKey);
+          await runtime.store.resolveTerminal({
+            nodeId: "node-1",
+            sessionKey,
+            runId: "run-cancel",
+            leaseId: lease?.leaseId ?? "",
+            leaseEpoch: lease?.leaseEpoch ?? 0,
+            terminalEventId: "term-before-cancel-response",
+            finalSeq: 0,
+            terminal: {
+              kind: "completed",
+              stopReason: "done",
+            },
+          });
+          return cancelResult;
+        }
+        throw new Error(`unexpected command ${command}`);
+      },
+    });
+
+    const handle = await backend.ensureSession({
+      sessionKey,
+      agent: "main",
+      mode: "persistent",
+    });
+
+    await runtime.store.startRun({
+      sessionKey,
+      runId: "run-cancel",
+      requestId: "req-cancel",
+    });
+
+    await expect(
+      backend.cancel({
+        handle,
+        reason: "manual-cancel",
+      }),
+    ).resolves.toBeUndefined();
+
+    expect(await runtime.store.getRun("run-cancel")).toMatchObject({
+      state: "completed",
+      terminal: {
+        terminalEventId: "term-before-cancel-response",
+        kind: "completed",
+        stopReason: "done",
+      },
+    });
+    expect(commands).toEqual(["acp.session.ensure", "acp.turn.cancel"]);
+  });
 });

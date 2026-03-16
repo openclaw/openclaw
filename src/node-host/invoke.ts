@@ -421,7 +421,11 @@ export async function handleInvoke(
   skillBins: SkillBinsProvider,
 ) {
   const command = String(frame.command ?? "");
-  const acpResult = await handleAcpInvokeCommand(frame);
+  const acpResult = await handleAcpInvokeCommand(frame, {
+    sendNodeEvent: async (event, payload) => {
+      await sendNodeEvent(client, event, payload);
+    },
+  });
   if (acpResult.handled) {
     if (acpResult.ok) {
       await sendJsonPayloadResult(client, frame, acpResult.payload);
