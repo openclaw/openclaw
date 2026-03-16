@@ -21,7 +21,7 @@ import type {
   CommandsConfig,
   MessagesConfig,
 } from "./types.messages.js";
-import type { ModelsConfig } from "./types.models.js";
+import type { LlmConfig, ModelsConfig } from "./types.models.js";
 import type { NodeHostConfig } from "./types.node-host.js";
 import type { PluginsConfig } from "./types.plugins.js";
 import type { SecretsConfig } from "./types.secrets.js";
@@ -94,6 +94,8 @@ export type OpenClawConfig = {
   secrets?: SecretsConfig;
   skills?: SkillsConfig;
   plugins?: PluginsConfig;
+  /** Shorthand single-LLM config. Expanded into models.providers at runtime. */
+  llm?: LlmConfig;
   models?: ModelsConfig;
   nodeHost?: NodeHostConfig;
   agents?: AgentsConfig;

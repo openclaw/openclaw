@@ -74,3 +74,38 @@ export type ModelsConfig = {
   providers?: Record<string, ModelProviderConfig>;
   bedrockDiscovery?: BedrockDiscoveryConfig;
 };
+
+/**
+ * Simplified LLM configuration shorthand.
+ * Expands into `models.providers` + `agents.defaults.model.primary` at runtime.
+ *
+ * Example:
+ *   { llm: { provider: "openai-compatible", model: "deepseek-chat",
+ *            api_key: "sk-...", base_url: "https://api.deepseek.com",
+ *            temperature: 0.7 } }
+ */
+export type LlmConfig = {
+  /**
+   * API protocol type. Supported shorthands:
+   *   "openai-compatible"    → api: "openai-completions"
+   *   "anthropic-compatible" → api: "anthropic-messages"
+   * Any raw ModelApi value is also accepted directly.
+   */
+  provider: string;
+  /** Model ID, e.g. "deepseek-chat" or "claude-opus-4-6". */
+  model: string;
+  /** API key. Accepts plain string or SecretInput ref. */
+  api_key?: SecretInput;
+  /** Provider base URL, e.g. "https://api.deepseek.com". */
+  base_url?: string;
+  /**
+   * Inference temperature (0–2).
+   * Stored in agents.defaults.models[ref].params.temperature.
+   */
+  temperature?: number;
+  /**
+   * Custom provider key written to models.json.
+   * Defaults to "custom".
+   */
+  provider_id?: string;
+};

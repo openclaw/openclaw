@@ -260,6 +260,19 @@ export const ModelsConfigSchema = z
   .strict()
   .optional();
 
+/** Shorthand single-LLM config. Expanded into models.providers at runtime. */
+export const LlmConfigSchema = z
+  .object({
+    provider: z.string().min(1),
+    model: z.string().min(1),
+    api_key: SecretInputSchema.optional().register(sensitive),
+    base_url: z.string().min(1).optional(),
+    temperature: z.number().min(0).max(2).optional(),
+    provider_id: z.string().min(1).optional(),
+  })
+  .strict()
+  .optional();
+
 export const GroupChatSchema = z
   .object({
     mentionPatterns: z.array(z.string()).optional(),

@@ -9,7 +9,7 @@ import {
   resolveTalkApiKey,
 } from "./talk.js";
 import type { OpenClawConfig } from "./types.js";
-import type { ModelDefinitionConfig } from "./types.models.js";
+import type { ModelDefinitionConfig, ModelProviderConfig } from "./types.models.js";
 import { hasConfiguredSecretInput } from "./types.secrets.js";
 
 type WarnState = { warned: boolean };
@@ -533,4 +533,91 @@ export function applyCompactionDefaults(cfg: OpenClawConfig): OpenClawConfig {
 
 export function resetSessionDefaultsWarningForTests() {
   defaultWarnState = { warned: false };
+}
+
+const LLM_PROVIDER_API_MAP: Record<string, string> = {
+  "openai-compatible": "openai-completions",
+  "anthropic-compatible": "anthropic-messages",
+};
+
+/**
+ * Expand the `llm` shorthand config into `models.providers`,
+ * `agents.defaults.model.primary`, and `agents.defaults.models[ref].params`.
+ *
+ * The `llm` key is non-destructive: existing values in `models.providers` or
+ * `agents.defaults.model.primary` are NOT overwritten, so users can still
+ * override individual fields via the full `models`/`agents` config keys.
+ */
+export function applyLlmConfig(cfg: OpenClawConfig): OpenClawConfig {
+  const llm = cfg.llm;
+  if (!llm) {
+    return cfg;
+  }
+
+  const providerId = llm.provider_id?.trim() || "custom";
+  const modelId = llm.model.trim();
+  const modelRef = `${providerId}/${modelId}`;
+
+  // Resolve API type from provider shorthand or pass through as-is.
+  const api = LLM_PROVIDER_API_MAP[llm.provider] ?? llm.provider;
+
+  // Build the provider entry. Only fill fields that were specified.
+  const providerEntry: ModelProviderConfig = {
+    baseUrl: llm.base_url ?? "",
+    api: api as ModelProviderConfig["api"],
+    models: [{ id: modelId, name: modelId } as ModelDefinitionConfig],
+    ...(llm.api_key !== undefined ? { apiKey: llm.api_key } : {}),
+  };
+
+  // Merge into models.providers — do not overwrite an existing provider entry.
+  const existingProviders = cfg.models?.providers ?? {};
+  const nextProviders = existingProviders[providerId]
+    ? existingProviders
+    : { ...existingProviders, [providerId]: providerEntry };
+
+  let nextCfg: OpenClawConfig = {
+    ...cfg,
+    models: {
+      ...cfg.models,
+      providers: nextProviders,
+    },
+  };
+
+  // Set agents.defaults.model.primary only if not already configured.
+  const existingDefaults = nextCfg.agents?.defaults;
+  const existingPrimary = resolveAgentModelPrimaryValue(existingDefaults?.model);
+  if (!existingPrimary) {
+    const nextDefaults = existingDefaults ? { ...existingDefaults } : {};
+    nextDefaults.model = { primary: modelRef };
+    nextCfg = {
+      ...nextCfg,
+      agents: { ...nextCfg.agents, defaults: nextDefaults },
+    };
+  }
+
+  // Inject temperature into agents.defaults.models[ref].params if provided.
+  if (typeof llm.temperature === "number") {
+    const defaults = nextCfg.agents?.defaults;
+    const existingModels = (defaults?.models ?? {}) as Record<string, Record<string, unknown>>;
+    const existingEntry = existingModels[modelRef] ?? {};
+    const existingParams = (existingEntry.params as Record<string, unknown> | undefined) ?? {};
+    // Only set temperature if not already explicitly configured.
+    if (typeof existingParams.temperature !== "number") {
+      const nextModels = {
+        ...existingModels,
+        [modelRef]: {
+          ...existingEntry,
+          params: { ...existingParams, temperature: llm.temperature },
+        },
+      };
+      const nextDefaults = defaults ? { ...defaults } : {};
+      nextDefaults.models = nextModels as typeof nextDefaults.models;
+      nextCfg = {
+        ...nextCfg,
+        agents: { ...nextCfg.agents, defaults: nextDefaults },
+      };
+    }
+  }
+
+  return nextCfg;
 }

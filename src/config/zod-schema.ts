@@ -6,6 +6,7 @@ import { AgentsSchema, AudioSchema, BindingsSchema, BroadcastSchema } from "./zo
 import { ApprovalsSchema } from "./zod-schema.approvals.js";
 import {
   HexColorSchema,
+  LlmConfigSchema,
   ModelsConfigSchema,
   SecretInputSchema,
   SecretsConfigSchema,
@@ -468,6 +469,7 @@ export const OpenClawSchema = z
       })
       .strict()
       .optional(),
+    llm: LlmConfigSchema,
     models: ModelsConfigSchema,
     nodeHost: NodeHostSchema,
     agents: AgentsSchema,

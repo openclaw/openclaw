@@ -21,6 +21,7 @@ import {
   applyCompactionDefaults,
   applyContextPruningDefaults,
   applyAgentDefaults,
+  applyLlmConfig,
   applyLoggingDefaults,
   applyMessageDefaults,
   applyModelDefaults,
@@ -801,7 +802,11 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
           applyCompactionDefaults(
             applyContextPruningDefaults(
               applyAgentDefaults(
-                applySessionDefaults(applyLoggingDefaults(applyMessageDefaults(validated.config))),
+                applyLlmConfig(
+                  applySessionDefaults(
+                    applyLoggingDefaults(applyMessageDefaults(validated.config)),
+                  ),
+                ),
               ),
             ),
           ),
@@ -892,7 +897,7 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
           applyModelDefaults(
             applyCompactionDefaults(
               applyContextPruningDefaults(
-                applyAgentDefaults(applySessionDefaults(applyMessageDefaults({}))),
+                applyAgentDefaults(applyLlmConfig(applySessionDefaults(applyMessageDefaults({})))),
               ),
             ),
           ),
@@ -1004,7 +1009,11 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
           applyTalkConfigNormalization(
             applyModelDefaults(
               applyAgentDefaults(
-                applySessionDefaults(applyLoggingDefaults(applyMessageDefaults(validated.config))),
+                applyLlmConfig(
+                  applySessionDefaults(
+                    applyLoggingDefaults(applyMessageDefaults(validated.config)),
+                  ),
+                ),
               ),
             ),
           ),
