@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
+import { imessageOutbound } from "../../../../test/channel-outbounds.js";
 import type { OpenClawConfig } from "../../../config/config.js";
-import { imessageOutbound } from "./imessage.js";
 
 describe("imessageOutbound", () => {
   const cfg: OpenClawConfig = {
