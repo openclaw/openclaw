@@ -181,3 +181,5 @@ export const signalSetupWizard: ChannelSetupWizard = {
   dmPolicy: signalDmPolicy,
   disable: (cfg) => setOnboardingChannelEnabled(cfg, channel, false),
 };
+
+export { normalizeSignalAccountInput, parseSignalAllowFromEntries, signalSetupAdapter };
