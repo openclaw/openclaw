@@ -213,7 +213,6 @@ export function createHandoffCapsule(params: CreateHandoffParams): HandoffCapsul
   // contextTag (AES-GCM auth tag) is included so all serialised capsule fields
   // are covered and the hash is a complete pre-decryption integrity check.
   const handoffHash = createHash("sha256")
-  const handoffHash = createHash("sha256")
     .update(capabilityProof, "hex")
     .update(encryptedContext, "utf8")
     .update(contextIv, "utf8")

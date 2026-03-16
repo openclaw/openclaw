@@ -1,4 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
+import { createHandoffCapsule } from "../../agents/zk-handoff.js";
+import { resolveZkSpawnKey } from "../../agents/zk-spawn-key.js";
 import { BARE_SESSION_RESET_PROMPT } from "../../auto-reply/reply/session-reset-prompt.js";
 import { agentHandlers } from "./agent.js";
 import type { GatewayRequestContext } from "./types.js";
@@ -648,5 +650,85 @@ describe("gateway agent handler", () => {
         message: expect.stringContaining("malformed session key"),
       }),
     );
+  });
+
+  it("rejects malformed zk handoff capsule JSON", async () => {
+    primeMainAgentRun();
+    mocks.agentCommand.mockClear();
+    const respond = await invokeAgent(
+      {
+        message: "test",
+        sessionKey: "agent:main:main",
+        idempotencyKey: "test-malformed-zk-capsule",
+        zkHandoffCapsule: "{not-json",
+      },
+      { reqId: "bad-zk-1" },
+    );
+
+    expect(mocks.agentCommand).not.toHaveBeenCalled();
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        message: expect.stringContaining("malformed zk handoff capsule"),
+      }),
+    );
+  });
+
+  it("does not burn handoff nonce when capsule verification fails", async () => {
+    primeMainAgentRun();
+    mocks.agentCommand.mockClear();
+
+    const validCapsule = createHandoffCapsule({
+      senderAgentId: "parent",
+      receiverAgentId: "main",
+      task: "step",
+      taskLabel: "step",
+      state: {},
+      authorizedChannelIds: [],
+      authorizedResourceIds: [],
+      gatewayKey: resolveZkSpawnKey(),
+      ttlMs: 120_000,
+    });
+    const invalidCapsule = {
+      ...validCapsule,
+      handoffHash: `${validCapsule.handoffHash.slice(0, 63)}0`,
+    };
+
+    const invalidRespond = await invokeAgent(
+      {
+        message: "invalid handoff",
+        sessionKey: "agent:main:main",
+        idempotencyKey: "test-zk-invalid",
+        zkHandoffCapsule: JSON.stringify(invalidCapsule),
+      },
+      { reqId: "zk-invalid-1" },
+    );
+    expect(invalidRespond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        message: expect.stringContaining("zk handoff verification failed"),
+      }),
+    );
+    expect(mocks.agentCommand).not.toHaveBeenCalled();
+
+    const validRespond = await invokeAgent(
+      {
+        message: "valid handoff",
+        sessionKey: "agent:main:main",
+        idempotencyKey: "test-zk-valid",
+        zkHandoffCapsule: JSON.stringify(validCapsule),
+      },
+      { reqId: "zk-valid-1" },
+    );
+
+    expect(validRespond).toHaveBeenCalledWith(
+      true,
+      expect.anything(),
+      undefined,
+      expect.anything(),
+    );
+    expect(mocks.agentCommand).toHaveBeenCalledTimes(1);
   });
 });

@@ -117,6 +117,15 @@ describe("formatAllowFromLowercase", () => {
       }),
     ).toEqual(["usera", "userb"]);
   });
+
+  it("normalizes Discord mention wrappers to bare IDs", () => {
+    expect(
+      formatAllowFromLowercase({
+        allowFrom: ["<@123456789>", "<@!987654321>", "discord:111", "@222"],
+        stripPrefixRe: /^(user:|discord:|@|<@!?)|>$/gi,
+      }),
+    ).toEqual(["123456789", "987654321", "111", "222"]);
+  });
 });
 
 describe("formatNormalizedAllowFromEntries", () => {

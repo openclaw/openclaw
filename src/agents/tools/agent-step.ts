@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import { callGateway } from "../../gateway/call.js";
+import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel.js";
 import { AGENT_LANE_NESTED } from "../lanes.js";
 import { createHandoffCapsule } from "../zk-handoff.js";
@@ -47,14 +48,15 @@ export async function runAgentStep(params: {
 
   // Build a ZK handoff capsule for peer-to-peer agent steps so that
   // inter-session messages are authenticated and logged under [zk-handoff].
-  // Use the full session key as agent ID to match what the gateway verifier
-  // receives as canonicalKey.
+  // Use canonical agent IDs because the gateway verifies against resolved IDs.
   let zkHandoffCapsule: string | undefined;
   if (params.sourceSessionKey && params.sourceSessionKey !== params.sessionKey) {
     try {
+      const senderAgentId = resolveAgentIdFromSessionKey(params.sourceSessionKey);
+      const receiverAgentId = resolveAgentIdFromSessionKey(params.sessionKey);
       const capsule = createHandoffCapsule({
-        senderAgentId: params.sourceSessionKey,
-        receiverAgentId: params.sessionKey,
+        senderAgentId,
+        receiverAgentId,
         task: params.message.slice(0, 200),
         taskLabel: params.sourceTool ?? "sessions_send",
         state: { turn: params.sourceTool },

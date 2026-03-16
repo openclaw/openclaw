@@ -372,9 +372,33 @@ export const agentHandlers: GatewayRequestHandlers = {
         try {
           zkCapsule = JSON.parse(request.zkHandoffCapsule) as Record<string, unknown>;
         } catch {
-          // Malformed JSON — skip ZK checks, allow dispatch.
+          respond(
+            false,
+            undefined,
+            errorShape(
+              ErrorCodes.INVALID_REQUEST,
+              "invalid agent params: malformed zk handoff capsule",
+            ),
+          );
+          return;
         }
         if (zkCapsule) {
+          const verifyResult = receiveHandoffCapsule(
+            zkCapsule as unknown as HandoffCapsule,
+            sessionAgent ?? canonicalKey,
+            resolveZkSpawnKey(),
+          );
+          if (!verifyResult.valid) {
+            respond(
+              false,
+              undefined,
+              errorShape(
+                ErrorCodes.INVALID_REQUEST,
+                `invalid agent params: zk handoff verification failed: ${verifyResult.reason}`,
+              ),
+            );
+            return;
+          }
           const header = zkCapsule?.header as Record<string, unknown> | undefined;
           if (header?.handoffNonce && typeof header.expiresAt === "number") {
             const isReplay = _zkNonceRegistry.checkAndRegister(
@@ -385,16 +409,16 @@ export const agentHandlers: GatewayRequestHandlers = {
               canonicalKey,
             );
             if (isReplay) {
-              throw new Error("ZK handoff replay detected — request rejected");
+              respond(
+                false,
+                undefined,
+                errorShape(
+                  ErrorCodes.INVALID_REQUEST,
+                  "invalid agent params: zk handoff replay detected — request rejected",
+                ),
+              );
+              return;
             }
-          }
-          const verifyResult = receiveHandoffCapsule(
-            zkCapsule as unknown as HandoffCapsule,
-            sessionAgent ?? canonicalKey,
-            resolveZkSpawnKey(),
-          );
-          if (!verifyResult.valid) {
-            throw new Error(`ZK handoff verification failed: ${verifyResult.reason}`);
           }
         }
       }

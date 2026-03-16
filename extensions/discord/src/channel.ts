@@ -308,7 +308,7 @@ const discordConfigAccessors = createScopedAccountConfigAccessors({
   resolveAccount: ({ cfg, accountId }) => resolveDiscordAccount({ cfg, accountId }),
   resolveAllowFrom: (account: ResolvedDiscordAccount) => account.config.dm?.allowFrom,
   formatAllowFrom: (allowFrom) =>
-    formatAllowFromLowercase({ allowFrom, stripPrefixRe: /^(user:|discord:|@|<@!?)/i }),
+    formatAllowFromLowercase({ allowFrom, stripPrefixRe: /^(user:|discord:|@|<@!?)|>$/gi }),
   resolveDefaultTo: (account: ResolvedDiscordAccount) => account.config.defaultTo,
 });
 

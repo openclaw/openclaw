@@ -614,7 +614,7 @@ export async function spawnSubagentDirect(
       senderAgentId: requesterAgentId ?? "unknown",
       receiverAgentId: targetAgentId ?? requesterAgentId ?? "unknown",
       task,
-      taskLabel: label || task.slice(0, 80),
+      taskLabel: label || "subagent-spawn",
       state: { spawnDepth: childDepth },
       parentSessionKey: requesterInternalKey,
       authorizedChannelIds: requesterOrigin?.channel ? [requesterOrigin.channel] : [],
