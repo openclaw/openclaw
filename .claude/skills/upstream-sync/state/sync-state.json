@@ -38,7 +38,13 @@
         "commits": 8,
         "mergedAt": "2026-03-16T17:00:00Z"
       },
-      "review": { "status": "pending", "branch": null, "pr": null, "commits": 20 },
+      "review": {
+        "status": "completed",
+        "branch": "sync/v2026.3.12-review",
+        "pr": 6,
+        "commits": 17,
+        "mergedAt": "2026-03-16T18:00:00Z"
+      },
       "ui-inspiration": { "status": "pending", "branch": null, "pr": null, "commits": 6 }
     }
   },
