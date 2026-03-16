@@ -4,6 +4,7 @@ import type { OpenClawConfig } from "../config/config.js";
 import {
   buildCanonicalSentMessageHookContext,
   deriveInboundMessageHookContext,
+  toPluginInboundClaimContext,
   toInternalMessagePreprocessedContext,
   toInternalMessageReceivedContext,
   toInternalMessageSentContext,
@@ -96,6 +97,53 @@ describe("message hook mappers", () => {
         senderUsername: "userone",
         senderE164: "+15551234567",
       }),
+    });
+  });
+
+  it("normalizes Discord channel targets for inbound claim contexts", () => {
+    const canonical = deriveInboundMessageHookContext(
+      makeInboundCtx({
+        Provider: "discord",
+        Surface: "discord",
+        OriginatingChannel: "discord",
+        To: "channel:123456789012345678",
+        OriginatingTo: "channel:123456789012345678",
+        GroupChannel: "general",
+        GroupSubject: "guild",
+      }),
+    );
+
+    expect(toPluginInboundClaimContext(canonical)).toEqual({
+      channelId: "discord",
+      accountId: "acc-1",
+      conversationId: "channel:123456789012345678",
+      parentConversationId: undefined,
+      senderId: "sender-1",
+      messageId: "msg-1",
+    });
+  });
+
+  it("normalizes Discord DM targets for inbound claim contexts", () => {
+    const canonical = deriveInboundMessageHookContext(
+      makeInboundCtx({
+        Provider: "discord",
+        Surface: "discord",
+        OriginatingChannel: "discord",
+        From: "discord:1177378744822943744",
+        To: "channel:1480574946919846079",
+        OriginatingTo: "channel:1480574946919846079",
+        GroupChannel: undefined,
+        GroupSubject: undefined,
+      }),
+    );
+
+    expect(toPluginInboundClaimContext(canonical)).toEqual({
+      channelId: "discord",
+      accountId: "acc-1",
+      conversationId: "user:1177378744822943744",
+      parentConversationId: undefined,
+      senderId: "sender-1",
+      messageId: "msg-1",
     });
   });
 

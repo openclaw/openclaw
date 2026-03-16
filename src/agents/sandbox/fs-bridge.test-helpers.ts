@@ -48,6 +48,10 @@ export function findCallByScriptFragment(fragment: string) {
   return mockedExecDockerRaw.mock.calls.find(([args]) => getDockerScript(args).includes(fragment));
 }
 
+export function findCallByDockerArg(position: number, value: string) {
+  return mockedExecDockerRaw.mock.calls.find(([args]) => getDockerArg(args, position) === value);
+}
+
 export function findCallsByScriptFragment(fragment: string) {
   return mockedExecDockerRaw.mock.calls.filter(([args]) =>
     getDockerScript(args).includes(fragment),
@@ -73,6 +77,36 @@ export function createSandbox(overrides?: Partial<SandboxContext>): SandboxConte
       containerPrefix: "moltbot-sbx-",
     },
   });
+}
+
+export async function createSeededSandboxFsBridge(
+  stateDir: string,
+  params?: {
+    rootFileName?: string;
+    rootContents?: string;
+    nestedFileName?: string;
+    nestedContents?: string;
+  },
+) {
+  const workspaceDir = path.join(stateDir, "workspace");
+  await fs.mkdir(path.join(workspaceDir, "nested"), { recursive: true });
+  await fs.writeFile(
+    path.join(workspaceDir, params?.rootFileName ?? "from.txt"),
+    params?.rootContents ?? "hello",
+    "utf8",
+  );
+  await fs.writeFile(
+    path.join(workspaceDir, "nested", params?.nestedFileName ?? "file.txt"),
+    params?.nestedContents ?? "bye",
+    "utf8",
+  );
+  const bridge = createSandboxFsBridge({
+    sandbox: createSandbox({
+      workspaceDir,
+      agentWorkspaceDir: workspaceDir,
+    }),
+  });
+  return { workspaceDir, bridge };
 }
 
 export async function withTempDir<T>(
@@ -142,12 +176,16 @@ export async function expectMkdirpAllowsExistingDirectory(params?: {
 
     await expect(bridge.mkdirp({ filePath: "memory/kemik" })).resolves.toBeUndefined();
 
-    const mkdirCall = findCallByScriptFragment('mkdir -p -- "$2"');
+    const mkdirCall = mockedExecDockerRaw.mock.calls.find(
+      ([args]) =>
+        getDockerScript(args).includes("operation = sys.argv[1]") &&
+        getDockerArg(args, 1) === "mkdirp",
+    );
     expect(mkdirCall).toBeDefined();
-    const mkdirParent = mkdirCall ? getDockerArg(mkdirCall[0], 1) : "";
-    const mkdirBase = mkdirCall ? getDockerArg(mkdirCall[0], 2) : "";
-    expect(mkdirParent).toBe("/workspace/memory");
-    expect(mkdirBase).toBe("kemik");
+    const mountRoot = mkdirCall ? getDockerArg(mkdirCall[0], 2) : "";
+    const relativePath = mkdirCall ? getDockerArg(mkdirCall[0], 3) : "";
+    expect(mountRoot).toBe("/workspace");
+    expect(relativePath).toBe("memory/kemik");
   });
 }
 

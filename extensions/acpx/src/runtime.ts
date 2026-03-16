@@ -13,7 +13,7 @@ import type {
 } from "openclaw/plugin-sdk/acpx";
 import { AcpRuntimeError } from "openclaw/plugin-sdk/acpx";
 import { toAcpMcpServers, type ResolvedAcpxPluginConfig } from "./config.js";
-import { checkAcpxVersion } from "./ensure.js";
+import { checkAcpxVersion, type AcpxVersionCheckResult } from "./ensure.js";
 import {
   parseJsonLines,
   parsePromptEventLine,
@@ -50,6 +50,28 @@ const ACPX_EXIT_CODE_PERMISSION_DENIED = 5;
 const ACPX_CAPABILITIES: AcpRuntimeCapabilities = {
   controls: ["session/set_mode", "session/set_config_option", "session/status"],
 };
+
+type AcpxHealthCheckResult =
+  | {
+      ok: true;
+      versionCheck: Extract<AcpxVersionCheckResult, { ok: true }>;
+    }
+  | {
+      ok: false;
+      failure:
+        | {
+            kind: "version-check";
+            versionCheck: Extract<AcpxVersionCheckResult, { ok: false }>;
+          }
+        | {
+            kind: "help-check";
+            result: Awaited<ReturnType<typeof spawnAndCollect>>;
+          }
+        | {
+            kind: "exception";
+            error: unknown;
+          };
+    };
 
 function formatPermissionModeGuidance(): string {
   return "Configure plugins.entries.acpx.config.permissionMode to one of: approve-reads, approve-all, deny-all.";
@@ -165,31 +187,69 @@ export class AcpxRuntime implements AcpRuntime {
     );
   }
 
-  async probeAvailability(): Promise<void> {
-    const versionCheck = await checkAcpxVersion({
+  private async checkVersion(): Promise<AcpxVersionCheckResult> {
+    return await checkAcpxVersion({
       command: this.config.command,
       cwd: this.config.cwd,
       expectedVersion: this.config.expectedVersion,
+      stripProviderAuthEnvVars: this.config.stripProviderAuthEnvVars,
       spawnOptions: this.spawnCommandOptions,
     });
+  }
+
+  private async runHelpCheck(): Promise<Awaited<ReturnType<typeof spawnAndCollect>>> {
+    return await spawnAndCollect(
+      {
+        command: this.config.command,
+        args: ["--help"],
+        cwd: this.config.cwd,
+        stripProviderAuthEnvVars: this.config.stripProviderAuthEnvVars,
+      },
+      this.spawnCommandOptions,
+    );
+  }
+
+  private async checkHealth(): Promise<AcpxHealthCheckResult> {
+    const versionCheck = await this.checkVersion();
     if (!versionCheck.ok) {
-      this.healthy = false;
-      return;
+      return {
+        ok: false,
+        failure: {
+          kind: "version-check",
+          versionCheck,
+        },
+      };
     }
 
     try {
-      const result = await spawnAndCollect(
-        {
-          command: this.config.command,
-          args: ["--help"],
-          cwd: this.config.cwd,
+      const result = await this.runHelpCheck();
+      if (result.error != null || (result.code ?? 0) !== 0) {
+        return {
+          ok: false,
+          failure: {
+            kind: "help-check",
+            result,
+          },
+        };
+      }
+      return {
+        ok: true,
+        versionCheck,
+      };
+    } catch (error) {
+      return {
+        ok: false,
+        failure: {
+          kind: "exception",
+          error,
         },
-        this.spawnCommandOptions,
-      );
-      this.healthy = result.error == null && (result.code ?? 0) === 0;
-    } catch {
-      this.healthy = false;
+      };
     }
+  }
+
+  async probeAvailability(): Promise<void> {
+    const result = await this.checkHealth();
+    this.healthy = result.ok;
   }
 
   async ensureSession(input: AcpRuntimeEnsureInput): Promise<AcpRuntimeHandle> {
@@ -309,6 +369,7 @@ export class AcpxRuntime implements AcpRuntime {
         command: this.config.command,
         args,
         cwd: state.cwd,
+        stripProviderAuthEnvVars: this.config.stripProviderAuthEnvVars,
       },
       this.spawnCommandOptions,
     );
@@ -491,13 +552,9 @@ export class AcpxRuntime implements AcpRuntime {
   }
 
   async doctor(): Promise<AcpRuntimeDoctorReport> {
-    const versionCheck = await checkAcpxVersion({
-      command: this.config.command,
-      cwd: this.config.cwd,
-      expectedVersion: this.config.expectedVersion,
-      spawnOptions: this.spawnCommandOptions,
-    });
-    if (!versionCheck.ok) {
+    const result = await this.checkHealth();
+    if (!result.ok && result.failure.kind === "version-check") {
+      const { versionCheck } = result.failure;
       this.healthy = false;
       const details = [
         versionCheck.expectedVersion ? `expected=${versionCheck.expectedVersion}` : null,
@@ -512,19 +569,12 @@ export class AcpxRuntime implements AcpRuntime {
       };
     }
 
-    try {
-      const result = await spawnAndCollect(
-        {
-          command: this.config.command,
-          args: ["--help"],
-          cwd: this.config.cwd,
-        },
-        this.spawnCommandOptions,
-      );
-      if (result.error) {
-        const spawnFailure = resolveSpawnFailure(result.error, this.config.cwd);
+    if (!result.ok && result.failure.kind === "help-check") {
+      const { result: helpResult } = result.failure;
+      this.healthy = false;
+      if (helpResult.error) {
+        const spawnFailure = resolveSpawnFailure(helpResult.error, this.config.cwd);
         if (spawnFailure === "missing-command") {
-          this.healthy = false;
           return {
             ok: false,
             code: "ACP_BACKEND_UNAVAILABLE",
@@ -533,42 +583,47 @@ export class AcpxRuntime implements AcpRuntime {
           };
         }
         if (spawnFailure === "missing-cwd") {
-          this.healthy = false;
           return {
             ok: false,
             code: "ACP_BACKEND_UNAVAILABLE",
             message: `ACP runtime working directory does not exist: ${this.config.cwd}`,
           };
         }
-        this.healthy = false;
         return {
           ok: false,
           code: "ACP_BACKEND_UNAVAILABLE",
-          message: result.error.message,
-          details: [String(result.error)],
+          message: helpResult.error.message,
+          details: [String(helpResult.error)],
         };
       }
-      if ((result.code ?? 0) !== 0) {
-        this.healthy = false;
-        return {
-          ok: false,
-          code: "ACP_BACKEND_UNAVAILABLE",
-          message: result.stderr.trim() || `acpx exited with code ${result.code ?? "unknown"}`,
-        };
-      }
-      this.healthy = true;
-      return {
-        ok: true,
-        message: `acpx command available (${this.config.command}, version ${versionCheck.version}${this.config.expectedVersion ? `, expected ${this.config.expectedVersion}` : ""})`,
-      };
-    } catch (error) {
-      this.healthy = false;
       return {
         ok: false,
         code: "ACP_BACKEND_UNAVAILABLE",
-        message: error instanceof Error ? error.message : String(error),
+        message:
+          helpResult.stderr.trim() || `acpx exited with code ${helpResult.code ?? "unknown"}`,
       };
     }
+
+    if (!result.ok) {
+      this.healthy = false;
+      const failure = result.failure;
+      return {
+        ok: false,
+        code: "ACP_BACKEND_UNAVAILABLE",
+        message:
+          failure.kind === "exception"
+            ? failure.error instanceof Error
+              ? failure.error.message
+              : String(failure.error)
+            : "acpx backend unavailable",
+      };
+    }
+
+    this.healthy = true;
+    return {
+      ok: true,
+      message: `acpx command available (${this.config.command}, version ${result.versionCheck.version}${this.config.expectedVersion ? `, expected ${this.config.expectedVersion}` : ""})`,
+    };
   }
 
   async cancel(input: { handle: AcpRuntimeHandle; reason?: string }): Promise<void> {
@@ -683,6 +738,7 @@ export class AcpxRuntime implements AcpRuntime {
       acpxCommand: this.config.command,
       cwd: params.cwd,
       agent: params.agent,
+      stripProviderAuthEnvVars: this.config.stripProviderAuthEnvVars,
       spawnOptions: this.spawnCommandOptions,
     });
     const resolved = buildMcpProxyAgentCommand({
@@ -705,6 +761,7 @@ export class AcpxRuntime implements AcpRuntime {
         command: this.config.command,
         args: params.args,
         cwd: params.cwd,
+        stripProviderAuthEnvVars: this.config.stripProviderAuthEnvVars,
       },
       this.spawnCommandOptions,
       {

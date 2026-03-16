@@ -30,6 +30,13 @@ function extractInputTypes(input: unknown[]) {
     .filter((t): t is string => typeof t === "string");
 }
 
+function extractInputMessages(input: unknown[]) {
+  return input.filter(
+    (item): item is Record<string, unknown> =>
+      !!item && typeof item === "object" && (item as Record<string, unknown>).type === "message",
+  );
+}
+
 const ZERO_USAGE = {
   input: 0,
   output: 0,
@@ -184,4 +191,36 @@ describe("openai-responses reasoning replay", () => {
     expect(types).toContain("reasoning");
     expect(types).toContain("message");
   });
+
+  it.each(["commentary", "final_answer"] as const)(
+    "replays assistant message phase metadata for %s",
+    async (phase) => {
+      const assistantWithText = buildAssistantMessage({
+        stopReason: "stop",
+        content: [
+          buildReasoningPart(),
+          {
+            type: "text",
+            text: "hello",
+            textSignature: JSON.stringify({ v: 1, id: `msg_${phase}`, phase }),
+          },
+        ],
+      });
+
+      const { input, types } = await runAbortedOpenAIResponsesStream({
+        messages: [
+          { role: "user", content: "Hi", timestamp: Date.now() },
+          assistantWithText,
+          { role: "user", content: "Ok", timestamp: Date.now() },
+        ],
+      });
+
+      expect(types).toContain("message");
+
+      const replayedMessage = extractInputMessages(input).find(
+        (item) => item.id === `msg_${phase}`,
+      );
+      expect(replayedMessage?.phase).toBe(phase);
+    },
+  );
 });

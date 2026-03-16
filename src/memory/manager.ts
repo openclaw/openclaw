@@ -125,6 +125,8 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
   >();
   private sessionWarm = new Set<string>();
   private syncing: Promise<void> | null = null;
+  private queuedSessionFiles = new Set<string>();
+  private queuedSessionSync: Promise<void> | null = null;
   private readonlyRecoveryAttempts = 0;
   private readonlyRecoverySuccesses = 0;
   private readonlyRecoveryFailures = 0;
@@ -157,6 +159,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
         provider: settings.provider,
         remote: settings.remote,
         model: settings.model,
+        outputDimensionality: settings.outputDimensionality,
         fallback: settings.fallback,
         local: settings.local,
       });
@@ -451,18 +454,52 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
   async sync(params?: {
     reason?: string;
     force?: boolean;
+    sessionFiles?: string[];
     progress?: (update: MemorySyncProgressUpdate) => void;
   }): Promise<void> {
     if (this.closed) {
       return;
     }
     if (this.syncing) {
+      if (params?.sessionFiles?.some((sessionFile) => sessionFile.trim().length > 0)) {
+        return this.enqueueTargetedSessionSync(params.sessionFiles);
+      }
       return this.syncing;
     }
     this.syncing = this.runSyncWithReadonlyRecovery(params).finally(() => {
       this.syncing = null;
     });
     return this.syncing ?? Promise.resolve();
+  }
+
+  private enqueueTargetedSessionSync(sessionFiles?: string[]): Promise<void> {
+    for (const sessionFile of sessionFiles ?? []) {
+      const trimmed = sessionFile.trim();
+      if (trimmed) {
+        this.queuedSessionFiles.add(trimmed);
+      }
+    }
+    if (this.queuedSessionFiles.size === 0) {
+      return this.syncing ?? Promise.resolve();
+    }
+    if (!this.queuedSessionSync) {
+      this.queuedSessionSync = (async () => {
+        try {
+          await this.syncing?.catch(() => undefined);
+          while (!this.closed && this.queuedSessionFiles.size > 0) {
+            const queuedSessionFiles = Array.from(this.queuedSessionFiles);
+            this.queuedSessionFiles.clear();
+            await this.sync({
+              reason: "queued-session-files",
+              sessionFiles: queuedSessionFiles,
+            });
+          }
+        } finally {
+          this.queuedSessionSync = null;
+        }
+      })();
+    }
+    return this.queuedSessionSync;
   }
 
   private isReadonlyDbError(err: unknown): boolean {
@@ -517,6 +554,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
   private async runSyncWithReadonlyRecovery(params?: {
     reason?: string;
     force?: boolean;
+    sessionFiles?: string[];
     progress?: (update: MemorySyncProgressUpdate) => void;
   }): Promise<void> {
     try {
