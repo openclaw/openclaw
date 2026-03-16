@@ -20,6 +20,16 @@ import {
 
 const SLACK_MAX_BLOCKS = 50;
 
+function resolveRenderedInteractiveBlocks(
+  interactive?: InteractiveReply,
+): SlackBlock[] | undefined {
+  if (!interactive) {
+    return undefined;
+  }
+  const blocks = buildSlackInteractiveBlocks(interactive);
+  return blocks.length > 0 ? blocks : undefined;
+}
+
 function resolveSlackSendIdentity(identity?: OutboundIdentity): SlackSendIdentity | undefined {
   if (!identity) {
     return undefined;
@@ -116,15 +126,15 @@ function resolveSlackBlocks(payload: {
   interactive?: InteractiveReply;
 }) {
   const slackData = payload.channelData?.slack;
-  const renderedInteractive = buildSlackInteractiveBlocks(payload.interactive);
+  const renderedInteractive = resolveRenderedInteractiveBlocks(payload.interactive);
   if (!slackData || typeof slackData !== "object" || Array.isArray(slackData)) {
-    return renderedInteractive.length > 0 ? renderedInteractive : undefined;
+    return renderedInteractive;
   }
   let existingBlocks: SlackBlock[] | undefined;
   existingBlocks = parseSlackBlocksInput((slackData as { blocks?: unknown }).blocks) as
     | SlackBlock[]
     | undefined;
-  const mergedBlocks = [...(existingBlocks ?? []), ...renderedInteractive];
+  const mergedBlocks = [...(existingBlocks ?? []), ...(renderedInteractive ?? [])];
   if (mergedBlocks.length === 0) {
     return undefined;
   }
@@ -173,17 +183,16 @@ export const slackOutbound: ChannelOutboundAdapter = {
         identity: ctx.identity,
       });
     }
-    const lastResult = await sendPayloadMediaSequence({
-      text: payload.text ?? "",
+    await sendPayloadMediaSequence({
+      text: "",
       mediaUrls,
-      send: async ({ text, mediaUrl, isFirst }) =>
+      send: async ({ text, mediaUrl }) =>
         await sendSlackOutboundMessage({
           cfg: ctx.cfg,
           to: ctx.to,
           text,
           mediaUrl,
           mediaLocalRoots: ctx.mediaLocalRoots,
-          blocks: isFirst ? blocks : undefined,
           accountId: ctx.accountId,
           deps: ctx.deps,
           replyToId: ctx.replyToId,
@@ -191,7 +200,18 @@ export const slackOutbound: ChannelOutboundAdapter = {
           identity: ctx.identity,
         }),
     });
-    return lastResult ?? { channel: "slack", messageId: "" };
+    return await sendSlackOutboundMessage({
+      cfg: ctx.cfg,
+      to: ctx.to,
+      text: payload.text ?? "",
+      mediaLocalRoots: ctx.mediaLocalRoots,
+      blocks,
+      accountId: ctx.accountId,
+      deps: ctx.deps,
+      replyToId: ctx.replyToId,
+      threadId: ctx.threadId,
+      identity: ctx.identity,
+    });
   },
   sendText: async ({ cfg, to, text, accountId, deps, replyToId, threadId, identity }) => {
     return await sendSlackOutboundMessage({

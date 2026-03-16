@@ -39,9 +39,9 @@ export async function handleSlackMessageAction(params: {
       allowEmpty: true,
     });
     const mediaUrl = readStringParam(actionParams, "media", { trim: false });
-    const blocks =
-      readSlackBlocksParam(actionParams) ??
-      buildSlackInteractiveBlocks(normalizeInteractiveReply(actionParams.interactive));
+    const interactive = normalizeInteractiveReply(actionParams.interactive);
+    const interactiveBlocks = interactive ? buildSlackInteractiveBlocks(interactive) : undefined;
+    const blocks = readSlackBlocksParam(actionParams) ?? interactiveBlocks;
     if (!content && !mediaUrl && !blocks) {
       throw new Error("Slack send requires message, blocks, or media.");
     }
@@ -56,9 +56,9 @@ export async function handleSlackMessageAction(params: {
         to,
         content: content ?? "",
         mediaUrl: mediaUrl ?? undefined,
-        blocks,
         accountId,
         threadTs: threadId ?? replyTo ?? undefined,
+        ...(blocks ? { blocks } : {}),
       },
       cfg,
       ctx.toolContext,

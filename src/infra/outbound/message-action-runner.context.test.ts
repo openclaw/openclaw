@@ -186,6 +186,32 @@ describe("runMessageAction context isolation", () => {
     ).rejects.toThrow(/message required/i);
   });
 
+  it("requires message when send only includes shared interactive payloads", async () => {
+    await expect(
+      runDrySend({
+        cfg: {
+          channels: {
+            telegram: {
+              botToken: "telegram-test",
+            },
+          },
+        } as OpenClawConfig,
+        actionParams: {
+          channel: "telegram",
+          target: "123456",
+          interactive: {
+            blocks: [
+              {
+                type: "buttons",
+                buttons: [{ label: "Approve", value: "approve" }],
+              },
+            ],
+          },
+        },
+      }),
+    ).rejects.toThrow(/message required/i);
+  });
+
   it.each([
     {
       name: "structured poll params",
