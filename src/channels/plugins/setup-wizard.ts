@@ -248,6 +248,15 @@ export type ChannelSetupWizard = {
   status: ChannelSetupWizardStatus;
   introNote?: ChannelSetupWizardNote;
   envShortcut?: ChannelSetupWizardEnvShortcut;
+  resolveAccountIdForConfigure?: (params: {
+    cfg: OpenClawConfig;
+    prompter: WizardPrompter;
+    options?: ChannelOnboardingConfigureContext["options"];
+    accountOverride?: string;
+    shouldPromptAccountIds: boolean;
+    listAccountIds: ChannelSetupWizardPlugin["config"]["listAccountIds"];
+    defaultAccountId: string;
+  }) => string | Promise<string>;
   resolveShouldPromptAccountIds?: (params: {
     cfg: OpenClawConfig;
     options?: ChannelOnboardingConfigureContext["options"];
@@ -416,15 +425,25 @@ export function buildChannelOnboardingAdapterFromSetupWizard(params: {
           options,
           shouldPromptAccountIds,
         }) ?? shouldPromptAccountIds;
-      const accountId = await resolveAccountIdForConfigure({
-        cfg,
-        prompter,
-        label: plugin.meta.label,
-        accountOverride: accountOverrides[plugin.id],
-        shouldPromptAccountIds: resolvedShouldPromptAccountIds,
-        listAccountIds: plugin.config.listAccountIds,
-        defaultAccountId,
-      });
+      const accountId = await (wizard.resolveAccountIdForConfigure
+        ? wizard.resolveAccountIdForConfigure({
+            cfg,
+            prompter,
+            options,
+            accountOverride: accountOverrides[plugin.id],
+            shouldPromptAccountIds: resolvedShouldPromptAccountIds,
+            listAccountIds: plugin.config.listAccountIds,
+            defaultAccountId,
+          })
+        : resolveAccountIdForConfigure({
+            cfg,
+            prompter,
+            label: plugin.meta.label,
+            accountOverride: accountOverrides[plugin.id],
+            shouldPromptAccountIds: resolvedShouldPromptAccountIds,
+            listAccountIds: plugin.config.listAccountIds,
+            defaultAccountId,
+          }));
 
       let next = cfg;
       let credentialValues = collectCredentialValues({
