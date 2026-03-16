@@ -33,7 +33,6 @@ import { logAcceptedEnvOption } from "../infra/env.js";
 import { createExecApprovalForwarder } from "../infra/exec-approval-forwarder.js";
 import { onHeartbeatEvent } from "../infra/heartbeat-events.js";
 import { startHeartbeatRunner, type HeartbeatRunner } from "../infra/heartbeat-runner.js";
-import { resolveHttpApprovalPolicy } from "../infra/http-approval-policy.js";
 import { resolveHttpAllowAlwaysPattern } from "../infra/http-approvals.js";
 import { getMachineDisplayName } from "../infra/machine-name.js";
 import { ensureOpenClawCliOnPath } from "../infra/path-env.js";
@@ -823,10 +822,14 @@ export async function startGatewayServer(
               (httpPolicy.agents as Record<string, { allowlist?: Array<{ pattern: string }> }>) ??
               {};
             const agent = agents[target] ?? {};
-            // Start from the agent's effective (resolved) allowlist so global
-            // entries are preserved when creating the first per-agent override.
-            const resolved = resolveHttpApprovalPolicy({ cfg, agentId: target });
-            const allowlist = [...resolved.allowlist];
+            // Use the raw per-agent allowlist. When creating a new per-agent
+            // override for the first time, seed with global entries so existing
+            // access is preserved without copying them on every subsequent write.
+            const existingAllowlist = Array.isArray(agent.allowlist) ? [...agent.allowlist] : [];
+            const allowlist =
+              existingAllowlist.length > 0
+                ? existingAllowlist
+                : [...(Array.isArray(httpPolicy.allowlist) ? httpPolicy.allowlist : [])];
             if (!allowlist.some((e) => e.pattern === pattern)) {
               allowlist.push({ pattern });
               agents[target] = { ...agent, allowlist };

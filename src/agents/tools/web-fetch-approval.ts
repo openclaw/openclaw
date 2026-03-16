@@ -69,6 +69,8 @@ export function withHttpApprovalGate(
 
   // Runtime cache of allow-always patterns so that subsequent fetches to the
   // same host are allowed immediately without waiting for config reload.
+  // Bounded to prevent unbounded growth in long-running sessions.
+  const MAX_RUNTIME_ALLOWED_PATTERNS = 1000;
   const runtimeAllowedPatterns: Array<{ pattern: string }> = [];
 
   return {
@@ -125,7 +127,11 @@ export function withHttpApprovalGate(
           // fetches to the same host bypass approval immediately.
           if (approvalDecision === "allow-always") {
             const pattern = resolveHttpAllowAlwaysPattern(url);
-            if (pattern && !runtimeAllowedPatterns.some((e) => e.pattern === pattern)) {
+            if (
+              pattern &&
+              runtimeAllowedPatterns.length < MAX_RUNTIME_ALLOWED_PATTERNS &&
+              !runtimeAllowedPatterns.some((e) => e.pattern === pattern)
+            ) {
               runtimeAllowedPatterns.push({ pattern });
             }
           }

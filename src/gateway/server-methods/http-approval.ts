@@ -48,8 +48,9 @@ export function createHttpApprovalHandlers(
         twoPhase?: boolean;
       };
       const twoPhase = p.twoPhase === true;
-      const timeoutMs =
+      const rawTimeout =
         typeof p.timeoutMs === "number" ? p.timeoutMs : DEFAULT_HTTP_APPROVAL_TIMEOUT_MS;
+      const timeoutMs = Math.max(1000, Math.min(600_000, rawTimeout));
       const url = typeof p.url === "string" ? p.url.trim() : "";
       if (!url) {
         respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "url is required"));
