@@ -10,24 +10,14 @@ describe("decodeFeishuFilename", () => {
     expect(decodeFeishuFilename("")).toBe("");
   });
 
-  it("decodes URL-encoded Chinese filename", () => {
+  it("decodes non-ASCII filenames", () => {
     expect(decodeFeishuFilename("%E6%B5%8B%E8%AF%95.pdf")).toBe("测试.pdf");
   });
 
-  it("decodes URL-encoded English filename", () => {
-    expect(decodeFeishuFilename("test%20file.pdf")).toBe("test file.pdf");
-  });
-
-  it("returns original string when decoding fails", () => {
-    expect(decodeFeishuFilename("invalid%")).toBe("invalid%");
-  });
-
-  it("preserves literal filenames without percent-encoding", () => {
-    // Filenames that don't look URL-encoded should be preserved
-    expect(decodeFeishuFilename("test file.pdf")).toBe("test file.pdf");
-    expect(decodeFeishuFilename("plain.txt")).toBe("plain.txt");
-    // Literal % not followed by hex should be preserved
-    expect(decodeFeishuFilename("50% off.txt")).toBe("50% off.txt");
+  it("preserves literal percent signs in filenames", () => {
+    // Literal % followed by hex should NOT be decoded
+    expect(decodeFeishuFilename("report%202026.pdf")).toBe("report%202026.pdf");
+    expect(decodeFeishuFilename("50%off.txt")).toBe("50%off.txt");
   });
 
   it("handles filenames without encoding", () => {
@@ -35,6 +25,6 @@ describe("decodeFeishuFilename", () => {
   });
 
   it("handles special characters", () => {
-    expect(decodeFeishuFilename("file%20%28%29.pdf")).toBe("file ().pdf");
+    expect(decodeFeishuFilename("file with spaces.pdf")).toBe("file with spaces.pdf");
   });
 });
