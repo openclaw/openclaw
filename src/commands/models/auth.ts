@@ -106,7 +106,12 @@ async function resolveModelsAuthContext(): Promise<ResolvedModelsAuthContext> {
   const agentDir = resolveAgentDir(config, defaultAgentId);
   const workspaceDir =
     resolveAgentWorkspaceDir(config, defaultAgentId) ?? resolveDefaultAgentWorkspaceDir();
-  const providers = resolvePluginProviders({ config, workspaceDir });
+  const providers = resolvePluginProviders({
+    config,
+    workspaceDir,
+    bundledProviderAllowlistCompat: true,
+    bundledProviderVitestCompat: true,
+  });
   return { config, agentDir, workspaceDir, providers };
 }
 
@@ -490,6 +495,7 @@ type LoginOptions = {
   provider?: string;
   method?: string;
   setDefault?: boolean;
+  yes?: boolean;
 };
 
 /**

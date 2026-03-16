@@ -35,6 +35,22 @@ export type ChannelExecApprovalForwardTarget = {
   source?: "session" | "target";
 };
 
+export type ChannelCapabilitiesDisplayTone = "default" | "muted" | "success" | "warn" | "error";
+
+export type ChannelCapabilitiesDisplayLine = {
+  text: string;
+  tone?: ChannelCapabilitiesDisplayTone;
+};
+
+export type ChannelCapabilitiesDiagnostics = {
+  lines?: ChannelCapabilitiesDisplayLine[];
+  details?: Record<string, unknown>;
+};
+
+type BivariantCallback<T extends (...args: never[]) => unknown> = {
+  bivarianceHack: T;
+}["bivarianceHack"];
+
 export type ChannelSetupAdapter = {
   resolveAccountId?: (params: {
     cfg: OpenClawConfig;
@@ -153,12 +169,25 @@ export type ChannelStatusAdapter<ResolvedAccount, Probe = unknown, Audit = unkno
     timeoutMs: number;
     cfg: OpenClawConfig;
   }) => Promise<Probe>;
+  formatCapabilitiesProbe?: BivariantCallback<
+    (params: { probe: Probe }) => ChannelCapabilitiesDisplayLine[]
+  >;
   auditAccount?: (params: {
     account: ResolvedAccount;
     timeoutMs: number;
     cfg: OpenClawConfig;
     probe?: Probe;
   }) => Promise<Audit>;
+  buildCapabilitiesDiagnostics?: BivariantCallback<
+    (params: {
+      account: ResolvedAccount;
+      timeoutMs: number;
+      cfg: OpenClawConfig;
+      probe?: Probe;
+      audit?: Audit;
+      target?: string;
+    }) => Promise<ChannelCapabilitiesDiagnostics | undefined>
+  >;
   buildAccountSnapshot?: (params: {
     account: ResolvedAccount;
     cfg: OpenClawConfig;

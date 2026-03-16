@@ -11,12 +11,9 @@ import {
   resolveStorePath,
   type SessionEntry,
 } from "../config/sessions.js";
-import {
-  classifySessionKey,
-  listAgentsForGateway,
-  resolveSessionModelRef,
-} from "../gateway/session-utils.js";
-import { resolveHeartbeatSummaryForAgent } from "../infra/heartbeat-runner.js";
+import { listGatewayAgentsBasic } from "../gateway/agent-list.js";
+import { classifySessionKey, resolveSessionModelRef } from "../gateway/session-utils.js";
+import { resolveHeartbeatSummaryForAgent } from "../infra/heartbeat-summary.js";
 import { peekSystemEvents } from "../infra/system-events.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
 import { resolveRuntimeServiceVersion } from "../version.js";
@@ -107,7 +104,7 @@ export async function getStatusSummary(
         resolveLinkChannelContext(cfg),
       )
     : null;
-  const agentList = listAgentsForGateway(cfg);
+  const agentList = listGatewayAgentsBasic(cfg);
   const heartbeatAgents: HeartbeatStatus[] = agentList.agents.map((agent) => {
     const summary = resolveHeartbeatSummaryForAgent(cfg, agent.id);
     return {

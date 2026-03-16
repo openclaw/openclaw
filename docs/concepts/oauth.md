@@ -92,7 +92,7 @@ Flow shape:
 2. paste the token into OpenClaw
 3. store as a token auth profile (no refresh)
 
-The wizard path is `openclaw setup --wizard` → auth choice `setup-token` (Anthropic).
+The wizard path is `openclaw onboard` → auth choice `setup-token` (Anthropic).
 
 ### OpenAI Codex (ChatGPT OAuth)
 
@@ -107,7 +107,7 @@ Flow shape (PKCE):
 5. exchange at `https://auth.openai.com/oauth/token`
 6. extract `accountId` from the access token and store `{ access, refresh, expires, accountId }`
 
-Wizard path is `openclaw setup --wizard` → auth choice `openai-codex`.
+Wizard path is `openclaw onboard` → auth choice `openai-codex`.
 
 ## Refresh + expiry
 

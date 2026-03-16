@@ -1250,13 +1250,16 @@ export async function runSecurityAudit(opts: SecurityAuditOptions): Promise<Secu
     }
   }
 
-  if (context.includeChannelSecurity && hasPotentialConfiguredChannels(cfg, env)) {
-    const plugins = context.plugins ?? (await loadChannelPlugins()).listChannelPlugins();
+  const shouldAuditChannelSecurity =
+    context.includeChannelSecurity &&
+    (context.plugins !== undefined || hasPotentialConfiguredChannels(cfg, env));
+  if (shouldAuditChannelSecurity) {
+    const channelPlugins = context.plugins ?? (await loadChannelPlugins()).listChannelPlugins();
     findings.push(
       ...(await collectChannelSecurityFindings({
         cfg,
         sourceConfig: context.sourceConfig,
-        plugins,
+        plugins: channelPlugins,
       })),
     );
   }
