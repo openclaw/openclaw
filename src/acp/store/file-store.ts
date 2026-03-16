@@ -296,7 +296,7 @@ export class AcpGatewayStore {
   async startRun(
     input: StartAcpGatewayRunInput,
   ): Promise<AcpGatewayStoreResult<AcpGatewayRunSummary>> {
-    return await this.mutate(async (snapshot) => {
+    return await this.mutate<AcpGatewayStoreResult<AcpGatewayRunSummary>>(async (snapshot) => {
       const now = this.now();
       const existingIdempotency =
         snapshot.idempotency[runStartIdempotencyKey(input.sessionKey, input.requestId)];
@@ -406,128 +406,134 @@ export class AcpGatewayStore {
   async appendWorkerEvent(
     input: AppendAcpGatewayWorkerEventInput,
   ): Promise<AcpGatewayStoreResult<AcpGatewayWorkerEventRecord>> {
-    return await this.mutate(async (snapshot) => {
-      const session = snapshot.sessions[input.sessionKey];
-      const run = snapshot.runs[input.runId];
-      const leaseMatch = assertActiveLeaseMatch({
-        session,
-        run,
-        nodeId: input.nodeId,
-        leaseId: input.leaseId,
-        leaseEpoch: input.leaseEpoch,
-      });
-      if (!leaseMatch.ok) {
-        return {
-          snapshot,
-          result: leaseMatch,
-        };
-      }
-      if (resolveWorkerEventType(input.event) === "done") {
-        return {
-          snapshot,
-          result: {
-            ok: false,
-            code: "ACP_EVENT_DONE_NOT_ALLOWED",
-            message:
-              "acp.worker.event must not carry terminal done events; use acp.worker.terminal.",
-          },
-        };
-      }
-      if (run.terminal) {
-        return {
-          snapshot,
-          result: {
-            ok: false,
-            code: "ACP_TERMINAL_CONFLICT",
-            message: `ACP run ${run.runId} already has canonical terminal ${run.terminal.terminalEventId}.`,
-          },
-        };
-      }
-      const duplicateIdempotency = snapshot.idempotency[input.eventId];
-      if (duplicateIdempotency) {
-        const duplicate = snapshot.events[input.eventId];
-        if (duplicate) {
+    return await this.mutate<AcpGatewayStoreResult<AcpGatewayWorkerEventRecord>>(
+      async (snapshot) => {
+        const session = snapshot.sessions[input.sessionKey];
+        const run = snapshot.runs[input.runId];
+        const leaseMatch = assertActiveLeaseMatch({
+          session,
+          run,
+          nodeId: input.nodeId,
+          leaseId: input.leaseId,
+          leaseEpoch: input.leaseEpoch,
+        });
+        if (!leaseMatch.ok) {
+          return {
+            snapshot,
+            result: leaseMatch,
+          };
+        }
+        if (resolveWorkerEventType(input.event) === "done") {
           return {
             snapshot,
             result: {
-              ok: true,
-              duplicate: true,
-              value: duplicate,
+              ok: false,
+              code: "ACP_EVENT_DONE_NOT_ALLOWED",
+              message:
+                "acp.worker.event must not carry terminal done events; use acp.worker.terminal.",
             },
           };
         }
-      }
-      const conflictingSeq = Object.values(snapshot.events).find(
-        (event) => event.runId === input.runId && event.seq === input.seq,
-      );
-      if (conflictingSeq) {
+        const activeRun = leaseMatch.value.run;
+        const activeSession = leaseMatch.value.session;
+        if (activeRun.terminal) {
+          return {
+            snapshot,
+            result: {
+              ok: false,
+              code: "ACP_TERMINAL_CONFLICT",
+              message:
+                `ACP run ${activeRun.runId} already has canonical terminal ` +
+                `${activeRun.terminal.terminalEventId}.`,
+            },
+          };
+        }
+        const duplicateIdempotency = snapshot.idempotency[input.eventId];
+        if (duplicateIdempotency) {
+          const duplicate = snapshot.events[input.eventId];
+          if (duplicate) {
+            return {
+              snapshot,
+              result: {
+                ok: true,
+                duplicate: true,
+                value: duplicate,
+              },
+            };
+          }
+        }
+        const conflictingSeq = Object.values(snapshot.events).find(
+          (event) => event.runId === input.runId && event.seq === input.seq,
+        );
+        if (conflictingSeq) {
+          return {
+            snapshot,
+            result: {
+              ok: false,
+              code: "ACP_EVENT_DUPLICATE_SEQ",
+              message: `ACP run ${input.runId} already recorded seq ${input.seq} as ${conflictingSeq.eventId}.`,
+            },
+          };
+        }
+        const now = this.now();
+        const event: AcpGatewayWorkerEventRecord = {
+          eventId: input.eventId,
+          kind: "event",
+          sessionKey: input.sessionKey,
+          runId: input.runId,
+          nodeId: input.nodeId,
+          leaseId: input.leaseId,
+          leaseEpoch: input.leaseEpoch,
+          seq: input.seq,
+          recordedAt: now,
+          payload: {
+            event: input.event,
+          },
+        };
+        snapshot.events[input.eventId] = event;
+        snapshot.idempotency[input.eventId] = {
+          key: input.eventId,
+          scope: "worker-event",
+          sessionKey: input.sessionKey,
+          runId: input.runId,
+          firstSeenAt: now,
+          eventId: input.eventId,
+        };
+        const nextRun: AcpGatewayRunRecord = {
+          ...activeRun,
+          updatedAt: now,
+          state: "running",
+          recoverableReason: undefined,
+          lastAcceptedSeq: input.seq,
+        };
+        const nextSession: AcpGatewaySessionRecord = {
+          ...activeSession,
+          updatedAt: now,
+          state: "running",
+          activeRunId: input.runId,
+          lease: {
+            ...leaseMatch.value.lease,
+            updatedAt: now,
+            currentRunId: input.runId,
+          },
+        };
+        snapshot.runs[input.runId] = nextRun;
+        snapshot.sessions[input.sessionKey] = nextSession;
         return {
           snapshot,
           result: {
-            ok: false,
-            code: "ACP_EVENT_DUPLICATE_SEQ",
-            message: `ACP run ${input.runId} already recorded seq ${input.seq} as ${conflictingSeq.eventId}.`,
+            ok: true,
+            value: event,
           },
         };
-      }
-      const now = this.now();
-      const event: AcpGatewayWorkerEventRecord = {
-        eventId: input.eventId,
-        kind: "event",
-        sessionKey: input.sessionKey,
-        runId: input.runId,
-        nodeId: input.nodeId,
-        leaseId: input.leaseId,
-        leaseEpoch: input.leaseEpoch,
-        seq: input.seq,
-        recordedAt: now,
-        payload: {
-          event: input.event,
-        },
-      };
-      snapshot.events[input.eventId] = event;
-      snapshot.idempotency[input.eventId] = {
-        key: input.eventId,
-        scope: "worker-event",
-        sessionKey: input.sessionKey,
-        runId: input.runId,
-        firstSeenAt: now,
-        eventId: input.eventId,
-      };
-      const nextRun: AcpGatewayRunRecord = {
-        ...run,
-        updatedAt: now,
-        state: "running",
-        recoverableReason: undefined,
-        lastAcceptedSeq: input.seq,
-      };
-      const nextSession: AcpGatewaySessionRecord = {
-        ...session,
-        updatedAt: now,
-        state: "running",
-        activeRunId: input.runId,
-        lease: {
-          ...leaseMatch.value.lease,
-          updatedAt: now,
-          currentRunId: input.runId,
-        },
-      };
-      snapshot.runs[input.runId] = nextRun;
-      snapshot.sessions[input.sessionKey] = nextSession;
-      return {
-        snapshot,
-        result: {
-          ok: true,
-          value: event,
-        },
-      };
-    });
+      },
+    );
   }
 
   async appendTerminal(
     input: AppendAcpGatewayTerminalInput,
   ): Promise<AcpGatewayStoreResult<AcpGatewayRunRecord>> {
-    return await this.mutate(async (snapshot) => {
+    return await this.mutate<AcpGatewayStoreResult<AcpGatewayRunRecord>>(async (snapshot) => {
       const session = snapshot.sessions[input.sessionKey];
       const run = snapshot.runs[input.runId];
       const leaseMatch = assertActiveLeaseMatch({
@@ -553,8 +559,10 @@ export class AcpGatewayStore {
           },
         };
       }
+      const activeRun = leaseMatch.value.run;
+      const activeSession = leaseMatch.value.session;
       const resolution = resolveCanonicalTerminal({
-        current: run.terminal,
+        current: activeRun.terminal,
         incoming: {
           terminalEventId: input.terminalEventId,
           finalSeq: input.finalSeq,
@@ -578,7 +586,7 @@ export class AcpGatewayStore {
           result: {
             ok: true,
             duplicate: true,
-            value: run,
+            value: activeRun,
           },
         };
       }
@@ -624,15 +632,15 @@ export class AcpGatewayStore {
       };
       const terminal = resolution.terminal;
       const nextRun: AcpGatewayRunRecord = {
-        ...run,
+        ...activeRun,
         updatedAt: now,
         state: terminal.status,
         recoverableReason: undefined,
-        lastAcceptedSeq: Math.max(run.lastAcceptedSeq, input.finalSeq),
+        lastAcceptedSeq: Math.max(activeRun.lastAcceptedSeq, input.finalSeq),
         terminal,
       };
       const nextSession: AcpGatewaySessionRecord = {
-        ...session,
+        ...activeSession,
         updatedAt: now,
         state: "idle",
         activeRunId: undefined,
@@ -689,7 +697,7 @@ export class AcpGatewayStore {
     leaseEpoch: number;
     reason: string;
   }): Promise<AcpGatewayStoreResult<AcpGatewayRunSummary>> {
-    return await this.mutate(async (snapshot) => {
+    return await this.mutate<AcpGatewayStoreResult<AcpGatewayRunSummary>>(async (snapshot) => {
       const session = snapshot.sessions[params.sessionKey];
       const activeRunId = session?.activeRunId;
       const run = activeRunId ? snapshot.runs[activeRunId] : undefined;
@@ -706,24 +714,26 @@ export class AcpGatewayStore {
           result: leaseMatch,
         };
       }
+      const activeRun = leaseMatch.value.run;
+      const activeSession = leaseMatch.value.session;
       const now = this.now();
       const nextRun: AcpGatewayRunRecord = {
-        ...run,
+        ...activeRun,
         updatedAt: now,
-        state: run.terminal ? run.state : "recovering",
-        recoverableReason: run.terminal ? undefined : params.reason,
+        state: activeRun.terminal ? activeRun.state : "recovering",
+        recoverableReason: activeRun.terminal ? undefined : params.reason,
       };
       const nextSession: AcpGatewaySessionRecord = {
-        ...session,
+        ...activeSession,
         updatedAt: now,
-        state: run.terminal ? "idle" : "recovering",
+        state: activeRun.terminal ? "idle" : "recovering",
         lease: {
           ...leaseMatch.value.lease,
-          state: run.terminal ? leaseMatch.value.lease.state : "suspect",
+          state: activeRun.terminal ? leaseMatch.value.lease.state : "suspect",
           updatedAt: now,
         },
       };
-      snapshot.runs[run.runId] = nextRun;
+      snapshot.runs[activeRun.runId] = nextRun;
       snapshot.sessions[params.sessionKey] = nextSession;
       return {
         snapshot,
@@ -745,7 +755,7 @@ export class AcpGatewayStore {
     leaseId: string;
     leaseEpoch: number;
   }): Promise<AcpGatewayStoreResult<AcpGatewayLeaseRecord>> {
-    return await this.mutate(async (snapshot) => {
+    return await this.mutate<AcpGatewayStoreResult<AcpGatewayLeaseRecord>>(async (snapshot) => {
       const session = snapshot.sessions[params.sessionKey];
       const run = snapshot.runs[params.runId];
       const leaseMatch = assertActiveLeaseMatch({
@@ -769,7 +779,7 @@ export class AcpGatewayStore {
         lastHeartbeatAt: now,
       };
       snapshot.sessions[params.sessionKey] = {
-        ...session,
+        ...leaseMatch.value.session,
         updatedAt: now,
         lease: nextLease,
       };

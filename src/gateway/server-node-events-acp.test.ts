@@ -143,6 +143,9 @@ describe("ACP worker node events", () => {
     });
 
     expect(response.ok).toBe(false);
+    if (response.ok) {
+      return;
+    }
     expect(response.error).toMatchObject({
       code: "INVALID_REQUEST",
       details: { code: "ACP_LEASE_EPOCH_STALE" },
@@ -179,6 +182,9 @@ describe("ACP worker node events", () => {
       },
     });
     expect(badEvent.ok).toBe(false);
+    if (badEvent.ok) {
+      return;
+    }
     expect(badEvent.error).toMatchObject({
       code: "INVALID_REQUEST",
       details: { code: "ACP_EVENT_DONE_NOT_ALLOWED" },

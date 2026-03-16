@@ -47,6 +47,15 @@ type ParsedAcpWorkerBase = {
   leaseEpoch: number;
 };
 
+type ParsedBasePayloadResult =
+  | {
+      value: ParsedAcpWorkerBase;
+      raw: Record<string, unknown>;
+    }
+  | {
+      error: ErrorShape;
+    };
+
 function parsePayloadObject(payloadJSON?: string | null): Record<string, unknown> | null {
   if (!payloadJSON) {
     return null;
@@ -78,6 +87,10 @@ function invalidPayload(message: string): AcpWorkerEventResponse {
   };
 }
 
+function invalidPayloadError(message: string): ErrorShape {
+  return errorShape(ErrorCodes.INVALID_REQUEST, message);
+}
+
 function mapStoreError(result: Extract<AcpGatewayStoreResult<unknown>, { ok: false }>): ErrorShape {
   return errorShape(ErrorCodes.INVALID_REQUEST, result.message, {
     details: {
@@ -89,10 +102,10 @@ function mapStoreError(result: Extract<AcpGatewayStoreResult<unknown>, { ok: fal
 function parseBasePayload(
   payloadJSON: string | null | undefined,
   authenticatedNodeId: string,
-): { ok: true; value: ParsedAcpWorkerBase; raw: Record<string, unknown> } | AcpWorkerEventResponse {
+): ParsedBasePayloadResult {
   const raw = parsePayloadObject(payloadJSON);
   if (!raw) {
-    return invalidPayload("ACP worker event payload must be a JSON object.");
+    return { error: invalidPayloadError("ACP worker event payload must be a JSON object.") };
   }
   const sessionKey = requireString(raw, "sessionKey");
   const runId = requireString(raw, "runId");
@@ -100,17 +113,20 @@ function parseBasePayload(
   const leaseId = requireString(raw, "leaseId");
   const leaseEpoch = requirePositiveInteger(raw, "leaseEpoch");
   if (!sessionKey || !runId || !nodeId || !leaseId || leaseEpoch === null) {
-    return invalidPayload(
-      "ACP worker event payload must include sessionKey, runId, nodeId, leaseId, and leaseEpoch.",
-    );
+    return {
+      error: invalidPayloadError(
+        "ACP worker event payload must include sessionKey, runId, nodeId, leaseId, and leaseEpoch.",
+      ),
+    };
   }
   if (nodeId !== authenticatedNodeId) {
-    return invalidPayload(
-      `ACP worker payload nodeId ${nodeId} does not match authenticated node ${authenticatedNodeId}.`,
-    );
+    return {
+      error: invalidPayloadError(
+        `ACP worker payload nodeId ${nodeId} does not match authenticated node ${authenticatedNodeId}.`,
+      ),
+    };
   }
   return {
-    ok: true,
     value: {
       sessionKey,
       runId,
@@ -137,8 +153,11 @@ export async function handleAcpWorkerNodeEvent(params: {
   payloadJSON?: string | null;
 }): Promise<AcpWorkerEventResponse> {
   const parsed = parseBasePayload(params.payloadJSON, params.nodeId);
-  if (!parsed.ok) {
-    return parsed;
+  if ("error" in parsed) {
+    return {
+      ok: false,
+      error: parsed.error,
+    };
   }
 
   if (params.event === "acp.worker.event") {

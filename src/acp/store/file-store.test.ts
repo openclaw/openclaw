@@ -4,8 +4,11 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { AcpGatewayStore } from "./file-store.js";
 
+const tempRoots: string[] = [];
+
 async function createStore() {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "acp-gateway-store-"));
+  tempRoots.push(root);
   return {
     root,
     filePath: path.join(root, "gateway-store.json"),
@@ -28,17 +31,18 @@ async function seedRun(
   expect(started.ok).toBe(true);
 }
 
-afterEach(async (context) => {
-  const root = (context.task.meta.root as string | undefined) ?? "";
-  if (root) {
-    await fs.rm(root, { recursive: true, force: true });
+afterEach(async () => {
+  while (tempRoots.length > 0) {
+    const root = tempRoots.pop();
+    if (root) {
+      await fs.rm(root, { recursive: true, force: true });
+    }
   }
 });
 
 describe("AcpGatewayStore", () => {
-  it("persists sessions runs events checkpoints and idempotency across reload", async (context) => {
-    const { root, filePath, store } = await createStore();
-    context.task.meta.root = root;
+  it("persists sessions runs events checkpoints and idempotency across reload", async () => {
+    const { filePath, store } = await createStore();
 
     await seedRun(store);
     const appendResult = await store.appendWorkerEvent({
@@ -73,9 +77,8 @@ describe("AcpGatewayStore", () => {
     expect(snapshot.idempotency["run-start:agent:main:acp:test:req-1"]?.scope).toBe("run-start");
   });
 
-  it("rejects stale lease epochs after lease replacement", async (context) => {
-    const { root, store } = await createStore();
-    context.task.meta.root = root;
+  it("rejects stale lease epochs after lease replacement", async () => {
+    const { store } = await createStore();
 
     await seedRun(store);
     const replaced = await store.startRun({
@@ -108,9 +111,8 @@ describe("AcpGatewayStore", () => {
     expect(stale.code).toBe("ACP_LEASE_EPOCH_STALE");
   });
 
-  it("treats acp.worker.terminal as the single terminal authority", async (context) => {
-    const { root, store } = await createStore();
-    context.task.meta.root = root;
+  it("treats acp.worker.terminal as the single terminal authority", async () => {
+    const { store } = await createStore();
 
     await seedRun(store);
     const badEvent = await store.appendWorkerEvent({
@@ -184,9 +186,8 @@ describe("AcpGatewayStore", () => {
     expect(conflicting.code).toBe("ACP_TERMINAL_CONFLICT");
   });
 
-  it("reloads recoverable state after a suspect lease transition", async (context) => {
-    const { root, filePath, store } = await createStore();
-    context.task.meta.root = root;
+  it("reloads recoverable state after a suspect lease transition", async () => {
+    const { filePath, store } = await createStore();
 
     await seedRun(store);
     const suspect = await store.markLeaseSuspect({
