@@ -1,7 +1,4 @@
-import type {
-  ChannelOnboardingAdapter,
-  ChannelOnboardingDmPolicy,
-} from "../../../src/channels/plugins/onboarding-types.js";
+import type { ChannelOnboardingDmPolicy } from "../../../src/channels/plugins/onboarding-types.js";
 import {
   noteChannelLookupFailure,
   noteChannelLookupSummary,
@@ -16,12 +13,8 @@ import {
   applyAccountNameToChannelSection,
   migrateBaseNameToDefaultAccount,
 } from "../../../src/channels/plugins/setup-helpers.js";
-import {
-  buildChannelOnboardingAdapterFromSetupWizard,
-  type ChannelSetupWizard,
-} from "../../../src/channels/plugins/setup-wizard.js";
+import type { ChannelSetupWizard } from "../../../src/channels/plugins/setup-wizard.js";
 import type { ChannelSetupAdapter } from "../../../src/channels/plugins/types.adapters.js";
-import { getChatChannelMeta } from "../../../src/channels/registry.js";
 import type { OpenClawConfig } from "../../../src/config/config.js";
 import type { DiscordGuildEntry } from "../../../src/config/types.discord.js";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../../../src/routing/session-key.js";
@@ -397,27 +390,3 @@ export const discordSetupWizard: ChannelSetupWizard = {
   dmPolicy: discordDmPolicy,
   disable: (cfg) => setOnboardingChannelEnabled(cfg, channel, false),
 };
-
-const discordSetupPlugin = {
-  id: channel,
-  meta: {
-    ...getChatChannelMeta(channel),
-    quickstartAllowFrom: true,
-  },
-  config: {
-    listAccountIds: listDiscordAccountIds,
-    resolveAccount: (cfg: OpenClawConfig, accountId?: string | null) =>
-      resolveDiscordAccount({ cfg, accountId }),
-    resolveAllowFrom: ({ cfg, accountId }: { cfg: OpenClawConfig; accountId?: string | null }) => {
-      const resolved = resolveDiscordAccount({ cfg, accountId });
-      return resolved.config.allowFrom ?? resolved.config.dm?.allowFrom;
-    },
-  },
-  setup: discordSetupAdapter,
-} as const;
-
-export const discordOnboardingAdapter: ChannelOnboardingAdapter =
-  buildChannelOnboardingAdapterFromSetupWizard({
-    plugin: discordSetupPlugin,
-    wizard: discordSetupWizard,
-  });
