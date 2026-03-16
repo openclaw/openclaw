@@ -1,0 +1,9 @@
+{
+  "id": "xiaomi",
+  "providers": ["xiaomi"],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}
