@@ -3,13 +3,6 @@ import { z } from "zod";
 export { z };
 import { buildSecretInputSchema, hasConfiguredSecretInput } from "./secret-input.js";
 
-const ChannelActionsSchema = z
-  .object({
-    reactions: z.boolean().optional(),
-  })
-  .strict()
-  .optional();
-
 const DmPolicySchema = z.enum(["open", "pairing", "allowlist"]);
 const GroupPolicySchema = z.union([
   z.enum(["open", "allowlist", "disabled"]),
@@ -138,6 +131,11 @@ const ReactionNotificationModeSchema = z.enum(["off", "own", "all"]).optional();
  */
 const ReplyInThreadSchema = z.enum(["disabled", "enabled"]).optional();
 
+// Reply-to mode for group chats: controls whether bot replies use Feishu's reply API
+// - "off": Never use reply API, send plain messages directly to group main interface
+// - "on" (default): Use reply API, keep existing behavior
+const ReplyToModeSchema = z.enum(["on", "off"]).optional();
+
 export const FeishuGroupSchema = z
   .object({
     requireMention: z.boolean().optional(),
@@ -177,8 +175,8 @@ const FeishuSharedConfigShape = {
   renderMode: RenderModeSchema,
   streaming: StreamingModeSchema,
   tools: FeishuToolsConfigSchema,
-  actions: ChannelActionsSchema,
   replyInThread: ReplyInThreadSchema,
+  replyToMode: ReplyToModeSchema,
   reactionNotifications: ReactionNotificationModeSchema,
   typingIndicator: z.boolean().optional(),
   resolveSenderNames: z.boolean().optional(),
