@@ -18,6 +18,11 @@ export type PathSafetyCheck = {
   options: PathSafetyOptions;
 };
 
+export type AnchoredSandboxEntry = {
+  canonicalParentPath: string;
+  basename: string;
+};
+
 export type PinnedSandboxEntry = {
   mountRootPath: string;
   relativeParentPath: string;
