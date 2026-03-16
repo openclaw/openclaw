@@ -1,5 +1,9 @@
 import type { Command } from "commander";
-import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
+import {
+  resolveAgentIdByWorkspacePath,
+  resolveAgentWorkspaceDir,
+  resolveDefaultAgentId,
+} from "../agents/agent-scope.js";
 import { loadConfig } from "../config/config.js";
 import { defaultRuntime } from "../runtime.js";
 import { formatDocsLink } from "../terminal/links.js";
@@ -19,7 +23,9 @@ type SkillStatusReport = Awaited<
 
 async function loadSkillsStatusReport(): Promise<SkillStatusReport> {
   const config = loadConfig();
-  const workspaceDir = resolveAgentWorkspaceDir(config, resolveDefaultAgentId(config));
+  const agentId =
+    resolveAgentIdByWorkspacePath(config, process.cwd()) ?? resolveDefaultAgentId(config);
+  const workspaceDir = resolveAgentWorkspaceDir(config, agentId);
   const { buildWorkspaceSkillStatus } = await import("../agents/skills-status.js");
   return buildWorkspaceSkillStatus(workspaceDir, { config });
 }

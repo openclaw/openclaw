@@ -2,6 +2,7 @@ import { Command } from "commander";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const loadConfigMock = vi.fn();
+const resolveAgentIdByWorkspacePathMock = vi.fn();
 const resolveAgentWorkspaceDirMock = vi.fn();
 const resolveDefaultAgentIdMock = vi.fn();
 const buildWorkspaceSkillStatusMock = vi.fn();
@@ -20,6 +21,7 @@ vi.mock("../config/config.js", () => ({
 }));
 
 vi.mock("../agents/agent-scope.js", () => ({
+  resolveAgentIdByWorkspacePath: resolveAgentIdByWorkspacePathMock,
   resolveAgentWorkspaceDir: resolveAgentWorkspaceDirMock,
   resolveDefaultAgentId: resolveDefaultAgentIdMock,
 }));
@@ -60,6 +62,7 @@ describe("registerSkillsCli", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     loadConfigMock.mockReturnValue({ gateway: {} });
+    resolveAgentIdByWorkspacePathMock.mockReturnValue(undefined);
     resolveDefaultAgentIdMock.mockReturnValue("main");
     resolveAgentWorkspaceDirMock.mockReturnValue("/tmp/workspace");
     buildWorkspaceSkillStatusMock.mockReturnValue(report);
@@ -71,6 +74,8 @@ describe("registerSkillsCli", () => {
   it("runs list command with resolved report and formatter options", async () => {
     await runCli(["skills", "list", "--eligible", "--verbose", "--json"]);
 
+    expect(resolveAgentIdByWorkspacePathMock).toHaveBeenCalledWith({ gateway: {} }, process.cwd());
+    expect(resolveAgentWorkspaceDirMock).toHaveBeenCalledWith({ gateway: {} }, "main");
     expect(buildWorkspaceSkillStatusMock).toHaveBeenCalledWith("/tmp/workspace", {
       config: { gateway: {} },
     });
@@ -83,6 +88,19 @@ describe("registerSkillsCli", () => {
       }),
     );
     expect(runtime.log).toHaveBeenCalledWith("skills-list-output");
+  });
+
+  it("prefers the agent inferred from cwd over the default agent", async () => {
+    resolveAgentIdByWorkspacePathMock.mockReturnValue("ops");
+    resolveAgentWorkspaceDirMock.mockReturnValue("/tmp/ops-workspace");
+
+    await runCli(["skills", "list"]);
+
+    expect(resolveAgentWorkspaceDirMock).toHaveBeenCalledWith({ gateway: {} }, "ops");
+    expect(resolveDefaultAgentIdMock).not.toHaveBeenCalled();
+    expect(buildWorkspaceSkillStatusMock).toHaveBeenCalledWith("/tmp/ops-workspace", {
+      config: { gateway: {} },
+    });
   });
 
   it("runs info command and forwards skill name", async () => {
