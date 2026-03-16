@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { HISTORY_CONTEXT_MARKER } from "../auto-reply/reply/history.js";
 import { CURRENT_MESSAGE_MARKER } from "../auto-reply/reply/mentions.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
@@ -21,6 +21,12 @@ beforeAll(async () => {
   ({ startGatewayServer } = await import("./server.js"));
   enabledPort = await getFreePort();
   enabledServer = await startServer(enabledPort);
+});
+
+beforeEach(() => {
+  testState.agentsConfig = {
+    list: [{ id: "alpha" }, { id: "beta" }],
+  };
 });
 
 afterAll(async () => {
@@ -183,6 +189,13 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
       {
         await expectAgentSessionKeyMatch({
           body: { model: "openclaw", messages: [{ role: "user", content: "hi" }] },
+          matcher: /^agent:main:/,
+        });
+      }
+
+      {
+        await expectAgentSessionKeyMatch({
+          body: { model: "openclaw", messages: [{ role: "user", content: "hi" }] },
           headers: { "x-openclaw-agent-id": "beta" },
           matcher: /^agent:beta:/,
         });
@@ -207,6 +220,33 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
           headers: { "x-openclaw-agent-id": "alpha" },
           matcher: /^agent:alpha:/,
         });
+      }
+
+      {
+        agentCommand.mockClear();
+        const res = await postChatCompletions(
+          port,
+          { model: "openclaw", messages: [{ role: "user", content: "hi" }] },
+          { "x-openclaw-agent-id": "ghost" },
+        );
+        expect(res.status).toBe(400);
+        const json = (await res.json()) as { error?: { type?: string; message?: string } };
+        expect(json.error?.type).toBe("invalid_request_error");
+        expect(json.error?.message ?? "").toContain('Unknown agent id "ghost"');
+        expect(agentCommand).toHaveBeenCalledTimes(0);
+      }
+
+      {
+        agentCommand.mockClear();
+        const res = await postChatCompletions(port, {
+          model: "openclaw:ghost",
+          messages: [{ role: "user", content: "hi" }],
+        });
+        expect(res.status).toBe(400);
+        const json = (await res.json()) as { error?: { type?: string; message?: string } };
+        expect(json.error?.type).toBe("invalid_request_error");
+        expect(json.error?.message ?? "").toContain('Unknown agent id "ghost"');
+        expect(agentCommand).toHaveBeenCalledTimes(0);
       }
 
       {
