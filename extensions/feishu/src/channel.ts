@@ -22,6 +22,7 @@ import {
   resolveDefaultFeishuAccountId,
 } from "./accounts.js";
 import { FeishuConfigSchema } from "./config-schema.js";
+import { parseFeishuConversationId } from "./conversation-id.js";
 import { listFeishuDirectoryPeers, listFeishuDirectoryGroups } from "./directory.static.js";
 import { resolveFeishuGroupToolPolicy } from "./policy.js";
 import { getFeishuRuntime } from "./runtime.js";
@@ -93,6 +94,77 @@ function areAnyFeishuReactionActionsEnabled(cfg: ClawdbotConfig): boolean {
     }
   }
   return false;
+}
+
+function isSupportedFeishuDirectConversationId(conversationId: string): boolean {
+  const trimmed = conversationId.trim();
+  if (!trimmed || trimmed.includes(":")) {
+    return false;
+  }
+  if (trimmed.startsWith("oc_") || trimmed.startsWith("on_")) {
+    return false;
+  }
+  return true;
+}
+
+function normalizeFeishuAcpConversationId(conversationId: string) {
+  const parsed = parseFeishuConversationId({ conversationId });
+  if (
+    !parsed ||
+    (parsed.scope !== "group_topic" &&
+      parsed.scope !== "group_topic_sender" &&
+      !isSupportedFeishuDirectConversationId(parsed.canonicalConversationId))
+  ) {
+    return null;
+  }
+  return {
+    conversationId: parsed.canonicalConversationId,
+    parentConversationId:
+      parsed.scope === "group_topic" || parsed.scope === "group_topic_sender"
+        ? parsed.chatId
+        : undefined,
+  };
+}
+
+function matchFeishuAcpConversation(params: {
+  bindingConversationId: string;
+  conversationId: string;
+  parentConversationId?: string;
+}) {
+  const binding = normalizeFeishuAcpConversationId(params.bindingConversationId);
+  if (!binding) {
+    return null;
+  }
+  const incoming = parseFeishuConversationId({
+    conversationId: params.conversationId,
+    parentConversationId: params.parentConversationId,
+  });
+  if (
+    !incoming ||
+    (incoming.scope !== "group_topic" &&
+      incoming.scope !== "group_topic_sender" &&
+      !isSupportedFeishuDirectConversationId(incoming.canonicalConversationId))
+  ) {
+    return null;
+  }
+  const matchesCanonicalConversation = binding.conversationId === incoming.canonicalConversationId;
+  const matchesParentTopicForSenderScopedConversation =
+    incoming.scope === "group_topic_sender" &&
+    binding.parentConversationId === incoming.chatId &&
+    binding.conversationId === `${incoming.chatId}:topic:${incoming.topicId}`;
+  if (!matchesCanonicalConversation && !matchesParentTopicForSenderScopedConversation) {
+    return null;
+  }
+  return {
+    conversationId: matchesParentTopicForSenderScopedConversation
+      ? binding.conversationId
+      : incoming.canonicalConversationId,
+    parentConversationId:
+      incoming.scope === "group_topic" || incoming.scope === "group_topic_sender"
+        ? incoming.chatId
+        : undefined,
+    matchPriority: matchesCanonicalConversation ? 2 : 1,
+  };
 }
 
 export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount> = {
@@ -392,6 +464,12 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount> = {
         groupAllowFromPath: "channels.feishu.groupAllowFrom",
       });
     },
+  },
+  acpBindings: {
+    normalizeConfiguredBindingTarget: ({ conversationId }) =>
+      normalizeFeishuAcpConversationId(conversationId),
+    matchConfiguredBinding: ({ bindingConversationId, conversationId, parentConversationId }) =>
+      matchFeishuAcpConversation({ bindingConversationId, conversationId, parentConversationId }),
   },
   setup: feishuSetupAdapter,
   setupWizard: feishuSetupWizard,
