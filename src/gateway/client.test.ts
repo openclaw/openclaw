@@ -363,6 +363,28 @@ describe("GatewayClient close handling", () => {
     }
   });
 
+  it("cancels a pending reconnect when stop is called", async () => {
+    vi.useFakeTimers();
+    try {
+      const client = new GatewayClient({
+        url: "ws://127.0.0.1:18789",
+      });
+
+      client.start();
+      getLatestWs().emitClose(1012, "service restart");
+      expect(vi.getTimerCount()).toBe(1);
+
+      // A stopped client should not keep retrying in the background.
+      client.stop();
+      expect(vi.getTimerCount()).toBe(0);
+      await vi.advanceTimersByTimeAsync(1_000);
+
+      expect(wsInstances).toHaveLength(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("does not clear persisted device auth when explicit shared token is provided", () => {
     const onClose = vi.fn();
     const identity: DeviceIdentity = {
