@@ -873,7 +873,10 @@ async function agentCommandInternal(
       });
     }
 
-    const needsSkillsSnapshot = isNewSession || !sessionEntry?.skillsSnapshot;
+    const needsSkillsSnapshot =
+      isNewSession ||
+      !sessionEntry?.skillsSnapshot ||
+      sessionEntry.skillsSnapshot.snapshotVersion !== skillsSnapshotVersion;
     const skillsSnapshotVersion = getSkillsSnapshotVersion(workspaceDir);
     const skillFilter = resolveAgentSkillsFilter(cfg, sessionAgentId);
     const skillsSnapshot = needsSkillsSnapshot
