@@ -12,6 +12,8 @@ type GetPluginCommandSpecsFn =
 type MatchPluginCommandFn = typeof import("../../../src/plugins/commands.js").matchPluginCommand;
 type ExecutePluginCommandFn =
   typeof import("../../../src/plugins/commands.js").executePluginCommand;
+type DispatchReplyWithBufferedBlockDispatcherFn =
+  typeof import("../../../src/auto-reply/reply/provider-dispatcher.js").dispatchReplyWithBufferedBlockDispatcher;
 type AnyMock = MockFn<(...args: unknown[]) => unknown>;
 type AnyAsyncMock = MockFn<(...args: unknown[]) => Promise<unknown>>;
 type NativeCommandHarness = {
@@ -41,6 +43,27 @@ vi.mock("../../../src/plugins/commands.js", () => ({
   getPluginCommandSpecs: pluginCommandMocks.getPluginCommandSpecs,
   matchPluginCommand: pluginCommandMocks.matchPluginCommand,
   executePluginCommand: pluginCommandMocks.executePluginCommand,
+}));
+
+const replyDispatcherMocks = vi.hoisted(() => ({
+  dispatchReplyWithBufferedBlockDispatcher: vi.fn<DispatchReplyWithBufferedBlockDispatcherFn>(
+    async () =>
+      ({
+        queuedFinal: false,
+        counts: {} as Awaited<
+          ReturnType<
+            typeof import("../../../src/auto-reply/reply/provider-dispatcher.js").dispatchReplyWithBufferedBlockDispatcher
+          >
+        >["counts"],
+      }) as Awaited<ReturnType<DispatchReplyWithBufferedBlockDispatcherFn>>,
+  ),
+}));
+export const dispatchReplyWithBufferedBlockDispatcher =
+  replyDispatcherMocks.dispatchReplyWithBufferedBlockDispatcher;
+
+vi.mock("../../../src/auto-reply/reply/provider-dispatcher.js", () => ({
+  dispatchReplyWithBufferedBlockDispatcher:
+    replyDispatcherMocks.dispatchReplyWithBufferedBlockDispatcher,
 }));
 
 const deliveryMocks = vi.hoisted(() => ({
@@ -118,6 +141,8 @@ export function createNativeCommandsHarness(params?: {
       handlers[name] = handler;
     },
   } as const;
+
+  replyDispatcherMocks.dispatchReplyWithBufferedBlockDispatcher.mockClear();
 
   registerTelegramNativeCommands({
     bot: bot as unknown as Parameters<typeof registerTelegramNativeCommands>[0]["bot"],

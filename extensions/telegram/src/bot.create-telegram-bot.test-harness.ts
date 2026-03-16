@@ -39,6 +39,22 @@ vi.mock("../../../src/config/config.js", async (importOriginal) => {
   };
 });
 
+const { loadModelCatalog } = vi.hoisted((): { loadModelCatalog: AnyAsyncMock } => ({
+  loadModelCatalog: vi.fn(async () => []),
+}));
+
+export function getLoadModelCatalogMock(): AnyAsyncMock {
+  return loadModelCatalog;
+}
+
+vi.mock("../../../src/agents/model-catalog.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../../src/agents/model-catalog.js")>();
+  return {
+    ...actual,
+    loadModelCatalog,
+  };
+});
+
 vi.mock("../../../src/config/sessions.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../../src/config/sessions.js")>();
   return {
@@ -287,6 +303,8 @@ beforeEach(() => {
   resetInboundDedupe();
   loadConfig.mockReset();
   loadConfig.mockReturnValue(DEFAULT_TELEGRAM_TEST_CONFIG);
+  loadModelCatalog.mockReset();
+  loadModelCatalog.mockResolvedValue([]);
   loadWebMedia.mockReset();
   readChannelAllowFromStore.mockReset();
   readChannelAllowFromStore.mockResolvedValue([]);

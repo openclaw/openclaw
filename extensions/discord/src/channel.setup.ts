@@ -1,8 +1,5 @@
 import { createScopedChannelConfigBase } from "openclaw/plugin-sdk/compat";
-import {
-  createScopedAccountConfigAccessors,
-  formatAllowFromLowercase,
-} from "openclaw/plugin-sdk/compat";
+import { createScopedAccountConfigAccessors } from "openclaw/plugin-sdk/compat";
 import {
   buildChannelConfigSchema,
   DiscordConfigSchema,
@@ -14,6 +11,7 @@ import {
   type ChannelPlugin,
   type ResolvedDiscordAccount,
 } from "openclaw/plugin-sdk/discord";
+import { formatDiscordAllowFromEntries } from "./allow-from.js";
 import { createDiscordSetupWizardProxy, discordSetupAdapter } from "./setup-core.js";
 
 async function loadDiscordChannelRuntime() {
@@ -23,7 +21,7 @@ async function loadDiscordChannelRuntime() {
 const discordConfigAccessors = createScopedAccountConfigAccessors({
   resolveAccount: ({ cfg, accountId }) => resolveDiscordAccount({ cfg, accountId }),
   resolveAllowFrom: (account: ResolvedDiscordAccount) => account.config.dm?.allowFrom,
-  formatAllowFrom: (allowFrom) => formatAllowFromLowercase({ allowFrom }),
+  formatAllowFrom: (allowFrom) => formatDiscordAllowFromEntries(allowFrom),
   resolveDefaultTo: (account: ResolvedDiscordAccount) => account.config.defaultTo,
 });
 

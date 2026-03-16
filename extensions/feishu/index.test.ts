@@ -52,7 +52,6 @@ describe("feishu plugin register", () => {
       registrationMode: "full",
       on: vi.fn(),
       config: {},
-      registrationMode: "full",
     } as unknown as OpenClawPluginApi;
 
     plugin.register(api);

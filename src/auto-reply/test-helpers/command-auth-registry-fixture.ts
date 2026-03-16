@@ -1,12 +1,13 @@
 import { afterEach, beforeEach } from "vitest";
+import { discordPlugin } from "../../../extensions/discord/src/channel.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
-import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
+import { createTestRegistry } from "../../test-utils/channel-plugins.js";
 
 export const createDiscordRegistry = () =>
   createTestRegistry([
     {
       pluginId: "discord",
-      plugin: createOutboundTestPlugin({ id: "discord", outbound: { deliveryMode: "direct" } }),
+      plugin: discordPlugin,
       source: "test",
     },
   ]);

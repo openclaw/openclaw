@@ -11,6 +11,8 @@ import type { ChatChannelId } from "../registry.js";
 import type { ChannelMessageActionName as ChannelMessageActionNameFromList } from "./message-action-names.js";
 import type { ChannelMessageCapability } from "./message-capabilities.js";
 
+export type { ChannelMessageCapability } from "./message-capabilities.js";
+
 export type ChannelId = ChatChannelId | (string & {});
 
 export type ChannelOutboundTargetMode = "explicit" | "implicit" | "heartbeat";

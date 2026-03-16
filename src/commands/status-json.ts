@@ -27,6 +27,7 @@ export async function statusJsonCommand(
   },
   runtime: RuntimeEnv,
 ) {
+  const includeFullDiagnostics = opts.deep === true || opts.all === true;
   const scan = await scanStatus(
     { json: true, deep: opts.deep, timeoutMs: opts.timeoutMs, all: opts.all },
     runtime,
@@ -36,8 +37,8 @@ export async function statusJsonCommand(
       config: scan.cfg,
       sourceConfig: scan.sourceConfig,
       deep: false,
-      // Keep the default JSON status path lightweight for startup-sensitive calls.
-      includeFilesystem: opts.deep === true,
+      // Keep the default JSON status path lightweight unless full diagnostics were requested.
+      includeFilesystem: includeFullDiagnostics,
       includeChannelSecurity: true,
     }),
   );
@@ -47,7 +48,7 @@ export async function statusJsonCommand(
         loadProviderUsageSummary({ timeoutMs: opts.timeoutMs }),
       )
     : undefined;
-  const health = opts.deep
+  const health = includeFullDiagnostics
     ? await callGateway({
         method: "health",
         params: { probe: true },
@@ -56,7 +57,7 @@ export async function statusJsonCommand(
       }).catch(() => undefined)
     : undefined;
   const lastHeartbeat =
-    opts.deep && scan.gatewayReachable
+    includeFullDiagnostics && scan.gatewayReachable
       ? await callGateway<HeartbeatEventPayload | null>({
           method: "last-heartbeat",
           params: {},

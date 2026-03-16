@@ -2,6 +2,7 @@ import { ChannelType } from "discord-api-types/v10";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { NativeCommandSpec } from "../../../../src/auto-reply/commands-registry.js";
 import * as dispatcherModule from "../../../../src/auto-reply/reply/provider-dispatcher.js";
+import { installDiscordRegistryHooks } from "../../../../src/auto-reply/test-helpers/command-auth-registry-fixture.js";
 import type { OpenClawConfig } from "../../../../src/config/config.js";
 import type { DiscordAccountConfig } from "../../../../src/config/types.discord.js";
 import * as pluginCommandsModule from "../../../../src/plugins/commands.js";
@@ -11,6 +12,8 @@ import {
   type MockCommandInteraction,
 } from "./native-command.test-helpers.js";
 import { createNoopThreadBindingManager } from "./thread-bindings.js";
+
+installDiscordRegistryHooks();
 
 function createInteraction(params?: { userId?: string }): MockCommandInteraction {
   return createMockCommandInteraction({

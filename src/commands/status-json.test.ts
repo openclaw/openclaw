@@ -88,4 +88,17 @@ describe("statusJsonCommand", () => {
       }),
     );
   });
+
+  it("keeps filesystem audit enabled for status --json --all", async () => {
+    const { statusJsonCommand } = await import("./status-json.js");
+
+    await statusJsonCommand({ all: true }, mocks.runtime as never);
+
+    expect(mocks.runSecurityAudit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        includeFilesystem: true,
+        includeChannelSecurity: true,
+      }),
+    );
+  });
 });

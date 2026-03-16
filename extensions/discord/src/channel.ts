@@ -43,6 +43,7 @@ import {
 } from "openclaw/plugin-sdk/discord";
 import { resolveOutboundSendDep } from "../../../src/infra/outbound/send-deps.js";
 import { normalizeMessageChannel } from "../../../src/utils/message-channel.js";
+import { formatDiscordAllowFromEntries } from "./allow-from.js";
 import {
   isDiscordExecApprovalClientEnabled,
   shouldSuppressLocalDiscordExecApprovalPrompt,
@@ -303,7 +304,7 @@ function resolveDiscordOutboundSessionRoute(params: {
 const discordConfigAccessors = createScopedAccountConfigAccessors({
   resolveAccount: ({ cfg, accountId }) => resolveDiscordAccount({ cfg, accountId }),
   resolveAllowFrom: (account: ResolvedDiscordAccount) => account.config.dm?.allowFrom,
-  formatAllowFrom: (allowFrom) => formatAllowFromLowercase({ allowFrom }),
+  formatAllowFrom: (allowFrom) => formatDiscordAllowFromEntries(allowFrom),
   resolveDefaultTo: (account: ResolvedDiscordAccount) => account.config.defaultTo,
 });
 
