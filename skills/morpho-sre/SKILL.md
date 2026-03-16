@@ -22,6 +22,15 @@ metadata: { "openclaw": { "emoji": "🛠️" } }
 - Shell portability:
   - default command syntax must be POSIX `sh` compatible
   - do not use `set -o pipefail`, arrays, or other Bash-only features unless command is explicitly wrapped with `bash -lc '...'`
+- Forked tests / anvil / replay / SDK repros: use Morpho cached RPC first (`skills/foundry-evm-debug/scripts/rpc-url.sh <chainId>`). Never use a repo's default RPC provider for forked simulations when the cached endpoint is available. If a forked run hits HTTP 429 or `failed to get fork block`, switch to cached Morpho RPC before concluding anything about application logic.
+- GitHub auth preflight (before any repo/PR work):
+  1. Check if `/home/node/.openclaw/bin/gh` wrapper exists and is on PATH — use it (auto-mints App token)
+  2. Else if `GITHUB_APP_ID` + `GITHUB_APP_INSTALLATION_ID` + `GITHUB_APP_PRIVATE_KEY` exist, mint installation token via `repo-clone.sh` or `github-app-token.sh`
+  3. Else if `GH_TOKEN` / `GITHUB_TOKEN` exist, use directly
+  4. Only if all three fail: report blocked with exact error from each attempt
+  - Never declare "GitHub is blocked" after trying only `gh auth login` or a single empty env var check.
+  - For repo materialization: if mapped path has no `.git`, call `repo-clone.sh --image <workload>` to create a proper clone before attempting commits.
+- For any PR work requested by a human or triggered by autofix confidence gate, use `autofix-pr.sh` which handles: repo cloning, GitHub App auth, branch creation, commit, PR creation, and Linear linking. Do not attempt manual `git clone` + `git push` + `gh pr create` — the `autofix-pr.sh` pipeline handles all auth and repo bootstrap.
 - No root-cause ranking before one successful live check. Access/runtime failures alone are not enough evidence for hypotheses.
 - On blocked investigations:
   - first reply must include exact failing command + exact error text
