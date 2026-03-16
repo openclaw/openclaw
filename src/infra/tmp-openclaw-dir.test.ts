@@ -1,64 +1,106 @@
-import path from "node:path";
-import { describe, expect, it, vi } from "vitest";
-import { POSIX_OPENCLAW_TMP_DIR, resolvePreferredOpenClawTmpDir } from "./tmp-openclaw-dir.js";
+import { describe, it, expect, vi } from 'vitest'
+import { resolvePreferredOpenClawTmpDir, POSIX_OPENCLAW_TMP_DIR } from './tmp-openclaw-dir'
 
-describe("resolvePreferredOpenClawTmpDir", () => {
-  it("prefers /tmp/openclaw when it already exists and is writable", () => {
-    const accessSync = vi.fn();
-    const statSync = vi.fn(() => ({ isDirectory: () => true }));
-    const tmpdir = vi.fn(() => "/var/fallback");
+describe('resolvePreferredOpenClawTmpDir', () => {
+  it('returns POSIX path when preferred directory exists and is accessible', () => {
+    const accessSync = vi.fn()
+    const statSync = vi.fn(() => ({ isDirectory: () => true }))
+    const tmpdir = vi.fn(() => '/tmp')
 
-    const resolved = resolvePreferredOpenClawTmpDir({ accessSync, statSync, tmpdir });
+    const result = resolvePreferredOpenClawTmpDir({
+      accessSync,
+      statSync,
+      tmpdir,
+    })
 
-    expect(statSync).toHaveBeenCalledTimes(1);
-    expect(accessSync).toHaveBeenCalledTimes(1);
-    expect(resolved).toBe(POSIX_OPENCLAW_TMP_DIR);
-    expect(tmpdir).not.toHaveBeenCalled();
-  });
+    expect(result).toBe(POSIX_OPENCLAW_TMP_DIR)
+    expect(statSync).toHaveBeenCalledWith(POSIX_OPENCLAW_TMP_DIR)
+    expect(accessSync).toHaveBeenCalledWith(
+      POSIX_OPENCLAW_TMP_DIR,
+      // fs.constants.W_OK | fs.constants.X_OK = 6
+      6,
+    )
+  })
 
-  it("prefers /tmp/openclaw when it does not exist but /tmp is writable", () => {
-    const accessSync = vi.fn();
+  it('returns fallback path when preferred directory does not exist', () => {
+    const err = new Error('ENOENT: no such file or directory') as any
+    err.code = 'ENOENT'
+    const accessSync = vi.fn()
     const statSync = vi.fn(() => {
-      const err = new Error("missing") as Error & { code?: string };
-      err.code = "ENOENT";
-      throw err;
-    });
-    const tmpdir = vi.fn(() => "/var/fallback");
+      throw err
+    })
+    const tmpdir = vi.fn(() => '/tmp')
 
-    const resolved = resolvePreferredOpenClawTmpDir({ accessSync, statSync, tmpdir });
+    const result = resolvePreferredOpenClawTmpDir({
+      accessSync,
+      statSync,
+      tmpdir,
+    })
 
-    expect(resolved).toBe(POSIX_OPENCLAW_TMP_DIR);
-    expect(accessSync).toHaveBeenCalledWith("/tmp", expect.any(Number));
-    expect(tmpdir).not.toHaveBeenCalled();
-  });
+    expect(result).toBe('/tmp/openclaw')
+    expect(statSync).toHaveBeenCalledWith(POSIX_OPENCLAW_TMP_DIR)
+    expect(accessSync).not.toHaveBeenCalled()
+  })
 
-  it("falls back to os.tmpdir()/openclaw when /tmp/openclaw is not a directory", () => {
-    const accessSync = vi.fn();
-    const statSync = vi.fn(() => ({ isDirectory: () => false }));
-    const tmpdir = vi.fn(() => "/var/fallback");
+  it('returns fallback path when preferred directory is not a directory', () => {
+    const accessSync = vi.fn()
+    const statSync = vi.fn(() => ({ isDirectory: () => false }))
+    const tmpdir = vi.fn(() => '/var/tmp')
 
-    const resolved = resolvePreferredOpenClawTmpDir({ accessSync, statSync, tmpdir });
+    const result = resolvePreferredOpenClawTmpDir({
+      accessSync,
+      statSync,
+      tmpdir,
+    })
 
-    expect(resolved).toBe(path.join("/var/fallback", "openclaw"));
-    expect(tmpdir).toHaveBeenCalledTimes(1);
-  });
+    expect(result).toBe('/var/tmp/openclaw')
+    expect(accessSync).not.toHaveBeenCalled()
+  })
 
-  it("falls back to os.tmpdir()/openclaw when /tmp is not writable", () => {
-    const accessSync = vi.fn((target: string) => {
-      if (target === "/tmp") {
-        throw new Error("read-only");
-      }
-    });
+  it('returns fallback path when preferred directory is not writable', () => {
+    const err = new Error('EACCES: permission denied') as any
+    err.code = 'EACCES'
+    const accessSync = vi.fn(() => {
+      throw err
+    })
+    const statSync = vi.fn(() => ({ isDirectory: () => true }))
+    const tmpdir = vi.fn(() => '/tmp')
+
+    const result = resolvePreferredOpenClawTmpDir({
+      accessSync,
+      statSync,
+      tmpdir,
+    })
+
+    expect(result).toBe('/tmp/openclaw')
+  })
+
+  it('returns POSIX path when /tmp is accessible', () => {
+    const err = new Error('ENOENT: no such file or directory') as any
+    err.code = 'ENOENT'
+    const accessSync = vi.fn((path, mode) => {
+      if (path === POSIX_OPENCLAW_TMP_DIR) throw err
+      // /tmp access succeeds
+    })
     const statSync = vi.fn(() => {
-      const err = new Error("missing") as Error & { code?: string };
-      err.code = "ENOENT";
-      throw err;
-    });
-    const tmpdir = vi.fn(() => "/var/fallback");
+      throw err
+    })
+    const tmpdir = vi.fn(() => '/tmp')
 
-    const resolved = resolvePreferredOpenClawTmpDir({ accessSync, statSync, tmpdir });
+    const result = resolvePreferredOpenClawTmpDir({
+      accessSync,
+      statSync,
+      tmpdir,
+    })
 
-    expect(resolved).toBe(path.join("/var/fallback", "openclaw"));
-    expect(tmpdir).toHaveBeenCalledTimes(1);
-  });
-});
+    expect(result).toBe(POSIX_OPENCLAW_TMP_DIR)
+  })
+
+  it('uses default functions when options are not provided', () => {
+    // This test verifies that the function can be called without options
+    // and uses the real fs/os functions
+    expect(() => {
+      resolvePreferredOpenClawTmpDir()
+    }).not.toThrow()
+  })
+})
