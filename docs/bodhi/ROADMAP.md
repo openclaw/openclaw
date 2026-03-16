@@ -1,6 +1,6 @@
 # OpenBodhi Roadmap
 
-> Building in public. Follow the process on [Substack](https://growmindspace.substack.com).
+> Building in public. Follow on GitHub Discussions or watch the repo for updates.
 
 ---
 

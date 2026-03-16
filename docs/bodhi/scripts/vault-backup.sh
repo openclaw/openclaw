@@ -7,8 +7,8 @@
 set -euo pipefail
 
 VAULT_DIR="${HOME}/openbodhi/vault"
-BUCKET="s3://hudadata/backups/vault"
-ENDPOINT="https://nbg1.your-objectstorage.com"
+BUCKET="${S3_BACKUP_BUCKET:-s3://your-bucket/backups/vault}"
+ENDPOINT="${S3_ENDPOINT_URL:-https://your-s3-endpoint}"
 TIMESTAMP=$(date -u +"%Y-%m-%dT%H%M%SZ")
 BACKUP_KEY="${BUCKET}/${TIMESTAMP}/"
 LOG_FILE="${HOME}/.openclaw/backup.log"

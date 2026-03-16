@@ -11,11 +11,11 @@ triggers:
 
 # bodhi-calendar
 
-Calendar integration via Cal.com hosted at cal.huda20.fun. Surfaces what's on your plate without requiring you to open a browser.
+Calendar integration via Cal.com hosted at ${CAL_BASE_URL}. Surfaces what's on your plate without requiring you to open a browser.
 
 **Auth:** `CAL_API_KEY` environment variable. If unset, all commands reply: `Calendar not configured. Set CAL_API_KEY.`
 
-**Base URL:** `https://cal.huda20.fun/api/v1`
+**Base URL:** `${CAL_BASE_URL}/api/v1`
 
 ---
 
@@ -27,7 +27,7 @@ All Cal.com API calls use this pattern:
 python3 -c "
 import urllib.request, urllib.error, json, os, sys
 
-base = 'https://cal.huda20.fun/api/v1'
+base = '${CAL_BASE_URL}/api/v1'
 api_key = os.environ.get('CAL_API_KEY', '')
 if not api_key:
     print('ERROR:no_api_key')
@@ -79,7 +79,7 @@ params = urllib.parse.urlencode({
     'dateTo': date_to,
     'status': 'accepted'
 })
-url = f'https://cal.huda20.fun/api/v1/bookings?{params}'
+url = f'${CAL_BASE_URL}/api/v1/bookings?{params}'
 
 try:
     with urllib.request.urlopen(url, timeout=10) as resp:
@@ -137,7 +137,7 @@ params = urllib.parse.urlencode({
     'dateTo': f'{sunday.isoformat()}T23:59:59.999Z',
     'status': 'accepted'
 })
-url = f'https://cal.huda20.fun/api/v1/bookings?{params}'
+url = f'${CAL_BASE_URL}/api/v1/bookings?{params}'
 
 try:
     with urllib.request.urlopen(url, timeout=10) as resp:
@@ -188,7 +188,7 @@ params = urllib.parse.urlencode({
     'status': 'accepted',
     'take': limit
 })
-url = f'https://cal.huda20.fun/api/v1/bookings?{params}'
+url = f'${CAL_BASE_URL}/api/v1/bookings?{params}'
 
 try:
     with urllib.request.urlopen(url, timeout=10) as resp:
@@ -221,7 +221,7 @@ if not api_key:
     print('ERROR:no_api_key')
     exit(1)
 
-url = f'https://cal.huda20.fun/api/v1/bookings/{uid}/cancel'
+url = f'${CAL_BASE_URL}/api/v1/bookings/{uid}/cancel'
 import urllib.parse
 body = urllib.parse.urlencode({'apiKey': api_key, 'reason': 'Cancelled via Bodhi'}).encode()
 
@@ -247,7 +247,7 @@ Only cancel after explicit confirmation.
 
 Return the booking link for a discovery call:
 
-Reply: `Discovery call: https://cal.huda20.fun` — nothing more.
+Reply: `Discovery call: ${CAL_BASE_URL}` — nothing more.
 Do not attempt to create bookings programmatically. Cal.com's public booking page handles this.
 
 ---
@@ -266,7 +266,7 @@ if not api_key:
     exit(1)
 
 params = urllib.parse.urlencode({'apiKey': api_key})
-url = f'https://cal.huda20.fun/api/v1/event-types?{params}'
+url = f'${CAL_BASE_URL}/api/v1/event-types?{params}'
 
 try:
     with urllib.request.urlopen(url, timeout=10) as resp:

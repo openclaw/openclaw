@@ -1,6 +1,6 @@
 ---
 name: bodhi-substack
-description: Investigative journalism engine — research, article generation, clip extraction for growmindspace.substack.com
+description: Investigative journalism engine — research, article generation, clip extraction for Substack
 user-invocable: true
 disable-model-invocation: false
 triggers:
@@ -72,7 +72,7 @@ Generate full article draft using the 12-section template.
 Between every major section, use this image (never a plain horizontal rule):
 
 ```
-![](https://hudafilm-media.nbg1.your-objectstorage.com/assets/dividers/paragraph-splitter.png)
+![](${DIVIDER_IMAGE_URL})
 ```
 
 ### Output
@@ -112,9 +112,9 @@ Pull performance data for recent articles:
 ```bash
 python3 -c "
 import os
-# Query Plausible for growmindspace.substack.com pageviews
+# Query Plausible for your Substack publication pageviews
 # This is a placeholder — actual API call depends on Plausible setup
-print('Query analytics.huda20.fun for Substack performance')
+print('Query your analytics instance (configured via ANALYTICS_URL) for Substack performance')
 "
 ```
 

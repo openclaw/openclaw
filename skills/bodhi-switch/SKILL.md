@@ -81,7 +81,7 @@ All messages are captured to the vault via bodhi-curator. Cross-domain bridges a
 
 ## On `/q` or `/qenjin`
 
-Switch to Qenjin — business operator for qenjin.io.
+Switch to Qenjin agent.
 
 ```bash
 python3 -c "

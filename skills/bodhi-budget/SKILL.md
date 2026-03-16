@@ -86,7 +86,7 @@ When `today_spend >= daily_limit`:
 Resets in ~Xh Ym (midnight UTC).
 
 Use /log [thought] to capture without API cost.
-SiYuan is still reachable at si.qenjin.io — add items manually.
+SiYuan is still reachable at your configured SIYUAN_API_URL — add items manually.
 ```
 
 To compute "resets in":

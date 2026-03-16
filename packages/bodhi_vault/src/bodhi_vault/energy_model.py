@@ -167,7 +167,7 @@ def find_critical_clusters(
     """
     Return clusters whose energy exceeds the criticality threshold.
 
-    Threshold = Q3 + iqr_k × IQR  (Tukey fence on the upper tail).
+    Threshold = median + iqr_k × IQR  (robust outlier detection on the upper tail).
     Clusters with zero energy are excluded from the threshold calculation
     but included in the full ranked list.
 
@@ -193,9 +193,10 @@ def find_critical_clusters(
         return [top] if top.energy > 0 else []
 
     q1 = _percentile(active_energies, 25)
+    q2 = _percentile(active_energies, 50)
     q3 = _percentile(active_energies, 75)
     iqr = q3 - q1
-    threshold = q3 + iqr_k * iqr
+    threshold = q2 + iqr_k * iqr
 
     return [c for c in all_clusters if c.energy >= threshold]
 

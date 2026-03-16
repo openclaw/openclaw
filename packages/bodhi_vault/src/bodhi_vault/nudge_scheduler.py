@@ -182,6 +182,7 @@ def generate_nudges(
     iqr_k: float = DEFAULT_IQR_K,
     state_path: Path = NUDGE_STATE_PATH,
     log_path: Path = NUDGE_LOG_PATH,
+    revisit_log_path: Optional[Path] = None,
 ) -> list[dict[str, Any]]:
     """
     Generate up to max_nudges nudges for clusters above the criticality threshold.
@@ -197,14 +198,25 @@ def generate_nudges(
           "nudge_count": int,          # how many times this cluster has been nudged
         }
 
+    Args:
+        revisit_log_path: Path to the revisit events log. Defaults to
+            vault_path.parent / "revisit.jsonl" so callers only need to pass
+            vault_path and the scheduler finds revisit history automatically.
+
     State file is updated and nudge log is appended.
     Returns empty list if no clusters qualify or all are on cooldown.
     """
     if now is None:
         now = datetime.now(tz=timezone.utc)
 
+    # Derive revisit log from vault location when not explicitly provided.
+    # Convention: revisit.jsonl lives alongside the vault directory.
+    if revisit_log_path is None:
+        revisit_log_path = vault_path.parent / "revisit.jsonl"
+
     critical = find_critical_clusters(
         vault_path=vault_path,
+        log_path=revisit_log_path,
         half_life_days=half_life_days,
         iqr_k=iqr_k,
         now=now,
@@ -304,6 +316,7 @@ def get_nudge_history(
 def nudge_status(
     vault_path: Path,
     state_path: Path = NUDGE_STATE_PATH,
+    revisit_log_path: Optional[Path] = None,
     now: Optional[datetime] = None,
 ) -> str:
     """
@@ -314,9 +327,12 @@ def nudge_status(
     if now is None:
         now = datetime.now(tz=timezone.utc)
 
+    if revisit_log_path is None:
+        revisit_log_path = vault_path.parent / "revisit.jsonl"
+
     from bodhi_vault.energy_model import energy_summary
 
-    summary = energy_summary(vault_path=vault_path, now=now)
+    summary = energy_summary(vault_path=vault_path, log_path=revisit_log_path, now=now)
     state = _load_state(state_path)
 
     critical_count = summary["critical_clusters"]
@@ -334,7 +350,7 @@ def nudge_status(
 
     # Find which critical clusters are on cooldown vs ready
     from bodhi_vault.energy_model import find_critical_clusters
-    critical = find_critical_clusters(vault_path=vault_path, now=now)
+    critical = find_critical_clusters(vault_path=vault_path, log_path=revisit_log_path, now=now)
     ready = [c for c in critical if not _is_on_cooldown(c.cluster_id, state, now)]
     snoozed = len(critical) - len(ready)
 
