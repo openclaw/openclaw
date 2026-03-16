@@ -315,8 +315,9 @@ clawdock-devices() {
   if [ $exit_status -ne 0 ]; then
     echo ""
     echo -e "${_CLR_CYAN}💡 If you see token errors above:${_CLR_RESET}"
-    echo -e "   1. Verify token is set: $(_cmd clawdock-token)"
-    echo "   2. Try manual config inside container:"
+    echo -e "   1. Fix token: $(_cmd clawdock-fix-token)"
+    echo -e "   2. Verify token is set: $(_cmd clawdock-token)"
+    echo "   3. Try manual config inside container:"
     echo -e "      $(_cmd clawdock-shell)"
     echo -e "      $(_cmd 'openclaw config get gateway.remote.token')"
     return 1
