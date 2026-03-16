@@ -32,14 +32,18 @@ const providerId = "telegram";
 function readTelegramSendParams(params: Record<string, unknown>) {
   const to = readStringParam(params, "to", { required: true });
   const mediaUrl = readStringParam(params, "media", { trim: false });
-  const message = readStringParam(params, "message", { required: !mediaUrl, allowEmpty: true });
+  const buttons =
+    params.buttons ??
+    buildTelegramInteractiveButtons(normalizeInteractiveReply(params.interactive));
+  const hasButtons = Array.isArray(buttons) && buttons.length > 0;
+  const message = readStringParam(params, "message", {
+    required: !mediaUrl && !hasButtons,
+    allowEmpty: true,
+  });
   const caption = readStringParam(params, "caption", { allowEmpty: true });
   const content = message || caption || "";
   const replyTo = readStringParam(params, "replyTo");
   const threadId = readStringParam(params, "threadId");
-  const buttons =
-    params.buttons ??
-    buildTelegramInteractiveButtons(normalizeInteractiveReply(params.interactive));
   const asVoice = readBooleanParam(params, "asVoice");
   const silent = readBooleanParam(params, "silent");
   const forceDocument = readBooleanParam(params, "forceDocument");

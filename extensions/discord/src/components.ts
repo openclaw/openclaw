@@ -220,6 +220,8 @@ function resolveDiscordInteractiveButtonStyle(
   return style ?? "secondary";
 }
 
+const DISCORD_INTERACTIVE_BUTTON_ROW_SIZE = 5;
+
 export function buildDiscordInteractiveComponents(
   interactive?: InteractiveReply,
 ): DiscordComponentMessageSpec | undefined {
@@ -227,18 +229,33 @@ export function buildDiscordInteractiveComponents(
     interactive,
     [] as NonNullable<DiscordComponentMessageSpec["blocks"]>,
     (state, block) => {
+      if (block.type === "text") {
+        const text = block.text.trim();
+        if (text) {
+          state.push({ type: "text", text });
+        }
+        return state;
+      }
       if (block.type === "buttons") {
         if (block.buttons.length === 0) {
           return state;
         }
-        state.push({
-          type: "actions",
-          buttons: block.buttons.map((button) => ({
-            label: button.label,
-            style: resolveDiscordInteractiveButtonStyle(button.style),
-            callbackData: button.value,
-          })),
-        });
+        for (
+          let index = 0;
+          index < block.buttons.length;
+          index += DISCORD_INTERACTIVE_BUTTON_ROW_SIZE
+        ) {
+          state.push({
+            type: "actions",
+            buttons: block.buttons
+              .slice(index, index + DISCORD_INTERACTIVE_BUTTON_ROW_SIZE)
+              .map((button) => ({
+                label: button.label,
+                style: resolveDiscordInteractiveButtonStyle(button.style),
+                callbackData: button.value,
+              })),
+          });
+        }
         return state;
       }
       if (block.type === "select" && block.options.length > 0) {
