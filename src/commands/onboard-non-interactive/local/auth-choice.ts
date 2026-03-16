@@ -161,24 +161,6 @@ export async function applyNonInteractiveAuthChoice(params: {
     return null;
   }
 
-  const pluginProviderChoice = await applyNonInteractivePluginProviderChoice({
-    nextConfig,
-    authChoice,
-    opts,
-    runtime,
-    baseConfig,
-    resolveApiKey: (input) =>
-      resolveApiKey({
-        ...input,
-        cfg: baseConfig,
-        runtime,
-      }),
-    toApiKeyCredential,
-  });
-  if (pluginProviderChoice !== undefined) {
-    return pluginProviderChoice;
-  }
-
   if (authChoice === "token") {
     const providerRaw = opts.tokenProvider?.trim();
     if (!providerRaw) {
@@ -291,6 +273,13 @@ export async function applyNonInteractiveAuthChoice(params: {
       endpoint = "global";
     } else if (authChoice === "zai-cn") {
       endpoint = "cn";
+    }
+
+    if (endpoint) {
+      const detected = await detectZaiEndpoint({ apiKey: resolved.key, endpoint });
+      if (detected) {
+        modelIdOverride = detected.modelId;
+      }
     } else {
       const detected = await detectZaiEndpoint({ apiKey: resolved.key });
       if (detected) {
@@ -475,6 +464,24 @@ export async function applyNonInteractiveAuthChoice(params: {
       runtime.exit(1);
       return null;
     }
+  }
+
+  const pluginProviderChoice = await applyNonInteractivePluginProviderChoice({
+    nextConfig,
+    authChoice,
+    opts,
+    runtime,
+    baseConfig,
+    resolveApiKey: (input) =>
+      resolveApiKey({
+        ...input,
+        cfg: baseConfig,
+        runtime,
+      }),
+    toApiKeyCredential,
+  });
+  if (pluginProviderChoice !== undefined) {
+    return pluginProviderChoice;
   }
 
   if (

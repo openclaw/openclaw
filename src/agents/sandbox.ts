@@ -11,6 +11,12 @@ export {
   DEFAULT_SANDBOX_IMAGE,
 } from "./sandbox/constants.js";
 export { ensureSandboxWorkspaceForSession, resolveSandboxContext } from "./sandbox/context.js";
+export {
+  getSandboxBackendFactory,
+  getSandboxBackendManager,
+  registerSandboxBackend,
+  requireSandboxBackendFactory,
+} from "./sandbox/backend.js";
 
 export { buildSandboxCreateArgs } from "./sandbox/docker.js";
 export {
@@ -27,6 +33,20 @@ export {
 } from "./sandbox/runtime-status.js";
 
 export { resolveSandboxToolPolicyForAgent } from "./sandbox/tool-policy.js";
+export type { SandboxFsBridge, SandboxFsStat, SandboxResolvedPath } from "./sandbox/fs-bridge.js";
+
+export type {
+  CreateSandboxBackendParams,
+  SandboxBackendCommandParams,
+  SandboxBackendCommandResult,
+  SandboxBackendExecSpec,
+  SandboxBackendFactory,
+  SandboxBackendHandle,
+  SandboxBackendId,
+  SandboxBackendManager,
+  SandboxBackendRegistration,
+  SandboxBackendRuntimeInfo,
+} from "./sandbox/backend.js";
 
 export type {
   SandboxBrowserConfig,

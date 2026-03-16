@@ -783,7 +783,7 @@ Gemini CLI uses a **plugin auth flow**, not a client id or secret in `openclaw.j
 
 Steps:
 
-1. Enable the plugin: `openclaw plugins enable google-gemini-cli-auth`
+1. Enable the plugin: `openclaw plugins enable google`
 2. Login: `openclaw models auth login --provider google-gemini-cli --set-default`
 
 This stores OAuth tokens in auth profiles on the gateway host. Details: [Model providers](/concepts/model-providers).
@@ -1358,7 +1358,8 @@ Your **workspace** (AGENTS.md, memory files, skills, etc.) is separate and confi
 These files live in the **agent workspace**, not `~/.openclaw`.
 
 - **Workspace (per agent)**: `AGENTS.md`, `SOUL.md`, `IDENTITY.md`, `USER.md`,
-  `MEMORY.md` (or `memory.md`), `memory/YYYY-MM-DD.md`, optional `HEARTBEAT.md`.
+  `MEMORY.md` (or legacy fallback `memory.md` when `MEMORY.md` is absent),
+  `memory/YYYY-MM-DD.md`, optional `HEARTBEAT.md`.
 - **State dir (`~/.openclaw`)**: config, credentials, auth profiles, sessions, logs,
   and shared skills (`~/.openclaw/skills`).
 

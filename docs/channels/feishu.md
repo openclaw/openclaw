@@ -30,9 +30,9 @@ openclaw plugins install @openclaw/feishu
 
 There are two ways to add the Feishu channel:
 
-### Method 1: onboarding wizard (recommended)
+### Method 1: setup wizard (recommended)
 
-If you just installed OpenClaw, run the wizard:
+If you just installed OpenClaw, run the setup wizard:
 
 ```bash
 openclaw onboard
@@ -531,6 +531,75 @@ Feishu supports streaming replies via interactive cards. When enabled, the bot u
 ```
 
 Set `streaming: false` to wait for the full reply before sending.
+
+### ACP sessions
+
+Feishu supports ACP for:
+
+- DMs
+- group topic conversations
+
+Feishu ACP is text-command driven. There are no native slash-command menus, so use `/acp ...` messages directly in the conversation.
+
+#### Persistent ACP bindings
+
+Use top-level typed ACP bindings to pin a Feishu DM or topic conversation to a persistent ACP session.
+
+```json5
+{
+  agents: {
+    list: [
+      {
+        id: "codex",
+        runtime: {
+          type: "acp",
+          acp: {
+            agent: "codex",
+            backend: "acpx",
+            mode: "persistent",
+            cwd: "/workspace/openclaw",
+          },
+        },
+      },
+    ],
+  },
+  bindings: [
+    {
+      type: "acp",
+      agentId: "codex",
+      match: {
+        channel: "feishu",
+        accountId: "default",
+        peer: { kind: "direct", id: "ou_1234567890" },
+      },
+    },
+    {
+      type: "acp",
+      agentId: "codex",
+      match: {
+        channel: "feishu",
+        accountId: "default",
+        peer: { kind: "group", id: "oc_group_chat:topic:om_topic_root" },
+      },
+      acp: { label: "codex-feishu-topic" },
+    },
+  ],
+}
+```
+
+#### Thread-bound ACP spawn from chat
+
+In a Feishu DM or topic conversation, you can spawn and bind an ACP session in place:
+
+```text
+/acp spawn codex --thread here
+```
+
+Notes:
+
+- `--thread here` works for DMs and Feishu topics.
+- Follow-up messages in the bound DM/topic route directly to that ACP session.
+- v1 does not target generic non-topic group chats.
 
 ### Multi-agent routing
 

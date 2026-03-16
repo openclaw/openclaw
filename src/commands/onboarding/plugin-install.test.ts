@@ -58,15 +58,20 @@ import fs from "node:fs";
 import type { ChannelPluginCatalogEntry } from "../../channels/plugins/catalog.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { loadOpenClawPlugins } from "../../plugins/loader.js";
+import { createEmptyPluginRegistry } from "../../plugins/registry.js";
+import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import type { WizardPrompter } from "../../wizard/prompts.js";
 import { makePrompter, makeRuntime } from "./__tests__/test-utils.js";
 import {
   ensureOnboardingPluginInstalled,
+  loadOnboardingPluginRegistrySnapshotForChannel,
   reloadOnboardingPluginRegistry,
+  reloadOnboardingPluginRegistryForChannel,
 } from "./plugin-install.js";
 
 const baseEntry: ChannelPluginCatalogEntry = {
   id: "zalo",
+  pluginId: "zalo",
   meta: {
     id: "zalo",
     label: "Zalo",
@@ -84,6 +89,7 @@ const baseEntry: ChannelPluginCatalogEntry = {
 beforeEach(() => {
   vi.clearAllMocks();
   resolveBundledPluginSources.mockReturnValue(new Map());
+  setActivePluginRegistry(createEmptyPluginRegistry());
 });
 
 function mockRepoLocalPathExists() {
@@ -169,6 +175,30 @@ describe("ensureOnboardingPluginInstalled", () => {
 
     expectPluginLoadedFromLocalPath(result);
     expect(result.cfg.plugins?.entries?.zalo?.enabled).toBe(true);
+  });
+
+  it("uses the catalog plugin id for local-path installs", async () => {
+    const runtime = makeRuntime();
+    const prompter = makePrompter({
+      select: vi.fn(async () => "local") as WizardPrompter["select"],
+    });
+    const cfg: OpenClawConfig = {};
+    mockRepoLocalPathExists();
+
+    const result = await ensureOnboardingPluginInstalled({
+      cfg,
+      entry: {
+        ...baseEntry,
+        id: "teams",
+        pluginId: "@openclaw/msteams-plugin",
+      },
+      prompter,
+      runtime,
+    });
+
+    expect(result.installed).toBe(true);
+    expect(result.pluginId).toBe("@openclaw/msteams-plugin");
+    expect(result.cfg.plugins?.entries?.["@openclaw/msteams-plugin"]?.enabled).toBe(true);
   });
 
   it("defaults to local on dev channel when local path exists", async () => {
@@ -262,10 +292,120 @@ describe("ensureOnboardingPluginInstalled", () => {
         config: cfg,
         workspaceDir: "/tmp/openclaw-workspace",
         cache: false,
+        includeSetupOnlyChannelPlugins: true,
       }),
     );
     expect(clearPluginDiscoveryCache.mock.invocationCallOrder[0]).toBeLessThan(
       vi.mocked(loadOpenClawPlugins).mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
+    );
+  });
+
+  it("scopes channel reloads when onboarding starts from an empty registry", () => {
+    const runtime = makeRuntime();
+    const cfg: OpenClawConfig = {};
+
+    reloadOnboardingPluginRegistryForChannel({
+      cfg,
+      runtime,
+      channel: "telegram",
+      workspaceDir: "/tmp/openclaw-workspace",
+    });
+
+    expect(loadOpenClawPlugins).toHaveBeenCalledWith(
+      expect.objectContaining({
+        config: cfg,
+        workspaceDir: "/tmp/openclaw-workspace",
+        cache: false,
+        onlyPluginIds: ["telegram"],
+        includeSetupOnlyChannelPlugins: true,
+      }),
+    );
+  });
+
+  it("keeps full reloads when the active plugin registry is already populated", () => {
+    const runtime = makeRuntime();
+    const cfg: OpenClawConfig = {};
+    const registry = createEmptyPluginRegistry();
+    registry.plugins.push({
+      id: "loaded",
+      name: "loaded",
+      source: "/tmp/loaded.cjs",
+      origin: "bundled",
+      enabled: true,
+      status: "loaded",
+      toolNames: [],
+      hookNames: [],
+      channelIds: [],
+      providerIds: [],
+      webSearchProviderIds: [],
+      gatewayMethods: [],
+      cliCommands: [],
+      services: [],
+      commands: [],
+      httpRoutes: 0,
+      hookCount: 0,
+      configSchema: true,
+    });
+    setActivePluginRegistry(registry);
+
+    reloadOnboardingPluginRegistryForChannel({
+      cfg,
+      runtime,
+      channel: "telegram",
+      workspaceDir: "/tmp/openclaw-workspace",
+    });
+
+    expect(loadOpenClawPlugins).toHaveBeenCalledWith(
+      expect.not.objectContaining({
+        onlyPluginIds: expect.anything(),
+      }),
+    );
+  });
+
+  it("can load a channel-scoped snapshot without activating the global registry", () => {
+    const runtime = makeRuntime();
+    const cfg: OpenClawConfig = {};
+
+    loadOnboardingPluginRegistrySnapshotForChannel({
+      cfg,
+      runtime,
+      channel: "telegram",
+      workspaceDir: "/tmp/openclaw-workspace",
+    });
+
+    expect(loadOpenClawPlugins).toHaveBeenCalledWith(
+      expect.objectContaining({
+        config: cfg,
+        workspaceDir: "/tmp/openclaw-workspace",
+        cache: false,
+        onlyPluginIds: ["telegram"],
+        includeSetupOnlyChannelPlugins: true,
+        activate: false,
+      }),
+    );
+  });
+
+  it("scopes snapshots by plugin id when channel and plugin ids differ", () => {
+    const runtime = makeRuntime();
+    const cfg: OpenClawConfig = {};
+
+    loadOnboardingPluginRegistrySnapshotForChannel({
+      cfg,
+      runtime,
+      channel: "msteams",
+      pluginId: "@openclaw/msteams-plugin",
+      workspaceDir: "/tmp/openclaw-workspace",
+    });
+
+    expect(loadOpenClawPlugins).toHaveBeenCalledWith(
+      expect.objectContaining({
+        config: cfg,
+        workspaceDir: "/tmp/openclaw-workspace",
+        cache: false,
+        onlyPluginIds: ["@openclaw/msteams-plugin"],
+        includeSetupOnlyChannelPlugins: true,
+        activate: false,
+      }),
     );
   });
 });

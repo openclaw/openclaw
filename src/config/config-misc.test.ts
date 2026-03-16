@@ -212,6 +212,49 @@ describe("gateway.channelHealthCheckMinutes", () => {
       expect(res.issues[0]?.path).toBe("gateway.channelHealthCheckMinutes");
     }
   });
+
+  it("rejects stale thresholds shorter than the health check interval", () => {
+    const res = validateConfigObject({
+      gateway: {
+        channelHealthCheckMinutes: 5,
+        channelStaleEventThresholdMinutes: 4,
+      },
+    });
+    expect(res.ok).toBe(false);
+    if (!res.ok) {
+      expect(res.issues[0]?.path).toBe("gateway.channelStaleEventThresholdMinutes");
+    }
+  });
+
+  it("accepts stale thresholds that match or exceed the health check interval", () => {
+    const equal = validateConfigObject({
+      gateway: {
+        channelHealthCheckMinutes: 5,
+        channelStaleEventThresholdMinutes: 5,
+      },
+    });
+    expect(equal.ok).toBe(true);
+
+    const greater = validateConfigObject({
+      gateway: {
+        channelHealthCheckMinutes: 5,
+        channelStaleEventThresholdMinutes: 6,
+      },
+    });
+    expect(greater.ok).toBe(true);
+  });
+
+  it("rejects stale thresholds shorter than the default health check interval", () => {
+    const res = validateConfigObject({
+      gateway: {
+        channelStaleEventThresholdMinutes: 4,
+      },
+    });
+    expect(res.ok).toBe(false);
+    if (!res.ok) {
+      expect(res.issues[0]?.path).toBe("gateway.channelStaleEventThresholdMinutes");
+    }
+  });
 });
 
 describe("cron webhook schema", () => {
@@ -359,6 +402,33 @@ describe("config strict validation", () => {
       customUnknownField: { nested: "value" },
     });
     expect(res.ok).toBe(false);
+  });
+
+  it("accepts documented agents.list[].params overrides", () => {
+    const res = validateConfigObject({
+      agents: {
+        list: [
+          {
+            id: "main",
+            model: "anthropic/claude-opus-4-6",
+            params: {
+              cacheRetention: "none",
+              temperature: 0.4,
+              maxTokens: 8192,
+            },
+          },
+        ],
+      },
+    });
+
+    expect(res.ok).toBe(true);
+    if (res.ok) {
+      expect(res.config.agents?.list?.[0]?.params).toEqual({
+        cacheRetention: "none",
+        temperature: 0.4,
+        maxTokens: 8192,
+      });
+    }
   });
 
   it("flags legacy config entries without auto-migrating", async () => {

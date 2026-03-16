@@ -7,7 +7,12 @@ import { formatErrorMessage } from "../infra/errors.js";
 import { resetDirectoryCache } from "../infra/outbound/target-resolver.js";
 import type { createSubsystemLogger } from "../logging/subsystem.js";
 import type { PluginRuntime } from "../plugins/runtime/types.js";
-import { DEFAULT_ACCOUNT_ID } from "../routing/session-key.js";
+import { resolveAccountEntry } from "../routing/account-lookup.js";
+import {
+  DEFAULT_ACCOUNT_ID,
+  normalizeAccountId,
+  normalizeOptionalAccountId,
+} from "../routing/session-key.js";
 import type { RuntimeEnv } from "../runtime.js";
 
 const CHANNEL_RESTART_POLICY: BackoffPolicy = {
@@ -29,6 +34,16 @@ type ChannelRuntimeStore = {
   aborts: Map<string, AbortController>;
   tasks: Map<string, Promise<unknown>>;
   runtimes: Map<string, ChannelAccountSnapshot>;
+};
+
+type HealthMonitorConfig = {
+  healthMonitor?: {
+    enabled?: boolean;
+  };
+};
+
+type ChannelHealthMonitorConfig = HealthMonitorConfig & {
+  accounts?: Record<string, HealthMonitorConfig>;
 };
 
 function createRuntimeStore(): ChannelRuntimeStore {
@@ -105,6 +120,7 @@ export type ChannelManager = {
   markChannelLoggedOut: (channelId: ChannelId, cleared: boolean, accountId?: string) => void;
   isManuallyStopped: (channelId: ChannelId, accountId: string) => boolean;
   resetRestartAttempts: (channelId: ChannelId, accountId: string) => void;
+  isHealthMonitorEnabled: (channelId: ChannelId, accountId: string) => boolean;
 };
 
 // Channel docking: lifecycle hooks (`plugin.gateway`) flow through this manager.
@@ -118,6 +134,63 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
   const manuallyStopped = new Set<string>();
 
   const restartKey = (channelId: ChannelId, accountId: string) => `${channelId}:${accountId}`;
+
+  const resolveAccountHealthMonitorOverride = (
+    channelConfig: ChannelHealthMonitorConfig | undefined,
+    accountId: string,
+  ): boolean | undefined => {
+    if (!channelConfig?.accounts) {
+      return undefined;
+    }
+    const direct = resolveAccountEntry(channelConfig.accounts, accountId);
+    if (typeof direct?.healthMonitor?.enabled === "boolean") {
+      return direct.healthMonitor.enabled;
+    }
+
+    const normalizedAccountId = normalizeOptionalAccountId(accountId);
+    if (!normalizedAccountId) {
+      return undefined;
+    }
+    const matchKey = Object.keys(channelConfig.accounts).find(
+      (key) => normalizeAccountId(key) === normalizedAccountId,
+    );
+    if (!matchKey) {
+      return undefined;
+    }
+    return channelConfig.accounts[matchKey]?.healthMonitor?.enabled;
+  };
+
+  const isHealthMonitorEnabled = (channelId: ChannelId, accountId: string): boolean => {
+    const cfg = loadConfig();
+    const channelConfig = cfg.channels?.[channelId] as ChannelHealthMonitorConfig | undefined;
+    const accountOverride = resolveAccountHealthMonitorOverride(channelConfig, accountId);
+    const channelOverride = channelConfig?.healthMonitor?.enabled;
+
+    if (typeof accountOverride === "boolean") {
+      return accountOverride;
+    }
+
+    if (typeof channelOverride === "boolean") {
+      return channelOverride;
+    }
+
+    const plugin = getChannelPlugin(channelId);
+    if (!plugin) {
+      return true;
+    }
+    try {
+      // Probe only: health-monitor config is read directly from raw channel config above.
+      // This call exists solely to fail closed if resolver-side config loading is broken.
+      plugin.config.resolveAccount(cfg, accountId);
+    } catch (err) {
+      channelLogs[channelId].warn?.(
+        `[${channelId}:${accountId}] health-monitor: failed to resolve account; skipping monitor (${formatErrorMessage(err)})`,
+      );
+      return false;
+    }
+
+    return true;
+  };
 
   const getStore = (channelId: ChannelId): ChannelRuntimeStore => {
     const existing = channelStores.get(channelId);
@@ -453,5 +526,6 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
     markChannelLoggedOut,
     isManuallyStopped: isManuallyStopped_,
     resetRestartAttempts: resetRestartAttempts_,
+    isHealthMonitorEnabled,
   };
 }
