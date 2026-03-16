@@ -12,7 +12,7 @@ import {
 } from "./bundled-compat.js";
 import { normalizePluginsConfig, resolveEffectiveEnableState } from "./config-state.js";
 import type { PluginLoadOptions } from "./loader.js";
-import type { WebSearchProviderPlugin } from "./types.js";
+import type { PluginWebSearchProviderEntry } from "./types.js";
 
 const BUNDLED_WEB_SEARCH_ALLOWLIST_COMPAT_PLUGIN_IDS = [
   "brave",
@@ -114,7 +114,7 @@ export function resolvePluginWebSearchProviders(params: {
   workspaceDir?: string;
   env?: PluginLoadOptions["env"];
   bundledAllowlistCompat?: boolean;
-}): WebSearchProviderPlugin[] {
+}): PluginWebSearchProviderEntry[] {
   const allowlistCompat = params.bundledAllowlistCompat
     ? withBundledPluginAllowlistCompat({
         config: params.config,
