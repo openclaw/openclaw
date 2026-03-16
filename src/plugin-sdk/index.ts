@@ -105,6 +105,7 @@ export type {
   PluginHookInboundClaimResult,
   PluginInteractiveDiscordHandlerContext,
   PluginInteractiveHandlerRegistration,
+  PluginInteractiveSlackHandlerContext,
   PluginInteractiveTelegramHandlerContext,
   PluginLogger,
   ProviderAuthContext,
