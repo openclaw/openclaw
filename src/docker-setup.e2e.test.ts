@@ -205,6 +205,18 @@ describe("docker-setup.sh", () => {
     expect(identityDirStat.isDirectory()).toBe(true);
   });
 
+  it("writes OPENCLAW_TZ into .env when given a real IANA timezone", async () => {
+    const activeSandbox = requireSandbox(sandbox);
+
+    const result = runDockerSetup(activeSandbox, {
+      OPENCLAW_TZ: "Asia/Shanghai",
+    });
+
+    expect(result.status).toBe(0);
+    const envFile = await readFile(join(activeSandbox.rootDir, ".env"), "utf8");
+    expect(envFile).toContain("OPENCLAW_TZ=Asia/Shanghai");
+  });
+
   it("precreates agent data dirs to avoid EACCES in container", async () => {
     const activeSandbox = requireSandbox(sandbox);
     const configDir = join(activeSandbox.rootDir, "config-agent-dirs");
@@ -411,6 +423,17 @@ describe("docker-setup.sh", () => {
     expect(result.stderr).toContain("OPENCLAW_HOME_VOLUME must match");
   });
 
+  it("rejects OPENCLAW_TZ values that are not present in zoneinfo", async () => {
+    const activeSandbox = requireSandbox(sandbox);
+
+    const result = runDockerSetup(activeSandbox, {
+      OPENCLAW_TZ: "Nope/Bad",
+    });
+
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain("OPENCLAW_TZ must match a timezone in /usr/share/zoneinfo");
+  });
+
   it("avoids associative arrays so the script remains Bash 3.2-compatible", async () => {
     const script = await readFile(join(repoRoot, "docker-setup.sh"), "utf8");
     expect(script).not.toMatch(/^\s*declare -A\b/m);
@@ -454,5 +477,10 @@ describe("docker-setup.sh", () => {
     expect(compose.match(/OPENCLAW_GATEWAY_TOKEN: \$\{OPENCLAW_GATEWAY_TOKEN:-\}/g)).toHaveLength(
       2,
     );
+  });
+
+  it("keeps docker-compose timezone env defaults aligned across services", async () => {
+    const compose = await readFile(join(repoRoot, "docker-compose.yml"), "utf8");
+    expect(compose.match(/TZ: \$\{OPENCLAW_TZ:-UTC\}/g)).toHaveLength(2);
   });
 });

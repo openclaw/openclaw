@@ -184,9 +184,51 @@ export const cronHandlers: GatewayRequestHandlers = {
       );
       return;
     }
+
+    // Get job info before removal to clean up associated session
+    const job = context.cron.getJob?.(jobId);
+    const sessionKey = job?.sessionKey;
+
     const result = await context.cron.remove(jobId);
     if (result.removed) {
       context.logGateway.info("cron: job removed", { jobId });
+
+      // Clean up associated session record if exists
+      if (sessionKey) {
+        try {
+          const { loadSessionStore, updateSessionStore } = await import("../../config/sessions.js");
+          const defaultAgentId = "main"; // Default agent for cron jobs
+          const sessionsPath = await import("../../config/sessions/paths.js").then(m =>
+            m.resolveStorePath(undefined, { agentId: defaultAgentId })
+          ).catch(() => undefined);
+
+          if (sessionsPath) {
+            const store = await loadSessionStore(sessionsPath);
+            const keyToDelete = Object.keys(store).find(
+              (k) => k.includes(sessionKey) || k.includes(jobId)
+            );
+            if (keyToDelete) {
+              await updateSessionStore(sessionsPath, (s) => {
+                delete s[keyToDelete];
+              });
+              context.logGateway.info("cron: cleaned up session record", { jobId, sessionKey });
+            }
+          }
+        } catch (err) {
+          context.logGateway.warn("cron: failed to clean up session record", { jobId, error: String(err) });
+        }
+
+        // Clean up run history file
+        try {
+          const { rm } = await import("node:fs/promises");
+          const { join } = await import("node:path");
+          const cronRunsDir = join(process.env.OPENCLAW_HOME || process.env.HOME || "~", ".openclaw", "cron", "runs");
+          await rm(join(cronRunsDir, `${jobId}.jsonl`), { force: true });
+          context.logGateway.info("cron: cleaned up run history", { jobId });
+        } catch (err) {
+          context.logGateway.warn("cron: failed to clean up run history", { jobId, error: String(err) });
+        }
+      }
     }
     respond(true, result, undefined);
   },

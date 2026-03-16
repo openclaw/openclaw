@@ -14,6 +14,25 @@ function parseOrigin(
   if (!trimmed || trimmed === "null") {
     return null;
   }
+
+  // Handle non-standard URL schemes like tauri://, electron://
+  // These fail new URL() but we can parse them manually
+  if (trimmed.startsWith("tauri://") || trimmed.startsWith("electron://") || trimmed.startsWith("capacitor://")) {
+    try {
+      // Extract hostname from tauri://hostname or tauri://hostname:port
+      const withoutScheme = trimmed.replace(/^(tauri|electron|capacitor):\/\//, "");
+      const [hostname, port] = withoutScheme.split(":");
+      const host = port ? `${hostname}:${port}` : hostname;
+      return {
+        origin: trimmed, // Keep original for allowlist matching
+        host: host.toLowerCase(),
+        hostname: hostname.toLowerCase(),
+      };
+    } catch {
+      return null;
+    }
+  }
+
   try {
     const url = new URL(trimmed);
     return {

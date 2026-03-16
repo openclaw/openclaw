@@ -58,13 +58,9 @@ export async function ensureBrowserControlAuth(params: {
     return { auth };
   }
 
-  if (params.cfg.gateway?.auth?.mode === "none") {
-    return { auth };
-  }
-
-  if (params.cfg.gateway?.auth?.mode === "trusted-proxy") {
-    return { auth };
-  }
+  // Browser control requires authentication regardless of gateway auth mode.
+  // "none" and "trusted-proxy" modes are for gateway API, not browser control.
+  // Do not bypass browser auth for these modes.
 
   // Re-read latest config to avoid racing with concurrent config writers.
   const latestCfg = loadConfig();
@@ -73,12 +69,6 @@ export async function ensureBrowserControlAuth(params: {
     return { auth: latestAuth };
   }
   if (latestCfg.gateway?.auth?.mode === "password") {
-    return { auth: latestAuth };
-  }
-  if (latestCfg.gateway?.auth?.mode === "none") {
-    return { auth: latestAuth };
-  }
-  if (latestCfg.gateway?.auth?.mode === "trusted-proxy") {
     return { auth: latestAuth };
   }
 

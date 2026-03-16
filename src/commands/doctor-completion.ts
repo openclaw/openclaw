@@ -28,11 +28,34 @@ async function generateCompletionCache(): Promise<boolean> {
   }
 
   const binPath = path.join(root, "openclaw.mjs");
-  const result = spawnSync(process.execPath, [binPath, "completion", "--write-state"], {
-    cwd: root,
-    env: process.env,
-    encoding: "utf-8",
-  });
+
+  // Check available memory before generating completion cache
+  // Skip cache generation on low-memory systems to avoid OOM (#45065)
+  const os = await import("node:os");
+  const freeMemoryMB = os.freemem() / (1024 * 1024);
+  const MIN_MEMORY_MB = 512;
+
+  if (freeMemoryMB < MIN_MEMORY_MB) {
+    console.error(
+      `Skipping completion cache generation: only ${freeMemoryMB.toFixed(0)}MB free memory ` +
+        `(minimum ${MIN_MEMORY_MB}MB required). Run 'openclaw completion --write-state' manually after update.`,
+    );
+    return false;
+  }
+
+  // Use increased memory limit for completion cache generation
+  try {
+    const result = spawnSync(process.execPath, [binPath, "completion", "--write-state"], {
+      cwd: root,
+      env: { ...process.env, NODE_OPTIONS: "--max-old-space-size=2048" },
+      encoding: "utf-8",
+      maxBuffer: 50 * 1024 * 1024, // 50MB buffer for large output
+    });
+    return result.status === 0;
+  } catch (error) {
+    console.error("Completion cache generation failed:", error);
+    return false;
+  }
 
   return result.status === 0;
 }

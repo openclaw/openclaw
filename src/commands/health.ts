@@ -381,6 +381,32 @@ export async function getHealthSnapshot(params?: {
   const channelOrder = listChannelPlugins().map((plugin) => plugin.id);
   const channelLabels: Record<string, string> = {};
 
+  // Get runtime channel status from gateway to get accurate running/tokenSource info
+  let gatewayChannelStatus: Record<string, unknown> = {};
+  try {
+    const result = await callGateway({
+      method: "channels.status",
+      params: { probe: doProbe, timeoutMs: cappedTimeout },
+      timeoutMs: cappedTimeout,
+      config: cfg,
+    });
+    // Validate response structure
+    if (result && typeof result === "object" && "channels" in result) {
+      gatewayChannelStatus = result as Record<string, unknown>;
+    }
+  } catch (err) {
+    debugHealth("gateway channels.status failed", err);
+  }
+
+  // Helper to safely extract gateway channel data
+  const getGatewayChannelData = (channelId: string) => {
+    const channels = gatewayChannelStatus.channels;
+    if (!channels || typeof channels !== "object") return null;
+    const channel = (channels as Record<string, unknown>)[channelId];
+    if (!channel || typeof channel !== "object") return null;
+    return channel as Record<string, unknown>;
+  };
+
   for (const plugin of listChannelPlugins()) {
     channelLabels[plugin.id] = plugin.meta.label ?? plugin.id;
     const accountIds = plugin.config.listAccountIds(cfg);
@@ -485,6 +511,19 @@ export async function getHealthSnapshot(params?: {
       if (record.lastProbeAt === undefined && lastProbeAt) {
         record.lastProbeAt = lastProbeAt;
       }
+
+      // Merge with gateway runtime status for accurate running/tokenSource at account level
+      const gwChannel = getGatewayChannelData(plugin.id);
+      const gwAccounts = gwChannel?.accounts as Record<string, unknown> | undefined;
+      const gwAccount = gwAccounts?.[accountId];
+      if (gwAccount && typeof gwAccount === "object") {
+        for (const key of ["running", "tokenSource", "lastStartAt", "lastStopAt", "lastError", "mode"] as const) {
+          if (key in gwAccount && record[key] === undefined) {
+            record[key] = gwAccount[key] as ChannelAccountHealthSummary[typeof key];
+          }
+        }
+      }
+
       record.accountId = accountId;
       accountSummaries[accountId] = record;
     }
@@ -495,8 +534,19 @@ export async function getHealthSnapshot(params?: {
       accountSummaries[accountIdsToProbe[0] ?? preferredAccountId];
     const fallbackSummary = defaultSummary ?? accountSummaries[Object.keys(accountSummaries)[0]];
     if (fallbackSummary) {
+      // Merge with gateway runtime status for accurate running/tokenSource at channel level
+      const gwChannel = getGatewayChannelData(plugin.id);
+      const gatewayRuntimeFields = gwChannel
+        ? Object.fromEntries(
+            Object.entries(gwChannel).filter(([key]) =>
+              !["accounts", "accountId", "configured", "enabled", "probe", "lastProbeAt"].includes(key),
+            ),
+          )
+        : {};
+
       channels[plugin.id] = {
         ...fallbackSummary,
+        ...gatewayRuntimeFields,
         accounts: accountSummaries,
       } satisfies ChannelHealthSummary;
     }
