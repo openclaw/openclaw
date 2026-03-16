@@ -193,7 +193,7 @@ export function formatMSTeamsSendErrorHint(
   classification: MSTeamsSendErrorClassification,
 ): string | undefined {
   if (classification.kind === "auth") {
-    return "check msteams appId/tenantId and auth config (appPassword, certificate, or federated credential)";
+    return "check msteams appId/tenantId (or env MSTEAMS_APP_ID/MSTEAMS_TENANT_ID) and auth config (appPassword, certificate, or federated credential)";
   }
   if (classification.kind === "throttled") {
     return "Teams throttled the bot; backing off may help";

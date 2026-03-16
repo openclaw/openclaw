@@ -60,7 +60,7 @@ export async function probeMSTeams(cfg?: MSTeamsConfig): Promise<ProbeMSTeamsRes
     return {
       ok: false,
       error:
-        "missing credentials (appId, tenantId, and one of: appPassword, certificate, or federated credential)",
+        "missing credentials (appId, tenantId — or env MSTEAMS_APP_ID/MSTEAMS_TENANT_ID — and one of: appPassword, certificate, or federated credential)",
     };
   }
 
