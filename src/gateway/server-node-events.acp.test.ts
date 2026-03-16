@@ -494,6 +494,58 @@ describe("handleNodeEvent ACP worker ingress", () => {
     });
   });
 
+  it("marks a reconnecting lease lost when acp.session.status reports terminal handoff failure", async () => {
+    const runtime = await createRuntime();
+    const now = Date.now();
+    const lease = await runtime.store.acquireLease({
+      sessionKey: "agent:main:acp:test-session",
+      nodeId: "node-1",
+      leaseId: "lease-1",
+      now,
+    });
+    await runtime.store.startRun({
+      sessionKey: "agent:main:acp:test-session",
+      runId: "run-1",
+      requestId: "req-1",
+      now,
+    });
+    await handleNodeDisconnect("node-1", {
+      now: now + 10,
+    });
+
+    await handleNodeConnected({
+      nodeId: "node-1",
+      invokeNode: async () => ({
+        ok: true,
+        payload: {
+          nodeId: "node-1",
+          ok: true,
+          sessionKey: "agent:main:acp:test-session",
+          leaseId: lease.leaseId,
+          leaseEpoch: lease.leaseEpoch,
+          state: "error",
+          nodeRuntimeSessionId: "runtime-1",
+          details: {
+            reason: "terminal_delivery_failed",
+            runId: "run-1",
+          },
+          workerProtocolVersion: 1,
+        },
+      }),
+      now: now + 11,
+    });
+
+    expect(await runtime.store.getActiveLease("agent:main:acp:test-session")).toMatchObject({
+      state: "lost",
+      leaseId: lease.leaseId,
+      leaseEpoch: lease.leaseEpoch,
+    });
+    expect(await runtime.store.getRun("run-1")).toMatchObject({
+      state: "recovering",
+      recoveryReason: "status_mismatch",
+    });
+  });
+
   it("fails safe to lost when acp.session.status transport fails during reconnect reconcile", async () => {
     const runtime = await createRuntime();
     const now = Date.now();

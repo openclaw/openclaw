@@ -7,7 +7,7 @@ import type { NodeInvokeRequestPayload } from "./invoke.js";
 
 type AcpSessionMode = "persistent" | "oneshot";
 type AcpTurnMode = "prompt" | "steer";
-type AcpWorkerState = "idle" | "running" | "cancelling";
+type AcpWorkerState = "idle" | "running" | "cancelling" | "error";
 
 type AcpEnsureParams = {
   sessionKey: string;
@@ -71,6 +71,7 @@ type AcpNodeSessionRecord = {
   runtimeOptions?: Record<string, unknown>;
   resume?: Record<string, unknown>;
   lastStatusSummary?: string;
+  terminalDeliveryFailure?: AcpNodeTerminalDeliveryFailure;
   completedTurns: Map<string, AcpCompletedTurnRecord>;
   updatedAt: number;
 };
@@ -89,6 +90,13 @@ type AcpCompletedTurnRecord = {
   runId: string;
   requestId: string;
   nodeWorkerRunId: string;
+};
+
+type AcpNodeTerminalDeliveryFailure = {
+  runId: string;
+  requestId: string;
+  nodeWorkerRunId: string;
+  errorMessage: string;
 };
 
 type AcpInvokeCommandResult =
@@ -427,6 +435,27 @@ async function buildStatusPayload(params: {
     typeof runtimeStatus.summary === "string" && runtimeStatus.summary.trim()
       ? runtimeStatus.summary.trim()
       : session.lastStatusSummary;
+  if (session.terminalDeliveryFailure) {
+    return {
+      nodeId: params.nodeId,
+      ok: true,
+      sessionKey: session.sessionKey,
+      leaseId: session.leaseId,
+      leaseEpoch: session.leaseEpoch,
+      state: "error",
+      nodeRuntimeSessionId: session.nodeRuntimeSessionId,
+      workerProtocolVersion: 1,
+      details: {
+        summary: `ACP terminal handoff failed for run ${session.terminalDeliveryFailure.runId}; explicit recovery required`,
+        reason: "terminal_delivery_failed",
+        runId: session.terminalDeliveryFailure.runId,
+        requestId: session.terminalDeliveryFailure.requestId,
+        nodeWorkerRunId: session.terminalDeliveryFailure.nodeWorkerRunId,
+        errorMessage: session.terminalDeliveryFailure.errorMessage,
+        ...(statusSummary ? { backendSummary: statusSummary } : {}),
+      },
+    };
+  }
   return {
     nodeId: params.nodeId,
     ok: true,
@@ -594,6 +623,46 @@ function rememberCompletedTurn(session: AcpNodeSessionRecord, turn: AcpCompleted
   }
 }
 
+function settleCompletedTurn(session: AcpNodeSessionRecord, activeTurn: AcpNodeActiveTurn): void {
+  if (nodeAcpSessions.get(session.sessionKey) !== session || session.activeTurn !== activeTurn) {
+    return;
+  }
+  rememberCompletedTurn(session, {
+    runId: activeTurn.runId,
+    requestId: activeTurn.requestId,
+    nodeWorkerRunId: activeTurn.nodeWorkerRunId,
+  });
+  session.state = "idle";
+  session.currentRunId = undefined;
+  session.currentRequestId = undefined;
+  session.nodeWorkerRunId = undefined;
+  session.activeTurn = undefined;
+  session.terminalDeliveryFailure = undefined;
+  session.updatedAt = Date.now();
+}
+
+function settleTerminalDeliveryFailure(
+  session: AcpNodeSessionRecord,
+  activeTurn: AcpNodeActiveTurn,
+  error: unknown,
+): void {
+  if (nodeAcpSessions.get(session.sessionKey) !== session || session.activeTurn !== activeTurn) {
+    return;
+  }
+  session.state = "error";
+  session.currentRunId = activeTurn.runId;
+  session.currentRequestId = activeTurn.requestId;
+  session.nodeWorkerRunId = undefined;
+  session.activeTurn = undefined;
+  session.terminalDeliveryFailure = {
+    runId: activeTurn.runId,
+    requestId: activeTurn.requestId,
+    nodeWorkerRunId: activeTurn.nodeWorkerRunId,
+    errorMessage: resolveFailureMessage(error),
+  };
+  session.updatedAt = Date.now();
+}
+
 async function runWorkerTurn(params: {
   nodeId: string;
   session: AcpNodeSessionRecord;
@@ -676,29 +745,20 @@ async function runWorkerTurn(params: {
         };
   }
 
-  await sendNodeEvent("acp.worker.terminal", {
-    nodeId,
-    sessionKey: session.sessionKey,
-    runId: activeTurn.runId,
-    leaseId: session.leaseId,
-    leaseEpoch: session.leaseEpoch,
-    terminalEventId: `node-host:${randomUUID()}`,
-    finalSeq: seq,
-    terminal,
-  });
-
-  if (nodeAcpSessions.get(session.sessionKey) === session && session.activeTurn === activeTurn) {
-    rememberCompletedTurn(session, {
+  try {
+    await sendNodeEvent("acp.worker.terminal", {
+      nodeId,
+      sessionKey: session.sessionKey,
       runId: activeTurn.runId,
-      requestId: activeTurn.requestId,
-      nodeWorkerRunId: activeTurn.nodeWorkerRunId,
+      leaseId: session.leaseId,
+      leaseEpoch: session.leaseEpoch,
+      terminalEventId: `node-host:${randomUUID()}`,
+      finalSeq: seq,
+      terminal,
     });
-    session.state = "idle";
-    session.currentRunId = undefined;
-    session.currentRequestId = undefined;
-    session.nodeWorkerRunId = undefined;
-    session.activeTurn = undefined;
-    session.updatedAt = Date.now();
+    settleCompletedTurn(session, activeTurn);
+  } catch (error) {
+    settleTerminalDeliveryFailure(session, activeTurn, error);
   }
 }
 
@@ -716,6 +776,14 @@ function handleTurnStart(
     };
   }
   const session = assertLeaseBinding(nodeAcpSessions.get(params.sessionKey), params);
+  if (session.terminalDeliveryFailure) {
+    return {
+      handled: true,
+      ok: false,
+      code: "UNAVAILABLE",
+      message: `ACP run ${session.terminalDeliveryFailure.runId} finished locally but terminal delivery failed on this node; explicit recovery is required before starting another turn`,
+    };
+  }
   if (
     session.currentRunId === params.runId &&
     session.currentRequestId === params.requestId &&

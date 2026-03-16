@@ -727,6 +727,122 @@ describe("handleAcpInvokeCommand", () => {
     });
   });
 
+  it("fails closed when terminal emission fails after an accepted run finishes", async () => {
+    const runtime = new FakeNodeHostRuntime();
+    registerAcpRuntimeBackend({
+      id: "acpx",
+      runtime,
+    });
+    const nodeEvents: NodeEventCall[] = [];
+    let terminalAttempts = 0;
+
+    await handleAcpInvokeCommand(
+      buildFrame({
+        command: "acp.session.ensure",
+        payload: {
+          sessionKey: "agent:main:acp:test",
+          leaseId: "lease-1",
+          leaseEpoch: 1,
+          agent: "main",
+          mode: "persistent",
+        },
+      }),
+      buildDeps(async (event, payload) => {
+        if (event === "acp.worker.terminal") {
+          terminalAttempts += 1;
+          throw new Error("terminal bridge offline");
+        }
+        nodeEvents.push({ event, payload });
+      }),
+    );
+
+    await handleAcpInvokeCommand(
+      buildFrame({
+        command: "acp.turn.start",
+        payload: {
+          sessionKey: "agent:main:acp:test",
+          runId: "run-terminal-failure",
+          leaseId: "lease-1",
+          leaseEpoch: 1,
+          requestId: "req-terminal-failure",
+          mode: "prompt",
+          text: "finish then fail",
+        },
+      }),
+      buildDeps(async (event, payload) => {
+        if (event === "acp.worker.terminal") {
+          terminalAttempts += 1;
+          throw new Error("terminal bridge offline");
+        }
+        nodeEvents.push({ event, payload });
+      }),
+    );
+
+    await runtime.waitForTurnStart();
+    runtime.releaseTurnToComplete("end_turn");
+    await runtime.waitForTurnFinish();
+    await vi.waitFor(() => {
+      expect(terminalAttempts).toBe(1);
+    });
+
+    const status = await handleAcpInvokeCommand(
+      buildFrame({
+        command: "acp.session.status",
+        payload: {
+          sessionKey: "agent:main:acp:test",
+          leaseId: "lease-1",
+          leaseEpoch: 1,
+        },
+      }),
+      buildDeps(),
+    );
+
+    expect(status).toMatchObject({
+      handled: true,
+      ok: true,
+      payload: {
+        state: "error",
+        nodeRuntimeSessionId: "acpx-session-1",
+        details: {
+          reason: "terminal_delivery_failed",
+          runId: "run-terminal-failure",
+          requestId: "req-terminal-failure",
+          nodeWorkerRunId: expect.any(String),
+          errorMessage: "terminal bridge offline",
+          summary: expect.stringContaining("explicit recovery required"),
+          backendSummary: "local runtime ready",
+        },
+      },
+    });
+    expect(
+      (status as Extract<typeof status, { handled: true; ok: true }>).payload,
+    ).not.toHaveProperty("nodeWorkerRunId");
+    expect(nodeEvents).toHaveLength(2);
+
+    const nextStart = await handleAcpInvokeCommand(
+      buildFrame({
+        command: "acp.turn.start",
+        payload: {
+          sessionKey: "agent:main:acp:test",
+          runId: "run-after-terminal-failure",
+          leaseId: "lease-1",
+          leaseEpoch: 1,
+          requestId: "req-after-terminal-failure",
+          mode: "prompt",
+          text: "retry",
+        },
+      }),
+      buildDeps(async () => {}),
+    );
+
+    expect(nextStart).toMatchObject({
+      handled: true,
+      ok: false,
+      code: "UNAVAILABLE",
+      message: expect.stringContaining("run-terminal-failure"),
+    });
+  });
+
   it("propagates runtime status failure instead of synthesizing a healthy status payload", async () => {
     const runtime = new FakeNodeHostRuntime();
     runtime.statusError = new Error("status backend exploded");
