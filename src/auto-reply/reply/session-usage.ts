@@ -137,7 +137,7 @@ export async function persistSessionUsageUpdate(params: {
           const patch: Partial<SessionEntry> = {
             modelProvider: params.providerUsed ?? entry.modelProvider,
             model: params.modelUsed ?? entry.model,
-            modelIsFromFallback: params.isFromFallback ?? false,
+            modelIsFromFallback: params.isFromFallback ?? entry.modelIsFromFallback,
             contextTokens: resolvedContextTokens,
             systemPromptReport: params.systemPromptReport ?? entry.systemPromptReport,
             updatedAt: Date.now(),
@@ -179,7 +179,7 @@ export async function persistSessionUsageUpdate(params: {
           const patch: Partial<SessionEntry> = {
             modelProvider: params.providerUsed ?? entry.modelProvider,
             model: params.modelUsed ?? entry.model,
-            modelIsFromFallback: params.isFromFallback ?? false,
+            modelIsFromFallback: params.isFromFallback ?? entry.modelIsFromFallback,
             contextTokens: params.contextTokensUsed ?? entry.contextTokens,
             systemPromptReport: params.systemPromptReport ?? entry.systemPromptReport,
             updatedAt: Date.now(),
