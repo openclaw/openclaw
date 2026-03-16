@@ -89,4 +89,66 @@ describe("slackOutbound sendPayload", () => {
     expect(ctx.deps.sendSlack).toHaveBeenCalledWith("C12345", "a".repeat(5000), expect.any(Object));
     expect(result).toMatchObject({ channel: "slack" });
   });
+
+  it("forwards Slack blocks from channelData", async () => {
+    const { run, sendMock, to } = createHarness({
+      payload: {
+        text: "Fallback summary",
+        channelData: {
+          slack: {
+            blocks: [{ type: "divider" }],
+          },
+        },
+      },
+    });
+
+    const result = await run();
+
+    expect(sendMock).toHaveBeenCalledTimes(1);
+    expect(sendMock).toHaveBeenCalledWith(
+      to,
+      "Fallback summary",
+      expect.objectContaining({
+        blocks: [{ type: "divider" }],
+      }),
+    );
+    expect(result).toMatchObject({ channel: "slack", messageId: "sl-1" });
+  });
+
+  it("accepts blocks encoded as JSON strings in Slack channelData", async () => {
+    const { run, sendMock, to } = createHarness({
+      payload: {
+        channelData: {
+          slack: {
+            blocks: '[{"type":"section","text":{"type":"mrkdwn","text":"hello"}}]',
+          },
+        },
+      },
+    });
+
+    await run();
+
+    expect(sendMock).toHaveBeenCalledWith(
+      to,
+      "",
+      expect.objectContaining({
+        blocks: [{ type: "section", text: { type: "mrkdwn", text: "hello" } }],
+      }),
+    );
+  });
+
+  it("rejects invalid Slack blocks from channelData", async () => {
+    const { run, sendMock } = createHarness({
+      payload: {
+        channelData: {
+          slack: {
+            blocks: {},
+          },
+        },
+      },
+    });
+
+    await expect(run()).rejects.toThrow(/blocks must be an array/i);
+    expect(sendMock).not.toHaveBeenCalled();
+  });
 });

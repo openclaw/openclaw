@@ -4,6 +4,7 @@ import { streamSimple } from "@mariozechner/pi-ai";
 import { log } from "./logger.js";
 
 type OpenAIServiceTier = "auto" | "default" | "flex" | "priority";
+type OpenAIReasoningEffort = "low" | "medium" | "high";
 
 const OPENAI_RESPONSES_APIS = new Set(["openai-responses"]);
 const OPENAI_RESPONSES_PROVIDERS = new Set(["openai", "azure-openai-responses"]);
@@ -168,6 +169,89 @@ export function resolveOpenAIServiceTier(
   return normalized;
 }
 
+function normalizeOpenAIFastMode(value: unknown): boolean | undefined {
+  if (typeof value === "boolean") {
+    return value;
+  }
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const normalized = value.trim().toLowerCase();
+  if (
+    normalized === "on" ||
+    normalized === "true" ||
+    normalized === "yes" ||
+    normalized === "1" ||
+    normalized === "fast"
+  ) {
+    return true;
+  }
+  if (
+    normalized === "off" ||
+    normalized === "false" ||
+    normalized === "no" ||
+    normalized === "0" ||
+    normalized === "normal"
+  ) {
+    return false;
+  }
+  return undefined;
+}
+
+export function resolveOpenAIFastMode(
+  extraParams: Record<string, unknown> | undefined,
+): boolean | undefined {
+  const raw = extraParams?.fastMode ?? extraParams?.fast_mode;
+  const normalized = normalizeOpenAIFastMode(raw);
+  if (raw !== undefined && normalized === undefined) {
+    const rawSummary = typeof raw === "string" ? raw : typeof raw;
+    log.warn(`ignoring invalid OpenAI fast mode param: ${rawSummary}`);
+  }
+  return normalized;
+}
+
+function resolveFastModeReasoningEffort(modelId: unknown): OpenAIReasoningEffort {
+  if (typeof modelId !== "string") {
+    return "low";
+  }
+  const normalized = modelId.trim().toLowerCase();
+  // Keep fast mode broadly compatible across GPT-5 family variants by using
+  // the lowest shared non-disabled effort that current transports accept.
+  if (normalized.startsWith("gpt-5")) {
+    return "low";
+  }
+  return "low";
+}
+
+function applyOpenAIFastModePayloadOverrides(params: {
+  payloadObj: Record<string, unknown>;
+  model: { provider?: unknown; id?: unknown; baseUrl?: unknown; api?: unknown };
+}): void {
+  if (params.payloadObj.reasoning === undefined) {
+    params.payloadObj.reasoning = {
+      effort: resolveFastModeReasoningEffort(params.model.id),
+    };
+  }
+
+  const existingText = params.payloadObj.text;
+  if (existingText === undefined) {
+    params.payloadObj.text = { verbosity: "low" };
+  } else if (existingText && typeof existingText === "object" && !Array.isArray(existingText)) {
+    const textObj = existingText as Record<string, unknown>;
+    if (textObj.verbosity === undefined) {
+      textObj.verbosity = "low";
+    }
+  }
+
+  if (
+    params.model.provider === "openai" &&
+    params.payloadObj.service_tier === undefined &&
+    isOpenAIPublicApiBaseUrl(params.model.baseUrl)
+  ) {
+    params.payloadObj.service_tier = "priority";
+  }
+}
+
 export function createOpenAIResponsesContextManagementWrapper(
   baseStreamFn: StreamFn | undefined,
   extraParams: Record<string, unknown> | undefined,
@@ -198,6 +282,31 @@ export function createOpenAIResponsesContextManagementWrapper(
           });
         }
         return originalOnPayload?.(payload, payloadModel);
+      },
+    });
+  };
+}
+
+export function createOpenAIFastModeWrapper(baseStreamFn: StreamFn | undefined): StreamFn {
+  const underlying = baseStreamFn ?? streamSimple;
+  return (model, context, options) => {
+    if (
+      (model.api !== "openai-responses" && model.api !== "openai-codex-responses") ||
+      (model.provider !== "openai" && model.provider !== "openai-codex")
+    ) {
+      return underlying(model, context, options);
+    }
+    const originalOnPayload = options?.onPayload;
+    return underlying(model, context, {
+      ...options,
+      onPayload: (payload) => {
+        if (payload && typeof payload === "object") {
+          applyOpenAIFastModePayloadOverrides({
+            payloadObj: payload as Record<string, unknown>,
+            model,
+          });
+        }
+        return originalOnPayload?.(payload, model);
       },
     });
   };

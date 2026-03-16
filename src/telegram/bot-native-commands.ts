@@ -64,6 +64,7 @@ import {
 } from "./bot/helpers.js";
 import type { TelegramContext } from "./bot/types.js";
 import { resolveTelegramConversationRoute } from "./conversation-route.js";
+import { shouldSuppressLocalTelegramExecApprovalPrompt } from "./exec-approvals.js";
 import {
   evaluateTelegramGroupBaseAccess,
   evaluateTelegramGroupPolicyAccess,
@@ -177,6 +178,7 @@ async function resolveTelegramCommandAuth(params: {
     isForum,
     messageThreadId,
   });
+  const threadParams = buildTelegramThreadParams(threadSpec) ?? {};
   const groupAllowContext = await resolveTelegramGroupAllowFromContext({
     chatId,
     accountId,
@@ -234,7 +236,6 @@ async function resolveTelegramCommandAuth(params: {
     : null;
 
   const sendAuthMessage = async (text: string) => {
-    const threadParams = buildTelegramThreadParams(threadSpec) ?? {};
     await withTelegramApiErrorLogging({
       operation: "sendMessage",
       fn: () => bot.api.sendMessage(chatId, text, threadParams),
@@ -574,9 +575,8 @@ export const registerTelegramNativeCommands = ({
             senderUsername,
             groupConfig,
             topicConfig,
-            commandAuthorized: initialCommandAuthorized,
+            commandAuthorized,
           } = auth;
-          let commandAuthorized = initialCommandAuthorized;
           const runtimeContext = await resolveCommandRuntimeContext({
             msg,
             isGroup,
@@ -742,6 +742,16 @@ export const registerTelegramNativeCommands = ({
             dispatcherOptions: {
               ...prefixOptions,
               deliver: async (payload, _info) => {
+                if (
+                  shouldSuppressLocalTelegramExecApprovalPrompt({
+                    cfg,
+                    accountId: route.accountId,
+                    payload,
+                  })
+                ) {
+                  deliveryState.delivered = true;
+                  return;
+                }
                 const result = await deliverReplies({
                   replies: [payload],
                   ...deliveryBaseOptions,
@@ -851,10 +861,18 @@ export const registerTelegramNativeCommands = ({
             messageThreadId: threadSpec.id,
           });
 
-          await deliverReplies({
-            replies: [result],
-            ...deliveryBaseOptions,
-          });
+          if (
+            !shouldSuppressLocalTelegramExecApprovalPrompt({
+              cfg,
+              accountId: route.accountId,
+              payload: result,
+            })
+          ) {
+            await deliverReplies({
+              replies: [result],
+              ...deliveryBaseOptions,
+            });
+          }
         });
       }
     }

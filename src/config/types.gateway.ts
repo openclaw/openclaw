@@ -345,6 +345,21 @@ export type GatewayHttpConfig = {
   securityHeaders?: GatewayHttpSecurityHeadersConfig;
 };
 
+export type GatewayPushApnsRelayConfig = {
+  /** Base HTTPS URL for the external iOS APNs relay service. */
+  baseUrl?: string;
+  /** Timeout in milliseconds for relay send requests (default: 10000). */
+  timeoutMs?: number;
+};
+
+export type GatewayPushApnsConfig = {
+  relay?: GatewayPushApnsRelayConfig;
+};
+
+export type GatewayPushConfig = {
+  apns?: GatewayPushApnsConfig;
+};
+
 export type GatewayNodesConfig = {
   /** Browser routing policy for node-hosted browser proxies. */
   browser?: {
@@ -393,6 +408,7 @@ export type GatewayConfig = {
   reload?: GatewayReloadConfig;
   tls?: GatewayTlsConfig;
   http?: GatewayHttpConfig;
+  push?: GatewayPushConfig;
   nodes?: GatewayNodesConfig;
   /**
    * IPs of trusted reverse proxies (e.g. Traefik, nginx). When a connection

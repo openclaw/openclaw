@@ -481,8 +481,10 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
       provider: "gemini",
       enabled: Boolean(gemini),
       buildRequest: (chunk) => ({
-        content: { parts: [{ text: chunk.text }] },
-        taskType: "RETRIEVAL_DOCUMENT",
+        request: {
+          content: { parts: [{ text: chunk.text }] },
+          taskType: "RETRIEVAL_DOCUMENT",
+        },
       }),
       runBatch: async (runnerOptions) =>
         await runGeminiEmbeddingBatches({

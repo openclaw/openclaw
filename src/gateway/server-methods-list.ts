@@ -152,6 +152,7 @@ const BASE_METHODS = [
   "mcp.registry.remove",
   "mcp.registry.sync",
   "mcp.health.check",
+  "gateway.identity.get",
   "system-presence",
   "system-event",
   "send",

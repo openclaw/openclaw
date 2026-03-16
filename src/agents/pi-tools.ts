@@ -269,6 +269,8 @@ export function createOpenClawCodingTools(options?: {
   senderIsOwner?: boolean;
   /** Pre-resolved MCP tools (from gateway startup or lazy init). */
   mcpTools?: AnyAgentTool[];
+  /** Callback invoked when sessions_yield tool is called. */
+  onYield?: (message: string) => Promise<void> | void;
 }): AnyAgentTool[] {
   const execToolName = "exec";
   const sandbox = options?.sandbox?.enabled ? options.sandbox : undefined;
@@ -533,6 +535,7 @@ export function createOpenClawCodingTools(options?: {
       senderIsOwner: options?.senderIsOwner,
       sessionId: options?.sessionId,
       mcpTools: options?.mcpTools,
+      onYield: options?.onYield,
     }),
   ];
   const toolsForMemoryFlush =

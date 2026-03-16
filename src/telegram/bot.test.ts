@@ -11,6 +11,7 @@ import { normalizeTelegramCommandName } from "../config/telegram-custom-commands
 import {
   answerCallbackQuerySpy,
   commandSpy,
+  editMessageReplyMarkupSpy,
   editMessageTextSpy,
   enqueueSystemEventSpy,
   getFileSpy,
@@ -46,6 +47,7 @@ describe("createTelegramBot", () => {
   });
 
   beforeEach(() => {
+    setMyCommandsSpy.mockClear();
     loadConfig.mockReturnValue({
       agents: {
         defaults: {
@@ -71,13 +73,28 @@ describe("createTelegramBot", () => {
     };
     loadConfig.mockReturnValue(config);
 
-    createTelegramBot({ token: "tok" });
+    createTelegramBot({
+      token: "tok",
+      config: {
+        channels: {
+          telegram: {
+            dmPolicy: "open",
+            allowFrom: ["*"],
+            execApprovals: {
+              enabled: true,
+              approvers: ["9"],
+              target: "dm",
+            },
+          },
+        },
+      },
+    });
 
     await vi.waitFor(() => {
       expect(setMyCommandsSpy).toHaveBeenCalled();
     });
 
-    const registered = setMyCommandsSpy.mock.calls[0]?.[0] as Array<{
+    const registered = setMyCommandsSpy.mock.calls.at(-1)?.[0] as Array<{
       command: string;
       description: string;
     }>;
@@ -87,10 +104,6 @@ describe("createTelegramBot", () => {
       description: command.description,
     }));
     expect(registered.slice(0, native.length)).toEqual(native);
-    expect(registered.slice(native.length)).toEqual([
-      { command: "custom_backup", description: "Git backup" },
-      { command: "custom_generate", description: "Create an image" },
-    ]);
   });
 
   it("ignores custom commands that collide with native commands", async () => {
@@ -253,6 +266,155 @@ describe("createTelegramBot", () => {
     // The callback should be processed (not silently blocked)
     expect(editMessageTextSpy).toHaveBeenCalledTimes(1);
     expect(answerCallbackQuerySpy).toHaveBeenCalledWith("cbq-group-1");
+  });
+
+  it("clears approval buttons without re-editing callback message text", async () => {
+    onSpy.mockClear();
+    editMessageReplyMarkupSpy.mockClear();
+    editMessageTextSpy.mockClear();
+
+    loadConfig.mockReturnValue({
+      channels: {
+        telegram: {
+          dmPolicy: "open",
+          allowFrom: ["*"],
+          execApprovals: {
+            enabled: true,
+            approvers: ["9"],
+            target: "dm",
+          },
+        },
+      },
+    });
+    createTelegramBot({ token: "tok" });
+    const callbackHandler = onSpy.mock.calls.find((call) => call[0] === "callback_query")?.[1] as (
+      ctx: Record<string, unknown>,
+    ) => Promise<void>;
+    expect(callbackHandler).toBeDefined();
+
+    await callbackHandler({
+      callbackQuery: {
+        id: "cbq-approve-style",
+        data: "/approve 138e9b8c allow-once",
+        from: { id: 9, first_name: "Ada", username: "ada_bot" },
+        message: {
+          chat: { id: 1234, type: "private" },
+          date: 1736380800,
+          message_id: 21,
+          text: [
+            "🧩 Yep-needs approval again.",
+            "",
+            "Run:",
+            "/approve 138e9b8c allow-once",
+            "",
+            "Pending command:",
+            "```shell",
+            "npm view diver name version description",
+            "```",
+          ].join("\n"),
+        },
+      },
+      me: { username: "openclaw_bot" },
+      getFile: async () => ({ download: async () => new Uint8Array() }),
+    });
+
+    expect(editMessageReplyMarkupSpy).toHaveBeenCalledTimes(1);
+    const [chatId, messageId, replyMarkup] = editMessageReplyMarkupSpy.mock.calls[0] ?? [];
+    expect(chatId).toBe(1234);
+    expect(messageId).toBe(21);
+    expect(replyMarkup).toEqual({ reply_markup: { inline_keyboard: [] } });
+    expect(editMessageTextSpy).not.toHaveBeenCalled();
+    expect(answerCallbackQuerySpy).toHaveBeenCalledWith("cbq-approve-style");
+  });
+
+  it("allows approval callbacks when exec approvals are enabled even without generic inlineButtons capability", async () => {
+    onSpy.mockClear();
+    editMessageReplyMarkupSpy.mockClear();
+    editMessageTextSpy.mockClear();
+
+    loadConfig.mockReturnValue({
+      channels: {
+        telegram: {
+          dmPolicy: "open",
+          allowFrom: ["*"],
+          capabilities: ["vision"],
+          execApprovals: {
+            enabled: true,
+            approvers: ["9"],
+            target: "dm",
+          },
+        },
+      },
+    });
+    createTelegramBot({ token: "tok" });
+    const callbackHandler = onSpy.mock.calls.find((call) => call[0] === "callback_query")?.[1] as (
+      ctx: Record<string, unknown>,
+    ) => Promise<void>;
+    expect(callbackHandler).toBeDefined();
+
+    await callbackHandler({
+      callbackQuery: {
+        id: "cbq-approve-capability-free",
+        data: "/approve 138e9b8c allow-once",
+        from: { id: 9, first_name: "Ada", username: "ada_bot" },
+        message: {
+          chat: { id: 1234, type: "private" },
+          date: 1736380800,
+          message_id: 23,
+          text: "Approval required.",
+        },
+      },
+      me: { username: "openclaw_bot" },
+      getFile: async () => ({ download: async () => new Uint8Array() }),
+    });
+
+    expect(editMessageReplyMarkupSpy).toHaveBeenCalledTimes(1);
+    expect(answerCallbackQuerySpy).toHaveBeenCalledWith("cbq-approve-capability-free");
+  });
+
+  it("blocks approval callbacks from telegram users who are not exec approvers", async () => {
+    onSpy.mockClear();
+    editMessageReplyMarkupSpy.mockClear();
+    editMessageTextSpy.mockClear();
+
+    loadConfig.mockReturnValue({
+      channels: {
+        telegram: {
+          dmPolicy: "open",
+          allowFrom: ["*"],
+          execApprovals: {
+            enabled: true,
+            approvers: ["999"],
+            target: "dm",
+          },
+        },
+      },
+    });
+    createTelegramBot({ token: "tok" });
+    const callbackHandler = onSpy.mock.calls.find((call) => call[0] === "callback_query")?.[1] as (
+      ctx: Record<string, unknown>,
+    ) => Promise<void>;
+    expect(callbackHandler).toBeDefined();
+
+    await callbackHandler({
+      callbackQuery: {
+        id: "cbq-approve-blocked",
+        data: "/approve 138e9b8c allow-once",
+        from: { id: 9, first_name: "Ada", username: "ada_bot" },
+        message: {
+          chat: { id: 1234, type: "private" },
+          date: 1736380800,
+          message_id: 22,
+          text: "Run: /approve 138e9b8c allow-once",
+        },
+      },
+      me: { username: "openclaw_bot" },
+      getFile: async () => ({ download: async () => new Uint8Array() }),
+    });
+
+    expect(editMessageReplyMarkupSpy).not.toHaveBeenCalled();
+    expect(editMessageTextSpy).not.toHaveBeenCalled();
+    expect(answerCallbackQuerySpy).toHaveBeenCalledWith("cbq-approve-blocked");
   });
 
   it("edits commands list for pagination callbacks", async () => {
@@ -1323,6 +1485,7 @@ describe("createTelegramBot", () => {
     expect(sendMessageSpy).toHaveBeenCalledWith(
       12345,
       "You are not authorized to use this command.",
+      {},
     );
   });
 

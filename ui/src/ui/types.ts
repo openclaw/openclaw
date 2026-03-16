@@ -407,6 +407,7 @@ export type GatewaySessionRow = {
   systemSent?: boolean;
   abortedLastRun?: boolean;
   thinkingLevel?: string;
+  fastMode?: boolean;
   verboseLevel?: string;
   reasoningLevel?: string;
   elevatedLevel?: string;
@@ -424,6 +425,7 @@ export type SessionsPatchResult = SessionsPatchResultBase<{
   sessionId: string;
   updatedAt?: number;
   thinkingLevel?: string;
+  fastMode?: boolean;
   verboseLevel?: string;
   reasoningLevel?: string;
   elevatedLevel?: string;

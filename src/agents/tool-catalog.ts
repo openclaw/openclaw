@@ -154,6 +154,14 @@ const CORE_TOOL_DEFINITIONS: CoreToolDefinition[] = [
     includeInOpenClawGroup: true,
   },
   {
+    id: "sessions_yield",
+    label: "sessions_yield",
+    description: "End turn to receive sub-agent results",
+    sectionId: "sessions",
+    profiles: ["coding"],
+    includeInOpenClawGroup: true,
+  },
+  {
     id: "subagents",
     label: "subagents",
     description: "Manage sub-agents",

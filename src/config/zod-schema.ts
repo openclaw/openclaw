@@ -796,6 +796,23 @@ export const OpenClawSchema = z
           })
           .strict()
           .optional(),
+        push: z
+          .object({
+            apns: z
+              .object({
+                relay: z
+                  .object({
+                    baseUrl: z.string().optional(),
+                    timeoutMs: z.number().int().positive().optional(),
+                  })
+                  .strict()
+                  .optional(),
+              })
+              .strict()
+              .optional(),
+          })
+          .strict()
+          .optional(),
         nodes: z
           .object({
             browser: z

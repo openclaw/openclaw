@@ -184,6 +184,24 @@ export function resolveResponseUsageMode(raw?: string | null): UsageDisplayLevel
   return normalizeUsageDisplay(raw) ?? "off";
 }
 
+// Normalize fast-mode flags used to toggle low-latency model behavior.
+export function normalizeFastMode(raw?: string | boolean | null): boolean | undefined {
+  if (typeof raw === "boolean") {
+    return raw;
+  }
+  if (!raw) {
+    return undefined;
+  }
+  const key = raw.toLowerCase();
+  if (["off", "false", "no", "0", "disable", "disabled", "normal"].includes(key)) {
+    return false;
+  }
+  if (["on", "true", "yes", "1", "enable", "enabled", "fast"].includes(key)) {
+    return true;
+  }
+  return undefined;
+}
+
 // Normalize elevated flags used to toggle elevated bash permissions.
 export function normalizeElevatedLevel(raw?: string | null): ElevatedLevel | undefined {
   if (!raw) {
