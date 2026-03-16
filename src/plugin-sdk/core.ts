@@ -144,3 +144,5 @@ export {
   type RoutePeerKind,
 } from "../routing/resolve-route.js";
 export { resolveThreadSessionKeys } from "../routing/session-key.js";
+export { runPassiveAccountLifecycle } from "./channel-lifecycle.js";
+export { createLoggerBackedRuntime } from "./runtime.js";

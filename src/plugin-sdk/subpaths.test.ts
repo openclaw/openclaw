@@ -29,6 +29,8 @@ describe("plugin-sdk subpath exports", () => {
   it("exports core routing helpers", () => {
     expect(typeof coreSdk.buildAgentSessionKey).toBe("function");
     expect(typeof coreSdk.resolveThreadSessionKeys).toBe("function");
+    expect(typeof coreSdk.runPassiveAccountLifecycle).toBe("function");
+    expect(typeof coreSdk.createLoggerBackedRuntime).toBe("function");
   });
 
   it("exports Discord helpers", () => {

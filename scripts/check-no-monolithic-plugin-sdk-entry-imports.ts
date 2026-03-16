@@ -59,6 +59,10 @@ function collectPluginSourceFiles(rootDir: string): string[] {
   return files;
 }
 
+function collectSharedExtensionSourceFiles(): string[] {
+  return collectPluginSourceFiles(path.join(process.cwd(), "extensions", "shared"));
+}
+
 function main() {
   const discovery = discoverOpenClawPlugins({});
   const bundledCandidates = discovery.candidates.filter((c) => c.origin === "bundled");
@@ -68,6 +72,9 @@ function main() {
     for (const srcFile of collectPluginSourceFiles(candidate.rootDir)) {
       filesToCheck.add(srcFile);
     }
+  }
+  for (const sharedFile of collectSharedExtensionSourceFiles()) {
+    filesToCheck.add(sharedFile);
   }
 
   const offenders: string[] = [];
