@@ -6,15 +6,20 @@ const { undiciFetchMock, proxyAgentSpy } = vi.hoisted(() => ({
   proxyAgentSpy: vi.fn(),
 }));
 
+vi.mock("../../../../src/infra/net/proxy-env.js", () => ({
+  resolveEnvHttpProxyUrl: vi.fn(() => undefined),
+}));
+
 vi.mock("undici", () => {
   class ProxyAgent {
     proxyUrl: string;
-    constructor(proxyUrl: string) {
-      if (proxyUrl === "bad-proxy") {
+    constructor(options: string | { uri: string }) {
+      const uri = typeof options === "string" ? options : options.uri;
+      if (uri === "bad-proxy") {
         throw new Error("bad proxy");
       }
-      this.proxyUrl = proxyUrl;
-      proxyAgentSpy(proxyUrl);
+      this.proxyUrl = uri;
+      proxyAgentSpy(options);
     }
   }
   return {
@@ -36,7 +41,9 @@ describe("resolveDiscordRestFetch", () => {
 
     await fetcher("https://discord.com/api/v10/oauth2/applications/@me");
 
-    expect(proxyAgentSpy).toHaveBeenCalledWith("http://proxy.test:8080");
+    expect(proxyAgentSpy).toHaveBeenCalledWith(
+      expect.objectContaining({ uri: "http://proxy.test:8080" }),
+    );
     expect(undiciFetchMock).toHaveBeenCalledWith(
       "https://discord.com/api/v10/oauth2/applications/@me",
       expect.objectContaining({

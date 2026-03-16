@@ -364,17 +364,24 @@ export function createPinnedDispatcher(
 
   if (policy.mode === "env-proxy") {
     return new EnvHttpProxyAgent({
-      connect: withPinnedLookup(pinned.lookup, policy.connect),
+      connect: {
+        ...withPinnedLookup(pinned.lookup, policy.connect),
+        keepAlive: false,
+      },
       ...(policy.proxyTls ? { proxyTls: { ...policy.proxyTls } } : {}),
     });
   }
 
   const proxyUrl = policy.proxyUrl.trim();
   if (!policy.proxyTls) {
-    return new ProxyAgent(proxyUrl);
+    return new ProxyAgent({
+      uri: proxyUrl,
+      connect: { keepAlive: false },
+    });
   }
   return new ProxyAgent({
     uri: proxyUrl,
+    connect: { keepAlive: false },
     proxyTls: { ...policy.proxyTls },
   });
 }
@@ -383,14 +390,20 @@ export async function closeDispatcher(dispatcher?: Dispatcher | null): Promise<v
   if (!dispatcher) {
     return;
   }
-  const candidate = dispatcher as { close?: () => Promise<void> | void; destroy?: () => void };
+  const candidate = dispatcher as {
+    close?: () => Promise<void> | void;
+    destroy?: () => Promise<void> | void;
+  };
   try {
-    if (typeof candidate.close === "function") {
-      await candidate.close();
+    // Prefer destroy() for immediate teardown — these are ephemeral per-request
+    // dispatchers whose response bodies are already consumed by release time.
+    // close() can hang when proxy tunnels keep connections alive (EnvHttpProxyAgent).
+    if (typeof candidate.destroy === "function") {
+      await candidate.destroy();
       return;
     }
-    if (typeof candidate.destroy === "function") {
-      candidate.destroy();
+    if (typeof candidate.close === "function") {
+      await candidate.close();
     }
   } catch {
     // ignore dispatcher cleanup errors

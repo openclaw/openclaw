@@ -5,6 +5,7 @@ import { ProxyAgent, fetch as undiciFetch } from "undici";
 import WebSocket from "ws";
 import type { DiscordAccountConfig } from "../../../../src/config/types.js";
 import { danger } from "../../../../src/globals.js";
+import { resolveEnvHttpProxyUrl } from "../../../../src/infra/net/proxy-env.js";
 import type { RuntimeEnv } from "../../../../src/runtime.js";
 
 const DISCORD_GATEWAY_BOT_URL = "https://discord.com/api/v10/gateway/bot";
@@ -176,7 +177,7 @@ export function createDiscordGatewayPlugin(params: {
   runtime: RuntimeEnv;
 }): GatewayPlugin {
   const intents = resolveDiscordGatewayIntents(params.discordConfig?.intents);
-  const proxy = params.discordConfig?.proxy?.trim();
+  const proxy = params.discordConfig?.proxy?.trim() || resolveEnvHttpProxyUrl("https");
   const options = {
     reconnect: { maxAttempts: 50 },
     intents,
@@ -192,7 +193,10 @@ export function createDiscordGatewayPlugin(params: {
 
   try {
     const wsAgent = new HttpsProxyAgent<string>(proxy);
-    const fetchAgent = new ProxyAgent(proxy);
+    const fetchAgent = new ProxyAgent({
+      uri: proxy,
+      connect: { keepAlive: false },
+    });
 
     params.runtime.log?.("discord: gateway proxy enabled");
 

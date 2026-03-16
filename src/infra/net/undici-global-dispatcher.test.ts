@@ -108,6 +108,7 @@ describe("ensureGlobalUndiciStreamTimeouts", () => {
     expect(next.options?.connect).toEqual({
       autoSelectFamily: false,
       autoSelectFamilyAttemptTimeout: 300,
+      keepAlive: false,
     });
   });
 

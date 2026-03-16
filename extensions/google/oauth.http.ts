@@ -1,4 +1,5 @@
 import { fetchWithSsrFGuard } from "../../src/infra/net/fetch-guard.js";
+import { hasProxyEnvConfigured } from "../../src/infra/net/proxy-env.js";
 import { DEFAULT_FETCH_TIMEOUT_MS } from "./oauth.shared.js";
 
 export async function fetchWithTimeout(
@@ -10,6 +11,7 @@ export async function fetchWithTimeout(
     url,
     init,
     timeoutMs,
+    mode: hasProxyEnvConfigured() ? "trusted_env_proxy" : undefined,
   });
   try {
     const body = await response.arrayBuffer();

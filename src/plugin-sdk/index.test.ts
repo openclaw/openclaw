@@ -4,6 +4,7 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { build } from "tsdown";
 import { describe, expect, it } from "vitest";
+// @ts-ignore
 import {
   buildPluginSdkEntrySources,
   buildPluginSdkPackageExports,
@@ -175,7 +176,9 @@ describe("plugin-sdk exports", () => {
 
       const { default: importResults } = await import(pathToFileURL(consumerEntry).href);
       expect(importResults).toEqual(
-        Object.fromEntries(pluginSdkSpecifiers.map((specifier: string) => [specifier, "object"])),
+        Object.fromEntries(
+          (pluginSdkSpecifiers as string[]).map((specifier) => [specifier, "object"]),
+        ),
       );
     } finally {
       await fs.rm(outDir, { recursive: true, force: true });
@@ -191,7 +194,6 @@ describe("plugin-sdk exports", () => {
     const currentPluginSdkExports = Object.fromEntries(
       Object.entries(packageJson.exports ?? {}).filter(([key]) => key.startsWith("./plugin-sdk")),
     );
-
     expect(currentPluginSdkExports).toEqual(buildPluginSdkPackageExports());
   });
 });

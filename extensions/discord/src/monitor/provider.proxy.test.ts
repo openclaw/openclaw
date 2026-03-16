@@ -86,13 +86,21 @@ vi.mock("https-proxy-agent", () => ({
   HttpsProxyAgent,
 }));
 
+vi.mock("../../../../src/infra/net/proxy-env.js", () => ({
+  resolveEnvHttpProxyUrl: vi.fn(() => undefined),
+}));
+
 vi.mock("undici", () => ({
   ProxyAgent: class {
     proxyUrl: string;
-    constructor(proxyUrl: string) {
-      this.proxyUrl = proxyUrl;
-      undiciProxyAgentSpy(proxyUrl);
-      restProxyAgentSpy(proxyUrl);
+    constructor(options: string | { uri: string }) {
+      const uri = typeof options === "string" ? options : options.uri;
+      if (uri === "bad-proxy") {
+        throw new Error("bad proxy");
+      }
+      this.proxyUrl = uri;
+      undiciProxyAgentSpy(options);
+      restProxyAgentSpy(options);
     }
   },
   fetch: undiciFetchMock,
@@ -243,7 +251,9 @@ describe("createDiscordGatewayPlugin", () => {
 
     await registerGatewayClientWithMetadata({ plugin, fetchMock: undiciFetchMock });
 
-    expect(restProxyAgentSpy).toHaveBeenCalledWith("http://proxy.test:8080");
+    expect(restProxyAgentSpy).toHaveBeenCalledWith(
+      expect.objectContaining({ uri: "http://proxy.test:8080" }),
+    );
     expect(undiciFetchMock).toHaveBeenCalledWith(
       "https://discord.com/api/v10/gateway/bot",
       expect.objectContaining({
