@@ -156,9 +156,11 @@ From within the Azure Bastion SSH shell, start the [OpenClaw onboarding wizard](
 openclaw onboard --install-daemon
 ```
 
+Most enterprise Azure teams already have GitHub Copilot licenses. If that is your case, we recommend choosing the GitHub Copilot provider in the OpenClaw onboarding wizard. See [GitHub Copilot provider](/providers/github-copilot).
+
 ## Next steps
 
 - Set up messaging channels: [Channels](/channels)
 - Pair local devices as nodes: [Nodes](/nodes)
 - Configure the Gateway: [Gateway configuration](/gateway/configuration)
-- Azure deployment repo (credentials/context): [johnsonshi/openclaw-azure-github-copilot](https://github.com/johnsonshi/openclaw-azure-github-copilot)
+- For more details on OpenClaw Azure deployment with the GitHub Copilot model provider: [OpenClaw on Azure with GitHub Copilot](https://github.com/johnsonshi/openclaw-azure-github-copilot)
