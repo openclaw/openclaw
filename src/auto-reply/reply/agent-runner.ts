@@ -344,7 +344,14 @@ export async function runReplyAgent(params: {
     });
   try {
     const runStartedAt = Date.now();
-    const replyToChannelId = replyToChannel ?? sessionCtx.Provider ?? "";
+    const hookChannelId = (
+      replyToChannel ??
+      followupRun.run.messageProvider ??
+      "unknown"
+    ).toLowerCase();
+    const hookChannelKey = [hookChannelId, sessionCtx.AccountId, sessionCtx.To]
+      .filter(Boolean)
+      .join(":");
     const runOutcome = await runAgentTurnWithHooks(
       {
         commandBody,
@@ -370,8 +377,9 @@ export async function runReplyAgent(params: {
         resolvedVerboseLevel,
       },
       {
-        channelId: replyToChannelId,
-        channelKey: sessionCtx.AccountId ?? replyToChannelId,
+        channelId: hookChannelId,
+        channelKey: hookChannelKey,
+        conversationId: sessionCtx.To ?? undefined,
         agentId: followupRun.run.agentId ?? "",
         recreateBlockPipeline:
           blockStreamingEnabled && opts?.onBlockReply

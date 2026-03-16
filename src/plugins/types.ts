@@ -1451,6 +1451,8 @@ export type PluginHookAgentContext = {
   trigger?: string;
   /** Channel identifier (e.g. "telegram", "discord", "whatsapp"). */
   channelId?: string;
+  /** Conversation target (e.g. group ID, DM address). */
+  conversationId?: string;
 };
 
 // before_model_resolve hook
@@ -1539,18 +1541,11 @@ export type PluginHookAfterAgentCompleteEvent = {
   sessionKey: string;
   channelId: string;
   channelKey: string;
+  /** Conversation target (e.g. group ID, DM address). */
+  conversationId?: string;
   agentId: string;
   response: string;
   processingStartedAt: number;
-  messageIdAtStart?: string;
-  toolCallsMade: PluginHookToolCallRecord[];
-};
-
-export type PluginHookToolCallRecord = {
-  toolName: string;
-  input: Record<string, unknown>;
-  output: string;
-  hasSideEffect: boolean;
 };
 
 export type PluginHookAfterAgentCompleteResult = {

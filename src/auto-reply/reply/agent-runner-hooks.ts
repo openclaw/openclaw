@@ -12,6 +12,8 @@ export type AfterAgentCompleteHookContext = {
   channelId: string;
   /** Account-scoped channel key. */
   channelKey: string;
+  /** Conversation target (e.g. group ID, DM address). */
+  conversationId?: string;
   agentId: string;
   /** Factory to recreate the block reply pipeline on reinject iterations. */
   recreateBlockPipeline?: () => RunAgentTurnParams["blockReplyPipeline"];
@@ -58,20 +60,22 @@ export async function runAgentTurnWithHooks(
         .filter(Boolean)
         .join("\n") ?? "";
 
-    // Tool call records are not yet available from the run result;
-    // consumers that need tool tracking (e.g. speedtrap) should use
-    // the before_tool_call hook to observe calls as they happen.
     const hookResult = await hookRunner.runAfterAgentComplete(
       {
         sessionKey: params.sessionKey ?? "",
         channelId: hookCtx.channelId,
         channelKey: hookCtx.channelKey,
+        conversationId: hookCtx.conversationId,
         agentId: hookCtx.agentId,
         response: responseText,
         processingStartedAt,
-        toolCallsMade: [],
       },
-      { agentId: hookCtx.agentId, sessionKey: params.sessionKey },
+      {
+        agentId: hookCtx.agentId,
+        sessionKey: params.sessionKey,
+        channelId: hookCtx.channelId,
+        conversationId: hookCtx.conversationId,
+      },
     );
 
     // No hook result or no reinject/suppress: return normally.
