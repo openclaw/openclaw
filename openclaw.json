@@ -291,17 +291,17 @@
         "recurring": true
       },
       {
-        "id": "surveyor-weekly",
-        "schedule": "0 2 * * 6",
-        "agent": "bo",
-        "prompt": "Run the weekly vault survey. Run /surveyor — cluster all vault nodes, detect bridges, surface SOC signals, and send the weekly digest.",
-        "recurring": true
-      },
-      {
         "id": "distiller-daily",
         "schedule": "0 6 * * *",
         "agent": "bo",
         "prompt": "Run the daily digest. Run /distiller — query last 7 days of vault nodes and send morning synthesis.",
+        "recurring": true
+      },
+      {
+        "id": "surveyor-weekly",
+        "schedule": "0 2 * * 6",
+        "agent": "bo",
+        "prompt": "Run the weekly vault survey. Run /surveyor — cluster all vault nodes, detect bridges, surface SOC signals, and send the weekly digest.",
         "recurring": true
       }
     ]

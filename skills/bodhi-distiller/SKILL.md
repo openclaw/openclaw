@@ -1,9 +1,8 @@
 ---
 name: bodhi-distiller
-description: Morning synthesis of recent thoughts. Runs daily at 6am.
+description: Morning synthesis of recent thoughts. Cron-scheduled via openclaw.json (distiller-daily job, 6am UTC daily).
 user-invocable: true
 disable-model-invocation: false
-metadata: {"openclaw":{"cron":"0 6 * * *"}}
 ---
 
 # bodhi-distiller

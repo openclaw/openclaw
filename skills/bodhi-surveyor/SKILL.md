@@ -1,9 +1,8 @@
 ---
 name: bodhi-surveyor
-description: Weekly clustering, bridge discovery, domain analysis, and SOC signals. Runs Saturdays at 2am.
+description: Weekly clustering, bridge discovery, domain analysis, and SOC signals. Cron-scheduled via openclaw.json (surveyor-weekly job, Saturdays 2am UTC).
 user-invocable: true
 disable-model-invocation: false
-metadata: {"openclaw":{"cron":"0 2 * * 6"}}
 ---
 
 # bodhi-surveyor
