@@ -1,3 +1,4 @@
+import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -8,6 +9,10 @@ import { loadEnabledBundleMcpConfig } from "./bundle-mcp.js";
 import { clearPluginManifestRegistryCache } from "./manifest-registry.js";
 
 const tempDirs: string[] = [];
+
+function canonicalizeComparablePath(filePath: string): string {
+  return fsSync.realpathSync.native(filePath);
+}
 
 async function createTempDir(prefix: string): Promise<string> {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), prefix));
@@ -76,7 +81,11 @@ describe("loadEnabledBundleMcpConfig", () => {
 
       expect(loaded.diagnostics).toEqual([]);
       expect(loaded.config.mcpServers.bundleProbe?.command).toBe("node");
-      expect(loaded.config.mcpServers.bundleProbe?.args).toEqual([resolvedServerPath]);
+      expect(
+        loaded.config.mcpServers.bundleProbe?.args?.map((entry) =>
+          canonicalizeComparablePath(String(entry)),
+        ),
+      ).toEqual([canonicalizeComparablePath(resolvedServerPath)]);
     } finally {
       env.restore();
     }
