@@ -1,13 +1,13 @@
-import { markdownToSignalTextChunks } from "../../../../extensions/signal/src/format.js";
-import { sendMessageSignal } from "../../../../extensions/signal/src/send.js";
-import { resolveTextChunkLimit } from "../../../auto-reply/chunk.js";
-import { resolveMarkdownTableMode } from "../../../config/markdown-tables.js";
+import { resolveTextChunkLimit } from "../../../src/auto-reply/chunk.js";
+import { createScopedChannelMediaMaxBytesResolver } from "../../../src/channels/plugins/outbound/direct-text-media.js";
+import type { ChannelOutboundAdapter } from "../../../src/channels/plugins/types.js";
+import { resolveMarkdownTableMode } from "../../../src/config/markdown-tables.js";
 import {
   resolveOutboundSendDep,
   type OutboundSendDeps,
-} from "../../../infra/outbound/send-deps.js";
-import type { ChannelOutboundAdapter } from "../types.js";
-import { createScopedChannelMediaMaxBytesResolver } from "./direct-text-media.js";
+} from "../../../src/infra/outbound/send-deps.js";
+import { markdownToSignalTextChunks } from "./format.js";
+import { sendMessageSignal } from "./send.js";
 
 function resolveSignalSender(deps: OutboundSendDeps | undefined) {
   return resolveOutboundSendDep<typeof sendMessageSignal>(deps, "signal") ?? sendMessageSignal;

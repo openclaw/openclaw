@@ -1,5 +1,4 @@
 import { getChannelPlugin } from "../../channels/plugins/index.js";
-import { listPairingChannels } from "../../channels/plugins/pairing.js";
 import type { ChannelId } from "../../channels/plugins/types.js";
 import { normalizeChannelId } from "../../channels/registry.js";
 import type { OpenClawConfig } from "../../config/config.js";
@@ -8,7 +7,6 @@ import {
   validateConfigObjectWithPlugins,
   writeConfigFile,
 } from "../../config/config.js";
-import { isBlockedObjectKey } from "../../infra/prototype-keys.js";
 import {
   addChannelAllowFromStoreEntry,
   readChannelAllowFromStore,
@@ -198,104 +196,6 @@ async function updatePairingStoreAllowlist(params: {
   }
 }
 
-function resolveAccountTarget(
-  parsed: Record<string, unknown>,
-  channelId: ChannelId,
-  accountId?: string | null,
-) {
-  const channels = (parsed.channels ??= {}) as Record<string, unknown>;
-  const channel = (channels[channelId] ??= {}) as Record<string, unknown>;
-  const normalizedAccountId = normalizeAccountId(accountId);
-  if (isBlockedObjectKey(normalizedAccountId)) {
-    return {
-      target: channel,
-      pathPrefix: `channels.${channelId}`,
-      accountId: DEFAULT_ACCOUNT_ID,
-      writeTarget: { kind: "channel", scope: { channelId } } as const,
-    };
-  }
-  const hasAccounts = Boolean(channel.accounts && typeof channel.accounts === "object");
-  const useAccount = normalizedAccountId !== DEFAULT_ACCOUNT_ID || hasAccounts;
-  if (!useAccount) {
-    return {
-      target: channel,
-      pathPrefix: `channels.${channelId}`,
-      accountId: normalizedAccountId,
-      writeTarget: { kind: "channel", scope: { channelId } } as const,
-    };
-  }
-  const accounts = (channel.accounts ??= {}) as Record<string, unknown>;
-  const existingAccount = Object.hasOwn(accounts, normalizedAccountId)
-    ? accounts[normalizedAccountId]
-    : undefined;
-  if (!existingAccount || typeof existingAccount !== "object") {
-    accounts[normalizedAccountId] = {};
-  }
-  const account = accounts[normalizedAccountId] as Record<string, unknown>;
-  return {
-    target: account,
-    pathPrefix: `channels.${channelId}.accounts.${normalizedAccountId}`,
-    accountId: normalizedAccountId,
-    writeTarget: {
-      kind: "account",
-      scope: { channelId, accountId: normalizedAccountId },
-    } as const,
-  };
-}
-
-function getNestedValue(root: Record<string, unknown>, path: string[]): unknown {
-  let current: unknown = root;
-  for (const key of path) {
-    if (!current || typeof current !== "object") {
-      return undefined;
-    }
-    current = (current as Record<string, unknown>)[key];
-  }
-  return current;
-}
-
-function ensureNestedObject(
-  root: Record<string, unknown>,
-  path: string[],
-): Record<string, unknown> {
-  let current = root;
-  for (const key of path) {
-    const existing = current[key];
-    if (!existing || typeof existing !== "object") {
-      current[key] = {};
-    }
-    current = current[key] as Record<string, unknown>;
-  }
-  return current;
-}
-
-function setNestedValue(root: Record<string, unknown>, path: string[], value: unknown) {
-  if (path.length === 0) {
-    return;
-  }
-  if (path.length === 1) {
-    root[path[0]] = value;
-    return;
-  }
-  const parent = ensureNestedObject(root, path.slice(0, -1));
-  parent[path[path.length - 1]] = value;
-}
-
-function deleteNestedValue(root: Record<string, unknown>, path: string[]) {
-  if (path.length === 0) {
-    return;
-  }
-  if (path.length === 1) {
-    delete root[path[0]];
-    return;
-  }
-  const parent = getNestedValue(root, path.slice(0, -1));
-  if (!parent || typeof parent !== "object") {
-    return;
-  }
-  delete (parent as Record<string, unknown>)[path[path.length - 1]];
-}
-
 function mapResolvedAllowlistNames(entries: ResolvedAllowlistName[]): Map<string, string> {
   const map = new Map<string, string>();
   for (const entry of entries) {
@@ -375,7 +275,7 @@ export const handleAllowlistCommand: CommandHandler = async (params, allowTextCo
   const plugin = getChannelPlugin(channelId);
 
   if (parsed.action === "list") {
-    const supportsStore = listPairingChannels().includes(channelId);
+    const supportsStore = Boolean(plugin?.pairing);
     if (!plugin?.allowlist?.readConfig && !supportsStore) {
       return {
         shouldContinue: false,
@@ -493,7 +393,7 @@ export const handleAllowlistCommand: CommandHandler = async (params, allowTextCo
   }
 
   const shouldUpdateConfig = parsed.target !== "store";
-  const shouldTouchStore = parsed.target !== "config" && listPairingChannels().includes(channelId);
+  const shouldTouchStore = parsed.target !== "config" && Boolean(plugin?.pairing);
 
   if (shouldUpdateConfig) {
     if (parsed.scope === "all") {
@@ -502,19 +402,7 @@ export const handleAllowlistCommand: CommandHandler = async (params, allowTextCo
         reply: { text: "⚠️ /allowlist add|remove requires scope dm or group." },
       };
     }
-    const {
-      target,
-      pathPrefix,
-      accountId: normalizedAccountId,
-      writeTarget,
-    } = resolveAccountTarget(structuredClone({ channels: {} }), channelId, accountId);
-    void target;
-    const editSpec = plugin?.allowlist?.resolveConfigEdit?.({
-      scope: parsed.scope,
-      pathPrefix,
-      writeTarget,
-    });
-    if (!editSpec) {
+    if (!plugin?.allowlist?.applyConfigEdit) {
       return {
         shouldContinue: false,
         reply: {
@@ -531,14 +419,35 @@ export const handleAllowlistCommand: CommandHandler = async (params, allowTextCo
       };
     }
     const parsedConfig = structuredClone(snapshot.parsed as Record<string, unknown>);
-    const resolvedTarget = resolveAccountTarget(parsedConfig, channelId, accountId);
+    const editResult = await plugin.allowlist.applyConfigEdit({
+      cfg: params.cfg,
+      parsedConfig,
+      accountId,
+      scope: parsed.scope,
+      action: parsed.action,
+      entry: parsed.entry,
+    });
+    if (!editResult) {
+      return {
+        shouldContinue: false,
+        reply: {
+          text: `⚠️ ${channelId} does not support ${parsed.scope} allowlist edits via /allowlist.`,
+        },
+      };
+    }
+    if (editResult.kind === "invalid-entry") {
+      return {
+        shouldContinue: false,
+        reply: { text: "⚠️ Invalid allowlist entry." },
+      };
+    }
     const deniedText = resolveConfigWriteDeniedText({
       cfg: params.cfg,
       channel: params.command.channel,
       channelId,
       accountId: params.ctx.AccountId,
       gatewayClientScopes: params.ctx.GatewayClientScopes,
-      target: editSpec.writeTarget,
+      target: editResult.writeTarget,
     });
     if (deniedText) {
       return {
@@ -548,82 +457,7 @@ export const handleAllowlistCommand: CommandHandler = async (params, allowTextCo
         },
       };
     }
-
-    const existing: string[] = [];
-    for (const path of editSpec.readPaths) {
-      const existingRaw = getNestedValue(resolvedTarget.target, path);
-      if (!Array.isArray(existingRaw)) {
-        continue;
-      }
-      for (const entry of existingRaw) {
-        const value = String(entry).trim();
-        if (!value || existing.includes(value)) {
-          continue;
-        }
-        existing.push(value);
-      }
-    }
-
-    const normalizedEntry = normalizeAllowFrom({
-      cfg: params.cfg,
-      channelId,
-      accountId: normalizedAccountId,
-      values: [parsed.entry],
-    });
-    if (normalizedEntry.length === 0) {
-      return {
-        shouldContinue: false,
-        reply: { text: "⚠️ Invalid allowlist entry." },
-      };
-    }
-
-    const existingNormalized = normalizeAllowFrom({
-      cfg: params.cfg,
-      channelId,
-      accountId: normalizedAccountId,
-      values: existing,
-    });
-
-    const shouldMatch = (value: string) => normalizedEntry.includes(value);
-
-    let configChanged = false;
-    let next = existing;
-    const configHasEntry = existingNormalized.some((value) => shouldMatch(value));
-    if (parsed.action === "add") {
-      if (!configHasEntry) {
-        next = [...existing, parsed.entry.trim()];
-        configChanged = true;
-      }
-    }
-
-    if (parsed.action === "remove") {
-      const keep: string[] = [];
-      for (const entry of existing) {
-        const normalized = normalizeAllowFrom({
-          cfg: params.cfg,
-          channelId,
-          accountId: normalizedAccountId,
-          values: [entry],
-        });
-        if (normalized.some((value) => shouldMatch(value))) {
-          configChanged = true;
-          continue;
-        }
-        keep.push(entry);
-      }
-      next = keep;
-    }
-
-    if (configChanged) {
-      if (next.length === 0) {
-        deleteNestedValue(resolvedTarget.target, editSpec.writePath);
-      } else {
-        setNestedValue(resolvedTarget.target, editSpec.writePath, next);
-      }
-      for (const path of editSpec.cleanupPaths ?? []) {
-        deleteNestedValue(resolvedTarget.target, path);
-      }
-    }
+    const configChanged = editResult.changed;
 
     if (configChanged) {
       const validated = validateConfigObjectWithPlugins(parsedConfig);
@@ -655,7 +489,7 @@ export const handleAllowlistCommand: CommandHandler = async (params, allowTextCo
     const scopeLabel = parsed.scope === "dm" ? "DM" : "group";
     const locations: string[] = [];
     if (configChanged) {
-      locations.push(`${resolvedTarget.pathPrefix}.${editSpec.writePath.join(".")}`);
+      locations.push(editResult.pathLabel);
     }
     if (shouldTouchStore) {
       locations.push("pairing store");

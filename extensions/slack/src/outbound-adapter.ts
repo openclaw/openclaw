@@ -1,22 +1,19 @@
-import { parseSlackBlocksInput } from "../../../../extensions/slack/src/blocks-input.js";
-import {
-  buildSlackInteractiveBlocks,
-  type SlackBlock,
-} from "../../../../extensions/slack/src/blocks-render.js";
-import { sendMessageSlack, type SlackSendIdentity } from "../../../../extensions/slack/src/send.js";
-import type { OutboundIdentity } from "../../../infra/outbound/identity.js";
-import { resolveOutboundSendDep } from "../../../infra/outbound/send-deps.js";
-import {
-  resolveInteractiveTextFallback,
-  type InteractiveReply,
-} from "../../../interactive/payload.js";
-import { getGlobalHookRunner } from "../../../plugins/hook-runner-global.js";
-import type { ChannelOutboundAdapter } from "../types.js";
 import {
   resolvePayloadMediaUrls,
   sendPayloadMediaSequence,
   sendTextMediaPayload,
-} from "./direct-text-media.js";
+} from "../../../src/channels/plugins/outbound/direct-text-media.js";
+import type { ChannelOutboundAdapter } from "../../../src/channels/plugins/types.js";
+import type { OutboundIdentity } from "../../../src/infra/outbound/identity.js";
+import { resolveOutboundSendDep } from "../../../src/infra/outbound/send-deps.js";
+import {
+  resolveInteractiveTextFallback,
+  type InteractiveReply,
+} from "../../../src/interactive/payload.js";
+import { getGlobalHookRunner } from "../../../src/plugins/hook-runner-global.js";
+import { parseSlackBlocksInput } from "./blocks-input.js";
+import { buildSlackInteractiveBlocks, type SlackBlock } from "./blocks-render.js";
+import { sendMessageSlack, type SlackSendIdentity } from "./send.js";
 
 const SLACK_MAX_BLOCKS = 50;
 
@@ -88,7 +85,6 @@ async function sendSlackOutboundMessage(params: {
 }) {
   const send =
     resolveOutboundSendDep<typeof sendMessageSlack>(params.deps, "slack") ?? sendMessageSlack;
-  // Use threadId fallback so routed tool notifications stay in the Slack thread.
   const threadTs =
     params.replyToId ?? (params.threadId != null ? String(params.threadId) : undefined);
   const hookResult = await applySlackMessageSendingHooks({
@@ -130,8 +126,7 @@ function resolveSlackBlocks(payload: {
   if (!slackData || typeof slackData !== "object" || Array.isArray(slackData)) {
     return renderedInteractive;
   }
-  let existingBlocks: SlackBlock[] | undefined;
-  existingBlocks = parseSlackBlocksInput((slackData as { blocks?: unknown }).blocks) as
+  const existingBlocks = parseSlackBlocksInput((slackData as { blocks?: unknown }).blocks) as
     | SlackBlock[]
     | undefined;
   const mergedBlocks = [...(existingBlocks ?? []), ...(renderedInteractive ?? [])];

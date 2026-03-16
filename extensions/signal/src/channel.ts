@@ -1,4 +1,5 @@
 import {
+  buildAccountScopedAllowlistConfigEditor,
   buildAccountScopedDmSecurityPolicy,
   createScopedAccountConfigAccessors,
   collectAllowlistProviderRestrictSendersWarnings,
@@ -283,11 +284,14 @@ export const signalPlugin: ChannelPlugin<ResolvedSignalAccount> = {
         groupPolicy: account.config.groupPolicy,
       };
     },
-    resolveConfigEdit: ({ scope, pathPrefix, writeTarget }) => ({
-      pathPrefix,
-      writeTarget,
-      readPaths: [[scope === "dm" ? "allowFrom" : "groupAllowFrom"]],
-      writePath: [scope === "dm" ? "allowFrom" : "groupAllowFrom"],
+    applyConfigEdit: buildAccountScopedAllowlistConfigEditor({
+      channelId: "signal",
+      normalize: ({ cfg, accountId, values }) =>
+        signalConfigAccessors.formatAllowFrom!({ cfg, accountId, allowFrom: values }),
+      resolvePaths: (scope) => ({
+        readPaths: [[scope === "dm" ? "allowFrom" : "groupAllowFrom"]],
+        writePath: [scope === "dm" ? "allowFrom" : "groupAllowFrom"],
+      }),
     }),
   },
   security: {
