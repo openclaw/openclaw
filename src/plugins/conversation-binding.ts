@@ -1,8 +1,6 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import { Button, Row, type TopLevelComponents } from "@buape/carbon";
-import { ButtonStyle } from "discord-api-types/v10";
 import type { ReplyPayload } from "../auto-reply/types.js";
 import { expandHomePrefix } from "../infra/home-dir.js";
 import { writeJsonAtomic } from "../infra/json-files.js";
@@ -119,24 +117,6 @@ function getPluginBindingGlobalState(): PluginBindingGlobalState {
   });
 }
 
-class PluginBindingApprovalButton extends Button {
-  customId: string;
-  label: string;
-  style: ButtonStyle;
-
-  constructor(params: {
-    approvalId: string;
-    decision: PluginBindingApprovalDecision;
-    label: string;
-    style: ButtonStyle;
-  }) {
-    super();
-    this.customId = buildPluginBindingApprovalCustomId(params.approvalId, params.decision);
-    this.label = params.label;
-    this.style = params.style;
-  }
-}
-
 function resolveApprovalsPath(): string {
   return expandHomePrefix(APPROVALS_PATH);
 }
@@ -236,54 +216,33 @@ function isLegacyPluginBindingRecord(params: {
   );
 }
 
-function buildDiscordButtonRow(
+function buildApprovalInteractiveReply(
   approvalId: string,
-  labels?: { once?: string; always?: string; deny?: string },
-): TopLevelComponents[] {
-  return [
-    new Row([
-      new PluginBindingApprovalButton({
-        approvalId,
-        decision: "allow-once",
-        label: labels?.once ?? "Allow once",
-        style: ButtonStyle.Success,
-      }),
-      new PluginBindingApprovalButton({
-        approvalId,
-        decision: "allow-always",
-        label: labels?.always ?? "Always allow",
-        style: ButtonStyle.Primary,
-      }),
-      new PluginBindingApprovalButton({
-        approvalId,
-        decision: "deny",
-        label: labels?.deny ?? "Deny",
-        style: ButtonStyle.Danger,
-      }),
-    ]),
-  ];
-}
-
-function buildTelegramButtons(approvalId: string) {
-  return [
-    [
+): NonNullable<ReplyPayload["interactive"]> {
+  return {
+    blocks: [
       {
-        text: "Allow once",
-        callback_data: buildPluginBindingApprovalCustomId(approvalId, "allow-once"),
-        style: "success" as const,
-      },
-      {
-        text: "Always allow",
-        callback_data: buildPluginBindingApprovalCustomId(approvalId, "allow-always"),
-        style: "primary" as const,
-      },
-      {
-        text: "Deny",
-        callback_data: buildPluginBindingApprovalCustomId(approvalId, "deny"),
-        style: "danger" as const,
+        type: "buttons",
+        buttons: [
+          {
+            label: "Allow once",
+            value: buildPluginBindingApprovalCustomId(approvalId, "allow-once"),
+            style: "success",
+          },
+          {
+            label: "Always allow",
+            value: buildPluginBindingApprovalCustomId(approvalId, "allow-always"),
+            style: "primary",
+          },
+          {
+            label: "Deny",
+            value: buildPluginBindingApprovalCustomId(approvalId, "deny"),
+            style: "danger",
+          },
+        ],
       },
     ],
-  ];
+  };
 }
 
 function createApprovalRequestId(): string {
@@ -547,14 +506,7 @@ export function markPluginBindingFallbackNoticeShown(bindingId: string): void {
 function buildPendingReply(request: PendingPluginBindingRequest): ReplyPayload {
   return {
     text: buildApprovalMessage(request),
-    channelData: {
-      telegram: {
-        buttons: buildTelegramButtons(request.id),
-      },
-      discord: {
-        components: buildDiscordButtonRow(request.id),
-      },
-    },
+    interactive: buildApprovalInteractiveReply(request.id),
   };
 }
 
