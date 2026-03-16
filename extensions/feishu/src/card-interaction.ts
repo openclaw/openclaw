@@ -61,9 +61,7 @@ function isInteractionKind(value: unknown): value is FeishuCardInteractionKind {
   return value === "button" || value === "quick" || value === "meta";
 }
 
-function isMetadataValue(
-  value: unknown,
-): value is string | number | boolean | null | undefined {
+function isMetadataValue(value: unknown): value is string | number | boolean | null | undefined {
   return (
     value === null ||
     value === undefined ||
@@ -144,11 +142,7 @@ export function decodeFeishuCardAction(params: {
     if (actionValue.c.e !== undefined && !Number.isFinite(actionValue.c.e)) {
       return { kind: "invalid", reason: "malformed" };
     }
-    if (
-      actionValue.c.t !== undefined &&
-      actionValue.c.t !== "p2p" &&
-      actionValue.c.t !== "group"
-    ) {
+    if (actionValue.c.t !== undefined && actionValue.c.t !== "p2p" && actionValue.c.t !== "group") {
       return { kind: "invalid", reason: "malformed" };
     }
 
