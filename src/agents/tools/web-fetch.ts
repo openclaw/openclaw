@@ -560,9 +560,7 @@ async function runWebFetch(params: WebFetchRuntimeParams): Promise<Record<string
       timeoutSeconds: params.timeoutSeconds,
       // Only allow RFC 2544 benchmark range (fake-ip proxy range) when a proxy is configured.
       // This prevents widening SSRF protections for non-proxied environments.
-      policy: hasProxyEnvConfigured()
-        ? { allowRfc2544BenchmarkRange: true }
-        : undefined,
+      policy: hasProxyEnvConfigured() ? { allowRfc2544BenchmarkRange: true } : undefined,
       init: {
         headers: {
           Accept: "text/markdown, text/html;q=0.9, */*;q=0.1",
