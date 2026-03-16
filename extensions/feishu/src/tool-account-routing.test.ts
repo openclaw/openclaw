@@ -1,6 +1,7 @@
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/feishu";
 import { beforeEach, describe, expect, test, vi } from "vitest";
 import { registerFeishuBitableTools } from "./bitable.js";
+import { registerFeishuDocTools } from "./docx.js";
 import { registerFeishuDriveTools } from "./drive.js";
 import { registerFeishuPermTools } from "./perm.js";
 import { createToolFactoryHarness } from "./tool-factory-test-harness.js";
@@ -27,7 +28,11 @@ function createConfig(params: {
   };
   defaultAccount?: string;
   autoBindAgentAccount?: boolean;
-  bindings?: Array<{ agentId: string; match: { channel: string; accountId?: string } }>;
+  bindings?: Array<{
+    type?: "route" | "acp";
+    agentId: string;
+    match: { channel: string; accountId?: string };
+  }>;
 }): OpenClawPluginApi["config"] {
   return {
     channels: {
@@ -246,6 +251,102 @@ describe("feishu tool account routing", () => {
       await tool.execute("call", { action: "search" });
 
       expect(createFeishuClientMock.mock.calls.at(-1)?.[0]?.appId).toBe("app-b");
+    });
+
+    test("doc tool routes to agent binding account when binding exists", async () => {
+      const { api, resolveTool } = createToolFactoryHarness(
+        createConfig({
+          autoBindAgentAccount: true,
+          bindings: [{ agentId: "agent-work", match: { channel: "feishu", accountId: "b" } }],
+        }),
+      );
+      registerFeishuDocTools(api);
+
+      const tool = resolveTool("feishu_doc", { agentId: "agent-work" });
+      await tool.execute("call", { action: "read", doc_token: "tok" });
+
+      expect(createFeishuClientMock.mock.calls.at(-1)?.[0]?.appId).toBe("app-b");
+    });
+
+    test("doc tool ignores wildcard accountId binding and uses defaultAccount", async () => {
+      const { api, resolveTool } = createToolFactoryHarness(
+        createConfig({
+          toolsA: { doc: true },
+          toolsB: { doc: true },
+          defaultAccount: "a",
+          autoBindAgentAccount: true,
+          bindings: [{ agentId: "agent-work", match: { channel: "feishu", accountId: "*" } }],
+        }),
+      );
+      registerFeishuDocTools(api);
+
+      const tool = resolveTool("feishu_doc", { agentId: "agent-work" });
+      await tool.execute("call", { action: "read", doc_token: "tok" });
+
+      // Should use defaultAccount since "*" is a wildcard, not a concrete account ID
+      expect(createFeishuClientMock.mock.calls.at(-1)?.[0]?.appId).toBe("app-a");
+    });
+
+    test("doc tool ignores whitespace-padded wildcard accountId binding", async () => {
+      const { api, resolveTool } = createToolFactoryHarness(
+        createConfig({
+          toolsA: { doc: true },
+          toolsB: { doc: true },
+          defaultAccount: "a",
+          autoBindAgentAccount: true,
+          bindings: [{ agentId: "agent-work", match: { channel: "feishu", accountId: " * " } }],
+        }),
+      );
+      registerFeishuDocTools(api);
+
+      const tool = resolveTool("feishu_doc", { agentId: "agent-work" });
+      await tool.execute("call", { action: "read", doc_token: "tok" });
+
+      // Should use defaultAccount since " * " (trimmed) is a wildcard, not a concrete account ID
+      expect(createFeishuClientMock.mock.calls.at(-1)?.[0]?.appId).toBe("app-a");
+    });
+
+    test("doc tool skips wildcard binding and uses later concrete account binding", async () => {
+      const { api, resolveTool } = createToolFactoryHarness(
+        createConfig({
+          toolsA: { doc: true },
+          toolsB: { doc: true },
+          defaultAccount: "a",
+          autoBindAgentAccount: true,
+          bindings: [
+            { agentId: "agent-work", match: { channel: "feishu", accountId: "*" } },
+            { agentId: "agent-work", match: { channel: "feishu", accountId: "b" } },
+          ],
+        }),
+      );
+      registerFeishuDocTools(api);
+
+      const tool = resolveTool("feishu_doc", { agentId: "agent-work" });
+      await tool.execute("call", { action: "read", doc_token: "tok" });
+
+      expect(createFeishuClientMock.mock.calls.at(-1)?.[0]?.appId).toBe("app-b");
+    });
+
+    test("doc tool ignores ACP bindings and uses defaultAccount", async () => {
+      const { api, resolveTool } = createToolFactoryHarness(
+        createConfig({
+          toolsA: { doc: true },
+          toolsB: { doc: true },
+          defaultAccount: "a",
+          autoBindAgentAccount: true,
+          bindings: [
+            // ACP binding should be ignored
+            { type: "acp", agentId: "agent-work", match: { channel: "feishu", accountId: "b" } },
+          ],
+        }),
+      );
+      registerFeishuDocTools(api);
+
+      const tool = resolveTool("feishu_doc", { agentId: "agent-work" });
+      await tool.execute("call", { action: "read", doc_token: "tok" });
+
+      // Should use defaultAccount since ACP bindings are filtered out
+      expect(createFeishuClientMock.mock.calls.at(-1)?.[0]?.appId).toBe("app-a");
     });
   });
 });

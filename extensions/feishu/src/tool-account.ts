@@ -35,13 +35,19 @@ function getAgentBindingAccountId(
   if (!agentId) return undefined;
   const bindings = config.bindings as
     | Array<{
+        type?: "route" | "acp";
         agentId: string;
         match: { channel: string; accountId?: string };
       }>
     | undefined;
-  const boundAccountId = bindings?.find(
-    (b) => b.agentId === agentId && b.match?.channel === "feishu" && b.match?.accountId,
-  )?.match?.accountId;
+  // Filter to route bindings only (exclude ACP bindings)
+  const routeBindings = bindings?.filter((b) => b.type !== "acp");
+  const boundAccountId = routeBindings?.find((b) => {
+    if (b.agentId !== agentId || b.match?.channel !== "feishu") return false;
+    const normalizedAccountId = normalizeOptionalAccountId(b.match?.accountId);
+    // Ignore wildcard accountId values like "*" so later concrete bindings can still match.
+    return normalizedAccountId !== undefined && normalizedAccountId !== "*";
+  })?.match?.accountId;
   return normalizeOptionalAccountId(boundAccountId);
 }
 
