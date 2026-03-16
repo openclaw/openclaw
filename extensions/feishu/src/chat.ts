@@ -3,6 +3,7 @@ import type { OpenClawPluginApi } from "openclaw/plugin-sdk/feishu";
 import { listEnabledFeishuAccounts } from "./accounts.js";
 import { FeishuChatSchema, type FeishuChatParams } from "./chat-schema.js";
 import { createFeishuClient } from "./client.js";
+import { resolveAnyEnabledFeishuToolsConfig, resolveFeishuToolAccount } from "./tool-account.js";
 import { resolveToolsConfig } from "./tools-config.js";
 
 function json(data: unknown) {
@@ -33,6 +34,46 @@ async function getChatInfo(client: Lark.Client, chatId: string) {
     membership_approval: chat?.membership_approval,
     moderation_permission: chat?.moderation_permission,
     avatar: chat?.avatar,
+  };
+}
+
+async function getChatList(
+  client: Lark.Client,
+  pageSize?: number,
+  pageToken?: string,
+  sortType?: "ByCreateTimeAsc" | "ByActiveTimeDesc",
+  userIdType?: "open_id" | "user_id" | "union_id",
+) {
+  const page_size = pageSize ? Math.max(1, Math.min(100, pageSize)) : 50;
+  const res = await client.im.chat.list({
+    params: {
+      page_size,
+      page_token: pageToken,
+      sort_type: sortType,
+      user_id_type: userIdType,
+    },
+  });
+
+  if (res.code !== 0) {
+    throw new Error(res.msg);
+  }
+
+  return {
+    has_more: res.data?.has_more,
+    page_token: res.data?.page_token,
+    items:
+      res.data?.items?.map((item) => ({
+        chat_id: item.chat_id,
+        name: item.name,
+        description: item.description,
+        owner_id: item.owner_id,
+        owner_id_type: item.owner_id_type,
+        avatar: item.avatar,
+        external: item.external,
+        tenant_key: item.tenant_key,
+        labels: item.labels,
+        chat_status: item.chat_status,
+      })) ?? [],
   };
 }
 
@@ -83,45 +124,67 @@ export function registerFeishuChatTools(api: OpenClawPluginApi) {
     return;
   }
 
-  const firstAccount = accounts[0];
-  const toolsCfg = resolveToolsConfig(firstAccount.config.tools);
+  const toolsCfg = resolveAnyEnabledFeishuToolsConfig(accounts);
   if (!toolsCfg.chat) {
     api.logger.debug?.("feishu_chat: chat tool disabled in config");
     return;
   }
 
-  const getClient = () => createFeishuClient(firstAccount);
-
   api.registerTool(
-    {
-      name: "feishu_chat",
-      label: "Feishu Chat",
-      description: "Feishu chat operations. Actions: members, info",
-      parameters: FeishuChatSchema,
-      async execute(_toolCallId, params) {
-        const p = params as FeishuChatParams;
-        try {
-          const client = getClient();
-          switch (p.action) {
-            case "members":
-              return json(
-                await getChatMembers(
-                  client,
-                  p.chat_id,
-                  p.page_size,
-                  p.page_token,
-                  p.member_id_type,
-                ),
-              );
-            case "info":
-              return json(await getChatInfo(client, p.chat_id));
-            default:
-              return json({ error: `Unknown action: ${String(p.action)}` });
+    (ctx) => {
+      const defaultAccountId = ctx.agentAccountId;
+      return {
+        name: "feishu_chat",
+        label: "Feishu Chat",
+        description:
+          "Feishu chat operations. Actions: members (list members of a chat), info (get chat details), list (list all chats the bot has joined, no chat_id needed)",
+        parameters: FeishuChatSchema,
+        async execute(_toolCallId, params) {
+          const p = params as FeishuChatParams;
+          try {
+            const resolvedAccount = resolveFeishuToolAccount({
+              api,
+              executeParams: p,
+              defaultAccountId,
+            });
+            const accountToolsCfg = resolveToolsConfig(resolvedAccount.config.tools);
+            if (!accountToolsCfg.chat) {
+              return json({
+                error: `chat tool is disabled for account "${resolvedAccount.accountId}"`,
+              });
+            }
+            const client = createFeishuClient(resolvedAccount);
+            switch (p.action) {
+              case "list":
+                return json(
+                  await getChatList(client, p.page_size, p.page_token, p.sort_type, p.user_id_type),
+                );
+              case "members":
+                if (!p.chat_id) {
+                  return json({ error: "chat_id is required for members action" });
+                }
+                return json(
+                  await getChatMembers(
+                    client,
+                    p.chat_id,
+                    p.page_size,
+                    p.page_token,
+                    p.member_id_type,
+                  ),
+                );
+              case "info":
+                if (!p.chat_id) {
+                  return json({ error: "chat_id is required for info action" });
+                }
+                return json(await getChatInfo(client, p.chat_id));
+              default:
+                return json({ error: `Unknown action: ${String(p.action)}` });
+            }
+          } catch (err) {
+            return json({ error: err instanceof Error ? err.message : String(err) });
           }
-        } catch (err) {
-          return json({ error: err instanceof Error ? err.message : String(err) });
-        }
-      },
+        },
+      };
     },
     { name: "feishu_chat" },
   );
