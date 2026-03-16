@@ -13,6 +13,7 @@ import {
   BrowserResourceExhaustedError,
   BrowserValidationError,
 } from "./errors.js";
+import { getBrowserProfileCapabilities } from "./profile-capabilities.js";
 import {
   allocateCdpPort,
   allocateColor,
@@ -27,14 +28,15 @@ export type CreateProfileParams = {
   name: string;
   color?: string;
   cdpUrl?: string;
-  driver?: "openclaw" | "extension";
+  driver?: "openclaw" | "extension" | "existing-session";
 };
 
 export type CreateProfileResult = {
   ok: true;
   profile: string;
-  cdpPort: number;
-  cdpUrl: string;
+  transport: "cdp" | "chrome-mcp";
+  cdpPort: number | null;
+  cdpUrl: string | null;
   color: string;
   isRemote: boolean;
 };
@@ -79,7 +81,12 @@ export function createBrowserProfilesService(ctx: BrowserRouteContext) {
   const createProfile = async (params: CreateProfileParams): Promise<CreateProfileResult> => {
     const name = params.name.trim();
     const rawCdpUrl = params.cdpUrl?.trim() || undefined;
-    const driver = params.driver === "extension" ? "extension" : undefined;
+    const driver =
+      params.driver === "extension"
+        ? "extension"
+        : params.driver === "existing-session"
+          ? "existing-session"
+          : undefined;
 
     if (!isValidProfileName(name)) {
       throw new BrowserValidationError(
@@ -118,6 +125,11 @@ export function createBrowserProfilesService(ctx: BrowserRouteContext) {
           );
         }
       }
+      if (driver === "existing-session") {
+        throw new BrowserValidationError(
+          "driver=existing-session does not accept cdpUrl; it attaches via the Chrome MCP auto-connect flow",
+        );
+      }
       profileConfig = {
         cdpUrl: parsed.normalized,
         ...(driver ? { driver } : {}),
@@ -136,6 +148,7 @@ export function createBrowserProfilesService(ctx: BrowserRouteContext) {
       profileConfig = {
         cdpPort,
         ...(driver ? { driver } : {}),
+        ...(driver === "existing-session" ? { attachOnly: true } : {}),
         color: profileColor,
       };
     }
@@ -158,12 +171,14 @@ export function createBrowserProfilesService(ctx: BrowserRouteContext) {
     if (!resolved) {
       throw new BrowserProfileNotFoundError(`profile "${name}" not found after creation`);
     }
+    const capabilities = getBrowserProfileCapabilities(resolved);
 
     return {
       ok: true,
       profile: name,
-      cdpPort: resolved.cdpPort,
-      cdpUrl: resolved.cdpUrl,
+      transport: capabilities.usesChromeMcp ? "chrome-mcp" : "cdp",
+      cdpPort: capabilities.usesChromeMcp ? null : resolved.cdpPort,
+      cdpUrl: capabilities.usesChromeMcp ? null : resolved.cdpUrl,
       color: resolved.color,
       isRemote: !resolved.cdpIsLoopback,
     };
@@ -195,7 +210,7 @@ export function createBrowserProfilesService(ctx: BrowserRouteContext) {
     const state = ctx.state();
     const resolved = resolveProfile(state.resolved, name);
 
-    if (resolved?.cdpIsLoopback) {
+    if (resolved?.cdpIsLoopback && resolved.driver === "openclaw") {
       try {
         await ctx.forProfile(name).stopRunningBrowser();
       } catch {

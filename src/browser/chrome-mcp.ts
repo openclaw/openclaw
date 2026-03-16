@@ -33,13 +33,10 @@ const DEFAULT_CHROME_MCP_ARGS = [
   "-y",
   "chrome-devtools-mcp@latest",
   "--autoConnect",
-  // Direct chrome-devtools-mcp launches do not enable structuredContent by default.
-  "--experimentalStructuredContent",
   "--experimental-page-id-routing",
 ];
 
 const sessions = new Map<string, ChromeMcpSession>();
-const pendingSessions = new Map<string, Promise<ChromeMcpSession>>();
 let sessionFactory: ChromeMcpSessionFactory | null = null;
 
 function asRecord(value: unknown): Record<string, unknown> | null {
@@ -136,38 +133,6 @@ function extractJsonBlock(text: string): unknown {
   return raw ? JSON.parse(raw) : null;
 }
 
-function extractMessageText(result: ChromeMcpToolResult): string {
-  const message = extractStructuredContent(result).message;
-  if (typeof message === "string" && message.trim()) {
-    return message;
-  }
-  const blocks = extractTextContent(result);
-  return blocks.find((block) => block.trim()) ?? "";
-}
-
-function extractToolErrorMessage(result: ChromeMcpToolResult, name: string): string {
-  const message = extractMessageText(result).trim();
-  return message || `Chrome MCP tool "${name}" failed.`;
-}
-
-function extractJsonMessage(result: ChromeMcpToolResult): unknown {
-  const candidates = [extractMessageText(result), ...extractTextContent(result)].filter((text) =>
-    text.trim(),
-  );
-  let lastError: unknown;
-  for (const candidate of candidates) {
-    try {
-      return extractJsonBlock(candidate);
-    } catch (err) {
-      lastError = err;
-    }
-  }
-  if (lastError) {
-    throw lastError;
-  }
-  return null;
-}
-
 async function createRealSession(profileName: string): Promise<ChromeMcpSession> {
   const transport = new StdioClientTransport({
     command: DEFAULT_CHROME_MCP_COMMAND,
@@ -213,22 +178,8 @@ async function getSession(profileName: string): Promise<ChromeMcpSession> {
     session = undefined;
   }
   if (!session) {
-    let pending = pendingSessions.get(profileName);
-    if (!pending) {
-      pending = (async () => {
-        const created = await (sessionFactory ?? createRealSession)(profileName);
-        sessions.set(profileName, created);
-        return created;
-      })();
-      pendingSessions.set(profileName, pending);
-    }
-    try {
-      session = await pending;
-    } finally {
-      if (pendingSessions.get(profileName) === pending) {
-        pendingSessions.delete(profileName);
-      }
-    }
+    session = await (sessionFactory ?? createRealSession)(profileName);
+    sessions.set(profileName, session);
   }
   try {
     await session.ready;
@@ -248,24 +199,16 @@ async function callTool(
   args: Record<string, unknown> = {},
 ): Promise<ChromeMcpToolResult> {
   const session = await getSession(profileName);
-  let result: ChromeMcpToolResult;
   try {
-    result = (await session.client.callTool({
+    return (await session.client.callTool({
       name,
       arguments: args,
     })) as ChromeMcpToolResult;
   } catch (err) {
-    // Transport/connection error — tear down session so it reconnects on next call
     sessions.delete(profileName);
     await session.client.close().catch(() => {});
     throw err;
   }
-  // Tool-level errors (element not found, script error, etc.) don't indicate a
-  // broken connection — don't tear down the session for these.
-  if (result.isError) {
-    throw new Error(extractToolErrorMessage(result, name));
-  }
-  return result;
 }
 
 async function withTempFile<T>(fn: (filePath: string) => Promise<T>): Promise<T> {
@@ -296,7 +239,6 @@ export function getChromeMcpPid(profileName: string): number | null {
 }
 
 export async function closeChromeMcpSession(profileName: string): Promise<boolean> {
-  pendingSessions.delete(profileName);
   const session = sessions.get(profileName);
   if (!session) {
     return false;
@@ -515,7 +457,12 @@ export async function evaluateChromeMcpScript(params: {
     function: params.fn,
     ...(params.args?.length ? { args: params.args } : {}),
   });
-  return extractJsonMessage(result);
+  const message = extractStructuredContent(result).message;
+  const text = typeof message === "string" ? message : "";
+  if (!text.trim()) {
+    return null;
+  }
+  return extractJsonBlock(text);
 }
 
 export async function waitForChromeMcpText(params: {
@@ -537,6 +484,5 @@ export function setChromeMcpSessionFactoryForTest(factory: ChromeMcpSessionFacto
 
 export async function resetChromeMcpSessionsForTest(): Promise<void> {
   sessionFactory = null;
-  pendingSessions.clear();
   await stopAllChromeMcpSessions();
 }

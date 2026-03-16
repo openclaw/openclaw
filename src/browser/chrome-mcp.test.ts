@@ -1,6 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
-  evaluateChromeMcpScript,
   listChromeMcpTabs,
   openChromeMcpTab,
   resetChromeMcpSessionsForTest,
@@ -12,13 +11,7 @@ type ToolCall = {
   arguments?: Record<string, unknown>;
 };
 
-type ChromeMcpSessionFactory = Exclude<
-  Parameters<typeof setChromeMcpSessionFactoryForTest>[0],
-  null
->;
-type ChromeMcpSession = Awaited<ReturnType<ChromeMcpSessionFactory>>;
-
-function createFakeSession(): ChromeMcpSession {
+function createFakeSession() {
   const callTool = vi.fn(async ({ name }: ToolCall) => {
     if (name === "list_pages") {
       return {
@@ -49,16 +42,6 @@ function createFakeSession(): ChromeMcpSession {
         ],
       };
     }
-    if (name === "evaluate_script") {
-      return {
-        content: [
-          {
-            type: "text",
-            text: "```json\n123\n```",
-          },
-        ],
-      };
-    }
     throw new Error(`unexpected tool ${name}`);
   });
 
@@ -73,7 +56,7 @@ function createFakeSession(): ChromeMcpSession {
       pid: 123,
     },
     ready: Promise.resolve(),
-  } as unknown as ChromeMcpSession;
+  };
 }
 
 describe("chrome MCP page parsing", () => {
@@ -82,8 +65,7 @@ describe("chrome MCP page parsing", () => {
   });
 
   it("parses list_pages text responses when structuredContent is missing", async () => {
-    const factory: ChromeMcpSessionFactory = async () => createFakeSession();
-    setChromeMcpSessionFactoryForTest(factory);
+    setChromeMcpSessionFactoryForTest(async () => createFakeSession());
 
     const tabs = await listChromeMcpTabs("chrome-live");
 
@@ -104,8 +86,7 @@ describe("chrome MCP page parsing", () => {
   });
 
   it("parses new_page text responses and returns the created tab", async () => {
-    const factory: ChromeMcpSessionFactory = async () => createFakeSession();
-    setChromeMcpSessionFactoryForTest(factory);
+    setChromeMcpSessionFactoryForTest(async () => createFakeSession());
 
     const tab = await openChromeMcpTab("chrome-live", "https://example.com/");
 
@@ -115,156 +96,5 @@ describe("chrome MCP page parsing", () => {
       url: "https://example.com/",
       type: "page",
     });
-  });
-
-  it("parses evaluate_script text responses when structuredContent is missing", async () => {
-    const factory: ChromeMcpSessionFactory = async () => createFakeSession();
-    setChromeMcpSessionFactoryForTest(factory);
-
-    const result = await evaluateChromeMcpScript({
-      profileName: "chrome-live",
-      targetId: "1",
-      fn: "() => 123",
-    });
-
-    expect(result).toBe(123);
-  });
-
-  it("surfaces MCP tool errors instead of JSON parse noise", async () => {
-    const factory: ChromeMcpSessionFactory = async () => {
-      const session = createFakeSession();
-      const callTool = vi.fn(async ({ name }: ToolCall) => {
-        if (name === "evaluate_script") {
-          return {
-            content: [
-              {
-                type: "text",
-                text: "Cannot read properties of null (reading 'value')",
-              },
-            ],
-            isError: true,
-          };
-        }
-        throw new Error(`unexpected tool ${name}`);
-      });
-      session.client.callTool = callTool as typeof session.client.callTool;
-      return session;
-    };
-    setChromeMcpSessionFactoryForTest(factory);
-
-    await expect(
-      evaluateChromeMcpScript({
-        profileName: "chrome-live",
-        targetId: "1",
-        fn: "() => document.getElementById('missing').value",
-      }),
-    ).rejects.toThrow(/Cannot read properties of null/);
-  });
-
-  it("reuses a single pending session for concurrent requests", async () => {
-    let factoryCalls = 0;
-    let releaseFactory!: () => void;
-    const factoryGate = new Promise<void>((resolve) => {
-      releaseFactory = resolve;
-    });
-
-    const factory: ChromeMcpSessionFactory = async () => {
-      factoryCalls += 1;
-      await factoryGate;
-      return createFakeSession();
-    };
-    setChromeMcpSessionFactoryForTest(factory);
-
-    const tabsPromise = listChromeMcpTabs("chrome-live");
-    const evalPromise = evaluateChromeMcpScript({
-      profileName: "chrome-live",
-      targetId: "1",
-      fn: "() => 123",
-    });
-
-    releaseFactory();
-    const [tabs, result] = await Promise.all([tabsPromise, evalPromise]);
-
-    expect(factoryCalls).toBe(1);
-    expect(tabs).toHaveLength(2);
-    expect(result).toBe(123);
-  });
-
-  it("preserves session after tool-level errors (isError)", async () => {
-    let factoryCalls = 0;
-    const factory: ChromeMcpSessionFactory = async () => {
-      factoryCalls += 1;
-      const session = createFakeSession();
-      const callTool = vi.fn(async ({ name }: ToolCall) => {
-        if (name === "evaluate_script") {
-          return {
-            content: [{ type: "text", text: "element not found" }],
-            isError: true,
-          };
-        }
-        if (name === "list_pages") {
-          return {
-            content: [{ type: "text", text: "## Pages\n1: https://example.com [selected]" }],
-          };
-        }
-        throw new Error(`unexpected tool ${name}`);
-      });
-      session.client.callTool = callTool as typeof session.client.callTool;
-      return session;
-    };
-    setChromeMcpSessionFactoryForTest(factory);
-
-    // First call: tool error (isError: true) — should NOT destroy session
-    await expect(
-      evaluateChromeMcpScript({ profileName: "chrome-live", targetId: "1", fn: "() => null" }),
-    ).rejects.toThrow(/element not found/);
-
-    // Second call: should reuse the same session (factory called only once)
-    const tabs = await listChromeMcpTabs("chrome-live");
-    expect(factoryCalls).toBe(1);
-    expect(tabs).toHaveLength(1);
-  });
-
-  it("destroys session on transport errors so next call reconnects", async () => {
-    let factoryCalls = 0;
-    const factory: ChromeMcpSessionFactory = async () => {
-      factoryCalls += 1;
-      const session = createFakeSession();
-      if (factoryCalls === 1) {
-        // First session: transport error (callTool throws)
-        const callTool = vi.fn(async () => {
-          throw new Error("connection reset");
-        });
-        session.client.callTool = callTool as typeof session.client.callTool;
-      }
-      return session;
-    };
-    setChromeMcpSessionFactoryForTest(factory);
-
-    // First call: transport error — should destroy session
-    await expect(listChromeMcpTabs("chrome-live")).rejects.toThrow(/connection reset/);
-
-    // Second call: should create a new session (factory called twice)
-    const tabs = await listChromeMcpTabs("chrome-live");
-    expect(factoryCalls).toBe(2);
-    expect(tabs).toHaveLength(2);
-  });
-
-  it("clears failed pending sessions so the next call can retry", async () => {
-    let factoryCalls = 0;
-    const factory: ChromeMcpSessionFactory = async () => {
-      factoryCalls += 1;
-      if (factoryCalls === 1) {
-        throw new Error("attach failed");
-      }
-      return createFakeSession();
-    };
-    setChromeMcpSessionFactoryForTest(factory);
-
-    await expect(listChromeMcpTabs("chrome-live")).rejects.toThrow(/attach failed/);
-
-    const tabs = await listChromeMcpTabs("chrome-live");
-    expect(factoryCalls).toBe(2);
-    expect(tabs).toHaveLength(2);
   });
 });

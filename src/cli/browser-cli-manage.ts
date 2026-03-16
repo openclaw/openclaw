@@ -1,5 +1,6 @@
 import type { Command } from "commander";
 import type {
+  BrowserTransport,
   BrowserCreateProfileResult,
   BrowserDeleteProfileResult,
   BrowserResetProfileResult,
@@ -101,6 +102,29 @@ function logBrowserTabs(tabs: BrowserTab[], json?: boolean) {
   );
 }
 
+function usesChromeMcpTransport(params: {
+  transport?: BrowserTransport;
+  driver?: "openclaw" | "extension" | "existing-session";
+}): boolean {
+  return params.transport === "chrome-mcp" || params.driver === "existing-session";
+}
+
+function formatBrowserConnectionSummary(params: {
+  transport?: BrowserTransport;
+  driver?: "openclaw" | "extension" | "existing-session";
+  isRemote?: boolean;
+  cdpPort?: number | null;
+  cdpUrl?: string | null;
+}): string {
+  if (usesChromeMcpTransport(params)) {
+    return "transport: chrome-mcp";
+  }
+  if (params.isRemote) {
+    return `cdpUrl: ${params.cdpUrl ?? "(unset)"}`;
+  }
+  return `port: ${params.cdpPort ?? "(unset)"}`;
+}
+
 export function registerBrowserManageCommands(
   browser: Command,
   parentOpts: (cmd: Command) => BrowserParentOpts,
@@ -122,8 +146,15 @@ export function registerBrowserManageCommands(
             `profile: ${status.profile ?? "openclaw"}`,
             `enabled: ${status.enabled}`,
             `running: ${status.running}`,
-            `cdpPort: ${status.cdpPort}`,
-            `cdpUrl: ${status.cdpUrl ?? `http://127.0.0.1:${status.cdpPort}`}`,
+            `transport: ${
+              usesChromeMcpTransport(status) ? "chrome-mcp" : (status.transport ?? "cdp")
+            }`,
+            ...(!usesChromeMcpTransport(status)
+              ? [
+                  `cdpPort: ${status.cdpPort ?? "(unset)"}`,
+                  `cdpUrl: ${status.cdpUrl ?? `http://127.0.0.1:${status.cdpPort}`}`,
+                ]
+              : []),
             `browser: ${status.chosenBrowser ?? "unknown"}`,
             `detectedBrowser: ${status.detectedBrowser ?? "unknown"}`,
             `detectedPath: ${detectedDisplay}`,
@@ -407,9 +438,10 @@ export function registerBrowserManageCommands(
               const status = p.running ? "running" : "stopped";
               const tabs = p.running ? ` (${p.tabCount} tabs)` : "";
               const def = p.isDefault ? " [default]" : "";
-              const loc = p.isRemote ? `cdpUrl: ${p.cdpUrl}` : `port: ${p.cdpPort}`;
+              const loc = formatBrowserConnectionSummary(p);
               const remote = p.isRemote ? " [remote]" : "";
-              return `${p.name}: ${status}${tabs}${def}${remote}\n  ${loc}, color: ${p.color}`;
+              const driver = p.driver !== "openclaw" ? ` [${p.driver}]` : "";
+              return `${p.name}: ${status}${tabs}${def}${remote}${driver}\n  ${loc}, color: ${p.color}`;
             })
             .join("\n"),
         );
@@ -422,7 +454,10 @@ export function registerBrowserManageCommands(
     .requiredOption("--name <name>", "Profile name (lowercase, numbers, hyphens)")
     .option("--color <hex>", "Profile color (hex format, e.g. #0066CC)")
     .option("--cdp-url <url>", "CDP URL for remote Chrome (http/https)")
-    .option("--driver <driver>", "Profile driver (openclaw|extension). Default: openclaw")
+    .option(
+      "--driver <driver>",
+      "Profile driver (openclaw|extension|existing-session). Default: openclaw",
+    )
     .action(
       async (opts: { name: string; color?: string; cdpUrl?: string; driver?: string }, cmd) => {
         const parent = parentOpts(cmd);
@@ -436,7 +471,12 @@ export function registerBrowserManageCommands(
                 name: opts.name,
                 color: opts.color,
                 cdpUrl: opts.cdpUrl,
-                driver: opts.driver === "extension" ? "extension" : undefined,
+                driver:
+                  opts.driver === "extension"
+                    ? "extension"
+                    : opts.driver === "existing-session"
+                      ? "existing-session"
+                      : undefined,
               },
             },
             { timeoutMs: 10_000 },
@@ -444,11 +484,15 @@ export function registerBrowserManageCommands(
           if (printJsonResult(parent, result)) {
             return;
           }
-          const loc = result.isRemote ? `  cdpUrl: ${result.cdpUrl}` : `  port: ${result.cdpPort}`;
+          const loc = `  ${formatBrowserConnectionSummary(result)}`;
           defaultRuntime.log(
             info(
               `🦞 Created profile "${result.profile}"\n${loc}\n  color: ${result.color}${
-                opts.driver === "extension" ? "\n  driver: extension" : ""
+                opts.driver === "extension"
+                  ? "\n  driver: extension"
+                  : opts.driver === "existing-session"
+                    ? "\n  driver: existing-session"
+                    : ""
               }`,
             ),
           );
