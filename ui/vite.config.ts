@@ -21,11 +21,18 @@ function normalizeBase(input: string): string {
 export default defineConfig(() => {
   const envBase = process.env.OPENCLAW_CONTROL_UI_BASE_PATH?.trim();
   const base = envBase ? normalizeBase(envBase) : "./";
+  const fsShim = path.resolve(here, "src/shims/fs.ts");
   return {
     base,
     publicDir: path.resolve(here, "public"),
     optimizeDeps: {
       include: ["lit/directives/repeat.js"],
+    },
+    resolve: {
+      alias: {
+        fs: fsShim,
+        "node:fs": fsShim,
+      },
     },
     build: {
       outDir: path.resolve(here, "../dist/control-ui"),
