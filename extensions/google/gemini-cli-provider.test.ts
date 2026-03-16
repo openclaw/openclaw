@@ -8,22 +8,33 @@ import googlePlugin from "./index.js";
 
 function registerGooglePlugin(): {
   provider: ProviderPlugin;
+  webSearchProvider: {
+    id: string;
+    envVars: string[];
+    label: string;
+  } | null;
   webSearchProviderRegistered: boolean;
 } {
   let provider: ProviderPlugin | undefined;
   let webSearchProviderRegistered = false;
+  let webSearchProvider: {
+    id: string;
+    envVars: string[];
+    label: string;
+  } | null = null;
   googlePlugin.register({
     registerProvider(nextProvider: ProviderPlugin) {
       provider = nextProvider;
     },
-    registerWebSearchProvider() {
+    registerWebSearchProvider(nextProvider: { id: string; envVars: string[]; label: string }) {
       webSearchProviderRegistered = true;
+      webSearchProvider = nextProvider;
     },
   } as never);
   if (!provider) {
     throw new Error("provider registration missing");
   }
-  return { provider, webSearchProviderRegistered };
+  return { provider, webSearchProviderRegistered, webSearchProvider };
 }
 
 describe("google plugin", () => {
@@ -32,6 +43,11 @@ describe("google plugin", () => {
 
     expect(result.provider.id).toBe("google-gemini-cli");
     expect(result.webSearchProviderRegistered).toBe(true);
+    expect(result.webSearchProvider).toMatchObject({
+      id: "gemini",
+      label: "Gemini (Google Search)",
+      envVars: ["GEMINI_API_KEY"],
+    });
   });
 
   it("owns gemini 3.1 forward-compat resolution", () => {
