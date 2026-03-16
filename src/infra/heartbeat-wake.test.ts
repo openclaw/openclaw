@@ -380,4 +380,32 @@ describe("heartbeat-wake", () => {
     await vi.advanceTimersByTimeAsync(1);
     expect(handler).toHaveBeenCalledTimes(1);
   });
+
+  it("re-schedules timer when breaker drops all wakes so polling does not stall", async () => {
+    vi.useFakeTimers();
+    const handler = vi.fn().mockResolvedValue({ status: "failed" as const, reason: "broken" });
+    setHeartbeatWakeHandler(handler);
+
+    // Trip the breaker for the default target by sending 5 failing wakes.
+    for (let i = 0; i < 5; i++) {
+      requestHeartbeatNow({ reason: "interval", coalesceMs: 0 });
+      await vi.advanceTimersByTimeAsync(1);
+      await vi.advanceTimersByTimeAsync(120_000);
+    }
+
+    // Breaker is tripped. Clear mock and send a new wake — it should be dropped.
+    handler.mockClear();
+    handler.mockResolvedValue({ status: "ran" as const, durationMs: 1 });
+    requestHeartbeatNow({ reason: "interval", coalesceMs: 0 });
+    await vi.advanceTimersByTimeAsync(1);
+    expect(handler).not.toHaveBeenCalled();
+
+    // Advance past the 5-minute cooldown. The re-scheduled timer from
+    // the "all wakes dropped" path should fire and the half-open probe
+    // should invoke the handler.
+    await vi.advanceTimersByTimeAsync(5 * 60_000);
+    requestHeartbeatNow({ reason: "interval", coalesceMs: 0 });
+    await vi.advanceTimersByTimeAsync(1);
+    expect(handler).toHaveBeenCalledTimes(1);
+  });
 });

@@ -199,15 +199,31 @@ function schedule(coalesceMs: number, kind: WakeTimerKind = "normal") {
 
     // Build pending batch, filtering out targets whose breaker is open.
     const pendingBatch: PendingWakeReason[] = [];
+    let minBreakerRemainingMs = Infinity;
     for (const [targetKey, wake] of pendingWakes) {
       if (isBreakerOpen(targetKey)) {
-        // Target's breaker is tripped — drop this wake silently.
+        // Target's breaker is tripped — drop this wake, but track the
+        // remaining cooldown so we re-schedule for the half-open probe.
+        const state = breakerByTarget.get(targetKey);
+        if (state) {
+          const remaining = BREAKER_COOLDOWN_MS - (Date.now() - state.trippedAt);
+          if (remaining > 0 && remaining < minBreakerRemainingMs) {
+            minBreakerRemainingMs = remaining;
+          }
+        }
         continue;
       }
       pendingBatch.push(wake);
     }
     pendingWakes.clear();
     if (pendingBatch.length === 0) {
+      // All wakes were dropped by the breaker. Re-schedule so interval
+      // polling resumes after the earliest breaker cooldown (half-open
+      // probe). Without this, dropping all wakes permanently stalls
+      // heartbeats until an external wake source arrives.
+      if (Number.isFinite(minBreakerRemainingMs)) {
+        schedule(minBreakerRemainingMs, "normal");
+      }
       return;
     }
     running = true;
