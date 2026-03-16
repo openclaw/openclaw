@@ -5,7 +5,7 @@ import {
 import type { OpenClawConfig } from "../../config/config.js";
 import type { DmPolicy, GroupPolicy } from "../../config/types.js";
 import type { SecretInput } from "../../config/types.secrets.js";
-import { promptAccountId as promptAccountIdSdk } from "../../plugin-sdk/onboarding.js";
+import { promptAccountId as promptAccountIdSdk } from "../../plugin-sdk/setup.js";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../../routing/session-key.js";
 import type { WizardPrompter } from "../../wizard/prompts.js";
 import type { PromptAccountId, PromptAccountIdParams } from "./setup-flow-types.js";
