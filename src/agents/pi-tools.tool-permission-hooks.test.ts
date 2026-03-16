@@ -87,6 +87,16 @@ describe("before_tools_resolve hook", () => {
     expect(result?.deny).toContain("gateway");
   });
 
+  it("intersects allow lists from multiple hooks", async () => {
+    addBeforeToolsResolveHook("policy-a", () => ({ allow: ["read", "write"] }), 10);
+    addBeforeToolsResolveHook("policy-b", () => ({ allow: ["read", "exec"] }), 5);
+
+    const runner = createHookRunner(registry);
+    const result = await runner.runBeforeToolsResolve({ toolNames: ["read", "write", "exec"] }, {});
+
+    expect(result?.allow).toEqual(["read"]);
+  });
+
   it("receives identity context", async () => {
     let receivedCtx: Record<string, unknown> = {};
     addBeforeToolsResolveHook("spy", (_event: unknown, ctx: unknown) => {

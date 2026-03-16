@@ -762,7 +762,10 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
       ctx,
       (acc, next) => ({
         deny: [...(acc?.deny ?? []), ...(next.deny ?? [])],
-        allow: next.allow ?? acc?.allow,
+        allow:
+          acc?.allow !== undefined && next.allow !== undefined
+            ? acc.allow.filter((n) => (next.allow as string[]).includes(n))
+            : (next.allow ?? acc?.allow),
       }),
     );
   }
