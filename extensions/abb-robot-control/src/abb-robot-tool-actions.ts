@@ -609,16 +609,19 @@ export async function handleAction(
       return errorResult("Not connected. Use 'connect' action first.");
     }
     try {
-      const joints = await controller.getJointPositions();
+      const liveJoints = await controller.getJointPositions();
       const cfg = currentConfig || getCfg("abb-crb-15000");
-      const jointConfigs = cfg.joints.map((j, i) => ({
-        index: i,
-        id: j.id,
-        type: j.type,
-        min: j.min,
-        max: j.max,
-        home: j.home,
-      }));
+      const jointConfigs = liveJoints.map((_, i) => {
+        const jCfg = cfg.joints[i];
+        return {
+          index: i,
+          id: jCfg?.id ?? `joint${i}`,
+          type: (jCfg?.type ?? "revolute") as "revolute" | "prismatic",
+          min: jCfg?.min ?? -180,
+          max: jCfg?.max ?? 180,
+          home: jCfg?.home ?? 0,
+        };
+      });
       const { identifyRobot } = await import("./robot-config-loader.js");
       const identified = identifyRobot(jointConfigs);
       if (identified) {
@@ -628,12 +631,12 @@ export async function handleAction(
             type: "text" as const,
             text: `✓ Robot identified: ${identifiedCfg.manufacturer} ${identifiedCfg.model} (${identified})`,
           }],
-          details: { robotId: identified, manufacturer: identifiedCfg.manufacturer, model: identifiedCfg.model },
+          details: { robotId: identified, manufacturer: identifiedCfg.manufacturer, model: identifiedCfg.model, dof: liveJoints.length },
         };
       }
       return {
-        content: [{ type: "text" as const, text: "⚠ Could not identify robot from controller data. Specify robot_id manually." }],
-        details: { identified: false },
+        content: [{ type: "text" as const, text: `⚠ Could not identify robot from controller data (${liveJoints.length} DOF). Specify robot_id manually.` }],
+        details: { identified: false, dof: liveJoints.length },
       };
     } catch (err) {
       return errorResult(`Identify robot failed: ${String(err)}`);

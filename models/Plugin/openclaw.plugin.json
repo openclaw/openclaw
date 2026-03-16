@@ -7,11 +7,13 @@
     "properties": {
       "wsHost": {
         "type": "string",
-        "description": "WebSocket bridge host for the 3D kinematic viewer (default: 127.0.0.1)"
+        "description": "WebSocket bridge host for the 3D kinematic viewer",
+        "default": "127.0.0.1"
       },
       "wsPort": {
         "type": "number",
-        "description": "WebSocket bridge port for the 3D kinematic viewer (default: 9877)",
+        "description": "WebSocket bridge port for the 3D kinematic viewer",
+        "default": 9877,
         "minimum": 1,
         "maximum": 65535
       },

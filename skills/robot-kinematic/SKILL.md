@@ -5,7 +5,7 @@ description: >
   natural-language chat. Use when the user wants to move a robot, apply a pose,
   run a motion sequence, wave, dance, inspect, pick, or any other arm motion.
   Also use when the user asks to switch between robots, list available robots or
-  presets, or check viewer connections.
+  presets, or list active viewer connections.
 metadata:
   openclaw:
     emoji: "🦾"

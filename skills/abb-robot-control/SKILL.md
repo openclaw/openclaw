@@ -200,7 +200,7 @@ abb_robot action:identify_robot
 ```
 
 ### execute_rapid
-Execute RAPID code on the controller immediately.
+Load and immediately run RAPID code on the controller in one step.
 
 **Parameters:**
 - `rapid_code` (required): RAPID program code
@@ -212,7 +212,7 @@ abb_robot action:execute_rapid rapid_code:"MODULE MainModule\n  PROC main()\n   
 ```
 
 ### load_rapid
-Load a RAPID program to the controller without executing it.
+Stage a RAPID program on the controller without executing it. Use `start_program` afterwards to begin execution.
 
 **Parameters:**
 - `rapid_code` (required): RAPID program code
