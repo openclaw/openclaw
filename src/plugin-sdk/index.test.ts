@@ -4,68 +4,15 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { build } from "tsdown";
 import { describe, expect, it } from "vitest";
+import {
+  buildPluginSdkEntrySources,
+  buildPluginSdkPackageExports,
+  buildPluginSdkSpecifiers,
+  pluginSdkEntrypoints,
+} from "../../scripts/lib/plugin-sdk-entries.mjs";
 import * as sdk from "./index.js";
 
-const pluginSdkEntrypoints = [
-  "index",
-  "core",
-  "compat",
-  "telegram",
-  "discord",
-  "slack",
-  "signal",
-  "imessage",
-  "whatsapp",
-  "line",
-  "msteams",
-  "acpx",
-  "bluebubbles",
-  "copilot-proxy",
-  "device-pair",
-  "diagnostics-otel",
-  "diffs",
-  "feishu",
-  "googlechat",
-  "irc",
-  "llm-task",
-  "lobster",
-  "matrix",
-  "mattermost",
-  "memory-core",
-  "memory-lancedb",
-  "minimax-portal-auth",
-  "nextcloud-talk",
-  "nostr",
-  "open-prose",
-  "phone-control",
-  "qwen-portal-auth",
-  "synology-chat",
-  "talk-voice",
-  "test-utils",
-  "thread-ownership",
-  "tlon",
-  "twitch",
-  "voice-call",
-  "zalo",
-  "zalouser",
-  "account-id",
-  "keyed-async-queue",
-] as const;
-
-const pluginSdkSpecifiers = pluginSdkEntrypoints.map((entry) =>
-  entry === "index" ? "openclaw/plugin-sdk" : `openclaw/plugin-sdk/${entry}`,
-);
-
-function buildPluginSdkPackageExports() {
-  return Object.fromEntries(
-    pluginSdkEntrypoints.map((entry) => [
-      entry === "index" ? "./plugin-sdk" : `./plugin-sdk/${entry}`,
-      {
-        default: `./dist/plugin-sdk/${entry}.js`,
-      },
-    ]),
-  );
-}
+const pluginSdkSpecifiers = buildPluginSdkSpecifiers();
 
 describe("plugin-sdk exports", () => {
   it("does not expose runtime modules", () => {
@@ -180,9 +127,7 @@ describe("plugin-sdk exports", () => {
         clean: true,
         config: false,
         dts: false,
-        entry: Object.fromEntries(
-          pluginSdkEntrypoints.map((entry) => [entry, `src/plugin-sdk/${entry}.ts`]),
-        ),
+        entry: buildPluginSdkEntrySources(),
         env: { NODE_ENV: "production" },
         fixedExtension: false,
         logLevel: "error",
@@ -236,5 +181,17 @@ describe("plugin-sdk exports", () => {
       await fs.rm(outDir, { recursive: true, force: true });
       await fs.rm(fixtureDir, { recursive: true, force: true });
     }
+  });
+
+  it("keeps package.json plugin-sdk exports synced with the manifest", async () => {
+    const packageJsonPath = path.join(process.cwd(), "package.json");
+    const packageJson = JSON.parse(await fs.readFile(packageJsonPath, "utf8")) as {
+      exports?: Record<string, unknown>;
+    };
+    const currentPluginSdkExports = Object.fromEntries(
+      Object.entries(packageJson.exports ?? {}).filter(([key]) => key.startsWith("./plugin-sdk")),
+    );
+
+    expect(currentPluginSdkExports).toEqual(buildPluginSdkPackageExports());
   });
 });
