@@ -211,15 +211,19 @@ describe("exec host env validation", () => {
     });
     const text = normalizeText(result.content.find((c) => c.type === "text")?.text);
     expect(text).toContain("ok");
+  });
+
+  it("allows explicit host override when tools.exec.host is not configured", async () => {
+    const tool = createExecTool({ security: "full", ask: "off" });
 
     // When tools.exec.host is NOT configured, explicit host="gateway" should succeed
     // (It will return approval-pending, not throw an error)
-    const result2 = await tool.execute("call2", {
+    const result = await tool.execute("call1", {
       command: "echo ok",
       host: "gateway",
     });
     // Should get approval-pending status instead of throwing an error
-    const details = result2.details as { status: string };
+    const details = result.details as { status: string };
     expect(details.status).toBe("approval-pending");
   });
 

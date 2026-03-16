@@ -308,6 +308,9 @@ export function createExecTool(
       const sandboxHostConfigured = defaults?.host === "sandbox";
       const requestedHost = normalizeExecHost(params.host) ?? null;
       let host: ExecHost = requestedHost ?? configuredHost;
+      // Prevent host override when tools.exec.host is explicitly configured, unless elevated (which bypasses approvals).
+      // Note: Even with ask: "off", approval-pending may be returned if tools.exec.host is not configured and host is overridden—
+      // this is because bypassApprovals logic (below) only applies when elevatedRequested && elevatedMode === "full".
       if (!elevatedRequested && requestedHost && defaults?.host && requestedHost !== configuredHost) {
         throw new Error(
           `exec host not allowed (requested ${renderExecHostLabel(requestedHost)}; ` +
