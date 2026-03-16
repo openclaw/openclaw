@@ -37,9 +37,13 @@ import {
 import { resolveOutboundSendDep } from "../../../src/infra/outbound/send-deps.js";
 import { buildPassiveProbedChannelStatusSummary } from "../../shared/channel-status-summary.js";
 import { getSlackRuntime } from "./runtime.js";
-import { slackSetupAdapter, slackSetupWizard } from "./setup-surface.js";
+import { createSlackSetupWizardProxy, slackSetupAdapter } from "./setup-core.js";
 
 const meta = getChatChannelMeta("slack");
+
+async function loadSlackChannelRuntime() {
+  return await import("./channel.runtime.js");
+}
 
 // Select the appropriate Slack token for read/write operations.
 function getTokenForOperation(
@@ -105,6 +109,10 @@ const slackConfigBase = createScopedChannelConfigBase({
   defaultAccountId: resolveDefaultSlackAccountId,
   clearBaseFields: ["botToken", "appToken", "name"],
 });
+
+const slackSetupWizard = createSlackSetupWizardProxy(async () => ({
+  slackSetupWizard: (await loadSlackChannelRuntime()).slackSetupWizard,
+}));
 
 export const slackPlugin: ChannelPlugin<ResolvedSlackAccount> = {
   id: "slack",

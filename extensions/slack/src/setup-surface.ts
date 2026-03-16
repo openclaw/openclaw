@@ -10,15 +10,10 @@ import {
   setLegacyChannelDmPolicyWithAllowFrom,
   setOnboardingChannelEnabled,
 } from "../../../src/channels/plugins/onboarding/helpers.js";
-import {
-  applyAccountNameToChannelSection,
-  migrateBaseNameToDefaultAccount,
-} from "../../../src/channels/plugins/setup-helpers.js";
 import type {
   ChannelSetupWizard,
   ChannelSetupWizardAllowFromEntry,
 } from "../../../src/channels/plugins/setup-wizard.js";
-import type { ChannelSetupAdapter } from "../../../src/channels/plugins/types.adapters.js";
 import type { OpenClawConfig } from "../../../src/config/config.js";
 import { hasConfiguredSecretInput } from "../../../src/config/types.secrets.js";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../../../src/routing/session-key.js";
@@ -33,6 +28,7 @@ import {
 } from "./accounts.js";
 import { resolveSlackChannelAllowlist } from "./resolve-channels.js";
 import { resolveSlackUserAllowlist } from "./resolve-users.js";
+import { slackSetupAdapter } from "./setup-core.js";
 
 const channel = "slack" as const;
 
@@ -237,78 +233,6 @@ function isSlackAccountConfigured(account: ResolvedSlackAccount): boolean {
     Boolean(account.appToken?.trim()) || hasConfiguredSecretInput(account.config.appToken);
   return hasConfiguredBotToken && hasConfiguredAppToken;
 }
-
-export const slackSetupAdapter: ChannelSetupAdapter = {
-  resolveAccountId: ({ accountId }) => normalizeAccountId(accountId),
-  applyAccountName: ({ cfg, accountId, name }) =>
-    applyAccountNameToChannelSection({
-      cfg,
-      channelKey: channel,
-      accountId,
-      name,
-    }),
-  validateInput: ({ accountId, input }) => {
-    if (input.useEnv && accountId !== DEFAULT_ACCOUNT_ID) {
-      return "Slack env tokens can only be used for the default account.";
-    }
-    if (!input.useEnv && (!input.botToken || !input.appToken)) {
-      return "Slack requires --bot-token and --app-token (or --use-env).";
-    }
-    return null;
-  },
-  applyAccountConfig: ({ cfg, accountId, input }) => {
-    const namedConfig = applyAccountNameToChannelSection({
-      cfg,
-      channelKey: channel,
-      accountId,
-      name: input.name,
-    });
-    const next =
-      accountId !== DEFAULT_ACCOUNT_ID
-        ? migrateBaseNameToDefaultAccount({
-            cfg: namedConfig,
-            channelKey: channel,
-          })
-        : namedConfig;
-    if (accountId === DEFAULT_ACCOUNT_ID) {
-      return {
-        ...next,
-        channels: {
-          ...next.channels,
-          slack: {
-            ...next.channels?.slack,
-            enabled: true,
-            ...(input.useEnv
-              ? {}
-              : {
-                  ...(input.botToken ? { botToken: input.botToken } : {}),
-                  ...(input.appToken ? { appToken: input.appToken } : {}),
-                }),
-          },
-        },
-      };
-    }
-    return {
-      ...next,
-      channels: {
-        ...next.channels,
-        slack: {
-          ...next.channels?.slack,
-          enabled: true,
-          accounts: {
-            ...next.channels?.slack?.accounts,
-            [accountId]: {
-              ...next.channels?.slack?.accounts?.[accountId],
-              enabled: true,
-              ...(input.botToken ? { botToken: input.botToken } : {}),
-              ...(input.appToken ? { appToken: input.appToken } : {}),
-            },
-          },
-        },
-      },
-    };
-  },
-};
 
 export const slackSetupWizard: ChannelSetupWizard = {
   channel,
