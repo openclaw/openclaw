@@ -29,7 +29,7 @@ export type ValidateResult = {
 /**
  * Validate a strategy package directory per fep v1.2:
  * - Required: fep.yaml, scripts/strategy.py
- * - fep.yaml: fep, identity.id, identity.name, technical.entryPoint, technical.language, backtest
+ * - fep.yaml: fep, identity (id, name, type, version, style, visibility, summary, license, author.name, changelog), technical, backtest, classification
  * - strategy.py: must define compute(data); must not use forbidden imports/calls
  */
 export async function validateStrategyPackage(dirPath: string): Promise<ValidateResult> {
@@ -83,6 +83,26 @@ export async function validateStrategyPackage(dirPath: string): Promise<Validate
   if (!/\bversion\s*:/m.test(identityBlock)) {
     errors.push("fep.yaml identity must include 'version' (e.g. \"1.0.0\")");
   }
+  if (!/\bstyle\s*:/m.test(identityBlock)) {
+    errors.push(
+      "fep.yaml identity must include 'style' (trend|mean_reversion|dca|momentum|swing|hybrid)",
+    );
+  }
+  if (!/\bvisibility\s*:/m.test(identityBlock)) {
+    errors.push("fep.yaml identity must include 'visibility' (public|private|unlisted)");
+  }
+  if (!/\bsummary\s*:/m.test(identityBlock)) {
+    errors.push("fep.yaml identity must include 'summary' (one-line strategy description)");
+  }
+  if (!/\blicense\s*:/m.test(identityBlock)) {
+    errors.push("fep.yaml identity must include 'license' (MIT|CC-BY-4.0|proprietary)");
+  }
+  if (!/\bauthor\s*:/m.test(identityBlock) || !/\bname\s*:/m.test(identityBlock)) {
+    errors.push("fep.yaml identity.author must include 'name' (author name)");
+  }
+  if (!/\bchangelog\s*:/m.test(identityBlock)) {
+    errors.push("fep.yaml identity must include 'changelog' (at least one version record)");
+  }
   if (!/^\s*technical\s*:/m.test(fepStr)) {
     errors.push("fep.yaml must contain 'technical:' section");
   } else {
@@ -118,6 +138,29 @@ export async function validateStrategyPackage(dirPath: string): Promise<Validate
     }
     if (!/\bbenchmark\s*:/m.test(backtestBlock)) {
       errors.push("fep.yaml backtest.benchmark is required (e.g. BTC-USD)");
+    }
+  }
+  if (!/^\s*classification\s*:/m.test(fepStr)) {
+    errors.push("fep.yaml must contain 'classification:' section");
+  } else {
+    const classificationBlockMatch = /classification:\s*([\s\S]*?)(?=\n\w|\n$|$)/.exec(fepStr);
+    const classificationBlock = classificationBlockMatch ? classificationBlockMatch[1] : "";
+    if (!/\barchetype\s*:/m.test(classificationBlock)) {
+      errors.push(
+        "fep.yaml classification.archetype is required (systematic|discretionary|hybrid)",
+      );
+    }
+    if (!/\bmarket\s*:/m.test(classificationBlock)) {
+      errors.push("fep.yaml classification.market is required (Crypto|US|CN|HK|Forex|Commodity)");
+    }
+    if (!/\bassetClasses\s*:/m.test(classificationBlock)) {
+      errors.push("fep.yaml classification.assetClasses is required (e.g. [crypto])");
+    }
+    if (!/\bfrequency\s*:/m.test(classificationBlock)) {
+      errors.push("fep.yaml classification.frequency is required (daily|weekly|monthly)");
+    }
+    if (!/\briskProfile\s*:/m.test(classificationBlock)) {
+      errors.push("fep.yaml classification.riskProfile is required (low|medium|high)");
     }
   }
 

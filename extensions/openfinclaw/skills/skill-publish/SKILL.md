@@ -106,22 +106,158 @@ When `backtestStatus === "completed"`:
 
 ```json
 {
-  "task_id": "bt-xxx",
-  "performance": {
-    "totalReturn": -0.2391,
-    "sharpe": -1.63,
-    "maxDrawdown": 0.45,
-    "winRate": 0.42,
-    "profitFactor": 0.85,
-    "totalTrades": 156,
-    "finalEquity": 7609.00,
-    "monthlyReturns": { "2024-01": -0.05, ... }
+  "alpha": null,
+  "task_id": "bt-2be0c156bfe2",
+  "metadata": {
+    "id": "tsla-simple-test",
+    "name": "TSLA Simple Test Strategy",
+    "tags": ["tsla", "simple", "test"],
+    "type": "strategy",
+    "style": "trend",
+    "author": { "name": "OpenFinClaw" },
+    "market": "US",
+    "license": "MIT",
+    "summary": "Simple TSLA strategy for testing",
+    "version": "1.0.0",
+    "archetype": "systematic",
+    "frequency": "daily",
+    "riskLevel": "moderate",
+    "visibility": "private",
+    "description": "A simple trend following strategy for TSLA",
+    "assetClasses": ["equity"],
+    "parameters": [
+      {
+        "name": "sma_period",
+        "type": "integer",
+        "label": "SMA周期",
+        "default": 20,
+        "range": { "min": 10, "max": 50 }
+      }
+    ]
   },
-  "integrity": { ... },
-  "equity_curve": [ ... ],
-  "trade_journal": [ ... ]
+  "integrity": {
+    "fepHash": "sha256:...",
+    "codeHash": "sha256:...",
+    "contentCID": "Qm...",
+    "contentHash": "sha256:...",
+    "publishedAt": "2026-03-12T10:18:28.782727+00:00",
+    "timestampProof": "..."
+  },
+  "performance": {
+    "hints": ["Insufficient data: 1/435 periods (0%) had no market data."],
+    "calmar": 0.37,
+    "sharpe": 0.12,
+    "sortino": 0.13,
+    "winRate": 68.25,
+    "finalEquity": 100216.37,
+    "maxDrawdown": 0.49,
+    "totalReturn": 0.22,
+    "totalTrades": 189,
+    "profitFactor": 1.32,
+    "maxDrawdownStart": "349",
+    "maxDrawdownEnd": "426",
+    "monthlyReturns": { "2025-01": 0, "2025-02": 0 },
+    "annualizedReturn": 0.18,
+    "recentValidation": {
+      "decay": {
+        "sharpeDecay30d": 15.17,
+        "sharpeDecay90d": 6.25,
+        "warning": "30d Sharpe decay 1517% exceeds 50% threshold"
+      },
+      "recent": [{ "period": "2026-02-10 ~ 2026-03-12", "window": "30d", "sharpe": -1.76 }],
+      "historical": { "period": "2025-01-01 ~ 2026-03-11", "sharpe": 0.12 }
+    }
+  },
+  "equity_curve": null,
+  "trade_journal": null
 }
 ```
+
+### Report fields
+
+#### Top-level fields
+
+| Field           | Type             | Description                               |
+| --------------- | ---------------- | ----------------------------------------- |
+| `alpha`         | `number \| null` | Alpha coefficient, strategy excess return |
+| `task_id`       | `string`         | Backtest task unique identifier           |
+| `metadata`      | `object`         | Strategy metadata (see below)             |
+| `integrity`     | `object`         | Integrity verification info (see below)   |
+| `performance`   | `object`         | Backtest performance metrics (see below)  |
+| `equity_curve`  | `array \| null`  | Equity curve data points                  |
+| `trade_journal` | `array \| null`  | Trade journal records                     |
+
+#### metadata fields
+
+| Field          | Type       | Description                          |
+| -------------- | ---------- | ------------------------------------ |
+| `id`           | `string`   | Strategy unique identifier           |
+| `name`         | `string`   | Strategy name                        |
+| `tags`         | `string[]` | Strategy tags                        |
+| `type`         | `string`   | Strategy type (strategy/indicator)   |
+| `style`        | `string`   | Strategy style                       |
+| `author`       | `object`   | Author info `{ name: string }`       |
+| `market`       | `string`   | Target market (US/CN/HK etc.)        |
+| `license`      | `string`   | License type                         |
+| `summary`      | `string`   | Strategy summary                     |
+| `version`      | `string`   | Version number                       |
+| `archetype`    | `string`   | Architecture type                    |
+| `frequency`    | `string`   | Trading frequency                    |
+| `riskLevel`    | `string`   | Risk level                           |
+| `visibility`   | `string`   | Visibility (public/private/unlisted) |
+| `description`  | `string`   | Detailed description                 |
+| `assetClasses` | `string[]` | Asset classes                        |
+| `parameters`   | `object[]` | Strategy parameter definitions       |
+
+#### integrity fields
+
+| Field            | Type     | Description                           |
+| ---------------- | -------- | ------------------------------------- |
+| `fepHash`        | `string` | FEP file SHA256 hash                  |
+| `codeHash`       | `string` | Code file SHA256 hash                 |
+| `contentCID`     | `string` | IPFS content CID                      |
+| `contentHash`    | `string` | Full content SHA256 hash              |
+| `publishedAt`    | `string` | Publish timestamp (ISO 8601)          |
+| `timestampProof` | `string` | Timestamp proof (blockchain anchored) |
+
+#### performance fields
+
+| Field              | Type       | Description                                     |
+| ------------------ | ---------- | ----------------------------------------------- |
+| `hints`            | `string[]` | Backtest hints/warnings                         |
+| `calmar`           | `number`   | Calmar ratio (annualized return / max drawdown) |
+| `sharpe`           | `number`   | Sharpe ratio                                    |
+| `sortino`          | `number`   | Sortino ratio                                   |
+| `winRate`          | `number`   | Win rate (percentage)                           |
+| `finalEquity`      | `number`   | Final equity                                    |
+| `maxDrawdown`      | `number`   | Maximum drawdown (decimal)                      |
+| `totalReturn`      | `number`   | Total return (decimal)                          |
+| `totalTrades`      | `number`   | Total number of trades                          |
+| `profitFactor`     | `number`   | Profit factor                                   |
+| `maxDrawdownStart` | `string`   | Max drawdown start position (bar index)         |
+| `maxDrawdownEnd`   | `string`   | Max drawdown end position (bar index)           |
+| `monthlyReturns`   | `object`   | Monthly returns `{ "YYYY-MM": number }`         |
+| `annualizedReturn` | `number`   | Annualized return                               |
+| `recentValidation` | `object`   | Recent validation analysis (see below)          |
+
+#### recentValidation fields
+
+| Field                  | Type       | Description                              |
+| ---------------------- | ---------- | ---------------------------------------- |
+| `decay`                | `object`   | Strategy decay analysis                  |
+| `decay.sharpeDecay30d` | `number`   | 30-day Sharpe decay percentage           |
+| `decay.sharpeDecay90d` | `number`   | 90-day Sharpe decay percentage           |
+| `decay.warning`        | `string`   | Decay warning message                    |
+| `recent`               | `object[]` | Recent window backtest results (30d/90d) |
+| `historical`           | `object`   | Historical full backtest results         |
+
+## Post-publish guidance
+
+After the strategy is successfully published and backtest completed, inform the user:
+
+> ✅ 策略发布成功！请访问 **https://hub.openfinclaw.ai/en/dashboard/entries** 查看策略详情和回测报告。
+
+**Do NOT** provide strategy-specific URLs like `https://hub.openfinclaw.ai/en/strategy/{entryId}`. Always direct users to the dashboard entries page.
 
 ## Example workflow
 
