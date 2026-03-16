@@ -5,11 +5,58 @@ import { formatZonedTimestamp } from "../../infra/format-time/format-datetime.js
 import type { TemplateContext } from "../templating.js";
 
 function hashId(value: string): string {
+  // Keep 12-char truncation aligned with formatOwnerDisplayId.
   return createHash("sha256").update(value).digest("hex").slice(0, 12);
 }
 
 function hashSenderId(value: string): string {
   return `user_${hashId(value)}`;
+}
+
+function hashParticipantLabel(value: string): string {
+  return `participant_${hashId(value)}`;
+}
+
+/**
+ * Sender-label redaction pattern:
+ * - +15551234567
+ * - 15551234567
+ * - 15551234567@s.whatsapp.net
+ *
+ * Applied only to label-like metadata fields (history/reply/forward sender labels),
+ * not to SenderId/chat_id, to avoid broadening numeric-ID false positives.
+ */
+const SENDER_LABEL_PHONE_PATTERN = /^(?:\+\d{7,15}|\d{7,15}|\d{7,15}@.+)$/;
+const SENDER_LABEL_ID_PATTERN = /^user:(.+)$/;
+
+function redactSenderLabel(value: string | undefined): string | undefined {
+  if (!value) {
+    return undefined;
+  }
+  const idMatch = value.match(SENDER_LABEL_ID_PATTERN);
+  if (idMatch) {
+    return hashSenderId(idMatch[1]);
+  }
+  if (SENDER_LABEL_PHONE_PATTERN.test(value)) {
+    return hashSenderId(value);
+  }
+  return hashParticipantLabel(value);
+}
+
+function resolveRedactedParticipantLabel(ctx: TemplateContext): string | undefined {
+  const rawSenderId = safeTrim(ctx.SenderId);
+  const senderE164 = safeTrim(ctx.SenderE164);
+  const senderName = safeTrim(ctx.SenderName);
+  const senderUsername = safeTrim(ctx.SenderUsername);
+  return rawSenderId
+    ? hashSenderId(rawSenderId)
+    : senderE164
+      ? hashSenderId(senderE164)
+      : senderName
+        ? hashParticipantLabel(senderName)
+        : senderUsername
+          ? hashParticipantLabel(senderUsername)
+          : undefined;
 }
 
 function hashChatId(value: string): string {
@@ -78,13 +125,11 @@ export function buildInboundMetaSystemPrompt(
   // For webchat/Hub Chat sessions (when Surface is 'webchat' or undefined with no real channel),
   // omit the channel field entirely rather than falling back to an unrelated provider.
   const channelValue = resolveInboundChannel(ctx);
+  const chatId = safeTrim(ctx.OriginatingTo);
 
   const payload = {
     schema: "openclaw.inbound_meta.v1",
-    chat_id:
-      options?.redactPII && safeTrim(ctx.OriginatingTo)
-        ? hashChatId(safeTrim(ctx.OriginatingTo)!)
-        : safeTrim(ctx.OriginatingTo),
+    chat_id: options?.redactPII && chatId ? hashChatId(chatId) : chatId,
     account_id: safeTrim(ctx.AccountId),
     channel: channelValue,
     provider: safeTrim(ctx.Provider),
@@ -127,20 +172,26 @@ export function buildInboundUserContextPrefix(
   const senderE164 = options?.redactPII ? undefined : safeTrim(ctx.SenderE164);
   const rawSenderId = safeTrim(ctx.SenderId);
   const senderId = options?.redactPII && rawSenderId ? hashSenderId(rawSenderId) : rawSenderId;
+  const redactedParticipantLabel = options?.redactPII
+    ? resolveRedactedParticipantLabel(ctx)
+    : undefined;
 
   const conversationInfo = {
     message_id: shouldIncludeConversationInfo ? resolvedMessageId : undefined,
     reply_to_id: shouldIncludeConversationInfo ? safeTrim(ctx.ReplyToId) : undefined,
     sender_id: shouldIncludeConversationInfo ? senderId : undefined,
-    conversation_label: isDirect ? undefined : safeTrim(ctx.ConversationLabel),
+    conversation_label:
+      options?.redactPII || isDirect ? undefined : safeTrim(ctx.ConversationLabel),
     sender: shouldIncludeConversationInfo
-      ? (safeTrim(ctx.SenderName) ?? senderE164 ?? senderId ?? safeTrim(ctx.SenderUsername))
+      ? options?.redactPII
+        ? redactedParticipantLabel
+        : (safeTrim(ctx.SenderName) ?? senderE164 ?? senderId ?? safeTrim(ctx.SenderUsername))
       : undefined,
     timestamp: timestampStr,
-    group_subject: safeTrim(ctx.GroupSubject),
-    group_channel: safeTrim(ctx.GroupChannel),
-    group_space: safeTrim(ctx.GroupSpace),
-    thread_label: safeTrim(ctx.ThreadLabel),
+    group_subject: options?.redactPII ? undefined : safeTrim(ctx.GroupSubject),
+    group_channel: options?.redactPII ? undefined : safeTrim(ctx.GroupChannel),
+    group_space: options?.redactPII ? undefined : safeTrim(ctx.GroupSpace),
+    thread_label: options?.redactPII ? undefined : safeTrim(ctx.ThreadLabel),
     topic_id: ctx.MessageThreadId != null ? String(ctx.MessageThreadId) : undefined,
     is_forum: ctx.IsForum === true ? true : undefined,
     is_group_chat: !isDirect ? true : undefined,
@@ -164,20 +215,25 @@ export function buildInboundUserContextPrefix(
     );
   }
 
-  const senderInfo = {
-    label: resolveSenderLabel({
-      name: safeTrim(ctx.SenderName),
-      username: safeTrim(ctx.SenderUsername),
-      tag: safeTrim(ctx.SenderTag),
-      e164: senderE164,
-      id: senderId,
-    }),
-    id: senderId,
-    name: safeTrim(ctx.SenderName),
-    username: safeTrim(ctx.SenderUsername),
-    tag: safeTrim(ctx.SenderTag),
-    e164: senderE164,
-  };
+  const senderInfo = options?.redactPII
+    ? {
+        label: redactedParticipantLabel,
+        id: senderId,
+      }
+    : {
+        label: resolveSenderLabel({
+          name: safeTrim(ctx.SenderName),
+          username: safeTrim(ctx.SenderUsername),
+          tag: safeTrim(ctx.SenderTag),
+          e164: senderE164,
+          id: senderId,
+        }),
+        id: senderId,
+        name: safeTrim(ctx.SenderName),
+        username: safeTrim(ctx.SenderUsername),
+        tag: safeTrim(ctx.SenderTag),
+        e164: senderE164,
+      };
   if (senderInfo?.label) {
     blocks.push(
       ["Sender (untrusted metadata):", "```json", JSON.stringify(senderInfo, null, 2), "```"].join(
@@ -204,7 +260,9 @@ export function buildInboundUserContextPrefix(
         "```json",
         JSON.stringify(
           {
-            sender_label: safeTrim(ctx.ReplyToSender),
+            sender_label: options?.redactPII
+              ? redactSenderLabel(safeTrim(ctx.ReplyToSender))
+              : safeTrim(ctx.ReplyToSender),
             is_quote: ctx.ReplyToIsQuote === true ? true : undefined,
             body: ctx.ReplyToBody,
           },
@@ -223,11 +281,13 @@ export function buildInboundUserContextPrefix(
         "```json",
         JSON.stringify(
           {
-            from: safeTrim(ctx.ForwardedFrom),
+            from: options?.redactPII
+              ? redactSenderLabel(safeTrim(ctx.ForwardedFrom))
+              : safeTrim(ctx.ForwardedFrom),
             type: safeTrim(ctx.ForwardedFromType),
-            username: safeTrim(ctx.ForwardedFromUsername),
-            title: safeTrim(ctx.ForwardedFromTitle),
-            signature: safeTrim(ctx.ForwardedFromSignature),
+            username: options?.redactPII ? undefined : safeTrim(ctx.ForwardedFromUsername),
+            title: options?.redactPII ? undefined : safeTrim(ctx.ForwardedFromTitle),
+            signature: options?.redactPII ? undefined : safeTrim(ctx.ForwardedFromSignature),
             chat_type: safeTrim(ctx.ForwardedFromChatType),
             date_ms: typeof ctx.ForwardedDate === "number" ? ctx.ForwardedDate : undefined,
           },
@@ -246,7 +306,7 @@ export function buildInboundUserContextPrefix(
         "```json",
         JSON.stringify(
           ctx.InboundHistory.map((entry) => ({
-            sender: entry.sender,
+            sender: options?.redactPII ? redactSenderLabel(entry.sender) : entry.sender,
             timestamp_ms: entry.timestamp,
             body: entry.body,
           })),
