@@ -722,7 +722,8 @@ export class GatewayClient {
     }
     const delay = this.backoffMs;
     this.backoffMs = Math.min(this.backoffMs * 2, 30_000);
-    setTimeout(() => this.start(), delay).unref();
+    // Keep reconnect timers ref'd so long-running clients stay alive between disconnect and retry.
+    setTimeout(() => this.start(), delay);
   }
 
   private flushPendingErrors(err: Error) {
