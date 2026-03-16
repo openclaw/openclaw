@@ -6,13 +6,20 @@ describe("plugin-sdk/text-chunking", () => {
     expect(chunkTextForOutbound("hello world", 100)).toEqual(["hello world"]);
   });
 
-  it("splits at newlines when possible", () => {
-    const text = "line one\nline two\nline three";
-    expect(chunkTextForOutbound(text, 15)).toEqual(["line one\nline two", "line three"]);
+  it("returns empty for empty input", () => {
+    expect(chunkTextForOutbound("", 10)).toEqual([]);
+  });
+
+  it("splits on newline boundaries", () => {
+    expect(chunkTextForOutbound("alpha\nbeta gamma", 8)).toEqual(["alpha", "beta", "gamma"]);
   });
 
   it("splits at spaces when no newlines available", () => {
     expect(chunkTextForOutbound("alpha beta gamma", 10)).toEqual(["alpha", "beta gamma"]);
+  });
+
+  it("falls back to hard limit when no separator exists", () => {
+    expect(chunkTextForOutbound("abcdefghij", 4)).toEqual(["abcd", "efgh", "ij"]);
   });
 
   describe("code block awareness", () => {
@@ -79,10 +86,34 @@ describe("plugin-sdk/text-chunking", () => {
     });
 
     it("does not treat inline backticks as code block markers", () => {
+      // Inline ``` (not at start of line) should be treated as regular text
       const text = "Use ``` to start a code block. And ``` to end it.";
       const chunks = chunkTextForOutbound(text, 30);
-      // Should split at newline/space, not at the inline ```
+      // Should split at space, not at the inline ```
       expect(chunks.length).toBeGreaterThan(1);
+      // All chunks should be valid (no broken ``` markers)
+      for (const chunk of chunks) {
+        // Since inline ``` is not a fence, chunks can have odd counts
+        // The important thing is that the chunking happens at spaces, not at ```
+        expect(chunk.length).toBeLessThanOrEqual(30);
+      }
+    });
+
+    it("handles 4-backtick fences correctly", () => {
+      // Code blocks with 4 backticks are used when code contains 3 backticks
+      const text = "````\ncode with ``` inside\n````";
+      expect(chunkTextForOutbound(text, 100)).toEqual([text]);
+    });
+
+    it("handles code block at window start", () => {
+      // When a code block starts exactly at position 0 of a window
+      const text = "```\nfirst\n```\n```\nsecond\n```";
+      const chunks = chunkTextForOutbound(text, 20);
+      // Each chunk should have balanced code blocks
+      for (const chunk of chunks) {
+        const openCount = (chunk.match(/```/g) || []).length;
+        expect(openCount % 2).toBe(0);
+      }
     });
   });
 });
