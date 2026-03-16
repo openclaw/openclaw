@@ -35,6 +35,7 @@ export const HeartbeatSchema = z
     suppressToolErrorWarnings: z.boolean().optional(),
     lightContext: z.boolean().optional(),
     isolatedSession: z.boolean().optional(),
+    timeoutSeconds: z.number().int().positive().optional(),
   })
   .strict()
   .superRefine((val, ctx) => {

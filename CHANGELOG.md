@@ -6,6 +6,8 @@ Docs: https://docs.openclaw.ai
 
 ### Changes
 
+<<<<<<< HEAD
+
 - Commands/btw: add `/btw` side questions for quick tool-less answers about the current session without changing future session context, with dismissible in-session TUI answers and explicit BTW replies on external channels. (#45444) Thanks @ngutman.
 - Sandbox/runtime: add pluggable sandbox backends, ship an OpenShell backend with `mirror` and `remote` workspace modes, and make sandbox list/recreate/prune backend-aware instead of Docker-only.
 - Sandbox/SSH: add a core SSH sandbox backend with secret-backed key, certificate, and known_hosts inputs, move shared remote exec/filesystem tooling into core, and keep OpenShell focused on sandbox lifecycle plus optional `mirror` mode.
@@ -30,6 +32,7 @@ Docs: https://docs.openclaw.ai
 - secrets: harden read-only SecretRef command paths and diagnostics. (#47794) Thanks @joshavant.
 - Browser/existing-session: support `browser.profiles.<name>.userDataDir` so Chrome DevTools MCP can attach to Brave, Edge, and other Chromium-based browsers through their own user data directories. (#48170) thanks @velvet-shark.
 - Skills/prompt budget: preserve all registered skills via a compact catalog fallback before dropping entries when the full prompt format exceeds `maxSkillsPromptChars`. (#47553) Thanks @snese.
+- Heartbeat/timeout: add `agents.defaults.heartbeat.timeoutSeconds` and `agents.list[].heartbeat.timeoutSeconds` so heartbeat runs can fail fast (e.g., 60s) when a model hangs, without affecting interactive agent turn timeouts. Defaults to `agents.defaults.timeoutSeconds` (600s) when unset. (#47456)
 
 ### Breaking
 
@@ -95,7 +98,9 @@ Docs: https://docs.openclaw.ai
 - Nodes/pending actions: re-check queued foreground actions against the current node command policy before returning them to the node. (#46815) Thanks @zpbrent and @vincentkoc.
 - Node/startup: remove leftover debug `console.log("node host PATH: ...")` that printed the resolved PATH on every `openclaw node run` invocation. (#46411)
 - CLI/completion: reduce recursive completion-script string churn and fix nested PowerShell command-path matching so generated nested completions resolve on PowerShell too. (#45537) Thanks @yiShanXin and @vincentkoc.
-- Slack/startup: harden `@slack/bolt` import interop across current bundled runtime shapes so Slack monitors no longer crash with `App is not a constructor` after plugin-sdk bundling changes. (#45953) thanks @merc1305.
+- # Slack/startup: harden `@slack/bolt` import interop across current bundled runtime shapes so Slack monitors no longer crash with `App is not a constructor` after plugin-sdk bundling changes. (#45953) thanks @merc1305.
+- Heartbeat/timeout: add `agents.defaults.heartbeat.timeoutSeconds` and `agents.list[].heartbeat.timeoutSeconds` so heartbeat runs can fail fast (e.g., 60s) when a model hangs, without affecting interactive agent turn timeouts. Defaults to `agents.defaults.timeoutSeconds` (600s) when unset. (#47456)
+  > > > > > > > 617f1752e6 (feat: heartbeat.timeoutSeconds — per-heartbeat embedded run timeout)
 
 ## 2026.3.13
 

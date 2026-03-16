@@ -267,6 +267,13 @@ export type AgentDefaultsConfig = {
      * Default: false (only the final heartbeat payload is delivered).
      */
     includeReasoning?: boolean;
+    /**
+     * Timeout for heartbeat embedded runs in seconds. Overrides agents.defaults.timeoutSeconds
+     * for heartbeat runs only. Useful for failing fast when a heartbeat model hangs.
+     * Default: inherits agents.defaults.timeoutSeconds (600s).
+     * Example: 60 = fail over after 1 minute instead of 10 minutes.
+     */
+    timeoutSeconds?: number;
   };
   /** Max concurrent agent runs across all conversations. Default: 1 (sequential). */
   maxConcurrent?: number;
