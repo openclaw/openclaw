@@ -201,6 +201,12 @@ function resolveRouteLawEnvelopeFromBundle(
   };
 }
 
+function preserveRouteLawEnvelope(routeLaw: SessionAcpMeta["routeLaw"]): {
+  routeLaw?: SessionAcpRouteLawEnvelope;
+} {
+  return routeLaw ? { routeLaw } : {};
+}
+
 export class AcpSessionManager {
   private readonly actorQueue = new SessionActorQueue();
   private readonly actorTailBySession = this.actorQueue.getTailMapForTesting();
@@ -1117,7 +1123,7 @@ export class AcpSessionManager {
       agent,
       runtimeSessionName: ensured.runtimeSessionName,
       ...(nextIdentity ? { identity: nextIdentity } : {}),
-      ...(previousMeta.routeLaw ? { routeLaw: previousMeta.routeLaw } : {}),
+      ...preserveRouteLawEnvelope(previousMeta.routeLaw),
       mode: params.meta.mode,
       ...(Object.keys(nextRuntimeOptions).length > 0 ? { runtimeOptions: nextRuntimeOptions } : {}),
       ...(effectiveCwd ? { cwd: effectiveCwd } : {}),
@@ -1184,7 +1190,7 @@ export class AcpSessionManager {
           agent: base.agent,
           runtimeSessionName: base.runtimeSessionName,
           ...(base.identity ? { identity: base.identity } : {}),
-          ...(base.routeLaw ? { routeLaw: base.routeLaw } : {}),
+          ...preserveRouteLawEnvelope(base.routeLaw),
           mode: base.mode,
           runtimeOptions: hasOptions ? normalized : undefined,
           cwd: normalized.cwd,
@@ -1331,7 +1337,7 @@ export class AcpSessionManager {
           agent: base.agent,
           runtimeSessionName: base.runtimeSessionName,
           ...(base.identity ? { identity: base.identity } : {}),
-          ...(base.routeLaw ? { routeLaw: base.routeLaw } : {}),
+          ...preserveRouteLawEnvelope(base.routeLaw),
           mode: base.mode,
           ...(base.runtimeOptions ? { runtimeOptions: base.runtimeOptions } : {}),
           ...(base.cwd ? { cwd: base.cwd } : {}),
