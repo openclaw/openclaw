@@ -1428,10 +1428,13 @@ Wizard precedence:
 `plugin.setupWizard` is best for channels that fit the shared pattern:
 
 - one account picker driven by `plugin.config.listAccountIds`
+- optional preflight/prepare step before prompting (for example installer/bootstrap work)
 - optional env-shortcut prompt for bundled credential sets (for example paired bot/app tokens)
 - one or more credential prompts, with each step either writing through `plugin.setup.applyAccountConfig` or a channel-owned partial patch
+- optional non-secret text prompts (for example CLI paths, base URLs, account ids)
 - optional channel/group access allowlist prompts resolved by the host
 - optional DM allowlist resolution (for example `@username` -> numeric id)
+- optional completion note after setup finishes
 
 `plugin.onboarding` hooks still return the same values as before:
 
