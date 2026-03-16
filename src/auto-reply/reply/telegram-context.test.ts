@@ -1,5 +1,14 @@
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
+import { telegramPlugin } from "../../../extensions/telegram/src/channel.js";
+import { setActivePluginRegistry } from "../../plugins/runtime.js";
+import { createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { resolveTelegramConversationId } from "./telegram-context.js";
+
+beforeEach(() => {
+  setActivePluginRegistry(
+    createTestRegistry([{ pluginId: "telegram", source: "test", plugin: telegramPlugin }]),
+  );
+});
 
 describe("resolveTelegramConversationId", () => {
   it("builds canonical topic ids from chat target and message thread id", () => {

@@ -1,5 +1,4 @@
-import { getChannelDock } from "../../channels/dock.js";
-import { normalizeChannelId } from "../../channels/plugins/index.js";
+import { getChannelPlugin, normalizeChannelId } from "../../channels/plugins/index.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { BlockStreamingCoalesceConfig } from "../../config/types.js";
 import { resolveAccountEntry } from "../../routing/account-lookup.js";
@@ -34,7 +33,7 @@ function resolveProviderChunkContext(
   const providerKey = normalizeChunkProvider(provider);
   const providerId = providerKey ? normalizeChannelId(providerKey) : null;
   const providerChunkLimit = providerId
-    ? getChannelDock(providerId)?.outbound?.textChunkLimit
+    ? getChannelPlugin(providerId)?.outbound?.textChunkLimit
     : undefined;
   const textLimit = resolveTextChunkLimit(cfg, providerKey, accountId, {
     fallbackLimit: providerChunkLimit,
@@ -209,7 +208,7 @@ export function resolveBlockStreamingCoalescing(
   // when chunkMode="newline", matching the delivery-time splitting behavior.
   const chunkMode = opts?.chunkMode ?? resolveChunkMode(cfg, providerKey, accountId);
   const providerDefaults = providerId
-    ? getChannelDock(providerId)?.streaming?.blockStreamingCoalesceDefaults
+    ? getChannelPlugin(providerId)?.streaming?.blockStreamingCoalesceDefaults
     : undefined;
   const providerCfg = resolveProviderBlockStreamingCoalesce({
     cfg,
