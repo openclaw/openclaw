@@ -1,5 +1,7 @@
 # ExecuTorch Parakeet Plugin for OpenClaw
 
+https://github.com/user-attachments/assets/cb39ffcd-509e-4205-8ab1-34e7bbdc0c23
+
 On-device speech-to-text (STT) for OpenClaw using an embedded ExecuTorch runtime with **Parakeet-TDT** on **Metal**.
 
 ## Scope
