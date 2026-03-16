@@ -688,6 +688,106 @@ describe("preflightDiscordMessage", () => {
     expect(result).not.toBeNull();
     expect(result?.wasMentioned).toBe(true);
   });
+
+  describe("thread mention fallback (#44183)", () => {
+    const guildId = "guild-tf";
+
+    it("detects mention via text when mentionedUsers is empty (thread bug workaround)", async () => {
+      const botUserId = "bot-123";
+      const channelId = "ch-tf-1";
+      const message = createDiscordMessage({
+        id: "m-tf-1",
+        content: `Hey <@${botUserId}> please help`,
+        channelId,
+        mentionedUsers: [], // empty — simulates Discord thread bug
+        author: { id: "u1", bot: false, username: "Alice" },
+      });
+      const result = await preflightDiscordMessage({
+        ...createPreflightArgs({
+          cfg: DEFAULT_PREFLIGHT_CFG,
+          discordConfig: {} as DiscordConfig,
+          data: createGuildEvent({ channelId, guildId, author: message.author, message }),
+          client: createGuildTextClient(channelId),
+        }),
+        botUserId,
+        guildEntries: { [guildId]: { requireMention: true } },
+      });
+      expect(result).not.toBeNull();
+      expect(result?.wasMentioned).toBe(true);
+    });
+
+    it("detects nickname-format mention <@!id> via text fallback", async () => {
+      const botUserId = "bot-456";
+      const channelId = "ch-tf-2";
+      const message = createDiscordMessage({
+        id: "m-tf-2",
+        content: `<@!${botUserId}> review this?`,
+        channelId,
+        mentionedUsers: [],
+        author: { id: "u2", bot: false, username: "Bob" },
+      });
+      const result = await preflightDiscordMessage({
+        ...createPreflightArgs({
+          cfg: DEFAULT_PREFLIGHT_CFG,
+          discordConfig: {} as DiscordConfig,
+          data: createGuildEvent({ channelId, guildId, author: message.author, message }),
+          client: createGuildTextClient(channelId),
+        }),
+        botUserId,
+        guildEntries: { [guildId]: { requireMention: true } },
+      });
+      expect(result).not.toBeNull();
+      expect(result?.wasMentioned).toBe(true);
+    });
+
+    it("drops message mentioning a different bot", async () => {
+      const botUserId = "bot-123";
+      const channelId = "ch-tf-3";
+      const message = createDiscordMessage({
+        id: "m-tf-3",
+        content: `Hello <@bot-999> not you`,
+        channelId,
+        mentionedUsers: [],
+        author: { id: "u3", bot: false, username: "Carol" },
+      });
+      const result = await preflightDiscordMessage({
+        ...createPreflightArgs({
+          cfg: DEFAULT_PREFLIGHT_CFG,
+          discordConfig: {} as DiscordConfig,
+          data: createGuildEvent({ channelId, guildId, author: message.author, message }),
+          client: createGuildTextClient(channelId),
+        }),
+        botUserId,
+        guildEntries: { [guildId]: { requireMention: true } },
+      });
+      expect(result).toBeNull();
+    });
+
+    it("works when both mentionedUsers array and text mention are present (normal case)", async () => {
+      const botUserId = "bot-123";
+      const channelId = "ch-tf-4";
+      const message = createDiscordMessage({
+        id: "m-tf-4",
+        content: `Hello <@${botUserId}>`,
+        channelId,
+        mentionedUsers: [{ id: botUserId }],
+        author: { id: "u4", bot: false, username: "Dave" },
+      });
+      const result = await preflightDiscordMessage({
+        ...createPreflightArgs({
+          cfg: DEFAULT_PREFLIGHT_CFG,
+          discordConfig: {} as DiscordConfig,
+          data: createGuildEvent({ channelId, guildId, author: message.author, message }),
+          client: createGuildTextClient(channelId),
+        }),
+        botUserId,
+        guildEntries: { [guildId]: { requireMention: true } },
+      });
+      expect(result).not.toBeNull();
+      expect(result?.wasMentioned).toBe(true);
+    });
+  });
+
 });
 
 describe("shouldIgnoreBoundThreadWebhookMessage", () => {
