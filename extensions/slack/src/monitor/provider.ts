@@ -1,5 +1,5 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
-import SlackBolt from "@slack/bolt";
+import SlackBolt, * as SlackBoltNamespace from "@slack/bolt";
 import { resolveTextChunkLimit } from "../../../../src/auto-reply/chunk.js";
 import { DEFAULT_GROUP_HISTORY_LIMIT } from "../../../../src/auto-reply/reply/history.js";
 import {
@@ -46,14 +46,77 @@ import {
 import { registerSlackMonitorSlashCommands } from "./slash.js";
 import type { MonitorSlackOpts } from "./types.js";
 
-const slackBoltModule = SlackBolt as typeof import("@slack/bolt") & {
-  default?: typeof import("@slack/bolt");
+type SlackAppConstructor = typeof import("@slack/bolt").App;
+type SlackHttpReceiverConstructor = typeof import("@slack/bolt").HTTPReceiver;
+type SlackBoltResolvedExports = {
+  App: SlackAppConstructor;
+  HTTPReceiver: SlackHttpReceiverConstructor;
 };
-// Bun allows named imports from CJS; Node ESM doesn't. Use default+fallback for compatibility.
-// Fix: Check if module has App property directly (Node 25.x ESM/CJS compat issue)
-const slackBolt =
-  (slackBoltModule.App ? slackBoltModule : slackBoltModule.default) ?? slackBoltModule;
-const { App, HTTPReceiver } = slackBolt;
+type Constructor = abstract new (...args: never[]) => unknown;
+
+function isConstructorFunction<T extends Constructor>(value: unknown): value is T {
+  return typeof value === "function";
+}
+
+function resolveSlackBoltModule(value: unknown): SlackBoltResolvedExports | null {
+  if (!value || typeof value !== "object") {
+    return null;
+  }
+  const app = Reflect.get(value, "App");
+  const httpReceiver = Reflect.get(value, "HTTPReceiver");
+  if (
+    !isConstructorFunction<SlackAppConstructor>(app) ||
+    !isConstructorFunction<SlackHttpReceiverConstructor>(httpReceiver)
+  ) {
+    return null;
+  }
+  return {
+    App: app,
+    HTTPReceiver: httpReceiver,
+  };
+}
+
+function resolveSlackBoltInterop(params: {
+  defaultImport: unknown;
+  namespaceImport: unknown;
+}): SlackBoltResolvedExports {
+  const { defaultImport, namespaceImport } = params;
+  const nestedDefault =
+    defaultImport && typeof defaultImport === "object"
+      ? Reflect.get(defaultImport, "default")
+      : undefined;
+  const namespaceDefault =
+    namespaceImport && typeof namespaceImport === "object"
+      ? Reflect.get(namespaceImport, "default")
+      : undefined;
+  const namespaceReceiver =
+    namespaceImport && typeof namespaceImport === "object"
+      ? Reflect.get(namespaceImport, "HTTPReceiver")
+      : undefined;
+  const directModule =
+    resolveSlackBoltModule(defaultImport) ??
+    resolveSlackBoltModule(nestedDefault) ??
+    resolveSlackBoltModule(namespaceDefault) ??
+    resolveSlackBoltModule(namespaceImport);
+  if (directModule) {
+    return directModule;
+  }
+  if (
+    isConstructorFunction<SlackAppConstructor>(defaultImport) &&
+    isConstructorFunction<SlackHttpReceiverConstructor>(namespaceReceiver)
+  ) {
+    return {
+      App: defaultImport,
+      HTTPReceiver: namespaceReceiver,
+    };
+  }
+  throw new TypeError("Unable to resolve @slack/bolt App/HTTPReceiver exports");
+}
+
+const { App, HTTPReceiver } = resolveSlackBoltInterop({
+  defaultImport: SlackBolt,
+  namespaceImport: SlackBoltNamespace,
+});
 
 const SLACK_WEBHOOK_MAX_BODY_BYTES = 1024 * 1024;
 const SLACK_WEBHOOK_BODY_TIMEOUT_MS = 30_000;
@@ -559,6 +622,7 @@ export const __testing = {
   publishSlackDisconnectedStatus,
   resolveSlackRuntimeGroupPolicy: resolveOpenProviderRuntimeGroupPolicy,
   resolveDefaultGroupPolicy,
+  resolveSlackBoltInterop,
   getSocketEmitter,
   waitForSlackSocketDisconnect,
 };
