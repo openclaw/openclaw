@@ -6,6 +6,7 @@ const runConfigUnsetMock = vi.hoisted(() => vi.fn(async () => {}));
 const modelsListCommandMock = vi.hoisted(() => vi.fn(async () => {}));
 const modelsStatusCommandMock = vi.hoisted(() => vi.fn(async () => {}));
 const gatewayStatusCommandMock = vi.hoisted(() => vi.fn(async () => {}));
+const statusJsonCommandMock = vi.hoisted(() => vi.fn(async () => {}));
 
 vi.mock("../config-cli.js", () => ({
   runConfigGet: runConfigGetMock,
@@ -19,6 +20,10 @@ vi.mock("../../commands/models.js", () => ({
 
 vi.mock("../../commands/gateway-status.js", () => ({
   gatewayStatusCommand: gatewayStatusCommandMock,
+}));
+
+vi.mock("../../commands/status-json.js", () => ({
+  statusJsonCommand: statusJsonCommandMock,
 }));
 
 describe("program routes", () => {
@@ -122,6 +127,26 @@ describe("program routes", () => {
 
   it("returns false when status timeout flag value is missing", async () => {
     await expectRunFalse(["status"], ["node", "openclaw", "status", "--timeout"]);
+  });
+
+  it("routes status --json through the lean JSON command", async () => {
+    const route = expectRoute(["status"]);
+    await expect(
+      route?.run([
+        "node",
+        "openclaw",
+        "status",
+        "--json",
+        "--deep",
+        "--usage",
+        "--timeout",
+        "5000",
+      ]),
+    ).resolves.toBe(true);
+    expect(statusJsonCommandMock).toHaveBeenCalledWith(
+      { deep: true, all: false, usage: true, timeoutMs: 5000 },
+      expect.any(Object),
+    );
   });
 
   it("returns false for sessions route when --store value is missing", async () => {
