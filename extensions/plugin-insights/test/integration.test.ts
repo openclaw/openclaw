@@ -91,11 +91,19 @@ describe("Integration: full lifecycle", () => {
       prePromptMessageCount: 0,
     });
 
-    // Turn 3: format_code triggered
+    // Turn 3: format_code triggered (cumulative transcript for sess-1)
     await engine.afterTurn!({
       sessionId: "sess-1",
       sessionFile: "/tmp/sess-1.json",
       messages: [
+        mkUserMessage("What was the bug I fixed yesterday?"),
+        mkAssistantMessage("Based on your memory, you fixed the auth timeout bug.", {
+          usage: { input: 500, output: 200, cacheRead: 0, cacheWrite: 0, total: 700 },
+        }),
+        mkUserMessage("Thanks, now help me write a React component."),
+        mkAssistantMessage("Sure, here is a component...", {
+          usage: { input: 600, output: 300, cacheRead: 0, cacheWrite: 0, total: 900 },
+        }),
         mkUserMessage("Format this code for me"),
         mkAssistantMessage("Here is the formatted code...", {
           toolCalls: [

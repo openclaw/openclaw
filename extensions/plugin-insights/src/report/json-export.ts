@@ -1,5 +1,6 @@
 import type Database from "better-sqlite3";
 import type { InsightsReport } from "../types.js";
+import { daysAgo } from "../utils.js";
 import * as fs from "node:fs";
 
 export interface ExportOptions {
@@ -98,8 +99,3 @@ export function exportRawData(
   return content;
 }
 
-function daysAgo(n: number): string {
-  const d = new Date();
-  d.setDate(d.getDate() - n);
-  return d.toISOString().slice(0, 19).replace("T", " ");
-}

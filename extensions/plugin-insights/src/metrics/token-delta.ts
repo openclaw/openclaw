@@ -1,5 +1,6 @@
 import type Database from "better-sqlite3";
 import type { TokenDeltaResult } from "../types.js";
+import { daysAgo, round } from "../utils.js";
 
 // Approximate pricing per 1M tokens (GPT-4o class)
 const DEFAULT_COST_PER_1M_INPUT = 2.5;
@@ -16,7 +17,9 @@ export class TokenDeltaMetric {
   compute(pluginId: string, days: number = 30): TokenDeltaResult {
     const since = daysAgo(days);
 
-    // Average tokens for turns where this plugin was triggered
+    // Average tokens for turns where this plugin was triggered.
+    // Use a subquery to deduplicate: a turn with multiple plugin_events
+    // for the same plugin should only be counted once.
     const withPlugin = this.db
       .prepare(
         `SELECT
@@ -25,12 +28,14 @@ export class TokenDeltaMetric {
            AVG(t.completion_tokens) as avg_completion,
            COUNT(*) as cnt
          FROM turns t
-         JOIN plugin_events pe ON pe.turn_id = t.id
-         WHERE pe.plugin_id = ?
+         WHERE t.id IN (
+           SELECT DISTINCT pe.turn_id FROM plugin_events pe
+           WHERE pe.plugin_id = ? AND pe.created_at >= ?
+         )
            AND t.timestamp >= ?
            AND t.total_tokens IS NOT NULL`
       )
-      .get(pluginId, since) as {
+      .get(pluginId, since, since) as {
       avg_total: number | null;
       avg_prompt: number | null;
       avg_completion: number | null;
@@ -81,13 +86,3 @@ export class TokenDeltaMetric {
   }
 }
 
-function daysAgo(n: number): string {
-  const d = new Date();
-  d.setDate(d.getDate() - n);
-  return d.toISOString().slice(0, 19).replace("T", " ");
-}
-
-function round(n: number, decimals: number = 1): number {
-  const f = 10 ** decimals;
-  return Math.round(n * f) / f;
-}

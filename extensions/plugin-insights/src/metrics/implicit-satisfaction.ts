@@ -1,5 +1,6 @@
 import type Database from "better-sqlite3";
 import type { ImplicitSatisfactionResult } from "../types.js";
+import { daysAgo, round } from "../utils.js";
 
 export class ImplicitSatisfactionMetric {
   private db: Database.Database;
@@ -52,13 +53,3 @@ export class ImplicitSatisfactionMetric {
   }
 }
 
-function daysAgo(n: number): string {
-  const d = new Date();
-  d.setDate(d.getDate() - n);
-  return d.toISOString().slice(0, 19).replace("T", " ");
-}
-
-function round(n: number, decimals: number = 1): number {
-  const f = 10 ** decimals;
-  return Math.round(n * f) / f;
-}

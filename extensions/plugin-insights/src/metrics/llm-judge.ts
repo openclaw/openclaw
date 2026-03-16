@@ -1,5 +1,6 @@
 import type Database from "better-sqlite3";
 import type { LLMJudgeConfig, LLMJudgeResult } from "../types.js";
+import { daysAgo, round } from "../utils.js";
 
 const JUDGE_PROMPT_TEMPLATE = `You are an expert evaluator assessing the quality of an AI assistant's response.
 
@@ -216,13 +217,3 @@ function isValidScore(n: unknown): n is number {
   return typeof n === "number" && n >= 1 && n <= 5;
 }
 
-function daysAgo(n: number): string {
-  const d = new Date();
-  d.setDate(d.getDate() - n);
-  return d.toISOString().slice(0, 19).replace("T", " ");
-}
-
-function round(n: number, decimals: number = 1): number {
-  const f = 10 ** decimals;
-  return Math.round(n * f) / f;
-}

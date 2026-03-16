@@ -58,6 +58,16 @@ export function createInsightsEngine(
 
   // Per-session turn counters — ensures turn_index is session-scoped
   const sessionTurnCounters = new Map<string, number>();
+  // Track how many messages we've already processed per session,
+  // so afterTurn only ingests newly added messages (not the full transcript).
+  const sessionMessageCounts = new Map<string, number>();
+
+  // Create LLM judge once (not per-turn) to avoid race conditions
+  // where concurrent evaluations both read budget as unfull.
+  const judge =
+    config.llmJudge.enabled && config.llmJudge.apiKey
+      ? new LLMJudgeMetric(db, config.llmJudge)
+      : null;
 
   const engine: ContextEngine = {
     info: {
@@ -112,11 +122,20 @@ export function createInsightsEngine(
       const sid = params.sessionId;
       const idx = sessionTurnCounters.get(sid) ?? 0;
       sessionTurnCounters.set(sid, idx + 1);
-      turnCollector.collect(sid, idx, params.messages);
 
-      // Async LLM judge evaluation (fire-and-forget)
-      if (config.llmJudge.enabled && config.llmJudge.apiKey) {
-        const judge = new LLMJudgeMetric(db, config.llmJudge);
+      // Only process newly added messages since last afterTurn call.
+      // The SDK passes the full transcript each time; re-processing
+      // old messages would inflate plugin events and metrics.
+      const prevCount = sessionMessageCounts.get(sid) ?? 0;
+      const newMessages = params.messages.slice(prevCount);
+      sessionMessageCounts.set(sid, params.messages.length);
+
+      if (newMessages.length > 0) {
+        turnCollector.collect(sid, idx, newMessages);
+      }
+
+      // Async LLM judge evaluation (fire-and-forget, single instance)
+      if (judge) {
         judge.evaluate().catch(() => {
           // Silently ignore judge errors
         });
@@ -303,27 +322,21 @@ export function cleanupOldData(
   cutoff.setDate(cutoff.getDate() - retentionDays);
   const cutoffStr = cutoff.toISOString().slice(0, 19).replace("T", " ");
 
+  // Use subqueries instead of spreading turn IDs as bind parameters.
+  // This avoids hitting SQLite's SQLITE_MAX_VARIABLE_NUMBER limit
+  // when many expired turns exist.
   db.transaction(() => {
-    const turnIds = db
-      .prepare("SELECT id FROM turns WHERE timestamp < ?")
-      .all(cutoffStr) as { id: number }[];
-
-    if (turnIds.length === 0) return;
-
-    const ids = turnIds.map((r) => r.id);
-    const placeholders = ids.map(() => "?").join(",");
-
     db.prepare(
-      `DELETE FROM satisfaction_signals WHERE turn_id IN (${placeholders})`
-    ).run(...ids);
+      `DELETE FROM satisfaction_signals WHERE turn_id IN (SELECT id FROM turns WHERE timestamp < ?)`
+    ).run(cutoffStr);
     db.prepare(
-      `DELETE FROM llm_scores WHERE turn_id IN (${placeholders})`
-    ).run(...ids);
+      `DELETE FROM llm_scores WHERE turn_id IN (SELECT id FROM turns WHERE timestamp < ?)`
+    ).run(cutoffStr);
     db.prepare(
-      `DELETE FROM plugin_events WHERE turn_id IN (${placeholders})`
-    ).run(...ids);
+      `DELETE FROM plugin_events WHERE turn_id IN (SELECT id FROM turns WHERE timestamp < ?)`
+    ).run(cutoffStr);
     db.prepare(
-      `DELETE FROM turns WHERE id IN (${placeholders})`
-    ).run(...ids);
+      `DELETE FROM turns WHERE timestamp < ?`
+    ).run(cutoffStr);
   })();
 }
