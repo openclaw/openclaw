@@ -1,4 +1,3 @@
-import { hasAnyWhatsAppAuth } from "../../extensions/whatsapp/src/accounts.js";
 import { normalizeProviderId } from "../agents/model-selection.js";
 import {
   getChannelPluginCatalogEntry,
@@ -9,6 +8,7 @@ import {
   listChatChannels,
   normalizeChatChannelId,
 } from "../channels/registry.js";
+import { hasAnyWhatsAppAuth } from "../plugin-sdk/whatsapp.js";
 import {
   loadPluginManifestRegistry,
   type PluginManifestRegistry,

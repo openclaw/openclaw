@@ -1,33 +1,11 @@
 import { expect, vi } from "vitest";
-import { bluebubblesPlugin } from "../../../../extensions/bluebubbles/src/channel.js";
-import { discordPlugin } from "../../../../extensions/discord/src/channel.js";
-import { setDiscordRuntime } from "../../../../extensions/discord/src/runtime.js";
-import { feishuPlugin } from "../../../../extensions/feishu/src/channel.js";
-import { googlechatPlugin } from "../../../../extensions/googlechat/src/channel.js";
-import { imessagePlugin } from "../../../../extensions/imessage/src/channel.js";
-import { ircPlugin } from "../../../../extensions/irc/src/channel.js";
-import { linePlugin } from "../../../../extensions/line/src/channel.js";
-import { setLineRuntime } from "../../../../extensions/line/src/runtime.js";
-import { matrixPlugin } from "../../../../extensions/matrix/src/channel.js";
-import { mattermostPlugin } from "../../../../extensions/mattermost/src/channel.js";
-import { msteamsPlugin } from "../../../../extensions/msteams/src/channel.js";
-import { nextcloudTalkPlugin } from "../../../../extensions/nextcloud-talk/src/channel.js";
-import { nostrPlugin } from "../../../../extensions/nostr/src/channel.js";
-import { signalPlugin } from "../../../../extensions/signal/src/channel.js";
-import { slackPlugin } from "../../../../extensions/slack/src/channel.js";
-import { synologyChatPlugin } from "../../../../extensions/synology-chat/src/channel.js";
-import { telegramPlugin } from "../../../../extensions/telegram/src/channel.js";
-import { setTelegramRuntime } from "../../../../extensions/telegram/src/runtime.js";
-import { tlonPlugin } from "../../../../extensions/tlon/src/channel.js";
-import { whatsappPlugin } from "../../../../extensions/whatsapp/src/channel.js";
-import { zaloPlugin } from "../../../../extensions/zalo/src/channel.js";
-import { zalouserPlugin } from "../../../../extensions/zalouser/src/channel.js";
 import type { OpenClawConfig } from "../../../config/config.js";
 import {
   resolveDefaultLineAccountId,
   resolveLineAccount,
   listLineAccountIds,
 } from "../../../line/accounts.js";
+import { bundledChannelRuntimeSetters, requireBundledChannelPlugin } from "../bundled.js";
 import type { ChannelPlugin } from "../types.js";
 
 type PluginContractEntry = {
@@ -84,7 +62,7 @@ const telegramGetCapabilitiesMock = vi.fn();
 const discordListActionsMock = vi.fn();
 const discordGetCapabilitiesMock = vi.fn();
 
-setTelegramRuntime({
+bundledChannelRuntimeSetters.setTelegramRuntime({
   channel: {
     telegram: {
       messageActions: {
@@ -95,7 +73,7 @@ setTelegramRuntime({
   },
 } as never);
 
-setDiscordRuntime({
+bundledChannelRuntimeSetters.setDiscordRuntime({
   channel: {
     discord: {
       messageActions: {
@@ -106,7 +84,7 @@ setDiscordRuntime({
   },
 } as never);
 
-setLineRuntime({
+bundledChannelRuntimeSetters.setLineRuntime({
   channel: {
     line: {
       listLineAccountIds,
@@ -118,32 +96,32 @@ setLineRuntime({
 } as never);
 
 export const pluginContractRegistry: PluginContractEntry[] = [
-  { id: "bluebubbles", plugin: bluebubblesPlugin },
-  { id: "discord", plugin: discordPlugin },
-  { id: "feishu", plugin: feishuPlugin },
-  { id: "googlechat", plugin: googlechatPlugin },
-  { id: "imessage", plugin: imessagePlugin },
-  { id: "irc", plugin: ircPlugin },
-  { id: "line", plugin: linePlugin },
-  { id: "matrix", plugin: matrixPlugin },
-  { id: "mattermost", plugin: mattermostPlugin },
-  { id: "msteams", plugin: msteamsPlugin },
-  { id: "nextcloud-talk", plugin: nextcloudTalkPlugin },
-  { id: "nostr", plugin: nostrPlugin },
-  { id: "signal", plugin: signalPlugin },
-  { id: "slack", plugin: slackPlugin },
-  { id: "synology-chat", plugin: synologyChatPlugin },
-  { id: "telegram", plugin: telegramPlugin },
-  { id: "tlon", plugin: tlonPlugin },
-  { id: "whatsapp", plugin: whatsappPlugin },
-  { id: "zalo", plugin: zaloPlugin },
-  { id: "zalouser", plugin: zalouserPlugin },
+  { id: "bluebubbles", plugin: requireBundledChannelPlugin("bluebubbles") },
+  { id: "discord", plugin: requireBundledChannelPlugin("discord") },
+  { id: "feishu", plugin: requireBundledChannelPlugin("feishu") },
+  { id: "googlechat", plugin: requireBundledChannelPlugin("googlechat") },
+  { id: "imessage", plugin: requireBundledChannelPlugin("imessage") },
+  { id: "irc", plugin: requireBundledChannelPlugin("irc") },
+  { id: "line", plugin: requireBundledChannelPlugin("line") },
+  { id: "matrix", plugin: requireBundledChannelPlugin("matrix") },
+  { id: "mattermost", plugin: requireBundledChannelPlugin("mattermost") },
+  { id: "msteams", plugin: requireBundledChannelPlugin("msteams") },
+  { id: "nextcloud-talk", plugin: requireBundledChannelPlugin("nextcloud-talk") },
+  { id: "nostr", plugin: requireBundledChannelPlugin("nostr") },
+  { id: "signal", plugin: requireBundledChannelPlugin("signal") },
+  { id: "slack", plugin: requireBundledChannelPlugin("slack") },
+  { id: "synology-chat", plugin: requireBundledChannelPlugin("synology-chat") },
+  { id: "telegram", plugin: requireBundledChannelPlugin("telegram") },
+  { id: "tlon", plugin: requireBundledChannelPlugin("tlon") },
+  { id: "whatsapp", plugin: requireBundledChannelPlugin("whatsapp") },
+  { id: "zalo", plugin: requireBundledChannelPlugin("zalo") },
+  { id: "zalouser", plugin: requireBundledChannelPlugin("zalouser") },
 ];
 
 export const actionContractRegistry: ActionsContractEntry[] = [
   {
     id: "slack",
-    plugin: slackPlugin,
+    plugin: requireBundledChannelPlugin("slack"),
     unsupportedAction: "poll",
     cases: [
       {
@@ -217,7 +195,7 @@ export const actionContractRegistry: ActionsContractEntry[] = [
   },
   {
     id: "mattermost",
-    plugin: mattermostPlugin,
+    plugin: requireBundledChannelPlugin("mattermost"),
     unsupportedAction: "poll",
     cases: [
       {
@@ -265,7 +243,7 @@ export const actionContractRegistry: ActionsContractEntry[] = [
   },
   {
     id: "telegram",
-    plugin: telegramPlugin,
+    plugin: requireBundledChannelPlugin("telegram"),
     cases: [
       {
         name: "forwards runtime-backed Telegram actions and capabilities",
@@ -283,7 +261,7 @@ export const actionContractRegistry: ActionsContractEntry[] = [
   },
   {
     id: "discord",
-    plugin: discordPlugin,
+    plugin: requireBundledChannelPlugin("discord"),
     cases: [
       {
         name: "forwards runtime-backed Discord actions and capabilities",
@@ -304,7 +282,7 @@ export const actionContractRegistry: ActionsContractEntry[] = [
 export const setupContractRegistry: SetupContractEntry[] = [
   {
     id: "slack",
-    plugin: slackPlugin,
+    plugin: requireBundledChannelPlugin("slack"),
     cases: [
       {
         name: "default account stores tokens and enables the channel",
@@ -334,7 +312,7 @@ export const setupContractRegistry: SetupContractEntry[] = [
   },
   {
     id: "mattermost",
-    plugin: mattermostPlugin,
+    plugin: requireBundledChannelPlugin("mattermost"),
     cases: [
       {
         name: "default account stores token and normalized base URL",
@@ -363,7 +341,7 @@ export const setupContractRegistry: SetupContractEntry[] = [
   },
   {
     id: "line",
-    plugin: linePlugin,
+    plugin: requireBundledChannelPlugin("line"),
     cases: [
       {
         name: "default account stores token and secret",
@@ -396,7 +374,7 @@ export const setupContractRegistry: SetupContractEntry[] = [
 export const statusContractRegistry: StatusContractEntry[] = [
   {
     id: "slack",
-    plugin: slackPlugin,
+    plugin: requireBundledChannelPlugin("slack"),
     cases: [
       {
         name: "configured account produces a configured status snapshot",
@@ -424,7 +402,7 @@ export const statusContractRegistry: StatusContractEntry[] = [
   },
   {
     id: "mattermost",
-    plugin: mattermostPlugin,
+    plugin: requireBundledChannelPlugin("mattermost"),
     cases: [
       {
         name: "configured account preserves connectivity details in the snapshot",
@@ -455,7 +433,7 @@ export const statusContractRegistry: StatusContractEntry[] = [
   },
   {
     id: "line",
-    plugin: linePlugin,
+    plugin: requireBundledChannelPlugin("line"),
     cases: [
       {
         name: "configured account produces a webhook status snapshot",

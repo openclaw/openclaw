@@ -1,3 +1,4 @@
+/** Extract the canonical send target fields from tool arguments when the action matches. */
 export function extractToolSend(
   args: Record<string, unknown>,
   expectedAction = "sendMessage",

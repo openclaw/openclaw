@@ -3,6 +3,7 @@ export type KeyedAsyncQueueHooks = {
   onSettle?: () => void;
 };
 
+/** Serialize async work per key while allowing unrelated keys to run concurrently. */
 export function enqueueKeyedTask<T>(params: {
   tails: Map<string, Promise<void>>;
   key: string;

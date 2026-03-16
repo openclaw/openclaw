@@ -48,7 +48,7 @@ export {
 export {
   looksLikeTelegramTargetId,
   normalizeTelegramMessagingTarget,
-} from "../channels/plugins/normalize/telegram.js";
+} from "../../extensions/telegram/src/normalize.js";
 export {
   parseTelegramReplyToMessageId,
   parseTelegramThreadId,
@@ -58,7 +58,7 @@ export {
   normalizeTelegramAllowFromEntry,
 } from "../../extensions/telegram/src/allow-from.js";
 export { fetchTelegramChatId } from "../../extensions/telegram/src/api-fetch.js";
-export { collectTelegramStatusIssues } from "../channels/plugins/status-issues/telegram.js";
+export { collectTelegramStatusIssues } from "../../extensions/telegram/src/status-issues.js";
 export { sendTelegramPayloadMessages } from "../../extensions/telegram/src/outbound-adapter.js";
 export {
   buildBrowseProvidersButton,
@@ -72,6 +72,7 @@ export {
   isTelegramExecApprovalApprover,
   isTelegramExecApprovalClientEnabled,
 } from "../../extensions/telegram/src/exec-approvals.js";
+export type { StickerMetadata } from "../../extensions/telegram/src/bot/types.js";
 
 export {
   resolveAllowlistProviderRuntimeGroupPolicy,

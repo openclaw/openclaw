@@ -87,7 +87,7 @@ export type PluginRuntimeChannel = {
     shouldHandleTextCommands: typeof import("../../auto-reply/commands-registry.js").shouldHandleTextCommands;
   };
   discord: {
-    messageActions: typeof import("../../channels/plugins/actions/discord.js").discordMessageActions;
+    messageActions: typeof import("../../../extensions/discord/src/channel-actions.js").discordMessageActions;
     auditChannelPermissions: typeof import("../../../extensions/discord/src/audit.js").auditDiscordChannelPermissions;
     listDirectoryGroupsLive: typeof import("../../../extensions/discord/src/directory-live.js").listDiscordDirectoryGroupsLive;
     listDirectoryPeersLive: typeof import("../../../extensions/discord/src/directory-live.js").listDiscordDirectoryPeersLive;
@@ -147,7 +147,7 @@ export type PluginRuntimeChannel = {
     sendMessageTelegram: typeof import("../../../extensions/telegram/src/send.js").sendMessageTelegram;
     sendPollTelegram: typeof import("../../../extensions/telegram/src/send.js").sendPollTelegram;
     monitorTelegramProvider: typeof import("../../../extensions/telegram/src/monitor.js").monitorTelegramProvider;
-    messageActions: typeof import("../../channels/plugins/actions/telegram.js").telegramMessageActions;
+    messageActions: typeof import("../../../extensions/telegram/src/channel-actions.js").telegramMessageActions;
     threadBindings: {
       setIdleTimeoutBySessionKey: typeof import("../../../extensions/telegram/src/thread-bindings.js").setTelegramThreadBindingIdleTimeoutBySessionKey;
       setMaxAgeBySessionKey: typeof import("../../../extensions/telegram/src/thread-bindings.js").setTelegramThreadBindingMaxAgeBySessionKey;

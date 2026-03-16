@@ -1,4 +1,5 @@
 import { auditDiscordChannelPermissions } from "../../../extensions/discord/src/audit.js";
+import { discordMessageActions } from "../../../extensions/discord/src/channel-actions.js";
 import {
   listDiscordDirectoryGroupsLive,
   listDiscordDirectoryPeersLive,
@@ -29,7 +30,6 @@ import {
   sendTypingDiscord,
   unpinMessageDiscord,
 } from "../../../extensions/discord/src/send.js";
-import { discordMessageActions } from "../../channels/plugins/actions/discord.js";
 import { createDiscordTypingLease } from "./runtime-discord-typing.js";
 import type { PluginRuntimeChannel } from "./types-channel.js";
 

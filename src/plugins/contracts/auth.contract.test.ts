@@ -51,7 +51,13 @@ function buildPrompter(): WizardPrompter {
     intro: async () => {},
     outro: async () => {},
     note: async () => {},
-    select: async <T>(params: WizardSelectParams<T>) => params.options[0].value,
+    select: async <T>(params: WizardSelectParams<T>) => {
+      const option = params.options[0];
+      if (!option) {
+        throw new Error("missing select option");
+      }
+      return option.value;
+    },
     multiselect: async <T>(params: WizardMultiSelectParams<T>) => params.initialValues ?? [],
     text: async () => "",
     confirm: async () => false,

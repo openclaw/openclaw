@@ -59,10 +59,10 @@ function requireProvider(providers: ProviderPlugin[], providerId: string) {
   return provider;
 }
 
-function buildTestModel(params: { id: string; name: string }): ModelDefinitionConfig {
+function createModelConfig(id: string, name = id): ModelDefinitionConfig {
   return {
-    id: params.id,
-    name: params.name,
+    id,
+    name,
     reasoning: false,
     input: ["text"],
     cost: {
@@ -75,7 +75,6 @@ function buildTestModel(params: { id: string; name: string }): ModelDefinitionCo
     maxTokens: 8_192,
   };
 }
-
 describe("provider discovery contract", () => {
   afterEach(() => {
     resolveCopilotApiTokenMock.mockReset();
@@ -244,7 +243,7 @@ describe("provider discovery contract", () => {
             providers: {
               ollama: {
                 baseUrl: "http://ollama-host:11434/v1/",
-                models: [buildTestModel({ id: "llama3.2", name: "llama3.2" })],
+                models: [createModelConfig("llama3.2")],
               },
             },
           },
@@ -257,7 +256,7 @@ describe("provider discovery contract", () => {
         baseUrl: "http://ollama-host:11434",
         api: "ollama",
         apiKey: "ollama-local",
-        models: [expect.objectContaining({ id: "llama3.2", name: "llama3.2" })],
+        models: [createModelConfig("llama3.2")],
       },
     });
     expect(buildOllamaProviderMock).not.toHaveBeenCalled();

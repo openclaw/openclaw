@@ -24,6 +24,7 @@ function isHostnameAllowedBySuffixAllowlist(
   return allowlist.some((entry) => normalized === entry || normalized.endsWith(`.${entry}`));
 }
 
+/** Normalize suffix-style host allowlists into lowercase canonical entries with wildcard collapse. */
 export function normalizeHostnameSuffixAllowlist(
   input?: readonly string[],
   defaults?: readonly string[],
@@ -39,6 +40,7 @@ export function normalizeHostnameSuffixAllowlist(
   return Array.from(new Set(normalized));
 }
 
+/** Check whether a URL is HTTPS and its hostname matches the normalized suffix allowlist. */
 export function isHttpsUrlAllowedByHostnameSuffixAllowlist(
   url: string,
   allowlist: readonly string[],

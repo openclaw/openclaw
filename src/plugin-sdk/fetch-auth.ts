@@ -6,6 +6,7 @@ function isAuthFailureStatus(status: number): boolean {
   return status === 401 || status === 403;
 }
 
+/** Retry a fetch with bearer tokens from the provided scopes when the unauthenticated attempt fails. */
 export async function fetchWithBearerAuthScopeFallback(params: {
   url: string;
   scopes: readonly string[];
