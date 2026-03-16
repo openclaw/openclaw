@@ -60,6 +60,7 @@
           "bodhi-tasks",
           "bodhi-calendar",
           "bodhi-accountability",
+          "bodhi-query",
           "bodhi-switch"
         ]
       },
@@ -153,7 +154,8 @@
         "skills/bodhi-checkin",
         "skills/bodhi-tasks",
         "skills/bodhi-calendar",
-        "skills/bodhi-accountability"
+        "skills/bodhi-accountability",
+        "skills/bodhi-query"
       ],
       "watch": false
     }
@@ -216,6 +218,27 @@
         "schedule": "*/15 * * * *",
         "agent": "bodhi",
         "prompt": "Silent Tailscale check. Run: bash ~/openbodhi/docs/bodhi/scripts/tailscale-watchdog.sh — alert via Telegram only if Tailscale is down. No message if healthy.",
+        "recurring": true
+      },
+      {
+        "id": "vault-backup-weekly",
+        "schedule": "0 3 * * 0",
+        "agent": "bodhi",
+        "prompt": "Run vault backup: bash ~/openbodhi/docs/bodhi/scripts/vault-backup.sh — send result as Telegram message. Format: 'Vault backup: [OK/FAIL] — N nodes synced to S3.'",
+        "recurring": true
+      },
+      {
+        "id": "surveyor-weekly",
+        "schedule": "0 2 * * 6",
+        "agent": "bo",
+        "prompt": "Run the weekly vault survey. Run /surveyor — cluster all vault nodes, detect bridges, surface SOC signals, and send the weekly digest.",
+        "recurring": true
+      },
+      {
+        "id": "distiller-daily",
+        "schedule": "0 6 * * *",
+        "agent": "bo",
+        "prompt": "Run the daily digest. Run /distiller — query last 7 days of vault nodes and send morning synthesis.",
         "recurring": true
       }
     ]
