@@ -11,6 +11,9 @@ import {
 
 const SILENT_REPLY_PATTERN = /^\s*NO_REPLY\s*$/;
 
+/** Limit chat.history request to avoid huge payloads and main-thread freeze (see CHAT_HISTORY_RENDER_LIMIT in views/chat.ts). */
+const CHAT_HISTORY_REQUEST_LIMIT = 25;
+
 function isSilentReplyStream(text: string): boolean {
   return SILENT_REPLY_PATTERN.test(text);
 }
@@ -75,9 +78,6 @@ export async function loadChatHistory(state: ChatState) {
   state.chatLoading = true;
   state.lastError = null;
   try {
-    // Request a small batch to avoid huge payloads and main-thread freeze when
-    // parsing JSON and rendering many markdown messages (browser "tab unresponsive").
-    const CHAT_HISTORY_REQUEST_LIMIT = 25;
     const res = await state.client.request<{ messages?: Array<unknown>; thinkingLevel?: string }>(
       "chat.history",
       {
@@ -91,11 +91,7 @@ export async function loadChatHistory(state: ChatState) {
     maybeResetToolStream(state);
     state.chatStream = null;
     state.chatStreamStartedAt = null;
-    // Defer applying messages so the UI can paint "Loading chat..." before the heavy render.
-    state.chatLoading = false;
-    requestAnimationFrame(() => {
-      state.chatMessages = filtered;
-    });
+    state.chatMessages = filtered;
   } catch (err) {
     if (isMissingOperatorReadScopeError(err)) {
       state.chatMessages = [];
