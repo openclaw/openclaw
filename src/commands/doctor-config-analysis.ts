@@ -126,7 +126,7 @@ export function noteOpencodeProviderOverrides(cfg: OpenClawConfig): void {
   });
 
   lines.push(
-    "- Remove these entries to restore per-model API routing + costs (then re-run onboarding if needed).",
+    "- Remove these entries to restore per-model API routing + costs (then re-run setup if needed).",
   );
   note(lines.join("\n"), "OpenCode");
 }

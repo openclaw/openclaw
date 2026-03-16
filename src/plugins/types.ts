@@ -496,7 +496,7 @@ export type ProviderDiscoveryResult = ProviderCatalogResult;
  */
 export type ProviderPluginDiscovery = ProviderPluginCatalog;
 
-export type ProviderPluginWizardOnboarding = {
+export type ProviderPluginWizardSetup = {
   choiceId?: string;
   choiceLabel?: string;
   choiceHint?: string;
@@ -513,7 +513,7 @@ export type ProviderPluginWizardModelPicker = {
 };
 
 export type ProviderPluginWizard = {
-  onboarding?: ProviderPluginWizardOnboarding;
+  setup?: ProviderPluginWizardSetup;
   modelPicker?: ProviderPluginWizardModelPicker;
 };
 
@@ -532,7 +532,7 @@ export type ProviderPlugin = {
   docsPath?: string;
   aliases?: string[];
   /**
-   * Provider-related env vars shown in onboarding/search/help surfaces.
+   * Provider-related env vars shown in setup/search/help surfaces.
    *
    * Keep entries in preferred display order. This can include direct auth env
    * vars or setup inputs such as OAuth client id/secret vars.

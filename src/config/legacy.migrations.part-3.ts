@@ -100,7 +100,7 @@ function mergeLegacyIntoDefaults(params: {
 export const LEGACY_CONFIG_MIGRATIONS_PART_3: LegacyConfigMigration[] = [
   {
     // v2026.2.26 added a startup guard requiring gateway.controlUi.allowedOrigins (or the
-    // host-header fallback flag) for any non-loopback bind. The onboarding wizard was updated
+    // host-header fallback flag) for any non-loopback bind. The setup wizard was updated
     // to seed this for new installs, but existing bind=lan/bind=custom installs that upgrade
     // crash-loop immediately on next startup with no recovery path (issue #29385).
     //

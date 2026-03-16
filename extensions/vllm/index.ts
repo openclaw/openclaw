@@ -59,7 +59,7 @@ const vllmPlugin = {
           }),
       },
       wizard: {
-        onboarding: {
+        setup: {
           choiceId: "vllm",
           choiceLabel: "vLLM",
           choiceHint: "Local/self-hosted OpenAI-compatible server",

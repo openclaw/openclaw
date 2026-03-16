@@ -2,7 +2,7 @@ import {
   mergeAllowFromEntries,
   setSetupChannelEnabled,
   splitSetupEntries,
-} from "../../../src/channels/plugins/setup-flow-helpers.js";
+} from "../../../src/channels/plugins/setup-wizard-helpers.js";
 import type { ChannelSetupWizard } from "../../../src/channels/plugins/setup-wizard.js";
 import type { ChannelSetupAdapter } from "../../../src/channels/plugins/types.adapters.js";
 import type { OpenClawConfig } from "../../../src/config/config.js";

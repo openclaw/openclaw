@@ -61,12 +61,12 @@ import { loadOpenClawPlugins } from "../../plugins/loader.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import type { WizardPrompter } from "../../wizard/prompts.js";
-import { makePrompter, makeRuntime } from "./__tests__/test-utils.js";
+import { makePrompter, makeRuntime } from "../setup/__tests__/test-utils.js";
 import {
-  ensureOnboardingPluginInstalled,
-  loadOnboardingPluginRegistrySnapshotForChannel,
-  reloadOnboardingPluginRegistry,
-  reloadOnboardingPluginRegistryForChannel,
+  ensureChannelSetupPluginInstalled,
+  loadChannelSetupPluginRegistrySnapshotForChannel,
+  reloadChannelSetupPluginRegistry,
+  reloadChannelSetupPluginRegistryForChannel,
 } from "./plugin-install.js";
 
 const baseEntry: ChannelPluginCatalogEntry = {
@@ -106,7 +106,7 @@ async function runInitialValueForChannel(channel: "dev" | "beta") {
   const cfg: OpenClawConfig = { update: { channel } };
   mockRepoLocalPathExists();
 
-  await ensureOnboardingPluginInstalled({
+  await ensureChannelSetupPluginInstalled({
     cfg,
     entry: baseEntry,
     prompter,
@@ -118,14 +118,14 @@ async function runInitialValueForChannel(channel: "dev" | "beta") {
 }
 
 function expectPluginLoadedFromLocalPath(
-  result: Awaited<ReturnType<typeof ensureOnboardingPluginInstalled>>,
+  result: Awaited<ReturnType<typeof ensureChannelSetupPluginInstalled>>,
 ) {
   const expectedPath = path.resolve(process.cwd(), "extensions/zalo");
   expect(result.installed).toBe(true);
   expect(result.cfg.plugins?.load?.paths).toContain(expectedPath);
 }
 
-describe("ensureOnboardingPluginInstalled", () => {
+describe("ensureChannelSetupPluginInstalled", () => {
   it("installs from npm and enables the plugin", async () => {
     const runtime = makeRuntime();
     const prompter = makePrompter({
@@ -140,7 +140,7 @@ describe("ensureOnboardingPluginInstalled", () => {
       extensions: [],
     });
 
-    const result = await ensureOnboardingPluginInstalled({
+    const result = await ensureChannelSetupPluginInstalled({
       cfg,
       entry: baseEntry,
       prompter,
@@ -166,7 +166,7 @@ describe("ensureOnboardingPluginInstalled", () => {
     const cfg: OpenClawConfig = {};
     mockRepoLocalPathExists();
 
-    const result = await ensureOnboardingPluginInstalled({
+    const result = await ensureChannelSetupPluginInstalled({
       cfg,
       entry: baseEntry,
       prompter,
@@ -185,7 +185,7 @@ describe("ensureOnboardingPluginInstalled", () => {
     const cfg: OpenClawConfig = {};
     mockRepoLocalPathExists();
 
-    const result = await ensureOnboardingPluginInstalled({
+    const result = await ensureChannelSetupPluginInstalled({
       cfg,
       entry: {
         ...baseEntry,
@@ -228,7 +228,7 @@ describe("ensureOnboardingPluginInstalled", () => {
       ]),
     );
 
-    await ensureOnboardingPluginInstalled({
+    await ensureChannelSetupPluginInstalled({
       cfg,
       entry: baseEntry,
       prompter,
@@ -264,7 +264,7 @@ describe("ensureOnboardingPluginInstalled", () => {
       error: "nope",
     });
 
-    const result = await ensureOnboardingPluginInstalled({
+    const result = await ensureChannelSetupPluginInstalled({
       cfg,
       entry: baseEntry,
       prompter,
@@ -280,7 +280,7 @@ describe("ensureOnboardingPluginInstalled", () => {
     const runtime = makeRuntime();
     const cfg: OpenClawConfig = {};
 
-    reloadOnboardingPluginRegistry({
+    reloadChannelSetupPluginRegistry({
       cfg,
       runtime,
       workspaceDir: "/tmp/openclaw-workspace",
@@ -300,11 +300,11 @@ describe("ensureOnboardingPluginInstalled", () => {
     );
   });
 
-  it("scopes channel reloads when onboarding starts from an empty registry", () => {
+  it("scopes channel reloads when setup starts from an empty registry", () => {
     const runtime = makeRuntime();
     const cfg: OpenClawConfig = {};
 
-    reloadOnboardingPluginRegistryForChannel({
+    reloadChannelSetupPluginRegistryForChannel({
       cfg,
       runtime,
       channel: "telegram",
@@ -348,7 +348,7 @@ describe("ensureOnboardingPluginInstalled", () => {
     });
     setActivePluginRegistry(registry);
 
-    reloadOnboardingPluginRegistryForChannel({
+    reloadChannelSetupPluginRegistryForChannel({
       cfg,
       runtime,
       channel: "telegram",
@@ -366,7 +366,7 @@ describe("ensureOnboardingPluginInstalled", () => {
     const runtime = makeRuntime();
     const cfg: OpenClawConfig = {};
 
-    loadOnboardingPluginRegistrySnapshotForChannel({
+    loadChannelSetupPluginRegistrySnapshotForChannel({
       cfg,
       runtime,
       channel: "telegram",
@@ -389,7 +389,7 @@ describe("ensureOnboardingPluginInstalled", () => {
     const runtime = makeRuntime();
     const cfg: OpenClawConfig = {};
 
-    loadOnboardingPluginRegistrySnapshotForChannel({
+    loadChannelSetupPluginRegistrySnapshotForChannel({
       cfg,
       runtime,
       channel: "msteams",

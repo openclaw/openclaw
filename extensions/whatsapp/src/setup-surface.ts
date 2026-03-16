@@ -3,8 +3,8 @@ import { loginWeb } from "../../../src/channel-web.js";
 import {
   normalizeAllowFromEntries,
   splitSetupEntries,
-} from "../../../src/channels/plugins/setup-flow-helpers.js";
-import { setSetupChannelEnabled } from "../../../src/channels/plugins/setup-flow-helpers.js";
+} from "../../../src/channels/plugins/setup-wizard-helpers.js";
+import { setSetupChannelEnabled } from "../../../src/channels/plugins/setup-wizard-helpers.js";
 import type { ChannelSetupWizard } from "../../../src/channels/plugins/setup-wizard.js";
 import { formatCliCommand } from "../../../src/cli/command-format.js";
 import type { OpenClawConfig } from "../../../src/config/config.js";

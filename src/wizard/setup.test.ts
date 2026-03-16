@@ -5,8 +5,8 @@ import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { createWizardPrompter as buildWizardPrompter } from "../../test/helpers/wizard-prompter.js";
 import { DEFAULT_BOOTSTRAP_FILENAME } from "../agents/workspace.js";
 import type { RuntimeEnv } from "../runtime.js";
-import { runOnboardingWizard } from "./onboarding.js";
 import type { WizardPrompter, WizardSelectParams } from "./prompts.js";
+import { runSetupWizard } from "./setup.js";
 
 const ensureAuthProfileStore = vi.hoisted(() => vi.fn(() => ({ profiles: {} })));
 const promptAuthChoiceGrouped = vi.hoisted(() => vi.fn(async () => "skip"));
@@ -16,7 +16,7 @@ const warnIfModelConfigLooksOff = vi.hoisted(() => vi.fn(async () => {}));
 const applyPrimaryModel = vi.hoisted(() => vi.fn((cfg) => cfg));
 const promptDefaultModel = vi.hoisted(() => vi.fn(async () => ({ config: null, model: null })));
 const promptCustomApiConfig = vi.hoisted(() => vi.fn(async (args) => ({ config: args.config })));
-const configureGatewayForOnboarding = vi.hoisted(() =>
+const configureGatewayForSetup = vi.hoisted(() =>
   vi.fn(async (args) => ({
     nextConfig: args.nextConfig,
     settings: {
@@ -29,7 +29,7 @@ const configureGatewayForOnboarding = vi.hoisted(() =>
     },
   })),
 );
-const finalizeOnboardingWizard = vi.hoisted(() =>
+const finalizeSetupWizard = vi.hoisted(() =>
   vi.fn(async (options) => {
     if (!options.nextConfig?.tools?.web?.search?.provider) {
       await options.prompter.note("Web search was skipped.", "Web search");
@@ -86,7 +86,7 @@ const ensureSystemdUserLingerInteractive = vi.hoisted(() => vi.fn(async () => {}
 const isSystemdUserServiceAvailable = vi.hoisted(() => vi.fn(async () => true));
 const ensureControlUiAssetsBuilt = vi.hoisted(() => vi.fn(async () => ({ ok: true })));
 const runTui = vi.hoisted(() => vi.fn(async (_options: unknown) => {}));
-const setupOnboardingShellCompletion = vi.hoisted(() => vi.fn(async () => {}));
+const setupWizardShellCompletion = vi.hoisted(() => vi.fn(async () => {}));
 const probeGatewayReachable = vi.hoisted(() => vi.fn(async () => ({ ok: true })));
 
 vi.mock("../commands/onboard-channels.js", () => ({
@@ -184,16 +184,16 @@ vi.mock("../tui/tui.js", () => ({
   runTui,
 }));
 
-vi.mock("./onboarding.gateway-config.js", () => ({
-  configureGatewayForOnboarding,
+vi.mock("./setup.gateway-config.js", () => ({
+  configureGatewayForSetup,
 }));
 
-vi.mock("./onboarding.finalize.js", () => ({
-  finalizeOnboardingWizard,
+vi.mock("./setup.finalize.js", () => ({
+  finalizeSetupWizard,
 }));
 
-vi.mock("./onboarding.completion.js", () => ({
-  setupOnboardingShellCompletion,
+vi.mock("./setup.completion.js", () => ({
+  setupWizardShellCompletion,
 }));
 
 function createRuntime(opts?: { throwsOnExit?: boolean }): RuntimeEnv {
@@ -214,7 +214,7 @@ function createRuntime(opts?: { throwsOnExit?: boolean }): RuntimeEnv {
   };
 }
 
-describe("runOnboardingWizard", () => {
+describe("runSetupWizard", () => {
   let suiteRoot = "";
   let suiteCase = 0;
 
@@ -255,7 +255,7 @@ describe("runOnboardingWizard", () => {
     const runtime = createRuntime({ throwsOnExit: true });
 
     await expect(
-      runOnboardingWizard(
+      runSetupWizard(
         {
           acceptRisk: true,
           flow: "quickstart",
@@ -284,7 +284,7 @@ describe("runOnboardingWizard", () => {
     const prompter = buildWizardPrompter({ select, multiselect });
     const runtime = createRuntime({ throwsOnExit: true });
 
-    await runOnboardingWizard(
+    await runSetupWizard(
       {
         acceptRisk: true,
         flow: "quickstart",
@@ -328,7 +328,7 @@ describe("runOnboardingWizard", () => {
     const prompter = buildWizardPrompter({ select });
     const runtime = createRuntime({ throwsOnExit: true });
 
-    await runOnboardingWizard(
+    await runSetupWizard(
       {
         acceptRisk: true,
         flow: "quickstart",
@@ -370,7 +370,7 @@ describe("runOnboardingWizard", () => {
       const prompter = buildWizardPrompter({ note });
       const runtime = createRuntime();
 
-      await runOnboardingWizard(
+      await runSetupWizard(
         {
           acceptRisk: true,
           flow: "quickstart",
@@ -435,7 +435,7 @@ describe("runOnboardingWizard", () => {
     const runtime = createRuntime();
 
     try {
-      await runOnboardingWizard(
+      await runSetupWizard(
         {
           acceptRisk: true,
           flow: "quickstart",
@@ -468,11 +468,11 @@ describe("runOnboardingWizard", () => {
   });
 
   it("passes secretInputMode through to local gateway config step", async () => {
-    configureGatewayForOnboarding.mockClear();
+    configureGatewayForSetup.mockClear();
     const prompter = buildWizardPrompter({});
     const runtime = createRuntime();
 
-    await runOnboardingWizard(
+    await runSetupWizard(
       {
         acceptRisk: true,
         flow: "quickstart",
@@ -490,7 +490,7 @@ describe("runOnboardingWizard", () => {
       prompter,
     );
 
-    expect(configureGatewayForOnboarding).toHaveBeenCalledWith(
+    expect(configureGatewayForSetup).toHaveBeenCalledWith(
       expect.objectContaining({
         secretInputMode: "ref", // pragma: allowlist secret
       }),

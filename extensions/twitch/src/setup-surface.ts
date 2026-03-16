@@ -2,7 +2,7 @@
  * Twitch setup wizard surface for CLI setup.
  */
 
-import type { ChannelSetupDmPolicy } from "../../../src/channels/plugins/setup-flow-types.js";
+import type { ChannelSetupDmPolicy } from "../../../src/channels/plugins/setup-wizard-types.js";
 import type { ChannelSetupWizard } from "../../../src/channels/plugins/setup-wizard.js";
 import type { ChannelSetupAdapter } from "../../../src/channels/plugins/types.adapters.js";
 import type { OpenClawConfig } from "../../../src/config/config.js";

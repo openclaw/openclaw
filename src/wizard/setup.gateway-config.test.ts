@@ -22,9 +22,9 @@ vi.mock("../infra/tailscale.js", () => ({
   getTailnetHostname: mocks.getTailnetHostname,
 }));
 
-import { configureGatewayForOnboarding } from "./onboarding.gateway-config.js";
+import { configureGatewayForSetup } from "./setup.gateway-config.js";
 
-describe("configureGatewayForOnboarding", () => {
+describe("configureGatewayForSetup", () => {
   function createPrompter(params: { selectQueue: string[]; textQueue: Array<string | undefined> }) {
     const selectQueue = [...params.selectQueue];
     const textQueue = [...params.textQueue];
@@ -78,7 +78,7 @@ describe("configureGatewayForOnboarding", () => {
       textQueue: params?.textQueue ?? ["18789", undefined],
     });
     const runtime = createRuntime();
-    return configureGatewayForOnboarding({
+    return configureGatewayForSetup({
       flow: params?.flow ?? "advanced",
       baseConfig: {},
       nextConfig: params?.nextConfig ?? {},
@@ -153,7 +153,7 @@ describe("configureGatewayForOnboarding", () => {
       });
       const runtime = createRuntime();
 
-      const result = await configureGatewayForOnboarding({
+      const result = await configureGatewayForSetup({
         flow: "advanced",
         baseConfig: {},
         nextConfig: {},
@@ -189,7 +189,7 @@ describe("configureGatewayForOnboarding", () => {
       });
       const runtime = createRuntime();
 
-      const result = await configureGatewayForOnboarding({
+      const result = await configureGatewayForSetup({
         flow: "advanced",
         baseConfig: {},
         nextConfig: {},
@@ -231,7 +231,7 @@ describe("configureGatewayForOnboarding", () => {
       textQueue: [],
     });
 
-    const result = await configureGatewayForOnboarding({
+    const result = await configureGatewayForSetup({
       flow: "quickstart",
       baseConfig: {},
       nextConfig: {

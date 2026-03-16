@@ -33,7 +33,7 @@ function warnInvalidAllowFromEntries(entries: string[]) {
         JSON.stringify(entry),
         "- allowFrom/groupAllowFrom authorization expects numeric Telegram sender user IDs only.",
         'To allow a Telegram group or supergroup, add its negative chat ID under "channels.telegram.groups" instead.',
-        'If you had "@username" entries, re-run onboarding (it resolves @username to IDs) or replace them manually.',
+        'If you had "@username" entries, re-run setup (it resolves @username to IDs) or replace them manually.',
       ].join(" "),
     );
   }

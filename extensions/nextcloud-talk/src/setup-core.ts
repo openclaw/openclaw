@@ -1,14 +1,14 @@
 import {
+  applyAccountNameToChannelSection,
+  patchScopedAccountConfig,
+} from "../../../src/channels/plugins/setup-helpers.js";
+import {
   mergeAllowFromEntries,
   resolveSetupAccountId,
   setSetupChannelEnabled,
   setTopLevelChannelDmPolicyWithAllowFrom,
-} from "../../../src/channels/plugins/setup-flow-helpers.js";
-import type { ChannelSetupDmPolicy } from "../../../src/channels/plugins/setup-flow-types.js";
-import {
-  applyAccountNameToChannelSection,
-  patchScopedAccountConfig,
-} from "../../../src/channels/plugins/setup-helpers.js";
+} from "../../../src/channels/plugins/setup-wizard-helpers.js";
+import type { ChannelSetupDmPolicy } from "../../../src/channels/plugins/setup-wizard-types.js";
 import { type ChannelSetupWizard } from "../../../src/channels/plugins/setup-wizard.js";
 import type { ChannelSetupAdapter } from "../../../src/channels/plugins/types.adapters.js";
 import type { ChannelSetupInput } from "../../../src/channels/plugins/types.core.js";

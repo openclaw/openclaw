@@ -12,7 +12,7 @@ export const CORE_CLI_COMMAND_DESCRIPTORS = [
   },
   {
     name: "onboard",
-    description: "Interactive onboarding wizard for gateway, workspace, and skills",
+    description: "Interactive setup wizard for gateway, workspace, and skills",
     hasSubcommands: false,
   },
   {

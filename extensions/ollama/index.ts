@@ -96,7 +96,7 @@ const ollamaPlugin = {
         },
       },
       wizard: {
-        onboarding: {
+        setup: {
           choiceId: "ollama",
           choiceLabel: "Ollama",
           choiceHint: "Cloud and local open models",

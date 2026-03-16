@@ -4,7 +4,7 @@ import type { RuntimeEnv } from "../runtime.js";
 
 const runTui = vi.hoisted(() => vi.fn(async () => {}));
 const probeGatewayReachable = vi.hoisted(() => vi.fn(async () => ({ ok: true })));
-const setupOnboardingShellCompletion = vi.hoisted(() => vi.fn(async () => {}));
+const setupWizardShellCompletion = vi.hoisted(() => vi.fn(async () => {}));
 const buildGatewayInstallPlan = vi.hoisted(() =>
   vi.fn(async () => ({
     programArguments: [],
@@ -96,11 +96,11 @@ vi.mock("../tui/tui.js", () => ({
   runTui,
 }));
 
-vi.mock("./onboarding.completion.js", () => ({
-  setupOnboardingShellCompletion,
+vi.mock("./setup.completion.js", () => ({
+  setupWizardShellCompletion,
 }));
 
-import { finalizeOnboardingWizard } from "./onboarding.finalize.js";
+import { finalizeSetupWizard } from "./setup.finalize.js";
 
 function createRuntime(): RuntimeEnv {
   return {
@@ -117,11 +117,11 @@ function expectFirstOnboardingInstallPlanCallOmitsToken() {
   expect(firstArg && "token" in firstArg).toBe(false);
 }
 
-describe("finalizeOnboardingWizard", () => {
+describe("finalizeSetupWizard", () => {
   beforeEach(() => {
     runTui.mockClear();
     probeGatewayReachable.mockClear();
-    setupOnboardingShellCompletion.mockClear();
+    setupWizardShellCompletion.mockClear();
     buildGatewayInstallPlan.mockClear();
     gatewayServiceInstall.mockClear();
     gatewayServiceIsLoaded.mockReset();
@@ -150,7 +150,7 @@ describe("finalizeOnboardingWizard", () => {
     const runtime = createRuntime();
 
     try {
-      await finalizeOnboardingWizard({
+      await finalizeSetupWizard({
         flow: "quickstart",
         opts: {
           acceptRisk: true,
@@ -220,7 +220,7 @@ describe("finalizeOnboardingWizard", () => {
     });
     const runtime = createRuntime();
 
-    await finalizeOnboardingWizard({
+    await finalizeSetupWizard({
       flow: "advanced",
       opts: {
         acceptRisk: true,
@@ -277,7 +277,7 @@ describe("finalizeOnboardingWizard", () => {
       progress: vi.fn(() => ({ update: progressUpdate, stop: progressStop })),
     });
 
-    await finalizeOnboardingWizard({
+    await finalizeSetupWizard({
       flow: "advanced",
       opts: {
         acceptRisk: true,

@@ -25,7 +25,7 @@ describe("provider wizard boundaries", () => {
     vi.clearAllMocks();
   });
 
-  it("uses explicit onboarding choice ids and bound method ids", () => {
+  it("uses explicit setup choice ids and bound method ids", () => {
     const provider = makeProvider({
       id: "vllm",
       label: "vLLM",
@@ -34,7 +34,7 @@ describe("provider wizard boundaries", () => {
         { id: "cloud", label: "Cloud", kind: "custom", run: vi.fn() },
       ],
       wizard: {
-        onboarding: {
+        setup: {
           choiceId: "self-hosted-vllm",
           methodId: "local",
           choiceLabel: "vLLM local",

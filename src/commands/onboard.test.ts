@@ -3,18 +3,18 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { RuntimeEnv } from "../runtime.js";
 
 const mocks = vi.hoisted(() => ({
-  runInteractiveOnboarding: vi.fn(async () => {}),
-  runNonInteractiveOnboarding: vi.fn(async () => {}),
+  runInteractiveSetup: vi.fn(async () => {}),
+  runNonInteractiveSetup: vi.fn(async () => {}),
   readConfigFileSnapshot: vi.fn(async () => ({ exists: false, valid: false, config: {} })),
   handleReset: vi.fn(async () => {}),
 }));
 
 vi.mock("./onboard-interactive.js", () => ({
-  runInteractiveOnboarding: mocks.runInteractiveOnboarding,
+  runInteractiveSetup: mocks.runInteractiveSetup,
 }));
 
 vi.mock("./onboard-non-interactive.js", () => ({
-  runNonInteractiveOnboarding: mocks.runNonInteractiveOnboarding,
+  runNonInteractiveSetup: mocks.runNonInteractiveSetup,
 }));
 
 vi.mock("../config/config.js", () => ({
@@ -56,8 +56,8 @@ describe("onboardCommand", () => {
       'Invalid --secret-input-mode. Use "plaintext" or "ref".',
     );
     expect(runtime.exit).toHaveBeenCalledWith(1);
-    expect(mocks.runInteractiveOnboarding).not.toHaveBeenCalled();
-    expect(mocks.runNonInteractiveOnboarding).not.toHaveBeenCalled();
+    expect(mocks.runInteractiveSetup).not.toHaveBeenCalled();
+    expect(mocks.runNonInteractiveSetup).not.toHaveBeenCalled();
   });
 
   it("logs ASCII-safe Windows guidance before onboarding", async () => {
@@ -155,7 +155,7 @@ describe("onboardCommand", () => {
     );
     expect(runtime.exit).toHaveBeenCalledWith(1);
     expect(mocks.handleReset).not.toHaveBeenCalled();
-    expect(mocks.runInteractiveOnboarding).not.toHaveBeenCalled();
-    expect(mocks.runNonInteractiveOnboarding).not.toHaveBeenCalled();
+    expect(mocks.runInteractiveSetup).not.toHaveBeenCalled();
+    expect(mocks.runNonInteractiveSetup).not.toHaveBeenCalled();
   });
 });

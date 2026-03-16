@@ -313,7 +313,7 @@ export async function promptAndConfigureOllama(params: {
         `Ollama could not be reached at ${baseUrl}.`,
         "Download it at https://ollama.com/download",
         "",
-        "Start Ollama and re-run onboarding.",
+        "Start Ollama and re-run setup.",
       ].join("\n"),
       "Ollama",
     );
@@ -486,7 +486,7 @@ export async function configureOllamaNonInteractive(params: {
       runtime.error(
         [
           `No Ollama models are available at ${baseUrl}.`,
-          "Pull a model first, then re-run onboarding.",
+          "Pull a model first, then re-run setup.",
         ].join("\n"),
       );
       runtime.exit(1);

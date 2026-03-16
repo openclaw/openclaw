@@ -1,9 +1,9 @@
+import { patchScopedAccountConfig } from "../../../src/channels/plugins/setup-helpers.js";
 import {
   mergeAllowFromEntries,
   setTopLevelChannelDmPolicyWithAllowFrom,
-} from "../../../src/channels/plugins/setup-flow-helpers.js";
-import type { ChannelSetupDmPolicy } from "../../../src/channels/plugins/setup-flow-types.js";
-import { patchScopedAccountConfig } from "../../../src/channels/plugins/setup-helpers.js";
+} from "../../../src/channels/plugins/setup-wizard-helpers.js";
+import type { ChannelSetupDmPolicy } from "../../../src/channels/plugins/setup-wizard-types.js";
 import type { ChannelSetupWizard } from "../../../src/channels/plugins/setup-wizard.js";
 import type { OpenClawConfig } from "../../../src/config/config.js";
 import { formatResolvedUnresolvedNote } from "../../../src/plugin-sdk/resolution-notes.js";

@@ -51,7 +51,7 @@ The LLM generates descriptive slugs based on your conversation:
 
 ## Requirements
 
-- **Config**: `workspace.dir` must be set (automatically configured during onboarding)
+- **Config**: `workspace.dir` must be set (automatically configured during setup)
 
 The hook uses your configured LLM provider to generate slugs, so it works with any provider (Anthropic, OpenAI, etc.).
 

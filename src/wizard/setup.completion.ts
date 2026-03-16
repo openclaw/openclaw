@@ -8,8 +8,8 @@ import {
   ensureCompletionCacheExists,
 } from "../commands/doctor-completion.js";
 import { pathExists } from "../utils.js";
-import type { WizardFlow } from "./onboarding.types.js";
 import type { WizardPrompter } from "./prompts.js";
+import type { WizardFlow } from "./setup.types.js";
 
 type CompletionDeps = {
   resolveCliName: () => string;
@@ -41,7 +41,7 @@ function formatReloadHint(shell: ShellCompletionStatus["shell"], profileHint: st
   return `Restart your shell or run: source ${profileHint}`;
 }
 
-export async function setupOnboardingShellCompletion(params: {
+export async function setupWizardShellCompletion(params: {
   flow: WizardFlow;
   prompter: Pick<WizardPrompter, "confirm" | "note">;
   deps?: Partial<CompletionDeps>;
