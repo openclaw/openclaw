@@ -121,6 +121,7 @@ export async function runSetupWizard(
     await prompter.outro(
       `Config invalid. Run \`${formatCliCommand("openclaw doctor")}\` to repair it, then re-run setup.`,
     );
+    await clearOnboardingInProgress();
     runtime.exit(1);
     return;
   }
@@ -135,6 +136,7 @@ export async function runSetupWizard(
     normalizedExplicitFlow !== "advanced"
   ) {
     runtime.error("Invalid --flow (use quickstart, manual, or advanced).");
+    await clearOnboardingInProgress();
     runtime.exit(1);
     return;
   }
