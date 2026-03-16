@@ -17,6 +17,7 @@ export const zh_CN: TranslationMap = {
     chat: "聊天",
     control: "控制",
     agent: "代理",
+    reseller: "代理商",
     settings: "设置",
     expand: "展开侧边栏",
     collapse: "折叠侧边栏",
@@ -35,6 +36,7 @@ export const zh_CN: TranslationMap = {
     config: "配置",
     debug: "调试",
     logs: "日志",
+    reseller: "代理商",
   },
   subtitles: {
     agents: "管理代理工作区、工具和身份。",
@@ -50,6 +52,7 @@ export const zh_CN: TranslationMap = {
     config: "安全地编辑 ~/.openclaw/openclaw.json。",
     debug: "网关快照、事件和手动 RPC 调用。",
     logs: "网关文件日志的实时追踪。",
+    reseller: "代理商门户与合作伙伴管理。",
   },
   overview: {
     access: {
@@ -105,6 +108,9 @@ export const zh_CN: TranslationMap = {
     thinkingToggle: "切换助手思考/工作输出",
     focusToggle: "切换专注模式 (隐藏侧边栏 + 页面页眉)",
     onboardingDisabled: "引导期间禁用",
+  },
+  reseller: {
+    placeholder: "代理商门户即将上线。",
   },
   languages: {
     en: "English",

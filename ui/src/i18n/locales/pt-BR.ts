@@ -17,6 +17,7 @@ export const pt_BR: TranslationMap = {
     chat: "Chat",
     control: "Controle",
     agent: "Agente",
+    reseller: "Revendedor",
     settings: "Configurações",
     expand: "Expandir barra lateral",
     collapse: "Recolher barra lateral",
@@ -35,6 +36,7 @@ export const pt_BR: TranslationMap = {
     config: "Config",
     debug: "Debug",
     logs: "Logs",
+    reseller: "Revendedor",
   },
   subtitles: {
     agents: "Gerenciar espaços de trabalho, ferramentas e identidades de agentes.",
@@ -50,6 +52,7 @@ export const pt_BR: TranslationMap = {
     config: "Editar ~/.openclaw/openclaw.json com segurança.",
     debug: "Snapshots do gateway, eventos e chamadas RPC manuais.",
     logs: "Acompanhamento ao vivo dos logs de arquivo do gateway.",
+    reseller: "Portal de revendedor e gerenciamento de parceiros.",
   },
   overview: {
     access: {
@@ -108,6 +111,9 @@ export const pt_BR: TranslationMap = {
     thinkingToggle: "Alternar saída de pensamento/trabalho do assistente",
     focusToggle: "Alternar modo de foco (ocultar barra lateral + cabeçalho da página)",
     onboardingDisabled: "Desativado durante a integração",
+  },
+  reseller: {
+    placeholder: "Portal de revendedor em breve.",
   },
   languages: {
     en: "English",

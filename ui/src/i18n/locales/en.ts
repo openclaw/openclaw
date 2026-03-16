@@ -17,6 +17,7 @@ export const en: TranslationMap = {
     chat: "Chat",
     control: "Control",
     agent: "Agent",
+    reseller: "Reseller",
     settings: "Settings",
     expand: "Expand sidebar",
     collapse: "Collapse sidebar",
@@ -35,6 +36,7 @@ export const en: TranslationMap = {
     config: "Config",
     debug: "Debug",
     logs: "Logs",
+    reseller: "Reseller",
   },
   subtitles: {
     agents: "Manage agent workspaces, tools, and identities.",
@@ -50,6 +52,7 @@ export const en: TranslationMap = {
     config: "Edit ~/.openclaw/openclaw.json safely.",
     debug: "Gateway snapshots, events, and manual RPC calls.",
     logs: "Live tail of the gateway file logs.",
+    reseller: "Reseller portal and partner management.",
   },
   overview: {
     access: {
@@ -106,6 +109,9 @@ export const en: TranslationMap = {
     thinkingToggle: "Toggle assistant thinking/working output",
     focusToggle: "Toggle focus mode (hide sidebar + page header)",
     onboardingDisabled: "Disabled during onboarding",
+  },
+  reseller: {
+    placeholder: "Reseller portal coming soon.",
   },
   languages: {
     en: "English",
