@@ -8,6 +8,7 @@ import {
 } from "nostr-tools";
 import { decrypt, encrypt } from "nostr-tools/nip04";
 import type { NostrProfile } from "./config-schema.js";
+import { DEFAULT_RELAYS } from "./default-relays.js";
 import {
   createMetrics,
   createNoopMetrics,
@@ -24,8 +25,6 @@ import {
   writeNostrProfileState,
 } from "./nostr-state-store.js";
 import { createSeenTracker, type SeenTracker } from "./seen-tracker.js";
-
-export const DEFAULT_RELAYS = ["wss://relay.damus.io", "wss://nos.lol"];
 
 // ============================================================================
 // Constants
