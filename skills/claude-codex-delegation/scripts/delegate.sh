@@ -185,11 +185,11 @@ ESCAPED_LOG="$(printf '%q' "$LOG_FILE")"
 
 if $BACKGROUND; then
     (
+        EXIT_CODE=0
         timeout "$TIMEOUT" bash -c "$(declare -f run_delegation build_claude_cmd build_codex_cmd); \
             AGENT='$AGENT' PROMPT='$(printf '%s' "$PROMPT" | sed "s/'/'\\\\''/g")' \
             WORKDIR=$ESCAPED_WORKDIR LOG_FILE=$ESCAPED_LOG FULL_AUTO=$FULL_AUTO \
-            run_delegation"
-        EXIT_CODE=$?
+            run_delegation" || EXIT_CODE=$?
         echo ""
         echo "--- Delegation complete (exit code: $EXIT_CODE) ---"
     ) >> "$LOG_FILE" 2>&1 &
@@ -197,11 +197,11 @@ if $BACKGROUND; then
     echo "Background PID: $BG_PID"
     echo "Monitor: tail -f $LOG_FILE"
 else
+    EXIT_CODE=0
     timeout "$TIMEOUT" bash -c "$(declare -f run_delegation build_claude_cmd build_codex_cmd); \
         AGENT='$AGENT' PROMPT='$(printf '%s' "$PROMPT" | sed "s/'/'\\\\''/g")' \
         WORKDIR=$ESCAPED_WORKDIR LOG_FILE=$ESCAPED_LOG FULL_AUTO=$FULL_AUTO \
-        run_delegation"
-    EXIT_CODE=$?
+        run_delegation" || EXIT_CODE=$?
     if [[ $EXIT_CODE -eq 0 ]]; then
         echo "Delegation complete."
     elif [[ $EXIT_CODE -eq 124 ]]; then

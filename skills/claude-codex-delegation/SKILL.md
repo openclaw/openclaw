@@ -2,7 +2,7 @@
 name: claude-codex-delegation
 description: Delegate code-writing, document generation, and analysis tasks to Claude Code or OpenAI Codex sub-processes. Use when you need to spawn a coding agent for file generation, code modification, script writing, or any multi-step coding task. Triggers on "delegate to claude", "delegate to codex", "use claude code", "use codex", "spawn coding agent", "run delegation", or when a task requires writing/modifying code that should be handed off to a sub-process.
 metadata:
-  { "openclaw": { "os": ["linux", "darwin"], "requires": { "anyBins": ["claude", "codex"], "bins": ["bash", "timeout"] } } }
+  { "openclaw": { "os": ["linux"], "requires": { "anyBins": ["claude", "codex"], "bins": ["bash", "timeout"] } } }
 ---
 
 # Claude Code + Codex Delegation
