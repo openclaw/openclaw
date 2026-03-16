@@ -48,6 +48,7 @@ export type WebhookAnomalyTracker = {
   clear: () => void;
 };
 
+/** Create a simple fixed-window rate limiter for in-memory webhook protection. */
 export function createFixedWindowRateLimiter(options: {
   windowMs: number;
   maxRequests: number;
@@ -104,6 +105,7 @@ export function createFixedWindowRateLimiter(options: {
   };
 }
 
+/** Count keyed events in memory with optional TTL pruning and bounded cardinality. */
 export function createBoundedCounter(options: {
   maxTrackedKeys: number;
   ttlMs?: number;
@@ -161,6 +163,7 @@ export function createBoundedCounter(options: {
   };
 }
 
+/** Track repeated webhook failures and emit sampled logs for suspicious request patterns. */
 export function createWebhookAnomalyTracker(options?: {
   maxTrackedKeys?: number;
   ttlMs?: number;
