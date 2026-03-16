@@ -487,6 +487,47 @@ describe("config plugin validation", () => {
     }
   });
 
+  it("accepts plugin entry with apiKey, env, and extra plugin-specific keys (#43551)", async () => {
+    const res = validateInSuite({
+      agents: { list: [{ id: "pi" }] },
+      plugins: {
+        enabled: false,
+        load: { paths: [badPluginDir] },
+        entries: {
+          "bad-plugin": {
+            enabled: true,
+            apiKey: "test-key",
+            env: { MEM0_API_KEY: "test" },
+            config: { value: true },
+          },
+        },
+      },
+    });
+    expect(res.ok).toBe(true);
+  });
+
+  it("tolerates unknown plugin-specific keys at entry level without crashing (#43551)", async () => {
+    const res = validateInSuite({
+      agents: { list: [{ id: "pi" }] },
+      plugins: {
+        enabled: false,
+        load: { paths: [badPluginDir] },
+        entries: {
+          "bad-plugin": {
+            enabled: true,
+            mode: "auto",
+            userId: "user-123",
+            autoCapture: true,
+            autoRecall: false,
+            oss: true,
+            config: { value: true },
+          },
+        },
+      },
+    });
+    expect(res.ok).toBe(true);
+  });
+
   it("rejects invalid heartbeat directPolicy values", async () => {
     const res = validateInSuite({
       agents: {
