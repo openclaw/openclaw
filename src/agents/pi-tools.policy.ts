@@ -7,7 +7,6 @@ import { normalizeAgentId } from "../routing/session-key.js";
 import { resolveThreadParentSessionKey } from "../sessions/session-key-utils.js";
 import { normalizeMessageChannel } from "../utils/message-channel.js";
 import { resolveAgentConfig, resolveAgentIdFromSessionKey } from "./agent-scope.js";
-import { compileGlobPatterns, matchesAnyGlobPattern } from "./glob-pattern.js";
 import type { AnyAgentTool } from "./pi-tools.types.js";
 import { pickSandboxToolPolicy } from "./sandbox-tool-policy.js";
 import type { SandboxToolPolicy } from "./sandbox.js";
@@ -15,34 +14,8 @@ import {
   resolveStoredSubagentCapabilities,
   type SubagentSessionRole,
 } from "./subagent-capabilities.js";
-import { expandToolGroups, normalizeToolName } from "./tool-policy.js";
-
-function makeToolPolicyMatcher(policy: SandboxToolPolicy) {
-  const deny = compileGlobPatterns({
-    raw: expandToolGroups(policy.deny ?? []),
-    normalize: normalizeToolName,
-  });
-  const allow = compileGlobPatterns({
-    raw: expandToolGroups(policy.allow ?? []),
-    normalize: normalizeToolName,
-  });
-  return (name: string) => {
-    const normalized = normalizeToolName(name);
-    if (matchesAnyGlobPattern(normalized, deny)) {
-      return false;
-    }
-    if (allow.length === 0) {
-      return true;
-    }
-    if (matchesAnyGlobPattern(normalized, allow)) {
-      return true;
-    }
-    if (normalized === "apply_patch" && matchesAnyGlobPattern("exec", allow)) {
-      return true;
-    }
-    return false;
-  };
-}
+import { isToolAllowedByPolicies, isToolAllowedByPolicyName } from "./tool-policy-match.js";
+import { normalizeToolName } from "./tool-policy.js";
 
 /**
  * Tools always denied for sub-agents regardless of depth.
@@ -140,19 +113,11 @@ export function resolveSubagentToolPolicyForSession(
   return { allow: mergedAllow, deny };
 }
 
-export function isToolAllowedByPolicyName(name: string, policy?: SandboxToolPolicy): boolean {
-  if (!policy) {
-    return true;
-  }
-  return makeToolPolicyMatcher(policy)(name);
-}
-
 export function filterToolsByPolicy(tools: AnyAgentTool[], policy?: SandboxToolPolicy) {
   if (!policy) {
     return tools;
   }
-  const matcher = makeToolPolicyMatcher(policy);
-  return tools.filter((tool) => matcher(tool.name));
+  return tools.filter((tool) => isToolAllowedByPolicyName(tool.name, policy));
 }
 
 type ToolPolicyConfig = {
@@ -381,9 +346,4 @@ export function resolveGroupToolPolicy(params: {
   return pickSandboxToolPolicy(toolsConfig);
 }
 
-export function isToolAllowedByPolicies(
-  name: string,
-  policies: Array<SandboxToolPolicy | undefined>,
-) {
-  return policies.every((policy) => isToolAllowedByPolicyName(name, policy));
-}
+export { isToolAllowedByPolicies, isToolAllowedByPolicyName } from "./tool-policy-match.js";
