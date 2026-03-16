@@ -9,6 +9,7 @@ import type {
   ApiKeyCredential,
   AuthProfileCredential,
   OAuthCredential,
+  AuthProfileStore,
 } from "../agents/auth-profiles/types.js";
 import type { ModelCatalogEntry } from "../agents/model-catalog.js";
 import type { ProviderCapabilities } from "../agents/provider-capabilities.js";
@@ -119,6 +120,15 @@ export type ProviderAuthContext = {
   prompter: WizardPrompter;
   runtime: RuntimeEnv;
   /**
+   * Optional onboarding CLI options that triggered this auth flow.
+   *
+   * Present for setup/configure/auth-choice flows so provider methods can
+   * honor preseeded flags like `--openai-api-key` or generic
+   * `--token/--token-provider` pairs. Direct `models auth login` usually
+   * leaves this undefined.
+   */
+  opts?: Partial<OnboardOptions>;
+  /**
    * Onboarding secret persistence preference.
    *
    * Interactive wizard flows set this when the caller explicitly requested
@@ -186,6 +196,14 @@ export type ProviderAuthMethod = {
   label: string;
   hint?: string;
   kind: ProviderAuthKind;
+  /**
+   * Optional wizard/onboarding metadata for this specific auth method.
+   *
+   * Use this when one provider exposes multiple setup entries (for example API
+   * key + OAuth, or region-specific login flows). OpenClaw uses this to expose
+   * method-specific auth choices while keeping the provider id stable.
+   */
+  wizard?: ProviderPluginWizardSetup;
   run: (ctx: ProviderAuthContext) => Promise<ProviderAuthResult>;
   runNonInteractive?: (
     ctx: ProviderAuthMethodNonInteractiveContext,
@@ -368,6 +386,20 @@ export type ProviderFetchUsageSnapshotContext = {
 };
 
 /**
+ * Provider-owned auth-doctor hint input.
+ *
+ * Called when OAuth refresh fails and OpenClaw wants a provider-specific repair
+ * hint to append to the generic re-auth message. Use this for legacy profile-id
+ * migrations or other provider-owned auth-store cleanup guidance.
+ */
+export type ProviderAuthDoctorHintContext = {
+  config?: OpenClawConfig;
+  store: AuthProfileStore;
+  provider: string;
+  profileId?: string;
+};
+
+/**
  * Provider-owned extra-param normalization before OpenClaw builds its generic
  * stream option wrapper.
  *
@@ -521,6 +553,18 @@ export type ProviderPluginWizardSetup = {
   groupLabel?: string;
   groupHint?: string;
   methodId?: string;
+  /**
+   * Optional model-allowlist prompt policy applied after this auth choice is
+   * selected in configure/onboarding flows.
+   *
+   * Keep this UI-facing and static. Provider logic that needs runtime state
+   * should stay in `run`/`runNonInteractive`.
+   */
+  modelAllowlist?: {
+    allowedKeys?: string[];
+    initialSelections?: string[];
+    message?: string;
+  };
 };
 
 export type ProviderPluginWizardModelPicker = {
@@ -732,8 +776,42 @@ export type ProviderPlugin = {
    */
   isModernModelRef?: (ctx: ProviderModernModelPolicyContext) => boolean | undefined;
   wizard?: ProviderPluginWizard;
+  /**
+   * Provider-owned auth-profile API-key formatter.
+   *
+   * OpenClaw uses this when a stored auth profile is already valid and needs to
+   * be converted into the runtime `apiKey` string expected by the provider. Use
+   * this for providers whose auth profile stores extra metadata alongside the
+   * bearer token (for example Gemini CLI's `{ token, projectId }` payload).
+   */
   formatApiKey?: (cred: AuthProfileCredential) => string;
+  /**
+   * Legacy auth-profile ids that should be retired by `openclaw doctor`.
+   *
+   * Use this when a provider plugin replaces an older core-managed profile id
+   * and wants cleanup/migration messaging to live with the provider instead of
+   * in hardcoded doctor tables.
+   */
+  deprecatedProfileIds?: string[];
+  /**
+   * Provider-owned OAuth refresh.
+   *
+   * OpenClaw calls this before falling back to the shared `pi-ai` OAuth
+   * refreshers. Use it when the provider has a custom refresh endpoint, or when
+   * the provider needs custom refresh-failure behavior that should stay out of
+   * core auth-profile code.
+   */
   refreshOAuth?: (cred: OAuthCredential) => Promise<OAuthCredential>;
+  /**
+   * Provider-owned auth-doctor hint.
+   *
+   * Return a multiline repair hint when OAuth refresh fails and the provider
+   * wants to steer users toward a specific auth-profile migration or recovery
+   * path. Return nothing to keep OpenClaw's generic error text.
+   */
+  buildAuthDoctorHint?: (
+    ctx: ProviderAuthDoctorHintContext,
+  ) => string | Promise<string | null | undefined> | null | undefined;
   onModelSelected?: (ctx: ProviderModelSelectedContext) => Promise<void>;
 };
 

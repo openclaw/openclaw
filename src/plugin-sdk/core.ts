@@ -26,6 +26,7 @@ export type {
   ProviderWrapStreamFnContext,
   OpenClawPluginService,
   ProviderAuthContext,
+  ProviderAuthDoctorHintContext,
   ProviderAuthMethodNonInteractiveContext,
   ProviderAuthResult,
 } from "../plugins/types.js";

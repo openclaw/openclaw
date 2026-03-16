@@ -10,7 +10,7 @@ import {
 } from "../../../src/infra/outbound/send-deps.js";
 import { resolveInteractiveTextFallback } from "../../../src/interactive/payload.js";
 import type { TelegramInlineButtons } from "./button-types.js";
-import { buildTelegramInteractiveButtons } from "./button-types.js";
+import { resolveTelegramInlineButtons } from "./button-types.js";
 import { markdownToTelegramHtmlChunks } from "./format.js";
 import { parseTelegramReplyToMessageId, parseTelegramThreadId } from "./outbound-params.js";
 import { sendMessageTelegram } from "./send.js";
@@ -67,8 +67,10 @@ export async function sendTelegramPayloadMessages(params: {
       interactive: params.payload.interactive,
     }) ?? "";
   const mediaUrls = resolvePayloadMediaUrls(params.payload);
-  const interactiveButtons = buildTelegramInteractiveButtons(params.payload.interactive);
-  const buttons = telegramData?.buttons ?? interactiveButtons;
+  const buttons = resolveTelegramInlineButtons({
+    buttons: telegramData?.buttons,
+    interactive: params.payload.interactive,
+  });
   const payloadOpts = {
     ...params.baseOpts,
     quoteText,

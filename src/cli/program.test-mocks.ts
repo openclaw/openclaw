@@ -2,34 +2,39 @@ import { vi, type Mock } from "vitest";
 
 type AnyMock = Mock<(...args: unknown[]) => unknown>;
 
-const programMocks = vi.hoisted(() => ({
-  messageCommand: vi.fn(),
-  statusCommand: vi.fn(),
-  configureCommand: vi.fn(),
-  configureCommandWithSections: vi.fn(),
-  setupCommand: vi.fn(),
-  setupWizardCommand: vi.fn(),
-  callGateway: vi.fn(),
-  runChannelLogin: vi.fn(),
-  runChannelLogout: vi.fn(),
-  runTui: vi.fn(),
-  loadAndMaybeMigrateDoctorConfig: vi.fn(),
-  ensureConfigReady: vi.fn(),
-  ensurePluginRegistryLoaded: vi.fn(),
-  runtime: {
-    log: vi.fn(),
-    error: vi.fn(),
-    exit: vi.fn(() => {
-      throw new Error("exit");
-    }),
-  },
-}));
+const programMocks = vi.hoisted(() => {
+  const setupWizardCommand = vi.fn();
+  return {
+    messageCommand: vi.fn(),
+    statusCommand: vi.fn(),
+    configureCommand: vi.fn(),
+    configureCommandWithSections: vi.fn(),
+    setupCommand: vi.fn(),
+    setupWizardCommand,
+    onboardCommand: setupWizardCommand,
+    callGateway: vi.fn(),
+    runChannelLogin: vi.fn(),
+    runChannelLogout: vi.fn(),
+    runTui: vi.fn(),
+    loadAndMaybeMigrateDoctorConfig: vi.fn(),
+    ensureConfigReady: vi.fn(),
+    ensurePluginRegistryLoaded: vi.fn(),
+    runtime: {
+      log: vi.fn(),
+      error: vi.fn(),
+      exit: vi.fn(() => {
+        throw new Error("exit");
+      }),
+    },
+  };
+});
 
 export const messageCommand = programMocks.messageCommand as AnyMock;
 export const statusCommand = programMocks.statusCommand as AnyMock;
 export const configureCommand = programMocks.configureCommand as AnyMock;
 export const configureCommandWithSections = programMocks.configureCommandWithSections as AnyMock;
 export const setupCommand = programMocks.setupCommand as AnyMock;
+export const onboardCommand = programMocks.onboardCommand as AnyMock;
 export const setupWizardCommand = programMocks.setupWizardCommand as AnyMock;
 export const callGateway = programMocks.callGateway as AnyMock;
 export const runChannelLogin = programMocks.runChannelLogin as AnyMock;
@@ -72,7 +77,7 @@ vi.mock("../commands/configure.js", () => ({
 }));
 vi.mock("../commands/setup.js", () => ({ setupCommand: programMocks.setupCommand }));
 vi.mock("../commands/onboard.js", () => ({
-  onboardCommand: programMocks.setupWizardCommand,
+  onboardCommand: programMocks.onboardCommand,
   setupWizardCommand: programMocks.setupWizardCommand,
 }));
 vi.mock("../runtime.js", () => ({ defaultRuntime: programMocks.runtime }));
