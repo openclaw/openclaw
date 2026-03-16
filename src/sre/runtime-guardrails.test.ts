@@ -176,6 +176,36 @@ describe("buildSreRuntimeGuardrailContextFromTranscript", () => {
     );
   });
 
+  it("normalizes absolute helper overrides before rendering them", async () => {
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "single-vault-helper-"));
+    const nestedDir = path.join(tmpDir, "nested");
+    const helperPath = path.join(tmpDir, "single-vault-graphql-evidence.sh");
+    await fs.mkdir(nestedDir);
+    await fs.writeFile(helperPath, "#!/usr/bin/env bash\n");
+    await fs.chmod(helperPath, 0o755);
+    vi.stubEnv(
+      "SINGLE_VAULT_GRAPHQL_EVIDENCE_SCRIPT_PATH",
+      `${nestedDir}/../single-vault-graphql-evidence.sh`,
+    );
+
+    const transcriptText = `
+{"type":"message","message":{"role":"assistant","content":[{"type":"text","text":"Root cause: vaultByAddress factory.chain is null"}]}}
+{"type":"message","message":{"role":"user","content":[{"type":"text","text":"query VaultV2ByAddress { vaultV2ByAddress(address: \\"0xE18d7f0C6aaba1E600fF680459a357C3B3CfdB34\\", chainId: 999) { apy netApy } } traceId=abc123"}]}}
+`;
+    try {
+      const context = buildSreRuntimeGuardrailContextFromTranscript({
+        agentId: "sre",
+        prompt: "look into this vault v2 graphql apy issue",
+        transcriptText,
+      });
+
+      expect(context).toContain(helperPath);
+      expect(context).not.toContain(`${nestedDir}/../single-vault-graphql-evidence.sh`);
+    } finally {
+      await fs.rm(tmpDir, { recursive: true, force: true });
+    }
+  });
+
   it("requires explicit retraction when new evidence contradicts an older theory", () => {
     const transcriptText = `
 {"type":"message","message":{"role":"assistant","content":[{"type":"text","text":"Root cause: vaultByAddress factory.chain is null"}]}}

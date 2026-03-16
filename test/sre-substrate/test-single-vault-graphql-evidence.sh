@@ -295,13 +295,13 @@ zero_chain_stderr="${TMP}/zero-chain.stderr"
 zero_chain_status=0
 env PATH="${BIN_NO_CAST}:/usr/bin:/bin" bash "$SCRIPT_PATH" --address "$ADDRESS" --chain-id 0 --query "$QUERY" > /dev/null 2>"$zero_chain_stderr" || zero_chain_status=$?
 test "$zero_chain_status" = "2"
-grep -F 'between 1 and 2147483647' "$zero_chain_stderr" >/dev/null
+grep -F 'between 1 and 2147483647 (GraphQL Int limit)' "$zero_chain_stderr" >/dev/null
 
 too_large_chain_stderr="${TMP}/too-large-chain.stderr"
 too_large_chain_status=0
 env PATH="${BIN_NO_CAST}:/usr/bin:/bin" bash "$SCRIPT_PATH" --address "$ADDRESS" --chain-id 2147483648 --query "$QUERY" > /dev/null 2>"$too_large_chain_stderr" || too_large_chain_status=$?
 test "$too_large_chain_status" = "2"
-grep -F 'between 1 and 2147483647' "$too_large_chain_stderr" >/dev/null
+grep -F 'between 1 and 2147483647 (GraphQL Int limit)' "$too_large_chain_stderr" >/dev/null
 
 invalid_address_stderr="${TMP}/invalid-address.stderr"
 invalid_address_status=0

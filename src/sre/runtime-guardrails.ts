@@ -61,22 +61,42 @@ function formatInlineCode(text: string): string {
 }
 
 function isErrnoCode(err: unknown, code: string): err is NodeJS.ErrnoException {
-  return err instanceof Error && "code" in err && (err as NodeJS.ErrnoException).code === code;
+  return (
+    err instanceof Error &&
+    "code" in err &&
+    typeof (err as NodeJS.ErrnoException).code === "string" &&
+    (err as NodeJS.ErrnoException).code === code
+  );
 }
 
+/**
+ * Returns the display path for the single-vault evidence helper.
+ *
+ * The env override stays opt-in, but it must be an absolute executable path so
+ * the rendered guidance does not point at a dead helper.
+ */
 function singleVaultGraphqlEvidenceScriptPath(): string {
   const envPath = process.env.SINGLE_VAULT_GRAPHQL_EVIDENCE_SCRIPT_PATH?.trim();
   if (!envPath || !path.isAbsolute(envPath)) {
     return DEFAULT_SINGLE_VAULT_GRAPHQL_EVIDENCE_SCRIPT;
   }
+  const normalizedPath = path.resolve(envPath);
   try {
-    accessSync(envPath, fsConstants.X_OK);
+    accessSync(normalizedPath, fsConstants.X_OK);
   } catch {
     return DEFAULT_SINGLE_VAULT_GRAPHQL_EVIDENCE_SCRIPT;
   }
-  return envPath;
+  return normalizedPath;
 }
 
+/**
+ * Builds inline SRE runtime guardrails from a JSONL transcript plus the current
+ * prompt.
+ *
+ * `params.transcriptText` should be the raw session transcript where each line
+ * is one JSON event. Returns a formatted guardrail block when the transcript or
+ * prompt implies extra operator guidance, otherwise `undefined`.
+ */
 export function buildSreRuntimeGuardrailContextFromTranscript(params: {
   agentId: string;
   prompt: string;

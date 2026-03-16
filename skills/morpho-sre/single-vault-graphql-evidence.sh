@@ -67,7 +67,8 @@ require_evm_address() {
 }
 
 json_is_valid() {
-  jq -e . >/dev/null 2>&1 <<<"${1:?json text required}"
+  local json_text="${1:?json text required}"
+  jq -e . >/dev/null 2>&1 <<<"$json_text"
 }
 
 while [[ $# -gt 0 ]]; do
@@ -148,8 +149,10 @@ fi
   exit 2
 }
 # Morpho GraphQL uses GraphQL `Int`, so reject ids the API cannot encode.
+# GraphQL `Int` is a signed 32-bit integer, and chain ids in this helper must
+# stay positive.
 [[ "$CHAIN_ID" -ge 1 && "$CHAIN_ID" -le 2147483647 ]] || {
-  printf 'chain id must be between 1 and 2147483647\n' >&2
+  printf 'chain id must be between 1 and 2147483647 (GraphQL Int limit)\n' >&2
   exit 2
 }
 
