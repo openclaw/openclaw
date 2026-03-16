@@ -4,14 +4,16 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"strings"
 	"time"
 )
 
 const (
-	translateMaxAttempts = 3
-	translateBaseDelay   = 15 * time.Second
-	translatePromptTimeout = 2 * time.Minute
+	translateMaxAttempts     = 3
+	translateBaseDelay       = 15 * time.Second
+	defaultPromptTimeout     = 2 * time.Minute
+	envDocsI18nPromptTimeout = "OPENCLAW_DOCS_I18N_PROMPT_TIMEOUT"
 )
 
 var errEmptyTranslation = errors.New("empty translation")
@@ -112,10 +114,16 @@ func isRetryableTranslateError(err error) bool {
 	if err == nil {
 		return false
 	}
+	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
+		return false
+	}
 	if errors.Is(err, errEmptyTranslation) {
 		return true
 	}
 	message := strings.ToLower(err.Error())
+	if strings.Contains(message, "authentication failed") {
+		return false
+	}
 	return strings.Contains(message, "placeholder missing") || strings.Contains(message, "rate limit") || strings.Contains(message, "429")
 }
 
@@ -142,7 +150,7 @@ type promptRunner interface {
 }
 
 func runPrompt(ctx context.Context, client promptRunner, message string) (string, error) {
-	promptCtx, cancel := context.WithTimeout(ctx, translatePromptTimeout)
+	promptCtx, cancel := context.WithTimeout(ctx, docsI18nPromptTimeout())
 	defer cancel()
 
 	result, err := client.Prompt(promptCtx, message)
@@ -170,4 +178,16 @@ func normalizeThinking(value string) string {
 	default:
 		return "high"
 	}
+}
+
+func docsI18nPromptTimeout() time.Duration {
+	value := strings.TrimSpace(os.Getenv(envDocsI18nPromptTimeout))
+	if value == "" {
+		return defaultPromptTimeout
+	}
+	parsed, err := time.ParseDuration(value)
+	if err != nil || parsed <= 0 {
+		return defaultPromptTimeout
+	}
+	return parsed
 }

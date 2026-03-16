@@ -50,8 +50,32 @@ func TestRunPromptAddsTimeout(t *testing.T) {
 	}
 
 	remaining := time.Until(deadline)
-	if remaining <= time.Minute || remaining > translatePromptTimeout {
+	if remaining <= time.Minute || remaining > docsI18nPromptTimeout() {
 		t.Fatalf("unexpected timeout window %s", remaining)
+	}
+}
+
+func TestDocsI18nPromptTimeoutUsesEnvOverride(t *testing.T) {
+	t.Setenv(envDocsI18nPromptTimeout, "5m")
+
+	if got := docsI18nPromptTimeout(); got != 5*time.Minute {
+		t.Fatalf("expected 5m timeout, got %s", got)
+	}
+}
+
+func TestIsRetryableTranslateErrorRejectsDeadlineExceeded(t *testing.T) {
+	t.Parallel()
+
+	if isRetryableTranslateError(context.DeadlineExceeded) {
+		t.Fatal("deadline exceeded should not retry")
+	}
+}
+
+func TestIsRetryableTranslateErrorRejectsAuthenticationFailures(t *testing.T) {
+	t.Parallel()
+
+	if isRetryableTranslateError(errors.New(`Authentication failed for "openai"`)) {
+		t.Fatal("auth failures should not retry")
 	}
 }
 
