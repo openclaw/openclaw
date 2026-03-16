@@ -80,7 +80,7 @@ function toModelDefinition(entry: DeepInfraModelEntry): ModelDefinitionConfig {
 // Static fallback
 // ---------------------------------------------------------------------------
 
-function buildStaticCatalog(): ModelDefinitionConfig[] {
+export function buildStaticCatalog(): ModelDefinitionConfig[] {
   return DEEPINFRA_MODEL_CATALOG.map((model) => ({
     id: model.id,
     name: model.name,
