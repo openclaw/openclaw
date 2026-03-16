@@ -139,7 +139,7 @@ function resolveInstallDefaultChoice(params: {
   return localPath ? "local" : "npm";
 }
 
-export async function ensureOnboardingPluginInstalled(params: {
+export async function ensureChannelSetupPluginInstalled(params: {
   cfg: OpenClawConfig;
   entry: ChannelPluginCatalogEntry;
   prompter: WizardPrompter;
@@ -225,15 +225,15 @@ export async function ensureOnboardingPluginInstalled(params: {
   return { cfg: next, installed: false };
 }
 
-export function reloadOnboardingPluginRegistry(params: {
+export function reloadChannelSetupPluginRegistry(params: {
   cfg: OpenClawConfig;
   runtime: RuntimeEnv;
   workspaceDir?: string;
 }): void {
-  loadOnboardingPluginRegistry(params);
+  loadChannelSetupPluginRegistry(params);
 }
 
-function loadOnboardingPluginRegistry(params: {
+function loadChannelSetupPluginRegistry(params: {
   cfg: OpenClawConfig;
   runtime: RuntimeEnv;
   workspaceDir?: string;
@@ -255,7 +255,7 @@ function loadOnboardingPluginRegistry(params: {
   });
 }
 
-export function reloadOnboardingPluginRegistryForChannel(params: {
+export function reloadChannelSetupPluginRegistryForChannel(params: {
   cfg: OpenClawConfig;
   runtime: RuntimeEnv;
   channel: string;
@@ -264,24 +264,24 @@ export function reloadOnboardingPluginRegistryForChannel(params: {
 }): void {
   const activeRegistry = getActivePluginRegistry();
   // On low-memory hosts, the empty-registry fallback should only recover the selected
-  // plugin instead of importing every bundled extension during onboarding.
+  // plugin instead of importing every bundled extension during setup.
   const onlyPluginIds = activeRegistry?.plugins.length
     ? undefined
     : [params.pluginId ?? params.channel];
-  loadOnboardingPluginRegistry({
+  loadChannelSetupPluginRegistry({
     ...params,
     onlyPluginIds,
   });
 }
 
-export function loadOnboardingPluginRegistrySnapshotForChannel(params: {
+export function loadChannelSetupPluginRegistrySnapshotForChannel(params: {
   cfg: OpenClawConfig;
   runtime: RuntimeEnv;
   channel: string;
   pluginId?: string;
   workspaceDir?: string;
 }): PluginRegistry {
-  return loadOnboardingPluginRegistry({
+  return loadChannelSetupPluginRegistry({
     ...params,
     onlyPluginIds: [params.pluginId ?? params.channel],
     activate: false,

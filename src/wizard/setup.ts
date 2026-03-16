@@ -16,9 +16,9 @@ import { normalizeSecretInputString } from "../config/types.secrets.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { defaultRuntime } from "../runtime.js";
 import { resolveUserPath } from "../utils.js";
-import { resolveOnboardingSecretInputString } from "./onboarding.secret-input.js";
-import type { QuickstartGatewayDefaults, WizardFlow } from "./onboarding.types.js";
 import { WizardCancelledError, type WizardPrompter } from "./prompts.js";
+import { resolveSetupSecretInputString } from "./setup.secret-input.js";
+import type { QuickstartGatewayDefaults, WizardFlow } from "./setup.types.js";
 
 async function requireRiskAcknowledgement(params: {
   opts: OnboardOptions;
@@ -70,7 +70,7 @@ async function requireRiskAcknowledgement(params: {
   }
 }
 
-export async function runOnboardingWizard(
+export async function runSetupWizard(
   opts: OnboardOptions,
   runtime: RuntimeEnv = defaultRuntime,
   prompter: WizardPrompter,
@@ -96,7 +96,7 @@ export async function runOnboardingWizard(
       );
     }
     await prompter.outro(
-      `Config invalid. Run \`${formatCliCommand("openclaw doctor")}\` to repair it, then re-run onboarding.`,
+      `Config invalid. Run \`${formatCliCommand("openclaw doctor")}\` to repair it, then re-run setup.`,
     );
     runtime.exit(1);
     return;
@@ -283,7 +283,7 @@ export async function runOnboardingWizard(
   const localUrl = `ws://127.0.0.1:${localPort}`;
   let localGatewayToken = process.env.OPENCLAW_GATEWAY_TOKEN ?? process.env.CLAWDBOT_GATEWAY_TOKEN;
   try {
-    const resolvedGatewayToken = await resolveOnboardingSecretInputString({
+    const resolvedGatewayToken = await resolveSetupSecretInputString({
       config: baseConfig,
       value: baseConfig.gateway?.auth?.token,
       path: "gateway.auth.token",
@@ -304,7 +304,7 @@ export async function runOnboardingWizard(
   let localGatewayPassword =
     process.env.OPENCLAW_GATEWAY_PASSWORD ?? process.env.CLAWDBOT_GATEWAY_PASSWORD;
   try {
-    const resolvedGatewayPassword = await resolveOnboardingSecretInputString({
+    const resolvedGatewayPassword = await resolveSetupSecretInputString({
       config: baseConfig,
       value: baseConfig.gateway?.auth?.password,
       path: "gateway.auth.password",
@@ -331,7 +331,7 @@ export async function runOnboardingWizard(
   const remoteUrl = baseConfig.gateway?.remote?.url?.trim() ?? "";
   let remoteGatewayToken = normalizeSecretInputString(baseConfig.gateway?.remote?.token);
   try {
-    const resolvedRemoteGatewayToken = await resolveOnboardingSecretInputString({
+    const resolvedRemoteGatewayToken = await resolveSetupSecretInputString({
       config: baseConfig,
       value: baseConfig.gateway?.remote?.token,
       path: "gateway.remote.token",
@@ -406,8 +406,8 @@ export async function runOnboardingWizard(
 
   const workspaceDir = resolveUserPath(workspaceInput.trim() || onboardHelpers.DEFAULT_WORKSPACE);
 
-  const { applyOnboardingLocalWorkspaceConfig } = await import("../commands/onboard-config.js");
-  let nextConfig: OpenClawConfig = applyOnboardingLocalWorkspaceConfig(baseConfig, workspaceDir);
+  const { applyLocalSetupWorkspaceConfig } = await import("../commands/onboard-config.js");
+  let nextConfig: OpenClawConfig = applyLocalSetupWorkspaceConfig(baseConfig, workspaceDir);
 
   const { ensureAuthProfileStore } = await import("../agents/auth-profiles.runtime.js");
   const { promptAuthChoiceGrouped } = await import("../commands/auth-choice-prompt.js");
@@ -482,8 +482,8 @@ export async function runOnboardingWizard(
 
   await warnIfModelConfigLooksOff(nextConfig, prompter);
 
-  const { configureGatewayForOnboarding } = await import("./onboarding.gateway-config.js");
-  const gateway = await configureGatewayForOnboarding({
+  const { configureGatewayForSetup } = await import("./setup.gateway-config.js");
+  const gateway = await configureGatewayForSetup({
     flow,
     baseConfig,
     nextConfig,
@@ -548,8 +548,8 @@ export async function runOnboardingWizard(
   nextConfig = onboardHelpers.applyWizardMetadata(nextConfig, { command: "onboard", mode });
   await writeConfigFile(nextConfig);
 
-  const { finalizeOnboardingWizard } = await import("./onboarding.finalize.js");
-  const { launchedTui } = await finalizeOnboardingWizard({
+  const { finalizeSetupWizard } = await import("./setup.finalize.js");
+  const { launchedTui } = await finalizeSetupWizard({
     flow,
     opts,
     baseConfig,
