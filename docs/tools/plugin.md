@@ -1230,7 +1230,8 @@ The non-interactive context includes:
 - the current and base config
 - parsed onboarding CLI options
 - runtime logging/error helpers
-- agent/workspace dirs
+- agent/workspace dirs so the provider can persist auth into the same scoped
+  store used by the rest of onboarding
 - `resolveApiKey(...)` to read provider keys from flags, env, or existing auth
   profiles while honoring `--secret-input-mode`
 - `toApiKeyCredential(...)` to convert a resolved key into an auth-profile
@@ -1407,10 +1408,13 @@ api.registerProvider({
 Notes:
 
 - `run` receives a `ProviderAuthContext` with `prompter`, `runtime`,
-  `openUrl`, and `oauth.createVpsAwareHandlers` helpers.
+  `openUrl`, `oauth.createVpsAwareHandlers`, `secretInputMode`, and
+  `allowSecretRefPrompt` helpers/state. Onboarding/configure flows can use
+  these to honor `--secret-input-mode` or offer env/file/exec secret-ref
+  capture, while `openclaw models auth` keeps a tighter prompt surface.
 - `runNonInteractive` receives a `ProviderAuthMethodNonInteractiveContext`
-  with `opts`, `resolveApiKey`, and `toApiKeyCredential` helpers for
-  headless onboarding.
+  with `opts`, `agentDir`, `resolveApiKey`, and `toApiKeyCredential` helpers
+  for headless onboarding.
 - Return `configPatch` when you need to add default models or provider config.
 - Return `defaultModel` so `--set-default` can update agent defaults.
 - `wizard.setup` adds a provider choice to `openclaw onboard`.
