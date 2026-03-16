@@ -620,13 +620,14 @@ describe("loadChatHistory", () => {
 
     expect(request).toHaveBeenCalledWith("chat.history", {
       sessionKey: "main",
-      limit: 200,
+      limit: 25,
     });
     expect(state.chatMessages).toEqual([
       { role: "assistant", content: [{ type: "text", text: "visible answer" }] },
       { role: "user", content: [{ type: "text", text: "NO_REPLY" }] },
     ]);
     expect(state.chatThinkingLevel).toBe("low");
+    expect(state.chatHistoryTruncated).toBe(false);
     expect(state.chatLoading).toBe(false);
     expect(state.lastError).toBeNull();
   });
@@ -651,6 +652,28 @@ describe("loadChatHistory", () => {
     expect(state.chatMessages).toEqual([]);
     expect(state.chatThinkingLevel).toBeNull();
     expect(state.lastError).toContain("operator.read");
+    expect(state.chatHistoryTruncated).toBe(false);
+    expect(state.chatLoading).toBe(false);
+  });
+
+  it("sets chatHistoryTruncated when response has at least request limit", async () => {
+    const messages = Array.from({ length: 25 }, (_, i) => ({
+      role: "user",
+      content: [{ type: "text", text: `msg ${i}` }],
+    }));
+    const request = vi.fn().mockResolvedValue({
+      messages,
+      thinkingLevel: null,
+    });
+    const state = createState({
+      connected: true,
+      client: { request } as unknown as ChatState["client"],
+    });
+
+    await loadChatHistory(state);
+
+    expect(state.chatMessages).toHaveLength(25);
+    expect(state.chatHistoryTruncated).toBe(true);
     expect(state.chatLoading).toBe(false);
   });
 });
