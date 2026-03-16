@@ -293,4 +293,76 @@ describe("resolveEffectiveToolPolicy", () => {
     const result = resolveEffectiveToolPolicy({ config: cfg, agentId: "coder" });
     expect(result.profileAlsoAllow).toEqual(["read", "write", "edit"]);
   });
+
+  it("does not implicitly expose global exec when agent has explicit alsoAllow without it", () => {
+    // Regression test for #47487: tool profile restrictions not enforced
+    const cfg = {
+      tools: {
+        exec: { security: "full", ask: "off" },
+      },
+      agents: {
+        list: [
+          {
+            id: "messenger",
+            tools: {
+              profile: "messaging",
+              alsoAllow: ["web_search"],
+            },
+          },
+        ],
+      },
+    } as OpenClawConfig;
+    const result = resolveEffectiveToolPolicy({ config: cfg, agentId: "messenger" });
+    expect(result.profileAlsoAllow).toEqual(["web_search"]);
+    expect(result.profileAlsoAllow).not.toContain("exec");
+    expect(result.profileAlsoAllow).not.toContain("process");
+  });
+
+  it("does not implicitly expose global fs when agent has explicit empty alsoAllow", () => {
+    const cfg = {
+      tools: {
+        fs: { workspaceOnly: false },
+      },
+      agents: {
+        list: [
+          {
+            id: "restricted",
+            tools: {
+              profile: "messaging",
+              alsoAllow: [],
+            },
+          },
+        ],
+      },
+    } as OpenClawConfig;
+    const result = resolveEffectiveToolPolicy({ config: cfg, agentId: "restricted" });
+    // Empty array is returned (not undefined) when explicit alsoAllow is set
+    expect(result.profileAlsoAllow).toEqual([]);
+    expect(result.profileAlsoAllow).not.toContain("read");
+    expect(result.profileAlsoAllow).not.toContain("write");
+    expect(result.profileAlsoAllow).not.toContain("edit");
+  });
+
+  it("still uses agent-level exec section for implicit exposure even with explicit alsoAllow", () => {
+    const cfg = {
+      tools: {
+        profile: "messaging",
+      },
+      agents: {
+        list: [
+          {
+            id: "coder",
+            tools: {
+              alsoAllow: ["web_search"],
+              exec: { host: "sandbox" },
+            },
+          },
+        ],
+      },
+    } as OpenClawConfig;
+    const result = resolveEffectiveToolPolicy({ config: cfg, agentId: "coder" });
+    expect(result.profileAlsoAllow).toContain("web_search");
+    expect(result.profileAlsoAllow).toContain("exec");
+    expect(result.profileAlsoAllow).toContain("process");
+  });
 });
