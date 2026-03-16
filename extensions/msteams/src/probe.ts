@@ -4,7 +4,7 @@ import {
   type MSTeamsConfig,
 } from "openclaw/plugin-sdk/msteams";
 import { formatUnknownError } from "./errors.js";
-import { loadMSTeamsSdkWithAuth } from "./sdk.js";
+import { createTokenProvider, loadMSTeamsSdkWithAuth } from "./sdk.js";
 import { readAccessToken } from "./token-response.js";
 import { resolveMSTeamsCredentials } from "./token.js";
 
@@ -66,7 +66,7 @@ export async function probeMSTeams(cfg?: MSTeamsConfig): Promise<ProbeMSTeamsRes
 
   try {
     const { sdk, authConfig } = await loadMSTeamsSdkWithAuth(creds);
-    const tokenProvider = new sdk.MsalTokenProvider(authConfig);
+    const tokenProvider = createTokenProvider(creds, authConfig, sdk);
     await tokenProvider.getAccessToken("https://api.botframework.com");
     let graph:
       | {

@@ -77,6 +77,9 @@ export function hasConfiguredMSTeamsCredentials(cfg?: MSTeamsConfig): boolean {
       return hasCertificateAuthMaterial(cfg);
     case "federatedCredential":
       return hasFederatedAuthMaterial(cfg);
+    case "defaultAzureCredential":
+      // DAC handles its own credential discovery — appId + tenantId is sufficient.
+      return true;
     case "clientSecret":
     default:
       return Boolean(hasConfiguredSecretInput(cfg?.appPassword));
@@ -118,6 +121,11 @@ export function resolveMSTeamsCredentials(cfg?: MSTeamsConfig): MSTeamsCredentia
         ficClientId: trimPresence(cfg?.ficClientId),
         widAssertionFile: trimPresence(cfg?.widAssertionFile),
       };
+    }
+    case "defaultAzureCredential": {
+      // DAC defers credential selection to @azure/identity at runtime.
+      // Only appId + tenantId are required from config.
+      return { appId, tenantId, authType };
     }
     case "clientSecret":
     default: {

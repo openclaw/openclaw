@@ -1,6 +1,6 @@
 import type { MSTeamsConfig } from "openclaw/plugin-sdk/msteams";
 import { GRAPH_ROOT } from "./attachments/shared.js";
-import { loadMSTeamsSdkWithAuth } from "./sdk.js";
+import { createTokenProvider, loadMSTeamsSdkWithAuth } from "./sdk.js";
 import { readAccessToken } from "./token-response.js";
 import { resolveMSTeamsCredentials } from "./token.js";
 
@@ -57,7 +57,7 @@ export async function resolveGraphToken(cfg: unknown): Promise<string> {
     throw new Error("MS Teams credentials missing");
   }
   const { sdk, authConfig } = await loadMSTeamsSdkWithAuth(creds);
-  const tokenProvider = new sdk.MsalTokenProvider(authConfig);
+  const tokenProvider = createTokenProvider(creds, authConfig, sdk);
   const token = await tokenProvider.getAccessToken("https://graph.microsoft.com");
   const accessToken = readAccessToken(token);
   if (!accessToken) {

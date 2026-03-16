@@ -164,6 +164,19 @@ describe("resolveMSTeamsCredentials", () => {
     ).toBeUndefined();
   });
 
+  it("resolves defaultAzureCredential with only appId and tenantId", () => {
+    const resolved = resolveMSTeamsCredentials({
+      appId: "app-id",
+      tenantId: "tenant-id",
+      authType: "defaultAzureCredential",
+    });
+
+    expect(resolved?.authType).toBe("defaultAzureCredential");
+    expect(resolved?.appId).toBe("app-id");
+    expect(resolved?.tenantId).toBe("tenant-id");
+    expect(resolved?.appPassword).toBeUndefined();
+  });
+
   it("throws when appPassword remains an unresolved SecretRef object", () => {
     expect(() =>
       resolveMSTeamsCredentials({
@@ -267,5 +280,15 @@ describe("hasConfiguredMSTeamsCredentials", () => {
         authType: "federatedCredential",
       }),
     ).toBe(false);
+  });
+
+  it("detects defaultAzureCredential as configured with only appId and tenantId", () => {
+    expect(
+      hasConfiguredMSTeamsCredentials({
+        appId: "app-id",
+        tenantId: "tenant-id",
+        authType: "defaultAzureCredential",
+      }),
+    ).toBe(true);
   });
 });

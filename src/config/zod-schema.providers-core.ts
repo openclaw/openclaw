@@ -1483,7 +1483,9 @@ export const MSTeamsConfigSchema = z
     configWrites: z.boolean().optional(),
     appId: z.string().optional(),
     appPassword: SecretInputSchema.optional().register(sensitive),
-    authType: z.enum(["clientSecret", "certificate", "federatedCredential"]).optional(),
+    authType: z
+      .enum(["clientSecret", "certificate", "federatedCredential", "defaultAzureCredential"])
+      .optional(),
     certPemFile: z.string().optional(),
     certKeyFile: z.string().optional(),
     sendX5C: z.boolean().optional(),

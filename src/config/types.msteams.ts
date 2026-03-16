@@ -70,8 +70,11 @@ export type MSTeamsConfig = {
    * - "certificate": Uses certPemFile + certKeyFile for certificate-based auth.
    * - "federatedCredential": Uses FIC (First-party Integration Channel) client ID
    *   with workload identity federation (no secret needed).
+   * - "defaultAzureCredential": Defers credential selection to @azure/identity's
+   *   DefaultAzureCredential, which tries env vars, workload identity, managed
+   *   identity, az cli, and other sources automatically.
    */
-  authType?: "clientSecret" | "certificate" | "federatedCredential";
+  authType?: "clientSecret" | "certificate" | "federatedCredential" | "defaultAzureCredential";
   /** Path to the certificate PEM file (used when authType is "certificate"). */
   certPemFile?: string;
   /** Path to the certificate key file (used when authType is "certificate"). */
