@@ -1417,6 +1417,404 @@
         ]
       },
       {
+        "language": "fr",
+        "tabs": [
+          {
+            "tab": "Démarrage",
+            "groups": [
+              {
+                "group": "Accueil",
+                "pages": ["fr-FR/index"]
+              },
+              {
+                "group": "Aperçu",
+                "pages": ["fr-FR/start/showcase"]
+              },
+              {
+                "group": "Concepts de base",
+                "pages": ["fr-FR/concepts/features"]
+              },
+              {
+                "group": "Premiers pas",
+                "pages": [
+                  "fr-FR/start/getting-started",
+                  "fr-FR/start/quickstart",
+                  "fr-FR/start/wizard",
+                  "fr-FR/start/onboarding",
+                  "fr-FR/start/onboarding-overview",
+                  "fr-FR/start/wizard-cli-reference",
+                  "fr-FR/start/wizard-cli-automation"
+                ]
+              },
+              {
+                "group": "Guides",
+                "pages": ["fr-FR/start/openclaw", "fr-FR/start/bootstrapping", "fr-FR/start/setup"]
+              },
+              {
+                "group": "Communauté",
+                "pages": ["fr-FR/start/lore", "fr-FR/start/hubs", "fr-FR/start/docs-directory"]
+              }
+            ]
+          },
+          {
+            "tab": "Installation",
+            "groups": [
+              {
+                "group": "Vue d'ensemble",
+                "pages": [
+                  "fr-FR/install/index",
+                  "fr-FR/install/installer",
+                  "fr-FR/install/updating",
+                  "fr-FR/install/uninstall",
+                  "fr-FR/install/migrating"
+                ]
+              },
+              {
+                "group": "Plateformes",
+                "pages": [
+                  "fr-FR/platforms/index",
+                  "fr-FR/platforms/linux",
+                  "fr-FR/platforms/windows",
+                  "fr-FR/platforms/android",
+                  "fr-FR/platforms/ios"
+                ]
+              },
+              {
+                "group": "Environnements cloud",
+                "pages": [
+                  "fr-FR/install/docker",
+                  "fr-FR/install/podman",
+                  "fr-FR/install/fly",
+                  "fr-FR/install/gcp",
+                  "fr-FR/install/hetzner",
+                  "fr-FR/install/exe-dev"
+                ]
+              },
+              {
+                "group": "Avancé",
+                "pages": [
+                  "fr-FR/install/nix",
+                  "fr-FR/install/bun",
+                  "fr-FR/install/node",
+                  "fr-FR/install/ansible",
+                  "fr-FR/install/macos-vm",
+                  "fr-FR/install/development-channels"
+                ]
+              }
+            ]
+          },
+          {
+            "tab": "Canaux",
+            "groups": [
+              {
+                "group": "Vue d'ensemble",
+                "pages": ["fr-FR/channels/index", "fr-FR/channels/location"]
+              },
+              {
+                "group": "Canaux avancés",
+                "pages": ["fr-FR/channels/tlon", "fr-FR/channels/grammy"]
+              }
+            ]
+          },
+          {
+            "tab": "Passerelle",
+            "groups": [
+              {
+                "group": "Introduction",
+                "pages": [
+                  "fr-FR/gateway/index",
+                  "fr-FR/gateway/configuration",
+                  "fr-FR/gateway/configuration-examples",
+                  "fr-FR/gateway/authentication"
+                ]
+              },
+              {
+                "group": "Concepts",
+                "pages": [
+                  "fr-FR/gateway/network-model",
+                  "fr-FR/gateway/discovery",
+                  "fr-FR/gateway/remote",
+                  "fr-FR/gateway/remote-gateway-readme",
+                  "fr-FR/gateway/pairing",
+                  "fr-FR/gateway/multiple-gateways"
+                ]
+              },
+              {
+                "group": "APIs",
+                "pages": [
+                  "fr-FR/gateway/openai-http-api",
+                  "fr-FR/gateway/openresponses-http-api",
+                  "fr-FR/gateway/tools-invoke-http-api",
+                  "fr-FR/gateway/protocol",
+                  "fr-FR/gateway/bridge-protocol"
+                ]
+              },
+              {
+                "group": "Fonctionnalités avancées",
+                "pages": [
+                  "fr-FR/gateway/local-models",
+                  "fr-FR/gateway/sandboxing",
+                  "fr-FR/gateway/sandbox-vs-tool-policy-vs-elevated",
+                  "fr-FR/gateway/cli-backends",
+                  "fr-FR/gateway/heartbeat"
+                ]
+              },
+              {
+                "group": "Réseau",
+                "pages": [
+                  "fr-FR/gateway/bonjour",
+                  "fr-FR/gateway/tailscale",
+                  "fr-FR/gateway/trusted-proxy-auth"
+                ]
+              },
+              {
+                "group": "Maintenance",
+                "pages": [
+                  "fr-FR/gateway/logging",
+                  "fr-FR/gateway/health",
+                  "fr-FR/gateway/doctor",
+                  "fr-FR/gateway/troubleshooting",
+                  "fr-FR/gateway/background-process",
+                  "fr-FR/gateway/gateway-lock"
+                ]
+              }
+            ]
+          },
+          {
+            "tab": "Concepts",
+            "groups": [
+              {
+                "group": "Architecture",
+                "pages": [
+                  "fr-FR/concepts/architecture",
+                  "fr-FR/concepts/agent",
+                  "fr-FR/concepts/agent-workspace",
+                  "fr-FR/concepts/agent-loop",
+                  "fr-FR/concepts/multi-agent"
+                ]
+              },
+              {
+                "group": "Sessions",
+                "pages": [
+                  "fr-FR/concepts/session",
+                  "fr-FR/concepts/sessions",
+                  "fr-FR/concepts/session-tool",
+                  "fr-FR/concepts/session-pruning",
+                  "fr-FR/concepts/queue"
+                ]
+              },
+              {
+                "group": "Modèles",
+                "pages": [
+                  "fr-FR/concepts/model-providers",
+                  "fr-FR/concepts/model-failover",
+                  "fr-FR/concepts/oauth"
+                ]
+              },
+              {
+                "group": "Messages et contexte",
+                "pages": [
+                  "fr-FR/concepts/messages",
+                  "fr-FR/concepts/context",
+                  "fr-FR/concepts/compaction",
+                  "fr-FR/concepts/streaming",
+                  "fr-FR/concepts/retry"
+                ]
+              },
+              {
+                "group": "Système",
+                "pages": [
+                  "fr-FR/concepts/system-prompt",
+                  "fr-FR/concepts/memory",
+                  "fr-FR/concepts/presence"
+                ]
+              },
+              {
+                "group": "Détails techniques",
+                "pages": [
+                  "fr-FR/concepts/markdown-formatting",
+                  "fr-FR/concepts/typing-indicators",
+                  "fr-FR/concepts/usage-tracking",
+                  "fr-FR/concepts/timezone",
+                  "fr-FR/concepts/typebox"
+                ]
+              }
+            ]
+          },
+          {
+            "tab": "Outils",
+            "groups": [
+              {
+                "group": "Outils disponibles",
+                "pages": [
+                  "fr-FR/tools/reactions",
+                  "fr-FR/tools/firecrawl",
+                  "fr-FR/tools/browser-login",
+                  "fr-FR/tools/apply-patch"
+                ]
+              },
+              {
+                "group": "Développement d'outils",
+                "pages": ["fr-FR/tools/creating-skills"]
+              }
+            ]
+          },
+          {
+            "tab": "Automatisation",
+            "groups": [
+              {
+                "group": "Automatisation",
+                "pages": [
+                  "fr-FR/automation/cron-jobs",
+                  "fr-FR/automation/cron-vs-heartbeat",
+                  "fr-FR/automation/hooks",
+                  "fr-FR/automation/webhook",
+                  "fr-FR/automation/poll",
+                  "fr-FR/automation/gmail-pubsub"
+                ]
+              },
+              {
+                "group": "Monitoring",
+                "pages": ["fr-FR/automation/auth-monitoring", "fr-FR/automation/troubleshooting"]
+              }
+            ]
+          },
+          {
+            "tab": "Web & Interfaces",
+            "groups": [
+              {
+                "group": "Interfaces web",
+                "pages": [
+                  "fr-FR/web/index",
+                  "fr-FR/web/control-ui",
+                  "fr-FR/web/dashboard",
+                  "fr-FR/web/webchat",
+                  "fr-FR/web/tui"
+                ]
+              }
+            ]
+          },
+          {
+            "tab": "Plugins",
+            "groups": [
+              {
+                "group": "Plugins disponibles",
+                "pages": [
+                  "fr-FR/plugins/manifest",
+                  "fr-FR/plugins/agent-tools",
+                  "fr-FR/plugins/voice-call",
+                  "fr-FR/plugins/zalouser"
+                ]
+              }
+            ]
+          },
+          {
+            "tab": "Fournisseurs",
+            "groups": [
+              {
+                "group": "Fournisseurs de modèles",
+                "pages": [
+                  "fr-FR/providers/opencode",
+                  "fr-FR/providers/openrouter",
+                  "fr-FR/providers/glm",
+                  "fr-FR/providers/zai",
+                  "fr-FR/providers/vercel-ai-gateway"
+                ]
+              }
+            ]
+          },
+          {
+            "tab": "CLI",
+            "groups": [
+              {
+                "group": "Commandes principales",
+                "pages": [
+                  "fr-FR/cli/dashboard",
+                  "fr-FR/cli/health",
+                  "fr-FR/cli/setup",
+                  "fr-FR/cli/sessions",
+                  "fr-FR/cli/pairing",
+                  "fr-FR/cli/reset",
+                  "fr-FR/cli/uninstall"
+                ]
+              },
+              {
+                "group": "Outils avancés",
+                "pages": ["fr-FR/cli/logs", "fr-FR/cli/tui", "fr-FR/cli/docs"]
+              }
+            ]
+          },
+          {
+            "tab": "Aide",
+            "groups": [
+              {
+                "group": "Aide",
+                "pages": ["fr-FR/help/index", "fr-FR/help/troubleshooting", "fr-FR/help/faq"]
+              },
+              {
+                "group": "Développement",
+                "pages": [
+                  "fr-FR/help/debugging",
+                  "fr-FR/help/testing",
+                  "fr-FR/help/environment",
+                  "fr-FR/help/scripts"
+                ]
+              }
+            ]
+          },
+          {
+            "tab": "Sécurité",
+            "groups": [
+              {
+                "group": "Documentation sécurité",
+                "pages": [
+                  "fr-FR/security/README",
+                  "fr-FR/security/THREAT-MODEL-ATLAS",
+                  "fr-FR/security/CONTRIBUTING-THREAT-MODEL",
+                  "fr-FR/security/formal-verification"
+                ]
+              }
+            ]
+          },
+          {
+            "tab": "Référence",
+            "groups": [
+              {
+                "group": "Référence API",
+                "pages": ["fr-FR/reference/rpc", "fr-FR/reference/device-models"]
+              },
+              {
+                "group": "Modèles",
+                "pages": [
+                  "fr-FR/reference/AGENTS.default",
+                  "fr-FR/reference/templates/AGENTS",
+                  "fr-FR/reference/templates/BOOT",
+                  "fr-FR/reference/templates/BOOTSTRAP",
+                  "fr-FR/reference/templates/HEARTBEAT",
+                  "fr-FR/reference/templates/IDENTITY",
+                  "fr-FR/reference/templates/SOUL",
+                  "fr-FR/reference/templates/TOOLS",
+                  "fr-FR/reference/templates/USER"
+                ]
+              },
+              {
+                "group": "Projet",
+                "pages": ["fr-FR/reference/credits"]
+              }
+            ]
+          },
+          {
+            "tab": "Diagnostics",
+            "groups": [
+              {
+                "group": "Dépannage",
+                "pages": ["fr-FR/diagnostics/flags", "fr-FR/debug/node-issue"]
+              }
+            ]
+          }
+        ]
+      },
+      {
         "language": "zh-Hans",
         "tabs": [
           {

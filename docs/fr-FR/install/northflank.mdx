@@ -1,0 +1,53 @@
+---
+title: Déployer sur Northflank
+---
+
+Déployez OpenClaw sur Northflank avec un modèle en un clic et terminez la configuration dans votre navigateur.
+C'est le chemin le plus simple "pas de terminal sur le serveur" : Northflank exécute la passerelle pour vous,
+et vous configurez tout via l'assistant web `/setup`.
+
+## Comment commencer
+
+1. Cliquez sur [Déployer OpenClaw](https://northflank.com/stacks/deploy-openclaw) pour ouvrir le modèle.
+2. Créez un [compte sur Northflank](https://app.northflank.com/signup) si vous n'en avez pas déjà un.
+3. Cliquez sur **Deploy OpenClaw now**.
+4. Définissez la variable d'environnement requise : `SETUP_PASSWORD`.
+5. Cliquez sur **Deploy stack** pour construire et exécuter le modèle OpenClaw.
+6. Attendez que le déploiement se termine, puis cliquez sur **View resources**.
+7. Ouvrez le service OpenClaw.
+8. Ouvrez l'URL publique OpenClaw et complétez la configuration à `/setup`.
+9. Ouvrez l'interface de contrôle à `/openclaw`.
+
+## Ce que vous obtenez
+
+- Passerelle OpenClaw hébergée + Interface de contrôle
+- Assistant de configuration web à `/setup` (pas de commandes terminal)
+- Stockage persistant via volume Northflank (`/data`) pour que config/identifiants/espace de travail survivent aux redéploiements
+
+## Flux de configuration
+
+1. Visitez `https://<votre-domaine-northflank>/setup` et entrez votre `SETUP_PASSWORD`.
+2. Choisissez un modèle/fournisseur d'authentification et collez votre clé.
+3. (Optionnel) Ajoutez des jetons Telegram/Discord/Slack.
+4. Cliquez sur **Run setup**.
+5. Ouvrez l'interface de contrôle à `https://<votre-domaine-northflank>/openclaw`
+
+Si les DM Telegram sont définis sur appairage, l'assistant de configuration peut approuver le code d'appairage.
+
+## Obtenir les jetons de chat
+
+### Jeton bot Telegram
+
+1. Envoyez un message à `@BotFather` dans Telegram
+2. Exécutez `/newbot`
+3. Copiez le jeton (ressemble à `123456789:AA...`)
+4. Collez-le dans `/setup`
+
+### Jeton bot Discord
+
+1. Allez sur [https://discord.com/developers/applications](https://discord.com/developers/applications)
+2. **New Application** → choisissez un nom
+3. **Bot** → **Add Bot**
+4. **Activez MESSAGE CONTENT INTENT** sous Bot → Privileged Gateway Intents (requis sinon le bot crashera au démarrage)
+5. Copiez le **Bot Token** et collez dans `/setup`
+6. Invitez le bot sur votre serveur (générateur URL OAuth2 ; scopes : `bot`, `applications.commands`)
