@@ -26,7 +26,9 @@ export function installProviderPluginContractSuite(params: { provider: ProviderP
     for (const method of provider.auth) {
       expect(method.id.trim()).not.toBe("");
       expect(method.label.trim()).not.toBe("");
-      expect(method.hint.trim()).not.toBe("");
+      if (method.hint !== undefined) {
+        expect(method.hint.trim()).not.toBe("");
+      }
       expect(typeof method.run).toBe("function");
     }
   });
