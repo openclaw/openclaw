@@ -38,7 +38,7 @@ metadata: { "openclaw": { "emoji": "🛠️" } }
 - Retry on repeated asks: if same/near-identical question appears again in the same thread/session, re-run relevant live checks/tools (state may have changed); do not reuse a prior failure-only answer.
 - In monitored Slack incident threads, human follow-ups after the first bot reply must pass ingress and trigger fresh live checks; do not treat them like duplicate alert updates.
 - If an incident thread drifts into unrelated design/history questions, redirect that discussion to a DM or new thread instead of mixing it into RCA.
-- Never send progress-only messages (`On it`, `Found it`, `Let me verify`, `Checking…`) in any Slack thread — incident, bug-report, or general channel. Wait until you have net-new evidence, a completed action, a concrete blocker, or a PR URL before posting.
+- Never send progress-only messages (`On it`, `Found it`, `Let me verify`, `Checking…`) in any Slack thread — incident, bug-report, or general channel. In non-incident threads, allow one short acknowledgement only when it includes a concrete ETA and clear next action (for example, `Investigating now, I’ll return with findings in ~30m`). Otherwise wait until you have net-new evidence, a completed action, a concrete blocker, or a PR URL.
 - Before claiming repo/tool access is unavailable, run one live probe (`gh repo view <owner/repo>` or the target helper in dry-run mode) and quote the exact error.
 - Before accepting any task that requires repo access (PR creation, code changes, repo reads), immediately run `gh repo view <owner/repo>` and verify local clone availability. If either check fails, report the blocker in the same message as the acknowledgement — do not split into acknowledge-then-fail-later.
 - If a human challenges or contradicts a technical claim in any thread (incident, bug-report, or general), immediately re-investigate with fresh live evidence. If a human questions the proposed fix or PR in-thread, re-open RCA before defending the fix. Respond in the same thread with updated evidence, a revised conclusion, or an explicit confirmation/disproof statement. Never go silent after a challenge.
@@ -334,7 +334,7 @@ metadata: { "openclaw": { "emoji": "🛠️" } }
 - Put unrelated warnings under `*Also watching:*`.
 - Do not open with routing hints, fingerprint changes, raw step names, signal counts, confidence percentages, or `primary/supporting` namespace jargon.
 - Never leak progress chatter, tool-call JSON, exec-approval warnings, or command-construction failures into the thread.
-- Do not send progress-only replies like `On it`, `Found it`, `Let me verify`, or `Checking...` in any Slack thread; wait for net-new evidence, mitigation, validation, or a PR URL.
+- Do not send progress-only replies like `On it`, `Found it`, `Let me verify`, or `Checking...` in any Slack thread unless it is a single non-incident acknowledgment containing a concrete ETA and expected next step. In all other cases, wait for net-new evidence, mitigation, validation, or a PR URL.
 - For recurring indexer freshness alerts on the same workload, answer as one ongoing RCA instead of a fresh transient update.
 - If fix is scoped/reversible and confidence >= `AUTO_PR_MIN_CONFIDENCE`, create PR via `autofix-pr.sh` and post PR URL in-thread.
 - If fix is not open-PR ready yet, still name 1-2 concrete PR candidates with repo/path/title/validation.
