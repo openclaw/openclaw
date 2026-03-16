@@ -1,4 +1,10 @@
-import type { ContentBlock, ImageContent, ToolKind } from "@agentclientprotocol/sdk";
+import type {
+  ContentBlock,
+  ImageContent,
+  ToolCallContent,
+  ToolCallLocation,
+  ToolKind,
+} from "@agentclientprotocol/sdk";
 
 export type GatewayAttachment = {
   type: string;
@@ -151,4 +157,176 @@ export function inferToolKind(name?: string): ToolKind {
     return "fetch";
   }
   return "other";
+}
+
+function asRecord(value: unknown): Record<string, unknown> | undefined {
+  if (value && typeof value === "object" && !Array.isArray(value)) {
+    return value as Record<string, unknown>;
+  }
+  return undefined;
+}
+
+export function extractToolCallContent(value: unknown): ToolCallContent[] | undefined {
+  if (typeof value === "string") {
+    return value.trim() ? [{ type: "content", content: { type: "text", text: value } }] : undefined;
+  }
+
+  const record = asRecord(value);
+  if (!record) {
+    return undefined;
+  }
+
+  const contents: ToolCallContent[] = [];
+  const blocks = Array.isArray(record.content) ? record.content : [];
+  for (const block of blocks) {
+    const entry = asRecord(block);
+    if (entry?.type === "text" && typeof entry.text === "string" && entry.text.trim()) {
+      contents.push({ type: "content", content: { type: "text", text: entry.text } });
+    }
+  }
+  return contents.length > 0 ? contents : undefined;
+}
+
+const TOOL_LOCATION_PATH_KEYS = [
+  "path",
+  "filePath",
+  "file_path",
+  "targetPath",
+  "target_path",
+  "targetFile",
+  "target_file",
+  "sourcePath",
+  "source_path",
+  "destinationPath",
+  "destination_path",
+  "oldPath",
+  "old_path",
+  "newPath",
+  "new_path",
+  "outputPath",
+  "output_path",
+  "inputPath",
+  "input_path",
+] as const;
+
+const TOOL_LOCATION_LINE_KEYS = ["line", "lineNumber", "line_number", "startLine", "start_line"];
+const TOOL_RESULT_PATH_MARKER_RE = /^(?:FILE|MEDIA):(.+)$/gm;
+const TOOL_LOCATION_MAX_DEPTH = 4;
+const TOOL_LOCATION_MAX_NODES = 100;
+
+function normalizeToolLocationPath(rawPath: string): string | undefined {
+  const trimmed = rawPath.trim();
+  return trimmed.length > 0 && trimmed.length < 512 ? trimmed : undefined;
+}
+
+function normalizeToolLocationLine(value: unknown): number | undefined {
+  if (typeof value === "number" && Number.isInteger(value) && value > 0) {
+    return value;
+  }
+  return undefined;
+}
+
+function extractToolLocationLine(record: Record<string, unknown>): number | undefined {
+  for (const key of TOOL_LOCATION_LINE_KEYS) {
+    const line = normalizeToolLocationLine(record[key]);
+    if (line !== undefined) {
+      return line;
+    }
+  }
+  return undefined;
+}
+
+function addToolLocation(
+  locations: Map<string, ToolCallLocation>,
+  rawPath: string,
+  line?: number,
+): void {
+  const path = normalizeToolLocationPath(rawPath);
+  if (!path) {
+    return;
+  }
+  for (const [existingKey, existing] of locations.entries()) {
+    if (existing.path !== path) {
+      continue;
+    }
+    if (line === undefined || existing.line === line) {
+      return;
+    }
+    if (existing.line === undefined) {
+      locations.delete(existingKey);
+    }
+  }
+  const locationKey = `${path}:${line ?? ""}`;
+  if (locations.has(locationKey)) {
+    return;
+  }
+  locations.set(locationKey, line !== undefined ? { path, line } : { path });
+}
+
+function collectLocationsFromTextMarkers(
+  text: string,
+  locations: Map<string, ToolCallLocation>,
+): void {
+  for (const match of text.matchAll(TOOL_RESULT_PATH_MARKER_RE)) {
+    const candidate = match[1]?.trim();
+    if (candidate) {
+      addToolLocation(locations, candidate);
+    }
+  }
+}
+
+function collectToolLocations(
+  value: unknown,
+  locations: Map<string, ToolCallLocation>,
+  state: { visited: number },
+  depth: number,
+): void {
+  if (state.visited >= TOOL_LOCATION_MAX_NODES || depth > TOOL_LOCATION_MAX_DEPTH) {
+    return;
+  }
+  state.visited += 1;
+
+  if (typeof value === "string") {
+    collectLocationsFromTextMarkers(value, locations);
+    return;
+  }
+  if (!value || typeof value !== "object") {
+    return;
+  }
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      collectToolLocations(item, locations, state, depth + 1);
+      if (state.visited >= TOOL_LOCATION_MAX_NODES) {
+        return;
+      }
+    }
+    return;
+  }
+
+  const record = value as Record<string, unknown>;
+  const line = extractToolLocationLine(record);
+  for (const key of TOOL_LOCATION_PATH_KEYS) {
+    const rawPath = record[key];
+    if (typeof rawPath === "string") {
+      addToolLocation(locations, rawPath, line);
+    }
+  }
+
+  for (const [key, nested] of Object.entries(record)) {
+    if (key === "content") {
+      continue;
+    }
+    collectToolLocations(nested, locations, state, depth + 1);
+    if (state.visited >= TOOL_LOCATION_MAX_NODES) {
+      return;
+    }
+  }
+}
+
+export function extractToolCallLocations(...values: unknown[]): ToolCallLocation[] | undefined {
+  const locations = new Map<string, ToolCallLocation>();
+  for (const value of values) {
+    collectToolLocations(value, locations, { visited: 0 }, 0);
+  }
+  return locations.size > 0 ? [...locations.values()] : undefined;
 }
