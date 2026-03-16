@@ -623,7 +623,7 @@ describe("chat view", () => {
         ok: false,
       } satisfies Partial<Response>),
     );
-    const { state, request } = createChatHeaderState({ model: "gpt-5-mini" });
+    const { state, request } = createChatHeaderState({ model: "openai/gpt-5-mini" });
     const container = document.createElement("div");
     render(renderChatSessionSelect(state), container);
 
