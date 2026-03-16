@@ -1246,14 +1246,14 @@ describe("createOpenAIWebSocketStreamFn", () => {
         {
           name: "get_weather",
           description: "Get weather",
-          inputSchema: { type: "object" as const, properties: {} },
+          parameters: { type: "object" as const, properties: {} },
         },
       ],
-    };
+    } as unknown as Parameters<typeof streamFn>[1];
     const opts = { topP: 0.9, toolChoice: "auto" };
     const stream = streamFn(
       modelStub as Parameters<typeof streamFn>[0],
-      contextWithTools as Parameters<typeof streamFn>[1],
+      contextWithTools,
       opts as unknown as Parameters<typeof streamFn>[2],
     );
     await new Promise<void>((resolve, reject) => {
