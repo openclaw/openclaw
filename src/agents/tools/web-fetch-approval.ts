@@ -84,8 +84,13 @@ export function withHttpApprovalGate(
 
       // Check the runtime allow-always cache before policy evaluation.
       // This allows "allow-always" to take effect immediately for subsequent
-      // fetches without waiting for config reload.
-      if (runtimeAllowedPatterns.length > 0 && matchHttpAllowlist(runtimeAllowedPatterns, url)) {
+      // fetches without waiting for config reload. Skip the cache when
+      // ask=always so every call is re-prompted as the operator expects.
+      if (
+        policy.ask !== "always" &&
+        runtimeAllowedPatterns.length > 0 &&
+        matchHttpAllowlist(runtimeAllowedPatterns, url)
+      ) {
         return originalExecute(toolCallId, args);
       }
 
