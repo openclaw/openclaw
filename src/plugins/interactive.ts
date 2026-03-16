@@ -9,6 +9,8 @@ import type {
   PluginInteractiveButtons,
   PluginInteractiveDiscordHandlerRegistration,
   PluginInteractiveHandlerRegistration,
+  PluginInteractiveSlackHandlerContext,
+  PluginInteractiveSlackHandlerRegistration,
   PluginInteractiveTelegramHandlerRegistration,
   PluginInteractiveTelegramHandlerContext,
 } from "./types.js";
@@ -55,6 +57,20 @@ type DiscordInteractiveDispatchContext = Omit<
 > & {
   interaction: Omit<
     PluginInteractiveDiscordHandlerContext["interaction"],
+    "data" | "namespace" | "payload"
+  >;
+};
+
+type SlackInteractiveDispatchContext = Omit<
+  PluginInteractiveSlackHandlerContext,
+  | "interaction"
+  | "respond"
+  | "requestConversationBinding"
+  | "detachConversationBinding"
+  | "getCurrentConversationBinding"
+> & {
+  interaction: Omit<
+    PluginInteractiveSlackHandlerContext["interaction"],
     "data" | "namespace" | "payload"
   >;
 };
@@ -181,11 +197,21 @@ export async function dispatchPluginInteractiveHandler(params: {
   respond: PluginInteractiveDiscordHandlerContext["respond"];
 }): Promise<InteractiveDispatchResult>;
 export async function dispatchPluginInteractiveHandler(params: {
-  channel: "telegram" | "discord";
+  channel: "slack";
+  data: string;
+  interactionId: string;
+  ctx: SlackInteractiveDispatchContext;
+  respond: PluginInteractiveSlackHandlerContext["respond"];
+}): Promise<InteractiveDispatchResult>;
+export async function dispatchPluginInteractiveHandler(params: {
+  channel: "telegram" | "discord" | "slack";
   data: string;
   callbackId?: string;
   interactionId?: string;
-  ctx: TelegramInteractiveDispatchContext | DiscordInteractiveDispatchContext;
+  ctx:
+    | TelegramInteractiveDispatchContext
+    | DiscordInteractiveDispatchContext
+    | SlackInteractiveDispatchContext;
   respond:
     | {
         reply: (params: { text: string; buttons?: PluginInteractiveButtons }) => Promise<void>;
@@ -197,7 +223,8 @@ export async function dispatchPluginInteractiveHandler(params: {
         clearButtons: () => Promise<void>;
         deleteMessage: () => Promise<void>;
       }
-    | PluginInteractiveDiscordHandlerContext["respond"];
+    | PluginInteractiveDiscordHandlerContext["respond"]
+    | PluginInteractiveSlackHandlerContext["respond"];
 }): Promise<InteractiveDispatchResult> {
   const match = resolveNamespaceMatch(params.channel, params.data);
   if (!match) {
@@ -212,7 +239,8 @@ export async function dispatchPluginInteractiveHandler(params: {
 
   let result:
     | ReturnType<PluginInteractiveTelegramHandlerRegistration["handler"]>
-    | ReturnType<PluginInteractiveDiscordHandlerRegistration["handler"]>;
+    | ReturnType<PluginInteractiveDiscordHandlerRegistration["handler"]>
+    | ReturnType<PluginInteractiveSlackHandlerRegistration["handler"]>;
   if (params.channel === "telegram") {
     const pluginRoot = match.registration.pluginRoot;
     const { callbackMessage, ...handlerContext } = params.ctx as TelegramInteractiveDispatchContext;
@@ -284,7 +312,7 @@ export async function dispatchPluginInteractiveHandler(params: {
         });
       },
     });
-  } else {
+  } else if (params.channel === "discord") {
     const pluginRoot = match.registration.pluginRoot;
     result = (
       match.registration as RegisteredInteractiveHandler &
@@ -348,6 +376,74 @@ export async function dispatchPluginInteractiveHandler(params: {
             accountId: handlerContext.accountId,
             conversationId: handlerContext.conversationId,
             parentConversationId: handlerContext.parentConversationId,
+          },
+        });
+      },
+    });
+  } else {
+    const pluginRoot = match.registration.pluginRoot;
+    const handlerContext = params.ctx as SlackInteractiveDispatchContext;
+    result = (
+      match.registration as RegisteredInteractiveHandler & PluginInteractiveSlackHandlerRegistration
+    ).handler({
+      ...handlerContext,
+      channel: "slack",
+      interaction: {
+        ...handlerContext.interaction,
+        data: params.data,
+        namespace: match.namespace,
+        payload: match.payload,
+      },
+      respond: params.respond as PluginInteractiveSlackHandlerContext["respond"],
+      requestConversationBinding: async (bindingParams) => {
+        if (!pluginRoot) {
+          return {
+            status: "error",
+            message: "This interaction cannot bind the current conversation.",
+          };
+        }
+        return requestPluginConversationBinding({
+          pluginId: match.registration.pluginId,
+          pluginName: match.registration.pluginName,
+          pluginRoot,
+          requestedBySenderId: handlerContext.senderId,
+          conversation: {
+            channel: "slack",
+            accountId: handlerContext.accountId,
+            conversationId: handlerContext.conversationId,
+            parentConversationId: handlerContext.parentConversationId,
+            threadId: handlerContext.threadId,
+          },
+          binding: bindingParams,
+        });
+      },
+      detachConversationBinding: async () => {
+        if (!pluginRoot) {
+          return { removed: false };
+        }
+        return detachPluginConversationBinding({
+          pluginRoot,
+          conversation: {
+            channel: "slack",
+            accountId: handlerContext.accountId,
+            conversationId: handlerContext.conversationId,
+            parentConversationId: handlerContext.parentConversationId,
+            threadId: handlerContext.threadId,
+          },
+        });
+      },
+      getCurrentConversationBinding: async () => {
+        if (!pluginRoot) {
+          return null;
+        }
+        return getCurrentPluginConversationBinding({
+          pluginRoot,
+          conversation: {
+            channel: "slack",
+            accountId: handlerContext.accountId,
+            conversationId: handlerContext.conversationId,
+            parentConversationId: handlerContext.parentConversationId,
+            threadId: handlerContext.threadId,
           },
         });
       },
