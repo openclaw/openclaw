@@ -119,7 +119,6 @@ function buildCoreDistEntries(): Record<string, string> {
     // Ensure this module is bundled as an entry so legacy CLI shims can resolve its exports.
     "cli/daemon-cli": "src/cli/daemon-cli.ts",
     "infra/warning-filter": "src/infra/warning-filter.ts",
-    extensionAPI: "src/extensionAPI.ts",
     // Keep sync lazy-runtime channel modules as concrete dist files.
     "channels/plugins/agent-tools/whatsapp-login":
       "src/channels/plugins/agent-tools/whatsapp-login.ts",
