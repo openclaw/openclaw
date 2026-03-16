@@ -538,6 +538,7 @@ public struct AgentParams: Codable, Sendable {
     public let inputprovenance: [String: AnyCodable]?
     public let idempotencykey: String
     public let label: String?
+    public let zkhandoffcapsule: String?
 
     public init(
         message: String,
@@ -564,7 +565,8 @@ public struct AgentParams: Codable, Sendable {
         internalevents: [[String: AnyCodable]]?,
         inputprovenance: [String: AnyCodable]?,
         idempotencykey: String,
-        label: String?)
+        label: String?,
+        zkhandoffcapsule: String?)
     {
         self.message = message
         self.agentid = agentid
@@ -591,6 +593,7 @@ public struct AgentParams: Codable, Sendable {
         self.inputprovenance = inputprovenance
         self.idempotencykey = idempotencykey
         self.label = label
+        self.zkhandoffcapsule = zkhandoffcapsule
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -619,6 +622,7 @@ public struct AgentParams: Codable, Sendable {
         case inputprovenance = "inputProvenance"
         case idempotencykey = "idempotencyKey"
         case label
+        case zkhandoffcapsule = "zkHandoffCapsule"
     }
 }
 
