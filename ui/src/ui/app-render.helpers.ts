@@ -842,8 +842,10 @@ export function resolveSessionOptionGroups(
       counts.set(option.label, (counts.get(option.label) ?? 0) + 1);
     }
     for (const option of group.options) {
-      if ((counts.get(option.label) ?? 0) > 1 && option.scopeLabel !== option.label) {
-        option.label = `${option.label} · ${option.scopeLabel}`;
+      if ((counts.get(option.label) ?? 0) > 1) {
+        // Use scopeLabel when not already in label (e.g. "agent / main" has scopeLabel "main"); else use full key
+        const suffix = option.label.includes(option.scopeLabel) ? option.title : option.scopeLabel;
+        option.label = `${option.label} · ${suffix}`;
       }
     }
   }
@@ -883,7 +885,8 @@ function resolveSessionScopedOptionLabel(
   const label = row.label?.trim() || "";
   const displayName = row.displayName?.trim() || "";
   if ((label && label !== key) || (displayName && displayName !== key)) {
-    return resolveSessionDisplayName(key, row);
+    const customLabel = resolveSessionDisplayName(key, row);
+    return agentGroupLabel ? `${agentGroupLabel} / ${customLabel}` : customLabel;
   }
 
   return agentGroupLabel ? `${agentGroupLabel} / ${base}` : base;
