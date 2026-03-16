@@ -64,7 +64,7 @@ function createSyntheticOperatorClient(): GatewayRequestOptions["client"] {
   };
 }
 
-async function dispatchGatewayMethod<T>(
+export async function dispatchGatewayMethod<T>(
   method: string,
   params: Record<string, unknown>,
 ): Promise<T> {
@@ -73,7 +73,7 @@ async function dispatchGatewayMethod<T>(
   const isWebchatConnect = scope?.isWebchatConnect ?? (() => false);
   if (!context) {
     throw new Error(
-      `Plugin subagent dispatch requires a gateway request scope (method: ${method}). No scope set and no fallback context available.`,
+      `Plugin gateway dispatch requires a gateway request scope (method: ${method}). No scope set and no fallback context available.`,
     );
   }
 
@@ -110,7 +110,9 @@ function createGatewaySubagentRuntime(): PluginRuntime["subagent"] {
       key: params.sessionKey,
       ...(params.limit != null && { limit: params.limit }),
     });
-    return { messages: Array.isArray(payload?.messages) ? payload.messages : [] };
+    return {
+      messages: Array.isArray(payload?.messages) ? payload.messages : [],
+    };
   };
 
   return {
@@ -119,7 +121,9 @@ function createGatewaySubagentRuntime(): PluginRuntime["subagent"] {
         sessionKey: params.sessionKey,
         message: params.message,
         deliver: params.deliver ?? false,
-        ...(params.extraSystemPrompt && { extraSystemPrompt: params.extraSystemPrompt }),
+        ...(params.extraSystemPrompt && {
+          extraSystemPrompt: params.extraSystemPrompt,
+        }),
         ...(params.lane && { lane: params.lane }),
         ...(params.idempotencyKey && { idempotencyKey: params.idempotencyKey }),
       });
@@ -130,13 +134,13 @@ function createGatewaySubagentRuntime(): PluginRuntime["subagent"] {
       return { runId };
     },
     async waitForRun(params) {
-      const payload = await dispatchGatewayMethod<{ status?: string; error?: string }>(
-        "agent.wait",
-        {
-          runId: params.runId,
-          ...(params.timeoutMs != null && { timeoutMs: params.timeoutMs }),
-        },
-      );
+      const payload = await dispatchGatewayMethod<{
+        status?: string;
+        error?: string;
+      }>("agent.wait", {
+        runId: params.runId,
+        ...(params.timeoutMs != null && { timeoutMs: params.timeoutMs }),
+      });
       const status = payload?.status;
       if (status !== "ok" && status !== "error" && status !== "timeout") {
         throw new Error(`Gateway agent.wait returned unexpected status: ${status}`);
@@ -187,6 +191,9 @@ export function loadGatewayPlugins(params: {
     coreGatewayHandlers: params.coreGatewayHandlers,
     runtimeOptions: {
       subagent: createGatewaySubagentRuntime(),
+      gateway: {
+        dispatchMethod: dispatchGatewayMethod,
+      },
     },
     preferSetupRuntimeForChannelPlugins: params.preferSetupRuntimeForChannelPlugins,
   });

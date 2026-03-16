@@ -46,8 +46,19 @@ function createUnavailableSubagentRuntime(): PluginRuntime["subagent"] {
   };
 }
 
+function createUnavailableGatewayRuntime(): PluginRuntime["gateway"] {
+  return {
+    dispatchMethod: () => {
+      throw new Error(
+        "Plugin runtime gateway.dispatchMethod is only available when running inside a gateway.",
+      );
+    },
+  };
+}
+
 export type CreatePluginRuntimeOptions = {
   subagent?: PluginRuntime["subagent"];
+  gateway?: PluginRuntime["gateway"];
 };
 
 export function createPluginRuntime(_options: CreatePluginRuntimeOptions = {}): PluginRuntime {
@@ -56,6 +67,7 @@ export function createPluginRuntime(_options: CreatePluginRuntimeOptions = {}): 
     config: createRuntimeConfig(),
     agent: createRuntimeAgent(),
     subagent: _options.subagent ?? createUnavailableSubagentRuntime(),
+    gateway: _options.gateway ?? createUnavailableGatewayRuntime(),
     system: createRuntimeSystem(),
     media: createRuntimeMedia(),
     tts: { textToSpeechTelephony },
