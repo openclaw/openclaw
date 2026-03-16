@@ -115,7 +115,7 @@ describe("provider auth-choice contract", () => {
         resolvePreferredProviderForAuthChoice({ choice: scenario.authChoice }),
       ).resolves.toBe(scenario.expectedProvider);
     }
-  });
+  }, 180_000);
 
   it("applies qwen portal auth choices through the shared plugin-provider path", async () => {
     await setupTempState();

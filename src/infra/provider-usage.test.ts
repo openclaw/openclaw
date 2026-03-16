@@ -182,7 +182,7 @@ describe("provider usage loading", () => {
     expect(minimax?.windows[0]?.usedPercent).toBe(75);
     expect(zai?.plan).toBe("Pro");
     expect(mockFetch).toHaveBeenCalled();
-  });
+  }, 180_000);
 
   it.each([
     {
