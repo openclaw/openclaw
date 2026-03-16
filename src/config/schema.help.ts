@@ -1047,6 +1047,16 @@ export const FIELD_HELP: Record<string, string> = {
     'Custom identifier-preservation instruction text used when identifierPolicy="custom". Keep this explicit and safety-focused so compaction summaries do not rewrite opaque IDs, URLs, hosts, or ports.',
   "agents.defaults.compaction.recentTurnsPreserve":
     "Number of most recent user/assistant turns kept verbatim outside safeguard summarization (default: 3). Raise this to preserve exact recent dialogue context, or lower it to maximize compaction savings.",
+  "agents.defaults.compaction.guard":
+    "Reserved repeated-compaction guard scaffolding for future loop protection. Keep this block for pre-staging loop-protection settings, but use it as config-only for now because it does not change runtime behavior until compaction guard logic is implemented.",
+  "agents.defaults.compaction.guard.enabled":
+    "Enables reserved repeated-compaction guard scaffolding. Default: false, and setting this currently has no runtime effect until repeated-compaction guard behavior exists.",
+  "agents.defaults.compaction.guard.maxCompactionsPerWindow":
+    "Maximum compaction events allowed within the rolling guard window before the future guard would escalate (range 2-20). Keep this small if you are pre-staging repeated-compaction protection settings.",
+  "agents.defaults.compaction.guard.windowMinutes":
+    "Rolling time window in minutes used by the future compaction guard when counting repeated compactions (range 1-1440). Use shorter windows for burst detection or longer ones for broader session-level protection.",
+  "agents.defaults.compaction.guard.escalation":
+    'Reserved escalation mode for future compaction guard trips. Use "recommend-reset" to pre-stage a future session-reset recommendation once guard behavior is implemented; no other values are currently accepted.',
   "agents.defaults.compaction.qualityGuard":
     "Optional quality-audit retry settings for safeguard compaction summaries. Leave this disabled unless you explicitly want summary audits and one-shot regeneration on failed checks.",
   "agents.defaults.compaction.qualityGuard.enabled":

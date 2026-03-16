@@ -224,4 +224,52 @@ describe("config schema regressions", () => {
 
     expect(res.ok).toBe(true);
   });
+
+  it('rejects compaction.guard escalation values other than "recommend-reset"', () => {
+    const res = validateConfigObject({
+      agents: {
+        defaults: {
+          compaction: {
+            guard: {
+              escalation: "reset-now",
+            },
+          },
+        },
+      },
+    });
+
+    expect(res.ok).toBe(false);
+    if (!res.ok) {
+      expect(
+        res.issues.some((issue) => issue.path === "agents.defaults.compaction.guard.escalation"),
+      ).toBe(true);
+    }
+  });
+
+  it("rejects compaction.guard numeric values outside conservative bounds", () => {
+    const res = validateConfigObject({
+      agents: {
+        defaults: {
+          compaction: {
+            guard: {
+              maxCompactionsPerWindow: 1,
+              windowMinutes: 1441,
+            },
+          },
+        },
+      },
+    });
+
+    expect(res.ok).toBe(false);
+    if (!res.ok) {
+      expect(
+        res.issues.some(
+          (issue) => issue.path === "agents.defaults.compaction.guard.maxCompactionsPerWindow",
+        ),
+      ).toBe(true);
+      expect(
+        res.issues.some((issue) => issue.path === "agents.defaults.compaction.guard.windowMinutes"),
+      ).toBe(true);
+    }
+  });
 });

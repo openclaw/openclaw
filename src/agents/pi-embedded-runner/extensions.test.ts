@@ -71,4 +71,36 @@ describe("buildEmbeddedExtensionFactories", () => {
       qualityGuardMaxRetries: 2,
     });
   });
+
+  it("wires compaction guard enablement into the safeguard runtime", () => {
+    const sessionManager = {} as SessionManager;
+    const model = {
+      id: "claude-sonnet-4-20250514",
+      contextWindow: 200_000,
+    } as Model<Api>;
+    const cfg = {
+      agents: {
+        defaults: {
+          compaction: {
+            mode: "safeguard",
+            guard: {
+              enabled: true,
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    buildEmbeddedExtensionFactories({
+      cfg,
+      sessionManager,
+      provider: "anthropic",
+      modelId: "claude-sonnet-4-20250514",
+      model,
+    });
+
+    expect(getCompactionSafeguardRuntime(sessionManager)).toMatchObject({
+      guardEnabled: true,
+    });
+  });
 });

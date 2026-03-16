@@ -1009,6 +1009,12 @@ Periodic heartbeat runs.
         reserveTokensFloor: 24000,
         identifierPolicy: "strict", // strict | off | custom
         identifierInstructions: "Preserve deployment IDs, ticket IDs, and host:port pairs exactly.", // used when identifierPolicy=custom
+        guard: {
+          enabled: false,
+          maxCompactionsPerWindow: 3,
+          windowMinutes: 30,
+          escalation: "recommend-reset",
+        },
         postCompactionSections: ["Session Startup", "Red Lines"], // [] disables reinjection
         model: "openrouter/anthropic/claude-sonnet-4-5", // optional compaction-only model override
         memoryFlush: {
@@ -1027,6 +1033,11 @@ Periodic heartbeat runs.
 - `timeoutSeconds`: maximum seconds allowed for a single compaction operation before OpenClaw aborts it. Default: `900`.
 - `identifierPolicy`: `strict` (default), `off`, or `custom`. `strict` prepends built-in opaque identifier retention guidance during compaction summarization.
 - `identifierInstructions`: optional custom identifier-preservation text used when `identifierPolicy=custom`.
+- `guard`: loop-aware compaction guard settings for safeguard compaction. Default: `{ enabled: false }`.
+- `guard.enabled`: when `true`, safeguard compaction can detect transcript-tail risk, score session health, strengthen compaction instructions for high-risk sessions, validate the post-compaction outcome, and emit conservative internal recommend-reset diagnostics when configured. When `false`, the guard path is an exact no-op.
+- `guard.maxCompactionsPerWindow`: maximum compaction events allowed within the rolling guard window before future escalation. Integer range: `2-20`. Parsed and validated today, but repeated-compaction window policy is still deferred.
+- `guard.windowMinutes`: rolling guard window in minutes. Integer range: `1-1440`. Parsed and validated today, but repeated-compaction window policy is still deferred.
+- `guard.escalation`: escalation policy for severe failed guarded compactions. Currently only `recommend-reset` is accepted. This emits an internal recommendation signal only; it does **not** automatically reset the session or send default user-facing chat output. See [Saturated Session Recovery](/reference/saturated-session-recovery).
 - `postCompactionSections`: optional AGENTS.md H2/H3 section names to re-inject after compaction. Defaults to `["Session Startup", "Red Lines"]`; set `[]` to disable reinjection. When unset or explicitly set to that default pair, older `Every Session`/`Safety` headings are also accepted as a legacy fallback.
 - `model`: optional `provider/model-id` override for compaction summarization only. Use this when the main session should keep one model but compaction summaries should run on another; when unset, compaction uses the session's primary model.
 - `memoryFlush`: silent agentic turn before auto-compaction to store durable memories. Skipped when workspace is read-only.
