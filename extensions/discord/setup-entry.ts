@@ -1,3 +1,3 @@
-import { discordPlugin } from "./src/channel.js";
+import { discordSetupPlugin } from "./src/channel.setup.js";
 
-export default { plugin: discordPlugin };
+export default { plugin: discordSetupPlugin };

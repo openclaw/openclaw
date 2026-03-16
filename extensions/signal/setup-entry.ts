@@ -1,3 +1,3 @@
-import { signalPlugin } from "./src/channel.js";
+import { signalSetupPlugin } from "./src/channel.setup.js";
 
-export default { plugin: signalPlugin };
+export default { plugin: signalSetupPlugin };

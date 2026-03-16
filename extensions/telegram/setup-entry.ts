@@ -1,3 +1,3 @@
-import { telegramPlugin } from "./src/channel.js";
+import { telegramSetupPlugin } from "./src/channel.setup.js";
 
-export default { plugin: telegramPlugin };
+export default { plugin: telegramSetupPlugin };

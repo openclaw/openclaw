@@ -1,3 +1,3 @@
-import { slackPlugin } from "./src/channel.js";
+import { slackSetupPlugin } from "./src/channel.setup.js";
 
-export default { plugin: slackPlugin };
+export default { plugin: slackSetupPlugin };
