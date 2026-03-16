@@ -6,11 +6,12 @@ import {
   hasConfiguredSecretInput,
   normalizeSecretInputString,
 } from "../config/types.secrets.js";
+import { resolvePluginWebSearchProviders } from "../plugins/web-search-providers.js";
 import type { RuntimeEnv } from "../runtime.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 import type { SecretInputMode } from "./onboard-types.js";
 
-export type SearchProvider = "brave" | "gemini" | "grok" | "kimi" | "perplexity";
+export type SearchProvider = string;
 
 type SearchProviderEntry = {
   value: SearchProvider;
@@ -21,48 +22,17 @@ type SearchProviderEntry = {
   signupUrl: string;
 };
 
-export const SEARCH_PROVIDER_OPTIONS: readonly SearchProviderEntry[] = [
-  {
-    value: "brave",
-    label: "Brave Search",
-    hint: "Structured results · country/language/time filters",
-    envKeys: ["BRAVE_API_KEY"],
-    placeholder: "BSA...",
-    signupUrl: "https://brave.com/search/api/",
-  },
-  {
-    value: "gemini",
-    label: "Gemini (Google Search)",
-    hint: "Google Search grounding · AI-synthesized",
-    envKeys: ["GEMINI_API_KEY"],
-    placeholder: "AIza...",
-    signupUrl: "https://aistudio.google.com/apikey",
-  },
-  {
-    value: "grok",
-    label: "Grok (xAI)",
-    hint: "xAI web-grounded responses",
-    envKeys: ["XAI_API_KEY"],
-    placeholder: "xai-...",
-    signupUrl: "https://console.x.ai/",
-  },
-  {
-    value: "kimi",
-    label: "Kimi (Moonshot)",
-    hint: "Moonshot web search",
-    envKeys: ["KIMI_API_KEY", "MOONSHOT_API_KEY"],
-    placeholder: "sk-...",
-    signupUrl: "https://platform.moonshot.cn/",
-  },
-  {
-    value: "perplexity",
-    label: "Perplexity Search",
-    hint: "Structured results · domain/country/language/time filters",
-    envKeys: ["PERPLEXITY_API_KEY"],
-    placeholder: "pplx-...",
-    signupUrl: "https://www.perplexity.ai/settings/api",
-  },
-] as const;
+export const SEARCH_PROVIDER_OPTIONS: readonly SearchProviderEntry[] =
+  resolvePluginWebSearchProviders({
+    bundledAllowlistCompat: true,
+  }).map((provider) => ({
+    value: provider.id,
+    label: provider.label,
+    hint: provider.hint,
+    envKeys: provider.envVars,
+    placeholder: provider.placeholder,
+    signupUrl: provider.signupUrl,
+  }));
 
 export function hasKeyInEnv(entry: SearchProviderEntry): boolean {
   return entry.envKeys.some((k) => Boolean(process.env[k]?.trim()));
@@ -70,18 +40,11 @@ export function hasKeyInEnv(entry: SearchProviderEntry): boolean {
 
 function rawKeyValue(config: OpenClawConfig, provider: SearchProvider): unknown {
   const search = config.tools?.web?.search;
-  switch (provider) {
-    case "brave":
-      return search?.apiKey;
-    case "gemini":
-      return search?.gemini?.apiKey;
-    case "grok":
-      return search?.grok?.apiKey;
-    case "kimi":
-      return search?.kimi?.apiKey;
-    case "perplexity":
-      return search?.perplexity?.apiKey;
-  }
+  const entry = resolvePluginWebSearchProviders({
+    config,
+    bundledAllowlistCompat: true,
+  }).find((candidate) => candidate.id === provider);
+  return entry?.getCredentialValue(search as Record<string, unknown> | undefined);
 }
 
 /** Returns the plaintext key string, or undefined for SecretRefs/missing. */
@@ -128,22 +91,12 @@ export function applySearchKey(
   key: SecretInput,
 ): OpenClawConfig {
   const search = { ...config.tools?.web?.search, provider, enabled: true };
-  switch (provider) {
-    case "brave":
-      search.apiKey = key;
-      break;
-    case "gemini":
-      search.gemini = { ...search.gemini, apiKey: key };
-      break;
-    case "grok":
-      search.grok = { ...search.grok, apiKey: key };
-      break;
-    case "kimi":
-      search.kimi = { ...search.kimi, apiKey: key };
-      break;
-    case "perplexity":
-      search.perplexity = { ...search.perplexity, apiKey: key };
-      break;
+  const entry = resolvePluginWebSearchProviders({
+    config,
+    bundledAllowlistCompat: true,
+  }).find((candidate) => candidate.id === provider);
+  if (entry) {
+    entry.setCredentialValue(search as Record<string, unknown>, key);
   }
   return {
     ...config,
@@ -225,7 +178,7 @@ export async function setupSearch(
     return SEARCH_PROVIDER_OPTIONS[0].value;
   })();
 
-  type PickerValue = SearchProvider | "__skip__";
+  type PickerValue = string;
   const choice = await prompter.select<PickerValue>({
     message: "Search provider",
     options: [
@@ -236,7 +189,7 @@ export async function setupSearch(
         hint: "Configure later with openclaw configure --section web",
       },
     ],
-    initialValue: defaultProvider as PickerValue,
+    initialValue: defaultProvider,
   });
 
   if (choice === "__skip__") {
