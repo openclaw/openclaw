@@ -5,7 +5,8 @@ const mocks = vi.hoisted(() => ({
   resolveDefaultAgentId: vi.fn(() => "main"),
   loadConfig: vi.fn(),
   loadOpenClawPlugins: vi.fn(),
-  loadPluginManifestRegistry: vi.fn(),
+  resolveConfiguredChannelPluginIds: vi.fn(),
+  resolveChannelPluginIds: vi.fn(),
   getActivePluginRegistry: vi.fn(),
 }));
 
@@ -22,8 +23,9 @@ vi.mock("../plugins/loader.js", () => ({
   loadOpenClawPlugins: mocks.loadOpenClawPlugins,
 }));
 
-vi.mock("../plugins/manifest-registry.js", () => ({
-  loadPluginManifestRegistry: mocks.loadPluginManifestRegistry,
+vi.mock("../plugins/channel-plugin-ids.js", () => ({
+  resolveConfiguredChannelPluginIds: mocks.resolveConfiguredChannelPluginIds,
+  resolveChannelPluginIds: mocks.resolveChannelPluginIds,
 }));
 
 vi.mock("../plugins/runtime.js", () => ({
@@ -38,13 +40,8 @@ describe("ensurePluginRegistryLoaded", () => {
       plugins: { enabled: true },
       channels: { telegram: { enabled: false } },
     });
-    mocks.loadPluginManifestRegistry.mockReturnValue({
-      plugins: [
-        { id: "telegram", channels: ["telegram"] },
-        { id: "slack", channels: ["slack"] },
-        { id: "openai", channels: [] },
-      ],
-    });
+    mocks.resolveConfiguredChannelPluginIds.mockReturnValue(["telegram"]);
+    mocks.resolveChannelPluginIds.mockReturnValue(["telegram", "slack"]);
     mocks.getActivePluginRegistry.mockReturnValue({
       plugins: [],
       channels: [],
