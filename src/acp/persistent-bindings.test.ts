@@ -148,7 +148,11 @@ function createDiscordPersistentSpec(overrides: Partial<BindingSpec> = {}): Bind
   } as BindingSpec;
 }
 
-function mockReadySession(params: { spec: BindingSpec; cwd: string }) {
+function mockReadySession(params: {
+  spec: BindingSpec;
+  cwd: string;
+  state?: "idle" | "running" | "error";
+}) {
   const sessionKey = buildConfiguredAcpSessionKey(params.spec);
   managerMocks.resolveSession.mockReturnValue({
     kind: "ready",
@@ -159,7 +163,7 @@ function mockReadySession(params: { spec: BindingSpec; cwd: string }) {
       runtimeSessionName: "existing",
       mode: params.spec.mode,
       runtimeOptions: { cwd: params.cwd },
-      state: "idle",
+      state: params.state ?? "idle",
       lastActivityAt: Date.now(),
     },
   });
@@ -631,6 +635,32 @@ describe("ensureConfiguredAcpBindingSession", () => {
     const sessionKey = mockReadySession({
       spec,
       cwd: "/workspace/other-repo",
+    });
+
+    const ensured = await ensureConfiguredAcpBindingSession({
+      cfg: baseCfg,
+      spec,
+    });
+
+    expect(ensured).toEqual({ ok: true, sessionKey });
+    expect(managerMocks.closeSession).toHaveBeenCalledTimes(1);
+    expect(managerMocks.closeSession).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionKey,
+        clearMeta: false,
+      }),
+    );
+    expect(managerMocks.initializeSession).toHaveBeenCalledTimes(1);
+  });
+
+  it("reinitializes a ready session when the stored ACP session is in error state", async () => {
+    const spec = createDiscordPersistentSpec({
+      cwd: "/home/bob/clawd",
+    });
+    const sessionKey = mockReadySession({
+      spec,
+      cwd: "/home/bob/clawd",
+      state: "error",
     });
 
     const ensured = await ensureConfiguredAcpBindingSession({

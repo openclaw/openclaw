@@ -16,6 +16,10 @@ function sessionMatchesConfiguredBinding(params: {
   spec: ConfiguredAcpBindingSpec;
   meta: SessionAcpMeta;
 }): boolean {
+  if (params.meta.state === "error") {
+    return false;
+  }
+
   const desiredAgent = (params.spec.acpAgentId ?? params.spec.agentId).trim().toLowerCase();
   const currentAgent = (params.meta.agent ?? "").trim().toLowerCase();
   if (!currentAgent || currentAgent !== desiredAgent) {
