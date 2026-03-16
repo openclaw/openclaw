@@ -1,7 +1,4 @@
-import { listEnabledDiscordAccounts } from "../../extensions/discord/src/accounts.js";
-import { isDiscordExecApprovalClientEnabled } from "../../extensions/discord/src/exec-approvals.js";
-import { listEnabledTelegramAccounts } from "../../extensions/telegram/src/accounts.js";
-import { isTelegramExecApprovalClientEnabled } from "../../extensions/telegram/src/exec-approvals.js";
+import { getChannelPlugin, listChannelPlugins } from "../channels/plugins/index.js";
 import { loadConfig, type OpenClawConfig } from "../config/config.js";
 import { INTERNAL_MESSAGE_CHANNEL, normalizeMessageChannel } from "../utils/message-channel.js";
 
@@ -37,46 +34,18 @@ export function resolveExecApprovalInitiatingSurfaceState(params: {
   }
 
   const cfg = params.cfg ?? loadConfig();
-  if (channel === "telegram") {
-    return isTelegramExecApprovalClientEnabled({ cfg, accountId: params.accountId })
-      ? { kind: "enabled", channel, channelLabel }
-      : { kind: "disabled", channel, channelLabel };
-  }
-  if (channel === "discord") {
-    return isDiscordExecApprovalClientEnabled({ cfg, accountId: params.accountId })
-      ? { kind: "enabled", channel, channelLabel }
-      : { kind: "disabled", channel, channelLabel };
+  const state = getChannelPlugin(channel)?.execApprovals?.getInitiatingSurfaceState?.({
+    cfg,
+    accountId: params.accountId,
+  });
+  if (state) {
+    return { ...state, channel, channelLabel };
   }
   return { kind: "unsupported", channel, channelLabel };
 }
 
-function hasExecApprovalDmRoute(
-  accounts: Array<{
-    config: {
-      execApprovals?: {
-        enabled?: boolean;
-        approvers?: unknown[];
-        target?: string;
-      };
-    };
-  }>,
-): boolean {
-  for (const account of accounts) {
-    const execApprovals = account.config.execApprovals;
-    if (!execApprovals?.enabled || (execApprovals.approvers?.length ?? 0) === 0) {
-      continue;
-    }
-    const target = execApprovals.target ?? "dm";
-    if (target === "dm" || target === "both") {
-      return true;
-    }
-  }
-  return false;
-}
-
 export function hasConfiguredExecApprovalDmRoute(cfg: OpenClawConfig): boolean {
-  return (
-    hasExecApprovalDmRoute(listEnabledDiscordAccounts(cfg)) ||
-    hasExecApprovalDmRoute(listEnabledTelegramAccounts(cfg))
+  return listChannelPlugins().some(
+    (plugin) => plugin.execApprovals?.hasConfiguredDmRoute?.({ cfg }) ?? false,
   );
 }

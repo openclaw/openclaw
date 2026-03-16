@@ -1195,11 +1195,11 @@ A provider plugin can participate in five distinct phases:
    `auth[].run(ctx)` performs OAuth, API-key capture, device code, or custom
    setup and returns auth profiles plus optional config patches.
 2. **Non-interactive setup**
-   `auth[].runNonInteractive(ctx)` handles `openclaw setup --wizard --non-interactive`
+   `auth[].runNonInteractive(ctx)` handles `openclaw onboard --non-interactive`
    without prompts. Use this when the provider needs custom headless setup
    beyond the built-in simple API-key paths.
 3. **Wizard integration**
-   `wizard.setup` adds an entry to `openclaw setup --wizard`.
+   `wizard.setup` adds an entry to `openclaw onboard`.
    `wizard.modelPicker` adds a setup entry to the model picker.
 4. **Implicit discovery**
    `discovery.run(ctx)` can contribute provider config automatically during
@@ -1275,6 +1275,7 @@ errors instead.
 - `groupLabel`: group label
 - `groupHint`: group hint
 - `methodId`: auth method to run
+- `modelAllowlist`: optional post-auth allowlist policy (`allowedKeys`, `initialSelections`, `message`)
 
 `wizard.modelPicker` controls how a provider appears as a "set this up now"
 entry in model selection:
@@ -1360,7 +1361,7 @@ or more auth methods (OAuth, API key, device code, etc.). Those methods can
 power:
 
 - `openclaw models auth login --provider <id> [--method <id>]`
-- `openclaw setup --wizard`
+- `openclaw onboard`
 - model-picker “custom provider” setup entries
 - implicit provider discovery during model resolution/listing
 
@@ -1435,8 +1436,13 @@ Notes:
   for headless onboarding.
 - Return `configPatch` when you need to add default models or provider config.
 - Return `defaultModel` so `--set-default` can update agent defaults.
-- `wizard.setup` adds a provider choice to `openclaw setup --wizard`.
+- `wizard.setup` adds a provider choice to onboarding surfaces such as
+  `openclaw onboard` / `openclaw setup --wizard`.
+- `wizard.setup.modelAllowlist` lets the provider narrow the follow-up model
+  allowlist prompt during onboarding/configure.
 - `wizard.modelPicker` adds a “setup this provider” entry to the model picker.
+- `deprecatedProfileIds` lets the provider own `openclaw doctor` cleanup for
+  retired auth-profile ids.
 - `discovery.run` returns either `{ provider }` for the plugin’s own provider id
   or `{ providers }` for multi-provider discovery.
 - `discovery.order` controls when the provider runs relative to built-in
