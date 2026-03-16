@@ -100,10 +100,16 @@ async function resumeOrphanedSession(params: {
       },
       timeoutMs: 10_000,
     });
-    replaceSubagentRunAfterSteer({
+    const remapped = replaceSubagentRunAfterSteer({
       previousRunId: params.originalRunId,
       nextRunId: result.runId,
     });
+    if (!remapped) {
+      log.warn(
+        `resumed orphaned session ${params.sessionKey} but remap failed (old run already removed); treating as failure`,
+      );
+      return false;
+    }
     log.info(`resumed orphaned session: ${params.sessionKey}`);
     return true;
   } catch (err) {
@@ -125,9 +131,11 @@ async function resumeOrphanedSession(params: {
  */
 export async function recoverOrphanedSubagentSessions(params: {
   getActiveRuns: () => Map<string, SubagentRunRecord>;
+  /** Persisted across retries so already-resumed sessions are not resumed again. */
+  resumedSessionKeys?: Set<string>;
 }): Promise<{ recovered: number; failed: number; skipped: number }> {
   const result = { recovered: 0, failed: 0, skipped: 0 };
-  const resumedSessionKeys = new Set<string>();
+  const resumedSessionKeys = params.resumedSessionKeys ?? new Set<string>();
   const configChangePattern = /openclaw\.json|openclaw gateway restart|config\.patch/i;
 
   try {
@@ -236,6 +244,10 @@ export async function recoverOrphanedSubagentSessions(params: {
     }
   } catch (err) {
     log.warn(`orphan recovery scan failed: ${String(err)}`);
+    // Ensure retry logic fires for scan-level exceptions.
+    if (result.failed === 0) {
+      result.failed = 1;
+    }
   }
 
   if (result.recovered > 0 || result.failed > 0) {
@@ -265,9 +277,11 @@ export function scheduleOrphanRecovery(params: {
   const initialDelay = params.delayMs ?? DEFAULT_RECOVERY_DELAY_MS;
   const maxRetries = params.maxRetries ?? MAX_RECOVERY_RETRIES;
 
+  const resumedSessionKeys = new Set<string>();
+
   const attemptRecovery = (attempt: number, delay: number) => {
     setTimeout(() => {
-      void recoverOrphanedSubagentSessions(params)
+      void recoverOrphanedSubagentSessions({ ...params, resumedSessionKeys })
         .then((result) => {
           if (result.failed > 0 && attempt < maxRetries) {
             const nextDelay = delay * RETRY_BACKOFF_MULTIPLIER;
