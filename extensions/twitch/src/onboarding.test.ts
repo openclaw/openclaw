@@ -1,5 +1,5 @@
 /**
- * Tests for onboarding.ts helpers
+ * Tests for setup-surface.ts helpers
  *
  * Tests cover:
  * - promptToken helper
@@ -14,11 +14,6 @@
 import type { WizardPrompter } from "openclaw/plugin-sdk/twitch";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { TwitchAccountConfig } from "./types.js";
-
-vi.mock("openclaw/plugin-sdk/twitch", () => ({
-  formatDocsLink: (url: string, fallback: string) => fallback || url,
-  promptChannelAccessConfig: vi.fn(async () => null),
-}));
 
 // Mock the helpers we're testing
 const mockPromptText = vi.fn();
@@ -35,7 +30,7 @@ const mockAccount: TwitchAccountConfig = {
   channel: "#testchannel",
 };
 
-describe("onboarding helpers", () => {
+describe("setup surface helpers", () => {
   beforeEach(() => {
     vi.clearAllMocks();
   });
@@ -46,7 +41,7 @@ describe("onboarding helpers", () => {
 
   describe("promptToken", () => {
     it("should return existing token when user confirms to keep it", async () => {
-      const { promptToken } = await import("./onboarding.js");
+      const { promptToken } = await import("./setup-surface.js");
 
       mockPromptConfirm.mockResolvedValue(true);
 
@@ -61,7 +56,7 @@ describe("onboarding helpers", () => {
     });
 
     it("should prompt for new token when user doesn't keep existing", async () => {
-      const { promptToken } = await import("./onboarding.js");
+      const { promptToken } = await import("./setup-surface.js");
 
       mockPromptConfirm.mockResolvedValue(false);
       mockPromptText.mockResolvedValue("oauth:newtoken123");
@@ -77,7 +72,7 @@ describe("onboarding helpers", () => {
     });
 
     it("should use env token as initial value when provided", async () => {
-      const { promptToken } = await import("./onboarding.js");
+      const { promptToken } = await import("./setup-surface.js");
 
       mockPromptConfirm.mockResolvedValue(false);
       mockPromptText.mockResolvedValue("oauth:fromenv");
@@ -92,7 +87,7 @@ describe("onboarding helpers", () => {
     });
 
     it("should validate token format", async () => {
-      const { promptToken } = await import("./onboarding.js");
+      const { promptToken } = await import("./setup-surface.js");
 
       // Set up mocks - user doesn't want to keep existing token
       mockPromptConfirm.mockResolvedValueOnce(false);
@@ -124,7 +119,7 @@ describe("onboarding helpers", () => {
     });
 
     it("should return early when no existing token and no env token", async () => {
-      const { promptToken } = await import("./onboarding.js");
+      const { promptToken } = await import("./setup-surface.js");
 
       mockPromptText.mockResolvedValue("oauth:newtoken");
 
@@ -137,7 +132,7 @@ describe("onboarding helpers", () => {
 
   describe("promptUsername", () => {
     it("should prompt for username with validation", async () => {
-      const { promptUsername } = await import("./onboarding.js");
+      const { promptUsername } = await import("./setup-surface.js");
 
       mockPromptText.mockResolvedValue("mybot");
 
@@ -152,7 +147,7 @@ describe("onboarding helpers", () => {
     });
 
     it("should use existing username as initial value", async () => {
-      const { promptUsername } = await import("./onboarding.js");
+      const { promptUsername } = await import("./setup-surface.js");
 
       mockPromptText.mockResolvedValue("testbot");
 
@@ -168,7 +163,7 @@ describe("onboarding helpers", () => {
 
   describe("promptClientId", () => {
     it("should prompt for client ID with validation", async () => {
-      const { promptClientId } = await import("./onboarding.js");
+      const { promptClientId } = await import("./setup-surface.js");
 
       mockPromptText.mockResolvedValue("abc123xyz");
 
@@ -185,7 +180,7 @@ describe("onboarding helpers", () => {
 
   describe("promptChannelName", () => {
     it("should return channel name when provided", async () => {
-      const { promptChannelName } = await import("./onboarding.js");
+      const { promptChannelName } = await import("./setup-surface.js");
 
       mockPromptText.mockResolvedValue("#mychannel");
 
@@ -195,7 +190,7 @@ describe("onboarding helpers", () => {
     });
 
     it("should require a non-empty channel name", async () => {
-      const { promptChannelName } = await import("./onboarding.js");
+      const { promptChannelName } = await import("./setup-surface.js");
 
       mockPromptText.mockResolvedValue("");
 
@@ -210,7 +205,7 @@ describe("onboarding helpers", () => {
 
   describe("promptRefreshTokenSetup", () => {
     it("should return empty object when user declines", async () => {
-      const { promptRefreshTokenSetup } = await import("./onboarding.js");
+      const { promptRefreshTokenSetup } = await import("./setup-surface.js");
 
       mockPromptConfirm.mockResolvedValue(false);
 
@@ -224,7 +219,7 @@ describe("onboarding helpers", () => {
     });
 
     it("should prompt for credentials when user accepts", async () => {
-      const { promptRefreshTokenSetup } = await import("./onboarding.js");
+      const { promptRefreshTokenSetup } = await import("./setup-surface.js");
 
       mockPromptConfirm
         .mockResolvedValueOnce(true) // First call: useRefresh
@@ -242,7 +237,7 @@ describe("onboarding helpers", () => {
     });
 
     it("should use existing values as initial prompts", async () => {
-      const { promptRefreshTokenSetup } = await import("./onboarding.js");
+      const { promptRefreshTokenSetup } = await import("./setup-surface.js");
 
       const accountWithRefresh = {
         ...mockAccount,
@@ -267,7 +262,7 @@ describe("onboarding helpers", () => {
 
   describe("configureWithEnvToken", () => {
     it("should return null when user declines env token", async () => {
-      const { configureWithEnvToken } = await import("./onboarding.js");
+      const { configureWithEnvToken } = await import("./setup-surface.js");
 
       // Reset and set up mock - user declines env token
       mockPromptConfirm.mockReset().mockResolvedValue(false as never);
@@ -287,7 +282,7 @@ describe("onboarding helpers", () => {
     });
 
     it("should prompt for username and clientId when using env token", async () => {
-      const { configureWithEnvToken } = await import("./onboarding.js");
+      const { configureWithEnvToken } = await import("./setup-surface.js");
 
       // Reset and set up mocks - user accepts env token
       mockPromptConfirm.mockReset().mockResolvedValue(true as never);
