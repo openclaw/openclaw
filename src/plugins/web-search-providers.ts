@@ -1,3 +1,4 @@
+import type { PluginEntryConfig } from "../config/types.plugins.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { loadOpenClawPlugins, type PluginLoadOptions } from "./loader.js";
 import { createPluginLoaderLogger } from "./logger.js";
@@ -48,7 +49,7 @@ function withBundledWebSearchEnablementCompat(
 ): PluginLoadOptions["config"] {
   const existingEntries = config?.plugins?.entries ?? {};
   let changed = false;
-  const nextEntries: Record<string, unknown> = { ...existingEntries };
+  const nextEntries: Record<string, PluginEntryConfig> = { ...existingEntries };
 
   for (const pluginId of BUNDLED_WEB_SEARCH_ALLOWLIST_COMPAT_PLUGIN_IDS) {
     if (existingEntries[pluginId] !== undefined) {
