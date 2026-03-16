@@ -51,6 +51,11 @@ function resolveReplyToMessageId(params: {
   // Check replyToMode config - if "off", never reply to messages
   const replyToMode = params.cfg?.channels?.feishu?.replyToMode;
   if (replyToMode === "off") {
+    // Still respect explicit replyToId, just don't use thread fallback
+    const replyToId = params.replyToId?.trim();
+    if (replyToId) {
+      return replyToId;
+    }
     return undefined;
   }
   

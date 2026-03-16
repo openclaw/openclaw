@@ -180,6 +180,7 @@ const FeishuSharedConfigShape = {
   reactionNotifications: ReactionNotificationModeSchema,
   typingIndicator: z.boolean().optional(),
   resolveSenderNames: z.boolean().optional(),
+  actions: z.object({ reactions: z.boolean().optional() }).optional(),
 };
 
 /**
