@@ -131,7 +131,7 @@ function isCompatiblePluginIdHint(idHint: string | undefined, manifestId: string
   if (normalizedHint === manifestId) {
     return true;
   }
-  return normalizedHint === `${manifestId}-provider`;
+  return normalizedHint === `${manifestId}-provider` || normalizedHint === `${manifestId}-plugin`;
 }
 
 function buildRecord(params: {
