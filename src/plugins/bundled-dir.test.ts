@@ -7,7 +7,6 @@ import { resolveBundledPluginsDir } from "./bundled-dir.js";
 const tempDirs: string[] = [];
 const originalCwd = process.cwd();
 const originalBundledDir = process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
-const originalWatchMode = process.env.OPENCLAW_WATCH_MODE;
 
 function makeRepoRoot(prefix: string): string {
   const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
@@ -22,20 +21,15 @@ afterEach(() => {
   } else {
     process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = originalBundledDir;
   }
-  if (originalWatchMode === undefined) {
-    delete process.env.OPENCLAW_WATCH_MODE;
-  } else {
-    process.env.OPENCLAW_WATCH_MODE = originalWatchMode;
-  }
   for (const dir of tempDirs.splice(0, tempDirs.length)) {
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
 
 describe("resolveBundledPluginsDir", () => {
-  it("prefers source extensions from the package root in watch mode", () => {
-    const repoRoot = makeRepoRoot("openclaw-bundled-dir-watch-");
-    fs.mkdirSync(path.join(repoRoot, "extensions"), { recursive: true });
+  it("prefers the staged runtime bundled plugin tree from the package root", () => {
+    const repoRoot = makeRepoRoot("openclaw-bundled-dir-runtime-");
+    fs.mkdirSync(path.join(repoRoot, "dist-runtime", "extensions"), { recursive: true });
     fs.mkdirSync(path.join(repoRoot, "dist", "extensions"), { recursive: true });
     fs.writeFileSync(
       path.join(repoRoot, "package.json"),
@@ -44,10 +38,9 @@ describe("resolveBundledPluginsDir", () => {
     );
 
     process.chdir(repoRoot);
-    process.env.OPENCLAW_WATCH_MODE = "1";
 
     expect(fs.realpathSync(resolveBundledPluginsDir() ?? "")).toBe(
-      fs.realpathSync(path.join(repoRoot, "extensions")),
+      fs.realpathSync(path.join(repoRoot, "dist-runtime", "extensions")),
     );
   });
 });
