@@ -382,10 +382,10 @@ export const matrixPlugin: ChannelPlugin<ResolvedMatrixAccount> = {
     chunker: (text, limit) => getMatrixRuntime().channel.text.chunkMarkdownText(text, limit),
     chunkerMode: "markdown",
     textChunkLimit: 4000,
-    sendText: async (params) => (await loadMatrixChannelRuntime()).matrixOutbound.sendText(params),
+    sendText: async (params) => (await loadMatrixChannelRuntime()).matrixOutbound.sendText!(params),
     sendMedia: async (params) =>
-      (await loadMatrixChannelRuntime()).matrixOutbound.sendMedia(params),
-    sendPoll: async (params) => (await loadMatrixChannelRuntime()).matrixOutbound.sendPoll(params),
+      (await loadMatrixChannelRuntime()).matrixOutbound.sendMedia!(params),
+    sendPoll: async (params) => (await loadMatrixChannelRuntime()).matrixOutbound.sendPoll!(params),
   },
   status: {
     defaultRuntime: {

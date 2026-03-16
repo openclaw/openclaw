@@ -65,10 +65,11 @@ const feishuOnboarding = {
         },
       },
     }),
-    promptAllowFrom: async (cfg, prompter) =>
-      (await loadFeishuChannelRuntime()).feishuOnboardingAdapter.dmPolicy!.promptAllowFrom({
+    promptAllowFrom: async ({ cfg, prompter, accountId }) =>
+      (await loadFeishuChannelRuntime()).feishuOnboardingAdapter.dmPolicy!.promptAllowFrom!({
         cfg,
         prompter,
+        accountId,
       }),
   },
   disable: (cfg) => ({
