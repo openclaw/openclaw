@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   readBestEffortConfig: vi.fn(),
@@ -12,6 +12,7 @@ const mocks = vi.hoisted(() => ({
   probeGateway: vi.fn(),
   resolveGatewayProbeAuthResolution: vi.fn(),
   ensurePluginRegistryLoaded: vi.fn(),
+  getMemorySearchManager: vi.fn(),
 }));
 
 vi.mock("../cli/progress.js", () => ({
@@ -53,7 +54,7 @@ vi.mock("../infra/os-summary.js", () => ({
 
 vi.mock("./status.scan.deps.runtime.js", () => ({
   getTailnetHostname: vi.fn(),
-  getMemorySearchManager: vi.fn(),
+  getMemorySearchManager: mocks.getMemorySearchManager,
 }));
 
 vi.mock("../gateway/call.js", () => ({
@@ -81,6 +82,17 @@ vi.mock("../cli/plugin-registry.js", () => ({
 import { scanStatus } from "./status.scan.js";
 
 describe("scanStatus", () => {
+  beforeEach(() => {
+    mocks.getMemorySearchManager.mockReset();
+    mocks.getMemorySearchManager.mockResolvedValue({
+      manager: {
+        probeVectorAvailability: vi.fn(async () => true),
+        status: vi.fn(() => ({ available: true })),
+        close: vi.fn(async () => undefined),
+      },
+    });
+  });
+
   it("passes sourceConfig into buildChannelsTable for summary-mode status output", async () => {
     mocks.readBestEffortConfig.mockResolvedValue({
       marker: "source",
@@ -319,6 +331,119 @@ describe("scanStatus", () => {
 
     expect(mocks.ensurePluginRegistryLoaded).toHaveBeenCalledWith({
       scope: "configured-channels",
+    });
+  });
+
+  it("skips memory manager startup for default status --json", async () => {
+    mocks.readBestEffortConfig.mockResolvedValue({
+      session: {},
+      gateway: {},
+      plugins: {},
+    });
+    mocks.resolveCommandSecretRefsViaGateway.mockResolvedValue({
+      resolvedConfig: {
+        session: {},
+        gateway: {},
+        plugins: {},
+      },
+      diagnostics: [],
+    });
+    mocks.getUpdateCheckResult.mockResolvedValue({
+      installKind: "git",
+      git: null,
+      registry: null,
+    });
+    mocks.getAgentLocalStatuses.mockResolvedValue({
+      defaultId: "main",
+      agents: [],
+    });
+    mocks.getStatusSummary.mockResolvedValue({
+      linkChannel: undefined,
+      sessions: { count: 0, paths: [], defaults: {}, recent: [] },
+    });
+    mocks.buildGatewayConnectionDetails.mockReturnValue({
+      url: "ws://127.0.0.1:18789",
+      urlSource: "default",
+    });
+    mocks.resolveGatewayProbeAuthResolution.mockReturnValue({
+      auth: {},
+      warning: undefined,
+    });
+    mocks.probeGateway.mockResolvedValue({
+      ok: false,
+      url: "ws://127.0.0.1:18789",
+      connectLatencyMs: null,
+      error: "timeout",
+      close: null,
+      health: null,
+      status: null,
+      presence: null,
+      configSnapshot: null,
+    });
+
+    const result = await scanStatus({ json: true }, {} as never);
+
+    expect(mocks.getMemorySearchManager).not.toHaveBeenCalled();
+    expect(result.memory).toBeNull();
+  });
+
+  it("keeps memory status available for deep status --json", async () => {
+    mocks.readBestEffortConfig.mockResolvedValue({
+      session: {},
+      gateway: {},
+      plugins: {},
+    });
+    mocks.resolveCommandSecretRefsViaGateway.mockResolvedValue({
+      resolvedConfig: {
+        session: {},
+        gateway: {},
+        plugins: {},
+      },
+      diagnostics: [],
+    });
+    mocks.getUpdateCheckResult.mockResolvedValue({
+      installKind: "git",
+      git: null,
+      registry: null,
+    });
+    mocks.getAgentLocalStatuses.mockResolvedValue({
+      defaultId: "main",
+      agents: [],
+    });
+    mocks.getStatusSummary.mockResolvedValue({
+      linkChannel: undefined,
+      sessions: { count: 0, paths: [], defaults: {}, recent: [] },
+    });
+    mocks.buildGatewayConnectionDetails.mockReturnValue({
+      url: "ws://127.0.0.1:18789",
+      urlSource: "default",
+    });
+    mocks.resolveGatewayProbeAuthResolution.mockReturnValue({
+      auth: {},
+      warning: undefined,
+    });
+    mocks.probeGateway.mockResolvedValue({
+      ok: false,
+      url: "ws://127.0.0.1:18789",
+      connectLatencyMs: null,
+      error: "timeout",
+      close: null,
+      health: null,
+      status: null,
+      presence: null,
+      configSnapshot: null,
+    });
+
+    const result = await scanStatus({ json: true, deep: true }, {} as never);
+
+    expect(mocks.getMemorySearchManager).toHaveBeenCalledWith({
+      cfg: expect.objectContaining({ plugins: {} }),
+      agentId: "main",
+      purpose: "status",
+    });
+    expect(result.memory).toEqual({
+      agentId: "main",
+      available: true,
     });
   });
 });

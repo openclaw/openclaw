@@ -204,6 +204,7 @@ async function resolveMemoryStatusSnapshot(params: {
 }
 
 async function scanStatusJsonFast(opts: {
+  deep?: boolean;
   timeoutMs?: number;
   all?: boolean;
 }): Promise<StatusScanResult> {
@@ -268,8 +269,10 @@ async function scanStatusJsonFast(opts: {
     ? pickGatewaySelfPresence(gatewayProbe.presence)
     : null;
   const memoryPlugin = resolveMemoryPluginStatus(cfg);
-  const memoryPromise = resolveMemoryStatusSnapshot({ cfg, agentStatus, memoryPlugin });
-  const memory = await memoryPromise;
+  const includeMemorySnapshot = opts.deep === true || opts.all === true;
+  const memory = includeMemorySnapshot
+    ? await resolveMemoryStatusSnapshot({ cfg, agentStatus, memoryPlugin })
+    : null;
 
   return {
     cfg,
@@ -300,13 +303,18 @@ async function scanStatusJsonFast(opts: {
 export async function scanStatus(
   opts: {
     json?: boolean;
+    deep?: boolean;
     timeoutMs?: number;
     all?: boolean;
   },
   _runtime: RuntimeEnv,
 ): Promise<StatusScanResult> {
   if (opts.json) {
-    return await scanStatusJsonFast({ timeoutMs: opts.timeoutMs, all: opts.all });
+    return await scanStatusJsonFast({
+      deep: opts.deep,
+      timeoutMs: opts.timeoutMs,
+      all: opts.all,
+    });
   }
   return await withProgress(
     {

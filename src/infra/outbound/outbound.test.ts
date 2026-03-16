@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { discordPlugin } from "../../../extensions/discord/src/channel.js";
+import { importFreshModule } from "../../../test/helpers/import-fresh.js";
 import type { ReplyPayload } from "../../auto-reply/types.js";
 import { setDefaultChannelPluginRegistryForTests } from "../../commands/channel-test-helpers.js";
 import type { OpenClawConfig } from "../../config/config.js";
@@ -30,11 +31,7 @@ import {
   formatGatewaySummary,
   formatOutboundDeliverySummary,
 } from "./format.js";
-import {
-  applyCrossContextDecoration,
-  buildCrossContextDecoration,
-  enforceCrossContextPolicy,
-} from "./outbound-policy.js";
+import { enforceCrossContextPolicy } from "./outbound-policy.js";
 import { resolveOutboundSessionRoute } from "./outbound-session.js";
 import {
   formatOutboundPayloadLog,
@@ -48,6 +45,15 @@ beforeEach(() => {
     createTestRegistry([{ pluginId: "discord", plugin: discordPlugin, source: "test" }]),
   );
 });
+let outboundPolicyImportScope = 0;
+
+async function loadFreshOutboundPolicy() {
+  vi.resetModules();
+  return await importFreshModule<typeof import("./outbound-policy.js")>(
+    import.meta.url,
+    `./outbound-policy.js?scope=outbound-${outboundPolicyImportScope++}`,
+  );
+}
 
 describe("delivery-queue", () => {
   let tmpDir: string;
@@ -913,6 +919,8 @@ describe("outbound policy", () => {
   });
 
   it("uses components when available and preferred", async () => {
+    const { applyCrossContextDecoration, buildCrossContextDecoration } =
+      await loadFreshOutboundPolicy();
     const decoration = await buildCrossContextDecoration({
       cfg: discordConfig,
       channel: "discord",

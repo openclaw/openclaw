@@ -1,10 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { discordPlugin } from "../../extensions/discord/src/channel.js";
 import { telegramPlugin } from "../../extensions/telegram/src/channel.js";
+import { importFreshModule } from "../../test/helpers/import-fresh.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { createTestRegistry } from "../test-utils/channel-plugins.js";
-import { createExecApprovalForwarder } from "./exec-approval-forwarder.js";
+
+let importScope = 0;
+let createExecApprovalForwarder: (typeof import("./exec-approval-forwarder.js"))["createExecApprovalForwarder"];
 
 const baseRequest = {
   id: "req-1",
@@ -144,8 +147,12 @@ async function expectSessionFilterRequestResult(params: {
 }
 
 describe("exec approval forwarder", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
     setActivePluginRegistry(defaultRegistry);
+    vi.resetModules();
+    ({ createExecApprovalForwarder } = await importFreshModule<
+      typeof import("./exec-approval-forwarder.js")
+    >(import.meta.url, `./exec-approval-forwarder.js?scope=forwarder-${importScope++}`));
   });
 
   afterEach(() => {

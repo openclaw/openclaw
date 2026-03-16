@@ -625,10 +625,13 @@ describe("discoverOpenClawPlugins", () => {
       },
     });
 
-    expect(first.candidates.find((candidate) => candidate.idHint === "demo")?.source).toBe(pluginA);
-    expect(second.candidates.find((candidate) => candidate.idHint === "demo")?.source).toBe(
-      pluginB,
-    );
+    const firstSource = first.candidates.find((candidate) => candidate.idHint === "demo")?.source;
+    const secondSource = second.candidates.find((candidate) => candidate.idHint === "demo")?.source;
+
+    expect(firstSource).toBeDefined();
+    expect(secondSource).toBeDefined();
+    expect(canonicalExistingPath(String(firstSource))).toBe(canonicalExistingPath(pluginA));
+    expect(canonicalExistingPath(String(secondSource))).toBe(canonicalExistingPath(pluginB));
   });
 
   it("treats configured load-path order as cache-significant", () => {

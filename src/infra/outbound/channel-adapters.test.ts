@@ -1,18 +1,25 @@
-import { Separator, TextDisplay } from "@buape/carbon";
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { discordPlugin } from "../../../extensions/discord/src/channel.js";
-import { DiscordUiContainer } from "../../../extensions/discord/src/ui.js";
+import { importFreshModule } from "../../../test/helpers/import-fresh.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createTestRegistry } from "../../test-utils/channel-plugins.js";
-import { getChannelMessageAdapter } from "./channel-adapters.js";
+
+let importScope = 0;
+let getChannelMessageAdapter: (typeof import("./channel-adapters.js"))["getChannelMessageAdapter"];
+
+beforeEach(async () => {
+  setActivePluginRegistry(
+    createTestRegistry([{ pluginId: "discord", plugin: discordPlugin, source: "test" }]),
+  );
+  vi.resetModules();
+  const scope = `channel-adapters-${importScope++}`;
+  ({ getChannelMessageAdapter } = await importFreshModule<typeof import("./channel-adapters.js")>(
+    import.meta.url,
+    `./channel-adapters.js?scope=${scope}`,
+  ));
+});
 
 describe("getChannelMessageAdapter", () => {
-  beforeEach(() => {
-    setActivePluginRegistry(
-      createTestRegistry([{ pluginId: "discord", plugin: discordPlugin, source: "test" }]),
-    );
-  });
-
   it("returns the default adapter for non-discord channels", () => {
     expect(getChannelMessageAdapter("telegram")).toEqual({
       supportsComponentsV2: false,
@@ -31,14 +38,16 @@ describe("getChannelMessageAdapter", () => {
       cfg: {} as never,
       accountId: "primary",
     });
-    const container = components?.[0] as DiscordUiContainer | undefined;
+    const container = components?.[0] as
+      | { components: Array<{ constructor: { name: string } }> }
+      | undefined;
 
     expect(components).toHaveLength(1);
-    expect(container).toBeInstanceOf(DiscordUiContainer);
-    expect(container?.components).toEqual([
-      expect.any(TextDisplay),
-      expect.any(Separator),
-      expect.any(TextDisplay),
+    expect(container?.constructor.name).toBe("DiscordUiContainer");
+    expect(container?.components.map((component) => component.constructor.name)).toEqual([
+      "TextDisplay",
+      "Separator",
+      "TextDisplay",
     ]);
   });
 
@@ -49,9 +58,13 @@ describe("getChannelMessageAdapter", () => {
       message: "   ",
       cfg: {} as never,
     });
-    const container = components?.[0] as DiscordUiContainer | undefined;
+    const container = components?.[0] as
+      | { components: Array<{ constructor: { name: string } }> }
+      | undefined;
 
     expect(components).toHaveLength(1);
-    expect(container?.components).toEqual([expect.any(TextDisplay)]);
+    expect(container?.components.map((component) => component.constructor.name)).toEqual([
+      "TextDisplay",
+    ]);
   });
 });

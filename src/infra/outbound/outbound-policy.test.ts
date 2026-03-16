@@ -1,14 +1,32 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { discordPlugin } from "../../../extensions/discord/src/channel.js";
+import { importFreshModule } from "../../../test/helpers/import-fresh.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createTestRegistry } from "../../test-utils/channel-plugins.js";
-import {
-  applyCrossContextDecoration,
-  buildCrossContextDecoration,
-  enforceCrossContextPolicy,
-  shouldApplyCrossContextMarker,
-} from "./outbound-policy.js";
+
+let importScope = 0;
+let applyCrossContextDecoration: (typeof import("./outbound-policy.js"))["applyCrossContextDecoration"];
+let buildCrossContextDecoration: (typeof import("./outbound-policy.js"))["buildCrossContextDecoration"];
+let enforceCrossContextPolicy: (typeof import("./outbound-policy.js"))["enforceCrossContextPolicy"];
+let shouldApplyCrossContextMarker: (typeof import("./outbound-policy.js"))["shouldApplyCrossContextMarker"];
+
+beforeEach(async () => {
+  setActivePluginRegistry(
+    createTestRegistry([{ pluginId: "discord", plugin: discordPlugin, source: "test" }]),
+  );
+  vi.resetModules();
+  const scope = `outbound-policy-${importScope++}`;
+  ({
+    applyCrossContextDecoration,
+    buildCrossContextDecoration,
+    enforceCrossContextPolicy,
+    shouldApplyCrossContextMarker,
+  } = await importFreshModule<typeof import("./outbound-policy.js")>(
+    import.meta.url,
+    `./outbound-policy.js?scope=${scope}`,
+  ));
+});
 
 const slackConfig = {
   channels: {
@@ -26,12 +44,6 @@ const discordConfig = {
 } as OpenClawConfig;
 
 describe("outbound policy helpers", () => {
-  beforeEach(() => {
-    setActivePluginRegistry(
-      createTestRegistry([{ pluginId: "discord", plugin: discordPlugin, source: "test" }]),
-    );
-  });
-
   it("allows cross-provider sends when enabled", () => {
     const cfg = {
       ...slackConfig,
