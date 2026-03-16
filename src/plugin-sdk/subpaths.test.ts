@@ -18,10 +18,6 @@ const bundledExtensionSubpathLoaders = [
   { id: "diagnostics-otel", load: () => import("openclaw/plugin-sdk/diagnostics-otel") },
   { id: "diffs", load: () => import("openclaw/plugin-sdk/diffs") },
   { id: "feishu", load: () => import("openclaw/plugin-sdk/feishu") },
-  {
-    id: "google-gemini-cli-auth",
-    load: () => import("openclaw/plugin-sdk/google-gemini-cli-auth"),
-  },
   { id: "googlechat", load: () => import("openclaw/plugin-sdk/googlechat") },
   { id: "irc", load: () => import("openclaw/plugin-sdk/irc") },
   { id: "llm-task", load: () => import("openclaw/plugin-sdk/llm-task") },

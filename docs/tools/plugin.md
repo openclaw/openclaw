@@ -167,8 +167,7 @@ Important trust note:
 - Anthropic provider runtime — bundled as `anthropic` (enabled by default)
 - BytePlus provider catalog — bundled as `byteplus` (enabled by default)
 - Cloudflare AI Gateway provider catalog — bundled as `cloudflare-ai-gateway` (enabled by default)
-- Google Antigravity OAuth (provider auth) — bundled as `google-antigravity-auth` (disabled by default)
-- Gemini CLI OAuth (provider auth) — bundled as `google-gemini-cli-auth` (disabled by default)
+- Google web search + Gemini CLI OAuth — bundled as `google` (web search auto-loads it; provider auth stays opt-in)
 - GitHub Copilot provider runtime — bundled as `github-copilot` (enabled by default)
 - Hugging Face provider catalog — bundled as `huggingface` (enabled by default)
 - Kilo Gateway provider runtime — bundled as `kilocode` (enabled by default)
@@ -521,8 +520,7 @@ authoring plugins:
   `openclaw/plugin-sdk/acpx`, `openclaw/plugin-sdk/bluebubbles`,
   `openclaw/plugin-sdk/copilot-proxy`, `openclaw/plugin-sdk/device-pair`,
   `openclaw/plugin-sdk/diagnostics-otel`, `openclaw/plugin-sdk/diffs`,
-  `openclaw/plugin-sdk/feishu`,
-  `openclaw/plugin-sdk/google-gemini-cli-auth`, `openclaw/plugin-sdk/googlechat`,
+  `openclaw/plugin-sdk/feishu`, `openclaw/plugin-sdk/googlechat`,
   `openclaw/plugin-sdk/irc`, `openclaw/plugin-sdk/llm-task`,
   `openclaw/plugin-sdk/lobster`, `openclaw/plugin-sdk/matrix`,
   `openclaw/plugin-sdk/mattermost`, `openclaw/plugin-sdk/memory-core`,
