@@ -62,6 +62,11 @@ export async function listConfigBackups(
   configPath: string,
   ioFs: BackupRestoreFs = defaultFs,
 ): Promise<ConfigBackup[]> {
+  // Guard against undefined/null path
+  if (!configPath || typeof configPath !== "string") {
+    return [];
+  }
+
   const dir = path.dirname(configPath);
   const base = path.basename(configPath);
   const backups: ConfigBackup[] = [];
@@ -83,10 +88,12 @@ export async function listConfigBackups(
   // Check numbered and timestamped backups
   try {
     const entries = await ioFs.readdir(dir);
+    // Escape special regex characters in filename
+    const escapedBase = base.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
     for (const entry of entries) {
       // Match both numbered backups (.bak.1, .bak.2) and timestamped backups (.bak.2024-01-15_00-00-00)
       // Exclude failed backups (.failed-*)
-      const match = entry.match(new RegExp(`^${base}\\.bak\\.(.+)$`));
+      const match = entry.match(new RegExp(`^${escapedBase}\\.bak\\.(.+)$`));
       if (match && !entry.includes(".failed-")) {
         const fullPath = path.join(dir, entry);
         try {
@@ -262,6 +269,14 @@ export async function attemptConfigRollback(
   configPath: string,
   ioFs: BackupRestoreFs = defaultFs,
 ): Promise<{ restored: boolean; backupPath?: string; error?: string }> {
+  // Guard against undefined/null path
+  if (!configPath || typeof configPath !== "string") {
+    return {
+      restored: false,
+      error: "No config path provided for rollback",
+    };
+  }
+
   const backups = await listConfigBackups(configPath, ioFs);
 
   if (backups.length === 0) {
@@ -324,15 +339,22 @@ export async function cleanupFailedBackups(
   maxAge: number = 7 * 24 * 60 * 60 * 1000, // 7 days in ms
   ioFs: BackupRestoreFs = defaultFs,
 ): Promise<number> {
+  // Guard against undefined/null path
+  if (!configPath || typeof configPath !== "string") {
+    return 0;
+  }
+
   const dir = path.dirname(configPath);
   const base = path.basename(configPath);
+  // Escape special regex characters in filename
+  const escapedBase = base.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   const cutoff = Date.now() - maxAge;
   let cleaned = 0;
 
   try {
     const entries = await ioFs.readdir(dir);
     for (const entry of entries) {
-      if (entry.match(new RegExp(`^${base}\\.failed-\\d+$`))) {
+      if (entry.match(new RegExp(`^${escapedBase}\\.failed-\\d+$`))) {
         const fullPath = path.join(dir, entry);
         try {
           const stat = await ioFs.stat(fullPath);
