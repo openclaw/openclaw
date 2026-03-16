@@ -24,7 +24,7 @@ type RunCommandOptions = {
 };
 
 export type SandboxResolvedPath = {
-  hostPath: string;
+  hostPath?: string;
   relativePath: string;
   containerPath: string;
 };
