@@ -1,7 +1,26 @@
+import { createHash } from "node:crypto";
 import { normalizeChatType } from "../../channels/chat-type.js";
 import { resolveSenderLabel } from "../../channels/sender-label.js";
 import { formatZonedTimestamp } from "../../infra/format-time/format-datetime.js";
 import type { TemplateContext } from "../templating.js";
+
+function hashId(value: string): string {
+  return createHash("sha256").update(value).digest("hex").slice(0, 12);
+}
+
+function hashSenderId(value: string): string {
+  return `user_${hashId(value)}`;
+}
+
+function hashChatId(value: string): string {
+  const colonIdx = value.indexOf(":");
+  if (colonIdx > 0) {
+    const prefix = value.slice(0, colonIdx);
+    const id = value.slice(colonIdx + 1);
+    return `${prefix}:${hashId(id)}`;
+  }
+  return hashId(value);
+}
 
 function safeTrim(value: unknown): string | undefined {
   if (typeof value !== "string") {
@@ -42,7 +61,10 @@ function resolveInboundChannel(ctx: TemplateContext): string | undefined {
   return channelValue;
 }
 
-export function buildInboundMetaSystemPrompt(ctx: TemplateContext): string {
+export function buildInboundMetaSystemPrompt(
+  ctx: TemplateContext,
+  options?: { redactPII?: boolean },
+): string {
   const chatType = normalizeChatType(ctx.ChatType);
   const isDirect = !chatType || chatType === "direct";
 
@@ -59,7 +81,10 @@ export function buildInboundMetaSystemPrompt(ctx: TemplateContext): string {
 
   const payload = {
     schema: "openclaw.inbound_meta.v1",
-    chat_id: safeTrim(ctx.OriginatingTo),
+    chat_id:
+      options?.redactPII && safeTrim(ctx.OriginatingTo)
+        ? hashChatId(safeTrim(ctx.OriginatingTo)!)
+        : safeTrim(ctx.OriginatingTo),
     account_id: safeTrim(ctx.AccountId),
     channel: channelValue,
     provider: safeTrim(ctx.Provider),
@@ -81,7 +106,10 @@ export function buildInboundMetaSystemPrompt(ctx: TemplateContext): string {
   ].join("\n");
 }
 
-export function buildInboundUserContextPrefix(ctx: TemplateContext): string {
+export function buildInboundUserContextPrefix(
+  ctx: TemplateContext,
+  options?: { redactPII?: boolean },
+): string {
   const blocks: string[] = [];
   const chatType = normalizeChatType(ctx.ChatType);
   const isDirect = !chatType || chatType === "direct";
@@ -96,16 +124,17 @@ export function buildInboundUserContextPrefix(ctx: TemplateContext): string {
   const resolvedMessageId = messageId ?? messageIdFull;
   const timestampStr = formatConversationTimestamp(ctx.Timestamp);
 
+  const senderE164 = options?.redactPII ? undefined : safeTrim(ctx.SenderE164);
+  const rawSenderId = safeTrim(ctx.SenderId);
+  const senderId = options?.redactPII && rawSenderId ? hashSenderId(rawSenderId) : rawSenderId;
+
   const conversationInfo = {
     message_id: shouldIncludeConversationInfo ? resolvedMessageId : undefined,
     reply_to_id: shouldIncludeConversationInfo ? safeTrim(ctx.ReplyToId) : undefined,
-    sender_id: shouldIncludeConversationInfo ? safeTrim(ctx.SenderId) : undefined,
+    sender_id: shouldIncludeConversationInfo ? senderId : undefined,
     conversation_label: isDirect ? undefined : safeTrim(ctx.ConversationLabel),
     sender: shouldIncludeConversationInfo
-      ? (safeTrim(ctx.SenderName) ??
-        safeTrim(ctx.SenderE164) ??
-        safeTrim(ctx.SenderId) ??
-        safeTrim(ctx.SenderUsername))
+      ? (safeTrim(ctx.SenderName) ?? senderE164 ?? senderId ?? safeTrim(ctx.SenderUsername))
       : undefined,
     timestamp: timestampStr,
     group_subject: safeTrim(ctx.GroupSubject),
@@ -140,14 +169,14 @@ export function buildInboundUserContextPrefix(ctx: TemplateContext): string {
       name: safeTrim(ctx.SenderName),
       username: safeTrim(ctx.SenderUsername),
       tag: safeTrim(ctx.SenderTag),
-      e164: safeTrim(ctx.SenderE164),
-      id: safeTrim(ctx.SenderId),
+      e164: senderE164,
+      id: senderId,
     }),
-    id: safeTrim(ctx.SenderId),
+    id: senderId,
     name: safeTrim(ctx.SenderName),
     username: safeTrim(ctx.SenderUsername),
     tag: safeTrim(ctx.SenderTag),
-    e164: safeTrim(ctx.SenderE164),
+    e164: senderE164,
   };
   if (senderInfo?.label) {
     blocks.push(
