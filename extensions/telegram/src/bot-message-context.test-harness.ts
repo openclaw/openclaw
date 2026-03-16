@@ -1,4 +1,5 @@
 import { vi } from "vitest";
+import type { PairingMessageConfig } from "../../../src/pairing/pairing-messages.js";
 import {
   buildTelegramMessageContext,
   type BuildTelegramMessageContextParams,
@@ -20,6 +21,8 @@ type BuildTelegramMessageContextForTestParams = {
   resolveGroupActivation?: BuildTelegramMessageContextParams["resolveGroupActivation"];
   resolveGroupRequireMention?: BuildTelegramMessageContextParams["resolveGroupRequireMention"];
   resolveTelegramGroupConfig?: BuildTelegramMessageContextParams["resolveTelegramGroupConfig"];
+  pairingMessage?: PairingMessageConfig;
+  dmPolicy?: BuildTelegramMessageContextParams["dmPolicy"];
 };
 
 export async function buildTelegramMessageContextForTest(
@@ -49,7 +52,7 @@ export async function buildTelegramMessageContextForTest(
     account: { accountId: params.accountId ?? "default" } as never,
     historyLimit: 0,
     groupHistories: new Map(),
-    dmPolicy: "open",
+    dmPolicy: params.dmPolicy ?? "open",
     allowFrom: [],
     groupAllowFrom: [],
     ackReactionScope: "off",
@@ -63,5 +66,6 @@ export async function buildTelegramMessageContextForTest(
         topicConfig: undefined,
       })),
     sendChatActionHandler: { sendChatAction: vi.fn() } as never,
+    pairingMessage: params.pairingMessage,
   });
 }

@@ -58,7 +58,7 @@ export class TelegramPollingSession {
 
   constructor(private readonly opts: TelegramPollingSessionOpts) {}
 
-  get activeRunner() {
+  get activeRunner(): ReturnType<typeof run> | undefined {
     return this.#activeRunner;
   }
 

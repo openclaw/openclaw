@@ -1,4 +1,4 @@
-import chalk, { Chalk } from "chalk";
+import chalk, { Chalk, type ChalkInstance } from "chalk";
 import { LOBSTER_PALETTE } from "./palette.js";
 
 const hasForceColor =
@@ -10,7 +10,21 @@ const baseChalk = process.env.NO_COLOR && !hasForceColor ? new Chalk({ level: 0 
 
 const hex = (value: string) => baseChalk.hex(value);
 
-export const theme = {
+type TerminalTheme = {
+  accent: ChalkInstance;
+  accentBright: ChalkInstance;
+  accentDim: ChalkInstance;
+  info: ChalkInstance;
+  success: ChalkInstance;
+  warn: ChalkInstance;
+  error: ChalkInstance;
+  muted: ChalkInstance;
+  heading: ChalkInstance;
+  command: ChalkInstance;
+  option: ChalkInstance;
+};
+
+export const theme: TerminalTheme = {
   accent: hex(LOBSTER_PALETTE.accent),
   accentBright: hex(LOBSTER_PALETTE.accentBright),
   accentDim: hex(LOBSTER_PALETTE.accentDim),
@@ -22,7 +36,7 @@ export const theme = {
   heading: baseChalk.bold.hex(LOBSTER_PALETTE.accent),
   command: hex(LOBSTER_PALETTE.accentBright),
   option: hex(LOBSTER_PALETTE.warn),
-} as const;
+};
 
 export const isRich = () => Boolean(baseChalk.level > 0);
 

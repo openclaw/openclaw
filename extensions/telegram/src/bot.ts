@@ -105,7 +105,7 @@ function extractTelegramApiMethod(input: TelegramFetchInput): string | null {
   }
 }
 
-export function createTelegramBot(opts: TelegramBotOptions) {
+export function createTelegramBot(opts: TelegramBotOptions): Bot {
   const runtime: RuntimeEnv = opts.runtime ?? createNonExitingRuntime();
   const cfg = opts.config ?? loadConfig();
   const account = resolveTelegramAccount({
@@ -175,7 +175,7 @@ export function createTelegramBot(opts: TelegramBotOptions) {
           abortWith(init.signal as unknown as AbortSignal);
         } else {
           onRequestAbort = () => abortWith(init.signal as AbortSignal);
-          init.signal.addEventListener("abort", onRequestAbort);
+          init.signal.addEventListener("abort", onRequestAbort, { once: true });
         }
       }
       return callFetch(input as GlobalFetchInput, {

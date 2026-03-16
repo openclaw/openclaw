@@ -7,6 +7,7 @@ import type {
   TelegramGroupConfig,
   TelegramTopicConfig,
 } from "../../../src/config/types.js";
+import type { PairingMessageConfig } from "../../../src/pairing/pairing-messages.js";
 import type { StickerMetadata, TelegramContext } from "./bot/types.js";
 
 export type TelegramMediaRef = {
@@ -62,4 +63,5 @@ export type BuildTelegramMessageContextParams = {
   resolveTelegramGroupConfig: ResolveTelegramGroupConfig;
   /** Global (per-account) handler for sendChatAction 401 backoff (#27092). */
   sendChatActionHandler: import("./sendchataction-401-backoff.js").TelegramSendChatActionHandler;
+  pairingMessage?: PairingMessageConfig;
 };

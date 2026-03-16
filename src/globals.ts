@@ -1,3 +1,4 @@
+import type { ChalkInstance } from "chalk";
 import { getLogger, isFileLogLevelEnabled } from "./logging/logger.js";
 import { theme } from "./terminal/theme.js";
 
@@ -46,7 +47,7 @@ export function isYes() {
   return globalYes;
 }
 
-export const success = theme.success;
-export const warn = theme.warn;
-export const info = theme.info;
-export const danger = theme.error;
+export const success: ChalkInstance = theme.success;
+export const warn: ChalkInstance = theme.warn;
+export const info: ChalkInstance = theme.info;
+export const danger: ChalkInstance = theme.error;
