@@ -47,8 +47,70 @@ const routeStatus: RouteSpec = {
     if (timeoutMs === null) {
       return false;
     }
+    if (json) {
+      const { statusJsonCommand } = await import("../../commands/status-json.js");
+      await statusJsonCommand({ deep, all, usage, timeoutMs }, defaultRuntime);
+      return true;
+    }
     const { statusCommand } = await import("../../commands/status.js");
     await statusCommand({ json, deep, all, usage, timeoutMs, verbose }, defaultRuntime);
+    return true;
+  },
+};
+
+const routeGatewayStatus: RouteSpec = {
+  match: (path) => path[0] === "gateway" && path[1] === "status",
+  run: async (argv) => {
+    const url = getFlagValue(argv, "--url");
+    if (url === null) {
+      return false;
+    }
+    const token = getFlagValue(argv, "--token");
+    if (token === null) {
+      return false;
+    }
+    const password = getFlagValue(argv, "--password");
+    if (password === null) {
+      return false;
+    }
+    const timeout = getFlagValue(argv, "--timeout");
+    if (timeout === null) {
+      return false;
+    }
+    const ssh = getFlagValue(argv, "--ssh");
+    if (ssh === null) {
+      return false;
+    }
+    if (ssh !== undefined) {
+      return false;
+    }
+    const sshIdentity = getFlagValue(argv, "--ssh-identity");
+    if (sshIdentity === null) {
+      return false;
+    }
+    if (sshIdentity !== undefined) {
+      return false;
+    }
+    if (hasFlag(argv, "--ssh-auto")) {
+      return false;
+    }
+    const deep = hasFlag(argv, "--deep");
+    const json = hasFlag(argv, "--json");
+    const requireRpc = hasFlag(argv, "--require-rpc");
+    const probe = !hasFlag(argv, "--no-probe");
+    const { runDaemonStatus } = await import("../daemon-cli/status.js");
+    await runDaemonStatus({
+      rpc: {
+        url: url ?? undefined,
+        token: token ?? undefined,
+        password: password ?? undefined,
+        timeout: timeout ?? undefined,
+      },
+      probe,
+      requireRpc,
+      deep,
+      json,
+    });
     return true;
   },
 };
@@ -251,6 +313,7 @@ const routeModelsStatus: RouteSpec = {
 const routes: RouteSpec[] = [
   routeHealth,
   routeStatus,
+  routeGatewayStatus,
   routeSessions,
   routeAgentsList,
   routeMemoryStatus,

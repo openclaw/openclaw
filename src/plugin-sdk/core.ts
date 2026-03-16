@@ -1,6 +1,7 @@
 export type {
   AnyAgentTool,
   OpenClawPluginApi,
+  OpenClawPluginConfigSchema,
   ProviderDiscoveryContext,
   ProviderCatalogContext,
   ProviderCatalogResult,
@@ -9,7 +10,9 @@ export type {
   ProviderBuiltInModelSuppressionResult,
   ProviderBuildMissingAuthMessageContext,
   ProviderCacheTtlEligibilityContext,
+  ProviderDefaultThinkingPolicyContext,
   ProviderFetchUsageSnapshotContext,
+  ProviderModernModelPolicyContext,
   ProviderPreparedRuntimeAuth,
   ProviderResolvedUsageAuth,
   ProviderPrepareExtraParamsContext,
@@ -19,12 +22,29 @@ export type {
   ProviderResolveDynamicModelContext,
   ProviderNormalizeResolvedModelContext,
   ProviderRuntimeModel,
+  ProviderThinkingPolicyContext,
   ProviderWrapStreamFnContext,
   OpenClawPluginService,
   ProviderAuthContext,
   ProviderAuthMethodNonInteractiveContext,
   ProviderAuthResult,
 } from "../plugins/types.js";
+export type {
+  CreateSandboxBackendParams,
+  SandboxBackendCommandParams,
+  SandboxBackendCommandResult,
+  SandboxBackendExecSpec,
+  SandboxBackendFactory,
+  SandboxFsBridge,
+  SandboxFsStat,
+  SandboxBackendHandle,
+  SandboxBackendId,
+  SandboxBackendManager,
+  SandboxBackendRegistration,
+  SandboxBackendRuntimeInfo,
+  SandboxContext,
+  SandboxResolvedPath,
+} from "../agents/sandbox.js";
 export type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
 export type { PluginRuntime } from "../plugins/runtime/types.js";
 export type { OpenClawConfig } from "../config/config.js";
@@ -36,6 +56,12 @@ export type {
 } from "../infra/provider-usage.types.js";
 
 export { emptyPluginConfigSchema } from "../plugins/config-schema.js";
+export {
+  getSandboxBackendFactory,
+  getSandboxBackendManager,
+  registerSandboxBackend,
+  requireSandboxBackendFactory,
+} from "../agents/sandbox.js";
 export { buildOauthProviderAuthResult } from "./provider-auth-result.js";
 export {
   applyProviderDefaultModel,

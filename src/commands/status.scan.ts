@@ -7,14 +7,12 @@ import { readBestEffortConfig } from "../config/config.js";
 import { buildGatewayConnectionDetails, callGateway } from "../gateway/call.js";
 import { normalizeControlUiBasePath } from "../gateway/control-ui-shared.js";
 import { probeGateway } from "../gateway/probe.js";
-import { collectChannelStatusIssues } from "../infra/channels-status-issues.js";
 import { resolveOsSummary } from "../infra/os-summary.js";
 import { getTailnetHostname } from "../infra/tailscale.js";
 import { getMemorySearchManager } from "../memory/index.js";
 import type { MemoryProviderStatus } from "../memory/types.js";
 import { runExec } from "../process/exec.js";
 import type { RuntimeEnv } from "../runtime.js";
-import { buildChannelsTable } from "./status-all/channels.js";
 import { getAgentLocalStatuses } from "./status.agent-local.js";
 import {
   pickGatewaySelfPresence,
@@ -48,11 +46,21 @@ type GatewayProbeSnapshot = {
 };
 
 let pluginRegistryModulePromise: Promise<typeof import("../cli/plugin-registry.js")> | undefined;
+let statusScanRuntimeModulePromise: Promise<typeof import("./status.scan.runtime.js")> | undefined;
 
 function loadPluginRegistryModule() {
   pluginRegistryModulePromise ??= import("../cli/plugin-registry.js");
   return pluginRegistryModulePromise;
 }
+
+function loadStatusScanRuntimeModule() {
+  statusScanRuntimeModulePromise ??= import("./status.scan.runtime.js");
+  return statusScanRuntimeModulePromise;
+}
+
+type StatusScanRuntimeModule = Awaited<ReturnType<typeof loadStatusScanRuntimeModule>>;
+type ChannelStatusIssues = ReturnType<StatusScanRuntimeModule["collectChannelStatusIssues"]>;
+type ChannelsTable = Awaited<ReturnType<StatusScanRuntimeModule["buildChannelsTable"]>>;
 
 function deferResult<T>(promise: Promise<T>): Promise<DeferredResult<T>> {
   return promise.then(
@@ -155,9 +163,9 @@ export type StatusScanResult = {
   gatewayProbe: Awaited<ReturnType<typeof probeGateway>> | null;
   gatewayReachable: boolean;
   gatewaySelf: ReturnType<typeof pickGatewaySelfPresence>;
-  channelIssues: ReturnType<typeof collectChannelStatusIssues>;
+  channelIssues: ChannelStatusIssues;
   agentStatus: Awaited<ReturnType<typeof getAgentLocalStatuses>>;
-  channels: Awaited<ReturnType<typeof buildChannelsTable>>;
+  channels: ChannelsTable;
   summary: Awaited<ReturnType<typeof getStatusSummary>>;
   memory: MemoryStatusSnapshot | null;
   memoryPlugin: MemoryPluginStatus;
@@ -202,7 +210,7 @@ async function scanStatusJsonFast(opts: {
     });
   if (hasPotentialConfiguredChannels(cfg)) {
     const { ensurePluginRegistryLoaded } = await loadPluginRegistryModule();
-    ensurePluginRegistryLoaded({ scope: "channels" });
+    ensurePluginRegistryLoaded({ scope: "configured-channels" });
   }
   const osSummary = resolveOsSummary();
   const tailscaleMode = cfg.gateway?.tailscale?.mode ?? "off";
@@ -360,6 +368,8 @@ export async function scanStatus(
 
       progress.setLabel("Querying channel status…");
       const channelsStatus = await resolveChannelsStatus({ cfg, gatewayReachable, opts });
+      const { collectChannelStatusIssues, buildChannelsTable } =
+        await loadStatusScanRuntimeModule();
       const channelIssues = channelsStatus ? collectChannelStatusIssues(channelsStatus) : [];
       progress.tick();
 

@@ -1117,7 +1117,7 @@ See [Typing Indicators](/concepts/typing-indicators).
 
 ### `agents.defaults.sandbox`
 
-Optional **Docker sandboxing** for the embedded agent. See [Sandboxing](/gateway/sandboxing) for the full guide.
+Optional sandboxing for the embedded agent. See [Sandboxing](/gateway/sandboxing) for the full guide.
 
 ```json5
 {
@@ -1125,6 +1125,7 @@ Optional **Docker sandboxing** for the embedded agent. See [Sandboxing](/gateway
     defaults: {
       sandbox: {
         mode: "non-main", // off | non-main | all
+        backend: "docker", // docker | openshell
         scope: "agent", // session | agent | shared
         workspaceAccess: "none", // none | ro | rw
         workspaceRoot: "~/.openclaw/sandboxes",
@@ -1199,6 +1200,14 @@ Optional **Docker sandboxing** for the embedded agent. See [Sandboxing](/gateway
 
 <Accordion title="Sandbox details">
 
+**Backend:**
+
+- `docker`: local Docker runtime (default)
+- `openshell`: OpenShell runtime
+
+When `backend: "openshell"` is selected, runtime-specific settings move to
+`plugins.entries.openshell.config`.
+
 **Workspace access:**
 
 - `none`: per-scope sandbox workspace under `~/.openclaw/sandboxes`
@@ -1210,6 +1219,39 @@ Optional **Docker sandboxing** for the embedded agent. See [Sandboxing](/gateway
 - `session`: per-session container + workspace
 - `agent`: one container + workspace per agent (default)
 - `shared`: shared container and workspace (no cross-session isolation)
+
+**OpenShell plugin config:**
+
+```json5
+{
+  plugins: {
+    entries: {
+      openshell: {
+        enabled: true,
+        config: {
+          mode: "mirror", // mirror | remote
+          from: "openclaw",
+          remoteWorkspaceDir: "/sandbox",
+          remoteAgentWorkspaceDir: "/agent",
+          gateway: "lab", // optional
+          gatewayEndpoint: "https://lab.example", // optional
+          policy: "strict", // optional OpenShell policy id
+          providers: ["openai"], // optional
+          autoProviders: true,
+          timeoutSeconds: 120,
+        },
+      },
+    },
+  },
+}
+```
+
+**OpenShell mode:**
+
+- `mirror`: seed remote from local before exec, sync back after exec; local workspace stays canonical
+- `remote`: seed remote once when the sandbox is created, then keep the remote workspace canonical
+
+In `remote` mode, host-local edits made outside OpenClaw are not synced into the sandbox automatically after the seed step.
 
 **`setupCommand`** runs once after container creation (via `sh -lc`). Needs network egress, writable root, root user.
 
@@ -1259,6 +1301,8 @@ noVNC observer access uses VNC auth by default and OpenClaw emits a short-lived 
     entrypoint to change container defaults.
 
 </Accordion>
+
+Browser sandboxing and `sandbox.docker.binds` are currently Docker-only.
 
 Build images:
 

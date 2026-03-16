@@ -1,6 +1,9 @@
 {
   "id": "openrouter",
   "providers": ["openrouter"],
+  "providerAuthEnvVars": {
+    "openrouter": ["OPENROUTER_API_KEY"]
+  },
   "configSchema": {
     "type": "object",
     "additionalProperties": false,

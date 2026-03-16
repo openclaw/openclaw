@@ -2,6 +2,7 @@ import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../../agents/ag
 import { listChannelPluginCatalogEntries } from "../../channels/plugins/catalog.js";
 import { parseOptionalDelimitedEntries } from "../../channels/plugins/helpers.js";
 import { getChannelPlugin, normalizeChannelId } from "../../channels/plugins/index.js";
+import type { ChannelSetupPlugin } from "../../channels/plugins/setup-flow-types.js";
 import { moveSingleAccountChannelSectionToDefaultAccount } from "../../channels/plugins/setup-helpers.js";
 import type { ChannelId, ChannelPlugin, ChannelSetupInput } from "../../channels/plugins/types.js";
 import { writeConfigFile, type OpenClawConfig } from "../../config/config.js";
@@ -9,6 +10,7 @@ import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../../routing/session-ke
 import { defaultRuntime, type RuntimeEnv } from "../../runtime.js";
 import { createClackPrompter } from "../../wizard/clack-prompter.js";
 import { applyAgentBindings, describeBinding } from "../agents.bindings.js";
+import { isCatalogChannelInstalled } from "../channel-setup/discovery.js";
 import type { ChannelChoice } from "../onboard-types.js";
 import { applyAccountName, applyChannelAccountConfig } from "./add-mutators.js";
 import { channelLabel, requireValidConfig, shouldUseWizard } from "./shared.js";
@@ -55,7 +57,7 @@ export async function channelsAddCommand(
     const prompter = createClackPrompter();
     let selection: ChannelChoice[] = [];
     const accountIds: Partial<Record<ChannelChoice, string>> = {};
-    const resolvedPlugins = new Map<ChannelChoice, ChannelPlugin>();
+    const resolvedPlugins = new Map<ChannelChoice, ChannelSetupPlugin>();
     await prompter.intro("Channel setup");
     let nextConfig = await setupChannels(cfg, runtime, prompter, {
       allowDisable: false,
@@ -202,24 +204,32 @@ export async function channelsAddCommand(
   };
 
   if (!channel && catalogEntry) {
-    const { ensureOnboardingPluginInstalled } = await import("../onboarding/plugin-install.js");
-    const prompter = createClackPrompter();
     const workspaceDir = resolveWorkspaceDir();
-    const result = await ensureOnboardingPluginInstalled({
-      cfg: nextConfig,
-      entry: catalogEntry,
-      prompter,
-      runtime,
-      workspaceDir,
-    });
-    nextConfig = result.cfg;
-    if (!result.installed) {
-      return;
+    if (
+      !isCatalogChannelInstalled({
+        cfg: nextConfig,
+        entry: catalogEntry,
+        workspaceDir,
+      })
+    ) {
+      const { ensureOnboardingPluginInstalled } = await import("../onboarding/plugin-install.js");
+      const prompter = createClackPrompter();
+      const result = await ensureOnboardingPluginInstalled({
+        cfg: nextConfig,
+        entry: catalogEntry,
+        prompter,
+        runtime,
+        workspaceDir,
+      });
+      nextConfig = result.cfg;
+      if (!result.installed) {
+        return;
+      }
+      catalogEntry = {
+        ...catalogEntry,
+        ...(result.pluginId ? { pluginId: result.pluginId } : {}),
+      };
     }
-    catalogEntry = {
-      ...catalogEntry,
-      ...(result.pluginId ? { pluginId: result.pluginId } : {}),
-    };
     channel = normalizeChannelId(catalogEntry.id) ?? (catalogEntry.id as ChannelId);
   }
 
@@ -251,6 +261,7 @@ export async function channelsAddCommand(
   const input: ChannelSetupInput = {
     name: opts.name,
     token: opts.token,
+    privateKey: opts.privateKey,
     tokenFile: opts.tokenFile,
     botToken: opts.botToken,
     appToken: opts.appToken,
@@ -276,6 +287,7 @@ export async function channelsAddCommand(
     useEnv,
     ship: opts.ship,
     url: opts.url,
+    relayUrls: opts.relayUrls,
     code: opts.code,
     groupChannels,
     dmAllowlist,
