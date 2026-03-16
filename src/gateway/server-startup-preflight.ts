@@ -6,6 +6,8 @@ import {
 } from "../config/config.js";
 import { formatConfigIssueLines } from "../config/issue-format.js";
 import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
+import type { ControlUiRootState } from "./control-ui.js";
+import type { GatewayRuntimeConfig } from "./server-runtime-config.js";
 
 export type GatewayStartupPreflightPhase =
   | "config_legacy_migration"
@@ -21,6 +23,8 @@ export type GatewayStartupContext = {
   };
   config: OpenClawConfig;
   diagnosticsEnabled: boolean;
+  runtimeConfig?: GatewayRuntimeConfig;
+  controlUiRootState?: ControlUiRootState;
 };
 
 export class GatewayStartupPreflightError extends Error {
