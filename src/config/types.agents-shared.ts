@@ -15,6 +15,8 @@ export type AgentModelConfig =
 
 export type AgentSandboxConfig = {
   mode?: "off" | "non-main" | "all";
+  /** Sandbox runtime backend id. Default: "docker". */
+  backend?: string;
   /** Agent workspace access inside the sandbox. */
   workspaceAccess?: "none" | "ro" | "rw";
   /**
