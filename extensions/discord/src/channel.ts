@@ -1,3 +1,4 @@
+import { Separator, TextDisplay } from "@buape/carbon";
 import { createScopedChannelConfigBase } from "openclaw/plugin-sdk/compat";
 import {
   buildAccountScopedDmSecurityPolicy,
@@ -31,11 +32,15 @@ import {
   resolveDiscordGroupToolPolicy,
   type ChannelMessageActionAdapter,
   type ChannelPlugin,
+  type OpenClawConfig,
   type ResolvedDiscordAccount,
 } from "openclaw/plugin-sdk/discord";
 import { resolveOutboundSendDep } from "../../../src/infra/outbound/send-deps.js";
+import { normalizeMessageChannel } from "../../../src/utils/message-channel.js";
+import { isDiscordExecApprovalClientEnabled } from "./exec-approvals.js";
 import { getDiscordRuntime } from "./runtime.js";
 import { createDiscordSetupWizardProxy, discordSetupAdapter } from "./setup-core.js";
+import { DiscordUiContainer } from "./ui.js";
 
 type DiscordSendFn = ReturnType<
   typeof getDiscordRuntime
@@ -59,7 +64,36 @@ const discordMessageActions: ChannelMessageActionAdapter = {
     }
     return ma.handleAction(ctx);
   },
+  requiresTrustedRequesterSender: ({ action, toolContext }) =>
+    Boolean(toolContext && (action === "timeout" || action === "kick" || action === "ban")),
 };
+
+function buildDiscordCrossContextComponents(params: {
+  originLabel: string;
+  message: string;
+  cfg: OpenClawConfig;
+  accountId?: string | null;
+}) {
+  const trimmed = params.message.trim();
+  const components: Array<TextDisplay | Separator> = [];
+  if (trimmed) {
+    components.push(new TextDisplay(params.message));
+    components.push(new Separator({ divider: true, spacing: "small" }));
+  }
+  components.push(new TextDisplay(`*From ${params.originLabel}*`));
+  return [new DiscordUiContainer({ cfg: params.cfg, accountId: params.accountId, components })];
+}
+
+function hasDiscordExecApprovalDmRoute(cfg: OpenClawConfig): boolean {
+  return listDiscordAccountIds(cfg).some((accountId) => {
+    const execApprovals = resolveDiscordAccount({ cfg, accountId }).config.execApprovals;
+    if (!execApprovals?.enabled || (execApprovals.approvers?.length ?? 0) === 0) {
+      return false;
+    }
+    const target = execApprovals.target ?? "dm";
+    return target === "dm" || target === "both";
+  });
+}
 
 const discordConfigAccessors = createScopedAccountConfigAccessors({
   resolveAccount: ({ cfg, accountId }) => resolveDiscordAccount({ cfg, accountId }),
@@ -183,10 +217,21 @@ export const discordPlugin: ChannelPlugin<ResolvedDiscordAccount> = {
   },
   messaging: {
     normalizeTarget: normalizeDiscordMessagingTarget,
+    buildCrossContextComponents: buildDiscordCrossContextComponents,
     targetResolver: {
       looksLikeId: looksLikeDiscordTargetId,
       hint: "<channelId|user:ID|channel:ID>",
     },
+  },
+  execApprovals: {
+    getInitiatingSurfaceState: ({ cfg, accountId }) =>
+      isDiscordExecApprovalClientEnabled({ cfg, accountId })
+        ? { kind: "enabled" }
+        : { kind: "disabled" },
+    hasConfiguredDmRoute: ({ cfg }) => hasDiscordExecApprovalDmRoute(cfg),
+    shouldSuppressForwardingFallback: ({ cfg, target }) =>
+      (normalizeMessageChannel(target.channel) ?? target.channel) === "discord" &&
+      isDiscordExecApprovalClientEnabled({ cfg, accountId: target.accountId }),
   },
   directory: {
     self: async () => null,
