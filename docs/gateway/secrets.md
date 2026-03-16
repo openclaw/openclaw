@@ -70,7 +70,7 @@ active-surface policy, so you can see why a credential was treated as active or 
 
 When onboarding runs in interactive mode and you choose SecretRef storage, OpenClaw runs preflight validation before saving:
 
-- Env refs: validates env var name and confirms a non-empty value is visible during onboarding.
+- Env refs: validates env var name and confirms a non-empty value is visible during setup.
 - Provider refs (`file` or `exec`): validates provider selection, resolves `id`, and checks resolved value type.
 - Quickstart reuse path: when `gateway.auth.token` is already a SecretRef, onboarding resolves it before probe/dashboard bootstrap (for `env`, `file`, and `exec` refs) using the same fail-fast gate.
 
