@@ -1,7 +1,8 @@
 import type { RuntimeEnv, WizardPrompter } from "openclaw/plugin-sdk/irc";
 import { describe, expect, it, vi } from "vitest";
+import { buildChannelOnboardingAdapterFromSetupWizard } from "../../../src/channels/plugins/setup-wizard.js";
 import { createRuntimeEnv } from "../../test-utils/runtime-env.js";
-import { ircOnboardingAdapter } from "./onboarding.js";
+import { ircPlugin } from "./channel.js";
 import type { CoreConfig } from "./types.js";
 
 const selectFirstOption = async <T>(params: { options: Array<{ value: T }> }): Promise<T> => {
@@ -26,7 +27,12 @@ function createPrompter(overrides: Partial<WizardPrompter>): WizardPrompter {
   };
 }
 
-describe("irc onboarding", () => {
+const ircConfigureAdapter = buildChannelOnboardingAdapterFromSetupWizard({
+  plugin: ircPlugin,
+  wizard: ircPlugin.setupWizard!,
+});
+
+describe("irc setup wizard", () => {
   it("configures host and nick via onboarding prompts", async () => {
     const prompter = createPrompter({
       text: vi.fn(async ({ message }: { message: string }) => {
@@ -66,7 +72,7 @@ describe("irc onboarding", () => {
 
     const runtime: RuntimeEnv = createRuntimeEnv();
 
-    const result = await ircOnboardingAdapter.configure({
+    const result = await ircConfigureAdapter.configure({
       cfg: {} as CoreConfig,
       runtime,
       prompter,
@@ -97,7 +103,7 @@ describe("irc onboarding", () => {
       confirm: vi.fn(async () => false),
     });
 
-    const promptAllowFrom = ircOnboardingAdapter.dmPolicy?.promptAllowFrom;
+    const promptAllowFrom = ircConfigureAdapter.dmPolicy?.promptAllowFrom;
     expect(promptAllowFrom).toBeTypeOf("function");
 
     const cfg: CoreConfig = {
