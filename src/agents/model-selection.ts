@@ -401,7 +401,6 @@ export function resolveSubagentSpawnModelSelection(params: {
       cfg: params.cfg,
       agentId: params.agentId,
     }) ??
-    normalizeModelSelection(resolveAgentModelPrimaryValue(params.cfg.agents?.defaults?.model)) ??
     `${runtimeDefault.provider}/${runtimeDefault.model}`
   );
 }
