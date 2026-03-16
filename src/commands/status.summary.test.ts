@@ -1,5 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+vi.mock("../channels/config-presence.js", () => ({
+  hasPotentialConfiguredChannels: vi.fn(() => true),
+}));
+
 vi.mock("../agents/context.js", () => ({
   resolveContextTokensForModel: vi.fn(() => 200_000),
 }));
@@ -81,5 +85,20 @@ describe("getStatusSummary", () => {
     expect(summary.runtimeVersion).toBe("2026.3.8");
     expect(summary.heartbeat.defaultAgentId).toBe("main");
     expect(summary.channelSummary).toEqual(["ok"]);
+  });
+
+  it("skips channel summary imports when no channels are configured", async () => {
+    const { hasPotentialConfiguredChannels } = await import("../channels/config-presence.js");
+    vi.mocked(hasPotentialConfiguredChannels).mockReturnValue(false);
+    const { buildChannelSummary } = await import("../infra/channel-summary.js");
+    const { resolveLinkChannelContext } = await import("./status.link-channel.js");
+    const { getStatusSummary } = await import("./status.summary.js");
+
+    const summary = await getStatusSummary();
+
+    expect(summary.channelSummary).toEqual([]);
+    expect(summary.linkChannel).toBeUndefined();
+    expect(buildChannelSummary).not.toHaveBeenCalled();
+    expect(resolveLinkChannelContext).not.toHaveBeenCalled();
   });
 });
