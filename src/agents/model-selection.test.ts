@@ -361,6 +361,27 @@ describe("model-selection", () => {
         }),
       ).toBeUndefined();
     });
+
+    it("treats normalized bare allowlist entries as ambiguous matches", () => {
+      const cfg = {
+        agents: {
+          defaults: {
+            models: {
+              "sonnet-4.6": {},
+              "minimax/claude-sonnet-4-6": {},
+            },
+          },
+        },
+      } as OpenClawConfig;
+
+      expect(
+        inferUniqueProviderFromConfiguredModels({
+          cfg,
+          model: "claude-sonnet-4-6",
+          defaultProvider: "anthropic",
+        }),
+      ).toBeUndefined();
+    });
   });
 
   describe("buildModelAliasIndex", () => {

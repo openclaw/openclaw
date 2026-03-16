@@ -167,6 +167,7 @@ export function inferUniqueProviderFromConfiguredModels(params: {
   if (!configuredModels) {
     return undefined;
   }
+  const inferenceDefaultProvider = params.defaultProvider ?? DEFAULT_PROVIDER;
   const normalized = model.toLowerCase();
   const providers = new Set<string>();
   for (const key of Object.keys(configuredModels)) {
@@ -175,8 +176,12 @@ export function inferUniqueProviderFromConfiguredModels(params: {
       continue;
     }
     if (!ref.includes("/")) {
-      if (params.defaultProvider && (ref === model || ref.toLowerCase() === normalized)) {
-        providers.add(normalizeProviderId(params.defaultProvider));
+      const parsedBare = parseModelRef(ref, inferenceDefaultProvider);
+      if (
+        parsedBare &&
+        (parsedBare.model === model || parsedBare.model.toLowerCase() === normalized)
+      ) {
+        providers.add(parsedBare.provider);
         if (providers.size > 1) {
           return undefined;
         }
