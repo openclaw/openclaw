@@ -26,7 +26,7 @@ import {
 import { hasReplyChannelData, hasReplyContent } from "../../interactive/payload.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { getAgentScopedMediaLocalRoots } from "../../media/local-roots.js";
-import { isAudioFileName, normalizeMimeType } from "../../media/mime.js";
+import { getFileExtension, isAudioFileName, normalizeMimeType } from "../../media/mime.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { throwIfAborted } from "./abort.js";
 import { resolveOutboundChannelPlugin } from "./channel-resolution.js";
@@ -45,6 +45,18 @@ export { normalizeOutboundPayloads } from "./payloads.js";
 export { resolveOutboundSendDep, type OutboundSendDeps } from "./send-deps.js";
 
 const log = createSubsystemLogger("outbound/deliver");
+
+function shouldPreserveAudioAsVoice(params: { mediaType?: string; mediaUrl?: string }): boolean {
+  const mediaType = normalizeMimeType(params.mediaType);
+  if (mediaType) {
+    return mediaType.startsWith("audio/");
+  }
+  const ext = getFileExtension(params.mediaUrl);
+  if (!ext) {
+    return true;
+  }
+  return isAudioFileName(params.mediaUrl);
+}
 
 export type OutboundDeliveryResult = {
   channel: Exclude<OutboundChannel, "none">;
@@ -745,7 +757,7 @@ async function deliverOutboundPayloadsCore(
           contentType: mediaType,
           audioAsVoice:
             sendOverrides.audioAsVoice &&
-            (normalizeMimeType(mediaType)?.startsWith("audio/") || isAudioFileName(url)),
+            shouldPreserveAudioAsVoice({ mediaType, mediaUrl: url }),
         };
         if (handler.sendFormattedMedia) {
           const delivery = await handler.sendFormattedMedia(caption, url, mediaSendOverrides);

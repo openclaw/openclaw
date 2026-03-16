@@ -1,4 +1,5 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/bluebubbles";
+import { getFileExtension, isAudioFileName, normalizeMimeType } from "../../../src/media/mime.js";
 import {
   DM_GROUP_ACCESS_REASON,
   createScopedPairingAccess,
@@ -90,12 +91,16 @@ function normalizeSnippet(value: string): string {
 }
 
 export function isAudioCompatibleMedia(params: { mediaType?: string; mediaUrl?: string }): boolean {
-  const mediaType = params.mediaType?.trim().toLowerCase();
-  if (mediaType?.startsWith("audio/")) {
+  const mediaType = normalizeMimeType(params.mediaType);
+  if (mediaType) {
+    return mediaType.startsWith("audio/");
+  }
+  const ext = getFileExtension(params.mediaUrl);
+  if (!ext) {
+    // No reliable signal yet; preserve voice mode and let fetch-time MIME detection decide.
     return true;
   }
-  const url = params.mediaUrl?.toLowerCase() ?? "";
-  return /\.(caf|mp3|m4a|aac|wav|ogg|opus)(?:$|[?#])/.test(url);
+  return isAudioFileName(params.mediaUrl);
 }
 
 function isBlueBubblesSelfChatMessage(

@@ -12,6 +12,13 @@ describe("bluebubbles voice media gating", () => {
     expect(isAudioCompatibleMedia({ mediaUrl: "https://x.test/reply.opus?dl=1" })).toBe(true);
   });
 
+  it("preserves voice mode when media type and file extension are both unavailable", () => {
+    expect(isAudioCompatibleMedia({ mediaUrl: "https://x.test/download?id=voice-note" })).toBe(
+      true,
+    );
+    expect(isAudioCompatibleMedia({})).toBe(true);
+  });
+
   it("does not treat non-audio media as voice-compatible", () => {
     expect(isAudioCompatibleMedia({ mediaType: "image/png", mediaUrl: "/tmp/photo.png" })).toBe(
       false,

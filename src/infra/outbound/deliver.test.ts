@@ -1219,6 +1219,46 @@ describe("deliverOutboundPayloads", () => {
     ]);
   });
 
+  it("preserves audioAsVoice for extensionless media URLs when mime is not known yet", async () => {
+    const sendMedia = vi.fn().mockResolvedValue({ channel: "matrix", messageId: "mx-audio" });
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "matrix",
+          source: "test",
+          plugin: createOutboundTestPlugin({
+            id: "matrix",
+            outbound: {
+              deliveryMode: "direct",
+              sendText: vi.fn().mockResolvedValue({ channel: "matrix", messageId: "mx-text" }),
+              sendMedia,
+            },
+          }),
+        },
+      ]),
+    );
+
+    const results = await deliverOutboundPayloads({
+      cfg: {},
+      channel: "matrix",
+      to: "!room:1",
+      payloads: [
+        {
+          text: "voice note",
+          mediaUrls: ["https://example.com/download?id=voice-note"],
+          audioAsVoice: true,
+        },
+      ],
+    });
+
+    expect(sendMedia).toHaveBeenCalledTimes(1);
+    expect(sendMedia.mock.calls[0]?.[0]).toMatchObject({
+      contentType: undefined,
+      audioAsVoice: true,
+    });
+    expect(results).toEqual([{ channel: "matrix", messageId: "mx-audio" }]);
+  });
+
   it("falls back to one sendText call for multi-media payloads when sendMedia is omitted", async () => {
     const sendText = vi.fn().mockResolvedValue({ channel: "matrix", messageId: "mx-2" });
     setActivePluginRegistry(
