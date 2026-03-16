@@ -159,7 +159,8 @@ export function inferUniqueProviderFromConfiguredModels(params: {
   model: string;
   defaultProvider?: string;
 }): string | undefined {
-  const model = params.model.trim();
+  const { model: rawModel } = splitTrailingAuthProfile(params.model);
+  const model = rawModel.trim();
   if (!model) {
     return undefined;
   }
@@ -167,8 +168,21 @@ export function inferUniqueProviderFromConfiguredModels(params: {
   if (!configuredModels) {
     return undefined;
   }
-  const inferenceDefaultProvider = params.defaultProvider ?? DEFAULT_PROVIDER;
   const normalized = model.toLowerCase();
+  const inferenceDefaultProviderRaw = params.defaultProvider?.trim();
+  const inferenceDefaultProvider = inferenceDefaultProviderRaw
+    ? normalizeProviderId(inferenceDefaultProviderRaw)
+    : undefined;
+  const canonicalWithDefault = inferenceDefaultProvider
+    ? parseModelRef(model, inferenceDefaultProvider)?.model.toLowerCase()
+    : undefined;
+  const matchesModel = (candidateModel: string): boolean => {
+    const candidate = candidateModel.toLowerCase();
+    return (
+      candidate === normalized ||
+      (canonicalWithDefault !== undefined && candidate === canonicalWithDefault)
+    );
+  };
   const providers = new Set<string>();
   for (const key of Object.keys(configuredModels)) {
     const ref = key.trim();
@@ -176,11 +190,11 @@ export function inferUniqueProviderFromConfiguredModels(params: {
       continue;
     }
     if (!ref.includes("/")) {
+      if (!inferenceDefaultProvider) {
+        continue;
+      }
       const parsedBare = parseModelRef(ref, inferenceDefaultProvider);
-      if (
-        parsedBare &&
-        (parsedBare.model === model || parsedBare.model.toLowerCase() === normalized)
-      ) {
+      if (parsedBare && matchesModel(parsedBare.model)) {
         providers.add(parsedBare.provider);
         if (providers.size > 1) {
           return undefined;
@@ -189,7 +203,7 @@ export function inferUniqueProviderFromConfiguredModels(params: {
       continue;
     }
     const parsed = parseModelRef(ref, DEFAULT_PROVIDER);
-    if (parsed && (parsed.model === model || parsed.model.toLowerCase() === normalized)) {
+    if (parsed && matchesModel(parsed.model)) {
       providers.add(parsed.provider);
       if (providers.size > 1) {
         return undefined;

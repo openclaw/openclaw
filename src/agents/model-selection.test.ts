@@ -382,6 +382,25 @@ describe("model-selection", () => {
         }),
       ).toBeUndefined();
     });
+
+    it("does not infer provider from bare allowlist entries when caller default is missing", () => {
+      const cfg = {
+        agents: {
+          defaults: {
+            models: {
+              "gpt-4o": {},
+            },
+          },
+        },
+      } as OpenClawConfig;
+
+      expect(
+        inferUniqueProviderFromConfiguredModels({
+          cfg,
+          model: "gpt-4o",
+        }),
+      ).toBeUndefined();
+    });
   });
 
   describe("buildModelAliasIndex", () => {
