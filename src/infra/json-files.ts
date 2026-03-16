@@ -2,6 +2,23 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 
+export function createAsyncLock() {
+  let lock: Promise<void> = Promise.resolve();
+  return async function withLock<T>(fn: () => Promise<T>): Promise<T> {
+    const prev = lock;
+    let release: (() => void) | undefined;
+    lock = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    await prev;
+    try {
+      return await fn();
+    } finally {
+      release?.();
+    }
+  };
+}
+
 export async function readJsonFile<T>(filePath: string): Promise<T | null> {
   try {
     const raw = await fs.readFile(filePath, "utf8");
