@@ -493,6 +493,7 @@ export function createExecTool(
         pendingMaxOutput,
         notifyOnExit: effectiveNotifyOnExit,
         notifyOnExitEmptySuccess: effectiveNotifyOnExitEmptySuccess,
+        explicitOnComplete: onCompleteNotify,
         scopeKey: defaults?.scopeKey,
         sessionKey: notifySessionKey,
         timeoutSec: effectiveTimeout,

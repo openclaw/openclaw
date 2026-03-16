@@ -236,14 +236,18 @@ function maybeNotifyOnExit(session: ProcessSession, status: "completed" | "faile
 
   // Fire an internal hook event so hooks can react to exec completion
   // even when heartbeats are disabled (no wake handler registered).
-  void triggerInternalHook(
-    createInternalHookEvent("exec", status, sessionKey, {
-      sessionId: session.id,
-      exitCode: session.exitCode,
-      exitSignal: session.exitSignal,
-      text: summary,
-    }),
-  );
+  // Only fire for explicit onComplete="notify" requests — auto-backgrounded
+  // processes (yieldMs timeout) should not wake the agent via hook.
+  if (session.explicitOnComplete) {
+    void triggerInternalHook(
+      createInternalHookEvent("exec", status, sessionKey, {
+        sessionId: session.id,
+        exitCode: session.exitCode,
+        exitSignal: session.exitSignal,
+        text: summary,
+      }),
+    );
+  }
 }
 
 export function createApprovalSlug(id: string) {
@@ -321,6 +325,7 @@ export async function runExecProcess(opts: {
   pendingMaxOutput: number;
   notifyOnExit: boolean;
   notifyOnExitEmptySuccess?: boolean;
+  explicitOnComplete?: boolean;
   scopeKey?: string;
   sessionKey?: string;
   timeoutSec: number | null;
@@ -342,6 +347,7 @@ export async function runExecProcess(opts: {
     sessionKey: opts.sessionKey,
     notifyOnExit: opts.notifyOnExit,
     notifyOnExitEmptySuccess: opts.notifyOnExitEmptySuccess === true,
+    explicitOnComplete: opts.explicitOnComplete === true,
     exitNotified: false,
     child: undefined,
     stdin: undefined,
