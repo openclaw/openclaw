@@ -69,7 +69,7 @@ describe("feishu tool account routing", () => {
     expect(createFeishuClientMock.mock.calls.at(-1)?.[0]?.appId).toBe("app-b");
   });
 
-  test("wiki tool prefers configured defaultAccount over inherited default account context", async () => {
+  test("routed account context (agentAccountId) takes priority over configured defaultAccount", async () => {
     const { api, resolveTool } = createToolFactoryHarness(
       createConfig({
         defaultAccount: "b",
@@ -79,7 +79,24 @@ describe("feishu tool account routing", () => {
     );
     registerFeishuWikiTools(api);
 
+    // agentAccountId "a" should win over defaultAccount "b"
     const tool = resolveTool("feishu_wiki", { agentAccountId: "a" });
+    await tool.execute("call", { action: "search" });
+
+    expect(createFeishuClientMock.mock.calls.at(-1)?.[0]?.appId).toBe("app-a");
+  });
+
+  test("falls back to configured defaultAccount when agentAccountId is absent", async () => {
+    const { api, resolveTool } = createToolFactoryHarness(
+      createConfig({
+        defaultAccount: "b",
+        toolsA: { wiki: true },
+        toolsB: { wiki: true },
+      }),
+    );
+    registerFeishuWikiTools(api);
+
+    const tool = resolveTool("feishu_wiki", {});
     await tool.execute("call", { action: "search" });
 
     expect(createFeishuClientMock.mock.calls.at(-1)?.[0]?.appId).toBe("app-b");
