@@ -6,12 +6,10 @@ import {
   createScopedDmSecurityResolver,
 } from "openclaw/plugin-sdk/compat";
 import {
-  applyAccountNameToChannelSection,
   buildChannelConfigSchema,
   buildProbeChannelStatusSummary,
   collectStatusIssuesFromLastError,
   DEFAULT_ACCOUNT_ID,
-  normalizeAccountId,
   PAIRING_APPROVED_MESSAGE,
   type ChannelPlugin,
 } from "openclaw/plugin-sdk/matrix";
@@ -30,9 +28,8 @@ import {
   type ResolvedMatrixAccount,
 } from "./matrix/accounts.js";
 import { normalizeMatrixAllowList, normalizeMatrixUserId } from "./matrix/monitor/allowlist.js";
-import { matrixOnboardingAdapter } from "./onboarding.js";
 import { getMatrixRuntime } from "./runtime.js";
-import { normalizeSecretInputString } from "./secret-input.js";
+import { matrixSetupAdapter, matrixSetupWizard } from "./setup-surface.js";
 import type { CoreConfig } from "./types.js";
 
 // Mutex for serializing account startup (workaround for concurrent dynamic import race condition)
@@ -64,38 +61,6 @@ function normalizeMatrixMessagingTarget(raw: string): string | undefined {
   }
   const stripped = normalized.replace(/^(room|channel|user):/i, "").trim();
   return stripped || undefined;
-}
-
-function buildMatrixConfigUpdate(
-  cfg: CoreConfig,
-  input: {
-    homeserver?: string;
-    userId?: string;
-    accessToken?: string;
-    password?: string;
-    deviceName?: string;
-    initialSyncLimit?: number;
-  },
-): CoreConfig {
-  const existing = cfg.channels?.matrix ?? {};
-  return {
-    ...cfg,
-    channels: {
-      ...cfg.channels,
-      matrix: {
-        ...existing,
-        enabled: true,
-        ...(input.homeserver ? { homeserver: input.homeserver } : {}),
-        ...(input.userId ? { userId: input.userId } : {}),
-        ...(input.accessToken ? { accessToken: input.accessToken } : {}),
-        ...(input.password ? { password: input.password } : {}),
-        ...(input.deviceName ? { deviceName: input.deviceName } : {}),
-        ...(typeof input.initialSyncLimit === "number"
-          ? { initialSyncLimit: input.initialSyncLimit }
-          : {}),
-      },
-    },
-  };
 }
 
 const matrixConfigAccessors = createScopedAccountConfigAccessors({
@@ -132,7 +97,7 @@ const resolveMatrixDmPolicy = createScopedDmSecurityResolver<ResolvedMatrixAccou
 export const matrixPlugin: ChannelPlugin<ResolvedMatrixAccount> = {
   id: "matrix",
   meta,
-  onboarding: matrixOnboardingAdapter,
+  setupWizard: matrixSetupWizard,
   pairing: {
     idLabel: "matrixUserId",
     normalizeAllowEntry: (entry) => entry.replace(/^matrix:/i, ""),
@@ -316,67 +281,7 @@ export const matrixPlugin: ChannelPlugin<ResolvedMatrixAccount> = {
       (await loadMatrixChannelRuntime()).resolveMatrixTargets({ cfg, inputs, kind, runtime }),
   },
   actions: matrixMessageActions,
-  setup: {
-    resolveAccountId: ({ accountId }) => normalizeAccountId(accountId),
-    applyAccountName: ({ cfg, accountId, name }) =>
-      applyAccountNameToChannelSection({
-        cfg: cfg as CoreConfig,
-        channelKey: "matrix",
-        accountId,
-        name,
-      }),
-    validateInput: ({ input }) => {
-      if (input.useEnv) {
-        return null;
-      }
-      if (!input.homeserver?.trim()) {
-        return "Matrix requires --homeserver";
-      }
-      const accessToken = input.accessToken?.trim();
-      const password = normalizeSecretInputString(input.password);
-      const userId = input.userId?.trim();
-      if (!accessToken && !password) {
-        return "Matrix requires --access-token or --password";
-      }
-      if (!accessToken) {
-        if (!userId) {
-          return "Matrix requires --user-id when using --password";
-        }
-        if (!password) {
-          return "Matrix requires --password when using --user-id";
-        }
-      }
-      return null;
-    },
-    applyAccountConfig: ({ cfg, input }) => {
-      const namedConfig = applyAccountNameToChannelSection({
-        cfg: cfg as CoreConfig,
-        channelKey: "matrix",
-        accountId: DEFAULT_ACCOUNT_ID,
-        name: input.name,
-      });
-      if (input.useEnv) {
-        return {
-          ...namedConfig,
-          channels: {
-            ...namedConfig.channels,
-            matrix: {
-              ...namedConfig.channels?.matrix,
-              enabled: true,
-            },
-          },
-        } as CoreConfig;
-      }
-      return buildMatrixConfigUpdate(namedConfig as CoreConfig, {
-        homeserver: input.homeserver?.trim(),
-        userId: input.userId?.trim(),
-        accessToken: input.accessToken?.trim(),
-        password: normalizeSecretInputString(input.password),
-        deviceName: input.deviceName?.trim(),
-        initialSyncLimit: input.initialSyncLimit,
-      });
-    },
-  },
+  setup: matrixSetupAdapter,
   outbound: {
     deliveryMode: "direct",
     chunker: (text, limit) => getMatrixRuntime().channel.text.chunkMarkdownText!(text, limit),

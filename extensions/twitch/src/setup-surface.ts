@@ -1,25 +1,21 @@
 /**
- * Twitch onboarding adapter for CLI setup wizard.
+ * Twitch setup wizard surface for CLI setup.
  */
 
-import type { OpenClawConfig } from "openclaw/plugin-sdk/twitch";
-import {
-  formatDocsLink,
-  promptChannelAccessConfig,
-  type ChannelOnboardingAdapter,
-  type ChannelOnboardingDmPolicy,
-  type WizardPrompter,
-} from "openclaw/plugin-sdk/twitch";
+import type { ChannelOnboardingDmPolicy } from "../../../src/channels/plugins/onboarding-types.js";
+import { promptChannelAccessConfig } from "../../../src/channels/plugins/onboarding/channel-access.js";
+import type { ChannelSetupWizard } from "../../../src/channels/plugins/setup-wizard.js";
+import type { ChannelSetupAdapter } from "../../../src/channels/plugins/types.adapters.js";
+import type { OpenClawConfig } from "../../../src/config/config.js";
+import { formatDocsLink } from "../../../src/terminal/links.js";
+import type { WizardPrompter } from "../../../src/wizard/prompts.js";
 import { DEFAULT_ACCOUNT_ID, getAccountConfig } from "./config.js";
 import type { TwitchAccountConfig, TwitchRole } from "./types.js";
 import { isAccountConfigured } from "./utils/twitch.js";
 
 const channel = "twitch" as const;
 
-/**
- * Set Twitch account configuration
- */
-function setTwitchAccount(
+export function setTwitchAccount(
   cfg: OpenClawConfig,
   account: Partial<TwitchAccountConfig>,
 ): OpenClawConfig {
@@ -59,9 +55,6 @@ function setTwitchAccount(
   };
 }
 
-/**
- * Note about Twitch setup
- */
 async function noteTwitchSetupHelp(prompter: WizardPrompter): Promise<void> {
   await prompter.note(
     [
@@ -77,17 +70,13 @@ async function noteTwitchSetupHelp(prompter: WizardPrompter): Promise<void> {
   );
 }
 
-/**
- * Prompt for Twitch OAuth token with early returns.
- */
-async function promptToken(
+export async function promptToken(
   prompter: WizardPrompter,
   account: TwitchAccountConfig | null,
   envToken: string | undefined,
 ): Promise<string> {
   const existingToken = account?.accessToken ?? "";
 
-  // If we have an existing token and no env var, ask if we should keep it
   if (existingToken && !envToken) {
     const keepToken = await prompter.confirm({
       message: "Access token already configured. Keep it?",
@@ -98,7 +87,6 @@ async function promptToken(
     }
   }
 
-  // Prompt for new token
   return String(
     await prompter.text({
       message: "Twitch OAuth token (oauth:...)",
@@ -117,10 +105,7 @@ async function promptToken(
   ).trim();
 }
 
-/**
- * Prompt for Twitch username.
- */
-async function promptUsername(
+export async function promptUsername(
   prompter: WizardPrompter,
   account: TwitchAccountConfig | null,
 ): Promise<string> {
@@ -133,10 +118,7 @@ async function promptUsername(
   ).trim();
 }
 
-/**
- * Prompt for Twitch Client ID.
- */
-async function promptClientId(
+export async function promptClientId(
   prompter: WizardPrompter,
   account: TwitchAccountConfig | null,
 ): Promise<string> {
@@ -149,27 +131,20 @@ async function promptClientId(
   ).trim();
 }
 
-/**
- * Prompt for optional channel name.
- */
-async function promptChannelName(
+export async function promptChannelName(
   prompter: WizardPrompter,
   account: TwitchAccountConfig | null,
 ): Promise<string> {
-  const channelName = String(
+  return String(
     await prompter.text({
       message: "Channel to join",
       initialValue: account?.channel ?? "",
       validate: (value) => (value?.trim() ? undefined : "Required"),
     }),
   ).trim();
-  return channelName;
 }
 
-/**
- * Prompt for token refresh credentials (client secret and refresh token).
- */
-async function promptRefreshTokenSetup(
+export async function promptRefreshTokenSetup(
   prompter: WizardPrompter,
   account: TwitchAccountConfig | null,
 ): Promise<{ clientSecret?: string; refreshToken?: string }> {
@@ -203,10 +178,7 @@ async function promptRefreshTokenSetup(
   return { clientSecret, refreshToken };
 }
 
-/**
- * Configure with env token path (returns early if user chooses env token).
- */
-async function configureWithEnvToken(
+export async function configureWithEnvToken(
   cfg: OpenClawConfig,
   prompter: WizardPrompter,
   account: TwitchAccountConfig | null,
@@ -228,7 +200,7 @@ async function configureWithEnvToken(
   const cfgWithAccount = setTwitchAccount(cfg, {
     username,
     clientId,
-    accessToken: "", // Will use env var
+    accessToken: "",
     enabled: true,
   });
 
@@ -239,9 +211,6 @@ async function configureWithEnvToken(
   return { cfg: cfgWithAccount };
 }
 
-/**
- * Set Twitch access control (role-based)
- */
 function setTwitchAccessControl(
   cfg: OpenClawConfig,
   allowedRoles: TwitchRole[],
@@ -259,14 +228,13 @@ function setTwitchAccessControl(
   });
 }
 
-const dmPolicy: ChannelOnboardingDmPolicy = {
+const twitchDmPolicy: ChannelOnboardingDmPolicy = {
   label: "Twitch",
   channel,
-  policyKey: "channels.twitch.allowedRoles", // Twitch uses roles instead of DM policy
+  policyKey: "channels.twitch.allowedRoles",
   allowFromKey: "channels.twitch.accounts.default.allowFrom",
   getCurrent: (cfg) => {
-    const account = getAccountConfig(cfg, DEFAULT_ACCOUNT_ID);
-    // Map allowedRoles to policy equivalent
+    const account = getAccountConfig(cfg as OpenClawConfig, DEFAULT_ACCOUNT_ID);
     if (account?.allowedRoles?.includes("all")) {
       return "open";
     }
@@ -278,10 +246,10 @@ const dmPolicy: ChannelOnboardingDmPolicy = {
   setPolicy: (cfg, policy) => {
     const allowedRoles: TwitchRole[] =
       policy === "open" ? ["all"] : policy === "allowlist" ? [] : ["moderator"];
-    return setTwitchAccessControl(cfg, allowedRoles, true);
+    return setTwitchAccessControl(cfg as OpenClawConfig, allowedRoles, true);
   },
   promptAllowFrom: async ({ cfg, prompter }) => {
-    const account = getAccountConfig(cfg, DEFAULT_ACCOUNT_ID);
+    const account = getAccountConfig(cfg as OpenClawConfig, DEFAULT_ACCOUNT_ID);
     const existingAllowFrom = account?.allowFrom ?? [];
 
     const entry = await prompter.text({
@@ -295,28 +263,43 @@ const dmPolicy: ChannelOnboardingDmPolicy = {
       .map((s) => s.trim())
       .filter(Boolean);
 
-    return setTwitchAccount(cfg, {
+    return setTwitchAccount(cfg as OpenClawConfig, {
       ...(account ?? undefined),
       allowFrom,
     });
   },
 };
 
-export const twitchOnboardingAdapter: ChannelOnboardingAdapter = {
-  channel,
-  getStatus: async ({ cfg }) => {
-    const account = getAccountConfig(cfg, DEFAULT_ACCOUNT_ID);
-    const configured = account ? isAccountConfigured(account) : false;
+export const twitchSetupAdapter: ChannelSetupAdapter = {
+  resolveAccountId: () => DEFAULT_ACCOUNT_ID,
+  applyAccountConfig: ({ cfg }) =>
+    setTwitchAccount(cfg, {
+      enabled: true,
+    }),
+};
 
-    return {
-      channel,
-      configured,
-      statusLines: [`Twitch: ${configured ? "configured" : "needs username, token, and clientId"}`],
-      selectionHint: configured ? "configured" : "needs setup",
-    };
+export const twitchSetupWizard: ChannelSetupWizard = {
+  channel,
+  resolveAccountIdForConfigure: () => DEFAULT_ACCOUNT_ID,
+  resolveShouldPromptAccountIds: () => false,
+  status: {
+    configuredLabel: "configured",
+    unconfiguredLabel: "needs username, token, and clientId",
+    configuredHint: "configured",
+    unconfiguredHint: "needs setup",
+    resolveConfigured: ({ cfg }) => {
+      const account = getAccountConfig(cfg as OpenClawConfig, DEFAULT_ACCOUNT_ID);
+      return account ? isAccountConfigured(account) : false;
+    },
+    resolveStatusLines: ({ cfg }) => {
+      const account = getAccountConfig(cfg as OpenClawConfig, DEFAULT_ACCOUNT_ID);
+      const configured = account ? isAccountConfigured(account) : false;
+      return [`Twitch: ${configured ? "configured" : "needs username, token, and clientId"}`];
+    },
   },
-  configure: async ({ cfg, prompter, forceAllowFrom }) => {
-    const account = getAccountConfig(cfg, DEFAULT_ACCOUNT_ID);
+  credentials: [],
+  finalize: async ({ cfg, prompter, forceAllowFrom }) => {
+    const account = getAccountConfig(cfg as OpenClawConfig, DEFAULT_ACCOUNT_ID);
 
     if (!account || !isAccountConfigured(account)) {
       await noteTwitchSetupHelp(prompter);
@@ -324,29 +307,27 @@ export const twitchOnboardingAdapter: ChannelOnboardingAdapter = {
 
     const envToken = process.env.OPENCLAW_TWITCH_ACCESS_TOKEN?.trim();
 
-    // Check if env var is set and config is empty
     if (envToken && !account?.accessToken) {
       const envResult = await configureWithEnvToken(
-        cfg,
+        cfg as OpenClawConfig,
         prompter,
         account,
         envToken,
         forceAllowFrom,
-        dmPolicy,
+        twitchDmPolicy,
       );
       if (envResult) {
         return envResult;
       }
     }
 
-    // Prompt for credentials
     const username = await promptUsername(prompter, account);
     const token = await promptToken(prompter, account, envToken);
     const clientId = await promptClientId(prompter, account);
     const channelName = await promptChannelName(prompter, account);
     const { clientSecret, refreshToken } = await promptRefreshTokenSetup(prompter, account);
 
-    const cfgWithAccount = setTwitchAccount(cfg, {
+    const cfgWithAccount = setTwitchAccount(cfg as OpenClawConfig, {
       username,
       accessToken: token,
       clientId,
@@ -357,11 +338,10 @@ export const twitchOnboardingAdapter: ChannelOnboardingAdapter = {
     });
 
     const cfgWithAllowFrom =
-      forceAllowFrom && dmPolicy.promptAllowFrom
-        ? await dmPolicy.promptAllowFrom({ cfg: cfgWithAccount, prompter })
+      forceAllowFrom && twitchDmPolicy.promptAllowFrom
+        ? await twitchDmPolicy.promptAllowFrom({ cfg: cfgWithAccount, prompter })
         : cfgWithAccount;
 
-    // Prompt for access control if allowFrom not set
     if (!account?.allowFrom || account.allowFrom.length === 0) {
       const accessConfig = await promptChannelAccessConfig({
         prompter,
@@ -384,14 +364,15 @@ export const twitchOnboardingAdapter: ChannelOnboardingAdapter = {
               ? ["moderator", "vip"]
               : [];
 
-        const cfgWithAccessControl = setTwitchAccessControl(cfgWithAllowFrom, allowedRoles, true);
-        return { cfg: cfgWithAccessControl };
+        return {
+          cfg: setTwitchAccessControl(cfgWithAllowFrom, allowedRoles, true),
+        };
       }
     }
 
     return { cfg: cfgWithAllowFrom };
   },
-  dmPolicy,
+  dmPolicy: twitchDmPolicy,
   disable: (cfg) => {
     const twitch = (cfg.channels as Record<string, unknown>)?.twitch as
       | Record<string, unknown>
@@ -404,14 +385,4 @@ export const twitchOnboardingAdapter: ChannelOnboardingAdapter = {
       },
     };
   },
-};
-
-// Export helper functions for testing
-export {
-  promptToken,
-  promptUsername,
-  promptClientId,
-  promptChannelName,
-  promptRefreshTokenSetup,
-  configureWithEnvToken,
 };
