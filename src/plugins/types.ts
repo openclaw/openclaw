@@ -1040,6 +1040,7 @@ export type PluginHookName =
   | "message_sent"
   | "before_tool_call"
   | "after_tool_call"
+  | "before_tool_surface"
   | "tool_result_persist"
   | "before_message_write"
   | "session_start"
@@ -1067,6 +1068,7 @@ export const PLUGIN_HOOK_NAMES = [
   "message_sent",
   "before_tool_call",
   "after_tool_call",
+  "before_tool_surface",
   "tool_result_persist",
   "before_message_write",
   "session_start",
@@ -1371,6 +1373,17 @@ export type PluginHookAfterToolCallEvent = {
   durationMs?: number;
 };
 
+// before_tool_surface hook
+export type PluginHookBeforeToolSurfaceEvent = {
+  /** Tool definitions about to be sent to the LLM. */
+  tools: Array<{ name: string; description: string; parameters: unknown }>;
+};
+
+export type PluginHookBeforeToolSurfaceResult = {
+  /** Replacement tool list. If set, overrides the original tools array. */
+  tools?: Array<{ name: string; description: string; parameters: unknown }>;
+};
+
 // tool_result_persist hook
 export type PluginHookToolResultPersistContext = {
   agentId?: string;
@@ -1581,6 +1594,10 @@ export type PluginHookHandlerMap = {
     event: PluginHookAfterToolCallEvent,
     ctx: PluginHookToolContext,
   ) => Promise<void> | void;
+  before_tool_surface: (
+    event: PluginHookBeforeToolSurfaceEvent,
+    ctx: PluginHookAgentContext,
+  ) => Promise<PluginHookBeforeToolSurfaceResult | void> | PluginHookBeforeToolSurfaceResult | void;
   tool_result_persist: (
     event: PluginHookToolResultPersistEvent,
     ctx: PluginHookToolResultPersistContext,
