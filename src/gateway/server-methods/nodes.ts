@@ -99,7 +99,11 @@ const pendingNodeActionsById = new Map<string, PendingNodeAction[]>();
 
 function mapNodeEventErrorToRpcError(error: unknown) {
   if (error instanceof AcpGatewayStoreError) {
-    return errorShape(ErrorCodes.INVALID_REQUEST, error.message, {
+    const rpcCode =
+      error.code === "ACP_NODE_STORE_READ_FAILED" || error.code === "ACP_NODE_STORE_WRITE_FAILED"
+        ? ErrorCodes.UNAVAILABLE
+        : ErrorCodes.INVALID_REQUEST;
+    return errorShape(rpcCode, error.message, {
       details: {
         code: error.code,
       },

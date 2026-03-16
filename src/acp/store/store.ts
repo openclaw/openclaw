@@ -441,6 +441,7 @@ export class AcpGatewayStore {
     nodeId: string;
     leaseId: string;
     leaseEpoch: number;
+    state?: AcpWorkerHeartbeatEnvelope["state"];
     now?: number;
     nodeRuntimeSessionId?: string;
     nodeWorkerRunId?: string;
@@ -496,7 +497,7 @@ export class AcpGatewayStore {
             run,
             lease,
             now,
-            state: run.highestAcceptedSeq > 0 ? "running" : "idle",
+            state: params.state ?? (run.highestAcceptedSeq > 0 ? "running" : "idle"),
             nodeRuntimeSessionId: params.nodeRuntimeSessionId,
             nodeWorkerRunId: params.nodeWorkerRunId,
             workerProtocolVersion: params.workerProtocolVersion,

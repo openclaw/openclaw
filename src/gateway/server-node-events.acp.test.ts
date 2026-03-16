@@ -389,6 +389,64 @@ describe("handleNodeEvent ACP worker ingress", () => {
     });
   });
 
+  it("preserves worker-reported cancelling state during reconnect reconcile", async () => {
+    const runtime = await createRuntime();
+    const now = Date.now();
+    const lease = await runtime.store.acquireLease({
+      sessionKey: "agent:main:acp:test-session",
+      nodeId: "node-1",
+      leaseId: "lease-1",
+      now,
+    });
+    await runtime.store.startRun({
+      sessionKey: "agent:main:acp:test-session",
+      runId: "run-1",
+      requestId: "req-1",
+      now,
+    });
+    await handleNodeEvent(buildCtx(), "node-1", {
+      event: "acp.worker.event",
+      payloadJSON: JSON.stringify({
+        nodeId: "node-1",
+        sessionKey: "agent:main:acp:test-session",
+        runId: "run-1",
+        leaseId: lease.leaseId,
+        leaseEpoch: lease.leaseEpoch,
+        seq: 1,
+        event: {
+          type: "status",
+          text: "working",
+        },
+      }),
+    });
+    await handleNodeDisconnect("node-1", {
+      now: now + 10,
+    });
+
+    await handleNodeConnected({
+      nodeId: "node-1",
+      invokeNode: async () => ({
+        ok: true,
+        payload: {
+          nodeId: "node-1",
+          ok: true,
+          sessionKey: "agent:main:acp:test-session",
+          leaseId: lease.leaseId,
+          leaseEpoch: lease.leaseEpoch,
+          state: "cancelling",
+          nodeRuntimeSessionId: "runtime-1",
+          nodeWorkerRunId: "worker-1",
+          workerProtocolVersion: 1,
+        },
+      }),
+      now: now + 11,
+    });
+
+    expect(await runtime.store.getRun("run-1")).toMatchObject({
+      state: "cancelling",
+    });
+  });
+
   it("marks a reconnecting lease lost when acp.session.status is incoherent", async () => {
     const runtime = await createRuntime();
     const now = Date.now();
@@ -433,6 +491,87 @@ describe("handleNodeEvent ACP worker ingress", () => {
     expect(await runtime.store.getRun("run-1")).toMatchObject({
       state: "recovering",
       recoveryReason: "status_mismatch",
+    });
+  });
+
+  it("fails safe to lost when acp.session.status transport fails during reconnect reconcile", async () => {
+    const runtime = await createRuntime();
+    const now = Date.now();
+    await runtime.store.acquireLease({
+      sessionKey: "agent:main:acp:test-session",
+      nodeId: "node-1",
+      leaseId: "lease-1",
+      now,
+    });
+    await runtime.store.startRun({
+      sessionKey: "agent:main:acp:test-session",
+      runId: "run-1",
+      requestId: "req-1",
+      now,
+    });
+    await handleNodeDisconnect("node-1", {
+      now: now + 10,
+    });
+
+    await expect(
+      handleNodeConnected({
+        nodeId: "node-1",
+        invokeNode: async () => ({
+          ok: false,
+          error: {
+            message: "status failed",
+          },
+        }),
+        now: now + 11,
+      }),
+    ).resolves.toBeUndefined();
+
+    expect(await runtime.store.getActiveLease("agent:main:acp:test-session")).toMatchObject({
+      state: "lost",
+    });
+    expect(await runtime.store.getRun("run-1")).toMatchObject({
+      state: "recovering",
+      recoveryReason: "status_mismatch",
+    });
+  });
+
+  it("fails safe to lost when acp.session.status payload is invalid during reconnect reconcile", async () => {
+    const runtime = await createRuntime();
+    const now = Date.now();
+    await runtime.store.acquireLease({
+      sessionKey: "agent:main:acp:test-session",
+      nodeId: "node-1",
+      leaseId: "lease-1",
+      now,
+    });
+    await runtime.store.startRun({
+      sessionKey: "agent:main:acp:test-session",
+      runId: "run-1",
+      requestId: "req-1",
+      now,
+    });
+    await handleNodeDisconnect("node-1", {
+      now: now + 10,
+    });
+
+    await expect(
+      handleNodeConnected({
+        nodeId: "node-1",
+        invokeNode: async () => ({
+          ok: true,
+          payload: {
+            nodeId: "node-1",
+            sessionKey: "agent:main:acp:test-session",
+            leaseId: "lease-1",
+            leaseEpoch: 1,
+          },
+        }),
+        now: now + 11,
+      }),
+    ).resolves.toBeUndefined();
+
+    expect(await runtime.store.getActiveLease("agent:main:acp:test-session")).toMatchObject({
+      state: "lost",
     });
   });
 });

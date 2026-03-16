@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { AcpNodeRuntime } from "../runtime/acp-node.js";
 import { FakeAcpNodeWorker } from "../test-harness/fake-acp-node-worker.js";
 import { AcpGatewayNodeRuntime, __testing } from "./gateway-events.js";
 
@@ -415,5 +416,179 @@ describe("AcpGatewayNodeRuntime", () => {
     expect(await store.getRun("run-1")).toMatchObject({
       state: "completed",
     });
+  });
+
+  it("drives live ACP control operations through the acp-node runtime backend path", async () => {
+    const { runtime } = await createRuntime();
+    const commands: string[] = [];
+    const backend = new AcpNodeRuntime({
+      gatewayRuntime: runtime,
+      listNodes: () =>
+        [
+          {
+            nodeId: "node-1",
+            caps: ["acp:v1"],
+            commands: [
+              "acp.session.ensure",
+              "acp.session.load",
+              "acp.turn.start",
+              "acp.turn.cancel",
+              "acp.session.close",
+              "acp.session.status",
+            ],
+          },
+        ] as never,
+      invokeNode: async ({ command, params }) => {
+        commands.push(command);
+        if (command === "acp.session.ensure") {
+          const payload = params as Record<string, unknown>;
+          return {
+            ok: true,
+            payload: {
+              ok: true,
+              sessionKey: payload.sessionKey,
+              leaseId: payload.leaseId,
+              leaseEpoch: payload.leaseEpoch,
+              nodeRuntimeSessionId: "runtime-1",
+            },
+          };
+        }
+        if (command === "acp.session.status") {
+          const payload = params as Record<string, unknown>;
+          return {
+            ok: true,
+            payload: {
+              nodeId: "node-1",
+              ok: true,
+              sessionKey: payload.sessionKey,
+              leaseId: payload.leaseId,
+              leaseEpoch: payload.leaseEpoch,
+              state: "running",
+              nodeRuntimeSessionId: "runtime-1",
+              nodeWorkerRunId: "worker-1",
+              workerProtocolVersion: 1,
+              details: {
+                summary: "run active",
+              },
+            },
+          };
+        }
+        if (command === "acp.turn.start") {
+          const payload = params as Record<string, unknown>;
+          const sessionKey = String(payload.sessionKey);
+          const runId = String(payload.runId);
+          const leaseId = String(payload.leaseId);
+          const leaseEpoch = Number(payload.leaseEpoch);
+          queueMicrotask(() => {
+            void runtime.ingestNodeEvent("node-1", {
+              event: "acp.worker.event",
+              payloadJSON: JSON.stringify({
+                nodeId: "node-1",
+                sessionKey,
+                runId,
+                leaseId,
+                leaseEpoch,
+                seq: 1,
+                event: {
+                  type: "text_delta",
+                  stream: "output",
+                  text: "hello",
+                },
+              }),
+            });
+            void runtime.ingestNodeEvent("node-1", {
+              event: "acp.worker.terminal",
+              payloadJSON: JSON.stringify({
+                nodeId: "node-1",
+                sessionKey,
+                runId,
+                leaseId,
+                leaseEpoch,
+                terminalEventId: "term-1",
+                finalSeq: 1,
+                terminal: {
+                  kind: "completed",
+                  stopReason: "done",
+                },
+              }),
+            });
+          });
+          return {
+            ok: true,
+            payload: {
+              ok: true,
+              accepted: true,
+              nodeWorkerRunId: "worker-1",
+            },
+          };
+        }
+        if (command === "acp.turn.cancel") {
+          return {
+            ok: true,
+            payload: {
+              ok: true,
+              accepted: true,
+            },
+          };
+        }
+        if (command === "acp.session.close") {
+          return {
+            ok: true,
+            payload: {
+              ok: true,
+              accepted: true,
+            },
+          };
+        }
+        throw new Error(`unexpected command ${command}`);
+      },
+    });
+    const handle = await backend.ensureSession({
+      sessionKey: "agent:main:acp:test-session",
+      agent: "main",
+      mode: "persistent",
+    });
+    const status = await backend.getStatus({
+      handle,
+    });
+    expect(status.summary).toBe("run active");
+
+    const seenEvents: string[] = [];
+    for await (const event of backend.runTurn({
+      handle,
+      text: "hello",
+      mode: "prompt",
+      requestId: "run-1",
+    })) {
+      if (event.type !== "error") {
+        seenEvents.push(event.type);
+      }
+    }
+    expect(seenEvents).toEqual(["text_delta", "done"]);
+
+    await runtime.store.startRun({
+      sessionKey: "agent:main:acp:test-session",
+      runId: "run-cancel",
+      requestId: "run-cancel",
+    });
+    await backend.cancel({
+      handle,
+      reason: "abort",
+    });
+
+    await backend.close({
+      handle,
+      reason: "cleanup",
+    });
+
+    expect(commands).toEqual(
+      expect.arrayContaining([
+        "acp.session.ensure",
+        "acp.session.status",
+        "acp.turn.start",
+        "acp.turn.cancel",
+        "acp.session.close",
+      ]),
+    );
   });
 });

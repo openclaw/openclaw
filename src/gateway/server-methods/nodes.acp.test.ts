@@ -64,7 +64,7 @@ vi.mock("../ws-log.js", () => ({
 
 const { AcpGatewayNodeRuntime, __testing: acpGatewayTesting } =
   await import("../../acp/store/gateway-events.js");
-const { AcpGatewayStore } = await import("../../acp/store/store.js");
+const { AcpGatewayStore, AcpGatewayStoreError } = await import("../../acp/store/store.js");
 const { nodeHandlers } = await import("./nodes.js");
 
 const tempRoots: string[] = [];
@@ -259,5 +259,129 @@ describe("nodeHandlers node.event ACP ingress", () => {
       }),
     );
     expect(await runtime.store.listRunEvents("run-1")).toHaveLength(0);
+  });
+
+  it("rejects unsupported acp.worker.status explicitly on the live RPC path", async () => {
+    const runtime = await createRuntime();
+    const lease = await runtime.store.acquireLease({
+      sessionKey: "agent:main:acp:test-session",
+      nodeId: "node-1",
+      leaseId: "lease-1",
+      now: 10,
+    });
+    await runtime.store.startRun({
+      sessionKey: "agent:main:acp:test-session",
+      runId: "run-1",
+      requestId: "req-1",
+      now: 10,
+    });
+    const respond = vi.fn();
+
+    await nodeHandlers["node.event"]({
+      params: {
+        event: "acp.worker.status",
+        payload: {
+          nodeId: "node-1",
+          sessionKey: "agent:main:acp:test-session",
+          runId: "run-1",
+          leaseId: lease.leaseId,
+          leaseEpoch: lease.leaseEpoch,
+        },
+      },
+      respond,
+      context: buildContext(),
+      client: {
+        connect: {
+          role: "node",
+          client: {
+            id: "node-1",
+            mode: "node",
+            name: "node",
+            platform: "linux",
+            version: "test",
+          },
+        },
+      } as never,
+      req: { type: "req", id: "req-3", method: "node.event" },
+      isWebchatConnect: () => false,
+    });
+
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        code: "INVALID_REQUEST",
+        message: expect.stringContaining("Unsupported ACP worker event"),
+        details: {
+          code: "ACP_NODE_INVALID_EVENT",
+        },
+      }),
+    );
+  });
+
+  it("maps gateway durability failures to UNAVAILABLE on the live RPC path", async () => {
+    acpGatewayTesting.setAcpGatewayNodeRuntimeForTests({
+      store: {} as never,
+      ingestNodeEvent: async () => {
+        throw new AcpGatewayStoreError("ACP_NODE_STORE_WRITE_FAILED", "disk full");
+      },
+      markNodeDisconnected: async () => ({ sessions: [], runs: [] }),
+      reconcileSuspectLease: async () => ({}) as never,
+      expireSuspectLeases: async () => ({ sessions: [], runs: [], leases: [] }),
+      querySessionStatus: async () => ({}) as never,
+      reconcileConnectedNodeLeases: async () => ({ reconciled: [], lost: [] }),
+      ensureSession: async () => ({ ok: true }),
+      loadSession: async () => ({ ok: true }),
+      startTurn: async () => ({ ok: true }),
+      cancelTurn: async () => ({ ok: true }),
+      closeSession: async () => ({ ok: true }),
+    } as never);
+    const respond = vi.fn();
+
+    await nodeHandlers["node.event"]({
+      params: {
+        event: "acp.worker.event",
+        payload: {
+          nodeId: "node-1",
+          sessionKey: "agent:main:acp:test-session",
+          runId: "run-1",
+          leaseId: "lease-1",
+          leaseEpoch: 1,
+          seq: 1,
+          event: {
+            type: "text_delta",
+            text: "hello",
+          },
+        },
+      },
+      respond,
+      context: buildContext(),
+      client: {
+        connect: {
+          role: "node",
+          client: {
+            id: "node-1",
+            mode: "node",
+            name: "node",
+            platform: "linux",
+            version: "test",
+          },
+        },
+      } as never,
+      req: { type: "req", id: "req-4", method: "node.event" },
+      isWebchatConnect: () => false,
+    });
+
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        code: "UNAVAILABLE",
+        message: "disk full",
+        details: {
+          code: "ACP_NODE_STORE_WRITE_FAILED",
+        },
+      }),
+    );
   });
 });

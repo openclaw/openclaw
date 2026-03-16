@@ -326,6 +326,12 @@ export class AcpGatewayNodeRuntime {
         return true;
       }
       default:
+        if (evt.event.startsWith("acp.worker.")) {
+          throw new AcpGatewayStoreError(
+            "ACP_NODE_INVALID_EVENT",
+            `Unsupported ACP worker event "${evt.event}".`,
+          );
+        }
         return false;
     }
   }
@@ -343,6 +349,7 @@ export class AcpGatewayNodeRuntime {
     nodeId: string;
     leaseId: string;
     leaseEpoch: number;
+    state?: AcpWorkerHeartbeatEnvelope["state"];
     now?: number;
     nodeRuntimeSessionId?: string;
     nodeWorkerRunId?: string;
@@ -381,40 +388,50 @@ export class AcpGatewayNodeRuntime {
         result.error?.message || "ACP node status request failed.",
       );
     }
-    const payload = parseInvokePayloadObject(result);
-    const state = requireString(payload.state, "state");
-    if (
-      state !== "idle" &&
-      state !== "running" &&
-      state !== "cancelling" &&
-      state !== "missing" &&
-      state !== "error"
-    ) {
+    try {
+      const payload = parseInvokePayloadObject(result);
+      const state = requireString(payload.state, "state");
+      if (
+        state !== "idle" &&
+        state !== "running" &&
+        state !== "cancelling" &&
+        state !== "missing" &&
+        state !== "error"
+      ) {
+        throw new AcpGatewayNodeTransportError(
+          "ACP_NODE_INVALID_STATUS",
+          `ACP node status state "${state}" is not supported.`,
+        );
+      }
+      return {
+        nodeId: requireString(payload.nodeId, "nodeId"),
+        ok: true,
+        sessionKey: requireString(payload.sessionKey, "sessionKey"),
+        leaseId: requireString(payload.leaseId, "leaseId"),
+        leaseEpoch: requireInteger(payload.leaseEpoch, "leaseEpoch", 0),
+        state,
+        ...(optionalString(payload.nodeRuntimeSessionId)
+          ? { nodeRuntimeSessionId: optionalString(payload.nodeRuntimeSessionId) }
+          : {}),
+        ...(optionalString(payload.nodeWorkerRunId)
+          ? { nodeWorkerRunId: optionalString(payload.nodeWorkerRunId) }
+          : {}),
+        ...(typeof payload.workerProtocolVersion === "number" &&
+        Number.isFinite(payload.workerProtocolVersion) &&
+        Math.trunc(payload.workerProtocolVersion) === payload.workerProtocolVersion
+          ? { workerProtocolVersion: payload.workerProtocolVersion }
+          : {}),
+        ...(isRecord(payload.details) ? { details: payload.details } : {}),
+      };
+    } catch (error) {
+      if (error instanceof AcpGatewayNodeTransportError) {
+        throw error;
+      }
       throw new AcpGatewayNodeTransportError(
         "ACP_NODE_INVALID_STATUS",
-        `ACP node status state "${state}" is not supported.`,
+        error instanceof Error ? error.message : "ACP node status payload is invalid.",
       );
     }
-    return {
-      nodeId: requireString(payload.nodeId, "nodeId"),
-      ok: true,
-      sessionKey: requireString(payload.sessionKey, "sessionKey"),
-      leaseId: requireString(payload.leaseId, "leaseId"),
-      leaseEpoch: requireInteger(payload.leaseEpoch, "leaseEpoch", 0),
-      state,
-      ...(optionalString(payload.nodeRuntimeSessionId)
-        ? { nodeRuntimeSessionId: optionalString(payload.nodeRuntimeSessionId) }
-        : {}),
-      ...(optionalString(payload.nodeWorkerRunId)
-        ? { nodeWorkerRunId: optionalString(payload.nodeWorkerRunId) }
-        : {}),
-      ...(typeof payload.workerProtocolVersion === "number" &&
-      Number.isFinite(payload.workerProtocolVersion) &&
-      Math.trunc(payload.workerProtocolVersion) === payload.workerProtocolVersion
-        ? { workerProtocolVersion: payload.workerProtocolVersion }
-        : {}),
-      ...(isRecord(payload.details) ? { details: payload.details } : {}),
-    };
   }
 
   async reconcileConnectedNodeLeases(params: {
@@ -433,42 +450,54 @@ export class AcpGatewayNodeRuntime {
       (lease) => lease.nodeId === params.nodeId && lease.state === "suspect",
     );
     for (const lease of candidateLeases) {
-      const status = await this.querySessionStatus({
-        invokeNode: params.invokeNode,
-        nodeId: params.nodeId,
-        sessionKey: lease.sessionKey,
-        leaseId: lease.leaseId,
-        leaseEpoch: lease.leaseEpoch,
-      });
-      if (
-        status.nodeId === params.nodeId &&
-        status.sessionKey === lease.sessionKey &&
-        status.leaseId === lease.leaseId &&
-        status.leaseEpoch === lease.leaseEpoch &&
-        (status.state === "idle" || status.state === "running" || status.state === "cancelling")
-      ) {
-        const next = await this.store.reconcileSuspectLease({
-          sessionKey: lease.sessionKey,
+      try {
+        const status = await this.querySessionStatus({
+          invokeNode: params.invokeNode,
           nodeId: params.nodeId,
+          sessionKey: lease.sessionKey,
           leaseId: lease.leaseId,
           leaseEpoch: lease.leaseEpoch,
-          now,
-          ...(status.nodeRuntimeSessionId
-            ? { nodeRuntimeSessionId: status.nodeRuntimeSessionId }
-            : {}),
-          ...(status.nodeWorkerRunId ? { nodeWorkerRunId: status.nodeWorkerRunId } : {}),
-          ...(typeof status.workerProtocolVersion === "number"
-            ? { workerProtocolVersion: status.workerProtocolVersion }
-            : {}),
         });
-        reconciled.push(next.lease);
-        continue;
+        if (
+          status.nodeId === params.nodeId &&
+          status.sessionKey === lease.sessionKey &&
+          status.leaseId === lease.leaseId &&
+          status.leaseEpoch === lease.leaseEpoch &&
+          (status.state === "idle" || status.state === "running" || status.state === "cancelling")
+        ) {
+          const next = await this.store.reconcileSuspectLease({
+            sessionKey: lease.sessionKey,
+            nodeId: params.nodeId,
+            leaseId: lease.leaseId,
+            leaseEpoch: lease.leaseEpoch,
+            state: status.state,
+            now,
+            ...(status.nodeRuntimeSessionId
+              ? { nodeRuntimeSessionId: status.nodeRuntimeSessionId }
+              : {}),
+            ...(status.nodeWorkerRunId ? { nodeWorkerRunId: status.nodeWorkerRunId } : {}),
+            ...(typeof status.workerProtocolVersion === "number"
+              ? { workerProtocolVersion: status.workerProtocolVersion }
+              : {}),
+          });
+          reconciled.push(next.lease);
+          continue;
+        }
+        const next = await this.store.markStatusMismatch({
+          sessionKey: lease.sessionKey,
+          now,
+        });
+        lost.push(next.lease);
+      } catch (error) {
+        if (!(error instanceof AcpGatewayNodeTransportError)) {
+          throw error;
+        }
+        const next = await this.store.markStatusMismatch({
+          sessionKey: lease.sessionKey,
+          now,
+        });
+        lost.push(next.lease);
       }
-      const next = await this.store.markStatusMismatch({
-        sessionKey: lease.sessionKey,
-        now,
-      });
-      lost.push(next.lease);
     }
     return { reconciled, lost };
   }
