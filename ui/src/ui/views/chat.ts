@@ -63,6 +63,8 @@ export type ChatProps = {
   compactionStatus?: CompactionIndicatorStatus | null;
   fallbackStatus?: FallbackIndicatorStatus | null;
   messages: unknown[];
+  /** True when history was limited by request limit (older messages not loaded). */
+  historyTruncated?: boolean;
   toolMessages: unknown[];
   streamSegments: Array<{ text: string; ts: number }>;
   stream: string | null;
@@ -1428,13 +1430,21 @@ function buildChatItems(props: ChatProps): Array<ChatItem | MessageGroup> {
   const history = Array.isArray(props.messages) ? props.messages : [];
   const tools = Array.isArray(props.toolMessages) ? props.toolMessages : [];
   const historyStart = Math.max(0, history.length - CHAT_HISTORY_RENDER_LIMIT);
-  if (historyStart > 0) {
+  const showTruncationNotice =
+    historyStart > 0 ||
+    (Boolean(props.historyTruncated) && history.length >= CHAT_HISTORY_RENDER_LIMIT);
+  if (showTruncationNotice) {
+    const hiddenCount = historyStart > 0 ? historyStart : "older";
+    const label =
+      typeof hiddenCount === "number"
+        ? `Showing last ${CHAT_HISTORY_RENDER_LIMIT} messages (${hiddenCount} hidden).`
+        : `Showing last ${CHAT_HISTORY_RENDER_LIMIT} messages (older messages not loaded).`;
     items.push({
       kind: "message",
       key: "chat:history:notice",
       message: {
         role: "system",
-        content: `Showing last ${CHAT_HISTORY_RENDER_LIMIT} messages (${historyStart} hidden).`,
+        content: label,
         timestamp: Date.now(),
       },
     });
