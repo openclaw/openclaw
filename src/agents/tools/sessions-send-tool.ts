@@ -17,6 +17,7 @@ import {
   extractAssistantText,
   resolveEffectiveSessionToolsVisibility,
   resolveSessionReference,
+  resolveSandboxedSessionToolContext,
   resolveVisibleSessionReference,
   stripToolMessages,
 } from "./sessions-helpers.js";
