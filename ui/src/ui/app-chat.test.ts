@@ -93,7 +93,7 @@ describe("handleSendChat", () => {
           ts: 0,
           path: "",
           count: 0,
-          defaults: { model: "gpt-5", contextTokens: null },
+          defaults: { modelProvider: "openai", model: "gpt-5", contextTokens: null },
           sessions: [],
         };
       }
