@@ -1,16 +1,16 @@
+import { buildTelegramExecApprovalButtons } from "../../extensions/telegram/src/approval-buttons.js";
+import { sendTypingTelegram } from "../../extensions/telegram/src/send.js";
 import type { ReplyPayload } from "../auto-reply/types.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { loadConfig } from "../config/config.js";
-import { loadSessionStore, resolveStorePath } from "../config/sessions.js";
 import type {
   ExecApprovalForwardingConfig,
   ExecApprovalForwardTarget,
 } from "../config/types.approvals.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { normalizeAccountId, parseAgentSessionKey } from "../routing/session-key.js";
-import { compileSafeRegex, testRegexWithBoundedInput } from "../security/safe-regex.js";
-import { buildTelegramExecApprovalButtons } from "../telegram/approval-buttons.js";
-import { sendTypingTelegram } from "../telegram/send.js";
+import { compileConfigRegex } from "../security/config-regex.js";
+import { testRegexWithBoundedInput } from "../security/safe-regex.js";
 import {
   isDeliverableMessageChannel,
   normalizeMessageChannel,
@@ -18,13 +18,13 @@ import {
 } from "../utils/message-channel.js";
 import { resolveExecApprovalCommandDisplay } from "./exec-approval-command-display.js";
 import { buildExecApprovalPendingReplyPayload } from "./exec-approval-reply.js";
+import { resolveExecApprovalSessionTarget } from "./exec-approval-session-target.js";
 import type {
   ExecApprovalDecision,
   ExecApprovalRequest,
   ExecApprovalResolved,
 } from "./exec-approvals.js";
 import { deliverOutboundPayloads } from "./outbound/deliver.js";
-import { resolveSessionDeliveryTarget } from "./outbound/targets.js";
 
 const log = createSubsystemLogger("gateway/exec-approvals");
 export type { ExecApprovalRequest, ExecApprovalResolved };
@@ -64,8 +64,8 @@ function matchSessionFilter(sessionKey: string, patterns: string[]): boolean {
     if (sessionKey.includes(pattern)) {
       return true;
     }
-    const regex = compileSafeRegex(pattern);
-    return regex ? testRegexWithBoundedInput(regex, sessionKey) : false;
+    const compiled = compileConfigRegex(pattern);
+    return compiled?.regex ? testRegexWithBoundedInput(compiled.regex, sessionKey) : false;
   });
 }
 
@@ -281,37 +281,26 @@ function defaultResolveSessionTarget(params: {
   cfg: OpenClawConfig;
   request: ExecApprovalRequest;
 }): ExecApprovalForwardTarget | null {
-  const sessionKey = params.request.request.sessionKey?.trim();
-  if (!sessionKey) {
-    return null;
-  }
-  const parsed = parseAgentSessionKey(sessionKey);
-  const agentId = parsed?.agentId ?? params.request.request.agentId ?? "main";
-  const storePath = resolveStorePath(params.cfg.session?.store, { agentId });
-  const store = loadSessionStore(storePath);
-  const entry = store[sessionKey];
-  if (!entry) {
-    return null;
-  }
-  const target = resolveSessionDeliveryTarget({
-    entry,
-    requestedChannel: "last",
+  const resolvedTarget = resolveExecApprovalSessionTarget({
+    cfg: params.cfg,
+    request: params.request,
     turnSourceChannel: normalizeTurnSourceChannel(params.request.request.turnSourceChannel),
     turnSourceTo: params.request.request.turnSourceTo?.trim() || undefined,
     turnSourceAccountId: params.request.request.turnSourceAccountId?.trim() || undefined,
     turnSourceThreadId: params.request.request.turnSourceThreadId ?? undefined,
   });
-  if (!target.channel || !target.to) {
+  if (!resolvedTarget?.channel || !resolvedTarget.to) {
     return null;
   }
-  if (!isDeliverableMessageChannel(target.channel)) {
+  const channel = resolvedTarget.channel;
+  if (!isDeliverableMessageChannel(channel)) {
     return null;
   }
   return {
-    channel: target.channel,
-    to: target.to,
-    accountId: target.accountId,
-    threadId: target.threadId,
+    channel,
+    to: resolvedTarget.to,
+    accountId: resolvedTarget.accountId,
+    threadId: resolvedTarget.threadId,
   };
 }
 

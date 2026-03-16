@@ -23,7 +23,7 @@ Welcome to the lobster tank! 🦞
 - **Jos** - Telegram, API, Nix mode
   - GitHub: [@joshp123](https://github.com/joshp123) · X: [@jjpcodes](https://x.com/jjpcodes)
 
-- **Ayaan Zaidi** - Telegram subsystem, iOS app
+- **Ayaan Zaidi** - Telegram subsystem, Android app
   - GitHub: [@obviyus](https://github.com/obviyus) · X: [@0bviyus](https://x.com/0bviyus)
 
 - **Tyler Yust** - Agents/subagents, cron, BlueBubbles, macOS app
@@ -61,7 +61,7 @@ Welcome to the lobster tank! 🦞
 - **Josh Lehman** - Compaction, Tlon/Urbit subsystem
   - GitHub [@jalehman](https://github.com/jalehman) · X: [@jlehman\_](https://x.com/jlehman_)
 
-- **Radek Sienkiewicz** - Control UI + WebChat correctness
+- **Radek Sienkiewicz** - Docs, Control UI
   - GitHub [@velvet-shark](https://github.com/velvet-shark) · X: [@velvet_shark](https://twitter.com/velvet_shark)
 
 - **Muhammed Mukhthar** - Mattermost, CLI
@@ -75,6 +75,9 @@ Welcome to the lobster tank! 🦞
 
 - **Tengji (George) Zhang** - Chinese model APIs, cloud, pi
   - GitHub: [@odysseus0](https://github.com/odysseus0) · X: [@odysseus0z](https://x.com/odysseus0z)
+
+- **Andrew (Bubbles) Demczuk** - Agents/Gateway/TTS/VTT
+  - GitHub: [@ademczuk](https://github.com/ademczuk) · X: [@ademczuk](https://x.com/ademczuk)
 
 ## How to Contribute
 
@@ -92,6 +95,8 @@ Welcome to the lobster tank! 🦞
 - Describe what & why
 - Reply to or resolve bot review conversations you addressed before asking for review again
 - **Include screenshots** — one showing the problem/before, one showing the fix/after (for UI or visual changes)
+- Use American English spelling and grammar in code, comments, docs, and UI strings
+- Do not edit files covered by `CODEOWNERS` security ownership unless a listed owner explicitly asked for the change or is already reviewing it with you. Treat those paths as restricted review surfaces, not opportunistic cleanup targets.
 
 ## Review Conversations Are Author-Owned
 

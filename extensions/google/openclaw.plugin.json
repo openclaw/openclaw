@@ -1,0 +1,9 @@
+{
+  "id": "google",
+  "providers": ["google-gemini-cli"],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

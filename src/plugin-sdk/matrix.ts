@@ -11,6 +11,7 @@ export {
 export type { ReplyPayload } from "../auto-reply/types.js";
 export {
   compileAllowlist,
+  resolveCompiledAllowlistMatch,
   resolveAllowlistCandidates,
   resolveAllowlistMatchByCandidates,
 } from "../channels/allowlist-match.js";
@@ -31,11 +32,6 @@ export {
 } from "../channels/plugins/config-helpers.js";
 export { buildChannelConfigSchema } from "../channels/plugins/config-schema.js";
 export { formatPairingApproveHint } from "../channels/plugins/helpers.js";
-export type {
-  ChannelOnboardingAdapter,
-  ChannelOnboardingDmPolicy,
-} from "../channels/plugins/onboarding-types.js";
-export { promptChannelAccessConfig } from "../channels/plugins/onboarding/channel-access.js";
 export {
   buildSingleChannelSecretPromptState,
   addWildcardAllowFrom,
@@ -112,3 +108,5 @@ export {
   buildProbeChannelStatusSummary,
   collectStatusIssuesFromLastError,
 } from "./status-helpers.js";
+export { matrixSetupWizard } from "../../extensions/matrix/src/setup-surface.js";
+export { matrixSetupAdapter } from "../../extensions/matrix/src/setup-core.js";

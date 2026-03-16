@@ -3,6 +3,7 @@ import { type Api, getEnvApiKey, type Model } from "@mariozechner/pi-ai";
 import { formatCliCommand } from "../cli/command-format.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { ModelProviderAuthMode, ModelProviderConfig } from "../config/types.js";
+import { coerceSecretRef } from "../config/types.secrets.js";
 import { getShellEnvAppliedKeys } from "../infra/shell-env.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
@@ -19,6 +20,7 @@ import {
 } from "./auth-profiles.js";
 import { PROVIDER_ENV_API_KEY_CANDIDATES } from "./model-auth-env-vars.js";
 import {
+  CUSTOM_LOCAL_AUTH_MARKER,
   isKnownEnvApiKeyMarker,
   isNonSecretApiKeyMarker,
   OLLAMA_LOCAL_AUTH_MARKER,
@@ -33,6 +35,14 @@ const AWS_BEARER_ENV = "AWS_BEARER_TOKEN_BEDROCK";
 const AWS_ACCESS_KEY_ENV = "AWS_ACCESS_KEY_ID";
 const AWS_SECRET_KEY_ENV = "AWS_SECRET_ACCESS_KEY";
 const AWS_PROFILE_ENV = "AWS_PROFILE";
+let providerRuntimePromise:
+  | Promise<typeof import("../plugins/provider-runtime.runtime.js")>
+  | undefined;
+
+function loadProviderRuntime() {
+  providerRuntimePromise ??= import("../plugins/provider-runtime.runtime.js");
+  return providerRuntimePromise;
+}
 
 function resolveProviderConfig(
   cfg: OpenClawConfig | undefined,
@@ -119,15 +129,44 @@ function resolveProviderAuthOverride(
   return undefined;
 }
 
+function isLocalBaseUrl(baseUrl: string): boolean {
+  try {
+    const host = new URL(baseUrl).hostname.toLowerCase();
+    return (
+      host === "localhost" ||
+      host === "127.0.0.1" ||
+      host === "0.0.0.0" ||
+      host === "[::1]" ||
+      host === "[::ffff:7f00:1]" ||
+      host === "[::ffff:127.0.0.1]"
+    );
+  } catch {
+    return false;
+  }
+}
+
+function hasExplicitProviderApiKeyConfig(providerConfig: ModelProviderConfig): boolean {
+  return (
+    normalizeOptionalSecretInput(providerConfig.apiKey) !== undefined ||
+    coerceSecretRef(providerConfig.apiKey) !== null
+  );
+}
+
+function isCustomLocalProviderConfig(providerConfig: ModelProviderConfig): boolean {
+  return (
+    typeof providerConfig.baseUrl === "string" &&
+    providerConfig.baseUrl.trim().length > 0 &&
+    typeof providerConfig.api === "string" &&
+    providerConfig.api.trim().length > 0 &&
+    Array.isArray(providerConfig.models) &&
+    providerConfig.models.length > 0
+  );
+}
+
 function resolveSyntheticLocalProviderAuth(params: {
   cfg: OpenClawConfig | undefined;
   provider: string;
 }): ResolvedProviderAuth | null {
-  const normalizedProvider = normalizeProviderId(params.provider);
-  if (normalizedProvider !== "ollama") {
-    return null;
-  }
-
   const providerConfig = resolveProviderConfig(params.cfg, params.provider);
   if (!providerConfig) {
     return null;
@@ -141,11 +180,38 @@ function resolveSyntheticLocalProviderAuth(params: {
     return null;
   }
 
-  return {
-    apiKey: OLLAMA_LOCAL_AUTH_MARKER,
-    source: "models.providers.ollama (synthetic local key)",
-    mode: "api-key",
-  };
+  const normalizedProvider = normalizeProviderId(params.provider);
+  if (normalizedProvider === "ollama") {
+    return {
+      apiKey: OLLAMA_LOCAL_AUTH_MARKER,
+      source: "models.providers.ollama (synthetic local key)",
+      mode: "api-key",
+    };
+  }
+
+  const authOverride = resolveProviderAuthOverride(params.cfg, params.provider);
+  if (authOverride && authOverride !== "api-key") {
+    return null;
+  }
+  if (!isCustomLocalProviderConfig(providerConfig)) {
+    return null;
+  }
+  if (hasExplicitProviderApiKeyConfig(providerConfig)) {
+    return null;
+  }
+
+  // Custom providers pointing at a local server (e.g. llama.cpp, vLLM, LocalAI)
+  // typically don't require auth. Synthesize a local key so the auth resolver
+  // doesn't reject them when the user left the API key blank during onboarding.
+  if (providerConfig.baseUrl && isLocalBaseUrl(providerConfig.baseUrl)) {
+    return {
+      apiKey: CUSTOM_LOCAL_AUTH_MARKER,
+      source: `models.providers.${params.provider} (synthetic local key)`,
+      mode: "api-key",
+    };
+  }
+
+  return null;
 }
 
 function resolveEnvSourceLabel(params: {
@@ -300,13 +366,20 @@ export async function resolveApiKeyForProvider(params: {
     return resolveAwsSdkAuthInfo();
   }
 
-  if (provider === "openai") {
-    const hasCodex = listProfilesForProvider(store, "openai-codex").length > 0;
-    if (hasCodex) {
-      throw new Error(
-        'No API key found for provider "openai". You are authenticated with OpenAI Codex OAuth. Use openai-codex/gpt-5.4 (OAuth) or set OPENAI_API_KEY to use openai/gpt-5.4.',
-      );
-    }
+  const { buildProviderMissingAuthMessageWithPlugin } = await loadProviderRuntime();
+  const pluginMissingAuthMessage = buildProviderMissingAuthMessageWithPlugin({
+    provider,
+    config: cfg,
+    context: {
+      config: cfg,
+      agentDir: params.agentDir,
+      env: process.env,
+      provider,
+      listProfileIds: (providerId) => listProfilesForProvider(store, providerId),
+    },
+  });
+  if (pluginMissingAuthMessage) {
+    throw new Error(pluginMissingAuthMessage);
   }
 
   const authStorePath = resolveAuthStorePathForDisplay(params.agentDir);
@@ -438,4 +511,26 @@ export function requireApiKey(auth: ResolvedProviderAuth, provider: string): str
     return key;
   }
   throw new Error(`No API key resolved for provider "${provider}" (auth mode: ${auth.mode}).`);
+}
+
+export function applyLocalNoAuthHeaderOverride<T extends Model<Api>>(
+  model: T,
+  auth: ResolvedProviderAuth | null | undefined,
+): T {
+  if (auth?.apiKey !== CUSTOM_LOCAL_AUTH_MARKER || model.api !== "openai-completions") {
+    return model;
+  }
+
+  // OpenAI's SDK always generates Authorization from apiKey. Keep the non-secret
+  // placeholder so construction succeeds, then clear the header at request build
+  // time for local servers that intentionally do not require auth.
+  const headers = {
+    ...model.headers,
+    Authorization: null,
+  } as unknown as Record<string, string>;
+
+  return {
+    ...model,
+    headers,
+  };
 }
