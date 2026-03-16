@@ -102,15 +102,15 @@ function buildSyntheticMessageEvent(
   return {
     sender: {
       sender_id: {
-        open_id: event.operator.open_id,
-        user_id: event.operator.user_id,
-        union_id: event.operator.union_id,
+        open_id: event.operator?.open_id ?? "",
+        user_id: event.operator?.user_id ?? "",
+        union_id: event.operator?.union_id ?? "",
       },
     },
     message: {
-      message_id: `card-action-${event.token}`,
-      chat_id: event.context.chat_id || event.operator.open_id,
-      chat_type: chatType ?? (event.context.chat_id ? "group" : "p2p"),
+      message_id: `card-action-${event.token ?? ""}`,
+      chat_id: event.context?.chat_id || event.operator?.open_id ?? "",
+      chat_type: chatType ?? (event.context?.chat_id ? "group" : "p2p"),
       message_type: "text",
       content: JSON.stringify({ text: content }),
     },
@@ -118,11 +118,11 @@ function buildSyntheticMessageEvent(
 }
 
 function resolveCallbackTarget(event: FeishuCardActionEvent): string {
-  const chatId = event.context.chat_id?.trim();
+  const chatId = event.context?.chat_id?.trim();
   if (chatId) {
     return `chat:${chatId}`;
   }
-  return `user:${event.operator.open_id}`;
+  return `user:${event.operator?.open_id ?? "unknown"}`;
 }
 
 async function dispatchSyntheticCommand(params: {
@@ -176,6 +176,13 @@ export async function handleFeishuCardAction(params: {
   const { cfg, event, runtime, accountId } = params;
   const account = resolveFeishuAccount({ cfg, accountId });
   const log = runtime?.log ?? console.log;
+
+  // Early return if required fields are missing to prevent crashes
+  if (!event?.operator || !event?.token || !event?.context) {
+    log(`feishu[${account.accountId}]: invalid card action payload, missing required fields`);
+    return;
+  }
+
   const decoded = decodeFeishuCardAction({ event });
   const claimedToken = beginFeishuCardActionToken({
     token: event.token,
@@ -189,7 +196,7 @@ export async function handleFeishuCardAction(params: {
   try {
     if (decoded.kind === "invalid") {
       log(
-        `feishu[${account.accountId}]: rejected card action from ${event.operator.open_id}: ${decoded.reason}`,
+        `feishu[${account.accountId}]: rejected card action from ${event.operator?.open_id ?? "unknown user"}: ${decoded.reason}`,
       );
       await sendInvalidInteractionNotice({
         cfg,
@@ -204,7 +211,7 @@ export async function handleFeishuCardAction(params: {
     if (decoded.kind === "structured") {
       const { envelope } = decoded;
       log(
-        `feishu[${account.accountId}]: handling structured card action ${envelope.a} from ${event.operator.open_id}`,
+        `feishu[${account.accountId}]: handling structured card action ${envelope.a} from ${event.operator?.open_id ?? "unknown user"}`,
       );
 
       if (envelope.a === FEISHU_APPROVAL_REQUEST_ACTION) {
@@ -227,8 +234,8 @@ export async function handleFeishuCardAction(params: {
           cfg,
           to: resolveCallbackTarget(event),
           card: createApprovalCard({
-            operatorOpenId: event.operator.open_id,
-            chatId: event.context.chat_id || undefined,
+            operatorOpenId: event.operator?.open_id ?? "",
+            chatId: event.context?.chat_id || undefined,
             command,
             prompt,
             sessionKey: envelope.c?.s,
@@ -291,7 +298,7 @@ export async function handleFeishuCardAction(params: {
     const content = buildFeishuCardActionTextFallback(event);
 
     log(
-      `feishu[${account.accountId}]: handling card action from ${event.operator.open_id}: ${content}`,
+      `feishu[${account.accountId}]: handling card action from ${event.operator?.open_id ?? "unknown user"}: ${content}`,
     );
 
     await dispatchSyntheticCommand({
