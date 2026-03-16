@@ -434,7 +434,7 @@ function formatSubMessageContent(content: string, contentType: string): string {
       case "image":
         return "[Image]";
       case "file":
-        return `[File: ${decodeRfc5987Filename(parsed.file_name) || "unknown"}]`;
+        return `[File: ${decodeFeishuFilename(parsed.file_name) || "unknown"}]`;
       case "audio":
         return "[Audio]";
       case "video":
@@ -509,12 +509,17 @@ function normalizeFeishuCommandProbeBody(text: string): string {
 /**
  * Decode RFC 5987 encoded filename (e.g., filename*=UTF-8''%E7%A4%BA%E4%BE%8B.pdf -> 测试.pdf)
  */
-function decodeRfc5987Filename(filename: string | undefined): string {
+/**
+ * Decode filename from Feishu JSON payload.
+ * Feishu sends URL-encoded filenames in JSON, not RFC 5987 format.
+ */
+export function decodeFeishuFilename(filename: string | undefined): string {
   if (!filename) return "";
-  if (filename.startsWith("filename*=UTF-8''")) {
-    return decodeURIComponent(filename.replace("filename*=UTF-8''", ""));
+  try {
+    return decodeURIComponent(filename);
+  } catch {
+    return filename; // Fallback to original if decoding fails
   }
-  return filename;
 }
 
 /**
@@ -536,7 +541,7 @@ function parseMediaKeys(
       case "image":
         return { imageKey };
       case "file":
-        return { fileKey, fileName: decodeRfc5987Filename(parsed.file_name) };
+        return { fileKey, fileName: decodeFeishuFilename(parsed.file_name) };
       case "audio":
         return { fileKey };
       case "video":
