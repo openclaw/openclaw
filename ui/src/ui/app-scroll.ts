@@ -51,6 +51,13 @@ function computeBottomScrollTop(target: HTMLElement): number {
   return Math.max(0, target.scrollHeight - target.clientHeight);
 }
 
+/** Return the block's top offset relative to the scroll container's content origin. */
+function blockTopRelativeToScrollContainer(target: HTMLElement, block: HTMLElement): number {
+  // getBoundingClientRect gives viewport-relative rects; the delta between them
+  // is the visual offset, and adding scrollTop converts to scroll-content coords.
+  return block.getBoundingClientRect().top - target.getBoundingClientRect().top + target.scrollTop;
+}
+
 function computeChatScrollTop(
   target: HTMLElement,
   latestBlock: LatestChatBlock | null,
@@ -61,14 +68,16 @@ function computeChatScrollTop(
     return bottomScrollTop;
   }
   // Keep following only while the beginning of the newest block stays visible.
-  return Math.min(bottomScrollTop, latestBlock.element.offsetTop);
+  return Math.min(bottomScrollTop, blockTopRelativeToScrollContainer(target, latestBlock.element));
 }
 
 function hasReachedBlockClamp(target: HTMLElement, latestBlock: LatestChatBlock | null): boolean {
   if (!latestBlock) {
     return false;
   }
-  return computeBottomScrollTop(target) > latestBlock.element.offsetTop;
+  return (
+    computeBottomScrollTop(target) > blockTopRelativeToScrollContainer(target, latestBlock.element)
+  );
 }
 
 function measureDistanceFromBottom(target: HTMLElement): number {
