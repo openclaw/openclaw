@@ -1,56 +1,43 @@
 name: Deploy Blink Claw
 
-# Triggers on every push to main that touches Blink-relevant code.
-# Skips pure doc/upstream-only changes.
-# Also has a manual trigger for emergency re-deploys.
 on:
   push:
     branches: [main]
   workflow_dispatch:
 
-# Never cancel an in-progress deploy — queue it instead.
-# A half-deployed image would leave agents in a bad state.
+# Never cancel mid-deploy — queue it instead.
 concurrency:
   group: deploy-blink-claw
   cancel-in-progress: false
 
 jobs:
-  build-and-deploy:
-    name: Build → Push → Update agents
+  deploy:
+    name: Build on Fly → Update all agents
     runs-on: ubuntu-24.04
 
     steps:
       - name: Checkout
         uses: actions/checkout@v6
 
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v4
+      - name: Set up Fly CLI
+        uses: superfly/flyctl-actions/setup-flyctl@master
 
-      # Fly registry uses the API token as the password; username is ignored.
-      - name: Login to Fly Registry
-        uses: docker/login-action@v4
-        with:
-          registry: registry.fly.io
-          username: x
-          password: ${{ secrets.FLY_API_TOKEN }}
-
-      # Registry-based layer cache stored at registry.fly.io/blink-claw:buildcache.
-      # The heavy Chromium + system-deps layers are ~1 GB and rarely change.
-      # After the first run they stay cached → subsequent builds drop from
-      # ~15 min down to ~3-5 min (only the compile + copy layers rebuild).
-      - name: Build and push to Fly Registry
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          platforms: linux/amd64
-          build-args: |
-            OPENCLAW_INSTALL_BROWSER=1
-            OPENCLAW_EXTENSIONS=telegram discord slack
-          tags: registry.fly.io/blink-claw:latest
-          push: true
-          provenance: false
-          cache-from: type=registry,ref=registry.fly.io/blink-claw:buildcache
-          cache-to: type=registry,ref=registry.fly.io/blink-claw:buildcache,mode=max
+      # Build on Fly's remote infrastructure — no Docker setup needed.
+      # Fly's remote builders are fast, dedicated machines with their own layer cache.
+      # --build-only: build the image but don't deploy machines
+      # --remote-only: build on Fly's builders, not locally
+      # --push: push the result to registry.fly.io/blink-claw:latest
+      - name: Build image on Fly remote builder
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+        run: |
+          flyctl deploy \
+            --build-only \
+            --remote-only \
+            --push \
+            --app blink-claw \
+            --build-arg OPENCLAW_INSTALL_BROWSER=1 \
+            --build-arg "OPENCLAW_EXTENSIONS=telegram discord slack"
 
       # Update every running blink-claw-* machine to the new image.
       # Skips the registry-only app (blink-claw) and the manager.
@@ -58,10 +45,7 @@ jobs:
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
         run: |
-          curl -L https://fly.io/install.sh | sh
-          export PATH="$HOME/.fly/bin:$PATH"
-
-          APPS=$(fly apps list --org blink-new --json \
+          APPS=$(flyctl apps list --org blink-new --json \
             | jq -r '.[].Name' \
             | grep "^blink-claw-" \
             | grep -v "^blink-claw-manager$")
@@ -71,12 +55,11 @@ jobs:
             exit 0
           fi
 
-          echo "Apps to update:"
-          echo "$APPS"
+          echo "Apps to update: $APPS"
 
           FAILED=0
           for APP in $APPS; do
-            MACHINES=$(fly machines list --app "$APP" --json 2>/dev/null \
+            MACHINES=$(flyctl machines list --app "$APP" --json 2>/dev/null \
               | jq -r '.[].id' 2>/dev/null || true)
 
             if [ -z "$MACHINES" ]; then
@@ -86,7 +69,7 @@ jobs:
 
             for MACHINE in $MACHINES; do
               echo "  Updating $APP / $MACHINE ..."
-              fly machines update "$MACHINE" \
+              flyctl machines update "$MACHINE" \
                 --image registry.fly.io/blink-claw:latest \
                 --app "$APP" \
                 --yes \
@@ -94,8 +77,13 @@ jobs:
             done
           done
 
-          if [ "$FAILED" -eq 1 ]; then
-            echo "::warning::One or more machines failed to update. Check logs above."
-          fi
-
+          [ "$FAILED" -eq 1 ] && echo "::warning::One or more machines failed to update."
           echo "Done."
+
+      - name: Notify on failure
+        if: failure()
+        run: |
+          echo "::error::Deploy failed — check the logs above."
+          # Add Slack/Telegram webhook here if desired:
+          # curl -s -X POST "${{ secrets.SLACK_WEBHOOK }}" \
+          #   -d '{"text":"❌ Blink Claw deploy failed: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"}'
