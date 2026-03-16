@@ -28,6 +28,7 @@ const state = vi.hoisted(() => ({
   dirModes: new Map<string, number>(),
   files: new Map<string, string>(),
   fileModes: new Map<string, number>(),
+  chmodFailures: new Map<string, string>(),
 }));
 
 vi.mock("node:os", () => ({
@@ -125,6 +126,9 @@ vi.mock("node:fs/promises", async (importOriginal) => {
       if (state.symlinks.has(key)) {
         return;
       }
+      if (state.dirs.has(key)) {
+        return;
+      }
       state.dirs.add(key);
       state.dirModes.set(key, opts?.mode ?? 0o777);
     }),
@@ -169,6 +173,10 @@ vi.mock("node:fs/promises", async (importOriginal) => {
     }),
     chmod: vi.fn(async (p: string, mode: number) => {
       const key = String(p);
+      const failure = state.chmodFailures.get(key);
+      if (failure) {
+        throw new Error(failure);
+      }
       if (state.dirs.has(key)) {
         state.dirModes.set(key, mode);
         return;
@@ -247,6 +255,7 @@ beforeEach(() => {
   state.dirModes.clear();
   state.files.clear();
   state.fileModes.clear();
+  state.chmodFailures.clear();
   cleanStaleGatewayProcessesSync.mockReset();
   cleanStaleGatewayProcessesSync.mockReturnValue([]);
   launchdRestartHandoffState.isCurrentProcessLaunchdServiceLabel.mockReset();
@@ -467,6 +476,23 @@ describe("launchd install", () => {
     expect(state.dirModes.get("/Users/test/Library")).toBe(0o755);
     expect(state.dirModes.get("/Users/test/Library/LaunchAgents")).toBe(0o755);
     expect(state.fileModes.get(plistPath)).toBe(0o600);
+  });
+
+  it("fails closed when tightening launch agent directory permissions fails", async () => {
+    const env = createDefaultLaunchdEnv();
+    state.dirs.add("/Users/test/Library");
+    state.dirModes.set("/Users/test/Library", 0o777);
+    state.chmodFailures.set("/Users/test/Library", "EPERM: chmod '/Users/test/Library'");
+
+    await expect(
+      installLaunchAgent({
+        env,
+        stdout: new PassThrough(),
+        programArguments: defaultProgramArguments,
+      }),
+    ).rejects.toThrow(
+      "Failed to tighten LaunchAgent directory permissions for /Users/test/Library",
+    );
   });
 
   it("does not clobber a pre-existing temp plist file", async () => {

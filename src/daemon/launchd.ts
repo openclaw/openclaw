@@ -237,7 +237,16 @@ async function ensureSecureDirectory(targetPath: string): Promise<void> {
   const mode = stat.mode & 0o777;
   const tightenedMode = mode & ~0o022;
   if (tightenedMode !== mode) {
-    await fs.chmod(targetPath, tightenedMode).catch(() => undefined);
+    try {
+      await fs.chmod(targetPath, tightenedMode);
+    } catch (error) {
+      throw new Error(
+        `Failed to tighten LaunchAgent directory permissions for ${targetPath}: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+        { cause: error },
+      );
+    }
   }
 }
 
