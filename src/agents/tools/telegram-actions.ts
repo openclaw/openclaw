@@ -150,6 +150,7 @@ export async function handleTelegramAction(
     const { emoji, remove, isEmpty } = readReactionParams(params, {
       removeErrorMessage: "Emoji is required to remove a Telegram reaction.",
     });
+    const customEmojiId = readStringParam(params, "customEmojiId");
     const token = resolveTelegramToken(cfg, { accountId }).token;
     if (!token) {
       return jsonResult({
@@ -165,6 +166,7 @@ export async function handleTelegramAction(
         token,
         remove,
         accountId: accountId ?? undefined,
+        customEmojiId: customEmojiId ?? undefined,
       });
     } catch (err) {
       const isInvalid = String(err).includes("REACTION_INVALID");
@@ -185,7 +187,11 @@ export async function handleTelegramAction(
       });
     }
     if (!remove && !isEmpty) {
-      return jsonResult({ ok: true, added: emoji });
+      return jsonResult({
+        ok: true,
+        added: customEmojiId ? `custom_emoji:${customEmojiId}` : emoji,
+        ...(customEmojiId ? { customEmojiId } : {}),
+      });
     }
     return jsonResult({ ok: true, removed: true });
   }
