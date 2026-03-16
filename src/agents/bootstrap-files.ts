@@ -1,6 +1,7 @@
 import type { OpenClawConfig } from "../config/config.js";
 import { getOrLoadBootstrapFiles } from "./bootstrap-cache.js";
 import { applyBootstrapHookOverrides } from "./bootstrap-hooks.js";
+import { loadContextBookBootstrapFiles } from "./context-books.js";
 import type { EmbeddedContextFile } from "./pi-embedded-helpers.js";
 import {
   buildBootstrapContextFiles,
@@ -83,9 +84,17 @@ export async function resolveBootstrapFilesForRun(params: {
     contextMode: params.contextMode,
     runKind: params.runKind,
   });
+  const contextBookFiles = await loadContextBookBootstrapFiles({
+    workspaceDir: params.workspaceDir,
+    sessionKey,
+    contextMode: params.contextMode,
+    runKind: params.runKind,
+    warn: params.warn,
+  });
+  const mergedBootstrapFiles = [...bootstrapFiles, ...contextBookFiles];
 
   const updated = await applyBootstrapHookOverrides({
-    files: bootstrapFiles,
+    files: mergedBootstrapFiles,
     workspaceDir: params.workspaceDir,
     config: params.config,
     sessionKey: params.sessionKey,

@@ -114,6 +114,59 @@ describe("resolveBootstrapContextForRun", () => {
     expect(files.every((file) => file.name === "HEARTBEAT.md")).toBe(true);
   });
 
+  it("includes always-on Context Book entries for normal sessions", async () => {
+    const workspaceDir = await makeTempWorkspace("openclaw-bootstrap-");
+    await fs.mkdir(path.join(workspaceDir, "context-books"), { recursive: true });
+    await fs.writeFile(
+      path.join(workspaceDir, "context-books", "coding.yaml"),
+      [
+        "entries:",
+        "  - name: Repo rules",
+        "    enabled: true",
+        "    alwaysActive: true",
+        "    order: 5",
+        "    content: |",
+        "      Use pnpm",
+      ].join("\n"),
+      "utf8",
+    );
+
+    const result = await resolveBootstrapContextForRun({ workspaceDir });
+    const contextBookFile = result.bootstrapFiles.find(
+      (file) => file.name === "CONTEXT_BOOK:Repo rules",
+    );
+    const injected = result.contextFiles.find((file) =>
+      file.path.includes("coding.yaml#repo-rules"),
+    );
+
+    expect(contextBookFile?.content).toBe("Use pnpm");
+    expect(injected?.content).toBe("Use pnpm");
+  });
+
+  it("skips Context Book entries for subagent sessions", async () => {
+    const workspaceDir = await makeTempWorkspace("openclaw-bootstrap-");
+    await fs.mkdir(path.join(workspaceDir, "context-books"), { recursive: true });
+    await fs.writeFile(
+      path.join(workspaceDir, "context-books", "coding.yaml"),
+      [
+        "entries:",
+        "  - name: Repo rules",
+        "    enabled: true",
+        "    alwaysActive: true",
+        "    content: |",
+        "      Use pnpm",
+      ].join("\n"),
+      "utf8",
+    );
+
+    const files = await resolveBootstrapFilesForRun({
+      workspaceDir,
+      sessionKey: "agent:default:subagent:task-1",
+    });
+
+    expect(files.some((file) => file.name.startsWith("CONTEXT_BOOK:"))).toBe(false);
+  });
+
   it("keeps bootstrap context empty in lightweight cron mode", async () => {
     const workspaceDir = await makeTempWorkspace("openclaw-bootstrap-");
     await fs.writeFile(path.join(workspaceDir, "HEARTBEAT.md"), "check inbox", "utf8");
