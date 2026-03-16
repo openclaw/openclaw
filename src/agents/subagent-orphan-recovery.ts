@@ -82,6 +82,7 @@ async function resumeOrphanedSession(params: {
   lastHumanMessage?: string;
   configChangeHint?: string;
   originalRunId: string;
+  originalRun: SubagentRunRecord;
 }): Promise<boolean> {
   let resumeMessage = buildResumeMessage(params.task, params.lastHumanMessage);
   if (params.configChangeHint) {
@@ -103,6 +104,7 @@ async function resumeOrphanedSession(params: {
     const remapped = replaceSubagentRunAfterSteer({
       previousRunId: params.originalRunId,
       nextRunId: result.runId,
+      fallback: params.originalRun,
     });
     if (!remapped) {
       log.warn(
@@ -210,6 +212,7 @@ export async function recoverOrphanedSubagentSessions(params: {
             ? "\n\n[config changes from your previous run were already applied — do not re-modify openclaw.json or restart the gateway]"
             : undefined,
           originalRunId: runId,
+          originalRun: runRecord,
         });
 
         if (resumed) {

@@ -279,6 +279,7 @@ export const FIELD_LABELS: Record<string, string> = {
     "OpenAI Chat Completions Image Timeout (ms)",
   "gateway.reload.mode": "Config Reload Mode",
   "gateway.reload.debounceMs": "Config Reload Debounce (ms)",
+  "gateway.reload.deferralTimeoutMs": "Restart Deferral Timeout (ms)",
   "gateway.nodes.browser.mode": "Gateway Node Browser Mode",
   "gateway.nodes.browser.node": "Gateway Node Browser Pin",
   "gateway.nodes.allowCommands": "Gateway Node Allowlist (Extra Commands)",

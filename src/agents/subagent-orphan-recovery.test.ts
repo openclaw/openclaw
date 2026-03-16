@@ -65,8 +65,9 @@ describe("subagent-orphan-recovery", () => {
       "agent:main:subagent:test-session-1": sessionEntry,
     });
 
+    const run = createTestRunRecord();
     const activeRuns = new Map<string, SubagentRunRecord>();
-    activeRuns.set("run-1", createTestRunRecord());
+    activeRuns.set("run-1", run);
 
     const { recoverOrphanedSubagentSessions } = await import("./subagent-orphan-recovery.js");
 
@@ -87,10 +88,13 @@ describe("subagent-orphan-recovery", () => {
     expect(params.sessionKey).toBe("agent:main:subagent:test-session-1");
     expect(params.message).toContain("gateway reload");
     expect(params.message).toContain("Test task: implement feature X");
-    expect(subagentRegistry.replaceSubagentRunAfterSteer).toHaveBeenCalledWith({
-      previousRunId: "run-1",
-      nextRunId: "test-run-id",
-    });
+    expect(subagentRegistry.replaceSubagentRunAfterSteer).toHaveBeenCalledWith(
+      expect.objectContaining({
+        previousRunId: "run-1",
+        nextRunId: "test-run-id",
+        fallback: run,
+      }),
+    );
   });
 
   it("skips sessions that are not aborted", async () => {
