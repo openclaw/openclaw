@@ -9,7 +9,7 @@ import { resolveSessionAuthProfileOverride } from "../../agents/auth-profiles/se
 import { resolveBootstrapWarningSignaturesSeen } from "../../agents/bootstrap-budget.js";
 import { runCliAgent } from "../../agents/cli-runner.js";
 import { getCliSessionId, setCliSessionId } from "../../agents/cli-session.js";
-import { lookupContextTokens } from "../../agents/context.js";
+import { resolveContextTokensForModelAsync } from "../../agents/context.js";
 import { resolveCronStyleNow } from "../../agents/current-time.js";
 import { DEFAULT_CONTEXT_TOKENS, DEFAULT_MODEL, DEFAULT_PROVIDER } from "../../agents/defaults.js";
 import { resolveFastModeState } from "../../agents/fast-mode.js";
@@ -739,7 +739,13 @@ export async function runCronIsolatedAgentTurn(params: {
     const modelUsed = finalRunResult.meta?.agentMeta?.model ?? fallbackModel ?? model;
     const providerUsed = finalRunResult.meta?.agentMeta?.provider ?? fallbackProvider ?? provider;
     const contextTokens =
-      agentCfg?.contextTokens ?? lookupContextTokens(modelUsed) ?? DEFAULT_CONTEXT_TOKENS;
+      (await resolveContextTokensForModelAsync({
+        cfg: cfgWithAgentDefaults,
+        provider: providerUsed,
+        model: modelUsed,
+        contextTokensOverride: agentCfg?.contextTokens,
+        fallbackContextTokens: DEFAULT_CONTEXT_TOKENS,
+      })) ?? DEFAULT_CONTEXT_TOKENS;
 
     setSessionRuntimeModel(cronSession.sessionEntry, {
       provider: providerUsed,

@@ -6,6 +6,7 @@ vi.mock("../channels/config-presence.js", () => ({
 
 vi.mock("../agents/context.js", () => ({
   resolveContextTokensForModel: vi.fn(() => 200_000),
+  resolveContextTokensForModelAsync: vi.fn(async () => 200_000),
 }));
 
 vi.mock("../agents/defaults.js", () => ({
@@ -105,5 +106,46 @@ describe("getStatusSummary", () => {
     expect(summary.linkChannel).toBeUndefined();
     expect(buildChannelSummary).not.toHaveBeenCalled();
     expect(resolveLinkChannelContext).not.toHaveBeenCalled();
+  });
+
+  it("repairs stale stored fallback context tokens when the model registry resolves a larger window", async () => {
+    const { resolveContextTokensForModelAsync } = await import("../agents/context.js");
+    const { loadSessionStore } = await import("../config/sessions.js");
+    const { resolveSessionModelRef } = await import("../gateway/session-utils.js");
+    const { getStatusSummary } = await import("./status.summary.js");
+
+    vi.mocked(resolveContextTokensForModelAsync).mockImplementation(async (params) => {
+      if (params.model === "claude-opus-4-6") {
+        return 1_000_000;
+      }
+      return 200_000;
+    });
+    vi.mocked(resolveSessionModelRef).mockReturnValue({
+      provider: "anthropic",
+      model: "claude-opus-4-6",
+    });
+    vi.mocked(loadSessionStore).mockReturnValue({
+      "agent:main:cron:test": {
+        sessionId: "sess-cron",
+        updatedAt: Date.now(),
+        model: "claude-opus-4-6",
+        modelProvider: "anthropic",
+        contextTokens: 200_000,
+      },
+    });
+
+    const summary = await getStatusSummary({
+      config: {
+        agents: {
+          defaults: {
+            model: {
+              primary: "anthropic/claude-opus-4-6",
+            },
+          },
+        },
+      },
+    });
+
+    expect(summary.sessions.recent[0]?.contextTokens).toBe(1_000_000);
   });
 });

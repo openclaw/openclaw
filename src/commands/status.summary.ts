@@ -1,3 +1,4 @@
+import { resolveAgentConfig } from "../agents/agent-scope.js";
 import { DEFAULT_CONTEXT_TOKENS, DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { resolveConfiguredModelRef } from "../agents/model-selection.js";
 import { hasPotentialConfiguredChannels } from "../channels/config-presence.js";
@@ -36,6 +37,42 @@ function loadLinkChannelModule() {
 function loadStatusSummaryRuntimeModule() {
   statusSummaryRuntimeModulePromise ??= import("./status.summary.runtime.js");
   return statusSummaryRuntimeModulePromise;
+}
+
+function hasExplicitContextTokensCap(cfg: OpenClawConfig, agentId?: string): boolean {
+  if (
+    typeof cfg.agents?.defaults?.contextTokens === "number" &&
+    cfg.agents.defaults.contextTokens > 0
+  ) {
+    return true;
+  }
+  if (!agentId) {
+    return false;
+  }
+  const agentContextTokens = resolveAgentConfig(cfg, agentId)?.contextTokens;
+  return typeof agentContextTokens === "number" && agentContextTokens > 0;
+}
+
+function shouldRepairStoredContextTokens(params: {
+  cfg: OpenClawConfig;
+  agentId?: string;
+  entry?: SessionEntry;
+  resolvedContextTokens?: number | null;
+}): boolean {
+  const storedContextTokens = params.entry?.contextTokens;
+  if (storedContextTokens !== DEFAULT_CONTEXT_TOKENS) {
+    return false;
+  }
+  if (
+    typeof params.resolvedContextTokens !== "number" ||
+    params.resolvedContextTokens <= DEFAULT_CONTEXT_TOKENS
+  ) {
+    return false;
+  }
+  // Older cron/profile sessions could persist the hard fallback before the
+  // async model registry finished loading. If there is no explicit cap in the
+  // current config, prefer the resolved model window for status display.
+  return !hasExplicitContextTokensCap(params.cfg, params.agentId);
 }
 
 const buildFlags = (entry?: SessionEntry): string[] => {
@@ -103,7 +140,7 @@ export async function getStatusSummary(
   } = {},
 ): Promise<StatusSummary> {
   const { includeSensitive = true } = options;
-  const { classifySessionKey, resolveContextTokensForModel, resolveSessionModelRef } =
+  const { classifySessionKey, resolveContextTokensForModelAsync, resolveSessionModelRef } =
     await loadStatusSummaryRuntimeModule();
   const cfg = options.config ?? loadConfig();
   const needsChannelPlugins = hasPotentialConfiguredChannels(cfg);
@@ -141,13 +178,13 @@ export async function getStatusSummary(
   });
   const configModel = resolved.model ?? DEFAULT_MODEL;
   const configContextTokens =
-    resolveContextTokensForModel({
+    (await resolveContextTokensForModelAsync({
       cfg,
       provider: resolved.provider ?? DEFAULT_PROVIDER,
       model: configModel,
       contextTokensOverride: cfg.agents?.defaults?.contextTokens,
       fallbackContextTokens: DEFAULT_CONTEXT_TOKENS,
-    }) ?? DEFAULT_CONTEXT_TOKENS;
+    })) ?? DEFAULT_CONTEXT_TOKENS;
 
   const now = Date.now();
   const storeCache = new Map<string, Record<string, SessionEntry | undefined>>();
@@ -160,82 +197,102 @@ export async function getStatusSummary(
     storeCache.set(storePath, store);
     return store;
   };
-  const buildSessionRows = (
+  const buildSessionRows = async (
     store: Record<string, SessionEntry | undefined>,
     opts: { agentIdOverride?: string } = {},
-  ) =>
-    Object.entries(store)
-      .filter(([key]) => key !== "global" && key !== "unknown")
-      .map(([key, entry]) => {
-        const updatedAt = entry?.updatedAt ?? null;
-        const age = updatedAt ? now - updatedAt : null;
-        const resolvedModel = resolveSessionModelRef(cfg, entry, opts.agentIdOverride);
-        const model = resolvedModel.model ?? configModel ?? null;
-        const contextTokens =
-          resolveContextTokensForModel({
+  ) => {
+    const rows = await Promise.all(
+      Object.entries(store)
+        .filter(([key]) => key !== "global" && key !== "unknown")
+        .map(async ([key, entry]) => {
+          const updatedAt = entry?.updatedAt ?? null;
+          const age = updatedAt ? now - updatedAt : null;
+          const parsedAgentId = parseAgentSessionKey(key)?.agentId;
+          const agentId = opts.agentIdOverride ?? parsedAgentId;
+          const resolvedModel = resolveSessionModelRef(cfg, entry, opts.agentIdOverride);
+          const model = resolvedModel.model ?? configModel ?? null;
+          const storedContextTokens =
+            typeof entry?.contextTokens === "number" ? entry.contextTokens : undefined;
+          const resolvedContextTokens =
+            (await resolveContextTokensForModelAsync({
+              cfg,
+              provider: resolvedModel.provider,
+              model,
+              fallbackContextTokens: configContextTokens ?? undefined,
+            })) ?? null;
+          const contextTokens = shouldRepairStoredContextTokens({
             cfg,
-            provider: resolvedModel.provider,
-            model,
-            contextTokensOverride: entry?.contextTokens,
-            fallbackContextTokens: configContextTokens ?? undefined,
-          }) ?? null;
-        const total = resolveFreshSessionTotalTokens(entry);
-        const totalTokensFresh =
-          typeof entry?.totalTokens === "number" ? entry?.totalTokensFresh !== false : false;
-        const remaining =
-          contextTokens != null && total !== undefined ? Math.max(0, contextTokens - total) : null;
-        const pct =
-          contextTokens && contextTokens > 0 && total !== undefined
-            ? Math.min(999, Math.round((total / contextTokens) * 100))
-            : null;
-        const parsedAgentId = parseAgentSessionKey(key)?.agentId;
-        const agentId = opts.agentIdOverride ?? parsedAgentId;
+            agentId,
+            entry,
+            resolvedContextTokens,
+          })
+            ? resolvedContextTokens
+            : (storedContextTokens ?? resolvedContextTokens);
+          const total = resolveFreshSessionTotalTokens(entry);
+          const totalTokensFresh =
+            typeof entry?.totalTokens === "number" ? entry?.totalTokensFresh !== false : false;
+          const remaining =
+            contextTokens != null && total !== undefined
+              ? Math.max(0, contextTokens - total)
+              : null;
+          const pct =
+            contextTokens && contextTokens > 0 && total !== undefined
+              ? Math.min(999, Math.round((total / contextTokens) * 100))
+              : null;
 
-        return {
-          agentId,
-          key,
-          kind: classifySessionKey(key, entry),
-          sessionId: entry?.sessionId,
-          updatedAt,
-          age,
-          thinkingLevel: entry?.thinkingLevel,
-          fastMode: entry?.fastMode,
-          verboseLevel: entry?.verboseLevel,
-          reasoningLevel: entry?.reasoningLevel,
-          elevatedLevel: entry?.elevatedLevel,
-          systemSent: entry?.systemSent,
-          abortedLastRun: entry?.abortedLastRun,
-          inputTokens: entry?.inputTokens,
-          outputTokens: entry?.outputTokens,
-          cacheRead: entry?.cacheRead,
-          cacheWrite: entry?.cacheWrite,
-          totalTokens: total ?? null,
-          totalTokensFresh,
-          remainingTokens: remaining,
-          percentUsed: pct,
-          model,
-          contextTokens,
-          flags: buildFlags(entry),
-        } satisfies SessionStatus;
-      })
-      .sort((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0));
+          return {
+            agentId,
+            key,
+            kind: classifySessionKey(key, entry),
+            sessionId: entry?.sessionId,
+            updatedAt,
+            age,
+            thinkingLevel: entry?.thinkingLevel,
+            fastMode: entry?.fastMode,
+            verboseLevel: entry?.verboseLevel,
+            reasoningLevel: entry?.reasoningLevel,
+            elevatedLevel: entry?.elevatedLevel,
+            systemSent: entry?.systemSent,
+            abortedLastRun: entry?.abortedLastRun,
+            inputTokens: entry?.inputTokens,
+            outputTokens: entry?.outputTokens,
+            cacheRead: entry?.cacheRead,
+            cacheWrite: entry?.cacheWrite,
+            totalTokens: total ?? null,
+            totalTokensFresh,
+            remainingTokens: remaining,
+            percentUsed: pct,
+            model,
+            contextTokens,
+            flags: buildFlags(entry),
+          } satisfies SessionStatus;
+        }),
+    );
+    return rows.toSorted((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0));
+  };
 
   const paths = new Set<string>();
-  const byAgent = agentList.agents.map((agent) => {
-    const storePath = resolveStorePath(cfg.session?.store, { agentId: agent.id });
-    paths.add(storePath);
-    const store = loadStore(storePath);
-    const sessions = buildSessionRows(store, { agentIdOverride: agent.id });
-    return {
-      agentId: agent.id,
-      path: storePath,
-      count: sessions.length,
-      recent: sessions.slice(0, 10),
-    };
-  });
+  const byAgent = await Promise.all(
+    agentList.agents.map(async (agent) => {
+      const storePath = resolveStorePath(cfg.session?.store, { agentId: agent.id });
+      paths.add(storePath);
+      const store = loadStore(storePath);
+      const sessions = await buildSessionRows(store, { agentIdOverride: agent.id });
+      return {
+        agentId: agent.id,
+        path: storePath,
+        count: sessions.length,
+        recent: sessions.slice(0, 10),
+      };
+    }),
+  );
 
-  const allSessions = Array.from(paths)
-    .flatMap((storePath) => buildSessionRows(loadStore(storePath)))
+  const allSessions = (
+    await Promise.all(
+      Array.from(paths).map(async (storePath) => await buildSessionRows(loadStore(storePath))),
+    )
+  )
+    .flat()
     .toSorted((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0));
   const recent = allSessions.slice(0, 10);
   const totalSessions = allSessions.length;

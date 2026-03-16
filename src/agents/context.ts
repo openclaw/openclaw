@@ -163,6 +163,10 @@ function ensureContextWindowCacheLoaded(): Promise<void> {
 
   const cfg = primeConfiguredContextWindows();
   if (!cfg) {
+    // If config is not yet available (cold start or backoff after failure),
+    // return immediately without setting loadPromise so the next caller can
+    // retry once the backoff window has elapsed.  resolveContextTokensForModelAsync
+    // will fall back to DEFAULT_CONTEXT_TOKENS for this call.
     return Promise.resolve();
   }
 
@@ -208,6 +212,17 @@ export function lookupContextTokens(modelId?: string): number | undefined {
   // Best-effort: kick off loading, but don't block.
   void ensureContextWindowCacheLoaded();
   return MODEL_CACHE.get(modelId);
+}
+
+export async function resolveContextTokensForModelAsync(params: {
+  cfg?: OpenClawConfig;
+  provider?: string;
+  model?: string;
+  contextTokensOverride?: number;
+  fallbackContextTokens?: number;
+}): Promise<number | undefined> {
+  await ensureContextWindowCacheLoaded();
+  return resolveContextTokensForModel(params);
 }
 
 if (!shouldSkipEagerContextWindowWarmup()) {

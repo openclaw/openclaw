@@ -10,6 +10,7 @@ import {
   resolveConfiguredModelRefMock,
   resolveCronSessionMock,
   resetRunCronIsolatedAgentTurnHarness,
+  resolveContextTokensForModelAsyncMock,
   restoreFastTestEnv,
   runWithModelFallbackMock,
   updateSessionStoreMock,
@@ -164,6 +165,15 @@ describe("runCronIsolatedAgentTurn — cron model override (#21057)", () => {
     expect(preRunSnapshot.model).toBe("claude-sonnet-4-6");
     expect(preRunSnapshot.modelProvider).toBe("anthropic");
     expect(preRunSnapshot.systemSent).toBe(true);
+  });
+
+  it("persists the resolved model context window instead of the hard fallback", async () => {
+    resolveContextTokensForModelAsyncMock.mockResolvedValueOnce(1_000_000);
+    runWithModelFallbackMock.mockResolvedValueOnce(makeSuccessfulRunResult());
+
+    await runCronIsolatedAgentTurn(makeParams());
+
+    expect(cronSession.sessionEntry.contextTokens).toBe(1_000_000);
   });
 
   it("returns error without persisting model when payload model is disallowed", async () => {

@@ -40,6 +40,7 @@ export const getCliSessionIdMock = createMock();
 export const updateSessionStoreMock = createMock();
 export const resolveCronSessionMock = createMock();
 export const logWarnMock = createMock();
+export const resolveContextTokensForModelAsyncMock = createMock();
 export const countActiveDescendantRunsMock = createMock();
 export const listDescendantRunsForRequesterMock = createMock();
 export const pickLastNonEmptyTextFromPayloadsMock = createMock();
@@ -126,6 +127,8 @@ vi.mock("../../agents/context.js", async (importOriginal) => {
   return {
     ...actual,
     lookupContextTokens: vi.fn().mockReturnValue(128000),
+    resolveContextTokensForModelAsync: (...args: unknown[]) =>
+      resolveContextTokensForModelAsyncMock(...args),
   };
 });
 
@@ -374,6 +377,8 @@ export function resetRunCronIsolatedAgentTurnHarness(): void {
 
   runCliAgentMock.mockReset();
   getCliSessionIdMock.mockReturnValue(undefined);
+  resolveContextTokensForModelAsyncMock.mockReset();
+  resolveContextTokensForModelAsyncMock.mockResolvedValue(128000);
 
   updateSessionStoreMock.mockReset();
   updateSessionStoreMock.mockResolvedValue(undefined);
