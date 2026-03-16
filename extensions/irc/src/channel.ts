@@ -32,11 +32,12 @@ import {
   isChannelTarget,
   normalizeIrcAllowEntry,
 } from "./normalize.js";
-import { ircOnboardingAdapter } from "./onboarding.js";
 import { resolveIrcGroupMatch, resolveIrcRequireMention } from "./policy.js";
 import { probeIrc } from "./probe.js";
 import { getIrcRuntime } from "./runtime.js";
 import { sendMessageIrc } from "./send.js";
+import { ircSetupAdapter } from "./setup-core.js";
+import { ircSetupWizard } from "./setup-surface.js";
 import type { CoreConfig, IrcProbe } from "./types.js";
 
 const meta = getChatChannelMeta("irc");
@@ -66,7 +67,8 @@ export const ircPlugin: ChannelPlugin<ResolvedIrcAccount, IrcProbe> = {
     ...meta,
     quickstartAllowFrom: true,
   },
-  onboarding: ircOnboardingAdapter,
+  setup: ircSetupAdapter,
+  setupWizard: ircSetupWizard,
   pairing: {
     idLabel: "ircUser",
     normalizeAllowEntry: (entry) => normalizeIrcAllowEntry(entry),

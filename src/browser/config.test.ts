@@ -188,13 +188,6 @@ describe("browser config", () => {
     expect(profile?.cdpIsLoopback).toBe(true);
   });
 
-  it("trims relayBindHost when configured", () => {
-    const resolved = resolveBrowserConfig({
-      relayBindHost: " 0.0.0.0 ",
-    });
-    expect(resolved.relayBindHost).toBe("0.0.0.0");
-  });
-
   it("rejects unsupported protocols", () => {
     expect(() => resolveBrowserConfig({ cdpUrl: "ftp://127.0.0.1:18791" })).toThrow(
       "must be http(s) or ws(s)",
@@ -289,7 +282,6 @@ describe("browser config", () => {
     const resolved = resolveBrowserConfig({
       profiles: {
         "chrome-live": { driver: "existing-session", attachOnly: true, color: "#00AA00" },
-        relay: { driver: "extension", cdpUrl: "http://127.0.0.1:18792", color: "#0066CC" },
         work: { cdpPort: 18801, color: "#0066CC" },
       },
     });
@@ -299,9 +291,6 @@ describe("browser config", () => {
 
     const managed = resolveProfile(resolved, "openclaw")!;
     expect(getBrowserProfileCapabilities(managed).usesChromeMcp).toBe(false);
-
-    const extension = resolveProfile(resolved, "relay")!;
-    expect(getBrowserProfileCapabilities(extension).usesChromeMcp).toBe(false);
 
     const work = resolveProfile(resolved, "work")!;
     expect(getBrowserProfileCapabilities(work).usesChromeMcp).toBe(false);
