@@ -16,7 +16,12 @@ import {
   isSubagentSessionKey,
   parseAgentSessionKey,
 } from "../../../../src/routing/session-key.js";
-import { createChatModelOverride, resolveServerChatModelValue } from "../chat-model-ref.ts";
+import {
+  buildChatModelOption,
+  createChatModelOverride,
+  normalizeChatModelOverrideValue,
+  resolveServerChatModelValue,
+} from "../chat-model-ref.ts";
 import type { GatewayBrowserClient } from "../gateway.ts";
 import type {
   AgentsListResult,
@@ -133,8 +138,16 @@ async function executeModel(
         client.request<{ models: ModelCatalogEntry[] }>("models.list", {}),
       ]);
       const session = resolveCurrentSession(sessions, sessionKey);
-      const model = session?.model || sessions?.defaults?.model || "default";
-      const available = models?.models?.map((m: ModelCatalogEntry) => m.id) ?? [];
+      const catalog = models?.models ?? [];
+      const model =
+        resolveDisplayModelValue(session?.model, session?.modelProvider, catalog) ||
+        resolveDisplayModelValue(
+          sessions?.defaults?.model,
+          sessions?.defaults?.modelProvider,
+          catalog,
+        ) ||
+        "default";
+      const available = listAvailableModelValues(catalog);
       const lines = [`**Current model:** \`${model}\``];
       if (available.length > 0) {
         lines.push(
@@ -159,8 +172,9 @@ async function executeModel(
       patched.resolved?.model ?? args.trim(),
       patched.resolved?.modelProvider,
     );
+    const displayValue = resolvedValue || args.trim();
     return {
-      content: `Model set to \`${args.trim()}\`.`,
+      content: `Model set to \`${displayValue}\`.`,
       action: "refresh",
       sessionPatch: { modelOverride: createChatModelOverride(resolvedValue) },
     };
@@ -316,7 +330,16 @@ async function executeUsage(
       lines.push(`Context: **${pct}%** of ${fmtTokens(ctx)}`);
     }
     if (session.model) {
-      lines.push(`Model: \`${session.model}\``);
+      let catalog: ModelCatalogEntry[] = [];
+      try {
+        const models = await client.request<{ models: ModelCatalogEntry[] }>("models.list", {});
+        catalog = models?.models ?? [];
+      } catch {
+        // Keep usage available even if the model catalog is temporarily unavailable.
+      }
+      const model =
+        resolveDisplayModelValue(session.model, session.modelProvider, catalog) || session.model;
+      lines.push(`Model: \`${model}\``);
     }
     return { content: lines.join("\n") };
   } catch (err) {
@@ -516,6 +539,44 @@ function resolveEquivalentSessionKeys(
 
 function formatDirectiveOptions(text: string, options: string): string {
   return `${text}\nOptions: ${options}.`;
+}
+
+function resolveDisplayModelValue(
+  model: string | null | undefined,
+  provider: string | null | undefined,
+  catalog: ModelCatalogEntry[],
+): string {
+  if (typeof model !== "string") {
+    return "";
+  }
+  const trimmedModel = model.trim();
+  if (!trimmedModel) {
+    return "";
+  }
+  if (provider?.trim()) {
+    return resolveServerChatModelValue(trimmedModel, provider);
+  }
+  return (
+    normalizeChatModelOverrideValue(createChatModelOverride(trimmedModel), catalog) || trimmedModel
+  );
+}
+
+function listAvailableModelValues(catalog: ModelCatalogEntry[]): string[] {
+  const seen = new Set<string>();
+  const values: string[] = [];
+  for (const entry of catalog) {
+    const value = buildChatModelOption(entry).value.trim();
+    if (!value) {
+      continue;
+    }
+    const key = value.toLowerCase();
+    if (seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    values.push(value);
+  }
+  return values;
 }
 
 async function loadCurrentSession(

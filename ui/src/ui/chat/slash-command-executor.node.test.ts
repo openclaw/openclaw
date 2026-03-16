@@ -238,6 +238,7 @@ describe("executeSlashCommand directives", () => {
           defaults: { modelProvider: "openai", model: "default-model" },
           sessions: [
             row("agent:main:main", {
+              modelProvider: "openai",
               model: "gpt-4.1-mini",
             }),
           ],
@@ -245,7 +246,10 @@ describe("executeSlashCommand directives", () => {
       }
       if (method === "models.list") {
         return {
-          models: [{ id: "gpt-4.1-mini" }, { id: "gpt-4.1" }],
+          models: [
+            { id: "gpt-4.1-mini", provider: "openai" },
+            { id: "gpt-4.1", provider: "openai" },
+          ],
         };
       }
       throw new Error(`unexpected method: ${method}`);
@@ -259,7 +263,7 @@ describe("executeSlashCommand directives", () => {
     );
 
     expect(result.content).toBe(
-      "**Current model:** `gpt-4.1-mini`\n**Available:** `gpt-4.1-mini`, `gpt-4.1`",
+      "**Current model:** `openai/gpt-4.1-mini`\n**Available:** `openai/gpt-4.1-mini`, `openai/gpt-4.1`",
     );
     expect(request).toHaveBeenNthCalledWith(1, "sessions.list", {});
     expect(request).toHaveBeenNthCalledWith(2, "models.list", {});
@@ -291,6 +295,7 @@ describe("executeSlashCommand directives", () => {
       key: "main",
       model: "gpt-5-mini",
     });
+    expect(result.content).toBe("Model set to `openai/gpt-5-mini`.");
     expect(result.sessionPatch?.modelOverride).toEqual({
       kind: "qualified",
       value: "openai/gpt-5-mini",
@@ -303,6 +308,7 @@ describe("executeSlashCommand directives", () => {
         return {
           sessions: [
             row("agent:main:main", {
+              modelProvider: "openai",
               model: "gpt-4.1-mini",
               inputTokens: 1200,
               outputTokens: 300,
@@ -310,6 +316,11 @@ describe("executeSlashCommand directives", () => {
               contextTokens: 4000,
             }),
           ],
+        };
+      }
+      if (method === "models.list") {
+        return {
+          models: [{ id: "gpt-4.1-mini", provider: "openai" }],
         };
       }
       throw new Error(`unexpected method: ${method}`);
@@ -323,9 +334,10 @@ describe("executeSlashCommand directives", () => {
     );
 
     expect(result.content).toBe(
-      "**Session Usage**\nInput: **1.2k** tokens\nOutput: **300** tokens\nTotal: **1.5k** tokens\nContext: **30%** of 4k\nModel: `gpt-4.1-mini`",
+      "**Session Usage**\nInput: **1.2k** tokens\nOutput: **300** tokens\nTotal: **1.5k** tokens\nContext: **30%** of 4k\nModel: `openai/gpt-4.1-mini`",
     );
     expect(request).toHaveBeenNthCalledWith(1, "sessions.list", {});
+    expect(request).toHaveBeenNthCalledWith(2, "models.list", {});
   });
 
   it("reports the current thinking level for bare /think", async () => {
