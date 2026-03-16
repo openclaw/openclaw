@@ -17,4 +17,9 @@ export type SessionRow = {
   key: string;
   lastActivity: string;
   messageCount: number;
+  agentId?: string;
+  kind?: string;
+  label?: string;
+  model?: string;
+  updatedAt?: number;
 };

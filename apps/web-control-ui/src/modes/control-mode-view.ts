@@ -26,7 +26,7 @@ import { loadPreferenceMemory, savePreferenceMemory, loadLanguagePreference, sav
 import { AppState } from "../core/app-state";
 import { extractText, inferMessageKind, defaultGatewayUrl, CHAT_COLLAPSE_THRESHOLD } from "../core/utils";
 import type { ConnectionState, ChatMessageKind, ChatFilter, ChatMessage, UsageVariant, SessionRow } from "../core/types";
-import { type Language, getTranslation, detectBrowserLanguage } from "../core/i18n";
+import { type Language, type TranslationKey, getTranslation, detectBrowserLanguage } from "../core/i18n";
 
 type ChatEventPayload = {
   runId: string;
@@ -51,10 +51,7 @@ function loadBoundTarget(): BoundTarget | null {
     const agentId = typeof parsed.agentId === "string" ? parsed.agentId.trim() : "";
     const sessionKey = typeof parsed.sessionKey === "string" ? parsed.sessionKey.trim() : "";
     if (!agentId && !sessionKey) return null;
-    return {
-      agentId: agentId || "testui",
-      sessionKey: sessionKey || "main",
-    };
+    return normalizeBoundTarget(agentId, sessionKey);
   } catch {
     return null;
   }
@@ -73,6 +70,37 @@ function clearBoundTarget() {
     localStorage.removeItem(BOUND_TARGET_STORAGE_KEY);
   } catch {
     // ignore persistence errors
+  }
+}
+
+function normalizeBoundTarget(agentId: string, sessionKey: string): BoundTarget {
+  const normalizedAgentId = agentId.trim() || "testui";
+  const normalizedSessionKey = sessionKey.trim() || "main";
+  if (normalizedSessionKey.startsWith("agent:")) {
+    const [, embeddedAgentId, ...sessionParts] = normalizedSessionKey.split(":");
+    return {
+      agentId: embeddedAgentId?.trim() || normalizedAgentId,
+      sessionKey: sessionParts.join(":").trim() || "main",
+    };
+  }
+  return {
+    agentId: normalizedAgentId,
+    sessionKey: normalizedSessionKey,
+  };
+}
+
+function loadBoundTargetFromUrl(): BoundTarget | null {
+  try {
+    const url = new URL(window.location.href);
+    const agentView = url.searchParams.get("agentView");
+    const rawAgentId = url.searchParams.get("agentId")?.trim() ?? "";
+    const rawSessionKey = url.searchParams.get("sessionKey")?.trim() ?? "";
+    if (agentView !== "1" && !rawAgentId && !rawSessionKey) {
+      return null;
+    }
+    return normalizeBoundTarget(rawAgentId, rawSessionKey);
+  } catch {
+    return null;
   }
 }
 
@@ -431,6 +459,54 @@ export class ControlModeView extends LitElement {
       margin-bottom: 10px;
     }
 
+    .agent-focus {
+      display: grid;
+      grid-template-columns: minmax(0, 1.3fr) auto;
+      gap: 16px;
+      align-items: center;
+    }
+
+    .session-browser {
+      display: grid;
+      gap: 12px;
+    }
+
+    .session-item {
+      display: grid;
+      gap: 10px;
+      text-align: left;
+      height: auto;
+      padding: 16px;
+      border-radius: 16px;
+      border: 1px solid rgba(148, 163, 184, 0.14);
+      background: rgba(15, 23, 42, 0.72);
+    }
+
+    .session-item.active {
+      border-color: rgba(59, 130, 246, 0.62);
+      box-shadow: inset 0 0 0 1px rgba(59, 130, 246, 0.25);
+    }
+
+    .session-item-header {
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      align-items: flex-start;
+    }
+
+    .session-meta {
+      color: #94a3b8;
+      font-size: 13px;
+      line-height: 1.5;
+      word-break: break-word;
+    }
+
+    .session-actions {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+
     .section-stack {
       display: grid;
       gap: 20px;
@@ -440,7 +516,8 @@ export class ControlModeView extends LitElement {
     @media (max-width: 900px) {
       .hero-grid,
       .product-grid,
-      .controls {
+      .controls,
+      .agent-focus {
         grid-template-columns: 1fr;
       }
     }
@@ -455,6 +532,8 @@ export class ControlModeView extends LitElement {
   @state() gatewayToken = "";
   @state() targetAgentId = "testui";
   @state() sessionKey = "main";
+  @state() boundTarget: BoundTarget | null = null;
+  @state() standaloneAgentMode = false;
   @state() connectionState: ConnectionState = "idle";
   @state() hello: GatewayHelloOk | null = null;
   @state() health: HealthSummary | null = null;
@@ -501,13 +580,17 @@ export class ControlModeView extends LitElement {
     this.preferenceMemory = loaded;
     this.preferenceDraft = toDraft(loaded);
     this.gatewayToken = loadInitialGatewayToken();
+    const urlBoundTarget = loadBoundTargetFromUrl();
     const savedBoundTarget = loadBoundTarget();
-    if (savedBoundTarget) {
-      this.boundTarget = savedBoundTarget;
-      this.targetAgentId = savedBoundTarget.agentId;
-      this.sessionKey = savedBoundTarget.sessionKey.startsWith("agent:")
-        ? savedBoundTarget.sessionKey.split(":").slice(2).join(":") || "main"
-        : savedBoundTarget.sessionKey;
+    const initialBoundTarget = urlBoundTarget ?? savedBoundTarget;
+    this.standaloneAgentMode = urlBoundTarget !== null;
+    if (initialBoundTarget) {
+      this.boundTarget = normalizeBoundTarget(initialBoundTarget.agentId, initialBoundTarget.sessionKey);
+      this.targetAgentId = this.boundTarget.agentId;
+      this.sessionKey = this.boundTarget.sessionKey;
+      if (urlBoundTarget) {
+        saveBoundTarget(this.boundTarget);
+      }
     }
     this.currentUsageVariant = this.appState.variant;
     this.unsubscribeAppState = this.appState.subscribe(() => {
@@ -547,7 +630,7 @@ export class ControlModeView extends LitElement {
     this.chatLoading = true;
     try {
       const result = await this.client.request<{ messages?: unknown[] }>("chat.history", {
-        sessionKey: this.getNormalizedSessionKey(),
+        sessionKey: this.getBoundTarget().sessionKey,
         limit: 100,
       });
       const messages = Array.isArray(result.messages) ? result.messages : [];
@@ -600,22 +683,21 @@ export class ControlModeView extends LitElement {
     return normalized || "main";
   }
 
+  private getDraftTarget(): BoundTarget {
+    return normalizeBoundTarget(this.targetAgentId, this.getNormalizedSessionKey());
+  }
+
   private getBoundTarget(): BoundTarget {
-    const bound = this.boundTarget ?? { agentId: "", sessionKey: "" };
-    const agentId = bound.agentId.trim() || this.targetAgentId.trim() || "testui";
-    const rawSessionKey = bound.sessionKey.trim() || this.getNormalizedSessionKey();
-    const sessionKey = rawSessionKey.startsWith("agent:") ? rawSessionKey : `agent:${agentId}:${rawSessionKey}`;
+    const bound = this.boundTarget ?? this.getDraftTarget();
+    const normalized = normalizeBoundTarget(bound.agentId, bound.sessionKey);
     return {
-      agentId,
-      sessionKey,
+      agentId: normalized.agentId,
+      sessionKey: `agent:${normalized.agentId}:${normalized.sessionKey}`,
     };
   }
 
   private bindCurrentTarget() {
-    this.boundTarget = {
-      agentId: this.targetAgentId.trim() || "testui",
-      sessionKey: this.getNormalizedSessionKey(),
-    };
+    this.boundTarget = this.getDraftTarget();
     saveBoundTarget(this.boundTarget);
     this.errorMessage = null;
     this.chatMessages = [];
@@ -630,6 +712,7 @@ export class ControlModeView extends LitElement {
     this.boundTarget = { agentId: "testui", sessionKey: "main" };
     this.targetAgentId = "testui";
     this.sessionKey = "main";
+    this.standaloneAgentMode = false;
     clearBoundTarget();
     this.errorMessage = null;
     this.chatMessages = [];
@@ -645,11 +728,24 @@ export class ControlModeView extends LitElement {
     return [bound.sessionKey];
   }
 
+  private resolveSessionTarget(session: SessionRow): BoundTarget {
+    return normalizeBoundTarget(session.agentId ?? this.targetAgentId, session.key);
+  }
+
   private async switchSession(nextSessionKey: string) {
-    if (!nextSessionKey || nextSessionKey === this.sessionKey) {
+    await this.switchSessionTarget(normalizeBoundTarget(this.targetAgentId, nextSessionKey));
+  }
+
+  private async switchSessionTarget(target: BoundTarget) {
+    const normalized = normalizeBoundTarget(target.agentId, target.sessionKey);
+    const current = this.boundTarget ?? this.getDraftTarget();
+    if (current.agentId === normalized.agentId && current.sessionKey === normalized.sessionKey) {
       return;
     }
-    this.sessionKey = nextSessionKey;
+    this.boundTarget = normalized;
+    this.targetAgentId = normalized.agentId;
+    this.sessionKey = normalized.sessionKey;
+    saveBoundTarget(normalized);
     this.chatMessages = [];
     this.chatStream = "";
     this.chatRunId = null;
@@ -1076,6 +1172,41 @@ export class ControlModeView extends LitElement {
     }
   }
 
+  private buildStandaloneAgentUrl(target: BoundTarget) {
+    const normalized = normalizeBoundTarget(target.agentId, target.sessionKey);
+    const url = new URL(window.location.href);
+    url.searchParams.set("mode", "control");
+    url.searchParams.set("agentView", "1");
+    url.searchParams.set("agentId", normalized.agentId);
+    url.searchParams.set("sessionKey", normalized.sessionKey);
+    return url.toString();
+  }
+
+  private openStandaloneAgent(target: BoundTarget) {
+    window.open(this.buildStandaloneAgentUrl(target), "_blank", "noopener");
+  }
+
+  private async copyStandaloneAgentLink(target: BoundTarget) {
+    const url = this.buildStandaloneAgentUrl(target);
+    try {
+      await navigator.clipboard.writeText(url);
+      this.errorMessage = null;
+    } catch (error) {
+      this.errorMessage = `复制链接失败：${String(error)}`;
+    }
+  }
+
+  private exitStandaloneAgentMode() {
+    const url = new URL(window.location.href);
+    url.searchParams.delete("agentView");
+    url.searchParams.delete("agentId");
+    url.searchParams.delete("sessionKey");
+    if (url.searchParams.get("mode") === "control") {
+      url.searchParams.delete("mode");
+    }
+    window.location.href = url.toString();
+  }
+
   private messageKey(message: ChatMessage, index: number) {
     return `${message.role}:${message.timestamp}:${index}`;
   }
@@ -1154,7 +1285,7 @@ export class ControlModeView extends LitElement {
                   <span class="tag">CONTROL 面板</span>
                   <span class="tag">当前使用态：${this.usageVariantLabel(this.currentUsageVariant)}</span>
                   <span class="tag">ACP：${this.acpRuntimeStatus()}</span>
-                  <span class="tag">绑定目标：${this.getBoundTarget().agentId} / ${this.getBoundTarget().sessionKey}</span>
+                  <span class="tag">绑定目标：${this.getDraftTarget().agentId} / ${this.getDraftTarget().sessionKey}</span>
                 </div>
                 <div class="inline-actions">
                   <button class="secondary compact-button" type="button" @click=${() => this.setUsageVariant("native")}>Native</button>
@@ -1216,8 +1347,30 @@ export class ControlModeView extends LitElement {
               <button class="secondary" type="button" @click=${() => this.unbindCurrentTarget()}>解绑当前目标</button>
               <button type="submit">连接 Gateway</button>
             </form>
-            <p class="subtitle" style="margin-top: 12px;">当前绑定工作区：${this.getBoundTarget().agentId} → ${this.getBoundTarget().sessionKey}</p>
+            <p class="subtitle" style="margin-top: 12px;">当前绑定工作区：${this.getDraftTarget().agentId} → ${this.getDraftTarget().sessionKey}</p>
           </section>
+
+          ${this.standaloneAgentMode
+            ? html`
+                <section class="panel">
+                  <div class="agent-focus">
+                    <div>
+                      <h2>单 Agent 视图</h2>
+                      <p class="subtitle">这个标签页会直接绑定到一个 agent / session，适合把某个工作线程单独打开、单独盯住。</p>
+                      <div class="tag-list">
+                        <span class="tag">agent：${this.getDraftTarget().agentId}</span>
+                        <span class="tag">session：${this.getDraftTarget().sessionKey}</span>
+                        <span class="tag">当前模式：CONTROL</span>
+                      </div>
+                    </div>
+                    <div class="inline-actions">
+                      <button class="secondary compact-button" type="button" @click=${() => this.copyStandaloneAgentLink(this.getDraftTarget())}>复制直达链接</button>
+                      <button class="secondary compact-button" type="button" @click=${() => this.exitStandaloneAgentMode()}>返回完整工作台</button>
+                    </div>
+                  </div>
+                </section>
+              `
+            : null}
 
           <section class="panel">
             <h2>Dev Access</h2>
@@ -1392,10 +1545,15 @@ export class ControlModeView extends LitElement {
             <div class="section-stack">
               <section class="panel">
                       <h2>Session Browser</h2>
-                <p class="subtitle">打开每个 agent / session 的入口。点一下就切到对应会话并刷新聊天记录。</p>
+                <p class="subtitle">这里不只是切换会话，也可以把某个 agent / session 直接单独打开成一个独立标签页。</p>
                 <div class="memory-actions" style="margin-bottom: 12px; justify-content: space-between;">
-                  <div class="muted">当前会话：${this.sessionKey}</div>
-                  <button class="secondary" type="button" @click=${() => this.loadSessionsList()} led=${this.sessionsLoading}>${this.sessionsLoading ? "刷新中..." : "刷新会话列表"}</button>
+                  <div class="muted">当前目标：${this.getDraftTarget().agentId} / ${this.getDraftTarget().sessionKey}</div>
+                  <button class="secondary" type="button" @click=${() => this.loadSessionsList()} ?disabled=${this.sessionsLoading}>${this.sessionsLoading ? "刷新中..." : "刷新会话列表"}</button>
+                </div>
+                <div class="inline-actions" style="margin-bottom: 12px;">
+                  <button class="secondary compact-button" type="button" @click=${() => this.bindCurrentTarget()}>绑定输入框中的目标</button>
+                  <button class="secondary compact-button" type="button" @click=${() => this.openStandaloneAgent(this.getDraftTarget())}>单独打开当前目标</button>
+                  <button class="secondary compact-button" type="button" @click=${() => this.copyStandaloneAgentLink(this.getDraftTarget())}>复制当前目标链接</button>
                 </div>
                 ${this.sessionsError ? html`<p style="margin-bottom:12px;color:#fca5a5;">${this.sessionsError}</p>` : null}
                 <div class="memory-item" style="margin-bottom: 12px;">
@@ -1409,19 +1567,28 @@ export class ControlModeView extends LitElement {
                   />
                 </div>
                 <div class="session-browser">
-                  ${this.filteredSessionRows().map(
-                    (session) => html`
-                      <button
-                        type="button"
-                        class="session-item ${session.key === this.sessionKey ? "active" : ""}"
-                        @click=${() => this.switchSession(session.key)}
-                      >
-                        <div><strong>${session.label?.trim() || session.key}</strong></div>
-                        <div class="session-meta">key: ${session.key}</div>
+                  ${this.filteredSessionRows().map((session) => {
+                    const target = this.resolveSessionTarget(session);
+                    const isActive = target.agentId === this.getDraftTarget().agentId && target.sessionKey === this.getDraftTarget().sessionKey;
+                    return html`
+                      <article class="session-item ${isActive ? "active" : ""}">
+                        <div class="session-item-header">
+                          <div>
+                            <div><strong>${session.label?.trim() || target.sessionKey}</strong></div>
+                            <div class="session-meta">agent: ${target.agentId}</div>
+                          </div>
+                          ${isActive ? html`<span class="tag">当前</span>` : null}
+                        </div>
+                        <div class="session-meta">session: ${target.sessionKey}</div>
                         <div class="session-meta">kind: ${session.kind ?? "-"} · model: ${session.model ?? "-"}</div>
-                      </button>
-                    `,
-                  )}
+                        <div class="session-meta">updated: ${this.formatSessionTime(session.updatedAt)}</div>
+                        <div class="session-actions">
+                          <button class="secondary compact-button" type="button" @click=${() => this.switchSessionTarget(target)}>切到这里</button>
+                          <button class="compact-button" type="button" @click=${() => this.openStandaloneAgent(target)}>单独打开</button>
+                        </div>
+                      </article>
+                    `;
+                  })}
                   ${!this.sessionsLoading && this.sessionRows.length === 0 ? html`<div class="muted">当前还没有拉到 session 列表。</div>` : null}
                 </div>
               </section>

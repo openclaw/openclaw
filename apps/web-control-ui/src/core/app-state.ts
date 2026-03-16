@@ -9,6 +9,7 @@ export class AppState {
 
   private constructor() {
     this.loadFromStorage();
+    this.loadFromUrl();
   }
 
   static getInstance(): AppState {
@@ -65,6 +66,27 @@ export class AppState {
       }
     } catch {
       // Ignore storage errors
+    }
+  }
+
+  private loadFromUrl(): void {
+    try {
+      const url = new URL(window.location.href);
+      const mode = url.searchParams.get("mode");
+      const variant = url.searchParams.get("variant");
+      const agentView = url.searchParams.get("agentView");
+
+      if (mode === "use" || mode === "control") {
+        this._mode = mode;
+      }
+      if (variant === "native" || variant === "mission" || variant === "star" || variant === "blank") {
+        this._variant = variant;
+      }
+      if (agentView === "1") {
+        this._mode = "control";
+      }
+    } catch {
+      // Ignore URL parsing errors
     }
   }
 
