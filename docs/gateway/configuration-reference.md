@@ -1117,7 +1117,7 @@ See [Typing Indicators](/concepts/typing-indicators).
 
 ### `agents.defaults.sandbox`
 
-Optional **Docker sandboxing** for the embedded agent. See [Sandboxing](/gateway/sandboxing) for the full guide.
+Optional sandboxing for the embedded agent. See [Sandboxing](/gateway/sandboxing) for the full guide.
 
 ```json5
 {
@@ -1125,6 +1125,7 @@ Optional **Docker sandboxing** for the embedded agent. See [Sandboxing](/gateway
     defaults: {
       sandbox: {
         mode: "non-main", // off | non-main | all
+        backend: "docker", // docker | openshell
         scope: "agent", // session | agent | shared
         workspaceAccess: "none", // none | ro | rw
         workspaceRoot: "~/.openclaw/sandboxes",
@@ -1259,6 +1260,11 @@ noVNC observer access uses VNC auth by default and OpenClaw emits a short-lived 
     entrypoint to change container defaults.
 
 </Accordion>
+
+When `backend: "openshell"` is selected, runtime-specific settings move to
+`plugins.entries.openshell.config` (for example `mode: "mirror" | "remote"` and
+`remoteWorkspaceDir`). Browser sandboxing and `sandbox.docker.binds` are
+currently Docker-only.
 
 Build images:
 

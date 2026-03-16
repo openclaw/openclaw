@@ -24,6 +24,7 @@ import {
 import { resolveOpenShellPluginConfig, type ResolvedOpenShellPluginConfig } from "./config.js";
 import { createOpenShellFsBridge } from "./fs-bridge.js";
 import { replaceDirectoryContents } from "./mirror.js";
+import { createOpenShellRemoteFsBridge } from "./remote-fs-bridge.js";
 
 type CreateOpenShellSandboxBackendFactoryParams = {
   pluginConfig: ResolvedOpenShellPluginConfig;
@@ -34,6 +35,7 @@ type PendingExec = {
 };
 
 export type OpenShellSandboxBackend = SandboxBackendHandle & {
+  mode: "mirror" | "remote";
   remoteWorkspaceDir: string;
   remoteAgentWorkspaceDir: string;
   runRemoteShellScript(params: SandboxBackendCommandParams): Promise<SandboxBackendCommandResult>;
@@ -109,6 +111,7 @@ async function createOpenShellSandboxBackend(params: {
     runtimeLabel: sandboxName,
     workdir: params.pluginConfig.remoteWorkspaceDir,
     env: params.createParams.cfg.docker.env,
+    mode: params.pluginConfig.mode,
     configLabel: params.pluginConfig.from,
     configLabelKind: "Source",
     buildExecSpec: async ({ command, workdir, env, usePty }) => {
@@ -125,10 +128,15 @@ async function createOpenShellSandboxBackend(params: {
     },
     runShellCommand: async (command) => await impl.runRemoteShellScript(command),
     createFsBridge: ({ sandbox }) =>
-      createOpenShellFsBridge({
-        sandbox,
-        backend: impl.asHandle(),
-      }),
+      params.pluginConfig.mode === "remote"
+        ? createOpenShellRemoteFsBridge({
+            sandbox,
+            backend: impl.asHandle(),
+          })
+        : createOpenShellFsBridge({
+            sandbox,
+            backend: impl.asHandle(),
+          }),
     remoteWorkspaceDir: params.pluginConfig.remoteWorkspaceDir,
     remoteAgentWorkspaceDir: params.pluginConfig.remoteAgentWorkspaceDir,
     runRemoteShellScript: async (command) => await impl.runRemoteShellScript(command),
@@ -139,6 +147,7 @@ async function createOpenShellSandboxBackend(params: {
 
 class OpenShellSandboxBackendImpl {
   private ensurePromise: Promise<void> | null = null;
+  private remoteSeedPending = false;
 
   constructor(
     private readonly params: {
@@ -157,6 +166,7 @@ class OpenShellSandboxBackendImpl {
       runtimeLabel: this.params.execContext.sandboxName,
       workdir: this.params.remoteWorkspaceDir,
       env: this.params.createParams.cfg.docker.env,
+      mode: this.params.execContext.config.mode,
       configLabel: this.params.execContext.config.from,
       configLabelKind: "Source",
       remoteWorkspaceDir: this.params.remoteWorkspaceDir,
@@ -175,10 +185,15 @@ class OpenShellSandboxBackendImpl {
       },
       runShellCommand: async (command) => await self.runRemoteShellScript(command),
       createFsBridge: ({ sandbox }) =>
-        createOpenShellFsBridge({
-          sandbox,
-          backend: self.asHandle(),
-        }),
+        this.params.execContext.config.mode === "remote"
+          ? createOpenShellRemoteFsBridge({
+              sandbox,
+              backend: self.asHandle(),
+            })
+          : createOpenShellFsBridge({
+              sandbox,
+              backend: self.asHandle(),
+            }),
       runRemoteShellScript: async (command) => await self.runRemoteShellScript(command),
       syncLocalPathToRemote: async (localPath, remotePath) =>
         await self.syncLocalPathToRemote(localPath, remotePath),
@@ -192,7 +207,11 @@ class OpenShellSandboxBackendImpl {
     usePty: boolean;
   }): Promise<{ argv: string[]; token: PendingExec }> {
     await this.ensureSandboxExists();
-    await this.syncWorkspaceToRemote();
+    if (this.params.execContext.config.mode === "mirror") {
+      await this.syncWorkspaceToRemote();
+    } else {
+      await this.maybeSeedRemoteWorkspace();
+    }
     const sshSession = await createOpenShellSshSession({
       context: this.params.execContext,
     });
@@ -218,7 +237,9 @@ class OpenShellSandboxBackendImpl {
 
   async finalizeExec(token?: PendingExec): Promise<void> {
     try {
-      await this.syncWorkspaceFromRemote();
+      if (this.params.execContext.config.mode === "mirror") {
+        await this.syncWorkspaceFromRemote();
+      }
     } finally {
       if (token?.sshSession) {
         await disposeOpenShellSshSession(token.sshSession);
@@ -230,6 +251,13 @@ class OpenShellSandboxBackendImpl {
     params: SandboxBackendCommandParams,
   ): Promise<SandboxBackendCommandResult> {
     await this.ensureSandboxExists();
+    await this.maybeSeedRemoteWorkspace();
+    return await this.runRemoteShellScriptInternal(params);
+  }
+
+  private async runRemoteShellScriptInternal(
+    params: SandboxBackendCommandParams,
+  ): Promise<SandboxBackendCommandResult> {
     const session = await createOpenShellSshSession({
       context: this.params.execContext,
     });
@@ -254,6 +282,7 @@ class OpenShellSandboxBackendImpl {
 
   async syncLocalPathToRemote(localPath: string, remotePath: string): Promise<void> {
     await this.ensureSandboxExists();
+    await this.maybeSeedRemoteWorkspace();
     const stats = await fs.lstat(localPath).catch(() => null);
     if (!stats) {
       await this.runRemoteShellScript({
@@ -340,10 +369,11 @@ class OpenShellSandboxBackendImpl {
     if (createResult.code !== 0) {
       throw new Error(createResult.stderr.trim() || "openshell sandbox create failed");
     }
+    this.remoteSeedPending = true;
   }
 
   private async syncWorkspaceToRemote(): Promise<void> {
-    await this.runRemoteShellScript({
+    await this.runRemoteShellScriptInternal({
       script: 'mkdir -p -- "$1" && find "$1" -mindepth 1 -maxdepth 1 -exec rm -rf -- {} +',
       args: [this.params.remoteWorkspaceDir],
     });
@@ -357,7 +387,7 @@ class OpenShellSandboxBackendImpl {
       path.resolve(this.params.createParams.agentWorkspaceDir) !==
         path.resolve(this.params.createParams.workspaceDir)
     ) {
-      await this.runRemoteShellScript({
+      await this.runRemoteShellScriptInternal({
         script: 'mkdir -p -- "$1" && find "$1" -mindepth 1 -maxdepth 1 -exec rm -rf -- {} +',
         args: [this.params.remoteAgentWorkspaceDir],
       });
@@ -411,6 +441,19 @@ class OpenShellSandboxBackendImpl {
     });
     if (result.code !== 0) {
       throw new Error(result.stderr.trim() || "openshell sandbox upload failed");
+    }
+  }
+
+  private async maybeSeedRemoteWorkspace(): Promise<void> {
+    if (!this.remoteSeedPending) {
+      return;
+    }
+    this.remoteSeedPending = false;
+    try {
+      await this.syncWorkspaceToRemote();
+    } catch (error) {
+      this.remoteSeedPending = true;
+      throw error;
     }
   }
 }
