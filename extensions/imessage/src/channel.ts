@@ -28,9 +28,17 @@ import {
 import { resolveOutboundSendDep } from "../../../src/infra/outbound/send-deps.js";
 import { buildPassiveProbedChannelStatusSummary } from "../../shared/channel-status-summary.js";
 import { getIMessageRuntime } from "./runtime.js";
-import { imessageSetupAdapter, imessageSetupWizard } from "./setup-surface.js";
+import { createIMessageSetupWizardProxy, imessageSetupAdapter } from "./setup-core.js";
 
 const meta = getChatChannelMeta("imessage");
+
+async function loadIMessageChannelRuntime() {
+  return await import("./channel.runtime.js");
+}
+
+const imessageSetupWizard = createIMessageSetupWizardProxy(async () => ({
+  imessageSetupWizard: (await loadIMessageChannelRuntime()).imessageSetupWizard,
+}));
 
 type IMessageSendFn = ReturnType<
   typeof getIMessageRuntime
