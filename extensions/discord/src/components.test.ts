@@ -19,11 +19,13 @@ describe("discord components", () => {
       blocks: [
         {
           type: "actions",
-          buttons: [{ label: "Approve", style: "success" }],
+          buttons: [{ label: "Approve", style: "success", callbackData: "codex:approve" }],
         },
       ],
       modal: {
         title: "Details",
+        callbackData: "codex:modal",
+        allowedUsers: ["discord:user-1"],
         fields: [{ type: "text", label: "Requester" }],
       },
     });
@@ -39,6 +41,11 @@ describe("discord components", () => {
 
     const trigger = result.entries.find((entry) => entry.kind === "modal-trigger");
     expect(trigger?.modalId).toBe(result.modals[0]?.id);
+    expect(result.entries.find((entry) => entry.kind === "button")?.callbackData).toBe(
+      "codex:approve",
+    );
+    expect(result.modals[0]?.callbackData).toBe("codex:modal");
+    expect(result.modals[0]?.allowedUsers).toEqual(["discord:user-1"]);
   });
 
   it("requires options for modal select fields", () => {

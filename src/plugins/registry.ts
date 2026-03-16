@@ -10,9 +10,10 @@ import type {
 import { registerInternalHook } from "../hooks/internal-hooks.js";
 import type { HookEntry } from "../hooks/types.js";
 import { resolveUserPath } from "../utils.js";
-import { registerPluginCommand } from "./commands.js";
+import { registerPluginCommand, validatePluginCommandDefinition } from "./commands.js";
 import { normalizePluginHttpPath } from "./http-path.js";
 import { findOverlappingPluginHttpRoute } from "./http-route-overlap.js";
+import { registerPluginInteractiveHandler } from "./interactive.js";
 import { normalizeRegisteredProvider } from "./provider-validation.js";
 import type { PluginRuntime } from "./runtime/types.js";
 import { defaultSlotIdForKey } from "./slots.js";
@@ -37,27 +38,35 @@ import type {
   OpenClawPluginToolFactory,
   PluginConfigUiHint,
   PluginDiagnostic,
+  PluginBundleFormat,
+  PluginFormat,
   PluginLogger,
   PluginOrigin,
   PluginKind,
+  PluginRegistrationMode,
   PluginHookName,
   PluginHookHandlerMap,
   PluginHookRegistration as TypedPluginHookRegistration,
+  WebSearchProviderPlugin,
 } from "./types.js";
 
 export type PluginToolRegistration = {
   pluginId: string;
+  pluginName?: string;
   factory: OpenClawPluginToolFactory;
   names: string[];
   optional: boolean;
   source: string;
+  rootDir?: string;
 };
 
 export type PluginCliRegistration = {
   pluginId: string;
+  pluginName?: string;
   register: OpenClawPluginCliRegistrar;
   commands: string[];
   source: string;
+  rootDir?: string;
 };
 
 export type PluginHttpRouteRegistration = {
@@ -71,15 +80,36 @@ export type PluginHttpRouteRegistration = {
 
 export type PluginChannelRegistration = {
   pluginId: string;
+  pluginName?: string;
   plugin: ChannelPlugin;
   dock?: ChannelDock;
   source: string;
+  rootDir?: string;
+};
+
+export type PluginChannelSetupRegistration = {
+  pluginId: string;
+  pluginName?: string;
+  plugin: ChannelPlugin;
+  source: string;
+  enabled: boolean;
+  rootDir?: string;
 };
 
 export type PluginProviderRegistration = {
   pluginId: string;
+  pluginName?: string;
   provider: ProviderPlugin;
   source: string;
+  rootDir?: string;
+};
+
+export type PluginWebSearchProviderRegistration = {
+  pluginId: string;
+  pluginName?: string;
+  provider: WebSearchProviderPlugin;
+  source: string;
+  rootDir?: string;
 };
 
 export type PluginHookRegistration = {
@@ -87,18 +117,23 @@ export type PluginHookRegistration = {
   entry: HookEntry;
   events: string[];
   source: string;
+  rootDir?: string;
 };
 
 export type PluginServiceRegistration = {
   pluginId: string;
+  pluginName?: string;
   service: OpenClawPluginService;
   source: string;
+  rootDir?: string;
 };
 
 export type PluginCommandRegistration = {
   pluginId: string;
+  pluginName?: string;
   command: OpenClawPluginCommandDefinition;
   source: string;
+  rootDir?: string;
 };
 
 export type PluginRecord = {
@@ -106,8 +141,12 @@ export type PluginRecord = {
   name: string;
   version?: string;
   description?: string;
+  format?: PluginFormat;
+  bundleFormat?: PluginBundleFormat;
+  bundleCapabilities?: string[];
   kind?: PluginKind;
   source: string;
+  rootDir?: string;
   origin: PluginOrigin;
   workspaceDir?: string;
   enabled: boolean;
@@ -117,6 +156,7 @@ export type PluginRecord = {
   hookNames: string[];
   channelIds: string[];
   providerIds: string[];
+  webSearchProviderIds: string[];
   gatewayMethods: string[];
   cliCommands: string[];
   services: string[];
@@ -134,7 +174,9 @@ export type PluginRegistry = {
   hooks: PluginHookRegistration[];
   typedHooks: TypedPluginHookRegistration[];
   channels: PluginChannelRegistration[];
+  channelSetups: PluginChannelSetupRegistration[];
   providers: PluginProviderRegistration[];
+  webSearchProviders: PluginWebSearchProviderRegistration[];
   gatewayHandlers: GatewayRequestHandlers;
   httpRoutes: PluginHttpRouteRegistration[];
   cliRegistrars: PluginCliRegistration[];
@@ -147,6 +189,9 @@ export type PluginRegistryParams = {
   logger: PluginLogger;
   coreGatewayHandlers?: GatewayRequestHandlers;
   runtime: PluginRuntime;
+  // When true, skip writing to the global plugin command registry during register().
+  // Used by non-activating snapshot loads to avoid leaking commands into the running gateway.
+  suppressGlobalCommands?: boolean;
 };
 
 type PluginTypedHookPolicy = {
@@ -174,7 +219,9 @@ export function createEmptyPluginRegistry(): PluginRegistry {
     hooks: [],
     typedHooks: [],
     channels: [],
+    channelSetups: [],
     providers: [],
+    webSearchProviders: [],
     gatewayHandlers: {},
     httpRoutes: [],
     cliRegistrars: [],
@@ -212,10 +259,12 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     }
     registry.tools.push({
       pluginId: record.id,
+      pluginName: record.name,
       factory,
       names: normalized,
       optional,
       source: record.source,
+      rootDir: record.rootDir,
     });
   };
 
@@ -414,6 +463,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
   const registerChannel = (
     record: PluginRecord,
     registration: OpenClawPluginChannelRegistration | ChannelPlugin,
+    mode: PluginRegistrationMode = "full",
   ) => {
     const normalized =
       typeof (registration as OpenClawPluginChannelRegistration).plugin === "object"
@@ -430,22 +480,45 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       });
       return;
     }
-    const existing = registry.channels.find((entry) => entry.plugin.id === id);
-    if (existing) {
+    const existingRuntime = registry.channels.find((entry) => entry.plugin.id === id);
+    if (mode !== "setup-only" && existingRuntime) {
       pushDiagnostic({
         level: "error",
         pluginId: record.id,
         source: record.source,
-        message: `channel already registered: ${id} (${existing.pluginId})`,
+        message: `channel already registered: ${id} (${existingRuntime.pluginId})`,
+      });
+      return;
+    }
+    const existingSetup = registry.channelSetups.find((entry) => entry.plugin.id === id);
+    if (existingSetup) {
+      pushDiagnostic({
+        level: "error",
+        pluginId: record.id,
+        source: record.source,
+        message: `channel setup already registered: ${id} (${existingSetup.pluginId})`,
       });
       return;
     }
     record.channelIds.push(id);
+    registry.channelSetups.push({
+      pluginId: record.id,
+      pluginName: record.name,
+      plugin,
+      source: record.source,
+      enabled: record.enabled,
+      rootDir: record.rootDir,
+    });
+    if (mode === "setup-only") {
+      return;
+    }
     registry.channels.push({
       pluginId: record.id,
+      pluginName: record.name,
       plugin,
       dock: normalized.dock,
       source: record.source,
+      rootDir: record.rootDir,
     });
   };
 
@@ -473,8 +546,41 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     record.providerIds.push(id);
     registry.providers.push({
       pluginId: record.id,
+      pluginName: record.name,
       provider: normalizedProvider,
       source: record.source,
+      rootDir: record.rootDir,
+    });
+  };
+
+  const registerWebSearchProvider = (record: PluginRecord, provider: WebSearchProviderPlugin) => {
+    const id = provider.id.trim();
+    if (!id) {
+      pushDiagnostic({
+        level: "error",
+        pluginId: record.id,
+        source: record.source,
+        message: "web search provider registration missing id",
+      });
+      return;
+    }
+    const existing = registry.webSearchProviders.find((entry) => entry.provider.id === id);
+    if (existing) {
+      pushDiagnostic({
+        level: "error",
+        pluginId: record.id,
+        source: record.source,
+        message: `web search provider already registered: ${id} (${existing.pluginId})`,
+      });
+      return;
+    }
+    record.webSearchProviderIds.push(id);
+    registry.webSearchProviders.push({
+      pluginId: record.id,
+      pluginName: record.name,
+      provider,
+      source: record.source,
+      rootDir: record.rootDir,
     });
   };
 
@@ -509,9 +615,11 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     record.cliCommands.push(...commands);
     registry.cliRegistrars.push({
       pluginId: record.id,
+      pluginName: record.name,
       register: registrar,
       commands,
       source: record.source,
+      rootDir: record.rootDir,
     });
   };
 
@@ -533,8 +641,10 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     record.services.push(id);
     registry.services.push({
       pluginId: record.id,
+      pluginName: record.name,
       service,
       source: record.source,
+      rootDir: record.rootDir,
     });
   };
 
@@ -550,23 +660,46 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       return;
     }
 
-    // Register with the plugin command system (validates name and checks for duplicates)
-    const result = registerPluginCommand(record.id, command);
-    if (!result.ok) {
-      pushDiagnostic({
-        level: "error",
-        pluginId: record.id,
-        source: record.source,
-        message: `command registration failed: ${result.error}`,
+    // For snapshot (non-activating) loads, record the command locally without touching the
+    // global plugin command registry so running gateway commands stay intact.
+    // We still validate the command definition so diagnostics match the real activation path.
+    // NOTE: cross-plugin duplicate command detection is intentionally skipped here because
+    // snapshot registries are isolated and never write to the global command table. Conflicts
+    // will surface when the plugin is loaded via the normal activation path at gateway startup.
+    if (registryParams.suppressGlobalCommands) {
+      const validationError = validatePluginCommandDefinition(command);
+      if (validationError) {
+        pushDiagnostic({
+          level: "error",
+          pluginId: record.id,
+          source: record.source,
+          message: `command registration failed: ${validationError}`,
+        });
+        return;
+      }
+    } else {
+      const result = registerPluginCommand(record.id, command, {
+        pluginName: record.name,
+        pluginRoot: record.rootDir,
       });
-      return;
+      if (!result.ok) {
+        pushDiagnostic({
+          level: "error",
+          pluginId: record.id,
+          source: record.source,
+          message: `command registration failed: ${result.error}`,
+        });
+        return;
+      }
     }
 
     record.commands.push(name);
     registry.commands.push({
       pluginId: record.id,
+      pluginName: record.name,
       command,
       source: record.source,
+      rootDir: record.rootDir,
     });
   };
 
@@ -632,29 +765,70 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       config: OpenClawPluginApi["config"];
       pluginConfig?: Record<string, unknown>;
       hookPolicy?: PluginTypedHookPolicy;
+      registrationMode?: PluginRegistrationMode;
     },
   ): OpenClawPluginApi => {
+    const registrationMode = params.registrationMode ?? "full";
     return {
       id: record.id,
       name: record.name,
       version: record.version,
       description: record.description,
       source: record.source,
+      rootDir: record.rootDir,
+      registrationMode,
       config: params.config,
       pluginConfig: params.pluginConfig,
       runtime: registryParams.runtime,
       logger: normalizeLogger(registryParams.logger),
-      registerTool: (tool, opts) => registerTool(record, tool, opts),
-      registerHook: (events, handler, opts) =>
-        registerHook(record, events, handler, opts, params.config),
-      registerHttpRoute: (params) => registerHttpRoute(record, params),
-      registerChannel: (registration) => registerChannel(record, registration),
-      registerProvider: (provider) => registerProvider(record, provider),
-      registerGatewayMethod: (method, handler) => registerGatewayMethod(record, method, handler),
-      registerCli: (registrar, opts) => registerCli(record, registrar, opts),
-      registerService: (service) => registerService(record, service),
-      registerCommand: (command) => registerCommand(record, command),
+      registerTool:
+        registrationMode === "full" ? (tool, opts) => registerTool(record, tool, opts) : () => {},
+      registerHook:
+        registrationMode === "full"
+          ? (events, handler, opts) => registerHook(record, events, handler, opts, params.config)
+          : () => {},
+      registerHttpRoute:
+        registrationMode === "full" ? (params) => registerHttpRoute(record, params) : () => {},
+      registerChannel: (registration) => registerChannel(record, registration, registrationMode),
+      registerProvider:
+        registrationMode === "full" ? (provider) => registerProvider(record, provider) : () => {},
+      registerWebSearchProvider:
+        registrationMode === "full"
+          ? (provider) => registerWebSearchProvider(record, provider)
+          : () => {},
+      registerGatewayMethod:
+        registrationMode === "full"
+          ? (method, handler) => registerGatewayMethod(record, method, handler)
+          : () => {},
+      registerCli:
+        registrationMode === "full"
+          ? (registrar, opts) => registerCli(record, registrar, opts)
+          : () => {},
+      registerService:
+        registrationMode === "full" ? (service) => registerService(record, service) : () => {},
+      registerInteractiveHandler:
+        registrationMode === "full"
+          ? (registration) => {
+              const result = registerPluginInteractiveHandler(record.id, registration, {
+                pluginName: record.name,
+                pluginRoot: record.rootDir,
+              });
+              if (!result.ok) {
+                pushDiagnostic({
+                  level: "warn",
+                  pluginId: record.id,
+                  source: record.source,
+                  message: result.error ?? "interactive handler registration failed",
+                });
+              }
+            }
+          : () => {},
+      registerCommand:
+        registrationMode === "full" ? (command) => registerCommand(record, command) : () => {},
       registerContextEngine: (id, factory) => {
+        if (registrationMode !== "full") {
+          return;
+        }
         if (id === defaultSlotIdForKey("contextEngine")) {
           pushDiagnostic({
             level: "error",
@@ -678,7 +852,9 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       },
       resolvePath: (input: string) => resolveUserPath(input),
       on: (hookName, handler, opts) =>
-        registerTypedHook(record, hookName, handler, opts, params.hookPolicy),
+        registrationMode === "full"
+          ? registerTypedHook(record, hookName, handler, opts, params.hookPolicy)
+          : undefined,
     };
   };
 
@@ -689,6 +865,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     registerTool,
     registerChannel,
     registerProvider,
+    registerWebSearchProvider,
     registerGatewayMethod,
     registerCli,
     registerService,

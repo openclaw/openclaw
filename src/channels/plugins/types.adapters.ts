@@ -1,6 +1,7 @@
 import type { ReplyPayload } from "../../auto-reply/types.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { GroupToolPolicyConfig } from "../../config/types.tools.js";
+import type { ExecApprovalRequest, ExecApprovalResolved } from "../../infra/exec-approvals.js";
 import type { OutboundDeliveryResult, OutboundSendDeps } from "../../infra/outbound/deliver.js";
 import type { OutboundIdentity } from "../../infra/outbound/identity.js";
 import type { PluginRuntime } from "../../plugins/runtime/types.js";
@@ -20,6 +21,35 @@ import type {
   ChannelSetupInput,
   ChannelStatusIssue,
 } from "./types.core.js";
+
+export type ChannelExecApprovalInitiatingSurfaceState =
+  | { kind: "enabled" }
+  | { kind: "disabled" }
+  | { kind: "unsupported" };
+
+export type ChannelExecApprovalForwardTarget = {
+  channel: string;
+  to: string;
+  accountId?: string | null;
+  threadId?: string | number | null;
+  source?: "session" | "target";
+};
+
+export type ChannelCapabilitiesDisplayTone = "default" | "muted" | "success" | "warn" | "error";
+
+export type ChannelCapabilitiesDisplayLine = {
+  text: string;
+  tone?: ChannelCapabilitiesDisplayTone;
+};
+
+export type ChannelCapabilitiesDiagnostics = {
+  lines?: ChannelCapabilitiesDisplayLine[];
+  details?: Record<string, unknown>;
+};
+
+type BivariantCallback<T extends (...args: never[]) => unknown> = {
+  bivarianceHack: T;
+}["bivarianceHack"];
 
 export type ChannelSetupAdapter = {
   resolveAccountId?: (params: {
@@ -139,12 +169,25 @@ export type ChannelStatusAdapter<ResolvedAccount, Probe = unknown, Audit = unkno
     timeoutMs: number;
     cfg: OpenClawConfig;
   }) => Promise<Probe>;
+  formatCapabilitiesProbe?: BivariantCallback<
+    (params: { probe: Probe }) => ChannelCapabilitiesDisplayLine[]
+  >;
   auditAccount?: (params: {
     account: ResolvedAccount;
     timeoutMs: number;
     cfg: OpenClawConfig;
     probe?: Probe;
   }) => Promise<Audit>;
+  buildCapabilitiesDiagnostics?: BivariantCallback<
+    (params: {
+      account: ResolvedAccount;
+      timeoutMs: number;
+      cfg: OpenClawConfig;
+      probe?: Probe;
+      audit?: Audit;
+      target?: string;
+    }) => Promise<ChannelCapabilitiesDiagnostics | undefined>
+  >;
   buildAccountSnapshot?: (params: {
     account: ResolvedAccount;
     cfg: OpenClawConfig;
@@ -375,6 +418,53 @@ export type ChannelElevatedAdapter = {
 export type ChannelCommandAdapter = {
   enforceOwnerForCommands?: boolean;
   skipWhenConfigEmpty?: boolean;
+};
+
+export type ChannelLifecycleAdapter = {
+  onAccountConfigChanged?: (params: {
+    prevCfg: OpenClawConfig;
+    nextCfg: OpenClawConfig;
+    accountId: string;
+    runtime: RuntimeEnv;
+  }) => Promise<void> | void;
+  onAccountRemoved?: (params: {
+    prevCfg: OpenClawConfig;
+    accountId: string;
+    runtime: RuntimeEnv;
+  }) => Promise<void> | void;
+};
+
+export type ChannelExecApprovalAdapter = {
+  getInitiatingSurfaceState?: (params: {
+    cfg: OpenClawConfig;
+    accountId?: string | null;
+  }) => ChannelExecApprovalInitiatingSurfaceState;
+  hasConfiguredDmRoute?: (params: { cfg: OpenClawConfig }) => boolean;
+  shouldSuppressForwardingFallback?: (params: {
+    cfg: OpenClawConfig;
+    target: ChannelExecApprovalForwardTarget;
+    request: ExecApprovalRequest;
+  }) => boolean;
+  buildPendingPayload?: (params: {
+    cfg: OpenClawConfig;
+    request: ExecApprovalRequest;
+    target: ChannelExecApprovalForwardTarget;
+    nowMs: number;
+  }) => ReplyPayload | null;
+  buildResolvedPayload?: (params: {
+    cfg: OpenClawConfig;
+    resolved: ExecApprovalResolved;
+    target: ChannelExecApprovalForwardTarget;
+  }) => ReplyPayload | null;
+  beforeDeliverPending?: (params: {
+    cfg: OpenClawConfig;
+    target: ChannelExecApprovalForwardTarget;
+    payload: ReplyPayload;
+  }) => Promise<void> | void;
+};
+
+export type ChannelAllowlistAdapter = {
+  supportsScope?: (params: { scope: "dm" | "group" | "all" }) => boolean;
 };
 
 export type ChannelSecurityAdapter<ResolvedAccount = unknown> = {

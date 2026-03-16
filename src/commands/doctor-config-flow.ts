@@ -330,7 +330,7 @@ async function maybeRepairTelegramAllowFromUsernames(cfg: OpenClawConfig): Promi
     config: cfg,
     commandName: "doctor --fix",
     targetIds: getChannelsCommandSecretTargetIds(),
-    mode: "summary",
+    mode: "read_only_status",
   });
   const hasConfiguredUnavailableToken = listTelegramAccountIds(cfg).some((accountId) => {
     const inspected = inspectTelegramAccount({ cfg, accountId });
@@ -352,7 +352,7 @@ async function maybeRepairTelegramAllowFromUsernames(cfg: OpenClawConfig): Promi
       changes: [
         hasConfiguredUnavailableToken
           ? `- Telegram allowFrom contains @username entries, but configured Telegram bot credentials are unavailable in this command path; cannot auto-resolve (start the gateway or make the secret source available, then rerun doctor --fix).`
-          : `- Telegram allowFrom contains @username entries, but no Telegram bot token is configured; cannot auto-resolve (run onboarding or replace with numeric sender IDs).`,
+          : `- Telegram allowFrom contains @username entries, but no Telegram bot token is configured; cannot auto-resolve (run setup or replace with numeric sender IDs).`,
       ],
     };
   }

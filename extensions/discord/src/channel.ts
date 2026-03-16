@@ -1,3 +1,4 @@
+import { Separator, TextDisplay } from "@buape/carbon";
 import { createScopedChannelConfigBase } from "openclaw/plugin-sdk/compat";
 import {
   buildAccountScopedDmSecurityPolicy,
@@ -7,14 +8,12 @@ import {
   formatAllowFromLowercase,
 } from "openclaw/plugin-sdk/compat";
 import {
-  applyAccountNameToChannelSection,
   buildComputedAccountStatusSnapshot,
   buildChannelConfigSchema,
   buildTokenChannelStatusSummary,
   collectDiscordAuditChannelIds,
   collectDiscordStatusIssues,
   DEFAULT_ACCOUNT_ID,
-  discordOnboardingAdapter,
   DiscordConfigSchema,
   getChatChannelMeta,
   inspectDiscordAccount,
@@ -22,8 +21,6 @@ import {
   listDiscordDirectoryGroupsFromConfig,
   listDiscordDirectoryPeersFromConfig,
   looksLikeDiscordTargetId,
-  migrateBaseNameToDefaultAccount,
-  normalizeAccountId,
   normalizeDiscordMessagingTarget,
   normalizeDiscordOutboundTarget,
   PAIRING_APPROVED_MESSAGE,
@@ -35,16 +32,44 @@ import {
   resolveDiscordGroupToolPolicy,
   type ChannelMessageActionAdapter,
   type ChannelPlugin,
+  type OpenClawConfig,
   type ResolvedDiscordAccount,
 } from "openclaw/plugin-sdk/discord";
 import { resolveOutboundSendDep } from "../../../src/infra/outbound/send-deps.js";
+import { normalizeMessageChannel } from "../../../src/utils/message-channel.js";
+import { isDiscordExecApprovalClientEnabled } from "./exec-approvals.js";
+import type { DiscordProbe } from "./probe.js";
 import { getDiscordRuntime } from "./runtime.js";
+import { fetchChannelPermissionsDiscord } from "./send.js";
+import { createDiscordSetupWizardProxy, discordSetupAdapter } from "./setup-core.js";
+import { parseDiscordTarget } from "./targets.js";
+import { DiscordUiContainer } from "./ui.js";
 
 type DiscordSendFn = ReturnType<
   typeof getDiscordRuntime
 >["channel"]["discord"]["sendMessageDiscord"];
 
 const meta = getChatChannelMeta("discord");
+const REQUIRED_DISCORD_PERMISSIONS = ["ViewChannel", "SendMessages"] as const;
+
+async function loadDiscordChannelRuntime() {
+  return await import("./channel.runtime.js");
+}
+
+function formatDiscordIntents(intents?: {
+  messageContent?: string;
+  guildMembers?: string;
+  presence?: string;
+}) {
+  if (!intents) {
+    return "unknown";
+  }
+  return [
+    `messageContent=${intents.messageContent ?? "unknown"}`,
+    `guildMembers=${intents.guildMembers ?? "unknown"}`,
+    `presence=${intents.presence ?? "unknown"}`,
+  ].join(" ");
+}
 
 const discordMessageActions: ChannelMessageActionAdapter = {
   listActions: (ctx) =>
@@ -58,7 +83,36 @@ const discordMessageActions: ChannelMessageActionAdapter = {
     }
     return ma.handleAction(ctx);
   },
+  requiresTrustedRequesterSender: ({ action, toolContext }) =>
+    Boolean(toolContext && (action === "timeout" || action === "kick" || action === "ban")),
 };
+
+function buildDiscordCrossContextComponents(params: {
+  originLabel: string;
+  message: string;
+  cfg: OpenClawConfig;
+  accountId?: string | null;
+}) {
+  const trimmed = params.message.trim();
+  const components: Array<TextDisplay | Separator> = [];
+  if (trimmed) {
+    components.push(new TextDisplay(params.message));
+    components.push(new Separator({ divider: true, spacing: "small" }));
+  }
+  components.push(new TextDisplay(`*From ${params.originLabel}*`));
+  return [new DiscordUiContainer({ cfg: params.cfg, accountId: params.accountId, components })];
+}
+
+function hasDiscordExecApprovalDmRoute(cfg: OpenClawConfig): boolean {
+  return listDiscordAccountIds(cfg).some((accountId) => {
+    const execApprovals = resolveDiscordAccount({ cfg, accountId }).config.execApprovals;
+    if (!execApprovals?.enabled || (execApprovals.approvers?.length ?? 0) === 0) {
+      return false;
+    }
+    const target = execApprovals.target ?? "dm";
+    return target === "dm" || target === "both";
+  });
+}
 
 const discordConfigAccessors = createScopedAccountConfigAccessors({
   resolveAccount: ({ cfg, accountId }) => resolveDiscordAccount({ cfg, accountId }),
@@ -76,12 +130,16 @@ const discordConfigBase = createScopedChannelConfigBase({
   clearBaseFields: ["token", "name"],
 });
 
+const discordSetupWizard = createDiscordSetupWizardProxy(async () => ({
+  discordSetupWizard: (await loadDiscordChannelRuntime()).discordSetupWizard,
+}));
+
 export const discordPlugin: ChannelPlugin<ResolvedDiscordAccount> = {
   id: "discord",
   meta: {
     ...meta,
   },
-  onboarding: discordOnboardingAdapter,
+  setupWizard: discordSetupWizard,
   pairing: {
     idLabel: "discordUserId",
     normalizeAllowEntry: (entry) => entry.replace(/^(discord|user):/i, ""),
@@ -178,10 +236,21 @@ export const discordPlugin: ChannelPlugin<ResolvedDiscordAccount> = {
   },
   messaging: {
     normalizeTarget: normalizeDiscordMessagingTarget,
+    buildCrossContextComponents: buildDiscordCrossContextComponents,
     targetResolver: {
       looksLikeId: looksLikeDiscordTargetId,
       hint: "<channelId|user:ID|channel:ID>",
     },
+  },
+  execApprovals: {
+    getInitiatingSurfaceState: ({ cfg, accountId }) =>
+      isDiscordExecApprovalClientEnabled({ cfg, accountId })
+        ? { kind: "enabled" }
+        : { kind: "disabled" },
+    hasConfiguredDmRoute: ({ cfg }) => hasDiscordExecApprovalDmRoute(cfg),
+    shouldSuppressForwardingFallback: ({ cfg, target }) =>
+      (normalizeMessageChannel(target.channel) ?? target.channel) === "discord" &&
+      isDiscordExecApprovalClientEnabled({ cfg, accountId: target.accountId }),
   },
   directory: {
     self: async () => null,
@@ -233,71 +302,7 @@ export const discordPlugin: ChannelPlugin<ResolvedDiscordAccount> = {
     },
   },
   actions: discordMessageActions,
-  setup: {
-    resolveAccountId: ({ accountId }) => normalizeAccountId(accountId),
-    applyAccountName: ({ cfg, accountId, name }) =>
-      applyAccountNameToChannelSection({
-        cfg,
-        channelKey: "discord",
-        accountId,
-        name,
-      }),
-    validateInput: ({ accountId, input }) => {
-      if (input.useEnv && accountId !== DEFAULT_ACCOUNT_ID) {
-        return "DISCORD_BOT_TOKEN can only be used for the default account.";
-      }
-      if (!input.useEnv && !input.token) {
-        return "Discord requires token (or --use-env).";
-      }
-      return null;
-    },
-    applyAccountConfig: ({ cfg, accountId, input }) => {
-      const namedConfig = applyAccountNameToChannelSection({
-        cfg,
-        channelKey: "discord",
-        accountId,
-        name: input.name,
-      });
-      const next =
-        accountId !== DEFAULT_ACCOUNT_ID
-          ? migrateBaseNameToDefaultAccount({
-              cfg: namedConfig,
-              channelKey: "discord",
-            })
-          : namedConfig;
-      if (accountId === DEFAULT_ACCOUNT_ID) {
-        return {
-          ...next,
-          channels: {
-            ...next.channels,
-            discord: {
-              ...next.channels?.discord,
-              enabled: true,
-              ...(input.useEnv ? {} : input.token ? { token: input.token } : {}),
-            },
-          },
-        };
-      }
-      return {
-        ...next,
-        channels: {
-          ...next.channels,
-          discord: {
-            ...next.channels?.discord,
-            enabled: true,
-            accounts: {
-              ...next.channels?.discord?.accounts,
-              [accountId]: {
-                ...next.channels?.discord?.accounts?.[accountId],
-                enabled: true,
-                ...(input.token ? { token: input.token } : {}),
-              },
-            },
-          },
-        },
-      };
-    },
-  },
+  setup: discordSetupAdapter,
   outbound: {
     deliveryMode: "direct",
     chunker: null,
@@ -369,6 +374,91 @@ export const discordPlugin: ChannelPlugin<ResolvedDiscordAccount> = {
       getDiscordRuntime().channel.discord.probeDiscord(account.token, timeoutMs, {
         includeApplication: true,
       }),
+    formatCapabilitiesProbe: ({ probe }) => {
+      const discordProbe = probe as DiscordProbe | undefined;
+      const lines = [];
+      if (discordProbe?.bot?.username) {
+        const botId = discordProbe.bot.id ? ` (${discordProbe.bot.id})` : "";
+        lines.push({ text: `Bot: @${discordProbe.bot.username}${botId}` });
+      }
+      if (discordProbe?.application?.intents) {
+        lines.push({ text: `Intents: ${formatDiscordIntents(discordProbe.application.intents)}` });
+      }
+      return lines;
+    },
+    buildCapabilitiesDiagnostics: async ({ account, timeoutMs, target }) => {
+      if (!target?.trim()) {
+        return undefined;
+      }
+      const parsedTarget = parseDiscordTarget(target.trim(), { defaultKind: "channel" });
+      const details: Record<string, unknown> = {
+        target: {
+          raw: target,
+          normalized: parsedTarget?.normalized,
+          kind: parsedTarget?.kind,
+          channelId: parsedTarget?.kind === "channel" ? parsedTarget.id : undefined,
+        },
+      };
+      if (!parsedTarget || parsedTarget.kind !== "channel") {
+        return {
+          details,
+          lines: [
+            {
+              text: "Permissions: Target looks like a DM user; pass channel:<id> to audit channel permissions.",
+              tone: "error",
+            },
+          ],
+        };
+      }
+      const token = account.token?.trim();
+      if (!token) {
+        return {
+          details,
+          lines: [
+            {
+              text: "Permissions: Discord bot token missing for permission audit.",
+              tone: "error",
+            },
+          ],
+        };
+      }
+      try {
+        const perms = await fetchChannelPermissionsDiscord(parsedTarget.id, {
+          token,
+          accountId: account.accountId ?? undefined,
+        });
+        const missingRequired = REQUIRED_DISCORD_PERMISSIONS.filter(
+          (permission) => !perms.permissions.includes(permission),
+        );
+        details.permissions = {
+          channelId: perms.channelId,
+          guildId: perms.guildId,
+          isDm: perms.isDm,
+          channelType: perms.channelType,
+          permissions: perms.permissions,
+          missingRequired,
+          raw: perms.raw,
+        };
+        return {
+          details,
+          lines: [
+            {
+              text: `Permissions (${perms.channelId}): ${perms.permissions.length ? perms.permissions.join(", ") : "none"}`,
+            },
+            missingRequired.length > 0
+              ? { text: `Missing required: ${missingRequired.join(", ")}`, tone: "warn" }
+              : { text: "Missing required: none", tone: "success" },
+          ],
+        };
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        details.permissions = { channelId: parsedTarget.id, error: message };
+        return {
+          details,
+          lines: [{ text: `Permissions: ${message}`, tone: "error" }],
+        };
+      }
+    },
     auditAccount: async ({ account, timeoutMs, cfg }) => {
       const { channelIds, unresolvedChannels } = collectDiscordAuditChannelIds({
         cfg,

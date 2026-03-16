@@ -1,19 +1,13 @@
 import type { OpenClawConfig } from "../config/config.js";
 import type { RuntimeEnv } from "../runtime.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
+import { normalizeLegacyOnboardAuthChoice } from "./auth-choice-legacy.js";
 import { applyAuthChoiceAnthropic } from "./auth-choice.apply.anthropic.js";
 import { applyAuthChoiceApiProviders } from "./auth-choice.apply.api-providers.js";
-import { applyAuthChoiceBytePlus } from "./auth-choice.apply.byteplus.js";
-import { applyAuthChoiceCopilotProxy } from "./auth-choice.apply.copilot-proxy.js";
-import { applyAuthChoiceGitHubCopilot } from "./auth-choice.apply.github-copilot.js";
-import { applyAuthChoiceGoogleGeminiCli } from "./auth-choice.apply.google-gemini-cli.js";
 import { applyAuthChoiceMiniMax } from "./auth-choice.apply.minimax.js";
 import { applyAuthChoiceOAuth } from "./auth-choice.apply.oauth.js";
 import { applyAuthChoiceOpenAI } from "./auth-choice.apply.openai.js";
 import { applyAuthChoiceLoadedPluginProvider } from "./auth-choice.apply.plugin-provider.js";
-import { applyAuthChoiceQwenPortal } from "./auth-choice.apply.qwen-portal.js";
-import { applyAuthChoiceVolcengine } from "./auth-choice.apply.volcengine.js";
-import { applyAuthChoiceXAI } from "./auth-choice.apply.xai.js";
 import type { AuthChoice, OnboardOptions } from "./onboard-types.js";
 
 export type ApplyAuthChoiceParams = {
@@ -35,6 +29,12 @@ export type ApplyAuthChoiceResult = {
 export async function applyAuthChoice(
   params: ApplyAuthChoiceParams,
 ): Promise<ApplyAuthChoiceResult> {
+  const normalizedAuthChoice =
+    normalizeLegacyOnboardAuthChoice(params.authChoice) ?? params.authChoice;
+  const normalizedParams =
+    normalizedAuthChoice === params.authChoice
+      ? params
+      : { ...params, authChoice: normalizedAuthChoice };
   const handlers: Array<(p: ApplyAuthChoiceParams) => Promise<ApplyAuthChoiceResult | null>> = [
     applyAuthChoiceLoadedPluginProvider,
     applyAuthChoiceAnthropic,
@@ -42,21 +42,14 @@ export async function applyAuthChoice(
     applyAuthChoiceOAuth,
     applyAuthChoiceApiProviders,
     applyAuthChoiceMiniMax,
-    applyAuthChoiceGitHubCopilot,
-    applyAuthChoiceGoogleGeminiCli,
-    applyAuthChoiceCopilotProxy,
-    applyAuthChoiceQwenPortal,
-    applyAuthChoiceXAI,
-    applyAuthChoiceVolcengine,
-    applyAuthChoiceBytePlus,
   ];
 
   for (const handler of handlers) {
-    const result = await handler(params);
+    const result = await handler(normalizedParams);
     if (result) {
       return result;
     }
   }
 
-  return { config: params.config };
+  return { config: normalizedParams.config };
 }
