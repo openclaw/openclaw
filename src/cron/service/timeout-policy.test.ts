@@ -46,4 +46,16 @@ describe("timeout-policy", () => {
     );
     expect(timeout).toBe(1_900);
   });
+
+  it("applies explicit timeoutSeconds for script payloads (#47608)", () => {
+    const timeout = resolveCronJobTimeoutMs(
+      makeJob({ kind: "script", script: "echo hi", timeoutSeconds: 30 }),
+    );
+    expect(timeout).toBe(30_000);
+  });
+
+  it("uses DEFAULT_JOB_TIMEOUT_MS for script payloads without explicit timeout", () => {
+    const timeout = resolveCronJobTimeoutMs(makeJob({ kind: "script", script: "echo hi" }));
+    expect(timeout).toBe(DEFAULT_JOB_TIMEOUT_MS);
+  });
 });
