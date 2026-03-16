@@ -13,7 +13,7 @@ import {
 const PROVIDER_ID = "vllm";
 
 async function loadProviderSetup() {
-  return await import("openclaw/plugin-sdk/provider-setup");
+  return await import("openclaw/plugin-sdk/self-hosted-provider-setup");
 }
 
 const vllmPlugin = {

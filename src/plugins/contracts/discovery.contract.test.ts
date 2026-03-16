@@ -32,6 +32,23 @@ vi.mock("openclaw/plugin-sdk/provider-setup", async () => {
   };
 });
 
+vi.mock("openclaw/plugin-sdk/self-hosted-provider-setup", async () => {
+  const actual = await vi.importActual<object>("openclaw/plugin-sdk/self-hosted-provider-setup");
+  return {
+    ...actual,
+    buildVllmProvider: (...args: unknown[]) => buildVllmProviderMock(...args),
+    buildSglangProvider: (...args: unknown[]) => buildSglangProviderMock(...args),
+  };
+});
+
+vi.mock("openclaw/plugin-sdk/ollama-setup", async () => {
+  const actual = await vi.importActual<object>("openclaw/plugin-sdk/ollama-setup");
+  return {
+    ...actual,
+    buildOllamaProvider: (...args: unknown[]) => buildOllamaProviderMock(...args),
+  };
+});
+
 const qwenPortalPlugin = (await import("../../../extensions/qwen-portal-auth/index.js")).default;
 const githubCopilotPlugin = (await import("../../../extensions/github-copilot/index.js")).default;
 const ollamaPlugin = (await import("../../../extensions/ollama/index.js")).default;
