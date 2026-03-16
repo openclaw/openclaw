@@ -54,9 +54,9 @@ function nodeBuildConfig(config: Record<string, unknown>) {
     ...config,
     env,
     fixedExtension: false,
-    platform: "node",
+    platform: "node" as const,
     inputOptions: buildInputOptions,
-  };
+  } as const;
 }
 
 function listBundledPluginBuildEntries(): Record<string, string> {
@@ -159,4 +159,4 @@ export default defineConfig([
   nodeBuildConfig({
     entry: ["src/hooks/bundled/*/handler.ts", "src/hooks/llm-slug-generator.ts"],
   }),
-]);
+] as unknown as Parameters<typeof defineConfig>[0]);
