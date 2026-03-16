@@ -1,5 +1,5 @@
 ---
-summary: "Web search + fetch tools (Brave, Firecrawl, Gemini, Grok, Kimi, and Perplexity providers)"
+summary: "Web search + fetch tools (Baidu, Brave, Firecrawl, Gemini, Grok, Kimi, and Perplexity providers)"
 read_when:
   - You want to enable web_search or web_fetch
   - You need provider API key setup
@@ -11,7 +11,7 @@ title: "Web Tools"
 
 OpenClaw ships two lightweight web tools:
 
-- `web_search` — Search the web using Brave Search API, Firecrawl Search, Gemini with Google Search grounding, Grok, Kimi, or Perplexity Search API.
+- `web_search` — Search the web using Baidu Search API, Brave Search API, Firecrawl Search, Gemini with Google Search grounding, Grok, Kimi, or Perplexity Search API.
 - `web_fetch` — HTTP fetch + readable extraction (HTML → markdown/text).
 
 These are **not** browser automation. For JS-heavy sites or logins, use the
@@ -32,6 +32,7 @@ See [Brave Search setup](/brave-search) and [Perplexity Search setup](/perplexit
 
 | Provider                  | Result shape                       | Provider-specific filters                                    | Notes                                                                          | API key                                     |
 | ------------------------- | ---------------------------------- | ------------------------------------------------------------ | ------------------------------------------------------------------------------ | ------------------------------------------- |
+| **baidu**                 | Fast, structured results           | -                                                            | Use Baidu web search                                                           | `BAIDU_SEARCH_API_KEY`                      |
 | **Brave Search API**      | Structured results with snippets   | `country`, `language`, `ui_lang`, time                       | Supports Brave `llm-context` mode                                              | `BRAVE_API_KEY`                             |
 | **Firecrawl Search**      | Structured results with snippets   | Use `firecrawl_search` for Firecrawl-specific search options | Best for pairing search with Firecrawl scraping/extraction                     | `FIRECRAWL_API_KEY`                         |
 | **Gemini**                | AI-synthesized answers + citations | —                                                            | Uses Google Search grounding                                                   | `GEMINI_API_KEY`                            |
@@ -43,12 +44,13 @@ See [Brave Search setup](/brave-search) and [Perplexity Search setup](/perplexit
 
 The table above is alphabetical. If no `provider` is explicitly set, runtime auto-detection checks providers in this order:
 
-1. **Brave** — `BRAVE_API_KEY` env var or `tools.web.search.apiKey` config
-2. **Gemini** — `GEMINI_API_KEY` env var or `tools.web.search.gemini.apiKey` config
-3. **Grok** — `XAI_API_KEY` env var or `tools.web.search.grok.apiKey` config
-4. **Kimi** — `KIMI_API_KEY` / `MOONSHOT_API_KEY` env var or `tools.web.search.kimi.apiKey` config
-5. **Perplexity** — `PERPLEXITY_API_KEY`, `OPENROUTER_API_KEY`, or `tools.web.search.perplexity.apiKey` config
-6. **Firecrawl** — `FIRECRAWL_API_KEY` env var or `tools.web.search.firecrawl.apiKey` config
+1. **Baidu** - `BAIDU_SEARCH__API_KEY` env var or `tools.web.search.baidu.apiKey` config
+2. **Brave** — `BRAVE_API_KEY` env var or `tools.web.search.apiKey` config
+3. **Gemini** — `GEMINI_API_KEY` env var or `tools.web.search.gemini.apiKey` config
+4. **Grok** — `XAI_API_KEY` env var or `tools.web.search.grok.apiKey` config
+5. **Kimi** — `KIMI_API_KEY` / `MOONSHOT_API_KEY` env var or `tools.web.search.kimi.apiKey` config
+6. **Perplexity** — `PERPLEXITY_API_KEY`, `OPENROUTER_API_KEY`, or `tools.web.search.perplexity.apiKey` config
+7. **Firecrawl** — `FIRECRAWL_API_KEY` env var or `tools.web.search.firecrawl.apiKey` config
 
 If no keys are found, it falls back to Brave (you'll get a missing-key error prompting you to configure one).
 
@@ -88,6 +90,7 @@ See [Perplexity Search API Docs](https://docs.perplexity.ai/guides/search-quicks
 
 **Via config:** run `openclaw configure --section web`. It stores the key under the provider-specific config path:
 
+- Baidu: `tools.web.search.baidu.apiKey`
 - Brave: `tools.web.search.apiKey`
 - Firecrawl: `tools.web.search.firecrawl.apiKey`
 - Gemini: `tools.web.search.gemini.apiKey`
@@ -99,6 +102,7 @@ All of these fields also support SecretRef objects.
 
 **Via environment:** set provider env vars in the Gateway process environment:
 
+- Baidu: `BAIDU_SEARCH_API_KEY`
 - Brave: `BRAVE_API_KEY`
 - Firecrawl: `FIRECRAWL_API_KEY`
 - Gemini: `GEMINI_API_KEY`
@@ -109,6 +113,24 @@ All of these fields also support SecretRef objects.
 For a gateway install, put these in `~/.openclaw/.env` (or your service environment). See [Env vars](/help/faq#how-does-openclaw-load-environment-variables).
 
 ### Config examples
+
+**Baidu Search:**
+
+```json5
+{
+  tools: {
+    web: {
+      search: {
+        enabled: true,
+        provider: "baidu",
+        baidu: {
+          apiKey: "bce-v3/ALTAK-...",
+        },
+      },
+    },
+  },
+}
+```
 
 **Brave Search:**
 
@@ -215,6 +237,12 @@ In this mode, `country` and `language` / `search_lang` still work, but `ui_lang`
 }
 ```
 
+## Using Baidu Search
+
+1. Visit the [Baidu AI Search Console](https://console.bce.baidu.com/ai-search/qianfan/ais/console/apiKey)
+2. Generate a new API key or select an existing one (format: `bce-v3/ALTAK-...`)
+3. Copy the API key and use it with OpenClaw
+
 ## Using Gemini (Google Search grounding)
 
 Gemini models support built-in [Google Search grounding](https://ai.google.dev/gemini-api/docs/grounding),
@@ -266,6 +294,7 @@ Search the web using your configured provider.
 
 - `tools.web.search.enabled` must not be `false` (default: enabled)
 - API key for your chosen provider:
+  - **Baidu**: `BAIDU_SEARCH_API_KEY` or `tools.web.search.baidu.apiKey`
   - **Brave**: `BRAVE_API_KEY` or `tools.web.search.apiKey`
   - **Firecrawl**: `FIRECRAWL_API_KEY` or `tools.web.search.firecrawl.apiKey`
   - **Gemini**: `GEMINI_API_KEY` or `tools.web.search.gemini.apiKey`
