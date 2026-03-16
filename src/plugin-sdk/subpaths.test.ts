@@ -1,4 +1,3 @@
-import * as extensionApi from "openclaw/extension-api";
 import * as compatSdk from "openclaw/plugin-sdk/compat";
 import * as coreSdk from "openclaw/plugin-sdk/core";
 import type {
@@ -241,9 +240,5 @@ describe("plugin-sdk subpath exports", () => {
 
     const zalo = await import("openclaw/plugin-sdk/zalo");
     expect(typeof zalo.resolveClientIp).toBe("function");
-  });
-
-  it("exports the extension api bridge", () => {
-    expect(typeof extensionApi.runEmbeddedPiAgent).toBe("function");
   });
 });

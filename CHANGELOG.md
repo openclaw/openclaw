@@ -34,6 +34,7 @@ Docs: https://docs.openclaw.ai
 ### Breaking
 
 - Browser/Chrome MCP: remove the legacy Chrome extension relay path, bundled extension assets, `driver: "extension"`, and `browser.relayBindHost`. Run `openclaw doctor --fix` to migrate host-local browser config to `existing-session` / `user`; Docker, headless, sandbox, and remote browser flows still use raw CDP. (#47893) Thanks @vincentkoc.
+- Plugins/runtime: remove the public `openclaw/extension-api` surface with no compatibility shim. Bundled plugins must use injected runtime for host-side operations (for example `api.runtime.agent.runEmbeddedPiAgent`) and any remaining direct imports must come from narrow `openclaw/plugin-sdk/*` subpaths instead of the monolithic SDK root.
 
 ### Fixes
 
@@ -78,6 +79,7 @@ Docs: https://docs.openclaw.ai
 - Zalo Personal/group gating: stop reapplying `dmPolicy.allowFrom` as a sender gate for already-allowlisted groups when `groupAllowFrom` is unset, so any member of an allowed group can trigger replies while DMs stay restricted. (#46663) Fixes #40146. Thanks @Takhoffman.
 - Zalo/plugin runtime: export `resolveClientIp` from `openclaw/plugin-sdk/zalo` so installed builds no longer crash on startup when the webhook monitor loads from the packaged extension instead of the monorepo source tree. (#46549) Thanks @No898.
 - Plugins/install precedence: keep bundled plugins ahead of auto-discovered globals by default, but let an explicitly installed plugin record win its own duplicate-id tie so installed channel plugins load from `~/.openclaw/extensions` after `openclaw plugins install`. (#46722) Thanks @Takhoffman.
+- Control UI/logging: make browser-safe logger imports avoid eager temp-dir resolution so the bundled Control UI no longer crashes to a blank screen when logging reaches `tmp-openclaw-dir`. (#48469) Fixes #48062. Thanks @7inspire.
 - Plugins/scoped ids: preserve scoped plugin ids during install and config keying, and keep bundled plugins ahead of discovered duplicate ids by default so `@scope/name` plugins no longer collide with unscoped installs. (#47413) Thanks @vincentkoc.
 - Gateway/watch mode: restart on bundled-plugin package and manifest metadata changes, rebuild `dist` for extension source and `tsdown.config.ts` changes, and still ignore extension docs. (#47571) Thanks @gumadeiras.
 - Gateway/watch mode: recreate bundled plugin runtime metadata after clean or stale `dist` states, so `pnpm gateway:watch` no longer fails on missing `dist/extensions/*/openclaw.plugin.json` manifests after a rebuild. Thanks @gumadeiras.
@@ -101,6 +103,7 @@ Docs: https://docs.openclaw.ai
 - Control UI/model switching: preserve the selected provider prefix when switching models from the chat dropdown, so multi-provider setups no longer send `anthropic/gpt-5.2`-style mismatches when the user picked `openai/gpt-5.2`. (#47581) Thanks @chrishham.
 - Control UI/storage: scope persisted settings keys by gateway base path, with migration from the legacy shared key, so multiple gateways under one domain stop overwriting each other's dashboard preferences. (#47932) Thanks @bobBot-claw.
 - Agents/usage tracking: stop forcing `supportsUsageInStreaming: false` on non-native OpenAI-completions providers so compatible backends report token usage and cost again instead of showing all zeros. (#46500) Fixes #46142. Thanks @ademczuk.
+- Control UI/overview: keep the language dropdown aligned with the persisted locale during dashboard startup so refreshing the page does not fall back to English before locale hydration completes. (#48019) Thanks @git-jxj.
 
 ## 2026.3.13
 
