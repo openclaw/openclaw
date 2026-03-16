@@ -133,14 +133,12 @@ export function buildInboundUserContextPrefix(
   const timestampStr = formatConversationTimestamp(ctx.Timestamp);
 
   const rawE164 = safeTrim(ctx.SenderE164);
-  // When redacting, hash E.164 as fallback pseudonym if no other sender ID exists; otherwise strip.
-  const senderE164 = options?.redactPII
-    ? rawE164 && !safeTrim(ctx.SenderId)
-      ? hashSenderId(rawE164)
-      : undefined
-    : rawE164;
   const rawSenderId = safeTrim(ctx.SenderId);
   const senderId = options?.redactPII && rawSenderId ? hashSenderId(rawSenderId) : rawSenderId;
+  const senderE164 = options?.redactPII ? undefined : rawE164;
+  // When redacting, hash E.164 as fallback pseudonym if no other sender ID exists; otherwise strip.
+  const senderFallback =
+    options?.redactPII && rawE164 && !senderId ? hashSenderId(rawE164) : senderE164;
 
   const conversationInfo = {
     message_id: shouldIncludeConversationInfo ? resolvedMessageId : undefined,
@@ -148,7 +146,7 @@ export function buildInboundUserContextPrefix(
     sender_id: shouldIncludeConversationInfo ? senderId : undefined,
     conversation_label: isDirect ? undefined : safeTrim(ctx.ConversationLabel),
     sender: shouldIncludeConversationInfo
-      ? (safeTrim(ctx.SenderName) ?? senderE164 ?? senderId ?? safeTrim(ctx.SenderUsername))
+      ? (safeTrim(ctx.SenderName) ?? senderFallback ?? senderId ?? safeTrim(ctx.SenderUsername))
       : undefined,
     timestamp: timestampStr,
     group_subject: safeTrim(ctx.GroupSubject),
