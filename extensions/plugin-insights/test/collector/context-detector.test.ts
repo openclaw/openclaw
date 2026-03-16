@@ -66,9 +66,7 @@ describe("ContextDetector", () => {
     const detector = new ContextDetector();
 
     // The new ContextDetector uses extractAllText which reads both user and assistant text
-    const messages: AgentMessage[] = [
-      mkAssistantMessage("[memory-core] I found some data"),
-    ];
+    const messages: AgentMessage[] = [mkAssistantMessage("[memory-core] I found some data")];
 
     const results = detector.detect(messages);
     expect(results).toHaveLength(1);
@@ -78,9 +76,7 @@ describe("ContextDetector", () => {
   it("should support custom markers", () => {
     const detector = new ContextDetector([[/\[my-plugin\]/i, "my-plugin"]]);
 
-    const messages: AgentMessage[] = [
-      mkUserMessage("[my-plugin] custom data"),
-    ];
+    const messages: AgentMessage[] = [mkUserMessage("[my-plugin] custom data")];
 
     const results = detector.detect(messages);
     expect(results).toHaveLength(1);

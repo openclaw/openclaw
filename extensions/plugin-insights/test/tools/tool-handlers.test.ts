@@ -1,9 +1,9 @@
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import Database from "better-sqlite3";
-import { runMigrations } from "../../src/db/migration.js";
-import { createInsightsShowTool } from "../../src/tools/insights-show.js";
-import { createInsightsCompareTool } from "../../src/tools/insights-compare.js";
+import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { ToolDetector } from "../../src/collector/tool-detector.js";
+import { runMigrations } from "../../src/db/migration.js";
+import { createInsightsCompareTool } from "../../src/tools/insights-compare.js";
+import { createInsightsShowTool } from "../../src/tools/insights-show.js";
 import type { PluginInsightsConfig, AgentToolResult } from "../../src/types.js";
 import { DEFAULT_CONFIG } from "../../src/types.js";
 
@@ -67,11 +67,11 @@ describe("insights_show tool handler", () => {
     // Insert old data (40 days ago) — both timestamp and created_at must be old
     db.prepare(
       `INSERT INTO turns (session_id, turn_index, timestamp, plugins_triggered_json)
-       VALUES ('s1', 0, datetime('now', '-40 days'), '["old-plug"]')`
+       VALUES ('s1', 0, datetime('now', '-40 days'), '["old-plug"]')`,
     ).run();
     db.prepare(
       `INSERT INTO plugin_events (turn_id, plugin_id, detection_method, action, created_at)
-       VALUES (1, 'old-plug', 'tool_call', 'x', datetime('now', '-40 days'))`
+       VALUES (1, 'old-plug', 'tool_call', 'x', datetime('now', '-40 days'))`,
     ).run();
 
     const tool = createInsightsShowTool(db, config, toolDetector);
@@ -137,11 +137,11 @@ function seedTestData(db: Database.Database) {
   for (let i = 0; i < 10; i++) {
     db.prepare(
       `INSERT INTO turns (session_id, turn_index, timestamp, total_tokens, plugins_triggered_json)
-       VALUES ('s${i}', 0, datetime('now', '-${i} hours'), 500, '["mem"]')`
+       VALUES ('s${i}', 0, datetime('now', '-${i} hours'), 500, '["mem"]')`,
     ).run();
     db.prepare(
       `INSERT INTO plugin_events (turn_id, plugin_id, detection_method, action)
-       VALUES (${i + 1}, 'mem', 'tool_call', 'memory_search')`
+       VALUES (${i + 1}, 'mem', 'tool_call', 'memory_search')`,
     ).run();
   }
 }
@@ -150,21 +150,21 @@ function seedTwoPlugins(db: Database.Database) {
   for (let i = 0; i < 10; i++) {
     db.prepare(
       `INSERT INTO turns (session_id, turn_index, timestamp, total_tokens, plugins_triggered_json)
-       VALUES ('s${i}', 0, datetime('now', '-${i} hours'), 500, '["mem"]')`
+       VALUES ('s${i}', 0, datetime('now', '-${i} hours'), 500, '["mem"]')`,
     ).run();
     db.prepare(
       `INSERT INTO plugin_events (turn_id, plugin_id, detection_method, action)
-       VALUES (${i + 1}, 'mem', 'tool_call', 'search')`
+       VALUES (${i + 1}, 'mem', 'tool_call', 'search')`,
     ).run();
   }
   for (let i = 0; i < 6; i++) {
     db.prepare(
       `INSERT INTO turns (session_id, turn_index, timestamp, total_tokens, plugins_triggered_json)
-       VALUES ('sf${i}', 0, datetime('now', '-${i} hours'), 300, '["fmt"]')`
+       VALUES ('sf${i}', 0, datetime('now', '-${i} hours'), 300, '["fmt"]')`,
     ).run();
     db.prepare(
       `INSERT INTO plugin_events (turn_id, plugin_id, detection_method, action)
-       VALUES (${10 + i + 1}, 'fmt', 'tool_call', 'format')`
+       VALUES (${10 + i + 1}, 'fmt', 'tool_call', 'format')`,
     ).run();
   }
 }

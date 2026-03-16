@@ -1,3 +1,6 @@
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
 import { describe, it, expect, vi, afterEach } from "vitest";
 import pluginDefinition from "../index.js";
 import type {
@@ -9,9 +12,6 @@ import type {
   UserMessage,
   AssistantMessage,
 } from "../src/types.js";
-import * as fs from "node:fs";
-import * as path from "node:path";
-import * as os from "node:os";
 
 function createMockAPI(configOverrides?: Record<string, unknown>): {
   api: OpenClawPluginApi;
@@ -78,9 +78,14 @@ function mkUserMessage(content: string): UserMessage {
 function mkAssistantMessage(
   text: string,
   opts?: {
-    toolCalls?: { type: "toolCall"; id: string; name: string; arguments: Record<string, unknown> }[];
+    toolCalls?: {
+      type: "toolCall";
+      id: string;
+      name: string;
+      arguments: Record<string, unknown>;
+    }[];
     usage?: { input: number; output: number; cacheRead: number; cacheWrite: number; total: number };
-  }
+  },
 ): AssistantMessage {
   const content: AssistantMessage["content"] = [{ type: "text", text }];
   if (opts?.toolCalls) {
@@ -191,9 +196,7 @@ describe("pluginDefinition.register()", () => {
     const messages: AgentMessage[] = [
       mkUserMessage("test"),
       mkAssistantMessage("response", {
-        toolCalls: [
-          { type: "toolCall", id: "tc1", name: "memory_search", arguments: {} },
-        ],
+        toolCalls: [{ type: "toolCall", id: "tc1", name: "memory_search", arguments: {} }],
         usage: { input: 100, output: 50, cacheRead: 0, cacheWrite: 0, total: 150 },
       }),
     ];
@@ -233,13 +236,13 @@ describe("pluginDefinition.register() → after_tool_call hook auto-learning", (
     // Simulate after_tool_call event for an external tool
     hook(
       { toolName: "memory_recall", params: {}, durationMs: 100 },
-      { toolName: "memory_recall", sessionId: "test-sess" }
+      { toolName: "memory_recall", sessionId: "test-sess" },
     );
 
     // Should NOT learn our own tools
     hook(
       { toolName: "insights_show", params: {} },
-      { toolName: "insights_show", sessionId: "test-sess" }
+      { toolName: "insights_show", sessionId: "test-sess" },
     );
 
     // The tool should be recorded in the DB for future attribution

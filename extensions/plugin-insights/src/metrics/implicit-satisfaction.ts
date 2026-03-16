@@ -19,7 +19,7 @@ export class ImplicitSatisfactionMetric {
          FROM satisfaction_signals ss
          JOIN plugin_events pe ON pe.turn_id = ss.turn_id
          WHERE pe.plugin_id = ? AND ss.created_at >= ?
-         GROUP BY ss.signal_type`
+         GROUP BY ss.signal_type`,
       )
       .all(pluginId, since) as { signal_type: string; cnt: number }[];
 
@@ -52,4 +52,3 @@ export class ImplicitSatisfactionMetric {
     };
   }
 }
-

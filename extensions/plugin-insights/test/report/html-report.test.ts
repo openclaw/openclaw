@@ -73,7 +73,7 @@ describe("HTML Report", () => {
 
     const html = generateHTMLReport(report);
     expect(html).toContain("trend-bar");
-    expect(html).toContain("class=\"bar\"");
+    expect(html).toContain('class="bar"');
   });
 
   it("should escape HTML in plugin names", () => {

@@ -1,5 +1,5 @@
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import Database from "better-sqlite3";
+import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { runMigrations } from "../../src/db/migration.js";
 import { TriggerFrequencyMetric } from "../../src/metrics/trigger-frequency.js";
 
@@ -15,29 +15,29 @@ describe("TriggerFrequencyMetric", () => {
     // Seed test data: 3 turns across 2 sessions
     db.prepare(
       `INSERT INTO turns (session_id, turn_index, timestamp)
-       VALUES ('s1', 0, datetime('now', '-1 day'))`
+       VALUES ('s1', 0, datetime('now', '-1 day'))`,
     ).run();
     db.prepare(
       `INSERT INTO turns (session_id, turn_index, timestamp)
-       VALUES ('s1', 1, datetime('now', '-1 day'))`
+       VALUES ('s1', 1, datetime('now', '-1 day'))`,
     ).run();
     db.prepare(
       `INSERT INTO turns (session_id, turn_index, timestamp)
-       VALUES ('s2', 0, datetime('now'))`
+       VALUES ('s2', 0, datetime('now'))`,
     ).run();
 
     // Plugin events
     db.prepare(
       `INSERT INTO plugin_events (turn_id, plugin_id, detection_method, action)
-       VALUES (1, 'mem', 'tool_call', 'memory_search')`
+       VALUES (1, 'mem', 'tool_call', 'memory_search')`,
     ).run();
     db.prepare(
       `INSERT INTO plugin_events (turn_id, plugin_id, detection_method, action)
-       VALUES (2, 'mem', 'tool_call', 'memory_store')`
+       VALUES (2, 'mem', 'tool_call', 'memory_store')`,
     ).run();
     db.prepare(
       `INSERT INTO plugin_events (turn_id, plugin_id, detection_method, action)
-       VALUES (3, 'mem', 'tool_call', 'memory_search')`
+       VALUES (3, 'mem', 'tool_call', 'memory_search')`,
     ).run();
   });
 

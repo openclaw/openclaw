@@ -1,5 +1,5 @@
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import Database from "better-sqlite3";
+import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { runMigrations } from "../../src/db/migration.js";
 import { TokenDeltaMetric } from "../../src/metrics/token-delta.js";
 
@@ -15,31 +15,31 @@ describe("TokenDeltaMetric", () => {
     // Turns WITH plugin (higher tokens)
     db.prepare(
       `INSERT INTO turns (session_id, turn_index, timestamp, prompt_tokens, completion_tokens, total_tokens, plugins_triggered_json)
-       VALUES ('s1', 0, datetime('now'), 800, 200, 1000, '["mem"]')`
+       VALUES ('s1', 0, datetime('now'), 800, 200, 1000, '["mem"]')`,
     ).run();
     db.prepare(
       `INSERT INTO turns (session_id, turn_index, timestamp, prompt_tokens, completion_tokens, total_tokens, plugins_triggered_json)
-       VALUES ('s1', 1, datetime('now'), 900, 300, 1200, '["mem"]')`
+       VALUES ('s1', 1, datetime('now'), 900, 300, 1200, '["mem"]')`,
     ).run();
 
     // Link plugin events
     db.prepare(
       `INSERT INTO plugin_events (turn_id, plugin_id, detection_method, action)
-       VALUES (1, 'mem', 'tool_call', 'search')`
+       VALUES (1, 'mem', 'tool_call', 'search')`,
     ).run();
     db.prepare(
       `INSERT INTO plugin_events (turn_id, plugin_id, detection_method, action)
-       VALUES (2, 'mem', 'tool_call', 'search')`
+       VALUES (2, 'mem', 'tool_call', 'search')`,
     ).run();
 
     // Turns WITHOUT plugin (lower tokens)
     db.prepare(
       `INSERT INTO turns (session_id, turn_index, timestamp, prompt_tokens, completion_tokens, total_tokens)
-       VALUES ('s2', 0, datetime('now'), 400, 100, 500)`
+       VALUES ('s2', 0, datetime('now'), 400, 100, 500)`,
     ).run();
     db.prepare(
       `INSERT INTO turns (session_id, turn_index, timestamp, prompt_tokens, completion_tokens, total_tokens)
-       VALUES ('s2', 1, datetime('now'), 500, 100, 600)`
+       VALUES ('s2', 1, datetime('now'), 500, 100, 600)`,
     ).run();
   });
 

@@ -10,7 +10,7 @@ const VERDICT_COLORS: Record<VerdictLevel, string> = {
 
 export function generateHTMLReport(
   report: InsightsReport,
-  unmappedTools?: { toolName: string; count: number }[]
+  unmappedTools?: { toolName: string; count: number }[],
 ): string {
   const pluginCards = report.plugins.map(generatePluginCard).join("\n");
   const coverageBanner = generateCoverageBanner(unmappedTools);
@@ -149,9 +149,7 @@ function generatePluginCard(plugin: PluginReport): string {
     </div>`;
 }
 
-function generateTrendBars(
-  trend: { date: string; count: number }[]
-): string {
+function generateTrendBars(trend: { date: string; count: number }[]): string {
   if (trend.length === 0) return "";
 
   const max = Math.max(...trend.map((t) => t.count), 1);
@@ -159,16 +157,14 @@ function generateTrendBars(
     .slice(-14) // Show last 14 days
     .map(
       (t) =>
-        `<div class="bar" style="height:${Math.max((t.count / max) * 24, 2)}px" title="${t.date}: ${t.count}"></div>`
+        `<div class="bar" style="height:${Math.max((t.count / max) * 24, 2)}px" title="${t.date}: ${t.count}"></div>`,
     )
     .join("");
 
   return `<div class="trend-bar">${bars}</div>`;
 }
 
-function generateCoverageBanner(
-  unmappedTools?: { toolName: string; count: number }[]
-): string {
+function generateCoverageBanner(unmappedTools?: { toolName: string; count: number }[]): string {
   if (!unmappedTools || unmappedTools.length === 0) return "";
 
   const totalCalls = unmappedTools.reduce((sum, t) => sum + t.count, 0);

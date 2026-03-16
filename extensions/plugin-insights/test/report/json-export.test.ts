@@ -1,5 +1,5 @@
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import Database from "better-sqlite3";
+import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { runMigrations } from "../../src/db/migration.js";
 import { exportJSON, exportRawData } from "../../src/report/json-export.js";
 import type { InsightsReport, PluginReport } from "../../src/types.js";
@@ -84,11 +84,11 @@ describe("exportRawData", () => {
 
     db.prepare(
       `INSERT INTO turns (session_id, turn_index, timestamp, total_tokens)
-       VALUES ('s1', 0, datetime('now'), 500)`
+       VALUES ('s1', 0, datetime('now'), 500)`,
     ).run();
     db.prepare(
       `INSERT INTO plugin_events (turn_id, plugin_id, detection_method, action)
-       VALUES (1, 'mem', 'tool_call', 'search')`
+       VALUES (1, 'mem', 'tool_call', 'search')`,
     ).run();
   });
 

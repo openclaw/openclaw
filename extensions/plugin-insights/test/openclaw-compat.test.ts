@@ -176,24 +176,12 @@ describe("OpenClaw integration readiness checklist", () => {
    * serve as a checklist for real integration testing.
    */
 
-  it.todo(
-    "afterTurn receives correct AfterTurnParams shape from OpenClaw runtime"
-  );
-  it.todo(
-    "registerContextEngine factory is called exactly once per session"
-  );
+  it.todo("afterTurn receives correct AfterTurnParams shape from OpenClaw runtime");
+  it.todo("registerContextEngine factory is called exactly once per session");
   it.todo("registerTool makes tools available to the agent via tool_use");
-  it.todo(
-    "registerCommand makes commands available via `openclaw <cmd>`"
-  );
-  it.todo(
-    "api.on('plugin_insights_report') hook receives cross-plugin reports"
-  );
-  it.todo(
-    "plugin activates correctly after `openclaw plugins install plugin-insights`"
-  );
-  it.todo(
-    "SQLite DB is created at the configured path on first activation"
-  );
+  it.todo("registerCommand makes commands available via `openclaw <cmd>`");
+  it.todo("api.on('plugin_insights_report') hook receives cross-plugin reports");
+  it.todo("plugin activates correctly after `openclaw plugins install plugin-insights`");
+  it.todo("SQLite DB is created at the configured path on first activation");
   it.todo("data survives across multiple openclaw sessions");
 });

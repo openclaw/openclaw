@@ -3,6 +3,7 @@
   "version": "2026.3.16",
   "private": true,
   "description": "Automatically evaluate how much your installed plugins actually help",
+  "license": "MIT",
   "type": "module",
   "dependencies": {
     "better-sqlite3": "^11.0.0"
@@ -11,7 +12,8 @@
     "@types/better-sqlite3": "^7.6.8"
   },
   "openclaw": {
-    "extensions": ["./index.ts"]
-  },
-  "license": "MIT"
+    "extensions": [
+      "./index.ts"
+    ]
+  }
 }

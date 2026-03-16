@@ -1,7 +1,7 @@
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import Database from "better-sqlite3";
-import { runMigrations } from "../../src/db/migration.js";
+import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { ToolDetector } from "../../src/collector/tool-detector.js";
+import { runMigrations } from "../../src/db/migration.js";
 import type { ToolCallContent } from "../../src/types.js";
 
 describe("ToolDetector", () => {
@@ -61,9 +61,7 @@ describe("ToolDetector", () => {
   });
 
   it("should handle entries without pluginName", () => {
-    detector.refreshMappingFromEntries([
-      { toolName: "some_tool", pluginId: "no-name" },
-    ]);
+    detector.refreshMappingFromEntries([{ toolName: "some_tool", pluginId: "no-name" }]);
 
     expect(detector.getPluginForTool("some_tool")).toBe("no-name");
     expect(detector.getPluginForTool("anything")).toBeUndefined();

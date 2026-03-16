@@ -95,7 +95,7 @@ export function runMigrations(db: Database.Database): void {
     db
       .prepare("SELECT version FROM _migrations")
       .all()
-      .map((row: any) => row.version as number)
+      .map((row: any) => row.version as number),
   );
 
   for (const migration of MIGRATIONS) {
@@ -103,9 +103,7 @@ export function runMigrations(db: Database.Database): void {
 
     db.transaction(() => {
       db.exec(migration.sql);
-      db.prepare("INSERT INTO _migrations (version) VALUES (?)").run(
-        migration.version
-      );
+      db.prepare("INSERT INTO _migrations (version) VALUES (?)").run(migration.version);
     })();
   }
 }

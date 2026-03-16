@@ -26,7 +26,7 @@ export class ConversationTurnsMetric {
            HAVING COUNT(*) >= 2
          )
          AND t.timestamp >= ?
-         GROUP BY t.session_id`
+         GROUP BY t.session_id`,
       )
       .all(pluginId, since, since) as { session_id: string; turn_count: number }[];
 
@@ -44,7 +44,7 @@ export class ConversationTurnsMetric {
            GROUP BY t2.session_id
            HAVING COUNT(*) >= 2
          )
-         GROUP BY t.session_id`
+         GROUP BY t.session_id`,
       )
       .all(since, pluginId, since) as { session_id: string; turn_count: number }[];
 
@@ -67,4 +67,3 @@ function average(nums: number[]): number {
   if (nums.length === 0) return 0;
   return nums.reduce((a, b) => a + b, 0) / nums.length;
 }
-

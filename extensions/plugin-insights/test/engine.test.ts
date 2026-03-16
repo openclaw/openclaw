@@ -1,5 +1,5 @@
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import Database from "better-sqlite3";
+import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { runMigrations } from "../src/db/migration.js";
 import { buildReport, cleanupOldData } from "../src/engine.js";
 import type { PluginInsightsConfig } from "../src/types.js";
@@ -32,15 +32,15 @@ describe("buildReport", () => {
     // Seed data
     db.prepare(
       `INSERT INTO turns (session_id, turn_index, timestamp, total_tokens, plugins_triggered_json)
-       VALUES ('s1', 0, datetime('now'), 1000, '["mem"]')`
+       VALUES ('s1', 0, datetime('now'), 1000, '["mem"]')`,
     ).run();
     db.prepare(
       `INSERT INTO plugin_events (turn_id, plugin_id, detection_method, action)
-       VALUES (1, 'mem', 'tool_call', 'search')`
+       VALUES (1, 'mem', 'tool_call', 'search')`,
     ).run();
     db.prepare(
       `INSERT INTO plugin_installs (plugin_id, first_seen_at, last_seen_at)
-       VALUES ('mem', datetime('now', '-10 days'), datetime('now'))`
+       VALUES ('mem', datetime('now', '-10 days'), datetime('now'))`,
     ).run();
 
     const report = buildReport(db, makeConfig(), 30);
@@ -56,22 +56,22 @@ describe("buildReport", () => {
     for (let i = 0; i < 10; i++) {
       db.prepare(
         `INSERT INTO turns (session_id, turn_index, timestamp, total_tokens, plugins_triggered_json)
-         VALUES ('s${i}', 0, datetime('now', '-${i} hours'), 500, '["plugA"]')`
+         VALUES ('s${i}', 0, datetime('now', '-${i} hours'), 500, '["plugA"]')`,
       ).run();
       db.prepare(
         `INSERT INTO plugin_events (turn_id, plugin_id, detection_method, action)
-         VALUES (${i + 1}, 'plugA', 'tool_call', 'action')`
+         VALUES (${i + 1}, 'plugA', 'tool_call', 'action')`,
       ).run();
     }
 
     // Plugin B: rarely used → low_usage
     db.prepare(
       `INSERT INTO turns (session_id, turn_index, timestamp, total_tokens, plugins_triggered_json)
-       VALUES ('sB', 0, datetime('now'), 500, '["plugB"]')`
+       VALUES ('sB', 0, datetime('now'), 500, '["plugB"]')`,
     ).run();
     db.prepare(
       `INSERT INTO plugin_events (turn_id, plugin_id, detection_method, action)
-       VALUES (11, 'plugB', 'tool_call', 'action')`
+       VALUES (11, 'plugB', 'tool_call', 'action')`,
     ).run();
 
     const report = buildReport(db, makeConfig(), 30);
@@ -97,11 +97,11 @@ describe("computeVerdict (via buildReport)", () => {
   it("should give 'low_usage' for rarely triggered plugins", () => {
     db.prepare(
       `INSERT INTO turns (session_id, turn_index, timestamp, plugins_triggered_json)
-       VALUES ('s1', 0, datetime('now'), '["rare"]')`
+       VALUES ('s1', 0, datetime('now'), '["rare"]')`,
     ).run();
     db.prepare(
       `INSERT INTO plugin_events (turn_id, plugin_id, detection_method, action)
-       VALUES (1, 'rare', 'tool_call', 'x')`
+       VALUES (1, 'rare', 'tool_call', 'x')`,
     ).run();
 
     const report = buildReport(db, makeConfig(), 30);
@@ -112,11 +112,11 @@ describe("computeVerdict (via buildReport)", () => {
     for (let i = 0; i < 20; i++) {
       db.prepare(
         `INSERT INTO turns (session_id, turn_index, timestamp, total_tokens, plugins_triggered_json)
-         VALUES ('s${i}', 0, datetime('now', '-${i} hours'), 500, '["good"]')`
+         VALUES ('s${i}', 0, datetime('now', '-${i} hours'), 500, '["good"]')`,
       ).run();
       db.prepare(
         `INSERT INTO plugin_events (turn_id, plugin_id, detection_method, action)
-         VALUES (${i + 1}, 'good', 'tool_call', 'action')`
+         VALUES (${i + 1}, 'good', 'tool_call', 'action')`,
       ).run();
     }
 
@@ -124,7 +124,7 @@ describe("computeVerdict (via buildReport)", () => {
     for (let i = 0; i < 5; i++) {
       db.prepare(
         `INSERT INTO turns (session_id, turn_index, timestamp, total_tokens)
-         VALUES ('baseline${i}', 0, datetime('now'), 500)`
+         VALUES ('baseline${i}', 0, datetime('now'), 500)`,
       ).run();
     }
 
@@ -149,21 +149,21 @@ describe("cleanupOldData", () => {
     // Old turn (100 days ago)
     db.prepare(
       `INSERT INTO turns (session_id, turn_index, timestamp)
-       VALUES ('old', 0, datetime('now', '-100 days'))`
+       VALUES ('old', 0, datetime('now', '-100 days'))`,
     ).run();
     db.prepare(
       `INSERT INTO plugin_events (turn_id, plugin_id, detection_method, action)
-       VALUES (1, 'mem', 'tool_call', 'search')`
+       VALUES (1, 'mem', 'tool_call', 'search')`,
     ).run();
     db.prepare(
       `INSERT INTO satisfaction_signals (turn_id, signal_type, confidence)
-       VALUES (1, 'accepted', 0.9)`
+       VALUES (1, 'accepted', 0.9)`,
     ).run();
 
     // Recent turn (1 day ago)
     db.prepare(
       `INSERT INTO turns (session_id, turn_index, timestamp)
-       VALUES ('new', 0, datetime('now', '-1 day'))`
+       VALUES ('new', 0, datetime('now', '-1 day'))`,
     ).run();
 
     cleanupOldData(db, 90);
@@ -182,7 +182,7 @@ describe("cleanupOldData", () => {
   it("should keep all data if nothing is expired", () => {
     db.prepare(
       `INSERT INTO turns (session_id, turn_index, timestamp)
-       VALUES ('recent', 0, datetime('now'))`
+       VALUES ('recent', 0, datetime('now'))`,
     ).run();
 
     cleanupOldData(db, 90);

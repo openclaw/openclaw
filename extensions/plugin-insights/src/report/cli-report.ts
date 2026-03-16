@@ -14,11 +14,7 @@ export function formatCLIReport(report: InsightsReport): string {
 
   lines.push("╔" + "═".repeat(W) + "╗");
   lines.push("║" + center("Plugin Insights Report", W) + "║");
-  lines.push(
-    "║" +
-      center(`Period: ${report.periodStart} → ${report.periodEnd}`, W) +
-      "║"
-  );
+  lines.push("║" + center(`Period: ${report.periodStart} → ${report.periodEnd}`, W) + "║");
   lines.push("╠" + "═".repeat(W) + "╣");
   lines.push("║" + " ".repeat(W) + "║");
 
@@ -41,9 +37,7 @@ function formatPluginSection(plugin: PluginReport, W: number): string[] {
 
   const tf = plugin.triggerFrequency;
   lines.push(
-    "║" +
-      pad(`  ├─ Triggered: ${tf.totalTriggers} times (${tf.triggersPerDay}/day)`, W) +
-      "║"
+    "║" + pad(`  ├─ Triggered: ${tf.totalTriggers} times (${tf.triggersPerDay}/day)`, W) + "║",
   );
 
   const td = plugin.tokenDelta;
@@ -52,9 +46,9 @@ function formatPluginSection(plugin: PluginReport, W: number): string[] {
     "║" +
       pad(
         `  ├─ Token overhead: ${sign}${td.deltaPercent}% (~$${td.estimatedMonthlyCostUSD}/mo)`,
-        W
+        W,
       ) +
-      "║"
+      "║",
   );
 
   const ct = plugin.conversationTurns;
@@ -64,25 +58,17 @@ function formatPluginSection(plugin: PluginReport, W: number): string[] {
       "║" +
         pad(
           `  ├─ Avg turns/session: ${ct.avgTurnsWithoutPlugin} → ${ct.avgTurnsWithPlugin} (${arrow}${Math.abs(ct.deltaPercent)}%)`,
-          W
+          W,
         ) +
-        "║"
+        "║",
     );
   }
 
   const is = plugin.implicitSatisfaction;
   if (is.totalSignals > 0) {
-    lines.push(
-      "║" +
-        pad(`  ├─ User acceptance rate: ${is.acceptanceRate}%`, W) +
-        "║"
-    );
+    lines.push("║" + pad(`  ├─ User acceptance rate: ${is.acceptanceRate}%`, W) + "║");
     if (is.retryRate > 0) {
-      lines.push(
-        "║" +
-          pad(`  ├─ Retry rate after trigger: ${is.retryRate}%`, W) +
-          "║"
-      );
+      lines.push("║" + pad(`  ├─ Retry rate after trigger: ${is.retryRate}%`, W) + "║");
     }
   }
 
@@ -92,18 +78,14 @@ function formatPluginSection(plugin: PluginReport, W: number): string[] {
       "║" +
         pad(
           `  ├─ LLM Judge score: ${lj.avgScoreWithPlugin}/5 (vs ${lj.avgScoreWithoutPlugin} baseline)`,
-          W
+          W,
         ) +
-        "║"
+        "║",
     );
   }
 
   const icon = VERDICT_ICONS[plugin.verdict.level];
-  lines.push(
-    "║" +
-      pad(`  └─ Verdict: ${icon} ${plugin.verdict.label}`, W) +
-      "║"
-  );
+  lines.push("║" + pad(`  └─ Verdict: ${icon} ${plugin.verdict.label}`, W) + "║");
 
   return lines;
 }

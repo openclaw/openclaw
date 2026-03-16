@@ -1,8 +1,13 @@
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import Database from "better-sqlite3";
+import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { runMigrations } from "../src/db/migration.js";
 import { createInsightsEngine, buildReport, type ToolPluginMapping } from "../src/engine.js";
-import type { AgentMessage, UserMessage, AssistantMessage, PluginInsightsConfig } from "../src/types.js";
+import type {
+  AgentMessage,
+  UserMessage,
+  AssistantMessage,
+  PluginInsightsConfig,
+} from "../src/types.js";
 import { DEFAULT_CONFIG } from "../src/types.js";
 
 function mkUserMessage(content: string): UserMessage {
@@ -12,9 +17,14 @@ function mkUserMessage(content: string): UserMessage {
 function mkAssistantMessage(
   text: string,
   opts?: {
-    toolCalls?: { type: "toolCall"; id: string; name: string; arguments: Record<string, unknown> }[];
+    toolCalls?: {
+      type: "toolCall";
+      id: string;
+      name: string;
+      arguments: Record<string, unknown>;
+    }[];
     usage?: { input: number; output: number; cacheRead: number; cacheWrite: number; total: number };
-  }
+  },
 ): AssistantMessage {
   const contentArr: AssistantMessage["content"] = [{ type: "text", text }];
   if (opts?.toolCalls) {
@@ -106,9 +116,7 @@ describe("Integration: full lifecycle", () => {
         }),
         mkUserMessage("Format this code for me"),
         mkAssistantMessage("Here is the formatted code...", {
-          toolCalls: [
-            { type: "toolCall", id: "tc2", name: "format_code", arguments: {} },
-          ],
+          toolCalls: [{ type: "toolCall", id: "tc2", name: "format_code", arguments: {} }],
           usage: { input: 300, output: 100, cacheRead: 0, cacheWrite: 0, total: 400 },
         }),
       ],
@@ -122,9 +130,7 @@ describe("Integration: full lifecycle", () => {
       messages: [
         mkUserMessage("Recall my notes on database design"),
         mkAssistantMessage("Here are your notes...", {
-          toolCalls: [
-            { type: "toolCall", id: "tc3", name: "memory_search", arguments: {} },
-          ],
+          toolCalls: [{ type: "toolCall", id: "tc3", name: "memory_search", arguments: {} }],
           usage: { input: 400, output: 150, cacheRead: 0, cacheWrite: 0, total: 550 },
         }),
       ],
@@ -154,7 +160,11 @@ describe("Integration: full lifecycle", () => {
     const { engine, reporter } = createInsightsEngine(db, config, toolPluginMappings);
 
     // Simulate another plugin reporting its activity
-    reporter.report({ pluginId: "custom-plugin", action: "custom_action", metadata: { foo: "bar" } });
+    reporter.report({
+      pluginId: "custom-plugin",
+      action: "custom_action",
+      metadata: { foo: "bar" },
+    });
 
     // The report gets flushed during the next afterTurn
     await engine.afterTurn!({
@@ -169,7 +179,9 @@ describe("Integration: full lifecycle", () => {
       prePromptMessageCount: 0,
     });
 
-    const events = db.prepare("SELECT * FROM plugin_events WHERE plugin_id = 'custom-plugin'").all() as any[];
+    const events = db
+      .prepare("SELECT * FROM plugin_events WHERE plugin_id = 'custom-plugin'")
+      .all() as any[];
     expect(events).toHaveLength(1);
     expect(events[0].detection_method).toBe("self_report");
     expect(events[0].action).toBe("custom_action");
@@ -185,9 +197,7 @@ describe("Integration: full lifecycle", () => {
       messages: [
         mkUserMessage("How do I optimize database queries for large tables?"),
         mkAssistantMessage("You can use indexing and query optimization...", {
-          toolCalls: [
-            { type: "toolCall", id: "tc1", name: "memory_search", arguments: {} },
-          ],
+          toolCalls: [{ type: "toolCall", id: "tc1", name: "memory_search", arguments: {} }],
           usage: { input: 500, output: 200, cacheRead: 0, cacheWrite: 0, total: 700 },
         }),
       ],

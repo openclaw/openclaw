@@ -33,7 +33,7 @@ export class TokenDeltaMetric {
            WHERE pe.plugin_id = ? AND pe.created_at >= ?
          )
            AND t.timestamp >= ?
-           AND t.total_tokens IS NOT NULL`
+           AND t.total_tokens IS NOT NULL`,
       )
       .get(pluginId, since, since) as {
       avg_total: number | null;
@@ -53,7 +53,7 @@ export class TokenDeltaMetric {
          FROM turns
          WHERE timestamp >= ?
            AND total_tokens IS NOT NULL
-           AND (plugins_triggered_json IS NULL OR plugins_triggered_json = '[]')`
+           AND (plugins_triggered_json IS NULL OR plugins_triggered_json = '[]')`,
       )
       .get(since) as {
       avg_total: number | null;
@@ -68,12 +68,9 @@ export class TokenDeltaMetric {
     const deltaPercent = avgWithout > 0 ? (delta / avgWithout) * 100 : 0;
 
     // Estimate monthly cost: assume 30 triggers/day * 30 days
-    const triggersPerMonth = withPlugin.cnt > 0
-      ? (withPlugin.cnt / days) * 30
-      : 0;
+    const triggersPerMonth = withPlugin.cnt > 0 ? (withPlugin.cnt / days) * 30 : 0;
     const extraTokensPerMonth = delta > 0 ? delta * triggersPerMonth : 0;
-    const estimatedCost =
-      (extraTokensPerMonth / 1_000_000) * DEFAULT_COST_PER_1M_BLENDED;
+    const estimatedCost = (extraTokensPerMonth / 1_000_000) * DEFAULT_COST_PER_1M_BLENDED;
 
     return {
       pluginId,
@@ -85,4 +82,3 @@ export class TokenDeltaMetric {
     };
   }
 }
-

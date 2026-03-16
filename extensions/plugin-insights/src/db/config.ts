@@ -4,7 +4,7 @@ import type { PluginInsightsConfig } from "../types.js";
 import { DEFAULT_CONFIG } from "../types.js";
 
 export function resolveConfig(
-  userConfig: Partial<PluginInsightsConfig> | undefined
+  userConfig: Partial<PluginInsightsConfig> | undefined,
 ): PluginInsightsConfig {
   const config = { ...DEFAULT_CONFIG, ...userConfig };
 

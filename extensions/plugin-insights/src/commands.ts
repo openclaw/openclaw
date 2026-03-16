@@ -1,17 +1,17 @@
+import * as fs from "node:fs";
 import type Database from "better-sqlite3";
+import type { ToolDetector } from "./collector/tool-detector.js";
+import { buildReport } from "./engine.js";
+import { formatCLIReport, formatPluginSummary } from "./report/cli-report.js";
+import { generateHTMLReport } from "./report/html-report.js";
+import { exportJSON, exportRawData } from "./report/json-export.js";
+import { formatComparison } from "./tools/insights-compare.js";
 import type {
   OpenClawPluginCommandDefinition,
   PluginInsightsConfig,
   PluginCommandContext,
   ReplyPayload,
 } from "./types.js";
-import { buildReport } from "./engine.js";
-import { formatCLIReport, formatPluginSummary } from "./report/cli-report.js";
-import { generateHTMLReport } from "./report/html-report.js";
-import { exportJSON, exportRawData } from "./report/json-export.js";
-import { formatComparison } from "./tools/insights-compare.js";
-import type { ToolDetector } from "./collector/tool-detector.js";
-import * as fs from "node:fs";
 
 /** Parse --days flag with validation; returns days or an error message */
 function parseDays(flags: Record<string, string | boolean>): number | string {
@@ -25,7 +25,10 @@ function parseDays(flags: Record<string, string | boolean>): number | string {
 }
 
 /** Parse raw args string into positional args and flags */
-function parseArgs(raw?: string): { positional: string[]; flags: Record<string, string | boolean> } {
+function parseArgs(raw?: string): {
+  positional: string[];
+  flags: Record<string, string | boolean>;
+} {
   const positional: string[] = [];
   const flags: Record<string, string | boolean> = {};
   if (!raw) return { positional, flags };
@@ -52,7 +55,7 @@ function parseArgs(raw?: string): { positional: string[]; flags: Record<string, 
 export function createCommands(
   db: Database.Database,
   config: PluginInsightsConfig,
-  toolDetector: ToolDetector
+  toolDetector: ToolDetector,
 ): OpenClawPluginCommandDefinition[] {
   return [
     createShowCommand(db, config, toolDetector),
@@ -67,7 +70,7 @@ export function createCommands(
 function createShowCommand(
   db: Database.Database,
   config: PluginInsightsConfig,
-  toolDetector: ToolDetector
+  toolDetector: ToolDetector,
 ): OpenClawPluginCommandDefinition {
   return {
     name: "insights-show",
@@ -82,13 +85,17 @@ function createShowCommand(
       const report = buildReport(db, config, days);
 
       if (report.plugins.length === 0) {
-        return { text: "No plugin activity data collected yet. Use /insights-status to see collection diagnostics." };
+        return {
+          text: "No plugin activity data collected yet. Use /insights-status to see collection diagnostics.",
+        };
       }
 
       if (pluginId) {
         const plugin = report.plugins.find((p) => p.pluginId === pluginId);
         if (!plugin) {
-          return { text: `No data found for plugin "${pluginId}". Available: ${report.plugins.map((p) => p.pluginId).join(", ")}` };
+          return {
+            text: `No data found for plugin "${pluginId}". Available: ${report.plugins.map((p) => p.pluginId).join(", ")}`,
+          };
         }
         return { text: formatPluginSummary(plugin) };
       }
@@ -106,7 +113,7 @@ function createShowCommand(
 function createCompareCommand(
   db: Database.Database,
   config: PluginInsightsConfig,
-  toolDetector: ToolDetector
+  toolDetector: ToolDetector,
 ): OpenClawPluginCommandDefinition {
   return {
     name: "insights-compare",
@@ -147,7 +154,7 @@ function createCompareCommand(
 function createExportCommand(
   db: Database.Database,
   config: PluginInsightsConfig,
-  toolDetector: ToolDetector
+  toolDetector: ToolDetector,
 ): OpenClawPluginCommandDefinition {
   return {
     name: "insights-export",
@@ -190,7 +197,7 @@ function createExportCommand(
 function createDashboardCommand(
   db: Database.Database,
   config: PluginInsightsConfig,
-  toolDetector: ToolDetector
+  toolDetector: ToolDetector,
 ): OpenClawPluginCommandDefinition {
   return {
     name: "insights-dashboard",
@@ -198,8 +205,7 @@ function createDashboardCommand(
     acceptsArgs: true,
     handler(ctx: PluginCommandContext): ReplyPayload {
       const { flags } = parseArgs(ctx.args);
-      const output =
-        (flags.output as string) || "./plugin-insights-dashboard.html";
+      const output = (flags.output as string) || "./plugin-insights-dashboard.html";
       const days = parseDays(flags);
       if (typeof days === "string") return { text: days };
 
@@ -219,9 +225,7 @@ function createDashboardCommand(
   };
 }
 
-function createResetCommand(
-  db: Database.Database
-): OpenClawPluginCommandDefinition {
+function createResetCommand(db: Database.Database): OpenClawPluginCommandDefinition {
   return {
     name: "insights-reset",
     description: "Delete all collected insights data",
@@ -229,7 +233,9 @@ function createResetCommand(
     handler(ctx: PluginCommandContext): ReplyPayload {
       const { flags } = parseArgs(ctx.args);
       if (!flags.confirm) {
-        return { text: "This will permanently delete all collected data.\nRun with --confirm to proceed." };
+        return {
+          text: "This will permanently delete all collected data.\nRun with --confirm to proceed.",
+        };
       }
 
       db.transaction(() => {
@@ -248,7 +254,7 @@ function createResetCommand(
 
 function createStatusCommand(
   db: Database.Database,
-  toolDetector: ToolDetector
+  toolDetector: ToolDetector,
 ): OpenClawPluginCommandDefinition {
   return {
     name: "insights-status",
@@ -257,23 +263,33 @@ function createStatusCommand(
       const lines: string[] = ["Plugin Insights — Collection Status", "═".repeat(40)];
 
       // Turn stats
-      const turnCount = (db.prepare("SELECT COUNT(*) as cnt FROM turns").get() as { cnt: number }).cnt;
-      const sessionCount = (db.prepare("SELECT COUNT(DISTINCT session_id) as cnt FROM turns").get() as { cnt: number }).cnt;
+      const turnCount = (db.prepare("SELECT COUNT(*) as cnt FROM turns").get() as { cnt: number })
+        .cnt;
+      const sessionCount = (
+        db.prepare("SELECT COUNT(DISTINCT session_id) as cnt FROM turns").get() as { cnt: number }
+      ).cnt;
       lines.push(`\nTurns collected: ${turnCount}`);
       lines.push(`Sessions tracked: ${sessionCount}`);
 
       // Plugin event stats
-      const eventCount = (db.prepare("SELECT COUNT(*) as cnt FROM plugin_events").get() as { cnt: number }).cnt;
+      const eventCount = (
+        db.prepare("SELECT COUNT(*) as cnt FROM plugin_events").get() as { cnt: number }
+      ).cnt;
       lines.push(`Plugin events recorded: ${eventCount}`);
 
       // Mapped plugins (from tool_plugin_mapping)
-      const mappedRows = db.prepare("SELECT DISTINCT plugin_id, plugin_name FROM tool_plugin_mapping").all() as { plugin_id: string; plugin_name: string | null }[];
+      const mappedRows = db
+        .prepare("SELECT DISTINCT plugin_id, plugin_name FROM tool_plugin_mapping")
+        .all() as { plugin_id: string; plugin_name: string | null }[];
       if (mappedRows.length > 0) {
         lines.push(`\nConfigured tool→plugin mappings (${mappedRows.length} plugin(s)):`);
         for (const row of mappedRows) {
           const name = row.plugin_name ? ` (${row.plugin_name})` : "";
-          const tools = (db.prepare("SELECT tool_name FROM tool_plugin_mapping WHERE plugin_id = ?").all(row.plugin_id) as { tool_name: string }[])
-            .map((r) => r.tool_name);
+          const tools = (
+            db
+              .prepare("SELECT tool_name FROM tool_plugin_mapping WHERE plugin_id = ?")
+              .all(row.plugin_id) as { tool_name: string }[]
+          ).map((r) => r.tool_name);
           lines.push(`  ${row.plugin_id}${name}: ${tools.join(", ")}`);
         }
       } else {
@@ -296,12 +312,18 @@ function createStatusCommand(
       } else if (turnCount > 0 && mappedRows.length === 0) {
         lines.push(
           "\nNo plugin tools observed yet.",
-          "Keep using plugins in conversations — tool names will appear here."
+          "Keep using plugins in conversations — tool names will appear here.",
         );
       }
 
       // Context detections
-      const contextCount = (db.prepare("SELECT COUNT(*) as cnt FROM plugin_events WHERE detection_method = 'context_injection'").get() as { cnt: number }).cnt;
+      const contextCount = (
+        db
+          .prepare(
+            "SELECT COUNT(*) as cnt FROM plugin_events WHERE detection_method = 'context_injection'",
+          )
+          .get() as { cnt: number }
+      ).cnt;
       if (contextCount > 0) {
         lines.push(`\nContext injection detections: ${contextCount}`);
       }

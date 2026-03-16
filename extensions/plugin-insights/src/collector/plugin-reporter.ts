@@ -56,7 +56,7 @@ export class PluginReporter {
           turnId,
           report.pluginId,
           report.action,
-          report.metadata ? JSON.stringify(report.metadata) : null
+          report.metadata ? JSON.stringify(report.metadata) : null,
         );
       }
     });

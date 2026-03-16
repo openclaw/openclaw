@@ -1,10 +1,10 @@
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import Database from "better-sqlite3";
-import { runMigrations } from "../../src/db/migration.js";
-import { TurnCollector, jaccardSimilarity } from "../../src/collector/turn-collector.js";
-import { ToolDetector } from "../../src/collector/tool-detector.js";
+import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { ContextDetector } from "../../src/collector/context-detector.js";
 import { PluginReporter } from "../../src/collector/plugin-reporter.js";
+import { ToolDetector } from "../../src/collector/tool-detector.js";
+import { TurnCollector, jaccardSimilarity } from "../../src/collector/turn-collector.js";
+import { runMigrations } from "../../src/db/migration.js";
 import type { AgentMessage, UserMessage, AssistantMessage } from "../../src/types.js";
 
 function mkUserMessage(content: string): UserMessage {
@@ -14,9 +14,14 @@ function mkUserMessage(content: string): UserMessage {
 function mkAssistantMessage(
   text: string,
   opts?: {
-    toolCalls?: { type: "toolCall"; id: string; name: string; arguments: Record<string, unknown> }[];
+    toolCalls?: {
+      type: "toolCall";
+      id: string;
+      name: string;
+      arguments: Record<string, unknown>;
+    }[];
     usage?: { input: number; output: number; cacheRead: number; cacheWrite: number; total: number };
-  }
+  },
 ): AssistantMessage {
   const contentArr: AssistantMessage["content"] = [{ type: "text", text }];
   if (opts?.toolCalls) {
@@ -77,17 +82,13 @@ describe("TurnCollector", () => {
     const messages: AgentMessage[] = [
       mkUserMessage("Recall something"),
       mkAssistantMessage("Here you go", {
-        toolCalls: [
-          { type: "toolCall", id: "tc1", name: "memory_search", arguments: {} },
-        ],
+        toolCalls: [{ type: "toolCall", id: "tc1", name: "memory_search", arguments: {} }],
       }),
     ];
 
     const turnId = collector.collect("sess-1", 0, messages);
 
-    const events = db
-      .prepare("SELECT * FROM plugin_events WHERE turn_id = ?")
-      .all(turnId) as any[];
+    const events = db.prepare("SELECT * FROM plugin_events WHERE turn_id = ?").all(turnId) as any[];
     expect(events).toHaveLength(1);
     expect(events[0].plugin_id).toBe("mem");
     expect(events[0].detection_method).toBe("tool_call");
@@ -117,10 +118,7 @@ describe("TurnCollector", () => {
 
   it("should truncate previews to 200 chars", () => {
     const longText = "a".repeat(500);
-    const messages: AgentMessage[] = [
-      mkUserMessage(longText),
-      mkAssistantMessage(longText),
-    ];
+    const messages: AgentMessage[] = [mkUserMessage(longText), mkAssistantMessage(longText)];
 
     const turnId = collector.collect("sess-1", 0, messages);
     const row = db.prepare("SELECT * FROM turns WHERE id = ?").get(turnId) as any;

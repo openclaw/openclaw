@@ -1,7 +1,7 @@
+import * as fs from "node:fs";
 import type Database from "better-sqlite3";
 import type { InsightsReport } from "../types.js";
 import { daysAgo } from "../utils.js";
-import * as fs from "node:fs";
 
 export interface ExportOptions {
   format: "json" | "jsonl";
@@ -10,10 +10,7 @@ export interface ExportOptions {
 }
 
 /** Export full insights report as JSON */
-export function exportJSON(
-  report: InsightsReport,
-  options: ExportOptions
-): string {
+export function exportJSON(report: InsightsReport, options: ExportOptions): string {
   const content =
     options.format === "jsonl"
       ? report.plugins.map((p) => JSON.stringify(p)).join("\n")
@@ -29,7 +26,7 @@ export function exportJSON(
 /** Export raw data from tables for advanced analysis */
 export function exportRawData(
   db: Database.Database,
-  options: ExportOptions & { days?: number }
+  options: ExportOptions & { days?: number },
 ): string {
   const days = options.days ?? 30;
   const since = daysAgo(days);
@@ -43,7 +40,7 @@ export function exportRawData(
       `SELECT pe.* FROM plugin_events pe
        JOIN turns t ON pe.turn_id = t.id
        WHERE t.timestamp >= ?
-       ORDER BY pe.created_at`
+       ORDER BY pe.created_at`,
     )
     .all(since);
 
@@ -52,7 +49,7 @@ export function exportRawData(
       `SELECT ss.* FROM satisfaction_signals ss
        JOIN turns t ON ss.turn_id = t.id
        WHERE t.timestamp >= ?
-       ORDER BY ss.created_at`
+       ORDER BY ss.created_at`,
     )
     .all(since);
 
@@ -61,7 +58,7 @@ export function exportRawData(
       `SELECT ls.* FROM llm_scores ls
        JOIN turns t ON ls.turn_id = t.id
        WHERE t.timestamp >= ?
-       ORDER BY ls.created_at`
+       ORDER BY ls.created_at`,
     )
     .all(since);
 
@@ -70,7 +67,7 @@ export function exportRawData(
     .prepare(
       `SELECT tool_name, call_count FROM observed_unmapped_tools
        WHERE tool_name NOT IN (SELECT tool_name FROM tool_plugin_mapping)
-       ORDER BY call_count DESC`
+       ORDER BY call_count DESC`,
     )
     .all() as { tool_name: string; call_count: number }[];
 
@@ -98,4 +95,3 @@ export function exportRawData(
 
   return content;
 }
-

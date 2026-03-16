@@ -1,13 +1,13 @@
 import type Database from "better-sqlite3";
+import type { ToolDetector } from "../collector/tool-detector.js";
+import { buildReport } from "../engine.js";
 import type { PluginInsightsConfig, PluginReport, AgentTool } from "../types.js";
 import { textToolResult } from "../types.js";
-import { buildReport } from "../engine.js";
-import type { ToolDetector } from "../collector/tool-detector.js";
 
 export function createInsightsCompareTool(
   db: Database.Database,
   config: PluginInsightsConfig,
-  toolDetector: ToolDetector
+  toolDetector: ToolDetector,
 ): AgentTool {
   return {
     name: "insights_compare",
@@ -97,18 +97,11 @@ export function formatComparison(a: PluginReport, b: PluginReport): string {
       `${a.implicitSatisfaction.acceptanceRate}%`,
       `${b.implicitSatisfaction.acceptanceRate}%`,
     ],
-    [
-      "Retry rate",
-      `${a.implicitSatisfaction.retryRate}%`,
-      `${b.implicitSatisfaction.retryRate}%`,
-    ],
+    ["Retry rate", `${a.implicitSatisfaction.retryRate}%`, `${b.implicitSatisfaction.retryRate}%`],
     ["Verdict", a.verdict.label, b.verdict.label],
   ];
 
-  if (
-    (a.llmJudge && a.llmJudge.sampleCount > 0) ||
-    (b.llmJudge && b.llmJudge.sampleCount > 0)
-  ) {
+  if ((a.llmJudge && a.llmJudge.sampleCount > 0) || (b.llmJudge && b.llmJudge.sampleCount > 0)) {
     rows.splice(-1, 0, [
       "LLM Judge",
       a.llmJudge ? `${a.llmJudge.avgScoreWithPlugin}/5` : "N/A",
@@ -121,9 +114,6 @@ export function formatComparison(a: PluginReport, b: PluginReport): string {
   const col2 = Math.max(...rows.map((r) => r[2].length));
 
   return rows
-    .map(
-      ([c0, c1, c2]) =>
-        `${c0.padEnd(col0)}  ${c1.padEnd(col1)}  ${c2.padEnd(col2)}`
-    )
+    .map(([c0, c1, c2]) => `${c0.padEnd(col0)}  ${c1.padEnd(col1)}  ${c2.padEnd(col2)}`)
     .join("\n");
 }

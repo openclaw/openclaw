@@ -133,10 +133,7 @@ export interface ContextEngine {
   }): Promise<CompactResult>;
 
   // Optional hooks
-  bootstrap?(params: {
-    sessionId: string;
-    sessionFile: string;
-  }): Promise<BootstrapResult>;
+  bootstrap?(params: { sessionId: string; sessionFile: string }): Promise<BootstrapResult>;
 
   afterTurn?(params: AfterTurnParams): Promise<void>;
 
@@ -146,10 +143,7 @@ export interface ContextEngine {
     ttlMs?: number;
   }): Promise<SubagentSpawnPreparation | undefined>;
 
-  onSubagentEnded?(params: {
-    childSessionKey: string;
-    reason: SubagentEndReason;
-  }): Promise<void>;
+  onSubagentEnded?(params: { childSessionKey: string; reason: SubagentEndReason }): Promise<void>;
 
   dispose?(): Promise<void>;
 }
@@ -221,7 +215,7 @@ export interface AgentTool {
   execute(
     toolCallId: string,
     params: Record<string, unknown>,
-    signal?: AbortSignal
+    signal?: AbortSignal,
   ): Promise<AgentToolResult>;
   ownerOnly?: boolean;
 }
@@ -242,13 +236,10 @@ export interface OpenClawPluginApi {
 
   registerTool(tool: AgentTool): void;
   registerCommand(command: OpenClawPluginCommandDefinition): void;
-  registerContextEngine(
-    id: string,
-    factory: ContextEngineFactory
-  ): void;
+  registerContextEngine(id: string, factory: ContextEngineFactory): void;
   registerCli?(
     registrar: (ctx: unknown) => void | Promise<void>,
-    opts?: { commands?: string[] }
+    opts?: { commands?: string[] },
   ): void;
   resolvePath?(input: string): string;
 
@@ -256,7 +247,7 @@ export interface OpenClawPluginApi {
   on(
     hookName: string,
     handler: (...args: any[]) => void | Promise<void>,
-    opts?: { priority?: number }
+    opts?: { priority?: number },
   ): void;
 }
 
@@ -418,12 +409,7 @@ export interface PluginReport {
   verdict: PluginVerdict;
 }
 
-export type VerdictLevel =
-  | "keep"
-  | "low_usage"
-  | "expensive"
-  | "low_satisfaction"
-  | "remove";
+export type VerdictLevel = "keep" | "low_usage" | "expensive" | "low_satisfaction" | "remove";
 
 export interface PluginVerdict {
   level: VerdictLevel;
@@ -498,9 +484,7 @@ export function extractToolCalls(msg: AgentMessage): ToolCallContent[] {
 
   const assistantMsg = msg as AssistantMessage;
   if (!Array.isArray(assistantMsg.content)) return [];
-  return assistantMsg.content.filter(
-    (c): c is ToolCallContent => c.type === "toolCall"
-  );
+  return assistantMsg.content.filter((c): c is ToolCallContent => c.type === "toolCall");
 }
 
 /** Extract Usage from an AssistantMessage */
@@ -536,7 +520,7 @@ export function extractAllText(msg: AgentMessage): string | null {
           typeof c === "object" &&
           c !== null &&
           "text" in c &&
-          typeof (c as Record<string, unknown>).text === "string"
+          typeof (c as Record<string, unknown>).text === "string",
       )
       .map((c) => c.text);
     return texts.length > 0 ? texts.join("\n") : null;

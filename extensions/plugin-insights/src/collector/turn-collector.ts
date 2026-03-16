@@ -1,14 +1,9 @@
 import type Database from "better-sqlite3";
 import type { AgentMessage, ToolCallContent, Usage } from "../types.js";
-import {
-  extractUserText,
-  extractAssistantText,
-  extractToolCalls,
-  extractUsage,
-} from "../types.js";
-import { ToolDetector } from "./tool-detector.js";
+import { extractUserText, extractAssistantText, extractToolCalls, extractUsage } from "../types.js";
 import { ContextDetector } from "./context-detector.js";
 import { PluginReporter } from "./plugin-reporter.js";
+import { ToolDetector } from "./tool-detector.js";
 
 export class TurnCollector {
   private db: Database.Database;
@@ -20,7 +15,7 @@ export class TurnCollector {
     db: Database.Database,
     toolDetector: ToolDetector,
     contextDetector: ContextDetector,
-    pluginReporter: PluginReporter
+    pluginReporter: PluginReporter,
   ) {
     this.db = db;
     this.toolDetector = toolDetector;
@@ -29,11 +24,7 @@ export class TurnCollector {
   }
 
   /** Process a completed turn and store all data */
-  collect(
-    sessionId: string,
-    turnIndex: number,
-    messages: AgentMessage[]
-  ): number {
+  collect(sessionId: string, turnIndex: number, messages: AgentMessage[]): number {
     const userPrompt = this.extractLastUserMessage(messages);
     const assistantResponse = this.extractLastAssistantMessage(messages);
 
@@ -62,7 +53,7 @@ export class TurnCollector {
       assistantResponse,
       usage,
       toolCalls,
-      allPluginIds
+      allPluginIds,
     );
 
     // Insert plugin events from Layer 1
@@ -72,7 +63,7 @@ export class TurnCollector {
         pluginId: d.pluginId,
         method: "tool_call" as const,
         action: d.action,
-      }))
+      })),
     );
 
     // Insert plugin events from Layer 2
@@ -83,7 +74,7 @@ export class TurnCollector {
         method: "context_injection" as const,
         action: d.action,
         metadata: { marker: d.marker },
-      }))
+      })),
     );
 
     // Flush Layer 3 self-reports (session-scoped)
@@ -102,7 +93,7 @@ export class TurnCollector {
     assistantResponse: string | null,
     usage: Usage | null,
     toolCalls: ToolCallContent[],
-    pluginIds: Set<string>
+    pluginIds: Set<string>,
   ): number {
     const stmt = this.db.prepare(`
       INSERT INTO turns (
@@ -121,10 +112,8 @@ export class TurnCollector {
       usage?.input ?? null,
       usage?.output ?? null,
       usage?.total ?? null,
-      toolCalls.length > 0
-        ? JSON.stringify(toolCalls.map((tc) => tc.name))
-        : null,
-      pluginIds.size > 0 ? JSON.stringify([...pluginIds]) : null
+      toolCalls.length > 0 ? JSON.stringify(toolCalls.map((tc) => tc.name)) : null,
+      pluginIds.size > 0 ? JSON.stringify([...pluginIds]) : null,
     );
 
     return result.lastInsertRowid as number;
@@ -137,7 +126,7 @@ export class TurnCollector {
       method: "tool_call" | "context_injection";
       action: string;
       metadata?: Record<string, unknown>;
-    }[]
+    }[],
   ): void {
     if (events.length === 0) return;
 
@@ -153,7 +142,7 @@ export class TurnCollector {
           event.pluginId,
           event.method,
           event.action,
-          event.metadata ? JSON.stringify(event.metadata) : null
+          event.metadata ? JSON.stringify(event.metadata) : null,
         );
       }
     });
@@ -163,7 +152,7 @@ export class TurnCollector {
   private detectSatisfactionSignals(
     currentTurnId: number,
     sessionId: string,
-    currentPrompt: string | null
+    currentPrompt: string | null,
   ): void {
     if (!currentPrompt) return;
 
@@ -171,7 +160,7 @@ export class TurnCollector {
       .prepare(
         `SELECT id, user_prompt_preview FROM turns
          WHERE session_id = ? AND id < ?
-         ORDER BY id DESC LIMIT 1`
+         ORDER BY id DESC LIMIT 1`,
       )
       .get(sessionId, currentTurnId) as
       | { id: number; user_prompt_preview: string | null }
@@ -193,12 +182,7 @@ export class TurnCollector {
     }
 
     if (similarity > 0.6) {
-      stmt.run(
-        prevTurn.id,
-        "retried",
-        Math.min(similarity, 1.0),
-        currentTurnId
-      );
+      stmt.run(prevTurn.id, "retried", Math.min(similarity, 1.0), currentTurnId);
       return;
     }
 

@@ -1,18 +1,14 @@
+import { createCommands } from "./src/commands.js";
+import { resolveConfig } from "./src/db/config.js";
+import { createDb } from "./src/db/connection.js";
+import { createInsightsEngine, cleanupOldData, type ToolPluginMapping } from "./src/engine.js";
+import { createInsightsCompareTool } from "./src/tools/insights-compare.js";
+import { createInsightsShowTool } from "./src/tools/insights-show.js";
 import type {
   OpenClawPluginApi,
   OpenClawPluginDefinition,
   PluginInsightsConfig,
 } from "./src/types.js";
-import { resolveConfig } from "./src/db/config.js";
-import { createDb } from "./src/db/connection.js";
-import {
-  createInsightsEngine,
-  cleanupOldData,
-  type ToolPluginMapping,
-} from "./src/engine.js";
-import { createInsightsShowTool } from "./src/tools/insights-show.js";
-import { createInsightsCompareTool } from "./src/tools/insights-compare.js";
-import { createCommands } from "./src/commands.js";
 
 /**
  * Plugin Insights — OpenClaw plugin definition.
@@ -23,8 +19,7 @@ import { createCommands } from "./src/commands.js";
 const pluginDefinition: OpenClawPluginDefinition = {
   id: "plugin-insights",
   name: "Plugin Insights",
-  description:
-    "Automatically evaluate how much your installed plugins actually help",
+  description: "Automatically evaluate how much your installed plugins actually help",
   version: "0.1.0",
 
   register(api: OpenClawPluginApi): void {
@@ -45,11 +40,7 @@ const pluginDefinition: OpenClawPluginDefinition = {
         pluginName: m.pluginName,
       })) ?? [];
 
-    const { engine, toolDetector } = createInsightsEngine(
-      db,
-      config,
-      toolPluginMappings
-    );
+    const { engine, toolDetector } = createInsightsEngine(db, config, toolPluginMappings);
 
     // Register as ContextEngine (ownsCompaction: false — non-invasive)
     api.registerContextEngine("plugin-insights", () => engine);

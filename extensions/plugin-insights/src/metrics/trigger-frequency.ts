@@ -16,7 +16,7 @@ export class TriggerFrequencyMetric {
     const totalRow = this.db
       .prepare(
         `SELECT COUNT(*) as cnt FROM plugin_events
-         WHERE plugin_id = ? AND created_at >= ?`
+         WHERE plugin_id = ? AND created_at >= ?`,
       )
       .get(pluginId, since) as { cnt: number };
 
@@ -27,7 +27,7 @@ export class TriggerFrequencyMetric {
          FROM plugin_events
          WHERE plugin_id = ? AND created_at >= ?
          GROUP BY date(created_at)
-         ORDER BY date(created_at)`
+         ORDER BY date(created_at)`,
       )
       .all(pluginId, since) as { date: string; cnt: number }[];
 
@@ -37,7 +37,7 @@ export class TriggerFrequencyMetric {
         `SELECT COUNT(DISTINCT t.session_id) as cnt
          FROM plugin_events pe
          JOIN turns t ON pe.turn_id = t.id
-         WHERE pe.plugin_id = ? AND pe.created_at >= ?`
+         WHERE pe.plugin_id = ? AND pe.created_at >= ?`,
       )
       .get(pluginId, since) as { cnt: number };
 
@@ -61,11 +61,8 @@ export class TriggerFrequencyMetric {
   getActivePlugins(days: number = 30): string[] {
     const since = daysAgo(days);
     const rows = this.db
-      .prepare(
-        `SELECT DISTINCT plugin_id FROM plugin_events WHERE created_at >= ?`
-      )
+      .prepare(`SELECT DISTINCT plugin_id FROM plugin_events WHERE created_at >= ?`)
       .all(since) as { plugin_id: string }[];
     return rows.map((r) => r.plugin_id);
   }
 }
-

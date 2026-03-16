@@ -4,13 +4,22 @@ import type { ToolCallContent, ToolPluginMappingRow } from "../types.js";
 /** Tools built into the OpenClaw agent runtime (not owned by any plugin) */
 const BUILTIN_TOOLS = new Set([
   // Core agent tools
-  "web_search", "web_browse", "web_fetch",
-  "write_file", "read_file", "edit_file", "list_files",
-  "run_command", "run_shell",
-  "create_file", "delete_file",
-  "search_code", "search_files",
+  "web_search",
+  "web_browse",
+  "web_fetch",
+  "write_file",
+  "read_file",
+  "edit_file",
+  "list_files",
+  "run_command",
+  "run_shell",
+  "create_file",
+  "delete_file",
+  "search_code",
+  "search_files",
   // Our own tools (should never be attributed)
-  "insights_show", "insights_compare",
+  "insights_show",
+  "insights_compare",
 ]);
 
 /**
@@ -30,7 +39,7 @@ export class ToolDetector {
 
   /** Rebuild the tool→plugin mapping from explicit entries */
   refreshMappingFromEntries(
-    entries: { toolName: string; pluginId: string; pluginName?: string }[]
+    entries: { toolName: string; pluginId: string; pluginName?: string }[],
   ): void {
     const upsert = this.db.prepare(`
       INSERT INTO tool_plugin_mapping (tool_name, plugin_id, plugin_name, updated_at)
@@ -91,20 +100,24 @@ export class ToolDetector {
 
     if (this.knownUnmapped.has(toolName)) {
       // Already seen this session — just bump the count
-      this.db.prepare(
-        `UPDATE observed_unmapped_tools
+      this.db
+        .prepare(
+          `UPDATE observed_unmapped_tools
          SET call_count = call_count + 1, last_seen_at = datetime('now')
-         WHERE tool_name = ?`
-      ).run(toolName);
+         WHERE tool_name = ?`,
+        )
+        .run(toolName);
     } else {
       // First time this session (may or may not exist in DB from prior sessions)
-      this.db.prepare(
-        `INSERT INTO observed_unmapped_tools (tool_name, call_count)
+      this.db
+        .prepare(
+          `INSERT INTO observed_unmapped_tools (tool_name, call_count)
          VALUES (?, 1)
          ON CONFLICT(tool_name) DO UPDATE SET
            call_count = call_count + 1,
-           last_seen_at = datetime('now')`
-      ).run(toolName);
+           last_seen_at = datetime('now')`,
+        )
+        .run(toolName);
       this.knownUnmapped.add(toolName);
     }
   }
@@ -120,11 +133,13 @@ export class ToolDetector {
    *  Reads from DB so observations survive across restarts.
    *  Excludes tools that have since been added to tool_plugin_mapping. */
   getUnmappedToolsWithCounts(): { toolName: string; count: number }[] {
-    const rows = this.db.prepare(
-      `SELECT tool_name, call_count FROM observed_unmapped_tools
+    const rows = this.db
+      .prepare(
+        `SELECT tool_name, call_count FROM observed_unmapped_tools
        WHERE tool_name NOT IN (SELECT tool_name FROM tool_plugin_mapping)
-       ORDER BY call_count DESC`
-    ).all() as { tool_name: string; call_count: number }[];
+       ORDER BY call_count DESC`,
+      )
+      .all() as { tool_name: string; call_count: number }[];
 
     return rows.map((r) => ({ toolName: r.tool_name, count: r.call_count }));
   }

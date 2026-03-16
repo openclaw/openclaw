@@ -1,8 +1,8 @@
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import Database from "better-sqlite3";
-import { runMigrations } from "../src/db/migration.js";
-import { createCommands } from "../src/commands.js";
+import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { ToolDetector } from "../src/collector/tool-detector.js";
+import { createCommands } from "../src/commands.js";
+import { runMigrations } from "../src/db/migration.js";
 import type { PluginInsightsConfig, PluginCommandContext } from "../src/types.js";
 import { DEFAULT_CONFIG } from "../src/types.js";
 
@@ -64,16 +64,18 @@ describe("CLI Commands", () => {
   it("insights-reset with --confirm should delete all data", () => {
     // Seed data
     db.prepare(
-      `INSERT INTO turns (session_id, turn_index, timestamp) VALUES ('s1', 0, datetime('now'))`
+      `INSERT INTO turns (session_id, turn_index, timestamp) VALUES ('s1', 0, datetime('now'))`,
     ).run();
     db.prepare(
-      `INSERT INTO plugin_events (turn_id, plugin_id, detection_method, action) VALUES (1, 'mem', 'tool_call', 'x')`
+      `INSERT INTO plugin_events (turn_id, plugin_id, detection_method, action) VALUES (1, 'mem', 'tool_call', 'x')`,
     ).run();
 
     const commands = createCommands(db, config, toolDetector);
     const resetCmd = commands.find((c) => c.name === "insights-reset")!;
 
-    const result = resetCmd.handler(mkCommandContext({ args: "--confirm", commandBody: "insights-reset --confirm" }));
+    const result = resetCmd.handler(
+      mkCommandContext({ args: "--confirm", commandBody: "insights-reset --confirm" }),
+    );
 
     const turns = db.prepare("SELECT * FROM turns").all();
     expect(turns).toHaveLength(0);

@@ -35,8 +35,8 @@ openclaw plugins install plugin-insights
 
 You can also ask your agent directly:
 
-- *"How effective are my plugins?"* → triggers `insights_show`
-- *"Compare memory-core and memory-lancedb"* → triggers `insights_compare`
+- _"How effective are my plugins?"_ → triggers `insights_show`
+- _"Compare memory-core and memory-lancedb"_ → triggers `insights_compare`
 
 ### Report Example
 
@@ -92,17 +92,17 @@ Add to your OpenClaw config:
 }
 ```
 
-| Option | Default | Description |
-|--------|---------|-------------|
-| `enabled` | `true` | Enable/disable data collection |
-| `dbPath` | `~/.openclaw/plugin-insights.db` | Path to local SQLite database |
-| `retentionDays` | `90` | Days of data to retain before auto-cleanup |
-| `toolMappings` | `[]` | Explicit tool→plugin mappings for accurate attribution |
-| `llmJudge.enabled` | `false` | Enable LLM-as-Judge quality scoring |
-| `llmJudge.apiKey` | — | Your OpenAI-compatible API key |
-| `llmJudge.baseUrl` | `https://api.openai.com/v1` | API base URL |
-| `llmJudge.model` | `gpt-4o-mini` | Model to use for judging |
-| `llmJudge.maxEvalPerDay` | `20` | Max evaluations per day (cost control) |
+| Option                   | Default                          | Description                                            |
+| ------------------------ | -------------------------------- | ------------------------------------------------------ |
+| `enabled`                | `true`                           | Enable/disable data collection                         |
+| `dbPath`                 | `~/.openclaw/plugin-insights.db` | Path to local SQLite database                          |
+| `retentionDays`          | `90`                             | Days of data to retain before auto-cleanup             |
+| `toolMappings`           | `[]`                             | Explicit tool→plugin mappings for accurate attribution |
+| `llmJudge.enabled`       | `false`                          | Enable LLM-as-Judge quality scoring                    |
+| `llmJudge.apiKey`        | —                                | Your OpenAI-compatible API key                         |
+| `llmJudge.baseUrl`       | `https://api.openai.com/v1`      | API base URL                                           |
+| `llmJudge.model`         | `gpt-4o-mini`                    | Model to use for judging                               |
+| `llmJudge.maxEvalPerDay` | `20`                             | Max evaluations per day (cost control)                 |
 
 ## How It Works
 
@@ -120,13 +120,13 @@ Three layers work together to figure out which plugin caused what:
 
 ### Metrics
 
-| Metric | What it measures |
-|--------|------------------|
-| Trigger Frequency | How often a plugin activates |
-| Token Delta | Extra tokens consumed when plugin is active |
-| Conversation Turns | Whether sessions are shorter (more efficient) with the plugin |
-| Implicit Satisfaction | Retry/correction rates after plugin triggers |
-| LLM Judge | AI-scored quality comparison (optional, uses your API key) |
+| Metric                | What it measures                                              |
+| --------------------- | ------------------------------------------------------------- |
+| Trigger Frequency     | How often a plugin activates                                  |
+| Token Delta           | Extra tokens consumed when plugin is active                   |
+| Conversation Turns    | Whether sessions are shorter (more efficient) with the plugin |
+| Implicit Satisfaction | Retry/correction rates after plugin triggers                  |
+| LLM Judge             | AI-scored quality comparison (optional, uses your API key)    |
 
 ## For Plugin Developers
 
@@ -140,7 +140,11 @@ For best results, ask your users to add your tool names to the `toolMappings` co
     "entries": {
       "plugin-insights": {
         "toolMappings": [
-          { "toolName": "your_tool_name", "pluginId": "your-plugin-id", "pluginName": "Your Plugin" }
+          {
+            "toolName": "your_tool_name",
+            "pluginId": "your-plugin-id",
+            "pluginName": "Your Plugin"
+          }
         ]
       }
     }
@@ -157,10 +161,12 @@ import Database from "better-sqlite3";
 
 // Open the shared insights DB
 const db = new Database("~/.openclaw/plugin-insights.db");
-db.prepare(`
+db.prepare(
+  `
   INSERT INTO plugin_events (turn_id, plugin_id, detection_method, action, metadata_json)
   VALUES (?, ?, 'self_report', ?, ?)
-`).run(turnId, "my-plugin", "recall", JSON.stringify({ count: 5 }));
+`,
+).run(turnId, "my-plugin", "recall", JSON.stringify({ count: 5 }));
 ```
 
 > **Note:** A cleaner hook-based self-report API (`api.on("plugin_insights_report", ...)`) is planned for when the OpenClaw SDK supports custom hook names. The infrastructure is ready in the codebase.

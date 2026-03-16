@@ -63,7 +63,7 @@ export class LLMJudgeMetric {
            AND t.assistant_response_preview IS NOT NULL
            AND t.timestamp >= datetime('now', ?)
          ORDER BY RANDOM()
-         LIMIT ?`
+         LIMIT ?`,
       )
       .all(`-${days} days`, remaining) as {
       id: number;
@@ -75,7 +75,7 @@ export class LLMJudgeMetric {
       try {
         const score = await this.callJudge(
           turn.user_prompt_preview,
-          turn.assistant_response_preview
+          turn.assistant_response_preview,
         );
         if (score) {
           this.insertScore(turn.id, score);
@@ -96,7 +96,7 @@ export class LLMJudgeMetric {
         `SELECT AVG(ls.overall_score) as avg_score, COUNT(*) as cnt
          FROM llm_scores ls
          JOIN plugin_events pe ON pe.turn_id = ls.turn_id
-         WHERE pe.plugin_id = ? AND ls.created_at >= ?`
+         WHERE pe.plugin_id = ? AND ls.created_at >= ?`,
       )
       .get(pluginId, since) as { avg_score: number | null; cnt: number };
 
@@ -107,7 +107,7 @@ export class LLMJudgeMetric {
          FROM llm_scores ls
          JOIN turns t ON t.id = ls.turn_id
          WHERE (t.plugins_triggered_json IS NULL OR t.plugins_triggered_json = '[]')
-           AND ls.created_at >= ?`
+           AND ls.created_at >= ?`,
       )
       .get(since) as { avg_score: number | null; cnt: number };
 
@@ -125,11 +125,12 @@ export class LLMJudgeMetric {
 
   private async callJudge(
     userPrompt: string,
-    assistantResponse: string
+    assistantResponse: string,
   ): Promise<JudgeResponse | null> {
-    const prompt = JUDGE_PROMPT_TEMPLATE
-      .replace("{user_prompt}", userPrompt)
-      .replace("{assistant_response}", assistantResponse);
+    const prompt = JUDGE_PROMPT_TEMPLATE.replace("{user_prompt}", userPrompt).replace(
+      "{assistant_response}",
+      assistantResponse,
+    );
 
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 30_000);
@@ -189,7 +190,7 @@ export class LLMJudgeMetric {
         `INSERT INTO llm_scores (
           turn_id, accuracy_score, completeness_score,
           relevance_score, overall_score, judge_model, judge_response_json
-        ) VALUES (?, ?, ?, ?, ?, ?, ?)`
+        ) VALUES (?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         turnId,
@@ -198,7 +199,7 @@ export class LLMJudgeMetric {
         score.relevance,
         score.overall,
         this.config.model,
-        JSON.stringify(score)
+        JSON.stringify(score),
       );
   }
 
@@ -206,7 +207,7 @@ export class LLMJudgeMetric {
     const row = this.db
       .prepare(
         `SELECT COUNT(*) as cnt FROM llm_scores
-         WHERE created_at >= date('now')`
+         WHERE created_at >= date('now')`,
       )
       .get() as { cnt: number };
     return row.cnt;
@@ -216,4 +217,3 @@ export class LLMJudgeMetric {
 function isValidScore(n: unknown): n is number {
   return typeof n === "number" && n >= 1 && n <= 5;
 }
-

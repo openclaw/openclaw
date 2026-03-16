@@ -1,6 +1,6 @@
-import { describe, it, expect } from "vitest";
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { describe, it, expect } from "vitest";
 import { DEFAULT_CONFIG } from "../src/types.js";
 
 const MANIFEST_PATH = path.resolve(__dirname, "../openclaw.plugin.json");

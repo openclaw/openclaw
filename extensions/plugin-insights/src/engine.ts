@@ -1,4 +1,13 @@
 import type Database from "better-sqlite3";
+import { ContextDetector } from "./collector/context-detector.js";
+import { PluginReporter } from "./collector/plugin-reporter.js";
+import { ToolDetector } from "./collector/tool-detector.js";
+import { TurnCollector } from "./collector/turn-collector.js";
+import { ConversationTurnsMetric } from "./metrics/conversation-turns.js";
+import { ImplicitSatisfactionMetric } from "./metrics/implicit-satisfaction.js";
+import { LLMJudgeMetric } from "./metrics/llm-judge.js";
+import { TokenDeltaMetric } from "./metrics/token-delta.js";
+import { TriggerFrequencyMetric } from "./metrics/trigger-frequency.js";
 import type {
   ContextEngine,
   AfterTurnParams,
@@ -14,15 +23,6 @@ import type {
   CompactResult,
   BootstrapResult,
 } from "./types.js";
-import { TurnCollector } from "./collector/turn-collector.js";
-import { ToolDetector } from "./collector/tool-detector.js";
-import { ContextDetector } from "./collector/context-detector.js";
-import { PluginReporter } from "./collector/plugin-reporter.js";
-import { TriggerFrequencyMetric } from "./metrics/trigger-frequency.js";
-import { TokenDeltaMetric } from "./metrics/token-delta.js";
-import { ConversationTurnsMetric } from "./metrics/conversation-turns.js";
-import { ImplicitSatisfactionMetric } from "./metrics/implicit-satisfaction.js";
-import { LLMJudgeMetric } from "./metrics/llm-judge.js";
 
 export interface ToolPluginMapping {
   toolName: string;
@@ -33,17 +33,12 @@ export interface ToolPluginMapping {
 export function createInsightsEngine(
   db: Database.Database,
   config: PluginInsightsConfig,
-  toolPluginMappings?: ToolPluginMapping[]
+  toolPluginMappings?: ToolPluginMapping[],
 ): { engine: ContextEngine; reporter: PluginReporter; toolDetector: ToolDetector } {
   const toolDetector = new ToolDetector(db);
   const contextDetector = new ContextDetector();
   const pluginReporter = new PluginReporter(db);
-  const turnCollector = new TurnCollector(
-    db,
-    toolDetector,
-    contextDetector,
-    pluginReporter
-  );
+  const turnCollector = new TurnCollector(db, toolDetector, contextDetector, pluginReporter);
 
   // Build tool→plugin mapping if provided
   if (toolPluginMappings && toolPluginMappings.length > 0) {
@@ -77,10 +72,7 @@ export function createInsightsEngine(
     },
 
     // Required: ingest each message (we just pass through)
-    async ingest(_params: {
-      sessionId: string;
-      message: AgentMessage;
-    }): Promise<IngestResult> {
+    async ingest(_params: { sessionId: string; message: AgentMessage }): Promise<IngestResult> {
       return { ingested: true };
     },
 
@@ -96,10 +88,7 @@ export function createInsightsEngine(
     },
 
     // Required: compact (we don't own compaction)
-    async compact(_params: {
-      sessionId: string;
-      sessionFile: string;
-    }): Promise<CompactResult> {
+    async compact(_params: { sessionId: string; sessionFile: string }): Promise<CompactResult> {
       return {
         ok: true,
         compacted: false,
@@ -108,10 +97,7 @@ export function createInsightsEngine(
     },
 
     // Optional: bootstrap
-    async bootstrap(_params: {
-      sessionId: string;
-      sessionFile: string;
-    }): Promise<BootstrapResult> {
+    async bootstrap(_params: { sessionId: string; sessionFile: string }): Promise<BootstrapResult> {
       return { bootstrapped: true };
     },
 
@@ -150,15 +136,13 @@ export function createInsightsEngine(
 export function buildReport(
   db: Database.Database,
   config: PluginInsightsConfig,
-  days: number = 30
+  days: number = 30,
 ): InsightsReport {
   const triggerMetric = new TriggerFrequencyMetric(db);
   const tokenMetric = new TokenDeltaMetric(db);
   const turnsMetric = new ConversationTurnsMetric(db);
   const satisfactionMetric = new ImplicitSatisfactionMetric(db);
-  const judgeMetric = config.llmJudge.enabled
-    ? new LLMJudgeMetric(db, config.llmJudge)
-    : null;
+  const judgeMetric = config.llmJudge.enabled ? new LLMJudgeMetric(db, config.llmJudge) : null;
 
   const activePlugins = triggerMetric.getActivePlugins(days);
 
@@ -167,9 +151,7 @@ export function buildReport(
     const tokenDelta = tokenMetric.compute(pluginId, days);
     const conversationTurns = turnsMetric.compute(pluginId, days);
     const implicitSatisfaction = satisfactionMetric.compute(pluginId, days);
-    const llmJudge = judgeMetric
-      ? judgeMetric.computeResult(pluginId, days)
-      : undefined;
+    const llmJudge = judgeMetric ? judgeMetric.computeResult(pluginId, days) : undefined;
 
     const installedDays = getInstalledDays(db, pluginId);
     const pluginName = getPluginName(db, pluginId);
@@ -180,7 +162,7 @@ export function buildReport(
       tokenDelta.deltaPercent,
       implicitSatisfaction.acceptanceRate,
       implicitSatisfaction.retryRate,
-      implicitSatisfaction.totalSignals
+      implicitSatisfaction.totalSignals,
     );
 
     return {
@@ -224,7 +206,7 @@ function computeVerdict(
   tokenDeltaPercent: number,
   acceptanceRate: number,
   _retryRate: number,
-  totalSignals: number
+  totalSignals: number,
 ): PluginVerdict {
   // Low usage: only check absolute trigger count.
   // triggersPerDay is now window-scoped so the threshold would depend
@@ -268,10 +250,7 @@ function computeVerdict(
   };
 }
 
-function updatePluginInstalls(
-  db: Database.Database,
-  pluginIds: string[]
-): void {
+function updatePluginInstalls(db: Database.Database, pluginIds: string[]): void {
   const upsert = db.prepare(`
     INSERT INTO plugin_installs (plugin_id, first_seen_at, last_seen_at)
     VALUES (?, datetime('now'), datetime('now'))
@@ -295,18 +274,13 @@ function getInstalledDays(db: Database.Database, pluginId: string): number {
 
   const firstSeen = new Date(row.first_seen_at);
   const now = new Date();
-  return Math.floor(
-    (now.getTime() - firstSeen.getTime()) / (1000 * 60 * 60 * 24)
-  );
+  return Math.floor((now.getTime() - firstSeen.getTime()) / (1000 * 60 * 60 * 24));
 }
 
-function getPluginName(
-  db: Database.Database,
-  pluginId: string
-): string | undefined {
+function getPluginName(db: Database.Database, pluginId: string): string | undefined {
   const row = db
     .prepare(
-      "SELECT DISTINCT plugin_name FROM tool_plugin_mapping WHERE plugin_id = ? AND plugin_name IS NOT NULL LIMIT 1"
+      "SELECT DISTINCT plugin_name FROM tool_plugin_mapping WHERE plugin_id = ? AND plugin_name IS NOT NULL LIMIT 1",
     )
     .get(pluginId) as { plugin_name: string } | undefined;
 
@@ -314,10 +288,7 @@ function getPluginName(
 }
 
 /** Clean up data older than retention period */
-export function cleanupOldData(
-  db: Database.Database,
-  retentionDays: number
-): void {
+export function cleanupOldData(db: Database.Database, retentionDays: number): void {
   const cutoff = new Date();
   cutoff.setDate(cutoff.getDate() - retentionDays);
   const cutoffStr = cutoff.toISOString().slice(0, 19).replace("T", " ");
@@ -327,16 +298,14 @@ export function cleanupOldData(
   // when many expired turns exist.
   db.transaction(() => {
     db.prepare(
-      `DELETE FROM satisfaction_signals WHERE turn_id IN (SELECT id FROM turns WHERE timestamp < ?)`
+      `DELETE FROM satisfaction_signals WHERE turn_id IN (SELECT id FROM turns WHERE timestamp < ?)`,
     ).run(cutoffStr);
     db.prepare(
-      `DELETE FROM llm_scores WHERE turn_id IN (SELECT id FROM turns WHERE timestamp < ?)`
+      `DELETE FROM llm_scores WHERE turn_id IN (SELECT id FROM turns WHERE timestamp < ?)`,
     ).run(cutoffStr);
     db.prepare(
-      `DELETE FROM plugin_events WHERE turn_id IN (SELECT id FROM turns WHERE timestamp < ?)`
+      `DELETE FROM plugin_events WHERE turn_id IN (SELECT id FROM turns WHERE timestamp < ?)`,
     ).run(cutoffStr);
-    db.prepare(
-      `DELETE FROM turns WHERE timestamp < ?`
-    ).run(cutoffStr);
+    db.prepare(`DELETE FROM turns WHERE timestamp < ?`).run(cutoffStr);
   })();
 }
