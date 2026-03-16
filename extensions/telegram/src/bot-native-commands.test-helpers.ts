@@ -14,6 +14,11 @@ type ExecutePluginCommandFn =
   typeof import("../../../src/plugins/commands.js").executePluginCommand;
 type DispatchReplyWithBufferedBlockDispatcherFn =
   typeof import("../../../src/auto-reply/reply/provider-dispatcher.js").dispatchReplyWithBufferedBlockDispatcher;
+type DispatchReplyWithBufferedBlockDispatcherResult = Awaited<
+  ReturnType<DispatchReplyWithBufferedBlockDispatcherFn>
+>;
+type RecordInboundSessionMetaSafeFn =
+  typeof import("../../../src/channels/session-meta.js").recordInboundSessionMetaSafe;
 type AnyMock = MockFn<(...args: unknown[]) => unknown>;
 type AnyAsyncMock = MockFn<(...args: unknown[]) => Promise<unknown>>;
 type NativeCommandHarness = {
@@ -45,25 +50,35 @@ vi.mock("../../../src/plugins/commands.js", () => ({
   executePluginCommand: pluginCommandMocks.executePluginCommand,
 }));
 
-const replyDispatcherMocks = vi.hoisted(() => ({
-  dispatchReplyWithBufferedBlockDispatcher: vi.fn<DispatchReplyWithBufferedBlockDispatcherFn>(
-    async () =>
-      ({
-        queuedFinal: false,
-        counts: {} as Awaited<
-          ReturnType<
-            typeof import("../../../src/auto-reply/reply/provider-dispatcher.js").dispatchReplyWithBufferedBlockDispatcher
-          >
-        >["counts"],
-      }) as Awaited<ReturnType<DispatchReplyWithBufferedBlockDispatcherFn>>,
-  ),
-}));
+const replyPipelineMocks = vi.hoisted(() => {
+  const dispatchReplyResult: DispatchReplyWithBufferedBlockDispatcherResult = {
+    queuedFinal: false,
+    counts: {} as DispatchReplyWithBufferedBlockDispatcherResult["counts"],
+  };
+  return {
+    finalizeInboundContext: vi.fn((ctx: unknown) => ctx),
+    dispatchReplyWithBufferedBlockDispatcher: vi.fn<DispatchReplyWithBufferedBlockDispatcherFn>(
+      async () => dispatchReplyResult,
+    ),
+    createReplyPrefixOptions: vi.fn(() => ({ onModelSelected: () => {} })),
+    recordInboundSessionMetaSafe: vi.fn<RecordInboundSessionMetaSafeFn>(async () => undefined),
+  };
+});
 export const dispatchReplyWithBufferedBlockDispatcher =
-  replyDispatcherMocks.dispatchReplyWithBufferedBlockDispatcher;
+  replyPipelineMocks.dispatchReplyWithBufferedBlockDispatcher;
 
+vi.mock("../../../src/auto-reply/reply/inbound-context.js", () => ({
+  finalizeInboundContext: replyPipelineMocks.finalizeInboundContext,
+}));
 vi.mock("../../../src/auto-reply/reply/provider-dispatcher.js", () => ({
   dispatchReplyWithBufferedBlockDispatcher:
-    replyDispatcherMocks.dispatchReplyWithBufferedBlockDispatcher,
+    replyPipelineMocks.dispatchReplyWithBufferedBlockDispatcher,
+}));
+vi.mock("../../../src/channels/reply-prefix.js", () => ({
+  createReplyPrefixOptions: replyPipelineMocks.createReplyPrefixOptions,
+}));
+vi.mock("../../../src/channels/session-meta.js", () => ({
+  recordInboundSessionMetaSafe: replyPipelineMocks.recordInboundSessionMetaSafe,
 }));
 
 const deliveryMocks = vi.hoisted(() => ({
@@ -142,7 +157,7 @@ export function createNativeCommandsHarness(params?: {
     },
   } as const;
 
-  replyDispatcherMocks.dispatchReplyWithBufferedBlockDispatcher.mockClear();
+  replyPipelineMocks.dispatchReplyWithBufferedBlockDispatcher.mockClear();
 
   registerTelegramNativeCommands({
     bot: bot as unknown as Parameters<typeof registerTelegramNativeCommands>[0]["bot"],

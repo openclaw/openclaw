@@ -1,22 +1,25 @@
 export type { ChannelMessageActionName } from "../channels/plugins/types.js";
-export type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
 export type { OpenClawConfig } from "../config/config.js";
 export type { DmPolicy, GroupPolicy, WhatsAppAccountConfig } from "../config/types.js";
-export type { PluginRuntime } from "../plugins/runtime/types.js";
-export type { OpenClawPluginApi } from "../plugins/types.js";
-
-export { emptyPluginConfigSchema } from "../plugins/config-schema.js";
-
-export { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../routing/session-key.js";
-
+export type {
+  ChannelMessageActionContext,
+  ChannelPlugin,
+  OpenClawPluginApi,
+  PluginRuntime,
+} from "./channel-plugin-common.js";
 export {
+  DEFAULT_ACCOUNT_ID,
+  PAIRING_APPROVED_MESSAGE,
   applyAccountNameToChannelSection,
+  buildChannelConfigSchema,
+  deleteAccountFromConfigSection,
+  emptyPluginConfigSchema,
+  formatPairingApproveHint,
+  getChatChannelMeta,
   migrateBaseNameToDefaultAccount,
-} from "../channels/plugins/setup-helpers.js";
-export { buildChannelConfigSchema } from "../channels/plugins/config-schema.js";
-export { formatPairingApproveHint } from "../channels/plugins/helpers.js";
-
-export { getChatChannelMeta } from "../channels/registry.js";
+  normalizeAccountId,
+  setAccountEnabledInConfigSection,
+} from "./channel-plugin-common.js";
 export {
   formatWhatsAppConfigAllowFromEntries,
   resolveWhatsAppConfigAllowFrom,
@@ -26,11 +29,6 @@ export {
   listWhatsAppDirectoryGroupsFromConfig,
   listWhatsAppDirectoryPeersFromConfig,
 } from "../channels/plugins/directory-config.js";
-export {
-  hasAnyWhatsAppAuth,
-  listEnabledWhatsAppAccounts,
-  resolveWhatsAppAccount,
-} from "../../extensions/whatsapp/src/accounts.js";
 export { normalizeWhatsAppAllowFromEntries } from "../channels/plugins/normalize/whatsapp.js";
 export {
   collectAllowlistProviderGroupPolicyWarnings,
@@ -57,5 +55,4 @@ export { WhatsAppConfigSchema } from "../config/zod-schema.providers-whatsapp.js
 
 export { createActionGate, readStringParam } from "../agents/tools/common.js";
 export { createPluginRuntimeStore } from "./runtime-store.js";
-
 export { normalizeE164 } from "../utils.js";
