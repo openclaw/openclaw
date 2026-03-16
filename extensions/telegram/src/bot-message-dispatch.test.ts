@@ -1,6 +1,6 @@
 import path from "node:path";
 import type { Bot } from "grammy";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { STATE_DIR } from "../../../src/config/paths.js";
 import {
   createSequencedTestDraftStream,
@@ -58,6 +58,10 @@ describe("dispatchTelegramMessage draft streaming", () => {
     resolveStorePath.mockClear();
     resolveStorePath.mockReturnValue("/tmp/sessions.json");
     loadSessionStore.mockReturnValue({});
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
   });
 
   const createDraftStream = (messageId?: number) => createTestDraftStream({ messageId });
@@ -2241,6 +2245,94 @@ describe("dispatchTelegramMessage draft streaming", () => {
       ),
     );
     expect(finalTextSentViaDeliverReplies).toBe(true);
+  });
+
+  it("clears status reaction after the done hold window", async () => {
+    vi.useFakeTimers();
+
+    const reactionApi = vi.fn(async () => {});
+    const statusReactionController = {
+      setThinking: vi.fn(async () => {}),
+      setCompacting: vi.fn(async () => {}),
+      setTool: vi.fn(async () => {}),
+      setDone: vi.fn(async () => {}),
+      setError: vi.fn(async () => {}),
+      setQueued: vi.fn(async () => {}),
+      cancelPending: vi.fn(() => {}),
+      clear: vi.fn(async () => {}),
+      restoreInitial: vi.fn(async () => {}),
+    };
+    dispatchReplyWithBufferedBlockDispatcher.mockResolvedValue({ queuedFinal: true });
+
+    await dispatchWithContext({
+      context: createContext({
+        reactionApi: reactionApi as never,
+        statusReactionController: statusReactionController as never,
+      }),
+      streamMode: "off",
+      cfg: {
+        messages: {
+          statusReactions: {
+            timing: {
+              doneHoldMs: 25,
+            },
+          },
+        },
+      },
+    });
+
+    await vi.runAllTicks();
+    expect(statusReactionController.setDone).toHaveBeenCalledTimes(1);
+    expect(reactionApi).not.toHaveBeenCalled();
+
+    await vi.advanceTimersByTimeAsync(25);
+
+    expect(reactionApi).toHaveBeenCalledWith(123, 456, []);
+  });
+
+  it("clears status reaction after the error hold window", async () => {
+    vi.useFakeTimers();
+
+    const reactionApi = vi.fn(async () => {});
+    const statusReactionController = {
+      setThinking: vi.fn(async () => {}),
+      setCompacting: vi.fn(async () => {}),
+      setTool: vi.fn(async () => {}),
+      setDone: vi.fn(async () => {}),
+      setError: vi.fn(async () => {}),
+      setQueued: vi.fn(async () => {}),
+      cancelPending: vi.fn(() => {}),
+      clear: vi.fn(async () => {}),
+      restoreInitial: vi.fn(async () => {}),
+    };
+    dispatchReplyWithBufferedBlockDispatcher.mockRejectedValue(new Error("boom"));
+    deliverReplies.mockResolvedValue({ delivered: false });
+
+    await dispatchWithContext({
+      context: createContext({
+        reactionApi: reactionApi as never,
+        statusReactionController: statusReactionController as never,
+      }),
+      streamMode: "off",
+      cfg: {
+        messages: {
+          statusReactions: {
+            timing: {
+              errorHoldMs: 30,
+            },
+          },
+        },
+      },
+    });
+
+    await vi.runAllTicks();
+    expect(statusReactionController.setError).toHaveBeenCalledTimes(1);
+    expect(statusReactionController.setDone).not.toHaveBeenCalled();
+    expect(reactionApi).not.toHaveBeenCalled();
+
+    await vi.advanceTimersByTimeAsync(30);
+
+    expect(reactionApi).toHaveBeenCalledWith(123, 456, []);
   });
 
   it("shows compacting reaction during auto-compaction and resumes thinking", async () => {

@@ -13,6 +13,7 @@ import type { ReplyPayload } from "../../../src/auto-reply/types.js";
 import { removeAckReactionAfterReply } from "../../../src/channels/ack-reactions.js";
 import { logAckFailure, logTypingFailure } from "../../../src/channels/logging.js";
 import { createReplyPrefixOptions } from "../../../src/channels/reply-prefix.js";
+import { DEFAULT_TIMING } from "../../../src/channels/status-reactions.js";
 import { createTypingCallbacks } from "../../../src/channels/typing.js";
 import { resolveMarkdownTableMode } from "../../../src/config/markdown-tables.js";
 import {
@@ -136,6 +137,30 @@ function resolveTelegramReasoningLevel(params: {
     // Fall through to default.
   }
   return "off";
+}
+
+function finalizeTelegramStatusReaction(params: {
+  controller: NonNullable<TelegramMessageContext["statusReactionController"]>;
+  reactionApi: NonNullable<TelegramMessageContext["reactionApi"]>;
+  chatId: number;
+  messageId: number;
+  state: "done" | "error";
+  holdMs: number;
+}): void {
+  const { controller, reactionApi, chatId, messageId, state, holdMs } = params;
+  const setTerminal =
+    state === "done" ? controller.setDone.bind(controller) : controller.setError.bind(controller);
+
+  void (async () => {
+    await setTerminal();
+    if (holdMs > 0) {
+      await new Promise((resolve) => setTimeout(resolve, holdMs));
+    }
+    await reactionApi(chatId, messageId, []);
+  })().catch((err) => {
+    const phase = state === "done" ? "finalize" : "error finalize";
+    logVerbose(`telegram: status reaction ${phase} failed: ${String(err)}`);
+  });
 }
 
 export const dispatchTelegramMessage = async ({
@@ -824,11 +849,28 @@ export const dispatchTelegramMessage = async ({
   }
 
   const hasFinalResponse = queuedFinal || sentFallback;
+  const statusReactionTiming = cfg.messages?.statusReactions?.timing;
 
-  if (statusReactionController && !hasFinalResponse) {
-    void statusReactionController.setError().catch((err) => {
-      logVerbose(`telegram: status reaction error finalize failed: ${String(err)}`);
-    });
+  if (statusReactionController && reactionApi && typeof msg.message_id === "number") {
+    if (!hasFinalResponse) {
+      finalizeTelegramStatusReaction({
+        controller: statusReactionController,
+        reactionApi,
+        chatId,
+        messageId: msg.message_id,
+        state: "error",
+        holdMs: statusReactionTiming?.errorHoldMs ?? DEFAULT_TIMING.errorHoldMs,
+      });
+    } else {
+      finalizeTelegramStatusReaction({
+        controller: statusReactionController,
+        reactionApi,
+        chatId,
+        messageId: msg.message_id,
+        state: "done",
+        holdMs: statusReactionTiming?.doneHoldMs ?? DEFAULT_TIMING.doneHoldMs,
+      });
+    }
   }
 
   if (!hasFinalResponse) {
@@ -836,11 +878,7 @@ export const dispatchTelegramMessage = async ({
     return;
   }
 
-  if (statusReactionController) {
-    void statusReactionController.setDone().catch((err) => {
-      logVerbose(`telegram: status reaction finalize failed: ${String(err)}`);
-    });
-  } else {
+  if (!statusReactionController) {
     removeAckReactionAfterReply({
       removeAfterReply: removeAckAfterReply,
       ackReactionPromise,
