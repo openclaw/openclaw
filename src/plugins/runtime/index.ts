@@ -64,10 +64,13 @@ export function createPluginRuntime(_options: CreatePluginRuntimeOptions = {}): 
           session: _se,
           deps: _de,
           ...publicParams
-        } = params as Record<string, unknown>;
-        return deliverOutboundPayloads(
-          publicParams as Parameters<typeof deliverOutboundPayloads>[0],
-        );
+        } = params as typeof params & {
+          skipQueue?: unknown;
+          mirror?: unknown;
+          session?: unknown;
+          deps?: unknown;
+        };
+        return deliverOutboundPayloads(publicParams);
       },
     },
     system: createRuntimeSystem(),
