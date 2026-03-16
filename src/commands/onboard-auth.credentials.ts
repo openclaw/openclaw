@@ -75,7 +75,7 @@ function resolveApiKeySecretInput(
   return normalized;
 }
 
-function buildApiKeyCredential(
+export function buildApiKeyCredential(
   provider: string,
   input: SecretInput,
   metadata?: Record<string, string>,
@@ -198,7 +198,7 @@ export async function writeOAuthCredentials(
           agentDir: targetAgentDir,
         });
       } catch {
-        // Best-effort: sibling sync failure must not block primary onboarding.
+        // Best-effort: sibling sync failure must not block primary setup.
       }
     }
   }

@@ -94,6 +94,7 @@ export async function verifyGoogleChatRequest(params: {
   bearer?: string | null;
   audienceType?: GoogleChatAudienceType | null;
   audience?: string | null;
+  expectedAddOnPrincipal?: string | null;
 }): Promise<{ ok: boolean; reason?: string }> {
   const bearer = params.bearer?.trim();
   if (!bearer) {
@@ -112,10 +113,32 @@ export async function verifyGoogleChatRequest(params: {
         audience,
       });
       const payload = ticket.getPayload();
-      const email = payload?.email ?? "";
-      const ok =
-        payload?.email_verified && (email === CHAT_ISSUER || ADDON_ISSUER_PATTERN.test(email));
-      return ok ? { ok: true } : { ok: false, reason: `invalid issuer: ${email}` };
+      const email = String(payload?.email ?? "")
+        .trim()
+        .toLowerCase();
+      if (!payload?.email_verified) {
+        return { ok: false, reason: "email not verified" };
+      }
+      if (email === CHAT_ISSUER) {
+        return { ok: true };
+      }
+      if (!ADDON_ISSUER_PATTERN.test(email)) {
+        return { ok: false, reason: `invalid issuer: ${email}` };
+      }
+      const expectedAddOnPrincipal = params.expectedAddOnPrincipal?.trim().toLowerCase();
+      if (!expectedAddOnPrincipal) {
+        return { ok: false, reason: "missing add-on principal binding" };
+      }
+      const tokenPrincipal = String(payload?.sub ?? "")
+        .trim()
+        .toLowerCase();
+      if (!tokenPrincipal || tokenPrincipal !== expectedAddOnPrincipal) {
+        return {
+          ok: false,
+          reason: `unexpected add-on principal: ${tokenPrincipal || "<missing>"}`,
+        };
+      }
+      return { ok: true };
     } catch (err) {
       return { ok: false, reason: err instanceof Error ? err.message : "invalid token" };
     }

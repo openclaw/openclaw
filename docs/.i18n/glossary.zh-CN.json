@@ -48,6 +48,18 @@
     "target": "快速开始"
   },
   {
+    "source": "Setup Wizard Reference",
+    "target": "设置向导参考"
+  },
+  {
+    "source": "CLI Setup Reference",
+    "target": "CLI 设置参考"
+  },
+  {
+    "source": "Setup Wizard (CLI)",
+    "target": "设置向导（CLI）"
+  },
+  {
     "source": "Docs directory",
     "target": "文档目录"
   },
@@ -122,6 +134,22 @@
   {
     "source": "Network model",
     "target": "网络模型"
+  },
+  {
+    "source": "Doctor",
+    "target": "Doctor"
+  },
+  {
+    "source": "Polls",
+    "target": "投票"
+  },
+  {
+    "source": "Release Policy",
+    "target": "发布策略"
+  },
+  {
+    "source": "Release policy",
+    "target": "发布策略"
   },
   {
     "source": "for full details",

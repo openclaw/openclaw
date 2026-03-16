@@ -18,6 +18,17 @@ export type ChatEvent = {
   errorMessage?: string;
 };
 
+export type BtwEvent = {
+  kind: "btw";
+  runId?: string;
+  sessionKey?: string;
+  question: string;
+  text: string;
+  isError?: boolean;
+  seq?: number;
+  ts?: number;
+};
+
 export type AgentEvent = {
   runId: string;
   stream: string;
@@ -28,6 +39,7 @@ export type ResponseUsageMode = "on" | "off" | "tokens" | "full";
 
 export type SessionInfo = {
   thinkingLevel?: string;
+  fastMode?: boolean;
   verboseLevel?: string;
   reasoningLevel?: string;
   model?: string;

@@ -69,7 +69,6 @@ function sanitizeJsonValue(value: unknown): unknown {
   }
   return value;
 }
-
 function formatSkillName(skill: SkillStatusEntry): string {
   const emoji = normalizeSkillEmoji(skill.emoji);
   return `${emoji} ${theme.command(skill.name)}`;

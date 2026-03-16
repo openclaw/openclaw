@@ -289,7 +289,6 @@ async function storeOllamaCredential(agentDir?: string): Promise<void> {
 export async function promptAndConfigureOllama(params: {
   cfg: OpenClawConfig;
   prompter: WizardPrompter;
-  agentDir?: string;
 }): Promise<{ config: OpenClawConfig; defaultModelId: string }> {
   const { prompter } = params;
 
@@ -314,7 +313,7 @@ export async function promptAndConfigureOllama(params: {
         `Ollama could not be reached at ${baseUrl}.`,
         "Download it at https://ollama.com/download",
         "",
-        "Start Ollama and re-run onboarding.",
+        "Start Ollama and re-run setup.",
       ].join("\n"),
       "Ollama",
     );
@@ -394,8 +393,6 @@ export async function promptAndConfigureOllama(params: {
     ...suggestedModels,
     ...modelNames.filter((name) => !suggestedModels.includes(name)),
   ];
-
-  await storeOllamaCredential(params.agentDir);
 
   const defaultModelId = suggestedModels[0] ?? OLLAMA_DEFAULT_MODEL;
   const config = applyOllamaProviderConfig(
@@ -489,7 +486,7 @@ export async function configureOllamaNonInteractive(params: {
       runtime.error(
         [
           `No Ollama models are available at ${baseUrl}.`,
-          "Pull a model first, then re-run onboarding.",
+          "Pull a model first, then re-run setup.",
         ].join("\n"),
       );
       runtime.exit(1);

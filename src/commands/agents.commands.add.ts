@@ -266,6 +266,7 @@ export async function agentsAddCommand(
         prompter,
         store: authStore,
         includeSkip: true,
+        config: nextConfig,
       });
 
       const authResult = await applyAuthChoice({

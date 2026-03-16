@@ -198,4 +198,24 @@ describe("session binding service", () => {
       placements: [],
     });
   });
+
+  it("rejects duplicate adapter registration for the same channel account", () => {
+    registerSessionBindingAdapter({
+      channel: "discord",
+      accountId: "default",
+      bind: async (input) => createRecord(input),
+      listBySession: () => [],
+      resolveByConversation: () => null,
+    });
+
+    expect(() =>
+      registerSessionBindingAdapter({
+        channel: "Discord",
+        accountId: "DEFAULT",
+        bind: async (input) => createRecord(input),
+        listBySession: () => [],
+        resolveByConversation: () => null,
+      }),
+    ).toThrow("Session binding adapter already registered for discord:default");
+  });
 });

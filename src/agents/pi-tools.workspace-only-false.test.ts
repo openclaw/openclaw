@@ -7,10 +7,13 @@ vi.mock("@mariozechner/pi-ai", async (importOriginal) => {
   const original = await importOriginal<typeof import("@mariozechner/pi-ai")>();
   return {
     ...original,
-    getOAuthApiKey: () => undefined,
-    getOAuthProviders: () => [],
   };
 });
+
+vi.mock("@mariozechner/pi-ai/oauth", () => ({
+  getOAuthApiKey: () => undefined,
+  getOAuthProviders: () => [],
+}));
 
 import { createOpenClawCodingTools } from "./pi-tools.js";
 

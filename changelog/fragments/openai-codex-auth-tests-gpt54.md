@@ -1,0 +1,1 @@
+- tests: align OpenAI Codex auth login expectations with the `gpt-5.4` default model to prevent stale CI failures. (#44367) thanks @jrrcdev

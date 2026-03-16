@@ -1,13 +1,22 @@
 import { createDedupeCache } from "../../../infra/dedupe.js";
+import { resolveGlobalSingleton } from "../../../shared/global-singleton.js";
 import { applyQueueDropPolicy, shouldSkipQueueItem } from "../../../utils/queue-helpers.js";
 import { kickFollowupDrainIfIdle } from "./drain.js";
 import { getExistingFollowupQueue, getFollowupQueue } from "./state.js";
 import type { FollowupRun, QueueDedupeMode, QueueSettings } from "./types.js";
 
-const RECENT_QUEUE_MESSAGE_IDS = createDedupeCache({
-  ttlMs: 5 * 60 * 1000,
-  maxSize: 10_000,
-});
+/**
+ * Keep queued message-id dedupe shared across bundled chunks so redeliveries
+ * are rejected no matter which chunk receives the enqueue call.
+ */
+const RECENT_QUEUE_MESSAGE_IDS_KEY = Symbol.for("openclaw.recentQueueMessageIds");
+
+const RECENT_QUEUE_MESSAGE_IDS = resolveGlobalSingleton(RECENT_QUEUE_MESSAGE_IDS_KEY, () =>
+  createDedupeCache({
+    ttlMs: 5 * 60 * 1000,
+    maxSize: 10_000,
+  }),
+);
 
 function buildRecentMessageIdKey(run: FollowupRun, queueKey: string): string | undefined {
   const messageId = run.messageId?.trim();
