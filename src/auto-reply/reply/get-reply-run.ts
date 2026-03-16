@@ -265,8 +265,10 @@ export async function runPreparedReply(
       })
     : "";
   const groupSystemPrompt = sessionCtx.GroupSystemPrompt?.trim() ?? "";
+  const redactPIIOpts = cfg.privacy?.redactPII ? { redactPII: true } : undefined;
   const inboundMetaPrompt = buildInboundMetaSystemPrompt(
     isNewSession ? sessionCtx : { ...sessionCtx, ThreadStarterBody: undefined },
+    redactPIIOpts,
   );
   const extraSystemPromptParts = [
     inboundMetaPrompt,
@@ -301,6 +303,7 @@ export async function runPreparedReply(
             : {}),
         }
       : { ...sessionCtx, ThreadStarterBody: undefined },
+    redactPIIOpts,
   );
   const baseBodyForPrompt = isBareSessionReset
     ? baseBodyFinal
@@ -496,6 +499,9 @@ export async function runPreparedReply(
       groupId: resolveGroupSessionKey(sessionCtx)?.id ?? undefined,
       groupChannel: sessionCtx.GroupChannel?.trim() ?? sessionCtx.GroupSubject?.trim(),
       groupSpace: sessionCtx.GroupSpace?.trim() ?? undefined,
+      // Raw sender fields are intentional here: they are used for internal auth/routing
+      // and policy checks, not injected into the LLM prompt. PII redaction is applied
+      // separately in buildInboundUserContextPrefix above.
       senderId: sessionCtx.SenderId?.trim() || undefined,
       senderName: sessionCtx.SenderName?.trim() || undefined,
       senderUsername: sessionCtx.SenderUsername?.trim() || undefined,
