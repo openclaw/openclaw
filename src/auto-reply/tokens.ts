@@ -1,4 +1,5 @@
 import { escapeRegExp } from "../utils.js";
+import { stripInlineDirectiveTagsForDisplay } from "../utils/directive-tags.js";
 
 export const HEARTBEAT_TOKEN = "HEARTBEAT_OK";
 export const SILENT_REPLY_TOKEN = "NO_REPLY";
@@ -37,7 +38,19 @@ export function isSilentReplyText(
   }
   // Match only the exact silent token with optional surrounding whitespace.
   // This prevents substantive replies ending with NO_REPLY from being suppressed (#19537).
-  return getSilentExactRegex(token).test(text);
+  if (getSilentExactRegex(token).test(text)) {
+    return true;
+  }
+  // Reply/audio directive tags may prefix otherwise-silent text, e.g.
+  // [[reply_to_current]] NO_REPLY. Strip directives before the exact-match check
+  // so silent turns stay silent on chat surfaces that use reply tags.
+  if (text.includes("[[")) {
+    const stripped = stripInlineDirectiveTagsForDisplay(text).text;
+    if (stripped && getSilentExactRegex(token).test(stripped)) {
+      return true;
+    }
+  }
+  return false;
 }
 
 /**

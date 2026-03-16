@@ -11,6 +11,15 @@ describe("isSilentReplyText", () => {
     expect(isSilentReplyText("\nNO_REPLY\n")).toBe(true);
   });
 
+  it("returns true for reply-tagged silent token", () => {
+    expect(isSilentReplyText("[[reply_to_current]] NO_REPLY")).toBe(true);
+    expect(isSilentReplyText("[[ reply_to : 123 ]]\nNO_REPLY")).toBe(true);
+  });
+
+  it("returns false for reply-tagged substantive text containing token", () => {
+    expect(isSilentReplyText("[[reply_to_current]] NO_REPLY but here is more content")).toBe(false);
+  });
+
   it("returns false for undefined/empty", () => {
     expect(isSilentReplyText(undefined)).toBe(false);
     expect(isSilentReplyText("")).toBe(false);
