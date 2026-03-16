@@ -78,6 +78,50 @@ jobs:
 
           node scripts/ci-changed-scope.mjs --base "$BASE" --head HEAD
 
+  changed-extensions:
+    needs: [docs-scope, changed-scope]
+    if: needs.docs-scope.outputs.docs_only != 'true' && needs.changed-scope.outputs.run_node == 'true'
+    runs-on: blacksmith-16vcpu-ubuntu-2404
+    outputs:
+      has_changed_extensions: ${{ steps.changed.outputs.has_changed_extensions }}
+      changed_extensions_matrix: ${{ steps.changed.outputs.changed_extensions_matrix }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 1
+          fetch-tags: false
+          submodules: false
+
+      - name: Ensure changed-extensions base commit
+        uses: ./.github/actions/ensure-base-commit
+        with:
+          base-sha: ${{ github.event_name == 'push' && github.event.before || github.event.pull_request.base.sha }}
+          fetch-ref: ${{ github.event_name == 'push' && github.ref_name || github.event.pull_request.base.ref }}
+
+      - name: Setup Node environment
+        uses: ./.github/actions/setup-node-env
+        with:
+          install-bun: "false"
+          install-deps: "false"
+          use-sticky-disk: "false"
+
+      - name: Detect changed extensions
+        id: changed
+        env:
+          BASE_SHA: ${{ github.event_name == 'push' && github.event.before || github.event.pull_request.base.sha }}
+        run: |
+          node --input-type=module <<'EOF'
+          import { appendFileSync } from "node:fs";
+          import { listChangedExtensionIds } from "./scripts/test-extension.mjs";
+
+          const extensionIds = listChangedExtensionIds({ base: process.env.BASE_SHA, head: "HEAD" });
+          const matrix = JSON.stringify({ include: extensionIds.map((extension) => ({ extension })) });
+
+          appendFileSync(process.env.GITHUB_OUTPUT, `has_changed_extensions=${extensionIds.length > 0}\n`, "utf8");
+          appendFileSync(process.env.GITHUB_OUTPUT, `changed_extensions_matrix=${matrix}\n`, "utf8");
+          EOF
+
   # Build dist once for Node-relevant changes and share it with downstream jobs.
   build-artifacts:
     needs: [docs-scope, changed-scope]
@@ -204,6 +248,29 @@ jobs:
       - name: Run ${{ matrix.task }} (${{ matrix.runtime }})
         if: matrix.runtime != 'bun' || github.event_name != 'pull_request'
         run: ${{ matrix.command }}
+
+  extension-fast:
+    name: "extension-fast (${{ matrix.extension }})"
+    needs: [docs-scope, changed-scope, changed-extensions]
+    if: needs.docs-scope.outputs.docs_only != 'true' && needs.changed-scope.outputs.run_node == 'true' && needs.changed-extensions.outputs.has_changed_extensions == 'true'
+    runs-on: blacksmith-16vcpu-ubuntu-2404
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJson(needs.changed-extensions.outputs.changed_extensions_matrix) }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          submodules: false
+
+      - name: Setup Node environment
+        uses: ./.github/actions/setup-node-env
+        with:
+          install-bun: "false"
+          use-sticky-disk: "false"
+
+      - name: Run changed extension tests
+        run: pnpm test:extension ${{ matrix.extension }}
 
   # Types, lint, and format check.
   check:
