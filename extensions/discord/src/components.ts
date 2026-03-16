@@ -168,6 +168,7 @@ export type DiscordComponentEntry = {
   sessionKey?: string;
   agentId?: string;
   accountId?: string;
+  workspaceOverride?: string;
   reusable?: boolean;
   allowedUsers?: string[];
   messageId?: string;
@@ -199,6 +200,7 @@ export type DiscordModalEntry = {
   sessionKey?: string;
   agentId?: string;
   accountId?: string;
+  workspaceOverride?: string;
   reusable?: boolean;
   messageId?: string;
   createdAt?: number;

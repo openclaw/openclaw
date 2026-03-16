@@ -526,6 +526,7 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
       CommandAuthorized: commandAuthorized,
       OriginatingChannel: "msteams" as const,
       OriginatingTo: teamsTo,
+      WorkspaceOverride: route.workspaceOverride,
       ...mediaPayload,
     });
 

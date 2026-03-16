@@ -218,6 +218,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       CommandAuthorized: entry.commandAuthorized,
       OriginatingChannel: "signal" as const,
       OriginatingTo: signalTo,
+      WorkspaceOverride: route.workspaceOverride,
     });
 
     await recordInboundSession({

@@ -617,6 +617,7 @@ async function processMessage(
     }),
     OriginatingChannel: "zalouser",
     OriginatingTo: normalizedTo,
+    WorkspaceOverride: route.workspaceOverride,
   });
 
   await core.channel.session.recordInboundSession({

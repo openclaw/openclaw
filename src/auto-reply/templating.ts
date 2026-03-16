@@ -47,6 +47,8 @@ export type MsgContext = {
   SessionKey?: string;
   /** Provider account id (multi-account). */
   AccountId?: string;
+  /** Binding-level workspace override for project-specific context isolation. */
+  WorkspaceOverride?: string;
   ParentSessionKey?: string;
   MessageSid?: string;
   /** Provider-specific full message id when MessageSid is a shortened alias. */

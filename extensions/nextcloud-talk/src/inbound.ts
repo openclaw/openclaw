@@ -281,6 +281,7 @@ export async function handleNextcloudTalkInbound(params: {
     Timestamp: message.timestamp,
     OriginatingChannel: CHANNEL_ID,
     OriginatingTo: `nextcloud-talk:${roomToken}`,
+    WorkspaceOverride: route.workspaceOverride,
     CommandAuthorized: commandAuthorized,
   });
 
