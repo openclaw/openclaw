@@ -7,6 +7,7 @@ import {
 } from "../config/port-defaults.js";
 import { isLoopbackHost } from "../gateway/net.js";
 import type { SsrFPolicy } from "../infra/net/ssrf.js";
+import { resolveUserPath } from "../utils.js";
 import {
   DEFAULT_OPENCLAW_BROWSER_COLOR,
   DEFAULT_OPENCLAW_BROWSER_ENABLED,
@@ -329,7 +330,7 @@ export function resolveProfile(
       cdpUrl: "",
       cdpHost: "",
       cdpIsLoopback: true,
-      userDataDir: profile.userDataDir?.trim() || undefined,
+      userDataDir: resolveUserPath(profile.userDataDir?.trim() || "") || undefined,
       color: profile.color,
       driver,
       attachOnly: true,
