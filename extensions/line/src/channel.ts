@@ -20,7 +20,8 @@ import {
   type ResolvedLineAccount,
 } from "openclaw/plugin-sdk/line";
 import { getLineRuntime } from "./runtime.js";
-import { lineSetupAdapter, lineSetupWizard } from "./setup-surface.js";
+import { lineSetupAdapter } from "./setup-core.js";
+import { lineSetupWizard } from "./setup-surface.js";
 
 // LINE channel metadata
 const meta = {
