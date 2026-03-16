@@ -44,7 +44,7 @@ export type MockSock = {
       getPNForLID: AnyMockFn;
     };
   };
-  user: { id: string };
+  user: { id: string; lid?: string };
 };
 
 function createResolvedMock() {
@@ -66,7 +66,7 @@ function createMockSock(): MockSock {
         getPNForLID: vi.fn().mockResolvedValue(null),
       },
     },
-    user: { id: "123@s.whatsapp.net" },
+    user: { id: "123@s.whatsapp.net", lid: "123:1@lid" },
   };
 }
 

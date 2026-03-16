@@ -187,18 +187,20 @@ function registerAndResolveStatusHandler(params: {
   cfg: OpenClawConfig;
   allowFrom?: string[];
   groupAllowFrom?: string[];
+  telegramCfg?: RegisterTelegramNativeCommandsParams["telegramCfg"];
   resolveTelegramGroupConfig?: RegisterTelegramHandlerParams["resolveTelegramGroupConfig"];
 }): {
   handler: TelegramCommandHandler;
   sendMessage: ReturnType<typeof vi.fn>;
 } {
-  const { cfg, allowFrom, groupAllowFrom, resolveTelegramGroupConfig } = params;
+  const { cfg, allowFrom, groupAllowFrom, telegramCfg, resolveTelegramGroupConfig } = params;
   return registerAndResolveCommandHandlerBase({
     commandName: "status",
     cfg,
     allowFrom: allowFrom ?? ["*"],
     groupAllowFrom: groupAllowFrom ?? [],
     useAccessGroups: true,
+    telegramCfg,
     resolveTelegramGroupConfig,
   });
 }
@@ -209,6 +211,7 @@ function registerAndResolveCommandHandlerBase(params: {
   allowFrom: string[];
   groupAllowFrom: string[];
   useAccessGroups: boolean;
+  telegramCfg?: RegisterTelegramNativeCommandsParams["telegramCfg"];
   resolveTelegramGroupConfig?: RegisterTelegramHandlerParams["resolveTelegramGroupConfig"];
 }): {
   handler: TelegramCommandHandler;
@@ -220,6 +223,7 @@ function registerAndResolveCommandHandlerBase(params: {
     allowFrom,
     groupAllowFrom,
     useAccessGroups,
+    telegramCfg,
     resolveTelegramGroupConfig,
   } = params;
   const commandHandlers = new Map<string, TelegramCommandHandler>();
@@ -239,6 +243,7 @@ function registerAndResolveCommandHandlerBase(params: {
       allowFrom,
       groupAllowFrom,
       useAccessGroups,
+      telegramCfg,
       resolveTelegramGroupConfig,
     }),
   });
@@ -254,6 +259,7 @@ function registerAndResolveCommandHandler(params: {
   allowFrom?: string[];
   groupAllowFrom?: string[];
   useAccessGroups?: boolean;
+  telegramCfg?: RegisterTelegramNativeCommandsParams["telegramCfg"];
   resolveTelegramGroupConfig?: RegisterTelegramHandlerParams["resolveTelegramGroupConfig"];
 }): {
   handler: TelegramCommandHandler;
@@ -265,6 +271,7 @@ function registerAndResolveCommandHandler(params: {
     allowFrom,
     groupAllowFrom,
     useAccessGroups,
+    telegramCfg,
     resolveTelegramGroupConfig,
   } = params;
   return registerAndResolveCommandHandlerBase({
@@ -273,6 +280,7 @@ function registerAndResolveCommandHandler(params: {
     allowFrom: allowFrom ?? [],
     groupAllowFrom: groupAllowFrom ?? [],
     useAccessGroups: useAccessGroups ?? true,
+    telegramCfg,
     resolveTelegramGroupConfig,
   });
 }
@@ -441,6 +449,31 @@ describe("registerTelegramNativeCommands — session metadata", () => {
     await handler(buildStatusCommandContext());
 
     expect(deliveryMocks.deliverReplies).not.toHaveBeenCalled();
+  });
+
+  it("sends native command error replies silently when silentErrorReplies is enabled", async () => {
+    replyMocks.dispatchReplyWithBufferedBlockDispatcher.mockImplementationOnce(
+      async ({ dispatcherOptions }: DispatchReplyWithBufferedBlockDispatcherParams) => {
+        await dispatcherOptions.deliver({ text: "oops", isError: true }, { kind: "final" });
+        return dispatchReplyResult;
+      },
+    );
+
+    const { handler } = registerAndResolveStatusHandler({
+      cfg: {},
+      telegramCfg: { silentErrorReplies: true },
+    });
+    await handler(buildStatusCommandContext());
+
+    const deliveredCall = deliveryMocks.deliverReplies.mock.calls[0]?.[0] as
+      | DeliverRepliesParams
+      | undefined;
+    expect(deliveredCall).toEqual(
+      expect.objectContaining({
+        silent: true,
+        replies: [expect.objectContaining({ isError: true })],
+      }),
+    );
   });
 
   it("routes Telegram native commands through configured ACP topic bindings", async () => {

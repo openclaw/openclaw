@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import type { loadConfig } from "../config/config.js";
 import { loadOpenClawPlugins } from "../plugins/loader.js";
 import { getPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
+import { setGatewaySubagentRuntime } from "../plugins/runtime/index.js";
 import type { PluginRuntime } from "../plugins/runtime/types.js";
 import { GATEWAY_CLIENT_IDS, GATEWAY_CLIENT_MODES } from "./protocol/client-info.js";
 import type { ErrorShape } from "./protocol/index.js";
@@ -172,7 +173,16 @@ export function loadGatewayPlugins(params: {
   };
   coreGatewayHandlers: Record<string, GatewayRequestHandler>;
   baseMethods: string[];
+  preferSetupRuntimeForChannelPlugins?: boolean;
+  logDiagnostics?: boolean;
 }) {
+  // Set the process-global gateway subagent runtime BEFORE loading plugins.
+  // Gateway-owned registries may already exist from schema loads, so the
+  // gateway path opts those runtimes into late binding rather than changing
+  // the default subagent behavior for every plugin runtime in the process.
+  const gatewaySubagent = createGatewaySubagentRuntime();
+  setGatewaySubagentRuntime(gatewaySubagent);
+
   const pluginRegistry = loadOpenClawPlugins({
     config: params.cfg,
     workspaceDir: params.workspaceDir,
@@ -184,12 +194,13 @@ export function loadGatewayPlugins(params: {
     },
     coreGatewayHandlers: params.coreGatewayHandlers,
     runtimeOptions: {
-      subagent: createGatewaySubagentRuntime(),
+      allowGatewaySubagentBinding: true,
     },
+    preferSetupRuntimeForChannelPlugins: params.preferSetupRuntimeForChannelPlugins,
   });
   const pluginMethods = Object.keys(pluginRegistry.gatewayHandlers);
   const gatewayMethods = Array.from(new Set([...params.baseMethods, ...pluginMethods]));
-  if (pluginRegistry.diagnostics.length > 0) {
+  if ((params.logDiagnostics ?? true) && pluginRegistry.diagnostics.length > 0) {
     for (const diag of pluginRegistry.diagnostics) {
       const details = [
         diag.pluginId ? `plugin=${diag.pluginId}` : null,
