@@ -11,6 +11,7 @@ const log = createSubsystemLogger("plugins");
 
 const BUNDLED_WEB_SEARCH_ALLOWLIST_COMPAT_PLUGIN_IDS = [
   "brave",
+  "firecrawl",
   "google",
   "moonshot",
   "perplexity",

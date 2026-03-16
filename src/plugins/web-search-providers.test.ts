@@ -96,6 +96,7 @@ describe("resolvePluginWebSearchProviders", () => {
             entries: expect.objectContaining({
               openrouter: { enabled: true },
               brave: { enabled: true },
+              firecrawl: { enabled: true },
               google: { enabled: true },
               moonshot: { enabled: true },
               perplexity: { enabled: true },

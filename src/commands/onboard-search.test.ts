@@ -116,6 +116,19 @@ describe("setupSearch", () => {
     expect(result.tools?.web?.search?.gemini?.apiKey).toBe("AIza-test");
   });
 
+  it("sets provider and key for firecrawl and enables the plugin", async () => {
+    const cfg: OpenClawConfig = {};
+    const { prompter } = createPrompter({
+      selectValue: "firecrawl",
+      textValue: "fc-test-key",
+    });
+    const result = await setupSearch(cfg, runtime, prompter);
+    expect(result.tools?.web?.search?.provider).toBe("firecrawl");
+    expect(result.tools?.web?.search?.enabled).toBe(true);
+    expect(result.tools?.web?.search?.firecrawl?.apiKey).toBe("fc-test-key");
+    expect(result.plugins?.entries?.firecrawl?.enabled).toBe(true);
+  });
+
   it("sets provider and key for grok", async () => {
     const cfg: OpenClawConfig = {};
     const { prompter } = createPrompter({
@@ -331,9 +344,9 @@ describe("setupSearch", () => {
     expect(result.tools?.web?.search?.apiKey).toBe("BSA-plain");
   });
 
-  it("exports all 5 providers in SEARCH_PROVIDER_OPTIONS", () => {
-    expect(SEARCH_PROVIDER_OPTIONS).toHaveLength(5);
+  it("exports all 6 providers in SEARCH_PROVIDER_OPTIONS", () => {
+    expect(SEARCH_PROVIDER_OPTIONS).toHaveLength(6);
     const values = SEARCH_PROVIDER_OPTIONS.map((e) => e.value);
-    expect(values).toEqual(["brave", "gemini", "grok", "kimi", "perplexity"]);
+    expect(values).toEqual(["brave", "gemini", "grok", "kimi", "perplexity", "firecrawl"]);
   });
 });

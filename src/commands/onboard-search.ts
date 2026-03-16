@@ -6,6 +6,7 @@ import {
   hasConfiguredSecretInput,
   normalizeSecretInputString,
 } from "../config/types.secrets.js";
+import { enablePluginInConfig } from "../plugins/enable.js";
 import { resolvePluginWebSearchProviders } from "../plugins/web-search-providers.js";
 import type { RuntimeEnv } from "../runtime.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
@@ -15,7 +16,7 @@ export type SearchProvider = NonNullable<
   NonNullable<NonNullable<NonNullable<OpenClawConfig["tools"]>["web"]>["search"]>["provider"]
 >;
 
-const SEARCH_PROVIDER_IDS = ["brave", "gemini", "grok", "kimi", "perplexity"] as const;
+const SEARCH_PROVIDER_IDS = ["brave", "firecrawl", "gemini", "grok", "kimi", "perplexity"] as const;
 
 function isSearchProvider(value: string): value is SearchProvider {
   return (SEARCH_PROVIDER_IDS as readonly string[]).includes(value);
@@ -114,17 +115,21 @@ export function applySearchKey(
   if (entry) {
     entry.setCredentialValue(search as Record<string, unknown>, key);
   }
-  return {
+  const next = {
     ...config,
     tools: {
       ...config.tools,
       web: { ...config.tools?.web, search },
     },
   };
+  if (provider !== "firecrawl") {
+    return next;
+  }
+  return enablePluginInConfig(next, "firecrawl").config;
 }
 
 function applyProviderOnly(config: OpenClawConfig, provider: SearchProvider): OpenClawConfig {
-  return {
+  const next = {
     ...config,
     tools: {
       ...config.tools,
@@ -138,6 +143,10 @@ function applyProviderOnly(config: OpenClawConfig, provider: SearchProvider): Op
       },
     },
   };
+  if (provider !== "firecrawl") {
+    return next;
+  }
+  return enablePluginInConfig(next, "firecrawl").config;
 }
 
 function preserveDisabledState(original: OpenClawConfig, result: OpenClawConfig): OpenClawConfig {
