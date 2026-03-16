@@ -2,6 +2,8 @@ import { describe, expect, it, vi } from "vitest";
 import {
   createStubSessionHarness,
   emitAssistantTextDelta,
+  emitMessageStartAndEndForAssistantText,
+  extractAgentEventPayloads,
 } from "./pi-embedded-subscribe.e2e-harness.js";
 import { subscribeEmbeddedPiSession } from "./pi-embedded-subscribe.js";
 
@@ -58,5 +60,26 @@ describe("subscribeEmbeddedPiSession thinking tag code span awareness", () => {
     expect(lastCall[0].text).not.toContain("internal thought");
     expect(lastCall[0].text).toContain("Hello");
     expect(lastCall[0].text).toContain("world");
+  });
+
+  it("strips thinking in message_end fallback path so reasoning does not leak", () => {
+    const { session, emit } = createStubSessionHarness();
+    const onAgentEvent = vi.fn();
+
+    subscribeEmbeddedPiSession({
+      session,
+      runId: "run",
+      onAgentEvent,
+    });
+    // No text_delta: only message_start + message_end, so we hit the fallback path.
+    emitMessageStartAndEndForAssistantText({
+      emit,
+      text: "<thinking>internal reasoning</thinking>Hello world",
+    });
+
+    const payloads = extractAgentEventPayloads(onAgentEvent.mock.calls);
+    expect(payloads).toHaveLength(1);
+    expect(payloads[0]?.text).toBe("Hello world");
+    expect(payloads[0]?.text).not.toContain("internal reasoning");
   });
 });
