@@ -302,8 +302,8 @@ export function createAcpxPluginConfigSchema(): OpenClawPluginConfigSchema {
                       type: "object",
                       properties: {
                         source: { type: "string", enum: ["env", "file", "exec"] },
-                        provider: { type: "string" },
-                        id: { type: "string" },
+                        provider: { type: "string", minLength: 1 },
+                        id: { type: "string", minLength: 1 },
                       },
                       required: ["source", "provider", "id"],
                       additionalProperties: false,

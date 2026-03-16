@@ -92,6 +92,12 @@ function collectMcpServerEnvAssignments(params: {
     }
 
     for (const [envKey, envValue] of Object.entries(env)) {
+      // Only collect explicit SecretRef objects. Plain string env values
+      // (including template-style strings like `${HOME}`) must remain
+      // literal so existing MCP configs are not unexpectedly rewritten.
+      if (typeof envValue === "string") {
+        continue;
+      }
       collectSecretInputAssignment({
         value: envValue,
         path: `plugins.entries.${params.pluginId}.config.mcpServers.${serverName}.env.${envKey}`,
