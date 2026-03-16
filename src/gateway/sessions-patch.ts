@@ -11,6 +11,7 @@ import {
   formatThinkingLevels,
   formatXHighModelHint,
   normalizeElevatedLevel,
+  normalizeFastMode,
   normalizeReasoningLevel,
   normalizeThinkLevel,
   normalizeUsageDisplay,
@@ -128,6 +129,27 @@ export async function applySessionsPatchToStore(params: {
     }
   }
 
+  if ("spawnedWorkspaceDir" in patch) {
+    const raw = patch.spawnedWorkspaceDir;
+    if (raw === null) {
+      if (existing?.spawnedWorkspaceDir) {
+        return invalid("spawnedWorkspaceDir cannot be cleared once set");
+      }
+    } else if (raw !== undefined) {
+      if (!supportsSpawnLineage(storeKey)) {
+        return invalid("spawnedWorkspaceDir is only supported for subagent:* or acp:* sessions");
+      }
+      const trimmed = String(raw).trim();
+      if (!trimmed) {
+        return invalid("invalid spawnedWorkspaceDir: empty");
+      }
+      if (existing?.spawnedWorkspaceDir && existing.spawnedWorkspaceDir !== trimmed) {
+        return invalid("spawnedWorkspaceDir cannot be changed once set");
+      }
+      next.spawnedWorkspaceDir = trimmed;
+    }
+  }
+
   if ("spawnDepth" in patch) {
     const raw = patch.spawnDepth;
     if (raw === null) {
@@ -228,6 +250,19 @@ export async function applySessionsPatchToStore(params: {
         );
       }
       next.thinkingLevel = normalized;
+    }
+  }
+
+  if ("fastMode" in patch) {
+    const raw = patch.fastMode;
+    if (raw === null) {
+      delete next.fastMode;
+    } else if (raw !== undefined) {
+      const normalized = normalizeFastMode(raw);
+      if (normalized === undefined) {
+        return invalid("invalid fastMode (use true or false)");
+      }
+      next.fastMode = normalized;
     }
   }
 

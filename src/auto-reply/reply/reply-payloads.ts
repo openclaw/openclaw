@@ -1,14 +1,28 @@
 import { isMessagingToolDuplicate } from "../../agents/pi-embedded-helpers.js";
 import type { MessagingToolSend } from "../../agents/pi-embedded-runner.js";
 import { normalizeChannelId } from "../../channels/plugins/index.js";
+import { parseExplicitTargetForChannel } from "../../channels/plugins/target-parsing.js";
 import type { ReplyToMode } from "../../config/types.js";
 import { normalizeTargetForProvider } from "../../infra/outbound/target-normalization.js";
+import { hasReplyChannelData, hasReplyContent } from "../../interactive/payload.js";
 import { normalizeOptionalAccountId } from "../../routing/account-id.js";
-import { parseTelegramTarget } from "../../telegram/targets.js";
 import type { OriginatingChannelType } from "../templating.js";
 import type { ReplyPayload } from "../types.js";
 import { extractReplyToTag } from "./reply-tags.js";
 import { createReplyToModeFilterForChannel } from "./reply-threading.js";
+
+export function formatBtwTextForExternalDelivery(payload: ReplyPayload): string | undefined {
+  const text = payload.text?.trim();
+  if (!text) {
+    return payload.text;
+  }
+  const question = payload.btw?.question?.trim();
+  if (!question) {
+    return payload.text;
+  }
+  const formatted = `BTW\nQuestion: ${question}\n\n${text}`;
+  return text === formatted || text.startsWith("BTW\nQuestion:") ? text : formatted;
+}
 
 function resolveReplyThreadingForPayload(params: {
   payload: ReplyPayload;
@@ -61,13 +75,14 @@ export function applyReplyTagsToPayload(
 }
 
 export function isRenderablePayload(payload: ReplyPayload): boolean {
-  return Boolean(
-    payload.text ||
-    payload.mediaUrl ||
-    (payload.mediaUrls && payload.mediaUrls.length > 0) ||
-    payload.audioAsVoice ||
-    payload.channelData,
-  );
+  return hasReplyContent({
+    text: payload.text,
+    mediaUrl: payload.mediaUrl,
+    mediaUrls: payload.mediaUrls,
+    interactive: payload.interactive,
+    hasChannelData: hasReplyChannelData(payload.channelData),
+    extraContent: payload.audioAsVoice,
+  });
 }
 
 export function shouldSuppressReasoningPayload(payload: ReplyPayload): boolean {
@@ -195,15 +210,16 @@ function targetsMatchForSuppression(params: {
     return params.targetKey === params.originTarget;
   }
 
-  const origin = parseTelegramTarget(params.originTarget);
-  const target = parseTelegramTarget(params.targetKey);
+  const origin = parseExplicitTargetForChannel("telegram", params.originTarget);
+  const target = parseExplicitTargetForChannel("telegram", params.targetKey);
+  if (!origin || !target) {
+    return params.targetKey === params.originTarget;
+  }
   const explicitTargetThreadId = normalizeThreadIdForComparison(params.targetThreadId);
   const targetThreadId =
-    explicitTargetThreadId ??
-    (target.messageThreadId != null ? String(target.messageThreadId) : undefined);
-  const originThreadId =
-    origin.messageThreadId != null ? String(origin.messageThreadId) : undefined;
-  if (origin.chatId.trim().toLowerCase() !== target.chatId.trim().toLowerCase()) {
+    explicitTargetThreadId ?? (target.threadId != null ? String(target.threadId) : undefined);
+  const originThreadId = origin.threadId != null ? String(origin.threadId) : undefined;
+  if (origin.to.trim().toLowerCase() !== target.to.trim().toLowerCase()) {
     return false;
   }
   if (originThreadId && targetThreadId != null) {

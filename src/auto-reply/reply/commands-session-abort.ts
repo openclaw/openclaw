@@ -86,6 +86,23 @@ async function applyAbortTarget(params: {
   }
 }
 
+function buildAbortTargetApplyParams(
+  params: Parameters<CommandHandler>[0],
+  abortTarget: AbortTarget,
+) {
+  return {
+    abortTarget,
+    sessionStore: params.sessionStore,
+    storePath: params.storePath,
+    abortKey: params.command.abortKey,
+    abortCutoff: resolveAbortCutoffForTarget({
+      ctx: params.ctx,
+      commandSessionKey: params.sessionKey,
+      targetSessionKey: abortTarget.key,
+    }),
+  };
+}
+
 export const handleStopCommand: CommandHandler = async (params, allowTextCommands) => {
   if (!allowTextCommands) {
     return null;
@@ -109,17 +126,7 @@ export const handleStopCommand: CommandHandler = async (params, allowTextCommand
       `stop: cleared followups=${cleared.followupCleared} lane=${cleared.laneCleared} keys=${cleared.keys.join(",")}`,
     );
   }
-  await applyAbortTarget({
-    abortTarget,
-    sessionStore: params.sessionStore,
-    storePath: params.storePath,
-    abortKey: params.command.abortKey,
-    abortCutoff: resolveAbortCutoffForTarget({
-      ctx: params.ctx,
-      commandSessionKey: params.sessionKey,
-      targetSessionKey: abortTarget.key,
-    }),
-  });
+  await applyAbortTarget(buildAbortTargetApplyParams(params, abortTarget));
 
   // Trigger internal hook for stop command
   const hookEvent = createInternalHookEvent(
@@ -160,16 +167,6 @@ export const handleAbortTrigger: CommandHandler = async (params, allowTextComman
     sessionEntry: params.sessionEntry,
     sessionStore: params.sessionStore,
   });
-  await applyAbortTarget({
-    abortTarget,
-    sessionStore: params.sessionStore,
-    storePath: params.storePath,
-    abortKey: params.command.abortKey,
-    abortCutoff: resolveAbortCutoffForTarget({
-      ctx: params.ctx,
-      commandSessionKey: params.sessionKey,
-      targetSessionKey: abortTarget.key,
-    }),
-  });
+  await applyAbortTarget(buildAbortTargetApplyParams(params, abortTarget));
   return { shouldContinue: false, reply: { text: "⚙️ Agent was aborted." } };
 };

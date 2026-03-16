@@ -1,5 +1,4 @@
-import type { OAuthCredentials } from "@mariozechner/pi-ai";
-import { loginOpenAICodex } from "@mariozechner/pi-ai/oauth";
+import { loginOpenAICodex, type OAuthCredentials } from "@mariozechner/pi-ai/oauth";
 import type { RuntimeEnv } from "../runtime.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 import { createVpsAwareOAuthHandlers } from "./oauth-flow.js";
@@ -14,6 +13,7 @@ export async function loginOpenAICodexOAuth(params: {
   isRemote: boolean;
   openUrl: (url: string) => Promise<void>;
   localBrowserMessage?: string;
+  // eslint-disable-next-line @typescript-eslint/no-redundant-type-constituents
 }): Promise<OAuthCredentials | null> {
   const { prompter, runtime, isRemote, openUrl, localBrowserMessage } = params;
   const preflight = await runOpenAIOAuthTlsPreflight();

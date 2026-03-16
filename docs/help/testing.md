@@ -53,15 +53,15 @@ Think of the suites as “increasing realism” (and increasing flakiness/cost):
   - No real keys required
   - Should be fast and stable
 - Pool note:
-  - OpenClaw uses Vitest `vmForks` on Node 22/23 for faster unit shards.
-  - On Node 24+, OpenClaw automatically falls back to regular `forks` to avoid Node VM linking errors (`ERR_VM_MODULE_LINK_FAILURE` / `module is already linked`).
+  - OpenClaw uses Vitest `vmForks` on Node 22, 23, and 24 for faster unit shards.
+  - On Node 25+, OpenClaw automatically falls back to regular `forks` until the repo is re-validated there.
   - Override manually with `OPENCLAW_TEST_VM_FORKS=0` (force `forks`) or `OPENCLAW_TEST_VM_FORKS=1` (force `vmForks`).
 
 ### E2E (gateway smoke)
 
 - Command: `pnpm test:e2e`
 - Config: `vitest.e2e.config.ts`
-- Files: `src/**/*.e2e.test.ts`
+- Files: `src/**/*.e2e.test.ts`, `test/**/*.e2e.test.ts`
 - Runtime defaults:
   - Uses Vitest `vmForks` for faster file startup.
   - Uses adaptive workers (CI: 2-4, local: 4-8).
@@ -76,6 +76,23 @@ Think of the suites as “increasing realism” (and increasing flakiness/cost):
   - Runs in CI (when enabled in the pipeline)
   - No real keys required
   - More moving parts than unit tests (can be slower)
+
+### E2E: OpenShell backend smoke
+
+- Command: `pnpm test:e2e:openshell`
+- File: `test/openshell-sandbox.e2e.test.ts`
+- Scope:
+  - Starts an isolated OpenShell gateway on the host via Docker
+  - Creates a sandbox from a temporary local Dockerfile
+  - Exercises OpenClaw's OpenShell backend over real `sandbox ssh-config` + SSH exec
+  - Verifies remote-canonical filesystem behavior through the sandbox fs bridge
+- Expectations:
+  - Opt-in only; not part of the default `pnpm test:e2e` run
+  - Requires a local `openshell` CLI plus a working Docker daemon
+  - Uses isolated `HOME` / `XDG_CONFIG_HOME`, then destroys the test gateway and sandbox
+- Useful overrides:
+  - `OPENCLAW_E2E_OPENSHELL=1` to enable the test when running the broader e2e suite manually
+  - `OPENCLAW_E2E_OPENSHELL_COMMAND=/path/to/openshell` to point at a non-default CLI binary or wrapper script
 
 ### Live (real providers + real models)
 
@@ -311,11 +328,11 @@ Include at least one image-capable model in `OPENCLAW_LIVE_GATEWAY_MODELS` (Clau
 If you have keys enabled, we also support testing via:
 
 - OpenRouter: `openrouter/...` (hundreds of models; use `openclaw models scan` to find tool+image capable candidates)
-- OpenCode Zen: `opencode/...` (auth via `OPENCODE_API_KEY` / `OPENCODE_ZEN_API_KEY`)
+- OpenCode: `opencode/...` for Zen and `opencode-go/...` for Go (auth via `OPENCODE_API_KEY` / `OPENCODE_ZEN_API_KEY`)
 
 More providers you can include in the live matrix (if you have creds/config):
 
-- Built-in: `openai`, `openai-codex`, `anthropic`, `google`, `google-vertex`, `google-antigravity`, `google-gemini-cli`, `zai`, `openrouter`, `opencode`, `xai`, `groq`, `cerebras`, `mistral`, `github-copilot`
+- Built-in: `openai`, `openai-codex`, `anthropic`, `google`, `google-vertex`, `google-antigravity`, `google-gemini-cli`, `zai`, `openrouter`, `opencode`, `opencode-go`, `xai`, `groq`, `cerebras`, `mistral`, `github-copilot`
 - Via `models.providers` (custom endpoints): `minimax` (cloud/API), plus any OpenAI/Anthropic-compatible proxy (LM Studio, vLLM, LiteLLM, etc.)
 
 Tip: don’t try to hardcode “all models” in docs. The authoritative list is whatever `discoverModels(...)` returns on your machine + whatever keys are available.
@@ -345,7 +362,7 @@ If you want to rely on env keys (e.g. exported in your `~/.profile`), run local 
 
 ## Docker runners (optional “works in Linux” checks)
 
-These run `pnpm test:live` inside the repo Docker image, mounting your local config dir and workspace (and sourcing `~/.profile` if mounted):
+These run `pnpm test:live` inside the repo Docker image, mounting your local config dir and workspace (and sourcing `~/.profile` if mounted). They also bind-mount CLI auth homes like `~/.codex`, `~/.claude`, `~/.qwen`, and `~/.minimax` when present so external-CLI OAuth stays available in-container:
 
 - Direct models: `pnpm test:docker:live-models` (script: `scripts/test-live-models-docker.sh`)
 - Gateway + dev agent: `pnpm test:docker:live-gateway` (script: `scripts/test-live-gateway-models-docker.sh`)
@@ -367,6 +384,7 @@ Useful env vars:
 - `OPENCLAW_CONFIG_DIR=...` (default: `~/.openclaw`) mounted to `/home/node/.openclaw`
 - `OPENCLAW_WORKSPACE_DIR=...` (default: `~/.openclaw/workspace`) mounted to `/home/node/.openclaw/workspace`
 - `OPENCLAW_PROFILE_FILE=...` (default: `~/.profile`) mounted to `/home/node/.profile` and sourced before running tests
+- External CLI auth dirs under `$HOME` (`.codex`, `.claude`, `.qwen`, `.minimax`) are mounted read-only to the matching `/home/node/...` paths when present
 - `OPENCLAW_LIVE_GATEWAY_MODELS=...` / `OPENCLAW_LIVE_MODELS=...` to narrow the run
 - `OPENCLAW_LIVE_REQUIRE_PROFILE_KEYS=1` to ensure creds come from the profile store (not env)
 

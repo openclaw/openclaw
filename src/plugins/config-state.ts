@@ -24,16 +24,59 @@ export type NormalizedPluginsConfig = {
 };
 
 export const BUNDLED_ENABLED_BY_DEFAULT = new Set<string>([
+  "amazon-bedrock",
+  "anthropic",
+  "byteplus",
+  "cloudflare-ai-gateway",
   "device-pair",
+  "github-copilot",
+  "google",
+  "huggingface",
+  "kilocode",
+  "kimi-coding",
+  "minimax",
+  "mistral",
+  "modelstudio",
+  "moonshot",
+  "nvidia",
+  "ollama",
+  "openai",
+  "opencode",
+  "opencode-go",
+  "openrouter",
   "phone-control",
+  "qianfan",
+  "qwen-portal-auth",
+  "sglang",
+  "synthetic",
   "talk-voice",
+  "together",
+  "venice",
+  "vercel-ai-gateway",
+  "vllm",
+  "volcengine",
+  "xai",
+  "xiaomi",
+  "zai",
 ]);
+
+const PLUGIN_ID_ALIASES: Readonly<Record<string, string>> = {
+  "openai-codex": "openai",
+  "minimax-portal-auth": "minimax",
+};
+
+function normalizePluginId(id: string): string {
+  const trimmed = id.trim();
+  return PLUGIN_ID_ALIASES[trimmed] ?? trimmed;
+}
 
 const normalizeList = (value: unknown): string[] => {
   if (!Array.isArray(value)) {
     return [];
   }
-  return value.map((entry) => (typeof entry === "string" ? entry.trim() : "")).filter(Boolean);
+  return value
+    .map((entry) => (typeof entry === "string" ? normalizePluginId(entry) : ""))
+    .filter(Boolean);
 };
 
 const normalizeSlotValue = (value: unknown): string | null | undefined => {
@@ -56,11 +99,12 @@ const normalizePluginEntries = (entries: unknown): NormalizedPluginsConfig["entr
   }
   const normalized: NormalizedPluginsConfig["entries"] = {};
   for (const [key, value] of Object.entries(entries)) {
-    if (!key.trim()) {
+    const normalizedKey = normalizePluginId(key);
+    if (!normalizedKey) {
       continue;
     }
     if (!value || typeof value !== "object" || Array.isArray(value)) {
-      normalized[key] = {};
+      normalized[normalizedKey] = {};
       continue;
     }
     const entry = value as Record<string, unknown>;
@@ -78,10 +122,12 @@ const normalizePluginEntries = (entries: unknown): NormalizedPluginsConfig["entr
             allowPromptInjection: hooks.allowPromptInjection,
           }
         : undefined;
-    normalized[key] = {
-      enabled: typeof entry.enabled === "boolean" ? entry.enabled : undefined,
-      hooks: normalizedHooks,
-      config: "config" in entry ? entry.config : undefined,
+    normalized[normalizedKey] = {
+      ...normalized[normalizedKey],
+      enabled:
+        typeof entry.enabled === "boolean" ? entry.enabled : normalized[normalizedKey]?.enabled,
+      hooks: normalizedHooks ?? normalized[normalizedKey]?.hooks,
+      config: "config" in entry ? entry.config : normalized[normalizedKey]?.config,
     };
   }
   return normalized;
@@ -201,10 +247,14 @@ export function resolveEnableState(
   if (entry?.enabled === false) {
     return { enabled: false, reason: "disabled in config" };
   }
+  const explicitlyAllowed = config.allow.includes(id);
+  if (origin === "workspace" && !explicitlyAllowed && entry?.enabled !== true) {
+    return { enabled: false, reason: "workspace plugin (disabled by default)" };
+  }
   if (config.slots.memory === id) {
     return { enabled: true };
   }
-  if (config.allow.length > 0 && !config.allow.includes(id)) {
+  if (config.allow.length > 0 && !explicitlyAllowed) {
     return { enabled: false, reason: "not in allowlist" };
   }
   if (entry?.enabled === true) {

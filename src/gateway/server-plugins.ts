@@ -85,7 +85,7 @@ async function dispatchGatewayMethod<T>(
       method,
       params,
     },
-    client: createSyntheticOperatorClient(),
+    client: scope?.client ?? createSyntheticOperatorClient(),
     isWebchatConnect,
     respond: (ok, payload, error) => {
       if (!result) {
@@ -172,6 +172,8 @@ export function loadGatewayPlugins(params: {
   };
   coreGatewayHandlers: Record<string, GatewayRequestHandler>;
   baseMethods: string[];
+  preferSetupRuntimeForChannelPlugins?: boolean;
+  logDiagnostics?: boolean;
 }) {
   const pluginRegistry = loadOpenClawPlugins({
     config: params.cfg,
@@ -186,10 +188,11 @@ export function loadGatewayPlugins(params: {
     runtimeOptions: {
       subagent: createGatewaySubagentRuntime(),
     },
+    preferSetupRuntimeForChannelPlugins: params.preferSetupRuntimeForChannelPlugins,
   });
   const pluginMethods = Object.keys(pluginRegistry.gatewayHandlers);
   const gatewayMethods = Array.from(new Set([...params.baseMethods, ...pluginMethods]));
-  if (pluginRegistry.diagnostics.length > 0) {
+  if ((params.logDiagnostics ?? true) && pluginRegistry.diagnostics.length > 0) {
     for (const diag of pluginRegistry.diagnostics) {
       const details = [
         diag.pluginId ? `plugin=${diag.pluginId}` : null,

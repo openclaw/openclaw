@@ -1,5 +1,6 @@
 import ipaddr from "ipaddr.js";
 
+// eslint-disable-next-line @typescript-eslint/no-redundant-type-constituents
 export type ParsedIpAddress = ipaddr.IPv4 | ipaddr.IPv6;
 type Ipv4Range = ReturnType<ipaddr.IPv4["range"]>;
 type Ipv6Range = ReturnType<ipaddr.IPv6["range"]>;
@@ -88,6 +89,7 @@ function isNumericIpv4LiteralPart(value: string): boolean {
   return /^[0-9]+$/.test(value) || /^0x[0-9a-f]+$/i.test(value);
 }
 
+// eslint-disable-next-line @typescript-eslint/no-redundant-type-constituents
 function parseIpv6WithEmbeddedIpv4(raw: string): ipaddr.IPv6 | undefined {
   if (!raw.includes(":") || !raw.includes(".")) {
     return undefined;
@@ -128,12 +130,17 @@ function normalizeIpv4MappedAddress(address: ParsedIpAddress): ParsedIpAddress {
   return address.toIPv4Address();
 }
 
-export function parseCanonicalIpAddress(raw: string | undefined): ParsedIpAddress | undefined {
+function normalizeIpParseInput(raw: string | undefined): string | undefined {
   const trimmed = raw?.trim();
   if (!trimmed) {
     return undefined;
   }
-  const normalized = stripIpv6Brackets(trimmed);
+  return stripIpv6Brackets(trimmed);
+}
+
+// eslint-disable-next-line @typescript-eslint/no-redundant-type-constituents
+export function parseCanonicalIpAddress(raw: string | undefined): ParsedIpAddress | undefined {
+  const normalized = normalizeIpParseInput(raw);
   if (!normalized) {
     return undefined;
   }
@@ -149,12 +156,9 @@ export function parseCanonicalIpAddress(raw: string | undefined): ParsedIpAddres
   return parseIpv6WithEmbeddedIpv4(normalized);
 }
 
+// eslint-disable-next-line @typescript-eslint/no-redundant-type-constituents
 export function parseLooseIpAddress(raw: string | undefined): ParsedIpAddress | undefined {
-  const trimmed = raw?.trim();
-  if (!trimmed) {
-    return undefined;
-  }
-  const normalized = stripIpv6Brackets(trimmed);
+  const normalized = normalizeIpParseInput(raw);
   if (!normalized) {
     return undefined;
   }
@@ -276,6 +280,7 @@ function decodeIpv4FromHextets(high: number, low: number): ipaddr.IPv4 {
   return ipaddr.IPv4.parse(octets.join("."));
 }
 
+// eslint-disable-next-line @typescript-eslint/no-redundant-type-constituents
 export function extractEmbeddedIpv4FromIpv6(address: ipaddr.IPv6): ipaddr.IPv4 | undefined {
   if (address.isIPv4MappedAddress()) {
     return address.toIPv4Address();

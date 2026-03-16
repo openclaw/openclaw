@@ -74,7 +74,7 @@ function resolveApiKeySecretInput(
   return normalized;
 }
 
-function buildApiKeyCredential(
+export function buildApiKeyCredential(
   provider: string,
   input: SecretInput,
   metadata?: Record<string, string>,
@@ -197,7 +197,7 @@ export async function writeOAuthCredentials(
           agentDir: targetAgentDir,
         });
       } catch {
-        // Best-effort: sibling sync failure must not block primary onboarding.
+        // Best-effort: sibling sync failure must not block primary setup.
       }
     }
   }
@@ -433,11 +433,30 @@ export async function setOpencodeZenApiKey(
   agentDir?: string,
   options?: ApiKeyStorageOptions,
 ) {
-  upsertAuthProfile({
-    profileId: "opencode:default",
-    credential: buildApiKeyCredential("opencode", key, undefined, options),
-    agentDir: resolveAuthAgentDir(agentDir),
-  });
+  await setSharedOpencodeApiKey(key, agentDir, options);
+}
+
+export async function setOpencodeGoApiKey(
+  key: SecretInput,
+  agentDir?: string,
+  options?: ApiKeyStorageOptions,
+) {
+  await setSharedOpencodeApiKey(key, agentDir, options);
+}
+
+async function setSharedOpencodeApiKey(
+  key: SecretInput,
+  agentDir?: string,
+  options?: ApiKeyStorageOptions,
+) {
+  const resolvedAgentDir = resolveAuthAgentDir(agentDir);
+  for (const provider of ["opencode", "opencode-go"] as const) {
+    upsertAuthProfile({
+      profileId: `${provider}:default`,
+      credential: buildApiKeyCredential(provider, key, undefined, options),
+      agentDir: resolvedAgentDir,
+    });
+  }
 }
 
 export async function setTogetherApiKey(
