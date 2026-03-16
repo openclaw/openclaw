@@ -1,7 +1,9 @@
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
 import { parseSlackBlocksInput } from "../../extensions/slack/src/blocks-input.js";
+import { buildSlackInteractiveBlocks } from "../../extensions/slack/src/shared-interactive.js";
 import { readNumberParam, readStringParam } from "../agents/tools/common.js";
 import type { ChannelMessageActionContext } from "../channels/plugins/types.js";
+import { normalizeInteractiveReply } from "../interactive/payload.js";
 
 type SlackActionInvoke = (
   action: Record<string, unknown>,
@@ -37,7 +39,9 @@ export async function handleSlackMessageAction(params: {
       allowEmpty: true,
     });
     const mediaUrl = readStringParam(actionParams, "media", { trim: false });
-    const blocks = readSlackBlocksParam(actionParams);
+    const blocks =
+      readSlackBlocksParam(actionParams) ??
+      buildSlackInteractiveBlocks(normalizeInteractiveReply(actionParams.interactive));
     if (!content && !mediaUrl && !blocks) {
       throw new Error("Slack send requires message, blocks, or media.");
     }
