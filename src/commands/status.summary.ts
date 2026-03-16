@@ -100,13 +100,16 @@ export async function getStatusSummary(
     includeSensitive?: boolean;
     config?: OpenClawConfig;
     sourceConfig?: OpenClawConfig;
+    fast?: boolean;
   } = {},
 ): Promise<StatusSummary> {
-  const { includeSensitive = true } = options;
-  const { classifySessionKey, resolveContextTokensForModel, resolveSessionModelRef } =
-    await loadStatusSummaryRuntimeModule();
+  const { includeSensitive = true, fast = false } = options;
+  const runtimeHelpers = fast ? null : await loadStatusSummaryRuntimeModule();
+  const classifySessionKey = runtimeHelpers?.classifySessionKey;
+  const resolveContextTokensForModel = runtimeHelpers?.resolveContextTokensForModel;
+  const resolveSessionModelRef = runtimeHelpers?.resolveSessionModelRef;
   const cfg = options.config ?? loadConfig();
-  const needsChannelPlugins = hasPotentialConfiguredChannels(cfg);
+  const needsChannelPlugins = !fast && hasPotentialConfiguredChannels(cfg);
   const linkContext = needsChannelPlugins
     ? await loadLinkChannelModule().then(({ resolveLinkChannelContext }) =>
         resolveLinkChannelContext(cfg),
@@ -140,14 +143,15 @@ export async function getStatusSummary(
     defaultModel: DEFAULT_MODEL,
   });
   const configModel = resolved.model ?? DEFAULT_MODEL;
-  const configContextTokens =
-    resolveContextTokensForModel({
-      cfg,
-      provider: resolved.provider ?? DEFAULT_PROVIDER,
-      model: configModel,
-      contextTokensOverride: cfg.agents?.defaults?.contextTokens,
-      fallbackContextTokens: DEFAULT_CONTEXT_TOKENS,
-    }) ?? DEFAULT_CONTEXT_TOKENS;
+  const configContextTokens = resolveContextTokensForModel
+    ? (resolveContextTokensForModel({
+        cfg,
+        provider: resolved.provider ?? DEFAULT_PROVIDER,
+        model: configModel,
+        contextTokensOverride: cfg.agents?.defaults?.contextTokens,
+        fallbackContextTokens: DEFAULT_CONTEXT_TOKENS,
+      }) ?? DEFAULT_CONTEXT_TOKENS)
+    : (cfg.agents?.defaults?.contextTokens ?? DEFAULT_CONTEXT_TOKENS);
 
   const now = Date.now();
   const storeCache = new Map<string, Record<string, SessionEntry | undefined>>();
@@ -169,16 +173,19 @@ export async function getStatusSummary(
       .map(([key, entry]) => {
         const updatedAt = entry?.updatedAt ?? null;
         const age = updatedAt ? now - updatedAt : null;
-        const resolvedModel = resolveSessionModelRef(cfg, entry, opts.agentIdOverride);
+        const resolvedModel = resolveSessionModelRef
+          ? resolveSessionModelRef(cfg, entry, opts.agentIdOverride)
+          : { provider: resolved.provider ?? DEFAULT_PROVIDER, model: entry?.model ?? configModel };
         const model = resolvedModel.model ?? configModel ?? null;
-        const contextTokens =
-          resolveContextTokensForModel({
-            cfg,
-            provider: resolvedModel.provider,
-            model,
-            contextTokensOverride: entry?.contextTokens,
-            fallbackContextTokens: configContextTokens ?? undefined,
-          }) ?? null;
+        const contextTokens = resolveContextTokensForModel
+          ? (resolveContextTokensForModel({
+              cfg,
+              provider: resolvedModel.provider,
+              model,
+              contextTokensOverride: entry?.contextTokens,
+              fallbackContextTokens: configContextTokens ?? undefined,
+            }) ?? null)
+          : (entry?.contextTokens ?? configContextTokens ?? null);
         const total = resolveFreshSessionTotalTokens(entry);
         const totalTokensFresh =
           typeof entry?.totalTokens === "number" ? entry?.totalTokensFresh !== false : false;
@@ -194,7 +201,7 @@ export async function getStatusSummary(
         return {
           agentId,
           key,
-          kind: classifySessionKey(key, entry),
+          kind: classifySessionKey ? classifySessionKey(key, entry) : "unknown",
           sessionId: entry?.sessionId,
           updatedAt,
           age,

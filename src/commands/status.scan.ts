@@ -246,13 +246,6 @@ async function scanStatusJsonFast(opts: {
   const osSummary = resolveOsSummary();
   const tailscaleMode = cfg.gateway?.tailscale?.mode ?? "off";
   const updateTimeoutMs = opts.all ? 6500 : 2500;
-  const updatePromise = getUpdateCheckResult({
-    timeoutMs: updateTimeoutMs,
-    fetchGit: true,
-    includeRegistry: true,
-  });
-  const agentStatusPromise = getAgentLocalStatuses(cfg);
-  const summaryPromise = getStatusSummary({ config: cfg, sourceConfig: loadedRaw });
 
   const tailscaleDnsPromise =
     tailscaleMode === "off"
@@ -267,13 +260,15 @@ async function scanStatusJsonFast(opts: {
 
   const gatewayProbePromise = resolveGatewayProbeSnapshot({ cfg, opts });
 
-  const [tailscaleDns, update, agentStatus, gatewaySnapshot, summary] = await Promise.all([
-    tailscaleDnsPromise,
-    updatePromise,
-    agentStatusPromise,
-    gatewayProbePromise,
-    summaryPromise,
-  ]);
+  const tailscaleDns = await tailscaleDnsPromise;
+  const update = await getUpdateCheckResult({
+    timeoutMs: updateTimeoutMs,
+    fetchGit: true,
+    includeRegistry: true,
+  });
+  const agentStatus = await getAgentLocalStatuses(cfg);
+  const summary = await getStatusSummary({ config: cfg, sourceConfig: loadedRaw, fast: true });
+  const gatewaySnapshot = await gatewayProbePromise;
   const tailscaleHttpsUrl =
     tailscaleMode !== "off" && tailscaleDns
       ? `https://${tailscaleDns}${normalizeControlUiBasePath(cfg.gateway?.controlUi?.basePath)}`
