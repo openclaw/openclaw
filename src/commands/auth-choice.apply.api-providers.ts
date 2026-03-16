@@ -439,7 +439,7 @@ export async function applyAuthChoiceApiProviders(
       const gigachatMetadata: Record<string, string> = {
         authMode: "oauth",
         scope: gigachatScope,
-        insecureTls: "true",
+        insecureTls: "false",
       };
 
       await ensureApiKeyFromOptionEnvOrPrompt({
@@ -523,7 +523,7 @@ export async function applyAuthChoiceApiProviders(
 
     const basicMetadata: Record<string, string> = {
       authMode: "basic",
-      insecureTls: "true",
+      insecureTls: "false",
       ...(gigachatBasicScope ? { scope: gigachatBasicScope } : {}),
     };
 
