@@ -136,6 +136,30 @@ export function hasInteractiveReplyBlocks(value: unknown): value is InteractiveR
   return Boolean(normalizeInteractiveReply(value));
 }
 
+export function hasReplyChannelData(value: unknown): value is Record<string, unknown> {
+  return Boolean(
+    value && typeof value === "object" && !Array.isArray(value) && Object.keys(value).length > 0,
+  );
+}
+
+export function hasReplyContent(params: {
+  text?: string | null;
+  mediaUrl?: string | null;
+  mediaUrls?: ReadonlyArray<string | null | undefined>;
+  interactive?: unknown;
+  hasChannelData?: boolean;
+  extraContent?: boolean;
+}): boolean {
+  return Boolean(
+    params.text?.trim() ||
+    params.mediaUrl?.trim() ||
+    params.mediaUrls?.some((entry) => Boolean(entry?.trim())) ||
+    hasInteractiveReplyBlocks(params.interactive) ||
+    params.hasChannelData ||
+    params.extraContent,
+  );
+}
+
 export function resolveInteractiveTextFallback(params: {
   text?: string;
   interactive?: InteractiveReply;
