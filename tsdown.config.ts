@@ -126,6 +126,7 @@ function buildCoreDistEntries(): Record<string, string> {
     "channels/plugins/actions/discord": "src/channels/plugins/actions/discord.ts",
     "channels/plugins/actions/signal": "src/channels/plugins/actions/signal.ts",
     "channels/plugins/actions/telegram": "src/channels/plugins/actions/telegram.ts",
+    "plugins/runtime/index": "src/plugins/runtime/index.ts",
     "telegram/audit": "extensions/telegram/src/audit.ts",
     "telegram/token": "extensions/telegram/src/token.ts",
     "line/accounts": "src/line/accounts.ts",
