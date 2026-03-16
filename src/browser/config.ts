@@ -178,24 +178,6 @@ function ensureDefaultProfile(
   return result;
 }
 
-/**
- * Ensure a built-in "user" profile exists for Chrome's existing-session attach flow.
- */
-function ensureDefaultUserBrowserProfile(
-  profiles: Record<string, BrowserProfileConfig>,
-): Record<string, BrowserProfileConfig> {
-  const result = { ...profiles };
-  if (result.user) {
-    return result;
-  }
-  result.user = {
-    driver: "existing-session",
-    attachOnly: true,
-    color: "#00AA00",
-  };
-  return result;
-}
-
 export function resolveBrowserConfig(
   cfg: BrowserConfig | undefined,
   rootConfig?: OpenClawConfig,
@@ -255,24 +237,57 @@ export function resolveBrowserConfig(
   const legacyCdpPort = rawCdpUrl ? cdpInfo.port : undefined;
   const isWsUrl = cdpInfo.parsed.protocol === "ws:" || cdpInfo.parsed.protocol === "wss:";
   const legacyCdpUrl = rawCdpUrl && isWsUrl ? cdpInfo.normalized : undefined;
-  const profiles = ensureDefaultUserBrowserProfile(
-    ensureDefaultProfile(
-      cfg?.profiles,
-      defaultColor,
-      legacyCdpPort,
-      cdpPortRangeStart,
-      legacyCdpUrl,
-    ),
+  const hasUserProfile = Boolean(cfg?.profiles && cfg.profiles.user);
+  let profiles = ensureDefaultProfile(
+    cfg?.profiles,
+    defaultColor,
+    legacyCdpPort,
+    cdpPortRangeStart,
+    legacyCdpUrl,
   );
+
+  /**
+   * Ensure a built-in "user" profile exists for Chrome's existing-session attach flow
+   * only when no legacy/global cdpUrl is configured.
+   *
+   * When browser.cdpUrl is set but no explicit "user" profile exists, we prefer to
+   * steer callers toward the default "openclaw" CDP profile so that remote CDP
+   * endpoints are actually used instead of falling back to Chrome MCP +
+   * DevToolsActivePort.
+   */
+  if (!rawCdpUrl && !hasUserProfile) {
+    profiles = {
+      ...profiles,
+      user: {
+        driver: "existing-session",
+        attachOnly: true,
+        color: "#00AA00",
+      },
+    };
+  }
   const cdpProtocol = cdpInfo.parsed.protocol === "https:" ? "https" : "http";
 
-  const defaultProfile =
+  let defaultProfile =
     defaultProfileFromConfig ??
     (profiles[DEFAULT_BROWSER_DEFAULT_PROFILE_NAME]
       ? DEFAULT_BROWSER_DEFAULT_PROFILE_NAME
       : profiles[DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME]
         ? DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME
         : "user");
+
+  // When browser.cdpUrl is set but the config does not define an explicit "user"
+  // profile, treat defaultProfile: "user" as a request to use the legacy CDP-backed
+  // "openclaw" profile instead of the Chrome MCP existing-session profile. This
+  // matches user expectations that setting browser.cdpUrl causes the browser tool
+  // to connect via CDP rather than relying on DevToolsActivePort.
+  if (
+    rawCdpUrl &&
+    defaultProfileFromConfig === "user" &&
+    !hasUserProfile &&
+    profiles[DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME]
+  ) {
+    defaultProfile = DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME;
+  }
 
   const extraArgs = Array.isArray(cfg?.extraArgs)
     ? cfg.extraArgs.filter((a): a is string => typeof a === "string" && a.trim().length > 0)

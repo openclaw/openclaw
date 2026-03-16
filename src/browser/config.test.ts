@@ -343,6 +343,18 @@ describe("browser config", () => {
       expect(resolved.defaultProfile).toBe("user");
     });
 
+    it('rewrites defaultProfile "user" to "openclaw" when browser.cdpUrl is set without an explicit user profile', () => {
+      const resolved = resolveBrowserConfig({
+        cdpUrl: "http://localhost:9222",
+        defaultProfile: "user",
+      });
+      expect(resolved.defaultProfile).toBe("openclaw");
+      const profile = resolveProfile(resolved, resolved.defaultProfile);
+      expect(profile?.name).toBe("openclaw");
+      expect(profile?.driver).toBe("openclaw");
+      expect(profile?.cdpUrl).toBe("http://localhost:9222");
+    });
+
     it("allows custom profile as default even in headless mode", () => {
       const resolved = resolveBrowserConfig({
         headless: true,
