@@ -331,6 +331,16 @@ export async function processMessage(params: {
     Surface: "whatsapp",
     OriginatingChannel: "whatsapp",
     OriginatingTo: params.msg.from,
+    ...(params.msg.isForwarded
+      ? {
+          // WhatsApp intentionally withholds the original sender's identity for all
+          // forwarded messages — this is a platform-level privacy design, not missing
+          // data. The string below is surfaced verbatim to agents so they understand
+          // they cannot determine who wrote the original content.
+          ForwardedFrom: "unknown sender (WhatsApp does not disclose the original sender)",
+          ForwardingScore: params.msg.forwardingScore,
+        }
+      : {}),
   });
 
   // Only update main session's lastRoute when DM actually IS the main session.

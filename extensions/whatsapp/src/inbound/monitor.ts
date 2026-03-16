@@ -13,6 +13,7 @@ import { checkInboundAccessControl } from "./access-control.js";
 import { isRecentInboundMessage } from "./dedupe.js";
 import {
   describeReplyContext,
+  extractForwardingInfo,
   extractLocationData,
   extractMediaPlaceholder,
   extractMentionedJids,
@@ -259,6 +260,7 @@ export async function monitorWebInbox(options: {
     body: string;
     location?: ReturnType<typeof extractLocationData>;
     replyContext?: ReturnType<typeof describeReplyContext>;
+    forwardingInfo?: ReturnType<typeof extractForwardingInfo>;
     mediaPath?: string;
     mediaType?: string;
     mediaFileName?: string;
@@ -278,6 +280,7 @@ export async function monitorWebInbox(options: {
       }
     }
     const replyContext = describeReplyContext(msg.message as proto.IMessage | undefined);
+    const forwardingInfo = extractForwardingInfo(msg.message as proto.IMessage | undefined);
 
     let mediaPath: string | undefined;
     let mediaType: string | undefined;
@@ -309,6 +312,7 @@ export async function monitorWebInbox(options: {
       body,
       location: location ?? undefined,
       replyContext,
+      forwardingInfo: forwardingInfo ?? undefined,
       mediaPath,
       mediaType,
       mediaFileName,
@@ -383,6 +387,8 @@ export async function monitorWebInbox(options: {
       mediaPath: enriched.mediaPath,
       mediaType: enriched.mediaType,
       mediaFileName: enriched.mediaFileName,
+      isForwarded: enriched.forwardingInfo?.isForwarded,
+      forwardingScore: enriched.forwardingInfo?.forwardingScore,
     };
     try {
       const task = Promise.resolve(debouncer.enqueue(inboundMessage));

@@ -58,6 +58,22 @@ function extractContextInfo(message: proto.IMessage | undefined): proto.IContext
   return undefined;
 }
 
+export function extractForwardingInfo(
+  rawMessage: proto.IMessage | undefined,
+): { isForwarded: boolean; forwardingScore: number } | null {
+  const message = unwrapMessage(rawMessage);
+  if (!message) {
+    return null;
+  }
+  const contextInfo = extractContextInfo(message);
+  if (!contextInfo?.isForwarded) {
+    return null;
+  }
+  const forwardingScore =
+    typeof contextInfo.forwardingScore === "number" ? contextInfo.forwardingScore : 0;
+  return { isForwarded: true, forwardingScore };
+}
+
 export function extractMentionedJids(rawMessage: proto.IMessage | undefined): string[] | undefined {
   const message = unwrapMessage(rawMessage);
   if (!message) {

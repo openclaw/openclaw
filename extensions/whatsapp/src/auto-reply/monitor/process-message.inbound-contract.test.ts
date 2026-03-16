@@ -440,4 +440,56 @@ describe("web processMessage inbound contract", () => {
 
     expect(updateLastRouteMock).toHaveBeenCalledTimes(1);
   });
+
+  it("sets ForwardedFrom to 'unknown sender' when message is forwarded", async () => {
+    capturedCtx = undefined;
+
+    await processMessage(
+      makeProcessMessageArgs({
+        routeSessionKey: "agent:main:whatsapp:direct:+1000",
+        groupHistoryKey: "+1000",
+        msg: {
+          id: "msg-fwd-1",
+          from: "+1000",
+          to: "+2000",
+          chatType: "direct",
+          body: "forwarded text",
+          isForwarded: true,
+          forwardingScore: 1,
+        },
+      }),
+    );
+
+    expect(capturedCtx).toBeTruthy();
+    // oxlint-disable-next-line typescript/no-explicit-any
+    const ctx = capturedCtx as any;
+    expect(ctx.ForwardedFrom).toBe(
+      "unknown sender (WhatsApp does not disclose the original sender)",
+    );
+    expect(ctx.ForwardingScore).toBe(1);
+  });
+
+  it("does not set ForwardedFrom when message is not forwarded", async () => {
+    capturedCtx = undefined;
+
+    await processMessage(
+      makeProcessMessageArgs({
+        routeSessionKey: "agent:main:whatsapp:direct:+1000",
+        groupHistoryKey: "+1000",
+        msg: {
+          id: "msg-nofwd-1",
+          from: "+1000",
+          to: "+2000",
+          chatType: "direct",
+          body: "regular text",
+        },
+      }),
+    );
+
+    expect(capturedCtx).toBeTruthy();
+    // oxlint-disable-next-line typescript/no-explicit-any
+    const ctx = capturedCtx as any;
+    expect(ctx.ForwardedFrom).toBeUndefined();
+    expect(ctx.ForwardingScore).toBeUndefined();
+  });
 });
