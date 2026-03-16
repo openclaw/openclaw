@@ -1,8 +1,10 @@
 import type { ChannelMessageActionName as ChannelMessageActionNameFromList } from "./message-action-names.js";
 
 export { CHANNEL_MESSAGE_ACTION_NAMES } from "./message-action-names.js";
+export { CHANNEL_MESSAGE_CAPABILITIES } from "./message-capabilities.js";
 
 export type ChannelMessageActionName = ChannelMessageActionNameFromList;
+export type { ChannelMessageCapability } from "./message-capabilities.js";
 
 export type {
   ChannelAuthAdapter,
