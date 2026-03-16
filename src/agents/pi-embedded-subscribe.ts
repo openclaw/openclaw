@@ -557,32 +557,34 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     if (!state.streamReasoning) {
       return;
     }
-    const formatted = formatReasoningMessage(text);
-    if (!formatted) {
+    const trimmed = text.trim();
+    if (!trimmed) {
       return;
     }
-    if (formatted === state.lastStreamedReasoning) {
+    if (trimmed === state.lastStreamedReasoning) {
       return;
     }
-    // Compute delta: new text since the last emitted reasoning.
+    // Compute raw delta: new text since the last emitted reasoning.
     // Guard against non-prefix changes (e.g. trim/format altering earlier content).
     const prior = state.lastStreamedReasoning ?? "";
-    const delta = formatted.startsWith(prior) ? formatted.slice(prior.length) : formatted;
-    state.lastStreamedReasoning = formatted;
+    const delta = trimmed.startsWith(prior) ? trimmed.slice(prior.length) : trimmed;
+    state.lastStreamedReasoning = trimmed;
 
-    // Broadcast thinking event to WebSocket clients registered for thinking-events.
+    // Broadcast thinking event to WebSocket clients: plain incremental delta, no decoration.
     emitAgentEvent({
       runId: params.runId,
       stream: "thinking",
       data: {
-        text: formatted,
+        text: trimmed,
         delta,
       },
     });
 
-    void params.onReasoningStream?.({
-      text: formatted,
-    });
+    // onReasoningStream is used by CLI / messaging-channel paths — keep formatted output.
+    if (params.onReasoningStream) {
+      const formatted = formatReasoningMessage(trimmed);
+      void params.onReasoningStream({ text: formatted });
+    }
   };
 
   const resetForCompactionRetry = () => {
