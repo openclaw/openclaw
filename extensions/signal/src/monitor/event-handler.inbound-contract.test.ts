@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { MsgContext } from "../../../../src/auto-reply/templating.js";
-import { expectInboundContextContract } from "../../../../test/helpers/inbound-contract.js";
+import { expectChannelInboundContextContract as expectInboundContextContract } from "../../../../src/channels/plugins/contracts/suites.js";
 import { createSignalEventHandler } from "./event-handler.js";
 import {
   createBaseSignalEventHandlerDeps,
