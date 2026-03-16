@@ -109,7 +109,11 @@ export function resolveProfilesUnavailableReason(params: {
       recordedReason = true;
     }
     if (!recordedReason) {
-      addScore("rate_limit", 1);
+      // No failure counts recorded for this cooldown window. Previously this
+      // defaulted to "rate_limit", which caused false "rate limit reached"
+      // warnings when the actual reason was unknown (e.g. transient network
+      // blip or server error without a classified failure count).
+      addScore("unknown", 1);
     }
   }
 
@@ -400,9 +404,19 @@ function computeNextProfileUsageStats(params: {
     params.existing.lastFailureAt > 0 &&
     params.now - params.existing.lastFailureAt > windowMs;
 
-  const baseErrorCount = windowExpired ? 0 : (params.existing.errorCount ?? 0);
+  // If the previous cooldown has already expired, reset error counters so the
+  // profile gets a fresh backoff window. clearExpiredCooldowns() does this
+  // in-memory during profile ordering, but the on-disk state may still carry
+  // the old counters when the lock-based updater reads a fresh store. Without
+  // this check, stale error counts from an expired cooldown cause the next
+  // failure to escalate to a much longer cooldown (e.g. 1 min → 25 min).
+  const unusableUntil = resolveProfileUnusableUntil(params.existing);
+  const previousCooldownExpired = typeof unusableUntil === "number" && params.now >= unusableUntil;
+
+  const shouldResetCounters = windowExpired || previousCooldownExpired;
+  const baseErrorCount = shouldResetCounters ? 0 : (params.existing.errorCount ?? 0);
   const nextErrorCount = baseErrorCount + 1;
-  const failureCounts = windowExpired ? {} : { ...params.existing.failureCounts };
+  const failureCounts = shouldResetCounters ? {} : { ...params.existing.failureCounts };
   failureCounts[params.reason] = (failureCounts[params.reason] ?? 0) + 1;
 
   const updatedStats: ProfileUsageStats = {

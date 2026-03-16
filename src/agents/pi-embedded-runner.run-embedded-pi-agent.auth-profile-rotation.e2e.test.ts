@@ -916,7 +916,7 @@ describe("runEmbeddedPiAgent auth profile rotation", () => {
         }),
       ).rejects.toMatchObject({
         name: "FailoverError",
-        reason: "rate_limit",
+        reason: "unknown",
         provider: "openai",
         model: "mock-1",
       });
@@ -1013,6 +1013,54 @@ describe("runEmbeddedPiAgent auth profile rotation", () => {
     });
   });
 
+  it("can probe one billing-disabled profile when transient cooldown probe is allowed without fallback models", async () => {
+    await withTimedAgentWorkspace(async ({ agentDir, workspaceDir, now }) => {
+      await writeAuthStore(agentDir, {
+        usageStats: {
+          "openai:p1": {
+            lastUsed: 1,
+            disabledUntil: now + 60 * 60 * 1000,
+            disabledReason: "billing",
+          },
+          "openai:p2": {
+            lastUsed: 2,
+            disabledUntil: now + 60 * 60 * 1000,
+            disabledReason: "billing",
+          },
+        },
+      });
+
+      runEmbeddedAttemptMock.mockResolvedValueOnce(
+        makeAttempt({
+          assistantTexts: ["ok"],
+          lastAssistant: buildAssistant({
+            stopReason: "stop",
+            content: [{ type: "text", text: "ok" }],
+          }),
+        }),
+      );
+
+      const result = await runEmbeddedPiAgent({
+        sessionId: "session:test",
+        sessionKey: "agent:test:billing-cooldown-probe-no-fallbacks",
+        sessionFile: path.join(workspaceDir, "session.jsonl"),
+        workspaceDir,
+        agentDir,
+        config: makeConfig(),
+        prompt: "hello",
+        provider: "openai",
+        model: "mock-1",
+        authProfileIdSource: "auto",
+        allowTransientCooldownProbe: true,
+        timeoutMs: 5_000,
+        runId: "run:billing-cooldown-probe-no-fallbacks",
+      });
+
+      expect(runEmbeddedAttemptMock).toHaveBeenCalledTimes(1);
+      expect(result.payloads?.[0]?.text ?? "").toContain("ok");
+    });
+  });
+
   it("treats agent-level fallbacks as configured when defaults have none", async () => {
     await withTimedAgentWorkspace(async ({ agentDir, workspaceDir, now }) => {
       await writeAuthStore(agentDir, {
@@ -1040,7 +1088,7 @@ describe("runEmbeddedPiAgent auth profile rotation", () => {
         }),
       ).rejects.toMatchObject({
         name: "FailoverError",
-        reason: "rate_limit",
+        reason: "unknown",
         provider: "openai",
         model: "mock-1",
       });

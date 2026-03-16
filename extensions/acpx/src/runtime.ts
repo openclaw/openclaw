@@ -170,6 +170,7 @@ export class AcpxRuntime implements AcpRuntime {
       command: this.config.command,
       cwd: this.config.cwd,
       expectedVersion: this.config.expectedVersion,
+      stripProviderAuthEnvVars: this.config.stripProviderAuthEnvVars,
       spawnOptions: this.spawnCommandOptions,
     });
     if (!versionCheck.ok) {
@@ -183,6 +184,7 @@ export class AcpxRuntime implements AcpRuntime {
           command: this.config.command,
           args: ["--help"],
           cwd: this.config.cwd,
+          stripProviderAuthEnvVars: this.config.stripProviderAuthEnvVars,
         },
         this.spawnCommandOptions,
       );
@@ -303,6 +305,7 @@ export class AcpxRuntime implements AcpRuntime {
         command: this.config.command,
         args,
         cwd: state.cwd,
+        stripProviderAuthEnvVars: this.config.stripProviderAuthEnvVars,
       },
       this.spawnCommandOptions,
     );
@@ -476,6 +479,7 @@ export class AcpxRuntime implements AcpRuntime {
       command: this.config.command,
       cwd: this.config.cwd,
       expectedVersion: this.config.expectedVersion,
+      stripProviderAuthEnvVars: this.config.stripProviderAuthEnvVars,
       spawnOptions: this.spawnCommandOptions,
     });
     if (!versionCheck.ok) {
@@ -499,6 +503,7 @@ export class AcpxRuntime implements AcpRuntime {
           command: this.config.command,
           args: ["--help"],
           cwd: this.config.cwd,
+          stripProviderAuthEnvVars: this.config.stripProviderAuthEnvVars,
         },
         this.spawnCommandOptions,
       );
@@ -664,6 +669,7 @@ export class AcpxRuntime implements AcpRuntime {
       acpxCommand: this.config.command,
       cwd: params.cwd,
       agent: params.agent,
+      stripProviderAuthEnvVars: this.config.stripProviderAuthEnvVars,
       spawnOptions: this.spawnCommandOptions,
     });
     const resolved = buildMcpProxyAgentCommand({
@@ -686,6 +692,7 @@ export class AcpxRuntime implements AcpRuntime {
         command: this.config.command,
         args: params.args,
         cwd: params.cwd,
+        stripProviderAuthEnvVars: this.config.stripProviderAuthEnvVars,
       },
       this.spawnCommandOptions,
       {

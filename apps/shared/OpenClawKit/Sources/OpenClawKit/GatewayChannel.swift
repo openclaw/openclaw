@@ -112,7 +112,6 @@ public struct GatewayConnectOptions: Sendable {
 public enum GatewayAuthSource: String, Sendable {
     case deviceToken = "device-token"
     case sharedToken = "shared-token"
-    case bootstrapToken = "bootstrap-token"
     case password = "password"
     case none = "none"
 }
@@ -132,24 +131,39 @@ private let defaultOperatorConnectScopes: [String] = [
     "operator.pairing",
 ]
 
-private extension String {
-    var nilIfEmpty: String? {
-        self.isEmpty ? nil : self
-    }
+private enum GatewayConnectErrorCodes {
+    static let authTokenMismatch = "AUTH_TOKEN_MISMATCH"
+    static let authDeviceTokenMismatch = "AUTH_DEVICE_TOKEN_MISMATCH"
+    static let authTokenMissing = "AUTH_TOKEN_MISSING"
+    static let authPasswordMissing = "AUTH_PASSWORD_MISSING"
+    static let authPasswordMismatch = "AUTH_PASSWORD_MISMATCH"
+    static let authRateLimited = "AUTH_RATE_LIMITED"
+    static let pairingRequired = "PAIRING_REQUIRED"
+    static let controlUiDeviceIdentityRequired = "CONTROL_UI_DEVICE_IDENTITY_REQUIRED"
+    static let deviceIdentityRequired = "DEVICE_IDENTITY_REQUIRED"
 }
 
-private enum GatewayConnectErrorCodes {
-    static let authTokenMismatch = GatewayConnectAuthDetailCode.authTokenMismatch.rawValue
-    static let authDeviceTokenMismatch = GatewayConnectAuthDetailCode.authDeviceTokenMismatch.rawValue
-    static let authTokenMissing = GatewayConnectAuthDetailCode.authTokenMissing.rawValue
-    static let authTokenNotConfigured = GatewayConnectAuthDetailCode.authTokenNotConfigured.rawValue
-    static let authPasswordMissing = GatewayConnectAuthDetailCode.authPasswordMissing.rawValue
-    static let authPasswordMismatch = GatewayConnectAuthDetailCode.authPasswordMismatch.rawValue
-    static let authPasswordNotConfigured = GatewayConnectAuthDetailCode.authPasswordNotConfigured.rawValue
-    static let authRateLimited = GatewayConnectAuthDetailCode.authRateLimited.rawValue
-    static let pairingRequired = GatewayConnectAuthDetailCode.pairingRequired.rawValue
-    static let controlUiDeviceIdentityRequired = GatewayConnectAuthDetailCode.controlUiDeviceIdentityRequired.rawValue
-    static let deviceIdentityRequired = GatewayConnectAuthDetailCode.deviceIdentityRequired.rawValue
+private struct GatewayConnectAuthError: LocalizedError {
+    let message: String
+    let detailCode: String?
+    let canRetryWithDeviceToken: Bool
+
+    var errorDescription: String? { self.message }
+
+    var isNonRecoverable: Bool {
+        switch self.detailCode {
+        case GatewayConnectErrorCodes.authTokenMissing,
+            GatewayConnectErrorCodes.authPasswordMissing,
+            GatewayConnectErrorCodes.authPasswordMismatch,
+            GatewayConnectErrorCodes.authRateLimited,
+            GatewayConnectErrorCodes.pairingRequired,
+            GatewayConnectErrorCodes.controlUiDeviceIdentityRequired,
+            GatewayConnectErrorCodes.deviceIdentityRequired:
+            return true
+        default:
+            return false
+        }
+    }
 }
 
 public actor GatewayChannelActor {
@@ -161,7 +175,6 @@ public actor GatewayChannelActor {
     private var connectWaiters: [CheckedContinuation<Void, Error>] = []
     private var url: URL
     private var token: String?
-    private var bootstrapToken: String?
     private var password: String?
     private let session: WebSocketSessioning
     private var backoffMs: Double = 500
@@ -193,7 +206,6 @@ public actor GatewayChannelActor {
     public init(
         url: URL,
         token: String?,
-        bootstrapToken: String? = nil,
         password: String? = nil,
         session: WebSocketSessionBox? = nil,
         pushHandler: (@Sendable (GatewayPush) async -> Void)? = nil,
@@ -202,7 +214,6 @@ public actor GatewayChannelActor {
     {
         self.url = url
         self.token = token
-        self.bootstrapToken = bootstrapToken
         self.password = password
         self.session = session?.session ?? URLSession(configuration: .default)
         self.pushHandler = pushHandler
@@ -267,7 +278,8 @@ public actor GatewayChannelActor {
                 if self.shouldPauseReconnectAfterAuthFailure(error) {
                     self.reconnectPausedForAuthFailure = true
                     self.logger.error(
-                        "gateway watchdog reconnect paused for non-recoverable auth failure \(error.localizedDescription, privacy: .public)"
+                        "gateway watchdog reconnect paused for non-recoverable auth failure " +
+                            "\(error.localizedDescription, privacy: .public)"
                     )
                     continue
                 }
@@ -412,29 +424,22 @@ public actor GatewayChannelActor {
             (includeDeviceIdentity && identity != nil)
                 ? DeviceAuthStore.loadToken(deviceId: identity!.deviceId, role: role)?.token
                 : nil
-        let explicitToken = self.token?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
-        let explicitBootstrapToken =
-            self.bootstrapToken?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
-        let explicitPassword = self.password?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
         let shouldUseDeviceRetryToken =
             includeDeviceIdentity && self.pendingDeviceTokenRetry &&
-            storedToken != nil && explicitToken != nil && self.isTrustedDeviceRetryEndpoint()
+            storedToken != nil && self.token != nil && self.isTrustedDeviceRetryEndpoint()
         if shouldUseDeviceRetryToken {
             self.pendingDeviceTokenRetry = false
         }
         // Keep shared credentials explicit when provided. Device token retry is attached
         // only on a bounded second attempt after token mismatch.
-        let authToken = explicitToken ?? (includeDeviceIdentity ? storedToken : nil)
-        let authBootstrapToken = authToken == nil ? explicitBootstrapToken : nil
+        let authToken = self.token ?? (includeDeviceIdentity ? storedToken : nil)
         let authDeviceToken = shouldUseDeviceRetryToken ? storedToken : nil
         let authSource: GatewayAuthSource
-        if authDeviceToken != nil || (explicitToken == nil && storedToken != nil) {
+        if authDeviceToken != nil || (self.token == nil && storedToken != nil) {
             authSource = .deviceToken
         } else if authToken != nil {
             authSource = .sharedToken
-        } else if authBootstrapToken != nil {
-            authSource = .bootstrapToken
-        } else if explicitPassword != nil {
+        } else if self.password != nil {
             authSource = .password
         } else {
             authSource = .none
@@ -447,9 +452,7 @@ public actor GatewayChannelActor {
                 auth["deviceToken"] = ProtoAnyCodable(authDeviceToken)
             }
             params["auth"] = ProtoAnyCodable(auth)
-        } else if let authBootstrapToken {
-            params["auth"] = ProtoAnyCodable(["bootstrapToken": ProtoAnyCodable(authBootstrapToken)])
-        } else if let password = explicitPassword {
+        } else if let password = self.password {
             params["auth"] = ProtoAnyCodable(["password": ProtoAnyCodable(password)])
         }
         let signedAtMs = Int(Date().timeIntervalSince1970 * 1000)
@@ -462,7 +465,7 @@ public actor GatewayChannelActor {
                 role: role,
                 scopes: scopes,
                 signedAtMs: signedAtMs,
-                token: authToken ?? authBootstrapToken,
+                token: authToken,
                 nonce: connectNonce,
                 platform: platform,
                 deviceFamily: InstanceIdentity.deviceFamily)
@@ -491,7 +494,7 @@ public actor GatewayChannelActor {
         } catch {
             let shouldRetryWithDeviceToken = self.shouldRetryWithStoredDeviceToken(
                 error: error,
-                explicitGatewayToken: explicitToken,
+                explicitGatewayToken: self.token,
                 storedToken: storedToken,
                 attemptedDeviceTokenRetry: authDeviceToken != nil)
             if shouldRetryWithDeviceToken {
@@ -519,12 +522,10 @@ public actor GatewayChannelActor {
             let details = res.error?["details"]?.value as? [String: ProtoAnyCodable]
             let detailCode = details?["code"]?.value as? String
             let canRetryWithDeviceToken = details?["canRetryWithDeviceToken"]?.value as? Bool ?? false
-            let recommendedNextStep = details?["recommendedNextStep"]?.value as? String
             throw GatewayConnectAuthError(
                 message: msg,
-                detailCodeRaw: detailCode,
-                canRetryWithDeviceToken: canRetryWithDeviceToken,
-                recommendedNextStepRaw: recommendedNextStep)
+                detailCode: detailCode,
+                canRetryWithDeviceToken: canRetryWithDeviceToken)
         }
         guard let payload = res.payload else {
             throw NSError(
@@ -709,7 +710,8 @@ public actor GatewayChannelActor {
             if self.shouldPauseReconnectAfterAuthFailure(error) {
                 self.reconnectPausedForAuthFailure = true
                 self.logger.error(
-                    "gateway reconnect paused for non-recoverable auth failure \(error.localizedDescription, privacy: .public)"
+                    "gateway reconnect paused for non-recoverable auth failure " +
+                        "\(error.localizedDescription, privacy: .public)"
                 )
                 return
             }
@@ -741,7 +743,7 @@ public actor GatewayChannelActor {
             return false
         }
         return authError.canRetryWithDeviceToken ||
-            authError.detail == .authTokenMismatch
+            authError.detailCode == GatewayConnectErrorCodes.authTokenMismatch
     }
 
     private func shouldPauseReconnectAfterAuthFailure(_ error: Error) -> Bool {
@@ -751,7 +753,7 @@ public actor GatewayChannelActor {
         if authError.isNonRecoverable {
             return true
         }
-        if authError.detail == .authTokenMismatch &&
+        if authError.detailCode == GatewayConnectErrorCodes.authTokenMismatch &&
             self.deviceTokenRetryBudgetUsed && !self.pendingDeviceTokenRetry
         {
             return true
@@ -763,7 +765,7 @@ public actor GatewayChannelActor {
         guard let authError = error as? GatewayConnectAuthError else {
             return false
         }
-        return authError.detail == .authDeviceTokenMismatch
+        return authError.detailCode == GatewayConnectErrorCodes.authDeviceTokenMismatch
     }
 
     private func isTrustedDeviceRetryEndpoint() -> Bool {
@@ -865,9 +867,6 @@ public actor GatewayChannelActor {
 
     // Wrap low-level URLSession/WebSocket errors with context so UI can surface them.
     private func wrap(_ error: Error, context: String) -> Error {
-        if error is GatewayConnectAuthError || error is GatewayResponseError || error is GatewayDecodingError {
-            return error
-        }
         if let urlError = error as? URLError {
             let desc = urlError.localizedDescription.isEmpty ? "cancelled" : urlError.localizedDescription
             return NSError(
@@ -911,8 +910,8 @@ public actor GatewayChannelActor {
             return (id: id, data: data)
         } catch {
             self.logger.error(
-                "gateway \(kind) encode failed \(method, privacy: .public) error=\(error.localizedDescription, privacy: .public)"
-            )
+                "gateway \(kind) encode failed \(method, privacy: .public) " +
+                    "error=\(error.localizedDescription, privacy: .public)")
             throw error
         }
     }

@@ -28,6 +28,7 @@ type AgentRunParams = {
 type EmbeddedRunParams = {
   prompt?: string;
   extraSystemPrompt?: string;
+  memoryFlushWritePath?: string;
   bootstrapPromptWarningSignaturesSeen?: string[];
   bootstrapPromptWarningSignature?: string;
   onAgentEvent?: (evt: { stream?: string; data?: { phase?: string; willRetry?: boolean } }) => void;
@@ -1220,6 +1221,79 @@ describe("runReplyAgent typing (heartbeat)", () => {
     });
   });
 
+  it("clears stale runtime model fields when resetSession retries after compaction failure", async () => {
+    await withTempStateDir(async (stateDir) => {
+      const sessionId = "session-stale-model";
+      const storePath = path.join(stateDir, "sessions", "sessions.json");
+      const transcriptPath = sessions.resolveSessionTranscriptPath(sessionId);
+      const sessionEntry: SessionEntry = {
+        sessionId,
+        updatedAt: Date.now(),
+        sessionFile: transcriptPath,
+        modelProvider: "qwencode",
+        model: "qwen3.5-plus-2026-02-15",
+        contextTokens: 123456,
+        systemPromptReport: {
+          source: "run",
+          generatedAt: Date.now(),
+          sessionId,
+          sessionKey: "main",
+          provider: "qwencode",
+          model: "qwen3.5-plus-2026-02-15",
+          workspaceDir: stateDir,
+          bootstrapMaxChars: 1000,
+          bootstrapTotalMaxChars: 2000,
+          systemPrompt: {
+            chars: 10,
+            projectContextChars: 5,
+            nonProjectContextChars: 5,
+          },
+          injectedWorkspaceFiles: [],
+          skills: {
+            promptChars: 0,
+            entries: [],
+          },
+          tools: {
+            listChars: 0,
+            schemaChars: 0,
+            entries: [],
+          },
+        },
+      };
+      const sessionStore = { main: sessionEntry };
+
+      await fs.mkdir(path.dirname(storePath), { recursive: true });
+      await fs.writeFile(storePath, JSON.stringify(sessionStore), "utf-8");
+      await fs.mkdir(path.dirname(transcriptPath), { recursive: true });
+      await fs.writeFile(transcriptPath, "ok", "utf-8");
+
+      state.runEmbeddedPiAgentMock.mockImplementationOnce(async () => {
+        throw new Error(
+          'Context overflow: Summarization failed: 400 {"message":"prompt is too long"}',
+        );
+      });
+
+      const { run } = createMinimalRun({
+        sessionEntry,
+        sessionStore,
+        sessionKey: "main",
+        storePath,
+      });
+      await run();
+
+      expect(sessionStore.main.modelProvider).toBeUndefined();
+      expect(sessionStore.main.model).toBeUndefined();
+      expect(sessionStore.main.contextTokens).toBeUndefined();
+      expect(sessionStore.main.systemPromptReport).toBeUndefined();
+
+      const persisted = JSON.parse(await fs.readFile(storePath, "utf-8"));
+      expect(persisted.main.modelProvider).toBeUndefined();
+      expect(persisted.main.model).toBeUndefined();
+      expect(persisted.main.contextTokens).toBeUndefined();
+      expect(persisted.main.systemPromptReport).toBeUndefined();
+    });
+  });
+
   it("surfaces overflow fallback when embedded run returns empty payloads", async () => {
     state.runEmbeddedPiAgentMock.mockImplementationOnce(async () => ({
       payloads: [],
@@ -1577,9 +1651,14 @@ describe("runReplyAgent memory flush", () => {
       const flushCall = calls[0];
       expect(flushCall?.prompt).toContain("Write notes.");
       expect(flushCall?.prompt).toContain("NO_REPLY");
+      expect(flushCall?.prompt).toMatch(/memory\/\d{4}-\d{2}-\d{2}\.md/);
+      expect(flushCall?.prompt).toContain("MEMORY.md");
+      expect(flushCall?.memoryFlushWritePath).toMatch(/^memory\/\d{4}-\d{2}-\d{2}\.md$/);
       expect(flushCall?.extraSystemPrompt).toContain("extra system");
       expect(flushCall?.extraSystemPrompt).toContain("Flush memory now.");
       expect(flushCall?.extraSystemPrompt).toContain("NO_REPLY");
+      expect(flushCall?.extraSystemPrompt).toContain("memory/YYYY-MM-DD.md");
+      expect(flushCall?.extraSystemPrompt).toContain("MEMORY.md");
       expect(calls[1]?.prompt).toBe("hello");
     });
   });
@@ -1667,9 +1746,17 @@ describe("runReplyAgent memory flush", () => {
 
       await seedSessionStore({ storePath, sessionKey, entry: sessionEntry });
 
-      const calls: Array<{ prompt?: string }> = [];
+      const calls: Array<{
+        prompt?: string;
+        extraSystemPrompt?: string;
+        memoryFlushWritePath?: string;
+      }> = [];
       state.runEmbeddedPiAgentMock.mockImplementation(async (params: EmbeddedRunParams) => {
-        calls.push({ prompt: params.prompt });
+        calls.push({
+          prompt: params.prompt,
+          extraSystemPrompt: params.extraSystemPrompt,
+          memoryFlushWritePath: params.memoryFlushWritePath,
+        });
         if (params.prompt?.includes("Pre-compaction memory flush.")) {
           return { payloads: [], meta: {} };
         }
@@ -1696,6 +1783,10 @@ describe("runReplyAgent memory flush", () => {
       expect(calls[0]?.prompt).toContain("Pre-compaction memory flush.");
       expect(calls[0]?.prompt).toContain("Current time:");
       expect(calls[0]?.prompt).toMatch(/memory\/\d{4}-\d{2}-\d{2}\.md/);
+      expect(calls[0]?.prompt).toContain("MEMORY.md");
+      expect(calls[0]?.memoryFlushWritePath).toMatch(/^memory\/\d{4}-\d{2}-\d{2}\.md$/);
+      expect(calls[0]?.extraSystemPrompt).toContain("memory/YYYY-MM-DD.md");
+      expect(calls[0]?.extraSystemPrompt).toContain("MEMORY.md");
       expect(calls[1]?.prompt).toBe("hello");
 
       const stored = JSON.parse(await fs.readFile(storePath, "utf-8"));

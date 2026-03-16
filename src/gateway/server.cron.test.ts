@@ -848,6 +848,32 @@ describe("gateway server cron", () => {
         'Cron job "failure destination webhook" failed: unknown error',
       );
 
+      fetchWithSsrFGuardMock.mockClear();
+      cronIsolatedRun.mockResolvedValueOnce({ status: "error", summary: "best-effort failed" });
+      const bestEffortFailureDestJobId = await addWebhookCronJob({
+        ws,
+        name: "best effort failure destination webhook",
+        sessionTarget: "isolated",
+        delivery: {
+          mode: "announce",
+          channel: "telegram",
+          to: "19098680",
+          bestEffort: true,
+          failureDestination: {
+            mode: "webhook",
+            to: "https://example.invalid/failure-destination",
+          },
+        },
+      });
+      const bestEffortFailureDestFinished = waitForCronEvent(
+        ws,
+        (payload) =>
+          payload?.jobId === bestEffortFailureDestJobId && payload?.action === "finished",
+      );
+      await runCronJobForce(ws, bestEffortFailureDestJobId);
+      await bestEffortFailureDestFinished;
+      expect(fetchWithSsrFGuardMock).not.toHaveBeenCalled();
+
       cronIsolatedRun.mockResolvedValueOnce({ status: "ok", summary: "" });
       const noSummaryJobId = await addWebhookCronJob({
         ws,
@@ -861,7 +887,7 @@ describe("gateway server cron", () => {
       );
       await runCronJobForce(ws, noSummaryJobId);
       await noSummaryFinished;
-      expect(fetchWithSsrFGuardMock).toHaveBeenCalledTimes(1);
+      expect(fetchWithSsrFGuardMock).not.toHaveBeenCalled();
     } finally {
       await cleanupCronTestRun({ ws, server, prevSkipCron });
     }

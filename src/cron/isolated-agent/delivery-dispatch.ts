@@ -83,7 +83,7 @@ type DispatchCronDeliveryParams = {
   resolvedDelivery: DeliveryTargetResolution;
   deliveryRequested: boolean;
   skipHeartbeatDelivery: boolean;
-  skipMessagingToolDelivery: boolean;
+  skipMessagingToolDelivery?: boolean;
   deliveryBestEffort: boolean;
   deliveryPayloadHasStructuredContent: boolean;
   deliveryPayloads: ReplyPayload[];
@@ -157,7 +157,9 @@ function isTransientDirectCronDeliveryError(error: unknown): boolean {
 }
 
 function resolveDirectCronRetryDelaysMs(): readonly number[] {
-  return process.env.OPENCLAW_TEST_FAST === "1" ? [8, 16, 32] : [5_000, 10_000, 20_000];
+  return process.env.NODE_ENV === "test" && process.env.OPENCLAW_TEST_FAST === "1"
+    ? [8, 16, 32]
+    : [5_000, 10_000, 20_000];
 }
 
 async function retryTransientDirectCronDelivery<T>(params: {
@@ -192,15 +194,17 @@ async function retryTransientDirectCronDelivery<T>(params: {
 export async function dispatchCronDelivery(
   params: DispatchCronDeliveryParams,
 ): Promise<DispatchCronDeliveryState> {
+  const skipMessagingToolDelivery = params.skipMessagingToolDelivery === true;
   let summary = params.summary;
   let outputText = params.outputText;
   let synthesizedText = params.synthesizedText;
   let deliveryPayloads = params.deliveryPayloads;
 
-  // `true` means we confirmed at least one outbound send reached the target.
-  // Keep this strict so timer fallback can safely decide whether to wake main.
-  let delivered = params.skipMessagingToolDelivery;
-  let deliveryAttempted = params.skipMessagingToolDelivery;
+  // Shared callers can treat a matching message-tool send as the completed
+  // delivery path. Cron-owned callers keep this false so direct cron delivery
+  // remains the only source of delivered state.
+  let delivered = skipMessagingToolDelivery;
+  let deliveryAttempted = skipMessagingToolDelivery;
   const failDeliveryTarget = (error: string) =>
     params.withRunSession({
       status: "error",
@@ -254,6 +258,12 @@ export async function dispatchCronDelivery(
           bestEffort: params.deliveryBestEffort,
           deps: createOutboundSendDeps(params.deps),
           abortSignal: params.abortSignal,
+          // Isolated cron direct delivery uses its own transient retry loop.
+          // Keep all attempts out of the write-ahead delivery queue so a
+          // late-successful first send cannot leave behind a failed queue
+          // entry that replays on the next restart.
+          // See: https://github.com/openclaw/openclaw/issues/40545
+          skipQueue: true,
         });
       const deliveryResults = options?.retryTransient
         ? await retryTransientDirectCronDelivery({
@@ -404,11 +414,7 @@ export async function dispatchCronDelivery(
     }
   };
 
-  if (
-    params.deliveryRequested &&
-    !params.skipHeartbeatDelivery &&
-    !params.skipMessagingToolDelivery
-  ) {
+  if (params.deliveryRequested && !params.skipHeartbeatDelivery && !skipMessagingToolDelivery) {
     if (!params.resolvedDelivery.ok) {
       if (!params.deliveryBestEffort) {
         return {

@@ -265,6 +265,22 @@ describe("fs-safe", () => {
     await expect(fs.readFile(targetPath, "utf8")).resolves.toBe("seed\nnext");
   });
 
+  it("does not truncate existing target when atomic rename fails", async () => {
+    const root = await tempDirs.make("openclaw-fs-safe-root-");
+    const targetPath = path.join(root, "nested", "out.txt");
+    await fs.mkdir(path.dirname(targetPath), { recursive: true });
+    await fs.writeFile(targetPath, "seed");
+
+    await appendFileWithinRoot({
+      rootDir: root,
+      relativePath: "nested/out.txt",
+      data: "next",
+      prependNewlineIfNeeded: true,
+    });
+
+    await expect(fs.readFile(targetPath, "utf8")).resolves.toBe("seed\nnext");
+  });
+
   it("copies a file within root safely", async () => {
     const root = await tempDirs.make("openclaw-fs-safe-root-");
     const sourceDir = await tempDirs.make("openclaw-fs-safe-source-");

@@ -7,6 +7,7 @@ import {
 } from "../../../src/gateway/protocol/client-info.js";
 import {
   ConnectErrorDetailCodes,
+  readConnectErrorRecoveryAdvice,
   readConnectErrorDetailCode,
 } from "../../../src/gateway/protocol/connect-error-details.js";
 import { clearDeviceAuthToken, loadDeviceAuthToken, storeDeviceAuthToken } from "./device-auth.ts";
@@ -57,11 +58,9 @@ export function resolveGatewayErrorDetailCode(
  * Auth errors that won't resolve without user action — don't auto-reconnect.
  *
  * NOTE: AUTH_TOKEN_MISMATCH is intentionally NOT included here because the
- * browser client has a device-token fallback flow: a stale cached device token
- * triggers a mismatch, sendConnect() clears it, and the next reconnect retries
- * with opts.token (the shared gateway token). Blocking reconnect on mismatch
- * would break that fallback. The rate limiter still catches persistent wrong
- * tokens after N failures → AUTH_RATE_LIMITED stops the loop.
+ * browser client supports a bounded one-time retry with a cached device token
+ * when the endpoint is trusted. Reconnect suppression for mismatch is handled
+ * with client state (after retry budget is exhausted).
  */
 export function isNonRecoverableAuthError(error: GatewayErrorInfo | undefined): boolean {
   if (!error) {
@@ -73,8 +72,28 @@ export function isNonRecoverableAuthError(error: GatewayErrorInfo | undefined): 
     code === ConnectErrorDetailCodes.AUTH_BOOTSTRAP_TOKEN_INVALID ||
     code === ConnectErrorDetailCodes.AUTH_PASSWORD_MISSING ||
     code === ConnectErrorDetailCodes.AUTH_PASSWORD_MISMATCH ||
-    code === ConnectErrorDetailCodes.AUTH_RATE_LIMITED
+    code === ConnectErrorDetailCodes.AUTH_RATE_LIMITED ||
+    code === ConnectErrorDetailCodes.PAIRING_REQUIRED ||
+    code === ConnectErrorDetailCodes.CONTROL_UI_DEVICE_IDENTITY_REQUIRED ||
+    code === ConnectErrorDetailCodes.DEVICE_IDENTITY_REQUIRED
   );
+}
+
+function isTrustedRetryEndpoint(url: string): boolean {
+  try {
+    const gatewayUrl = new URL(url, window.location.href);
+    const host = gatewayUrl.hostname.trim().toLowerCase();
+    const isLoopbackHost =
+      host === "localhost" || host === "::1" || host === "[::1]" || host === "127.0.0.1";
+    const isLoopbackIPv4 = host.startsWith("127.");
+    if (isLoopbackHost || isLoopbackIPv4) {
+      return true;
+    }
+    const pageUrl = new URL(window.location.href);
+    return gatewayUrl.host === pageUrl.host;
+  } catch {
+    return false;
+  }
 }
 
 export type GatewayHelloOk = {
@@ -128,6 +147,8 @@ export class GatewayBrowserClient {
   private connectTimer: number | null = null;
   private backoffMs = 800;
   private pendingConnectError: GatewayErrorInfo | undefined;
+  private pendingDeviceTokenRetry = false;
+  private deviceTokenRetryBudgetUsed = false;
 
   constructor(private opts: GatewayBrowserClientOptions) {}
 
@@ -141,6 +162,8 @@ export class GatewayBrowserClient {
     this.ws?.close();
     this.ws = null;
     this.pendingConnectError = undefined;
+    this.pendingDeviceTokenRetry = false;
+    this.deviceTokenRetryBudgetUsed = false;
     this.flushPending(new Error("gateway client stopped"));
   }
 
@@ -162,6 +185,14 @@ export class GatewayBrowserClient {
       this.ws = null;
       this.flushPending(new Error(`gateway closed (${ev.code}): ${reason}`));
       this.opts.onClose?.({ code: ev.code, reason, error: connectError });
+      const connectErrorCode = resolveGatewayErrorDetailCode(connectError);
+      if (
+        connectErrorCode === ConnectErrorDetailCodes.AUTH_TOKEN_MISMATCH &&
+        this.deviceTokenRetryBudgetUsed &&
+        !this.pendingDeviceTokenRetry
+      ) {
+        return;
+      }
       if (!isNonRecoverableAuthError(connectError)) {
         this.scheduleReconnect();
       }
@@ -216,9 +247,20 @@ export class GatewayBrowserClient {
         deviceId: deviceIdentity.deviceId,
         role,
       })?.token;
-      deviceToken = !(explicitGatewayToken || this.opts.password?.trim())
-        ? (storedToken ?? undefined)
-        : undefined;
+      const shouldUseDeviceRetryToken =
+        this.pendingDeviceTokenRetry &&
+        !deviceToken &&
+        Boolean(explicitGatewayToken) &&
+        Boolean(storedToken) &&
+        isTrustedRetryEndpoint(this.opts.url);
+      if (shouldUseDeviceRetryToken) {
+        deviceToken = storedToken ?? undefined;
+        this.pendingDeviceTokenRetry = false;
+      } else {
+        deviceToken = !(explicitGatewayToken || this.opts.password?.trim())
+          ? (storedToken ?? undefined)
+          : undefined;
+      }
       canFallbackToShared = Boolean(deviceToken && explicitGatewayToken);
     }
     authToken = explicitGatewayToken ?? deviceToken;
@@ -226,6 +268,7 @@ export class GatewayBrowserClient {
       authToken || this.opts.password
         ? {
             token: authToken,
+            deviceToken,
             password: this.opts.password,
           }
         : undefined;
@@ -283,6 +326,8 @@ export class GatewayBrowserClient {
 
     void this.request<GatewayHelloOk>("connect", params)
       .then((hello) => {
+        this.pendingDeviceTokenRetry = false;
+        this.deviceTokenRetryBudgetUsed = false;
         if (hello?.auth?.deviceToken && deviceIdentity) {
           storeDeviceAuthToken({
             deviceId: deviceIdentity.deviceId,
@@ -295,6 +340,33 @@ export class GatewayBrowserClient {
         this.opts.onHello?.(hello);
       })
       .catch((err: unknown) => {
+        const connectErrorCode =
+          err instanceof GatewayRequestError ? resolveGatewayErrorDetailCode(err) : null;
+        const recoveryAdvice =
+          err instanceof GatewayRequestError ? readConnectErrorRecoveryAdvice(err.details) : {};
+        const retryWithDeviceTokenRecommended =
+          recoveryAdvice.recommendedNextStep === "retry_with_device_token";
+        const canRetryWithDeviceTokenHint =
+          recoveryAdvice.canRetryWithDeviceToken === true ||
+          retryWithDeviceTokenRecommended ||
+          connectErrorCode === ConnectErrorDetailCodes.AUTH_TOKEN_MISMATCH;
+        const shouldRetryWithDeviceToken =
+          !this.deviceTokenRetryBudgetUsed &&
+          !deviceToken &&
+          Boolean(explicitGatewayToken) &&
+          Boolean(deviceIdentity) &&
+          Boolean(
+            loadDeviceAuthToken({
+              deviceId: deviceIdentity?.deviceId ?? "",
+              role,
+            })?.token,
+          ) &&
+          canRetryWithDeviceTokenHint &&
+          isTrustedRetryEndpoint(this.opts.url);
+        if (shouldRetryWithDeviceToken) {
+          this.pendingDeviceTokenRetry = true;
+          this.deviceTokenRetryBudgetUsed = true;
+        }
         if (err instanceof GatewayRequestError) {
           this.pendingConnectError = {
             code: err.gatewayCode,
@@ -304,7 +376,11 @@ export class GatewayBrowserClient {
         } else {
           this.pendingConnectError = undefined;
         }
-        if (canFallbackToShared && deviceIdentity) {
+        if (
+          canFallbackToShared &&
+          deviceIdentity &&
+          connectErrorCode === ConnectErrorDetailCodes.AUTH_DEVICE_TOKEN_MISMATCH
+        ) {
           clearDeviceAuthToken({ deviceId: deviceIdentity.deviceId, role });
         }
         this.ws?.close(CONNECT_FAILED_CLOSE_CODE, "connect failed");

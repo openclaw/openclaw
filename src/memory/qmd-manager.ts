@@ -949,8 +949,12 @@ export class QmdMemoryManager implements MemorySearchManager {
   async sync(params?: {
     reason?: string;
     force?: boolean;
+    sessionFiles?: string[];
     progress?: (update: MemorySyncProgressUpdate) => void;
   }): Promise<void> {
+    if (params?.sessionFiles?.some((sessionFile) => sessionFile.trim().length > 0)) {
+      log.debug("qmd sync ignoring targeted sessionFiles hint; running regular update");
+    }
     if (params?.progress) {
       params.progress({ completed: 0, total: 1, label: "Updating QMD index…" });
     }

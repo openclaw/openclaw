@@ -65,6 +65,7 @@ cat ~/.openclaw/openclaw.json
 - Config normalization for legacy values.
 - OpenCode Zen provider override warnings (`models.providers.opencode`).
 - Legacy on-disk state migration (sessions/agent dir/WhatsApp auth).
+- Legacy cron store migration (`jobId`, `schedule.cron`, top-level delivery/payload fields, payload `provider`, simple `notify: true` webhook fallback jobs).
 - State integrity and permissions checks (sessions, transcripts, state dir).
 - Config file permission checks (chmod 600) when running locally.
 - Model auth health: checks OAuth expiry, can refresh expiring tokens, and reports auth-profile cooldown/disabled states.
@@ -158,26 +159,24 @@ the legacy sessions + agent dir on startup so history/auth/models land in the
 per-agent path without a manual doctor run. WhatsApp auth is intentionally only
 migrated via `openclaw doctor`.
 
-### 3b) SQLite state database
+### 3b) Legacy cron store migrations
 
-Doctor checks the health of `operator1.db`, the SQLite database that stores sessions, projects, agent scopes, and config overrides.
+Doctor also checks the cron job store (`~/.openclaw/cron/jobs.json` by default,
+or `cron.store` when overridden) for old job shapes that the scheduler still
+accepts for compatibility.
 
-Doctor reports:
+Current cron cleanups include:
 
-- **Schema version**: confirms the database is at the expected schema version. A mismatch usually means the database was opened by an older build; the gateway auto-migrates on startup.
-- **WAL mode**: verifies the database is running in WAL (write-ahead log) mode for safe concurrent access.
-- **Table integrity**: spot-checks key tables for row counts and basic consistency.
-- **Path and file size**: reports the resolved path (usually `~/.openclaw/operator1.db`) and current file size.
+- `jobId` → `id`
+- `schedule.cron` → `schedule.expr`
+- top-level payload fields (`message`, `model`, `thinking`, ...) → `payload`
+- top-level delivery fields (`deliver`, `channel`, `to`, `provider`, ...) → `delivery`
+- payload `provider` delivery aliases → explicit `delivery.channel`
+- simple legacy `notify: true` webhook fallback jobs → explicit `delivery.mode="webhook"` with `delivery.to=cron.webhook`
 
-Common fixes:
-
-| Symptom                   | Fix                                                                                                                                       |
-| ------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
-| Locked DB (stale process) | Kill the stale process holding a write lock, then restart the gateway.                                                                    |
-| Schema mismatch           | Restart the gateway — it auto-migrates `operator1.db` at startup.                                                                         |
-| Corrupt WAL               | Delete `~/.openclaw/operator1.db-wal` and `~/.openclaw/operator1.db-shm`; the gateway recovers from the main database file on next start. |
-
-Run `openclaw doctor` to see all checks. The SQLite check appears as a named health item labeled **SQLite state database** in the output.
+Doctor only auto-migrates `notify: true` jobs when it can do so without
+changing behavior. If a job combines legacy notify fallback with an existing
+non-webhook delivery mode, doctor warns and leaves that job for manual review.
 
 ### 4) State integrity checks (session persistence, routing, and safety)
 

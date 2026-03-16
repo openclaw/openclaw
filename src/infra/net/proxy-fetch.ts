@@ -1,5 +1,6 @@
 import { EnvHttpProxyAgent, ProxyAgent, fetch as undiciFetch } from "undici";
 import { logWarn } from "../../logger.js";
+import { hasEnvHttpProxyConfigured } from "./proxy-env.js";
 
 /**
  * Create a fetch function that routes requests through the given HTTP proxy.
@@ -24,12 +25,7 @@ export function makeProxyFetch(proxyUrl: string): typeof fetch {
  * Gracefully returns undefined if the proxy URL is malformed.
  */
 export function resolveProxyFetchFromEnv(): typeof fetch | undefined {
-  const proxyUrl =
-    process.env.HTTPS_PROXY ||
-    process.env.HTTP_PROXY ||
-    process.env.https_proxy ||
-    process.env.http_proxy;
-  if (!proxyUrl?.trim()) {
+  if (!hasEnvHttpProxyConfigured("https")) {
     return undefined;
   }
   try {

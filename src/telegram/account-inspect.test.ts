@@ -1,3 +1,6 @@
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { withEnv } from "../test-utils/env.js";
@@ -76,4 +79,29 @@ describe("inspectTelegramAccount SecretRef resolution", () => {
       expect(account.token).toBe("");
     });
   });
+
+  it.runIf(process.platform !== "win32")(
+    "treats symlinked token files as configured_unavailable",
+    () => {
+      const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-telegram-inspect-"));
+      const tokenFile = path.join(dir, "token.txt");
+      const tokenLink = path.join(dir, "token-link.txt");
+      fs.writeFileSync(tokenFile, "123:token\n", "utf8");
+      fs.symlinkSync(tokenFile, tokenLink);
+
+      const cfg: OpenClawConfig = {
+        channels: {
+          telegram: {
+            tokenFile: tokenLink,
+          },
+        },
+      };
+
+      const account = inspectTelegramAccount({ cfg, accountId: "default" });
+      expect(account.tokenSource).toBe("tokenFile");
+      expect(account.tokenStatus).toBe("configured_unavailable");
+      expect(account.token).toBe("");
+      fs.rmSync(dir, { recursive: true, force: true });
+    },
+  );
 });

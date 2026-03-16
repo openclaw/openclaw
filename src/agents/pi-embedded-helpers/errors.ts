@@ -138,6 +138,13 @@ export function isLikelyContextOverflowError(errorMessage?: string): boolean {
     return false;
   }
 
+  // Billing/quota errors can contain patterns like "request size exceeds" or
+  // "maximum token limit exceeded" that match the context overflow heuristic.
+  // Billing is a more specific error class — exclude it early.
+  if (isBillingErrorMessage(errorMessage)) {
+    return false;
+  }
+
   if (CONTEXT_WINDOW_TOO_SMALL_RE.test(errorMessage)) {
     return false;
   }
@@ -189,7 +196,7 @@ const HTTP_STATUS_PREFIX_RE = /^(?:http\s*)?(\d{3})\s+(.+)$/i;
 const HTTP_STATUS_CODE_PREFIX_RE = /^(?:http\s*)?(\d{3})(?:\s+([\s\S]+))?$/i;
 const HTML_ERROR_PREFIX_RE = /^\s*(?:<!doctype\s+html\b|<html\b)/i;
 const CLOUDFLARE_HTML_ERROR_CODES = new Set([521, 522, 523, 524, 525, 526, 530]);
-const TRANSIENT_HTTP_ERROR_CODES = new Set([500, 502, 503, 504, 521, 522, 523, 524, 529]);
+const TRANSIENT_HTTP_ERROR_CODES = new Set([499, 500, 502, 503, 504, 521, 522, 523, 524, 529]);
 const HTTP_ERROR_HINTS = [
   "error",
   "bad request",
@@ -237,7 +244,7 @@ const RETRYABLE_402_SCOPED_RESULT_HINTS = [
   "exhausted",
 ] as const;
 const RAW_402_MARKER_RE =
-  /["']?(?:status|code)["']?\s*[:=]\s*402\b|\bhttp\s*402\b|\berror(?:\s+code)?\s*[:=]?\s*402\b|\b(?:got|returned|received)\s+(?:a\s+)?402\b|^\s*402\s+payment required\b/i;
+  /["']?(?:status|code)["']?\s*[:=]\s*402\b|\bhttp\s*402\b|\berror(?:\s+code)?\s*[:=]?\s*402\b|\b(?:got|returned|received)\s+(?:a\s+)?402\b|^\s*402\s+payment required\b|^\s*402\s+.*used up your points\b/i;
 const LEADING_402_WRAPPER_RE =
   /^(?:error[:\s-]+)?(?:(?:http\s*)?402(?:\s+payment required)?|payment required)(?:[:\s-]+|$)/i;
 
@@ -252,6 +259,13 @@ function hasExplicit402BillingSignal(text: string): boolean {
     text.includes("billing hard limit") ||
     text.includes("hard limit reached") ||
     (text.includes("maximum allowed") && text.includes("limit"))
+  );
+}
+
+function hasQuotaRefreshWindowSignal(text: string): boolean {
+  return (
+    text.includes("subscription quota limit") &&
+    (text.includes("automatic quota refresh") || text.includes("rolling time window"))
   );
 }
 
@@ -278,6 +292,10 @@ function classify402Message(message: string): PaymentRequiredFailoverReason {
   const normalized = normalize402Message(message);
   if (!normalized) {
     return "billing";
+  }
+
+  if (hasQuotaRefreshWindowSignal(normalized)) {
+    return "rate_limit";
   }
 
   if (hasExplicit402BillingSignal(normalized)) {
@@ -375,13 +393,19 @@ export function classifyFailoverReasonFromHttpStatus(
     }
     return "timeout";
   }
+  if (status === 499) {
+    if (message && isOverloadedErrorMessage(message)) {
+      return "overloaded";
+    }
+    return "timeout";
+  }
   if (status === 502 || status === 504) {
     return "timeout";
   }
   if (status === 529) {
     return "overloaded";
   }
-  if (status === 400) {
+  if (status === 400 || status === 422) {
     // Some providers return quota/balance errors under HTTP 400, so do not
     // let the generic format fallback mask an explicit billing signal.
     if (message && isBillingErrorMessage(message)) {

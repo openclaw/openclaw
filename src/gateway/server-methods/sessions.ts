@@ -1,29 +1,13 @@
-import { randomUUID } from "node:crypto";
 import fs from "node:fs";
-import { getAcpSessionManager } from "../../acp/control-plane/manager.js";
 import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
-import { clearBootstrapSnapshot } from "../../agents/bootstrap-cache.js";
-import { abortEmbeddedPiRun, waitForEmbeddedPiRunEnd } from "../../agents/pi-embedded.js";
-import { stopSubagentsForRequester } from "../../auto-reply/reply/abort.js";
-import { clearSessionQueues } from "../../auto-reply/reply/queue.js";
-import { closeTrackedBrowserTabsForSessions } from "../../browser/session-tab-registry.js";
 import { loadConfig } from "../../config/config.js";
 import {
   loadSessionStore,
-  snapshotSessionOrigin,
   resolveMainSessionKey,
   type SessionEntry,
   updateSessionStore,
 } from "../../config/sessions.js";
-import { unbindThreadBindingsBySessionKey } from "../../discord/monitor/thread-bindings.js";
-import { logVerbose } from "../../globals.js";
-import { createInternalHookEvent, triggerInternalHook } from "../../hooks/internal-hooks.js";
-import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
-import {
-  isSubagentSessionKey,
-  normalizeAgentId,
-  parseAgentSessionKey,
-} from "../../routing/session-key.js";
+import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
 import { GATEWAY_CLIENT_IDS } from "../protocol/client-info.js";
 import {
   ErrorCodes,
@@ -37,8 +21,13 @@ import {
   validateSessionsResolveParams,
 } from "../protocol/index.js";
 import {
+  archiveSessionTranscriptsForSession,
+  cleanupSessionBeforeMutation,
+  emitSessionUnboundLifecycleEvent,
+  performGatewaySessionReset,
+} from "../session-reset-service.js";
+import {
   archiveFileOnDisk,
-  archiveSessionTranscripts,
   listSessionsFromStore,
   loadCombinedSessionStoreForGateway,
   loadSessionEntry,
@@ -126,6 +115,19 @@ function migrateAndPruneSessionStoreKey(params: {
     candidates: target.storeKeys,
   });
   return { target, primaryKey, entry: params.store[primaryKey] };
+}
+
+function _stripRuntimeModelState(entry?: SessionEntry): SessionEntry | undefined {
+  if (!entry) {
+    return entry;
+  }
+  return {
+    ...entry,
+    model: undefined,
+    modelProvider: undefined,
+    contextTokens: undefined,
+    systemPromptReport: undefined,
+  };
 }
 
 function archiveSessionTranscriptsForSession(params: {
@@ -522,88 +524,17 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       return;
     }
 
-    const { cfg, target, storePath } = resolveGatewaySessionTargetFromKey(key);
-    const { entry, legacyKey, canonicalKey } = loadSessionEntry(key);
-    const hadExistingEntry = Boolean(entry);
-    const commandReason = p.reason === "new" ? "new" : "reset";
-    const hookEvent = createInternalHookEvent(
-      "command",
-      commandReason,
-      target.canonicalKey ?? key,
-      {
-        sessionEntry: entry,
-        previousSessionEntry: entry,
-        commandSource: "gateway:sessions.reset",
-        cfg,
-      },
-    );
-    await triggerInternalHook(hookEvent);
-    const mutationCleanupError = await cleanupSessionBeforeMutation({
-      cfg,
+    const reason = p.reason === "new" ? "new" : "reset";
+    const result = await performGatewaySessionReset({
       key,
-      target,
-      entry,
-      legacyKey,
-      canonicalKey,
-      reason: "session-reset",
+      reason,
+      commandSource: "gateway:sessions.reset",
     });
-    if (mutationCleanupError) {
-      respond(false, undefined, mutationCleanupError);
+    if (!result.ok) {
+      respond(false, undefined, result.error);
       return;
     }
-    let oldSessionId: string | undefined;
-    let oldSessionFile: string | undefined;
-    const next = await updateSessionStore(storePath, (store) => {
-      const { primaryKey } = migrateAndPruneSessionStoreKey({ cfg, key, store });
-      const entry = store[primaryKey];
-      const parsed = parseAgentSessionKey(primaryKey);
-      const sessionAgentId = normalizeAgentId(parsed?.agentId ?? resolveDefaultAgentId(cfg));
-      const resolvedModel = resolveSessionModelRef(cfg, entry, sessionAgentId);
-      oldSessionId = entry?.sessionId;
-      oldSessionFile = entry?.sessionFile;
-      const now = Date.now();
-      const nextEntry: SessionEntry = {
-        sessionId: randomUUID(),
-        updatedAt: now,
-        systemSent: false,
-        abortedLastRun: false,
-        thinkingLevel: entry?.thinkingLevel,
-        verboseLevel: entry?.verboseLevel,
-        reasoningLevel: entry?.reasoningLevel,
-        responseUsage: entry?.responseUsage,
-        model: resolvedModel.model,
-        modelProvider: resolvedModel.provider,
-        contextTokens: entry?.contextTokens,
-        sendPolicy: entry?.sendPolicy,
-        label: entry?.label,
-        origin: snapshotSessionOrigin(entry),
-        lastChannel: entry?.lastChannel,
-        lastTo: entry?.lastTo,
-        skillsSnapshot: entry?.skillsSnapshot,
-        // Reset token counts to 0 on session reset (#1523)
-        inputTokens: 0,
-        outputTokens: 0,
-        totalTokens: 0,
-        totalTokensFresh: true,
-      };
-      store[primaryKey] = nextEntry;
-      return nextEntry;
-    });
-    // Archive old transcript so it doesn't accumulate on disk (#14869).
-    archiveSessionTranscriptsForSession({
-      sessionId: oldSessionId,
-      storePath,
-      sessionFile: oldSessionFile,
-      agentId: target.agentId,
-      reason: "reset",
-    });
-    if (hadExistingEntry) {
-      await emitSessionUnboundLifecycleEvent({
-        targetSessionKey: target.canonicalKey ?? key,
-        reason: "session-reset",
-      });
-    }
-    respond(true, { ok: true, key: target.canonicalKey, entry: next }, undefined);
+    respond(true, { ok: true, key: result.key, entry: result.entry }, undefined);
   },
   "sessions.delete": async ({ params, respond, client, isWebchatConnect }) => {
     if (!assertValidParams(params, validateSessionsDeleteParams, "sessions.delete", respond)) {

@@ -296,14 +296,11 @@ export class GatewayClient {
     if (shouldUseDeviceRetryToken) {
       this.pendingDeviceTokenRetry = false;
     }
-    // Shared gateway credentials stay explicit. Bootstrap tokens are different:
-    // once a role-scoped device token exists, it should take precedence so the
-    // temporary bootstrap secret falls out of active use.
+    // Keep shared gateway credentials explicit. Persisted per-device tokens only
+    // participate when no explicit shared token/password is provided.
     const resolvedDeviceToken =
       explicitDeviceToken ??
-      (shouldUseDeviceRetryToken ||
-      (!(explicitGatewayToken || this.opts.password?.trim()) &&
-        (!explicitBootstrapToken || Boolean(storedToken)))
+      (shouldUseDeviceRetryToken || !(explicitGatewayToken || this.opts.password?.trim())
         ? (storedToken ?? undefined)
         : undefined);
     // Legacy compatibility: keep `auth.token` populated for device-token auth when
@@ -428,7 +425,6 @@ export class GatewayClient {
     }
     if (
       detailCode === ConnectErrorDetailCodes.AUTH_TOKEN_MISSING ||
-      detailCode === ConnectErrorDetailCodes.AUTH_BOOTSTRAP_TOKEN_INVALID ||
       detailCode === ConnectErrorDetailCodes.AUTH_PASSWORD_MISSING ||
       detailCode === ConnectErrorDetailCodes.AUTH_PASSWORD_MISMATCH ||
       detailCode === ConnectErrorDetailCodes.AUTH_RATE_LIMITED ||

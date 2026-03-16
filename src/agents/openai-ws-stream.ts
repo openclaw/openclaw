@@ -161,6 +161,7 @@ export function convertTools(tools: Context["tools"]): FunctionToolDefinition[] 
   }
   return tools.map((tool) => ({
     type: "function" as const,
+    name: tool.name,
     function: {
       name: tool.name,
       description: typeof tool.description === "string" ? tool.description : undefined,

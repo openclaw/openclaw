@@ -10,6 +10,9 @@ import * as tts from "./tts.js";
 
 vi.mock("@mariozechner/pi-ai", () => ({
   completeSimple: vi.fn(),
+}));
+
+vi.mock("@mariozechner/pi-ai/oauth", () => ({
   // Some auth helpers import oauth provider metadata at module load time.
   getOAuthProviders: () => [],
   getOAuthApiKey: vi.fn(async () => null),

@@ -1,11 +1,14 @@
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { captureEnv } from "../../test-utils/env.js";
 import { resolveApiKeyForProfile } from "./oauth.js";
 import {
   clearRuntimeAuthProfileStoreSnapshots,
   ensureAuthProfileStore,
   saveAuthProfileStore,
 } from "./store.js";
-import { useAuthProfilesTestDb } from "./test-helpers.auth-profiles.js";
 import type { AuthProfileStore } from "./types.js";
 
 const { getOAuthApiKeyMock } = vi.hoisted(() => ({
@@ -14,17 +17,13 @@ const { getOAuthApiKeyMock } = vi.hoisted(() => ({
   }),
 }));
 
-vi.mock("@mariozechner/pi-ai", async () => {
-  const actual = await vi.importActual<typeof import("@mariozechner/pi-ai")>("@mariozechner/pi-ai");
-  return {
-    ...actual,
-    getOAuthApiKey: getOAuthApiKeyMock,
-    getOAuthProviders: () => [
-      { id: "openai-codex", envApiKey: "OPENAI_API_KEY", oauthTokenEnv: "OPENAI_OAUTH_TOKEN" }, // pragma: allowlist secret
-      { id: "anthropic", envApiKey: "ANTHROPIC_API_KEY", oauthTokenEnv: "ANTHROPIC_OAUTH_TOKEN" }, // pragma: allowlist secret
-    ],
-  };
-});
+vi.mock("@mariozechner/pi-ai/oauth", () => ({
+  getOAuthApiKey: getOAuthApiKeyMock,
+  getOAuthProviders: () => [
+    { id: "openai-codex", envApiKey: "OPENAI_API_KEY", oauthTokenEnv: "OPENAI_OAUTH_TOKEN" }, // pragma: allowlist secret
+    { id: "anthropic", envApiKey: "ANTHROPIC_API_KEY", oauthTokenEnv: "ANTHROPIC_OAUTH_TOKEN" }, // pragma: allowlist secret
+  ],
+}));
 
 function createExpiredOauthStore(params: {
   profileId: string;
@@ -46,15 +45,29 @@ function createExpiredOauthStore(params: {
 }
 
 describe("resolveApiKeyForProfile openai-codex refresh fallback", () => {
-  useAuthProfilesTestDb();
+  const envSnapshot = captureEnv([
+    "OPENCLAW_STATE_DIR",
+    "OPENCLAW_AGENT_DIR",
+    "PI_CODING_AGENT_DIR",
+  ]);
+  let tempRoot = "";
+  let agentDir = "";
 
-  beforeEach(() => {
+  beforeEach(async () => {
     getOAuthApiKeyMock.mockClear();
     clearRuntimeAuthProfileStoreSnapshots();
+    tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-refresh-fallback-"));
+    agentDir = path.join(tempRoot, "agents", "main", "agent");
+    await fs.mkdir(agentDir, { recursive: true });
+    process.env.OPENCLAW_STATE_DIR = tempRoot;
+    process.env.OPENCLAW_AGENT_DIR = agentDir;
+    process.env.PI_CODING_AGENT_DIR = agentDir;
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     clearRuntimeAuthProfileStoreSnapshots();
+    envSnapshot.restore();
+    await fs.rm(tempRoot, { recursive: true, force: true });
   });
 
   it("falls back to cached access token when openai-codex refresh fails on accountId extraction", async () => {
@@ -64,11 +77,13 @@ describe("resolveApiKeyForProfile openai-codex refresh fallback", () => {
         profileId,
         provider: "openai-codex",
       }),
+      agentDir,
     );
 
     const result = await resolveApiKeyForProfile({
-      store: ensureAuthProfileStore(),
+      store: ensureAuthProfileStore(agentDir),
       profileId,
+      agentDir,
     });
 
     expect(result).toEqual({
@@ -86,12 +101,14 @@ describe("resolveApiKeyForProfile openai-codex refresh fallback", () => {
         profileId,
         provider: "anthropic",
       }),
+      agentDir,
     );
 
     await expect(
       resolveApiKeyForProfile({
-        store: ensureAuthProfileStore(),
+        store: ensureAuthProfileStore(agentDir),
         profileId,
+        agentDir,
       }),
     ).rejects.toThrow(/OAuth token refresh failed for anthropic/);
   });
@@ -103,6 +120,7 @@ describe("resolveApiKeyForProfile openai-codex refresh fallback", () => {
         profileId,
         provider: "openai-codex",
       }),
+      agentDir,
     );
     getOAuthApiKeyMock.mockImplementationOnce(async () => {
       throw new Error("invalid_grant");
@@ -110,8 +128,9 @@ describe("resolveApiKeyForProfile openai-codex refresh fallback", () => {
 
     await expect(
       resolveApiKeyForProfile({
-        store: ensureAuthProfileStore(),
+        store: ensureAuthProfileStore(agentDir),
         profileId,
+        agentDir,
       }),
     ).rejects.toThrow(/OAuth token refresh failed for openai-codex/);
   });

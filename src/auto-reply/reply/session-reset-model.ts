@@ -87,6 +87,7 @@ function applySelectionToSession(params: {
 
 export async function applyResetModelOverride(params: {
   cfg: OpenClawConfig;
+  agentId?: string;
   resetTriggered: boolean;
   bodyStripped?: string;
   sessionCtx: TemplateContext;
@@ -118,6 +119,7 @@ export async function applyResetModelOverride(params: {
     catalog,
     defaultProvider: params.defaultProvider,
     defaultModel: params.defaultModel,
+    agentId: params.agentId,
   });
   const allowedModelKeys = allowed.allowedKeys;
   if (allowedModelKeys.size === 0) {

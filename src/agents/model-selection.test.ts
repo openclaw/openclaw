@@ -73,6 +73,12 @@ describe("model-selection", () => {
     });
   });
 
+  describe("modelKey", () => {
+    it("keeps canonical OpenRouter native ids without duplicating the provider", () => {
+      expect(modelKey("openrouter", "openrouter/hunter-alpha")).toBe("openrouter/hunter-alpha");
+    });
+  });
+
   describe("parseModelRef", () => {
     it("should parse full model refs", () => {
       expect(parseModelRef("anthropic/claude-3-5-sonnet", "openai")).toEqual({
@@ -321,6 +327,98 @@ describe("model-selection", () => {
       expect(result.allowedCatalog).toEqual([
         { provider: "anthropic", id: "claude-sonnet-4-6", name: "claude-sonnet-4-6" },
       ]);
+    });
+
+    it("includes fallback models in allowed set", () => {
+      const cfg: OpenClawConfig = {
+        agents: {
+          defaults: {
+            models: {
+              "openai/gpt-4o": {},
+            },
+            model: {
+              primary: "openai/gpt-4o",
+              fallbacks: ["anthropic/claude-sonnet-4-6", "google/gemini-3-pro"],
+            },
+          },
+        },
+      } as OpenClawConfig;
+
+      const result = buildAllowedModelSet({
+        cfg,
+        catalog: [],
+        defaultProvider: "openai",
+        defaultModel: "gpt-4o",
+      });
+
+      expect(result.allowedKeys.has("openai/gpt-4o")).toBe(true);
+      expect(result.allowedKeys.has("anthropic/claude-sonnet-4-6")).toBe(true);
+      expect(result.allowedKeys.has("google/gemini-3-pro-preview")).toBe(true);
+      expect(result.allowAny).toBe(false);
+    });
+
+    it("handles empty fallbacks gracefully", () => {
+      const cfg: OpenClawConfig = {
+        agents: {
+          defaults: {
+            models: {
+              "openai/gpt-4o": {},
+            },
+            model: {
+              primary: "openai/gpt-4o",
+              fallbacks: [],
+            },
+          },
+        },
+      } as OpenClawConfig;
+
+      const result = buildAllowedModelSet({
+        cfg,
+        catalog: [],
+        defaultProvider: "openai",
+        defaultModel: "gpt-4o",
+      });
+
+      expect(result.allowedKeys.has("openai/gpt-4o")).toBe(true);
+      expect(result.allowAny).toBe(false);
+    });
+
+    it("prefers per-agent fallback overrides when agentId is provided", () => {
+      const cfg: OpenClawConfig = {
+        agents: {
+          defaults: {
+            models: {
+              "openai/gpt-4o": {},
+            },
+            model: {
+              primary: "openai/gpt-4o",
+              fallbacks: ["google/gemini-3-pro"],
+            },
+          },
+          list: [
+            {
+              id: "coder",
+              model: {
+                primary: "openai/gpt-4o",
+                fallbacks: ["anthropic/claude-sonnet-4-6"],
+              },
+            },
+          ],
+        },
+      } as OpenClawConfig;
+
+      const result = buildAllowedModelSet({
+        cfg,
+        catalog: [],
+        defaultProvider: "openai",
+        defaultModel: "gpt-4o",
+        agentId: "coder",
+      });
+
+      expect(result.allowedKeys.has("openai/gpt-4o")).toBe(true);
+      expect(result.allowedKeys.has("anthropic/claude-sonnet-4-6")).toBe(true);
+      expect(result.allowedKeys.has("google/gemini-3-pro-preview")).toBe(false);
+      expect(result.allowAny).toBe(false);
     });
   });
 
@@ -660,6 +758,28 @@ describe("model-selection", () => {
       } as OpenClawConfig;
 
       expect(resolveAnthropicOpusThinking(cfg)).toBe("high");
+    });
+
+    it("accepts legacy duplicated OpenRouter keys for per-model thinking", () => {
+      const cfg = {
+        agents: {
+          defaults: {
+            models: {
+              "openrouter/openrouter/hunter-alpha": {
+                params: { thinking: "high" },
+              },
+            },
+          },
+        },
+      } as OpenClawConfig;
+
+      expect(
+        resolveThinkingDefault({
+          cfg,
+          provider: "openrouter",
+          model: "openrouter/hunter-alpha",
+        }),
+      ).toBe("high");
     });
 
     it("accepts per-model params.thinking=adaptive", () => {
