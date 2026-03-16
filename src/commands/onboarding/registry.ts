@@ -1,7 +1,7 @@
-import { discordOnboardingAdapter } from "../../../extensions/discord/src/setup-surface.js";
+import { discordPlugin } from "../../../extensions/discord/src/channel.js";
 import { imessagePlugin } from "../../../extensions/imessage/src/channel.js";
 import { signalPlugin } from "../../../extensions/signal/src/channel.js";
-import { slackOnboardingAdapter } from "../../../extensions/slack/src/setup-surface.js";
+import { slackPlugin } from "../../../extensions/slack/src/channel.js";
 import { telegramPlugin } from "../../../extensions/telegram/src/channel.js";
 import { whatsappOnboardingAdapter } from "../../../extensions/whatsapp/src/onboarding.js";
 import { listChannelSetupPlugins } from "../../channels/plugins/setup-registry.js";
@@ -12,6 +12,14 @@ import type { ChannelOnboardingAdapter } from "./types.js";
 const telegramOnboardingAdapter = buildChannelOnboardingAdapterFromSetupWizard({
   plugin: telegramPlugin,
   wizard: telegramPlugin.setupWizard!,
+});
+const discordOnboardingAdapter = buildChannelOnboardingAdapterFromSetupWizard({
+  plugin: discordPlugin,
+  wizard: discordPlugin.setupWizard!,
+});
+const slackOnboardingAdapter = buildChannelOnboardingAdapterFromSetupWizard({
+  plugin: slackPlugin,
+  wizard: slackPlugin.setupWizard!,
 });
 const signalOnboardingAdapter = buildChannelOnboardingAdapterFromSetupWizard({
   plugin: signalPlugin,
