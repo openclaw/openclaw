@@ -1,26 +1,24 @@
 import path from "node:path";
 import { loginWeb } from "../../../src/channel-web.js";
-import type { ChannelOnboardingAdapter } from "../../../src/channels/plugins/onboarding-types.js";
 import {
   normalizeAllowFromEntries,
-  resolveAccountIdForConfigure,
-  resolveOnboardingAccountId,
   splitOnboardingEntries,
 } from "../../../src/channels/plugins/onboarding/helpers.js";
+import { setOnboardingChannelEnabled } from "../../../src/channels/plugins/onboarding/helpers.js";
+import {
+  applyAccountNameToChannelSection,
+  migrateBaseNameToDefaultAccount,
+} from "../../../src/channels/plugins/setup-helpers.js";
+import type { ChannelSetupWizard } from "../../../src/channels/plugins/setup-wizard.js";
+import type { ChannelSetupAdapter } from "../../../src/channels/plugins/types.adapters.js";
 import { formatCliCommand } from "../../../src/cli/command-format.js";
 import type { OpenClawConfig } from "../../../src/config/config.js";
 import { mergeWhatsAppConfig } from "../../../src/config/merge-config.js";
 import type { DmPolicy } from "../../../src/config/types.js";
-import { DEFAULT_ACCOUNT_ID } from "../../../src/routing/session-key.js";
-import type { RuntimeEnv } from "../../../src/runtime.js";
+import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../../../src/routing/session-key.js";
 import { formatDocsLink } from "../../../src/terminal/links.js";
 import { normalizeE164, pathExists } from "../../../src/utils.js";
-import type { WizardPrompter } from "../../../src/wizard/prompts.js";
-import {
-  listWhatsAppAccountIds,
-  resolveDefaultWhatsAppAccountId,
-  resolveWhatsAppAuthDir,
-} from "./accounts.js";
+import { listWhatsAppAccountIds, resolveWhatsAppAuthDir } from "./accounts.js";
 
 const channel = "whatsapp" as const;
 
@@ -43,8 +41,8 @@ async function detectWhatsAppLinked(cfg: OpenClawConfig, accountId: string): Pro
 }
 
 async function promptWhatsAppOwnerAllowFrom(params: {
-  prompter: WizardPrompter;
   existingAllowFrom: string[];
+  prompter: Parameters<NonNullable<ChannelSetupWizard["finalize"]>>[0]["prompter"];
 }): Promise<{ normalized: string; allowFrom: string[] }> {
   const { prompter, existingAllowFrom } = params;
 
@@ -82,10 +80,10 @@ async function promptWhatsAppOwnerAllowFrom(params: {
 
 async function applyWhatsAppOwnerAllowlist(params: {
   cfg: OpenClawConfig;
-  prompter: WizardPrompter;
   existingAllowFrom: string[];
-  title: string;
   messageLines: string[];
+  prompter: Parameters<NonNullable<ChannelSetupWizard["finalize"]>>[0]["prompter"];
+  title: string;
 }): Promise<OpenClawConfig> {
   const { normalized, allowFrom } = await promptWhatsAppOwnerAllowFrom({
     prompter: params.prompter,
@@ -121,27 +119,26 @@ function parseWhatsAppAllowFromEntries(raw: string): { entries: string[]; invali
   return { entries: normalizeAllowFromEntries(entries, normalizeE164) };
 }
 
-async function promptWhatsAppAllowFrom(
-  cfg: OpenClawConfig,
-  _runtime: RuntimeEnv,
-  prompter: WizardPrompter,
-  options?: { forceAllowlist?: boolean },
-): Promise<OpenClawConfig> {
-  const existingPolicy = cfg.channels?.whatsapp?.dmPolicy ?? "pairing";
-  const existingAllowFrom = cfg.channels?.whatsapp?.allowFrom ?? [];
+async function promptWhatsAppDmAccess(params: {
+  cfg: OpenClawConfig;
+  forceAllowFrom: boolean;
+  prompter: Parameters<NonNullable<ChannelSetupWizard["finalize"]>>[0]["prompter"];
+}): Promise<OpenClawConfig> {
+  const existingPolicy = params.cfg.channels?.whatsapp?.dmPolicy ?? "pairing";
+  const existingAllowFrom = params.cfg.channels?.whatsapp?.allowFrom ?? [];
   const existingLabel = existingAllowFrom.length > 0 ? existingAllowFrom.join(", ") : "unset";
 
-  if (options?.forceAllowlist) {
+  if (params.forceAllowFrom) {
     return await applyWhatsAppOwnerAllowlist({
-      cfg,
-      prompter,
+      cfg: params.cfg,
+      prompter: params.prompter,
       existingAllowFrom,
       title: "WhatsApp allowlist",
       messageLines: ["Allowlist mode enabled."],
     });
   }
 
-  await prompter.note(
+  await params.prompter.note(
     [
       "WhatsApp direct chats are gated by `channels.whatsapp.dmPolicy` + `channels.whatsapp.allowFrom`.",
       "- pairing (default): unknown senders get a pairing code; owner approves",
@@ -155,7 +152,7 @@ async function promptWhatsAppAllowFrom(
     "WhatsApp DM access",
   );
 
-  const phoneMode = await prompter.select({
+  const phoneMode = await params.prompter.select({
     message: "WhatsApp phone setup",
     options: [
       { value: "personal", label: "This is my personal phone number" },
@@ -165,8 +162,8 @@ async function promptWhatsAppAllowFrom(
 
   if (phoneMode === "personal") {
     return await applyWhatsAppOwnerAllowlist({
-      cfg,
-      prompter,
+      cfg: params.cfg,
+      prompter: params.prompter,
       existingAllowFrom,
       title: "WhatsApp personal phone",
       messageLines: [
@@ -176,7 +173,7 @@ async function promptWhatsAppAllowFrom(
     });
   }
 
-  const policy = (await prompter.select({
+  const policy = (await params.prompter.select({
     message: "WhatsApp DM policy",
     options: [
       { value: "pairing", label: "Pairing (recommended)" },
@@ -186,7 +183,7 @@ async function promptWhatsAppAllowFrom(
     ],
   })) as DmPolicy;
 
-  let next = setWhatsAppSelfChatMode(cfg, false);
+  let next = setWhatsAppSelfChatMode(params.cfg, false);
   next = setWhatsAppDmPolicy(next, policy);
   if (policy === "open") {
     const allowFrom = normalizeAllowFromEntries(["*", ...existingAllowFrom], normalizeE164);
@@ -212,7 +209,7 @@ async function promptWhatsAppAllowFrom(
           { value: "list", label: "Set allowFrom to specific numbers" },
         ] as const);
 
-  const mode = await prompter.select({
+  const mode = await params.prompter.select({
     message: "WhatsApp allowFrom (optional pre-allowlist)",
     options: allowOptions.map((opt) => ({
       value: opt.value,
@@ -221,92 +218,123 @@ async function promptWhatsAppAllowFrom(
   });
 
   if (mode === "keep") {
-    // Keep allowFrom as-is.
-  } else if (mode === "unset") {
-    next = setWhatsAppAllowFrom(next, undefined);
-  } else {
-    const allowRaw = await prompter.text({
-      message: "Allowed sender numbers (comma-separated, E.164)",
-      placeholder: "+15555550123, +447700900123",
-      validate: (value) => {
-        const raw = String(value ?? "").trim();
-        if (!raw) {
-          return "Required";
-        }
-        const parsed = parseWhatsAppAllowFromEntries(raw);
-        if (parsed.entries.length === 0 && !parsed.invalidEntry) {
-          return "Required";
-        }
-        if (parsed.invalidEntry) {
-          return `Invalid number: ${parsed.invalidEntry}`;
-        }
-        return undefined;
-      },
-    });
-
-    const parsed = parseWhatsAppAllowFromEntries(String(allowRaw));
-    next = setWhatsAppAllowFrom(next, parsed.entries);
+    return next;
+  }
+  if (mode === "unset") {
+    return setWhatsAppAllowFrom(next, undefined);
   }
 
-  return next;
+  const allowRaw = await params.prompter.text({
+    message: "Allowed sender numbers (comma-separated, E.164)",
+    placeholder: "+15555550123, +447700900123",
+    validate: (value) => {
+      const raw = String(value ?? "").trim();
+      if (!raw) {
+        return "Required";
+      }
+      const parsed = parseWhatsAppAllowFromEntries(raw);
+      if (parsed.entries.length === 0 && !parsed.invalidEntry) {
+        return "Required";
+      }
+      if (parsed.invalidEntry) {
+        return `Invalid number: ${parsed.invalidEntry}`;
+      }
+      return undefined;
+    },
+  });
+
+  const parsed = parseWhatsAppAllowFromEntries(String(allowRaw));
+  return setWhatsAppAllowFrom(next, parsed.entries);
 }
 
-export const whatsappOnboardingAdapter: ChannelOnboardingAdapter = {
-  channel,
-  getStatus: async ({ cfg, accountOverrides }) => {
-    const defaultAccountId = resolveDefaultWhatsAppAccountId(cfg);
-    const accountId = resolveOnboardingAccountId({
-      accountId: accountOverrides.whatsapp,
-      defaultAccountId,
-    });
-    const linked = await detectWhatsAppLinked(cfg, accountId);
-    const accountLabel = accountId === DEFAULT_ACCOUNT_ID ? "default" : accountId;
-    return {
-      channel,
-      configured: linked,
-      statusLines: [`WhatsApp (${accountLabel}): ${linked ? "linked" : "not linked"}`],
-      selectionHint: linked ? "linked" : "not linked",
-      quickstartScore: linked ? 5 : 4,
-    };
-  },
-  configure: async ({
-    cfg,
-    runtime,
-    prompter,
-    options,
-    accountOverrides,
-    shouldPromptAccountIds,
-    forceAllowFrom,
-  }) => {
-    const accountId = await resolveAccountIdForConfigure({
+export const whatsappSetupAdapter: ChannelSetupAdapter = {
+  resolveAccountId: ({ accountId }) => normalizeAccountId(accountId),
+  applyAccountName: ({ cfg, accountId, name }) =>
+    applyAccountNameToChannelSection({
       cfg,
-      prompter,
-      label: "WhatsApp",
-      accountOverride: accountOverrides.whatsapp,
-      shouldPromptAccountIds: Boolean(shouldPromptAccountIds || options?.promptWhatsAppAccountId),
-      listAccountIds: listWhatsAppAccountIds,
-      defaultAccountId: resolveDefaultWhatsAppAccountId(cfg),
+      channelKey: channel,
+      accountId,
+      name,
+      alwaysUseAccounts: true,
+    }),
+  applyAccountConfig: ({ cfg, accountId, input }) => {
+    const namedConfig = applyAccountNameToChannelSection({
+      cfg,
+      channelKey: channel,
+      accountId,
+      name: input.name,
+      alwaysUseAccounts: true,
     });
-
-    let next = cfg;
-    if (accountId !== DEFAULT_ACCOUNT_ID) {
-      next = {
-        ...next,
-        channels: {
-          ...next.channels,
-          whatsapp: {
-            ...next.channels?.whatsapp,
-            accounts: {
-              ...next.channels?.whatsapp?.accounts,
-              [accountId]: {
-                ...next.channels?.whatsapp?.accounts?.[accountId],
-                enabled: next.channels?.whatsapp?.accounts?.[accountId]?.enabled ?? true,
-              },
-            },
+    const next = migrateBaseNameToDefaultAccount({
+      cfg: namedConfig,
+      channelKey: channel,
+      alwaysUseAccounts: true,
+    });
+    const entry = {
+      ...next.channels?.whatsapp?.accounts?.[accountId],
+      ...(input.authDir ? { authDir: input.authDir } : {}),
+      enabled: true,
+    };
+    return {
+      ...next,
+      channels: {
+        ...next.channels,
+        whatsapp: {
+          ...next.channels?.whatsapp,
+          accounts: {
+            ...next.channels?.whatsapp?.accounts,
+            [accountId]: entry,
           },
         },
-      };
-    }
+      },
+    };
+  },
+};
+
+export const whatsappSetupWizard: ChannelSetupWizard = {
+  channel,
+  status: {
+    configuredLabel: "linked",
+    unconfiguredLabel: "not linked",
+    configuredHint: "linked",
+    unconfiguredHint: "not linked",
+    configuredScore: 5,
+    unconfiguredScore: 4,
+    resolveConfigured: async ({ cfg }) => {
+      for (const accountId of listWhatsAppAccountIds(cfg)) {
+        if (await detectWhatsAppLinked(cfg, accountId)) {
+          return true;
+        }
+      }
+      return false;
+    },
+    resolveStatusLines: async ({ cfg, configured }) => {
+      const linkedAccountId = (
+        await Promise.all(
+          listWhatsAppAccountIds(cfg).map(async (accountId) => ({
+            accountId,
+            linked: await detectWhatsAppLinked(cfg, accountId),
+          })),
+        )
+      ).find((entry) => entry.linked)?.accountId;
+      const label = linkedAccountId
+        ? `WhatsApp (${linkedAccountId === DEFAULT_ACCOUNT_ID ? "default" : linkedAccountId})`
+        : "WhatsApp";
+      return [`${label}: ${configured ? "linked" : "not linked"}`];
+    },
+  },
+  resolveShouldPromptAccountIds: ({ options, shouldPromptAccountIds }) =>
+    Boolean(shouldPromptAccountIds || options?.promptWhatsAppAccountId),
+  credentials: [],
+  finalize: async ({ cfg, accountId, forceAllowFrom, prompter, runtime }) => {
+    let next =
+      accountId === DEFAULT_ACCOUNT_ID
+        ? cfg
+        : whatsappSetupAdapter.applyAccountConfig({
+            cfg,
+            accountId,
+            input: {},
+          });
 
     const linked = await detectWhatsAppLinked(next, accountId);
     const { authDir } = resolveWhatsAppAuthDir({
@@ -324,6 +352,7 @@ export const whatsappOnboardingAdapter: ChannelOnboardingAdapter = {
         "WhatsApp linking",
       );
     }
+
     const wantsLink = await prompter.confirm({
       message: linked ? "WhatsApp already linked. Re-link now?" : "Link WhatsApp now (QR)?",
       initialValue: !linked,
@@ -331,8 +360,8 @@ export const whatsappOnboardingAdapter: ChannelOnboardingAdapter = {
     if (wantsLink) {
       try {
         await loginWeb(false, undefined, runtime, accountId);
-      } catch (err) {
-        runtime.error(`WhatsApp login failed: ${String(err)}`);
+      } catch (error) {
+        runtime.error(`WhatsApp login failed: ${String(error)}`);
         await prompter.note(`Docs: ${formatDocsLink("/whatsapp", "whatsapp")}`, "WhatsApp help");
       }
     } else if (!linked) {
@@ -342,12 +371,14 @@ export const whatsappOnboardingAdapter: ChannelOnboardingAdapter = {
       );
     }
 
-    next = await promptWhatsAppAllowFrom(next, runtime, prompter, {
-      forceAllowlist: forceAllowFrom,
+    next = await promptWhatsAppDmAccess({
+      cfg: next,
+      forceAllowFrom,
+      prompter,
     });
-
-    return { cfg: next, accountId };
+    return { cfg: next };
   },
+  disable: (cfg) => setOnboardingChannelEnabled(cfg, channel, false),
   onAccountRecorded: (accountId, options) => {
     options?.onWhatsAppAccountId?.(accountId);
   },
