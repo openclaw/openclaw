@@ -163,6 +163,10 @@ function applySkillConfigEnvOverrides(params: {
         continue;
       }
       pendingOverrides[envKey] = envValue;
+      // Trust user-configured env vars from openclaw.json skills.entries.<skill>.env
+      // These are explicit user choices and should be allowed even if they match
+      // sensitive patterns (e.g., TAVILY_API_KEY).
+      allowedSensitiveKeys.add(envKey);
     }
   }
 
