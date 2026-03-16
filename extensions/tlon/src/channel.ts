@@ -7,7 +7,8 @@ import type {
 } from "openclaw/plugin-sdk/tlon";
 import { tlonChannelConfigSchema } from "./config-schema.js";
 import { monitorTlonProvider } from "./monitor/index.js";
-import { tlonSetupAdapter, tlonSetupWizard } from "./setup-surface.js";
+import { tlonSetupAdapter } from "./setup-core.js";
+import { tlonSetupWizard } from "./setup-surface.js";
 import { formatTargetHint, normalizeShip, parseTlonTarget } from "./targets.js";
 import { resolveTlonAccount, listTlonAccountIds } from "./types.js";
 import { authenticate } from "./urbit/auth.js";

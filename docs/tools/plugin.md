@@ -172,8 +172,7 @@ Important trust note:
 - Hugging Face provider catalog — bundled as `huggingface` (enabled by default)
 - Kilo Gateway provider runtime — bundled as `kilocode` (enabled by default)
 - Kimi Coding provider catalog — bundled as `kimi-coding` (enabled by default)
-- MiniMax provider catalog + usage — bundled as `minimax` (enabled by default)
-- MiniMax OAuth (provider auth + catalog) — bundled as `minimax-portal-auth` (enabled by default)
+- MiniMax provider catalog + usage + OAuth — bundled as `minimax` (enabled by default; owns `minimax` and `minimax-portal`)
 - Mistral provider capabilities — bundled as `mistral` (enabled by default)
 - Model Studio provider catalog — bundled as `modelstudio` (enabled by default)
 - Moonshot provider runtime — bundled as `moonshot` (enabled by default)
@@ -664,7 +663,7 @@ Default-on bundled plugin examples:
 - `kilocode`
 - `kimi-coding`
 - `minimax`
-- `minimax-portal-auth`
+- `minimax`
 - `modelstudio`
 - `moonshot`
 - `nvidia`
@@ -749,7 +748,8 @@ A plugin directory may include a `package.json` with `openclaw.extensions`:
 {
   "name": "my-pack",
   "openclaw": {
-    "extensions": ["./src/safety.ts", "./src/tools.ts"]
+    "extensions": ["./src/safety.ts", "./src/tools.ts"],
+    "setupEntry": "./src/setup-entry.ts"
   }
 }
 ```
@@ -767,6 +767,13 @@ rejected.
 Security note: `openclaw plugins install` installs plugin dependencies with
 `npm install --ignore-scripts` (no lifecycle scripts). Keep plugin dependency
 trees "pure JS/TS" and avoid packages that require `postinstall` builds.
+
+Optional: `openclaw.setupEntry` can point at a lightweight setup-only module.
+When OpenClaw needs onboarding/setup surfaces for a disabled channel plugin, or
+when a channel plugin is enabled but still unconfigured, it loads `setupEntry`
+instead of the full plugin entry. This keeps startup and onboarding lighter
+when your main plugin entry also wires tools, hooks, or other runtime-only
+code.
 
 ### Channel catalog metadata
 
@@ -1657,6 +1664,7 @@ Recommended packaging:
 Publishing contract:
 
 - Plugin `package.json` must include `openclaw.extensions` with one or more entry files.
+- Optional: `openclaw.setupEntry` may point at a lightweight setup-only entry for disabled or still-unconfigured channel onboarding/setup.
 - Entry files can be `.js` or `.ts` (jiti loads TS at runtime).
 - `openclaw plugins install <npm-spec>` uses `npm pack`, extracts into `~/.openclaw/extensions/<id>/`, and enables it in config.
 - Config key stability: scoped packages are normalized to the **unscoped** id for `plugins.entries.*`.

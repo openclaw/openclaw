@@ -14,6 +14,7 @@ import { formatCliCommand } from "../cli/command-format.js";
 import { resolveNativeCommandsEnabled, resolveNativeSkillsEnabled } from "../config/commands.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { isDangerousNameMatchingEnabled } from "../config/dangerous-name-matching.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import { readChannelAllowFromStore } from "../pairing/pairing-store.js";
 import { normalizeStringEntries } from "../shared/string-normalization.js";
 import type { SecurityAuditFinding, SecurityAuditSeverity } from "./audit.js";
@@ -164,6 +165,7 @@ export async function collectChannelSecurityFindings(params: {
     plugin: (typeof params.plugins)[number],
     accountId: string,
   ) => {
+    const diagnostics: string[] = [];
     const sourceInspectedAccount = inspectChannelAccount(plugin, sourceConfig, accountId);
     const resolvedInspectedAccount = inspectChannelAccount(plugin, params.cfg, accountId);
     const sourceInspection = sourceInspectedAccount as {
@@ -174,8 +176,27 @@ export async function collectChannelSecurityFindings(params: {
       enabled?: boolean;
       configured?: boolean;
     } | null;
-    const resolvedAccount =
-      resolvedInspectedAccount ?? plugin.config.resolveAccount(params.cfg, accountId);
+    let resolvedAccount = resolvedInspectedAccount;
+    if (!resolvedAccount) {
+      try {
+        resolvedAccount = plugin.config.resolveAccount(params.cfg, accountId);
+      } catch (error) {
+        diagnostics.push(
+          `${plugin.id}:${accountId}: failed to resolve account (${formatErrorMessage(error)}).`,
+        );
+      }
+    }
+    if (!resolvedAccount && sourceInspectedAccount) {
+      resolvedAccount = sourceInspectedAccount;
+    }
+    if (!resolvedAccount) {
+      return {
+        account: {},
+        enabled: false,
+        configured: false,
+        diagnostics,
+      };
+    }
     const useSourceUnavailableAccount = Boolean(
       sourceInspectedAccount &&
       hasConfiguredUnavailableCredentialStatus(sourceInspectedAccount) &&
@@ -185,23 +206,49 @@ export async function collectChannelSecurityFindings(params: {
     const account = useSourceUnavailableAccount ? sourceInspectedAccount : resolvedAccount;
     const selectedInspection = useSourceUnavailableAccount ? sourceInspection : resolvedInspection;
     const accountRecord = asAccountRecord(account);
-    const enabled =
+    let enabled =
       typeof selectedInspection?.enabled === "boolean"
         ? selectedInspection.enabled
         : typeof accountRecord?.enabled === "boolean"
           ? accountRecord.enabled
-          : plugin.config.isEnabled
-            ? plugin.config.isEnabled(account, params.cfg)
-            : true;
-    const configured =
+          : true;
+    if (
+      typeof selectedInspection?.enabled !== "boolean" &&
+      typeof accountRecord?.enabled !== "boolean" &&
+      plugin.config.isEnabled
+    ) {
+      try {
+        enabled = plugin.config.isEnabled(account, params.cfg);
+      } catch (error) {
+        enabled = false;
+        diagnostics.push(
+          `${plugin.id}:${accountId}: failed to evaluate enabled state (${formatErrorMessage(error)}).`,
+        );
+      }
+    }
+
+    let configured =
       typeof selectedInspection?.configured === "boolean"
         ? selectedInspection.configured
         : typeof accountRecord?.configured === "boolean"
           ? accountRecord.configured
-          : plugin.config.isConfigured
-            ? await plugin.config.isConfigured(account, params.cfg)
-            : true;
-    return { account, enabled, configured };
+          : true;
+    if (
+      typeof selectedInspection?.configured !== "boolean" &&
+      typeof accountRecord?.configured !== "boolean" &&
+      plugin.config.isConfigured
+    ) {
+      try {
+        configured = await plugin.config.isConfigured(account, params.cfg);
+      } catch (error) {
+        configured = false;
+        diagnostics.push(
+          `${plugin.id}:${accountId}: failed to evaluate configured state (${formatErrorMessage(error)}).`,
+        );
+      }
+    }
+
+    return { account, enabled, configured, diagnostics };
   };
 
   const coerceNativeSetting = (value: unknown): boolean | "auto" | undefined => {
@@ -298,7 +345,20 @@ export async function collectChannelSecurityFindings(params: {
         plugin.id,
         accountId,
       );
-      const { account, enabled, configured } = await resolveChannelAuditAccount(plugin, accountId);
+      const { account, enabled, configured, diagnostics } = await resolveChannelAuditAccount(
+        plugin,
+        accountId,
+      );
+      for (const diagnostic of diagnostics) {
+        findings.push({
+          checkId: `channels.${plugin.id}.account.read_only_resolution`,
+          severity: "warn",
+          title: `${plugin.meta.label ?? plugin.id} account could not be fully resolved`,
+          detail: diagnostic,
+          remediation:
+            "Ensure referenced secrets are available in this shell or run with a running gateway snapshot so security audit can inspect the full channel configuration.",
+        });
+      }
       if (!enabled) {
         continue;
       }
