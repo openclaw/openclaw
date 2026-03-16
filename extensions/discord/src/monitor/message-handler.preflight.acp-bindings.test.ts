@@ -1,13 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const ensureConfiguredAcpBindingSessionMock = vi.hoisted(() => vi.fn());
-const resolveConfiguredAcpBindingRecordMock = vi.hoisted(() => vi.fn());
+const ensureConfiguredAcpRouteReadyMock = vi.hoisted(() => vi.fn());
+const resolveConfiguredAcpRouteMock = vi.hoisted(() => vi.fn());
 
-vi.mock("../../../../src/acp/persistent-bindings.js", () => ({
-  ensureConfiguredAcpBindingSession: (...args: unknown[]) =>
-    ensureConfiguredAcpBindingSessionMock(...args),
-  resolveConfiguredAcpBindingRecord: (...args: unknown[]) =>
-    resolveConfiguredAcpBindingRecordMock(...args),
+vi.mock("../../../../src/channels/plugins/acp-routing.js", () => ({
+  ensureConfiguredAcpRouteReady: (...args: unknown[]) => ensureConfiguredAcpRouteReadyMock(...args),
+  resolveConfiguredAcpRoute: (...args: unknown[]) => resolveConfiguredAcpRouteMock(...args),
 }));
 
 import { __testing as sessionBindingTesting } from "../../../../src/infra/outbound/session-binding-service.js";
@@ -48,6 +46,23 @@ function createConfiguredDiscordBinding() {
         mode: "persistent",
         agentId: "codex",
       },
+    },
+  } as const;
+}
+
+function createConfiguredDiscordRoute() {
+  const configuredBinding = createConfiguredDiscordBinding();
+  return {
+    configuredBinding,
+    boundSessionKey: configuredBinding.record.targetSessionKey,
+    route: {
+      agentId: "codex",
+      accountId: "default",
+      channel: "discord",
+      sessionKey: configuredBinding.record.targetSessionKey,
+      mainSessionKey: "agent:codex:main",
+      matchedBy: "binding.channel",
+      lastRoutePolicy: "bound",
     },
   } as const;
 }
@@ -94,13 +109,10 @@ function createBasePreflightParams(overrides?: Record<string, unknown>) {
 describe("preflightDiscordMessage configured ACP bindings", () => {
   beforeEach(() => {
     sessionBindingTesting.resetSessionBindingAdaptersForTests();
-    ensureConfiguredAcpBindingSessionMock.mockReset();
-    resolveConfiguredAcpBindingRecordMock.mockReset();
-    resolveConfiguredAcpBindingRecordMock.mockReturnValue(createConfiguredDiscordBinding());
-    ensureConfiguredAcpBindingSessionMock.mockResolvedValue({
-      ok: true,
-      sessionKey: "agent:codex:acp:binding:discord:default:abc123",
-    });
+    ensureConfiguredAcpRouteReadyMock.mockReset();
+    resolveConfiguredAcpRouteMock.mockReset();
+    resolveConfiguredAcpRouteMock.mockReturnValue(createConfiguredDiscordRoute());
+    ensureConfiguredAcpRouteReadyMock.mockResolvedValue({ ok: true });
   });
 
   it("does not initialize configured ACP bindings for rejected messages", async () => {
@@ -121,8 +133,8 @@ describe("preflightDiscordMessage configured ACP bindings", () => {
     );
 
     expect(result).toBeNull();
-    expect(resolveConfiguredAcpBindingRecordMock).toHaveBeenCalledTimes(1);
-    expect(ensureConfiguredAcpBindingSessionMock).not.toHaveBeenCalled();
+    expect(resolveConfiguredAcpRouteMock).toHaveBeenCalledTimes(1);
+    expect(ensureConfiguredAcpRouteReadyMock).not.toHaveBeenCalled();
   });
 
   it("initializes configured ACP bindings only after preflight accepts the message", async () => {
@@ -144,8 +156,8 @@ describe("preflightDiscordMessage configured ACP bindings", () => {
     );
 
     expect(result).not.toBeNull();
-    expect(resolveConfiguredAcpBindingRecordMock).toHaveBeenCalledTimes(1);
-    expect(ensureConfiguredAcpBindingSessionMock).toHaveBeenCalledTimes(1);
+    expect(resolveConfiguredAcpRouteMock).toHaveBeenCalledTimes(1);
+    expect(ensureConfiguredAcpRouteReadyMock).toHaveBeenCalledTimes(1);
     expect(result?.boundSessionKey).toBe("agent:codex:acp:binding:discord:default:abc123");
   });
 });

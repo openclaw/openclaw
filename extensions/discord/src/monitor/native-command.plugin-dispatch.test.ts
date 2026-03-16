@@ -205,8 +205,8 @@ function expectBoundSessionDispatch(
   };
   expect(dispatchCall.ctx?.SessionKey).toBe(boundSessionKey);
   expect(dispatchCall.ctx?.CommandTargetSessionKey).toBe(boundSessionKey);
-  expect(persistentBindingMocks.resolveConfiguredAcpBindingRecord).toHaveBeenCalledTimes(1);
-  expect(persistentBindingMocks.ensureConfiguredAcpBindingSession).toHaveBeenCalledTimes(1);
+  expect(persistentBindingMocks.resolveConfiguredAcpRoute).toHaveBeenCalledTimes(1);
+  expect(persistentBindingMocks.ensureConfiguredAcpRouteReady).toHaveBeenCalledTimes(1);
 }
 
 async function expectBoundStatusCommandDispatch(params: {
@@ -476,8 +476,8 @@ describe("Discord native plugin command dispatch", () => {
     expect(dispatchCall.ctx?.CommandTargetSessionKey).toBe(
       "agent:qwen:discord:channel:1478836151241412759",
     );
-    expect(persistentBindingMocks.resolveConfiguredAcpBindingRecord).toHaveBeenCalledTimes(1);
-    expect(persistentBindingMocks.ensureConfiguredAcpBindingSession).not.toHaveBeenCalled();
+    expect(persistentBindingMocks.resolveConfiguredAcpRoute).toHaveBeenCalledTimes(1);
+    expect(persistentBindingMocks.ensureConfiguredAcpRouteReady).not.toHaveBeenCalled();
   });
 
   it("routes Discord DM native slash commands through configured ACP bindings", async () => {

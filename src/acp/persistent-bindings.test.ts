@@ -518,6 +518,25 @@ describe("resolveConfiguredAcpBindingRecord", () => {
     expect(resolved?.spec.cwd).toBe("/workspace/repo-a");
     expect(resolved?.spec.backend).toBe("acpx");
   });
+
+  it("derives configured binding cwd from an explicit agent workspace", () => {
+    const cfg = createCfgWithBindings(
+      [
+        createDiscordBinding({
+          agentId: "codex",
+          conversationId: defaultDiscordConversationId,
+        }),
+      ],
+      {
+        agents: {
+          list: [{ id: "codex", workspace: "/workspace/openclaw" }, { id: "claude" }],
+        },
+      },
+    );
+    const resolved = resolveBindingRecord(cfg);
+
+    expect(resolved?.spec.cwd).toBe("/workspace/openclaw");
+  });
 });
 
 describe("resolveConfiguredAcpBindingSpecBySessionKey", () => {

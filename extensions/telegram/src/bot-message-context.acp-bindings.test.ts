@@ -1,13 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const ensureConfiguredAcpBindingSessionMock = vi.hoisted(() => vi.fn());
-const resolveConfiguredAcpBindingRecordMock = vi.hoisted(() => vi.fn());
+const ensureConfiguredAcpRouteReadyMock = vi.hoisted(() => vi.fn());
+const resolveConfiguredAcpRouteMock = vi.hoisted(() => vi.fn());
 
-vi.mock("../../../src/acp/persistent-bindings.js", () => ({
-  ensureConfiguredAcpBindingSession: (...args: unknown[]) =>
-    ensureConfiguredAcpBindingSessionMock(...args),
-  resolveConfiguredAcpBindingRecord: (...args: unknown[]) =>
-    resolveConfiguredAcpBindingRecordMock(...args),
+vi.mock("../../../src/channels/plugins/acp-routing.js", () => ({
+  ensureConfiguredAcpRouteReady: (...args: unknown[]) => ensureConfiguredAcpRouteReadyMock(...args),
+  resolveConfiguredAcpRoute: (...args: unknown[]) => resolveConfiguredAcpRouteMock(...args),
 }));
 
 import { buildTelegramMessageContextForTest } from "./bot-message-context.test-harness.js";
@@ -43,15 +41,29 @@ function createConfiguredTelegramBinding() {
   } as const;
 }
 
+function createConfiguredTelegramRoute() {
+  const configuredBinding = createConfiguredTelegramBinding();
+  return {
+    configuredBinding,
+    boundSessionKey: configuredBinding.record.targetSessionKey,
+    route: {
+      agentId: "codex",
+      accountId: "work",
+      channel: "telegram",
+      sessionKey: configuredBinding.record.targetSessionKey,
+      mainSessionKey: "agent:codex:main",
+      matchedBy: "binding.channel",
+      lastRoutePolicy: "bound",
+    },
+  } as const;
+}
+
 describe("buildTelegramMessageContext ACP configured bindings", () => {
   beforeEach(() => {
-    ensureConfiguredAcpBindingSessionMock.mockReset();
-    resolveConfiguredAcpBindingRecordMock.mockReset();
-    resolveConfiguredAcpBindingRecordMock.mockReturnValue(createConfiguredTelegramBinding());
-    ensureConfiguredAcpBindingSessionMock.mockResolvedValue({
-      ok: true,
-      sessionKey: "agent:codex:acp:binding:telegram:work:abc123",
-    });
+    ensureConfiguredAcpRouteReadyMock.mockReset();
+    resolveConfiguredAcpRouteMock.mockReset();
+    resolveConfiguredAcpRouteMock.mockReturnValue(createConfiguredTelegramRoute());
+    ensureConfiguredAcpRouteReadyMock.mockResolvedValue({ ok: true });
   });
 
   it("treats configured topic bindings as explicit route matches on non-default accounts", async () => {
@@ -68,7 +80,7 @@ describe("buildTelegramMessageContext ACP configured bindings", () => {
     expect(ctx?.route.accountId).toBe("work");
     expect(ctx?.route.matchedBy).toBe("binding.channel");
     expect(ctx?.route.sessionKey).toBe("agent:codex:acp:binding:telegram:work:abc123");
-    expect(ensureConfiguredAcpBindingSessionMock).toHaveBeenCalledTimes(1);
+    expect(ensureConfiguredAcpRouteReadyMock).toHaveBeenCalledTimes(1);
   });
 
   it("skips ACP session initialization when topic access is denied", async () => {
@@ -86,8 +98,8 @@ describe("buildTelegramMessageContext ACP configured bindings", () => {
     });
 
     expect(ctx).toBeNull();
-    expect(resolveConfiguredAcpBindingRecordMock).toHaveBeenCalledTimes(1);
-    expect(ensureConfiguredAcpBindingSessionMock).not.toHaveBeenCalled();
+    expect(resolveConfiguredAcpRouteMock).toHaveBeenCalledTimes(1);
+    expect(ensureConfiguredAcpRouteReadyMock).not.toHaveBeenCalled();
   });
 
   it("defers ACP session initialization for unauthorized control commands", async () => {
@@ -109,14 +121,13 @@ describe("buildTelegramMessageContext ACP configured bindings", () => {
     });
 
     expect(ctx).toBeNull();
-    expect(resolveConfiguredAcpBindingRecordMock).toHaveBeenCalledTimes(1);
-    expect(ensureConfiguredAcpBindingSessionMock).not.toHaveBeenCalled();
+    expect(resolveConfiguredAcpRouteMock).toHaveBeenCalledTimes(1);
+    expect(ensureConfiguredAcpRouteReadyMock).not.toHaveBeenCalled();
   });
 
   it("drops inbound processing when configured ACP binding initialization fails", async () => {
-    ensureConfiguredAcpBindingSessionMock.mockResolvedValue({
+    ensureConfiguredAcpRouteReadyMock.mockResolvedValue({
       ok: false,
-      sessionKey: "agent:codex:acp:binding:telegram:work:abc123",
       error: "gateway unavailable",
     });
 
@@ -130,7 +141,7 @@ describe("buildTelegramMessageContext ACP configured bindings", () => {
     });
 
     expect(ctx).toBeNull();
-    expect(resolveConfiguredAcpBindingRecordMock).toHaveBeenCalledTimes(1);
-    expect(ensureConfiguredAcpBindingSessionMock).toHaveBeenCalledTimes(1);
+    expect(resolveConfiguredAcpRouteMock).toHaveBeenCalledTimes(1);
+    expect(ensureConfiguredAcpRouteReadyMock).toHaveBeenCalledTimes(1);
   });
 });
