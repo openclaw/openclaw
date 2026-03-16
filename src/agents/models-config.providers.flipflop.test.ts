@@ -21,8 +21,8 @@ import { normalizeProviders } from "./models-config.providers.js";
 
 describe("normalizeProviders flip-flop bug", () => {
   let agentDir: string;
-  const TEST_ENV_VAR = "TEST_OLLAMA_API_KEY";
-  const TEST_ENV_VALUE = "ollama-local";
+  const TEST_ENV_VAR = "OPENAI_API_KEY";
+  const TEST_ENV_VALUE = "sk-test-openai-key-12345"; // pragma: allowlist secret
 
   beforeEach(async () => {
     agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-agent-"));
@@ -36,57 +36,57 @@ describe("normalizeProviders flip-flop bug", () => {
 
   it("FIX VERIFICATION: resolved values are preserved (no flip-flop)", async () => {
     const providers: NonNullable<NonNullable<OpenClawConfig["models"]>["providers"]> = {
-      "ollama-local": {
-        baseUrl: "http://127.0.0.1:11434",
-        api: "ollama",
+      openai: {
+        baseUrl: "https://api.openai.com/v1",
+        api: "openai-completions",
         apiKey: TEST_ENV_VALUE, // Resolved value from env var
         models: [
           {
-            id: "qwen3.5:4b",
-            name: "Qwen 3.5 4B",
+            id: "gpt-4.1-mini",
+            name: "GPT-4.1 mini",
             input: ["text"],
             reasoning: false,
             cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-            contextWindow: 262144,
-            maxTokens: 8192,
+            contextWindow: 128000,
+            maxTokens: 16384,
           },
         ],
       },
     };
 
     // First normalization: should preserve resolved value
-    const _normalized1 = normalizeProviders({ providers, agentDir });
-    expect(_normalized1?.["ollama-local"]?.apiKey).toBe(TEST_ENV_VALUE);
+    const normalized1 = normalizeProviders({ providers, agentDir });
+    expect(normalized1?.openai?.apiKey).toBe(TEST_ENV_VALUE);
 
     // Simulate user manually editing models.json
     const manuallyFixed = {
       ...providers,
-      "ollama-local": {
-        ...providers["ollama-local"],
+      openai: {
+        ...providers.openai,
         apiKey: TEST_ENV_VALUE,
       },
     };
 
     // Second normalization: should still preserve resolved value (no flip-flop)
     const normalized2 = normalizeProviders({ providers: manuallyFixed, agentDir });
-    expect(normalized2?.["ollama-local"]?.apiKey).toBe(TEST_ENV_VALUE);
+    expect(normalized2?.openai?.apiKey).toBe(TEST_ENV_VALUE);
   });
 
   it("FIX VERIFICATION: preserves resolved value after normalization (no flip-flop)", async () => {
     const providers: NonNullable<NonNullable<OpenClawConfig["models"]>["providers"]> = {
-      "ollama-local": {
-        baseUrl: "http://127.0.0.1:11434",
-        api: "ollama",
+      openai: {
+        baseUrl: "https://api.openai.com/v1",
+        api: "openai-completions",
         apiKey: TEST_ENV_VALUE, // Resolved value
         models: [
           {
-            id: "qwen3.5:4b",
-            name: "Qwen 3.5 4B",
+            id: "gpt-4.1-mini",
+            name: "GPT-4.1 mini",
             input: ["text"],
             reasoning: false,
             cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-            contextWindow: 262144,
-            maxTokens: 8192,
+            contextWindow: 128000,
+            maxTokens: 16384,
           },
         ],
       },
@@ -97,26 +97,26 @@ describe("normalizeProviders flip-flop bug", () => {
 
     // EXPECTED BEHAVIOR AFTER FIX:
     // models.json should contain the resolved value, not the env var name
-    expect(normalized?.["ollama-local"]?.apiKey).toBe(TEST_ENV_VALUE);
+    expect(normalized?.openai?.apiKey).toBe(TEST_ENV_VALUE);
   });
 
   it("FIX VERIFICATION: manual edits to models.json are preserved", async () => {
     const originalProviders: NonNullable<NonNullable<OpenClawConfig["models"]>["providers"]> = {
-      "ollama-local": {
-        baseUrl: "http://127.0.0.1:11434",
-        api: "ollama",
+      openai: {
+        baseUrl: "https://api.openai.com/v1",
+        api: "openai-completions",
         apiKey: "original-value",
         models: [],
       },
     };
 
     // First normalization
-    const _normalized1 = normalizeProviders({ providers: originalProviders, agentDir });
+    normalizeProviders({ providers: originalProviders, agentDir });
 
     // Simulate user editing models.json
     const editedProviders: NonNullable<NonNullable<OpenClawConfig["models"]>["providers"]> = {
-      "ollama-local": {
-        ...originalProviders["ollama-local"],
+      openai: {
+        ...originalProviders.openai,
         apiKey: "edited-value", // User manually edits
       },
     };
@@ -126,7 +126,7 @@ describe("normalizeProviders flip-flop bug", () => {
 
     // EXPECTED BEHAVIOR AFTER FIX:
     // Manual edits should be preserved, not reverted
-    expect(normalized2?.["ollama-local"]?.apiKey).toBe("edited-value");
+    expect(normalized2?.openai?.apiKey).toBe("edited-value");
   });
 
   it("ENV VAR REFERENCE: { source: 'env' } config normalizes to env var name", async () => {
@@ -134,9 +134,9 @@ describe("normalizeProviders flip-flop bug", () => {
     // (separate from the flip-flop bug which affects resolved string values)
 
     const providers: NonNullable<NonNullable<OpenClawConfig["models"]>["providers"]> = {
-      "ollama-local": {
-        baseUrl: "http://127.0.0.1:11434",
-        api: "ollama",
+      openai: {
+        baseUrl: "https://api.openai.com/v1",
+        api: "openai-completions",
         apiKey: { source: "env" as const, provider: "default", id: TEST_ENV_VAR },
         models: [],
       },
@@ -146,7 +146,7 @@ describe("normalizeProviders flip-flop bug", () => {
     const normalized = normalizeProviders({ providers, agentDir });
 
     // SecretRef { source: "env", id: "VAR" } normalizes to "VAR"
-    expect(normalized?.["ollama-local"]?.apiKey).toBe(TEST_ENV_VAR);
+    expect(normalized?.openai?.apiKey).toBe(TEST_ENV_VAR);
   });
 });
 
