@@ -175,7 +175,7 @@ describe("plugin-sdk exports", () => {
 
       const { default: importResults } = await import(pathToFileURL(consumerEntry).href);
       expect(importResults).toEqual(
-        Object.fromEntries(pluginSdkSpecifiers.map((specifier) => [specifier, "object"])),
+        Object.fromEntries(pluginSdkSpecifiers.map((specifier: string) => [specifier, "object"])),
       );
     } finally {
       await fs.rm(outDir, { recursive: true, force: true });
