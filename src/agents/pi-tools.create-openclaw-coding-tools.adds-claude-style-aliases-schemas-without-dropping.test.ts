@@ -6,6 +6,7 @@ import { Type } from "@sinclair/typebox";
 import { describe, expect, it, vi } from "vitest";
 import "./test-helpers/fast-coding-tools.js";
 import { createOpenClawTools } from "./openclaw-tools.js";
+import { findUnsupportedSchemaKeywords } from "./pi-embedded-runner/google.js";
 import { __testing, createOpenClawCodingTools } from "./pi-tools.js";
 import { createOpenClawReadTool, createSandboxedReadTool } from "./pi-tools.read.js";
 import { createHostSandboxFsBridge } from "./test-helpers/host-sandbox-fs-bridge.js";
@@ -156,10 +157,9 @@ describe("createOpenClawCodingTools", () => {
     expect(schema.type).toBe("object");
     expect(schema.anyOf).toBeUndefined();
   });
-  it("mentions Chrome extension relay in browser tool description", () => {
+  it("mentions user browser profile in browser tool description", () => {
     const browser = createBrowserTool();
-    expect(browser.description).toMatch(/Chrome extension/i);
-    expect(browser.description).toMatch(/profile="chrome"/i);
+    expect(browser.description).toMatch(/profile="user"/i);
   });
   it("keeps browser tool schema properties after normalization", () => {
     const browser = defaultTools.find((tool) => tool.name === "browser");
@@ -444,75 +444,12 @@ describe("createOpenClawCodingTools", () => {
     expect(names.has("read")).toBe(false);
   });
   it("removes unsupported JSON Schema keywords for Cloud Code Assist API compatibility", () => {
-    // Helper to recursively check schema for unsupported keywords
-    const unsupportedKeywords = new Set([
-      "patternProperties",
-      "additionalProperties",
-      "$schema",
-      "$id",
-      "$ref",
-      "$defs",
-      "definitions",
-      "examples",
-      "minLength",
-      "maxLength",
-      "minimum",
-      "maximum",
-      "multipleOf",
-      "pattern",
-      "format",
-      "minItems",
-      "maxItems",
-      "uniqueItems",
-      "minProperties",
-      "maxProperties",
-    ]);
-
-    const findUnsupportedKeywords = (schema: unknown, path: string): string[] => {
-      const found: string[] = [];
-      if (!schema || typeof schema !== "object") {
-        return found;
-      }
-      if (Array.isArray(schema)) {
-        schema.forEach((item, i) => {
-          found.push(...findUnsupportedKeywords(item, `${path}[${i}]`));
-        });
-        return found;
-      }
-
-      const record = schema as Record<string, unknown>;
-      const properties =
-        record.properties &&
-        typeof record.properties === "object" &&
-        !Array.isArray(record.properties)
-          ? (record.properties as Record<string, unknown>)
-          : undefined;
-      if (properties) {
-        for (const [key, value] of Object.entries(properties)) {
-          found.push(...findUnsupportedKeywords(value, `${path}.properties.${key}`));
-        }
-      }
-
-      for (const [key, value] of Object.entries(record)) {
-        if (key === "properties") {
-          continue;
-        }
-        if (unsupportedKeywords.has(key)) {
-          found.push(`${path}.${key}`);
-        }
-        if (value && typeof value === "object") {
-          found.push(...findUnsupportedKeywords(value, `${path}.${key}`));
-        }
-      }
-      return found;
-    };
-
     const googleTools = createOpenClawCodingTools({
       modelProvider: "google",
       senderIsOwner: true,
     });
     for (const tool of googleTools) {
-      const violations = findUnsupportedKeywords(tool.parameters, `${tool.name}.parameters`);
+      const violations = findUnsupportedSchemaKeywords(tool.parameters, `${tool.name}.parameters`);
       expect(violations).toEqual([]);
     }
   });

@@ -1,4 +1,6 @@
 import type { OpenClawConfig } from "../../config/config.js";
+import type { SandboxSshSettings } from "../../config/types.sandbox.js";
+import { normalizeSecretInputString } from "../../config/types.secrets.js";
 import { resolveAgentConfig } from "../agent-scope.js";
 import {
   DEFAULT_SANDBOX_BROWSER_AUTOSTART_TIMEOUT_MS,
@@ -22,7 +24,31 @@ import type {
   SandboxDockerConfig,
   SandboxPruneConfig,
   SandboxScope,
+  SandboxSshConfig,
 } from "./types.js";
+
+export const DANGEROUS_SANDBOX_DOCKER_BOOLEAN_KEYS = [
+  "dangerouslyAllowReservedContainerTargets",
+  "dangerouslyAllowExternalBindSources",
+  "dangerouslyAllowContainerNamespaceJoin",
+] as const;
+
+const DEFAULT_SANDBOX_SSH_COMMAND = "ssh";
+const DEFAULT_SANDBOX_SSH_WORKSPACE_ROOT = "/tmp/openclaw-sandboxes";
+
+type DangerousSandboxDockerBooleanKey = (typeof DANGEROUS_SANDBOX_DOCKER_BOOLEAN_KEYS)[number];
+type DangerousSandboxDockerBooleans = Pick<SandboxDockerConfig, DangerousSandboxDockerBooleanKey>;
+
+function resolveDangerousSandboxDockerBooleans(
+  agentDocker?: Partial<SandboxDockerConfig>,
+  globalDocker?: Partial<SandboxDockerConfig>,
+): DangerousSandboxDockerBooleans {
+  const resolved = {} as DangerousSandboxDockerBooleans;
+  for (const key of DANGEROUS_SANDBOX_DOCKER_BOOLEAN_KEYS) {
+    resolved[key] = agentDocker?.[key] ?? globalDocker?.[key];
+  }
+  return resolved;
+}
 
 export function resolveSandboxBrowserDockerCreateConfig(params: {
   docker: SandboxDockerConfig;
@@ -95,15 +121,7 @@ export function resolveSandboxDockerConfig(params: {
     dns: agentDocker?.dns ?? globalDocker?.dns,
     extraHosts: agentDocker?.extraHosts ?? globalDocker?.extraHosts,
     binds: binds.length ? binds : undefined,
-    dangerouslyAllowReservedContainerTargets:
-      agentDocker?.dangerouslyAllowReservedContainerTargets ??
-      globalDocker?.dangerouslyAllowReservedContainerTargets,
-    dangerouslyAllowExternalBindSources:
-      agentDocker?.dangerouslyAllowExternalBindSources ??
-      globalDocker?.dangerouslyAllowExternalBindSources,
-    dangerouslyAllowContainerNamespaceJoin:
-      agentDocker?.dangerouslyAllowContainerNamespaceJoin ??
-      globalDocker?.dangerouslyAllowContainerNamespaceJoin,
+    ...resolveDangerousSandboxDockerBooleans(agentDocker, globalDocker),
   };
 }
 
@@ -155,6 +173,54 @@ export function resolveSandboxPruneConfig(params: {
   };
 }
 
+function normalizeOptionalString(value: string | undefined): string | undefined {
+  const trimmed = value?.trim();
+  return trimmed ? trimmed : undefined;
+}
+
+function normalizeRemoteRoot(value: string | undefined, fallback: string): string {
+  const normalized = normalizeOptionalString(value) ?? fallback;
+  const posix = normalized.replaceAll("\\", "/");
+  if (!posix.startsWith("/")) {
+    throw new Error(`Sandbox SSH workspaceRoot must be an absolute POSIX path: ${normalized}`);
+  }
+  return posix.replace(/\/+$/g, "") || "/";
+}
+
+export function resolveSandboxSshConfig(params: {
+  scope: SandboxScope;
+  globalSsh?: Partial<SandboxSshSettings>;
+  agentSsh?: Partial<SandboxSshSettings>;
+}): SandboxSshConfig {
+  const agentSsh = params.scope === "shared" ? undefined : params.agentSsh;
+  const globalSsh = params.globalSsh;
+  return {
+    target: normalizeOptionalString(agentSsh?.target ?? globalSsh?.target),
+    command:
+      normalizeOptionalString(agentSsh?.command ?? globalSsh?.command) ??
+      DEFAULT_SANDBOX_SSH_COMMAND,
+    workspaceRoot: normalizeRemoteRoot(
+      agentSsh?.workspaceRoot ?? globalSsh?.workspaceRoot,
+      DEFAULT_SANDBOX_SSH_WORKSPACE_ROOT,
+    ),
+    strictHostKeyChecking:
+      agentSsh?.strictHostKeyChecking ?? globalSsh?.strictHostKeyChecking ?? true,
+    updateHostKeys: agentSsh?.updateHostKeys ?? globalSsh?.updateHostKeys ?? true,
+    identityFile: normalizeOptionalString(agentSsh?.identityFile ?? globalSsh?.identityFile),
+    certificateFile: normalizeOptionalString(
+      agentSsh?.certificateFile ?? globalSsh?.certificateFile,
+    ),
+    knownHostsFile: normalizeOptionalString(agentSsh?.knownHostsFile ?? globalSsh?.knownHostsFile),
+    identityData: normalizeSecretInputString(agentSsh?.identityData ?? globalSsh?.identityData),
+    certificateData: normalizeSecretInputString(
+      agentSsh?.certificateData ?? globalSsh?.certificateData,
+    ),
+    knownHostsData: normalizeSecretInputString(
+      agentSsh?.knownHostsData ?? globalSsh?.knownHostsData,
+    ),
+  };
+}
+
 export function resolveSandboxConfigForAgent(
   cfg?: OpenClawConfig,
   agentId?: string,
@@ -177,6 +243,7 @@ export function resolveSandboxConfigForAgent(
 
   return {
     mode: agentSandbox?.mode ?? agent?.mode ?? "off",
+    backend: agentSandbox?.backend?.trim() || agent?.backend?.trim() || "docker",
     scope,
     workspaceAccess: agentSandbox?.workspaceAccess ?? agent?.workspaceAccess ?? "none",
     workspaceRoot:
@@ -185,6 +252,11 @@ export function resolveSandboxConfigForAgent(
       scope,
       globalDocker: agent?.docker,
       agentDocker: agentSandbox?.docker,
+    }),
+    ssh: resolveSandboxSshConfig({
+      scope,
+      globalSsh: agent?.ssh,
+      agentSsh: agentSandbox?.ssh,
     }),
     browser: resolveSandboxBrowserConfig({
       scope,

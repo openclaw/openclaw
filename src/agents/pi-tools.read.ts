@@ -1,14 +1,39 @@
+import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
 import { createEditTool, createReadTool, createWriteTool } from "@mariozechner/pi-coding-agent";
+import {
+  appendFileWithinRoot,
+  SafeOpenError,
+  openFileWithinRoot,
+  readFileWithinRoot,
+  writeFileWithinRoot,
+} from "../infra/fs-safe.js";
 import { detectMime } from "../media/mime.js";
 import { sniffMimeFromBase64 } from "../media/sniff-mime-from-base64.js";
 import type { ImageSanitizationLimits } from "./image-sanitization.js";
+import { toRelativeWorkspacePath } from "./path-policy.js";
+import { wrapHostEditToolWithPostWriteRecovery } from "./pi-tools.host-edit.js";
+import {
+  CLAUDE_PARAM_GROUPS,
+  assertRequiredParams,
+  normalizeToolParams,
+  patchToolSchemaForClaudeCompatibility,
+  wrapToolParamNormalization,
+} from "./pi-tools.params.js";
 import type { AnyAgentTool } from "./pi-tools.types.js";
 import { assertSandboxPath } from "./sandbox-paths.js";
 import type { SandboxFsBridge } from "./sandbox/fs-bridge.js";
 import { sanitizeToolResultImages } from "./tool-images.js";
+
+export {
+  CLAUDE_PARAM_GROUPS,
+  assertRequiredParams,
+  normalizeToolParams,
+  patchToolSchemaForClaudeCompatibility,
+  wrapToolParamNormalization,
+} from "./pi-tools.params.js";
 
 // NOTE(steipete): Upstream read now does file-magic MIME detection; we keep the wrapper
 // to normalize payloads and sanitize oversized images before they hit providers.
@@ -326,230 +351,6 @@ async function normalizeReadImageResult(
   return { ...result, content: nextContent };
 }
 
-type RequiredParamGroup = {
-  keys: readonly string[];
-  allowEmpty?: boolean;
-  label?: string;
-};
-
-const RETRY_GUIDANCE_SUFFIX = " Supply correct parameters before retrying.";
-
-function parameterValidationError(message: string): Error {
-  return new Error(`${message}.${RETRY_GUIDANCE_SUFFIX}`);
-}
-
-export const CLAUDE_PARAM_GROUPS = {
-  read: [{ keys: ["path", "file_path"], label: "path (path or file_path)" }],
-  write: [
-    { keys: ["path", "file_path"], label: "path (path or file_path)" },
-    { keys: ["content"], label: "content" },
-  ],
-  edit: [
-    { keys: ["path", "file_path"], label: "path (path or file_path)" },
-    {
-      keys: ["oldText", "old_string"],
-      label: "oldText (oldText or old_string)",
-    },
-    {
-      keys: ["newText", "new_string"],
-      label: "newText (newText or new_string)",
-      allowEmpty: true,
-    },
-  ],
-} as const;
-
-function extractStructuredText(value: unknown, depth = 0): string | undefined {
-  if (depth > 6) {
-    return undefined;
-  }
-  if (typeof value === "string") {
-    return value;
-  }
-  if (Array.isArray(value)) {
-    const parts = value
-      .map((entry) => extractStructuredText(entry, depth + 1))
-      .filter((entry): entry is string => typeof entry === "string");
-    return parts.length > 0 ? parts.join("") : undefined;
-  }
-  if (!value || typeof value !== "object") {
-    return undefined;
-  }
-  const record = value as Record<string, unknown>;
-  if (typeof record.text === "string") {
-    return record.text;
-  }
-  if (typeof record.content === "string") {
-    return record.content;
-  }
-  if (Array.isArray(record.content)) {
-    return extractStructuredText(record.content, depth + 1);
-  }
-  if (Array.isArray(record.parts)) {
-    return extractStructuredText(record.parts, depth + 1);
-  }
-  if (typeof record.value === "string" && record.value.length > 0) {
-    const type = typeof record.type === "string" ? record.type.toLowerCase() : "";
-    const kind = typeof record.kind === "string" ? record.kind.toLowerCase() : "";
-    if (type.includes("text") || kind === "text") {
-      return record.value;
-    }
-  }
-  return undefined;
-}
-
-function normalizeTextLikeParam(record: Record<string, unknown>, key: string) {
-  const value = record[key];
-  if (typeof value === "string") {
-    return;
-  }
-  const extracted = extractStructuredText(value);
-  if (typeof extracted === "string") {
-    record[key] = extracted;
-  }
-}
-
-// Normalize tool parameters from Claude Code conventions to pi-coding-agent conventions.
-// Claude Code uses file_path/old_string/new_string while pi-coding-agent uses path/oldText/newText.
-// This prevents models trained on Claude Code from getting stuck in tool-call loops.
-export function normalizeToolParams(params: unknown): Record<string, unknown> | undefined {
-  if (!params || typeof params !== "object") {
-    return undefined;
-  }
-  const record = params as Record<string, unknown>;
-  const normalized = { ...record };
-  // file_path → path (read, write, edit)
-  if ("file_path" in normalized && !("path" in normalized)) {
-    normalized.path = normalized.file_path;
-    delete normalized.file_path;
-  }
-  // old_string → oldText (edit)
-  if ("old_string" in normalized && !("oldText" in normalized)) {
-    normalized.oldText = normalized.old_string;
-    delete normalized.old_string;
-  }
-  // new_string → newText (edit)
-  if ("new_string" in normalized && !("newText" in normalized)) {
-    normalized.newText = normalized.new_string;
-    delete normalized.new_string;
-  }
-  // Some providers/models emit text payloads as structured blocks instead of raw strings.
-  // Normalize these for write/edit so content matching and writes stay deterministic.
-  normalizeTextLikeParam(normalized, "content");
-  normalizeTextLikeParam(normalized, "oldText");
-  normalizeTextLikeParam(normalized, "newText");
-  return normalized;
-}
-
-export function patchToolSchemaForClaudeCompatibility(tool: AnyAgentTool): AnyAgentTool {
-  const schema =
-    tool.parameters && typeof tool.parameters === "object"
-      ? (tool.parameters as Record<string, unknown>)
-      : undefined;
-
-  if (!schema || !schema.properties || typeof schema.properties !== "object") {
-    return tool;
-  }
-
-  const properties = { ...(schema.properties as Record<string, unknown>) };
-  const required = Array.isArray(schema.required)
-    ? schema.required.filter((key): key is string => typeof key === "string")
-    : [];
-  let changed = false;
-
-  const aliasPairs: Array<{ original: string; alias: string }> = [
-    { original: "path", alias: "file_path" },
-    { original: "oldText", alias: "old_string" },
-    { original: "newText", alias: "new_string" },
-  ];
-
-  for (const { original, alias } of aliasPairs) {
-    if (!(original in properties)) {
-      continue;
-    }
-    if (!(alias in properties)) {
-      properties[alias] = properties[original];
-      changed = true;
-    }
-    const idx = required.indexOf(original);
-    if (idx !== -1) {
-      required.splice(idx, 1);
-      changed = true;
-    }
-  }
-
-  if (!changed) {
-    return tool;
-  }
-
-  return {
-    ...tool,
-    parameters: {
-      ...schema,
-      properties,
-      required,
-    },
-  };
-}
-
-export function assertRequiredParams(
-  record: Record<string, unknown> | undefined,
-  groups: readonly RequiredParamGroup[],
-  toolName: string,
-): void {
-  if (!record || typeof record !== "object") {
-    throw parameterValidationError(`Missing parameters for ${toolName}`);
-  }
-
-  const missingLabels: string[] = [];
-  for (const group of groups) {
-    const satisfied = group.keys.some((key) => {
-      if (!(key in record)) {
-        return false;
-      }
-      const value = record[key];
-      if (typeof value !== "string") {
-        return false;
-      }
-      if (group.allowEmpty) {
-        return true;
-      }
-      return value.trim().length > 0;
-    });
-
-    if (!satisfied) {
-      const label = group.label ?? group.keys.join(" or ");
-      missingLabels.push(label);
-    }
-  }
-
-  if (missingLabels.length > 0) {
-    const joined = missingLabels.join(", ");
-    const noun = missingLabels.length === 1 ? "parameter" : "parameters";
-    throw parameterValidationError(`Missing required ${noun}: ${joined}`);
-  }
-}
-
-// Generic wrapper to normalize parameters for any tool
-export function wrapToolParamNormalization(
-  tool: AnyAgentTool,
-  requiredParamGroups?: readonly RequiredParamGroup[],
-): AnyAgentTool {
-  const patched = patchToolSchemaForClaudeCompatibility(tool);
-  return {
-    ...patched,
-    execute: async (toolCallId, params, signal, onUpdate) => {
-      const normalized = normalizeToolParams(params);
-      const record =
-        normalized ??
-        (params && typeof params === "object" ? (params as Record<string, unknown>) : undefined);
-      if (requiredParamGroups?.length) {
-        assertRequiredParams(record, requiredParamGroups, tool.name);
-      }
-      return tool.execute(toolCallId, normalized ?? params, signal, onUpdate);
-    },
-  };
-}
-
 export function wrapToolWorkspaceRootGuard(tool: AnyAgentTool, root: string): AnyAgentTool {
   return wrapToolWorkspaceRootGuardWithOptions(tool, root);
 }
@@ -604,6 +405,161 @@ function mapContainerPathToWorkspaceRoot(params: {
     return path.resolve(params.root);
   }
   return path.resolve(params.root, ...relative.split("/").filter(Boolean));
+}
+
+export function resolveToolPathAgainstWorkspaceRoot(params: {
+  filePath: string;
+  root: string;
+  containerWorkdir?: string;
+}): string {
+  const mapped = mapContainerPathToWorkspaceRoot(params);
+  const candidate = mapped.startsWith("@") ? mapped.slice(1) : mapped;
+  return path.isAbsolute(candidate)
+    ? path.resolve(candidate)
+    : path.resolve(params.root, candidate || ".");
+}
+
+type MemoryFlushAppendOnlyWriteOptions = {
+  root: string;
+  relativePath: string;
+  containerWorkdir?: string;
+  sandbox?: {
+    root: string;
+    bridge: SandboxFsBridge;
+  };
+};
+
+async function readOptionalUtf8File(params: {
+  absolutePath: string;
+  relativePath: string;
+  sandbox?: MemoryFlushAppendOnlyWriteOptions["sandbox"];
+  signal?: AbortSignal;
+}): Promise<string> {
+  try {
+    if (params.sandbox) {
+      const stat = await params.sandbox.bridge.stat({
+        filePath: params.relativePath,
+        cwd: params.sandbox.root,
+        signal: params.signal,
+      });
+      if (!stat) {
+        return "";
+      }
+      const buffer = await params.sandbox.bridge.readFile({
+        filePath: params.relativePath,
+        cwd: params.sandbox.root,
+        signal: params.signal,
+      });
+      return buffer.toString("utf-8");
+    }
+    return await fs.readFile(params.absolutePath, "utf-8");
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException | undefined)?.code === "ENOENT") {
+      return "";
+    }
+    throw error;
+  }
+}
+
+async function appendMemoryFlushContent(params: {
+  absolutePath: string;
+  root: string;
+  relativePath: string;
+  content: string;
+  sandbox?: MemoryFlushAppendOnlyWriteOptions["sandbox"];
+  signal?: AbortSignal;
+}) {
+  if (!params.sandbox) {
+    await appendFileWithinRoot({
+      rootDir: params.root,
+      relativePath: params.relativePath,
+      data: params.content,
+      mkdir: true,
+      prependNewlineIfNeeded: true,
+    });
+    return;
+  }
+
+  const existing = await readOptionalUtf8File({
+    absolutePath: params.absolutePath,
+    relativePath: params.relativePath,
+    sandbox: params.sandbox,
+    signal: params.signal,
+  });
+  const separator =
+    existing.length > 0 && !existing.endsWith("\n") && !params.content.startsWith("\n") ? "\n" : "";
+  const next = `${existing}${separator}${params.content}`;
+  if (params.sandbox) {
+    const parent = path.posix.dirname(params.relativePath);
+    if (parent && parent !== ".") {
+      await params.sandbox.bridge.mkdirp({
+        filePath: parent,
+        cwd: params.sandbox.root,
+        signal: params.signal,
+      });
+    }
+    await params.sandbox.bridge.writeFile({
+      filePath: params.relativePath,
+      cwd: params.sandbox.root,
+      data: next,
+      mkdir: true,
+      signal: params.signal,
+    });
+    return;
+  }
+  await fs.mkdir(path.dirname(params.absolutePath), { recursive: true });
+  await fs.writeFile(params.absolutePath, next, "utf-8");
+}
+
+export function wrapToolMemoryFlushAppendOnlyWrite(
+  tool: AnyAgentTool,
+  options: MemoryFlushAppendOnlyWriteOptions,
+): AnyAgentTool {
+  const allowedAbsolutePath = path.resolve(options.root, options.relativePath);
+  return {
+    ...tool,
+    description: `${tool.description} During memory flush, this tool may only append to ${options.relativePath}.`,
+    execute: async (toolCallId, args, signal, onUpdate) => {
+      const normalized = normalizeToolParams(args);
+      const record =
+        normalized ??
+        (args && typeof args === "object" ? (args as Record<string, unknown>) : undefined);
+      assertRequiredParams(record, CLAUDE_PARAM_GROUPS.write, tool.name);
+      const filePath =
+        typeof record?.path === "string" && record.path.trim() ? record.path : undefined;
+      const content = typeof record?.content === "string" ? record.content : undefined;
+      if (!filePath || content === undefined) {
+        return tool.execute(toolCallId, normalized ?? args, signal, onUpdate);
+      }
+
+      const resolvedPath = resolveToolPathAgainstWorkspaceRoot({
+        filePath,
+        root: options.root,
+        containerWorkdir: options.containerWorkdir,
+      });
+      if (resolvedPath !== allowedAbsolutePath) {
+        throw new Error(
+          `Memory flush writes are restricted to ${options.relativePath}; use that path only.`,
+        );
+      }
+
+      await appendMemoryFlushContent({
+        absolutePath: allowedAbsolutePath,
+        root: options.root,
+        relativePath: options.relativePath,
+        content,
+        sandbox: options.sandbox,
+        signal,
+      });
+      return {
+        content: [{ type: "text", text: `Appended content to ${options.relativePath}.` }],
+        details: {
+          path: options.relativePath,
+          appendOnly: true,
+        },
+      };
+    },
+  };
 }
 
 export function wrapToolWorkspaceRootGuardWithOptions(
@@ -663,6 +619,21 @@ export function createSandboxedEditTool(params: SandboxToolParams) {
     operations: createSandboxEditOperations(params),
   }) as unknown as AnyAgentTool;
   return wrapToolParamNormalization(base, CLAUDE_PARAM_GROUPS.edit);
+}
+
+export function createHostWorkspaceWriteTool(root: string, options?: { workspaceOnly?: boolean }) {
+  const base = createWriteTool(root, {
+    operations: createHostWriteOperations(root, options),
+  }) as unknown as AnyAgentTool;
+  return wrapToolParamNormalization(base, CLAUDE_PARAM_GROUPS.write);
+}
+
+export function createHostWorkspaceEditTool(root: string, options?: { workspaceOnly?: boolean }) {
+  const base = createEditTool(root, {
+    operations: createHostEditOperations(root, options),
+  }) as unknown as AnyAgentTool;
+  const withRecovery = wrapHostEditToolWithPostWriteRecovery(base, root);
+  return wrapToolParamNormalization(withRecovery, CLAUDE_PARAM_GROUPS.edit);
 }
 
 export function createOpenClawReadTool(
@@ -736,6 +707,116 @@ function createSandboxEditOperations(params: SandboxToolParams) {
       const stat = await params.bridge.stat({ filePath: absolutePath, cwd: params.root });
       if (!stat) {
         throw createFsAccessError("ENOENT", absolutePath);
+      }
+    },
+  } as const;
+}
+
+async function writeHostFile(absolutePath: string, content: string) {
+  const resolved = path.resolve(absolutePath);
+  await fs.mkdir(path.dirname(resolved), { recursive: true });
+  await fs.writeFile(resolved, content, "utf-8");
+}
+
+function createHostWriteOperations(root: string, options?: { workspaceOnly?: boolean }) {
+  const workspaceOnly = options?.workspaceOnly ?? false;
+
+  if (!workspaceOnly) {
+    // When workspaceOnly is false, allow writes anywhere on the host
+    return {
+      mkdir: async (dir: string) => {
+        const resolved = path.resolve(dir);
+        await fs.mkdir(resolved, { recursive: true });
+      },
+      writeFile: writeHostFile,
+    } as const;
+  }
+
+  // When workspaceOnly is true, enforce workspace boundary
+  return {
+    mkdir: async (dir: string) => {
+      const relative = toRelativeWorkspacePath(root, dir, { allowRoot: true });
+      const resolved = relative ? path.resolve(root, relative) : path.resolve(root);
+      await assertSandboxPath({ filePath: resolved, cwd: root, root });
+      await fs.mkdir(resolved, { recursive: true });
+    },
+    writeFile: async (absolutePath: string, content: string) => {
+      const relative = toRelativeWorkspacePath(root, absolutePath);
+      await writeFileWithinRoot({
+        rootDir: root,
+        relativePath: relative,
+        data: content,
+        mkdir: true,
+      });
+    },
+  } as const;
+}
+
+function createHostEditOperations(root: string, options?: { workspaceOnly?: boolean }) {
+  const workspaceOnly = options?.workspaceOnly ?? false;
+
+  if (!workspaceOnly) {
+    // When workspaceOnly is false, allow edits anywhere on the host
+    return {
+      readFile: async (absolutePath: string) => {
+        const resolved = path.resolve(absolutePath);
+        return await fs.readFile(resolved);
+      },
+      writeFile: writeHostFile,
+      access: async (absolutePath: string) => {
+        const resolved = path.resolve(absolutePath);
+        await fs.access(resolved);
+      },
+    } as const;
+  }
+
+  // When workspaceOnly is true, enforce workspace boundary
+  return {
+    readFile: async (absolutePath: string) => {
+      const relative = toRelativeWorkspacePath(root, absolutePath);
+      const safeRead = await readFileWithinRoot({
+        rootDir: root,
+        relativePath: relative,
+      });
+      return safeRead.buffer;
+    },
+    writeFile: async (absolutePath: string, content: string) => {
+      const relative = toRelativeWorkspacePath(root, absolutePath);
+      await writeFileWithinRoot({
+        rootDir: root,
+        relativePath: relative,
+        data: content,
+        mkdir: true,
+      });
+    },
+    access: async (absolutePath: string) => {
+      let relative: string;
+      try {
+        relative = toRelativeWorkspacePath(root, absolutePath);
+      } catch {
+        // Path escapes workspace root.  Don't throw here – the upstream
+        // library replaces any `access` error with a misleading "File not
+        // found" message.  By returning silently the subsequent `readFile`
+        // call will throw the same "Path escapes workspace root" error
+        // through a code-path that propagates the original message.
+        return;
+      }
+      try {
+        const opened = await openFileWithinRoot({
+          rootDir: root,
+          relativePath: relative,
+        });
+        await opened.handle.close().catch(() => {});
+      } catch (error) {
+        if (error instanceof SafeOpenError && error.code === "not-found") {
+          throw createFsAccessError("ENOENT", absolutePath);
+        }
+        if (error instanceof SafeOpenError && error.code === "outside-workspace") {
+          // Don't throw here – see the comment above about the upstream
+          // library swallowing access errors as "File not found".
+          return;
+        }
+        throw error;
       }
     },
   } as const;

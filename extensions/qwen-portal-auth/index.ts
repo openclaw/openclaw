@@ -1,8 +1,13 @@
 import {
+  buildOauthProviderAuthResult,
   emptyPluginConfigSchema,
   type OpenClawPluginApi,
   type ProviderAuthContext,
-} from "openclaw/plugin-sdk";
+  type ProviderCatalogContext,
+} from "openclaw/plugin-sdk/qwen-portal-auth";
+import { ensureAuthProfileStore, listProfilesForProvider } from "../../src/agents/auth-profiles.js";
+import { QWEN_OAUTH_MARKER } from "../../src/agents/model-auth-markers.js";
+import { refreshQwenPortalCredentials } from "../../src/providers/qwen-portal-oauth.js";
 import { loginQwenPortalOAuth } from "./oauth.js";
 
 const PROVIDER_ID = "qwen-portal";
@@ -11,7 +16,6 @@ const DEFAULT_MODEL = "qwen-portal/coder-model";
 const DEFAULT_BASE_URL = "https://portal.qwen.ai/v1";
 const DEFAULT_CONTEXT_WINDOW = 128000;
 const DEFAULT_MAX_TOKENS = 8192;
-const OAUTH_PLACEHOLDER = "qwen-oauth";
 
 function normalizeBaseUrl(value: string | undefined): string {
   const raw = value?.trim() || DEFAULT_BASE_URL;
@@ -35,6 +39,51 @@ function buildModelDefinition(params: {
   };
 }
 
+function buildProviderCatalog(params: { baseUrl: string; apiKey: string }) {
+  return {
+    baseUrl: params.baseUrl,
+    apiKey: params.apiKey,
+    api: "openai-completions" as const,
+    models: [
+      buildModelDefinition({
+        id: "coder-model",
+        name: "Qwen Coder",
+        input: ["text"],
+      }),
+      buildModelDefinition({
+        id: "vision-model",
+        name: "Qwen Vision",
+        input: ["text", "image"],
+      }),
+    ],
+  };
+}
+
+function resolveCatalog(ctx: ProviderCatalogContext) {
+  const explicitProvider = ctx.config.models?.providers?.[PROVIDER_ID];
+  const envApiKey = ctx.resolveProviderApiKey(PROVIDER_ID).apiKey;
+  const authStore = ensureAuthProfileStore(ctx.agentDir, {
+    allowKeychainPrompt: false,
+  });
+  const hasProfiles = listProfilesForProvider(authStore, PROVIDER_ID).length > 0;
+  const explicitApiKey =
+    typeof explicitProvider?.apiKey === "string" ? explicitProvider.apiKey.trim() : undefined;
+  const apiKey = envApiKey ?? explicitApiKey ?? (hasProfiles ? QWEN_OAUTH_MARKER : undefined);
+  if (!apiKey) {
+    return null;
+  }
+
+  const explicitBaseUrl =
+    typeof explicitProvider?.baseUrl === "string" ? explicitProvider.baseUrl : undefined;
+
+  return {
+    provider: buildProviderCatalog({
+      baseUrl: normalizeBaseUrl(explicitBaseUrl),
+      apiKey,
+    }),
+  };
+}
+
 const qwenPortalPlugin = {
   id: "qwen-portal-auth",
   name: "Qwen OAuth",
@@ -46,6 +95,10 @@ const qwenPortalPlugin = {
       label: PROVIDER_LABEL,
       docsPath: "/providers/qwen",
       aliases: ["qwen"],
+      envVars: ["QWEN_OAUTH_TOKEN", "QWEN_PORTAL_API_KEY"],
+      catalog: {
+        run: async (ctx: ProviderCatalogContext) => resolveCatalog(ctx),
+      },
       auth: [
         {
           id: "device",
@@ -63,41 +116,20 @@ const qwenPortalPlugin = {
 
               progress.stop("Qwen OAuth complete");
 
-              const profileId = `${PROVIDER_ID}:default`;
               const baseUrl = normalizeBaseUrl(result.resourceUrl);
 
-              return {
-                profiles: [
-                  {
-                    profileId,
-                    credential: {
-                      type: "oauth",
-                      provider: PROVIDER_ID,
-                      access: result.access,
-                      refresh: result.refresh,
-                      expires: result.expires,
-                    },
-                  },
-                ],
+              return buildOauthProviderAuthResult({
+                providerId: PROVIDER_ID,
+                defaultModel: DEFAULT_MODEL,
+                access: result.access,
+                refresh: result.refresh,
+                expires: result.expires,
                 configPatch: {
                   models: {
                     providers: {
                       [PROVIDER_ID]: {
                         baseUrl,
-                        apiKey: OAUTH_PLACEHOLDER,
-                        api: "openai-completions",
-                        models: [
-                          buildModelDefinition({
-                            id: "coder-model",
-                            name: "Qwen Coder",
-                            input: ["text"],
-                          }),
-                          buildModelDefinition({
-                            id: "vision-model",
-                            name: "Qwen Vision",
-                            input: ["text", "image"],
-                          }),
-                        ],
+                        models: [],
                       },
                     },
                   },
@@ -110,12 +142,11 @@ const qwenPortalPlugin = {
                     },
                   },
                 },
-                defaultModel: DEFAULT_MODEL,
                 notes: [
                   "Qwen OAuth tokens auto-refresh. Re-run login if refresh fails or access is revoked.",
                   `Base URL defaults to ${DEFAULT_BASE_URL}. Override models.providers.${PROVIDER_ID}.baseUrl if needed.`,
                 ],
-              };
+              });
             } catch (err) {
               progress.stop("Qwen OAuth failed");
               await ctx.prompter.note(
@@ -127,6 +158,21 @@ const qwenPortalPlugin = {
           },
         },
       ],
+      wizard: {
+        setup: {
+          choiceId: "qwen-portal",
+          choiceLabel: "Qwen OAuth",
+          choiceHint: "Device code login",
+          methodId: "device",
+        },
+      },
+      refreshOAuth: async (cred) => ({
+        ...cred,
+        ...(await refreshQwenPortalCredentials(cred)),
+        type: "oauth",
+        provider: PROVIDER_ID,
+        email: cred.email,
+      }),
     });
   },
 };

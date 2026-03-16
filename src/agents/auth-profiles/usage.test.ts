@@ -26,6 +26,7 @@ function makeStore(usageStats: AuthProfileStore["usageStats"]): AuthProfileStore
       "anthropic:default": { type: "api_key", provider: "anthropic", key: "sk-test" },
       "openai:default": { type: "api_key", provider: "openai", key: "sk-test-2" },
       "openrouter:default": { type: "api_key", provider: "openrouter", key: "sk-or-test" },
+      "kilocode:default": { type: "api_key", provider: "kilocode", key: "sk-kc-test" },
     },
     usageStats,
   };
@@ -120,6 +121,17 @@ describe("isProfileInCooldown", () => {
     });
     expect(isProfileInCooldown(store, "openrouter:default")).toBe(false);
   });
+
+  it("returns false for Kilocode even when cooldown fields exist", () => {
+    const store = makeStore({
+      "kilocode:default": {
+        cooldownUntil: Date.now() + 60_000,
+        disabledUntil: Date.now() + 60_000,
+        disabledReason: "billing",
+      },
+    });
+    expect(isProfileInCooldown(store, "kilocode:default")).toBe(false);
+  });
 });
 
 describe("resolveProfilesUnavailableReason", () => {
@@ -141,6 +153,24 @@ describe("resolveProfilesUnavailableReason", () => {
     ).toBe("billing");
   });
 
+  it("returns auth_permanent for active permanent auth disables", () => {
+    const now = Date.now();
+    const store = makeStore({
+      "anthropic:default": {
+        disabledUntil: now + 60_000,
+        disabledReason: "auth_permanent",
+      },
+    });
+
+    expect(
+      resolveProfilesUnavailableReason({
+        store,
+        profileIds: ["anthropic:default"],
+        now,
+      }),
+    ).toBe("auth_permanent");
+  });
+
   it("uses recorded non-rate-limit failure counts for active cooldown windows", () => {
     const now = Date.now();
     const store = makeStore({
@@ -159,7 +189,25 @@ describe("resolveProfilesUnavailableReason", () => {
     ).toBe("auth");
   });
 
-  it("falls back to rate_limit when active cooldown has no reason history", () => {
+  it("returns overloaded for active overloaded cooldown windows", () => {
+    const now = Date.now();
+    const store = makeStore({
+      "anthropic:default": {
+        cooldownUntil: now + 60_000,
+        failureCounts: { overloaded: 2, rate_limit: 1 },
+      },
+    });
+
+    expect(
+      resolveProfilesUnavailableReason({
+        store,
+        profileIds: ["anthropic:default"],
+        now,
+      }),
+    ).toBe("overloaded");
+  });
+
+  it("falls back to unknown when active cooldown has no reason history", () => {
     const now = Date.now();
     const store = makeStore({
       "anthropic:default": {
@@ -173,7 +221,7 @@ describe("resolveProfilesUnavailableReason", () => {
         profileIds: ["anthropic:default"],
         now,
       }),
-    ).toBe("rate_limit");
+    ).toBe("unknown");
   });
 
   it("ignores expired windows and returns null when no profile is actively unavailable", () => {
@@ -490,7 +538,7 @@ describe("markAuthProfileFailure — active windows do not extend on retry", () 
   async function markFailureAt(params: {
     store: ReturnType<typeof makeStore>;
     now: number;
-    reason: "rate_limit" | "billing";
+    reason: "rate_limit" | "billing" | "auth_permanent";
   }): Promise<void> {
     vi.useFakeTimers();
     vi.setSystemTime(params.now);
@@ -528,6 +576,18 @@ describe("markAuthProfileFailure — active windows do not extend on retry", () 
       }),
       readUntil: (stats: WindowStats | undefined) => stats?.disabledUntil,
     },
+    {
+      label: "disabledUntil(auth_permanent)",
+      reason: "auth_permanent" as const,
+      buildUsageStats: (now: number): WindowStats => ({
+        disabledUntil: now + 20 * 60 * 60 * 1000,
+        disabledReason: "auth_permanent",
+        errorCount: 5,
+        failureCounts: { auth_permanent: 5 },
+        lastFailureAt: now - 60_000,
+      }),
+      readUntil: (stats: WindowStats | undefined) => stats?.disabledUntil,
+    },
   ];
 
   for (const testCase of activeWindowCases) {
@@ -548,6 +608,10 @@ describe("markAuthProfileFailure — active windows do not extend on retry", () 
     });
   }
 
+  // When a cooldown/disabled window expires, the error count resets to prevent
+  // stale counters from escalating the next cooldown (the root cause of
+  // infinite cooldown loops — see #40989). The next failure should compute
+  // backoff from errorCount=1, not from the accumulated stale count.
   const expiredWindowCases = [
     {
       label: "cooldownUntil",
@@ -557,7 +621,8 @@ describe("markAuthProfileFailure — active windows do not extend on retry", () 
         errorCount: 3,
         lastFailureAt: now - 60_000,
       }),
-      expectedUntil: (now: number) => now + 60 * 60 * 1000,
+      // errorCount resets → calculateAuthProfileCooldownMs(1) = 60_000
+      expectedUntil: (now: number) => now + 60_000,
       readUntil: (stats: WindowStats | undefined) => stats?.cooldownUntil,
     },
     {
@@ -570,7 +635,24 @@ describe("markAuthProfileFailure — active windows do not extend on retry", () 
         failureCounts: { billing: 2 },
         lastFailureAt: now - 60_000,
       }),
-      expectedUntil: (now: number) => now + 20 * 60 * 60 * 1000,
+      // errorCount resets, billing count resets to 1 →
+      // calculateAuthProfileBillingDisableMsWithConfig(1, 5h, 24h) = 5h
+      expectedUntil: (now: number) => now + 5 * 60 * 60 * 1000,
+      readUntil: (stats: WindowStats | undefined) => stats?.disabledUntil,
+    },
+    {
+      label: "disabledUntil(auth_permanent)",
+      reason: "auth_permanent" as const,
+      buildUsageStats: (now: number): WindowStats => ({
+        disabledUntil: now - 60_000,
+        disabledReason: "auth_permanent",
+        errorCount: 5,
+        failureCounts: { auth_permanent: 2 },
+        lastFailureAt: now - 60_000,
+      }),
+      // errorCount resets, auth_permanent count resets to 1 →
+      // calculateAuthProfileBillingDisableMsWithConfig(1, 5h, 24h) = 5h
+      expectedUntil: (now: number) => now + 5 * 60 * 60 * 1000,
       readUntil: (stats: WindowStats | undefined) => stats?.disabledUntil,
     },
   ];

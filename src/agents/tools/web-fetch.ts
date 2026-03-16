@@ -1,20 +1,23 @@
 import { Type } from "@sinclair/typebox";
 import type { OpenClawConfig } from "../../config/config.js";
-import { fetchWithSsrFGuard } from "../../infra/net/fetch-guard.js";
+import { normalizeResolvedSecretInputString } from "../../config/types.secrets.js";
 import { SsrFBlockedError } from "../../infra/net/ssrf.js";
 import { logDebug } from "../../logger.js";
+import type { RuntimeWebFetchFirecrawlMetadata } from "../../secrets/runtime-web-tools.js";
 import { wrapExternalContent, wrapWebContent } from "../../security/external-content.js";
 import { normalizeSecretInput } from "../../utils/normalize-secret-input.js";
 import { stringEnum } from "../schema/typebox.js";
 import type { AnyAgentTool } from "./common.js";
 import { jsonResult, readNumberParam, readStringParam } from "./common.js";
 import {
+  extractBasicHtmlContent,
   extractReadableContent,
   htmlToMarkdown,
   markdownToText,
   truncateText,
   type ExtractMode,
 } from "./web-fetch-utils.js";
+import { fetchWithWebToolsNetworkGuard, withTrustedWebToolsEndpoint } from "./web-guarded-fetch.js";
 import {
   CacheEntry,
   DEFAULT_CACHE_TTL_MINUTES,
@@ -24,7 +27,6 @@ import {
   readResponseText,
   resolveCacheTtlMs,
   resolveTimeoutSeconds,
-  withTimeout,
   writeCache,
 } from "./web-shared.js";
 
@@ -71,7 +73,7 @@ type WebFetchConfig = NonNullable<OpenClawConfig["tools"]>["web"] extends infer 
 type FirecrawlFetchConfig =
   | {
       enabled?: boolean;
-      apiKey?: string;
+      apiKey?: unknown;
       baseUrl?: string;
       onlyMainContent?: boolean;
       maxAgeMs?: number;
@@ -136,10 +138,14 @@ function resolveFirecrawlConfig(fetch?: WebFetchConfig): FirecrawlFetchConfig {
 }
 
 function resolveFirecrawlApiKey(firecrawl?: FirecrawlFetchConfig): string | undefined {
-  const fromConfig =
-    firecrawl && "apiKey" in firecrawl && typeof firecrawl.apiKey === "string"
-      ? normalizeSecretInput(firecrawl.apiKey)
-      : "";
+  const fromConfigRaw =
+    firecrawl && "apiKey" in firecrawl
+      ? normalizeResolvedSecretInputString({
+          value: firecrawl.apiKey,
+          path: "tools.web.fetch.firecrawl.apiKey",
+        })
+      : undefined;
+  const fromConfig = normalizeSecretInput(fromConfigRaw);
   const fromEnv = normalizeSecretInput(process.env.FIRECRAWL_API_KEY);
   return fromConfig || fromEnv || undefined;
 }
@@ -155,11 +161,12 @@ function resolveFirecrawlEnabled(params: {
 }
 
 function resolveFirecrawlBaseUrl(firecrawl?: FirecrawlFetchConfig): string {
-  const raw =
+  const fromConfig =
     firecrawl && "baseUrl" in firecrawl && typeof firecrawl.baseUrl === "string"
       ? firecrawl.baseUrl.trim()
       : "";
-  return raw || DEFAULT_FIRECRAWL_BASE_URL;
+  const fromEnv = normalizeSecretInput(process.env.FIRECRAWL_BASE_URL);
+  return fromConfig || fromEnv || DEFAULT_FIRECRAWL_BASE_URL;
 }
 
 function resolveFirecrawlOnlyMainContent(firecrawl?: FirecrawlFetchConfig): boolean {
@@ -375,54 +382,59 @@ export async function fetchFirecrawlContent(params: {
     proxy: params.proxy,
     storeInCache: params.storeInCache,
   };
-
-  const res = await fetch(endpoint, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${params.apiKey}`,
-      "Content-Type": "application/json",
+  return await withTrustedWebToolsEndpoint(
+    {
+      url: endpoint,
+      timeoutSeconds: params.timeoutSeconds,
+      init: {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${params.apiKey}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(body),
+      },
     },
-    body: JSON.stringify(body),
-    signal: withTimeout(undefined, params.timeoutSeconds * 1000),
-  });
-
-  const payload = (await res.json()) as {
-    success?: boolean;
-    data?: {
-      markdown?: string;
-      content?: string;
-      metadata?: {
-        title?: string;
-        sourceURL?: string;
-        statusCode?: number;
+    async ({ response }) => {
+      const payload = (await response.json()) as {
+        success?: boolean;
+        data?: {
+          markdown?: string;
+          content?: string;
+          metadata?: {
+            title?: string;
+            sourceURL?: string;
+            statusCode?: number;
+          };
+        };
+        warning?: string;
+        error?: string;
       };
-    };
-    warning?: string;
-    error?: string;
-  };
 
-  if (!res.ok || payload?.success === false) {
-    const detail = payload?.error ?? "";
-    throw new Error(
-      `Firecrawl fetch failed (${res.status}): ${wrapWebContent(detail || res.statusText, "web_fetch")}`.trim(),
-    );
-  }
+      if (!response.ok || payload?.success === false) {
+        const detail = payload?.error ?? "";
+        throw new Error(
+          `Firecrawl fetch failed (${response.status}): ${wrapWebContent(detail || response.statusText, "web_fetch")}`.trim(),
+        );
+      }
 
-  const data = payload?.data ?? {};
-  const rawText =
-    typeof data.markdown === "string"
-      ? data.markdown
-      : typeof data.content === "string"
-        ? data.content
-        : "";
-  const text = params.extractMode === "text" ? markdownToText(rawText) : rawText;
-  return {
-    text,
-    title: data.metadata?.title,
-    finalUrl: data.metadata?.sourceURL,
-    status: data.metadata?.statusCode,
-    warning: payload?.warning,
-  };
+      const data = payload?.data ?? {};
+      const rawText =
+        typeof data.markdown === "string"
+          ? data.markdown
+          : typeof data.content === "string"
+            ? data.content
+            : "";
+      const text = params.extractMode === "text" ? markdownToText(rawText) : rawText;
+      return {
+        text,
+        title: data.metadata?.title,
+        finalUrl: data.metadata?.sourceURL,
+        status: data.metadata?.statusCode,
+        warning: payload?.warning,
+      };
+    },
+  );
 }
 
 type FirecrawlRuntimeParams = {
@@ -523,10 +535,10 @@ async function runWebFetch(params: WebFetchRuntimeParams): Promise<Record<string
   let release: (() => Promise<void>) | null = null;
   let finalUrl = params.url;
   try {
-    const result = await fetchWithSsrFGuard({
+    const result = await fetchWithWebToolsNetworkGuard({
       url: params.url,
       maxRedirects: params.maxRedirects,
-      timeoutMs: params.timeoutSeconds * 1000,
+      timeoutSeconds: params.timeoutSeconds,
       init: {
         headers: {
           Accept: "text/markdown, text/html;q=0.9, */*;q=0.1",
@@ -623,9 +635,19 @@ async function runWebFetch(params: WebFetchRuntimeParams): Promise<Record<string
             title = firecrawl.title;
             extractor = "firecrawl";
           } else {
-            throw new Error(
-              "Web fetch extraction failed: Readability and Firecrawl returned no content.",
-            );
+            const basic = await extractBasicHtmlContent({
+              html: body,
+              extractMode: params.extractMode,
+            });
+            if (basic?.text) {
+              text = basic.text;
+              title = basic.title;
+              extractor = "raw-html";
+            } else {
+              throw new Error(
+                "Web fetch extraction failed: Readability, Firecrawl, and basic HTML cleanup returned no content.",
+              );
+            }
           }
         }
       } else {
@@ -712,6 +734,7 @@ function resolveFirecrawlEndpoint(baseUrl: string): string {
 export function createWebFetchTool(options?: {
   config?: OpenClawConfig;
   sandboxed?: boolean;
+  runtimeFirecrawl?: RuntimeWebFetchFirecrawlMetadata;
 }): AnyAgentTool | null {
   const fetch = resolveFetchConfig(options?.config);
   if (!resolveFetchEnabled({ fetch, sandboxed: options?.sandboxed })) {
@@ -719,8 +742,14 @@ export function createWebFetchTool(options?: {
   }
   const readabilityEnabled = resolveFetchReadabilityEnabled(fetch);
   const firecrawl = resolveFirecrawlConfig(fetch);
-  const firecrawlApiKey = resolveFirecrawlApiKey(firecrawl);
-  const firecrawlEnabled = resolveFirecrawlEnabled({ firecrawl, apiKey: firecrawlApiKey });
+  const runtimeFirecrawlActive = options?.runtimeFirecrawl?.active;
+  const shouldResolveFirecrawlApiKey =
+    runtimeFirecrawlActive === undefined ? firecrawl?.enabled !== false : runtimeFirecrawlActive;
+  const firecrawlApiKey = shouldResolveFirecrawlApiKey
+    ? resolveFirecrawlApiKey(firecrawl)
+    : undefined;
+  const firecrawlEnabled =
+    runtimeFirecrawlActive ?? resolveFirecrawlEnabled({ firecrawl, apiKey: firecrawlApiKey });
   const firecrawlBaseUrl = resolveFirecrawlBaseUrl(firecrawl);
   const firecrawlOnlyMainContent = resolveFirecrawlOnlyMainContent(firecrawl);
   const firecrawlMaxAgeMs = resolveFirecrawlMaxAgeMsOrDefault(firecrawl);
@@ -771,3 +800,7 @@ export function createWebFetchTool(options?: {
     },
   };
 }
+
+export const __testing = {
+  resolveFirecrawlBaseUrl,
+};

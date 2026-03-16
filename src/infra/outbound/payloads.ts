@@ -1,13 +1,21 @@
 import { parseReplyDirectives } from "../../auto-reply/reply/reply-directives.js";
 import {
+  formatBtwTextForExternalDelivery,
   isRenderablePayload,
   shouldSuppressReasoningPayload,
 } from "../../auto-reply/reply/reply-payloads.js";
 import type { ReplyPayload } from "../../auto-reply/types.js";
+import {
+  hasInteractiveReplyBlocks,
+  hasReplyChannelData,
+  hasReplyContent,
+  type InteractiveReply,
+} from "../../interactive/payload.js";
 
 export type NormalizedOutboundPayload = {
   text: string;
   mediaUrls: string[];
+  interactive?: InteractiveReply;
   channelData?: Record<string, unknown>;
 };
 
@@ -15,6 +23,7 @@ export type OutboundPayloadJson = {
   text: string;
   mediaUrl: string | null;
   mediaUrls?: string[];
+  interactive?: InteractiveReply;
   channelData?: Record<string, unknown>;
 };
 
@@ -43,9 +52,10 @@ function mergeMediaUrls(...lists: Array<ReadonlyArray<string | undefined> | unde
 export function normalizeReplyPayloadsForDelivery(
   payloads: readonly ReplyPayload[],
 ): ReplyPayload[] {
-  return payloads.flatMap((payload) => {
+  const normalized: ReplyPayload[] = [];
+  for (const payload of payloads) {
     if (shouldSuppressReasoningPayload(payload)) {
-      return [];
+      continue;
     }
     const parsed = parseReplyDirectives(payload.text ?? "");
     const explicitMediaUrls = payload.mediaUrls ?? parsed.mediaUrls;
@@ -58,7 +68,11 @@ export function normalizeReplyPayloadsForDelivery(
     const resolvedMediaUrl = hasMultipleMedia ? undefined : explicitMediaUrl;
     const next: ReplyPayload = {
       ...payload,
-      text: parsed.text ?? "",
+      text:
+        formatBtwTextForExternalDelivery({
+          ...payload,
+          text: parsed.text ?? "",
+        }) ?? "",
       mediaUrls: mergedMedia.length ? mergedMedia : undefined,
       mediaUrl: resolvedMediaUrl,
       replyToId: payload.replyToId ?? parsed.replyToId,
@@ -67,47 +81,61 @@ export function normalizeReplyPayloadsForDelivery(
       audioAsVoice: Boolean(payload.audioAsVoice || parsed.audioAsVoice),
     };
     if (parsed.isSilent && mergedMedia.length === 0) {
-      return [];
+      continue;
     }
     if (!isRenderablePayload(next)) {
-      return [];
+      continue;
     }
-    return [next];
-  });
+    normalized.push(next);
+  }
+  return normalized;
 }
 
 export function normalizeOutboundPayloads(
   payloads: readonly ReplyPayload[],
 ): NormalizedOutboundPayload[] {
-  return normalizeReplyPayloadsForDelivery(payloads)
-    .map((payload) => {
-      const channelData = payload.channelData;
-      const normalized: NormalizedOutboundPayload = {
-        text: payload.text ?? "",
-        mediaUrls: payload.mediaUrls ?? (payload.mediaUrl ? [payload.mediaUrl] : []),
-      };
-      if (channelData && Object.keys(channelData).length > 0) {
-        normalized.channelData = channelData;
-      }
-      return normalized;
-    })
-    .filter(
-      (payload) =>
-        payload.text ||
-        payload.mediaUrls.length > 0 ||
-        Boolean(payload.channelData && Object.keys(payload.channelData).length > 0),
-    );
+  const normalizedPayloads: NormalizedOutboundPayload[] = [];
+  for (const payload of normalizeReplyPayloadsForDelivery(payloads)) {
+    const mediaUrls = payload.mediaUrls ?? (payload.mediaUrl ? [payload.mediaUrl] : []);
+    const interactive = payload.interactive;
+    const channelData = payload.channelData;
+    const hasChannelData = hasReplyChannelData(channelData);
+    const hasInteractive = hasInteractiveReplyBlocks(interactive);
+    const text = payload.text ?? "";
+    if (
+      !hasReplyContent({
+        text,
+        mediaUrls,
+        interactive,
+        hasChannelData,
+      })
+    ) {
+      continue;
+    }
+    normalizedPayloads.push({
+      text,
+      mediaUrls,
+      ...(hasInteractive ? { interactive } : {}),
+      ...(hasChannelData ? { channelData } : {}),
+    });
+  }
+  return normalizedPayloads;
 }
 
 export function normalizeOutboundPayloadsForJson(
   payloads: readonly ReplyPayload[],
 ): OutboundPayloadJson[] {
-  return normalizeReplyPayloadsForDelivery(payloads).map((payload) => ({
-    text: payload.text ?? "",
-    mediaUrl: payload.mediaUrl ?? null,
-    mediaUrls: payload.mediaUrls ?? (payload.mediaUrl ? [payload.mediaUrl] : undefined),
-    channelData: payload.channelData,
-  }));
+  const normalized: OutboundPayloadJson[] = [];
+  for (const payload of normalizeReplyPayloadsForDelivery(payloads)) {
+    normalized.push({
+      text: payload.text ?? "",
+      mediaUrl: payload.mediaUrl ?? null,
+      mediaUrls: payload.mediaUrls ?? (payload.mediaUrl ? [payload.mediaUrl] : undefined),
+      interactive: payload.interactive,
+      channelData: payload.channelData,
+    });
+  }
+  return normalized;
 }
 
 export function formatOutboundPayloadLog(

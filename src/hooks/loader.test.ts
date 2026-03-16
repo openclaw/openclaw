@@ -1,8 +1,11 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import { setLoggerOverride } from "../logging/logger.js";
+import { loggingState } from "../logging/state.js";
+import { stripAnsi } from "../terminal/ansi.js";
 import { captureEnv } from "../test-utils/env.js";
 import {
   clearInternalHooks,
@@ -31,6 +34,13 @@ describe("loader", () => {
     // Disable bundled hooks during tests by setting env var to non-existent directory
     envSnapshot = captureEnv(["OPENCLAW_BUNDLED_HOOKS_DIR"]);
     process.env.OPENCLAW_BUNDLED_HOOKS_DIR = "/nonexistent/bundled/hooks";
+    setLoggerOverride({ level: "silent", consoleLevel: "error" });
+    loggingState.rawConsole = {
+      log: vi.fn(),
+      info: vi.fn(),
+      warn: vi.fn(),
+      error: vi.fn(),
+    };
   });
 
   async function writeHandlerModule(
@@ -54,6 +64,8 @@ describe("loader", () => {
 
   afterEach(async () => {
     clearInternalHooks();
+    loggingState.rawConsole = null;
+    setLoggerOverride(null);
     envSnapshot.restore();
   });
 
@@ -65,6 +77,20 @@ describe("loader", () => {
   });
 
   describe("loadInternalHooks", () => {
+    const createLegacyHandlerConfig = () =>
+      createEnabledHooksConfig([
+        {
+          event: "command:new",
+          module: "legacy-handler.js",
+        },
+      ]);
+
+    const expectNoCommandHookRegistration = async (cfg: OpenClawConfig) => {
+      const count = await loadInternalHooks(cfg, tmpDir);
+      expect(count).toBe(0);
+      expect(getRegisteredEventKeys()).not.toContain("command:new");
+    };
+
     it("should return 0 when hooks are not enabled", async () => {
       const cfg: OpenClawConfig = {
         hooks: {
@@ -252,11 +278,7 @@ describe("loader", () => {
         return;
       }
 
-      const cfg = createEnabledHooksConfig();
-
-      const count = await loadInternalHooks(cfg, tmpDir);
-      expect(count).toBe(0);
-      expect(getRegisteredEventKeys()).not.toContain("command:new");
+      await expectNoCommandHookRegistration(createEnabledHooksConfig());
     });
 
     it("rejects legacy handler modules that escape workspace via symlink", async () => {
@@ -270,16 +292,84 @@ describe("loader", () => {
         return;
       }
 
+      await expectNoCommandHookRegistration(createLegacyHandlerConfig());
+    });
+
+    it("rejects directory hook handlers that escape hook dir via hardlink", async () => {
+      if (process.platform === "win32") {
+        return;
+      }
+      const outsideHandlerPath = path.join(fixtureRoot, `outside-handler-hardlink-${caseId}.js`);
+      await fs.writeFile(outsideHandlerPath, "export default async function() {}", "utf-8");
+
+      const hookDir = path.join(tmpDir, "hooks", "hardlink-hook");
+      await fs.mkdir(hookDir, { recursive: true });
+      await fs.writeFile(
+        path.join(hookDir, "HOOK.md"),
+        [
+          "---",
+          "name: hardlink-hook",
+          "description: hardlink test",
+          'metadata: {"openclaw":{"events":["command:new"]}}',
+          "---",
+          "",
+          "# Hardlink Hook",
+        ].join("\n"),
+        "utf-8",
+      );
+      try {
+        await fs.link(outsideHandlerPath, path.join(hookDir, "handler.js"));
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException).code === "EXDEV") {
+          return;
+        }
+        throw err;
+      }
+
+      await expectNoCommandHookRegistration(createEnabledHooksConfig());
+    });
+
+    it("rejects legacy handler modules that escape workspace via hardlink", async () => {
+      if (process.platform === "win32") {
+        return;
+      }
+      const outsideHandlerPath = path.join(fixtureRoot, `outside-legacy-hardlink-${caseId}.js`);
+      await fs.writeFile(outsideHandlerPath, "export default async function() {}", "utf-8");
+
+      const linkedHandlerPath = path.join(tmpDir, "legacy-handler.js");
+      try {
+        await fs.link(outsideHandlerPath, linkedHandlerPath);
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException).code === "EXDEV") {
+          return;
+        }
+        throw err;
+      }
+
+      await expectNoCommandHookRegistration(createLegacyHandlerConfig());
+    });
+
+    it("sanitizes control characters in loader error logs", async () => {
+      const error = loggingState.rawConsole?.error;
+      expect(error).toBeTypeOf("function");
+
       const cfg = createEnabledHooksConfig([
         {
           event: "command:new",
-          module: "legacy-handler.js",
+          module: `${tmpDir}\u001b[31m\nforged-log`,
         },
       ]);
 
-      const count = await loadInternalHooks(cfg, tmpDir);
-      expect(count).toBe(0);
-      expect(getRegisteredEventKeys()).not.toContain("command:new");
+      await expectNoCommandHookRegistration(cfg);
+
+      const messages = stripAnsi(
+        (error as ReturnType<typeof vi.fn>).mock.calls
+          .map((call) => String(call[0] ?? ""))
+          .join("\n"),
+      );
+      expect(messages).toContain("forged-log");
+      expect(messages).not.toContain("\u001b[31m");
+      expect(messages).not.toContain("\nforged-log");
     });
   });
 });

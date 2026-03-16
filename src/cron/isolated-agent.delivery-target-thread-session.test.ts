@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { parseTelegramTarget } from "../../extensions/telegram/src/targets.js";
 import type { OpenClawConfig } from "../config/config.js";
 
 // Mock session store so we can control what entries exist.
@@ -19,6 +20,16 @@ vi.mock("../channels/plugins/index.js", () => ({
   getChannelPlugin: vi.fn(() => ({
     meta: { label: "Telegram" },
     config: {},
+    messaging: {
+      parseExplicitTarget: ({ raw }: { raw: string }) => {
+        const target = parseTelegramTarget(raw);
+        return {
+          to: target.chatId,
+          threadId: target.messageThreadId,
+          chatType: target.chatType === "unknown" ? undefined : target.chatType,
+        };
+      },
+    },
     outbound: {
       resolveTarget: ({ to }: { to?: string }) =>
         to ? { ok: true, to } : { ok: false, error: new Error("missing") },
@@ -108,6 +119,27 @@ describe("resolveDeliveryTarget thread session lookup", () => {
     expect(result.to).toBe("63448508");
     expect(result.threadId).toBe(1008013);
     expect(result.channel).toBe("telegram");
+  });
+
+  it("explicit accountId overrides session lastAccountId", async () => {
+    mockStore["/mock/store.json"] = {
+      "agent:main:main": {
+        sessionId: "s1",
+        updatedAt: 1,
+        lastChannel: "telegram",
+        lastTo: "-100444",
+        lastAccountId: "session-account",
+      },
+    };
+
+    const result = await resolveDeliveryTarget(cfg, "main", {
+      channel: "telegram",
+      to: "-100444",
+      accountId: "explicit-account",
+    });
+
+    expect(result.accountId).toBe("explicit-account");
+    expect(result.to).toBe("-100444");
   });
 
   it("preserves threadId from :topic: when lastTo differs", async () => {

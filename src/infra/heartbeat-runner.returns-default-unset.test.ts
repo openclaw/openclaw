@@ -2,9 +2,10 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { parseTelegramTarget } from "../../extensions/telegram/src/targets.js";
+import { whatsappOutbound } from "../../test/channel-outbounds.js";
 import { HEARTBEAT_PROMPT } from "../auto-reply/heartbeat.js";
 import * as replyModule from "../auto-reply/reply.js";
-import { whatsappOutbound } from "../channels/plugins/outbound/whatsapp.js";
 import type { OpenClawConfig } from "../config/config.js";
 import {
   resolveAgentIdFromSessionKey,
@@ -38,12 +39,9 @@ let testRegistry: ReturnType<typeof getActivePluginRegistry> | null = null;
 let fixtureRoot = "";
 let fixtureCount = 0;
 
-const createCaseDir = async (prefix: string, { skipHeartbeatFile = false } = {}) => {
+const createCaseDir = async (prefix: string) => {
   const dir = path.join(fixtureRoot, `${prefix}-${fixtureCount++}`);
   await fs.mkdir(dir, { recursive: true });
-  if (!skipHeartbeatFile) {
-    await fs.writeFile(path.join(dir, "HEARTBEAT.md"), "- Check status\n", "utf-8");
-  }
   return dir;
 };
 
@@ -62,25 +60,39 @@ beforeAll(async () => {
     outbound: {
       deliveryMode: "direct",
       sendText: async ({ to, text, deps, accountId }) => {
-        if (!deps?.sendTelegram) {
+        if (!deps?.["telegram"]) {
           throw new Error("sendTelegram missing");
         }
-        const res = await deps.sendTelegram(to, text, {
+        const res = await (deps["telegram"] as Function)(to, text, {
           verbose: false,
           accountId: accountId ?? undefined,
         });
         return { channel: "telegram", messageId: res.messageId, chatId: res.chatId };
       },
       sendMedia: async ({ to, text, mediaUrl, deps, accountId }) => {
-        if (!deps?.sendTelegram) {
+        if (!deps?.["telegram"]) {
           throw new Error("sendTelegram missing");
         }
-        const res = await deps.sendTelegram(to, text, {
+        const res = await (deps["telegram"] as Function)(to, text, {
           verbose: false,
           accountId: accountId ?? undefined,
           mediaUrl,
         });
         return { channel: "telegram", messageId: res.messageId, chatId: res.chatId };
+      },
+    },
+    messaging: {
+      parseExplicitTarget: ({ raw }) => {
+        const target = parseTelegramTarget(raw);
+        return {
+          to: target.chatId,
+          threadId: target.messageThreadId,
+          chatType: target.chatType === "unknown" ? undefined : target.chatType,
+        };
+      },
+      inferTargetChatType: ({ to }) => {
+        const target = parseTelegramTarget(to);
+        return target.chatType === "unknown" ? undefined : target.chatType;
       },
     },
   });
@@ -239,12 +251,12 @@ describe("resolveHeartbeatDeliveryTarget", () => {
         },
       },
       {
-        name: "use last route by default",
+        name: "target defaults to none when unset",
         cfg: {},
-        entry: { ...baseEntry, lastChannel: "whatsapp", lastTo: "+1555" },
+        entry: { ...baseEntry, lastChannel: "whatsapp", lastTo: "120363401234567890@g.us" },
         expected: {
-          channel: "whatsapp",
-          to: "+1555",
+          channel: "none",
+          reason: "target-none",
           accountId: undefined,
           lastChannel: "whatsapp",
           lastAccountId: undefined,
@@ -253,13 +265,15 @@ describe("resolveHeartbeatDeliveryTarget", () => {
       {
         name: "normalize explicit whatsapp target when allowFrom wildcard",
         cfg: {
-          agents: { defaults: { heartbeat: { target: "whatsapp", to: "whatsapp:(555) 123" } } },
+          agents: {
+            defaults: { heartbeat: { target: "whatsapp", to: "whatsapp:120363401234567890@G.US" } },
+          },
           channels: { whatsapp: { allowFrom: ["*"] } },
         },
         entry: baseEntry,
         expected: {
           channel: "whatsapp",
-          to: "+555123",
+          to: "120363401234567890@g.us",
           accountId: undefined,
           lastChannel: undefined,
           lastAccountId: undefined,
@@ -271,7 +285,7 @@ describe("resolveHeartbeatDeliveryTarget", () => {
         entry: { ...baseEntry, lastChannel: "webchat", lastTo: "web" },
         expected: {
           channel: "none",
-          reason: "no-target",
+          reason: "target-none",
           accountId: undefined,
           lastChannel: undefined,
           lastAccountId: undefined,
@@ -281,7 +295,7 @@ describe("resolveHeartbeatDeliveryTarget", () => {
         name: "reject explicit whatsapp target outside allowFrom",
         cfg: {
           agents: { defaults: { heartbeat: { target: "whatsapp", to: "+1999" } } },
-          channels: { whatsapp: { allowFrom: ["+1555", "+1666"] } },
+          channels: { whatsapp: { allowFrom: ["120363401234567890@g.us", "+1666"] } },
         },
         entry: { ...baseEntry, lastChannel: "whatsapp", lastTo: "+1222" },
         expected: {
@@ -294,7 +308,10 @@ describe("resolveHeartbeatDeliveryTarget", () => {
       },
       {
         name: "normalize prefixed whatsapp group targets",
-        cfg: { channels: { whatsapp: { allowFrom: ["+1555"] } } },
+        cfg: {
+          agents: { defaults: { heartbeat: { target: "last" } } },
+          channels: { whatsapp: { allowFrom: ["120363401234567890@g.us"] } },
+        },
         entry: {
           ...baseEntry,
           lastChannel: "whatsapp",
@@ -310,13 +327,37 @@ describe("resolveHeartbeatDeliveryTarget", () => {
       },
       {
         name: "keep explicit telegram target",
-        cfg: { agents: { defaults: { heartbeat: { target: "telegram", to: "123" } } } },
+        cfg: { agents: { defaults: { heartbeat: { target: "telegram", to: "-100123" } } } },
         entry: baseEntry,
         expected: {
           channel: "telegram",
-          to: "123",
+          to: "-100123",
           accountId: undefined,
           lastChannel: undefined,
+          lastAccountId: undefined,
+        },
+      },
+      {
+        name: "allow direct target by default",
+        cfg: { agents: { defaults: { heartbeat: { target: "last" } } } },
+        entry: { ...baseEntry, lastChannel: "telegram", lastTo: "5232990709" },
+        expected: {
+          channel: "telegram",
+          to: "5232990709",
+          accountId: undefined,
+          lastChannel: "telegram",
+          lastAccountId: undefined,
+        },
+      },
+      {
+        name: "block direct target when directPolicy is block",
+        cfg: { agents: { defaults: { heartbeat: { target: "last", directPolicy: "block" } } } },
+        entry: { ...baseEntry, lastChannel: "telegram", lastTo: "5232990709" },
+        expected: {
+          channel: "none",
+          reason: "dm-blocked",
+          accountId: undefined,
+          lastChannel: "telegram",
           lastAccountId: undefined,
         },
       },
@@ -355,7 +396,7 @@ describe("resolveHeartbeatDeliveryTarget", () => {
         accountId: "work",
         expected: {
           channel: "telegram",
-          to: "123",
+          to: "-100123",
           accountId: "work",
           lastChannel: undefined,
           lastAccountId: undefined,
@@ -377,7 +418,7 @@ describe("resolveHeartbeatDeliveryTarget", () => {
       const cfg: OpenClawConfig = {
         agents: {
           defaults: {
-            heartbeat: { target: "telegram", to: "123", accountId: testCase.accountId },
+            heartbeat: { target: "telegram", to: "-100123", accountId: testCase.accountId },
           },
         },
         channels: { telegram: { accounts: { work: { botToken: "token" } } } },
@@ -388,9 +429,9 @@ describe("resolveHeartbeatDeliveryTarget", () => {
 
   it("prefers per-agent heartbeat overrides when provided", () => {
     const cfg: OpenClawConfig = {
-      agents: { defaults: { heartbeat: { target: "telegram", to: "123" } } },
+      agents: { defaults: { heartbeat: { target: "telegram", to: "-100123" } } },
     };
-    const heartbeat = { target: "whatsapp", to: "+1555" } as const;
+    const heartbeat = { target: "whatsapp", to: "120363401234567890@g.us" } as const;
     expect(
       resolveHeartbeatDeliveryTarget({
         cfg,
@@ -399,7 +440,7 @@ describe("resolveHeartbeatDeliveryTarget", () => {
       }),
     ).toEqual({
       channel: "whatsapp",
-      to: "+1555",
+      to: "120363401234567890@g.us",
       accountId: undefined,
       lastChannel: "whatsapp",
       lastAccountId: undefined,
@@ -442,10 +483,14 @@ describe("resolveHeartbeatSenderContext", () => {
 
 describe("runHeartbeatOnce", () => {
   const createHeartbeatDeps = (
-    sendWhatsApp: NonNullable<HeartbeatDeps["sendWhatsApp"]>,
+    sendWhatsApp: (
+      to: string,
+      text: string,
+      opts?: unknown,
+    ) => Promise<{ messageId: string; toJid: string }>,
     nowMs = 0,
   ): HeartbeatDeps => ({
-    sendWhatsApp,
+    whatsapp: sendWhatsApp,
     getQueueSize: () => 0,
     nowMs: () => nowMs,
     webAuthExists: async () => true,
@@ -515,16 +560,24 @@ describe("runHeartbeatOnce", () => {
             sessionId: "sid",
             updatedAt: Date.now(),
             lastChannel: "whatsapp",
-            lastTo: "+1555",
+            lastTo: "120363401234567890@g.us",
           },
         }),
       );
 
       replySpy.mockResolvedValue([{ text: "Let me check..." }, { text: "Final alert" }]);
-      const sendWhatsApp = vi.fn<NonNullable<HeartbeatDeps["sendWhatsApp"]>>().mockResolvedValue({
-        messageId: "m1",
-        toJid: "jid",
-      });
+      const sendWhatsApp = vi
+        .fn<
+          (
+            to: string,
+            text: string,
+            opts?: unknown,
+          ) => Promise<{ messageId: string; toJid: string }>
+        >()
+        .mockResolvedValue({
+          messageId: "m1",
+          toJid: "jid",
+        });
 
       await runHeartbeatOnce({
         cfg,
@@ -532,7 +585,11 @@ describe("runHeartbeatOnce", () => {
       });
 
       expect(sendWhatsApp).toHaveBeenCalledTimes(1);
-      expect(sendWhatsApp).toHaveBeenCalledWith("+1555", "Final alert", expect.any(Object));
+      expect(sendWhatsApp).toHaveBeenCalledWith(
+        "120363401234567890@g.us",
+        "Final alert",
+        expect.any(Object),
+      );
     } finally {
       replySpy.mockRestore();
     }
@@ -569,30 +626,42 @@ describe("runHeartbeatOnce", () => {
             sessionId: "sid",
             updatedAt: Date.now(),
             lastChannel: "whatsapp",
-            lastTo: "+1555",
+            lastTo: "120363401234567890@g.us",
           },
         }),
       );
       replySpy.mockResolvedValue([{ text: "Final alert" }]);
-      const sendWhatsApp = vi.fn<NonNullable<HeartbeatDeps["sendWhatsApp"]>>().mockResolvedValue({
-        messageId: "m1",
-        toJid: "jid",
-      });
+      const sendWhatsApp = vi
+        .fn<
+          (
+            to: string,
+            text: string,
+            opts?: unknown,
+          ) => Promise<{ messageId: string; toJid: string }>
+        >()
+        .mockResolvedValue({
+          messageId: "m1",
+          toJid: "jid",
+        });
       await runHeartbeatOnce({
         cfg,
         agentId: "ops",
         deps: createHeartbeatDeps(sendWhatsApp),
       });
       expect(sendWhatsApp).toHaveBeenCalledTimes(1);
-      expect(sendWhatsApp).toHaveBeenCalledWith("+1555", "Final alert", expect.any(Object));
+      expect(sendWhatsApp).toHaveBeenCalledWith(
+        "120363401234567890@g.us",
+        "Final alert",
+        expect.any(Object),
+      );
       expect(replySpy).toHaveBeenCalledWith(
         expect.objectContaining({
           Body: expect.stringMatching(/Ops check[\s\S]*Current time: /),
           SessionKey: sessionKey,
-          From: "+1555",
-          To: "+1555",
+          From: "120363401234567890@g.us",
+          To: "120363401234567890@g.us",
           OriginatingChannel: "whatsapp",
-          OriginatingTo: "+1555",
+          OriginatingTo: "120363401234567890@g.us",
           Provider: "heartbeat",
         }),
         expect.objectContaining({ isHeartbeat: true, suppressToolErrorWarnings: false }),
@@ -642,16 +711,24 @@ describe("runHeartbeatOnce", () => {
             sessionFile,
             updatedAt: Date.now(),
             lastChannel: "whatsapp",
-            lastTo: "+1555",
+            lastTo: "120363401234567890@g.us",
           },
         }),
       );
 
       replySpy.mockResolvedValue([{ text: "Final alert" }]);
-      const sendWhatsApp = vi.fn<NonNullable<HeartbeatDeps["sendWhatsApp"]>>().mockResolvedValue({
-        messageId: "m1",
-        toJid: "jid",
-      });
+      const sendWhatsApp = vi
+        .fn<
+          (
+            to: string,
+            text: string,
+            opts?: unknown,
+          ) => Promise<{ messageId: string; toJid: string }>
+        >()
+        .mockResolvedValue({
+          messageId: "m1",
+          toJid: "jid",
+        });
       const result = await runHeartbeatOnce({
         cfg,
         agentId,
@@ -660,12 +737,16 @@ describe("runHeartbeatOnce", () => {
 
       expect(result.status).toBe("ran");
       expect(sendWhatsApp).toHaveBeenCalledTimes(1);
-      expect(sendWhatsApp).toHaveBeenCalledWith("+1555", "Final alert", expect.any(Object));
+      expect(sendWhatsApp).toHaveBeenCalledWith(
+        "120363401234567890@g.us",
+        "Final alert",
+        expect.any(Object),
+      );
       expect(replySpy).toHaveBeenCalledWith(
         expect.objectContaining({
           SessionKey: sessionKey,
-          From: "+1555",
-          To: "+1555",
+          From: "120363401234567890@g.us",
+          To: "120363401234567890@g.us",
           Provider: "heartbeat",
         }),
         expect.objectContaining({ isHeartbeat: true, suppressToolErrorWarnings: false }),
@@ -706,8 +787,8 @@ describe("runHeartbeatOnce", () => {
         {
           name: "runHeartbeatOnce sessionKey arg",
           caseDir: "hb-forced-session-override",
-          peerKind: "direct" as const,
-          peerId: "+15559990000",
+          peerKind: "group" as const,
+          peerId: "120363401234567891@g.us",
           message: "Forced alert",
           applyOverride: () => {},
           runOptions: ({ sessionKey }: { sessionKey: string }) => ({ sessionKey }),
@@ -747,7 +828,7 @@ describe("runHeartbeatOnce", () => {
               sessionId: "sid-main",
               updatedAt: Date.now(),
               lastChannel: "whatsapp",
-              lastTo: "+1555",
+              lastTo: "120363401234567890@g.us",
             },
             [overrideSessionKey]: {
               sessionId: `sid-${testCase.peerKind}`,
@@ -761,7 +842,13 @@ describe("runHeartbeatOnce", () => {
         replySpy.mockClear();
         replySpy.mockResolvedValue([{ text: testCase.message }]);
         const sendWhatsApp = vi
-          .fn<NonNullable<HeartbeatDeps["sendWhatsApp"]>>()
+          .fn<
+            (
+              to: string,
+              text: string,
+              opts?: unknown,
+            ) => Promise<{ messageId: string; toJid: string }>
+          >()
           .mockResolvedValue({ messageId: "m1", toJid: "jid" });
 
         await runHeartbeatOnce({
@@ -816,7 +903,7 @@ describe("runHeartbeatOnce", () => {
             sessionId: "sid",
             updatedAt: Date.now(),
             lastChannel: "whatsapp",
-            lastTo: "+1555",
+            lastTo: "120363401234567890@g.us",
             lastHeartbeatText: "Final alert",
             lastHeartbeatSentAt: 0,
           },
@@ -825,7 +912,13 @@ describe("runHeartbeatOnce", () => {
 
       replySpy.mockResolvedValue([{ text: "Final alert" }]);
       const sendWhatsApp = vi
-        .fn<NonNullable<HeartbeatDeps["sendWhatsApp"]>>()
+        .fn<
+          (
+            to: string,
+            text: string,
+            opts?: unknown,
+          ) => Promise<{ messageId: string; toJid: string }>
+        >()
         .mockResolvedValue({ messageId: "m1", toJid: "jid" });
 
       await runHeartbeatOnce({
@@ -889,7 +982,7 @@ describe("runHeartbeatOnce", () => {
               updatedAt: Date.now(),
               lastChannel: "whatsapp",
               lastProvider: "whatsapp",
-              lastTo: "+1555",
+              lastTo: "120363401234567890@g.us",
             },
           }),
         );
@@ -897,7 +990,13 @@ describe("runHeartbeatOnce", () => {
         replySpy.mockClear();
         replySpy.mockResolvedValue(testCase.replies);
         const sendWhatsApp = vi
-          .fn<NonNullable<HeartbeatDeps["sendWhatsApp"]>>()
+          .fn<
+            (
+              to: string,
+              text: string,
+              opts?: unknown,
+            ) => Promise<{ messageId: string; toJid: string }>
+          >()
           .mockResolvedValue({ messageId: "m1", toJid: "jid" });
 
         await runHeartbeatOnce({
@@ -909,7 +1008,7 @@ describe("runHeartbeatOnce", () => {
         for (const [index, text] of testCase.expectedTexts.entries()) {
           expect(sendWhatsApp, testCase.name).toHaveBeenNthCalledWith(
             index + 1,
-            "+1555",
+            "120363401234567890@g.us",
             text,
             expect.any(Object),
           );
@@ -927,7 +1026,7 @@ describe("runHeartbeatOnce", () => {
     try {
       const cfg: OpenClawConfig = {
         agents: {
-          defaults: { workspace: tmpDir, heartbeat: { every: "5m" } },
+          defaults: { workspace: tmpDir, heartbeat: { every: "5m", target: "whatsapp" } },
           list: [{ id: "work", default: true }],
         },
         channels: { whatsapp: { allowFrom: ["*"] } },
@@ -946,16 +1045,24 @@ describe("runHeartbeatOnce", () => {
             updatedAt: Date.now(),
             lastChannel: "whatsapp",
             lastProvider: "whatsapp",
-            lastTo: "+1555",
+            lastTo: "120363401234567890@g.us",
           },
         }),
       );
 
       replySpy.mockResolvedValue({ text: "Hello from heartbeat" });
-      const sendWhatsApp = vi.fn<NonNullable<HeartbeatDeps["sendWhatsApp"]>>().mockResolvedValue({
-        messageId: "m1",
-        toJid: "jid",
-      });
+      const sendWhatsApp = vi
+        .fn<
+          (
+            to: string,
+            text: string,
+            opts?: unknown,
+          ) => Promise<{ messageId: string; toJid: string }>
+        >()
+        .mockResolvedValue({
+          messageId: "m1",
+          toJid: "jid",
+        });
 
       await runHeartbeatOnce({
         cfg,
@@ -964,7 +1071,7 @@ describe("runHeartbeatOnce", () => {
 
       expect(sendWhatsApp).toHaveBeenCalledTimes(1);
       expect(sendWhatsApp).toHaveBeenCalledWith(
-        "+1555",
+        "120363401234567890@g.us",
         "Hello from heartbeat",
         expect.any(Object),
       );
@@ -1021,7 +1128,7 @@ describe("runHeartbeatOnce", () => {
           sessionId: "sid",
           updatedAt: Date.now(),
           lastChannel: "whatsapp",
-          lastTo: "+1555",
+          lastTo: "120363401234567890@g.us",
         },
       }),
     );
@@ -1035,15 +1142,36 @@ describe("runHeartbeatOnce", () => {
     const replySpy = vi.spyOn(replyModule, "getReplyFromConfig");
     replySpy.mockResolvedValue({ text: params.replyText ?? "Checked logs and PRs" });
     const sendWhatsApp = vi
-      .fn<NonNullable<HeartbeatDeps["sendWhatsApp"]>>()
+      .fn<
+        (to: string, text: string, opts?: unknown) => Promise<{ messageId: string; toJid: string }>
+      >()
       .mockResolvedValue({ messageId: "m1", toJid: "jid" });
     const res = await runHeartbeatOnce({
       cfg,
       reason: params.reason,
       deps: createHeartbeatDeps(sendWhatsApp),
     });
-    return { res, replySpy, sendWhatsApp };
+    return { res, replySpy, sendWhatsApp, workspaceDir };
   }
+
+  it("adds explicit workspace HEARTBEAT.md path guidance to heartbeat prompts", async () => {
+    const { res, replySpy, sendWhatsApp, workspaceDir } = await runHeartbeatFileScenario({
+      fileState: "actionable",
+      reason: "interval",
+      replyText: "Checked logs and PRs",
+    });
+    try {
+      expect(res.status).toBe("ran");
+      expect(sendWhatsApp).toHaveBeenCalledTimes(1);
+      expect(replySpy).toHaveBeenCalledTimes(1);
+      const calledCtx = replySpy.mock.calls[0]?.[0] as { Body?: string };
+      const expectedPath = path.join(workspaceDir, "HEARTBEAT.md").replace(/\\/g, "/");
+      expect(calledCtx.Body).toContain(`use workspace file ${expectedPath} (exact case)`);
+      expect(calledCtx.Body).toContain("Do not read docs/heartbeat.md.");
+    } finally {
+      replySpy.mockRestore();
+    }
+  });
 
   it("applies HEARTBEAT.md gating rules across file states and triggers", async () => {
     const cases: Array<{
@@ -1146,6 +1274,116 @@ describe("runHeartbeatOnce", () => {
       } finally {
         replySpy.mockRestore();
       }
+    }
+  });
+
+  it("uses an internal-only cron prompt when heartbeat delivery target is none", async () => {
+    const tmpDir = await createCaseDir("hb-cron-target-none");
+    const storePath = path.join(tmpDir, "sessions.json");
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: {
+          workspace: tmpDir,
+          heartbeat: { every: "5m", target: "none" },
+        },
+      },
+      channels: { whatsapp: { allowFrom: ["*"] } },
+      session: { store: storePath },
+    };
+    const sessionKey = resolveMainSessionKey(cfg);
+    await fs.writeFile(
+      storePath,
+      JSON.stringify({
+        [sessionKey]: {
+          sessionId: "sid",
+          updatedAt: Date.now(),
+          lastChannel: "whatsapp",
+          lastTo: "120363401234567890@g.us",
+        },
+      }),
+    );
+    enqueueSystemEvent("Cron: rotate logs", {
+      sessionKey,
+      contextKey: "cron:rotate-logs",
+    });
+
+    const replySpy = vi.spyOn(replyModule, "getReplyFromConfig");
+    replySpy.mockResolvedValue({ text: "Handled internally" });
+    const sendWhatsApp = vi
+      .fn<
+        (to: string, text: string, opts?: unknown) => Promise<{ messageId: string; toJid: string }>
+      >()
+      .mockResolvedValue({ messageId: "m1", toJid: "jid" });
+
+    try {
+      const res = await runHeartbeatOnce({
+        cfg,
+        reason: "interval",
+        deps: createHeartbeatDeps(sendWhatsApp),
+      });
+      expect(res.status).toBe("ran");
+      expect(sendWhatsApp).toHaveBeenCalledTimes(0);
+      const calledCtx = replySpy.mock.calls[0]?.[0] as { Provider?: string; Body?: string };
+      expect(calledCtx.Provider).toBe("cron-event");
+      expect(calledCtx.Body).toContain("Handle this reminder internally");
+      expect(calledCtx.Body).not.toContain("Please relay this reminder to the user");
+    } finally {
+      replySpy.mockRestore();
+    }
+  });
+
+  it("uses an internal-only exec prompt when heartbeat delivery target is none", async () => {
+    const tmpDir = await createCaseDir("hb-exec-target-none");
+    const storePath = path.join(tmpDir, "sessions.json");
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: {
+          workspace: tmpDir,
+          heartbeat: { every: "5m", target: "none" },
+        },
+      },
+      channels: { whatsapp: { allowFrom: ["*"] } },
+      session: { store: storePath },
+    };
+    const sessionKey = resolveMainSessionKey(cfg);
+    await fs.writeFile(
+      storePath,
+      JSON.stringify({
+        [sessionKey]: {
+          sessionId: "sid",
+          updatedAt: Date.now(),
+          lastChannel: "whatsapp",
+          lastTo: "120363401234567890@g.us",
+        },
+      }),
+    );
+    enqueueSystemEvent("exec finished: backup completed", {
+      sessionKey,
+      contextKey: "exec:backup",
+    });
+
+    const replySpy = vi.spyOn(replyModule, "getReplyFromConfig");
+    replySpy.mockResolvedValue({ text: "Handled internally" });
+    const sendWhatsApp = vi
+      .fn<
+        (to: string, text: string, opts?: unknown) => Promise<{ messageId: string; toJid: string }>
+      >()
+      .mockResolvedValue({ messageId: "m1", toJid: "jid" });
+
+    try {
+      const res = await runHeartbeatOnce({
+        cfg,
+        reason: "exec-event",
+        deps: createHeartbeatDeps(sendWhatsApp),
+      });
+      expect(res.status).toBe("ran");
+      expect(sendWhatsApp).toHaveBeenCalledTimes(0);
+      const calledCtx = replySpy.mock.calls[0]?.[0] as { Provider?: string; Body?: string };
+      expect(calledCtx.Provider).toBe("exec-event");
+      expect(calledCtx.Body).toContain("Handle the result internally");
+      expect(calledCtx.Body).not.toContain("Please relay the command output to the user");
+    } finally {
+      replySpy.mockRestore();
     }
   });
 });

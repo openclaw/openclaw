@@ -1,14 +1,14 @@
 import { lookup as dnsLookupCb, type LookupAddress } from "node:dns";
 import { lookup as dnsLookup } from "node:dns/promises";
-import { Agent, type Dispatcher } from "undici";
+import { Agent, EnvHttpProxyAgent, ProxyAgent, type Dispatcher } from "undici";
 import {
   extractEmbeddedIpv4FromIpv6,
   isBlockedSpecialUseIpv4Address,
+  isBlockedSpecialUseIpv6Address,
   isCanonicalDottedDecimalIPv4,
   type Ipv4SpecialUseBlockOptions,
   isIpv4Address,
   isLegacyIpv4Literal,
-  isPrivateOrLoopbackIpAddress,
   parseCanonicalIpAddress,
   parseLooseIpAddress,
 } from "../../shared/net/ip.js";
@@ -63,7 +63,7 @@ function normalizeHostnameAllowlist(values?: string[]): string[] {
   );
 }
 
-function resolveAllowPrivateNetwork(policy?: SsrFPolicy): boolean {
+export function isPrivateNetworkAllowedByPolicy(policy?: SsrFPolicy): boolean {
   return policy?.dangerouslyAllowPrivateNetwork === true || policy?.allowPrivateNetwork === true;
 }
 
@@ -120,7 +120,7 @@ export function isPrivateIpAddress(address: string, policy?: SsrFPolicy): boolea
     if (isIpv4Address(strictIp)) {
       return isBlockedSpecialUseIpv4Address(strictIp, blockOptions);
     }
-    if (isPrivateOrLoopbackIpAddress(strictIp.toString())) {
+    if (isBlockedSpecialUseIpv6Address(strictIp)) {
       return true;
     }
     const embeddedIpv4 = extractEmbeddedIpv4FromIpv6(strictIp);
@@ -255,6 +255,22 @@ export type PinnedHostname = {
   lookup: typeof dnsLookupCb;
 };
 
+export type PinnedDispatcherPolicy =
+  | {
+      mode: "direct";
+      connect?: Record<string, unknown>;
+    }
+  | {
+      mode: "env-proxy";
+      connect?: Record<string, unknown>;
+      proxyTls?: Record<string, unknown>;
+    }
+  | {
+      mode: "explicit-proxy";
+      proxyUrl: string;
+      proxyTls?: Record<string, unknown>;
+    };
+
 function dedupeAndPreferIpv4(results: readonly LookupAddress[]): string[] {
   const seen = new Set<string>();
   const ipv4: string[] = [];
@@ -282,7 +298,7 @@ export async function resolvePinnedHostnameWithPolicy(
     throw new Error("Invalid hostname");
   }
 
-  const allowPrivateNetwork = resolveAllowPrivateNetwork(params.policy);
+  const allowPrivateNetwork = isPrivateNetworkAllowedByPolicy(params.policy);
   const allowedHostnames = normalizeHostnameSet(params.policy?.allowedHostnames);
   const hostnameAllowlist = normalizeHostnameAllowlist(params.policy?.hostnameAllowlist);
   const isExplicitAllowed = allowedHostnames.has(normalized);
@@ -329,13 +345,37 @@ export async function resolvePinnedHostname(
   return await resolvePinnedHostnameWithPolicy(hostname, { lookupFn });
 }
 
-export function createPinnedDispatcher(pinned: PinnedHostname): Dispatcher {
-  return new Agent({
-    connect: {
-      lookup: pinned.lookup,
-      autoSelectFamily: true,
-      autoSelectFamilyAttemptTimeout: 300,
-    },
+function withPinnedLookup(
+  lookup: PinnedHostname["lookup"],
+  connect?: Record<string, unknown>,
+): Record<string, unknown> {
+  return connect ? { ...connect, lookup } : { lookup };
+}
+
+export function createPinnedDispatcher(
+  pinned: PinnedHostname,
+  policy?: PinnedDispatcherPolicy,
+): Dispatcher {
+  if (!policy || policy.mode === "direct") {
+    return new Agent({
+      connect: withPinnedLookup(pinned.lookup, policy?.connect),
+    });
+  }
+
+  if (policy.mode === "env-proxy") {
+    return new EnvHttpProxyAgent({
+      connect: withPinnedLookup(pinned.lookup, policy.connect),
+      ...(policy.proxyTls ? { proxyTls: { ...policy.proxyTls } } : {}),
+    });
+  }
+
+  const proxyUrl = policy.proxyUrl.trim();
+  if (!policy.proxyTls) {
+    return new ProxyAgent(proxyUrl);
+  }
+  return new ProxyAgent({
+    uri: proxyUrl,
+    proxyTls: { ...policy.proxyTls },
   });
 }
 

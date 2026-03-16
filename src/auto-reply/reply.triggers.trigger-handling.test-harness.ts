@@ -80,7 +80,7 @@ const modelCatalogMocks = vi.hoisted(() => ({
     { provider: "openai", id: "gpt-4.1-mini", name: "GPT-4.1 mini" },
     { provider: "openai", id: "gpt-5.2", name: "GPT-5.2" },
     { provider: "openai-codex", id: "gpt-5.2", name: "GPT-5.2 (Codex)" },
-    { provider: "minimax", id: "MiniMax-M2.1", name: "MiniMax M2.1" },
+    { provider: "minimax", id: "MiniMax-M2.5", name: "MiniMax M2.5" },
   ]),
   resetModelCatalogCacheForTest: vi.fn(),
 }));
@@ -101,7 +101,7 @@ export function getWebSessionMocks(): AnyMocks {
   return webSessionMocks;
 }
 
-vi.mock("../web/session.js", () => webSessionMocks);
+vi.mock("../../extensions/whatsapp/src/session.js", () => webSessionMocks);
 
 export const MAIN_SESSION_KEY = "agent:main:main";
 
@@ -363,7 +363,7 @@ export async function runGreetingPromptForBareNewOrReset(params: {
   expect(runEmbeddedPiAgentMock).toHaveBeenCalledOnce();
   const prompt = runEmbeddedPiAgentMock.mock.calls.at(-1)?.[0]?.prompt ?? "";
   expect(prompt).toContain("A new session was started via /new or /reset");
-  expect(prompt).toContain("Execute your Session Startup sequence now");
+  expect(prompt).toContain("Run your Session Startup sequence");
 }
 
 export function installTriggerHandlingE2eTestHooks() {

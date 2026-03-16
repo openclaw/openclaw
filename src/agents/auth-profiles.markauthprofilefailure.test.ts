@@ -114,6 +114,38 @@ describe("markAuthProfileFailure", () => {
       expect(reloaded.usageStats?.["anthropic:default"]?.cooldownUntil).toBe(firstCooldownUntil);
     });
   });
+  it("records overloaded failures in the cooldown bucket", async () => {
+    await withAuthProfileStore(async ({ agentDir, store }) => {
+      await markAuthProfileFailure({
+        store,
+        profileId: "anthropic:default",
+        reason: "overloaded",
+        agentDir,
+      });
+
+      const stats = store.usageStats?.["anthropic:default"];
+      expect(typeof stats?.cooldownUntil).toBe("number");
+      expect(stats?.disabledUntil).toBeUndefined();
+      expect(stats?.disabledReason).toBeUndefined();
+      expect(stats?.failureCounts?.overloaded).toBe(1);
+    });
+  });
+  it("disables auth_permanent failures via disabledUntil (like billing)", async () => {
+    await withAuthProfileStore(async ({ agentDir, store }) => {
+      await markAuthProfileFailure({
+        store,
+        profileId: "anthropic:default",
+        reason: "auth_permanent",
+        agentDir,
+      });
+
+      const stats = store.usageStats?.["anthropic:default"];
+      expect(typeof stats?.disabledUntil).toBe("number");
+      expect(stats?.disabledReason).toBe("auth_permanent");
+      // Should NOT set cooldownUntil (that's for transient errors)
+      expect(stats?.cooldownUntil).toBeUndefined();
+    });
+  });
   it("resets backoff counters outside the failure window", async () => {
     const agentDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-auth-"));
     try {
@@ -153,6 +185,58 @@ describe("markAuthProfileFailure", () => {
 
       expect(store.usageStats?.["anthropic:default"]?.errorCount).toBe(1);
       expect(store.usageStats?.["anthropic:default"]?.failureCounts?.billing).toBe(1);
+    } finally {
+      fs.rmSync(agentDir, { recursive: true, force: true });
+    }
+  });
+
+  it("resets error count when previous cooldown has expired to prevent escalation", async () => {
+    const agentDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-auth-"));
+    try {
+      const authPath = path.join(agentDir, "auth-profiles.json");
+      const now = Date.now();
+      // Simulate state left on disk after 3 rapid failures within a 1-min cooldown
+      // window. The cooldown has since expired, but clearExpiredCooldowns() only
+      // ran in-memory and never persisted — so disk still carries errorCount: 3.
+      fs.writeFileSync(
+        authPath,
+        JSON.stringify({
+          version: 1,
+          profiles: {
+            "anthropic:default": {
+              type: "api_key",
+              provider: "anthropic",
+              key: "sk-default",
+            },
+          },
+          usageStats: {
+            "anthropic:default": {
+              errorCount: 3,
+              failureCounts: { rate_limit: 3 },
+              lastFailureAt: now - 120_000, // 2 minutes ago
+              cooldownUntil: now - 60_000, // expired 1 minute ago
+            },
+          },
+        }),
+      );
+
+      const store = ensureAuthProfileStore(agentDir);
+      await markAuthProfileFailure({
+        store,
+        profileId: "anthropic:default",
+        reason: "rate_limit",
+        agentDir,
+      });
+
+      const stats = store.usageStats?.["anthropic:default"];
+      // Error count should reset to 1 (not escalate to 4) because the
+      // previous cooldown expired. Cooldown should be ~1 min, not ~60 min.
+      expect(stats?.errorCount).toBe(1);
+      expect(stats?.failureCounts?.rate_limit).toBe(1);
+      const cooldownMs = (stats?.cooldownUntil ?? 0) - now;
+      // calculateAuthProfileCooldownMs(1) = 60_000 (1 minute)
+      expect(cooldownMs).toBeLessThan(120_000);
+      expect(cooldownMs).toBeGreaterThan(0);
     } finally {
       fs.rmSync(agentDir, { recursive: true, force: true });
     }

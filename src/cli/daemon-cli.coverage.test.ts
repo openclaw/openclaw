@@ -10,10 +10,11 @@ const resolveGatewayProgramArguments = vi.fn(async (_opts?: unknown) => ({
 const serviceInstall = vi.fn().mockResolvedValue(undefined);
 const serviceUninstall = vi.fn().mockResolvedValue(undefined);
 const serviceStop = vi.fn().mockResolvedValue(undefined);
-const serviceRestart = vi.fn().mockResolvedValue(undefined);
+const serviceRestart = vi.fn().mockResolvedValue({ outcome: "completed" });
 const serviceIsLoaded = vi.fn().mockResolvedValue(false);
 const serviceReadCommand = vi.fn().mockResolvedValue(null);
 const serviceReadRuntime = vi.fn().mockResolvedValue({ status: "running" });
+const resolveGatewayProbeAuthWithSecretInputs = vi.fn(async (_opts?: unknown) => ({}));
 const findExtraGatewayServices = vi.fn(async (_env: unknown, _opts?: unknown) => []);
 const inspectPortUsage = vi.fn(async (port: number) => ({
   port,
@@ -21,6 +22,16 @@ const inspectPortUsage = vi.fn(async (port: number) => ({
   listeners: [],
   hints: [],
 }));
+const buildGatewayInstallPlan = vi.fn(
+  async (params: { port: number; token?: string; env?: NodeJS.ProcessEnv }) => ({
+    programArguments: ["/bin/node", "cli", "gateway", "--port", String(params.port)],
+    workingDirectory: process.cwd(),
+    environment: {
+      OPENCLAW_GATEWAY_PORT: String(params.port),
+      ...(params.token ? { OPENCLAW_GATEWAY_TOKEN: params.token } : {}),
+    },
+  }),
+);
 
 const { runtimeLogs, defaultRuntime, resetRuntimeCapture } = createCliRuntimeCapture();
 
@@ -28,24 +39,33 @@ vi.mock("../gateway/call.js", () => ({
   callGateway: (opts: unknown) => callGateway(opts),
 }));
 
+vi.mock("../gateway/probe-auth.js", () => ({
+  resolveGatewayProbeAuthWithSecretInputs: (opts: unknown) =>
+    resolveGatewayProbeAuthWithSecretInputs(opts),
+}));
+
 vi.mock("../daemon/program-args.js", () => ({
   resolveGatewayProgramArguments: (opts: unknown) => resolveGatewayProgramArguments(opts),
 }));
 
-vi.mock("../daemon/service.js", () => ({
-  resolveGatewayService: () => ({
-    label: "LaunchAgent",
-    loadedText: "loaded",
-    notLoadedText: "not loaded",
-    install: serviceInstall,
-    uninstall: serviceUninstall,
-    stop: serviceStop,
-    restart: serviceRestart,
-    isLoaded: serviceIsLoaded,
-    readCommand: serviceReadCommand,
-    readRuntime: serviceReadRuntime,
-  }),
-}));
+vi.mock("../daemon/service.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../daemon/service.js")>();
+  return {
+    ...actual,
+    resolveGatewayService: () => ({
+      label: "LaunchAgent",
+      loadedText: "loaded",
+      notLoadedText: "not loaded",
+      install: serviceInstall,
+      uninstall: serviceUninstall,
+      stop: serviceStop,
+      restart: serviceRestart,
+      isLoaded: serviceIsLoaded,
+      readCommand: serviceReadCommand,
+      readRuntime: serviceReadRuntime,
+    }),
+  };
+});
 
 vi.mock("../daemon/legacy.js", () => ({
   findLegacyGatewayServices: async () => [],
@@ -65,6 +85,11 @@ vi.mock("../runtime.js", () => ({
   defaultRuntime,
 }));
 
+vi.mock("../commands/daemon-install-helpers.js", () => ({
+  buildGatewayInstallPlan: (params: { port: number; token?: string; env?: NodeJS.ProcessEnv }) =>
+    buildGatewayInstallPlan(params),
+}));
+
 vi.mock("./deps.js", () => ({
   createDefaultDeps: () => {},
 }));
@@ -74,6 +99,7 @@ vi.mock("./progress.js", () => ({
 }));
 
 const { registerDaemonCli } = await import("./daemon-cli.js");
+let daemonProgram: Command;
 
 function createDaemonProgram() {
   const program = new Command();
@@ -83,8 +109,7 @@ function createDaemonProgram() {
 }
 
 async function runDaemonCommand(args: string[]) {
-  const program = createDaemonProgram();
-  await program.parseAsync(args, { from: "user" });
+  await daemonProgram.parseAsync(args, { from: "user" });
 }
 
 function parseFirstJsonRuntimeLine<T>() {
@@ -96,6 +121,7 @@ describe("daemon-cli coverage", () => {
   let envSnapshot: ReturnType<typeof captureEnv>;
 
   beforeEach(() => {
+    daemonProgram = createDaemonProgram();
     envSnapshot = captureEnv([
       "OPENCLAW_STATE_DIR",
       "OPENCLAW_CONFIG_PATH",
@@ -107,6 +133,8 @@ describe("daemon-cli coverage", () => {
     delete process.env.OPENCLAW_GATEWAY_PORT;
     delete process.env.OPENCLAW_PROFILE;
     serviceReadCommand.mockResolvedValue(null);
+    resolveGatewayProbeAuthWithSecretInputs.mockClear();
+    buildGatewayInstallPlan.mockClear();
   });
 
   afterEach(() => {
@@ -138,7 +166,7 @@ describe("daemon-cli coverage", () => {
         OPENCLAW_CONFIG_PATH: "/tmp/openclaw-daemon-state/openclaw.json",
         OPENCLAW_GATEWAY_PORT: "19001",
       },
-      sourcePath: "/tmp/bot.molt.gateway.plist",
+      sourcePath: "/tmp/ai.openclaw.gateway.plist",
     });
 
     await runDaemonCommand(["daemon", "status", "--json"]);
@@ -180,7 +208,15 @@ describe("daemon-cli coverage", () => {
     serviceIsLoaded.mockResolvedValueOnce(false);
     serviceInstall.mockClear();
 
-    await runDaemonCommand(["daemon", "install", "--port", "18789", "--json"]);
+    await runDaemonCommand([
+      "daemon",
+      "install",
+      "--port",
+      "18789",
+      "--token",
+      "test-token",
+      "--json",
+    ]);
 
     expect(serviceInstall).toHaveBeenCalledTimes(1);
     const parsed = parseFirstJsonRuntimeLine<{

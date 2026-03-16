@@ -3,18 +3,37 @@ import type { SimpleStreamOptions } from "@mariozechner/pi-ai";
 import { streamSimple } from "@mariozechner/pi-ai";
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import {
+  prepareProviderExtraParams,
+  wrapProviderStreamFn,
+} from "../../plugins/provider-runtime.js";
+import {
+  createAnthropicBetaHeadersWrapper,
+  createAnthropicFastModeWrapper,
+  createAnthropicToolPayloadCompatibilityWrapper,
+  createBedrockNoCacheWrapper,
+  isAnthropicBedrockModel,
+  resolveAnthropicFastMode,
+  resolveAnthropicBetas,
+  resolveCacheRetention,
+} from "./anthropic-stream-wrappers.js";
 import { log } from "./logger.js";
-
-const OPENROUTER_APP_HEADERS: Record<string, string> = {
-  "HTTP-Referer": "https://openclaw.ai",
-  "X-Title": "OpenClaw",
-};
-const ANTHROPIC_CONTEXT_1M_BETA = "context-1m-2025-08-07";
-const ANTHROPIC_1M_MODEL_PREFIXES = ["claude-opus-4", "claude-sonnet-4"] as const;
-// NOTE: We only force `store=true` for *direct* OpenAI Responses.
-// Codex responses (chatgpt.com/backend-api/codex/responses) require `store=false`.
-const OPENAI_RESPONSES_APIS = new Set(["openai-responses"]);
-const OPENAI_RESPONSES_PROVIDERS = new Set(["openai"]);
+import {
+  createMoonshotThinkingWrapper,
+  resolveMoonshotThinkingType,
+  createSiliconFlowThinkingWrapper,
+  shouldApplyMoonshotPayloadCompat,
+  shouldApplySiliconFlowThinkingOffCompat,
+} from "./moonshot-stream-wrappers.js";
+import {
+  createOpenAIDefaultTransportWrapper,
+  createOpenAIFastModeWrapper,
+  createOpenAIResponsesContextManagementWrapper,
+  createOpenAIServiceTierWrapper,
+  resolveOpenAIFastMode,
+  resolveOpenAIServiceTier,
+} from "./openai-stream-wrappers.js";
+import { createZaiToolStreamWrapper } from "./zai-stream-wrappers.js";
 
 /**
  * Resolve provider-specific extra params from model config.
@@ -40,66 +59,24 @@ export function resolveExtraParams(params: {
     return undefined;
   }
 
-  return Object.assign({}, globalParams, agentParams);
+  const merged = Object.assign({}, globalParams, agentParams);
+  const resolvedParallelToolCalls = resolveAliasedParamValue(
+    [globalParams, agentParams],
+    "parallel_tool_calls",
+    "parallelToolCalls",
+  );
+  if (resolvedParallelToolCalls !== undefined) {
+    merged.parallel_tool_calls = resolvedParallelToolCalls;
+    delete merged.parallelToolCalls;
+  }
+
+  return merged;
 }
 
-type CacheRetention = "none" | "short" | "long";
 type CacheRetentionStreamOptions = Partial<SimpleStreamOptions> & {
-  cacheRetention?: CacheRetention;
+  cacheRetention?: "none" | "short" | "long";
+  openaiWsWarmup?: boolean;
 };
-
-/**
- * Resolve cacheRetention from extraParams, supporting both new `cacheRetention`
- * and legacy `cacheControlTtl` values for backwards compatibility.
- *
- * Mapping: "5m" → "short", "1h" → "long"
- *
- * Applies to:
- * - direct Anthropic provider
- * - Anthropic Claude models on Bedrock when cache retention is explicitly configured
- *
- * OpenRouter uses openai-completions API with hardcoded cache_control instead
- * of the cacheRetention stream option.
- *
- * Defaults to "short" for direct Anthropic when not explicitly configured.
- */
-function resolveCacheRetention(
-  extraParams: Record<string, unknown> | undefined,
-  provider: string,
-): CacheRetention | undefined {
-  const isAnthropicDirect = provider === "anthropic";
-  const hasBedrockOverride =
-    extraParams?.cacheRetention !== undefined || extraParams?.cacheControlTtl !== undefined;
-  const isAnthropicBedrock = provider === "amazon-bedrock" && hasBedrockOverride;
-
-  if (!isAnthropicDirect && !isAnthropicBedrock) {
-    return undefined;
-  }
-
-  // Prefer new cacheRetention if present
-  const newVal = extraParams?.cacheRetention;
-  if (newVal === "none" || newVal === "short" || newVal === "long") {
-    return newVal;
-  }
-
-  // Fall back to legacy cacheControlTtl with mapping
-  const legacy = extraParams?.cacheControlTtl;
-  if (legacy === "5m") {
-    return "short";
-  }
-  if (legacy === "1h") {
-    return "long";
-  }
-
-  // Default to "short" only for direct Anthropic when not explicitly configured.
-  // Bedrock retains upstream provider defaults unless explicitly set.
-  if (!isAnthropicDirect) {
-    return undefined;
-  }
-
-  // Default to "short" for direct Anthropic when not explicitly configured
-  return "short";
-}
 
 function createStreamFnWithExtraParams(
   baseStreamFn: StreamFn | undefined,
@@ -117,44 +94,30 @@ function createStreamFnWithExtraParams(
   if (typeof extraParams.maxTokens === "number") {
     streamParams.maxTokens = extraParams.maxTokens;
   }
+  const transport = extraParams.transport;
+  if (transport === "sse" || transport === "websocket" || transport === "auto") {
+    streamParams.transport = transport;
+  } else if (transport != null) {
+    const transportSummary = typeof transport === "string" ? transport : typeof transport;
+    log.warn(`ignoring invalid transport param: ${transportSummary}`);
+  }
+  if (typeof extraParams.openaiWsWarmup === "boolean") {
+    streamParams.openaiWsWarmup = extraParams.openaiWsWarmup;
+  }
   const cacheRetention = resolveCacheRetention(extraParams, provider);
   if (cacheRetention) {
     streamParams.cacheRetention = cacheRetention;
   }
 
-  // Extract OpenRouter provider routing preferences from extraParams.provider.
-  // Injected into model.compat.openRouterRouting so pi-ai's buildParams sets
-  // params.provider in the API request body (openai-completions.js L359-362).
-  // pi-ai's OpenRouterRouting type only declares { only?, order? }, but at
-  // runtime the full object is forwarded — enabling allow_fallbacks,
-  // data_collection, ignore, sort, quantizations, etc.
-  const providerRouting =
-    provider === "openrouter" &&
-    extraParams.provider != null &&
-    typeof extraParams.provider === "object"
-      ? (extraParams.provider as Record<string, unknown>)
-      : undefined;
-
-  if (Object.keys(streamParams).length === 0 && !providerRouting) {
+  if (Object.keys(streamParams).length === 0) {
     return undefined;
   }
 
   log.debug(`creating streamFn wrapper with params: ${JSON.stringify(streamParams)}`);
-  if (providerRouting) {
-    log.debug(`OpenRouter provider routing: ${JSON.stringify(providerRouting)}`);
-  }
 
   const underlying = baseStreamFn ?? streamSimple;
   const wrappedStreamFn: StreamFn = (model, context, options) => {
-    // When provider routing is configured, inject it into model.compat so
-    // pi-ai picks it up via model.compat.openRouterRouting.
-    const effectiveModel = providerRouting
-      ? ({
-          ...model,
-          compat: { ...model.compat, openRouterRouting: providerRouting },
-        } as unknown as typeof model)
-      : model;
-    return underlying(effectiveModel, context, {
+    return underlying(model, context, {
       ...streamParams,
       ...options,
     });
@@ -163,256 +126,73 @@ function createStreamFnWithExtraParams(
   return wrappedStreamFn;
 }
 
-function isAnthropicBedrockModel(modelId: string): boolean {
+function isGemini31Model(modelId: string): boolean {
   const normalized = modelId.toLowerCase();
-  return normalized.includes("anthropic.claude") || normalized.includes("anthropic/claude");
+  return normalized.includes("gemini-3.1-pro") || normalized.includes("gemini-3.1-flash");
 }
 
-function createBedrockNoCacheWrapper(baseStreamFn: StreamFn | undefined): StreamFn {
-  const underlying = baseStreamFn ?? streamSimple;
-  return (model, context, options) =>
-    underlying(model, context, {
-      ...options,
-      cacheRetention: "none",
-    });
-}
-
-function isDirectOpenAIBaseUrl(baseUrl: unknown): boolean {
-  if (typeof baseUrl !== "string" || !baseUrl.trim()) {
-    return true;
-  }
-
-  try {
-    const host = new URL(baseUrl).hostname.toLowerCase();
-    return host === "api.openai.com" || host === "chatgpt.com";
-  } catch {
-    const normalized = baseUrl.toLowerCase();
-    return normalized.includes("api.openai.com") || normalized.includes("chatgpt.com");
-  }
-}
-
-function shouldForceResponsesStore(model: {
-  api?: unknown;
-  provider?: unknown;
-  baseUrl?: unknown;
-}): boolean {
-  if (typeof model.api !== "string" || typeof model.provider !== "string") {
-    return false;
-  }
-  if (!OPENAI_RESPONSES_APIS.has(model.api)) {
-    return false;
-  }
-  if (!OPENAI_RESPONSES_PROVIDERS.has(model.provider)) {
-    return false;
-  }
-  return isDirectOpenAIBaseUrl(model.baseUrl);
-}
-
-function createOpenAIResponsesStoreWrapper(baseStreamFn: StreamFn | undefined): StreamFn {
-  const underlying = baseStreamFn ?? streamSimple;
-  return (model, context, options) => {
-    if (!shouldForceResponsesStore(model)) {
-      return underlying(model, context, options);
-    }
-
-    const originalOnPayload = options?.onPayload;
-    return underlying(model, context, {
-      ...options,
-      onPayload: (payload) => {
-        if (payload && typeof payload === "object") {
-          (payload as { store?: unknown }).store = true;
-        }
-        originalOnPayload?.(payload);
-      },
-    });
-  };
-}
-
-function isAnthropic1MModel(modelId: string): boolean {
-  const normalized = modelId.trim().toLowerCase();
-  return ANTHROPIC_1M_MODEL_PREFIXES.some((prefix) => normalized.startsWith(prefix));
-}
-
-function parseHeaderList(value: unknown): string[] {
-  if (typeof value !== "string") {
-    return [];
-  }
-  return value
-    .split(",")
-    .map((item) => item.trim())
-    .filter(Boolean);
-}
-
-function resolveAnthropicBetas(
-  extraParams: Record<string, unknown> | undefined,
-  provider: string,
-  modelId: string,
-): string[] | undefined {
-  if (provider !== "anthropic") {
-    return undefined;
-  }
-
-  const betas = new Set<string>();
-  const configured = extraParams?.anthropicBeta;
-  if (typeof configured === "string" && configured.trim()) {
-    betas.add(configured.trim());
-  } else if (Array.isArray(configured)) {
-    for (const beta of configured) {
-      if (typeof beta === "string" && beta.trim()) {
-        betas.add(beta.trim());
-      }
-    }
-  }
-
-  if (extraParams?.context1m === true) {
-    if (isAnthropic1MModel(modelId)) {
-      betas.add(ANTHROPIC_CONTEXT_1M_BETA);
-    } else {
-      log.warn(`ignoring context1m for non-opus/sonnet model: ${provider}/${modelId}`);
-    }
-  }
-
-  return betas.size > 0 ? [...betas] : undefined;
-}
-
-function mergeAnthropicBetaHeader(
-  headers: Record<string, string> | undefined,
-  betas: string[],
-): Record<string, string> {
-  const merged = { ...headers };
-  const existingKey = Object.keys(merged).find((key) => key.toLowerCase() === "anthropic-beta");
-  const existing = existingKey ? parseHeaderList(merged[existingKey]) : [];
-  const values = Array.from(new Set([...existing, ...betas]));
-  const key = existingKey ?? "anthropic-beta";
-  merged[key] = values.join(",");
-  return merged;
-}
-
-// Betas that pi-ai's createClient injects for standard Anthropic API key calls.
-// Must be included when injecting anthropic-beta via options.headers, because
-// pi-ai's mergeHeaders uses Object.assign (last-wins), which would otherwise
-// overwrite the hardcoded defaultHeaders["anthropic-beta"].
-const PI_AI_DEFAULT_ANTHROPIC_BETAS = [
-  "fine-grained-tool-streaming-2025-05-14",
-  "interleaved-thinking-2025-05-14",
-] as const;
-
-// Additional betas pi-ai injects when the API key is an OAuth token (sk-ant-oat-*).
-// These are required for Anthropic to accept OAuth Bearer auth. Losing oauth-2025-04-20
-// causes a 401 "OAuth authentication is currently not supported".
-const PI_AI_OAUTH_ANTHROPIC_BETAS = [
-  "claude-code-20250219",
-  "oauth-2025-04-20",
-  ...PI_AI_DEFAULT_ANTHROPIC_BETAS,
-] as const;
-
-function isAnthropicOAuthApiKey(apiKey: unknown): boolean {
-  return typeof apiKey === "string" && apiKey.includes("sk-ant-oat");
-}
-
-function createAnthropicBetaHeadersWrapper(
-  baseStreamFn: StreamFn | undefined,
-  betas: string[],
-): StreamFn {
-  const underlying = baseStreamFn ?? streamSimple;
-  return (model, context, options) => {
-    const isOauth = isAnthropicOAuthApiKey(options?.apiKey);
-    const requestedContext1m = betas.includes(ANTHROPIC_CONTEXT_1M_BETA);
-    const effectiveBetas =
-      isOauth && requestedContext1m
-        ? betas.filter((beta) => beta !== ANTHROPIC_CONTEXT_1M_BETA)
-        : betas;
-    if (isOauth && requestedContext1m) {
-      log.warn(
-        `ignoring context1m for OAuth token auth on ${model.provider}/${model.id}; Anthropic rejects context-1m beta with OAuth auth`,
-      );
-    }
-
-    // Preserve the betas pi-ai's createClient would inject for the given token type.
-    // Without this, our options.headers["anthropic-beta"] overwrites the pi-ai
-    // defaultHeaders via Object.assign, stripping critical betas like oauth-2025-04-20.
-    const piAiBetas = isOauth
-      ? (PI_AI_OAUTH_ANTHROPIC_BETAS as readonly string[])
-      : (PI_AI_DEFAULT_ANTHROPIC_BETAS as readonly string[]);
-    const allBetas = [...new Set([...piAiBetas, ...effectiveBetas])];
-    return underlying(model, context, {
-      ...options,
-      headers: mergeAnthropicBetaHeader(options?.headers, allBetas),
-    });
-  };
-}
-
-function isOpenRouterAnthropicModel(provider: string, modelId: string): boolean {
-  return provider.toLowerCase() === "openrouter" && modelId.toLowerCase().startsWith("anthropic/");
-}
-
-type PayloadMessage = {
-  role?: string;
-  content?: unknown;
-};
-
-/**
- * Inject cache_control into the system message for OpenRouter Anthropic models.
- * OpenRouter passes through Anthropic's cache_control field — caching the system
- * prompt avoids re-processing it on every request.
- */
-function createOpenRouterSystemCacheWrapper(baseStreamFn: StreamFn | undefined): StreamFn {
-  const underlying = baseStreamFn ?? streamSimple;
-  return (model, context, options) => {
-    if (
-      typeof model.provider !== "string" ||
-      typeof model.id !== "string" ||
-      !isOpenRouterAnthropicModel(model.provider, model.id)
-    ) {
-      return underlying(model, context, options);
-    }
-
-    const originalOnPayload = options?.onPayload;
-    return underlying(model, context, {
-      ...options,
-      onPayload: (payload) => {
-        const messages = (payload as Record<string, unknown>)?.messages;
-        if (Array.isArray(messages)) {
-          for (const msg of messages as PayloadMessage[]) {
-            if (msg.role !== "system" && msg.role !== "developer") {
-              continue;
-            }
-            if (typeof msg.content === "string") {
-              msg.content = [
-                { type: "text", text: msg.content, cache_control: { type: "ephemeral" } },
-              ];
-            } else if (Array.isArray(msg.content) && msg.content.length > 0) {
-              const last = msg.content[msg.content.length - 1];
-              if (last && typeof last === "object") {
-                (last as Record<string, unknown>).cache_control = { type: "ephemeral" };
-              }
-            }
-          }
-        }
-        originalOnPayload?.(payload);
-      },
-    });
-  };
-}
-
-/**
- * Map OpenClaw's ThinkLevel to OpenRouter's reasoning.effort values.
- * "off" maps to "none"; all other levels pass through as-is.
- */
-function mapThinkingLevelToOpenRouterReasoningEffort(
+function mapThinkLevelToGoogleThinkingLevel(
   thinkingLevel: ThinkLevel,
-): "none" | "minimal" | "low" | "medium" | "high" | "xhigh" {
-  if (thinkingLevel === "off") {
-    return "none";
+): "MINIMAL" | "LOW" | "MEDIUM" | "HIGH" | undefined {
+  switch (thinkingLevel) {
+    case "minimal":
+      return "MINIMAL";
+    case "low":
+      return "LOW";
+    case "medium":
+    case "adaptive":
+      return "MEDIUM";
+    case "high":
+    case "xhigh":
+      return "HIGH";
+    default:
+      return undefined;
   }
-  return thinkingLevel;
 }
 
-/**
- * Create a streamFn wrapper that adds OpenRouter app attribution headers
- * and injects reasoning.effort based on the configured thinking level.
- */
-function createOpenRouterWrapper(
+function sanitizeGoogleThinkingPayload(params: {
+  payload: unknown;
+  modelId?: string;
+  thinkingLevel?: ThinkLevel;
+}): void {
+  if (!params.payload || typeof params.payload !== "object") {
+    return;
+  }
+  const payloadObj = params.payload as Record<string, unknown>;
+  const config = payloadObj.config;
+  if (!config || typeof config !== "object") {
+    return;
+  }
+  const configObj = config as Record<string, unknown>;
+  const thinkingConfig = configObj.thinkingConfig;
+  if (!thinkingConfig || typeof thinkingConfig !== "object") {
+    return;
+  }
+  const thinkingConfigObj = thinkingConfig as Record<string, unknown>;
+  const thinkingBudget = thinkingConfigObj.thinkingBudget;
+  if (typeof thinkingBudget !== "number" || thinkingBudget >= 0) {
+    return;
+  }
+
+  // pi-ai can emit thinkingBudget=-1 for some Gemini 3.1 IDs; a negative budget
+  // is invalid for Google-compatible backends and can lead to malformed handling.
+  delete thinkingConfigObj.thinkingBudget;
+
+  if (
+    typeof params.modelId === "string" &&
+    isGemini31Model(params.modelId) &&
+    params.thinkingLevel &&
+    params.thinkingLevel !== "off" &&
+    thinkingConfigObj.thinkingLevel === undefined
+  ) {
+    const mappedLevel = mapThinkLevelToGoogleThinkingLevel(params.thinkingLevel);
+    if (mappedLevel) {
+      thinkingConfigObj.thinkingLevel = mappedLevel;
+    }
+  }
+}
+
+function createGoogleThinkingPayloadWrapper(
   baseStreamFn: StreamFn | undefined,
   thinkingLevel?: ThinkLevel,
 ): StreamFn {
@@ -421,81 +201,62 @@ function createOpenRouterWrapper(
     const onPayload = options?.onPayload;
     return underlying(model, context, {
       ...options,
-      headers: {
-        ...OPENROUTER_APP_HEADERS,
-        ...options?.headers,
-      },
       onPayload: (payload) => {
-        if (thinkingLevel && payload && typeof payload === "object") {
-          const payloadObj = payload as Record<string, unknown>;
-
-          // pi-ai may inject a top-level reasoning_effort (OpenAI flat format).
-          // OpenRouter expects the nested reasoning.effort format instead, and
-          // rejects payloads containing both fields. Remove the flat field so
-          // only the nested one is sent.
-          delete payloadObj.reasoning_effort;
-
-          // When thinking is "off", do not inject reasoning at all.
-          // Some models (e.g. deepseek/deepseek-r1) require reasoning and reject
-          // { effort: "none" } with "Reasoning is mandatory for this endpoint and
-          // cannot be disabled." Omitting the field lets each model use its own
-          // default reasoning behavior.
-          if (thinkingLevel !== "off") {
-            const existingReasoning = payloadObj.reasoning;
-
-            // OpenRouter treats reasoning.effort and reasoning.max_tokens as
-            // alternative controls. If max_tokens is already present, do not
-            // inject effort and do not overwrite caller-supplied reasoning.
-            if (
-              existingReasoning &&
-              typeof existingReasoning === "object" &&
-              !Array.isArray(existingReasoning)
-            ) {
-              const reasoningObj = existingReasoning as Record<string, unknown>;
-              if (!("max_tokens" in reasoningObj) && !("effort" in reasoningObj)) {
-                reasoningObj.effort = mapThinkingLevelToOpenRouterReasoningEffort(thinkingLevel);
-              }
-            } else if (!existingReasoning) {
-              payloadObj.reasoning = {
-                effort: mapThinkingLevelToOpenRouterReasoningEffort(thinkingLevel),
-              };
-            }
-          }
+        if (model.api === "google-generative-ai") {
+          sanitizeGoogleThinkingPayload({
+            payload,
+            modelId: model.id,
+            thinkingLevel,
+          });
         }
-        onPayload?.(payload);
+        return onPayload?.(payload, model);
       },
     });
   };
 }
 
-/**
- * Create a streamFn wrapper that injects tool_stream=true for Z.AI providers.
- *
- * Z.AI's API supports the `tool_stream` parameter to enable real-time streaming
- * of tool call arguments and reasoning content. When enabled, the API returns
- * progressive tool_call deltas, allowing users to see tool execution in real-time.
- *
- * @see https://docs.z.ai/api-reference#streaming
- */
-function createZaiToolStreamWrapper(
+function resolveAliasedParamValue(
+  sources: Array<Record<string, unknown> | undefined>,
+  snakeCaseKey: string,
+  camelCaseKey: string,
+): unknown {
+  let resolved: unknown = undefined;
+  let seen = false;
+  for (const source of sources) {
+    if (!source) {
+      continue;
+    }
+    const hasSnakeCaseKey = Object.hasOwn(source, snakeCaseKey);
+    const hasCamelCaseKey = Object.hasOwn(source, camelCaseKey);
+    if (!hasSnakeCaseKey && !hasCamelCaseKey) {
+      continue;
+    }
+    resolved = hasSnakeCaseKey ? source[snakeCaseKey] : source[camelCaseKey];
+    seen = true;
+  }
+  return seen ? resolved : undefined;
+}
+
+function createParallelToolCallsWrapper(
   baseStreamFn: StreamFn | undefined,
   enabled: boolean,
 ): StreamFn {
   const underlying = baseStreamFn ?? streamSimple;
   return (model, context, options) => {
-    if (!enabled) {
+    if (model.api !== "openai-completions" && model.api !== "openai-responses") {
       return underlying(model, context, options);
     }
-
+    log.debug(
+      `applying parallel_tool_calls=${enabled} for ${model.provider ?? "unknown"}/${model.id ?? "unknown"} api=${model.api}`,
+    );
     const originalOnPayload = options?.onPayload;
     return underlying(model, context, {
       ...options,
       onPayload: (payload) => {
         if (payload && typeof payload === "object") {
-          // Inject tool_stream: true for Z.AI API
-          (payload as Record<string, unknown>).tool_stream = true;
+          (payload as Record<string, unknown>).parallel_tool_calls = enabled;
         }
-        originalOnPayload?.(payload);
+        return originalOnPayload?.(payload, model);
       },
     });
   };
@@ -516,7 +277,7 @@ export function applyExtraParamsToAgent(
   thinkingLevel?: ThinkLevel,
   agentId?: string,
 ): void {
-  const extraParams = resolveExtraParams({
+  const resolvedExtraParams = resolveExtraParams({
     cfg,
     provider,
     modelId,
@@ -528,15 +289,36 @@ export function applyExtraParamsToAgent(
           Object.entries(extraParamsOverride).filter(([, value]) => value !== undefined),
         )
       : undefined;
-  const merged = Object.assign({}, extraParams, override);
-  const wrappedStreamFn = createStreamFnWithExtraParams(agent.streamFn, merged, provider);
+  const merged = Object.assign({}, resolvedExtraParams, override);
+  const effectiveExtraParams =
+    prepareProviderExtraParams({
+      provider,
+      config: cfg,
+      context: {
+        config: cfg,
+        provider,
+        modelId,
+        extraParams: merged,
+        thinkingLevel,
+      },
+    }) ?? merged;
+
+  if (provider === "openai") {
+    // Default OpenAI Responses to WebSocket-first with transparent SSE fallback.
+    agent.streamFn = createOpenAIDefaultTransportWrapper(agent.streamFn);
+  }
+  const wrappedStreamFn = createStreamFnWithExtraParams(
+    agent.streamFn,
+    effectiveExtraParams,
+    provider,
+  );
 
   if (wrappedStreamFn) {
     log.debug(`applying extraParams to agent streamFn for ${provider}/${modelId}`);
     agent.streamFn = wrappedStreamFn;
   }
 
-  const anthropicBetas = resolveAnthropicBetas(merged, provider, modelId);
+  const anthropicBetas = resolveAnthropicBetas(effectiveExtraParams, provider, modelId);
   if (anthropicBetas?.length) {
     log.debug(
       `applying Anthropic beta header for ${provider}/${modelId}: ${anthropicBetas.join(",")}`,
@@ -544,17 +326,40 @@ export function applyExtraParamsToAgent(
     agent.streamFn = createAnthropicBetaHeadersWrapper(agent.streamFn, anthropicBetas);
   }
 
-  if (provider === "openrouter") {
-    log.debug(`applying OpenRouter app attribution headers for ${provider}/${modelId}`);
-    // "auto" is a dynamic routing model — we don't know which underlying model
-    // OpenRouter will select, and it may be a reasoning-required endpoint.
-    // Omit the thinkingLevel so we never inject `reasoning.effort: "none"`,
-    // which would cause a 400 on models where reasoning is mandatory.
-    // Users who need reasoning control should target a specific model ID.
-    // See: openclaw/openclaw#24851
-    const openRouterThinkingLevel = modelId === "auto" ? undefined : thinkingLevel;
-    agent.streamFn = createOpenRouterWrapper(agent.streamFn, openRouterThinkingLevel);
-    agent.streamFn = createOpenRouterSystemCacheWrapper(agent.streamFn);
+  if (shouldApplySiliconFlowThinkingOffCompat({ provider, modelId, thinkingLevel })) {
+    log.debug(
+      `normalizing thinking=off to thinking=null for SiliconFlow compatibility (${provider}/${modelId})`,
+    );
+    agent.streamFn = createSiliconFlowThinkingWrapper(agent.streamFn);
+  }
+
+  agent.streamFn = createAnthropicToolPayloadCompatibilityWrapper(agent.streamFn);
+  const providerStreamBase = agent.streamFn;
+  const pluginWrappedStreamFn = wrapProviderStreamFn({
+    provider,
+    config: cfg,
+    context: {
+      config: cfg,
+      provider,
+      modelId,
+      extraParams: effectiveExtraParams,
+      thinkingLevel,
+      streamFn: providerStreamBase,
+    },
+  });
+  agent.streamFn = pluginWrappedStreamFn ?? providerStreamBase;
+  const providerWrapperHandled =
+    pluginWrappedStreamFn !== undefined && pluginWrappedStreamFn !== providerStreamBase;
+
+  if (!providerWrapperHandled && shouldApplyMoonshotPayloadCompat({ provider, modelId })) {
+    // Preserve the legacy Moonshot compatibility path when no plugin wrapper
+    // actually handled the stream function. This covers tests/disabled plugins
+    // and Ollama Cloud Kimi models until they gain a dedicated runtime hook.
+    const thinkingType = resolveMoonshotThinkingType({
+      configuredThinking: effectiveExtraParams?.thinking,
+      thinkingLevel,
+    });
+    agent.streamFn = createMoonshotThinkingWrapper(agent.streamFn, thinkingType);
   }
 
   if (provider === "amazon-bedrock" && !isAnthropicBedrockModel(modelId)) {
@@ -565,15 +370,59 @@ export function applyExtraParamsToAgent(
   // Enable Z.AI tool_stream for real-time tool call streaming.
   // Enabled by default for Z.AI provider, can be disabled via params.tool_stream: false
   if (provider === "zai" || provider === "z-ai") {
-    const toolStreamEnabled = merged?.tool_stream !== false;
+    const toolStreamEnabled = effectiveExtraParams?.tool_stream !== false;
     if (toolStreamEnabled) {
       log.debug(`enabling Z.AI tool_stream for ${provider}/${modelId}`);
       agent.streamFn = createZaiToolStreamWrapper(agent.streamFn, true);
     }
   }
 
+  // Guard Google payloads against invalid negative thinking budgets emitted by
+  // upstream model-ID heuristics for Gemini 3.1 variants.
+  agent.streamFn = createGoogleThinkingPayloadWrapper(agent.streamFn, thinkingLevel);
+
+  const anthropicFastMode = resolveAnthropicFastMode(effectiveExtraParams);
+  if (anthropicFastMode !== undefined) {
+    log.debug(`applying Anthropic fast mode=${anthropicFastMode} for ${provider}/${modelId}`);
+    agent.streamFn = createAnthropicFastModeWrapper(agent.streamFn, anthropicFastMode);
+  }
+
+  const openAIFastMode = resolveOpenAIFastMode(effectiveExtraParams);
+  if (openAIFastMode) {
+    log.debug(`applying OpenAI fast mode for ${provider}/${modelId}`);
+    agent.streamFn = createOpenAIFastModeWrapper(agent.streamFn);
+  }
+
+  const openAIServiceTier = resolveOpenAIServiceTier(effectiveExtraParams);
+  if (openAIServiceTier) {
+    log.debug(`applying OpenAI service_tier=${openAIServiceTier} for ${provider}/${modelId}`);
+    agent.streamFn = createOpenAIServiceTierWrapper(agent.streamFn, openAIServiceTier);
+  }
+
   // Work around upstream pi-ai hardcoding `store: false` for Responses API.
-  // Force `store=true` for direct OpenAI/OpenAI Codex providers so multi-turn
-  // server-side conversation state is preserved.
-  agent.streamFn = createOpenAIResponsesStoreWrapper(agent.streamFn);
+  // Force `store=true` for direct OpenAI Responses models and auto-enable
+  // server-side compaction for compatible OpenAI Responses payloads.
+  agent.streamFn = createOpenAIResponsesContextManagementWrapper(
+    agent.streamFn,
+    effectiveExtraParams,
+  );
+
+  const rawParallelToolCalls = resolveAliasedParamValue(
+    [resolvedExtraParams, override],
+    "parallel_tool_calls",
+    "parallelToolCalls",
+  );
+  if (rawParallelToolCalls !== undefined) {
+    if (typeof rawParallelToolCalls === "boolean") {
+      agent.streamFn = createParallelToolCallsWrapper(agent.streamFn, rawParallelToolCalls);
+    } else if (rawParallelToolCalls === null) {
+      log.debug("parallel_tool_calls suppressed by null override, skipping injection");
+    } else {
+      const summary =
+        typeof rawParallelToolCalls === "string"
+          ? rawParallelToolCalls
+          : typeof rawParallelToolCalls;
+      log.warn(`ignoring invalid parallel_tool_calls param: ${summary}`);
+    }
+  }
 }

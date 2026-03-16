@@ -2,16 +2,19 @@ import fs from "node:fs";
 import fsPromises from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import * as jsonFiles from "../../infra/json-files.js";
 import {
   clearSessionStoreCacheForTest,
   loadSessionStore,
+  mergeSessionEntry,
   resolveAndPersistSessionFile,
   updateSessionStore,
 } from "../sessions.js";
 import type { SessionConfig } from "../types.base.js";
 import {
   resolveSessionFilePath,
+  resolveSessionFilePathOptions,
   resolveSessionTranscriptPathInDir,
   validateSessionId,
 } from "./paths.js";
@@ -65,6 +68,13 @@ describe("session path safety", () => {
       { sessionsDir },
     );
     expect(resolved).toBe(path.resolve(sessionsDir, "sess-1.jsonl"));
+  });
+
+  it("ignores multi-store sentinel paths when deriving session file options", () => {
+    expect(resolveSessionFilePathOptions({ agentId: "worker", storePath: "(multiple)" })).toEqual({
+      agentId: "worker",
+    });
+    expect(resolveSessionFilePathOptions({ storePath: "(multiple)" })).toBeUndefined();
   });
 
   it("accepts symlink-alias session paths that resolve under the sessions dir", () => {
@@ -191,6 +201,24 @@ describe("session store lock (Promise chain mutex)", () => {
     expect((store[key] as Record<string, unknown>).counter).toBe(N);
   });
 
+  it("skips session store disk writes when payload is unchanged", async () => {
+    const key = "agent:main:no-op-save";
+    const { storePath } = await makeTmpStore({
+      [key]: { sessionId: "s-noop", updatedAt: Date.now() },
+    });
+
+    const writeSpy = vi.spyOn(jsonFiles, "writeTextAtomic");
+    await updateSessionStore(
+      storePath,
+      async () => {
+        // Intentionally no-op mutation.
+      },
+      { skipMaintenance: true },
+    );
+    expect(writeSpy).not.toHaveBeenCalled();
+    writeSpy.mockRestore();
+  });
+
   it("multiple consecutive errors do not permanently poison the queue", async () => {
     const key = "agent:main:multi-err";
     const { storePath } = await makeTmpStore({
@@ -215,22 +243,65 @@ describe("session store lock (Promise chain mutex)", () => {
     const store = loadSessionStore(storePath);
     expect(store[key]?.modelOverride).toBe("recovered");
   });
+
+  it("clears stale runtime provider when model is patched without provider", () => {
+    const merged = mergeSessionEntry(
+      {
+        sessionId: "sess-runtime",
+        updatedAt: 100,
+        modelProvider: "anthropic",
+        model: "claude-opus-4-6",
+      },
+      {
+        model: "gpt-5.2",
+      },
+    );
+    expect(merged.model).toBe("gpt-5.2");
+    expect(merged.modelProvider).toBeUndefined();
+  });
+
+  it("normalizes orphan modelProvider fields at store write boundary", async () => {
+    const key = "agent:main:orphan-provider";
+    const { storePath } = await makeTmpStore({
+      [key]: {
+        sessionId: "sess-orphan",
+        updatedAt: 100,
+        modelProvider: "anthropic",
+      },
+    });
+
+    await updateSessionStore(storePath, async (store) => {
+      const entry = store[key];
+      entry.updatedAt = Date.now();
+    });
+
+    const store = loadSessionStore(storePath);
+    expect(store[key]?.modelProvider).toBeUndefined();
+    expect(store[key]?.model).toBeUndefined();
+  });
 });
 
 describe("appendAssistantMessageToSessionTranscript", () => {
   const fixture = useTempSessionsFixture("transcript-test-");
+  const sessionId = "test-session-id";
+  const sessionKey = "test-session";
+
+  function writeTranscriptStore() {
+    fs.writeFileSync(
+      fixture.storePath(),
+      JSON.stringify({
+        [sessionKey]: {
+          sessionId,
+          chatType: "direct",
+          channel: "discord",
+        },
+      }),
+      "utf-8",
+    );
+  }
 
   it("creates transcript file and appends message for valid session", async () => {
-    const sessionId = "test-session-id";
-    const sessionKey = "test-session";
-    const store = {
-      [sessionKey]: {
-        sessionId,
-        chatType: "direct",
-        channel: "discord",
-      },
-    };
-    fs.writeFileSync(fixture.storePath(), JSON.stringify(store), "utf-8");
+    writeTranscriptStore();
 
     const result = await appendAssistantMessageToSessionTranscript({
       sessionKey,
@@ -259,6 +330,70 @@ describe("appendAssistantMessageToSessionTranscript", () => {
       expect(messageLine.message.content[0].type).toBe("text");
       expect(messageLine.message.content[0].text).toBe("Hello from delivery mirror!");
     }
+  });
+
+  it("does not append a duplicate delivery mirror for the same idempotency key", async () => {
+    writeTranscriptStore();
+
+    await appendAssistantMessageToSessionTranscript({
+      sessionKey,
+      text: "Hello from delivery mirror!",
+      idempotencyKey: "mirror:test-source-message",
+      storePath: fixture.storePath(),
+    });
+    await appendAssistantMessageToSessionTranscript({
+      sessionKey,
+      text: "Hello from delivery mirror!",
+      idempotencyKey: "mirror:test-source-message",
+      storePath: fixture.storePath(),
+    });
+
+    const sessionFile = resolveSessionTranscriptPathInDir(sessionId, fixture.sessionsDir());
+    const lines = fs.readFileSync(sessionFile, "utf-8").trim().split("\n");
+    expect(lines.length).toBe(2);
+
+    const messageLine = JSON.parse(lines[1]);
+    expect(messageLine.message.idempotencyKey).toBe("mirror:test-source-message");
+    expect(messageLine.message.content[0].text).toBe("Hello from delivery mirror!");
+  });
+
+  it("ignores malformed transcript lines when checking mirror idempotency", async () => {
+    writeTranscriptStore();
+
+    const sessionFile = resolveSessionTranscriptPathInDir(sessionId, fixture.sessionsDir());
+    fs.writeFileSync(
+      sessionFile,
+      [
+        JSON.stringify({
+          type: "session",
+          version: 1,
+          id: sessionId,
+          timestamp: new Date().toISOString(),
+          cwd: process.cwd(),
+        }),
+        "{not-json",
+        JSON.stringify({
+          type: "message",
+          message: {
+            role: "assistant",
+            idempotencyKey: "mirror:test-source-message",
+            content: [{ type: "text", text: "Hello from delivery mirror!" }],
+          },
+        }),
+      ].join("\n") + "\n",
+      "utf-8",
+    );
+
+    const result = await appendAssistantMessageToSessionTranscript({
+      sessionKey,
+      text: "Hello from delivery mirror!",
+      idempotencyKey: "mirror:test-source-message",
+      storePath: fixture.storePath(),
+    });
+
+    expect(result.ok).toBe(true);
+    const lines = fs.readFileSync(sessionFile, "utf-8").trim().split("\n");
+    expect(lines.length).toBe(3);
   });
 });
 

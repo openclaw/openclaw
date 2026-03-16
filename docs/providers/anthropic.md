@@ -35,6 +35,43 @@ openclaw onboard --anthropic-api-key "$ANTHROPIC_API_KEY"
 }
 ```
 
+## Thinking defaults (Claude 4.6)
+
+- Anthropic Claude 4.6 models default to `adaptive` thinking in OpenClaw when no explicit thinking level is set.
+- You can override per-message (`/think:<level>`) or in model params:
+  `agents.defaults.models["anthropic/<model>"].params.thinking`.
+- Related Anthropic docs:
+  - [Adaptive thinking](https://platform.claude.com/docs/en/build-with-claude/adaptive-thinking)
+  - [Extended thinking](https://platform.claude.com/docs/en/build-with-claude/extended-thinking)
+
+## Fast mode (Anthropic API)
+
+OpenClaw's shared `/fast` toggle also supports direct Anthropic API-key traffic.
+
+- `/fast on` maps to `service_tier: "auto"`
+- `/fast off` maps to `service_tier: "standard_only"`
+- Config default:
+
+```json5
+{
+  agents: {
+    defaults: {
+      models: {
+        "anthropic/claude-sonnet-4-5": {
+          params: { fastMode: true },
+        },
+      },
+    },
+  },
+}
+```
+
+Important limits:
+
+- This is **API-key only**. Anthropic setup-token / OAuth auth does not honor OpenClaw fast-mode tier injection.
+- OpenClaw only injects Anthropic service tiers for direct `api.anthropic.com` requests. If you route `anthropic/*` through a proxy or gateway, `/fast` leaves `service_tier` untouched.
+- Anthropic reports the effective tier on the response under `usage.service_tier`. On accounts without Priority Tier capacity, `service_tier: "auto"` may still resolve to `standard`.
+
 ## Prompt caching (Anthropic API)
 
 OpenClaw supports Anthropic's prompt caching feature. This is **API-only**; subscription auth does not honor cache settings.
@@ -137,6 +174,14 @@ with `params.context1m: true` for supported Opus/Sonnet models.
 OpenClaw maps this to `anthropic-beta: context-1m-2025-08-07` on Anthropic
 requests.
 
+This only activates when `params.context1m` is explicitly set to `true` for
+that model.
+
+Requirement: Anthropic must allow long-context usage on that credential
+(typically API key billing, or a subscription account with Extra Usage
+enabled). Otherwise Anthropic returns:
+`HTTP 429: rate_limit_error: Extra usage is required for long context requests`.
+
 Note: Anthropic currently rejects `context-1m-*` beta requests when using
 OAuth/subscription tokens (`sk-ant-oat-*`). OpenClaw automatically skips the
 context1m beta header for OAuth auth and keeps the required OAuth betas.
@@ -168,7 +213,7 @@ openclaw models auth paste-token --provider anthropic
 ### CLI setup (setup-token)
 
 ```bash
-# Paste a setup-token during onboarding
+# Paste a setup-token during setup
 openclaw onboard --auth-choice setup-token
 ```
 

@@ -110,11 +110,35 @@ describe("profile CRUD endpoints", () => {
     const createBadRemote = await realFetch(`${base}/profiles/create`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ name: "badremote", cdpUrl: "ws://bad" }),
+      body: JSON.stringify({ name: "badremote", cdpUrl: "ftp://bad" }),
     });
     expect(createBadRemote.status).toBe(400);
     const createBadRemoteBody = (await createBadRemote.json()) as { error: string };
     expect(createBadRemoteBody.error).toContain("cdpUrl");
+
+    const createClawd = await realFetch(`${base}/profiles/create`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: "legacyclawd", driver: "clawd" }),
+    });
+    expect(createClawd.status).toBe(200);
+    const createClawdBody = (await createClawd.json()) as {
+      profile?: string;
+      transport?: string;
+      cdpPort?: number | null;
+    };
+    expect(createClawdBody.profile).toBe("legacyclawd");
+    expect(createClawdBody.transport).toBe("cdp");
+    expect(createClawdBody.cdpPort).toBeTypeOf("number");
+
+    const createLegacyDriver = await realFetch(`${base}/profiles/create`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: "legacy", driver: "extension" }),
+    });
+    expect(createLegacyDriver.status).toBe(400);
+    const createLegacyDriverBody = (await createLegacyDriver.json()) as { error: string };
+    expect(createLegacyDriverBody.error).toContain('unsupported profile driver "extension"');
 
     const deleteMissing = await realFetch(`${base}/profiles/nonexistent`, {
       method: "DELETE",

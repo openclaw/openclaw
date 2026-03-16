@@ -8,8 +8,8 @@ import {
   Text,
   TUI,
 } from "@mariozechner/pi-tui";
-import { resolveDefaultAgentId } from "../agents/agent-scope.js";
-import { loadConfig } from "../config/config.js";
+import { resolveAgentIdByWorkspacePath, resolveDefaultAgentId } from "../agents/agent-scope.js";
+import { loadConfig, type OpenClawConfig } from "../config/config.js";
 import {
   buildAgentMainSessionKey,
   normalizeAgentId,
@@ -203,9 +203,31 @@ export function resolveTuiSessionKey(params: {
     return trimmed;
   }
   if (trimmed.startsWith("agent:")) {
-    return trimmed;
+    return trimmed.toLowerCase();
   }
-  return `agent:${params.currentAgentId}:${trimmed}`;
+  return `agent:${params.currentAgentId}:${trimmed.toLowerCase()}`;
+}
+
+export function resolveInitialTuiAgentId(params: {
+  cfg: OpenClawConfig;
+  fallbackAgentId: string;
+  initialSessionInput?: string;
+  cwd?: string;
+}) {
+  const parsed = parseAgentSessionKey((params.initialSessionInput ?? "").trim());
+  if (parsed?.agentId) {
+    return normalizeAgentId(parsed.agentId);
+  }
+
+  const inferredFromWorkspace = resolveAgentIdByWorkspacePath(
+    params.cfg,
+    params.cwd ?? process.cwd(),
+  );
+  if (inferredFromWorkspace) {
+    return inferredFromWorkspace;
+  }
+
+  return normalizeAgentId(params.fallbackAgentId);
 }
 
 export function resolveGatewayDisconnectState(reason?: string): {
@@ -246,6 +268,30 @@ export function createBackspaceDeduper(params?: { dedupeWindowMs?: number; now?:
   };
 }
 
+export function isIgnorableTuiStopError(error: unknown): boolean {
+  if (!error || typeof error !== "object") {
+    return false;
+  }
+  const err = error as { code?: unknown; syscall?: unknown; message?: unknown };
+  const code = typeof err.code === "string" ? err.code : "";
+  const syscall = typeof err.syscall === "string" ? err.syscall : "";
+  const message = typeof err.message === "string" ? err.message : "";
+  if (code === "EBADF" && syscall === "setRawMode") {
+    return true;
+  }
+  return /setRawMode/i.test(message) && /EBADF/i.test(message);
+}
+
+export function stopTuiSafely(stop: () => void): void {
+  try {
+    stop();
+  } catch (error) {
+    if (!isIgnorableTuiStopError(error)) {
+      throw error;
+    }
+  }
+}
+
 type CtrlCAction = "clear" | "warn" | "exit";
 
 export function resolveCtrlCAction(params: {
@@ -279,7 +325,12 @@ export async function runTui(opts: TuiOptions) {
   let sessionScope: SessionScope = (config.session?.scope ?? "per-sender") as SessionScope;
   let sessionMainKey = normalizeMainKey(config.session?.mainKey);
   let agentDefaultId = resolveDefaultAgentId(config);
-  let currentAgentId = agentDefaultId;
+  let currentAgentId = resolveInitialTuiAgentId({
+    cfg: config,
+    fallbackAgentId: agentDefaultId,
+    initialSessionInput,
+    cwd: process.cwd(),
+  });
   let agents: AgentSummary[] = [];
   const agentNames = new Map<string, string>();
   let currentSessionKey = "";
@@ -293,6 +344,7 @@ export async function runTui(opts: TuiOptions) {
   let showThinking = false;
   let pairingHintShown = false;
   const localRunIds = new Set<string>();
+  const localBtwRunIds = new Set<string>();
 
   const deliverDefault = opts.deliver ?? false;
   const autoMessage = opts.message?.trim();
@@ -447,7 +499,30 @@ export async function runTui(opts: TuiOptions) {
     localRunIds.clear();
   };
 
-  const client = new GatewayChatClient({
+  const noteLocalBtwRunId = (runId: string) => {
+    if (!runId) {
+      return;
+    }
+    localBtwRunIds.add(runId);
+    if (localBtwRunIds.size > 200) {
+      const [first] = localBtwRunIds;
+      if (first) {
+        localBtwRunIds.delete(first);
+      }
+    }
+  };
+
+  const forgetLocalBtwRunId = (runId: string) => {
+    localBtwRunIds.delete(runId);
+  };
+
+  const isLocalBtwRunId = (runId: string) => localBtwRunIds.has(runId);
+
+  const clearLocalBtwRunIds = () => {
+    localBtwRunIds.clear();
+  };
+
+  const client = await GatewayChatClient.connect({
     url: opts.url,
     token: opts.token,
     password: opts.password,
@@ -701,6 +776,7 @@ export async function runTui(opts: TuiOptions) {
       : "unknown";
     const tokens = formatTokens(sessionInfo.totalTokens ?? null, sessionInfo.contextTokens ?? null);
     const think = sessionInfo.thinkingLevel ?? "off";
+    const fast = sessionInfo.fastMode === true;
     const verbose = sessionInfo.verboseLevel ?? "off";
     const reasoning = sessionInfo.reasoningLevel ?? "off";
     const reasoningLabel =
@@ -710,6 +786,7 @@ export async function runTui(opts: TuiOptions) {
       `session ${sessionLabel}`,
       modelLabel,
       think !== "off" ? `think ${think}` : null,
+      fast ? "fast" : null,
       verbose !== "off" ? `verbose ${verbose}` : null,
       reasoningLabel,
       tokens,
@@ -718,6 +795,14 @@ export async function runTui(opts: TuiOptions) {
   };
 
   const { openOverlay, closeOverlay } = createOverlayHandlers(tui, editor);
+  const btw = {
+    showResult: (params: { question: string; text: string; isError?: boolean }) => {
+      chatLog.showBtw(params);
+    },
+    clear: () => {
+      chatLog.dismissBtw();
+    },
+  };
 
   const initialSessionAgentId = (() => {
     if (!initialSessionInput) {
@@ -730,6 +815,7 @@ export async function runTui(opts: TuiOptions) {
   const sessionActions = createSessionActions({
     client,
     chatLog,
+    btw,
     tui,
     opts,
     state,
@@ -752,8 +838,9 @@ export async function runTui(opts: TuiOptions) {
     abortActive,
   } = sessionActions;
 
-  const { handleChatEvent, handleAgentEvent } = createEventHandlers({
+  const { handleChatEvent, handleAgentEvent, handleBtwEvent } = createEventHandlers({
     chatLog,
+    btw,
     tui,
     state,
     setActivityStatus,
@@ -762,6 +849,9 @@ export async function runTui(opts: TuiOptions) {
     isLocalRunId,
     forgetLocalRunId,
     clearLocalRunIds,
+    isLocalBtwRunId,
+    forgetLocalBtwRunId,
+    clearLocalBtwRunIds,
   });
 
   const requestExit = () => {
@@ -770,7 +860,7 @@ export async function runTui(opts: TuiOptions) {
     }
     exitRequested = true;
     client.stop();
-    tui.stop();
+    stopTuiSafely(() => tui.stop());
     process.exit(0);
   };
 
@@ -793,7 +883,9 @@ export async function runTui(opts: TuiOptions) {
       setActivityStatus,
       formatSessionKey,
       noteLocalRunId,
+      noteLocalBtwRunId,
       forgetLocalRunId,
+      forgetLocalBtwRunId,
       requestExit,
     });
 
@@ -816,6 +908,11 @@ export async function runTui(opts: TuiOptions) {
   });
 
   editor.onEscape = () => {
+    if (chatLog.hasVisibleBtw()) {
+      chatLog.dismissBtw();
+      tui.requestRender();
+      return;
+    }
     void abortActive();
   };
   const handleCtrlC = () => {
@@ -865,9 +962,27 @@ export async function runTui(opts: TuiOptions) {
     void loadHistory();
   };
 
+  tui.addInputListener((data) => {
+    if (!chatLog.hasVisibleBtw()) {
+      return undefined;
+    }
+    if (editor.getText().length > 0) {
+      return undefined;
+    }
+    if (matchesKey(data, "enter")) {
+      chatLog.dismissBtw();
+      tui.requestRender();
+      return { consume: true };
+    }
+    return undefined;
+  });
+
   client.onEvent = (evt) => {
     if (evt.event === "chat") {
       handleChatEvent(evt.payload);
+    }
+    if (evt.event === "chat.side_result") {
+      handleBtwEvent(evt.payload);
     }
     if (evt.event === "agent") {
       handleAgentEvent(evt.payload);

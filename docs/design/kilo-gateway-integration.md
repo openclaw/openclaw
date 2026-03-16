@@ -462,7 +462,7 @@ const needsNonImageSanitize =
             "id": "anthropic/claude-opus-4.6",
             "name": "Anthropic: Claude Opus 4.6"
           },
-          { "id": "minimax/minimax-m2.1:free", "name": "Minimax: Minimax M2.1" }
+          { "id": "minimax/minimax-m2.5:free", "name": "Minimax: Minimax M2.5" }
         ]
       }
     }
@@ -492,8 +492,8 @@ const needsNonImageSanitize =
    - Test `resolveEnvApiKey("kilocode")` returns correct env var
 
 2. **Integration Tests:**
-   - Test onboarding flow with `--auth-choice kilocode-api-key`
-   - Test non-interactive onboarding with `--kilocode-api-key`
+   - Test setup flow with `--auth-choice kilocode-api-key`
+   - Test non-interactive setup with `--kilocode-api-key`
    - Test model selection with `kilocode/` prefix
 
 3. **E2E Tests:**

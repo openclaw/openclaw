@@ -40,6 +40,19 @@ describe("buildEmbeddedRunPayloads", () => {
     expect(payloads[0]?.text).toBe(OVERLOADED_FALLBACK_TEXT);
   };
 
+  function expectNoSyntheticCompletionForSession(sessionKey: string) {
+    const payloads = buildPayloads({
+      sessionKey,
+      toolMetas: [{ toolName: "write", meta: "/tmp/out.md" }],
+      lastAssistant: makeAssistant({
+        stopReason: "stop",
+        errorMessage: undefined,
+        content: [],
+      }),
+    });
+    expect(payloads).toHaveLength(0);
+  }
+
   it("suppresses raw API error JSON when the assistant errored", () => {
     const payloads = buildPayloads({
       assistantTexts: [errorJson],
@@ -86,6 +99,18 @@ describe("buildEmbeddedRunPayloads", () => {
     expect(payloads).toHaveLength(1);
     expect(payloads[0]?.text).toBe(formatBillingErrorMessage("Anthropic", "claude-3-5-sonnet"));
     expect(payloads[0]?.isError).toBe(true);
+  });
+
+  it("does not emit a synthetic billing error for successful turns with stale errorMessage", () => {
+    const payloads = buildPayloads({
+      lastAssistant: makeAssistant({
+        stopReason: "stop",
+        errorMessage: "insufficient credits for embedding model",
+        content: [{ type: "text", text: "Handle payment required errors in your API." }],
+      }),
+    });
+
+    expectSinglePayloadText(payloads, "Handle payment required errors in your API.");
   });
 
   it("suppresses raw error JSON even when errorMessage is missing", () => {
@@ -140,31 +165,11 @@ describe("buildEmbeddedRunPayloads", () => {
   });
 
   it("does not add synthetic completion text for channel sessions", () => {
-    const payloads = buildPayloads({
-      sessionKey: "agent:main:discord:channel:c123",
-      toolMetas: [{ toolName: "write", meta: "/tmp/out.md" }],
-      lastAssistant: makeAssistant({
-        stopReason: "stop",
-        errorMessage: undefined,
-        content: [],
-      }),
-    });
-
-    expect(payloads).toHaveLength(0);
+    expectNoSyntheticCompletionForSession("agent:main:discord:channel:c123");
   });
 
   it("does not add synthetic completion text for group sessions", () => {
-    const payloads = buildPayloads({
-      sessionKey: "agent:main:telegram:group:g123",
-      toolMetas: [{ toolName: "write", meta: "/tmp/out.md" }],
-      lastAssistant: makeAssistant({
-        stopReason: "stop",
-        errorMessage: undefined,
-        content: [],
-      }),
-    });
-
-    expect(payloads).toHaveLength(0);
+    expectNoSyntheticCompletionForSession("agent:main:telegram:group:g123");
   });
 
   it("does not add synthetic completion text when messaging tool already delivered output", () => {
