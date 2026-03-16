@@ -275,6 +275,7 @@ async function runProviderAuthMethod(params: {
     workspaceDir: params.workspaceDir,
     prompter: params.prompter,
     runtime: params.runtime,
+    allowSecretRefPrompt: false,
     isRemote: isRemoteEnvironment(),
     openUrl: async (url) => {
       await openUrl(url);
