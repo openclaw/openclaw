@@ -53,6 +53,7 @@ export type {
   SshSandboxSettings,
 } from "../agents/sandbox.js";
 export type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
+export type { ChannelMessageActionContext } from "../channels/plugins/types.js";
 export type { PluginRuntime } from "../plugins/runtime/types.js";
 export type { OpenClawConfig } from "../config/config.js";
 export type { GatewayRequestHandlerOptions } from "../gateway/server-methods/types.js";
