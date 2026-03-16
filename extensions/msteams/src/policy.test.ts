@@ -141,6 +141,18 @@ describe("msteams policy", () => {
       expect(policy).toEqual({ requireMention: true, replyStyle: "thread" });
     });
 
+    it("keeps mentioned channel replies in-thread by default", () => {
+      const policy = resolveMSTeamsReplyPolicy({
+        isDirectMessage: false,
+        globalConfig: { requireMention: true },
+      });
+
+      expect(policy).toEqual({
+        requireMention: true,
+        replyStyle: "thread",
+      });
+    });
+
     it("keeps default replyStyle=thread when requireMention=false", () => {
       const policy = resolveMSTeamsReplyPolicy({
         isDirectMessage: false,
