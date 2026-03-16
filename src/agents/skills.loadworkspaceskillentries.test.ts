@@ -175,4 +175,34 @@ describe("loadWorkspaceSkillEntries", () => {
       expect(entries.map((entry) => entry.skill.name)).not.toContain("outside-file-skill");
     },
   );
+
+  it("does not crash and still loads other skills when one skill has malformed frontmatter", async () => {
+    const workspaceDir = await createTempWorkspaceDir();
+    const skillsDir = path.join(workspaceDir, "skills");
+    await fs.mkdir(skillsDir, { recursive: true });
+
+    const badSkillDir = path.join(skillsDir, "bad-skill");
+    await writeSkill({
+      dir: badSkillDir,
+      name: "bad-skill",
+      description: "Bad",
+      // Intentionally invalid JSON5 to trigger a metadata/frontmatter parse error.
+      metadata: '{"openclaw":{"emoji":"🔍","requires":{invalid-json}}}',
+    });
+
+    const goodSkillDir = path.join(skillsDir, "good-skill");
+    await writeSkill({
+      dir: goodSkillDir,
+      name: "good-skill",
+      description: "Good",
+    });
+
+    const entries = loadWorkspaceSkillEntries(workspaceDir, {
+      managedSkillsDir: path.join(workspaceDir, ".managed"),
+      bundledSkillsDir: path.join(workspaceDir, ".bundled"),
+    });
+
+    const names = entries.map((entry) => entry.skill.name);
+    expect(names).toContain("good-skill");
+  });
 });

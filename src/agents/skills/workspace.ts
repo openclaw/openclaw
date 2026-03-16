@@ -343,13 +343,22 @@ function loadSkillEntries(
         return [];
       }
 
-      const loaded = loadSkillsFromDir({ dir: baseDir, source: params.source });
-      return filterLoadedSkillsInsideRoot({
-        skills: unwrapLoadedSkills(loaded),
-        source: params.source,
-        rootDir,
-        rootRealPath: baseDirRealPath,
-      });
+      try {
+        const loaded = loadSkillsFromDir({ dir: baseDir, source: params.source });
+        return filterLoadedSkillsInsideRoot({
+          skills: unwrapLoadedSkills(loaded),
+          source: params.source,
+          rootDir,
+          rootRealPath: baseDirRealPath,
+        });
+      } catch (error) {
+        skillsLogger.warn("Failed to load skills root, skipping skills from this source.", {
+          dir: baseDir,
+          source: params.source,
+          errorMessage: error instanceof Error ? error.message : String(error),
+        });
+        return [];
+      }
     }
 
     const childDirs = listChildDirectories(baseDir);
@@ -417,15 +426,24 @@ function loadSkillEntries(
         continue;
       }
 
-      const loaded = loadSkillsFromDir({ dir: skillDir, source: params.source });
-      loadedSkills.push(
-        ...filterLoadedSkillsInsideRoot({
-          skills: unwrapLoadedSkills(loaded),
+      try {
+        const loaded = loadSkillsFromDir({ dir: skillDir, source: params.source });
+        loadedSkills.push(
+          ...filterLoadedSkillsInsideRoot({
+            skills: unwrapLoadedSkills(loaded),
+            source: params.source,
+            rootDir,
+            rootRealPath: baseDirRealPath,
+          }),
+        );
+      } catch (error) {
+        skillsLogger.warn("Failed to load skill, skipping it.", {
+          dir: skillDir,
           source: params.source,
-          rootDir,
-          rootRealPath: baseDirRealPath,
-        }),
-      );
+          skill: name,
+          errorMessage: error instanceof Error ? error.message : String(error),
+        });
+      }
 
       if (loadedSkills.length >= limits.maxSkillsLoadedPerSource) {
         break;
