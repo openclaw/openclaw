@@ -27,6 +27,7 @@ import {
   type ResolvedSignalAccount,
 } from "openclaw/plugin-sdk/signal";
 import { resolveOutboundSendDep } from "../../../src/infra/outbound/send-deps.js";
+import type { SignalProbe } from "./probe.js";
 import { getSignalRuntime } from "./runtime.js";
 import { createSignalSetupWizardProxy, signalSetupAdapter } from "./setup-core.js";
 
@@ -220,6 +221,10 @@ export const signalPlugin: ChannelPlugin<ResolvedSignalAccount> = {
       const baseUrl = account.baseUrl;
       return await getSignalRuntime().channel.signal.probeSignal(baseUrl, timeoutMs);
     },
+    formatCapabilitiesProbe: ({ probe }) =>
+      (probe as SignalProbe | undefined)?.version
+        ? [{ text: `Signal daemon: ${(probe as SignalProbe).version}` }]
+        : [],
     buildAccountSnapshot: ({ account, runtime, probe }) => ({
       ...buildBaseAccountStatusSnapshot({ account, runtime, probe }),
       baseUrl: account.baseUrl,

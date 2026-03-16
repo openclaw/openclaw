@@ -6,6 +6,7 @@ import {
   readStringParam,
 } from "../../agents/tools/common.js";
 import { parseReplyDirectives } from "../../auto-reply/reply/reply-directives.js";
+import { getChannelPlugin } from "../../channels/plugins/index.js";
 import { dispatchChannelMessageAction } from "../../channels/plugins/message-actions.js";
 import type {
   ChannelId,
@@ -37,8 +38,6 @@ import {
   parseInteractiveParam,
   readBooleanParam,
   resolveAttachmentMediaPolicy,
-  resolveSlackAutoThreadId,
-  resolveTelegramAutoThreadId,
 } from "./message-action-params.js";
 import type { MessagePollResult, MessageSendResult } from "./message.js";
 import {
@@ -65,22 +64,23 @@ export type MessageActionRunnerGateway = {
 function resolveAndApplyOutboundThreadId(
   params: Record<string, unknown>,
   ctx: {
+    cfg: OpenClawConfig;
     channel: ChannelId;
     to: string;
+    accountId?: string | null;
     toolContext?: ChannelThreadingToolContext;
-    allowSlackAutoThread: boolean;
   },
 ): string | undefined {
   const threadId = readStringParam(params, "threadId");
-  const slackAutoThreadId =
-    ctx.allowSlackAutoThread && ctx.channel === "slack" && !threadId
-      ? resolveSlackAutoThreadId({ to: ctx.to, toolContext: ctx.toolContext })
-      : undefined;
-  const telegramAutoThreadId =
-    ctx.channel === "telegram" && !threadId
-      ? resolveTelegramAutoThreadId({ to: ctx.to, toolContext: ctx.toolContext })
-      : undefined;
-  const resolved = threadId ?? slackAutoThreadId ?? telegramAutoThreadId;
+  const resolved =
+    threadId ??
+    getChannelPlugin(ctx.channel)?.threading?.resolveAutoThreadId?.({
+      cfg: ctx.cfg,
+      accountId: ctx.accountId,
+      to: ctx.to,
+      toolContext: ctx.toolContext,
+      replyToId: readStringParam(params, "replyTo"),
+    });
   // Write auto-resolved threadId back into params so downstream dispatch
   // (plugin `readStringParam(params, "threadId")`) picks it up.
   if (resolved && !params.threadId) {
@@ -501,10 +501,11 @@ async function handleSendAction(ctx: ResolvedActionContext): Promise<MessageActi
 
   const replyToId = readStringParam(params, "replyTo");
   const resolvedThreadId = resolveAndApplyOutboundThreadId(params, {
+    cfg,
     channel,
     to,
+    accountId,
     toolContext: input.toolContext,
-    allowSlackAutoThread: channel === "slack" && !replyToId,
   });
   const outboundRoute =
     agentId && !dryRun
@@ -619,10 +620,11 @@ async function handlePollAction(ctx: ResolvedActionContext): Promise<MessageActi
   }
 
   const resolvedThreadId = resolveAndApplyOutboundThreadId(params, {
+    cfg,
     channel,
     to,
+    accountId,
     toolContext: input.toolContext,
-    allowSlackAutoThread: channel === "slack",
   });
 
   const base = typeof params.message === "string" ? params.message : "";

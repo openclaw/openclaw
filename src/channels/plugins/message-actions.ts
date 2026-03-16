@@ -4,17 +4,16 @@ import { getChannelPlugin, listChannelPlugins } from "./index.js";
 import type { ChannelMessageCapability } from "./message-capabilities.js";
 import type { ChannelMessageActionContext, ChannelMessageActionName } from "./types.js";
 
-const trustedRequesterRequiredByChannel: Readonly<
-  Partial<Record<string, ReadonlySet<ChannelMessageActionName>>>
-> = {
-  discord: new Set<ChannelMessageActionName>(["timeout", "kick", "ban"]),
-};
-
 type ChannelActions = NonNullable<NonNullable<ReturnType<typeof getChannelPlugin>>["actions"]>;
 
 function requiresTrustedRequesterSender(ctx: ChannelMessageActionContext): boolean {
-  const actions = trustedRequesterRequiredByChannel[ctx.channel];
-  return Boolean(actions?.has(ctx.action) && ctx.toolContext);
+  const plugin = getChannelPlugin(ctx.channel);
+  return Boolean(
+    plugin?.actions?.requiresTrustedRequesterSender?.({
+      action: ctx.action,
+      toolContext: ctx.toolContext,
+    }),
+  );
 }
 
 export function listChannelMessageActions(cfg: OpenClawConfig): ChannelMessageActionName[] {
