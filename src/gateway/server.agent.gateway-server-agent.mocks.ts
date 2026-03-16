@@ -1,9 +1,24 @@
 import { vi } from "vitest";
-import { createEmptyPluginRegistry, type PluginRegistry } from "../plugins/registry.js";
+import type { PluginRegistry } from "../plugins/registry.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 
 export const registryState: { registry: PluginRegistry } = {
-  registry: createEmptyPluginRegistry(),
+  registry: {
+    plugins: [],
+    tools: [],
+    hooks: [],
+    typedHooks: [],
+    channels: [],
+    channelSetups: [],
+    providers: [],
+    gatewayHandlers: {},
+    httpHandlers: [],
+    httpRoutes: [],
+    cliRegistrars: [],
+    services: [],
+    commands: [],
+    diagnostics: [],
+  } as PluginRegistry,
 };
 
 export function setRegistry(registry: PluginRegistry) {
@@ -21,5 +36,7 @@ vi.mock("./server-plugins.js", async () => {
         gatewayMethods: params.baseMethods ?? [],
       };
     },
+    // server.impl.ts sets a fallback context before dispatch; tests only need the symbol to exist.
+    setFallbackGatewayContext: vi.fn(),
   };
 });

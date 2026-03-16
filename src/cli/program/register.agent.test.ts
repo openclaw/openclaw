@@ -3,9 +3,12 @@ import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const agentCliCommandMock = vi.fn();
 const agentsAddCommandMock = vi.fn();
+const agentsBindingsCommandMock = vi.fn();
+const agentsBindCommandMock = vi.fn();
 const agentsDeleteCommandMock = vi.fn();
 const agentsListCommandMock = vi.fn();
 const agentsSetIdentityCommandMock = vi.fn();
+const agentsUnbindCommandMock = vi.fn();
 const setVerboseMock = vi.fn();
 const createDefaultDepsMock = vi.fn(() => ({ deps: true }));
 
@@ -21,9 +24,12 @@ vi.mock("../../commands/agent-via-gateway.js", () => ({
 
 vi.mock("../../commands/agents.js", () => ({
   agentsAddCommand: agentsAddCommandMock,
+  agentsBindingsCommand: agentsBindingsCommandMock,
+  agentsBindCommand: agentsBindCommandMock,
   agentsDeleteCommand: agentsDeleteCommandMock,
   agentsListCommand: agentsListCommandMock,
   agentsSetIdentityCommand: agentsSetIdentityCommandMock,
+  agentsUnbindCommand: agentsUnbindCommandMock,
 }));
 
 vi.mock("../../globals.js", () => ({
@@ -55,9 +61,12 @@ describe("registerAgentCommands", () => {
     vi.clearAllMocks();
     agentCliCommandMock.mockResolvedValue(undefined);
     agentsAddCommandMock.mockResolvedValue(undefined);
+    agentsBindingsCommandMock.mockResolvedValue(undefined);
+    agentsBindCommandMock.mockResolvedValue(undefined);
     agentsDeleteCommandMock.mockResolvedValue(undefined);
     agentsListCommandMock.mockResolvedValue(undefined);
     agentsSetIdentityCommandMock.mockResolvedValue(undefined);
+    agentsUnbindCommandMock.mockResolvedValue(undefined);
     createDefaultDepsMock.mockReturnValue({ deps: true });
   });
 
@@ -142,6 +151,61 @@ describe("registerAgentCommands", () => {
       {
         json: true,
         bindings: true,
+      },
+      runtime,
+    );
+  });
+
+  it("forwards agents bindings options", async () => {
+    await runCli(["agents", "bindings", "--agent", "ops", "--json"]);
+    expect(agentsBindingsCommandMock).toHaveBeenCalledWith(
+      {
+        agent: "ops",
+        json: true,
+      },
+      runtime,
+    );
+  });
+
+  it("forwards agents bind options", async () => {
+    await runCli([
+      "agents",
+      "bind",
+      "--agent",
+      "ops",
+      "--bind",
+      "matrix-js:ops",
+      "--bind",
+      "telegram",
+      "--json",
+    ]);
+    expect(agentsBindCommandMock).toHaveBeenCalledWith(
+      {
+        agent: "ops",
+        bind: ["matrix-js:ops", "telegram"],
+        json: true,
+      },
+      runtime,
+    );
+  });
+
+  it("documents bind accountId resolution behavior in help text", () => {
+    const program = new Command();
+    registerAgentCommands(program, { agentChannelOptions: "last|telegram|discord" });
+    const agents = program.commands.find((command) => command.name() === "agents");
+    const bind = agents?.commands.find((command) => command.name() === "bind");
+    const help = bind?.helpInformation() ?? "";
+    expect(help).toContain("accountId is resolved by channel defaults/hooks");
+  });
+
+  it("forwards agents unbind options", async () => {
+    await runCli(["agents", "unbind", "--agent", "ops", "--all", "--json"]);
+    expect(agentsUnbindCommandMock).toHaveBeenCalledWith(
+      {
+        agent: "ops",
+        bind: [],
+        all: true,
+        json: true,
       },
       runtime,
     );

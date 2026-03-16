@@ -1,5 +1,5 @@
 import { withProgress } from "../cli/progress.js";
-import { loadConfig, resolveGatewayPort } from "../config/config.js";
+import { readBestEffortConfig, resolveGatewayPort } from "../config/config.js";
 import { probeGateway } from "../gateway/probe.js";
 import { discoverGatewayBeacons } from "../infra/bonjour-discovery.js";
 import { resolveSshConfig } from "../infra/ssh-config.js";
@@ -10,6 +10,8 @@ import { colorize, isRich, theme } from "../terminal/theme.js";
 import {
   buildNetworkHints,
   extractConfigSummary,
+  isProbeReachable,
+  isScopeLimitedProbeFailure,
   type GatewayStatusTarget,
   parseTimeoutMs,
   pickGatewaySelfPresence,
@@ -35,7 +37,7 @@ export async function gatewayStatusCommand(
   runtime: RuntimeEnv,
 ) {
   const startedAt = Date.now();
-  const cfg = loadConfig();
+  const cfg = await readBestEffortConfig();
   const rich = isRich() && opts.json !== true;
   const overallTimeoutMs = parseTimeoutMs(opts.timeout, 3000);
   const wideAreaDomain = resolveWideAreaDiscoveryDomain({
@@ -152,10 +154,14 @@ export async function gatewayStatusCommand(
       try {
         const probed = await Promise.all(
           targets.map(async (target) => {
-            const auth = resolveAuthForTarget(cfg, target, {
+            const authResolution = await resolveAuthForTarget(cfg, target, {
               token: typeof opts.token === "string" ? opts.token : undefined,
               password: typeof opts.password === "string" ? opts.password : undefined,
             });
+            const auth = {
+              token: authResolution.token,
+              password: authResolution.password,
+            };
             const timeoutMs = resolveProbeBudgetMs(overallTimeoutMs, target.kind);
             const probe = await probeGateway({
               url: target.url,
@@ -166,7 +172,13 @@ export async function gatewayStatusCommand(
               ? extractConfigSummary(probe.configSnapshot)
               : null;
             const self = pickGatewaySelfPresence(probe.presence);
-            return { target, probe, configSummary, self };
+            return {
+              target,
+              probe,
+              configSummary,
+              self,
+              authDiagnostics: authResolution.diagnostics ?? [],
+            };
           }),
         );
 
@@ -183,8 +195,10 @@ export async function gatewayStatusCommand(
     },
   );
 
-  const reachable = probed.filter((p) => p.probe.ok);
+  const reachable = probed.filter((p) => isProbeReachable(p.probe));
   const ok = reachable.length > 0;
+  const degradedScopeLimited = probed.filter((p) => isScopeLimitedProbeFailure(p.probe));
+  const degraded = degradedScopeLimited.length > 0;
   const multipleGateways = reachable.length > 1;
   const primary =
     reachable.find((p) => p.target.kind === "explicit") ??
@@ -214,12 +228,33 @@ export async function gatewayStatusCommand(
       targetIds: reachable.map((p) => p.target.id),
     });
   }
+  for (const result of probed) {
+    if (result.authDiagnostics.length === 0) {
+      continue;
+    }
+    for (const diagnostic of result.authDiagnostics) {
+      warnings.push({
+        code: "auth_secretref_unresolved",
+        message: diagnostic,
+        targetIds: [result.target.id],
+      });
+    }
+  }
+  for (const result of degradedScopeLimited) {
+    warnings.push({
+      code: "probe_scope_limited",
+      message:
+        "Probe diagnostics are limited by gateway scopes (missing operator.read). Connection succeeded, but status details may be incomplete. Hint: pair device identity or use credentials with operator.read.",
+      targetIds: [result.target.id],
+    });
+  }
 
   if (opts.json) {
     runtime.log(
       JSON.stringify(
         {
           ok,
+          degraded,
           ts: Date.now(),
           durationMs: Date.now() - startedAt,
           timeoutMs: overallTimeoutMs,
@@ -252,7 +287,9 @@ export async function gatewayStatusCommand(
             active: p.target.active,
             tunnel: p.target.tunnel ?? null,
             connect: {
-              ok: p.probe.ok,
+              ok: isProbeReachable(p.probe),
+              rpcOk: p.probe.ok,
+              scopeLimited: isScopeLimitedProbeFailure(p.probe),
               latencyMs: p.probe.connectLatencyMs,
               error: p.probe.error,
               close: p.probe.close,

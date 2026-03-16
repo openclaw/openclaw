@@ -1,0 +1,9 @@
+{
+  "id": "zai",
+  "providers": ["zai"],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

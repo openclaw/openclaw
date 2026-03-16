@@ -2,7 +2,7 @@ import type { OpenClawConfig } from "../../config/config.js";
 import type { DmPolicy } from "../../config/types.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import type { WizardPrompter } from "../../wizard/prompts.js";
-import type { ChannelId } from "./types.js";
+import type { ChannelId, ChannelPlugin } from "./types.js";
 
 export type SetupChannelsOptions = {
   allowDisable?: boolean;
@@ -10,6 +10,7 @@ export type SetupChannelsOptions = {
   onSelection?: (selection: ChannelId[]) => void;
   accountIds?: Partial<Record<ChannelId, string>>;
   onAccountId?: (channel: ChannelId, accountId: string) => void;
+  onResolvedPlugin?: (channel: ChannelId, plugin: ChannelPlugin) => void;
   promptAccountIds?: boolean;
   whatsappAccountId?: string;
   promptWhatsAppAccountId?: boolean;
@@ -20,6 +21,7 @@ export type SetupChannelsOptions = {
   skipConfirm?: boolean;
   quickstartDefaults?: boolean;
   initialSelection?: ChannelId[];
+  secretInputMode?: "plaintext" | "ref";
 };
 
 export type PromptAccountIdParams = {
@@ -62,6 +64,13 @@ export type ChannelOnboardingResult = {
   accountId?: string;
 };
 
+export type ChannelOnboardingConfiguredResult = ChannelOnboardingResult | "skip";
+
+export type ChannelOnboardingInteractiveContext = ChannelOnboardingConfigureContext & {
+  configured: boolean;
+  label: string;
+};
+
 export type ChannelOnboardingDmPolicy = {
   label: string;
   channel: ChannelId;
@@ -80,6 +89,12 @@ export type ChannelOnboardingAdapter = {
   channel: ChannelId;
   getStatus: (ctx: ChannelOnboardingStatusContext) => Promise<ChannelOnboardingStatus>;
   configure: (ctx: ChannelOnboardingConfigureContext) => Promise<ChannelOnboardingResult>;
+  configureInteractive?: (
+    ctx: ChannelOnboardingInteractiveContext,
+  ) => Promise<ChannelOnboardingConfiguredResult>;
+  configureWhenConfigured?: (
+    ctx: ChannelOnboardingInteractiveContext,
+  ) => Promise<ChannelOnboardingConfiguredResult>;
   dmPolicy?: ChannelOnboardingDmPolicy;
   onAccountRecorded?: (accountId: string, options?: SetupChannelsOptions) => void;
   disable?: (cfg: OpenClawConfig) => OpenClawConfig;

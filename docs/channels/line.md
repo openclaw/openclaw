@@ -48,6 +48,10 @@ The gateway responds to LINE’s webhook verification (GET) and inbound events (
 If you need a custom path, set `channels.line.webhookPath` or
 `channels.line.accounts.<id>.webhookPath` and update the URL accordingly.
 
+Security note:
+
+- LINE signature verification is body-dependent (HMAC over the raw body), so OpenClaw applies strict pre-auth body limits and timeout before verification.
+
 ## Configure
 
 Minimal config:
@@ -82,6 +86,8 @@ Token/secret files:
   },
 }
 ```
+
+`tokenFile` and `secretFile` must point to regular files. Symlinks are rejected.
 
 Multiple accounts:
 

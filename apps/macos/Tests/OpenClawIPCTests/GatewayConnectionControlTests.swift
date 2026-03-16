@@ -1,5 +1,5 @@
-import OpenClawKit
 import Foundation
+import OpenClawKit
 import Testing
 @testable import OpenClaw
 @testable import OpenClawIPC
@@ -39,14 +39,14 @@ private func makeTestGatewayConnection() -> GatewayConnection {
 }
 
 @Suite(.serialized) struct GatewayConnectionControlTests {
-    @Test func statusFailsWhenProcessMissing() async {
+    @Test func `status fails when process missing`() async {
         let connection = makeTestGatewayConnection()
         let result = await connection.status()
         #expect(result.ok == false)
         #expect(result.error != nil)
     }
 
-    @Test func rejectEmptyMessage() async {
+    @Test func `reject empty message`() async {
         let connection = makeTestGatewayConnection()
         let result = await connection.sendAgent(
             message: "",

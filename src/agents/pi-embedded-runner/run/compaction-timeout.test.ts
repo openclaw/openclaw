@@ -1,6 +1,8 @@
-import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import { describe, expect, it } from "vitest";
+import { castAgentMessage } from "../../test-helpers/agent-message-fixtures.js";
 import {
+  resolveRunTimeoutDuringCompaction,
+  resolveRunTimeoutWithCompactionGraceMs,
   selectCompactionTimeoutSnapshot,
   shouldFlagCompactionTimeout,
 } from "./compaction-timeout.js";
@@ -31,9 +33,48 @@ describe("compaction-timeout helpers", () => {
     ).toBe(false);
   });
 
+  it("extends the first run timeout reached during compaction", () => {
+    expect(
+      resolveRunTimeoutDuringCompaction({
+        isCompactionPendingOrRetrying: false,
+        isCompactionInFlight: true,
+        graceAlreadyUsed: false,
+      }),
+    ).toBe("extend");
+  });
+
+  it("aborts after compaction grace has already been used", () => {
+    expect(
+      resolveRunTimeoutDuringCompaction({
+        isCompactionPendingOrRetrying: true,
+        isCompactionInFlight: false,
+        graceAlreadyUsed: true,
+      }),
+    ).toBe("abort");
+  });
+
+  it("aborts immediately when no compaction is active", () => {
+    expect(
+      resolveRunTimeoutDuringCompaction({
+        isCompactionPendingOrRetrying: false,
+        isCompactionInFlight: false,
+        graceAlreadyUsed: false,
+      }),
+    ).toBe("abort");
+  });
+
+  it("adds one compaction grace window to the run timeout budget", () => {
+    expect(
+      resolveRunTimeoutWithCompactionGraceMs({
+        runTimeoutMs: 600_000,
+        compactionTimeoutMs: 900_000,
+      }),
+    ).toBe(1_500_000);
+  });
+
   it("uses pre-compaction snapshot when compaction timeout occurs", () => {
-    const pre = [{ role: "assistant", content: "pre" } as unknown as AgentMessage] as const;
-    const current = [{ role: "assistant", content: "current" } as unknown as AgentMessage] as const;
+    const pre = [castAgentMessage({ role: "assistant", content: "pre" })] as const;
+    const current = [castAgentMessage({ role: "assistant", content: "current" })] as const;
     const selected = selectCompactionTimeoutSnapshot({
       timedOutDuringCompaction: true,
       preCompactionSnapshot: [...pre],
@@ -47,7 +88,7 @@ describe("compaction-timeout helpers", () => {
   });
 
   it("falls back to current snapshot when pre-compaction snapshot is unavailable", () => {
-    const current = [{ role: "assistant", content: "current" } as unknown as AgentMessage] as const;
+    const current = [castAgentMessage({ role: "assistant", content: "current" })] as const;
     const selected = selectCompactionTimeoutSnapshot({
       timedOutDuringCompaction: true,
       preCompactionSnapshot: null,

@@ -8,10 +8,28 @@ title: "Plugin Manifest"
 
 # Plugin manifest (openclaw.plugin.json)
 
-Every plugin **must** ship a `openclaw.plugin.json` file in the **plugin root**.
-OpenClaw uses this manifest to validate configuration **without executing plugin
-code**. Missing or invalid manifests are treated as plugin errors and block
-config validation.
+This page is for the **native OpenClaw plugin manifest** only.
+
+For compatible bundle layouts, see [Plugin bundles](/plugins/bundles).
+
+Compatible bundle formats use different manifest files:
+
+- Codex bundle: `.codex-plugin/plugin.json`
+- Claude bundle: `.claude-plugin/plugin.json` or the default Claude component
+  layout without a manifest
+- Cursor bundle: `.cursor-plugin/plugin.json`
+
+OpenClaw auto-detects those bundle layouts too, but they are not validated
+against the `openclaw.plugin.json` schema described here.
+
+For compatible bundles, OpenClaw currently reads bundle metadata plus declared
+skill roots, Claude command roots, Claude bundle `settings.json` defaults, and
+supported hook packs when the layout matches OpenClaw runtime expectations.
+
+Every native OpenClaw plugin **must** ship a `openclaw.plugin.json` file in the
+**plugin root**. OpenClaw uses this manifest to validate configuration
+**without executing plugin code**. Missing or invalid manifests are treated as
+plugin errors and block config validation.
 
 See the full plugin system guide: [Plugins](/tools/plugin).
 
@@ -35,7 +53,7 @@ Required keys:
 
 Optional keys:
 
-- `kind` (string): plugin kind (example: `"memory"`).
+- `kind` (string): plugin kind (examples: `"memory"`, `"context-engine"`).
 - `channels` (array): channel ids registered by this plugin (example: `["matrix"]`).
 - `providers` (array): provider ids registered by this plugin.
 - `skills` (array): skill directories to load (relative to the plugin root).
@@ -63,9 +81,13 @@ Optional keys:
 
 ## Notes
 
-- The manifest is **required for all plugins**, including local filesystem loads.
+- The manifest is **required for native OpenClaw plugins**, including local filesystem loads.
 - Runtime still loads the plugin module separately; the manifest is only for
   discovery + validation.
+- Exclusive plugin kinds are selected through `plugins.slots.*`.
+  - `kind: "memory"` is selected by `plugins.slots.memory`.
+  - `kind: "context-engine"` is selected by `plugins.slots.contextEngine`
+    (default: built-in `legacy`).
 - If your plugin depends on native modules, document the build steps and any
   package-manager allowlist requirements (for example, pnpm `allow-build-scripts`
   - `pnpm rebuild <package>`).

@@ -1,30 +1,37 @@
 ---
-summary: "Perplexity Sonar setup for web_search"
+summary: "Perplexity Search API and Sonar/OpenRouter compatibility for web_search"
 read_when:
-  - You want to use Perplexity Sonar for web search
-  - You need PERPLEXITY_API_KEY or OpenRouter setup
-title: "Perplexity Sonar"
+  - You want to use Perplexity Search for web search
+  - You need PERPLEXITY_API_KEY or OPENROUTER_API_KEY setup
+title: "Perplexity Search"
 ---
 
-# Perplexity Sonar
+# Perplexity Search API
 
-OpenClaw can use Perplexity Sonar for the `web_search` tool. You can connect
-through Perplexity’s direct API or via OpenRouter.
+OpenClaw supports Perplexity Search API as a `web_search` provider.
+It returns structured results with `title`, `url`, and `snippet` fields.
 
-## API options
+For compatibility, OpenClaw also supports legacy Perplexity Sonar/OpenRouter setups.
+If you use `OPENROUTER_API_KEY`, an `sk-or-...` key in `tools.web.search.perplexity.apiKey`, or set `tools.web.search.perplexity.baseUrl` / `model`, the provider switches to the chat-completions path and returns AI-synthesized answers with citations instead of structured Search API results.
 
-### Perplexity (direct)
+## Getting a Perplexity API key
 
-- Base URL: [https://api.perplexity.ai](https://api.perplexity.ai)
-- Environment variable: `PERPLEXITY_API_KEY`
+1. Create a Perplexity account at [perplexity.ai/settings/api](https://www.perplexity.ai/settings/api)
+2. Generate an API key in the dashboard
+3. Store the key in config or set `PERPLEXITY_API_KEY` in the Gateway environment.
 
-### OpenRouter (alternative)
+## OpenRouter compatibility
 
-- Base URL: [https://openrouter.ai/api/v1](https://openrouter.ai/api/v1)
-- Environment variable: `OPENROUTER_API_KEY`
-- Supports prepaid/crypto credits.
+If you were already using OpenRouter for Perplexity Sonar, keep `provider: "perplexity"` and set `OPENROUTER_API_KEY` in the Gateway environment, or store an `sk-or-...` key in `tools.web.search.perplexity.apiKey`.
 
-## Config example
+Optional legacy controls:
+
+- `tools.web.search.perplexity.baseUrl`
+- `tools.web.search.perplexity.model`
+
+## Config examples
+
+### Native Perplexity Search API
 
 ```json5
 {
@@ -34,7 +41,24 @@ through Perplexity’s direct API or via OpenRouter.
         provider: "perplexity",
         perplexity: {
           apiKey: "pplx-...",
-          baseUrl: "https://api.perplexity.ai",
+        },
+      },
+    },
+  },
+}
+```
+
+### OpenRouter / Sonar compatibility
+
+```json5
+{
+  tools: {
+    web: {
+      search: {
+        provider: "perplexity",
+        perplexity: {
+          apiKey: "<openrouter-api-key>",
+          baseUrl: "https://openrouter.ai/api/v1",
           model: "perplexity/sonar-pro",
         },
       },
@@ -43,38 +67,92 @@ through Perplexity’s direct API or via OpenRouter.
 }
 ```
 
-## Switching from Brave
+## Where to set the key
 
-```json5
-{
-  tools: {
-    web: {
-      search: {
-        provider: "perplexity",
-        perplexity: {
-          apiKey: "pplx-...",
-          baseUrl: "https://api.perplexity.ai",
-        },
-      },
-    },
-  },
-}
+**Via config:** run `openclaw configure --section web`. It stores the key in
+`~/.openclaw/openclaw.json` under `tools.web.search.perplexity.apiKey`.
+That field also accepts SecretRef objects.
+
+**Via environment:** set `PERPLEXITY_API_KEY` or `OPENROUTER_API_KEY`
+in the Gateway process environment. For a gateway install, put it in
+`~/.openclaw/.env` (or your service environment). See [Env vars](/help/faq#how-does-openclaw-load-environment-variables).
+
+If `provider: "perplexity"` is configured and the Perplexity key SecretRef is unresolved with no env fallback, startup/reload fails fast.
+
+## Tool parameters
+
+These parameters apply to the native Perplexity Search API path.
+
+| Parameter             | Description                                          |
+| --------------------- | ---------------------------------------------------- |
+| `query`               | Search query (required)                              |
+| `count`               | Number of results to return (1-10, default: 5)       |
+| `country`             | 2-letter ISO country code (e.g., "US", "DE")         |
+| `language`            | ISO 639-1 language code (e.g., "en", "de", "fr")     |
+| `freshness`           | Time filter: `day` (24h), `week`, `month`, or `year` |
+| `date_after`          | Only results published after this date (YYYY-MM-DD)  |
+| `date_before`         | Only results published before this date (YYYY-MM-DD) |
+| `domain_filter`       | Domain allowlist/denylist array (max 20)             |
+| `max_tokens`          | Total content budget (default: 25000, max: 1000000)  |
+| `max_tokens_per_page` | Per-page token limit (default: 2048)                 |
+
+For the legacy Sonar/OpenRouter compatibility path, only `query` and `freshness` are supported.
+Search API-only filters such as `country`, `language`, `date_after`, `date_before`, `domain_filter`, `max_tokens`, and `max_tokens_per_page` return explicit errors.
+
+**Examples:**
+
+```javascript
+// Country and language-specific search
+await web_search({
+  query: "renewable energy",
+  country: "DE",
+  language: "de",
+});
+
+// Recent results (past week)
+await web_search({
+  query: "AI news",
+  freshness: "week",
+});
+
+// Date range search
+await web_search({
+  query: "AI developments",
+  date_after: "2024-01-01",
+  date_before: "2024-06-30",
+});
+
+// Domain filtering (allowlist)
+await web_search({
+  query: "climate research",
+  domain_filter: ["nature.com", "science.org", ".edu"],
+});
+
+// Domain filtering (denylist - prefix with -)
+await web_search({
+  query: "product reviews",
+  domain_filter: ["-reddit.com", "-pinterest.com"],
+});
+
+// More content extraction
+await web_search({
+  query: "detailed AI research",
+  max_tokens: 50000,
+  max_tokens_per_page: 4096,
+});
 ```
 
-If both `PERPLEXITY_API_KEY` and `OPENROUTER_API_KEY` are set, set
-`tools.web.search.perplexity.baseUrl` (or `tools.web.search.perplexity.apiKey`)
-to disambiguate.
+### Domain filter rules
 
-If no base URL is set, OpenClaw chooses a default based on the API key source:
+- Maximum 20 domains per filter
+- Cannot mix allowlist and denylist in the same request
+- Use `-` prefix for denylist entries (e.g., `["-reddit.com"]`)
 
-- `PERPLEXITY_API_KEY` or `pplx-...` → direct Perplexity (`https://api.perplexity.ai`)
-- `OPENROUTER_API_KEY` or `sk-or-...` → OpenRouter (`https://openrouter.ai/api/v1`)
-- Unknown key formats → OpenRouter (safe fallback)
+## Notes
 
-## Models
-
-- `perplexity/sonar` — fast Q&A with web search
-- `perplexity/sonar-pro` (default) — multi-step reasoning + web search
-- `perplexity/sonar-reasoning-pro` — deep research
+- Perplexity Search API returns structured web search results (`title`, `url`, `snippet`)
+- OpenRouter or explicit `baseUrl` / `model` switches Perplexity back to Sonar chat completions for compatibility
+- Results are cached for 15 minutes by default (configurable via `cacheTtlMinutes`)
 
 See [Web tools](/tools/web) for the full web_search configuration.
+See [Perplexity Search API docs](https://docs.perplexity.ai/docs/search/quickstart) for more details.

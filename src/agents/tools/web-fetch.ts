@@ -1,8 +1,9 @@
 import { Type } from "@sinclair/typebox";
 import type { OpenClawConfig } from "../../config/config.js";
-import { fetchWithSsrFGuard } from "../../infra/net/fetch-guard.js";
+import { normalizeResolvedSecretInputString } from "../../config/types.secrets.js";
 import { SsrFBlockedError } from "../../infra/net/ssrf.js";
 import { logDebug } from "../../logger.js";
+import type { RuntimeWebFetchFirecrawlMetadata } from "../../secrets/runtime-web-tools.js";
 import { wrapExternalContent, wrapWebContent } from "../../security/external-content.js";
 import { normalizeSecretInput } from "../../utils/normalize-secret-input.js";
 import { stringEnum } from "../schema/typebox.js";
@@ -15,6 +16,7 @@ import {
   truncateText,
   type ExtractMode,
 } from "./web-fetch-utils.js";
+import { fetchWithWebToolsNetworkGuard } from "./web-guarded-fetch.js";
 import {
   CacheEntry,
   DEFAULT_CACHE_TTL_MINUTES,
@@ -71,7 +73,7 @@ type WebFetchConfig = NonNullable<OpenClawConfig["tools"]>["web"] extends infer 
 type FirecrawlFetchConfig =
   | {
       enabled?: boolean;
-      apiKey?: string;
+      apiKey?: unknown;
       baseUrl?: string;
       onlyMainContent?: boolean;
       maxAgeMs?: number;
@@ -136,10 +138,14 @@ function resolveFirecrawlConfig(fetch?: WebFetchConfig): FirecrawlFetchConfig {
 }
 
 function resolveFirecrawlApiKey(firecrawl?: FirecrawlFetchConfig): string | undefined {
-  const fromConfig =
-    firecrawl && "apiKey" in firecrawl && typeof firecrawl.apiKey === "string"
-      ? normalizeSecretInput(firecrawl.apiKey)
-      : "";
+  const fromConfigRaw =
+    firecrawl && "apiKey" in firecrawl
+      ? normalizeResolvedSecretInputString({
+          value: firecrawl.apiKey,
+          path: "tools.web.fetch.firecrawl.apiKey",
+        })
+      : undefined;
+  const fromConfig = normalizeSecretInput(fromConfigRaw);
   const fromEnv = normalizeSecretInput(process.env.FIRECRAWL_API_KEY);
   return fromConfig || fromEnv || undefined;
 }
@@ -523,10 +529,10 @@ async function runWebFetch(params: WebFetchRuntimeParams): Promise<Record<string
   let release: (() => Promise<void>) | null = null;
   let finalUrl = params.url;
   try {
-    const result = await fetchWithSsrFGuard({
+    const result = await fetchWithWebToolsNetworkGuard({
       url: params.url,
       maxRedirects: params.maxRedirects,
-      timeoutMs: params.timeoutSeconds * 1000,
+      timeoutSeconds: params.timeoutSeconds,
       init: {
         headers: {
           Accept: "text/markdown, text/html;q=0.9, */*;q=0.1",
@@ -712,6 +718,7 @@ function resolveFirecrawlEndpoint(baseUrl: string): string {
 export function createWebFetchTool(options?: {
   config?: OpenClawConfig;
   sandboxed?: boolean;
+  runtimeFirecrawl?: RuntimeWebFetchFirecrawlMetadata;
 }): AnyAgentTool | null {
   const fetch = resolveFetchConfig(options?.config);
   if (!resolveFetchEnabled({ fetch, sandboxed: options?.sandboxed })) {
@@ -719,8 +726,14 @@ export function createWebFetchTool(options?: {
   }
   const readabilityEnabled = resolveFetchReadabilityEnabled(fetch);
   const firecrawl = resolveFirecrawlConfig(fetch);
-  const firecrawlApiKey = resolveFirecrawlApiKey(firecrawl);
-  const firecrawlEnabled = resolveFirecrawlEnabled({ firecrawl, apiKey: firecrawlApiKey });
+  const runtimeFirecrawlActive = options?.runtimeFirecrawl?.active;
+  const shouldResolveFirecrawlApiKey =
+    runtimeFirecrawlActive === undefined ? firecrawl?.enabled !== false : runtimeFirecrawlActive;
+  const firecrawlApiKey = shouldResolveFirecrawlApiKey
+    ? resolveFirecrawlApiKey(firecrawl)
+    : undefined;
+  const firecrawlEnabled =
+    runtimeFirecrawlActive ?? resolveFirecrawlEnabled({ firecrawl, apiKey: firecrawlApiKey });
   const firecrawlBaseUrl = resolveFirecrawlBaseUrl(firecrawl);
   const firecrawlOnlyMainContent = resolveFirecrawlOnlyMainContent(firecrawl);
   const firecrawlMaxAgeMs = resolveFirecrawlMaxAgeMsOrDefault(firecrawl);

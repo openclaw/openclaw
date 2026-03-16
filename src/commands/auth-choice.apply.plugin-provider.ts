@@ -7,7 +7,7 @@ import {
 import { upsertAuthProfile } from "../agents/auth-profiles.js";
 import { resolveDefaultAgentWorkspaceDir } from "../agents/workspace.js";
 import { enablePluginInConfig } from "../plugins/enable.js";
-import { resolvePluginProviders } from "../plugins/providers.js";
+import type { ProviderAuthMethod } from "../plugins/types.js";
 import type { ApplyAuthChoiceParams, ApplyAuthChoiceResult } from "./auth-choice.apply.js";
 import { isRemoteEnvironment } from "./oauth-env.js";
 import { createVpsAwareOAuthHandlers } from "./oauth-flow.js";
@@ -27,6 +27,130 @@ export type PluginProviderAuthChoiceOptions = {
   methodId?: string;
   label: string;
 };
+
+async function loadPluginProviderRuntime() {
+  return import("./auth-choice.apply.plugin-provider.runtime.js");
+}
+
+export async function runProviderPluginAuthMethod(params: {
+  config: ApplyAuthChoiceParams["config"];
+  runtime: ApplyAuthChoiceParams["runtime"];
+  prompter: ApplyAuthChoiceParams["prompter"];
+  method: ProviderAuthMethod;
+  agentDir?: string;
+  agentId?: string;
+  workspaceDir?: string;
+  emitNotes?: boolean;
+}): Promise<{ config: ApplyAuthChoiceParams["config"]; defaultModel?: string }> {
+  const agentId = params.agentId ?? resolveDefaultAgentId(params.config);
+  const defaultAgentId = resolveDefaultAgentId(params.config);
+  const agentDir =
+    params.agentDir ??
+    (agentId === defaultAgentId
+      ? resolveOpenClawAgentDir()
+      : resolveAgentDir(params.config, agentId));
+  const workspaceDir =
+    params.workspaceDir ??
+    resolveAgentWorkspaceDir(params.config, agentId) ??
+    resolveDefaultAgentWorkspaceDir();
+
+  const isRemote = isRemoteEnvironment();
+  const result = await params.method.run({
+    config: params.config,
+    agentDir,
+    workspaceDir,
+    prompter: params.prompter,
+    runtime: params.runtime,
+    isRemote,
+    openUrl: async (url) => {
+      await openUrl(url);
+    },
+    oauth: {
+      createVpsAwareHandlers: (opts) => createVpsAwareOAuthHandlers(opts),
+    },
+  });
+
+  let nextConfig = params.config;
+  if (result.configPatch) {
+    nextConfig = mergeConfigPatch(nextConfig, result.configPatch);
+  }
+
+  for (const profile of result.profiles) {
+    upsertAuthProfile({
+      profileId: profile.profileId,
+      credential: profile.credential,
+      agentDir,
+    });
+
+    nextConfig = applyAuthProfileConfig(nextConfig, {
+      profileId: profile.profileId,
+      provider: profile.credential.provider,
+      mode: profile.credential.type === "token" ? "token" : profile.credential.type,
+      ...("email" in profile.credential && profile.credential.email
+        ? { email: profile.credential.email }
+        : {}),
+    });
+  }
+
+  if (params.emitNotes !== false && result.notes && result.notes.length > 0) {
+    await params.prompter.note(result.notes.join("\n"), "Provider notes");
+  }
+
+  return {
+    config: nextConfig,
+    defaultModel: result.defaultModel,
+  };
+}
+
+export async function applyAuthChoiceLoadedPluginProvider(
+  params: ApplyAuthChoiceParams,
+): Promise<ApplyAuthChoiceResult | null> {
+  const agentId = params.agentId ?? resolveDefaultAgentId(params.config);
+  const workspaceDir =
+    resolveAgentWorkspaceDir(params.config, agentId) ?? resolveDefaultAgentWorkspaceDir();
+  const { resolvePluginProviders, resolveProviderPluginChoice, runProviderModelSelectedHook } =
+    await loadPluginProviderRuntime();
+  const providers = resolvePluginProviders({ config: params.config, workspaceDir });
+  const resolved = resolveProviderPluginChoice({
+    providers,
+    choice: params.authChoice,
+  });
+  if (!resolved) {
+    return null;
+  }
+
+  const applied = await runProviderPluginAuthMethod({
+    config: params.config,
+    runtime: params.runtime,
+    prompter: params.prompter,
+    method: resolved.method,
+    agentDir: params.agentDir,
+    agentId: params.agentId,
+    workspaceDir,
+  });
+
+  let agentModelOverride: string | undefined;
+  if (applied.defaultModel) {
+    if (params.setDefaultModel) {
+      const nextConfig = applyDefaultModel(applied.config, applied.defaultModel);
+      await runProviderModelSelectedHook({
+        config: nextConfig,
+        model: applied.defaultModel,
+        prompter: params.prompter,
+        agentDir: params.agentDir,
+        workspaceDir,
+      });
+      await params.prompter.note(
+        `Default model set to ${applied.defaultModel}`,
+        "Model configured",
+      );
+      return { config: nextConfig };
+    }
+    agentModelOverride = applied.defaultModel;
+  }
+
+  return { config: applied.config, agentModelOverride };
+}
 
 export async function applyAuthChoicePluginProvider(
   params: ApplyAuthChoiceParams,
@@ -54,6 +178,8 @@ export async function applyAuthChoicePluginProvider(
   const workspaceDir =
     resolveAgentWorkspaceDir(nextConfig, agentId) ?? resolveDefaultAgentWorkspaceDir();
 
+  const { resolvePluginProviders, runProviderModelSelectedHook } =
+    await loadPluginProviderRuntime();
   const providers = resolvePluginProviders({ config: nextConfig, workspaceDir });
   const provider = resolveProviderMatch(providers, options.providerId);
   if (!provider) {
@@ -70,59 +196,39 @@ export async function applyAuthChoicePluginProvider(
     return { config: nextConfig };
   }
 
-  const isRemote = isRemoteEnvironment();
-  const result = await method.run({
+  const applied = await runProviderPluginAuthMethod({
     config: nextConfig,
-    agentDir,
-    workspaceDir,
-    prompter: params.prompter,
     runtime: params.runtime,
-    isRemote,
-    openUrl: async (url) => {
-      await openUrl(url);
-    },
-    oauth: {
-      createVpsAwareHandlers: (opts) => createVpsAwareOAuthHandlers(opts),
-    },
+    prompter: params.prompter,
+    method,
+    agentDir,
+    agentId,
+    workspaceDir,
   });
-
-  if (result.configPatch) {
-    nextConfig = mergeConfigPatch(nextConfig, result.configPatch);
-  }
-
-  for (const profile of result.profiles) {
-    upsertAuthProfile({
-      profileId: profile.profileId,
-      credential: profile.credential,
-      agentDir,
-    });
-
-    nextConfig = applyAuthProfileConfig(nextConfig, {
-      profileId: profile.profileId,
-      provider: profile.credential.provider,
-      mode: profile.credential.type === "token" ? "token" : profile.credential.type,
-      ...("email" in profile.credential && profile.credential.email
-        ? { email: profile.credential.email }
-        : {}),
-    });
-  }
+  nextConfig = applied.config;
 
   let agentModelOverride: string | undefined;
-  if (result.defaultModel) {
+  if (applied.defaultModel) {
     if (params.setDefaultModel) {
-      nextConfig = applyDefaultModel(nextConfig, result.defaultModel);
-      await params.prompter.note(`Default model set to ${result.defaultModel}`, "Model configured");
-    } else if (params.agentId) {
-      agentModelOverride = result.defaultModel;
+      nextConfig = applyDefaultModel(nextConfig, applied.defaultModel);
+      await runProviderModelSelectedHook({
+        config: nextConfig,
+        model: applied.defaultModel,
+        prompter: params.prompter,
+        agentDir,
+        workspaceDir,
+      });
       await params.prompter.note(
-        `Default model set to ${result.defaultModel} for agent "${params.agentId}".`,
+        `Default model set to ${applied.defaultModel}`,
+        "Model configured",
+      );
+    } else if (params.agentId) {
+      agentModelOverride = applied.defaultModel;
+      await params.prompter.note(
+        `Default model set to ${applied.defaultModel} for agent "${params.agentId}".`,
         "Model configured",
       );
     }
-  }
-
-  if (result.notes && result.notes.length > 0) {
-    await params.prompter.note(result.notes.join("\n"), "Provider notes");
   }
 
   return { config: nextConfig, agentModelOverride };
