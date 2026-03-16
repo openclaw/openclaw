@@ -305,11 +305,11 @@ export class AcpNodeRuntime implements AcpRuntime {
     let nextSeq = 1;
     let cancelRequested = false;
     for (;;) {
-      const events = await this.gatewayRuntime.store.listRunEvents(runId);
-      for (const event of events) {
-        if (event.seq < nextSeq) {
-          continue;
-        }
+      const delivery = await this.gatewayRuntime.store.getRunDeliveryState({
+        runId,
+        afterSeq: nextSeq - 1,
+      });
+      for (const event of delivery.events) {
         nextSeq = event.seq + 1;
         yield event.event;
         await this.gatewayRuntime.store.recordCheckpoint({
@@ -319,26 +319,27 @@ export class AcpNodeRuntime implements AcpRuntime {
           cursorSeq: event.seq,
         });
       }
-      const run = await this.gatewayRuntime.store.getRun(runId);
-      if (run?.terminal) {
-        if (run.terminal.kind === "failed") {
+      if (delivery.run?.terminal) {
+        if (delivery.run.terminal.kind === "failed") {
           yield {
             type: "error",
-            message: run.terminal.errorMessage ?? "ACP node turn failed.",
-            ...(run.terminal.errorCode ? { code: run.terminal.errorCode } : {}),
+            message: delivery.run.terminal.errorMessage ?? "ACP node turn failed.",
+            ...(delivery.run.terminal.errorCode ? { code: delivery.run.terminal.errorCode } : {}),
           };
           return;
         }
         yield {
           type: "done",
-          ...(run.terminal.stopReason ? { stopReason: run.terminal.stopReason } : {}),
+          ...(delivery.run.terminal.stopReason
+            ? { stopReason: delivery.run.terminal.stopReason }
+            : {}),
         };
         return;
       }
-      if (run?.state === "cancelling" || run?.cancelRequestedAt) {
+      if (delivery.run?.state === "cancelling" || delivery.run?.cancelRequestedAt) {
         cancelRequested = true;
       }
-      if (startRecoveredFromUnknownError && run?.state !== "recovering") {
+      if (startRecoveredFromUnknownError && delivery.run?.state !== "recovering") {
         startRecoveredFromUnknownError = false;
       }
       if (input.signal?.aborted && !cancelRequested) {

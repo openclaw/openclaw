@@ -147,6 +147,22 @@ export class AcpGatewayStore {
     );
   }
 
+  async getRunDeliveryState(params: { runId: string; afterSeq?: number }): Promise<{
+    events: AcpGatewayRunEventRecord[];
+    run: AcpGatewayRunRecord | null;
+  }> {
+    return await this.withLock(async () => {
+      const store = await this.readStore();
+      const run = store.runs[params.runId] ?? null;
+      const afterSeq = params.afterSeq ?? 0;
+      const events = (store.events[params.runId] ?? []).filter((event) => event.seq > afterSeq);
+      return cloneValue({
+        events,
+        run,
+      });
+    });
+  }
+
   async getCheckpoint(checkpointKey: string): Promise<AcpGatewayCheckpointRecord | null> {
     return await this.withLock(async () =>
       cloneValue((await this.readStore()).checkpoints[checkpointKey] ?? null),

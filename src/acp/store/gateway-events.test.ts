@@ -883,6 +883,254 @@ describe("AcpGatewayNodeRuntime", () => {
     expect(commands.filter((command) => command === "acp.turn.start")).toHaveLength(1);
   });
 
+  it("keeps code-less unknown start failures recoverable", async () => {
+    const { runtime } = await createRuntime();
+    const sessionKey = "agent:main:acp:test-session";
+    const lateWorkerOutput: { emit?: () => void } = {};
+
+    const backend = new AcpNodeRuntime({
+      gatewayRuntime: runtime,
+      listNodes: () =>
+        [
+          {
+            nodeId: "node-1",
+            caps: ["acp:v1"],
+            commands: [
+              "acp.session.ensure",
+              "acp.session.load",
+              "acp.turn.start",
+              "acp.turn.cancel",
+              "acp.session.close",
+              "acp.session.status",
+            ],
+          },
+        ] as never,
+      invokeNode: async ({ command, params }) => {
+        if (command === "acp.session.ensure") {
+          const payload = params as Record<string, unknown>;
+          return {
+            ok: true,
+            payload: {
+              ok: true,
+              sessionKey: payload.sessionKey,
+              leaseId: payload.leaseId,
+              leaseEpoch: payload.leaseEpoch,
+              nodeRuntimeSessionId: "runtime-1",
+            },
+          };
+        }
+        if (command === "acp.turn.start") {
+          const payload = params as Record<string, unknown>;
+          const runId = String(payload.runId);
+          const leaseId = String(payload.leaseId);
+          const leaseEpoch = Number(payload.leaseEpoch);
+          lateWorkerOutput.emit = () => {
+            void runtime.ingestNodeEvent("node-1", {
+              event: "acp.worker.event",
+              payloadJSON: JSON.stringify({
+                nodeId: "node-1",
+                sessionKey,
+                runId,
+                leaseId,
+                leaseEpoch,
+                seq: 1,
+                event: {
+                  type: "status",
+                  text: "late status",
+                },
+              }),
+            });
+            void runtime.ingestNodeEvent("node-1", {
+              event: "acp.worker.terminal",
+              payloadJSON: JSON.stringify({
+                nodeId: "node-1",
+                sessionKey,
+                runId,
+                leaseId,
+                leaseEpoch,
+                terminalEventId: "term-late-no-code",
+                finalSeq: 1,
+                terminal: {
+                  kind: "completed",
+                  stopReason: "done",
+                },
+              }),
+            });
+          };
+          return {
+            ok: false,
+            error: {
+              message: "unknown start result",
+            },
+          };
+        }
+        throw new Error(`unexpected command ${command}`);
+      },
+    });
+
+    const handle = await backend.ensureSession({
+      sessionKey,
+      agent: "main",
+      mode: "persistent",
+    });
+
+    const turnPromise = collectEvents(
+      backend.runTurn({
+        handle,
+        text: "maybe started",
+        mode: "prompt",
+        requestId: "run-no-code",
+      }),
+    );
+
+    await vi.waitFor(async () => {
+      expect(await runtime.store.getRun("run-no-code")).toMatchObject({
+        state: "recovering",
+        recoveryReason: "start_unknown_transport",
+      });
+    });
+
+    lateWorkerOutput.emit?.();
+
+    await expect(turnPromise).resolves.toEqual([
+      {
+        type: "status",
+        text: "late status",
+      },
+      {
+        type: "done",
+        stopReason: "done",
+      },
+    ]);
+  });
+
+  it("does not drop a late same-lease event accepted between delivery polls and terminal completion", async () => {
+    const { runtime } = await createRuntime();
+    const sessionKey = "agent:main:acp:test-session";
+
+    const backend = new AcpNodeRuntime({
+      gatewayRuntime: runtime,
+      listNodes: () =>
+        [
+          {
+            nodeId: "node-1",
+            caps: ["acp:v1"],
+            commands: [
+              "acp.session.ensure",
+              "acp.session.load",
+              "acp.turn.start",
+              "acp.turn.cancel",
+              "acp.session.close",
+              "acp.session.status",
+            ],
+          },
+        ] as never,
+      invokeNode: async ({ command, params }) => {
+        if (command === "acp.session.ensure") {
+          const payload = params as Record<string, unknown>;
+          return {
+            ok: true,
+            payload: {
+              ok: true,
+              sessionKey: payload.sessionKey,
+              leaseId: payload.leaseId,
+              leaseEpoch: payload.leaseEpoch,
+              nodeRuntimeSessionId: "runtime-1",
+            },
+          };
+        }
+        if (command === "acp.turn.start") {
+          return {
+            ok: false,
+            error: {
+              code: "TIMEOUT",
+              message: "invoke timeout with unknown worker state",
+            },
+          };
+        }
+        throw new Error(`unexpected command ${command}`);
+      },
+    });
+
+    const handle = await backend.ensureSession({
+      sessionKey,
+      agent: "main",
+      mode: "persistent",
+    });
+
+    const acceptedRun = await runtime.store.getRun("run-race");
+    const lease = await runtime.store.getActiveLease(sessionKey);
+    let deliveryPolls = 0;
+    runtime.store.getRunDeliveryState = async () => {
+      deliveryPolls += 1;
+      if (deliveryPolls === 1) {
+        return {
+          events: [],
+          run: {
+            ...acceptedRun!,
+            state: "recovering" as const,
+          },
+        };
+      }
+      return {
+        events: [
+          {
+            eventId: "run-race:1",
+            runId: "run-race",
+            sessionKey,
+            seq: 1,
+            nodeId: "node-1",
+            leaseId: lease?.leaseId ?? "",
+            leaseEpoch: lease?.leaseEpoch ?? 0,
+            acceptedAt: Date.now(),
+            event: {
+              type: "text_delta",
+              stream: "output",
+              text: "late hello",
+            },
+          },
+        ],
+        run: {
+          ...acceptedRun!,
+          state: "completed" as const,
+          highestAcceptedSeq: 1,
+          eventCount: 1,
+          terminal: {
+            terminalEventId: "term-race",
+            finalSeq: 1,
+            kind: "completed",
+            stopReason: "done",
+            acceptedAt: Date.now(),
+            nodeId: "node-1",
+            leaseId: lease?.leaseId ?? "",
+            leaseEpoch: lease?.leaseEpoch ?? 0,
+          },
+        },
+      };
+    };
+
+    await expect(
+      collectEvents(
+        backend.runTurn({
+          handle,
+          text: "maybe started",
+          mode: "prompt",
+          requestId: "run-race",
+        }),
+      ),
+    ).resolves.toEqual([
+      {
+        type: "text_delta",
+        stream: "output",
+        text: "late hello",
+      },
+      {
+        type: "done",
+        stopReason: "done",
+      },
+    ]);
+  });
+
   it("waits for the cancelled terminal on active-turn cancel instead of surfacing an abort error", async () => {
     const { runtime } = await createRuntime();
     const sessionKey = "agent:main:acp:test-session";
