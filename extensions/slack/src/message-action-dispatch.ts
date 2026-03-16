@@ -187,6 +187,9 @@ export async function handleSlackMessageAction(params: {
     const channelId =
       readStringParam(actionParams, "channelId") ??
       readStringParam(actionParams, "to", { required: true });
+    if (!channelId) {
+      throw new Error("channelId required");
+    }
     return normalizeChannelId ? normalizeChannelId(channelId) : channelId;
   };
 
