@@ -256,6 +256,53 @@ describe("createFeishuClient HTTP timeout", () => {
   });
 });
 
+describe("createFeishuClient HTTP proxy handling", () => {
+  beforeEach(() => {
+    clearClientCache();
+  });
+
+  const getLastClientHttpInstance = () => {
+    const calls = (LarkClient as unknown as ReturnType<typeof vi.fn>).mock.calls;
+    const lastCall = calls[calls.length - 1]?.[0] as
+      | { httpInstance?: { get: (...args: unknown[]) => Promise<unknown> } }
+      | undefined;
+    return lastCall?.httpInstance;
+  };
+
+  it("does not inject proxy options when env is unset", async () => {
+    createFeishuClient({ appId: "app_proxy_1", appSecret: "secret_proxy_1" }); // pragma: allowlist secret
+
+    const httpInstance = getLastClientHttpInstance();
+    await httpInstance?.get("https://example.com/api");
+
+    const options = (mockBaseHttpInstance.get as ReturnType<typeof vi.fn>).mock.calls[0]?.[1] as
+      | { httpsAgent?: unknown; proxy?: unknown }
+      | undefined;
+    expect(options?.httpsAgent).toBeUndefined();
+    expect(options?.proxy).toBeUndefined();
+    expect(httpsProxyAgentCtorMock).not.toHaveBeenCalled();
+  });
+
+  it("injects httpsAgent and disables axios proxy when HTTPS_PROXY is set", async () => {
+    process.env.HTTPS_PROXY = "http://proxy.example:8080";
+
+    createFeishuClient({ appId: "app_proxy_2", appSecret: "secret_proxy_2" }); // pragma: allowlist secret
+
+    const httpInstance = getLastClientHttpInstance();
+    await httpInstance?.get("https://example.com/api");
+
+    expect(httpsProxyAgentCtorMock).toHaveBeenCalledTimes(1);
+    expect(httpsProxyAgentCtorMock).toHaveBeenCalledWith("http://proxy.example:8080");
+    expect(mockBaseHttpInstance.get).toHaveBeenCalledWith(
+      "https://example.com/api",
+      expect.objectContaining({
+        httpsAgent: { proxyUrl: "http://proxy.example:8080" },
+        proxy: false,
+      }),
+    );
+  });
+});
+
 describe("createFeishuWSClient proxy handling", () => {
   it("does not set a ws proxy agent when proxy env is absent", () => {
     createFeishuWSClient(baseAccount);
