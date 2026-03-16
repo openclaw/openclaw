@@ -23,7 +23,7 @@ const runGatewayLoop = vi.fn(async ({ start }: { start: () => Promise<unknown> }
 const gatewayLogMessages = vi.hoisted(() => [] as string[]);
 const configState = vi.hoisted(() => ({
   cfg: {} as Record<string, unknown>,
-  snapshot: { valid: true, exists: false } as Record<string, unknown>,
+  snapshot: { valid: true, exists: false, issues: [] } as Record<string, unknown>,
 }));
 const controlUiState = vi.hoisted(() => ({
   root: "/tmp/openclaw-control-ui" as string | null,
