@@ -229,7 +229,7 @@ export async function gatewayStatusCommand(
     });
   }
   for (const result of probed) {
-    if (result.authDiagnostics.length === 0) {
+    if (result.authDiagnostics.length === 0 || isProbeReachable(result.probe)) {
       continue;
     }
     for (const diagnostic of result.authDiagnostics) {
