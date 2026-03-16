@@ -6,6 +6,40 @@ vi.mock("../runtime.js", () => ({
   defaultRuntime: { log: vi.fn(), error: vi.fn() },
 }));
 
+vi.mock("../plugins/web-search-providers.js", () => {
+  const getScoped = (key: string) => (search?: Record<string, unknown>) =>
+    (search?.[key] as { apiKey?: unknown } | undefined)?.apiKey;
+  return {
+    resolvePluginWebSearchProviders: () => [
+      {
+        id: "brave",
+        envVars: ["BRAVE_API_KEY"],
+        getCredentialValue: (search?: Record<string, unknown>) => search?.apiKey,
+      },
+      {
+        id: "gemini",
+        envVars: ["GEMINI_API_KEY"],
+        getCredentialValue: getScoped("gemini"),
+      },
+      {
+        id: "grok",
+        envVars: ["XAI_API_KEY"],
+        getCredentialValue: getScoped("grok"),
+      },
+      {
+        id: "kimi",
+        envVars: ["KIMI_API_KEY", "MOONSHOT_API_KEY"],
+        getCredentialValue: getScoped("kimi"),
+      },
+      {
+        id: "perplexity",
+        envVars: ["PERPLEXITY_API_KEY", "OPENROUTER_API_KEY"],
+        getCredentialValue: getScoped("perplexity"),
+      },
+    ],
+  };
+});
+
 const { __testing } = await import("../agents/tools/web-search.js");
 const { resolveSearchProvider } = __testing;
 
