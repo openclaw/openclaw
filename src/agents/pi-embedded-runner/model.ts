@@ -515,6 +515,13 @@ function resolveConfiguredFallbackModel(params: {
         ? ["text", "image"]
         : ["text"];
 
+    const providerHeaders = sanitizeModelHeaders(providerConfig?.headers, {
+      stripSecretRefMarkers: true,
+    });
+    const modelHeaders = sanitizeModelHeaders(configuredOpenRouterModel?.headers, {
+      stripSecretRefMarkers: true,
+    });
+
     return normalizeResolvedModel({
       provider,
       cfg,
@@ -522,15 +529,18 @@ function resolveConfiguredFallbackModel(params: {
       model: {
         id: modelId,
         name: modelId,
-        api: "openai-completions",
+        api: configuredOpenRouterModel?.api ?? providerConfig?.api ?? "openai-completions",
         provider,
-        baseUrl: "https://openrouter.ai/api/v1",
+        baseUrl: providerConfig?.baseUrl ?? "https://openrouter.ai/api/v1",
         reasoning: configuredOpenRouterModel?.reasoning ?? false,
         input: resolvedInput,
         cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
         contextWindow: configuredOpenRouterModel?.contextWindow ?? DEFAULT_CONTEXT_TOKENS,
         // Align with OPENROUTER_DEFAULT_MAX_TOKENS in models-config.providers.ts
         maxTokens: configuredOpenRouterModel?.maxTokens ?? 8192,
+        ...(providerHeaders || modelHeaders
+          ? { headers: { ...providerHeaders, ...modelHeaders } }
+          : {}),
       } as Model<Api>,
       runtimeHooks,
     });
