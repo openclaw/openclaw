@@ -87,7 +87,7 @@ const botMentionRegexCache = new Map<string, RegExp>();
 function getBotMentionRegex(botId: string): RegExp {
   let regex = botMentionRegexCache.get(botId);
   if (!regex) {
-    regex = new RegExp(`<@!?${botId}>`);
+    regex = new RegExp(`<@!?${botId.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}>`);
     botMentionRegexCache.set(botId, regex);
   }
   return regex;
