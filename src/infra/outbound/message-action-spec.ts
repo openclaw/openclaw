@@ -60,20 +60,25 @@ export const MESSAGE_ACTION_TARGET_MODE: Record<ChannelMessageActionName, Messag
     "download-file": "none",
   };
 
-const ACTION_TARGET_ALIASES: Partial<Record<ChannelMessageActionName, string[]>> = {
-  read: ["messageId"],
-  unsend: ["messageId"],
-  edit: ["messageId"],
-  pin: ["messageId"],
-  unpin: ["messageId"],
-  "list-pins": ["chatId"],
-  "channel-info": ["chatId"],
-  react: ["chatGuid", "chatIdentifier", "chatId"],
-  renameGroup: ["chatGuid", "chatIdentifier", "chatId"],
-  setGroupIcon: ["chatGuid", "chatIdentifier", "chatId"],
-  addParticipant: ["chatGuid", "chatIdentifier", "chatId"],
-  removeParticipant: ["chatGuid", "chatIdentifier", "chatId"],
-  leaveGroup: ["chatGuid", "chatIdentifier", "chatId"],
+type ActionTargetAliasSpec = {
+  aliases: string[];
+  channels?: string[];
+};
+
+const ACTION_TARGET_ALIASES: Partial<Record<ChannelMessageActionName, ActionTargetAliasSpec>> = {
+  read: { aliases: ["messageId"], channels: ["feishu"] },
+  unsend: { aliases: ["messageId"] },
+  edit: { aliases: ["messageId"] },
+  pin: { aliases: ["messageId"], channels: ["feishu"] },
+  unpin: { aliases: ["messageId"], channels: ["feishu"] },
+  "list-pins": { aliases: ["chatId"], channels: ["feishu"] },
+  "channel-info": { aliases: ["chatId"], channels: ["feishu"] },
+  react: { aliases: ["chatGuid", "chatIdentifier", "chatId"] },
+  renameGroup: { aliases: ["chatGuid", "chatIdentifier", "chatId"] },
+  setGroupIcon: { aliases: ["chatGuid", "chatIdentifier", "chatId"] },
+  addParticipant: { aliases: ["chatGuid", "chatIdentifier", "chatId"] },
+  removeParticipant: { aliases: ["chatGuid", "chatIdentifier", "chatId"] },
+  leaveGroup: { aliases: ["chatGuid", "chatIdentifier", "chatId"] },
 };
 
 export function actionRequiresTarget(action: ChannelMessageActionName): boolean {
@@ -83,6 +88,7 @@ export function actionRequiresTarget(action: ChannelMessageActionName): boolean 
 export function actionHasTarget(
   action: ChannelMessageActionName,
   params: Record<string, unknown>,
+  options?: { channel?: string },
 ): boolean {
   const to = typeof params.to === "string" ? params.to.trim() : "";
   if (to) {
@@ -92,11 +98,17 @@ export function actionHasTarget(
   if (channelId) {
     return true;
   }
-  const aliases = ACTION_TARGET_ALIASES[action];
-  if (!aliases) {
+  const spec = ACTION_TARGET_ALIASES[action];
+  if (!spec) {
     return false;
   }
-  return aliases.some((alias) => {
+  if (
+    spec.channels &&
+    (!options?.channel || !spec.channels.includes(options.channel.trim().toLowerCase()))
+  ) {
+    return false;
+  }
+  return spec.aliases.some((alias) => {
     const value = params[alias];
     if (typeof value === "string") {
       return value.trim().length > 0;
