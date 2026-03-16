@@ -92,6 +92,22 @@ describe("i18n", () => {
     expect(fresh.t("common.health")).toBe("健康状况");
   });
 
+  it("skips node localStorage accessors that warn without a storage file", async () => {
+    vi.resetModules();
+    vi.unstubAllGlobals();
+    vi.stubGlobal("navigator", { language: "en-US" } as Navigator);
+    const warningSpy = vi.spyOn(process, "emitWarning");
+
+    const fresh = await import("../lib/translate.ts");
+
+    expect(fresh.i18n.getLocale()).toBe("en");
+    expect(warningSpy).not.toHaveBeenCalledWith(
+      "`--localstorage-file` was provided without a valid path",
+      expect.anything(),
+      expect.anything(),
+    );
+  });
+
   it("keeps the version label available in shipped locales", () => {
     expect((pt_BR.common as { version?: string }).version).toBeTruthy();
     expect((zh_CN.common as { version?: string }).version).toBeTruthy();
