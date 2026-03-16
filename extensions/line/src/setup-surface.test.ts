@@ -59,6 +59,11 @@ describe("line setup wizard", () => {
   });
 
   it("re-enables and refreshes accounts.default when rerunning default account setup", () => {
+    const input = {
+      channelAccessToken: "fresh-token",
+      channelSecret: "fresh-secret",
+    };
+
     const next = lineSetupAdapter.applyAccountConfig({
       cfg: {
         channels: {
@@ -75,10 +80,7 @@ describe("line setup wizard", () => {
         },
       } as OpenClawConfig,
       accountId: "default",
-      input: {
-        channelAccessToken: "fresh-token",
-        channelSecret: "fresh-secret",
-      },
+      input,
     });
 
     expect(next.channels?.line?.enabled).toBe(true);
