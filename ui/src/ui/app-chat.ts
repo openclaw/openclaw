@@ -92,9 +92,36 @@ function normalizeMissingChatSessionSelection(
   return !nextSessionKey || nextSessionKey === currentSessionKey ? null : nextSessionKey;
 }
 
+async function loadRefreshChatSessionsResult(host: ChatHost): Promise<SessionsListResult | null> {
+  if (!host.client || !host.connected) {
+    return null;
+  }
+  const appHost = host as unknown as OpenClawApp;
+  if (appHost.sessionsLoading) {
+    try {
+      return (
+        (await host.client.request<SessionsListResult | undefined>("sessions.list", {
+          includeGlobal: true,
+          includeUnknown: true,
+        })) ?? null
+      );
+    } catch {
+      return null;
+    }
+  }
+  await loadSessions(appHost, {
+    activeMinutes: 0,
+    limit: 0,
+    includeGlobal: true,
+    includeUnknown: true,
+  });
+  return appHost.sessionsError ? null : (appHost.sessionsResult ?? null);
+}
+
 async function switchMissingChatSession(host: ChatHost, nextSessionKey: string) {
   host.sessionKey = nextSessionKey;
   host.chatMessage = "";
+  host.chatAttachments = [];
   host.chatStream = null;
   host.chatRunId = null;
   host.chatQueue = [];
@@ -434,21 +461,13 @@ function injectCommandResult(host: ChatHost, content: string) {
 }
 
 export async function refreshChat(host: ChatHost, opts?: { scheduleScroll?: boolean }) {
-  await Promise.all([
+  const [, sessionsResult] = await Promise.all([
     loadChatHistory(host as unknown as OpenClawApp),
-    loadSessions(host as unknown as OpenClawApp, {
-      activeMinutes: 0,
-      limit: 0,
-      includeGlobal: true,
-      includeUnknown: true,
-    }),
+    loadRefreshChatSessionsResult(host),
     refreshChatAvatar(host),
     refreshChatModels(host),
   ]);
-  const nextSessionKey = normalizeMissingChatSessionSelection(
-    host,
-    (host as unknown as OpenClawApp).sessionsResult ?? null,
-  );
+  const nextSessionKey = normalizeMissingChatSessionSelection(host, sessionsResult);
   if (nextSessionKey) {
     await switchMissingChatSession(host, nextSessionKey);
   }
