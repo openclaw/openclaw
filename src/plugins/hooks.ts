@@ -27,6 +27,8 @@ import type {
   PluginHookBeforeResetEvent,
   PluginHookBeforeToolCallEvent,
   PluginHookBeforeToolCallResult,
+  PluginHookBeforeToolSurfaceEvent,
+  PluginHookBeforeToolSurfaceResult,
   PluginHookGatewayContext,
   PluginHookGatewayStartEvent,
   PluginHookGatewayStopEvent,
@@ -81,6 +83,8 @@ export type {
   PluginHookToolContext,
   PluginHookBeforeToolCallEvent,
   PluginHookBeforeToolCallResult,
+  PluginHookBeforeToolSurfaceEvent,
+  PluginHookBeforeToolSurfaceResult,
   PluginHookAfterToolCallEvent,
   PluginHookToolResultPersistContext,
   PluginHookToolResultPersistEvent,
@@ -659,6 +663,30 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
     return runVoidHook("after_tool_call", event, ctx);
   }
 
+  const mergeBeforeToolSurface = (
+    acc: PluginHookBeforeToolSurfaceResult | undefined,
+    next: PluginHookBeforeToolSurfaceResult,
+  ): PluginHookBeforeToolSurfaceResult => ({
+    tools: next.tools ?? acc?.tools,
+  });
+
+  /**
+   * Run before_tool_surface hook.
+   * Allows plugins to filter or replace the tools[] array before it's sent to the LLM.
+   * Runs sequentially in priority order.
+   */
+  async function runBeforeToolSurface(
+    event: PluginHookBeforeToolSurfaceEvent,
+    ctx: PluginHookAgentContext,
+  ): Promise<PluginHookBeforeToolSurfaceResult | undefined> {
+    return runModifyingHook<"before_tool_surface", PluginHookBeforeToolSurfaceResult>(
+      "before_tool_surface",
+      event,
+      ctx,
+      mergeBeforeToolSurface,
+    );
+  }
+
   /**
    * Run tool_result_persist hook.
    *
@@ -940,6 +968,7 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
     // Tool hooks
     runBeforeToolCall,
     runAfterToolCall,
+    runBeforeToolSurface,
     runToolResultPersist,
     // Message write hooks
     runBeforeMessageWrite,
