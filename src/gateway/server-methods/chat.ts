@@ -238,6 +238,20 @@ function resolveChatSendOriginatingRoute(params: {
   };
 }
 
+/**
+ * Filter out internal delivery-mirror transcript entries that should never
+ * appear as user-visible assistant messages (provider=openclaw, model=delivery-mirror).
+ */
+function filterDeliveryMirrorMessages(messages: unknown[]): unknown[] {
+  return messages.filter((msg) => {
+    if (!msg || typeof msg !== "object") {
+      return true;
+    }
+    const record = msg as Record<string, unknown>;
+    return !(record.provider === "openclaw" && record.model === "delivery-mirror");
+  });
+}
+
 function stripDisallowedChatControlChars(message: string): string {
   let output = "";
   for (const char of message) {
@@ -984,7 +998,8 @@ export const chatHandlers: GatewayRequestHandlers = {
     const max = Math.min(hardMax, requested);
     const sliced = rawMessages.length > max ? rawMessages.slice(-max) : rawMessages;
     const sanitized = stripEnvelopeFromMessages(sliced);
-    const normalized = sanitizeChatHistoryMessages(sanitized);
+    const withoutMirrors = filterDeliveryMirrorMessages(sanitized);
+    const normalized = sanitizeChatHistoryMessages(withoutMirrors);
     const maxHistoryBytes = getMaxChatHistoryMessagesBytes();
     const perMessageHardCap = Math.min(CHAT_HISTORY_MAX_SINGLE_MESSAGE_BYTES, maxHistoryBytes);
     const replaced = replaceOversizedChatHistoryMessages({

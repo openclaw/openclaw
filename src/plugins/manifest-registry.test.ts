@@ -136,7 +136,7 @@ afterEach(() => {
 });
 
 describe("loadPluginManifestRegistry", () => {
-  it("emits duplicate warning for truly distinct plugins with same id", () => {
+  it("suppresses duplicate warning when origins differ and prefers higher-precedence copy", () => {
     const dirA = makeTempDir();
     const dirB = makeTempDir();
     const manifest = { id: "test-plugin", configSchema: { type: "object" } };
@@ -148,6 +148,33 @@ describe("loadPluginManifestRegistry", () => {
         idHint: "test-plugin",
         rootDir: dirA,
         origin: "bundled",
+      }),
+      createPluginCandidate({
+        idHint: "test-plugin",
+        rootDir: dirB,
+        origin: "global",
+      }),
+    ];
+
+    const registry = loadRegistry(candidates);
+    // Different origins: higher-precedence (global) wins, no warning.
+    expect(countDuplicateWarnings(registry)).toBe(0);
+    expect(registry.plugins.length).toBe(1);
+    expect(registry.plugins[0]?.origin).toBe("global");
+  });
+
+  it("emits duplicate warning for truly distinct plugins with same id and same origin", () => {
+    const dirA = makeTempDir();
+    const dirB = makeTempDir();
+    const manifest = { id: "test-plugin", configSchema: { type: "object" } };
+    writeManifest(dirA, manifest);
+    writeManifest(dirB, manifest);
+
+    const candidates: PluginCandidate[] = [
+      createPluginCandidate({
+        idHint: "test-plugin",
+        rootDir: dirA,
+        origin: "global",
       }),
       createPluginCandidate({
         idHint: "test-plugin",

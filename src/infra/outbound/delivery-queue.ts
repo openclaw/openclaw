@@ -429,6 +429,8 @@ const PERMANENT_ERROR_PATTERNS: readonly RegExp[] = [
   /recipient is not a valid/i,
   /outbound not configured for channel/i,
   /ambiguous discord recipient/i,
+  // Discord 10003: target channel does not exist (e.g. user ID used as channel ID).
+  /unknown channel/i,
 ];
 
 export function isPermanentDeliveryError(error: string): boolean {
