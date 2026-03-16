@@ -4,6 +4,7 @@ import {
   resolveApiKeyForProvider as resolveApiKeyForProviderRaw,
 } from "../../agents/model-auth.js";
 import { resolveStateDir } from "../../config/paths.js";
+import { deliverOutboundPayloads } from "../../infra/outbound/deliver-runtime.js";
 import { transcribeAudioFile } from "../../media-understanding/transcribe-audio.js";
 import { textToSpeechTelephony } from "../../tts/tts.js";
 import { createRuntimeChannel } from "./runtime-channel.js";
@@ -54,6 +55,7 @@ export function createPluginRuntime(_options: CreatePluginRuntimeOptions = {}): 
     version: resolveVersion(),
     config: createRuntimeConfig(),
     subagent: _options.subagent ?? createUnavailableSubagentRuntime(),
+    outbound: { deliverOutboundPayloads },
     system: createRuntimeSystem(),
     media: createRuntimeMedia(),
     tts: { textToSpeechTelephony },

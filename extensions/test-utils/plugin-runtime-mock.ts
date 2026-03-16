@@ -258,6 +258,9 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
       resolveApiKeyForProvider:
         vi.fn() as unknown as PluginRuntime["modelAuth"]["resolveApiKeyForProvider"],
     },
+    outbound: {
+      deliverOutboundPayloads: vi.fn(async () => []),
+    },
     subagent: {
       run: vi.fn(),
       waitForRun: vi.fn(),

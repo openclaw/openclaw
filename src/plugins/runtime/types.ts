@@ -59,5 +59,9 @@ export type PluginRuntime = PluginRuntimeCore & {
     getSession: (params: SubagentGetSessionParams) => Promise<SubagentGetSessionResult>;
     deleteSession: (params: SubagentDeleteSessionParams) => Promise<void>;
   };
+  outbound: {
+    /** Send payloads through the standard outbound delivery pipeline (chunking, hooks, queue). */
+    deliverOutboundPayloads: typeof import("../../infra/outbound/deliver.js").deliverOutboundPayloads;
+  };
   channel: PluginRuntimeChannel;
 };
