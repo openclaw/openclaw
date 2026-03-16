@@ -348,7 +348,9 @@ afterEach(() => {
 
 describe("bundle plugins", () => {
   it("reports Codex bundles as loaded bundle plugins without importing runtime code", () => {
+    useNoBundledPlugins();
     const workspaceDir = makeTempDir();
+    const stateDir = makeTempDir();
     const bundleRoot = path.join(workspaceDir, ".openclaw", "extensions", "sample-bundle");
     mkdirSafe(path.join(bundleRoot, ".codex-plugin"));
     mkdirSafe(path.join(bundleRoot, "skills"));
@@ -366,19 +368,22 @@ describe("bundle plugins", () => {
       "---\ndescription: fixture\n---\n",
     );
 
-    const registry = loadOpenClawPlugins({
-      workspaceDir,
-      config: {
-        plugins: {
-          entries: {
-            "sample-bundle": {
-              enabled: true,
+    const registry = withEnv({ OPENCLAW_STATE_DIR: stateDir }, () =>
+      loadOpenClawPlugins({
+        workspaceDir,
+        onlyPluginIds: ["sample-bundle"],
+        config: {
+          plugins: {
+            entries: {
+              "sample-bundle": {
+                enabled: true,
+              },
             },
           },
         },
-      },
-      cache: false,
-    });
+        cache: false,
+      }),
+    );
 
     const plugin = registry.plugins.find((entry) => entry.id === "sample-bundle");
     expect(plugin?.status).toBe("loaded");
