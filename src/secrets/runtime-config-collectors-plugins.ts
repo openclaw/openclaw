@@ -57,6 +57,22 @@ export function collectPluginConfigAssignments(params: {
       continue;
     }
 
+    // When no loadable-plugin set is available (e.g. secrets apply), treat
+    // entries that are not explicitly enabled as inactive so stale/workspace
+    // plugin config does not cause resolution failures.
+    const explicitlyEnabled = isRecord(entry) && entry.enabled === true;
+    if (!params.loadablePluginIds && !explicitlyEnabled) {
+      collectMcpServerEnvAssignments({
+        pluginId,
+        pluginConfig,
+        active: false,
+        inactiveReason: "plugin not explicitly enabled (no loadable-plugin set available).",
+        defaults: params.defaults,
+        context: params.context,
+      });
+      continue;
+    }
+
     const enableState = resolveEnableState(pluginId, "config", normalizedConfig);
     collectMcpServerEnvAssignments({
       pluginId,
