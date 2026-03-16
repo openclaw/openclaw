@@ -28,6 +28,7 @@ import { checkUpdateStatus, formatGitInstallLabel } from "../infra/update-check.
 import { runExec } from "../process/exec.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { VERSION } from "../version.js";
+import { isProbeReachable } from "./gateway-status/helpers.js";
 import { resolveControlUiLinks } from "./onboard-helpers.js";
 import { getAgentLocalStatuses } from "./status-all/agents.js";
 import { buildChannelsTable } from "./status-all/channels.js";
@@ -134,7 +135,7 @@ export async function statusAllCommand(
       auth: probeAuth,
       timeoutMs: Math.min(5000, opts?.timeoutMs ?? 10_000),
     }).catch(() => null);
-    const gatewayReachable = gatewayProbe?.ok === true;
+    const gatewayReachable = gatewayProbe ? isProbeReachable(gatewayProbe) : false;
     const gatewaySelf = pickGatewaySelfPresence(gatewayProbe?.presence ?? null);
     progress.tick();
 
