@@ -229,7 +229,7 @@ export {
 export {
   promptSingleChannelSecretInput,
   type SingleChannelSecretInputPromptResult,
-} from "../channels/plugins/onboarding/helpers.js";
+} from "../channels/plugins/setup-flow-helpers.js";
 export { buildOauthProviderAuthResult } from "./provider-auth-result.js";
 export { formatResolvedUnresolvedNote } from "./resolution-notes.js";
 export { buildChannelSendResult } from "./channel-send-result.js";

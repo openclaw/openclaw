@@ -1,7 +1,7 @@
 import {
   patchChannelConfigForAccount,
-  splitOnboardingEntries,
-} from "../../../src/channels/plugins/onboarding/helpers.js";
+  splitSetupEntries,
+} from "../../../src/channels/plugins/setup-flow-helpers.js";
 import {
   applyAccountNameToChannelSection,
   migrateBaseNameToDefaultAccount,
@@ -73,7 +73,7 @@ export async function promptTelegramAllowFromForAccount(params: {
   cfg: OpenClawConfig;
   prompter: Parameters<
     NonNullable<
-      import("../../../src/channels/plugins/onboarding-types.js").ChannelOnboardingDmPolicy["promptAllowFrom"]
+      import("../../../src/channels/plugins/setup-flow-types.js").ChannelSetupDmPolicy["promptAllowFrom"]
     >
   >[0]["prompter"];
   accountId?: string;
@@ -88,7 +88,7 @@ export async function promptTelegramAllowFromForAccount(params: {
     );
   }
   const { promptResolvedAllowFrom } =
-    await import("../../../src/channels/plugins/onboarding/helpers.js");
+    await import("../../../src/channels/plugins/setup-flow-helpers.js");
   const unique = await promptResolvedAllowFrom({
     prompter: params.prompter,
     existing: resolved.config.allowFrom ?? [],
@@ -96,7 +96,7 @@ export async function promptTelegramAllowFromForAccount(params: {
     message: "Telegram allowFrom (numeric sender id; @username resolves to id)",
     placeholder: "@username",
     label: "Telegram allowlist",
-    parseInputs: splitOnboardingEntries,
+    parseInputs: splitSetupEntries,
     parseId: parseTelegramAllowFromId,
     invalidWithoutTokenNote:
       "Telegram token missing; use numeric sender ids (usernames require a bot token).",

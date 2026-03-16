@@ -1,11 +1,11 @@
-import type { ChannelOnboardingDmPolicy } from "../../../src/channels/plugins/onboarding-types.js";
 import {
   mergeAllowFromEntries,
-  parseOnboardingEntriesWithParser,
+  parseSetupEntriesWithParser,
   setTopLevelChannelAllowFrom,
   setTopLevelChannelDmPolicyWithAllowFrom,
-  splitOnboardingEntries,
-} from "../../../src/channels/plugins/onboarding/helpers.js";
+  splitSetupEntries,
+} from "../../../src/channels/plugins/setup-flow-helpers.js";
+import type { ChannelSetupDmPolicy } from "../../../src/channels/plugins/setup-flow-types.js";
 import type { ChannelSetupWizard } from "../../../src/channels/plugins/setup-wizard.js";
 import type { ChannelSetupAdapter } from "../../../src/channels/plugins/types.adapters.js";
 import type { OpenClawConfig } from "../../../src/config/config.js";
@@ -76,7 +76,7 @@ function setNostrAllowFrom(cfg: OpenClawConfig, allowFrom: string[]): OpenClawCo
 }
 
 function parseRelayUrls(raw: string): { relays: string[]; error?: string } {
-  const entries = splitOnboardingEntries(raw);
+  const entries = splitSetupEntries(raw);
   const relays: string[] = [];
   for (const entry of entries) {
     try {
@@ -93,7 +93,7 @@ function parseRelayUrls(raw: string): { relays: string[]; error?: string } {
 }
 
 function parseNostrAllowFrom(raw: string): { entries: string[]; error?: string } {
-  return parseOnboardingEntriesWithParser(raw, (entry) => {
+  return parseSetupEntriesWithParser(raw, (entry) => {
     const cleaned = entry.replace(/^nostr:/i, "").trim();
     try {
       return { value: normalizePubkey(cleaned) };
@@ -125,7 +125,7 @@ async function promptNostrAllowFrom(params: {
   return setNostrAllowFrom(params.cfg, mergeAllowFromEntries(existing, parsed.entries));
 }
 
-const nostrDmPolicy: ChannelOnboardingDmPolicy = {
+const nostrDmPolicy: ChannelSetupDmPolicy = {
   label: "Nostr",
   channel,
   policyKey: "channels.nostr.dmPolicy",
