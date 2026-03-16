@@ -47,6 +47,18 @@ export function inferAuthChoiceFromFlags(opts: OnboardOptions): AuthChoiceInfere
     });
   }
 
+  if (
+    hasStringValue(opts.anthropicAzureApiKey) ||
+    hasStringValue(opts.anthropicAzureBaseUrl) ||
+    hasStringValue(opts.anthropicAzureModelId)
+  ) {
+    matches.push({
+      optionKey: "anthropicAzureApiKey",
+      authChoice: "anthropic-azure-api-key",
+      label: "--anthropic-azure-...",
+    });
+  }
+
   return {
     choice: matches[0]?.authChoice,
     matches,

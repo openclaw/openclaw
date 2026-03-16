@@ -428,6 +428,33 @@ describe("onboard (non-interactive): provider auth", () => {
     });
   });
 
+  it("configures Azure Claude via non-interactive flags", async () => {
+    await withOnboardEnv("openclaw-onboard-azure-claude-", async (env) => {
+      const cfg = await runOnboardingAndReadConfig(env, {
+        authChoice: "anthropic-azure-api-key",
+        anthropicAzureBaseUrl: "fabric-hub",
+        anthropicAzureApiKey: "azk-test", // pragma: allowlist secret
+        anthropicAzureModelId: "claude-sonnet-4-6",
+      });
+
+      expect(cfg.auth?.profiles?.["anthropic-azure:default"]?.provider).toBe("anthropic-azure");
+      expect(cfg.models?.providers?.["anthropic-azure"]?.baseUrl).toBe(
+        "https://fabric-hub.services.ai.azure.com/anthropic",
+      );
+      expect(cfg.agents?.defaults?.model?.primary).toBe("anthropic-azure/claude-sonnet-4-6");
+      await expectApiKeyProfile({
+        profileId: "anthropic-azure:default",
+        provider: "anthropic-azure",
+        key: "azk-test",
+        metadata: {
+          baseUrl: "https://fabric-hub.services.ai.azure.com/anthropic",
+          modelId: "claude-sonnet-4-6",
+          resource: "fabric-hub",
+        },
+      });
+    });
+  });
+
   it("stores OpenAI API key and sets OpenAI default model", async () => {
     await withOnboardEnv("openclaw-onboard-openai-", async (env) => {
       const cfg = await runOnboardingAndReadConfig(env, {
@@ -488,9 +515,18 @@ describe("onboard (non-interactive): provider auth", () => {
       flagName: "--byteplus-api-key",
       envVar: "BYTEPLUS_API_KEY",
     },
+    {
+      name: "anthropic-azure",
+      prefix: "openclaw-onboard-ref-flag-azure-",
+      authChoice: "anthropic-azure-api-key",
+      optionKey: "anthropicAzureApiKey",
+      flagName: "--anthropic-azure-api-key",
+      envVar: "ANTHROPIC_FOUNDRY_API_KEY",
+      extraOptions: { anthropicAzureBaseUrl: "fabric-hub" },
+    },
   ])(
     "fails fast for $name when --secret-input-mode ref uses explicit key without env and does not leak the key",
-    async ({ prefix, authChoice, optionKey, flagName, envVar }) => {
+    async ({ prefix, authChoice, optionKey, flagName, envVar, extraOptions }) => {
       await withOnboardEnv(prefix, async ({ runtime }) => {
         const providedSecret = `${envVar.toLowerCase()}-should-not-leak`; // pragma: allowlist secret
         const options: Record<string, unknown> = {
@@ -498,6 +534,7 @@ describe("onboard (non-interactive): provider auth", () => {
           secretInputMode: "ref", // pragma: allowlist secret
           [optionKey]: providedSecret,
           skipSkills: true,
+          ...extraOptions,
         };
         const envOverrides: Record<string, string | undefined> = {
           [envVar]: undefined,
