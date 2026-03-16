@@ -9,6 +9,7 @@ const mocks = vi.hoisted(() => ({
   getAgentLocalStatuses: vi.fn(),
   getStatusSummary: vi.fn(),
   getMemorySearchManager: vi.fn(),
+  getTailnetHostname: vi.fn(),
   buildGatewayConnectionDetails: vi.fn(),
   probeGateway: vi.fn(),
   resolveGatewayProbeAuthResolution: vi.fn(),
@@ -53,7 +54,7 @@ vi.mock("../infra/os-summary.js", () => ({
 }));
 
 vi.mock("./status.scan.deps.runtime.js", () => ({
-  getTailnetHostname: vi.fn(),
+  getTailnetHostname: mocks.getTailnetHostname,
   getMemorySearchManager: mocks.getMemorySearchManager,
 }));
 
@@ -456,5 +457,66 @@ describe("scanStatus", () => {
     expect(mocks.ensurePluginRegistryLoaded).toHaveBeenCalledWith({
       scope: "configured-channels",
     });
+  });
+
+  it("falls back when the tailscale probe never settles", async () => {
+    vi.useFakeTimers();
+    mocks.getTailnetHostname.mockImplementation(() => new Promise(() => {}));
+    mocks.readBestEffortConfig.mockResolvedValue({
+      session: {},
+      plugins: { enabled: false },
+      gateway: { tailscale: { mode: "serve" } },
+    });
+    mocks.resolveCommandSecretRefsViaGateway.mockResolvedValue({
+      resolvedConfig: {
+        session: {},
+        plugins: { enabled: false },
+        gateway: { tailscale: { mode: "serve" } },
+      },
+      diagnostics: [],
+    });
+    mocks.getUpdateCheckResult.mockResolvedValue({
+      installKind: "git",
+      git: null,
+      registry: null,
+    });
+    mocks.getAgentLocalStatuses.mockResolvedValue({
+      defaultId: "main",
+      agents: [],
+    });
+    mocks.getStatusSummary.mockResolvedValue({
+      linkChannel: undefined,
+      sessions: { count: 0, paths: [], defaults: {}, recent: [] },
+    });
+    mocks.buildGatewayConnectionDetails.mockReturnValue({
+      url: "ws://127.0.0.1:18789",
+      urlSource: "default",
+    });
+    mocks.resolveGatewayProbeAuthResolution.mockReturnValue({
+      auth: {},
+      warning: undefined,
+    });
+    mocks.probeGateway.mockResolvedValue({
+      ok: false,
+      url: "ws://127.0.0.1:18789",
+      connectLatencyMs: null,
+      error: "timeout",
+      close: null,
+      health: null,
+      status: null,
+      presence: null,
+      configSnapshot: null,
+    });
+
+    try {
+      const scanPromise = scanStatus({ json: true }, {} as never);
+      await vi.advanceTimersByTimeAsync(1_500);
+      const result = await scanPromise;
+
+      expect(result.tailscaleDns).toBeNull();
+      expect(result.tailscaleHttpsUrl).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
