@@ -109,6 +109,7 @@ export type {
   PluginInteractiveTelegramHandlerContext,
   PluginLogger,
   ProviderAuthContext,
+  ProviderAuthDoctorHintContext,
   ProviderAuthResult,
   ProviderAugmentModelCatalogContext,
   ProviderBuiltInModelSuppressionContext,

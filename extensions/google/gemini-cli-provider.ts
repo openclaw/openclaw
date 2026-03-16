@@ -30,6 +30,20 @@ function parseGoogleUsageToken(apiKey: string): string {
   return apiKey;
 }
 
+function formatGoogleOauthApiKey(cred: {
+  type?: string;
+  access?: string;
+  projectId?: string;
+}): string {
+  if (cred.type !== "oauth" || typeof cred.access !== "string" || !cred.access.trim()) {
+    return "";
+  }
+  return JSON.stringify({
+    token: cred.access,
+    projectId: cred.projectId,
+  });
+}
+
 async function fetchGeminiCliUsage(ctx: ProviderFetchUsageSnapshotContext) {
   return await fetchGeminiUsage(ctx.token, ctx.timeoutMs, ctx.fetchFn, PROVIDER_ID);
 }
@@ -48,6 +62,24 @@ export function registerGoogleGeminiCliProvider(api: OpenClawPluginApi) {
         hint: "PKCE + localhost callback",
         kind: "oauth",
         run: async (ctx: ProviderAuthContext) => {
+          await ctx.prompter.note(
+            [
+              "This is an unofficial integration and is not endorsed by Google.",
+              "Some users have reported account restrictions or suspensions after using third-party Gemini CLI and Antigravity OAuth clients.",
+              "Proceed only if you understand and accept this risk.",
+            ].join("\n"),
+            "Google Gemini CLI caution",
+          );
+
+          const proceed = await ctx.prompter.confirm({
+            message: "Continue with Google Gemini CLI OAuth?",
+            initialValue: false,
+          });
+          if (!proceed) {
+            await ctx.prompter.note("Skipped Google Gemini CLI OAuth setup.", "Setup skipped");
+            return { profiles: [] };
+          }
+
           const spin = ctx.prompter.progress("Starting Gemini CLI OAuth…");
           try {
             const result = await loginGeminiCliOAuth({
@@ -81,9 +113,18 @@ export function registerGoogleGeminiCliProvider(api: OpenClawPluginApi) {
         },
       },
     ],
+    wizard: {
+      setup: {
+        choiceId: "google-gemini-cli",
+        choiceLabel: "Gemini CLI OAuth",
+        choiceHint: "Google OAuth with project-aware token payload",
+        methodId: "oauth",
+      },
+    },
     resolveDynamicModel: (ctx) =>
       resolveGoogle31ForwardCompatModel({ providerId: PROVIDER_ID, ctx }),
     isModernModelRef: ({ modelId }) => isModernGoogleModel(modelId),
+    formatApiKey: (cred) => formatGoogleOauthApiKey(cred),
     resolveUsageAuth: async (ctx) => {
       const auth = await ctx.resolveOAuthToken();
       if (!auth) {

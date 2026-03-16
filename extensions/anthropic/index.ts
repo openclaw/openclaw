@@ -5,8 +5,11 @@ import {
   type ProviderResolveDynamicModelContext,
   type ProviderRuntimeModel,
 } from "openclaw/plugin-sdk/core";
-import { upsertAuthProfile } from "../../src/agents/auth-profiles.js";
+import { listProfilesForProvider, upsertAuthProfile } from "../../src/agents/auth-profiles.js";
+import { suggestOAuthProfileIdForLegacyDefault } from "../../src/agents/auth-profiles/repair.js";
+import type { AuthProfileStore } from "../../src/agents/auth-profiles/types.js";
 import { normalizeModelCompat } from "../../src/agents/model-compat.js";
+import { formatCliCommand } from "../../src/cli/command-format.js";
 import { parseDurationMs } from "../../src/cli/parse-duration.js";
 import {
   normalizeSecretInputModeInput,
@@ -118,6 +121,41 @@ function resolveAnthropicForwardCompatModel(
 function matchesAnthropicModernModel(modelId: string): boolean {
   const lower = modelId.trim().toLowerCase();
   return ANTHROPIC_MODERN_MODEL_PREFIXES.some((prefix) => lower.startsWith(prefix));
+}
+
+function buildAnthropicAuthDoctorHint(params: {
+  config?: ProviderAuthContext["config"];
+  store: AuthProfileStore;
+  profileId?: string;
+}): string {
+  const legacyProfileId = params.profileId ?? "anthropic:default";
+  const suggested = suggestOAuthProfileIdForLegacyDefault({
+    cfg: params.config,
+    store: params.store,
+    provider: PROVIDER_ID,
+    legacyProfileId,
+  });
+  if (!suggested || suggested === legacyProfileId) {
+    return "";
+  }
+
+  const storeOauthProfiles = listProfilesForProvider(params.store, PROVIDER_ID)
+    .filter((id) => params.store.profiles[id]?.type === "oauth")
+    .join(", ");
+
+  const cfgMode = params.config?.auth?.profiles?.[legacyProfileId]?.mode;
+  const cfgProvider = params.config?.auth?.profiles?.[legacyProfileId]?.provider;
+
+  return [
+    "Doctor hint (for GitHub issue):",
+    `- provider: ${PROVIDER_ID}`,
+    `- config: ${legacyProfileId}${
+      cfgProvider || cfgMode ? ` (provider=${cfgProvider ?? "?"}, mode=${cfgMode ?? "?"})` : ""
+    }`,
+    `- auth store oauth profiles: ${storeOauthProfiles || "(none)"}`,
+    `- suggested profile: ${suggested}`,
+    `Fix: run "${formatCliCommand("openclaw doctor --yes")}"`,
+  ].join("\n");
 }
 
 async function runAnthropicSetupToken(ctx: ProviderAuthContext): Promise<ProviderAuthResult> {
@@ -311,6 +349,12 @@ const anthropicPlugin = {
       fetchUsageSnapshot: async (ctx) =>
         await fetchClaudeUsage(ctx.token, ctx.timeoutMs, ctx.fetchFn),
       isCacheTtlEligible: () => true,
+      buildAuthDoctorHint: (ctx) =>
+        buildAnthropicAuthDoctorHint({
+          config: ctx.config,
+          store: ctx.store,
+          profileId: ctx.profileId,
+        }),
     });
   },
 };

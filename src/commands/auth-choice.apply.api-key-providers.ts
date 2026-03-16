@@ -3,6 +3,8 @@ import type { SecretInput } from "../config/types.secrets.js";
 import { normalizeApiKeyInput, validateApiKeyInput } from "./auth-choice.api-key.js";
 import { ensureApiKeyFromOptionEnvOrPrompt } from "./auth-choice.apply-helpers.js";
 import type { ApplyAuthChoiceParams, ApplyAuthChoiceResult } from "./auth-choice.apply.js";
+import { ensureModelAllowlistEntry } from "./model-allowlist.js";
+import { applyPrimaryModel } from "./model-picker.js";
 import type { ApiKeyStorageOptions } from "./onboard-auth.credentials.js";
 import {
   applyAuthProfileConfig,
@@ -36,6 +38,8 @@ import {
   applyVeniceProviderConfig,
   applyVercelAiGatewayConfig,
   applyVercelAiGatewayProviderConfig,
+  applyXaiConfig,
+  applyXaiProviderConfig,
   applyXiaomiConfig,
   applyXiaomiProviderConfig,
   KILOCODE_DEFAULT_MODEL_REF,
@@ -58,11 +62,15 @@ import {
   setTogetherApiKey,
   setVeniceApiKey,
   setVercelAiGatewayApiKey,
+  setVolcengineApiKey,
+  setByteplusApiKey,
+  setXaiApiKey,
   setXiaomiApiKey,
   SYNTHETIC_DEFAULT_MODEL_REF,
   TOGETHER_DEFAULT_MODEL_REF,
   VENICE_DEFAULT_MODEL_REF,
   VERCEL_AI_GATEWAY_DEFAULT_MODEL_REF,
+  XAI_DEFAULT_MODEL_REF,
   XIAOMI_DEFAULT_MODEL_REF,
 } from "./onboard-auth.js";
 import type { AuthChoice, SecretInputMode } from "./onboard-types.js";
@@ -113,6 +121,9 @@ type SimpleApiKeyProviderFlow = {
   noteMessage?: string;
   noteTitle?: string;
 };
+
+const VOLCENGINE_DEFAULT_MODEL_REF = "volcengine-plan/ark-code-latest";
+const BYTEPLUS_DEFAULT_MODEL_REF = "byteplus-plan/ark-code-latest";
 
 const SIMPLE_API_KEY_PROVIDER_FLOWS: Partial<Record<AuthChoice, SimpleApiKeyProviderFlow>> = {
   "ai-gateway-api-key": {
@@ -177,6 +188,18 @@ const SIMPLE_API_KEY_PROVIDER_FLOWS: Partial<Record<AuthChoice, SimpleApiKeyProv
     applyDefaultConfig: applyXiaomiConfig,
     applyProviderConfig: applyXiaomiProviderConfig,
     noteDefault: XIAOMI_DEFAULT_MODEL_REF,
+  },
+  "xai-api-key": {
+    provider: "xai",
+    profileId: "xai:default",
+    expectedProviders: ["xai"],
+    envLabel: "XAI_API_KEY",
+    promptMessage: "Enter xAI API key",
+    setCredential: setXaiApiKey,
+    defaultModel: XAI_DEFAULT_MODEL_REF,
+    applyDefaultConfig: applyXaiConfig,
+    applyProviderConfig: applyXaiProviderConfig,
+    noteDefault: XAI_DEFAULT_MODEL_REF,
   },
   "mistral-api-key": {
     provider: "mistral",
@@ -331,6 +354,38 @@ const SIMPLE_API_KEY_PROVIDER_FLOWS: Partial<Record<AuthChoice, SimpleApiKeyProv
     noteTitle: "Alibaba Cloud Model Studio Coding Plan (Global/Intl)",
     normalize: (value) => String(value ?? "").trim(),
     validate: (value) => (String(value ?? "").trim() ? undefined : "Required"),
+  },
+  "volcengine-api-key": {
+    provider: "volcengine",
+    profileId: "volcengine:default",
+    expectedProviders: ["volcengine"],
+    envLabel: "VOLCANO_ENGINE_API_KEY",
+    promptMessage: "Enter Volcano Engine API key",
+    setCredential: setVolcengineApiKey,
+    defaultModel: VOLCENGINE_DEFAULT_MODEL_REF,
+    applyDefaultConfig: (cfg) => applyPrimaryModel(cfg, VOLCENGINE_DEFAULT_MODEL_REF),
+    applyProviderConfig: (cfg) =>
+      ensureModelAllowlistEntry({
+        cfg,
+        modelRef: VOLCENGINE_DEFAULT_MODEL_REF,
+      }),
+    noteDefault: VOLCENGINE_DEFAULT_MODEL_REF,
+  },
+  "byteplus-api-key": {
+    provider: "byteplus",
+    profileId: "byteplus:default",
+    expectedProviders: ["byteplus"],
+    envLabel: "BYTEPLUS_API_KEY",
+    promptMessage: "Enter BytePlus API key",
+    setCredential: setByteplusApiKey,
+    defaultModel: BYTEPLUS_DEFAULT_MODEL_REF,
+    applyDefaultConfig: (cfg) => applyPrimaryModel(cfg, BYTEPLUS_DEFAULT_MODEL_REF),
+    applyProviderConfig: (cfg) =>
+      ensureModelAllowlistEntry({
+        cfg,
+        modelRef: BYTEPLUS_DEFAULT_MODEL_REF,
+      }),
+    noteDefault: BYTEPLUS_DEFAULT_MODEL_REF,
   },
   "synthetic-api-key": {
     provider: "synthetic",

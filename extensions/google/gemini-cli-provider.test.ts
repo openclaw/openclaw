@@ -146,6 +146,22 @@ describe("google plugin", () => {
     });
   });
 
+  it("owns OAuth auth-profile formatting", () => {
+    const { providers } = registerGooglePlugin();
+    const provider = findProvider(providers, "google-gemini-cli");
+
+    expect(
+      provider.formatApiKey?.({
+        type: "oauth",
+        provider: "google-gemini-cli",
+        access: "google-oauth-token",
+        refresh: "refresh-token",
+        expires: Date.now() + 60_000,
+        projectId: "proj-123",
+      }),
+    ).toBe('{"token":"google-oauth-token","projectId":"proj-123"}');
+  });
+
   it("owns usage snapshot fetching", async () => {
     const { providers } = registerGooglePlugin();
     const provider = findProvider(providers, "google-gemini-cli");

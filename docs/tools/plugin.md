@@ -220,7 +220,7 @@ Provider plugins now have two layers:
 - manifest metadata: `providerAuthEnvVars` for cheap env-auth lookup before
   runtime load
 - config-time hooks: `catalog` / legacy `discovery`
-- runtime hooks: `resolveDynamicModel`, `prepareDynamicModel`, `normalizeResolvedModel`, `capabilities`, `prepareExtraParams`, `wrapStreamFn`, `isCacheTtlEligible`, `buildMissingAuthMessage`, `suppressBuiltInModel`, `augmentModelCatalog`, `isBinaryThinking`, `supportsXHighThinking`, `resolveDefaultThinkingLevel`, `isModernModelRef`, `prepareRuntimeAuth`, `resolveUsageAuth`, `fetchUsageSnapshot`
+- runtime hooks: `resolveDynamicModel`, `prepareDynamicModel`, `normalizeResolvedModel`, `capabilities`, `prepareExtraParams`, `wrapStreamFn`, `formatApiKey`, `refreshOAuth`, `buildAuthDoctorHint`, `isCacheTtlEligible`, `buildMissingAuthMessage`, `suppressBuiltInModel`, `augmentModelCatalog`, `isBinaryThinking`, `supportsXHighThinking`, `resolveDefaultThinkingLevel`, `isModernModelRef`, `prepareRuntimeAuth`, `resolveUsageAuth`, `fetchUsageSnapshot`
 
 OpenClaw still owns the generic agent loop, failover, transcript handling, and
 tool policy. These hooks are the seam for provider-specific behavior without
@@ -254,31 +254,39 @@ For model/provider plugins, OpenClaw uses hooks in this rough order:
    Provider-owned request-param normalization before generic stream option wrappers.
 8. `wrapStreamFn`
    Provider-owned stream wrapper after generic wrappers are applied.
-9. `isCacheTtlEligible`
-   Provider-owned prompt-cache policy for proxy/backhaul providers.
-10. `buildMissingAuthMessage`
+9. `formatApiKey`
+   Provider-owned auth-profile formatter used when a stored auth profile needs
+   to become the runtime `apiKey` string.
+10. `refreshOAuth`
+    Provider-owned OAuth refresh override for custom refresh endpoints or
+    refresh-failure policy.
+11. `buildAuthDoctorHint`
+    Provider-owned repair hint appended when OAuth refresh fails.
+12. `isCacheTtlEligible`
+    Provider-owned prompt-cache policy for proxy/backhaul providers.
+13. `buildMissingAuthMessage`
     Provider-owned replacement for the generic missing-auth recovery message.
-11. `suppressBuiltInModel`
+14. `suppressBuiltInModel`
     Provider-owned stale upstream model suppression plus optional user-facing
     error hint.
-12. `augmentModelCatalog`
+15. `augmentModelCatalog`
     Provider-owned synthetic/final catalog rows appended after discovery.
-13. `isBinaryThinking`
+16. `isBinaryThinking`
     Provider-owned on/off reasoning toggle for binary-thinking providers.
-14. `supportsXHighThinking`
+17. `supportsXHighThinking`
     Provider-owned `xhigh` reasoning support for selected models.
-15. `resolveDefaultThinkingLevel`
+18. `resolveDefaultThinkingLevel`
     Provider-owned default `/think` level for a specific model family.
-16. `isModernModelRef`
+19. `isModernModelRef`
     Provider-owned modern-model matcher used by live profile filters and smoke
     selection.
-17. `prepareRuntimeAuth`
+20. `prepareRuntimeAuth`
     Exchanges a configured credential into the actual runtime token/key just
     before inference.
-18. `resolveUsageAuth`
+21. `resolveUsageAuth`
     Resolves usage/billing credentials for `/usage` and related status
     surfaces.
-19. `fetchUsageSnapshot`
+22. `fetchUsageSnapshot`
     Fetches and normalizes provider-specific usage/quota snapshots after auth
     is resolved.
 
@@ -291,6 +299,9 @@ For model/provider plugins, OpenClaw uses hooks in this rough order:
 - `capabilities`: publish provider-family and transcript/tooling quirks without hardcoding provider ids in core
 - `prepareExtraParams`: set provider defaults or normalize provider-specific per-model params before generic stream wrapping
 - `wrapStreamFn`: add provider-specific headers/payload/model compat patches while still using the normal `pi-ai` execution path
+- `formatApiKey`: turn a stored auth profile into the runtime `apiKey` string without hardcoding provider token blobs in core
+- `refreshOAuth`: own OAuth refresh for providers that do not fit the shared `pi-ai` refreshers
+- `buildAuthDoctorHint`: append provider-owned auth repair guidance when refresh fails
 - `isCacheTtlEligible`: decide whether provider/model pairs should use cache TTL metadata
 - `buildMissingAuthMessage`: replace the generic auth-store error with a provider-specific recovery hint
 - `suppressBuiltInModel`: hide stale upstream rows and optionally return a provider-owned error for direct resolution failures
@@ -312,6 +323,9 @@ Rule of thumb:
 - provider needs transcript/provider-family quirks: use `capabilities`
 - provider needs default request params or per-provider param cleanup: use `prepareExtraParams`
 - provider needs request headers/body/model compat wrappers without a custom transport: use `wrapStreamFn`
+- provider stores extra metadata in auth profiles and needs a custom runtime token shape: use `formatApiKey`
+- provider needs a custom OAuth refresh endpoint or refresh failure policy: use `refreshOAuth`
+- provider needs provider-owned auth repair guidance after refresh failure: use `buildAuthDoctorHint`
 - provider needs proxy-specific cache TTL gating: use `isCacheTtlEligible`
 - provider needs a provider-specific missing-auth recovery hint: use `buildMissingAuthMessage`
 - provider needs to hide stale upstream rows or replace them with a vendor hint: use `suppressBuiltInModel`
@@ -384,11 +398,12 @@ api.registerProvider({
 
 ### Built-in examples
 
-- Anthropic uses `resolveDynamicModel`, `capabilities`, `resolveUsageAuth`,
-  `fetchUsageSnapshot`, `isCacheTtlEligible`, `resolveDefaultThinkingLevel`,
-  and `isModernModelRef` because it owns Claude 4.6 forward-compat,
-  provider-family hints, usage endpoint integration, prompt-cache
-  eligibility, and Claude default/adaptive thinking policy.
+- Anthropic uses `resolveDynamicModel`, `capabilities`, `buildAuthDoctorHint`,
+  `resolveUsageAuth`, `fetchUsageSnapshot`, `isCacheTtlEligible`,
+  `resolveDefaultThinkingLevel`, and `isModernModelRef` because it owns Claude
+  4.6 forward-compat, provider-family hints, auth repair guidance, usage
+  endpoint integration, prompt-cache eligibility, and Claude default/adaptive
+  thinking policy.
 - OpenAI uses `resolveDynamicModel`, `normalizeResolvedModel`, and
   `capabilities` plus `buildMissingAuthMessage`, `suppressBuiltInModel`,
   `augmentModelCatalog`, `supportsXHighThinking`, and `isModernModelRef`
@@ -399,20 +414,22 @@ api.registerProvider({
 - OpenRouter uses `catalog` plus `resolveDynamicModel` and
   `prepareDynamicModel` because the provider is pass-through and may expose new
   model ids before OpenClaw's static catalog updates.
-- GitHub Copilot uses `catalog`, `resolveDynamicModel`, and
+- GitHub Copilot uses `catalog`, `auth`, `resolveDynamicModel`, and
   `capabilities` plus `prepareRuntimeAuth` and `fetchUsageSnapshot` because it
-  needs model fallback behavior, Claude transcript quirks, a GitHub token ->
-  Copilot token exchange, and a provider-owned usage endpoint.
+  needs provider-owned device login, model fallback behavior, Claude transcript
+  quirks, a GitHub token -> Copilot token exchange, and a provider-owned usage
+  endpoint.
 - OpenAI Codex uses `catalog`, `resolveDynamicModel`,
-  `normalizeResolvedModel`, and `augmentModelCatalog` plus
+  `normalizeResolvedModel`, `refreshOAuth`, and `augmentModelCatalog` plus
   `prepareExtraParams`, `resolveUsageAuth`, and `fetchUsageSnapshot` because it
   still runs on core OpenAI transports but owns its transport/base URL
-  normalization, default transport choice, synthetic Codex catalog rows, and
-  ChatGPT usage endpoint integration.
+  normalization, OAuth refresh fallback policy, default transport choice,
+  synthetic Codex catalog rows, and ChatGPT usage endpoint integration.
 - Google AI Studio and Gemini CLI OAuth use `resolveDynamicModel` and
   `isModernModelRef` because they own Gemini 3.1 forward-compat fallback and
-  modern-model matching; Gemini CLI OAuth also uses `resolveUsageAuth` and
-  `fetchUsageSnapshot` for token parsing and quota endpoint wiring.
+  modern-model matching; Gemini CLI OAuth also uses `formatApiKey`,
+  `resolveUsageAuth`, and `fetchUsageSnapshot` for token formatting, token
+  parsing, and quota endpoint wiring.
 - OpenRouter uses `capabilities`, `wrapStreamFn`, and `isCacheTtlEligible`
   to keep provider-specific request headers, routing metadata, reasoning
   patches, and prompt-cache policy out of core.
@@ -430,9 +447,10 @@ api.registerProvider({
 - Mistral, OpenCode Zen, and OpenCode Go use `capabilities` only to keep
   transcript/tooling quirks out of core.
 - Catalog-only bundled providers such as `byteplus`, `cloudflare-ai-gateway`,
-  `huggingface`, `kimi-coding`, `minimax-portal`, `modelstudio`, `nvidia`,
-  `qianfan`, `qwen-portal`, `synthetic`, `together`, `venice`,
-  `vercel-ai-gateway`, and `volcengine` use `catalog` only.
+  `huggingface`, `kimi-coding`, `modelstudio`, `nvidia`, `qianfan`,
+  `synthetic`, `together`, `venice`, `vercel-ai-gateway`, and `volcengine` use
+  `catalog` only.
+- Qwen portal uses `catalog`, `auth`, and `refreshOAuth`.
 - MiniMax and Xiaomi use `catalog` plus usage hooks because their `/usage`
   behavior is plugin-owned even though inference still runs through the shared
   transports.

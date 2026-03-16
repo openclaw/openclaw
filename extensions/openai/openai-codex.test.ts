@@ -1,10 +1,20 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { ProviderPlugin } from "../../src/plugins/types.js";
 import {
   createProviderUsageFetch,
   makeResponse,
 } from "../../src/test-utils/provider-usage-fetch.js";
 import openAIPlugin from "./index.js";
+
+const getOAuthApiKeyMock = vi.hoisted(() => vi.fn());
+
+vi.mock("@mariozechner/pi-ai/oauth", async () => {
+  const actual = await vi.importActual<object>("@mariozechner/pi-ai/oauth");
+  return {
+    ...actual,
+    getOAuthApiKey: getOAuthApiKeyMock,
+  };
+});
 
 function registerCodexProvider(): ProviderPlugin {
   let provider: ProviderPlugin | undefined;
@@ -22,6 +32,22 @@ function registerCodexProvider(): ProviderPlugin {
 }
 
 describe("openai codex provider", () => {
+  it("owns refresh fallback for accountId extraction failures", async () => {
+    const provider = registerCodexProvider();
+    const credential = {
+      type: "oauth" as const,
+      provider: "openai-codex",
+      access: "cached-access-token",
+      refresh: "refresh-token",
+      expires: Date.now() - 60_000,
+    };
+
+    getOAuthApiKeyMock.mockReset();
+    getOAuthApiKeyMock.mockRejectedValueOnce(new Error("Failed to extract accountId from token"));
+
+    await expect(provider.refreshOAuth?.(credential)).resolves.toEqual(credential);
+  });
+
   it("owns forward-compat codex models", () => {
     const provider = registerCodexProvider();
     const model = provider.resolveDynamicModel?.({

@@ -7,6 +7,7 @@ import {
 } from "openclaw/plugin-sdk/qwen-portal-auth";
 import { ensureAuthProfileStore, listProfilesForProvider } from "../../src/agents/auth-profiles.js";
 import { QWEN_OAUTH_MARKER } from "../../src/agents/model-auth-markers.js";
+import { refreshQwenPortalCredentials } from "../../src/providers/qwen-portal-oauth.js";
 import { loginQwenPortalOAuth } from "./oauth.js";
 
 const PROVIDER_ID = "qwen-portal";
@@ -157,6 +158,21 @@ const qwenPortalPlugin = {
           },
         },
       ],
+      wizard: {
+        setup: {
+          choiceId: "qwen-portal",
+          choiceLabel: "Qwen OAuth",
+          choiceHint: "Device code login",
+          methodId: "device",
+        },
+      },
+      refreshOAuth: async (cred) => ({
+        ...cred,
+        ...(await refreshQwenPortalCredentials(cred)),
+        type: "oauth",
+        provider: PROVIDER_ID,
+        email: cred.email,
+      }),
     });
   },
 };
