@@ -5,9 +5,14 @@ import { discoverOpenClawPlugins } from "../src/plugins/discovery.js";
 // Match exact monolithic-root specifier in any code path:
 // imports/exports, require/dynamic import, and test mocks (vi.mock/jest.mock).
 const ROOT_IMPORT_PATTERN = /["']openclaw\/plugin-sdk["']/;
+const LEGACY_ROUTING_IMPORT_PATTERN = /["']openclaw\/plugin-sdk\/routing["']/;
 
 function hasMonolithicRootImport(content: string): boolean {
   return ROOT_IMPORT_PATTERN.test(content);
+}
+
+function hasLegacyRoutingImport(content: string): boolean {
+  return LEGACY_ROUTING_IMPORT_PATTERN.test(content);
 }
 
 function isSourceFile(filePath: string): boolean {
@@ -59,6 +64,10 @@ function collectPluginSourceFiles(rootDir: string): string[] {
   return files;
 }
 
+function collectSharedExtensionSourceFiles(): string[] {
+  return collectPluginSourceFiles(path.join(process.cwd(), "extensions", "shared"));
+}
+
 function main() {
   const discovery = discoverOpenClawPlugins({});
   const bundledCandidates = discovery.candidates.filter((c) => c.origin === "bundled");
@@ -69,8 +78,12 @@ function main() {
       filesToCheck.add(srcFile);
     }
   }
+  for (const sharedFile of collectSharedExtensionSourceFiles()) {
+    filesToCheck.add(sharedFile);
+  }
 
-  const offenders: string[] = [];
+  const monolithicOffenders: string[] = [];
+  const legacyRoutingOffenders: string[] = [];
   for (const entryFile of filesToCheck) {
     let content = "";
     try {
@@ -79,19 +92,35 @@ function main() {
       continue;
     }
     if (hasMonolithicRootImport(content)) {
-      offenders.push(entryFile);
+      monolithicOffenders.push(entryFile);
+    }
+    if (hasLegacyRoutingImport(content)) {
+      legacyRoutingOffenders.push(entryFile);
     }
   }
 
-  if (offenders.length > 0) {
-    console.error("Bundled plugin source files must not import monolithic openclaw/plugin-sdk.");
-    for (const file of offenders.toSorted()) {
-      const relative = path.relative(process.cwd(), file) || file;
-      console.error(`- ${relative}`);
+  if (monolithicOffenders.length > 0 || legacyRoutingOffenders.length > 0) {
+    if (monolithicOffenders.length > 0) {
+      console.error("Bundled plugin source files must not import monolithic openclaw/plugin-sdk.");
+      for (const file of monolithicOffenders.toSorted()) {
+        const relative = path.relative(process.cwd(), file) || file;
+        console.error(`- ${relative}`);
+      }
     }
-    console.error(
-      "Use openclaw/plugin-sdk/<channel> for channel plugins, /core for startup surfaces, or /compat for broader internals.",
-    );
+    if (legacyRoutingOffenders.length > 0) {
+      console.error(
+        "Bundled plugin source files must not import legacy openclaw/plugin-sdk/routing.",
+      );
+      for (const file of legacyRoutingOffenders.toSorted()) {
+        const relative = path.relative(process.cwd(), file) || file;
+        console.error(`- ${relative}`);
+      }
+    }
+    if (monolithicOffenders.length > 0 || legacyRoutingOffenders.length > 0) {
+      console.error(
+        "Use openclaw/plugin-sdk/<channel> for channel plugins, /core for shared routing and startup surfaces, or /compat for broader internals.",
+      );
+    }
     process.exit(1);
   }
 

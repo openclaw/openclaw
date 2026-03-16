@@ -22,6 +22,7 @@ export {
   isAuthPermanentErrorMessage,
   isModelNotFoundErrorMessage,
   isBillingAssistantError,
+  extractObservedOverflowTokenCount,
   parseApiErrorInfo,
   sanitizeUserFacingText,
   isBillingErrorMessage,

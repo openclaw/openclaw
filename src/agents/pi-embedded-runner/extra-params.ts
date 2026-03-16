@@ -4,33 +4,36 @@ import { streamSimple } from "@mariozechner/pi-ai";
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import {
+  prepareProviderExtraParams,
+  wrapProviderStreamFn,
+} from "../../plugins/provider-runtime.js";
+import {
   createAnthropicBetaHeadersWrapper,
+  createAnthropicFastModeWrapper,
   createAnthropicToolPayloadCompatibilityWrapper,
   createBedrockNoCacheWrapper,
   isAnthropicBedrockModel,
+  resolveAnthropicFastMode,
   resolveAnthropicBetas,
   resolveCacheRetention,
 } from "./anthropic-stream-wrappers.js";
 import { log } from "./logger.js";
 import {
   createMoonshotThinkingWrapper,
-  createSiliconFlowThinkingWrapper,
   resolveMoonshotThinkingType,
+  createSiliconFlowThinkingWrapper,
+  shouldApplyMoonshotPayloadCompat,
   shouldApplySiliconFlowThinkingOffCompat,
 } from "./moonshot-stream-wrappers.js";
 import {
-  createCodexDefaultTransportWrapper,
   createOpenAIDefaultTransportWrapper,
+  createOpenAIFastModeWrapper,
   createOpenAIResponsesContextManagementWrapper,
   createOpenAIServiceTierWrapper,
+  resolveOpenAIFastMode,
   resolveOpenAIServiceTier,
 } from "./openai-stream-wrappers.js";
-import {
-  createKilocodeWrapper,
-  createOpenRouterSystemCacheWrapper,
-  createOpenRouterWrapper,
-  isProxyReasoningUnsupported,
-} from "./proxy-stream-wrappers.js";
+import { createZaiToolStreamWrapper } from "./zai-stream-wrappers.js";
 
 /**
  * Resolve provider-specific extra params from model config.
@@ -106,39 +109,15 @@ function createStreamFnWithExtraParams(
     streamParams.cacheRetention = cacheRetention;
   }
 
-  // Extract OpenRouter provider routing preferences from extraParams.provider.
-  // Injected into model.compat.openRouterRouting so pi-ai's buildParams sets
-  // params.provider in the API request body (openai-completions.js L359-362).
-  // pi-ai's OpenRouterRouting type only declares { only?, order? }, but at
-  // runtime the full object is forwarded — enabling allow_fallbacks,
-  // data_collection, ignore, sort, quantizations, etc.
-  const providerRouting =
-    provider === "openrouter" &&
-    extraParams.provider != null &&
-    typeof extraParams.provider === "object"
-      ? (extraParams.provider as Record<string, unknown>)
-      : undefined;
-
-  if (Object.keys(streamParams).length === 0 && !providerRouting) {
+  if (Object.keys(streamParams).length === 0) {
     return undefined;
   }
 
   log.debug(`creating streamFn wrapper with params: ${JSON.stringify(streamParams)}`);
-  if (providerRouting) {
-    log.debug(`OpenRouter provider routing: ${JSON.stringify(providerRouting)}`);
-  }
 
   const underlying = baseStreamFn ?? streamSimple;
   const wrappedStreamFn: StreamFn = (model, context, options) => {
-    // When provider routing is configured, inject it into model.compat so
-    // pi-ai picks it up via model.compat.openRouterRouting.
-    const effectiveModel = providerRouting
-      ? ({
-          ...model,
-          compat: { ...model.compat, openRouterRouting: providerRouting },
-        } as unknown as typeof model)
-      : model;
-    return underlying(effectiveModel, context, {
+    return underlying(model, context, {
       ...streamParams,
       ...options,
     });
@@ -236,39 +215,6 @@ function createGoogleThinkingPayloadWrapper(
   };
 }
 
-/**
- * Create a streamFn wrapper that injects tool_stream=true for Z.AI providers.
- *
- * Z.AI's API supports the `tool_stream` parameter to enable real-time streaming
- * of tool call arguments and reasoning content. When enabled, the API returns
- * progressive tool_call deltas, allowing users to see tool execution in real-time.
- *
- * @see https://docs.z.ai/api-reference#streaming
- */
-function createZaiToolStreamWrapper(
-  baseStreamFn: StreamFn | undefined,
-  enabled: boolean,
-): StreamFn {
-  const underlying = baseStreamFn ?? streamSimple;
-  return (model, context, options) => {
-    if (!enabled) {
-      return underlying(model, context, options);
-    }
-
-    const originalOnPayload = options?.onPayload;
-    return underlying(model, context, {
-      ...options,
-      onPayload: (payload) => {
-        if (payload && typeof payload === "object") {
-          // Inject tool_stream: true for Z.AI API
-          (payload as Record<string, unknown>).tool_stream = true;
-        }
-        return originalOnPayload?.(payload, model);
-      },
-    });
-  };
-}
-
 function resolveAliasedParamValue(
   sources: Array<Record<string, unknown> | undefined>,
   snakeCaseKey: string,
@@ -337,13 +283,6 @@ export function applyExtraParamsToAgent(
     modelId,
     agentId,
   });
-  if (provider === "openai-codex") {
-    // Default Codex to WebSocket-first when nothing else specifies transport.
-    agent.streamFn = createCodexDefaultTransportWrapper(agent.streamFn);
-  } else if (provider === "openai") {
-    // Default OpenAI Responses to WebSocket-first with transparent SSE fallback.
-    agent.streamFn = createOpenAIDefaultTransportWrapper(agent.streamFn);
-  }
   const override =
     extraParamsOverride && Object.keys(extraParamsOverride).length > 0
       ? Object.fromEntries(
@@ -351,14 +290,35 @@ export function applyExtraParamsToAgent(
         )
       : undefined;
   const merged = Object.assign({}, resolvedExtraParams, override);
-  const wrappedStreamFn = createStreamFnWithExtraParams(agent.streamFn, merged, provider);
+  const effectiveExtraParams =
+    prepareProviderExtraParams({
+      provider,
+      config: cfg,
+      context: {
+        config: cfg,
+        provider,
+        modelId,
+        extraParams: merged,
+        thinkingLevel,
+      },
+    }) ?? merged;
+
+  if (provider === "openai") {
+    // Default OpenAI Responses to WebSocket-first with transparent SSE fallback.
+    agent.streamFn = createOpenAIDefaultTransportWrapper(agent.streamFn);
+  }
+  const wrappedStreamFn = createStreamFnWithExtraParams(
+    agent.streamFn,
+    effectiveExtraParams,
+    provider,
+  );
 
   if (wrappedStreamFn) {
     log.debug(`applying extraParams to agent streamFn for ${provider}/${modelId}`);
     agent.streamFn = wrappedStreamFn;
   }
 
-  const anthropicBetas = resolveAnthropicBetas(merged, provider, modelId);
+  const anthropicBetas = resolveAnthropicBetas(effectiveExtraParams, provider, modelId);
   if (anthropicBetas?.length) {
     log.debug(
       `applying Anthropic beta header for ${provider}/${modelId}: ${anthropicBetas.join(",")}`,
@@ -373,48 +333,33 @@ export function applyExtraParamsToAgent(
     agent.streamFn = createSiliconFlowThinkingWrapper(agent.streamFn);
   }
 
-  if (provider === "moonshot") {
-    const moonshotThinkingType = resolveMoonshotThinkingType({
-      configuredThinking: merged?.thinking,
+  agent.streamFn = createAnthropicToolPayloadCompatibilityWrapper(agent.streamFn);
+  const providerStreamBase = agent.streamFn;
+  const pluginWrappedStreamFn = wrapProviderStreamFn({
+    provider,
+    config: cfg,
+    context: {
+      config: cfg,
+      provider,
+      modelId,
+      extraParams: effectiveExtraParams,
+      thinkingLevel,
+      streamFn: providerStreamBase,
+    },
+  });
+  agent.streamFn = pluginWrappedStreamFn ?? providerStreamBase;
+  const providerWrapperHandled =
+    pluginWrappedStreamFn !== undefined && pluginWrappedStreamFn !== providerStreamBase;
+
+  if (!providerWrapperHandled && shouldApplyMoonshotPayloadCompat({ provider, modelId })) {
+    // Preserve the legacy Moonshot compatibility path when no plugin wrapper
+    // actually handled the stream function. This covers tests/disabled plugins
+    // and Ollama Cloud Kimi models until they gain a dedicated runtime hook.
+    const thinkingType = resolveMoonshotThinkingType({
+      configuredThinking: effectiveExtraParams?.thinking,
       thinkingLevel,
     });
-    if (moonshotThinkingType) {
-      log.debug(
-        `applying Moonshot thinking=${moonshotThinkingType} payload wrapper for ${provider}/${modelId}`,
-      );
-    }
-    agent.streamFn = createMoonshotThinkingWrapper(agent.streamFn, moonshotThinkingType);
-  }
-
-  agent.streamFn = createAnthropicToolPayloadCompatibilityWrapper(agent.streamFn);
-
-  if (provider === "openrouter") {
-    log.debug(`applying OpenRouter app attribution headers for ${provider}/${modelId}`);
-    // "auto" is a dynamic routing model — we don't know which underlying model
-    // OpenRouter will select, and it may be a reasoning-required endpoint.
-    // Omit the thinkingLevel so we never inject `reasoning.effort: "none"`,
-    // which would cause a 400 on models where reasoning is mandatory.
-    // Users who need reasoning control should target a specific model ID.
-    // See: openclaw/openclaw#24851
-    //
-    // x-ai/grok models do not support OpenRouter's reasoning.effort parameter
-    // and reject payloads containing it with "Invalid arguments passed to the
-    // model." Skip reasoning injection for these models.
-    // See: openclaw/openclaw#32039
-    const skipReasoningInjection = modelId === "auto" || isProxyReasoningUnsupported(modelId);
-    const openRouterThinkingLevel = skipReasoningInjection ? undefined : thinkingLevel;
-    agent.streamFn = createOpenRouterWrapper(agent.streamFn, openRouterThinkingLevel);
-    agent.streamFn = createOpenRouterSystemCacheWrapper(agent.streamFn);
-  }
-
-  if (provider === "kilocode") {
-    log.debug(`applying Kilocode feature header for ${provider}/${modelId}`);
-    // kilo/auto is a dynamic routing model — skip reasoning injection
-    // (same rationale as OpenRouter "auto"). See: openclaw/openclaw#24851
-    // Also skip for models known to reject reasoning.effort (e.g. x-ai/*).
-    const kilocodeThinkingLevel =
-      modelId === "kilo/auto" || isProxyReasoningUnsupported(modelId) ? undefined : thinkingLevel;
-    agent.streamFn = createKilocodeWrapper(agent.streamFn, kilocodeThinkingLevel);
+    agent.streamFn = createMoonshotThinkingWrapper(agent.streamFn, thinkingType);
   }
 
   if (provider === "amazon-bedrock" && !isAnthropicBedrockModel(modelId)) {
@@ -425,7 +370,7 @@ export function applyExtraParamsToAgent(
   // Enable Z.AI tool_stream for real-time tool call streaming.
   // Enabled by default for Z.AI provider, can be disabled via params.tool_stream: false
   if (provider === "zai" || provider === "z-ai") {
-    const toolStreamEnabled = merged?.tool_stream !== false;
+    const toolStreamEnabled = effectiveExtraParams?.tool_stream !== false;
     if (toolStreamEnabled) {
       log.debug(`enabling Z.AI tool_stream for ${provider}/${modelId}`);
       agent.streamFn = createZaiToolStreamWrapper(agent.streamFn, true);
@@ -436,7 +381,19 @@ export function applyExtraParamsToAgent(
   // upstream model-ID heuristics for Gemini 3.1 variants.
   agent.streamFn = createGoogleThinkingPayloadWrapper(agent.streamFn, thinkingLevel);
 
-  const openAIServiceTier = resolveOpenAIServiceTier(merged);
+  const anthropicFastMode = resolveAnthropicFastMode(effectiveExtraParams);
+  if (anthropicFastMode !== undefined) {
+    log.debug(`applying Anthropic fast mode=${anthropicFastMode} for ${provider}/${modelId}`);
+    agent.streamFn = createAnthropicFastModeWrapper(agent.streamFn, anthropicFastMode);
+  }
+
+  const openAIFastMode = resolveOpenAIFastMode(effectiveExtraParams);
+  if (openAIFastMode) {
+    log.debug(`applying OpenAI fast mode for ${provider}/${modelId}`);
+    agent.streamFn = createOpenAIFastModeWrapper(agent.streamFn);
+  }
+
+  const openAIServiceTier = resolveOpenAIServiceTier(effectiveExtraParams);
   if (openAIServiceTier) {
     log.debug(`applying OpenAI service_tier=${openAIServiceTier} for ${provider}/${modelId}`);
     agent.streamFn = createOpenAIServiceTierWrapper(agent.streamFn, openAIServiceTier);
@@ -445,7 +402,10 @@ export function applyExtraParamsToAgent(
   // Work around upstream pi-ai hardcoding `store: false` for Responses API.
   // Force `store=true` for direct OpenAI Responses models and auto-enable
   // server-side compaction for compatible OpenAI Responses payloads.
-  agent.streamFn = createOpenAIResponsesContextManagementWrapper(agent.streamFn, merged);
+  agent.streamFn = createOpenAIResponsesContextManagementWrapper(
+    agent.streamFn,
+    effectiveExtraParams,
+  );
 
   const rawParallelToolCalls = resolveAliasedParamValue(
     [resolvedExtraParams, override],
