@@ -135,13 +135,6 @@ export function copyBundledPluginMetadata(params = {}) {
   }
 
   const sourcePluginDirs = new Set();
-  const removeGeneratedPluginArtifacts = (distPluginDir) => {
-    removeFileIfExists(path.join(distPluginDir, "openclaw.plugin.json"));
-    removeFileIfExists(path.join(distPluginDir, "package.json"));
-    removePathIfExists(path.join(distPluginDir, GENERATED_BUNDLED_SKILLS_DIR));
-    removePathIfExists(path.join(distPluginDir, "node_modules"));
-  };
-
   for (const dirent of fs.readdirSync(extensionsRoot, { withFileTypes: true })) {
     if (!dirent.isDirectory()) {
       continue;
@@ -154,7 +147,7 @@ export function copyBundledPluginMetadata(params = {}) {
     const distManifestPath = path.join(distPluginDir, "openclaw.plugin.json");
     const distPackageJsonPath = path.join(distPluginDir, "package.json");
     if (!fs.existsSync(manifestPath)) {
-      removeGeneratedPluginArtifacts(distPluginDir);
+      removePathIfExists(distPluginDir);
       continue;
     }
 
@@ -203,7 +196,7 @@ export function copyBundledPluginMetadata(params = {}) {
       continue;
     }
     const distPluginDir = path.join(distExtensionsRoot, dirent.name);
-    removeGeneratedPluginArtifacts(distPluginDir);
+    removePathIfExists(distPluginDir);
   }
 }
 

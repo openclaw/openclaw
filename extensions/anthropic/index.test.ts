@@ -1,23 +1,12 @@
 import { describe, expect, it } from "vitest";
-import type { ProviderPlugin } from "../../src/plugins/types.js";
+import { registerSingleProviderPlugin } from "../../src/test-utils/plugin-registration.js";
 import {
   createProviderUsageFetch,
   makeResponse,
 } from "../../src/test-utils/provider-usage-fetch.js";
 import anthropicPlugin from "./index.js";
 
-function registerProvider(): ProviderPlugin {
-  let provider: ProviderPlugin | undefined;
-  anthropicPlugin.register({
-    registerProvider(nextProvider: ProviderPlugin) {
-      provider = nextProvider;
-    },
-  } as never);
-  if (!provider) {
-    throw new Error("provider registration missing");
-  }
-  return provider;
-}
+const registerProvider = () => registerSingleProviderPlugin(anthropicPlugin);
 
 describe("anthropic plugin", () => {
   it("owns anthropic 4.6 forward-compat resolution", () => {
@@ -67,6 +56,39 @@ describe("anthropic plugin", () => {
     ).resolves.toEqual({
       token: "anthropic-oauth-token",
     });
+  });
+
+  it("owns auth doctor hint generation", () => {
+    const provider = registerProvider();
+    const hint = provider.buildAuthDoctorHint?.({
+      provider: "anthropic",
+      profileId: "anthropic:default",
+      config: {
+        auth: {
+          profiles: {
+            "anthropic:default": {
+              provider: "anthropic",
+              mode: "oauth",
+            },
+          },
+        },
+      } as never,
+      store: {
+        version: 1,
+        profiles: {
+          "anthropic:oauth-user@example.com": {
+            type: "oauth",
+            provider: "anthropic",
+            access: "oauth-access",
+            refresh: "oauth-refresh",
+            expires: Date.now() + 60_000,
+          },
+        },
+      },
+    });
+
+    expect(hint).toContain("suggested profile: anthropic:oauth-user@example.com");
+    expect(hint).toContain("openclaw doctor --yes");
   });
 
   it("owns usage snapshot fetching", async () => {

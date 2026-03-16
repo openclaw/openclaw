@@ -38,6 +38,7 @@ import { resolveOutboundSendDep } from "../../../src/infra/outbound/send-deps.js
 import { buildPassiveProbedChannelStatusSummary } from "../../shared/channel-status-summary.js";
 import { getSlackRuntime } from "./runtime.js";
 import { createSlackSetupWizardProxy, slackSetupAdapter } from "./setup-core.js";
+import { parseSlackTarget } from "./targets.js";
 
 const meta = getChatChannelMeta("slack");
 
@@ -92,6 +93,37 @@ function resolveSlackSendContext(params: {
   const tokenOverride = token && token !== botToken ? token : undefined;
   const threadTsValue = params.replyToId ?? params.threadId;
   return { send, threadTsValue, tokenOverride };
+}
+
+function resolveSlackAutoThreadId(params: {
+  cfg: Parameters<typeof resolveSlackAccount>[0]["cfg"];
+  accountId?: string | null;
+  to: string;
+  toolContext?: {
+    currentChannelId?: string;
+    currentThreadTs?: string;
+    replyToMode?: "off" | "first" | "all";
+    hasRepliedRef?: { value: boolean };
+  };
+}): string | undefined {
+  const context = params.toolContext;
+  if (!context?.currentThreadTs || !context.currentChannelId) {
+    return undefined;
+  }
+  if (context.replyToMode !== "all" && context.replyToMode !== "first") {
+    return undefined;
+  }
+  const parsedTarget = parseSlackTarget(params.to, { defaultKind: "channel" });
+  if (!parsedTarget || parsedTarget.kind !== "channel") {
+    return undefined;
+  }
+  if (parsedTarget.id.toLowerCase() !== context.currentChannelId.toLowerCase()) {
+    return undefined;
+  }
+  if (context.replyToMode === "first" && context.hasRepliedRef?.value) {
+    return undefined;
+  }
+  return context.currentThreadTs;
 }
 
 const slackConfigAccessors = createScopedAccountConfigAccessors({
@@ -235,9 +267,24 @@ export const slackPlugin: ChannelPlugin<ResolvedSlackAccount> = {
       resolveSlackReplyToMode(resolveSlackAccount({ cfg, accountId }), chatType),
     allowExplicitReplyTagsWhenOff: false,
     buildToolContext: (params) => buildSlackThreadingToolContext(params),
+    resolveAutoThreadId: ({ cfg, accountId, to, toolContext, replyToId }) =>
+      replyToId
+        ? undefined
+        : resolveSlackAutoThreadId({
+            cfg,
+            accountId,
+            to,
+            toolContext,
+          }),
+    resolveReplyTransport: ({ threadId, replyToId }) => ({
+      replyToId: replyToId ?? (threadId != null && threadId !== "" ? String(threadId) : undefined),
+      threadId: null,
+    }),
   },
   messaging: {
     normalizeTarget: normalizeSlackMessagingTarget,
+    enableInteractiveReplies: ({ cfg, accountId }) =>
+      isSlackInteractiveRepliesEnabled({ cfg, accountId }),
     targetResolver: {
       looksLikeId: looksLikeSlackTargetId,
       hint: "<channelId|user:ID|channel:ID>",
@@ -292,6 +339,16 @@ export const slackPlugin: ChannelPlugin<ResolvedSlackAccount> = {
   },
   actions: {
     listActions: ({ cfg }) => listSlackMessageActions(cfg),
+    getCapabilities: ({ cfg }) => {
+      const capabilities = new Set<"interactive" | "blocks">();
+      if (listSlackMessageActions(cfg).includes("send")) {
+        capabilities.add("blocks");
+      }
+      if (isSlackInteractiveRepliesEnabled({ cfg })) {
+        capabilities.add("interactive");
+      }
+      return Array.from(capabilities);
+    },
     extractToolSend: ({ args }) => extractSlackToolSend(args),
     handleAction: async (ctx) =>
       await handleSlackMessageAction({

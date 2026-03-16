@@ -38,7 +38,7 @@ export {
   mergeAllowFromEntries,
   promptSingleChannelSecretInput,
   setTopLevelChannelGroupPolicy,
-} from "../channels/plugins/onboarding/helpers.js";
+} from "../channels/plugins/setup-wizard-helpers.js";
 export { PAIRING_APPROVED_MESSAGE } from "../channels/plugins/pairing-message.js";
 export { applyAccountNameToChannelSection } from "../channels/plugins/setup-helpers.js";
 export { createAccountListHelpers } from "../channels/plugins/account-helpers.js";
@@ -108,7 +108,5 @@ export {
   buildProbeChannelStatusSummary,
   collectStatusIssuesFromLastError,
 } from "./status-helpers.js";
-export {
-  matrixSetupAdapter,
-  matrixSetupWizard,
-} from "../../extensions/matrix/src/setup-surface.js";
+export { matrixSetupWizard } from "../../extensions/matrix/src/setup-surface.js";
+export { matrixSetupAdapter } from "../../extensions/matrix/src/setup-core.js";

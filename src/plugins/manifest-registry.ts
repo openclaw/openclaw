@@ -41,6 +41,7 @@ export type PluginManifestRecord = {
   kind?: PluginKind;
   channels: string[];
   providers: string[];
+  providerAuthEnvVars?: Record<string, string[]>;
   skills: string[];
   settingsFiles?: string[];
   hooks: string[];
@@ -131,7 +132,7 @@ function isCompatiblePluginIdHint(idHint: string | undefined, manifestId: string
   if (normalizedHint === manifestId) {
     return true;
   }
-  return normalizedHint === `${manifestId}-provider`;
+  return normalizedHint === `${manifestId}-provider` || normalizedHint === `${manifestId}-plugin`;
 }
 
 function buildRecord(params: {
@@ -152,6 +153,7 @@ function buildRecord(params: {
     kind: params.manifest.kind,
     channels: params.manifest.channels ?? [],
     providers: params.manifest.providers ?? [],
+    providerAuthEnvVars: params.manifest.providerAuthEnvVars,
     skills: params.manifest.skills ?? [],
     settingsFiles: [],
     hooks: [],

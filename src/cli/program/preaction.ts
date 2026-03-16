@@ -78,7 +78,7 @@ function shouldLoadPluginsForCommand(commandPath: string[], argv: string[]): boo
   if ((primary === "status" || primary === "health") && hasFlag(argv, "--json")) {
     return false;
   }
-  // Onboarding/setup should stay manifest-first and load selected plugins on demand.
+  // Setup wizard and channels add should stay manifest-first and load selected plugins on demand.
   if (primary === "onboard" || (primary === "channels" && secondary === "add")) {
     return false;
   }

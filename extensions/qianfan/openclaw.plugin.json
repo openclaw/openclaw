@@ -1,6 +1,9 @@
 {
   "id": "qianfan",
   "providers": ["qianfan"],
+  "providerAuthEnvVars": {
+    "qianfan": ["QIANFAN_API_KEY"]
+  },
   "configSchema": {
     "type": "object",
     "additionalProperties": false,

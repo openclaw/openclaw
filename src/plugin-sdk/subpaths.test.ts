@@ -4,47 +4,20 @@ import * as discordSdk from "openclaw/plugin-sdk/discord";
 import * as imessageSdk from "openclaw/plugin-sdk/imessage";
 import * as lineSdk from "openclaw/plugin-sdk/line";
 import * as msteamsSdk from "openclaw/plugin-sdk/msteams";
+import * as nostrSdk from "openclaw/plugin-sdk/nostr";
 import * as signalSdk from "openclaw/plugin-sdk/signal";
 import * as slackSdk from "openclaw/plugin-sdk/slack";
 import * as telegramSdk from "openclaw/plugin-sdk/telegram";
 import * as whatsappSdk from "openclaw/plugin-sdk/whatsapp";
 import { describe, expect, it } from "vitest";
+import { pluginSdkSubpaths } from "./entrypoints.js";
 
-const bundledExtensionSubpathLoaders = [
-  { id: "acpx", load: () => import("openclaw/plugin-sdk/acpx") },
-  { id: "bluebubbles", load: () => import("openclaw/plugin-sdk/bluebubbles") },
-  { id: "copilot-proxy", load: () => import("openclaw/plugin-sdk/copilot-proxy") },
-  { id: "device-pair", load: () => import("openclaw/plugin-sdk/device-pair") },
-  { id: "diagnostics-otel", load: () => import("openclaw/plugin-sdk/diagnostics-otel") },
-  { id: "diffs", load: () => import("openclaw/plugin-sdk/diffs") },
-  { id: "feishu", load: () => import("openclaw/plugin-sdk/feishu") },
-  { id: "googlechat", load: () => import("openclaw/plugin-sdk/googlechat") },
-  { id: "irc", load: () => import("openclaw/plugin-sdk/irc") },
-  { id: "llm-task", load: () => import("openclaw/plugin-sdk/llm-task") },
-  { id: "lobster", load: () => import("openclaw/plugin-sdk/lobster") },
-  { id: "matrix", load: () => import("openclaw/plugin-sdk/matrix") },
-  { id: "mattermost", load: () => import("openclaw/plugin-sdk/mattermost") },
-  { id: "memory-core", load: () => import("openclaw/plugin-sdk/memory-core") },
-  { id: "memory-lancedb", load: () => import("openclaw/plugin-sdk/memory-lancedb") },
-  {
-    id: "minimax-portal-auth",
-    load: () => import("openclaw/plugin-sdk/minimax-portal-auth"),
-  },
-  { id: "nextcloud-talk", load: () => import("openclaw/plugin-sdk/nextcloud-talk") },
-  { id: "nostr", load: () => import("openclaw/plugin-sdk/nostr") },
-  { id: "open-prose", load: () => import("openclaw/plugin-sdk/open-prose") },
-  { id: "phone-control", load: () => import("openclaw/plugin-sdk/phone-control") },
-  { id: "qwen-portal-auth", load: () => import("openclaw/plugin-sdk/qwen-portal-auth") },
-  { id: "synology-chat", load: () => import("openclaw/plugin-sdk/synology-chat") },
-  { id: "talk-voice", load: () => import("openclaw/plugin-sdk/talk-voice") },
-  { id: "test-utils", load: () => import("openclaw/plugin-sdk/test-utils") },
-  { id: "thread-ownership", load: () => import("openclaw/plugin-sdk/thread-ownership") },
-  { id: "tlon", load: () => import("openclaw/plugin-sdk/tlon") },
-  { id: "twitch", load: () => import("openclaw/plugin-sdk/twitch") },
-  { id: "voice-call", load: () => import("openclaw/plugin-sdk/voice-call") },
-  { id: "zalo", load: () => import("openclaw/plugin-sdk/zalo") },
-  { id: "zalouser", load: () => import("openclaw/plugin-sdk/zalouser") },
-] as const;
+const importPluginSdkSubpath = (specifier: string) => import(/* @vite-ignore */ specifier);
+
+const bundledExtensionSubpathLoaders = pluginSdkSubpaths.map((id: string) => ({
+  id,
+  load: () => importPluginSdkSubpath(`openclaw/plugin-sdk/${id}`),
+}));
 
 describe("plugin-sdk subpath exports", () => {
   it("exports compat helpers", () => {
@@ -110,6 +83,8 @@ describe("plugin-sdk subpath exports", () => {
   it("exports LINE helpers", () => {
     expect(typeof lineSdk.processLineMessage).toBe("function");
     expect(typeof lineSdk.createInfoCard).toBe("function");
+    expect(typeof lineSdk.lineSetupWizard).toBe("object");
+    expect(typeof lineSdk.lineSetupAdapter).toBe("object");
   });
 
   it("exports Microsoft Teams helpers", () => {
@@ -117,6 +92,11 @@ describe("plugin-sdk subpath exports", () => {
     expect(typeof msteamsSdk.loadOutboundMediaFromUrl).toBe("function");
     expect(typeof msteamsSdk.msteamsSetupWizard).toBe("object");
     expect(typeof msteamsSdk.msteamsSetupAdapter).toBe("object");
+  });
+
+  it("exports Nostr helpers", () => {
+    expect(typeof nostrSdk.nostrSetupWizard).toBe("object");
+    expect(typeof nostrSdk.nostrSetupAdapter).toBe("object");
   });
 
   it("exports Google Chat helpers", async () => {
@@ -129,6 +109,12 @@ describe("plugin-sdk subpath exports", () => {
     const zaloSdk = await import("openclaw/plugin-sdk/zalo");
     expect(typeof zaloSdk.zaloSetupWizard).toBe("object");
     expect(typeof zaloSdk.zaloSetupAdapter).toBe("object");
+  });
+
+  it("exports Synology Chat helpers", async () => {
+    const synologyChatSdk = await import("openclaw/plugin-sdk/synology-chat");
+    expect(typeof synologyChatSdk.synologyChatSetupWizard).toBe("object");
+    expect(typeof synologyChatSdk.synologyChatSetupAdapter).toBe("object");
   });
 
   it("exports Zalouser helpers", async () => {

@@ -484,7 +484,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       return;
     }
     const existingRuntime = registry.channels.find((entry) => entry.plugin.id === id);
-    if (mode === "full" && existingRuntime) {
+    if (mode !== "setup-only" && existingRuntime) {
       pushDiagnostic({
         level: "error",
         pluginId: record.id,

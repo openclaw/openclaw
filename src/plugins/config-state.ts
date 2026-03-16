@@ -29,11 +29,11 @@ export const BUNDLED_ENABLED_BY_DEFAULT = new Set<string>([
   "cloudflare-ai-gateway",
   "device-pair",
   "github-copilot",
+  "google",
   "huggingface",
   "kilocode",
   "kimi-coding",
   "minimax",
-  "minimax-portal-auth",
   "mistral",
   "modelstudio",
   "moonshot",
@@ -54,12 +54,14 @@ export const BUNDLED_ENABLED_BY_DEFAULT = new Set<string>([
   "vercel-ai-gateway",
   "vllm",
   "volcengine",
+  "xai",
   "xiaomi",
   "zai",
 ]);
 
 const PLUGIN_ID_ALIASES: Readonly<Record<string, string>> = {
   "openai-codex": "openai",
+  "minimax-portal-auth": "minimax",
 };
 
 function normalizePluginId(id: string): string {

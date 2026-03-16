@@ -105,16 +105,20 @@ export type {
   PluginHookInboundClaimResult,
   PluginInteractiveDiscordHandlerContext,
   PluginInteractiveHandlerRegistration,
+  PluginInteractiveSlackHandlerContext,
   PluginInteractiveTelegramHandlerContext,
   PluginLogger,
   ProviderAuthContext,
+  ProviderAuthDoctorHintContext,
   ProviderAuthResult,
   ProviderAugmentModelCatalogContext,
   ProviderBuiltInModelSuppressionContext,
   ProviderBuiltInModelSuppressionResult,
   ProviderBuildMissingAuthMessageContext,
   ProviderCacheTtlEligibilityContext,
+  ProviderDefaultThinkingPolicyContext,
   ProviderFetchUsageSnapshotContext,
+  ProviderModernModelPolicyContext,
   ProviderPreparedRuntimeAuth,
   ProviderResolvedUsageAuth,
   ProviderPrepareExtraParamsContext,
@@ -124,6 +128,7 @@ export type {
   ProviderResolveDynamicModelContext,
   ProviderNormalizeResolvedModelContext,
   ProviderRuntimeModel,
+  ProviderThinkingPolicyContext,
   ProviderWrapStreamFnContext,
 } from "../plugins/types.js";
 export type {
@@ -229,7 +234,7 @@ export {
 export {
   promptSingleChannelSecretInput,
   type SingleChannelSecretInputPromptResult,
-} from "../channels/plugins/onboarding/helpers.js";
+} from "../channels/plugins/setup-wizard-helpers.js";
 export { buildOauthProviderAuthResult } from "./provider-auth-result.js";
 export { formatResolvedUnresolvedNote } from "./resolution-notes.js";
 export { buildChannelSendResult } from "./channel-send-result.js";
@@ -615,21 +620,6 @@ export {
 } from "../channels/plugins/helpers.js";
 export { PAIRING_APPROVED_MESSAGE } from "../channels/plugins/pairing-message.js";
 
-export type {
-  ChannelOnboardingAdapter,
-  ChannelOnboardingDmPolicy,
-} from "../channels/plugins/onboarding-types.js";
-export {
-  addWildcardAllowFrom,
-  mergeAllowFromEntries,
-  promptAccountId,
-  resolveAccountIdForConfigure,
-  setTopLevelChannelAllowFrom,
-  setTopLevelChannelDmPolicyWithAllowFrom,
-  setTopLevelChannelGroupPolicy,
-} from "../channels/plugins/onboarding/helpers.js";
-export { promptChannelAccessConfig } from "../channels/plugins/onboarding/channel-access.js";
-
 export {
   createActionGate,
   jsonResult,
@@ -758,10 +748,8 @@ export {
 } from "../../extensions/telegram/src/accounts.js";
 export { inspectTelegramAccount } from "../../extensions/telegram/src/account-inspect.js";
 export type { InspectedTelegramAccount } from "../../extensions/telegram/src/account-inspect.js";
-export {
-  telegramSetupAdapter,
-  telegramSetupWizard,
-} from "../../extensions/telegram/src/setup-surface.js";
+export { telegramSetupWizard } from "../../extensions/telegram/src/setup-surface.js";
+export { telegramSetupAdapter } from "../../extensions/telegram/src/setup-core.js";
 export {
   looksLikeTelegramTargetId,
   normalizeTelegramMessagingTarget,
@@ -801,6 +789,7 @@ export {
   resolveDefaultLineAccountId,
   resolveLineAccount,
 } from "../line/accounts.js";
+export { lineSetupAdapter, lineSetupWizard } from "../../extensions/line/src/setup-surface.js";
 export { LineConfigSchema } from "../line/config-schema.js";
 export type {
   LineConfig,

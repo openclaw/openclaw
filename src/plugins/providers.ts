@@ -1,6 +1,9 @@
+import { normalizeProviderId } from "../agents/model-selection.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { withBundledPluginAllowlistCompat } from "./bundled-compat.js";
 import { loadOpenClawPlugins, type PluginLoadOptions } from "./loader.js";
 import { createPluginLoaderLogger } from "./logger.js";
+import { loadPluginManifestRegistry } from "./manifest-registry.js";
 import type { ProviderPlugin } from "./types.js";
 
 const log = createSubsystemLogger("plugins");
@@ -15,7 +18,6 @@ const BUNDLED_PROVIDER_ALLOWLIST_COMPAT_PLUGIN_IDS = [
   "kilocode",
   "kimi-coding",
   "minimax",
-  "minimax-portal-auth",
   "mistral",
   "modelstudio",
   "moonshot",
@@ -33,6 +35,7 @@ const BUNDLED_PROVIDER_ALLOWLIST_COMPAT_PLUGIN_IDS = [
   "venice",
   "vercel-ai-gateway",
   "volcengine",
+  "xai",
   "vllm",
   "xiaomi",
   "zai",
@@ -64,38 +67,6 @@ function hasExplicitPluginConfig(config: PluginLoadOptions["config"]): boolean {
   return false;
 }
 
-function withBundledProviderAllowlistCompat(
-  config: PluginLoadOptions["config"],
-): PluginLoadOptions["config"] {
-  const allow = config?.plugins?.allow;
-  if (!Array.isArray(allow) || allow.length === 0) {
-    return config;
-  }
-
-  const allowSet = new Set(allow.map((entry) => entry.trim()).filter(Boolean));
-  let changed = false;
-  for (const pluginId of BUNDLED_PROVIDER_ALLOWLIST_COMPAT_PLUGIN_IDS) {
-    if (!allowSet.has(pluginId)) {
-      allowSet.add(pluginId);
-      changed = true;
-    }
-  }
-
-  if (!changed) {
-    return config;
-  }
-
-  return {
-    ...config,
-    plugins: {
-      ...config?.plugins,
-      // Backward compat: bundled implicit providers historically stayed
-      // available even when operators kept a restrictive plugin allowlist.
-      allow: [...allowSet],
-    },
-  };
-}
-
 function withBundledProviderVitestCompat(params: {
   config: PluginLoadOptions["config"];
   env?: PluginLoadOptions["env"];
@@ -119,6 +90,31 @@ function withBundledProviderVitestCompat(params: {
   };
 }
 
+export function resolveOwningPluginIdsForProvider(params: {
+  provider: string;
+  config?: PluginLoadOptions["config"];
+  workspaceDir?: string;
+  env?: PluginLoadOptions["env"];
+}): string[] | undefined {
+  const normalizedProvider = normalizeProviderId(params.provider);
+  if (!normalizedProvider) {
+    return undefined;
+  }
+
+  const registry = loadPluginManifestRegistry({
+    config: params.config,
+    workspaceDir: params.workspaceDir,
+    env: params.env,
+  });
+  const pluginIds = registry.plugins
+    .filter((plugin) =>
+      plugin.providers.some((providerId) => normalizeProviderId(providerId) === normalizedProvider),
+    )
+    .map((plugin) => plugin.id);
+
+  return pluginIds.length > 0 ? pluginIds : undefined;
+}
+
 export function resolvePluginProviders(params: {
   config?: PluginLoadOptions["config"];
   workspaceDir?: string;
@@ -127,9 +123,14 @@ export function resolvePluginProviders(params: {
   bundledProviderAllowlistCompat?: boolean;
   bundledProviderVitestCompat?: boolean;
   onlyPluginIds?: string[];
+  activate?: boolean;
+  cache?: boolean;
 }): ProviderPlugin[] {
   const maybeAllowlistCompat = params.bundledProviderAllowlistCompat
-    ? withBundledProviderAllowlistCompat(params.config)
+    ? withBundledPluginAllowlistCompat({
+        config: params.config,
+        pluginIds: BUNDLED_PROVIDER_ALLOWLIST_COMPAT_PLUGIN_IDS,
+      })
     : params.config;
   const config = params.bundledProviderVitestCompat
     ? withBundledProviderVitestCompat({
@@ -142,6 +143,8 @@ export function resolvePluginProviders(params: {
     workspaceDir: params.workspaceDir,
     env: params.env,
     onlyPluginIds: params.onlyPluginIds,
+    cache: params.cache ?? false,
+    activate: params.activate ?? false,
     logger: createPluginLoaderLogger(log),
   });
 

@@ -26,7 +26,8 @@ import {
   resolveMSTeamsUserAllowlist,
 } from "./resolve-allowlist.js";
 import { getMSTeamsRuntime } from "./runtime.js";
-import { msteamsSetupAdapter, msteamsSetupWizard } from "./setup-surface.js";
+import { msteamsSetupAdapter } from "./setup-core.js";
+import { msteamsSetupWizard } from "./setup-surface.js";
 import { resolveMSTeamsCredentials } from "./token.js";
 
 type ResolvedMSTeamsAccount = {
@@ -365,11 +366,11 @@ export const msteamsPlugin: ChannelPlugin<ResolvedMSTeamsAccount> = {
       }
       return ["poll"] satisfies ChannelMessageActionName[];
     },
-    supportsCards: ({ cfg }) => {
-      return (
-        cfg.channels?.msteams?.enabled !== false &&
+    getCapabilities: ({ cfg }) => {
+      return cfg.channels?.msteams?.enabled !== false &&
         Boolean(resolveMSTeamsCredentials(cfg.channels?.msteams))
-      );
+        ? (["cards"] as const)
+        : [];
     },
     handleAction: async (ctx) => {
       // Handle send action with card parameter

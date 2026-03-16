@@ -25,7 +25,8 @@ import { FeishuConfigSchema } from "./config-schema.js";
 import { listFeishuDirectoryPeers, listFeishuDirectoryGroups } from "./directory.static.js";
 import { resolveFeishuGroupToolPolicy } from "./policy.js";
 import { getFeishuRuntime } from "./runtime.js";
-import { feishuSetupAdapter, feishuSetupWizard } from "./setup-surface.js";
+import { feishuSetupAdapter } from "./setup-core.js";
+import { feishuSetupWizard } from "./setup-surface.js";
 import { normalizeFeishuTarget, looksLikeFeishuId, formatFeishuTarget } from "./targets.js";
 import type { ResolvedFeishuAccount, FeishuConfig } from "./types.js";
 
@@ -218,11 +219,11 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount> = {
       }
       return Array.from(actions);
     },
-    supportsCards: ({ cfg }) => {
-      return (
-        cfg.channels?.feishu?.enabled !== false &&
+    getCapabilities: ({ cfg }) => {
+      return cfg.channels?.feishu?.enabled !== false &&
         Boolean(resolveFeishuCredentials(cfg.channels?.feishu as FeishuConfig | undefined))
-      );
+        ? (["cards"] as const)
+        : [];
     },
     handleAction: async (ctx) => {
       const account = resolveFeishuAccount({ cfg: ctx.cfg, accountId: ctx.accountId ?? undefined });

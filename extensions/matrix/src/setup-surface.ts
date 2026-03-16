@@ -1,68 +1,28 @@
-import type { ChannelOnboardingDmPolicy } from "../../../src/channels/plugins/onboarding-types.js";
-import { promptChannelAccessConfig } from "../../../src/channels/plugins/onboarding/channel-access.js";
 import {
   addWildcardAllowFrom,
   buildSingleChannelSecretPromptState,
   mergeAllowFromEntries,
   promptSingleChannelSecretInput,
   setTopLevelChannelGroupPolicy,
-} from "../../../src/channels/plugins/onboarding/helpers.js";
-import {
-  applyAccountNameToChannelSection,
-  migrateBaseNameToDefaultAccount,
-} from "../../../src/channels/plugins/setup-helpers.js";
+} from "../../../src/channels/plugins/setup-wizard-helpers.js";
+import type { ChannelSetupDmPolicy } from "../../../src/channels/plugins/setup-wizard-types.js";
 import type { ChannelSetupWizard } from "../../../src/channels/plugins/setup-wizard.js";
-import type { ChannelSetupAdapter } from "../../../src/channels/plugins/types.adapters.js";
 import type { OpenClawConfig } from "../../../src/config/config.js";
 import type { DmPolicy } from "../../../src/config/types.js";
 import type { SecretInput } from "../../../src/config/types.secrets.js";
-import {
-  hasConfiguredSecretInput,
-  normalizeSecretInputString,
-} from "../../../src/config/types.secrets.js";
+import { hasConfiguredSecretInput } from "../../../src/config/types.secrets.js";
 import { formatResolvedUnresolvedNote } from "../../../src/plugin-sdk/resolution-notes.js";
-import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../../../src/routing/session-key.js";
+import { DEFAULT_ACCOUNT_ID } from "../../../src/routing/session-key.js";
 import { formatDocsLink } from "../../../src/terminal/links.js";
 import type { WizardPrompter } from "../../../src/wizard/prompts.js";
 import { listMatrixDirectoryGroupsLive } from "./directory-live.js";
 import { resolveMatrixAccount } from "./matrix/accounts.js";
 import { ensureMatrixSdkInstalled, isMatrixSdkAvailable } from "./matrix/deps.js";
 import { resolveMatrixTargets } from "./resolve-targets.js";
+import { buildMatrixConfigUpdate, matrixSetupAdapter } from "./setup-core.js";
 import type { CoreConfig } from "./types.js";
 
 const channel = "matrix" as const;
-
-function buildMatrixConfigUpdate(
-  cfg: CoreConfig,
-  input: {
-    homeserver?: string;
-    userId?: string;
-    accessToken?: string;
-    password?: string;
-    deviceName?: string;
-    initialSyncLimit?: number;
-  },
-): CoreConfig {
-  const existing = cfg.channels?.matrix ?? {};
-  return {
-    ...cfg,
-    channels: {
-      ...cfg.channels,
-      matrix: {
-        ...existing,
-        enabled: true,
-        ...(input.homeserver ? { homeserver: input.homeserver } : {}),
-        ...(input.userId ? { userId: input.userId } : {}),
-        ...(input.accessToken ? { accessToken: input.accessToken } : {}),
-        ...(input.password ? { password: input.password } : {}),
-        ...(input.deviceName ? { deviceName: input.deviceName } : {}),
-        ...(typeof input.initialSyncLimit === "number"
-          ? { initialSyncLimit: input.initialSyncLimit }
-          : {}),
-      },
-    },
-  };
-}
 
 function setMatrixDmPolicy(cfg: CoreConfig, policy: DmPolicy) {
   const allowFrom =
@@ -210,7 +170,79 @@ function setMatrixGroupRooms(cfg: CoreConfig, roomKeys: string[]) {
   };
 }
 
-const matrixDmPolicy: ChannelOnboardingDmPolicy = {
+async function resolveMatrixGroupRooms(params: {
+  cfg: CoreConfig;
+  entries: string[];
+  prompter: Pick<WizardPrompter, "note">;
+}): Promise<string[]> {
+  if (params.entries.length === 0) {
+    return [];
+  }
+  try {
+    const resolvedIds: string[] = [];
+    const unresolved: string[] = [];
+    for (const entry of params.entries) {
+      const trimmed = entry.trim();
+      if (!trimmed) {
+        continue;
+      }
+      const cleaned = trimmed.replace(/^(room|channel):/i, "").trim();
+      if (cleaned.startsWith("!") && cleaned.includes(":")) {
+        resolvedIds.push(cleaned);
+        continue;
+      }
+      const matches = await listMatrixDirectoryGroupsLive({
+        cfg: params.cfg,
+        query: trimmed,
+        limit: 10,
+      });
+      const exact = matches.find(
+        (match) => (match.name ?? "").toLowerCase() === trimmed.toLowerCase(),
+      );
+      const best = exact ?? matches[0];
+      if (best?.id) {
+        resolvedIds.push(best.id);
+      } else {
+        unresolved.push(entry);
+      }
+    }
+    const roomKeys = [...resolvedIds, ...unresolved.map((entry) => entry.trim()).filter(Boolean)];
+    const resolution = formatResolvedUnresolvedNote({
+      resolved: resolvedIds,
+      unresolved,
+    });
+    if (resolution) {
+      await params.prompter.note(resolution, "Matrix rooms");
+    }
+    return roomKeys;
+  } catch (err) {
+    await params.prompter.note(
+      `Room lookup failed; keeping entries as typed. ${String(err)}`,
+      "Matrix rooms",
+    );
+    return params.entries.map((entry) => entry.trim()).filter(Boolean);
+  }
+}
+
+const matrixGroupAccess: NonNullable<ChannelSetupWizard["groupAccess"]> = {
+  label: "Matrix rooms",
+  placeholder: "!roomId:server, #alias:server, Project Room",
+  currentPolicy: ({ cfg }) => cfg.channels?.matrix?.groupPolicy ?? "allowlist",
+  currentEntries: ({ cfg }) =>
+    Object.keys(cfg.channels?.matrix?.groups ?? cfg.channels?.matrix?.rooms ?? {}),
+  updatePrompt: ({ cfg }) => Boolean(cfg.channels?.matrix?.groups ?? cfg.channels?.matrix?.rooms),
+  setPolicy: ({ cfg, policy }) => setMatrixGroupPolicy(cfg as CoreConfig, policy),
+  resolveAllowlist: async ({ cfg, entries, prompter }) =>
+    await resolveMatrixGroupRooms({
+      cfg: cfg as CoreConfig,
+      entries,
+      prompter,
+    }),
+  applyAllowlist: ({ cfg, resolved }) =>
+    setMatrixGroupRooms(cfg as CoreConfig, resolved as string[]),
+};
+
+const matrixDmPolicy: ChannelSetupDmPolicy = {
   label: "Matrix",
   channel,
   policyKey: "channels.matrix.dm.policy",
@@ -220,74 +252,7 @@ const matrixDmPolicy: ChannelOnboardingDmPolicy = {
   promptAllowFrom: promptMatrixAllowFrom,
 };
 
-export const matrixSetupAdapter: ChannelSetupAdapter = {
-  resolveAccountId: ({ accountId }) => normalizeAccountId(accountId),
-  applyAccountName: ({ cfg, accountId, name }) =>
-    applyAccountNameToChannelSection({
-      cfg: cfg as CoreConfig,
-      channelKey: channel,
-      accountId,
-      name,
-    }),
-  validateInput: ({ input }) => {
-    if (input.useEnv) {
-      return null;
-    }
-    if (!input.homeserver?.trim()) {
-      return "Matrix requires --homeserver";
-    }
-    const accessToken = input.accessToken?.trim();
-    const password = normalizeSecretInputString(input.password);
-    const userId = input.userId?.trim();
-    if (!accessToken && !password) {
-      return "Matrix requires --access-token or --password";
-    }
-    if (!accessToken) {
-      if (!userId) {
-        return "Matrix requires --user-id when using --password";
-      }
-      if (!password) {
-        return "Matrix requires --password when using --user-id";
-      }
-    }
-    return null;
-  },
-  applyAccountConfig: ({ cfg, accountId, input }) => {
-    const namedConfig = applyAccountNameToChannelSection({
-      cfg: cfg as CoreConfig,
-      channelKey: channel,
-      accountId,
-      name: input.name,
-    });
-    const next =
-      accountId !== DEFAULT_ACCOUNT_ID
-        ? migrateBaseNameToDefaultAccount({
-            cfg: namedConfig,
-            channelKey: channel,
-          })
-        : namedConfig;
-    if (input.useEnv) {
-      return {
-        ...next,
-        channels: {
-          ...next.channels,
-          matrix: {
-            ...next.channels?.matrix,
-            enabled: true,
-          },
-        },
-      } as CoreConfig;
-    }
-    return buildMatrixConfigUpdate(next as CoreConfig, {
-      homeserver: input.homeserver?.trim(),
-      userId: input.userId?.trim(),
-      accessToken: input.accessToken?.trim(),
-      password: normalizeSecretInputString(input.password),
-      deviceName: input.deviceName?.trim(),
-      initialSyncLimit: input.initialSyncLimit,
-    });
-  },
-};
+export { matrixSetupAdapter } from "./setup-core.js";
 
 export const matrixSetupWizard: ChannelSetupWizard = {
   channel,
@@ -492,72 +457,10 @@ export const matrixSetupWizard: ChannelSetupWizard = {
       next = await promptMatrixAllowFrom({ cfg: next, prompter });
     }
 
-    const existingGroups = next.channels?.matrix?.groups ?? next.channels?.matrix?.rooms;
-    const accessConfig = await promptChannelAccessConfig({
-      prompter,
-      label: "Matrix rooms",
-      currentPolicy: next.channels?.matrix?.groupPolicy ?? "allowlist",
-      currentEntries: Object.keys(existingGroups ?? {}),
-      placeholder: "!roomId:server, #alias:server, Project Room",
-      updatePrompt: Boolean(existingGroups),
-    });
-    if (accessConfig) {
-      if (accessConfig.policy !== "allowlist") {
-        next = setMatrixGroupPolicy(next, accessConfig.policy);
-      } else {
-        let roomKeys = accessConfig.entries;
-        if (accessConfig.entries.length > 0) {
-          try {
-            const resolvedIds: string[] = [];
-            const unresolved: string[] = [];
-            for (const entry of accessConfig.entries) {
-              const trimmed = entry.trim();
-              if (!trimmed) {
-                continue;
-              }
-              const cleaned = trimmed.replace(/^(room|channel):/i, "").trim();
-              if (cleaned.startsWith("!") && cleaned.includes(":")) {
-                resolvedIds.push(cleaned);
-                continue;
-              }
-              const matches = await listMatrixDirectoryGroupsLive({
-                cfg: next,
-                query: trimmed,
-                limit: 10,
-              });
-              const exact = matches.find(
-                (match) => (match.name ?? "").toLowerCase() === trimmed.toLowerCase(),
-              );
-              const best = exact ?? matches[0];
-              if (best?.id) {
-                resolvedIds.push(best.id);
-              } else {
-                unresolved.push(entry);
-              }
-            }
-            roomKeys = [...resolvedIds, ...unresolved.map((entry) => entry.trim()).filter(Boolean)];
-            const resolution = formatResolvedUnresolvedNote({
-              resolved: resolvedIds,
-              unresolved,
-            });
-            if (resolution) {
-              await prompter.note(resolution, "Matrix rooms");
-            }
-          } catch (err) {
-            await prompter.note(
-              `Room lookup failed; keeping entries as typed. ${String(err)}`,
-              "Matrix rooms",
-            );
-          }
-        }
-        next = setMatrixGroupPolicy(next, "allowlist");
-        next = setMatrixGroupRooms(next, roomKeys);
-      }
-    }
-
     return { cfg: next };
   },
   dmPolicy: matrixDmPolicy,
+  groupAccess: matrixGroupAccess,
   disable: (cfg) => ({
     ...(cfg as CoreConfig),
     channels: {

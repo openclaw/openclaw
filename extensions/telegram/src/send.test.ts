@@ -15,6 +15,7 @@ const { botApi, botCtorSpy, loadConfig, loadWebMedia, maybePersistResolvedTelegr
 const {
   buildInlineKeyboard,
   createForumTopicTelegram,
+  editForumTopicTelegram,
   editMessageTelegram,
   pinMessageTelegram,
   reactMessageTelegram,
@@ -255,6 +256,62 @@ describe("sendMessageTelegram", () => {
     expect(botApi.editForumTopic).toHaveBeenCalledWith("-1001234567890", 271, {
       name: "Codex Thread",
     });
+  });
+
+  it("edits a Telegram forum topic name and icon via the shared helper", async () => {
+    loadConfig.mockReturnValue({
+      channels: {
+        telegram: {
+          botToken: "tok",
+        },
+      },
+    });
+    botApi.editForumTopic.mockResolvedValue(true);
+
+    await editForumTopicTelegram("-1001234567890", 271, {
+      accountId: "default",
+      name: "Codex Thread",
+      iconCustomEmojiId: "emoji-123",
+    });
+
+    expect(botApi.editForumTopic).toHaveBeenCalledWith("-1001234567890", 271, {
+      name: "Codex Thread",
+      icon_custom_emoji_id: "emoji-123",
+    });
+  });
+
+  it("strips topic suffixes before editing a Telegram forum topic", async () => {
+    loadConfig.mockReturnValue({
+      channels: {
+        telegram: {
+          botToken: "tok",
+        },
+      },
+    });
+    botApi.editForumTopic.mockResolvedValue(true);
+
+    await editForumTopicTelegram("telegram:group:-1001234567890:topic:271", 271, {
+      accountId: "default",
+      name: "Codex Thread",
+    });
+
+    expect(botApi.editForumTopic).toHaveBeenCalledWith("-1001234567890", 271, {
+      name: "Codex Thread",
+    });
+  });
+
+  it("rejects empty topic edits", async () => {
+    await expect(
+      editForumTopicTelegram("-1001234567890", 271, {
+        accountId: "default",
+      }),
+    ).rejects.toThrow("Telegram forum topic update requires a name or iconCustomEmojiId");
+    await expect(
+      editForumTopicTelegram("-1001234567890", 271, {
+        accountId: "default",
+        iconCustomEmojiId: "   ",
+      }),
+    ).rejects.toThrow("Telegram forum topic icon custom emoji ID is required");
   });
 
   it("applies timeoutSeconds config precedence", async () => {
