@@ -1,11 +1,12 @@
 import type {
+  NormalizedOutboundPayload,
   OutboundDeliveryResult,
   deliverOutboundPayloads,
 } from "../../infra/outbound/deliver.js";
 import type { PluginRuntimeChannel } from "./types-channel.js";
 import type { PluginRuntimeCore, RuntimeLogger } from "./types-core.js";
 
-export type { RuntimeLogger };
+export type { NormalizedOutboundPayload, RuntimeLogger };
 
 // ── Outbound delivery types (plugin-facing) ─────────────────────────
 
