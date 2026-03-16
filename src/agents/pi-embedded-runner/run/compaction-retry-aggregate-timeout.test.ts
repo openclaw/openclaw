@@ -41,7 +41,7 @@ describe("waitForCompactionRetryWithAggregateTimeout", () => {
     });
   });
 
-  it("keeps waiting while compaction remains in flight", async () => {
+  it("keeps waiting while compaction remains in flight and resolves before cap", async () => {
     await withFakeTimers(async () => {
       const onTimeout = vi.fn();
       let compactionInFlight = true;
@@ -68,6 +68,31 @@ describe("waitForCompactionRetryWithAggregateTimeout", () => {
 
       expect(result.timedOut).toBe(false);
       expectClearedTimeoutState(onTimeout, false);
+    });
+  });
+
+  it("caps in-flight extensions to prevent indefinite zombie state", async () => {
+    await withFakeTimers(async () => {
+      const onTimeout = vi.fn();
+      // Compaction reports in-flight forever (stuck signal)
+      const waitForCompactionRetry = vi.fn(async () => await new Promise<void>(() => {}));
+
+      const resultPromise = waitForCompactionRetryWithAggregateTimeout({
+        waitForCompactionRetry,
+        abortable: async (promise) => await promise,
+        aggregateTimeoutMs: 60_000,
+        onTimeout,
+        isCompactionStillInFlight: () => true, // always stuck
+      });
+
+      // MAX_COMPACTION_INFLIGHT_EXTENSIONS is 3, so after 4 timeout windows
+      // (initial + 3 extensions) the function should give up.
+      // 4 * 60_000 = 240_000ms
+      await vi.advanceTimersByTimeAsync(240_000);
+      const result = await resultPromise;
+
+      expect(result.timedOut).toBe(true);
+      expectClearedTimeoutState(onTimeout, true);
     });
   });
 

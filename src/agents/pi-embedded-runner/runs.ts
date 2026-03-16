@@ -272,6 +272,31 @@ export function clearActiveEmbeddedRun(
   }
 }
 
+/**
+ * Force-clear the active run for a session regardless of handle identity.
+ *
+ * This is a safety net for timeout scenarios where the normal cleanup path
+ * (clearActiveEmbeddedRun with handle matching) may not execute because the
+ * run is stuck in a zombie state.  The timeout handler calls this to guarantee
+ * the session returns to idle so future runs are not blocked.
+ *
+ * See: https://github.com/openclaw/openclaw/issues/48518
+ */
+export function forceClearActiveEmbeddedRun(sessionId: string, sessionKey?: string) {
+  if (!ACTIVE_EMBEDDED_RUNS.has(sessionId)) {
+    return;
+  }
+  ACTIVE_EMBEDDED_RUNS.delete(sessionId);
+  ACTIVE_EMBEDDED_RUN_SNAPSHOTS.delete(sessionId);
+  logSessionStateChange({ sessionId, sessionKey, state: "idle", reason: "force_cleared_timeout" });
+  if (!sessionId.startsWith("probe-")) {
+    diag.warn(
+      `run force-cleared after timeout: sessionId=${sessionId} totalActive=${ACTIVE_EMBEDDED_RUNS.size}`,
+    );
+  }
+  notifyEmbeddedRunEnded(sessionId);
+}
+
 export const __testing = {
   resetActiveEmbeddedRuns() {
     for (const waiters of EMBEDDED_RUN_WAITERS.values()) {
