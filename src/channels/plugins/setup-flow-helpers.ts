@@ -1,18 +1,18 @@
 import {
   promptSecretRefForOnboarding,
   resolveSecretInputModeForEnvSelection,
-} from "../../../commands/auth-choice.apply-helpers.js";
-import type { OpenClawConfig } from "../../../config/config.js";
-import type { DmPolicy, GroupPolicy } from "../../../config/types.js";
-import type { SecretInput } from "../../../config/types.secrets.js";
-import { promptAccountId as promptAccountIdSdk } from "../../../plugin-sdk/onboarding.js";
-import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../../../routing/session-key.js";
-import type { WizardPrompter } from "../../../wizard/prompts.js";
-import type { PromptAccountId, PromptAccountIdParams } from "../onboarding-types.js";
+} from "../../commands/auth-choice.apply-helpers.js";
+import type { OpenClawConfig } from "../../config/config.js";
+import type { DmPolicy, GroupPolicy } from "../../config/types.js";
+import type { SecretInput } from "../../config/types.secrets.js";
+import { promptAccountId as promptAccountIdSdk } from "../../plugin-sdk/onboarding.js";
+import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../../routing/session-key.js";
+import type { WizardPrompter } from "../../wizard/prompts.js";
+import type { PromptAccountId, PromptAccountIdParams } from "./setup-flow-types.js";
 import {
   moveSingleAccountChannelSectionToDefaultAccount,
   patchScopedAccountConfig,
-} from "../setup-helpers.js";
+} from "./setup-helpers.js";
 
 export const promptAccountId: PromptAccountId = async (params: PromptAccountIdParams) => {
   return await promptAccountIdSdk(params);
@@ -34,20 +34,20 @@ export function mergeAllowFromEntries(
   return [...new Set(merged)];
 }
 
-export function splitOnboardingEntries(raw: string): string[] {
+export function splitSetupEntries(raw: string): string[] {
   return raw
     .split(/[\n,;]+/g)
     .map((entry) => entry.trim())
     .filter(Boolean);
 }
 
-type ParsedOnboardingEntry = { value: string } | { error: string };
+type ParsedSetupEntry = { value: string } | { error: string };
 
-export function parseOnboardingEntriesWithParser(
+export function parseSetupEntriesWithParser(
   raw: string,
-  parseEntry: (entry: string) => ParsedOnboardingEntry,
+  parseEntry: (entry: string) => ParsedSetupEntry,
 ): { entries: string[]; error?: string } {
-  const parts = splitOnboardingEntries(String(raw ?? ""));
+  const parts = splitSetupEntries(String(raw ?? ""));
   const entries: string[] = [];
   for (const part of parts) {
     const parsed = parseEntry(part);
@@ -59,11 +59,11 @@ export function parseOnboardingEntriesWithParser(
   return { entries: normalizeAllowFromEntries(entries) };
 }
 
-export function parseOnboardingEntriesAllowingWildcard(
+export function parseSetupEntriesAllowingWildcard(
   raw: string,
-  parseEntry: (entry: string) => ParsedOnboardingEntry,
+  parseEntry: (entry: string) => ParsedSetupEntry,
 ): { entries: string[]; error?: string } {
-  return parseOnboardingEntriesWithParser(raw, (entry) => {
+  return parseSetupEntriesWithParser(raw, (entry) => {
     if (entry === "*") {
       return { value: "*" };
     }
@@ -117,7 +117,7 @@ export function normalizeAllowFromEntries(
   return [...new Set(normalized)];
 }
 
-export function resolveOnboardingAccountId(params: {
+export function resolveSetupAccountId(params: {
   accountId?: string;
   defaultAccountId: string;
 }): string {
@@ -338,7 +338,7 @@ export function patchLegacyDmChannelConfig(params: {
   };
 }
 
-export function setOnboardingChannelEnabled(
+export function setSetupChannelEnabled(
   cfg: OpenClawConfig,
   channel: string,
   enabled: boolean,
@@ -656,7 +656,7 @@ export async function promptParsedAllowFromForScopedChannel(params: {
     accountId: string;
   }) => Array<string | number>;
 }): Promise<OpenClawConfig> {
-  const accountId = resolveOnboardingAccountId({
+  const accountId = resolveSetupAccountId({
     accountId: params.accountId,
     defaultAccountId: params.defaultAccountId,
   });
@@ -799,7 +799,7 @@ export async function promptLegacyChannelAllowFrom(params: {
     message: params.message,
     placeholder: params.placeholder,
     label: params.noteTitle,
-    parseInputs: splitOnboardingEntries,
+    parseInputs: splitSetupEntries,
     parseId: params.parseId,
     invalidWithoutTokenNote: params.invalidWithoutTokenNote,
     resolveEntries: params.resolveEntries,
