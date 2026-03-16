@@ -84,9 +84,95 @@
   overflow-x: auto;
 }
 
+.chat-text :where(.code-block-wrapper) {
+  margin-top: 0.75em;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  overflow: hidden;
+  background: color-mix(in srgb, var(--secondary) 55%, transparent);
+}
+
+.chat-text :where(.code-block-header) {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--border);
+  background: color-mix(in srgb, var(--panel) 85%, transparent);
+}
+
+.chat-text :where(.code-block-lang) {
+  min-width: 0;
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.chat-text :where(.code-block-copy) {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-width: 72px;
+  padding: 4px 10px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--panel) 70%, transparent);
+  color: var(--muted-strong);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.2;
+  cursor: pointer;
+  transition:
+    border-color 0.15s ease,
+    background 0.15s ease,
+    color 0.15s ease;
+}
+
+.chat-text :where(.code-block-copy:hover) {
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
+  background: color-mix(in srgb, var(--accent) 12%, var(--panel));
+  color: var(--text);
+}
+
+.chat-text :where(.code-block-copy:focus-visible) {
+  outline: 2px solid color-mix(in srgb, var(--accent) 55%, transparent);
+  outline-offset: 2px;
+}
+
+.chat-text :where(.code-block-copy__done) {
+  display: none;
+}
+
+.chat-text :where(.code-block-copy.copied) {
+  border-color: color-mix(in srgb, var(--success, #22c55e) 55%, var(--border));
+  background: color-mix(in srgb, var(--success, #22c55e) 12%, var(--panel));
+  color: var(--text);
+}
+
+.chat-text :where(.code-block-copy.copied .code-block-copy__idle) {
+  display: none;
+}
+
+.chat-text :where(.code-block-copy.copied .code-block-copy__done) {
+  display: inline;
+}
+
 .chat-text :where(pre code) {
   background: none;
   padding: 0;
+}
+
+.chat-text :where(.code-block-wrapper pre) {
+  margin: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
 }
 
 .chat-text :where(blockquote) {
