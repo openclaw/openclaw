@@ -152,6 +152,9 @@ export default defineConfig([
     // directly from dist/extensions instead of transpiling extensions/*.ts via Jiti.
     entry: bundledPluginBuildEntries,
     outDir: "dist",
+    deps: {
+      neverBundle: ["@lancedb/lancedb"],
+    },
   }),
   nodeBuildConfig({
     entry: "src/extensionAPI.ts",
