@@ -1,7 +1,7 @@
-import { parseTelegramTarget } from "../../../extensions/telegram/src/targets.js";
 import { isMessagingToolDuplicate } from "../../agents/pi-embedded-helpers.js";
 import type { MessagingToolSend } from "../../agents/pi-embedded-runner.js";
 import { normalizeChannelId } from "../../channels/plugins/index.js";
+import { parseExplicitTargetForChannel } from "../../channels/plugins/target-parsing.js";
 import type { ReplyToMode } from "../../config/types.js";
 import { normalizeTargetForProvider } from "../../infra/outbound/target-normalization.js";
 import { hasReplyChannelData, hasReplyContent } from "../../interactive/payload.js";
@@ -210,15 +210,16 @@ function targetsMatchForSuppression(params: {
     return params.targetKey === params.originTarget;
   }
 
-  const origin = parseTelegramTarget(params.originTarget);
-  const target = parseTelegramTarget(params.targetKey);
+  const origin = parseExplicitTargetForChannel("telegram", params.originTarget);
+  const target = parseExplicitTargetForChannel("telegram", params.targetKey);
+  if (!origin || !target) {
+    return params.targetKey === params.originTarget;
+  }
   const explicitTargetThreadId = normalizeThreadIdForComparison(params.targetThreadId);
   const targetThreadId =
-    explicitTargetThreadId ??
-    (target.messageThreadId != null ? String(target.messageThreadId) : undefined);
-  const originThreadId =
-    origin.messageThreadId != null ? String(origin.messageThreadId) : undefined;
-  if (origin.chatId.trim().toLowerCase() !== target.chatId.trim().toLowerCase()) {
+    explicitTargetThreadId ?? (target.threadId != null ? String(target.threadId) : undefined);
+  const originThreadId = origin.threadId != null ? String(origin.threadId) : undefined;
+  if (origin.to.trim().toLowerCase() !== target.to.trim().toLowerCase()) {
     return false;
   }
   if (originThreadId && targetThreadId != null) {
