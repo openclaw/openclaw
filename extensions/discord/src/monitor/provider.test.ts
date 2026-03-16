@@ -829,4 +829,36 @@ describe("monitorDiscordProvider", () => {
     expect(connectedTrue).toBeDefined();
     expect(connectedFalse).toBeDefined();
   });
+
+  it("logs Discord startup phases and early gateway debug events", async () => {
+    const { monitorDiscordProvider } = await import("./provider.js");
+    const runtime = baseRuntime();
+    const emitter = new EventEmitter();
+    const gateway = { emitter, isConnected: true, reconnectAttempts: 0 };
+    clientGetPluginMock.mockImplementation((name: string) =>
+      name === "gateway" ? gateway : undefined,
+    );
+    clientFetchUserMock.mockImplementationOnce(async () => {
+      emitter.emit("debug", "WebSocket connection opened");
+      return { id: "bot-1", username: "Molty" };
+    });
+
+    await monitorDiscordProvider({
+      config: baseConfig(),
+      runtime,
+    });
+
+    const messages = vi.mocked(runtime.log).mock.calls.map((call) => String(call[0]));
+    expect(messages.some((msg) => msg.includes("fetch-application-id:start"))).toBe(true);
+    expect(messages.some((msg) => msg.includes("fetch-application-id:done"))).toBe(true);
+    expect(messages.some((msg) => msg.includes("deploy-commands:start"))).toBe(true);
+    expect(messages.some((msg) => msg.includes("deploy-commands:done"))).toBe(true);
+    expect(messages.some((msg) => msg.includes("fetch-bot-identity:start"))).toBe(true);
+    expect(messages.some((msg) => msg.includes("fetch-bot-identity:done"))).toBe(true);
+    expect(
+      messages.some(
+        (msg) => msg.includes("gateway-debug") && msg.includes("WebSocket connection opened"),
+      ),
+    ).toBe(true);
+  });
 });
