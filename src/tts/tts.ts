@@ -76,6 +76,13 @@ const TELEGRAM_OUTPUT = {
   voiceCompatible: true,
 };
 
+const BLUEBUBBLES_OUTPUT = {
+  openai: "mp3" as const,
+  elevenlabs: "mp3_44100_128",
+  extension: ".mp3",
+  voiceCompatible: true,
+};
+
 const DEFAULT_OUTPUT = {
   openai: "mp3" as const,
   elevenlabs: "mp3_44100_128",
@@ -504,6 +511,9 @@ export function setLastTtsAttempt(entry: TtsStatusEntry | undefined): void {
 const VOICE_BUBBLE_CHANNELS = new Set(["telegram", "feishu", "whatsapp", "bluebubbles"]);
 
 function resolveOutputFormat(channelId?: string | null) {
+  if (channelId === "bluebubbles") {
+    return BLUEBUBBLES_OUTPUT;
+  }
   if (channelId && VOICE_BUBBLE_CHANNELS.has(channelId)) {
     return TELEGRAM_OUTPUT;
   }

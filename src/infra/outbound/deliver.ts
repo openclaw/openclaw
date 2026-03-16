@@ -26,6 +26,7 @@ import {
 import { hasReplyChannelData, hasReplyContent } from "../../interactive/payload.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { getAgentScopedMediaLocalRoots } from "../../media/local-roots.js";
+import { isAudioFileName } from "../../media/mime.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { throwIfAborted } from "./abort.js";
 import { resolveOutboundChannelPlugin } from "./channel-resolution.js";
@@ -731,12 +732,16 @@ async function deliverOutboundPayloadsCore(
         throwIfAborted(abortSignal);
         const caption = first ? payloadSummary.text : "";
         first = false;
+        const mediaSendOverrides = {
+          ...sendOverrides,
+          audioAsVoice: sendOverrides.audioAsVoice && isAudioFileName(url),
+        };
         if (handler.sendFormattedMedia) {
-          const delivery = await handler.sendFormattedMedia(caption, url, sendOverrides);
+          const delivery = await handler.sendFormattedMedia(caption, url, mediaSendOverrides);
           results.push(delivery);
           lastMessageId = delivery.messageId;
         } else {
-          const delivery = await handler.sendMedia(caption, url, sendOverrides);
+          const delivery = await handler.sendMedia(caption, url, mediaSendOverrides);
           results.push(delivery);
           lastMessageId = delivery.messageId;
         }

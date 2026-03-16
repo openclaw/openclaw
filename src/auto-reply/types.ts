@@ -81,6 +81,8 @@ export type ReplyPayload = {
   btw?: {
     question: string;
   };
+  mediaType?: string;
+  mediaTypes?: string[];
   replyToId?: string;
   replyToTag?: boolean;
   /** True when [[reply_to_current]] was present but not yet mapped to a message id. */
