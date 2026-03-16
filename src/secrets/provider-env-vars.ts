@@ -1,6 +1,7 @@
 import { BUNDLED_PROVIDER_AUTH_ENV_VAR_CANDIDATES } from "../plugins/bundled-provider-auth-env-vars.js";
 
 const CORE_PROVIDER_AUTH_ENV_VAR_CANDIDATES = {
+  "google-vertex": ["GOOGLE_CLOUD_API_KEY"],
   voyage: ["VOYAGE_API_KEY"],
   cerebras: ["CEREBRAS_API_KEY"],
   "anthropic-openai": ["ANTHROPIC_API_KEY"],
