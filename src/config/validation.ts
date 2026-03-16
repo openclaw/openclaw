@@ -343,6 +343,14 @@ export function validateConfigObjectRaw(
         }
         return { ok: true, config, warnings };
       }
+      // Retry after stripping still failed — report the retry's issues for accuracy
+      return {
+        ok: false,
+        issues: retried.error.issues.map((iss) => ({
+          path: iss.path.join("."),
+          message: iss.message,
+        })),
+      };
     }
     return {
       ok: false,
