@@ -16,7 +16,7 @@ jq -e '
 ' "$CONFIG" >/dev/null
 
 jq -e '
-  .channels.slack.channels["#platform-monitoring"].systemPrompt
+  .sre.promptTemplates.monitoringIncident
   | contains("_fetchMerklSingleRates()")
 ' "$CONFIG" >/dev/null
 
@@ -26,7 +26,7 @@ jq -e '
 ' "$CONFIG" >/dev/null
 
 jq -e '
-  .channels.slack.channels["#platform-monitoring"].systemPrompt
+  .sre.promptTemplates.monitoringIncident
   | contains("merged reward row")
 ' "$CONFIG" >/dev/null
 
@@ -36,7 +36,7 @@ jq -e '
 ' "$CONFIG" >/dev/null
 
 jq -e '
-  .channels.slack.channels["#platform-monitoring"].systemPrompt
+  .sre.promptTemplates.monitoringIncident
   | contains("If current code, query output, or live evidence disproves an earlier theory")
 ' "$CONFIG" >/dev/null
 

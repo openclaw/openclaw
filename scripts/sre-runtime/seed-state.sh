@@ -174,8 +174,11 @@ apply_slack_incident_channel_override() {
     .channels.slack.channels as $channels
     | ($incident_channels | map(select(. != "#bug-report"))) as $override_channels
     | ($channels["#bug-report"]) as $bug_report
-    | ($channels["#platform-monitoring"]
-        // $channels["#public-api-monitoring"]) as $monitoring_template
+    | (.sre.promptTemplates.monitoringIncident
+        // $channels["#platform-monitoring"].systemPrompt
+        // $channels["#public-api-monitoring"].systemPrompt) as $monitoring_prompt
+    | (($channels["#platform-monitoring"]
+        // $channels["#public-api-monitoring"]) | .systemPrompt = $monitoring_prompt) as $monitoring_template
     | if $bug_report == null or $monitoring_template == null then
         error("missing seeded Slack incident channel templates")
       else
