@@ -816,6 +816,28 @@ function renderSlashMenu(
   `;
 }
 
+const NEW_THREAD_DIALOG_TITLE_ID = "chat-thread-modal-title";
+const NEW_THREAD_DIALOG_LABEL_INPUT_ID = "chat-thread-label-input";
+
+function focusNewThreadDialogPrimaryField() {
+  requestAnimationFrame(() => {
+    const input = document.getElementById(NEW_THREAD_DIALOG_LABEL_INPUT_ID) as
+      | HTMLInputElement
+      | null;
+    input?.focus();
+    input?.select();
+  });
+}
+
+function handleNewThreadDialogKeydown(event: KeyboardEvent, requestUpdate: () => void) {
+  if (event.key !== "Escape") {
+    return;
+  }
+  event.preventDefault();
+  event.stopPropagation();
+  closeNewThreadDialog(requestUpdate);
+}
+
 function openNewThreadDialog(props: ChatProps, requestUpdate: () => void) {
   vs.newThreadOpen = true;
   vs.newThreadCreating = false;
@@ -824,6 +846,7 @@ function openNewThreadDialog(props: ChatProps, requestUpdate: () => void) {
   vs.newThreadLabel = "";
   vs.newThreadMessage = (props.getDraft?.() ?? "").trim();
   requestUpdate();
+  focusNewThreadDialogPrimaryField();
 }
 
 function closeNewThreadDialog(requestUpdate: () => void) {
@@ -873,11 +896,22 @@ function renderNewThreadDialog(
   }
   const agents = props.agentsList?.agents ?? [];
   return html`
-    <div class="chat-thread-modal-overlay" @click=${() => closeNewThreadDialog(requestUpdate)}>
-      <div class="chat-thread-modal" @click=${(event: Event) => event.stopPropagation()}>
+    <div
+      class="chat-thread-modal-overlay"
+      @click=${() => closeNewThreadDialog(requestUpdate)}
+      @keydown=${(event: KeyboardEvent) => handleNewThreadDialogKeydown(event, requestUpdate)}
+    >
+      <div
+        class="chat-thread-modal"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby=${NEW_THREAD_DIALOG_TITLE_ID}
+        tabindex="-1"
+        @click=${(event: Event) => event.stopPropagation()}
+      >
         <div class="chat-thread-modal__header">
           <div>
-            <div class="chat-thread-modal__title">Create new thread</div>
+            <div class="chat-thread-modal__title" id=${NEW_THREAD_DIALOG_TITLE_ID}>Create new thread</div>
             <div class="chat-thread-modal__sub">
               Start a parallel conversation without resetting the current session.
             </div>
@@ -922,6 +956,7 @@ function renderNewThreadDialog(
           <label class="field">
             <span>Thread label (optional)</span>
             <input
+              id=${NEW_THREAD_DIALOG_LABEL_INPUT_ID}
               .value=${vs.newThreadLabel}
               @input=${(event: Event) => {
                 vs.newThreadLabel = (event.target as HTMLInputElement).value;

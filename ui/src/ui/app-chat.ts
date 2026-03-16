@@ -1,6 +1,6 @@
 import { parseAgentSessionKey } from "../../../src/sessions/session-key-utils.js";
 import { scheduleChatScroll } from "./app-scroll.ts";
-import { applySettings, setLastActiveSessionKey } from "./app-settings.ts";
+import { applySettings, setLastActiveSessionKey, syncUrlWithSessionKey } from "./app-settings.ts";
 import { resetToolStream } from "./app-tool-stream.ts";
 import type { OpenClawApp } from "./app.ts";
 import { executeSlashCommand } from "./chat/slash-command-executor.ts";
@@ -172,6 +172,7 @@ export async function handleCreateThread(
     sessionKey: nextSessionKey,
     lastActiveSessionKey: nextSessionKey,
   });
+  syncUrlWithSessionKey(host, nextSessionKey, false);
   scheduleChatScroll(host as unknown as Parameters<typeof scheduleChatScroll>[0], true);
   void host.loadAssistantIdentity();
   void refreshChatAvatar(host);
@@ -200,6 +201,7 @@ export async function handleCreateThread(
       sessionKey: previousSessionKey,
       lastActiveSessionKey: previousLastActiveSessionKey,
     });
+    syncUrlWithSessionKey(host, previousSessionKey, true);
     host.lastError = `Failed to create thread: ${String(err)}`;
     await loadChatHistory(host);
     void host.loadAssistantIdentity();
