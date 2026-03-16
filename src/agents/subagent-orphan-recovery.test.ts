@@ -186,7 +186,7 @@ describe("subagent-orphan-recovery", () => {
     expect(gateway.callGateway).toHaveBeenCalledTimes(2);
   });
 
-  it("handles callGateway failure gracefully", async () => {
+  it("handles callGateway failure gracefully and preserves abortedLastRun flag", async () => {
     const sessions = await import("../config/sessions.js");
     const gateway = await import("../gateway/call.js");
 
@@ -211,6 +211,10 @@ describe("subagent-orphan-recovery", () => {
 
     expect(result.recovered).toBe(0);
     expect(result.failed).toBe(1);
+
+    // abortedLastRun flag should NOT be cleared on failure,
+    // so the next restart can retry the recovery
+    expect(sessions.updateSessionStore).not.toHaveBeenCalled();
   });
 
   it("returns empty results when no active runs exist", async () => {
@@ -246,8 +250,12 @@ describe("subagent-orphan-recovery", () => {
     expect(gateway.callGateway).not.toHaveBeenCalled();
   });
 
-  it("clears abortedLastRun flag before resuming", async () => {
+  it("clears abortedLastRun flag after successful resume", async () => {
     const sessions = await import("../config/sessions.js");
+    const gateway = await import("../gateway/call.js");
+
+    // Ensure callGateway succeeds for this test
+    vi.mocked(gateway.callGateway).mockResolvedValue({ runId: "resumed-run" } as never);
 
     vi.mocked(sessions.loadSessionStore).mockReturnValue({
       "agent:main:subagent:test-session-1": {
@@ -266,7 +274,7 @@ describe("subagent-orphan-recovery", () => {
       getActiveRuns: () => activeRuns,
     });
 
-    // updateSessionStore should have been called to clear the flag
+    // updateSessionStore should have been called AFTER successful resume to clear the flag
     expect(sessions.updateSessionStore).toHaveBeenCalledOnce();
     const calls = vi.mocked(sessions.updateSessionStore).mock.calls;
     const [storePath, updater] = calls[0];
