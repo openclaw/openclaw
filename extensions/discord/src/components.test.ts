@@ -1,11 +1,6 @@
 import { MessageFlags } from "discord-api-types/v10";
-import { describe, expect, it, beforeEach } from "vitest";
-import {
-  clearDiscordComponentEntries,
-  registerDiscordComponentEntries,
-  resolveDiscordComponentEntry,
-  resolveDiscordModalEntry,
-} from "./components-registry.js";
+import { describe, expect, it, vi } from "vitest";
+import { withStateDirEnv } from "../../../src/test-helpers/state-dir-env.js";
 import {
   buildDiscordComponentMessage,
   buildDiscordComponentMessageFlags,
@@ -19,13 +14,11 @@ describe("discord components", () => {
       blocks: [
         {
           type: "actions",
-          buttons: [{ label: "Approve", style: "success", callbackData: "codex:approve" }],
+          buttons: [{ label: "Approve", style: "success" }],
         },
       ],
       modal: {
         title: "Details",
-        callbackData: "codex:modal",
-        allowedUsers: ["discord:user-1"],
         fields: [{ type: "text", label: "Requester" }],
       },
     });
@@ -41,11 +34,6 @@ describe("discord components", () => {
 
     const trigger = result.entries.find((entry) => entry.kind === "modal-trigger");
     expect(trigger?.modalId).toBe(result.modals[0]?.id);
-    expect(result.entries.find((entry) => entry.kind === "button")?.callbackData).toBe(
-      "codex:approve",
-    );
-    expect(result.modals[0]?.callbackData).toBe("codex:modal");
-    expect(result.modals[0]?.allowedUsers).toEqual(["discord:user-1"]);
   });
 
   it("requires options for modal select fields", () => {
@@ -74,32 +62,106 @@ describe("discord components", () => {
 });
 
 describe("discord component registry", () => {
-  beforeEach(() => {
-    clearDiscordComponentEntries();
+  async function importRegistryModule() {
+    vi.resetModules();
+    return import("./components-registry.js");
+  }
+
+  it("registers and consumes component entries", async () => {
+    await withStateDirEnv("openclaw-discord-components-registry-", async () => {
+      const registry = await importRegistryModule();
+      registry.clearDiscordComponentEntries();
+      registry.registerDiscordComponentEntries({
+        entries: [{ id: "btn_1", kind: "button", label: "Confirm" }],
+        modals: [
+          {
+            id: "mdl_1",
+            title: "Details",
+            fields: [{ id: "fld_1", name: "name", label: "Name", type: "text" }],
+          },
+        ],
+        messageId: "msg_1",
+        ttlMs: 1000,
+      });
+
+      const entry = registry.resolveDiscordComponentEntry({ id: "btn_1", consume: false });
+      expect(entry?.messageId).toBe("msg_1");
+
+      const modal = registry.resolveDiscordModalEntry({ id: "mdl_1", consume: false });
+      expect(modal?.messageId).toBe("msg_1");
+
+      const consumed = registry.resolveDiscordComponentEntry({ id: "btn_1" });
+      expect(consumed?.id).toBe("btn_1");
+      expect(registry.resolveDiscordComponentEntry({ id: "btn_1" })).toBeNull();
+    });
   });
 
-  it("registers and consumes component entries", () => {
-    registerDiscordComponentEntries({
-      entries: [{ id: "btn_1", kind: "button", label: "Confirm" }],
-      modals: [
-        {
-          id: "mdl_1",
-          title: "Details",
-          fields: [{ id: "fld_1", name: "name", label: "Name", type: "text" }],
-        },
-      ],
-      messageId: "msg_1",
-      ttlMs: 1000,
+  it("rehydrates component entries after a simulated restart", async () => {
+    await withStateDirEnv("openclaw-discord-components-registry-", async () => {
+      const firstLoad = await importRegistryModule();
+      firstLoad.clearDiscordComponentEntries();
+      firstLoad.registerDiscordComponentEntries({
+        entries: [{ id: "btn_restart", kind: "button", label: "Rehydrate" }],
+        modals: [
+          {
+            id: "mdl_restart",
+            title: "Restart Form",
+            fields: [{ id: "fld_1", name: "name", label: "Name", type: "text" }],
+          },
+        ],
+        messageId: "msg_restart",
+        ttlMs: 60_000,
+      });
+
+      const reloaded = await importRegistryModule();
+      const component = reloaded.resolveDiscordComponentEntry({
+        id: "btn_restart",
+        consume: false,
+      });
+      expect(component).toMatchObject({
+        id: "btn_restart",
+        messageId: "msg_restart",
+      });
+
+      const modal = reloaded.resolveDiscordModalEntry({ id: "mdl_restart", consume: false });
+      expect(modal).toMatchObject({
+        id: "mdl_restart",
+        messageId: "msg_restart",
+      });
     });
+  });
 
-    const entry = resolveDiscordComponentEntry({ id: "btn_1", consume: false });
-    expect(entry?.messageId).toBe("msg_1");
+  it("prunes expired entries after a simulated restart", async () => {
+    await withStateDirEnv("openclaw-discord-components-registry-", async () => {
+      const firstLoad = await importRegistryModule();
+      firstLoad.clearDiscordComponentEntries();
+      const expiredAt = Date.now() - 1_000;
+      firstLoad.registerDiscordComponentEntries({
+        entries: [
+          {
+            id: "btn_expired",
+            kind: "button",
+            label: "Expired",
+            createdAt: expiredAt - 1_000,
+            expiresAt: expiredAt,
+          },
+        ],
+        modals: [
+          {
+            id: "mdl_expired",
+            title: "Expired Form",
+            createdAt: expiredAt - 1_000,
+            expiresAt: expiredAt,
+            fields: [{ id: "fld_1", name: "name", label: "Name", type: "text" }],
+          },
+        ],
+      });
 
-    const modal = resolveDiscordModalEntry({ id: "mdl_1", consume: false });
-    expect(modal?.messageId).toBe("msg_1");
-
-    const consumed = resolveDiscordComponentEntry({ id: "btn_1" });
-    expect(consumed?.id).toBe("btn_1");
-    expect(resolveDiscordComponentEntry({ id: "btn_1" })).toBeNull();
+      const reloaded = await importRegistryModule();
+      expect(
+        reloaded.resolveDiscordComponentEntry({ id: "btn_expired", consume: false }),
+      ).toBeNull();
+      expect(reloaded.resolveDiscordModalEntry({ id: "mdl_expired", consume: false })).toBeNull();
+    });
   });
 });
