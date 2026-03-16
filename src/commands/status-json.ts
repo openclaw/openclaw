@@ -2,15 +2,20 @@ import { callGateway } from "../gateway/call.js";
 import type { HeartbeatEventPayload } from "../infra/heartbeat-events.js";
 import { normalizeUpdateChannel, resolveUpdateChannelDisplay } from "../infra/update-channels.js";
 import type { RuntimeEnv } from "../runtime.js";
-import { runSecurityAudit } from "../security/audit.js";
 import { getDaemonStatusSummary, getNodeDaemonStatusSummary } from "./status.daemon.js";
 import { scanStatus } from "./status.scan.js";
 
 let providerUsagePromise: Promise<typeof import("../infra/provider-usage.js")> | undefined;
+let securityAuditModulePromise: Promise<typeof import("../security/audit.runtime.js")> | undefined;
 
 function loadProviderUsage() {
   providerUsagePromise ??= import("../infra/provider-usage.js");
   return providerUsagePromise;
+}
+
+function loadSecurityAuditModule() {
+  securityAuditModulePromise ??= import("../security/audit.runtime.js");
+  return securityAuditModulePromise;
 }
 
 export async function statusJsonCommand(
@@ -23,13 +28,15 @@ export async function statusJsonCommand(
   runtime: RuntimeEnv,
 ) {
   const scan = await scanStatus({ json: true, timeoutMs: opts.timeoutMs, all: opts.all }, runtime);
-  const securityAudit = await runSecurityAudit({
-    config: scan.cfg,
-    sourceConfig: scan.sourceConfig,
-    deep: false,
-    includeFilesystem: true,
-    includeChannelSecurity: true,
-  });
+  const securityAudit = await loadSecurityAuditModule().then(({ runSecurityAudit }) =>
+    runSecurityAudit({
+      config: scan.cfg,
+      sourceConfig: scan.sourceConfig,
+      deep: false,
+      includeFilesystem: true,
+      includeChannelSecurity: true,
+    }),
+  );
 
   const usage = opts.usage
     ? await loadProviderUsage().then(({ loadProviderUsageSummary }) =>

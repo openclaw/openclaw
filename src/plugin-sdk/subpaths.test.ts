@@ -1,5 +1,6 @@
 import * as extensionApi from "openclaw/extension-api";
 import * as compatSdk from "openclaw/plugin-sdk/compat";
+import * as coreSdk from "openclaw/plugin-sdk/core";
 import * as discordSdk from "openclaw/plugin-sdk/discord";
 import * as imessageSdk from "openclaw/plugin-sdk/imessage";
 import * as lineSdk from "openclaw/plugin-sdk/line";
@@ -23,6 +24,13 @@ describe("plugin-sdk subpath exports", () => {
   it("exports compat helpers", () => {
     expect(typeof compatSdk.emptyPluginConfigSchema).toBe("function");
     expect(typeof compatSdk.resolveControlCommandGate).toBe("function");
+  });
+
+  it("exports core routing helpers", () => {
+    expect(typeof coreSdk.buildAgentSessionKey).toBe("function");
+    expect(typeof coreSdk.resolveThreadSessionKeys).toBe("function");
+    expect(typeof coreSdk.runPassiveAccountLifecycle).toBe("function");
+    expect(typeof coreSdk.createLoggerBackedRuntime).toBe("function");
   });
 
   it("exports Discord helpers", () => {

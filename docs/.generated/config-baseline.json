@@ -8035,21 +8035,7 @@
         "storage"
       ],
       "label": "Browser Profile Driver",
-      "help": "Per-profile browser driver mode: \"openclaw\" (or legacy \"clawd\") or \"extension\" depending on connection/runtime strategy. Use the driver that matches your browser control stack to avoid protocol mismatches.",
-      "hasChildren": false
-    },
-    {
-      "path": "browser.relayBindHost",
-      "kind": "core",
-      "type": "string",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [
-        "advanced"
-      ],
-      "label": "Browser Relay Bind Address",
-      "help": "Bind IP address for the Chrome extension relay listener. Leave unset for loopback-only access, or set an explicit non-loopback IP such as 0.0.0.0 only when the relay must be reachable across network namespaces (for example WSL2) and the surrounding network is already trusted.",
+      "help": "Per-profile browser driver mode. Use \"openclaw\" (or legacy \"clawd\") for CDP-based profiles, or use \"existing-session\" for host-local Chrome MCP attachment.",
       "hasChildren": false
     },
     {
@@ -40264,6 +40250,22 @@
       ],
       "label": "Config Reload Debounce (ms)",
       "help": "Debounce window (ms) before applying config changes.",
+      "hasChildren": false
+    },
+    {
+      "path": "gateway.reload.deferralTimeoutMs",
+      "kind": "core",
+      "type": "integer",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "network",
+        "performance",
+        "reliability"
+      ],
+      "label": "Restart Deferral Timeout (ms)",
+      "help": "Maximum time (ms) to wait for in-flight operations to complete before forcing a SIGUSR1 restart. Default: 300000 (5 minutes). Lower values risk aborting active subagent LLM calls.",
       "hasChildren": false
     },
     {

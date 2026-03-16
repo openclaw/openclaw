@@ -27,21 +27,32 @@ function mockCiaoService(params?: {
   advertise?: ReturnType<typeof vi.fn>;
   destroy?: ReturnType<typeof vi.fn>;
   serviceState?: string;
+  stateRef?: { value: string };
   on?: ReturnType<typeof vi.fn>;
 }) {
   const advertise = params?.advertise ?? vi.fn().mockResolvedValue(undefined);
   const destroy = params?.destroy ?? vi.fn().mockResolvedValue(undefined);
   const on = params?.on ?? vi.fn();
   createService.mockImplementation((options: Record<string, unknown>) => {
-    return {
+    const service = {
       advertise,
       destroy,
-      serviceState: params?.serviceState ?? "announced",
       on,
       getFQDN: () => `${asString(options.type, "service")}.${asString(options.domain, "local")}.`,
       getHostname: () => asString(options.hostname, "unknown"),
       getPort: () => Number(options.port ?? -1),
     };
+    Object.defineProperty(service, "serviceState", {
+      configurable: true,
+      enumerable: true,
+      get: () => params?.stateRef?.value ?? params?.serviceState ?? "announced",
+      set: (value: string) => {
+        if (params?.stateRef) {
+          params.stateRef.value = value;
+        }
+      },
+    });
+    return service;
   });
   return { advertise, destroy, on };
 }
@@ -254,7 +265,7 @@ describe("gateway bonjour advertiser", () => {
     expect(logWarn).toHaveBeenCalledWith(expect.stringContaining("advertise failed"));
 
     // watchdog should attempt re-advertise at the 60s interval tick
-    await vi.advanceTimersByTimeAsync(60_000);
+    await vi.advanceTimersByTimeAsync(15_000);
     expect(advertise).toHaveBeenCalledTimes(2);
 
     await started.stop();
@@ -281,6 +292,50 @@ describe("gateway bonjour advertiser", () => {
     expect(logWarn).toHaveBeenCalledWith(expect.stringContaining("advertise threw"));
 
     await started.stop();
+  });
+
+  it("recreates the advertiser when ciao gets stuck announcing", async () => {
+    enableAdvertiserUnitMode();
+    vi.useFakeTimers();
+
+    const stateRef = { value: "announcing" };
+    const events: string[] = [];
+    let advertiseCount = 0;
+    const destroy = vi.fn().mockImplementation(async () => {
+      events.push("destroy");
+    });
+    const advertise = vi.fn().mockImplementation(() => {
+      advertiseCount += 1;
+      events.push(`advertise:${advertiseCount}`);
+      if (advertiseCount === 1) {
+        stateRef.value = "announcing";
+        return new Promise<void>(() => {});
+      }
+      stateRef.value = "announced";
+      return Promise.resolve();
+    });
+    mockCiaoService({ advertise, destroy, stateRef });
+
+    const started = await startGatewayBonjourAdvertiser({
+      gatewayPort: 18789,
+      sshPort: 2222,
+    });
+
+    expect(createService).toHaveBeenCalledTimes(1);
+    expect(advertise).toHaveBeenCalledTimes(1);
+
+    await vi.advanceTimersByTimeAsync(15_000);
+
+    expect(logWarn).toHaveBeenCalledWith(expect.stringContaining("restarting advertiser"));
+    expect(createService).toHaveBeenCalledTimes(2);
+    expect(advertise).toHaveBeenCalledTimes(2);
+    expect(destroy).toHaveBeenCalledTimes(1);
+    expect(shutdown).toHaveBeenCalledTimes(1);
+    expect(events).toEqual(["advertise:1", "destroy", "advertise:2"]);
+
+    await started.stop();
+    expect(destroy).toHaveBeenCalledTimes(2);
+    expect(shutdown).toHaveBeenCalledTimes(2);
   });
 
   it("normalizes hostnames with domains for service names", async () => {

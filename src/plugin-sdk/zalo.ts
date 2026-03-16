@@ -3,7 +3,6 @@
 
 export { jsonResult, readStringParam } from "../agents/tools/common.js";
 export type { ReplyPayload } from "../auto-reply/types.js";
-export type { ChannelDock } from "../channels/dock.js";
 export {
   deleteAccountFromConfigSection,
   setAccountEnabledInConfigSection,

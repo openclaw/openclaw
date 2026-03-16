@@ -63,6 +63,23 @@ const ZAI_AUTH_CHOICE_ENDPOINT: Partial<
   "zai-cn": "cn",
 };
 
+export function normalizeApiKeyTokenProviderAuthChoice(params: {
+  authChoice: AuthChoice;
+  tokenProvider?: string;
+}): AuthChoice {
+  if (params.authChoice !== "apiKey" || !params.tokenProvider) {
+    return params.authChoice;
+  }
+  const normalizedTokenProvider = normalizeTokenProviderInput(params.tokenProvider);
+  if (!normalizedTokenProvider) {
+    return params.authChoice;
+  }
+  if (normalizedTokenProvider === "anthropic" || normalizedTokenProvider === "openai") {
+    return params.authChoice;
+  }
+  return API_KEY_TOKEN_PROVIDER_AUTH_CHOICE[normalizedTokenProvider] ?? params.authChoice;
+}
+
 export async function applyAuthChoiceApiProviders(
   params: ApplyAuthChoiceParams,
 ): Promise<ApplyAuthChoiceResult | null> {
@@ -77,14 +94,12 @@ export async function applyAuthChoiceApiProviders(
     (model) => (agentModelOverride = model),
   );
 
-  let authChoice = params.authChoice;
+  const authChoice = normalizeApiKeyTokenProviderAuthChoice({
+    authChoice: params.authChoice,
+    tokenProvider: params.opts?.tokenProvider,
+  });
   const normalizedTokenProvider = normalizeTokenProviderInput(params.opts?.tokenProvider);
   const requestedSecretInputMode = normalizeSecretInputModeInput(params.opts?.secretInputMode);
-  if (authChoice === "apiKey" && params.opts?.tokenProvider) {
-    if (normalizedTokenProvider !== "anthropic" && normalizedTokenProvider !== "openai") {
-      authChoice = API_KEY_TOKEN_PROVIDER_AUTH_CHOICE[normalizedTokenProvider ?? ""] ?? authChoice;
-    }
-  }
 
   if (authChoice === "openrouter-api-key") {
     return applyAuthChoiceOpenRouter(params);

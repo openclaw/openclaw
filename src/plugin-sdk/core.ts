@@ -28,6 +28,7 @@ export type {
   ProviderAuthContext,
   ProviderAuthDoctorHintContext,
   ProviderAuthMethodNonInteractiveContext,
+  ProviderAuthMethod,
   ProviderAuthResult,
 } from "../plugins/types.js";
 export type {
@@ -137,3 +138,11 @@ export type {
   TailscaleStatusCommandResult,
   TailscaleStatusCommandRunner,
 } from "../shared/tailscale-status.js";
+export {
+  buildAgentSessionKey,
+  type RoutePeer,
+  type RoutePeerKind,
+} from "../routing/resolve-route.js";
+export { resolveThreadSessionKeys } from "../routing/session-key.js";
+export { runPassiveAccountLifecycle } from "./channel-lifecycle.js";
+export { createLoggerBackedRuntime } from "./runtime.js";
