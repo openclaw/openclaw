@@ -52,14 +52,13 @@
 - 模型配置与 CLI: [Models](https://docs.openclaw.ai/concepts/models)
 - 认证配置文件轮换 (OAuth vs API 密钥) 及回退机制: [Model failover](https://docs.openclaw.ai/concepts/model-failover)
 
-## 安装 (推荐)
-
 最简单的方法是使用引导向导：
+
+运行时要求：**Node ≥22**。
 
 ```bash
 npm install -g openclaw@latest
 openclaw onboard
-```
 
 ### 更多详细安装选项：
 
