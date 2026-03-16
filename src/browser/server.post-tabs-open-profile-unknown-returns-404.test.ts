@@ -116,6 +116,21 @@ describe("profile CRUD endpoints", () => {
     const createBadRemoteBody = (await createBadRemote.json()) as { error: string };
     expect(createBadRemoteBody.error).toContain("cdpUrl");
 
+    const createClawd = await realFetch(`${base}/profiles/create`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: "legacyclawd", driver: "clawd" }),
+    });
+    expect(createClawd.status).toBe(200);
+    const createClawdBody = (await createClawd.json()) as {
+      profile?: string;
+      transport?: string;
+      cdpPort?: number | null;
+    };
+    expect(createClawdBody.profile).toBe("legacyclawd");
+    expect(createClawdBody.transport).toBe("cdp");
+    expect(createClawdBody.cdpPort).toBeTypeOf("number");
+
     const createLegacyDriver = await realFetch(`${base}/profiles/create`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
