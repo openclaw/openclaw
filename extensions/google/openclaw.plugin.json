@@ -1,0 +1,8 @@
+{
+  "id": "google",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}
