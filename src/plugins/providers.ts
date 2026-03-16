@@ -35,6 +35,7 @@ const BUNDLED_PROVIDER_ALLOWLIST_COMPAT_PLUGIN_IDS = [
   "venice",
   "vercel-ai-gateway",
   "volcengine",
+  "xai",
   "vllm",
   "xiaomi",
   "zai",
@@ -122,6 +123,8 @@ export function resolvePluginProviders(params: {
   bundledProviderAllowlistCompat?: boolean;
   bundledProviderVitestCompat?: boolean;
   onlyPluginIds?: string[];
+  activate?: boolean;
+  cache?: boolean;
 }): ProviderPlugin[] {
   const maybeAllowlistCompat = params.bundledProviderAllowlistCompat
     ? withBundledPluginAllowlistCompat({
@@ -140,6 +143,8 @@ export function resolvePluginProviders(params: {
     workspaceDir: params.workspaceDir,
     env: params.env,
     onlyPluginIds: params.onlyPluginIds,
+    cache: params.cache ?? false,
+    activate: params.activate ?? false,
     logger: createPluginLoaderLogger(log),
   });
 

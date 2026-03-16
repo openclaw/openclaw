@@ -3,7 +3,6 @@
 
 export type { ReplyPayload } from "../auto-reply/types.js";
 export { mergeAllowlist, summarizeMapping } from "../channels/allowlists/resolve-utils.js";
-export type { ChannelDock } from "../channels/dock.js";
 export { resolveMentionGatingWithBypass } from "../channels/mention-gating.js";
 export {
   deleteAccountFromConfigSection,
@@ -15,7 +14,7 @@ export {
   addWildcardAllowFrom,
   mergeAllowFromEntries,
   setTopLevelChannelDmPolicyWithAllowFrom,
-} from "../channels/plugins/onboarding/helpers.js";
+} from "../channels/plugins/setup-wizard-helpers.js";
 export {
   applyAccountNameToChannelSection,
   applySetupAccountConfigPatch,

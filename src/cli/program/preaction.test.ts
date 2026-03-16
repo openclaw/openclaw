@@ -169,7 +169,7 @@ describe("registerPreActionHooks", () => {
     expect(ensurePluginRegistryLoadedMock).toHaveBeenCalledWith({ scope: "all" });
   });
 
-  it("keeps onboarding and channels add manifest-first", async () => {
+  it("keeps setup alias and channels add manifest-first", async () => {
     await runPreAction({
       parseArgv: ["onboard"],
       processArgv: ["node", "openclaw", "onboard"],

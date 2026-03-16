@@ -1,11 +1,11 @@
-import type { ChannelOnboardingDmPolicy } from "../../../src/channels/plugins/onboarding-types.js";
 import {
   buildSingleChannelSecretPromptState,
   mergeAllowFromEntries,
   promptSingleChannelSecretInput,
   runSingleChannelSecretStep,
   setTopLevelChannelDmPolicyWithAllowFrom,
-} from "../../../src/channels/plugins/onboarding/helpers.js";
+} from "../../../src/channels/plugins/setup-wizard-helpers.js";
+import type { ChannelSetupDmPolicy } from "../../../src/channels/plugins/setup-wizard-types.js";
 import type { ChannelSetupWizard } from "../../../src/channels/plugins/setup-wizard.js";
 import type { OpenClawConfig } from "../../../src/config/config.js";
 import type { SecretInput } from "../../../src/config/types.secrets.js";
@@ -122,7 +122,7 @@ async function noteZaloTokenHelp(
 
 async function promptZaloAllowFrom(params: {
   cfg: OpenClawConfig;
-  prompter: Parameters<NonNullable<ChannelOnboardingDmPolicy["promptAllowFrom"]>>[0]["prompter"];
+  prompter: Parameters<NonNullable<ChannelSetupDmPolicy["promptAllowFrom"]>>[0]["prompter"];
   accountId: string;
 }): Promise<OpenClawConfig> {
   const { cfg, prompter, accountId } = params;
@@ -182,7 +182,7 @@ async function promptZaloAllowFrom(params: {
   } as OpenClawConfig;
 }
 
-const zaloDmPolicy: ChannelOnboardingDmPolicy = {
+const zaloDmPolicy: ChannelSetupDmPolicy = {
   label: "Zalo",
   channel,
   policyKey: "channels.zalo.dmPolicy",

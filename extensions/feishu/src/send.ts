@@ -139,6 +139,12 @@ async function sendReplyOrFallbackDirect(
     return sendFallbackDirect(client, params.directParams, params.directErrorPrefix);
   }
 
+  const threadReplyFallbackError = params.replyInThread
+    ? new Error(
+        "Feishu thread reply failed: reply target is unavailable and cannot safely fall back to a top-level send.",
+      )
+    : null;
+
   let response: { code?: number; msg?: string; data?: { message_id?: string } };
   try {
     response = await client.im.message.reply({
@@ -153,9 +159,15 @@ async function sendReplyOrFallbackDirect(
     if (!isWithdrawnReplyError(err)) {
       throw err;
     }
+    if (threadReplyFallbackError) {
+      throw threadReplyFallbackError;
+    }
     return sendFallbackDirect(client, params.directParams, params.directErrorPrefix);
   }
   if (shouldFallbackFromReplyTarget(response)) {
+    if (threadReplyFallbackError) {
+      throw threadReplyFallbackError;
+    }
     return sendFallbackDirect(client, params.directParams, params.directErrorPrefix);
   }
   assertFeishuMessageApiSuccess(response, params.replyErrorPrefix);
@@ -406,7 +418,7 @@ export type SendFeishuMessageParams = {
   accountId?: string;
 };
 
-function buildFeishuPostMessagePayload(params: { messageText: string }): {
+export function buildFeishuPostMessagePayload(params: { messageText: string }): {
   content: string;
   msgType: string;
 } {
@@ -484,6 +496,59 @@ export async function sendCardFeishu(params: SendFeishuCardParams): Promise<Feis
     directErrorPrefix: "Feishu card send failed",
     replyErrorPrefix: "Feishu card reply failed",
   });
+}
+
+export async function editMessageFeishu(params: {
+  cfg: ClawdbotConfig;
+  messageId: string;
+  text?: string;
+  card?: Record<string, unknown>;
+  accountId?: string;
+}): Promise<{ messageId: string; contentType: "post" | "interactive" }> {
+  const { cfg, messageId, text, card, accountId } = params;
+  const account = resolveFeishuAccount({ cfg, accountId });
+  if (!account.configured) {
+    throw new Error(`Feishu account "${account.accountId}" not configured`);
+  }
+
+  const hasText = typeof text === "string" && text.trim().length > 0;
+  const hasCard = Boolean(card);
+  if (hasText === hasCard) {
+    throw new Error("Feishu edit requires exactly one of text or card.");
+  }
+
+  const client = createFeishuClient(account);
+
+  if (card) {
+    const content = JSON.stringify(card);
+    const response = await client.im.message.patch({
+      path: { message_id: messageId },
+      data: { content },
+    });
+
+    if (response.code !== 0) {
+      throw new Error(`Feishu message edit failed: ${response.msg || `code ${response.code}`}`);
+    }
+
+    return { messageId, contentType: "interactive" };
+  }
+
+  const tableMode = getFeishuRuntime().channel.text.resolveMarkdownTableMode({
+    cfg,
+    channel: "feishu",
+  });
+  const messageText = getFeishuRuntime().channel.text.convertMarkdownTables(text!, tableMode);
+  const payload = buildFeishuPostMessagePayload({ messageText });
+  const response = await client.im.message.patch({
+    path: { message_id: messageId },
+    data: { content: payload.content },
+  });
+
+  if (response.code !== 0) {
+    throw new Error(`Feishu message edit failed: ${response.msg || `code ${response.code}`}`);
+  }
+
+  return { messageId, contentType: "post" };
 }
 
 export async function updateCardFeishu(params: {
@@ -626,42 +691,4 @@ export async function sendMarkdownCardFeishu(params: {
   }
   const card = buildMarkdownCard(cardText);
   return sendCardFeishu({ cfg, to, card, replyToMessageId, replyInThread, accountId });
-}
-
-/**
- * Edit an existing text message.
- * Note: Feishu only allows editing messages within 24 hours.
- */
-export async function editMessageFeishu(params: {
-  cfg: ClawdbotConfig;
-  messageId: string;
-  text: string;
-  accountId?: string;
-}): Promise<void> {
-  const { cfg, messageId, text, accountId } = params;
-  const account = resolveFeishuAccount({ cfg, accountId });
-  if (!account.configured) {
-    throw new Error(`Feishu account "${account.accountId}" not configured`);
-  }
-
-  const client = createFeishuClient(account);
-  const tableMode = getFeishuRuntime().channel.text.resolveMarkdownTableMode({
-    cfg,
-    channel: "feishu",
-  });
-  const messageText = getFeishuRuntime().channel.text.convertMarkdownTables(text ?? "", tableMode);
-
-  const { content, msgType } = buildFeishuPostMessagePayload({ messageText });
-
-  const response = await client.im.message.update({
-    path: { message_id: messageId },
-    data: {
-      msg_type: msgType,
-      content,
-    },
-  });
-
-  if (response.code !== 0) {
-    throw new Error(`Feishu message edit failed: ${response.msg || `code ${response.code}`}`);
-  }
 }

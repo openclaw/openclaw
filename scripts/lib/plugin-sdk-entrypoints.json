@@ -2,6 +2,7 @@
   "index",
   "core",
   "compat",
+  "routing",
   "telegram",
   "discord",
   "slack",

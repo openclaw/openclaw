@@ -1,11 +1,11 @@
-import type { ChannelOnboardingDmPolicy } from "../../../src/channels/plugins/onboarding-types.js";
 import {
   mergeAllowFromEntries,
   setTopLevelChannelAllowFrom,
   setTopLevelChannelDmPolicyWithAllowFrom,
   setTopLevelChannelGroupPolicy,
-  splitOnboardingEntries,
-} from "../../../src/channels/plugins/onboarding/helpers.js";
+  splitSetupEntries,
+} from "../../../src/channels/plugins/setup-wizard-helpers.js";
+import type { ChannelSetupDmPolicy } from "../../../src/channels/plugins/setup-wizard-types.js";
 import type { ChannelSetupWizard } from "../../../src/channels/plugins/setup-wizard.js";
 import type { OpenClawConfig } from "../../../src/config/config.js";
 import type { DmPolicy, MSTeamsTeamConfig } from "../../../src/config/types.js";
@@ -93,7 +93,7 @@ async function promptMSTeamsAllowFrom(params: {
       initialValue: existing[0] ? String(existing[0]) : undefined,
       validate: (value) => (String(value ?? "").trim() ? undefined : "Required"),
     });
-    const parts = splitOnboardingEntries(String(entry));
+    const parts = splitSetupEntries(String(entry));
     if (parts.length === 0) {
       await params.prompter.note("Enter at least one user.", "MS Teams allowlist");
       continue;
@@ -280,7 +280,7 @@ const msteamsGroupAccess: NonNullable<ChannelSetupWizard["groupAccess"]> = {
     setMSTeamsTeamsAllowlist(cfg, resolved as Array<{ teamKey: string; channelKey?: string }>),
 };
 
-const msteamsDmPolicy: ChannelOnboardingDmPolicy = {
+const msteamsDmPolicy: ChannelSetupDmPolicy = {
   label: "MS Teams",
   channel,
   policyKey: "channels.msteams.dmPolicy",

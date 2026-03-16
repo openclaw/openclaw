@@ -3,7 +3,6 @@
 
 export { jsonResult, readStringParam } from "../agents/tools/common.js";
 export type { ReplyPayload } from "../auto-reply/types.js";
-export type { ChannelDock } from "../channels/dock.js";
 export {
   deleteAccountFromConfigSection,
   setAccountEnabledInConfigSection,
@@ -18,7 +17,7 @@ export {
   promptSingleChannelSecretInput,
   runSingleChannelSecretStep,
   setTopLevelChannelDmPolicyWithAllowFrom,
-} from "../channels/plugins/onboarding/helpers.js";
+} from "../channels/plugins/setup-wizard-helpers.js";
 export { PAIRING_APPROVED_MESSAGE } from "../channels/plugins/pairing-message.js";
 export {
   applyAccountNameToChannelSection,

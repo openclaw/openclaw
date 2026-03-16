@@ -1,16 +1,16 @@
-import type { ChannelOnboardingDmPolicy } from "../../../src/channels/plugins/onboarding-types.js";
+import {
+  applyAccountNameToChannelSection,
+  migrateBaseNameToDefaultAccount,
+} from "../../../src/channels/plugins/setup-helpers.js";
 import {
   noteChannelLookupFailure,
   noteChannelLookupSummary,
   parseMentionOrPrefixedId,
   patchChannelConfigForAccount,
   setLegacyChannelDmPolicyWithAllowFrom,
-  setOnboardingChannelEnabled,
-} from "../../../src/channels/plugins/onboarding/helpers.js";
-import {
-  applyAccountNameToChannelSection,
-  migrateBaseNameToDefaultAccount,
-} from "../../../src/channels/plugins/setup-helpers.js";
+  setSetupChannelEnabled,
+} from "../../../src/channels/plugins/setup-wizard-helpers.js";
+import type { ChannelSetupDmPolicy } from "../../../src/channels/plugins/setup-wizard-types.js";
 import type { ChannelSetupWizard } from "../../../src/channels/plugins/setup-wizard.js";
 import type { ChannelSetupAdapter } from "../../../src/channels/plugins/types.adapters.js";
 import type { OpenClawConfig } from "../../../src/config/config.js";
@@ -140,7 +140,7 @@ export const discordSetupAdapter: ChannelSetupAdapter = {
 export function createDiscordSetupWizardProxy(
   loadWizard: () => Promise<{ discordSetupWizard: ChannelSetupWizard }>,
 ) {
-  const discordDmPolicy: ChannelOnboardingDmPolicy = {
+  const discordDmPolicy: ChannelSetupDmPolicy = {
     label: "Discord",
     channel,
     policyKey: "channels.discord.dmPolicy",
@@ -343,6 +343,6 @@ export function createDiscordSetupWizardProxy(
         }),
     },
     dmPolicy: discordDmPolicy,
-    disable: (cfg: OpenClawConfig) => setOnboardingChannelEnabled(cfg, channel, false),
+    disable: (cfg: OpenClawConfig) => setSetupChannelEnabled(cfg, channel, false),
   } satisfies ChannelSetupWizard;
 }
