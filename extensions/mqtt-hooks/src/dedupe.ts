@@ -2,6 +2,7 @@ import { createDedupeCache } from "openclaw/plugin-sdk/mqtt-hooks";
 
 export type MqttMessageDedupe = {
   shouldSkip: (key: string, now?: number) => boolean;
+  peek: (key: string, now?: number) => boolean;
   clear: () => void;
 };
 
@@ -14,6 +15,9 @@ export function createMqttMessageDedupe(windowMs: number): MqttMessageDedupe {
   return {
     shouldSkip(key, now) {
       return cache.check(key, now);
+    },
+    peek(key, now) {
+      return cache.peek(key, now);
     },
     clear() {
       cache.clear();

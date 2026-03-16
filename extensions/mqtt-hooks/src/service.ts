@@ -126,6 +126,7 @@ export function createMqttHooksService(params: {
     maxQueuedMessages: params.pluginConfig.runtime.maxQueuedMessages,
     onDrop: () => {},
   });
+  let queuedDedupeKeys = new Set<string>();
   let stopPromise: Promise<void> | null = null;
 
   const clearStartupGuardTimer = () => {
@@ -163,6 +164,7 @@ export function createMqttHooksService(params: {
           ctx.logger.warn("mqtt-hooks: dropped message because the ingress queue is full");
         },
       });
+      queuedDedupeKeys = new Set();
 
       const dispatchers = {
         dispatchWake: (value: { text: string; mode: "now" | "next-heartbeat" }) => {
@@ -273,18 +275,22 @@ export function createMqttHooksService(params: {
         }
 
         for (const subscription of processableSubscriptions) {
-          const accepted = queue.enqueue(async () => {
-            const dedupeKey = buildMqttDedupeKey({
-              subscriptionId: subscription.id,
-              topic: normalizedPacket.topic,
-              retain: normalizedPacket.retain,
-              payloadHash: payloadHasher(normalizedPacket.payload),
-            });
-            if (dedupe.shouldSkip(dedupeKey, now())) {
-              return;
-            }
+          const dedupeKey = buildMqttDedupeKey({
+            subscriptionId: subscription.id,
+            topic: normalizedPacket.topic,
+            retain: normalizedPacket.retain,
+            payloadHash: payloadHasher(normalizedPacket.payload),
+          });
+          if (queuedDedupeKeys.has(dedupeKey) || dedupe.peek(dedupeKey, now())) {
+            continue;
+          }
 
+          queuedDedupeKeys.add(dedupeKey);
+          const accepted = queue.enqueue(async () => {
             try {
+              if (dedupe.shouldSkip(dedupeKey, now())) {
+                return;
+              }
               const envelope = buildMqttMessageEnvelope({
                 subscription,
                 packet: normalizedPacket,
@@ -310,9 +316,12 @@ export function createMqttHooksService(params: {
               ctx.logger.warn(
                 `mqtt-hooks: failed to process topic ${topic} for ${subscription.id}: ${String(err)}`,
               );
+            } finally {
+              queuedDedupeKeys.delete(dedupeKey);
             }
           });
           if (!accepted) {
+            queuedDedupeKeys.delete(dedupeKey);
             ctx.logger.warn(
               `mqtt-hooks: queue full while handling subscription ${subscription.id}`,
             );
@@ -338,6 +347,7 @@ export function createMqttHooksService(params: {
 
       stopPromise = (async () => {
         queue.clear();
+        queuedDedupeKeys.clear();
         await queue.onIdle();
         if (!currentClient) {
           return;

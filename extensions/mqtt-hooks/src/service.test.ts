@@ -328,6 +328,90 @@ describe("createMqttHooksService", () => {
     });
   });
 
+  it("applies dedupe before queueing so duplicate bursts do not starve unique messages", async () => {
+    const firstDispatchCompletion = {
+      resolve: null as null | (() => void),
+    };
+    sharedMocks.dispatchAgentIngressAction.mockImplementationOnce(() => ({
+      runId: "run-1",
+      completion: new Promise<void>((resolve) => {
+        firstDispatchCompletion.resolve = resolve;
+      }),
+    }));
+    sharedMocks.dispatchAgentIngressAction.mockImplementationOnce(() => ({
+      runId: "run-2",
+      completion: Promise.resolve(),
+    }));
+
+    const fakeClient = new FakeMqttClient();
+    const logger = createLogger();
+    const service = createMqttHooksService({
+      pluginConfig: resolveMqttHooksPluginConfig({
+        broker: { url: "mqtt://broker.local:1883" },
+        runtime: {
+          maxConcurrentMessages: 1,
+        },
+        subscriptions: [
+          {
+            id: "alerts",
+            topic: "home/alerts/#",
+            qos: 1,
+            action: "agent",
+            agentId: "hooks",
+            ignoreRetainedOnStartup: false,
+          },
+        ],
+      }),
+      clientFactory: () => fakeClient as never,
+      payloadHasher: (payload) => payload.toString("utf8"),
+    });
+
+    await service.start({
+      config: {},
+      stateDir: "/tmp/openclaw-state",
+      logger,
+    });
+
+    fakeClient.emit("connect");
+    await vi.waitFor(() => {
+      expect(fakeClient.subscribed).toEqual([{ topic: "home/alerts/#", qos: 1 }]);
+    });
+
+    const packet = { qos: 1, retain: false, dup: false };
+    fakeClient.emit("message", "home/alerts/kitchen", Buffer.from("first"), packet);
+    await vi.waitFor(() => {
+      expect(sharedMocks.dispatchAgentIngressAction).toHaveBeenCalledTimes(1);
+    });
+
+    for (let index = 0; index < 40; index += 1) {
+      fakeClient.emit("message", "home/alerts/kitchen", Buffer.from("first"), packet);
+    }
+    fakeClient.emit("message", "home/alerts/kitchen", Buffer.from("second"), packet);
+    await Promise.resolve();
+    expect(sharedMocks.dispatchAgentIngressAction).toHaveBeenCalledTimes(1);
+    expect(logger.warn).not.toHaveBeenCalledWith(
+      expect.stringContaining("queue full while handling subscription alerts"),
+    );
+
+    if (!firstDispatchCompletion.resolve) {
+      throw new Error("expected first agent dispatch completion handle");
+    }
+    firstDispatchCompletion.resolve();
+
+    await vi.waitFor(() => {
+      expect(sharedMocks.dispatchAgentIngressAction).toHaveBeenCalledTimes(2);
+    });
+    expect(logger.warn).not.toHaveBeenCalledWith(
+      expect.stringContaining("queue full while handling subscription alerts"),
+    );
+
+    await service.stop?.({
+      config: {},
+      stateDir: "/tmp/openclaw-state",
+      logger,
+    });
+  });
+
   it("drops oversized payloads before queueing or computing dedupe hashes", async () => {
     const fakeClient = new FakeMqttClient();
     const logger = createLogger();
