@@ -99,6 +99,22 @@ describe("normalizeWebhookMessage", () => {
     expect(result).toBeNull();
   });
 
+  it("drops degraded group messages when chatId is 0", () => {
+    const result = normalizeWebhookMessage({
+      type: "new-message",
+      data: {
+        guid: "msg-chatid-zero",
+        text: "hello group",
+        isGroup: true,
+        isFromMe: false,
+        handle: null,
+        chatId: 0,
+      },
+    });
+
+    expect(result).toBeNull();
+  });
+
   it("falls back to me for fromMe messages when sender handle is missing", () => {
     const result = normalizeWebhookMessage({
       type: "new-message",
@@ -184,6 +200,23 @@ describe("normalizeWebhookReaction", () => {
         isGroup: true,
         isFromMe: false,
         handle: null,
+      },
+    });
+
+    expect(result).toBeNull();
+  });
+
+  it("drops degraded group reactions when chatId is 0", () => {
+    const result = normalizeWebhookReaction({
+      type: "updated-message",
+      data: {
+        guid: "msg-reaction-chatid-zero",
+        associatedMessageGuid: "p:0/msg-1",
+        associatedMessageType: 2000,
+        isGroup: true,
+        isFromMe: false,
+        handle: null,
+        chatId: 0,
       },
     });
 

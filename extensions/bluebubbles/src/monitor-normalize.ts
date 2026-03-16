@@ -703,7 +703,7 @@ function resolveNormalizedWebhookSender(params: {
   const hasStableGroupChatIdentity =
     Boolean(params.chatGuid?.trim()) ||
     Boolean(params.chatIdentifier?.trim()) ||
-    typeof params.chatId === "number";
+    (typeof params.chatId === "number" && params.chatId > 0);
   // Preserve group events with missing sender identity so processing can degrade
   // gracefully instead of dropping the entire message or reaction. Still require
   // a stable chat identity so unrelated degraded group events do not merge.
