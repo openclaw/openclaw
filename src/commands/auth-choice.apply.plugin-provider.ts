@@ -7,11 +7,6 @@ import {
 import { upsertAuthProfile } from "../agents/auth-profiles.js";
 import { resolveDefaultAgentWorkspaceDir } from "../agents/workspace.js";
 import { enablePluginInConfig } from "../plugins/enable.js";
-import {
-  resolveProviderPluginChoice,
-  runProviderModelSelectedHook,
-} from "../plugins/provider-wizard.js";
-import { resolvePluginProviders } from "../plugins/providers.js";
 import type { ProviderAuthMethod } from "../plugins/types.js";
 import type { ApplyAuthChoiceParams, ApplyAuthChoiceResult } from "./auth-choice.apply.js";
 import { isRemoteEnvironment } from "./oauth-env.js";
@@ -32,6 +27,10 @@ export type PluginProviderAuthChoiceOptions = {
   methodId?: string;
   label: string;
 };
+
+async function loadPluginProviderRuntime() {
+  return import("./auth-choice.apply.plugin-provider.runtime.js");
+}
 
 export async function runProviderPluginAuthMethod(params: {
   config: ApplyAuthChoiceParams["config"];
@@ -109,6 +108,8 @@ export async function applyAuthChoiceLoadedPluginProvider(
   const agentId = params.agentId ?? resolveDefaultAgentId(params.config);
   const workspaceDir =
     resolveAgentWorkspaceDir(params.config, agentId) ?? resolveDefaultAgentWorkspaceDir();
+  const { resolvePluginProviders, resolveProviderPluginChoice, runProviderModelSelectedHook } =
+    await loadPluginProviderRuntime();
   const providers = resolvePluginProviders({ config: params.config, workspaceDir });
   const resolved = resolveProviderPluginChoice({
     providers,
@@ -177,6 +178,8 @@ export async function applyAuthChoicePluginProvider(
   const workspaceDir =
     resolveAgentWorkspaceDir(nextConfig, agentId) ?? resolveDefaultAgentWorkspaceDir();
 
+  const { resolvePluginProviders, runProviderModelSelectedHook } =
+    await loadPluginProviderRuntime();
   const providers = resolvePluginProviders({ config: nextConfig, workspaceDir });
   const provider = resolveProviderMatch(providers, options.providerId);
   if (!provider) {

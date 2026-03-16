@@ -16,6 +16,88 @@ For model selection rules, see [/concepts/models](/concepts/models).
 - Model refs use `provider/model` (example: `opencode/claude-opus-4-6`).
 - If you set `agents.defaults.models`, it becomes the allowlist.
 - CLI helpers: `openclaw onboard`, `openclaw models list`, `openclaw models set <provider/model>`.
+- Provider plugins can inject model catalogs via `registerProvider({ catalog })`;
+  OpenClaw merges that output into `models.providers` before writing
+  `models.json`.
+- Provider manifests can declare `providerAuthEnvVars` so generic env-based
+  auth probes do not need to load plugin runtime.
+- Provider plugins can also own provider runtime behavior via
+  `resolveDynamicModel`, `prepareDynamicModel`, `normalizeResolvedModel`,
+  `capabilities`, `prepareExtraParams`, `wrapStreamFn`,
+  `isCacheTtlEligible`, `buildMissingAuthMessage`,
+  `suppressBuiltInModel`, `augmentModelCatalog`, `isBinaryThinking`,
+  `supportsXHighThinking`, `resolveDefaultThinkingLevel`,
+  `isModernModelRef`, `prepareRuntimeAuth`, `resolveUsageAuth`, and
+  `fetchUsageSnapshot`.
+
+## Plugin-owned provider behavior
+
+Provider plugins can now own most provider-specific logic while OpenClaw keeps
+the generic inference loop.
+
+Typical split:
+
+- `catalog`: provider appears in `models.providers`
+- `resolveDynamicModel`: provider accepts model ids not present in the local
+  static catalog yet
+- `prepareDynamicModel`: provider needs a metadata refresh before retrying
+  dynamic resolution
+- `normalizeResolvedModel`: provider needs transport or base URL rewrites
+- `capabilities`: provider publishes transcript/tooling/provider-family quirks
+- `prepareExtraParams`: provider defaults or normalizes per-model request params
+- `wrapStreamFn`: provider applies request headers/body/model compat wrappers
+- `isCacheTtlEligible`: provider decides which upstream model ids support prompt-cache TTL
+- `buildMissingAuthMessage`: provider replaces the generic auth-store error
+  with a provider-specific recovery hint
+- `suppressBuiltInModel`: provider hides stale upstream rows and can return a
+  vendor-owned error for direct resolution failures
+- `augmentModelCatalog`: provider appends synthetic/final catalog rows after
+  discovery and config merging
+- `isBinaryThinking`: provider owns binary on/off thinking UX
+- `supportsXHighThinking`: provider opts selected models into `xhigh`
+- `resolveDefaultThinkingLevel`: provider owns default `/think` policy for a
+  model family
+- `isModernModelRef`: provider owns live/smoke preferred-model matching
+- `prepareRuntimeAuth`: provider turns a configured credential into a short
+  lived runtime token
+- `resolveUsageAuth`: provider resolves usage/quota credentials for `/usage`
+  and related status/reporting surfaces
+- `fetchUsageSnapshot`: provider owns the usage endpoint fetch/parsing while
+  core still owns the summary shell and formatting
+
+Current bundled examples:
+
+- `anthropic`: Claude 4.6 forward-compat fallback, usage endpoint fetching,
+  and cache-TTL/provider-family metadata
+- `openrouter`: pass-through model ids, request wrappers, provider capability
+  hints, and cache-TTL policy
+- `github-copilot`: forward-compat model fallback, Claude-thinking transcript
+  hints, runtime token exchange, and usage endpoint fetching
+- `openai`: GPT-5.4 forward-compat fallback, direct OpenAI transport
+  normalization, Codex-aware missing-auth hints, Spark suppression, synthetic
+  OpenAI/Codex catalog rows, thinking/live-model policy, and
+  provider-family metadata
+- `google` and `google-gemini-cli`: Gemini 3.1 forward-compat fallback and
+  modern-model matching; Gemini CLI OAuth also owns usage-token parsing and
+  quota endpoint fetching for usage surfaces
+- `moonshot`: shared transport, plugin-owned thinking payload normalization
+- `kilocode`: shared transport, plugin-owned request headers, reasoning payload
+  normalization, Gemini transcript hints, and cache-TTL policy
+- `zai`: GLM-5 forward-compat fallback, `tool_stream` defaults, cache-TTL
+  policy, binary-thinking/live-model policy, and usage auth + quota fetching
+- `mistral`, `opencode`, and `opencode-go`: plugin-owned capability metadata
+- `byteplus`, `cloudflare-ai-gateway`, `huggingface`, `kimi-coding`,
+  `minimax-portal`, `modelstudio`, `nvidia`, `qianfan`, `qwen-portal`,
+  `synthetic`, `together`, `venice`, `vercel-ai-gateway`, and `volcengine`:
+  plugin-owned catalogs only
+- `minimax` and `xiaomi`: plugin-owned catalogs plus usage auth/snapshot logic
+
+The bundled `openai` plugin now owns both provider ids: `openai` and
+`openai-codex`.
+
+That covers providers that still fit OpenClaw's normal transports. A provider
+that needs a totally custom request executor is a separate, deeper extension
+surface.
 
 ## API key rotation
 
@@ -114,16 +196,13 @@ OpenClaw ships with the pi‑ai catalog. These providers require **no**
 - Compatibility: legacy OpenClaw config using `google/gemini-3.1-flash-preview` is normalized to `google/gemini-3-flash-preview`
 - CLI: `openclaw onboard --auth-choice gemini-api-key`
 
-### Google Vertex, Antigravity, and Gemini CLI
+### Google Vertex and Gemini CLI
 
-- Providers: `google-vertex`, `google-antigravity`, `google-gemini-cli`
-- Auth: Vertex uses gcloud ADC; Antigravity/Gemini CLI use their respective auth flows
-- Caution: Antigravity and Gemini CLI OAuth in OpenClaw are unofficial integrations. Some users have reported Google account restrictions after using third-party clients. Review Google terms and use a non-critical account if you choose to proceed.
-- Antigravity OAuth is shipped as a bundled plugin (`google-antigravity-auth`, disabled by default).
-  - Enable: `openclaw plugins enable google-antigravity-auth`
-  - Login: `openclaw models auth login --provider google-antigravity --set-default`
-- Gemini CLI OAuth is shipped as a bundled plugin (`google-gemini-cli-auth`, disabled by default).
-  - Enable: `openclaw plugins enable google-gemini-cli-auth`
+- Providers: `google-vertex`, `google-gemini-cli`
+- Auth: Vertex uses gcloud ADC; Gemini CLI uses its OAuth flow
+- Caution: Gemini CLI OAuth in OpenClaw is an unofficial integration. Some users have reported Google account restrictions after using third-party clients. Review Google terms and use a non-critical account if you choose to proceed.
+- Gemini CLI OAuth is shipped as part of the bundled `google` plugin.
+  - Enable: `openclaw plugins enable google`
   - Login: `openclaw models auth login --provider google-gemini-cli --set-default`
   - Note: you do **not** paste a client id or secret into `openclaw.json`. The CLI login flow stores
     tokens in auth profiles on the gateway host.
@@ -154,12 +233,26 @@ OpenClaw ships with the pi‑ai catalog. These providers require **no**
 
 See [/providers/kilocode](/providers/kilocode) for setup details.
 
-### Other built-in providers
+### Other bundled provider plugins
 
 - OpenRouter: `openrouter` (`OPENROUTER_API_KEY`)
 - Example model: `openrouter/anthropic/claude-sonnet-4-5`
 - Kilo Gateway: `kilocode` (`KILOCODE_API_KEY`)
 - Example model: `kilocode/anthropic/claude-opus-4.6`
+- MiniMax: `minimax` (`MINIMAX_API_KEY`)
+- Moonshot: `moonshot` (`MOONSHOT_API_KEY`)
+- Kimi Coding: `kimi-coding` (`KIMI_API_KEY` or `KIMICODE_API_KEY`)
+- Qianfan: `qianfan` (`QIANFAN_API_KEY`)
+- Model Studio: `modelstudio` (`MODELSTUDIO_API_KEY`)
+- NVIDIA: `nvidia` (`NVIDIA_API_KEY`)
+- Together: `together` (`TOGETHER_API_KEY`)
+- Venice: `venice` (`VENICE_API_KEY`)
+- Xiaomi: `xiaomi` (`XIAOMI_API_KEY`)
+- Vercel AI Gateway: `vercel-ai-gateway` (`AI_GATEWAY_API_KEY`)
+- Hugging Face Inference: `huggingface` (`HUGGINGFACE_HUB_TOKEN` or `HF_TOKEN`)
+- Cloudflare AI Gateway: `cloudflare-ai-gateway` (`CLOUDFLARE_AI_GATEWAY_API_KEY`)
+- Volcengine: `volcengine` (`VOLCANO_ENGINE_API_KEY`)
+- BytePlus: `byteplus` (`BYTEPLUS_API_KEY`)
 - xAI: `xai` (`XAI_API_KEY`)
 - Mistral: `mistral` (`MISTRAL_API_KEY`)
 - Example model: `mistral/mistral-large-latest`
@@ -169,12 +262,16 @@ See [/providers/kilocode](/providers/kilocode) for setup details.
   - GLM models on Cerebras use ids `zai-glm-4.7` and `zai-glm-4.6`.
   - OpenAI-compatible base URL: `https://api.cerebras.ai/v1`.
 - GitHub Copilot: `github-copilot` (`COPILOT_GITHUB_TOKEN` / `GH_TOKEN` / `GITHUB_TOKEN`)
-- Hugging Face Inference: `huggingface` (`HUGGINGFACE_HUB_TOKEN` or `HF_TOKEN`) — OpenAI-compatible router; example model: `huggingface/deepseek-ai/DeepSeek-R1`; CLI: `openclaw onboard --auth-choice huggingface-api-key`. See [Hugging Face (Inference)](/providers/huggingface).
+- Hugging Face Inference example model: `huggingface/deepseek-ai/DeepSeek-R1`; CLI: `openclaw onboard --auth-choice huggingface-api-key`. See [Hugging Face (Inference)](/providers/huggingface).
 
 ## Providers via `models.providers` (custom/base URL)
 
 Use `models.providers` (or `models.json`) to add **custom** providers or
 OpenAI/Anthropic‑compatible proxies.
+
+Many of the bundled provider plugins below already publish a default catalog.
+Use explicit `models.providers.<id>` entries only when you want to override the
+default base URL, headers, or model list.
 
 ### Moonshot AI (Kimi)
 
@@ -235,10 +332,9 @@ Kimi Coding uses Moonshot AI's Anthropic-compatible endpoint:
 ### Qwen OAuth (free tier)
 
 Qwen provides OAuth access to Qwen Coder + Vision via a device-code flow.
-Enable the bundled plugin, then log in:
+The bundled provider plugin is enabled by default, so just log in:
 
 ```bash
-openclaw plugins enable qwen-portal-auth
 openclaw models auth login --provider qwen-portal --set-default
 ```
 

@@ -100,10 +100,48 @@ export type {
   OpenClawPluginApi,
   OpenClawPluginService,
   OpenClawPluginServiceContext,
+  PluginHookInboundClaimContext,
+  PluginHookInboundClaimEvent,
+  PluginHookInboundClaimResult,
+  PluginInteractiveDiscordHandlerContext,
+  PluginInteractiveHandlerRegistration,
+  PluginInteractiveTelegramHandlerContext,
   PluginLogger,
   ProviderAuthContext,
   ProviderAuthResult,
+  ProviderAugmentModelCatalogContext,
+  ProviderBuiltInModelSuppressionContext,
+  ProviderBuiltInModelSuppressionResult,
+  ProviderBuildMissingAuthMessageContext,
+  ProviderCacheTtlEligibilityContext,
+  ProviderDefaultThinkingPolicyContext,
+  ProviderFetchUsageSnapshotContext,
+  ProviderModernModelPolicyContext,
+  ProviderPreparedRuntimeAuth,
+  ProviderResolvedUsageAuth,
+  ProviderPrepareExtraParamsContext,
+  ProviderPrepareDynamicModelContext,
+  ProviderPrepareRuntimeAuthContext,
+  ProviderResolveUsageAuthContext,
+  ProviderResolveDynamicModelContext,
+  ProviderNormalizeResolvedModelContext,
+  ProviderRuntimeModel,
+  ProviderThinkingPolicyContext,
+  ProviderWrapStreamFnContext,
 } from "../plugins/types.js";
+export type {
+  ProviderUsageSnapshot,
+  UsageProviderId,
+  UsageWindow,
+} from "../infra/provider-usage.types.js";
+export type {
+  ConversationRef,
+  SessionBindingBindInput,
+  SessionBindingCapabilities,
+  SessionBindingRecord,
+  SessionBindingService,
+  SessionBindingUnbindInput,
+} from "../infra/outbound/session-binding-service.js";
 export type {
   GatewayRequestHandler,
   GatewayRequestHandlerOptions,
@@ -194,7 +232,7 @@ export {
 export {
   promptSingleChannelSecretInput,
   type SingleChannelSecretInputPromptResult,
-} from "../channels/plugins/onboarding/helpers.js";
+} from "../channels/plugins/setup-wizard-helpers.js";
 export { buildOauthProviderAuthResult } from "./provider-auth-result.js";
 export { formatResolvedUnresolvedNote } from "./resolution-notes.js";
 export { buildChannelSendResult } from "./channel-send-result.js";
@@ -580,21 +618,6 @@ export {
 } from "../channels/plugins/helpers.js";
 export { PAIRING_APPROVED_MESSAGE } from "../channels/plugins/pairing-message.js";
 
-export type {
-  ChannelOnboardingAdapter,
-  ChannelOnboardingDmPolicy,
-} from "../channels/plugins/onboarding-types.js";
-export {
-  addWildcardAllowFrom,
-  mergeAllowFromEntries,
-  promptAccountId,
-  resolveAccountIdForConfigure,
-  setTopLevelChannelAllowFrom,
-  setTopLevelChannelDmPolicyWithAllowFrom,
-  setTopLevelChannelGroupPolicy,
-} from "../channels/plugins/onboarding/helpers.js";
-export { promptChannelAccessConfig } from "../channels/plugins/onboarding/channel-access.js";
-
 export {
   createActionGate,
   jsonResult,
@@ -655,7 +678,8 @@ export {
 export { inspectDiscordAccount } from "../../extensions/discord/src/account-inspect.js";
 export type { InspectedDiscordAccount } from "../../extensions/discord/src/account-inspect.js";
 export { collectDiscordAuditChannelIds } from "../../extensions/discord/src/audit.js";
-export { discordOnboardingAdapter } from "../channels/plugins/onboarding/discord.js";
+export { discordSetupWizard } from "../../extensions/discord/src/setup-surface.js";
+export { discordSetupAdapter } from "../../extensions/discord/src/setup-core.js";
 export {
   looksLikeDiscordTargetId,
   normalizeDiscordMessagingTarget,
@@ -670,7 +694,8 @@ export {
   resolveIMessageAccount,
   type ResolvedIMessageAccount,
 } from "../../extensions/imessage/src/accounts.js";
-export { imessageOnboardingAdapter } from "../channels/plugins/onboarding/imessage.js";
+export { imessageSetupWizard } from "../../extensions/imessage/src/setup-surface.js";
+export { imessageSetupAdapter } from "../../extensions/imessage/src/setup-core.js";
 export {
   looksLikeIMessageTargetId,
   normalizeIMessageMessagingTarget,
@@ -704,7 +729,8 @@ export {
   extractSlackToolSend,
   listSlackMessageActions,
 } from "../../extensions/slack/src/message-actions.js";
-export { slackOnboardingAdapter } from "../channels/plugins/onboarding/slack.js";
+export { slackSetupAdapter } from "../../extensions/slack/src/setup-core.js";
+export { slackSetupWizard } from "../../extensions/slack/src/setup-surface.js";
 export {
   looksLikeSlackTargetId,
   normalizeSlackMessagingTarget,
@@ -720,7 +746,8 @@ export {
 } from "../../extensions/telegram/src/accounts.js";
 export { inspectTelegramAccount } from "../../extensions/telegram/src/account-inspect.js";
 export type { InspectedTelegramAccount } from "../../extensions/telegram/src/account-inspect.js";
-export { telegramOnboardingAdapter } from "../channels/plugins/onboarding/telegram.js";
+export { telegramSetupWizard } from "../../extensions/telegram/src/setup-surface.js";
+export { telegramSetupAdapter } from "../../extensions/telegram/src/setup-core.js";
 export {
   looksLikeTelegramTargetId,
   normalizeTelegramMessagingTarget,
@@ -739,7 +766,8 @@ export {
   resolveSignalAccount,
   type ResolvedSignalAccount,
 } from "../../extensions/signal/src/accounts.js";
-export { signalOnboardingAdapter } from "../channels/plugins/onboarding/signal.js";
+export { signalSetupWizard } from "../../extensions/signal/src/setup-surface.js";
+export { signalSetupAdapter } from "../../extensions/signal/src/setup-core.js";
 export {
   looksLikeSignalTargetId,
   normalizeSignalMessagingTarget,
@@ -759,6 +787,7 @@ export {
   resolveDefaultLineAccountId,
   resolveLineAccount,
 } from "../line/accounts.js";
+export { lineSetupAdapter, lineSetupWizard } from "../../extensions/line/src/setup-surface.js";
 export { LineConfigSchema } from "../line/config-schema.js";
 export type {
   LineConfig,
@@ -805,7 +834,11 @@ export type { ContextEngineFactory } from "../context-engine/registry.js";
 // agentDir/store) rather than importing raw helpers directly.
 export { requireApiKey } from "../agents/model-auth.js";
 export type { ResolvedProviderAuth } from "../agents/model-auth.js";
-export type { ProviderDiscoveryContext } from "../plugins/types.js";
+export type {
+  ProviderCatalogContext,
+  ProviderCatalogResult,
+  ProviderDiscoveryContext,
+} from "../plugins/types.js";
 export {
   applyProviderDefaultModel,
   promptAndConfigureOpenAICompatibleSelfHostedProvider,

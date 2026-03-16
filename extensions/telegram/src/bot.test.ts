@@ -1,5 +1,10 @@
 import { rm } from "node:fs/promises";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  clearPluginInteractiveHandlers,
+  registerPluginInteractiveHandler,
+} from "../../../src/plugins/interactive.js";
+import type { PluginInteractiveTelegramHandlerContext } from "../../../src/plugins/types.js";
 import { escapeRegExp, formatEnvelopeTimestamp } from "../../../test/helpers/envelope-timestamp.js";
 import { expectInboundContextContract } from "../../../test/helpers/inbound-contract.js";
 import {
@@ -49,6 +54,7 @@ describe("createTelegramBot", () => {
 
   beforeEach(() => {
     setMyCommandsSpy.mockClear();
+    clearPluginInteractiveHandlers();
     loadConfig.mockReturnValue({
       agents: {
         defaults: {
@@ -201,7 +207,7 @@ describe("createTelegramBot", () => {
         },
       },
     });
-    const callbackHandler = onSpy.mock.calls.find((call) => call[0] === "callback_query")?.[1] as (
+    const callbackHandler = getOnHandler("callback_query") as (
       ctx: Record<string, unknown>,
     ) => Promise<void>;
     expect(callbackHandler).toBeDefined();
@@ -244,7 +250,7 @@ describe("createTelegramBot", () => {
         },
       },
     });
-    const callbackHandler = onSpy.mock.calls.find((call) => call[0] === "callback_query")?.[1] as (
+    const callbackHandler = getOnHandler("callback_query") as (
       ctx: Record<string, unknown>,
     ) => Promise<void>;
     expect(callbackHandler).toBeDefined();
@@ -288,7 +294,7 @@ describe("createTelegramBot", () => {
       },
     });
     createTelegramBot({ token: "tok" });
-    const callbackHandler = onSpy.mock.calls.find((call) => call[0] === "callback_query")?.[1] as (
+    const callbackHandler = getOnHandler("callback_query") as (
       ctx: Record<string, unknown>,
     ) => Promise<void>;
     expect(callbackHandler).toBeDefined();
@@ -1357,6 +1363,57 @@ describe("createTelegramBot", () => {
       getFile: async () => ({ download: async () => new Uint8Array() }),
     });
 
+    expect(replySpy).not.toHaveBeenCalled();
+  });
+
+  it.skip("routes plugin-owned callback namespaces before synthetic command fallback", async () => {
+    onSpy.mockClear();
+    replySpy.mockClear();
+    editMessageTextSpy.mockClear();
+    sendMessageSpy.mockClear();
+    registerPluginInteractiveHandler("codex-plugin", {
+      channel: "telegram",
+      namespace: "codex",
+      handler: async ({ respond, callback }: PluginInteractiveTelegramHandlerContext) => {
+        await respond.editMessage({
+          text: `Handled ${callback.payload}`,
+        });
+        return { handled: true };
+      },
+    });
+
+    createTelegramBot({
+      token: "tok",
+      config: {
+        channels: {
+          telegram: {
+            dmPolicy: "open",
+            allowFrom: ["*"],
+          },
+        },
+      },
+    });
+    const callbackHandler = getOnHandler("callback_query") as (
+      ctx: Record<string, unknown>,
+    ) => Promise<void>;
+
+    await callbackHandler({
+      callbackQuery: {
+        id: "cbq-codex-1",
+        data: "codex:resume:thread-1",
+        from: { id: 9, first_name: "Ada", username: "ada_bot" },
+        message: {
+          chat: { id: 1234, type: "private" },
+          date: 1736380800,
+          message_id: 11,
+          text: "Select a thread",
+        },
+      },
+      me: { username: "openclaw_bot" },
+      getFile: async () => ({ download: async () => new Uint8Array() }),
+    });
+
+    expect(editMessageTextSpy).toHaveBeenCalledWith(1234, 11, "Handled resume:thread-1", undefined);
     expect(replySpy).not.toHaveBeenCalled();
   });
   it("sets command target session key for dm topic commands", async () => {

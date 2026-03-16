@@ -32,19 +32,14 @@ export {
 export { buildChannelConfigSchema } from "../channels/plugins/config-schema.js";
 export { resolveChannelMediaMaxBytes } from "../channels/plugins/media-limits.js";
 export { buildMediaPayload } from "../channels/plugins/media-payload.js";
-export type {
-  ChannelOnboardingAdapter,
-  ChannelOnboardingDmPolicy,
-} from "../channels/plugins/onboarding-types.js";
-export { promptChannelAccessConfig } from "../channels/plugins/onboarding/channel-access.js";
 export {
   addWildcardAllowFrom,
   mergeAllowFromEntries,
   setTopLevelChannelAllowFrom,
   setTopLevelChannelDmPolicyWithAllowFrom,
   setTopLevelChannelGroupPolicy,
-  splitOnboardingEntries,
-} from "../channels/plugins/onboarding/helpers.js";
+  splitSetupEntries,
+} from "../channels/plugins/setup-wizard-helpers.js";
 export { PAIRING_APPROVED_MESSAGE } from "../channels/plugins/pairing-message.js";
 export type {
   BaseProbeResult,
@@ -122,3 +117,5 @@ export {
   createDefaultChannelRuntimeState,
 } from "./status-helpers.js";
 export { normalizeStringEntries } from "../shared/string-normalization.js";
+export { msteamsSetupWizard } from "../../extensions/msteams/src/setup-surface.js";
+export { msteamsSetupAdapter } from "../../extensions/msteams/src/setup-core.js";

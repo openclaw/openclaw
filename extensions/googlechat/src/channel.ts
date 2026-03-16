@@ -7,8 +7,6 @@ import {
   formatNormalizedAllowFromEntries,
 } from "openclaw/plugin-sdk/compat";
 import {
-  applyAccountNameToChannelSection,
-  applySetupAccountConfigPatch,
   buildComputedAccountStatusSnapshot,
   buildChannelConfigSchema,
   DEFAULT_ACCOUNT_ID,
@@ -16,9 +14,7 @@ import {
   getChatChannelMeta,
   listDirectoryGroupEntriesFromMapKeys,
   listDirectoryUserEntriesFromAllowFrom,
-  migrateBaseNameToDefaultAccount,
   missingTargetError,
-  normalizeAccountId,
   PAIRING_APPROVED_MESSAGE,
   resolveChannelMediaMaxBytes,
   resolveGoogleChatGroupRequireMention,
@@ -38,10 +34,9 @@ import {
   type ResolvedGoogleChatAccount,
 } from "./accounts.js";
 import { googlechatMessageActions } from "./actions.js";
-import { sendGoogleChatMessage, uploadGoogleChatAttachment, probeGoogleChat } from "./api.js";
-import { resolveGoogleChatWebhookPath, startGoogleChatMonitor } from "./monitor.js";
-import { googlechatOnboardingAdapter } from "./onboarding.js";
 import { getGoogleChatRuntime } from "./runtime.js";
+import { googlechatSetupAdapter } from "./setup-core.js";
+import { googlechatSetupWizard } from "./setup-surface.js";
 import {
   isGoogleChatSpaceTarget,
   isGoogleChatUserTarget,
@@ -50,6 +45,10 @@ import {
 } from "./targets.js";
 
 const meta = getChatChannelMeta("googlechat");
+
+async function loadGoogleChatChannelRuntime() {
+  return await import("./channel.runtime.js");
+}
 
 const formatAllowFromEntry = (entry: string) =>
   entry
@@ -136,7 +135,8 @@ const googlechatActions: ChannelMessageActionAdapter = {
 export const googlechatPlugin: ChannelPlugin<ResolvedGoogleChatAccount> = {
   id: "googlechat",
   meta: { ...meta },
-  onboarding: googlechatOnboardingAdapter,
+  setup: googlechatSetupAdapter,
+  setupWizard: googlechatSetupWizard,
   pairing: {
     idLabel: "googlechatUserId",
     normalizeAllowEntry: (entry) => formatAllowFromEntry(entry),
@@ -148,6 +148,7 @@ export const googlechatPlugin: ChannelPlugin<ResolvedGoogleChatAccount> = {
       const user = normalizeGoogleChatTarget(id) ?? id;
       const target = isGoogleChatUserTarget(user) ? user : `users/${user}`;
       const space = await resolveGoogleChatOutboundSpace({ account, target });
+      const { sendGoogleChatMessage } = await loadGoogleChatChannelRuntime();
       await sendGoogleChatMessage({
         account,
         space,
@@ -272,64 +273,6 @@ export const googlechatPlugin: ChannelPlugin<ResolvedGoogleChatAccount> = {
     },
   },
   actions: googlechatActions,
-  setup: {
-    resolveAccountId: ({ accountId }) => normalizeAccountId(accountId),
-    applyAccountName: ({ cfg, accountId, name }) =>
-      applyAccountNameToChannelSection({
-        cfg: cfg,
-        channelKey: "googlechat",
-        accountId,
-        name,
-      }),
-    validateInput: ({ accountId, input }) => {
-      if (input.useEnv && accountId !== DEFAULT_ACCOUNT_ID) {
-        return "GOOGLE_CHAT_SERVICE_ACCOUNT env vars can only be used for the default account.";
-      }
-      if (!input.useEnv && !input.token && !input.tokenFile) {
-        return "Google Chat requires --token (service account JSON) or --token-file.";
-      }
-      return null;
-    },
-    applyAccountConfig: ({ cfg, accountId, input }) => {
-      const namedConfig = applyAccountNameToChannelSection({
-        cfg: cfg,
-        channelKey: "googlechat",
-        accountId,
-        name: input.name,
-      });
-      const next =
-        accountId !== DEFAULT_ACCOUNT_ID
-          ? migrateBaseNameToDefaultAccount({
-              cfg: namedConfig,
-              channelKey: "googlechat",
-            })
-          : namedConfig;
-      const patch = input.useEnv
-        ? {}
-        : input.tokenFile
-          ? { serviceAccountFile: input.tokenFile }
-          : input.token
-            ? { serviceAccount: input.token }
-            : {};
-      const audienceType = input.audienceType?.trim();
-      const audience = input.audience?.trim();
-      const webhookPath = input.webhookPath?.trim();
-      const webhookUrl = input.webhookUrl?.trim();
-      const configPatch = {
-        ...patch,
-        ...(audienceType ? { audienceType } : {}),
-        ...(audience ? { audience } : {}),
-        ...(webhookPath ? { webhookPath } : {}),
-        ...(webhookUrl ? { webhookUrl } : {}),
-      };
-      return applySetupAccountConfigPatch({
-        cfg: next,
-        channelKey: "googlechat",
-        accountId,
-        patch: configPatch,
-      });
-    },
-  },
   outbound: {
     deliveryMode: "direct",
     chunker: (text, limit) => getGoogleChatRuntime().channel.text.chunkMarkdownText(text, limit),
@@ -361,6 +304,7 @@ export const googlechatPlugin: ChannelPlugin<ResolvedGoogleChatAccount> = {
       });
       const space = await resolveGoogleChatOutboundSpace({ account, target: to });
       const thread = (threadId ?? replyToId ?? undefined) as string | undefined;
+      const { sendGoogleChatMessage } = await loadGoogleChatChannelRuntime();
       const result = await sendGoogleChatMessage({
         account,
         space,
@@ -414,6 +358,8 @@ export const googlechatPlugin: ChannelPlugin<ResolvedGoogleChatAccount> = {
             maxBytes: effectiveMaxBytes,
             localRoots: mediaLocalRoots?.length ? mediaLocalRoots : undefined,
           });
+      const { sendGoogleChatMessage, uploadGoogleChatAttachment } =
+        await loadGoogleChatChannelRuntime();
       const upload = await uploadGoogleChatAttachment({
         account,
         space,
@@ -482,7 +428,8 @@ export const googlechatPlugin: ChannelPlugin<ResolvedGoogleChatAccount> = {
         webhookPath: snapshot.webhookPath ?? null,
         webhookUrl: snapshot.webhookUrl ?? null,
       }),
-    probeAccount: async ({ account }) => probeGoogleChat(account),
+    probeAccount: async ({ account }) =>
+      (await loadGoogleChatChannelRuntime()).probeGoogleChat(account),
     buildAccountSnapshot: ({ account, runtime, probe }) => {
       const base = buildComputedAccountStatusSnapshot({
         accountId: account.accountId,
@@ -511,6 +458,8 @@ export const googlechatPlugin: ChannelPlugin<ResolvedGoogleChatAccount> = {
         setStatus: ctx.setStatus,
       });
       ctx.log?.info(`[${account.accountId}] starting Google Chat webhook`);
+      const { resolveGoogleChatWebhookPath, startGoogleChatMonitor } =
+        await loadGoogleChatChannelRuntime();
       statusSink({
         running: true,
         lastStartAt: Date.now(),

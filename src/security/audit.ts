@@ -2,9 +2,11 @@ import { isIP } from "node:net";
 import path from "node:path";
 import { resolveSandboxConfigForAgent } from "../agents/sandbox.js";
 import { execDockerRaw } from "../agents/sandbox/docker.js";
+import { redactCdpUrl } from "../browser/cdp.helpers.js";
 import { resolveBrowserConfig, resolveProfile } from "../browser/config.js";
 import { resolveBrowserControlAuth } from "../browser/control-auth.js";
-import { listChannelPlugins } from "../channels/plugins/index.js";
+import { hasPotentialConfiguredChannels } from "../channels/config-presence.js";
+import type { listChannelPlugins } from "../channels/plugins/index.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../config/config.js";
 import { resolveConfigPath, resolveStateDir } from "../config/paths.js";
@@ -18,6 +20,7 @@ import {
   resolveMergedSafeBinProfileFixtures,
 } from "../infra/exec-safe-bin-runtime-policy.js";
 import { normalizeTrustedSafeBinDirs } from "../infra/exec-safe-bin-trust.js";
+import { isBlockedHostnameOrIp, isPrivateNetworkAllowedByPolicy } from "../infra/net/ssrf.js";
 import { collectChannelSecurityFindings } from "./audit-channel.js";
 import {
   collectAttackSurfaceSummaryFindings,
@@ -110,6 +113,8 @@ export type SecurityAuditOptions = {
   configSnapshot?: ConfigFileSnapshot | null;
   /** Optional cache for code-safety summaries across repeated deep audits. */
   codeSafetySummaryCache?: Map<string, Promise<unknown>>;
+  /** Optional explicit auth for deep gateway probe. */
+  deepProbeAuth?: { token?: string; password?: string };
 };
 
 type AuditExecutionContext = {
@@ -129,7 +134,15 @@ type AuditExecutionContext = {
   plugins?: ReturnType<typeof listChannelPlugins>;
   configSnapshot: ConfigFileSnapshot | null;
   codeSafetySummaryCache: Map<string, Promise<unknown>>;
+  deepProbeAuth?: { token?: string; password?: string };
 };
+
+let channelPluginsModulePromise: Promise<typeof import("../channels/plugins/index.js")> | undefined;
+
+async function loadChannelPlugins() {
+  channelPluginsModulePromise ??= import("../channels/plugins/index.js");
+  return await channelPluginsModulePromise;
+}
 
 function countBySeverity(findings: SecurityAuditFinding[]): SecurityAuditSummary {
   let critical = 0;
@@ -338,6 +351,7 @@ async function collectFilesystemFindings(params: {
 
 function collectGatewayConfigFindings(
   cfg: OpenClawConfig,
+  sourceConfig: OpenClawConfig,
   env: NodeJS.ProcessEnv,
 ): SecurityAuditFinding[] {
   const findings: SecurityAuditFinding[] = [];
@@ -362,18 +376,18 @@ function collectGatewayConfigFindings(
     hasNonEmptyString(env.OPENCLAW_GATEWAY_PASSWORD) ||
     hasNonEmptyString(env.CLAWDBOT_GATEWAY_PASSWORD);
   const tokenConfiguredFromConfig = hasConfiguredSecretInput(
-    cfg.gateway?.auth?.token,
-    cfg.secrets?.defaults,
+    sourceConfig.gateway?.auth?.token,
+    sourceConfig.secrets?.defaults,
   );
   const passwordConfiguredFromConfig = hasConfiguredSecretInput(
-    cfg.gateway?.auth?.password,
-    cfg.secrets?.defaults,
+    sourceConfig.gateway?.auth?.password,
+    sourceConfig.secrets?.defaults,
   );
   const remoteTokenConfigured = hasConfiguredSecretInput(
-    cfg.gateway?.remote?.token,
-    cfg.secrets?.defaults,
+    sourceConfig.gateway?.remote?.token,
+    sourceConfig.secrets?.defaults,
   );
-  const explicitAuthMode = cfg.gateway?.auth?.mode;
+  const explicitAuthMode = sourceConfig.gateway?.auth?.mode;
   const tokenCanWin =
     hasToken || envTokenConfigured || tokenConfiguredFromConfig || remoteTokenConfigured;
   const passwordCanWin =
@@ -782,13 +796,29 @@ function collectBrowserControlFindings(
     } catch {
       continue;
     }
+    const redactedCdpUrl = redactCdpUrl(profile.cdpUrl) ?? profile.cdpUrl;
     if (url.protocol === "http:") {
       findings.push({
         checkId: "browser.remote_cdp_http",
         severity: "warn",
         title: "Remote CDP uses HTTP",
-        detail: `browser profile "${name}" uses http CDP (${profile.cdpUrl}); this is OK only if it's tailnet-only or behind an encrypted tunnel.`,
+        detail: `browser profile "${name}" uses http CDP (${redactedCdpUrl}); this is OK only if it's tailnet-only or behind an encrypted tunnel.`,
         remediation: `Prefer HTTPS/TLS or a tailnet-only endpoint for remote CDP.`,
+      });
+    }
+    if (
+      isPrivateNetworkAllowedByPolicy(resolved.ssrfPolicy) &&
+      isBlockedHostnameOrIp(url.hostname)
+    ) {
+      findings.push({
+        checkId: "browser.remote_cdp_private_host",
+        severity: "warn",
+        title: "Remote CDP targets a private/internal host",
+        detail:
+          `browser profile "${name}" points at a private/internal CDP host (${redactedCdpUrl}). ` +
+          "This is expected for LAN/tailnet/WSL-style setups, but treat it as a trusted-network endpoint.",
+        remediation:
+          "Prefer a tailnet or tunnel for remote CDP. If you want strict blocking, set browser.ssrfPolicy.dangerouslyAllowPrivateNetwork=false and allow only explicit hosts.",
       });
     }
   }
@@ -1043,6 +1073,7 @@ async function maybeProbeGateway(params: {
   env: NodeJS.ProcessEnv;
   timeoutMs: number;
   probe: typeof probeGateway;
+  explicitAuth?: { token?: string; password?: string };
 }): Promise<{
   deep: SecurityAuditReport["deep"];
   authWarning?: string;
@@ -1056,8 +1087,18 @@ async function maybeProbeGateway(params: {
 
   const authResolution =
     !isRemoteMode || remoteUrlMissing
-      ? resolveGatewayProbeAuthSafe({ cfg: params.cfg, env: params.env, mode: "local" })
-      : resolveGatewayProbeAuthSafe({ cfg: params.cfg, env: params.env, mode: "remote" });
+      ? resolveGatewayProbeAuthSafe({
+          cfg: params.cfg,
+          env: params.env,
+          mode: "local",
+          explicitAuth: params.explicitAuth,
+        })
+      : resolveGatewayProbeAuthSafe({
+          cfg: params.cfg,
+          env: params.env,
+          mode: "remote",
+          explicitAuth: params.explicitAuth,
+        });
   const res = await params
     .probe({ url, auth: authResolution.auth, timeoutMs: params.timeoutMs })
     .catch((err) => ({
@@ -1125,6 +1166,7 @@ async function createAuditExecutionContext(
     plugins: opts.plugins,
     configSnapshot,
     codeSafetySummaryCache: opts.codeSafetySummaryCache ?? new Map<string, Promise<unknown>>(),
+    deepProbeAuth: opts.deepProbeAuth,
   };
 }
 
@@ -1136,7 +1178,7 @@ export async function runSecurityAudit(opts: SecurityAuditOptions): Promise<Secu
   findings.push(...collectAttackSurfaceSummaryFindings(cfg));
   findings.push(...collectSyncedFolderFindings({ stateDir, configPath }));
 
-  findings.push(...collectGatewayConfigFindings(cfg, env));
+  findings.push(...collectGatewayConfigFindings(cfg, context.sourceConfig, env));
   findings.push(...collectBrowserControlFindings(cfg, env));
   findings.push(...collectLoggingFindings(cfg));
   findings.push(...collectElevatedFindings(cfg));
@@ -1208,8 +1250,8 @@ export async function runSecurityAudit(opts: SecurityAuditOptions): Promise<Secu
     }
   }
 
-  if (context.includeChannelSecurity) {
-    const plugins = context.plugins ?? listChannelPlugins();
+  if (context.includeChannelSecurity && hasPotentialConfiguredChannels(cfg, env)) {
+    const plugins = context.plugins ?? (await loadChannelPlugins()).listChannelPlugins();
     findings.push(
       ...(await collectChannelSecurityFindings({
         cfg,
@@ -1225,6 +1267,7 @@ export async function runSecurityAudit(opts: SecurityAuditOptions): Promise<Secu
         env,
         timeoutMs: context.deepTimeoutMs,
         probe: context.probeGatewayFn ?? probeGateway,
+        explicitAuth: context.deepProbeAuth,
       })
     : undefined;
   const deep = deepProbeResult?.deep;

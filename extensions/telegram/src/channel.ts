@@ -7,7 +7,6 @@ import {
   formatAllowFromLowercase,
 } from "openclaw/plugin-sdk/compat";
 import {
-  applyAccountNameToChannelSection,
   buildChannelConfigSchema,
   buildTokenChannelStatusSummary,
   clearAccountEntryFields,
@@ -19,7 +18,6 @@ import {
   listTelegramDirectoryGroupsFromConfig,
   listTelegramDirectoryPeersFromConfig,
   looksLikeTelegramTargetId,
-  migrateBaseNameToDefaultAccount,
   normalizeAccountId,
   normalizeTelegramMessagingTarget,
   PAIRING_APPROVED_MESSAGE,
@@ -32,7 +30,6 @@ import {
   resolveTelegramGroupRequireMention,
   resolveTelegramGroupToolPolicy,
   sendTelegramPayloadMessages,
-  telegramOnboardingAdapter,
   TelegramConfigSchema,
   type ChannelMessageActionAdapter,
   type ChannelPlugin,
@@ -45,6 +42,8 @@ import {
   resolveOutboundSendDep,
 } from "../../../src/infra/outbound/send-deps.js";
 import { getTelegramRuntime } from "./runtime.js";
+import { telegramSetupAdapter } from "./setup-core.js";
+import { telegramSetupWizard } from "./setup-surface.js";
 
 type TelegramSendFn = ReturnType<
   typeof getTelegramRuntime
@@ -96,6 +95,7 @@ function buildTelegramSendOptions(params: {
   replyToId?: string | null;
   threadId?: string | number | null;
   silent?: boolean | null;
+  forceDocument?: boolean | null;
 }): TelegramSendOptions {
   return {
     verbose: false,
@@ -106,6 +106,7 @@ function buildTelegramSendOptions(params: {
     replyToMessageId: parseTelegramReplyToMessageId(params.replyToId),
     accountId: params.accountId ?? undefined,
     silent: params.silent ?? undefined,
+    forceDocument: params.forceDocument ?? undefined,
   };
 }
 
@@ -184,7 +185,7 @@ export const telegramPlugin: ChannelPlugin<ResolvedTelegramAccount, TelegramProb
     ...meta,
     quickstartAllowFrom: true,
   },
-  onboarding: telegramOnboardingAdapter,
+  setupWizard: telegramSetupWizard,
   pairing: {
     idLabel: "telegramUserId",
     normalizeAllowEntry: (entry) => entry.replace(/^(telegram|tg):/i, ""),
@@ -295,81 +296,7 @@ export const telegramPlugin: ChannelPlugin<ResolvedTelegramAccount, TelegramProb
     listGroups: async (params) => listTelegramDirectoryGroupsFromConfig(params),
   },
   actions: telegramMessageActions,
-  setup: {
-    resolveAccountId: ({ accountId }) => normalizeAccountId(accountId),
-    applyAccountName: ({ cfg, accountId, name }) =>
-      applyAccountNameToChannelSection({
-        cfg,
-        channelKey: "telegram",
-        accountId,
-        name,
-      }),
-    validateInput: ({ accountId, input }) => {
-      if (input.useEnv && accountId !== DEFAULT_ACCOUNT_ID) {
-        return "TELEGRAM_BOT_TOKEN can only be used for the default account.";
-      }
-      if (!input.useEnv && !input.token && !input.tokenFile) {
-        return "Telegram requires token or --token-file (or --use-env).";
-      }
-      return null;
-    },
-    applyAccountConfig: ({ cfg, accountId, input }) => {
-      const namedConfig = applyAccountNameToChannelSection({
-        cfg,
-        channelKey: "telegram",
-        accountId,
-        name: input.name,
-      });
-      const next =
-        accountId !== DEFAULT_ACCOUNT_ID
-          ? migrateBaseNameToDefaultAccount({
-              cfg: namedConfig,
-              channelKey: "telegram",
-            })
-          : namedConfig;
-      if (accountId === DEFAULT_ACCOUNT_ID) {
-        return {
-          ...next,
-          channels: {
-            ...next.channels,
-            telegram: {
-              ...next.channels?.telegram,
-              enabled: true,
-              ...(input.useEnv
-                ? {}
-                : input.tokenFile
-                  ? { tokenFile: input.tokenFile }
-                  : input.token
-                    ? { botToken: input.token }
-                    : {}),
-            },
-          },
-        };
-      }
-      return {
-        ...next,
-        channels: {
-          ...next.channels,
-          telegram: {
-            ...next.channels?.telegram,
-            enabled: true,
-            accounts: {
-              ...next.channels?.telegram?.accounts,
-              [accountId]: {
-                ...next.channels?.telegram?.accounts?.[accountId],
-                enabled: true,
-                ...(input.tokenFile
-                  ? { tokenFile: input.tokenFile }
-                  : input.token
-                    ? { botToken: input.token }
-                    : {}),
-              },
-            },
-          },
-        },
-      };
-    },
-  },
+  setup: telegramSetupAdapter,
   outbound: {
     deliveryMode: "direct",
     chunker: (text, limit) => getTelegramRuntime().channel.text.chunkMarkdownText(text, limit),
@@ -386,6 +313,7 @@ export const telegramPlugin: ChannelPlugin<ResolvedTelegramAccount, TelegramProb
       replyToId,
       threadId,
       silent,
+      forceDocument,
     }) => {
       const send =
         resolveOutboundSendDep<TelegramSendFn>(deps, "telegram") ??
@@ -401,6 +329,7 @@ export const telegramPlugin: ChannelPlugin<ResolvedTelegramAccount, TelegramProb
           replyToId,
           threadId,
           silent,
+          forceDocument,
         }),
       });
       return { channel: "telegram", ...result };
