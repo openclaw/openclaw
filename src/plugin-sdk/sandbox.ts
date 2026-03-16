@@ -19,6 +19,7 @@ export type {
   SshSandboxSession,
   SshSandboxSettings,
 } from "../agents/sandbox.js";
+export type { OpenClawConfig } from "../config/config.js";
 
 export {
   buildExecRemoteCommand,

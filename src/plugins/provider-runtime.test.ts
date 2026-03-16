@@ -1,9 +1,13 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ProviderPlugin, ProviderRuntimeModel } from "./types.js";
 
-const resolvePluginProvidersMock = vi.fn((_: unknown) => [] as ProviderPlugin[]);
-const resolveOwningPluginIdsForProviderMock = vi.fn(
-  (_: unknown) => undefined as string[] | undefined,
+type ResolvePluginProviders = typeof import("./providers.js").resolvePluginProviders;
+type ResolveOwningPluginIdsForProvider =
+  typeof import("./providers.js").resolveOwningPluginIdsForProvider;
+
+const resolvePluginProvidersMock = vi.fn<ResolvePluginProviders>((_) => [] as ProviderPlugin[]);
+const resolveOwningPluginIdsForProviderMock = vi.fn<ResolveOwningPluginIdsForProvider>(
+  (_) => undefined as string[] | undefined,
 );
 
 vi.mock("./providers.js", () => ({
@@ -98,7 +102,7 @@ describe("provider-runtime", () => {
   });
 
   it("dispatches runtime hooks for the matched provider", async () => {
-    resolveOwningPluginIdsForProviderMock.mockImplementation((params: { provider?: string }) => {
+    resolveOwningPluginIdsForProviderMock.mockImplementation((params) => {
       if (params.provider === "demo") {
         return ["demo"];
       }

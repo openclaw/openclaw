@@ -849,6 +849,10 @@ export type WebSearchProviderPlugin = {
   createTool: (ctx: WebSearchProviderContext) => WebSearchProviderToolDefinition | null;
 };
 
+export type PluginWebSearchProviderEntry = WebSearchProviderPlugin & {
+  pluginId: string;
+};
+
 export type OpenClawPluginGatewayMethod = {
   method: string;
   handler: GatewayRequestHandler;
