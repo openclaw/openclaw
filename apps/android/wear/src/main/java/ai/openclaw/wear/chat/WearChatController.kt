@@ -393,22 +393,24 @@ class WearChatController(
         }
       }
       "final", "aborted", "error" -> {
-        if (runId != null && !isPendingRun(runId)) return
         val state = payload.str("state")
-        if (state == "error") {
+        val isLocalRun = runId != null && isPendingRun(runId)
+        val isUnknownRun = runId == null
+        val shouldAffectLocalState = isLocalRun || isUnknownRun
+        if (state == "error" && shouldAffectLocalState) {
           _errorText.value =
             payload.str("errorMessage")?.takeIf { it.isNotBlank() }
               ?: stringResolver(R.string.wear_chat_error_failed)
         }
 
-        if (runId != null && isPendingRun(runId)) {
+        if (isLocalRun) {
           clearPendingRun(runId)
-        } else {
-          if (runId == null) {
-            clearPendingRuns()
-          }
+        } else if (isUnknownRun) {
+          clearPendingRuns()
         }
-        _streamingText.value = null
+        if (shouldAffectLocalState) {
+          _streamingText.value = null
+        }
         refreshHistoryImmediately(emitLatestAssistantReply = state == "final")
       }
     }

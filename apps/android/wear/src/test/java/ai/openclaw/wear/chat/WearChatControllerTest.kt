@@ -411,7 +411,8 @@ class WearChatControllerTest {
   fun `foreign run ids do not affect the local pending send`() = runTest {
     val client = FakeGatewayClient().apply {
       chatSendDeferred = CompletableDeferred()
-      historyResponse = """{"messages":[]}"""
+      historyResponses += """{"messages":[]}"""
+      historyResponses += """{"messages":[{"role":"user","timestamp":1,"content":[{"type":"text","text":"Stay pending"}]}]}"""
     }
     val controllerScope = TestScope(StandardTestDispatcher(testScheduler))
     val controller = WearChatController(controllerScope, client, ::testString)
@@ -438,7 +439,55 @@ class WearChatControllerTest {
     assertTrue(controller.isSending.value)
     assertEquals(listOf("Stay pending"), controller.messages.value.map { it.text })
     assertEquals(null, controller.streamingText.value)
-    assertEquals(1, client.requests.count { it.first == "chat.history" })
+    assertEquals(2, client.requests.count { it.first == "chat.history" })
+
+    controllerScope.cancel()
+  }
+
+  @Test
+  fun `foreign final does not clear local streaming text`() = runTest {
+    val client = FakeGatewayClient().apply {
+      chatSendDeferred = CompletableDeferred()
+      historyResponses += """{"messages":[]}"""
+      historyResponses += """{"messages":[]}"""
+    }
+    val controllerScope = TestScope(StandardTestDispatcher(testScheduler))
+    val controller = WearChatController(controllerScope, client, ::testString)
+    advanceUntilIdle()
+
+    controller.sendMessage("Stay pending")
+    runCurrent()
+
+    val chatSendParams =
+      client.requests.last { it.first == "chat.send" }.second ?: error("missing chat.send params")
+    val runId =
+      Json.parseToJsonElement(chatSendParams)
+        .jsonObject["idempotencyKey"]
+        ?.jsonPrimitive
+        ?.content ?: error("missing idempotencyKey")
+
+    client.emitEvent(
+      GatewayEvent(
+        event = "agent",
+        payloadJson =
+          """{"sessionKey":"main","runId":"$runId","stream":"assistant","data":{"text":"local delta"}}""",
+      ),
+    )
+    runCurrent()
+
+    assertEquals("local delta", controller.streamingText.value)
+
+    client.emitEvent(
+      GatewayEvent(
+        event = "chat",
+        payloadJson = """{"sessionKey":"main","state":"final","runId":"foreign-run"}""",
+      ),
+    )
+    runCurrent()
+
+    assertTrue(controller.isSending.value)
+    assertEquals("local delta", controller.streamingText.value)
+    assertEquals(2, client.requests.count { it.first == "chat.history" })
 
     controllerScope.cancel()
   }
