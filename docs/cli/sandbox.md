@@ -19,6 +19,12 @@ Today that usually means:
 - SSH sandbox runtimes when `agents.defaults.sandbox.backend = "ssh"`
 - OpenShell sandbox runtimes when `agents.defaults.sandbox.backend = "openshell"`
 
+For `ssh` and OpenShell `remote`, recreate matters more than with Docker:
+
+- the remote workspace is canonical after the initial seed
+- `openclaw sandbox recreate` deletes that canonical remote workspace for the selected scope
+- next use seeds it again from the current local workspace
+
 ## Commands
 
 ### `openclaw sandbox explain`

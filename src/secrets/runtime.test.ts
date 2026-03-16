@@ -261,6 +261,39 @@ describe("secrets runtime snapshot", () => {
     });
   });
 
+  it("treats sandbox ssh secret refs as inactive when ssh backend is not selected", async () => {
+    const snapshot = await prepareSecretsRuntimeSnapshot({
+      config: asConfig({
+        agents: {
+          defaults: {
+            sandbox: {
+              mode: "all",
+              backend: "docker",
+              ssh: {
+                identityData: { source: "env", provider: "default", id: "SSH_IDENTITY_DATA" },
+              },
+            },
+          },
+        },
+      }),
+      env: {},
+    });
+
+    expect(snapshot.config.agents?.defaults?.sandbox?.ssh?.identityData).toEqual({
+      source: "env",
+      provider: "default",
+      id: "SSH_IDENTITY_DATA",
+    });
+    expect(snapshot.warnings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          code: "SECRETS_REF_IGNORED_INACTIVE_SURFACE",
+          path: "agents.defaults.sandbox.ssh.identityData",
+        }),
+      ]),
+    );
+  });
+
   it("normalizes inline SecretRef object on token to tokenRef", async () => {
     const config: OpenClawConfig = { models: {}, secrets: {} };
     const snapshot = await prepareSecretsRuntimeSnapshot({

@@ -105,6 +105,12 @@ How it works:
 - After that, `exec`, `read`, `write`, `edit`, `apply_patch`, prompt media reads, and inbound media staging run directly against the remote workspace over SSH.
 - OpenClaw does not sync remote changes back to the local workspace automatically.
 
+Authentication material:
+
+- `identityFile`, `certificateFile`, `knownHostsFile`: use existing local files and pass them through OpenSSH config.
+- `identityData`, `certificateData`, `knownHostsData`: use inline strings or SecretRefs. OpenClaw resolves them through the normal secrets runtime snapshot, writes them to temp files with `0600`, and deletes them when the SSH session ends.
+- If both `*File` and `*Data` are set for the same item, `*Data` wins for that SSH session.
+
 This is a **remote-canonical** model. The remote SSH workspace becomes the real sandbox state after the initial seed.
 
 Important consequences:
@@ -149,6 +155,12 @@ OpenShell modes:
 
 OpenShell reuses the same core SSH transport and remote filesystem bridge as the generic SSH backend.
 The plugin adds OpenShell-specific lifecycle (`sandbox create/get/delete`, `sandbox ssh-config`) and the optional `mirror` mode.
+
+Remote transport details:
+
+- OpenClaw asks OpenShell for sandbox-specific SSH config via `openshell sandbox ssh-config <name>`.
+- Core writes that SSH config to a temp file, opens the SSH session, and reuses the same remote filesystem bridge used by `backend: "ssh"`.
+- In `mirror` mode only the lifecycle differs: sync local to remote before exec, then sync back after exec.
 
 Current OpenShell limitations:
 
