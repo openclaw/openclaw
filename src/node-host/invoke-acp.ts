@@ -71,6 +71,7 @@ type AcpNodeSessionRecord = {
   runtimeOptions?: Record<string, unknown>;
   resume?: Record<string, unknown>;
   lastStatusSummary?: string;
+  completedTurns: Map<string, AcpCompletedTurnRecord>;
   updatedAt: number;
 };
 
@@ -79,8 +80,15 @@ type AcpNodeActiveTurn = {
   requestId: string;
   nodeWorkerRunId: string;
   cancelRequested: boolean;
+  cancelReason?: string;
   abortController: AbortController;
   completion: Promise<void>;
+};
+
+type AcpCompletedTurnRecord = {
+  runId: string;
+  requestId: string;
+  nodeWorkerRunId: string;
 };
 
 type AcpInvokeCommandResult =
@@ -342,11 +350,6 @@ function buildNodeRuntimeSessionId(handle: AcpRuntimeHandle): string {
   return handle.backendSessionId?.trim() || handle.runtimeSessionName.trim();
 }
 
-function isCancelableStopReason(stopReason?: string): boolean {
-  const normalized = stopReason?.trim().toLowerCase() ?? "";
-  return normalized.includes("cancel") || normalized.includes("abort");
-}
-
 function resolveFailureMessage(error: unknown): string {
   if (error instanceof Error && error.message.trim()) {
     return error.message.trim();
@@ -402,18 +405,26 @@ async function buildStatusPayload(params: {
       },
     };
   }
-  let runtimeStatus: AcpRuntimeStatus | undefined;
-  if (session.runtime.getStatus) {
-    try {
-      runtimeStatus = await session.runtime.getStatus({
-        handle: session.handle,
-      });
-    } catch {
-      runtimeStatus = undefined;
-    }
+  if (!session.runtime.getStatus) {
+    throw new Error(`ACP status backend unavailable for session ${session.sessionKey}.`);
   }
+  let runtimeStatus: AcpRuntimeStatus;
+  try {
+    runtimeStatus = await session.runtime.getStatus({
+      handle: session.handle,
+    });
+  } catch (error) {
+    throw new Error(
+      `ACP status backend failed for session ${session.sessionKey}: ${resolveFailureMessage(error)}`,
+      { cause: error },
+    );
+  }
+  session.lastStatusSummary =
+    typeof runtimeStatus.summary === "string" && runtimeStatus.summary.trim()
+      ? runtimeStatus.summary.trim()
+      : session.lastStatusSummary;
   const statusSummary =
-    typeof runtimeStatus?.summary === "string" && runtimeStatus.summary.trim()
+    typeof runtimeStatus.summary === "string" && runtimeStatus.summary.trim()
       ? runtimeStatus.summary.trim()
       : session.lastStatusSummary;
   return {
@@ -542,6 +553,7 @@ async function handleEnsureLike(
     ...(params.cwd ? { cwd: params.cwd } : {}),
     ...(params.runtimeOptions ? { runtimeOptions: params.runtimeOptions } : {}),
     ...(params.resume ? { resume: params.resume } : {}),
+    completedTurns: new Map(),
   };
   nodeAcpSessions.set(params.sessionKey, session);
   return {
@@ -566,6 +578,20 @@ async function handleEnsureLike(
       },
     },
   };
+}
+
+function rememberCompletedTurn(session: AcpNodeSessionRecord, turn: AcpCompletedTurnRecord): void {
+  if (session.completedTurns.has(turn.runId)) {
+    session.completedTurns.delete(turn.runId);
+  }
+  session.completedTurns.set(turn.runId, turn);
+  while (session.completedTurns.size > 8) {
+    const oldest = session.completedTurns.keys().next().value;
+    if (!oldest) {
+      break;
+    }
+    session.completedTurns.delete(oldest);
+  }
 }
 
 async function runWorkerTurn(params: {
@@ -612,11 +638,15 @@ async function runWorkerTurn(params: {
       }
       if (event.type === "done") {
         terminal = {
-          kind:
-            activeTurn.cancelRequested && isCancelableStopReason(event.stopReason)
-              ? "cancelled"
-              : "completed",
-          ...(event.stopReason ? { stopReason: event.stopReason } : {}),
+          kind: activeTurn.cancelRequested ? "cancelled" : "completed",
+          ...(activeTurn.cancelRequested
+            ? {
+                stopReason:
+                  activeTurn.cancelReason?.trim() || event.stopReason?.trim() || "cancelled",
+              }
+            : event.stopReason
+              ? { stopReason: event.stopReason }
+              : {}),
         };
         continue;
       }
@@ -638,7 +668,7 @@ async function runWorkerTurn(params: {
     terminal = activeTurn.cancelRequested
       ? {
           kind: "cancelled",
-          stopReason: "cancelled",
+          stopReason: activeTurn.cancelReason?.trim() || "cancelled",
         }
       : {
           kind: "completed",
@@ -658,6 +688,11 @@ async function runWorkerTurn(params: {
   });
 
   if (nodeAcpSessions.get(session.sessionKey) === session && session.activeTurn === activeTurn) {
+    rememberCompletedTurn(session, {
+      runId: activeTurn.runId,
+      requestId: activeTurn.requestId,
+      nodeWorkerRunId: activeTurn.nodeWorkerRunId,
+    });
     session.state = "idle";
     session.currentRunId = undefined;
     session.currentRequestId = undefined;
@@ -701,6 +736,30 @@ function handleTurnStart(
       },
     };
   }
+  const completedTurn = session.completedTurns.get(params.runId);
+  if (completedTurn) {
+    if (completedTurn.requestId !== params.requestId) {
+      return {
+        handled: true,
+        ok: false,
+        code: "INVALID_REQUEST",
+        message: `ACP run ${params.runId} already completed on this node for request ${completedTurn.requestId}`,
+      };
+    }
+    return {
+      handled: true,
+      ok: true,
+      payload: {
+        ok: true,
+        sessionKey: session.sessionKey,
+        runId: params.runId,
+        leaseId: session.leaseId,
+        leaseEpoch: session.leaseEpoch,
+        accepted: true,
+        nodeWorkerRunId: completedTurn.nodeWorkerRunId,
+      },
+    };
+  }
   if (session.activeTurn && session.activeTurn.runId !== params.runId && session.state !== "idle") {
     return {
       handled: true,
@@ -715,6 +774,7 @@ function handleTurnStart(
     requestId: params.requestId,
     nodeWorkerRunId: nextWorkerRunId,
     cancelRequested: false,
+    cancelReason: undefined,
     abortController: new AbortController(),
     completion: Promise.resolve(),
   };
@@ -771,6 +831,7 @@ async function handleTurnCancel(params: AcpTurnCancelParams): Promise<AcpInvokeC
   session.state = "cancelling";
   session.currentRunId = params.runId;
   session.activeTurn.cancelRequested = true;
+  session.activeTurn.cancelReason = params.reason?.trim() || session.activeTurn.cancelReason;
   session.updatedAt = Date.now();
   try {
     await session.runtime.cancel({
@@ -780,6 +841,7 @@ async function handleTurnCancel(params: AcpTurnCancelParams): Promise<AcpInvokeC
   } catch (error) {
     session.state = "running";
     session.activeTurn.cancelRequested = false;
+    session.activeTurn.cancelReason = undefined;
     throw error;
   }
   return {
