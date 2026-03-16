@@ -15,7 +15,6 @@ export {
 } from "../channels/plugins/helpers.js";
 export {
   addWildcardAllowFrom,
-  promptAccountId,
   setTopLevelChannelAllowFrom,
   setTopLevelChannelDmPolicyWithAllowFrom,
 } from "../channels/plugins/onboarding/helpers.js";

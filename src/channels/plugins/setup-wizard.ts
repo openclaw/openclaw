@@ -8,14 +8,14 @@ import type {
   ChannelOnboardingStatus,
   ChannelOnboardingStatusContext,
 } from "./onboarding-types.js";
-import { configureChannelAccessWithAllowlist } from "./onboarding/channel-access-configure.js";
-import type { ChannelAccessPolicy } from "./onboarding/channel-access.js";
 import {
   promptResolvedAllowFrom,
   resolveAccountIdForConfigure,
   runSingleChannelSecretStep,
   splitOnboardingEntries,
 } from "./onboarding/helpers.js";
+import { configureChannelAccessWithAllowlist } from "./setup-group-access-configure.js";
+import type { ChannelAccessPolicy } from "./setup-group-access.js";
 import type { ChannelSetupInput } from "./types.core.js";
 import type { ChannelPlugin } from "./types.js";
 
@@ -184,6 +184,7 @@ export type ChannelSetupWizardGroupAccess = {
   placeholder: string;
   helpTitle?: string;
   helpLines?: string[];
+  skipAllowlistEntries?: boolean;
   currentPolicy: (params: { cfg: OpenClawConfig; accountId: string }) => ChannelAccessPolicy;
   currentEntries: (params: { cfg: OpenClawConfig; accountId: string }) => string[];
   updatePrompt: (params: { cfg: OpenClawConfig; accountId: string }) => boolean;
@@ -192,14 +193,14 @@ export type ChannelSetupWizardGroupAccess = {
     accountId: string;
     policy: ChannelAccessPolicy;
   }) => OpenClawConfig;
-  resolveAllowlist: (params: {
+  resolveAllowlist?: (params: {
     cfg: OpenClawConfig;
     accountId: string;
     credentialValues: ChannelSetupWizardCredentialValues;
     entries: string[];
     prompter: Pick<WizardPrompter, "note">;
   }) => Promise<unknown>;
-  applyAllowlist: (params: {
+  applyAllowlist?: (params: {
     cfg: OpenClawConfig;
     accountId: string;
     resolved: unknown;
@@ -757,26 +758,31 @@ export function buildChannelOnboardingAdapterFromSetupWizard(params: {
           currentEntries: access.currentEntries({ cfg: next, accountId }),
           placeholder: access.placeholder,
           updatePrompt: access.updatePrompt({ cfg: next, accountId }),
+          skipAllowlistEntries: access.skipAllowlistEntries,
           setPolicy: (currentCfg, policy) =>
             access.setPolicy({
               cfg: currentCfg,
               accountId,
               policy,
             }),
-          resolveAllowlist: async ({ cfg: currentCfg, entries }) =>
-            await access.resolveAllowlist({
-              cfg: currentCfg,
-              accountId,
-              credentialValues,
-              entries,
-              prompter,
-            }),
-          applyAllowlist: ({ cfg: currentCfg, resolved }) =>
-            access.applyAllowlist({
-              cfg: currentCfg,
-              accountId,
-              resolved,
-            }),
+          resolveAllowlist: access.resolveAllowlist
+            ? async ({ cfg: currentCfg, entries }) =>
+                await access.resolveAllowlist!({
+                  cfg: currentCfg,
+                  accountId,
+                  credentialValues,
+                  entries,
+                  prompter,
+                })
+            : undefined,
+          applyAllowlist: access.applyAllowlist
+            ? ({ cfg: currentCfg, resolved }) =>
+                access.applyAllowlist!({
+                  cfg: currentCfg,
+                  accountId,
+                  resolved,
+                })
+            : undefined,
         });
       }
 

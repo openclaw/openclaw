@@ -3,7 +3,6 @@
  */
 
 import type { ChannelOnboardingDmPolicy } from "../../../src/channels/plugins/onboarding-types.js";
-import { promptChannelAccessConfig } from "../../../src/channels/plugins/onboarding/channel-access.js";
 import type { ChannelSetupWizard } from "../../../src/channels/plugins/setup-wizard.js";
 import type { ChannelSetupAdapter } from "../../../src/channels/plugins/types.adapters.js";
 import type { OpenClawConfig } from "../../../src/config/config.js";
@@ -228,6 +227,26 @@ function setTwitchAccessControl(
   });
 }
 
+function resolveTwitchGroupPolicy(cfg: OpenClawConfig): "open" | "allowlist" | "disabled" {
+  const account = getAccountConfig(cfg, DEFAULT_ACCOUNT_ID);
+  if (account?.allowedRoles?.includes("all")) {
+    return "open";
+  }
+  if (account?.allowedRoles?.includes("moderator")) {
+    return "allowlist";
+  }
+  return "disabled";
+}
+
+function setTwitchGroupPolicy(
+  cfg: OpenClawConfig,
+  policy: "open" | "allowlist" | "disabled",
+): OpenClawConfig {
+  const allowedRoles: TwitchRole[] =
+    policy === "open" ? ["all"] : policy === "allowlist" ? ["moderator", "vip"] : [];
+  return setTwitchAccessControl(cfg, allowedRoles, true);
+}
+
 const twitchDmPolicy: ChannelOnboardingDmPolicy = {
   label: "Twitch",
   channel,
@@ -268,6 +287,24 @@ const twitchDmPolicy: ChannelOnboardingDmPolicy = {
       allowFrom,
     });
   },
+};
+
+const twitchGroupAccess: NonNullable<ChannelSetupWizard["groupAccess"]> = {
+  label: "Twitch chat",
+  placeholder: "",
+  skipAllowlistEntries: true,
+  currentPolicy: ({ cfg }) => resolveTwitchGroupPolicy(cfg as OpenClawConfig),
+  currentEntries: ({ cfg }) => {
+    const account = getAccountConfig(cfg as OpenClawConfig, DEFAULT_ACCOUNT_ID);
+    return account?.allowFrom ?? [];
+  },
+  updatePrompt: ({ cfg }) => {
+    const account = getAccountConfig(cfg as OpenClawConfig, DEFAULT_ACCOUNT_ID);
+    return Boolean(account?.allowedRoles?.length || account?.allowFrom?.length);
+  },
+  setPolicy: ({ cfg, policy }) => setTwitchGroupPolicy(cfg as OpenClawConfig, policy),
+  resolveAllowlist: async () => [],
+  applyAllowlist: ({ cfg }) => cfg as OpenClawConfig,
 };
 
 export const twitchSetupAdapter: ChannelSetupAdapter = {
@@ -342,37 +379,10 @@ export const twitchSetupWizard: ChannelSetupWizard = {
         ? await twitchDmPolicy.promptAllowFrom({ cfg: cfgWithAccount, prompter })
         : cfgWithAccount;
 
-    if (!account?.allowFrom || account.allowFrom.length === 0) {
-      const accessConfig = await promptChannelAccessConfig({
-        prompter,
-        label: "Twitch chat",
-        currentPolicy: account?.allowedRoles?.includes("all")
-          ? "open"
-          : account?.allowedRoles?.includes("moderator")
-            ? "allowlist"
-            : "disabled",
-        currentEntries: [],
-        placeholder: "",
-        updatePrompt: false,
-      });
-
-      if (accessConfig) {
-        const allowedRoles: TwitchRole[] =
-          accessConfig.policy === "open"
-            ? ["all"]
-            : accessConfig.policy === "allowlist"
-              ? ["moderator", "vip"]
-              : [];
-
-        return {
-          cfg: setTwitchAccessControl(cfgWithAllowFrom, allowedRoles, true),
-        };
-      }
-    }
-
     return { cfg: cfgWithAllowFrom };
   },
   dmPolicy: twitchDmPolicy,
+  groupAccess: twitchGroupAccess,
   disable: (cfg) => {
     const twitch = (cfg.channels as Record<string, unknown>)?.twitch as
       | Record<string, unknown>

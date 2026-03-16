@@ -27,7 +27,6 @@ export { resolveChannelMediaMaxBytes } from "../channels/plugins/media-limits.js
 export {
   addWildcardAllowFrom,
   mergeAllowFromEntries,
-  promptAccountId,
   splitOnboardingEntries,
   setTopLevelChannelDmPolicyWithAllowFrom,
 } from "../channels/plugins/onboarding/helpers.js";
