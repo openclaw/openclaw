@@ -5,6 +5,7 @@ import {
   approveDevicePairing,
   listDevicePairing,
   summarizeDeviceTokens,
+  updatePairedDeviceMetadata,
   type PairedDevice as InfraPairedDevice,
 } from "../infra/device-pairing.js";
 import { formatTimeAgo } from "../infra/format-time/format-relative.ts";
@@ -26,6 +27,7 @@ type DevicesRpcOpts = {
   device?: string;
   role?: string;
   scope?: string[];
+  name?: string;
 };
 
 type DeviceTokenSummary = {
@@ -147,10 +149,26 @@ async function listPairingWithFallback(opts: DevicesRpcOpts): Promise<DevicePair
 async function approvePairingWithFallback(
   opts: DevicesRpcOpts,
   requestId: string,
+  displayName?: string,
 ): Promise<Record<string, unknown> | null> {
   try {
-    return await callGatewayCli("device.pair.approve", opts, { requestId });
+    return await callGatewayCli("device.pair.approve", opts, { requestId, displayName });
   } catch (error) {
+    // If displayName was provided and request failed due to schema validation,
+    // retry without displayName for backward compatibility with older gateways
+    if (displayName) {
+      try {
+        const result = await callGatewayCli("device.pair.approve", opts, { requestId });
+        if (!opts.json) {
+          defaultRuntime.log(
+            theme.warn("Gateway does not support displayName, device approved without naming"),
+          );
+        }
+        return result as Record<string, unknown> | null;
+      } catch {
+        // fall through to original error handling for local fallback
+      }
+    }
     if (!shouldUseLocalPairingFallback(opts, error)) {
       throw error;
     }
@@ -160,6 +178,17 @@ async function approvePairingWithFallback(
     const approved = await approveDevicePairing(requestId);
     if (!approved) {
       return null;
+    }
+    if (displayName && approved.device) {
+      try {
+        await updatePairedDeviceMetadata(approved.device.deviceId, { displayName });
+        approved.device.displayName = displayName;
+      } catch (err) {
+        if (!opts.json) {
+          const msg = `device pairing approved but displayName update failed device=${approved.device.deviceId}: ${String(err)}`;
+          defaultRuntime.log(theme.warn(msg));
+        }
+      }
     }
     return {
       requestId,
@@ -366,33 +395,65 @@ export function registerDevicesCli(program: Command) {
       .command("approve")
       .description("Approve a pending device pairing request")
       .argument("[requestId]", "Pending request id")
+      .argument("[displayName]", "Display name / 备注名称 (optional)", undefined)
       .option("--latest", "Approve the most recent pending request", false)
-      .action(async (requestId: string | undefined, opts: DevicesRpcOpts) => {
-        let resolvedRequestId = requestId?.trim();
-        if (!resolvedRequestId || opts.latest) {
-          const latest = selectLatestPendingRequest((await listPairingWithFallback(opts)).pending);
-          resolvedRequestId = latest?.requestId?.trim();
-        }
-        if (!resolvedRequestId) {
-          defaultRuntime.error("No pending device pairing requests to approve");
-          defaultRuntime.exit(1);
-          return;
-        }
-        const result = await approvePairingWithFallback(opts, resolvedRequestId);
-        if (!result) {
-          defaultRuntime.error("unknown requestId");
-          defaultRuntime.exit(1);
-          return;
-        }
-        if (opts.json) {
-          defaultRuntime.log(JSON.stringify(result, null, 2));
-          return;
-        }
-        const deviceId = (result as { device?: { deviceId?: string } })?.device?.deviceId;
-        defaultRuntime.log(
-          `${theme.success("Approved")} ${theme.command(deviceId ?? "ok")} ${theme.muted(`(${resolvedRequestId})`)}`,
-        );
-      }),
+      .option("--name <displayName>", "Display name for the paired device (optional)", undefined)
+      .action(
+        async (
+          requestId: string | undefined,
+          displayName: string | undefined,
+          opts: DevicesRpcOpts,
+        ) => {
+          let resolvedRequestId = requestId?.trim();
+          // Use --name option if provided for safer displayName setting with --latest
+          if (opts.name) {
+            displayName = opts.name.trim();
+          }
+          // When using --latest and NO requestId is provided (only displayName is given)
+          // User typed `devices approve --latest my-device-name` → promote the only positional to displayName
+          // This preserves backward compatibility for existing `devices approve req-old --latest`
+          // Original behavior: --latest always looks up the latest, even if a requestId is given
+          if (opts.latest && !resolvedRequestId && typeof displayName === "string" && !opts.name) {
+            // Only promote if we actually got a string displayName and no requestId is provided
+            displayName = displayName.trim();
+            resolvedRequestId = undefined;
+          }
+          // --latest always resolves the latest pending request, ignoring any explicit requestId
+          // preserves original behavior
+          if (!resolvedRequestId || opts.latest) {
+            const latest = selectLatestPendingRequest(
+              (await listPairingWithFallback(opts)).pending,
+            );
+            resolvedRequestId = latest?.requestId?.trim();
+          }
+          if (!resolvedRequestId) {
+            defaultRuntime.error("No pending device pairing requests to approve");
+            defaultRuntime.exit(1);
+            return;
+          }
+          const result = await approvePairingWithFallback(
+            opts,
+            resolvedRequestId,
+            displayName?.trim(),
+          );
+          if (!result) {
+            defaultRuntime.error("unknown requestId");
+            defaultRuntime.exit(1);
+            return;
+          }
+          if (opts.json) {
+            defaultRuntime.log(JSON.stringify(result, null, 2));
+            return;
+          }
+          const deviceId = (result as { device?: { deviceId?: string } })?.device?.deviceId;
+          const displayLabel = (result as { device?: { displayName?: string } })?.device
+            ?.displayName;
+          const display = displayLabel ? `${displayLabel} (${deviceId})` : (deviceId ?? "ok");
+          defaultRuntime.log(
+            `${theme.success("Approved")} ${theme.command(display)} ${theme.muted(`(${resolvedRequestId})`)}`,
+          );
+        },
+      ),
   );
 
   devicesCallOpts(

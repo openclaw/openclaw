@@ -3,6 +3,7 @@ import {
   getPairedDevice,
   listDevicePairing,
   removePairedDevice,
+  updatePairedDeviceMetadata,
   type DeviceAuthToken,
   type RotateDeviceTokenDenyReason,
   rejectDevicePairing,
@@ -108,7 +109,7 @@ export const deviceHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-    const { requestId } = params as { requestId: string };
+    const { requestId, displayName } = params as { requestId: string; displayName?: string };
     const callerScopes = Array.isArray(client?.connect?.scopes) ? client.connect.scopes : [];
     const approved = await approveDevicePairing(requestId, { callerScopes });
     if (!approved) {
@@ -122,6 +123,16 @@ export const deviceHandlers: GatewayRequestHandlers = {
         errorShape(ErrorCodes.INVALID_REQUEST, `missing scope: ${approved.missingScope}`),
       );
       return;
+    }
+    if (displayName) {
+      try {
+        await updatePairedDeviceMetadata(approved.device.deviceId, { displayName });
+        approved.device.displayName = displayName;
+      } catch (err) {
+        context.logGateway.warn(
+          `device pairing approved but displayName update failed device=${approved.device.deviceId}: ${String(err)}`,
+        );
+      }
     }
     context.logGateway.info(
       `device pairing approved device=${approved.device.deviceId} role=${approved.device.role ?? "unknown"}`,
