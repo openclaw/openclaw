@@ -13,15 +13,9 @@ export {
   formatPairingApproveHint,
   parseOptionalDelimitedEntries,
 } from "../channels/plugins/helpers.js";
-export type {
-  ChannelOnboardingAdapter,
-  ChannelOnboardingDmPolicy,
-} from "../channels/plugins/onboarding-types.js";
-export { promptChannelAccessConfig } from "../channels/plugins/onboarding/channel-access.js";
 export {
   addWildcardAllowFrom,
   promptAccountId,
-  resolveAccountIdForConfigure,
   setTopLevelChannelAllowFrom,
   setTopLevelChannelDmPolicyWithAllowFrom,
 } from "../channels/plugins/onboarding/helpers.js";
@@ -66,6 +60,11 @@ export { DEFAULT_ACCOUNT_ID } from "../routing/session-key.js";
 export type { RuntimeEnv } from "../runtime.js";
 export { createAccountStatusSink, runPassiveAccountLifecycle } from "./channel-lifecycle.js";
 export {
+  listIrcAccountIds,
+  resolveDefaultIrcAccountId,
+  resolveIrcAccount,
+} from "../../extensions/irc/src/accounts.js";
+export {
   readStoreAllowFromForDmPolicy,
   resolveEffectiveAllowFromLists,
 } from "../security/dm-policy-shared.js";
@@ -74,6 +73,7 @@ export type { WizardPrompter } from "../wizard/prompts.js";
 export { createScopedPairingAccess } from "./pairing-access.js";
 export { issuePairingChallenge } from "../pairing/pairing-challenge.js";
 export { dispatchInboundReplyWithBase } from "./inbound-reply-dispatch.js";
+export { ircSetupAdapter, ircSetupWizard } from "../../extensions/irc/src/setup-surface.js";
 export type { OutboundReplyPayload } from "./reply-payload.js";
 export {
   createNormalizedOutboundDeliverer,

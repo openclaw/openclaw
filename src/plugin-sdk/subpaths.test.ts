@@ -90,6 +90,13 @@ describe("plugin-sdk subpath exports", () => {
     expect(typeof imessageSdk.imessageSetupAdapter).toBe("object");
   });
 
+  it("exports IRC helpers", async () => {
+    const ircSdk = await import("openclaw/plugin-sdk/irc");
+    expect(typeof ircSdk.resolveIrcAccount).toBe("function");
+    expect(typeof ircSdk.ircSetupWizard).toBe("object");
+    expect(typeof ircSdk.ircSetupAdapter).toBe("object");
+  });
+
   it("exports WhatsApp helpers", () => {
     // WhatsApp-specific functions (resolveWhatsAppAccount, whatsappOnboardingAdapter) moved to extensions/whatsapp/src/
     expect(typeof whatsappSdk.WhatsAppConfigSchema).toBe("object");
@@ -106,6 +113,19 @@ describe("plugin-sdk subpath exports", () => {
   it("exports Microsoft Teams helpers", () => {
     expect(typeof msteamsSdk.resolveControlCommandGate).toBe("function");
     expect(typeof msteamsSdk.loadOutboundMediaFromUrl).toBe("function");
+  });
+
+  it("exports Google Chat helpers", async () => {
+    const googlechatSdk = await import("openclaw/plugin-sdk/googlechat");
+    expect(typeof googlechatSdk.googlechatSetupWizard).toBe("object");
+    expect(typeof googlechatSdk.googlechatSetupAdapter).toBe("object");
+  });
+
+  it("exports Tlon helpers", async () => {
+    const tlonSdk = await import("openclaw/plugin-sdk/tlon");
+    expect(typeof tlonSdk.fetchWithSsrFGuard).toBe("function");
+    expect(typeof tlonSdk.tlonSetupWizard).toBe("object");
+    expect(typeof tlonSdk.tlonSetupAdapter).toBe("object");
   });
 
   it("exports acpx helpers", async () => {
