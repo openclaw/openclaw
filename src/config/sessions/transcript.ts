@@ -154,7 +154,9 @@ export async function appendAssistantMessageToSessionTranscript(params: {
 
   const storePath = params.storePath ?? resolveDefaultSessionStorePath(params.agentId);
   const store = loadSessionStore(storePath, { skipCache: true });
-  const entry = store[sessionKey] as SessionEntry | undefined;
+  // Normalize session key to match store format (lowercased keys).
+  const normalizedKey = sessionKey.toLowerCase();
+  const entry = (store[normalizedKey] ?? store[sessionKey]) as SessionEntry | undefined;
   if (!entry?.sessionId) {
     return { ok: false, reason: `unknown sessionKey: ${sessionKey}` };
   }
