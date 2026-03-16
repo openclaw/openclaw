@@ -1,12 +1,21 @@
+import type { ReplyPayload } from "../../auto-reply/types.js";
+import type { deliverOutboundPayloads } from "../../infra/outbound/deliver-runtime.js";
 import type {
   NormalizedOutboundPayload,
   OutboundDeliveryResult,
-  deliverOutboundPayloads,
 } from "../../infra/outbound/deliver.js";
+import type { OutboundIdentity } from "../../infra/outbound/identity.js";
+import type { OutboundChannel } from "../../infra/outbound/targets.js";
 import type { PluginRuntimeChannel } from "./types-channel.js";
 import type { PluginRuntimeCore, RuntimeLogger } from "./types-core.js";
 
-export type { NormalizedOutboundPayload, RuntimeLogger };
+export type {
+  NormalizedOutboundPayload,
+  OutboundChannel,
+  OutboundIdentity,
+  ReplyPayload,
+  RuntimeLogger,
+};
 
 // ── Outbound delivery types (plugin-facing) ─────────────────────────
 
