@@ -540,18 +540,20 @@ function normalizeFeishuCommandProbeBody(text: string): string {
  */
 export function decodeFeishuFilename(filename: string | undefined): string {
   if (!filename) return "";
-  // Strip RFC 5987 prefix (case-insensitive): filename*=UTF-8'language'encoded
+  // Handle RFC 5987 format: filename*=UTF-8'language'encoded
   const rfcMatch = /^filename\*=utf-8'[^']*'/i.exec(filename);
-  if (!rfcMatch) {
-    return filename; // Plain filename - return as-is
+  if (rfcMatch) {
+    filename = filename.substring(rfcMatch[0].length);
   }
-  // RFC 5987 format - strip prefix and decode
-  filename = filename.substring(rfcMatch[0].length);
-  try {
-    return decodeURIComponent(filename);
-  } catch {
-    return filename;
+  // Decode percent-encoded strings
+  if (/%[0-9A-Fa-f]{2}/.test(filename)) {
+    try {
+      return decodeURIComponent(filename);
+    } catch {
+      return filename;
+    }
   }
+  return filename;
 }
 
 /**
