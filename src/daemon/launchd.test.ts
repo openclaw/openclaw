@@ -452,7 +452,7 @@ describe("launchd install", () => {
     });
 
     const plistPath = resolveLaunchAgentPlistPath(env);
-    expect(state.dirModes.get("/Users/test/Library")).toBe(0o777);
+    expect(state.dirModes.get("/Users/test/Library")).toBe(0o755);
     expect(state.dirModes.get("/Users/test/Library/LaunchAgents")).toBe(0o755);
     expect(state.fileModes.get(plistPath)).toBe(0o600);
   });
