@@ -263,6 +263,7 @@ describe("detectAndLoadPromptImages", () => {
     });
 
     expect(result.images).toHaveLength(0);
+    expect(result.detectedRefs).toHaveLength(0);
     expect(result.droppedForVision).toBe(1);
   });
 
