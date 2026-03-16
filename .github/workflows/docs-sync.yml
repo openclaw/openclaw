@@ -41,7 +41,30 @@ jobs:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
         run: pnpm run docs:translate
 
-      - name: Push Changes
+      - name: Commit Changes
+        id: commit
         run: |
-          # 這裡假設腳本已經完成了 commit 動作，只需要 push
-          git push origin main || echo "No changes to push"
+          if [[ -z "$(git status --porcelain)" ]]; then
+            echo "has_changes=false" >> "$GITHUB_OUTPUT"
+            echo "No changes to commit."
+            exit 0
+          fi
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+
+          if git diff --cached --quiet; then
+            echo "has_changes=false" >> "$GITHUB_OUTPUT"
+            echo "No staged changes to commit."
+            exit 0
+          fi
+
+          git commit -m "docs(i18n): sync translated docs"
+          echo "has_changes=true" >> "$GITHUB_OUTPUT"
+
+      - name: Push Changes
+        if: steps.commit.outputs.has_changes == 'true'
+        run: |
+          git pull --rebase origin main
+          git push origin HEAD:main
