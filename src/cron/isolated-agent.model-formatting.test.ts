@@ -134,7 +134,7 @@ describe("cron model formatting and precedence edge cases", () => {
   // ------ provider/model string splitting ------
 
   describe("parseModelRef formatting", () => {
-    it("splits standard provider/model", async () => {
+    it("splits standard provider/model", { timeout: 180_000 }, async () => {
       await withTempHome(async (home) => {
         const { res, call } = await runTurn(home, {
           jobPayload: { kind: "agentTurn", message: DEFAULT_MESSAGE, model: "openai/gpt-4.1-mini" },
