@@ -56,27 +56,48 @@ comes in from upstream, not the other way around.
 
 ## 3. Git Topology
 
+### Phased PR Workflow (default)
+
+Each upstream release is synced in **per-category phases**, each with its own
+branch and PR. This keeps PRs focused and reviewable.
+
 ```
 upstream/main (pure openclaw — fetch only, never push)
   │
-  │  identify commits from CHANGELOG / git log
+  │  identify commits, classify into 6 categories
   │
-  │  git cherry-pick <sha>
-  │         │
-  ▼         ▼
-sync/v2026.3.12 (short-lived sync branch off main)
-  ├── cherry-pick: security fix A
-  ├── cherry-pick: bug fix B
-  ├── pnpm build && pnpm test
+  ▼
+Phase 1: sync/<tag>-security ──── PR → merge to main → user tests
+Phase 2: sync/<tag>-bugfixes ──── PR → merge to main → user tests
+Phase 3: sync/<tag>-features ──── PR → merge to main → user tests
+Phase 4: sync/<tag>-provider-refactor ── PR → merge to main → user tests
+Phase 5: sync/<tag>-review ────── PR → merge to main → user tests
+Phase 6: sync/<tag>-ui-inspiration ──── draft PR (reference only)
   │
-  ▼  (fast-forward merge once validated)
-origin/main (operator1)
+  ▼
+origin/main (operator1) — each phase branches from main AFTER prior phase merges
 ```
 
-**Key:** `upstream` remote is the pure openclaw fork (fetch-only, never push).
-Cherry-picks land on a short-lived `sync/<tag>` branch created from `main`.
-After validation passes, fast-forward merge to `main` and delete the sync branch.
-If the batch goes sideways, delete the sync branch — `main` is untouched.
+**Key:** Each phase branches from the current `main` (which includes all prior
+phases' merged commits). The user does hands-on testing after each merge before
+the next phase starts. This catches regressions early and keeps the sync
+reversible at each step.
+
+### Phase categories
+
+| Phase | Category          | Branch Pattern                 | Priority                         |
+| ----- | ----------------- | ------------------------------ | -------------------------------- |
+| 1     | Security          | `sync/<tag>-security`          | Critical — merge first           |
+| 2     | Bug Fixes         | `sync/<tag>-bugfixes`          | High                             |
+| 3     | Features          | `sync/<tag>-features`          | Medium                           |
+| 4     | Provider/Refactor | `sync/<tag>-provider-refactor` | Align with upstream architecture |
+| 5     | Review Items      | `sync/<tag>-review`            | Triaged during classification    |
+| 6     | UI Inspiration    | `sync/<tag>-ui-inspiration`    | Reference — draft PR             |
+
+### Legacy single-branch workflow
+
+For small syncs (< 20 commits) or hotfixes, a single `sync/<tag>` branch
+with one PR is still acceptable.
 
 ### One-time setup: Disable push to upstream
 
@@ -473,4 +494,4 @@ regenerate the lockfile, and commit the result separately.
 
 ---
 
-_Process version: 2.1 — 2026-03-15 (cherry-pick -x traceability, batch dry-run, cumulative skip counter, schema migration renumbering, two-sided safe-file check, cross-release sequencing, post-rebase SHA note, cherry-pick post-sync checklist, security hotfix naming, CI push step)_
+_Process version: 3.0 — 2026-03-16 (phased PR workflow: per-category branches/PRs, 6-phase pipeline with human-in-the-loop testing between phases, provider refactor + UI inspiration phases, sync-state.json currentSync tracking, resume capability)_

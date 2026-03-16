@@ -1,0 +1,47 @@
+{
+  "lastSyncedTag": "v2026.3.8",
+  "lastSyncedAt": "2026-03-09T12:30:36Z",
+  "lastSyncedCommit": "2b5ef174750ba20d3717df24ea7210ab97585e55",
+  "backupTag": "backup/pre-sync-v2026.3.8",
+  "cumulativeSkipped": 0,
+  "currentSync": {
+    "targetTag": "v2026.3.12",
+    "fromTag": "v2026.3.8",
+    "startedAt": "2026-03-16T00:00:00Z",
+    "reportFile": "Project-tasks/releases/sync-v2026.3.12-report.md",
+    "phases": {
+      "security": { "status": "pending", "branch": null, "pr": null, "commits": 34 },
+      "bugfixes": { "status": "pending", "branch": null, "pr": null, "commits": 75 },
+      "features": { "status": "pending", "branch": null, "pr": null, "commits": 11 },
+      "provider-refactor": { "status": "pending", "branch": null, "pr": null, "commits": 8 },
+      "review": { "status": "pending", "branch": null, "pr": null, "commits": 20 },
+      "ui-inspiration": { "status": "pending", "branch": null, "pr": null, "commits": 6 }
+    }
+  },
+  "history": [
+    {
+      "type": "full-merge",
+      "fromTag": "v2026.3.7-beta.1",
+      "toTag": "v2026.3.8",
+      "syncedAt": "2026-03-09T12:30:36Z",
+      "commitsCount": 263,
+      "conflictsResolved": 195,
+      "backupTag": "backup/pre-sync-v2026.3.8",
+      "notes": "Large sync — memoryDashboardHandlers, clawhubHandlers, ~40 plugin-sdk exports silently dropped during conflict resolution. Required manual post-sync audit."
+    },
+    {
+      "type": "full-merge",
+      "fromTag": "v2026.3.2",
+      "toTag": "v2026.3.7-beta.1",
+      "syncedAt": "2026-03-08T00:00:00Z",
+      "backupTag": "backup/pre-sync-v2026.3.7-beta.1"
+    },
+    {
+      "type": "full-merge",
+      "fromTag": "v2026.2.1",
+      "toTag": "v2026.3.2",
+      "syncedAt": "2026-03-03T00:00:00Z",
+      "backupTag": "backup/pre-sync-v2026.3.2"
+    }
+  ]
+}
