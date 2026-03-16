@@ -6,7 +6,7 @@ import { redactCdpUrl } from "../browser/cdp.helpers.js";
 import { resolveBrowserConfig, resolveProfile } from "../browser/config.js";
 import { resolveBrowserControlAuth } from "../browser/control-auth.js";
 import { hasPotentialConfiguredChannels } from "../channels/config-presence.js";
-import { listChannelPlugins } from "../channels/plugins/index.js";
+import type { listChannelPlugins } from "../channels/plugins/index.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../config/config.js";
 import { resolveConfigPath, resolveStateDir } from "../config/paths.js";
@@ -136,6 +136,13 @@ type AuditExecutionContext = {
   codeSafetySummaryCache: Map<string, Promise<unknown>>;
   deepProbeAuth?: { token?: string; password?: string };
 };
+
+let channelPluginsModulePromise: Promise<typeof import("../channels/plugins/index.js")> | undefined;
+
+async function loadChannelPlugins() {
+  channelPluginsModulePromise ??= import("../channels/plugins/index.js");
+  return await channelPluginsModulePromise;
+}
 
 function countBySeverity(findings: SecurityAuditFinding[]): SecurityAuditSummary {
   let critical = 0;
@@ -1244,7 +1251,7 @@ export async function runSecurityAudit(opts: SecurityAuditOptions): Promise<Secu
   }
 
   if (context.includeChannelSecurity && hasPotentialConfiguredChannels(cfg, env)) {
-    const plugins = context.plugins ?? listChannelPlugins();
+    const plugins = context.plugins ?? (await loadChannelPlugins()).listChannelPlugins();
     findings.push(
       ...(await collectChannelSecurityFindings({
         cfg,
