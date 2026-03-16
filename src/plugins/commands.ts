@@ -5,8 +5,15 @@
  * These commands are processed before built-in commands and before agent invocation.
  */
 
+import { parseDiscordTarget } from "../../extensions/discord/src/targets.js";
+import { parseTelegramTarget } from "../../extensions/telegram/src/targets.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { logVerbose } from "../globals.js";
+import {
+  detachPluginConversationBinding,
+  getCurrentPluginConversationBinding,
+  requestPluginConversationBinding,
+} from "./conversation-binding.js";
 import type {
   OpenClawPluginCommandDefinition,
   PluginCommandContext,
@@ -15,6 +22,8 @@ import type {
 
 type RegisteredPluginCommand = OpenClawPluginCommandDefinition & {
   pluginId: string;
+  pluginName?: string;
+  pluginRoot?: string;
 };
 
 // Registry of plugin commands
@@ -104,50 +113,32 @@ export type CommandRegistrationResult = {
 
 export type PluginCommandRegistryEntry = {
   pluginId: string;
+  pluginName?: string;
+  pluginRoot?: string;
   command: OpenClawPluginCommandDefinition;
 };
 
-export type CommandValidationResult =
-  | {
-      ok: true;
-      name: string;
-      description: string;
-    }
-  | {
-      ok: false;
-      error: string;
-    };
-
+/**
+ * Validate a plugin command definition without registering it.
+ * Returns an error message if invalid, or null if valid.
+ * Shared by both the global registration path and snapshot (non-activating) loads.
+ */
 export function validatePluginCommandDefinition(
   command: OpenClawPluginCommandDefinition,
-): CommandValidationResult {
+): string | null {
   if (typeof command.handler !== "function") {
-    return { ok: false, error: "Command handler must be a function" };
+    return "Command handler must be a function";
   }
-
   if (typeof command.name !== "string") {
-    return { ok: false, error: "Command name must be a string" };
+    return "Command name must be a string";
   }
   if (typeof command.description !== "string") {
-    return { ok: false, error: "Command description must be a string" };
+    return "Command description must be a string";
   }
-
-  const name = command.name.trim();
-  const description = command.description.trim();
-  if (!description) {
-    return { ok: false, error: "Command description cannot be empty" };
+  if (!command.description.trim()) {
+    return "Command description cannot be empty";
   }
-
-  const validationError = validateCommandName(name);
-  if (validationError) {
-    return { ok: false, error: validationError };
-  }
-
-  return {
-    ok: true,
-    name,
-    description,
-  };
+  return validateCommandName(command.name.trim());
 }
 
 /**
@@ -157,17 +148,20 @@ export function validatePluginCommandDefinition(
 export function registerPluginCommand(
   pluginId: string,
   command: OpenClawPluginCommandDefinition,
+  opts?: { pluginName?: string; pluginRoot?: string },
 ): CommandRegistrationResult {
   // Prevent registration while commands are being processed
   if (registryLocked) {
     return { ok: false, error: "Cannot register commands while processing is in progress" };
   }
 
-  const validation = validatePluginCommandDefinition(command);
-  if (!validation.ok) {
-    return { ok: false, error: validation.error };
+  const definitionError = validatePluginCommandDefinition(command);
+  if (definitionError) {
+    return { ok: false, error: definitionError };
   }
-  const { name, description } = validation;
+
+  const name = command.name.trim();
+  const description = command.description.trim();
 
   const key = `/${name.toLowerCase()}`;
 
@@ -180,7 +174,14 @@ export function registerPluginCommand(
     };
   }
 
-  pluginCommands.set(key, { ...command, name, description, pluginId });
+  pluginCommands.set(key, {
+    ...command,
+    name,
+    description,
+    pluginId,
+    pluginName: opts?.pluginName,
+    pluginRoot: opts?.pluginRoot,
+  });
   logVerbose(`Registered plugin command: ${key} (plugin: ${pluginId})`);
   return { ok: true };
 }
@@ -194,12 +195,13 @@ export function replacePluginCommands(
 
   const nextCommands = new Map<string, RegisteredPluginCommand>();
   for (const entry of entries) {
-    const validation = validatePluginCommandDefinition(entry.command);
-    if (!validation.ok) {
-      return { ok: false, error: validation.error };
+    const definitionError = validatePluginCommandDefinition(entry.command);
+    if (definitionError) {
+      return { ok: false, error: definitionError };
     }
 
-    const { name, description } = validation;
+    const name = entry.command.name.trim();
+    const description = entry.command.description.trim();
     const key = `/${name.toLowerCase()}`;
     if (nextCommands.has(key)) {
       const existing = nextCommands.get(key)!;
@@ -214,6 +216,8 @@ export function replacePluginCommands(
       name,
       description,
       pluginId: entry.pluginId,
+      pluginName: entry.pluginName,
+      pluginRoot: entry.pluginRoot,
     });
   }
 
@@ -305,6 +309,63 @@ function sanitizeArgs(args: string | undefined): string | undefined {
   return sanitized;
 }
 
+function stripPrefix(raw: string | undefined, prefix: string): string | undefined {
+  if (!raw) {
+    return undefined;
+  }
+  return raw.startsWith(prefix) ? raw.slice(prefix.length) : raw;
+}
+
+function resolveBindingConversationFromCommand(params: {
+  channel: string;
+  from?: string;
+  to?: string;
+  accountId?: string;
+  messageThreadId?: number;
+}): {
+  channel: string;
+  accountId: string;
+  conversationId: string;
+  parentConversationId?: string;
+  threadId?: string | number;
+} | null {
+  const accountId = params.accountId?.trim() || "default";
+  if (params.channel === "telegram") {
+    const rawTarget = params.to ?? params.from;
+    if (!rawTarget) {
+      return null;
+    }
+    const target = parseTelegramTarget(rawTarget);
+    return {
+      channel: "telegram",
+      accountId,
+      conversationId: target.chatId,
+      threadId: params.messageThreadId ?? target.messageThreadId,
+    };
+  }
+  if (params.channel === "discord") {
+    const source = params.from ?? params.to;
+    const rawTarget = source?.startsWith("discord:channel:")
+      ? stripPrefix(source, "discord:")
+      : source?.startsWith("discord:user:")
+        ? stripPrefix(source, "discord:")
+        : source;
+    if (!rawTarget || rawTarget.startsWith("slash:")) {
+      return null;
+    }
+    const target = parseDiscordTarget(rawTarget, { defaultKind: "channel" });
+    if (!target) {
+      return null;
+    }
+    return {
+      channel: "discord",
+      accountId,
+      conversationId: `${target.kind}:${target.id}`,
+    };
+  }
+  return null;
+}
+
 /**
  * Execute a plugin command handler.
  *
@@ -338,6 +399,13 @@ export async function executePluginCommand(params: {
 
   // Sanitize args before passing to handler
   const sanitizedArgs = sanitizeArgs(args);
+  const bindingConversation = resolveBindingConversationFromCommand({
+    channel,
+    from: params.from,
+    to: params.to,
+    accountId: params.accountId,
+    messageThreadId: params.messageThreadId,
+  });
 
   const ctx: PluginCommandContext = {
     senderId,
@@ -351,6 +419,40 @@ export async function executePluginCommand(params: {
     to: params.to,
     accountId: params.accountId,
     messageThreadId: params.messageThreadId,
+    requestConversationBinding: async (bindingParams) => {
+      if (!command.pluginRoot || !bindingConversation) {
+        return {
+          status: "error",
+          message: "This command cannot bind the current conversation.",
+        };
+      }
+      return requestPluginConversationBinding({
+        pluginId: command.pluginId,
+        pluginName: command.pluginName,
+        pluginRoot: command.pluginRoot,
+        requestedBySenderId: senderId,
+        conversation: bindingConversation,
+        binding: bindingParams,
+      });
+    },
+    detachConversationBinding: async () => {
+      if (!command.pluginRoot || !bindingConversation) {
+        return { removed: false };
+      }
+      return detachPluginConversationBinding({
+        pluginRoot: command.pluginRoot,
+        conversation: bindingConversation,
+      });
+    },
+    getCurrentConversationBinding: async () => {
+      if (!command.pluginRoot || !bindingConversation) {
+        return null;
+      }
+      return getCurrentPluginConversationBinding({
+        pluginRoot: command.pluginRoot,
+        conversation: bindingConversation,
+      });
+    },
   };
 
   // Lock registry during execution to prevent concurrent modifications
@@ -411,9 +513,17 @@ export function getPluginCommandSpecs(provider?: string): Array<{
   description: string;
   acceptsArgs: boolean;
 }> {
+  const providerName = provider?.trim().toLowerCase();
+  if (providerName && providerName !== "telegram" && providerName !== "discord") {
+    return [];
+  }
   return Array.from(pluginCommands.values()).map((cmd) => ({
     name: resolvePluginNativeName(cmd, provider),
     description: cmd.description,
     acceptsArgs: cmd.acceptsArgs ?? false,
   }));
 }
+
+export const __testing = {
+  resolveBindingConversationFromCommand,
+};

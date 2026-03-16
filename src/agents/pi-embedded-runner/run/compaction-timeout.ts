@@ -13,6 +13,24 @@ export function shouldFlagCompactionTimeout(signal: CompactionTimeoutSignal): bo
   return signal.isCompactionPendingOrRetrying || signal.isCompactionInFlight;
 }
 
+export function resolveRunTimeoutDuringCompaction(params: {
+  isCompactionPendingOrRetrying: boolean;
+  isCompactionInFlight: boolean;
+  graceAlreadyUsed: boolean;
+}): "extend" | "abort" {
+  if (!params.isCompactionPendingOrRetrying && !params.isCompactionInFlight) {
+    return "abort";
+  }
+  return params.graceAlreadyUsed ? "abort" : "extend";
+}
+
+export function resolveRunTimeoutWithCompactionGraceMs(params: {
+  runTimeoutMs: number;
+  compactionTimeoutMs: number;
+}): number {
+  return params.runTimeoutMs + params.compactionTimeoutMs;
+}
+
 export type SnapshotSelectionParams = {
   timedOutDuringCompaction: boolean;
   preCompactionSnapshot: AgentMessage[] | null;

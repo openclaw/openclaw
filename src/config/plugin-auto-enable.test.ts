@@ -62,6 +62,7 @@ function makeRegistry(plugins: Array<{ id: string; channels: string[] }>): Plugi
       channels: p.channels,
       providers: [],
       skills: [],
+      hooks: [],
       origin: "config" as const,
       rootDir: `/fake/${p.id}`,
       source: `/fake/${p.id}/index.js`,
@@ -306,7 +307,7 @@ describe("applyPluginAutoEnable", () => {
       env: {},
     });
 
-    expect(result.config.plugins?.entries?.["google-gemini-cli-auth"]?.enabled).toBe(true);
+    expect(result.config.plugins?.entries?.google?.enabled).toBe(true);
   });
 
   it("auto-enables acpx plugin when ACP is configured", () => {
