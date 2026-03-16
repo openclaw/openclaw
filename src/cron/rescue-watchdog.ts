@@ -179,9 +179,10 @@ async function probeProfileGateway(params: {
       typeof params.timeoutMs === "number"
         ? Math.max(1, Math.min(PROBE_TIMEOUT_MS, params.timeoutMs))
         : PROBE_TIMEOUT_MS,
-    // Shared-secret probes do not need pairing, so keep them device-less to
-    // avoid remote/tailnet watchdog probes tripping pairing-required closes.
-    ...(hasSharedProbeAuth ? { disableDeviceIdentity: true } : {}),
+    // Shared-secret probes do not need pairing, while no-auth probes must
+    // explicitly preserve device identity so loopback probe defaults do not
+    // trigger "device identity required" closes.
+    disableDeviceIdentity: hasSharedProbeAuth,
   });
   if (probe.ok || looksLikeAuthClose(probe.close?.code, probe.close?.reason)) {
     return { healthy: true };

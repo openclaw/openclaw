@@ -44,8 +44,8 @@ export async function probeGateway(opts: {
   let close: GatewayProbeClose | null = null;
 
   const disableDeviceIdentity = (() => {
-    if (opts.disableDeviceIdentity) {
-      return true;
+    if (typeof opts.disableDeviceIdentity === "boolean") {
+      return opts.disableDeviceIdentity;
     }
     try {
       return isLoopbackHost(new URL(opts.url).hostname);

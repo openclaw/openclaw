@@ -306,7 +306,7 @@ describe("runRescueWatchdogJob", () => {
     );
   });
 
-  it("keeps device identity enabled for no-auth watchdog probes", async () => {
+  it("explicitly keeps device identity enabled for no-auth watchdog probes", async () => {
     loadConfig.mockReturnValue({
       gateway: {
         port: 18_789,
@@ -344,7 +344,47 @@ describe("runRescueWatchdogJob", () => {
       | { disableDeviceIdentity?: boolean; url?: string }
       | undefined;
     expect(probeCall?.url).toBe("ws://100.64.0.10:18789");
-    expect(probeCall).not.toHaveProperty("disableDeviceIdentity");
+    expect(probeCall?.disableDeviceIdentity).toBe(false);
+  });
+
+  it("explicitly keeps device identity enabled for loopback no-auth watchdog probes", async () => {
+    loadConfig.mockReturnValue({
+      gateway: {
+        port: 18_789,
+        auth: {
+          mode: "none",
+        },
+      },
+    });
+    resolveGatewayProbeAuthSafe.mockReturnValue({
+      auth: {},
+    });
+    probeGateway.mockResolvedValue({
+      ok: true,
+      close: null,
+      error: null,
+    });
+
+    const result = await runRescueWatchdogJob({
+      job: {
+        id: "job-loopback-no-auth",
+        name: "rescue",
+        payload: {
+          kind: "rescueWatchdog",
+          monitoredProfile: "work",
+          timeoutSeconds: 120,
+        },
+      } as never,
+      monitoredProfile: "work",
+    });
+
+    expect(result.status).toBe("ok");
+    expect(probeGateway).toHaveBeenCalledWith(
+      expect.objectContaining({
+        disableDeviceIdentity: false,
+        url: "ws://127.0.0.1:18789",
+      }),
+    );
   });
   it("brackets IPv6 custom bind hosts in the watchdog probe URL", async () => {
     loadConfig.mockReturnValue({
