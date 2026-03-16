@@ -85,6 +85,39 @@ describe("buildInboundMetaSystemPrompt", () => {
     expect(payload["flags"]).toBeUndefined();
   });
 
+  it("hashes chat_id when redactPII=true", () => {
+    const prompt = buildInboundMetaSystemPrompt(
+      {
+        OriginatingTo: "telegram:1657377165",
+        OriginatingChannel: "telegram",
+        Provider: "telegram",
+        Surface: "telegram",
+        ChatType: "direct",
+      } as TemplateContext,
+      { redactPII: true },
+    );
+
+    const payload = parseInboundMetaPayload(prompt);
+    expect(payload["chat_id"]).toMatch(/^telegram:[a-f0-9]{12}$/);
+    expect(payload["chat_id"]).not.toContain("1657377165");
+  });
+
+  it("preserves chat_id when redactPII=false", () => {
+    const prompt = buildInboundMetaSystemPrompt(
+      {
+        OriginatingTo: "telegram:1657377165",
+        OriginatingChannel: "telegram",
+        Provider: "telegram",
+        Surface: "telegram",
+        ChatType: "direct",
+      } as TemplateContext,
+      { redactPII: false },
+    );
+
+    const payload = parseInboundMetaPayload(prompt);
+    expect(payload["chat_id"]).toBe("telegram:1657377165");
+  });
+
   it("omits sender_id when blank", () => {
     const prompt = buildInboundMetaSystemPrompt({
       MessageSid: "458",
@@ -330,5 +363,95 @@ describe("buildInboundUserContextPrefix", () => {
 
     const conversationInfo = parseConversationInfoPayload(text);
     expect(conversationInfo["sender"]).toBe("user@example.com");
+  });
+
+  describe("redactPII", () => {
+    it("omits e164 and hashes SenderId", () => {
+      const text = buildInboundUserContextPrefix(
+        {
+          ChatType: "group",
+          SenderE164: "+15551234567",
+          SenderId: "user-123",
+          SenderUsername: "alice",
+        } as TemplateContext,
+        { redactPII: true },
+      );
+
+      const conversationInfo = parseConversationInfoPayload(text);
+      expect(conversationInfo["sender"]).toMatch(/^user_[a-f0-9]{12}$/);
+      expect(conversationInfo["sender"]).not.toBe("user-123");
+      expect(conversationInfo["sender_id"]).toMatch(/^user_[a-f0-9]{12}$/);
+
+      const senderInfo = parseSenderInfoPayload(text);
+      expect(senderInfo["e164"]).toBeUndefined();
+      expect(senderInfo["id"]).toMatch(/^user_[a-f0-9]{12}$/);
+      expect(senderInfo["username"]).toBe("alice");
+    });
+
+    it("hashes phone-like SenderId on WhatsApp/Signal", () => {
+      const text = buildInboundUserContextPrefix(
+        {
+          ChatType: "group",
+          SenderId: "+15551234567",
+          SenderName: "Alice",
+        } as TemplateContext,
+        { redactPII: true },
+      );
+
+      const conversationInfo = parseConversationInfoPayload(text);
+      expect(conversationInfo["sender_id"]).toMatch(/^user_[a-f0-9]{12}$/);
+      expect(conversationInfo["sender_id"]).not.toContain("15551234567");
+      expect(conversationInfo["sender"]).toBe("Alice");
+    });
+
+    it("still includes SenderName when redactPII=true", () => {
+      const text = buildInboundUserContextPrefix(
+        {
+          ChatType: "group",
+          SenderName: "Tyler",
+          SenderE164: "+15551234567",
+          SenderId: "user-123",
+        } as TemplateContext,
+        { redactPII: true },
+      );
+
+      const conversationInfo = parseConversationInfoPayload(text);
+      expect(conversationInfo["sender"]).toBe("Tyler");
+
+      const senderInfo = parseSenderInfoPayload(text);
+      expect(senderInfo["name"]).toBe("Tyler");
+      expect(senderInfo["e164"]).toBeUndefined();
+    });
+
+    it("preserves e164 when redactPII=false", () => {
+      const text = buildInboundUserContextPrefix(
+        {
+          ChatType: "group",
+          SenderE164: "+15551234567",
+          SenderId: "user-123",
+        } as TemplateContext,
+        { redactPII: false },
+      );
+
+      const conversationInfo = parseConversationInfoPayload(text);
+      expect(conversationInfo["sender"]).toBe("+15551234567");
+
+      const senderInfo = parseSenderInfoPayload(text);
+      expect(senderInfo["e164"]).toBe("+15551234567");
+    });
+
+    it("preserves e164 when no options passed", () => {
+      const text = buildInboundUserContextPrefix({
+        ChatType: "group",
+        SenderE164: "+15551234567",
+        SenderId: "user-123",
+      } as TemplateContext);
+
+      const conversationInfo = parseConversationInfoPayload(text);
+      expect(conversationInfo["sender"]).toBe("+15551234567");
+
+      const senderInfo = parseSenderInfoPayload(text);
+      expect(senderInfo["e164"]).toBe("+15551234567");
+    });
   });
 });
