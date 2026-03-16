@@ -289,7 +289,7 @@
         "agent": "bodhi",
         "prompt": "Run: bash ~/openbodhi/docs/bodhi/scripts/secrets-audit.sh — send the full output as a Telegram message. This is the monthly security audit reminder.",
         "recurring": true
-      }
+      },
       {
         "id": "surveyor-weekly",
         "schedule": "0 2 * * 6",
