@@ -184,7 +184,7 @@ describe("feishu tool account routing", () => {
     expect(createFeishuClientMock.mock.calls.at(-1)?.[0]?.appId).toBe("app-b");
   });
 
-  test("legacy call shape: configured default remains ahead of defaultAccountId when messageChannel is missing", async () => {
+  test("missing messageChannel: ignores agentAccountId and uses configured default", async () => {
     const { api, resolveTool } = createToolFactoryHarness(
       createConfig({
         defaultAccount: "b",
@@ -194,24 +194,10 @@ describe("feishu tool account routing", () => {
     );
     registerFeishuWikiTools(api);
 
+    // Without messageChannel, agentAccountId is not trusted as Feishu context.
     const tool = resolveTool("feishu_wiki", { agentAccountId: "a" });
     await tool.execute("call", { action: "search" });
 
     expect(createFeishuClientMock.mock.calls.at(-1)?.[0]?.appId).toBe("app-b");
-  });
-
-  test("legacy call shape: defaultAccountId still works when configured default is missing", async () => {
-    const { api, resolveTool } = createToolFactoryHarness(
-      createConfig({
-        toolsA: { wiki: true },
-        toolsB: { wiki: true },
-      }),
-    );
-    registerFeishuWikiTools(api);
-
-    const tool = resolveTool("feishu_wiki", { agentAccountId: "a" });
-    await tool.execute("call", { action: "search" });
-
-    expect(createFeishuClientMock.mock.calls.at(-1)?.[0]?.appId).toBe("app-a");
   });
 });

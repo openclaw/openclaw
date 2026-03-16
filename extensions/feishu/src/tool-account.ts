@@ -39,10 +39,7 @@ function isFeishuMessageChannel(messageChannel?: string): boolean {
 export function resolveFeishuToolAccount(params: {
   api: Pick<OpenClawPluginApi, "config">;
   executeParams?: AccountAwareParams;
-  /** @deprecated Prefer `resolveFeishuToolAccountFromContext({ toolContext })`. */
   defaultAccountId?: string;
-  /** @deprecated Prefer `resolveFeishuToolAccountFromContext({ toolContext })`. */
-  messageChannel?: string;
 }): ResolvedFeishuAccount {
   if (!params.api.config) {
     throw new Error("Feishu config unavailable");
@@ -51,40 +48,45 @@ export function resolveFeishuToolAccount(params: {
     cfg: params.api.config,
     accountId:
       normalizeOptionalAccountId(params.executeParams?.accountId) ??
-      // Only trust routed account context for Feishu-originated sessions.
-      (isFeishuMessageChannel(params.messageChannel) &&
-      isKnownFeishuAccountId(params.api.config, params.defaultAccountId)
-        ? normalizeOptionalAccountId(params.defaultAccountId)
-        : undefined) ??
       readConfiguredDefaultAccountId(params.api.config) ??
-      // Preserve legacy behavior for callers that still pass defaultAccountId
-      // without messageChannel/context wiring.
-      (params.messageChannel == null
-        ? normalizeOptionalAccountId(params.defaultAccountId)
-        : undefined),
+      normalizeOptionalAccountId(params.defaultAccountId),
   });
 }
 
+/**
+ * Channel-aware account resolution.
+ * Only trusts the routed `agentAccountId` when the request originates from Feishu
+ * and the ID maps to a known Feishu account; otherwise falls back to the
+ * configured default. This prevents cross-channel pollution (e.g. a Discord
+ * session's accountId colliding with a Feishu account name).
+ */
 export function resolveFeishuToolAccountFromContext(params: {
   api: Pick<OpenClawPluginApi, "config">;
   executeParams?: AccountAwareParams;
   toolContext?: FeishuToolRuntimeContext;
 }): ResolvedFeishuAccount {
+  const routedAccountId = params.toolContext?.agentAccountId;
+  const feishuRoutedAccountId =
+    isFeishuMessageChannel(params.toolContext?.messageChannel) &&
+    isKnownFeishuAccountId(params.api.config, routedAccountId)
+      ? routedAccountId
+      : undefined;
+
+  const mergedExecuteParams: AccountAwareParams | undefined =
+    params.executeParams?.accountId || !feishuRoutedAccountId
+      ? params.executeParams
+      : { ...params.executeParams, accountId: feishuRoutedAccountId };
+
   return resolveFeishuToolAccount({
     api: params.api,
-    executeParams: params.executeParams,
-    defaultAccountId: params.toolContext?.agentAccountId,
-    messageChannel: params.toolContext?.messageChannel,
+    executeParams: mergedExecuteParams,
   });
 }
 
 export function createFeishuToolClient(params: {
   api: Pick<OpenClawPluginApi, "config">;
   executeParams?: AccountAwareParams;
-  /** @deprecated Prefer `createFeishuToolClientFromContext({ toolContext })`. */
   defaultAccountId?: string;
-  /** @deprecated Prefer `createFeishuToolClientFromContext({ toolContext })`. */
-  messageChannel?: string;
 }): Lark.Client {
   return createFeishuClient(resolveFeishuToolAccount(params));
 }
