@@ -25,6 +25,55 @@ import {
   wasSentByBot,
 } from "./bot.create-telegram-bot.test-harness.js";
 
+vi.mock("../../../src/auto-reply/reply/commands-models.js", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../../../src/auto-reply/reply/commands-models.js")>();
+  const { resolveDefaultModelForAgent } = await import("../../../src/agents/model-selection.js");
+
+  return {
+    ...actual,
+    buildModelsProviderData: vi.fn(async (cfg: Record<string, unknown>, agentId?: string) => {
+      const resolvedDefault = resolveDefaultModelForAgent({
+        cfg: cfg as Parameters<typeof resolveDefaultModelForAgent>[0]["cfg"],
+        agentId,
+      });
+      const byProvider = new Map<string, Set<string>>();
+      const add = (provider: string, model: string) => {
+        const existing = byProvider.get(provider) ?? new Set<string>();
+        existing.add(model);
+        byProvider.set(provider, existing);
+      };
+      const rawModels =
+        (
+          cfg as {
+            agents?: {
+              defaults?: {
+                models?: Record<string, unknown>;
+              };
+            };
+          }
+        ).agents?.defaults?.models ?? {};
+
+      for (const raw of Object.keys(rawModels)) {
+        const slashIndex = raw.indexOf("/");
+        if (slashIndex > 0 && slashIndex < raw.length - 1) {
+          add(raw.slice(0, slashIndex), raw.slice(slashIndex + 1));
+        } else if (raw.trim()) {
+          add(resolvedDefault.provider, raw.trim());
+        }
+      }
+
+      add(resolvedDefault.provider, resolvedDefault.model);
+
+      return {
+        byProvider,
+        providers: [...byProvider.keys()].toSorted(),
+        resolvedDefault,
+      };
+    }),
+  };
+});
+
 // Import after the harness registers `vi.mock(...)` for grammY and Telegram internals.
 const { listNativeCommandSpecs, listNativeCommandSpecsForConfig } =
   await import("../../../src/auto-reply/commands-registry.js");

@@ -38,6 +38,7 @@ const hookMocks = vi.hoisted(() => ({
 vi.mock("./accounts.js", () => ({
   resolveDiscordAccount: hookMocks.resolveDiscordAccount,
 }));
+
 vi.mock("./monitor/thread-bindings.js", () => ({
   autoBindSpawnedDiscordSubagent: hookMocks.autoBindSpawnedDiscordSubagent,
   listThreadBindingsBySessionKey: hookMocks.listThreadBindingsBySessionKey,
