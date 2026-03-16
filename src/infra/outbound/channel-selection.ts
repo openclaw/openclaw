@@ -7,6 +7,7 @@ import {
   isDeliverableMessageChannel,
   normalizeMessageChannel,
 } from "../../utils/message-channel.js";
+import { resolveOutboundChannelPlugin } from "./channel-resolution.js";
 
 export type MessageChannelId = DeliverableMessageChannel;
 export type MessageChannelSelectionSource =
@@ -32,6 +33,22 @@ function resolveKnownChannel(value?: string | null): MessageChannelId | undefine
     return undefined;
   }
   return normalized as MessageChannelId;
+}
+
+function resolveAvailableKnownChannel(params: {
+  cfg: OpenClawConfig;
+  value?: string | null;
+}): MessageChannelId | undefined {
+  const normalized = resolveKnownChannel(params.value);
+  if (!normalized) {
+    return undefined;
+  }
+  return resolveOutboundChannelPlugin({
+    channel: normalized,
+    cfg: params.cfg,
+  })
+    ? normalized
+    : undefined;
 }
 
 function isAccountEnabled(account: unknown): boolean {
@@ -94,8 +111,15 @@ export async function resolveMessageChannelSelection(params: {
 }> {
   const normalized = normalizeMessageChannel(params.channel);
   if (normalized) {
-    if (!isKnownChannel(normalized)) {
-      const fallback = resolveKnownChannel(params.fallbackChannel);
+    const availableExplicit = resolveAvailableKnownChannel({
+      cfg: params.cfg,
+      value: normalized,
+    });
+    if (!availableExplicit) {
+      const fallback = resolveAvailableKnownChannel({
+        cfg: params.cfg,
+        value: params.fallbackChannel,
+      });
       if (fallback) {
         return {
           channel: fallback,
@@ -103,16 +127,22 @@ export async function resolveMessageChannelSelection(params: {
           source: "tool-context-fallback",
         };
       }
-      throw new Error(`Unknown channel: ${String(normalized)}`);
+      if (!isKnownChannel(normalized)) {
+        throw new Error(`Unknown channel: ${String(normalized)}`);
+      }
+      throw new Error(`Channel is unavailable: ${String(normalized)}`);
     }
     return {
-      channel: normalized as MessageChannelId,
+      channel: availableExplicit,
       configured: await listConfiguredMessageChannels(params.cfg),
       source: "explicit",
     };
   }
 
-  const fallback = resolveKnownChannel(params.fallbackChannel);
+  const fallback = resolveAvailableKnownChannel({
+    cfg: params.cfg,
+    value: params.fallbackChannel,
+  });
   if (fallback) {
     return {
       channel: fallback,

@@ -457,8 +457,15 @@ export type ToolsConfig = {
     search?: {
       /** Enable web search tool (default: true when API key is present). */
       enabled?: boolean;
-      /** Search provider ("brave", "gemini", "grok", "kimi", "perplexity", or "playwright-mcp"). */
-      provider?: "brave" | "gemini" | "grok" | "kimi" | "perplexity" | "playwright-mcp";
+      /** Search provider ("brave", "firecrawl", "gemini", "grok", "kimi", "perplexity", or "playwright-mcp"). */
+      provider?:
+        | "brave"
+        | "firecrawl"
+        | "gemini"
+        | "grok"
+        | "kimi"
+        | "perplexity"
+        | "playwright-mcp";
       /** Brave Search API key (optional; defaults to BRAVE_API_KEY env var). */
       apiKey?: SecretInput;
       /** Default search results count (1-10). */
@@ -478,6 +485,13 @@ export type ToolsConfig = {
         apiKey?: SecretInput;
         /** Model to use for grounded search (defaults to "gemini-2.5-flash"). */
         model?: string;
+      };
+      /** Firecrawl-specific configuration (used when provider="firecrawl"). */
+      firecrawl?: {
+        /** Firecrawl API key (defaults to FIRECRAWL_API_KEY env var). */
+        apiKey?: SecretInput;
+        /** Base URL for API requests (defaults to "https://api.firecrawl.dev"). */
+        baseUrl?: string;
       };
       /** Grok-specific configuration (used when provider="grok"). */
       grok?: {

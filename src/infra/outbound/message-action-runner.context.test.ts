@@ -186,6 +186,46 @@ describe("runMessageAction context isolation", () => {
     ).rejects.toThrow(/message required/i);
   });
 
+  it("allows send when only shared interactive payloads are provided", async () => {
+    const result = await runDrySend({
+      cfg: {
+        channels: {
+          telegram: {
+            botToken: "telegram-test",
+          },
+        },
+      } as OpenClawConfig,
+      actionParams: {
+        channel: "telegram",
+        target: "123456",
+        interactive: {
+          blocks: [
+            {
+              type: "buttons",
+              buttons: [{ label: "Approve", value: "approve" }],
+            },
+          ],
+        },
+      },
+    });
+
+    expect(result.kind).toBe("send");
+  });
+
+  it("allows send when only Slack blocks are provided", async () => {
+    const result = await runDrySend({
+      cfg: slackConfig,
+      actionParams: {
+        channel: "slack",
+        target: "#C12345678",
+        blocks: [{ type: "divider" }],
+      },
+      toolContext: { currentChannelId: "C12345678" },
+    });
+
+    expect(result.kind).toBe("send");
+  });
+
   it.each([
     {
       name: "structured poll params",

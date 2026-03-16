@@ -1,5 +1,5 @@
 ---
-summary: "Web search + fetch tools (Brave, Gemini, Grok, Kimi, Perplexity, and Playwright MCP providers)"
+summary: "Web search + fetch tools (Brave, Firecrawl, Gemini, Grok, Kimi, Perplexity, and Playwright MCP providers)"
 read_when:
   - You want to enable web_search or web_fetch
   - You need provider API key setup
@@ -11,7 +11,7 @@ title: "Web Tools"
 
 OpenClaw ships two lightweight web tools:
 
-- `web_search` — Search the web using Brave Search API, Gemini with Google Search grounding, Grok, Kimi, Perplexity Search API, or a Playwright MCP server tool.
+- `web_search` — Search the web using Brave Search API, Firecrawl Search, Gemini with Google Search grounding, Grok, Kimi, Perplexity Search API, or a Playwright MCP server tool.
 - `web_fetch` — HTTP fetch + readable extraction (HTML → markdown/text).
 
 These are **not** browser automation. For JS-heavy sites or logins, use the
@@ -24,19 +24,21 @@ These are **not** browser automation. For JS-heavy sites or logins, use the
 - `web_fetch` does a plain HTTP GET and extracts readable content
   (HTML → markdown/text). It does **not** execute JavaScript.
 - `web_fetch` is enabled by default (unless explicitly disabled).
+- The bundled Firecrawl plugin also adds `firecrawl_search` and `firecrawl_scrape` when enabled.
 
 See [Brave Search setup](/brave-search) and [Perplexity Search setup](/perplexity) for provider-specific details.
 
 ## Choosing a search provider
 
-| Provider                  | Result shape                       | Provider-specific filters                    | Notes                                                                          | API key                                     |
-| ------------------------- | ---------------------------------- | -------------------------------------------- | ------------------------------------------------------------------------------ | ------------------------------------------- |
-| **Brave Search API**      | Structured results with snippets   | `country`, `language`, `ui_lang`, time       | Supports Brave `llm-context` mode                                              | `BRAVE_API_KEY`                             |
-| **Gemini**                | AI-synthesized answers + citations | —                                            | Uses Google Search grounding                                                   | `GEMINI_API_KEY`                            |
-| **Grok**                  | AI-synthesized answers + citations | —                                            | Uses xAI web-grounded responses                                                | `XAI_API_KEY`                               |
-| **Kimi**                  | AI-synthesized answers + citations | —                                            | Uses Moonshot web search                                                       | `KIMI_API_KEY` / `MOONSHOT_API_KEY`         |
-| **Playwright MCP**        | MCP tool-defined                   | Tool-defined                                 | Calls a configured MCP `tools/call` endpoint                                   | —                                           |
-| **Perplexity Search API** | Structured results with snippets   | `country`, `language`, time, `domain_filter` | Supports content extraction controls; OpenRouter uses Sonar compatibility path | `PERPLEXITY_API_KEY` / `OPENROUTER_API_KEY` |
+| Provider                  | Result shape                       | Provider-specific filters                                    | Notes                                                                          | API key                                     |
+| ------------------------- | ---------------------------------- | ------------------------------------------------------------ | ------------------------------------------------------------------------------ | ------------------------------------------- |
+| **Brave Search API**      | Structured results with snippets   | `country`, `language`, `ui_lang`, time                       | Supports Brave `llm-context` mode                                              | `BRAVE_API_KEY`                             |
+| **Firecrawl Search**      | Structured results with snippets   | Use `firecrawl_search` for Firecrawl-specific search options | Best for pairing search with Firecrawl scraping/extraction                     | `FIRECRAWL_API_KEY`                         |
+| **Gemini**                | AI-synthesized answers + citations | —                                                            | Uses Google Search grounding                                                   | `GEMINI_API_KEY`                            |
+| **Grok**                  | AI-synthesized answers + citations | —                                                            | Uses xAI web-grounded responses                                                | `XAI_API_KEY`                               |
+| **Kimi**                  | AI-synthesized answers + citations | —                                                            | Uses Moonshot web search                                                       | `KIMI_API_KEY` / `MOONSHOT_API_KEY`         |
+| **Perplexity Search API** | Structured results with snippets   | `country`, `language`, time, `domain_filter`                 | Supports content extraction controls; OpenRouter uses Sonar compatibility path | `PERPLEXITY_API_KEY` / `OPENROUTER_API_KEY` |
+| **Playwright MCP**        | MCP tool-defined                   | Tool-defined                                                 | Calls a configured MCP `tools/call` endpoint                                   | —                                           |
 
 ### Auto-detection
 
@@ -47,7 +49,8 @@ The table above is alphabetical. If no `provider` is explicitly set, runtime aut
 3. **Grok** — `XAI_API_KEY` env var or `tools.web.search.grok.apiKey` config
 4. **Kimi** — `KIMI_API_KEY` / `MOONSHOT_API_KEY` env var or `tools.web.search.kimi.apiKey` config
 5. **Perplexity** — `PERPLEXITY_API_KEY`, `OPENROUTER_API_KEY`, or `tools.web.search.perplexity.apiKey` config
-6. **Playwright MCP** — configure `provider: "playwright-mcp"` with `tools.web.search.playwrightMcp.serverUrl`
+6. **Firecrawl** — `FIRECRAWL_API_KEY` env var or `tools.web.search.firecrawl.apiKey` config
+7. **Playwright MCP** — configure `provider: "playwright-mcp"` with `tools.web.search.playwrightMcp.serverUrl`
 
 If no keys are found, it falls back to Brave (you'll get a missing-key error prompting you to configure one).
 
@@ -88,6 +91,7 @@ See [Perplexity Search API Docs](https://docs.perplexity.ai/guides/search-quicks
 **Via config:** run `openclaw configure --section web`. It stores the key under the provider-specific config path:
 
 - Brave: `tools.web.search.apiKey`
+- Firecrawl: `tools.web.search.firecrawl.apiKey`
 - Gemini: `tools.web.search.gemini.apiKey`
 - Grok: `tools.web.search.grok.apiKey`
 - Kimi: `tools.web.search.kimi.apiKey`
@@ -101,6 +105,7 @@ All of these fields also support SecretRef objects.
 **Via environment:** set provider env vars in the Gateway process environment:
 
 - Brave: `BRAVE_API_KEY`
+- Firecrawl: `FIRECRAWL_API_KEY`
 - Gemini: `GEMINI_API_KEY`
 - Grok: `XAI_API_KEY`
 - Kimi: `KIMI_API_KEY` or `MOONSHOT_API_KEY`
@@ -145,6 +150,34 @@ For a gateway install, put these in `~/.openclaw/.env` (or your service environm
   },
 }
 ```
+
+**Firecrawl Search:**
+
+```json5
+{
+  plugins: {
+    entries: {
+      firecrawl: {
+        enabled: true,
+      },
+    },
+  },
+  tools: {
+    web: {
+      search: {
+        enabled: true,
+        provider: "firecrawl",
+        firecrawl: {
+          apiKey: "fc-...", // optional if FIRECRAWL_API_KEY is set
+          baseUrl: "https://api.firecrawl.dev",
+        },
+      },
+    },
+  },
+}
+```
+
+When you choose Firecrawl in onboarding or `openclaw configure --section web`, OpenClaw enables the bundled Firecrawl plugin automatically so `web_search`, `firecrawl_search`, and `firecrawl_scrape` are all available.
 
 **Brave LLM Context mode:**
 
@@ -259,6 +292,7 @@ Search the web using your configured provider.
 - `tools.web.search.enabled` must not be `false` (default: enabled)
 - API key for your chosen provider:
   - **Brave**: `BRAVE_API_KEY` or `tools.web.search.apiKey`
+  - **Firecrawl**: `FIRECRAWL_API_KEY` or `tools.web.search.firecrawl.apiKey`
   - **Gemini**: `GEMINI_API_KEY` or `tools.web.search.gemini.apiKey`
   - **Grok**: `XAI_API_KEY` or `tools.web.search.grok.apiKey`
   - **Kimi**: `KIMI_API_KEY`, `MOONSHOT_API_KEY`, or `tools.web.search.kimi.apiKey`
@@ -285,7 +319,7 @@ Search the web using your configured provider.
 
 ### Tool parameters
 
-All parameters work for Brave and for native Perplexity Search API unless noted.
+Parameters depend on the selected provider.
 
 Perplexity's OpenRouter / Sonar compatibility path supports only `query` and `freshness`.
 If you set `tools.web.search.perplexity.baseUrl` / `model`, use `OPENROUTER_API_KEY`, or configure an `sk-or-...` key, Search API-only filters return explicit errors.
@@ -303,6 +337,8 @@ If you set `tools.web.search.perplexity.baseUrl` / `model`, use `OPENROUTER_API_
 | `domain_filter`       | Domain allowlist/denylist array (Perplexity only)     |
 | `max_tokens`          | Total content budget, default 25000 (Perplexity only) |
 | `max_tokens_per_page` | Per-page token limit, default 2048 (Perplexity only)  |
+
+Firecrawl `web_search` supports `query` and `count`. For Firecrawl-specific controls like `sources`, `categories`, result scraping, or scrape timeout, use `firecrawl_search` from the bundled Firecrawl plugin.
 
 **Examples:**
 

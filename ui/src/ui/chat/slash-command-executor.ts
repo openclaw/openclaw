@@ -9,15 +9,22 @@ import {
   normalizeThinkLevel,
   normalizeVerboseLevel,
   resolveThinkingDefaultForModel,
-} from "../../../../src/auto-reply/thinking.js";
+} from "../../../../src/auto-reply/thinking.shared.js";
 import {
   DEFAULT_AGENT_ID,
   DEFAULT_MAIN_KEY,
   isSubagentSessionKey,
   parseAgentSessionKey,
 } from "../../../../src/routing/session-key.js";
+import { createChatModelOverride, resolveServerChatModelValue } from "../chat-model-ref.ts";
 import type { GatewayBrowserClient } from "../gateway.ts";
-import type { AgentsListResult, GatewaySessionRow, SessionsListResult } from "../types.ts";
+import type {
+  AgentsListResult,
+  ChatModelOverride,
+  GatewaySessionRow,
+  SessionsListResult,
+  SessionsPatchResult,
+} from "../types.ts";
 import { SLASH_COMMANDS } from "./slash-commands.ts";
 
 export type SlashCommandResult = {
@@ -35,7 +42,7 @@ export type SlashCommandResult = {
     | "navigate-usage";
   /** Optional session-level directive changes that the caller should mirror locally. */
   sessionPatch?: {
-    model?: string | null;
+    modelOverride?: ChatModelOverride | null;
   };
 };
 
@@ -144,11 +151,18 @@ async function executeModel(
   }
 
   try {
-    await client.request("sessions.patch", { key: sessionKey, model: args.trim() });
+    const patched = await client.request<SessionsPatchResult>("sessions.patch", {
+      key: sessionKey,
+      model: args.trim(),
+    });
+    const resolvedValue = resolveServerChatModelValue(
+      patched.resolved?.model ?? args.trim(),
+      patched.resolved?.modelProvider,
+    );
     return {
       content: `Model set to \`${args.trim()}\`.`,
       action: "refresh",
-      sessionPatch: { model: args.trim() },
+      sessionPatch: { modelOverride: createChatModelOverride(resolvedValue) },
     };
   } catch (err) {
     return { content: `Failed to set model: ${String(err)}` };

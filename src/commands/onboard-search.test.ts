@@ -116,6 +116,19 @@ describe("setupSearch", () => {
     expect(result.tools?.web?.search?.gemini?.apiKey).toBe("AIza-test");
   });
 
+  it("sets provider and key for firecrawl and enables the plugin", async () => {
+    const cfg: OpenClawConfig = {};
+    const { prompter } = createPrompter({
+      selectValue: "firecrawl",
+      textValue: "fc-test-key",
+    });
+    const result = await setupSearch(cfg, runtime, prompter);
+    expect(result.tools?.web?.search?.provider).toBe("firecrawl");
+    expect(result.tools?.web?.search?.enabled).toBe(true);
+    expect(result.tools?.web?.search?.firecrawl?.apiKey).toBe("fc-test-key");
+    expect(result.plugins?.entries?.firecrawl?.enabled).toBe(true);
+  });
+
   it("sets provider and key for grok", async () => {
     const cfg: OpenClawConfig = {};
     const { prompter } = createPrompter({
@@ -244,18 +257,66 @@ describe("setupSearch", () => {
   });
 
   it("stores env-backed SecretRef when secretInputMode=ref for perplexity", async () => {
+    const originalPerplexity = process.env.PERPLEXITY_API_KEY;
+    const originalOpenRouter = process.env.OPENROUTER_API_KEY;
+    delete process.env.PERPLEXITY_API_KEY;
+    delete process.env.OPENROUTER_API_KEY;
     const cfg: OpenClawConfig = {};
-    const { prompter } = createPrompter({ selectValue: "perplexity" });
-    const result = await setupSearch(cfg, runtime, prompter, {
-      secretInputMode: "ref", // pragma: allowlist secret
-    });
-    expect(result.tools?.web?.search?.provider).toBe("perplexity");
-    expect(result.tools?.web?.search?.perplexity?.apiKey).toEqual({
-      source: "env",
-      provider: "default",
-      id: "PERPLEXITY_API_KEY", // pragma: allowlist secret
-    });
-    expect(prompter.text).not.toHaveBeenCalled();
+    try {
+      const { prompter } = createPrompter({ selectValue: "perplexity" });
+      const result = await setupSearch(cfg, runtime, prompter, {
+        secretInputMode: "ref", // pragma: allowlist secret
+      });
+      expect(result.tools?.web?.search?.provider).toBe("perplexity");
+      expect(result.tools?.web?.search?.perplexity?.apiKey).toEqual({
+        source: "env",
+        provider: "default",
+        id: "PERPLEXITY_API_KEY", // pragma: allowlist secret
+      });
+      expect(prompter.text).not.toHaveBeenCalled();
+    } finally {
+      if (originalPerplexity === undefined) {
+        delete process.env.PERPLEXITY_API_KEY;
+      } else {
+        process.env.PERPLEXITY_API_KEY = originalPerplexity;
+      }
+      if (originalOpenRouter === undefined) {
+        delete process.env.OPENROUTER_API_KEY;
+      } else {
+        process.env.OPENROUTER_API_KEY = originalOpenRouter;
+      }
+    }
+  });
+
+  it("prefers detected OPENROUTER_API_KEY SecretRef for perplexity ref mode", async () => {
+    const originalPerplexity = process.env.PERPLEXITY_API_KEY;
+    const originalOpenRouter = process.env.OPENROUTER_API_KEY;
+    delete process.env.PERPLEXITY_API_KEY;
+    process.env.OPENROUTER_API_KEY = "sk-or-test";
+    const cfg: OpenClawConfig = {};
+    try {
+      const { prompter } = createPrompter({ selectValue: "perplexity" });
+      const result = await setupSearch(cfg, runtime, prompter, {
+        secretInputMode: "ref", // pragma: allowlist secret
+      });
+      expect(result.tools?.web?.search?.perplexity?.apiKey).toEqual({
+        source: "env",
+        provider: "default",
+        id: "OPENROUTER_API_KEY", // pragma: allowlist secret
+      });
+      expect(prompter.text).not.toHaveBeenCalled();
+    } finally {
+      if (originalPerplexity === undefined) {
+        delete process.env.PERPLEXITY_API_KEY;
+      } else {
+        process.env.PERPLEXITY_API_KEY = originalPerplexity;
+      }
+      if (originalOpenRouter === undefined) {
+        delete process.env.OPENROUTER_API_KEY;
+      } else {
+        process.env.OPENROUTER_API_KEY = originalOpenRouter;
+      }
+    }
   });
 
   it("stores env-backed SecretRef when secretInputMode=ref for brave", async () => {
@@ -284,8 +345,16 @@ describe("setupSearch", () => {
   });
 
   it("exports all supported providers in SEARCH_PROVIDER_OPTIONS", () => {
-    expect(SEARCH_PROVIDER_OPTIONS).toHaveLength(6);
+    expect(SEARCH_PROVIDER_OPTIONS).toHaveLength(7);
     const values = SEARCH_PROVIDER_OPTIONS.map((e) => e.value);
-    expect(values).toEqual(["brave", "gemini", "grok", "kimi", "playwright-mcp", "perplexity"]);
+    expect(values).toEqual([
+      "brave",
+      "firecrawl",
+      "gemini",
+      "grok",
+      "kimi",
+      "perplexity",
+      "playwright-mcp",
+    ]);
   });
 });

@@ -16,6 +16,11 @@ import {
   createOpenRouterWrapper,
   isProxyReasoningUnsupported,
 } from "../../src/agents/pi-embedded-runner/proxy-stream-wrappers.js";
+import {
+  applyOpenrouterConfig,
+  OPENROUTER_DEFAULT_MODEL_REF,
+} from "../../src/commands/onboard-auth.js";
+import { createProviderApiKeyAuthMethod } from "../../src/plugins/provider-api-key-auth.js";
 
 const PROVIDER_ID = "openrouter";
 const OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1";
@@ -85,7 +90,28 @@ const openRouterPlugin = {
       label: "OpenRouter",
       docsPath: "/providers/models",
       envVars: ["OPENROUTER_API_KEY"],
-      auth: [],
+      auth: [
+        createProviderApiKeyAuthMethod({
+          providerId: PROVIDER_ID,
+          methodId: "api-key",
+          label: "OpenRouter API key",
+          hint: "API key",
+          optionKey: "openrouterApiKey",
+          flagName: "--openrouter-api-key",
+          envVar: "OPENROUTER_API_KEY",
+          promptMessage: "Enter OpenRouter API key",
+          defaultModel: OPENROUTER_DEFAULT_MODEL_REF,
+          expectedProviders: ["openrouter"],
+          applyConfig: (cfg) => applyOpenrouterConfig(cfg),
+          wizard: {
+            choiceId: "openrouter-api-key",
+            choiceLabel: "OpenRouter API key",
+            groupId: "openrouter",
+            groupLabel: "OpenRouter",
+            groupHint: "API key",
+          },
+        }),
+      ],
       catalog: {
         order: "simple",
         run: async (ctx) => {
@@ -110,6 +136,7 @@ const openRouterPlugin = {
         geminiThoughtSignatureSanitization: true,
         geminiThoughtSignatureModelHints: ["gemini"],
       },
+      isModernModelRef: () => true,
       wrapStreamFn: (ctx) => {
         let streamFn = ctx.streamFn;
         const providerRouting =

@@ -1,4 +1,8 @@
-import { resolveDefaultAgentId, resolveAgentWorkspaceDir } from "../../../agents/agent-scope.js";
+import {
+  resolveAgentDir,
+  resolveDefaultAgentId,
+  resolveAgentWorkspaceDir,
+} from "../../../agents/agent-scope.js";
 import type { ApiKeyCredential } from "../../../agents/auth-profiles/types.js";
 import { resolveDefaultAgentWorkspaceDir } from "../../../agents/workspace.js";
 import type { OpenClawConfig } from "../../../config/config.js";
@@ -58,6 +62,7 @@ export async function applyNonInteractivePluginProviderChoice(params: {
   ) => ApiKeyCredential | null;
 }): Promise<OpenClawConfig | null | undefined> {
   const agentId = resolveDefaultAgentId(params.nextConfig);
+  const agentDir = resolveAgentDir(params.nextConfig, agentId);
   const workspaceDir =
     resolveAgentWorkspaceDir(params.nextConfig, agentId) ?? resolveDefaultAgentWorkspaceDir();
   const prefixedProviderId = params.authChoice.startsWith(PROVIDER_PLUGIN_CHOICE_PREFIX)
@@ -79,6 +84,8 @@ export async function applyNonInteractivePluginProviderChoice(params: {
     providers: resolvePluginProviders({
       config: resolutionConfig,
       workspaceDir,
+      bundledProviderAllowlistCompat: true,
+      bundledProviderVitestCompat: true,
     }),
     choice: params.authChoice,
   });
@@ -116,6 +123,7 @@ export async function applyNonInteractivePluginProviderChoice(params: {
     baseConfig: params.baseConfig,
     opts: params.opts,
     runtime: params.runtime,
+    agentDir,
     workspaceDir,
     resolveApiKey: params.resolveApiKey,
     toApiKeyCredential: params.toApiKeyCredential,
