@@ -45,7 +45,7 @@ import { enqueueSystemEvent } from "../infra/system-events.js";
 import { scheduleGatewayUpdateCheck } from "../infra/update-startup.js";
 import { startDiagnosticHeartbeat, stopDiagnosticHeartbeat } from "../logging/diagnostic.js";
 import { createSubsystemLogger, runtimeForLogger } from "../logging/subsystem.js";
-import { resolveConfiguredChannelPluginIds } from "../plugins/channel-plugin-ids.js";
+import { resolveConfiguredDeferredChannelPluginIds } from "../plugins/channel-plugin-ids.js";
 import { getGlobalHookRunner, runGlobalGatewayStopSafely } from "../plugins/hook-runner-global.js";
 import { createEmptyPluginRegistry } from "../plugins/registry.js";
 import { createPluginRuntime } from "../plugins/runtime/index.js";
@@ -474,9 +474,9 @@ export async function startGatewayServer(
   initSubagentRegistry();
   const defaultAgentId = resolveDefaultAgentId(cfgAtStart);
   const defaultWorkspaceDir = resolveAgentWorkspaceDir(cfgAtStart, defaultAgentId);
-  const configuredChannelPluginIds = minimalTestGateway
+  const deferredConfiguredChannelPluginIds = minimalTestGateway
     ? []
-    : resolveConfiguredChannelPluginIds({
+    : resolveConfiguredDeferredChannelPluginIds({
         config: cfgAtStart,
         workspaceDir: defaultWorkspaceDir,
         env: process.env,
@@ -492,7 +492,7 @@ export async function startGatewayServer(
       log,
       coreGatewayHandlers,
       baseMethods,
-      preferSetupRuntimeForChannelPlugins: configuredChannelPluginIds.length > 0,
+      preferSetupRuntimeForChannelPlugins: deferredConfiguredChannelPluginIds.length > 0,
     }));
   }
   const channelLogs = Object.fromEntries(
@@ -951,7 +951,7 @@ export async function startGatewayServer(
 
   let browserControl: Awaited<ReturnType<typeof startBrowserControlServerIfEnabled>> = null;
   if (!minimalTestGateway) {
-    if (configuredChannelPluginIds.length > 0) {
+    if (deferredConfiguredChannelPluginIds.length > 0) {
       ({ pluginRegistry } = loadGatewayPlugins({
         cfg: cfgAtStart,
         workspaceDir: defaultWorkspaceDir,
