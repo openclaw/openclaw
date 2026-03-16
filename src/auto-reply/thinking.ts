@@ -24,8 +24,6 @@ export type ThinkingSupportSource = {
   catalog?: ThinkingCatalogEntry[] | null;
 };
 
-const CLAUDE_46_MODEL_RE = /claude-(?:opus|sonnet)-4(?:\.|-)6(?:$|[-.])/i;
-
 function normalizeProviderId(provider?: string | null): string {
   if (!provider) {
     return "";
@@ -331,7 +329,6 @@ export function resolveThinkingDefaultForModel(params: {
   catalog?: ThinkingCatalogEntry[];
 }): ThinkLevel {
   const normalizedProvider = normalizeProviderId(params.provider);
-  const modelLower = params.model.trim().toLowerCase();
   const candidate = params.catalog?.find(
     (entry) => entry.provider === params.provider && entry.id === params.model,
   );
@@ -345,10 +342,6 @@ export function resolveThinkingDefaultForModel(params: {
   });
   if (pluginDecision) {
     return pluginDecision;
-  }
-
-  if (normalizedProvider === "amazon-bedrock" && CLAUDE_46_MODEL_RE.test(modelLower)) {
-    return "adaptive";
   }
   if (candidate?.reasoning) {
     return "low";

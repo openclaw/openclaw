@@ -16,7 +16,6 @@ import type { ProviderCapabilities } from "../agents/provider-capabilities.js";
 import type { AnyAgentTool } from "../agents/tools/common.js";
 import type { ThinkLevel } from "../auto-reply/thinking.js";
 import type { ReplyPayload } from "../auto-reply/types.js";
-import type { ChannelDock } from "../channels/dock.js";
 import type { ChannelId, ChannelPlugin } from "../channels/plugins/types.js";
 import type { createVpsAwareOAuthHandlers } from "../commands/oauth-flow.js";
 import type { OnboardOptions } from "../commands/onboard-types.js";
@@ -108,6 +107,13 @@ export type ProviderAuthKind = "oauth" | "api_key" | "token" | "device_code" | "
 
 export type ProviderAuthResult = {
   profiles: Array<{ profileId: string; credential: AuthProfileCredential }>;
+  /**
+   * Optional config patch to merge after credentials are written.
+   *
+   * Use this for provider-owned onboarding defaults such as
+   * `models.providers.<id>` entries, default aliases, or agent model helpers.
+   * The caller still persists auth-profile bindings separately.
+   */
   configPatch?: Partial<OpenClawConfig>;
   defaultModel?: string;
   notes?: string[];
@@ -1155,7 +1161,6 @@ export type OpenClawPluginService = {
 
 export type OpenClawPluginChannelRegistration = {
   plugin: ChannelPlugin;
-  dock?: ChannelDock;
 };
 
 export type OpenClawPluginDefinition = {

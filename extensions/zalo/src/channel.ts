@@ -8,7 +8,6 @@ import {
 } from "openclaw/plugin-sdk/compat";
 import type {
   ChannelAccountSnapshot,
-  ChannelDock,
   ChannelPlugin,
   OpenClawConfig,
 } from "openclaw/plugin-sdk/zalo";
@@ -63,28 +62,6 @@ function normalizeZaloMessagingTarget(raw: string): string | undefined {
   }
   return trimmed.replace(/^(zalo|zl):/i, "");
 }
-
-export const zaloDock: ChannelDock = {
-  id: "zalo",
-  capabilities: {
-    chatTypes: ["direct", "group"],
-    media: true,
-    blockStreaming: true,
-  },
-  outbound: { textChunkLimit: 2000 },
-  config: {
-    resolveAllowFrom: ({ cfg, accountId }) =>
-      mapAllowFromEntries(resolveZaloAccount({ cfg: cfg, accountId }).config.allowFrom),
-    formatAllowFrom: ({ allowFrom }) =>
-      formatAllowFromLowercase({ allowFrom, stripPrefixRe: /^(zalo|zl):/i }),
-  },
-  groups: {
-    resolveRequireMention: () => true,
-  },
-  threading: {
-    resolveReplyToMode: () => "off",
-  },
-};
 
 export const zaloPlugin: ChannelPlugin<ResolvedZaloAccount> = {
   id: "zalo",
