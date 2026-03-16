@@ -46,9 +46,11 @@ const {
   resolveDiscordAllowlistConfigMock,
   resolveNativeCommandsEnabledMock,
   resolveNativeSkillsEnabledMock,
+  shouldLogVerboseMock,
   voiceRuntimeModuleLoadedMock,
 } = vi.hoisted(() => {
   const createdBindingManagers: Array<{ stop: ReturnType<typeof vi.fn> }> = [];
+  const shouldLogVerboseMock = vi.fn(() => false);
   return {
     clientHandleDeployRequestMock: vi.fn(async () => undefined),
     clientConstructorOptionsMock: vi.fn(),
@@ -110,6 +112,7 @@ const {
     })),
     resolveNativeCommandsEnabledMock: vi.fn(() => true),
     resolveNativeSkillsEnabledMock: vi.fn(() => false),
+    shouldLogVerboseMock,
     voiceRuntimeModuleLoadedMock: vi.fn(),
   };
 });
@@ -211,7 +214,7 @@ vi.mock("../../../../src/config/config.js", () => ({
 vi.mock("../../../../src/globals.js", () => ({
   danger: (v: string) => v,
   logVerbose: vi.fn(),
-  shouldLogVerbose: () => false,
+  shouldLogVerbose: shouldLogVerboseMock,
   warn: (v: string) => v,
 }));
 
@@ -435,6 +438,7 @@ describe("monitorDiscordProvider", () => {
     });
     resolveNativeCommandsEnabledMock.mockClear().mockReturnValue(true);
     resolveNativeSkillsEnabledMock.mockClear().mockReturnValue(false);
+    shouldLogVerboseMock.mockClear().mockReturnValue(false);
     voiceRuntimeModuleLoadedMock.mockClear();
   });
 
@@ -828,5 +832,51 @@ describe("monitorDiscordProvider", () => {
 
     expect(connectedTrue).toBeDefined();
     expect(connectedFalse).toBeDefined();
+  });
+
+  it("logs Discord startup phases and early gateway debug events", async () => {
+    const { monitorDiscordProvider } = await import("./provider.js");
+    const runtime = baseRuntime();
+    const emitter = new EventEmitter();
+    const gateway = { emitter, isConnected: true, reconnectAttempts: 0 };
+    clientGetPluginMock.mockImplementation((name: string) =>
+      name === "gateway" ? gateway : undefined,
+    );
+    clientFetchUserMock.mockImplementationOnce(async () => {
+      emitter.emit("debug", "WebSocket connection opened");
+      return { id: "bot-1", username: "Molty" };
+    });
+    shouldLogVerboseMock.mockReturnValue(true);
+
+    await monitorDiscordProvider({
+      config: baseConfig(),
+      runtime,
+    });
+
+    const messages = vi.mocked(runtime.log).mock.calls.map((call) => String(call[0]));
+    expect(messages.some((msg) => msg.includes("fetch-application-id:start"))).toBe(true);
+    expect(messages.some((msg) => msg.includes("fetch-application-id:done"))).toBe(true);
+    expect(messages.some((msg) => msg.includes("deploy-commands:start"))).toBe(true);
+    expect(messages.some((msg) => msg.includes("deploy-commands:done"))).toBe(true);
+    expect(messages.some((msg) => msg.includes("fetch-bot-identity:start"))).toBe(true);
+    expect(messages.some((msg) => msg.includes("fetch-bot-identity:done"))).toBe(true);
+    expect(
+      messages.some(
+        (msg) => msg.includes("gateway-debug") && msg.includes("WebSocket connection opened"),
+      ),
+    ).toBe(true);
+  });
+
+  it("keeps Discord startup chatter quiet by default", async () => {
+    const { monitorDiscordProvider } = await import("./provider.js");
+    const runtime = baseRuntime();
+
+    await monitorDiscordProvider({
+      config: baseConfig(),
+      runtime,
+    });
+
+    const messages = vi.mocked(runtime.log).mock.calls.map((call) => String(call[0]));
+    expect(messages.some((msg) => msg.includes("discord startup ["))).toBe(false);
   });
 });

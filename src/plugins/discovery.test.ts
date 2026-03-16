@@ -219,6 +219,109 @@ describe("discoverOpenClawPlugins", () => {
     const ids = candidates.map((c) => c.idHint);
     expect(ids).toContain("demo-plugin-dir");
   });
+
+  it("auto-detects Codex bundles as bundle candidates", async () => {
+    const stateDir = makeTempDir();
+    const bundleDir = path.join(stateDir, "extensions", "sample-bundle");
+    mkdirSafe(path.join(bundleDir, ".codex-plugin"));
+    mkdirSafe(path.join(bundleDir, "skills"));
+    fs.writeFileSync(
+      path.join(bundleDir, ".codex-plugin", "plugin.json"),
+      JSON.stringify({
+        name: "Sample Bundle",
+        skills: "skills",
+      }),
+      "utf-8",
+    );
+
+    const { candidates } = await discoverWithStateDir(stateDir, {});
+    const bundle = candidates.find((candidate) => candidate.idHint === "sample-bundle");
+
+    expect(bundle).toBeDefined();
+    expect(bundle?.idHint).toBe("sample-bundle");
+    expect(bundle?.format).toBe("bundle");
+    expect(bundle?.bundleFormat).toBe("codex");
+    expect(bundle?.source).toBe(bundleDir);
+    expect(bundle?.rootDir).toBe(fs.realpathSync.native(bundleDir));
+  });
+
+  it("auto-detects manifestless Claude bundles from the default layout", async () => {
+    const stateDir = makeTempDir();
+    const bundleDir = path.join(stateDir, "extensions", "claude-bundle");
+    mkdirSafe(path.join(bundleDir, "commands"));
+    fs.writeFileSync(path.join(bundleDir, "settings.json"), '{"hideThinkingBlock":true}', "utf-8");
+
+    const { candidates } = await discoverWithStateDir(stateDir, {});
+    const bundle = candidates.find((candidate) => candidate.idHint === "claude-bundle");
+
+    expect(bundle).toBeDefined();
+    expect(bundle?.format).toBe("bundle");
+    expect(bundle?.bundleFormat).toBe("claude");
+    expect(bundle?.source).toBe(bundleDir);
+  });
+
+  it("auto-detects Cursor bundles as bundle candidates", async () => {
+    const stateDir = makeTempDir();
+    const bundleDir = path.join(stateDir, "extensions", "cursor-bundle");
+    mkdirSafe(path.join(bundleDir, ".cursor-plugin"));
+    mkdirSafe(path.join(bundleDir, ".cursor", "commands"));
+    fs.writeFileSync(
+      path.join(bundleDir, ".cursor-plugin", "plugin.json"),
+      JSON.stringify({
+        name: "Cursor Bundle",
+      }),
+      "utf-8",
+    );
+
+    const { candidates } = await discoverWithStateDir(stateDir, {});
+    const bundle = candidates.find((candidate) => candidate.idHint === "cursor-bundle");
+
+    expect(bundle).toBeDefined();
+    expect(bundle?.format).toBe("bundle");
+    expect(bundle?.bundleFormat).toBe("cursor");
+    expect(bundle?.source).toBe(bundleDir);
+  });
+
+  it("falls back to legacy index discovery when a scanned bundle sidecar is malformed", async () => {
+    const stateDir = makeTempDir();
+    const pluginDir = path.join(stateDir, "extensions", "legacy-with-bad-bundle");
+    mkdirSafe(path.join(pluginDir, ".claude-plugin"));
+    fs.writeFileSync(path.join(pluginDir, "index.ts"), "export default {}", "utf-8");
+    fs.writeFileSync(path.join(pluginDir, ".claude-plugin", "plugin.json"), "{", "utf-8");
+
+    const result = await discoverWithStateDir(stateDir, {});
+    const legacy = result.candidates.find(
+      (candidate) => candidate.idHint === "legacy-with-bad-bundle",
+    );
+
+    expect(legacy).toBeDefined();
+    expect(legacy?.format).toBe("openclaw");
+    expect(
+      result.diagnostics.some((entry) => entry.source?.endsWith(".claude-plugin/plugin.json")),
+    ).toBe(true);
+  });
+
+  it("falls back to legacy index discovery for configured paths with malformed bundle sidecars", async () => {
+    const stateDir = makeTempDir();
+    const pluginDir = path.join(stateDir, "plugins", "legacy-with-bad-bundle");
+    mkdirSafe(path.join(pluginDir, ".codex-plugin"));
+    fs.writeFileSync(path.join(pluginDir, "index.ts"), "export default {}", "utf-8");
+    fs.writeFileSync(path.join(pluginDir, ".codex-plugin", "plugin.json"), "{", "utf-8");
+
+    const result = await discoverWithStateDir(stateDir, {
+      extraPaths: [pluginDir],
+    });
+    const legacy = result.candidates.find(
+      (candidate) => candidate.idHint === "legacy-with-bad-bundle",
+    );
+
+    expect(legacy).toBeDefined();
+    expect(legacy?.format).toBe("openclaw");
+    expect(
+      result.diagnostics.some((entry) => entry.source?.endsWith(".codex-plugin/plugin.json")),
+    ).toBe(true);
+  });
+
   it("blocks extension entries that escape package directory", async () => {
     const stateDir = makeTempDir();
     const globalExt = path.join(stateDir, "extensions", "escape-pack");

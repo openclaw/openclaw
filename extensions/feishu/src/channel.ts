@@ -22,18 +22,9 @@ import {
   resolveDefaultFeishuAccountId,
 } from "./accounts.js";
 import { FeishuConfigSchema } from "./config-schema.js";
-import {
-  listFeishuDirectoryPeers,
-  listFeishuDirectoryGroups,
-  listFeishuDirectoryPeersLive,
-  listFeishuDirectoryGroupsLive,
-} from "./directory.js";
-import { feishuOnboardingAdapter } from "./onboarding.js";
-import { feishuOutbound } from "./outbound.js";
+import { listFeishuDirectoryPeers, listFeishuDirectoryGroups } from "./directory.static.js";
 import { resolveFeishuGroupToolPolicy } from "./policy.js";
-import { probeFeishu } from "./probe.js";
-import { addReactionFeishu, listReactionsFeishu, removeReactionFeishu } from "./reactions.js";
-import { sendCardFeishu, sendMessageFeishu } from "./send.js";
+import { getFeishuRuntime } from "./runtime.js";
 import { normalizeFeishuTarget, looksLikeFeishuId, formatFeishuTarget } from "./targets.js";
 import type { ResolvedFeishuAccount, FeishuConfig } from "./types.js";
 
@@ -47,6 +38,48 @@ const meta: ChannelMeta = {
   aliases: ["lark"],
   order: 70,
 };
+
+async function loadFeishuChannelRuntime() {
+  return await import("./channel.runtime.js");
+}
+
+const feishuOnboarding = {
+  channel: "feishu",
+  getStatus: async (ctx) =>
+    (await loadFeishuChannelRuntime()).feishuOnboardingAdapter.getStatus(ctx),
+  configure: async (ctx) =>
+    (await loadFeishuChannelRuntime()).feishuOnboardingAdapter.configure(ctx),
+  dmPolicy: {
+    label: "Feishu",
+    channel: "feishu",
+    policyKey: "channels.feishu.dmPolicy",
+    allowFromKey: "channels.feishu.allowFrom",
+    getCurrent: (cfg) => (cfg.channels?.feishu as FeishuConfig | undefined)?.dmPolicy ?? "pairing",
+    setPolicy: (cfg, policy) => ({
+      ...cfg,
+      channels: {
+        ...cfg.channels,
+        feishu: {
+          ...cfg.channels?.feishu,
+          dmPolicy: policy,
+        },
+      },
+    }),
+    promptAllowFrom: async ({ cfg, prompter, accountId }) =>
+      (await loadFeishuChannelRuntime()).feishuOnboardingAdapter.dmPolicy!.promptAllowFrom!({
+        cfg,
+        prompter,
+        accountId,
+      }),
+  },
+  disable: (cfg) => ({
+    ...cfg,
+    channels: {
+      ...cfg.channels,
+      feishu: { ...cfg.channels?.feishu, enabled: false },
+    },
+  }),
+} satisfies ChannelPlugin<ResolvedFeishuAccount>["onboarding"];
 
 function setFeishuNamedAccountEnabled(
   cfg: ClawdbotConfig,
@@ -107,6 +140,7 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount> = {
     idLabel: "feishuUserId",
     normalizeAllowEntry: (entry) => entry.replace(/^(feishu|user|open_id):/i, ""),
     notifyApproval: async ({ cfg, id }) => {
+      const { sendMessageFeishu } = await loadFeishuChannelRuntime();
       await sendMessageFeishu({
         cfg,
         to: id,
@@ -254,6 +288,7 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount> = {
           typeof ctx.params.replyTo === "string"
             ? ctx.params.replyTo.trim() || undefined
             : undefined;
+        const { sendCardFeishu } = await loadFeishuChannelRuntime();
         const result = await sendCardFeishu({
           cfg: ctx.cfg,
           to,
@@ -287,6 +322,7 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount> = {
           if (!emoji) {
             throw new Error("Emoji is required to remove a Feishu reaction.");
           }
+          const { listReactionsFeishu, removeReactionFeishu } = await loadFeishuChannelRuntime();
           const matches = await listReactionsFeishu({
             cfg: ctx.cfg,
             messageId,
@@ -321,6 +357,7 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount> = {
               "Emoji is required to add a Feishu reaction. Set clearAll=true to remove all bot reactions.",
             );
           }
+          const { listReactionsFeishu, removeReactionFeishu } = await loadFeishuChannelRuntime();
           const reactions = await listReactionsFeishu({
             cfg: ctx.cfg,
             messageId,
@@ -341,6 +378,7 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount> = {
             details: { ok: true, removed },
           };
         }
+        const { addReactionFeishu } = await loadFeishuChannelRuntime();
         await addReactionFeishu({
           cfg: ctx.cfg,
           messageId,
@@ -361,6 +399,7 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount> = {
         if (!messageId) {
           throw new Error("Feishu reactions lookup requires messageId.");
         }
+        const { listReactionsFeishu } = await loadFeishuChannelRuntime();
         const reactions = await listReactionsFeishu({
           cfg: ctx.cfg,
           messageId,
@@ -411,7 +450,7 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount> = {
       return setFeishuNamedAccountEnabled(cfg, accountId, true);
     },
   },
-  onboarding: feishuOnboardingAdapter,
+  onboarding: feishuOnboarding,
   messaging: {
     normalizeTarget: (raw) => normalizeFeishuTarget(raw) ?? undefined,
     targetResolver: {
@@ -436,28 +475,37 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount> = {
         accountId: accountId ?? undefined,
       }),
     listPeersLive: async ({ cfg, query, limit, accountId }) =>
-      listFeishuDirectoryPeersLive({
+      (await loadFeishuChannelRuntime()).listFeishuDirectoryPeersLive({
         cfg,
         query: query ?? undefined,
         limit: limit ?? undefined,
         accountId: accountId ?? undefined,
       }),
     listGroupsLive: async ({ cfg, query, limit, accountId }) =>
-      listFeishuDirectoryGroupsLive({
+      (await loadFeishuChannelRuntime()).listFeishuDirectoryGroupsLive({
         cfg,
         query: query ?? undefined,
         limit: limit ?? undefined,
         accountId: accountId ?? undefined,
       }),
   },
-  outbound: feishuOutbound,
+  outbound: {
+    deliveryMode: "direct",
+    chunker: (text, limit) => getFeishuRuntime().channel.text.chunkMarkdownText(text, limit),
+    chunkerMode: "markdown",
+    textChunkLimit: 4000,
+    sendText: async (params) => (await loadFeishuChannelRuntime()).feishuOutbound.sendText!(params),
+    sendMedia: async (params) =>
+      (await loadFeishuChannelRuntime()).feishuOutbound.sendMedia!(params),
+  },
   status: {
     defaultRuntime: createDefaultChannelRuntimeState(DEFAULT_ACCOUNT_ID, { port: null }),
     buildChannelSummary: ({ snapshot }) =>
       buildProbeChannelStatusSummary(snapshot, {
         port: snapshot.port ?? null,
       }),
-    probeAccount: async ({ account }) => await probeFeishu(account),
+    probeAccount: async ({ account }) =>
+      await (await loadFeishuChannelRuntime()).probeFeishu(account),
     buildAccountSnapshot: ({ account, runtime, probe }) => ({
       accountId: account.accountId,
       enabled: account.enabled,

@@ -2,10 +2,17 @@ import type { Api, Model } from "@mariozechner/pi-ai";
 import type { AuthStorage, ModelRegistry } from "@mariozechner/pi-coding-agent";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { ModelDefinitionConfig } from "../../config/types.js";
+import {
+  prepareProviderDynamicModel,
+  resolveProviderRuntimePlugin,
+  runProviderDynamicModel,
+  normalizeProviderResolvedModelWithPlugin,
+} from "../../plugins/provider-runtime.js";
 import { resolveOpenClawAgentDir } from "../agent-paths.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../defaults.js";
 import { buildModelAliasLines } from "../model-alias-lines.js";
 import { isSecretRefHeaderValueMarker } from "../model-auth-markers.js";
+import { normalizeModelCompat } from "../model-compat.js";
 import { resolveForwardCompatModel } from "../model-forward-compat.js";
 import { findNormalizedProviderValue, normalizeProviderId } from "../model-selection.js";
 import {
@@ -14,10 +21,6 @@ import {
 } from "../model-suppression.js";
 import { discoverAuthStorage, discoverModels } from "../pi-model-discovery.js";
 import { normalizeResolvedProviderModel } from "./model.provider-normalization.js";
-import {
-  getOpenRouterModelCapabilities,
-  loadOpenRouterModelCapabilities,
-} from "./openrouter-model-capabilities.js";
 
 type InlineModelEntry = ModelDefinitionConfig & {
   provider: string;
@@ -30,6 +33,8 @@ type InlineProviderConfig = {
   models?: ModelDefinitionConfig[];
   headers?: unknown;
 };
+
+const PLUGIN_FIRST_DYNAMIC_PROVIDERS = new Set(["anthropic", "google-gemini-cli", "openai", "zai"]);
 
 function sanitizeModelHeaders(
   headers: unknown,
@@ -51,7 +56,26 @@ function sanitizeModelHeaders(
   return Object.keys(next).length > 0 ? next : undefined;
 }
 
-function normalizeResolvedModel(params: { provider: string; model: Model<Api> }): Model<Api> {
+function normalizeResolvedModel(params: {
+  provider: string;
+  model: Model<Api>;
+  cfg?: OpenClawConfig;
+  agentDir?: string;
+}): Model<Api> {
+  const pluginNormalized = normalizeProviderResolvedModelWithPlugin({
+    provider: params.provider,
+    config: params.cfg,
+    context: {
+      config: params.cfg,
+      agentDir: params.agentDir,
+      provider: params.provider,
+      modelId: params.model.id,
+      model: params.model,
+    },
+  });
+  if (pluginNormalized) {
+    return normalizeModelCompat(pluginNormalized);
+  }
   return normalizeResolvedProviderModel(params);
 }
 
@@ -165,8 +189,9 @@ function resolveExplicitModelWithRegistry(params: {
   modelId: string;
   modelRegistry: ModelRegistry;
   cfg?: OpenClawConfig;
+  agentDir?: string;
 }): { kind: "resolved"; model: Model<Api> } | { kind: "suppressed" } | undefined {
-  const { provider, modelId, modelRegistry, cfg } = params;
+  const { provider, modelId, modelRegistry, cfg, agentDir } = params;
   if (shouldSuppressBuiltInModel({ provider, id: modelId })) {
     return { kind: "suppressed" };
   }
@@ -178,6 +203,8 @@ function resolveExplicitModelWithRegistry(params: {
       kind: "resolved",
       model: normalizeResolvedModel({
         provider,
+        cfg,
+        agentDir,
         model: applyConfiguredProviderOverrides({
           discoveredModel: model,
           providerConfig,
@@ -196,8 +223,41 @@ function resolveExplicitModelWithRegistry(params: {
   if (inlineMatch?.api) {
     return {
       kind: "resolved",
-      model: normalizeResolvedModel({ provider, model: inlineMatch as Model<Api> }),
+      model: normalizeResolvedModel({
+        provider,
+        cfg,
+        agentDir,
+        model: inlineMatch as Model<Api>,
+      }),
     };
+  }
+
+  if (PLUGIN_FIRST_DYNAMIC_PROVIDERS.has(normalizeProviderId(provider))) {
+    // Give migrated provider plugins first shot at ids that still keep a core
+    // forward-compat fallback for disabled-plugin/test compatibility.
+    const pluginDynamicModel = runProviderDynamicModel({
+      provider,
+      config: cfg,
+      context: {
+        config: cfg,
+        agentDir,
+        provider,
+        modelId,
+        modelRegistry,
+        providerConfig,
+      },
+    });
+    if (pluginDynamicModel) {
+      return {
+        kind: "resolved",
+        model: normalizeResolvedModel({
+          provider,
+          cfg,
+          agentDir,
+          model: pluginDynamicModel,
+        }),
+      };
+    }
   }
 
   // Forward-compat fallbacks must be checked BEFORE the generic providerCfg fallback.
@@ -208,6 +268,8 @@ function resolveExplicitModelWithRegistry(params: {
       kind: "resolved",
       model: normalizeResolvedModel({
         provider,
+        cfg,
+        agentDir,
         model: applyConfiguredProviderOverrides({
           discoveredModel: forwardCompat,
           providerConfig,
@@ -225,6 +287,7 @@ export function resolveModelWithRegistry(params: {
   modelId: string;
   modelRegistry: ModelRegistry;
   cfg?: OpenClawConfig;
+  agentDir?: string;
 }): Model<Api> | undefined {
   const explicitModel = resolveExplicitModelWithRegistry(params);
   if (explicitModel?.kind === "suppressed") {
@@ -234,31 +297,26 @@ export function resolveModelWithRegistry(params: {
     return explicitModel.model;
   }
 
-  const { provider, modelId, cfg } = params;
-  const normalizedProvider = normalizeProviderId(provider);
+  const { provider, modelId, cfg, modelRegistry, agentDir } = params;
   const providerConfig = resolveConfiguredProviderConfig(cfg, provider);
-
-  // OpenRouter is a pass-through proxy - any model ID available on OpenRouter
-  // should work without being pre-registered in the local catalog.
-  // Try to fetch actual capabilities from the OpenRouter API so that new models
-  // (not yet in the static pi-ai snapshot) get correct image/reasoning support.
-  if (normalizedProvider === "openrouter") {
-    const capabilities = getOpenRouterModelCapabilities(modelId);
+  const pluginDynamicModel = runProviderDynamicModel({
+    provider,
+    config: cfg,
+    context: {
+      config: cfg,
+      agentDir,
+      provider,
+      modelId,
+      modelRegistry,
+      providerConfig,
+    },
+  });
+  if (pluginDynamicModel) {
     return normalizeResolvedModel({
       provider,
-      model: {
-        id: modelId,
-        name: capabilities?.name ?? modelId,
-        api: "openai-completions",
-        provider,
-        baseUrl: "https://openrouter.ai/api/v1",
-        reasoning: capabilities?.reasoning ?? false,
-        input: capabilities?.input ?? ["text"],
-        cost: capabilities?.cost ?? { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-        contextWindow: capabilities?.contextWindow ?? DEFAULT_CONTEXT_TOKENS,
-        // Align with OPENROUTER_DEFAULT_MAX_TOKENS in models-config.providers.ts
-        maxTokens: capabilities?.maxTokens ?? 8192,
-      } as Model<Api>,
+      cfg,
+      agentDir,
+      model: pluginDynamicModel,
     });
   }
 
@@ -272,6 +330,8 @@ export function resolveModelWithRegistry(params: {
   if (providerConfig || modelId.startsWith("mock-")) {
     return normalizeResolvedModel({
       provider,
+      cfg,
+      agentDir,
       model: {
         id: modelId,
         name: modelId,
@@ -312,7 +372,13 @@ export function resolveModel(
   const resolvedAgentDir = agentDir ?? resolveOpenClawAgentDir();
   const authStorage = discoverAuthStorage(resolvedAgentDir);
   const modelRegistry = discoverModels(authStorage, resolvedAgentDir);
-  const model = resolveModelWithRegistry({ provider, modelId, modelRegistry, cfg });
+  const model = resolveModelWithRegistry({
+    provider,
+    modelId,
+    modelRegistry,
+    cfg,
+    agentDir: resolvedAgentDir,
+  });
   if (model) {
     return { model, authStorage, modelRegistry };
   }
@@ -338,7 +404,13 @@ export async function resolveModelAsync(
   const resolvedAgentDir = agentDir ?? resolveOpenClawAgentDir();
   const authStorage = discoverAuthStorage(resolvedAgentDir);
   const modelRegistry = discoverModels(authStorage, resolvedAgentDir);
-  const explicitModel = resolveExplicitModelWithRegistry({ provider, modelId, modelRegistry, cfg });
+  const explicitModel = resolveExplicitModelWithRegistry({
+    provider,
+    modelId,
+    modelRegistry,
+    cfg,
+    agentDir: resolvedAgentDir,
+  });
   if (explicitModel?.kind === "suppressed") {
     return {
       error: buildUnknownModelError(provider, modelId),
@@ -346,13 +418,36 @@ export async function resolveModelAsync(
       modelRegistry,
     };
   }
-  if (!explicitModel && normalizeProviderId(provider) === "openrouter") {
-    await loadOpenRouterModelCapabilities(modelId);
+  if (!explicitModel) {
+    const providerPlugin = resolveProviderRuntimePlugin({
+      provider,
+      config: cfg,
+    });
+    if (providerPlugin?.prepareDynamicModel) {
+      await prepareProviderDynamicModel({
+        provider,
+        config: cfg,
+        context: {
+          config: cfg,
+          agentDir: resolvedAgentDir,
+          provider,
+          modelId,
+          modelRegistry,
+          providerConfig: resolveConfiguredProviderConfig(cfg, provider),
+        },
+      });
+    }
   }
   const model =
     explicitModel?.kind === "resolved"
       ? explicitModel.model
-      : resolveModelWithRegistry({ provider, modelId, modelRegistry, cfg });
+      : resolveModelWithRegistry({
+          provider,
+          modelId,
+          modelRegistry,
+          cfg,
+          agentDir: resolvedAgentDir,
+        });
   if (model) {
     return { model, authStorage, modelRegistry };
   }
