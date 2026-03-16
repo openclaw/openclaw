@@ -344,6 +344,7 @@ async function collectFilesystemFindings(params: {
 
 function collectGatewayConfigFindings(
   cfg: OpenClawConfig,
+  sourceConfig: OpenClawConfig,
   env: NodeJS.ProcessEnv,
 ): SecurityAuditFinding[] {
   const findings: SecurityAuditFinding[] = [];
@@ -368,18 +369,18 @@ function collectGatewayConfigFindings(
     hasNonEmptyString(env.OPENCLAW_GATEWAY_PASSWORD) ||
     hasNonEmptyString(env.CLAWDBOT_GATEWAY_PASSWORD);
   const tokenConfiguredFromConfig = hasConfiguredSecretInput(
-    cfg.gateway?.auth?.token,
-    cfg.secrets?.defaults,
+    sourceConfig.gateway?.auth?.token,
+    sourceConfig.secrets?.defaults,
   );
   const passwordConfiguredFromConfig = hasConfiguredSecretInput(
-    cfg.gateway?.auth?.password,
-    cfg.secrets?.defaults,
+    sourceConfig.gateway?.auth?.password,
+    sourceConfig.secrets?.defaults,
   );
   const remoteTokenConfigured = hasConfiguredSecretInput(
-    cfg.gateway?.remote?.token,
-    cfg.secrets?.defaults,
+    sourceConfig.gateway?.remote?.token,
+    sourceConfig.secrets?.defaults,
   );
-  const explicitAuthMode = cfg.gateway?.auth?.mode;
+  const explicitAuthMode = sourceConfig.gateway?.auth?.mode;
   const tokenCanWin =
     hasToken || envTokenConfigured || tokenConfiguredFromConfig || remoteTokenConfigured;
   const passwordCanWin =
@@ -1170,7 +1171,7 @@ export async function runSecurityAudit(opts: SecurityAuditOptions): Promise<Secu
   findings.push(...collectAttackSurfaceSummaryFindings(cfg));
   findings.push(...collectSyncedFolderFindings({ stateDir, configPath }));
 
-  findings.push(...collectGatewayConfigFindings(cfg, env));
+  findings.push(...collectGatewayConfigFindings(cfg, context.sourceConfig, env));
   findings.push(...collectBrowserControlFindings(cfg, env));
   findings.push(...collectLoggingFindings(cfg));
   findings.push(...collectElevatedFindings(cfg));

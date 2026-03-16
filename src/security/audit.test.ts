@@ -346,6 +346,43 @@ description: test skill
     expectNoFinding(res, "gateway.bind_no_auth");
   });
 
+  it("does not flag missing gateway auth when read-only scrubbed config omits unavailable auth SecretRefs", async () => {
+    const sourceConfig: OpenClawConfig = {
+      gateway: {
+        bind: "lan",
+        auth: {
+          token: {
+            source: "env",
+            provider: "default",
+            id: "OPENCLAW_GATEWAY_TOKEN",
+          },
+        },
+      },
+      secrets: {
+        providers: {
+          default: { source: "env" },
+        },
+      },
+    };
+    const resolvedConfig: OpenClawConfig = {
+      gateway: {
+        bind: "lan",
+        auth: {},
+      },
+      secrets: sourceConfig.secrets,
+    };
+
+    const res = await runSecurityAudit({
+      config: resolvedConfig,
+      sourceConfig,
+      env: {},
+      includeFilesystem: false,
+      includeChannelSecurity: false,
+    });
+
+    expectNoFinding(res, "gateway.bind_no_auth");
+  });
+
   it("evaluates gateway auth rate-limit warning based on configuration", async () => {
     const cases: Array<{
       name: string;
