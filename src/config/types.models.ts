@@ -15,6 +15,7 @@ export type ModelApi = (typeof MODEL_APIS)[number];
 
 export type ModelCompatConfig = {
   supportsStore?: boolean;
+  supportsPromptCacheKey?: boolean;
   supportsDeveloperRole?: boolean;
   supportsReasoningEffort?: boolean;
   supportsUsageInStreaming?: boolean;
