@@ -6,8 +6,6 @@ import (
 	"fmt"
 	"strings"
 	"time"
-
-	pi "github.com/joshp123/pi-golang"
 )
 
 const (
@@ -19,21 +17,14 @@ const (
 var errEmptyTranslation = errors.New("empty translation")
 
 type PiTranslator struct {
-	client *pi.OneShotClient
+	client *docsPiClient
 }
 
 func NewPiTranslator(srcLang, tgtLang string, glossary []GlossaryEntry, thinking string) (*PiTranslator, error) {
-	options := pi.DefaultOneShotOptions()
-	options.AppName = "openclaw-docs-i18n"
-	options.WorkDir = "/tmp"
-	options.Mode = pi.ModeDragons
-	options.Dragons = pi.DragonsOptions{
-		Provider: "anthropic",
-		Model:    modelVersion,
-		Thinking: normalizeThinking(thinking),
-	}
-	options.SystemPrompt = translationPrompt(srcLang, tgtLang, glossary)
-	client, err := pi.StartOneShot(options)
+	client, err := startDocsPiClient(context.Background(), docsPiClientOptions{
+		SystemPrompt: translationPrompt(srcLang, tgtLang, glossary),
+		Thinking:     normalizeThinking(thinking),
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -146,7 +137,7 @@ func (t *PiTranslator) Close() {
 }
 
 type promptRunner interface {
-	Run(context.Context, string) (pi.RunResult, error)
+	Prompt(context.Context, string) (string, error)
 	Stderr() string
 }
 
@@ -154,11 +145,11 @@ func runPrompt(ctx context.Context, client promptRunner, message string) (string
 	promptCtx, cancel := context.WithTimeout(ctx, translatePromptTimeout)
 	defer cancel()
 
-	result, err := client.Run(promptCtx, message)
+	result, err := client.Prompt(promptCtx, message)
 	if err != nil {
 		return "", decoratePromptError(err, client.Stderr())
 	}
-	return result.Text, nil
+	return result, nil
 }
 
 func decoratePromptError(err error, stderr string) error {
