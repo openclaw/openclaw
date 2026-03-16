@@ -92,6 +92,7 @@ describe("createPinnedDispatcher", () => {
     });
 
     expect(envHttpProxyAgentCtor).toHaveBeenCalledWith({
+      keepAlive: false,
       connect: {
         autoSelectFamily: true,
         lookup,
@@ -120,6 +121,7 @@ describe("createPinnedDispatcher", () => {
 
     expect(proxyAgentCtor).toHaveBeenCalledWith({
       uri: "http://127.0.0.1:7890",
+      connect: { keepAlive: false },
       proxyTls: {
         autoSelectFamily: false,
       },

@@ -196,7 +196,7 @@ export async function fetchWithSsrFGuard(params: GuardedFetchOptions): Promise<G
       const canUseTrustedEnvProxy =
         mode === GUARDED_FETCH_MODE.TRUSTED_ENV_PROXY && hasProxyEnvConfigured();
       if (canUseTrustedEnvProxy) {
-        dispatcher = new EnvHttpProxyAgent({ keepAlive: false });
+        dispatcher = new EnvHttpProxyAgent({ connect: { keepAlive: false } });
       } else if (params.pinDns !== false) {
         dispatcher = createPinnedDispatcher(pinned, params.dispatcherPolicy);
       }

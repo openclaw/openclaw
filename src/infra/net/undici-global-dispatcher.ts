@@ -93,7 +93,7 @@ export function ensureGlobalUndiciEnvProxyDispatcher(): void {
     return;
   }
   try {
-    setGlobalDispatcher(new EnvHttpProxyAgent({ keepAlive: false }));
+    setGlobalDispatcher(new EnvHttpProxyAgent({ connect: { keepAlive: false } }));
     lastAppliedProxyBootstrap = true;
   } catch {
     // Best-effort bootstrap only.

@@ -80,123 +80,95 @@ export const lineSetupWizard: ChannelSetupWizard = {
       preferredEnvVar: "LINE_CHANNEL_ACCESS_TOKEN",
       helpTitle: "LINE Messaging API",
       helpLines: LINE_SETUP_HELP_LINES,
-      envPrompt: "LINE_CHANNEL_ACCESS_TOKEN detected. Use env var?",
-      keepPrompt: "LINE channel access token already configured. Keep it?",
-      inputPrompt: "Enter LINE channel access token",
-      allowEnv: ({ accountId }) => accountId === DEFAULT_ACCOUNT_ID,
-      inspect: ({ cfg, accountId }) => {
+      resolveConfigured: ({ cfg, accountId }) => {
         const resolved = resolveLineAccount({ cfg, accountId });
-        return {
-          accountConfigured: Boolean(
-            resolved.channelAccessToken.trim() && resolved.channelSecret.trim(),
-          ),
-          hasConfiguredValue: Boolean(
-            resolved.config.channelAccessToken?.trim() || resolved.config.tokenFile?.trim(),
-          ),
-          resolvedValue: resolved.channelAccessToken.trim() || undefined,
-          envValue:
-            accountId === DEFAULT_ACCOUNT_ID
-              ? process.env.LINE_CHANNEL_ACCESS_TOKEN?.trim() || undefined
-              : undefined,
-        };
+        return Boolean(resolved.channelAccessToken.trim());
       },
-      applyUseEnv: ({ cfg, accountId }) =>
+      resolveCurrent: ({ cfg, accountId }) => {
+        const resolved = resolveLineAccount({ cfg, accountId });
+        return resolved.channelAccessToken.trim();
+      },
+      onInput: ({ cfg, accountId, value }) =>
         patchLineAccountConfig({
           cfg,
           accountId,
-          enabled: true,
-          clearFields: ["channelAccessToken", "tokenFile"],
-          patch: {},
+          patch: { channelAccessToken: value.trim() },
         }),
-      applySet: ({ cfg, accountId, resolvedValue }) =>
+      onClear: ({ cfg, accountId }) =>
         patchLineAccountConfig({
           cfg,
           accountId,
-          enabled: true,
-          clearFields: ["tokenFile"],
-          patch: { channelAccessToken: resolvedValue },
+          patch: {},
+          clearFields: ["channelAccessToken"],
         }),
     },
     {
-      inputKey: "password",
-      providerHint: "line-secret",
+      inputKey: "secret",
+      providerHint: channel,
       credentialLabel: "channel secret",
       preferredEnvVar: "LINE_CHANNEL_SECRET",
       helpTitle: "LINE Messaging API",
       helpLines: LINE_SETUP_HELP_LINES,
-      envPrompt: "LINE_CHANNEL_SECRET detected. Use env var?",
-      keepPrompt: "LINE channel secret already configured. Keep it?",
-      inputPrompt: "Enter LINE channel secret",
-      allowEnv: ({ accountId }) => accountId === DEFAULT_ACCOUNT_ID,
-      inspect: ({ cfg, accountId }) => {
+      resolveConfigured: ({ cfg, accountId }) => {
         const resolved = resolveLineAccount({ cfg, accountId });
-        return {
-          accountConfigured: Boolean(
-            resolved.channelAccessToken.trim() && resolved.channelSecret.trim(),
-          ),
-          hasConfiguredValue: Boolean(
-            resolved.config.channelSecret?.trim() || resolved.config.secretFile?.trim(),
-          ),
-          resolvedValue: resolved.channelSecret.trim() || undefined,
-          envValue:
-            accountId === DEFAULT_ACCOUNT_ID
-              ? process.env.LINE_CHANNEL_SECRET?.trim() || undefined
-              : undefined,
-        };
+        return Boolean(resolved.channelSecret.trim());
       },
-      applyUseEnv: ({ cfg, accountId }) =>
+      resolveCurrent: ({ cfg, accountId }) => {
+        const resolved = resolveLineAccount({ cfg, accountId });
+        return resolved.channelSecret.trim();
+      },
+      onInput: ({ cfg, accountId, value }) =>
         patchLineAccountConfig({
           cfg,
           accountId,
-          enabled: true,
-          clearFields: ["channelSecret", "secretFile"],
-          patch: {},
+          patch: { channelSecret: value.trim() },
         }),
-      applySet: ({ cfg, accountId, resolvedValue }) =>
+      onClear: ({ cfg, accountId }) =>
         patchLineAccountConfig({
           cfg,
           accountId,
-          enabled: true,
-          clearFields: ["secretFile"],
-          patch: { channelSecret: resolvedValue },
+          patch: {},
+          clearFields: ["channelSecret"],
         }),
     },
   ],
-  allowFrom: {
-    helpTitle: "LINE allowlist",
-    helpLines: LINE_ALLOW_FROM_HELP_LINES,
-    message: "LINE allowFrom (user id)",
-    placeholder: "U1234567890abcdef1234567890abcdef",
-    invalidWithoutCredentialNote:
-      "LINE allowFrom requires raw user ids like U1234567890abcdef1234567890abcdef.",
-    parseInputs: splitSetupEntries,
-    parseId: parseLineAllowFromId,
-    resolveEntries: async ({ entries }) =>
-      entries.map((entry) => {
-        const id = parseLineAllowFromId(entry);
-        return {
-          input: entry,
-          resolved: Boolean(id),
-          id,
-        };
-      }),
-    apply: ({ cfg, accountId, allowFrom }) =>
-      patchLineAccountConfig({
-        cfg,
-        accountId,
-        enabled: true,
-        patch: { dmPolicy: "allowlist", allowFrom },
-      }),
-  },
+  onboarding: [
+    {
+      inputKey: "enabled",
+      type: "confirm",
+      label: "Enable LINE channel?",
+      getCurrent: (cfg) => cfg.channels?.line?.enabled ?? false,
+      onInput: ({ cfg, value }) =>
+        setSetupChannelEnabled({
+          cfg,
+          channel,
+          enabled: value,
+        }),
+    },
+    {
+      inputKey: "allowFrom",
+      type: "text",
+      label: "Initial allowlist (optional)",
+      helpTitle: "LINE Allowlist",
+      helpLines: LINE_ALLOW_FROM_HELP_LINES,
+      shouldShow: ({ cfg }) =>
+        cfg.channels?.line?.enabled !== false && !cfg.channels?.line?.allowFrom?.length,
+      onInput: ({ cfg, value }) => {
+        const entries = splitSetupEntries(value);
+        const allowFrom = entries.map(parseLineAllowFromId).filter(Boolean) as string[];
+        return patchLineAccountConfig({
+          cfg,
+          accountId: DEFAULT_ACCOUNT_ID,
+          patch: allowFrom.length > 0 ? { allowFrom } : {},
+        });
+      },
+    },
+  ],
   dmPolicy: lineDmPolicy,
-  completionNote: {
-    title: "LINE webhook",
-    lines: [
-      "Enable Use webhook in the LINE console after saving credentials.",
-      "Default webhook URL: https://<gateway-host>/line/webhook",
-      "If you set channels.line.webhookPath, update the URL to match.",
-      `Docs: ${formatDocsLink("/channels/line", "channels/line")}`,
-    ],
-  },
-  disable: (cfg) => setSetupChannelEnabled(cfg, channel, false),
+  disable: (cfg) =>
+    patchLineAccountConfig({
+      cfg,
+      accountId: DEFAULT_ACCOUNT_ID,
+      patch: { enabled: false },
+    }),
 };
