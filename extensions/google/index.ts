@@ -6,6 +6,7 @@ import {
 import { emptyPluginConfigSchema } from "../../src/plugins/config-schema.js";
 import type { OpenClawPluginApi } from "../../src/plugins/types.js";
 import { registerGoogleGeminiCliProvider } from "./gemini-cli-provider.js";
+import { isModernGoogleModel, resolveGoogle31ForwardCompatModel } from "./provider-models.js";
 
 const googlePlugin = {
   id: "google",
@@ -13,6 +14,16 @@ const googlePlugin = {
   description: "Bundled Google plugin",
   configSchema: emptyPluginConfigSchema(),
   register(api: OpenClawPluginApi) {
+    api.registerProvider({
+      id: "google",
+      label: "Google AI Studio",
+      docsPath: "/providers/models",
+      envVars: ["GEMINI_API_KEY", "GOOGLE_API_KEY"],
+      auth: [],
+      resolveDynamicModel: (ctx) =>
+        resolveGoogle31ForwardCompatModel({ providerId: "google", ctx }),
+      isModernModelRef: ({ modelId }) => isModernGoogleModel(modelId),
+    });
     registerGoogleGeminiCliProvider(api);
     api.registerWebSearchProvider(
       createPluginBackedWebSearchProvider({
