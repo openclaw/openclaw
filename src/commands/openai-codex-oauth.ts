@@ -1,7 +1,7 @@
 import { loginOpenAICodex, type OAuthCredentials } from "@mariozechner/pi-ai/oauth";
 import { isErrno } from "../infra/errors.js";
-import { describePortOwner } from "../infra/ports.js";
 import { tryListenOnPort } from "../infra/ports-probe.js";
+import { describePortOwner } from "../infra/ports.js";
 import type { RuntimeEnv } from "../runtime.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 import { createVpsAwareOAuthHandlers } from "./oauth-flow.js";
