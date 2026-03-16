@@ -800,7 +800,7 @@ async function executeGatewayRequestWithScopes<T>(params: {
 }): Promise<T> {
   // Ensure the event loop is not starved by deferred module evaluation before
   // opening any network connections (see waitForEventLoopReady jsdoc).
-  await waitForEventLoopReady();
+  await waitForEventLoopReady(params.timeoutMs);
 
   const { opts, scopes, url, token, password, tlsFingerprint, timeoutMs, safeTimerTimeoutMs } =
     params;

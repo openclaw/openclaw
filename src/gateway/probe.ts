@@ -39,7 +39,7 @@ export async function probeGateway(opts: {
 }): Promise<GatewayProbeResult> {
   // Ensure the event loop is not starved by deferred module evaluation before
   // opening any network connections (see waitForEventLoopReady jsdoc).
-  await waitForEventLoopReady();
+  await waitForEventLoopReady(opts.timeoutMs);
 
   const startedAt = Date.now();
   const instanceId = randomUUID();
