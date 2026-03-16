@@ -578,13 +578,13 @@ function parseMediaKeys(
       case "file":
         return { fileKey, fileName: decodeFeishuFilename(parsed.file_name) };
       case "audio":
-        return { fileKey, fileName: parsed.file_name };
+        return { fileKey, fileName: decodeFeishuFilename(parsed.file_name) };
       case "video":
       case "media":
         // Video/media has both file_key (video) and image_key (thumbnail)
-        return { fileKey, imageKey, fileName: parsed.file_name };
+        return { fileKey, imageKey, fileName: decodeFeishuFilename(parsed.file_name) };
       case "sticker":
-        return { fileKey, fileName: parsed.file_name };
+        return { fileKey, fileName: decodeFeishuFilename(parsed.file_name) };
       default:
         return {};
     }
