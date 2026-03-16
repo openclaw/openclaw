@@ -19,8 +19,8 @@ export function buildMSTeamsAuthConfig(
 
   switch (creds.authType) {
     case "certificate":
-      base.certPemFile = creds.certPemFile;
-      base.certKeyFile = creds.certKeyFile;
+      if (creds.certPemFile) base.certPemFile = creds.certPemFile;
+      if (creds.certKeyFile) base.certKeyFile = creds.certKeyFile;
       if (creds.sendX5C != null) base.sendX5C = creds.sendX5C;
       break;
     case "federatedCredential":

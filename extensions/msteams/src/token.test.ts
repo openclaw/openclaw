@@ -77,6 +77,10 @@ describe("resolveMSTeamsCredentials", () => {
       });
 
       expect(resolved?.authType).toBe("certificate");
+      // Env-only cert paths are not forwarded in credentials — the SDK
+      // merges them from env at runtime via getAuthConfigWithDefaults().
+      expect(resolved?.certPemFile).toBeUndefined();
+      expect(resolved?.certKeyFile).toBeUndefined();
     } finally {
       delete process.env.certPemFile;
       delete process.env.certKeyFile;

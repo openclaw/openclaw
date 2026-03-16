@@ -30,12 +30,18 @@ export type MSTeamsCredentials = {
  * belong to an unrelated Agents SDK connection and cannot be reliably
  * attributed to the Teams channel.
  */
+/** Return trimmed value if non-blank, otherwise undefined. */
+function trimPresence(value: string | undefined | null): string | undefined {
+  const trimmed = value?.trim();
+  return trimmed || undefined;
+}
+
 function hasCertificateAuthMaterial(
   cfg?: MSTeamsConfig,
   env: NodeJS.ProcessEnv = process.env,
 ): boolean {
-  const hasPem = Boolean(cfg?.certPemFile || env.certPemFile);
-  const hasKey = Boolean(cfg?.certKeyFile || env.certKeyFile);
+  const hasPem = Boolean(trimPresence(cfg?.certPemFile) || trimPresence(env.certPemFile));
+  const hasKey = Boolean(trimPresence(cfg?.certKeyFile) || trimPresence(env.certKeyFile));
   return hasPem && hasKey;
 }
 
@@ -52,7 +58,10 @@ function hasFederatedAuthMaterial(
   env: NodeJS.ProcessEnv = process.env,
 ): boolean {
   return Boolean(
-    cfg?.ficClientId || env.FICClientId || cfg?.widAssertionFile || env.WIDAssertionFile,
+    trimPresence(cfg?.ficClientId) ||
+    trimPresence(env.FICClientId) ||
+    trimPresence(cfg?.widAssertionFile) ||
+    trimPresence(env.WIDAssertionFile),
   );
 }
 
@@ -95,8 +104,8 @@ export function resolveMSTeamsCredentials(cfg?: MSTeamsConfig): MSTeamsCredentia
         appId,
         tenantId,
         authType,
-        certPemFile: cfg?.certPemFile,
-        certKeyFile: cfg?.certKeyFile,
+        certPemFile: trimPresence(cfg?.certPemFile),
+        certKeyFile: trimPresence(cfg?.certKeyFile),
         sendX5C: cfg?.sendX5C,
       };
     }
@@ -106,8 +115,8 @@ export function resolveMSTeamsCredentials(cfg?: MSTeamsConfig): MSTeamsCredentia
         appId,
         tenantId,
         authType,
-        ficClientId: cfg?.ficClientId,
-        widAssertionFile: cfg?.widAssertionFile,
+        ficClientId: trimPresence(cfg?.ficClientId),
+        widAssertionFile: trimPresence(cfg?.widAssertionFile),
       };
     }
     case "clientSecret":
