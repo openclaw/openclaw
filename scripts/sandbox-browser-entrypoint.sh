@@ -35,7 +35,15 @@ RENDERER_PROCESS_LIMIT="${OPENCLAW_BROWSER_RENDERER_PROCESS_LIMIT:-2}"
 
 mkdir -p "${HOME}" "${HOME}/.chrome" "${XDG_CONFIG_HOME}" "${XDG_CACHE_HOME}"
 
-Xvfb :1 -screen 0 1280x800x24 -ac -nolisten tcp &
+rm -rf /tmp/openclaw-home/.chrome/SingletonCookie
+rm -rf /tmp/openclaw-home/.chrome/SingletonLock
+rm -rf /tmp/openclaw-home/.chrome/SingletonSocket
+
+rm -f /tmp/.X1-lock /tmp/.X11-unix/X1
+pkill -f "Xvfb :1" || true
+pkill -f "chromium" || true
+
+Xvfb :1 -screen 0 1920x1080x16 -ac -nolisten tcp &
 
 if [[ "${HEADLESS}" == "1" ]]; then
   CHROME_ARGS=(
@@ -64,6 +72,15 @@ CHROME_ARGS+=(
   "--disable-crash-reporter"
   "--no-zygote"
   "--metrics-recording-only"
+  "--window-size=1920,1080"
+  "--window-position=0,0"
+  "--disable-sync"
+  "--mute-audio"
+  "--is-testing"
+  "--disable-notifications"
+  "--disable-features=Translate"
+  "--disable-vulkan"
+  "--enable-background-mode"
 )
 
 DISABLE_GRAPHICS_FLAGS_LOWER="${DISABLE_GRAPHICS_FLAGS,,}"
