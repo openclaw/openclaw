@@ -4,12 +4,12 @@ import {
   createKilocodeWrapper,
   isProxyReasoningUnsupported,
 } from "../../src/agents/pi-embedded-runner/proxy-stream-wrappers.js";
-import { resolveKilocodeOrgId } from "../../src/providers/kilocode-shared.js";
 import {
   applyKilocodeConfig,
   KILOCODE_DEFAULT_MODEL_REF,
 } from "../../src/commands/onboard-auth.js";
 import { createProviderApiKeyAuthMethod } from "../../src/plugins/provider-api-key-auth.js";
+import { resolveKilocodeOrgId } from "../../src/providers/kilocode-shared.js";
 
 const PROVIDER_ID = "kilocode";
 
