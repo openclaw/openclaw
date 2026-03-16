@@ -132,7 +132,8 @@ const ACP_COMMANDS = new Set([
 
 const nodeAcpSessions = new Map<string, AcpNodeSessionRecord>();
 const DEFAULT_NODE_HOST_ACP_BACKEND = "acpx";
-const ACTIVE_CLOSE_QUIESCENCE_TIMEOUT_MS = 100;
+const DEFAULT_ACTIVE_CLOSE_QUIESCENCE_TIMEOUT_MS = 30_000;
+let activeCloseQuiescenceTimeoutMs = DEFAULT_ACTIVE_CLOSE_QUIESCENCE_TIMEOUT_MS;
 
 let acpRuntimeServicesInit: Promise<void> | null = null;
 let acpRuntimeServicesHandle: PluginServicesHandle | null = null;
@@ -420,7 +421,7 @@ async function closeSessionRecord(
       throw error;
     }
     if (opts?.requireTurnQuiescence) {
-      const quiescenceTimeoutMs = opts.quiescenceTimeoutMs ?? ACTIVE_CLOSE_QUIESCENCE_TIMEOUT_MS;
+      const quiescenceTimeoutMs = opts.quiescenceTimeoutMs ?? activeCloseQuiescenceTimeoutMs;
       let quiescenceTimer: ReturnType<typeof setTimeout> | undefined;
       try {
         await Promise.race([
@@ -1156,6 +1157,10 @@ export async function handleAcpInvokeCommand(
 export const __testing = {
   resetNodeAcpSessionsForTests() {
     nodeAcpSessions.clear();
+    activeCloseQuiescenceTimeoutMs = DEFAULT_ACTIVE_CLOSE_QUIESCENCE_TIMEOUT_MS;
+  },
+  setActiveCloseQuiescenceTimeoutMsForTests(timeoutMs: number) {
+    activeCloseQuiescenceTimeoutMs = timeoutMs;
   },
   async resetNodeAcpRuntimeBootstrapForTests() {
     const handle = acpRuntimeServicesHandle;

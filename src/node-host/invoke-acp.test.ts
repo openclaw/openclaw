@@ -1705,7 +1705,8 @@ describe("handleAcpInvokeCommand", () => {
     });
   });
 
-  it("waits for active close quiescence before reporting success or deleting the session", async () => {
+  it("allows a healthy active close to settle after more than 100ms before reporting success", async () => {
+    __testing.setActiveCloseQuiescenceTimeoutMsForTests(250);
     const runtime = new FakeNodeHostRuntime();
     runtime.cancelReleasesTurn = false;
     registerAcpRuntimeBackend({
@@ -1771,8 +1772,9 @@ describe("handleAcpInvokeCommand", () => {
       expect(runtime.cancelled).toHaveLength(1);
     });
     expect(runtime.closed).toHaveLength(0);
-    await new Promise((resolve) => setTimeout(resolve, 10));
+    await new Promise((resolve) => setTimeout(resolve, 125));
     expect(closeResolved).toBe(false);
+    expect(runtime.closed).toHaveLength(0);
 
     const inFlightStatus = await handleAcpInvokeCommand(
       buildFrame({
@@ -1841,6 +1843,7 @@ describe("handleAcpInvokeCommand", () => {
   });
 
   it("fails closed when active close cannot observe worker quiescence in time", async () => {
+    __testing.setActiveCloseQuiescenceTimeoutMsForTests(50);
     const runtime = new FakeNodeHostRuntime();
     runtime.cancelReleasesTurn = false;
     registerAcpRuntimeBackend({
