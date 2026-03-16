@@ -105,6 +105,14 @@ type ChannelManagerOptions = {
    * @see {@link ChannelGatewayContext.channelRuntime}
    */
   channelRuntime?: PluginRuntime["channel"];
+  /**
+   * Lazily resolves optional channel runtime helpers for external channel plugins.
+   *
+   * Use this when the caller wants to avoid instantiating the full plugin channel
+   * runtime during gateway startup. The manager only needs the runtime surface once
+   * a channel account actually starts.
+   */
+  resolveChannelRuntime?: () => PluginRuntime["channel"];
 };
 
 type StartChannelOptions = {
@@ -125,7 +133,8 @@ export type ChannelManager = {
 
 // Channel docking: lifecycle hooks (`plugin.gateway`) flow through this manager.
 export function createChannelManager(opts: ChannelManagerOptions): ChannelManager {
-  const { loadConfig, channelLogs, channelRuntimeEnvs, channelRuntime } = opts;
+  const { loadConfig, channelLogs, channelRuntimeEnvs, channelRuntime, resolveChannelRuntime } =
+    opts;
 
   const channelStores = new Map<ChannelId, ChannelRuntimeStore>();
   // Tracks restart attempts per channel:account. Reset on successful start.
@@ -219,6 +228,10 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
     return next;
   };
 
+  const getChannelRuntime = (): PluginRuntime["channel"] | undefined => {
+    return channelRuntime ?? resolveChannelRuntime?.();
+  };
+
   const startChannelInternal = async (
     channelId: ChannelId,
     accountId?: string,
@@ -297,6 +310,7 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
         });
 
         const log = channelLogs[channelId];
+        const resolvedChannelRuntime = getChannelRuntime();
         const task = startAccount({
           cfg,
           accountId: id,
@@ -306,7 +320,7 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
           log,
           getStatus: () => getRuntime(channelId, id),
           setStatus: (next) => setRuntime(channelId, id, next),
-          ...(channelRuntime ? { channelRuntime } : {}),
+          ...(resolvedChannelRuntime ? { channelRuntime: resolvedChannelRuntime } : {}),
         });
         const trackedPromise = Promise.resolve(task)
           .catch((err) => {
