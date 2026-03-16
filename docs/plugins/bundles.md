@@ -259,11 +259,18 @@ openclaw plugins install ./my-codex-bundle
 openclaw plugins install ./my-claude-bundle
 openclaw plugins install ./my-cursor-bundle
 openclaw plugins install ./my-bundle.tgz
+openclaw plugins marketplace list <marketplace-name>
+openclaw plugins install <plugin-name>@<marketplace-name>
 openclaw plugins info my-bundle
 ```
 
 If the directory is a native OpenClaw plugin/package, the native install path
 still wins.
+
+For Claude marketplace names, OpenClaw reads the local Claude known-marketplace
+registry at `~/.claude/plugins/known_marketplaces.json`. Marketplace entries
+can resolve to bundle-compatible directories/archives or to native plugin
+sources; after resolution, the normal install rules still apply.
 
 ## Troubleshooting
 

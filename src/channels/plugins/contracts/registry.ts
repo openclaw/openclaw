@@ -57,6 +57,33 @@ type StatusContractEntry = {
   }>;
 };
 
+export type ChannelPluginSurface =
+  | "actions"
+  | "setup"
+  | "status"
+  | "outbound"
+  | "messaging"
+  | "threading"
+  | "directory"
+  | "gateway";
+
+type SurfaceContractEntry = {
+  id: string;
+  plugin: Pick<
+    ChannelPlugin,
+    | "id"
+    | "actions"
+    | "setup"
+    | "status"
+    | "outbound"
+    | "messaging"
+    | "threading"
+    | "directory"
+    | "gateway"
+  >;
+  surfaces: readonly ChannelPluginSurface[];
+};
+
 const telegramListActionsMock = vi.fn();
 const telegramGetCapabilitiesMock = vi.fn();
 const discordListActionsMock = vi.fn();
@@ -458,6 +485,190 @@ export const statusContractRegistry: StatusContractEntry[] = [
           expect(snapshot.mode).toBe("webhook");
         },
       },
+    ],
+  },
+];
+
+export const surfaceContractRegistry: SurfaceContractEntry[] = [
+  {
+    id: "bluebubbles",
+    plugin: requireBundledChannelPlugin("bluebubbles"),
+    surfaces: ["actions", "setup", "status", "outbound", "messaging", "threading", "gateway"],
+  },
+  {
+    id: "discord",
+    plugin: requireBundledChannelPlugin("discord"),
+    surfaces: [
+      "actions",
+      "setup",
+      "status",
+      "outbound",
+      "messaging",
+      "threading",
+      "directory",
+      "gateway",
+    ],
+  },
+  {
+    id: "feishu",
+    plugin: requireBundledChannelPlugin("feishu"),
+    surfaces: ["actions", "setup", "status", "outbound", "messaging", "directory", "gateway"],
+  },
+  {
+    id: "googlechat",
+    plugin: requireBundledChannelPlugin("googlechat"),
+    surfaces: [
+      "actions",
+      "setup",
+      "status",
+      "outbound",
+      "messaging",
+      "threading",
+      "directory",
+      "gateway",
+    ],
+  },
+  {
+    id: "imessage",
+    plugin: requireBundledChannelPlugin("imessage"),
+    surfaces: ["setup", "status", "outbound", "messaging", "gateway"],
+  },
+  {
+    id: "irc",
+    plugin: requireBundledChannelPlugin("irc"),
+    surfaces: ["setup", "status", "outbound", "messaging", "directory", "gateway"],
+  },
+  {
+    id: "line",
+    plugin: requireBundledChannelPlugin("line"),
+    surfaces: ["setup", "status", "outbound", "messaging", "directory", "gateway"],
+  },
+  {
+    id: "matrix",
+    plugin: requireBundledChannelPlugin("matrix"),
+    surfaces: [
+      "actions",
+      "setup",
+      "status",
+      "outbound",
+      "messaging",
+      "threading",
+      "directory",
+      "gateway",
+    ],
+  },
+  {
+    id: "mattermost",
+    plugin: requireBundledChannelPlugin("mattermost"),
+    surfaces: [
+      "actions",
+      "setup",
+      "status",
+      "outbound",
+      "messaging",
+      "threading",
+      "directory",
+      "gateway",
+    ],
+  },
+  {
+    id: "msteams",
+    plugin: requireBundledChannelPlugin("msteams"),
+    surfaces: [
+      "actions",
+      "setup",
+      "status",
+      "outbound",
+      "messaging",
+      "threading",
+      "directory",
+      "gateway",
+    ],
+  },
+  {
+    id: "nextcloud-talk",
+    plugin: requireBundledChannelPlugin("nextcloud-talk"),
+    surfaces: ["setup", "status", "outbound", "messaging", "gateway"],
+  },
+  {
+    id: "nostr",
+    plugin: requireBundledChannelPlugin("nostr"),
+    surfaces: ["setup", "status", "outbound", "messaging", "gateway"],
+  },
+  {
+    id: "signal",
+    plugin: requireBundledChannelPlugin("signal"),
+    surfaces: ["actions", "setup", "status", "outbound", "messaging", "gateway"],
+  },
+  {
+    id: "slack",
+    plugin: requireBundledChannelPlugin("slack"),
+    surfaces: [
+      "actions",
+      "setup",
+      "status",
+      "outbound",
+      "messaging",
+      "threading",
+      "directory",
+      "gateway",
+    ],
+  },
+  {
+    id: "synology-chat",
+    plugin: requireBundledChannelPlugin("synology-chat"),
+    surfaces: ["setup", "outbound", "messaging", "directory", "gateway"],
+  },
+  {
+    id: "telegram",
+    plugin: requireBundledChannelPlugin("telegram"),
+    surfaces: [
+      "actions",
+      "setup",
+      "status",
+      "outbound",
+      "messaging",
+      "threading",
+      "directory",
+      "gateway",
+    ],
+  },
+  {
+    id: "tlon",
+    plugin: requireBundledChannelPlugin("tlon"),
+    surfaces: ["setup", "status", "outbound", "messaging", "gateway"],
+  },
+  {
+    id: "whatsapp",
+    plugin: requireBundledChannelPlugin("whatsapp"),
+    surfaces: ["actions", "setup", "status", "outbound", "messaging", "directory", "gateway"],
+  },
+  {
+    id: "zalo",
+    plugin: requireBundledChannelPlugin("zalo"),
+    surfaces: [
+      "actions",
+      "setup",
+      "status",
+      "outbound",
+      "messaging",
+      "threading",
+      "directory",
+      "gateway",
+    ],
+  },
+  {
+    id: "zalouser",
+    plugin: requireBundledChannelPlugin("zalouser"),
+    surfaces: [
+      "actions",
+      "setup",
+      "status",
+      "outbound",
+      "messaging",
+      "threading",
+      "directory",
+      "gateway",
     ],
   },
 ];
