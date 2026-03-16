@@ -166,7 +166,7 @@ export const en: TranslationMap = {
     hideCronSessions: "Hide cron sessions",
     showCronSessions: "Show cron sessions",
     showCronSessionsHidden: "Show cron sessions ({count} hidden)",
-    onboardingDisabled: "Disabled during onboarding",
+    onboardingDisabled: "Disabled during setup",
   },
   languages: {
     en: "English",

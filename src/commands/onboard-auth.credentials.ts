@@ -197,7 +197,7 @@ export async function writeOAuthCredentials(
           agentDir: targetAgentDir,
         });
       } catch {
-        // Best-effort: sibling sync failure must not block primary onboarding.
+        // Best-effort: sibling sync failure must not block primary setup.
       }
     }
   }

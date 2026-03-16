@@ -45,8 +45,12 @@ vi.mock("./monitor.js", () => ({
   startGoogleChatMonitor: vi.fn(),
 }));
 
-vi.mock("./onboarding.js", () => ({
-  googlechatOnboardingAdapter: {},
+vi.mock("./setup-core.js", () => ({
+  googlechatSetupAdapter: {},
+}));
+
+vi.mock("./setup-surface.js", () => ({
+  googlechatSetupWizard: {},
 }));
 
 vi.mock("./runtime.js", () => ({

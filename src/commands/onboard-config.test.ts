@@ -7,7 +7,7 @@ import {
 } from "./onboard-config.js";
 
 describe("applyLocalSetupWorkspaceConfig", () => {
-  it("defaults local onboarding tool profile to coding", () => {
+  it("defaults local setup tool profile to coding", () => {
     expect(ONBOARDING_DEFAULT_TOOLS_PROFILE).toBe("coding");
   });
 

@@ -187,7 +187,7 @@ export async function finalizeSetupWizard(
           installError = [
             "Gateway install blocked:",
             tokenResolution.unavailableReason,
-            "Fix gateway auth config/token input and rerun onboarding.",
+            "Fix gateway auth config/token input and rerun setup.",
           ].join(" ");
         } else {
           const { programArguments, workingDirectory, environment } = await buildGatewayInstallPlan(
@@ -295,7 +295,7 @@ export async function finalizeSetupWizard(
     } catch (error) {
       await prompter.note(
         [
-          "Could not resolve gateway.auth.password SecretRef for onboarding auth.",
+          "Could not resolve gateway.auth.password SecretRef for setup auth.",
           error instanceof Error ? error.message : String(error),
         ].join("\n"),
         "Gateway auth",
@@ -378,12 +378,12 @@ export async function finalizeSetupWizard(
     });
 
     if (hatchChoice === "tui") {
-      restoreTerminalState("pre-onboarding tui", { resumeStdinIfPaused: true });
+      restoreTerminalState("pre-setup tui", { resumeStdinIfPaused: true });
       await runTui({
         url: links.wsUrl,
         token: settings.authMode === "token" ? settings.gatewayToken : undefined,
         password: settings.authMode === "password" ? resolvedGatewayPassword : "",
-        // Safety: onboarding TUI should not auto-deliver to lastProvider/lastTo.
+        // Safety: setup TUI should not auto-deliver to lastProvider/lastTo.
         deliver: false,
         message: hasBootstrap ? "Wake up, my friend!" : undefined,
       });

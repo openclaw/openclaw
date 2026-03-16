@@ -22,7 +22,7 @@ export const PROVIDER_AUTH_ENV_VAR_CANDIDATES: Record<string, readonly string[]>
 };
 
 /**
- * Provider env vars used for onboarding/default secret refs and broad secret
+ * Provider env vars used for setup/default secret refs and broad secret
  * scrubbing. This can include non-model providers and may intentionally choose
  * a different preferred first env var than auth resolution. Keep the
  * anthropic override in core so generic onboarding still prefers API keys over

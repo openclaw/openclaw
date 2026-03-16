@@ -26,7 +26,7 @@ vi.mock("./onboard-helpers.js", () => ({
   handleReset: mocks.handleReset,
 }));
 
-const { onboardCommand } = await import("./onboard.js");
+const { onboardCommand, setupWizardCommand } = await import("./onboard.js");
 
 function makeRuntime(): RuntimeEnv {
   return {
@@ -36,16 +36,16 @@ function makeRuntime(): RuntimeEnv {
   };
 }
 
-describe("onboardCommand", () => {
+describe("setupWizardCommand", () => {
   afterEach(() => {
     vi.clearAllMocks();
     mocks.readConfigFileSnapshot.mockResolvedValue({ exists: false, valid: false, config: {} });
   });
 
-  it("fails fast for invalid secret-input-mode before onboarding starts", async () => {
+  it("fails fast for invalid secret-input-mode before setup starts", async () => {
     const runtime = makeRuntime();
 
-    await onboardCommand(
+    await setupWizardCommand(
       {
         secretInputMode: "invalid" as never, // pragma: allowlist secret
       },
@@ -60,12 +60,12 @@ describe("onboardCommand", () => {
     expect(mocks.runNonInteractiveSetup).not.toHaveBeenCalled();
   });
 
-  it("logs ASCII-safe Windows guidance before onboarding", async () => {
+  it("logs ASCII-safe Windows guidance before setup", async () => {
     const runtime = makeRuntime();
     const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
 
     try {
-      await onboardCommand({}, runtime);
+      await setupWizardCommand({}, runtime);
 
       expect(runtime.log).toHaveBeenCalledWith(
         [
@@ -83,7 +83,7 @@ describe("onboardCommand", () => {
   it("defaults --reset to config+creds+sessions scope", async () => {
     const runtime = makeRuntime();
 
-    await onboardCommand(
+    await setupWizardCommand(
       {
         reset: true,
       },
@@ -111,7 +111,7 @@ describe("onboardCommand", () => {
       },
     });
 
-    await onboardCommand(
+    await setupWizardCommand(
       {
         reset: true,
       },
@@ -128,7 +128,7 @@ describe("onboardCommand", () => {
   it("accepts explicit --reset-scope full", async () => {
     const runtime = makeRuntime();
 
-    await onboardCommand(
+    await setupWizardCommand(
       {
         reset: true,
         resetScope: "full",
@@ -142,7 +142,7 @@ describe("onboardCommand", () => {
   it("fails fast for invalid --reset-scope", async () => {
     const runtime = makeRuntime();
 
-    await onboardCommand(
+    await setupWizardCommand(
       {
         reset: true,
         resetScope: "invalid" as never,
@@ -157,5 +157,9 @@ describe("onboardCommand", () => {
     expect(mocks.handleReset).not.toHaveBeenCalled();
     expect(mocks.runInteractiveSetup).not.toHaveBeenCalled();
     expect(mocks.runNonInteractiveSetup).not.toHaveBeenCalled();
+  });
+
+  it("keeps onboardCommand as an alias for setupWizardCommand", () => {
+    expect(onboardCommand).toBe(setupWizardCommand);
   });
 });
