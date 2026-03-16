@@ -1,5 +1,10 @@
 import type { OpenClawConfig } from "../config/types.js";
 import type { ModelCompatConfig } from "../config/types.models.js";
+import {
+  resolveProviderBinaryThinking,
+  resolveProviderDefaultThinkingLevel,
+  resolveProviderXHighThinking,
+} from "../plugins/provider-runtime.js";
 
 export type ThinkLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "adaptive";
 export type VerboseLevel = "off" | "on" | "full";
@@ -179,8 +184,25 @@ function collectExplicitXHighRefs(
   return [...out.values()];
 }
 
-export function isBinaryThinkingProvider(provider?: string | null): boolean {
-  return normalizeProviderId(provider) === "zai";
+export function isBinaryThinkingProvider(provider?: string | null, model?: string | null): boolean {
+  const normalizedProvider = normalizeProviderId(provider);
+  const normalizedModel = normalizeModelId(model);
+  if (!normalizedProvider) {
+    return false;
+  }
+
+  const pluginDecision = resolveProviderBinaryThinking({
+    provider: normalizedProvider,
+    context: {
+      provider: normalizedProvider,
+      modelId: normalizedModel,
+    },
+  });
+  if (typeof pluginDecision === "boolean") {
+    return pluginDecision;
+  }
+
+  return normalizedProvider === "zai";
 }
 
 export const XHIGH_MODEL_REFS = [
@@ -284,6 +306,18 @@ export function supportsXHighThinking(
   }
   const providerKey = normalizeProviderId(provider);
   if (providerKey) {
+    const pluginDecision = resolveProviderXHighThinking({
+      provider: providerKey,
+      context: {
+        provider: providerKey,
+        modelId: modelKey,
+      },
+    });
+    if (typeof pluginDecision === "boolean") {
+      return pluginDecision;
+    }
+  }
+  if (providerKey) {
     return XHIGH_MODEL_SET.has(`${providerKey}/${modelKey}`);
   }
   return XHIGH_MODEL_IDS.has(modelKey);
@@ -307,7 +341,7 @@ export function listThinkingLevelLabels(
   model?: string | null,
   source?: ThinkingSupportSource,
 ): string[] {
-  if (isBinaryThinkingProvider(provider)) {
+  if (isBinaryThinkingProvider(provider, model)) {
     return ["off", "on"];
   }
   return listThinkingLevels(provider, model, source);
@@ -343,6 +377,21 @@ export function resolveThinkingDefaultForModel(params: {
 }): ThinkLevel {
   const normalizedProvider = normalizeProviderId(params.provider);
   const modelLower = params.model.trim().toLowerCase();
+  const candidate = params.catalog?.find(
+    (entry) => entry.provider === params.provider && entry.id === params.model,
+  );
+  const pluginDecision = resolveProviderDefaultThinkingLevel({
+    provider: normalizedProvider,
+    context: {
+      provider: normalizedProvider,
+      modelId: params.model,
+      reasoning: candidate?.reasoning,
+    },
+  });
+  if (pluginDecision) {
+    return pluginDecision;
+  }
+
   const isAnthropicFamilyModel =
     normalizedProvider === "anthropic" ||
     normalizedProvider === "amazon-bedrock" ||
@@ -351,9 +400,6 @@ export function resolveThinkingDefaultForModel(params: {
   if (isAnthropicFamilyModel && CLAUDE_46_MODEL_RE.test(modelLower)) {
     return "adaptive";
   }
-  const candidate = params.catalog?.find(
-    (entry) => entry.provider === params.provider && entry.id === params.model,
-  );
   if (candidate?.reasoning) {
     return "low";
   }
