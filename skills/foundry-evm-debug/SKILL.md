@@ -17,6 +17,9 @@ Use this skill for:
 
 - Never hardcode RPC URLs with secrets.
 - Always build RPC URLs through `{baseDir}/scripts/rpc-url.sh`.
+- For any forked simulation (anvil, vitest fork mode, `cast --rpc-url` with fork): MUST use `{baseDir}/scripts/rpc-url.sh <chainId>` first. Never fall back to a repo's default or third-party RPC provider when the Morpho cached endpoint is available.
+- If a test framework provides its own RPC config (e.g. vitest `forkUrl`, hardhat `forking.url`), override it with `ETH_RPC_URL` from `rpc-url.sh`.
+- HTTP 429 / rate-limit errors during forked runs = switch to cached Morpho RPC immediately. Do not continue on the noisy path or draw conclusions about application logic from rate-limited responses.
 - Prefer a clean worktree before reading protocol source.
 - Do not edit a shared or dirty checkout when debugging protocol code.
 - Default to forked simulation and impersonation. Only use real signing keys when the user explicitly asks.
