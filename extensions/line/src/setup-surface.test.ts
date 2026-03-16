@@ -1,6 +1,6 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/line";
 import { describe, expect, it, vi } from "vitest";
-import { buildChannelOnboardingAdapterFromSetupWizard } from "../../../src/channels/plugins/setup-wizard.js";
+import { buildChannelSetupFlowAdapterFromSetupWizard } from "../../../src/channels/plugins/setup-wizard.js";
 import {
   listLineAccountIds,
   resolveDefaultLineAccountId,
@@ -30,7 +30,7 @@ function createPrompter(overrides: Partial<WizardPrompter> = {}): WizardPrompter
   };
 }
 
-const lineConfigureAdapter = buildChannelOnboardingAdapterFromSetupWizard({
+const lineConfigureAdapter = buildChannelSetupFlowAdapterFromSetupWizard({
   plugin: {
     id: "line",
     meta: { label: "LINE" },
@@ -41,7 +41,7 @@ const lineConfigureAdapter = buildChannelOnboardingAdapterFromSetupWizard({
         resolveLineAccount({ cfg, accountId: accountId ?? undefined }).config.allowFrom,
     },
     setup: lineSetupAdapter,
-  } as Parameters<typeof buildChannelOnboardingAdapterFromSetupWizard>[0]["plugin"],
+  } as Parameters<typeof buildChannelSetupFlowAdapterFromSetupWizard>[0]["plugin"],
   wizard: lineSetupWizard,
 });
 

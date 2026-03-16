@@ -1,7 +1,7 @@
 import {
   setTopLevelChannelAllowFrom,
   setTopLevelChannelDmPolicyWithAllowFrom,
-} from "../../../src/channels/plugins/onboarding/helpers.js";
+} from "../../../src/channels/plugins/setup-flow-helpers.js";
 import {
   applyAccountNameToChannelSection,
   patchScopedAccountConfig,

@@ -32,7 +32,7 @@ export {
   buildSingleChannelSecretPromptState,
   promptSingleChannelSecretInput,
   runSingleChannelSecretStep,
-} from "../channels/plugins/onboarding/helpers.js";
+} from "../channels/plugins/setup-flow-helpers.js";
 export {
   applyAccountNameToChannelSection,
   applySetupAccountConfigPatch,

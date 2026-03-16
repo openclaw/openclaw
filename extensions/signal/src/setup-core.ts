@@ -1,10 +1,10 @@
-import type { ChannelOnboardingDmPolicy } from "../../../src/channels/plugins/onboarding-types.js";
 import {
-  parseOnboardingEntriesAllowingWildcard,
+  parseSetupEntriesAllowingWildcard,
   promptParsedAllowFromForScopedChannel,
   setChannelDmPolicyWithAllowFrom,
-  setOnboardingChannelEnabled,
-} from "../../../src/channels/plugins/onboarding/helpers.js";
+  setSetupChannelEnabled,
+} from "../../../src/channels/plugins/setup-flow-helpers.js";
+import type { ChannelSetupDmPolicy } from "../../../src/channels/plugins/setup-flow-types.js";
 import {
   applyAccountNameToChannelSection,
   migrateBaseNameToDefaultAccount,
@@ -51,7 +51,7 @@ function isUuidLike(value: string): boolean {
 }
 
 export function parseSignalAllowFromEntries(raw: string): { entries: string[]; error?: string } {
-  return parseOnboardingEntriesAllowingWildcard(raw, (entry) => {
+  return parseSetupEntriesAllowingWildcard(raw, (entry) => {
     if (entry.toLowerCase().startsWith("uuid:")) {
       const id = entry.slice("uuid:".length).trim();
       if (!id) {
@@ -186,7 +186,7 @@ export const signalSetupAdapter: ChannelSetupAdapter = {
 export function createSignalSetupWizardProxy(
   loadWizard: () => Promise<{ signalSetupWizard: ChannelSetupWizard }>,
 ) {
-  const signalDmPolicy: ChannelOnboardingDmPolicy = {
+  const signalDmPolicy: ChannelSetupDmPolicy = {
     label: "Signal",
     channel,
     policyKey: "channels.signal.dmPolicy",
@@ -270,6 +270,6 @@ export function createSignalSetupWizardProxy(
       ],
     },
     dmPolicy: signalDmPolicy,
-    disable: (cfg: OpenClawConfig) => setOnboardingChannelEnabled(cfg, channel, false),
+    disable: (cfg: OpenClawConfig) => setSetupChannelEnabled(cfg, channel, false),
   } satisfies ChannelSetupWizard;
 }
