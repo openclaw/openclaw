@@ -16,7 +16,6 @@ import {
   MSTeamsConfigSchema,
   PAIRING_APPROVED_MESSAGE,
 } from "openclaw/plugin-sdk/msteams";
-import { msteamsOnboardingAdapter } from "./onboarding.js";
 import { resolveMSTeamsGroupToolPolicy } from "./policy.js";
 import {
   normalizeMSTeamsMessagingTarget,
@@ -27,6 +26,7 @@ import {
   resolveMSTeamsUserAllowlist,
 } from "./resolve-allowlist.js";
 import { getMSTeamsRuntime } from "./runtime.js";
+import { msteamsSetupAdapter, msteamsSetupWizard } from "./setup-surface.js";
 import { resolveMSTeamsCredentials } from "./token.js";
 
 type ResolvedMSTeamsAccount = {
@@ -56,7 +56,7 @@ export const msteamsPlugin: ChannelPlugin<ResolvedMSTeamsAccount> = {
     ...meta,
     aliases: [...meta.aliases],
   },
-  onboarding: msteamsOnboardingAdapter,
+  setupWizard: msteamsSetupWizard,
   pairing: {
     idLabel: "msteamsUserId",
     normalizeAllowEntry: (entry) => entry.replace(/^(msteams|user):/i, ""),
@@ -145,19 +145,7 @@ export const msteamsPlugin: ChannelPlugin<ResolvedMSTeamsAccount> = {
       });
     },
   },
-  setup: {
-    resolveAccountId: () => DEFAULT_ACCOUNT_ID,
-    applyAccountConfig: ({ cfg }) => ({
-      ...cfg,
-      channels: {
-        ...cfg.channels,
-        msteams: {
-          ...cfg.channels?.msteams,
-          enabled: true,
-        },
-      },
-    }),
-  },
+  setup: msteamsSetupAdapter,
   messaging: {
     normalizeTarget: normalizeMSTeamsMessagingTarget,
     targetResolver: {
