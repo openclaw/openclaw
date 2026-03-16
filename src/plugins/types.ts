@@ -9,6 +9,7 @@ import type {
   ApiKeyCredential,
   AuthProfileCredential,
   OAuthCredential,
+  AuthProfileStore,
 } from "../agents/auth-profiles/types.js";
 import type { ModelCatalogEntry } from "../agents/model-catalog.js";
 import type { ProviderCapabilities } from "../agents/provider-capabilities.js";
@@ -118,6 +119,23 @@ export type ProviderAuthContext = {
   workspaceDir?: string;
   prompter: WizardPrompter;
   runtime: RuntimeEnv;
+  /**
+   * Onboarding secret persistence preference.
+   *
+   * Interactive wizard flows set this when the caller explicitly requested
+   * plaintext or env/file/exec ref storage. Ad-hoc `models auth login` flows
+   * usually leave it undefined.
+   */
+  secretInputMode?: OnboardOptions["secretInputMode"];
+  /**
+   * Whether the provider auth flow should offer the onboarding secret-storage
+   * mode picker when `secretInputMode` is unset.
+   *
+   * This is true for onboarding/configure flows and false for direct
+   * `models auth` commands, which should keep a tighter, provider-owned prompt
+   * surface.
+   */
+  allowSecretRefPrompt?: boolean;
   isRemote: boolean;
   openUrl: (url: string) => Promise<void>;
   oauth: {
@@ -351,6 +369,20 @@ export type ProviderFetchUsageSnapshotContext = {
 };
 
 /**
+ * Provider-owned auth-doctor hint input.
+ *
+ * Called when OAuth refresh fails and OpenClaw wants a provider-specific repair
+ * hint to append to the generic re-auth message. Use this for legacy profile-id
+ * migrations or other provider-owned auth-store cleanup guidance.
+ */
+export type ProviderAuthDoctorHintContext = {
+  config?: OpenClawConfig;
+  store: AuthProfileStore;
+  provider: string;
+  profileId?: string;
+};
+
+/**
  * Provider-owned extra-param normalization before OpenClaw builds its generic
  * stream option wrapper.
  *
@@ -496,7 +528,7 @@ export type ProviderDiscoveryResult = ProviderCatalogResult;
  */
 export type ProviderPluginDiscovery = ProviderPluginCatalog;
 
-export type ProviderPluginWizardOnboarding = {
+export type ProviderPluginWizardSetup = {
   choiceId?: string;
   choiceLabel?: string;
   choiceHint?: string;
@@ -513,7 +545,7 @@ export type ProviderPluginWizardModelPicker = {
 };
 
 export type ProviderPluginWizard = {
-  onboarding?: ProviderPluginWizardOnboarding;
+  setup?: ProviderPluginWizardSetup;
   modelPicker?: ProviderPluginWizardModelPicker;
 };
 
@@ -532,7 +564,7 @@ export type ProviderPlugin = {
   docsPath?: string;
   aliases?: string[];
   /**
-   * Provider-related env vars shown in onboarding/search/help surfaces.
+   * Provider-related env vars shown in setup/search/help surfaces.
    *
    * Keep entries in preferred display order. This can include direct auth env
    * vars or setup inputs such as OAuth client id/secret vars.
@@ -715,8 +747,34 @@ export type ProviderPlugin = {
    */
   isModernModelRef?: (ctx: ProviderModernModelPolicyContext) => boolean | undefined;
   wizard?: ProviderPluginWizard;
+  /**
+   * Provider-owned auth-profile API-key formatter.
+   *
+   * OpenClaw uses this when a stored auth profile is already valid and needs to
+   * be converted into the runtime `apiKey` string expected by the provider. Use
+   * this for providers whose auth profile stores extra metadata alongside the
+   * bearer token (for example Gemini CLI's `{ token, projectId }` payload).
+   */
   formatApiKey?: (cred: AuthProfileCredential) => string;
+  /**
+   * Provider-owned OAuth refresh.
+   *
+   * OpenClaw calls this before falling back to the shared `pi-ai` OAuth
+   * refreshers. Use it when the provider has a custom refresh endpoint, or when
+   * the provider needs custom refresh-failure behavior that should stay out of
+   * core auth-profile code.
+   */
   refreshOAuth?: (cred: OAuthCredential) => Promise<OAuthCredential>;
+  /**
+   * Provider-owned auth-doctor hint.
+   *
+   * Return a multiline repair hint when OAuth refresh fails and the provider
+   * wants to steer users toward a specific auth-profile migration or recovery
+   * path. Return nothing to keep OpenClaw's generic error text.
+   */
+  buildAuthDoctorHint?: (
+    ctx: ProviderAuthDoctorHintContext,
+  ) => string | Promise<string | null | undefined> | null | undefined;
   onModelSelected?: (ctx: ProviderModelSelectedContext) => Promise<void>;
 };
 
@@ -859,7 +917,7 @@ export type OpenClawPluginCommandDefinition = {
   handler: PluginCommandHandler;
 };
 
-export type PluginInteractiveChannel = "telegram" | "discord";
+export type PluginInteractiveChannel = "telegram" | "discord" | "slack";
 
 export type PluginInteractiveButtons = Array<
   Array<{ text: string; callback_data: string; style?: "danger" | "success" | "primary" }>
@@ -944,6 +1002,53 @@ export type PluginInteractiveDiscordHandlerContext = {
   getCurrentConversationBinding: () => Promise<PluginConversationBinding | null>;
 };
 
+export type PluginInteractiveSlackHandlerResult = {
+  handled?: boolean;
+} | void;
+
+export type PluginInteractiveSlackHandlerContext = {
+  channel: "slack";
+  accountId: string;
+  interactionId: string;
+  conversationId: string;
+  parentConversationId?: string;
+  senderId?: string;
+  senderUsername?: string;
+  threadId?: string;
+  auth: {
+    isAuthorizedSender: boolean;
+  };
+  interaction: {
+    kind: "button" | "select";
+    data: string;
+    namespace: string;
+    payload: string;
+    actionId: string;
+    blockId?: string;
+    messageTs?: string;
+    threadTs?: string;
+    value?: string;
+    selectedValues?: string[];
+    selectedLabels?: string[];
+    triggerId?: string;
+    responseUrl?: string;
+  };
+  respond: {
+    acknowledge: () => Promise<void>;
+    reply: (params: { text: string; responseType?: "ephemeral" | "in_channel" }) => Promise<void>;
+    followUp: (params: {
+      text: string;
+      responseType?: "ephemeral" | "in_channel";
+    }) => Promise<void>;
+    editMessage: (params: { text?: string; blocks?: unknown[] }) => Promise<void>;
+  };
+  requestConversationBinding: (
+    params?: PluginConversationBindingRequestParams,
+  ) => Promise<PluginConversationBindingRequestResult>;
+  detachConversationBinding: () => Promise<{ removed: boolean }>;
+  getCurrentConversationBinding: () => Promise<PluginConversationBinding | null>;
+};
+
 export type PluginInteractiveTelegramHandlerRegistration = {
   channel: "telegram";
   namespace: string;
@@ -960,9 +1065,18 @@ export type PluginInteractiveDiscordHandlerRegistration = {
   ) => Promise<PluginInteractiveDiscordHandlerResult> | PluginInteractiveDiscordHandlerResult;
 };
 
+export type PluginInteractiveSlackHandlerRegistration = {
+  channel: "slack";
+  namespace: string;
+  handler: (
+    ctx: PluginInteractiveSlackHandlerContext,
+  ) => Promise<PluginInteractiveSlackHandlerResult> | PluginInteractiveSlackHandlerResult;
+};
+
 export type PluginInteractiveHandlerRegistration =
   | PluginInteractiveTelegramHandlerRegistration
-  | PluginInteractiveDiscordHandlerRegistration;
+  | PluginInteractiveDiscordHandlerRegistration
+  | PluginInteractiveSlackHandlerRegistration;
 
 export type OpenClawPluginHttpRouteAuth = "gateway" | "plugin";
 export type OpenClawPluginHttpRouteMatch = "exact" | "prefix";

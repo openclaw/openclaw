@@ -15,15 +15,18 @@ For model selection rules, see [/concepts/models](/concepts/models).
 
 - Model refs use `provider/model` (example: `opencode/claude-opus-4-6`).
 - If you set `agents.defaults.models`, it becomes the allowlist.
-- CLI helpers: `openclaw onboard`, `openclaw models list`, `openclaw models set <provider/model>`.
+- CLI helpers: `openclaw setup --wizard`, `openclaw models list`, `openclaw models set <provider/model>`.
 - Provider plugins can inject model catalogs via `registerProvider({ catalog })`;
   OpenClaw merges that output into `models.providers` before writing
   `models.json`.
 - Provider manifests can declare `providerAuthEnvVars` so generic env-based
-  auth probes do not need to load plugin runtime.
+  auth probes do not need to load plugin runtime. The remaining core env-var
+  map is now just for non-plugin/core providers and a few generic-precedence
+  cases such as Anthropic API-key-first onboarding.
 - Provider plugins can also own provider runtime behavior via
   `resolveDynamicModel`, `prepareDynamicModel`, `normalizeResolvedModel`,
-  `capabilities`, `prepareExtraParams`, `wrapStreamFn`,
+  `capabilities`, `prepareExtraParams`, `wrapStreamFn`, `formatApiKey`,
+  `refreshOAuth`, `buildAuthDoctorHint`,
   `isCacheTtlEligible`, `buildMissingAuthMessage`,
   `suppressBuiltInModel`, `augmentModelCatalog`, `isBinaryThinking`,
   `supportsXHighThinking`, `resolveDefaultThinkingLevel`,
@@ -37,6 +40,10 @@ the generic inference loop.
 
 Typical split:
 
+- `auth[].run` / `auth[].runNonInteractive`: provider owns onboarding/login
+  flows for `openclaw onboard`, `openclaw models auth`, and headless setup
+- `wizard.onboarding` / `wizard.modelPicker`: provider owns auth-choice labels,
+  hints, and setup entries in onboarding/model pickers
 - `catalog`: provider appears in `models.providers`
 - `resolveDynamicModel`: provider accepts model ids not present in the local
   static catalog yet
@@ -46,6 +53,12 @@ Typical split:
 - `capabilities`: provider publishes transcript/tooling/provider-family quirks
 - `prepareExtraParams`: provider defaults or normalizes per-model request params
 - `wrapStreamFn`: provider applies request headers/body/model compat wrappers
+- `formatApiKey`: provider formats stored auth profiles into the runtime
+  `apiKey` string expected by the transport
+- `refreshOAuth`: provider owns OAuth refresh when the shared `pi-ai`
+  refreshers are not enough
+- `buildAuthDoctorHint`: provider appends repair guidance when OAuth refresh
+  fails
 - `isCacheTtlEligible`: provider decides which upstream model ids support prompt-cache TTL
 - `buildMissingAuthMessage`: provider replaces the generic auth-store error
   with a provider-specific recovery hint
@@ -67,19 +80,21 @@ Typical split:
 
 Current bundled examples:
 
-- `anthropic`: Claude 4.6 forward-compat fallback, usage endpoint fetching,
-  and cache-TTL/provider-family metadata
+- `anthropic`: Claude 4.6 forward-compat fallback, auth repair hints, usage
+  endpoint fetching, and cache-TTL/provider-family metadata
 - `openrouter`: pass-through model ids, request wrappers, provider capability
   hints, and cache-TTL policy
-- `github-copilot`: forward-compat model fallback, Claude-thinking transcript
-  hints, runtime token exchange, and usage endpoint fetching
+- `github-copilot`: onboarding/device login, forward-compat model fallback,
+  Claude-thinking transcript hints, runtime token exchange, and usage endpoint
+  fetching
 - `openai`: GPT-5.4 forward-compat fallback, direct OpenAI transport
   normalization, Codex-aware missing-auth hints, Spark suppression, synthetic
   OpenAI/Codex catalog rows, thinking/live-model policy, and
   provider-family metadata
 - `google` and `google-gemini-cli`: Gemini 3.1 forward-compat fallback and
-  modern-model matching; Gemini CLI OAuth also owns usage-token parsing and
-  quota endpoint fetching for usage surfaces
+  modern-model matching; Gemini CLI OAuth also owns auth-profile token
+  formatting, usage-token parsing, and quota endpoint fetching for usage
+  surfaces
 - `moonshot`: shared transport, plugin-owned thinking payload normalization
 - `kilocode`: shared transport, plugin-owned request headers, reasoning payload
   normalization, Gemini transcript hints, and cache-TTL policy
@@ -87,9 +102,9 @@ Current bundled examples:
   policy, binary-thinking/live-model policy, and usage auth + quota fetching
 - `mistral`, `opencode`, and `opencode-go`: plugin-owned capability metadata
 - `byteplus`, `cloudflare-ai-gateway`, `huggingface`, `kimi-coding`,
-  `minimax-portal`, `modelstudio`, `nvidia`, `qianfan`, `qwen-portal`,
-  `synthetic`, `together`, `venice`, `vercel-ai-gateway`, and `volcengine`:
-  plugin-owned catalogs only
+  `modelstudio`, `nvidia`, `qianfan`, `synthetic`, `together`, `venice`,
+  `vercel-ai-gateway`, and `volcengine`: plugin-owned catalogs only
+- `qwen-portal`: plugin-owned catalog, OAuth login, and OAuth refresh
 - `minimax` and `xiaomi`: plugin-owned catalogs plus usage auth/snapshot logic
 
 The bundled `openai` plugin now owns both provider ids: `openai` and
@@ -124,7 +139,7 @@ OpenClaw ships with the pi‑ai catalog. These providers require **no**
 - Auth: `OPENAI_API_KEY`
 - Optional rotation: `OPENAI_API_KEYS`, `OPENAI_API_KEY_1`, `OPENAI_API_KEY_2`, plus `OPENCLAW_LIVE_OPENAI_KEY` (single override)
 - Example models: `openai/gpt-5.4`, `openai/gpt-5.4-pro`
-- CLI: `openclaw onboard --auth-choice openai-api-key`
+- CLI: `openclaw setup --wizard --auth-choice openai-api-key`
 - Default transport is `auto` (WebSocket-first, SSE fallback)
 - Override per model via `agents.defaults.models["openai/<model>"].params.transport` (`"sse"`, `"websocket"`, or `"auto"`)
 - OpenAI Responses WebSocket warm-up defaults to enabled via `params.openaiWsWarmup` (`true`/`false`)
@@ -144,7 +159,7 @@ OpenClaw ships with the pi‑ai catalog. These providers require **no**
 - Auth: `ANTHROPIC_API_KEY` or `claude setup-token`
 - Optional rotation: `ANTHROPIC_API_KEYS`, `ANTHROPIC_API_KEY_1`, `ANTHROPIC_API_KEY_2`, plus `OPENCLAW_LIVE_ANTHROPIC_KEY` (single override)
 - Example model: `anthropic/claude-opus-4-6`
-- CLI: `openclaw onboard --auth-choice token` (paste setup-token) or `openclaw models auth paste-token --provider anthropic`
+- CLI: `openclaw setup --wizard --auth-choice token` (paste setup-token) or `openclaw models auth paste-token --provider anthropic`
 - Direct API-key models support the shared `/fast` toggle and `params.fastMode`; OpenClaw maps that to Anthropic `service_tier` (`auto` vs `standard_only`)
 - Policy note: setup-token support is technical compatibility; Anthropic has blocked some subscription usage outside Claude Code in the past. Verify current Anthropic terms and decide based on your risk tolerance.
 - Recommendation: Anthropic API key auth is the safer, recommended path over subscription setup-token auth.
@@ -160,7 +175,7 @@ OpenClaw ships with the pi‑ai catalog. These providers require **no**
 - Provider: `openai-codex`
 - Auth: OAuth (ChatGPT)
 - Example model: `openai-codex/gpt-5.4`
-- CLI: `openclaw onboard --auth-choice openai-codex` or `openclaw models auth login --provider openai-codex`
+- CLI: `openclaw setup --wizard --auth-choice openai-codex` or `openclaw models auth login --provider openai-codex`
 - Default transport is `auto` (WebSocket-first, SSE fallback)
 - Override per model via `agents.defaults.models["openai-codex/<model>"].params.transport` (`"sse"`, `"websocket"`, or `"auto"`)
 - Shares the same `/fast` toggle and `params.fastMode` config as direct `openai/*`
@@ -179,7 +194,7 @@ OpenClaw ships with the pi‑ai catalog. These providers require **no**
 - Zen runtime provider: `opencode`
 - Go runtime provider: `opencode-go`
 - Example models: `opencode/claude-opus-4-6`, `opencode-go/kimi-k2.5`
-- CLI: `openclaw onboard --auth-choice opencode-zen` or `openclaw onboard --auth-choice opencode-go`
+- CLI: `openclaw setup --wizard --auth-choice opencode-zen` or `openclaw setup --wizard --auth-choice opencode-go`
 
 ```json5
 {
@@ -194,7 +209,7 @@ OpenClaw ships with the pi‑ai catalog. These providers require **no**
 - Optional rotation: `GEMINI_API_KEYS`, `GEMINI_API_KEY_1`, `GEMINI_API_KEY_2`, `GOOGLE_API_KEY` fallback, and `OPENCLAW_LIVE_GEMINI_KEY` (single override)
 - Example models: `google/gemini-3.1-pro-preview`, `google/gemini-3-flash-preview`
 - Compatibility: legacy OpenClaw config using `google/gemini-3.1-flash-preview` is normalized to `google/gemini-3-flash-preview`
-- CLI: `openclaw onboard --auth-choice gemini-api-key`
+- CLI: `openclaw setup --wizard --auth-choice gemini-api-key`
 
 ### Google Vertex and Gemini CLI
 
@@ -212,7 +227,7 @@ OpenClaw ships with the pi‑ai catalog. These providers require **no**
 - Provider: `zai`
 - Auth: `ZAI_API_KEY`
 - Example model: `zai/glm-5`
-- CLI: `openclaw onboard --auth-choice zai-api-key`
+- CLI: `openclaw setup --wizard --auth-choice zai-api-key`
   - Aliases: `z.ai/*` and `z-ai/*` normalize to `zai/*`
 
 ### Vercel AI Gateway
@@ -220,14 +235,14 @@ OpenClaw ships with the pi‑ai catalog. These providers require **no**
 - Provider: `vercel-ai-gateway`
 - Auth: `AI_GATEWAY_API_KEY`
 - Example model: `vercel-ai-gateway/anthropic/claude-opus-4.6`
-- CLI: `openclaw onboard --auth-choice ai-gateway-api-key`
+- CLI: `openclaw setup --wizard --auth-choice ai-gateway-api-key`
 
 ### Kilo Gateway
 
 - Provider: `kilocode`
 - Auth: `KILOCODE_API_KEY`
 - Example model: `kilocode/anthropic/claude-opus-4.6`
-- CLI: `openclaw onboard --kilocode-api-key <key>`
+- CLI: `openclaw setup --wizard --kilocode-api-key <key>`
 - Base URL: `https://api.kilo.ai/api/gateway/`
 - Expanded built-in catalog includes GLM-5 Free, MiniMax M2.5 Free, GPT-5.2, Gemini 3 Pro Preview, Gemini 3 Flash Preview, Grok Code Fast 1, and Kimi K2.5.
 
@@ -256,13 +271,13 @@ See [/providers/kilocode](/providers/kilocode) for setup details.
 - xAI: `xai` (`XAI_API_KEY`)
 - Mistral: `mistral` (`MISTRAL_API_KEY`)
 - Example model: `mistral/mistral-large-latest`
-- CLI: `openclaw onboard --auth-choice mistral-api-key`
+- CLI: `openclaw setup --wizard --auth-choice mistral-api-key`
 - Groq: `groq` (`GROQ_API_KEY`)
 - Cerebras: `cerebras` (`CEREBRAS_API_KEY`)
   - GLM models on Cerebras use ids `zai-glm-4.7` and `zai-glm-4.6`.
   - OpenAI-compatible base URL: `https://api.cerebras.ai/v1`.
 - GitHub Copilot: `github-copilot` (`COPILOT_GITHUB_TOKEN` / `GH_TOKEN` / `GITHUB_TOKEN`)
-- Hugging Face Inference example model: `huggingface/deepseek-ai/DeepSeek-R1`; CLI: `openclaw onboard --auth-choice huggingface-api-key`. See [Hugging Face (Inference)](/providers/huggingface).
+- Hugging Face Inference example model: `huggingface/deepseek-ai/DeepSeek-R1`; CLI: `openclaw setup --wizard --auth-choice huggingface-api-key`. See [Hugging Face (Inference)](/providers/huggingface).
 
 ## Providers via `models.providers` (custom/base URL)
 
@@ -352,7 +367,7 @@ Volcano Engine (火山引擎) provides access to Doubao and other models in Chin
 - Provider: `volcengine` (coding: `volcengine-plan`)
 - Auth: `VOLCANO_ENGINE_API_KEY`
 - Example model: `volcengine/doubao-seed-1-8-251228`
-- CLI: `openclaw onboard --auth-choice volcengine-api-key`
+- CLI: `openclaw setup --wizard --auth-choice volcengine-api-key`
 
 ```json5
 {
@@ -385,7 +400,7 @@ BytePlus ARK provides access to the same models as Volcano Engine for internatio
 - Provider: `byteplus` (coding: `byteplus-plan`)
 - Auth: `BYTEPLUS_API_KEY`
 - Example model: `byteplus/seed-1-8-251228`
-- CLI: `openclaw onboard --auth-choice byteplus-api-key`
+- CLI: `openclaw setup --wizard --auth-choice byteplus-api-key`
 
 ```json5
 {
@@ -416,7 +431,7 @@ Synthetic provides Anthropic-compatible models behind the `synthetic` provider:
 - Provider: `synthetic`
 - Auth: `SYNTHETIC_API_KEY`
 - Example model: `synthetic/hf:MiniMaxAI/MiniMax-M2.5`
-- CLI: `openclaw onboard --auth-choice synthetic-api-key`
+- CLI: `openclaw setup --wizard --auth-choice synthetic-api-key`
 
 ```json5
 {
@@ -470,7 +485,7 @@ ollama pull llama3.3
 
 Ollama is detected locally at `http://127.0.0.1:11434` when you opt in with
 `OLLAMA_API_KEY`, and the bundled provider plugin adds Ollama directly to
-`openclaw onboard` and the model picker. See [/providers/ollama](/providers/ollama)
+`openclaw setup --wizard` and the model picker. See [/providers/ollama](/providers/ollama)
 for onboarding, cloud/local mode, and custom configuration.
 
 ### vLLM
@@ -580,7 +595,7 @@ Notes:
 ## CLI examples
 
 ```bash
-openclaw onboard --auth-choice opencode-zen
+openclaw setup --wizard --auth-choice opencode-zen
 openclaw models set opencode/claude-opus-4-6
 openclaw models list
 ```

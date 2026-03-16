@@ -7,6 +7,7 @@ import type { GatewayClientMode, GatewayClientName } from "../../utils/message-c
 import type { ChatType } from "../chat-type.js";
 import type { ChatChannelId } from "../registry.js";
 import type { ChannelMessageActionName as ChannelMessageActionNameFromList } from "./message-action-names.js";
+import type { ChannelMessageCapability } from "./message-capabilities.js";
 
 export type ChannelId = ChatChannelId | (string & {});
 
@@ -372,8 +373,7 @@ export type ChannelMessageActionAdapter = {
    */
   listActions?: (params: { cfg: OpenClawConfig }) => ChannelMessageActionName[];
   supportsAction?: (params: { action: ChannelMessageActionName }) => boolean;
-  supportsButtons?: (params: { cfg: OpenClawConfig }) => boolean;
-  supportsCards?: (params: { cfg: OpenClawConfig }) => boolean;
+  getCapabilities?: (params: { cfg: OpenClawConfig }) => readonly ChannelMessageCapability[];
   extractToolSend?: (params: { args: Record<string, unknown> }) => ChannelToolSend | null;
   handleAction?: (ctx: ChannelMessageActionContext) => Promise<AgentToolResult<unknown>>;
 };

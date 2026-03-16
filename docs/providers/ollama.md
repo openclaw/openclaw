@@ -18,10 +18,10 @@ Ollama is a local LLM runtime that makes it easy to run open-source models on yo
 
 ### Onboarding wizard (recommended)
 
-The fastest way to set up Ollama is through the onboarding wizard:
+The fastest way to set up Ollama is through the setup wizard:
 
 ```bash
-openclaw onboard
+openclaw setup --wizard
 ```
 
 Select **Ollama** from the provider list. The wizard will:
@@ -35,7 +35,7 @@ Select **Ollama** from the provider list. The wizard will:
 Non-interactive mode is also supported:
 
 ```bash
-openclaw onboard --non-interactive \
+openclaw setup --wizard --non-interactive \
   --auth-choice ollama \
   --accept-risk
 ```
@@ -43,7 +43,7 @@ openclaw onboard --non-interactive \
 Optionally specify a custom base URL or model:
 
 ```bash
-openclaw onboard --non-interactive \
+openclaw setup --wizard --non-interactive \
   --auth-choice ollama \
   --custom-base-url "http://ollama-host:11434" \
   --custom-model-id "qwen3.5:27b" \
@@ -73,7 +73,7 @@ ollama signin
 4. Run onboarding and choose `Ollama`:
 
 ```bash
-openclaw onboard
+openclaw setup --wizard
 ```
 
 - `Local`: local models only
@@ -231,7 +231,7 @@ Once configured, all your Ollama models are available:
 
 Cloud models let you run cloud-hosted models (for example `kimi-k2.5:cloud`, `minimax-m2.5:cloud`, `glm-5:cloud`) alongside your local models.
 
-To use cloud models, select **Cloud + Local** mode during onboarding. The wizard checks whether you are signed in and opens a browser sign-in flow when needed. If authentication cannot be verified, the wizard falls back to local model defaults.
+To use cloud models, select **Cloud + Local** mode during setup. The wizard checks whether you are signed in and opens a browser sign-in flow when needed. If authentication cannot be verified, the wizard falls back to local model defaults.
 
 You can also sign in directly at [ollama.com/signin](https://ollama.com/signin).
 

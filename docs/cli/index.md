@@ -13,7 +13,7 @@ This page describes the current CLI behavior. If commands change, update this do
 ## Command pages
 
 - [`setup`](/cli/setup)
-- [`onboard`](/cli/onboard)
+- [`onboard`](/cli/onboard) (legacy alias for `setup --wizard`)
 - [`configure`](/cli/configure)
 - [`config`](/cli/config)
 - [`completion`](/cli/completion)
@@ -317,7 +317,7 @@ Initialize config + workspace.
 Options:
 
 - `--workspace <dir>`: agent workspace path (default `~/.openclaw/workspace`).
-- `--wizard`: run the onboarding wizard.
+- `--wizard`: run the setup wizard.
 - `--non-interactive`: run wizard without prompts.
 - `--mode <local|remote>`: wizard mode.
 - `--remote-url <url>`: remote Gateway URL.

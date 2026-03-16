@@ -5,10 +5,22 @@ import {
   type ProviderResolveDynamicModelContext,
   type ProviderRuntimeModel,
 } from "openclaw/plugin-sdk/core";
+import { listProfilesForProvider, upsertAuthProfile } from "../../src/agents/auth-profiles.js";
+import { suggestOAuthProfileIdForLegacyDefault } from "../../src/agents/auth-profiles/repair.js";
+import type { AuthProfileStore } from "../../src/agents/auth-profiles/types.js";
 import { normalizeModelCompat } from "../../src/agents/model-compat.js";
+import { formatCliCommand } from "../../src/cli/command-format.js";
+import { parseDurationMs } from "../../src/cli/parse-duration.js";
+import {
+  normalizeSecretInputModeInput,
+  promptSecretRefForSetup,
+  resolveSecretInputModeForEnvSelection,
+} from "../../src/commands/auth-choice.apply-helpers.js";
 import { buildTokenProfileId, validateAnthropicSetupToken } from "../../src/commands/auth-token.js";
+import { applyAuthProfileConfig } from "../../src/commands/onboard-auth.js";
 import { fetchClaudeUsage } from "../../src/infra/provider-usage.fetch.js";
 import type { ProviderAuthResult } from "../../src/plugins/types.js";
+import { normalizeSecretInput } from "../../src/utils/normalize-secret-input.js";
 
 const PROVIDER_ID = "anthropic";
 const ANTHROPIC_OPUS_46_MODEL_ID = "claude-opus-4-6";
@@ -111,6 +123,41 @@ function matchesAnthropicModernModel(modelId: string): boolean {
   return ANTHROPIC_MODERN_MODEL_PREFIXES.some((prefix) => lower.startsWith(prefix));
 }
 
+function buildAnthropicAuthDoctorHint(params: {
+  config?: ProviderAuthContext["config"];
+  store: AuthProfileStore;
+  profileId?: string;
+}): string {
+  const legacyProfileId = params.profileId ?? "anthropic:default";
+  const suggested = suggestOAuthProfileIdForLegacyDefault({
+    cfg: params.config,
+    store: params.store,
+    provider: PROVIDER_ID,
+    legacyProfileId,
+  });
+  if (!suggested || suggested === legacyProfileId) {
+    return "";
+  }
+
+  const storeOauthProfiles = listProfilesForProvider(params.store, PROVIDER_ID)
+    .filter((id) => params.store.profiles[id]?.type === "oauth")
+    .join(", ");
+
+  const cfgMode = params.config?.auth?.profiles?.[legacyProfileId]?.mode;
+  const cfgProvider = params.config?.auth?.profiles?.[legacyProfileId]?.provider;
+
+  return [
+    "Doctor hint (for GitHub issue):",
+    `- provider: ${PROVIDER_ID}`,
+    `- config: ${legacyProfileId}${
+      cfgProvider || cfgMode ? ` (provider=${cfgProvider ?? "?"}, mode=${cfgMode ?? "?"})` : ""
+    }`,
+    `- auth store oauth profiles: ${storeOauthProfiles || "(none)"}`,
+    `- suggested profile: ${suggested}`,
+    `Fix: run "${formatCliCommand("openclaw doctor --yes")}"`,
+  ].join("\n");
+}
+
 async function runAnthropicSetupToken(ctx: ProviderAuthContext): Promise<ProviderAuthResult> {
   await ctx.prompter.note(
     ["Run `claude setup-token` in your terminal.", "Then paste the generated token below."].join(
@@ -119,11 +166,41 @@ async function runAnthropicSetupToken(ctx: ProviderAuthContext): Promise<Provide
     "Anthropic setup-token",
   );
 
-  const tokenRaw = await ctx.prompter.text({
-    message: "Paste Anthropic setup-token",
-    validate: (value) => validateAnthropicSetupToken(String(value ?? "")),
-  });
-  const token = String(tokenRaw ?? "").trim();
+  const requestedSecretInputMode = normalizeSecretInputModeInput(ctx.secretInputMode);
+  const selectedMode = ctx.allowSecretRefPrompt
+    ? await resolveSecretInputModeForEnvSelection({
+        prompter: ctx.prompter,
+        explicitMode: requestedSecretInputMode,
+        copy: {
+          modeMessage: "How do you want to provide this setup token?",
+          plaintextLabel: "Paste setup token now",
+          plaintextHint: "Stores the token directly in the auth profile",
+        },
+      })
+    : "plaintext";
+
+  let token = "";
+  let tokenRef: { source: "env" | "file" | "exec"; provider: string; id: string } | undefined;
+  if (selectedMode === "ref") {
+    const resolved = await promptSecretRefForSetup({
+      provider: "anthropic-setup-token",
+      config: ctx.config,
+      prompter: ctx.prompter,
+      preferredEnvVar: "ANTHROPIC_SETUP_TOKEN",
+      copy: {
+        sourceMessage: "Where is this Anthropic setup token stored?",
+        envVarPlaceholder: "ANTHROPIC_SETUP_TOKEN",
+      },
+    });
+    token = resolved.resolvedValue.trim();
+    tokenRef = resolved.ref;
+  } else {
+    const tokenRaw = await ctx.prompter.text({
+      message: "Paste Anthropic setup-token",
+      validate: (value) => validateAnthropicSetupToken(String(value ?? "")),
+    });
+    token = String(tokenRaw ?? "").trim();
+  }
   const tokenError = validateAnthropicSetupToken(token);
   if (tokenError) {
     throw new Error(tokenError);
@@ -145,10 +222,78 @@ async function runAnthropicSetupToken(ctx: ProviderAuthContext): Promise<Provide
           type: "token",
           provider: PROVIDER_ID,
           token,
+          ...(tokenRef ? { tokenRef } : {}),
         },
       },
     ],
   };
+}
+
+async function runAnthropicSetupTokenNonInteractive(ctx: {
+  config: ProviderAuthContext["config"];
+  opts: {
+    tokenProvider?: string;
+    token?: string;
+    tokenExpiresIn?: string;
+    tokenProfileId?: string;
+  };
+  runtime: ProviderAuthContext["runtime"];
+  agentDir?: string;
+}): Promise<ProviderAuthContext["config"] | null> {
+  const provider = ctx.opts.tokenProvider?.trim().toLowerCase();
+  if (!provider) {
+    ctx.runtime.error("Missing --token-provider for --auth-choice token.");
+    ctx.runtime.exit(1);
+    return null;
+  }
+  if (provider !== PROVIDER_ID) {
+    ctx.runtime.error("Only --token-provider anthropic is supported for --auth-choice token.");
+    ctx.runtime.exit(1);
+    return null;
+  }
+
+  const token = normalizeSecretInput(ctx.opts.token);
+  if (!token) {
+    ctx.runtime.error("Missing --token for --auth-choice token.");
+    ctx.runtime.exit(1);
+    return null;
+  }
+  const tokenError = validateAnthropicSetupToken(token);
+  if (tokenError) {
+    ctx.runtime.error(tokenError);
+    ctx.runtime.exit(1);
+    return null;
+  }
+
+  let expires: number | undefined;
+  const expiresInRaw = ctx.opts.tokenExpiresIn?.trim();
+  if (expiresInRaw) {
+    try {
+      expires = Date.now() + parseDurationMs(expiresInRaw, { defaultUnit: "d" });
+    } catch (err) {
+      ctx.runtime.error(`Invalid --token-expires-in: ${String(err)}`);
+      ctx.runtime.exit(1);
+      return null;
+    }
+  }
+
+  const profileId =
+    ctx.opts.tokenProfileId?.trim() || buildTokenProfileId({ provider: PROVIDER_ID, name: "" });
+  upsertAuthProfile({
+    profileId,
+    agentDir: ctx.agentDir,
+    credential: {
+      type: "token",
+      provider: PROVIDER_ID,
+      token,
+      ...(expires ? { expires } : {}),
+    },
+  });
+  return applyAuthProfileConfig(ctx.config, {
+    profileId,
+    provider: PROVIDER_ID,
+    mode: "token",
+  });
 }
 
 const anthropicPlugin = {
@@ -169,8 +314,23 @@ const anthropicPlugin = {
           hint: "Paste a setup-token from `claude setup-token`",
           kind: "token",
           run: async (ctx: ProviderAuthContext) => await runAnthropicSetupToken(ctx),
+          runNonInteractive: async (ctx) =>
+            await runAnthropicSetupTokenNonInteractive({
+              config: ctx.config,
+              opts: ctx.opts,
+              runtime: ctx.runtime,
+              agentDir: ctx.agentDir,
+            }),
         },
       ],
+      wizard: {
+        setup: {
+          choiceId: "token",
+          choiceLabel: "Anthropic token (paste setup-token)",
+          choiceHint: "Run `claude setup-token` elsewhere, then paste the token here",
+          methodId: "setup-token",
+        },
+      },
       resolveDynamicModel: (ctx) => resolveAnthropicForwardCompatModel(ctx),
       capabilities: {
         providerFamily: "anthropic",
@@ -189,6 +349,12 @@ const anthropicPlugin = {
       fetchUsageSnapshot: async (ctx) =>
         await fetchClaudeUsage(ctx.token, ctx.timeoutMs, ctx.fetchFn),
       isCacheTtlEligible: () => true,
+      buildAuthDoctorHint: (ctx) =>
+        buildAnthropicAuthDoctorHint({
+          config: ctx.config,
+          store: ctx.store,
+          profileId: ctx.profileId,
+        }),
     });
   },
 };

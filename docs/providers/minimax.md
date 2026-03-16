@@ -44,7 +44,7 @@ Enable the bundled OAuth plugin and authenticate:
 ```bash
 openclaw plugins enable minimax  # skip if already loaded.
 openclaw gateway restart  # restart if gateway is already running
-openclaw onboard --auth-choice minimax-portal
+openclaw setup --wizard --auth-choice minimax-portal
 ```
 
 You will be prompted to select an endpoint:

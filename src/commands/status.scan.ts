@@ -18,6 +18,10 @@ import {
   pickGatewaySelfPresence,
   resolveGatewayProbeAuthResolution,
 } from "./status.gateway-probe.js";
+import type {
+  buildChannelsTable as buildChannelsTableFn,
+  collectChannelStatusIssues as collectChannelStatusIssuesFn,
+} from "./status.scan.runtime.js";
 import { getStatusSummary } from "./status.summary.js";
 import { getUpdateCheckResult } from "./status.update.js";
 
@@ -57,10 +61,6 @@ function loadStatusScanRuntimeModule() {
   statusScanRuntimeModulePromise ??= import("./status.scan.runtime.js");
   return statusScanRuntimeModulePromise;
 }
-
-type StatusScanRuntimeModule = Awaited<ReturnType<typeof loadStatusScanRuntimeModule>>;
-type ChannelStatusIssues = ReturnType<StatusScanRuntimeModule["collectChannelStatusIssues"]>;
-type ChannelsTable = Awaited<ReturnType<StatusScanRuntimeModule["buildChannelsTable"]>>;
 
 function deferResult<T>(promise: Promise<T>): Promise<DeferredResult<T>> {
   return promise.then(
@@ -163,9 +163,9 @@ export type StatusScanResult = {
   gatewayProbe: Awaited<ReturnType<typeof probeGateway>> | null;
   gatewayReachable: boolean;
   gatewaySelf: ReturnType<typeof pickGatewaySelfPresence>;
-  channelIssues: ChannelStatusIssues;
+  channelIssues: ReturnType<typeof collectChannelStatusIssuesFn>;
   agentStatus: Awaited<ReturnType<typeof getAgentLocalStatuses>>;
-  channels: ChannelsTable;
+  channels: Awaited<ReturnType<typeof buildChannelsTableFn>>;
   summary: Awaited<ReturnType<typeof getStatusSummary>>;
   memory: MemoryStatusSnapshot | null;
   memoryPlugin: MemoryPluginStatus;
