@@ -643,7 +643,7 @@ export class GatewayClient {
     }
     const delay = this.backoffMs;
     this.backoffMs = Math.min(this.backoffMs * 2, 30_000);
-    setTimeout(() => this.start(), delay).unref();
+    setTimeout(() => this.start(), delay);
   }
 
   private flushPendingErrors(err: Error) {
