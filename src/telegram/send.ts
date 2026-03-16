@@ -103,6 +103,7 @@ const THREAD_NOT_FOUND_RE = /400:\s*Bad Request:\s*message thread not found/i;
 const MESSAGE_NOT_MODIFIED_RE =
   /400:\s*Bad Request:\s*message is not modified|MESSAGE_NOT_MODIFIED/i;
 const CHAT_NOT_FOUND_RE = /400: Bad Request: chat not found/i;
+const BOT_NOT_MEMBER_RE = /403:\s*Forbidden:\s*bot is not a member of the channel chat/i;
 const sendLogger = createSubsystemLogger("telegram/send");
 const diagLogger = createSubsystemLogger("telegram/diagnostic");
 
@@ -395,6 +396,21 @@ function wrapTelegramChatNotFoundError(err: unknown, params: { chatId: string; i
   );
 }
 
+function wrapTelegramBotNotMemberError(err: unknown, params: { chatId: string; input: string }) {
+  if (!BOT_NOT_MEMBER_RE.test(formatErrorMessage(err))) {
+    return err;
+  }
+  return new Error(
+    [
+      `Telegram send failed: bot is not a member of the chat (chat_id=${params.chatId}).`,
+      "For channels: add the bot as an administrator or member first.",
+      "For groups: the bot may have been removed; re-add it to the group.",
+      "For DMs: ensure the user has started a conversation with the bot (/start).",
+      `Input was: ${JSON.stringify(params.input)}.`,
+    ].join(" "),
+  );
+}
+
 async function withTelegramThreadFallback<T>(
   params: Record<string, unknown> | undefined,
   label: string,
@@ -429,7 +445,11 @@ function createRequestWithChatNotFound(params: {
 }) {
   return async <T>(fn: () => Promise<T>, label: string) =>
     params.requestWithDiag(fn, label).catch((err) => {
-      throw wrapTelegramChatNotFoundError(err, {
+      const wrapped = wrapTelegramChatNotFoundError(err, {
+        chatId: params.chatId,
+        input: params.input,
+      });
+      throw wrapTelegramBotNotMemberError(wrapped, {
         chatId: params.chatId,
         input: params.input,
       });

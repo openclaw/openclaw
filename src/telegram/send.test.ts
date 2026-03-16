@@ -1489,6 +1489,66 @@ describe("shared send behaviors", () => {
       await testCase.run();
     }
   });
+
+  it("wraps bot-not-member with actionable context", async () => {
+    async function expectBotNotMemberWithChatId(
+      action: Promise<unknown>,
+      expectedChatId: string,
+    ): Promise<void> {
+      try {
+        await action;
+        throw new Error("Expected action to reject with bot-not-member context");
+      } catch (error) {
+        if (
+          error instanceof Error &&
+          error.message === "Expected action to reject with bot-not-member context"
+        ) {
+          throw error;
+        }
+        const message = error instanceof Error ? error.message : String(error);
+        expect(message).toMatch(/bot is not a member of the chat/i);
+        expect(message).toMatch(/add the bot as an administrator/i);
+        expect(message).toMatch(new RegExp(`chat_id=${expectedChatId}`));
+      }
+    }
+
+    const cases = [
+      {
+        name: "message send to channel",
+        run: async () => {
+          const chatId = "-1001234567890";
+          const err = new Error("403: Forbidden: bot is not a member of the channel chat");
+          const sendMessage = vi.fn().mockRejectedValue(err);
+          const api = { sendMessage } as unknown as {
+            sendMessage: typeof sendMessage;
+          };
+          await expectBotNotMemberWithChatId(
+            sendMessageTelegram(chatId, "hi", { token: "tok", api }),
+            chatId,
+          );
+        },
+      },
+      {
+        name: "message send to group",
+        run: async () => {
+          const chatId = "-456";
+          const err = new Error("403: Forbidden: bot is not a member of the channel chat");
+          const sendMessage = vi.fn().mockRejectedValue(err);
+          const api = { sendMessage } as unknown as {
+            sendMessage: typeof sendMessage;
+          };
+          await expectBotNotMemberWithChatId(
+            sendMessageTelegram(chatId, "hi", { token: "tok", api }),
+            chatId,
+          );
+        },
+      },
+    ] as const;
+
+    for (const testCase of cases) {
+      await testCase.run();
+    }
+  });
 });
 
 describe("editMessageTelegram", () => {
