@@ -6,6 +6,13 @@ import { refreshChat } from "./app-chat.ts";
 import { syncUrlWithSessionKey } from "./app-settings.ts";
 import type { AppViewState } from "./app-view-state.ts";
 import { OpenClawApp } from "./app.ts";
+import {
+  buildChatModelOption,
+  createChatModelOverride,
+  formatChatModelDisplay,
+  normalizeChatModelOverrideValue,
+  resolveServerChatModelValue,
+} from "./chat-model-ref.ts";
 import { ChatState, loadChatHistory } from "./controllers/chat.ts";
 import { loadSessions } from "./controllers/sessions.ts";
 import { icons } from "./icons.ts";
@@ -521,8 +528,8 @@ function resolveActiveSessionRow(state: AppViewState) {
 function resolveModelOverrideValue(state: AppViewState): string {
   // Prefer the local cache — it reflects in-flight patches before sessionsResult refreshes.
   const cached = state.chatModelOverrides[state.sessionKey];
-  if (typeof cached === "string") {
-    return cached.trim();
+  if (cached) {
+    return normalizeChatModelOverrideValue(cached, state.chatModelCatalog ?? []);
   }
   // cached === null means explicitly cleared to default.
   if (cached === null) {
@@ -532,21 +539,14 @@ function resolveModelOverrideValue(state: AppViewState): string {
   // Include provider prefix so the value matches option keys (provider/model).
   const activeRow = resolveActiveSessionRow(state);
   if (activeRow && typeof activeRow.model === "string" && activeRow.model.trim()) {
-    const provider = activeRow.modelProvider?.trim();
-    const model = activeRow.model.trim();
-    return provider ? `${provider}/${model}` : model;
+    return resolveServerChatModelValue(activeRow.model, activeRow.modelProvider);
   }
   return "";
 }
 
 function resolveDefaultModelValue(state: AppViewState): string {
   const defaults = state.sessionsResult?.defaults;
-  const model = defaults?.model;
-  if (typeof model !== "string" || !model.trim()) {
-    return "";
-  }
-  const provider = defaults?.modelProvider?.trim();
-  return provider ? `${provider}/${model.trim()}` : model.trim();
+  return resolveServerChatModelValue(defaults?.model, defaults?.modelProvider);
 }
 
 function buildChatModelOptions(
@@ -570,9 +570,8 @@ function buildChatModelOptions(
   };
 
   for (const entry of catalog) {
-    const provider = entry.provider?.trim();
-    const value = provider ? `${provider}/${entry.id}` : entry.id;
-    addOption(value, provider ? `${entry.id} · ${provider}` : entry.id);
+    const option = buildChatModelOption(entry);
+    addOption(option.value, option.label);
   }
 
   if (currentOverride) {
@@ -592,9 +591,7 @@ function renderChatModelSelect(state: AppViewState) {
     currentOverride,
     defaultModel,
   );
-  const defaultDisplay = defaultModel.includes("/")
-    ? `${defaultModel.slice(defaultModel.indexOf("/") + 1)} · ${defaultModel.slice(0, defaultModel.indexOf("/"))}`
-    : defaultModel;
+  const defaultDisplay = formatChatModelDisplay(defaultModel);
   const defaultLabel = defaultModel ? `Default (${defaultDisplay})` : "Default model";
   const busy =
     state.chatLoading || state.chatSending || Boolean(state.chatRunId) || state.chatStream !== null;
@@ -639,7 +636,7 @@ async function switchChatModel(state: AppViewState, nextModel: string) {
   // Write the override cache immediately so the picker stays in sync during the RPC round-trip.
   state.chatModelOverrides = {
     ...state.chatModelOverrides,
-    [targetSessionKey]: nextModel || null,
+    [targetSessionKey]: createChatModelOverride(nextModel),
   };
   try {
     await state.client.request("sessions.patch", {
