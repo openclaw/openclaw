@@ -51,11 +51,9 @@ function shouldPreserveAudioAsVoice(params: { mediaType?: string; mediaUrl?: str
   if (mediaType) {
     return mediaType.startsWith("audio/");
   }
-  const ext = getFileExtension(params.mediaUrl);
-  if (!ext) {
-    return true;
-  }
-  return isAudioFileName(params.mediaUrl);
+  // This layer has no fetch-time MIME detection, so unknown URLs must downgrade to avoid
+  // forcing voice mode onto extensionless image/document links in mixed-media replies.
+  return Boolean(getFileExtension(params.mediaUrl)) && isAudioFileName(params.mediaUrl);
 }
 
 export type OutboundDeliveryResult = {
@@ -756,8 +754,7 @@ async function deliverOutboundPayloadsCore(
           ...sendOverrides,
           contentType: mediaType,
           audioAsVoice:
-            sendOverrides.audioAsVoice &&
-            shouldPreserveAudioAsVoice({ mediaType, mediaUrl: url }),
+            sendOverrides.audioAsVoice && shouldPreserveAudioAsVoice({ mediaType, mediaUrl: url }),
         };
         if (handler.sendFormattedMedia) {
           const delivery = await handler.sendFormattedMedia(caption, url, mediaSendOverrides);

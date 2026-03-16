@@ -1219,7 +1219,7 @@ describe("deliverOutboundPayloads", () => {
     ]);
   });
 
-  it("preserves audioAsVoice for extensionless media URLs when mime is not known yet", async () => {
+  it("downgrades audioAsVoice for extensionless media URLs when mime is not known yet", async () => {
     const sendMedia = vi.fn().mockResolvedValue({ channel: "matrix", messageId: "mx-audio" });
     setActivePluginRegistry(
       createTestRegistry([
@@ -1254,7 +1254,7 @@ describe("deliverOutboundPayloads", () => {
     expect(sendMedia).toHaveBeenCalledTimes(1);
     expect(sendMedia.mock.calls[0]?.[0]).toMatchObject({
       contentType: undefined,
-      audioAsVoice: true,
+      audioAsVoice: false,
     });
     expect(results).toEqual([{ channel: "matrix", messageId: "mx-audio" }]);
   });
