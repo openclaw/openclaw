@@ -34,7 +34,7 @@ type LifecycleHost = {
   chatLoading: boolean;
   chatMessages: unknown[];
   chatToolMessages: unknown[];
-  chatStream: string;
+  chatStream: string | null;
   logsAutoFollow: boolean;
   logsAtBottom: boolean;
   logsEntries: unknown[];
