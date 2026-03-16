@@ -6,9 +6,13 @@ const loggerMocks = vi.hoisted(() => ({
 }));
 
 vi.mock("../logging/subsystem.js", () => ({
-  createSubsystemLogger: () => ({
-    info: loggerMocks.info,
-  }),
+  createSubsystemLogger: () => {
+    const logger = {
+      info: loggerMocks.info,
+      child: () => logger,
+    };
+    return logger;
+  },
 }));
 
 import { isTruthyEnvValue, logAcceptedEnvOption, normalizeEnv, normalizeZaiEnv } from "./env.js";

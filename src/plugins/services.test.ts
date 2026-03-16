@@ -2,12 +2,16 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createEmptyPluginRegistry } from "./registry.js";
 import type { OpenClawPluginService, OpenClawPluginServiceContext } from "./types.js";
 
-const mockedLogger = vi.hoisted(() => ({
-  info: vi.fn<(msg: string) => void>(),
-  warn: vi.fn<(msg: string) => void>(),
-  error: vi.fn<(msg: string) => void>(),
-  debug: vi.fn<(msg: string) => void>(),
-}));
+const mockedLogger = vi.hoisted(() => {
+  const logger = {
+    info: vi.fn<(msg: string) => void>(),
+    warn: vi.fn<(msg: string) => void>(),
+    error: vi.fn<(msg: string) => void>(),
+    debug: vi.fn<(msg: string) => void>(),
+    child: vi.fn(() => logger),
+  };
+  return logger;
+});
 
 vi.mock("../logging/subsystem.js", () => ({
   createSubsystemLogger: () => mockedLogger,

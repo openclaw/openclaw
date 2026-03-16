@@ -24,11 +24,15 @@ vi.mock("./ports-lsof.js", () => ({
 }));
 
 vi.mock("../logging/subsystem.js", () => ({
-  createSubsystemLogger: vi.fn(() => ({
-    warn: (...args: unknown[]) => mockRestartWarn(...args),
-    info: vi.fn(),
-    error: vi.fn(),
-  })),
+  createSubsystemLogger: vi.fn(() => {
+    const logger = {
+      warn: (...args: unknown[]) => mockRestartWarn(...args),
+      info: vi.fn(),
+      error: vi.fn(),
+      child: () => logger,
+    };
+    return logger;
+  }),
 }));
 
 import { resolveLsofCommandSync } from "./ports-lsof.js";

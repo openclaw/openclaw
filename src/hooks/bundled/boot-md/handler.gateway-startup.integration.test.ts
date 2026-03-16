@@ -7,10 +7,14 @@ const runBootOnce = vi.fn();
 
 vi.mock("../../../gateway/boot.js", () => ({ runBootOnce }));
 vi.mock("../../../logging/subsystem.js", () => ({
-  createSubsystemLogger: () => ({
-    warn: vi.fn(),
-    debug: vi.fn(),
-  }),
+  createSubsystemLogger: () => {
+    const logger = {
+      warn: vi.fn(),
+      debug: vi.fn(),
+      child: () => logger,
+    };
+    return logger;
+  },
 }));
 
 const { default: runBootChecklist } = await import("./handler.js");

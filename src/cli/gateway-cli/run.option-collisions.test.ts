@@ -86,11 +86,15 @@ vi.mock("../../logging/console.js", () => ({
 }));
 
 vi.mock("../../logging/subsystem.js", () => ({
-  createSubsystemLogger: () => ({
-    info: () => undefined,
-    warn: () => undefined,
-    error: () => undefined,
-  }),
+  createSubsystemLogger: () => {
+    const logger = {
+      info: () => undefined,
+      warn: () => undefined,
+      error: () => undefined,
+      child: () => logger,
+    };
+    return logger;
+  },
 }));
 
 vi.mock("../../runtime.js", () => ({

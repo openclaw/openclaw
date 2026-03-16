@@ -34,6 +34,7 @@ const gatewayLog = {
   info: vi.fn(),
   warn: vi.fn(),
   error: vi.fn(),
+  child: vi.fn(() => gatewayLog),
 };
 
 vi.mock("../../infra/gateway-lock.js", () => ({
