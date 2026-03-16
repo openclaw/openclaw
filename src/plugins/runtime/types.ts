@@ -75,7 +75,13 @@ export type PluginRuntime = PluginRuntimeCore & {
     deleteSession: (params: SubagentDeleteSessionParams) => Promise<void>;
   };
   outbound: {
-    /** Send payloads through the standard outbound delivery pipeline (chunking, hooks, queue). */
+    /**
+     * Send payloads through the standard outbound delivery pipeline (chunking, hooks, queue).
+     *
+     * Note: when `bestEffort` is true and no `onError` callback is provided,
+     * per-payload delivery failures are silently swallowed and the returned
+     * results array may be shorter than the input payloads array.
+     */
     deliverOutboundPayloads: (
       params: PluginDeliverOutboundParams,
     ) => Promise<OutboundDeliveryResult[]>;
