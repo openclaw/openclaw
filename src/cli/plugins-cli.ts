@@ -108,6 +108,7 @@ function formatPluginLine(plugin: PluginRecord, verbose = false): string {
     `  format: ${format}`,
     `  source: ${theme.muted(shortenHomeInString(plugin.source))}`,
     `  origin: ${plugin.origin}`,
+    `  trust: ${plugin.trustTier}`,
   ];
   if (plugin.bundleFormat) {
     parts.push(`  bundle format: ${plugin.bundleFormat}`);
@@ -512,6 +513,7 @@ export function registerPluginsCli(program: Command) {
       }
       lines.push(`${theme.muted("Source:")} ${shortenHomeInString(plugin.source)}`);
       lines.push(`${theme.muted("Origin:")} ${plugin.origin}`);
+      lines.push(`${theme.muted("Trust tier:")} ${plugin.trustTier}`);
       if (plugin.version) {
         lines.push(`${theme.muted("Version:")} ${plugin.version}`);
       }

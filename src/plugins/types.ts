@@ -1013,6 +1013,16 @@ export type PluginFormat = "openclaw" | "bundle";
 
 export type PluginBundleFormat = "codex" | "claude" | "cursor";
 
+/**
+ * Trust boundary classification for plugins.
+ *
+ * - "content": Bundle plugins (Claude, Codex, Cursor). Safe metadata/skill/command packs.
+ *   No runtime code execution.
+ * - "sandboxed": Reserved — future tier for ACP/subprocess-isolated tool execution.
+ * - "native": TypeScript plugins with full api.runtime access. Existing in-process model.
+ */
+export type PluginTrustTier = "content" | "sandboxed" | "native";
+
 export type PluginDiagnostic = {
   level: "warn" | "error";
   message: string;

@@ -252,6 +252,9 @@ This makes bundle support safer by default than native plugin modules, but you
 should still treat third-party bundles as trusted content for the features they
 do expose.
 
+All bundle plugins are classified as **content** trust tier. See
+[Plugin trust tiers](/plugins/trust-tiers) for the full trust model.
+
 ## Install examples
 
 ```bash
