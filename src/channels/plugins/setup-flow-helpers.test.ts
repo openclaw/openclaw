@@ -3,7 +3,7 @@ import type { OpenClawConfig } from "../../config/config.js";
 import { DEFAULT_ACCOUNT_ID } from "../../routing/session-key.js";
 
 const promptAccountIdSdkMock = vi.hoisted(() => vi.fn(async () => "default"));
-vi.mock("../../plugin-sdk/onboarding.js", () => ({
+vi.mock("../../plugin-sdk/setup.js", () => ({
   promptAccountId: promptAccountIdSdkMock,
 }));
 
