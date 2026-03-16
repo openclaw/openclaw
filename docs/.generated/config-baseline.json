@@ -40253,6 +40253,22 @@
       "hasChildren": false
     },
     {
+      "path": "gateway.reload.deferralTimeoutMs",
+      "kind": "core",
+      "type": "integer",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "network",
+        "performance",
+        "reliability"
+      ],
+      "label": "Restart Deferral Timeout (ms)",
+      "help": "Maximum time (ms) to wait for in-flight operations to complete before forcing a SIGUSR1 restart. Default: 300000 (5 minutes). Lower values risk aborting active subagent LLM calls.",
+      "hasChildren": false
+    },
+    {
       "path": "gateway.reload.mode",
       "kind": "core",
       "type": "string",

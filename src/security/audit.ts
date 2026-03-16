@@ -1,7 +1,6 @@
 import { isIP } from "node:net";
 import path from "node:path";
 import { resolveSandboxConfigForAgent } from "../agents/sandbox.js";
-import { execDockerRaw } from "../agents/sandbox/docker.js";
 import { redactCdpUrl } from "../browser/cdp.helpers.js";
 import { resolveBrowserConfig, resolveProfile } from "../browser/config.js";
 import { resolveBrowserControlAuth } from "../browser/control-auth.js";
@@ -12,9 +11,6 @@ import type { ConfigFileSnapshot, OpenClawConfig } from "../config/config.js";
 import { resolveConfigPath, resolveStateDir } from "../config/paths.js";
 import { hasConfiguredSecretInput } from "../config/types.secrets.js";
 import { resolveGatewayAuth } from "../gateway/auth.js";
-import { buildGatewayConnectionDetails } from "../gateway/call.js";
-import { resolveGatewayProbeAuthSafe } from "../gateway/probe-auth.js";
-import { probeGateway } from "../gateway/probe.js";
 import {
   listInterpreterLikeSafeBins,
   resolveMergedSafeBinProfileFixtures,
@@ -29,6 +25,9 @@ import {
 import { collectEnabledInsecureOrDangerousFlags } from "./dangerous-config-flags.js";
 import { DEFAULT_GATEWAY_HTTP_TOOL_DENY } from "./dangerous-tools.js";
 import type { ExecFn } from "./windows-acl.js";
+
+type ExecDockerRawFn = typeof import("../agents/sandbox/docker.js").execDockerRaw;
+type ProbeGatewayFn = typeof import("../gateway/probe.js").probeGateway;
 
 export type SecurityAuditSeverity = "info" | "warn" | "critical";
 
@@ -77,18 +76,18 @@ export type SecurityAuditOptions = {
   deepTimeoutMs?: number;
   /** Dependency injection for tests. */
   plugins?: ReturnType<typeof listChannelPlugins>;
-  /** Dependency injection for tests. */
-  probeGatewayFn?: typeof probeGateway;
   /** Dependency injection for tests (Windows ACL checks). */
   execIcacls?: ExecFn;
   /** Dependency injection for tests (Docker label checks). */
-  execDockerRawFn?: typeof execDockerRaw;
+  execDockerRawFn?: ExecDockerRawFn;
   /** Optional preloaded config snapshot to skip audit-time config file reads. */
   configSnapshot?: ConfigFileSnapshot | null;
   /** Optional cache for code-safety summaries across repeated deep audits. */
   codeSafetySummaryCache?: Map<string, Promise<unknown>>;
   /** Optional explicit auth for deep gateway probe. */
   deepProbeAuth?: { token?: string; password?: string };
+  /** Dependency injection for tests. */
+  probeGatewayFn?: ProbeGatewayFn;
 };
 
 type AuditExecutionContext = {
@@ -103,8 +102,8 @@ type AuditExecutionContext = {
   stateDir: string;
   configPath: string;
   execIcacls?: ExecFn;
-  execDockerRawFn?: typeof execDockerRaw;
-  probeGatewayFn?: typeof probeGateway;
+  execDockerRawFn?: ExecDockerRawFn;
+  probeGatewayFn?: ProbeGatewayFn;
   plugins?: ReturnType<typeof listChannelPlugins>;
   configSnapshot: ConfigFileSnapshot | null;
   codeSafetySummaryCache: Map<string, Promise<unknown>>;
@@ -116,6 +115,13 @@ let auditNonDeepModulePromise: Promise<typeof import("./audit.nondeep.runtime.js
 let auditDeepModulePromise: Promise<typeof import("./audit.deep.runtime.js")> | undefined;
 let auditChannelModulePromise:
   | Promise<typeof import("./audit-channel.collect.runtime.js")>
+  | undefined;
+let gatewayProbeDepsPromise:
+  | Promise<{
+      buildGatewayConnectionDetails: typeof import("../gateway/call.js").buildGatewayConnectionDetails;
+      resolveGatewayProbeAuthSafe: typeof import("../gateway/probe-auth.js").resolveGatewayProbeAuthSafe;
+      probeGateway: typeof import("../gateway/probe.js").probeGateway;
+    }>
   | undefined;
 
 async function loadChannelPlugins() {
@@ -136,6 +142,19 @@ async function loadAuditDeepModule() {
 async function loadAuditChannelModule() {
   auditChannelModulePromise ??= import("./audit-channel.collect.runtime.js");
   return await auditChannelModulePromise;
+}
+
+async function loadGatewayProbeDeps() {
+  gatewayProbeDepsPromise ??= Promise.all([
+    import("../gateway/call.js"),
+    import("../gateway/probe-auth.js"),
+    import("../gateway/probe.js"),
+  ]).then(([callModule, probeAuthModule, probeModule]) => ({
+    buildGatewayConnectionDetails: callModule.buildGatewayConnectionDetails,
+    resolveGatewayProbeAuthSafe: probeAuthModule.resolveGatewayProbeAuthSafe,
+    probeGateway: probeModule.probeGateway,
+  }));
+  return await gatewayProbeDepsPromise;
 }
 
 function countBySeverity(findings: SecurityAuditFinding[]): SecurityAuditSummary {
@@ -1066,12 +1085,14 @@ async function maybeProbeGateway(params: {
   cfg: OpenClawConfig;
   env: NodeJS.ProcessEnv;
   timeoutMs: number;
-  probe: typeof probeGateway;
+  probe: ProbeGatewayFn;
   explicitAuth?: { token?: string; password?: string };
 }): Promise<{
   deep: SecurityAuditReport["deep"];
   authWarning?: string;
 }> {
+  const { buildGatewayConnectionDetails, resolveGatewayProbeAuthSafe } =
+    await loadGatewayProbeDeps();
   const connection = buildGatewayConnectionDetails({ config: params.cfg });
   const url = connection.url;
   const isRemoteMode = params.cfg.gateway?.mode === "remote";
@@ -1267,7 +1288,7 @@ export async function runSecurityAudit(opts: SecurityAuditOptions): Promise<Secu
         cfg,
         env,
         timeoutMs: context.deepTimeoutMs,
-        probe: context.probeGatewayFn ?? probeGateway,
+        probe: context.probeGatewayFn ?? (await loadGatewayProbeDeps()).probeGateway,
         explicitAuth: context.deepProbeAuth,
       })
     : undefined;

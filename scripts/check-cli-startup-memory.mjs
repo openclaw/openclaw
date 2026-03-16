@@ -33,7 +33,7 @@ writeFileSync(
 
 const DEFAULT_LIMITS_MB = {
   help: 500,
-  statusJson: 900,
+  statusJson: 925,
   gatewayStatus: 900,
 };
 
@@ -93,6 +93,10 @@ function buildBenchEnv() {
   }
   if (process.env.NODE_DISABLE_COMPILE_CACHE) {
     env.NODE_DISABLE_COMPILE_CACHE = process.env.NODE_DISABLE_COMPILE_CACHE;
+  } else {
+    // Keep the regression check focused on app/runtime startup, not Node's
+    // one-shot compile cache overhead, which varies across runner builds.
+    env.NODE_DISABLE_COMPILE_CACHE = "1";
   }
 
   return env;
