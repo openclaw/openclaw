@@ -27,12 +27,12 @@ import {
   type GatewayRemoteCredentialFallback,
   type GatewayRemoteCredentialPrecedence,
 } from "./credentials.js";
+import { waitForEventLoopReady } from "./event-loop-ready.js";
 import {
   CLI_DEFAULT_OPERATOR_SCOPES,
   resolveLeastPrivilegeOperatorScopesForMethod,
   type OperatorScope,
 } from "./method-scopes.js";
-import { waitForEventLoopReady } from "./event-loop-ready.js";
 import { isSecureWebSocketUrl } from "./net.js";
 import { PROTOCOL_VERSION } from "./protocol/index.js";
 
