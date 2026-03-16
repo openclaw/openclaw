@@ -22,7 +22,6 @@ export function installSlackBlockTestMocks() {
   }));
 
   vi.mock("./accounts.js", () => ({
-    listSlackAccountIds: () => ["default"],
     resolveSlackAccount: () => ({
       accountId: "default",
       botToken: "xoxb-test",
