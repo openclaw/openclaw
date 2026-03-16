@@ -721,14 +721,17 @@ export async function runHeartbeatOnce(opts: {
     const suppressToolErrorWarnings = heartbeat?.suppressToolErrorWarnings === true;
     const bootstrapContextMode: "lightweight" | undefined =
       heartbeat?.lightContext === true ? "lightweight" : undefined;
-    const replyOpts = heartbeatModelOverride
-      ? {
-          isHeartbeat: true,
-          heartbeatModelOverride,
-          suppressToolErrorWarnings,
-          bootstrapContextMode,
-        }
-      : { isHeartbeat: true, suppressToolErrorWarnings, bootstrapContextMode };
+    const timeoutOverrideSeconds = heartbeat?.timeoutSeconds;
+    const replyOpts =
+      heartbeatModelOverride || timeoutOverrideSeconds !== undefined
+        ? {
+            isHeartbeat: true,
+            heartbeatModelOverride,
+            suppressToolErrorWarnings,
+            bootstrapContextMode,
+            ...(timeoutOverrideSeconds !== undefined && { timeoutOverrideSeconds }),
+          }
+        : { isHeartbeat: true, suppressToolErrorWarnings, bootstrapContextMode };
     const replyResult = await getReplyFromConfig(ctx, replyOpts, cfg);
     const replyPayload = resolveHeartbeatReplyPayload(replyResult);
     const includeReasoning = heartbeat?.includeReasoning === true;
