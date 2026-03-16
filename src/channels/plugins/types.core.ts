@@ -1,3 +1,4 @@
+import type { TopLevelComponents } from "@buape/carbon";
 import type { AgentTool, AgentToolResult } from "@mariozechner/pi-agent-core";
 import type { TSchema } from "@sinclair/typebox";
 import type { MsgContext } from "../../auto-reply/templating.js";
@@ -237,6 +238,38 @@ export type ChannelStreamingAdapter = {
   };
 };
 
+export type ChannelCrossContextComponentsFactory = (params: {
+  originLabel: string;
+  message: string;
+  cfg: OpenClawConfig;
+  accountId?: string | null;
+}) => TopLevelComponents[];
+
+export type ChannelReplyTransport = {
+  replyToId?: string | null;
+  threadId?: string | number | null;
+};
+
+export type ChannelFocusedBindingContext = {
+  conversationId: string;
+  parentConversationId?: string;
+  placement: "current" | "child";
+  labelNoun: string;
+};
+
+export type ChannelOutboundSessionRoute = {
+  sessionKey: string;
+  baseSessionKey: string;
+  peer: {
+    kind: ChatType;
+    id: string;
+  };
+  chatType: "direct" | "group" | "channel";
+  from: string;
+  to: string;
+  threadId?: string | number;
+};
+
 export type ChannelThreadingAdapter = {
   resolveReplyToMode?: (params: {
     cfg: OpenClawConfig;
@@ -260,6 +293,24 @@ export type ChannelThreadingAdapter = {
     context: ChannelThreadingContext;
     hasRepliedRef?: { value: boolean };
   }) => ChannelThreadingToolContext | undefined;
+  resolveAutoThreadId?: (params: {
+    cfg: OpenClawConfig;
+    accountId?: string | null;
+    to: string;
+    toolContext?: ChannelThreadingToolContext;
+    replyToId?: string | null;
+  }) => string | undefined;
+  resolveReplyTransport?: (params: {
+    cfg: OpenClawConfig;
+    accountId?: string | null;
+    threadId?: string | number | null;
+    replyToId?: string | null;
+  }) => ChannelReplyTransport | null;
+  resolveFocusedBinding?: (params: {
+    cfg: OpenClawConfig;
+    accountId?: string | null;
+    context: ChannelThreadingContext;
+  }) => ChannelFocusedBindingContext | null;
 };
 
 export type ChannelThreadingContext = {
@@ -293,6 +344,11 @@ export type ChannelThreadingToolContext = {
 
 export type ChannelMessagingAdapter = {
   normalizeTarget?: (raw: string) => string | undefined;
+  buildCrossContextComponents?: ChannelCrossContextComponentsFactory;
+  enableInteractiveReplies?: (params: {
+    cfg: OpenClawConfig;
+    accountId?: string | null;
+  }) => boolean;
   targetResolver?: {
     looksLikeId?: (raw: string, normalized?: string) => boolean;
     hint?: string;
@@ -314,6 +370,20 @@ export type ChannelMessagingAdapter = {
     display?: string;
     kind?: ChannelDirectoryEntryKind;
   }) => string;
+  resolveOutboundSessionRoute?: (params: {
+    cfg: OpenClawConfig;
+    agentId: string;
+    accountId?: string | null;
+    target: string;
+    resolvedTarget?: {
+      to: string;
+      kind: ChannelDirectoryEntryKind | "channel";
+      display?: string;
+      source: "normalized" | "directory";
+    };
+    replyToId?: string | null;
+    threadId?: string | number | null;
+  }) => ChannelOutboundSessionRoute | Promise<ChannelOutboundSessionRoute | null> | null;
 };
 
 export type ChannelAgentPromptAdapter = {
@@ -374,6 +444,10 @@ export type ChannelMessageActionAdapter = {
   listActions?: (params: { cfg: OpenClawConfig }) => ChannelMessageActionName[];
   supportsAction?: (params: { action: ChannelMessageActionName }) => boolean;
   getCapabilities?: (params: { cfg: OpenClawConfig }) => readonly ChannelMessageCapability[];
+  requiresTrustedRequesterSender?: (params: {
+    action: ChannelMessageActionName;
+    toolContext?: ChannelThreadingToolContext;
+  }) => boolean;
   extractToolSend?: (params: { args: Record<string, unknown> }) => ChannelToolSend | null;
   handleAction?: (ctx: ChannelMessageActionContext) => Promise<AgentToolResult<unknown>>;
 };
