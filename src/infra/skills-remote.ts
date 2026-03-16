@@ -21,6 +21,11 @@ const log = createSubsystemLogger("gateway/skills-remote");
 const remoteNodes = new Map<string, RemoteNodeRecord>();
 let remoteRegistry: NodeRegistry | null = null;
 
+export function clearSkillsRemoteState(): void {
+  remoteNodes.clear();
+  remoteRegistry = null;
+}
+
 function describeNode(nodeId: string): string {
   const record = remoteNodes.get(nodeId);
   const name = record?.displayName?.trim();

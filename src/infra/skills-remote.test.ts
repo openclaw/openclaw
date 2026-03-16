@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import {
+  clearSkillsRemoteState,
   getRemoteSkillEligibility,
   recordRemoteNodeBins,
   recordRemoteNodeInfo,
@@ -8,6 +9,10 @@ import {
 } from "./skills-remote.js";
 
 describe("skills-remote", () => {
+  afterEach(() => {
+    clearSkillsRemoteState();
+  });
+
   it("removes disconnected nodes from remote skill eligibility", () => {
     const nodeId = `node-${randomUUID()}`;
     const bin = `bin-${randomUUID()}`;
@@ -32,6 +37,23 @@ describe("skills-remote", () => {
       removeRemoteNodeInfo(nodeId);
       removeRemoteNodeInfo(nodeId);
     }).not.toThrow();
+  });
+
+  it("clears remote node cache and eligibility state", () => {
+    const nodeId = `node-${randomUUID()}`;
+    const bin = `bin-${randomUUID()}`;
+    recordRemoteNodeInfo({
+      nodeId,
+      displayName: "Remote Mac",
+      platform: "darwin",
+      commands: ["system.run"],
+    });
+    recordRemoteNodeBins(nodeId, [bin]);
+    expect(getRemoteSkillEligibility()?.hasBin(bin)).toBe(true);
+
+    clearSkillsRemoteState();
+
+    expect(getRemoteSkillEligibility()).toBeUndefined();
   });
 
   it("ignores non-mac and non-system.run nodes for eligibility", () => {
