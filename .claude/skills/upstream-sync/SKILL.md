@@ -84,7 +84,15 @@ You: "/upstream-sync v2026.3.12"
     │   │   (loop: if qa fails → code-guard fixes → qa reruns)
     │   │   ← HARD GATE: PR cannot open until qa-runner passes (four-eyes)
     │   │
-    │   ├── Push branch, open PR, update sync-state.json
+    │   ├── Spawn docs-updater on sync branch ───────────────┐
+    │   │                                                     │
+    │   │   docs-updater (sonnet)                             │
+    │   │   ├── Scan phase commits for doc-relevant changes  │
+    │   │   ├── Update relevant docs/ pages                  │
+    │   │   ├── Commit doc updates to sync branch            │
+    │   │   └── Report what was updated ─────────────────────┘
+    │   │
+    │   ├── Push branch, open PR (includes doc updates), update sync-state.json
     │   ├── STOP — present PR to user for review
     │   │            ← USER APPROVES: "merge it" / "looks good"
     │   ├── Merge PR (regular merge, preserve -x traceability)
@@ -103,11 +111,12 @@ You: "/upstream-sync v2026.3.12"
 
 ## Agents Involved
 
-| Agent        | Role                                                                                                | Model  | Tools                                      |
-| ------------ | --------------------------------------------------------------------------------------------------- | ------ | ------------------------------------------ |
-| `sync-lead`  | Orchestrator — fetches, classifies into phases, coordinates, records                                | sonnet | Bash, Read, Write, Edit, Glob, Grep, Agent |
-| `code-guard` | Cherry-pick & conflict specialist — picks commits for one phase, resolves per §6, audits registries | sonnet | Bash, Read, Write, Edit, Glob, Grep        |
-| `qa-runner`  | Validation — build, test, lint, UI, §7.1 checklist                                                  | sonnet | Bash, Read, Grep                           |
+| Agent          | Role                                                                                                | Model  | Tools                                      |
+| -------------- | --------------------------------------------------------------------------------------------------- | ------ | ------------------------------------------ |
+| `sync-lead`    | Orchestrator — fetches, classifies into phases, coordinates, records                                | sonnet | Bash, Read, Write, Edit, Glob, Grep, Agent |
+| `code-guard`   | Cherry-pick & conflict specialist — picks commits for one phase, resolves per §6, audits registries | sonnet | Bash, Read, Write, Edit, Glob, Grep        |
+| `qa-runner`    | Validation — build, test, lint, UI, §7.1 checklist                                                  | sonnet | Bash, Read, Grep                           |
+| `docs-updater` | Documentation maintenance — scans changes, updates relevant docs                                    | sonnet | Bash, Read, Write, Edit, Glob, Grep        |
 
 ## Key Reference Files
 

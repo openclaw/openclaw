@@ -47,7 +47,19 @@ pnpm test 2>&1
 **Pass**: All tests pass (or pre-existing failures only).
 **Fail**: Report which test file, test name, and assertion.
 
-To check if a failure is pre-existing:
+**Compare against baseline:**
+If a test baseline file exists at `/tmp/sync-test-baseline.txt`, compare:
+
+```bash
+# Current failures
+pnpm test 2>&1 | grep "Test Files" > /tmp/sync-test-current.txt
+# Baseline
+cat /tmp/sync-test-baseline.txt
+```
+
+Report the delta: "X new test failures vs baseline (Y pre-existing)."
+
+If no baseline file exists, fall back to checking against the backup tag:
 
 ```bash
 # Compare against the backup tag

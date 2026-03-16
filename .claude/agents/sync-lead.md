@@ -59,6 +59,8 @@ Each upstream release is broken into these phases (in order):
 | 5     | **Review Items**      | `sync/<tag>-review`            | Items that needed closer inspection, now triaged           |
 | 6     | **UI Inspiration**    | `sync/<tag>-ui-inspiration`    | Dashboard/UI commits as reference for ui-next (draft PR)   |
 
+**Batch size guideline:** If a phase has more than 30 commits, consider splitting it into sub-phases (e.g., `bugfixes-1`, `bugfixes-2`) to keep PRs reviewable and reduce conflict cascading.
+
 ---
 
 ## Full Procedure
@@ -242,6 +244,26 @@ Dependency chains detected:
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 ```
 
+**Step 2.4b — Operator1 Impact Analysis**
+
+For each phase category, analyze how the commits impact operator1 specifically:
+
+- What operator1 features/workflows benefit?
+- What bugs affecting operator1 users are fixed?
+- What security risks to our deployment are mitigated?
+- What future maintenance burden is reduced?
+
+Present this as an "Operator1 Impact" section under each phase in the classification:
+
+```
+── Phase 1: Security (N commits) ──────────
+Operator1 impact:
+  • <specific benefit to operator1 deployment/users>
+  • <specific risk mitigated>
+```
+
+This gives the operator confidence that each phase has concrete value.
+
 **Step 2.5 — Save the sync report**
 
 Write the full Phase 0-2 report to:
@@ -311,6 +333,14 @@ For each phase in order (security → bugfixes → features → provider-refacto
 cat .claude/skills/upstream-sync/state/sync-state.json
 ```
 
+**Capture test baseline:** Before starting the first phase, record the test failure count on main:
+
+```bash
+pnpm test 2>&1 | grep "Test Files" > /tmp/sync-test-baseline.txt
+```
+
+This allows qa-runner to precisely report new-vs-pre-existing failures.
+
 - If this is NOT the first phase, verify the prior phase's status is `completed`
 - If prior phase is `pr-open`, tell user: "Phase N PR needs to be merged before starting Phase N+1. Merge it and run `/upstream-sync --phase next`."
 - If this phase is already `completed`, skip to next phase
@@ -323,6 +353,17 @@ git tag "$BACKUP_TAG" 2>/dev/null || echo "Backup tag already exists"
 ```
 
 **Step 3.2 — Spawn code-guard**
+
+**Pre-scan for missing dependencies:**
+For each commit in the phase, check if it imports modules/functions that don't exist in our tree:
+
+```bash
+for sha in <commit-list>; do
+  git show $sha --stat | grep -v "^$" | head -5
+done
+```
+
+Flag any commits that reference files/functions not in our codebase. Either add the dependency commit or warn code-guard to handle it.
 
 Give code-guard:
 
@@ -348,6 +389,20 @@ Spawn qa-runner on the sync branch. Instruct it to:
 If failures: re-engage code-guard to fix, then re-run qa-runner. Loop until green.
 
 **Only proceed to Step 3.4 after qa-runner reports PASS.**
+
+**Step 3.3b — Spawn docs-updater on sync branch (BEFORE PR)**
+
+While still on the sync branch (before pushing), spawn docs-updater to update relevant documentation for this phase's changes. The docs updates become part of the PR.
+
+Give docs-updater:
+
+- The phase name and commit list
+- The sync report file path for context
+- Instruction: update docs on the current sync branch, commit changes
+
+For `ui-inspiration` phase: skip docs-updater (reference only, no user-facing doc changes).
+
+Wait for docs-updater to report what was updated.
 
 **Step 3.4 — Push branch and open PR**
 
@@ -426,6 +481,9 @@ PR: <url>
 Commits cherry-picked: N
 Build: ✅  Tests: ✅  UI: ✅
 
+Key wins for operator1:
+  • <remind 2-3 specific operator1 benefits from this phase>
+
 → Please review the PR. When ready, say "merge it" to proceed.
 → Remaining phases: <list pending phases>
 ```
@@ -495,6 +553,9 @@ git push
 
 ```
 ✅ Phase <N> (<phase>) merged to main.
+
+Key wins for operator1:
+  • <remind 2-3 specific operator1 benefits from this phase>
 
 → Please test on main before we continue:
   1. pnpm install && pnpm build

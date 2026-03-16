@@ -67,6 +67,19 @@ pnpm build 2>&1 | head -50
 - If build passes: the batch is safe. Reset and proceed to real picks.
 - If build fails: identify which commit introduced the missing dep. Either add the dependency commit to the batch or flag it back to sync-lead.
 
+**If build fails during dry-run:**
+Check for missing imports — these indicate cherry-pick dependency gaps:
+
+```bash
+pnpm build 2>&1 | grep "Cannot find\|has no exported member\|Module.*not found"
+```
+
+For each missing dependency:
+
+1. Check if it exists upstream: `git show v<tag>:<file>`
+2. If it's a small function/type: create it from upstream
+3. If it's a large structural dependency: flag to sync-lead as needing an extra commit
+
 ```bash
 git reset --hard  # safe — we're on the sync branch, not main
 ```
@@ -157,6 +170,31 @@ ls .agents/ 2>/dev/null && echo "✅ .agents/" || echo "❌ .agents/ MISSING"
 - After all picks, verify provider discovery and auth flows are intact
 
 ### Step 7 — Report to sync-lead
+
+**MANDATORY: Verify zero conflict markers before reporting**
+
+```bash
+grep -rl '<<<<<<< HEAD' --include='*.ts' --include='*.tsx' --include='*.json' --include='*.md' . | grep -v node_modules
+```
+
+If ANY files are found:
+
+1. For each file: resolve the conflict (take upstream for non-operator1 files, manual merge for operator1 files)
+2. If too complex: `git checkout main -- <file>` to restore
+3. Re-run this check until clean
+4. Only then proceed to report
+
+**MANDATORY: Verify build passes before reporting**
+
+```bash
+pnpm build 2>&1 | tail -10
+```
+
+If build fails:
+
+1. Check for missing imports/exports
+2. Restore broken files to main: `git checkout main -- <file>`
+3. Rebuild until clean
 
 For each cherry-picked commit:
 
