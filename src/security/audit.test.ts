@@ -1864,7 +1864,7 @@ description: test skill
         security: {
           resolveDmPolicy: () => ({
             policy: "allowlist",
-            allowFrom: ["user-a", "user-b"],
+            allowFrom: ["111111111111", "222222222222"],
             policyPath: "channels.whatsapp.dmPolicy",
             allowFromPath: "channels.whatsapp.",
             approveHint: "approve",
