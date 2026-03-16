@@ -1195,12 +1195,13 @@
                       "gateway/trusted-proxy-auth",
                       "gateway/health",
                       "gateway/heartbeat",
-                      "gateway/doctor",
-                      "gateway/logging",
-                      "gateway/gateway-lock",
-                      "gateway/background-process",
-                      "gateway/multiple-gateways",
-                      "gateway/troubleshooting"
+	                      "gateway/doctor",
+	                      "gateway/logging",
+	                      "gateway/monitoring",
+	                      "gateway/gateway-lock",
+	                      "gateway/background-process",
+	                      "gateway/multiple-gateways",
+	                      "gateway/troubleshooting"
                     ]
                   },
                   {
