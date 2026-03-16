@@ -91,6 +91,7 @@ function installTestRegistry(plugin: ChannelPlugin<TestAccount>) {
 
 function createManager(options?: {
   channelRuntime?: PluginRuntime["channel"];
+  resolveChannelRuntime?: () => PluginRuntime["channel"];
   loadConfig?: () => Record<string, unknown>;
 }) {
   const log = createSubsystemLogger("gateway/server-channels-test");
@@ -102,6 +103,9 @@ function createManager(options?: {
     channelLogs,
     channelRuntimeEnvs,
     ...(options?.channelRuntime ? { channelRuntime: options.channelRuntime } : {}),
+    ...(options?.resolveChannelRuntime
+      ? { resolveChannelRuntime: options.resolveChannelRuntime }
+      : {}),
   });
 }
 
@@ -136,7 +140,7 @@ describe("server-channels auto restart", () => {
     const snapshot = manager.getRuntimeSnapshot();
     const account = snapshot.channelAccounts.discord?.[DEFAULT_ACCOUNT_ID];
     expect(account?.running).toBe(false);
-    expect(account?.reconnectAttempts).toBe(10);
+    expect(account?.reconnectAttempts).toBe(11);
 
     await vi.advanceTimersByTimeAsync(200);
     expect(startAccount).toHaveBeenCalledTimes(11);
@@ -182,6 +186,29 @@ describe("server-channels auto restart", () => {
     const manager = createManager({ channelRuntime });
 
     await manager.startChannels();
+    expect(startAccount).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not resolve channelRuntime until a channel starts", async () => {
+    const channelRuntime = {
+      marker: "lazy-channel-runtime",
+    } as unknown as PluginRuntime["channel"];
+    const resolveChannelRuntime = vi.fn(() => channelRuntime);
+    const startAccount = vi.fn(async (ctx) => {
+      expect(ctx.channelRuntime).toBe(channelRuntime);
+    });
+
+    installTestRegistry(createTestPlugin({ startAccount }));
+    const manager = createManager({ resolveChannelRuntime });
+
+    expect(resolveChannelRuntime).not.toHaveBeenCalled();
+
+    void manager.getRuntimeSnapshot();
+    expect(resolveChannelRuntime).not.toHaveBeenCalled();
+
+    await manager.startChannels();
+
+    expect(resolveChannelRuntime).toHaveBeenCalledTimes(1);
     expect(startAccount).toHaveBeenCalledTimes(1);
   });
 
