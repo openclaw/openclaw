@@ -253,9 +253,31 @@ export function parsePostContent(content: string): PostParseResult {
       }
       let renderedParagraph = "";
       for (const element of paragraph) {
-        renderedParagraph += renderElement(element, imageKeys, mediaKeys, mentionedOpenIds);
+        let rendered = renderElement(element, imageKeys, mediaKeys, mentionedOpenIds);
+        const isTagNeedsSpace =
+          isRecord(element) && ["a", "at"].includes(toStringOrEmpty(element.tag).toLowerCase());
+
+        if (isTagNeedsSpace) {
+          // Ensure space before
+          if (
+            renderedParagraph.length > 0 &&
+            !renderedParagraph.endsWith(" ") &&
+            !renderedParagraph.endsWith("\n")
+          ) {
+            renderedParagraph += " ";
+          }
+          renderedParagraph += rendered;
+          // Ensure space after (we will just append it, and later trim)
+          renderedParagraph += " ";
+        } else {
+          // It's normal text. If it starts with space and renderedParagraph ends with space, avoid double space,
+          // but mostly it's fine. We just append.
+          renderedParagraph += rendered;
+        }
       }
-      paragraphs.push(renderedParagraph);
+      // Replace double spaces with single space, just in case
+      renderedParagraph = renderedParagraph.replace(/ {2,}/g, " ");
+      paragraphs.push(renderedParagraph.trim());
     }
 
     const title = escapeMarkdownText(payload.title.trim());
