@@ -1,9 +1,12 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { importFreshModule } from "../../../test/helpers/import-fresh.js";
 import {
   __testing,
   abortEmbeddedPiRun,
   clearActiveEmbeddedRun,
+  getActiveEmbeddedRunSnapshot,
   setActiveEmbeddedRun,
+  updateActiveEmbeddedRunSnapshot,
   waitForActiveEmbeddedRuns,
 } from "./runs.js";
 
@@ -104,5 +107,60 @@ describe("pi-embedded runner run registry", () => {
       await vi.runOnlyPendingTimersAsync();
       vi.useRealTimers();
     }
+  });
+
+  it("shares active run state across distinct module instances", async () => {
+    const runsA = await importFreshModule<typeof import("./runs.js")>(
+      import.meta.url,
+      "./runs.js?scope=shared-a",
+    );
+    const runsB = await importFreshModule<typeof import("./runs.js")>(
+      import.meta.url,
+      "./runs.js?scope=shared-b",
+    );
+    const handle = {
+      queueMessage: async () => {},
+      isStreaming: () => true,
+      isCompacting: () => false,
+      abort: vi.fn(),
+    };
+
+    runsA.__testing.resetActiveEmbeddedRuns();
+    runsB.__testing.resetActiveEmbeddedRuns();
+
+    try {
+      runsA.setActiveEmbeddedRun("session-shared", handle);
+      expect(runsB.isEmbeddedPiRunActive("session-shared")).toBe(true);
+
+      runsB.clearActiveEmbeddedRun("session-shared", handle);
+      expect(runsA.isEmbeddedPiRunActive("session-shared")).toBe(false);
+    } finally {
+      runsA.__testing.resetActiveEmbeddedRuns();
+      runsB.__testing.resetActiveEmbeddedRuns();
+    }
+  });
+
+  it("tracks and clears per-session transcript snapshots for active runs", () => {
+    const handle = {
+      queueMessage: async () => {},
+      isStreaming: () => true,
+      isCompacting: () => false,
+      abort: vi.fn(),
+    };
+
+    setActiveEmbeddedRun("session-snapshot", handle);
+    updateActiveEmbeddedRunSnapshot("session-snapshot", {
+      transcriptLeafId: "assistant-1",
+      messages: [{ role: "user", content: [{ type: "text", text: "hello" }], timestamp: 1 }],
+      inFlightPrompt: "keep going",
+    });
+    expect(getActiveEmbeddedRunSnapshot("session-snapshot")).toEqual({
+      transcriptLeafId: "assistant-1",
+      messages: [{ role: "user", content: [{ type: "text", text: "hello" }], timestamp: 1 }],
+      inFlightPrompt: "keep going",
+    });
+
+    clearActiveEmbeddedRun("session-snapshot", handle);
+    expect(getActiveEmbeddedRunSnapshot("session-snapshot")).toBeUndefined();
   });
 });

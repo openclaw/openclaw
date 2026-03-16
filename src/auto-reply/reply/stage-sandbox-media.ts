@@ -7,7 +7,7 @@ import { ensureSandboxWorkspaceForSession } from "../../agents/sandbox.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { logVerbose } from "../../globals.js";
 import { copyFileWithinRoot, SafeOpenError } from "../../infra/fs-safe.js";
-import { normalizeScpRemoteHost } from "../../infra/scp-host.js";
+import { normalizeScpRemoteHost, normalizeScpRemotePath } from "../../infra/scp-host.js";
 import { resolvePreferredOpenClawTmpDir } from "../../infra/tmp-openclaw-dir.js";
 import {
   isInboundPathAllowed,
@@ -293,6 +293,10 @@ async function scpFile(remoteHost: string, remotePath: string, localPath: string
   if (!safeRemoteHost) {
     throw new Error("invalid remote host for SCP");
   }
+  const safeRemotePath = normalizeScpRemotePath(remotePath);
+  if (!safeRemotePath) {
+    throw new Error("invalid remote path for SCP");
+  }
   return new Promise((resolve, reject) => {
     const child = spawn(
       "/usr/bin/scp",
@@ -302,7 +306,7 @@ async function scpFile(remoteHost: string, remotePath: string, localPath: string
         "-o",
         "StrictHostKeyChecking=yes",
         "--",
-        `${safeRemoteHost}:${remotePath}`,
+        `${safeRemoteHost}:${safeRemotePath}`,
         localPath,
       ],
       { stdio: ["ignore", "ignore", "pipe"] },

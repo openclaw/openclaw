@@ -1,3 +1,4 @@
+import { hasPotentialConfiguredChannels } from "../channels/config-presence.js";
 import { resolveCommandSecretRefsViaGateway } from "../cli/command-secret-gateway.js";
 import { getStatusCommandSecretTargetIds } from "../cli/command-secret-targets.js";
 import { withProgress } from "../cli/progress.js";
@@ -6,14 +7,12 @@ import { readBestEffortConfig } from "../config/config.js";
 import { buildGatewayConnectionDetails, callGateway } from "../gateway/call.js";
 import { normalizeControlUiBasePath } from "../gateway/control-ui-shared.js";
 import { probeGateway } from "../gateway/probe.js";
-import { collectChannelStatusIssues } from "../infra/channels-status-issues.js";
 import { resolveOsSummary } from "../infra/os-summary.js";
 import { getTailnetHostname } from "../infra/tailscale.js";
 import { getMemorySearchManager } from "../memory/index.js";
 import type { MemoryProviderStatus } from "../memory/types.js";
 import { runExec } from "../process/exec.js";
 import type { RuntimeEnv } from "../runtime.js";
-import { buildChannelsTable } from "./status-all/channels.js";
 import { getAgentLocalStatuses } from "./status.agent-local.js";
 import {
   pickGatewaySelfPresence,
@@ -45,6 +44,19 @@ type GatewayProbeSnapshot = {
   gatewayProbeAuthWarning?: string;
   gatewayProbe: Awaited<ReturnType<typeof probeGateway>> | null;
 };
+
+let pluginRegistryModulePromise: Promise<typeof import("../cli/plugin-registry.js")> | undefined;
+let statusScanRuntimeModulePromise: Promise<typeof import("./status.scan.runtime.js")> | undefined;
+
+function loadPluginRegistryModule() {
+  pluginRegistryModulePromise ??= import("../cli/plugin-registry.js");
+  return pluginRegistryModulePromise;
+}
+
+function loadStatusScanRuntimeModule() {
+  statusScanRuntimeModulePromise ??= import("./status.scan.runtime.js");
+  return statusScanRuntimeModulePromise;
+}
 
 function deferResult<T>(promise: Promise<T>): Promise<DeferredResult<T>> {
   return promise.then(
@@ -90,6 +102,7 @@ async function resolveGatewayProbeSnapshot(params: {
         url: gatewayConnection.url,
         auth: gatewayProbeAuthResolution.auth,
         timeoutMs: Math.min(params.opts.all ? 5000 : 2500, params.opts.timeoutMs ?? 10_000),
+        detailLevel: "presence",
       }).catch(() => null);
   if (gatewayProbeAuthWarning && gatewayProbe?.ok === false) {
     gatewayProbe.error = gatewayProbe.error
@@ -189,8 +202,12 @@ async function scanStatusJsonFast(opts: {
       config: loadedRaw,
       commandName: "status --json",
       targetIds: getStatusCommandSecretTargetIds(),
-      mode: "summary",
+      mode: "read_only_status",
     });
+  if (hasPotentialConfiguredChannels(cfg)) {
+    const { ensurePluginRegistryLoaded } = await loadPluginRegistryModule();
+    ensurePluginRegistryLoaded({ scope: "configured-channels" });
+  }
   const osSummary = resolveOsSummary();
   const tailscaleMode = cfg.gateway?.tailscale?.mode ?? "off";
   const updateTimeoutMs = opts.all ? 6500 : 2500;
@@ -235,11 +252,9 @@ async function scanStatusJsonFast(opts: {
   const gatewaySelf = gatewayProbe?.presence
     ? pickGatewaySelfPresence(gatewayProbe.presence)
     : null;
-  const channelsStatusPromise = resolveChannelsStatus({ cfg, gatewayReachable, opts });
   const memoryPlugin = resolveMemoryPluginStatus(cfg);
   const memoryPromise = resolveMemoryStatusSnapshot({ cfg, agentStatus, memoryPlugin });
-  const [channelsStatus, memory] = await Promise.all([channelsStatusPromise, memoryPromise]);
-  const channelIssues = channelsStatus ? collectChannelStatusIssues(channelsStatus) : [];
+  const memory = await memoryPromise;
 
   return {
     cfg,
@@ -258,7 +273,7 @@ async function scanStatusJsonFast(opts: {
     gatewayProbe,
     gatewayReachable,
     gatewaySelf,
-    channelIssues,
+    channelIssues: [],
     agentStatus,
     channels: { rows: [], details: [] },
     summary,
@@ -292,7 +307,7 @@ export async function scanStatus(
           config: loadedRaw,
           commandName: "status",
           targetIds: getStatusCommandSecretTargetIds(),
-          mode: "summary",
+          mode: "read_only_status",
         });
       const osSummary = resolveOsSummary();
       const tailscaleMode = cfg.gateway?.tailscale?.mode ?? "off";
@@ -349,6 +364,8 @@ export async function scanStatus(
 
       progress.setLabel("Querying channel status…");
       const channelsStatus = await resolveChannelsStatus({ cfg, gatewayReachable, opts });
+      const { collectChannelStatusIssues, buildChannelsTable } =
+        await loadStatusScanRuntimeModule();
       const channelIssues = channelsStatus ? collectChannelStatusIssues(channelsStatus) : [];
       progress.tick();
 
