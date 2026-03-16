@@ -18,6 +18,9 @@ let writeConfigFile: typeof import("../config/config.js").writeConfigFile;
 let resolveConfigPath: typeof import("../config/config.js").resolveConfigPath;
 const GATEWAY_E2E_TIMEOUT_MS = 30_000;
 let gatewayTestSeq = 0;
+// Keep this off the real "openai" provider id so the runtime stays on the
+// mocked HTTP Responses path instead of upgrading to the OpenAI WS transport.
+const MOCK_OPENAI_PROVIDER_ID = "mock-openai";
 
 function nextGatewayId(prefix: string): string {
   return `${prefix}-${process.pid}-${process.env.VITEST_POOL_ID ?? "0"}-${gatewayTestSeq++}`;
@@ -73,7 +76,7 @@ describe("gateway e2e", () => {
         models: {
           mode: "replace",
           providers: {
-            openai: buildOpenAiResponsesProviderConfig(openaiBaseUrl),
+            [MOCK_OPENAI_PROVIDER_ID]: buildOpenAiResponsesProviderConfig(openaiBaseUrl),
           },
         },
         gateway: { auth: { token } },
@@ -91,7 +94,7 @@ describe("gateway e2e", () => {
 
         await client.request("sessions.patch", {
           key: sessionKey,
-          model: "openai/gpt-5.2",
+          model: `${MOCK_OPENAI_PROVIDER_ID}/gpt-5.2`,
         });
 
         const runId = nextGatewayId("run");
@@ -116,7 +119,7 @@ describe("gateway e2e", () => {
         expect(text).toContain(nonceA);
         expect(text).toContain(nonceB);
       } finally {
-        client.stop();
+        await client.stopAndWait();
         await server.close({ reason: "mock openai test complete" });
         await fs.rm(tempHome, { recursive: true, force: true });
         restore();
@@ -216,7 +219,7 @@ describe("gateway e2e", () => {
           | undefined;
         expect((token?.auth as { token?: string } | undefined)?.token).toBe(wizardToken);
       } finally {
-        client.stop();
+        await client.stopAndWait();
         await server.close({ reason: "wizard e2e complete" });
       }
 
