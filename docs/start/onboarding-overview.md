@@ -1,18 +1,18 @@
 ---
-summary: "Overview of OpenClaw onboarding options and flows"
+summary: "Overview of OpenClaw setup options and flows"
 read_when:
-  - Choosing an onboarding path
+  - Choosing a setup path
   - Setting up a new environment
-title: "Onboarding Overview"
-sidebarTitle: "Onboarding Overview"
+title: "Setup Overview"
+sidebarTitle: "Setup Overview"
 ---
 
-# Onboarding Overview
+# Setup Overview
 
-OpenClaw supports multiple onboarding paths depending on where the Gateway runs
+OpenClaw supports multiple setup paths depending on where the Gateway runs
 and how you prefer to configure providers.
 
-## Choose your onboarding path
+## Choose your setup path
 
 - **CLI wizard** for macOS, Linux, and Windows (via WSL2).
 - **macOS app** for a guided first run on Apple silicon or Intel Macs.
@@ -22,14 +22,14 @@ and how you prefer to configure providers.
 Run the wizard in a terminal:
 
 ```bash
-openclaw onboard
+openclaw setup --wizard
 ```
 
 Use the CLI wizard when you want full control of the Gateway, workspace,
 channels, and skills. Docs:
 
 - [Setup Wizard (CLI)](/start/wizard)
-- [`openclaw onboard` command](/cli/onboard)
+- [`openclaw setup --wizard` command](/cli/setup)
 
 ## macOS app onboarding
 
@@ -48,4 +48,4 @@ CLI wizard. You will be asked to:
 - Provide a model ID and optional alias.
 - Choose an Endpoint ID so multiple custom endpoints can coexist.
 
-For detailed steps, follow the CLI onboarding docs above.
+For detailed steps, follow the CLI setup docs above.

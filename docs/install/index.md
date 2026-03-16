@@ -76,7 +76,7 @@ For VPS/cloud hosts, avoid third-party "1-click" marketplace images when possibl
       <Tab title="npm">
         ```bash
         npm install -g openclaw@latest
-        openclaw onboard --install-daemon
+        openclaw setup --wizard --install-daemon
         ```
 
         <Accordion title="sharp build errors?">
@@ -93,7 +93,7 @@ For VPS/cloud hosts, avoid third-party "1-click" marketplace images when possibl
         ```bash
         pnpm add -g openclaw@latest
         pnpm approve-builds -g        # approve openclaw, node-llama-cpp, sharp, etc.
-        openclaw onboard --install-daemon
+        openclaw setup --wizard --install-daemon
         ```
 
         <Note>
@@ -140,7 +140,7 @@ For VPS/cloud hosts, avoid third-party "1-click" marketplace images when possibl
       </Step>
       <Step title="Run onboarding">
         ```bash
-        openclaw onboard --install-daemon
+        openclaw setup --wizard --install-daemon
         ```
       </Step>
     </Steps>

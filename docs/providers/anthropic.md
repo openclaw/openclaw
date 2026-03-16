@@ -19,11 +19,11 @@ Create your API key in the Anthropic Console.
 ### CLI setup
 
 ```bash
-openclaw onboard
+openclaw setup --wizard
 # choose: Anthropic API key
 
 # or non-interactive
-openclaw onboard --anthropic-api-key "$ANTHROPIC_API_KEY"
+openclaw setup --wizard --anthropic-api-key "$ANTHROPIC_API_KEY"
 ```
 
 ### Config snippet
@@ -214,7 +214,7 @@ openclaw models auth paste-token --provider anthropic
 
 ```bash
 # Paste a setup-token during setup
-openclaw onboard --auth-choice setup-token
+openclaw setup --wizard --auth-choice setup-token
 ```
 
 ### Config snippet (setup-token)

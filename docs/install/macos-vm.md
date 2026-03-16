@@ -138,7 +138,7 @@ Inside the VM:
 
 ```bash
 npm install -g openclaw@latest
-openclaw onboard --install-daemon
+openclaw setup --wizard --install-daemon
 ```
 
 Follow the onboarding prompts to set up your model provider (Anthropic, OpenAI, etc.).

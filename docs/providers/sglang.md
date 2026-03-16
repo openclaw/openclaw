@@ -33,7 +33,7 @@ export SGLANG_API_KEY="sglang-local"
 3. Run onboarding and choose `SGLang`, or set a model directly:
 
 ```bash
-openclaw onboard
+openclaw setup --wizard
 ```
 
 ```json5

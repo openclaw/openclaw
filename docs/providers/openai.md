@@ -20,9 +20,9 @@ Get your API key from the OpenAI dashboard.
 ### CLI setup
 
 ```bash
-openclaw onboard --auth-choice openai-api-key
+openclaw setup --wizard --auth-choice openai-api-key
 # or non-interactive
-openclaw onboard --openai-api-key "$OPENAI_API_KEY"
+openclaw setup --wizard --openai-api-key "$OPENAI_API_KEY"
 ```
 
 ### Config snippet
@@ -52,7 +52,7 @@ Codex cloud requires ChatGPT sign-in, while the Codex CLI supports ChatGPT or AP
 
 ```bash
 # Run Codex OAuth in the wizard
-openclaw onboard --auth-choice openai-codex
+openclaw setup --wizard --auth-choice openai-codex
 
 # Or run OAuth directly
 openclaw models auth login --provider openai-codex

@@ -21,7 +21,7 @@ title: "Hugging Face (Inference)"
 2. Run onboarding and choose **Hugging Face** in the provider dropdown, then enter your API key when prompted:
 
 ```bash
-openclaw onboard --auth-choice huggingface-api-key
+openclaw setup --wizard --auth-choice huggingface-api-key
 ```
 
 3. In the **Default Hugging Face model** dropdown, pick the model you want (the list is loaded from the Inference API when you have a valid token; otherwise a built-in list is shown). Your choice is saved as the default model.
@@ -40,7 +40,7 @@ openclaw onboard --auth-choice huggingface-api-key
 ## Non-interactive example
 
 ```bash
-openclaw onboard --non-interactive \
+openclaw setup --wizard --non-interactive \
   --mode local \
   --auth-choice huggingface-api-key \
   --huggingface-api-key "$HF_TOKEN"
