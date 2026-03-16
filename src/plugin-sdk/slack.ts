@@ -1,15 +1,7 @@
 export type { OpenClawConfig } from "../config/config.js";
-export type { InspectedSlackAccount } from "../../extensions/slack/src/account-inspect.js";
-export type { ResolvedSlackAccount } from "../../extensions/slack/src/accounts.js";
+export type { SlackAccountConfig } from "../config/types.slack.js";
 export * from "./channel-plugin-common.js";
-export {
-  listSlackAccountIds,
-  resolveDefaultSlackAccountId,
-  resolveSlackAccount,
-  resolveSlackReplyToMode,
-} from "../../extensions/slack/src/accounts.js";
-export { isSlackInteractiveRepliesEnabled } from "../../extensions/slack/src/interactive-replies.js";
-export { inspectSlackAccount } from "../../extensions/slack/src/account-inspect.js";
+
 export {
   projectCredentialSnapshotFields,
   resolveConfiguredFromCredentialStatuses,
@@ -24,13 +16,6 @@ export {
   normalizeSlackMessagingTarget,
 } from "../channels/plugins/normalize/slack.js";
 export {
-  extractSlackToolSend,
-  listSlackMessageActions,
-} from "../../extensions/slack/src/message-actions.js";
-export { buildSlackThreadingToolContext } from "../../extensions/slack/src/threading-tool-context.js";
-export { buildComputedAccountStatusSnapshot } from "./status-helpers.js";
-
-export {
   resolveDefaultGroupPolicy,
   resolveOpenProviderRuntimeGroupPolicy,
 } from "../config/runtime-group-policy.js";
@@ -38,7 +23,5 @@ export {
   resolveSlackGroupRequireMention,
   resolveSlackGroupToolPolicy,
 } from "../channels/plugins/group-mentions.js";
-export { slackOnboardingAdapter } from "../channels/plugins/onboarding/slack.js";
 export { SlackConfigSchema } from "../config/zod-schema.providers-core.js";
-
-export { handleSlackMessageAction } from "./slack-message-actions.js";
+export { buildComputedAccountStatusSnapshot } from "./status-helpers.js";

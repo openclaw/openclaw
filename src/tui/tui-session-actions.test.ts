@@ -4,6 +4,11 @@ import { createSessionActions } from "./tui-session-actions.js";
 import type { TuiStateAccess } from "./tui-types.js";
 
 describe("tui session actions", () => {
+  const createBtwPresenter = () => ({
+    clear: vi.fn(),
+    showResult: vi.fn(),
+  });
+
   it("queues session refreshes and applies the latest result", async () => {
     let resolveFirst: ((value: unknown) => void) | undefined;
     let resolveSecond: ((value: unknown) => void) | undefined;
@@ -52,6 +57,7 @@ describe("tui session actions", () => {
     const { refreshSessionInfo } = createSessionActions({
       client: { listSessions } as unknown as GatewayChatClient,
       chatLog: { addSystem: vi.fn() } as unknown as import("./components/chat-log.js").ChatLog,
+      btw: createBtwPresenter(),
       tui: { requestRender } as unknown as import("@mariozechner/pi-tui").TUI,
       opts: {},
       state,
@@ -157,6 +163,7 @@ describe("tui session actions", () => {
     const { applySessionInfoFromPatch, refreshSessionInfo } = createSessionActions({
       client: { listSessions } as unknown as GatewayChatClient,
       chatLog: { addSystem: vi.fn() } as unknown as import("./components/chat-log.js").ChatLog,
+      btw: createBtwPresenter(),
       tui: { requestRender: vi.fn() } as unknown as import("@mariozechner/pi-tui").TUI,
       opts: {},
       state,
@@ -211,6 +218,7 @@ describe("tui session actions", () => {
       sessionId: "session-2",
       messages: [],
     });
+    const btw = createBtwPresenter();
 
     const state: TuiStateAccess = {
       agentDefaultId: "main",
@@ -247,6 +255,7 @@ describe("tui session actions", () => {
         addSystem: vi.fn(),
         clearAll: vi.fn(),
       } as unknown as import("./components/chat-log.js").ChatLog,
+      btw,
       tui: { requestRender: vi.fn() } as unknown as import("@mariozechner/pi-tui").TUI,
       opts: {},
       state,
@@ -270,5 +279,6 @@ describe("tui session actions", () => {
     expect(state.sessionInfo.model).toBe("session-model");
     expect(state.sessionInfo.modelProvider).toBe("openai");
     expect(state.sessionInfo.updatedAt).toBe(50);
+    expect(btw.clear).toHaveBeenCalled();
   });
 });

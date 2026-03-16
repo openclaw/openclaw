@@ -1,19 +1,15 @@
+import { buildAccountScopedAllowlistConfigEditor } from "openclaw/plugin-sdk/compat";
 import {
+  buildChannelConfigSchema,
   buildAccountScopedDmSecurityPolicy,
   collectAllowlistProviderGroupPolicyWarnings,
   collectOpenGroupPolicyRouteAllowlistWarnings,
-} from "openclaw/plugin-sdk/compat";
-import {
-  applyAccountNameToChannelSection,
-  buildChannelConfigSchema,
   createActionGate,
   createWhatsAppOutboundBase,
   DEFAULT_ACCOUNT_ID,
   getChatChannelMeta,
   listWhatsAppDirectoryGroupsFromConfig,
   listWhatsAppDirectoryPeersFromConfig,
-  migrateBaseNameToDefaultAccount,
-  normalizeAccountId,
   normalizeE164,
   formatWhatsAppConfigAllowFromEntries,
   readStringParam,
@@ -24,11 +20,12 @@ import {
   resolveWhatsAppGroupIntroHint,
   resolveWhatsAppGroupToolPolicy,
   resolveWhatsAppHeartbeatRecipients,
-  resolveWhatsAppMentionStripPatterns,
+  resolveWhatsAppMentionStripRegexes,
   WhatsAppConfigSchema,
   type ChannelMessageActionName,
   type ChannelPlugin,
 } from "openclaw/plugin-sdk/whatsapp";
+import { isWhatsAppGroupJid, normalizeWhatsAppTarget } from "../../../src/whatsapp/normalize.js";
 // WhatsApp-specific imports from local extension code (moved from src/web/ and src/channels/plugins/)
 import {
   listWhatsAppAccountIds,
@@ -37,11 +34,75 @@ import {
   type ResolvedWhatsAppAccount,
 } from "./accounts.js";
 import { looksLikeWhatsAppTargetId, normalizeWhatsAppMessagingTarget } from "./normalize.js";
-import { whatsappOnboardingAdapter } from "./onboarding.js";
 import { getWhatsAppRuntime } from "./runtime.js";
+import { whatsappSetupAdapter } from "./setup-core.js";
 import { collectWhatsAppStatusIssues } from "./status-issues.js";
 
 const meta = getChatChannelMeta("whatsapp");
+
+async function loadWhatsAppChannelRuntime() {
+  return await import("./channel.runtime.js");
+}
+
+function normalizeWhatsAppPayloadText(text: string | undefined): string {
+  return (text ?? "").replace(/^(?:[ \t]*\r?\n)+/, "");
+}
+
+function parseWhatsAppExplicitTarget(raw: string) {
+  const normalized = normalizeWhatsAppTarget(raw);
+  if (!normalized) {
+    return null;
+  }
+  return {
+    to: normalized,
+    chatType: isWhatsAppGroupJid(normalized) ? ("group" as const) : ("direct" as const),
+  };
+}
+
+const whatsappSetupWizardProxy = {
+  channel: "whatsapp",
+  status: {
+    configuredLabel: "linked",
+    unconfiguredLabel: "not linked",
+    configuredHint: "linked",
+    unconfiguredHint: "not linked",
+    configuredScore: 5,
+    unconfiguredScore: 4,
+    resolveConfigured: async ({ cfg }) =>
+      await (
+        await loadWhatsAppChannelRuntime()
+      ).whatsappSetupWizard.status.resolveConfigured({
+        cfg,
+      }),
+    resolveStatusLines: async ({ cfg, configured }) =>
+      (await (
+        await loadWhatsAppChannelRuntime()
+      ).whatsappSetupWizard.status.resolveStatusLines?.({
+        cfg,
+        configured,
+      })) ?? [],
+  },
+  resolveShouldPromptAccountIds: (params) =>
+    (params.shouldPromptAccountIds || params.options?.promptWhatsAppAccountId) ?? false,
+  credentials: [],
+  finalize: async (params) =>
+    await (
+      await loadWhatsAppChannelRuntime()
+    ).whatsappSetupWizard.finalize!(params),
+  disable: (cfg) => ({
+    ...cfg,
+    channels: {
+      ...cfg.channels,
+      whatsapp: {
+        ...cfg.channels?.whatsapp,
+        enabled: false,
+      },
+    },
+  }),
+  onAccountRecorded: (accountId, options) => {
+    options?.onWhatsAppAccountId?.(accountId);
+  },
+} satisfies NonNullable<ChannelPlugin<ResolvedWhatsAppAccount>["setupWizard"]>;
 
 export const whatsappPlugin: ChannelPlugin<ResolvedWhatsAppAccount> = {
   id: "whatsapp",
@@ -52,7 +113,7 @@ export const whatsappPlugin: ChannelPlugin<ResolvedWhatsAppAccount> = {
     forceAccountBinding: true,
     preferSessionLookupForAnnounceTarget: true,
   },
-  onboarding: whatsappOnboardingAdapter,
+  setupWizard: whatsappSetupWizardProxy,
   agentTools: () => [getWhatsAppRuntime().channel.whatsapp.createLoginTool()],
   pairing: {
     idLabel: "whatsappSenderId",
@@ -124,6 +185,26 @@ export const whatsappPlugin: ChannelPlugin<ResolvedWhatsAppAccount> = {
     formatAllowFrom: ({ allowFrom }) => formatWhatsAppConfigAllowFromEntries(allowFrom),
     resolveDefaultTo: ({ cfg, accountId }) => resolveWhatsAppConfigDefaultTo({ cfg, accountId }),
   },
+  allowlist: {
+    supportsScope: ({ scope }) => scope === "dm" || scope === "group" || scope === "all",
+    readConfig: ({ cfg, accountId }) => {
+      const account = resolveWhatsAppAccount({ cfg, accountId });
+      return {
+        dmAllowFrom: (account.allowFrom ?? []).map(String),
+        groupAllowFrom: (account.groupAllowFrom ?? []).map(String),
+        dmPolicy: account.dmPolicy,
+        groupPolicy: account.groupPolicy,
+      };
+    },
+    applyConfigEdit: buildAccountScopedAllowlistConfigEditor({
+      channelId: "whatsapp",
+      normalize: ({ values }) => formatWhatsAppConfigAllowFromEntries(values),
+      resolvePaths: (scope) => ({
+        readPaths: [[scope === "dm" ? "allowFrom" : "groupAllowFrom"]],
+        writePath: [scope === "dm" ? "allowFrom" : "groupAllowFrom"],
+      }),
+    }),
+  },
   security: {
     resolveDmPolicy: ({ cfg, accountId, account }) => {
       return buildAccountScopedDmSecurityPolicy({
@@ -165,56 +246,14 @@ export const whatsappPlugin: ChannelPlugin<ResolvedWhatsAppAccount> = {
       });
     },
   },
-  setup: {
-    resolveAccountId: ({ accountId }) => normalizeAccountId(accountId),
-    applyAccountName: ({ cfg, accountId, name }) =>
-      applyAccountNameToChannelSection({
-        cfg,
-        channelKey: "whatsapp",
-        accountId,
-        name,
-        alwaysUseAccounts: true,
-      }),
-    applyAccountConfig: ({ cfg, accountId, input }) => {
-      const namedConfig = applyAccountNameToChannelSection({
-        cfg,
-        channelKey: "whatsapp",
-        accountId,
-        name: input.name,
-        alwaysUseAccounts: true,
-      });
-      const next = migrateBaseNameToDefaultAccount({
-        cfg: namedConfig,
-        channelKey: "whatsapp",
-        alwaysUseAccounts: true,
-      });
-      const entry = {
-        ...next.channels?.whatsapp?.accounts?.[accountId],
-        ...(input.authDir ? { authDir: input.authDir } : {}),
-        enabled: true,
-      };
-      return {
-        ...next,
-        channels: {
-          ...next.channels,
-          whatsapp: {
-            ...next.channels?.whatsapp,
-            accounts: {
-              ...next.channels?.whatsapp?.accounts,
-              [accountId]: entry,
-            },
-          },
-        },
-      };
-    },
-  },
+  setup: whatsappSetupAdapter,
   groups: {
     resolveRequireMention: resolveWhatsAppGroupRequireMention,
     resolveToolPolicy: resolveWhatsAppGroupToolPolicy,
     resolveGroupIntroHint: resolveWhatsAppGroupIntroHint,
   },
   mentions: {
-    stripPatterns: ({ ctx }) => resolveWhatsAppMentionStripPatterns(ctx),
+    stripRegexes: ({ ctx }) => resolveWhatsAppMentionStripRegexes(ctx),
   },
   commands: {
     enforceOwnerForCommands: true,
@@ -222,6 +261,8 @@ export const whatsappPlugin: ChannelPlugin<ResolvedWhatsAppAccount> = {
   },
   messaging: {
     normalizeTarget: normalizeWhatsAppMessagingTarget,
+    parseExplicitTarget: ({ raw }) => parseWhatsAppExplicitTarget(raw),
+    inferTargetChatType: ({ to }) => parseWhatsAppExplicitTarget(to)?.chatType,
     targetResolver: {
       looksLikeId: looksLikeWhatsAppTargetId,
       hint: "<E.164|group JID>",
@@ -286,16 +327,22 @@ export const whatsappPlugin: ChannelPlugin<ResolvedWhatsAppAccount> = {
       );
     },
   },
-  outbound: createWhatsAppOutboundBase({
-    chunker: (text, limit) => getWhatsAppRuntime().channel.text.chunkText(text, limit),
-    sendMessageWhatsApp: async (...args) =>
-      await getWhatsAppRuntime().channel.whatsapp.sendMessageWhatsApp(...args),
-    sendPollWhatsApp: async (...args) =>
-      await getWhatsAppRuntime().channel.whatsapp.sendPollWhatsApp(...args),
-    shouldLogVerbose: () => getWhatsAppRuntime().logging.shouldLogVerbose(),
-    resolveTarget: ({ to, allowFrom, mode }) =>
-      resolveWhatsAppOutboundTarget({ to, allowFrom, mode }),
-  }),
+  outbound: {
+    ...createWhatsAppOutboundBase({
+      chunker: (text, limit) => getWhatsAppRuntime().channel.text.chunkText(text, limit),
+      sendMessageWhatsApp: async (...args) =>
+        await getWhatsAppRuntime().channel.whatsapp.sendMessageWhatsApp(...args),
+      sendPollWhatsApp: async (...args) =>
+        await getWhatsAppRuntime().channel.whatsapp.sendPollWhatsApp(...args),
+      shouldLogVerbose: () => getWhatsAppRuntime().logging.shouldLogVerbose(),
+      resolveTarget: ({ to, allowFrom, mode }) =>
+        resolveWhatsAppOutboundTarget({ to, allowFrom, mode }),
+    }),
+    normalizePayload: ({ payload }) => ({
+      ...payload,
+      text: normalizeWhatsAppPayloadText(payload.text),
+    }),
+  },
   auth: {
     login: async ({ cfg, accountId, runtime, verbose }) => {
       const resolvedAccountId = accountId?.trim() || resolveDefaultWhatsAppAccountId(cfg);

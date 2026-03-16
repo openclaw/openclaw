@@ -48,7 +48,7 @@ import {
   prepareSecretsRuntimeSnapshot,
   resolveCommandSecretsFromActiveRuntimeSnapshot,
 } from "../secrets/runtime.js";
-import { runOnboardingWizard } from "../wizard/onboarding.js";
+import { runSetupWizard } from "../wizard/setup.js";
 import { createAuthRateLimiter, type AuthRateLimiter } from "./auth-rate-limit.js";
 import { startChannelHealthMonitor } from "./channel-health-monitor.js";
 import type { ControlUiRootState } from "./control-ui.js";
@@ -135,6 +135,13 @@ const logDiscovery = log.child("discovery");
 const logTailscale = log.child("tailscale");
 const logChannels = log.child("channels");
 const logBrowser = log.child("browser");
+
+let cachedChannelRuntime: ReturnType<typeof createPluginRuntime>["channel"] | null = null;
+
+function getChannelRuntime() {
+  cachedChannelRuntime ??= createPluginRuntime().channel;
+  return cachedChannelRuntime;
+}
 const logHealth = log.child("health");
 const logCron = log.child("cron");
 const logReload = log.child("reload");
@@ -257,7 +264,7 @@ export type GatewayServerOptions = {
    */
   allowCanvasHostInTests?: boolean;
   /**
-   * Test-only: override the onboarding wizard runner.
+   * Test-only: override the setup wizard runner.
    */
   wizardRunner?: (
     opts: import("../commands/onboard-types.js").OnboardOptions,
@@ -435,7 +442,7 @@ export async function startGatewayServer(
     },
   );
 
-  const wizardRunner = opts.wizardRunner ?? runOnboardingWizard;
+  const wizardRunner = opts.wizardRunner ?? runSetupWizard;
   const { wizardSessions, findRunningWizard, purgeWizardSession } = createWizardSessionTracker();
 
   const deps = createDefaultDeps();
@@ -449,7 +456,7 @@ export async function startGatewayServer(
     loadConfig,
     channelLogs,
     channelRuntimeEnvs,
-    channelRuntime: createPluginRuntime().channel,
+    resolveChannelRuntime: getChannelRuntime,
   });
   const getReadiness = createReadinessChecker({
     channelManager,
@@ -457,6 +464,7 @@ export async function startGatewayServer(
   });
   const {
     canvasHost,
+    releasePluginRouteRegistry,
     httpServer,
     httpServers,
     httpBindHosts,
@@ -631,11 +639,17 @@ export async function startGatewayServer(
 
   const healthCheckMinutes = cfgAtStart.gateway?.channelHealthCheckMinutes;
   const healthCheckDisabled = healthCheckMinutes === 0;
+  const staleEventThresholdMinutes = cfgAtStart.gateway?.channelStaleEventThresholdMinutes;
+  const maxRestartsPerHour = cfgAtStart.gateway?.channelMaxRestartsPerHour;
   let channelHealthMonitor = healthCheckDisabled
     ? null
     : startChannelHealthMonitor({
         channelManager,
         checkIntervalMs: (healthCheckMinutes ?? 5) * 60_000,
+        ...(staleEventThresholdMinutes != null && {
+          staleEventThresholdMs: staleEventThresholdMinutes * 60_000,
+        }),
+        ...(maxRestartsPerHour != null && { maxRestartsPerHour }),
       });
 
   if (!minimalTestGateway) {
@@ -854,8 +868,21 @@ export async function startGatewayServer(
           logChannels,
           logCron,
           logReload,
-          createHealthMonitor: (checkIntervalMs: number) =>
-            startChannelHealthMonitor({ channelManager, checkIntervalMs }),
+          createHealthMonitor: (opts: {
+            checkIntervalMs: number;
+            staleEventThresholdMs?: number;
+            maxRestartsPerHour?: number;
+          }) =>
+            startChannelHealthMonitor({
+              channelManager,
+              checkIntervalMs: opts.checkIntervalMs,
+              ...(opts.staleEventThresholdMs != null && {
+                staleEventThresholdMs: opts.staleEventThresholdMs,
+              }),
+              ...(opts.maxRestartsPerHour != null && {
+                maxRestartsPerHour: opts.maxRestartsPerHour,
+              }),
+            }),
         });
 
         return startGatewayRuntimeConfigReloader({
@@ -878,6 +905,7 @@ export async function startGatewayServer(
     tailscaleCleanup,
     canvasHost,
     canvasHostServer,
+    releasePluginRouteRegistry,
     stopChannel,
     pluginServices,
     cron,

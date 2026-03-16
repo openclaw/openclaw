@@ -26,10 +26,8 @@ describe("browser config", () => {
     expect(user?.driver).toBe("existing-session");
     expect(user?.cdpPort).toBe(0);
     expect(user?.cdpUrl).toBe("");
-    const chromeRelay = resolveProfile(resolved, "chrome-relay");
-    expect(chromeRelay?.driver).toBe("extension");
-    expect(chromeRelay?.cdpPort).toBe(18792);
-    expect(chromeRelay?.cdpUrl).toBe("http://127.0.0.1:18792");
+    // chrome-relay is no longer auto-created
+    expect(resolveProfile(resolved, "chrome-relay")).toBe(null);
     expect(resolved.remoteCdpTimeoutMs).toBe(1500);
     expect(resolved.remoteCdpHandshakeTimeoutMs).toBe(3000);
   });
@@ -38,10 +36,7 @@ describe("browser config", () => {
     withEnv({ OPENCLAW_GATEWAY_PORT: "19001" }, () => {
       const resolved = resolveBrowserConfig(undefined);
       expect(resolved.controlPort).toBe(19003);
-      const chromeRelay = resolveProfile(resolved, "chrome-relay");
-      expect(chromeRelay?.driver).toBe("extension");
-      expect(chromeRelay?.cdpPort).toBe(19004);
-      expect(chromeRelay?.cdpUrl).toBe("http://127.0.0.1:19004");
+      expect(resolveProfile(resolved, "chrome-relay")).toBe(null);
 
       const openclaw = resolveProfile(resolved, "openclaw");
       expect(openclaw?.cdpPort).toBe(19012);
@@ -53,10 +48,7 @@ describe("browser config", () => {
     withEnv({ OPENCLAW_GATEWAY_PORT: undefined }, () => {
       const resolved = resolveBrowserConfig(undefined, { gateway: { port: 19011 } });
       expect(resolved.controlPort).toBe(19013);
-      const chromeRelay = resolveProfile(resolved, "chrome-relay");
-      expect(chromeRelay?.driver).toBe("extension");
-      expect(chromeRelay?.cdpPort).toBe(19014);
-      expect(chromeRelay?.cdpUrl).toBe("http://127.0.0.1:19014");
+      expect(resolveProfile(resolved, "chrome-relay")).toBe(null);
 
       const openclaw = resolveProfile(resolved, "openclaw");
       expect(openclaw?.cdpPort).toBe(19022);
@@ -196,27 +188,10 @@ describe("browser config", () => {
     expect(profile?.cdpIsLoopback).toBe(true);
   });
 
-  it("trims relayBindHost when configured", () => {
-    const resolved = resolveBrowserConfig({
-      relayBindHost: " 0.0.0.0 ",
-    });
-    expect(resolved.relayBindHost).toBe("0.0.0.0");
-  });
-
   it("rejects unsupported protocols", () => {
     expect(() => resolveBrowserConfig({ cdpUrl: "ftp://127.0.0.1:18791" })).toThrow(
       "must be http(s) or ws(s)",
     );
-  });
-
-  it("does not add the built-in chrome-relay profile if the derived relay port is already used", () => {
-    const resolved = resolveBrowserConfig({
-      profiles: {
-        openclaw: { cdpPort: 18792, color: "#FF4500" },
-      },
-    });
-    expect(resolveProfile(resolved, "chrome-relay")).toBe(null);
-    expect(resolved.defaultProfile).toBe("openclaw");
   });
 
   it("defaults extraArgs to empty array when not provided", () => {
@@ -317,9 +292,6 @@ describe("browser config", () => {
     const managed = resolveProfile(resolved, "openclaw")!;
     expect(getBrowserProfileCapabilities(managed).usesChromeMcp).toBe(false);
 
-    const extension = resolveProfile(resolved, "chrome-relay")!;
-    expect(getBrowserProfileCapabilities(extension).usesChromeMcp).toBe(false);
-
     const work = resolveProfile(resolved, "work")!;
     expect(getBrowserProfileCapabilities(work).usesChromeMcp).toBe(false);
   });
@@ -358,17 +330,17 @@ describe("browser config", () => {
     it("explicit defaultProfile config overrides defaults in headless mode", () => {
       const resolved = resolveBrowserConfig({
         headless: true,
-        defaultProfile: "chrome-relay",
+        defaultProfile: "user",
       });
-      expect(resolved.defaultProfile).toBe("chrome-relay");
+      expect(resolved.defaultProfile).toBe("user");
     });
 
     it("explicit defaultProfile config overrides defaults in noSandbox mode", () => {
       const resolved = resolveBrowserConfig({
         noSandbox: true,
-        defaultProfile: "chrome-relay",
+        defaultProfile: "user",
       });
-      expect(resolved.defaultProfile).toBe("chrome-relay");
+      expect(resolved.defaultProfile).toBe("user");
     });
 
     it("allows custom profile as default even in headless mode", () => {

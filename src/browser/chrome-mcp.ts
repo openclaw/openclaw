@@ -193,7 +193,7 @@ async function createRealSession(profileName: string): Promise<ChromeMcpSession>
       await client.close().catch(() => {});
       throw new BrowserProfileUnavailableError(
         `Chrome MCP existing-session attach failed for profile "${profileName}". ` +
-          `Make sure Chrome is running, enable chrome://inspect/#remote-debugging, and approve the connection. ` +
+          `Make sure Chrome (v144+) is running. ` +
           `Details: ${String(err)}`,
       );
     }

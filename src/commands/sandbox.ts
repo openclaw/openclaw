@@ -74,7 +74,7 @@ export async function sandboxRecreateCommand(
   const filtered = await fetchAndFilterContainers(opts);
 
   if (filtered.containers.length + filtered.browsers.length === 0) {
-    runtime.log("No containers found matching the criteria.");
+    runtime.log("No sandbox runtimes found matching the criteria.");
     return;
   }
 
@@ -154,7 +154,7 @@ async function removeContainers(
   filtered: FilteredContainers,
   runtime: RuntimeEnv,
 ): Promise<{ successCount: number; failCount: number }> {
-  runtime.log("\nRemoving containers...\n");
+  runtime.log("\nRemoving sandbox runtimes...\n");
 
   let successCount = 0;
   let failCount = 0;

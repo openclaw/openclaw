@@ -24,4 +24,14 @@ describe("projectSafeChannelAccountSnapshotFields", () => {
       signingSecretStatus: "configured_unavailable", // pragma: allowlist secret
     });
   });
+
+  it("strips embedded credentials from baseUrl fields", () => {
+    const snapshot = projectSafeChannelAccountSnapshotFields({
+      baseUrl: "https://bob:secret@chat.example.test",
+    });
+
+    expect(snapshot).toEqual({
+      baseUrl: "https://chat.example.test/",
+    });
+  });
 });

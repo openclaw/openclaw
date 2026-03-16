@@ -189,6 +189,9 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean })
       defaultRuntime.log(`${label("RPC probe:")} ${okText("ok")}`);
     } else {
       defaultRuntime.error(`${label("RPC probe:")} ${errorText("failed")}`);
+      if (rpc.authWarning) {
+        defaultRuntime.error(`${label("RPC auth:")} ${warnText(rpc.authWarning)}`);
+      }
       if (rpc.url) {
         defaultRuntime.error(`${label("RPC target:")} ${rpc.url}`);
       }
@@ -199,6 +202,25 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean })
         defaultRuntime.error(`  ${errorText(line)}`);
       }
     }
+    spacer();
+  }
+
+  if (
+    status.health &&
+    status.health.staleGatewayPids.length > 0 &&
+    service.runtime?.status === "running" &&
+    typeof service.runtime.pid === "number"
+  ) {
+    defaultRuntime.error(
+      errorText(
+        `Gateway runtime PID does not own the listening port. Other gateway process(es) are listening: ${status.health.staleGatewayPids.join(", ")}`,
+      ),
+    );
+    defaultRuntime.error(
+      errorText(
+        `Fix: run ${formatCliCommand("openclaw gateway restart")} and re-check with ${formatCliCommand("openclaw gateway status --deep")}.`,
+      ),
+    );
     spacer();
   }
 

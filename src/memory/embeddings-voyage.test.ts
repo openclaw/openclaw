@@ -34,6 +34,7 @@ async function createDefaultVoyageProvider(
   fetchMock: ReturnType<typeof createFetchMock>,
 ) {
   vi.stubGlobal("fetch", fetchMock);
+  mockPublicPinnedHostname();
   mockVoyageApiKey();
   return createVoyageEmbeddingProvider({
     config: {} as never,
