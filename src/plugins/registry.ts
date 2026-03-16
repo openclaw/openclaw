@@ -1,6 +1,5 @@
 import path from "node:path";
 import type { AnyAgentTool } from "../agents/tools/common.js";
-import type { ChannelDock } from "../channels/dock.js";
 import type { ChannelPlugin } from "../channels/plugins/types.js";
 import { registerContextEngineForOwner } from "../context-engine/registry.js";
 import { onAgentEvent, type AgentEventPayload } from "../infra/agent-events.js";
@@ -83,7 +82,6 @@ export type PluginChannelRegistration = {
   pluginId: string;
   pluginName?: string;
   plugin: ChannelPlugin;
-  dock?: ChannelDock;
   source: string;
   rootDir?: string;
 };
@@ -517,7 +515,6 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       pluginId: record.id,
       pluginName: record.name,
       plugin,
-      dock: normalized.dock,
       source: record.source,
       rootDir: record.rootDir,
     });

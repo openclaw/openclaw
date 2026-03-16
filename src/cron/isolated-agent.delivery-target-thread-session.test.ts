@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { parseTelegramTarget } from "../../extensions/telegram/src/targets.js";
 import type { OpenClawConfig } from "../config/config.js";
 
 // Mock session store so we can control what entries exist.
@@ -19,6 +20,16 @@ vi.mock("../channels/plugins/index.js", () => ({
   getChannelPlugin: vi.fn(() => ({
     meta: { label: "Telegram" },
     config: {},
+    messaging: {
+      parseExplicitTarget: ({ raw }: { raw: string }) => {
+        const target = parseTelegramTarget(raw);
+        return {
+          to: target.chatId,
+          threadId: target.messageThreadId,
+          chatType: target.chatType === "unknown" ? undefined : target.chatType,
+        };
+      },
+    },
     outbound: {
       resolveTarget: ({ to }: { to?: string }) =>
         to ? { ok: true, to } : { ok: false, error: new Error("missing") },

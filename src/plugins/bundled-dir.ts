@@ -1,12 +1,29 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { resolveOpenClawPackageRootSync } from "../infra/openclaw-root.js";
 import { resolveUserPath } from "../utils.js";
 
 export function resolveBundledPluginsDir(env: NodeJS.ProcessEnv = process.env): string | undefined {
   const override = env.OPENCLAW_BUNDLED_PLUGINS_DIR?.trim();
   if (override) {
     return resolveUserPath(override, env);
+  }
+
+  if (env.OPENCLAW_WATCH_MODE === "1") {
+    try {
+      const packageRoot = resolveOpenClawPackageRootSync({ cwd: process.cwd() });
+      if (packageRoot) {
+        // In watch mode, prefer source plugin roots so plugin-local runtime deps
+        // resolve from extensions/<id>/node_modules instead of stripped dist copies.
+        const sourceExtensionsDir = path.join(packageRoot, "extensions");
+        if (fs.existsSync(sourceExtensionsDir)) {
+          return sourceExtensionsDir;
+        }
+      }
+    } catch {
+      // ignore
+    }
   }
 
   // bun --compile: ship a sibling `extensions/` next to the executable.

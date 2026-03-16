@@ -57,6 +57,18 @@ openclaw plugins install ./my-bundle
 openclaw plugins install ./my-bundle.tgz
 ```
 
+For Claude marketplace installs, list the marketplace first, then install by
+marketplace entry name:
+
+```bash
+openclaw plugins marketplace list <marketplace-name>
+openclaw plugins install <plugin-name>@<marketplace-name>
+```
+
+OpenClaw resolves known Claude marketplace names from
+`~/.claude/plugins/known_marketplaces.json`. You can also pass an explicit
+marketplace source with `--marketplace`.
+
 ## Architecture
 
 OpenClaw's plugin system has four layers:
@@ -93,6 +105,10 @@ OpenClaw also recognizes two compatible external bundle layouts:
 - Claude-style bundles: `.claude-plugin/plugin.json` or the default Claude
   component layout without a manifest
 - Cursor-style bundles: `.cursor-plugin/plugin.json`
+
+Claude marketplace entries can point at any of these compatible bundles, or at
+native OpenClaw plugin sources. OpenClaw resolves the marketplace entry first,
+then runs the normal install path for the resolved source.
 
 They are shown in the plugin list as `format=bundle`, with a subtype of
 `codex` or `claude` in verbose/info output.
@@ -218,7 +234,8 @@ Tool authoring guide: [Plugin agent tools](/plugins/agent-tools).
 Provider plugins now have two layers:
 
 - manifest metadata: `providerAuthEnvVars` for cheap env-auth lookup before
-  runtime load
+  runtime load, plus `providerAuthChoices` for cheap onboarding/auth-choice
+  labels and CLI flag metadata before runtime load
 - config-time hooks: `catalog` / legacy `discovery`
 - runtime hooks: `resolveDynamicModel`, `prepareDynamicModel`, `normalizeResolvedModel`, `capabilities`, `prepareExtraParams`, `wrapStreamFn`, `formatApiKey`, `refreshOAuth`, `buildAuthDoctorHint`, `isCacheTtlEligible`, `buildMissingAuthMessage`, `suppressBuiltInModel`, `augmentModelCatalog`, `isBinaryThinking`, `supportsXHighThinking`, `resolveDefaultThinkingLevel`, `isModernModelRef`, `prepareRuntimeAuth`, `resolveUsageAuth`, `fetchUsageSnapshot`
 
@@ -228,8 +245,11 @@ needing a whole custom inference transport.
 
 Use manifest `providerAuthEnvVars` when the provider has env-based credentials
 that generic auth/status/model-picker paths should see without loading plugin
-runtime. Keep provider runtime `envVars` for operator-facing hints such as
-onboarding labels or OAuth client-id/client-secret setup vars.
+runtime. Use manifest `providerAuthChoices` when onboarding/auth-choice CLI
+surfaces should know the provider's choice id, group labels, and simple
+one-flag auth wiring without loading provider runtime. Keep provider runtime
+`envVars` for operator-facing hints such as onboarding labels or OAuth
+client-id/client-secret setup vars.
 
 ### Hook order
 
@@ -567,14 +587,14 @@ Notes:
 Use SDK subpaths instead of the monolithic `openclaw/plugin-sdk` import when
 authoring plugins:
 
-- `openclaw/plugin-sdk/core` for generic plugin APIs, provider auth types, and shared helpers.
+- `openclaw/plugin-sdk/core` for generic plugin APIs, provider auth types, and shared helpers such as routing/session utilities and logger-backed runtimes.
 - `openclaw/plugin-sdk/compat` for bundled/internal plugin code that needs broader shared runtime helpers than `core`.
-- `openclaw/plugin-sdk/telegram` for Telegram channel plugins.
-- `openclaw/plugin-sdk/discord` for Discord channel plugins.
-- `openclaw/plugin-sdk/slack` for Slack channel plugins.
-- `openclaw/plugin-sdk/signal` for Signal channel plugins.
-- `openclaw/plugin-sdk/imessage` for iMessage channel plugins.
-- `openclaw/plugin-sdk/whatsapp` for WhatsApp channel plugins.
+- `openclaw/plugin-sdk/telegram` for Telegram channel plugin types and shared channel-facing helpers. Built-in Telegram implementation internals stay private to the bundled extension.
+- `openclaw/plugin-sdk/discord` for Discord channel plugin types and shared channel-facing helpers. Built-in Discord implementation internals stay private to the bundled extension.
+- `openclaw/plugin-sdk/slack` for Slack channel plugin types and shared channel-facing helpers. Built-in Slack implementation internals stay private to the bundled extension.
+- `openclaw/plugin-sdk/signal` for Signal channel plugin types and shared channel-facing helpers. Built-in Signal implementation internals stay private to the bundled extension.
+- `openclaw/plugin-sdk/imessage` for iMessage channel plugin types and shared channel-facing helpers. Built-in iMessage implementation internals stay private to the bundled extension.
+- `openclaw/plugin-sdk/whatsapp` for WhatsApp channel plugin types and shared channel-facing helpers. Built-in WhatsApp implementation internals stay private to the bundled extension.
 - `openclaw/plugin-sdk/line` for LINE channel plugins.
 - `openclaw/plugin-sdk/msteams` for the bundled Microsoft Teams plugin surface.
 - Bundled extension-specific subpaths are also available:
@@ -821,6 +841,37 @@ when a channel plugin is enabled but still unconfigured, it loads `setupEntry`
 instead of the full plugin entry. This keeps startup and setup lighter
 when your main plugin entry also wires tools, hooks, or other runtime-only
 code.
+
+Optional: `openclaw.startup.deferConfiguredChannelFullLoadUntilAfterListen`
+can opt a channel plugin into the same `setupEntry` path during the gateway's
+pre-listen startup phase, even when the channel is already configured.
+
+Use this only when `setupEntry` fully covers the startup surface that must exist
+before the gateway starts listening. In practice, that means the setup entry
+must register every channel-owned capability that startup depends on, such as:
+
+- channel registration itself
+- any HTTP routes that must be available before the gateway starts listening
+- any gateway methods, tools, or services that must exist during that same window
+
+If your full entry still owns any required startup capability, do not enable
+this flag. Keep the plugin on the default behavior and let OpenClaw load the
+full entry during startup.
+
+Example:
+
+```json
+{
+  "name": "@scope/my-channel",
+  "openclaw": {
+    "extensions": ["./index.ts"],
+    "setupEntry": "./setup-entry.ts",
+    "startup": {
+      "deferConfiguredChannelFullLoadUntilAfterListen": true
+    }
+  }
+}
+```
 
 ### Channel catalog metadata
 
@@ -1265,6 +1316,16 @@ Do not prompt from `runNonInteractive`. Reject missing inputs with actionable
 errors instead.
 
 ### Provider wizard metadata
+
+Provider auth/onboarding metadata can live in two layers:
+
+- manifest `providerAuthChoices`: cheap labels, grouping, `--auth-choice`
+  ids, and simple CLI flag metadata available before runtime load
+- runtime `wizard.setup` / `auth[].wizard`: richer behavior that depends on
+  loaded provider code
+
+Use manifest metadata for static labels/flags. Use runtime wizard metadata when
+setup depends on dynamic auth methods, method fallback, or runtime validation.
 
 `wizard.setup` controls how the provider appears in grouped onboarding:
 
@@ -1722,6 +1783,7 @@ Publishing contract:
 
 - Plugin `package.json` must include `openclaw.extensions` with one or more entry files.
 - Optional: `openclaw.setupEntry` may point at a lightweight setup-only entry for disabled or still-unconfigured channel setup.
+- Optional: `openclaw.startup.deferConfiguredChannelFullLoadUntilAfterListen` may opt a channel plugin into using `setupEntry` during pre-listen gateway startup, but only when that setup entry completely covers the plugin's startup-critical surface.
 - Entry files can be `.js` or `.ts` (jiti loads TS at runtime).
 - `openclaw plugins install <npm-spec>` uses `npm pack`, extracts into `~/.openclaw/extensions/<id>/`, and enables it in config.
 - Config key stability: scoped packages are normalized to the **unscoped** id for `plugins.entries.*`.

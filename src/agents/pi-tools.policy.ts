@@ -1,4 +1,4 @@
-import { getChannelDock } from "../channels/dock.js";
+import { getChannelPlugin } from "../channels/plugins/index.js";
 import { DEFAULT_SUBAGENT_MAX_SPAWN_DEPTH } from "../config/agent-limits.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveChannelGroupToolsPolicy } from "../config/group-policy.js";
@@ -315,14 +315,14 @@ export function resolveGroupToolPolicy(params: {
   if (!channel) {
     return undefined;
   }
-  let dock;
+  let plugin;
   try {
-    dock = getChannelDock(channel);
+    plugin = getChannelPlugin(channel);
   } catch {
-    dock = undefined;
+    plugin = undefined;
   }
   const toolsConfig =
-    dock?.groups?.resolveToolPolicy?.({
+    plugin?.groups?.resolveToolPolicy?.({
       cfg: params.config,
       groupId,
       groupChannel: params.groupChannel,
