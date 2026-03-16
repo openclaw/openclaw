@@ -135,13 +135,6 @@ function hashBotIdentity(botIdentity?: string): string {
 
 function resolveCommandHashPath(accountId?: string, botIdentity?: string): string {
   const stateDir = resolveStateDir(process.env, os.homedir);
-  // Guard against malformed state dirs such as bare Windows extended-length prefix
-  // remnants (e.g. "\?" or "\\?") that are not valid root paths.
-  // path.join would silently append "telegram/file.txt", making dirPath look like
-  // "\?\telegram" which passes isAbsolute but is still an invalid mkdir target.
-  if (/^\\{1,2}\?[/\\]?$/.test(stateDir)) {
-    throw new Error(`Invalid state dir for command hash: "${stateDir}"`);
-  }
   const normalizedAccount = accountId?.trim().replace(/[^a-z0-9._-]+/gi, "_") || "default";
   const botHash = hashBotIdentity(botIdentity);
   return path.join(stateDir, "telegram", `command-hash-${normalizedAccount}-${botHash}.txt`);
@@ -163,12 +156,15 @@ async function writeCachedCommandHash(
   botIdentity: string | undefined,
   hash: string,
 ): Promise<void> {
-  const filePath = resolveCommandHashPath(accountId, botIdentity);
   try {
+    // Resolve inside the try so any path issues stay best-effort.
+    const filePath = resolveCommandHashPath(accountId, botIdentity);
     const dirPath = path.dirname(filePath);
-    // Basic sanity check — filePath comes from resolveCommandHashPath which already
-    // validates the stateDir, so dirPath should always be a well-formed absolute path.
-    if (!dirPath || dirPath === ".") {
+    // Guard against malformed state dirs (e.g. OPENCLAW_STATE_DIR="\?") that produce
+    // paths like "\?\telegram". path.win32.isAbsolute returns true for bare prefixes,
+    // so we use a regex that matches them directly. Both single and double-backslash
+    // variants are covered: \? and \\? (plus optional trailing slash).
+    if (!dirPath || dirPath === "." || /^\\{1,2}\?[/\\]?$/.test(dirPath)) {
       throw new Error(`Invalid directory path for command hash: "${dirPath}"`);
     }
     await fs.mkdir(dirPath, { recursive: true });
