@@ -1708,12 +1708,6 @@
   max-width: 100%;
 }
 
-.cron-run-entry__summary table {
-  display: table;
-  width: 100%;
-  max-width: 100%;
-}
-
 .cron-job-detail-value pre {
   width: 100%;
   max-width: 100%;
