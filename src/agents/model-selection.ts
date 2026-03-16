@@ -157,6 +157,7 @@ export function parseModelRef(raw: string, defaultProvider: string): ModelRef | 
 export function inferUniqueProviderFromConfiguredModels(params: {
   cfg: OpenClawConfig;
   model: string;
+  defaultProvider?: string;
 }): string | undefined {
   const model = params.model.trim();
   if (!model) {
@@ -170,14 +171,20 @@ export function inferUniqueProviderFromConfiguredModels(params: {
   const providers = new Set<string>();
   for (const key of Object.keys(configuredModels)) {
     const ref = key.trim();
-    if (!ref || !ref.includes("/")) {
+    if (!ref) {
+      continue;
+    }
+    if (!ref.includes("/")) {
+      if (params.defaultProvider && (ref === model || ref.toLowerCase() === normalized)) {
+        providers.add(normalizeProviderId(params.defaultProvider));
+        if (providers.size > 1) {
+          return undefined;
+        }
+      }
       continue;
     }
     const parsed = parseModelRef(ref, DEFAULT_PROVIDER);
-    if (!parsed) {
-      continue;
-    }
-    if (parsed.model === model || parsed.model.toLowerCase() === normalized) {
+    if (parsed && (parsed.model === model || parsed.model.toLowerCase() === normalized)) {
       providers.add(parsed.provider);
       if (providers.size > 1) {
         return undefined;
@@ -549,18 +556,23 @@ export function resolveAllowedModelRef(params: {
     return { error: "invalid model: empty" };
   }
 
-  const defaultProvider = !trimmed.includes("/")
-    ? (inferUniqueProviderFromConfiguredModels({ cfg: params.cfg, model: trimmed }) ??
-      params.defaultProvider)
-    : params.defaultProvider;
+  const { model: modelForInference } = splitTrailingAuthProfile(trimmed);
+  const resolvedDefaultProvider =
+    modelForInference && !modelForInference.includes("/")
+      ? (inferUniqueProviderFromConfiguredModels({
+          cfg: params.cfg,
+          model: modelForInference,
+          defaultProvider: params.defaultProvider,
+        }) ?? params.defaultProvider)
+      : params.defaultProvider;
 
   const aliasIndex = buildModelAliasIndex({
     cfg: params.cfg,
-    defaultProvider,
+    defaultProvider: params.defaultProvider,
   });
   const resolved = resolveModelRefFromString({
     raw: trimmed,
-    defaultProvider,
+    defaultProvider: resolvedDefaultProvider,
     aliasIndex,
   });
   if (!resolved) {
