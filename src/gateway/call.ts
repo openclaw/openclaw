@@ -32,6 +32,7 @@ import {
   resolveLeastPrivilegeOperatorScopesForMethod,
   type OperatorScope,
 } from "./method-scopes.js";
+import { waitForEventLoopReady } from "./event-loop-ready.js";
 import { isSecureWebSocketUrl } from "./net.js";
 import { PROTOCOL_VERSION } from "./protocol/index.js";
 
@@ -797,6 +798,10 @@ async function executeGatewayRequestWithScopes<T>(params: {
   safeTimerTimeoutMs: number;
   connectionDetails: GatewayConnectionDetails;
 }): Promise<T> {
+  // Ensure the event loop is not starved by deferred module evaluation before
+  // opening any network connections (see waitForEventLoopReady jsdoc).
+  await waitForEventLoopReady();
+
   const { opts, scopes, url, token, password, tlsFingerprint, timeoutMs, safeTimerTimeoutMs } =
     params;
   return await new Promise<T>((resolve, reject) => {
