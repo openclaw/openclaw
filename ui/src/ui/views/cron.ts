@@ -1618,7 +1618,7 @@ function renderJobPayload(job: CronJob) {
     <div class="cron-job-detail">
       <div class="cron-job-detail-section">
         <span class="cron-job-detail-label">${t("cron.jobDetail.prompt")}</span>
-        <div class="muted cron-job-detail-value chat-text">${unsafeHTML(toSanitizedMarkdownHtml(job.payload.message))}</div>
+        <div class="muted cron-job-detail-value chat-text" @click=${stopPropagationForInteractive}>${unsafeHTML(toSanitizedMarkdownHtml(job.payload.message))}</div>
       </div>
       ${
         delivery
@@ -1630,6 +1630,13 @@ function renderJobPayload(job: CronJob) {
       }
     </div>
   `;
+}
+
+function stopPropagationForInteractive(event: MouseEvent) {
+  const target = event.target as HTMLElement | null;
+  if (target?.closest("a,button,input,textarea,select,summary,[role='button'],[role='link']")) {
+    event.stopPropagation();
+  }
 }
 
 function formatStateRelative(ms?: number) {
@@ -1729,6 +1736,8 @@ function renderRun(entry: CronRunLogEntry, basePath: string) {
       : usage && typeof usage.input_tokens === "number" && typeof usage.output_tokens === "number"
         ? `${usage.input_tokens} in / ${usage.output_tokens} out`
         : null;
+  const bodySource = entry.summary ?? entry.error ?? t("cron.runEntry.noSummary");
+  const showErrorInMeta = !!entry.error && entry.summary != null;
   return html`
     <div class="list-item cron-run-entry">
       <div class="cron-run-entry__header">
@@ -1758,11 +1767,11 @@ function renderRun(entry: CronRunLogEntry, basePath: string) {
               ? html`<div><a class="session-link" href=${chatUrl}>${t("cron.runEntry.openRunChat")}</a></div>`
               : nothing
           }
-          ${entry.error ? html`<div class="muted">${entry.error}</div>` : nothing}
+          ${showErrorInMeta ? html`<div class="muted">${entry.error}</div>` : nothing}
           ${entry.deliveryError ? html`<div class="muted">${entry.deliveryError}</div>` : nothing}
         </div>
       </div>
-      <div class="cron-run-entry__body chat-text">${unsafeHTML(toSanitizedMarkdownHtml(entry.summary ?? entry.error ?? t("cron.runEntry.noSummary")))}</div>
+      <div class="cron-run-entry__body chat-text">${unsafeHTML(toSanitizedMarkdownHtml(bodySource))}</div>
     </div>
   `;
 }
