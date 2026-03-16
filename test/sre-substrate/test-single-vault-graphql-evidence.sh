@@ -220,6 +220,7 @@ help_output="$(bash "$SCRIPT_PATH" --help)"
 printf '%s\n' "$help_output" | grep -F -- '--query ' >/dev/null
 printf '%s\n' "$help_output" | grep -F -- '--variables-json ' >/dev/null
 printf '%s\n' "$help_output" | grep -F -- 'SINGLE_VAULT_GRAPHQL_URL' >/dev/null
+printf '%s\n' "$help_output" | grep -F -- 'SINGLE_VAULT_RPC_URL' >/dev/null
 printf '%s\n' "$help_output" | grep -F -- 'SINGLE_VAULT_CURL_TIMEOUT_SECONDS' >/dev/null
 
 missing_address_status=0
@@ -309,6 +310,18 @@ invalid_address_status=0
 env PATH="${BIN_NO_CAST}:/usr/bin:/bin" bash "$SCRIPT_PATH" --address 0x123 --chain-id 8453 --query "$QUERY" > /dev/null 2>"$invalid_address_stderr" || invalid_address_status=$?
 test "$invalid_address_status" = "2"
 grep -F 'address must be a valid Ethereum address' "$invalid_address_stderr" >/dev/null
+
+insecure_rpc_url_stderr="${TMP}/insecure-rpc-url.stderr"
+insecure_rpc_url_status=0
+env PATH="${BIN_NO_CAST}:/usr/bin:/bin" \
+  SINGLE_VAULT_RPC_URL='http://rpc.example' \
+  bash "$SCRIPT_PATH" \
+    --address "$ADDRESS" \
+    --chain-id 8453 \
+    --query "$QUERY" \
+    --variables-json "$VARIABLES" >/dev/null 2>"$insecure_rpc_url_stderr" || insecure_rpc_url_status=$?
+test "$insecure_rpc_url_status" = "2"
+grep -F 'rpc url must use HTTPS' "$insecure_rpc_url_stderr" >/dev/null
 
 missing_cast_output="$(
   env PATH="${BIN_NO_CAST}:/usr/bin:/bin" \

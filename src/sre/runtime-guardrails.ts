@@ -17,7 +17,7 @@ const DB_DATA_PLAYBOOK_RE = /db-data-incident-playbook\.md$/i;
 const DEFAULT_SINGLE_VAULT_GRAPHQL_EVIDENCE_SCRIPT =
   "/home/node/.openclaw/skills/morpho-sre/scripts/single-vault-graphql-evidence.sh";
 const HUMAN_CORRECTION_RE =
-  /\b(wrong|actual issue|current lead is|we confirmed|this is connected|my only explanation|outdated|not the issue)\b/i;
+  /\b(this is wrong|that is wrong|you(?:'re| are) wrong|actual issue|current lead is|we confirmed|this is connected|my only explanation|not the issue|old lead is stale|previous guess was stale|outdated theory)\b/i;
 const RESOLVER_TOKEN_RE = {
   vaultByAddress: /\bvaultByAddress\b/,
   vaultV2ByAddress: /\bvaultV2ByAddress\b/,

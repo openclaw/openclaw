@@ -285,6 +285,20 @@ describe("buildSreRuntimeGuardrailContextFromTranscript", () => {
     expect(context).toContain("DB row/provenance fact");
   });
 
+  it("does not treat wrong-values incident wording as a human correction", () => {
+    const context = buildSreRuntimeGuardrailContextFromTranscript({
+      agentId: "sre",
+      prompt:
+        'graphql wrong values for one vault. query VaultV2ByAddress { vaultV2ByAddress(address: "0xE18d7f0C6aaba1E600fF680459a357C3B3CfdB34", chainId: 999) { apy netApy } } traceId=abc123',
+      transcriptText: "",
+    });
+
+    expect(context).toContain("Latest user-supplied exact artifact detected");
+    expect(context).toContain("single-vault-graphql-evidence.sh");
+    expect(context).not.toContain("Latest human correction overrides older bot theories");
+    expect(context).not.toContain("Explicitly retract the outdated theory");
+  });
+
   it("does not require retraction without an exact artifact", () => {
     const transcriptText = `
 {"type":"message","message":{"role":"assistant","content":[{"type":"text","text":"Root cause: prior theory"}]}}

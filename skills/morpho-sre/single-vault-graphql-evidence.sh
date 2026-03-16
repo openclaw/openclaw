@@ -38,6 +38,7 @@ Captures a compact evidence bundle for one-address GraphQL incidents:
 
 Environment:
 - `SINGLE_VAULT_GRAPHQL_URL` overrides the GraphQL endpoint (default: https://api.morpho.org/graphql)
+- `SINGLE_VAULT_RPC_URL` overrides the optional direct RPC endpoint (must use HTTPS)
 - `SINGLE_VAULT_CURL_TIMEOUT_SECONDS` overrides curl `--max-time` (default: 20)
 EOF
 }
@@ -142,6 +143,9 @@ done
 require_cmd curl
 require_cmd jq
 require_https_url "graphql url" "$GRAPHQL_URL"
+if [[ -n "$RPC_URL" ]]; then
+  require_https_url "rpc url" "$RPC_URL"
+fi
 
 [[ -n "$ADDRESS" ]] || {
   printf 'address is required\n' >&2
