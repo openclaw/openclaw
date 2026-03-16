@@ -839,6 +839,8 @@ export type OpenClawPluginModule =
   | OpenClawPluginDefinition
   | ((api: OpenClawPluginApi) => void | Promise<void>);
 
+export type PluginRegistrationMode = "full" | "setup-only";
+
 export type OpenClawPluginApi = {
   id: string;
   name: string;
@@ -846,6 +848,7 @@ export type OpenClawPluginApi = {
   description?: string;
   source: string;
   rootDir?: string;
+  registrationMode: PluginRegistrationMode;
   config: OpenClawConfig;
   pluginConfig?: Record<string, unknown>;
   runtime: PluginRuntime;

@@ -12,6 +12,9 @@ const plugin = {
   register(api: OpenClawPluginApi) {
     setZalouserRuntime(api.runtime);
     api.registerChannel({ plugin: zalouserPlugin, dock: zalouserDock });
+    if (api.registrationMode !== "full") {
+      return;
+    }
 
     api.registerTool({
       name: "zalouser",
