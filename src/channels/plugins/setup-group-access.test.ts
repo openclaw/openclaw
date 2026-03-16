@@ -5,7 +5,7 @@ import {
   promptChannelAccessConfig,
   promptChannelAllowlist,
   promptChannelAccessPolicy,
-} from "./channel-access.js";
+} from "./setup-group-access.js";
 
 function createPrompter(params?: {
   confirm?: (options: { message: string; initialValue: boolean }) => Promise<boolean>;
@@ -80,6 +80,27 @@ describe("promptChannelAccessPolicy", () => {
     });
 
     expect(result).toBe("open");
+  });
+});
+
+describe("promptChannelAccessConfig", () => {
+  it("skips the allowlist text prompt when entries are policy-only", async () => {
+    const prompter = createPrompter({
+      confirm: async () => true,
+      select: async () => "allowlist",
+      text: async () => {
+        throw new Error("text prompt should not run");
+      },
+    });
+
+    const result = await promptChannelAccessConfig({
+      // oxlint-disable-next-line typescript/no-explicit-any
+      prompter: prompter as any,
+      label: "Twitch chat",
+      skipAllowlistEntries: true,
+    });
+
+    expect(result).toEqual({ policy: "allowlist", entries: [] });
   });
 });
 

@@ -14,7 +14,6 @@ export { formatPairingApproveHint } from "../channels/plugins/helpers.js";
 export {
   addWildcardAllowFrom,
   mergeAllowFromEntries,
-  promptAccountId,
   setTopLevelChannelDmPolicyWithAllowFrom,
 } from "../channels/plugins/onboarding/helpers.js";
 export {

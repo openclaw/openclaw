@@ -3,7 +3,6 @@
 
 export type { ReplyPayload } from "../auto-reply/types.js";
 export { buildChannelConfigSchema } from "../channels/plugins/config-schema.js";
-export { promptAccountId } from "../channels/plugins/onboarding/helpers.js";
 export {
   applyAccountNameToChannelSection,
   patchScopedAccountConfig,

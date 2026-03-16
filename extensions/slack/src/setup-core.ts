@@ -455,7 +455,7 @@ export function createSlackSetupWizardProxy(
       }) => {
         try {
           const wizard = (await loadWizard()).slackSetupWizard;
-          if (!wizard.groupAccess) {
+          if (!wizard.groupAccess?.resolveAllowlist) {
             return entries;
           }
           return await wizard.groupAccess.resolveAllowlist({
