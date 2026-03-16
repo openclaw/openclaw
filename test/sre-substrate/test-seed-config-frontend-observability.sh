@@ -26,7 +26,7 @@ jq -e '
 ' "$CONFIG" >/dev/null
 
 jq -e '
-  .channels.slack.channels["#bug-report"].systemPrompt | contains("Do not send progress-only thread replies")
+  .channels.slack.channels["#bug-report"].systemPrompt | contains("Never send progress-only messages")
 ' "$CONFIG" >/dev/null
 
 jq -e '
@@ -34,7 +34,11 @@ jq -e '
 ' "$CONFIG" >/dev/null
 
 jq -e '
-  .channels.slack.channels["#bug-report"].systemPrompt | contains("If a human questions the proposed fix or PR, re-open RCA with fresh evidence")
+  .channels.slack.channels["#bug-report"].systemPrompt | contains("Before accepting any task that requires repo access")
+' "$CONFIG" >/dev/null
+
+jq -e '
+  .channels.slack.channels["#bug-report"].systemPrompt | contains("If a human challenges or contradicts a technical claim in any thread")
 ' "$CONFIG" >/dev/null
 
 test -f "$ROOT/posthog-mcp.sh"
