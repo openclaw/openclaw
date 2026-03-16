@@ -20,10 +20,23 @@ describe("actionHasTarget", () => {
   });
 
   it("detects alias targets for message and chat actions", () => {
+    expect(actionHasTarget("read", { messageId: "msg_123" }, { channel: "feishu" })).toBe(true);
     expect(actionHasTarget("edit", { messageId: "  msg_123  " })).toBe(true);
+    expect(actionHasTarget("pin", { messageId: "msg_123" }, { channel: "feishu" })).toBe(true);
+    expect(actionHasTarget("unpin", { messageId: "msg_123" }, { channel: "feishu" })).toBe(true);
+    expect(actionHasTarget("list-pins", { chatId: "oc_123" }, { channel: "feishu" })).toBe(true);
+    expect(actionHasTarget("channel-info", { chatId: "oc_123" }, { channel: "feishu" })).toBe(true);
     expect(actionHasTarget("react", { chatGuid: "chat-guid" })).toBe(true);
     expect(actionHasTarget("react", { chatIdentifier: "chat-id" })).toBe(true);
     expect(actionHasTarget("react", { chatId: 42 })).toBe(true);
+  });
+
+  it("scopes Feishu-only aliases to Feishu", () => {
+    expect(actionHasTarget("read", { messageId: "msg_123" })).toBe(false);
+    expect(actionHasTarget("pin", { messageId: "msg_123" }, { channel: "slack" })).toBe(false);
+    expect(actionHasTarget("channel-info", { chatId: "oc_123" }, { channel: "discord" })).toBe(
+      false,
+    );
   });
 
   it("rejects blank and non-finite alias targets", () => {

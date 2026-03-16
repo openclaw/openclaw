@@ -1,6 +1,6 @@
-import { upsertAuthProfileWithLock } from "../agents/auth-profiles.js";
+import { upsertAuthProfileWithLock } from "../agents/auth-profiles/upsert-with-lock.js";
+import { OLLAMA_DEFAULT_BASE_URL } from "../agents/ollama-defaults.js";
 import {
-  OLLAMA_DEFAULT_BASE_URL,
   buildOllamaModelDefinition,
   enrichOllamaModelsWithContext,
   fetchOllamaModels,
@@ -15,7 +15,7 @@ import { applyAgentDefaultModelPrimary } from "./onboard-auth.config-shared.js";
 import { openUrl } from "./onboard-helpers.js";
 import type { OnboardMode, OnboardOptions } from "./onboard-types.js";
 
-export { OLLAMA_DEFAULT_BASE_URL } from "../agents/ollama-models.js";
+export { OLLAMA_DEFAULT_BASE_URL } from "../agents/ollama-defaults.js";
 export const OLLAMA_DEFAULT_MODEL = "glm-4.7-flash";
 
 const OLLAMA_SUGGESTED_MODELS_LOCAL = ["glm-4.7-flash"];
@@ -313,7 +313,7 @@ export async function promptAndConfigureOllama(params: {
         `Ollama could not be reached at ${baseUrl}.`,
         "Download it at https://ollama.com/download",
         "",
-        "Start Ollama and re-run onboarding.",
+        "Start Ollama and re-run setup.",
       ].join("\n"),
       "Ollama",
     );
@@ -486,7 +486,7 @@ export async function configureOllamaNonInteractive(params: {
       runtime.error(
         [
           `No Ollama models are available at ${baseUrl}.`,
-          "Pull a model first, then re-run onboarding.",
+          "Pull a model first, then re-run setup.",
         ].join("\n"),
       );
       runtime.exit(1);
