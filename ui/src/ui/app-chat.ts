@@ -359,7 +359,7 @@ export async function refreshChat(host: ChatHost, opts?: { scheduleScroll?: bool
     loadChatHistory(host as unknown as OpenClawApp),
     loadSessions(host as unknown as OpenClawApp, {
       activeMinutes: CHAT_SESSIONS_ACTIVE_MINUTES,
-      limit: 40,
+      limit: 60,
       includeGlobal: true,
       includeUnknown: true,
     }),
