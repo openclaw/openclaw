@@ -224,6 +224,8 @@ function scheduleDelayedAck(params: {
     cancel: async () => {
       cancelled = true;
       clearTimeout(timer);
+      // sendPromise is always safe to await here because the timer callback
+      // attaches its own .catch() and converts failures into log entries.
       if (sendPromise) {
         await sendPromise;
       }
