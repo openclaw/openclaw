@@ -140,10 +140,11 @@ struct MacNodeBrowserProxyTests {
         #expect(parsed["c"] as? Bool == true)
     }
 
-    // Regression: POST request body is correctly serialized end-to-end.
-    // The sanitizer fast-path handles valid JSON; non-serializable values
-    // are exercised at unit level in sanitizeForJSONConvertsNonSerializableValuesToStrings.
-    @Test func postRequestSanitizesBodyDuringSerialization() async throws {
+    // Regression: POST request body round-trips correctly through the
+    // makeRequest → performRequest → response pipeline.
+    // Non-serializable value handling is covered at unit level by
+    // sanitizeForJSONConvertsNonSerializableValuesToStrings.
+    @Test func postRequestWithSimpleBodySerializesCorrectly() async throws {
         actor BodyCapture {
             private var body: Data?
             func set(_ body: Data?) { self.body = body }
