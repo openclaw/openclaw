@@ -32,12 +32,15 @@ vi.mock("../config/sessions.js", () => ({
   resolveStorePath: vi.fn(() => "/tmp/sessions.json"),
 }));
 
-vi.mock("../gateway/session-utils.js", () => ({
-  classifySessionKey: vi.fn(() => "direct"),
-  listAgentsForGateway: vi.fn(() => ({
+vi.mock("../gateway/agent-list.js", () => ({
+  listGatewayAgentsBasic: vi.fn(() => ({
     defaultId: "main",
     agents: [{ id: "main" }],
   })),
+}));
+
+vi.mock("../gateway/session-utils.js", () => ({
+  classifySessionKey: vi.fn(() => "direct"),
   resolveSessionModelRef: vi.fn(() => ({
     provider: "openai",
     model: "gpt-5.2",
@@ -61,6 +64,8 @@ vi.mock("../infra/system-events.js", () => ({
 }));
 
 vi.mock("../routing/session-key.js", () => ({
+  normalizeAgentId: vi.fn((value: string) => value),
+  normalizeMainKey: vi.fn((value?: string) => value ?? "main"),
   parseAgentSessionKey: vi.fn(() => null),
 }));
 
