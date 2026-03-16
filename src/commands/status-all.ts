@@ -48,7 +48,7 @@ export async function statusAllCommand(
       config: loadedRaw,
       commandName: "status --all",
       targetIds: getStatusCommandSecretTargetIds(),
-      mode: "summary",
+      mode: "read_only_status",
     });
     const osSummary = resolveOsSummary();
     const snap = await readConfigFileSnapshot().catch(() => null);

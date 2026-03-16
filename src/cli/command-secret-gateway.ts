@@ -26,7 +26,16 @@ type ResolveCommandSecretsResult = {
   hadUnresolvedTargets: boolean;
 };
 
-export type CommandSecretResolutionMode = "strict" | "summary" | "operational_readonly"; // pragma: allowlist secret
+export type CommandSecretResolutionMode =
+  | "enforce_resolved"
+  | "read_only_status"
+  | "read_only_operational";
+
+type LegacyCommandSecretResolutionMode = "strict" | "summary" | "operational_readonly"; // pragma: allowlist secret
+
+type CommandSecretResolutionModeInput =
+  | CommandSecretResolutionMode
+  | LegacyCommandSecretResolutionMode;
 
 export type CommandSecretTargetState =
   | "resolved_gateway"
@@ -53,6 +62,22 @@ const WEB_RUNTIME_SECRET_PATH_PREFIXES = [
   "tools.web.search.",
   "tools.web.fetch.firecrawl.",
 ] as const;
+
+function normalizeCommandSecretResolutionMode(
+  mode?: CommandSecretResolutionModeInput,
+): CommandSecretResolutionMode {
+  if (!mode || mode === "enforce_resolved" || mode === "strict") {
+    return "enforce_resolved";
+  }
+  if (mode === "read_only_status" || mode === "summary") {
+    return "read_only_status";
+  }
+  return "read_only_operational";
+}
+
+function enforcesResolvedSecrets(mode: CommandSecretResolutionMode): boolean {
+  return mode === "enforce_resolved";
+}
 
 function dedupeDiagnostics(entries: readonly string[]): string[] {
   const seen = new Set<string>();
@@ -242,7 +267,7 @@ async function resolveCommandSecretRefsLocally(params: {
         context,
       });
     } catch (error) {
-      if (params.mode === "strict") {
+      if (enforcesResolvedSecrets(params.mode)) {
         throw error;
       }
       localResolutionDiagnostics.push(
@@ -289,7 +314,7 @@ async function resolveCommandSecretRefsLocally(params: {
     analyzed,
     resolvedState: "resolved_local",
   });
-  if (params.mode !== "strict" && analyzed.unresolved.length > 0) {
+  if (!enforcesResolvedSecrets(params.mode) && analyzed.unresolved.length > 0) {
     scrubUnresolvedAssignments(resolvedConfig, analyzed.unresolved);
   } else if (analyzed.unresolved.length > 0) {
     throw new Error(
@@ -336,7 +361,7 @@ function buildUnresolvedDiagnostics(
   unresolved: UnresolvedCommandSecretAssignment[],
   mode: CommandSecretResolutionMode,
 ): string[] {
-  if (mode === "strict") {
+  if (enforcesResolvedSecrets(mode)) {
     return [];
   }
   return unresolved.map(
@@ -411,7 +436,7 @@ async function resolveTargetSecretLocally(params: {
     });
     setPathExistingStrict(params.resolvedConfig, params.target.pathSegments, resolved);
   } catch (error) {
-    if (params.mode !== "strict") {
+    if (!enforcesResolvedSecrets(params.mode)) {
       params.localResolutionDiagnostics.push(
         `${params.commandName}: failed to resolve ${params.target.path} locally (${describeUnknownError(error)}).`,
       );
@@ -423,9 +448,9 @@ export async function resolveCommandSecretRefsViaGateway(params: {
   config: OpenClawConfig;
   commandName: string;
   targetIds: Set<string>;
-  mode?: CommandSecretResolutionMode;
+  mode?: CommandSecretResolutionModeInput;
 }): Promise<ResolveCommandSecretsResult> {
-  const mode = params.mode ?? "strict";
+  const mode = normalizeCommandSecretResolutionMode(params.mode);
   const configuredTargetRefPaths = collectConfiguredTargetRefPaths({
     config: params.config,
     targetIds: params.targetIds,
@@ -567,7 +592,7 @@ export async function resolveCommandSecretRefsViaGateway(params: {
         (entry) => !recoveredPaths.has(entry.path),
       );
       if (stillUnresolved.length > 0) {
-        if (mode === "strict") {
+        if (enforcesResolvedSecrets(mode)) {
           throw new Error(
             `${params.commandName}: ${stillUnresolved[0]?.path ?? "target"} is unresolved in the active runtime snapshot.`,
           );
@@ -590,7 +615,7 @@ export async function resolveCommandSecretRefsViaGateway(params: {
         ]);
       }
     } catch (error) {
-      if (mode === "strict") {
+      if (enforcesResolvedSecrets(mode)) {
         throw error;
       }
       scrubUnresolvedAssignments(resolvedConfig, analyzed.unresolved);

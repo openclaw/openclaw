@@ -315,7 +315,7 @@ export async function channelsStatusCommand(
       config: cfg,
       commandName: "channels status",
       targetIds: getChannelsCommandSecretTargetIds(),
-      mode: "summary",
+      mode: "read_only_status",
     });
     for (const entry of diagnostics) {
       runtime.log(`[secrets] ${entry}`);

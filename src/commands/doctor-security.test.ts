@@ -173,6 +173,32 @@ describe("noteSecurityWarnings gateway exposure", () => {
     expect(message).toContain("direct/DM targets by default");
   });
 
+  it("degrades safely when channel account resolution fails in read-only security checks", async () => {
+    pluginRegistry.list = [
+      {
+        id: "whatsapp",
+        meta: { label: "WhatsApp" },
+        config: {
+          listAccountIds: () => ["default"],
+          resolveAccount: () => {
+            throw new Error("missing secret");
+          },
+          isEnabled: () => true,
+          isConfigured: () => true,
+        },
+        security: {
+          resolveDmPolicy: () => null,
+        },
+      },
+    ];
+
+    await noteSecurityWarnings({} as OpenClawConfig);
+    const message = lastMessage();
+    expect(message).toContain("[secrets]");
+    expect(message).toContain("failed to resolve account");
+    expect(message).toContain("Run: openclaw security audit --deep");
+  });
+
   it("skips heartbeat directPolicy warning when delivery is internal-only or explicit", async () => {
     const cfg = {
       agents: {

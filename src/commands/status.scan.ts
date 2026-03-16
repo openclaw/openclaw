@@ -197,7 +197,7 @@ async function scanStatusJsonFast(opts: {
       config: loadedRaw,
       commandName: "status --json",
       targetIds: getStatusCommandSecretTargetIds(),
-      mode: "summary",
+      mode: "read_only_status",
     });
   if (hasPotentialConfiguredChannels(cfg)) {
     const { ensurePluginRegistryLoaded } = await loadPluginRegistryModule();
@@ -302,7 +302,7 @@ export async function scanStatus(
           config: loadedRaw,
           commandName: "status",
           targetIds: getStatusCommandSecretTargetIds(),
-          mode: "summary",
+          mode: "read_only_status",
         });
       const osSummary = resolveOsSummary();
       const tailscaleMode = cfg.gateway?.tailscale?.mode ?? "off";

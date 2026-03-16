@@ -2,7 +2,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { captureEnv } from "../../test-utils/env.js";
 import type { GatewayRestartSnapshot } from "./restart-health.js";
 
-const callGatewayStatusProbe = vi.fn(async (_opts?: unknown) => ({ ok: true as const }));
+const callGatewayStatusProbe = vi.fn<
+  (opts?: unknown) => Promise<{ ok: boolean; url?: string; error?: string | null }>
+>(async (_opts?: unknown) => ({
+  ok: true,
+  url: "ws://127.0.0.1:19001",
+  error: null,
+}));
 const loadGatewayTlsRuntime = vi.fn(async (_cfg?: unknown) => ({
   enabled: true,
   required: true,
@@ -331,6 +337,71 @@ describe("gatherDaemonStatus", () => {
         password: undefined,
       }),
     );
+  });
+
+  it("degrades safely when daemon probe auth SecretRef is unresolved", async () => {
+    daemonLoadedConfig = {
+      gateway: {
+        bind: "lan",
+        tls: { enabled: true },
+        auth: {
+          mode: "token",
+          token: { source: "env", provider: "default", id: "MISSING_DAEMON_GATEWAY_TOKEN" },
+        },
+      },
+      secrets: {
+        providers: {
+          default: { source: "env" },
+        },
+      },
+    };
+
+    const status = await gatherDaemonStatus({
+      rpc: {},
+      probe: true,
+      deep: false,
+    });
+
+    expect(callGatewayStatusProbe).toHaveBeenCalledWith(
+      expect.objectContaining({
+        token: undefined,
+        password: undefined,
+      }),
+    );
+    expect(status.rpc?.authWarning).toBeUndefined();
+  });
+
+  it("surfaces authWarning when daemon probe auth SecretRef is unresolved and probe fails", async () => {
+    daemonLoadedConfig = {
+      gateway: {
+        bind: "lan",
+        tls: { enabled: true },
+        auth: {
+          mode: "token",
+          token: { source: "env", provider: "default", id: "MISSING_DAEMON_GATEWAY_TOKEN" },
+        },
+      },
+      secrets: {
+        providers: {
+          default: { source: "env" },
+        },
+      },
+    };
+    callGatewayStatusProbe.mockResolvedValueOnce({
+      ok: false,
+      error: "gateway closed",
+      url: "wss://127.0.0.1:19001",
+    });
+
+    const status = await gatherDaemonStatus({
+      rpc: {},
+      probe: true,
+      deep: false,
+    });
+
+    expect(status.rpc?.ok).toBe(false);
+    expect(status.rpc?.authWarning).toContain("gateway.auth.token SecretRef is unavailable");
+    expect(status.rpc?.authWarning).toContain("probing without configured auth credentials");
   });
 
   it("keeps remote probe auth strict when remote token is missing", async () => {

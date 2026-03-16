@@ -54,10 +54,22 @@ export function resolveGatewayProbeAuthSafe(params: {
   cfg: OpenClawConfig;
   mode: "local" | "remote";
   env?: NodeJS.ProcessEnv;
+  explicitAuth?: ExplicitGatewayAuth;
 }): {
   auth: { token?: string; password?: string };
   warning?: string;
 } {
+  const explicitToken = params.explicitAuth?.token?.trim();
+  const explicitPassword = params.explicitAuth?.password?.trim();
+  if (explicitToken || explicitPassword) {
+    return {
+      auth: {
+        ...(explicitToken ? { token: explicitToken } : {}),
+        ...(explicitPassword ? { password: explicitPassword } : {}),
+      },
+    };
+  }
+
   try {
     return { auth: resolveGatewayProbeAuth(params) };
   } catch (error) {
