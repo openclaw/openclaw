@@ -200,7 +200,11 @@ function isDirectGaxiosImportMiss(err: unknown): boolean {
   if (!isModuleNotFoundError(err)) {
     return false;
   }
-  return typeof err.message === "string" && err.message.includes("Cannot find package 'gaxios'");
+  return (
+    typeof err.message === "string" &&
+    (err.message.includes("Cannot find package 'gaxios'") ||
+      err.message.includes("Cannot find module 'gaxios'"))
+  );
 }
 
 async function loadGaxiosConstructor(): Promise<GaxiosConstructor | null> {
