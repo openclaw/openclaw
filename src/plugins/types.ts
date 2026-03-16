@@ -876,7 +876,7 @@ export type OpenClawPluginCommandDefinition = {
   handler: PluginCommandHandler;
 };
 
-export type PluginInteractiveChannel = "telegram" | "discord";
+export type PluginInteractiveChannel = "telegram" | "discord" | "slack";
 
 export type PluginInteractiveButtons = Array<
   Array<{ text: string; callback_data: string; style?: "danger" | "success" | "primary" }>
@@ -961,6 +961,53 @@ export type PluginInteractiveDiscordHandlerContext = {
   getCurrentConversationBinding: () => Promise<PluginConversationBinding | null>;
 };
 
+export type PluginInteractiveSlackHandlerResult = {
+  handled?: boolean;
+} | void;
+
+export type PluginInteractiveSlackHandlerContext = {
+  channel: "slack";
+  accountId: string;
+  interactionId: string;
+  conversationId: string;
+  parentConversationId?: string;
+  senderId?: string;
+  senderUsername?: string;
+  threadId?: string;
+  auth: {
+    isAuthorizedSender: boolean;
+  };
+  interaction: {
+    kind: "button" | "select";
+    data: string;
+    namespace: string;
+    payload: string;
+    actionId: string;
+    blockId?: string;
+    messageTs?: string;
+    threadTs?: string;
+    value?: string;
+    selectedValues?: string[];
+    selectedLabels?: string[];
+    triggerId?: string;
+    responseUrl?: string;
+  };
+  respond: {
+    acknowledge: () => Promise<void>;
+    reply: (params: { text: string; responseType?: "ephemeral" | "in_channel" }) => Promise<void>;
+    followUp: (params: {
+      text: string;
+      responseType?: "ephemeral" | "in_channel";
+    }) => Promise<void>;
+    editMessage: (params: { text?: string; blocks?: unknown[] }) => Promise<void>;
+  };
+  requestConversationBinding: (
+    params?: PluginConversationBindingRequestParams,
+  ) => Promise<PluginConversationBindingRequestResult>;
+  detachConversationBinding: () => Promise<{ removed: boolean }>;
+  getCurrentConversationBinding: () => Promise<PluginConversationBinding | null>;
+};
+
 export type PluginInteractiveTelegramHandlerRegistration = {
   channel: "telegram";
   namespace: string;
@@ -977,9 +1024,18 @@ export type PluginInteractiveDiscordHandlerRegistration = {
   ) => Promise<PluginInteractiveDiscordHandlerResult> | PluginInteractiveDiscordHandlerResult;
 };
 
+export type PluginInteractiveSlackHandlerRegistration = {
+  channel: "slack";
+  namespace: string;
+  handler: (
+    ctx: PluginInteractiveSlackHandlerContext,
+  ) => Promise<PluginInteractiveSlackHandlerResult> | PluginInteractiveSlackHandlerResult;
+};
+
 export type PluginInteractiveHandlerRegistration =
   | PluginInteractiveTelegramHandlerRegistration
-  | PluginInteractiveDiscordHandlerRegistration;
+  | PluginInteractiveDiscordHandlerRegistration
+  | PluginInteractiveSlackHandlerRegistration;
 
 export type OpenClawPluginHttpRouteAuth = "gateway" | "plugin";
 export type OpenClawPluginHttpRouteMatch = "exact" | "prefix";
