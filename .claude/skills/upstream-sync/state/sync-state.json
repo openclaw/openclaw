@@ -1,54 +1,27 @@
 {
-  "lastSyncedTag": "v2026.3.8",
-  "lastSyncedAt": "2026-03-09T12:30:36Z",
-  "lastSyncedCommit": "2b5ef174750ba20d3717df24ea7210ab97585e55",
-  "backupTag": "backup/pre-sync-v2026.3.8",
+  "lastSyncedTag": "v2026.3.12",
+  "lastSyncedAt": "2026-03-16T19:00:00Z",
+  "lastSyncedCommit": "baa14ccb97",
+  "backupTag": "backup/pre-sync-v2026.3.12-security-20260316",
   "cumulativeSkipped": 0,
-  "currentSync": {
-    "targetTag": "v2026.3.12",
-    "fromTag": "v2026.3.8",
-    "startedAt": "2026-03-16T00:00:00Z",
-    "reportFile": "Project-tasks/releases/sync-v2026.3.12-report.md",
-    "phases": {
-      "security": {
-        "status": "completed",
-        "branch": "sync/v2026.3.12-security",
-        "pr": 2,
-        "commits": 34,
-        "mergedAt": "2026-03-16T12:00:00Z"
-      },
-      "bugfixes": {
-        "status": "completed",
-        "branch": "sync/v2026.3.12-bugfixes",
-        "pr": 3,
-        "commits": 83,
-        "mergedAt": "2026-03-16T14:00:00Z"
-      },
-      "features": {
-        "status": "completed",
-        "branch": "sync/v2026.3.12-features",
-        "pr": 4,
-        "commits": 11,
-        "mergedAt": "2026-03-16T16:00:00Z"
-      },
-      "provider-refactor": {
-        "status": "completed",
-        "branch": "sync/v2026.3.12-provider-refactor",
-        "pr": 5,
-        "commits": 8,
-        "mergedAt": "2026-03-16T17:00:00Z"
-      },
-      "review": {
-        "status": "completed",
-        "branch": "sync/v2026.3.12-review",
-        "pr": 6,
-        "commits": 17,
-        "mergedAt": "2026-03-16T18:00:00Z"
-      },
-      "ui-inspiration": { "status": "pending", "branch": null, "pr": null, "commits": 6 }
-    }
-  },
+  "currentSync": null,
   "history": [
+    {
+      "type": "cherry-pick-phased",
+      "fromTag": "v2026.3.8",
+      "toTag": "v2026.3.12",
+      "syncedAt": "2026-03-16T19:00:00Z",
+      "backupTag": "backup/pre-sync-v2026.3.12-security-20260316",
+      "phases": {
+        "security": { "commits": 34, "pr": 2 },
+        "bugfixes": { "commits": 83, "pr": 3 },
+        "features": { "commits": 11, "pr": 4 },
+        "provider-refactor": { "commits": 8, "pr": 5 },
+        "review": { "commits": 17, "pr": 6 },
+        "ui-inspiration": { "commits": 5, "pr": 7 }
+      },
+      "notes": "First phased cherry-pick sync. 6 phases with per-category PRs. ~158 total commits adopted."
+    },
     {
       "type": "full-merge",
       "fromTag": "v2026.3.7-beta.1",
