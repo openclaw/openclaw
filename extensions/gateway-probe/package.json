@@ -1,0 +1,14 @@
+{
+  "name": "@openclaw/gateway-probe",
+  "version": "2026.3.2",
+  "description": "Optional observe-only gateway telemetry probe plugin",
+  "type": "module",
+  "dependencies": {
+    "kafkajs": "^2.2.4"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}
