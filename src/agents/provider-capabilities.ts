@@ -28,20 +28,17 @@ const DEFAULT_PROVIDER_CAPABILITIES: ProviderCapabilities = {
 };
 
 const CORE_PROVIDER_CAPABILITIES: Record<string, Partial<ProviderCapabilities>> = {
-  anthropic: {
-    providerFamily: "anthropic",
-    dropThinkingBlockModelHints: ["claude"],
-  },
   "amazon-bedrock": {
     providerFamily: "anthropic",
     dropThinkingBlockModelHints: ["claude"],
   },
-  openai: {
-    providerFamily: "openai",
-  },
 };
 
 const PLUGIN_CAPABILITIES_FALLBACKS: Record<string, Partial<ProviderCapabilities>> = {
+  anthropic: {
+    providerFamily: "anthropic",
+    dropThinkingBlockModelHints: ["claude"],
+  },
   mistral: {
     transcriptToolCallIdMode: "strict9",
     transcriptToolCallIdModelHints: [
@@ -63,6 +60,9 @@ const PLUGIN_CAPABILITIES_FALLBACKS: Record<string, Partial<ProviderCapabilities
     openAiCompatTurnValidation: false,
     geminiThoughtSignatureSanitization: true,
     geminiThoughtSignatureModelHints: ["gemini"],
+  },
+  openai: {
+    providerFamily: "openai",
   },
 };
 
