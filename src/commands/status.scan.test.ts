@@ -516,6 +516,7 @@ describe("scanStatus", () => {
       expect(result.tailscaleDns).toBeNull();
       expect(result.tailscaleHttpsUrl).toBeNull();
     } finally {
+      mocks.getTailnetHostname.mockReset();
       vi.useRealTimers();
     }
   });
