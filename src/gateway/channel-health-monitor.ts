@@ -1,4 +1,5 @@
 import type { ChannelId } from "../channels/plugins/types.js";
+import { recordOagIncident } from "../infra/oag-incident-collector.js";
 import { incrementOagMetric } from "../infra/oag-metrics.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
@@ -171,6 +172,12 @@ export function startChannelHealthMonitor(deps: ChannelHealthMonitorDeps): Chann
             channelManager.resetRestartAttempts(channelId as ChannelId, accountId);
             await channelManager.startChannel(channelId as ChannelId, accountId);
             incrementOagMetric("channelRestarts");
+            recordOagIncident({
+              type: "channel_crash_loop",
+              channel: channelId,
+              accountId,
+              detail: `health-monitor restart (reason: ${reason})`,
+            });
             record.lastRestartAt = now;
             record.restartsThisHour.push({ at: now });
             restartRecords.set(key, record);

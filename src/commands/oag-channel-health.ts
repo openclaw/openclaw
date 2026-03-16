@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 
 export type OagChannelHealthSummary = {
+  schemaVersion?: number;
   congested: boolean;
   backloggedAfterRecovery?: boolean;
   affectedChannels: string[];
@@ -86,6 +87,38 @@ function readOptionalString(value: unknown): string | undefined {
   return trimmed || undefined;
 }
 
+type SentinelSchemaVersion = 1 | 2;
+
+function detectSchemaVersion(parsed: Record<string, unknown>): SentinelSchemaVersion {
+  if (typeof parsed.schema_version === "number" && parsed.schema_version >= 2) {
+    return 2;
+  }
+  // Default to v1 for backward compatibility with existing sentinel producers
+  return 1;
+}
+
+function parseAffectedTargetsV2(raw: unknown[]): OagChannelHealthSummary["affectedTargets"] {
+  return raw
+    .filter((item): item is Record<string, unknown> => Boolean(item && typeof item === "object"))
+    .map((item) => ({
+      channel: readOptionalString(item.channel) ?? "",
+      accountId: readOptionalString(item.account_id),
+      sessionKeys: (() => {
+        const keys = item.session_keys;
+        if (!Array.isArray(keys)) {
+          return [];
+        }
+        return (keys as unknown[])
+          .map((entry) => readOptionalString(entry))
+          .filter((entry): entry is string => typeof entry === "string" && entry.length > 0);
+      })(),
+      pendingDeliveries:
+        typeof item.pending_deliveries === "number" ? item.pending_deliveries : undefined,
+      recentFailures: typeof item.recent_failures === "number" ? item.recent_failures : undefined,
+    }))
+    .filter((item) => item.channel.length > 0);
+}
+
 export async function readOagChannelHealthSummary(): Promise<OagChannelHealthSummary | undefined> {
   const statePath = getOagChannelHealthPath();
   if (!statePath) {
@@ -94,38 +127,44 @@ export async function readOagChannelHealthSummary(): Promise<OagChannelHealthSum
   try {
     const raw = await fs.readFile(statePath, "utf8");
     const parsed = JSON.parse(raw) as Record<string, unknown>;
+    const schemaVersion = detectSchemaVersion(parsed);
     const affectedChannels = Array.isArray(parsed.affected_channels)
       ? parsed.affected_channels
           .map((item) => String(item).trim())
           .filter((item) => item.length > 0)
       : [];
     const affectedTargets = Array.isArray(parsed.affected_targets)
-      ? parsed.affected_targets
-          .filter((item): item is Record<string, unknown> =>
-            Boolean(item && typeof item === "object"),
-          )
-          .map((item) => ({
-            channel: readOptionalString(item.channel) ?? "",
-            accountId: readOptionalString(item.account_id) ?? readOptionalString(item.accountId),
-            sessionKeys: (() => {
-              const raw = item.session_keys ?? item.sessionKeys;
-              if (!Array.isArray(raw)) {
-                return [];
-              }
-              return (raw as unknown[])
-                .map((entry) => readOptionalString(entry))
-                .filter((entry): entry is string => typeof entry === "string" && entry.length > 0);
-            })(),
-            pendingDeliveries:
-              typeof (item.pending_deliveries ?? item.pendingDeliveries) === "number"
-                ? Number(item.pending_deliveries ?? item.pendingDeliveries)
-                : undefined,
-            recentFailures:
-              typeof (item.recent_failures ?? item.recentFailures) === "number"
-                ? Number(item.recent_failures ?? item.recentFailures)
-                : undefined,
-          }))
-          .filter((item) => item.channel.length > 0)
+      ? schemaVersion >= 2
+        ? parseAffectedTargetsV2(parsed.affected_targets)
+        : // v1: dual-naming fallback for backward compatibility with existing sentinel producers
+          parsed.affected_targets
+            .filter((item): item is Record<string, unknown> =>
+              Boolean(item && typeof item === "object"),
+            )
+            .map((item) => ({
+              channel: readOptionalString(item.channel) ?? "",
+              accountId: readOptionalString(item.account_id) ?? readOptionalString(item.accountId),
+              sessionKeys: (() => {
+                const raw = item.session_keys ?? item.sessionKeys;
+                if (!Array.isArray(raw)) {
+                  return [];
+                }
+                return (raw as unknown[])
+                  .map((entry) => readOptionalString(entry))
+                  .filter(
+                    (entry): entry is string => typeof entry === "string" && entry.length > 0,
+                  );
+              })(),
+              pendingDeliveries:
+                typeof (item.pending_deliveries ?? item.pendingDeliveries) === "number"
+                  ? Number(item.pending_deliveries ?? item.pendingDeliveries)
+                  : undefined,
+              recentFailures:
+                typeof (item.recent_failures ?? item.recentFailures) === "number"
+                  ? Number(item.recent_failures ?? item.recentFailures)
+                  : undefined,
+            }))
+            .filter((item) => item.channel.length > 0)
       : [];
     const sessionWatchRaw =
       parsed.session_watch && typeof parsed.session_watch === "object"
@@ -136,6 +175,7 @@ export async function readOagChannelHealthSummary(): Promise<OagChannelHealthSum
         ? (parsed.task_watch as Record<string, unknown>)
         : undefined;
     return {
+      schemaVersion,
       congested: parsed.congested === true,
       backloggedAfterRecovery: parsed.backlogged_after_recovery === true,
       affectedChannels,

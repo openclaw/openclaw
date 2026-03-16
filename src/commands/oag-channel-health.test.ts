@@ -64,6 +64,7 @@ describe("readOagChannelHealthSummary", () => {
     );
 
     await expect(readOagChannelHealthSummary()).resolves.toEqual({
+      schemaVersion: 1,
       congested: false,
       backloggedAfterRecovery: false,
       affectedChannels: [],
@@ -310,6 +311,72 @@ describe("readOagChannelHealthSummary", () => {
 
     await expect(readOagChannelHealthSummary()).resolves.toBeUndefined();
     expect(readFileMock).not.toHaveBeenCalled();
+  });
+
+  describe("schema versioning", () => {
+    it("defaults to schema v1 when schema_version is absent", async () => {
+      readFileMock.mockResolvedValueOnce(
+        JSON.stringify({
+          congested: false,
+          pending_deliveries: 0,
+          recent_failure_count: 0,
+        }),
+      );
+      const summary = await readOagChannelHealthSummary();
+      expect(summary?.schemaVersion).toBe(1);
+    });
+
+    it("detects schema v2 when schema_version is 2", async () => {
+      readFileMock.mockResolvedValueOnce(
+        JSON.stringify({
+          schema_version: 2,
+          congested: false,
+          pending_deliveries: 0,
+          recent_failure_count: 0,
+          affected_targets: [
+            {
+              channel: "telegram",
+              account_id: "default",
+              session_keys: ["key1", "key2"],
+              pending_deliveries: 3,
+              recent_failures: 1,
+            },
+          ],
+        }),
+      );
+      const summary = await readOagChannelHealthSummary();
+      expect(summary?.schemaVersion).toBe(2);
+      expect(summary?.affectedTargets).toEqual([
+        {
+          channel: "telegram",
+          accountId: "default",
+          sessionKeys: ["key1", "key2"],
+          pendingDeliveries: 3,
+          recentFailures: 1,
+        },
+      ]);
+    });
+
+    it("v2 rejects camelCase field names", async () => {
+      readFileMock.mockResolvedValueOnce(
+        JSON.stringify({
+          schema_version: 2,
+          congested: false,
+          pending_deliveries: 0,
+          recent_failure_count: 0,
+          affected_targets: [
+            {
+              channel: "telegram",
+              accountId: "default", // camelCase — v2 only reads snake_case
+              sessionKeys: ["key1"], // camelCase — v2 only reads snake_case
+            },
+          ],
+        }),
+      );
+      const summary = await readOagChannelHealthSummary();
+      expect(summary?.affectedTargets?.[0]?.accountId).toBeUndefined();
+      expect(summary?.affectedTargets?.[0]?.sessionKeys).toEqual([]);
+    });
   });
 });
 

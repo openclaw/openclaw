@@ -35,7 +35,10 @@ import { createExecApprovalForwarder } from "../infra/exec-approval-forwarder.js
 import { onHeartbeatEvent } from "../infra/heartbeat-events.js";
 import { startHeartbeatRunner, type HeartbeatRunner } from "../infra/heartbeat-runner.js";
 import { getMachineDisplayName } from "../infra/machine-name.js";
-import { incrementOagMetric } from "../infra/oag-metrics.js";
+import { collectActiveIncidents, recordOagIncident } from "../infra/oag-incident-collector.js";
+import { recordLifecycleShutdown } from "../infra/oag-memory.js";
+import { getOagMetrics, incrementOagMetric } from "../infra/oag-metrics.js";
+import { runPostRecoveryAnalysis } from "../infra/oag-postmortem.js";
 import { ensureOpenClawCliOnPath } from "../infra/path-env.js";
 import {
   detectPluginInstallPathIssue,
@@ -716,6 +719,12 @@ export async function startGatewayServer(
         .catch((err) => {
           incrementOagMetric("deliveryRecoveryFailures");
           log.error(`Channel delivery recovery failed (${key}): ${String(err)}`);
+          recordOagIncident({
+            type: "delivery_recovery_failure",
+            channel: String(channelId),
+            accountId,
+            detail: String(err),
+          });
         })
         .finally(() => {
           pendingRecoveryRetrigger.delete(key);
@@ -1085,6 +1094,22 @@ export async function startGatewayServer(
         cfg: cfgAtStart,
       });
     })().catch((err) => log.error(`Delivery recovery failed: ${String(err)}`));
+
+    // Run OAG post-recovery analysis (non-blocking)
+    void (async () => {
+      try {
+        const postmortem = await runPostRecoveryAnalysis();
+        if (postmortem.userNotification) {
+          // Inject evolution notification as a pending OAG note
+          log.info(`OAG evolution: ${postmortem.userNotification}`);
+        }
+        if (postmortem.applied.length > 0) {
+          log.info(`OAG evolution applied ${postmortem.applied.length} parameter adjustments`);
+        }
+      } catch (err) {
+        log.warn(`OAG post-recovery analysis failed: ${String(err)}`);
+      }
+    })();
   }
 
   const execApprovalManager = new ExecApprovalManager();
@@ -1405,6 +1430,17 @@ export async function startGatewayServer(
       stopModelPricingRefresh();
       channelHealthMonitor?.stop();
       clearSecretsRuntimeSnapshot();
+      // Snapshot OAG lifecycle before shutdown
+      try {
+        await recordLifecycleShutdown({
+          startedAt: serverStartedAt,
+          stopReason: opts?.reason === "gateway stopping" ? "clean" : "restart",
+          metricsSnapshot: getOagMetrics(),
+          incidents: collectActiveIncidents(),
+        });
+      } catch (err) {
+        log.warn(`OAG lifecycle snapshot failed: ${String(err)}`);
+      }
       await close(opts);
     },
   };
