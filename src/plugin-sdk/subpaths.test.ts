@@ -4,12 +4,13 @@ import * as discordSdk from "openclaw/plugin-sdk/discord";
 import * as imessageSdk from "openclaw/plugin-sdk/imessage";
 import * as lineSdk from "openclaw/plugin-sdk/line";
 import * as msteamsSdk from "openclaw/plugin-sdk/msteams";
+import * as nostrSdk from "openclaw/plugin-sdk/nostr";
 import * as signalSdk from "openclaw/plugin-sdk/signal";
 import * as slackSdk from "openclaw/plugin-sdk/slack";
 import * as telegramSdk from "openclaw/plugin-sdk/telegram";
 import * as whatsappSdk from "openclaw/plugin-sdk/whatsapp";
 import { describe, expect, it } from "vitest";
-import { pluginSdkSubpaths } from "../../scripts/lib/plugin-sdk-entries.mjs";
+import { pluginSdkSubpaths } from "./entrypoints.js";
 
 const importPluginSdkSubpath = (specifier: string) => import(/* @vite-ignore */ specifier);
 
@@ -93,6 +94,11 @@ describe("plugin-sdk subpath exports", () => {
     expect(typeof msteamsSdk.msteamsSetupAdapter).toBe("object");
   });
 
+  it("exports Nostr helpers", () => {
+    expect(typeof nostrSdk.nostrSetupWizard).toBe("object");
+    expect(typeof nostrSdk.nostrSetupAdapter).toBe("object");
+  });
+
   it("exports Google Chat helpers", async () => {
     const googlechatSdk = await import("openclaw/plugin-sdk/googlechat");
     expect(typeof googlechatSdk.googlechatSetupWizard).toBe("object");
@@ -103,6 +109,12 @@ describe("plugin-sdk subpath exports", () => {
     const zaloSdk = await import("openclaw/plugin-sdk/zalo");
     expect(typeof zaloSdk.zaloSetupWizard).toBe("object");
     expect(typeof zaloSdk.zaloSetupAdapter).toBe("object");
+  });
+
+  it("exports Synology Chat helpers", async () => {
+    const synologyChatSdk = await import("openclaw/plugin-sdk/synology-chat");
+    expect(typeof synologyChatSdk.synologyChatSetupWizard).toBe("object");
+    expect(typeof synologyChatSdk.synologyChatSetupAdapter).toBe("object");
   });
 
   it("exports Zalouser helpers", async () => {

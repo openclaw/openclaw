@@ -217,12 +217,19 @@ Tool authoring guide: [Plugin agent tools](/plugins/agent-tools).
 
 Provider plugins now have two layers:
 
+- manifest metadata: `providerAuthEnvVars` for cheap env-auth lookup before
+  runtime load
 - config-time hooks: `catalog` / legacy `discovery`
 - runtime hooks: `resolveDynamicModel`, `prepareDynamicModel`, `normalizeResolvedModel`, `capabilities`, `prepareExtraParams`, `wrapStreamFn`, `isCacheTtlEligible`, `buildMissingAuthMessage`, `suppressBuiltInModel`, `augmentModelCatalog`, `prepareRuntimeAuth`, `resolveUsageAuth`, `fetchUsageSnapshot`
 
 OpenClaw still owns the generic agent loop, failover, transcript handling, and
 tool policy. These hooks are the seam for provider-specific behavior without
 needing a whole custom inference transport.
+
+Use manifest `providerAuthEnvVars` when the provider has env-based credentials
+that generic auth/status/model-picker paths should see without loading plugin
+runtime. Keep provider runtime `envVars` for operator-facing hints such as
+onboarding labels or OAuth client-id/client-secret setup vars.
 
 ### Hook order
 
@@ -769,7 +776,7 @@ Security note: `openclaw plugins install` installs plugin dependencies with
 trees "pure JS/TS" and avoid packages that require `postinstall` builds.
 
 Optional: `openclaw.setupEntry` can point at a lightweight setup-only module.
-When OpenClaw needs onboarding/setup surfaces for a disabled channel plugin, or
+When OpenClaw needs setup surfaces for a disabled channel plugin, or
 when a channel plugin is enabled but still unconfigured, it loads `setupEntry`
 instead of the full plugin entry. This keeps startup and onboarding lighter
 when your main plugin entry also wires tools, hooks, or other runtime-only
@@ -777,7 +784,7 @@ code.
 
 ### Channel catalog metadata
 
-Channel plugins can advertise onboarding metadata via `openclaw.channel` and
+Channel plugins can advertise setup/discovery metadata via `openclaw.channel` and
 install hints via `openclaw.install`. This keeps the core catalog data-free.
 
 Example:
@@ -1664,7 +1671,7 @@ Recommended packaging:
 Publishing contract:
 
 - Plugin `package.json` must include `openclaw.extensions` with one or more entry files.
-- Optional: `openclaw.setupEntry` may point at a lightweight setup-only entry for disabled or still-unconfigured channel onboarding/setup.
+- Optional: `openclaw.setupEntry` may point at a lightweight setup-only entry for disabled or still-unconfigured channel setup.
 - Entry files can be `.js` or `.ts` (jiti loads TS at runtime).
 - `openclaw plugins install <npm-spec>` uses `npm pack`, extracts into `~/.openclaw/extensions/<id>/`, and enables it in config.
 - Config key stability: scoped packages are normalized to the **unscoped** id for `plugins.entries.*`.

@@ -330,7 +330,7 @@ async function maybeRepairTelegramAllowFromUsernames(cfg: OpenClawConfig): Promi
     config: cfg,
     commandName: "doctor --fix",
     targetIds: getChannelsCommandSecretTargetIds(),
-    mode: "summary",
+    mode: "read_only_status",
   });
   const hasConfiguredUnavailableToken = listTelegramAccountIds(cfg).some((accountId) => {
     const inspected = inspectTelegramAccount({ cfg, accountId });

@@ -1,6 +1,9 @@
 {
   "id": "moonshot",
   "providers": ["moonshot"],
+  "providerAuthEnvVars": {
+    "moonshot": ["MOONSHOT_API_KEY"]
+  },
   "configSchema": {
     "type": "object",
     "additionalProperties": false,

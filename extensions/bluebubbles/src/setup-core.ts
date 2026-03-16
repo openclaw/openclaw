@@ -1,4 +1,4 @@
-import { setTopLevelChannelDmPolicyWithAllowFrom } from "../../../src/channels/plugins/onboarding/helpers.js";
+import { setTopLevelChannelDmPolicyWithAllowFrom } from "../../../src/channels/plugins/setup-flow-helpers.js";
 import {
   applyAccountNameToChannelSection,
   migrateBaseNameToDefaultAccount,
