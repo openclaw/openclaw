@@ -40,7 +40,7 @@ export function normalizeThinkLevel(raw?: string | null): ThinkLevel | undefined
   if (["min", "minimal"].includes(key)) {
     return "minimal";
   }
-  if (["low", "thinkhard", "think-hard", "think_hard"].includes(key)) {
+  if (["low", "thinkhard", "think_hard"].includes(key)) {
     return "low";
   }
   if (["mid", "med", "medium", "thinkharder", "think-harder", "harder"].includes(key)) {
@@ -50,6 +50,7 @@ export function normalizeThinkLevel(raw?: string | null): ThinkLevel | undefined
     ["high", "ultra", "ultrathink", "think-hard", "thinkhardest", "highest", "max"].includes(key)
   ) {
     return "high";
+  }
   }
   if (["think"].includes(key)) {
     return "minimal";
