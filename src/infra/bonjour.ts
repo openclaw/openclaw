@@ -273,11 +273,11 @@ export async function startGatewayBonjourAdvertiser(
     recreatePromise = (async () => {
       logWarn(`bonjour: restarting advertiser (${reason})`);
       const previous = cycle;
+      await stopCycle(previous);
       cycle = createCycle();
       stateTracker.clear();
       attachConflictListeners(cycle.services);
       startAdvertising(cycle.services);
-      await stopCycle(previous);
     })().finally(() => {
       recreatePromise = null;
     });
