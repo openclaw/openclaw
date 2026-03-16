@@ -11,6 +11,21 @@ Delegate coding tasks to Claude Code or OpenAI Codex as sub-processes. Each dele
 
 This skill extends the built-in `coding-agent` skill with concrete delegation scripts, tmux session management, and an example delegation policy. Use `coding-agent` for prompt composition guidance; use this skill when you need the actual execution infrastructure.
 
+## Installation
+
+```bash
+# Install everything (Claude Code, Codex, scripts, skill file)
+./install.sh
+
+# Already have Claude Code and Codex? Just install scripts
+./install.sh --skip-npm
+
+# Preview what will happen
+./install.sh --dry-run
+```
+
+Requires Node.js 22+, an existing OpenClaw installation, and subscription/OAuth auth for both Claude Code and Codex (API key auth will not work — the scripts strip API keys by design).
+
 ## Agent Selection
 
 | Request | Agent | CLI |
