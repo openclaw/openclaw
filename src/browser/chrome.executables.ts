@@ -434,11 +434,11 @@ function expandWindowsEnvVars(value: string): string {
 }
 
 function extractWindowsExecutablePath(command: string): string | null {
-  const quoted = command.match(/"([^"]+\\.exe)"/i);
+  const quoted = command.match(/"([^"]+\.exe)"/i);
   if (quoted?.[1]) {
     return quoted[1];
   }
-  const unquoted = command.match(/([^\\s]+\\.exe)/i);
+  const unquoted = command.match(/(\S+\.exe)/i);
   if (unquoted?.[1]) {
     return unquoted[1];
   }
