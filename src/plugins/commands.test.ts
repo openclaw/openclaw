@@ -136,6 +136,22 @@ describe("registerPluginCommand", () => {
     });
   });
 
+  it("resolves Telegram topic command bindings without a Telegram registry entry", () => {
+    expect(
+      __testing.resolveBindingConversationFromCommand({
+        channel: "telegram",
+        from: "telegram:group:-100123",
+        to: "telegram:group:-100123:topic:77",
+        accountId: "default",
+      }),
+    ).toEqual({
+      channel: "telegram",
+      accountId: "default",
+      conversationId: "-100123",
+      threadId: 77,
+    });
+  });
+
   it("does not resolve binding conversations for unsupported command channels", () => {
     expect(
       __testing.resolveBindingConversationFromCommand({
