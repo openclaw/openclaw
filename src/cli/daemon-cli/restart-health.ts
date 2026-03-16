@@ -15,6 +15,7 @@ export const DEFAULT_RESTART_HEALTH_DELAY_MS = 500;
 export const DEFAULT_RESTART_HEALTH_ATTEMPTS = Math.ceil(
   DEFAULT_RESTART_HEALTH_TIMEOUT_MS / DEFAULT_RESTART_HEALTH_DELAY_MS,
 );
+export const DEFAULT_LOCAL_GATEWAY_REACHABILITY_TIMEOUT_MS = 10_000;
 
 export type GatewayRestartSnapshot = {
   runtime: GatewayServiceRuntime;
@@ -65,7 +66,9 @@ async function confirmGatewayReachable(port: number): Promise<boolean> {
   const probe = await probeGateway({
     url: `ws://127.0.0.1:${port}`,
     auth: token || password ? { token, password } : undefined,
-    timeoutMs: 3_000,
+    // Restart health runs during the gateway's hottest startup and recovery windows.
+    // Give local handshakes extra budget so busy embedded runs do not look like a dead gateway.
+    timeoutMs: DEFAULT_LOCAL_GATEWAY_REACHABILITY_TIMEOUT_MS,
     includeDetails: false,
   });
   return probe.ok || looksLikeAuthClose(probe.close?.code, probe.close?.reason);

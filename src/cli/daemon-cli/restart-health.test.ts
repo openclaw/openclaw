@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { GatewayService } from "../../daemon/service.js";
 import type { PortListenerKind, PortUsage } from "../../infra/ports.js";
+import { DEFAULT_LOCAL_GATEWAY_REACHABILITY_TIMEOUT_MS } from "./restart-health.js";
 
 const inspectPortUsage = vi.hoisted(() => vi.fn<(port: number) => Promise<PortUsage>>());
 const classifyPortListener = vi.hoisted(() =>
@@ -184,7 +185,10 @@ describe("inspectGatewayRestart", () => {
 
     expect(snapshot.healthy).toBe(true);
     expect(probeGateway).toHaveBeenCalledWith(
-      expect.objectContaining({ url: "ws://127.0.0.1:18789" }),
+      expect.objectContaining({
+        url: "ws://127.0.0.1:18789",
+        timeoutMs: DEFAULT_LOCAL_GATEWAY_REACHABILITY_TIMEOUT_MS,
+      }),
     );
   });
 
@@ -208,6 +212,12 @@ describe("inspectGatewayRestart", () => {
 
     expect(snapshot.healthy).toBe(true);
     expect(snapshot.staleGatewayPids).toEqual([]);
+    expect(probeGateway).toHaveBeenCalledWith(
+      expect.objectContaining({
+        url: "ws://127.0.0.1:18789",
+        timeoutMs: DEFAULT_LOCAL_GATEWAY_REACHABILITY_TIMEOUT_MS,
+      }),
+    );
   });
 
   it("treats auth-closed probe as healthy gateway reachability", async () => {
