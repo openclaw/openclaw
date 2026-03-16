@@ -27,6 +27,7 @@ const mocks = vi.hoisted(() => ({
   resolveOutboundTarget: vi.fn(() => ({ ok: true as const, to: "+15550002" })),
   deliverOutboundPayloads: vi.fn(async () => []),
   enqueueSystemEvent: vi.fn(),
+  deriveSessionChatType: vi.fn(() => "unknown"),
 }));
 
 vi.mock("../agents/agent-scope.js", () => ({
@@ -76,6 +77,10 @@ vi.mock("../infra/system-events.js", () => ({
   enqueueSystemEvent: mocks.enqueueSystemEvent,
 }));
 
+vi.mock("../sessions/session-key-utils.js", () => ({
+  deriveSessionChatType: mocks.deriveSessionChatType,
+}));
+
 const { scheduleRestartSentinelWake } = await import("./server-restart-sentinel.js");
 
 describe("scheduleRestartSentinelWake", () => {
@@ -90,5 +95,38 @@ describe("scheduleRestartSentinelWake", () => {
       }),
     );
     expect(mocks.enqueueSystemEvent).not.toHaveBeenCalled();
+  });
+
+  it("ignores pseudo-thread suffixes from direct session keys", async () => {
+    mocks.consumeRestartSentinel.mockResolvedValueOnce({
+      payload: {
+        sessionKey: "agent:main:telegram:dm:user:thread:abc",
+        deliveryContext: {
+          channel: "telegram",
+          to: "user:thread:abc",
+        },
+      },
+    });
+    mocks.deriveSessionChatType.mockReturnValueOnce("direct");
+    mocks.parseSessionThreadInfo.mockReturnValueOnce({
+      baseSessionKey: "agent:main:telegram:dm:user",
+      threadId: "abc",
+    });
+    mocks.resolveAnnounceTargetFromKey.mockReturnValueOnce({
+      channel: "telegram",
+      to: "user:thread:abc",
+      threadId: undefined,
+    });
+    mocks.resolveOutboundTarget.mockReturnValueOnce({ ok: true, to: "user:thread:abc" });
+
+    await scheduleRestartSentinelWake({ deps: {} as never });
+
+    expect(mocks.deliverOutboundPayloads).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "telegram",
+        to: "user:thread:abc",
+        threadId: undefined,
+      }),
+    );
   });
 });

@@ -12,6 +12,7 @@ import {
   summarizeRestartSentinel,
 } from "../infra/restart-sentinel.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
+import { deriveSessionChatType } from "../sessions/session-key-utils.js";
 import { deliveryContextFromSession, mergeDeliveryContext } from "../utils/delivery-context.js";
 import { loadSessionEntry } from "./session-utils.js";
 
@@ -31,10 +32,16 @@ export async function scheduleRestartSentinelWake(_params: { deps: CliDeps }) {
     return;
   }
 
-  const { baseSessionKey, threadId: sessionThreadId } = parseSessionThreadInfo(sessionKey);
+  const sessionChatType = deriveSessionChatType(sessionKey);
+  const { baseSessionKey: parsedBaseSessionKey, threadId: parsedSessionThreadId } =
+    parseSessionThreadInfo(sessionKey);
+  const baseSessionKey =
+    sessionChatType === "direct" ? sessionKey : (parsedBaseSessionKey ?? sessionKey);
+  const sessionThreadId = sessionChatType === "direct" ? undefined : parsedSessionThreadId;
 
   const { cfg, entry } = loadSessionEntry(sessionKey);
-  const parsedTarget = resolveAnnounceTargetFromKey(baseSessionKey ?? sessionKey);
+  const parsedTarget =
+    resolveAnnounceTargetFromKey(sessionKey) ?? resolveAnnounceTargetFromKey(baseSessionKey);
 
   // Prefer delivery context from sentinel (captured at restart) over session store
   // Handles race condition where store wasn't flushed before restart
