@@ -178,11 +178,11 @@ By default, sub-agents cannot spawn their own sub-agents (`maxSpawnDepth: 1`). Y
 
 ### Depth levels
 
-| Depth | Session key shape                            | Role                                          | Can spawn?                        |
-| ----- | -------------------------------------------- | --------------------------------------------- | --------------------------------- |
-| 0     | `agent:<id>:main`                            | Main agent                                    | Always                            |
-| 1     | `agent:<id>:subagent:<uuid>`                 | Sub-agent (orchestrator when depth 2 allowed) | Only if `maxSpawnDepth >= 2`      |
-| 2     | `agent:<id>:subagent:<uuid>:subagent:<uuid>` | Sub-sub-agent (leaf worker at depth 2)        | Only if `maxSpawnDepth >= 3`      |
+| Depth | Session key shape                            | Role                                          | Can spawn?                   |
+| ----- | -------------------------------------------- | --------------------------------------------- | ---------------------------- |
+| 0     | `agent:<id>:main`                            | Main agent                                    | Always                       |
+| 1     | `agent:<id>:subagent:<uuid>`                 | Sub-agent (orchestrator when depth 2 allowed) | Only if `maxSpawnDepth >= 2` |
+| 2     | `agent:<id>:subagent:<uuid>:subagent:<uuid>` | Sub-sub-agent (leaf worker at depth 2)        | Only if `maxSpawnDepth >= 3` |
 
 General rule for depths 3–5: each depth N agent can spawn children only if `maxSpawnDepth >= N + 1`. The deepest allowed depth (equal to `maxSpawnDepth`) is always a leaf and cannot spawn further. Session keys append `:subagent:<uuid>` per nesting level.
 
