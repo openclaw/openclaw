@@ -51,10 +51,14 @@ Typical split:
 
 Current bundled examples:
 
+- `anthropic`: Claude 4.6 forward-compat fallback, usage endpoint fetching,
+  and cache-TTL/provider-family metadata
 - `openrouter`: pass-through model ids, request wrappers, provider capability
   hints, and cache-TTL policy
 - `github-copilot`: forward-compat model fallback, Claude-thinking transcript
   hints, runtime token exchange, and usage endpoint fetching
+- `openai`: GPT-5.4 forward-compat fallback, direct OpenAI transport
+  normalization, and provider-family metadata
 - `openai-codex`: forward-compat model fallback, transport normalization, and
   default transport params plus usage endpoint fetching
 - `google-gemini-cli`: Gemini 3.1 forward-compat fallback plus usage-token
