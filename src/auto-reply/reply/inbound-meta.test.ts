@@ -501,6 +501,21 @@ describe("buildInboundUserContextPrefix", () => {
       expect(text).toMatch(/user_[a-f0-9]{12}/);
     });
 
+    it("hashes SenderE164 as fallback when SenderId is absent", () => {
+      const text = buildInboundUserContextPrefix(
+        {
+          ChatType: "group",
+          SenderE164: "+15551234567",
+        } as TemplateContext,
+        { redactPII: true },
+      );
+
+      const conversationInfo = parseConversationInfoPayload(text);
+      // E164 should be hashed as fallback, not undefined
+      expect(conversationInfo["sender"]).toMatch(/^user_[a-f0-9]{12}$/);
+      expect(conversationInfo["sender"]).not.toContain("15551234567");
+    });
+
     it("keeps non-phone ReplyToSender unchanged", () => {
       const text = buildInboundUserContextPrefix(
         {

@@ -132,7 +132,13 @@ export function buildInboundUserContextPrefix(
   const resolvedMessageId = messageId ?? messageIdFull;
   const timestampStr = formatConversationTimestamp(ctx.Timestamp);
 
-  const senderE164 = options?.redactPII ? undefined : safeTrim(ctx.SenderE164);
+  const rawE164 = safeTrim(ctx.SenderE164);
+  // When redacting, hash E.164 as fallback pseudonym if no other sender ID exists; otherwise strip.
+  const senderE164 = options?.redactPII
+    ? rawE164 && !safeTrim(ctx.SenderId)
+      ? hashSenderId(rawE164)
+      : undefined
+    : rawE164;
   const rawSenderId = safeTrim(ctx.SenderId);
   const senderId = options?.redactPII && rawSenderId ? hashSenderId(rawSenderId) : rawSenderId;
 
