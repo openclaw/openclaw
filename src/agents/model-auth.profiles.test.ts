@@ -467,4 +467,17 @@ describe("getApiKeyForModel", () => {
       },
     );
   });
+
+  it("resolveEnvApiKey('modelscope) uses modelscope auth candidates", async () => {
+    await withEnvAsync(
+      {
+        MODELSCOPE_API_KEY: "modelscope-plan-key",
+      },
+      async () => {
+        const resolved = resolveEnvApiKey("modelscope");
+        expect(resolved?.apiKey).toBe("modelscope-api-key");
+        expect(resolved?.source).toContain("MODELSCOPE_API_KEY");
+      },
+    );
+  });
 });

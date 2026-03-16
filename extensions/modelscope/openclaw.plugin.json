@@ -1,0 +1,9 @@
+{
+  "id": "modelscope",
+  "providers": ["modelscope"],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

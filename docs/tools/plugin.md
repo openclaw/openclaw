@@ -174,6 +174,7 @@ Important trust note:
 - Kimi Coding provider catalog — bundled as `kimi-coding` (enabled by default)
 - MiniMax provider catalog + usage + OAuth — bundled as `minimax` (enabled by default; owns `minimax` and `minimax-portal`)
 - Mistral provider capabilities — bundled as `mistral` (enabled by default)
+- ModelScope provider catalog — bundled as `modelscope` (enabled by default)
 - Model Studio provider catalog — bundled as `modelstudio` (enabled by default)
 - Moonshot provider runtime — bundled as `moonshot` (enabled by default)
 - NVIDIA provider catalog — bundled as `nvidia` (enabled by default)

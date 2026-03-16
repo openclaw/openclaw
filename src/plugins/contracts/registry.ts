@@ -11,6 +11,7 @@ import kilocodePlugin from "../../../extensions/kilocode/index.js";
 import kimiCodingPlugin from "../../../extensions/kimi-coding/index.js";
 import minimaxPlugin from "../../../extensions/minimax/index.js";
 import mistralPlugin from "../../../extensions/mistral/index.js";
+import modelscopePlugin from "../../../extensions/modelscope/index.ts";
 import modelStudioPlugin from "../../../extensions/modelstudio/index.js";
 import moonshotPlugin from "../../../extensions/moonshot/index.js";
 import nvidiaPlugin from "../../../extensions/nvidia/index.js";
@@ -66,6 +67,7 @@ const bundledProviderPlugins: RegistrablePlugin[] = [
   githubCopilotPlugin,
   googlePlugin,
   huggingFacePlugin,
+  modelscopePlugin,
   kilocodePlugin,
   kimiCodingPlugin,
   minimaxPlugin,

@@ -10,6 +10,12 @@ import {
 } from "./huggingface-models.js";
 import { discoverKilocodeModels } from "./kilocode-models.js";
 import {
+  discoverModelScopeModels,
+  MODELSCOPE_BASE_URL,
+  MODELSCOPE_MODEL_CATALOG,
+  buildModelScopeModelDefinition,
+} from "./modelscope-models.js";
+import {
   enrichOllamaModelsWithContext,
   OLLAMA_DEFAULT_CONTEXT_WINDOW,
   OLLAMA_DEFAULT_COST,
@@ -180,6 +186,19 @@ export async function buildHuggingfaceProvider(discoveryApiKey?: string): Promis
       : HUGGINGFACE_MODEL_CATALOG.map(buildHuggingfaceModelDefinition);
   return {
     baseUrl: HUGGINGFACE_BASE_URL,
+    api: "openai-completions",
+    models,
+  };
+}
+
+export async function buildModelScopeProvider(discoveryApiKey?: string): Promise<ProviderConfig> {
+  const resolvedSecret = discoveryApiKey?.trim() ?? "";
+  const models =
+    resolvedSecret !== ""
+      ? await discoverModelScopeModels(resolvedSecret)
+      : MODELSCOPE_MODEL_CATALOG.map(buildModelScopeModelDefinition);
+  return {
+    baseUrl: MODELSCOPE_BASE_URL,
     api: "openai-completions",
     models,
   };

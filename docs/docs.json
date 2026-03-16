@@ -1112,6 +1112,7 @@
                   "providers/litellm",
                   "providers/glm",
                   "providers/minimax",
+                  "providers/modelscope",
                   "providers/moonshot",
                   "providers/mistral",
                   "providers/nvidia",

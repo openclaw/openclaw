@@ -12,6 +12,11 @@ import {
   XIAOMI_DEFAULT_MODEL_ID,
 } from "../agents/models-config.providers.static.js";
 import {
+  buildModelScopeModelDefinition,
+  MODELSCOPE_BASE_URL,
+  MODELSCOPE_MODEL_CATALOG,
+} from "../agents/modelscope-models.js";
+import {
   buildSyntheticModelDefinition,
   SYNTHETIC_BASE_URL,
   SYNTHETIC_DEFAULT_MODEL_REF,
@@ -40,6 +45,7 @@ import {
   XIAOMI_DEFAULT_MODEL_REF,
   ZAI_DEFAULT_MODEL_REF,
   XAI_DEFAULT_MODEL_REF,
+  MODELSCOPE_DEFAULT_MODEL_REF,
 } from "./onboard-auth.credentials.js";
 export {
   applyCloudflareAiGatewayConfig,
@@ -401,6 +407,28 @@ export function applyHuggingfaceProviderConfig(cfg: OpenClawConfig): OpenClawCon
 export function applyHuggingfaceConfig(cfg: OpenClawConfig): OpenClawConfig {
   const next = applyHuggingfaceProviderConfig(cfg);
   return applyAgentDefaultModelPrimary(next, HUGGINGFACE_DEFAULT_MODEL_REF);
+}
+
+export function applyModelScopeProviderConfig(cfg: OpenClawConfig): OpenClawConfig {
+  const models = { ...cfg.agents?.defaults?.models };
+  models[MODELSCOPE_DEFAULT_MODEL_REF] = {
+    ...models[MODELSCOPE_DEFAULT_MODEL_REF],
+    alias: models[MODELSCOPE_DEFAULT_MODEL_REF]?.alias ?? "ModelScope",
+  };
+
+  const modelscopeModels = MODELSCOPE_MODEL_CATALOG.map(buildModelScopeModelDefinition);
+  return applyProviderConfigWithModelCatalog(cfg, {
+    agentModels: models,
+    providerId: "modelscope",
+    api: "openai-completions",
+    baseUrl: MODELSCOPE_BASE_URL,
+    catalogModels: modelscopeModels,
+  });
+}
+
+export function applyModelScopeConfig(cfg: OpenClawConfig): OpenClawConfig {
+  const next = applyModelScopeProviderConfig(cfg);
+  return applyAgentDefaultModelPrimary(next, MODELSCOPE_DEFAULT_MODEL_REF);
 }
 
 export function applyXaiProviderConfig(cfg: OpenClawConfig): OpenClawConfig {

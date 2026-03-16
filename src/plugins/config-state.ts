@@ -36,6 +36,7 @@ export const BUNDLED_ENABLED_BY_DEFAULT = new Set<string>([
   "kimi-coding",
   "minimax",
   "mistral",
+  "modelscope",
   "modelstudio",
   "moonshot",
   "nvidia",

@@ -455,6 +455,8 @@ importers:
 
   extensions/mistral: {}
 
+  extensions/modelscope: {}
+
   extensions/modelstudio: {}
 
   extensions/moonshot: {}
