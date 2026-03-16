@@ -81,4 +81,18 @@ describe("probeGateway", () => {
     expect(result.ok).toBe(true);
     expect(gatewayClientState.requests).toEqual([]);
   });
+
+  it("fetches only presence for presence-only probes", async () => {
+    const result = await probeGateway({
+      url: "ws://127.0.0.1:18789",
+      timeoutMs: 1_000,
+      detailLevel: "presence",
+    });
+
+    expect(result.ok).toBe(true);
+    expect(gatewayClientState.requests).toEqual(["system-presence"]);
+    expect(result.health).toBeNull();
+    expect(result.status).toBeNull();
+    expect(result.configSnapshot).toBeNull();
+  });
 });

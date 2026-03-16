@@ -246,6 +246,9 @@ describe("scanStatus", () => {
     await scanStatus({ json: true }, {} as never);
 
     expect(mocks.ensurePluginRegistryLoaded).toHaveBeenCalledWith({ scope: "channels" });
+    expect(mocks.probeGateway).toHaveBeenCalledWith(
+      expect.objectContaining({ detailLevel: "presence" }),
+    );
     expect(mocks.callGateway).not.toHaveBeenCalledWith(
       expect.objectContaining({ method: "channels.status" }),
     );
