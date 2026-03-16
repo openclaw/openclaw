@@ -10,7 +10,13 @@
     "startedAt": "2026-03-16T00:00:00Z",
     "reportFile": "Project-tasks/releases/sync-v2026.3.12-report.md",
     "phases": {
-      "security": { "status": "pending", "branch": null, "pr": null, "commits": 34 },
+      "security": {
+        "status": "completed",
+        "branch": "sync/v2026.3.12-security",
+        "pr": 2,
+        "commits": 34,
+        "mergedAt": "2026-03-16T12:00:00Z"
+      },
       "bugfixes": { "status": "pending", "branch": null, "pr": null, "commits": 75 },
       "features": { "status": "pending", "branch": null, "pr": null, "commits": 11 },
       "provider-refactor": { "status": "pending", "branch": null, "pr": null, "commits": 8 },
