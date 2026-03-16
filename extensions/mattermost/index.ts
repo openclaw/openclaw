@@ -12,6 +12,9 @@ const plugin = {
   register(api: OpenClawPluginApi) {
     setMattermostRuntime(api.runtime);
     api.registerChannel({ plugin: mattermostPlugin });
+    if (api.registrationMode !== "full") {
+      return;
+    }
 
     // Register the HTTP route for slash command callbacks.
     // The actual command registration with MM happens in the monitor

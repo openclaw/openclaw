@@ -258,6 +258,7 @@ export const TelegramAccountSchemaBase = z
         editMessage: z.boolean().optional(),
         sticker: z.boolean().optional(),
         createForumTopic: z.boolean().optional(),
+        editForumTopic: z.boolean().optional(),
       })
       .strict()
       .optional(),
@@ -767,6 +768,7 @@ export const GoogleChatAccountSchema = z
     serviceAccountFile: z.string().optional(),
     audienceType: z.enum(["app-url", "project-number"]).optional(),
     audience: z.string().optional(),
+    appPrincipal: z.string().optional(),
     webhookPath: z.string().optional(),
     webhookUrl: z.string().optional(),
     botUser: z.string().optional(),

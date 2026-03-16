@@ -1,0 +1,12 @@
+{
+  "id": "venice",
+  "providers": ["venice"],
+  "providerAuthEnvVars": {
+    "venice": ["VENICE_API_KEY"]
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}
