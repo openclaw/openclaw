@@ -39,10 +39,18 @@ comes in from upstream, not the other way around.
 
 - **We choose what lands.** No change enters operator1 without explicit review.
 - **Security fixes first.** Always prioritize security patches.
-- **Branch from upstream, merge into ours.** Review branches are based on
-  pure upstream tags — never branched off operator1 `main`.
-- **One review branch per upstream release.** Keeps changes traceable.
+- **Cherry-pick on a sync branch, merge to main.** Never cherry-pick directly
+  onto `main`. Use a short-lived `sync/<tag>` branch so you can abort cleanly
+  if things go sideways mid-batch.
+- **One sync branch per upstream release.** Keeps changes traceable.
+  Exception: out-of-cycle security hotfixes use `sync/ghsa-<id>` or
+  `sync/cve-<id>` naming.
+- **Always `cherry-pick -x`.** The `-x` flag auto-appends
+  `(cherry picked from commit <sha>)` to every commit message, giving free
+  reverse-traceability from `git log` without relying on the sync log alone.
 - **Test before merge.** Every cherry-pick batch is validated before landing on `main`.
+- **Dry-run before commit.** Use `--no-commit` cherry-picks to catch missing
+  dependencies early without polluting history.
 
 ---
 
@@ -53,19 +61,22 @@ upstream/main (pure openclaw — fetch only, never push)
   │
   │  identify commits from CHANGELOG / git log
   │
-  │  git cherry-pick <sha>   ← directly onto main
+  │  git cherry-pick <sha>
   │         │
   ▼         ▼
-origin/main (operator1)
+sync/v2026.3.12 (short-lived sync branch off main)
   ├── cherry-pick: security fix A
   ├── cherry-pick: bug fix B
   ├── pnpm build && pnpm test
-  └── done
+  │
+  ▼  (fast-forward merge once validated)
+origin/main (operator1)
 ```
 
-**Key:** No extra branches. `upstream` remote is the pure openclaw fork
-(fetch-only, never push). We cherry-pick directly from upstream commits
-onto our `main`. Conflicts resolve inline. Test. Push. Done.
+**Key:** `upstream` remote is the pure openclaw fork (fetch-only, never push).
+Cherry-picks land on a short-lived `sync/<tag>` branch created from `main`.
+After validation passes, fast-forward merge to `main` and delete the sync branch.
+If the batch goes sideways, delete the sync branch — `main` is untouched.
 
 ### One-time setup: Disable push to upstream
 
@@ -131,7 +142,11 @@ git log --oneline v2026.3.8..v2026.3.12 --no-merges
 ### Phase 2: Review & Select (1-2 hrs for large releases)
 
 **Pre-filter by scope:** Before reviewing individual commits, narrow down
-to files you care about. This cuts hundreds of commits to a manageable set:
+to files you care about. This cuts hundreds of commits to a manageable set.
+
+> **Maintenance note:** Update this path list whenever operator1 adds new
+> top-level source directories or renames existing ones. A stale filter
+> silently misses commits in new areas.
 
 ```bash
 # Only show commits touching areas we use
@@ -162,35 +177,79 @@ git log --oneline --ancestry-path <skipped-sha>..<target-sha>
 
 Classify each into the sync log (see §7).
 
-### Phase 3: Cherry-pick onto main
+### Phase 3: Cherry-pick onto sync branch
 
 ```bash
-# Make sure we're on main
+# Create a sync branch from main
 git checkout main
+git checkout -b sync/v2026.3.12
 
-# Cherry-pick selected commits directly (chronological order)
-git cherry-pick <sha1>
+# Batch dry-run: cherry-pick ALL selected commits without committing,
+# then build to catch missing deps / interaction effects across the batch.
+git cherry-pick --no-commit <sha1> <sha2> <sha3>
+pnpm build  # does it compile? if not, you're missing a dependency commit
+git reset --hard  # discard dry-run working tree (sync branch only, safe)
+
+# Now cherry-pick for real (chronological order).
+# Always use -x to record the source SHA in the commit message.
+git cherry-pick -x <sha1>
 # → if conflict: resolve, then git cherry-pick --continue
 # → if too messy: git cherry-pick --abort and skip
-git cherry-pick <sha2>
-git cherry-pick <sha3>
+git cherry-pick -x <sha2>
+git cherry-pick -x <sha3>
 
 # If a cherry-pick depends on a commit we skipped, either:
 #   a) cherry-pick the dependency too
 #   b) adapt the fix manually (write our own version)
 #   c) skip and note in sync log
+
+# If a cherry-pick touches package.json, always regenerate the lockfile:
+pnpm install
+git add pnpm-lock.yaml
+git commit -m "chore: regenerate lockfile after upstream cherry-pick"
+# Never try to resolve lockfile merge conflicts manually — just regenerate.
 ```
 
-### Phase 4: Validate & Push
+**Abort escape hatch:** If the batch is going badly mid-way:
 
 ```bash
+git cherry-pick --abort        # cancel in-progress cherry-pick
+git checkout main              # back to safety
+git branch -D sync/v2026.3.12  # delete the failed sync branch
+# main is completely untouched
+```
+
+### Phase 4: Validate & Merge to main
+
+```bash
+# Still on sync/v2026.3.12
 pnpm install && pnpm build && pnpm test
 cd ui-next && pnpm build && cd ..
 
-# If all good, push
+# Optional but recommended: push sync branch to run CI before merging.
+# Catches environment-specific failures (Node version, etc.).
+git push -u origin sync/v2026.3.12
+
+# If all good, fast-forward merge to main
+git checkout main
+git merge --ff-only sync/v2026.3.12
+
+# If fast-forward fails (main moved), rebase sync branch first:
+# git checkout sync/v2026.3.12
+# git rebase main
+# <re-validate: pnpm build && pnpm test>
+# IMPORTANT: rebase rewrites SHAs — update sync log entries if you
+# recorded cherry-pick SHAs there. The -x trailer still has the
+# original upstream SHA, but the operator1 commit SHA changes.
+# git checkout main
+# git merge --ff-only sync/v2026.3.12
+
 git push
+git branch -d sync/v2026.3.12
+git push origin --delete sync/v2026.3.12 2>/dev/null  # clean up remote
 
 # Update the sync log in this doc
+# Run the cherry-pick post-sync checklist (§7.1)
 ```
 
 ### Phase 5: Rollback (if needed)
@@ -216,30 +275,54 @@ Never use `git reset --hard` or force-push to undo cherry-picks on `main`.
 These files have significant operator1 customizations. Cherry-picks touching
 them need extra care:
 
-| File                                     | Conflict strategy                                                                                                           |
-| ---------------------------------------- | --------------------------------------------------------------------------------------------------------------------------- |
-| `src/agents/system-prompt.ts`            | Take theirs for new prompt logic, keep our custom sections intact. Merge by appending upstream additions around our blocks. |
-| `src/auto-reply/reply/commands-core.ts`  | Keep our handler pipeline order. Take theirs for new command registrations only.                                            |
-| `src/gateway/server-methods.ts`          | Append-only — take theirs for new handlers, keep ours. Both sides should coexist.                                           |
-| `src/gateway/server-methods-list.ts`     | Append-only — merge both method lists.                                                                                      |
-| `src/gateway/method-scopes.ts`           | Append-only — merge both scope entries.                                                                                     |
-| `src/gateway/protocol/schema/*.ts`       | Take theirs for new types. Keep our custom types. If same type modified, manual merge.                                      |
-| `src/infra/state-db/schema.ts`           | **Our version always wins on migration number.** Take theirs for new table/column logic, keep our version bump.             |
-| `ui-next/src/app.tsx`                    | Keep our custom routes. Take theirs for shared component updates only.                                                      |
-| `ui-next/src/components/app-sidebar.tsx` | Keep our custom navigation. Manual merge if both sides modify.                                                              |
+| File                                     | Conflict strategy                                                                                                                                                                                                                                                                                                    |
+| ---------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `src/agents/system-prompt.ts`            | Take theirs for new prompt logic, keep our custom sections intact. Merge by appending upstream additions around our blocks.                                                                                                                                                                                          |
+| `src/auto-reply/reply/commands-core.ts`  | Keep our handler pipeline order. Take theirs for new command registrations only.                                                                                                                                                                                                                                     |
+| `src/gateway/server-methods.ts`          | Append-only — take theirs for new handlers, keep ours. Both sides should coexist.                                                                                                                                                                                                                                    |
+| `src/gateway/server-methods-list.ts`     | Append-only — merge both method lists.                                                                                                                                                                                                                                                                               |
+| `src/gateway/method-scopes.ts`           | Append-only — merge both scope entries.                                                                                                                                                                                                                                                                              |
+| `src/gateway/protocol/schema/*.ts`       | Take theirs for new types. Keep our custom types. If same type modified, manual merge.                                                                                                                                                                                                                               |
+| `src/infra/state-db/schema.ts`           | **Our version always wins on migration number.** If upstream adds a migration at the same number as ours: take their table/column logic, renumber it to our next available migration number, and update the version constant. Never squash upstream + ours into one migration — keep them separate for auditability. |
+| `ui-next/src/app.tsx`                    | Keep our custom routes. Take theirs for shared component updates only.                                                                                                                                                                                                                                               |
+| `ui-next/src/components/app-sidebar.tsx` | Keep our custom navigation. Manual merge if both sides modify.                                                                                                                                                                                                                                                       |
 
 ### Files safe to cherry-pick freely
 
-These are less likely to conflict:
+These are less likely to conflict — **but verify before each sync** from both
+sides: (a) did we modify a "safe" file locally, and (b) does the incoming
+cherry-pick touch a file we've diverged on?
+
+```bash
+# Check 1: which "safe" files have we locally touched since last sync?
+LAST_SYNC_TAG="v2026.3.8"  # update from sync log §7
+for path in \
+  "src/agents/tools/" \
+  "src/agents/model-*.ts" \
+  "src/agents/pi-embedded-helpers/errors.ts" \
+  "src/agents/openai-ws-connection.ts" \
+  "extensions/" \
+  "docs/"; do
+  count=$(git log --oneline "$LAST_SYNC_TAG"..HEAD -- "$path" 2>/dev/null | wc -l | tr -d ' ')
+  [ "$count" -gt 0 ] && echo "LOCAL: $path has $count local commits since $LAST_SYNC_TAG"
+done
+
+# Check 2: does a specific cherry-pick target touch files we've diverged on?
+# Run per-commit before picking from the "safe" list.
+git show --stat <sha> --name-only | while read -r file; do
+  [ -z "$file" ] && continue
+  local_changes=$(git log --oneline "$LAST_SYNC_TAG"..HEAD -- "$file" 2>/dev/null | wc -l | tr -d ' ')
+  [ "$local_changes" -gt 0 ] && echo "CONFLICT RISK: $file has $local_changes local changes"
+done
+```
+
+Default safe list (subject to the check above):
 
 - `src/agents/tools/*` — individual tool implementations
 - `src/agents/model-*.ts` — model definitions, forward-compat
 - `src/agents/pi-embedded-helpers/errors.ts` — error classification
 - `src/agents/openai-ws-connection.ts` — WebSocket management
-- `extensions/*` — plugin code (we don't modify these).
-  **Caveat:** Verify before assuming no local changes:
-  `git log --oneline main -- extensions/<name>`. If we've patched an
-  extension, it becomes conflict-prone.
+- `extensions/*` — plugin code (we generally don't modify these)
 - `docs/*` — documentation (we maintain separately)
 
 ### Security advisories
@@ -253,6 +336,30 @@ These are less likely to conflict:
 
 Track every sync decision here. One section per upstream release reviewed.
 
+**Cumulative skipped: 0** _(update after each review — triggers full merge
+consideration at > 500; see §8)_
+
+### 7.1 Cherry-pick Post-Sync Checklist
+
+Run after every cherry-pick sync lands on main (abbreviated from the full
+merge checklist — only items relevant to partial syncs):
+
+- [ ] `pnpm build` passes
+- [ ] `pnpm test` passes
+- [ ] `cd ui-next && pnpm build` passes
+- [ ] If cherry-pick touched `src/gateway/server-methods*.ts`: verify all
+      handlers imported AND spread into `coreGatewayHandlers`
+- [ ] If cherry-pick touched `src/gateway/server-methods-list.ts`: verify
+      every method name in `BASE_METHODS`
+- [ ] If cherry-pick touched `src/gateway/method-scopes.ts`: verify every
+      method has a scope entry
+- [ ] If cherry-pick touched `package.json` exports: verify all
+      `./plugin-sdk/*` subpath exports present
+- [ ] Sync log updated with adopted/skipped/deferred decisions
+- [ ] Cumulative skipped count updated
+
+---
+
 ### Last synced to: v2026.3.8 (2026-03-09)
 
 Full merge — last time we did a complete upstream sync.
@@ -262,6 +369,12 @@ Full merge — last time we did a complete upstream sync.
 ### v2026.3.11 (2026-03-12) — 235 commits
 
 **Status:** Pending review
+
+> **Note:** Review v2026.3.11 before v2026.3.12. If a v2026.3.12 commit
+> depends on a v2026.3.11 commit you skipped, you must either pick the
+> dependency from v2026.3.11 first or defer the v2026.3.12 commit.
+> Process sequentially: create `sync/v2026.3.11`, merge, then
+> `sync/v2026.3.12`.
 
 #### Adopted
 
@@ -281,7 +394,7 @@ _(none yet — review needed)_
 
 Verify delta: `git log --oneline v2026.3.11..v2026.3.12 --no-merges | wc -l`
 
-**Status:** Pending review
+**Status:** Pending review — review only after v2026.3.11 is resolved.
 
 #### Adopted
 
@@ -299,11 +412,20 @@ _(none yet — review needed)_
 
 ## 8. When to Do a Full Merge Instead
 
-If **all** of these are true, consider a full merge as a "rebase checkpoint":
+If **any** of these hard triggers fire, consider a full merge as a "rebase checkpoint":
+
+- **Cumulative skipped commits > 500.** Too much drift — cherry-picking becomes
+  a game of whack-a-mole with implicit dependencies.
+- **Same dependency chain deferred 3+ times.** If you keep punting the same
+  prerequisite commits, the upstream codebase has structurally moved on.
+- **Upstream ships a foundational change we need** (e.g., new SDK version,
+  major dependency bump, new build system).
+- **Cherry-pick burden per release consistently exceeds 4 hours.** At that
+  point you're doing a merge with extra steps and worse traceability.
+
+Additional context factors (weigh alongside the triggers above):
 
 - We're 5+ stable releases behind
-- Cherry-pick burden exceeds a full merge effort
-- Upstream has made foundational changes we need (e.g., new SDK version)
 - We have time for a dedicated sync sprint (2-3 days)
 
 Use the sync-lead/code-guard/qa-runner agents for full merges. Always on a
@@ -327,6 +449,14 @@ A: Every stable release (roughly weekly). Security advisories: immediately.
 **Q: Can we automate any of this?**
 A: The identify phase (CHANGELOG diff, commit listing) can be scripted.
 The classification and cherry-pick decisions are human/AI judgment calls.
+Consider a weekly cron/Dart task that fetches upstream tags, compares to the
+sync log, and creates a review task with commit count + changelog diff when
+a new stable release appears.
+
+**Q: How do I handle upstream dependency bumps?**
+A: If a cherry-pick touches `package.json`, never try to resolve `pnpm-lock.yaml`
+conflicts manually. Cherry-pick the `package.json` change, run `pnpm install` to
+regenerate the lockfile, and commit the result separately.
 
 ---
 
@@ -334,7 +464,8 @@ The classification and cherry-pick decisions are human/AI judgment calls.
 
 - Previous sync process: sync-lead/code-guard/qa-runner agents (still available for full merges)
 - Upstream repo: https://github.com/openclaw/openclaw
-- Post-sync checklist (for full merges): see MEMORY.md "Post-Upstream-Sync Checklist"
+- Cherry-pick post-sync checklist: §7.1 (inline above)
+- Full merge post-sync checklist: see MEMORY.md "Post-Upstream-Sync Checklist"
 - Key source files:
   - `src/gateway/server-methods.ts` — handler registry (append-only)
   - `src/gateway/server-methods-list.ts` — method names (append-only)
@@ -342,4 +473,4 @@ The classification and cherry-pick decisions are human/AI judgment calls.
 
 ---
 
-_Process version: 1.1 — 2026-03-13 (incorporated senior dev review feedback)_
+_Process version: 2.1 — 2026-03-15 (cherry-pick -x traceability, batch dry-run, cumulative skip counter, schema migration renumbering, two-sided safe-file check, cross-release sequencing, post-rebase SHA note, cherry-pick post-sync checklist, security hotfix naming, CI push step)_
