@@ -385,7 +385,7 @@ export default function register(api: OpenClawPluginApi) {
         if (!pending) {
           return { text: "Pairing request not found." };
         }
-        const approved = await approveDevicePairing(pending.requestId);
+        const approved = await approveDevicePairing(pending.requestId, {});
         if (!approved) {
           return { text: "Pairing request not found." };
         }

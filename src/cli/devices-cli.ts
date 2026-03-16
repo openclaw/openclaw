@@ -157,12 +157,12 @@ async function approvePairingWithFallback(
     if (opts.json !== true) {
       defaultRuntime.log(theme.warn(FALLBACK_NOTICE));
     }
-    const approved = await approveDevicePairing(requestId);
+    const approved = await approveDevicePairing(requestId, {});
     if (!approved) {
       return null;
     }
     if (approved.status === "forbidden") {
-      throw new Error(`missing scope: ${approved.missingScope}`);
+      throw new Error(`missing scope: ${approved.missingScope}`, { cause: error });
     }
     return {
       requestId,
