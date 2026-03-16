@@ -5,15 +5,10 @@ import {
   setChannelDmPolicyWithAllowFrom,
   setOnboardingChannelEnabled,
 } from "../../../src/channels/plugins/onboarding/helpers.js";
-import {
-  applyAccountNameToChannelSection,
-  migrateBaseNameToDefaultAccount,
-} from "../../../src/channels/plugins/setup-helpers.js";
 import { type ChannelSetupWizard } from "../../../src/channels/plugins/setup-wizard.js";
-import type { ChannelSetupAdapter } from "../../../src/channels/plugins/types.adapters.js";
 import { detectBinary } from "../../../src/commands/onboard-helpers.js";
 import type { OpenClawConfig } from "../../../src/config/config.js";
-import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../../../src/routing/session-key.js";
+import { DEFAULT_ACCOUNT_ID } from "../../../src/routing/session-key.js";
 import { formatDocsLink } from "../../../src/terminal/links.js";
 import type { WizardPrompter } from "../../../src/wizard/prompts.js";
 import {
@@ -21,52 +16,9 @@ import {
   resolveDefaultIMessageAccountId,
   resolveIMessageAccount,
 } from "./accounts.js";
-import { normalizeIMessageHandle } from "./targets.js";
+import { imessageSetupAdapter, parseIMessageAllowFromEntries } from "./setup-core.js";
 
 const channel = "imessage" as const;
-
-export function parseIMessageAllowFromEntries(raw: string): { entries: string[]; error?: string } {
-  return parseOnboardingEntriesAllowingWildcard(raw, (entry) => {
-    const lower = entry.toLowerCase();
-    if (lower.startsWith("chat_id:")) {
-      const id = entry.slice("chat_id:".length).trim();
-      if (!/^\d+$/.test(id)) {
-        return { error: `Invalid chat_id: ${entry}` };
-      }
-      return { value: entry };
-    }
-    if (lower.startsWith("chat_guid:")) {
-      if (!entry.slice("chat_guid:".length).trim()) {
-        return { error: "Invalid chat_guid entry" };
-      }
-      return { value: entry };
-    }
-    if (lower.startsWith("chat_identifier:")) {
-      if (!entry.slice("chat_identifier:".length).trim()) {
-        return { error: "Invalid chat_identifier entry" };
-      }
-      return { value: entry };
-    }
-    if (!normalizeIMessageHandle(entry)) {
-      return { error: `Invalid handle: ${entry}` };
-    }
-    return { value: entry };
-  });
-}
-
-function buildIMessageSetupPatch(input: {
-  cliPath?: string;
-  dbPath?: string;
-  service?: "imessage" | "sms" | "auto";
-  region?: string;
-}) {
-  return {
-    ...(input.cliPath ? { cliPath: input.cliPath } : {}),
-    ...(input.dbPath ? { dbPath: input.dbPath } : {}),
-    ...(input.service ? { service: input.service } : {}),
-    ...(input.region ? { region: input.region } : {}),
-  };
-}
 
 async function promptIMessageAllowFrom(params: {
   cfg: OpenClawConfig;
@@ -111,63 +63,6 @@ const imessageDmPolicy: ChannelOnboardingDmPolicy = {
       dmPolicy: policy,
     }),
   promptAllowFrom: promptIMessageAllowFrom,
-};
-
-export const imessageSetupAdapter: ChannelSetupAdapter = {
-  resolveAccountId: ({ accountId }) => normalizeAccountId(accountId),
-  applyAccountName: ({ cfg, accountId, name }) =>
-    applyAccountNameToChannelSection({
-      cfg,
-      channelKey: channel,
-      accountId,
-      name,
-    }),
-  applyAccountConfig: ({ cfg, accountId, input }) => {
-    const namedConfig = applyAccountNameToChannelSection({
-      cfg,
-      channelKey: channel,
-      accountId,
-      name: input.name,
-    });
-    const next =
-      accountId !== DEFAULT_ACCOUNT_ID
-        ? migrateBaseNameToDefaultAccount({
-            cfg: namedConfig,
-            channelKey: channel,
-          })
-        : namedConfig;
-    if (accountId === DEFAULT_ACCOUNT_ID) {
-      return {
-        ...next,
-        channels: {
-          ...next.channels,
-          imessage: {
-            ...next.channels?.imessage,
-            enabled: true,
-            ...buildIMessageSetupPatch(input),
-          },
-        },
-      };
-    }
-    return {
-      ...next,
-      channels: {
-        ...next.channels,
-        imessage: {
-          ...next.channels?.imessage,
-          enabled: true,
-          accounts: {
-            ...next.channels?.imessage?.accounts,
-            [accountId]: {
-              ...next.channels?.imessage?.accounts?.[accountId],
-              enabled: true,
-              ...buildIMessageSetupPatch(input),
-            },
-          },
-        },
-      },
-    };
-  },
 };
 
 export const imessageSetupWizard: ChannelSetupWizard = {
@@ -236,3 +131,5 @@ export const imessageSetupWizard: ChannelSetupWizard = {
   dmPolicy: imessageDmPolicy,
   disable: (cfg) => setOnboardingChannelEnabled(cfg, channel, false),
 };
+
+export { imessageSetupAdapter, parseIMessageAllowFromEntries };
