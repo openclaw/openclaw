@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { withTempHome } from "../../test/helpers/temp-home.js";
 import { ensureAuthProfileStore, listProfilesForProvider } from "../agents/auth-profiles.js";
 import { withEnvAsync } from "../test-utils/env.js";
@@ -11,6 +11,11 @@ import {
   loadProviderUsageSummary,
   type UsageSummary,
 } from "./provider-usage.js";
+
+vi.mock("../plugins/provider-runtime.js", () => ({
+  resolveProviderUsageAuthWithPlugin: vi.fn(async () => null),
+  resolveProviderUsageSnapshotWithPlugin: vi.fn(async () => null),
+}));
 
 const minimaxRemainsEndpoint = "api.minimaxi.com/v1/api/openplatform/coding_plan/remains";
 const usageNow = Date.UTC(2026, 0, 7, 0, 0, 0);

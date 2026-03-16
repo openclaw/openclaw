@@ -1,9 +1,13 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { NON_ENV_SECRETREF_MARKER } from "../agents/model-auth-markers.js";
 import { resolveProviderAuths, type ProviderAuth } from "./provider-usage.auth.js";
+
+vi.mock("../plugins/provider-runtime.js", () => ({
+  resolveProviderUsageAuthWithPlugin: vi.fn(async () => null),
+}));
 
 describe("resolveProviderAuths key normalization", () => {
   let suiteRoot = "";
