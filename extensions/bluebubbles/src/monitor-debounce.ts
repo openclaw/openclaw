@@ -145,7 +145,13 @@ export function createBlueBubblesDebounceRegistry(params: {
             msg.chatGuid?.trim() ??
             msg.chatIdentifier?.trim() ??
             (msg.chatId ? String(msg.chatId) : "dm");
-          return `bluebubbles:${account.accountId}:${chatKey}:${msg.senderId}`;
+          const senderKey = msg.senderId.trim();
+          if (senderKey) {
+            return `bluebubbles:${account.accountId}:${chatKey}:${senderKey}`;
+          }
+          const timestampKey =
+            typeof msg.timestamp === "number" ? `ts:${msg.timestamp}` : "unknown-sender";
+          return `bluebubbles:${account.accountId}:${chatKey}:${timestampKey}`;
         },
         shouldDebounce: (entry) => {
           const msg = entry.message;
