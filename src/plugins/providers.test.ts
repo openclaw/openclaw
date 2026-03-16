@@ -11,7 +11,7 @@ describe("resolvePluginProviders", () => {
   beforeEach(() => {
     loadOpenClawPluginsMock.mockReset();
     loadOpenClawPluginsMock.mockReturnValue({
-      providers: [{ provider: { id: "demo-provider" } }],
+      providers: [{ pluginId: "google", provider: { id: "demo-provider" } }],
     });
   });
 
@@ -23,7 +23,7 @@ describe("resolvePluginProviders", () => {
       env,
     });
 
-    expect(providers).toEqual([{ id: "demo-provider" }]);
+    expect(providers).toEqual([{ id: "demo-provider", pluginId: "google" }]);
     expect(loadOpenClawPluginsMock).toHaveBeenCalledWith(
       expect.objectContaining({
         workspaceDir: "/workspace/explicit",
@@ -46,13 +46,12 @@ describe("resolvePluginProviders", () => {
       expect.objectContaining({
         config: expect.objectContaining({
           plugins: expect.objectContaining({
-            allow: expect.arrayContaining(["openrouter", "kilocode", "moonshot"]),
+            allow: expect.arrayContaining(["openrouter", "google", "kilocode", "moonshot"]),
           }),
         }),
       }),
     );
   });
-
   it("can enable bundled provider plugins under Vitest when no explicit plugin config exists", () => {
     resolvePluginProviders({
       env: { VITEST: "1" } as NodeJS.ProcessEnv,
@@ -69,5 +68,22 @@ describe("resolvePluginProviders", () => {
         }),
       }),
     );
+  });
+
+  it("does not reintroduce the retired google auth plugin id into compat allowlists", () => {
+    resolvePluginProviders({
+      config: {
+        plugins: {
+          allow: ["openrouter"],
+        },
+      },
+      bundledProviderAllowlistCompat: true,
+    });
+
+    const call = loadOpenClawPluginsMock.mock.calls.at(-1)?.[0];
+    const allow = call?.config?.plugins?.allow;
+
+    expect(allow).toContain("google");
+    expect(allow).not.toContain("google-gemini-cli-auth");
   });
 });
