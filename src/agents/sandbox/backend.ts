@@ -65,7 +65,11 @@ export type SandboxBackendManager = {
     config: OpenClawConfig;
     agentId?: string;
   }): Promise<SandboxBackendRuntimeInfo>;
-  removeRuntime(params: { entry: SandboxRegistryEntry }): Promise<void>;
+  removeRuntime(params: {
+    entry: SandboxRegistryEntry;
+    config: OpenClawConfig;
+    agentId?: string;
+  }): Promise<void>;
 };
 
 export type CreateSandboxBackendParams = {
@@ -141,8 +145,14 @@ export function requireSandboxBackendFactory(id: string): SandboxBackendFactory 
 }
 
 import { createDockerSandboxBackend, dockerSandboxBackendManager } from "./docker-backend.js";
+import { createSshSandboxBackend, sshSandboxBackendManager } from "./ssh-backend.js";
 
 registerSandboxBackend("docker", {
   factory: createDockerSandboxBackend,
   manager: dockerSandboxBackendManager,
+});
+
+registerSandboxBackend("ssh", {
+  factory: createSshSandboxBackend,
+  manager: sshSandboxBackendManager,
 });

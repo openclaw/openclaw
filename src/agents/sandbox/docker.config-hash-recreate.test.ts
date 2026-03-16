@@ -109,6 +109,12 @@ function createSandboxConfig(
       binds: binds ?? ["/tmp/workspace:/workspace:rw"],
       dangerouslyAllowReservedContainerTargets: true,
     },
+    ssh: {
+      command: "ssh",
+      workspaceRoot: "/tmp/openclaw-sandboxes",
+      strictHostKeyChecking: true,
+      updateHostKeys: true,
+    },
     browser: {
       enabled: false,
       image: "openclaw-browser:test",

@@ -4,43 +4,44 @@ import path from "node:path";
 import type {
   CreateSandboxBackendParams,
   OpenClawConfig,
+  RemoteShellSandboxHandle,
   SandboxBackendCommandParams,
   SandboxBackendCommandResult,
   SandboxBackendFactory,
   SandboxBackendHandle,
   SandboxBackendManager,
+  SshSandboxSession,
 } from "openclaw/plugin-sdk/core";
-import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/core";
+import {
+  createRemoteShellSandboxFsBridge,
+  disposeSshSandboxSession,
+  resolvePreferredOpenClawTmpDir,
+  runSshSandboxCommand,
+} from "openclaw/plugin-sdk/core";
 import {
   buildExecRemoteCommand,
   buildRemoteCommand,
   createOpenShellSshSession,
-  disposeOpenShellSshSession,
   runOpenShellCli,
-  runOpenShellSshCommand,
   type OpenShellExecContext,
-  type OpenShellSshSession,
 } from "./cli.js";
 import { resolveOpenShellPluginConfig, type ResolvedOpenShellPluginConfig } from "./config.js";
 import { createOpenShellFsBridge } from "./fs-bridge.js";
 import { replaceDirectoryContents } from "./mirror.js";
-import { createOpenShellRemoteFsBridge } from "./remote-fs-bridge.js";
 
 type CreateOpenShellSandboxBackendFactoryParams = {
   pluginConfig: ResolvedOpenShellPluginConfig;
 };
 
 type PendingExec = {
-  sshSession: OpenShellSshSession;
+  sshSession: SshSandboxSession;
 };
 
-export type OpenShellSandboxBackend = SandboxBackendHandle & {
-  mode: "mirror" | "remote";
-  remoteWorkspaceDir: string;
-  remoteAgentWorkspaceDir: string;
-  runRemoteShellScript(params: SandboxBackendCommandParams): Promise<SandboxBackendCommandResult>;
-  syncLocalPathToRemote(localPath: string, remotePath: string): Promise<void>;
-};
+export type OpenShellSandboxBackend = SandboxBackendHandle &
+  RemoteShellSandboxHandle & {
+    mode: "mirror" | "remote";
+    syncLocalPathToRemote(localPath: string, remotePath: string): Promise<void>;
+  };
 
 export function createOpenShellSandboxBackendFactory(
   params: CreateOpenShellSandboxBackendFactoryParams,
@@ -129,9 +130,9 @@ async function createOpenShellSandboxBackend(params: {
     runShellCommand: async (command) => await impl.runRemoteShellScript(command),
     createFsBridge: ({ sandbox }) =>
       params.pluginConfig.mode === "remote"
-        ? createOpenShellRemoteFsBridge({
+        ? createRemoteShellSandboxFsBridge({
             sandbox,
-            backend: impl.asHandle(),
+            runtime: impl.asHandle(),
           })
         : createOpenShellFsBridge({
             sandbox,
@@ -186,9 +187,9 @@ class OpenShellSandboxBackendImpl {
       runShellCommand: async (command) => await self.runRemoteShellScript(command),
       createFsBridge: ({ sandbox }) =>
         this.params.execContext.config.mode === "remote"
-          ? createOpenShellRemoteFsBridge({
+          ? createRemoteShellSandboxFsBridge({
               sandbox,
-              backend: self.asHandle(),
+              runtime: self.asHandle(),
             })
           : createOpenShellFsBridge({
               sandbox,
@@ -242,7 +243,7 @@ class OpenShellSandboxBackendImpl {
       }
     } finally {
       if (token?.sshSession) {
-        await disposeOpenShellSshSession(token.sshSession);
+        await disposeSshSandboxSession(token.sshSession);
       }
     }
   }
@@ -262,7 +263,7 @@ class OpenShellSandboxBackendImpl {
       context: this.params.execContext,
     });
     try {
-      return await runOpenShellSshCommand({
+      return await runSshSandboxCommand({
         session,
         remoteCommand: buildRemoteCommand([
           "/bin/sh",
@@ -276,7 +277,7 @@ class OpenShellSandboxBackendImpl {
         signal: params.signal,
       });
     } finally {
-      await disposeOpenShellSshSession(session);
+      await disposeSshSandboxSession(session);
     }
   }
 

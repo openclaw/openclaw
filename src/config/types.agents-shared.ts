@@ -2,6 +2,7 @@ import type {
   SandboxBrowserSettings,
   SandboxDockerSettings,
   SandboxPruneSettings,
+  SandboxSshSettings,
 } from "./types.sandbox.js";
 
 export type AgentModelConfig =
@@ -32,6 +33,8 @@ export type AgentSandboxConfig = {
   workspaceRoot?: string;
   /** Docker-specific sandbox settings. */
   docker?: SandboxDockerSettings;
+  /** SSH-specific sandbox settings. */
+  ssh?: SandboxSshSettings;
   /** Optional sandboxed browser settings. */
   browser?: SandboxBrowserSettings;
   /** Auto-prune sandbox settings. */

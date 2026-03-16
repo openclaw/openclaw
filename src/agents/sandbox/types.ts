@@ -51,6 +51,20 @@ export type SandboxPruneConfig = {
   maxAgeDays: number;
 };
 
+export type SandboxSshConfig = {
+  target?: string;
+  command: string;
+  workspaceRoot: string;
+  strictHostKeyChecking: boolean;
+  updateHostKeys: boolean;
+  identityFile?: string;
+  certificateFile?: string;
+  knownHostsFile?: string;
+  identityData?: string;
+  certificateData?: string;
+  knownHostsData?: string;
+};
+
 export type SandboxScope = "session" | "agent" | "shared";
 
 export type SandboxConfig = {
@@ -60,6 +74,7 @@ export type SandboxConfig = {
   workspaceAccess: SandboxWorkspaceAccess;
   workspaceRoot: string;
   docker: SandboxDockerConfig;
+  ssh: SandboxSshConfig;
   browser: SandboxBrowserConfig;
   tools: SandboxToolPolicy;
   prune: SandboxPruneConfig;

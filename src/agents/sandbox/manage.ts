@@ -85,16 +85,22 @@ export async function listSandboxBrowsers(): Promise<SandboxBrowserInfo[]> {
 }
 
 export async function removeSandboxContainer(containerName: string): Promise<void> {
+  const config = loadConfig();
   const registry = await readRegistry();
   const entry = registry.entries.find((item) => item.containerName === containerName);
   if (entry) {
     const manager = getSandboxBackendManager(entry.backendId ?? "docker");
-    await manager?.removeRuntime({ entry });
+    await manager?.removeRuntime({
+      entry,
+      config,
+      agentId: resolveSandboxAgentId(entry.sessionKey),
+    });
   }
   await removeRegistryEntry(containerName);
 }
 
 export async function removeSandboxBrowserContainer(containerName: string): Promise<void> {
+  const config = loadConfig();
   const registry = await readBrowserRegistry();
   const entry = registry.entries.find((item) => item.containerName === containerName);
   if (entry) {
@@ -105,6 +111,7 @@ export async function removeSandboxBrowserContainer(containerName: string): Prom
         runtimeLabel: entry.containerName,
         configLabelKind: "Image",
       },
+      config,
     });
   }
   await removeBrowserRegistryEntry(containerName);

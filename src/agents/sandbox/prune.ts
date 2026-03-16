@@ -1,4 +1,5 @@
 import { stopBrowserBridgeServer } from "../../browser/bridge-server.js";
+import { loadConfig } from "../../config/config.js";
 import { defaultRuntime } from "../../runtime.js";
 import { getSandboxBackendManager } from "./backend.js";
 import { BROWSER_BRIDGES } from "./browser-bridges.js";
@@ -62,18 +63,23 @@ async function pruneSandboxRegistryEntries<TEntry extends SandboxRegistryEntry>(
 }
 
 async function pruneSandboxContainers(cfg: SandboxConfig) {
+  const config = loadConfig();
   await pruneSandboxRegistryEntries<SandboxRegistryEntry>({
     cfg,
     read: readRegistry,
     remove: removeRegistryEntry,
     removeRuntime: async (entry) => {
       const manager = getSandboxBackendManager(entry.backendId ?? "docker");
-      await manager?.removeRuntime({ entry });
+      await manager?.removeRuntime({
+        entry,
+        config,
+      });
     },
   });
 }
 
 async function pruneSandboxBrowsers(cfg: SandboxConfig) {
+  const config = loadConfig();
   await pruneSandboxRegistryEntries<
     SandboxBrowserRegistryEntry & {
       backendId?: string;
@@ -92,6 +98,7 @@ async function pruneSandboxBrowsers(cfg: SandboxConfig) {
           runtimeLabel: entry.containerName,
           configLabelKind: "Image",
         },
+        config,
       });
     },
     onRemoved: async (entry) => {

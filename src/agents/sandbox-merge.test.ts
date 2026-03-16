@@ -5,6 +5,7 @@ import {
   resolveSandboxDockerConfig,
   resolveSandboxPruneConfig,
   resolveSandboxScope,
+  resolveSandboxSshConfig,
 } from "./sandbox/config.js";
 
 describe("sandbox config merges", () => {
@@ -128,6 +129,41 @@ describe("sandbox config merges", () => {
       agentPrune: { idleHours: 0, maxAgeDays: 1 },
     });
     expect(pruneShared).toEqual({ idleHours: 24, maxAgeDays: 7 });
+  });
+
+  it("merges sandbox ssh settings and ignores agent overrides under shared scope", () => {
+    const ssh = resolveSandboxSshConfig({
+      scope: "agent",
+      globalSsh: {
+        target: "global@example.com:22",
+        command: "ssh",
+        identityFile: "~/.ssh/global",
+        strictHostKeyChecking: true,
+      },
+      agentSsh: {
+        target: "agent@example.com:2222",
+        certificateFile: "~/.ssh/agent-cert.pub",
+        strictHostKeyChecking: false,
+      },
+    });
+    expect(ssh).toMatchObject({
+      target: "agent@example.com:2222",
+      command: "ssh",
+      identityFile: "~/.ssh/global",
+      certificateFile: "~/.ssh/agent-cert.pub",
+      strictHostKeyChecking: false,
+    });
+
+    const sshShared = resolveSandboxSshConfig({
+      scope: "shared",
+      globalSsh: {
+        target: "global@example.com:22",
+      },
+      agentSsh: {
+        target: "agent@example.com:2222",
+      },
+    });
+    expect(sshShared.target).toBe("global@example.com:22");
   });
 
   it("defaults sandbox backend to docker", () => {
