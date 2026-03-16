@@ -33,7 +33,8 @@ import {
 import { resolveNextcloudTalkGroupToolPolicy } from "./policy.js";
 import { getNextcloudTalkRuntime } from "./runtime.js";
 import { sendMessageNextcloudTalk } from "./send.js";
-import { nextcloudTalkSetupAdapter, nextcloudTalkSetupWizard } from "./setup-surface.js";
+import { nextcloudTalkSetupAdapter } from "./setup-core.js";
+import { nextcloudTalkSetupWizard } from "./setup-surface.js";
 import type { CoreConfig } from "./types.js";
 
 const meta = {
