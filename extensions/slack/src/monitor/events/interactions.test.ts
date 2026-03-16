@@ -9,12 +9,13 @@ const dispatchPluginInteractiveHandlerMock = vi.fn(async () => ({
 }));
 
 vi.mock("../../../../../src/infra/system-events.js", () => ({
-  enqueueSystemEvent: (...args: unknown[]) => enqueueSystemEventMock(...args),
+  enqueueSystemEvent: (...args: unknown[]) =>
+    (enqueueSystemEventMock as (...innerArgs: unknown[]) => unknown)(...args),
 }));
 
 vi.mock("../../../../../src/plugins/interactive.js", () => ({
   dispatchPluginInteractiveHandler: (...args: unknown[]) =>
-    dispatchPluginInteractiveHandlerMock(...args),
+    (dispatchPluginInteractiveHandlerMock as (...innerArgs: unknown[]) => unknown)(...args),
 }));
 
 type RegisteredHandler = (args: {
@@ -132,6 +133,7 @@ function createContext(overrides?: {
     );
   const ctx = {
     app,
+    accountId: "default",
     runtime: { log: runtimeLog },
     dmEnabled: overrides?.dmEnabled ?? true,
     dmPolicy: overrides?.dmPolicy ?? ("open" as const),
