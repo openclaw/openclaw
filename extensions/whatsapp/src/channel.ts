@@ -1,3 +1,4 @@
+import { buildAccountScopedAllowlistConfigEditor } from "openclaw/plugin-sdk/compat";
 import {
   buildChannelConfigSchema,
   buildAccountScopedDmSecurityPolicy,
@@ -195,11 +196,13 @@ export const whatsappPlugin: ChannelPlugin<ResolvedWhatsAppAccount> = {
         groupPolicy: account.groupPolicy,
       };
     },
-    resolveConfigEdit: ({ scope, pathPrefix, writeTarget }) => ({
-      pathPrefix,
-      writeTarget,
-      readPaths: [[scope === "dm" ? "allowFrom" : "groupAllowFrom"]],
-      writePath: [scope === "dm" ? "allowFrom" : "groupAllowFrom"],
+    applyConfigEdit: buildAccountScopedAllowlistConfigEditor({
+      channelId: "whatsapp",
+      normalize: ({ values }) => formatWhatsAppConfigAllowFromEntries(values),
+      resolvePaths: (scope) => ({
+        readPaths: [[scope === "dm" ? "allowFrom" : "groupAllowFrom"]],
+        writePath: [scope === "dm" ? "allowFrom" : "groupAllowFrom"],
+      }),
     }),
   },
   security: {

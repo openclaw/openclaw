@@ -1,5 +1,5 @@
 import { normalizeIMessageHandle } from "../../extensions/imessage/src/targets.js";
-import { imessageOutbound } from "../channels/plugins/outbound/imessage.js";
+import { imessageOutbound } from "../../test/channel-outbounds.js";
 import type { ChannelOutboundAdapter, ChannelPlugin } from "../channels/plugins/types.js";
 import { collectStatusIssuesFromLastError } from "../plugin-sdk/status-helpers.js";
 

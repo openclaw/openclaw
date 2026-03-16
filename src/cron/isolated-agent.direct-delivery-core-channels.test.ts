@@ -1,12 +1,14 @@
 import "./isolated-agent.mocks.js";
 import { beforeEach, describe, expect, it } from "vitest";
+import {
+  discordOutbound,
+  imessageOutbound,
+  signalOutbound,
+  slackOutbound,
+  telegramOutbound,
+  whatsappOutbound,
+} from "../../test/channel-outbounds.js";
 import { runSubagentAnnounceFlow } from "../agents/subagent-announce.js";
-import { discordOutbound } from "../channels/plugins/outbound/discord.js";
-import { imessageOutbound } from "../channels/plugins/outbound/imessage.js";
-import { signalOutbound } from "../channels/plugins/outbound/signal.js";
-import { slackOutbound } from "../channels/plugins/outbound/slack.js";
-import { telegramOutbound } from "../channels/plugins/outbound/telegram.js";
-import { whatsappOutbound } from "../channels/plugins/outbound/whatsapp.js";
 import type { CliDeps } from "../cli/deps.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../test-utils/channel-plugins.js";

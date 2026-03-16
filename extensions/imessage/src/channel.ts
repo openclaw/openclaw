@@ -1,4 +1,5 @@
 import {
+  buildAccountScopedAllowlistConfigEditor,
   buildAccountScopedDmSecurityPolicy,
   collectAllowlistProviderRestrictSendersWarnings,
 } from "openclaw/plugin-sdk/compat";
@@ -135,11 +136,13 @@ export const imessagePlugin: ChannelPlugin<ResolvedIMessageAccount> = {
         groupPolicy: account.config.groupPolicy,
       };
     },
-    resolveConfigEdit: ({ scope, pathPrefix, writeTarget }) => ({
-      pathPrefix,
-      writeTarget,
-      readPaths: [[scope === "dm" ? "allowFrom" : "groupAllowFrom"]],
-      writePath: [scope === "dm" ? "allowFrom" : "groupAllowFrom"],
+    applyConfigEdit: buildAccountScopedAllowlistConfigEditor({
+      channelId: "imessage",
+      normalize: ({ values }) => formatTrimmedAllowFromEntries(values),
+      resolvePaths: (scope) => ({
+        readPaths: [[scope === "dm" ? "allowFrom" : "groupAllowFrom"]],
+        writePath: [scope === "dm" ? "allowFrom" : "groupAllowFrom"],
+      }),
     }),
   },
   security: {

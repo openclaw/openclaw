@@ -1,5 +1,6 @@
 import { createScopedChannelConfigBase } from "openclaw/plugin-sdk/compat";
 import {
+  buildAccountScopedAllowlistConfigEditor,
   buildAccountScopedDmSecurityPolicy,
   collectOpenProviderGroupPolicyWarnings,
   collectOpenGroupPolicyConfiguredRouteWarnings,
@@ -279,16 +280,19 @@ export const slackPlugin: ChannelPlugin<ResolvedSlackAccount> = {
       readSlackAllowlistConfig(resolveSlackAccount({ cfg, accountId })),
     resolveNames: async ({ cfg, accountId, entries }) =>
       await resolveSlackAllowlistNames({ cfg, accountId, entries }),
-    resolveConfigEdit: ({ scope, pathPrefix, writeTarget }) =>
-      scope === "dm"
-        ? {
-            pathPrefix,
-            writeTarget,
-            readPaths: [["allowFrom"], ["dm", "allowFrom"]],
-            writePath: ["allowFrom"],
-            cleanupPaths: [["dm", "allowFrom"]],
-          }
-        : null,
+    applyConfigEdit: buildAccountScopedAllowlistConfigEditor({
+      channelId: "slack",
+      normalize: ({ cfg, accountId, values }) =>
+        slackConfigAccessors.formatAllowFrom!({ cfg, accountId, allowFrom: values }),
+      resolvePaths: (scope) =>
+        scope === "dm"
+          ? {
+              readPaths: [["allowFrom"], ["dm", "allowFrom"]],
+              writePath: ["allowFrom"],
+              cleanupPaths: [["dm", "allowFrom"]],
+            }
+          : null,
+    }),
   },
   security: {
     resolveDmPolicy: ({ cfg, accountId, account }) => {
