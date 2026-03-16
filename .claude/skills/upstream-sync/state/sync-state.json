@@ -1,11 +1,27 @@
 {
-  "lastSyncedTag": "v2026.3.12",
-  "lastSyncedAt": "2026-03-16T19:00:00Z",
-  "lastSyncedCommit": "baa14ccb97",
-  "backupTag": "backup/pre-sync-v2026.3.12-security-20260316",
+  "lastSyncedTag": "v2026.3.13-beta.1",
+  "lastSyncedAt": "2026-03-17T00:00:00Z",
+  "lastSyncedCommit": "d2e68622ef",
+  "backupTag": "backup/pre-sync-v2026.3.13-beta.1-20260316",
   "cumulativeSkipped": 0,
   "currentSync": null,
   "history": [
+    {
+      "type": "inclusive-phased",
+      "fromTag": "v2026.3.12",
+      "toTag": "v2026.3.13-beta.1",
+      "syncedAt": "2026-03-17T00:00:00Z",
+      "backupTag": "backup/pre-sync-v2026.3.13-beta.1-20260316",
+      "phases": {
+        "security": { "commits": 26, "pr": 8 },
+        "core": { "commits": 655, "pr": 9 },
+        "features": { "commits": 6, "pr": 10 },
+        "integration": { "commits": 11, "pr": 11 },
+        "platform": { "commits": 21, "pr": 12 },
+        "ui-reference": { "commits": 5, "pr": 13 }
+      },
+      "notes": "First inclusive sync (take everything). 724 commits applied across 6 phases. Session store fix required post-merge due to SQLite vs JSON architectural divergence. Protected-files manifest updated with architectural divergence section."
+    },
     {
       "type": "cherry-pick-phased",
       "fromTag": "v2026.3.8",
