@@ -1,3 +1,4 @@
+import { getSafeLocalStorage } from "../../local-storage.ts";
 import type { GatewayBrowserClient } from "../gateway.ts";
 import type {
   SessionsUsageResult,
@@ -64,14 +65,7 @@ let legacyUsageStatusCache: Map<string, number> | null = null;
 let usageQuotaMeta = new WeakMap<UsageState, UsageQuotaMeta>();
 
 function getLocalStorage(): Storage | null {
-  // Support browser runtime and node tests (when localStorage is stubbed globally).
-  if (typeof window !== "undefined" && window.localStorage) {
-    return window.localStorage;
-  }
-  if (typeof localStorage !== "undefined") {
-    return localStorage;
-  }
-  return null;
+  return getSafeLocalStorage();
 }
 
 function loadLegacyUsageDateParamsCache(): Set<string> {
