@@ -134,7 +134,7 @@ describe("fetchCodexUsage", () => {
     expect(result.windows).toEqual([{ label: "6h", usedPercent: 11, resetAt: undefined }]);
   });
 
-  it("builds a balance-only plan when credits exist without a plan type", async () => {
+  it("sets balance (not plan) when credits exist without a plan type", async () => {
     const mockFetch = createProviderUsageFetch(async () =>
       makeResponse(200, {
         credits: { balance: "7.5" },
@@ -142,11 +142,12 @@ describe("fetchCodexUsage", () => {
     );
 
     const result = await fetchCodexUsage("token", undefined, 5000, mockFetch);
-    expect(result.plan).toBe("$7.50");
+    expect(result.plan).toBeUndefined();
+    expect(result.balance).toBe("$7.50");
     expect(result.windows).toEqual([]);
   });
 
-  it("falls back invalid credit strings to a zero balance", async () => {
+  it("does not set balance for unparseable credit strings", async () => {
     const mockFetch = createProviderUsageFetch(async () =>
       makeResponse(200, {
         plan_type: "Plus",
@@ -155,6 +156,7 @@ describe("fetchCodexUsage", () => {
     );
 
     const result = await fetchCodexUsage("token", undefined, 5000, mockFetch);
-    expect(result.plan).toBe("Plus ($0.00)");
+    expect(result.plan).toBe("Plus");
+    expect(result.balance).toBeUndefined();
   });
 });
