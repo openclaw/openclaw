@@ -329,18 +329,17 @@ describe("bot-native-command-menu", () => {
       expect(setMyCommands).toHaveBeenCalledWith([{ command: "win_test", description: "Win Test" }]);
     });
 
-    it("bare Windows prefix patterns are detected by guard regex", () => {
-      // The guard uses this regex to catch incomplete extended-length prefix paths.
-      // Note: path.win32.isAbsolute() returns true for these bare prefixes (they
-      // start with a backslash), so the guard cannot rely on it — the regex is the
-      // authoritative check. Fixes #44199.
+    it("bare Windows prefix patterns are detected by stateDir guard regex", () => {
+      // resolveCommandHashPath validates the stateDir before path.join to prevent
+      // path.join("\?", "telegram", "file") from producing "\?\telegram" which
+      // would bypass a dirPath-level check. The guard regex:
       const guardRegex = /^\\{1,2}\?[/\\]?$/;
-      expect(guardRegex.test("\\?")).toBe(true);      // single backslash
-      expect(guardRegex.test("\\\\?")).toBe(true);    // double backslash
-      expect(guardRegex.test("\\\\?\\")).toBe(true);  // with trailing backslash
-      expect(guardRegex.test("C:\\Users\\test")).toBe(false);    // valid path
-      expect(guardRegex.test("\\\\?\\C:\\Users")).toBe(false);   // valid extended prefix
-      expect(guardRegex.test("/home/user")).toBe(false);          // Linux path
+      expect(guardRegex.test("\\?")).toBe(true);           // single backslash bare prefix
+      expect(guardRegex.test("\\\\?")).toBe(true);        // double backslash bare prefix
+      expect(guardRegex.test("\\\\?\\")).toBe(true);    // with trailing backslash
+      expect(guardRegex.test("C:\\Users\\test")).toBe(false);     // valid Windows path
+      expect(guardRegex.test("\\\\?\\C:\\Users")).toBe(false); // valid extended prefix
+      expect(guardRegex.test("/home/user")).toBe(false);            // Linux path
     });
 
     it("path.win32.isAbsolute correctly accepts valid Windows absolute paths", () => {
