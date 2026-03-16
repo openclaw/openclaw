@@ -5,12 +5,26 @@ import {
 } from "../../agents/auth-profiles/store.js";
 import { createNonExitingRuntime } from "../../runtime.js";
 import { createCapturedPluginRegistration } from "../../test-utils/plugin-registration.js";
-import type { WizardPrompter, WizardProgress } from "../../wizard/prompts.js";
+import type {
+  WizardMultiSelectParams,
+  WizardPrompter,
+  WizardProgress,
+  WizardSelectParams,
+} from "../../wizard/prompts.js";
 import type { OpenClawPluginApi, ProviderPlugin } from "../types.js";
 
-const loginOpenAICodexOAuthMock = vi.hoisted(() => vi.fn());
-const loginQwenPortalOAuthMock = vi.hoisted(() => vi.fn());
-const githubCopilotLoginCommandMock = vi.hoisted(() => vi.fn());
+type LoginOpenAICodexOAuth =
+  (typeof import("../../commands/openai-codex-oauth.js"))["loginOpenAICodexOAuth"];
+type LoginQwenPortalOAuth =
+  (typeof import("../../../extensions/qwen-portal-auth/oauth.js"))["loginQwenPortalOAuth"];
+type GithubCopilotLoginCommand =
+  (typeof import("../../providers/github-copilot-auth.js"))["githubCopilotLoginCommand"];
+type CreateVpsAwareHandlers =
+  (typeof import("../../commands/oauth-flow.js"))["createVpsAwareOAuthHandlers"];
+
+const loginOpenAICodexOAuthMock = vi.hoisted(() => vi.fn<LoginOpenAICodexOAuth>());
+const loginQwenPortalOAuthMock = vi.hoisted(() => vi.fn<LoginQwenPortalOAuth>());
+const githubCopilotLoginCommandMock = vi.hoisted(() => vi.fn<GithubCopilotLoginCommand>());
 
 vi.mock("../../commands/openai-codex-oauth.js", () => ({
   loginOpenAICodexOAuth: loginOpenAICodexOAuthMock,
@@ -37,8 +51,8 @@ function buildPrompter(): WizardPrompter {
     intro: async () => {},
     outro: async () => {},
     note: async () => {},
-    select: async () => "",
-    multiselect: async () => [],
+    select: async <T>(params: WizardSelectParams<T>) => params.options[0].value,
+    multiselect: async <T>(params: WizardMultiSelectParams<T>) => params.initialValues ?? [],
     text: async () => "",
     confirm: async () => false,
     progress: () => progress,
@@ -53,7 +67,7 @@ function buildAuthContext() {
     isRemote: false,
     openUrl: async () => {},
     oauth: {
-      createVpsAwareHandlers: vi.fn() as never,
+      createVpsAwareHandlers: vi.fn<CreateVpsAwareHandlers>(),
     },
   };
 }
