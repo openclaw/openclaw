@@ -4,7 +4,7 @@ import {
   createScopedAccountConfigAccessors,
   collectAllowlistProviderRestrictSendersWarnings,
 } from "openclaw/plugin-sdk/compat";
-import { buildAgentSessionKey, type RoutePeer } from "openclaw/plugin-sdk/core";
+import { buildAgentSessionKey, type RoutePeer } from "openclaw/plugin-sdk/routing";
 import {
   buildBaseAccountStatusSnapshot,
   buildBaseChannelStatusSummary,

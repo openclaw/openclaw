@@ -1,11 +1,10 @@
-import { resolveIMessageAccount } from "../../extensions/imessage/src/accounts.js";
-import { resolveWhatsAppAccount } from "../../extensions/whatsapp/src/accounts.js";
 import {
   deleteAccountFromConfigSection,
   setAccountEnabledInConfigSection,
 } from "../channels/plugins/config-helpers.js";
 import { buildAccountScopedDmSecurityPolicy } from "../channels/plugins/helpers.js";
 import { normalizeWhatsAppAllowFromEntries } from "../channels/plugins/normalize/whatsapp.js";
+import { getChannelPlugin } from "../channels/plugins/registry.js";
 import type { ChannelConfigAdapter } from "../channels/plugins/types.adapters.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { normalizeAccountId } from "../routing/session-key.js";
@@ -148,7 +147,10 @@ export function resolveWhatsAppConfigAllowFrom(params: {
   cfg: OpenClawConfig;
   accountId?: string | null;
 }): string[] {
-  return resolveWhatsAppAccount(params).allowFrom ?? [];
+  const account = getChannelPlugin("whatsapp")?.config.resolveAccount(params.cfg, params.accountId);
+  return account && typeof account === "object" && Array.isArray(account.allowFrom)
+    ? account.allowFrom.map(String)
+    : [];
 }
 
 export function formatWhatsAppConfigAllowFromEntries(allowFrom: Array<string | number>): string[] {
@@ -169,12 +171,20 @@ export function resolveIMessageConfigAllowFrom(params: {
   cfg: OpenClawConfig;
   accountId?: string | null;
 }): string[] {
-  return mapAllowFromEntries(resolveIMessageAccount(params).config.allowFrom);
+  const account = getChannelPlugin("imessage")?.config.resolveAccount(params.cfg, params.accountId);
+  if (!account || typeof account !== "object" || !("config" in account)) {
+    return [];
+  }
+  return mapAllowFromEntries(account.config.allowFrom);
 }
 
 export function resolveIMessageConfigDefaultTo(params: {
   cfg: OpenClawConfig;
   accountId?: string | null;
 }): string | undefined {
-  return resolveOptionalConfigString(resolveIMessageAccount(params).config.defaultTo);
+  const account = getChannelPlugin("imessage")?.config.resolveAccount(params.cfg, params.accountId);
+  if (!account || typeof account !== "object" || !("config" in account)) {
+    return undefined;
+  }
+  return resolveOptionalConfigString(account.config.defaultTo);
 }

@@ -1,4 +1,4 @@
-import { parseTelegramTarget } from "../../../extensions/telegram/src/targets.js";
+import { parseExplicitTargetForChannel } from "../../channels/plugins/target-parsing.js";
 
 type TelegramConversationParams = {
   ctx: {
@@ -25,7 +25,7 @@ export function resolveTelegramConversationId(
     .map((value) => value.trim())
     .filter(Boolean);
   const chatId = toCandidates
-    .map((candidate) => parseTelegramTarget(candidate).chatId.trim())
+    .map((candidate) => parseExplicitTargetForChannel("telegram", candidate)?.to.trim() ?? "")
     .find((candidate) => candidate.length > 0);
   if (!chatId) {
     return undefined;

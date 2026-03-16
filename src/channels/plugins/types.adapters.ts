@@ -456,6 +456,11 @@ export type ChannelExecApprovalAdapter = {
     cfg: OpenClawConfig;
     accountId?: string | null;
   }) => ChannelExecApprovalInitiatingSurfaceState;
+  shouldSuppressLocalPrompt?: (params: {
+    cfg: OpenClawConfig;
+    accountId?: string | null;
+    payload: ReplyPayload;
+  }) => boolean;
   hasConfiguredDmRoute?: (params: { cfg: OpenClawConfig }) => boolean;
   shouldSuppressForwardingFallback?: (params: {
     cfg: OpenClawConfig;

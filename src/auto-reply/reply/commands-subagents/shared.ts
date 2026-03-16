@@ -1,4 +1,3 @@
-import { parseDiscordTarget } from "../../../../extensions/discord/src/targets.js";
 import { resolveStoredSubagentCapabilities } from "../../../agents/subagent-capabilities.js";
 import type { ResolvedSubagentController } from "../../../agents/subagent-control.js";
 import {
@@ -12,6 +11,7 @@ import {
   sanitizeTextContent,
   stripToolMessages,
 } from "../../../agents/tools/sessions-helpers.js";
+import { parseExplicitTargetForChannel } from "../../../channels/plugins/target-parsing.js";
 import type {
   SessionEntry,
   loadSessionStore as loadSessionStoreFn,
@@ -335,13 +335,9 @@ export function resolveDiscordChannelIdForFocus(
     typeof params.ctx.To === "string" ? params.ctx.To.trim() : "",
   ].filter(Boolean);
   for (const candidate of toCandidates) {
-    try {
-      const target = parseDiscordTarget(candidate, { defaultKind: "channel" });
-      if (target?.kind === "channel" && target.id) {
-        return target.id;
-      }
-    } catch {
-      // Ignore parse failures and try the next candidate.
+    const target = parseExplicitTargetForChannel("discord", candidate);
+    if (target?.chatType === "channel" && target.to) {
+      return target.to;
     }
   }
   return undefined;
