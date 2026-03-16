@@ -1,8 +1,8 @@
 {
-  "lastSyncedTag": "v2026.3.13-beta.1",
-  "lastSyncedAt": "2026-03-17T00:00:00Z",
-  "lastSyncedCommit": "d2e68622ef",
-  "backupTag": "backup/pre-sync-v2026.3.13-beta.1-20260316",
+  "lastSyncedTag": "v2026.3.13-1",
+  "lastSyncedAt": "2026-03-17T00:30:00Z",
+  "lastSyncedCommit": "192f205ebd",
+  "backupTag": "backup/pre-sync-v2026.3.13-1-20260316",
   "cumulativeSkipped": 0,
   "currentSync": null,
   "history": [
