@@ -1,8 +1,6 @@
-import {
-  emptyPluginConfigSchema,
-  type OpenClawPluginApi,
-  type ProviderResolveDynamicModelContext,
-  type ProviderRuntimeModel,
+import type {
+  ProviderResolveDynamicModelContext,
+  ProviderRuntimeModel,
 } from "openclaw/plugin-sdk/core";
 import { listProfilesForProvider } from "../../src/agents/auth-profiles/profiles.js";
 import { ensureAuthProfileStore } from "../../src/agents/auth-profiles/store.js";
@@ -11,6 +9,8 @@ import { normalizeModelCompat } from "../../src/agents/model-compat.js";
 import { normalizeProviderId } from "../../src/agents/model-selection.js";
 import { buildOpenAICodexProvider } from "../../src/agents/models-config.providers.static.js";
 import { fetchCodexUsage } from "../../src/infra/provider-usage.fetch.js";
+import type { ProviderPlugin } from "../../src/plugins/types.js";
+import { cloneFirstTemplateModel, findCatalogTemplate, isOpenAIApiBaseUrl } from "./shared.js";
 
 const PROVIDER_ID = "openai-codex";
 const OPENAI_CODEX_BASE_URL = "https://chatgpt.com/backend-api";
@@ -23,14 +23,6 @@ const OPENAI_CODEX_GPT_53_SPARK_MODEL_ID = "gpt-5.3-codex-spark";
 const OPENAI_CODEX_GPT_53_SPARK_CONTEXT_TOKENS = 128_000;
 const OPENAI_CODEX_GPT_53_SPARK_MAX_TOKENS = 128_000;
 const OPENAI_CODEX_TEMPLATE_MODEL_IDS = ["gpt-5.2-codex"] as const;
-
-function isOpenAIApiBaseUrl(baseUrl?: string): boolean {
-  const trimmed = baseUrl?.trim();
-  if (!trimmed) {
-    return false;
-  }
-  return /^https?:\/\/api\.openai\.com(?:\/v1)?\/?$/i.test(trimmed);
-}
 
 function isOpenAICodexBaseUrl(baseUrl?: string): boolean {
   const trimmed = baseUrl?.trim();
@@ -57,31 +49,6 @@ function normalizeCodexTransport(model: ProviderRuntimeModel): ProviderRuntimeMo
     api,
     baseUrl,
   };
-}
-
-function cloneFirstTemplateModel(params: {
-  modelId: string;
-  templateIds: readonly string[];
-  ctx: ProviderResolveDynamicModelContext;
-  patch?: Partial<ProviderRuntimeModel>;
-}): ProviderRuntimeModel | undefined {
-  const trimmedModelId = params.modelId.trim();
-  for (const templateId of [...new Set(params.templateIds)].filter(Boolean)) {
-    const template = params.ctx.modelRegistry.find(
-      PROVIDER_ID,
-      templateId,
-    ) as ProviderRuntimeModel | null;
-    if (!template) {
-      continue;
-    }
-    return normalizeModelCompat({
-      ...template,
-      id: trimmedModelId,
-      name: trimmedModelId,
-      ...params.patch,
-    } as ProviderRuntimeModel);
-  }
-  return undefined;
 }
 
 function resolveCodexForwardCompatModel(
@@ -118,6 +85,7 @@ function resolveCodexForwardCompatModel(
 
   return (
     cloneFirstTemplateModel({
+      providerId: PROVIDER_ID,
       modelId: trimmedModelId,
       templateIds,
       ctx,
@@ -138,56 +106,76 @@ function resolveCodexForwardCompatModel(
   );
 }
 
-const openAICodexPlugin = {
-  id: "openai-codex",
-  name: "OpenAI Codex Provider",
-  description: "Bundled OpenAI Codex provider plugin",
-  configSchema: emptyPluginConfigSchema(),
-  register(api: OpenClawPluginApi) {
-    api.registerProvider({
-      id: PROVIDER_ID,
-      label: "OpenAI Codex",
-      docsPath: "/providers/models",
-      auth: [],
-      catalog: {
-        order: "profile",
-        run: async (ctx) => {
-          const authStore = ensureAuthProfileStore(ctx.agentDir, {
-            allowKeychainPrompt: false,
-          });
-          if (listProfilesForProvider(authStore, PROVIDER_ID).length === 0) {
-            return null;
-          }
-          return {
-            provider: buildOpenAICodexProvider(),
-          };
-        },
-      },
-      resolveDynamicModel: (ctx) => resolveCodexForwardCompatModel(ctx),
-      capabilities: {
-        providerFamily: "openai",
-      },
-      prepareExtraParams: (ctx) => {
-        const transport = ctx.extraParams?.transport;
-        if (transport === "auto" || transport === "sse" || transport === "websocket") {
-          return ctx.extraParams;
+export function buildOpenAICodexProviderPlugin(): ProviderPlugin {
+  return {
+    id: PROVIDER_ID,
+    label: "OpenAI Codex",
+    docsPath: "/providers/models",
+    auth: [],
+    catalog: {
+      order: "profile",
+      run: async (ctx) => {
+        const authStore = ensureAuthProfileStore(ctx.agentDir, {
+          allowKeychainPrompt: false,
+        });
+        if (listProfilesForProvider(authStore, PROVIDER_ID).length === 0) {
+          return null;
         }
         return {
-          ...ctx.extraParams,
-          transport: "auto",
+          provider: buildOpenAICodexProvider(),
         };
       },
-      normalizeResolvedModel: (ctx) => {
-        if (normalizeProviderId(ctx.provider) !== PROVIDER_ID) {
-          return undefined;
-        }
-        return normalizeCodexTransport(ctx.model);
-      },
-      resolveUsageAuth: async (ctx) => await ctx.resolveOAuthToken(),
-      fetchUsageSnapshot: async (ctx) =>
-        await fetchCodexUsage(ctx.token, ctx.accountId, ctx.timeoutMs, ctx.fetchFn),
-    });
-  },
-};
-
-export default openAICodexPlugin;
+    },
+    resolveDynamicModel: (ctx) => resolveCodexForwardCompatModel(ctx),
+    capabilities: {
+      providerFamily: "openai",
+    },
+    prepareExtraParams: (ctx) => {
+      const transport = ctx.extraParams?.transport;
+      if (transport === "auto" || transport === "sse" || transport === "websocket") {
+        return ctx.extraParams;
+      }
+      return {
+        ...ctx.extraParams,
+        transport: "auto",
+      };
+    },
+    normalizeResolvedModel: (ctx) => {
+      if (normalizeProviderId(ctx.provider) !== PROVIDER_ID) {
+        return undefined;
+      }
+      return normalizeCodexTransport(ctx.model);
+    },
+    resolveUsageAuth: async (ctx) => await ctx.resolveOAuthToken(),
+    fetchUsageSnapshot: async (ctx) =>
+      await fetchCodexUsage(ctx.token, ctx.accountId, ctx.timeoutMs, ctx.fetchFn),
+    augmentModelCatalog: (ctx) => {
+      const gpt54Template = findCatalogTemplate({
+        entries: ctx.entries,
+        providerId: PROVIDER_ID,
+        templateIds: OPENAI_CODEX_GPT_54_TEMPLATE_MODEL_IDS,
+      });
+      const sparkTemplate = findCatalogTemplate({
+        entries: ctx.entries,
+        providerId: PROVIDER_ID,
+        templateIds: [OPENAI_CODEX_GPT_53_MODEL_ID, ...OPENAI_CODEX_TEMPLATE_MODEL_IDS],
+      });
+      return [
+        gpt54Template
+          ? {
+              ...gpt54Template,
+              id: OPENAI_CODEX_GPT_54_MODEL_ID,
+              name: OPENAI_CODEX_GPT_54_MODEL_ID,
+            }
+          : undefined,
+        sparkTemplate
+          ? {
+              ...sparkTemplate,
+              id: OPENAI_CODEX_GPT_53_SPARK_MODEL_ID,
+              name: OPENAI_CODEX_GPT_53_SPARK_MODEL_ID,
+            }
+          : undefined,
+      ].filter((entry): entry is NonNullable<typeof entry> => entry !== undefined);
+    },
+  };
+}
