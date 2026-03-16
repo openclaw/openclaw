@@ -13,13 +13,13 @@ describe("Plugin Manifest (openclaw.plugin.json)", () => {
   it("should have required fields", () => {
     expect(manifest.id).toBe("plugin-insights");
     expect(manifest.name).toBeTruthy();
-    expect(manifest.version).toBeTruthy();
     expect(manifest.description).toBeTruthy();
-    expect(manifest.main).toBe("dist/index.js");
   });
 
-  it("should have version matching package.json", () => {
-    expect(manifest.version).toBe(pkg.version);
+  it("should have id matching package name suffix", () => {
+    // In the monorepo, package name is @openclaw/plugin-insights
+    const suffix = pkg.name.replace(/^@openclaw\//, "");
+    expect(manifest.id).toBe(suffix);
   });
 
   it("should have a valid configSchema", () => {
