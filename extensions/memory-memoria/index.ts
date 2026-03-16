@@ -254,7 +254,7 @@ const plugin = {
 
   register(api: OpenClawPluginApi) {
     const config = parseMemoriaPluginConfig(api.pluginConfig);
-    const client = new MemoriaClient(config);
+    const client = new MemoriaClient(config, { logger: api.logger });
 
     api.logger.info(`memory-memoria: registered (${config.backend})`);
 
@@ -503,6 +503,13 @@ const plugin = {
 
             if (memoryId) {
               const result = await client.deleteMemory({ userId, memoryId, reason });
+              if (result.purged <= 0) {
+                return textResult(`Memory ${memoryId} was not found or was already deleted.`, {
+                  ok: false,
+                  userId,
+                  result,
+                });
+              }
               return textResult(`Forgot memory ${memoryId}.`, {
                 ok: true,
                 userId,
@@ -544,6 +551,18 @@ const plugin = {
               memoryId: selected.memory_id,
               reason,
             });
+
+            if (result.purged <= 0) {
+              return textResult(
+                `Memory ${selected.memory_id} was not found or was already deleted.`,
+                {
+                  ok: false,
+                  userId,
+                  result,
+                  memory: selected,
+                },
+              );
+            }
 
             return textResult(`Forgot memory ${selected.memory_id}.`, {
               ok: true,

@@ -343,12 +343,24 @@ function asObject(value: unknown): Record<string, unknown> {
   return value as Record<string, unknown>;
 }
 
-function parseString(value: unknown): string | undefined {
+function parseString(
+  value: unknown,
+  issues?: Issue[],
+  path: Array<string | number> = [],
+): string | undefined {
   if (typeof value !== "string") {
     return undefined;
   }
   const trimmed = value.trim();
-  return trimmed ? resolveEnvVars(trimmed) : undefined;
+  if (!trimmed) {
+    return undefined;
+  }
+  try {
+    return resolveEnvVars(trimmed);
+  } catch (error) {
+    issues?.push({ path, message: String(error) });
+    return undefined;
+  }
 }
 
 function parseBoolean(value: unknown): boolean | undefined {
@@ -412,7 +424,7 @@ export function safeParseMemoriaPluginConfig(value: unknown): SafeParseResult {
   const cfg = asObject(value);
   const issues: Issue[] = [];
 
-  const backendRaw = parseString(cfg.backend) ?? DEFAULTS.backend;
+  const backendRaw = parseString(cfg.backend, issues, ["backend"]) ?? DEFAULTS.backend;
   const backend = MEMORIA_BACKENDS.includes(backendRaw as MemoriaBackendMode)
     ? (backendRaw as MemoriaBackendMode)
     : undefined;
@@ -420,7 +432,8 @@ export function safeParseMemoriaPluginConfig(value: unknown): SafeParseResult {
     addIssue(issues, ["backend"], `must be one of ${MEMORIA_BACKENDS.join(", ")}`);
   }
 
-  const userIdStrategyRaw = parseString(cfg.userIdStrategy) ?? DEFAULTS.userIdStrategy;
+  const userIdStrategyRaw =
+    parseString(cfg.userIdStrategy, issues, ["userIdStrategy"]) ?? DEFAULTS.userIdStrategy;
   const userIdStrategy = MEMORIA_USER_ID_STRATEGIES.includes(
     userIdStrategyRaw as MemoriaUserIdStrategy,
   )
@@ -493,13 +506,30 @@ export function safeParseMemoriaPluginConfig(value: unknown): SafeParseResult {
   }
 
   const backendValue = backend ?? DEFAULTS.backend;
-  const apiUrl = parseString(cfg.apiUrl) ?? (backendValue === "http" ? DEFAULTS.apiUrl : undefined);
+  const apiUrl =
+    parseString(cfg.apiUrl, issues, ["apiUrl"]) ??
+    (backendValue === "http" ? DEFAULTS.apiUrl : undefined);
 
   if (backendValue === "http" && !apiUrl) {
     addIssue(issues, ["apiUrl"], "is required when backend=http");
   }
 
-  const dbUrl = parseString(cfg.dbUrl) ?? DEFAULTS.dbUrl;
+  const dbUrl = parseString(cfg.dbUrl, issues, ["dbUrl"]) ?? DEFAULTS.dbUrl;
+  const apiKey = parseString(cfg.apiKey, issues, ["apiKey"]);
+  const pythonExecutable =
+    parseString(cfg.pythonExecutable, issues, ["pythonExecutable"]) ?? DEFAULTS.pythonExecutable;
+  const memoriaRoot = parseString(cfg.memoriaRoot, issues, ["memoriaRoot"]);
+  const defaultUserId =
+    parseString(cfg.defaultUserId, issues, ["defaultUserId"]) ?? DEFAULTS.defaultUserId;
+  const embeddingProvider =
+    parseString(cfg.embeddingProvider, issues, ["embeddingProvider"]) ?? DEFAULTS.embeddingProvider;
+  const embeddingModel =
+    parseString(cfg.embeddingModel, issues, ["embeddingModel"]) ?? DEFAULTS.embeddingModel;
+  const embeddingBaseUrl = parseString(cfg.embeddingBaseUrl, issues, ["embeddingBaseUrl"]);
+  const embeddingApiKey = parseString(cfg.embeddingApiKey, issues, ["embeddingApiKey"]);
+  const llmApiKey = parseString(cfg.llmApiKey, issues, ["llmApiKey"]);
+  const llmBaseUrl = parseString(cfg.llmBaseUrl, issues, ["llmBaseUrl"]);
+  const llmModel = parseString(cfg.llmModel, issues, ["llmModel"]) ?? DEFAULTS.llmModel;
 
   if (issues.length > 0) {
     return {
@@ -514,10 +544,10 @@ export function safeParseMemoriaPluginConfig(value: unknown): SafeParseResult {
       backend: backendValue,
       dbUrl,
       apiUrl,
-      apiKey: parseString(cfg.apiKey),
-      pythonExecutable: parseString(cfg.pythonExecutable) ?? DEFAULTS.pythonExecutable,
-      memoriaRoot: parseString(cfg.memoriaRoot),
-      defaultUserId: parseString(cfg.defaultUserId) ?? DEFAULTS.defaultUserId,
+      apiKey,
+      pythonExecutable,
+      memoriaRoot,
+      defaultUserId,
       userIdStrategy: userIdStrategy ?? DEFAULTS.userIdStrategy,
       timeoutMs: timeoutMs ?? DEFAULTS.timeoutMs,
       maxListPages: maxListPages ?? DEFAULTS.maxListPages,
@@ -529,14 +559,14 @@ export function safeParseMemoriaPluginConfig(value: unknown): SafeParseResult {
       retrieveMemoryTypes,
       observeTailMessages: observeTailMessages ?? DEFAULTS.observeTailMessages,
       observeMaxChars: observeMaxChars ?? DEFAULTS.observeMaxChars,
-      embeddingProvider: parseString(cfg.embeddingProvider) ?? DEFAULTS.embeddingProvider,
-      embeddingModel: parseString(cfg.embeddingModel) ?? DEFAULTS.embeddingModel,
-      embeddingBaseUrl: parseString(cfg.embeddingBaseUrl),
-      embeddingApiKey: parseString(cfg.embeddingApiKey),
+      embeddingProvider,
+      embeddingModel,
+      embeddingBaseUrl,
+      embeddingApiKey,
       embeddingDim,
-      llmApiKey: parseString(cfg.llmApiKey),
-      llmBaseUrl: parseString(cfg.llmBaseUrl),
-      llmModel: parseString(cfg.llmModel) ?? DEFAULTS.llmModel,
+      llmApiKey,
+      llmBaseUrl,
+      llmModel,
     },
   };
 }

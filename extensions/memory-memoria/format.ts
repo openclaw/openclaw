@@ -52,7 +52,7 @@ export function formatMemoryList(memories: MemoriaMemoryRecord[], maxChars = 140
   return memories
     .map(
       (memory, index) =>
-        `${index + 1}. ${renderMemoryBadge(memory)} ${truncateText(memory.content, maxChars)}`,
+        `${index + 1}. ${renderMemoryBadge(memory)} ${truncateText(escapePromptText(memory.content), maxChars)}`,
     )
     .join("\n");
 }

@@ -198,8 +198,19 @@ type MemoriaClientOps = {
   }): Promise<{ purged: number }>;
 };
 
+type MemoriaClientLogger = {
+  warn?: (message: string) => void;
+};
+
 class MemoriaHttpClient implements MemoriaClientOps {
-  constructor(private readonly config: MemoriaPluginConfig) {}
+  constructor(
+    private readonly config: MemoriaPluginConfig,
+    private readonly logger?: MemoriaClientLogger,
+  ) {}
+
+  private warn(message: string) {
+    this.logger?.warn?.(`memory-memoria: ${message}`);
+  }
 
   private async request<T>(method: string, path: string, body?: unknown): Promise<T> {
     if (!this.config.apiUrl) {
@@ -273,9 +284,12 @@ class MemoriaHttpClient implements MemoriaClientOps {
         query: params.query,
         top_k: params.topK,
         memory_types: params.memoryTypes,
+        session_id: params.sessionId,
+        include_cross_session: params.includeCrossSession ?? true,
       });
       return result.map((entry) => normalizeMemoryRecord(entry));
-    } catch {
+    } catch (error) {
+      this.warn(`search endpoint failed; falling back to retrieve: ${String(error)}`);
       return this.retrieve(params);
     }
   }
@@ -325,7 +339,8 @@ class MemoriaHttpClient implements MemoriaClientOps {
         `/v1/memories/${encodeURIComponent(params.memoryId)}${encodeQuery({ user_id: params.userId })}`,
       );
       return normalizeMemoryRecord(result);
-    } catch {
+    } catch (error) {
+      this.warn(`getMemory endpoint failed; falling back to list scan: ${String(error)}`);
       let cursor: string | undefined;
       for (let page = 0; page < this.config.maxListPages; page += 1) {
         const response = await this.listMemoriesPage({
@@ -535,9 +550,11 @@ class MemoriaEmbeddedClient implements MemoriaClientOps {
 export class MemoriaClient {
   private readonly impl: MemoriaClientOps;
 
-  constructor(config: MemoriaPluginConfig) {
+  constructor(config: MemoriaPluginConfig, options: { logger?: MemoriaClientLogger } = {}) {
     this.impl =
-      config.backend === "http" ? new MemoriaHttpClient(config) : new MemoriaEmbeddedClient(config);
+      config.backend === "http"
+        ? new MemoriaHttpClient(config, options.logger)
+        : new MemoriaEmbeddedClient(config);
   }
 
   health(userId: string) {
