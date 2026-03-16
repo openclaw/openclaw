@@ -70,23 +70,25 @@ describe("listThinkingLevels", () => {
     expect(listThinkingLevels("demo", "demo-model")).toContain("xhigh");
   });
 
-  it("includes xhigh for codex models", () => {
-    expect(listThinkingLevels(undefined, "gpt-5.2-codex")).toContain("xhigh");
-    expect(listThinkingLevels(undefined, "gpt-5.3-codex")).toContain("xhigh");
-    expect(listThinkingLevels(undefined, "gpt-5.3-codex-spark")).toContain("xhigh");
-  });
+  it("includes xhigh for provider-advertised models", () => {
+    providerRuntimeMocks.resolveProviderXHighThinking.mockImplementation(({ provider, context }) =>
+      (provider === "openai" && ["gpt-5.2", "gpt-5.4", "gpt-5.4-pro"].includes(context.modelId)) ||
+      (provider === "openai-codex" &&
+        ["gpt-5.2-codex", "gpt-5.3-codex", "gpt-5.3-codex-spark", "gpt-5.4"].includes(
+          context.modelId,
+        )) ||
+      (provider === "github-copilot" && ["gpt-5.2", "gpt-5.2-codex"].includes(context.modelId))
+        ? true
+        : undefined,
+    );
 
-  it("includes xhigh for openai gpt-5.2 and gpt-5.4 variants", () => {
+    expect(listThinkingLevels("openai-codex", "gpt-5.2-codex")).toContain("xhigh");
+    expect(listThinkingLevels("openai-codex", "gpt-5.3-codex")).toContain("xhigh");
+    expect(listThinkingLevels("openai-codex", "gpt-5.3-codex-spark")).toContain("xhigh");
     expect(listThinkingLevels("openai", "gpt-5.2")).toContain("xhigh");
     expect(listThinkingLevels("openai", "gpt-5.4")).toContain("xhigh");
     expect(listThinkingLevels("openai", "gpt-5.4-pro")).toContain("xhigh");
-  });
-
-  it("includes xhigh for openai-codex gpt-5.4", () => {
     expect(listThinkingLevels("openai-codex", "gpt-5.4")).toContain("xhigh");
-  });
-
-  it("includes xhigh for github-copilot gpt-5.2 refs", () => {
     expect(listThinkingLevels("github-copilot", "gpt-5.2")).toContain("xhigh");
     expect(listThinkingLevels("github-copilot", "gpt-5.2-codex")).toContain("xhigh");
   });
@@ -108,7 +110,11 @@ describe("listThinkingLevelLabels", () => {
     expect(listThinkingLevelLabels("demo", "demo-model")).toEqual(["off", "on"]);
   });
 
-  it("returns on/off for ZAI", () => {
+  it("returns on/off for provider-advertised binary thinking", () => {
+    providerRuntimeMocks.resolveProviderBinaryThinking.mockImplementation(({ provider }) =>
+      provider === "zai" ? true : undefined,
+    );
+
     expect(listThinkingLevelLabels("zai", "glm-4.7")).toEqual(["off", "on"]);
   });
 
@@ -127,7 +133,12 @@ describe("resolveThinkingDefaultForModel", () => {
     );
   });
 
-  it("defaults Claude 4.6 models to adaptive", () => {
+  it("uses provider-advertised adaptive defaults", () => {
+    providerRuntimeMocks.resolveProviderDefaultThinkingLevel.mockImplementation(
+      ({ provider, context }) =>
+        provider === "anthropic" && context.modelId === "claude-opus-4-6" ? "adaptive" : undefined,
+    );
+
     expect(
       resolveThinkingDefaultForModel({ provider: "anthropic", model: "claude-opus-4-6" }),
     ).toBe("adaptive");

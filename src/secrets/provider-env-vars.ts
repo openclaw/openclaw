@@ -2,7 +2,6 @@ import { BUNDLED_PROVIDER_AUTH_ENV_VAR_CANDIDATES } from "../plugins/bundled-pro
 
 const CORE_PROVIDER_AUTH_ENV_VAR_CANDIDATES = {
   chutes: ["CHUTES_OAUTH_TOKEN", "CHUTES_API_KEY"],
-  google: ["GEMINI_API_KEY"],
   voyage: ["VOYAGE_API_KEY"],
   groq: ["GROQ_API_KEY"],
   deepgram: ["DEEPGRAM_API_KEY"],
@@ -25,15 +24,15 @@ export const PROVIDER_AUTH_ENV_VAR_CANDIDATES: Record<string, readonly string[]>
 /**
  * Provider env vars used for onboarding/default secret refs and broad secret
  * scrubbing. This can include non-model providers and may intentionally choose
- * a different preferred first env var than auth resolution.
+ * a different preferred first env var than auth resolution. Keep the
+ * anthropic override in core so generic onboarding still prefers API keys over
+ * OAuth tokens when both are present.
  */
 export const PROVIDER_ENV_VARS: Record<string, readonly string[]> = {
   ...PROVIDER_AUTH_ENV_VAR_CANDIDATES,
   anthropic: ["ANTHROPIC_API_KEY", "ANTHROPIC_OAUTH_TOKEN"],
   chutes: ["CHUTES_API_KEY", "CHUTES_OAUTH_TOKEN"],
-  google: ["GEMINI_API_KEY"],
   "minimax-cn": ["MINIMAX_API_KEY"],
-  xai: ["XAI_API_KEY"],
 };
 
 const EXTRA_PROVIDER_AUTH_ENV_VARS = ["MINIMAX_CODE_PLAN_KEY"] as const;

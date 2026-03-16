@@ -49,29 +49,8 @@ export function isBinaryThinkingProvider(provider?: string | null, model?: strin
   if (typeof pluginDecision === "boolean") {
     return pluginDecision;
   }
-
-  return normalizedProvider === "zai";
+  return false;
 }
-
-export const XHIGH_MODEL_REFS = [
-  "openai/gpt-5.4",
-  "openai/gpt-5.4-pro",
-  "openai/gpt-5.2",
-  "openai-codex/gpt-5.4",
-  "openai-codex/gpt-5.3-codex",
-  "openai-codex/gpt-5.3-codex-spark",
-  "openai-codex/gpt-5.2-codex",
-  "openai-codex/gpt-5.1-codex",
-  "github-copilot/gpt-5.2-codex",
-  "github-copilot/gpt-5.2",
-] as const;
-
-const XHIGH_MODEL_SET = new Set(XHIGH_MODEL_REFS.map((entry) => entry.toLowerCase()));
-const XHIGH_MODEL_IDS = new Set(
-  XHIGH_MODEL_REFS.map((entry) => entry.split("/")[1]?.toLowerCase()).filter(
-    (entry): entry is string => Boolean(entry),
-  ),
-);
 
 // Normalize user-provided thinking level strings to the canonical enum.
 export function normalizeThinkLevel(raw?: string | null): ThinkLevel | undefined {
@@ -130,10 +109,7 @@ export function supportsXHighThinking(provider?: string | null, model?: string |
       return pluginDecision;
     }
   }
-  if (providerKey) {
-    return XHIGH_MODEL_SET.has(`${providerKey}/${modelKey}`);
-  }
-  return XHIGH_MODEL_IDS.has(modelKey);
+  return false;
 }
 
 export function listThinkingLevels(provider?: string | null, model?: string | null): ThinkLevel[] {
@@ -161,17 +137,7 @@ export function formatThinkingLevels(
 }
 
 export function formatXHighModelHint(): string {
-  const refs = [...XHIGH_MODEL_REFS] as string[];
-  if (refs.length === 0) {
-    return "unknown model";
-  }
-  if (refs.length === 1) {
-    return refs[0];
-  }
-  if (refs.length === 2) {
-    return `${refs[0]} or ${refs[1]}`;
-  }
-  return `${refs.slice(0, -1).join(", ")} or ${refs[refs.length - 1]}`;
+  return "provider models that advertise xhigh reasoning";
 }
 
 export function resolveThinkingDefaultForModel(params: {
@@ -196,12 +162,7 @@ export function resolveThinkingDefaultForModel(params: {
     return pluginDecision;
   }
 
-  const isAnthropicFamilyModel =
-    normalizedProvider === "anthropic" ||
-    normalizedProvider === "amazon-bedrock" ||
-    modelLower.includes("anthropic/") ||
-    modelLower.includes(".anthropic.");
-  if (isAnthropicFamilyModel && CLAUDE_46_MODEL_RE.test(modelLower)) {
+  if (normalizedProvider === "amazon-bedrock" && CLAUDE_46_MODEL_RE.test(modelLower)) {
     return "adaptive";
   }
   if (candidate?.reasoning) {
