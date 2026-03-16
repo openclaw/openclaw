@@ -66,8 +66,10 @@ cat >"${BIN_WITH_CAST}/cast" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
 
-if [[ "${MOCK_CAST_REQUIRE_END_OF_OPTIONS:-0}" == "1" && " $* " != *" -- ${EXPECTED_ADDRESS:-0x123} "* ]]; then
-  printf 'missing -- before address: %s\n' "$*" >&2
+normalized_args="${*//$'\n'/ }"
+
+if [[ "${MOCK_CAST_REQUIRE_END_OF_OPTIONS:-0}" == "1" && " ${normalized_args} " != *" -- ${EXPECTED_ADDRESS:-0x123} "* ]]; then
+  printf 'missing -- before address: %s\n' "$normalized_args" >&2
   exit 95
 fi
 
@@ -76,7 +78,7 @@ if [[ "${MOCK_CAST_MODE:-success}" == "fail" ]]; then
   exit 1
 fi
 
-case "$*" in
+case "$normalized_args" in
   *"totalAssets()(uint256)"*)
     printf '%s\n' '123'
     ;;
@@ -84,7 +86,7 @@ case "$*" in
     printf '%s\n' '456'
     ;;
   *)
-    printf 'unexpected cast args: %s\n' "$*" >&2
+    printf 'unexpected cast args: %s\n' "$normalized_args" >&2
     exit 96
     ;;
 esac
@@ -194,6 +196,18 @@ leading_zero_chain_status=0
 env PATH="${BIN_NO_CAST}:/usr/bin:/bin" bash "$SCRIPT_PATH" --address "$ADDRESS" --chain-id 007 --query "$QUERY" > /dev/null 2>"$leading_zero_chain_stderr" || leading_zero_chain_status=$?
 test "$leading_zero_chain_status" = "2"
 grep -F 'without leading zeros' "$leading_zero_chain_stderr" >/dev/null
+
+zero_chain_stderr="${TMP}/zero-chain.stderr"
+zero_chain_status=0
+env PATH="${BIN_NO_CAST}:/usr/bin:/bin" bash "$SCRIPT_PATH" --address "$ADDRESS" --chain-id 0 --query "$QUERY" > /dev/null 2>"$zero_chain_stderr" || zero_chain_status=$?
+test "$zero_chain_status" = "2"
+grep -F 'between 1 and 2147483647' "$zero_chain_stderr" >/dev/null
+
+too_large_chain_stderr="${TMP}/too-large-chain.stderr"
+too_large_chain_status=0
+env PATH="${BIN_NO_CAST}:/usr/bin:/bin" bash "$SCRIPT_PATH" --address "$ADDRESS" --chain-id 2147483648 --query "$QUERY" > /dev/null 2>"$too_large_chain_stderr" || too_large_chain_status=$?
+test "$too_large_chain_status" = "2"
+grep -F 'between 1 and 2147483647' "$too_large_chain_stderr" >/dev/null
 
 invalid_address_stderr="${TMP}/invalid-address.stderr"
 invalid_address_status=0

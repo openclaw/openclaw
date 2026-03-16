@@ -147,6 +147,11 @@ fi
   printf 'chain id must be numeric without leading zeros\n' >&2
   exit 2
 }
+# Morpho GraphQL uses GraphQL `Int`, so reject ids the API cannot encode.
+[[ "$CHAIN_ID" -ge 1 && "$CHAIN_ID" -le 2147483647 ]] || {
+  printf 'chain id must be between 1 and 2147483647\n' >&2
+  exit 2
+}
 
 if [[ -n "$QUERY_FILE" ]]; then
   require_readable_file "query file" "$QUERY_FILE"
