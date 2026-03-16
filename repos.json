@@ -1,0 +1,45 @@
+{
+  "repos": {
+    "openclaw/openclaw": {
+      "enabled": true,
+      "priority": 1,
+      "url": "https://github.com/openclaw/openclaw",
+      "daily_max_commits": 10,
+      "daily_max_prs": 1,
+      "max_open_prs": 3,
+      "scan_per_round": 20,
+      "github_user": "extrasmall0",
+      "branch_prefix": "raymond",
+      "types": [
+        "bug-fix",
+        "test-fix",
+        "ci-fix",
+        "refactor"
+      ],
+      "cooldown_hours": 0,
+      "notes": "主力仓库，高频贡献"
+    },
+    "block/goose": {
+      "enabled": true,
+      "priority": 1,
+      "url": "https://github.com/block/goose",
+      "daily_max_commits": 3,
+      "daily_max_prs": 1,
+      "max_open_prs": 2,
+      "scan_per_round": 10,
+      "github_user": "extrasmall0",
+      "branch_prefix": "fix",
+      "types": [
+        "bug-fix",
+        "docs",
+        "test"
+      ],
+      "cooldown_hours": 12,
+      "notes": "次要仓库，低频高质量"
+    }
+  },
+  "global": {
+    "score_threshold": 8,
+    "max_new_prs_per_round": 1
+  }
+}

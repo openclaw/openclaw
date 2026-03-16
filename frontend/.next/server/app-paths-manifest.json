@@ -1,0 +1,10 @@
+{
+  "/_global-error/page": "app/_global-error/page.js",
+  "/_not-found/page": "app/_not-found/page.js",
+  "/api/cron/route": "app/api/cron/route.js",
+  "/api/kanban/route": "app/api/kanban/route.js",
+  "/api/repos/route": "app/api/repos/route.js",
+  "/api/soul/route": "app/api/soul/route.js",
+  "/api/strategy/route": "app/api/strategy/route.js",
+  "/page": "app/page.js"
+}

@@ -1,0 +1,52 @@
+{
+  "agent": "raymond",
+  "ran_at": "2026-03-16T12:18:00-07:00",
+  "timezone": "America/Los_Angeles",
+  "mode": "pr-ops",
+  "repos_processed": [
+    "openclaw/openclaw",
+    "block/goose"
+  ],
+  "quotas": {
+    "openclaw/openclaw": {
+      "prs_today": 1,
+      "daily_max_prs": 1,
+      "commits_today": 1,
+      "daily_max_commits": 10,
+      "open_prs": 1,
+      "max_open_prs": 3
+    },
+    "block/goose": {
+      "prs_today": 0,
+      "daily_max_prs": 1,
+      "commits_today": 0,
+      "daily_max_commits": 3,
+      "open_prs": 1,
+      "max_open_prs": 2
+    }
+  },
+  "inflight_prs_advanced": 0,
+  "new_prs_opened": 1,
+  "inflight_prs": [
+    {
+      "repo": "block/goose",
+      "pr_number": 7888,
+      "url": "https://github.com/block/goose/pull/7888",
+      "status": "ci_green_awaiting_review",
+      "notes": "CI green, only bot review (codex-connector). No human review since Mar 14. Day 2 of waiting, no action needed yet."
+    },
+    {
+      "repo": "openclaw/openclaw",
+      "pr_number": 48455,
+      "url": "https://github.com/openclaw/openclaw/pull/48455",
+      "status": "just_opened",
+      "notes": "Fix gateway stop/start lifecycle - uses disable+kill instead of bootout. Issue #48311, maintainer-endorsed fix direction."
+    }
+  ],
+  "issues_scanned": {
+    "openclaw/openclaw": 20,
+    "block/goose": 0
+  },
+  "blockers": [],
+  "notes": "Opened PR #48455 for openclaw/openclaw issue #48311 (gateway stop/start asymmetry). Maintainer gave explicit fix direction in comments. Clean 1-file change. block/goose #7888 still awaiting human review."
+}

@@ -1,0 +1,10 @@
+{
+  "/_global-error/page": "/_global-error",
+  "/_not-found/page": "/_not-found",
+  "/api/cron/route": "/api/cron",
+  "/api/kanban/route": "/api/kanban",
+  "/api/repos/route": "/api/repos",
+  "/api/soul/route": "/api/soul",
+  "/api/strategy/route": "/api/strategy",
+  "/page": "/"
+}
