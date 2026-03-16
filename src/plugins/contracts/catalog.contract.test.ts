@@ -1,9 +1,17 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   augmentModelCatalogWithProviderPlugins,
   buildProviderMissingAuthMessageWithPlugin,
   resolveProviderBuiltInModelSuppression,
 } from "../provider-runtime.js";
+
+vi.mock("@mariozechner/pi-ai/oauth", async () => {
+  const actual = await vi.importActual<object>("@mariozechner/pi-ai/oauth");
+  return {
+    ...actual,
+    getOAuthApiKey: vi.fn(),
+  };
+});
 
 describe("provider catalog contract", () => {
   it("keeps codex-only missing-auth hints wired through the provider runtime", () => {

@@ -1,6 +1,7 @@
 import { normalizeProviderId } from "../agents/provider-id.js";
 import type {
   ProviderAugmentModelCatalogContext,
+  ProviderBuildMissingAuthMessageContext,
   ProviderBuiltInModelSuppressionContext,
 } from "./types.js";
 
@@ -38,6 +39,18 @@ export function resolveBundledProviderBuiltInModelSuppression(
     suppress: true,
     errorMessage: `Unknown model: ${context.provider}/${OPENAI_DIRECT_SPARK_MODEL_ID}. ${OPENAI_DIRECT_SPARK_MODEL_ID} is only supported via openai-codex OAuth. Use openai-codex/${OPENAI_DIRECT_SPARK_MODEL_ID}.`,
   };
+}
+
+export function resolveBundledProviderMissingAuthMessage(
+  context: ProviderBuildMissingAuthMessageContext,
+) {
+  if (
+    normalizeProviderId(context.provider) !== OPENAI_PROVIDER_ID ||
+    context.listProfileIds(OPENAI_CODEX_PROVIDER_ID).length === 0
+  ) {
+    return undefined;
+  }
+  return 'No API key found for provider "openai". You are authenticated with OpenAI Codex OAuth. Use openai-codex/gpt-5.4 (OAuth) or set OPENAI_API_KEY to use openai/gpt-5.4.';
 }
 
 export function augmentBundledProviderCatalog(
