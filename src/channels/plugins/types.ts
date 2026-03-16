@@ -1,0 +1,75 @@
+import type { ChannelMessageActionName as ChannelMessageActionNameFromList } from "./message-action-names.js";
+
+export { CHANNEL_MESSAGE_ACTION_NAMES } from "./message-action-names.js";
+export { CHANNEL_MESSAGE_CAPABILITIES } from "./message-capabilities.js";
+
+export type ChannelMessageActionName = ChannelMessageActionNameFromList;
+export type { ChannelMessageCapability } from "./message-capabilities.js";
+
+export type {
+  ChannelAuthAdapter,
+  ChannelCommandAdapter,
+  ChannelCapabilitiesDiagnostics,
+  ChannelCapabilitiesDisplayLine,
+  ChannelCapabilitiesDisplayTone,
+  ChannelConfigAdapter,
+  ChannelDirectoryAdapter,
+  ChannelExecApprovalAdapter,
+  ChannelExecApprovalForwardTarget,
+  ChannelExecApprovalInitiatingSurfaceState,
+  ChannelResolveKind,
+  ChannelResolveResult,
+  ChannelResolverAdapter,
+  ChannelElevatedAdapter,
+  ChannelGatewayAdapter,
+  ChannelGatewayContext,
+  ChannelGroupAdapter,
+  ChannelHeartbeatAdapter,
+  ChannelLifecycleAdapter,
+  ChannelLoginWithQrStartResult,
+  ChannelLoginWithQrWaitResult,
+  ChannelLogoutContext,
+  ChannelLogoutResult,
+  ChannelOutboundAdapter,
+  ChannelOutboundContext,
+  ChannelAllowlistAdapter,
+  ChannelPairingAdapter,
+  ChannelSecurityAdapter,
+  ChannelSetupAdapter,
+  ChannelStatusAdapter,
+} from "./types.adapters.js";
+export type {
+  ChannelAccountSnapshot,
+  ChannelAccountState,
+  ChannelAgentPromptAdapter,
+  ChannelAgentTool,
+  ChannelAgentToolFactory,
+  ChannelCapabilities,
+  ChannelDirectoryEntry,
+  ChannelDirectoryEntryKind,
+  ChannelGroupContext,
+  ChannelHeartbeatDeps,
+  ChannelId,
+  ChannelLogSink,
+  ChannelMentionAdapter,
+  ChannelMessageActionAdapter,
+  ChannelMessageActionContext,
+  ChannelMessagingAdapter,
+  ChannelMeta,
+  ChannelOutboundTargetMode,
+  ChannelPollContext,
+  ChannelPollResult,
+  ChannelSecurityContext,
+  ChannelSecurityDmPolicy,
+  ChannelSetupInput,
+  ChannelStatusIssue,
+  ChannelStreamingAdapter,
+  ChannelThreadingAdapter,
+  ChannelThreadingContext,
+  ChannelThreadingToolContext,
+  ChannelToolSend,
+  BaseProbeResult,
+  BaseTokenResolution,
+} from "./types.core.js";
+
+export type { ChannelPlugin } from "./types.plugin.js";

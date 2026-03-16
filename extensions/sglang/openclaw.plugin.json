@@ -1,0 +1,12 @@
+{
+  "id": "sglang",
+  "providers": ["sglang"],
+  "providerAuthEnvVars": {
+    "sglang": ["SGLANG_API_KEY"]
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

@@ -1,0 +1,8 @@
+{
+  "id": "firecrawl",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

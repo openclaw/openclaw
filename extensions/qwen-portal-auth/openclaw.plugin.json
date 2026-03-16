@@ -1,0 +1,12 @@
+{
+  "id": "qwen-portal-auth",
+  "providers": ["qwen-portal"],
+  "providerAuthEnvVars": {
+    "qwen-portal": ["QWEN_OAUTH_TOKEN", "QWEN_PORTAL_API_KEY"]
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}
