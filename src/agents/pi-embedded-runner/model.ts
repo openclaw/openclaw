@@ -137,6 +137,9 @@ function applyConfiguredProviderOverrides(params: {
     cost: configuredModel?.cost ?? discoveredModel.cost,
     contextWindow: configuredModel?.contextWindow ?? discoveredModel.contextWindow,
     maxTokens: configuredModel?.maxTokens ?? discoveredModel.maxTokens,
+    parameters:
+      configuredModel?.parameters ??
+      (discoveredModel as { parameters?: Record<string, unknown> }).parameters,
     headers:
       discoveredHeaders || providerHeaders || configuredHeaders
         ? {

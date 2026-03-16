@@ -566,6 +566,10 @@ describe("resolveModel", () => {
                 reasoning: true,
                 contextWindow: 198000,
                 maxTokens: 16000,
+                parameters: {
+                  thinking: false,
+                  temperature: 0.2,
+                },
               },
             ],
           },
@@ -584,6 +588,10 @@ describe("resolveModel", () => {
       reasoning: true,
       contextWindow: 198000,
       maxTokens: 16000,
+      parameters: {
+        thinking: false,
+        temperature: 0.2,
+      },
     });
   });
 

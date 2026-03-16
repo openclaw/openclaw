@@ -188,6 +188,62 @@ Use explicit config when:
 
 If `OLLAMA_API_KEY` is set, you can omit `apiKey` in the provider entry and OpenClaw will fill it for availability checks.
 
+### Per-model Ollama parameters (options)
+
+Ollama’s `/api/chat` endpoint accepts an `options` object where you can control provider-specific behavior such as `thinking`, `temperature`, `top_p`, and other knobs. OpenClaw exposes this through a generic `parameters` field on each model definition.
+
+When `api: "ollama"` is used, `models.providers.ollama.models[].parameters` is forwarded to Ollama’s `options` field, with `contextWindow` still controlling the `num_ctx` option:
+
+```json5
+{
+  models: {
+    providers: {
+      ollama: {
+        baseUrl: "http://localhost:11434",
+        apiKey: "ollama-local",
+        api: "ollama",
+        models: [
+          {
+            id: "qwen3.5:9b",
+            name: "Qwen3.5 9B (No Think)",
+            reasoning: false,
+            input: ["text"],
+            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+            // Controls Ollama options
+            parameters: {
+              thinking: false,
+              temperature: 0.7,
+              top_p: 0.9,
+            },
+            // Controls options.num_ctx
+            contextWindow: 32768,
+            maxTokens: 327680,
+          },
+        ],
+      },
+    },
+  },
+}
+```
+
+This results in an Ollama `/api/chat` request with:
+
+```json5
+{
+  options: {
+    thinking: false,
+    temperature: 0.7,
+    top_p: 0.9,
+    num_ctx: 32768,
+  },
+}
+```
+
+Notes:
+
+- `parameters` is generic and reserved for provider-specific fields; for Ollama, it maps directly to `options`.
+- `contextWindow` always controls `options.num_ctx`, even if a `num_ctx` field is present under `parameters`.
+
 ### Custom base URL (explicit config)
 
 If Ollama is running on a different host or port (explicit config disables auto-discovery, so define models manually):
