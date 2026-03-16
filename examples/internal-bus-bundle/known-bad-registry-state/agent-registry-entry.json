@@ -1,0 +1,11 @@
+{
+  "kind": "internal.agent-registry-entry",
+  "schemaVersion": 1,
+  "sessionKey": "agent:codex:acp:session-registry-bad-state",
+  "agentId": "codex",
+  "backend": "acpx",
+  "runtimeSessionName": "agent:codex:acp:session-registry-bad-state:persistent:runtime",
+  "mode": "persistent",
+  "state": "stuck",
+  "lastActivityAt": 1760000000000
+}

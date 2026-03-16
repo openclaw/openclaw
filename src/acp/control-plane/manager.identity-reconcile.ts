@@ -100,18 +100,6 @@ export async function reconcileManagerRuntimeSessionIdentifiers(params: {
       runtimeStatus,
     };
   }
-  const nextMeta: SessionAcpMeta = {
-    backend: params.meta.backend,
-    agent: params.meta.agent,
-    runtimeSessionName: params.meta.runtimeSessionName,
-    ...(nextIdentity ? { identity: nextIdentity } : {}),
-    mode: params.meta.mode,
-    ...(params.meta.runtimeOptions ? { runtimeOptions: params.meta.runtimeOptions } : {}),
-    ...(params.meta.cwd ? { cwd: params.meta.cwd } : {}),
-    lastActivityAt: now,
-    state: params.meta.state,
-    ...(params.meta.lastError ? { lastError: params.meta.lastError } : {}),
-  };
   if (!identityEquals(currentIdentity, nextIdentity)) {
     const currentAgentSessionId = currentIdentity?.agentSessionId ?? "<none>";
     const nextAgentSessionId = nextIdentity?.agentSessionId ?? "<none>";
@@ -126,7 +114,7 @@ export async function reconcileManagerRuntimeSessionIdentifiers(params: {
         `acpxRecordId ${currentAcpxRecordId} -> ${nextAcpxRecordId})`,
     );
   }
-  await params.writeSessionMeta({
+  const persisted = await params.writeSessionMeta({
     cfg: params.cfg,
     sessionKey: params.sessionKey,
     mutate: (current, entry) => {
@@ -142,6 +130,7 @@ export async function reconcileManagerRuntimeSessionIdentifiers(params: {
         agent: base.agent,
         runtimeSessionName: base.runtimeSessionName,
         ...(nextIdentity ? { identity: nextIdentity } : {}),
+        ...(base.routeLaw ? { routeLaw: base.routeLaw } : {}),
         mode: base.mode,
         ...(base.runtimeOptions ? { runtimeOptions: base.runtimeOptions } : {}),
         ...(base.cwd ? { cwd: base.cwd } : {}),
@@ -151,9 +140,16 @@ export async function reconcileManagerRuntimeSessionIdentifiers(params: {
       };
     },
   });
+  if (!persisted?.acp) {
+    return {
+      handle: nextHandle,
+      meta: params.meta,
+      runtimeStatus,
+    };
+  }
   return {
     handle: nextHandle,
-    meta: nextMeta,
+    meta: persisted.acp,
     runtimeStatus,
   };
 }

@@ -1,5 +1,8 @@
+import COUSIN_TICKET_SCHEMA from "../../../schemas/cousin-ticket.schema.json" with { type: "json" };
+import ROUTE_DECISION_SCHEMA from "../../../schemas/route-decision.schema.json" with { type: "json" };
 import type { OpenClawConfig } from "../../config/config.js";
 import { logVerbose } from "../../globals.js";
+import { validateJsonSchemaValue } from "../../plugins/schema-validator.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import { isAcpSessionKey } from "../../sessions/session-key-utils.js";
 import {
@@ -35,6 +38,7 @@ import {
   type AcpSessionManagerDeps,
   type AcpSessionResolution,
   type AcpSessionRuntimeOptions,
+  type SessionAcpRouteLawEnvelope,
   type AcpSessionStatus,
   type AcpStartupIdentityReconcileResult,
   type ActiveTurnState,
@@ -68,6 +72,134 @@ import {
   validateRuntimeOptionPatch,
 } from "./runtime-options.js";
 import { SessionActorQueue } from "./session-actor-queue.js";
+
+type M12RouteDecisionArtifact = {
+  decisionId: string;
+  route: {
+    classification: SessionAcpRouteLawEnvelope["classification"];
+  };
+  decision: {
+    verdict: SessionAcpRouteLawEnvelope["verdict"];
+    cousinTicketRequired: boolean;
+    rejectReasons: string[];
+  };
+  cousinTicket?: {
+    ticketId: string;
+    ticketDigest: string;
+  };
+  trace: Pick<
+    SessionAcpRouteLawEnvelope,
+    | "traceNamespace"
+    | "receiptNamespace"
+    | "routeLawNamespace"
+    | "approvalNamespace"
+    | "correlationId"
+  >;
+};
+
+type M12CousinTicketArtifact = {
+  ticketId: string;
+  decisionId: string;
+  receipts: {
+    ticketDigest: string;
+  };
+};
+
+const ROUTE_DECISION_SCHEMA_CACHE_KEY = "acp-control-plane:route-decision";
+const COUSIN_TICKET_SCHEMA_CACHE_KEY = "acp-control-plane:cousin-ticket";
+
+function formatSchemaValidationErrors(errors: { text: string }[]): string {
+  return errors.map((error) => error.text).join("; ");
+}
+
+function validateRouteLawArtifactOrThrow(params: {
+  label: string;
+  cacheKey: string;
+  schema: Record<string, unknown>;
+  value: unknown;
+}): void {
+  const result = validateJsonSchemaValue({
+    schema: params.schema,
+    cacheKey: params.cacheKey,
+    value: params.value,
+  });
+  if (result.ok) {
+    return;
+  }
+  throw new AcpRuntimeError(
+    "ACP_SESSION_INIT_FAILED",
+    `ACP ${params.label} failed frozen M12 schema validation: ${formatSchemaValidationErrors(result.errors)}`,
+  );
+}
+
+function resolveRouteLawEnvelopeFromBundle(
+  bundle: AcpInitializeSessionInput["routeLawBundle"],
+): SessionAcpRouteLawEnvelope | undefined {
+  if (!bundle) {
+    return undefined;
+  }
+
+  validateRouteLawArtifactOrThrow({
+    label: "route decision",
+    cacheKey: ROUTE_DECISION_SCHEMA_CACHE_KEY,
+    schema: ROUTE_DECISION_SCHEMA as Record<string, unknown>,
+    value: bundle.routeDecision,
+  });
+  if (bundle.cousinTicket !== undefined) {
+    validateRouteLawArtifactOrThrow({
+      label: "cousin ticket",
+      cacheKey: COUSIN_TICKET_SCHEMA_CACHE_KEY,
+      schema: COUSIN_TICKET_SCHEMA as Record<string, unknown>,
+      value: bundle.cousinTicket,
+    });
+  }
+
+  const routeDecision = bundle.routeDecision as M12RouteDecisionArtifact;
+  if (routeDecision.decision.verdict === "reject") {
+    const rejectSummary = routeDecision.decision.rejectReasons.join(", ");
+    throw new AcpRuntimeError(
+      "ACP_SESSION_INIT_FAILED",
+      `ACP session rejected by frozen M12 route decision ${routeDecision.decisionId}: ${rejectSummary}`,
+    );
+  }
+  if (routeDecision.decision.cousinTicketRequired && bundle.cousinTicket === undefined) {
+    throw new AcpRuntimeError(
+      "ACP_SESSION_INIT_FAILED",
+      `ACP session rejected by frozen M12 route decision ${routeDecision.decisionId}: reject-missing-cousin-ticket`,
+    );
+  }
+  if (routeDecision.decision.cousinTicketRequired && bundle.cousinTicket !== undefined) {
+    const cousinTicket = bundle.cousinTicket as M12CousinTicketArtifact;
+    const ticketBindingMismatched =
+      cousinTicket.decisionId !== routeDecision.decisionId ||
+      cousinTicket.ticketId !== routeDecision.cousinTicket?.ticketId ||
+      cousinTicket.receipts.ticketDigest !== routeDecision.cousinTicket?.ticketDigest;
+    if (ticketBindingMismatched) {
+      throw new AcpRuntimeError(
+        "ACP_SESSION_INIT_FAILED",
+        `ACP session rejected by frozen M12 route decision ${routeDecision.decisionId}: reject-cousin-ticket-binding-mismatch`,
+      );
+    }
+  }
+
+  return {
+    decisionId: routeDecision.decisionId,
+    classification: routeDecision.route.classification,
+    verdict: routeDecision.decision.verdict,
+    rejectReasons: [...routeDecision.decision.rejectReasons],
+    traceNamespace: routeDecision.trace.traceNamespace,
+    receiptNamespace: routeDecision.trace.receiptNamespace,
+    routeLawNamespace: routeDecision.trace.routeLawNamespace,
+    approvalNamespace: routeDecision.trace.approvalNamespace,
+    correlationId: routeDecision.trace.correlationId,
+    ...(routeDecision.decision.cousinTicketRequired && routeDecision.cousinTicket
+      ? {
+          ticketId: routeDecision.cousinTicket.ticketId,
+          ticketDigest: routeDecision.cousinTicket.ticketDigest,
+        }
+      : {}),
+  };
+}
 
 export class AcpSessionManager {
   private readonly actorQueue = new SessionActorQueue();
@@ -149,6 +281,7 @@ export class AcpSessionManager {
     let checked = 0;
     let resolved = 0;
     let failed = 0;
+    const processedSessionKeys = new Set<string>();
 
     let acpSessions: Awaited<ReturnType<AcpSessionManagerDeps["listAcpSessions"]>>;
     try {
@@ -164,6 +297,11 @@ export class AcpSessionManager {
       if (!session.acp || !session.sessionKey) {
         continue;
       }
+      const dedupeKey = normalizeActorKey(session.sessionKey);
+      if (processedSessionKeys.has(dedupeKey)) {
+        continue;
+      }
+      processedSessionKeys.add(dedupeKey);
       const currentIdentity = resolveSessionIdentityFromMeta(session.acp);
       if (!isSessionIdentityPending(currentIdentity)) {
         continue;
@@ -223,6 +361,7 @@ export class AcpSessionManager {
     const agent = normalizeAgentId(input.agent);
     await this.evictIdleRuntimeHandles({ cfg: input.cfg });
     return await this.withSessionActor(sessionKey, async () => {
+      const routeLaw = resolveRouteLawEnvelopeFromBundle(input.routeLawBundle);
       const backend = this.deps.requireRuntimeBackend(input.backendId || input.cfg.acp?.backend);
       const runtime = backend.runtime;
       const initialRuntimeOptions = validateRuntimeOptionPatch({ cwd: input.cwd });
@@ -269,6 +408,7 @@ export class AcpSessionManager {
         agent,
         runtimeSessionName: handle.runtimeSessionName,
         identity: initializedIdentity,
+        ...(routeLaw ? { routeLaw } : {}),
         mode: input.mode,
         ...(Object.keys(effectiveRuntimeOptions).length > 0
           ? { runtimeOptions: effectiveRuntimeOptions }
@@ -977,6 +1117,7 @@ export class AcpSessionManager {
       agent,
       runtimeSessionName: ensured.runtimeSessionName,
       ...(nextIdentity ? { identity: nextIdentity } : {}),
+      ...(previousMeta.routeLaw ? { routeLaw: previousMeta.routeLaw } : {}),
       mode: params.meta.mode,
       ...(Object.keys(nextRuntimeOptions).length > 0 ? { runtimeOptions: nextRuntimeOptions } : {}),
       ...(effectiveCwd ? { cwd: effectiveCwd } : {}),
@@ -1043,6 +1184,7 @@ export class AcpSessionManager {
           agent: base.agent,
           runtimeSessionName: base.runtimeSessionName,
           ...(base.identity ? { identity: base.identity } : {}),
+          ...(base.routeLaw ? { routeLaw: base.routeLaw } : {}),
           mode: base.mode,
           runtimeOptions: hasOptions ? normalized : undefined,
           cwd: normalized.cwd,
@@ -1189,6 +1331,7 @@ export class AcpSessionManager {
           agent: base.agent,
           runtimeSessionName: base.runtimeSessionName,
           ...(base.identity ? { identity: base.identity } : {}),
+          ...(base.routeLaw ? { routeLaw: base.routeLaw } : {}),
           mode: base.mode,
           ...(base.runtimeOptions ? { runtimeOptions: base.runtimeOptions } : {}),
           ...(base.cwd ? { cwd: base.cwd } : {}),

@@ -35,11 +35,26 @@ export type SessionAcpIdentity = {
   lastUpdatedAt: number;
 };
 
+export type SessionAcpRouteLawEnvelope = {
+  decisionId: string;
+  classification: "child" | "sibling" | "escalation" | "cousin" | "illegal";
+  verdict: "allow" | "reject";
+  rejectReasons: string[];
+  traceNamespace: string;
+  receiptNamespace: string;
+  routeLawNamespace: string;
+  approvalNamespace: string;
+  correlationId: string;
+  ticketId?: string;
+  ticketDigest?: string;
+};
+
 export type SessionAcpMeta = {
   backend: string;
   agent: string;
   runtimeSessionName: string;
   identity?: SessionAcpIdentity;
+  routeLaw?: SessionAcpRouteLawEnvelope;
   mode: "persistent" | "oneshot";
   runtimeOptions?: AcpSessionRuntimeOptions;
   cwd?: string;

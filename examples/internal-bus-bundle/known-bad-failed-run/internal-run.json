@@ -1,0 +1,22 @@
+{
+  "kind": "internal.run",
+  "schemaVersion": 1,
+  "runId": "run:internal:bad-failed",
+  "sessionKey": "agent:codex:acp:session-registry-1",
+  "request": {
+    "requestId": "request:internal:bad-failed",
+    "mode": "prompt",
+    "text": "Fail this run without a full error envelope.",
+    "createdAt": "2026-03-16T03:50:00Z"
+  },
+  "runtime": {
+    "backend": "acpx",
+    "agent": "codex",
+    "sessionMode": "persistent",
+    "runtimeSessionName": "agent:codex:acp:session-registry-1:persistent:runtime"
+  },
+  "result": {
+    "status": "failed",
+    "errorMessage": "status says failed but errorCode is missing"
+  }
+}

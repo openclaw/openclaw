@@ -1,0 +1,259 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://openclaw.ai/schemas/internal-run.schema.json",
+  "title": "OpenClaw Internal Run Envelope",
+  "description": "Frozen M13 internal run-orchestrator contract for ACP-shaped turn request execution and status outcomes.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["kind", "schemaVersion", "runId", "sessionKey", "request", "runtime", "result"],
+  "properties": {
+    "kind": {
+      "const": "internal.run"
+    },
+    "schemaVersion": {
+      "const": 1
+    },
+    "runId": {
+      "$ref": "#/definitions/namespacedId"
+    },
+    "sessionKey": {
+      "$ref": "#/definitions/namespacedId"
+    },
+    "request": {
+      "$ref": "#/definitions/requestEnvelope"
+    },
+    "runtime": {
+      "$ref": "#/definitions/runtimeEnvelope"
+    },
+    "result": {
+      "$ref": "#/definitions/resultEnvelope"
+    },
+    "identitySnapshot": {
+      "$ref": "#/definitions/identityEnvelope"
+    },
+    "routeLawSnapshot": {
+      "$ref": "#/definitions/routeLawEnvelope"
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "result": {
+            "properties": {
+              "status": {
+                "const": "failed"
+              }
+            },
+            "required": ["status"]
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "result": {
+            "required": ["errorCode", "errorMessage"]
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "result": {
+            "properties": {
+              "status": {
+                "const": "completed"
+              }
+            },
+            "required": ["status"]
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "result": {
+            "required": ["completedAt"]
+          }
+        }
+      }
+    }
+  ],
+  "definitions": {
+    "namespacedId": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9._:/-]{2,255}$"
+    },
+    "timestamp": {
+      "type": "string",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$"
+    },
+    "requestEnvelope": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["requestId", "mode", "text", "createdAt"],
+      "properties": {
+        "requestId": {
+          "$ref": "#/definitions/namespacedId"
+        },
+        "mode": {
+          "type": "string",
+          "enum": ["prompt", "agent"]
+        },
+        "text": {
+          "type": "string",
+          "minLength": 1
+        },
+        "createdAt": {
+          "$ref": "#/definitions/timestamp"
+        },
+        "attachments": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["mediaType", "data"],
+            "properties": {
+              "mediaType": {
+                "type": "string",
+                "minLength": 1
+              },
+              "data": {
+                "type": "string",
+                "minLength": 1
+              }
+            }
+          }
+        }
+      }
+    },
+    "runtimeEnvelope": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["backend", "agent", "sessionMode", "runtimeSessionName"],
+      "properties": {
+        "backend": {
+          "$ref": "#/definitions/namespacedId"
+        },
+        "agent": {
+          "$ref": "#/definitions/namespacedId"
+        },
+        "sessionMode": {
+          "type": "string",
+          "enum": ["persistent", "oneshot"]
+        },
+        "runtimeSessionName": {
+          "$ref": "#/definitions/namespacedId"
+        }
+      }
+    },
+    "resultEnvelope": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status"],
+      "properties": {
+        "status": {
+          "type": "string",
+          "enum": ["accepted", "completed", "failed"]
+        },
+        "completedAt": {
+          "$ref": "#/definitions/timestamp"
+        },
+        "errorCode": {
+          "type": "string",
+          "minLength": 1
+        },
+        "errorMessage": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "identityEnvelope": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["state", "source", "lastUpdatedAt"],
+      "properties": {
+        "state": {
+          "type": "string",
+          "enum": ["pending", "resolved"]
+        },
+        "acpxRecordId": {
+          "$ref": "#/definitions/namespacedId"
+        },
+        "acpxSessionId": {
+          "$ref": "#/definitions/namespacedId"
+        },
+        "agentSessionId": {
+          "$ref": "#/definitions/namespacedId"
+        },
+        "source": {
+          "type": "string",
+          "enum": ["ensure", "status", "event"]
+        },
+        "lastUpdatedAt": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "routeLawEnvelope": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "decisionId",
+        "classification",
+        "verdict",
+        "rejectReasons",
+        "traceNamespace",
+        "receiptNamespace",
+        "routeLawNamespace",
+        "approvalNamespace",
+        "correlationId"
+      ],
+      "properties": {
+        "decisionId": {
+          "$ref": "#/definitions/namespacedId"
+        },
+        "classification": {
+          "type": "string",
+          "enum": ["child", "sibling", "escalation", "cousin", "illegal"]
+        },
+        "verdict": {
+          "type": "string",
+          "enum": ["allow", "reject"]
+        },
+        "rejectReasons": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "uniqueItems": true
+        },
+        "traceNamespace": {
+          "$ref": "#/definitions/namespacedId"
+        },
+        "receiptNamespace": {
+          "$ref": "#/definitions/namespacedId"
+        },
+        "routeLawNamespace": {
+          "$ref": "#/definitions/namespacedId"
+        },
+        "approvalNamespace": {
+          "$ref": "#/definitions/namespacedId"
+        },
+        "correlationId": {
+          "$ref": "#/definitions/namespacedId"
+        },
+        "ticketId": {
+          "$ref": "#/definitions/namespacedId"
+        },
+        "ticketDigest": {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        }
+      }
+    }
+  }
+}

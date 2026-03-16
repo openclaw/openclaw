@@ -1,0 +1,49 @@
+{
+  "kind": "internal.run",
+  "schemaVersion": 1,
+  "runId": "run:internal:0001",
+  "sessionKey": "agent:codex:acp:session-registry-1",
+  "request": {
+    "requestId": "request:internal:0001",
+    "mode": "prompt",
+    "text": "Summarize startup-reconcile checkpoint state.",
+    "createdAt": "2026-03-16T03:45:00Z",
+    "attachments": [
+      {
+        "mediaType": "text/plain",
+        "data": "checkpoint artifact context"
+      }
+    ]
+  },
+  "runtime": {
+    "backend": "acpx",
+    "agent": "codex",
+    "sessionMode": "persistent",
+    "runtimeSessionName": "agent:codex:acp:session-registry-1:persistent:runtime"
+  },
+  "result": {
+    "status": "completed",
+    "completedAt": "2026-03-16T03:45:03Z"
+  },
+  "identitySnapshot": {
+    "state": "resolved",
+    "acpxRecordId": "acpx:record:session-registry-1",
+    "acpxSessionId": "acpx:session:session-registry-1",
+    "agentSessionId": "agent:session:session-registry-1",
+    "source": "status",
+    "lastUpdatedAt": 1760000003000
+  },
+  "routeLawSnapshot": {
+    "decisionId": "route:decision:session-registry-1",
+    "classification": "cousin",
+    "verdict": "allow",
+    "rejectReasons": [],
+    "traceNamespace": "trace:internal:acp",
+    "receiptNamespace": "receipt:internal:acp",
+    "routeLawNamespace": "route-law:internal:acp",
+    "approvalNamespace": "approval:internal:acp",
+    "correlationId": "corr:session-registry-1",
+    "ticketId": "ticket:session-registry-1",
+    "ticketDigest": "sha256:2222222222222222222222222222222222222222222222222222222222222222"
+  }
+}

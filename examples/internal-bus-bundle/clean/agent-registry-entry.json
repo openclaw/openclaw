@@ -1,0 +1,42 @@
+{
+  "kind": "internal.agent-registry-entry",
+  "schemaVersion": 1,
+  "sessionKey": "agent:codex:acp:session-registry-1",
+  "agentId": "codex",
+  "backend": "acpx",
+  "runtimeSessionName": "agent:codex:acp:session-registry-1:persistent:runtime",
+  "mode": "persistent",
+  "state": "idle",
+  "lastActivityAt": 1760000000000,
+  "identity": {
+    "state": "resolved",
+    "acpxRecordId": "acpx:record:session-registry-1",
+    "acpxSessionId": "acpx:session:session-registry-1",
+    "agentSessionId": "agent:session:session-registry-1",
+    "source": "status",
+    "lastUpdatedAt": 1760000000000
+  },
+  "routeLaw": {
+    "decisionId": "route:decision:session-registry-1",
+    "classification": "cousin",
+    "verdict": "allow",
+    "rejectReasons": [],
+    "traceNamespace": "trace:internal:acp",
+    "receiptNamespace": "receipt:internal:acp",
+    "routeLawNamespace": "route-law:internal:acp",
+    "approvalNamespace": "approval:internal:acp",
+    "correlationId": "corr:session-registry-1",
+    "ticketId": "ticket:session-registry-1",
+    "ticketDigest": "sha256:1111111111111111111111111111111111111111111111111111111111111111"
+  },
+  "runtimeOptions": {
+    "runtimeMode": "plan",
+    "model": "openai/gpt-5",
+    "cwd": "/workspace/openclaw",
+    "permissionProfile": "strict",
+    "timeoutSeconds": 120,
+    "backendExtras": {
+      "trace_level": "verbose"
+    }
+  }
+}

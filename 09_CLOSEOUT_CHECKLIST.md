@@ -45,3 +45,59 @@
   - the bounded M11 proof test passes
   - deterministic reject behavior is proven
   - handoff, daily log, dependency manifest, and closeout checklist now exist in-repo
+
+## Mission M13
+
+### Final classification (M13)
+
+- `VERIFIED`
+
+### Fully proven (M13)
+
+- Mission-local M13 spec exists:
+  - `ops/missions/mission-013/01_MISSION_SPEC.md`
+- Required M13 schemas exist:
+  - `schemas/agent-registry-entry.schema.json`
+  - `schemas/internal-run.schema.json`
+- Required M13 internal-bus example bundle exists:
+  - `examples/internal-bus-bundle/clean/agent-registry-entry.json`
+  - `examples/internal-bus-bundle/clean/internal-run.json`
+  - `examples/internal-bus-bundle/known-bad-registry-state/agent-registry-entry.json`
+  - `examples/internal-bus-bundle/known-bad-failed-run/internal-run.json`
+- Dedicated M13 proof exists:
+  - `test/m13-bus-proof.test.ts`
+- M13 architecture doc pack exists:
+  - `docs/architecture/internal-agent-registry.md`
+  - `docs/architecture/run-orchestrator.md`
+  - `docs/architecture/internal-session-model.md`
+  - `docs/architecture/internal-bus-api.md`
+- M13 checkpoint artifacts exist:
+  - `ops/missions/mission-013/m13-manager-seam-recovery-checkpoint.md`
+  - `ops/missions/mission-013/m13-startup-reconcile-seam-checkpoint.md`
+- Validation receipts are recorded in mission-local evidence:
+  - schema/example/proof receipts in `ops/missions/mission-013/01_MISSION_SPEC.md`
+  - docs lint receipt in `ops/missions/mission-013/01_MISSION_SPEC.md`
+
+### Non-blocking deferred residuals
+
+- Optional startup-reconcile combo residual remains deferred by explicit choice:
+  - combined mixed batch with both read-throw and write-degradation entries
+  - documented as non-material in
+    `ops/missions/mission-013/m13-startup-reconcile-seam-checkpoint.md`
+
+### Actual blockers to honest closeout
+
+- None.
+
+### What would still be needed for stricter closure, if desired
+
+- Add the optional deferred combo residual proof lane only if the team wants
+  stricter than current checkpoint criteria.
+
+### Closure decision (M13)
+
+- `YES`
+- Decision basis:
+  - required M13 deliverables now exist and are evidenced by file path
+  - mission-local status truth is explicit in `01_MISSION_SPEC.md`
+  - deferred residual is explicitly documented as non-blocking

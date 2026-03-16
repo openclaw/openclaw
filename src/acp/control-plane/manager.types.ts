@@ -2,6 +2,7 @@ import type { OpenClawConfig } from "../../config/config.js";
 import type {
   SessionAcpIdentity,
   AcpSessionRuntimeOptions,
+  SessionAcpRouteLawEnvelope,
   SessionAcpMeta,
   SessionEntry,
 } from "../../config/sessions/types.js";
@@ -46,6 +47,10 @@ export type AcpInitializeSessionInput = {
   resumeSessionId?: string;
   cwd?: string;
   backendId?: string;
+  routeLawBundle?: {
+    routeDecision: unknown;
+    cousinTicket?: unknown;
+  };
 };
 
 export type AcpTurnAttachment = {
@@ -145,4 +150,4 @@ export const DEFAULT_DEPS: AcpSessionManagerDeps = {
   requireRuntimeBackend: requireAcpRuntimeBackend,
 };
 
-export type { AcpSessionRuntimeOptions, SessionAcpMeta, SessionEntry };
+export type { AcpSessionRuntimeOptions, SessionAcpMeta, SessionAcpRouteLawEnvelope, SessionEntry };

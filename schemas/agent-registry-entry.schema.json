@@ -1,0 +1,191 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://openclaw.ai/schemas/agent-registry-entry.schema.json",
+  "title": "OpenClaw Internal Agent Registry Entry",
+  "description": "Frozen M13 internal registry contract for ACP-shaped session identity and route-law envelope state.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "kind",
+    "schemaVersion",
+    "sessionKey",
+    "agentId",
+    "backend",
+    "runtimeSessionName",
+    "mode",
+    "state",
+    "lastActivityAt"
+  ],
+  "properties": {
+    "kind": {
+      "const": "internal.agent-registry-entry"
+    },
+    "schemaVersion": {
+      "const": 1
+    },
+    "sessionKey": {
+      "$ref": "#/definitions/namespacedId"
+    },
+    "agentId": {
+      "$ref": "#/definitions/namespacedId"
+    },
+    "backend": {
+      "$ref": "#/definitions/namespacedId"
+    },
+    "runtimeSessionName": {
+      "$ref": "#/definitions/namespacedId"
+    },
+    "mode": {
+      "type": "string",
+      "enum": ["persistent", "oneshot"]
+    },
+    "state": {
+      "type": "string",
+      "enum": ["idle", "running", "error"]
+    },
+    "lastActivityAt": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "lastError": {
+      "type": "string",
+      "minLength": 1
+    },
+    "identity": {
+      "$ref": "#/definitions/identityEnvelope"
+    },
+    "routeLaw": {
+      "$ref": "#/definitions/routeLawEnvelope"
+    },
+    "runtimeOptions": {
+      "$ref": "#/definitions/runtimeOptionsEnvelope"
+    }
+  },
+  "definitions": {
+    "namespacedId": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9._:/-]{2,255}$"
+    },
+    "sha256Digest": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "identityEnvelope": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["state", "source", "lastUpdatedAt"],
+      "properties": {
+        "state": {
+          "type": "string",
+          "enum": ["pending", "resolved"]
+        },
+        "acpxRecordId": {
+          "$ref": "#/definitions/namespacedId"
+        },
+        "acpxSessionId": {
+          "$ref": "#/definitions/namespacedId"
+        },
+        "agentSessionId": {
+          "$ref": "#/definitions/namespacedId"
+        },
+        "source": {
+          "type": "string",
+          "enum": ["ensure", "status", "event"]
+        },
+        "lastUpdatedAt": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "routeLawEnvelope": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "decisionId",
+        "classification",
+        "verdict",
+        "rejectReasons",
+        "traceNamespace",
+        "receiptNamespace",
+        "routeLawNamespace",
+        "approvalNamespace",
+        "correlationId"
+      ],
+      "properties": {
+        "decisionId": {
+          "$ref": "#/definitions/namespacedId"
+        },
+        "classification": {
+          "type": "string",
+          "enum": ["child", "sibling", "escalation", "cousin", "illegal"]
+        },
+        "verdict": {
+          "type": "string",
+          "enum": ["allow", "reject"]
+        },
+        "rejectReasons": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "uniqueItems": true
+        },
+        "traceNamespace": {
+          "$ref": "#/definitions/namespacedId"
+        },
+        "receiptNamespace": {
+          "$ref": "#/definitions/namespacedId"
+        },
+        "routeLawNamespace": {
+          "$ref": "#/definitions/namespacedId"
+        },
+        "approvalNamespace": {
+          "$ref": "#/definitions/namespacedId"
+        },
+        "correlationId": {
+          "$ref": "#/definitions/namespacedId"
+        },
+        "ticketId": {
+          "$ref": "#/definitions/namespacedId"
+        },
+        "ticketDigest": {
+          "$ref": "#/definitions/sha256Digest"
+        }
+      }
+    },
+    "runtimeOptionsEnvelope": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "runtimeMode": {
+          "type": "string",
+          "minLength": 1
+        },
+        "model": {
+          "type": "string",
+          "minLength": 1
+        },
+        "cwd": {
+          "type": "string",
+          "minLength": 1
+        },
+        "permissionProfile": {
+          "type": "string",
+          "minLength": 1
+        },
+        "timeoutSeconds": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "backendExtras": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        }
+      }
+    }
+  }
+}
