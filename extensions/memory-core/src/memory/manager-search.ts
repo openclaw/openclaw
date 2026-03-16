@@ -147,15 +147,18 @@ export async function searchVector(params: {
       source: SearchSource;
       dist: number;
     }>;
-    return rows.map((row) => ({
-      id: row.id,
-      path: row.path,
-      startLine: row.start_line,
-      endLine: row.end_line,
-      score: 1 - row.dist,
-      snippet: truncateUtf16Safe(row.text, params.snippetMaxChars),
-      source: row.source,
-    }));
+    return rows.map((row) => {
+      const { snippet, offsetLines } = extractRelevantSnippet(row.text, params.queryText, params.snippetMaxChars);
+      return {
+        id: row.id,
+        path: row.path,
+        startLine: row.start_line + offsetLines,
+        endLine: row.end_line,
+        score: 1 - row.dist,
+        snippet,
+        source: row.source,
+      };
+    });
   }
 
   const candidates = listChunks({
@@ -172,15 +175,22 @@ export async function searchVector(params: {
   return scored
     .toSorted((a, b) => b.score - a.score)
     .slice(0, params.limit)
-    .map((entry) => ({
-      id: entry.chunk.id,
-      path: entry.chunk.path,
-      startLine: entry.chunk.startLine,
-      endLine: entry.chunk.endLine,
-      score: entry.score,
-      snippet: truncateUtf16Safe(entry.chunk.text, params.snippetMaxChars),
-      source: entry.chunk.source,
-    }));
+    .map((entry) => {
+      const { snippet, offsetLines } = extractRelevantSnippet(
+        entry.chunk.text,
+        params.queryText,
+        params.snippetMaxChars,
+      );
+      return {
+        id: entry.chunk.id,
+        path: entry.chunk.path,
+        startLine: entry.chunk.startLine + offsetLines,
+        endLine: entry.chunk.endLine,
+        score: entry.score,
+        snippet,
+        source: entry.chunk.source,
+      };
+    });
 }
 
 export function listChunks(params: {
@@ -294,14 +304,15 @@ export async function searchKeyword(params: {
           ftsScore: textScore,
         })
       : textScore;
+    const { snippet, offsetLines } = extractRelevantSnippet(row.text, params.query, params.snippetMaxChars);
     return {
       id: row.id,
       path: row.path,
-      startLine: row.start_line,
+      startLine: row.start_line + offsetLines,
       endLine: row.end_line,
       score,
       textScore,
-      snippet: truncateUtf16Safe(row.text, params.snippetMaxChars),
+      snippet,
       source: row.source,
     };
   });
