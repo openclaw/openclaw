@@ -64,6 +64,7 @@ class InvokeCommandRegistryTest {
       OpenClawMotionCommand.Activity.rawValue,
       OpenClawMotionCommand.Pedometer.rawValue,
       OpenClawSmsCommand.Send.rawValue,
+      OpenClawSmsCommand.Search.rawValue,
     )
 
   private val debugCommands = setOf("debug.logs", "debug.ed25519")

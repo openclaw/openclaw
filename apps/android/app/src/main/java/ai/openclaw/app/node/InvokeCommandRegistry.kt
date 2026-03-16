@@ -190,6 +190,10 @@ object InvokeCommandRegistry {
         availability = InvokeCommandAvailability.SmsAvailable,
       ),
       InvokeCommandSpec(
+        name = OpenClawSmsCommand.Search.rawValue,
+        availability = InvokeCommandAvailability.SmsAvailable,
+      ),
+      InvokeCommandSpec(
         name = OpenClawCallLogCommand.Search.rawValue,
       ),
       InvokeCommandSpec(
