@@ -134,6 +134,8 @@ const nodeAcpSessions = new Map<string, AcpNodeSessionRecord>();
 const DEFAULT_NODE_HOST_ACP_BACKEND = "acpx";
 const DEFAULT_ACTIVE_CLOSE_QUIESCENCE_TIMEOUT_MS = 30_000;
 let activeCloseQuiescenceTimeoutMs = DEFAULT_ACTIVE_CLOSE_QUIESCENCE_TIMEOUT_MS;
+const DEFAULT_ACTIVE_CANCEL_ACK_TIMEOUT_MS = 30_000;
+let activeCancelAcknowledgementTimeoutMs = DEFAULT_ACTIVE_CANCEL_ACK_TIMEOUT_MS;
 
 let acpRuntimeServicesInit: Promise<void> | null = null;
 let acpRuntimeServicesHandle: PluginServicesHandle | null = null;
@@ -1058,10 +1060,24 @@ async function handleTurnCancel(params: AcpTurnCancelParams): Promise<AcpInvokeC
   activeTurn.cancelReason = params.reason?.trim() || activeTurn.cancelReason;
   session.updatedAt = Date.now();
   try {
-    await session.runtime.cancel({
-      handle: session.handle,
-      ...(params.reason ? { reason: params.reason } : {}),
-    });
+    let cancelTimer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      await Promise.race([
+        session.runtime.cancel({
+          handle: session.handle,
+          ...(params.reason ? { reason: params.reason } : {}),
+        }),
+        new Promise<never>((_, reject) => {
+          cancelTimer = setTimeout(() => {
+            reject(new Error(`ACP turn cancel timed out waiting for cancel acknowledgement`));
+          }, activeCancelAcknowledgementTimeoutMs);
+        }),
+      ]);
+    } finally {
+      if (cancelTimer) {
+        clearTimeout(cancelTimer);
+      }
+    }
   } catch (error) {
     await Promise.resolve();
     if (
@@ -1085,7 +1101,12 @@ async function handleTurnCancel(params: AcpTurnCancelParams): Promise<AcpInvokeC
     session.state = "running";
     activeTurn.cancelRequested = false;
     activeTurn.cancelReason = undefined;
-    throw error;
+    return {
+      handled: true,
+      ok: false,
+      code: "UNAVAILABLE",
+      message: `ACP turn cancel failed for ${params.sessionKey}: ${resolveFailureMessage(error)}`,
+    };
   }
   return {
     handled: true,
@@ -1184,9 +1205,13 @@ export const __testing = {
   resetNodeAcpSessionsForTests() {
     nodeAcpSessions.clear();
     activeCloseQuiescenceTimeoutMs = DEFAULT_ACTIVE_CLOSE_QUIESCENCE_TIMEOUT_MS;
+    activeCancelAcknowledgementTimeoutMs = DEFAULT_ACTIVE_CANCEL_ACK_TIMEOUT_MS;
   },
   setActiveCloseQuiescenceTimeoutMsForTests(timeoutMs: number) {
     activeCloseQuiescenceTimeoutMs = timeoutMs;
+  },
+  setActiveCancelAcknowledgementTimeoutMsForTests(timeoutMs: number) {
+    activeCancelAcknowledgementTimeoutMs = timeoutMs;
   },
   async resetNodeAcpRuntimeBootstrapForTests() {
     const handle = acpRuntimeServicesHandle;

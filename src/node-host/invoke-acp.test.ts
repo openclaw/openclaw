@@ -521,6 +521,124 @@ describe("handleAcpInvokeCommand", () => {
     });
   });
 
+  it("allows a healthy cancel acknowledgement to settle after more than 100ms", async () => {
+    __testing.setActiveCancelAcknowledgementTimeoutMsForTests(250);
+    const runtime = new FakeNodeHostRuntime();
+    runtime.cancelReleasesTurn = false;
+    runtime.cancelRejectAfterSettled = true;
+    registerAcpRuntimeBackend({
+      id: "acpx",
+      runtime,
+    });
+    const nodeEvents: NodeEventCall[] = [];
+
+    await handleAcpInvokeCommand(
+      buildFrame({
+        command: "acp.session.ensure",
+        payload: {
+          sessionKey: "agent:main:acp:test",
+          leaseId: "lease-1",
+          leaseEpoch: 1,
+          agent: "main",
+          mode: "persistent",
+        },
+      }),
+      buildDeps(async (event, payload) => {
+        nodeEvents.push({ event, payload });
+      }),
+    );
+
+    await handleAcpInvokeCommand(
+      buildFrame({
+        command: "acp.turn.start",
+        payload: {
+          sessionKey: "agent:main:acp:test",
+          runId: "run-slow-cancel",
+          leaseId: "lease-1",
+          leaseEpoch: 1,
+          requestId: "req-slow-cancel",
+          mode: "prompt",
+          text: "slow cancel",
+        },
+      }),
+      buildDeps(async (event, payload) => {
+        nodeEvents.push({ event, payload });
+      }),
+    );
+
+    await runtime.waitForTurnStart();
+
+    let cancelResolved = false;
+    const cancelPromise = handleAcpInvokeCommand(
+      buildFrame({
+        command: "acp.turn.cancel",
+        payload: {
+          sessionKey: "agent:main:acp:test",
+          runId: "run-slow-cancel",
+          leaseId: "lease-1",
+          leaseEpoch: 1,
+          reason: "manual-cancel",
+        },
+      }),
+      buildDeps(),
+    ).then((result) => {
+      cancelResolved = true;
+      return result;
+    });
+
+    await vi.waitFor(() => {
+      expect(runtime.cancelled).toHaveLength(1);
+    });
+    await new Promise((resolve) => setTimeout(resolve, 125));
+    expect(cancelResolved).toBe(false);
+
+    const inFlightStatus = await handleAcpInvokeCommand(
+      buildFrame({
+        command: "acp.session.status",
+        payload: {
+          sessionKey: "agent:main:acp:test",
+          leaseId: "lease-1",
+          leaseEpoch: 1,
+        },
+      }),
+      buildDeps(),
+    );
+    expect(inFlightStatus).toMatchObject({
+      handled: true,
+      ok: true,
+      payload: {
+        state: "cancelling",
+        nodeRuntimeSessionId: "acpx-session-1",
+        nodeWorkerRunId: expect.any(String),
+      },
+    });
+
+    runtime.releaseTurnToComplete("manual-cancel");
+    await runtime.waitForTurnFinish();
+
+    const cancelResult = await cancelPromise;
+    expect(cancelResult).toMatchObject({
+      handled: true,
+      ok: true,
+      payload: {
+        accepted: true,
+      },
+    });
+
+    await vi.waitFor(() => {
+      expect(nodeEvents.at(-1)).toMatchObject({
+        event: "acp.worker.terminal",
+        payload: {
+          runId: "run-slow-cancel",
+          terminal: {
+            kind: "cancelled",
+            stopReason: "manual-cancel",
+          },
+        },
+      });
+    });
+  });
+
   it("tolerates late cancel rejection after the turn already settled without leaving bogus running state", async () => {
     const runtime = new FakeNodeHostRuntime();
     runtime.cancelRejectAfterSettled = true;
@@ -621,6 +739,133 @@ describe("handleAcpInvokeCommand", () => {
     expect(
       (status as Extract<typeof status, { handled: true; ok: true }>).payload,
     ).not.toHaveProperty("nodeWorkerRunId");
+  });
+
+  it("fails closed when runtime cancel never resolves during acp.turn.cancel", async () => {
+    __testing.setActiveCancelAcknowledgementTimeoutMsForTests(50);
+    const runtime = new FakeNodeHostRuntime();
+    runtime.cancelReleasesTurn = false;
+    runtime.cancelNeverResolves = true;
+    registerAcpRuntimeBackend({
+      id: "acpx",
+      runtime,
+    });
+    const nodeEvents: NodeEventCall[] = [];
+
+    await handleAcpInvokeCommand(
+      buildFrame({
+        command: "acp.session.ensure",
+        payload: {
+          sessionKey: "agent:main:acp:test",
+          leaseId: "lease-1",
+          leaseEpoch: 1,
+          agent: "main",
+          mode: "persistent",
+        },
+      }),
+      buildDeps(async (event, payload) => {
+        nodeEvents.push({ event, payload });
+      }),
+    );
+
+    await handleAcpInvokeCommand(
+      buildFrame({
+        command: "acp.turn.start",
+        payload: {
+          sessionKey: "agent:main:acp:test",
+          runId: "run-cancel-stuck",
+          leaseId: "lease-1",
+          leaseEpoch: 1,
+          requestId: "req-cancel-stuck",
+          mode: "prompt",
+          text: "cancel hangs",
+        },
+      }),
+      buildDeps(async (event, payload) => {
+        nodeEvents.push({ event, payload });
+      }),
+    );
+
+    await runtime.waitForTurnStart();
+
+    const cancelResult = await handleAcpInvokeCommand(
+      buildFrame({
+        command: "acp.turn.cancel",
+        payload: {
+          sessionKey: "agent:main:acp:test",
+          runId: "run-cancel-stuck",
+          leaseId: "lease-1",
+          leaseEpoch: 1,
+          reason: "manual-cancel",
+        },
+      }),
+      buildDeps(),
+    );
+
+    expect(cancelResult).toMatchObject({
+      handled: true,
+      ok: false,
+      code: "UNAVAILABLE",
+      message: expect.stringContaining("timed out waiting for cancel acknowledgement"),
+    });
+
+    const status = await handleAcpInvokeCommand(
+      buildFrame({
+        command: "acp.session.status",
+        payload: {
+          sessionKey: "agent:main:acp:test",
+          leaseId: "lease-1",
+          leaseEpoch: 1,
+        },
+      }),
+      buildDeps(),
+    );
+    expect(status).toMatchObject({
+      handled: true,
+      ok: true,
+      payload: {
+        state: "running",
+        nodeRuntimeSessionId: "acpx-session-1",
+        nodeWorkerRunId: expect.any(String),
+      },
+    });
+
+    runtime.cancelNeverResolves = false;
+    runtime.cancelReleasesTurn = true;
+    const retryResult = await handleAcpInvokeCommand(
+      buildFrame({
+        command: "acp.turn.cancel",
+        payload: {
+          sessionKey: "agent:main:acp:test",
+          runId: "run-cancel-stuck",
+          leaseId: "lease-1",
+          leaseEpoch: 1,
+          reason: "manual-cancel",
+        },
+      }),
+      buildDeps(),
+    );
+
+    expect(retryResult).toMatchObject({
+      handled: true,
+      ok: true,
+      payload: {
+        accepted: true,
+      },
+    });
+    await runtime.waitForTurnFinish();
+    await vi.waitFor(() => {
+      expect(nodeEvents.at(-1)).toMatchObject({
+        event: "acp.worker.terminal",
+        payload: {
+          runId: "run-cancel-stuck",
+          terminal: {
+            kind: "cancelled",
+            stopReason: "manual-cancel",
+          },
+        },
+      });
+    });
   });
 
   it("does not rewrite a later runtime failure into cancelled just because cancel was requested", async () => {
