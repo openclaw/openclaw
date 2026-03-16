@@ -42,7 +42,10 @@ function normalizeHintText(value: string): string {
 export function isLikelyInterimCronMessage(value: string): boolean {
   const normalized = normalizeHintText(value);
   if (!normalized) {
-    return true;
+    // Empty text after payload filtering means the agent either returned
+    // NO_REPLY (deliberately silent) or produced no deliverable content.
+    // Do not treat this as an interim acknowledgement that needs a rerun.
+    return false;
   }
   const words = normalized.split(" ").filter(Boolean).length;
   return words <= 45 && INTERIM_CRON_HINTS.some((hint) => normalized.includes(hint));
@@ -166,7 +169,7 @@ export async function waitForDescendantSubagentSummary(params: {
   // CRON_SUBAGENT_FINAL_REPLY_GRACE_MS) to capture that synthesis.
   const gracePeriodDeadline = Math.min(Date.now() + CRON_SUBAGENT_FINAL_REPLY_GRACE_MS, deadline);
 
-  while (Date.now() < gracePeriodDeadline) {
+  const resolveUsableLatestReply = async () => {
     const latest = (await readLatestAssistantReply({ sessionKey: params.sessionKey }))?.trim();
     if (
       latest &&
@@ -175,16 +178,20 @@ export async function waitForDescendantSubagentSummary(params: {
     ) {
       return latest;
     }
+    return undefined;
+  };
+
+  while (Date.now() < gracePeriodDeadline) {
+    const latest = await resolveUsableLatestReply();
+    if (latest) {
+      return latest;
+    }
     await new Promise<void>((resolve) => setTimeout(resolve, CRON_SUBAGENT_GRACE_POLL_MS));
   }
 
   // Final read after grace period expires.
-  const latest = (await readLatestAssistantReply({ sessionKey: params.sessionKey }))?.trim();
-  if (
-    latest &&
-    latest.toUpperCase() !== SILENT_REPLY_TOKEN.toUpperCase() &&
-    (latest !== initialReply || !isLikelyInterimCronMessage(latest))
-  ) {
+  const latest = await resolveUsableLatestReply();
+  if (latest) {
     return latest;
   }
 

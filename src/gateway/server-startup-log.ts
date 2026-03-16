@@ -2,6 +2,10 @@ import chalk from "chalk";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { resolveConfiguredModelRef } from "../agents/model-selection.js";
 import type { loadConfig } from "../config/config.js";
+import {
+  formatRuntimeFingerprint,
+  resolveRuntimeFingerprint,
+} from "../infra/runtime-fingerprint.js";
 import { getResolvedLoggerSettings } from "../logging.js";
 import { collectEnabledInsecureOrDangerousFlags } from "../security/dangerous-config-flags.js";
 
@@ -29,6 +33,8 @@ export function logGatewayStartup(params: {
     params.bindHosts && params.bindHosts.length > 0 ? params.bindHosts : [params.bindHost];
   const listenEndpoints = hosts.map((host) => `${scheme}://${formatHost(host)}:${params.port}`);
   params.log.info(`listening on ${listenEndpoints.join(", ")} (PID ${process.pid})`);
+  const fingerprint = resolveRuntimeFingerprint({ moduleUrl: import.meta.url });
+  params.log.info(`runtime identity: ${formatRuntimeFingerprint(fingerprint)}`);
   params.log.info(`log file: ${getResolvedLoggerSettings().file}`);
   if (params.isNixMode) {
     params.log.info("gateway: running in Nix mode (config managed externally)");

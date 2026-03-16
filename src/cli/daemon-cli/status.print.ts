@@ -10,6 +10,7 @@ import {
   isSystemdUnavailableDetail,
   renderSystemdUnavailableHints,
 } from "../../daemon/systemd-hints.js";
+import { formatRuntimeFingerprint } from "../../infra/runtime-fingerprint.js";
 import { isWSLEnv } from "../../infra/wsl.js";
 import { getResolvedLoggerSettings } from "../../logging.js";
 import { defaultRuntime } from "../../runtime.js";
@@ -70,6 +71,13 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean })
     defaultRuntime.log(`${label("File logs:")} ${infoText(shortenHomePath(logFile))}`);
   } catch {
     // ignore missing config/log resolution
+  }
+  if (status.runtimeFingerprint) {
+    defaultRuntime.log(
+      `${label("Runtime ID:")} ${infoText(
+        formatRuntimeFingerprint(status.runtimeFingerprint, shortenHomePath),
+      )}`,
+    );
   }
   if (service.command?.programArguments?.length) {
     defaultRuntime.log(
@@ -181,6 +189,9 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean })
       defaultRuntime.log(`${label("RPC probe:")} ${okText("ok")}`);
     } else {
       defaultRuntime.error(`${label("RPC probe:")} ${errorText("failed")}`);
+      if (rpc.authWarning) {
+        defaultRuntime.error(`${label("RPC auth:")} ${warnText(rpc.authWarning)}`);
+      }
       if (rpc.url) {
         defaultRuntime.error(`${label("RPC target:")} ${rpc.url}`);
       }
@@ -191,6 +202,25 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean })
         defaultRuntime.error(`  ${errorText(line)}`);
       }
     }
+    spacer();
+  }
+
+  if (
+    status.health &&
+    status.health.staleGatewayPids.length > 0 &&
+    service.runtime?.status === "running" &&
+    typeof service.runtime.pid === "number"
+  ) {
+    defaultRuntime.error(
+      errorText(
+        `Gateway runtime PID does not own the listening port. Other gateway process(es) are listening: ${status.health.staleGatewayPids.join(", ")}`,
+      ),
+    );
+    defaultRuntime.error(
+      errorText(
+        `Fix: run ${formatCliCommand("openclaw gateway restart")} and re-check with ${formatCliCommand("openclaw gateway status --deep")}.`,
+      ),
+    );
     spacer();
   }
 

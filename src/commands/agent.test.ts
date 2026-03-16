@@ -218,16 +218,7 @@ async function expectDefaultThinkLevel(params: {
 function createTelegramOutboundPlugin() {
   const sendWithTelegram = async (
     ctx: {
-      deps?: {
-        sendTelegram?: (
-          to: string,
-          text: string,
-          opts: Record<string, unknown>,
-        ) => Promise<{
-          messageId: string;
-          chatId: string;
-        }>;
-      };
+      deps?: { [channelId: string]: unknown };
       to: string;
       text: string;
       accountId?: string | null;
@@ -235,7 +226,13 @@ function createTelegramOutboundPlugin() {
     },
     mediaUrl?: string,
   ) => {
-    const sendTelegram = ctx.deps?.sendTelegram;
+    const sendTelegram = ctx.deps?.["telegram"] as
+      | ((
+          to: string,
+          text: string,
+          opts: Record<string, unknown>,
+        ) => Promise<{ messageId: string; chatId: string }>)
+      | undefined;
     if (!sendTelegram) {
       throw new Error("sendTelegram dependency missing");
     }

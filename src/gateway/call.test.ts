@@ -14,8 +14,14 @@ let lastClientOptions: {
   password?: string;
   tlsFingerprint?: string;
   scopes?: string[];
+  deviceIdentity?: unknown;
   onHelloOk?: (hello: { features?: { methods?: string[] } }) => void | Promise<void>;
   onClose?: (code: number, reason: string) => void;
+} | null = null;
+let lastRequestOptions: {
+  method?: string;
+  params?: unknown;
+  opts?: { expectFinal?: boolean; timeoutMs?: number | null };
 } | null = null;
 type StartMode = "hello" | "close" | "silent";
 let startMode: StartMode = "hello";
@@ -44,7 +50,12 @@ vi.mock("./client.js", () => ({
     }) {
       lastClientOptions = opts;
     }
-    async request() {
+    async request(
+      method: string,
+      params: unknown,
+      opts?: { expectFinal?: boolean; timeoutMs?: number | null },
+    ) {
+      lastRequestOptions = { method, params, opts };
       return { ok: true };
     }
     start() {
@@ -71,6 +82,7 @@ function resetGatewayCallMocks() {
   pickPrimaryTailnetIPv4.mockClear();
   pickPrimaryLanIPv4.mockClear();
   lastClientOptions = null;
+  lastRequestOptions = null;
   startMode = "hello";
   closeCode = 1006;
   closeReason = "";
@@ -195,6 +207,19 @@ describe("callGateway url resolution", () => {
 
     expect(lastClientOptions?.url).toBe("wss://override.example/ws");
     expect(lastClientOptions?.token).toBe("explicit-token");
+  });
+
+  it("keeps device identity enabled for local loopback shared-token auth", async () => {
+    setLocalLoopbackGatewayConfig();
+
+    await callGateway({
+      method: "health",
+      token: "explicit-token",
+    });
+
+    expect(lastClientOptions?.url).toBe("ws://127.0.0.1:18789");
+    expect(lastClientOptions?.token).toBe("explicit-token");
+    expect(lastClientOptions?.deviceIdentity).toBeDefined();
   });
 
   it("uses OPENCLAW_GATEWAY_URL env override in remote mode when remote URL is missing", async () => {
@@ -560,6 +585,25 @@ describe("callGateway error details", () => {
     expect(errMessage).toContain("gateway closed (1006");
   });
 
+  it("forwards caller timeout to client requests", async () => {
+    setLocalLoopbackGatewayConfig();
+
+    await callGateway({ method: "health", timeoutMs: 45_000 });
+
+    expect(lastRequestOptions?.method).toBe("health");
+    expect(lastRequestOptions?.opts?.timeoutMs).toBe(45_000);
+  });
+
+  it("does not inject wrapper timeout defaults into expectFinal requests", async () => {
+    setLocalLoopbackGatewayConfig();
+
+    await callGateway({ method: "health", expectFinal: true });
+
+    expect(lastRequestOptions?.method).toBe("health");
+    expect(lastRequestOptions?.opts?.expectFinal).toBe(true);
+    expect(lastRequestOptions?.opts?.timeoutMs).toBeUndefined();
+  });
+
   it("fails fast when remote mode is missing remote url", async () => {
     loadConfig.mockReturnValue({
       gateway: { mode: "remote", bind: "loopback", remote: {} },
@@ -655,6 +699,7 @@ describe("callGateway password resolution", () => {
     envSnapshot = captureEnv([
       "OPENCLAW_GATEWAY_PASSWORD",
       "OPENCLAW_GATEWAY_TOKEN",
+      "LOCAL_REMOTE_FALLBACK_TOKEN",
       "LOCAL_REF_PASSWORD",
       "REMOTE_REF_TOKEN",
       "REMOTE_REF_PASSWORD",
@@ -662,6 +707,7 @@ describe("callGateway password resolution", () => {
     resetGatewayCallMocks();
     delete process.env.OPENCLAW_GATEWAY_PASSWORD;
     delete process.env.OPENCLAW_GATEWAY_TOKEN;
+    delete process.env.LOCAL_REMOTE_FALLBACK_TOKEN;
     delete process.env.LOCAL_REF_PASSWORD;
     delete process.env.REMOTE_REF_TOKEN;
     delete process.env.REMOTE_REF_PASSWORD;
@@ -811,6 +857,30 @@ describe("callGateway password resolution", () => {
 
     expect(lastClientOptions?.token).toBeUndefined();
     expect(lastClientOptions?.password).toBe("resolved-local-fallback-password"); // pragma: allowlist secret
+  });
+
+  it("fails closed when unresolved local token SecretRef would otherwise fall back to remote token", async () => {
+    process.env.LOCAL_REMOTE_FALLBACK_TOKEN = "resolved-local-remote-fallback-token";
+    loadConfig.mockReturnValue({
+      gateway: {
+        mode: "local",
+        bind: "loopback",
+        auth: {
+          mode: "token",
+          token: { source: "env", provider: "default", id: "MISSING_LOCAL_REF_TOKEN" },
+        },
+        remote: {
+          token: { source: "env", provider: "default", id: "LOCAL_REMOTE_FALLBACK_TOKEN" },
+        },
+      },
+      secrets: {
+        providers: {
+          default: { source: "env" },
+        },
+      },
+    } as unknown as OpenClawConfig);
+
+    await expect(callGateway({ method: "health" })).rejects.toThrow("gateway.auth.token");
   });
 
   it.each(["none", "trusted-proxy"] as const)(

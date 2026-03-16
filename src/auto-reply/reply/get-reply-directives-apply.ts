@@ -113,6 +113,7 @@ export async function applyInlineDirectiveOverrides(params: {
     sessionEntry,
     sessionStore,
     sessionKey,
+    parentSessionKey: ctx.ParentSessionKey,
     storePath,
     elevatedEnabled,
     elevatedAllowed,
@@ -150,6 +151,7 @@ export async function applyInlineDirectiveOverrides(params: {
     }
     const {
       currentThinkLevel: resolvedDefaultThinkLevel,
+      currentFastMode,
       currentVerboseLevel,
       currentReasoningLevel,
       currentElevatedLevel,
@@ -162,6 +164,7 @@ export async function applyInlineDirectiveOverrides(params: {
     const directiveReply = await handleDirectiveOnly({
       ...createDirectiveHandlingBase(),
       currentThinkLevel,
+      currentFastMode,
       currentVerboseLevel,
       currentReasoningLevel,
       currentElevatedLevel,
@@ -201,6 +204,7 @@ export async function applyInlineDirectiveOverrides(params: {
 
   const hasAnyDirective =
     directives.hasThinkDirective ||
+    directives.hasFastDirective ||
     directives.hasVerboseDirective ||
     directives.hasReasoningDirective ||
     directives.hasElevatedDirective ||
@@ -220,6 +224,7 @@ export async function applyInlineDirectiveOverrides(params: {
       sessionEntry,
       sessionStore,
       sessionKey,
+      parentSessionKey: ctx.ParentSessionKey,
       storePath,
       elevatedEnabled,
       elevatedAllowed,
@@ -252,6 +257,7 @@ export async function applyInlineDirectiveOverrides(params: {
     sessionEntry,
     sessionStore,
     sessionKey,
+    parentSessionKey: ctx.ParentSessionKey,
     storePath,
     elevatedEnabled,
     elevatedAllowed,

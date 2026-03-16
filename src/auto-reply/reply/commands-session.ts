@@ -1,15 +1,7 @@
+import { resolveFastModeState } from "../../agents/fast-mode.js";
+import { formatThreadBindingDurationLabel } from "../../channels/thread-bindings-messages.js";
 import { parseDurationMs } from "../../cli/parse-duration.js";
 import { isRestartEnabled } from "../../config/commands.js";
-import {
-  formatThreadBindingDurationLabel,
-  getThreadBindingManager,
-  resolveThreadBindingIdleTimeoutMs,
-  resolveThreadBindingInactivityExpiresAt,
-  resolveThreadBindingMaxAgeExpiresAt,
-  resolveThreadBindingMaxAgeMs,
-  setThreadBindingIdleTimeoutBySessionKey,
-  setThreadBindingMaxAgeBySessionKey,
-} from "../../discord/monitor/thread-bindings.js";
 import { logVerbose } from "../../globals.js";
 import { getSessionBindingService } from "../../infra/outbound/session-binding-service.js";
 import type { SessionBindingRecord } from "../../infra/outbound/session-binding-service.js";
@@ -19,14 +11,11 @@ import {
   triggerOpenClawRestart,
 } from "../../infra/restart.js";
 import { loadCostUsageSummary, loadSessionCostSummary } from "../../infra/session-cost-usage.js";
-import {
-  setTelegramThreadBindingIdleTimeoutBySessionKey,
-  setTelegramThreadBindingMaxAgeBySessionKey,
-} from "../../telegram/thread-bindings.js";
+import { createPluginRuntime } from "../../plugins/runtime/index.js";
 import { formatTokenCount, formatUsd } from "../../utils/usage-format.js";
 import { parseActivationCommand } from "../group-activation.js";
 import { parseSendPolicyCommand } from "../send-policy.js";
-import { normalizeUsageDisplay, resolveResponseUsageMode } from "../thinking.js";
+import { normalizeFastMode, normalizeUsageDisplay, resolveResponseUsageMode } from "../thinking.js";
 import { isDiscordSurface, isTelegramSurface, resolveChannelAccountId } from "./channel-context.js";
 import { handleAbortTrigger, handleStopCommand } from "./commands-session-abort.js";
 import { persistSessionEntry } from "./commands-session-store.js";
@@ -37,6 +26,12 @@ const SESSION_COMMAND_PREFIX = "/session";
 const SESSION_DURATION_OFF_VALUES = new Set(["off", "disable", "disabled", "none", "0"]);
 const SESSION_ACTION_IDLE = "idle";
 const SESSION_ACTION_MAX_AGE = "max-age";
+let cachedChannelRuntime: ReturnType<typeof createPluginRuntime>["channel"] | undefined;
+
+function getChannelRuntime() {
+  cachedChannelRuntime ??= createPluginRuntime().channel;
+  return cachedChannelRuntime;
+}
 
 function resolveSessionCommandUsage() {
   return "Usage: /session idle <duration|off> | /session max-age <duration|off> (example: /session idle 24h)";
@@ -295,6 +290,57 @@ export const handleUsageCommand: CommandHandler = async (params, allowTextComman
   };
 };
 
+export const handleFastCommand: CommandHandler = async (params, allowTextCommands) => {
+  if (!allowTextCommands) {
+    return null;
+  }
+  const normalized = params.command.commandBodyNormalized;
+  if (normalized !== "/fast" && !normalized.startsWith("/fast ")) {
+    return null;
+  }
+  if (!params.command.isAuthorizedSender) {
+    logVerbose(
+      `Ignoring /fast from unauthorized sender: ${params.command.senderId || "<unknown>"}`,
+    );
+    return { shouldContinue: false };
+  }
+
+  const rawArgs = normalized === "/fast" ? "" : normalized.slice("/fast".length).trim();
+  const rawMode = rawArgs.toLowerCase();
+  if (!rawMode || rawMode === "status") {
+    const state = resolveFastModeState({
+      cfg: params.cfg,
+      provider: params.provider,
+      model: params.model,
+      sessionEntry: params.sessionEntry,
+    });
+    const suffix =
+      state.source === "config" ? " (config)" : state.source === "default" ? " (default)" : "";
+    return {
+      shouldContinue: false,
+      reply: { text: `⚙️ Current fast mode: ${state.enabled ? "on" : "off"}${suffix}.` },
+    };
+  }
+
+  const nextMode = normalizeFastMode(rawMode);
+  if (nextMode === undefined) {
+    return {
+      shouldContinue: false,
+      reply: { text: "⚙️ Usage: /fast status|on|off" },
+    };
+  }
+
+  if (params.sessionEntry && params.sessionStore && params.sessionKey) {
+    params.sessionEntry.fastMode = nextMode;
+    await persistSessionEntry(params);
+  }
+
+  return {
+    shouldContinue: false,
+    reply: { text: `⚙️ Fast mode ${nextMode ? "enabled" : "disabled"}.` },
+  };
+};
+
 export const handleSessionCommand: CommandHandler = async (params, allowTextCommands) => {
   if (!allowTextCommands) {
     return null;
@@ -336,8 +382,11 @@ export const handleSessionCommand: CommandHandler = async (params, allowTextComm
   const threadId =
     params.ctx.MessageThreadId != null ? String(params.ctx.MessageThreadId).trim() : "";
   const telegramConversationId = onTelegram ? resolveTelegramConversationId(params) : undefined;
+  const channelRuntime = getChannelRuntime();
 
-  const discordManager = onDiscord ? getThreadBindingManager(accountId) : null;
+  const discordManager = onDiscord
+    ? channelRuntime.discord.threadBindings.getManager(accountId)
+    : null;
   if (onDiscord && !discordManager) {
     return {
       shouldContinue: false,
@@ -385,13 +434,13 @@ export const handleSessionCommand: CommandHandler = async (params, allowTextComm
   }
 
   const idleTimeoutMs = onDiscord
-    ? resolveThreadBindingIdleTimeoutMs({
+    ? channelRuntime.discord.threadBindings.resolveIdleTimeoutMs({
         record: discordBinding!,
         defaultIdleTimeoutMs: discordManager!.getIdleTimeoutMs(),
       })
     : resolveTelegramBindingDurationMs(telegramBinding!, "idleTimeoutMs", 24 * 60 * 60 * 1000);
   const idleExpiresAt = onDiscord
-    ? resolveThreadBindingInactivityExpiresAt({
+    ? channelRuntime.discord.threadBindings.resolveInactivityExpiresAt({
         record: discordBinding!,
         defaultIdleTimeoutMs: discordManager!.getIdleTimeoutMs(),
       })
@@ -399,13 +448,13 @@ export const handleSessionCommand: CommandHandler = async (params, allowTextComm
       ? resolveTelegramBindingLastActivityAt(telegramBinding!) + idleTimeoutMs
       : undefined;
   const maxAgeMs = onDiscord
-    ? resolveThreadBindingMaxAgeMs({
+    ? channelRuntime.discord.threadBindings.resolveMaxAgeMs({
         record: discordBinding!,
         defaultMaxAgeMs: discordManager!.getMaxAgeMs(),
       })
     : resolveTelegramBindingDurationMs(telegramBinding!, "maxAgeMs", 0);
   const maxAgeExpiresAt = onDiscord
-    ? resolveThreadBindingMaxAgeExpiresAt({
+    ? channelRuntime.discord.threadBindings.resolveMaxAgeExpiresAt({
         record: discordBinding!,
         defaultMaxAgeMs: discordManager!.getMaxAgeMs(),
       })
@@ -480,24 +529,24 @@ export const handleSessionCommand: CommandHandler = async (params, allowTextComm
   const updatedBindings = (() => {
     if (onDiscord) {
       return action === SESSION_ACTION_IDLE
-        ? setThreadBindingIdleTimeoutBySessionKey({
+        ? channelRuntime.discord.threadBindings.setIdleTimeoutBySessionKey({
             targetSessionKey: discordBinding!.targetSessionKey,
             accountId,
             idleTimeoutMs: durationMs,
           })
-        : setThreadBindingMaxAgeBySessionKey({
+        : channelRuntime.discord.threadBindings.setMaxAgeBySessionKey({
             targetSessionKey: discordBinding!.targetSessionKey,
             accountId,
             maxAgeMs: durationMs,
           });
     }
     return action === SESSION_ACTION_IDLE
-      ? setTelegramThreadBindingIdleTimeoutBySessionKey({
+      ? channelRuntime.telegram.threadBindings.setIdleTimeoutBySessionKey({
           targetSessionKey: telegramBinding!.targetSessionKey,
           accountId,
           idleTimeoutMs: durationMs,
         })
-      : setTelegramThreadBindingMaxAgeBySessionKey({
+      : channelRuntime.telegram.threadBindings.setMaxAgeBySessionKey({
           targetSessionKey: telegramBinding!.targetSessionKey,
           accountId,
           maxAgeMs: durationMs,

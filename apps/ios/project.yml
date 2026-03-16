@@ -98,6 +98,17 @@ targets:
         SUPPORTS_LIVE_ACTIVITIES: YES
         ENABLE_APPINTENTS_METADATA: NO
         ENABLE_APP_INTENTS_METADATA_GENERATION: NO
+      configs:
+        Debug:
+          OPENCLAW_PUSH_TRANSPORT: direct
+          OPENCLAW_PUSH_DISTRIBUTION: local
+          OPENCLAW_PUSH_RELAY_BASE_URL: ""
+          OPENCLAW_PUSH_APNS_ENVIRONMENT: sandbox
+        Release:
+          OPENCLAW_PUSH_TRANSPORT: direct
+          OPENCLAW_PUSH_DISTRIBUTION: local
+          OPENCLAW_PUSH_RELAY_BASE_URL: ""
+          OPENCLAW_PUSH_APNS_ENVIRONMENT: production
     info:
       path: Sources/Info.plist
       properties:
@@ -107,8 +118,8 @@ targets:
           - CFBundleURLName: ai.openclaw.ios
             CFBundleURLSchemes:
               - openclaw
-        CFBundleShortVersionString: "2026.3.8"
-        CFBundleVersion: "20260308"
+        CFBundleShortVersionString: "$(OPENCLAW_MARKETING_VERSION)"
+        CFBundleVersion: "$(OPENCLAW_BUILD_VERSION)"
         UILaunchScreen: {}
         UIApplicationSceneManifest:
           UIApplicationSupportsMultipleScenes: false
@@ -131,6 +142,10 @@ targets:
         NSSpeechRecognitionUsageDescription: OpenClaw uses on-device speech recognition for voice wake.
         NSSupportsLiveActivities: true
         ITSAppUsesNonExemptEncryption: false
+        OpenClawPushTransport: "$(OPENCLAW_PUSH_TRANSPORT)"
+        OpenClawPushDistribution: "$(OPENCLAW_PUSH_DISTRIBUTION)"
+        OpenClawPushRelayBaseURL: "$(OPENCLAW_PUSH_RELAY_BASE_URL)"
+        OpenClawPushAPNsEnvironment: "$(OPENCLAW_PUSH_APNS_ENVIRONMENT)"
         UISupportedInterfaceOrientations:
           - UIInterfaceOrientationPortrait
           - UIInterfaceOrientationPortraitUpsideDown
@@ -168,8 +183,8 @@ targets:
       path: ShareExtension/Info.plist
       properties:
         CFBundleDisplayName: OpenClaw Share
-        CFBundleShortVersionString: "2026.3.8"
-        CFBundleVersion: "20260308"
+        CFBundleShortVersionString: "$(OPENCLAW_MARKETING_VERSION)"
+        CFBundleVersion: "$(OPENCLAW_BUILD_VERSION)"
         NSExtension:
           NSExtensionPointIdentifier: com.apple.share-services
           NSExtensionPrincipalClass: "$(PRODUCT_MODULE_NAME).ShareViewController"
@@ -205,8 +220,8 @@ targets:
       path: ActivityWidget/Info.plist
       properties:
         CFBundleDisplayName: OpenClaw Activity
-        CFBundleShortVersionString: "2026.3.8"
-        CFBundleVersion: "20260308"
+        CFBundleShortVersionString: "$(OPENCLAW_MARKETING_VERSION)"
+        CFBundleVersion: "$(OPENCLAW_BUILD_VERSION)"
         NSSupportsLiveActivities: true
         NSExtension:
           NSExtensionPointIdentifier: com.apple.widgetkit-extension
@@ -224,6 +239,7 @@ targets:
       Release: Config/Signing.xcconfig
     settings:
       base:
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         ENABLE_APPINTENTS_METADATA: NO
         ENABLE_APP_INTENTS_METADATA_GENERATION: NO
         PRODUCT_BUNDLE_IDENTIFIER: "$(OPENCLAW_WATCH_APP_BUNDLE_ID)"
@@ -231,8 +247,8 @@ targets:
       path: WatchApp/Info.plist
       properties:
         CFBundleDisplayName: OpenClaw
-        CFBundleShortVersionString: "2026.3.8"
-        CFBundleVersion: "20260308"
+        CFBundleShortVersionString: "$(OPENCLAW_MARKETING_VERSION)"
+        CFBundleVersion: "$(OPENCLAW_BUILD_VERSION)"
         WKCompanionAppBundleIdentifier: "$(OPENCLAW_APP_BUNDLE_ID)"
         WKWatchKitApp: true
 
@@ -256,8 +272,8 @@ targets:
       path: WatchExtension/Info.plist
       properties:
         CFBundleDisplayName: OpenClaw
-        CFBundleShortVersionString: "2026.3.8"
-        CFBundleVersion: "20260308"
+        CFBundleShortVersionString: "$(OPENCLAW_MARKETING_VERSION)"
+        CFBundleVersion: "$(OPENCLAW_BUILD_VERSION)"
         NSExtension:
           NSExtensionAttributes:
             WKAppBundleIdentifier: "$(OPENCLAW_WATCH_APP_BUNDLE_ID)"
@@ -293,8 +309,8 @@ targets:
       path: Tests/Info.plist
       properties:
         CFBundleDisplayName: OpenClawTests
-        CFBundleShortVersionString: "2026.3.8"
-        CFBundleVersion: "20260308"
+        CFBundleShortVersionString: "$(OPENCLAW_MARKETING_VERSION)"
+        CFBundleVersion: "$(OPENCLAW_BUILD_VERSION)"
 
   OpenClawLogicTests:
     type: bundle.unit-test
@@ -319,5 +335,5 @@ targets:
       path: Tests/Info.plist
       properties:
         CFBundleDisplayName: OpenClawLogicTests
-        CFBundleShortVersionString: "2026.3.8"
-        CFBundleVersion: "20260308"
+        CFBundleShortVersionString: "$(OPENCLAW_MARKETING_VERSION)"
+        CFBundleVersion: "$(OPENCLAW_BUILD_VERSION)"

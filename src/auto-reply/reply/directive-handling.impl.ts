@@ -1,15 +1,21 @@
+import crypto from "node:crypto";
 import {
   resolveAgentConfig,
   resolveAgentDir,
   resolveSessionAgentId,
 } from "../../agents/agent-scope.js";
+import { resolveFastModeState } from "../../agents/fast-mode.js";
 import { resolveSandboxRuntimeStatus } from "../../agents/sandbox.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { type SessionEntry, updateSessionStore } from "../../config/sessions.js";
 import type { ExecAsk, ExecHost, ExecSecurity } from "../../infra/exec-approvals.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
 import { applyVerboseOverride } from "../../sessions/level-overrides.js";
-import { applyModelOverrideToSessionEntry } from "../../sessions/model-overrides.js";
+import {
+  applyFutureThreadModelDefaultToSessionEntry,
+  applyModelOverrideToSessionEntry,
+} from "../../sessions/model-overrides.js";
+import { resolveFutureThreadParentSessionKey } from "../../sessions/session-key-utils.js";
 import { formatThinkingLevels, formatXHighModelHint, supportsXHighThinking } from "../thinking.js";
 import type { ReplyPayload } from "../types.js";
 import {
@@ -78,6 +84,7 @@ export async function handleDirectiveOnly(
     initialModelLabel,
     formatModelSwitchEvent,
     currentThinkLevel,
+    currentFastMode,
     currentVerboseLevel,
     currentReasoningLevel,
     currentElevatedLevel,
@@ -131,6 +138,15 @@ export async function handleDirectiveOnly(
 
   const resolvedProvider = modelSelection?.provider ?? provider;
   const resolvedModel = modelSelection?.model ?? model;
+  const fastModeState = resolveFastModeState({
+    cfg: params.cfg,
+    provider: resolvedProvider,
+    model: resolvedModel,
+    sessionEntry,
+  });
+  const effectiveFastMode = directives.fastMode ?? currentFastMode ?? fastModeState.enabled;
+  const effectiveFastModeSource =
+    directives.fastMode !== undefined ? "session" : fastModeState.source;
 
   if (directives.hasThinkDirective && !directives.thinkLevel) {
     // If no argument was provided, show the current level
@@ -156,6 +172,25 @@ export async function handleDirectiveOnly(
     }
     return {
       text: `Unrecognized verbose level "${directives.rawVerboseLevel}". Valid levels: off, on, full.`,
+    };
+  }
+  if (directives.hasFastDirective && directives.fastMode === undefined) {
+    if (!directives.rawFastMode) {
+      const sourceSuffix =
+        effectiveFastModeSource === "config"
+          ? " (config)"
+          : effectiveFastModeSource === "default"
+            ? " (default)"
+            : "";
+      return {
+        text: withOptions(
+          `Current fast mode: ${effectiveFastMode ? "on" : "off"}${sourceSuffix}.`,
+          "on, off",
+        ),
+      };
+    }
+    return {
+      text: `Unrecognized fast mode "${directives.rawFastMode}". Valid levels: on, off.`,
     };
   }
   if (directives.hasReasoningDirective && !directives.reasoningLevel) {
@@ -279,10 +314,18 @@ export async function handleDirectiveOnly(
     directives.elevatedLevel !== undefined &&
     elevatedEnabled &&
     elevatedAllowed;
+  const fastModeChanged =
+    directives.hasFastDirective &&
+    directives.fastMode !== undefined &&
+    directives.fastMode !== currentFastMode;
+  const telegramChannelHint = sessionEntry.channel ?? sessionEntry.lastChannel;
   let reasoningChanged =
     directives.hasReasoningDirective && directives.reasoningLevel !== undefined;
   if (directives.hasThinkDirective && directives.thinkLevel) {
     sessionEntry.thinkingLevel = directives.thinkLevel;
+  }
+  if (directives.hasFastDirective && directives.fastMode !== undefined) {
+    sessionEntry.fastMode = directives.fastMode;
   }
   if (shouldDowngradeXHigh) {
     sessionEntry.thinkingLevel = "high";
@@ -328,6 +371,31 @@ export async function handleDirectiveOnly(
       selection: modelSelection,
       profileOverride,
     });
+
+    const futureThreadParentSessionKey = resolveFutureThreadParentSessionKey({
+      sessionKey,
+      parentSessionKey: params.parentSessionKey,
+      channelHint: telegramChannelHint,
+    });
+    if (futureThreadParentSessionKey) {
+      const parentEntry =
+        sessionStore[futureThreadParentSessionKey] ??
+        ({
+          sessionId: crypto.randomUUID(),
+          updatedAt: Date.now(),
+        } satisfies SessionEntry);
+      const { updated: parentUpdated } = applyFutureThreadModelDefaultToSessionEntry({
+        entry: parentEntry,
+        selection: {
+          provider: modelSelection.provider,
+          model: modelSelection.model,
+          isDefault: modelSelection.isDefault,
+        },
+      });
+      if (parentUpdated) {
+        sessionStore[futureThreadParentSessionKey] = parentEntry;
+      }
+    }
   }
   if (directives.hasQueueDirective && directives.queueReset) {
     delete sessionEntry.queueMode;
@@ -353,6 +421,14 @@ export async function handleDirectiveOnly(
   if (storePath) {
     await updateSessionStore(storePath, (store) => {
       store[sessionKey] = sessionEntry;
+      const futureThreadParentSessionKey = resolveFutureThreadParentSessionKey({
+        sessionKey,
+        parentSessionKey: params.parentSessionKey,
+        channelHint: telegramChannelHint,
+      });
+      if (futureThreadParentSessionKey && sessionStore[futureThreadParentSessionKey]) {
+        store[futureThreadParentSessionKey] = sessionStore[futureThreadParentSessionKey]!;
+      }
     });
   }
   if (modelSelection) {
@@ -378,6 +454,13 @@ export async function handleDirectiveOnly(
       directives.thinkLevel === "off"
         ? "Thinking disabled."
         : `Thinking level set to ${directives.thinkLevel}.`,
+    );
+  }
+  if (directives.hasFastDirective && directives.fastMode !== undefined) {
+    parts.push(
+      directives.fastMode
+        ? formatDirectiveAck("Fast mode enabled.")
+        : formatDirectiveAck("Fast mode disabled."),
     );
   }
   if (directives.hasVerboseDirective && directives.verboseLevel) {
@@ -441,6 +524,19 @@ export async function handleDirectiveOnly(
         ? `Model reset to default (${labelWithAlias}).`
         : `Model set to ${labelWithAlias}.`,
     );
+    if (
+      resolveFutureThreadParentSessionKey({
+        sessionKey,
+        parentSessionKey: params.parentSessionKey,
+        channelHint: telegramChannelHint,
+      })
+    ) {
+      parts.push(
+        modelSelection.isDefault
+          ? "New threads in this chat now follow the default model."
+          : `New threads in this chat will default to ${labelWithAlias}.`,
+      );
+    }
     if (profileOverride) {
       parts.push(`Auth profile set to ${profileOverride}.`);
     }
@@ -458,6 +554,12 @@ export async function handleDirectiveOnly(
   }
   if (directives.hasQueueDirective && directives.dropPolicy) {
     parts.push(formatDirectiveAck(`Queue drop set to ${directives.dropPolicy}.`));
+  }
+  if (fastModeChanged) {
+    enqueueSystemEvent(`Fast mode ${sessionEntry.fastMode ? "enabled" : "disabled"}.`, {
+      sessionKey,
+      contextKey: `fast:${sessionEntry.fastMode ? "on" : "off"}`,
+    });
   }
   const ack = parts.join(" ").trim();
   if (!ack && directives.hasStatusDirective) {

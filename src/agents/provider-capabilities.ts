@@ -1,3 +1,4 @@
+import { resolveProviderCapabilitiesWithPlugin } from "../plugins/provider-runtime.js";
 import { normalizeProviderId } from "./model-selection.js";
 
 export type ProviderCapabilities = {
@@ -26,17 +27,17 @@ const DEFAULT_PROVIDER_CAPABILITIES: ProviderCapabilities = {
   dropThinkingBlockModelHints: [],
 };
 
-const PROVIDER_CAPABILITIES: Record<string, Partial<ProviderCapabilities>> = {
-  anthropic: {
-    providerFamily: "anthropic",
-  },
+const CORE_PROVIDER_CAPABILITIES: Record<string, Partial<ProviderCapabilities>> = {
   "amazon-bedrock": {
     providerFamily: "anthropic",
+    dropThinkingBlockModelHints: ["claude"],
   },
-  "kimi-coding": {
-    anthropicToolSchemaMode: "openai-functions",
-    anthropicToolChoiceMode: "openai-string-modes",
-    preserveAnthropicThinkingSignatures: false,
+};
+
+const PLUGIN_CAPABILITIES_FALLBACKS: Record<string, Partial<ProviderCapabilities>> = {
+  anthropic: {
+    providerFamily: "anthropic",
+    dropThinkingBlockModelHints: ["claude"],
   },
   mistral: {
     transcriptToolCallIdMode: "strict9",
@@ -50,36 +51,30 @@ const PROVIDER_CAPABILITIES: Record<string, Partial<ProviderCapabilities>> = {
       "mistralai",
     ],
   },
-  openai: {
-    providerFamily: "openai",
-  },
-  "openai-codex": {
-    providerFamily: "openai",
-  },
-  openrouter: {
-    openAiCompatTurnValidation: false,
-    geminiThoughtSignatureSanitization: true,
-    geminiThoughtSignatureModelHints: ["gemini"],
-  },
   opencode: {
     openAiCompatTurnValidation: false,
     geminiThoughtSignatureSanitization: true,
     geminiThoughtSignatureModelHints: ["gemini"],
   },
-  kilocode: {
+  "opencode-go": {
+    openAiCompatTurnValidation: false,
     geminiThoughtSignatureSanitization: true,
     geminiThoughtSignatureModelHints: ["gemini"],
   },
-  "github-copilot": {
-    dropThinkingBlockModelHints: ["claude"],
+  openai: {
+    providerFamily: "openai",
   },
 };
 
 export function resolveProviderCapabilities(provider?: string | null): ProviderCapabilities {
   const normalized = normalizeProviderId(provider ?? "");
+  const pluginCapabilities = normalized
+    ? resolveProviderCapabilitiesWithPlugin({ provider: normalized })
+    : undefined;
   return {
     ...DEFAULT_PROVIDER_CAPABILITIES,
-    ...PROVIDER_CAPABILITIES[normalized],
+    ...CORE_PROVIDER_CAPABILITIES[normalized],
+    ...(pluginCapabilities ?? PLUGIN_CAPABILITIES_FALLBACKS[normalized]),
   };
 }
 

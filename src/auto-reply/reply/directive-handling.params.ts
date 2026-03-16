@@ -11,6 +11,7 @@ export type HandleDirectiveOnlyCoreParams = {
   sessionEntry: SessionEntry;
   sessionStore: Record<string, SessionEntry>;
   sessionKey: string;
+  parentSessionKey?: string;
   storePath?: string;
   elevatedEnabled: boolean;
   elevatedAllowed: boolean;
@@ -32,6 +33,7 @@ export type HandleDirectiveOnlyCoreParams = {
 
 export type HandleDirectiveOnlyParams = HandleDirectiveOnlyCoreParams & {
   currentThinkLevel?: ThinkLevel;
+  currentFastMode?: boolean;
   currentVerboseLevel?: VerboseLevel;
   currentReasoningLevel?: ReasoningLevel;
   currentElevatedLevel?: ElevatedLevel;

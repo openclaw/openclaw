@@ -8,6 +8,7 @@ import { loadConfig } from "../config/config.js";
 import { resolveStateDir } from "../config/paths.js";
 import { resolveSessionTranscriptsDirForAgent } from "../config/sessions/paths.js";
 import { setVerbose } from "../globals.js";
+import { resolveEmbeddingAuthDiagnostics } from "../memory/embedding-auth-diagnostics.js";
 import { getMemorySearchManager, type MemorySearchManagerResult } from "../memory/index.js";
 import { listMemoryFiles, normalizeExtraMemoryPaths } from "../memory/internal.js";
 import { defaultRuntime } from "../runtime.js";
@@ -474,6 +475,20 @@ export async function runMemoryStatus(opts: MemoryCommandOptions) {
       if (embeddingProbe.error) {
         lines.push(`${label("Embeddings error")} ${warn(embeddingProbe.error)}`);
       }
+    }
+    const embeddingAuth = resolveEmbeddingAuthDiagnostics(status);
+    if (embeddingAuth?.source || embeddingAuth?.fingerprint) {
+      const authParts: string[] = [];
+      if (embeddingAuth.source) {
+        authParts.push(embeddingAuth.source);
+      }
+      if (embeddingAuth.fingerprint) {
+        authParts.push(`sha256:${embeddingAuth.fingerprint}`);
+      }
+      const authLabel = embeddingAuth.provider
+        ? `${embeddingAuth.provider} (${authParts.join(", ")})`
+        : authParts.join(", ");
+      lines.push(`${label("Embeddings auth")} ${info(authLabel)}`);
     }
     if (status.sourceCounts?.length) {
       lines.push(label("By source"));

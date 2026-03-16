@@ -16,8 +16,9 @@ import {
   browserStatus,
   browserStop,
 } from "../../browser/client.js";
-import { resolveBrowserConfig } from "../../browser/config.js";
+import { resolveBrowserConfig, resolveProfile } from "../../browser/config.js";
 import { DEFAULT_UPLOAD_DIR, resolveExistingPathsWithinRoot } from "../../browser/paths.js";
+import { getBrowserProfileCapabilities } from "../../browser/profile-capabilities.js";
 import { applyBrowserProxyPaths, persistBrowserProxyFiles } from "../../browser/proxy-files.js";
 import {
   trackSessionBrowserTab,
@@ -279,6 +280,20 @@ function resolveBrowserBaseUrl(params: {
   return undefined;
 }
 
+function shouldPreferHostForProfile(profileName: string | undefined) {
+  if (!profileName) {
+    return false;
+  }
+  const cfg = loadConfig();
+  const resolved = resolveBrowserConfig(cfg.browser, cfg);
+  const profile = resolveProfile(resolved, profileName);
+  if (!profile) {
+    return false;
+  }
+  const capabilities = getBrowserProfileCapabilities(profile);
+  return capabilities.usesChromeMcp;
+}
+
 export function createBrowserTool(opts?: {
   sandboxBridgeUrl?: string;
   allowHostControl?: boolean;
@@ -292,10 +307,9 @@ export function createBrowserTool(opts?: {
     name: "browser",
     description: [
       "Control the browser via OpenClaw's browser control server (status/start/stop/profiles/tabs/open/snapshot/screenshot/actions).",
-      'Profiles: use profile="chrome" for Chrome extension relay takeover (your existing Chrome tabs). Use profile="openclaw" for the isolated openclaw-managed browser.',
-      'If the user mentions the Chrome extension / Browser Relay / toolbar button / “attach tab”, ALWAYS use profile="chrome" (do not ask which profile).',
+      "Browser choice: omit profile by default for the isolated OpenClaw-managed browser (`openclaw`).",
+      'For the logged-in user browser on the local host, use profile="user". Chrome (v144+) must be running. Use only when existing logins/cookies matter and the user is present.',
       'When a node-hosted browser proxy is available, the tool may auto-route to it. Pin a node with node=<id|name> or target="node".',
-      "Chrome extension relay needs an attached tab: user must click the OpenClaw Browser Relay toolbar icon on the tab (badge ON). If no tab is connected, ask them to attach it.",
       "When using refs from snapshot (e.g. e12), keep the same tab: prefer passing targetId from the snapshot response into subsequent actions (act/click/type/etc).",
       'For stable, self-resolving refs across calls, use snapshot with refs="aria" (Playwright aria-ref ids). Default refs="role" are role+name-based.',
       "Use snapshot+act for UI automation. Avoid act:wait by default; use only in exceptional cases when no reliable UI state exists.",
@@ -313,10 +327,20 @@ export function createBrowserTool(opts?: {
       if (requestedNode && target && target !== "node") {
         throw new Error('node is only supported with target="node".');
       }
-
-      if (!target && !requestedNode && profile === "chrome") {
-        // Chrome extension relay takeover is a host Chrome feature; prefer host unless explicitly targeting a node.
-        target = "host";
+      // User-browser profiles (existing-session) are host-only.
+      const isUserBrowserProfile = shouldPreferHostForProfile(profile);
+      if (isUserBrowserProfile) {
+        if (requestedNode || target === "node") {
+          throw new Error(`profile="${profile}" only supports the local host browser.`);
+        }
+        if (target === "sandbox") {
+          throw new Error(
+            `profile="${profile}" cannot use the sandbox browser; use target="host" or omit target.`,
+          );
+        }
+        if (!target && !requestedNode) {
+          target = "host";
+        }
       }
 
       const nodeTarget = await resolveBrowserNodeTarget({

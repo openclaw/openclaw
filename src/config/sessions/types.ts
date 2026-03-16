@@ -78,10 +78,16 @@ export type SessionEntry = {
   sessionFile?: string;
   /** Parent session key that spawned this session (used for sandbox session-tool scoping). */
   spawnedBy?: string;
+  /** Workspace inherited by spawned sessions and reused on later turns for the same child session. */
+  spawnedWorkspaceDir?: string;
   /** True after a thread/topic session has been forked from its parent transcript once. */
   forkedFromParent?: boolean;
   /** Subagent spawn depth (0 = main, 1 = sub-agent, 2 = sub-sub-agent). */
   spawnDepth?: number;
+  /** Explicit role assigned at spawn time for subagent tool policy/control decisions. */
+  subagentRole?: "orchestrator" | "leaf";
+  /** Explicit control scope assigned at spawn time for subagent control decisions. */
+  subagentControlScope?: "children" | "none";
   systemSent?: boolean;
   abortedLastRun?: boolean;
   /**
@@ -94,6 +100,7 @@ export type SessionEntry = {
   abortCutoffTimestamp?: number;
   chatType?: SessionChatType;
   thinkingLevel?: string;
+  fastMode?: boolean;
   verboseLevel?: string;
   reasoningLevel?: string;
   elevatedLevel?: string;
@@ -105,6 +112,13 @@ export type SessionEntry = {
   responseUsage?: "on" | "off" | "tokens" | "full";
   providerOverride?: string;
   modelOverride?: string;
+  /**
+   * Parent-chat default for future thread/topic sessions.
+   * This is intentionally separate from providerOverride/modelOverride so
+   * existing threads do not retroactively change when a thread picks a model.
+   */
+  futureThreadProviderOverride?: string;
+  futureThreadModelOverride?: string;
   authProfileOverride?: string;
   authProfileOverrideSource?: "auto" | "user";
   authProfileOverrideCompactionCount?: number;

@@ -78,11 +78,14 @@ export function resolveTranscriptPolicy(params: {
       provider,
       modelId,
     });
-  const requiresOpenAiCompatibleToolIdSanitization = params.modelApi === "openai-completions";
+  const requiresOpenAiCompatibleToolIdSanitization =
+    params.modelApi === "openai-completions" ||
+    (!isOpenAi &&
+      (params.modelApi === "openai-responses" || params.modelApi === "openai-codex-responses"));
 
-  // GitHub Copilot's Claude endpoints can reject persisted `thinking` blocks with
-  // non-binary/non-base64 signatures (e.g. thinkingSignature: "reasoning_text").
-  // Drop these blocks at send-time to keep sessions usable.
+  // Anthropic Claude endpoints can reject replayed `thinking` blocks unless the
+  // original signatures are preserved byte-for-byte. Drop them at send-time to
+  // keep persisted sessions usable across follow-up turns.
   const dropThinkingBlocks = shouldDropThinkingBlocksForModel({ provider, modelId });
 
   const needsNonImageSanitize =

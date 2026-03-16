@@ -1,7 +1,9 @@
+import crypto from "node:crypto";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import * as authModule from "../agents/model-auth.js";
 import { type FetchMock, withFetchPreconnect } from "../test-utils/fetch-mock.js";
 import { createVoyageEmbeddingProvider, normalizeVoyageModel } from "./embeddings-voyage.js";
+import { mockPublicPinnedHostname } from "./test-helpers/ssrf.js";
 
 vi.mock("../agents/model-auth.js", async () => {
   const { createModelAuthMockModule } = await import("../test-utils/model-auth-mock.js");
@@ -32,6 +34,7 @@ async function createDefaultVoyageProvider(
   fetchMock: ReturnType<typeof createFetchMock>,
 ) {
   vi.stubGlobal("fetch", fetchMock);
+  mockPublicPinnedHostname();
   mockVoyageApiKey();
   return createVoyageEmbeddingProvider({
     config: {} as never,
@@ -77,6 +80,7 @@ describe("voyage embedding provider", () => {
   it("respects remote overrides for baseUrl and apiKey", async () => {
     const fetchMock = createFetchMock();
     vi.stubGlobal("fetch", fetchMock);
+    mockPublicPinnedHostname();
 
     const result = await createVoyageEmbeddingProvider({
       config: {} as never,
@@ -100,6 +104,36 @@ describe("voyage embedding provider", () => {
     const headers = (init?.headers ?? {}) as Record<string, string>;
     expect(headers.Authorization).toBe("Bearer remote-override-key");
     expect(headers["X-Custom"]).toBe("123");
+  });
+
+  it("propagates auth diagnostics to voyage client metadata", async () => {
+    const fetchMock = createFetchMock();
+    vi.stubGlobal("fetch", fetchMock);
+    mockPublicPinnedHostname();
+    mockVoyageApiKey();
+
+    const result = await createVoyageEmbeddingProvider({
+      config: {} as never,
+      provider: "voyage",
+      model: "voyage-4-large",
+      fallback: "none",
+      remote: {
+        headers: {
+          Authorization: "Bearer voyage-remote-header-key",
+        },
+      },
+    });
+
+    await result.provider.embedQuery("test");
+
+    expect(result.client.authSource).toBe("agents.*.memorySearch.remote.headers.Authorization");
+    expect(result.client.authFingerprint).toBe(
+      crypto
+        .createHash("sha256")
+        .update("Bearer voyage-remote-header-key")
+        .digest("hex")
+        .slice(0, 12),
+    );
   });
 
   it("passes input_type=document for embedBatch", async () => {

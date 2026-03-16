@@ -1,3 +1,4 @@
+import crypto from "node:crypto";
 import {
   resolveAgentDir,
   resolveDefaultAgentId,
@@ -16,7 +17,11 @@ import type { OpenClawConfig } from "../../config/config.js";
 import { type SessionEntry, updateSessionStore } from "../../config/sessions.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
 import { applyVerboseOverride } from "../../sessions/level-overrides.js";
-import { applyModelOverrideToSessionEntry } from "../../sessions/model-overrides.js";
+import {
+  applyFutureThreadModelDefaultToSessionEntry,
+  applyModelOverrideToSessionEntry,
+} from "../../sessions/model-overrides.js";
+import { resolveFutureThreadParentSessionKey } from "../../sessions/session-key-utils.js";
 import { resolveProfileOverride } from "./directive-handling.auth.js";
 import type { InlineDirectives } from "./directive-handling.parse.js";
 import { enqueueModeSwitchEvents } from "./directive-handling.shared.js";
@@ -30,6 +35,7 @@ export async function persistInlineDirectives(params: {
   sessionEntry?: SessionEntry;
   sessionStore?: Record<string, SessionEntry>;
   sessionKey?: string;
+  parentSessionKey?: string;
   storePath?: string;
   elevatedEnabled: boolean;
   elevatedAllowed: boolean;
@@ -80,6 +86,7 @@ export async function persistInlineDirectives(params: {
     let reasoningChanged =
       directives.hasReasoningDirective && directives.reasoningLevel !== undefined;
     let updated = false;
+    const telegramChannelHint = sessionEntry.channel ?? sessionEntry.lastChannel;
 
     if (directives.hasThinkDirective && directives.thinkLevel) {
       sessionEntry.thinkingLevel = directives.thinkLevel;
@@ -171,6 +178,31 @@ export async function persistInlineDirectives(params: {
             },
             profileOverride,
           });
+          const futureThreadParentSessionKey = resolveFutureThreadParentSessionKey({
+            sessionKey,
+            parentSessionKey: params.parentSessionKey,
+            channelHint: telegramChannelHint,
+          });
+          if (futureThreadParentSessionKey) {
+            const parentEntry =
+              sessionStore[futureThreadParentSessionKey] ??
+              ({
+                sessionId: crypto.randomUUID(),
+                updatedAt: Date.now(),
+              } satisfies SessionEntry);
+            const { updated: parentUpdated } = applyFutureThreadModelDefaultToSessionEntry({
+              entry: parentEntry,
+              selection: {
+                provider: resolved.ref.provider,
+                model: resolved.ref.model,
+                isDefault,
+              },
+            });
+            if (parentUpdated) {
+              sessionStore[futureThreadParentSessionKey] = parentEntry;
+              updated = true;
+            }
+          }
           provider = resolved.ref.provider;
           model = resolved.ref.model;
           const nextLabel = `${provider}/${model}`;
@@ -198,6 +230,14 @@ export async function persistInlineDirectives(params: {
       if (storePath) {
         await updateSessionStore(storePath, (store) => {
           store[sessionKey] = sessionEntry;
+          const futureThreadParentSessionKey = resolveFutureThreadParentSessionKey({
+            sessionKey,
+            parentSessionKey: params.parentSessionKey,
+            channelHint: telegramChannelHint,
+          });
+          if (futureThreadParentSessionKey && sessionStore[futureThreadParentSessionKey]) {
+            store[futureThreadParentSessionKey] = sessionStore[futureThreadParentSessionKey]!;
+          }
         });
       }
       enqueueModeSwitchEvents({
