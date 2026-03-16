@@ -52,6 +52,7 @@ describe("buildAuthChoiceOptions", () => {
 
     for (const value of [
       "github-copilot",
+      "oauth",
       "token",
       "zai-api-key",
       "xiaomi-api-key",
@@ -113,6 +114,18 @@ describe("buildAuthChoiceOptions", () => {
 
     expect(chutesGroup).toBeDefined();
     expect(chutesGroup?.options.some((opt) => opt.value === "chutes")).toBe(true);
+  });
+
+  it("shows Anthropic OAuth in grouped provider selection", () => {
+    const { groups } = buildAuthChoiceGroups({
+      store: EMPTY_STORE,
+      includeSkip: false,
+    });
+    const anthropicGroup = groups.find((group) => group.value === "anthropic");
+
+    expect(anthropicGroup).toBeDefined();
+    expect(anthropicGroup?.options.some((opt) => opt.value === "oauth")).toBe(true);
+    expect(anthropicGroup?.options.some((opt) => opt.value === "token")).toBe(true);
   });
 
   it("groups OpenCode Zen and Go under one OpenCode entry", () => {

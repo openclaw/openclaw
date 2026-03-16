@@ -34,8 +34,8 @@ const AUTH_CHOICE_GROUP_DEFS: {
   {
     value: "anthropic",
     label: "Anthropic",
-    hint: "setup-token + API key",
-    choices: ["token", "apiKey"],
+    hint: "OAuth + setup-token + API key",
+    choices: ["oauth", "token", "apiKey"],
   },
   {
     value: "chutes",
@@ -219,6 +219,11 @@ function buildProviderAuthChoiceOptions(): AuthChoiceOption[] {
 }
 
 const BASE_AUTH_CHOICE_OPTIONS: ReadonlyArray<AuthChoiceOption> = [
+  {
+    value: "oauth",
+    label: "Anthropic OAuth (Claude Pro/Max)",
+    hint: "Browser sign-in",
+  },
   {
     value: "token",
     label: "Anthropic token (paste setup-token)",

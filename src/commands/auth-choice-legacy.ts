@@ -2,7 +2,6 @@ import type { AuthChoice } from "./onboard-types.js";
 
 export const AUTH_CHOICE_LEGACY_ALIASES_FOR_CLI: ReadonlyArray<AuthChoice> = [
   "setup-token",
-  "oauth",
   "claude-cli",
   "codex-cli",
 ];
@@ -10,7 +9,7 @@ export const AUTH_CHOICE_LEGACY_ALIASES_FOR_CLI: ReadonlyArray<AuthChoice> = [
 export function normalizeLegacyOnboardAuthChoice(
   authChoice: AuthChoice | undefined,
 ): AuthChoice | undefined {
-  if (authChoice === "oauth" || authChoice === "claude-cli") {
+  if (authChoice === "claude-cli") {
     return "setup-token";
   }
   if (authChoice === "codex-cli") {
