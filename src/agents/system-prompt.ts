@@ -416,8 +416,11 @@ export function buildAgentSystemPrompt(params: {
   });
   const workspaceNotes = (params.workspaceNotes ?? []).map((note) => note.trim()).filter(Boolean);
 
+  const trimmedPreamble = params.preamble?.trim();
   const preamble =
-    params.preamble?.trim() || "You are a personal assistant running inside OpenClaw.";
+    trimmedPreamble !== undefined && trimmedPreamble.length > 0
+      ? trimmedPreamble
+      : "You are a personal assistant running inside OpenClaw.";
 
   // For "none" mode, return just the basic identity line
   if (promptMode === "none") {

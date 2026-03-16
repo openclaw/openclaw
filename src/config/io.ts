@@ -371,7 +371,7 @@ function readConfigSchemaUri(value: unknown): string | undefined {
     return undefined;
   }
   const trimmed = value.$schema.trim();
-  return trimmed.length > 0 ? value.$schema : undefined;
+  return trimmed.length > 0 ? trimmed : undefined;
 }
 
 function cloneUnknown<T>(value: T): T {

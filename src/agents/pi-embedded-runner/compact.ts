@@ -680,7 +680,7 @@ export async function compactEmbeddedPiSessionDirect(
     const ownerDisplay = resolveOwnerDisplaySetting(params.config);
     // Resolve preamble: per-agent config takes priority over defaults.
     const agentPreamble =
-      params.config?.agents?.list?.find((a) => a.id === sessionAgentId)?.preamble ??
+      params.config?.agents?.list?.find((a) => a.id?.toLowerCase() === sessionAgentId?.toLowerCase())?.preamble ??
       params.config?.agents?.defaults?.preamble;
 
     const appendPrompt = buildEmbeddedSystemPrompt({

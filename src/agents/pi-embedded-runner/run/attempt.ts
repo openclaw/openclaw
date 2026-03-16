@@ -1650,7 +1650,7 @@ export async function runEmbeddedAttempt(
 
     // Resolve preamble: per-agent config takes priority over defaults.
     const agentPreamble =
-      params.config?.agents?.list?.find((a) => a.id === params.agentId)?.preamble ??
+      params.config?.agents?.list?.find((a) => a.id?.toLowerCase() === params.agentId?.toLowerCase())?.preamble ??
       params.config?.agents?.defaults?.preamble;
 
     const appendPrompt = buildEmbeddedSystemPrompt({
