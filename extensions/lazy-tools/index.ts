@@ -1,0 +1,139 @@
+import type { OpenClawPluginApi } from "../../src/plugin-sdk/index.js";
+
+/**
+ * Toolkit groupings — tool name → toolkit name.
+ * Tools not in any toolkit pass through unfiltered.
+ */
+export const TOOLKITS: Record<string, string[]> = {
+  messaging: ["message", "sessions_send", "sessions_list"],
+  memory: ["memory_search", "memory_get"],
+  web: ["web_search", "web_fetch"],
+  sessions: ["sessions_list", "sessions_history", "sessions_send", "sessions_spawn", "subagents"],
+  cron: ["cron"],
+  browser: ["browser"],
+  media: ["tts", "image"],
+  nodes: ["nodes"],
+};
+
+/** Core tools always visible regardless of lazy loading. */
+export const CORE_TOOLS = new Set(["read", "write", "edit", "exec", "load_toolkit"]);
+
+/** Reverse lookup: tool name → toolkit name. First toolkit to claim wins. */
+const toolToToolkit = new Map<string, string>();
+for (const [tkName, toolNames] of Object.entries(TOOLKITS)) {
+  for (const tn of toolNames) {
+    if (!toolToToolkit.has(tn)) {
+      toolToToolkit.set(tn, tkName);
+    }
+  }
+}
+
+type ToolEntry = { name: string; description: string; parameters: unknown };
+
+export function createLazyToolsPlugin() {
+  function loadToolkit(
+    name: string,
+    loadedToolkits: Set<string>,
+  ): { loaded: string; tools: string[]; message: string } | { error: string } {
+    const toolkit = TOOLKITS[name];
+    if (!toolkit) {
+      return { error: `Unknown toolkit: ${name}. Available: ${Object.keys(TOOLKITS).join(", ")}` };
+    }
+    loadedToolkits.add(name);
+    return {
+      loaded: name,
+      tools: toolkit,
+      message: `Toolkit "${name}" loaded. You can now use: ${toolkit.join(", ")}`,
+    };
+  }
+
+  function filterTools(tools: ToolEntry[], loadedToolkits: Set<string>): ToolEntry[] {
+    return tools.filter((tool) => {
+      if (CORE_TOOLS.has(tool.name)) return true;
+      const tk = toolToToolkit.get(tool.name);
+      if (!tk) return true; // Unknown tools pass through
+      return loadedToolkits.has(tk);
+    });
+  }
+
+  return { loadToolkit, filterTools };
+}
+
+// Compact catalog for load_toolkit description
+const catalog = Object.entries(TOOLKITS)
+  .map(([name, tools]) => `  - ${name}: ${tools.join(", ")}`)
+  .join("\n");
+
+/**
+ * Per-session state: tracks which toolkits have been loaded.
+ * Keyed by `sessionKey:sessionId` to isolate sessions.
+ */
+const sessionToolkitState = new Map<string, Set<string>>();
+
+function getLoadedToolkits(sessionKey?: string, sessionId?: string): Set<string> {
+  const key = `${sessionKey ?? ""}:${sessionId ?? ""}`;
+  let loaded = sessionToolkitState.get(key);
+  if (!loaded) {
+    loaded = new Set<string>();
+    sessionToolkitState.set(key, loaded);
+  }
+  return loaded;
+}
+
+const plugin = {
+  id: "lazy-tools",
+  name: "Lazy Tools",
+  description:
+    "Reduces token cost by lazy-loading tool schemas. " +
+    "Only core tools and a `load_toolkit` meta-tool are sent initially.",
+  register(api: OpenClawPluginApi) {
+    const lazyToolsPlugin = createLazyToolsPlugin();
+
+    // Register the load_toolkit meta-tool via factory pattern
+    // Factory receives OpenClawPluginToolContext with sessionKey/sessionId
+    api.registerTool(
+      (ctx) => ({
+        name: "load_toolkit",
+        description: `Load additional tools into this session. Available toolkits:\n${catalog}`,
+        parameters: {
+          type: "object" as const,
+          properties: {
+            name: {
+              type: "string",
+              enum: Object.keys(TOOLKITS),
+              description: "Toolkit name to load",
+            },
+          },
+          required: ["name"],
+        },
+        execute: async (_toolCallId: string, args: unknown) => {
+          const params = args as Record<string, unknown>;
+          const name = params.name as string;
+          const loaded = getLoadedToolkits(ctx.sessionKey, ctx.sessionId);
+          const result = lazyToolsPlugin.loadToolkit(name, loaded);
+          if ("error" in result) {
+            return { content: [{ type: "text" as const, text: result.error }] };
+          }
+          return { content: [{ type: "text" as const, text: result.message }] };
+        },
+      }),
+      { name: "load_toolkit" },
+    );
+
+    // Hook: filter tools before surfacing to the LLM
+    api.on("before_tool_surface", (event, ctx) => {
+      const loaded = getLoadedToolkits(ctx.sessionKey, ctx.sessionId);
+      return {
+        tools: lazyToolsPlugin.filterTools(event.tools, loaded),
+      };
+    });
+
+    // Clean up session state when session ends
+    api.on("session_end", (_event, ctx) => {
+      const key = `${ctx.sessionKey ?? ""}:${ctx.sessionId ?? ""}`;
+      sessionToolkitState.delete(key);
+    });
+  },
+};
+
+export default plugin;
