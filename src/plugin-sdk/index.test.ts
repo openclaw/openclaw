@@ -145,7 +145,11 @@ describe("plugin-sdk exports", () => {
       const consumerEntry = path.join(consumerDir, "import-plugin-sdk.mjs");
 
       await fs.mkdir(path.join(packageDir, "dist"), { recursive: true });
-      await fs.symlink(outDir, path.join(packageDir, "dist", "plugin-sdk"), "dir");
+      await fs.symlink(
+        outDir,
+        path.join(packageDir, "dist", "plugin-sdk"),
+        process.platform === "win32" ? "junction" : "dir",
+      );
       await fs.writeFile(
         path.join(packageDir, "package.json"),
         JSON.stringify(
@@ -160,7 +164,11 @@ describe("plugin-sdk exports", () => {
       );
 
       await fs.mkdir(path.join(consumerDir, "node_modules"), { recursive: true });
-      await fs.symlink(packageDir, path.join(consumerDir, "node_modules", "openclaw"), "dir");
+      await fs.symlink(
+        packageDir,
+        path.join(consumerDir, "node_modules", "openclaw"),
+        process.platform === "win32" ? "junction" : "dir",
+      );
       await fs.writeFile(
         consumerEntry,
         [
