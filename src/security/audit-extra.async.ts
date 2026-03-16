@@ -18,7 +18,6 @@ import { formatCliCommand } from "../cli/command-format.js";
 import { MANIFEST_KEY } from "../compat/legacy-names.js";
 import { resolveNativeSkillsEnabled } from "../config/commands.js";
 import type { OpenClawConfig, ConfigFileSnapshot } from "../config/config.js";
-import { createConfigIO } from "../config/config.js";
 import { collectIncludePathsRecursive } from "../config/includes-scan.js";
 import { resolveOAuthDir } from "../config/paths.js";
 import { hasConfiguredSecretInput } from "../config/types.secrets.js";
@@ -54,10 +53,16 @@ type CodeSafetySummaryCache = Map<string, Promise<unknown>>;
 const MAX_WORKSPACE_SKILL_SCAN_FILES_PER_WORKSPACE = 2_000;
 const MAX_WORKSPACE_SKILL_ESCAPE_DETAIL_ROWS = 12;
 let skillsModulePromise: Promise<typeof import("../agents/skills.js")> | undefined;
+let configModulePromise: Promise<typeof import("../config/config.js")> | undefined;
 
 function loadSkillsModule() {
   skillsModulePromise ??= import("../agents/skills.js");
   return skillsModulePromise;
+}
+
+function loadConfigModule() {
+  configModulePromise ??= import("../config/config.js");
+  return configModulePromise;
 }
 
 // --------------------------------------------------------------------------
@@ -1133,6 +1138,7 @@ export async function readConfigSnapshotForAudit(params: {
   env: NodeJS.ProcessEnv;
   configPath: string;
 }): Promise<ConfigFileSnapshot> {
+  const { createConfigIO } = await loadConfigModule();
   return await createConfigIO({
     env: params.env,
     configPath: params.configPath,
