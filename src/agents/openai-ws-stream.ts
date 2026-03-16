@@ -415,6 +415,10 @@ export function convertMessagesToInputItems(
     const parts = Array.isArray(m.content) ? contentToOpenAIParts(m.content, modelOverride) : [];
     const textOutput = contentToText(m.content);
     const imageParts = parts.filter((part) => part.type === "input_image");
+    // Skip if callId is empty (no corresponding function_call)
+    if (!callId) {
+      continue;
+    }
     items.push({
       type: "function_call_output",
       call_id: callId,
