@@ -402,6 +402,35 @@ async function closeSessionRecord(
   opts?: { requireTurnQuiescence?: boolean; quiescenceTimeoutMs?: number },
 ): Promise<void> {
   const activeTurn = session.activeTurn;
+  const closeTimeoutMs = opts?.quiescenceTimeoutMs ?? activeCloseQuiescenceTimeoutMs;
+  const closeDeadline = Date.now() + closeTimeoutMs;
+  const awaitWithinCloseWindow = async <T>(promise: Promise<T>, stage: string): Promise<T> => {
+    const remainingMs = closeDeadline - Date.now();
+    if (remainingMs <= 0) {
+      throw new Error(
+        `ACP session close timed out waiting for ${stage} for run ${activeTurn?.runId ?? "unknown"}`,
+      );
+    }
+    let stepTimer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      return await Promise.race([
+        promise,
+        new Promise<never>((_, reject) => {
+          stepTimer = setTimeout(() => {
+            reject(
+              new Error(
+                `ACP session close timed out waiting for ${stage} for run ${activeTurn?.runId ?? "unknown"}`,
+              ),
+            );
+          }, remainingMs);
+        }),
+      ]);
+    } finally {
+      if (stepTimer) {
+        clearTimeout(stepTimer);
+      }
+    }
+  };
   if (activeTurn) {
     session.state = "cancelling";
     session.currentRunId = activeTurn.runId;
@@ -412,37 +441,23 @@ async function closeSessionRecord(
     session.updatedAt = Date.now();
     activeTurn.abortController.abort();
     try {
-      await session.runtime.cancel({
-        handle: session.handle,
-        reason,
-      });
+      await awaitWithinCloseWindow(
+        session.runtime.cancel({
+          handle: session.handle,
+          reason,
+        }),
+        "cancel acknowledgement",
+      );
     } catch (error) {
       recordCloseFailure(session, reason, error);
       throw error;
     }
     if (opts?.requireTurnQuiescence) {
-      const quiescenceTimeoutMs = opts.quiescenceTimeoutMs ?? activeCloseQuiescenceTimeoutMs;
-      let quiescenceTimer: ReturnType<typeof setTimeout> | undefined;
       try {
-        await Promise.race([
-          activeTurn.completion,
-          new Promise<never>((_, reject) => {
-            quiescenceTimer = setTimeout(() => {
-              reject(
-                new Error(
-                  `ACP session close timed out waiting for worker quiescence for run ${activeTurn.runId}`,
-                ),
-              );
-            }, quiescenceTimeoutMs);
-          }),
-        ]);
+        await awaitWithinCloseWindow(activeTurn.completion, "worker quiescence");
       } catch (error) {
         recordCloseFailure(session, reason, error);
         throw error;
-      } finally {
-        if (quiescenceTimer) {
-          clearTimeout(quiescenceTimer);
-        }
       }
       if (nodeAcpSessions.get(session.sessionKey) !== session) {
         throw new Error(`ACP session ${session.sessionKey} was replaced while closing`);
@@ -608,9 +623,20 @@ async function handleEnsureLike(
     existing &&
     (existing.leaseEpoch !== params.leaseEpoch || existing.leaseId !== params.leaseId)
   ) {
-    await closeSessionRecord(existing, "lease-replaced");
-    if (nodeAcpSessions.get(params.sessionKey) === existing) {
-      nodeAcpSessions.delete(params.sessionKey);
+    try {
+      await closeSessionRecord(existing, "lease-replaced", {
+        requireTurnQuiescence: true,
+      });
+      if (nodeAcpSessions.get(params.sessionKey) === existing) {
+        nodeAcpSessions.delete(params.sessionKey);
+      }
+    } catch (error) {
+      return {
+        handled: true,
+        ok: false,
+        code: "UNAVAILABLE",
+        message: `ACP lease replacement failed for ${params.sessionKey}: ${resolveFailureMessage(error)}`,
+      };
     }
   }
   if (
