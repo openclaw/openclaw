@@ -88,7 +88,7 @@ export async function promptTelegramAllowFromForAccount(params: {
     );
   }
   const { promptResolvedAllowFrom } =
-    await import("../../../src/channels/plugins/setup-wizard-helpers.js");
+    await import("../../../src/channels/plugins/setup-wizard-helpers.runtime.js");
   const unique = await promptResolvedAllowFrom({
     prompter: params.prompter,
     existing: resolved.config.allowFrom ?? [],
