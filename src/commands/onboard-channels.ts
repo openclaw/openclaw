@@ -5,6 +5,7 @@ import {
   getChannelSetupPlugin,
   listChannelSetupPlugins,
 } from "../channels/plugins/setup-registry.js";
+import { buildChannelOnboardingAdapterFromSetupWizard } from "../channels/plugins/setup-wizard.js";
 import type { ChannelMeta, ChannelPlugin } from "../channels/plugins/types.js";
 import {
   formatChannelPrimerLine,
@@ -354,7 +355,14 @@ export async function setupChannels(
     if (adapter) {
       return adapter;
     }
-    return scopedPluginsById.get(channel)?.onboarding;
+    const scopedPlugin = scopedPluginsById.get(channel);
+    if (!scopedPlugin?.setupWizard) {
+      return undefined;
+    }
+    return buildChannelOnboardingAdapterFromSetupWizard({
+      plugin: scopedPlugin,
+      wizard: scopedPlugin.setupWizard,
+    });
   };
   const preloadConfiguredExternalPlugins = () => {
     // Keep onboarding memory bounded by snapshot-loading only configured external plugins.
