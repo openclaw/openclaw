@@ -535,7 +535,7 @@ describe("runMessageAction plugin dispatch", () => {
       expect(ctx.params.accountId).toBe(expectedAccountId);
     });
 
-    it("falls back to the channel plugin defaultAccountId for WhatsApp core outbound sends", async () => {
+    it("falls back to the channel plugin defaultAccountId for core outbound sends", async () => {
       const sendWhatsApp: NonNullable<ChannelOutboundAdapter["sendText"]> = vi.fn(async () => ({
         channel: "whatsapp",
         messageId: "wa-1",
@@ -596,72 +596,6 @@ describe("runMessageAction plugin dispatch", () => {
           to: "+1555",
           text: "hi",
           accountId: "work",
-          cfg: expect.any(Object),
-        }),
-      );
-    });
-
-    it("does not force the channel plugin defaultAccountId onto non-WhatsApp core sends", async () => {
-      const sendTelegram: NonNullable<ChannelOutboundAdapter["sendText"]> = vi.fn(async () => ({
-        channel: "telegram",
-        messageId: "tg-1",
-        chatId: "123",
-      }));
-      const plugin = createOutboundTestPlugin({
-        id: "telegram",
-        outbound: {
-          deliveryMode: "direct",
-          sendText: sendTelegram,
-        },
-      });
-      plugin.config = {
-        ...plugin.config,
-        listAccountIds: () => ["work"],
-        resolveAccount: () => ({ enabled: true }),
-        defaultAccountId: () => "work",
-      };
-      plugin.messaging = {
-        targetResolver: {
-          looksLikeId: () => true,
-        },
-      };
-
-      setActivePluginRegistry(
-        createTestRegistry([
-          {
-            pluginId: "telegram",
-            source: "test",
-            plugin,
-          },
-        ]),
-      );
-
-      await runMessageAction({
-        cfg: {
-          channels: {
-            telegram: {
-              defaultAccount: "work",
-              accounts: {
-                work: {},
-              },
-            },
-          },
-        } as OpenClawConfig,
-        action: "send",
-        params: {
-          channel: "telegram",
-          target: "123",
-          message: "hi",
-        },
-        deps: { sendTelegram },
-        dryRun: false,
-      });
-
-      expect(sendTelegram).toHaveBeenCalledWith(
-        expect.objectContaining({
-          to: "123",
-          text: "hi",
-          accountId: undefined,
           cfg: expect.any(Object),
         }),
       );
