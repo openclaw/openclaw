@@ -280,7 +280,11 @@ const FINAL_TAG_RE = /<\s*\/?\s*final\s*>/gi;
 // Strip both the tags and their content since this is internal protocol. See #45856.
 const TOOL_XML_TAG_RE =
   /<\s*(?:tool_call|tool_result)\b[^>]*>[\s\S]*?<\s*\/\s*(?:tool_call|tool_result)\b\s*>/gi;
-// Also catch self-closing or orphaned opening/closing tags
+// Strip unclosed opening tags and their content to end of string (no closing tag found).
+// Applied after TOOL_XML_TAG_RE to catch remaining orphaned openers.
+// Uses negative lookbehind (?<!\/) to exclude self-closing tags like <tool_call />.
+const TOOL_XML_UNCLOSED_TAG_RE = /<\s*(?:tool_call|tool_result)\b[^>]*(?<!\/)>[\s\S]*$/gi;
+// Also catch self-closing or orphaned closing tags (stray </tool_call> etc.)
 const TOOL_XML_ORPHAN_TAG_RE = /<\s*\/?\s*(?:tool_call|tool_result)\b[^>]*\/?>/gi;
 const ERROR_PREFIX_RE =
   /^(?:error|(?:[a-z][\w-]*\s+)?api\s*error|openai\s*error|anthropic\s*error|gateway\s*error|request failed|failed|exception)(?:\s+\d{3})?[:\s-]+/i;
@@ -479,10 +483,11 @@ function stripFinalTagsFromText(text: string): string {
     return text;
   }
   // Strip <final> tags, then raw <tool_call>/<tool_result> XML that some models emit.
-  // First strip complete tag pairs (with content), then orphaned opening/closing tags.
+  // Order: (1) complete tag pairs, (2) unclosed openers to end, (3) stray tags.
   return text
     .replace(FINAL_TAG_RE, "")
     .replace(TOOL_XML_TAG_RE, "")
+    .replace(TOOL_XML_UNCLOSED_TAG_RE, "")
     .replace(TOOL_XML_ORPHAN_TAG_RE, "");
 }
 

@@ -43,6 +43,10 @@ describe("sanitizeUserFacingText", () => {
     expect(sanitizeUserFacingText("<tool_results>data</tool_results>")).toBe(
       "<tool_results>data</tool_results>",
     );
+
+    // Unclosed opening tag — strip tag and all content to end of string
+    expect(sanitizeUserFacingText('<tool_call>{"name":"bash"}')).toBe("");
+    expect(sanitizeUserFacingText("Prefix <tool_result>leaked content")).toBe("Prefix ");
   });
 
   it.each(["202 results found", "400 days left"])(
