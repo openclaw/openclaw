@@ -91,6 +91,12 @@ export type SessionEntry = {
   systemSent?: boolean;
   abortedLastRun?: boolean;
   /**
+   * Last assistant message text captured immediately before a scheduled (daily/idle) session reset.
+   * Not set for explicit /new or /reset triggers.
+   * Used to inject a continuity hint into the next session so the agent can resume mid-task work.
+   */
+  lastAssistantMessageBeforeReset?: string;
+  /**
    * Session-level stop cutoff captured when /stop is received.
    * Messages at/before this boundary are skipped to avoid replaying
    * queued pre-stop backlog.

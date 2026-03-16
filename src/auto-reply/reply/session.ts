@@ -29,7 +29,10 @@ import {
   updateSessionStore,
 } from "../../config/sessions.js";
 import type { TtsAutoMode } from "../../config/types.tts.js";
-import { archiveSessionTranscripts } from "../../gateway/session-utils.fs.js";
+import {
+  archiveSessionTranscripts,
+  readLastAssistantMessageFromTranscript,
+} from "../../gateway/session-utils.fs.js";
 import { resolveConversationIdFromTargets } from "../../infra/outbound/conversation-id.js";
 import { deliverSessionMaintenanceWarning } from "../../infra/session-maintenance-warning.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
@@ -518,6 +521,23 @@ export async function initSessionState(params: {
     sessionEntry.inputTokens = undefined;
     sessionEntry.outputTokens = undefined;
     sessionEntry.contextTokens = undefined;
+
+    // On a scheduled (daily/idle) reset — not an explicit /new or /reset — capture
+    // the last assistant message from the previous session's transcript.
+    // This lets the agent pick up where it left off if it was mid-task when the
+    // session rolled over. Explicit resets are intentional blanks; don't carry over.
+    if (!resetTriggered && previousSessionEntry) {
+      const MAX_HINT_CHARS = 500;
+      const lastMsg = readLastAssistantMessageFromTranscript(
+        previousSessionEntry.sessionId,
+        storePath,
+        previousSessionEntry.sessionFile,
+        agentId,
+      );
+      if (lastMsg) {
+        sessionEntry.lastAssistantMessageBeforeReset = lastMsg.slice(0, MAX_HINT_CHARS);
+      }
+    }
   }
   // Preserve per-session overrides while resetting compaction state on /new.
   sessionStore[sessionKey] = { ...sessionStore[sessionKey], ...sessionEntry };
