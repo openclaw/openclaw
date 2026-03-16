@@ -18,9 +18,10 @@ const BIDI_CONTROL_RE = /[\u202a-\u202e\u2066-\u2069]/;
 const RTL_ISOLATE_START = "\u2067";
 const RTL_ISOLATE_END = "\u2069";
 
-// Matches a fenced code block: opening fence (``` with optional language) through closing fence.
-// Captures the full fence block including delimiters so it can be preserved verbatim.
-const CODE_FENCE_RE = /^(`{3,}|~{3,})[^\n]*\n[\s\S]*?\n\1[ \t]*$/gm;
+// NOTE: CODE_FENCE_RE is intentionally NOT declared at module scope.
+// A regex with the `g` flag retains lastIndex state between calls, which causes
+// intermittent failures when the same regex object is reused across invocations.
+// The regex is created fresh inside normalizeTokensOutsideCodeFences() instead.
 
 function hasControlChars(text: string): boolean {
   for (const char of text) {
@@ -135,18 +136,26 @@ function applyRtlIsolation(text: string): string {
  * Code blocks are meant to be copy-pasted verbatim — inserting spaces into long
  * tokens (e.g. package names such as "ubuntu-budgie-desktop-environment") would
  * corrupt the content and break pasted commands or identifiers.
+ *
+ * Both backtick fences (```) and tilde fences (~~~) are recognized.
+ *
+ * The regex is created fresh on every call to avoid lastIndex state leaking
+ * between invocations (a known hazard with module-scope `g`-flagged regexes).
  */
 function normalizeTokensOutsideCodeFences(text: string): string {
   if (!LONG_TOKEN_TEST_RE.test(text)) {
     return text;
   }
 
+  // Matches fenced code blocks delimited by ``` or ~~~  (with optional language tag).
+  // Created locally to prevent lastIndex from persisting across calls.
+  const codeFenceRe = /^(`{3,}|~{3,})[^\n]*\n[\s\S]*?\n\1[ \t]*$/gm;
+
   const parts: string[] = [];
   let lastIndex = 0;
-  CODE_FENCE_RE.lastIndex = 0;
 
   let match: RegExpExecArray | null;
-  while ((match = CODE_FENCE_RE.exec(text)) !== null) {
+  while ((match = codeFenceRe.exec(text)) !== null) {
     // Process the region before this code fence (normalize long tokens)
     const before = text.slice(lastIndex, match.index);
     parts.push(before.replace(LONG_TOKEN_RE, normalizeLongTokenForDisplay));

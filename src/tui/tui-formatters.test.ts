@@ -295,10 +295,18 @@ describe("sanitizeRenderableText", () => {
   });
 
   it("preserves long tokens inside tilde-fenced code blocks verbatim", () => {
-    const input = "~~~python\nsome_very_long_variable_name_that_exceeds_the_limit = True\n~~~";
+    // Use a token that would be split by normalizeLongTokenForDisplay if not inside a fence:
+    // - 33 chars (meets the ≥33 threshold)
+    // - no underscores (avoids the isCopySensitiveToken FILE_LIKE_RE branch)
+    // - no digits (avoids the TOKENISH_MIN_LENGTH credential branch)
+    // Without code-fence protection this token would be rewritten as
+    // "ubuntu-budgie-desktop-environmen t" (space inserted at char 32).
+    const longToken = "ubuntu-budgie-desktop-environment"; // exactly 33 chars, no underscores
+    const input = `~~~bash\napt install ${longToken}\n~~~`;
     const sanitized = sanitizeRenderableText(input);
 
     expect(sanitized).toBe(input);
+    expect(sanitized).toContain(longToken);
   });
 
   it("still normalizes long tokens in prose outside code fences", () => {
