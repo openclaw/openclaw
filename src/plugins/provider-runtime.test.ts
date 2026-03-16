@@ -2,9 +2,14 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ProviderPlugin, ProviderRuntimeModel } from "./types.js";
 
 const resolvePluginProvidersMock = vi.fn((_: unknown) => [] as ProviderPlugin[]);
+const resolveOwningPluginIdsForProviderMock = vi.fn(
+  (_: unknown) => undefined as string[] | undefined,
+);
 
 vi.mock("./providers.js", () => ({
   resolvePluginProviders: (params: unknown) => resolvePluginProvidersMock(params as never),
+  resolveOwningPluginIdsForProvider: (params: unknown) =>
+    resolveOwningPluginIdsForProviderMock(params as never),
 }));
 
 import {
@@ -12,10 +17,14 @@ import {
   buildProviderMissingAuthMessageWithPlugin,
   prepareProviderExtraParams,
   resolveProviderCacheTtlEligibility,
+  resolveProviderBinaryThinking,
   resolveProviderBuiltInModelSuppression,
+  resolveProviderDefaultThinkingLevel,
+  resolveProviderModernModelRef,
   resolveProviderUsageSnapshotWithPlugin,
   resolveProviderCapabilitiesWithPlugin,
   resolveProviderUsageAuthWithPlugin,
+  resolveProviderXHighThinking,
   normalizeProviderResolvedModelWithPlugin,
   prepareProviderDynamicModel,
   prepareProviderRuntimeAuth,
@@ -41,6 +50,8 @@ describe("provider-runtime", () => {
   beforeEach(() => {
     resolvePluginProvidersMock.mockReset();
     resolvePluginProvidersMock.mockReturnValue([]);
+    resolveOwningPluginIdsForProviderMock.mockReset();
+    resolveOwningPluginIdsForProviderMock.mockReturnValue(undefined);
   });
 
   it("matches providers by alias for runtime hook lookup", () => {
@@ -56,9 +67,13 @@ describe("provider-runtime", () => {
     const plugin = resolveProviderRuntimePlugin({ provider: "Open Router" });
 
     expect(plugin?.id).toBe("openrouter");
-    expect(resolvePluginProvidersMock).toHaveBeenCalledWith(
+    expect(resolveOwningPluginIdsForProviderMock).toHaveBeenCalledWith(
       expect.objectContaining({
         provider: "Open Router",
+      }),
+    );
+    expect(resolvePluginProvidersMock).toHaveBeenCalledWith(
+      expect.objectContaining({
         bundledProviderAllowlistCompat: true,
         bundledProviderVitestCompat: true,
       }),
@@ -132,6 +147,10 @@ describe("provider-runtime", () => {
           resolveUsageAuth,
           fetchUsageSnapshot,
           isCacheTtlEligible: ({ modelId }) => modelId.startsWith("anthropic/"),
+          isBinaryThinking: () => true,
+          supportsXHighThinking: ({ modelId }) => modelId === "gpt-5.4",
+          resolveDefaultThinkingLevel: ({ reasoning }) => (reasoning ? "low" : "off"),
+          isModernModelRef: ({ modelId }) => modelId.startsWith("gpt-5"),
         },
       ];
     });
@@ -263,6 +282,47 @@ describe("provider-runtime", () => {
         context: {
           provider: "demo",
           modelId: "anthropic/claude-sonnet-4-5",
+        },
+      }),
+    ).toBe(true);
+
+    expect(
+      resolveProviderBinaryThinking({
+        provider: "demo",
+        context: {
+          provider: "demo",
+          modelId: "glm-5",
+        },
+      }),
+    ).toBe(true);
+
+    expect(
+      resolveProviderXHighThinking({
+        provider: "demo",
+        context: {
+          provider: "demo",
+          modelId: "gpt-5.4",
+        },
+      }),
+    ).toBe(true);
+
+    expect(
+      resolveProviderDefaultThinkingLevel({
+        provider: "demo",
+        context: {
+          provider: "demo",
+          modelId: "gpt-5.4",
+          reasoning: true,
+        },
+      }),
+    ).toBe("low");
+
+    expect(
+      resolveProviderModernModelRef({
+        provider: "demo",
+        context: {
+          provider: "demo",
+          modelId: "gpt-5.4",
         },
       }),
     ).toBe(true);

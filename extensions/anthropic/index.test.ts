@@ -1,23 +1,12 @@
 import { describe, expect, it } from "vitest";
-import type { ProviderPlugin } from "../../src/plugins/types.js";
+import { registerSingleProviderPlugin } from "../../src/test-utils/plugin-registration.js";
 import {
   createProviderUsageFetch,
   makeResponse,
 } from "../../src/test-utils/provider-usage-fetch.js";
 import anthropicPlugin from "./index.js";
 
-function registerProvider(): ProviderPlugin {
-  let provider: ProviderPlugin | undefined;
-  anthropicPlugin.register({
-    registerProvider(nextProvider: ProviderPlugin) {
-      provider = nextProvider;
-    },
-  } as never);
-  if (!provider) {
-    throw new Error("provider registration missing");
-  }
-  return provider;
-}
+const registerProvider = () => registerSingleProviderPlugin(anthropicPlugin);
 
 describe("anthropic plugin", () => {
   it("owns anthropic 4.6 forward-compat resolution", () => {

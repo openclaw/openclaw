@@ -5,6 +5,8 @@ const runConfigGetMock = vi.hoisted(() => vi.fn(async () => {}));
 const runConfigUnsetMock = vi.hoisted(() => vi.fn(async () => {}));
 const modelsListCommandMock = vi.hoisted(() => vi.fn(async () => {}));
 const modelsStatusCommandMock = vi.hoisted(() => vi.fn(async () => {}));
+const gatewayStatusCommandMock = vi.hoisted(() => vi.fn(async () => {}));
+const statusJsonCommandMock = vi.hoisted(() => vi.fn(async () => {}));
 
 vi.mock("../config-cli.js", () => ({
   runConfigGet: runConfigGetMock,
@@ -14,6 +16,14 @@ vi.mock("../config-cli.js", () => ({
 vi.mock("../../commands/models.js", () => ({
   modelsListCommand: modelsListCommandMock,
   modelsStatusCommand: modelsStatusCommandMock,
+}));
+
+vi.mock("../../commands/gateway-status.js", () => ({
+  gatewayStatusCommand: gatewayStatusCommandMock,
+}));
+
+vi.mock("../../commands/status-json.js", () => ({
+  statusJsonCommand: statusJsonCommandMock,
 }));
 
 describe("program routes", () => {
@@ -32,9 +42,12 @@ describe("program routes", () => {
     await expect(route?.run(argv)).resolves.toBe(false);
   }
 
-  it("matches status route and always preloads plugins", () => {
+  it("matches status route and preloads plugins only for text output", () => {
     const route = expectRoute(["status"]);
-    expect(route?.loadPlugins).toBe(true);
+    expect(typeof route?.loadPlugins).toBe("function");
+    const shouldLoad = route?.loadPlugins as (argv: string[]) => boolean;
+    expect(shouldLoad(["node", "openclaw", "status"])).toBe(true);
+    expect(shouldLoad(["node", "openclaw", "status", "--json"])).toBe(false);
   });
 
   it("matches health route and preloads plugins only for text output", () => {
@@ -45,8 +58,95 @@ describe("program routes", () => {
     expect(shouldLoad(["node", "openclaw", "health", "--json"])).toBe(false);
   });
 
+  it("matches gateway status route without plugin preload", () => {
+    const route = expectRoute(["gateway", "status"]);
+    expect(route?.loadPlugins).toBeUndefined();
+  });
+
+  it("returns false for gateway status route when option values are missing", async () => {
+    await expectRunFalse(["gateway", "status"], ["node", "openclaw", "gateway", "status", "--url"]);
+    await expectRunFalse(
+      ["gateway", "status"],
+      ["node", "openclaw", "gateway", "status", "--token"],
+    );
+    await expectRunFalse(
+      ["gateway", "status"],
+      ["node", "openclaw", "gateway", "status", "--password"],
+    );
+    await expectRunFalse(
+      ["gateway", "status"],
+      ["node", "openclaw", "gateway", "status", "--timeout"],
+    );
+    await expectRunFalse(["gateway", "status"], ["node", "openclaw", "gateway", "status", "--ssh"]);
+    await expectRunFalse(
+      ["gateway", "status"],
+      ["node", "openclaw", "gateway", "status", "--ssh-identity"],
+    );
+  });
+
+  it("passes parsed gateway status flags through", async () => {
+    const route = expectRoute(["gateway", "status"]);
+    await expect(
+      route?.run([
+        "node",
+        "openclaw",
+        "--profile",
+        "work",
+        "gateway",
+        "status",
+        "--url",
+        "ws://127.0.0.1:18789",
+        "--token",
+        "abc",
+        "--password",
+        "def",
+        "--timeout",
+        "5000",
+        "--ssh",
+        "user@host",
+        "--ssh-identity",
+        "~/.ssh/id_test",
+        "--ssh-auto",
+        "--json",
+      ]),
+    ).resolves.toBe(true);
+    expect(gatewayStatusCommandMock).toHaveBeenCalledWith(
+      {
+        url: "ws://127.0.0.1:18789",
+        token: "abc",
+        password: "def",
+        timeout: "5000",
+        json: true,
+        ssh: "user@host",
+        sshIdentity: "~/.ssh/id_test",
+        sshAuto: true,
+      },
+      expect.any(Object),
+    );
+  });
+
   it("returns false when status timeout flag value is missing", async () => {
     await expectRunFalse(["status"], ["node", "openclaw", "status", "--timeout"]);
+  });
+
+  it("routes status --json through the lean JSON command", async () => {
+    const route = expectRoute(["status"]);
+    await expect(
+      route?.run([
+        "node",
+        "openclaw",
+        "status",
+        "--json",
+        "--deep",
+        "--usage",
+        "--timeout",
+        "5000",
+      ]),
+    ).resolves.toBe(true);
+    expect(statusJsonCommandMock).toHaveBeenCalledWith(
+      { deep: true, all: false, usage: true, timeoutMs: 5000 },
+      expect.any(Object),
+    );
   });
 
   it("returns false for sessions route when --store value is missing", async () => {

@@ -1,23 +1,17 @@
-import type { ChannelOnboardingDmPolicy } from "../../../src/channels/plugins/onboarding-types.js";
 import {
   noteChannelLookupFailure,
   noteChannelLookupSummary,
   parseMentionOrPrefixedId,
   patchChannelConfigForAccount,
   promptLegacyChannelAllowFrom,
-  resolveOnboardingAccountId,
+  resolveSetupAccountId,
   setLegacyChannelDmPolicyWithAllowFrom,
-  setOnboardingChannelEnabled,
-} from "../../../src/channels/plugins/onboarding/helpers.js";
-import {
-  applyAccountNameToChannelSection,
-  migrateBaseNameToDefaultAccount,
-} from "../../../src/channels/plugins/setup-helpers.js";
+  setSetupChannelEnabled,
+} from "../../../src/channels/plugins/setup-flow-helpers.js";
+import type { ChannelSetupDmPolicy } from "../../../src/channels/plugins/setup-flow-types.js";
 import type { ChannelSetupWizard } from "../../../src/channels/plugins/setup-wizard.js";
-import type { ChannelSetupAdapter } from "../../../src/channels/plugins/types.adapters.js";
 import type { OpenClawConfig } from "../../../src/config/config.js";
-import type { DiscordGuildEntry } from "../../../src/config/types.discord.js";
-import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../../../src/routing/session-key.js";
+import { DEFAULT_ACCOUNT_ID } from "../../../src/routing/session-key.js";
 import { formatDocsLink } from "../../../src/terminal/links.js";
 import type { WizardPrompter } from "../../../src/wizard/prompts.js";
 import { inspectDiscordAccount } from "./account-inspect.js";
@@ -32,57 +26,14 @@ import {
   type DiscordChannelResolution,
 } from "./resolve-channels.js";
 import { resolveDiscordUserAllowlist } from "./resolve-users.js";
+import {
+  discordSetupAdapter,
+  DISCORD_TOKEN_HELP_LINES,
+  parseDiscordAllowFromId,
+  setDiscordGuildChannelAllowlist,
+} from "./setup-core.js";
 
 const channel = "discord" as const;
-
-const DISCORD_TOKEN_HELP_LINES = [
-  "1) Discord Developer Portal -> Applications -> New Application",
-  "2) Bot -> Add Bot -> Reset Token -> copy token",
-  "3) OAuth2 -> URL Generator -> scope 'bot' -> invite to your server",
-  "Tip: enable Message Content Intent if you need message text. (Bot -> Privileged Gateway Intents -> Message Content Intent)",
-  `Docs: ${formatDocsLink("/discord", "discord")}`,
-];
-
-function setDiscordGuildChannelAllowlist(
-  cfg: OpenClawConfig,
-  accountId: string,
-  entries: Array<{
-    guildKey: string;
-    channelKey?: string;
-  }>,
-): OpenClawConfig {
-  const baseGuilds =
-    accountId === DEFAULT_ACCOUNT_ID
-      ? (cfg.channels?.discord?.guilds ?? {})
-      : (cfg.channels?.discord?.accounts?.[accountId]?.guilds ?? {});
-  const guilds: Record<string, DiscordGuildEntry> = { ...baseGuilds };
-  for (const entry of entries) {
-    const guildKey = entry.guildKey || "*";
-    const existing = guilds[guildKey] ?? {};
-    if (entry.channelKey) {
-      const channels = { ...existing.channels };
-      channels[entry.channelKey] = { allow: true };
-      guilds[guildKey] = { ...existing, channels };
-    } else {
-      guilds[guildKey] = existing;
-    }
-  }
-  return patchChannelConfigForAccount({
-    cfg,
-    channel,
-    accountId,
-    patch: { guilds },
-  });
-}
-
-function parseDiscordAllowFromId(value: string): string | null {
-  return parseMentionOrPrefixedId({
-    value,
-    mentionPattern: /^<@!?(\d+)>$/,
-    prefixPattern: /^(user:|discord:)/i,
-    idPattern: /^\d+$/,
-  });
-}
 
 async function resolveDiscordAllowFromEntries(params: { token?: string; entries: string[] }) {
   if (!params.token?.trim()) {
@@ -108,7 +59,7 @@ async function promptDiscordAllowFrom(params: {
   prompter: WizardPrompter;
   accountId?: string;
 }): Promise<OpenClawConfig> {
-  const accountId = resolveOnboardingAccountId({
+  const accountId = resolveSetupAccountId({
     accountId: params.accountId,
     defaultAccountId: resolveDefaultDiscordAccountId(params.cfg),
   });
@@ -141,7 +92,7 @@ async function promptDiscordAllowFrom(params: {
   });
 }
 
-const discordDmPolicy: ChannelOnboardingDmPolicy = {
+const discordDmPolicy: ChannelSetupDmPolicy = {
   label: "Discord",
   channel,
   policyKey: "channels.discord.dmPolicy",
@@ -155,72 +106,6 @@ const discordDmPolicy: ChannelOnboardingDmPolicy = {
       dmPolicy: policy,
     }),
   promptAllowFrom: promptDiscordAllowFrom,
-};
-
-export const discordSetupAdapter: ChannelSetupAdapter = {
-  resolveAccountId: ({ accountId }) => normalizeAccountId(accountId),
-  applyAccountName: ({ cfg, accountId, name }) =>
-    applyAccountNameToChannelSection({
-      cfg,
-      channelKey: channel,
-      accountId,
-      name,
-    }),
-  validateInput: ({ accountId, input }) => {
-    if (input.useEnv && accountId !== DEFAULT_ACCOUNT_ID) {
-      return "DISCORD_BOT_TOKEN can only be used for the default account.";
-    }
-    if (!input.useEnv && !input.token) {
-      return "Discord requires token (or --use-env).";
-    }
-    return null;
-  },
-  applyAccountConfig: ({ cfg, accountId, input }) => {
-    const namedConfig = applyAccountNameToChannelSection({
-      cfg,
-      channelKey: channel,
-      accountId,
-      name: input.name,
-    });
-    const next =
-      accountId !== DEFAULT_ACCOUNT_ID
-        ? migrateBaseNameToDefaultAccount({
-            cfg: namedConfig,
-            channelKey: channel,
-          })
-        : namedConfig;
-    if (accountId === DEFAULT_ACCOUNT_ID) {
-      return {
-        ...next,
-        channels: {
-          ...next.channels,
-          discord: {
-            ...next.channels?.discord,
-            enabled: true,
-            ...(input.useEnv ? {} : input.token ? { token: input.token } : {}),
-          },
-        },
-      };
-    }
-    return {
-      ...next,
-      channels: {
-        ...next.channels,
-        discord: {
-          ...next.channels?.discord,
-          enabled: true,
-          accounts: {
-            ...next.channels?.discord?.accounts,
-            [accountId]: {
-              ...next.channels?.discord?.accounts?.[accountId],
-              enabled: true,
-              ...(input.token ? { token: input.token } : {}),
-            },
-          },
-        },
-      },
-    };
-  },
 };
 
 export const discordSetupWizard: ChannelSetupWizard = {
@@ -388,5 +273,5 @@ export const discordSetupWizard: ChannelSetupWizard = {
       }),
   },
   dmPolicy: discordDmPolicy,
-  disable: (cfg) => setOnboardingChannelEnabled(cfg, channel, false),
+  disable: (cfg) => setSetupChannelEnabled(cfg, channel, false),
 };

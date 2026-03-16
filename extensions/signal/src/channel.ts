@@ -28,7 +28,15 @@ import {
 } from "openclaw/plugin-sdk/signal";
 import { resolveOutboundSendDep } from "../../../src/infra/outbound/send-deps.js";
 import { getSignalRuntime } from "./runtime.js";
-import { signalSetupAdapter, signalSetupWizard } from "./setup-surface.js";
+import { createSignalSetupWizardProxy, signalSetupAdapter } from "./setup-core.js";
+
+async function loadSignalChannelRuntime() {
+  return await import("./channel.runtime.js");
+}
+
+const signalSetupWizard = createSignalSetupWizardProxy(async () => ({
+  signalSetupWizard: (await loadSignalChannelRuntime()).signalSetupWizard,
+}));
 
 const signalMessageActions: ChannelMessageActionAdapter = {
   listActions: (ctx) => getSignalRuntime().channel.signal.messageActions?.listActions?.(ctx) ?? [],

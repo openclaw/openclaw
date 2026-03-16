@@ -6,7 +6,7 @@ import { redactCdpUrl } from "../browser/cdp.helpers.js";
 import { resolveBrowserConfig, resolveProfile } from "../browser/config.js";
 import { resolveBrowserControlAuth } from "../browser/control-auth.js";
 import { hasPotentialConfiguredChannels } from "../channels/config-presence.js";
-import { listChannelPlugins } from "../channels/plugins/index.js";
+import type { listChannelPlugins } from "../channels/plugins/index.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../config/config.js";
 import { resolveConfigPath, resolveStateDir } from "../config/paths.js";
@@ -113,6 +113,8 @@ export type SecurityAuditOptions = {
   configSnapshot?: ConfigFileSnapshot | null;
   /** Optional cache for code-safety summaries across repeated deep audits. */
   codeSafetySummaryCache?: Map<string, Promise<unknown>>;
+  /** Optional explicit auth for deep gateway probe. */
+  deepProbeAuth?: { token?: string; password?: string };
 };
 
 type AuditExecutionContext = {
@@ -132,7 +134,15 @@ type AuditExecutionContext = {
   plugins?: ReturnType<typeof listChannelPlugins>;
   configSnapshot: ConfigFileSnapshot | null;
   codeSafetySummaryCache: Map<string, Promise<unknown>>;
+  deepProbeAuth?: { token?: string; password?: string };
 };
+
+let channelPluginsModulePromise: Promise<typeof import("../channels/plugins/index.js")> | undefined;
+
+async function loadChannelPlugins() {
+  channelPluginsModulePromise ??= import("../channels/plugins/index.js");
+  return await channelPluginsModulePromise;
+}
 
 function countBySeverity(findings: SecurityAuditFinding[]): SecurityAuditSummary {
   let critical = 0;
@@ -341,6 +351,7 @@ async function collectFilesystemFindings(params: {
 
 function collectGatewayConfigFindings(
   cfg: OpenClawConfig,
+  sourceConfig: OpenClawConfig,
   env: NodeJS.ProcessEnv,
 ): SecurityAuditFinding[] {
   const findings: SecurityAuditFinding[] = [];
@@ -365,18 +376,18 @@ function collectGatewayConfigFindings(
     hasNonEmptyString(env.OPENCLAW_GATEWAY_PASSWORD) ||
     hasNonEmptyString(env.CLAWDBOT_GATEWAY_PASSWORD);
   const tokenConfiguredFromConfig = hasConfiguredSecretInput(
-    cfg.gateway?.auth?.token,
-    cfg.secrets?.defaults,
+    sourceConfig.gateway?.auth?.token,
+    sourceConfig.secrets?.defaults,
   );
   const passwordConfiguredFromConfig = hasConfiguredSecretInput(
-    cfg.gateway?.auth?.password,
-    cfg.secrets?.defaults,
+    sourceConfig.gateway?.auth?.password,
+    sourceConfig.secrets?.defaults,
   );
   const remoteTokenConfigured = hasConfiguredSecretInput(
-    cfg.gateway?.remote?.token,
-    cfg.secrets?.defaults,
+    sourceConfig.gateway?.remote?.token,
+    sourceConfig.secrets?.defaults,
   );
-  const explicitAuthMode = cfg.gateway?.auth?.mode;
+  const explicitAuthMode = sourceConfig.gateway?.auth?.mode;
   const tokenCanWin =
     hasToken || envTokenConfigured || tokenConfiguredFromConfig || remoteTokenConfigured;
   const passwordCanWin =
@@ -1062,6 +1073,7 @@ async function maybeProbeGateway(params: {
   env: NodeJS.ProcessEnv;
   timeoutMs: number;
   probe: typeof probeGateway;
+  explicitAuth?: { token?: string; password?: string };
 }): Promise<{
   deep: SecurityAuditReport["deep"];
   authWarning?: string;
@@ -1075,8 +1087,18 @@ async function maybeProbeGateway(params: {
 
   const authResolution =
     !isRemoteMode || remoteUrlMissing
-      ? resolveGatewayProbeAuthSafe({ cfg: params.cfg, env: params.env, mode: "local" })
-      : resolveGatewayProbeAuthSafe({ cfg: params.cfg, env: params.env, mode: "remote" });
+      ? resolveGatewayProbeAuthSafe({
+          cfg: params.cfg,
+          env: params.env,
+          mode: "local",
+          explicitAuth: params.explicitAuth,
+        })
+      : resolveGatewayProbeAuthSafe({
+          cfg: params.cfg,
+          env: params.env,
+          mode: "remote",
+          explicitAuth: params.explicitAuth,
+        });
   const res = await params
     .probe({ url, auth: authResolution.auth, timeoutMs: params.timeoutMs })
     .catch((err) => ({
@@ -1144,6 +1166,7 @@ async function createAuditExecutionContext(
     plugins: opts.plugins,
     configSnapshot,
     codeSafetySummaryCache: opts.codeSafetySummaryCache ?? new Map<string, Promise<unknown>>(),
+    deepProbeAuth: opts.deepProbeAuth,
   };
 }
 
@@ -1155,7 +1178,7 @@ export async function runSecurityAudit(opts: SecurityAuditOptions): Promise<Secu
   findings.push(...collectAttackSurfaceSummaryFindings(cfg));
   findings.push(...collectSyncedFolderFindings({ stateDir, configPath }));
 
-  findings.push(...collectGatewayConfigFindings(cfg, env));
+  findings.push(...collectGatewayConfigFindings(cfg, context.sourceConfig, env));
   findings.push(...collectBrowserControlFindings(cfg, env));
   findings.push(...collectLoggingFindings(cfg));
   findings.push(...collectElevatedFindings(cfg));
@@ -1228,7 +1251,7 @@ export async function runSecurityAudit(opts: SecurityAuditOptions): Promise<Secu
   }
 
   if (context.includeChannelSecurity && hasPotentialConfiguredChannels(cfg, env)) {
-    const plugins = context.plugins ?? listChannelPlugins();
+    const plugins = context.plugins ?? (await loadChannelPlugins()).listChannelPlugins();
     findings.push(
       ...(await collectChannelSecurityFindings({
         cfg,
@@ -1244,6 +1267,7 @@ export async function runSecurityAudit(opts: SecurityAuditOptions): Promise<Secu
         env,
         timeoutMs: context.deepTimeoutMs,
         probe: context.probeGatewayFn ?? probeGateway,
+        explicitAuth: context.deepProbeAuth,
       })
     : undefined;
   const deep = deepProbeResult?.deep;
