@@ -6,6 +6,7 @@ import { logVerbose } from "../../globals.js";
 import type { RuntimeWebSearchMetadata } from "../../secrets/runtime-web-tools.types.js";
 import { wrapWebContent } from "../../security/external-content.js";
 import { normalizeSecretInput } from "../../utils/normalize-secret-input.js";
+import { optionalStringEnum } from "../schema/typebox.js";
 import type { AnyAgentTool } from "./common.js";
 import { jsonResult, readNumberParam, readStringArrayParam, readStringParam } from "./common.js";
 import { withTrustedWebToolsEndpoint } from "./web-guarded-fetch.js";
@@ -22,7 +23,7 @@ import {
   writeCache,
 } from "./web-shared.js";
 
-const SEARCH_PROVIDERS = ["brave", "gemini", "grok", "kimi", "perplexity"] as const;
+const SEARCH_PROVIDERS = ["brave", "gemini", "grok", "kimi", "perplexity", "tavily"] as const;
 type SearchProvider = (typeof SEARCH_PROVIDERS)[number];
 const DEFAULT_SEARCH_COUNT = 5;
 const MAX_SEARCH_COUNT = 10;
@@ -44,6 +45,9 @@ const KIMI_WEB_SEARCH_TOOL = {
   type: "builtin_function",
   function: { name: "$web_search" },
 } as const;
+
+const TAVILY_DEFAULT_BASE_URL = "https://api.tavily.com";
+const TAVILY_MAX_RESULTS = 20;
 
 const SEARCH_CACHE_KEY = Symbol.for("openclaw.web-search.cache");
 
@@ -284,6 +288,37 @@ function createWebSearchSchema(params: {
           description:
             "Native Perplexity Search API only. Max tokens extracted per page (default: 2048).",
           minimum: 1,
+        }),
+      ),
+    });
+  }
+
+  if (params.provider === "tavily") {
+    return Type.Object({
+      ...querySchema,
+      count: Type.Optional(
+        Type.Number({
+          description: "Number of results to return (1-20).",
+          minimum: 1,
+          maximum: TAVILY_MAX_RESULTS,
+        }),
+      ),
+      freshness: filterSchema.freshness,
+      date_after: filterSchema.date_after,
+      date_before: filterSchema.date_before,
+      search_depth: optionalStringEnum(["basic", "advanced"], {
+        description:
+          "Search depth: 'basic' (default, faster) or 'advanced' (more thorough, higher cost).",
+      }),
+      include_answer: Type.Optional(
+        Type.Boolean({
+          description: "Include an AI-generated answer summary in the response (default: false).",
+        }),
+      ),
+      domain_filter: Type.Optional(
+        Type.Array(Type.String(), {
+          description:
+            "Domain filter. Allowlist: ['nature.com'], denylist (prefix with '-'): ['-reddit.com'], or both: ['nature.com', '-reddit.com'].",
         }),
       ),
     });
@@ -607,6 +642,14 @@ function missingSearchKeyPayload(provider: (typeof SEARCH_PROVIDERS)[number]) {
       docs: "https://docs.openclaw.ai/tools/web",
     };
   }
+  if (provider === "tavily") {
+    return {
+      error: "missing_tavily_api_key",
+      message:
+        "web_search (tavily) needs a Tavily API key. Set TAVILY_API_KEY in the Gateway environment, or configure tools.web.search.tavily.apiKey.",
+      docs: "https://docs.openclaw.ai/tools/web",
+    };
+  }
   return {
     error: "missing_perplexity_api_key",
     message:
@@ -638,6 +681,9 @@ function resolveSearchProvider(search?: WebSearchConfig): (typeof SEARCH_PROVIDE
   }
   if (raw === "perplexity") {
     return "perplexity";
+  }
+  if (raw === "tavily") {
+    return "tavily";
   }
 
   // Auto-detect provider from available API keys (alphabetical order)
@@ -681,6 +727,14 @@ function resolveSearchProvider(search?: WebSearchConfig): (typeof SEARCH_PROVIDE
         'web_search: no provider configured, auto-detected "perplexity" from available API keys',
       );
       return "perplexity";
+    }
+    // Tavily
+    const tavilyConfig = resolveTavilyConfig(search);
+    if (resolveTavilyApiKey(tavilyConfig)) {
+      logVerbose(
+        'web_search: no provider configured, auto-detected "tavily" from available API keys',
+      );
+      return "tavily";
     }
   }
 
@@ -933,6 +987,39 @@ function resolveGeminiModel(gemini?: GeminiConfig): string {
   return fromConfig || DEFAULT_GEMINI_MODEL;
 }
 
+type TavilyConfig = {
+  apiKey?: string;
+  baseUrl?: string;
+};
+
+function resolveTavilyConfig(search?: WebSearchConfig): TavilyConfig {
+  if (!search || typeof search !== "object") {
+    return {};
+  }
+  const tavily = "tavily" in search ? search.tavily : undefined;
+  if (!tavily || typeof tavily !== "object") {
+    return {};
+  }
+  return tavily as TavilyConfig;
+}
+
+function resolveTavilyApiKey(tavily?: TavilyConfig): string | undefined {
+  const fromConfig = normalizeApiKey(tavily?.apiKey);
+  if (fromConfig) {
+    return fromConfig;
+  }
+  const fromEnv = normalizeApiKey(process.env.TAVILY_API_KEY);
+  return fromEnv || undefined;
+}
+
+function resolveTavilyBaseUrl(tavily?: TavilyConfig): string {
+  const fromConfig =
+    tavily && "baseUrl" in tavily && typeof tavily.baseUrl === "string"
+      ? tavily.baseUrl.trim()
+      : "";
+  return fromConfig || TAVILY_DEFAULT_BASE_URL;
+}
+
 async function withTrustedWebSearchEndpoint<T>(
   params: {
     url: string;
@@ -1039,10 +1126,10 @@ async function runGeminiSearch(params: {
   );
 }
 
-function resolveSearchCount(value: unknown, fallback: number): number {
+function resolveSearchCount(value: unknown, fallback: number, provider?: SearchProvider): number {
+  const maxCount = provider === "tavily" ? TAVILY_MAX_RESULTS : MAX_SEARCH_COUNT;
   const parsed = typeof value === "number" && Number.isFinite(value) ? value : fallback;
-  const clamped = Math.max(1, Math.min(MAX_SEARCH_COUNT, Math.floor(parsed)));
-  return clamped;
+  return Math.max(1, Math.min(maxCount, Math.floor(parsed)));
 }
 
 function normalizeBraveSearchLang(value: string | undefined): string | undefined {
@@ -1125,11 +1212,14 @@ function normalizeFreshness(
   const lower = trimmed.toLowerCase();
 
   if (BRAVE_FRESHNESS_SHORTCUTS.has(lower)) {
-    return provider === "brave" ? lower : FRESHNESS_TO_RECENCY[lower];
+    if (provider === "brave") {
+      return lower;
+    }
+    return FRESHNESS_TO_RECENCY[lower];
   }
 
   if (PERPLEXITY_RECENCY_VALUES.has(lower)) {
-    return provider === "perplexity" ? lower : RECENCY_TO_FRESHNESS[lower];
+    return provider === "perplexity" || provider === "tavily" ? lower : RECENCY_TO_FRESHNESS[lower];
   }
 
   // Brave date range support
@@ -1595,6 +1685,98 @@ async function runBraveLlmContextSearch(params: {
   );
 }
 
+type TavilySearchResult = {
+  title?: string;
+  url?: string;
+  content?: string;
+  score?: number;
+  published_date?: string;
+};
+
+type TavilySearchResponse = {
+  query?: string;
+  answer?: string;
+  results?: TavilySearchResult[];
+};
+
+async function runTavilySearch(params: {
+  query: string;
+  apiKey: string;
+  baseUrl: string;
+  maxResults: number;
+  timeoutSeconds: number;
+  searchDepth?: string;
+  includeAnswer?: boolean;
+  timeRange?: string;
+  startDate?: string;
+  endDate?: string;
+  includeDomains?: string[];
+  excludeDomains?: string[];
+}): Promise<{
+  results: Array<{ title: string; url: string; snippet: string; score?: number }>;
+  answer?: string;
+}> {
+  const body: Record<string, unknown> = {
+    query: params.query,
+    max_results: Math.min(params.maxResults, TAVILY_MAX_RESULTS),
+  };
+  if (params.searchDepth) {
+    body.search_depth = params.searchDepth;
+  }
+  if (params.includeAnswer) {
+    body.include_answer = true;
+  }
+  if (params.timeRange) {
+    body.time_range = params.timeRange;
+  }
+  if (params.startDate) {
+    body.start_date = params.startDate;
+  }
+  if (params.endDate) {
+    body.end_date = params.endDate;
+  }
+  if (params.includeDomains && params.includeDomains.length > 0) {
+    body.include_domains = params.includeDomains;
+  }
+  if (params.excludeDomains && params.excludeDomains.length > 0) {
+    body.exclude_domains = params.excludeDomains;
+  }
+
+  const endpoint = `${params.baseUrl.replace(/\/+$/, "")}/search`;
+
+  return withTrustedWebSearchEndpoint(
+    {
+      url: endpoint,
+      timeoutSeconds: params.timeoutSeconds,
+      init: {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${params.apiKey}`,
+        },
+        body: JSON.stringify(body),
+      },
+    },
+    async (res) => {
+      if (!res.ok) {
+        const detailResult = await readResponseText(res, { maxBytes: 64_000 });
+        const detail = detailResult.text;
+        throw new Error(`Tavily Search API error (${res.status}): ${detail || res.statusText}`);
+      }
+
+      const data = (await res.json()) as TavilySearchResponse;
+      const results = (data.results ?? []).map((r) => ({
+        title: wrapWebContent(r.title ?? "", "web_search"),
+        url: r.url ?? "",
+        snippet: wrapWebContent(r.content ?? "", "web_search"),
+        score: r.score,
+      }));
+
+      return { results, answer: data.answer };
+    },
+  );
+}
+
 async function runWebSearch(params: {
   query: string;
   count: number;
@@ -1621,6 +1803,9 @@ async function runWebSearch(params: {
   kimiBaseUrl?: string;
   kimiModel?: string;
   braveMode?: "web" | "llm-context";
+  tavilyBaseUrl?: string;
+  tavilySearchDepth?: string;
+  tavilyIncludeAnswer?: boolean;
 }): Promise<Record<string, unknown>> {
   const effectiveBraveMode = params.braveMode ?? "web";
   const providerSpecificKey =
@@ -1632,7 +1817,9 @@ async function runWebSearch(params: {
           ? (params.geminiModel ?? DEFAULT_GEMINI_MODEL)
           : params.provider === "kimi"
             ? `${params.kimiBaseUrl ?? DEFAULT_KIMI_BASE_URL}:${params.kimiModel ?? DEFAULT_KIMI_MODEL}`
-            : "";
+            : params.provider === "tavily"
+              ? `${params.tavilyBaseUrl ?? TAVILY_DEFAULT_BASE_URL}:${params.tavilySearchDepth ?? ""}:${String(params.tavilyIncludeAnswer ?? false)}`
+              : "";
   const cacheKey = normalizeCacheKey(
     params.provider === "brave" && effectiveBraveMode === "llm-context"
       ? `${params.provider}:llm-context:${params.query}:${params.country || "default"}:${params.search_lang || params.language || "default"}:${params.freshness || "default"}`
@@ -1787,6 +1974,46 @@ async function runWebSearch(params: {
     return payload;
   }
 
+  if (params.provider === "tavily") {
+    const includeDomains = params.searchDomainFilter?.filter((d) => !d.startsWith("-")) ?? [];
+    const excludeDomains =
+      params.searchDomainFilter?.filter((d) => d.startsWith("-")).map((d) => d.slice(1)) ?? [];
+
+    const tavilyResult = await runTavilySearch({
+      query: params.query,
+      apiKey: params.apiKey,
+      baseUrl: params.tavilyBaseUrl ?? TAVILY_DEFAULT_BASE_URL,
+      maxResults: params.count,
+      timeoutSeconds: params.timeoutSeconds,
+      searchDepth: params.tavilySearchDepth || undefined,
+      includeAnswer: params.tavilyIncludeAnswer,
+      timeRange: params.freshness || undefined,
+      startDate: params.dateAfter,
+      endDate: params.dateBefore,
+      includeDomains: includeDomains.length > 0 ? includeDomains : undefined,
+      excludeDomains: excludeDomains.length > 0 ? excludeDomains : undefined,
+    });
+
+    const payload: Record<string, unknown> = {
+      query: params.query,
+      provider: params.provider,
+      count: tavilyResult.results.length,
+      tookMs: Date.now() - start,
+      externalContent: {
+        untrusted: true,
+        source: "web_search",
+        provider: params.provider,
+        wrapped: true,
+      },
+      results: tavilyResult.results,
+    };
+    if (tavilyResult.answer) {
+      payload.answer = wrapWebContent(tavilyResult.answer, "web_search");
+    }
+    writeCache(SEARCH_CACHE, cacheKey, payload, params.cacheTtlMs);
+    return payload;
+  }
+
   if (params.provider !== "brave") {
     throw new Error("Unsupported web search provider.");
   }
@@ -1929,6 +2156,7 @@ export function createWebSearchTool(options?: {
   const grokConfig = resolveGrokConfig(search);
   const geminiConfig = resolveGeminiConfig(search);
   const kimiConfig = resolveKimiConfig(search);
+  const tavilyConfig = resolveTavilyConfig(search);
   const braveConfig = resolveBraveConfig(search);
   const braveMode = resolveBraveMode(braveConfig);
 
@@ -1943,9 +2171,11 @@ export function createWebSearchTool(options?: {
           ? "Search the web using Kimi by Moonshot. Returns AI-synthesized answers with citations from native $web_search."
           : provider === "gemini"
             ? "Search the web using Gemini with Google Search grounding. Returns AI-synthesized answers with citations from Google Search."
-            : braveMode === "llm-context"
-              ? "Search the web using Brave Search LLM Context API. Returns pre-extracted page content (text chunks, tables, code blocks) optimized for LLM grounding."
-              : "Search the web using Brave Search API. Supports region-specific and localized search via country and language parameters. Returns titles, URLs, and snippets for fast research.";
+            : provider === "tavily"
+              ? "Search the web using Tavily Search API. Returns structured results with titles, URLs, and content snippets. Supports domain filters, time range, and configurable search depth."
+              : braveMode === "llm-context"
+                ? "Search the web using Brave Search LLM Context API. Returns pre-extracted page content (text chunks, tables, code blocks) optimized for LLM grounding."
+                : "Search the web using Brave Search API. Supports region-specific and localized search via country and language parameters. Returns titles, URLs, and snippets for fast research.";
 
   return {
     label: "Web Search",
@@ -1969,7 +2199,9 @@ export function createWebSearchTool(options?: {
               ? resolveKimiApiKey(kimiConfig)
               : provider === "gemini"
                 ? resolveGeminiApiKey(geminiConfig)
-                : resolveSearchApiKey(search);
+                : provider === "tavily"
+                  ? resolveTavilyApiKey(tavilyConfig)
+                  : resolveSearchApiKey(search);
 
       if (!apiKey) {
         return jsonResult(missingSearchKeyPayload(provider));
@@ -2051,10 +2283,15 @@ export function createWebSearchTool(options?: {
         });
       }
       const rawFreshness = readStringParam(params, "freshness");
-      if (rawFreshness && provider !== "brave" && provider !== "perplexity") {
+      if (
+        rawFreshness &&
+        provider !== "brave" &&
+        provider !== "perplexity" &&
+        provider !== "tavily"
+      ) {
         return jsonResult({
           error: "unsupported_freshness",
-          message: `freshness filtering is not supported by the ${provider} provider. Only Brave and Perplexity support freshness.`,
+          message: `freshness filtering is not supported by the ${provider} provider. Only Brave, Perplexity, and Tavily support freshness.`,
           docs: "https://docs.openclaw.ai/tools/web",
         });
       }
@@ -2087,6 +2324,7 @@ export function createWebSearchTool(options?: {
       if (
         (rawDateAfter || rawDateBefore) &&
         provider !== "brave" &&
+        provider !== "tavily" &&
         !(provider === "perplexity" && supportsStructuredPerplexityFilters)
       ) {
         return jsonResult({
@@ -2094,7 +2332,7 @@ export function createWebSearchTool(options?: {
           message:
             provider === "perplexity"
               ? "date_after/date_before are only supported by the native Perplexity Search API path. Remove Perplexity baseUrl/model overrides or use a direct PERPLEXITY_API_KEY to enable them."
-              : `date_after/date_before filtering is not supported by the ${provider} provider. Only Brave and Perplexity support date filtering.`,
+              : `date_after/date_before filtering is not supported by the ${provider} provider. Only Brave, Perplexity, and Tavily support date filtering.`,
           docs: "https://docs.openclaw.ai/tools/web",
         });
       }
@@ -2133,6 +2371,7 @@ export function createWebSearchTool(options?: {
       if (
         domainFilter &&
         domainFilter.length > 0 &&
+        provider !== "tavily" &&
         !(provider === "perplexity" && supportsStructuredPerplexityFilters)
       ) {
         return jsonResult({
@@ -2140,12 +2379,12 @@ export function createWebSearchTool(options?: {
           message:
             provider === "perplexity"
               ? "domain_filter is only supported by the native Perplexity Search API path. Remove Perplexity baseUrl/model overrides or use a direct PERPLEXITY_API_KEY to enable it."
-              : `domain_filter is not supported by the ${provider} provider. Only Perplexity supports domain filtering.`,
+              : `domain_filter is not supported by the ${provider} provider. Only Perplexity and Tavily support domain filtering.`,
           docs: "https://docs.openclaw.ai/tools/web",
         });
       }
 
-      if (domainFilter && domainFilter.length > 0) {
+      if (domainFilter && domainFilter.length > 0 && provider !== "tavily") {
         const hasDenylist = domainFilter.some((d) => d.startsWith("-"));
         const hasAllowlist = domainFilter.some((d) => !d.startsWith("-"));
         if (hasDenylist && hasAllowlist) {
@@ -2180,9 +2419,20 @@ export function createWebSearchTool(options?: {
         });
       }
 
+      const searchDepth = readStringParam(params, "search_depth");
+      if (searchDepth && searchDepth !== "basic" && searchDepth !== "advanced") {
+        return jsonResult({
+          error: "invalid_search_depth",
+          message: 'search_depth must be "basic" or "advanced".',
+          docs: "https://docs.openclaw.ai/tools/web",
+        });
+      }
+      const includeAnswer =
+        params.include_answer === true || params.include_answer === "true" ? true : undefined;
+
       const result = await runWebSearch({
         query,
-        count: resolveSearchCount(count, DEFAULT_SEARCH_COUNT),
+        count: resolveSearchCount(count, DEFAULT_SEARCH_COUNT, provider),
         apiKey,
         timeoutSeconds: resolveTimeoutSeconds(search?.timeoutSeconds, DEFAULT_TIMEOUT_SECONDS),
         cacheTtlMs: resolveCacheTtlMs(search?.cacheTtlMinutes, DEFAULT_CACHE_TTL_MINUTES),
@@ -2206,6 +2456,9 @@ export function createWebSearchTool(options?: {
         kimiBaseUrl: resolveKimiBaseUrl(kimiConfig),
         kimiModel: resolveKimiModel(kimiConfig),
         braveMode,
+        tavilyBaseUrl: resolveTavilyBaseUrl(tavilyConfig),
+        tavilySearchDepth: searchDepth ?? undefined,
+        tavilyIncludeAnswer: includeAnswer,
       });
       return jsonResult(result);
     },
@@ -2239,4 +2492,7 @@ export const __testing = {
   resolveRedirectUrl: resolveCitationRedirectUrl,
   resolveBraveMode,
   mapBraveLlmContextResults,
+  resolveTavilyApiKey,
+  resolveTavilyBaseUrl,
+  resolveTavilyConfig,
 } as const;

@@ -20,6 +20,7 @@ const BUNDLED_WEB_SEARCH_ALLOWLIST_COMPAT_PLUGIN_IDS = [
   "google",
   "moonshot",
   "perplexity",
+  "tavily",
   "xai",
 ] as const;
 
@@ -101,6 +102,22 @@ const BUNDLED_WEB_SEARCH_PROVIDER_REGISTRY = [
       getCredentialValue: (searchConfig) => getScopedCredentialValue(searchConfig, "perplexity"),
       setCredentialValue: (searchConfigTarget, value) =>
         setScopedCredentialValue(searchConfigTarget, "perplexity", value),
+    }),
+  },
+  {
+    pluginId: "tavily",
+    provider: createPluginBackedWebSearchProvider({
+      id: "tavily",
+      label: "Tavily Search",
+      hint: "Structured results · domain filters · AI answer summaries",
+      envVars: ["TAVILY_API_KEY"],
+      placeholder: "tvly-...",
+      signupUrl: "https://tavily.com/",
+      docsUrl: "https://docs.openclaw.ai/tavily",
+      autoDetectOrder: 60,
+      getCredentialValue: (searchConfig) => getScopedCredentialValue(searchConfig, "tavily"),
+      setCredentialValue: (searchConfigTarget, value) =>
+        setScopedCredentialValue(searchConfigTarget, "tavily", value),
     }),
   },
   {
