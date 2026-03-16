@@ -97,10 +97,9 @@ export function resolveLastChannelRaw(params: {
   // completion events to be delivered to the dashboard instead of the original
   // channel. See: https://github.com/openclaw/openclaw/issues/47745
   const persistedChannel = normalizeMessageChannel(params.persistedLastChannel);
-  const sessionKeyChannelHintForCheck = resolveSessionKeyChannelHint(params.sessionKey);
+  const sessionKeyChannelHint = resolveSessionKeyChannelHint(params.sessionKey);
   const hasEstablishedExternalRoute =
-    isExternalRoutingChannel(persistedChannel) ||
-    isExternalRoutingChannel(sessionKeyChannelHintForCheck);
+    isExternalRoutingChannel(persistedChannel) || isExternalRoutingChannel(sessionKeyChannelHint);
   if (
     originatingChannel === INTERNAL_MESSAGE_CHANNEL &&
     !hasEstablishedExternalRoute &&
@@ -108,7 +107,6 @@ export function resolveLastChannelRaw(params: {
   ) {
     return params.originatingChannelRaw;
   }
-  const sessionKeyChannelHint = sessionKeyChannelHintForCheck;
   let resolved = params.originatingChannelRaw || params.persistedLastChannel;
   // Internal/non-deliverable sources should not overwrite previously known
   // external delivery routes (or explicit channel hints from the session key).
@@ -132,10 +130,9 @@ export function resolveLastToRaw(params: {
 }): string | undefined {
   const originatingChannel = normalizeMessageChannel(params.originatingChannelRaw);
   const persistedChannel = normalizeMessageChannel(params.persistedLastChannel);
-  const sessionKeyChannelHintForToCheck = resolveSessionKeyChannelHint(params.sessionKey);
+  const sessionKeyChannelHint = resolveSessionKeyChannelHint(params.sessionKey);
   const hasEstablishedExternalRouteForTo =
-    isExternalRoutingChannel(persistedChannel) ||
-    isExternalRoutingChannel(sessionKeyChannelHintForToCheck);
+    isExternalRoutingChannel(persistedChannel) || isExternalRoutingChannel(sessionKeyChannelHint);
   if (
     originatingChannel === INTERNAL_MESSAGE_CHANNEL &&
     !hasEstablishedExternalRouteForTo &&
@@ -143,8 +140,6 @@ export function resolveLastToRaw(params: {
   ) {
     return params.originatingToRaw || params.toRaw;
   }
-  const sessionKeyChannelHint = sessionKeyChannelHintForToCheck;
-
   // When the turn originates from an internal/non-deliverable source, do not
   // replace an established external destination with internal routing ids
   // (e.g., session/webchat ids).
