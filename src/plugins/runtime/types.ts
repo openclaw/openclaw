@@ -1,5 +1,4 @@
-import type { OutboundDeliveryResult } from "../../infra/outbound/deliver.js";
-import type { deliverOutboundPayloads } from "../../infra/outbound/deliver.js";
+import type { OutboundDeliveryResult, deliverOutboundPayloads } from "../../infra/outbound/deliver.js";
 import type { PluginRuntimeChannel } from "./types-channel.js";
 import type { PluginRuntimeCore, RuntimeLogger } from "./types-core.js";
 
