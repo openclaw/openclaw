@@ -3,12 +3,13 @@
 Use this dossier when a consumer-app Sentry issue traces to an SDK interface
 change causing ABI decoding reverts on-chain.
 
-## Title
+## Incident identity
 
 - Service: consumer-app, blue-sdk-viem
 - Date: 2026-03-13
-- Env: mainnet (all chains with EIP-5267 tokens)
+- Env: mainnet (affects tokens implementing EIP-5267 `eip712Domain()`)
 - Severity: high (929 users, ~16k Sentry events since 2026-03-03)
+- Last updated: 2026-03-13
 
 ## Summary
 
@@ -35,8 +36,8 @@ change causing ABI decoding reverts on-chain.
 
 ## Likely Cause
 
-- Primary: commit `bb68ca4` changed `eip712Domain()` return type in `IERC20Permit.sol` from 7 individual values to a single `Eip5267Domain` struct. The struct contains dynamic types (`string memory`, `uint256[] memory`), which changes ABI encoding layout vs flat returns. On-chain implementations return flat-encoded values, causing the caller-side ABI decoder to misinterpret the data and revert. That failure is only outside `catch {}` when decoding happens after the external call boundary (for example a low-level call followed by separate decode logic), so the exact call site still needs live confirmation.
-- Contributing: unverified — a domain expert challenged the offset-pointer sub-explanation; the main struct-vs-flat ABI mismatch theory still fits the evidence, but the precise dynamic-offset failure mode remains unconfirmed
+- Primary: commit `bb68ca4` changed `eip712Domain()` return type in `IERC20Permit.sol` from 7 individual values to a single `Eip5267Domain` struct. The struct contains dynamic types (`string memory`, `uint256[] memory`), which changes ABI encoding layout vs flat returns. On-chain implementations return flat-encoded values, causing the caller-side ABI decoder to misinterpret the data and revert. In this implementation, decoding happens in caller-side logic after the external call returns, so `try/catch {}` on the call itself does not intercept the failure; live confirmation of the exact call site is still required.
+- Contributing: unverified — a domain expert challenged the dynamic offset-pointer sub-explanation; the main struct-vs-flat ABI mismatch theory still fits the evidence, but the precise dynamic-offset failure mode remains unconfirmed
 - Ruled out: tokens without `eip712Domain()` (WETH, USDC, DAI) — these revert at the call level and are caught by `catch {}`
 - Disproved theories: none yet; the offset-pointer sub-explanation was challenged but not yet confirmed or disproved
 

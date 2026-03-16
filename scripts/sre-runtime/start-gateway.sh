@@ -141,11 +141,11 @@ app_id="${GITHUB_APP_ID:-}"
 installation_id="${GITHUB_APP_INSTALLATION_ID:-}"
 private_key="${GITHUB_APP_PRIVATE_KEY:-}"
 
-	if [ -z "$app_id" ] || [ -z "$installation_id" ] || [ -z "$private_key" ]; then
-	  key_len="${#private_key}"
-	  echo "github-app-token:error missing app credentials (GITHUB_APP_ID=${app_id:+set} GITHUB_APP_INSTALLATION_ID=${installation_id:+set} GITHUB_APP_PRIVATE_KEY=${private_key:+set}, key_len=${key_len})" >&2
-	  exit 1
-	fi
+if [ -z "$app_id" ] || [ -z "$installation_id" ] || [ -z "$private_key" ]; then
+  key_len="${#private_key}"
+  echo "github-app-token:error missing app credentials (GITHUB_APP_ID=${app_id:+set} GITHUB_APP_INSTALLATION_ID=${installation_id:+set} GITHUB_APP_PRIVATE_KEY=${private_key:+set}, key_len=${key_len})" >&2
+  exit 1
+fi
 
 header_b64="$(printf '{"alg":"RS256","typ":"JWT"}' | openssl base64 -A | tr '+/' '-_' | tr -d '=')"
 now="$(date +%s)"
@@ -158,32 +158,37 @@ payload_b64="$(
 unsigned_token="${header_b64}.${payload_b64}"
 private_key_file="$(mktemp)"
 trap 'rm -f "$private_key_file"' EXIT HUP INT TERM
-	if [ -z "$private_key" ]; then
-	  echo "github-app-token:error empty private key provided" >&2
-	  exit 1
-	fi
 
-	# Convert literal \n sequences to real newlines (Vault may store PEM keys either way).
-	if ! printf '%s' "$private_key" | sed 's/\\n/\n/g' >"$private_key_file"; then
-	  echo "github-app-token:error failed to process PEM key format" >&2
-	  exit 1
-	fi
+case "$private_key" in
+  *\\n*)
+    if ! printf '%s' "$private_key" | awk 'BEGIN { ORS = "" } { while ((i = index($0, "\\n")) > 0) { printf "%s\n", substr($0, 1, i - 1); $0 = substr($0, i + 2) } printf "%s", $0 }' >"$private_key_file"; then
+      echo "github-app-token:error failed to process PEM key format" >&2
+      exit 1
+    fi
+    ;;
+  *)
+    if ! printf '%s' "$private_key" >"$private_key_file"; then
+      echo "github-app-token:error failed to process PEM key format" >&2
+      exit 1
+    fi
+    ;;
+esac
 
-	if ! grep -q '^-----BEGIN ' "$private_key_file"; then
-	  echo "github-app-token:error PEM key missing BEGIN marker" >&2
-	  exit 1
-	fi
+if ! grep -q '^-----BEGIN ' "$private_key_file"; then
+  echo "github-app-token:error PEM key missing BEGIN marker" >&2
+  exit 1
+fi
 
-	if ! grep -q '^-----END ' "$private_key_file"; then
-	  echo "github-app-token:error PEM key missing END marker" >&2
-	  exit 1
-	fi
+if ! grep -q '^-----END ' "$private_key_file"; then
+  echo "github-app-token:error PEM key missing END marker" >&2
+  exit 1
+fi
 chmod 600 "$private_key_file"
- if ! signature_b64="$(
-   printf '%s' "$unsigned_token" \
-     | openssl dgst -binary -sha256 -sign "$private_key_file" \
-     | openssl base64 -A | tr '+/' '-_' | tr -d '='
- )"; then
+if ! signature_b64="$(
+  printf '%s' "$unsigned_token" \
+    | openssl dgst -binary -sha256 -sign "$private_key_file" \
+    | openssl base64 -A | tr '+/' '-_' | tr -d '='
+)"; then
   echo "github-app-token:error openssl signature generation failed" >&2
   exit 1
 fi
@@ -219,48 +224,77 @@ if [ -z "$expires_at_iso" ]; then
   exit 1
 fi
 
-if ! expires_epoch="$(
-  node -e 'const iso=process.argv[1]; const t=Date.parse(iso); if (!Number.isFinite(t)) process.exit(1); process.stdout.write(String(Math.floor(t / 1000)));' "$expires_at_iso"
-)"; then
+if ! expires_epoch="$(date -d "$expires_at_iso" +%s)"; then
   echo "github-app-token:error failed to parse expires_at timestamp" >&2
   exit 1
 fi
 
-jq -n --arg token "$token" --argjson expires_at "$expires_epoch" \
-  '{token:$token,expires_at:$expires_at}' >"$cache_file"
-chmod 600 "$cache_file"
+if ! jq -n --arg token "$token" --argjson expires_at "$expires_epoch" \
+  '{token:$token,expires_at:$expires_at}' >"$cache_file"; then
+  echo "github-app-token:warning failed to write token cache" >&2
+else
+  chmod 600 "$cache_file"
+fi
 printf '%s\n' "$token"
 EOF
   chmod +x "${wrapper_dir}/github-app-token.sh"
 
-  cat >"${wrapper_dir}/gh" <<'EOF'
+cat >"${wrapper_dir}/gh" <<'EOF'
 #!/bin/sh
 set -eu
-	if token="$(/home/node/.openclaw/bin/github-app-token.sh)"; then
-	  export GH_TOKEN="$token"
-	  export GITHUB_TOKEN="$token"
-	else
-	  echo 'gh-wrapper:error github app token unavailable' >&2
-	  exit 1
-	fi
-	exec /usr/bin/gh "$@"
+if token="$(/home/node/.openclaw/bin/github-app-token.sh)"; then
+  export GH_TOKEN="$token"
+  export GITHUB_TOKEN="$token"
+else
+  echo 'gh-wrapper:error github app token unavailable' >&2
+  exit 1
+fi
+exec /usr/bin/gh "$@"
 EOF
   chmod +x "${wrapper_dir}/gh"
 
 cat >"${wrapper_dir}/git" <<'EOF'
 #!/bin/sh
 set -eu
-	if token="$(/home/node/.openclaw/bin/github-app-token.sh)"; then
-	  git_auth_basic="$(printf 'x-access-token:%s' "$token" | base64 | tr -d '\n')"
-	else
-	  echo 'git-wrapper:error github app token unavailable' >&2
-	  exit 1
-	fi
-	exec /usr/bin/git \
-	  -c credential.helper= \
-	  -c core.askPass= \
-	  -c "http.https://github.com/.extraHeader=Authorization: Basic ${git_auth_basic}" \
-	  "$@"
+git_cmd="$1"
+case "$git_cmd" in
+  -*)
+    while [ "$#" -gt 0 ]; do
+      if [ "${1#-}" != "$1" ]; then
+        shift
+        continue
+      fi
+      git_cmd="$1"
+      break
+    done
+    ;;
+esac
+
+case "$git_cmd" in
+  show|log|diff|rev-parse|status|branch|checkout|add|reset|restore|tag|config|commit|merge|rebase|stash)
+    require_token=0
+    ;;
+  *)
+    require_token=1
+    ;;
+esac
+
+if token="$(/home/node/.openclaw/bin/github-app-token.sh)"; then
+  git_auth_basic="$(printf 'x-access-token:%s' "$token" | base64 | tr -d '\n')"
+  exec /usr/bin/git \
+    -c credential.helper= \
+    -c core.askPass= \
+    -c "http.https://github.com/.extraHeader=Authorization: Basic ${git_auth_basic}" \
+    "$@"
+fi
+
+if [ "${require_token}" = 1 ]; then
+  echo 'git-wrapper:error github app token unavailable' >&2
+  exit 1
+fi
+
+echo 'git-wrapper:warning github app token unavailable, falling back to unauthenticated git' >&2
+exec /usr/bin/git "$@"
 EOF
   chmod +x "${wrapper_dir}/git"
 
@@ -335,23 +369,13 @@ jq \
   --argjson relationship_index_enabled "$(bool_from_env "${OPENCLAW_SRE_RELATIONSHIP_INDEX_ENABLED:-0}")" \
   '
     .tools = (.tools // {})
+    | .tools = (.tools // {})
     | .tools.exec = (
         if ((.tools.exec // null) | type) == "object" then
           .tools.exec
         else
           {}
         end
-      )
-    | .tools.exec.pathPrepend = (
-        (
-          if ((.tools.exec.pathPrepend // null) | type) == "array" then
-            .tools.exec.pathPrepend
-          else
-            []
-          end
-        )
-        + ["/home/node/.openclaw/bin"]
-        | unique
       )
     | .gateway = (.gateway // {})
     | .gateway.auth = (
@@ -380,6 +404,16 @@ jq \
         + (if ($heartbeat_target | length) > 0 then [$heartbeat_target] else [] end)
         | unique
       )
+    | .sre.promptTemplates.monitoringIncident as $monitoring_prompt
+    | .channels.slack.channels["#platform-monitoring"].systemPrompt = $monitoring_prompt
+    | .channels.slack.channels["#staging-infra-monitoring"].systemPrompt =
+        ($monitoring_prompt
+          | sub("^Monitoring incident intake mode:"; "Staging monitoring incident intake mode:")
+        )
+    | .channels.slack.channels["#public-api-monitoring"].systemPrompt =
+        ($monitoring_prompt
+          | sub("^Monitoring incident intake mode:"; "Public API monitoring incident intake mode:")
+        )
     | .sre = (.sre // {})
     | .sre.provenance = ((.sre.provenance // {}) + {enabled: $provenance_enabled})
     | .sre.structuredEvidence = ((.sre.structuredEvidence // {}) + {enabled: $structured_evidence_enabled})
