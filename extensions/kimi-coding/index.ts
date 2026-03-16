@@ -1,5 +1,7 @@
 import { emptyPluginConfigSchema, type OpenClawPluginApi } from "openclaw/plugin-sdk/core";
 import { buildKimiCodingProvider } from "../../src/agents/models-config.providers.static.js";
+import { applyKimiCodeConfig, KIMI_CODING_MODEL_REF } from "../../src/commands/onboard-auth.js";
+import { createProviderApiKeyAuthMethod } from "../../src/plugins/provider-api-key-auth.js";
 import { isRecord } from "../../src/utils.js";
 
 const PROVIDER_ID = "kimi-coding";
@@ -16,7 +18,33 @@ const kimiCodingPlugin = {
       aliases: ["kimi-code"],
       docsPath: "/providers/moonshot",
       envVars: ["KIMI_API_KEY", "KIMICODE_API_KEY"],
-      auth: [],
+      auth: [
+        createProviderApiKeyAuthMethod({
+          providerId: PROVIDER_ID,
+          methodId: "api-key",
+          label: "Kimi Code API key (subscription)",
+          hint: "Kimi K2.5 + Kimi Coding",
+          optionKey: "kimiCodeApiKey",
+          flagName: "--kimi-code-api-key",
+          envVar: "KIMI_API_KEY",
+          promptMessage: "Enter Kimi Coding API key",
+          defaultModel: KIMI_CODING_MODEL_REF,
+          expectedProviders: ["kimi-code", "kimi-coding"],
+          applyConfig: (cfg) => applyKimiCodeConfig(cfg),
+          noteMessage: [
+            "Kimi Coding uses a dedicated endpoint and API key.",
+            "Get your API key at: https://www.kimi.com/code/en",
+          ].join("\n"),
+          noteTitle: "Kimi Coding",
+          wizard: {
+            choiceId: "kimi-code-api-key",
+            choiceLabel: "Kimi Code API key (subscription)",
+            groupId: "moonshot",
+            groupLabel: "Moonshot AI (Kimi K2.5)",
+            groupHint: "Kimi K2.5 + Kimi Coding",
+          },
+        }),
+      ],
       catalog: {
         order: "simple",
         run: async (ctx) => {
