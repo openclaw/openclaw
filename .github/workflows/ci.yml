@@ -13,7 +13,7 @@ jobs:
   # Detect docs-only changes to skip heavy jobs (test, build, Windows, macOS, Android).
   # Lint and format always run. Fail-safe: if detection fails, run everything.
   docs-scope:
-    runs-on: blacksmith-16vcpu-ubuntu-2404
+    runs-on: ubuntu-latest
     outputs:
       docs_only: ${{ steps.check.outputs.docs_only }}
       docs_changed: ${{ steps.check.outputs.docs_changed }}
@@ -41,7 +41,7 @@ jobs:
   changed-scope:
     needs: [docs-scope]
     if: needs.docs-scope.outputs.docs_only != 'true'
-    runs-on: blacksmith-16vcpu-ubuntu-2404
+    runs-on: ubuntu-latest
     outputs:
       run_node: ${{ steps.scope.outputs.run_node }}
       run_macos: ${{ steps.scope.outputs.run_macos }}
@@ -80,7 +80,7 @@ jobs:
   build-artifacts:
     needs: [docs-scope, changed-scope]
     if: needs.docs-scope.outputs.docs_only != 'true' && (github.event_name == 'push' || needs.changed-scope.outputs.run_node == 'true')
-    runs-on: blacksmith-16vcpu-ubuntu-2404
+    runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v5
@@ -114,7 +114,7 @@ jobs:
   release-check:
     needs: [docs-scope, build-artifacts]
     if: github.event_name == 'push' && needs.docs-scope.outputs.docs_only != 'true'
-    runs-on: blacksmith-16vcpu-ubuntu-2404
+    runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v5
@@ -139,7 +139,7 @@ jobs:
   checks:
     needs: [docs-scope, changed-scope]
     if: needs.docs-scope.outputs.docs_only != 'true' && (github.event_name == 'push' || needs.changed-scope.outputs.run_node == 'true')
-    runs-on: blacksmith-16vcpu-ubuntu-2404
+    runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
@@ -191,7 +191,7 @@ jobs:
     name: "check"
     needs: [docs-scope, changed-scope]
     if: needs.docs-scope.outputs.docs_only != 'true' && (github.event_name == 'push' || needs.changed-scope.outputs.run_node == 'true')
-    runs-on: blacksmith-16vcpu-ubuntu-2404
+    runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v5
@@ -217,7 +217,7 @@ jobs:
   check-docs:
     needs: [docs-scope]
     if: needs.docs-scope.outputs.docs_changed == 'true'
-    runs-on: blacksmith-16vcpu-ubuntu-2404
+    runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v5
@@ -237,7 +237,7 @@ jobs:
     name: "compat-node22"
     needs: [docs-scope, changed-scope]
     if: needs.docs-scope.outputs.docs_only != 'true' && (github.event_name == 'push' || needs.changed-scope.outputs.run_node == 'true')
-    runs-on: blacksmith-16vcpu-ubuntu-2404
+    runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v5
@@ -270,7 +270,7 @@ jobs:
   skills-python:
     needs: [docs-scope, changed-scope]
     if: needs.docs-scope.outputs.docs_only != 'true' && (github.event_name == 'push' || needs.changed-scope.outputs.run_node == 'true' || needs.changed-scope.outputs.run_skills_python == 'true')
-    runs-on: blacksmith-16vcpu-ubuntu-2404
+    runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v5
@@ -294,7 +294,7 @@ jobs:
         run: python -m pytest -q skills
 
   secrets:
-    runs-on: blacksmith-16vcpu-ubuntu-2404
+    runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v5
@@ -363,7 +363,7 @@ jobs:
   checks-windows:
     needs: [docs-scope, changed-scope]
     if: needs.docs-scope.outputs.docs_only != 'true' && (github.event_name == 'push' || needs.changed-scope.outputs.run_windows == 'true')
-    runs-on: blacksmith-32vcpu-windows-2025
+    runs-on: windows-latest
     timeout-minutes: 45
     env:
       NODE_OPTIONS: --max-old-space-size=6144
@@ -725,7 +725,7 @@ jobs:
   android:
     needs: [docs-scope, changed-scope]
     if: needs.docs-scope.outputs.docs_only != 'true' && (github.event_name == 'push' || needs.changed-scope.outputs.run_android == 'true')
-    runs-on: blacksmith-16vcpu-ubuntu-2404
+    runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
