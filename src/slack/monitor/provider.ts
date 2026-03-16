@@ -100,12 +100,56 @@ function publishSlackDisconnectedStatus(
   });
 }
 
-async function readRequestBody(req: IncomingMessage): Promise<string> {
+async function readRequestBody(
+  req: IncomingMessage,
+  opts: { maxBytes: number; timeoutMs: number },
+): Promise<string> {
   return new Promise((resolve, reject) => {
     const chunks: Buffer[] = [];
-    req.on("data", (chunk) => chunks.push(chunk));
-    req.on("end", () => resolve(Buffer.concat(chunks).toString("utf8")));
-    req.on("error", reject);
+    let bytesRead = 0;
+
+    const timeout = setTimeout(() => {
+      cleanup();
+      reject(new Error("Request timeout"));
+    }, opts.timeoutMs);
+
+    const cleanup = () => {
+      clearTimeout(timeout);
+      req.off("data", onData);
+      req.off("end", onEnd);
+      req.off("error", onError);
+      req.off("close", onClose);
+    };
+
+    const onData = (chunk: Buffer) => {
+      bytesRead += chunk.length;
+      if (bytesRead > opts.maxBytes) {
+        cleanup();
+        reject(new Error("Request body too large"));
+        return;
+      }
+      chunks.push(chunk);
+    };
+
+    const onEnd = () => {
+      cleanup();
+      resolve(Buffer.concat(chunks).toString("utf8"));
+    };
+
+    const onError = (err: Error) => {
+      cleanup();
+      reject(err);
+    };
+
+    const onClose = () => {
+      cleanup();
+      reject(new Error("Request aborted"));
+    };
+
+    req.on("data", onData);
+    req.on("end", onEnd);
+    req.on("error", onError);
+    req.on("close", onClose);
   });
 }
 
@@ -232,8 +276,19 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
       ? async (req: IncomingMessage, res: ServerResponse) => {
           // Slack sends url_verification WITHOUT a signature (by design).
           // We must intercept this BEFORE the receiver's signature verification.
-          // Read the body first to check the request type.
-          const body = await readRequestBody(req);
+          // Read the body first to check the request type. Enforce limits early.
+          let body: string;
+          try {
+            body = await readRequestBody(req, {
+              maxBytes: SLACK_WEBHOOK_MAX_BODY_BYTES,
+              timeoutMs: SLACK_WEBHOOK_BODY_TIMEOUT_MS,
+            });
+          } catch (err) {
+            // Body limits or timeout reached.
+            res.writeHead(413, { "Content-Type": "text/plain" });
+            res.end(err instanceof Error ? err.message : String(err));
+            return;
+          }
 
           let parsed: unknown;
           try {
@@ -267,22 +322,10 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
           mockReq.removeListener = passThrough.removeListener.bind(passThrough);
           mockReq.emit = passThrough.emit.bind(passThrough);
 
-          const guard = installRequestBodyLimitGuard(mockReq, res, {
-            maxBytes: SLACK_WEBHOOK_MAX_BODY_BYTES,
-            timeoutMs: SLACK_WEBHOOK_BODY_TIMEOUT_MS,
-            responseFormat: "text",
-          });
-          if (guard.isTripped()) {
-            return;
-          }
           try {
             await Promise.resolve(receiver.requestListener(mockReq, res));
           } catch (err) {
-            if (!guard.isTripped()) {
-              throw err;
-            }
-          } finally {
-            guard.dispose();
+            throw err;
           }
         }
       : null;

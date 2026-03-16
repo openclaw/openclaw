@@ -77,7 +77,6 @@ export async function writeTextAtomic(
       throw err;
     }
   }
-  throw lastError;
 }
 
 export function createAsyncLock() {

@@ -89,6 +89,8 @@ USER.md
 # local tooling
 .serena/
 
+*.log
+
 # Agent credentials and memory (NEVER COMMIT)
 /memory/
 .agent/*.json
