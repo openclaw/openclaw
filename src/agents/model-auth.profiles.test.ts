@@ -467,4 +467,17 @@ describe("getApiKeyForModel", () => {
       },
     );
   });
+
+  it("resolveEnvApiKey('gigachat') ignores password-only basic-auth envs", async () => {
+    await withEnvAsync(
+      {
+        GIGACHAT_CREDENTIALS: undefined,
+        GIGACHAT_PASSWORD: "gigachat-basic-password",
+      },
+      async () => {
+        const resolved = resolveEnvApiKey("gigachat");
+        expect(resolved).toBeUndefined();
+      },
+    );
+  });
 });

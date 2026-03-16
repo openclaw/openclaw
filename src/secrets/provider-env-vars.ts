@@ -15,7 +15,7 @@ const CORE_PROVIDER_AUTH_ENV_VAR_CANDIDATES = {
   qianfan: ["QIANFAN_API_KEY"],
   xai: ["XAI_API_KEY"],
   mistral: ["MISTRAL_API_KEY"],
-  gigachat: ["GIGACHAT_CREDENTIALS", "GIGACHAT_PASSWORD"],
+  gigachat: ["GIGACHAT_CREDENTIALS"],
   kilocode: ["KILOCODE_API_KEY"],
   modelstudio: ["MODELSTUDIO_API_KEY"],
   volcengine: ["VOLCANO_ENGINE_API_KEY"],
@@ -25,6 +25,7 @@ const CORE_PROVIDER_AUTH_ENV_VAR_CANDIDATES = {
 const CORE_PROVIDER_SETUP_ENV_VAR_OVERRIDES = {
   anthropic: ["ANTHROPIC_API_KEY", "ANTHROPIC_OAUTH_TOKEN"],
   chutes: ["CHUTES_API_KEY", "CHUTES_OAUTH_TOKEN"],
+  gigachat: ["GIGACHAT_CREDENTIALS", "GIGACHAT_PASSWORD"],
   "minimax-cn": ["MINIMAX_API_KEY"],
 } as const;
 

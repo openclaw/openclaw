@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
+  PROVIDER_AUTH_ENV_VAR_CANDIDATES,
+  PROVIDER_ENV_VARS,
   listKnownProviderAuthEnvVarNames,
   listKnownSecretEnvVarNames,
   omitEnvKeysCaseInsensitive,
@@ -41,5 +43,10 @@ describe("provider env vars", () => {
     expect(listKnownProviderAuthEnvVarNames()).toEqual(
       expect.arrayContaining(["GIGACHAT_CREDENTIALS", "GIGACHAT_PASSWORD"]),
     );
+  });
+
+  it("does not treat GigaChat password-only env vars as API-key candidates", () => {
+    expect(PROVIDER_AUTH_ENV_VAR_CANDIDATES.gigachat).toEqual(["GIGACHAT_CREDENTIALS"]);
+    expect(PROVIDER_ENV_VARS.gigachat).toEqual(["GIGACHAT_CREDENTIALS", "GIGACHAT_PASSWORD"]);
   });
 });

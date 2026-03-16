@@ -35,6 +35,7 @@ import { resolveOpenClawAgentDir } from "../../agent-paths.js";
 import { resolveSessionAgentIds } from "../../agent-scope.js";
 import { createAnthropicPayloadLogger } from "../../anthropic-payload-log.js";
 import { ensureAuthProfileStore } from "../../auth-profiles.js";
+import type { ApiKeyCredential, AuthProfileStore } from "../../auth-profiles.js";
 import {
   analyzeBootstrapBudget,
   buildBootstrapPromptWarning,
@@ -216,6 +217,25 @@ function createYieldAbortedResponse(model: { api?: string; provider?: string; id
     async *[Symbol.asyncIterator]() {},
     result: async () => message,
   };
+}
+
+export function resolveGigachatAuthProfileMetadata(
+  store: Pick<AuthProfileStore, "profiles">,
+  authProfileId?: string,
+): Record<string, string> | undefined {
+  const profileIds = [authProfileId?.trim(), "gigachat:default"].filter(
+    (profileId): profileId is string => Boolean(profileId),
+  );
+  for (const profileId of profileIds) {
+    const credential = store.profiles[profileId];
+    if (
+      credential?.type === "api_key" &&
+      (credential as ApiKeyCredential).provider === "gigachat"
+    ) {
+      return credential.metadata;
+    }
+  }
+  return undefined;
 }
 
 // Queue a hidden steering message so pi-agent-core skips any remaining tool calls.
@@ -1913,8 +1933,10 @@ export async function runEmbeddedAttempt(
 
         // Read GigaChat-specific config from auth profile credential metadata.
         const gigachatStore = ensureAuthProfileStore(agentDir, { allowKeychainPrompt: false });
-        const gigachatCred = gigachatStore.profiles["gigachat:default"];
-        const gigachatMeta = gigachatCred?.type === "api_key" ? gigachatCred.metadata : undefined;
+        const gigachatMeta = resolveGigachatAuthProfileMetadata(
+          gigachatStore,
+          params.attempt.authProfileId,
+        );
 
         const gigachatStreamFn = createGigachatStreamFn({
           baseUrl,
