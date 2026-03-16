@@ -59,7 +59,6 @@ const requiredSubpathEntries = [
   "diagnostics-otel",
   "diffs",
   "feishu",
-  "google-gemini-cli-auth",
   "googlechat",
   "irc",
   "llm-task",

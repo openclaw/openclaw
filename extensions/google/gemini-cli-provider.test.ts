@@ -4,24 +4,38 @@ import {
   createProviderUsageFetch,
   makeResponse,
 } from "../../src/test-utils/provider-usage-fetch.js";
-import geminiCliPlugin from "./index.js";
+import googlePlugin from "./index.js";
 
-function registerProvider(): ProviderPlugin {
+function registerGooglePlugin(): {
+  provider: ProviderPlugin;
+  webSearchProviderRegistered: boolean;
+} {
   let provider: ProviderPlugin | undefined;
-  geminiCliPlugin.register({
+  let webSearchProviderRegistered = false;
+  googlePlugin.register({
     registerProvider(nextProvider: ProviderPlugin) {
       provider = nextProvider;
+    },
+    registerWebSearchProvider() {
+      webSearchProviderRegistered = true;
     },
   } as never);
   if (!provider) {
     throw new Error("provider registration missing");
   }
-  return provider;
+  return { provider, webSearchProviderRegistered };
 }
 
-describe("google-gemini-cli-auth plugin", () => {
+describe("google plugin", () => {
+  it("registers both Gemini CLI auth and Gemini web search", () => {
+    const result = registerGooglePlugin();
+
+    expect(result.provider.id).toBe("google-gemini-cli");
+    expect(result.webSearchProviderRegistered).toBe(true);
+  });
+
   it("owns gemini 3.1 forward-compat resolution", () => {
-    const provider = registerProvider();
+    const { provider } = registerGooglePlugin();
     const model = provider.resolveDynamicModel?.({
       provider: "google-gemini-cli",
       modelId: "gemini-3.1-pro-preview",
@@ -52,7 +66,7 @@ describe("google-gemini-cli-auth plugin", () => {
   });
 
   it("owns usage-token parsing", async () => {
-    const provider = registerProvider();
+    const { provider } = registerGooglePlugin();
     await expect(
       provider.resolveUsageAuth?.({
         config: {} as never,
@@ -71,7 +85,7 @@ describe("google-gemini-cli-auth plugin", () => {
   });
 
   it("owns usage snapshot fetching", async () => {
-    const provider = registerProvider();
+    const { provider } = registerGooglePlugin();
     const mockFetch = createProviderUsageFetch(async (url) => {
       if (url.includes("cloudcode-pa.googleapis.com/v1internal:retrieveUserQuota")) {
         return makeResponse(200, {

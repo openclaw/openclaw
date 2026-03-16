@@ -10,7 +10,7 @@ const BUNDLED_PROVIDER_ALLOWLIST_COMPAT_PLUGIN_IDS = [
   "cloudflare-ai-gateway",
   "copilot-proxy",
   "github-copilot",
-  "google-gemini-cli-auth",
+  "google",
   "huggingface",
   "kilocode",
   "kimi-coding",
