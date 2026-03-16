@@ -557,10 +557,13 @@ export async function ensureSandboxContainer(params: {
   }
   await updateRegistry({
     containerName,
+    backendId: "docker",
+    runtimeLabel: containerName,
     sessionKey: scopeKey,
     createdAtMs: now,
     lastUsedAtMs: now,
     image: params.cfg.docker.image,
+    configLabelKind: "Image",
     configHash: hashMismatch && running ? (currentHash ?? undefined) : expectedHash,
   });
   return containerName;

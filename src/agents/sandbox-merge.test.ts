@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   resolveSandboxBrowserConfig,
+  resolveSandboxConfigForAgent,
   resolveSandboxDockerConfig,
   resolveSandboxPruneConfig,
   resolveSandboxScope,
@@ -127,5 +128,9 @@ describe("sandbox config merges", () => {
       agentPrune: { idleHours: 0, maxAgeDays: 1 },
     });
     expect(pruneShared).toEqual({ idleHours: 24, maxAgeDays: 7 });
+  });
+
+  it("defaults sandbox backend to docker", () => {
+    expect(resolveSandboxConfigForAgent().backend).toBe("docker");
   });
 });
