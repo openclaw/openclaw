@@ -96,6 +96,10 @@ config. Deny always wins over allow.
 `tools.profile` sets a base allowlist before `allow`/`deny` is applied.
 Per-agent override: `agents.list[].tools.profile`.
 
+<Note>
+**2026.3.2 default change:** Local onboarding now defaults previously-unset configs to `tools.profile: "coding"` rather than leaving the profile unset (which behaves like `full`). Existing explicit profile values are preserved. If tools like `web_fetch` or `browser` seem missing after upgrading, check your `tools.profile` setting — `exec` is still available via `group:runtime` in the `coding` profile. For wider session-tool visibility, use `tools.sessions.visibility` (not `sessions.visibility`).
+</Note>
+
 | Profile     | What it includes                            |
 | ----------- | ------------------------------------------- |
 | `full`      | All tools (default)                         |
