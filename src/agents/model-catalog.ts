@@ -1,8 +1,6 @@
 import { type OpenClawConfig, loadConfig } from "../config/config.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import { augmentModelCatalogWithProviderPlugins } from "../plugins/provider-runtime.js";
 import { resolveOpenClawAgentDir } from "./agent-paths.js";
-import { shouldSuppressBuiltInModel } from "./model-suppression.js";
 import { ensureOpenClawModelsJson } from "./models-config.js";
 
 const log = createSubsystemLogger("model-catalog");
@@ -33,8 +31,22 @@ let modelCatalogPromise: Promise<ModelCatalogEntry[]> | null = null;
 let hasLoggedModelCatalogError = false;
 const defaultImportPiSdk = () => import("./pi-model-discovery-runtime.js");
 let importPiSdk = defaultImportPiSdk;
+let providerRuntimePromise:
+  | Promise<typeof import("../plugins/provider-runtime.runtime.js")>
+  | undefined;
+let modelSuppressionPromise: Promise<typeof import("./model-suppression.runtime.js")> | undefined;
 
 const NON_PI_NATIVE_MODEL_PROVIDERS = new Set(["kilocode"]);
+
+function loadProviderRuntime() {
+  providerRuntimePromise ??= import("../plugins/provider-runtime.runtime.js");
+  return providerRuntimePromise;
+}
+
+function loadModelSuppression() {
+  modelSuppressionPromise ??= import("./model-suppression.runtime.js");
+  return modelSuppressionPromise;
+}
 
 function normalizeConfiguredModelInput(input: unknown): ModelInputType[] | undefined {
   if (!Array.isArray(input)) {
@@ -160,6 +172,8 @@ export async function loadModelCatalog(params?: {
       // will keep failing until restart).
       const piSdk = await importPiSdk();
       const agentDir = resolveOpenClawAgentDir();
+      const [{ shouldSuppressBuiltInModel }, { augmentModelCatalogWithProviderPlugins }] =
+        await Promise.all([loadModelSuppression(), loadProviderRuntime()]);
       const { join } = await import("node:path");
       const authStorage = piSdk.discoverAuthStorage(agentDir);
       const registry = new (piSdk.ModelRegistry as unknown as {
