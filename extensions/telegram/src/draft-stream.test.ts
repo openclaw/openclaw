@@ -687,3 +687,263 @@ describe("draft stream initial message debounce", () => {
     });
   });
 });
+
+describe("HTML parse error fallback", () => {
+  afterEach(() => {
+    __testing.resetTelegramDraftStreamForTests();
+  });
+
+  const htmlRenderer = (text: string) => ({ text: `<i>${text}</i>`, parseMode: "HTML" as const });
+
+  function createRenderedStream(
+    api: ReturnType<typeof createMockDraftApi>,
+    overrides: Omit<Partial<TelegramDraftStreamParams>, "api" | "chatId"> = {},
+  ) {
+    return createDraftStream(api, { renderText: htmlRenderer, ...overrides });
+  }
+
+  it("retries editMessageText as plain text when HTML parse error occurs", async () => {
+    const api = createMockDraftApi();
+    api.editMessageText
+      .mockRejectedValueOnce(
+        new Error("400: Bad Request: can't parse entities: unexpected end tag"),
+      )
+      .mockResolvedValueOnce(true);
+    const warn = vi.fn();
+    const stream = createRenderedStream(api, { warn });
+
+    stream.update("hello");
+    await stream.flush();
+    expect(api.sendMessage).toHaveBeenCalledWith(123, "<i>hello</i>", { parse_mode: "HTML" });
+
+    stream.update("hello again");
+    await stream.flush();
+
+    expect(api.editMessageText).toHaveBeenCalledTimes(2);
+    expect(api.editMessageText).toHaveBeenNthCalledWith(1, 123, 17, "<i>hello again</i>", {
+      parse_mode: "HTML",
+    });
+    expect(api.editMessageText).toHaveBeenNthCalledWith(2, 123, 17, "hello again");
+    expect(warn).toHaveBeenCalledWith(
+      "telegram stream preview edit: HTML parse error, retrying as plain text",
+    );
+  });
+
+  it("propagates to outer handler when edit plain text retry also fails", async () => {
+    const api = createMockDraftApi();
+    api.editMessageText
+      .mockRejectedValueOnce(
+        new Error("400: Bad Request: can't parse entities: unexpected end tag"),
+      )
+      .mockRejectedValueOnce(new Error("500: Internal Server Error"));
+    const warn = vi.fn();
+    const stream = createRenderedStream(api, { warn });
+
+    stream.update("hello");
+    await stream.flush();
+
+    stream.update("hello again");
+    await stream.flush();
+
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringContaining("telegram stream preview failed: 500: Internal Server Error"),
+    );
+
+    // Stream is stopped — further updates are no-ops
+    stream.update("third");
+    await stream.flush();
+    expect(api.editMessageText).toHaveBeenCalledTimes(2);
+  });
+
+  it("retries first sendMessage as plain text when HTML parse error occurs", async () => {
+    const api = createMockDraftApi();
+    api.sendMessage
+      .mockRejectedValueOnce(
+        new Error("400: Bad Request: can't parse entities: unexpected end tag"),
+      )
+      .mockResolvedValueOnce({ message_id: 17 });
+    const warn = vi.fn();
+    const stream = createRenderedStream(api, { warn });
+
+    stream.update("hello");
+    await stream.flush();
+
+    expect(api.sendMessage).toHaveBeenCalledTimes(2);
+    expect(api.sendMessage).toHaveBeenNthCalledWith(1, 123, "<i>hello</i>", { parse_mode: "HTML" });
+    expect(api.sendMessage).toHaveBeenNthCalledWith(2, 123, "hello", undefined);
+    expect(warn).toHaveBeenCalledWith(
+      "telegram stream preview send: HTML parse error, retrying as plain text",
+    );
+
+    // Stream continues with captured message id
+    stream.update("hello again");
+    await stream.flush();
+    expect(api.editMessageText).toHaveBeenCalledWith(123, 17, "hello again");
+  });
+
+  it("retries sendMessageDraft as plain text when HTML parse error occurs", async () => {
+    const api = createMockDraftApi();
+    api.sendMessageDraft
+      .mockRejectedValueOnce(
+        new Error("400: Bad Request: can't parse entities: unexpected end tag"),
+      )
+      .mockResolvedValueOnce(true);
+    const warn = vi.fn();
+    const stream = createDraftStream(api, {
+      thread: { id: 42, scope: "dm" },
+      previewTransport: "draft",
+      renderText: htmlRenderer,
+      warn,
+    });
+
+    stream.update("hello");
+    await stream.flush();
+
+    expect(api.sendMessageDraft).toHaveBeenCalledTimes(2);
+    expect(api.sendMessageDraft).toHaveBeenNthCalledWith(
+      1,
+      123,
+      expect.any(Number),
+      "<i>hello</i>",
+      { message_thread_id: 42, parse_mode: "HTML" },
+    );
+    expect(api.sendMessageDraft).toHaveBeenNthCalledWith(2, 123, expect.any(Number), "hello", {
+      message_thread_id: 42,
+    });
+    expect(warn).toHaveBeenCalledWith(
+      "telegram stream draft preview: HTML parse error, retrying as plain text",
+    );
+  });
+
+  it("treats MESSAGE_NOT_MODIFIED on edit as success and continues streaming", async () => {
+    const api = createMockDraftApi();
+    api.editMessageText
+      .mockRejectedValueOnce(new Error("400: Bad Request: message is not modified"))
+      .mockResolvedValue(true);
+    const stream = createDraftStream(api);
+
+    stream.update("hello");
+    await stream.flush();
+    expect(api.sendMessage).toHaveBeenCalledTimes(1);
+
+    stream.update("hello2");
+    await stream.flush();
+    expect(api.editMessageText).toHaveBeenCalledTimes(1);
+
+    // Stream continues working after MESSAGE_NOT_MODIFIED
+    stream.update("hello3");
+    await stream.flush();
+    expect(api.editMessageText).toHaveBeenCalledTimes(2);
+  });
+
+  it("disables parse_mode for remaining updates in the same generation after a parse error", async () => {
+    const api = createMockDraftApi();
+    api.editMessageText
+      .mockRejectedValueOnce(
+        new Error("400: Bad Request: can't parse entities: unexpected end tag"),
+      )
+      .mockResolvedValue(true);
+    const warn = vi.fn();
+    const stream = createRenderedStream(api, { warn });
+
+    stream.update("hello");
+    await stream.flush();
+    expect(api.sendMessage).toHaveBeenCalledWith(123, "<i>hello</i>", { parse_mode: "HTML" });
+
+    // Edit triggers parse error → plain text retry
+    stream.update("hello again");
+    await stream.flush();
+    expect(api.editMessageText).toHaveBeenNthCalledWith(2, 123, 17, "hello again");
+
+    // Subsequent update uses plain text directly (no parse_mode)
+    stream.update("third update");
+    await stream.flush();
+    expect(api.editMessageText).toHaveBeenCalledTimes(3);
+    expect(api.editMessageText.mock.calls[2]).toEqual([123, 17, "third update"]);
+  });
+
+  it("re-enables HTML parse mode after forceNewMessage resets the generation", async () => {
+    const api = createMockDraftApi();
+    api.sendMessage
+      .mockResolvedValueOnce({ message_id: 17 })
+      .mockResolvedValueOnce({ message_id: 42 });
+    api.editMessageText
+      .mockRejectedValueOnce(
+        new Error("400: Bad Request: can't parse entities: unexpected end tag"),
+      )
+      .mockResolvedValue(true);
+    const warn = vi.fn();
+    const stream = createRenderedStream(api, { warn });
+
+    stream.update("hello");
+    await stream.flush();
+    expect(api.sendMessage).toHaveBeenCalledWith(123, "<i>hello</i>", { parse_mode: "HTML" });
+
+    // Edit triggers parse error → disables parse mode for gen 0
+    stream.update("hello again");
+    await stream.flush();
+    expect(api.editMessageText).toHaveBeenNthCalledWith(2, 123, 17, "hello again");
+
+    // Force new message → new generation, parse mode re-enabled
+    stream.forceNewMessage();
+    stream.update("new message");
+    await stream.flush();
+
+    expect(api.sendMessage).toHaveBeenNthCalledWith(2, 123, "<i>new message</i>", {
+      parse_mode: "HTML",
+    });
+  });
+
+  it("does not stop stream when HTML parse error reaches outer handler", async () => {
+    const api = createMockDraftApi();
+    api.editMessageText
+      .mockRejectedValueOnce(
+        new Error("400: Bad Request: can't parse entities: unexpected end tag"),
+      )
+      .mockRejectedValueOnce(
+        new Error("400: Bad Request: can't parse entities: unexpected end tag"),
+      )
+      .mockResolvedValue(true);
+    const warn = vi.fn();
+    const stream = createRenderedStream(api, { warn });
+
+    stream.update("hello");
+    await stream.flush();
+
+    // Both HTML edit and plain text retry fail with parse errors
+    stream.update("hello again");
+    await stream.flush();
+
+    expect(warn).toHaveBeenCalledWith(
+      "telegram stream preview: HTML parse error escaped to outer handler (degrading to plain text)",
+    );
+
+    // Stream still works (not stopped)
+    stream.update("third update");
+    await stream.flush();
+    expect(api.editMessageText).toHaveBeenCalledTimes(3);
+    expect(api.editMessageText.mock.calls[2]).toEqual([123, 17, "third update"]);
+  });
+
+  it("stops stream on non-parse errors in outer handler", async () => {
+    const api = createMockDraftApi();
+    api.editMessageText.mockRejectedValueOnce(new Error("429: Too Many Requests"));
+    const warn = vi.fn();
+    const stream = createRenderedStream(api, { warn });
+
+    stream.update("hello");
+    await stream.flush();
+
+    stream.update("hello again");
+    await stream.flush();
+
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringContaining("telegram stream preview failed: 429: Too Many Requests"),
+    );
+
+    // Stream is stopped — further updates are no-ops
+    stream.update("third");
+    await stream.flush();
+    expect(api.editMessageText).toHaveBeenCalledTimes(1);
+  });
+});

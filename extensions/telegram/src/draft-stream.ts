@@ -5,6 +5,18 @@ import { buildTelegramThreadParams, type TelegramThreadSpec } from "./bot/helper
 import { isSafeToRetrySendError, isTelegramClientRejection } from "./network-errors.js";
 import { normalizeTelegramReplyToMessageId } from "./outbound-params.js";
 
+const PARSE_ERR_RE = /can't parse entities|parse entities|find end of the entity/i;
+const MESSAGE_NOT_MODIFIED_RE =
+  /400:\s*Bad Request:\s*message is not modified|MESSAGE_NOT_MODIFIED/i;
+
+function isTelegramHtmlParseError(err: unknown): boolean {
+  return PARSE_ERR_RE.test(formatErrorMessage(err));
+}
+
+function isMessageNotModifiedError(err: unknown): boolean {
+  return MESSAGE_NOT_MODIFIED_RE.test(formatErrorMessage(err));
+}
+
 const TELEGRAM_STREAM_MAX_CHARS = 4096;
 const DEFAULT_THROTTLE_MS = 1000;
 const TELEGRAM_DRAFT_ID_MAX = 2_147_483_647;
@@ -176,10 +188,14 @@ export function createTelegramDraftStream(params: {
   let lastSentParseMode: "HTML" | undefined;
   let previewRevision = 0;
   let generation = 0;
+  /** Generation for which HTML parse_mode has been disabled due to parse errors. */
+  let parseModeDisabledForGeneration: number | undefined;
   type PreviewSendParams = {
     renderedText: string;
     renderedParseMode: "HTML" | undefined;
     sendGeneration: number;
+    /** Original unrendered text for plain-text fallback on HTML parse errors. */
+    plainText: string;
   };
   const sendRenderedMessageWithThreadFallback = async (sendArgs: {
     renderedText: string;
@@ -219,14 +235,36 @@ export function createTelegramDraftStream(params: {
     renderedText,
     renderedParseMode,
     sendGeneration,
+    plainText,
   }: PreviewSendParams): Promise<boolean> => {
+    // Resolve effective parse mode: disabled for this generation after a prior parse error.
+    const effectiveParseMode =
+      parseModeDisabledForGeneration === sendGeneration ? undefined : renderedParseMode;
+    const effectiveText = effectiveParseMode ? renderedText : plainText;
+
     if (typeof streamMessageId === "number") {
-      if (renderedParseMode) {
-        await params.api.editMessageText(chatId, streamMessageId, renderedText, {
-          parse_mode: renderedParseMode,
-        });
-      } else {
-        await params.api.editMessageText(chatId, streamMessageId, renderedText);
+      try {
+        if (effectiveParseMode) {
+          await params.api.editMessageText(chatId, streamMessageId, effectiveText, {
+            parse_mode: effectiveParseMode,
+          });
+        } else {
+          await params.api.editMessageText(chatId, streamMessageId, effectiveText);
+        }
+      } catch (err) {
+        if (isMessageNotModifiedError(err)) {
+          // Harmless noop — content identical to current message.
+          return true;
+        }
+        if (effectiveParseMode && isTelegramHtmlParseError(err)) {
+          // HTML rejected by Telegram — retry as plain text and disable
+          // parse_mode for the rest of this generation.
+          parseModeDisabledForGeneration = sendGeneration;
+          params.warn?.("telegram stream preview edit: HTML parse error, retrying as plain text");
+          await params.api.editMessageText(chatId, streamMessageId, plainText);
+          return true;
+        }
+        throw err;
       }
       return true;
     }
@@ -234,19 +272,31 @@ export function createTelegramDraftStream(params: {
     let sent: Awaited<ReturnType<typeof sendRenderedMessageWithThreadFallback>>["sent"];
     try {
       ({ sent } = await sendRenderedMessageWithThreadFallback({
-        renderedText,
-        renderedParseMode,
+        renderedText: effectiveText,
+        renderedParseMode: effectiveParseMode,
         fallbackWarnMessage:
           "telegram stream preview send failed with message_thread_id, retrying without thread",
       }));
     } catch (err) {
-      // Pre-connect failures (DNS, refused) and explicit Telegram rejections (4xx)
-      // guarantee the message was never delivered — clear the flag so
-      // sendMayHaveLanded() doesn't suppress fallback.
-      if (isSafeToRetrySendError(err) || isTelegramClientRejection(err)) {
-        messageSendAttempted = false;
+      if (effectiveParseMode && isTelegramHtmlParseError(err)) {
+        // HTML rejected on first send — retry as plain text.
+        parseModeDisabledForGeneration = sendGeneration;
+        params.warn?.("telegram stream preview send: HTML parse error, retrying as plain text");
+        ({ sent } = await sendRenderedMessageWithThreadFallback({
+          renderedText: plainText,
+          renderedParseMode: undefined,
+          fallbackWarnMessage:
+            "telegram stream preview send (plain) failed with message_thread_id, retrying without thread",
+        }));
+      } else {
+        // Pre-connect failures (DNS, refused) and explicit Telegram rejections (4xx)
+        // guarantee the message was never delivered — clear the flag so
+        // sendMayHaveLanded() doesn't suppress fallback.
+        if (isSafeToRetrySendError(err) || isTelegramClientRejection(err)) {
+          messageSendAttempted = false;
+        }
+        throw err;
       }
-      throw err;
     }
     const sentMessageId = sent?.message_id;
     if (typeof sentMessageId !== "number" || !Number.isFinite(sentMessageId)) {
@@ -269,21 +319,35 @@ export function createTelegramDraftStream(params: {
   const sendDraftTransportPreview = async ({
     renderedText,
     renderedParseMode,
+    sendGeneration,
+    plainText,
   }: PreviewSendParams): Promise<boolean> => {
+    const effectiveParseMode =
+      parseModeDisabledForGeneration === sendGeneration ? undefined : renderedParseMode;
+    const effectiveText = effectiveParseMode ? renderedText : plainText;
     const draftId = streamDraftId ?? allocateTelegramDraftId();
     streamDraftId = draftId;
-    const draftParams = {
-      ...(threadParams?.message_thread_id != null
-        ? { message_thread_id: threadParams.message_thread_id }
-        : {}),
-      ...(renderedParseMode ? { parse_mode: renderedParseMode } : {}),
+    const buildDraftParams = (parseMode: "HTML" | undefined) => {
+      const p: { message_thread_id?: number; parse_mode?: "HTML" } = {};
+      if (threadParams?.message_thread_id != null) {
+        p.message_thread_id = threadParams.message_thread_id;
+      }
+      if (parseMode) {
+        p.parse_mode = parseMode;
+      }
+      return Object.keys(p).length > 0 ? p : undefined;
     };
-    await resolvedDraftApi!(
-      chatId,
-      draftId,
-      renderedText,
-      Object.keys(draftParams).length > 0 ? draftParams : undefined,
-    );
+    try {
+      await resolvedDraftApi!(chatId, draftId, effectiveText, buildDraftParams(effectiveParseMode));
+    } catch (err) {
+      if (effectiveParseMode && isTelegramHtmlParseError(err)) {
+        parseModeDisabledForGeneration = sendGeneration;
+        params.warn?.("telegram stream draft preview: HTML parse error, retrying as plain text");
+        await resolvedDraftApi!(chatId, draftId, plainText, buildDraftParams(undefined));
+      } else {
+        throw err;
+      }
+    }
     return true;
   };
 
@@ -323,8 +387,6 @@ export function createTelegramDraftStream(params: {
       }
     }
 
-    lastSentText = renderedText;
-    lastSentParseMode = renderedParseMode;
     try {
       let sent = false;
       if (previewTransport === "draft") {
@@ -333,6 +395,7 @@ export function createTelegramDraftStream(params: {
             renderedText,
             renderedParseMode,
             sendGeneration,
+            plainText: trimmed,
           });
         } catch (err) {
           if (!shouldFallbackFromDraftTransport(err)) {
@@ -347,6 +410,7 @@ export function createTelegramDraftStream(params: {
             renderedText,
             renderedParseMode,
             sendGeneration,
+            plainText: trimmed,
           });
         }
       } else {
@@ -354,20 +418,36 @@ export function createTelegramDraftStream(params: {
           renderedText,
           renderedParseMode,
           sendGeneration,
+          plainText: trimmed,
         });
       }
       if (sent) {
         previewRevision += 1;
         lastDeliveredText = trimmed;
+        // Reflect the actual text and parse mode that was delivered. When the
+        // transport fell back to plain text, these may differ from the original
+        // renderedText/renderedParseMode.
+        lastSentText = parseModeDisabledForGeneration === sendGeneration ? trimmed : renderedText;
+        lastSentParseMode =
+          parseModeDisabledForGeneration === sendGeneration ? undefined : renderedParseMode;
       }
       return sent;
     } catch (err) {
+      // HTML parse errors should not permanently kill the stream — the next
+      // update will arrive with more text that may produce valid HTML, and
+      // the transport functions already disable parse_mode for this generation.
+      if (isTelegramHtmlParseError(err)) {
+        parseModeDisabledForGeneration = generation;
+        params.warn?.(
+          `telegram stream preview: HTML parse error escaped to outer handler (degrading to plain text)`,
+        );
+        return false;
+      }
       streamState.stopped = true;
       params.warn?.(`telegram stream preview failed: ${formatErrorMessage(err)}`);
       return false;
     }
   };
-
   const { loop, update, stop, clear } = createFinalizableDraftLifecycle({
     throttleMs,
     state: streamState,
@@ -416,13 +496,21 @@ export function createTelegramDraftStream(params: {
     if (previewTransport === "message" && typeof streamMessageId === "number") {
       return streamMessageId;
     }
-    // For draft transport, use the rendered snapshot first so parse_mode stays
-    // aligned with the text being materialized.
-    const renderedText = lastSentText || lastDeliveredText;
+    // For draft transport, prefer the unrendered text when HTML parse mode has
+    // been disabled for the current generation — avoids re-sending the same
+    // malformed HTML that caused the parse error during streaming.
+    const htmlDisabled = parseModeDisabledForGeneration === generation;
+    const renderedText = htmlDisabled
+      ? lastDeliveredText || lastSentText
+      : lastSentText || lastDeliveredText;
     if (!renderedText) {
       return undefined;
     }
-    const renderedParseMode = lastSentText ? lastSentParseMode : undefined;
+    const renderedParseMode = htmlDisabled
+      ? undefined
+      : lastSentText
+        ? lastSentParseMode
+        : undefined;
     try {
       const { sent, usedThreadParams } = await sendRenderedMessageWithThreadFallback({
         renderedText,
