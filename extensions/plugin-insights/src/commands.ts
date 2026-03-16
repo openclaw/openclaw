@@ -13,6 +13,17 @@ import { formatComparison } from "./tools/insights-compare.js";
 import type { ToolDetector } from "./collector/tool-detector.js";
 import * as fs from "node:fs";
 
+/** Parse --days flag with validation; returns days or an error message */
+function parseDays(flags: Record<string, string | boolean>): number | string {
+  const raw = flags.days;
+  if (raw === undefined || raw === true) return 30;
+  const n = Number(raw);
+  if (!Number.isFinite(n) || n <= 0) {
+    return `Invalid --days value "${raw}". Must be a positive number.`;
+  }
+  return Math.floor(n);
+}
+
 /** Parse raw args string into positional args and flags */
 function parseArgs(raw?: string): { positional: string[]; flags: Record<string, string | boolean> } {
   const positional: string[] = [];
@@ -64,7 +75,8 @@ function createShowCommand(
     acceptsArgs: true,
     handler(ctx: PluginCommandContext): ReplyPayload {
       const { positional, flags } = parseArgs(ctx.args);
-      const days = Number(flags.days ?? 30);
+      const days = parseDays(flags);
+      if (typeof days === "string") return { text: days };
       const pluginId = (flags.plugin as string) || positional[0];
 
       const report = buildReport(db, config, days);
@@ -108,7 +120,8 @@ function createCompareCommand(
       }
 
       const [pluginA, pluginB] = positional;
-      const days = Number(flags.days ?? 30);
+      const days = parseDays(flags);
+      if (typeof days === "string") return { text: days };
       const report = buildReport(db, config, days);
 
       const a = report.plugins.find((p) => p.pluginId === pluginA);
@@ -147,7 +160,8 @@ function createExportCommand(
         return { text: "Usage: /insights-export --output <path> [--format json|jsonl] [--raw]" };
       }
       const format = (flags.format as "json" | "jsonl") ?? "json";
-      const days = Number(flags.days ?? 30);
+      const days = parseDays(flags);
+      if (typeof days === "string") return { text: days };
       const raw = !!flags.raw;
 
       if (raw) {
@@ -186,7 +200,8 @@ function createDashboardCommand(
       const { flags } = parseArgs(ctx.args);
       const output =
         (flags.output as string) || "./plugin-insights-dashboard.html";
-      const days = Number(flags.days ?? 30);
+      const days = parseDays(flags);
+      if (typeof days === "string") return { text: days };
 
       const report = buildReport(db, config, days);
       const unmappedTools = toolDetector.getUnmappedToolsWithCounts();
