@@ -1,5 +1,4 @@
 import {
-  applyAccountNameToChannelSection,
   buildChannelConfigSchema,
   buildAccountScopedDmSecurityPolicy,
   collectAllowlistProviderGroupPolicyWarnings,
@@ -10,8 +9,6 @@ import {
   getChatChannelMeta,
   listWhatsAppDirectoryGroupsFromConfig,
   listWhatsAppDirectoryPeersFromConfig,
-  migrateBaseNameToDefaultAccount,
-  normalizeAccountId,
   normalizeE164,
   formatWhatsAppConfigAllowFromEntries,
   readStringParam,
@@ -35,8 +32,8 @@ import {
   type ResolvedWhatsAppAccount,
 } from "./accounts.js";
 import { looksLikeWhatsAppTargetId, normalizeWhatsAppMessagingTarget } from "./normalize.js";
-import { whatsappOnboardingAdapter } from "./onboarding.js";
 import { getWhatsAppRuntime } from "./runtime.js";
+import { whatsappSetupAdapter, whatsappSetupWizard } from "./setup-surface.js";
 import { collectWhatsAppStatusIssues } from "./status-issues.js";
 
 const meta = getChatChannelMeta("whatsapp");
@@ -50,7 +47,7 @@ export const whatsappPlugin: ChannelPlugin<ResolvedWhatsAppAccount> = {
     forceAccountBinding: true,
     preferSessionLookupForAnnounceTarget: true,
   },
-  onboarding: whatsappOnboardingAdapter,
+  setupWizard: whatsappSetupWizard,
   agentTools: () => [getWhatsAppRuntime().channel.whatsapp.createLoginTool()],
   pairing: {
     idLabel: "whatsappSenderId",
@@ -163,49 +160,7 @@ export const whatsappPlugin: ChannelPlugin<ResolvedWhatsAppAccount> = {
       });
     },
   },
-  setup: {
-    resolveAccountId: ({ accountId }) => normalizeAccountId(accountId),
-    applyAccountName: ({ cfg, accountId, name }) =>
-      applyAccountNameToChannelSection({
-        cfg,
-        channelKey: "whatsapp",
-        accountId,
-        name,
-        alwaysUseAccounts: true,
-      }),
-    applyAccountConfig: ({ cfg, accountId, input }) => {
-      const namedConfig = applyAccountNameToChannelSection({
-        cfg,
-        channelKey: "whatsapp",
-        accountId,
-        name: input.name,
-        alwaysUseAccounts: true,
-      });
-      const next = migrateBaseNameToDefaultAccount({
-        cfg: namedConfig,
-        channelKey: "whatsapp",
-        alwaysUseAccounts: true,
-      });
-      const entry = {
-        ...next.channels?.whatsapp?.accounts?.[accountId],
-        ...(input.authDir ? { authDir: input.authDir } : {}),
-        enabled: true,
-      };
-      return {
-        ...next,
-        channels: {
-          ...next.channels,
-          whatsapp: {
-            ...next.channels?.whatsapp,
-            accounts: {
-              ...next.channels?.whatsapp?.accounts,
-              [accountId]: entry,
-            },
-          },
-        },
-      };
-    },
-  },
+  setup: whatsappSetupAdapter,
   groups: {
     resolveRequireMention: resolveWhatsAppGroupRequireMention,
     resolveToolPolicy: resolveWhatsAppGroupToolPolicy,

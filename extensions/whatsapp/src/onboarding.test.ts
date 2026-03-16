@@ -1,8 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { buildChannelOnboardingAdapterFromSetupWizard } from "../../../src/channels/plugins/setup-wizard.js";
 import { DEFAULT_ACCOUNT_ID } from "../../../src/routing/session-key.js";
 import type { RuntimeEnv } from "../../../src/runtime.js";
 import type { WizardPrompter } from "../../../src/wizard/prompts.js";
-import { whatsappOnboardingAdapter } from "./onboarding.js";
+import { whatsappPlugin } from "./channel.js";
 
 const loginWebMock = vi.hoisted(() => vi.fn(async () => {}));
 const pathExistsMock = vi.hoisted(() => vi.fn(async () => false));
@@ -82,16 +83,21 @@ function createRuntime(): RuntimeEnv {
   } as unknown as RuntimeEnv;
 }
 
+const whatsappConfigureAdapter = buildChannelOnboardingAdapterFromSetupWizard({
+  plugin: whatsappPlugin,
+  wizard: whatsappPlugin.setupWizard!,
+});
+
 async function runConfigureWithHarness(params: {
   harness: ReturnType<typeof createPrompterHarness>;
-  cfg?: Parameters<typeof whatsappOnboardingAdapter.configure>[0]["cfg"];
+  cfg?: Parameters<typeof whatsappConfigureAdapter.configure>[0]["cfg"];
   runtime?: RuntimeEnv;
-  options?: Parameters<typeof whatsappOnboardingAdapter.configure>[0]["options"];
-  accountOverrides?: Parameters<typeof whatsappOnboardingAdapter.configure>[0]["accountOverrides"];
+  options?: Parameters<typeof whatsappConfigureAdapter.configure>[0]["options"];
+  accountOverrides?: Parameters<typeof whatsappConfigureAdapter.configure>[0]["accountOverrides"];
   shouldPromptAccountIds?: boolean;
   forceAllowFrom?: boolean;
 }) {
-  return await whatsappOnboardingAdapter.configure({
+  return await whatsappConfigureAdapter.configure({
     cfg: params.cfg ?? {},
     runtime: params.runtime ?? createRuntime(),
     prompter: params.harness.prompter,
@@ -122,7 +128,7 @@ async function runSeparatePhoneFlow(params: { selectValues: string[]; textValues
   return { harness, result };
 }
 
-describe("whatsappOnboardingAdapter.configure", () => {
+describe("whatsapp setup wizard", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     pathExistsMock.mockResolvedValue(false);
