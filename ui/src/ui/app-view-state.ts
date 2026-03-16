@@ -1,5 +1,13 @@
 import type { EventLogEntry } from "./app-events.ts";
 import type { CompactionStatus, FallbackStatus } from "./app-tool-stream.ts";
+import type {
+  CostState,
+  CostSummaryResponse,
+  CostTimeseriesResponse,
+  LedgerItem,
+  ModelCostBreakdownResponse,
+  TopSessionsResponse,
+} from "./controllers/cost.ts";
 import type { CronModelSuggestionsState, CronState } from "./controllers/cron.ts";
 import type { DevicePairingList } from "./controllers/devices.ts";
 import type { ExecApprovalRequest } from "./controllers/exec-approval.ts";
@@ -226,6 +234,18 @@ export type AppViewState = {
   usageLogFilterTools: string[];
   usageLogFilterHasTools: boolean;
   usageLogFilterQuery: string;
+  // Cost tab state
+  costLoading: boolean;
+  costError: string | null;
+  costStartDate: string;
+  costEndDate: string;
+  costSummary: CostSummaryResponse | null;
+  costTimeseries: CostTimeseriesResponse | null;
+  costByModel: ModelCostBreakdownResponse | null;
+  costTopSessions: TopSessionsResponse | null;
+  costLedgerItems: LedgerItem[];
+  costLedgerLoading: boolean;
+  costActiveTab: CostState["activeTab"];
 } & Pick<
   CronState,
   | "cronLoading"

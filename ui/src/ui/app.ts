@@ -342,8 +342,28 @@ export class OpenClawApp extends LitElement {
   @state() usageLogFilterHasTools = false;
   @state() usageLogFilterQuery = "";
 
-  // Non-reactive (don’t trigger renders just for timer bookkeeping).
+  // Non-reactive (don't trigger renders just for timer bookkeeping).
   usageQueryDebounceTimer: number | null = null;
+
+  // Cost tab state
+  @state() costLoading = false;
+  @state() costError: string | null = null;
+  @state() costStartDate = (() => {
+    const d = new Date();
+    d.setDate(d.getDate() - 29);
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+  })();
+  @state() costEndDate = (() => {
+    const d = new Date();
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+  })();
+  @state() costSummary: import("./controllers/cost.js").CostSummaryResponse | null = null;
+  @state() costTimeseries: import("./controllers/cost.js").CostTimeseriesResponse | null = null;
+  @state() costByModel: import("./controllers/cost.js").ModelCostBreakdownResponse | null = null;
+  @state() costTopSessions: import("./controllers/cost.js").TopSessionsResponse | null = null;
+  @state() costLedgerItems: import("./controllers/cost.js").LedgerItem[] = [];
+  @state() costLedgerLoading = false;
+  @state() costActiveTab: import("./controllers/cost.js").CostState["activeTab"] = "overview";
 
   @state() cronLoading = false;
   @state() cronJobsLoadingMore = false;

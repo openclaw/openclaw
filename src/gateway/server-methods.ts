@@ -11,6 +11,7 @@ import { channelsHandlers } from "./server-methods/channels.js";
 import { chatHandlers } from "./server-methods/chat.js";
 import { configHandlers } from "./server-methods/config.js";
 import { connectHandlers } from "./server-methods/connect.js";
+import { costHandlers } from "./server-methods/cost.js";
 import { cronHandlers } from "./server-methods/cron.js";
 import { deviceHandlers } from "./server-methods/devices.js";
 import { doctorHandlers } from "./server-methods/doctor.js";
@@ -92,6 +93,7 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
   ...pushHandlers,
   ...sendHandlers,
   ...usageHandlers,
+  ...costHandlers,
   ...agentHandlers,
   ...agentsHandlers,
   ...browserHandlers,

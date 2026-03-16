@@ -5,6 +5,7 @@ import {
 } from "../../../src/routing/session-key.js";
 import { t } from "../i18n/index.ts";
 import { refreshChatAvatar } from "./app-chat.ts";
+import { renderCostTab } from "./app-render-cost-tab.ts";
 import { renderUsageTab } from "./app-render-usage-tab.ts";
 import {
   renderChatControls,
@@ -767,6 +768,8 @@ export function renderApp(state: AppViewState) {
         }
 
         ${renderUsageTab(state)}
+
+        ${renderCostTab(state)}
 
         ${
           state.tab === "cron"
