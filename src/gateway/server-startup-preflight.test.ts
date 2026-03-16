@@ -1,6 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../config/config.js";
 import {
+  classifyGatewayStartupPreflightError,
+  createGatewayStartupContext,
+  formatGatewayStartupPreflightFailure,
   runGatewayStartupAuthBootstrap,
   GatewayStartupPreflightError,
   runGatewayStartupConfigPreflight,
@@ -270,7 +273,7 @@ describe("runGatewayStartupRuntimePolicyPhase", () => {
       .mockResolvedValue(seededConfig);
 
     const result = await runGatewayStartupRuntimePolicyPhase({
-      config,
+      context: createGatewayStartupContext(config),
       isDiagnosticsEnabled: () => true,
       startDiagnosticHeartbeat,
       isRestartEnabled: () => true,
@@ -285,17 +288,14 @@ describe("runGatewayStartupRuntimePolicyPhase", () => {
     expect(setPreRestartDeferralCheck).toHaveBeenCalledTimes(1);
     expect(setPreRestartDeferralCheck.mock.calls[0]?.[0]()).toBe(7);
     expect(seedControlUiAllowedOrigins).toHaveBeenCalledWith(config);
-    expect(result).toEqual({
-      config: seededConfig,
-      diagnosticsEnabled: true,
-    });
+    expect(result).toEqual({ config: seededConfig, diagnosticsEnabled: true });
   });
 
   it("does not start diagnostics when disabled", async () => {
     const startDiagnosticHeartbeat = vi.fn<() => void>();
 
     const result = await runGatewayStartupRuntimePolicyPhase({
-      config: {},
+      context: createGatewayStartupContext({}),
       isDiagnosticsEnabled: () => false,
       startDiagnosticHeartbeat,
       isRestartEnabled: () => false,
@@ -307,5 +307,51 @@ describe("runGatewayStartupRuntimePolicyPhase", () => {
 
     expect(startDiagnosticHeartbeat).not.toHaveBeenCalled();
     expect(result.diagnosticsEnabled).toBe(false);
+  });
+});
+
+describe("classifyGatewayStartupPreflightError", () => {
+  it("classifies concrete startup preflight errors", () => {
+    const classified = classifyGatewayStartupPreflightError(
+      new GatewayStartupPreflightError("config_validation", "bad config"),
+    );
+
+    expect(classified).toEqual({
+      phase: "config_validation",
+      message: "bad config",
+    });
+  });
+
+  it("classifies serialized startup preflight errors", () => {
+    const classified = classifyGatewayStartupPreflightError({
+      name: "GatewayStartupPreflightError",
+      phase: "config_legacy_migration",
+      message: "legacy keys",
+    });
+
+    expect(classified).toEqual({
+      phase: "config_legacy_migration",
+      message: "legacy keys",
+    });
+  });
+
+  it("returns null for non-preflight errors", () => {
+    expect(classifyGatewayStartupPreflightError(new Error("boom"))).toBeNull();
+  });
+});
+
+describe("formatGatewayStartupPreflightFailure", () => {
+  it("formats classified startup phase failures", () => {
+    expect(
+      formatGatewayStartupPreflightFailure({
+        name: "GatewayStartupPreflightError",
+        phase: "config_validation",
+        message: "Invalid config",
+      }),
+    ).toBe("Gateway startup phase failed (config_validation): Invalid config");
+  });
+
+  it("returns null for non-classified failures", () => {
+    expect(formatGatewayStartupPreflightFailure(new Error("boom"))).toBeNull();
   });
 });

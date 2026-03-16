@@ -3,6 +3,7 @@ import {
   getActiveEmbeddedRunCount,
   waitForActiveEmbeddedRuns,
 } from "../../agents/pi-embedded-runner/runs.js";
+import { formatGatewayStartupPreflightFailure } from "../../gateway/server-startup-preflight.js";
 import type { startGatewayServer } from "../../gateway/server.js";
 import { acquireGatewayLock } from "../../infra/gateway-lock.js";
 import { restartGatewayProcessWithFreshPid } from "../../infra/process-respawn.js";
@@ -236,9 +237,11 @@ export async function runGatewayLoop(params: {
         await releaseLockIfHeld();
         const errMsg = err instanceof Error ? err.message : String(err);
         const errStack = err instanceof Error && err.stack ? `\n${err.stack}` : "";
+        const startupPreflightFailure = formatGatewayStartupPreflightFailure(err);
         gatewayLog.error(
-          `gateway startup failed: ${errMsg}. ` +
-            `Process will stay alive; fix the issue and restart.${errStack}`,
+          startupPreflightFailure
+            ? `${startupPreflightFailure}. Process will stay alive; fix the issue and restart.${errStack}`
+            : `gateway startup failed: ${errMsg}. Process will stay alive; fix the issue and restart.${errStack}`,
         );
       }
       await new Promise<void>((resolve) => {

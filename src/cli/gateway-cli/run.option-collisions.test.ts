@@ -86,11 +86,15 @@ vi.mock("../../logging/console.js", () => ({
 }));
 
 vi.mock("../../logging/subsystem.js", () => ({
-  createSubsystemLogger: () => ({
-    info: () => undefined,
-    warn: () => undefined,
-    error: () => undefined,
-  }),
+  createSubsystemLogger: () => {
+    const logger = {
+      info: () => undefined,
+      warn: () => undefined,
+      error: () => undefined,
+      child: () => logger,
+    };
+    return logger;
+  },
 }));
 
 vi.mock("../../runtime.js", () => ({
@@ -190,6 +194,22 @@ describe("gateway run option collisions", () => {
       expect.objectContaining({
         bind: "loopback",
       }),
+    );
+  });
+
+  it("surfaces startup preflight phase classification on startup failure", async () => {
+    startGatewayServer.mockRejectedValueOnce({
+      name: "GatewayStartupPreflightError",
+      phase: "config_validation",
+      message: "Invalid config at /tmp/openclaw.json",
+    });
+
+    await expect(runGatewayCli(["gateway", "run", "--allow-unconfigured"])).rejects.toThrow(
+      "__exit__:1",
+    );
+
+    expect(runtimeErrors).toContain(
+      "Gateway startup phase failed (config_validation): Invalid config at /tmp/openclaw.json",
     );
   });
 

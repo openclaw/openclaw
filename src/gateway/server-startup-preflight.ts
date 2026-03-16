@@ -12,6 +12,11 @@ export type GatewayStartupPreflightPhase =
   | "config_validation"
   | "plugin_auto_enable";
 
+export type GatewayStartupContext = {
+  config: OpenClawConfig;
+  diagnosticsEnabled: boolean;
+};
+
 export class GatewayStartupPreflightError extends Error {
   readonly phase: GatewayStartupPreflightPhase;
 
@@ -26,6 +31,47 @@ export class GatewayStartupPreflightError extends Error {
     this.name = "GatewayStartupPreflightError";
     this.phase = phase;
   }
+}
+
+function isGatewayStartupPreflightPhase(value: unknown): value is GatewayStartupPreflightPhase {
+  return (
+    value === "config_legacy_migration" ||
+    value === "config_validation" ||
+    value === "plugin_auto_enable"
+  );
+}
+
+export function classifyGatewayStartupPreflightError(
+  err: unknown,
+): { phase: GatewayStartupPreflightPhase; message: string } | null {
+  if (err instanceof GatewayStartupPreflightError) {
+    return { phase: err.phase, message: err.message };
+  }
+  if (!err || typeof err !== "object") {
+    return null;
+  }
+  const candidate = err as { name?: unknown; phase?: unknown; message?: unknown };
+  if (candidate.name !== "GatewayStartupPreflightError") {
+    return null;
+  }
+  if (!isGatewayStartupPreflightPhase(candidate.phase)) {
+    return null;
+  }
+  if (typeof candidate.message !== "string" || candidate.message.length === 0) {
+    return null;
+  }
+  return {
+    phase: candidate.phase,
+    message: candidate.message,
+  };
+}
+
+export function formatGatewayStartupPreflightFailure(err: unknown): string | null {
+  const classified = classifyGatewayStartupPreflightError(err);
+  if (!classified) {
+    return null;
+  }
+  return `Gateway startup phase failed (${classified.phase}): ${classified.message}`;
 }
 
 type GatewayStartupPreflightDeps = {
@@ -155,7 +201,7 @@ type GatewayStartupAuthBootstrapDeps = {
 };
 
 type GatewayStartupRuntimePolicyDeps = {
-  config: OpenClawConfig;
+  context: GatewayStartupContext;
   isDiagnosticsEnabled: (config: OpenClawConfig) => boolean;
   startDiagnosticHeartbeat: () => void;
   isRestartEnabled: (config: OpenClawConfig) => boolean;
@@ -214,24 +260,31 @@ export async function runGatewayStartupAuthBootstrap(
   return (await deps.activateRuntimeSecrets(cfgAtStart)).config;
 }
 
+export function createGatewayStartupContext(config: OpenClawConfig): GatewayStartupContext {
+  return {
+    config,
+    diagnosticsEnabled: false,
+  };
+}
+
 /**
  * Startup phase: apply runtime policies derived from resolved startup config.
  */
 export async function runGatewayStartupRuntimePolicyPhase(
   deps: GatewayStartupRuntimePolicyDeps,
-): Promise<{ config: OpenClawConfig; diagnosticsEnabled: boolean }> {
-  const diagnosticsEnabled = deps.isDiagnosticsEnabled(deps.config);
+): Promise<GatewayStartupContext> {
+  const diagnosticsEnabled = deps.isDiagnosticsEnabled(deps.context.config);
   if (diagnosticsEnabled) {
     deps.startDiagnosticHeartbeat();
   }
 
   deps.setGatewaySigusr1RestartPolicy({
-    allowExternal: deps.isRestartEnabled(deps.config),
+    allowExternal: deps.isRestartEnabled(deps.context.config),
   });
   deps.setPreRestartDeferralCheck(deps.getPendingWorkCount);
 
   return {
-    config: await deps.seedControlUiAllowedOrigins(deps.config),
+    config: await deps.seedControlUiAllowedOrigins(deps.context.config),
     diagnosticsEnabled,
   };
 }

@@ -87,6 +87,7 @@ import { createGatewayRuntimeState } from "./server-runtime-state.js";
 import { resolveSessionKeyForRun } from "./server-session-key.js";
 import { logGatewayStartup } from "./server-startup-log.js";
 import {
+  createGatewayStartupContext,
   runGatewayStartupAuthBootstrap,
   runGatewayStartupConfigPreflight,
   runGatewayStartupRuntimePolicyPhase,
@@ -331,20 +332,22 @@ export async function startGatewayServer(
     },
   });
 
-  cfgAtStart = await runGatewayStartupAuthBootstrap({
-    loadConfig,
-    ensureGatewayStartupAuth,
-    activateRuntimeSecrets: async (config) =>
-      await activateRuntimeSecrets(config, {
-        reason: "startup",
-        activate: true,
-      }),
-    log,
-    authOverride: opts.auth,
-    tailscaleOverride: opts.tailscale,
-  });
-  const startupPolicyPhase = await runGatewayStartupRuntimePolicyPhase({
-    config: cfgAtStart,
+  let startupContext = createGatewayStartupContext(
+    await runGatewayStartupAuthBootstrap({
+      loadConfig,
+      ensureGatewayStartupAuth,
+      activateRuntimeSecrets: async (config) =>
+        await activateRuntimeSecrets(config, {
+          reason: "startup",
+          activate: true,
+        }),
+      log,
+      authOverride: opts.auth,
+      tailscaleOverride: opts.tailscale,
+    }),
+  );
+  startupContext = await runGatewayStartupRuntimePolicyPhase({
+    context: startupContext,
     isDiagnosticsEnabled,
     startDiagnosticHeartbeat,
     isRestartEnabled,
@@ -361,8 +364,8 @@ export async function startGatewayServer(
         log,
       }),
   });
-  cfgAtStart = startupPolicyPhase.config;
-  const diagnosticsEnabled = startupPolicyPhase.diagnosticsEnabled;
+  cfgAtStart = startupContext.config;
+  const diagnosticsEnabled = startupContext.diagnosticsEnabled;
 
   initSubagentRegistry();
   const defaultAgentId = resolveDefaultAgentId(cfgAtStart);
