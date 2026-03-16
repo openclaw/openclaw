@@ -15,6 +15,7 @@ Current OAG surfaces in this repo:
 - `openclaw status` prints `OAG channels`, `OAG sessions`, and `OAG tasks` in the overview.
 - `openclaw health` and `doctor` include the same OAG summaries when the Gateway is healthy enough to answer probes.
 - Session replies can receive one-shot `OAG:` system notes when the runtime performs a recovery action that the user should know about.
+- For external audits or tool-assisted review, use [OAG Review Brief](/gateway/oag-review-brief).
 
 ## Where state lives
 
