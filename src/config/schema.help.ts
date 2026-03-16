@@ -551,7 +551,7 @@ export const FIELD_HELP: Record<string, string> = {
   "tools.exec.notifyOnExit":
     "When true (default), backgrounded exec sessions on exit and node exec lifecycle events enqueue a system event and request a heartbeat.",
   "tools.exec.notifyOnExitEmptySuccess":
-    "When true, successful backgrounded exec exits with empty output still enqueue a completion system event (default: false).",
+    "When true (default), successful backgrounded exec exits with empty output still enqueue a completion system event. Set to false to suppress these notifications.",
   "tools.exec.pathPrepend": "Directories to prepend to PATH for exec runs (gateway/sandbox).",
   "tools.exec.safeBins":
     "Allow stdin-only safe binaries to run without explicit allowlist entries.",
