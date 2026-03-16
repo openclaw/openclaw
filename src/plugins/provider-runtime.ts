@@ -6,7 +6,9 @@ import type {
   ProviderBuildMissingAuthMessageContext,
   ProviderBuiltInModelSuppressionContext,
   ProviderCacheTtlEligibilityContext,
+  ProviderDefaultThinkingPolicyContext,
   ProviderFetchUsageSnapshotContext,
+  ProviderModernModelPolicyContext,
   ProviderPrepareExtraParamsContext,
   ProviderPrepareDynamicModelContext,
   ProviderPrepareRuntimeAuthContext,
@@ -14,6 +16,7 @@ import type {
   ProviderPlugin,
   ProviderResolveDynamicModelContext,
   ProviderRuntimeModel,
+  ProviderThinkingPolicyContext,
   ProviderWrapStreamFnContext,
 } from "./types.js";
 
@@ -177,6 +180,46 @@ export function resolveProviderCacheTtlEligibility(params: {
   context: ProviderCacheTtlEligibilityContext;
 }) {
   return resolveProviderRuntimePlugin(params)?.isCacheTtlEligible?.(params.context);
+}
+
+export function resolveProviderBinaryThinking(params: {
+  provider: string;
+  config?: OpenClawConfig;
+  workspaceDir?: string;
+  env?: NodeJS.ProcessEnv;
+  context: ProviderThinkingPolicyContext;
+}) {
+  return resolveProviderRuntimePlugin(params)?.isBinaryThinking?.(params.context);
+}
+
+export function resolveProviderXHighThinking(params: {
+  provider: string;
+  config?: OpenClawConfig;
+  workspaceDir?: string;
+  env?: NodeJS.ProcessEnv;
+  context: ProviderThinkingPolicyContext;
+}) {
+  return resolveProviderRuntimePlugin(params)?.supportsXHighThinking?.(params.context);
+}
+
+export function resolveProviderDefaultThinkingLevel(params: {
+  provider: string;
+  config?: OpenClawConfig;
+  workspaceDir?: string;
+  env?: NodeJS.ProcessEnv;
+  context: ProviderDefaultThinkingPolicyContext;
+}) {
+  return resolveProviderRuntimePlugin(params)?.resolveDefaultThinkingLevel?.(params.context);
+}
+
+export function resolveProviderModernModelRef(params: {
+  provider: string;
+  config?: OpenClawConfig;
+  workspaceDir?: string;
+  env?: NodeJS.ProcessEnv;
+  context: ProviderModernModelPolicyContext;
+}) {
+  return resolveProviderRuntimePlugin(params)?.isModernModelRef?.(params.context);
 }
 
 export function buildProviderMissingAuthMessageWithPlugin(params: {

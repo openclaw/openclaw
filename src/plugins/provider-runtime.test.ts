@@ -17,10 +17,14 @@ import {
   buildProviderMissingAuthMessageWithPlugin,
   prepareProviderExtraParams,
   resolveProviderCacheTtlEligibility,
+  resolveProviderBinaryThinking,
   resolveProviderBuiltInModelSuppression,
+  resolveProviderDefaultThinkingLevel,
+  resolveProviderModernModelRef,
   resolveProviderUsageSnapshotWithPlugin,
   resolveProviderCapabilitiesWithPlugin,
   resolveProviderUsageAuthWithPlugin,
+  resolveProviderXHighThinking,
   normalizeProviderResolvedModelWithPlugin,
   prepareProviderDynamicModel,
   prepareProviderRuntimeAuth,
@@ -143,6 +147,10 @@ describe("provider-runtime", () => {
           resolveUsageAuth,
           fetchUsageSnapshot,
           isCacheTtlEligible: ({ modelId }) => modelId.startsWith("anthropic/"),
+          isBinaryThinking: () => true,
+          supportsXHighThinking: ({ modelId }) => modelId === "gpt-5.4",
+          resolveDefaultThinkingLevel: ({ reasoning }) => (reasoning ? "low" : "off"),
+          isModernModelRef: ({ modelId }) => modelId.startsWith("gpt-5"),
         },
       ];
     });
@@ -274,6 +282,47 @@ describe("provider-runtime", () => {
         context: {
           provider: "demo",
           modelId: "anthropic/claude-sonnet-4-5",
+        },
+      }),
+    ).toBe(true);
+
+    expect(
+      resolveProviderBinaryThinking({
+        provider: "demo",
+        context: {
+          provider: "demo",
+          modelId: "glm-5",
+        },
+      }),
+    ).toBe(true);
+
+    expect(
+      resolveProviderXHighThinking({
+        provider: "demo",
+        context: {
+          provider: "demo",
+          modelId: "gpt-5.4",
+        },
+      }),
+    ).toBe(true);
+
+    expect(
+      resolveProviderDefaultThinkingLevel({
+        provider: "demo",
+        context: {
+          provider: "demo",
+          modelId: "gpt-5.4",
+          reasoning: true,
+        },
+      }),
+    ).toBe("low");
+
+    expect(
+      resolveProviderModernModelRef({
+        provider: "demo",
+        context: {
+          provider: "demo",
+          modelId: "gpt-5.4",
         },
       }),
     ).toBe(true);
