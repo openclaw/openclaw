@@ -30,8 +30,11 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 
-function recordHasKeys(value: unknown): boolean {
-  return isRecord(value) && Object.keys(value).length > 0;
+export function hasMeaningfulChannelConfig(value: unknown): boolean {
+  if (!isRecord(value)) {
+    return false;
+  }
+  return Object.keys(value).some((key) => key !== "enabled");
 }
 
 function hasWhatsAppAuthState(env: NodeJS.ProcessEnv): boolean {
@@ -71,7 +74,7 @@ export function listPotentialConfiguredChannelIds(
       if (IGNORED_CHANNEL_CONFIG_KEYS.has(key)) {
         continue;
       }
-      if (recordHasKeys(value)) {
+      if (hasMeaningfulChannelConfig(value)) {
         configuredChannelIds.add(key);
       }
     }
@@ -121,7 +124,7 @@ export function hasPotentialConfiguredChannels(
       if (IGNORED_CHANNEL_CONFIG_KEYS.has(key)) {
         continue;
       }
-      if (recordHasKeys(value)) {
+      if (hasMeaningfulChannelConfig(value)) {
         return true;
       }
     }
