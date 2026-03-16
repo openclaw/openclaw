@@ -126,7 +126,11 @@ export async function buildStatusReply(params: {
     const runs = listSubagentRunsForRequester(requesterKey);
     const verboseEnabled = resolvedVerboseLevel && resolvedVerboseLevel !== "off";
     if (runs.length > 0) {
-      const active = runs.filter((entry) => !entry.endedAt);
+      const active = runs.filter(
+        (entry) =>
+          !entry.endedAt ||
+          (!entry.cleanupCompletedAt && !entry.cleanupHandled && !entry.suppressAnnounceReason),
+      );
       const done = runs.length - active.length;
       if (verboseEnabled) {
         const labels = active
