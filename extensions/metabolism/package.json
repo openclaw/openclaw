@@ -1,0 +1,17 @@
+{
+  "name": "@openclaw/metabolism",
+  "version": "1.0.0",
+  "description": "Homeostatic token budget management system for OpenClaw",
+  "type": "module",
+  "main": "index.ts",
+  "scripts": {
+    "test": "vitest run src/*.test.ts"
+  },
+  "dependencies": {
+    "zod": "^4.3.6"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "vitest": "^4.0.18"
+  }
+}

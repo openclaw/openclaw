@@ -1,0 +1,9 @@
+{
+  "id": "metabolism",
+  "kind": "system",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}
