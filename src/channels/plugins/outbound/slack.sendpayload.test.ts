@@ -1,10 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
+import { slackOutbound } from "../../../../test/channel-outbounds.js";
 import type { ReplyPayload } from "../../../auto-reply/types.js";
 import {
   installSendPayloadContractSuite,
   primeSendMock,
 } from "../../../test-utils/send-payload-contract.js";
-import { slackOutbound } from "./slack.js";
 
 function createHarness(params: {
   payload: ReplyPayload;
