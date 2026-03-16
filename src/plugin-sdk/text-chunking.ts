@@ -25,7 +25,7 @@ export function chunkTextForOutbound(text: string, limit: number): string[] {
     markers.push({ pos: markerStart, len: match[1].length });
   }
 
-  return chunkTextByBreakResolver(text, limit, (window, windowStart) => {
+  return chunkTextByBreakResolver(text, limit, (window, windowStart = 0) => {
     // Determine if we're inside a code block at windowStart position
     // Count markers before windowStart
     const countBefore = markers.filter((m) => m.pos < windowStart).length;
