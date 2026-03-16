@@ -3,7 +3,12 @@ import os from "node:os";
 import path from "node:path";
 
 export const POSIX_OPENCLAW_TMP_DIR = "/tmp/openclaw";
-const TMP_DIR_ACCESS_MODE = fs.constants.W_OK | fs.constants.X_OK;
+// Lazy accessor: fs.constants is undefined when this module is bundled for
+// the browser (Vite externalizes node:fs).  Evaluating at call-time keeps
+// the import safe for the Control UI bundle while preserving Node.js behavior.
+function getTmpDirAccessMode(): number {
+  return fs.constants.W_OK | fs.constants.X_OK;
+}
 
 type ResolvePreferredOpenClawTmpDirOptions = {
   accessSync?: (path: string, mode?: number) => void;
@@ -86,7 +91,7 @@ export function resolvePreferredOpenClawTmpDir(
       if (!isTrustedTmpDir(candidate)) {
         return "invalid";
       }
-      accessSync(candidatePath, TMP_DIR_ACCESS_MODE);
+      accessSync(candidatePath, getTmpDirAccessMode());
       return "available";
     } catch (err) {
       if (isNodeErrorWithCode(err, "ENOENT")) {
@@ -152,7 +157,7 @@ export function resolvePreferredOpenClawTmpDir(
   }
 
   try {
-    accessSync("/tmp", TMP_DIR_ACCESS_MODE);
+    accessSync("/tmp", getTmpDirAccessMode());
     // Create with a safe default; subsequent callers expect it exists.
     mkdirSync(POSIX_OPENCLAW_TMP_DIR, { recursive: true, mode: 0o700 });
     chmodSync(POSIX_OPENCLAW_TMP_DIR, 0o700);
