@@ -14,7 +14,6 @@ import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
 import type { ProviderPlugin } from "../plugins/types.js";
 import type { WizardPrompter, WizardSelectOption } from "../wizard/prompts.js";
 import { formatTokenK } from "./models/shared.js";
-import { OPENAI_CODEX_DEFAULT_MODEL } from "./openai-codex-model-default.js";
 
 const KEEP_VALUE = "__keep__";
 const MANUAL_VALUE = "__manual__";
@@ -154,14 +153,6 @@ function addModelSelectOption(params: {
   params.seen.add(key);
 }
 
-function isAnthropicLegacyModel(entry: { provider: string; id: string }): boolean {
-  return (
-    entry.provider === "anthropic" &&
-    typeof entry.id === "string" &&
-    entry.id.toLowerCase().startsWith("claude-3")
-  );
-}
-
 async function promptManualModel(params: {
   prompter: WizardPrompter;
   allowBlank: boolean;
@@ -270,9 +261,6 @@ export async function promptDefaultModel(
       }
       return entry.provider === preferredProvider;
     });
-    if (preferredProvider === "anthropic") {
-      models = models.filter((entry) => !isAnthropicLegacyModel(entry));
-    }
   }
 
   const agentDir = params.agentDir;
@@ -459,7 +447,7 @@ export async function promptModelAllowlist(params: {
         params.message ??
         "Allowlist models (comma-separated provider/model; blank to keep current)",
       initialValue: existingKeys.join(", "),
-      placeholder: `${OPENAI_CODEX_DEFAULT_MODEL}, anthropic/claude-opus-4-6`,
+      placeholder: "provider/model, other-provider/model",
     });
     const parsed = String(raw ?? "")
       .split(",")

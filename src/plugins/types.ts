@@ -118,6 +118,23 @@ export type ProviderAuthContext = {
   workspaceDir?: string;
   prompter: WizardPrompter;
   runtime: RuntimeEnv;
+  /**
+   * Onboarding secret persistence preference.
+   *
+   * Interactive wizard flows set this when the caller explicitly requested
+   * plaintext or env/file/exec ref storage. Ad-hoc `models auth login` flows
+   * usually leave it undefined.
+   */
+  secretInputMode?: OnboardOptions["secretInputMode"];
+  /**
+   * Whether the provider auth flow should offer the onboarding secret-storage
+   * mode picker when `secretInputMode` is unset.
+   *
+   * This is true for onboarding/configure flows and false for direct
+   * `models auth` commands, which should keep a tighter, provider-owned prompt
+   * surface.
+   */
+  allowSecretRefPrompt?: boolean;
   isRemote: boolean;
   openUrl: (url: string) => Promise<void>;
   oauth: {

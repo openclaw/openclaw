@@ -54,6 +54,7 @@ export const BUNDLED_ENABLED_BY_DEFAULT = new Set<string>([
   "vercel-ai-gateway",
   "vllm",
   "volcengine",
+  "xai",
   "xiaomi",
   "zai",
 ]);

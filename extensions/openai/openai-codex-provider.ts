@@ -133,15 +133,20 @@ function resolveCodexForwardCompatModel(
 }
 
 async function runOpenAICodexOAuth(ctx: ProviderAuthContext) {
-  const creds = await loginOpenAICodexOAuth({
-    prompter: ctx.prompter,
-    runtime: ctx.runtime,
-    isRemote: ctx.isRemote,
-    openUrl: ctx.openUrl,
-    localBrowserMessage: "Complete sign-in in browser…",
-  });
+  let creds;
+  try {
+    creds = await loginOpenAICodexOAuth({
+      prompter: ctx.prompter,
+      runtime: ctx.runtime,
+      isRemote: ctx.isRemote,
+      openUrl: ctx.openUrl,
+      localBrowserMessage: "Complete sign-in in browser…",
+    });
+  } catch {
+    return { profiles: [] };
+  }
   if (!creds) {
-    throw new Error("OpenAI Codex OAuth did not return credentials.");
+    return { profiles: [] };
   }
 
   return buildOauthProviderAuthResult({
@@ -168,6 +173,14 @@ export function buildOpenAICodexProviderPlugin(): ProviderPlugin {
         run: async (ctx) => await runOpenAICodexOAuth(ctx),
       },
     ],
+    wizard: {
+      onboarding: {
+        choiceId: "openai-codex",
+        choiceLabel: "OpenAI Codex (ChatGPT OAuth)",
+        choiceHint: "Browser sign-in",
+        methodId: "oauth",
+      },
+    },
     catalog: {
       order: "profile",
       run: async (ctx) => {
