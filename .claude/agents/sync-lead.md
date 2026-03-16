@@ -446,6 +446,44 @@ gh pr view <pr-number> --json state --jq '.state'
 # Must be "MERGED"
 ```
 
+**Step 3.7b — Update CHANGELOG.md**
+
+After merge lands on main, update `CHANGELOG.md` with the phase's changes:
+
+```bash
+# Add a sync section under the current version heading
+```
+
+Format — append to the current version's `### Changes` or `### Fixes` section:
+
+- For **security** phase: add under `### Fixes` with prefix `Security:`
+  ```
+  - Security: <brief description of fix> (upstream <sha-short>)
+  ```
+- For **bug fixes** phase: add under `### Fixes`
+  ```
+  - Fix: <brief description> (upstream <sha-short>)
+  ```
+- For **features** phase: add under `### Changes`
+  ```
+  - <brief description of feature> (upstream <sha-short>)
+  ```
+- For **provider-refactor** phase: add under `### Changes`
+  ```
+  - Refactor: align provider plugin architecture with upstream (upstream <sha-short>)
+  ```
+- For **review** and **ui-inspiration** phases: only add notable items
+
+Group related commits into single entries where appropriate — don't list all 34 security SHAs individually. Aim for 3-8 changelog lines per phase summarizing the key changes.
+
+Commit the changelog update:
+
+```bash
+git add CHANGELOG.md
+git commit -m "docs: update changelog with <phase> sync from upstream <targetTag>"
+git push
+```
+
 **Step 3.8 — STOP: Prompt user for hands-on testing**
 
 ```
