@@ -138,6 +138,7 @@ import {
 } from "./compaction-timeout.js";
 import { pruneProcessedHistoryImages } from "./history-image-prune.js";
 import { detectAndLoadPromptImages } from "./images.js";
+import { wrapStreamFnWithToolSurface } from "./stream-tool-surface.js";
 import type { EmbeddedRunAttemptParams, EmbeddedRunAttemptResult } from "./types.js";
 
 type PromptBuildHookRunner = {
@@ -2030,6 +2031,21 @@ export async function runEmbeddedAttempt(
           } as unknown;
           return inner(model, nextContext as typeof context, options);
         };
+      }
+
+      // Lazy-load tool surface filtering: run before_tool_surface hook on every
+      // LLM call so plugins (e.g. lazy-tools) can filter tool schemas dynamically.
+      if (hookRunner?.hasHooks("before_tool_surface")) {
+        activeSession.agent.streamFn = wrapStreamFnWithToolSurface(
+          activeSession.agent.streamFn,
+          hookRunner,
+          {
+            agentId: sessionAgentId,
+            sessionKey: sandboxSessionKey,
+            sessionId: params.sessionId,
+            workspaceDir: resolvedWorkspace,
+          },
+        );
       }
 
       const innerStreamFn = activeSession.agent.streamFn;
