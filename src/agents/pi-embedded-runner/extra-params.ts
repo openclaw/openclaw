@@ -78,6 +78,12 @@ type CacheRetentionStreamOptions = Partial<SimpleStreamOptions> & {
   openaiWsWarmup?: boolean;
 };
 
+type ThinkingLevelSource = ThinkLevel | (() => ThinkLevel | undefined);
+
+function resolveThinkingLevelSource(source?: ThinkingLevelSource): ThinkLevel | undefined {
+  return typeof source === "function" ? source() : source;
+}
+
 function createStreamFnWithExtraParams(
   baseStreamFn: StreamFn | undefined,
   extraParams: Record<string, unknown> | undefined,
@@ -194,7 +200,7 @@ function sanitizeGoogleThinkingPayload(params: {
 
 function createGoogleThinkingPayloadWrapper(
   baseStreamFn: StreamFn | undefined,
-  thinkingLevel?: ThinkLevel,
+  thinkingLevel?: ThinkingLevelSource,
 ): StreamFn {
   const underlying = baseStreamFn ?? streamSimple;
   return (model, context, options) => {
@@ -206,7 +212,7 @@ function createGoogleThinkingPayloadWrapper(
           sanitizeGoogleThinkingPayload({
             payload,
             modelId: model.id,
-            thinkingLevel,
+            thinkingLevel: resolveThinkingLevelSource(thinkingLevel),
           });
         }
         return onPayload?.(payload, model);
@@ -274,7 +280,7 @@ export function applyExtraParamsToAgent(
   provider: string,
   modelId: string,
   extraParamsOverride?: Record<string, unknown>,
-  thinkingLevel?: ThinkLevel,
+  thinkingLevel?: ThinkingLevelSource,
   agentId?: string,
 ): void {
   const resolvedExtraParams = resolveExtraParams({
@@ -299,7 +305,7 @@ export function applyExtraParamsToAgent(
         provider,
         modelId,
         extraParams: merged,
-        thinkingLevel,
+        thinkingLevel: resolveThinkingLevelSource(thinkingLevel),
       },
     }) ?? merged;
 
@@ -326,10 +332,8 @@ export function applyExtraParamsToAgent(
     agent.streamFn = createAnthropicBetaHeadersWrapper(agent.streamFn, anthropicBetas);
   }
 
-  if (shouldApplySiliconFlowThinkingOffCompat({ provider, modelId, thinkingLevel })) {
-    log.debug(
-      `normalizing thinking=off to thinking=null for SiliconFlow compatibility (${provider}/${modelId})`,
-    );
+  if (shouldApplySiliconFlowThinkingOffCompat({ provider, modelId })) {
+    log.debug(`applying SiliconFlow thinking=off->null compat wrapper for ${provider}/${modelId}`);
     agent.streamFn = createSiliconFlowThinkingWrapper(agent.streamFn);
   }
 
@@ -353,13 +357,23 @@ export function applyExtraParamsToAgent(
 
   if (!providerWrapperHandled && shouldApplyMoonshotPayloadCompat({ provider, modelId })) {
     // Preserve the legacy Moonshot compatibility path when no plugin wrapper
-    // actually handled the stream function. This covers tests/disabled plugins
+    // actually handled the stream function. This covers tests, disabled plugins,
     // and Ollama Cloud Kimi models until they gain a dedicated runtime hook.
-    const thinkingType = resolveMoonshotThinkingType({
-      configuredThinking: effectiveExtraParams?.thinking,
-      thinkingLevel,
-    });
-    agent.streamFn = createMoonshotThinkingWrapper(agent.streamFn, thinkingType);
+    const resolveMoonshotThinkingTypeForRequest = () =>
+      resolveMoonshotThinkingType({
+        configuredThinking: effectiveExtraParams?.thinking,
+        thinkingLevel,
+      });
+    const initialMoonshotThinkingType = resolveMoonshotThinkingTypeForRequest();
+    if (initialMoonshotThinkingType) {
+      log.debug(
+        `applying Moonshot thinking=${initialMoonshotThinkingType} payload wrapper for ${provider}/${modelId}`,
+      );
+    }
+    agent.streamFn = createMoonshotThinkingWrapper(
+      agent.streamFn,
+      resolveMoonshotThinkingTypeForRequest,
+    );
   }
 
   if (provider === "amazon-bedrock" && !isAnthropicBedrockModel(modelId)) {
