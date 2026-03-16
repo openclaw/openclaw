@@ -13,6 +13,38 @@ Run the [Agent Client Protocol (ACP)](https://agentclientprotocol.com/) bridge t
 This command speaks ACP over stdio for IDEs and forwards prompts to the Gateway
 over WebSocket. It keeps ACP sessions mapped to Gateway session keys.
 
+`openclaw acp` is a Gateway-backed ACP bridge, not a full ACP-native editor
+runtime. It focuses on session routing, prompt delivery, and basic streaming
+updates.
+
+## Compatibility Matrix
+
+| ACP area                                                              | Status      | Notes                                                                                                            |
+| --------------------------------------------------------------------- | ----------- | ---------------------------------------------------------------------------------------------------------------- |
+| `initialize`, `newSession`, `prompt`, `cancel`                        | Implemented | Core bridge flow over stdio to Gateway chat/send + abort.                                                        |
+| `listSessions`, slash commands                                        | Implemented | Session list works against Gateway session state; commands are advertised via `available_commands_update`.       |
+| `loadSession`                                                         | Partial     | Rebinds the ACP session to a Gateway session key. Stored history is not replayed yet.                            |
+| Prompt content (`text`, embedded `resource`, images)                  | Partial     | Text/resources are flattened into chat input; images become Gateway attachments.                                 |
+| Session modes                                                         | Partial     | `session/set_mode` is supported, but this bridge does not yet expose broader ACP-native mode or config surfaces. |
+| Tool streaming                                                        | Partial     | Tool start and result updates are forwarded, but without ACP-native terminal or richer editor metadata.          |
+| Per-session MCP servers (`mcpServers`)                                | Unsupported | Bridge mode rejects per-session MCP server requests. Configure MCP on the OpenClaw gateway or agent instead.     |
+| Client filesystem methods (`fs/read_text_file`, `fs/write_text_file`) | Unsupported | The bridge does not call ACP client filesystem methods.                                                          |
+| Client terminal methods (`terminal/*`)                                | Unsupported | The bridge does not create ACP client terminals or stream terminal ids through tool calls.                       |
+| Session plans / thought streaming                                     | Unsupported | The bridge currently emits output text and tool status, not ACP plan or thought updates.                         |
+
+## Known Limitations
+
+- `loadSession` rebinds to an existing Gateway session, but it does not replay
+  prior user or assistant history yet.
+- If multiple ACP clients share the same Gateway session key, event and cancel
+  routing are best-effort rather than strictly isolated per client. Prefer the
+  default isolated `acp:<uuid>` sessions when you need clean editor-local
+  turns.
+- Gateway stop states are translated into ACP stop reasons, but that mapping is
+  less expressive than a fully ACP-native runtime.
+- Tool follow-along data is intentionally narrow in bridge mode. The bridge
+  does not yet emit ACP terminals, file locations, or structured diffs.
+
 ## Usage
 
 ```bash
@@ -226,7 +258,7 @@ Security note:
 - `--token` and `--password` can be visible in local process listings on some systems.
 - Prefer `--token-file`/`--password-file` or environment variables (`OPENCLAW_GATEWAY_TOKEN`, `OPENCLAW_GATEWAY_PASSWORD`).
 - Gateway auth resolution follows the shared contract used by other Gateway clients:
-  - local mode: env (`OPENCLAW_GATEWAY_*`) -> `gateway.auth.*` -> `gateway.remote.*` fallback only when `gateway.auth.*` is unset (configured-but-unresolved local SecretRefs fail closed)
+  - local mode: env (`OPENCLAW_GATEWAY_*`) -> `gateway.auth.*` -> `gateway.remote.*` fallback when `gateway.auth.*` is unset
   - remote mode: `gateway.remote.*` with env/config fallback per remote precedence rules
   - `--url` is override-safe and does not reuse implicit config/env credentials; pass explicit `--token`/`--password` (or file variants)
 - ACP runtime backend child processes receive `OPENCLAW_SHELL=acp`, which can be used for context-specific shell/profile rules.

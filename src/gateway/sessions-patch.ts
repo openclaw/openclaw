@@ -11,7 +11,6 @@ import {
   formatThinkingLevels,
   formatXHighModelHint,
   normalizeElevatedLevel,
-  normalizeFastMode,
   normalizeReasoningLevel,
   normalizeThinkLevel,
   normalizeUsageDisplay,
@@ -20,6 +19,7 @@ import {
 import type { OpenClawConfig } from "../config/config.js";
 import type { SessionEntry } from "../config/sessions.js";
 import {
+  isAcpSessionKey,
   isSubagentSessionKey,
   normalizeAgentId,
   parseAgentSessionKey,
@@ -27,9 +27,7 @@ import {
 import { applyVerboseOverride, parseVerboseOverride } from "../sessions/level-overrides.js";
 import { applyModelOverrideToSessionEntry } from "../sessions/model-overrides.js";
 import { normalizeSendPolicy } from "../sessions/send-policy.js";
-import { isAcpSessionKey } from "../sessions/session-key-utils.js";
 import { parseSessionLabel } from "../sessions/session-label.js";
-import { normalizeDeliveryContext } from "../utils/delivery-context.js";
 import {
   ErrorCodes,
   type ErrorShape,
@@ -69,22 +67,6 @@ function supportsSpawnLineage(storeKey: string): boolean {
   return isSubagentSessionKey(storeKey) || isAcpSessionKey(storeKey);
 }
 
-function normalizeSubagentRole(raw: string): "orchestrator" | "leaf" | undefined {
-  const normalized = raw.trim().toLowerCase();
-  if (normalized === "orchestrator" || normalized === "leaf") {
-    return normalized;
-  }
-  return undefined;
-}
-
-function normalizeSubagentControlScope(raw: string): "children" | "none" | undefined {
-  const normalized = raw.trim().toLowerCase();
-  if (normalized === "children" || normalized === "none") {
-    return normalized;
-  }
-  return undefined;
-}
-
 export async function applySessionsPatchToStore(params: {
   cfg: OpenClawConfig;
   store: Record<string, SessionEntry>;
@@ -120,34 +102,13 @@ export async function applySessionsPatchToStore(params: {
       if (!trimmed) {
         return invalid("invalid spawnedBy: empty");
       }
-      if (!isSubagentSessionKey(storeKey)) {
-        return invalid("spawnedBy is only supported for subagent:* sessions");
+      if (!supportsSpawnLineage(storeKey)) {
+        return invalid("spawnedBy is only supported for subagent:* or acp:* sessions");
       }
       if (existing?.spawnedBy && existing.spawnedBy !== trimmed) {
         return invalid("spawnedBy cannot be changed once set");
       }
       next.spawnedBy = trimmed;
-    }
-  }
-
-  if ("spawnedWorkspaceDir" in patch) {
-    const raw = patch.spawnedWorkspaceDir;
-    if (raw === null) {
-      if (existing?.spawnedWorkspaceDir) {
-        return invalid("spawnedWorkspaceDir cannot be cleared once set");
-      }
-    } else if (raw !== undefined) {
-      if (!supportsSpawnLineage(storeKey)) {
-        return invalid("spawnedWorkspaceDir is only supported for subagent:* or acp:* sessions");
-      }
-      const trimmed = String(raw).trim();
-      if (!trimmed) {
-        return invalid("invalid spawnedWorkspaceDir: empty");
-      }
-      if (existing?.spawnedWorkspaceDir && existing.spawnedWorkspaceDir !== trimmed) {
-        return invalid("spawnedWorkspaceDir cannot be changed once set");
-      }
-      next.spawnedWorkspaceDir = trimmed;
     }
   }
 
@@ -158,8 +119,8 @@ export async function applySessionsPatchToStore(params: {
         return invalid("spawnDepth cannot be cleared once set");
       }
     } else if (raw !== undefined) {
-      if (!isSubagentSessionKey(storeKey)) {
-        return invalid("spawnDepth is only supported for subagent:* sessions");
+      if (!supportsSpawnLineage(storeKey)) {
+        return invalid("spawnDepth is only supported for subagent:* or acp:* sessions");
       }
       const numeric = Number(raw);
       if (!Number.isInteger(numeric) || numeric < 0) {
@@ -170,48 +131,6 @@ export async function applySessionsPatchToStore(params: {
         return invalid("spawnDepth cannot be changed once set");
       }
       next.spawnDepth = normalized;
-    }
-  }
-
-  if ("subagentRole" in patch) {
-    const raw = patch.subagentRole;
-    if (raw === null) {
-      if (existing?.subagentRole) {
-        return invalid("subagentRole cannot be cleared once set");
-      }
-    } else if (raw !== undefined) {
-      if (!supportsSpawnLineage(storeKey)) {
-        return invalid("subagentRole is only supported for subagent:* or acp:* sessions");
-      }
-      const normalized = normalizeSubagentRole(String(raw));
-      if (!normalized) {
-        return invalid('invalid subagentRole (use "orchestrator" or "leaf")');
-      }
-      if (existing?.subagentRole && existing.subagentRole !== normalized) {
-        return invalid("subagentRole cannot be changed once set");
-      }
-      next.subagentRole = normalized;
-    }
-  }
-
-  if ("subagentControlScope" in patch) {
-    const raw = patch.subagentControlScope;
-    if (raw === null) {
-      if (existing?.subagentControlScope) {
-        return invalid("subagentControlScope cannot be cleared once set");
-      }
-    } else if (raw !== undefined) {
-      if (!supportsSpawnLineage(storeKey)) {
-        return invalid("subagentControlScope is only supported for subagent:* or acp:* sessions");
-      }
-      const normalized = normalizeSubagentControlScope(String(raw));
-      if (!normalized) {
-        return invalid('invalid subagentControlScope (use "children" or "none")');
-      }
-      if (existing?.subagentControlScope && existing.subagentControlScope !== normalized) {
-        return invalid("subagentControlScope cannot be changed once set");
-      }
-      next.subagentControlScope = normalized;
     }
   }
 
@@ -251,19 +170,6 @@ export async function applySessionsPatchToStore(params: {
         );
       }
       next.thinkingLevel = normalized;
-    }
-  }
-
-  if ("fastMode" in patch) {
-    const raw = patch.fastMode;
-    if (raw === null) {
-      delete next.fastMode;
-    } else if (raw !== undefined) {
-      const normalized = normalizeFastMode(raw);
-      if (normalized === undefined) {
-        return invalid("invalid fastMode (use true or false)");
-      }
-      next.fastMode = normalized;
     }
   }
 
@@ -455,34 +361,6 @@ export async function applySessionsPatchToStore(params: {
         return invalid('invalid groupActivation (use "mention"|"always")');
       }
       next.groupActivation = normalized;
-    }
-  }
-
-  if ("deliveryContext" in patch) {
-    const raw = patch.deliveryContext;
-    if (raw === null) {
-      // Unbind: clear delivery routing (webchat-only mode)
-      delete next.deliveryContext;
-      delete next.lastChannel;
-      delete next.lastTo;
-      delete next.lastAccountId;
-      delete next.lastThreadId;
-    } else if (raw !== undefined) {
-      const normalized = normalizeDeliveryContext(raw);
-      if (!normalized?.channel) {
-        return invalid("deliveryContext requires at least a channel");
-      }
-      next.deliveryContext = normalized;
-      next.lastChannel = normalized.channel;
-      if (normalized.to) {
-        next.lastTo = normalized.to;
-      }
-      if (normalized.accountId) {
-        next.lastAccountId = normalized.accountId;
-      }
-      if (normalized.threadId != null) {
-        next.lastThreadId = normalized.threadId;
-      }
     }
   }
 

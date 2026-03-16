@@ -50,6 +50,7 @@ export type AgentSummary = {
 };
 
 export type GatewayStatusSummary = {
+  runtimeVersion?: string | null;
   linkChannel?: {
     id?: string;
     label?: string;

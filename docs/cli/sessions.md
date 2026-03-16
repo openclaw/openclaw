@@ -24,6 +24,12 @@ Scope selection:
 - `--all-agents`: aggregate all configured agent stores
 - `--store <path>`: explicit store path (cannot be combined with `--agent` or `--all-agents`)
 
+`openclaw sessions --all-agents` reads configured agent stores. Gateway and ACP
+session discovery are broader: they also include disk-only stores found under
+the default `agents/` root or a templated `session.store` root. Those
+discovered stores must resolve to regular `sessions.json` files inside the
+agent root; symlinks and out-of-root paths are skipped.
+
 JSON examples:
 
 `openclaw sessions --all-agents --json`:
