@@ -52,42 +52,28 @@ type SlackBoltResolvedExports = {
   App: SlackAppConstructor;
   HTTPReceiver: SlackHttpReceiverConstructor;
 };
-type SlackBoltModuleLike = {
-  App?: unknown;
-  HTTPReceiver?: unknown;
-  default?: unknown;
-};
+type Constructor = abstract new (...args: never[]) => unknown;
 
-function isSlackAppConstructor(value: unknown): value is SlackAppConstructor {
+function isConstructorFunction<T extends Constructor>(value: unknown): value is T {
   return typeof value === "function";
 }
 
-function isSlackHttpReceiverConstructor(value: unknown): value is SlackHttpReceiverConstructor {
-  return typeof value === "function";
-}
-
-function isSlackBoltModule(value: unknown): value is SlackBoltResolvedExports {
+function resolveSlackBoltModule(value: unknown): SlackBoltResolvedExports | null {
   if (!value || typeof value !== "object") {
-    return false;
+    return null;
   }
-  const candidate = value as SlackBoltModuleLike;
-  return (
-    isSlackAppConstructor(candidate.App) && isSlackHttpReceiverConstructor(candidate.HTTPReceiver)
-  );
-}
-
-function describeSlackBoltShape(value: unknown): string {
-  if (!value) {
-    return "nullish";
+  const app = Reflect.get(value, "App");
+  const httpReceiver = Reflect.get(value, "HTTPReceiver");
+  if (
+    !isConstructorFunction<SlackAppConstructor>(app) ||
+    !isConstructorFunction<SlackHttpReceiverConstructor>(httpReceiver)
+  ) {
+    return null;
   }
-  if (typeof value === "function") {
-    return "function";
-  }
-  if (typeof value !== "object") {
-    return typeof value;
-  }
-  const keys = Object.keys(value as Record<string, unknown>).slice(0, 8);
-  return `object(${keys.join(",") || "no-keys"})`;
+  return {
+    App: app,
+    HTTPReceiver: httpReceiver,
+  };
 }
 
 function resolveSlackBoltInterop(params: {
@@ -95,49 +81,36 @@ function resolveSlackBoltInterop(params: {
   namespaceImport: unknown;
 }): SlackBoltResolvedExports {
   const { defaultImport, namespaceImport } = params;
-  const namespaceModule = (namespaceImport ?? {}) as SlackBoltModuleLike;
   const nestedDefault =
     defaultImport && typeof defaultImport === "object"
-      ? (defaultImport as { default?: unknown }).default
+      ? Reflect.get(defaultImport, "default")
       : undefined;
-
-  if (isSlackBoltModule(defaultImport)) {
-    return {
-      App: defaultImport.App,
-      HTTPReceiver: defaultImport.HTTPReceiver,
-    };
-  }
-  if (isSlackBoltModule(nestedDefault)) {
-    return {
-      App: nestedDefault.App,
-      HTTPReceiver: nestedDefault.HTTPReceiver,
-    };
+  const namespaceDefault =
+    namespaceImport && typeof namespaceImport === "object"
+      ? Reflect.get(namespaceImport, "default")
+      : undefined;
+  const namespaceReceiver =
+    namespaceImport && typeof namespaceImport === "object"
+      ? Reflect.get(namespaceImport, "HTTPReceiver")
+      : undefined;
+  const directModule =
+    resolveSlackBoltModule(defaultImport) ??
+    resolveSlackBoltModule(nestedDefault) ??
+    resolveSlackBoltModule(namespaceDefault) ??
+    resolveSlackBoltModule(namespaceImport);
+  if (directModule) {
+    return directModule;
   }
   if (
-    isSlackAppConstructor(defaultImport) &&
-    isSlackHttpReceiverConstructor(namespaceModule.HTTPReceiver)
+    isConstructorFunction<SlackAppConstructor>(defaultImport) &&
+    isConstructorFunction<SlackHttpReceiverConstructor>(namespaceReceiver)
   ) {
     return {
       App: defaultImport,
-      HTTPReceiver: namespaceModule.HTTPReceiver,
+      HTTPReceiver: namespaceReceiver,
     };
   }
-  if (isSlackBoltModule(namespaceModule.default)) {
-    return {
-      App: namespaceModule.default.App,
-      HTTPReceiver: namespaceModule.default.HTTPReceiver,
-    };
-  }
-  if (isSlackBoltModule(namespaceModule)) {
-    return {
-      App: namespaceModule.App,
-      HTTPReceiver: namespaceModule.HTTPReceiver,
-    };
-  }
-
-  throw new TypeError(
-    `Unable to resolve @slack/bolt exports (default=${describeSlackBoltShape(defaultImport)}, namespace=${describeSlackBoltShape(namespaceImport)}, namespace.default=${describeSlackBoltShape(namespaceModule.default)})`,
-  );
+  throw new TypeError("Unable to resolve @slack/bolt App/HTTPReceiver exports");
 }
 
 const { App, HTTPReceiver } = resolveSlackBoltInterop({

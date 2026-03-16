@@ -11,7 +11,7 @@ describe("resolveSlackBoltInterop", () => {
         App: FakeApp,
         HTTPReceiver: FakeHTTPReceiver,
       },
-      namespaceImport: {} as never,
+      namespaceImport: {},
     });
 
     expect(resolved).toEqual({
@@ -28,7 +28,7 @@ describe("resolveSlackBoltInterop", () => {
           HTTPReceiver: FakeHTTPReceiver,
         },
       },
-      namespaceImport: {} as never,
+      namespaceImport: {},
     });
 
     expect(resolved).toEqual({
@@ -42,7 +42,24 @@ describe("resolveSlackBoltInterop", () => {
       defaultImport: FakeApp,
       namespaceImport: {
         HTTPReceiver: FakeHTTPReceiver,
-      } as never,
+      },
+    });
+
+    expect(resolved).toEqual({
+      App: FakeApp,
+      HTTPReceiver: FakeHTTPReceiver,
+    });
+  });
+
+  it("uses namespace.default when it exposes named exports", () => {
+    const resolved = __testing.resolveSlackBoltInterop({
+      defaultImport: undefined,
+      namespaceImport: {
+        default: {
+          App: FakeApp,
+          HTTPReceiver: FakeHTTPReceiver,
+        },
+      },
     });
 
     expect(resolved).toEqual({
@@ -57,7 +74,7 @@ describe("resolveSlackBoltInterop", () => {
       namespaceImport: {
         App: FakeApp,
         HTTPReceiver: FakeHTTPReceiver,
-      } as never,
+      },
     });
 
     expect(resolved).toEqual({
@@ -66,12 +83,12 @@ describe("resolveSlackBoltInterop", () => {
     });
   });
 
-  it("throws with shape details when the module cannot be resolved", () => {
+  it("throws when the module cannot be resolved", () => {
     expect(() =>
       __testing.resolveSlackBoltInterop({
         defaultImport: null,
-        namespaceImport: {} as never,
+        namespaceImport: {},
       }),
-    ).toThrow(/Unable to resolve @slack\/bolt exports/);
+    ).toThrow("Unable to resolve @slack/bolt App/HTTPReceiver exports");
   });
 });
