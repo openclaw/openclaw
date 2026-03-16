@@ -2,6 +2,8 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { createJiti } from "jiti";
+import type { ChannelDock } from "../channels/dock.js";
+import type { ChannelPlugin } from "../channels/plugins/types.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import type { GatewayRequestHandler } from "../gateway/server-methods/types.js";
@@ -51,6 +53,7 @@ export type PluginLoadOptions = {
   cache?: boolean;
   mode?: "full" | "validate";
   onlyPluginIds?: string[];
+  includeSetupOnlyChannelPlugins?: boolean;
   activate?: boolean;
 };
 
@@ -244,6 +247,7 @@ function buildCacheKey(params: {
   installs?: Record<string, PluginInstallRecord>;
   env: NodeJS.ProcessEnv;
   onlyPluginIds?: string[];
+  includeSetupOnlyChannelPlugins?: boolean;
 }): string {
   const { roots, loadPaths } = resolvePluginCacheInputs({
     workspaceDir: params.workspaceDir,
@@ -267,11 +271,12 @@ function buildCacheKey(params: {
     ]),
   );
   const scopeKey = JSON.stringify(params.onlyPluginIds ?? []);
+  const setupOnlyKey = params.includeSetupOnlyChannelPlugins === true ? "setup-only" : "runtime";
   return `${roots.workspace ?? ""}::${roots.global ?? ""}::${roots.stock ?? ""}::${JSON.stringify({
     ...params.plugins,
     installs,
     loadPaths,
-  })}::${scopeKey}`;
+  })}::${scopeKey}::${setupOnlyKey}`;
 }
 
 function normalizeScopedPluginIds(ids?: string[]): string[] | undefined {
@@ -324,6 +329,32 @@ function resolvePluginModuleExport(moduleExport: unknown): {
     return { definition: def, register };
   }
   return {};
+}
+
+function resolveSetupChannelRegistration(moduleExport: unknown): {
+  plugin?: ChannelPlugin;
+  dock?: ChannelDock;
+} {
+  const resolved =
+    moduleExport &&
+    typeof moduleExport === "object" &&
+    "default" in (moduleExport as Record<string, unknown>)
+      ? (moduleExport as { default: unknown }).default
+      : moduleExport;
+  if (!resolved || typeof resolved !== "object") {
+    return {};
+  }
+  const setup = resolved as {
+    plugin?: unknown;
+    dock?: unknown;
+  };
+  if (!setup.plugin || typeof setup.plugin !== "object") {
+    return {};
+  }
+  return {
+    plugin: setup.plugin as ChannelPlugin,
+    ...(setup.dock && typeof setup.dock === "object" ? { dock: setup.dock as ChannelDock } : {}),
+  };
 }
 
 function createPluginRecord(params: {
@@ -669,6 +700,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
   const normalized = normalizePluginsConfig(cfg.plugins);
   const onlyPluginIds = normalizeScopedPluginIds(options.onlyPluginIds);
   const onlyPluginIdSet = onlyPluginIds ? new Set(onlyPluginIds) : null;
+  const includeSetupOnlyChannelPlugins = options.includeSetupOnlyChannelPlugins === true;
   const shouldActivate = options.activate !== false;
   // NOTE: `activate` is intentionally excluded from the cache key. All non-activating
   // (snapshot) callers pass `cache: false` via loadOnboardingPluginRegistry(), so they
@@ -680,6 +712,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
     installs: cfg.plugins?.installs,
     env,
     onlyPluginIds,
+    includeSetupOnlyChannelPlugins,
   });
   const cacheEnabled = options.cache !== false;
   if (cacheEnabled) {
@@ -892,7 +925,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
 
     const registrationMode = enableState.enabled
       ? "full"
-      : !validateOnly && manifestRecord.channels.length > 0
+      : includeSetupOnlyChannelPlugins && !validateOnly && manifestRecord.channels.length > 0
         ? "setup-only"
         : null;
 
@@ -960,8 +993,12 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
     }
 
     const pluginRoot = safeRealpathOrResolve(candidate.rootDir);
+    const loadSource =
+      registrationMode === "setup-only" && manifestRecord.setupSource
+        ? manifestRecord.setupSource
+        : candidate.source;
     const opened = openBoundaryFileSync({
-      absolutePath: candidate.source,
+      absolutePath: loadSource,
       rootPath: pluginRoot,
       boundaryLabel: "plugin root",
       rejectHardlinks: candidate.origin !== "bundled",
@@ -990,6 +1027,31 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
         diagnosticMessagePrefix: "failed to load plugin: ",
       });
       continue;
+    }
+
+    if (registrationMode === "setup-only" && manifestRecord.setupSource) {
+      const setupRegistration = resolveSetupChannelRegistration(mod);
+      if (setupRegistration.plugin) {
+        if (setupRegistration.plugin.id && setupRegistration.plugin.id !== record.id) {
+          pushPluginLoadError(
+            `plugin id mismatch (config uses "${record.id}", setup export uses "${setupRegistration.plugin.id}")`,
+          );
+          continue;
+        }
+        const api = createApi(record, {
+          config: cfg,
+          pluginConfig: {},
+          hookPolicy: entry?.hooks,
+          registrationMode,
+        });
+        api.registerChannel({
+          plugin: setupRegistration.plugin,
+          ...(setupRegistration.dock ? { dock: setupRegistration.dock } : {}),
+        });
+        registry.plugins.push(record);
+        seenIds.set(pluginId, candidate.origin);
+        continue;
+      }
     }
 
     const resolved = resolvePluginModuleExport(mod);
