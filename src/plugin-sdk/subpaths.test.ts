@@ -13,7 +13,7 @@ import { pluginSdkSubpaths } from "../../scripts/lib/plugin-sdk-entries.mjs";
 
 const importPluginSdkSubpath = (specifier: string) => import(/* @vite-ignore */ specifier);
 
-const bundledExtensionSubpathLoaders = pluginSdkSubpaths.map((id) => ({
+const bundledExtensionSubpathLoaders = pluginSdkSubpaths.map((id: string) => ({
   id,
   load: () => importPluginSdkSubpath(`openclaw/plugin-sdk/${id}`),
 }));

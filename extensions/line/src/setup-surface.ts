@@ -36,6 +36,74 @@ const LINE_ALLOW_FROM_HELP_LINES = [
   `Docs: ${formatDocsLink("/channels/line", "channels/line")}`,
 ];
 
+function patchLineAccountConfig(params: {
+  cfg: OpenClawConfig;
+  accountId: string;
+  patch: Record<string, unknown>;
+  clearFields?: string[];
+  enabled?: boolean;
+}): OpenClawConfig {
+  const accountId = normalizeAccountId(params.accountId);
+  const lineConfig = (params.cfg.channels?.line ?? {}) as LineConfig;
+  const clearFields = params.clearFields ?? [];
+
+  if (accountId === DEFAULT_ACCOUNT_ID) {
+    const nextLine = { ...lineConfig } as Record<string, unknown>;
+    for (const field of clearFields) {
+      delete nextLine[field];
+    }
+    return {
+      ...params.cfg,
+      channels: {
+        ...params.cfg.channels,
+        line: {
+          ...nextLine,
+          ...(params.enabled ? { enabled: true } : {}),
+          ...params.patch,
+        },
+      },
+    };
+  }
+
+  const nextAccount = {
+    ...(lineConfig.accounts?.[accountId] ?? {}),
+  } as Record<string, unknown>;
+  for (const field of clearFields) {
+    delete nextAccount[field];
+  }
+
+  return {
+    ...params.cfg,
+    channels: {
+      ...params.cfg.channels,
+      line: {
+        ...lineConfig,
+        ...(params.enabled ? { enabled: true } : {}),
+        accounts: {
+          ...lineConfig.accounts,
+          [accountId]: {
+            ...nextAccount,
+            ...(params.enabled ? { enabled: true } : {}),
+            ...params.patch,
+          },
+        },
+      },
+    },
+  };
+}
+
+function isLineConfigured(cfg: OpenClawConfig, accountId: string): boolean {
+  const resolved = resolveLineAccount({ cfg, accountId });
+  return Boolean(resolved.channelAccessToken.trim() && resolved.channelSecret.trim());
+}
+
+function parseLineAllowFromId(raw: string): string | null {
+  const trimmed = raw.trim().replace(/^line:(?:user:)?/i, "");
+  if (!/^U[a-f0-9]{32}$/i.test(trimmed)) {
+    return null;
+  }
+  return trimmed;
+}
 const lineDmPolicy: ChannelOnboardingDmPolicy = {
   label: "LINE",
   channel,
