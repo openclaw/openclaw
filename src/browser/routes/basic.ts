@@ -176,13 +176,17 @@ export function registerBrowserBasicRoutes(app: BrowserRouteRegistrar, ctx: Brow
     const name = toStringOrEmpty((req.body as { name?: unknown })?.name);
     const color = toStringOrEmpty((req.body as { color?: unknown })?.color);
     const cdpUrl = toStringOrEmpty((req.body as { cdpUrl?: unknown })?.cdpUrl);
-    const driver = toStringOrEmpty((req.body as { driver?: unknown })?.driver) as
-      | "openclaw"
-      | "existing-session"
-      | "";
+    const driver = toStringOrEmpty((req.body as { driver?: unknown })?.driver);
 
     if (!name) {
       return jsonError(res, 400, "name is required");
+    }
+    if (driver && driver !== "openclaw" && driver !== "existing-session") {
+      return jsonError(
+        res,
+        400,
+        `unsupported profile driver "${driver}"; use "openclaw" or "existing-session"`,
+      );
     }
 
     await withProfilesServiceMutation({
@@ -193,7 +197,12 @@ export function registerBrowserBasicRoutes(app: BrowserRouteRegistrar, ctx: Brow
           name,
           color: color || undefined,
           cdpUrl: cdpUrl || undefined,
-          driver: driver === "existing-session" ? "existing-session" : undefined,
+          driver:
+            driver === "existing-session"
+              ? "existing-session"
+              : driver === "openclaw"
+                ? "openclaw"
+                : undefined,
         }),
     });
   });

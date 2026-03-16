@@ -116,6 +116,15 @@ describe("profile CRUD endpoints", () => {
     const createBadRemoteBody = (await createBadRemote.json()) as { error: string };
     expect(createBadRemoteBody.error).toContain("cdpUrl");
 
+    const createLegacyDriver = await realFetch(`${base}/profiles/create`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: "legacy", driver: "extension" }),
+    });
+    expect(createLegacyDriver.status).toBe(400);
+    const createLegacyDriverBody = (await createLegacyDriver.json()) as { error: string };
+    expect(createLegacyDriverBody.error).toContain('unsupported profile driver "extension"');
+
     const deleteMissing = await realFetch(`${base}/profiles/nonexistent`, {
       method: "DELETE",
     });
