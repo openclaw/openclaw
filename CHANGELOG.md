@@ -5,38 +5,108 @@ Docs: https://docs.openclaw.ai
 ## Unreleased
 
 ### Changes
+- Sessions/named DM: add `buildNamedDmSessionKey`, `parseNamedDmSessionKey`, and `isNamedDmSessionKey` key-format helpers, an `activeNamedSession` field on `SessionEntry`, and `setActiveNamedSession`/`getActiveNamedSessionKey` store helpers as infrastructure for named DM session switching. Thanks @Otoris.
 
-- Sessions/named DM: add `buildNamedDmSessionKey`, `parseNamedDmSessionKey`, and `isNamedDmSessionKey` key-format helpers, an `activeNamedSession` field on `SessionEntry`, and `setActiveNamedSession`/`getActiveNamedSessionKey` store helpers as infrastructure for named DM session switching.
-
-- Android/mobile: add a system-aware dark theme across onboarding and post-onboarding screens so the app follows the device theme through setup, chat, and voice flows. (#46249) Thanks @sibbl.
 - Commands/btw: add `/btw` side questions for quick tool-less answers about the current session without changing future session context, with dismissible in-session TUI answers and explicit BTW replies on external channels. (#45444) Thanks @ngutman.
+- Sandbox/runtime: add pluggable sandbox backends, ship an OpenShell backend with `mirror` and `remote` workspace modes, and make sandbox list/recreate/prune backend-aware instead of Docker-only.
+- Sandbox/SSH: add a core SSH sandbox backend with secret-backed key, certificate, and known_hosts inputs, move shared remote exec/filesystem tooling into core, and keep OpenShell focused on sandbox lifecycle plus optional `mirror` mode.
+- Web tools/Firecrawl: add Firecrawl as an `onboard`/configure search provider via a bundled plugin, expose explicit `firecrawl_search` and `firecrawl_scrape` tools, and align core `web_fetch` fallback behavior with Firecrawl base-URL/env fallback plus guarded endpoint fetches.
+- Plugins/bundles: add compatible Codex, Claude, and Cursor bundle discovery/install support, map bundle skills into OpenClaw skills, and apply Claude bundle `settings.json` defaults to embedded Pi with shell overrides sanitized.
+- Plugins/providers: move OpenRouter, GitHub Copilot, and OpenAI Codex provider/runtime logic into bundled plugins, including dynamic model fallback, runtime auth exchange, stream wrappers, capability hints, and cache-TTL policy.
+- Plugins/agent integrations: broaden the plugin surface for app-server integrations with channel-aware commands, interactive callbacks, inbound claims, and Discord/Telegram conversation binding support. (#45318) Thanks @huntharo and @vincentkoc.
+- Install/update: allow package-manager installs from GitHub `main` via `openclaw update --tag main`, installer `--version main`, or direct npm/pnpm git specs. (#47630) Thanks @vincentkoc.
 - Gateway/health monitor: add configurable stale-event thresholds and restart limits, plus per-channel and per-account `healthMonitor.enabled` overrides, while keeping the existing global disable path on `gateway.channelHealthCheckMinutes=0`. (#42107) Thanks @rstar327.
+- Android/mobile: add a system-aware dark theme across onboarding and post-onboarding screens so the app follows the device theme through setup, chat, and voice flows. (#46249) Thanks @sibbl.
+- Feishu/ACP: add current-conversation ACP and subagent session binding for supported DMs and topic conversations, including completion delivery back to the originating Feishu conversation. (#46819) Thanks @Takhoffman.
+- Plugins/marketplaces: add Claude marketplace registry resolution, `plugin@marketplace` installs, marketplace listing, and update support, plus Docker E2E coverage for local and official marketplace flows. (#48058) Thanks @vincentkoc.
+- Feishu/cards: add structured interactive approval and quick-action launcher cards, preserve callback user and conversation context through routing, and keep legacy card-action fallback behavior so common actions can run without typing raw commands. (#47873) Thanks @Takhoffman.
+- Feishu/streaming: add `onReasoningStream` and `onReasoningEnd` support to streaming cards, so `/reasoning stream` renders thinking tokens as markdown blockquotes in the same card — matching the Telegram channel's reasoning lane behavior. (#46029) Thanks @day253.
 - Feishu/cards: add identity-aware structured card headers and note footers for Feishu replies and direct sends, while keeping that presentation wired through the shared outbound identity path. (#29938) Thanks @nszhsl.
-- Feishu/streaming: add `onReasoningStream` and `onReasoningEnd` support to streaming cards, so `/reasoning stream` renders thinking tokens as markdown blockquotes in the same card — matching the Telegram channel's reasoning lane behavior.
-- Refactor/channels: remove the legacy channel shim directories and point channel-specific imports directly at the extension-owned implementations. (#45967) thanks @scoootscooob.
+- Android/nodes: add `callLog.search` plus shared Call Log permission wiring so Android nodes can search recent call history through the gateway. (#44073) Thanks @lxk7280.
+- Plugins/MiniMax: merge the bundled MiniMax API and MiniMax OAuth plugin surfaces into a single default-on `minimax` plugin, while keeping legacy `minimax-portal-auth` config ids aliased for compatibility.
+- Telegram/actions: add `topic-edit` for forum-topic renames and icon updates while sharing the same Telegram topic-edit transport used by the plugin runtime. (#47798) Thanks @obviyus.
+- Telegram/error replies: add a default-off `channels.telegram.silentErrorReplies` setting so bot error replies can be delivered silently across regular replies, native commands, and fallback sends. (#19776) Thanks @ImLukeF.
+- Refactor/channels: remove the legacy channel shim directories and point channel-specific imports directly at the extension-owned implementations. (#45967) Thanks @scoootscooob.
+- Docs/Zalo: clarify the Marketplace-bot support matrix and config guidance so the Zalo channel docs match current Bot Creator behavior more closely. (#47552) Thanks @No898.
+- secrets: harden read-only SecretRef command paths and diagnostics. (#47794) Thanks @joshavant.
+- Browser/existing-session: support `browser.profiles.<name>.userDataDir` so Chrome DevTools MCP can attach to Brave, Edge, and other Chromium-based browsers through their own user data directories. (#48170) Thanks @velvet-shark.
+- Skills/prompt budget: preserve all registered skills via a compact catalog fallback before dropping entries when the full prompt format exceeds `maxSkillsPromptChars`. (#47553) Thanks @snese.
+
+### Breaking
+
+- Browser/Chrome MCP: remove the legacy Chrome extension relay path, bundled extension assets, `driver: "extension"`, and `browser.relayBindHost`. Run `openclaw doctor --fix` to migrate host-local browser config to `existing-session` / `user`; Docker, headless, sandbox, and remote browser flows still use raw CDP. (#47893) Thanks @vincentkoc.
 
 ### Fixes
 
-- Control UI/chat sessions: show human-readable labels in the grouped session dropdown again, keep unique scoped fallbacks when metadata is missing, and disambiguate duplicate labels only when needed. (#45130) thanks @luzhidong.
-- Slack/interactive replies: preserve `channelData.slack.blocks` through live DM delivery and preview-finalized edits so Block Kit button and select directives render instead of falling back to raw text. Thanks @vincentkoc.
-- Feishu/topic threads: fetch full thread context, including prior bot replies, when starting a topic-thread session so follow-up turns in Feishu topics keep the right conversation state. Thanks @Coobiw.
-- Configure/startup: move outbound send-deps resolution into a lightweight helper so `openclaw configure` no longer stalls after the banner while eagerly loading channel plugins. (#46301) thanks @scoootscooob.
-- Control UI/dashboard: preserve structured gateway shutdown reasons across restart disconnects so config-triggered restarts no longer fall back to `disconnected (1006): no reason`. (#46532) Thanks @vincentkoc.
-- Android/chat: theme the thinking dropdown and TLS trust dialogs explicitly so popup surfaces match the active app theme instead of falling back to mismatched Material defaults.
-- Z.AI/onboarding: detect a working default model even for explicit `zai-coding-*` endpoint choices, so Coding Plan setup can keep the selected endpoint while defaulting to `glm-5` when available or `glm-4.7` as fallback. (#45969)
+- Google auth/Node 25: patch `gaxios` to use native fetch without injecting `globalThis.window`, while translating proxy and mTLS transport settings so Google Vertex and Google Chat auth keep working on Node 25. (#47914) Thanks @pdd-cli.
+- Gateway/startup: load bundled channel plugins from compiled `dist/extensions` entries in built installs, so gateway boot no longer recompiles bundled extension TypeScript on every startup and WhatsApp-class cold starts drop back to seconds instead of tens of seconds or worse. (#47560) Thanks @ngutman.
+- Plugins/context engines: enforce owner-aware context-engine registration on both loader and public SDK paths so plugins cannot spoof privileged ownership, claim the core `legacy` engine id, or overwrite an existing engine id through direct SDK imports. (#47595) Thanks @vincentkoc.
+- Browser/remote CDP: honor strict browser SSRF policy during remote CDP reachability and `/json/version` discovery checks, redact sensitive `cdpUrl` tokens from status output, and warn when remote CDP targets private/internal hosts.
+- Gateway/plugins: pin runtime webhook routes to the gateway startup registry so channel webhooks keep working across plugin-registry churn, and make plugin auth + dispatch resolve routes from the same live HTTP-route registry. (#47902) Fixes #46924 and #47041. Thanks @steipete.
+- Gateway/auth: ignore spoofed loopback hops in trusted forwarding chains and block device approvals that request scopes above the caller session. (#46800) Thanks @vincentkoc.
+- Gateway/restart: defer externally signaled unmanaged restarts through the in-process idle drain, and preserve the restored subagent run as remap fallback during orphan recovery so resumed sessions do not duplicate work. (#47719) Thanks @joeykrug.
+- Control UI/session routing: preserve established external delivery routes when webchat views or sends in externally originated sessions, so subagent completions still return to the original channel instead of the dashboard. (#47797) Thanks @brokemac79.
+- Configure/startup: move outbound send-deps resolution into a lightweight helper so `openclaw configure` no longer stalls after the banner while eagerly loading channel plugins. (#46301) Thanks @scoootscooob.
+- CLI/startup: lazy-load channel add and root help startup paths to trim avoidable RSS and help latency on constrained hosts. (#46784) Thanks @vincentkoc.
+- CLI/onboarding: import static provider definitions directly for onboarding model/config helpers so those paths no longer pull provider discovery just for built-in defaults. (#47467) Thanks @vincentkoc.
+- CLI/auth choice: lazy-load plugin/provider fallback resolution so mapped auth choices stay on the static path and only unknown choices pay the heavy provider load. (#47495) Thanks @vincentkoc.
+- CLI: avoid loading provider discovery during startup model normalization. (#46522) Thanks @ItsAditya-xyz and @vincentkoc.
+- Security/device pairing: harden `device.token.rotate` deny handling by keeping public failures generic while logging internal deny reasons and preserving approved-baseline enforcement. (`GHSA-7jrw-x62h-64p8`)
+- Inbound policy hardening: tighten callback and webhook sender checks across Mattermost and Google Chat, match Nextcloud Talk rooms by stable room token, and treat explicit empty Twitch allowlists as deny-all. (#46787) Thanks @zpbrent, @ijxpwastaken and @vincentkoc.
+- Webhooks/runtime: move auth earlier and tighten pre-auth body limits and timeouts across bundled webhook handlers, including slow-body handling for Mattermost slash commands. (#46802) Thanks @vincentkoc.
+- Email/webhook wrapping: sanitize sender and subject metadata before external-content wrapping so metadata fields cannot break the wrapper structure. (#46816) Thanks @vincentkoc.
+- Tools/apply-patch: revalidate workspace-only delete and directory targets immediately before mutating host paths. (#46803) Thanks @vincentkoc.
+- Gateway/config views: strip embedded credentials from URL-based endpoint fields before returning read-only account and config snapshots. (#46799) Thanks @vincentkoc.
+- ACP/approvals: use canonical tool identity for prompting decisions and fail closed when conflicting tool identity hints are present. (#46817) Thanks @zpbrent and @vincentkoc.
+- ACP: require admin scope for mutating internal actions. (#46789) Thanks @tdjackey and @vincentkoc.
+- Subagents/follow-ups: require the same controller ownership checks for `/subagents send` as other control actions, so leaf sessions cannot message nested child runs they do not control. (#46801) Thanks @vincentkoc.
+- macOS/canvas actions: keep unattended local agent actions on trusted in-app canvas surfaces only, and stop exposing the deep-link fallback key to arbitrary page scripts. (#46790) Thanks @vincentkoc.
+- Agents/compaction: extend the enclosing run deadline once while compaction is actively in flight, and abort the underlying SDK compaction on timeout/cancel so large-session compactions stop freezing mid-run. (#46889) Thanks @asyncjason.
+- Agents/openai-compatible tool calls: deduplicate repeated tool call ids across live assistant messages and replayed history so OpenAI-compatible backends no longer reject duplicate `tool_call_id` values with HTTP 400. (#40996) Thanks @xaeon2026.
+- Models/openai-completions: default non-native OpenAI-compatible providers to omit tool-definition `strict` fields unless users explicitly opt back in, so tool calling keeps working on providers that reject that option. (#45497) Thanks @sahancava.
+- Models/OpenRouter runtime capabilities: fetch uncatalogued OpenRouter model metadata on first use so newly added vision models keep image input instead of silently degrading to text-only, with top-level capability field fallbacks for `/api/v1/models`. (#45824) Thanks @DJjjjhao.
+- Channels/plugins: keep shared interactive payloads merge-ready by fixing Slack custom callback routing and repeat-click dedupe, allowing interactive-only sends, and preserving ordered Discord shared text blocks. (#47715) Thanks @vincentkoc.
+- Slack/interactive replies: preserve `channelData.slack.blocks` through live DM delivery and preview-finalized edits so Block Kit button and select directives render instead of falling back to raw text. (#45890) Thanks @vincentkoc.
+- Feishu/actions: expand the runtime action surface with message read/edit, explicit thread replies, pinning, and operator-facing chat/member inspection so Feishu can operate more of the workspace directly. (#47968) Thanks @Takhoffman.
+- Feishu/topic threads: fetch full thread context, including prior bot replies, when starting a topic-thread session so follow-up turns in Feishu topics keep the right conversation state. (#45254) Thanks @Coobiw.
+- Feishu/media: keep native image, file, audio, and video/media handling aligned across outbound sends, inbound downloads, thread replies, directory/action aliases, and capability docs so unsupported areas are explicit instead of implied. (#47968) Thanks @Takhoffman.
+- WhatsApp/reconnect: restore the append recency filter in the extension inbox monitor and handle protobuf `Long` timestamps correctly, so fresh post-reconnect append messages are processed while stale history sync stays suppressed. (#42588) Thanks @MonkeyLeeT.
+- WhatsApp/login: wait for pending creds writes before reopening after Baileys `515` pairing restarts in both QR login and `channels login` flows, and keep the restart coverage pinned to the real wrapped error shape plus per-account creds queues. (#27910) Thanks @asyncjason.
+- Telegram/message send: forward `--force-document` through the `sendPayload` path as well as `sendMedia`, so Telegram payload sends with `channelData` keep uploading images as documents instead of silently falling back to compressed photo sends. (#47119) Thanks @thepagent.
+- Telegram/message chunking: preserve spaces, paragraph separators, and word boundaries when HTML overflow rechunking splits formatted replies. (#47274) Thanks @obviyus.
+- Z.AI/onboarding: detect a working default model even for explicit `zai-coding-*` endpoint choices, so Coding Plan setup can keep the selected endpoint while defaulting to `glm-5` when available or `glm-4.7` as fallback. (#45969) Thanks @obviyus.
 - Z.AI/onboarding: add `glm-5-turbo` to the default Z.AI provider catalog so onboarding-generated configs expose the new model alongside the existing GLM defaults. (#46670) Thanks @tomsun28.
-- Zalo Personal/group gating: stop reapplying `dmPolicy.allowFrom` as a sender gate for already-allowlisted groups when `groupAllowFrom` is unset, so any member of an allowed group can trigger replies while DMs stay restricted. (#40146)
-- Plugins/install precedence: keep bundled plugins ahead of auto-discovered globals by default, but let an explicitly installed plugin record win its own duplicate-id tie so installed channel plugins load from `~/.openclaw/extensions` after `openclaw plugins install`.
+- Zalo Personal/group gating: stop reapplying `dmPolicy.allowFrom` as a sender gate for already-allowlisted groups when `groupAllowFrom` is unset, so any member of an allowed group can trigger replies while DMs stay restricted. (#46663) Fixes #40146. Thanks @Takhoffman.
 - Zalo/plugin runtime: export `resolveClientIp` from `openclaw/plugin-sdk/zalo` so installed builds no longer crash on startup when the webhook monitor loads from the packaged extension instead of the monorepo source tree. (#46549) Thanks @No898.
+- Plugins/install precedence: keep bundled plugins ahead of auto-discovered globals by default, but let an explicitly installed plugin record win its own duplicate-id tie so installed channel plugins load from `~/.openclaw/extensions` after `openclaw plugins install`. (#46722) Thanks @Takhoffman.
+- Plugins/scoped ids: preserve scoped plugin ids during install and config keying, and keep bundled plugins ahead of discovered duplicate ids by default so `@scope/name` plugins no longer collide with unscoped installs. (#47413) Thanks @vincentkoc.
+- Gateway/watch mode: restart on bundled-plugin package and manifest metadata changes, rebuild `dist` for extension source and `tsdown.config.ts` changes, and still ignore extension docs. (#47571) Thanks @gumadeiras.
+- Gateway/watch mode: recreate bundled plugin runtime metadata after clean or stale `dist` states, so `pnpm gateway:watch` no longer fails on missing `dist/extensions/*/openclaw.plugin.json` manifests after a rebuild. Thanks @gumadeiras.
+- Control UI/chat sessions: show human-readable labels in the grouped session dropdown again, keep unique scoped fallbacks when metadata is missing, and disambiguate duplicate labels only when needed. (#45130) Thanks @luzhidong.
+- Control UI: scope persisted session selection per gateway, prevent stale session bleed across tokenized gateway opens, and cap stored gateway session history. (#47453) Thanks @sallyom.
+- Control UI/dashboard: preserve structured gateway shutdown reasons across restart disconnects so config-triggered restarts no longer fall back to `disconnected (1006): no reason`. (#46580) Fixes #46532. Thanks @vincentkoc.
+- Android/chat: theme the thinking dropdown and TLS trust dialogs explicitly so popup surfaces match the active app theme instead of falling back to mismatched Material defaults.
+- Group mention gating: reject invalid and unsafe nested-repetition `mentionPatterns`, reuse the shared safe config-regex compiler across mention stripping and detection, and cache strip-time regex compilation so noisy groups avoid repeated recompiles.
+- Browser/profiles: drop the auto-created `chrome-relay` browser profile; users who need the Chrome extension relay must now create their own profile via `openclaw browser create-profile`. (#46596) Fixes #45777. Thanks @odysseus0.
 - CI/channel test routing: move the built-in channel suites into `test:channels` and keep them out of `test:extensions`, so extension CI no longer fails after the channel migration while targeted test routing still sends Slack, Signal, and iMessage suites to the right lane. (#46066) Thanks @scoootscooob.
-- Browser/profiles: drop the auto-created `chrome-relay` browser profile; users who need the Chrome extension relay must now create their own profile via `openclaw browser create-profile`. (#45777) Thanks @odysseus0.
 - Docs/Mintlify: fix MDX marker syntax on Perplexity, Model Providers, Moonshot, and exec approvals pages so local docs preview no longer breaks rendering or leaves stale pages unpublished. (#46695) Thanks @velvet-shark.
-- Email/webhook wrapping: sanitize sender and subject metadata before external-content wrapping so metadata fields cannot break the wrapper structure. Thanks @vincentkoc.
-- Node/startup: remove leftover debug `console.log("node host PATH: ...")` that printed the resolved PATH on every `openclaw node run` invocation. (#46411)
+- Gateway/config validation: stop treating the implicit default memory slot as a required explicit plugin config, so startup no longer fails with `plugins.slots.memory: plugin not found: memory-core` when `memory-core` was only inferred. (#47494) Thanks @ngutman.
+- Tlon: honor explicit empty allowlists and defer cite expansion. (#46788) Thanks @zpbrent and @vincentkoc.
+- Nodes/pending actions: re-check queued foreground actions against the current node command policy before returning them to the node. (#46815) Thanks @zpbrent and @vincentkoc.
+- Node/startup: remove leftover debug `console.log("node host PATH: ...")` that printed the resolved PATH on every `openclaw node run` invocation. (#46515) Fixes #46411. Thanks @ademczuk.
+- CLI/completion: reduce recursive completion-script string churn and fix nested PowerShell command-path matching so generated nested completions resolve on PowerShell too. (#45537) Thanks @yiShanXin and @vincentkoc.
+- Slack/startup: harden `@slack/bolt` import interop across current bundled runtime shapes so Slack monitors no longer crash with `App is not a constructor` after plugin-sdk bundling changes. (#45953) Thanks @merc1305.
+- Windows/gateway status: accept `schtasks` `Last Result` output as an alias for `Last Run Result`, so running scheduled-task installs no longer show `Runtime: unknown`. (#47844) Thanks @MoerAI.
+- ACP/acpx: resolve the bundled plugin root from the actual plugin directory so plugin-local installs stay under `dist/extensions/acpx` instead of escaping to `dist/extensions` and failing runtime setup. (#47601) Thanks @ngutman.
+- Gateway/websocket pairing bypass for disabled auth: skip device-pairing enforcement for Control UI operator sessions when `gateway.auth.mode=none`, so reverse-proxied dashboards no longer get stuck on `pairing required` despite auth being explicitly disabled. (#47148) Thanks @ademczuk.
+- Control UI/model switching: preserve the selected provider prefix when switching models from the chat dropdown, so multi-provider setups no longer send `anthropic/gpt-5.2`-style mismatches when the user picked `openai/gpt-5.2`. (#47581) Thanks @chrishham.
+- Control UI/storage: scope persisted settings keys by gateway base path, with migration from the legacy shared key, so multiple gateways under one domain stop overwriting each other's dashboard preferences. (#47932) Thanks @bobBot-claw.
+- Agents/usage tracking: stop forcing `supportsUsageInStreaming: false` on non-native OpenAI-completions providers so compatible backends report token usage and cost again instead of showing all zeros. (#46500) Fixes #46142. Thanks @ademczuk.
 
 ## 2026.3.13
 
 ### Changes
+- Sessions/named DM: add `buildNamedDmSessionKey`, `parseNamedDmSessionKey`, and `isNamedDmSessionKey` key-format helpers, an `activeNamedSession` field on `SessionEntry`, and `setActiveNamedSession`/`getActiveNamedSessionKey` store helpers as infrastructure for named DM session switching. Thanks @Otoris.
 
 - Android/chat settings: redesign the chat settings sheet with grouped device and media sections, refresh the Connect and Voice tabs, and tighten the chat composer/session header for a denser mobile layout. (#44894) Thanks @obviyus.
 - iOS/onboarding: add a first-run welcome pager before gateway setup, stop auto-opening the QR scanner, and show `/pair qr` instructions on the connect step. (#45054) Thanks @ngutman.
@@ -68,6 +138,7 @@ Docs: https://docs.openclaw.ai
 - macOS/exec approvals: respect per-agent exec approval settings in the gateway prompter, including allowlist fallback when the native prompt cannot be shown, so gateway-triggered `system.run` requests follow configured policy instead of always prompting or denying unexpectedly. (#13707) Thanks @sliekens.
 - Telegram/media downloads: thread the same direct or proxy transport policy into SSRF-guarded file fetches so inbound attachments keep working when Telegram falls back between env-proxy and direct networking. (#44639) Thanks @obviyus.
 - Telegram/inbound media IPv4 fallback: retry SSRF-guarded Telegram file downloads once with the same IPv4 fallback policy as Bot API calls so fresh installs on IPv6-broken hosts no longer fail to download inbound images.
+- Commands/onboarding: split static auth-choice help from the plugin-backed onboarding catalog so `openclaw onboard` registration no longer pulls provider-wizard imports just to describe `--auth-choice`. (#47545) Thanks @vincentkoc.
 - Windows/gateway install: bound `schtasks` calls and fall back to the Startup-folder login item when task creation hangs, so native `openclaw gateway install` fails fast instead of wedging forever on broken Scheduled Task setups.
 - Windows/gateway stop: resolve Startup-folder fallback listeners from the installed `gateway.cmd` port, so `openclaw gateway stop` now actually kills fallback-launched gateway processes before restart.
 - Windows/gateway status: reuse the installed service command environment when reading runtime status, so startup-fallback gateways keep reporting the configured port and running state in `gateway status --json` instead of falling back to `gateway port unknown`.
@@ -114,6 +185,7 @@ Docs: https://docs.openclaw.ai
 ## 2026.3.12
 
 ### Changes
+- Sessions/named DM: add `buildNamedDmSessionKey`, `parseNamedDmSessionKey`, and `isNamedDmSessionKey` key-format helpers, an `activeNamedSession` field on `SessionEntry`, and `setActiveNamedSession`/`getActiveNamedSessionKey` store helpers as infrastructure for named DM session switching. Thanks @Otoris.
 
 - Control UI/dashboard-v2: refresh the gateway dashboard with modular overview, chat, config, agent, and session views, plus a command palette, mobile bottom tabs, and richer chat tools like slash commands, search, export, and pinned messages. (#41503) Thanks @BunsDev.
 - OpenAI/GPT-5.4 fast mode: add configurable session-level fast toggles across `/fast`, TUI, Control UI, and ACP, with per-model config defaults and OpenAI/Codex request shaping.
@@ -209,6 +281,7 @@ Docs: https://docs.openclaw.ai
 - Gateway/WebSocket: enforce browser origin validation for all browser-originated connections regardless of whether proxy headers are present, closing a cross-site WebSocket hijacking path in `trusted-proxy` mode that could grant untrusted origins `operator.admin` access. (GHSA-5wcw-8jjv-m286)
 
 ### Changes
+- Sessions/named DM: add `buildNamedDmSessionKey`, `parseNamedDmSessionKey`, and `isNamedDmSessionKey` key-format helpers, an `activeNamedSession` field on `SessionEntry`, and `setActiveNamedSession`/`getActiveNamedSessionKey` store helpers as infrastructure for named DM session switching. Thanks @Otoris.
 
 - OpenRouter/models: add temporary Hunter Alpha and Healer Alpha entries to the built-in catalog so OpenRouter users can try the new free stealth models during their roughly one-week availability window. (#43642) Thanks @ping-Toven.
 - iOS/Home canvas: add a bundled welcome screen with a live agent overview that refreshes on connect, reconnect, and foreground return, and move the compact connection pill off the top-left canvas overlay. (#42456) Thanks @ngutman.
@@ -347,6 +420,7 @@ Docs: https://docs.openclaw.ai
 ## 2026.3.8
 
 ### Changes
+- Sessions/named DM: add `buildNamedDmSessionKey`, `parseNamedDmSessionKey`, and `isNamedDmSessionKey` key-format helpers, an `activeNamedSession` field on `SessionEntry`, and `setActiveNamedSession`/`getActiveNamedSessionKey` store helpers as infrastructure for named DM session switching. Thanks @Otoris.
 
 - CLI/backup: add `openclaw backup create` and `openclaw backup verify` for local state archives, including `--only-config`, `--no-include-workspace`, manifest/payload validation, and backup guidance in destructive flows. (#40163) thanks @shichangs.
 - macOS/onboarding: add a remote gateway token field for remote mode, preserve existing non-plaintext `gateway.remote.token` config values until explicitly replaced, and warn when the loaded token shape cannot be used directly from the macOS app. (#40187, supersedes #34614) Thanks @cgdusek.
@@ -426,6 +500,7 @@ Docs: https://docs.openclaw.ai
 ## 2026.3.7
 
 ### Changes
+- Sessions/named DM: add `buildNamedDmSessionKey`, `parseNamedDmSessionKey`, and `isNamedDmSessionKey` key-format helpers, an `activeNamedSession` field on `SessionEntry`, and `setActiveNamedSession`/`getActiveNamedSessionKey` store helpers as infrastructure for named DM session switching. Thanks @Otoris.
 
 - Agents/context engine plugin interface: add `ContextEngine` plugin slot with full lifecycle hooks (`bootstrap`, `ingest`, `assemble`, `compact`, `afterTurn`, `prepareSubagentSpawn`, `onSubagentEnded`), slot-based registry with config-driven resolution, `LegacyContextEngine` wrapper preserving existing compaction behavior, scoped subagent runtime for plugin runtimes via `AsyncLocalStorage`, and `sessions.get` gateway method. Enables plugins like `lossless-claw` to provide alternative context management strategies without modifying core compaction logic. Zero behavior change when no context engine plugin is configured. (#22201) thanks @jalehman.
 - ACP/persistent channel bindings: add durable Discord channel and Telegram topic binding storage, routing resolution, and CLI/docs support so ACP thread targets survive restarts and can be managed consistently. (#34873) Thanks @dutifulbob.
@@ -787,6 +862,7 @@ Docs: https://docs.openclaw.ai
 ## 2026.3.2
 
 ### Changes
+- Sessions/named DM: add `buildNamedDmSessionKey`, `parseNamedDmSessionKey`, and `isNamedDmSessionKey` key-format helpers, an `activeNamedSession` field on `SessionEntry`, and `setActiveNamedSession`/`getActiveNamedSessionKey` store helpers as infrastructure for named DM session switching. Thanks @Otoris.
 
 - Secrets/SecretRef coverage: expand SecretRef support across the full supported user-supplied credential surface (64 targets total), including runtime collectors, `openclaw secrets` planning/apply/audit flows, onboarding SecretInput UX, and related docs; unresolved refs now fail fast on active surfaces while inactive surfaces report non-blocking diagnostics. (#29580) Thanks @joshavant.
 - Tools/PDF analysis: add a first-class `pdf` tool with native Anthropic and Google PDF provider support, extraction fallback for non-native models, configurable defaults (`agents.defaults.pdfModel`, `pdfMaxBytesMb`, `pdfMaxPages`), and docs/tests covering routing, validation, and registration. (#31319) Thanks @tyler6204.
@@ -1008,6 +1084,7 @@ Docs: https://docs.openclaw.ai
 ## 2026.3.1
 
 ### Changes
+- Sessions/named DM: add `buildNamedDmSessionKey`, `parseNamedDmSessionKey`, and `isNamedDmSessionKey` key-format helpers, an `activeNamedSession` field on `SessionEntry`, and `setActiveNamedSession`/`getActiveNamedSessionKey` store helpers as infrastructure for named DM session switching. Thanks @Otoris.
 
 - OpenAI/Streaming transport: make `openai` Responses WebSocket-first by default (`transport: "auto"` with SSE fallback), add shared OpenAI WS stream/connection runtime wiring with per-session cleanup, and preserve server-side compaction payload mutation (`store` + `context_management`) on the WS path.
 - Gateway/Container probes: add built-in HTTP liveness/readiness endpoints (`/health`, `/healthz`, `/ready`, `/readyz`) for Docker/Kubernetes health checks, with fallback routing so existing handlers on those paths are not shadowed. (#31272) Thanks @vincentkoc.
@@ -1134,6 +1211,7 @@ Docs: https://docs.openclaw.ai
 ## Unreleased
 
 ### Changes
+- Sessions/named DM: add `buildNamedDmSessionKey`, `parseNamedDmSessionKey`, and `isNamedDmSessionKey` key-format helpers, an `activeNamedSession` field on `SessionEntry`, and `setActiveNamedSession`/`getActiveNamedSessionKey` store helpers as infrastructure for named DM session switching. Thanks @Otoris.
 
 - Models/OpenAI forward compat: add support for `openai/gpt-5.4`, `openai/gpt-5.4-pro`, and `openai-codex/gpt-5.4`, including direct OpenAI Responses `serviceTier` passthrough safeguards for valid values. (#36590) Thanks @dorukardahan.
 - Android/Play package ID: rename the Android app package to `ai.openclaw.app`, including matching benchmark and Android tooling references for Play publishing. (#38712) Thanks @obviyus.
@@ -1295,6 +1373,7 @@ Docs: https://docs.openclaw.ai
 ## 2026.2.26
 
 ### Changes
+- Sessions/named DM: add `buildNamedDmSessionKey`, `parseNamedDmSessionKey`, and `isNamedDmSessionKey` key-format helpers, an `activeNamedSession` field on `SessionEntry`, and `setActiveNamedSession`/`getActiveNamedSessionKey` store helpers as infrastructure for named DM session switching. Thanks @Otoris.
 
 - Highlight: External Secrets Management introduces a full `openclaw secrets` workflow (`audit`, `configure`, `apply`, `reload`) with runtime snapshot activation, strict `secrets apply` target-path validation, safer migration scrubbing, ref-only auth-profile support, and dedicated docs. (#26155) Thanks @joshavant.
 - ACP/Thread-bound agents: make ACP agents first-class runtimes for thread sessions with `acp` spawn/send dispatch integration, acpx backend bridging, lifecycle controls, startup reconciliation, runtime cleanup, and coalesced thread replies. (#23580) thanks @osolmaz.
@@ -1396,6 +1475,7 @@ Docs: https://docs.openclaw.ai
 ## 2026.2.25
 
 ### Changes
+- Sessions/named DM: add `buildNamedDmSessionKey`, `parseNamedDmSessionKey`, and `isNamedDmSessionKey` key-format helpers, an `activeNamedSession` field on `SessionEntry`, and `setActiveNamedSession`/`getActiveNamedSessionKey` store helpers as infrastructure for named DM session switching. Thanks @Otoris.
 
 - Android/Chat: improve streaming delivery handling and markdown rendering quality in the native Android chat UI, including better GitHub-flavored markdown behavior. (#26079) Thanks @obviyus.
 - Android/Startup perf: defer foreground-service startup, move WebView debugging init out of critical startup, and add startup macrobenchmark + low-noise perf CLI scripts for deterministic cold-start tracking. (#26659) Thanks @obviyus.
@@ -1476,6 +1556,7 @@ Docs: https://docs.openclaw.ai
 ## 2026.2.24
 
 ### Changes
+- Sessions/named DM: add `buildNamedDmSessionKey`, `parseNamedDmSessionKey`, and `isNamedDmSessionKey` key-format helpers, an `activeNamedSession` field on `SessionEntry`, and `setActiveNamedSession`/`getActiveNamedSessionKey` store helpers as infrastructure for named DM session switching. Thanks @Otoris.
 
 - Auto-reply/Abort shortcuts: expand standalone stop phrases (`stop openclaw`, `stop action`, `stop run`, `stop agent`, `please stop`, and related variants), accept trailing punctuation (for example `STOP OPENCLAW!!!`), add multilingual stop keywords (including ES/FR/ZH/HI/AR/JP/DE/PT/RU forms), and treat exact `do not do that` as a stop trigger while preserving strict standalone matching. (#25103) Thanks @steipete and @vincentkoc.
 - Android/App UX: ship a native four-step onboarding flow, move post-onboarding into a five-tab shell (Connect, Chat, Voice, Screen, Settings), add a full Connect setup/manual mode screen, and refresh Android chat/settings surfaces for the new navigation model.
@@ -1570,6 +1651,7 @@ Docs: https://docs.openclaw.ai
 ## 2026.2.23
 
 ### Changes
+- Sessions/named DM: add `buildNamedDmSessionKey`, `parseNamedDmSessionKey`, and `isNamedDmSessionKey` key-format helpers, an `activeNamedSession` field on `SessionEntry`, and `setActiveNamedSession`/`getActiveNamedSessionKey` store helpers as infrastructure for named DM session switching. Thanks @Otoris.
 
 - Providers/Kilo Gateway: add first-class `kilocode` provider support (auth, onboarding, implicit provider detection, model defaults, transcript/cache-ttl handling, and docs), with default model `kilocode/anthropic/claude-opus-4.6`. (#20212) Thanks @jrf0110 and @markijbema.
 - Providers/Vercel AI Gateway: accept Claude shorthand model refs (`vercel-ai-gateway/claude-*`) by normalizing to canonical Anthropic-routed model ids. (#23985) Thanks @sallyom, @markbooch, and @vincentkoc.
@@ -1633,6 +1715,7 @@ Docs: https://docs.openclaw.ai
 ## 2026.2.22
 
 ### Changes
+- Sessions/named DM: add `buildNamedDmSessionKey`, `parseNamedDmSessionKey`, and `isNamedDmSessionKey` key-format helpers, an `activeNamedSession` field on `SessionEntry`, and `setActiveNamedSession`/`getActiveNamedSessionKey` store helpers as infrastructure for named DM session switching. Thanks @Otoris.
 
 - Control UI/Agents: make the Tools panel data-driven from runtime `tools.catalog`, add per-tool provenance labels (`core` / `plugin:<id>` + optional marker), and keep a static fallback list when the runtime catalog is unavailable.
 - Web Search/Gemini: add grounded Gemini provider support with provider auto-detection and config/docs updates. (#13075, #13074) Thanks @akoscz.
@@ -1891,6 +1974,7 @@ Docs: https://docs.openclaw.ai
 ## 2026.2.21
 
 ### Changes
+- Sessions/named DM: add `buildNamedDmSessionKey`, `parseNamedDmSessionKey`, and `isNamedDmSessionKey` key-format helpers, an `activeNamedSession` field on `SessionEntry`, and `setActiveNamedSession`/`getActiveNamedSessionKey` store helpers as infrastructure for named DM session switching. Thanks @Otoris.
 
 - Models/Google: add Gemini 3.1 support (`google/gemini-3.1-pro-preview`).
 - Providers/Onboarding: add Volcano Engine (Doubao) and BytePlus providers/models (including coding variants), wire onboarding auth choices for interactive + non-interactive flows, and align docs to `volcengine-api-key`. (#7967) Thanks @funmore123.
@@ -2036,6 +2120,7 @@ Docs: https://docs.openclaw.ai
 ## 2026.2.19
 
 ### Changes
+- Sessions/named DM: add `buildNamedDmSessionKey`, `parseNamedDmSessionKey`, and `isNamedDmSessionKey` key-format helpers, an `activeNamedSession` field on `SessionEntry`, and `setActiveNamedSession`/`getActiveNamedSessionKey` store helpers as infrastructure for named DM session switching. Thanks @Otoris.
 
 - iOS/Watch: add an Apple Watch companion MVP with watch inbox UI, watch notification relay handling, and gateway command surfaces for watch status/send flows. (#20054) Thanks @mbelinky.
 - iOS/Gateway: wake disconnected iOS nodes via APNs before `nodes.invoke` and auto-reconnect gateway sessions on silent push wake to reduce invoke failures while the app is backgrounded. (#20332) Thanks @mbelinky.
@@ -2131,6 +2216,7 @@ Docs: https://docs.openclaw.ai
 ## 2026.2.17
 
 ### Changes
+- Sessions/named DM: add `buildNamedDmSessionKey`, `parseNamedDmSessionKey`, and `isNamedDmSessionKey` key-format helpers, an `activeNamedSession` field on `SessionEntry`, and `setActiveNamedSession`/`getActiveNamedSessionKey` store helpers as infrastructure for named DM session switching. Thanks @Otoris.
 
 - Agents/Anthropic: add opt-in 1M context beta header support for Opus/Sonnet via model `params.context1m: true` (maps to `anthropic-beta: context-1m-2025-08-07`).
 - Agents/Models: support Anthropic Sonnet 4.6 (`anthropic/claude-sonnet-4-6`) across aliases/defaults with forward-compat fallback when upstream catalogs still only expose Sonnet 4.5.
@@ -2310,6 +2396,7 @@ Docs: https://docs.openclaw.ai
 ## 2026.2.15
 
 ### Changes
+- Sessions/named DM: add `buildNamedDmSessionKey`, `parseNamedDmSessionKey`, and `isNamedDmSessionKey` key-format helpers, an `activeNamedSession` field on `SessionEntry`, and `setActiveNamedSession`/`getActiveNamedSessionKey` store helpers as infrastructure for named DM session switching. Thanks @Otoris.
 
 - Discord: unlock rich interactive agent prompts with Components v2 (buttons, selects, modals, and attachment-backed file blocks) so for native interaction through Discord. Thanks @thewilloftheshadow.
 - Discord: components v2 UI + embeds passthrough + exec approval UX refinements (CV2 containers, button layout, Discord-forwarding skip). Thanks @thewilloftheshadow.
@@ -2376,6 +2463,7 @@ Docs: https://docs.openclaw.ai
 ## 2026.2.14
 
 ### Changes
+- Sessions/named DM: add `buildNamedDmSessionKey`, `parseNamedDmSessionKey`, and `isNamedDmSessionKey` key-format helpers, an `activeNamedSession` field on `SessionEntry`, and `setActiveNamedSession`/`getActiveNamedSessionKey` store helpers as infrastructure for named DM session switching. Thanks @Otoris.
 
 - Telegram: add poll sending via `openclaw message poll` (duration seconds, silent delivery, anonymity controls). (#16209) Thanks @robbyczgw-cla.
 - Slack/Discord: add `dmPolicy` + `allowFrom` config aliases for DM access control; legacy `dm.policy` + `dm.allowFrom` keys remain supported and `openclaw doctor --fix` can migrate them.
@@ -2525,6 +2613,7 @@ Docs: https://docs.openclaw.ai
 ## 2026.2.13
 
 ### Changes
+- Sessions/named DM: add `buildNamedDmSessionKey`, `parseNamedDmSessionKey`, and `isNamedDmSessionKey` key-format helpers, an `activeNamedSession` field on `SessionEntry`, and `setActiveNamedSession`/`getActiveNamedSessionKey` store helpers as infrastructure for named DM session switching. Thanks @Otoris.
 
 - Install: add optional Podman-based setup: `setup-podman.sh` for one-time host setup (openclaw user, image, launch script, systemd quadlet), `run-openclaw-podman.sh launch` / `launch setup`; systemd Quadlet unit for openclaw user service; docs for rootless container, openclaw user (subuid/subgid), and quadlet (troubleshooting). (#16273) Thanks @DarwinsBuddy.
 - Discord: send voice messages with waveform previews from local audio files (including silent delivery). (#7253) Thanks @nyanjou.
@@ -2645,6 +2734,7 @@ Docs: https://docs.openclaw.ai
 ## 2026.2.12
 
 ### Changes
+- Sessions/named DM: add `buildNamedDmSessionKey`, `parseNamedDmSessionKey`, and `isNamedDmSessionKey` key-format helpers, an `activeNamedSession` field on `SessionEntry`, and `setActiveNamedSession`/`getActiveNamedSessionKey` store helpers as infrastructure for named DM session switching. Thanks @Otoris.
 
 - CLI/Plugins: add `openclaw plugins uninstall <id>` with `--dry-run`, `--force`, and `--keep-files` options, including safe uninstall path handling and plugin uninstall docs. (#5985) Thanks @JustasMonkev.
 - CLI: add `openclaw logs --local-time` to display log timestamps in local timezone. (#13818) Thanks @xialonglee.
@@ -2829,6 +2919,7 @@ Docs: https://docs.openclaw.ai
 ## 2026.2.6
 
 ### Changes
+- Sessions/named DM: add `buildNamedDmSessionKey`, `parseNamedDmSessionKey`, and `isNamedDmSessionKey` key-format helpers, an `activeNamedSession` field on `SessionEntry`, and `setActiveNamedSession`/`getActiveNamedSessionKey` store helpers as infrastructure for named DM session switching. Thanks @Otoris.
 
 - Cron: default `wakeMode` is now `"now"` for new jobs (was `"next-heartbeat"`). (#10776) Thanks @tyler6204.
 - Cron: `cron run` defaults to force execution; use `--due` to restrict to due-only. (#10776) Thanks @tyler6204.
@@ -2867,6 +2958,7 @@ Docs: https://docs.openclaw.ai
 ## 2026.2.3
 
 ### Changes
+- Sessions/named DM: add `buildNamedDmSessionKey`, `parseNamedDmSessionKey`, and `isNamedDmSessionKey` key-format helpers, an `activeNamedSession` field on `SessionEntry`, and `setActiveNamedSession`/`getActiveNamedSessionKey` store helpers as infrastructure for named DM session switching. Thanks @Otoris.
 
 - Telegram: remove last `@ts-nocheck` from `bot-handlers.ts`, use Grammy types directly, deduplicate `StickerMetadata`. Zero `@ts-nocheck` remaining in `src/telegram/`. (#9206)
 - Telegram: remove `@ts-nocheck` from `bot-message.ts`, type deps via `Omit<BuildTelegramMessageContextParams>`, widen `allMedia` to `TelegramMediaRef[]`. (#9180)
@@ -2927,6 +3019,7 @@ Docs: https://docs.openclaw.ai
 ## 2026.2.2-2
 
 ### Changes
+- Sessions/named DM: add `buildNamedDmSessionKey`, `parseNamedDmSessionKey`, and `isNamedDmSessionKey` key-format helpers, an `activeNamedSession` field on `SessionEntry`, and `setActiveNamedSession`/`getActiveNamedSessionKey` store helpers as infrastructure for named DM session switching. Thanks @Otoris.
 
 - Docs: promote BlueBubbles as the recommended iMessage integration; mark imsg channel as legacy. (#8415) Thanks @tyler6204.
 
@@ -2943,6 +3036,7 @@ Docs: https://docs.openclaw.ai
 ## 2026.2.2
 
 ### Changes
+- Sessions/named DM: add `buildNamedDmSessionKey`, `parseNamedDmSessionKey`, and `isNamedDmSessionKey` key-format helpers, an `activeNamedSession` field on `SessionEntry`, and `setActiveNamedSession`/`getActiveNamedSessionKey` store helpers as infrastructure for named DM session switching. Thanks @Otoris.
 
 - Feishu: add Feishu/Lark plugin support + docs. (#7313) Thanks @jiulingyun (openclaw-cn).
 - Web UI: add Agents dashboard for managing agent files, tools, skills, models, channels, and cron jobs.
@@ -2982,6 +3076,7 @@ Docs: https://docs.openclaw.ai
 ## 2026.2.1
 
 ### Changes
+- Sessions/named DM: add `buildNamedDmSessionKey`, `parseNamedDmSessionKey`, and `isNamedDmSessionKey` key-format helpers, an `activeNamedSession` field on `SessionEntry`, and `setActiveNamedSession`/`getActiveNamedSessionKey` store helpers as infrastructure for named DM session switching. Thanks @Otoris.
 
 - Docs: onboarding/install/i18n/exec-approvals/Control UI/exe.dev/cacheRetention updates + misc nav/typos. (#3050, #3461, #4064, #4675, #4729, #4763, #5003, #5402, #5446, #5474, #5663, #5689, #5694, #5967, #6270, #6300, #6311, #6416, #6487, #6550, #6789)
 - Telegram: use shared pairing store. (#6127) Thanks @obviyus.
@@ -3048,6 +3143,7 @@ Docs: https://docs.openclaw.ai
 ## 2026.1.30
 
 ### Changes
+- Sessions/named DM: add `buildNamedDmSessionKey`, `parseNamedDmSessionKey`, and `isNamedDmSessionKey` key-format helpers, an `activeNamedSession` field on `SessionEntry`, and `setActiveNamedSession`/`getActiveNamedSessionKey` store helpers as infrastructure for named DM session switching. Thanks @Otoris.
 
 - CLI: add `completion` command (Zsh/Bash/PowerShell/Fish) and auto-setup during postinstall/onboarding.
 - CLI: add per-agent `models status` (`--agent` filter). (#4780) Thanks @jlowin.
@@ -3084,6 +3180,7 @@ Docs: https://docs.openclaw.ai
 ## 2026.1.29
 
 ### Changes
+- Sessions/named DM: add `buildNamedDmSessionKey`, `parseNamedDmSessionKey`, and `isNamedDmSessionKey` key-format helpers, an `activeNamedSession` field on `SessionEntry`, and `setActiveNamedSession`/`getActiveNamedSessionKey` store helpers as infrastructure for named DM session switching. Thanks @Otoris.
 
 - Rebrand: rename the npm package/CLI to `openclaw`, add a `openclaw` compatibility shim, and move extensions to the `@openclaw/*` scope.
 - Onboarding: strengthen security warning copy for beta + access control expectations.
@@ -3235,6 +3332,7 @@ Docs: https://docs.openclaw.ai
 - Telegram: DM topics as separate sessions + outbound link preview toggle. (#1597, #1700) Thanks @rohannagpal, @zerone0x. https://docs.openclaw.ai/channels/telegram
 
 ### Changes
+- Sessions/named DM: add `buildNamedDmSessionKey`, `parseNamedDmSessionKey`, and `isNamedDmSessionKey` key-format helpers, an `activeNamedSession` field on `SessionEntry`, and `setActiveNamedSession`/`getActiveNamedSessionKey` store helpers as infrastructure for named DM session switching. Thanks @Otoris.
 
 - Channels: add LINE plugin (Messaging API) with rich replies, quick replies, and plugin HTTP registry. (#1630) Thanks @plum-dawg.
 - TTS: add Edge TTS provider fallback, defaulting to keyless Edge with MP3 retry on format failures. (#1668) Thanks @steipete. https://docs.openclaw.ai/tts
@@ -3312,6 +3410,7 @@ Docs: https://docs.openclaw.ai
 - Channels: add Tlon/Urbit channel plugin (DMs, group mentions, thread replies). (#1544) Thanks @wca4a. https://docs.openclaw.ai/channels/tlon
 
 ### Changes
+- Sessions/named DM: add `buildNamedDmSessionKey`, `parseNamedDmSessionKey`, and `isNamedDmSessionKey` key-format helpers, an `activeNamedSession` field on `SessionEntry`, and `setActiveNamedSession`/`getActiveNamedSessionKey` store helpers as infrastructure for named DM session switching. Thanks @Otoris.
 
 - Channels: allow per-group tool allow/deny policies across built-in + plugin channels. (#1546) Thanks @adam91holt. https://docs.openclaw.ai/multi-agent-sandbox-tools
 - Agents: add Bedrock auto-discovery defaults + config overrides. (#1553) Thanks @fal3. https://docs.openclaw.ai/bedrock
@@ -3366,6 +3465,7 @@ Docs: https://docs.openclaw.ai
 ## 2026.1.22
 
 ### Changes
+- Sessions/named DM: add `buildNamedDmSessionKey`, `parseNamedDmSessionKey`, and `isNamedDmSessionKey` key-format helpers, an `activeNamedSession` field on `SessionEntry`, and `setActiveNamedSession`/`getActiveNamedSessionKey` store helpers as infrastructure for named DM session switching. Thanks @Otoris.
 
 - Highlight: Compaction safeguard now uses adaptive chunking, progressive fallback, and UI status + retries. (#1466) Thanks @dlauer.
 - Providers: add Antigravity usage tracking to status output. (#1490) Thanks @patelhiren.
@@ -3412,6 +3512,7 @@ Docs: https://docs.openclaw.ai
 ## 2026.1.21
 
 ### Changes
+- Sessions/named DM: add `buildNamedDmSessionKey`, `parseNamedDmSessionKey`, and `isNamedDmSessionKey` key-format helpers, an `activeNamedSession` field on `SessionEntry`, and `setActiveNamedSession`/`getActiveNamedSessionKey` store helpers as infrastructure for named DM session switching. Thanks @Otoris.
 
 - Highlight: Lobster optional plugin tool for typed workflows + approval gates. https://docs.openclaw.ai/tools/lobster
 - Lobster: allow workflow file args via `argsJson` in the plugin tool. https://docs.openclaw.ai/tools/lobster
@@ -3464,6 +3565,7 @@ Docs: https://docs.openclaw.ai
 ## 2026.1.20
 
 ### Changes
+- Sessions/named DM: add `buildNamedDmSessionKey`, `parseNamedDmSessionKey`, and `isNamedDmSessionKey` key-format helpers, an `activeNamedSession` field on `SessionEntry`, and `setActiveNamedSession`/`getActiveNamedSessionKey` store helpers as infrastructure for named DM session switching. Thanks @Otoris.
 
 - Control UI: add copy-as-markdown with error feedback. (#1345) https://docs.openclaw.ai/web/control-ui
 - Control UI: drop the legacy list view. (#1345) https://docs.openclaw.ai/web/control-ui
@@ -3647,6 +3749,7 @@ Thanks @AlexMikhalev, @CoreyH, @John-Rood, @KrauseFx, @MaudeBot, @Nachx639, @Nic
 ## 2026.1.16-2
 
 ### Changes
+- Sessions/named DM: add `buildNamedDmSessionKey`, `parseNamedDmSessionKey`, and `isNamedDmSessionKey` key-format helpers, an `activeNamedSession` field on `SessionEntry`, and `setActiveNamedSession`/`getActiveNamedSessionKey` store helpers as infrastructure for named DM session switching. Thanks @Otoris.
 
 - CLI: stamp build commit into dist metadata so banners show the commit in npm installs.
 - CLI: close memory manager after memory commands to avoid hanging processes. (#1127) — thanks @NicholasSpisak.
@@ -3672,6 +3775,7 @@ Thanks @AlexMikhalev, @CoreyH, @John-Rood, @KrauseFx, @MaudeBot, @Nachx639, @Nic
 - **BREAKING:** `openclaw plugins install <path>` now copies into `~/.openclaw/extensions` (use `--link` to keep path-based loading).
 
 ### Changes
+- Sessions/named DM: add `buildNamedDmSessionKey`, `parseNamedDmSessionKey`, and `isNamedDmSessionKey` key-format helpers, an `activeNamedSession` field on `SessionEntry`, and `setActiveNamedSession`/`getActiveNamedSessionKey` store helpers as infrastructure for named DM session switching. Thanks @Otoris.
 
 - Plugins: ship bundled plugins disabled by default and allow overrides by installed versions. (#1066) — thanks @ItzR3NO.
 - Plugins: add bundled Antigravity + Gemini CLI OAuth + Copilot Proxy provider plugins. (#1066) — thanks @ItzR3NO.
@@ -3777,6 +3881,7 @@ Thanks @AlexMikhalev, @CoreyH, @John-Rood, @KrauseFx, @MaudeBot, @Nachx639, @Nic
 - **BREAKING:** Microsoft Teams is now a plugin; install `@openclaw/msteams` via `openclaw plugins install @openclaw/msteams`.
 
 ### Changes
+- Sessions/named DM: add `buildNamedDmSessionKey`, `parseNamedDmSessionKey`, and `isNamedDmSessionKey` key-format helpers, an `activeNamedSession` field on `SessionEntry`, and `setActiveNamedSession`/`getActiveNamedSessionKey` store helpers as infrastructure for named DM session switching. Thanks @Otoris.
 
 - UI/Apps: move channel/config settings to schema-driven forms and rename Connections → Channels. (#1040) — thanks @thewilloftheshadow.
 - CLI: set process titles to `openclaw-<command>` for clearer process listings.
@@ -3858,6 +3963,7 @@ Thanks @AlexMikhalev, @CoreyH, @John-Rood, @KrauseFx, @MaudeBot, @Nachx639, @Nic
 - Security: expanded `openclaw security audit` (+ `--fix`), detect-secrets CI scan, and a `SECURITY.md` reporting policy.
 
 ### Changes
+- Sessions/named DM: add `buildNamedDmSessionKey`, `parseNamedDmSessionKey`, and `isNamedDmSessionKey` key-format helpers, an `activeNamedSession` field on `SessionEntry`, and `setActiveNamedSession`/`getActiveNamedSessionKey` store helpers as infrastructure for named DM session switching. Thanks @Otoris.
 
 - Docs: clarify per-agent auth stores, sandboxed skill binaries, and elevated semantics.
 - Docs: add FAQ entries for missing provider auth after adding agents and Gemini thinking signature errors.
@@ -3897,6 +4003,7 @@ Thanks @AlexMikhalev, @CoreyH, @John-Rood, @KrauseFx, @MaudeBot, @Nachx639, @Nic
 ## 2026.1.14
 
 ### Changes
+- Sessions/named DM: add `buildNamedDmSessionKey`, `parseNamedDmSessionKey`, and `isNamedDmSessionKey` key-format helpers, an `activeNamedSession` field on `SessionEntry`, and `setActiveNamedSession`/`getActiveNamedSessionKey` store helpers as infrastructure for named DM session switching. Thanks @Otoris.
 
 - Usage: add MiniMax coding plan usage tracking.
 - Auth: label Claude Code CLI auth options. (#915) — thanks @SeanZoR.
@@ -4029,6 +4136,7 @@ Thanks @AlexMikhalev, @CoreyH, @John-Rood, @KrauseFx, @MaudeBot, @Nachx639, @Nic
 - Agents: automatic pre-compaction memory flush turn to store durable memories before compaction.
 
 ### Changes
+- Sessions/named DM: add `buildNamedDmSessionKey`, `parseNamedDmSessionKey`, and `isNamedDmSessionKey` key-format helpers, an `activeNamedSession` field on `SessionEntry`, and `setActiveNamedSession`/`getActiveNamedSessionKey` store helpers as infrastructure for named DM session switching. Thanks @Otoris.
 
 - CLI/Onboarding: simplify MiniMax auth choice to a single M2.1 option.
 - CLI: configure section selection now loops until Continue.
@@ -4121,6 +4229,7 @@ Thanks @AlexMikhalev, @CoreyH, @John-Rood, @KrauseFx, @MaudeBot, @Nachx639, @Nic
 - Gateway: add OpenAI-compatible `/v1/chat/completions` HTTP endpoint (auth, SSE streaming, per-agent routing). (#680).
 
 ### Changes
+- Sessions/named DM: add `buildNamedDmSessionKey`, `parseNamedDmSessionKey`, and `isNamedDmSessionKey` key-format helpers, an `activeNamedSession` field on `SessionEntry`, and `setActiveNamedSession`/`getActiveNamedSessionKey` store helpers as infrastructure for named DM session switching. Thanks @Otoris.
 
 - Onboarding/Models: add first-class Z.AI (GLM) auth choice (`zai-api-key`) + `--zai-api-key` flag.
 - CLI/Onboarding: add OpenRouter API key auth option in configure/onboard. (#703) — thanks @mteam88.
