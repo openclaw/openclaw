@@ -271,4 +271,45 @@ describe("acp translator cancel and run scoping", () => {
     );
     await expect(pending1.promptPromise).resolves.toEqual({ stopReason: "end_turn" });
   });
+
+  it("drops chat events without runId when multiple pending prompts share a session key", async () => {
+    const sessionKey = "agent:main:shared";
+    const harness = createHarness([
+      { sessionId: "session-1", sessionKey },
+      { sessionId: "session-2", sessionKey },
+    ]);
+    const pending1 = await startPendingPrompt(harness, "session-1");
+    const pending2 = await startPendingPrompt(harness, "session-2");
+
+    await harness.agent.handleGatewayEvent(
+      createChatEvent({
+        sessionKey,
+        seq: 1,
+        state: "final",
+      }),
+    );
+
+    expect(harness.sessionStore.getSession("session-1")?.activeRunId).toBe(pending1.runId);
+    expect(harness.sessionStore.getSession("session-2")?.activeRunId).toBe(pending2.runId);
+
+    await harness.agent.handleGatewayEvent(
+      createChatEvent({
+        runId: pending1.runId,
+        sessionKey,
+        seq: 2,
+        state: "final",
+      }),
+    );
+    await expect(pending1.promptPromise).resolves.toEqual({ stopReason: "end_turn" });
+
+    await harness.agent.handleGatewayEvent(
+      createChatEvent({
+        runId: pending2.runId,
+        sessionKey,
+        seq: 3,
+        state: "final",
+      }),
+    );
+    await expect(pending2.promptPromise).resolves.toEqual({ stopReason: "end_turn" });
+  });
 });

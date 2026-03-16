@@ -880,16 +880,23 @@ export class AcpGatewayAgent implements Agent {
   }
 
   private findPendingBySessionKey(sessionKey: string, runId?: string): PendingPrompt | undefined {
+    let matchedPending: PendingPrompt | undefined;
     for (const pending of this.pendingPrompts.values()) {
       if (pending.sessionKey !== sessionKey) {
         continue;
       }
-      if (runId && pending.idempotencyKey !== runId) {
+      if (runId) {
+        if (pending.idempotencyKey === runId) {
+          return pending;
+        }
         continue;
       }
-      return pending;
+      if (matchedPending) {
+        return undefined;
+      }
+      matchedPending = pending;
     }
-    return undefined;
+    return matchedPending;
   }
 
   private async sendAvailableCommands(sessionId: string): Promise<void> {
