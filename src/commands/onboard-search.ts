@@ -16,7 +16,15 @@ export type SearchProvider = NonNullable<
   NonNullable<NonNullable<NonNullable<OpenClawConfig["tools"]>["web"]>["search"]>["provider"]
 >;
 
-const SEARCH_PROVIDER_IDS = ["brave", "firecrawl", "gemini", "grok", "kimi", "perplexity", "baidu"] as const;
+const SEARCH_PROVIDER_IDS = [
+  "brave",
+  "firecrawl",
+  "gemini",
+  "grok",
+  "kimi",
+  "perplexity",
+  "baidu",
+] as const;
 
 function isSearchProvider(value: string): value is SearchProvider {
   return (SEARCH_PROVIDER_IDS as readonly string[]).includes(value);
