@@ -10,6 +10,8 @@ import {
   supportsChannelMessageButtonsForChannel,
   supportsChannelMessageCards,
   supportsChannelMessageCardsForChannel,
+  supportsChannelMessageInteractive,
+  supportsChannelMessageInteractiveForChannel,
 } from "./message-actions.js";
 import type { ChannelPlugin } from "./types.js";
 
@@ -17,6 +19,7 @@ const emptyRegistry = createTestRegistry([]);
 
 function createMessageActionsPlugin(params: {
   id: "discord" | "telegram";
+  supportsInteractive: boolean;
   supportsButtons: boolean;
   supportsCards: boolean;
 }): ChannelPlugin {
@@ -31,6 +34,7 @@ function createMessageActionsPlugin(params: {
     }),
     actions: {
       listActions: () => ["send"],
+      supportsInteractive: () => params.supportsInteractive,
       supportsButtons: () => params.supportsButtons,
       supportsCards: () => params.supportsCards,
     },
@@ -39,12 +43,14 @@ function createMessageActionsPlugin(params: {
 
 const buttonsPlugin = createMessageActionsPlugin({
   id: "discord",
+  supportsInteractive: true,
   supportsButtons: true,
   supportsCards: false,
 });
 
 const cardsPlugin = createMessageActionsPlugin({
   id: "telegram",
+  supportsInteractive: false,
   supportsButtons: false,
   supportsCards: true,
 });
@@ -66,6 +72,7 @@ describe("message action capability checks", () => {
   it("aggregates buttons/card support across plugins", () => {
     activateMessageActionTestRegistry();
 
+    expect(supportsChannelMessageInteractive({} as OpenClawConfig)).toBe(true);
     expect(supportsChannelMessageButtons({} as OpenClawConfig)).toBe(true);
     expect(supportsChannelMessageCards({} as OpenClawConfig)).toBe(true);
   });
@@ -73,6 +80,18 @@ describe("message action capability checks", () => {
   it("checks per-channel capabilities", () => {
     activateMessageActionTestRegistry();
 
+    expect(
+      supportsChannelMessageInteractiveForChannel({
+        cfg: {} as OpenClawConfig,
+        channel: "discord",
+      }),
+    ).toBe(true);
+    expect(
+      supportsChannelMessageInteractiveForChannel({
+        cfg: {} as OpenClawConfig,
+        channel: "telegram",
+      }),
+    ).toBe(false);
     expect(
       supportsChannelMessageButtonsForChannel({ cfg: {} as OpenClawConfig, channel: "discord" }),
     ).toBe(true);
