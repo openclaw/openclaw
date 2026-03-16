@@ -1163,10 +1163,11 @@ export async function editForumTopicTelegram(
 
   const { cfg, account, api } = resolveTelegramApiContext(opts);
   const rawTarget = String(chatIdInput);
+  const target = parseTelegramTarget(rawTarget);
   const chatId = await resolveAndPersistChatId({
     cfg,
     api,
-    lookupTarget: rawTarget,
+    lookupTarget: target.chatId,
     persistTarget: rawTarget,
     verbose: opts.verbose,
   });
