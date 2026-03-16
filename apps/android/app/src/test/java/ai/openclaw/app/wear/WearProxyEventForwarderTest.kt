@@ -1,5 +1,6 @@
 package ai.openclaw.app.wear
 
+import ai.openclaw.android.gateway.GatewayEvent
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -17,7 +18,7 @@ class WearProxyEventForwarderTest {
   fun `forwarder keeps sending events to the handshake node`() = runTest {
     val scope = TestScope(StandardTestDispatcher(testScheduler))
     val mainSessionKey = MutableStateFlow("main")
-    val events = MutableSharedFlow<Pair<String, String?>>(extraBufferCapacity = 4)
+    val events = MutableSharedFlow<GatewayEvent>(extraBufferCapacity = 4)
     val sent = mutableListOf<Triple<String, String, String?>>()
 
     val job =
@@ -31,7 +32,7 @@ class WearProxyEventForwarderTest {
       ).startIn(scope)
 
     advanceUntilIdle()
-    events.emit("chat" to """{"state":"streaming"}""")
+    events.emit(GatewayEvent(event = "chat", payloadJson = """{"state":"streaming"}"""))
     advanceUntilIdle()
 
     assertEquals(

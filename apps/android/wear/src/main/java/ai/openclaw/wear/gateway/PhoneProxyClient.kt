@@ -15,11 +15,9 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.tasks.await
@@ -30,7 +28,8 @@ import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.buildJsonObject
-import ai.openclaw.wear.gateway.GatewayEvent
+import ai.openclaw.android.gateway.GatewayEvent
+import ai.openclaw.android.gateway.GatewayEventQueue
 import ai.openclaw.android.gateway.ProxyPaths
 import ai.openclaw.wear.R
 
@@ -189,8 +188,8 @@ class PhoneProxyClient internal constructor(
   private val _statusText = MutableStateFlow(stringResolver(R.string.wear_status_phone_proxy_offline))
   override val statusText: StateFlow<String> = _statusText.asStateFlow()
 
-  private val _events = MutableSharedFlow<GatewayEvent>(extraBufferCapacity = 64)
-  override val events: SharedFlow<GatewayEvent> = _events.asSharedFlow()
+  private val eventQueue = GatewayEventQueue(scope = scope, json = json, logTag = TAG)
+  override val events: SharedFlow<GatewayEvent> = eventQueue.events
 
   fun connect() {
     messageTransport.addListener(messageListener)
@@ -327,7 +326,7 @@ class PhoneProxyClient internal constructor(
         is JsonPrimitive -> payload.content
         else -> payload.toString()
       }
-      _events.tryEmit(GatewayEvent(event, payloadJson))
+      eventQueue.emit(event, payloadJson)
     } catch (e: Throwable) {
       Log.w(TAG, "Failed to parse event: ${e.message}")
     }
@@ -459,7 +458,7 @@ class PhoneProxyClient internal constructor(
     _statusText.value = stringResolver(R.string.wear_status_connected_via_phone)
     if (!wasConnected) {
       // Emit mainSessionKey request so the chat loads.
-      _events.tryEmit(GatewayEvent("proxy.connected", null))
+      eventQueue.emit("proxy.connected", null)
     }
     startLivenessChecks(sourceNodeId, generation)
   }

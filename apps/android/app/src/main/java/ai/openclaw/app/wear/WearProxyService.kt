@@ -6,6 +6,7 @@ import com.google.android.gms.wearable.MessageEvent
 import com.google.android.gms.wearable.Wearable
 import com.google.android.gms.wearable.WearableListenerService
 import ai.openclaw.app.NodeApp
+import ai.openclaw.android.gateway.GatewayEvent
 import ai.openclaw.android.gateway.ProxyPaths
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -156,16 +157,16 @@ class WearProxyService : WearableListenerService() {
 internal class WearProxyEventForwarder(
   private val nodeId: String,
   private val mainSessionKey: StateFlow<String>,
-  private val events: Flow<Pair<String, String?>>,
+  private val events: Flow<GatewayEvent>,
   private val sendEvent: suspend (String, String, String?) -> Unit,
 ) {
   fun startIn(scope: CoroutineScope): Job {
     return scope.launch {
       sendEvent(nodeId, "mainSessionKey", mainSessionKey.value.takeIf { it.isNotBlank() })
-      events.collect { (event, payloadJson) ->
+      events.collect { event ->
         try {
-          sendEvent(nodeId, event, payloadJson)
-          Log.d(TAG, "Forwarded event: $event")
+          sendEvent(nodeId, event.event, event.payloadJson)
+          Log.d(TAG, "Forwarded event: ${event.event}")
         } catch (e: Throwable) {
           Log.w(TAG, "Failed to forward event to watch: ${e.message}")
         }

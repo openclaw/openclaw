@@ -1,7 +1,7 @@
 package ai.openclaw.wear.chat
 
 import ai.openclaw.wear.R
-import ai.openclaw.wear.gateway.GatewayEvent
+import ai.openclaw.android.gateway.GatewayEvent
 import ai.openclaw.android.gateway.ChatSessionEntry
 import ai.openclaw.android.gateway.asObjectOrNull
 import ai.openclaw.android.gateway.asLongOrNull
@@ -352,16 +352,19 @@ class WearChatController(
         }
       }
       "chat" -> {
-        if (event.payloadJson.isNullOrBlank()) return
-        handleChatEvent(event.payloadJson)
+        val payloadJson = event.payloadJson
+        if (payloadJson.isNullOrBlank()) return
+        handleChatEvent(payloadJson)
       }
       "chat.side_result" -> {
-        if (event.payloadJson.isNullOrBlank()) return
-        handleSideResultEvent(event.payloadJson)
+        val payloadJson = event.payloadJson
+        if (payloadJson.isNullOrBlank()) return
+        handleSideResultEvent(payloadJson)
       }
       "agent" -> {
-        if (event.payloadJson.isNullOrBlank()) return
-        handleAgentEvent(event.payloadJson)
+        val payloadJson = event.payloadJson
+        if (payloadJson.isNullOrBlank()) return
+        handleAgentEvent(payloadJson)
       }
     }
   }

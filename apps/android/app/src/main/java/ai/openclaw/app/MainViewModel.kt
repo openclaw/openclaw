@@ -6,7 +6,8 @@ import androidx.lifecycle.LifecycleOwner
 import androidx.lifecycle.viewModelScope
 import ai.openclaw.app.chat.ChatMessage
 import ai.openclaw.app.chat.ChatPendingToolCall
-import ai.openclaw.app.chat.ChatSessionEntry
+import ai.openclaw.android.gateway.ChatSessionEntry
+import ai.openclaw.app.gateway.GatewayTrustPrompt
 import ai.openclaw.app.chat.OutgoingAttachment
 import ai.openclaw.app.gateway.GatewayEndpoint
 import ai.openclaw.app.node.CameraCaptureManager
@@ -79,7 +80,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
   val statusText: StateFlow<String> = runtimeState(initial = "Offline") { it.statusText }
   val serverName: StateFlow<String?> = runtimeState(initial = null) { it.serverName }
   val remoteAddress: StateFlow<String?> = runtimeState(initial = null) { it.remoteAddress }
-  val pendingGatewayTrust: StateFlow<NodeRuntime.GatewayTrustPrompt?> = runtimeState(initial = null) { it.pendingGatewayTrust }
+  val pendingGatewayTrust: StateFlow<GatewayTrustPrompt?> = runtimeState(initial = null) { it.pendingGatewayTrust }
   val seamColorArgb: StateFlow<Long> = runtimeState(initial = 0xFF0EA5E9) { it.seamColorArgb }
   val mainSessionKey: StateFlow<String> = runtimeState(initial = "main") { it.mainSessionKey }
 

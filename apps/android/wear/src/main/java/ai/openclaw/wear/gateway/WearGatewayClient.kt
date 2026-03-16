@@ -6,7 +6,8 @@ import android.os.Build
 import android.util.Log
 import ai.openclaw.android.gateway.GatewayClientProfiles
 import ai.openclaw.android.gateway.GatewayConnectBuilder
-import ai.openclaw.wear.gateway.GatewayEvent
+import ai.openclaw.android.gateway.GatewayEvent
+import ai.openclaw.android.gateway.GatewayEventQueue
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 import kotlinx.coroutines.CompletableDeferred
@@ -15,11 +16,9 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
@@ -86,8 +85,8 @@ class WearGatewayClient(private val context: Context) : GatewayClientInterface {
   private val _statusText = MutableStateFlow(context.getString(R.string.wear_status_offline))
   override val statusText: StateFlow<String> = _statusText.asStateFlow()
 
-  private val _events = MutableSharedFlow<GatewayEvent>(extraBufferCapacity = 64)
-  override val events: SharedFlow<GatewayEvent> = _events.asSharedFlow()
+  private val eventQueue = GatewayEventQueue(scope = scope, json = json, logTag = TAG)
+  override val events: SharedFlow<GatewayEvent> = eventQueue.events
 
   fun configure(config: WearGatewayConfig) {
     this.config = config
@@ -230,7 +229,7 @@ class WearGatewayClient(private val context: Context) : GatewayClientInterface {
           val sessionDefaults = (snapshot?.get("sessionDefaults") as? JsonObject)
           val mainSessionKey = (sessionDefaults?.get("mainSessionKey") as? JsonPrimitive)?.content
           if (mainSessionKey != null) {
-            _events.tryEmit(GatewayEvent("mainSessionKey", mainSessionKey))
+            eventQueue.emit("mainSessionKey", mainSessionKey)
           }
         } else {
           handleDisconnect("Connect timed out", epoch)
@@ -286,7 +285,7 @@ class WearGatewayClient(private val context: Context) : GatewayClientInterface {
       return
     }
 
-    _events.tryEmit(GatewayEvent(event, payloadJson))
+    eventQueue.emit(event, payloadJson)
   }
 
   private fun handleDisconnect(message: String, epoch: Long) {
