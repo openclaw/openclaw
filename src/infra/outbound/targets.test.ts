@@ -387,7 +387,7 @@ describe("resolveSessionDeliveryTarget", () => {
     expect(resolved.threadId).toBeUndefined();
   });
 
-  it("keeps :topic: parsing when the telegram plugin registry is unavailable", () => {
+  it("keeps raw :topic: targets when the telegram plugin registry is unavailable", () => {
     setActivePluginRegistry(createTestRegistry([]));
 
     const resolved = resolveSessionDeliveryTarget({
@@ -401,8 +401,8 @@ describe("resolveSessionDeliveryTarget", () => {
       explicitTo: "63448508:topic:1008013",
     });
 
-    expect(resolved.to).toBe("63448508");
-    expect(resolved.threadId).toBe(1008013);
+    expect(resolved.to).toBe("63448508:topic:1008013");
+    expect(resolved.threadId).toBeUndefined();
   });
 
   it("explicitThreadId takes priority over :topic: parsed value", () => {

@@ -17,10 +17,6 @@ import {
   normalizeMessageChannel,
 } from "../../utils/message-channel.js";
 import {
-  resolveBuiltInExplicitTarget,
-  resolveBuiltInTargetChatType,
-} from "./built-in-channel-messaging.js";
-import {
   normalizeDeliverableOutboundChannel,
   resolveOutboundChannelPlugin,
 } from "./channel-resolution.js";
@@ -78,7 +74,7 @@ function parseExplicitTargetWithPlugin(params: {
   return (
     resolveOutboundChannelPlugin({ channel: provider })?.messaging?.parseExplicitTarget?.({
       raw,
-    }) ?? resolveBuiltInExplicitTarget(provider, raw)
+    }) ?? null
   );
 }
 
@@ -422,7 +418,7 @@ function inferChatTypeFromTarget(params: {
   return (
     resolveOutboundChannelPlugin({
       channel: params.channel,
-    })?.messaging?.inferTargetChatType?.({ to }) ?? resolveBuiltInTargetChatType(params.channel, to)
+    })?.messaging?.inferTargetChatType?.({ to }) ?? undefined
   );
 }
 
