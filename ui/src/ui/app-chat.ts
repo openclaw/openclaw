@@ -106,6 +106,7 @@ async function loadRefreshChatSessionsResult(host: ChatHost): Promise<SessionsLi
         })) ?? null;
       if (res) {
         appHost.sessionsResult = res;
+        appHost.chatSessionsResult = res;
       }
       return res;
     } catch {

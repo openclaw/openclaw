@@ -7,6 +7,7 @@ export type SessionsState = {
   connected: boolean;
   sessionsLoading: boolean;
   sessionsResult: SessionsListResult | null;
+  chatSessionsResult?: SessionsListResult | null;
   sessionsError: string | null;
   sessionsFilterActive: string;
   sessionsFilterLimit: string;
@@ -49,6 +50,9 @@ export async function loadSessions(
     const res = await state.client.request<SessionsListResult | undefined>("sessions.list", params);
     if (res) {
       state.sessionsResult = res;
+      if (includeGlobal && includeUnknown && activeMinutes <= 0 && limit <= 0) {
+        state.chatSessionsResult = res;
+      }
     }
   } catch (err) {
     state.sessionsError = String(err);

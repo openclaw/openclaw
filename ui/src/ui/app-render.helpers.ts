@@ -134,7 +134,11 @@ function renderCronFilterIcon(hiddenCount: number) {
 }
 
 export function renderChatSessionSelect(state: AppViewState) {
-  const sessionGroups = resolveSessionOptionGroups(state, state.sessionKey, state.sessionsResult);
+  const sessionGroups = resolveSessionOptionGroups(
+    state,
+    state.sessionKey,
+    resolveChatSessionsSnapshot(state),
+  );
   const modelSelect = renderChatModelSelect(state);
   return html`
     <div class="chat-controls__session-row">
@@ -175,7 +179,7 @@ export function renderChatSessionSelect(state: AppViewState) {
 export function renderChatControls(state: AppViewState) {
   const hideCron = state.sessionsHideCron ?? true;
   const hiddenCronCount = hideCron
-    ? countHiddenCronSessions(state.sessionKey, state.sessionsResult)
+    ? countHiddenCronSessions(state.sessionKey, resolveChatSessionsSnapshot(state))
     : 0;
   const disableThinkingToggle = state.onboarding;
   const disableFocusToggle = state.onboarding;
@@ -336,7 +340,11 @@ export function renderChatControls(state: AppViewState) {
  * Hidden on desktop via CSS.
  */
 export function renderChatMobileToggle(state: AppViewState) {
-  const sessionGroups = resolveSessionOptionGroups(state, state.sessionKey, state.sessionsResult);
+  const sessionGroups = resolveSessionOptionGroups(
+    state,
+    state.sessionKey,
+    resolveChatSessionsSnapshot(state),
+  );
   const disableThinkingToggle = state.onboarding;
   const disableFocusToggle = state.onboarding;
   const showThinking = state.onboarding ? false : state.settings.chatShowThinking;
@@ -522,7 +530,7 @@ async function refreshSessionOptions(state: AppViewState) {
 }
 
 function resolveActiveSessionRow(state: AppViewState) {
-  return state.sessionsResult?.sessions?.find((row) => row.key === state.sessionKey);
+  return resolveChatSessionsSnapshot(state)?.sessions?.find((row) => row.key === state.sessionKey);
 }
 
 function resolveModelOverrideValue(state: AppViewState): string {
@@ -545,7 +553,7 @@ function resolveModelOverrideValue(state: AppViewState): string {
 }
 
 function resolveDefaultModelValue(state: AppViewState): string {
-  const defaults = state.sessionsResult?.defaults;
+  const defaults = resolveChatSessionsSnapshot(state)?.defaults;
   return resolveServerChatModelValue(defaults?.model, defaults?.modelProvider);
 }
 
@@ -774,6 +782,10 @@ export function isCronSessionKey(key: string): boolean {
 
 function shouldPreserveMissingSessionOption(key: string): boolean {
   return key.includes(":subagent:") || isCronSessionKey(key);
+}
+
+function resolveChatSessionsSnapshot(state: AppViewState): SessionsListResult | null {
+  return state.chatSessionsResult ?? state.sessionsResult;
 }
 
 type SessionOptionEntry = {

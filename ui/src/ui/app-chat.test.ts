@@ -289,7 +289,11 @@ describe("refreshChat", () => {
       },
       applySettings,
       loadAssistantIdentity,
-    }) as ChatHost & { sessionsLoading: boolean; sessionsResult: unknown };
+    }) as ChatHost & {
+      sessionsLoading: boolean;
+      sessionsResult: unknown;
+      chatSessionsResult?: unknown;
+    };
     host.sessionsLoading = true;
     host.sessionsResult = {
       ts: 0,
@@ -319,6 +323,7 @@ describe("refreshChat", () => {
         { key: "main", kind: "direct", updatedAt: null },
       ],
     });
+    expect(host.chatSessionsResult).toEqual(host.sessionsResult);
     expect(applySettings).not.toHaveBeenCalled();
     expect(loadAssistantIdentity).not.toHaveBeenCalled();
     expect(request).toHaveBeenCalledWith("sessions.list", {

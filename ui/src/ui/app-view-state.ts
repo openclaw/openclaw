@@ -180,6 +180,7 @@ export type AppViewState = {
   agentSkillsAgentId: string | null;
   sessionsLoading: boolean;
   sessionsResult: SessionsListResult | null;
+  chatSessionsResult?: SessionsListResult | null;
   sessionsError: string | null;
   sessionsFilterActive: string;
   sessionsFilterLimit: string;
