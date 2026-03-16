@@ -346,6 +346,43 @@ description: test skill
     expectNoFinding(res, "gateway.bind_no_auth");
   });
 
+  it("does not flag missing gateway auth when read-only scrubbed config omits unavailable auth SecretRefs", async () => {
+    const sourceConfig: OpenClawConfig = {
+      gateway: {
+        bind: "lan",
+        auth: {
+          token: {
+            source: "env",
+            provider: "default",
+            id: "OPENCLAW_GATEWAY_TOKEN",
+          },
+        },
+      },
+      secrets: {
+        providers: {
+          default: { source: "env" },
+        },
+      },
+    };
+    const resolvedConfig: OpenClawConfig = {
+      gateway: {
+        bind: "lan",
+        auth: {},
+      },
+      secrets: sourceConfig.secrets,
+    };
+
+    const res = await runSecurityAudit({
+      config: resolvedConfig,
+      sourceConfig,
+      env: {},
+      includeFilesystem: false,
+      includeChannelSecurity: false,
+    });
+
+    expectNoFinding(res, "gateway.bind_no_auth");
+  });
+
   it("evaluates gateway auth rate-limit warning based on configuration", async () => {
     const cases: Array<{
       name: string;
@@ -1805,11 +1842,7 @@ description: test skill
   it("warns when multiple DM senders share the main session", async () => {
     const cfg: OpenClawConfig = {
       session: { dmScope: "main" },
-      channels: {
-        whatsapp: {
-          enabled: true,
-        },
-      },
+      channels: { whatsapp: { enabled: true } },
     };
     const plugins: ChannelPlugin[] = [
       {
@@ -1982,6 +2015,40 @@ description: test skill
         ]),
       );
     });
+  });
+
+  it("adds a read-only resolution warning when channel account resolveAccount throws", async () => {
+    const plugin = stubChannelPlugin({
+      id: "zalouser",
+      label: "Zalo Personal",
+      listAccountIds: () => ["default"],
+      resolveAccount: () => {
+        throw new Error("missing SecretRef");
+      },
+    });
+
+    const cfg: OpenClawConfig = {
+      channels: {
+        zalouser: {
+          enabled: true,
+        },
+      },
+    };
+
+    const res = await runSecurityAudit({
+      config: cfg,
+      includeFilesystem: false,
+      includeChannelSecurity: true,
+      plugins: [plugin],
+    });
+
+    const finding = res.findings.find(
+      (entry) => entry.checkId === "channels.zalouser.account.read_only_resolution",
+    );
+    expect(finding?.severity).toBe("warn");
+    expect(finding?.title).toContain("could not be fully resolved");
+    expect(finding?.detail).toContain("zalouser:default: failed to resolve account");
+    expect(finding?.detail).toContain("missing SecretRef");
   });
 
   it("keeps Slack HTTP slash-command findings when resolved inspection only exposes signingSecret status", async () => {
