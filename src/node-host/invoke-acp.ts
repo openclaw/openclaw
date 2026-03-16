@@ -416,7 +416,6 @@ async function buildStatusPayload(params: {
   } catch (error) {
     throw new Error(
       `ACP status backend failed for session ${session.sessionKey}: ${resolveFailureMessage(error)}`,
-      { cause: error },
     );
   }
   session.lastStatusSummary =
