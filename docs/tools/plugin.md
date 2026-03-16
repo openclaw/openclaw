@@ -220,7 +220,7 @@ Provider plugins now have two layers:
 - manifest metadata: `providerAuthEnvVars` for cheap env-auth lookup before
   runtime load
 - config-time hooks: `catalog` / legacy `discovery`
-- runtime hooks: `resolveDynamicModel`, `prepareDynamicModel`, `normalizeResolvedModel`, `capabilities`, `prepareExtraParams`, `wrapStreamFn`, `isCacheTtlEligible`, `buildMissingAuthMessage`, `suppressBuiltInModel`, `augmentModelCatalog`, `prepareRuntimeAuth`, `resolveUsageAuth`, `fetchUsageSnapshot`
+- runtime hooks: `resolveDynamicModel`, `prepareDynamicModel`, `normalizeResolvedModel`, `capabilities`, `prepareExtraParams`, `wrapStreamFn`, `isCacheTtlEligible`, `buildMissingAuthMessage`, `suppressBuiltInModel`, `augmentModelCatalog`, `isBinaryThinking`, `supportsXHighThinking`, `resolveDefaultThinkingLevel`, `isModernModelRef`, `prepareRuntimeAuth`, `resolveUsageAuth`, `fetchUsageSnapshot`
 
 OpenClaw still owns the generic agent loop, failover, transcript handling, and
 tool policy. These hooks are the seam for provider-specific behavior without
@@ -263,13 +263,22 @@ For model/provider plugins, OpenClaw uses hooks in this rough order:
     error hint.
 12. `augmentModelCatalog`
     Provider-owned synthetic/final catalog rows appended after discovery.
-13. `prepareRuntimeAuth`
+13. `isBinaryThinking`
+    Provider-owned on/off reasoning toggle for binary-thinking providers.
+14. `supportsXHighThinking`
+    Provider-owned `xhigh` reasoning support for selected models.
+15. `resolveDefaultThinkingLevel`
+    Provider-owned default `/think` level for a specific model family.
+16. `isModernModelRef`
+    Provider-owned modern-model matcher used by live profile filters and smoke
+    selection.
+17. `prepareRuntimeAuth`
     Exchanges a configured credential into the actual runtime token/key just
     before inference.
-14. `resolveUsageAuth`
+18. `resolveUsageAuth`
     Resolves usage/billing credentials for `/usage` and related status
     surfaces.
-15. `fetchUsageSnapshot`
+19. `fetchUsageSnapshot`
     Fetches and normalizes provider-specific usage/quota snapshots after auth
     is resolved.
 
@@ -286,6 +295,10 @@ For model/provider plugins, OpenClaw uses hooks in this rough order:
 - `buildMissingAuthMessage`: replace the generic auth-store error with a provider-specific recovery hint
 - `suppressBuiltInModel`: hide stale upstream rows and optionally return a provider-owned error for direct resolution failures
 - `augmentModelCatalog`: append synthetic/final catalog rows after discovery and config merging
+- `isBinaryThinking`: expose binary on/off reasoning UX without hardcoding provider ids in `/think`
+- `supportsXHighThinking`: opt specific models into the `xhigh` reasoning level
+- `resolveDefaultThinkingLevel`: keep provider/model default reasoning policy out of core
+- `isModernModelRef`: keep live/smoke model family inclusion rules with the provider
 - `prepareRuntimeAuth`: exchange a configured credential into the actual short-lived runtime token/key used for requests
 - `resolveUsageAuth`: resolve provider-owned credentials for usage/billing endpoints without hardcoding token parsing in core
 - `fetchUsageSnapshot`: own provider-specific usage endpoint fetch/parsing while core keeps summary fan-out and formatting
@@ -303,6 +316,10 @@ Rule of thumb:
 - provider needs a provider-specific missing-auth recovery hint: use `buildMissingAuthMessage`
 - provider needs to hide stale upstream rows or replace them with a vendor hint: use `suppressBuiltInModel`
 - provider needs synthetic forward-compat rows in `models list` and pickers: use `augmentModelCatalog`
+- provider exposes only binary thinking on/off: use `isBinaryThinking`
+- provider wants `xhigh` on only a subset of models: use `supportsXHighThinking`
+- provider owns default `/think` policy for a model family: use `resolveDefaultThinkingLevel`
+- provider owns live/smoke preferred-model matching: use `isModernModelRef`
 - provider needs a token exchange or short-lived request credential: use `prepareRuntimeAuth`
 - provider needs custom usage/quota token parsing or a different usage credential: use `resolveUsageAuth`
 - provider needs a provider-specific usage endpoint or payload parser: use `fetchUsageSnapshot`
@@ -368,14 +385,17 @@ api.registerProvider({
 ### Built-in examples
 
 - Anthropic uses `resolveDynamicModel`, `capabilities`, `resolveUsageAuth`,
-  `fetchUsageSnapshot`, and `isCacheTtlEligible` because it owns Claude 4.6
-  forward-compat, provider-family hints, usage endpoint integration, and
-  prompt-cache eligibility.
+  `fetchUsageSnapshot`, `isCacheTtlEligible`, `resolveDefaultThinkingLevel`,
+  and `isModernModelRef` because it owns Claude 4.6 forward-compat,
+  provider-family hints, usage endpoint integration, prompt-cache
+  eligibility, and Claude default/adaptive thinking policy.
 - OpenAI uses `resolveDynamicModel`, `normalizeResolvedModel`, and
-  `capabilities` plus `buildMissingAuthMessage`, `suppressBuiltInModel`, and
-  `augmentModelCatalog` because it owns GPT-5.4 forward-compat, the direct
-  OpenAI `openai-completions` -> `openai-responses` normalization, Codex-aware
-  auth hints, Spark suppression, and synthetic OpenAI list rows.
+  `capabilities` plus `buildMissingAuthMessage`, `suppressBuiltInModel`,
+  `augmentModelCatalog`, `supportsXHighThinking`, and `isModernModelRef`
+  because it owns GPT-5.4 forward-compat, the direct OpenAI
+  `openai-completions` -> `openai-responses` normalization, Codex-aware auth
+  hints, Spark suppression, synthetic OpenAI list rows, and GPT-5 thinking /
+  live-model policy.
 - OpenRouter uses `catalog` plus `resolveDynamicModel` and
   `prepareDynamicModel` because the provider is pass-through and may expose new
   model ids before OpenClaw's static catalog updates.
@@ -389,9 +409,10 @@ api.registerProvider({
   still runs on core OpenAI transports but owns its transport/base URL
   normalization, default transport choice, synthetic Codex catalog rows, and
   ChatGPT usage endpoint integration.
-- Gemini CLI OAuth uses `resolveDynamicModel`, `resolveUsageAuth`, and
-  `fetchUsageSnapshot` because it owns Gemini 3.1 forward-compat fallback plus
-  the token parsing and quota endpoint wiring needed by `/usage`.
+- Google AI Studio and Gemini CLI OAuth use `resolveDynamicModel` and
+  `isModernModelRef` because they own Gemini 3.1 forward-compat fallback and
+  modern-model matching; Gemini CLI OAuth also uses `resolveUsageAuth` and
+  `fetchUsageSnapshot` for token parsing and quota endpoint wiring.
 - OpenRouter uses `capabilities`, `wrapStreamFn`, and `isCacheTtlEligible`
   to keep provider-specific request headers, routing metadata, reasoning
   patches, and prompt-cache policy out of core.
@@ -402,9 +423,10 @@ api.registerProvider({
   reasoning payload normalization, Gemini transcript hints, and Anthropic
   cache-TTL gating.
 - Z.AI uses `resolveDynamicModel`, `prepareExtraParams`, `wrapStreamFn`,
-  `isCacheTtlEligible`, `resolveUsageAuth`, and `fetchUsageSnapshot` because it
-  owns GLM-5 fallback, `tool_stream` defaults, and both usage auth + quota
-  fetching.
+  `isCacheTtlEligible`, `isBinaryThinking`, `isModernModelRef`,
+  `resolveUsageAuth`, and `fetchUsageSnapshot` because it owns GLM-5 fallback,
+  `tool_stream` defaults, binary thinking UX, modern-model matching, and both
+  usage auth + quota fetching.
 - Mistral, OpenCode Zen, and OpenCode Go use `capabilities` only to keep
   transcript/tooling quirks out of core.
 - Catalog-only bundled providers such as `byteplus`, `cloudflare-ai-gateway`,
