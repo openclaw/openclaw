@@ -1,14 +1,25 @@
 export type { OpenClawConfig } from "../config/config.js";
-export type { InspectedSlackAccount } from "../slack/account-inspect.js";
-export type { ResolvedSlackAccount } from "../slack/accounts.js";
-export * from "./channel-plugin-common.js";
+export type { SlackAccountConfig } from "../config/types.slack.js";
+export type {
+  ChannelMessageActionContext,
+  ChannelPlugin,
+  OpenClawPluginApi,
+  PluginRuntime,
+} from "./channel-plugin-common.js";
 export {
-  listSlackAccountIds,
-  resolveDefaultSlackAccountId,
-  resolveSlackAccount,
-  resolveSlackReplyToMode,
-} from "../slack/accounts.js";
-export { inspectSlackAccount } from "../slack/account-inspect.js";
+  DEFAULT_ACCOUNT_ID,
+  PAIRING_APPROVED_MESSAGE,
+  applyAccountNameToChannelSection,
+  buildChannelConfigSchema,
+  deleteAccountFromConfigSection,
+  emptyPluginConfigSchema,
+  formatPairingApproveHint,
+  getChatChannelMeta,
+  migrateBaseNameToDefaultAccount,
+  normalizeAccountId,
+  setAccountEnabledInConfigSection,
+} from "./channel-plugin-common.js";
+
 export {
   projectCredentialSnapshotFields,
   resolveConfiguredFromCredentialStatuses,
@@ -22,10 +33,6 @@ export {
   looksLikeSlackTargetId,
   normalizeSlackMessagingTarget,
 } from "../channels/plugins/normalize/slack.js";
-export { extractSlackToolSend, listSlackMessageActions } from "../slack/message-actions.js";
-export { buildSlackThreadingToolContext } from "../slack/threading-tool-context.js";
-export { buildComputedAccountStatusSnapshot } from "./status-helpers.js";
-
 export {
   resolveDefaultGroupPolicy,
   resolveOpenProviderRuntimeGroupPolicy,
@@ -34,7 +41,5 @@ export {
   resolveSlackGroupRequireMention,
   resolveSlackGroupToolPolicy,
 } from "../channels/plugins/group-mentions.js";
-export { slackOnboardingAdapter } from "../channels/plugins/onboarding/slack.js";
 export { SlackConfigSchema } from "../config/zod-schema.providers-core.js";
-
-export { handleSlackMessageAction } from "./slack-message-actions.js";
+export { buildComputedAccountStatusSnapshot } from "./status-helpers.js";

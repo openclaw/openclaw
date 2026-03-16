@@ -2,17 +2,17 @@ import type { TranslationMap } from "../lib/types.ts";
 
 export const zh_TW: TranslationMap = {
   common: {
-    version: "版本",
     health: "健康狀況",
     ok: "正常",
+    online: "在線",
     offline: "離線",
     connect: "連接",
     refresh: "刷新",
     enabled: "已啟用",
     disabled: "已禁用",
     na: "不適用",
+    version: "版本",
     docs: "文檔",
-    theme: "主題",
     resources: "資源",
     search: "搜尋",
   },
@@ -145,10 +145,6 @@ export const zh_TW: TranslationMap = {
       automation: "自動化",
       refreshAll: "全部刷新",
       terminal: "終端",
-    },
-    streamMode: {
-      active: "串流模式 — 數據已隱藏",
-      disable: "禁用",
     },
     palette: {
       placeholder: "輸入指令…",

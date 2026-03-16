@@ -7,9 +7,3 @@ export function parseLineWebhookBody(rawBody: string): WebhookRequestBody | null
     return null;
   }
 }
-
-export function isLineWebhookVerificationRequest(
-  body: WebhookRequestBody | null | undefined,
-): boolean {
-  return !!body && Array.isArray(body.events) && body.events.length === 0;
-}

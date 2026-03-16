@@ -80,6 +80,7 @@ import {
   type MattermostWebSocketFactory,
 } from "./monitor-websocket.js";
 import { runWithReconnect } from "./reconnect.js";
+import { deliverMattermostReplyPayload } from "./reply-delivery.js";
 import { sendMessageMattermost } from "./send.js";
 import {
   DEFAULT_COMMAND_SPECS,
@@ -566,6 +567,45 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
       trustedProxies: cfg.gateway?.trustedProxies,
       allowRealIpFallback: cfg.gateway?.allowRealIpFallback === true,
       handleInteraction: handleModelPickerInteraction,
+      authorizeButtonClick: async ({ payload, post }) => {
+        const channelInfo = await resolveChannelInfo(payload.channel_id);
+        const isDirect = channelInfo?.type?.trim().toUpperCase() === "D";
+        const allowTextCommands = core.channel.commands.shouldHandleTextCommands({
+          cfg,
+          surface: "mattermost",
+        });
+        const decision = authorizeMattermostCommandInvocation({
+          account,
+          cfg,
+          senderId: payload.user_id,
+          senderName: payload.user_name ?? "",
+          channelId: payload.channel_id,
+          channelInfo,
+          storeAllowFrom: isDirect
+            ? await readStoreAllowFromForDmPolicy({
+                provider: "mattermost",
+                accountId: account.accountId,
+                dmPolicy: account.config.dmPolicy ?? "pairing",
+                readStore: pairing.readStoreForDmPolicy,
+              })
+            : undefined,
+          allowTextCommands,
+          hasControlCommand: false,
+        });
+        if (decision.ok) {
+          return { ok: true };
+        }
+        return {
+          ok: false,
+          response: {
+            update: {
+              message: post.message ?? "",
+              props: post.props as Record<string, unknown> | undefined,
+            },
+            ephemeral_text: `OpenClaw ignored this action for ${decision.roomLabel}.`,
+          },
+        };
+      },
       resolveSessionKey: async ({ channelId, userId, post }) => {
         const channelInfo = await resolveChannelInfo(channelId);
         const kind = mapMattermostChannelTypeToChatType(channelInfo?.type);
@@ -682,44 +722,21 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
             ...prefixOptions,
             humanDelay: core.channel.reply.resolveHumanDelayConfig(cfg, route.agentId),
             deliver: async (payload: ReplyPayload) => {
-              const mediaUrls = payload.mediaUrls ?? (payload.mediaUrl ? [payload.mediaUrl] : []);
-              const text = core.channel.text.convertMarkdownTables(payload.text ?? "", tableMode);
-              if (mediaUrls.length === 0) {
-                const chunkMode = core.channel.text.resolveChunkMode(
-                  cfg,
-                  "mattermost",
-                  account.accountId,
-                );
-                const chunks = core.channel.text.chunkMarkdownTextWithMode(
-                  text,
-                  textLimit,
-                  chunkMode,
-                );
-                for (const chunk of chunks.length > 0 ? chunks : [text]) {
-                  if (!chunk) continue;
-                  await sendMessageMattermost(to, chunk, {
-                    accountId: account.accountId,
-                    replyToId: resolveMattermostReplyRootId({
-                      threadRootId: threadContext.effectiveReplyToId,
-                      replyToId: payload.replyToId,
-                    }),
-                  });
-                }
-              } else {
-                let first = true;
-                for (const mediaUrl of mediaUrls) {
-                  const caption = first ? text : "";
-                  first = false;
-                  await sendMessageMattermost(to, caption, {
-                    accountId: account.accountId,
-                    mediaUrl,
-                    replyToId: resolveMattermostReplyRootId({
-                      threadRootId: threadContext.effectiveReplyToId,
-                      replyToId: payload.replyToId,
-                    }),
-                  });
-                }
-              }
+              await deliverMattermostReplyPayload({
+                core,
+                cfg,
+                payload,
+                to,
+                accountId: account.accountId,
+                agentId: route.agentId,
+                replyToId: resolveMattermostReplyRootId({
+                  threadRootId: threadContext.effectiveReplyToId,
+                  replyToId: payload.replyToId,
+                }),
+                textLimit,
+                tableMode,
+                sendMessage: sendMessageMattermost,
+              });
               runtime.log?.(`delivered button-click reply to ${to}`);
             },
             onError: (err, info) => {
@@ -1000,53 +1017,34 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
         ...prefixOptions,
         // Picker-triggered confirmations should stay immediate.
         deliver: async (payload: ReplyPayload) => {
-          const mediaUrls = payload.mediaUrls ?? (payload.mediaUrl ? [payload.mediaUrl] : []);
-          const text = core.channel.text
-            .convertMarkdownTables(payload.text ?? "", tableMode)
-            .trim();
+          const trimmedPayload = {
+            ...payload,
+            text: core.channel.text.convertMarkdownTables(payload.text ?? "", tableMode).trim(),
+          };
 
           if (!shouldDeliverReplies) {
-            if (text) {
-              capturedTexts.push(text);
+            if (trimmedPayload.text) {
+              capturedTexts.push(trimmedPayload.text);
             }
             return;
           }
 
-          if (mediaUrls.length === 0) {
-            const chunkMode = core.channel.text.resolveChunkMode(
-              cfg,
-              "mattermost",
-              account.accountId,
-            );
-            const chunks = core.channel.text.chunkMarkdownTextWithMode(text, textLimit, chunkMode);
-            for (const chunk of chunks.length > 0 ? chunks : [text]) {
-              if (!chunk) {
-                continue;
-              }
-              await sendMessageMattermost(to, chunk, {
-                accountId: account.accountId,
-                replyToId: resolveMattermostReplyRootId({
-                  threadRootId: params.effectiveReplyToId,
-                  replyToId: payload.replyToId,
-                }),
-              });
-            }
-            return;
-          }
-
-          let first = true;
-          for (const mediaUrl of mediaUrls) {
-            const caption = first ? text : "";
-            first = false;
-            await sendMessageMattermost(to, caption, {
-              accountId: account.accountId,
-              mediaUrl,
-              replyToId: resolveMattermostReplyRootId({
-                threadRootId: params.effectiveReplyToId,
-                replyToId: payload.replyToId,
-              }),
-            });
-          }
+          await deliverMattermostReplyPayload({
+            core,
+            cfg,
+            payload: trimmedPayload,
+            to,
+            accountId: account.accountId,
+            agentId: params.route.agentId,
+            replyToId: resolveMattermostReplyRootId({
+              threadRootId: params.effectiveReplyToId,
+              replyToId: trimmedPayload.replyToId,
+            }),
+            textLimit,
+            // The picker path already converts and trims text before capture/delivery.
+            tableMode: "off",
+            sendMessage: sendMessageMattermost,
+          });
         },
         onError: (err, info) => {
           runtime.error?.(`mattermost model picker ${info.kind} reply failed: ${String(err)}`);
@@ -1743,42 +1741,21 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
         humanDelay: core.channel.reply.resolveHumanDelayConfig(cfg, route.agentId),
         typingCallbacks,
         deliver: async (payload: ReplyPayload) => {
-          const mediaUrls = payload.mediaUrls ?? (payload.mediaUrl ? [payload.mediaUrl] : []);
-          const text = core.channel.text.convertMarkdownTables(payload.text ?? "", tableMode);
-          if (mediaUrls.length === 0) {
-            const chunkMode = core.channel.text.resolveChunkMode(
-              cfg,
-              "mattermost",
-              account.accountId,
-            );
-            const chunks = core.channel.text.chunkMarkdownTextWithMode(text, textLimit, chunkMode);
-            for (const chunk of chunks.length > 0 ? chunks : [text]) {
-              if (!chunk) {
-                continue;
-              }
-              await sendMessageMattermost(to, chunk, {
-                accountId: account.accountId,
-                replyToId: resolveMattermostReplyRootId({
-                  threadRootId: effectiveReplyToId,
-                  replyToId: payload.replyToId,
-                }),
-              });
-            }
-          } else {
-            let first = true;
-            for (const mediaUrl of mediaUrls) {
-              const caption = first ? text : "";
-              first = false;
-              await sendMessageMattermost(to, caption, {
-                accountId: account.accountId,
-                mediaUrl,
-                replyToId: resolveMattermostReplyRootId({
-                  threadRootId: effectiveReplyToId,
-                  replyToId: payload.replyToId,
-                }),
-              });
-            }
-          }
+          await deliverMattermostReplyPayload({
+            core,
+            cfg,
+            payload,
+            to,
+            accountId: account.accountId,
+            agentId: route.agentId,
+            replyToId: resolveMattermostReplyRootId({
+              threadRootId: effectiveReplyToId,
+              replyToId: payload.replyToId,
+            }),
+            textLimit,
+            tableMode,
+            sendMessage: sendMessageMattermost,
+          });
           runtime.log?.(`delivered reply to ${to}`);
         },
         onError: (err, info) => {
