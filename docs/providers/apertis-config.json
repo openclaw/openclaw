@@ -1,0 +1,185 @@
+{
+  "models": {
+    "providers": {
+      "apertis": {
+        "type": "openai-compatible",
+        "baseUrl": "https://api.apertis.ai/v1",
+        "apiKey": "${APERTIS_API_KEY}",
+        "api": "openai-completions",
+        "auth": {
+          "type": "bearer",
+          "headerName": "Authorization",
+          "tokenPrefix": "Bearer"
+        },
+        "requestDefaults": {
+          "temperature": 0.7,
+          "top_p": 1.0,
+          "frequency_penalty": 0,
+          "presence_penalty": 0
+        },
+        "models": [
+          {
+            "id": "gpt-5.2",
+            "name": "GPT-5.2 (Reasoning)",
+            "provider": "apertis",
+            "enabled": true,
+            "capabilities": {
+              "reasoning": true,
+              "vision": true,
+              "streaming": true,
+              "thinking": true,
+              "functionCalling": false,
+              "toolUse": false
+            },
+            "limits": {
+              "contextWindow": 200000,
+              "maxTokens": 16000,
+              "maxThinkingTokens": 32000,
+              "costPer1kInputTokens": 0.003,
+              "costPer1kOutputTokens": 0.012,
+              "costPer1kThinkingTokens": 0.0006
+            },
+            "metadata": {
+              "releaseDate": "2026-01-15",
+              "tier": "premium",
+              "recommended": true,
+              "description": "Latest reasoning model with extended thinking capability",
+              "tags": ["reasoning", "vision", "latest"]
+            }
+          },
+          {
+            "id": "gpt-4.1",
+            "name": "GPT-4.1 (Vision)",
+            "provider": "apertis",
+            "enabled": true,
+            "capabilities": {
+              "reasoning": false,
+              "vision": true,
+              "streaming": true,
+              "thinking": false,
+              "functionCalling": false,
+              "toolUse": false
+            },
+            "limits": {
+              "contextWindow": 128000,
+              "maxTokens": 8192,
+              "costPer1kInputTokens": 0.0015,
+              "costPer1kOutputTokens": 0.006
+            },
+            "metadata": {
+              "releaseDate": "2025-11-20",
+              "tier": "standard",
+              "recommended": false,
+              "description": "Balanced model with vision capabilities",
+              "tags": ["vision", "balanced"]
+            }
+          },
+          {
+            "id": "gpt-4-turbo",
+            "name": "GPT-4 Turbo",
+            "provider": "apertis",
+            "enabled": true,
+            "capabilities": {
+              "reasoning": false,
+              "vision": true,
+              "streaming": true,
+              "thinking": false,
+              "functionCalling": false,
+              "toolUse": false
+            },
+            "limits": {
+              "contextWindow": 128000,
+              "maxTokens": 4096,
+              "costPer1kInputTokens": 0.001,
+              "costPer1kOutputTokens": 0.003
+            },
+            "metadata": {
+              "releaseDate": "2025-09-10",
+              "tier": "standard",
+              "recommended": false,
+              "description": "High-performance model with vision support",
+              "tags": ["vision", "fast"]
+            }
+          },
+          {
+            "id": "gpt-3.5-turbo",
+            "name": "GPT-3.5 Turbo (Fast)",
+            "provider": "apertis",
+            "enabled": true,
+            "capabilities": {
+              "reasoning": false,
+              "vision": false,
+              "streaming": true,
+              "thinking": false,
+              "functionCalling": false,
+              "toolUse": false
+            },
+            "limits": {
+              "contextWindow": 16000,
+              "maxTokens": 4096,
+              "costPer1kInputTokens": 0.0005,
+              "costPer1kOutputTokens": 0.0015
+            },
+            "metadata": {
+              "releaseDate": "2024-06-01",
+              "tier": "budget",
+              "recommended": false,
+              "description": "Fast and cost-effective model for simple tasks",
+              "tags": ["fast", "budget"]
+            }
+          }
+        ],
+        "requestWrappers": {
+          "thinking": {
+            "enabled": true,
+            "supportedModels": ["gpt-5.2"],
+            "defaultBudget": 5000,
+            "maxBudget": 32000
+          },
+          "vision": {
+            "enabled": true,
+            "supportedModels": ["gpt-5.2", "gpt-4.1", "gpt-4-turbo"],
+            "detailLevels": ["low", "high", "auto"]
+          },
+          "streaming": {
+            "enabled": true,
+            "supportedModels": ["gpt-5.2", "gpt-4.1", "gpt-4-turbo", "gpt-3.5-turbo"],
+            "chunkSize": 1024
+          }
+        },
+        "errorHandling": {
+          "retryPolicy": {
+            "maxRetries": 3,
+            "backoffMultiplier": 2,
+            "initialDelayMs": 1000,
+            "maxDelayMs": 30000
+          },
+          "rateLimitHandling": {
+            "strategy": "exponential-backoff",
+            "respectRetryAfter": true
+          },
+          "fallback": {
+            "enabled": true,
+            "providers": ["openai", "anthropic"],
+            "strategy": "round-robin"
+          }
+        },
+        "monitoring": {
+          "enabled": true,
+          "trackingFields": [
+            "model",
+            "tokens_used",
+            "latency_ms",
+            "error_code",
+            "thinking_tokens"
+          ],
+          "alertThresholds": {
+            "errorRatePercent": 5,
+            "latencyP99Ms": 2000,
+            "rateLimitApproaching": 80
+          }
+        }
+      }
+    }
+  }
+}
