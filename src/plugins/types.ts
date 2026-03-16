@@ -10,6 +10,7 @@ import type {
   AuthProfileCredential,
   OAuthCredential,
 } from "../agents/auth-profiles/types.js";
+import type { ModelCatalogEntry } from "../agents/model-catalog.js";
 import type { ProviderCapabilities } from "../agents/provider-capabilities.js";
 import type { AnyAgentTool } from "../agents/tools/common.js";
 import type { ThinkLevel } from "../auto-reply/thinking.js";
@@ -391,6 +392,59 @@ export type ProviderCacheTtlEligibilityContext = {
 };
 
 /**
+ * Provider-owned missing-auth message override.
+ *
+ * Runs only after OpenClaw exhausts normal env/profile/config auth resolution
+ * for the requested provider. Return a custom message to replace the generic
+ * "No API key found" error.
+ */
+export type ProviderBuildMissingAuthMessageContext = {
+  config?: OpenClawConfig;
+  agentDir?: string;
+  workspaceDir?: string;
+  env: NodeJS.ProcessEnv;
+  provider: string;
+  listProfileIds: (providerId: string) => string[];
+};
+
+/**
+ * Built-in model suppression hook.
+ *
+ * Use this when a provider/plugin needs to hide stale upstream catalog rows or
+ * replace them with a vendor-specific hint. This hook is consulted by model
+ * resolution, model listing, and catalog loading.
+ */
+export type ProviderBuiltInModelSuppressionContext = {
+  config?: OpenClawConfig;
+  agentDir?: string;
+  workspaceDir?: string;
+  env: NodeJS.ProcessEnv;
+  provider: string;
+  modelId: string;
+};
+
+export type ProviderBuiltInModelSuppressionResult = {
+  suppress: boolean;
+  errorMessage?: string;
+};
+
+/**
+ * Final catalog augmentation hook.
+ *
+ * Runs after OpenClaw loads the discovered model catalog and merges configured
+ * opt-in providers. Use this for forward-compat rows or vendor-owned synthetic
+ * entries that should appear in `models list` and model pickers even when the
+ * upstream registry has not caught up yet.
+ */
+export type ProviderAugmentModelCatalogContext = {
+  config?: OpenClawConfig;
+  agentDir?: string;
+  workspaceDir?: string;
+  env: NodeJS.ProcessEnv;
+  entries: ModelCatalogEntry[];
+};
+
+/**
  * @deprecated Use ProviderCatalogOrder.
  */
 export type ProviderDiscoveryOrder = ProviderCatalogOrder;
@@ -560,6 +614,40 @@ export type ProviderPlugin = {
    * only a subset of upstream models.
    */
   isCacheTtlEligible?: (ctx: ProviderCacheTtlEligibilityContext) => boolean | undefined;
+  /**
+   * Provider-owned missing-auth message override.
+   *
+   * Return a custom message when the provider wants a more specific recovery
+   * hint than OpenClaw's generic auth-store guidance.
+   */
+  buildMissingAuthMessage?: (
+    ctx: ProviderBuildMissingAuthMessageContext,
+  ) => string | null | undefined;
+  /**
+   * Provider-owned built-in model suppression.
+   *
+   * Return `{ suppress: true }` to hide a stale upstream row. Include
+   * `errorMessage` when OpenClaw should surface a provider-specific hint for
+   * direct model resolution failures.
+   */
+  suppressBuiltInModel?: (
+    ctx: ProviderBuiltInModelSuppressionContext,
+  ) => ProviderBuiltInModelSuppressionResult | null | undefined;
+  /**
+   * Provider-owned final catalog augmentation.
+   *
+   * Return extra rows to append to the final catalog after discovery/config
+   * merging. OpenClaw deduplicates by `provider/id`, so plugins only need to
+   * describe the desired supplemental rows.
+   */
+  augmentModelCatalog?: (
+    ctx: ProviderAugmentModelCatalogContext,
+  ) =>
+    | Array<ModelCatalogEntry>
+    | ReadonlyArray<ModelCatalogEntry>
+    | Promise<Array<ModelCatalogEntry> | ReadonlyArray<ModelCatalogEntry> | null | undefined>
+    | null
+    | undefined;
   wizard?: ProviderPluginWizard;
   formatApiKey?: (cred: AuthProfileCredential) => string;
   refreshOAuth?: (cred: OAuthCredential) => Promise<OAuthCredential>;

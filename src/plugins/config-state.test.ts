@@ -77,6 +77,22 @@ describe("normalizePluginsConfig", () => {
     });
     expect(result.entries["voice-call"]?.hooks).toBeUndefined();
   });
+
+  it("normalizes legacy plugin ids to their merged bundled plugin id", () => {
+    const result = normalizePluginsConfig({
+      allow: ["openai-codex"],
+      deny: ["openai-codex"],
+      entries: {
+        "openai-codex": {
+          enabled: true,
+        },
+      },
+    });
+
+    expect(result.allow).toEqual(["openai"]);
+    expect(result.deny).toEqual(["openai"]);
+    expect(result.entries.openai?.enabled).toBe(true);
+  });
 });
 
 describe("resolveEffectiveEnableState", () => {

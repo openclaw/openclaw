@@ -4,13 +4,15 @@ import {
   createProviderUsageFetch,
   makeResponse,
 } from "../../src/test-utils/provider-usage-fetch.js";
-import openAICodexPlugin from "./index.js";
+import openAIPlugin from "./index.js";
 
-function registerProvider(): ProviderPlugin {
+function registerCodexProvider(): ProviderPlugin {
   let provider: ProviderPlugin | undefined;
-  openAICodexPlugin.register({
+  openAIPlugin.register({
     registerProvider(nextProvider: ProviderPlugin) {
-      provider = nextProvider;
+      if (nextProvider.id === "openai-codex") {
+        provider = nextProvider;
+      }
     },
   } as never);
   if (!provider) {
@@ -19,9 +21,9 @@ function registerProvider(): ProviderPlugin {
   return provider;
 }
 
-describe("openai-codex plugin", () => {
+describe("openai codex provider", () => {
   it("owns forward-compat codex models", () => {
-    const provider = registerProvider();
+    const provider = registerCodexProvider();
     const model = provider.resolveDynamicModel?.({
       provider: "openai-codex",
       modelId: "gpt-5.4",
@@ -54,7 +56,7 @@ describe("openai-codex plugin", () => {
   });
 
   it("owns codex transport defaults", () => {
-    const provider = registerProvider();
+    const provider = registerCodexProvider();
     expect(
       provider.prepareExtraParams?.({
         provider: "openai-codex",
@@ -68,7 +70,7 @@ describe("openai-codex plugin", () => {
   });
 
   it("owns usage snapshot fetching", async () => {
-    const provider = registerProvider();
+    const provider = registerCodexProvider();
     const mockFetch = createProviderUsageFetch(async (url) => {
       if (url.includes("chatgpt.com/backend-api/wham/usage")) {
         return makeResponse(200, {
