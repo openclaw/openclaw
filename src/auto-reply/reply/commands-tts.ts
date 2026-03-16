@@ -103,7 +103,7 @@ export const handleTtsCommands: CommandHandler = async (params, allowTextCommand
 
   if (action === "on") {
     setTtsEnabled(prefsPath, true);
-    return { shouldContinue: false, reply: { text: "🔊 TTS enabled." } };
+    return { shouldContinue: false, reply: { text: "🔊 TTS enabled (auto mode: always)." } };
   }
 
   if (action === "off") {
