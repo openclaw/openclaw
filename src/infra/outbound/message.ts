@@ -191,13 +191,20 @@ export async function sendMessage(params: MessageSendParams): Promise<MessageSen
   const channel = await resolveRequiredChannel({ cfg, channel: params.channel });
   const plugin = resolveRequiredPlugin(channel, cfg);
   const deliveryMode = plugin.outbound?.deliveryMode ?? "direct";
-  const normalizedPayloads = normalizeReplyPayloadsForDelivery([
+  const normalizedPayloads = normalizeReplyPayloadsForDelivery(
+    [
+      {
+        text: params.content,
+        mediaUrl: params.mediaUrl,
+        mediaUrls: params.mediaUrls,
+      },
+    ],
     {
-      text: params.content,
-      mediaUrl: params.mediaUrl,
-      mediaUrls: params.mediaUrls,
+      cfg,
+      channel,
+      accountId: params.accountId,
     },
-  ]);
+  );
   const mirrorText = normalizedPayloads
     .map((payload) => payload.text)
     .filter(Boolean)
@@ -271,14 +278,21 @@ export async function sendMessage(params: MessageSendParams): Promise<MessageSen
     };
   }
 
+  const gatewayPayload = normalizedPayloads[0] ?? {
+    text: "",
+    mediaUrl: params.mediaUrl,
+    mediaUrls: params.mediaUrls,
+  };
   const result = await callMessageGateway<{ messageId: string }>({
     gateway: params.gateway,
     method: "send",
     params: {
       to: params.to,
-      message: params.content,
-      mediaUrl: params.mediaUrl,
-      mediaUrls: mirrorMediaUrls.length ? mirrorMediaUrls : params.mediaUrls,
+      message: gatewayPayload.text,
+      mediaUrl: gatewayPayload.mediaUrl,
+      mediaUrls:
+        gatewayPayload.mediaUrls ??
+        (gatewayPayload.mediaUrl ? [gatewayPayload.mediaUrl] : undefined),
       gifPlayback: params.gifPlayback,
       accountId: params.accountId,
       agentId: params.agentId,

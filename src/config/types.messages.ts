@@ -83,6 +83,23 @@ export type StatusReactionsConfig = {
   timing?: StatusReactionsTimingConfig;
 };
 
+export type OutboundEmDashMode = "preserve" | "comma";
+
+export type OutboundTextConfig = {
+  /**
+   * Rewrites outbound Unicode em dashes (`—`) before delivery.
+   *
+   * - `preserve`: leave em dashes unchanged (default)
+   * - `comma`: rewrite em dashes to commas with surrounding spacing normalized
+   */
+  emDash?: OutboundEmDashMode;
+};
+
+export type MessagesOutboundConfig = {
+  /** Shared outbound text normalization settings. */
+  text?: OutboundTextConfig;
+};
+
 export type MessagesConfig = {
   /** @deprecated Use `whatsapp.messagePrefix` (WhatsApp-only inbound prefix). */
   messagePrefix?: string;
@@ -120,6 +137,8 @@ export type MessagesConfig = {
   statusReactions?: StatusReactionsConfig;
   /** When true, suppress ⚠️ tool-error warnings from being shown to the user. Default: false. */
   suppressToolErrors?: boolean;
+  /** Shared outbound text formatting and normalization settings. */
+  outbound?: MessagesOutboundConfig;
   /** Text-to-speech settings for outbound replies. */
   tts?: TtsConfig;
 };

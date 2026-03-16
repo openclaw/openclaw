@@ -39,7 +39,7 @@ import { ackDelivery, enqueueDelivery, failDelivery } from "./delivery-queue.js"
 import type { OutboundIdentity } from "./identity.js";
 import type { DeliveryMirror } from "./mirror.js";
 import type { NormalizedOutboundPayload } from "./payloads.js";
-import { normalizeReplyPayloadsForDelivery } from "./payloads.js";
+import { applyOutboundTextTransforms, normalizeReplyPayloadsForDelivery } from "./payloads.js";
 import { isPlainTextSurface, sanitizeForPlainText } from "./sanitize-text.js";
 import { resolveOutboundSendDep, type OutboundSendDeps } from "./send-deps.js";
 import type { OutboundSessionContext } from "./session-context.js";
@@ -281,12 +281,16 @@ function normalizePayloadForChannelDelivery(
 function normalizePayloadsForChannelDelivery(
   payloads: ReplyPayload[],
   channel: Exclude<OutboundChannel, "none">,
-  _cfg: OpenClawConfig,
+  cfg: OpenClawConfig,
   _to: string,
-  _accountId?: string,
+  accountId?: string,
 ): ReplyPayload[] {
   const normalizedPayloads: ReplyPayload[] = [];
-  for (const payload of normalizeReplyPayloadsForDelivery(payloads)) {
+  for (const payload of normalizeReplyPayloadsForDelivery(payloads, {
+    cfg,
+    channel,
+    accountId,
+  })) {
     let sanitizedPayload = payload;
     // Strip HTML tags for plain-text surfaces (WhatsApp, Signal, etc.)
     // Models occasionally produce <br>, <b>, etc. that render as literal text.
@@ -380,6 +384,7 @@ function createMessageSentEmitter(params: {
 async function applyMessageSendingHook(params: {
   hookRunner: ReturnType<typeof getGlobalHookRunner>;
   enabled: boolean;
+  cfg: OpenClawConfig;
   payload: ReplyPayload;
   payloadSummary: NormalizedOutboundPayload;
   to: string;
@@ -427,16 +432,21 @@ async function applyMessageSendingHook(params: {
         payloadSummary: params.payloadSummary,
       };
     }
+    const transformedContent = applyOutboundTextTransforms(sendingResult.content, {
+      cfg: params.cfg,
+      channel: params.channel,
+      accountId: params.accountId,
+    });
     const payload = {
       ...params.payload,
-      text: sendingResult.content,
+      text: transformedContent,
     };
     return {
       cancelled: false,
       payload,
       payloadSummary: {
         ...params.payloadSummary,
-        text: sendingResult.content,
+        text: transformedContent,
       },
     };
   } catch {
@@ -693,6 +703,7 @@ async function deliverOutboundPayloadsCore(
       const hookResult = await applyMessageSendingHook({
         hookRunner,
         enabled: hasMessageSendingHooks,
+        cfg,
         payload,
         payloadSummary,
         to,

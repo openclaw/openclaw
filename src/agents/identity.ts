@@ -1,4 +1,9 @@
-import type { OpenClawConfig, HumanDelayConfig, IdentityConfig } from "../config/config.js";
+import type {
+  OpenClawConfig,
+  HumanDelayConfig,
+  IdentityConfig,
+  OutboundEmDashMode,
+} from "../config/config.js";
 import { resolveAgentConfig } from "./agent-scope.js";
 
 const DEFAULT_ACK_REACTION = "👀";
@@ -130,6 +135,37 @@ export function resolveResponsePrefix(
     return configured;
   }
   return undefined;
+}
+
+export function resolveOutboundEmDashMode(
+  cfg: OpenClawConfig,
+  opts?: { channel?: string; accountId?: string },
+): OutboundEmDashMode {
+  // L1: Channel account level
+  if (opts?.channel && opts?.accountId) {
+    const channelCfg = getChannelConfig(cfg, opts.channel);
+    const accounts = channelCfg?.accounts as Record<string, Record<string, unknown>> | undefined;
+    const accountMode = accounts?.[opts.accountId]?.outbound as
+      | { text?: { emDash?: OutboundEmDashMode } }
+      | undefined;
+    if (accountMode?.text?.emDash !== undefined) {
+      return accountMode.text.emDash;
+    }
+  }
+
+  // L2: Channel level
+  if (opts?.channel) {
+    const channelCfg = getChannelConfig(cfg, opts.channel);
+    const channelMode = channelCfg?.outbound as
+      | { text?: { emDash?: OutboundEmDashMode } }
+      | undefined;
+    if (channelMode?.text?.emDash !== undefined) {
+      return channelMode.text.emDash;
+    }
+  }
+
+  // L3: Global messages level
+  return cfg.messages?.outbound?.text?.emDash ?? "preserve";
 }
 
 export function resolveEffectiveMessagesConfig(

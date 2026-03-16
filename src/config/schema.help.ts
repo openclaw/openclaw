@@ -1373,6 +1373,12 @@ export const FIELD_HELP: Record<string, string> = {
     "Per-channel inbound debounce overrides keyed by provider id in milliseconds. Use this where some providers send message fragments more aggressively than others.",
   "messages.removeAckAfterReply":
     "Removes the acknowledgment reaction after final reply delivery when enabled. Keep enabled for cleaner UX in channels where persistent ack reactions create clutter.",
+  "messages.outbound":
+    "Shared outbound formatting and normalization controls applied before messages are sent to channels. Use this section for global reply-text rewrites that should stay consistent across send paths.",
+  "messages.outbound.text":
+    "Outbound plain-text normalization settings applied to assistant reply text before channel delivery. Keep these conservative so formatting changes stay predictable across providers.",
+  "messages.outbound.text.emDash":
+    'Controls how outbound Unicode em dashes (`—`) are handled: "preserve" keeps existing behavior, while "comma" rewrites em dashes to commas with normalized surrounding spacing.',
   "messages.tts":
     "Text-to-speech policy for reading agent replies aloud on supported voice or audio surfaces. Keep disabled unless voice playback is part of your operator/user workflow.",
   channels:
