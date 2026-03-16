@@ -240,7 +240,7 @@ run_probe() {
     local variables_text="${3:?variables required}"
     local raw stderr_file err
     stderr_file="$(mktemp)"
-    trap "rm -f -- '$stderr_file'" EXIT
+    trap "rm -f -- '$stderr_file'" EXIT INT TERM
     if raw="$(graphql_request "$query_text" "$variables_text" 2>"$stderr_file")"; then
       response_summary "$name" "$raw"
       exit 0
@@ -268,27 +268,29 @@ list_variables() {
 }
 
 run_cast_probe() {
-  local selector="${1:?selector required}"
-  local value stderr_file err status
-  stderr_file="$(mktemp)"
-  if value="$(cast call --rpc-url "$RPC_URL" -- "$ADDRESS" "$selector" 2>"$stderr_file")"; then
-    err=""
-    status="ok"
-  else
-    value=""
-    err="$(cat "$stderr_file")"
-    status="failed"
-  fi
-  rm -f "$stderr_file"
-  jq -nc \
-    --arg status "$status" \
-    --arg value "$value" \
-    --arg err "$err" \
-    '{
-      status: $status,
-      value: (if $value == "" then null else $value end),
-      error: (if $err == "" then null else $err end)
-    }'
+  (
+    local selector="${1:?selector required}"
+    local value stderr_file err status
+    stderr_file="$(mktemp)"
+    trap "rm -f -- '$stderr_file'" EXIT INT TERM
+    if value="$(cast call --rpc-url "$RPC_URL" -- "$ADDRESS" "$selector" 2>"$stderr_file")"; then
+      err=""
+      status="ok"
+    else
+      value=""
+      err="$(cat "$stderr_file")"
+      status="failed"
+    fi
+    jq -nc \
+      --arg status "$status" \
+      --arg value "$value" \
+      --arg err "$err" \
+      '{
+        status: $status,
+        value: (if $value == "" then null else $value end),
+        error: (if $err == "" then null else $err end)
+      }'
+  )
 }
 
 sanitize_graphql_probe() {
