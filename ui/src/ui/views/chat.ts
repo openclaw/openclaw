@@ -821,9 +821,9 @@ const NEW_THREAD_DIALOG_LABEL_INPUT_ID = "chat-thread-label-input";
 
 function focusNewThreadDialogPrimaryField() {
   requestAnimationFrame(() => {
-    const input = document.getElementById(NEW_THREAD_DIALOG_LABEL_INPUT_ID) as
-      | HTMLInputElement
-      | null;
+    const input = document.getElementById(
+      NEW_THREAD_DIALOG_LABEL_INPUT_ID,
+    ) as HTMLInputElement | null;
     input?.focus();
     input?.select();
   });
@@ -943,13 +943,15 @@ function renderNewThreadDialog(
                 requestUpdate();
               }}
             >
-              ${agents.length > 0
-                ? agents.map(
-                    (agent) => html`
+              ${
+                agents.length > 0
+                  ? agents.map(
+                      (agent) => html`
                       <option value=${agent.id}>${agent.identity?.name || agent.name || agent.id}</option>
                     `,
-                  )
-                : html`<option value=${props.currentAgentId}>${props.currentAgentId}</option>`}
+                    )
+                  : html`<option value=${props.currentAgentId}>${props.currentAgentId}</option>`
+              }
             </select>
           </label>
 
@@ -979,9 +981,11 @@ function renderNewThreadDialog(
             ></textarea>
           </label>
 
-          ${vs.newThreadError
-            ? html`<div class="chat-thread-modal__error">${vs.newThreadError}</div>`
-            : nothing}
+          ${
+            vs.newThreadError
+              ? html`<div class="chat-thread-modal__error">${vs.newThreadError}</div>`
+              : nothing
+          }
 
           <div class="chat-thread-modal__actions">
             <button class="btn" type="button" @click=${() => closeNewThreadDialog(requestUpdate)}>

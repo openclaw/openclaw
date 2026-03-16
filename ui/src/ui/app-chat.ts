@@ -215,7 +215,8 @@ export async function handleCreateThread(
     try {
       const appeared = await waitForSessionToAppear(host.client, nextSessionKey);
       if (!appeared) {
-        host.lastError = "Thread created, but the session row did not appear in time to apply its label.";
+        host.lastError =
+          "Thread created, but the session row did not appear in time to apply its label.";
       } else {
         await host.client.request("sessions.patch", { key: nextSessionKey, label });
       }
