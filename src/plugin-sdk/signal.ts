@@ -3,10 +3,16 @@ export type { ResolvedSignalAccount } from "../../extensions/signal/src/accounts
 export type { SignalAccountConfig } from "../config/types.js";
 export * from "./channel-plugin-common.js";
 export {
+  listEnabledSignalAccounts,
   listSignalAccountIds,
   resolveDefaultSignalAccountId,
   resolveSignalAccount,
 } from "../../extensions/signal/src/accounts.js";
+export { resolveSignalReactionLevel } from "../../extensions/signal/src/reaction-level.js";
+export {
+  removeReactionSignal,
+  sendReactionSignal,
+} from "../../extensions/signal/src/send-reactions.js";
 export {
   looksLikeSignalTargetId,
   normalizeSignalMessagingTarget,

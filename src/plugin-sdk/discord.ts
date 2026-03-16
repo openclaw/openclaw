@@ -44,6 +44,11 @@ export {
   listThreadBindingsBySessionKey,
   unbindThreadBindingsBySessionKey,
 } from "../../extensions/discord/src/monitor/thread-bindings.js";
+export type {
+  ThreadBindingManager,
+  ThreadBindingRecord,
+  ThreadBindingTargetKind,
+} from "../../extensions/discord/src/monitor/thread-bindings.js";
 
 export {
   buildComputedAccountStatusSnapshot,

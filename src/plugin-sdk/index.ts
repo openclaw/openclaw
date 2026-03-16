@@ -62,16 +62,6 @@ export type {
 } from "../channels/plugins/types.js";
 export type { ChannelConfigSchema, ChannelPlugin } from "../channels/plugins/types.plugin.js";
 export type {
-  ThreadBindingManager,
-  ThreadBindingRecord,
-  ThreadBindingTargetKind,
-} from "../../extensions/discord/src/monitor/thread-bindings.js";
-export {
-  autoBindSpawnedDiscordSubagent,
-  listThreadBindingsBySessionKey,
-  unbindThreadBindingsBySessionKey,
-} from "../../extensions/discord/src/monitor/thread-bindings.js";
-export type {
   AcpRuntimeCapabilities,
   AcpRuntimeControl,
   AcpRuntimeDoctorReport,
@@ -673,108 +663,107 @@ export type { SkillCommandSpec } from "../agents/skills.js";
 
 // Channel: Discord
 export {
+  autoBindSpawnedDiscordSubagent,
+  collectDiscordAuditChannelIds,
+  collectDiscordStatusIssues,
+  discordSetupAdapter,
+  discordSetupWizard,
+  inspectDiscordAccount,
   listDiscordAccountIds,
-  resolveDefaultDiscordAccountId,
-  resolveDiscordAccount,
-  type ResolvedDiscordAccount,
-} from "../../extensions/discord/src/accounts.js";
-export { inspectDiscordAccount } from "../../extensions/discord/src/account-inspect.js";
-export type { InspectedDiscordAccount } from "../../extensions/discord/src/account-inspect.js";
-export { collectDiscordAuditChannelIds } from "../../extensions/discord/src/audit.js";
-export { discordSetupWizard } from "../../extensions/discord/src/setup-surface.js";
-export { discordSetupAdapter } from "../../extensions/discord/src/setup-core.js";
-export {
   looksLikeDiscordTargetId,
   normalizeDiscordMessagingTarget,
   normalizeDiscordOutboundTarget,
-} from "../channels/plugins/normalize/discord.js";
-export { collectDiscordStatusIssues } from "../channels/plugins/status-issues/discord.js";
+  resolveDefaultDiscordAccountId,
+  resolveDiscordAccount,
+  type InspectedDiscordAccount,
+  type ResolvedDiscordAccount,
+  type ThreadBindingManager,
+  type ThreadBindingRecord,
+  type ThreadBindingTargetKind,
+  listThreadBindingsBySessionKey,
+  unbindThreadBindingsBySessionKey,
+} from "./discord.js";
 
 // Channel: iMessage
 export {
+  createAllowedChatSenderMatcher,
+  imessageSetupAdapter,
+  imessageSetupWizard,
   listIMessageAccountIds,
-  resolveDefaultIMessageAccountId,
-  resolveIMessageAccount,
-  type ResolvedIMessageAccount,
-} from "../../extensions/imessage/src/accounts.js";
-export { imessageSetupWizard } from "../../extensions/imessage/src/setup-surface.js";
-export { imessageSetupAdapter } from "../../extensions/imessage/src/setup-core.js";
-export {
   looksLikeIMessageTargetId,
   normalizeIMessageMessagingTarget,
-} from "../channels/plugins/normalize/imessage.js";
-export {
-  createAllowedChatSenderMatcher,
   parseChatAllowTargetPrefixes,
   parseChatTargetPrefixesOrThrow,
   resolveServicePrefixedChatTarget,
   resolveServicePrefixedAllowTarget,
   resolveServicePrefixedOrChatAllowTarget,
   resolveServicePrefixedTarget,
-} from "../../extensions/imessage/src/target-parsing-helpers.js";
-export type {
-  ChatSenderAllowParams,
-  ParsedChatTarget,
-} from "../../extensions/imessage/src/target-parsing-helpers.js";
+  resolveDefaultIMessageAccountId,
+  resolveIMessageAccount,
+  type ChatSenderAllowParams,
+  type ParsedChatTarget,
+  type ResolvedIMessageAccount,
+} from "./imessage.js";
 
 // Channel: Slack
 export {
+  buildSlackThreadingToolContext,
+  extractSlackToolSend,
+  inspectSlackAccount,
   listEnabledSlackAccounts,
   listSlackAccountIds,
+  listSlackMessageActions,
+  looksLikeSlackTargetId,
+  normalizeSlackMessagingTarget,
   resolveDefaultSlackAccountId,
   resolveSlackAccount,
   resolveSlackReplyToMode,
+  slackSetupAdapter,
+  slackSetupWizard,
+  type InspectedSlackAccount,
   type ResolvedSlackAccount,
-} from "../../extensions/slack/src/accounts.js";
-export { inspectSlackAccount } from "../../extensions/slack/src/account-inspect.js";
-export type { InspectedSlackAccount } from "../../extensions/slack/src/account-inspect.js";
-export {
-  extractSlackToolSend,
-  listSlackMessageActions,
-} from "../../extensions/slack/src/message-actions.js";
-export { slackSetupAdapter } from "../../extensions/slack/src/setup-core.js";
-export { slackSetupWizard } from "../../extensions/slack/src/setup-surface.js";
-export {
-  looksLikeSlackTargetId,
-  normalizeSlackMessagingTarget,
-} from "../channels/plugins/normalize/slack.js";
-export { buildSlackThreadingToolContext } from "../../extensions/slack/src/threading-tool-context.js";
+} from "./slack.js";
 
 // Channel: Telegram
 export {
+  buildBrowseProvidersButton,
+  buildModelsKeyboard,
+  buildProviderKeyboard,
+  calculateTotalPages,
+  fetchTelegramChatId,
+  getModelsPageSize,
+  inspectTelegramAccount,
+  isNumericTelegramUserId,
+  isTelegramExecApprovalApprover,
+  isTelegramExecApprovalClientEnabled,
   listTelegramAccountIds,
-  resolveDefaultTelegramAccountId,
-  resolveTelegramAccount,
-  type ResolvedTelegramAccount,
-} from "../../extensions/telegram/src/accounts.js";
-export { inspectTelegramAccount } from "../../extensions/telegram/src/account-inspect.js";
-export type { InspectedTelegramAccount } from "../../extensions/telegram/src/account-inspect.js";
-export { telegramSetupWizard } from "../../extensions/telegram/src/setup-surface.js";
-export { telegramSetupAdapter } from "../../extensions/telegram/src/setup-core.js";
-export {
   looksLikeTelegramTargetId,
+  normalizeTelegramAllowFromEntry,
   normalizeTelegramMessagingTarget,
-} from "../channels/plugins/normalize/telegram.js";
-export { collectTelegramStatusIssues } from "../channels/plugins/status-issues/telegram.js";
-export {
   parseTelegramReplyToMessageId,
   parseTelegramThreadId,
-} from "../../extensions/telegram/src/outbound-params.js";
-export { type TelegramProbe } from "../../extensions/telegram/src/probe.js";
+  resolveDefaultTelegramAccountId,
+  resolveTelegramAccount,
+  telegramSetupAdapter,
+  telegramSetupWizard,
+  type ResolvedTelegramAccount,
+  type InspectedTelegramAccount,
+  type ProviderInfo,
+  type TelegramProbe,
+  collectTelegramStatusIssues,
+} from "./telegram.js";
 
 // Channel: Signal
 export {
   listSignalAccountIds,
-  resolveDefaultSignalAccountId,
-  resolveSignalAccount,
-  type ResolvedSignalAccount,
-} from "../../extensions/signal/src/accounts.js";
-export { signalSetupWizard } from "../../extensions/signal/src/setup-surface.js";
-export { signalSetupAdapter } from "../../extensions/signal/src/setup-core.js";
-export {
   looksLikeSignalTargetId,
   normalizeSignalMessagingTarget,
-} from "../channels/plugins/normalize/signal.js";
+  resolveDefaultSignalAccountId,
+  resolveSignalAccount,
+  signalSetupAdapter,
+  signalSetupWizard,
+  type ResolvedSignalAccount,
+} from "./signal.js";
 
 // Channel: WhatsApp — WhatsApp-specific exports moved to extensions/whatsapp/src/
 export { isWhatsAppGroupJid, normalizeWhatsAppTarget } from "../whatsapp/normalize.js";
@@ -786,12 +775,13 @@ export { collectBlueBubblesStatusIssues } from "../channels/plugins/status-issue
 // Channel: LINE
 export {
   listLineAccountIds,
+  lineSetupAdapter,
+  lineSetupWizard,
   normalizeAccountId as normalizeLineAccountId,
   resolveDefaultLineAccountId,
   resolveLineAccount,
-} from "../line/accounts.js";
-export { lineSetupAdapter, lineSetupWizard } from "../../extensions/line/src/setup-surface.js";
-export { LineConfigSchema } from "../line/config-schema.js";
+  LineConfigSchema,
+} from "./line.js";
 export type {
   LineConfig,
   LineAccountConfig,
@@ -815,7 +805,7 @@ export {
 export type { ProcessedLineMessage } from "../line/markdown-to-line.js";
 
 // Media utilities
-export { loadWebMedia, type WebMediaResult } from "../../extensions/whatsapp/src/media.js";
+export { loadWebMedia, type WebMediaResult } from "./web-media.js";
 
 // Context engine
 export type {

@@ -1,4 +1,4 @@
-import { parseSlackTarget } from "../../../../extensions/slack/src/targets.js";
+import { parseSlackTarget } from "../../../plugin-sdk/slack-targets.js";
 
 export function normalizeSlackMessagingTarget(raw: string): string | undefined {
   const target = parseSlackTarget(raw, { defaultKind: "channel" });
