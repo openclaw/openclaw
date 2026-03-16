@@ -12,6 +12,7 @@ import type { PluginRuntimeCore, RuntimeLogger } from "./types-core.js";
 export type {
   NormalizedOutboundPayload,
   OutboundChannel,
+  OutboundDeliveryResult,
   OutboundIdentity,
   ReplyPayload,
   RuntimeLogger,
