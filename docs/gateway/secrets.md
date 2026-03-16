@@ -41,6 +41,9 @@ Examples of inactive surfaces:
 - Web search provider-specific keys that are not selected by `tools.web.search.provider`.
   In auto mode (provider unset), keys are consulted by precedence for provider auto-detection until one resolves.
   After selection, non-selected provider keys are treated as inactive until selected.
+- Sandbox SSH auth material (`agents.defaults.sandbox.ssh.identityData`,
+  `certificateData`, `knownHostsData`, plus per-agent overrides) is active only
+  when the effective sandbox backend is `ssh` for the default agent or an enabled agent.
 - `gateway.remote.token` / `gateway.remote.password` SecretRefs are active if one of these is true:
   - `gateway.mode=remote`
   - `gateway.remote.url` is configured
