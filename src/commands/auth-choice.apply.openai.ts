@@ -90,7 +90,7 @@ export async function applyAuthChoiceOpenAI(
       });
     } catch {
       // The helper already surfaces the error to the user.
-      // Keep onboarding flow alive and return unchanged config.
+      // Keep setup flow alive and return unchanged config.
       return { config: nextConfig, agentModelOverride };
     }
     if (creds) {

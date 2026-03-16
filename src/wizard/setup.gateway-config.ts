@@ -1,5 +1,5 @@
 import {
-  promptSecretRefForOnboarding,
+  promptSecretRefForSetup,
   resolveSecretInputModeForEnvSelection,
 } from "../commands/auth-choice.apply-helpers.js";
 import {
@@ -25,13 +25,13 @@ import { DEFAULT_DANGEROUS_NODE_COMMANDS } from "../gateway/node-command-policy.
 import { findTailscaleBinary } from "../infra/tailscale.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { validateIPv4AddressInput } from "../shared/net/ipv4.js";
-import { resolveOnboardingSecretInputString } from "./onboarding.secret-input.js";
+import type { WizardPrompter } from "./prompts.js";
+import { resolveSetupSecretInputString } from "./setup.secret-input.js";
 import type {
   GatewayWizardSettings,
   QuickstartGatewayDefaults,
   WizardFlow,
-} from "./onboarding.types.js";
-import type { WizardPrompter } from "./prompts.js";
+} from "./setup.types.js";
 
 type ConfigureGatewayOptions = {
   flow: WizardFlow;
@@ -49,7 +49,7 @@ type ConfigureGatewayResult = {
   settings: GatewayWizardSettings;
 };
 
-export async function configureGatewayForOnboarding(
+export async function configureGatewayForSetup(
   opts: ConfigureGatewayOptions,
 ): Promise<ConfigureGatewayResult> {
   const { flow, localPort, quickstartGateway, prompter } = opts;
@@ -183,14 +183,14 @@ export async function configureGatewayForOnboarding(
     if (tokenMode === "ref") {
       if (flow === "quickstart" && quickstartTokenRef) {
         gatewayTokenInput = quickstartTokenRef;
-        gatewayToken = await resolveOnboardingSecretInputString({
+        gatewayToken = await resolveSetupSecretInputString({
           config: nextConfig,
           value: quickstartTokenRef,
           path: "gateway.auth.token",
           env: process.env,
         });
       } else {
-        const resolved = await promptSecretRefForOnboarding({
+        const resolved = await promptSecretRefForSetup({
           provider: "gateway-auth-token",
           config: nextConfig,
           prompter,
@@ -236,7 +236,7 @@ export async function configureGatewayForOnboarding(
         },
       });
       if (selectedMode === "ref") {
-        const resolved = await promptSecretRefForOnboarding({
+        const resolved = await promptSecretRefForSetup({
           provider: "gateway-auth-password",
           config: nextConfig,
           prompter,
