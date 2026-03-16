@@ -79,4 +79,38 @@ describe("lazy-tools plugin logic", () => {
     plugin.loadToolkit("messaging", loaded);
     expect(plugin.filterTools(tools, loaded).map((t) => t.name)).toContain("message");
   });
+
+  it("shows overlapping tools when either toolkit is loaded", () => {
+    const plugin = createLazyToolsPlugin();
+    const loaded = new Set(["sessions"]);
+    const tools = [
+      { name: "sessions_send", description: "send", parameters: {} },
+      { name: "sessions_list", description: "list", parameters: {} },
+      { name: "sessions_history", description: "hist", parameters: {} },
+    ];
+
+    const filtered = plugin.filterTools(tools, loaded);
+    const names = filtered.map((t) => t.name);
+
+    // sessions_send is in both messaging and sessions toolkits
+    // Loading sessions should make it visible
+    expect(names).toContain("sessions_send");
+    expect(names).toContain("sessions_list");
+    expect(names).toContain("sessions_history");
+  });
+
+  it("session state is isolated by key", () => {
+    const plugin = createLazyToolsPlugin();
+    const session1 = new Set<string>();
+    const session2 = new Set<string>();
+
+    plugin.loadToolkit("messaging", session1);
+
+    const tools = [{ name: "message", description: "msg", parameters: {} }];
+
+    // Session 1 has messaging loaded
+    expect(plugin.filterTools(tools, session1).map((t) => t.name)).toContain("message");
+    // Session 2 does not
+    expect(plugin.filterTools(tools, session2).map((t) => t.name)).not.toContain("message");
+  });
 });

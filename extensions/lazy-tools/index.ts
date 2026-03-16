@@ -20,13 +20,16 @@ export const TOOLKITS: Record<string, string[]> = {
 /** Core tools always visible regardless of lazy loading. */
 export const CORE_TOOLS = new Set(["read", "write", "edit", "exec", "load_toolkit"]);
 
-/** Reverse lookup: tool name → toolkit name. First toolkit to claim wins. */
-const toolToToolkit = new Map<string, string>();
+/** Reverse lookup: tool name → set of toolkit names that claim it. */
+const toolToToolkits = new Map<string, Set<string>>();
 for (const [tkName, toolNames] of Object.entries(TOOLKITS)) {
   for (const tn of toolNames) {
-    if (!toolToToolkit.has(tn)) {
-      toolToToolkit.set(tn, tkName);
+    let tks = toolToToolkits.get(tn);
+    if (!tks) {
+      tks = new Set<string>();
+      toolToToolkits.set(tn, tks);
     }
+    tks.add(tkName);
   }
 }
 
@@ -52,9 +55,13 @@ export function createLazyToolsPlugin() {
   function filterTools(tools: ToolEntry[], loadedToolkits: Set<string>): ToolEntry[] {
     return tools.filter((tool) => {
       if (CORE_TOOLS.has(tool.name)) return true;
-      const tk = toolToToolkit.get(tool.name);
-      if (!tk) return true; // Unknown tools pass through
-      return loadedToolkits.has(tk);
+      const tks = toolToToolkits.get(tool.name);
+      if (!tks) return true; // Unknown tools pass through
+      // Show if ANY owning toolkit is loaded
+      for (const tk of tks) {
+        if (loadedToolkits.has(tk)) return true;
+      }
+      return false;
     });
   }
 
