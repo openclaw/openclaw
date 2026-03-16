@@ -6,7 +6,6 @@ import {
   listChannelSetupPlugins,
 } from "../channels/plugins/setup-registry.js";
 import type { ChannelPlugin } from "../channels/plugins/types.js";
-import type { ChannelPlugin } from "../channels/plugins/types.js";
 import {
   formatChannelPrimerLine,
   formatChannelSelectionLine,
@@ -22,15 +21,15 @@ import type { RuntimeEnv } from "../runtime.js";
 import { formatDocsLink } from "../terminal/links.js";
 import type { WizardPrompter, WizardSelectOption } from "../wizard/prompts.js";
 import { resolveChannelSetupEntries } from "./channel-setup/discovery.js";
+import {
+  loadBundledChannelOnboardingPlugin,
+  resolveChannelOnboardingAdapterForPlugin,
+} from "./channel-setup/registry.js";
 import type { ChannelChoice } from "./onboard-types.js";
 import {
   ensureOnboardingPluginInstalled,
   loadOnboardingPluginRegistrySnapshotForChannel,
 } from "./onboarding/plugin-install.js";
-import {
-  loadBundledChannelOnboardingPlugin,
-  resolveChannelOnboardingAdapterForPlugin,
-} from "./channel-setup/registry.js";
 import type {
   ChannelOnboardingAdapter,
   ChannelOnboardingConfiguredResult,
