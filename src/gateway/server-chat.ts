@@ -593,6 +593,21 @@ export function createAgentEventHandler({
       }
       if (!isAborted && evt.stream === "assistant" && typeof evt.data?.text === "string") {
         emitChatDelta(sessionKey, clientRunId, evt.runId, evt.seq, evt.data.text, evt.data.delta);
+      } else if (!isAborted && evt.stream === "thinking" && typeof evt.data?.text === "string") {
+        // Broadcast thinking/reasoning stream to WebSocket clients in real-time
+        const thinkingPayload = {
+          runId: clientRunId,
+          sessionKey,
+          seq: evt.seq,
+          state: "delta" as const,
+          message: {
+            role: "assistant",
+            content: [{ type: "thinking", thinking: evt.data.text }],
+            timestamp: Date.now(),
+          },
+        };
+        broadcast("chat", thinkingPayload, { dropIfSlow: true });
+        nodeSendToSession(sessionKey, "chat", thinkingPayload);
       } else if (!isAborted && (lifecyclePhase === "end" || lifecyclePhase === "error")) {
         const evtStopReason =
           typeof evt.data?.stopReason === "string" ? evt.data.stopReason : undefined;
