@@ -12,15 +12,12 @@ import {
   startGatewayWithClient,
 } from "./test-helpers.e2e.js";
 import { installOpenAiResponsesMock } from "./test-helpers.openai-mock.js";
-import { buildOpenAiResponsesProviderConfig } from "./test-openai-responses-model.js";
+import { buildMockOpenAiResponsesProvider } from "./test-openai-responses-model.js";
 
 let writeConfigFile: typeof import("../config/config.js").writeConfigFile;
 let resolveConfigPath: typeof import("../config/config.js").resolveConfigPath;
 const GATEWAY_E2E_TIMEOUT_MS = 30_000;
 let gatewayTestSeq = 0;
-// Keep this off the real "openai" provider id so the runtime stays on the
-// mocked HTTP Responses path instead of upgrading to the OpenAI WS transport.
-const MOCK_OPENAI_PROVIDER_ID = "mock-openai";
 
 function nextGatewayId(prefix: string): string {
   return `${prefix}-${process.pid}-${process.env.VITEST_POOL_ID ?? "0"}-${gatewayTestSeq++}`;
@@ -70,13 +67,14 @@ describe("gateway e2e", () => {
       const configDir = path.join(tempHome, ".openclaw");
       await fs.mkdir(configDir, { recursive: true });
       const configPath = path.join(configDir, "openclaw.json");
+      const mockProvider = buildMockOpenAiResponsesProvider(openaiBaseUrl);
 
       const cfg = {
         agents: { defaults: { workspace: workspaceDir } },
         models: {
           mode: "replace",
           providers: {
-            [MOCK_OPENAI_PROVIDER_ID]: buildOpenAiResponsesProviderConfig(openaiBaseUrl),
+            [mockProvider.providerId]: mockProvider.config,
           },
         },
         gateway: { auth: { token } },
@@ -94,7 +92,7 @@ describe("gateway e2e", () => {
 
         await client.request("sessions.patch", {
           key: sessionKey,
-          model: `${MOCK_OPENAI_PROVIDER_ID}/gpt-5.2`,
+          model: mockProvider.modelRef,
         });
 
         const runId = nextGatewayId("run");
