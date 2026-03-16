@@ -194,7 +194,10 @@ export function loadSettings(): UiSettings {
   try {
     // First check for legacy key (no scope), then check for scoped key
     const scopedKey = settingsKeyForGateway(defaults.gatewayUrl);
-    const raw = storage?.getItem(scopedKey) ?? storage?.getItem(SETTINGS_KEY_PREFIX + "default") ?? storage?.getItem("openclaw.control.settings.v1");
+    const raw =
+      storage?.getItem(scopedKey) ??
+      storage?.getItem(SETTINGS_KEY_PREFIX + "default") ??
+      storage?.getItem("openclaw.control.settings.v1");
     if (!raw) {
       return defaults;
     }
@@ -266,7 +269,10 @@ function persistSettings(next: UiSettings) {
   let existingSessionsByGateway: Record<string, ScopedSessionSelection> = {};
   try {
     // Try to migrate from legacy key or other scopes
-    const raw = storage?.getItem(scopedKey) ?? storage?.getItem(SETTINGS_KEY_PREFIX + "default") ?? storage?.getItem("openclaw.control.settings.v1");
+    const raw =
+      storage?.getItem(scopedKey) ??
+      storage?.getItem(SETTINGS_KEY_PREFIX + "default") ??
+      storage?.getItem("openclaw.control.settings.v1");
     if (raw) {
       const parsed = JSON.parse(raw) as PersistedUiSettings;
       if (parsed.sessionsByGateway && typeof parsed.sessionsByGateway === "object") {
