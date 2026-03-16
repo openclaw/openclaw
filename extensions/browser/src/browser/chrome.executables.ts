@@ -547,14 +547,18 @@ export function findChromeExecutableLinux(): BrowserExecutable | null {
     { kind: "chrome", path: "/usr/bin/google-chrome" },
     { kind: "chrome", path: "/usr/bin/google-chrome-stable" },
     { kind: "chrome", path: "/usr/bin/chrome" },
+    { kind: "chrome", path: "/opt/google/chrome/chrome" },
     { kind: "brave", path: "/usr/bin/brave-browser" },
     { kind: "brave", path: "/usr/bin/brave-browser-stable" },
     { kind: "brave", path: "/usr/bin/brave" },
     { kind: "brave", path: "/snap/bin/brave" },
+    { kind: "brave", path: "/opt/brave.com/brave/brave-browser" },
     { kind: "edge", path: "/usr/bin/microsoft-edge" },
     { kind: "edge", path: "/usr/bin/microsoft-edge-stable" },
     { kind: "chromium", path: "/usr/bin/chromium" },
     { kind: "chromium", path: "/usr/bin/chromium-browser" },
+    { kind: "chromium", path: "/usr/lib/chromium/chromium" },
+    { kind: "chromium", path: "/usr/lib/chromium-browser/chromium-browser" },
     { kind: "chromium", path: "/snap/bin/chromium" },
   ];
 
