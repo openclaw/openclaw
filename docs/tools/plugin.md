@@ -1275,6 +1275,7 @@ errors instead.
 - `groupLabel`: group label
 - `groupHint`: group hint
 - `methodId`: auth method to run
+- `modelAllowlist`: optional post-auth allowlist policy (`allowedKeys`, `initialSelections`, `message`)
 
 `wizard.modelPicker` controls how a provider appears as a "set this up now"
 entry in model selection:
@@ -1435,8 +1436,13 @@ Notes:
   for headless onboarding.
 - Return `configPatch` when you need to add default models or provider config.
 - Return `defaultModel` so `--set-default` can update agent defaults.
-- `wizard.setup` adds a provider choice to `openclaw onboard`.
+- `wizard.setup` adds a provider choice to onboarding surfaces such as
+  `openclaw onboard` / `openclaw setup --wizard`.
+- `wizard.setup.modelAllowlist` lets the provider narrow the follow-up model
+  allowlist prompt during onboarding/configure.
 - `wizard.modelPicker` adds a “setup this provider” entry to the model picker.
+- `deprecatedProfileIds` lets the provider own `openclaw doctor` cleanup for
+  retired auth-profile ids.
 - `discovery.run` returns either `{ provider }` for the plugin’s own provider id
   or `{ providers }` for multi-provider discovery.
 - `discovery.order` controls when the provider runs relative to built-in

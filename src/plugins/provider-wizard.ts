@@ -190,7 +190,11 @@ export function resolveProviderModelPickerEntries(params: {
 export function resolveProviderPluginChoice(params: {
   providers: ProviderPlugin[];
   choice: string;
-}): { provider: ProviderPlugin; method: ProviderAuthMethod } | null {
+}): {
+  provider: ProviderPlugin;
+  method: ProviderAuthMethod;
+  wizard?: ProviderPluginWizardSetup;
+} | null {
   const choice = params.choice.trim();
   if (!choice) {
     return null;
@@ -216,7 +220,7 @@ export function resolveProviderPluginChoice(params: {
       const choiceId =
         wizard.choiceId?.trim() || buildProviderPluginMethodChoice(provider.id, method.id);
       if (normalizeChoiceId(choiceId) === choice) {
-        return { provider, method };
+        return { provider, method, wizard };
       }
     }
     const setup = provider.wizard?.setup;
@@ -225,7 +229,7 @@ export function resolveProviderPluginChoice(params: {
       if (normalizeChoiceId(setupChoiceId) === choice) {
         const method = resolveMethodById(provider, setup.methodId);
         if (method) {
-          return { provider, method };
+          return { provider, method, wizard: setup };
         }
       }
     }

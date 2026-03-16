@@ -553,6 +553,18 @@ export type ProviderPluginWizardSetup = {
   groupLabel?: string;
   groupHint?: string;
   methodId?: string;
+  /**
+   * Optional model-allowlist prompt policy applied after this auth choice is
+   * selected in configure/onboarding flows.
+   *
+   * Keep this UI-facing and static. Provider logic that needs runtime state
+   * should stay in `run`/`runNonInteractive`.
+   */
+  modelAllowlist?: {
+    allowedKeys?: string[];
+    initialSelections?: string[];
+    message?: string;
+  };
 };
 
 export type ProviderPluginWizardModelPicker = {
@@ -773,6 +785,14 @@ export type ProviderPlugin = {
    * bearer token (for example Gemini CLI's `{ token, projectId }` payload).
    */
   formatApiKey?: (cred: AuthProfileCredential) => string;
+  /**
+   * Legacy auth-profile ids that should be retired by `openclaw doctor`.
+   *
+   * Use this when a provider plugin replaces an older core-managed profile id
+   * and wants cleanup/migration messaging to live with the provider instead of
+   * in hardcoded doctor tables.
+   */
+  deprecatedProfileIds?: string[];
   /**
    * Provider-owned OAuth refresh.
    *

@@ -117,7 +117,12 @@ export async function applyAuthChoiceLoadedPluginProvider(
     resolveAgentWorkspaceDir(params.config, agentId) ?? resolveDefaultAgentWorkspaceDir();
   const { resolvePluginProviders, resolveProviderPluginChoice, runProviderModelSelectedHook } =
     await loadPluginProviderRuntime();
-  const providers = resolvePluginProviders({ config: params.config, workspaceDir });
+  const providers = resolvePluginProviders({
+    config: params.config,
+    workspaceDir,
+    bundledProviderAllowlistCompat: true,
+    bundledProviderVitestCompat: true,
+  });
   const resolved = resolveProviderPluginChoice({
     providers,
     choice: params.authChoice,
@@ -190,7 +195,12 @@ export async function applyAuthChoicePluginProvider(
 
   const { resolvePluginProviders, runProviderModelSelectedHook } =
     await loadPluginProviderRuntime();
-  const providers = resolvePluginProviders({ config: nextConfig, workspaceDir });
+  const providers = resolvePluginProviders({
+    config: nextConfig,
+    workspaceDir,
+    bundledProviderAllowlistCompat: true,
+    bundledProviderVitestCompat: true,
+  });
   const provider = resolveProviderMatch(providers, options.providerId);
   if (!provider) {
     await params.prompter.note(
