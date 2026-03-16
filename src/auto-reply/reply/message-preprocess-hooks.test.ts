@@ -7,6 +7,8 @@ import {
 } from "../../hooks/internal-hooks.js";
 import type { FinalizedMsgContext } from "../templating.js";
 import { emitPreAgentMessageHooks } from "./message-preprocess-hooks.js";
+import { stripInboundMetadata } from "./strip-inbound-meta.js";
+import { appendUntrustedContext } from "./untrusted-context.js";
 
 function makeCtx(overrides: Partial<FinalizedMsgContext> = {}): FinalizedMsgContext {
   return {
@@ -110,10 +112,15 @@ describe("emitPreAgentMessageHooks", () => {
     });
 
     expect(ctx.UntrustedContext).toHaveLength(1);
+    expect(ctx.UntrustedContext?.[0]).toMatch(/<<<EXTERNAL_UNTRUSTED_CONTENT id="[a-f0-9]{16}">>>/);
+    expect(ctx.UntrustedContext?.[0]).toContain("Source: Hook metadata");
     expect(ctx.UntrustedContext?.[0]).toContain("Enriched context (hook-injected metadata):");
     expect(ctx.UntrustedContext?.[0]).toContain('"driving": true');
     expect(ctx.UntrustedContext?.[0]).toContain('"source": "vehicle-state"');
     expect(ctx.UntrustedContext?.[0]).toContain('"body_preview": "[Audio] Transcript: hello"');
+
+    const storedMessage = appendUntrustedContext("User-visible body", ctx.UntrustedContext);
+    expect(stripInboundMetadata(storedMessage)).toBe("User-visible body");
   });
 
   it("does not append untrusted context when enrich hooks return nothing", async () => {

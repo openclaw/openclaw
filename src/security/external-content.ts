@@ -97,6 +97,7 @@ export type ExternalContentSource =
   | "api"
   | "browser"
   | "channel_metadata"
+  | "hook_metadata"
   | "web_search"
   | "web_fetch"
   | "unknown";
@@ -107,6 +108,7 @@ const EXTERNAL_SOURCE_LABELS: Record<ExternalContentSource, string> = {
   api: "API",
   browser: "Browser",
   channel_metadata: "Channel metadata",
+  hook_metadata: "Hook metadata",
   web_search: "Web Search",
   web_fetch: "Web Fetch",
   unknown: "External",

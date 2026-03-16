@@ -14,6 +14,8 @@ import {
   toInternalMessageTranscribedContext,
 } from "../../hooks/message-hook-mappers.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
+import { wrapExternalContent } from "../../security/external-content.js";
+import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import type { FinalizedMsgContext } from "../templating.js";
 
 export async function emitPreAgentMessageHooks(params: {
@@ -81,7 +83,12 @@ export async function emitPreAgentMessageHooks(params: {
       "```",
     ].join("\n");
     const untrustedContext = (params.ctx.UntrustedContext ??= []);
-    untrustedContext.push(enrichBlock);
+    untrustedContext.push(
+      wrapExternalContent(enrichBlock, {
+        source: "hook_metadata",
+        includeWarning: false,
+      }),
+    );
     logVerbose(`get-reply: message:enrich injected ${metadataKeys.length} metadata key(s)`);
   } catch (err) {
     logVerbose(`get-reply: message:enrich internal hook failed: ${String(err)}`);
