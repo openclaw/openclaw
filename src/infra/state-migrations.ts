@@ -15,13 +15,13 @@ import { canonicalizeMainSessionAlias } from "../config/sessions/main-session.js
 import type { SessionScope } from "../config/sessions/types.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveChannelAllowFromPath } from "../pairing/pairing-store.js";
+import { listTelegramAccountIds } from "../plugin-sdk/telegram.js";
 import {
   buildAgentMainSessionKey,
   DEFAULT_ACCOUNT_ID,
   DEFAULT_MAIN_KEY,
   normalizeAgentId,
 } from "../routing/session-key.js";
-import { listTelegramAccountIds } from "../telegram/accounts.js";
 import { isWithinDir } from "./path-safety.js";
 import {
   ensureDir,

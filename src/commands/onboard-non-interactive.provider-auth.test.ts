@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
-import { beforeAll, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { makeTempWorkspace } from "../test-helpers/workspace.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { MINIMAX_API_BASE_URL, MINIMAX_CN_API_BASE_URL } from "./onboard-auth.js";
@@ -17,7 +17,9 @@ type OnboardEnv = {
   runtime: NonInteractiveRuntime;
 };
 
-const ensureWorkspaceAndSessionsMock = vi.fn(async (..._args: unknown[]) => {});
+const ensureWorkspaceAndSessionsMock = vi.hoisted(() => vi.fn(async (..._args: unknown[]) => {}));
+type DetectZaiEndpoint = typeof import("./zai-endpoint-detect.js").detectZaiEndpoint;
+const detectZaiEndpoint = vi.hoisted(() => vi.fn<DetectZaiEndpoint>(async () => null));
 
 vi.mock("./onboard-helpers.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./onboard-helpers.js")>();
@@ -27,7 +29,11 @@ vi.mock("./onboard-helpers.js", async (importOriginal) => {
   };
 });
 
-const { runNonInteractiveOnboarding } = await import("./onboard-non-interactive.js");
+vi.mock("./zai-endpoint-detect.js", () => ({
+  detectZaiEndpoint,
+}));
+
+const { runNonInteractiveSetup } = await import("./onboard-non-interactive.js");
 
 const NON_INTERACTIVE_DEFAULT_OPTIONS = {
   nonInteractive: true,
@@ -103,11 +109,11 @@ async function withOnboardEnv(
   }
 }
 
-async function runNonInteractiveOnboardingWithDefaults(
+async function runNonInteractiveSetupWithDefaults(
   runtime: NonInteractiveRuntime,
   options: Record<string, unknown>,
 ): Promise<void> {
-  await runNonInteractiveOnboarding(
+  await runNonInteractiveSetup(
     {
       ...NON_INTERACTIVE_DEFAULT_OPTIONS,
       ...options,
@@ -120,7 +126,7 @@ async function runOnboardingAndReadConfig(
   env: OnboardEnv,
   options: Record<string, unknown>,
 ): Promise<ProviderAuthConfigSnapshot> {
-  await runNonInteractiveOnboardingWithDefaults(env.runtime, {
+  await runNonInteractiveSetupWithDefaults(env.runtime, {
     skipSkills: true,
     ...options,
   });
@@ -135,7 +141,7 @@ async function runCustomLocalNonInteractive(
   runtime: NonInteractiveRuntime,
   overrides: Record<string, unknown> = {},
 ): Promise<void> {
-  await runNonInteractiveOnboardingWithDefaults(runtime, {
+  await runNonInteractiveSetupWithDefaults(runtime, {
     authChoice: "custom-api-key",
     customBaseUrl: CUSTOM_LOCAL_BASE_URL,
     customModelId: CUSTOM_LOCAL_MODEL_ID,
@@ -180,19 +186,24 @@ describe("onboard (non-interactive): provider auth", () => {
     ({ ensureAuthProfileStore, upsertAuthProfile } = await import("../agents/auth-profiles.js"));
   });
 
+  beforeEach(() => {
+    detectZaiEndpoint.mockReset();
+    detectZaiEndpoint.mockResolvedValue(null);
+  });
+
   it("stores MiniMax API key and uses global baseUrl by default", async () => {
     await withOnboardEnv("openclaw-onboard-minimax-", async (env) => {
       const cfg = await runOnboardingAndReadConfig(env, {
-        authChoice: "minimax-api",
+        authChoice: "minimax-global-api",
         minimaxApiKey: "sk-minimax-test", // pragma: allowlist secret
       });
 
-      expect(cfg.auth?.profiles?.["minimax:default"]?.provider).toBe("minimax");
-      expect(cfg.auth?.profiles?.["minimax:default"]?.mode).toBe("api_key");
+      expect(cfg.auth?.profiles?.["minimax:global"]?.provider).toBe("minimax");
+      expect(cfg.auth?.profiles?.["minimax:global"]?.mode).toBe("api_key");
       expect(cfg.models?.providers?.minimax?.baseUrl).toBe(MINIMAX_API_BASE_URL);
       expect(cfg.agents?.defaults?.model?.primary).toBe("minimax/MiniMax-M2.5");
       await expectApiKeyProfile({
-        profileId: "minimax:default",
+        profileId: "minimax:global",
         provider: "minimax",
         key: "sk-minimax-test",
       });
@@ -202,17 +213,17 @@ describe("onboard (non-interactive): provider auth", () => {
   it("supports MiniMax CN API endpoint auth choice", async () => {
     await withOnboardEnv("openclaw-onboard-minimax-cn-", async (env) => {
       const cfg = await runOnboardingAndReadConfig(env, {
-        authChoice: "minimax-api-key-cn",
+        authChoice: "minimax-cn-api",
         minimaxApiKey: "sk-minimax-test", // pragma: allowlist secret
       });
 
-      expect(cfg.auth?.profiles?.["minimax-cn:default"]?.provider).toBe("minimax-cn");
-      expect(cfg.auth?.profiles?.["minimax-cn:default"]?.mode).toBe("api_key");
-      expect(cfg.models?.providers?.["minimax-cn"]?.baseUrl).toBe(MINIMAX_CN_API_BASE_URL);
-      expect(cfg.agents?.defaults?.model?.primary).toBe("minimax-cn/MiniMax-M2.5");
+      expect(cfg.auth?.profiles?.["minimax:cn"]?.provider).toBe("minimax");
+      expect(cfg.auth?.profiles?.["minimax:cn"]?.mode).toBe("api_key");
+      expect(cfg.models?.providers?.minimax?.baseUrl).toBe(MINIMAX_CN_API_BASE_URL);
+      expect(cfg.agents?.defaults?.model?.primary).toBe("minimax/MiniMax-M2.5");
       await expectApiKeyProfile({
-        profileId: "minimax-cn:default",
-        provider: "minimax-cn",
+        profileId: "minimax:cn",
+        provider: "minimax",
         key: "sk-minimax-test",
       });
     });
@@ -220,6 +231,12 @@ describe("onboard (non-interactive): provider auth", () => {
 
   it("stores Z.AI API key and uses global baseUrl by default", async () => {
     await withOnboardEnv("openclaw-onboard-zai-", async (env) => {
+      detectZaiEndpoint.mockResolvedValueOnce({
+        endpoint: "global",
+        baseUrl: "https://api.z.ai/api/paas/v4",
+        modelId: "glm-5",
+        note: "Verified GLM-5 on global endpoint.",
+      });
       const cfg = await runOnboardingAndReadConfig(env, {
         authChoice: "zai-api-key",
         zaiApiKey: "zai-test-key", // pragma: allowlist secret
@@ -235,6 +252,12 @@ describe("onboard (non-interactive): provider auth", () => {
 
   it("supports Z.AI CN coding endpoint auth choice", async () => {
     await withOnboardEnv("openclaw-onboard-zai-cn-", async (env) => {
+      detectZaiEndpoint.mockResolvedValueOnce({
+        endpoint: "coding-cn",
+        baseUrl: "https://open.bigmodel.cn/api/coding/paas/v4",
+        modelId: "glm-4.7",
+        note: "Coding Plan CN endpoint verified, but this key/plan does not expose GLM-5 there. Defaulting to GLM-4.7.",
+      });
       const cfg = await runOnboardingAndReadConfig(env, {
         authChoice: "zai-coding-cn",
         zaiApiKey: "zai-test-key", // pragma: allowlist secret
@@ -243,6 +266,25 @@ describe("onboard (non-interactive): provider auth", () => {
       expect(cfg.models?.providers?.zai?.baseUrl).toBe(
         "https://open.bigmodel.cn/api/coding/paas/v4",
       );
+      expect(cfg.agents?.defaults?.model?.primary).toBe("zai/glm-4.7");
+    });
+  });
+
+  it("supports Z.AI Coding Plan global endpoint with GLM-5 when available", async () => {
+    await withOnboardEnv("openclaw-onboard-zai-coding-global-", async (env) => {
+      detectZaiEndpoint.mockResolvedValueOnce({
+        endpoint: "coding-global",
+        baseUrl: "https://api.z.ai/api/coding/paas/v4",
+        modelId: "glm-5",
+        note: "Verified GLM-5 on coding-global endpoint.",
+      });
+      const cfg = await runOnboardingAndReadConfig(env, {
+        authChoice: "zai-coding-global",
+        zaiApiKey: "zai-test-key", // pragma: allowlist secret
+      });
+
+      expect(cfg.models?.providers?.zai?.baseUrl).toBe("https://api.z.ai/api/coding/paas/v4");
+      expect(cfg.agents?.defaults?.model?.primary).toBe("zai/glm-5");
     });
   });
 
@@ -324,7 +366,7 @@ describe("onboard (non-interactive): provider auth", () => {
       const cleanToken = `sk-ant-oat01-${"a".repeat(80)}`;
       const token = `${cleanToken.slice(0, 30)}\r${cleanToken.slice(30)}`;
 
-      await runNonInteractiveOnboardingWithDefaults(runtime, {
+      await runNonInteractiveSetupWithDefaults(runtime, {
         authChoice: "token",
         tokenProvider: "anthropic",
         token,
@@ -424,7 +466,7 @@ describe("onboard (non-interactive): provider auth", () => {
         await withEnvAsync(envOverrides, async () => {
           let thrown: Error | undefined;
           try {
-            await runNonInteractiveOnboardingWithDefaults(runtime, options);
+            await runNonInteractiveSetupWithDefaults(runtime, options);
           } catch (error) {
             thrown = error as Error;
           }
@@ -450,7 +492,7 @@ describe("onboard (non-interactive): provider auth", () => {
           OPENCODE_ZEN_API_KEY: "opencode-zen-env-key", // pragma: allowlist secret
         },
         async () => {
-          await runNonInteractiveOnboardingWithDefaults(runtime, {
+          await runNonInteractiveSetupWithDefaults(runtime, {
             authChoice: "opencode-zen",
             secretInputMode: "ref", // pragma: allowlist secret
             skipSkills: true,
@@ -474,14 +516,63 @@ describe("onboard (non-interactive): provider auth", () => {
     });
   });
 
-  it("rejects vLLM auth choice in non-interactive mode", async () => {
-    await withOnboardEnv("openclaw-onboard-vllm-non-interactive-", async ({ runtime }) => {
-      await expect(
-        runNonInteractiveOnboardingWithDefaults(runtime, {
-          authChoice: "vllm",
-          skipSkills: true,
-        }),
-      ).rejects.toThrow('Auth choice "vllm" requires interactive mode.');
+  it("configures vLLM via the provider plugin in non-interactive mode", async () => {
+    await withOnboardEnv("openclaw-onboard-vllm-non-interactive-", async (env) => {
+      const cfg = await runOnboardingAndReadConfig(env, {
+        authChoice: "vllm",
+        customBaseUrl: "http://127.0.0.1:8100/v1",
+        customApiKey: "vllm-test-key", // pragma: allowlist secret
+        customModelId: "Qwen/Qwen3-8B",
+      });
+
+      expect(cfg.auth?.profiles?.["vllm:default"]?.provider).toBe("vllm");
+      expect(cfg.auth?.profiles?.["vllm:default"]?.mode).toBe("api_key");
+      expect(cfg.models?.providers?.vllm).toEqual({
+        baseUrl: "http://127.0.0.1:8100/v1",
+        api: "openai-completions",
+        apiKey: "VLLM_API_KEY",
+        models: [
+          expect.objectContaining({
+            id: "Qwen/Qwen3-8B",
+          }),
+        ],
+      });
+      expect(cfg.agents?.defaults?.model?.primary).toBe("vllm/Qwen/Qwen3-8B");
+      await expectApiKeyProfile({
+        profileId: "vllm:default",
+        provider: "vllm",
+        key: "vllm-test-key",
+      });
+    });
+  });
+
+  it("configures SGLang via the provider plugin in non-interactive mode", async () => {
+    await withOnboardEnv("openclaw-onboard-sglang-non-interactive-", async (env) => {
+      const cfg = await runOnboardingAndReadConfig(env, {
+        authChoice: "sglang",
+        customBaseUrl: "http://127.0.0.1:31000/v1",
+        customApiKey: "sglang-test-key", // pragma: allowlist secret
+        customModelId: "Qwen/Qwen3-32B",
+      });
+
+      expect(cfg.auth?.profiles?.["sglang:default"]?.provider).toBe("sglang");
+      expect(cfg.auth?.profiles?.["sglang:default"]?.mode).toBe("api_key");
+      expect(cfg.models?.providers?.sglang).toEqual({
+        baseUrl: "http://127.0.0.1:31000/v1",
+        api: "openai-completions",
+        apiKey: "SGLANG_API_KEY",
+        models: [
+          expect.objectContaining({
+            id: "Qwen/Qwen3-32B",
+          }),
+        ],
+      });
+      expect(cfg.agents?.defaults?.model?.primary).toBe("sglang/Qwen/Qwen3-32B");
+      await expectApiKeyProfile({
+        profileId: "sglang:default",
+        provider: "sglang",
+        key: "sglang-test-key",
+      });
     });
   });
 
@@ -518,7 +609,7 @@ describe("onboard (non-interactive): provider auth", () => {
     },
   ])("$name", async ({ prefix, options }) => {
     await withOnboardEnv(prefix, async ({ configPath, runtime }) => {
-      await runNonInteractiveOnboardingWithDefaults(runtime, {
+      await runNonInteractiveSetupWithDefaults(runtime, {
         cloudflareAiGatewayAccountId: "cf-account-id",
         cloudflareAiGatewayGatewayId: "cf-gateway-id",
         cloudflareAiGatewayApiKey: "cf-gateway-test-key", // pragma: allowlist secret
@@ -598,7 +689,7 @@ describe("onboard (non-interactive): provider auth", () => {
 
   it("configures a custom provider from non-interactive flags", async () => {
     await withOnboardEnv("openclaw-onboard-custom-provider-", async ({ configPath, runtime }) => {
-      await runNonInteractiveOnboardingWithDefaults(runtime, {
+      await runNonInteractiveSetupWithDefaults(runtime, {
         authChoice: "custom-api-key",
         customBaseUrl: "https://llm.example.com/v1",
         customApiKey: "custom-test-key", // pragma: allowlist secret
@@ -622,7 +713,7 @@ describe("onboard (non-interactive): provider auth", () => {
     await withOnboardEnv(
       "openclaw-onboard-custom-provider-infer-",
       async ({ configPath, runtime }) => {
-        await runNonInteractiveOnboardingWithDefaults(runtime, {
+        await runNonInteractiveSetupWithDefaults(runtime, {
           customBaseUrl: "https://models.custom.local/v1",
           customModelId: "local-large",
           customApiKey: "custom-test-key", // pragma: allowlist secret
@@ -719,7 +810,7 @@ describe("onboard (non-interactive): provider auth", () => {
       "openclaw-onboard-custom-provider-invalid-compat-",
       async ({ runtime }) => {
         await expect(
-          runNonInteractiveOnboardingWithDefaults(runtime, {
+          runNonInteractiveSetupWithDefaults(runtime, {
             authChoice: "custom-api-key",
             customBaseUrl: "https://models.custom.local/v1",
             customModelId: "local-large",
@@ -734,7 +825,7 @@ describe("onboard (non-interactive): provider auth", () => {
   it("fails custom provider auth when explicit provider id is invalid", async () => {
     await withOnboardEnv("openclaw-onboard-custom-provider-invalid-id-", async ({ runtime }) => {
       await expect(
-        runNonInteractiveOnboardingWithDefaults(runtime, {
+        runNonInteractiveSetupWithDefaults(runtime, {
           authChoice: "custom-api-key",
           customBaseUrl: "https://models.custom.local/v1",
           customModelId: "local-large",
@@ -752,7 +843,7 @@ describe("onboard (non-interactive): provider auth", () => {
       "openclaw-onboard-custom-provider-missing-required-",
       async ({ runtime }) => {
         await expect(
-          runNonInteractiveOnboardingWithDefaults(runtime, {
+          runNonInteractiveSetupWithDefaults(runtime, {
             customApiKey: "custom-test-key", // pragma: allowlist secret
             skipSkills: true,
           }),

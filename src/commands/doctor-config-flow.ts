@@ -1,11 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { normalizeChatChannelId } from "../channels/registry.js";
-import {
-  isNumericTelegramUserId,
-  normalizeTelegramAllowFromEntry,
-} from "../channels/telegram/allow-from.js";
-import { fetchTelegramChatId } from "../channels/telegram/api.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { resolveCommandSecretRefsViaGateway } from "../cli/command-secret-gateway.js";
 import { getChannelsCommandSecretTargetIds } from "../cli/command-secret-targets.js";
@@ -28,6 +23,14 @@ import {
 } from "../infra/exec-safe-bin-trust.js";
 import { readChannelAllowFromStore } from "../pairing/pairing-store.js";
 import {
+  fetchTelegramChatId,
+  inspectTelegramAccount,
+  isNumericTelegramUserId,
+  listTelegramAccountIds,
+  normalizeTelegramAllowFromEntry,
+  resolveTelegramAccount,
+} from "../plugin-sdk/telegram.js";
+import {
   formatChannelAccountsDefaultPath,
   formatSetExplicitDefaultInstruction,
   formatSetExplicitDefaultToConfiguredInstruction,
@@ -44,9 +47,8 @@ import {
   isMSTeamsMutableAllowEntry,
   isMattermostMutableAllowEntry,
   isSlackMutableAllowEntry,
+  isZalouserMutableGroupEntry,
 } from "../security/mutable-allowlist-detectors.js";
-import { inspectTelegramAccount } from "../telegram/account-inspect.js";
-import { listTelegramAccountIds, resolveTelegramAccount } from "../telegram/accounts.js";
 import { note } from "../terminal/note.js";
 import { resolveHomeDir } from "../utils.js";
 import {
@@ -326,7 +328,7 @@ async function maybeRepairTelegramAllowFromUsernames(cfg: OpenClawConfig): Promi
     config: cfg,
     commandName: "doctor --fix",
     targetIds: getChannelsCommandSecretTargetIds(),
-    mode: "summary",
+    mode: "read_only_status",
   });
   const hasConfiguredUnavailableToken = listTelegramAccountIds(cfg).some((accountId) => {
     const inspected = inspectTelegramAccount({ cfg, accountId });
@@ -348,7 +350,7 @@ async function maybeRepairTelegramAllowFromUsernames(cfg: OpenClawConfig): Promi
       changes: [
         hasConfiguredUnavailableToken
           ? `- Telegram allowFrom contains @username entries, but configured Telegram bot credentials are unavailable in this command path; cannot auto-resolve (start the gateway or make the secret source available, then rerun doctor --fix).`
-          : `- Telegram allowFrom contains @username entries, but no Telegram bot token is configured; cannot auto-resolve (run onboarding or replace with numeric sender IDs).`,
+          : `- Telegram allowFrom contains @username entries, but no Telegram bot token is configured; cannot auto-resolve (run setup or replace with numeric sender IDs).`,
       ],
     };
   }
@@ -880,6 +882,27 @@ function scanMutableAllowlistEntries(cfg: OpenClawConfig): MutableAllowlistHit[]
         list: group.allowFrom,
         detector: isIrcMutableAllowEntry,
         channel: "irc",
+        dangerousFlagPath: scope.dangerousFlagPath,
+      });
+    }
+  }
+
+  for (const scope of collectProviderDangerousNameMatchingScopes(cfg, "zalouser")) {
+    if (scope.dangerousNameMatchingEnabled) {
+      continue;
+    }
+    const groups = asObjectRecord(scope.account.groups);
+    if (!groups) {
+      continue;
+    }
+    for (const entry of Object.keys(groups)) {
+      if (!isZalouserMutableGroupEntry(entry)) {
+        continue;
+      }
+      hits.push({
+        channel: "zalouser",
+        path: `${scope.prefix}.groups`,
+        entry,
         dangerousFlagPath: scope.dangerousFlagPath,
       });
     }
