@@ -174,7 +174,7 @@ export function buildOpenAICodexProviderPlugin(): ProviderPlugin {
       },
     ],
     wizard: {
-      onboarding: {
+      setup: {
         choiceId: "openai-codex",
         choiceLabel: "OpenAI Codex (ChatGPT OAuth)",
         choiceHint: "Browser sign-in",

@@ -5,8 +5,8 @@ import {
   normalizeSecretInputModeInput,
 } from "./auth-choice.apply-helpers.js";
 import type { ApplyAuthChoiceParams, ApplyAuthChoiceResult } from "./auth-choice.apply.js";
-import { applyDefaultModelChoice } from "./auth-choice.default-model.js";
 import { applyAuthChoicePluginProvider } from "./auth-choice.apply.plugin-provider.js";
+import { applyDefaultModelChoice } from "./auth-choice.default-model.js";
 import { applyAuthProfileConfig, setOpenaiApiKey } from "./onboard-auth.js";
 import {
   applyOpenAIConfig,
