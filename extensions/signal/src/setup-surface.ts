@@ -5,88 +5,28 @@ import {
   setChannelDmPolicyWithAllowFrom,
   setOnboardingChannelEnabled,
 } from "../../../src/channels/plugins/onboarding/helpers.js";
-import {
-  applyAccountNameToChannelSection,
-  migrateBaseNameToDefaultAccount,
-} from "../../../src/channels/plugins/setup-helpers.js";
 import { type ChannelSetupWizard } from "../../../src/channels/plugins/setup-wizard.js";
-import type { ChannelSetupAdapter } from "../../../src/channels/plugins/types.adapters.js";
 import { formatCliCommand } from "../../../src/cli/command-format.js";
 import { detectBinary } from "../../../src/commands/onboard-helpers.js";
 import { installSignalCli } from "../../../src/commands/signal-install.js";
 import type { OpenClawConfig } from "../../../src/config/config.js";
-import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../../../src/routing/session-key.js";
+import { DEFAULT_ACCOUNT_ID } from "../../../src/routing/session-key.js";
 import { formatDocsLink } from "../../../src/terminal/links.js";
-import { normalizeE164 } from "../../../src/utils.js";
 import type { WizardPrompter } from "../../../src/wizard/prompts.js";
 import {
   listSignalAccountIds,
   resolveDefaultSignalAccountId,
   resolveSignalAccount,
 } from "./accounts.js";
+import {
+  normalizeSignalAccountInput,
+  parseSignalAllowFromEntries,
+  signalSetupAdapter,
+} from "./setup-core.js";
 
 const channel = "signal" as const;
-const MIN_E164_DIGITS = 5;
-const MAX_E164_DIGITS = 15;
-const DIGITS_ONLY = /^\d+$/;
 const INVALID_SIGNAL_ACCOUNT_ERROR =
   "Invalid E.164 phone number (must start with + and country code, e.g. +15555550123)";
-
-export function normalizeSignalAccountInput(value: string | null | undefined): string | null {
-  const trimmed = value?.trim();
-  if (!trimmed) {
-    return null;
-  }
-  const normalized = normalizeE164(trimmed);
-  const digits = normalized.slice(1);
-  if (!DIGITS_ONLY.test(digits)) {
-    return null;
-  }
-  if (digits.length < MIN_E164_DIGITS || digits.length > MAX_E164_DIGITS) {
-    return null;
-  }
-  return `+${digits}`;
-}
-
-function isUuidLike(value: string): boolean {
-  return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value);
-}
-
-export function parseSignalAllowFromEntries(raw: string): { entries: string[]; error?: string } {
-  return parseOnboardingEntriesAllowingWildcard(raw, (entry) => {
-    if (entry.toLowerCase().startsWith("uuid:")) {
-      const id = entry.slice("uuid:".length).trim();
-      if (!id) {
-        return { error: "Invalid uuid entry" };
-      }
-      return { value: `uuid:${id}` };
-    }
-    if (isUuidLike(entry)) {
-      return { value: `uuid:${entry}` };
-    }
-    const normalized = normalizeSignalAccountInput(entry);
-    if (!normalized) {
-      return { error: `Invalid entry: ${entry}` };
-    }
-    return { value: normalized };
-  });
-}
-
-function buildSignalSetupPatch(input: {
-  signalNumber?: string;
-  cliPath?: string;
-  httpUrl?: string;
-  httpHost?: string;
-  httpPort?: string;
-}) {
-  return {
-    ...(input.signalNumber ? { account: input.signalNumber } : {}),
-    ...(input.cliPath ? { cliPath: input.cliPath } : {}),
-    ...(input.httpUrl ? { httpUrl: input.httpUrl } : {}),
-    ...(input.httpHost ? { httpHost: input.httpHost } : {}),
-    ...(input.httpPort ? { httpPort: Number(input.httpPort) } : {}),
-  };
-}
 
 async function promptSignalAllowFrom(params: {
   cfg: OpenClawConfig;
@@ -129,75 +69,6 @@ const signalDmPolicy: ChannelOnboardingDmPolicy = {
       dmPolicy: policy,
     }),
   promptAllowFrom: promptSignalAllowFrom,
-};
-
-export const signalSetupAdapter: ChannelSetupAdapter = {
-  resolveAccountId: ({ accountId }) => normalizeAccountId(accountId),
-  applyAccountName: ({ cfg, accountId, name }) =>
-    applyAccountNameToChannelSection({
-      cfg,
-      channelKey: channel,
-      accountId,
-      name,
-    }),
-  validateInput: ({ input }) => {
-    if (
-      !input.signalNumber &&
-      !input.httpUrl &&
-      !input.httpHost &&
-      !input.httpPort &&
-      !input.cliPath
-    ) {
-      return "Signal requires --signal-number or --http-url/--http-host/--http-port/--cli-path.";
-    }
-    return null;
-  },
-  applyAccountConfig: ({ cfg, accountId, input }) => {
-    const namedConfig = applyAccountNameToChannelSection({
-      cfg,
-      channelKey: channel,
-      accountId,
-      name: input.name,
-    });
-    const next =
-      accountId !== DEFAULT_ACCOUNT_ID
-        ? migrateBaseNameToDefaultAccount({
-            cfg: namedConfig,
-            channelKey: channel,
-          })
-        : namedConfig;
-    if (accountId === DEFAULT_ACCOUNT_ID) {
-      return {
-        ...next,
-        channels: {
-          ...next.channels,
-          signal: {
-            ...next.channels?.signal,
-            enabled: true,
-            ...buildSignalSetupPatch(input),
-          },
-        },
-      };
-    }
-    return {
-      ...next,
-      channels: {
-        ...next.channels,
-        signal: {
-          ...next.channels?.signal,
-          enabled: true,
-          accounts: {
-            ...next.channels?.signal?.accounts,
-            [accountId]: {
-              ...next.channels?.signal?.accounts?.[accountId],
-              enabled: true,
-              ...buildSignalSetupPatch(input),
-            },
-          },
-        },
-      },
-    };
-  },
 };
 
 export const signalSetupWizard: ChannelSetupWizard = {
