@@ -48,6 +48,10 @@ type GatewayProbeSnapshot = {
 let pluginRegistryModulePromise: Promise<typeof import("../cli/plugin-registry.js")> | undefined;
 let statusScanRuntimeModulePromise: Promise<typeof import("./status.scan.runtime.js")> | undefined;
 
+type StatusScanRuntimeModule = typeof import("./status.scan.runtime.js");
+type ChannelStatusIssues = ReturnType<StatusScanRuntimeModule["collectChannelStatusIssues"]>;
+type ChannelsTable = Awaited<ReturnType<StatusScanRuntimeModule["buildChannelsTable"]>>;
+
 function loadPluginRegistryModule() {
   pluginRegistryModulePromise ??= import("../cli/plugin-registry.js");
   return pluginRegistryModulePromise;
@@ -159,9 +163,9 @@ export type StatusScanResult = {
   gatewayProbe: Awaited<ReturnType<typeof probeGateway>> | null;
   gatewayReachable: boolean;
   gatewaySelf: ReturnType<typeof pickGatewaySelfPresence>;
-  channelIssues: ReturnType<typeof collectChannelStatusIssues>;
+  channelIssues: ChannelStatusIssues;
   agentStatus: Awaited<ReturnType<typeof getAgentLocalStatuses>>;
-  channels: Awaited<ReturnType<typeof buildChannelsTable>>;
+  channels: ChannelsTable;
   summary: Awaited<ReturnType<typeof getStatusSummary>>;
   memory: MemoryStatusSnapshot | null;
   memoryPlugin: MemoryPluginStatus;
