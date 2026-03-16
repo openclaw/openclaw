@@ -59,6 +59,8 @@ const ACP_REASONING_LEVEL_CONFIG_ID = "reasoning_level";
 const ACP_RESPONSE_USAGE_CONFIG_ID = "response_usage";
 const ACP_ELEVATED_LEVEL_CONFIG_ID = "elevated_level";
 const ACP_LOAD_SESSION_REPLAY_LIMIT = 1_000_000;
+const ACP_UNSUPPORTED_PER_SESSION_MCP_MESSAGE =
+  "ACP bridge mode does not support per-session MCP servers. Configure MCP on the OpenClaw gateway or agent instead.";
 
 type PendingPrompt = {
   sessionId: string;
@@ -418,7 +420,10 @@ export class AcpGatewayAgent implements Agent {
   }
 
   async newSession(params: NewSessionRequest): Promise<NewSessionResponse> {
-    this.assertSupportedSessionSetup(params.mcpServers);
+    this.assertSupportedSessionSetup({
+      method: "newSession",
+      mcpServers: params.mcpServers,
+    });
     this.enforceSessionCreateRateLimit("newSession");
 
     const sessionId = randomUUID();
@@ -448,7 +453,10 @@ export class AcpGatewayAgent implements Agent {
   }
 
   async loadSession(params: LoadSessionRequest): Promise<LoadSessionResponse> {
-    this.assertSupportedSessionSetup(params.mcpServers);
+    this.assertSupportedSessionSetup({
+      method: "loadSession",
+      mcpServers: params.mcpServers,
+    });
     if (!this.sessionStore.hasSession(params.sessionId)) {
       this.enforceSessionCreateRateLimit("loadSession");
     }
@@ -1073,13 +1081,22 @@ export class AcpGatewayAgent implements Agent {
     }
   }
 
-  private assertSupportedSessionSetup(mcpServers: ReadonlyArray<unknown>): void {
-    if (mcpServers.length === 0) {
+  private assertSupportedSessionSetup(params: {
+    method: "newSession" | "loadSession";
+    mcpServers: unknown;
+  }): void {
+    if (params.mcpServers === undefined) {
       return;
     }
-    throw new Error(
-      "ACP bridge mode does not support per-session MCP servers. Configure MCP on the OpenClaw gateway or agent instead.",
-    );
+    if (!Array.isArray(params.mcpServers)) {
+      throw new Error(
+        `ACP bridge mode ${params.method} expects mcpServers to be an array when provided.`,
+      );
+    }
+    if (params.mcpServers.length === 0) {
+      return;
+    }
+    throw new Error(ACP_UNSUPPORTED_PER_SESSION_MCP_MESSAGE);
   }
 
   private enforceSessionCreateRateLimit(method: "newSession" | "loadSession"): void {

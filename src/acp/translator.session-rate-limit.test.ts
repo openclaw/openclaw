@@ -199,6 +199,45 @@ describe("acp unsupported bridge session setup", () => {
     expect(sessionUpdate).not.toHaveBeenCalled();
     sessionStore.clearAllSessionsForTest();
   });
+
+  it("rejects malformed mcpServers payload on newSession", async () => {
+    const sessionStore = createInMemorySessionStore();
+    const connection = createAcpConnection();
+    const sessionUpdate = connection.__sessionUpdateMock;
+    const agent = new AcpGatewayAgent(connection, createAcpGateway(), {
+      sessionStore,
+    });
+
+    await expect(
+      agent.newSession({
+        ...createNewSessionRequest(),
+        mcpServers: { name: "docs", command: "mcp-docs" } as never,
+      }),
+    ).rejects.toThrow(/expects mcpServers to be an array/i);
+
+    expect(sessionUpdate).not.toHaveBeenCalled();
+    sessionStore.clearAllSessionsForTest();
+  });
+
+  it("rejects malformed mcpServers payload on loadSession", async () => {
+    const sessionStore = createInMemorySessionStore();
+    const connection = createAcpConnection();
+    const sessionUpdate = connection.__sessionUpdateMock;
+    const agent = new AcpGatewayAgent(connection, createAcpGateway(), {
+      sessionStore,
+    });
+
+    await expect(
+      agent.loadSession({
+        ...createLoadSessionRequest("docs-session"),
+        mcpServers: { name: "docs", command: "mcp-docs" } as never,
+      }),
+    ).rejects.toThrow(/expects mcpServers to be an array/i);
+
+    expect(sessionStore.hasSession("docs-session")).toBe(false);
+    expect(sessionUpdate).not.toHaveBeenCalled();
+    sessionStore.clearAllSessionsForTest();
+  });
 });
 
 describe("acp session UX bridge behavior", () => {
