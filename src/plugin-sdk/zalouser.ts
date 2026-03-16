@@ -55,10 +55,8 @@ export type { WizardPrompter } from "../wizard/prompts.js";
 export { formatAllowFromLowercase } from "./allow-from.js";
 export { resolveSenderCommandAuthorization } from "./command-auth.js";
 export { resolveChannelAccountConfigBasePath } from "./config-paths.js";
-export {
-  zalouserSetupAdapter,
-  zalouserSetupWizard,
-} from "../../extensions/zalouser/src/setup-surface.js";
+export { zalouserSetupAdapter } from "../../extensions/zalouser/src/setup-core.js";
+export { zalouserSetupWizard } from "../../extensions/zalouser/src/setup-surface.js";
 export {
   evaluateGroupRouteAccessForPolicy,
   resolveSenderScopedGroupPolicy,
