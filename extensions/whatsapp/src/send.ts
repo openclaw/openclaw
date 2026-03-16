@@ -49,7 +49,6 @@ function requireOutboundActiveWebListener(params: { cfg: OpenClawConfig; account
   }
   return { accountId: resolvedAccountId, listener };
 }
-
 export async function sendMessageWhatsApp(
   to: string,
   body: string,

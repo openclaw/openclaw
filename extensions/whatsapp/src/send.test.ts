@@ -263,6 +263,28 @@ describe("web outbound", () => {
     );
   });
 
+  it("keeps mp3 audio as regular audio", async () => {
+    const buf = Buffer.from("audio");
+    loadWebMediaMock.mockResolvedValueOnce({
+      buffer: buf,
+      contentType: "audio/mpeg",
+      kind: "audio",
+      fileName: "voice.mp3",
+    });
+    await sendMessageWhatsApp("+1555", "", {
+      verbose: false,
+      mediaUrl: "/tmp/voice.mp3",
+    });
+    expect(sendMessage).toHaveBeenLastCalledWith("+1555", "", buf, "audio/mpeg");
+    expect(sendMessage).not.toHaveBeenCalledWith(
+      "+1555",
+      "",
+      buf,
+      "audio/mpeg",
+      expect.objectContaining({ audioAsVoice: true }),
+    );
+  });
+
   it("maps video with caption", async () => {
     const buf = Buffer.from("video");
     loadWebMediaMock.mockResolvedValueOnce({
