@@ -180,35 +180,17 @@ function ensureDefaultProfile(
 }
 
 /**
- * Ensure a built-in "user" profile exists for Chrome's existing-session attach flow.
- */
-function ensureDefaultUserBrowserProfile(
-  profiles: Record<string, BrowserProfileConfig>,
-): Record<string, BrowserProfileConfig> {
-  const result = { ...profiles };
-  if (result.user) {
-    return result;
-  }
-  result.user = {
-    driver: "existing-session",
-    attachOnly: true,
-    color: "#00AA00",
-  };
-  return result;
-}
-
-/**
- * Ensure a built-in "chrome-relay" profile exists for the Chrome extension relay.
+ * Ensure a built-in "chrome" profile exists for the Chrome extension relay.
  *
  * Note: this is an OpenClaw browser profile (routing config), not a Chrome user profile.
  * It points at the local relay CDP endpoint (controlPort + 1).
  */
-function ensureDefaultChromeRelayProfile(
+function ensureDefaultChromeExtensionProfile(
   profiles: Record<string, BrowserProfileConfig>,
   controlPort: number,
 ): Record<string, BrowserProfileConfig> {
   const result = { ...profiles };
-  if (result["chrome-relay"]) {
+  if (result.chrome) {
     return result;
   }
   const relayPort = controlPort + 1;
@@ -220,7 +202,7 @@ function ensureDefaultChromeRelayProfile(
   if (getUsedPorts(result).has(relayPort)) {
     return result;
   }
-  result["chrome-relay"] = {
+  result.chrome = {
     driver: "extension",
     cdpUrl: `http://127.0.0.1:${relayPort}`,
     color: "#00AA00",
@@ -286,15 +268,13 @@ export function resolveBrowserConfig(
   const legacyCdpPort = rawCdpUrl ? cdpInfo.port : undefined;
   const isWsUrl = cdpInfo.parsed.protocol === "ws:" || cdpInfo.parsed.protocol === "wss:";
   const legacyCdpUrl = rawCdpUrl && isWsUrl ? cdpInfo.normalized : undefined;
-  const profiles = ensureDefaultChromeRelayProfile(
-    ensureDefaultUserBrowserProfile(
-      ensureDefaultProfile(
-        cfg?.profiles,
-        defaultColor,
-        legacyCdpPort,
-        cdpPortRangeStart,
-        legacyCdpUrl,
-      ),
+  const profiles = ensureDefaultChromeExtensionProfile(
+    ensureDefaultProfile(
+      cfg?.profiles,
+      defaultColor,
+      legacyCdpPort,
+      cdpPortRangeStart,
+      legacyCdpUrl,
     ),
     controlPort,
   );
@@ -306,7 +286,7 @@ export function resolveBrowserConfig(
       ? DEFAULT_BROWSER_DEFAULT_PROFILE_NAME
       : profiles[DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME]
         ? DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME
-        : "user");
+        : "chrome");
 
   const extraArgs = Array.isArray(cfg?.extraArgs)
     ? cfg.extraArgs.filter((a): a is string => typeof a === "string" && a.trim().length > 0)
@@ -356,20 +336,6 @@ export function resolveProfile(
   let cdpPort = profile.cdpPort ?? 0;
   let cdpUrl = "";
   const driver = profile.driver === "extension" ? "extension" : "openclaw";
-
-  if (driver === "existing-session") {
-    // existing-session uses Chrome MCP auto-connect; no CDP port/URL needed
-    return {
-      name: profileName,
-      cdpPort: 0,
-      cdpUrl: "",
-      cdpHost: "",
-      cdpIsLoopback: true,
-      color: profile.color,
-      driver,
-      attachOnly: true,
-    };
-  }
 
   if (rawProfileUrl) {
     const parsed = parseHttpUrl(rawProfileUrl, `browser.profiles.${profileName}.cdpUrl`);
