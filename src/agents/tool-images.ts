@@ -5,7 +5,7 @@ import { canonicalizeBase64 } from "../media/base64.js";
 import {
   buildImageResizeSideGrid,
   getImageMetadata,
-  IMAGE_REDUCE_QUALITY_STEPS,
+  getEffectiveQualitySteps,
   resizeToJpeg,
 } from "../media/image-ops.js";
 import {
@@ -188,7 +188,7 @@ async function resizeImageBase64IfNeeded(params: {
 
   let smallest: { buffer: Buffer; size: number } | null = null;
   for (const side of sideGrid) {
-    for (const quality of IMAGE_REDUCE_QUALITY_STEPS) {
+    for (const quality of getEffectiveQualitySteps()) {
       const out = await resizeToJpeg({
         buffer: buf,
         maxSide: side,

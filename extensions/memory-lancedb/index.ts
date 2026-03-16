@@ -330,10 +330,10 @@ const memoryPlugin = {
           "Search through long-term memories. Use when you need context about user preferences, past decisions, or previously discussed topics.",
         parameters: Type.Object({
           query: Type.String({ description: "Search query" }),
-          limit: Type.Optional(Type.Number({ description: "Max results (default: 5)" })),
+          limit: Type.Optional(Type.Number({ description: "Max results" })),
         }),
         async execute(_toolCallId, params) {
-          const { query, limit = 5 } = params as {
+          const { query, limit } = params as {
             query: string;
             limit?: number;
           };
@@ -466,7 +466,7 @@ const memoryPlugin = {
 
           if (query) {
             const vector = await embeddings.embed(query);
-            const results = await db.search(vector, 5, 0.7);
+            const results = await db.search(vector, undefined, 0.7);
 
             if (results.length === 0) {
               return {

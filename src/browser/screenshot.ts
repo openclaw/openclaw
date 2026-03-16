@@ -1,7 +1,7 @@
 import {
   buildImageResizeSideGrid,
   getImageMetadata,
-  IMAGE_REDUCE_QUALITY_STEPS,
+  getEffectiveQualitySteps,
   resizeToJpeg,
 } from "../media/image-ops.js";
 
@@ -33,7 +33,7 @@ export async function normalizeBrowserScreenshot(
   let smallest: { buffer: Buffer; size: number } | null = null;
 
   for (const side of sideGrid) {
-    for (const quality of IMAGE_REDUCE_QUALITY_STEPS) {
+    for (const quality of getEffectiveQualitySteps()) {
       const out = await resizeToJpeg({
         buffer,
         maxSide: side,
