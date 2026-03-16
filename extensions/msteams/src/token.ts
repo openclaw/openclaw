@@ -5,7 +5,8 @@ import {
   normalizeSecretInputString,
 } from "./secret-input.js";
 
-export type MSTeamsAuthType = "clientSecret" | "certificate" | "federatedCredential";
+/** Derived from MSTeamsConfig.authType to keep a single source of truth. */
+export type MSTeamsAuthType = NonNullable<MSTeamsConfig["authType"]>;
 
 export type MSTeamsCredentials = {
   appId: string;
