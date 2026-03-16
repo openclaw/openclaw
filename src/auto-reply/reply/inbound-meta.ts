@@ -42,7 +42,10 @@ function resolveInboundChannel(ctx: TemplateContext): string | undefined {
   return channelValue;
 }
 
-export function buildInboundMetaSystemPrompt(ctx: TemplateContext): string {
+export function buildInboundMetaSystemPrompt(
+  ctx: TemplateContext,
+  options?: { redactPII?: boolean },
+): string {
   const chatType = normalizeChatType(ctx.ChatType);
   const isDirect = !chatType || chatType === "direct";
 
@@ -59,7 +62,7 @@ export function buildInboundMetaSystemPrompt(ctx: TemplateContext): string {
 
   const payload = {
     schema: "openclaw.inbound_meta.v1",
-    chat_id: safeTrim(ctx.OriginatingTo),
+    chat_id: options?.redactPII ? undefined : safeTrim(ctx.OriginatingTo),
     account_id: safeTrim(ctx.AccountId),
     channel: channelValue,
     provider: safeTrim(ctx.Provider),
@@ -81,7 +84,10 @@ export function buildInboundMetaSystemPrompt(ctx: TemplateContext): string {
   ].join("\n");
 }
 
-export function buildInboundUserContextPrefix(ctx: TemplateContext): string {
+export function buildInboundUserContextPrefix(
+  ctx: TemplateContext,
+  options?: { redactPII?: boolean },
+): string {
   const blocks: string[] = [];
   const chatType = normalizeChatType(ctx.ChatType);
   const isDirect = !chatType || chatType === "direct";
@@ -96,17 +102,19 @@ export function buildInboundUserContextPrefix(ctx: TemplateContext): string {
   const resolvedMessageId = messageId ?? messageIdFull;
   const timestampStr = formatConversationTimestamp(ctx.Timestamp);
 
+  const redactPII = options?.redactPII === true;
   const conversationInfo = {
     message_id: shouldIncludeConversationInfo ? resolvedMessageId : undefined,
     reply_to_id: shouldIncludeConversationInfo ? safeTrim(ctx.ReplyToId) : undefined,
-    sender_id: shouldIncludeConversationInfo ? safeTrim(ctx.SenderId) : undefined,
+    sender_id: shouldIncludeConversationInfo && !redactPII ? safeTrim(ctx.SenderId) : undefined,
     conversation_label: isDirect ? undefined : safeTrim(ctx.ConversationLabel),
-    sender: shouldIncludeConversationInfo
-      ? (safeTrim(ctx.SenderName) ??
-        safeTrim(ctx.SenderE164) ??
-        safeTrim(ctx.SenderId) ??
-        safeTrim(ctx.SenderUsername))
-      : undefined,
+    sender:
+      shouldIncludeConversationInfo && !redactPII
+        ? (safeTrim(ctx.SenderName) ??
+          safeTrim(ctx.SenderE164) ??
+          safeTrim(ctx.SenderId) ??
+          safeTrim(ctx.SenderUsername))
+        : undefined,
     timestamp: timestampStr,
     group_subject: safeTrim(ctx.GroupSubject),
     group_channel: safeTrim(ctx.GroupChannel),
@@ -135,26 +143,31 @@ export function buildInboundUserContextPrefix(ctx: TemplateContext): string {
     );
   }
 
-  const senderInfo = {
-    label: resolveSenderLabel({
+  if (!redactPII) {
+    const senderInfo = {
+      label: resolveSenderLabel({
+        name: safeTrim(ctx.SenderName),
+        username: safeTrim(ctx.SenderUsername),
+        tag: safeTrim(ctx.SenderTag),
+        e164: safeTrim(ctx.SenderE164),
+        id: safeTrim(ctx.SenderId),
+      }),
+      id: safeTrim(ctx.SenderId),
       name: safeTrim(ctx.SenderName),
       username: safeTrim(ctx.SenderUsername),
       tag: safeTrim(ctx.SenderTag),
       e164: safeTrim(ctx.SenderE164),
-      id: safeTrim(ctx.SenderId),
-    }),
-    id: safeTrim(ctx.SenderId),
-    name: safeTrim(ctx.SenderName),
-    username: safeTrim(ctx.SenderUsername),
-    tag: safeTrim(ctx.SenderTag),
-    e164: safeTrim(ctx.SenderE164),
-  };
-  if (senderInfo?.label) {
-    blocks.push(
-      ["Sender (untrusted metadata):", "```json", JSON.stringify(senderInfo, null, 2), "```"].join(
-        "\n",
-      ),
-    );
+    };
+    if (senderInfo?.label) {
+      blocks.push(
+        [
+          "Sender (untrusted metadata):",
+          "```json",
+          JSON.stringify(senderInfo, null, 2),
+          "```",
+        ].join("\n"),
+      );
+    }
   }
 
   if (safeTrim(ctx.ThreadStarterBody)) {

@@ -265,8 +265,10 @@ export async function runPreparedReply(
       })
     : "";
   const groupSystemPrompt = sessionCtx.GroupSystemPrompt?.trim() ?? "";
+  const redactInboundPII = cfg.privacy?.redactInboundPII === true;
   const inboundMetaPrompt = buildInboundMetaSystemPrompt(
     isNewSession ? sessionCtx : { ...sessionCtx, ThreadStarterBody: undefined },
+    { redactPII: redactInboundPII },
   );
   const extraSystemPromptParts = [
     inboundMetaPrompt,
@@ -301,6 +303,7 @@ export async function runPreparedReply(
             : {}),
         }
       : { ...sessionCtx, ThreadStarterBody: undefined },
+    { redactPII: redactInboundPII },
   );
   const baseBodyForPrompt = isBareSessionReset
     ? baseBodyFinal

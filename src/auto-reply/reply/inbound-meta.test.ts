@@ -85,6 +85,40 @@ describe("buildInboundMetaSystemPrompt", () => {
     expect(payload["flags"]).toBeUndefined();
   });
 
+  it("redacts chat_id when redactPII is true", () => {
+    const prompt = buildInboundMetaSystemPrompt(
+      {
+        OriginatingTo: "telegram:5494292670",
+        AccountId: "work",
+        OriginatingChannel: "telegram",
+        Provider: "telegram",
+        Surface: "telegram",
+        ChatType: "direct",
+      } as TemplateContext,
+      { redactPII: true },
+    );
+
+    const payload = parseInboundMetaPayload(prompt);
+    expect(payload["chat_id"]).toBeUndefined();
+    expect(payload["account_id"]).toBe("work");
+  });
+
+  it("keeps chat_id when redactPII is false", () => {
+    const prompt = buildInboundMetaSystemPrompt(
+      {
+        OriginatingTo: "telegram:5494292670",
+        OriginatingChannel: "telegram",
+        Provider: "telegram",
+        Surface: "telegram",
+        ChatType: "direct",
+      } as TemplateContext,
+      { redactPII: false },
+    );
+
+    const payload = parseInboundMetaPayload(prompt);
+    expect(payload["chat_id"]).toBe("telegram:5494292670");
+  });
+
   it("omits sender_id when blank", () => {
     const prompt = buildInboundMetaSystemPrompt({
       MessageSid: "458",
@@ -320,6 +354,45 @@ describe("buildInboundUserContextPrefix", () => {
 
     const conversationInfo = parseConversationInfoPayload(text);
     expect(conversationInfo["sender_id"]).toBe("289522496");
+  });
+
+  it("redacts sender_id, sender, and sender block when redactPII is true", () => {
+    const text = buildInboundUserContextPrefix(
+      {
+        ChatType: "group",
+        MessageSid: "msg-100",
+        SenderId: "289522496",
+        SenderName: "Tyler",
+        SenderUsername: "tylerg",
+        SenderTag: "Tyler#1234",
+        SenderE164: "+15551234567",
+      } as TemplateContext,
+      { redactPII: true },
+    );
+
+    const conversationInfo = parseConversationInfoPayload(text);
+    expect(conversationInfo["sender_id"]).toBeUndefined();
+    expect(conversationInfo["sender"]).toBeUndefined();
+    expect(text).not.toContain("Sender (untrusted metadata):");
+    // non-PII fields should still be present
+    expect(conversationInfo["message_id"]).toBe("msg-100");
+  });
+
+  it("keeps sender fields when redactPII is false", () => {
+    const text = buildInboundUserContextPrefix(
+      {
+        ChatType: "group",
+        MessageSid: "msg-101",
+        SenderId: "289522496",
+        SenderName: "Tyler",
+      } as TemplateContext,
+      { redactPII: false },
+    );
+
+    const conversationInfo = parseConversationInfoPayload(text);
+    expect(conversationInfo["sender_id"]).toBe("289522496");
+    expect(conversationInfo["sender"]).toBe("Tyler");
+    expect(text).toContain("Sender (untrusted metadata):");
   });
 
   it("falls back to SenderId when sender phone is missing", () => {
