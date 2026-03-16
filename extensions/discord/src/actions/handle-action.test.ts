@@ -173,6 +173,144 @@ describe("handleDiscordMessageAction", () => {
     );
   });
 
+  it("honors thread-reply filePath when media is not set", async () => {
+    await handleDiscordMessageAction({
+      action: "thread-reply",
+      params: {
+        channelId: "123",
+        message: "see attachment",
+        filePath: "/tmp/report.md",
+      },
+      cfg: {
+        channels: { discord: { token: "tok" } },
+      } as OpenClawConfig,
+      accountId: "ops",
+    });
+
+    expect(handleDiscordActionMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: "threadReply",
+        accountId: "ops",
+        channelId: "123",
+        content: "see attachment",
+        mediaUrl: "/tmp/report.md",
+      }),
+      expect.any(Object),
+      expect.any(Object),
+    );
+  });
+
+  it("honors thread-reply path when media is not set", async () => {
+    await handleDiscordMessageAction({
+      action: "thread-reply",
+      params: {
+        channelId: "123",
+        message: "see attachment",
+        path: "/tmp/report.md",
+      },
+      cfg: {
+        channels: { discord: { token: "tok" } },
+      } as OpenClawConfig,
+      accountId: "ops",
+    });
+
+    expect(handleDiscordActionMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: "threadReply",
+        accountId: "ops",
+        channelId: "123",
+        content: "see attachment",
+        mediaUrl: "/tmp/report.md",
+      }),
+      expect.any(Object),
+      expect.any(Object),
+    );
+  });
+
+  it("prefers thread-reply media over filePath", async () => {
+    await handleDiscordMessageAction({
+      action: "thread-reply",
+      params: {
+        channelId: "123",
+        message: "see attachment",
+        media: "/tmp/a.md",
+        filePath: "/tmp/b.md",
+      },
+      cfg: {
+        channels: { discord: { token: "tok" } },
+      } as OpenClawConfig,
+    });
+
+    expect(handleDiscordActionMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: "threadReply",
+        channelId: "123",
+        content: "see attachment",
+        mediaUrl: "/tmp/a.md",
+      }),
+      expect.any(Object),
+      expect.any(Object),
+    );
+  });
+
+  it("prefers thread-reply path over filePath", async () => {
+    await handleDiscordMessageAction({
+      action: "thread-reply",
+      params: {
+        channelId: "123",
+        message: "see attachment",
+        path: "/tmp/a.md",
+        filePath: "/tmp/b.md",
+      },
+      cfg: {
+        channels: { discord: { token: "tok" } },
+      } as OpenClawConfig,
+    });
+
+    expect(handleDiscordActionMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: "threadReply",
+        channelId: "123",
+        content: "see attachment",
+        mediaUrl: "/tmp/a.md",
+      }),
+      expect.any(Object),
+      expect.any(Object),
+    );
+  });
+
+  it("forwards media read context for thread-reply filePath attachments", async () => {
+    const mediaReadFile = vi.fn(async () => Buffer.from("report"));
+
+    await handleDiscordMessageAction({
+      action: "thread-reply",
+      params: {
+        channelId: "123",
+        message: "see attachment",
+        filePath: "/workspace/report.md",
+      },
+      cfg: {
+        channels: { discord: { token: "tok" } },
+      } as OpenClawConfig,
+      mediaLocalRoots: ["/workspace"],
+      mediaReadFile,
+    });
+
+    expect(handleDiscordActionMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: "threadReply",
+        channelId: "123",
+        content: "see attachment",
+        mediaUrl: "/workspace/report.md",
+      }),
+      expect.any(Object),
+      {
+        mediaLocalRoots: ["/workspace"],
+        mediaReadFile,
+      },
+    );
+  });
+
   it("falls back to Discord toolContext.currentChannelId for upload-file", async () => {
     await handleDiscordMessageAction({
       action: "upload-file",
