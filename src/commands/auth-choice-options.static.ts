@@ -21,6 +21,14 @@ export type AuthChoiceGroup = {
 
 export const CORE_AUTH_CHOICE_OPTIONS: ReadonlyArray<AuthChoiceOption> = [
   {
+    value: "azure-openai-api-key",
+    label: "Azure OpenAI API key",
+    hint: "Responses API + API key",
+    groupId: "azure-openai",
+    groupLabel: "Azure OpenAI",
+    groupHint: "Responses API + API key",
+  },
+  {
     value: "chutes",
     label: "Chutes (OAuth)",
     groupId: "chutes",
