@@ -93,6 +93,7 @@ import {
   runGatewayStartupRuntimePolicyPhase,
   runGatewayStartupSecretsPrecheck,
 } from "./server-startup-preflight.js";
+import { createGatewaySecretsActivationController } from "./server-startup-secrets.js";
 import { startGatewaySidecars } from "./server-startup.js";
 import { startGatewayTailscaleExposure } from "./server-tailscale.js";
 import { createWizardSessionTracker } from "./server-wizard-sessions.js";
@@ -292,7 +293,6 @@ export async function startGatewayServer(
     isNixMode,
   });
 
-  let secretsDegraded = false;
   const emitSecretsStateEvent = (
     code: "SECRETS_RELOADER_DEGRADED" | "SECRETS_RELOADER_RECOVERED",
     message: string,
@@ -303,60 +303,17 @@ export async function startGatewayServer(
       contextKey: code,
     });
   };
-  let secretsActivationTail: Promise<void> = Promise.resolve();
-  const runWithSecretsActivationLock = async <T>(operation: () => Promise<T>): Promise<T> => {
-    const run = secretsActivationTail.then(operation, operation);
-    secretsActivationTail = run.then(
-      () => undefined,
-      () => undefined,
-    );
-    return await run;
-  };
-  const activateRuntimeSecrets = async (
-    config: OpenClawConfig,
-    params: { reason: "startup" | "reload" | "restart-check"; activate: boolean },
-  ) =>
-    await runWithSecretsActivationLock(async () => {
-      try {
-        const prepared = await prepareSecretsRuntimeSnapshot({ config });
-        if (params.activate) {
-          runtimeState.secretsRuntime.activate(prepared);
-          logGatewayAuthSurfaceDiagnostics(prepared);
-        }
-        for (const warning of prepared.warnings) {
-          logSecrets.warn(`[${warning.code}] ${warning.message}`);
-        }
-        if (secretsDegraded) {
-          const recoveredMessage =
-            "Secret resolution recovered; runtime remained on last-known-good during the outage.";
-          logSecrets.info(`[SECRETS_RELOADER_RECOVERED] ${recoveredMessage}`);
-          emitSecretsStateEvent("SECRETS_RELOADER_RECOVERED", recoveredMessage, prepared.config);
-        }
-        secretsDegraded = false;
-        return prepared;
-      } catch (err) {
-        const details = String(err);
-        if (!secretsDegraded) {
-          logSecrets.error(`[SECRETS_RELOADER_DEGRADED] ${details}`);
-          if (params.reason !== "startup") {
-            emitSecretsStateEvent(
-              "SECRETS_RELOADER_DEGRADED",
-              `Secret resolution failed; runtime remains on last-known-good snapshot. ${details}`,
-              config,
-            );
-          }
-        } else {
-          logSecrets.warn(`[SECRETS_RELOADER_DEGRADED] ${details}`);
-        }
-        secretsDegraded = true;
-        if (params.reason === "startup") {
-          throw new Error(`Startup failed: required secrets are unavailable. ${details}`, {
-            cause: err,
-          });
-        }
-        throw err;
-      }
-    });
+  const { activateRuntimeSecrets } = createGatewaySecretsActivationController({
+    prepareSecretsRuntimeSnapshot,
+    activateRuntimeSnapshot: (snapshot) => runtimeState.secretsRuntime.activate(snapshot),
+    onAuthSurfaceDiagnostics: logGatewayAuthSurfaceDiagnostics,
+    log: {
+      info: (message) => logSecrets.info(message),
+      warn: (message) => logSecrets.warn(message),
+      error: (message) => logSecrets.error(message),
+    },
+    emitStateEvent: emitSecretsStateEvent,
+  });
 
   // Fail fast before startup if required refs are unresolved.
   let cfgAtStart: OpenClawConfig;
