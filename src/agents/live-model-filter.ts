@@ -1,3 +1,5 @@
+import { resolveProviderModernModelRef } from "../plugins/provider-runtime.js";
+
 export type ModelRef = {
   provider?: string | null;
   id?: string | null;
@@ -41,6 +43,19 @@ export function isModernModelRef(ref: ModelRef): boolean {
     return false;
   }
 
+  const pluginDecision = resolveProviderModernModelRef({
+    provider,
+    context: {
+      provider,
+      modelId: id,
+    },
+  });
+  if (typeof pluginDecision === "boolean") {
+    return pluginDecision;
+  }
+
+  // Compatibility fallback for core-owned providers and tests that disable
+  // bundled provider runtime hooks.
   if (provider === "anthropic") {
     return matchesPrefix(id, ANTHROPIC_PREFIXES);
   }

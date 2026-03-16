@@ -30,6 +30,10 @@ function modelRef(modelId: string): string {
   return `${PORTAL_PROVIDER_ID}/${modelId}`;
 }
 
+function isModernMiniMaxModel(modelId: string): boolean {
+  return modelId.trim().toLowerCase().startsWith("minimax-m2.5");
+}
+
 function buildPortalProviderCatalog(params: { baseUrl: string; apiKey: string }) {
   return {
     ...buildMinimaxPortalProvider(),
@@ -167,6 +171,7 @@ const minimaxPlugin = {
         });
         return apiKey ? { token: apiKey } : null;
       },
+      isModernModelRef: ({ modelId }) => isModernMiniMaxModel(modelId),
       fetchUsageSnapshot: async (ctx) =>
         await fetchMinimaxUsage(ctx.token, ctx.timeoutMs, ctx.fetchFn),
     });
@@ -195,6 +200,7 @@ const minimaxPlugin = {
           run: createOAuthHandler("cn"),
         },
       ],
+      isModernModelRef: ({ modelId }) => isModernMiniMaxModel(modelId),
     });
   },
 };

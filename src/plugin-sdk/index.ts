@@ -114,7 +114,9 @@ export type {
   ProviderBuiltInModelSuppressionResult,
   ProviderBuildMissingAuthMessageContext,
   ProviderCacheTtlEligibilityContext,
+  ProviderDefaultThinkingPolicyContext,
   ProviderFetchUsageSnapshotContext,
+  ProviderModernModelPolicyContext,
   ProviderPreparedRuntimeAuth,
   ProviderResolvedUsageAuth,
   ProviderPrepareExtraParamsContext,
@@ -124,6 +126,7 @@ export type {
   ProviderResolveDynamicModelContext,
   ProviderNormalizeResolvedModelContext,
   ProviderRuntimeModel,
+  ProviderThinkingPolicyContext,
   ProviderWrapStreamFnContext,
 } from "../plugins/types.js";
 export type {

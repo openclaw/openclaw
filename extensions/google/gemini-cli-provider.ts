@@ -1,52 +1,22 @@
-import { normalizeModelCompat } from "../../src/agents/model-compat.js";
 import { fetchGeminiUsage } from "../../src/infra/provider-usage.fetch.js";
 import { buildOauthProviderAuthResult } from "../../src/plugin-sdk/provider-auth-result.js";
 import type {
   OpenClawPluginApi,
   ProviderAuthContext,
   ProviderFetchUsageSnapshotContext,
-  ProviderResolveDynamicModelContext,
-  ProviderRuntimeModel,
 } from "../../src/plugins/types.js";
 import { loginGeminiCliOAuth } from "./oauth.js";
+import { isModernGoogleModel, resolveGoogle31ForwardCompatModel } from "./provider-models.js";
 
 const PROVIDER_ID = "google-gemini-cli";
 const PROVIDER_LABEL = "Gemini CLI OAuth";
 const DEFAULT_MODEL = "google-gemini-cli/gemini-3.1-pro-preview";
-const GEMINI_3_1_PRO_PREFIX = "gemini-3.1-pro";
-const GEMINI_3_1_FLASH_PREFIX = "gemini-3.1-flash";
-const GEMINI_3_1_PRO_TEMPLATE_IDS = ["gemini-3-pro-preview"] as const;
-const GEMINI_3_1_FLASH_TEMPLATE_IDS = ["gemini-3-flash-preview"] as const;
 const ENV_VARS = [
   "OPENCLAW_GEMINI_OAUTH_CLIENT_ID",
   "OPENCLAW_GEMINI_OAUTH_CLIENT_SECRET",
   "GEMINI_CLI_OAUTH_CLIENT_ID",
   "GEMINI_CLI_OAUTH_CLIENT_SECRET",
 ];
-
-function cloneFirstTemplateModel(params: {
-  modelId: string;
-  templateIds: readonly string[];
-  ctx: ProviderResolveDynamicModelContext;
-}): ProviderRuntimeModel | undefined {
-  const trimmedModelId = params.modelId.trim();
-  for (const templateId of [...new Set(params.templateIds)].filter(Boolean)) {
-    const template = params.ctx.modelRegistry.find(
-      PROVIDER_ID,
-      templateId,
-    ) as ProviderRuntimeModel | null;
-    if (!template) {
-      continue;
-    }
-    return normalizeModelCompat({
-      ...template,
-      id: trimmedModelId,
-      name: trimmedModelId,
-      reasoning: true,
-    } as ProviderRuntimeModel);
-  }
-  return undefined;
-}
 
 function parseGoogleUsageToken(apiKey: string): string {
   try {
@@ -62,28 +32,6 @@ function parseGoogleUsageToken(apiKey: string): string {
 
 async function fetchGeminiCliUsage(ctx: ProviderFetchUsageSnapshotContext) {
   return await fetchGeminiUsage(ctx.token, ctx.timeoutMs, ctx.fetchFn, PROVIDER_ID);
-}
-
-function resolveGeminiCliForwardCompatModel(
-  ctx: ProviderResolveDynamicModelContext,
-): ProviderRuntimeModel | undefined {
-  const trimmed = ctx.modelId.trim();
-  const lower = trimmed.toLowerCase();
-
-  let templateIds: readonly string[];
-  if (lower.startsWith(GEMINI_3_1_PRO_PREFIX)) {
-    templateIds = GEMINI_3_1_PRO_TEMPLATE_IDS;
-  } else if (lower.startsWith(GEMINI_3_1_FLASH_PREFIX)) {
-    templateIds = GEMINI_3_1_FLASH_TEMPLATE_IDS;
-  } else {
-    return undefined;
-  }
-
-  return cloneFirstTemplateModel({
-    modelId: trimmed,
-    templateIds,
-    ctx,
-  });
 }
 
 export function registerGoogleGeminiCliProvider(api: OpenClawPluginApi) {
@@ -133,7 +81,9 @@ export function registerGoogleGeminiCliProvider(api: OpenClawPluginApi) {
         },
       },
     ],
-    resolveDynamicModel: (ctx) => resolveGeminiCliForwardCompatModel(ctx),
+    resolveDynamicModel: (ctx) =>
+      resolveGoogle31ForwardCompatModel({ providerId: PROVIDER_ID, ctx }),
+    isModernModelRef: ({ modelId }) => isModernGoogleModel(modelId),
     resolveUsageAuth: async (ctx) => {
       const auth = await ctx.resolveOAuthToken();
       if (!auth) {

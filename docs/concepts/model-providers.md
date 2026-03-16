@@ -25,8 +25,10 @@ For model selection rules, see [/concepts/models](/concepts/models).
   `resolveDynamicModel`, `prepareDynamicModel`, `normalizeResolvedModel`,
   `capabilities`, `prepareExtraParams`, `wrapStreamFn`,
   `isCacheTtlEligible`, `buildMissingAuthMessage`,
-  `suppressBuiltInModel`, `augmentModelCatalog`, `prepareRuntimeAuth`,
-  `resolveUsageAuth`, and `fetchUsageSnapshot`.
+  `suppressBuiltInModel`, `augmentModelCatalog`, `isBinaryThinking`,
+  `supportsXHighThinking`, `resolveDefaultThinkingLevel`,
+  `isModernModelRef`, `prepareRuntimeAuth`, `resolveUsageAuth`, and
+  `fetchUsageSnapshot`.
 
 ## Plugin-owned provider behavior
 
@@ -51,6 +53,11 @@ Typical split:
   vendor-owned error for direct resolution failures
 - `augmentModelCatalog`: provider appends synthetic/final catalog rows after
   discovery and config merging
+- `isBinaryThinking`: provider owns binary on/off thinking UX
+- `supportsXHighThinking`: provider opts selected models into `xhigh`
+- `resolveDefaultThinkingLevel`: provider owns default `/think` policy for a
+  model family
+- `isModernModelRef`: provider owns live/smoke preferred-model matching
 - `prepareRuntimeAuth`: provider turns a configured credential into a short
   lived runtime token
 - `resolveUsageAuth`: provider resolves usage/quota credentials for `/usage`
@@ -68,14 +75,16 @@ Current bundled examples:
   hints, runtime token exchange, and usage endpoint fetching
 - `openai`: GPT-5.4 forward-compat fallback, direct OpenAI transport
   normalization, Codex-aware missing-auth hints, Spark suppression, synthetic
-  OpenAI/Codex catalog rows, and provider-family metadata
-- `google-gemini-cli`: Gemini 3.1 forward-compat fallback plus usage-token
-  parsing and quota endpoint fetching for usage surfaces
+  OpenAI/Codex catalog rows, thinking/live-model policy, and
+  provider-family metadata
+- `google` and `google-gemini-cli`: Gemini 3.1 forward-compat fallback and
+  modern-model matching; Gemini CLI OAuth also owns usage-token parsing and
+  quota endpoint fetching for usage surfaces
 - `moonshot`: shared transport, plugin-owned thinking payload normalization
 - `kilocode`: shared transport, plugin-owned request headers, reasoning payload
   normalization, Gemini transcript hints, and cache-TTL policy
 - `zai`: GLM-5 forward-compat fallback, `tool_stream` defaults, cache-TTL
-  policy, and usage auth + quota fetching
+  policy, binary-thinking/live-model policy, and usage auth + quota fetching
 - `mistral`, `opencode`, and `opencode-go`: plugin-owned capability metadata
 - `byteplus`, `cloudflare-ai-gateway`, `huggingface`, `kimi-coding`,
   `minimax-portal`, `modelstudio`, `nvidia`, `qianfan`, `qwen-portal`,
