@@ -34,7 +34,7 @@ export default defineConfig({
     ],
   },
   test: {
-    testTimeout: 120_000,
+    testTimeout: isWindows ? 240_000 : 120_000,
     hookTimeout: isWindows ? 180_000 : 120_000,
     // Many suites rely on `vi.stubEnv(...)` and expect it to be scoped to the test.
     // Keep env restoration automatic so shared-worker runs do not leak state.
