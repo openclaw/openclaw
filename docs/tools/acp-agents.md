@@ -444,6 +444,7 @@ Current acpx built-in harness aliases:
 - `pi`
 - `claude`
 - `codex`
+- `kiro`
 - `opencode`
 - `gemini`
 - `kimi`
@@ -464,7 +465,7 @@ Core ACP baseline:
     dispatch: { enabled: true },
     backend: "acpx",
     defaultAgent: "codex",
-    allowedAgents: ["pi", "claude", "codex", "opencode", "gemini", "kimi"],
+    allowedAgents: ["pi", "claude", "codex", "kiro", "opencode", "gemini", "kimi"],
     maxConcurrentSessions: 8,
     stream: {
       coalesceIdleMs: 300,

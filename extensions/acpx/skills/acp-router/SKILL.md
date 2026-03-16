@@ -89,7 +89,7 @@ Call:
 
 ## Thread spawn recovery policy
 
-When the user asks to start a coding harness in a thread (for example "start a codex/claude/pi/kimi thread"), treat that as an ACP runtime request and try to satisfy it end-to-end.
+When the user asks to start a coding harness in a thread (for example "start a codex/claude/pi/kiro/kimi thread"), treat that as an ACP runtime request and try to satisfy it end-to-end.
 
 Required behavior when ACP backend is unavailable:
 
@@ -183,6 +183,7 @@ ${ACPX_CMD} codex sessions close oc-codex-<conversationId>
 - `pi`
 - `claude`
 - `codex`
+- `kiro`
 - `opencode`
 - `gemini`
 - `kimi`
@@ -194,6 +195,7 @@ Defaults are:
 - `pi -> npx pi-acp`
 - `claude -> npx -y @zed-industries/claude-agent-acp`
 - `codex -> npx @zed-industries/codex-acp`
+- `kiro -> kiro-cli acp`
 - `opencode -> npx -y opencode-ai acp`
 - `gemini -> gemini`
 - `kimi -> kimi acp`
