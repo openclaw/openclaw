@@ -3,7 +3,6 @@ import {
   buildAccountScopedDmSecurityPolicy,
   collectAllowlistProviderRestrictSendersWarnings,
 } from "openclaw/plugin-sdk/compat";
-import { buildAgentSessionKey, type RoutePeer } from "openclaw/plugin-sdk/core";
 import {
   buildChannelConfigSchema,
   collectStatusIssuesFromLastError,
