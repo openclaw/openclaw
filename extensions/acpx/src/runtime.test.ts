@@ -154,6 +154,33 @@ describe("AcpxRuntime", () => {
     expect(resumeArgs[resumeFlagIndex + 1]).toBe(resumeSessionId);
   });
 
+  it("replaces dead named sessions returned by sessions ensure", async () => {
+    process.env.MOCK_ACPX_STATUS_STATUS = "dead";
+    process.env.MOCK_ACPX_STATUS_SUMMARY = "queue owner unavailable";
+    try {
+      const { runtime, logPath } = await createMockRuntimeFixture();
+      const sessionKey = "agent:codex:acp:dead-session";
+
+      const handle = await runtime.ensureSession({
+        sessionKey,
+        agent: "codex",
+        mode: "persistent",
+      });
+
+      expect(handle.backend).toBe("acpx");
+      const logs = await readMockRuntimeLogEntries(logPath);
+      const ensureIndex = logs.findIndex((entry) => entry.kind === "ensure");
+      const statusIndex = logs.findIndex((entry) => entry.kind === "status");
+      const newIndex = logs.findIndex((entry) => entry.kind === "new");
+      expect(ensureIndex).toBeGreaterThanOrEqual(0);
+      expect(statusIndex).toBeGreaterThan(ensureIndex);
+      expect(newIndex).toBeGreaterThan(statusIndex);
+    } finally {
+      delete process.env.MOCK_ACPX_STATUS_STATUS;
+      delete process.env.MOCK_ACPX_STATUS_SUMMARY;
+    }
+  });
+
   it("serializes text plus image attachments into ACP prompt blocks", async () => {
     const { runtime, logPath } = await createMockRuntimeFixture();
 

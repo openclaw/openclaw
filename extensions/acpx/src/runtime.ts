@@ -92,6 +92,26 @@ function formatAcpxExitMessage(params: {
   return stderr || `acpx exited with code ${params.exitCode ?? "unknown"}`;
 }
 
+function summarizeLogText(text: string, maxChars = 240): string {
+  const normalized = text.trim().replace(/\s+/g, " ");
+  if (!normalized) {
+    return "";
+  }
+  if (normalized.length <= maxChars) {
+    return normalized;
+  }
+  return `${normalized.slice(0, maxChars)}...`;
+}
+
+function findSessionIdentifierEvent(events: AcpxJsonObject[]): AcpxJsonObject | undefined {
+  return events.find(
+    (event) =>
+      asOptionalString(event.agentSessionId) ||
+      asOptionalString(event.acpxSessionId) ||
+      asOptionalString(event.acpxRecordId),
+  );
+}
+
 export function encodeAcpxRuntimeHandleState(state: AcpxHandleState): string {
   const payload = Buffer.from(JSON.stringify(state), "utf8").toString("base64url");
   return `${ACPX_RUNTIME_HANDLE_PREFIX}${payload}`;
@@ -252,6 +272,79 @@ export class AcpxRuntime implements AcpRuntime {
     this.healthy = result.ok;
   }
 
+  private async createNamedSession(params: {
+    agent: string;
+    cwd: string;
+    sessionName: string;
+    resumeSessionId?: string;
+  }): Promise<AcpxJsonObject[]> {
+    const command = params.resumeSessionId
+      ? [
+          "sessions",
+          "new",
+          "--name",
+          params.sessionName,
+          "--resume-session",
+          params.resumeSessionId,
+        ]
+      : ["sessions", "new", "--name", params.sessionName];
+    return await this.runControlCommand({
+      args: await this.buildVerbArgs({
+        agent: params.agent,
+        cwd: params.cwd,
+        command,
+      }),
+      cwd: params.cwd,
+      fallbackCode: "ACP_SESSION_INIT_FAILED",
+    });
+  }
+
+  private async shouldReplaceEnsuredSession(params: {
+    sessionName: string;
+    agent: string;
+    cwd: string;
+  }): Promise<boolean> {
+    const args = await this.buildVerbArgs({
+      agent: params.agent,
+      cwd: params.cwd,
+      command: ["status", "--session", params.sessionName],
+    });
+    let events: AcpxJsonObject[];
+    try {
+      events = await this.runControlCommand({
+        args,
+        cwd: params.cwd,
+        fallbackCode: "ACP_SESSION_INIT_FAILED",
+        ignoreNoSession: true,
+      });
+    } catch (error) {
+      this.logger?.warn?.(
+        `acpx ensureSession status probe failed: session=${params.sessionName} cwd=${params.cwd} error=${summarizeLogText(error instanceof Error ? error.message : String(error)) || "<empty>"}`,
+      );
+      return false;
+    }
+
+    const noSession = events.some((event) => toAcpxErrorEvent(event)?.code === "NO_SESSION");
+    if (noSession) {
+      this.logger?.warn?.(
+        `acpx ensureSession replacing missing named session: session=${params.sessionName} cwd=${params.cwd}`,
+      );
+      return true;
+    }
+
+    const detail = events.find((event) => !toAcpxErrorEvent(event));
+    const status = asTrimmedString(detail?.status)?.toLowerCase();
+    if (status === "dead") {
+      const summary = summarizeLogText(asOptionalString(detail?.summary) ?? "");
+      this.logger?.warn?.(
+        `acpx ensureSession replacing dead named session: session=${params.sessionName} cwd=${params.cwd} status=${status} summary=${summary || "<empty>"}`,
+      );
+      return true;
+    }
+
+    return false;
+  }
+
   async ensureSession(input: AcpRuntimeEnsureInput): Promise<AcpRuntimeHandle> {
     const sessionName = asTrimmedString(input.sessionKey);
     if (!sessionName) {
@@ -264,44 +357,63 @@ export class AcpxRuntime implements AcpRuntime {
     const cwd = asTrimmedString(input.cwd) || this.config.cwd;
     const mode = input.mode;
     const resumeSessionId = asTrimmedString(input.resumeSessionId);
-    const ensureSubcommand = resumeSessionId
-      ? ["sessions", "new", "--name", sessionName, "--resume-session", resumeSessionId]
-      : ["sessions", "ensure", "--name", sessionName];
-    const ensureCommand = await this.buildVerbArgs({
-      agent,
-      cwd,
-      command: ensureSubcommand,
-    });
+    let events = resumeSessionId
+      ? await this.createNamedSession({
+          agent,
+          cwd,
+          sessionName,
+          resumeSessionId,
+        })
+      : await this.runControlCommand({
+          args: await this.buildVerbArgs({
+            agent,
+            cwd,
+            command: ["sessions", "ensure", "--name", sessionName],
+          }),
+          cwd,
+          fallbackCode: "ACP_SESSION_INIT_FAILED",
+        });
+    if (events.length === 0) {
+      this.logger?.warn?.(
+        `acpx ensureSession returned no events after sessions ensure: session=${sessionName} agent=${agent} cwd=${cwd}`,
+      );
+    }
+    let ensuredEvent = findSessionIdentifierEvent(events);
 
-    let events = await this.runControlCommand({
-      args: ensureCommand,
-      cwd,
-      fallbackCode: "ACP_SESSION_INIT_FAILED",
-    });
-    let ensuredEvent = events.find(
-      (event) =>
-        asOptionalString(event.agentSessionId) ||
-        asOptionalString(event.acpxSessionId) ||
-        asOptionalString(event.acpxRecordId),
-    );
-
-    if (!ensuredEvent && !resumeSessionId) {
-      const newCommand = await this.buildVerbArgs({
+    if (
+      ensuredEvent &&
+      !resumeSessionId &&
+      (await this.shouldReplaceEnsuredSession({
+        sessionName,
         agent,
         cwd,
-        command: ["sessions", "new", "--name", sessionName],
-      });
-      events = await this.runControlCommand({
-        args: newCommand,
+      }))
+    ) {
+      events = await this.createNamedSession({
+        agent,
         cwd,
-        fallbackCode: "ACP_SESSION_INIT_FAILED",
+        sessionName,
       });
-      ensuredEvent = events.find(
-        (event) =>
-          asOptionalString(event.agentSessionId) ||
-          asOptionalString(event.acpxSessionId) ||
-          asOptionalString(event.acpxRecordId),
-      );
+      if (events.length === 0) {
+        this.logger?.warn?.(
+          `acpx ensureSession returned no events after replacing dead session: session=${sessionName} agent=${agent} cwd=${cwd}`,
+        );
+      }
+      ensuredEvent = findSessionIdentifierEvent(events);
+    }
+
+    if (!ensuredEvent && !resumeSessionId) {
+      events = await this.createNamedSession({
+        agent,
+        cwd,
+        sessionName,
+      });
+      if (events.length === 0) {
+        this.logger?.warn?.(
+          `acpx ensureSession returned no events after sessions new: session=${sessionName} agent=${agent} cwd=${cwd}`,
+        );
+      }
+      ensuredEvent = findSessionIdentifierEvent(events);
     }
     if (!ensuredEvent) {
       throw new AcpRuntimeError(
