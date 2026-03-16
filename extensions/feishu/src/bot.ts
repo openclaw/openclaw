@@ -535,11 +535,8 @@ function normalizeFeishuCommandProbeBody(text: string): string {
 }
 
 /**
- * Decode RFC 5987 encoded filename (e.g., filename*=UTF-8''%E7%A4%BA%E4%BE%8B.pdf -> 测试.pdf)
- */
-/**
  * Decode filename from Feishu JSON payload.
- * Feishu sends URL-encoded filenames in JSON, not RFC 5987 format.
+ * Handles both RFC 5987 format and plain URL-encoded names.
  */
 export function decodeFeishuFilename(filename: string | undefined): string {
   if (!filename) return "";
