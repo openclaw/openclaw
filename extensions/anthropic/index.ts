@@ -286,7 +286,7 @@ const anthropicPlugin = {
         },
       ],
       wizard: {
-        onboarding: {
+        setup: {
           choiceId: "token",
           choiceLabel: "Anthropic token (paste setup-token)",
           choiceHint: "Run `claude setup-token` elsewhere, then paste the token here",
