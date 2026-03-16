@@ -931,7 +931,7 @@ export function ChatHeader({
                 ref={projectSelectorRef}
                 onClick={() => setProjectSelectorOpen((prev) => !prev)}
                 className={cn(
-                  "hidden sm:flex items-center gap-1 shrink-0 text-[10px] px-1.5 py-0.5 rounded-md transition-colors cursor-pointer",
+                  "flex items-center gap-1 shrink-0 text-[10px] px-1.5 py-0.5 rounded-md transition-colors cursor-pointer",
                   projectName
                     ? "bg-chart-2/10 border border-chart-2/20 text-chart-2/80 hover:bg-chart-2/20"
                     : "bg-muted/50 border border-border/40 text-muted-foreground/50 hover:text-muted-foreground hover:bg-muted",

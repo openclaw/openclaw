@@ -466,7 +466,7 @@ function rewriteWorkspaceFilePaths(text: string, agentId: string): string {
   const filePathRe =
     /`?((?:~|\/(?:Users|home)\/[^\s/`]+)\/\.openclaw\/(?:agents\/[^\s/`]+\/)?workspace\/([\w./_-]+\.(?:png|jpe?g|gif|webp|svg|pdf|md|mdx|markdown)))`?/gi;
 
-  return text.replace(filePathRe, (match, _fullPath: string, relativePath: string) => {
+  let result = text.replace(filePathRe, (match, _fullPath: string, relativePath: string) => {
     // Skip if already inside markdown image/link syntax (preceded by ![ or ]( )
     const idx = text.indexOf(match);
     if (idx > 0) {
@@ -488,6 +488,35 @@ function rewriteWorkspaceFilePaths(text: string, agentId: string): string {
     }
     return `\n![${fileName}](${url})\n`;
   });
+
+  // Also match file paths to images/PDFs outside the workspace.
+  // Matches: /Users/xxx/..., /home/xxx/..., ~/...
+  const absolutePathRe =
+    /`?((?:~|\/(?:Users|home)\/[^\s/`]+)\/[^\s`]+\.(?:png|jpe?g|gif|webp|svg|pdf))`?/gi;
+
+  result = result.replace(absolutePathRe, (match, fullPath: string) => {
+    // Skip if already rewritten or inside markdown syntax
+    const idx = result.indexOf(match);
+    if (idx > 0) {
+      const before = result.slice(Math.max(0, idx - 2), idx);
+      if (before.endsWith("![") || before.endsWith("](")) {
+        return match;
+      }
+    }
+    // Skip workspace paths (already handled by the first rewriter above)
+    if (fullPath.includes("/.openclaw/") && fullPath.includes("/workspace/")) {
+      return match;
+    }
+    const fileName = fullPath.split("/").pop() ?? fullPath;
+    const url = `/api/project-files?path=${encodeURIComponent(fullPath)}`;
+    const isPdf = /\.pdf$/i.test(fullPath);
+    if (isPdf) {
+      return `\n![pdf:${fileName}](${url})\n`;
+    }
+    return `\n![${fileName}](${url})\n`;
+  });
+
+  return result;
 }
 
 function MarkdownComponent({

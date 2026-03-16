@@ -1,4 +1,6 @@
+import fs from "node:fs";
 import type { IncomingMessage, ServerResponse } from "node:http";
+import path from "node:path";
 import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
 import { loadConfig } from "../config/config.js";
 import { openFileWithinRoot, SafeOpenError } from "../infra/fs-safe.js";
@@ -8,6 +10,7 @@ import { isLocalDirectRequest, type ResolvedGatewayAuth } from "./auth.js";
 import { authorizeGatewayBearerRequestOrReply } from "./http-auth-helpers.js";
 
 const WORKSPACE_FILES_PREFIX = "/api/workspace-files/";
+const PROJECT_FILES_PATH = "/api/project-files";
 
 /** MIME types allowed to be served. Anything else returns 403. */
 const ALLOWED_MIME_TYPES = new Set([
@@ -50,6 +53,11 @@ export async function handleWorkspaceFilesHttpRequest(
 ): Promise<boolean> {
   const url = new URL(req.url ?? "/", "http://localhost");
   const pathname = url.pathname;
+
+  // Handle /api/project-files?path=<absolute-path> for project repo files
+  if (pathname === PROJECT_FILES_PATH || pathname.startsWith(PROJECT_FILES_PATH + "/")) {
+    return handleProjectFileRequest(req, res, url, opts);
+  }
 
   if (!pathname.startsWith(WORKSPACE_FILES_PREFIX)) {
     return false;
@@ -172,5 +180,107 @@ export async function handleWorkspaceFilesHttpRequest(
       return true;
     }
     throw err;
+  }
+}
+
+/**
+ * Serve files from project directories via /api/project-files?path=<absolute-path>.
+ * Only allows files under registered project paths or ~/.openclaw/.
+ */
+async function handleProjectFileRequest(
+  req: IncomingMessage,
+  res: ServerResponse,
+  url: URL,
+  opts: {
+    auth: ResolvedGatewayAuth;
+    trustedProxies?: string[];
+    allowRealIpFallback?: boolean;
+    rateLimiter?: AuthRateLimiter;
+  },
+): Promise<boolean> {
+  const method = (req.method ?? "GET").toUpperCase();
+  if (method !== "GET" && method !== "HEAD") {
+    res.statusCode = 405;
+    res.setHeader("Allow", "GET, HEAD");
+    res.setHeader("Content-Type", "text/plain; charset=utf-8");
+    res.end("Method Not Allowed");
+    return true;
+  }
+
+  const isLocal = isLocalDirectRequest(req, opts.trustedProxies, opts.allowRealIpFallback);
+  if (!isLocal) {
+    const authorized = await authorizeGatewayBearerRequestOrReply({
+      req,
+      res,
+      auth: opts.auth,
+      trustedProxies: opts.trustedProxies,
+      allowRealIpFallback: opts.allowRealIpFallback,
+      rateLimiter: opts.rateLimiter,
+    });
+    if (!authorized) {
+      return true;
+    }
+  }
+
+  const rawPath = url.searchParams.get("path");
+  // Expand ~ to home directory
+  const filePath = rawPath?.startsWith("~/")
+    ? path.join(process.env.HOME ?? "/", rawPath.slice(2))
+    : rawPath;
+  if (
+    !filePath ||
+    !path.isAbsolute(filePath) ||
+    filePath.includes("\0") ||
+    filePath.includes("..")
+  ) {
+    res.statusCode = 400;
+    res.setHeader("Content-Type", "text/plain; charset=utf-8");
+    res.end("Bad Request: invalid path");
+    return true;
+  }
+
+  // Security: only allow paths under home directory
+  const homeDir = process.env.HOME ?? "/";
+  if (!filePath.startsWith(homeDir + "/")) {
+    res.statusCode = 403;
+    res.setHeader("Content-Type", "text/plain; charset=utf-8");
+    res.end("Forbidden");
+    return true;
+  }
+
+  try {
+    const stat = fs.statSync(filePath);
+    if (!stat.isFile() || stat.size > MAX_FILE_BYTES) {
+      res.statusCode = stat.isFile() ? 413 : 404;
+      res.setHeader("Content-Type", "text/plain; charset=utf-8");
+      res.end(stat.isFile() ? "Payload Too Large" : "Not Found");
+      return true;
+    }
+
+    const buffer = fs.readFileSync(filePath);
+    const mime = await detectMime({ buffer, filePath });
+    if (!mime || !ALLOWED_MIME_TYPES.has(mime)) {
+      res.statusCode = 403;
+      res.setHeader("Content-Type", "text/plain; charset=utf-8");
+      res.end("Forbidden: file type not allowed");
+      return true;
+    }
+
+    res.statusCode = 200;
+    res.setHeader("Content-Type", mime);
+    res.setHeader("Cache-Control", "no-store");
+    res.setHeader("X-Content-Type-Options", "nosniff");
+    if (method === "HEAD") {
+      res.setHeader("Content-Length", String(buffer.length));
+      res.end();
+    } else {
+      res.end(buffer);
+    }
+    return true;
+  } catch {
+    res.statusCode = 404;
+    res.setHeader("Content-Type", "text/plain; charset=utf-8");
+    res.end("Not Found");
+    return true;
   }
 }
