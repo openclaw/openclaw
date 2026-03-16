@@ -60,9 +60,6 @@ function resolveChannelOnboardingAdapter(
     setupWizardAdapters.set(plugin, adapter);
     return adapter;
   }
-  if (plugin.onboarding) {
-    return plugin.onboarding;
-  }
   return undefined;
 }
 

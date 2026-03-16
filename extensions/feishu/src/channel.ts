@@ -25,6 +25,7 @@ import { FeishuConfigSchema } from "./config-schema.js";
 import { listFeishuDirectoryPeers, listFeishuDirectoryGroups } from "./directory.static.js";
 import { resolveFeishuGroupToolPolicy } from "./policy.js";
 import { getFeishuRuntime } from "./runtime.js";
+import { feishuSetupAdapter, feishuSetupWizard } from "./setup-surface.js";
 import { normalizeFeishuTarget, looksLikeFeishuId, formatFeishuTarget } from "./targets.js";
 import type { ResolvedFeishuAccount, FeishuConfig } from "./types.js";
 
@@ -42,44 +43,6 @@ const meta: ChannelMeta = {
 async function loadFeishuChannelRuntime() {
   return await import("./channel.runtime.js");
 }
-
-const feishuOnboarding = {
-  channel: "feishu",
-  getStatus: async (ctx) =>
-    (await loadFeishuChannelRuntime()).feishuOnboardingAdapter.getStatus(ctx),
-  configure: async (ctx) =>
-    (await loadFeishuChannelRuntime()).feishuOnboardingAdapter.configure(ctx),
-  dmPolicy: {
-    label: "Feishu",
-    channel: "feishu",
-    policyKey: "channels.feishu.dmPolicy",
-    allowFromKey: "channels.feishu.allowFrom",
-    getCurrent: (cfg) => (cfg.channels?.feishu as FeishuConfig | undefined)?.dmPolicy ?? "pairing",
-    setPolicy: (cfg, policy) => ({
-      ...cfg,
-      channels: {
-        ...cfg.channels,
-        feishu: {
-          ...cfg.channels?.feishu,
-          dmPolicy: policy,
-        },
-      },
-    }),
-    promptAllowFrom: async ({ cfg, prompter, accountId }) =>
-      (await loadFeishuChannelRuntime()).feishuOnboardingAdapter.dmPolicy!.promptAllowFrom!({
-        cfg,
-        prompter,
-        accountId,
-      }),
-  },
-  disable: (cfg) => ({
-    ...cfg,
-    channels: {
-      ...cfg.channels,
-      feishu: { ...cfg.channels?.feishu, enabled: false },
-    },
-  }),
-} satisfies ChannelPlugin<ResolvedFeishuAccount>["onboarding"];
 
 function setFeishuNamedAccountEnabled(
   cfg: ClawdbotConfig,
@@ -429,28 +392,8 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount> = {
       });
     },
   },
-  setup: {
-    resolveAccountId: () => DEFAULT_ACCOUNT_ID,
-    applyAccountConfig: ({ cfg, accountId }) => {
-      const isDefault = !accountId || accountId === DEFAULT_ACCOUNT_ID;
-
-      if (isDefault) {
-        return {
-          ...cfg,
-          channels: {
-            ...cfg.channels,
-            feishu: {
-              ...cfg.channels?.feishu,
-              enabled: true,
-            },
-          },
-        };
-      }
-
-      return setFeishuNamedAccountEnabled(cfg, accountId, true);
-    },
-  },
-  onboarding: feishuOnboarding,
+  setup: feishuSetupAdapter,
+  setupWizard: feishuSetupWizard,
   messaging: {
     normalizeTarget: (raw) => normalizeFeishuTarget(raw) ?? undefined,
     targetResolver: {
