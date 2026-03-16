@@ -132,6 +132,7 @@ const ACP_COMMANDS = new Set([
 
 const nodeAcpSessions = new Map<string, AcpNodeSessionRecord>();
 const DEFAULT_NODE_HOST_ACP_BACKEND = "acpx";
+const ACTIVE_CLOSE_QUIESCENCE_TIMEOUT_MS = 100;
 
 let acpRuntimeServicesInit: Promise<void> | null = null;
 let acpRuntimeServicesHandle: PluginServicesHandle | null = null;
@@ -397,7 +398,7 @@ function recordCloseFailure(session: AcpNodeSessionRecord, reason: string, error
 async function closeSessionRecord(
   session: AcpNodeSessionRecord,
   reason: string,
-  opts?: { requireTurnQuiescence?: boolean },
+  opts?: { requireTurnQuiescence?: boolean; quiescenceTimeoutMs?: number },
 ): Promise<void> {
   const activeTurn = session.activeTurn;
   if (activeTurn) {
@@ -419,7 +420,29 @@ async function closeSessionRecord(
       throw error;
     }
     if (opts?.requireTurnQuiescence) {
-      await activeTurn.completion;
+      const quiescenceTimeoutMs = opts.quiescenceTimeoutMs ?? ACTIVE_CLOSE_QUIESCENCE_TIMEOUT_MS;
+      let quiescenceTimer: ReturnType<typeof setTimeout> | undefined;
+      try {
+        await Promise.race([
+          activeTurn.completion,
+          new Promise<never>((_, reject) => {
+            quiescenceTimer = setTimeout(() => {
+              reject(
+                new Error(
+                  `ACP session close timed out waiting for worker quiescence for run ${activeTurn.runId}`,
+                ),
+              );
+            }, quiescenceTimeoutMs);
+          }),
+        ]);
+      } catch (error) {
+        recordCloseFailure(session, reason, error);
+        throw error;
+      } finally {
+        if (quiescenceTimer) {
+          clearTimeout(quiescenceTimer);
+        }
+      }
       if (nodeAcpSessions.get(session.sessionKey) !== session) {
         throw new Error(`ACP session ${session.sessionKey} was replaced while closing`);
       }

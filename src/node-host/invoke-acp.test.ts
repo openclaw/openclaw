@@ -1840,6 +1840,123 @@ describe("handleAcpInvokeCommand", () => {
     });
   });
 
+  it("fails closed when active close cannot observe worker quiescence in time", async () => {
+    const runtime = new FakeNodeHostRuntime();
+    runtime.cancelReleasesTurn = false;
+    registerAcpRuntimeBackend({
+      id: "acpx",
+      runtime,
+    });
+
+    await handleAcpInvokeCommand(
+      buildFrame({
+        command: "acp.session.ensure",
+        payload: {
+          sessionKey: "agent:main:acp:test",
+          leaseId: "lease-1",
+          leaseEpoch: 1,
+          agent: "main",
+          mode: "persistent",
+        },
+      }),
+      buildDeps(),
+    );
+
+    await handleAcpInvokeCommand(
+      buildFrame({
+        command: "acp.turn.start",
+        payload: {
+          sessionKey: "agent:main:acp:test",
+          runId: "run-close-timeout",
+          leaseId: "lease-1",
+          leaseEpoch: 1,
+          requestId: "req-close-timeout",
+          mode: "prompt",
+          text: "never settle",
+        },
+      }),
+      buildDeps(async () => {}),
+    );
+
+    await runtime.waitForTurnStart();
+
+    const closeResult = await handleAcpInvokeCommand(
+      buildFrame({
+        command: "acp.session.close",
+        payload: {
+          sessionKey: "agent:main:acp:test",
+          leaseId: "lease-1",
+          leaseEpoch: 1,
+          reason: "cleanup",
+        },
+      }),
+      buildDeps(),
+    );
+
+    expect(closeResult).toMatchObject({
+      handled: true,
+      ok: false,
+      code: "UNAVAILABLE",
+      message: expect.stringContaining("timed out waiting for worker quiescence"),
+    });
+    expect(runtime.cancelled).toHaveLength(1);
+    expect(runtime.closed).toHaveLength(0);
+
+    const status = await handleAcpInvokeCommand(
+      buildFrame({
+        command: "acp.session.status",
+        payload: {
+          sessionKey: "agent:main:acp:test",
+          leaseId: "lease-1",
+          leaseEpoch: 1,
+        },
+      }),
+      buildDeps(),
+    );
+
+    expect(status).toMatchObject({
+      handled: true,
+      ok: true,
+      payload: {
+        state: "error",
+        nodeRuntimeSessionId: "acpx-session-1",
+        details: {
+          reason: "close_failed",
+          closeReason: "cleanup",
+          errorMessage: expect.stringContaining("timed out waiting for worker quiescence"),
+        },
+      },
+    });
+
+    runtime.releaseTurnToComplete("end_turn");
+    await runtime.waitForTurnFinish();
+
+    const settledStatus = await handleAcpInvokeCommand(
+      buildFrame({
+        command: "acp.session.status",
+        payload: {
+          sessionKey: "agent:main:acp:test",
+          leaseId: "lease-1",
+          leaseEpoch: 1,
+        },
+      }),
+      buildDeps(),
+    );
+
+    expect(settledStatus).toMatchObject({
+      handled: true,
+      ok: true,
+      payload: {
+        state: "error",
+        details: {
+          reason: "close_failed",
+          closeReason: "cleanup",
+          errorMessage: expect.stringContaining("timed out waiting for worker quiescence"),
+        },
+      },
+    });
+  });
+
   it("keeps completed-turn replay idempotent after many later runs", async () => {
     const runtime = new FakeNodeHostRuntime();
     registerAcpRuntimeBackend({
