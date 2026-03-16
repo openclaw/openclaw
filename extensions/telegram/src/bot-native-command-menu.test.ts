@@ -279,7 +279,7 @@ describe("bot-native-command-menu", () => {
     );
     expect(runtimeError).not.toHaveBeenCalled();
   });
-}
+
   describe("Windows path validation in command hash cache (#44199)", () => {
     it("continues menu sync even if command hash mkdir fails", async () => {
       const fs = await import("node:fs/promises");
