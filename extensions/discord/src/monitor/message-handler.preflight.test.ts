@@ -90,6 +90,20 @@ function createThreadClient(params: { threadId: string; parentId: string }): Dis
   } as unknown as DiscordClient;
 }
 
+function createDmClient(channelId: string): DiscordClient {
+  return {
+    fetchChannel: async (id: string) => {
+      if (id === channelId) {
+        return {
+          id: channelId,
+          type: ChannelType.DM,
+        };
+      }
+      return null;
+    },
+  } as unknown as DiscordClient;
+}
+
 async function runThreadBoundPreflight(params: {
   threadId: string;
   parentId: string;
@@ -154,6 +168,25 @@ async function runGuildPreflight(params: {
       client: createGuildTextClient(params.channelId),
     }),
     guildEntries: params.guildEntries,
+  });
+}
+
+async function runDmPreflight(params: {
+  channelId: string;
+  message: import("@buape/carbon").Message;
+  discordConfig: DiscordConfig;
+}) {
+  return preflightDiscordMessage({
+    ...createPreflightArgs({
+      cfg: DEFAULT_PREFLIGHT_CFG,
+      discordConfig: params.discordConfig,
+      data: {
+        channel_id: params.channelId,
+        author: params.message.author,
+        message: params.message,
+      } as DiscordMessageEvent,
+      client: createDmClient(params.channelId),
+    }),
   });
 }
 
@@ -256,6 +289,60 @@ describe("preflightDiscordMessage", () => {
     });
 
     expect(result).toBeNull();
+  });
+
+  it("restores direct-message bindings by user target instead of DM channel id", async () => {
+    registerSessionBindingAdapter({
+      channel: "discord",
+      accountId: "default",
+      listBySession: () => [],
+      resolveByConversation: (ref) =>
+        ref.conversationId === "user:user-1"
+          ? createThreadBinding({
+              conversation: {
+                channel: "discord",
+                accountId: "default",
+                conversationId: "user:user-1",
+              },
+              metadata: {
+                pluginBindingOwner: "plugin",
+                pluginId: "openclaw-codex-app-server",
+                pluginRoot: "/Users/huntharo/github/openclaw-app-server",
+              },
+            })
+          : null,
+    });
+
+    const result = await runDmPreflight({
+      channelId: "dm-channel-1",
+      message: createDiscordMessage({
+        id: "m-dm-1",
+        channelId: "dm-channel-1",
+        content: "who are you",
+        author: {
+          id: "user-1",
+          bot: false,
+          username: "alice",
+        },
+      }),
+      discordConfig: {
+        allowBots: true,
+        dmPolicy: "open",
+      } as DiscordConfig,
+    });
+
+    expect(result).not.toBeNull();
+    expect(result?.threadBinding).toMatchObject({
+      conversation: {
+        channel: "discord",
+        accountId: "default",
+        conversationId: "user:user-1",
+      },
+      metadata: {
+        pluginBindingOwner: "plugin",
+        pluginId: "openclaw-codex-app-server",
+      },
+    });
   });
 
   it("keeps bound-thread regular bot messages flowing when allowBots=true", async () => {

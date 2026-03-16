@@ -1,6 +1,7 @@
 import type {
   ChannelCapabilities,
   ChannelId,
+  ChannelMessagingAdapter,
   ChannelOutboundAdapter,
   ChannelPlugin,
 } from "../channels/plugins/types.js";
@@ -18,7 +19,14 @@ export const createTestRegistry = (channels: TestChannelRegistration[] = []): Pl
   hooks: [],
   typedHooks: [],
   channels: channels as unknown as PluginRegistry["channels"],
+  channelSetups: channels.map((entry) => ({
+    pluginId: entry.pluginId,
+    plugin: entry.plugin as PluginRegistry["channelSetups"][number]["plugin"],
+    source: entry.source,
+    enabled: true,
+  })),
   providers: [],
+  webSearchProviders: [],
   gatewayHandlers: {},
   httpRoutes: [],
   cliRegistrars: [],
@@ -89,6 +97,7 @@ export const createMSTeamsTestPlugin = (params?: {
 export const createOutboundTestPlugin = (params: {
   id: ChannelId;
   outbound: ChannelOutboundAdapter;
+  messaging?: ChannelMessagingAdapter;
   label?: string;
   docsPath?: string;
   capabilities?: ChannelCapabilities;
@@ -101,4 +110,5 @@ export const createOutboundTestPlugin = (params: {
     config: { listAccountIds: () => [] },
   }),
   outbound: params.outbound,
+  ...(params.messaging ? { messaging: params.messaging } : {}),
 });

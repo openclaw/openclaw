@@ -106,6 +106,10 @@ export const discordMessageActions: ChannelMessageActionAdapter = {
     }
     return Array.from(actions);
   },
+  getCapabilities: ({ cfg }) =>
+    listTokenSourcedAccounts(listEnabledDiscordAccounts(cfg)).length > 0
+      ? (["interactive", "components"] as const)
+      : [],
   extractToolSend: ({ args }) => {
     const action = typeof args.action === "string" ? args.action.trim() : "";
     if (action === "sendMessage") {

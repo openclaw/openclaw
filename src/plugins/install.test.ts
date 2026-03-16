@@ -5,7 +5,10 @@ import * as tar from "tar";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { safePathSegmentHashed } from "../infra/install-safe-path.js";
 import * as skillScanner from "../security/skill-scanner.js";
-import { expectSingleNpmPackIgnoreScriptsCall } from "../test-utils/exec-assertions.js";
+import {
+  expectSingleNpmInstallIgnoreScriptsCall,
+  expectSingleNpmPackIgnoreScriptsCall,
+} from "../test-utils/exec-assertions.js";
 import {
   expectInstallUsesIgnoreScripts,
   expectIntegrityDriftRejected,
@@ -229,6 +232,107 @@ function setupManifestInstallFixture(params: { manifestId: string }) {
     JSON.stringify({
       id: params.manifestId,
       configSchema: { type: "object", properties: {} },
+    }),
+    "utf-8",
+  );
+  return { pluginDir, extensionsDir: path.join(stateDir, "extensions") };
+}
+
+function setupBundleInstallFixture(params: {
+  bundleFormat: "codex" | "claude" | "cursor";
+  name: string;
+}) {
+  const caseDir = makeTempDir();
+  const stateDir = path.join(caseDir, "state");
+  const pluginDir = path.join(caseDir, "plugin-src");
+  fs.mkdirSync(stateDir, { recursive: true });
+  fs.mkdirSync(path.join(pluginDir, "skills"), { recursive: true });
+  const manifestDir = path.join(
+    pluginDir,
+    params.bundleFormat === "codex"
+      ? ".codex-plugin"
+      : params.bundleFormat === "cursor"
+        ? ".cursor-plugin"
+        : ".claude-plugin",
+  );
+  fs.mkdirSync(manifestDir, { recursive: true });
+  fs.writeFileSync(
+    path.join(manifestDir, "plugin.json"),
+    JSON.stringify({
+      name: params.name,
+      description: `${params.bundleFormat} bundle fixture`,
+      ...(params.bundleFormat === "codex" ? { skills: "skills" } : {}),
+    }),
+    "utf-8",
+  );
+  if (params.bundleFormat === "cursor") {
+    fs.mkdirSync(path.join(pluginDir, ".cursor", "commands"), { recursive: true });
+    fs.writeFileSync(
+      path.join(pluginDir, ".cursor", "commands", "review.md"),
+      "---\ndescription: fixture\n---\n",
+      "utf-8",
+    );
+  }
+  fs.writeFileSync(
+    path.join(pluginDir, "skills", "SKILL.md"),
+    "---\ndescription: fixture\n---\n",
+    "utf-8",
+  );
+  return { pluginDir, extensionsDir: path.join(stateDir, "extensions") };
+}
+
+function setupManifestlessClaudeInstallFixture() {
+  const caseDir = makeTempDir();
+  const stateDir = path.join(caseDir, "state");
+  const pluginDir = path.join(caseDir, "claude-manifestless");
+  fs.mkdirSync(stateDir, { recursive: true });
+  fs.mkdirSync(path.join(pluginDir, "commands"), { recursive: true });
+  fs.writeFileSync(
+    path.join(pluginDir, "commands", "review.md"),
+    "---\ndescription: fixture\n---\n",
+    "utf-8",
+  );
+  fs.writeFileSync(path.join(pluginDir, "settings.json"), '{"hideThinkingBlock":true}', "utf-8");
+  return { pluginDir, extensionsDir: path.join(stateDir, "extensions") };
+}
+
+function setupDualFormatInstallFixture(params: { bundleFormat: "codex" | "claude" }) {
+  const caseDir = makeTempDir();
+  const stateDir = path.join(caseDir, "state");
+  const pluginDir = path.join(caseDir, "plugin-src");
+  fs.mkdirSync(path.join(pluginDir, "dist"), { recursive: true });
+  fs.mkdirSync(path.join(pluginDir, "skills"), { recursive: true });
+  const manifestDir = path.join(
+    pluginDir,
+    params.bundleFormat === "codex" ? ".codex-plugin" : ".claude-plugin",
+  );
+  fs.mkdirSync(manifestDir, { recursive: true });
+  fs.writeFileSync(
+    path.join(pluginDir, "package.json"),
+    JSON.stringify({
+      name: "@openclaw/native-dual",
+      version: "0.0.1",
+      openclaw: { extensions: ["./dist/index.js"] },
+      dependencies: { "left-pad": "1.3.0" },
+    }),
+    "utf-8",
+  );
+  fs.writeFileSync(
+    path.join(pluginDir, "openclaw.plugin.json"),
+    JSON.stringify({
+      id: "native-dual",
+      configSchema: { type: "object", properties: {} },
+      skills: ["skills"],
+    }),
+    "utf-8",
+  );
+  fs.writeFileSync(path.join(pluginDir, "dist", "index.js"), "export {};", "utf-8");
+  fs.writeFileSync(path.join(pluginDir, "skills", "SKILL.md"), "---\ndescription: fixture\n---\n");
+  fs.writeFileSync(
+    path.join(manifestDir, "plugin.json"),
+    JSON.stringify({
+      name: "Bundle Fallback",
+      ...(params.bundleFormat === "codex" ? { skills: "skills" } : {}),
     }),
     "utf-8",
   );
@@ -770,6 +874,95 @@ describe("installPluginFromDir", () => {
     expect(path.basename(scopedTarget)).toBe(`@${hashedFlatId}`);
     expect(scopedTarget).not.toBe(flatTarget);
   });
+
+  it("installs Codex bundles from a local directory", async () => {
+    const { pluginDir, extensionsDir } = setupBundleInstallFixture({
+      bundleFormat: "codex",
+      name: "Sample Bundle",
+    });
+
+    const res = await installPluginFromDir({
+      dirPath: pluginDir,
+      extensionsDir,
+    });
+
+    expect(res.ok).toBe(true);
+    if (!res.ok) {
+      return;
+    }
+    expect(res.pluginId).toBe("sample-bundle");
+    expect(fs.existsSync(path.join(res.targetDir, ".codex-plugin", "plugin.json"))).toBe(true);
+    expect(fs.existsSync(path.join(res.targetDir, "skills", "SKILL.md"))).toBe(true);
+  });
+
+  it("prefers native package installs over bundle installs for dual-format directories", async () => {
+    const { pluginDir, extensionsDir } = setupDualFormatInstallFixture({
+      bundleFormat: "codex",
+    });
+
+    const run = vi.mocked(runCommandWithTimeout);
+    run.mockResolvedValue({
+      code: 0,
+      stdout: "",
+      stderr: "",
+      signal: null,
+      killed: false,
+      termination: "exit",
+    });
+
+    const res = await installPluginFromDir({
+      dirPath: pluginDir,
+      extensionsDir,
+    });
+
+    expect(res.ok).toBe(true);
+    if (!res.ok) {
+      return;
+    }
+    expect(res.pluginId).toBe("native-dual");
+    expect(res.targetDir).toBe(path.join(extensionsDir, "native-dual"));
+    expectSingleNpmInstallIgnoreScriptsCall({
+      calls: run.mock.calls as Array<[unknown, { cwd?: string } | undefined]>,
+      expectedTargetDir: res.targetDir,
+    });
+  });
+
+  it("installs manifestless Claude bundles from a local directory", async () => {
+    const { pluginDir, extensionsDir } = setupManifestlessClaudeInstallFixture();
+
+    const res = await installPluginFromDir({
+      dirPath: pluginDir,
+      extensionsDir,
+    });
+
+    expect(res.ok).toBe(true);
+    if (!res.ok) {
+      return;
+    }
+    expect(res.pluginId).toBe("claude-manifestless");
+    expect(fs.existsSync(path.join(res.targetDir, "commands", "review.md"))).toBe(true);
+    expect(fs.existsSync(path.join(res.targetDir, "settings.json"))).toBe(true);
+  });
+
+  it("installs Cursor bundles from a local directory", async () => {
+    const { pluginDir, extensionsDir } = setupBundleInstallFixture({
+      bundleFormat: "cursor",
+      name: "Cursor Sample",
+    });
+
+    const res = await installPluginFromDir({
+      dirPath: pluginDir,
+      extensionsDir,
+    });
+
+    expect(res.ok).toBe(true);
+    if (!res.ok) {
+      return;
+    }
+    expect(res.pluginId).toBe("cursor-sample");
+    expect(fs.existsSync(path.join(res.targetDir, ".cursor-plugin", "plugin.json"))).toBe(true);
+    expect(fs.existsSync(path.join(res.targetDir, ".cursor", "commands", "review.md"))).toBe(true);
+  });
 });
 
 describe("installPluginFromPath", () => {
@@ -800,6 +993,69 @@ describe("installPluginFromPath", () => {
     }
     expect(result.error.toLowerCase()).toMatch(/hardlink|path alias escape/);
     expect(fs.readFileSync(victimPath, "utf-8")).toBe("ORIGINAL");
+  });
+
+  it("installs Claude bundles from an archive path", async () => {
+    const { pluginDir, extensionsDir } = setupBundleInstallFixture({
+      bundleFormat: "claude",
+      name: "Claude Sample",
+    });
+    const archivePath = path.join(makeTempDir(), "claude-bundle.tgz");
+
+    await packToArchive({
+      pkgDir: pluginDir,
+      outDir: path.dirname(archivePath),
+      outName: path.basename(archivePath),
+    });
+
+    const result = await installPluginFromPath({
+      path: archivePath,
+      extensionsDir,
+    });
+    expect(result.ok).toBe(true);
+    if (!result.ok) {
+      return;
+    }
+    expect(result.pluginId).toBe("claude-sample");
+    expect(fs.existsSync(path.join(result.targetDir, ".claude-plugin", "plugin.json"))).toBe(true);
+  });
+
+  it("prefers native package installs over bundle installs for dual-format archives", async () => {
+    const { pluginDir, extensionsDir } = setupDualFormatInstallFixture({
+      bundleFormat: "claude",
+    });
+    const archivePath = path.join(makeTempDir(), "dual-format.tgz");
+
+    await packToArchive({
+      pkgDir: pluginDir,
+      outDir: path.dirname(archivePath),
+      outName: path.basename(archivePath),
+    });
+
+    const run = vi.mocked(runCommandWithTimeout);
+    run.mockResolvedValue({
+      code: 0,
+      stdout: "",
+      stderr: "",
+      signal: null,
+      killed: false,
+      termination: "exit",
+    });
+
+    const result = await installPluginFromPath({
+      path: archivePath,
+      extensionsDir,
+    });
+    expect(result.ok).toBe(true);
+    if (!result.ok) {
+      return;
+    }
+    expect(result.pluginId).toBe("native-dual");
+    expect(result.targetDir).toBe(path.join(extensionsDir, "native-dual"));
+    expectSingleNpmInstallIgnoreScriptsCall({
+      calls: run.mock.calls as Array<[unknown, { cwd?: string } | undefined]>,
+      expectedTargetDir: result.targetDir,
+    });
   });
 });
 
