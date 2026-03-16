@@ -1,7 +1,7 @@
 import { spawn } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
-import { resolveGatewayLaunchAgentLabel } from "./constants.js";
+import { assertValidLaunchAgentLabel, resolveGatewayLaunchAgentLabel } from "./constants.js";
 
 export type LaunchdRestartHandoffMode = "kickstart" | "start-after-exit";
 
@@ -28,9 +28,9 @@ function resolveGuiDomain(): string {
 function resolveLaunchAgentLabel(env?: Record<string, string | undefined>): string {
   const envLabel = env?.OPENCLAW_LAUNCHD_LABEL?.trim();
   if (envLabel) {
-    return envLabel;
+    return assertValidLaunchAgentLabel(envLabel);
   }
-  return resolveGatewayLaunchAgentLabel(env?.OPENCLAW_PROFILE);
+  return assertValidLaunchAgentLabel(resolveGatewayLaunchAgentLabel(env?.OPENCLAW_PROFILE));
 }
 
 export function resolveLaunchdRestartTarget(
@@ -104,12 +104,12 @@ export function scheduleDetachedLaunchdRestartHandoff(params: {
   mode: LaunchdRestartHandoffMode;
   waitForPid?: number;
 }): LaunchdRestartHandoffResult {
-  const target = resolveLaunchdRestartTarget(params.env);
   const waitForPid =
     typeof params.waitForPid === "number" && Number.isFinite(params.waitForPid)
       ? Math.floor(params.waitForPid)
       : 0;
   try {
+    const target = resolveLaunchdRestartTarget(params.env);
     const child = spawn(
       "/bin/sh",
       [

@@ -38,6 +38,17 @@ export function resolveGatewayLaunchAgentLabel(profile?: string): string {
   return `ai.openclaw.${normalized}`;
 }
 
+export function assertValidLaunchAgentLabel(label: string): string {
+  const trimmed = label.trim();
+  if (!trimmed) {
+    throw new Error("Invalid launchd label: must not be empty");
+  }
+  if (trimmed.includes("/") || trimmed.includes("\\") || trimmed.includes("\0")) {
+    throw new Error(`Invalid launchd label: ${JSON.stringify(trimmed)}`);
+  }
+  return trimmed;
+}
+
 export function resolveLegacyGatewayLaunchAgentLabels(profile?: string): string[] {
   void profile;
   return [];

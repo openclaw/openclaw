@@ -6,6 +6,7 @@ import path from "node:path";
 import { parseStrictInteger, parseStrictPositiveInteger } from "../infra/parse-finite-number.js";
 import { cleanStaleGatewayProcessesSync } from "../infra/restart-stale-pids.js";
 import {
+  assertValidLaunchAgentLabel,
   GATEWAY_LAUNCH_AGENT_LABEL,
   resolveGatewayServiceDescription,
   resolveGatewayLaunchAgentLabel,
@@ -57,9 +58,9 @@ function resolveTrustedLaunchAgentHome(): string {
 function resolveLaunchAgentLabel(args?: { env?: Record<string, string | undefined> }): string {
   const envLabel = args?.env?.OPENCLAW_LAUNCHD_LABEL?.trim();
   if (envLabel) {
-    return envLabel;
+    return assertValidLaunchAgentLabel(envLabel);
   }
-  return resolveGatewayLaunchAgentLabel(args?.env?.OPENCLAW_PROFILE);
+  return assertValidLaunchAgentLabel(resolveGatewayLaunchAgentLabel(args?.env?.OPENCLAW_PROFILE));
 }
 
 function resolveLaunchAgentPlistPathForLabel(

@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  assertValidLaunchAgentLabel,
   formatGatewayServiceDescription,
   GATEWAY_LAUNCH_AGENT_LABEL,
   GATEWAY_SYSTEMD_SERVICE_NAME,
@@ -39,6 +40,19 @@ describe("resolveGatewayLaunchAgentLabel", () => {
     const result = resolveGatewayLaunchAgentLabel("dev");
     expect(result).toBe("ai.openclaw.dev");
   });
+});
+
+describe("assertValidLaunchAgentLabel", () => {
+  it("accepts labels with shell-safe punctuation", () => {
+    expect(assertValidLaunchAgentLabel("ai.openclaw.it's-a-test")).toBe("ai.openclaw.it's-a-test");
+  });
+
+  it.each(["../escape", "com.custom/label", "com.custom\\label"])(
+    "rejects path-like labels: %s",
+    (label) => {
+      expect(() => assertValidLaunchAgentLabel(label)).toThrow("Invalid launchd label");
+    },
+  );
 });
 
 describe("resolveGatewaySystemdServiceName", () => {

@@ -117,6 +117,18 @@ describe("restart-helper", () => {
       await cleanupScript(scriptPath);
     });
 
+    it("returns null for path-like launchd labels on macOS", async () => {
+      Object.defineProperty(process, "platform", { value: "darwin" });
+      process.getuid = () => 501;
+
+      const scriptPath = await prepareRestartScript({
+        HOME: "/Users/testuser",
+        OPENCLAW_LAUNCHD_LABEL: "../escape",
+      });
+
+      expect(scriptPath).toBeNull();
+    });
+
     it("creates a schtasks restart script on Windows", async () => {
       Object.defineProperty(process, "platform", { value: "win32" });
 

@@ -5,6 +5,7 @@ import path from "node:path";
 import { DEFAULT_GATEWAY_PORT } from "../../config/paths.js";
 import { quoteCmdScriptArg } from "../../daemon/cmd-argv.js";
 import {
+  assertValidLaunchAgentLabel,
   resolveGatewayLaunchAgentLabel,
   resolveGatewaySystemdServiceName,
   resolveGatewayWindowsTaskName,
@@ -36,9 +37,9 @@ function resolveSystemdUnit(env: NodeJS.ProcessEnv): string {
 function resolveLaunchdLabel(env: NodeJS.ProcessEnv): string {
   const override = env.OPENCLAW_LAUNCHD_LABEL?.trim();
   if (override) {
-    return override;
+    return assertValidLaunchAgentLabel(override);
   }
-  return resolveGatewayLaunchAgentLabel(env.OPENCLAW_PROFILE);
+  return assertValidLaunchAgentLabel(resolveGatewayLaunchAgentLabel(env.OPENCLAW_PROFILE));
 }
 
 function resolveWindowsTaskName(env: NodeJS.ProcessEnv): string {

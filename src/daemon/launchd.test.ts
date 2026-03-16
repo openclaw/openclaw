@@ -715,4 +715,13 @@ describe("resolveLaunchAgentPlistPath", () => {
   ])("$name", ({ env, expected }) => {
     expect(resolveLaunchAgentPlistPath(env)).toBe(expected);
   });
+
+  it("rejects path-like launchd label overrides", () => {
+    expect(() =>
+      resolveLaunchAgentPlistPath({
+        HOME: "/Users/test",
+        OPENCLAW_LAUNCHD_LABEL: "../escape",
+      }),
+    ).toThrow("Invalid launchd label");
+  });
 });
