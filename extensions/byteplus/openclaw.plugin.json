@@ -1,0 +1,12 @@
+{
+  "id": "byteplus",
+  "providers": ["byteplus", "byteplus-plan"],
+  "providerAuthEnvVars": {
+    "byteplus": ["BYTEPLUS_API_KEY"]
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

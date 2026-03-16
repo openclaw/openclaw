@@ -1,13 +1,4 @@
 import type { Command } from "commander";
-import {
-  channelsAddCommand,
-  channelsCapabilitiesCommand,
-  channelsListCommand,
-  channelsLogsCommand,
-  channelsRemoveCommand,
-  channelsResolveCommand,
-  channelsStatusCommand,
-} from "../commands/channels.js";
 import { danger } from "../globals.js";
 import { defaultRuntime } from "../runtime.js";
 import { formatDocsLink } from "../terminal/links.js";
@@ -23,6 +14,7 @@ const optionNamesAdd = [
   "account",
   "name",
   "token",
+  "privateKey",
   "tokenFile",
   "botToken",
   "appToken",
@@ -48,6 +40,7 @@ const optionNamesAdd = [
   "initialSyncLimit",
   "ship",
   "url",
+  "relayUrls",
   "code",
   "groupChannels",
   "dmAllowlist",
@@ -96,6 +89,7 @@ export function registerChannelsCli(program: Command) {
     .option("--json", "Output JSON", false)
     .action(async (opts) => {
       await runChannelsCommand(async () => {
+        const { channelsListCommand } = await import("../commands/channels.js");
         await channelsListCommand(opts, defaultRuntime);
       });
     });
@@ -108,6 +102,7 @@ export function registerChannelsCli(program: Command) {
     .option("--json", "Output JSON", false)
     .action(async (opts) => {
       await runChannelsCommand(async () => {
+        const { channelsStatusCommand } = await import("../commands/channels.js");
         await channelsStatusCommand(opts, defaultRuntime);
       });
     });
@@ -122,6 +117,7 @@ export function registerChannelsCli(program: Command) {
     .option("--json", "Output JSON", false)
     .action(async (opts) => {
       await runChannelsCommand(async () => {
+        const { channelsCapabilitiesCommand } = await import("../commands/channels.js");
         await channelsCapabilitiesCommand(opts, defaultRuntime);
       });
     });
@@ -136,6 +132,7 @@ export function registerChannelsCli(program: Command) {
     .option("--json", "Output JSON", false)
     .action(async (entries, opts) => {
       await runChannelsCommand(async () => {
+        const { channelsResolveCommand } = await import("../commands/channels.js");
         await channelsResolveCommand(
           {
             channel: opts.channel as string | undefined,
@@ -157,6 +154,7 @@ export function registerChannelsCli(program: Command) {
     .option("--json", "Output JSON", false)
     .action(async (opts) => {
       await runChannelsCommand(async () => {
+        const { channelsLogsCommand } = await import("../commands/channels.js");
         await channelsLogsCommand(opts, defaultRuntime);
       });
     });
@@ -168,6 +166,7 @@ export function registerChannelsCli(program: Command) {
     .option("--account <id>", "Account id (default when omitted)")
     .option("--name <name>", "Display name for this account")
     .option("--token <token>", "Bot token (Telegram/Discord)")
+    .option("--private-key <key>", "Nostr private key (nsec... or hex)")
     .option("--token-file <path>", "Bot token file (Telegram)")
     .option("--bot-token <token>", "Slack bot token (xoxb-...)")
     .option("--app-token <token>", "Slack app token (xapp-...)")
@@ -192,6 +191,7 @@ export function registerChannelsCli(program: Command) {
     .option("--initial-sync-limit <n>", "Matrix initial sync limit")
     .option("--ship <ship>", "Tlon ship name (~sampel-palnet)")
     .option("--url <url>", "Tlon ship URL")
+    .option("--relay-urls <list>", "Nostr relay URLs (comma-separated)")
     .option("--code <code>", "Tlon login code")
     .option("--group-channels <list>", "Tlon group channels (comma-separated)")
     .option("--dm-allowlist <list>", "Tlon DM allowlist (comma-separated ships)")
@@ -200,6 +200,7 @@ export function registerChannelsCli(program: Command) {
     .option("--use-env", "Use env token (default account only)", false)
     .action(async (opts, command) => {
       await runChannelsCommand(async () => {
+        const { channelsAddCommand } = await import("../commands/channels.js");
         const hasFlags = hasExplicitOptions(command, optionNamesAdd);
         await channelsAddCommand(opts, defaultRuntime, { hasFlags });
       });
@@ -213,6 +214,7 @@ export function registerChannelsCli(program: Command) {
     .option("--delete", "Delete config entries (no prompt)", false)
     .action(async (opts, command) => {
       await runChannelsCommand(async () => {
+        const { channelsRemoveCommand } = await import("../commands/channels.js");
         const hasFlags = hasExplicitOptions(command, optionNamesRemove);
         await channelsRemoveCommand(opts, defaultRuntime, { hasFlags });
       });

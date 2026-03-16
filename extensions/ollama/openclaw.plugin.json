@@ -1,6 +1,9 @@
 {
   "id": "ollama",
   "providers": ["ollama"],
+  "providerAuthEnvVars": {
+    "ollama": ["OLLAMA_API_KEY"]
+  },
   "configSchema": {
     "type": "object",
     "additionalProperties": false,

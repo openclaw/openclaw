@@ -1,0 +1,12 @@
+{
+  "id": "cloudflare-ai-gateway",
+  "providers": ["cloudflare-ai-gateway"],
+  "providerAuthEnvVars": {
+    "cloudflare-ai-gateway": ["CLOUDFLARE_AI_GATEWAY_API_KEY"]
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

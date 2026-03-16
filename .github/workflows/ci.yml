@@ -160,6 +160,9 @@ jobs:
             task: extensions
             command: pnpm test:extensions
           - runtime: node
+            task: channels
+            command: pnpm test:channels
+          - runtime: node
             task: protocol
             command: pnpm protocol:check
           - runtime: bun
@@ -228,6 +231,29 @@ jobs:
 
       - name: Enforce safe external URL opening policy
         run: pnpm lint:ui:no-raw-window-open
+
+  startup-memory:
+    name: "startup-memory"
+    needs: [docs-scope, changed-scope]
+    if: needs.docs-scope.outputs.docs_only != 'true' && needs.changed-scope.outputs.run_node == 'true'
+    runs-on: blacksmith-16vcpu-ubuntu-2404
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          submodules: false
+
+      - name: Setup Node environment
+        uses: ./.github/actions/setup-node-env
+        with:
+          install-bun: "false"
+          use-sticky-disk: "false"
+
+      - name: Build dist
+        run: pnpm build
+
+      - name: Check CLI startup memory
+        run: pnpm test:startup:memory
 
   # Validate docs (format, lint, broken links) only when docs files changed.
   check-docs:
