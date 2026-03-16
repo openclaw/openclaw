@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { withFetchPreconnect } from "../test-utils/fetch-mock.js";
 import {
   buildUsageErrorSnapshot,
   buildUsageHttpErrorSnapshot,
@@ -36,7 +37,7 @@ describe("provider usage fetch shared helpers", () => {
       async (_input: URL | RequestInfo, init?: RequestInit) =>
         new Response(JSON.stringify({ aborted: init?.signal?.aborted ?? false }), { status: 200 }),
     );
-    const fetchFn = fetchFnMock as typeof fetch;
+    const fetchFn = withFetchPreconnect(fetchFnMock);
 
     const response = await fetchJson(
       "https://example.com/usage",
@@ -71,7 +72,7 @@ describe("provider usage fetch shared helpers", () => {
           });
         }),
     );
-    const fetchFn = fetchFnMock as typeof fetch;
+    const fetchFn = withFetchPreconnect(fetchFnMock);
 
     const request = fetchJson("https://example.com/usage", {}, 50, fetchFn);
     const rejection = expect(request).rejects.toThrow("aborted by timeout");
