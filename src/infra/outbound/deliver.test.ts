@@ -1165,6 +1165,54 @@ describe("deliverOutboundPayloads", () => {
     ]);
   });
 
+  it("uses mediaTypes as a fallback when audio media URLs have no extension", async () => {
+    const sendMedia = vi
+      .fn()
+      .mockResolvedValueOnce({ channel: "matrix", messageId: "mx-image" })
+      .mockResolvedValueOnce({ channel: "matrix", messageId: "mx-audio" });
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "matrix",
+          source: "test",
+          plugin: createOutboundTestPlugin({
+            id: "matrix",
+            outbound: {
+              deliveryMode: "direct",
+              sendText: vi.fn().mockResolvedValue({ channel: "matrix", messageId: "mx-text" }),
+              sendMedia,
+            },
+          }),
+        },
+      ]),
+    );
+
+    const results = await deliverOutboundPayloads({
+      cfg: {},
+      channel: "matrix",
+      to: "!room:1",
+      payloads: [
+        {
+          text: "mixed media",
+          mediaUrls: [
+            "https://example.com/photo?id=1",
+            "https://example.com/download?id=voice-note",
+          ],
+          mediaTypes: ["image/png", "audio/mpeg"],
+          audioAsVoice: true,
+        },
+      ],
+    });
+
+    expect(sendMedia).toHaveBeenCalledTimes(2);
+    expect(sendMedia.mock.calls[0]?.[0]).toMatchObject({ audioAsVoice: false });
+    expect(sendMedia.mock.calls[1]?.[0]).toMatchObject({ audioAsVoice: true });
+    expect(results).toEqual([
+      { channel: "matrix", messageId: "mx-image" },
+      { channel: "matrix", messageId: "mx-audio" },
+    ]);
+  });
+
   it("falls back to one sendText call for multi-media payloads when sendMedia is omitted", async () => {
     const sendText = vi.fn().mockResolvedValue({ channel: "matrix", messageId: "mx-2" });
     setActivePluginRegistry(

@@ -16,6 +16,8 @@ export type NormalizedOutboundPayload = {
   text: string;
   mediaUrls: string[];
   interactive?: InteractiveReply;
+  mediaType?: string;
+  mediaTypes?: string[];
   channelData?: Record<string, unknown>;
 };
 
@@ -116,6 +118,8 @@ export function normalizeOutboundPayloads(
       text,
       mediaUrls,
       ...(hasInteractive ? { interactive } : {}),
+      ...(payload.mediaType ? { mediaType: payload.mediaType } : {}),
+      ...(payload.mediaTypes?.length ? { mediaTypes: payload.mediaTypes } : {}),
       ...(hasChannelData ? { channelData } : {}),
     });
   }

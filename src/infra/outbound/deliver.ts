@@ -26,7 +26,7 @@ import {
 import { hasReplyChannelData, hasReplyContent } from "../../interactive/payload.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { getAgentScopedMediaLocalRoots } from "../../media/local-roots.js";
-import { isAudioFileName } from "../../media/mime.js";
+import { isAudioFileName, normalizeMimeType } from "../../media/mime.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { throwIfAborted } from "./abort.js";
 import { resolveOutboundChannelPlugin } from "./channel-resolution.js";
@@ -344,6 +344,8 @@ function buildPayloadSummary(payload: ReplyPayload): NormalizedOutboundPayload {
     text: payload.text ?? "",
     mediaUrls: payload.mediaUrls ?? (payload.mediaUrl ? [payload.mediaUrl] : []),
     interactive: payload.interactive,
+    ...(payload.mediaType ? { mediaType: payload.mediaType } : {}),
+    ...(payload.mediaTypes?.length ? { mediaTypes: payload.mediaTypes } : {}),
     channelData: payload.channelData,
   };
 }
@@ -728,13 +730,18 @@ async function deliverOutboundPayloadsCore(
 
       let first = true;
       let lastMessageId: string | undefined;
-      for (const url of payloadSummary.mediaUrls) {
+      for (const [index, url] of payloadSummary.mediaUrls.entries()) {
         throwIfAborted(abortSignal);
         const caption = first ? payloadSummary.text : "";
         first = false;
+        const mediaType =
+          payloadSummary.mediaTypes?.[index] ??
+          (payloadSummary.mediaUrls.length === 1 ? payloadSummary.mediaType : undefined);
         const mediaSendOverrides = {
           ...sendOverrides,
-          audioAsVoice: sendOverrides.audioAsVoice && isAudioFileName(url),
+          audioAsVoice:
+            sendOverrides.audioAsVoice &&
+            (normalizeMimeType(mediaType)?.startsWith("audio/") || isAudioFileName(url)),
         };
         if (handler.sendFormattedMedia) {
           const delivery = await handler.sendFormattedMedia(caption, url, mediaSendOverrides);
