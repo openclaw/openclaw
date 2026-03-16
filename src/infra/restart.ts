@@ -118,16 +118,13 @@ export function emitGatewayRestart(reason?: string): boolean {
   const cycleToken = ++restartCycleToken;
   emittedRestartToken = cycleToken;
 
-  // Log restart with reason and stack trace when reason is missing
+  // Log restart reason diagnostics when reason is missing
   if (!reason || reason.trim() === "") {
     const stack = new Error().stack;
     restartLog.warn(
       `emitGatewayRestart called with missing reason; stack trace:
 ${stack}`,
     );
-    restartLog.info(`restart emitted (reason=none)`);
-  } else {
-    restartLog.info(`restart emitted (reason=${reason.trim().slice(0, 200)})`);
   }
 
   authorizeGatewaySigusr1Restart();
@@ -137,6 +134,8 @@ ${stack}`,
     } else {
       process.kill(process.pid, "SIGUSR1");
     }
+    const reasonStr = reason?.trim() ? reason.trim().slice(0, 200) : "none";
+    restartLog.info(`restart emitted (reason=${reasonStr})`);
   } catch {
     // Roll back the cycle marker so future restart requests can still proceed.
     emittedRestartToken = consumedRestartToken;
