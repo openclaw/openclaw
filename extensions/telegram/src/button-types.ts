@@ -1,5 +1,9 @@
 import { reduceInteractiveReply } from "../../../src/channels/plugins/outbound/interactive.js";
-import type { InteractiveReply, InteractiveReplyButton } from "../../../src/interactive/payload.js";
+import {
+  normalizeInteractiveReply,
+  type InteractiveReply,
+  type InteractiveReplyButton,
+} from "../../../src/interactive/payload.js";
 
 export type TelegramButtonStyle = "danger" | "success" | "primary";
 
@@ -59,4 +63,13 @@ export function buildTelegramInteractiveButtons(
     },
   );
   return rows.length > 0 ? rows : undefined;
+}
+
+export function resolveTelegramInlineButtons(params: {
+  buttons?: TelegramInlineButtons;
+  interactive?: unknown;
+}): TelegramInlineButtons | undefined {
+  return (
+    params.buttons ?? buildTelegramInteractiveButtons(normalizeInteractiveReply(params.interactive))
+  );
 }
