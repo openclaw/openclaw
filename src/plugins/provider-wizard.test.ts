@@ -61,6 +61,7 @@ describe("provider wizard boundaries", () => {
     ).toEqual({
       provider,
       method: provider.auth[0],
+      wizard: provider.wizard?.setup,
     });
   });
 
@@ -101,6 +102,41 @@ describe("provider wizard boundaries", () => {
     ).toEqual({
       provider,
       method: provider.auth[0],
+      wizard: provider.auth[0]?.wizard,
+    });
+  });
+
+  it("returns method wizard metadata for canonical choices", () => {
+    const provider = makeProvider({
+      id: "anthropic",
+      label: "Anthropic",
+      auth: [
+        {
+          id: "setup-token",
+          label: "setup-token",
+          kind: "token",
+          wizard: {
+            choiceId: "token",
+            modelAllowlist: {
+              allowedKeys: ["anthropic/claude-sonnet-4-6"],
+              initialSelections: ["anthropic/claude-sonnet-4-6"],
+              message: "Anthropic OAuth models",
+            },
+          },
+          run: vi.fn(),
+        },
+      ],
+    });
+
+    expect(
+      resolveProviderPluginChoice({
+        providers: [provider],
+        choice: "token",
+      }),
+    ).toEqual({
+      provider,
+      method: provider.auth[0],
+      wizard: provider.auth[0]?.wizard,
     });
   });
 

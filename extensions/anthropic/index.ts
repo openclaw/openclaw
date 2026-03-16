@@ -5,7 +5,11 @@ import {
   type ProviderResolveDynamicModelContext,
   type ProviderRuntimeModel,
 } from "openclaw/plugin-sdk/core";
-import { listProfilesForProvider, upsertAuthProfile } from "../../src/agents/auth-profiles.js";
+import {
+  CLAUDE_CLI_PROFILE_ID,
+  listProfilesForProvider,
+  upsertAuthProfile,
+} from "../../src/agents/auth-profiles.js";
 import { suggestOAuthProfileIdForLegacyDefault } from "../../src/agents/auth-profiles/repair.js";
 import type { AuthProfileStore } from "../../src/agents/auth-profiles/types.js";
 import { normalizeModelCompat } from "../../src/agents/model-compat.js";
@@ -37,6 +41,13 @@ const ANTHROPIC_MODERN_MODEL_PREFIXES = [
   "claude-opus-4-5",
   "claude-sonnet-4-5",
   "claude-haiku-4-5",
+] as const;
+const ANTHROPIC_OAUTH_ALLOWLIST = [
+  "anthropic/claude-sonnet-4-6",
+  "anthropic/claude-opus-4-6",
+  "anthropic/claude-opus-4-5",
+  "anthropic/claude-sonnet-4-5",
+  "anthropic/claude-haiku-4-5",
 ] as const;
 
 function cloneFirstTemplateModel(params: {
@@ -309,6 +320,7 @@ const anthropicPlugin = {
       label: "Anthropic",
       docsPath: "/providers/models",
       envVars: ["ANTHROPIC_OAUTH_TOKEN", "ANTHROPIC_API_KEY"],
+      deprecatedProfileIds: [CLAUDE_CLI_PROFILE_ID],
       auth: [
         {
           id: "setup-token",
@@ -322,6 +334,11 @@ const anthropicPlugin = {
             groupId: "anthropic",
             groupLabel: "Anthropic",
             groupHint: "setup-token + API key",
+            modelAllowlist: {
+              allowedKeys: [...ANTHROPIC_OAUTH_ALLOWLIST],
+              initialSelections: ["anthropic/claude-sonnet-4-6"],
+              message: "Anthropic OAuth models",
+            },
           },
           run: async (ctx: ProviderAuthContext) => await runAnthropicSetupToken(ctx),
           runNonInteractive: async (ctx) =>

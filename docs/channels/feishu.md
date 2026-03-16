@@ -711,7 +711,7 @@ Key options:
 - ✅ Images
 - ✅ Files
 - ✅ Audio
-- ✅ Video
+- ✅ Video/media
 - ✅ Stickers
 
 ### Send
@@ -720,4 +720,28 @@ Key options:
 - ✅ Images
 - ✅ Files
 - ✅ Audio
-- ⚠️ Rich text (partial support)
+- ✅ Video/media
+- ✅ Interactive cards
+- ⚠️ Rich text (post-style formatting and cards, not arbitrary Feishu authoring features)
+
+### Threads and replies
+
+- ✅ Inline replies
+- ✅ Topic-thread replies where Feishu exposes `reply_in_thread`
+- ✅ Media replies stay thread-aware when replying to a thread/topic message
+
+## Runtime action surface
+
+Feishu currently exposes these runtime actions:
+
+- `send`
+- `read`
+- `edit`
+- `thread-reply`
+- `pin`
+- `list-pins`
+- `unpin`
+- `member-info`
+- `channel-info`
+- `channel-list`
+- `react` and `reactions` when reactions are enabled in config

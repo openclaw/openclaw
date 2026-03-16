@@ -8,6 +8,7 @@ import {
   listSubagentRunsForRequester,
   resetSubagentRegistryForTests,
 } from "../../agents/subagent-registry.js";
+import { setDefaultChannelPluginRegistryForTests } from "../../commands/channel-test-helpers.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { updateSessionStore, type SessionEntry } from "../../config/sessions.js";
 import * as internalHooks from "../../hooks/internal-hooks.js";
@@ -131,6 +132,32 @@ beforeAll(async () => {
 
 afterAll(async () => {
   await fs.rm(testWorkspaceDir, { recursive: true, force: true });
+});
+
+beforeEach(() => {
+  setDefaultChannelPluginRegistryForTests();
+  readConfigFileSnapshotMock.mockImplementation(async () => {
+    const configPath = process.env.OPENCLAW_CONFIG_PATH;
+    if (!configPath) {
+      return { valid: false, parsed: null };
+    }
+    const parsed = JSON.parse(await fs.readFile(configPath, "utf-8")) as Record<string, unknown>;
+    return { valid: true, parsed };
+  });
+  validateConfigObjectWithPluginsMock.mockImplementation((config: unknown) => ({
+    ok: true,
+    config,
+  }));
+  writeConfigFileMock.mockImplementation(async (config: unknown) => {
+    const configPath = process.env.OPENCLAW_CONFIG_PATH;
+    if (!configPath) {
+      return;
+    }
+    await fs.writeFile(configPath, JSON.stringify(config, null, 2), "utf-8");
+  });
+  readChannelAllowFromStoreMock.mockResolvedValue([]);
+  addChannelAllowFromStoreEntryMock.mockResolvedValue({ changed: true, allowFrom: [] });
+  removeChannelAllowFromStoreEntryMock.mockResolvedValue({ changed: true, allowFrom: [] });
 });
 
 async function withTempConfigPath<T>(
@@ -998,6 +1025,7 @@ function buildPolicyParams(
 describe("handleCommands /allowlist", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    setDefaultChannelPluginRegistryForTests();
   });
 
   it("lists config + store allowFrom entries", async () => {

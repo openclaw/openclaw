@@ -6,23 +6,13 @@ import type { ChannelMessageActionContext, ChannelMessageActionName } from "./ty
 
 type ChannelActions = NonNullable<NonNullable<ReturnType<typeof getChannelPlugin>>["actions"]>;
 
-const trustedRequesterRequiredByChannel: Readonly<
-  Partial<Record<string, ReadonlySet<ChannelMessageActionName>>>
-> = {
-  discord: new Set<ChannelMessageActionName>(["timeout", "kick", "ban"]),
-};
-
 function requiresTrustedRequesterSender(ctx: ChannelMessageActionContext): boolean {
   const plugin = getChannelPlugin(ctx.channel);
-  const fromPlugin = plugin?.actions?.requiresTrustedRequesterSender?.({
-    action: ctx.action,
-    toolContext: ctx.toolContext,
-  });
-  if (fromPlugin != null) {
-    return fromPlugin;
-  }
   return Boolean(
-    trustedRequesterRequiredByChannel[ctx.channel]?.has(ctx.action) && ctx.toolContext,
+    plugin?.actions?.requiresTrustedRequesterSender?.({
+      action: ctx.action,
+      toolContext: ctx.toolContext,
+    }),
   );
 }
 

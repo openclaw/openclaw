@@ -15,7 +15,6 @@ import type {
   ChannelMessageActionName,
 } from "../../../src/channels/plugins/types.js";
 import type { TelegramActionConfig } from "../../../src/config/types.telegram.js";
-import { normalizeInteractiveReply } from "../../../src/interactive/payload.js";
 import { readBooleanParam } from "../../../src/plugin-sdk/boolean-param.js";
 import { extractToolSend } from "../../../src/plugin-sdk/tool-send.js";
 import { resolveTelegramPollVisibility } from "../../../src/poll-params.js";
@@ -24,7 +23,7 @@ import {
   listEnabledTelegramAccounts,
   resolveTelegramPollActionGateState,
 } from "./accounts.js";
-import { buildTelegramInteractiveButtons } from "./button-types.js";
+import { resolveTelegramInlineButtons } from "./button-types.js";
 import { isTelegramInlineButtonsEnabled } from "./inline-buttons.js";
 
 const providerId = "telegram";
@@ -32,9 +31,10 @@ const providerId = "telegram";
 function readTelegramSendParams(params: Record<string, unknown>) {
   const to = readStringParam(params, "to", { required: true });
   const mediaUrl = readStringParam(params, "media", { trim: false });
-  const buttons =
-    params.buttons ??
-    buildTelegramInteractiveButtons(normalizeInteractiveReply(params.interactive));
+  const buttons = resolveTelegramInlineButtons({
+    buttons: params.buttons as ReturnType<typeof resolveTelegramInlineButtons>,
+    interactive: params.interactive,
+  });
   const hasButtons = Array.isArray(buttons) && buttons.length > 0;
   const message = readStringParam(params, "message", {
     required: !mediaUrl && !hasButtons,

@@ -6,17 +6,19 @@ import {
 import {
   buildChannelConfigSchema,
   getChatChannelMeta,
-  inspectTelegramAccount,
-  listTelegramAccountIds,
   normalizeAccountId,
-  resolveDefaultTelegramAccountId,
-  resolveTelegramAccount,
   TelegramConfigSchema,
   type ChannelPlugin,
   type OpenClawConfig,
-  type ResolvedTelegramAccount,
-  type TelegramProbe,
 } from "openclaw/plugin-sdk/telegram";
+import { inspectTelegramAccount } from "./account-inspect.js";
+import {
+  listTelegramAccountIds,
+  resolveDefaultTelegramAccountId,
+  resolveTelegramAccount,
+  type ResolvedTelegramAccount,
+} from "./accounts.js";
+import type { TelegramProbe } from "./probe.js";
 import { telegramSetupAdapter } from "./setup-core.js";
 import { telegramSetupWizard } from "./setup-surface.js";
 

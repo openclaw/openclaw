@@ -1,3 +1,4 @@
+import { buildAccountScopedAllowlistConfigEditor } from "openclaw/plugin-sdk/compat";
 import {
   buildChannelConfigSchema,
   buildAccountScopedDmSecurityPolicy,
@@ -24,6 +25,7 @@ import {
   type ChannelMessageActionName,
   type ChannelPlugin,
 } from "openclaw/plugin-sdk/whatsapp";
+import { isWhatsAppGroupJid, normalizeWhatsAppTarget } from "../../../src/whatsapp/normalize.js";
 // WhatsApp-specific imports from local extension code (moved from src/web/ and src/channels/plugins/)
 import {
   listWhatsAppAccountIds,
@@ -40,6 +42,21 @@ const meta = getChatChannelMeta("whatsapp");
 
 async function loadWhatsAppChannelRuntime() {
   return await import("./channel.runtime.js");
+}
+
+function normalizeWhatsAppPayloadText(text: string | undefined): string {
+  return (text ?? "").replace(/^(?:[ \t]*\r?\n)+/, "");
+}
+
+function parseWhatsAppExplicitTarget(raw: string) {
+  const normalized = normalizeWhatsAppTarget(raw);
+  if (!normalized) {
+    return null;
+  }
+  return {
+    to: normalized,
+    chatType: isWhatsAppGroupJid(normalized) ? ("group" as const) : ("direct" as const),
+  };
 }
 
 const whatsappSetupWizardProxy = {
@@ -168,6 +185,26 @@ export const whatsappPlugin: ChannelPlugin<ResolvedWhatsAppAccount> = {
     formatAllowFrom: ({ allowFrom }) => formatWhatsAppConfigAllowFromEntries(allowFrom),
     resolveDefaultTo: ({ cfg, accountId }) => resolveWhatsAppConfigDefaultTo({ cfg, accountId }),
   },
+  allowlist: {
+    supportsScope: ({ scope }) => scope === "dm" || scope === "group" || scope === "all",
+    readConfig: ({ cfg, accountId }) => {
+      const account = resolveWhatsAppAccount({ cfg, accountId });
+      return {
+        dmAllowFrom: (account.allowFrom ?? []).map(String),
+        groupAllowFrom: (account.groupAllowFrom ?? []).map(String),
+        dmPolicy: account.dmPolicy,
+        groupPolicy: account.groupPolicy,
+      };
+    },
+    applyConfigEdit: buildAccountScopedAllowlistConfigEditor({
+      channelId: "whatsapp",
+      normalize: ({ values }) => formatWhatsAppConfigAllowFromEntries(values),
+      resolvePaths: (scope) => ({
+        readPaths: [[scope === "dm" ? "allowFrom" : "groupAllowFrom"]],
+        writePath: [scope === "dm" ? "allowFrom" : "groupAllowFrom"],
+      }),
+    }),
+  },
   security: {
     resolveDmPolicy: ({ cfg, accountId, account }) => {
       return buildAccountScopedDmSecurityPolicy({
@@ -224,6 +261,8 @@ export const whatsappPlugin: ChannelPlugin<ResolvedWhatsAppAccount> = {
   },
   messaging: {
     normalizeTarget: normalizeWhatsAppMessagingTarget,
+    parseExplicitTarget: ({ raw }) => parseWhatsAppExplicitTarget(raw),
+    inferTargetChatType: ({ to }) => parseWhatsAppExplicitTarget(to)?.chatType,
     targetResolver: {
       looksLikeId: looksLikeWhatsAppTargetId,
       hint: "<E.164|group JID>",
@@ -288,16 +327,22 @@ export const whatsappPlugin: ChannelPlugin<ResolvedWhatsAppAccount> = {
       );
     },
   },
-  outbound: createWhatsAppOutboundBase({
-    chunker: (text, limit) => getWhatsAppRuntime().channel.text.chunkText(text, limit),
-    sendMessageWhatsApp: async (...args) =>
-      await getWhatsAppRuntime().channel.whatsapp.sendMessageWhatsApp(...args),
-    sendPollWhatsApp: async (...args) =>
-      await getWhatsAppRuntime().channel.whatsapp.sendPollWhatsApp(...args),
-    shouldLogVerbose: () => getWhatsAppRuntime().logging.shouldLogVerbose(),
-    resolveTarget: ({ to, allowFrom, mode }) =>
-      resolveWhatsAppOutboundTarget({ to, allowFrom, mode }),
-  }),
+  outbound: {
+    ...createWhatsAppOutboundBase({
+      chunker: (text, limit) => getWhatsAppRuntime().channel.text.chunkText(text, limit),
+      sendMessageWhatsApp: async (...args) =>
+        await getWhatsAppRuntime().channel.whatsapp.sendMessageWhatsApp(...args),
+      sendPollWhatsApp: async (...args) =>
+        await getWhatsAppRuntime().channel.whatsapp.sendPollWhatsApp(...args),
+      shouldLogVerbose: () => getWhatsAppRuntime().logging.shouldLogVerbose(),
+      resolveTarget: ({ to, allowFrom, mode }) =>
+        resolveWhatsAppOutboundTarget({ to, allowFrom, mode }),
+    }),
+    normalizePayload: ({ payload }) => ({
+      ...payload,
+      text: normalizeWhatsAppPayloadText(payload.text),
+    }),
+  },
   auth: {
     login: async ({ cfg, accountId, runtime, verbose }) => {
       const resolvedAccountId = accountId?.trim() || resolveDefaultWhatsAppAccountId(cfg);

@@ -86,15 +86,12 @@ function shouldAttachDeviceIdentityForGatewayCall(params: {
   token?: string;
   password?: string;
 }): boolean {
-  if (!(params.token || params.password)) {
-    return true;
-  }
-  try {
-    const parsed = new URL(params.url);
-    return !["127.0.0.1", "::1", "localhost"].includes(parsed.hostname);
-  } catch {
-    return true;
-  }
+  void params;
+  // Shared-auth local calls used to skip device identity as an optimization, but
+  // device-less operator connects now have their self-declared scopes stripped.
+  // Keep identity enabled so local authenticated calls stay device-bound and
+  // retain their least-privilege scopes.
+  return true;
 }
 
 export type ExplicitGatewayAuth = {

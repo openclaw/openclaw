@@ -63,6 +63,7 @@ cat ~/.openclaw/openclaw.json
 - Health check + restart prompt.
 - Skills status summary (eligible/missing/blocked).
 - Config normalization for legacy values.
+- Browser migration checks for legacy Chrome extension configs and Chrome MCP readiness.
 - OpenCode provider override warnings (`models.providers.opencode` / `models.providers.opencode-go`).
 - Legacy on-disk state migration (sessions/agent dir/WhatsApp auth).
 - Legacy cron store migration (`jobId`, `schedule.cron`, top-level delivery/payload fields, payload `provider`, simple `notify: true` webhook fallback jobs).
@@ -128,6 +129,8 @@ Current migrations:
 - `agent.model`/`allowedModels`/`modelAliases`/`modelFallbacks`/`imageModelFallbacks`
   → `agents.defaults.models` + `agents.defaults.model.primary/fallbacks` + `agents.defaults.imageModel.primary/fallbacks`
 - `browser.ssrfPolicy.allowPrivateNetwork` → `browser.ssrfPolicy.dangerouslyAllowPrivateNetwork`
+- `browser.profiles.*.driver: "extension"` → `"existing-session"`
+- remove `browser.relayBindHost` (legacy extension relay setting)
 
 Doctor warnings also include account-default guidance for multi-account channels:
 
@@ -140,6 +143,35 @@ If you’ve added `models.providers.opencode`, `opencode-zen`, or `opencode-go`
 manually, it overrides the built-in OpenCode catalog from `@mariozechner/pi-ai`.
 That can force models onto the wrong API or zero out costs. Doctor warns so you
 can remove the override and restore per-model API routing + costs.
+
+### 2c) Browser migration and Chrome MCP readiness
+
+If your browser config still points at the removed Chrome extension path, doctor
+normalizes it to the current host-local Chrome MCP attach model:
+
+- `browser.profiles.*.driver: "extension"` becomes `"existing-session"`
+- `browser.relayBindHost` is removed
+
+Doctor also audits the host-local Chrome MCP path when you use `defaultProfile:
+"user"` or a configured `existing-session` profile:
+
+- checks whether Google Chrome is installed on the same host for default
+  auto-connect profiles
+- checks the detected Chrome version and warns when it is below Chrome 144
+- reminds you to enable remote debugging in the browser inspect page (for
+  example `chrome://inspect/#remote-debugging`, `brave://inspect/#remote-debugging`,
+  or `edge://inspect/#remote-debugging`)
+
+Doctor cannot enable the Chrome-side setting for you. Host-local Chrome MCP
+still requires:
+
+- a Chromium-based browser 144+ on the gateway/node host
+- the browser running locally
+- remote debugging enabled in that browser
+- approving the first attach consent prompt in the browser
+
+This check does **not** apply to Docker, sandbox, remote-browser, or other
+headless flows. Those continue to use raw CDP.
 
 ### 3) Legacy state migrations (disk layout)
 

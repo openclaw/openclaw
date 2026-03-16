@@ -10,10 +10,12 @@ import {
 } from "../../../src/infra/outbound/send-deps.js";
 import { resolveInteractiveTextFallback } from "../../../src/interactive/payload.js";
 import type { TelegramInlineButtons } from "./button-types.js";
-import { buildTelegramInteractiveButtons } from "./button-types.js";
+import { resolveTelegramInlineButtons } from "./button-types.js";
 import { markdownToTelegramHtmlChunks } from "./format.js";
 import { parseTelegramReplyToMessageId, parseTelegramThreadId } from "./outbound-params.js";
 import { sendMessageTelegram } from "./send.js";
+
+export const TELEGRAM_TEXT_CHUNK_LIMIT = 4000;
 
 type TelegramSendFn = typeof sendMessageTelegram;
 type TelegramSendOpts = Parameters<TelegramSendFn>[2];
@@ -67,8 +69,10 @@ export async function sendTelegramPayloadMessages(params: {
       interactive: params.payload.interactive,
     }) ?? "";
   const mediaUrls = resolvePayloadMediaUrls(params.payload);
-  const interactiveButtons = buildTelegramInteractiveButtons(params.payload.interactive);
-  const buttons = telegramData?.buttons ?? interactiveButtons;
+  const buttons = resolveTelegramInlineButtons({
+    buttons: telegramData?.buttons,
+    interactive: params.payload.interactive,
+  });
   const payloadOpts = {
     ...params.baseOpts,
     quoteText,
@@ -99,7 +103,10 @@ export const telegramOutbound: ChannelOutboundAdapter = {
   deliveryMode: "direct",
   chunker: markdownToTelegramHtmlChunks,
   chunkerMode: "markdown",
-  textChunkLimit: 4000,
+  textChunkLimit: TELEGRAM_TEXT_CHUNK_LIMIT,
+  shouldSkipPlainTextSanitization: ({ payload }) => Boolean(payload.channelData),
+  resolveEffectiveTextChunkLimit: ({ fallbackLimit }) =>
+    typeof fallbackLimit === "number" ? Math.min(fallbackLimit, 4096) : 4096,
   sendText: async ({ cfg, to, text, accountId, deps, replyToId, threadId }) => {
     const { send, baseOpts } = resolveTelegramSendContext({
       cfg,

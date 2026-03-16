@@ -4,13 +4,14 @@ import type {
   ProviderResolveDynamicModelContext,
   ProviderRuntimeModel,
 } from "openclaw/plugin-sdk/core";
+import { CODEX_CLI_PROFILE_ID } from "../../src/agents/auth-profiles.js";
 import { listProfilesForProvider } from "../../src/agents/auth-profiles/profiles.js";
 import { ensureAuthProfileStore } from "../../src/agents/auth-profiles/store.js";
 import type { OAuthCredential } from "../../src/agents/auth-profiles/types.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../src/agents/defaults.js";
 import { normalizeModelCompat } from "../../src/agents/model-compat.js";
-import { normalizeProviderId } from "../../src/agents/model-selection.js";
 import { buildOpenAICodexProvider } from "../../src/agents/models-config.providers.static.js";
+import { normalizeProviderId } from "../../src/agents/provider-id.js";
 import { loginOpenAICodexOAuth } from "../../src/commands/openai-codex-oauth.js";
 import { fetchCodexUsage } from "../../src/infra/provider-usage.fetch.js";
 import { buildOauthProviderAuthResult } from "../../src/plugin-sdk/provider-auth-result.js";
@@ -194,6 +195,7 @@ export function buildOpenAICodexProviderPlugin(): ProviderPlugin {
     id: PROVIDER_ID,
     label: "OpenAI Codex",
     docsPath: "/providers/models",
+    deprecatedProfileIds: [CODEX_CLI_PROFILE_ID],
     auth: [
       {
         id: "oauth",

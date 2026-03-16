@@ -2,7 +2,6 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { createJiti } from "jiti";
-import type { ChannelDock } from "../channels/dock.js";
 import type { ChannelPlugin } from "../channels/plugins/types.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { isChannelConfigured } from "../config/plugin-auto-enable.js";
@@ -55,12 +54,32 @@ export type PluginLoadOptions = {
   mode?: "full" | "validate";
   onlyPluginIds?: string[];
   includeSetupOnlyChannelPlugins?: boolean;
+  /**
+   * Prefer `setupEntry` for configured channel plugins that explicitly opt in
+   * via package metadata because their setup entry covers the pre-listen startup surface.
+   */
+  preferSetupRuntimeForChannelPlugins?: boolean;
   activate?: boolean;
 };
 
 const MAX_PLUGIN_REGISTRY_CACHE_ENTRIES = 128;
 const registryCache = new Map<string, PluginRegistry>();
 const openAllowlistWarningCache = new Set<string>();
+const LAZY_RUNTIME_REFLECTION_KEYS = [
+  "version",
+  "config",
+  "subagent",
+  "system",
+  "media",
+  "tts",
+  "stt",
+  "tools",
+  "channel",
+  "events",
+  "logging",
+  "state",
+  "modelAuth",
+] as const satisfies readonly (keyof PluginRuntime)[];
 
 export function clearPluginLoaderCache(): void {
   registryCache.clear();
@@ -322,6 +341,7 @@ function buildCacheKey(params: {
   env: NodeJS.ProcessEnv;
   onlyPluginIds?: string[];
   includeSetupOnlyChannelPlugins?: boolean;
+  preferSetupRuntimeForChannelPlugins?: boolean;
 }): string {
   const { roots, loadPaths } = resolvePluginCacheInputs({
     workspaceDir: params.workspaceDir,
@@ -346,11 +366,13 @@ function buildCacheKey(params: {
   );
   const scopeKey = JSON.stringify(params.onlyPluginIds ?? []);
   const setupOnlyKey = params.includeSetupOnlyChannelPlugins === true ? "setup-only" : "runtime";
+  const startupChannelMode =
+    params.preferSetupRuntimeForChannelPlugins === true ? "prefer-setup" : "full";
   return `${roots.workspace ?? ""}::${roots.global ?? ""}::${roots.stock ?? ""}::${JSON.stringify({
     ...params.plugins,
     installs,
     loadPaths,
-  })}::${scopeKey}::${setupOnlyKey}`;
+  })}::${scopeKey}::${setupOnlyKey}::${startupChannelMode}`;
 }
 
 function normalizeScopedPluginIds(ids?: string[]): string[] | undefined {
@@ -407,7 +429,6 @@ function resolvePluginModuleExport(moduleExport: unknown): {
 
 function resolveSetupChannelRegistration(moduleExport: unknown): {
   plugin?: ChannelPlugin;
-  dock?: ChannelDock;
 } {
   const resolved =
     moduleExport &&
@@ -420,25 +441,31 @@ function resolveSetupChannelRegistration(moduleExport: unknown): {
   }
   const setup = resolved as {
     plugin?: unknown;
-    dock?: unknown;
   };
   if (!setup.plugin || typeof setup.plugin !== "object") {
     return {};
   }
   return {
     plugin: setup.plugin as ChannelPlugin,
-    ...(setup.dock && typeof setup.dock === "object" ? { dock: setup.dock as ChannelDock } : {}),
   };
 }
 
 function shouldLoadChannelPluginInSetupRuntime(params: {
   manifestChannels: string[];
   setupSource?: string;
+  startupDeferConfiguredChannelFullLoadUntilAfterListen?: boolean;
   cfg: OpenClawConfig;
   env: NodeJS.ProcessEnv;
+  preferSetupRuntimeForChannelPlugins?: boolean;
 }): boolean {
   if (!params.setupSource || params.manifestChannels.length === 0) {
     return false;
+  }
+  if (
+    params.preferSetupRuntimeForChannelPlugins &&
+    params.startupDeferConfiguredChannelFullLoadUntilAfterListen === true
+  ) {
+    return true;
   }
   return !params.manifestChannels.some((channelId) =>
     isChannelConfigured(params.cfg, channelId, params.env),
@@ -789,6 +816,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
   const onlyPluginIds = normalizeScopedPluginIds(options.onlyPluginIds);
   const onlyPluginIdSet = onlyPluginIds ? new Set(onlyPluginIds) : null;
   const includeSetupOnlyChannelPlugins = options.includeSetupOnlyChannelPlugins === true;
+  const preferSetupRuntimeForChannelPlugins = options.preferSetupRuntimeForChannelPlugins === true;
   const shouldActivate = options.activate !== false;
   // NOTE: `activate` is intentionally excluded from the cache key. All non-activating
   // (snapshot) callers pass `cache: false` via loadOnboardingPluginRegistry(), so they
@@ -801,6 +829,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
     env,
     onlyPluginIds,
     includeSetupOnlyChannelPlugins,
+    preferSetupRuntimeForChannelPlugins,
   });
   const cacheEnabled = options.cache !== false;
   if (cacheEnabled) {
@@ -874,6 +903,22 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
     resolvedRuntime ??= resolveCreatePluginRuntime()(options.runtimeOptions);
     return resolvedRuntime;
   };
+  const lazyRuntimeReflectionKeySet = new Set<PropertyKey>(LAZY_RUNTIME_REFLECTION_KEYS);
+  const resolveLazyRuntimeDescriptor = (prop: PropertyKey): PropertyDescriptor | undefined => {
+    if (!lazyRuntimeReflectionKeySet.has(prop)) {
+      return Reflect.getOwnPropertyDescriptor(resolveRuntime() as object, prop);
+    }
+    return {
+      configurable: true,
+      enumerable: true,
+      get() {
+        return Reflect.get(resolveRuntime() as object, prop);
+      },
+      set(value: unknown) {
+        Reflect.set(resolveRuntime() as object, prop, value);
+      },
+    };
+  };
   const runtime = new Proxy({} as PluginRuntime, {
     get(_target, prop, receiver) {
       return Reflect.get(resolveRuntime(), prop, receiver);
@@ -882,13 +927,13 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
       return Reflect.set(resolveRuntime(), prop, value, receiver);
     },
     has(_target, prop) {
-      return Reflect.has(resolveRuntime(), prop);
+      return lazyRuntimeReflectionKeySet.has(prop) || Reflect.has(resolveRuntime(), prop);
     },
     ownKeys() {
-      return Reflect.ownKeys(resolveRuntime() as object);
+      return [...LAZY_RUNTIME_REFLECTION_KEYS];
     },
     getOwnPropertyDescriptor(_target, prop) {
-      return Reflect.getOwnPropertyDescriptor(resolveRuntime() as object, prop);
+      return resolveLazyRuntimeDescriptor(prop);
     },
     defineProperty(_target, prop, attributes) {
       return Reflect.defineProperty(resolveRuntime() as object, prop, attributes);
@@ -1039,8 +1084,11 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
         shouldLoadChannelPluginInSetupRuntime({
           manifestChannels: manifestRecord.channels,
           setupSource: manifestRecord.setupSource,
+          startupDeferConfiguredChannelFullLoadUntilAfterListen:
+            manifestRecord.startupDeferConfiguredChannelFullLoadUntilAfterListen,
           cfg,
           env,
+          preferSetupRuntimeForChannelPlugins,
         })
         ? "setup-runtime"
         : "full"
@@ -1167,10 +1215,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
           hookPolicy: entry?.hooks,
           registrationMode,
         });
-        api.registerChannel({
-          plugin: setupRegistration.plugin,
-          ...(setupRegistration.dock ? { dock: setupRegistration.dock } : {}),
-        });
+        api.registerChannel(setupRegistration.plugin);
         registry.plugins.push(record);
         seenIds.set(pluginId, candidate.origin);
         continue;

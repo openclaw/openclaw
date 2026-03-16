@@ -14,6 +14,7 @@ import type {
   ChannelThreadingToolContext,
 } from "../../channels/plugins/types.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import { hasInteractiveReplyBlocks, hasReplyContent } from "../../interactive/payload.js";
 import { getAgentScopedMediaLocalRoots } from "../../media/local-roots.js";
 import { hasPollCreationParams, resolveTelegramPollVisibility } from "../../poll-params.js";
 import { resolvePollMaxSelections } from "../../polls.js";
@@ -407,7 +408,7 @@ async function handleSendAction(ctx: ResolvedActionContext): Promise<MessageActi
   const hasButtons = Array.isArray(params.buttons) && params.buttons.length > 0;
   const hasCard = params.card != null && typeof params.card === "object";
   const hasComponents = params.components != null && typeof params.components === "object";
-  const hasInteractive = params.interactive != null && typeof params.interactive === "object";
+  const hasInteractive = hasInteractiveReplyBlocks(params.interactive);
   const hasBlocks =
     (Array.isArray(params.blocks) && params.blocks.length > 0) ||
     (typeof params.blocks === "string" && params.blocks.trim().length > 0);
@@ -482,14 +483,13 @@ async function handleSendAction(ctx: ResolvedActionContext): Promise<MessageActi
     }
   }
   if (
-    !message.trim() &&
-    !mediaUrl &&
-    mergedMediaUrls.length === 0 &&
-    !hasButtons &&
-    !hasCard &&
-    !hasComponents &&
-    !hasInteractive &&
-    !hasBlocks
+    !hasReplyContent({
+      text: message,
+      mediaUrl,
+      mediaUrls: mergedMediaUrls,
+      interactive: params.interactive,
+      extraContent: hasButtons || hasCard || hasComponents || hasBlocks,
+    })
   ) {
     throw new Error("send requires text or media");
   }

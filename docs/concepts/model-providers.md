@@ -42,8 +42,8 @@ Typical split:
 
 - `auth[].run` / `auth[].runNonInteractive`: provider owns onboarding/login
   flows for `openclaw onboard`, `openclaw models auth`, and headless setup
-- `wizard.onboarding` / `wizard.modelPicker`: provider owns auth-choice labels,
-  hints, and setup entries in onboarding/model pickers
+- `wizard.setup` / `wizard.modelPicker`: provider owns auth-choice labels,
+  legacy aliases, onboarding allowlist hints, and setup entries in onboarding/model pickers
 - `catalog`: provider appears in `models.providers`
 - `resolveDynamicModel`: provider accepts model ids not present in the local
   static catalog yet
