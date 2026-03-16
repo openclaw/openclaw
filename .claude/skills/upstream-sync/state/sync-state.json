@@ -31,7 +31,13 @@
         "commits": 11,
         "mergedAt": "2026-03-16T16:00:00Z"
       },
-      "provider-refactor": { "status": "pending", "branch": null, "pr": null, "commits": 8 },
+      "provider-refactor": {
+        "status": "completed",
+        "branch": "sync/v2026.3.12-provider-refactor",
+        "pr": 5,
+        "commits": 8,
+        "mergedAt": "2026-03-16T17:00:00Z"
+      },
       "review": { "status": "pending", "branch": null, "pr": null, "commits": 20 },
       "ui-inspiration": { "status": "pending", "branch": null, "pr": null, "commits": 6 }
     }
