@@ -686,9 +686,24 @@ export async function steerControlledSubagentRun(params: {
 
 export async function sendControlledSubagentMessage(params: {
   cfg: OpenClawConfig;
+  controller: ResolvedSubagentController;
   entry: SubagentRunRecord;
   message: string;
 }) {
+  const ownershipError = ensureControllerOwnsRun({
+    controller: params.controller,
+    entry: params.entry,
+  });
+  if (ownershipError) {
+    return { status: "forbidden" as const, error: ownershipError };
+  }
+  if (params.controller.controlScope !== "children") {
+    return {
+      status: "forbidden" as const,
+      error: "Leaf subagents cannot control other sessions.",
+    };
+  }
+
   const targetSessionKey = params.entry.childSessionKey;
   const parsed = parseAgentSessionKey(targetSessionKey);
   const storePath = resolveStorePath(params.cfg.session?.store, { agentId: parsed?.agentId });

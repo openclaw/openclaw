@@ -1,10 +1,10 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/mattermost";
 import { describe, expect, it } from "vitest";
-import { mattermostOnboardingAdapter } from "./onboarding.js";
+import { mattermostSetupWizard } from "./setup-surface.js";
 
 describe("mattermost onboarding status", () => {
   it("treats SecretRef botToken as configured when baseUrl is present", async () => {
-    const status = await mattermostOnboardingAdapter.getStatus({
+    const configured = await mattermostSetupWizard.status.resolveConfigured({
       cfg: {
         channels: {
           mattermost: {
@@ -17,9 +17,8 @@ describe("mattermost onboarding status", () => {
           },
         },
       } as OpenClawConfig,
-      accountOverrides: {},
     });
 
-    expect(status.configured).toBe(true);
+    expect(configured).toBe(true);
   });
 });

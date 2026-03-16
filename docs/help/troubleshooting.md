@@ -28,7 +28,7 @@ Good output in one line:
 
 - `openclaw status` → shows configured channels and no obvious auth errors.
 - `openclaw status --all` → full report is present and shareable.
-- `openclaw gateway probe` → expected gateway target is reachable.
+- `openclaw gateway probe` → expected gateway target is reachable (`Reachable: yes`). `RPC: limited - missing scope: operator.read` is degraded diagnostics, not a connect failure.
 - `openclaw gateway status` → `Runtime: running` and `RPC probe: ok`.
 - `openclaw doctor` → no blocking config/service errors.
 - `openclaw channels status --probe` → channels report `connected` or `ready`.

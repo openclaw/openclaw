@@ -567,6 +567,45 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
       trustedProxies: cfg.gateway?.trustedProxies,
       allowRealIpFallback: cfg.gateway?.allowRealIpFallback === true,
       handleInteraction: handleModelPickerInteraction,
+      authorizeButtonClick: async ({ payload, post }) => {
+        const channelInfo = await resolveChannelInfo(payload.channel_id);
+        const isDirect = channelInfo?.type?.trim().toUpperCase() === "D";
+        const allowTextCommands = core.channel.commands.shouldHandleTextCommands({
+          cfg,
+          surface: "mattermost",
+        });
+        const decision = authorizeMattermostCommandInvocation({
+          account,
+          cfg,
+          senderId: payload.user_id,
+          senderName: payload.user_name ?? "",
+          channelId: payload.channel_id,
+          channelInfo,
+          storeAllowFrom: isDirect
+            ? await readStoreAllowFromForDmPolicy({
+                provider: "mattermost",
+                accountId: account.accountId,
+                dmPolicy: account.config.dmPolicy ?? "pairing",
+                readStore: pairing.readStoreForDmPolicy,
+              })
+            : undefined,
+          allowTextCommands,
+          hasControlCommand: false,
+        });
+        if (decision.ok) {
+          return { ok: true };
+        }
+        return {
+          ok: false,
+          response: {
+            update: {
+              message: post.message ?? "",
+              props: post.props as Record<string, unknown> | undefined,
+            },
+            ephemeral_text: `OpenClaw ignored this action for ${decision.roomLabel}.`,
+          },
+        };
+      },
       resolveSessionKey: async ({ channelId, userId, post }) => {
         const channelInfo = await resolveChannelInfo(channelId);
         const kind = mapMattermostChannelTypeToChatType(channelInfo?.type);
