@@ -17,6 +17,10 @@ vi.mock("../../../agents/agent-scope.js", () => ({
 }));
 vi.mock("../../../logging/subsystem.js", () => ({
   createSubsystemLogger: () => ({
+    child: () => ({
+      warn: logWarn,
+      debug: logDebug,
+    }),
     warn: logWarn,
     debug: logDebug,
   }),

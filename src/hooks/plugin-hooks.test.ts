@@ -106,8 +106,8 @@ describe("bundle plugin hooks", () => {
     expect(entries[0]?.hook.name).toBe("bundle-hook");
     expect(entries[0]?.hook.source).toBe("openclaw-plugin");
     expect(entries[0]?.hook.pluginId).toBe("sample-bundle");
-    expect(entries[0]?.hook.baseDir).toBe(
-      fs.realpathSync.native(path.join(bundleRoot, "hooks", "bundle-hook")),
+    expect(path.normalize(entries[0]?.hook.baseDir ?? "")).toBe(
+      path.normalize(fs.realpathSync.native(path.join(bundleRoot, "hooks", "bundle-hook"))),
     );
     expect(entries[0]?.metadata?.events).toEqual(["command:new"]);
   });
