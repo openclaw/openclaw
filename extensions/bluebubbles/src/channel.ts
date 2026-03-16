@@ -1,18 +1,11 @@
-import type {
-  ChannelAccountSnapshot,
-  ChannelPlugin,
-  OpenClawConfig,
-} from "openclaw/plugin-sdk/bluebubbles";
+import type { ChannelAccountSnapshot, ChannelPlugin } from "openclaw/plugin-sdk/bluebubbles";
 import {
-  applyAccountNameToChannelSection,
   buildChannelConfigSchema,
   buildComputedAccountStatusSnapshot,
   buildProbeChannelStatusSummary,
   collectBlueBubblesStatusIssues,
   DEFAULT_ACCOUNT_ID,
   deleteAccountFromConfigSection,
-  migrateBaseNameToDefaultAccount,
-  normalizeAccountId,
   PAIRING_APPROVED_MESSAGE,
   resolveBlueBubblesGroupRequireMention,
   resolveBlueBubblesGroupToolPolicy,
@@ -21,6 +14,7 @@ import {
 import {
   buildAccountScopedDmSecurityPolicy,
   collectOpenGroupPolicyRestrictSendersWarnings,
+  createAccountStatusSink,
   formatNormalizedAllowFromEntries,
   mapAllowFromEntries,
 } from "openclaw/plugin-sdk/compat";
@@ -31,14 +25,14 @@ import {
   resolveDefaultBlueBubblesAccountId,
 } from "./accounts.js";
 import { bluebubblesMessageActions } from "./actions.js";
-import { applyBlueBubblesConnectionConfig } from "./config-apply.js";
 import { BlueBubblesConfigSchema } from "./config-schema.js";
 import { sendBlueBubblesMedia } from "./media-send.js";
 import { resolveBlueBubblesMessageId } from "./monitor.js";
 import { monitorBlueBubblesProvider, resolveWebhookPathFromConfig } from "./monitor.js";
-import { blueBubblesOnboardingAdapter } from "./onboarding.js";
 import { probeBlueBubbles, type BlueBubblesProbe } from "./probe.js";
 import { sendMessageBlueBubbles } from "./send.js";
+import { blueBubblesSetupAdapter } from "./setup-core.js";
+import { blueBubblesSetupWizard } from "./setup-surface.js";
 import {
   extractHandleFromChatGuid,
   looksLikeBlueBubblesTargetId,
@@ -87,7 +81,7 @@ export const bluebubblesPlugin: ChannelPlugin<ResolvedBlueBubblesAccount> = {
   },
   reload: { configPrefixes: ["channels.bluebubbles"] },
   configSchema: buildChannelConfigSchema(BlueBubblesConfigSchema),
-  onboarding: blueBubblesOnboardingAdapter,
+  setupWizard: blueBubblesSetupWizard,
   config: {
     listAccountIds: (cfg) => listBlueBubblesAccountIds(cfg),
     resolveAccount: (cfg, accountId) => resolveBlueBubblesAccount({ cfg: cfg, accountId }),
@@ -222,53 +216,7 @@ export const bluebubblesPlugin: ChannelPlugin<ResolvedBlueBubblesAccount> = {
       return display?.trim() || target?.trim() || "";
     },
   },
-  setup: {
-    resolveAccountId: ({ accountId }) => normalizeAccountId(accountId),
-    applyAccountName: ({ cfg, accountId, name }) =>
-      applyAccountNameToChannelSection({
-        cfg: cfg,
-        channelKey: "bluebubbles",
-        accountId,
-        name,
-      }),
-    validateInput: ({ input }) => {
-      if (!input.httpUrl && !input.password) {
-        return "BlueBubbles requires --http-url and --password.";
-      }
-      if (!input.httpUrl) {
-        return "BlueBubbles requires --http-url.";
-      }
-      if (!input.password) {
-        return "BlueBubbles requires --password.";
-      }
-      return null;
-    },
-    applyAccountConfig: ({ cfg, accountId, input }) => {
-      const namedConfig = applyAccountNameToChannelSection({
-        cfg: cfg,
-        channelKey: "bluebubbles",
-        accountId,
-        name: input.name,
-      });
-      const next =
-        accountId !== DEFAULT_ACCOUNT_ID
-          ? migrateBaseNameToDefaultAccount({
-              cfg: namedConfig,
-              channelKey: "bluebubbles",
-            })
-          : namedConfig;
-      return applyBlueBubblesConnectionConfig({
-        cfg: next,
-        accountId,
-        patch: {
-          serverUrl: input.httpUrl,
-          password: input.password,
-          webhookPath: input.webhookPath,
-        },
-        onlyDefinedFields: true,
-      });
-    },
-  },
+  setup: blueBubblesSetupAdapter,
   pairing: {
     idLabel: "bluebubblesSenderId",
     normalizeAllowEntry: (entry) => normalizeBlueBubblesHandle(entry.replace(/^bluebubbles:/i, "")),
@@ -369,8 +317,11 @@ export const bluebubblesPlugin: ChannelPlugin<ResolvedBlueBubblesAccount> = {
     startAccount: async (ctx) => {
       const account = ctx.account;
       const webhookPath = resolveWebhookPathFromConfig(account.config);
-      ctx.setStatus({
-        accountId: account.accountId,
+      const statusSink = createAccountStatusSink({
+        accountId: ctx.accountId,
+        setStatus: ctx.setStatus,
+      });
+      statusSink({
         baseUrl: account.baseUrl,
       });
       ctx.log?.info(`[${account.accountId}] starting provider (webhook=${webhookPath})`);
@@ -379,7 +330,7 @@ export const bluebubblesPlugin: ChannelPlugin<ResolvedBlueBubblesAccount> = {
         config: ctx.cfg,
         runtime: ctx.runtime,
         abortSignal: ctx.abortSignal,
-        statusSink: (patch) => ctx.setStatus({ accountId: ctx.accountId, ...patch }),
+        statusSink,
         webhookPath,
       });
     },

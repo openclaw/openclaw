@@ -13,7 +13,7 @@
   line-height: 1.4;
 }
 
-:root[data-theme="light"] .chat-thinking {
+:root[data-theme-mode="light"] .chat-thinking {
   border-color: rgba(16, 24, 40, 0.25);
   background: rgba(16, 24, 40, 0.04);
 }
@@ -54,6 +54,19 @@
 .chat-text :where(code) {
   font-family: var(--mono);
   font-size: 0.9em;
+}
+
+.chat-text :where(.markdown-inline-image) {
+  display: block;
+  max-width: min(100%, 420px);
+  max-height: 320px;
+  width: auto;
+  height: auto;
+  margin-top: 0.75em;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--secondary) 70%, transparent);
+  object-fit: contain;
 }
 
 .chat-text :where(:not(pre) > code) {
@@ -97,24 +110,24 @@
   background: rgba(255, 255, 255, 0.04);
 }
 
-:root[data-theme="light"] .chat-text :where(blockquote) {
+:root[data-theme-mode="light"] .chat-text :where(blockquote) {
   background: rgba(0, 0, 0, 0.03);
 }
 
-:root[data-theme="light"] .chat-text :where(blockquote blockquote) {
+:root[data-theme-mode="light"] .chat-text :where(blockquote blockquote) {
   background: rgba(0, 0, 0, 0.05);
 }
 
-:root[data-theme="light"] .chat-text :where(blockquote blockquote blockquote) {
+:root[data-theme-mode="light"] .chat-text :where(blockquote blockquote blockquote) {
   background: rgba(0, 0, 0, 0.04);
 }
 
-:root[data-theme="light"] .chat-text :where(:not(pre) > code) {
+:root[data-theme-mode="light"] .chat-text :where(:not(pre) > code) {
   background: rgba(0, 0, 0, 0.08);
   border: 1px solid rgba(0, 0, 0, 0.1);
 }
 
-:root[data-theme="light"] .chat-text :where(pre) {
+:root[data-theme-mode="light"] .chat-text :where(pre) {
   background: rgba(0, 0, 0, 0.05);
   border: 1px solid rgba(0, 0, 0, 0.1);
 }

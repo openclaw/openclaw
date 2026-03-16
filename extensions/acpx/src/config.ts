@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { OpenClawPluginConfigSchema } from "openclaw/plugin-sdk/acpx";
@@ -11,7 +12,27 @@ export type AcpxNonInteractivePermissionPolicy = (typeof ACPX_NON_INTERACTIVE_PO
 export const ACPX_PINNED_VERSION = "0.1.16";
 export const ACPX_VERSION_ANY = "any";
 const ACPX_BIN_NAME = process.platform === "win32" ? "acpx.cmd" : "acpx";
-export const ACPX_PLUGIN_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+
+export function resolveAcpxPluginRoot(moduleUrl: string = import.meta.url): string {
+  let cursor = path.dirname(fileURLToPath(moduleUrl));
+  for (let i = 0; i < 3; i += 1) {
+    // Bundled entries live at the plugin root while source files still live under src/.
+    if (
+      fs.existsSync(path.join(cursor, "openclaw.plugin.json")) &&
+      fs.existsSync(path.join(cursor, "package.json"))
+    ) {
+      return cursor;
+    }
+    const parent = path.dirname(cursor);
+    if (parent === cursor) {
+      break;
+    }
+    cursor = parent;
+  }
+  return path.resolve(path.dirname(fileURLToPath(moduleUrl)), "..");
+}
+
+export const ACPX_PLUGIN_ROOT = resolveAcpxPluginRoot();
 export const ACPX_BUNDLED_BIN = path.join(ACPX_PLUGIN_ROOT, "node_modules", ".bin", ACPX_BIN_NAME);
 export function buildAcpxLocalInstallCommand(version: string = ACPX_PINNED_VERSION): string {
   return `npm install --omit=dev --no-save acpx@${version}`;
@@ -47,6 +68,7 @@ export type ResolvedAcpxPluginConfig = {
   command: string;
   expectedVersion?: string;
   allowPluginLocalInstall: boolean;
+  stripProviderAuthEnvVars: boolean;
   installCommand: string;
   cwd: string;
   permissionMode: AcpxPermissionMode;
@@ -332,6 +354,7 @@ export function resolveAcpxPluginConfig(params: {
     workspaceDir: params.workspaceDir,
   });
   const allowPluginLocalInstall = command === ACPX_BUNDLED_BIN;
+  const stripProviderAuthEnvVars = command === ACPX_BUNDLED_BIN;
   const configuredExpectedVersion = normalized.expectedVersion;
   const expectedVersion =
     configuredExpectedVersion === ACPX_VERSION_ANY
@@ -343,6 +366,7 @@ export function resolveAcpxPluginConfig(params: {
     command,
     expectedVersion,
     allowPluginLocalInstall,
+    stripProviderAuthEnvVars,
     installCommand,
     cwd,
     permissionMode: normalized.permissionMode ?? DEFAULT_PERMISSION_MODE,

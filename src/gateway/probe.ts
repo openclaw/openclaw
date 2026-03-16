@@ -4,6 +4,7 @@ import type { SystemPresence } from "../infra/system-presence.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { GatewayClient } from "./client.js";
 import { READ_SCOPE } from "./method-scopes.js";
+import { isLoopbackHost } from "./net.js";
 
 export type GatewayProbeAuth = {
   token?: string;
@@ -32,12 +33,24 @@ export async function probeGateway(opts: {
   url: string;
   auth?: GatewayProbeAuth;
   timeoutMs: number;
+  includeDetails?: boolean;
+  detailLevel?: "none" | "presence" | "full";
 }): Promise<GatewayProbeResult> {
   const startedAt = Date.now();
   const instanceId = randomUUID();
   let connectLatencyMs: number | null = null;
   let connectError: string | null = null;
   let close: GatewayProbeClose | null = null;
+
+  const disableDeviceIdentity = (() => {
+    try {
+      return isLoopbackHost(new URL(opts.url).hostname);
+    } catch {
+      return false;
+    }
+  })();
+
+  const detailLevel = opts.includeDetails === false ? "none" : (opts.detailLevel ?? "full");
 
   return await new Promise<GatewayProbeResult>((resolve) => {
     let settled = false;
@@ -60,6 +73,7 @@ export async function probeGateway(opts: {
       clientVersion: "dev",
       mode: GATEWAY_CLIENT_MODES.PROBE,
       instanceId,
+      deviceIdentity: disableDeviceIdentity ? null : undefined,
       onConnectError: (err) => {
         connectError = formatErrorMessage(err);
       },
@@ -68,7 +82,34 @@ export async function probeGateway(opts: {
       },
       onHelloOk: async () => {
         connectLatencyMs = Date.now() - startedAt;
+        if (detailLevel === "none") {
+          settle({
+            ok: true,
+            connectLatencyMs,
+            error: null,
+            close,
+            health: null,
+            status: null,
+            presence: null,
+            configSnapshot: null,
+          });
+          return;
+        }
         try {
+          if (detailLevel === "presence") {
+            const presence = await client.request("system-presence");
+            settle({
+              ok: true,
+              connectLatencyMs,
+              error: null,
+              close,
+              health: null,
+              status: null,
+              presence: Array.isArray(presence) ? (presence as SystemPresence[]) : null,
+              configSnapshot: null,
+            });
+            return;
+          }
           const [health, status, presence, configSnapshot] = await Promise.all([
             client.request("health"),
             client.request("status"),

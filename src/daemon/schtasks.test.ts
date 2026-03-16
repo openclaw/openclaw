@@ -179,6 +179,7 @@ describe("readScheduledTaskCommand", () => {
         const result = await readScheduledTaskCommand(env);
         expect(result).toEqual({
           programArguments: ["C:/Program Files/Node/node.exe", "gateway.js"],
+          sourcePath: resolveTaskScriptPath(env),
         });
       },
     );
@@ -222,6 +223,7 @@ describe("readScheduledTaskCommand", () => {
             NODE_ENV: "production",
             OPENCLAW_PORT: "18789",
           },
+          sourcePath: resolveTaskScriptPath(env),
         });
       },
     );
@@ -245,6 +247,7 @@ describe("readScheduledTaskCommand", () => {
             "--port",
             "18789",
           ],
+          sourcePath: resolveTaskScriptPath(env),
         });
       },
     );
@@ -268,6 +271,7 @@ describe("readScheduledTaskCommand", () => {
             "--port",
             "18789",
           ],
+          sourcePath: resolveTaskScriptPath(env),
         });
       },
     );
@@ -283,6 +287,7 @@ describe("readScheduledTaskCommand", () => {
         const result = await readScheduledTaskCommand(env);
         expect(result).toEqual({
           programArguments: ["node", "gateway.js", "--from-state-dir"],
+          sourcePath: resolveTaskScriptPath(env),
         });
       },
     );
