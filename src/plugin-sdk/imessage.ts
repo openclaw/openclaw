@@ -1,5 +1,23 @@
 export type { IMessageAccountConfig } from "../config/types.js";
-export * from "./channel-plugin-common.js";
+export type {
+  ChannelMessageActionContext,
+  ChannelPlugin,
+  OpenClawPluginApi,
+  PluginRuntime,
+} from "./channel-plugin-common.js";
+export {
+  DEFAULT_ACCOUNT_ID,
+  PAIRING_APPROVED_MESSAGE,
+  applyAccountNameToChannelSection,
+  buildChannelConfigSchema,
+  deleteAccountFromConfigSection,
+  emptyPluginConfigSchema,
+  formatPairingApproveHint,
+  getChatChannelMeta,
+  migrateBaseNameToDefaultAccount,
+  normalizeAccountId,
+  setAccountEnabledInConfigSection,
+} from "./channel-plugin-common.js";
 export {
   formatTrimmedAllowFromEntries,
   resolveIMessageConfigAllowFrom,

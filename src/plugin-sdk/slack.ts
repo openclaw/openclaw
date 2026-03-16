@@ -1,6 +1,24 @@
 export type { OpenClawConfig } from "../config/config.js";
 export type { SlackAccountConfig } from "../config/types.slack.js";
-export * from "./channel-plugin-common.js";
+export type {
+  ChannelMessageActionContext,
+  ChannelPlugin,
+  OpenClawPluginApi,
+  PluginRuntime,
+} from "./channel-plugin-common.js";
+export {
+  DEFAULT_ACCOUNT_ID,
+  PAIRING_APPROVED_MESSAGE,
+  applyAccountNameToChannelSection,
+  buildChannelConfigSchema,
+  deleteAccountFromConfigSection,
+  emptyPluginConfigSchema,
+  formatPairingApproveHint,
+  getChatChannelMeta,
+  migrateBaseNameToDefaultAccount,
+  normalizeAccountId,
+  setAccountEnabledInConfigSection,
+} from "./channel-plugin-common.js";
 
 export {
   projectCredentialSnapshotFields,
