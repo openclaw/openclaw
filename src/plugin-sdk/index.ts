@@ -100,6 +100,8 @@ export type {
   OpenClawPluginApi,
   OpenClawPluginService,
   OpenClawPluginServiceContext,
+  PluginHookBeforeToolSurfaceEvent,
+  PluginHookBeforeToolSurfaceResult,
   PluginHookInboundClaimContext,
   PluginHookInboundClaimEvent,
   PluginHookInboundClaimResult,
