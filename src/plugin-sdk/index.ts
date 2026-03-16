@@ -615,21 +615,6 @@ export {
 } from "../channels/plugins/helpers.js";
 export { PAIRING_APPROVED_MESSAGE } from "../channels/plugins/pairing-message.js";
 
-export type {
-  ChannelOnboardingAdapter,
-  ChannelOnboardingDmPolicy,
-} from "../channels/plugins/onboarding-types.js";
-export {
-  addWildcardAllowFrom,
-  mergeAllowFromEntries,
-  promptAccountId,
-  resolveAccountIdForConfigure,
-  setTopLevelChannelAllowFrom,
-  setTopLevelChannelDmPolicyWithAllowFrom,
-  setTopLevelChannelGroupPolicy,
-} from "../channels/plugins/onboarding/helpers.js";
-export { promptChannelAccessConfig } from "../channels/plugins/onboarding/channel-access.js";
-
 export {
   createActionGate,
   jsonResult,
@@ -801,6 +786,7 @@ export {
   resolveDefaultLineAccountId,
   resolveLineAccount,
 } from "../line/accounts.js";
+export { lineSetupAdapter, lineSetupWizard } from "../../extensions/line/src/setup-surface.js";
 export { LineConfigSchema } from "../line/config-schema.js";
 export type {
   LineConfig,
