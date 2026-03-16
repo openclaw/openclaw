@@ -1,8 +1,8 @@
 import { Command } from "commander";
 import { VERSION } from "../../version.js";
-import { getCoreCliCommandDescriptors } from "./command-registry.js";
+import { getCoreCliCommandDescriptors } from "./core-command-descriptors.js";
 import { configureProgramHelp } from "./help.js";
-import { getSubCliEntries } from "./register.subclis.js";
+import { getSubCliEntries } from "./subcli-descriptors.js";
 
 function buildRootHelpProgram(): Command {
   const program = new Command();
