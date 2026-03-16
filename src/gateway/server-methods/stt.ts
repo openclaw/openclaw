@@ -1,3 +1,4 @@
+import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -99,7 +100,8 @@ export const sttHandlers: GatewayRequestHandlers = {
             : mime.includes("mp3")
               ? ".mp3"
               : ".webm";
-      const tmpPath = path.join(os.tmpdir(), `openclaw-stt-${Date.now()}${ext}`);
+      const tmpName = "openclaw-stt-" + crypto.randomBytes(8).toString("hex") + ext;
+      const tmpPath = path.join(os.tmpdir(), tmpName);
       await fs.writeFile(tmpPath, buffer);
       cleanupPaths.push(tmpPath);
 
@@ -123,7 +125,8 @@ export const sttHandlers: GatewayRequestHandlers = {
 
         // whisper-cli writes output to a file via -otxt -of <base>
         // We need to resolve the output file path and read it after execution.
-        const outputBase = path.join(os.tmpdir(), `openclaw-stt-out-${Date.now()}`);
+        const outputName = "openclaw-stt-out-" + crypto.randomBytes(8).toString("hex");
+        const outputBase = path.join(os.tmpdir(), outputName);
         const outputTxtPath = `${outputBase}.txt`;
         cleanupPaths.push(outputTxtPath);
 

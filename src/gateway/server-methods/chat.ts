@@ -1,3 +1,4 @@
+import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -973,7 +974,8 @@ export const chatHandlers: GatewayRequestHandlers = {
           : audioItem.mimeType.includes("ogg")
             ? ".ogg"
             : ".webm";
-        const tmpPath = path.join(os.tmpdir(), `openclaw-audio-${Date.now()}${ext}`);
+        const tmpName = "openclaw-audio-" + crypto.randomBytes(8).toString("hex") + ext;
+        const tmpPath = path.join(os.tmpdir(), tmpName);
         const audioBuffer = Buffer.from(audioItem.data, "base64");
         await fs.promises.writeFile(tmpPath, audioBuffer);
         ctx.MediaPath = tmpPath;
