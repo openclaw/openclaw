@@ -110,6 +110,35 @@ describe("session cost usage", () => {
     });
   });
 
+  it("handles flat number cost from OpenRouter", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-cost-flat-"));
+    const sessionsDir = path.join(root, "agents", "main", "sessions");
+    await fs.mkdir(sessionsDir, { recursive: true });
+    const sessionFile = path.join(sessionsDir, "sess-flat.jsonl");
+
+    const entry = {
+      type: "message",
+      timestamp: new Date().toISOString(),
+      message: {
+        role: "assistant",
+        provider: "openrouter",
+        model: "meta-llama/llama-3.3-70b-instruct",
+        usage: { input: 100, output: 50, totalTokens: 150, cost: 0.0042 },
+      },
+    };
+
+    await fs.writeFile(sessionFile, JSON.stringify(entry) + "\n", "utf-8");
+
+    const summary = await loadSessionCostUsage({
+      dataDir: root,
+      agentId: "main",
+      days: 7,
+    });
+
+    expect(summary.totals.totalCost).toBeCloseTo(0.0042, 6);
+    expect(summary.totals.totalTokens).toBe(150);
+  });
+
   it("summarizes a single session file", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-cost-session-"));
     const sessionFile = path.join(root, "session.jsonl");
