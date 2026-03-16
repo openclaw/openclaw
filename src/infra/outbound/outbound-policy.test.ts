@@ -1,5 +1,8 @@
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
+import { discordPlugin } from "../../../extensions/discord/src/channel.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import { setActivePluginRegistry } from "../../plugins/runtime.js";
+import { createTestRegistry } from "../../test-utils/channel-plugins.js";
 import {
   applyCrossContextDecoration,
   buildCrossContextDecoration,
@@ -23,6 +26,12 @@ const discordConfig = {
 } as OpenClawConfig;
 
 describe("outbound policy helpers", () => {
+  beforeEach(() => {
+    setActivePluginRegistry(
+      createTestRegistry([{ pluginId: "discord", plugin: discordPlugin, source: "test" }]),
+    );
+  });
+
   it("allows cross-provider sends when enabled", () => {
     const cfg = {
       ...slackConfig,

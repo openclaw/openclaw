@@ -1,8 +1,13 @@
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
+import { setDefaultChannelPluginRegistryForTests } from "../../commands/channel-test-helpers.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { resolveOutboundSessionRoute } from "./outbound-session.js";
 
 describe("resolveOutboundSessionRoute", () => {
+  beforeEach(() => {
+    setDefaultChannelPluginRegistryForTests();
+  });
+
   const baseConfig = {} as OpenClawConfig;
 
   it("resolves provider-specific session routes", async () => {

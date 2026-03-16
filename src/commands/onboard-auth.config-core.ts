@@ -10,7 +10,7 @@ import {
   buildXiaomiProvider,
   QIANFAN_DEFAULT_MODEL_ID,
   XIAOMI_DEFAULT_MODEL_ID,
-} from "../agents/models-config.providers.js";
+} from "../agents/models-config.providers.static.js";
 import {
   buildSyntheticModelDefinition,
   SYNTHETIC_BASE_URL,
@@ -338,7 +338,7 @@ export function applyVeniceProviderConfig(cfg: OpenClawConfig): OpenClawConfig {
 
 /**
  * Apply Venice provider configuration AND set Venice as the default model.
- * Use this when Venice is the primary provider choice during onboarding.
+ * Use this when Venice is the primary provider choice during setup.
  */
 export function applyVeniceConfig(cfg: OpenClawConfig): OpenClawConfig {
   const next = applyVeniceProviderConfig(cfg);
@@ -368,7 +368,7 @@ export function applyTogetherProviderConfig(cfg: OpenClawConfig): OpenClawConfig
 
 /**
  * Apply Together provider configuration AND set Together as the default model.
- * Use this when Together is the primary provider choice during onboarding.
+ * Use this when Together is the primary provider choice during setup.
  */
 export function applyTogetherConfig(cfg: OpenClawConfig): OpenClawConfig {
   const next = applyTogetherProviderConfig(cfg);
@@ -477,7 +477,7 @@ export function applyKilocodeProviderConfig(cfg: OpenClawConfig): OpenClawConfig
 
 /**
  * Apply Kilo Gateway provider configuration AND set Kilo Gateway as the default model.
- * Use this when Kilo Gateway is the primary provider choice during onboarding.
+ * Use this when Kilo Gateway is the primary provider choice during setup.
  */
 export function applyKilocodeConfig(cfg: OpenClawConfig): OpenClawConfig {
   const next = applyKilocodeProviderConfig(cfg);
