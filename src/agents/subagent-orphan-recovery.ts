@@ -174,18 +174,51 @@ export async function recoverOrphanedSubagentSessions(params: {
   return result;
 }
 
+/** Maximum number of retry attempts for orphan recovery. */
+const MAX_RECOVERY_RETRIES = 3;
+/** Backoff multiplier between retries (exponential). */
+const RETRY_BACKOFF_MULTIPLIER = 2;
+
 /**
- * Schedule orphan recovery after a delay.
+ * Schedule orphan recovery after a delay, with retry logic.
  * The delay gives the gateway time to fully bootstrap after restart.
+ * If recovery fails (e.g. gateway not yet ready), retries with exponential backoff.
  */
 export function scheduleOrphanRecovery(params: {
   getActiveRuns: () => Map<string, SubagentRunRecord>;
   delayMs?: number;
+  maxRetries?: number;
 }): void {
-  const delay = params.delayMs ?? DEFAULT_RECOVERY_DELAY_MS;
-  setTimeout(() => {
-    void recoverOrphanedSubagentSessions(params).catch((err) => {
-      log.warn(`scheduled orphan recovery failed: ${String(err)}`);
-    });
-  }, delay).unref?.();
+  const initialDelay = params.delayMs ?? DEFAULT_RECOVERY_DELAY_MS;
+  const maxRetries = params.maxRetries ?? MAX_RECOVERY_RETRIES;
+
+  const attemptRecovery = (attempt: number, delay: number) => {
+    setTimeout(() => {
+      void recoverOrphanedSubagentSessions(params)
+        .then((result) => {
+          if (result.failed > 0 && attempt < maxRetries) {
+            const nextDelay = delay * RETRY_BACKOFF_MULTIPLIER;
+            log.info(
+              `orphan recovery had ${result.failed} failure(s); retrying in ${nextDelay}ms (attempt ${attempt + 1}/${maxRetries})`,
+            );
+            attemptRecovery(attempt + 1, nextDelay);
+          }
+        })
+        .catch((err) => {
+          if (attempt < maxRetries) {
+            const nextDelay = delay * RETRY_BACKOFF_MULTIPLIER;
+            log.warn(
+              `scheduled orphan recovery failed: ${String(err)}; retrying in ${nextDelay}ms (attempt ${attempt + 1}/${maxRetries})`,
+            );
+            attemptRecovery(attempt + 1, nextDelay);
+          } else {
+            log.warn(
+              `scheduled orphan recovery failed after ${maxRetries} retries: ${String(err)}`,
+            );
+          }
+        });
+    }, delay).unref?.();
+  };
+
+  attemptRecovery(0, initialDelay);
 }
