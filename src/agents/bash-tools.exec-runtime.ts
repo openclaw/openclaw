@@ -1,6 +1,7 @@
 import path from "node:path";
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
 import { Type } from "@sinclair/typebox";
+import { createInternalHookEvent, triggerInternalHook } from "../hooks/internal-hooks.js";
 import { type ExecHost } from "../infra/exec-approvals.js";
 import { requestHeartbeatNow } from "../infra/heartbeat-wake.js";
 import { isDangerousHostEnvVarName } from "../infra/host-env-security.js";
@@ -141,6 +142,14 @@ export const execSchema = Type.Object({
       description: "Node id/name for host=node.",
     }),
   ),
+  onComplete: Type.Optional(
+    Type.String({
+      description:
+        'Set to "notify" to receive a system event when a background process completes. ' +
+        "When set, end your turn after starting the process — do not poll. " +
+        "You will be notified automatically with the exit status and output tail.",
+    }),
+  ),
 });
 
 export type ExecProcessOutcome = {
@@ -223,6 +232,17 @@ function maybeNotifyOnExit(session: ProcessSession, status: "completed" | "faile
   enqueueSystemEvent(summary, { sessionKey });
   requestHeartbeatNow(
     scopedHeartbeatWakeOptions(sessionKey, { reason: `exec:${session.id}:exit` }),
+  );
+
+  // Fire an internal hook event so hooks can react to exec completion
+  // even when heartbeats are disabled (no wake handler registered).
+  void triggerInternalHook(
+    createInternalHookEvent("exec", status, sessionKey, {
+      sessionId: session.id,
+      exitCode: session.exitCode,
+      exitSignal: session.exitSignal,
+      text: summary,
+    }),
   );
 }
 
