@@ -492,8 +492,8 @@ const needsNonImageSanitize =
    - Test `resolveEnvApiKey("kilocode")` returns correct env var
 
 2. **Integration Tests:**
-   - Test onboarding flow with `--auth-choice kilocode-api-key`
-   - Test non-interactive onboarding with `--kilocode-api-key`
+   - Test setup flow with `--auth-choice kilocode-api-key`
+   - Test non-interactive setup with `--kilocode-api-key`
    - Test model selection with `kilocode/` prefix
 
 3. **E2E Tests:**

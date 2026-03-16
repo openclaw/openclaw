@@ -738,7 +738,7 @@ In minimal mode, the Gateway still broadcasts enough for device discovery (`role
 Gateway auth is **required by default**. If no token/password is configured,
 the Gateway refuses WebSocket connections (fail‑closed).
 
-The onboarding wizard generates a token by default (even for loopback) so
+The setup wizard generates a token by default (even for loopback) so
 local clients must authenticate.
 
 Set a token so **all** WS clients must authenticate:

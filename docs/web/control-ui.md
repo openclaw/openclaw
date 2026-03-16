@@ -28,7 +28,7 @@ Auth is supplied during the WebSocket handshake via:
 - `connect.params.auth.token`
 - `connect.params.auth.password`
   The dashboard settings panel keeps a token for the current browser tab session and selected gateway URL; passwords are not persisted.
-  The onboarding wizard generates a gateway token by default, so paste it here on first connect.
+  The setup wizard generates a gateway token by default, so paste it here on first connect.
 
 ## Device pairing (first connection)
 

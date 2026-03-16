@@ -18,7 +18,7 @@ Ollama is a local LLM runtime that makes it easy to run open-source models on yo
 
 ### Onboarding wizard (recommended)
 
-The fastest way to set up Ollama is through the onboarding wizard:
+The fastest way to set up Ollama is through the setup wizard:
 
 ```bash
 openclaw onboard
@@ -231,7 +231,7 @@ Once configured, all your Ollama models are available:
 
 Cloud models let you run cloud-hosted models (for example `kimi-k2.5:cloud`, `minimax-m2.5:cloud`, `glm-5:cloud`) alongside your local models.
 
-To use cloud models, select **Cloud + Local** mode during onboarding. The wizard checks whether you are signed in and opens a browser sign-in flow when needed. If authentication cannot be verified, the wizard falls back to local model defaults.
+To use cloud models, select **Cloud + Local** mode during setup. The wizard checks whether you are signed in and opens a browser sign-in flow when needed. If authentication cannot be verified, the wizard falls back to local model defaults.
 
 You can also sign in directly at [ollama.com/signin](https://ollama.com/signin).
 

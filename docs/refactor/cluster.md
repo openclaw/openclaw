@@ -87,11 +87,11 @@ Risk:
 
 - Low
 
-## 3. Onboarding prompt and config-patch steps
+## 3. Setup prompt and config-patch steps
 
 Large surface area.
 
-Many onboarding files repeat:
+Many setup files repeat:
 
 - resolve account id
 - prompt allowlist entries
@@ -102,18 +102,18 @@ Many onboarding files repeat:
 
 Strong examples:
 
-- `extensions/bluebubbles/src/onboarding.ts`
-- `extensions/googlechat/src/onboarding.ts`
-- `extensions/msteams/src/onboarding.ts`
-- `extensions/zalo/src/onboarding.ts`
-- `extensions/zalouser/src/onboarding.ts`
-- `extensions/nextcloud-talk/src/onboarding.ts`
-- `extensions/matrix/src/onboarding.ts`
-- `extensions/irc/src/onboarding.ts`
+- `extensions/bluebubbles/src/setup-surface.ts`
+- `extensions/googlechat/src/setup-surface.ts`
+- `extensions/msteams/src/setup-surface.ts`
+- `extensions/zalo/src/setup-surface.ts`
+- `extensions/zalouser/src/setup-surface.ts`
+- `extensions/nextcloud-talk/src/setup-surface.ts`
+- `extensions/matrix/src/setup-surface.ts`
+- `extensions/irc/src/setup-surface.ts`
 
 Existing helper seam:
 
-- `src/channels/plugins/onboarding/helpers.ts`
+- `src/channels/plugins/setup-wizard-helpers.ts`
 
 Likely extraction shape:
 
