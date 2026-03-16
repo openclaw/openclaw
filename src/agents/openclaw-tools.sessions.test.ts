@@ -1,5 +1,6 @@
 import path from "node:path";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import type { OpenClawConfig } from "../config/config.js";
 import {
   addSubagentRunForTests,
   listSubagentRunsForRequester,
@@ -32,6 +33,17 @@ vi.mock("../config/config.js", async (importOriginal) => {
 
 import "./test-helpers/fast-core-tools.js";
 import { createOpenClawTools } from "./openclaw-tools.js";
+
+const permissiveSessionToolsConfig = {
+  session: {
+    mainKey: "main",
+    scope: "per-sender",
+    agentToAgent: { maxPingPongTurns: 2 },
+  },
+  tools: {
+    sessions: { visibility: "all" },
+  },
+} as const satisfies OpenClawConfig;
 
 const waitForCalls = async (getCount: () => number, count: number, timeoutMs = 2000) => {
   await vi.waitFor(
@@ -509,7 +521,7 @@ describe("sessions tools", () => {
     expect(details.error).toMatch(/Session not found|No session found/);
   });
 
-  it("sessions_send supports fire-and-forget and wait", async () => {
+  it("sessions_send keeps injected turns on webchat even when the target has an external route", async () => {
     const calls: Array<{ method?: string; params?: unknown }> = [];
     let agentCallCount = 0;
     let _historyCallCount = 0;
@@ -517,6 +529,7 @@ describe("sessions tools", () => {
     let lastWaitedRunId: string | undefined;
     const replyByRunId = new Map<string, string>();
     const requesterKey = "discord:group:req";
+    const targetKey = "main";
     callGatewayMock.mockImplementation(async (opts: unknown) => {
       const request = opts as { method?: string; params?: unknown };
       calls.push(request);
@@ -563,6 +576,21 @@ describe("sessions tools", () => {
           ],
         };
       }
+      if (request.method === "sessions.list") {
+        return {
+          sessions: [
+            {
+              key: targetKey,
+              deliveryContext: {
+                channel: "telegram",
+                to: "chat:main",
+              },
+              lastChannel: "telegram",
+              lastTo: "chat:main",
+            },
+          ],
+        };
+      }
       if (request.method === "send") {
         sendCallCount += 1;
         return { messageId: "m1" };
@@ -571,6 +599,7 @@ describe("sessions tools", () => {
     });
 
     const tool = createOpenClawTools({
+      config: permissiveSessionToolsConfig,
       agentSessionKey: requesterKey,
       agentChannel: "discord",
     }).find((candidate) => candidate.name === "sessions_send");
@@ -580,7 +609,7 @@ describe("sessions tools", () => {
     }
 
     const fire = await tool.execute("call5", {
-      sessionKey: "main",
+      sessionKey: targetKey,
       message: "ping",
       timeoutSeconds: 0,
     });
@@ -594,7 +623,7 @@ describe("sessions tools", () => {
     await waitForCalls(() => calls.filter((call) => call.method === "chat.history").length, 4);
 
     const waitPromise = tool.execute("call6", {
-      sessionKey: "main",
+      sessionKey: targetKey,
       message: "wait",
       timeoutSeconds: 1,
     });
@@ -620,36 +649,79 @@ describe("sessions tools", () => {
         inputProvenance: { kind: "inter_session" },
       });
     }
-    expect(
-      agentCalls.some(
-        (call) =>
-          typeof (call.params as { extraSystemPrompt?: string })?.extraSystemPrompt === "string" &&
-          (call.params as { extraSystemPrompt?: string })?.extraSystemPrompt?.includes(
-            "Agent-to-agent message context",
-          ),
-      ),
-    ).toBe(true);
-    expect(
-      agentCalls.some(
-        (call) =>
-          typeof (call.params as { extraSystemPrompt?: string })?.extraSystemPrompt === "string" &&
-          (call.params as { extraSystemPrompt?: string })?.extraSystemPrompt?.includes(
-            "Agent-to-agent reply step",
-          ),
-      ),
-    ).toBe(true);
-    expect(
-      agentCalls.some(
-        (call) =>
-          typeof (call.params as { extraSystemPrompt?: string })?.extraSystemPrompt === "string" &&
-          (call.params as { extraSystemPrompt?: string })?.extraSystemPrompt?.includes(
-            "Agent-to-agent announce step",
-          ),
-      ),
-    ).toBe(true);
+    const messageContextCalls = agentCalls.filter(
+      (call) =>
+        typeof (call.params as { extraSystemPrompt?: string })?.extraSystemPrompt === "string" &&
+        (call.params as { extraSystemPrompt?: string })?.extraSystemPrompt?.includes(
+          "Agent-to-agent message context",
+        ),
+    );
+    expect(messageContextCalls).toHaveLength(2);
+    for (const call of messageContextCalls) {
+      expect(call.params).toMatchObject({ channel: "webchat" });
+    }
+    const replySteps = agentCalls.filter(
+      (call) =>
+        typeof (call.params as { extraSystemPrompt?: string })?.extraSystemPrompt === "string" &&
+        (call.params as { extraSystemPrompt?: string })?.extraSystemPrompt?.includes(
+          "Agent-to-agent reply step",
+        ),
+    );
+    expect(replySteps).toHaveLength(4);
+    const replyStepChannels = replySteps.map(
+      (call) => (call.params as { channel?: string })?.channel,
+    );
+    expect(replyStepChannels.filter((channel) => channel === "webchat")).toHaveLength(4);
+    const announceSteps = agentCalls.filter(
+      (call) =>
+        typeof (call.params as { extraSystemPrompt?: string })?.extraSystemPrompt === "string" &&
+        (call.params as { extraSystemPrompt?: string })?.extraSystemPrompt?.includes(
+          "Agent-to-agent announce step",
+        ),
+    );
+    expect(announceSteps).toHaveLength(2);
+    for (const call of announceSteps) {
+      expect(call.params).toMatchObject({ channel: "webchat" });
+    }
     expect(waitCalls).toHaveLength(8);
     expect(historyOnlyCalls).toHaveLength(8);
     expect(sendCallCount).toBe(0);
+  });
+
+  it("sessions_send falls back to webchat when no source channel is available", async () => {
+    callGatewayMock.mockImplementation(async (opts: unknown) => {
+      const request = opts as { method?: string };
+      if (request.method === "agent") {
+        return { runId: "run-fallback", acceptedAt: 456 };
+      }
+      return {};
+    });
+
+    const tool = createOpenClawTools({
+      config: permissiveSessionToolsConfig,
+      agentSessionKey: "agent:main:main",
+    }).find((candidate) => candidate.name === "sessions_send");
+    expect(tool).toBeDefined();
+    if (!tool) {
+      throw new Error("missing sessions_send tool");
+    }
+
+    const result = await tool.execute("call-fallback", {
+      sessionKey: "main",
+      message: "ping",
+      timeoutSeconds: 0,
+    });
+    const details = result.details as { status?: string };
+    expect(details.status).toBe("accepted");
+    const agentCall = callGatewayMock.mock.calls.find(
+      (call) => (call[0] as { method?: string }).method === "agent",
+    );
+    expect(agentCall?.[0]).toMatchObject({
+      method: "agent",
+      params: {
+        channel: "webchat",
+      },
+    });
   });
 
   it("sessions_send resolves sessionId inputs", async () => {
@@ -676,6 +748,7 @@ describe("sessions tools", () => {
     });
 
     const tool = createOpenClawTools({
+      config: permissiveSessionToolsConfig,
       agentSessionKey: "main",
       agentChannel: "discord",
     }).find((candidate) => candidate.name === "sessions_send");
@@ -767,6 +840,7 @@ describe("sessions tools", () => {
     });
 
     const tool = createOpenClawTools({
+      config: permissiveSessionToolsConfig,
       agentSessionKey: requesterKey,
       agentChannel: "discord",
     }).find((candidate) => candidate.name === "sessions_send");
@@ -796,10 +870,18 @@ describe("sessions tools", () => {
     for (const call of agentCalls) {
       expect(call.params).toMatchObject({
         lane: "nested",
-        channel: "webchat",
         inputProvenance: { kind: "inter_session" },
       });
     }
+    const initialMessageCalls = agentCalls.filter(
+      (call) =>
+        typeof (call.params as { extraSystemPrompt?: string })?.extraSystemPrompt === "string" &&
+        (call.params as { extraSystemPrompt?: string })?.extraSystemPrompt?.includes(
+          "Agent-to-agent message context",
+        ),
+    );
+    expect(initialMessageCalls).toHaveLength(1);
+    expect(initialMessageCalls[0]?.params).toMatchObject({ channel: "webchat" });
 
     const replySteps = calls.filter(
       (call) =>
@@ -810,6 +892,18 @@ describe("sessions tools", () => {
         ),
     );
     expect(replySteps).toHaveLength(2);
+    for (const call of replySteps) {
+      expect(call.params).toMatchObject({ channel: "webchat" });
+    }
+    const announceSteps = agentCalls.filter(
+      (call) =>
+        typeof (call.params as { extraSystemPrompt?: string })?.extraSystemPrompt === "string" &&
+        (call.params as { extraSystemPrompt?: string })?.extraSystemPrompt?.includes(
+          "Agent-to-agent announce step",
+        ),
+    );
+    expect(announceSteps).toHaveLength(1);
+    expect(announceSteps[0]?.params).toMatchObject({ channel: "webchat" });
     expect(sendParams).toMatchObject({
       to: "channel:target",
       channel: "discord",
