@@ -1,5 +1,5 @@
 import { Readable } from "node:stream";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const updateToken = vi.fn(async () => {});
 const request = vi.fn();
@@ -22,6 +22,10 @@ function createSseStream(lines: string[]): Readable {
 }
 
 describe("createGigachatStreamFn tool calling", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
   it("round-trips sanitized tool names for streamed function calls", async () => {
     request.mockResolvedValueOnce({
       status: 200,
@@ -156,7 +160,6 @@ describe("createGigachatStreamFn tool calling", () => {
       status: 200,
       data: createSseStream(['data: {"choices":[{"delta":{"content":"done"}}]}', "data: [DONE]"]),
     });
-
     const streamFn = createGigachatStreamFn({
       baseUrl: "https://gigachat.devices.sberbank.ru/api/v1",
       authMode: "oauth",
@@ -232,5 +235,42 @@ describe("createGigachatStreamFn tool calling", () => {
       }),
     );
     expect(event.content).toEqual([{ type: "text", text: "done" }]);
+  });
+
+  it("rejects tool-name sanitization collisions before sending the request", async () => {
+    const streamFn = createGigachatStreamFn({
+      baseUrl: "https://gigachat.devices.sberbank.ru/api/v1",
+      authMode: "oauth",
+    });
+
+    const stream = streamFn(
+      { api: "gigachat", provider: "gigachat", id: "GigaChat-2-Max" } as never,
+      {
+        messages: [],
+        tools: [
+          {
+            name: "llm-task",
+            description: "Run a task",
+            parameters: { type: "object", properties: {} },
+          },
+          {
+            name: "llm_task",
+            description: "Run another task",
+            parameters: { type: "object", properties: {} },
+          },
+        ],
+      } as never,
+      { apiKey: "token" } as never,
+    );
+
+    const event = await stream.result();
+
+    expect(event.stopReason).toBe("error");
+    expect(event.errorMessage).toBe(
+      'GigaChat tool name collision after sanitization: "llm_task" and "llm-task" both map to "llm_task"',
+    );
+    expect(event.content).toEqual([]);
+    expect(updateToken).not.toHaveBeenCalled();
+    expect(request).not.toHaveBeenCalled();
   });
 });

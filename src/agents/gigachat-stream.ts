@@ -105,12 +105,13 @@ function rememberToolNameMapping(
   originalName: string,
 ): string {
   const gigaName = toGigaChatToolName(originalName);
+  const existingOriginalName = reverse.get(gigaName);
   forward.set(originalName, gigaName);
-  if (!reverse.has(gigaName)) {
+  if (!existingOriginalName) {
     reverse.set(gigaName, originalName);
-  } else if (reverse.get(gigaName) !== originalName) {
-    log.warn(
-      `GigaChat: tool name collision after sanitization: "${originalName}" and "${reverse.get(gigaName)}" both map to "${gigaName}"`,
+  } else if (existingOriginalName !== originalName) {
+    throw new Error(
+      `GigaChat tool name collision after sanitization: "${originalName}" and "${existingOriginalName}" both map to "${gigaName}"`,
     );
   }
   return gigaName;
