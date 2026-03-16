@@ -48,7 +48,7 @@ describe("parsePostContent", () => {
     const result = parsePostContent(content);
 
     expect(result.textContent).toBe(
-      "[Docs \\[v2\\]](https://example.com/guide(a)) @alice\\_bob @ou\\_123 [https://example.com/no\\-text](https://example.com/no-text)",
+      "[Docs \\[v2\\]](https://example.com/guide(a))  @alice\\_bob  @ou\\_123  [https://example.com/no\\-text](https://example.com/no-text)",
     );
     expect(result.mentionedOpenIds).toEqual(["ou_123"]);
   });

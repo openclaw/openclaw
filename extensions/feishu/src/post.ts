@@ -257,7 +257,7 @@ export function parsePostContent(content: string): PostParseResult {
         const isTagNeedsSpace =
           isRecord(element) && ["a", "at"].includes(toStringOrEmpty(element.tag).toLowerCase());
 
-        if (isTagNeedsSpace) {
+        if (isTagNeedsSpace && rendered.length > 0) {
           // Ensure space before
           if (
             renderedParagraph.length > 0 &&
@@ -270,13 +270,9 @@ export function parsePostContent(content: string): PostParseResult {
           // Ensure space after (we will just append it, and later trim)
           renderedParagraph += " ";
         } else {
-          // It's normal text. If it starts with space and renderedParagraph ends with space, avoid double space,
-          // but mostly it's fine. We just append.
           renderedParagraph += rendered;
         }
       }
-      // Replace double spaces with single space, just in case
-      renderedParagraph = renderedParagraph.replace(/ {2,}/g, " ");
       paragraphs.push(renderedParagraph.trim());
     }
 
