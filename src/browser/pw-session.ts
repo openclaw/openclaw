@@ -26,6 +26,8 @@ import {
   assertBrowserNavigationResultAllowed,
   withBrowserNavigationPolicy,
 } from "./navigation-guard.js";
+import { DEFAULT_DOWNLOAD_DIR } from "./paths.js";
+import { buildTempDownloadPath, saveDownloadPayload } from "./pw-tools-core.downloads.js";
 import { withPageScopedCdpClient } from "./pw-session.page-cdp.js";
 
 export type BrowserConsoleMessage = {
@@ -291,6 +293,15 @@ export function ensurePageState(page: Page): PageState {
       rec.failureText = req.failure()?.errorText;
       rec.ok = false;
     });
+    // Default download handler to avoid "Download is starting" errors for unhandled downloads
+    page.on("download", async (download) => {
+      try {
+        // Save to default temp dir if no explicit waiter is active
+        await saveDownloadPayload(download, buildTempDownloadPath(download.suggestedFilename() || "download.bin"));
+      } catch {
+        // Ignore download save failures for default handler
+      }
+    });
     page.on("close", () => {
       pageStates.delete(page);
       observedPages.delete(page);
@@ -306,6 +317,9 @@ function observeContext(context: BrowserContext) {
   }
   observedContexts.add(context);
   ensureContextState(context);
+
+  // Configure context to allow downloads and set default download path
+  context.setDefaultDownloadPath(DEFAULT_DOWNLOAD_DIR);
 
   for (const page of context.pages()) {
     ensurePageState(page);
