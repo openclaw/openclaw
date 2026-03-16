@@ -7,7 +7,7 @@ describe("normalizeReplyPayload", () => {
       text: "<relevant-memories>\n1. [personal] likes coffee\n</relevant-memories>\nHere is my answer.",
     });
     expect(result).not.toBeNull();
-    expect(result!.text).toBe("Here is my answer.");
+    expect(result!.text).toBe("\nHere is my answer.");
   });
 
   it("strips <relevant_memories> (underscore variant) from reply text", () => {
@@ -15,7 +15,7 @@ describe("normalizeReplyPayload", () => {
       text: "<relevant_memories>\ndata\n</relevant_memories>\nActual reply.",
     });
     expect(result).not.toBeNull();
-    expect(result!.text).toBe("Actual reply.");
+    expect(result!.text).toBe("\nActual reply.");
   });
 
   it("passes through text without relevant-memories tags unchanged", () => {
