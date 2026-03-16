@@ -161,7 +161,7 @@ async function pollOAuthToken(params: {
     return { status: "error", message: "An error occurred. Please try again later" };
   }
 
-  if (tokenPayload.status != "success") {
+  if (tokenPayload.status !== "success") {
     return { status: "pending", message: "current user code is not authorized" };
   }
 
@@ -216,29 +216,17 @@ export async function loginMiniMaxPortalOAuth(params: {
       region,
     });
 
-    // // Debug: print poll result
-    // await params.note(
-    //   `status: ${result.status}` +
-    //     (result.status === "success" ? `\ntoken: ${JSON.stringify(result.token, null, 2)}` : "") +
-    //     (result.status === "error" ? `\nmessage: ${result.message}` : "") +
-    //     (result.status === "pending" && result.message ? `\nmessage: ${result.message}` : ""),
-    //   "MiniMax OAuth Poll Result",
-    // );
-
     if (result.status === "success") {
       return result.token;
     }
 
     if (result.status === "error") {
-      throw new Error(`MiniMax OAuth failed: ${result.message}`);
-    }
-
-    if (result.status === "pending") {
-      pollIntervalMs = Math.min(pollIntervalMs * 1.5, 10000);
+      throw new Error(result.message);
     }
 
     await new Promise((resolve) => setTimeout(resolve, pollIntervalMs));
+    pollIntervalMs = Math.max(pollIntervalMs, 2000);
   }
 
-  throw new Error("MiniMax OAuth timed out waiting for authorization.");
+  throw new Error("MiniMax OAuth timed out before authorization completed.");
 }

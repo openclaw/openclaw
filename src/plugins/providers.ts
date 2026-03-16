@@ -16,7 +16,6 @@ const BUNDLED_PROVIDER_ALLOWLIST_COMPAT_PLUGIN_IDS = [
   "kilocode",
   "kimi-coding",
   "minimax",
-  "minimax-portal-auth",
   "mistral",
   "modelstudio",
   "moonshot",
