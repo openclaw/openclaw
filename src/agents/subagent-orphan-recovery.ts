@@ -19,7 +19,9 @@ import {
   type SessionEntry,
 } from "../config/sessions.js";
 import { callGateway } from "../gateway/call.js";
+import { readSessionMessages } from "../gateway/session-utils.fs.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { replaceSubagentRunAfterSteer } from "./subagent-registry.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
 const log = createSubsystemLogger("subagent-orphan-recovery");
@@ -30,14 +32,45 @@ const DEFAULT_RECOVERY_DELAY_MS = 5_000;
 /**
  * Build the resume message for an orphaned subagent.
  */
-function buildResumeMessage(task: string): string {
+function buildResumeMessage(task: string, lastHumanMessage?: string): string {
   const maxTaskLen = 2000;
   const truncatedTask = task.length > maxTaskLen ? `${task.slice(0, maxTaskLen)}...` : task;
 
-  return (
+  let message =
     `[System] Your previous turn was interrupted by a gateway reload. ` +
-    `Your task was:\n\n${truncatedTask}\n\nPlease continue where you left off.`
-  );
+    `Your original task was:\n\n${truncatedTask}\n\n`;
+
+  if (lastHumanMessage) {
+    message += `The last message from the user before the interruption was:\n\n${lastHumanMessage}\n\n`;
+  }
+
+  message += `Please continue where you left off.`;
+  return message;
+}
+
+function extractMessageText(msg: unknown): string | undefined {
+  if (!msg || typeof msg !== "object") {
+    return undefined;
+  }
+  const m = msg as Record<string, unknown>;
+  if (typeof m.content === "string") {
+    return m.content;
+  }
+  if (Array.isArray(m.content)) {
+    const text = m.content
+      .filter(
+        (c: unknown) =>
+          typeof c === "object" &&
+          c !== null &&
+          (c as Record<string, unknown>).type === "text" &&
+          typeof (c as Record<string, unknown>).text === "string",
+      )
+      .map((c: unknown) => (c as Record<string, string>).text)
+      .filter(Boolean)
+      .join("\n");
+    return text || undefined;
+  }
+  return undefined;
 }
 
 /**
@@ -46,11 +79,17 @@ function buildResumeMessage(task: string): string {
 async function resumeOrphanedSession(params: {
   sessionKey: string;
   task: string;
+  lastHumanMessage?: string;
+  configChangeHint?: string;
+  originalRunId: string;
 }): Promise<boolean> {
-  const resumeMessage = buildResumeMessage(params.task);
+  let resumeMessage = buildResumeMessage(params.task, params.lastHumanMessage);
+  if (params.configChangeHint) {
+    resumeMessage += params.configChangeHint;
+  }
 
   try {
-    await callGateway<{ runId: string }>({
+    const result = await callGateway<{ runId: string }>({
       method: "agent",
       params: {
         message: resumeMessage,
@@ -60,6 +99,10 @@ async function resumeOrphanedSession(params: {
         lane: "subagent",
       },
       timeoutMs: 10_000,
+    });
+    replaceSubagentRunAfterSteer({
+      previousRunId: params.originalRunId,
+      nextRunId: result.runId,
     });
     log.info(`resumed orphaned session: ${params.sessionKey}`);
     return true;
@@ -84,6 +127,8 @@ export async function recoverOrphanedSubagentSessions(params: {
   getActiveRuns: () => Map<string, SubagentRunRecord>;
 }): Promise<{ recovered: number; failed: number; skipped: number }> {
   const result = { recovered: 0, failed: 0, skipped: 0 };
+  const resumedSessionKeys = new Set<string>();
+  const configChangePattern = /openclaw\.json|openclaw gateway restart|config\.patch/i;
 
   try {
     const activeRuns = params.getActiveRuns();
@@ -102,6 +147,10 @@ export async function recoverOrphanedSubagentSessions(params: {
 
       const childSessionKey = runRecord.childSessionKey?.trim();
       if (!childSessionKey) {
+        continue;
+      }
+      if (resumedSessionKeys.has(childSessionKey)) {
+        result.skipped++;
         continue;
       }
 
@@ -129,6 +178,18 @@ export async function recoverOrphanedSubagentSessions(params: {
 
         log.info(`found orphaned subagent session: ${childSessionKey} (run=${runId})`);
 
+        const messages = readSessionMessages(entry.sessionId, storePath, entry.sessionFile);
+        const lastHumanMessage = [...messages]
+          .toReversed()
+          .find((msg) => (msg as { role?: unknown } | null)?.role === "user");
+        const configChangeDetected = messages.some((msg) => {
+          if ((msg as { role?: unknown } | null)?.role !== "assistant") {
+            return false;
+          }
+          const text = extractMessageText(msg);
+          return typeof text === "string" && configChangePattern.test(text);
+        });
+
         // Resume the session with the original task context.
         // We intentionally do NOT clear abortedLastRun before attempting
         // the resume — if callGateway fails (e.g. gateway still booting),
@@ -136,18 +197,30 @@ export async function recoverOrphanedSubagentSessions(params: {
         const resumed = await resumeOrphanedSession({
           sessionKey: childSessionKey,
           task: runRecord.task,
+          lastHumanMessage: extractMessageText(lastHumanMessage),
+          configChangeHint: configChangeDetected
+            ? "\n\n[config changes from your previous run were already applied — do not re-modify openclaw.json or restart the gateway]"
+            : undefined,
+          originalRunId: runId,
         });
 
         if (resumed) {
+          resumedSessionKeys.add(childSessionKey);
           // Only clear the aborted flag after confirmed successful resume.
-          await updateSessionStore(storePath, (currentStore) => {
-            const current = currentStore[childSessionKey];
-            if (current) {
-              current.abortedLastRun = false;
-              current.updatedAt = Date.now();
-              currentStore[childSessionKey] = current;
-            }
-          });
+          try {
+            await updateSessionStore(storePath, (currentStore) => {
+              const current = currentStore[childSessionKey];
+              if (current) {
+                current.abortedLastRun = false;
+                current.updatedAt = Date.now();
+                currentStore[childSessionKey] = current;
+              }
+            });
+          } catch (err) {
+            log.warn(
+              `resume succeeded but failed to update session store for ${childSessionKey}: ${String(err)}`,
+            );
+          }
           result.recovered++;
         } else {
           // Flag stays as abortedLastRun=true so next restart can retry
