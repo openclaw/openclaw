@@ -17,6 +17,10 @@ TARGET_PACKAGE_SPEC=""
 KEEP_SERVER=0
 CHECK_LATEST_REF=1
 JSON_OUTPUT=0
+DISCORD_TOKEN_ENV=""
+DISCORD_TOKEN_VALUE=""
+DISCORD_GUILD_ID=""
+DISCORD_CHANNEL_ID=""
 GUEST_OPENCLAW_BIN="/opt/homebrew/bin/openclaw"
 GUEST_OPENCLAW_ENTRY="/opt/homebrew/lib/node_modules/openclaw/openclaw.mjs"
 GUEST_NODE_BIN="/opt/homebrew/bin/node"
@@ -35,6 +39,7 @@ TIMEOUT_GATEWAY_S=60
 TIMEOUT_AGENT_S=120
 TIMEOUT_PERMISSION_S=60
 TIMEOUT_SNAPSHOT_S=180
+TIMEOUT_DISCORD_S=180
 
 FRESH_MAIN_VERSION="skip"
 LATEST_INSTALLED_VERSION="skip"
@@ -43,6 +48,8 @@ FRESH_GATEWAY_STATUS="skip"
 UPGRADE_GATEWAY_STATUS="skip"
 FRESH_AGENT_STATUS="skip"
 UPGRADE_AGENT_STATUS="skip"
+FRESH_DISCORD_STATUS="skip"
+UPGRADE_DISCORD_STATUS="skip"
 
 say() {
   printf '==> %s\n' "$*"
@@ -66,6 +73,9 @@ die() {
 }
 
 cleanup() {
+  if command -v cleanup_discord_smoke_messages >/dev/null 2>&1; then
+    cleanup_discord_smoke_messages
+  fi
   if [[ -n "${SERVER_PID:-}" ]]; then
     kill "$SERVER_PID" >/dev/null 2>&1 || true
   fi
@@ -106,6 +116,9 @@ Options:
                              Example: openclaw@2026.3.13-beta.1
   --skip-latest-ref-check    Skip the known latest-release ref-mode precheck in upgrade lane.
   --keep-server              Leave temp host HTTP server running.
+  --discord-token-env <var>  Host env var name for Discord bot token.
+  --discord-guild-id <id>    Discord guild ID for smoke roundtrip.
+  --discord-channel-id <id>  Discord channel ID for smoke roundtrip.
   --json                     Print machine-readable JSON summary.
   -h, --help                 Show help.
 EOF
@@ -154,6 +167,18 @@ while [[ $# -gt 0 ]]; do
       TARGET_PACKAGE_SPEC="$2"
       shift 2
       ;;
+    --discord-token-env)
+      DISCORD_TOKEN_ENV="$2"
+      shift 2
+      ;;
+    --discord-guild-id)
+      DISCORD_GUILD_ID="$2"
+      shift 2
+      ;;
+    --discord-channel-id)
+      DISCORD_CHANNEL_ID="$2"
+      shift 2
+      ;;
     --skip-latest-ref-check)
       CHECK_LATEST_REF=0
       shift
@@ -185,6 +210,86 @@ esac
 
 OPENAI_API_KEY_VALUE="${!OPENAI_API_KEY_ENV:-}"
 [[ -n "$OPENAI_API_KEY_VALUE" ]] || die "$OPENAI_API_KEY_ENV is required"
+
+if [[ -n "$DISCORD_TOKEN_ENV" || -n "$DISCORD_GUILD_ID" || -n "$DISCORD_CHANNEL_ID" ]]; then
+  [[ -n "$DISCORD_TOKEN_ENV" ]] || die "--discord-token-env is required when Discord smoke args are set"
+  [[ -n "$DISCORD_GUILD_ID" ]] || die "--discord-guild-id is required when Discord smoke args are set"
+  [[ -n "$DISCORD_CHANNEL_ID" ]] || die "--discord-channel-id is required when Discord smoke args are set"
+  DISCORD_TOKEN_VALUE="${!DISCORD_TOKEN_ENV:-}"
+  [[ -n "$DISCORD_TOKEN_VALUE" ]] || die "$DISCORD_TOKEN_ENV is required for Discord smoke"
+fi
+
+discord_smoke_enabled() {
+  [[ -n "$DISCORD_TOKEN_VALUE" && -n "$DISCORD_GUILD_ID" && -n "$DISCORD_CHANNEL_ID" ]]
+}
+
+discord_api_request() {
+  local method="$1"
+  local path="$2"
+  local payload="${3:-}"
+  local url="https://discord.com/api/v10$path"
+  if [[ -n "$payload" ]]; then
+    curl -fsS -X "$method" \
+      -H "Authorization: Bot $DISCORD_TOKEN_VALUE" \
+      -H "Content-Type: application/json" \
+      --data "$payload" \
+      "$url"
+    return
+  fi
+  curl -fsS -X "$method" \
+    -H "Authorization: Bot $DISCORD_TOKEN_VALUE" \
+    "$url"
+}
+
+json_contains_string() {
+  local needle="$1"
+  python3 - "$needle" <<'PY'
+import json
+import sys
+
+needle = sys.argv[1]
+try:
+    payload = json.load(sys.stdin)
+except Exception:
+    raise SystemExit(1)
+
+def contains(value):
+    if isinstance(value, str):
+        return needle in value
+    if isinstance(value, list):
+        return any(contains(item) for item in value)
+    if isinstance(value, dict):
+        return any(contains(item) for item in value.values())
+    return False
+
+raise SystemExit(0 if contains(payload) else 1)
+PY
+}
+
+discord_delete_message_id_file() {
+  local path="$1"
+  [[ -f "$path" ]] || return 0
+  [[ -s "$path" ]] || return 0
+  discord_smoke_enabled || return 0
+
+  local message_id
+  message_id="$(tr -d '\r\n' <"$path")"
+  [[ -n "$message_id" ]] || return 0
+
+  set +e
+  discord_api_request DELETE "/channels/$DISCORD_CHANNEL_ID/messages/$message_id" >/dev/null
+  set -e
+}
+
+cleanup_discord_smoke_messages() {
+  discord_smoke_enabled || return 0
+  [[ -d "$RUN_DIR" ]] || return 0
+
+  discord_delete_message_id_file "$RUN_DIR/fresh.discord-sent-message-id"
+  discord_delete_message_id_file "$RUN_DIR/fresh.discord-host-message-id"
+  discord_delete_message_id_file "$RUN_DIR/upgrade.discord-sent-message-id"
+  discord_delete_message_id_file "$RUN_DIR/upgrade.discord-host-message-id"
+}
 
 resolve_snapshot_id() {
   local json hint
@@ -286,7 +391,7 @@ wait_for_current_user() {
 
 guest_current_user_exec() {
   prlctl exec "$VM_NAME" --current-user /usr/bin/env \
-    PATH=/opt/homebrew/bin:/opt/homebrew/sbin:/usr/bin:/bin:/usr/sbin:/sbin \
+    PATH=/opt/homebrew/bin:/opt/homebrew/opt/node/bin:/opt/homebrew/sbin:/usr/bin:/bin:/usr/sbin:/sbin \
     "$@"
 }
 
@@ -553,6 +658,180 @@ verify_turn() {
   guest_current_user_exec "$GUEST_NODE_BIN" "$GUEST_OPENCLAW_ENTRY" agent --agent main --message ping --json
 }
 
+configure_discord_smoke() {
+  local guilds_json script
+  guilds_json="$(
+    DISCORD_GUILD_ID="$DISCORD_GUILD_ID" DISCORD_CHANNEL_ID="$DISCORD_CHANNEL_ID" python3 - <<'PY'
+import json
+import os
+
+print(
+    json.dumps(
+        {
+            os.environ["DISCORD_GUILD_ID"]: {
+                "channels": {
+                    os.environ["DISCORD_CHANNEL_ID"]: {
+                        "allow": True,
+                        "requireMention": False,
+                    }
+                }
+            }
+        }
+    )
+)
+PY
+  )"
+  script="$(cat <<EOF
+cat >/tmp/openclaw-discord-token <<'__OPENCLAW_TOKEN__'
+$DISCORD_TOKEN_VALUE
+__OPENCLAW_TOKEN__
+cat >/tmp/openclaw-discord-guilds.json <<'__OPENCLAW_GUILDS__'
+$guilds_json
+__OPENCLAW_GUILDS__
+token="\$(tr -d '\n' </tmp/openclaw-discord-token)"
+guilds_json="\$(cat /tmp/openclaw-discord-guilds.json)"
+$GUEST_NODE_BIN $GUEST_OPENCLAW_ENTRY config set channels.discord.token "\$token"
+$GUEST_NODE_BIN $GUEST_OPENCLAW_ENTRY config set channels.discord.enabled true
+$GUEST_NODE_BIN $GUEST_OPENCLAW_ENTRY config set channels.discord.groupPolicy allowlist
+$GUEST_NODE_BIN $GUEST_OPENCLAW_ENTRY config set channels.discord.guilds "\$guilds_json" --strict-json
+$GUEST_NODE_BIN $GUEST_OPENCLAW_ENTRY gateway restart
+for _ in 1 2 3 4 5 6 7 8; do
+  if $GUEST_NODE_BIN $GUEST_OPENCLAW_ENTRY gateway status --deep --require-rpc >/dev/null 2>&1; then
+    break
+  fi
+  sleep 2
+done
+$GUEST_NODE_BIN $GUEST_OPENCLAW_ENTRY channels status --probe --json
+rm -f /tmp/openclaw-discord-token /tmp/openclaw-discord-guilds.json
+EOF
+)"
+  prlctl exec "$VM_NAME" --current-user /usr/bin/env \
+    PATH=/opt/homebrew/bin:/opt/homebrew/opt/node/bin:/opt/homebrew/sbin:/usr/bin:/bin:/usr/sbin:/sbin \
+    /bin/sh -lc "$script"
+}
+
+discord_message_id_from_send_log() {
+  local path="$1"
+  python3 - "$path" <<'PY'
+import json
+import pathlib
+import sys
+
+payload = json.loads(pathlib.Path(sys.argv[1]).read_text())
+message_id = payload.get("payload", {}).get("messageId")
+if not message_id:
+    message_id = payload.get("payload", {}).get("result", {}).get("messageId")
+if not message_id:
+    raise SystemExit("messageId missing from send output")
+print(message_id)
+PY
+}
+
+wait_for_discord_host_visibility() {
+  local nonce="$1"
+  local response
+  local deadline=$((SECONDS + TIMEOUT_DISCORD_S))
+  while (( SECONDS < deadline )); do
+    set +e
+    response="$(discord_api_request GET "/channels/$DISCORD_CHANNEL_ID/messages?limit=20")"
+    local rc=$?
+    set -e
+    if [[ $rc -eq 0 ]] && [[ -n "$response" ]] && printf '%s' "$response" | json_contains_string "$nonce"; then
+      return 0
+    fi
+    sleep 2
+  done
+  return 1
+}
+
+post_host_discord_message() {
+  local nonce="$1"
+  local id_file="$2"
+  local payload response
+  payload="$(
+    NONCE="$nonce" python3 - <<'PY'
+import json
+import os
+
+print(
+    json.dumps(
+        {
+            "content": f"parallels-macos-smoke-inbound-{os.environ['NONCE']}",
+            "flags": 4096,
+        }
+    )
+)
+PY
+  )"
+  response="$(discord_api_request POST "/channels/$DISCORD_CHANNEL_ID/messages" "$payload")"
+  printf '%s' "$response" | python3 - "$id_file" <<'PY'
+import json
+import pathlib
+import sys
+
+payload = json.load(sys.stdin)
+message_id = payload.get("id")
+if not isinstance(message_id, str) or not message_id:
+    raise SystemExit("host Discord post missing message id")
+pathlib.Path(sys.argv[1]).write_text(f"{message_id}\n", encoding="utf-8")
+PY
+}
+
+wait_for_guest_discord_readback() {
+  local nonce="$1"
+  local response rc
+  local last_response_path="$RUN_DIR/discord-last-readback.json"
+  local deadline=$((SECONDS + TIMEOUT_DISCORD_S))
+  while (( SECONDS < deadline )); do
+    set +e
+    response="$(
+      guest_current_user_exec \
+      "$GUEST_OPENCLAW_BIN" \
+      message read \
+      --channel discord \
+      --target "channel:$DISCORD_CHANNEL_ID" \
+      --limit 20 \
+      --json
+    )"
+    rc=$?
+    set -e
+    if [[ -n "$response" ]]; then
+      printf '%s' "$response" >"$last_response_path"
+    fi
+    if [[ $rc -eq 0 ]] && [[ -n "$response" ]] && printf '%s' "$response" | json_contains_string "$nonce"; then
+      return 0
+    fi
+    sleep 3
+  done
+  return 1
+}
+
+run_discord_roundtrip_smoke() {
+  local phase="$1"
+  local nonce outbound_nonce inbound_nonce outbound_message outbound_log sent_id_file host_id_file
+  nonce="$(date +%s)-$RANDOM"
+  outbound_nonce="$phase-out-$nonce"
+  inbound_nonce="$phase-in-$nonce"
+  outbound_message="parallels-macos-smoke-outbound-$outbound_nonce"
+  outbound_log="$RUN_DIR/$phase.discord-send.json"
+  sent_id_file="$RUN_DIR/$phase.discord-sent-message-id"
+  host_id_file="$RUN_DIR/$phase.discord-host-message-id"
+
+  guest_current_user_exec \
+    "$GUEST_OPENCLAW_BIN" \
+    message send \
+    --channel discord \
+    --target "channel:$DISCORD_CHANNEL_ID" \
+    --message "$outbound_message" \
+    --silent \
+    --json >"$outbound_log"
+
+  discord_message_id_from_send_log "$outbound_log" >"$sent_id_file"
+  wait_for_discord_host_visibility "$outbound_nonce"
+  post_host_discord_message "$inbound_nonce" "$host_id_file"
+  wait_for_guest_discord_readback "$inbound_nonce"
+}
+
 phase_log_path() {
   printf '%s/%s.log\n' "$RUN_DIR" "$1"
 }
@@ -646,6 +925,7 @@ summary = {
         "version": os.environ["SUMMARY_FRESH_MAIN_VERSION"],
         "gateway": os.environ["SUMMARY_FRESH_GATEWAY_STATUS"],
         "agent": os.environ["SUMMARY_FRESH_AGENT_STATUS"],
+        "discord": os.environ["SUMMARY_FRESH_DISCORD_STATUS"],
     },
     "upgrade": {
         "precheck": os.environ["SUMMARY_UPGRADE_PRECHECK_STATUS"],
@@ -654,6 +934,7 @@ summary = {
         "mainVersion": os.environ["SUMMARY_UPGRADE_MAIN_VERSION"],
         "gateway": os.environ["SUMMARY_UPGRADE_GATEWAY_STATUS"],
         "agent": os.environ["SUMMARY_UPGRADE_AGENT_STATUS"],
+        "discord": os.environ["SUMMARY_UPGRADE_DISCORD_STATUS"],
     },
 }
 with open(sys.argv[1], "w", encoding="utf-8") as handle:
@@ -691,6 +972,12 @@ run_fresh_main_lane() {
   FRESH_GATEWAY_STATUS="pass"
   phase_run "fresh.first-agent-turn" "$TIMEOUT_AGENT_S" verify_turn
   FRESH_AGENT_STATUS="pass"
+  if discord_smoke_enabled; then
+    FRESH_DISCORD_STATUS="fail"
+    phase_run "fresh.discord-config" "$TIMEOUT_GATEWAY_S" configure_discord_smoke
+    phase_run "fresh.discord-roundtrip" "$TIMEOUT_DISCORD_S" run_discord_roundtrip_smoke "fresh"
+    FRESH_DISCORD_STATUS="pass"
+  fi
 }
 
 run_upgrade_lane() {
@@ -718,6 +1005,12 @@ run_upgrade_lane() {
   UPGRADE_GATEWAY_STATUS="pass"
   phase_run "upgrade.first-agent-turn" "$TIMEOUT_AGENT_S" verify_turn
   UPGRADE_AGENT_STATUS="pass"
+  if discord_smoke_enabled; then
+    UPGRADE_DISCORD_STATUS="fail"
+    phase_run "upgrade.discord-config" "$TIMEOUT_GATEWAY_S" configure_discord_smoke
+    phase_run "upgrade.discord-roundtrip" "$TIMEOUT_DISCORD_S" run_discord_roundtrip_smoke "upgrade"
+    UPGRADE_DISCORD_STATUS="pass"
+  fi
 }
 
 FRESH_MAIN_STATUS="skip"
@@ -733,6 +1026,11 @@ say "VM: $VM_NAME"
 say "Snapshot hint: $SNAPSHOT_HINT"
 say "Latest npm version: $LATEST_VERSION"
 say "Current head: $(git rev-parse --short HEAD)"
+if discord_smoke_enabled; then
+  say "Discord smoke: guild=$DISCORD_GUILD_ID channel=$DISCORD_CHANNEL_ID"
+else
+  say "Discord smoke: disabled"
+fi
 say "Run logs: $RUN_DIR"
 
 pack_main_tgz
@@ -781,12 +1079,14 @@ SUMMARY_JSON_PATH="$(
   SUMMARY_FRESH_MAIN_VERSION="$FRESH_MAIN_VERSION" \
   SUMMARY_FRESH_GATEWAY_STATUS="$FRESH_GATEWAY_STATUS" \
   SUMMARY_FRESH_AGENT_STATUS="$FRESH_AGENT_STATUS" \
+  SUMMARY_FRESH_DISCORD_STATUS="$FRESH_DISCORD_STATUS" \
   SUMMARY_UPGRADE_PRECHECK_STATUS="$UPGRADE_PRECHECK_STATUS" \
   SUMMARY_UPGRADE_STATUS="$UPGRADE_STATUS" \
   SUMMARY_LATEST_INSTALLED_VERSION="$LATEST_INSTALLED_VERSION" \
   SUMMARY_UPGRADE_MAIN_VERSION="$UPGRADE_MAIN_VERSION" \
   SUMMARY_UPGRADE_GATEWAY_STATUS="$UPGRADE_GATEWAY_STATUS" \
   SUMMARY_UPGRADE_AGENT_STATUS="$UPGRADE_AGENT_STATUS" \
+  SUMMARY_UPGRADE_DISCORD_STATUS="$UPGRADE_DISCORD_STATUS" \
   write_summary_json
 )"
 
@@ -800,9 +1100,9 @@ else
   if [[ -n "$INSTALL_VERSION" ]]; then
     printf '  baseline-install-version: %s\n' "$INSTALL_VERSION"
   fi
-  printf '  fresh-main: %s (%s)\n' "$FRESH_MAIN_STATUS" "$FRESH_MAIN_VERSION"
+  printf '  fresh-main: %s (%s) discord=%s\n' "$FRESH_MAIN_STATUS" "$FRESH_MAIN_VERSION" "$FRESH_DISCORD_STATUS"
   printf '  latest->main precheck: %s (%s)\n' "$UPGRADE_PRECHECK_STATUS" "$LATEST_INSTALLED_VERSION"
-  printf '  latest->main: %s (%s)\n' "$UPGRADE_STATUS" "$UPGRADE_MAIN_VERSION"
+  printf '  latest->main: %s (%s) discord=%s\n' "$UPGRADE_STATUS" "$UPGRADE_MAIN_VERSION" "$UPGRADE_DISCORD_STATUS"
   printf '  logs: %s\n' "$RUN_DIR"
   printf '  summary: %s\n' "$SUMMARY_JSON_PATH"
 fi
