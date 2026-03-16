@@ -674,6 +674,13 @@ async function runWorkerTurn(params: {
 }) {
   const { nodeId, session, activeTurn, sendNodeEvent } = params;
   let seq = 0;
+  let runtimeFailureTerminal:
+    | {
+        kind: "failed";
+        errorCode?: string;
+        errorMessage?: string;
+      }
+    | undefined;
   let terminal:
     | {
         kind: "completed" | "failed" | "cancelled";
@@ -692,7 +699,12 @@ async function runWorkerTurn(params: {
       requestId: activeTurn.requestId,
       signal: activeTurn.abortController.signal,
     })) {
-      if (event.type === "text_delta" || event.type === "status" || event.type === "tool_call") {
+      if (
+        event.type === "text_delta" ||
+        event.type === "status" ||
+        event.type === "tool_call" ||
+        event.type === "error"
+      ) {
         seq += 1;
         await sendNodeEvent("acp.worker.event", {
           nodeId,
@@ -703,27 +715,30 @@ async function runWorkerTurn(params: {
           seq,
           event,
         });
+        if (event.type === "error") {
+          runtimeFailureTerminal = {
+            kind: "failed",
+            ...(event.code ? { errorCode: event.code } : {}),
+            errorMessage: event.message,
+          };
+        }
         continue;
       }
       if (event.type === "done") {
-        terminal = {
-          kind: activeTurn.cancelRequested ? "cancelled" : "completed",
-          ...(activeTurn.cancelRequested
-            ? {
-                stopReason:
-                  activeTurn.cancelReason?.trim() || event.stopReason?.trim() || "cancelled",
-              }
-            : event.stopReason
-              ? { stopReason: event.stopReason }
-              : {}),
-        };
+        terminal = activeTurn.cancelRequested
+          ? {
+              kind: "cancelled",
+              stopReason:
+                activeTurn.cancelReason?.trim() || event.stopReason?.trim() || "cancelled",
+            }
+          : runtimeFailureTerminal
+            ? runtimeFailureTerminal
+            : {
+                kind: "completed",
+                ...(event.stopReason ? { stopReason: event.stopReason } : {}),
+              };
         continue;
       }
-      terminal = {
-        kind: "failed",
-        ...(event.code ? { errorCode: event.code } : {}),
-        errorMessage: event.message,
-      };
     }
   } catch (error) {
     terminal = {
@@ -739,10 +754,12 @@ async function runWorkerTurn(params: {
           kind: "cancelled",
           stopReason: activeTurn.cancelReason?.trim() || "cancelled",
         }
-      : {
-          kind: "completed",
-          stopReason: "done",
-        };
+      : runtimeFailureTerminal
+        ? runtimeFailureTerminal
+        : {
+            kind: "completed",
+            stopReason: "done",
+          };
   }
 
   try {

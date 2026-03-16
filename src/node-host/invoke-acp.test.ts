@@ -42,6 +42,23 @@ class FakeNodeHostRuntime implements AcpRuntime {
   readonly closed: Array<{ handle: AcpRuntimeHandle; reason: string }> = [];
   statusError: Error | null = null;
   rewriteStopReasonOnCancel = true;
+  emittedEvents: AcpRuntimeEvent[] = [
+    {
+      type: "text_delta",
+      stream: "output",
+      text: "hello from runtime",
+      tag: "agent_message_chunk",
+    },
+    {
+      type: "status",
+      text: "runtime step",
+      tag: "session_info_update",
+    },
+    {
+      type: "done",
+      stopReason: "done",
+    },
+  ];
 
   private readonly readyToEmit = createDeferred<void>();
   private readonly releaseTurn = createDeferred<void>();
@@ -63,21 +80,16 @@ class FakeNodeHostRuntime implements AcpRuntime {
     this.turns.push(input);
     this.readyToEmit.resolve();
     await this.releaseTurn.promise;
-    yield {
-      type: "text_delta",
-      stream: "output",
-      text: "hello from runtime",
-      tag: "agent_message_chunk",
-    };
-    yield {
-      type: "status",
-      text: "runtime step",
-      tag: "session_info_update",
-    };
-    yield {
-      type: "done",
-      stopReason: this.nextStopReason,
-    };
+    for (const event of this.emittedEvents) {
+      if (event.type === "done") {
+        yield {
+          type: "done",
+          stopReason: this.nextStopReason,
+        };
+        continue;
+      }
+      yield event;
+    }
     this.finished.resolve();
   }
 
@@ -840,6 +852,206 @@ describe("handleAcpInvokeCommand", () => {
       ok: false,
       code: "UNAVAILABLE",
       message: expect.stringContaining("run-terminal-failure"),
+    });
+  });
+
+  it("forwards runtime error events and preserves a failed terminal when done arrives later", async () => {
+    const runtime = new FakeNodeHostRuntime();
+    runtime.emittedEvents = [
+      {
+        type: "error",
+        message: "runtime-error-event",
+        code: "RUNTIME_ERR",
+      },
+      {
+        type: "done",
+        stopReason: "done-after-error",
+      },
+    ];
+    registerAcpRuntimeBackend({
+      id: "acpx",
+      runtime,
+    });
+    const nodeEvents: NodeEventCall[] = [];
+
+    await handleAcpInvokeCommand(
+      buildFrame({
+        command: "acp.session.ensure",
+        payload: {
+          sessionKey: "agent:main:acp:test",
+          leaseId: "lease-1",
+          leaseEpoch: 1,
+          agent: "main",
+          mode: "persistent",
+        },
+      }),
+      buildDeps(async (event, payload) => {
+        nodeEvents.push({ event, payload });
+      }),
+    );
+
+    await handleAcpInvokeCommand(
+      buildFrame({
+        command: "acp.turn.start",
+        payload: {
+          sessionKey: "agent:main:acp:test",
+          runId: "run-error-then-done",
+          leaseId: "lease-1",
+          leaseEpoch: 1,
+          requestId: "req-error-then-done",
+          mode: "prompt",
+          text: "trigger error",
+        },
+      }),
+      buildDeps(async (event, payload) => {
+        nodeEvents.push({ event, payload });
+      }),
+    );
+
+    await runtime.waitForTurnStart();
+    runtime.releaseTurnToComplete("done-after-error");
+    await runtime.waitForTurnFinish();
+
+    await vi.waitFor(() => {
+      expect(nodeEvents).toHaveLength(2);
+    });
+    expect(nodeEvents).toEqual([
+      {
+        event: "acp.worker.event",
+        payload: {
+          nodeId: "node-1",
+          sessionKey: "agent:main:acp:test",
+          runId: "run-error-then-done",
+          leaseId: "lease-1",
+          leaseEpoch: 1,
+          seq: 1,
+          event: {
+            type: "error",
+            message: "runtime-error-event",
+            code: "RUNTIME_ERR",
+          },
+        },
+      },
+      {
+        event: "acp.worker.terminal",
+        payload: {
+          nodeId: "node-1",
+          sessionKey: "agent:main:acp:test",
+          runId: "run-error-then-done",
+          leaseId: "lease-1",
+          leaseEpoch: 1,
+          terminalEventId: expect.any(String),
+          finalSeq: 1,
+          terminal: {
+            kind: "failed",
+            errorCode: "RUNTIME_ERR",
+            errorMessage: "runtime-error-event",
+          },
+        },
+      },
+    ]);
+  });
+
+  it("preserves cancel classification when a runtime error event is followed by done after cancel", async () => {
+    const runtime = new FakeNodeHostRuntime();
+    runtime.emittedEvents = [
+      {
+        type: "error",
+        message: "runtime-error-event",
+        code: "RUNTIME_ERR",
+      },
+      {
+        type: "done",
+        stopReason: "done-after-error",
+      },
+    ];
+    registerAcpRuntimeBackend({
+      id: "acpx",
+      runtime,
+    });
+    const nodeEvents: NodeEventCall[] = [];
+
+    await handleAcpInvokeCommand(
+      buildFrame({
+        command: "acp.session.ensure",
+        payload: {
+          sessionKey: "agent:main:acp:test",
+          leaseId: "lease-1",
+          leaseEpoch: 1,
+          agent: "main",
+          mode: "persistent",
+        },
+      }),
+      buildDeps(async (event, payload) => {
+        nodeEvents.push({ event, payload });
+      }),
+    );
+
+    await handleAcpInvokeCommand(
+      buildFrame({
+        command: "acp.turn.start",
+        payload: {
+          sessionKey: "agent:main:acp:test",
+          runId: "run-cancel-error-then-done",
+          leaseId: "lease-1",
+          leaseEpoch: 1,
+          requestId: "req-cancel-error-then-done",
+          mode: "prompt",
+          text: "cancel after start",
+        },
+      }),
+      buildDeps(async (event, payload) => {
+        nodeEvents.push({ event, payload });
+      }),
+    );
+
+    await runtime.waitForTurnStart();
+
+    await expect(
+      handleAcpInvokeCommand(
+        buildFrame({
+          command: "acp.turn.cancel",
+          payload: {
+            sessionKey: "agent:main:acp:test",
+            runId: "run-cancel-error-then-done",
+            leaseId: "lease-1",
+            leaseEpoch: 1,
+            reason: "manual-cancel",
+          },
+        }),
+        buildDeps(),
+      ),
+    ).resolves.toMatchObject({
+      handled: true,
+      ok: true,
+    });
+
+    await runtime.waitForTurnFinish();
+    await vi.waitFor(() => {
+      expect(nodeEvents).toHaveLength(2);
+    });
+    expect(nodeEvents.at(0)).toMatchObject({
+      event: "acp.worker.event",
+      payload: {
+        runId: "run-cancel-error-then-done",
+        seq: 1,
+        event: {
+          type: "error",
+          message: "runtime-error-event",
+          code: "RUNTIME_ERR",
+        },
+      },
+    });
+    expect(nodeEvents.at(1)).toMatchObject({
+      event: "acp.worker.terminal",
+      payload: {
+        runId: "run-cancel-error-then-done",
+        finalSeq: 1,
+        terminal: {
+          kind: "cancelled",
+          stopReason: "manual-cancel",
+        },
+      },
     });
   });
 
