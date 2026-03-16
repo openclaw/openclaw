@@ -174,6 +174,33 @@ const mocks = vi.hoisted(() => ({
     scope: "per-sender",
     agents: [{ id: "main", name: "Main" }],
   }),
+  getMemorySearchManager: vi.fn(async ({ agentId }: { agentId: string }) => ({
+    manager: {
+      probeVectorAvailability: vi.fn(async () => true),
+      status: () => ({
+        files: 2,
+        chunks: 3,
+        dirty: false,
+        workspaceDir: "/tmp/openclaw",
+        dbPath: "/tmp/memory.sqlite",
+        provider: "openai",
+        model: "text-embedding-3-small",
+        requestedProvider: "openai",
+        sources: ["memory"],
+        sourceCounts: [{ source: "memory", files: 2, chunks: 3 }],
+        cache: { enabled: true, entries: 10, maxEntries: 500 },
+        fts: { enabled: true, available: true },
+        vector: {
+          enabled: true,
+          available: true,
+          extensionPath: "/opt/vec0.dylib",
+          dims: 1024,
+        },
+      }),
+      close: vi.fn(async () => {}),
+      __agentId: agentId,
+    },
+  })),
   runSecurityAudit: vi.fn().mockResolvedValue({
     ts: 0,
     summary: { critical: 1, warn: 1, info: 2 },
@@ -236,6 +263,10 @@ vi.mock("../memory/manager.js", () => ({
     })),
   },
 }));
+vi.mock("./status.scan.deps.runtime.js", () => ({
+  getTailnetHostname: vi.fn(async () => null),
+  getMemorySearchManager: mocks.getMemorySearchManager,
+}));
 
 vi.mock("../config/sessions.js", () => ({
   loadSessionStore: mocks.loadSessionStore,
@@ -249,6 +280,28 @@ vi.mock("../config/sessions.js", () => ({
   ),
   readSessionUpdatedAt: vi.fn(() => undefined),
   recordSessionMetaFromInbound: vi.fn().mockResolvedValue(undefined),
+}));
+vi.mock("../config/sessions/store.js", () => ({
+  loadSessionStore: mocks.loadSessionStore,
+}));
+vi.mock("../config/sessions/main-session.js", () => ({
+  resolveMainSessionKey: mocks.resolveMainSessionKey,
+  resolveAgentMainSessionKey: vi.fn(({ agentId }: { agentId: string }) => `agent:${agentId}:main`),
+  canonicalizeMainSessionAlias: vi.fn(({ sessionKey }: { sessionKey: string }) => sessionKey),
+}));
+vi.mock("../config/sessions/paths.js", () => ({
+  resolveStorePath: mocks.resolveStorePath,
+}));
+vi.mock("../config/sessions/types.js", () => ({
+  resolveFreshSessionTotalTokens: vi.fn(
+    (entry?: { totalTokens?: number; totalTokensFresh?: boolean }) =>
+      typeof entry?.totalTokens === "number" && entry?.totalTokensFresh !== false
+        ? entry.totalTokens
+        : undefined,
+  ),
+}));
+vi.mock("../config/sessions/targets.js", () => ({
+  resolveAllAgentSessionStoreTargetsSync: vi.fn(() => []),
 }));
 vi.mock("../channels/plugins/index.js", () => ({
   listChannelPlugins: () =>
@@ -354,6 +407,7 @@ vi.mock("../config/config.js", async (importOriginal) => {
   return {
     ...actual,
     loadConfig: mocks.loadConfig,
+    readBestEffortConfig: mocks.loadConfig,
   };
 });
 vi.mock("../daemon/service.js", () => ({
@@ -403,6 +457,14 @@ describe("statusCommand", () => {
   });
 
   it("prints JSON when requested", async () => {
+    mocks.loadConfig.mockReturnValue({
+      session: {},
+      agents: {
+        defaults: {
+          memorySearch: {},
+        },
+      },
+    });
     await statusCommand({ json: true }, runtime as never);
     const payload = JSON.parse(String(runtimeLogMock.mock.calls[0]?.[0]));
     expect(payload.linkChannel).toBeUndefined();

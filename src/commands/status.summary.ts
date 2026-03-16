@@ -3,13 +3,10 @@ import { resolveConfiguredModelRef } from "../agents/model-selection.js";
 import { hasPotentialConfiguredChannels } from "../channels/config-presence.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { loadConfig } from "../config/config.js";
-import {
-  loadSessionStore,
-  resolveFreshSessionTotalTokens,
-  resolveMainSessionKey,
-  resolveStorePath,
-  type SessionEntry,
-} from "../config/sessions.js";
+import { resolveMainSessionKey } from "../config/sessions/main-session.js";
+import { resolveStorePath } from "../config/sessions/paths.js";
+import { loadSessionStore } from "../config/sessions/store.js";
+import { resolveFreshSessionTotalTokens, type SessionEntry } from "../config/sessions/types.js";
 import { listGatewayAgentsBasic } from "../gateway/agent-list.js";
 import { resolveHeartbeatSummaryForAgent } from "../infra/heartbeat-summary.js";
 import { peekSystemEvents } from "../infra/system-events.js";

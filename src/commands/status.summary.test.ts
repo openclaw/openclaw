@@ -25,12 +25,25 @@ vi.mock("../config/config.js", () => ({
   loadConfig: vi.fn(() => ({})),
 }));
 
-vi.mock("../config/sessions.js", () => ({
+vi.mock("../config/sessions/store.js", () => ({
   loadSessionStore: vi.fn(() => ({})),
+}));
+
+vi.mock("../config/sessions/types.js", () => ({
   resolveFreshSessionTotalTokens: vi.fn(() => undefined),
+}));
+
+vi.mock("../config/sessions/main-session.js", () => ({
   resolveMainSessionKey: vi.fn(() => "main"),
+}));
+
+vi.mock("../config/sessions/paths.js", () => ({
   resolveStorePath: vi.fn(() => "/tmp/sessions.json"),
 }));
+
+vi.mock("../config/sessions/transcript.js", () => {
+  throw new Error("status summary must not import transcript runtime");
+});
 
 vi.mock("../gateway/agent-list.js", () => ({
   listGatewayAgentsBasic: vi.fn(() => ({

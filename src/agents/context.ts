@@ -130,6 +130,8 @@ function shouldSkipEagerContextWindowWarmup(argv: string[] = process.argv): bool
   return primary ? SKIP_EAGER_WARMUP_PRIMARY_COMMANDS.has(primary) : false;
 }
 
+const skipContextWindowWarmup = shouldSkipEagerContextWindowWarmup();
+
 function primeConfiguredContextWindows(): OpenClawConfig | undefined {
   if (configuredConfig) {
     return configuredConfig;
@@ -205,12 +207,16 @@ export function lookupContextTokens(modelId?: string): number | undefined {
   if (!modelId) {
     return undefined;
   }
+  if (skipContextWindowWarmup) {
+    primeConfiguredContextWindows();
+    return MODEL_CACHE.get(modelId);
+  }
   // Best-effort: kick off loading, but don't block.
   void ensureContextWindowCacheLoaded();
   return MODEL_CACHE.get(modelId);
 }
 
-if (!shouldSkipEagerContextWindowWarmup()) {
+if (!skipContextWindowWarmup) {
   // Keep prior behavior where model limits begin loading during startup.
   // This avoids a cold-start miss on the first context token lookup.
   void ensureContextWindowCacheLoaded();

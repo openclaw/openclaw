@@ -82,6 +82,11 @@ const installProcessWarningFilter = async () => {
 
 await installProcessWarningFilter();
 
+// The wrapper installs the warning filter before loading the real entrypoint,
+// so the packaged CLI does not need the later self-respawn just to suppress
+// the ExperimentalWarning noise.
+process.env.OPENCLAW_NODE_OPTIONS_READY ??= "1";
+
 const tryImport = async (specifier) => {
   try {
     await import(specifier);

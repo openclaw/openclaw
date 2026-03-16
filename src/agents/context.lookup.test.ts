@@ -59,6 +59,7 @@ async function importResolveContextTokensForModel() {
 describe("lookupContextTokens", () => {
   beforeEach(() => {
     vi.resetModules();
+    vi.doUnmock("./pi-model-discovery-runtime.js");
   });
 
   it("returns configured model context window on first lookup", async () => {
@@ -113,6 +114,31 @@ describe("lookupContextTokens", () => {
     try {
       await import("./context.js");
       expect(loadConfigMock).not.toHaveBeenCalled();
+    } finally {
+      process.argv = argvSnapshot;
+    }
+  });
+
+  it("does not lazy-load pi model discovery during status lookups", async () => {
+    const loadConfigMock = vi.fn(() => ({
+      models: {
+        providers: {
+          openrouter: {
+            models: [{ id: "openrouter/claude-sonnet", contextWindow: 321_000 }],
+          },
+        },
+      },
+    }));
+    mockContextModuleDeps(loadConfigMock);
+    vi.doMock("./pi-model-discovery-runtime.js", () => {
+      throw new Error("status lookups must not import pi model discovery");
+    });
+
+    const argvSnapshot = process.argv;
+    process.argv = ["node", "openclaw", "status", "--json"];
+    try {
+      const { lookupContextTokens } = await import("./context.js");
+      expect(lookupContextTokens("openrouter/claude-sonnet")).toBe(321_000);
     } finally {
       process.argv = argvSnapshot;
     }
@@ -175,10 +201,9 @@ describe("lookupContextTokens", () => {
     ]);
 
     const { lookupContextTokens } = await import("./context.js");
-    // Trigger async cache population.
-    await new Promise((r) => setTimeout(r, 0));
-    // Conservative minimum: bare-id cache feeds runtime flush/compaction paths.
-    expect(lookupContextTokens("gemini-3.1-pro-preview")).toBe(128_000);
+    await vi.waitFor(() => expect(lookupContextTokens("gemini-3.1-pro-preview")).toBe(128_000), {
+      timeout: 3_000,
+    });
   });
 
   it("resolveContextTokensForModel returns discovery value when provider-qualified entry exists in cache", async () => {
@@ -190,8 +215,11 @@ describe("lookupContextTokens", () => {
       { id: "google-gemini-cli/gemini-3.1-pro-preview", contextWindow: 1_048_576 },
     ]);
 
-    const { resolveContextTokensForModel } = await import("./context.js");
-    await new Promise((r) => setTimeout(r, 0));
+    const { lookupContextTokens, resolveContextTokensForModel } = await import("./context.js");
+    await vi.waitFor(
+      () => expect(lookupContextTokens("google-gemini-cli/gemini-3.1-pro-preview")).toBe(1_048_576),
+      { timeout: 3_000 },
+    );
 
     // With provider specified and no config override, bare lookup finds the
     // provider-qualified discovery entry.
@@ -243,7 +271,10 @@ describe("lookupContextTokens", () => {
     mockDiscoveryDeps([{ id: "google/gemini-2.5-pro", contextWindow: 999_000 }]);
 
     const cfg = createContextOverrideConfig("google", "gemini-2.5-pro", 2_000_000);
-    const resolveContextTokensForModel = await importResolveContextTokensForModel();
+    const { lookupContextTokens, resolveContextTokensForModel } = await import("./context.js");
+    await vi.waitFor(() => expect(lookupContextTokens("google/gemini-2.5-pro")).toBe(999_000), {
+      timeout: 3_000,
+    });
 
     // Google with explicit cfg: config direct scan wins before any cache lookup.
     const googleResult = resolveContextTokensForModel({
@@ -277,7 +308,6 @@ describe("lookupContextTokens", () => {
     };
 
     const { resolveContextTokensForModel } = await import("./context.js");
-    await new Promise((r) => setTimeout(r, 0));
 
     // Exact key "qwen" wins over the alias-normalized match "qwen-portal".
     const qwenResult = resolveContextTokensForModel({
@@ -305,7 +335,10 @@ describe("lookupContextTokens", () => {
     mockDiscoveryDeps([{ id: "google/gemini-2.5-pro", contextWindow: 999_000 }]);
 
     const cfg = createContextOverrideConfig("google", "gemini-2.5-pro", 2_000_000);
-    const resolveContextTokensForModel = await importResolveContextTokensForModel();
+    const { lookupContextTokens, resolveContextTokensForModel } = await import("./context.js");
+    await vi.waitFor(() => expect(lookupContextTokens("google/gemini-2.5-pro")).toBe(999_000), {
+      timeout: 3_000,
+    });
 
     // model-only call (no explicit provider) must NOT apply config direct scan.
     // Falls through to bare cache lookup: "google/gemini-2.5-pro" → 999k ✓.
@@ -336,8 +369,11 @@ describe("lookupContextTokens", () => {
       { id: "google-gemini-cli/gemini-3.1-pro-preview", contextWindow: 1_048_576 },
     ]);
 
-    const { resolveContextTokensForModel } = await import("./context.js");
-    await new Promise((r) => setTimeout(r, 0));
+    const { lookupContextTokens, resolveContextTokensForModel } = await import("./context.js");
+    await vi.waitFor(
+      () => expect(lookupContextTokens("google-gemini-cli/gemini-3.1-pro-preview")).toBe(1_048_576),
+      { timeout: 3_000 },
+    );
 
     // Qualified "google-gemini-cli/gemini-3.1-pro-preview" → 1M wins over
     // bare "gemini-3.1-pro-preview" → 128k (cross-provider minimum).

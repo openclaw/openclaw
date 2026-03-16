@@ -11,19 +11,23 @@ import {
 } from "../agents/model-selection.js";
 import { type OpenClawConfig, loadConfig } from "../config/config.js";
 import { resolveStateDir } from "../config/paths.js";
+import { buildGroupDisplayName } from "../config/sessions/group.js";
 import {
-  buildGroupDisplayName,
   canonicalizeMainSessionAlias,
-  loadSessionStore,
-  resolveAllAgentSessionStoreTargetsSync,
   resolveAgentMainSessionKey,
-  resolveFreshSessionTotalTokens,
   resolveMainSessionKey,
-  resolveStorePath,
-  type SessionEntry,
+} from "../config/sessions/main-session.js";
+import { resolveStorePath } from "../config/sessions/paths.js";
+import { loadSessionStore } from "../config/sessions/store.js";
+import {
+  resolveAllAgentSessionStoreTargetsSync,
   type SessionStoreTarget,
+} from "../config/sessions/targets.js";
+import {
+  resolveFreshSessionTotalTokens,
+  type SessionEntry,
   type SessionScope,
-} from "../config/sessions.js";
+} from "../config/sessions/types.js";
 import { openBoundaryFileSync } from "../infra/boundary-file-read.js";
 import {
   normalizeAgentId,

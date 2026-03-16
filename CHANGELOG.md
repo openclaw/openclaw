@@ -98,6 +98,8 @@ Docs: https://docs.openclaw.ai
 - CLI/completion: reduce recursive completion-script string churn and fix nested PowerShell command-path matching so generated nested completions resolve on PowerShell too. (#45537) Thanks @yiShanXin and @vincentkoc.
 - CLI/status: bound Tailscale status probes in `status` and `status --all` so failed or hung Tailscale lookups fall back quickly instead of stalling the whole command for minutes.
 - Slack/startup: harden `@slack/bolt` import interop across current bundled runtime shapes so Slack monitors no longer crash with `App is not a constructor` after plugin-sdk bundling changes. (#45953) thanks @merc1305.
+- CLI/startup: skip the packaged wrapper's redundant self-respawn now that it installs the warning filter before loading the real entrypoint, which significantly reduces `openclaw status` startup time on wrapper-based installs.
+- CLI/status: avoid loading transcript and pi-model-discovery runtimes on read-only status paths, which significantly reduces `openclaw status` latency on large local setups.
 
 ## 2026.3.13
 
