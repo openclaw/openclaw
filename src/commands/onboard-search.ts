@@ -11,7 +11,21 @@ import type { RuntimeEnv } from "../runtime.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 import type { SecretInputMode } from "./onboard-types.js";
 
-export type SearchProvider = string;
+export type SearchProvider = NonNullable<
+  NonNullable<NonNullable<NonNullable<OpenClawConfig["tools"]>["web"]>["search"]>["provider"]
+>;
+
+const SEARCH_PROVIDER_IDS = ["brave", "gemini", "grok", "kimi", "perplexity"] as const;
+
+function isSearchProvider(value: string): value is SearchProvider {
+  return (SEARCH_PROVIDER_IDS as readonly string[]).includes(value);
+}
+
+function hasSearchProviderId<T extends { id: string }>(
+  provider: T,
+): provider is T & { id: SearchProvider } {
+  return isSearchProvider(provider.id);
+}
 
 type SearchProviderEntry = {
   value: SearchProvider;
@@ -25,14 +39,16 @@ type SearchProviderEntry = {
 export const SEARCH_PROVIDER_OPTIONS: readonly SearchProviderEntry[] =
   resolvePluginWebSearchProviders({
     bundledAllowlistCompat: true,
-  }).map((provider) => ({
-    value: provider.id,
-    label: provider.label,
-    hint: provider.hint,
-    envKeys: provider.envVars,
-    placeholder: provider.placeholder,
-    signupUrl: provider.signupUrl,
-  }));
+  })
+    .filter(hasSearchProviderId)
+    .map((provider) => ({
+      value: provider.id,
+      label: provider.label,
+      hint: provider.hint,
+      envKeys: provider.envVars,
+      placeholder: provider.placeholder,
+      signupUrl: provider.signupUrl,
+    }));
 
 export function hasKeyInEnv(entry: SearchProviderEntry): boolean {
   return entry.envKeys.some((k) => Boolean(process.env[k]?.trim()));
@@ -178,7 +194,7 @@ export async function setupSearch(
     return SEARCH_PROVIDER_OPTIONS[0].value;
   })();
 
-  type PickerValue = string;
+  type PickerValue = SearchProvider | "__skip__";
   const choice = await prompter.select<PickerValue>({
     message: "Search provider",
     options: [

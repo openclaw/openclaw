@@ -11,6 +11,7 @@ export const registryState: { registry: PluginRegistry } = {
     channels: [],
     channelSetups: [],
     providers: [],
+    webSearchProviders: [],
     gatewayHandlers: {},
     httpHandlers: [],
     httpRoutes: [],

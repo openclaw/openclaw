@@ -335,6 +335,7 @@ describe("ensureOnboardingPluginInstalled", () => {
       hookNames: [],
       channelIds: [],
       providerIds: [],
+      webSearchProviderIds: [],
       gatewayMethods: [],
       cliCommands: [],
       services: [],

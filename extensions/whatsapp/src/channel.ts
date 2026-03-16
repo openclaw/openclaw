@@ -58,12 +58,12 @@ const whatsappSetupWizardProxy = {
         cfg,
       }),
     resolveStatusLines: async ({ cfg, configured }) =>
-      await (
+      (await (
         await loadWhatsAppChannelRuntime()
       ).whatsappSetupWizard.status.resolveStatusLines?.({
         cfg,
         configured,
-      }),
+      })) ?? [],
   },
   resolveShouldPromptAccountIds: (params) =>
     (params.shouldPromptAccountIds || params.options?.promptWhatsAppAccountId) ?? false,
