@@ -271,4 +271,31 @@ describe("resolveEffectiveToolPolicy", () => {
     const result = resolveEffectiveToolPolicy({ config: cfg, agentId: "coder" });
     expect(result.profileAlsoAllow).toEqual(["read", "write", "edit"]);
   });
+
+  it("uses the configured default agent for non-agent session keys", () => {
+    const cfg = {
+      agents: {
+        list: [
+          {
+            id: "main",
+          },
+          {
+            id: "lexi",
+            default: true,
+            tools: {
+              fs: { workspaceOnly: true },
+            },
+          },
+        ],
+      },
+    } as OpenClawConfig;
+
+    const result = resolveEffectiveToolPolicy({
+      config: cfg,
+      sessionKey: "telegram:slash:123",
+    });
+
+    expect(result.agentId).toBe("lexi");
+    expect(result.profileAlsoAllow).toEqual(["read", "write", "edit"]);
+  });
 });
