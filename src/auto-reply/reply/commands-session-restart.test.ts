@@ -3,7 +3,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { HandleCommandsParams } from "./commands-types.js";
 
 const writeRestartSentinelMock = vi.fn().mockResolvedValue("/tmp/sentinel.json");
-const triggerOpenClawRestartMock = vi.fn(() => ({ ok: true, method: "launchctl" }));
+const triggerOpenClawRestartMock = vi.fn(
+  () => ({ ok: true, method: "launchctl" }) as { ok: boolean; method: string; detail?: string },
+);
 
 vi.mock("../../infra/restart-sentinel.js", async (importOriginal) => {
   const orig = await importOriginal();
