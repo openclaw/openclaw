@@ -6,19 +6,14 @@ import {
   runSingleChannelSecretStep,
   setTopLevelChannelDmPolicyWithAllowFrom,
 } from "../../../src/channels/plugins/onboarding/helpers.js";
-import {
-  applyAccountNameToChannelSection,
-  applySetupAccountConfigPatch,
-  migrateBaseNameToDefaultAccount,
-} from "../../../src/channels/plugins/setup-helpers.js";
 import type { ChannelSetupWizard } from "../../../src/channels/plugins/setup-wizard.js";
-import type { ChannelSetupAdapter } from "../../../src/channels/plugins/types.adapters.js";
 import type { OpenClawConfig } from "../../../src/config/config.js";
 import type { SecretInput } from "../../../src/config/types.secrets.js";
 import { hasConfiguredSecretInput } from "../../../src/config/types.secrets.js";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../../../src/routing/session-key.js";
 import { formatDocsLink } from "../../../src/terminal/links.js";
 import { listZaloAccountIds, resolveDefaultZaloAccountId, resolveZaloAccount } from "./accounts.js";
+import { zaloSetupAdapter } from "./setup-core.js";
 
 const channel = "zalo" as const;
 
@@ -207,53 +202,7 @@ const zaloDmPolicy: ChannelOnboardingDmPolicy = {
   },
 };
 
-export const zaloSetupAdapter: ChannelSetupAdapter = {
-  resolveAccountId: ({ accountId }) => normalizeAccountId(accountId),
-  applyAccountName: ({ cfg, accountId, name }) =>
-    applyAccountNameToChannelSection({
-      cfg,
-      channelKey: channel,
-      accountId,
-      name,
-    }),
-  validateInput: ({ accountId, input }) => {
-    if (input.useEnv && accountId !== DEFAULT_ACCOUNT_ID) {
-      return "ZALO_BOT_TOKEN can only be used for the default account.";
-    }
-    if (!input.useEnv && !input.token && !input.tokenFile) {
-      return "Zalo requires token or --token-file (or --use-env).";
-    }
-    return null;
-  },
-  applyAccountConfig: ({ cfg, accountId, input }) => {
-    const namedConfig = applyAccountNameToChannelSection({
-      cfg,
-      channelKey: channel,
-      accountId,
-      name: input.name,
-    });
-    const next =
-      accountId !== DEFAULT_ACCOUNT_ID
-        ? migrateBaseNameToDefaultAccount({
-            cfg: namedConfig,
-            channelKey: channel,
-          })
-        : namedConfig;
-    const patch = input.useEnv
-      ? {}
-      : input.tokenFile
-        ? { tokenFile: input.tokenFile }
-        : input.token
-          ? { botToken: input.token }
-          : {};
-    return applySetupAccountConfigPatch({
-      cfg: next,
-      channelKey: channel,
-      accountId,
-      patch,
-    });
-  },
-};
+export { zaloSetupAdapter } from "./setup-core.js";
 
 export const zaloSetupWizard: ChannelSetupWizard = {
   channel,
