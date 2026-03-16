@@ -51,6 +51,20 @@ const PLUGIN_CAPABILITIES_FALLBACKS: Record<string, Partial<ProviderCapabilities
       "mistralai",
     ],
   },
+  openrouter: {
+    openAiCompatTurnValidation: false,
+    geminiThoughtSignatureSanitization: true,
+    geminiThoughtSignatureModelHints: ["gemini"],
+    transcriptToolCallIdModelHints: [
+      "mistral",
+      "mixtral",
+      "codestral",
+      "pixtral",
+      "devstral",
+      "ministral",
+      "mistralai",
+    ],
+  },
   opencode: {
     openAiCompatTurnValidation: false,
     geminiThoughtSignatureSanitization: true,
