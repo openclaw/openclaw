@@ -1099,6 +1099,206 @@ describe("runHeartbeatOnce", () => {
         "# HEARTBEAT.md\n\n## Tasks\n\n",
         "utf-8",
       );
+
+      const cfg: OpenClawConfig = {
+        agents: {
+          defaults: {
+            workspace: workspaceDir,
+            heartbeat: { every: "5m", target: "whatsapp" },
+          },
+        },
+        channels: { whatsapp: { allowFrom: ["*"] } },
+        session: { store: storePath },
+      };
+      const sessionKey = resolveMainSessionKey(cfg);
+
+      await fs.writeFile(
+        storePath,
+        JSON.stringify(
+          {
+            [sessionKey]: {
+              sessionId: "sid",
+              updatedAt: Date.now(),
+              lastChannel: "whatsapp",
+              lastTo: "+1555",
+            },
+          },
+          null,
+          2,
+        ),
+      );
+
+      const sendWhatsApp = vi.fn().mockResolvedValue({
+        messageId: "m1",
+        toJid: "jid",
+      });
+
+      const res = await runHeartbeatOnce({
+        cfg,
+        deps: {
+          sendWhatsApp,
+          getQueueSize: () => 0,
+          nowMs: () => 0,
+          webAuthExists: async () => true,
+          hasActiveWebListener: () => true,
+        },
+      });
+
+      // Should skip without making API call
+      expect(res.status).toBe("skipped");
+      if (res.status === "skipped") {
+        expect(res.reason).toBe("empty-heartbeat-file");
+      }
+      expect(replySpy).not.toHaveBeenCalled();
+      expect(sendWhatsApp).not.toHaveBeenCalled();
+    } finally {
+      replySpy.mockRestore();
+    }
+  });
+
+  it("does not skip cron-triggered heartbeat when HEARTBEAT.md is effectively empty", async () => {
+    const tmpDir = await createCaseDir("openclaw-hb");
+    const storePath = path.join(tmpDir, "sessions.json");
+    const workspaceDir = path.join(tmpDir, "workspace");
+    const replySpy = vi.spyOn(replyModule, "getReplyFromConfig");
+    try {
+      await fs.mkdir(workspaceDir, { recursive: true });
+      await fs.writeFile(
+        path.join(workspaceDir, "HEARTBEAT.md"),
+        "# HEARTBEAT.md\n\n## Tasks\n\n",
+        "utf-8",
+      );
+
+      const cfg: OpenClawConfig = {
+        agents: {
+          defaults: {
+            workspace: workspaceDir,
+            heartbeat: { every: "5m", target: "whatsapp" },
+          },
+        },
+        channels: { whatsapp: { allowFrom: ["*"] } },
+        session: { store: storePath },
+      };
+      const sessionKey = resolveMainSessionKey(cfg);
+
+      await fs.writeFile(
+        storePath,
+        JSON.stringify(
+          {
+            [sessionKey]: {
+              sessionId: "sid",
+              updatedAt: Date.now(),
+              lastChannel: "whatsapp",
+              lastTo: "+1555",
+            },
+          },
+          null,
+          2,
+        ),
+      );
+
+      replySpy.mockResolvedValue({ text: "cron event processed" });
+      const sendWhatsApp = vi.fn().mockResolvedValue({
+        messageId: "m1",
+        toJid: "jid",
+      });
+
+      const res = await runHeartbeatOnce({
+        cfg,
+        reason: "cron:job-123",
+        deps: {
+          sendWhatsApp,
+          getQueueSize: () => 0,
+          nowMs: () => 0,
+          webAuthExists: async () => true,
+          hasActiveWebListener: () => true,
+        },
+      });
+
+      expect(res.status).toBe("ran");
+      expect(replySpy).toHaveBeenCalled();
+      expect(sendWhatsApp).toHaveBeenCalledTimes(1);
+    } finally {
+      replySpy.mockRestore();
+    }
+  });
+
+  it("does not skip wake-triggered heartbeat when HEARTBEAT.md is effectively empty", async () => {
+    const tmpDir = await createCaseDir("openclaw-hb");
+    const storePath = path.join(tmpDir, "sessions.json");
+    const workspaceDir = path.join(tmpDir, "workspace");
+    const replySpy = vi.spyOn(replyModule, "getReplyFromConfig");
+    try {
+      await fs.mkdir(workspaceDir, { recursive: true });
+      await fs.writeFile(
+        path.join(workspaceDir, "HEARTBEAT.md"),
+        "# HEARTBEAT.md\n\n## Tasks\n\n",
+        "utf-8",
+      );
+
+      const cfg: OpenClawConfig = {
+        agents: {
+          defaults: {
+            workspace: workspaceDir,
+            heartbeat: { every: "5m", target: "whatsapp" },
+          },
+        },
+        channels: { whatsapp: { allowFrom: ["*"] } },
+        session: { store: storePath },
+      };
+      const sessionKey = resolveMainSessionKey(cfg);
+
+      await fs.writeFile(
+        storePath,
+        JSON.stringify(
+          {
+            [sessionKey]: {
+              sessionId: "sid",
+              updatedAt: Date.now(),
+              lastChannel: "whatsapp",
+              lastTo: "+1555",
+            },
+          },
+          null,
+          2,
+        ),
+      );
+
+      replySpy.mockResolvedValue({ text: "wake event processed" });
+      const sendWhatsApp = vi.fn().mockResolvedValue({
+        messageId: "m1",
+        toJid: "jid",
+      });
+
+      const res = await runHeartbeatOnce({
+        cfg,
+        reason: "wake",
+        deps: {
+          sendWhatsApp,
+          getQueueSize: () => 0,
+          nowMs: () => 0,
+          webAuthExists: async () => true,
+          hasActiveWebListener: () => true,
+        },
+      });
+
+      expect(res.status).toBe("ran");
+      expect(replySpy).toHaveBeenCalled();
+      expect(sendWhatsApp).toHaveBeenCalledTimes(1);
+    } finally {
+      replySpy.mockRestore();
+    }
+  });
+
+  it("runs heartbeat when HEARTBEAT.md has actionable content", async () => {
+    const tmpDir = await createCaseDir("openclaw-hb");
+    const storePath = path.join(tmpDir, "sessions.json");
+    const workspaceDir = path.join(tmpDir, "workspace");
+    const replySpy = vi.spyOn(replyModule, "getReplyFromConfig");
+    try {
+      await fs.mkdir(workspaceDir, { recursive: true });
+
+      // Create HEARTBEAT.md with actionable content
     } else if (params.fileState === "actionable") {
       await fs.writeFile(
         path.join(workspaceDir, "HEARTBEAT.md"),
