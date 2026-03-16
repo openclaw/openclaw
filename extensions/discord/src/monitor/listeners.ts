@@ -755,14 +755,13 @@ export class DiscordThreadUpdateListener extends ThreadUpdateListener {
           return;
         }
         const logger = this.logger ?? discordEventQueueLog;
-        logger.info("Discord thread archived — resetting session", { threadId });
         const count = await closeDiscordThreadSessions({
           cfg: this.cfg,
           accountId: this.accountId,
           threadId,
         });
         if (count > 0) {
-          logger.info("Discord thread sessions reset after archival", { threadId, count });
+          logger.info("Discord thread archived — reset sessions", { threadId, count });
         }
       },
       onError: (err) => {

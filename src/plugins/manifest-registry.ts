@@ -122,6 +122,17 @@ function normalizeManifestLabel(raw: string | undefined): string | undefined {
   return trimmed ? trimmed : undefined;
 }
 
+function isCompatiblePluginIdHint(idHint: string | undefined, manifestId: string): boolean {
+  const normalizedHint = idHint?.trim();
+  if (!normalizedHint) {
+    return true;
+  }
+  if (normalizedHint === manifestId) {
+    return true;
+  }
+  return normalizedHint === `${manifestId}-provider`;
+}
+
 function buildRecord(params: {
   manifest: PluginManifest;
   candidate: PluginCandidate;
@@ -304,7 +315,7 @@ export function loadPluginManifestRegistry(params: {
     }
     const manifest = manifestRes.manifest;
 
-    if (candidate.idHint && candidate.idHint !== manifest.id) {
+    if (!isCompatiblePluginIdHint(candidate.idHint, manifest.id)) {
       diagnostics.push({
         level: "warn",
         pluginId: manifest.id,

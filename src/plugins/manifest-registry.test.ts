@@ -314,6 +314,44 @@ describe("loadPluginManifestRegistry", () => {
     expect(countDuplicateWarnings(loadRegistry(candidates))).toBe(0);
   });
 
+  it("accepts provider-style id hints without warning", () => {
+    const dir = makeTempDir();
+    writeManifest(dir, { id: "openai", configSchema: { type: "object" } });
+
+    const registry = loadRegistry([
+      createPluginCandidate({
+        idHint: "openai-provider",
+        rootDir: dir,
+        origin: "bundled",
+      }),
+    ]);
+
+    expect(registry.diagnostics.some((diag) => diag.message.includes("plugin id mismatch"))).toBe(
+      false,
+    );
+  });
+
+  it("still warns for unrelated id hint mismatches", () => {
+    const dir = makeTempDir();
+    writeManifest(dir, { id: "openai", configSchema: { type: "object" } });
+
+    const registry = loadRegistry([
+      createPluginCandidate({
+        idHint: "totally-different",
+        rootDir: dir,
+        origin: "bundled",
+      }),
+    ]);
+
+    expect(
+      registry.diagnostics.some((diag) =>
+        diag.message.includes(
+          'plugin id mismatch (manifest uses "openai", entry hints "totally-different")',
+        ),
+      ),
+    ).toBe(true);
+  });
+
   it("loads Codex bundle manifests into the registry", () => {
     const bundleDir = makeTempDir();
     mkdirSafe(path.join(bundleDir, ".codex-plugin"));

@@ -152,6 +152,49 @@ describe("copyBundledPluginMetadata", () => {
     expect(bundledManifest.skills).toEqual(["./bundled-skills/@tloncorp/tlon-skill"]);
   });
 
+  it("falls back to repo-root hoisted node_modules skill paths", () => {
+    const repoRoot = makeRepoRoot("openclaw-bundled-plugin-hoisted-skill-");
+    const pluginDir = path.join(repoRoot, "extensions", "tlon");
+    const hoistedSkillDir = path.join(repoRoot, "node_modules", "@tloncorp", "tlon-skill");
+    fs.mkdirSync(hoistedSkillDir, { recursive: true });
+    fs.writeFileSync(path.join(hoistedSkillDir, "SKILL.md"), "# Hoisted Tlon Skill\n", "utf8");
+    fs.mkdirSync(pluginDir, { recursive: true });
+    writeJson(path.join(pluginDir, "openclaw.plugin.json"), {
+      id: "tlon",
+      configSchema: { type: "object" },
+      skills: ["node_modules/@tloncorp/tlon-skill"],
+    });
+    writeJson(path.join(pluginDir, "package.json"), {
+      name: "@openclaw/tlon",
+      openclaw: { extensions: ["./index.ts"] },
+    });
+
+    copyBundledPluginMetadata({ repoRoot });
+
+    expect(
+      fs.readFileSync(
+        path.join(
+          repoRoot,
+          "dist",
+          "extensions",
+          "tlon",
+          "bundled-skills",
+          "@tloncorp",
+          "tlon-skill",
+          "SKILL.md",
+        ),
+        "utf8",
+      ),
+    ).toContain("Hoisted Tlon Skill");
+    const bundledManifest = JSON.parse(
+      fs.readFileSync(
+        path.join(repoRoot, "dist", "extensions", "tlon", "openclaw.plugin.json"),
+        "utf8",
+      ),
+    ) as { skills?: string[] };
+    expect(bundledManifest.skills).toEqual(["./bundled-skills/@tloncorp/tlon-skill"]);
+  });
+
   it("omits missing declared skill paths and removes stale generated outputs", () => {
     const repoRoot = makeRepoRoot("openclaw-bundled-plugin-missing-skill-");
     const pluginDir = path.join(repoRoot, "extensions", "tlon");
