@@ -11,6 +11,14 @@ import type {
 
 const log = createSubsystemLogger("memory");
 const QMD_MANAGER_CACHE = new Map<string, MemorySearchManager>();
+const QMD_BINARY_CHECK_CACHE = new Map<string, { available: boolean; timestamp: number }>();
+const QMD_BINARY_CHECK_TTL_MS = 30_000; // 30 seconds TTL for binary check cache
+let managerRuntimePromise: Promise<typeof import("./manager.js")> | null = null;
+
+function loadManagerRuntime() {
+  managerRuntimePromise ??= import("./manager.js");
+  return managerRuntimePromise;
+}
 
 export type MemorySearchManagerResult = {
   manager: MemorySearchManager | null;
@@ -38,7 +46,22 @@ export async function getMemorySearchManager(params: {
     // Check if QMD binary is available before attempting to create manager
     // Use agent workspace as cwd to ensure relative paths (e.g., ./bin/qmd) resolve correctly
     const workspaceDir = resolveAgentWorkspaceDir(params.cfg, params.agentId);
-    const qmdCheck = await checkQmdBinaryAvailable(resolved.qmd.command, 5000, workspaceDir);
+    const binaryCheckKey = `${resolved.qmd.command}:${workspaceDir}`;
+
+    // Check cached binary check result first (with TTL)
+    const cachedCheck = QMD_BINARY_CHECK_CACHE.get(binaryCheckKey);
+    const now = Date.now();
+    let qmdCheck: { available: boolean; error?: string };
+    if (cachedCheck && now - cachedCheck.timestamp < QMD_BINARY_CHECK_TTL_MS) {
+      qmdCheck = { available: cachedCheck.available };
+    } else {
+      qmdCheck = await checkQmdBinaryAvailable(resolved.qmd.command, 5000, workspaceDir);
+      QMD_BINARY_CHECK_CACHE.set(binaryCheckKey, {
+        available: qmdCheck.available,
+        timestamp: now,
+      });
+    }
+
     if (!qmdCheck.available) {
       log.warn(`QMD binary not available: ${qmdCheck.error}`);
       log.warn("Falling back to builtin memory backend. To use QMD, install it and ensure it's on PATH.");
@@ -60,7 +83,7 @@ export async function getMemorySearchManager(params: {
             {
               primary,
               fallbackFactory: async () => {
-                const { MemoryIndexManager } = await import("./manager.js");
+                const { MemoryIndexManager } = await loadManagerRuntime();
                 return await MemoryIndexManager.get(params);
               },
             },
@@ -77,12 +100,31 @@ export async function getMemorySearchManager(params: {
   }
 
   try {
-    const { MemoryIndexManager } = await import("./manager.js");
+    const { MemoryIndexManager } = await loadManagerRuntime();
     const manager = await MemoryIndexManager.get(params);
     return { manager };
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     return { manager: null, error: message };
+  }
+}
+
+export async function closeAllMemorySearchManagers(): Promise<void> {
+  // Close all cached QMD managers
+  const managers = Array.from(QMD_MANAGER_CACHE.values());
+  QMD_MANAGER_CACHE.clear();
+  for (const manager of managers) {
+    try {
+      await manager.close?.();
+    } catch (err) {
+      log.warn(`failed to close qmd memory manager: ${String(err)}`);
+    }
+  }
+
+  // Close all builtin memory index managers if runtime was loaded
+  if (managerRuntimePromise !== null) {
+    const { closeAllMemoryIndexManagers } = await loadManagerRuntime();
+    await closeAllMemoryIndexManagers();
   }
 }
 
@@ -166,6 +208,7 @@ class FallbackMemoryManager implements MemorySearchManager {
   async sync(params?: {
     reason?: string;
     force?: boolean;
+    sessionFiles?: string[];
     progress?: (update: MemorySyncProgressUpdate) => void;
   }) {
     if (!this.primaryFailed) {
