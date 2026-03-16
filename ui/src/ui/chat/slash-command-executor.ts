@@ -5,13 +5,6 @@
 
 import type { ModelCatalogEntry } from "../../../../src/agents/model-catalog.js";
 import {
-import type { ModelCatalogEntry } from "../../../../src/agents/model-catalog.js";
-import {
-  DEFAULT_AGENT_ID,
-  DEFAULT_MAIN_KEY,
-  isSubagentSessionKey,
-  parseAgentSessionKey,
-} from "../../../../src/routing/session-key.js";
   DEFAULT_AGENT_ID,
   DEFAULT_MAIN_KEY,
   isSubagentSessionKey,
