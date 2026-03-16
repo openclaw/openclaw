@@ -329,11 +329,11 @@ describe("bot-native-command-menu", () => {
       expect(setMyCommands).toHaveBeenCalledWith([{ command: "win_test", description: "Win Test" }]);
     });
 
-    it("bare Windows prefix patterns are detected by guard regex", () => {
-      // writeCachedCommandHash validates dirPath inside its try block so that
-      // malformed state dirs (e.g. OPENCLAW_STATE_DIR="\?") are caught best-effort.
-      // With stateDir="\?", path.join produces "\?\telegram\file.txt",
-      // so dirPath becomes "\?\telegram". The guard regex catches this:
+    it("bare Windows prefix patterns are detected by stateDir guard regex", () => {
+      // writeCachedCommandHash validates stateDir *inside* its try block (before
+      // path.join) to catch malformed values like OPENCLAW_STATE_DIR="\?" best-effort.
+      // After path.join, dirPath becomes "\?\telegram" — not a bare prefix — so the
+      // guard must act on stateDir directly. The regex used:
       const guardRegex = /^\\{1,2}\?[/\\]?$/;
       expect(guardRegex.test("\\?")).toBe(true);           // single backslash bare prefix
       expect(guardRegex.test("\\\\?")).toBe(true);        // double backslash bare prefix
