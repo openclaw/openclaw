@@ -164,7 +164,10 @@ async function writeCachedCommandHash(
     await fs.writeFile(filePath, hash, "utf-8");
   } catch (err) {
     // Best-effort: cache write failure means commands re-sync on next restart.
-    logVerbose(`telegram: failed to cache command hash: ${err instanceof Error ? err.message : String(err)}`);
+    // Log only the error code (not err.message) to avoid leaking filesystem paths
+    // that Node.js includes in ENOENT/EACCES messages (CWE-532).
+    const e = err as NodeJS.ErrnoException;
+    logVerbose(`telegram: failed to cache command hash (code=${e?.code ?? "unknown"})`);
   }
 }
 
