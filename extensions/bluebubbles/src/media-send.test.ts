@@ -299,4 +299,50 @@ describe("sendBlueBubblesMedia local-path hardening", () => {
     );
     expect(sendBlueBubblesAttachmentMock).toHaveBeenCalledTimes(1);
   });
+
+  it("downgrades asVoice when fetched remote media resolves to non-audio", async () => {
+    runtimeMocks.fetchRemoteMedia.mockResolvedValueOnce({
+      buffer: new Uint8Array([1, 2, 3]),
+      contentType: "image/png",
+      fileName: "download",
+    });
+
+    await sendBlueBubblesMedia({
+      cfg: createConfig(),
+      to: "chat:123",
+      mediaUrl: "https://example.com/download?id=1",
+      asVoice: true,
+    });
+
+    expect(sendBlueBubblesAttachmentMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        filename: "download",
+        contentType: "image/png",
+        asVoice: false,
+      }),
+    );
+  });
+
+  it("keeps asVoice when fetched remote media resolves to audio", async () => {
+    runtimeMocks.fetchRemoteMedia.mockResolvedValueOnce({
+      buffer: new Uint8Array([1, 2, 3]),
+      contentType: "audio/mpeg",
+      fileName: "download",
+    });
+
+    await sendBlueBubblesMedia({
+      cfg: createConfig(),
+      to: "chat:123",
+      mediaUrl: "https://example.com/download?id=2",
+      asVoice: true,
+    });
+
+    expect(sendBlueBubblesAttachmentMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        filename: "download",
+        contentType: "audio/mpeg",
+        asVoice: true,
+      }),
+    );
+  });
 });

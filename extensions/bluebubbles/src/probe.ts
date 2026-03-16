@@ -26,6 +26,20 @@ function buildCacheKey(accountId?: string): string {
   return accountId?.trim() || "default";
 }
 
+function setCachedServerInfo(cacheKey: string, info: BlueBubblesServerInfo): void {
+  serverInfoCache.set(cacheKey, { info, expires: Date.now() + CACHE_TTL_MS });
+  if (serverInfoCache.size > MAX_SERVER_INFO_CACHE_SIZE) {
+    const oldest = serverInfoCache.keys().next().value;
+    if (oldest !== undefined) {
+      serverInfoCache.delete(oldest);
+    }
+  }
+}
+
+function hasCachedServerInfoValue(info: BlueBubblesServerInfo): boolean {
+  return Object.keys(info).length > 0;
+}
+
 /**
  * Fetch server info from BlueBubbles API and cache it.
  * Returns cached result if available and not expired.
@@ -45,29 +59,26 @@ export async function fetchBlueBubblesServerInfo(params: {
   const cacheKey = buildCacheKey(params.accountId);
   const cached = serverInfoCache.get(cacheKey);
   if (cached && cached.expires > Date.now()) {
-    return cached.info;
+    return hasCachedServerInfoValue(cached.info) ? cached.info : null;
   }
 
   const url = buildBlueBubblesApiUrl({ baseUrl, path: "/api/v1/server/info", password });
   try {
     const res = await blueBubblesFetchWithTimeout(url, { method: "GET" }, params.timeoutMs ?? 5000);
     if (!res.ok) {
+      setCachedServerInfo(cacheKey, {});
       return null;
     }
     const payload = (await res.json().catch(() => null)) as Record<string, unknown> | null;
     const data = payload?.data as BlueBubblesServerInfo | undefined;
     if (data) {
-      serverInfoCache.set(cacheKey, { info: data, expires: Date.now() + CACHE_TTL_MS });
-      // Evict oldest entries if cache exceeds max size
-      if (serverInfoCache.size > MAX_SERVER_INFO_CACHE_SIZE) {
-        const oldest = serverInfoCache.keys().next().value;
-        if (oldest !== undefined) {
-          serverInfoCache.delete(oldest);
-        }
-      }
+      setCachedServerInfo(cacheKey, data);
+    } else {
+      setCachedServerInfo(cacheKey, {});
     }
     return data ?? null;
   } catch {
+    setCachedServerInfo(cacheKey, {});
     return null;
   }
 }

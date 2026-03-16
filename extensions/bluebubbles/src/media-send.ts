@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { resolveChannelMediaMaxBytes, type OpenClawConfig } from "openclaw/plugin-sdk/bluebubbles";
+import { isAudioFileName, normalizeMimeType } from "../../../src/media/mime.js";
 import { resolveBlueBubblesAccount } from "./accounts.js";
 import { sendBlueBubblesAttachment } from "./attachments.js";
 import { resolveBlueBubblesMessageId } from "./monitor.js";
@@ -193,6 +194,21 @@ function resolveFilenameFromSource(source?: string): string | undefined {
   return base || undefined;
 }
 
+function shouldSendAsVoice(params: {
+  asVoice?: boolean;
+  contentType?: string;
+  filename?: string;
+}): boolean {
+  if (params.asVoice !== true) {
+    return false;
+  }
+  const mediaType = normalizeMimeType(params.contentType);
+  if (mediaType) {
+    return mediaType.startsWith("audio/");
+  }
+  return isAudioFileName(params.filename);
+}
+
 export async function sendBlueBubblesMedia(params: {
   cfg: OpenClawConfig;
   to: string;
@@ -297,7 +313,11 @@ export async function sendBlueBubblesMedia(params: {
     filename: resolvedFilename ?? "attachment",
     contentType: resolvedContentType ?? undefined,
     replyToMessageGuid,
-    asVoice,
+    asVoice: shouldSendAsVoice({
+      asVoice,
+      contentType: resolvedContentType ?? undefined,
+      filename: resolvedFilename ?? mediaPath ?? mediaUrl,
+    }),
     maxBytes,
     opts: {
       cfg,
