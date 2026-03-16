@@ -706,10 +706,8 @@ export {
   resolveIMessageAccount,
   type ResolvedIMessageAccount,
 } from "../../extensions/imessage/src/accounts.js";
-export {
-  imessageSetupAdapter,
-  imessageSetupWizard,
-} from "../../extensions/imessage/src/setup-surface.js";
+export { imessageSetupWizard } from "../../extensions/imessage/src/setup-surface.js";
+export { imessageSetupAdapter } from "../../extensions/imessage/src/setup-core.js";
 export {
   looksLikeIMessageTargetId,
   normalizeIMessageMessagingTarget,
