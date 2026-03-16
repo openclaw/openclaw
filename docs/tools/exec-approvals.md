@@ -361,6 +361,8 @@ Reply in chat:
 /approve <id> deny
 ```
 
+The `/approve` command handles both exec approvals and plugin approvals. If the ID does not match a pending exec approval, it automatically checks plugin approvals.
+
 ### Built-in chat approval clients
 
 Discord and Telegram can also act as explicit exec approval clients with channel-specific config.

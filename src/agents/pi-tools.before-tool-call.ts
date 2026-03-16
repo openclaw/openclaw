@@ -172,6 +172,77 @@ export async function runBeforeToolCallHook(args: {
       toolContext,
     );
 
+    if (hookResult?.requireApproval) {
+      const approval = hookResult.requireApproval;
+      try {
+        const { callGatewayTool } = await import("./tools/gateway.js");
+        const requestResult = await callGatewayTool<{
+          id?: string;
+          status?: string;
+          decision?: string | null;
+        }>(
+          "plugin.approval.request",
+          { timeoutMs: (approval.timeoutMs ?? 120_000) + 10_000 },
+          {
+            id: approval.id,
+            pluginId: approval.pluginId,
+            title: approval.title,
+            description: approval.description,
+            severity: approval.severity,
+            toolName,
+            toolCallId: args.toolCallId,
+            agentId: args.ctx?.agentId,
+            sessionKey: args.ctx?.sessionKey,
+            timeoutMs: approval.timeoutMs ?? 120_000,
+            twoPhase: true,
+          },
+          { expectFinal: false },
+        );
+        const id = requestResult?.id;
+        if (!id) {
+          return {
+            blocked: true,
+            reason: approval.description || "Plugin approval request failed",
+          };
+        }
+        // Wait for the decision
+        const waitResult = await callGatewayTool<{
+          id?: string;
+          decision?: string | null;
+        }>(
+          "plugin.approval.waitDecision",
+          { timeoutMs: (approval.timeoutMs ?? 120_000) + 10_000 },
+          { id },
+        );
+        const decision = waitResult?.decision;
+        if (decision === "allow-once" || decision === "allow-always") {
+          if (hookResult.params && isPlainObject(hookResult.params)) {
+            if (isPlainObject(params)) {
+              return { blocked: false, params: { ...params, ...hookResult.params } };
+            }
+            return { blocked: false, params: hookResult.params };
+          }
+          return { blocked: false, params };
+        }
+        if (decision === "deny") {
+          return { blocked: true, reason: "Denied by user" };
+        }
+        // null = timeout
+        const timeoutBehavior = approval.timeoutBehavior ?? "deny";
+        if (timeoutBehavior === "allow") {
+          return { blocked: false, params };
+        }
+        return { blocked: true, reason: "Approval timed out" };
+      } catch (err) {
+        // Gateway error (unknown method / older gateway) — fall back to soft block
+        log.warn(`plugin approval gateway request failed, falling back to block: ${String(err)}`);
+        return {
+          blocked: true,
+          reason: approval.description || "Plugin approval required (gateway unavailable)",
+        };
+      }
+    }
+
     if (hookResult?.block) {
       return {
         blocked: true,

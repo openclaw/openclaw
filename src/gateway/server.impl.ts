@@ -100,6 +100,7 @@ import { GATEWAY_EVENTS, listGatewayMethods } from "./server-methods-list.js";
 import { coreGatewayHandlers } from "./server-methods.js";
 import { createExecApprovalHandlers } from "./server-methods/exec-approval.js";
 import { safeParseJson } from "./server-methods/nodes.helpers.js";
+import { createPluginApprovalHandlers } from "./server-methods/plugin-approval.js";
 import { createSecretsHandlers } from "./server-methods/secrets.js";
 import { hasConnectedMobileNode } from "./server-mobile-nodes.js";
 import { loadGatewayModelCatalog } from "./server-model-catalog.js";
@@ -1102,6 +1103,12 @@ export async function startGatewayServer(
     const execApprovalHandlers = createExecApprovalHandlers(execApprovalManager, {
       forwarder: execApprovalForwarder,
     });
+    const pluginApprovalManager = new ExecApprovalManager<
+      import("../infra/plugin-approvals.js").PluginApprovalRequestPayload
+    >();
+    const pluginApprovalHandlers = createPluginApprovalHandlers(pluginApprovalManager, {
+      forwarder: execApprovalForwarder,
+    });
     const secretsHandlers = createSecretsHandlers({
       reloadSecrets: async () => {
         const active = getActiveSecretsRuntimeSnapshot();
@@ -1134,6 +1141,7 @@ export async function startGatewayServer(
       cron,
       cronStorePath,
       execApprovalManager,
+      pluginApprovalManager,
       loadGatewayModelCatalog,
       getHealthCache,
       refreshHealthSnapshot: refreshGatewayHealthSnapshot,
@@ -1214,6 +1222,7 @@ export async function startGatewayServer(
       extraHandlers: {
         ...pluginRegistry.gatewayHandlers,
         ...execApprovalHandlers,
+        ...pluginApprovalHandlers,
         ...secretsHandlers,
       },
       broadcast,
