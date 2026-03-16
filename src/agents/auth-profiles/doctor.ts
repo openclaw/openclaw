@@ -5,12 +5,36 @@ import { listProfilesForProvider } from "./profiles.js";
 import { suggestOAuthProfileIdForLegacyDefault } from "./repair.js";
 import type { AuthProfileStore } from "./types.js";
 
-export function formatAuthDoctorHint(params: {
+let providerRuntimePromise:
+  | Promise<typeof import("../../plugins/provider-runtime.runtime.js")>
+  | undefined;
+
+function loadProviderRuntime() {
+  providerRuntimePromise ??= import("../../plugins/provider-runtime.runtime.js");
+  return providerRuntimePromise;
+}
+
+export async function formatAuthDoctorHint(params: {
   cfg?: OpenClawConfig;
   store: AuthProfileStore;
   provider: string;
   profileId?: string;
-}): string {
+}): Promise<string> {
+  const normalizedProvider = normalizeProviderId(params.provider);
+  const { buildProviderAuthDoctorHintWithPlugin } = await loadProviderRuntime();
+  const pluginHint = await buildProviderAuthDoctorHintWithPlugin({
+    provider: normalizedProvider,
+    context: {
+      config: params.cfg,
+      store: params.store,
+      provider: normalizedProvider,
+      profileId: params.profileId,
+    },
+  });
+  if (typeof pluginHint === "string" && pluginHint.trim()) {
+    return pluginHint;
+  }
+
   const providerKey = normalizeProviderId(params.provider);
   if (providerKey !== "anthropic") {
     return "";
