@@ -66,7 +66,8 @@ vi.mock("./ws-log.js", () => ({
 const { AcpGatewayNodeRuntime, __testing: acpGatewayTesting } =
   await import("../acp/store/gateway-events.js");
 const { AcpGatewayStore } = await import("../acp/store/store.js");
-const { handleNodeDisconnect, handleNodeEvent } = await import("./server-node-events.js");
+const { handleNodeConnected, handleNodeDisconnect, handleNodeEvent } =
+  await import("./server-node-events.js");
 
 function buildCtx(): NodeEventContext {
   return {
@@ -318,6 +319,120 @@ describe("handleNodeEvent ACP worker ingress", () => {
       terminal: {
         terminalEventId: "term-1",
       },
+    });
+  });
+
+  it("reconciles a suspect lease on live node reconnect through acp.session.status", async () => {
+    const runtime = await createRuntime();
+    const now = Date.now();
+    const lease = await runtime.store.acquireLease({
+      sessionKey: "agent:main:acp:test-session",
+      nodeId: "node-1",
+      leaseId: "lease-1",
+      now,
+    });
+    await runtime.store.startRun({
+      sessionKey: "agent:main:acp:test-session",
+      runId: "run-1",
+      requestId: "req-1",
+      now,
+    });
+    await handleNodeEvent(buildCtx(), "node-1", {
+      event: "acp.worker.event",
+      payloadJSON: JSON.stringify({
+        nodeId: "node-1",
+        sessionKey: "agent:main:acp:test-session",
+        runId: "run-1",
+        leaseId: lease.leaseId,
+        leaseEpoch: lease.leaseEpoch,
+        seq: 1,
+        event: {
+          type: "status",
+          text: "working",
+        },
+      }),
+    });
+    await handleNodeDisconnect("node-1", {
+      now: now + 10,
+    });
+
+    await handleNodeConnected({
+      nodeId: "node-1",
+      invokeNode: async () => ({
+        ok: true,
+        payload: {
+          nodeId: "node-1",
+          ok: true,
+          sessionKey: "agent:main:acp:test-session",
+          leaseId: lease.leaseId,
+          leaseEpoch: lease.leaseEpoch,
+          state: "running",
+          nodeRuntimeSessionId: "runtime-1",
+          nodeWorkerRunId: "worker-1",
+          workerProtocolVersion: 1,
+          details: {
+            summary: "run active",
+          },
+        },
+      }),
+      now: now + 11,
+    });
+
+    expect(await runtime.store.getActiveLease("agent:main:acp:test-session")).toMatchObject({
+      state: "active",
+      nodeRuntimeSessionId: "runtime-1",
+      nodeWorkerRunId: "worker-1",
+      workerProtocolVersion: 1,
+    });
+    expect(await runtime.store.getRun("run-1")).toMatchObject({
+      state: "running",
+    });
+  });
+
+  it("marks a reconnecting lease lost when acp.session.status is incoherent", async () => {
+    const runtime = await createRuntime();
+    const now = Date.now();
+    const lease = await runtime.store.acquireLease({
+      sessionKey: "agent:main:acp:test-session",
+      nodeId: "node-1",
+      leaseId: "lease-1",
+      now,
+    });
+    await runtime.store.startRun({
+      sessionKey: "agent:main:acp:test-session",
+      runId: "run-1",
+      requestId: "req-1",
+      now,
+    });
+    await handleNodeDisconnect("node-1", {
+      now: now + 10,
+    });
+
+    await handleNodeConnected({
+      nodeId: "node-1",
+      invokeNode: async () => ({
+        ok: true,
+        payload: {
+          nodeId: "node-1",
+          ok: true,
+          sessionKey: "agent:main:acp:test-session",
+          leaseId: "lease-replaced",
+          leaseEpoch: lease.leaseEpoch + 1,
+          state: "running",
+          workerProtocolVersion: 1,
+        },
+      }),
+      now: now + 11,
+    });
+
+    expect(await runtime.store.getActiveLease("agent:main:acp:test-session")).toMatchObject({
+      state: "lost",
+      leaseId: lease.leaseId,
+      leaseEpoch: lease.leaseEpoch,
+    });
+    expect(await runtime.store.getRun("run-1")).toMatchObject({
+      state: "recovering",
+      recoveryReason: "status_mismatch",
     });
   });
 });

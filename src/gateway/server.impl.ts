@@ -1,5 +1,4 @@
 import path from "node:path";
-import { createAcpGatewayStore } from "../acp/store/file-store.js";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { getActiveEmbeddedRunCount } from "../agents/pi-embedded-runner/runs.js";
 import { registerSkillsChangeListener } from "../agents/skills/refresh.js";
@@ -684,7 +683,6 @@ export async function startGatewayServer(
   });
   let bonjourStop: (() => Promise<void>) | null = null;
   const nodeRegistry = new NodeRegistry();
-  const acpGatewayStore = createAcpGatewayStore();
   const nodePresenceTimers = new Map<string, ReturnType<typeof setInterval>>();
   const nodeSubscriptions = createNodeSubscriptionManager();
   const nodeSendEvent = (opts: { nodeId: string; event: string; payloadJSON?: string | null }) => {
@@ -908,7 +906,6 @@ export async function startGatewayServer(
       return false;
     },
     nodeRegistry,
-    acpGatewayStore,
     agentRunSeq,
     chatAbortControllers,
     chatAbortedRuns: chatRunState.abortedRuns,

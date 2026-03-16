@@ -19,6 +19,7 @@ import {
   type ExecHostResponse,
 } from "../infra/exec-host.js";
 import { sanitizeHostExecEnv } from "../infra/host-env-security.js";
+import { handleAcpInvokeCommand } from "./invoke-acp.js";
 import { runBrowserProxyCommand } from "./invoke-browser.js";
 import { buildSystemRunApprovalPlan, handleSystemRunInvoke } from "./invoke-system-run.js";
 import type {
@@ -420,6 +421,15 @@ export async function handleInvoke(
   skillBins: SkillBinsProvider,
 ) {
   const command = String(frame.command ?? "");
+  const acpResult = await handleAcpInvokeCommand(frame);
+  if (acpResult.handled) {
+    if (acpResult.ok) {
+      await sendJsonPayloadResult(client, frame, acpResult.payload);
+    } else {
+      await sendErrorResult(client, frame, acpResult.code, acpResult.message);
+    }
+    return;
+  }
   if (command === "system.execApprovals.get") {
     try {
       ensureExecApprovals();

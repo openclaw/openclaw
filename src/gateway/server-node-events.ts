@@ -644,3 +644,15 @@ export async function handleNodeDisconnect(
     ...(typeof params?.now === "number" ? { now: params.now } : {}),
   });
 }
+
+export async function handleNodeConnected(params: {
+  nodeId: string;
+  invokeNode: import("../acp/store/gateway-events.js").AcpGatewayNodeInvoker;
+  now?: number;
+}): Promise<void> {
+  await getAcpGatewayNodeRuntime().reconcileConnectedNodeLeases({
+    nodeId: params.nodeId,
+    invokeNode: params.invokeNode,
+    ...(typeof params.now === "number" ? { now: params.now } : {}),
+  });
+}

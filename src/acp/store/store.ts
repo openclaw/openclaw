@@ -606,6 +606,49 @@ export class AcpGatewayStore {
     });
   }
 
+  async markStatusMismatch(params: {
+    sessionKey: string;
+    now?: number;
+  }): Promise<AcpGatewayLeaseReconcileRecord> {
+    const now = params.now ?? Date.now();
+    return await this.mutateStore(async (store) => {
+      const session = store.sessions[params.sessionKey];
+      if (!session) {
+        throw new AcpGatewayStoreError(
+          "ACP_NODE_SESSION_NOT_FOUND",
+          `ACP session ${params.sessionKey} does not exist.`,
+        );
+      }
+      const lease = store.leases[params.sessionKey];
+      if (!lease) {
+        throw new AcpGatewayStoreError(
+          "ACP_NODE_ACTIVE_LEASE_MISSING",
+          `ACP session ${params.sessionKey} does not have an active lease.`,
+        );
+      }
+      lease.state = "lost";
+      lease.updatedAt = now;
+      if (lease.expiresAt < now) {
+        lease.expiresAt = now;
+      }
+      session.state = "recovering";
+      session.updatedAt = now;
+      session.lastRecoveryReason = "status_mismatch";
+      const runId = session.activeRunId;
+      const run = runId ? store.runs[runId] : undefined;
+      if (run && !run.terminal) {
+        run.state = "recovering";
+        run.updatedAt = now;
+        run.recoveryReason = "status_mismatch";
+      }
+      return {
+        session,
+        ...(run ? { run } : {}),
+        lease,
+      };
+    });
+  }
+
   async expireSuspectLeases(params?: { now?: number }): Promise<{
     sessions: AcpGatewaySessionRecord[];
     runs: AcpGatewayRunRecord[];

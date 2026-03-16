@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { AcpGatewayStoreError } from "../../acp/store/store.js";
 import { loadConfig } from "../../config/config.js";
 import { listDevicePairing } from "../../infra/device-pairing.js";
 import {
@@ -41,7 +42,6 @@ import {
   validateNodePairVerifyParams,
   validateNodeRenameParams,
 } from "../protocol/index.js";
-import { handleAcpWorkerNodeEvent, isAcpWorkerNodeEvent } from "../server-node-events-acp.js";
 import { handleNodeInvokeResult } from "./nodes.handlers.invoke-result.js";
 import {
   respondInvalidParams,
@@ -96,6 +96,17 @@ type PendingNodeAction = {
 };
 
 const pendingNodeActionsById = new Map<string, PendingNodeAction[]>();
+
+function mapNodeEventErrorToRpcError(error: unknown) {
+  if (error instanceof AcpGatewayStoreError) {
+    return errorShape(ErrorCodes.INVALID_REQUEST, error.message, {
+      details: {
+        code: error.code,
+      },
+    });
+  }
+  return null;
+}
 
 async function resolveDirectNodePushConfig() {
   const auth = await resolveApnsAuthConfigFromEnv(process.env);
@@ -1131,24 +1142,6 @@ export const nodeHandlers: GatewayRequestHandlers = {
           : null;
     await respondUnavailableOnThrow(respond, async () => {
       const nodeId = client?.connect?.device?.id ?? client?.connect?.client?.id ?? "node";
-      if (isAcpWorkerNodeEvent(p.event)) {
-        const acpResult = await handleAcpWorkerNodeEvent({
-          context: {
-            acpGatewayStore: context.acpGatewayStore,
-            logGateway: { warn: context.logGateway.warn },
-          },
-          nodeId,
-          event: p.event,
-          payloadJSON,
-        });
-        if (!acpResult.ok) {
-          respond(false, undefined, acpResult.error);
-          return;
-        }
-        respond(true, acpResult.payload, undefined);
-        return;
-      }
-
       const { handleNodeEvent } = await import("../server-node-events.js");
       const nodeContext = {
         deps: context.deps,
@@ -1170,10 +1163,19 @@ export const nodeHandlers: GatewayRequestHandlers = {
         loadGatewayModelCatalog: context.loadGatewayModelCatalog,
         logGateway: { warn: context.logGateway.warn },
       };
-      await handleNodeEvent(nodeContext, nodeId, {
-        event: p.event,
-        payloadJSON,
-      });
+      try {
+        await handleNodeEvent(nodeContext, nodeId, {
+          event: p.event,
+          payloadJSON,
+        });
+      } catch (error) {
+        const mapped = mapNodeEventErrorToRpcError(error);
+        if (mapped) {
+          respond(false, undefined, mapped);
+          return;
+        }
+        throw error;
+      }
       respond(true, { ok: true }, undefined);
     });
   },
