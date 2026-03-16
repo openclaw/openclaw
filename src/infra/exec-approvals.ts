@@ -8,8 +8,8 @@ export * from "./exec-approvals-analysis.js";
 export * from "./exec-approvals-allowlist.js";
 
 export type ExecHost = "sandbox" | "gateway" | "node";
-export type ExecSecurity = "deny" | "allowlist" | "full";
-export type ExecAsk = "off" | "on-miss" | "always";
+export type ExecSecurity = "deny" | "allowlist" | "denylist" | "full";
+export type ExecAsk = "off" | "on-miss" | "on-match" | "always";
 
 export function normalizeExecHost(value?: string | null): ExecHost | null {
   const normalized = value?.trim().toLowerCase();
@@ -21,7 +21,7 @@ export function normalizeExecHost(value?: string | null): ExecHost | null {
 
 export function normalizeExecSecurity(value?: string | null): ExecSecurity | null {
   const normalized = value?.trim().toLowerCase();
-  if (normalized === "deny" || normalized === "allowlist" || normalized === "full") {
+  if (normalized === "deny" || normalized === "allowlist" || normalized === "denylist" || normalized === "full") {
     return normalized;
   }
   return null;
@@ -29,7 +29,7 @@ export function normalizeExecSecurity(value?: string | null): ExecSecurity | nul
 
 export function normalizeExecAsk(value?: string | null): ExecAsk | null {
   const normalized = value?.trim().toLowerCase();
-  if (normalized === "off" || normalized === "on-miss" || normalized === "always") {
+  if (normalized === "off" || normalized === "on-miss" || normalized === "on-match" || normalized === "always") {
     return normalized;
   }
   return null;
@@ -111,8 +111,17 @@ export type ExecAllowlistEntry = {
   lastResolvedPath?: string;
 };
 
+export type ExecDenylistEntry = {
+  id?: string;
+  pattern: string;
+  argsMatch?: string;
+  lastMatchedAt?: number;
+  lastMatchedCommand?: string;
+};
+
 export type ExecApprovalsAgent = ExecApprovalsDefaults & {
   allowlist?: ExecAllowlistEntry[];
+  denylist?: ExecDenylistEntry[];
 };
 
 export type ExecApprovalsFile = {
@@ -140,6 +149,7 @@ export type ExecApprovalsResolved = {
   defaults: Required<ExecApprovalsDefaults>;
   agent: Required<ExecApprovalsDefaults>;
   allowlist: ExecAllowlistEntry[];
+  denylist: ExecDenylistEntry[];
   file: ExecApprovalsFile;
 };
 
@@ -389,14 +399,14 @@ export function ensureExecApprovals(): ExecApprovalsFile {
 }
 
 function normalizeSecurity(value: ExecSecurity | undefined, fallback: ExecSecurity): ExecSecurity {
-  if (value === "allowlist" || value === "full" || value === "deny") {
+  if (value === "allowlist" || value === "denylist" || value === "full" || value === "deny") {
     return value;
   }
   return fallback;
 }
 
 function normalizeAsk(value: ExecAsk | undefined, fallback: ExecAsk): ExecAsk {
-  if (value === "always" || value === "off" || value === "on-miss") {
+  if (value === "always" || value === "off" || value === "on-miss" || value === "on-match") {
     return value;
   }
   return fallback;
@@ -468,6 +478,10 @@ export function resolveExecApprovalsFromFile(params: {
     ...(Array.isArray(wildcard.allowlist) ? wildcard.allowlist : []),
     ...(Array.isArray(agent.allowlist) ? agent.allowlist : []),
   ];
+  const denylist = [
+    ...(Array.isArray(wildcard.denylist) ? wildcard.denylist : []),
+    ...(Array.isArray(agent.denylist) ? agent.denylist : []),
+  ];
   return {
     path: params.path ?? resolveExecApprovalsPath(),
     socketPath: expandHomePrefix(
@@ -477,6 +491,7 @@ export function resolveExecApprovalsFromFile(params: {
     defaults: resolvedDefaults,
     agent: resolvedAgent,
     allowlist,
+    denylist,
     file,
   };
 }
@@ -545,12 +560,12 @@ export function addAllowlistEntry(
 }
 
 export function minSecurity(a: ExecSecurity, b: ExecSecurity): ExecSecurity {
-  const order: Record<ExecSecurity, number> = { deny: 0, allowlist: 1, full: 2 };
+  const order: Record<ExecSecurity, number> = { deny: 0, allowlist: 1, denylist: 1, full: 2 };
   return order[a] <= order[b] ? a : b;
 }
 
 export function maxAsk(a: ExecAsk, b: ExecAsk): ExecAsk {
-  const order: Record<ExecAsk, number> = { off: 0, "on-miss": 1, always: 2 };
+  const order: Record<ExecAsk, number> = { off: 0, "on-miss": 1, "on-match": 1, always: 2 };
   return order[a] >= order[b] ? a : b;
 }
 

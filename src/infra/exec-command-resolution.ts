@@ -143,14 +143,31 @@ export function resolveAllowlistCandidatePath(
 export function matchAllowlist(
   entries: ExecAllowlistEntry[],
   resolution: CommandResolution | null,
+  argv?: string[],
 ): ExecAllowlistEntry | null {
   if (!entries.length) {
     return null;
   }
+  const effectiveArgv =
+    argv && argv.length > 0
+      ? argv
+      : (resolution?.effectiveArgv ?? [resolution?.rawExecutable ?? ""]);
+  const joinedArgs = effectiveArgv
+    .slice(1)
+    .map((entry) => entry.trim().toLowerCase())
+    .filter(Boolean)
+    .join(" ");
+  const matchesArgsConstraint = (entry: ExecAllowlistEntry): boolean => {
+    const constraint = entry.argsMatch?.trim().toLowerCase();
+    if (!constraint) {
+      return true;
+    }
+    return joinedArgs.includes(constraint);
+  };
   // A bare "*" wildcard allows any parsed executable command.
   // Check it before the resolvedPath guard so unresolved PATH lookups still
   // match (for example platform-specific executables without known extensions).
-  const bareWild = entries.find((e) => e.pattern?.trim() === "*");
+  const bareWild = entries.find((e) => e.pattern?.trim() === "*" && matchesArgsConstraint(e));
   if (bareWild && resolution) {
     return bareWild;
   }
@@ -167,7 +184,7 @@ export function matchAllowlist(
     if (!hasPath) {
       continue;
     }
-    if (matchesExecAllowlistPattern(pattern, resolvedPath)) {
+    if (matchesExecAllowlistPattern(pattern, resolvedPath) && matchesArgsConstraint(entry)) {
       return entry;
     }
   }
@@ -176,40 +193,40 @@ export function matchAllowlist(
 
 export type ExecArgvToken =
   | {
-      kind: "empty";
-      raw: string;
-    }
+    kind: "empty";
+    raw: string;
+  }
   | {
-      kind: "terminator";
-      raw: string;
-    }
+    kind: "terminator";
+    raw: string;
+  }
   | {
-      kind: "stdin";
-      raw: string;
-    }
+    kind: "stdin";
+    raw: string;
+  }
   | {
-      kind: "positional";
-      raw: string;
-    }
+    kind: "positional";
+    raw: string;
+  }
   | {
-      kind: "option";
-      raw: string;
-      style: "long";
-      flag: string;
-      inlineValue?: string;
-    }
+    kind: "option";
+    raw: string;
+    style: "long";
+    flag: string;
+    inlineValue?: string;
+  }
   | {
-      kind: "option";
-      raw: string;
-      style: "short-cluster";
-      cluster: string;
-      flags: string[];
-    };
+    kind: "option";
+    raw: string;
+    style: "short-cluster";
+    cluster: string;
+    flags: string[];
+  };
 
 /**
- * Tokenizes a single argv entry into a normalized option/positional model.
- * Consumers can share this model to keep argv parsing behavior consistent.
- */
+* Tokenizes a single argv entry into a normalized option/positional model.
+* Consumers can share this model to keep argv parsing behavior consistent.
+*/
 export function parseExecArgvToken(raw: string): ExecArgvToken {
   if (!raw) {
     return { kind: "empty", raw };

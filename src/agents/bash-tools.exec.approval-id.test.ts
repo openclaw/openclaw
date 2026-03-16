@@ -194,6 +194,101 @@ describe("exec approvals", () => {
     expect(calls).not.toContain("exec.approval.request");
   });
 
+  it("requires approval when gateway denylist matches on-match", async () => {
+    const approvalsPath = path.join(process.env.HOME ?? "", ".openclaw", "exec-approvals.json");
+    await fs.mkdir(path.dirname(approvalsPath), { recursive: true });
+    await fs.writeFile(
+      approvalsPath,
+      JSON.stringify(
+        {
+          version: 1,
+          defaults: { security: "denylist", ask: "on-match", askFallback: "deny" },
+          agents: {
+            main: {
+              denylist: [{ pattern: process.execPath, argsMatch: "--version" }],
+            },
+          },
+        },
+        null,
+        2,
+      ),
+    );
+
+    const calls: string[] = [];
+    vi.mocked(callGatewayTool).mockImplementation(async (method, _opts, params) => {
+      calls.push(method);
+      if (method === "exec.approval.request") {
+        return { status: "accepted", id: (params as { id?: string })?.id };
+      }
+      if (method === "exec.approval.waitDecision") {
+        return { decision: "deny" };
+      }
+      return { ok: true };
+    });
+
+    const tool = createExecTool({
+      host: "gateway",
+      ask: "off",
+      security: "full",
+      approvalRunningNoticeMs: 0,
+    });
+
+    const result = await tool.execute("call-gateway-denylist", {
+      command: `"${process.execPath}" --version`,
+    });
+    expect(result.details.status).toBe("approval-pending");
+    expect(calls).toContain("exec.approval.request");
+    expect(calls).toContain("exec.approval.waitDecision");
+  });
+
+  it("requires approval when node denylist matches on-match", async () => {
+    const approvalsFile = {
+      version: 1,
+      defaults: { security: "denylist", ask: "on-match", askFallback: "deny" },
+      agents: {
+        main: {
+          denylist: [{ pattern: process.execPath, argsMatch: "--version" }],
+        },
+      },
+    };
+
+    const calls: string[] = [];
+    vi.mocked(callGatewayTool).mockImplementation(async (method, _opts, params) => {
+      calls.push(method);
+      if (method === "exec.approvals.node.get") {
+        return { file: approvalsFile };
+      }
+      if (method === "exec.approval.request") {
+        return { status: "accepted", id: (params as { id?: string })?.id };
+      }
+      if (method === "exec.approval.waitDecision") {
+        return { decision: "deny" };
+      }
+      if (method === "node.invoke") {
+        const invoke = params as { command?: string };
+        if (invoke.command === "system.run.prepare") {
+          return buildPreparedSystemRunPayload(params);
+        }
+      }
+      return { ok: true };
+    });
+
+    const tool = createExecTool({
+      host: "node",
+      ask: "on-match",
+      security: "denylist",
+      approvalRunningNoticeMs: 0,
+    });
+
+    const result = await tool.execute("call-node-denylist", {
+      command: `"${process.execPath}" --version`,
+    });
+    expect(result.details.status).toBe("approval-pending");
+    expect(calls).toContain("exec.approvals.node.get");
+    expect(calls).toContain("exec.approval.request");
+    expect(calls).toContain("exec.approval.waitDecision");
+  });
+
   it("honors ask=off for elevated gateway exec without prompting", async () => {
     const calls: string[] = [];
     vi.mocked(callGatewayTool).mockImplementation(async (method) => {

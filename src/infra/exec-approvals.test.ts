@@ -128,6 +128,23 @@ describe("exec approvals allowlist matching", () => {
     });
     expect(match?.pattern).toBe(literalPattern);
   });
+
+  it("supports argsMatch as a case-insensitive argv substring filter", () => {
+    const match = matchAllowlist(
+      [{ pattern: "/opt/**/rg", argsMatch: "--glob src/**" }],
+      baseResolution,
+      ["/opt/homebrew/bin/rg", "--glob", "src/**", "needle"],
+    );
+    expect(match?.pattern).toBe("/opt/**/rg");
+    expect(match?.argsMatch).toBe("--glob src/**");
+
+    const missed = matchAllowlist(
+      [{ pattern: "/opt/**/rg", argsMatch: "--glob docs/**" }],
+      baseResolution,
+      ["/opt/homebrew/bin/rg", "--glob", "src/**", "needle"],
+    );
+    expect(missed).toBeNull();
+  });
 });
 
 describe("mergeExecApprovalsSocketDefaults", () => {
@@ -877,6 +894,7 @@ describe("exec approvals policy helpers", () => {
   it("maxAsk returns the more aggressive ask mode", () => {
     expect(maxAsk("off", "always")).toBe("always");
     expect(maxAsk("on-miss", "off")).toBe("on-miss");
+    expect(maxAsk("on-match", "on-miss")).toBe("on-match");
   });
 
   it("requiresExecApproval respects ask mode and allowlist satisfaction", () => {
@@ -918,6 +936,24 @@ describe("exec approvals policy helpers", () => {
         security: "full",
         analysisOk: false,
         allowlistSatisfied: false,
+      }),
+    ).toBe(false);
+    expect(
+      requiresExecApproval({
+        ask: "on-match",
+        security: "denylist",
+        analysisOk: true,
+        allowlistSatisfied: false,
+        denylistMatched: true,
+      }),
+    ).toBe(true);
+    expect(
+      requiresExecApproval({
+        ask: "on-match",
+        security: "denylist",
+        analysisOk: true,
+        allowlistSatisfied: false,
+        denylistMatched: false,
       }),
     ).toBe(false);
   });

@@ -14,6 +14,7 @@ const buildPolicyParams = (overrides: Partial<EvaluatePolicyParams>): EvaluatePo
     ask: "off",
     analysisOk: true,
     allowlistSatisfied: true,
+    denylistMatched: false,
     approvalDecision: null,
     approved: false,
     isWindows: false,
@@ -139,5 +140,32 @@ describe("evaluateSystemRunPolicy", () => {
     expect(allowed.requiresAsk).toBe(false);
     expect(allowed.analysisOk).toBe(true);
     expect(allowed.allowlistSatisfied).toBe(true);
+  });
+
+  it("requires approval on denylist matches when ask=on-match", () => {
+    const denied = expectDeniedDecision(
+      evaluateSystemRunPolicy(
+        buildPolicyParams({
+          security: "denylist",
+          ask: "on-match",
+          denylistMatched: true,
+        }),
+      ),
+    );
+    expect(denied.eventReason).toBe("approval-required");
+    expect(denied.requiresAsk).toBe(true);
+  });
+
+  it("denies denylist matches without approval", () => {
+    const denied = expectDeniedDecision(
+      evaluateSystemRunPolicy(
+        buildPolicyParams({
+          security: "denylist",
+          denylistMatched: true,
+        }),
+      ),
+    );
+    expect(denied.eventReason).toBe("denylist-match");
+    expect(denied.errorMessage).toBe("SYSTEM_RUN_DENIED: denylist match");
   });
 });
