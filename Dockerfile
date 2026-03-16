@@ -65,7 +65,10 @@ COPY --from=ext-deps /out/ ./extensions/
 
 # Reduce OOM risk on low-memory hosts during dependency installation.
 # Docker builds on small VMs may otherwise fail with "Killed" (exit 137).
+# Enhanced cache mounts improve incremental build performance by reusing the
+# pnpm store and node_modules cache across builds.
 RUN --mount=type=cache,id=openclaw-pnpm-store,target=/root/.local/share/pnpm/store,sharing=locked \
+    --mount=type=cache,id=openclaw-node-modules,target=/app/node_modules/.cache,sharing=locked \
     NODE_OPTIONS=--max-old-space-size=2048 pnpm install --frozen-lockfile
 
 COPY . .
