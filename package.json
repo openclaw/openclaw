@@ -29,6 +29,8 @@
     "assets/",
     "dist/",
     "docs/",
+    "!docs/.generated/**",
+    "!docs/.i18n/zh-CN.tm.jsonl",
     "extensions/",
     "skills/"
   ],
