@@ -95,6 +95,7 @@ function normalizeConfiguredChannelLabel(value?: string | null): string | undefi
 async function resolveMSTeamsRecentChannelDisplayLabels(params: {
   cfg: MSTeamsMessageHandlerDeps["cfg"];
   graphTeamId?: string;
+  conversationTenantId?: string;
   conversationId: string;
   channelId?: string;
   teamName?: string;
@@ -127,7 +128,10 @@ async function resolveMSTeamsRecentChannelDisplayLabels(params: {
   if ((!teamLabel || !channelLabel) && graphTeamId) {
     resolution.graphAttempted = true;
     try {
-      const token = await resolveGraphToken(params.cfg);
+      const token = await resolveGraphToken({
+        cfg: params.cfg,
+        conversationTenantId: params.conversationTenantId,
+      });
       if (!teamLabel) {
         const team = await getTeamById(token, graphTeamId);
         teamLabel = team?.displayName?.trim() || undefined;
@@ -743,6 +747,7 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
         } = await resolveMSTeamsRecentChannelDisplayLabels({
           cfg,
           graphTeamId,
+          conversationTenantId: conversation?.tenantId ?? undefined,
           conversationId,
           channelId: activity.channelData?.channel?.id?.trim() || undefined,
           teamName,

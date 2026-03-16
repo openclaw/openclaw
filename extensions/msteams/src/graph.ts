@@ -49,15 +49,29 @@ export async function fetchGraphJson<T>(params: {
   return (await res.json()) as T;
 }
 
-export async function resolveGraphToken(cfg: unknown): Promise<string> {
+export async function resolveGraphToken(params: {
+  cfg: unknown;
+  conversationTenantId?: string;
+}): Promise<string> {
   const creds = resolveMSTeamsCredentials(
-    (cfg as { channels?: { msteams?: unknown } })?.channels?.msteams as MSTeamsConfig | undefined,
+    (params.cfg as { channels?: { msteams?: unknown } })?.channels?.msteams as
+      | MSTeamsConfig
+      | undefined,
   );
   if (!creds) {
     throw new Error("MS Teams credentials missing");
   }
   const { sdk, authConfig } = await loadMSTeamsSdkWithAuth(creds);
-  const tokenProvider = new sdk.MsalTokenProvider(authConfig);
+  const conversationTenantId = params.conversationTenantId?.trim();
+  const effectiveAuthConfig =
+    conversationTenantId && conversationTenantId !== creds.tenantId
+      ? sdk.getAuthConfigWithDefaults({
+          clientId: creds.appId,
+          clientSecret: creds.appPassword,
+          tenantId: conversationTenantId,
+        })
+      : authConfig;
+  const tokenProvider = new sdk.MsalTokenProvider(effectiveAuthConfig);
   const token = await tokenProvider.getAccessToken("https://graph.microsoft.com");
   const accessToken = readAccessToken(token);
   if (!accessToken) {
