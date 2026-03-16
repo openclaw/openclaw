@@ -1,3 +1,6 @@
+import { normalizeDeviceMetadataForAuth } from "./device-metadata-normalization.js";
+export { normalizeDeviceMetadataForAuth };
+
 export type DeviceAuthPayloadParams = {
   deviceId: string;
   clientId: string;
@@ -7,6 +10,11 @@ export type DeviceAuthPayloadParams = {
   signedAtMs: number;
   token?: string | null;
   nonce: string;
+};
+
+export type DeviceAuthPayloadV3Params = DeviceAuthPayloadParams & {
+  platform?: string | null;
+  deviceFamily?: string | null;
 };
 
 export function buildDeviceAuthPayload(params: DeviceAuthPayloadParams): string {
@@ -22,5 +30,25 @@ export function buildDeviceAuthPayload(params: DeviceAuthPayloadParams): string 
     String(params.signedAtMs),
     token,
     params.nonce,
+  ].join("|");
+}
+
+export function buildDeviceAuthPayloadV3(params: DeviceAuthPayloadV3Params): string {
+  const scopes = params.scopes.join(",");
+  const token = params.token ?? "";
+  const platform = normalizeDeviceMetadataForAuth(params.platform);
+  const deviceFamily = normalizeDeviceMetadataForAuth(params.deviceFamily);
+  return [
+    "v3",
+    params.deviceId,
+    params.clientId,
+    params.clientMode,
+    params.role,
+    scopes,
+    String(params.signedAtMs),
+    token,
+    params.nonce,
+    platform,
+    deviceFamily,
   ].join("|");
 }

@@ -1,6 +1,7 @@
 import { describe, expect, test } from "vitest";
 import {
   evaluateMissingDeviceIdentity,
+  isTrustedProxyControlUiOperatorAuth,
   resolveControlUiAuthPolicy,
   shouldSkipControlUiPairing,
 } from "./connect-policy.js";
@@ -168,9 +169,47 @@ describe("ws connect policy", () => {
         isLocalClient: false,
       }).kind,
     ).toBe("allow");
+
+    const bypass = resolveControlUiAuthPolicy({
+      isControlUi: true,
+      controlUiConfig: { dangerouslyDisableDeviceAuth: true },
+      deviceRaw: null,
+    });
+    expect(
+      evaluateMissingDeviceIdentity({
+        hasDeviceIdentity: false,
+        role: "operator",
+        isControlUi: true,
+        controlUiAuthPolicy: bypass,
+        trustedProxyAuthOk: false,
+        sharedAuthOk: false,
+        authOk: false,
+        hasSharedAuth: false,
+        isLocalClient: false,
+      }).kind,
+    ).toBe("allow");
+
+    // Regression: dangerouslyDisableDeviceAuth bypass must NOT extend to node-role
+    // sessions — the break-glass flag is scoped to operator Control UI only.
+    // A device-less node-role connection must still be rejected even when the flag
+    // is set, to prevent the flag from being abused to admit unauthorized node
+    // registrations.
+    expect(
+      evaluateMissingDeviceIdentity({
+        hasDeviceIdentity: false,
+        role: "node",
+        isControlUi: true,
+        controlUiAuthPolicy: bypass,
+        trustedProxyAuthOk: false,
+        sharedAuthOk: false,
+        authOk: false,
+        hasSharedAuth: false,
+        isLocalClient: false,
+      }).kind,
+    ).toBe("reject-device-required");
   });
 
-  test("pairing bypass requires control-ui bypass + shared auth (or trusted-proxy auth)", () => {
+  test("dangerouslyDisableDeviceAuth skips pairing for operator control-ui only", () => {
     const bypass = resolveControlUiAuthPolicy({
       isControlUi: true,
       controlUiConfig: { dangerouslyDisableDeviceAuth: true },
@@ -181,9 +220,84 @@ describe("ws connect policy", () => {
       controlUiConfig: undefined,
       deviceRaw: null,
     });
-    expect(shouldSkipControlUiPairing(bypass, true, false)).toBe(true);
-    expect(shouldSkipControlUiPairing(bypass, false, false)).toBe(false);
-    expect(shouldSkipControlUiPairing(strict, true, false)).toBe(false);
-    expect(shouldSkipControlUiPairing(strict, false, true)).toBe(true);
+    expect(shouldSkipControlUiPairing(bypass, "operator", false)).toBe(true);
+    expect(shouldSkipControlUiPairing(bypass, "node", false)).toBe(false);
+    expect(shouldSkipControlUiPairing(strict, "operator", false)).toBe(false);
+    expect(shouldSkipControlUiPairing(strict, "operator", true)).toBe(true);
+  });
+
+  test("auth.mode=none skips pairing for operator control-ui only", () => {
+    const controlUi = resolveControlUiAuthPolicy({
+      isControlUi: true,
+      controlUiConfig: undefined,
+      deviceRaw: null,
+    });
+    const nonControlUi = resolveControlUiAuthPolicy({
+      isControlUi: false,
+      controlUiConfig: undefined,
+      deviceRaw: null,
+    });
+    // Control UI + operator + auth.mode=none: skip pairing (the fix for #42931)
+    expect(shouldSkipControlUiPairing(controlUi, "operator", false, "none")).toBe(true);
+    // Control UI + node role + auth.mode=none: still require pairing
+    expect(shouldSkipControlUiPairing(controlUi, "node", false, "none")).toBe(false);
+    // Non-Control-UI + operator + auth.mode=none: still require pairing
+    // (prevents #43478 regression where ALL clients bypassed pairing)
+    expect(shouldSkipControlUiPairing(nonControlUi, "operator", false, "none")).toBe(false);
+    // Control UI + operator + auth.mode=shared-key: no change
+    expect(shouldSkipControlUiPairing(controlUi, "operator", false, "shared-key")).toBe(false);
+    // Control UI + operator + no authMode: no change
+    expect(shouldSkipControlUiPairing(controlUi, "operator", false)).toBe(false);
+  });
+
+  test("trusted-proxy control-ui bypass only applies to operator + trusted-proxy auth", () => {
+    const cases: Array<{
+      role: "operator" | "node";
+      authMode: string;
+      authOk: boolean;
+      authMethod: string | undefined;
+      expected: boolean;
+    }> = [
+      {
+        role: "operator",
+        authMode: "trusted-proxy",
+        authOk: true,
+        authMethod: "trusted-proxy",
+        expected: true,
+      },
+      {
+        role: "node",
+        authMode: "trusted-proxy",
+        authOk: true,
+        authMethod: "trusted-proxy",
+        expected: false,
+      },
+      {
+        role: "operator",
+        authMode: "token",
+        authOk: true,
+        authMethod: "token",
+        expected: false,
+      },
+      {
+        role: "operator",
+        authMode: "trusted-proxy",
+        authOk: false,
+        authMethod: "trusted-proxy",
+        expected: false,
+      },
+    ];
+
+    for (const tc of cases) {
+      expect(
+        isTrustedProxyControlUiOperatorAuth({
+          isControlUi: true,
+          role: tc.role,
+          authMode: tc.authMode,
+          authOk: tc.authOk,
+          authMethod: tc.authMethod,
+        }),
+      ).toBe(tc.expected);
+    }
   });
 });

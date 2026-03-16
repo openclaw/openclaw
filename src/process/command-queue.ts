@@ -1,4 +1,5 @@
 import { diagnosticLogger as diag, logLaneDequeue, logLaneEnqueue } from "../logging/diagnostic.js";
+import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { CommandLane } from "./lanes.js";
 /**
  * Dedicated error type thrown when a queued command is rejected because
@@ -9,6 +10,17 @@ export class CommandLaneClearedError extends Error {
   constructor(lane?: string) {
     super(lane ? `Command lane "${lane}" cleared` : "Command lane cleared");
     this.name = "CommandLaneClearedError";
+  }
+}
+
+/**
+ * Dedicated error type thrown when a new command is rejected because the
+ * gateway is currently draining for restart.
+ */
+export class GatewayDrainingError extends Error {
+  constructor() {
+    super("Gateway is draining for restart; new tasks are not accepted");
+    this.name = "GatewayDrainingError";
   }
 }
 
@@ -35,11 +47,20 @@ type LaneState = {
   generation: number;
 };
 
-const lanes = new Map<string, LaneState>();
-let nextTaskId = 1;
+/**
+ * Keep queue runtime state on globalThis so every bundled entry/chunk shares
+ * the same lanes, counters, and draining flag in production builds.
+ */
+const COMMAND_QUEUE_STATE_KEY = Symbol.for("openclaw.commandQueueState");
+
+const queueState = resolveGlobalSingleton(COMMAND_QUEUE_STATE_KEY, () => ({
+  gatewayDraining: false,
+  lanes: new Map<string, LaneState>(),
+  nextTaskId: 1,
+}));
 
 function getLaneState(lane: string): LaneState {
-  const existing = lanes.get(lane);
+  const existing = queueState.lanes.get(lane);
   if (existing) {
     return existing;
   }
@@ -51,7 +72,7 @@ function getLaneState(lane: string): LaneState {
     draining: false,
     generation: 0,
   };
-  lanes.set(lane, created);
+  queueState.lanes.set(lane, created);
   return created;
 }
 
@@ -66,55 +87,75 @@ function completeTask(state: LaneState, taskId: number, taskGeneration: number):
 function drainLane(lane: string) {
   const state = getLaneState(lane);
   if (state.draining) {
+    if (state.activeTaskIds.size === 0 && state.queue.length > 0) {
+      diag.warn(
+        `drainLane blocked: lane=${lane} draining=true active=0 queue=${state.queue.length}`,
+      );
+    }
     return;
   }
   state.draining = true;
 
   const pump = () => {
-    while (state.activeTaskIds.size < state.maxConcurrent && state.queue.length > 0) {
-      const entry = state.queue.shift() as QueueEntry;
-      const waitedMs = Date.now() - entry.enqueuedAt;
-      if (waitedMs >= entry.warnAfterMs) {
-        entry.onWait?.(waitedMs, state.queue.length);
-        diag.warn(
-          `lane wait exceeded: lane=${lane} waitedMs=${waitedMs} queueAhead=${state.queue.length}`,
-        );
-      }
-      logLaneDequeue(lane, waitedMs, state.queue.length);
-      const taskId = nextTaskId++;
-      const taskGeneration = state.generation;
-      state.activeTaskIds.add(taskId);
-      void (async () => {
-        const startTime = Date.now();
-        try {
-          const result = await entry.task();
-          const completedCurrentGeneration = completeTask(state, taskId, taskGeneration);
-          if (completedCurrentGeneration) {
-            diag.debug(
-              `lane task done: lane=${lane} durationMs=${Date.now() - startTime} active=${state.activeTaskIds.size} queued=${state.queue.length}`,
-            );
-            pump();
+    try {
+      while (state.activeTaskIds.size < state.maxConcurrent && state.queue.length > 0) {
+        const entry = state.queue.shift() as QueueEntry;
+        const waitedMs = Date.now() - entry.enqueuedAt;
+        if (waitedMs >= entry.warnAfterMs) {
+          try {
+            entry.onWait?.(waitedMs, state.queue.length);
+          } catch (err) {
+            diag.error(`lane onWait callback failed: lane=${lane} error="${String(err)}"`);
           }
-          entry.resolve(result);
-        } catch (err) {
-          const completedCurrentGeneration = completeTask(state, taskId, taskGeneration);
-          const isProbeLane = lane.startsWith("auth-probe:") || lane.startsWith("session:probe-");
-          if (!isProbeLane) {
-            diag.error(
-              `lane task error: lane=${lane} durationMs=${Date.now() - startTime} error="${String(err)}"`,
-            );
-          }
-          if (completedCurrentGeneration) {
-            pump();
-          }
-          entry.reject(err);
+          diag.warn(
+            `lane wait exceeded: lane=${lane} waitedMs=${waitedMs} queueAhead=${state.queue.length}`,
+          );
         }
-      })();
+        logLaneDequeue(lane, waitedMs, state.queue.length);
+        const taskId = queueState.nextTaskId++;
+        const taskGeneration = state.generation;
+        state.activeTaskIds.add(taskId);
+        void (async () => {
+          const startTime = Date.now();
+          try {
+            const result = await entry.task();
+            const completedCurrentGeneration = completeTask(state, taskId, taskGeneration);
+            if (completedCurrentGeneration) {
+              diag.debug(
+                `lane task done: lane=${lane} durationMs=${Date.now() - startTime} active=${state.activeTaskIds.size} queued=${state.queue.length}`,
+              );
+              pump();
+            }
+            entry.resolve(result);
+          } catch (err) {
+            const completedCurrentGeneration = completeTask(state, taskId, taskGeneration);
+            const isProbeLane = lane.startsWith("auth-probe:") || lane.startsWith("session:probe-");
+            if (!isProbeLane) {
+              diag.error(
+                `lane task error: lane=${lane} durationMs=${Date.now() - startTime} error="${String(err)}"`,
+              );
+            }
+            if (completedCurrentGeneration) {
+              pump();
+            }
+            entry.reject(err);
+          }
+        })();
+      }
+    } finally {
+      state.draining = false;
     }
-    state.draining = false;
   };
 
   pump();
+}
+
+/**
+ * Mark gateway as draining for restart so new enqueues fail fast with
+ * `GatewayDrainingError` instead of being silently killed on shutdown.
+ */
+export function markGatewayDraining(): void {
+  queueState.gatewayDraining = true;
 }
 
 export function setCommandLaneConcurrency(lane: string, maxConcurrent: number) {
@@ -132,6 +173,9 @@ export function enqueueCommandInLane<T>(
     onWait?: (waitMs: number, queuedAhead: number) => void;
   },
 ): Promise<T> {
+  if (queueState.gatewayDraining) {
+    return Promise.reject(new GatewayDrainingError());
+  }
   const cleaned = lane.trim() || CommandLane.Main;
   const warnAfterMs = opts?.warnAfterMs ?? 2_000;
   const state = getLaneState(cleaned);
@@ -161,7 +205,7 @@ export function enqueueCommand<T>(
 
 export function getQueueSize(lane: string = CommandLane.Main) {
   const resolved = lane.trim() || CommandLane.Main;
-  const state = lanes.get(resolved);
+  const state = queueState.lanes.get(resolved);
   if (!state) {
     return 0;
   }
@@ -170,7 +214,7 @@ export function getQueueSize(lane: string = CommandLane.Main) {
 
 export function getTotalQueueSize() {
   let total = 0;
-  for (const s of lanes.values()) {
+  for (const s of queueState.lanes.values()) {
     total += s.queue.length + s.activeTaskIds.size;
   }
   return total;
@@ -178,7 +222,7 @@ export function getTotalQueueSize() {
 
 export function clearCommandLane(lane: string = CommandLane.Main) {
   const cleaned = lane.trim() || CommandLane.Main;
-  const state = lanes.get(cleaned);
+  const state = queueState.lanes.get(cleaned);
   if (!state) {
     return 0;
   }
@@ -205,8 +249,9 @@ export function clearCommandLane(lane: string = CommandLane.Main) {
  * `enqueueCommandInLane()` call (which may never come).
  */
 export function resetAllLanes(): void {
+  queueState.gatewayDraining = false;
   const lanesToDrain: string[] = [];
-  for (const state of lanes.values()) {
+  for (const state of queueState.lanes.values()) {
     state.generation += 1;
     state.activeTaskIds.clear();
     state.draining = false;
@@ -226,7 +271,7 @@ export function resetAllLanes(): void {
  */
 export function getActiveTaskCount(): number {
   let total = 0;
-  for (const s of lanes.values()) {
+  for (const s of queueState.lanes.values()) {
     total += s.activeTaskIds.size;
   }
   return total;
@@ -245,7 +290,7 @@ export function waitForActiveTasks(timeoutMs: number): Promise<{ drained: boolea
   const POLL_INTERVAL_MS = 50;
   const deadline = Date.now() + timeoutMs;
   const activeAtStart = new Set<number>();
-  for (const state of lanes.values()) {
+  for (const state of queueState.lanes.values()) {
     for (const taskId of state.activeTaskIds) {
       activeAtStart.add(taskId);
     }
@@ -259,7 +304,7 @@ export function waitForActiveTasks(timeoutMs: number): Promise<{ drained: boolea
       }
 
       let hasPending = false;
-      for (const state of lanes.values()) {
+      for (const state of queueState.lanes.values()) {
         for (const taskId of state.activeTaskIds) {
           if (activeAtStart.has(taskId)) {
             hasPending = true;

@@ -2,20 +2,29 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, test } from "vitest";
+import { clearConfigCache, writeConfigFile } from "../config/config.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { SessionEntry } from "../config/sessions.js";
+import { withStateDirEnv } from "../test-helpers/state-dir-env.js";
 import {
   capArrayByJsonBytes,
   classifySessionKey,
   deriveSessionTitle,
   listAgentsForGateway,
   listSessionsFromStore,
+  loadCombinedSessionStoreForGateway,
+  loadSessionEntry,
   parseGroupKey,
   pruneLegacyStoreKeys,
   resolveGatewaySessionStoreTarget,
+  resolveSessionModelIdentityRef,
   resolveSessionModelRef,
   resolveSessionStoreKey,
 } from "./session-utils.js";
+
+function resolveSyncRealpath(filePath: string): string {
+  return fs.realpathSync.native(filePath);
+}
 
 function createSymlinkOrSkip(targetPath: string, linkPath: string): boolean {
   try {
@@ -37,6 +46,39 @@ function createSingleAgentAvatarConfig(workspace: string): OpenClawConfig {
       list: [{ id: "main", default: true, workspace, identity: { avatar: "avatar-link.png" } }],
     },
   } as OpenClawConfig;
+}
+
+function createModelDefaultsConfig(params: {
+  primary: string;
+  models?: Record<string, Record<string, never>>;
+}): OpenClawConfig {
+  return {
+    agents: {
+      defaults: {
+        model: { primary: params.primary },
+        models: params.models,
+      },
+    },
+  } as OpenClawConfig;
+}
+
+function createLegacyRuntimeListConfig(
+  models?: Record<string, Record<string, never>>,
+): OpenClawConfig {
+  return createModelDefaultsConfig({
+    primary: "google-gemini-cli/gemini-3-pro-preview",
+    ...(models ? { models } : {}),
+  });
+}
+
+function createLegacyRuntimeStore(model: string): Record<string, SessionEntry> {
+  return {
+    "agent:main:main": {
+      sessionId: "sess-main",
+      updatedAt: Date.now(),
+      model,
+    } as SessionEntry,
+  };
 }
 
 describe("gateway session utils", () => {
@@ -226,6 +268,66 @@ describe("gateway session utils", () => {
     expect(target.storeKeys).toEqual(expect.arrayContaining(["agent:ops:MAIN"]));
   });
 
+  test("resolveGatewaySessionStoreTarget preserves discovered store paths for non-round-tripping agent dirs", async () => {
+    await withStateDirEnv("session-utils-discovered-store-", async ({ stateDir }) => {
+      const retiredSessionsDir = path.join(stateDir, "agents", "Retired Agent", "sessions");
+      fs.mkdirSync(retiredSessionsDir, { recursive: true });
+      const retiredStorePath = path.join(retiredSessionsDir, "sessions.json");
+      fs.writeFileSync(
+        retiredStorePath,
+        JSON.stringify({
+          "agent:retired-agent:main": { sessionId: "sess-retired", updatedAt: 1 },
+        }),
+        "utf8",
+      );
+
+      const cfg = {
+        session: {
+          mainKey: "main",
+          store: path.join(stateDir, "agents", "{agentId}", "sessions", "sessions.json"),
+        },
+        agents: { list: [{ id: "main", default: true }] },
+      } as OpenClawConfig;
+
+      const target = resolveGatewaySessionStoreTarget({ cfg, key: "agent:retired-agent:main" });
+
+      expect(target.storePath).toBe(resolveSyncRealpath(retiredStorePath));
+    });
+  });
+
+  test("loadSessionEntry reads discovered stores from non-round-tripping agent dirs", async () => {
+    clearConfigCache();
+    try {
+      await withStateDirEnv("session-utils-load-entry-", async ({ stateDir }) => {
+        const retiredSessionsDir = path.join(stateDir, "agents", "Retired Agent", "sessions");
+        fs.mkdirSync(retiredSessionsDir, { recursive: true });
+        const retiredStorePath = path.join(retiredSessionsDir, "sessions.json");
+        fs.writeFileSync(
+          retiredStorePath,
+          JSON.stringify({
+            "agent:retired-agent:main": { sessionId: "sess-retired", updatedAt: 7 },
+          }),
+          "utf8",
+        );
+        await writeConfigFile({
+          session: {
+            mainKey: "main",
+            store: path.join(stateDir, "agents", "{agentId}", "sessions", "sessions.json"),
+          },
+          agents: { list: [{ id: "main", default: true }] },
+        });
+        clearConfigCache();
+
+        const loaded = loadSessionEntry("agent:retired-agent:main");
+
+        expect(loaded.storePath).toBe(resolveSyncRealpath(retiredStorePath));
+        expect(loaded.entry?.sessionId).toBe("sess-retired");
+      });
+    } finally {
+      clearConfigCache();
+    }
+  });
+
   test("pruneLegacyStoreKeys removes alias and case-variant ghost keys", () => {
     const store: Record<string, unknown> = {
       "agent:ops:work": { sessionId: "canonical", updatedAt: 3 },
@@ -276,17 +378,28 @@ describe("gateway session utils", () => {
       `data:image/png;base64,${Buffer.from("avatar").toString("base64")}`,
     );
   });
+
+  test("listAgentsForGateway keeps explicit agents.list scope over disk-only agents (scope boundary)", async () => {
+    await withStateDirEnv("openclaw-agent-list-scope-", async ({ stateDir }) => {
+      fs.mkdirSync(path.join(stateDir, "agents", "main"), { recursive: true });
+      fs.mkdirSync(path.join(stateDir, "agents", "codex"), { recursive: true });
+
+      const cfg = {
+        session: { mainKey: "main" },
+        agents: { list: [{ id: "main", default: true }] },
+      } as OpenClawConfig;
+
+      const { agents } = listAgentsForGateway(cfg);
+      expect(agents.map((agent) => agent.id)).toEqual(["main"]);
+    });
+  });
 });
 
 describe("resolveSessionModelRef", () => {
   test("prefers runtime model/provider from session entry", () => {
-    const cfg = {
-      agents: {
-        defaults: {
-          model: { primary: "anthropic/claude-opus-4-6" },
-        },
-      },
-    } as OpenClawConfig;
+    const cfg = createModelDefaultsConfig({
+      primary: "anthropic/claude-opus-4-6",
+    });
 
     const resolved = resolveSessionModelRef(cfg, {
       sessionId: "s1",
@@ -301,13 +414,9 @@ describe("resolveSessionModelRef", () => {
   });
 
   test("preserves openrouter provider when model contains vendor prefix", () => {
-    const cfg = {
-      agents: {
-        defaults: {
-          model: { primary: "openrouter/minimax/minimax-m2.5" },
-        },
-      },
-    } as OpenClawConfig;
+    const cfg = createModelDefaultsConfig({
+      primary: "openrouter/minimax/minimax-m2.5",
+    });
 
     const resolved = resolveSessionModelRef(cfg, {
       sessionId: "s-or",
@@ -323,13 +432,9 @@ describe("resolveSessionModelRef", () => {
   });
 
   test("falls back to override when runtime model is not recorded yet", () => {
-    const cfg = {
-      agents: {
-        defaults: {
-          model: { primary: "anthropic/claude-opus-4-6" },
-        },
-      },
-    } as OpenClawConfig;
+    const cfg = createModelDefaultsConfig({
+      primary: "anthropic/claude-opus-4-6",
+    });
 
     const resolved = resolveSessionModelRef(cfg, {
       sessionId: "s2",
@@ -338,6 +443,127 @@ describe("resolveSessionModelRef", () => {
     });
 
     expect(resolved).toEqual({ provider: "openai-codex", model: "gpt-5.3-codex" });
+  });
+
+  test("falls back to resolved provider for unprefixed legacy runtime model", () => {
+    const cfg = createModelDefaultsConfig({
+      primary: "google-gemini-cli/gemini-3-pro-preview",
+    });
+
+    const resolved = resolveSessionModelRef(cfg, {
+      sessionId: "legacy-session",
+      updatedAt: Date.now(),
+      model: "claude-sonnet-4-6",
+      modelProvider: undefined,
+    });
+
+    expect(resolved).toEqual({
+      provider: "google-gemini-cli",
+      model: "claude-sonnet-4-6",
+    });
+  });
+
+  test("preserves provider from slash-prefixed model when modelProvider is missing", () => {
+    // When model string contains a provider prefix (e.g. "anthropic/claude-sonnet-4-6")
+    // parseModelRef should extract it correctly even without modelProvider set.
+    const cfg = createModelDefaultsConfig({
+      primary: "google-gemini-cli/gemini-3-pro-preview",
+    });
+
+    const resolved = resolveSessionModelRef(cfg, {
+      sessionId: "slash-model",
+      updatedAt: Date.now(),
+      model: "anthropic/claude-sonnet-4-6",
+      modelProvider: undefined,
+    });
+
+    expect(resolved).toEqual({ provider: "anthropic", model: "claude-sonnet-4-6" });
+  });
+});
+
+describe("resolveSessionModelIdentityRef", () => {
+  const resolveLegacyIdentityRef = (
+    cfg: OpenClawConfig,
+    modelProvider: string | undefined = undefined,
+  ) =>
+    resolveSessionModelIdentityRef(cfg, {
+      sessionId: "legacy-session",
+      updatedAt: Date.now(),
+      model: "claude-sonnet-4-6",
+      modelProvider,
+    });
+
+  test("does not inherit default provider for unprefixed legacy runtime model", () => {
+    const cfg = createModelDefaultsConfig({
+      primary: "google-gemini-cli/gemini-3-pro-preview",
+    });
+
+    const resolved = resolveLegacyIdentityRef(cfg);
+
+    expect(resolved).toEqual({ model: "claude-sonnet-4-6" });
+  });
+
+  test("infers provider from configured model allowlist when unambiguous", () => {
+    const cfg = createModelDefaultsConfig({
+      primary: "google-gemini-cli/gemini-3-pro-preview",
+      models: {
+        "anthropic/claude-sonnet-4-6": {},
+      },
+    });
+
+    const resolved = resolveLegacyIdentityRef(cfg);
+
+    expect(resolved).toEqual({ provider: "anthropic", model: "claude-sonnet-4-6" });
+  });
+
+  test("keeps provider unknown when configured models are ambiguous", () => {
+    const cfg = createModelDefaultsConfig({
+      primary: "google-gemini-cli/gemini-3-pro-preview",
+      models: {
+        "anthropic/claude-sonnet-4-6": {},
+        "minimax/claude-sonnet-4-6": {},
+      },
+    });
+
+    const resolved = resolveLegacyIdentityRef(cfg);
+
+    expect(resolved).toEqual({ model: "claude-sonnet-4-6" });
+  });
+
+  test("preserves provider from slash-prefixed runtime model", () => {
+    const cfg = createModelDefaultsConfig({
+      primary: "google-gemini-cli/gemini-3-pro-preview",
+    });
+
+    const resolved = resolveSessionModelIdentityRef(cfg, {
+      sessionId: "slash-model",
+      updatedAt: Date.now(),
+      model: "anthropic/claude-sonnet-4-6",
+      modelProvider: undefined,
+    });
+
+    expect(resolved).toEqual({ provider: "anthropic", model: "claude-sonnet-4-6" });
+  });
+
+  test("infers wrapper provider for slash-prefixed runtime model when allowlist match is unique", () => {
+    const cfg = createModelDefaultsConfig({
+      primary: "google-gemini-cli/gemini-3-pro-preview",
+      models: {
+        "vercel-ai-gateway/anthropic/claude-sonnet-4-6": {},
+      },
+    });
+
+    const resolved = resolveSessionModelIdentityRef(cfg, {
+      sessionId: "slash-model",
+      updatedAt: Date.now(),
+      model: "anthropic/claude-sonnet-4-6",
+      modelProvider: undefined,
+    });
+
+    expect(resolved).toEqual({
+      provider: "vercel-ai-gateway",
+      model: "anthropic/claude-sonnet-4-6",
+    });
   });
 });
 
@@ -529,6 +755,39 @@ describe("listSessionsFromStore search", () => {
     expect(result.sessions.map((session) => session.key)).toEqual(["agent:main:cron:job-1"]);
   });
 
+  test.each([
+    {
+      name: "does not guess provider for legacy runtime model without modelProvider",
+      cfg: createLegacyRuntimeListConfig(),
+      runtimeModel: "claude-sonnet-4-6",
+      expectedProvider: undefined,
+    },
+    {
+      name: "infers provider for legacy runtime model when allowlist match is unique",
+      cfg: createLegacyRuntimeListConfig({ "anthropic/claude-sonnet-4-6": {} }),
+      runtimeModel: "claude-sonnet-4-6",
+      expectedProvider: "anthropic",
+    },
+    {
+      name: "infers wrapper provider for slash-prefixed legacy runtime model when allowlist match is unique",
+      cfg: createLegacyRuntimeListConfig({
+        "vercel-ai-gateway/anthropic/claude-sonnet-4-6": {},
+      }),
+      runtimeModel: "anthropic/claude-sonnet-4-6",
+      expectedProvider: "vercel-ai-gateway",
+    },
+  ])("$name", ({ cfg, runtimeModel, expectedProvider }) => {
+    const result = listSessionsFromStore({
+      cfg,
+      storePath: "/tmp/sessions.json",
+      store: createLegacyRuntimeStore(runtimeModel),
+      opts: {},
+    });
+
+    expect(result.sessions[0]?.modelProvider).toBe(expectedProvider);
+    expect(result.sessions[0]?.model).toBe(runtimeModel);
+  });
+
   test("exposes unknown totals when freshness is stale or missing", () => {
     const now = Date.now();
     const store: Record<string, SessionEntry> = {
@@ -568,5 +827,48 @@ describe("listSessionsFromStore search", () => {
     expect(stale?.totalTokensFresh).toBe(false);
     expect(missing?.totalTokens).toBeUndefined();
     expect(missing?.totalTokensFresh).toBe(false);
+  });
+});
+
+describe("loadCombinedSessionStoreForGateway includes disk-only agents (#32804)", () => {
+  test("ACP agent sessions are visible even when agents.list is configured", async () => {
+    await withStateDirEnv("openclaw-acp-vis-", async ({ stateDir }) => {
+      const customRoot = path.join(stateDir, "custom-state");
+      const agentsDir = path.join(customRoot, "agents");
+      const mainDir = path.join(agentsDir, "main", "sessions");
+      const codexDir = path.join(agentsDir, "codex", "sessions");
+      fs.mkdirSync(mainDir, { recursive: true });
+      fs.mkdirSync(codexDir, { recursive: true });
+
+      fs.writeFileSync(
+        path.join(mainDir, "sessions.json"),
+        JSON.stringify({
+          "agent:main:main": { sessionId: "s-main", updatedAt: 100 },
+        }),
+        "utf8",
+      );
+
+      fs.writeFileSync(
+        path.join(codexDir, "sessions.json"),
+        JSON.stringify({
+          "agent:codex:acp-task": { sessionId: "s-codex", updatedAt: 200 },
+        }),
+        "utf8",
+      );
+
+      const cfg = {
+        session: {
+          mainKey: "main",
+          store: path.join(customRoot, "agents", "{agentId}", "sessions", "sessions.json"),
+        },
+        agents: {
+          list: [{ id: "main", default: true }],
+        },
+      } as OpenClawConfig;
+
+      const { store } = loadCombinedSessionStoreForGateway(cfg);
+      expect(store["agent:main:main"]).toBeDefined();
+      expect(store["agent:codex:acp-task"]).toBeDefined();
+    });
   });
 });
