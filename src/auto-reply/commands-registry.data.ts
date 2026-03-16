@@ -232,8 +232,11 @@ function buildChatCommands(): ChatCommandDefinition[] {
           description: "TTS action",
           type: "string",
           choices: [
-            { value: "on", label: "On" },
             { value: "off", label: "Off" },
+            { value: "on", label: "On" },
+            { value: "inbound", label: "Inbound" },
+            { value: "tagged", label: "Tagged" },
+            { value: "always", label: "Always" },
             { value: "status", label: "Status" },
             { value: "provider", label: "Provider" },
             { value: "limit", label: "Limit" },
@@ -253,8 +256,11 @@ function buildChatCommands(): ChatCommandDefinition[] {
         arg: "action",
         title:
           "TTS Actions:\n" +
-          "• On – Enable TTS for responses\n" +
           "• Off – Disable TTS\n" +
+          "• On – Enable TTS for responses (equals always)\n" +
+          "• Inbound – TTS for inbound messages only\n" +
+          "• Tagged – TTS for tagged messages only\n" +
+          "• Always – Always enable TTS\n" +
           "• Status – Show current settings\n" +
           "• Provider – Set voice provider (edge, elevenlabs, openai)\n" +
           "• Limit – Set max characters for TTS\n" +
