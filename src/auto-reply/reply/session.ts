@@ -7,6 +7,7 @@ import {
 } from "../../acp/conversation-id.js";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { clearBootstrapSnapshotOnSessionRollover } from "../../agents/bootstrap-cache.js";
+import { closeTrackedBrowserTabsForSessions } from "../../browser/session-tab-registry.js";
 import { normalizeChatType } from "../../channels/chat-type.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import {
@@ -551,6 +552,15 @@ export async function initSessionState(params: {
       agentId,
       reason: "reset",
     });
+
+    // Close browser tabs tracked against the previous session so they don't leak.
+    // The shared gateway reset path (session-reset-service.ts) handles tab cleanup
+    // for gateway API resets, but all other session rollovers (idle expiry, daily
+    // reset, chat /new and /reset) flow through initSessionState directly.
+    closeTrackedBrowserTabsForSessions({
+      sessionKeys: [previousSessionEntry.sessionId, sessionKey],
+      onWarn: (msg) => log.warn(msg),
+    }).catch((err) => log.warn(`browser tab cleanup failed: ${String(err)}`));
   }
 
   const sessionCtx: TemplateContext = {
