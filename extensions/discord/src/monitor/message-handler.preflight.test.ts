@@ -688,6 +688,7 @@ describe("preflightDiscordMessage", () => {
     expect(result).not.toBeNull();
     expect(result?.wasMentioned).toBe(true);
   });
+
   // Tests for Issue #44183: Discord thread mentions not working
   describe("thread mention fallback (#44183)", () => {
     const guildId = "guild-thread-fallback";
@@ -696,7 +697,7 @@ describe("preflightDiscordMessage", () => {
       const botUserId = "bot-123";
       const channelId = "channel-tf-1";
       const client = createGuildTextClient(channelId);
-      const message = createMessage({
+      const message = createDiscordMessage({
         id: "msg-tf-1",
         content: `Hello <@${botUserId}> please help`,
         channelId,
@@ -708,7 +709,7 @@ describe("preflightDiscordMessage", () => {
 
       const result = await preflightDiscordMessage({
         ...createPreflightArgs({
-          cfg: DEFAULT_CFG,
+          cfg: DEFAULT_PREFLIGHT_CFG,
           discordConfig: {} as DiscordConfig,
           data: createGuildEvent({ channelId, guildId, author: message.author, message }),
           client,
@@ -725,7 +726,7 @@ describe("preflightDiscordMessage", () => {
       const botUserId = "bot-456";
       const channelId = "channel-tf-2";
       const client = createGuildTextClient(channelId);
-      const message = createMessage({
+      const message = createDiscordMessage({
         id: "msg-tf-2",
         // Use nickname mention format <@!id>
         content: `<@!${botUserId}> can you review this?`,
@@ -736,7 +737,7 @@ describe("preflightDiscordMessage", () => {
 
       const result = await preflightDiscordMessage({
         ...createPreflightArgs({
-          cfg: DEFAULT_CFG,
+          cfg: DEFAULT_PREFLIGHT_CFG,
           discordConfig: {} as DiscordConfig,
           data: createGuildEvent({ channelId, guildId, author: message.author, message }),
           client,
@@ -754,7 +755,7 @@ describe("preflightDiscordMessage", () => {
       const otherBotId = "bot-999";
       const channelId = "channel-tf-3";
       const client = createGuildTextClient(channelId);
-      const message = createMessage({
+      const message = createDiscordMessage({
         id: "msg-tf-3",
         content: `Hello <@${otherBotId}> not you`,
         channelId,
@@ -764,7 +765,7 @@ describe("preflightDiscordMessage", () => {
 
       const result = await preflightDiscordMessage({
         ...createPreflightArgs({
-          cfg: DEFAULT_CFG,
+          cfg: DEFAULT_PREFLIGHT_CFG,
           discordConfig: {} as DiscordConfig,
           data: createGuildEvent({ channelId, guildId, author: message.author, message }),
           client,
@@ -781,7 +782,7 @@ describe("preflightDiscordMessage", () => {
       const botUserId = "bot-123";
       const channelId = "channel-tf-4";
       const client = createGuildTextClient(channelId);
-      const message = createMessage({
+      const message = createDiscordMessage({
         id: "msg-tf-4",
         content: `Hello <@${botUserId}>`,
         channelId,
@@ -792,7 +793,7 @@ describe("preflightDiscordMessage", () => {
 
       const result = await preflightDiscordMessage({
         ...createPreflightArgs({
-          cfg: DEFAULT_CFG,
+          cfg: DEFAULT_PREFLIGHT_CFG,
           discordConfig: {} as DiscordConfig,
           data: createGuildEvent({ channelId, guildId, author: message.author, message }),
           client,
@@ -809,7 +810,7 @@ describe("preflightDiscordMessage", () => {
       const botUserId = "bot-123";
       const channelId = "channel-tf-5";
       const client = createGuildTextClient(channelId);
-      const message = createMessage({
+      const message = createDiscordMessage({
         id: "msg-tf-5",
         content: "",
         channelId,
@@ -819,7 +820,7 @@ describe("preflightDiscordMessage", () => {
 
       const result = await preflightDiscordMessage({
         ...createPreflightArgs({
-          cfg: DEFAULT_CFG,
+          cfg: DEFAULT_PREFLIGHT_CFG,
           discordConfig: {} as DiscordConfig,
           data: createGuildEvent({ channelId, guildId, author: message.author, message }),
           client,
