@@ -1727,7 +1727,12 @@ private extension NodeAppModel {
 
         guard let autoHideSeconds else { return }
         self.cameraHUDDismissTask = Task { @MainActor in
-            try? await Task.sleep(nanoseconds: UInt64(autoHideSeconds * 1_000_000_000))
+            do {
+                try await Task.sleep(nanoseconds: UInt64(autoHideSeconds * 1_000_000_000))
+            } catch {
+                return
+            }
+            guard !Task.isCancelled else { return }
             withAnimation(.easeOut(duration: 0.25)) {
                 self.cameraHUDText = nil
                 self.cameraHUDKind = nil
