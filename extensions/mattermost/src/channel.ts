@@ -30,6 +30,7 @@ import {
 } from "./mattermost/accounts.js";
 import {
   createMattermostClient,
+  normalizeMattermostBaseUrl,
   patchMattermostPost,
   deleteMattermostPost,
 } from "./mattermost/client.js";
