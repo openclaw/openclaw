@@ -53,7 +53,4 @@ pnpm check          # types + lint + format
 pnpm test           # vitest tests
 pnpm check:docs     # docs format + lint + broken links
 pnpm release:check  # validate npm pack
-pnpm land:gate      # maintainer land gate: frozen-lock install + check + build + test + release:check
 ```
-
-`pnpm land:gate` intentionally includes the same frozen-lockfile install step CI uses before running `check`, `build`, `test`, and `release:check`. Use it when you want local merge-gate parity instead of piecemeal commands.
