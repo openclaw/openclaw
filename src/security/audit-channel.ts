@@ -1,8 +1,4 @@
 import {
-  isNumericTelegramUserId,
-  normalizeTelegramAllowFromEntry,
-} from "../../extensions/telegram/src/allow-from.js";
-import {
   hasConfiguredUnavailableCredentialStatus,
   hasResolvedCredentialValue,
 } from "../channels/account-snapshot-fields.js";
@@ -15,14 +11,18 @@ import { resolveNativeCommandsEnabled, resolveNativeSkillsEnabled } from "../con
 import type { OpenClawConfig } from "../config/config.js";
 import { isDangerousNameMatchingEnabled } from "../config/dangerous-name-matching.js";
 import { formatErrorMessage } from "../infra/errors.js";
-import { readChannelAllowFromStore } from "../pairing/pairing-store.js";
 import { normalizeStringEntries } from "../shared/string-normalization.js";
 import type { SecurityAuditFinding, SecurityAuditSeverity } from "./audit.js";
 import { resolveDmAllowState } from "./dm-policy-shared.js";
-import {
-  isDiscordMutableAllowEntry,
-  isZalouserMutableGroupEntry,
-} from "./mutable-allowlist-detectors.js";
+
+let auditChannelRuntimeModulePromise:
+  | Promise<typeof import("./audit-channel.runtime.js")>
+  | undefined;
+
+function loadAuditChannelRuntimeModule() {
+  auditChannelRuntimeModulePromise ??= import("./audit-channel.runtime.js");
+  return auditChannelRuntimeModulePromise;
+}
 
 function normalizeAllowFromList(list: Array<string | number> | undefined | null): string[] {
   return normalizeStringEntries(Array.isArray(list) ? list : undefined);
@@ -32,12 +32,13 @@ function addDiscordNameBasedEntries(params: {
   target: Set<string>;
   values: unknown;
   source: string;
+  isDiscordMutableAllowEntry: (value: string) => boolean;
 }): void {
   if (!Array.isArray(params.values)) {
     return;
   }
   for (const value of params.values) {
-    if (!isDiscordMutableAllowEntry(String(value))) {
+    if (!params.isDiscordMutableAllowEntry(String(value))) {
       continue;
     }
     const text = String(value).trim();
@@ -52,25 +53,28 @@ function addZalouserMutableGroupEntries(params: {
   target: Set<string>;
   groups: unknown;
   source: string;
+  isZalouserMutableGroupEntry: (value: string) => boolean;
 }): void {
   if (!params.groups || typeof params.groups !== "object" || Array.isArray(params.groups)) {
     return;
   }
   for (const key of Object.keys(params.groups as Record<string, unknown>)) {
-    if (!isZalouserMutableGroupEntry(key)) {
+    if (!params.isZalouserMutableGroupEntry(key)) {
       continue;
     }
     params.target.add(`${params.source}:${key}`);
   }
 }
 
-function collectInvalidTelegramAllowFromEntries(params: {
+async function collectInvalidTelegramAllowFromEntries(params: {
   entries: unknown;
   target: Set<string>;
-}): void {
+}): Promise<void> {
   if (!Array.isArray(params.entries)) {
     return;
   }
+  const { isNumericTelegramUserId, normalizeTelegramAllowFromEntry } =
+    await loadAuditChannelRuntimeModule();
   for (const entry of params.entries) {
     const normalized = normalizeTelegramAllowFromEntry(entry);
     if (!normalized || normalized === "*") {
@@ -383,6 +387,8 @@ export async function collectChannelSecurityFindings(params: {
       }
 
       if (plugin.id === "discord") {
+        const { isDiscordMutableAllowEntry, readChannelAllowFromStore } =
+          await loadAuditChannelRuntimeModule();
         const discordCfg =
           (account as { config?: Record<string, unknown> } | null)?.config ??
           ({} as Record<string, unknown>);
@@ -401,16 +407,19 @@ export async function collectChannelSecurityFindings(params: {
           target: discordNameBasedAllowEntries,
           values: discordCfg.allowFrom,
           source: `${discordPathPrefix}.allowFrom`,
+          isDiscordMutableAllowEntry,
         });
         addDiscordNameBasedEntries({
           target: discordNameBasedAllowEntries,
           values: (discordCfg.dm as { allowFrom?: unknown } | undefined)?.allowFrom,
           source: `${discordPathPrefix}.dm.allowFrom`,
+          isDiscordMutableAllowEntry,
         });
         addDiscordNameBasedEntries({
           target: discordNameBasedAllowEntries,
           values: storeAllowFrom,
           source: "~/.openclaw/credentials/discord-allowFrom.json",
+          isDiscordMutableAllowEntry,
         });
         const discordGuildEntries =
           (discordCfg.guilds as Record<string, unknown> | undefined) ?? {};
@@ -423,6 +432,7 @@ export async function collectChannelSecurityFindings(params: {
             target: discordNameBasedAllowEntries,
             values: guild.users,
             source: `${discordPathPrefix}.guilds.${guildKey}.users`,
+            isDiscordMutableAllowEntry,
           });
           const channels = guild.channels;
           if (!channels || typeof channels !== "object") {
@@ -439,6 +449,7 @@ export async function collectChannelSecurityFindings(params: {
               target: discordNameBasedAllowEntries,
               values: channel.users,
               source: `${discordPathPrefix}.guilds.${guildKey}.channels.${channelKey}.users`,
+              isDiscordMutableAllowEntry,
             });
           }
         }
@@ -547,6 +558,7 @@ export async function collectChannelSecurityFindings(params: {
       }
 
       if (plugin.id === "zalouser") {
+        const { isZalouserMutableGroupEntry } = await loadAuditChannelRuntimeModule();
         const zalouserCfg =
           (account as { config?: Record<string, unknown> } | null)?.config ??
           ({} as Record<string, unknown>);
@@ -560,6 +572,7 @@ export async function collectChannelSecurityFindings(params: {
           target: mutableGroupEntries,
           groups: zalouserCfg.groups,
           source: `${zalouserPathPrefix}.groups`,
+          isZalouserMutableGroupEntry,
         });
         if (mutableGroupEntries.size > 0) {
           const examples = Array.from(mutableGroupEntries).slice(0, 5);
@@ -586,6 +599,7 @@ export async function collectChannelSecurityFindings(params: {
       }
 
       if (plugin.id === "slack") {
+        const { readChannelAllowFromStore } = await loadAuditChannelRuntimeModule();
         const slackCfg =
           (account as { config?: Record<string, unknown>; dm?: Record<string, unknown> } | null)
             ?.config ?? ({} as Record<string, unknown>);
@@ -724,6 +738,7 @@ export async function collectChannelSecurityFindings(params: {
         continue;
       }
 
+      const { readChannelAllowFromStore } = await loadAuditChannelRuntimeModule();
       const storeAllowFrom = await readChannelAllowFromStore(
         "telegram",
         process.env,
@@ -731,7 +746,7 @@ export async function collectChannelSecurityFindings(params: {
       ).catch(() => []);
       const storeHasWildcard = storeAllowFrom.some((v) => String(v).trim() === "*");
       const invalidTelegramAllowFromEntries = new Set<string>();
-      collectInvalidTelegramAllowFromEntries({
+      await collectInvalidTelegramAllowFromEntries({
         entries: storeAllowFrom,
         target: invalidTelegramAllowFromEntries,
       });
@@ -739,48 +754,50 @@ export async function collectChannelSecurityFindings(params: {
         ? telegramCfg.groupAllowFrom
         : [];
       const groupAllowFromHasWildcard = groupAllowFrom.some((v) => String(v).trim() === "*");
-      collectInvalidTelegramAllowFromEntries({
+      await collectInvalidTelegramAllowFromEntries({
         entries: groupAllowFrom,
         target: invalidTelegramAllowFromEntries,
       });
       const dmAllowFrom = Array.isArray(telegramCfg.allowFrom) ? telegramCfg.allowFrom : [];
-      collectInvalidTelegramAllowFromEntries({
+      await collectInvalidTelegramAllowFromEntries({
         entries: dmAllowFrom,
         target: invalidTelegramAllowFromEntries,
       });
-      const anyGroupOverride = Boolean(
-        groups &&
-        Object.values(groups).some((value) => {
+      let anyGroupOverride = false;
+      if (groups) {
+        for (const value of Object.values(groups)) {
           if (!value || typeof value !== "object") {
-            return false;
+            continue;
           }
           const group = value as Record<string, unknown>;
           const allowFrom = Array.isArray(group.allowFrom) ? group.allowFrom : [];
           if (allowFrom.length > 0) {
-            collectInvalidTelegramAllowFromEntries({
+            anyGroupOverride = true;
+            await collectInvalidTelegramAllowFromEntries({
               entries: allowFrom,
               target: invalidTelegramAllowFromEntries,
             });
-            return true;
           }
           const topics = group.topics;
           if (!topics || typeof topics !== "object") {
-            return false;
+            continue;
           }
-          return Object.values(topics as Record<string, unknown>).some((topicValue) => {
+          for (const topicValue of Object.values(topics as Record<string, unknown>)) {
             if (!topicValue || typeof topicValue !== "object") {
-              return false;
+              continue;
             }
             const topic = topicValue as Record<string, unknown>;
             const topicAllow = Array.isArray(topic.allowFrom) ? topic.allowFrom : [];
-            collectInvalidTelegramAllowFromEntries({
+            if (topicAllow.length > 0) {
+              anyGroupOverride = true;
+            }
+            await collectInvalidTelegramAllowFromEntries({
               entries: topicAllow,
               target: invalidTelegramAllowFromEntries,
             });
-            return topicAllow.length > 0;
-          });
-        }),
-      );
+          }
+        }
+      }
 
       const hasAnySenderAllowlist =
         storeAllowFrom.length > 0 || groupAllowFrom.length > 0 || anyGroupOverride;
