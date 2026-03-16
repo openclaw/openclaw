@@ -54,7 +54,7 @@ export type PluginLoadOptions = {
   activate?: boolean;
 };
 
-const MAX_PLUGIN_REGISTRY_CACHE_ENTRIES = 32;
+const MAX_PLUGIN_REGISTRY_CACHE_ENTRIES = 128;
 const registryCache = new Map<string, PluginRegistry>();
 const openAllowlistWarningCache = new Set<string>();
 
