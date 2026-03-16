@@ -1,0 +1,88 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://openclaw.ai/schemas/public-agent-card.schema.json",
+  "title": "OpenClaw M15 Public Agent Card",
+  "description": "Minimal public discovery card for the M15 public A2A edge.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "kind",
+    "schemaVersion",
+    "name",
+    "description",
+    "supportedInterfaces",
+    "endpoints",
+    "securitySchemes"
+  ],
+  "properties": {
+    "kind": {
+      "const": "public-agent-card"
+    },
+    "schemaVersion": {
+      "const": 1
+    },
+    "name": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 120
+    },
+    "description": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 280
+    },
+    "supportedInterfaces": {
+      "type": "array",
+      "minItems": 2,
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "enum": ["message/send", "message/stream", "tasks/get", "tasks/resubscribe"]
+      }
+    },
+    "endpoints": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["agentCard", "messageSend", "messageStream", "tasksGet", "tasksResubscribe"],
+      "properties": {
+        "agentCard": {
+          "const": "/.well-known/agent-card.json"
+        },
+        "messageSend": {
+          "const": "/message/send"
+        },
+        "messageStream": {
+          "const": "/message/stream"
+        },
+        "tasksGet": {
+          "const": "/tasks/get"
+        },
+        "tasksResubscribe": {
+          "const": "/tasks/resubscribe"
+        }
+      }
+    },
+    "securitySchemes": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["agentCard", "messageSend", "messageStream", "tasksGet", "tasksResubscribe"],
+      "properties": {
+        "agentCard": {
+          "const": "none"
+        },
+        "messageSend": {
+          "const": "bearer"
+        },
+        "messageStream": {
+          "const": "bearer"
+        },
+        "tasksGet": {
+          "const": "bearer"
+        },
+        "tasksResubscribe": {
+          "const": "bearer"
+        }
+      }
+    }
+  }
+}

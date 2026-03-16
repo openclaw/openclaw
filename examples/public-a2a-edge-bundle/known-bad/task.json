@@ -1,0 +1,7 @@
+{
+  "kind": "public-a2a-task",
+  "schemaVersion": 1,
+  "taskId": "run_unsafe_internal_id",
+  "contextId": "agent:main:a2a-public:user:alice",
+  "status": "done"
+}

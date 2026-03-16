@@ -57,6 +57,7 @@ import { getBearerToken } from "./http-utils.js";
 import { resolveRequestClientIp } from "./net.js";
 import { handleOpenAiHttpRequest } from "./openai-http.js";
 import { handleOpenResponsesHttpRequest } from "./openresponses-http.js";
+import { handlePublicA2AEdgeHttpRequest } from "./public-a2a-edge-http.js";
 import { DEDUPE_MAX, DEDUPE_TTL_MS } from "./server-constants.js";
 import {
   authorizeCanvasRequest,
@@ -831,6 +832,16 @@ export function createGatewayHttpServer(opts: {
             }),
         });
       }
+      requestStages.push({
+        name: "public-a2a-edge",
+        run: () =>
+          handlePublicA2AEdgeHttpRequest(req, res, {
+            auth: resolvedAuth,
+            trustedProxies,
+            allowRealIpFallback,
+            rateLimiter,
+          }),
+      });
       if (canvasHost) {
         requestStages.push({
           name: "canvas-auth",

@@ -1,0 +1,21 @@
+{
+  "kind": "public-agent-card",
+  "schemaVersion": 1,
+  "name": "OpenClaw Public A2A Edge",
+  "description": "This known-bad artifact intentionally violates auth posture.",
+  "supportedInterfaces": ["message/send", "message/stream", "tasks/get", "tasks/resubscribe"],
+  "endpoints": {
+    "agentCard": "/.well-known/agent-card.json",
+    "messageSend": "/message/send",
+    "messageStream": "/message/stream",
+    "tasksGet": "/tasks/get",
+    "tasksResubscribe": "/tasks/resubscribe"
+  },
+  "securitySchemes": {
+    "agentCard": "none",
+    "messageSend": "none",
+    "messageStream": "bearer",
+    "tasksGet": "bearer",
+    "tasksResubscribe": "bearer"
+  }
+}

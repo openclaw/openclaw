@@ -1,0 +1,10 @@
+{
+  "kind": "public-a2a-task",
+  "schemaVersion": 1,
+  "taskId": "task_4a148ea70e98d0012a5f4a5d",
+  "contextId": "ctx_7d1c4c59e2b02a88bd7419a4",
+  "status": "completed",
+  "output": {
+    "text": "hello from public edge"
+  }
+}

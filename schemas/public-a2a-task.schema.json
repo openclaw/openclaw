@@ -1,0 +1,40 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://openclaw.ai/schemas/public-a2a-task.schema.json",
+  "title": "OpenClaw M15 Public A2A Task",
+  "description": "Minimal public task projection for M15 message/send and message/stream surfaces.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["kind", "schemaVersion", "taskId", "contextId", "status"],
+  "properties": {
+    "kind": {
+      "const": "public-a2a-task"
+    },
+    "schemaVersion": {
+      "const": 1
+    },
+    "taskId": {
+      "type": "string",
+      "pattern": "^task_[0-9a-f]{24}$"
+    },
+    "contextId": {
+      "type": "string",
+      "pattern": "^ctx_[0-9a-f]{24}$"
+    },
+    "status": {
+      "type": "string",
+      "enum": ["in_progress", "completed", "failed"]
+    },
+    "output": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["text"],
+      "properties": {
+        "text": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    }
+  }
+}
