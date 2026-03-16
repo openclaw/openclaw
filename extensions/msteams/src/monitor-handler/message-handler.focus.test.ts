@@ -1,11 +1,14 @@
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import type { OpenClawConfig, PluginRuntime, RuntimeEnv } from "openclaw/plugin-sdk/msteams";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { resolveMSTeamsChannelFocusStorePath } from "../channel-focus-store.js";
 import type { MSTeamsMessageHandlerDeps } from "../monitor-handler.js";
 import { setMSTeamsRuntime } from "../runtime.js";
 import { createMSTeamsMessageHandler } from "./message-handler.js";
 
 const focusMockState = vi.hoisted(() => ({
-  loadSessionStore: vi.fn(() => ({})),
   dispatchReply: vi.fn(async () => ({ queuedFinal: false, counts: { final: 0 } })),
 }));
 
@@ -15,7 +18,6 @@ vi.mock("openclaw/plugin-sdk/msteams", async () => {
   );
   return {
     ...actual,
-    loadSessionStore: focusMockState.loadSessionStore,
     dispatchReplyFromConfigWithSettledDispatcher: focusMockState.dispatchReply,
   };
 });
@@ -26,6 +28,8 @@ describe("msteams message handler channel focus", () => {
   const conversationStore = {
     upsert: vi.fn(async () => undefined),
   };
+  let tempDir: string;
+  let sessionStorePath: string;
 
   function createDeps(cfg: OpenClawConfig = {} as OpenClawConfig): MSTeamsMessageHandlerDeps {
     return {
@@ -57,9 +61,9 @@ describe("msteams message handler channel focus", () => {
     recordInboundSession.mockClear();
     updateLastRoute.mockClear();
     conversationStore.upsert.mockClear();
-    focusMockState.loadSessionStore.mockReset();
-    focusMockState.loadSessionStore.mockReturnValue({});
     focusMockState.dispatchReply.mockClear();
+    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "msteams-focus-"));
+    sessionStorePath = path.join(tempDir, "sessions.json");
     setMSTeamsRuntime({
       logging: {
         shouldLogVerbose: () => false,
@@ -107,7 +111,7 @@ describe("msteams message handler channel focus", () => {
           resolveHumanDelayConfig: () => undefined,
         },
         session: {
-          resolveStorePath: () => "/tmp/sessions.json",
+          resolveStorePath: () => sessionStorePath,
           readSessionUpdatedAt: () => undefined,
           recordInboundSession,
           updateLastRoute,
@@ -163,42 +167,50 @@ describe("msteams message handler channel focus", () => {
     } as unknown as Parameters<typeof handler>[0]);
 
     expect(recordInboundSession).toHaveBeenCalled();
-    expect(updateLastRoute).toHaveBeenCalledWith(
-      expect.objectContaining({
-        storePath: expect.any(String),
-        sessionKey: "agent:main:main",
-        ctx: expect.objectContaining({
-          ChatType: "channel",
-          GroupChannel: "#General",
-          GroupSpace: "Team One",
-          GroupSubject: "Team One",
-          OriginatingTo: "conversation:19:channel@thread.tacv2",
-        }),
-      }),
-    );
-    expect(updateLastRoute.mock.calls[0]?.[0]).not.toHaveProperty("deliveryContext");
+    expect(updateLastRoute).not.toHaveBeenCalled();
+
+    const usedStorePath = recordInboundSession.mock.calls[0]?.[0]?.storePath as string;
+
+    const focusStore = JSON.parse(
+      fs.readFileSync(resolveMSTeamsChannelFocusStorePath(usedStorePath), "utf8"),
+    ) as {
+      focusByMainSessionKey?: Record<
+        string,
+        { label?: string; target?: string; teamLabel?: string; channelLabel?: string }
+      >;
+    };
+    expect(focusStore.focusByMainSessionKey?.["agent:main:main"]).toMatchObject({
+      target: "conversation:19:channel@thread.tacv2",
+      label: "Team One / #General",
+      teamLabel: "Team One",
+      channelLabel: "#General",
+    });
   });
 
-  it("injects recent channel focus into DM turns as untrusted metadata", async () => {
-    focusMockState.loadSessionStore.mockReturnValue({
-      "agent:main:main": {
-        sessionId: "sess-main",
-        updatedAt: Date.now(),
-        channel: "msteams",
-        chatType: "channel",
-        groupChannel: "#General",
-        space: "Team One",
-        origin: {
-          provider: "msteams",
-          chatType: "channel",
-          to: "conversation:19:channel@thread.tacv2",
-          label: "Team One / #General",
+  it("injects recent channel focus into repeated DM turns from sidecar metadata", async () => {
+    fs.writeFileSync(
+      resolveMSTeamsChannelFocusStorePath(sessionStorePath),
+      JSON.stringify(
+        {
+          version: 1,
+          focusByMainSessionKey: {
+            "agent:main:main": {
+              provider: "msteams",
+              target: "conversation:19:channel@thread.tacv2",
+              label: "Team One / #General",
+              teamLabel: "Team One",
+              channelLabel: "#General",
+              updatedAt: new Date().toISOString(),
+            },
+          },
         },
-      },
-    });
+        null,
+        2,
+      ),
+    );
     const handler = createMSTeamsMessageHandler(createDeps());
 
-    await handler({
+    const dmActivity = {
       activity: {
         id: "msg-dm-1",
         type: "message",
@@ -220,17 +232,30 @@ describe("msteams message handler channel focus", () => {
         attachments: [],
       },
       sendActivity: vi.fn(async () => undefined),
+    } as unknown as Parameters<typeof handler>[0];
+
+    await handler(dmActivity);
+    await handler({
+      ...dmActivity,
+      activity: {
+        ...dmActivity.activity,
+        id: "msg-dm-2",
+        text: "and do you still know which channel?",
+      },
     } as unknown as Parameters<typeof handler>[0]);
 
-    expect(recordInboundSession).toHaveBeenCalledWith(
-      expect.objectContaining({
-        ctx: expect.objectContaining({
-          UntrustedContext: expect.arrayContaining([
-            "Recent Microsoft Teams channel focus: Team One / #General.",
-            "If the user explicitly asks you to post back to that channel, use target conversation:19:channel@thread.tacv2.",
-          ]),
+    expect(recordInboundSession).toHaveBeenCalledTimes(2);
+    for (const call of recordInboundSession.mock.calls) {
+      expect(call[0]).toEqual(
+        expect.objectContaining({
+          ctx: expect.objectContaining({
+            UntrustedContext: expect.arrayContaining([
+              "Recent Microsoft Teams channel focus: Team One / #General.",
+              "If the user explicitly asks you to post back to that channel, use target conversation:19:channel@thread.tacv2.",
+            ]),
+          }),
         }),
-      }),
-    );
+      );
+    }
   });
 });

@@ -18,8 +18,6 @@ import {
   formatAllowlistMatchMeta,
   resolveEffectiveAllowFromLists,
   resolveDmGroupAccessWithLists,
-  loadSessionStore,
-  type SessionEntry,
   type HistoryEntry,
 } from "openclaw/plugin-sdk/msteams";
 import {
@@ -28,6 +26,12 @@ import {
   type MSTeamsAttachmentLike,
   summarizeMSTeamsHtmlAttachments,
 } from "../attachments.js";
+import {
+  buildMSTeamsRecentChannelFocusLabel,
+  readMSTeamsRecentChannelFocus,
+  writeMSTeamsRecentChannelFocus,
+  type MSTeamsRecentChannelFocus,
+} from "../channel-focus-store.js";
 import type { StoredConversationReference } from "../conversation-store.js";
 import { formatUnknownError } from "../errors.js";
 import {
@@ -50,64 +54,6 @@ import { getMSTeamsRuntime } from "../runtime.js";
 import type { MSTeamsTurnContext } from "../sdk-types.js";
 import { recordMSTeamsSentMessage, wasMSTeamsMessageSent } from "../sent-message-cache.js";
 import { resolveMSTeamsInboundMedia } from "./inbound-media.js";
-
-type MSTeamsRecentChannelFocus = {
-  target: string;
-  label: string;
-  teamLabel?: string;
-  channelLabel?: string;
-};
-
-function resolveSessionEntryByKey(
-  store: Record<string, SessionEntry>,
-  sessionKey: string,
-): SessionEntry | undefined {
-  const direct = store[sessionKey];
-  if (direct) {
-    return direct;
-  }
-  const lowered = sessionKey.trim().toLowerCase();
-  if (!lowered) {
-    return undefined;
-  }
-  return (
-    store[lowered] ?? Object.entries(store).find(([key]) => key.toLowerCase() === lowered)?.[1]
-  );
-}
-
-function resolveMSTeamsRecentChannelFocus(params: {
-  storePath: string;
-  mainSessionKey: string;
-}): MSTeamsRecentChannelFocus | null {
-  const entry = resolveSessionEntryByKey(loadSessionStore(params.storePath), params.mainSessionKey);
-  if (!entry) {
-    return null;
-  }
-  const provider =
-    entry.origin?.provider?.trim().toLowerCase() ?? entry.channel?.trim().toLowerCase();
-  if (provider !== "msteams") {
-    return null;
-  }
-  const target = entry.origin?.to?.trim();
-  if (!target || !/^conversation:/i.test(target)) {
-    return null;
-  }
-  const chatType =
-    entry.origin?.chatType?.trim().toLowerCase() ?? entry.chatType?.trim().toLowerCase();
-  const channelLabel = entry.groupChannel?.trim() ?? undefined;
-  const teamLabel = entry.space?.trim() ?? undefined;
-  const fallbackLabel = entry.displayName?.trim() ?? entry.origin?.label?.trim() ?? undefined;
-  const label = [teamLabel, channelLabel].filter(Boolean).join(" / ") || fallbackLabel || target;
-  if (chatType !== "channel" && !channelLabel && !teamLabel) {
-    return null;
-  }
-  return {
-    target,
-    label,
-    teamLabel,
-    channelLabel,
-  };
-}
 
 function buildMSTeamsRecentChannelFocusContext(
   focus: MSTeamsRecentChannelFocus | null,
@@ -549,8 +495,8 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
     if (isDirectMessage) {
       try {
         recentChannelFocusContext = buildMSTeamsRecentChannelFocusContext(
-          resolveMSTeamsRecentChannelFocus({
-            storePath,
+          await readMSTeamsRecentChannelFocus({
+            sessionStorePath: storePath,
             mainSessionKey: route.mainSessionKey,
           }),
         );
@@ -658,13 +604,29 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
 
     if (isChannel && route.mainSessionKey !== (ctxPayload.SessionKey ?? route.sessionKey)) {
       try {
-        await core.channel.session.updateLastRoute({
-          storePath,
-          sessionKey: route.mainSessionKey,
-          ctx: ctxPayload,
+        const teamLabel = teamName?.trim() || teamId?.trim() || teamRuntimeId?.trim() || undefined;
+        const channelLabel = channelName?.trim() ? `#${channelName.trim()}` : undefined;
+        await writeMSTeamsRecentChannelFocus({
+          sessionStorePath: storePath,
+          mainSessionKey: route.mainSessionKey,
+          focus: {
+            target: teamsTo,
+            label: buildMSTeamsRecentChannelFocusLabel({
+              target: teamsTo,
+              teamLabel,
+              channelLabel,
+            }),
+            teamLabel,
+            channelLabel,
+            teamId: teamId?.trim() || undefined,
+            teamRuntimeId: teamRuntimeId?.trim() || undefined,
+            channelId: activity.channelData?.channel?.id?.trim() || undefined,
+            conversationId,
+            tenantId: conversation?.tenantId?.trim() || undefined,
+          },
         });
       } catch (err) {
-        logVerboseMessage(`msteams: failed updating recent channel focus: ${String(err)}`);
+        logVerboseMessage(`msteams: failed updating recent channel focus sidecar: ${String(err)}`);
       }
     }
 
