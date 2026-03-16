@@ -26,7 +26,7 @@ jobs:
       - name: Install pnpm
         uses: pnpm/action-setup@v4
         with:
-          version: 10
+          version: 10.23.0
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
