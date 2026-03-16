@@ -343,6 +343,43 @@ export class AcpNodeRuntime implements AcpRuntime {
         startRecoveredFromUnknownError = false;
       }
       if (input.signal?.aborted && !cancelRequested) {
+        const latestDelivery = await this.gatewayRuntime.store.getRunDeliveryState({
+          runId,
+          afterSeq: nextSeq - 1,
+        });
+        for (const event of latestDelivery.events) {
+          nextSeq = event.seq + 1;
+          yield event.event;
+          await this.gatewayRuntime.store.recordCheckpoint({
+            checkpointKey: `runtime:${runId}`,
+            sessionKey: state.sessionKey,
+            runId,
+            cursorSeq: event.seq,
+          });
+        }
+        if (latestDelivery.run?.terminal) {
+          if (latestDelivery.run.terminal.kind === "failed") {
+            yield {
+              type: "error",
+              message: latestDelivery.run.terminal.errorMessage ?? "ACP node turn failed.",
+              ...(latestDelivery.run.terminal.errorCode
+                ? { code: latestDelivery.run.terminal.errorCode }
+                : {}),
+            };
+            return;
+          }
+          yield {
+            type: "done",
+            ...(latestDelivery.run.terminal.stopReason
+              ? { stopReason: latestDelivery.run.terminal.stopReason }
+              : {}),
+          };
+          return;
+        }
+        if (latestDelivery.run?.state === "cancelling" || latestDelivery.run?.cancelRequestedAt) {
+          cancelRequested = true;
+          continue;
+        }
         await this.requestCancel({
           state,
           runId,
@@ -572,6 +609,10 @@ export class AcpNodeRuntime implements AcpRuntime {
       idempotencyKey: `acp-node:cancel:${params.state.sessionKey}:${params.runId}`,
     });
     if (!result.ok) {
+      const currentRun = await this.gatewayRuntime.store.getRun(params.runId);
+      if (currentRun?.terminal) {
+        return;
+      }
       throw new AcpRuntimeError(
         "ACP_TURN_FAILED",
         result.error?.message ?? "ACP node turn cancel failed.",
@@ -579,6 +620,10 @@ export class AcpNodeRuntime implements AcpRuntime {
     }
     const payload = parseInvokePayload(result) as AcpNodeInvokePayload;
     if (payload.accepted !== true) {
+      const currentRun = await this.gatewayRuntime.store.getRun(params.runId);
+      if (currentRun?.terminal) {
+        return;
+      }
       throw new AcpRuntimeError(
         "ACP_TURN_FAILED",
         payload.message ?? "ACP node turn cancel was not accepted.",

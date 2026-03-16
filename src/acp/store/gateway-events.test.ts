@@ -1131,6 +1131,128 @@ describe("AcpGatewayNodeRuntime", () => {
     ]);
   });
 
+  it("converges on a terminal that lands after a stale snapshot but before abort-triggered cancel", async () => {
+    const { runtime } = await createRuntime();
+    const sessionKey = "agent:main:acp:test-session";
+    const commands: string[] = [];
+
+    const backend = new AcpNodeRuntime({
+      gatewayRuntime: runtime,
+      listNodes: () =>
+        [
+          {
+            nodeId: "node-1",
+            caps: ["acp:v1"],
+            commands: [
+              "acp.session.ensure",
+              "acp.session.load",
+              "acp.turn.start",
+              "acp.turn.cancel",
+              "acp.session.close",
+              "acp.session.status",
+            ],
+          },
+        ] as never,
+      invokeNode: async ({ command, params }) => {
+        commands.push(command);
+        if (command === "acp.session.ensure") {
+          const payload = params as Record<string, unknown>;
+          return {
+            ok: true,
+            payload: {
+              ok: true,
+              sessionKey: payload.sessionKey,
+              leaseId: payload.leaseId,
+              leaseEpoch: payload.leaseEpoch,
+              nodeRuntimeSessionId: "runtime-1",
+            },
+          };
+        }
+        if (command === "acp.turn.start") {
+          return {
+            ok: true,
+            payload: {
+              ok: true,
+              accepted: true,
+              nodeWorkerRunId: "worker-1",
+            },
+          };
+        }
+        if (command === "acp.turn.cancel") {
+          return {
+            ok: false,
+            error: {
+              message: "already completed",
+            },
+          };
+        }
+        throw new Error(`unexpected command ${command}`);
+      },
+    });
+
+    const handle = await backend.ensureSession({
+      sessionKey,
+      agent: "main",
+      mode: "persistent",
+    });
+
+    const abortController = new AbortController();
+    let deliveryPolls = 0;
+    runtime.store.getRunDeliveryState = async ({ runId, afterSeq }) => {
+      deliveryPolls += 1;
+      const currentRun = await runtime.store.getRun(runId);
+      const lease = await runtime.store.getActiveLease(sessionKey);
+      if (deliveryPolls === 1) {
+        abortController.abort();
+        return {
+          events: [],
+          run: currentRun,
+        };
+      }
+      if (deliveryPolls === 2) {
+        return {
+          events: [],
+          run: {
+            ...currentRun!,
+            terminal: {
+              terminalEventId: "term-after-snapshot",
+              finalSeq: afterSeq ?? 0,
+              kind: "completed",
+              stopReason: "done",
+              acceptedAt: Date.now(),
+              nodeId: "node-1",
+              leaseId: lease?.leaseId ?? "",
+              leaseEpoch: lease?.leaseEpoch ?? 0,
+            },
+            state: "completed" as const,
+          },
+        };
+      }
+      return {
+        events: [],
+        run: currentRun,
+      };
+    };
+
+    await expect(
+      collectEvents(
+        backend.runTurn({
+          handle,
+          text: "finish first",
+          mode: "prompt",
+          requestId: "run-abort-race",
+          signal: abortController.signal,
+        }),
+      ),
+    ).resolves.toEqual([
+      {
+        type: "done",
+        stopReason: "done",
+      },
+    ]);
+    expect(commands).toEqual(["acp.session.ensure", "acp.turn.start"]);
+  });
+
   it("waits for the cancelled terminal on active-turn cancel instead of surfacing an abort error", async () => {
     const { runtime } = await createRuntime();
     const sessionKey = "agent:main:acp:test-session";
