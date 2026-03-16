@@ -49,9 +49,12 @@ describe("normalizeAntigravityModelId", () => {
 });
 
 describe("normalizeGoogleModelId", () => {
-  it("maps the deprecated 3.1 flash alias to the real preview model", () => {
+  it("maps the deprecated 3.1 flash shorthand to the real preview model", () => {
     expect(normalizeGoogleModelId("gemini-3.1-flash")).toBe("gemini-3-flash-preview");
-    expect(normalizeGoogleModelId("gemini-3.1-flash-preview")).toBe("gemini-3-flash-preview");
+  });
+
+  it("passes gemini-3.1-flash-preview through unchanged (it is now a real model ID)", () => {
+    expect(normalizeGoogleModelId("gemini-3.1-flash-preview")).toBe("gemini-3.1-flash-preview");
   });
 
   it("adds the preview suffix for gemini 3.1 flash-lite", () => {
