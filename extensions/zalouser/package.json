@@ -12,6 +12,7 @@
     "extensions": [
       "./index.ts"
     ],
+    "setupEntry": "./setup-entry.ts",
     "channel": {
       "id": "zalouser",
       "label": "Zalo Personal",
