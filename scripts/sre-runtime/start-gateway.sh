@@ -3,6 +3,8 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 export PATH="/usr/local/bin:/usr/bin:/bin:${PATH:-}"
+# shellcheck source=./lib-prompts.sh
+. "${SCRIPT_DIR}/lib-prompts.sh"
 
 trim_env_var() {
   var_name="$1"
@@ -114,8 +116,9 @@ if [ -z "${VAULT_TOKEN:-}" ] && [ -n "${VAULT_ADDR:-}" ] && command -v curl >/de
 fi
 
 bootstrap_github_cli_wrappers() {
-  wrapper_dir="/home/node/.openclaw/bin"
-  cache_dir="/home/node/.openclaw/state/github"
+  wrapper_dir="${OPENCLAW_WRAPPER_BIN_DIR:-/home/node/.openclaw/bin}"
+  [ -n "$wrapper_dir" ] || wrapper_dir="/home/node/.openclaw/bin"
+  cache_dir="${OPENCLAW_GITHUB_CACHE_DIR:-/home/node/.openclaw/state/github}"
   mkdir -p "$wrapper_dir" "$cache_dir"
 
   cat >"${wrapper_dir}/github-app-token.sh" <<'EOF'
@@ -123,7 +126,7 @@ bootstrap_github_cli_wrappers() {
 set -eu
 umask 077
 
-cache_dir="/home/node/.openclaw/state/github"
+cache_dir="${OPENCLAW_GITHUB_CACHE_DIR:-/home/node/.openclaw/state/github}"
 cache_file="${cache_dir}/token.json"
 
 if [ -f "$cache_file" ]; then
@@ -242,7 +245,8 @@ EOF
 cat >"${wrapper_dir}/gh" <<'EOF'
 #!/bin/sh
 set -eu
-if token="$(/home/node/.openclaw/bin/github-app-token.sh)"; then
+wrapper_dir="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
+if token="$("${wrapper_dir}/github-app-token.sh")"; then
   export GH_TOKEN="$token"
   export GITHUB_TOKEN="$token"
 else
@@ -256,6 +260,7 @@ EOF
 cat >"${wrapper_dir}/git" <<'EOF'
 #!/bin/sh
 set -eu
+wrapper_dir="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
 git_cmd=""
 while [ "$#" -gt 0 ]; do
   case "$1" in
@@ -299,7 +304,7 @@ case "$git_cmd" in
     ;;
 esac
 
-if token="$(/home/node/.openclaw/bin/github-app-token.sh)"; then
+if token="$("${wrapper_dir}/github-app-token.sh")"; then
   git_auth_basic="$(printf 'x-access-token:%s' "$token" | base64 | tr -d '\n')"
   exec /usr/bin/git \
     -c credential.helper= \
@@ -317,8 +322,6 @@ echo 'git-wrapper:warning github app token unavailable, falling back to unauthen
 exec /usr/bin/git "$@"
 EOF
   chmod +x "${wrapper_dir}/git"
-
-  export PATH="${wrapper_dir}:${PATH}"
 }
 
 bootstrap_pg_client() {
@@ -366,14 +369,20 @@ bool_from_env() {
   esac
 }
 
+monitoring_prompt="$(build_monitoring_incident_prompt)"
+monitoring_prompt_marker="$(monitoring_incident_prompt_marker)"
+
 jq \
   --arg heartbeat_target "${OPENCLAW_HEARTBEAT_ROUTE_TARGET:-}" \
+  --arg monitoring_prompt "$monitoring_prompt" \
+  --arg monitoring_prompt_marker "$monitoring_prompt_marker" \
   --arg graph_dir "${OPENCLAW_SRE_GRAPH_DIR:-/home/node/.openclaw/state/sre-graph}" \
   --arg dossiers_dir "${OPENCLAW_SRE_DOSSIERS_DIR:-/home/node/.openclaw/state/sre-dossiers}" \
   --arg index_dir "${OPENCLAW_SRE_INDEX_DIR:-/home/node/.openclaw/state/sre-index}" \
   --arg plans_dir "${OPENCLAW_SRE_PLANS_DIR:-/home/node/.openclaw/state/sre-plans}" \
   --arg repo_root "${OPENCLAW_SRE_REPO_ROOT:-/srv/openclaw/repos}" \
   --arg ownership_file "${OPENCLAW_SRE_REPO_OWNERSHIP_FILE:-/home/node/.openclaw/state/sre-index/repo-ownership.json}" \
+  --arg wrapper_bin_dir "${OPENCLAW_WRAPPER_BIN_DIR:-/home/node/.openclaw/bin}" \
   --argjson gateway_env_token_enabled "$(bool_from_env "${OPENCLAW_GATEWAY_TOKEN:+1}")" \
   --argjson fallback_enabled "$(bool_from_env "${OPENCLAW_CONTROL_UI_HOST_HEADER_ORIGIN_FALLBACK:-0}")" \
   --argjson insecure_auth_enabled "$(bool_from_env "${OPENCLAW_CONTROL_UI_ALLOW_INSECURE_AUTH:-0}")" \
@@ -388,6 +397,15 @@ jq \
   --argjson change_intel_enabled "$(bool_from_env "${OPENCLAW_SRE_CHANGE_INTEL_ENABLED:-0}")" \
   --argjson relationship_index_enabled "$(bool_from_env "${OPENCLAW_SRE_RELATIONSHIP_INDEX_ENABLED:-0}")" \
   '
+    def prepend_unique($entry; $existing):
+      reduce ([$entry] + $existing)[] as $item
+        ([];
+          if ($item | type) != "string" or ($item | length) == 0 or index($item) != null then
+            .
+          else
+            . + [$item]
+          end
+        );
     .tools = (.tools // {})
     | .tools.exec = (
         if ((.tools.exec // null) | type) == "object" then
@@ -423,8 +441,34 @@ jq \
         + (if ($heartbeat_target | length) > 0 then [$heartbeat_target] else [] end)
         | unique
       )
-    | .sre.promptTemplates.monitoringIncident as $monitoring_prompt
-    | .channels.slack.channels["#platform-monitoring"].systemPrompt = $monitoring_prompt
+    | .agents.list = (
+        (.agents.list // [])
+        | map(
+            .id as $agent_id
+            # Inject wrapper bin directory for SRE agents and SRE subagents only.
+            | if (["sre", "sre-k8s", "sre-observability", "sre-release", "sre-repo-runtime", "sre-repo-helm", "sre-verifier"] | index($agent_id)) != null then
+              .tools = (.tools // {})
+              | .tools.exec = (
+                  if ((.tools.exec // null) | type) == "object" then
+                    .tools.exec
+                  else
+                    {}
+                  end
+                )
+              | .tools.exec.pathPrepend = prepend_unique(
+                  $wrapper_bin_dir;
+                  (
+                    (.tools.exec.pathPrepend // [])
+                    | if type == "array" then . else [] end
+                  )
+                )
+            else
+              .
+            end
+          )
+      )
+    | .channels.slack.channels["#platform-monitoring"].systemPrompt =
+        (if .channels.slack.channels["#platform-monitoring"].systemPrompt == $monitoring_prompt_marker then $monitoring_prompt else .channels.slack.channels["#platform-monitoring"].systemPrompt end)
     | .channels.slack.channels["#staging-infra-monitoring"].systemPrompt =
         ($monitoring_prompt
           | sub("^Monitoring incident intake mode:"; "Staging monitoring incident intake mode:")

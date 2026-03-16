@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=./lib-prompts.sh
+. "${SCRIPT_DIR}/lib-prompts.sh"
+
 REPO_ROOT="${OPENCLAW_SRE_RUNTIME_REPO_DIR:-${OPENCLAW_SRE_REPO_DIR:-/srv/openclaw/repos/openclaw-sre}}"
 STATE_DIR="${OPENCLAW_STATE_DIR:-/home/node/.openclaw}"
 CONFIG_PATH="${OPENCLAW_CONFIG_PATH:-${STATE_DIR}/openclaw.json}"
@@ -162,6 +166,10 @@ apply_slack_incident_channel_override() {
   [ -n "$SLACK_INCIDENT_CHANNELS_RAW" ] || return 0
 
   local channels_json
+  local monitoring_prompt
+  local monitoring_prompt_marker
+  monitoring_prompt="$(build_monitoring_incident_prompt)"
+  monitoring_prompt_marker="$(monitoring_incident_prompt_marker)"
   channels_json="$(normalize_slack_incident_channels_json)"
   if ! jq -e 'length > 0' >/dev/null <<<"$channels_json"; then
     echo "seed-state:error OPENCLAW_SRE_SLACK_INCIDENT_CHANNELS did not contain any channels" >&2
@@ -170,15 +178,15 @@ apply_slack_incident_channel_override() {
 
   local tmp_config
   tmp_config="$(mktemp "${CONFIG_PATH}.tmp.XXXXXX")"
-  jq --argjson incident_channels "$channels_json" '
+  jq --arg monitoring_prompt_template "$monitoring_prompt" --arg monitoring_prompt_marker "$monitoring_prompt_marker" --argjson incident_channels "$channels_json" '
     .channels.slack.channels as $channels
     | ($incident_channels | map(select(. != "#bug-report"))) as $override_channels
     | ($channels["#bug-report"]) as $bug_report
-    | (.sre.promptTemplates.monitoringIncident
-        // $channels["#platform-monitoring"].systemPrompt
+    | ($channels["#platform-monitoring"].systemPrompt
         // $channels["#public-api-monitoring"].systemPrompt) as $monitoring_prompt
+    | (if $monitoring_prompt == $monitoring_prompt_marker then $monitoring_prompt_template else $monitoring_prompt end) as $resolved_monitoring_prompt
     | (($channels["#platform-monitoring"]
-        // $channels["#public-api-monitoring"]) | .systemPrompt = $monitoring_prompt) as $monitoring_template
+        // $channels["#public-api-monitoring"]) | .systemPrompt = $resolved_monitoring_prompt) as $monitoring_template
     | if $bug_report == null or $monitoring_template == null then
         error("missing seeded Slack incident channel templates")
       else
