@@ -8,7 +8,8 @@ export type PlanStep = {
 };
 
 // Match both markdown task lists (- [ ] / - [x]) and Unicode checkbox variants (☐ / ☑ / ✅ / ✓)
-const TASK_LIST_RE = /^[-*]\s+(?:\[([ xX])\]|([☐☑✅✓]))\s+(.+)$/gmu;
+// Also match Unicode bullet • prefix (LLMs sometimes use • instead of -)
+const TASK_LIST_RE = /^[-*•]\s+(?:\[([ xX])\]|([☐☑✅✓]))\s+(.+)$/gmu;
 
 /**
  * Check whether the checklist looks intentional (a plan) vs incidental
