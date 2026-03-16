@@ -1,6 +1,9 @@
 import type { BaseTokenResolution } from "../../../src/channels/plugins/types.js";
 import type { OpenClawConfig } from "../../../src/config/config.js";
-import { normalizeResolvedSecretInputString } from "../../../src/config/types.secrets.js";
+import {
+  hasConfiguredSecretInput,
+  normalizeSecretInputString,
+} from "../../../src/config/types.secrets.js";
 import type { TelegramAccountConfig } from "../../../src/config/types.telegram.js";
 import { tryReadSecretFileSync } from "../../../src/infra/secret-file.js";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../../../src/routing/session-key.js";
@@ -60,12 +63,12 @@ export function resolveTelegramToken(
     return { token: "", source: "none" };
   }
 
-  const accountToken = normalizeResolvedSecretInputString({
-    value: accountCfg?.botToken,
-    path: `channels.telegram.accounts.${accountId}.botToken`,
-  });
+  const accountToken = normalizeSecretInputString(accountCfg?.botToken);
   if (accountToken) {
     return { token: accountToken, source: "config" };
+  }
+  if (hasConfiguredSecretInput(accountCfg?.botToken, cfg?.secrets?.defaults)) {
+    return { token: "", source: "config" };
   }
 
   const allowEnv = accountId === DEFAULT_ACCOUNT_ID;
@@ -81,12 +84,12 @@ export function resolveTelegramToken(
     return { token: "", source: "none" };
   }
 
-  const configToken = normalizeResolvedSecretInputString({
-    value: telegramCfg?.botToken,
-    path: "channels.telegram.botToken",
-  });
+  const configToken = normalizeSecretInputString(telegramCfg?.botToken);
   if (configToken) {
     return { token: configToken, source: "config" };
+  }
+  if (hasConfiguredSecretInput(telegramCfg?.botToken, cfg?.secrets?.defaults)) {
+    return { token: "", source: "config" };
   }
 
   const envToken = allowEnv ? (opts.envToken ?? process.env.TELEGRAM_BOT_TOKEN)?.trim() : "";

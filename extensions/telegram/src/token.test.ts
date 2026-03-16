@@ -188,7 +188,7 @@ describe("resolveTelegramToken", () => {
     expect(res.source).toBe("none");
   });
 
-  it("throws when botToken is an unresolved SecretRef object", () => {
+  it("returns empty token with config source when botToken is an unresolved SecretRef object", () => {
     const cfg = {
       channels: {
         telegram: {
@@ -197,9 +197,31 @@ describe("resolveTelegramToken", () => {
       },
     } as unknown as OpenClawConfig;
 
-    expect(() => resolveTelegramToken(cfg)).toThrow(
-      /channels\.telegram\.botToken: unresolved SecretRef/i,
-    );
+    const res = resolveTelegramToken(cfg);
+    expect(res.token).toBe("");
+    expect(res.source).toBe("config");
+  });
+
+  it("returns empty token with config source when account botToken is an unresolved file SecretRef", () => {
+    const cfg = {
+      channels: {
+        telegram: {
+          accounts: {
+            default: {
+              botToken: {
+                source: "file",
+                provider: "filemain",
+                id: "/channels/telegram/accounts/default/botToken",
+              },
+            },
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const res = resolveTelegramToken(cfg, { accountId: "default" });
+    expect(res.token).toBe("");
+    expect(res.source).toBe("config");
   });
 });
 
