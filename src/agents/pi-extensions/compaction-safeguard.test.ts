@@ -482,6 +482,10 @@ describe("compaction-safeguard runtime registry", () => {
         defaults: {
           compaction: {
             mode: "safeguard",
+            guard: {
+              enabled: true,
+              escalation: "recommend-reset",
+            },
             recentTurnsPreserve: 99,
             qualityGuard: { maxRetries: 99 },
           },
@@ -500,6 +504,8 @@ describe("compaction-safeguard runtime registry", () => {
     });
 
     const runtime = getCompactionSafeguardRuntime(sessionManager);
+    expect(runtime?.guardEnabled).toBe(true);
+    expect(runtime?.escalationMode).toBe("recommend-reset");
     expect(runtime?.qualityGuardMaxRetries).toBe(99);
     expect(runtime?.recentTurnsPreserve).toBe(99);
     expect(resolveQualityGuardMaxRetries(runtime?.qualityGuardMaxRetries)).toBe(3);
@@ -1167,7 +1173,7 @@ describe("compaction-safeguard recent-turn preservation", () => {
 
     const result = (await compactionHandler(event, mockContext)) as {
       cancel?: boolean;
-      compaction?: { summary?: string };
+      compaction?: { summary?: string; details?: Record<string, unknown> };
     };
 
     expect(result.cancel).not.toBe(true);
@@ -1190,6 +1196,7 @@ describe("compaction-safeguard recent-turn preservation", () => {
       model,
       recentTurnsPreserve: 0,
       guardEnabled: true,
+      escalationMode: "recommend-reset",
     });
 
     const compactionHandler = createCompactionHandler();
@@ -1202,7 +1209,7 @@ describe("compaction-safeguard recent-turn preservation", () => {
 
     const result = (await compactionHandler(event, mockContext)) as {
       cancel?: boolean;
-      compaction?: { summary?: string };
+      compaction?: { summary?: string; details?: Record<string, unknown> };
     };
 
     expect(result.cancel).not.toBe(true);
@@ -1212,6 +1219,14 @@ describe("compaction-safeguard recent-turn preservation", () => {
     expect(summaryCall?.customInstructions).toContain("Loop-aware compaction guard:");
     expect(summaryCall?.customInstructions).toContain("The latest explicit user goal or request.");
     expect(summaryCall?.customInstructions).toContain("Repeated tool failure pattern:");
+    expect(result.compaction?.details).toMatchObject({
+      guardEnabled: true,
+      escalationMode: "recommend-reset",
+      latestUserGoal: "Keep the latest user goal grounded and avoid rewriting persistence.",
+      signalBefore: expect.objectContaining({
+        action: expect.any(String),
+      }),
+    });
   });
 
   it("keeps summarization instructions unchanged when the guard is disabled", async () => {

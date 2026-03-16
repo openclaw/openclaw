@@ -6,7 +6,7 @@ import { extractSections } from "../../auto-reply/reply/post-compaction-context.
 import { openBoundaryFile } from "../../infra/boundary-file-read.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { extractKeywords, isQueryStopWordToken } from "../../memory/query-expansion.js";
-import { scoreCompactionGuard } from "../compaction-guard.js";
+import { scoreCompactionGuard, type SessionGuardSignal } from "../compaction-guard.js";
 import {
   BASE_CHUNK_RATIO,
   type CompactionSummarizationInstructions,
@@ -71,6 +71,16 @@ type ToolFailure = {
   toolName: string;
   summary: string;
   meta?: string;
+};
+
+export type CompactionSafeguardCompactionDetails = {
+  readFiles: string[];
+  modifiedFiles: string[];
+  guardEnabled?: boolean;
+  escalationMode?: string;
+  signalBefore?: SessionGuardSignal;
+  latestUserGoal?: string;
+  unresolvedItems?: string[];
 };
 
 function clampNonNegativeInt(value: unknown, fallback: number): number {
@@ -1104,7 +1114,14 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
           summary,
           firstKeptEntryId: preparation.firstKeptEntryId,
           tokensBefore: preparation.tokensBefore,
-          details: { readFiles, modifiedFiles },
+          details: {
+            readFiles,
+            modifiedFiles,
+            guardEnabled,
+            escalationMode: runtime?.escalationMode,
+            signalBefore: guardSignal ?? undefined,
+            latestUserGoal: latestUserAsk ?? undefined,
+          } satisfies CompactionSafeguardCompactionDetails,
         },
       };
     } catch (error) {
