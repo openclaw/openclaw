@@ -309,6 +309,16 @@ describe("refreshChat", () => {
         text: "history:agent:main:discord:channel:123",
       },
     ]);
+    expect(host.sessionsResult).toEqual({
+      ts: 0,
+      path: "",
+      count: 1,
+      defaults: { modelProvider: "openai", model: "gpt-5", contextTokens: null },
+      sessions: [
+        { key: "agent:main:discord:channel:123", kind: "direct", updatedAt: null },
+        { key: "main", kind: "direct", updatedAt: null },
+      ],
+    });
     expect(applySettings).not.toHaveBeenCalled();
     expect(loadAssistantIdentity).not.toHaveBeenCalled();
     expect(request).toHaveBeenCalledWith("sessions.list", {

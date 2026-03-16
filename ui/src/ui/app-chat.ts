@@ -99,12 +99,15 @@ async function loadRefreshChatSessionsResult(host: ChatHost): Promise<SessionsLi
   const appHost = host as unknown as OpenClawApp;
   if (appHost.sessionsLoading) {
     try {
-      return (
+      const res =
         (await host.client.request<SessionsListResult | undefined>("sessions.list", {
           includeGlobal: true,
           includeUnknown: true,
-        })) ?? null
-      );
+        })) ?? null;
+      if (res) {
+        appHost.sessionsResult = res;
+      }
+      return res;
     } catch {
       return null;
     }
