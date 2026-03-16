@@ -58,13 +58,20 @@ describe("line setup wizard", () => {
     expect(result.cfg.channels?.line?.channelSecret).toBe("line-secret");
   });
 
-  it("re-enables and refreshes accounts.default when rerunning default account setup", () => {
-    const input = {
-      channelAccessToken: "fresh-token",
-      channelSecret: "fresh-secret",
-    };
+  it("re-enables and refreshes accounts.default when rerunning default account setup", async () => {
+    const prompter = createPrompter({
+      text: vi.fn(async ({ message }: { message: string }) => {
+        if (message === "Enter LINE channel access token") {
+          return "fresh-token";
+        }
+        if (message === "Enter LINE channel secret") {
+          return "fresh-secret";
+        }
+        throw new Error(`Unexpected prompt: ${message}`);
+      }) as WizardPrompter["text"],
+    });
 
-    const next = lineSetupAdapter.applyAccountConfig({
+    const result = await lineConfigureAdapter.configure({
       cfg: {
         channels: {
           line: {
@@ -79,16 +86,20 @@ describe("line setup wizard", () => {
           },
         },
       } as OpenClawConfig,
-      accountId: "default",
-      input,
+      runtime: createRuntimeEnv(),
+      prompter,
+      options: {},
+      accountOverrides: {},
+      shouldPromptAccountIds: false,
+      forceAllowFrom: false,
     });
 
-    expect(next.channels?.line?.enabled).toBe(true);
-    expect(next.channels?.line?.accounts?.default?.enabled).toBe(true);
-    expect(next.channels?.line?.accounts?.default?.channelAccessToken).toBe("fresh-token");
-    expect(next.channels?.line?.accounts?.default?.channelSecret).toBe("fresh-secret");
+    expect(result.cfg.channels?.line?.enabled).toBe(true);
+    expect(result.cfg.channels?.line?.accounts?.default?.enabled).toBe(true);
+    expect(result.cfg.channels?.line?.accounts?.default?.channelAccessToken).toBe("fresh-token");
+    expect(result.cfg.channels?.line?.accounts?.default?.channelSecret).toBe("fresh-secret");
 
-    const resolved = resolveLineAccount({ cfg: next, accountId: "default" });
+    const resolved = resolveLineAccount({ cfg: result.cfg, accountId: "default" });
     expect(resolved.enabled).toBe(true);
     expect(resolved.channelAccessToken).toBe("fresh-token");
     expect(resolved.channelSecret).toBe("fresh-secret");
