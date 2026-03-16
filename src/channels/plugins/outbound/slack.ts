@@ -139,7 +139,9 @@ function resolveSlackBlocks(payload: {
     return undefined;
   }
   if (mergedBlocks.length > SLACK_MAX_BLOCKS) {
-    return existingBlocks?.length ? existingBlocks : undefined;
+    throw new Error(
+      `Slack blocks cannot exceed ${SLACK_MAX_BLOCKS} items after interactive render`,
+    );
   }
   return mergedBlocks;
 }

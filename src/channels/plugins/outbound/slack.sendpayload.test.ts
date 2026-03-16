@@ -144,4 +144,27 @@ describe("slackOutbound sendPayload", () => {
     );
     expect(result).toMatchObject({ channel: "slack", messageId: "sl-controls" });
   });
+
+  it("fails when merged Slack blocks exceed the platform limit", async () => {
+    const { run, sendMock } = createHarness({
+      payload: {
+        channelData: {
+          slack: {
+            blocks: Array.from({ length: 50 }, () => ({ type: "divider" })),
+          },
+        },
+        interactive: {
+          blocks: [
+            {
+              type: "buttons",
+              buttons: [{ label: "Allow", value: "pluginbind:approval-123:o" }],
+            },
+          ],
+        },
+      },
+    });
+
+    await expect(run()).rejects.toThrow(/Slack blocks cannot exceed 50 items/i);
+    expect(sendMock).not.toHaveBeenCalled();
+  });
 });
