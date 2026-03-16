@@ -5,7 +5,7 @@ description: >
   natural-language chat. Use when the user wants to move a robot, apply a pose,
   run a motion sequence, wave, dance, inspect, pick, or any other arm motion.
   Also use when the user asks to switch between robots, list available robots or
-  presets, or configure the WebSocket viewer connection.
+  presets, or list active viewer connections.
 metadata:
   openclaw:
     emoji: "🦾"
@@ -30,9 +30,13 @@ Control any configured robot arm in the 3D viewer via chat.
 | "set joint 1 to 45°" | `set_joints` with array |
 | "movj 到目标位，速度 40" | `movj` with `joints` + `speed` |
 | "which robots?" | `list_robots` |
-| "switch to robot X" | `switch_robot` |
+| "switch to robot X" | `switch_robot` (or use `robot_id` param) |
 | "what presets exist?" | `list_presets` |
+| "what sequences exist?" | `list_sequences` |
 | "run wave sequence" | `run_sequence` → `wave_sequence` |
+| "current joint state" | `get_state` |
+| "who is connected?" | `list_connections` |
+| "plugin version?" | `get_version` |
 
 ## Prerequisites
 
@@ -107,6 +111,28 @@ Sequences play all steps with the configured timing then return home automatical
 robot_control action:get_state
 ```
 
+### List connections
+
+Show all active viewer connections with their robot IDs and current joint values.
+
+```
+robot_control action:list_connections
+```
+
+### List presets
+
+```
+robot_control action:list_presets
+robot_control action:list_presets robot_id:abb-crb-15000
+```
+
+### List sequences
+
+```
+robot_control action:list_sequences
+robot_control action:list_sequences robot_id:abb-crb-15000
+```
+
 ### Switch robots
 
 ```
@@ -120,11 +146,13 @@ To add a new robot:
    in `models/Plugin/robots/robot-config.schema.json`.
 3. Use `switch_robot` to activate it — no code changes needed.
 
-### Configure viewer connection
+### Get version
 
 ```
-robot_control action:set_viewer ws_host:192.168.1.10 ws_port:9877
+robot_control action:get_version
 ```
+
+Returns the plugin version string for debugging.
 
 ## Robot Config Format
 
@@ -153,6 +181,27 @@ Each robot is defined in `models/Plugin/robots/<id>.json`:
 
 The plugin reads configs at runtime — add a file and call `switch_robot` immediately.
 
+## Configuration
+
+Plugin configuration in `openclaw.json`:
+
+```json
+{
+  "plugins": {
+    "entries": {
+      "robot-kinematic": {
+        "enabled": true,
+        "config": {
+          "wsHost": "127.0.0.1",
+          "wsPort": 9877,
+          "defaultRobot": "abb-crb-15000"
+        }
+      }
+    }
+  }
+}
+```
+
 ## Architecture
 
 ```
@@ -171,4 +220,3 @@ OpenClaw chat
 
 All joint values are validated server-side before reaching the viewer.
 Invalid targets are clamped to the configured [min, max] range.
-

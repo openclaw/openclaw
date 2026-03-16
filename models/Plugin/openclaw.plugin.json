@@ -5,10 +5,22 @@
     "type": "object",
     "additionalProperties": false,
     "properties": {
-      "wsHost": { "type": "string" },
-      "wsPort": { "type": "number", "minimum": 1, "maximum": 65535 },
-      "defaultRobot": { "type": "string" }
+      "wsHost": {
+        "type": "string",
+        "description": "WebSocket bridge host for the 3D kinematic viewer",
+        "default": "127.0.0.1"
+      },
+      "wsPort": {
+        "type": "number",
+        "description": "WebSocket bridge port for the 3D kinematic viewer",
+        "default": 9877,
+        "minimum": 1,
+        "maximum": 65535
+      },
+      "defaultRobot": {
+        "type": "string",
+        "description": "Default robot configuration ID to load on startup (e.g. 'abb-crb-15000')"
+      }
     }
   }
 }
-

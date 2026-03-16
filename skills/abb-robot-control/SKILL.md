@@ -22,14 +22,29 @@ Control actual ABB robots via PC SDK through natural language commands.
 | User Request | Action |
 |---|---|
 | "Connect to robot at 192.168.1.10" | `abb_robot` action:`connect` host:`192.168.1.10` |
+| "Disconnect from robot" | `abb_robot` action:`disconnect` |
 | "Move robot to home" | `abb_robot` action:`go_home` |
 | "Set joint 1 to 45 degrees" | `abb_robot` action:`set_joints` joints:`[45,0,0,0,0,0]` |
+| "Smooth move to target" | `abb_robot` action:`movj` joints:`[30,-20,55,15,25,10]` speed:`40` |
 | "Apply ready preset" | `abb_robot` action:`set_preset` preset:`ready` |
 | "Execute wave sequence" | `abb_robot` action:`run_sequence` sequence:`wave_sequence` |
 | "Get current position" | `abb_robot` action:`get_joints` |
 | "Check robot status" | `abb_robot` action:`get_status` |
 | "Turn motors on" | `abb_robot` action:`motors_on` |
+| "Turn motors off" | `abb_robot` action:`motors_off` |
 | "List available robots" | `abb_robot` action:`list_robots` |
+| "List presets" | `abb_robot` action:`list_presets` |
+| "List sequences" | `abb_robot` action:`list_sequences` |
+| "Identify connected robot" | `abb_robot` action:`identify_robot` |
+| "Load RAPID program" | `abb_robot` action:`load_rapid` rapid_code:`...` |
+| "Start RAPID program" | `abb_robot` action:`start_program` |
+| "Stop RAPID program" | `abb_robot` action:`stop_program` |
+| "Execute RAPID code" | `abb_robot` action:`execute_rapid` rapid_code:`...` |
+| "Make the robot dance" | `abb_robot` action:`dance_template` template:`wave` |
+| "Dance between two poses" | `abb_robot` action:`dance_two_points` point_a:`[...]` point_b:`[...]` |
+| "Show motion history" | `abb_robot` action:`get_motion_memory` |
+| "Clear motion history" | `abb_robot` action:`reset_motion_memory` |
+| "Check plugin version" | `abb_robot` action:`get_version` |
 
 ## Prerequisites
 
@@ -74,7 +89,6 @@ Each robot requires a configuration file in `robots/<robot-id>.json`:
       "speed": 250.0,
       "home": 0.0
     }
-    // ... more joints
   ],
   "presets": {
     "home": [0, 0, 0, 0, 0, 0],
@@ -111,6 +125,9 @@ Disconnect from controller.
 ### get_status
 Get controller and robot status (operation mode, motor state, RAPID running).
 
+### get_version
+Get the plugin version string for debugging.
+
 ### get_joints
 Get current joint positions in degrees.
 
@@ -127,6 +144,24 @@ abb_robot action:set_joints joints:[0,-30,60,0,30,0] speed:50
 ```
 
 Joint values are automatically clamped to configured limits.
+
+### movj
+Continuous joint motion from current (or specified start) position to target, with smooth interpolation.
+
+**Parameters:**
+- `joints` (required): Target joint angles in degrees
+- `start_joints` (optional): Starting joint angles (uses current position if omitted)
+- `speed` (optional): Movement speed 1-100% (default: 45)
+- `max_joint_step` (optional): Max interpolation step per joint in degrees (default: 6)
+- `min_samples` (optional): Minimum interpolation samples per segment (default: 2)
+- `interpolation` (optional): Interpolation profile — `linear`, `smoothstep`, or `cosine` (default: `cosine`)
+- `module_name` (optional): RAPID module name (default: `MoveJSegment`)
+
+**Example:**
+```
+abb_robot action:movj joints:[30,-20,55,15,25,10] speed:40
+abb_robot action:movj joints:[90,0,0,0,0,0] start_joints:[0,0,0,0,0,0] speed:60 interpolation:smoothstep
+```
 
 ### set_preset
 Apply a named preset position.
@@ -156,8 +191,16 @@ Sequences are converted to RAPID programs and executed on the controller.
 ### go_home
 Return all joints to home position (typically all zeros).
 
+### identify_robot
+Identify the connected robot model by matching controller joint limits and DH parameters against known robot configurations.
+
+**Example:**
+```
+abb_robot action:identify_robot
+```
+
 ### execute_rapid
-Execute RAPID code on the controller.
+Load and immediately run RAPID code on the controller in one step.
 
 **Parameters:**
 - `rapid_code` (required): RAPID program code
@@ -167,6 +210,24 @@ Execute RAPID code on the controller.
 ```
 abb_robot action:execute_rapid rapid_code:"MODULE MainModule\n  PROC main()\n    MoveJ [[0,0,0,0,0,0],[9E9,9E9,9E9,9E9,9E9,9E9]], v100, fine, tool0;\n  ENDPROC\nENDMODULE"
 ```
+
+### load_rapid
+Stage a RAPID program on the controller without executing it. Use `start_program` afterwards to begin execution.
+
+**Parameters:**
+- `rapid_code` (required): RAPID program code
+- `module_name` (optional): Module name (default: "MainModule")
+
+**Example:**
+```
+abb_robot action:load_rapid rapid_code:"MODULE MyModule\n  PROC main()\n    ...\n  ENDPROC\nENDMODULE"
+```
+
+### start_program
+Start execution of the currently loaded RAPID program on the controller.
+
+### stop_program
+Stop the currently running RAPID program on the controller.
 
 ### motors_on / motors_off
 Turn robot motors on or off.
@@ -182,6 +243,50 @@ List presets for current or specified robot.
 
 ### list_sequences
 List motion sequences for current or specified robot.
+
+### dance_two_points
+Execute a continuous dance motion oscillating between two joint positions.
+
+**Parameters:**
+- `point_a` (required): First joint position (array of angles in degrees)
+- `point_b` (required): Second joint position (array of angles in degrees)
+- `repeat` (optional): Number of A-B oscillations (default: 2)
+- `speed` (optional): Movement speed 1-100% (default: 45)
+- `max_joint_step` (optional): Max interpolation step (default: 6)
+- `min_samples` (optional): Minimum interpolation samples (default: 2)
+- `interpolation` (optional): `linear`, `smoothstep`, or `cosine` (default: `cosine`)
+- `auto_connect` (optional): Auto-connect from last position to point A (default: true)
+- `return_to_a` (optional): Return to point A at end (default: false)
+- `module_name` (optional): RAPID module name (default: `DanceSegment`)
+
+**Example:**
+```
+abb_robot action:dance_two_points point_a:[0,-30,60,0,30,0] point_b:[90,-30,60,45,30,0] repeat:4 speed:50
+```
+
+### dance_template
+Execute a built-in dance template motion pattern.
+
+**Parameters:**
+- `template` (required): Template name — `wave`, `bounce`, `sway`, or `twist`
+- `amplitude` (optional): Amplitude scale 0.1-2.0 (default: 1.0)
+- `beats` (optional): Number of beats mapped to repeat count (default: 8)
+- `speed` (optional): Movement speed 1-100% (default: 45)
+- `max_joint_step` (optional): Max interpolation step (default: 6)
+- `interpolation` (optional): `linear`, `smoothstep`, or `cosine` (default: `cosine`)
+- `module_name` (optional): RAPID module name
+
+**Example:**
+```
+abb_robot action:dance_template template:wave beats:8 speed:50
+abb_robot action:dance_template template:bounce amplitude:1.5
+```
+
+### get_motion_memory
+View motion history including last target position and recent history entries.
+
+### reset_motion_memory
+Clear all motion history and last target position.
 
 ## Multi-Robot Support
 
@@ -213,8 +318,9 @@ To add a new robot:
 The plugin automatically generates RAPID code for:
 
 - Single joint movements (`set_joints`)
+- Continuous interpolated motions (`movj`)
 - Motion sequences (`run_sequence`)
-- Custom trajectories
+- Dance patterns (`dance_two_points`, `dance_template`)
 
 Generated programs use:
 - `MoveAbsJ` for joint movements
@@ -241,6 +347,7 @@ Generated programs use:
 - Violations are reported in tool response
 
 **Robot not identified:**
+- Use `identify_robot` action to re-identify
 - Manually specify `robot_id` parameter
 - Verify robot configuration file exists
 - Check joint limits and DH parameters match actual robot
@@ -259,6 +366,15 @@ User: Now move joint 1 to 90 degrees
 AI: abb_robot action:set_joints joints:[90,0,0,0,0,0]
 ```
 
+### Smooth Continuous Motion
+```
+User: Smoothly move to target position at speed 40
+AI: abb_robot action:movj joints:[30,-20,55,15,25,10] speed:40
+
+User: Use linear interpolation for the next move
+AI: abb_robot action:movj joints:[0,0,0,0,0,0] speed:60 interpolation:linear
+```
+
 ### Execute Sequence
 ```
 User: Make the robot wave
@@ -268,10 +384,25 @@ User: What other sequences are available?
 AI: abb_robot action:list_sequences
 ```
 
-### Custom RAPID Program
+### Dance Patterns
 ```
-User: Execute a custom pick and place motion
-AI: abb_robot action:execute_rapid rapid_code:"MODULE PickPlace\n  PROC main()\n    MoveJ pPick, v100, fine, tool0;\n    ! Pick logic here\n    MoveJ pPlace, v100, fine, tool0;\n  ENDPROC\nENDMODULE"
+User: Make the robot dance
+AI: abb_robot action:dance_template template:wave beats:8 speed:50
+
+User: Dance between two custom poses
+AI: abb_robot action:dance_two_points point_a:[0,-30,60,0,30,0] point_b:[90,-30,60,45,30,0] repeat:4
+```
+
+### RAPID Program Management
+```
+User: Load a custom RAPID program
+AI: abb_robot action:load_rapid rapid_code:"MODULE PickPlace\n  PROC main()\n    MoveJ pPick, v100, fine, tool0;\n  ENDPROC\nENDMODULE"
+
+User: Start the loaded program
+AI: abb_robot action:start_program
+
+User: Stop the program
+AI: abb_robot action:stop_program
 ```
 
 ## Configuration

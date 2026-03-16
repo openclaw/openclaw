@@ -551,6 +551,98 @@ export async function handleAction(
     }
   }
 
+  // Load RAPID (load without executing)
+  if (action === "load_rapid") {
+    if (!controller?.isConnected()) {
+      return errorResult("Not connected. Use 'connect' action first.");
+    }
+    const code = String(params["rapid_code"] ?? "");
+    if (!code) return errorResult("rapid_code parameter is required");
+    const moduleName = String(params["module_name"] ?? "MainModule");
+
+    try {
+      await controller.loadRapidProgram(code, moduleName);
+      return {
+        content: [{ type: "text" as const, text: `✓ RAPID program loaded (${moduleName})` }],
+        details: { moduleName },
+      };
+    } catch (err) {
+      return errorResult(`RAPID load failed: ${String(err)}`);
+    }
+  }
+
+  // Start RAPID program
+  if (action === "start_program") {
+    if (!controller?.isConnected()) {
+      return errorResult("Not connected. Use 'connect' action first.");
+    }
+    try {
+      await controller.startRapid();
+      return {
+        content: [{ type: "text" as const, text: "✓ RAPID program started" }],
+        details: { running: true },
+      };
+    } catch (err) {
+      return errorResult(`Start program failed: ${String(err)}`);
+    }
+  }
+
+  // Stop RAPID program
+  if (action === "stop_program") {
+    if (!controller?.isConnected()) {
+      return errorResult("Not connected. Use 'connect' action first.");
+    }
+    try {
+      await controller.stopRapid();
+      return {
+        content: [{ type: "text" as const, text: "✓ RAPID program stopped" }],
+        details: { running: false },
+      };
+    } catch (err) {
+      return errorResult(`Stop program failed: ${String(err)}`);
+    }
+  }
+
+  // Identify robot from controller data
+  if (action === "identify_robot") {
+    if (!controller?.isConnected()) {
+      return errorResult("Not connected. Use 'connect' action first.");
+    }
+    try {
+      const liveJoints = await controller.getJointPositions();
+      const cfg = currentConfig || getCfg("abb-crb-15000");
+      const jointConfigs = liveJoints.map((_, i) => {
+        const jCfg = cfg.joints[i];
+        return {
+          index: i,
+          id: jCfg?.id ?? `joint${i}`,
+          type: (jCfg?.type ?? "revolute") as "revolute" | "prismatic",
+          min: jCfg?.min ?? -180,
+          max: jCfg?.max ?? 180,
+          home: jCfg?.home ?? 0,
+        };
+      });
+      const { identifyRobot } = await import("./robot-config-loader.js");
+      const identified = identifyRobot(jointConfigs);
+      if (identified) {
+        const identifiedCfg = getCfg(identified);
+        return {
+          content: [{
+            type: "text" as const,
+            text: `✓ Robot identified: ${identifiedCfg.manufacturer} ${identifiedCfg.model} (${identified})`,
+          }],
+          details: { robotId: identified, manufacturer: identifiedCfg.manufacturer, model: identifiedCfg.model, dof: liveJoints.length },
+        };
+      }
+      return {
+        content: [{ type: "text" as const, text: `⚠ Could not identify robot from controller data (${liveJoints.length} DOF). Specify robot_id manually.` }],
+        details: { identified: false, dof: liveJoints.length },
+      };
+    } catch (err) {
+      return errorResult(`Identify robot failed: ${String(err)}`);
+    }
+  }
+
   // Motors on/off
   if (action === "motors_on" || action === "motors_off") {
     if (!controller?.isConnected()) {

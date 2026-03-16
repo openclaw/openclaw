@@ -24,6 +24,8 @@ import {
   type RobotConfig,
 } from "./robot-config-loader.js";
 
+const ROBOT_KINEMATIC_VERSION = "1.0.0";
+
 // ── Config cache ─────────────────────────────────────────────────────────────
 
 const configCache = new Map<string, RobotConfig>();
@@ -121,6 +123,7 @@ export function createRobotControlTool(): AnyAgentTool {
             "list_presets",     // list presets for a robot config
             "list_sequences",   // list sequences for a robot config
             "list_connections", // list all active viewer connections
+            "get_version",      // get plugin version info
           ],
           description: "The action to perform.",
         },
@@ -172,6 +175,14 @@ export function createRobotControlTool(): AnyAgentTool {
     execute: async (_id: string, params: Record<string, unknown>) => {
       const action = String(params["action"] ?? "");
       const opts   = resolveOpts(params);
+
+      // ── get_version ──────────────────────────────────────────────────
+      if (action === "get_version") {
+        return {
+          content: [{ type: "text" as const, text: `robot_control plugin version: ${ROBOT_KINEMATIC_VERSION}` }],
+          details: { plugin: "robot-kinematic", version: ROBOT_KINEMATIC_VERSION },
+        };
+      }
 
       // ── list_connections ────────────────────────────────────────────────
       if (action === "list_connections") {
