@@ -3,7 +3,7 @@ import { normalizeApiKeyInput, validateApiKeyInput } from "./auth-choice.api-key
 import {
   normalizeSecretInputModeInput,
   ensureApiKeyFromOptionEnvOrPrompt,
-  promptSecretRefForOnboarding,
+  promptSecretRefForSetup,
   resolveSecretInputModeForEnvSelection,
 } from "./auth-choice.apply-helpers.js";
 import type { ApplyAuthChoiceParams, ApplyAuthChoiceResult } from "./auth-choice.apply.js";
@@ -42,7 +42,7 @@ export async function applyAuthChoiceAnthropic(
     let token = "";
     let tokenRef: { source: "env" | "file" | "exec"; provider: string; id: string } | undefined;
     if (selectedMode === "ref") {
-      const resolved = await promptSecretRefForOnboarding({
+      const resolved = await promptSecretRefForSetup({
         provider: "anthropic-setup-token",
         config: params.config,
         prompter: params.prompter,
