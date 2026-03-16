@@ -45,6 +45,14 @@ runs:
         done
         exit 1
 
+    - name: Export pnpm path
+      shell: bash
+      run: |
+        set -euo pipefail
+        PNPM_BIN_DIR="$(dirname "$(command -v pnpm)")"
+        echo "$PNPM_BIN_DIR" >> "$GITHUB_PATH"
+        echo "PNPM_BIN_DIR=$PNPM_BIN_DIR" >> "$GITHUB_ENV"
+
     - name: Resolve pnpm store path
       id: pnpm-store
       shell: bash

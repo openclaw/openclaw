@@ -501,19 +501,12 @@ jobs:
           npm -v
           pnpm -v
 
-      - name: Capture node path
-        shell: bash
-        run: |
-          set -euo pipefail
-          echo "NODE_BIN=$(dirname "$(command -v node)")" >> "$GITHUB_ENV"
-
       - name: Install dependencies
         shell: bash
         env:
           CI: true
         run: |
           set -euo pipefail
-          export PATH="$NODE_BIN:$PATH"
           command -v node
           node -v
           pnpm -v
