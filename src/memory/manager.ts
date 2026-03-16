@@ -347,21 +347,18 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       return strict.slice(0, maxResults);
     }
 
-    // Hybrid defaults can produce keyword-only matches with max score equal to
-    // textWeight (for example 0.3). If minScore is higher (for example 0.35),
-    // these exact lexical hits get filtered out even when they are the only
-    // relevant results.
-    const relaxedMinScore = Math.min(minScore, hybrid.textWeight);
+    // If strict hybrid results are empty but keyword matches exist, fall back to
+    // the keyword-backed subset directly. Applying another merged-score floor
+    // here can still drop exact lexical hits after temporal decay / MMR even
+    // though keyword search already found them.
     const keywordKeys = new Set(
       keywordResults.map(
         (entry) => `${entry.source}:${entry.path}:${entry.startLine}:${entry.endLine}`,
       ),
     );
     return merged
-      .filter(
-        (entry) =>
-          keywordKeys.has(`${entry.source}:${entry.path}:${entry.startLine}:${entry.endLine}`) &&
-          entry.score >= relaxedMinScore,
+      .filter((entry) =>
+        keywordKeys.has(`${entry.source}:${entry.path}:${entry.startLine}:${entry.endLine}`),
       )
       .slice(0, maxResults);
   }
