@@ -1,3 +1,4 @@
+import { withProgress } from "../cli/progress.js";
 import { callGateway } from "../gateway/call.js";
 import type { HeartbeatEventPayload } from "../infra/heartbeat-events.js";
 import { normalizeUpdateChannel, resolveUpdateChannelDisplay } from "../infra/update-channels.js";
@@ -28,19 +29,36 @@ export async function statusJsonCommand(
   runtime: RuntimeEnv,
 ) {
   const scan = await scanStatus({ json: true, timeoutMs: opts.timeoutMs, all: opts.all }, runtime);
-  const securityAudit = await loadSecurityAuditModule().then(({ runSecurityAudit }) =>
-    runSecurityAudit({
-      config: scan.cfg,
-      sourceConfig: scan.sourceConfig,
-      deep: false,
-      includeFilesystem: true,
-      includeChannelSecurity: true,
-    }),
+  const runSecurityAudit = async () =>
+    await loadSecurityAuditModule().then(({ runSecurityAudit }) =>
+      runSecurityAudit({
+        config: scan.cfg,
+        sourceConfig: scan.sourceConfig,
+        deep: false,
+        includeFilesystem: true,
+        includeChannelSecurity: true,
+      }),
+    );
+  const securityAudit = await withProgress(
+    {
+      label: "Running security audit...",
+      indeterminate: true,
+      enabled: false,
+    },
+    async () => await runSecurityAudit(),
   );
 
   const usage = opts.usage
-    ? await loadProviderUsage().then(({ loadProviderUsageSummary }) =>
-        loadProviderUsageSummary({ timeoutMs: opts.timeoutMs }),
+    ? await withProgress(
+        {
+          label: "Fetching usage snapshot...",
+          indeterminate: true,
+          enabled: false,
+        },
+        async () => {
+          const { loadProviderUsageSummary } = await loadProviderUsage();
+          return await loadProviderUsageSummary({ timeoutMs: opts.timeoutMs });
+        },
       )
     : undefined;
   const health = opts.deep
