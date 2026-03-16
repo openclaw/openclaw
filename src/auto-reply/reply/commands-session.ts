@@ -22,7 +22,12 @@ const SESSION_COMMAND_PREFIX = "/session";
 const SESSION_DURATION_OFF_VALUES = new Set(["off", "disable", "disabled", "none", "0"]);
 const SESSION_ACTION_IDLE = "idle";
 const SESSION_ACTION_MAX_AGE = "max-age";
-const channelRuntime = createPluginRuntime().channel;
+let cachedChannelRuntime: ReturnType<typeof createPluginRuntime>["channel"] | undefined;
+
+function getChannelRuntime() {
+  cachedChannelRuntime ??= createPluginRuntime().channel;
+  return cachedChannelRuntime;
+}
 
 function resolveSessionCommandUsage() {
   return "Usage: /session idle <duration|off> | /session max-age <duration|off> (example: /session idle 24h)";
@@ -373,6 +378,7 @@ export const handleSessionCommand: CommandHandler = async (params, allowTextComm
   const threadId =
     params.ctx.MessageThreadId != null ? String(params.ctx.MessageThreadId).trim() : "";
   const telegramConversationId = onTelegram ? resolveTelegramConversationId(params) : undefined;
+  const channelRuntime = getChannelRuntime();
 
   const discordManager = onDiscord
     ? channelRuntime.discord.threadBindings.getManager(accountId)
