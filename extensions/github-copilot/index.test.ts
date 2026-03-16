@@ -1,19 +1,8 @@
 import { describe, expect, it } from "vitest";
-import type { ProviderPlugin } from "../../src/plugins/types.js";
+import { registerSingleProviderPlugin } from "../../src/test-utils/plugin-registration.js";
 import githubCopilotPlugin from "./index.js";
 
-function registerProvider(): ProviderPlugin {
-  let provider: ProviderPlugin | undefined;
-  githubCopilotPlugin.register({
-    registerProvider(nextProvider: ProviderPlugin) {
-      provider = nextProvider;
-    },
-  } as never);
-  if (!provider) {
-    throw new Error("provider registration missing");
-  }
-  return provider;
-}
+const registerProvider = () => registerSingleProviderPlugin(githubCopilotPlugin);
 
 describe("github-copilot plugin", () => {
   it("owns Copilot-specific forward-compat fallbacks", () => {
