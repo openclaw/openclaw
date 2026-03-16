@@ -1,6 +1,14 @@
+import type { IncomingMessage, ServerResponse } from "node:http";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const handleBlueBubblesWebhookRequest = vi.hoisted(() => vi.fn(async () => false));
+type BlueBubblesWebhookHandler = (
+  req: IncomingMessage,
+  res: ServerResponse,
+) => Promise<boolean>;
+
+const handleBlueBubblesWebhookRequest = vi.hoisted(() =>
+  vi.fn<BlueBubblesWebhookHandler>(async () => false),
+);
 
 vi.mock("../../extensions/bluebubbles/src/monitor.js", () => ({
   handleBlueBubblesWebhookRequest,
@@ -41,6 +49,31 @@ describe("gateway bluebubbles webhook stage", () => {
         expect(response.res.statusCode).toBe(202);
         expect(response.getBody()).toBe("bluebubbles-handled");
         expect(handlePluginRequest).not.toHaveBeenCalled();
+      },
+    });
+  });
+
+  it("falls through to plugin handling when the bluebubbles handler does not claim the request", async () => {
+    const handlePluginRequest = vi.fn(
+      async (_req: IncomingMessage, res: ServerResponse) => {
+        res.statusCode = 204;
+        res.end();
+        return true;
+      },
+    );
+
+    await withGatewayServer({
+      prefix: "bluebubbles-webhook-fallthrough",
+      resolvedAuth: AUTH_NONE,
+      overrides: { handlePluginRequest },
+      run: async (server) => {
+        const response = await sendRequest(server, {
+          path: "/not-bluebubbles",
+          method: "POST",
+        });
+
+        expect(response.res.statusCode).toBe(204);
+        expect(handlePluginRequest).toHaveBeenCalledTimes(1);
       },
     });
   });
