@@ -1,5 +1,4 @@
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
-import type { PluginHookToolCallRecord } from "../../plugins/types.js";
 import type { AgentRunLoopResult } from "./agent-runner-execution.js";
 import { runAgentTurnWithFallback } from "./agent-runner-execution.js";
 
@@ -39,10 +38,7 @@ export async function runAgentTurnWithHooks(
 
   let effectiveCommandBody = params.commandBody;
   let blockReplyPipeline = params.blockReplyPipeline;
-
-  // Accumulate tool calls across reinject iterations so the plugin
-  // has the full picture of what the agent did.
-  const allToolCalls: PluginHookToolCallRecord[] = [];
+  const processingStartedAt = Date.now();
 
   for (let attempt = 0; attempt <= HOOK_REINJECT_SAFETY_CAP; attempt++) {
     const outcome = await runAgentTurnWithFallback({
@@ -62,6 +58,9 @@ export async function runAgentTurnWithHooks(
         .filter(Boolean)
         .join("\n") ?? "";
 
+    // Tool call records are not yet available from the run result;
+    // consumers that need tool tracking (e.g. speedtrap) should use
+    // the before_tool_call hook to observe calls as they happen.
     const hookResult = await hookRunner.runAfterAgentComplete(
       {
         sessionKey: params.sessionKey ?? "",
@@ -69,8 +68,8 @@ export async function runAgentTurnWithHooks(
         channelKey: hookCtx.channelKey,
         agentId: hookCtx.agentId,
         response: responseText,
-        processingStartedAt: Date.now(),
-        toolCallsMade: allToolCalls,
+        processingStartedAt,
+        toolCallsMade: [],
       },
       { agentId: hookCtx.agentId, sessionKey: params.sessionKey },
     );
