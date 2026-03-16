@@ -439,18 +439,9 @@ function shouldLoadChannelPluginInSetupRuntime(params: {
   ) {
     return true;
   }
-  const configuredChannels = params.cfg.channels;
-  return !params.manifestChannels.some((channelId) => {
-    if (
-      configuredChannels &&
-      typeof configuredChannels === "object" &&
-      !Array.isArray(configuredChannels) &&
-      Object.hasOwn(configuredChannels, channelId)
-    ) {
-      return true;
-    }
-    return isChannelConfigured(params.cfg, channelId, params.env);
-  });
+  return !params.manifestChannels.some((channelId) =>
+    isChannelConfigured(params.cfg, channelId, params.env),
+  );
 }
 
 function createPluginRecord(params: {

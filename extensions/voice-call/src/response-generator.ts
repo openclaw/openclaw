@@ -4,6 +4,7 @@
  */
 
 import crypto from "node:crypto";
+import type { SessionEntry } from "openclaw/plugin-sdk/voice-call";
 import type { VoiceCallConfig } from "./config.js";
 import type { CoreAgentDeps, CoreConfig } from "./core-bridge.js";
 
@@ -27,12 +28,6 @@ export type VoiceResponseParams = {
 export type VoiceResponseResult = {
   text: string | null;
   error?: string;
-};
-
-type SessionEntry = {
-  sessionId: string;
-  updatedAt: number;
-  sessionFile?: string;
 };
 
 /**
