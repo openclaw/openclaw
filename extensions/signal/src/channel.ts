@@ -1,5 +1,9 @@
 import {
-  applyAccountNameToChannelSection,
+  buildAccountScopedDmSecurityPolicy,
+  createScopedAccountConfigAccessors,
+  collectAllowlistProviderRestrictSendersWarnings,
+} from "openclaw/plugin-sdk/compat";
+import {
   buildBaseAccountStatusSnapshot,
   buildBaseChannelStatusSummary,
   buildChannelConfigSchema,
@@ -7,28 +11,32 @@ import {
   createDefaultChannelRuntimeState,
   DEFAULT_ACCOUNT_ID,
   deleteAccountFromConfigSection,
-  formatPairingApproveHint,
   getChatChannelMeta,
   listSignalAccountIds,
   looksLikeSignalTargetId,
-  migrateBaseNameToDefaultAccount,
-  normalizeAccountId,
   normalizeE164,
   normalizeSignalMessagingTarget,
   PAIRING_APPROVED_MESSAGE,
   resolveChannelMediaMaxBytes,
   resolveDefaultSignalAccountId,
-  resolveAllowlistProviderRuntimeGroupPolicy,
-  resolveDefaultGroupPolicy,
   resolveSignalAccount,
   setAccountEnabledInConfigSection,
-  signalOnboardingAdapter,
   SignalConfigSchema,
   type ChannelMessageActionAdapter,
   type ChannelPlugin,
   type ResolvedSignalAccount,
 } from "openclaw/plugin-sdk/signal";
+import { resolveOutboundSendDep } from "../../../src/infra/outbound/send-deps.js";
 import { getSignalRuntime } from "./runtime.js";
+import { createSignalSetupWizardProxy, signalSetupAdapter } from "./setup-core.js";
+
+async function loadSignalChannelRuntime() {
+  return await import("./channel.runtime.js");
+}
+
+const signalSetupWizard = createSignalSetupWizardProxy(async () => ({
+  signalSetupWizard: (await loadSignalChannelRuntime()).signalSetupWizard,
+}));
 
 const signalMessageActions: ChannelMessageActionAdapter = {
   listActions: (ctx) => getSignalRuntime().channel.signal.messageActions?.listActions?.(ctx) ?? [],
@@ -43,23 +51,17 @@ const signalMessageActions: ChannelMessageActionAdapter = {
   },
 };
 
-const meta = getChatChannelMeta("signal");
-
-function buildSignalSetupPatch(input: {
-  signalNumber?: string;
-  cliPath?: string;
-  httpUrl?: string;
-  httpHost?: string;
-  httpPort?: string;
-}) {
-  return {
-    ...(input.signalNumber ? { account: input.signalNumber } : {}),
-    ...(input.cliPath ? { cliPath: input.cliPath } : {}),
-    ...(input.httpUrl ? { httpUrl: input.httpUrl } : {}),
-    ...(input.httpHost ? { httpHost: input.httpHost } : {}),
-    ...(input.httpPort ? { httpPort: Number(input.httpPort) } : {}),
-  };
-}
+const signalConfigAccessors = createScopedAccountConfigAccessors({
+  resolveAccount: ({ cfg, accountId }) => resolveSignalAccount({ cfg, accountId }),
+  resolveAllowFrom: (account: ResolvedSignalAccount) => account.config.allowFrom,
+  formatAllowFrom: (allowFrom) =>
+    allowFrom
+      .map((entry) => String(entry).trim())
+      .filter(Boolean)
+      .map((entry) => (entry === "*" ? "*" : normalizeE164(entry.replace(/^signal:/i, ""))))
+      .filter(Boolean),
+  resolveDefaultTo: (account: ResolvedSignalAccount) => account.config.defaultTo,
+});
 
 type SignalSendFn = ReturnType<typeof getSignalRuntime>["channel"]["signal"]["sendMessageSignal"];
 
@@ -70,9 +72,11 @@ async function sendSignalOutbound(params: {
   mediaUrl?: string;
   mediaLocalRoots?: readonly string[];
   accountId?: string;
-  deps?: { sendSignal?: SignalSendFn };
+  deps?: { [channelId: string]: unknown };
 }) {
-  const send = params.deps?.sendSignal ?? getSignalRuntime().channel.signal.sendMessageSignal;
+  const send =
+    resolveOutboundSendDep<SignalSendFn>(params.deps, "signal") ??
+    getSignalRuntime().channel.signal.sendMessageSignal;
   const maxBytes = resolveChannelMediaMaxBytes({
     cfg: params.cfg,
     resolveChannelLimitMb: ({ cfg, accountId }) =>
@@ -91,9 +95,9 @@ async function sendSignalOutbound(params: {
 export const signalPlugin: ChannelPlugin<ResolvedSignalAccount> = {
   id: "signal",
   meta: {
-    ...meta,
+    ...getChatChannelMeta("signal"),
   },
-  onboarding: signalOnboardingAdapter,
+  setupWizard: signalSetupWizard,
   pairing: {
     idLabel: "signalNumber",
     normalizeAllowEntry: (entry) => entry.replace(/^signal:/i, ""),
@@ -139,48 +143,32 @@ export const signalPlugin: ChannelPlugin<ResolvedSignalAccount> = {
       configured: account.configured,
       baseUrl: account.baseUrl,
     }),
-    resolveAllowFrom: ({ cfg, accountId }) =>
-      (resolveSignalAccount({ cfg, accountId }).config.allowFrom ?? []).map((entry) =>
-        String(entry),
-      ),
-    formatAllowFrom: ({ allowFrom }) =>
-      allowFrom
-        .map((entry) => String(entry).trim())
-        .filter(Boolean)
-        .map((entry) => (entry === "*" ? "*" : normalizeE164(entry.replace(/^signal:/i, ""))))
-        .filter(Boolean),
-    resolveDefaultTo: ({ cfg, accountId }) =>
-      resolveSignalAccount({ cfg, accountId }).config.defaultTo?.trim() || undefined,
+    ...signalConfigAccessors,
   },
   security: {
     resolveDmPolicy: ({ cfg, accountId, account }) => {
-      const resolvedAccountId = accountId ?? account.accountId ?? DEFAULT_ACCOUNT_ID;
-      const useAccountPath = Boolean(cfg.channels?.signal?.accounts?.[resolvedAccountId]);
-      const basePath = useAccountPath
-        ? `channels.signal.accounts.${resolvedAccountId}.`
-        : "channels.signal.";
-      return {
-        policy: account.config.dmPolicy ?? "pairing",
+      return buildAccountScopedDmSecurityPolicy({
+        cfg,
+        channelKey: "signal",
+        accountId,
+        fallbackAccountId: account.accountId ?? DEFAULT_ACCOUNT_ID,
+        policy: account.config.dmPolicy,
         allowFrom: account.config.allowFrom ?? [],
-        policyPath: `${basePath}dmPolicy`,
-        allowFromPath: basePath,
-        approveHint: formatPairingApproveHint("signal"),
+        policyPathSuffix: "dmPolicy",
         normalizeEntry: (raw) => normalizeE164(raw.replace(/^signal:/i, "").trim()),
-      };
+      });
     },
     collectWarnings: ({ account, cfg }) => {
-      const defaultGroupPolicy = resolveDefaultGroupPolicy(cfg);
-      const { groupPolicy } = resolveAllowlistProviderRuntimeGroupPolicy({
+      return collectAllowlistProviderRestrictSendersWarnings({
+        cfg,
         providerConfigPresent: cfg.channels?.signal !== undefined,
-        groupPolicy: account.config.groupPolicy,
-        defaultGroupPolicy,
+        configuredGroupPolicy: account.config.groupPolicy,
+        surface: "Signal groups",
+        openScope: "any member",
+        groupPolicyPath: "channels.signal.groupPolicy",
+        groupAllowFromPath: "channels.signal.groupAllowFrom",
+        mentionGated: false,
       });
-      if (groupPolicy !== "open") {
-        return [];
-      }
-      return [
-        `- Signal groups: groupPolicy="open" allows any member to trigger the bot. Set channels.signal.groupPolicy="allowlist" + channels.signal.groupAllowFrom to restrict senders.`,
-      ];
     },
   },
   messaging: {
@@ -190,74 +178,7 @@ export const signalPlugin: ChannelPlugin<ResolvedSignalAccount> = {
       hint: "<E.164|uuid:ID|group:ID|signal:group:ID|signal:+E.164>",
     },
   },
-  setup: {
-    resolveAccountId: ({ accountId }) => normalizeAccountId(accountId),
-    applyAccountName: ({ cfg, accountId, name }) =>
-      applyAccountNameToChannelSection({
-        cfg,
-        channelKey: "signal",
-        accountId,
-        name,
-      }),
-    validateInput: ({ input }) => {
-      if (
-        !input.signalNumber &&
-        !input.httpUrl &&
-        !input.httpHost &&
-        !input.httpPort &&
-        !input.cliPath
-      ) {
-        return "Signal requires --signal-number or --http-url/--http-host/--http-port/--cli-path.";
-      }
-      return null;
-    },
-    applyAccountConfig: ({ cfg, accountId, input }) => {
-      const namedConfig = applyAccountNameToChannelSection({
-        cfg,
-        channelKey: "signal",
-        accountId,
-        name: input.name,
-      });
-      const next =
-        accountId !== DEFAULT_ACCOUNT_ID
-          ? migrateBaseNameToDefaultAccount({
-              cfg: namedConfig,
-              channelKey: "signal",
-            })
-          : namedConfig;
-      if (accountId === DEFAULT_ACCOUNT_ID) {
-        return {
-          ...next,
-          channels: {
-            ...next.channels,
-            signal: {
-              ...next.channels?.signal,
-              enabled: true,
-              ...buildSignalSetupPatch(input),
-            },
-          },
-        };
-      }
-      return {
-        ...next,
-        channels: {
-          ...next.channels,
-          signal: {
-            ...next.channels?.signal,
-            enabled: true,
-            accounts: {
-              ...next.channels?.signal?.accounts,
-              [accountId]: {
-                ...next.channels?.signal?.accounts?.[accountId],
-                enabled: true,
-                ...buildSignalSetupPatch(input),
-              },
-            },
-          },
-        },
-      };
-    },
-  },
+  setup: signalSetupAdapter,
   outbound: {
     deliveryMode: "direct",
     chunker: (text, limit) => getSignalRuntime().channel.text.chunkText(text, limit),

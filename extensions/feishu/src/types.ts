@@ -60,6 +60,22 @@ export type FeishuSendResult = {
   chatId: string;
 };
 
+export type FeishuChatType = "p2p" | "group" | "private";
+
+export type FeishuMessageInfo = {
+  messageId: string;
+  chatId: string;
+  chatType?: FeishuChatType;
+  senderId?: string;
+  senderOpenId?: string;
+  senderType?: string;
+  content: string;
+  contentType: string;
+  createTime?: number;
+  /** Feishu thread ID (omt_xxx) — present when the message belongs to a topic thread. */
+  threadId?: string;
+};
+
 export type FeishuProbeResult = BaseProbeResult<string> & {
   appId?: string;
   botName?: string;

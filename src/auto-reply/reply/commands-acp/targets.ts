@@ -1,5 +1,5 @@
 import { callGateway } from "../../../gateway/call.js";
-import { getSessionBindingService } from "../../../infra/outbound/session-binding-service.js";
+import { resolveEffectiveResetTargetSessionKey } from "../acp-reset-target.js";
 import { resolveRequesterSessionKey } from "../commands-subagents/shared.js";
 import type { HandleCommandsParams } from "../commands-types.js";
 import { resolveAcpCommandBindingContext } from "./context.js";
@@ -35,19 +35,22 @@ async function resolveSessionKeyByToken(token: string): Promise<string | null> {
 }
 
 export function resolveBoundAcpThreadSessionKey(params: HandleCommandsParams): string | undefined {
+  const commandTargetSessionKey =
+    typeof params.ctx.CommandTargetSessionKey === "string"
+      ? params.ctx.CommandTargetSessionKey.trim()
+      : "";
+  const activeSessionKey = commandTargetSessionKey || params.sessionKey.trim();
   const bindingContext = resolveAcpCommandBindingContext(params);
-  if (!bindingContext.channel || !bindingContext.conversationId) {
-    return undefined;
-  }
-  const binding = getSessionBindingService().resolveByConversation({
+  return resolveEffectiveResetTargetSessionKey({
+    cfg: params.cfg,
     channel: bindingContext.channel,
     accountId: bindingContext.accountId,
     conversationId: bindingContext.conversationId,
+    parentConversationId: bindingContext.parentConversationId,
+    activeSessionKey,
+    allowNonAcpBindingSessionKey: true,
+    skipConfiguredFallbackWhenActiveSessionNonAcp: false,
   });
-  if (!binding || binding.targetKind !== "session") {
-    return undefined;
-  }
-  return binding.targetSessionKey.trim() || undefined;
 }
 
 export async function resolveAcpTargetSessionKey(params: {

@@ -88,14 +88,17 @@ function isUrlAllowedBySsrfPolicy(url: string, policy?: SsrFPolicy): boolean {
   );
 }
 
-const fetchRemoteMediaMock = vi.fn(async (params: RemoteMediaFetchParams) => {
+async function fetchRemoteMediaWithRedirects(
+  params: RemoteMediaFetchParams,
+  requestInit?: RequestInit,
+) {
   const fetchFn = params.fetchImpl ?? fetch;
   let currentUrl = params.url;
   for (let i = 0; i <= MAX_REDIRECT_HOPS; i += 1) {
     if (!isUrlAllowedBySsrfPolicy(currentUrl, params.ssrfPolicy)) {
       throw new Error(`Blocked hostname (not in allowlist): ${currentUrl}`);
     }
-    const res = await fetchFn(currentUrl, { redirect: "manual" });
+    const res = await fetchFn(currentUrl, { redirect: "manual", ...requestInit });
     if (REDIRECT_STATUS_CODES.includes(res.status)) {
       const location = res.headers.get("location");
       if (!location) {
@@ -107,6 +110,10 @@ const fetchRemoteMediaMock = vi.fn(async (params: RemoteMediaFetchParams) => {
     return readRemoteMediaResponse(res, params);
   }
   throw new Error("too many redirects");
+}
+
+const fetchRemoteMediaMock = vi.fn(async (params: RemoteMediaFetchParams) => {
+  return await fetchRemoteMediaWithRedirects(params);
 });
 
 const runtimeStub: PluginRuntime = createPluginRuntimeMock({
@@ -720,24 +727,9 @@ describe("msteams attachments", () => {
       });
 
       fetchRemoteMediaMock.mockImplementationOnce(async (params) => {
-        const fetchFn = params.fetchImpl ?? fetch;
-        let currentUrl = params.url;
-        for (let i = 0; i < MAX_REDIRECT_HOPS; i += 1) {
-          const res = await fetchFn(currentUrl, {
-            redirect: "manual",
-            dispatcher: {},
-          } as RequestInit);
-          if (REDIRECT_STATUS_CODES.includes(res.status)) {
-            const location = res.headers.get("location");
-            if (!location) {
-              throw new Error("redirect missing location");
-            }
-            currentUrl = new URL(location, currentUrl).toString();
-            continue;
-          }
-          return readRemoteMediaResponse(res, params);
-        }
-        throw new Error("too many redirects");
+        return await fetchRemoteMediaWithRedirects(params, {
+          dispatcher: {},
+        } as RequestInit);
       });
 
       const media = await downloadAttachmentsWithFetch(

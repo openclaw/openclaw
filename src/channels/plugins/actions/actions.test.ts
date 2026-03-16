@@ -15,7 +15,7 @@ vi.mock("../../../agents/tools/telegram-actions.js", () => ({
   handleTelegramAction,
 }));
 
-vi.mock("../../../signal/send-reactions.js", () => ({
+vi.mock("../../../../extensions/signal/src/send-reactions.js", () => ({
   sendReactionSignal,
   removeReactionSignal,
 }));
@@ -330,6 +330,44 @@ describe("handleDiscordMessageAction", () => {
       },
     },
     {
+      name: "parses string booleans for discord poll adapter params",
+      input: {
+        action: "poll" as const,
+        params: {
+          to: "channel:123",
+          pollQuestion: "Ready?",
+          pollOption: ["Yes", "No"],
+          pollMulti: "true",
+        },
+      },
+      expected: {
+        action: "poll",
+        to: "channel:123",
+        question: "Ready?",
+        answers: ["Yes", "No"],
+        allowMultiselect: true,
+      },
+    },
+    {
+      name: "rejects partially numeric poll duration for discord poll adapter params",
+      input: {
+        action: "poll" as const,
+        params: {
+          to: "channel:123",
+          pollQuestion: "Ready?",
+          pollOption: ["Yes", "No"],
+          pollDurationHours: "24h",
+        },
+      },
+      expected: {
+        action: "poll",
+        to: "channel:123",
+        question: "Ready?",
+        answers: ["Yes", "No"],
+        durationHours: undefined,
+      },
+    },
+    {
       name: "forwards accountId for thread replies",
       input: {
         action: "thread-reply" as const,
@@ -496,6 +534,71 @@ describe("handleDiscordMessageAction", () => {
 });
 
 describe("telegramMessageActions", () => {
+  it("lists poll when telegram is configured", () => {
+    const actions = telegramMessageActions.listActions?.({ cfg: telegramCfg() }) ?? [];
+
+    expect(actions).toContain("poll");
+  });
+
+  it("omits poll when sendMessage is disabled", () => {
+    const cfg = {
+      channels: {
+        telegram: {
+          botToken: "tok",
+          actions: { sendMessage: false },
+        },
+      },
+    } as OpenClawConfig;
+
+    const actions = telegramMessageActions.listActions?.({ cfg }) ?? [];
+
+    expect(actions).not.toContain("poll");
+  });
+
+  it("omits poll when poll actions are disabled", () => {
+    const cfg = {
+      channels: {
+        telegram: {
+          botToken: "tok",
+          actions: { poll: false },
+        },
+      },
+    } as OpenClawConfig;
+
+    const actions = telegramMessageActions.listActions?.({ cfg }) ?? [];
+
+    expect(actions).not.toContain("poll");
+  });
+
+  it("omits poll when sendMessage and poll are split across accounts", () => {
+    const cfg = {
+      channels: {
+        telegram: {
+          accounts: {
+            senderOnly: {
+              botToken: "tok-send",
+              actions: {
+                sendMessage: true,
+                poll: false,
+              },
+            },
+            pollOnly: {
+              botToken: "tok-poll",
+              actions: {
+                sendMessage: false,
+                poll: true,
+              },
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    const actions = telegramMessageActions.listActions?.({ cfg }) ?? [];
+
+    expect(actions).not.toContain("poll");
+  });
+
   it("lists sticker actions only when enabled by config", () => {
     const cases = [
       {
@@ -592,6 +695,85 @@ describe("telegramMessageActions", () => {
           messageId: 42,
           content: "Updated",
           buttons: [],
+          accountId: undefined,
+        },
+      },
+      {
+        name: "poll maps to telegram poll action",
+        action: "poll" as const,
+        params: {
+          to: "123",
+          pollQuestion: "Ready?",
+          pollOption: ["Yes", "No"],
+          pollMulti: true,
+          pollDurationSeconds: 60,
+          pollPublic: true,
+          replyTo: 55,
+          threadId: 77,
+          silent: true,
+        },
+        expectedPayload: {
+          action: "poll",
+          to: "123",
+          question: "Ready?",
+          answers: ["Yes", "No"],
+          allowMultiselect: true,
+          durationHours: undefined,
+          durationSeconds: 60,
+          replyToMessageId: 55,
+          messageThreadId: 77,
+          isAnonymous: false,
+          silent: true,
+          accountId: undefined,
+        },
+      },
+      {
+        name: "poll parses string booleans before telegram action handoff",
+        action: "poll" as const,
+        params: {
+          to: "123",
+          pollQuestion: "Ready?",
+          pollOption: ["Yes", "No"],
+          pollMulti: "true",
+          pollPublic: "true",
+          silent: "true",
+        },
+        expectedPayload: {
+          action: "poll",
+          to: "123",
+          question: "Ready?",
+          answers: ["Yes", "No"],
+          allowMultiselect: true,
+          durationHours: undefined,
+          durationSeconds: undefined,
+          replyToMessageId: undefined,
+          messageThreadId: undefined,
+          isAnonymous: false,
+          silent: true,
+          accountId: undefined,
+        },
+      },
+      {
+        name: "poll rejects partially numeric duration strings before telegram action handoff",
+        action: "poll" as const,
+        params: {
+          to: "123",
+          pollQuestion: "Ready?",
+          pollOption: ["Yes", "No"],
+          pollDurationSeconds: "60s",
+        },
+        expectedPayload: {
+          action: "poll",
+          to: "123",
+          question: "Ready?",
+          answers: ["Yes", "No"],
+          allowMultiselect: undefined,
+          durationHours: undefined,
+          durationSeconds: undefined,
+          replyToMessageId: undefined,
+          messageThreadId: undefined,
+          isAnonymous: undefined,
+          silent: undefined,
           accountId: undefined,
         },
       },

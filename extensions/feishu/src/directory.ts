@@ -1,86 +1,14 @@
 import type { ClawdbotConfig } from "openclaw/plugin-sdk/feishu";
 import { resolveFeishuAccount } from "./accounts.js";
 import { createFeishuClient } from "./client.js";
-import { normalizeFeishuTarget } from "./targets.js";
+import {
+  listFeishuDirectoryGroups,
+  listFeishuDirectoryPeers,
+  type FeishuDirectoryGroup,
+  type FeishuDirectoryPeer,
+} from "./directory.static.js";
 
-export type FeishuDirectoryPeer = {
-  kind: "user";
-  id: string;
-  name?: string;
-};
-
-export type FeishuDirectoryGroup = {
-  kind: "group";
-  id: string;
-  name?: string;
-};
-
-export async function listFeishuDirectoryPeers(params: {
-  cfg: ClawdbotConfig;
-  query?: string;
-  limit?: number;
-  accountId?: string;
-}): Promise<FeishuDirectoryPeer[]> {
-  const account = resolveFeishuAccount({ cfg: params.cfg, accountId: params.accountId });
-  const feishuCfg = account.config;
-  const q = params.query?.trim().toLowerCase() || "";
-  const ids = new Set<string>();
-
-  for (const entry of feishuCfg?.allowFrom ?? []) {
-    const trimmed = String(entry).trim();
-    if (trimmed && trimmed !== "*") {
-      ids.add(trimmed);
-    }
-  }
-
-  for (const userId of Object.keys(feishuCfg?.dms ?? {})) {
-    const trimmed = userId.trim();
-    if (trimmed) {
-      ids.add(trimmed);
-    }
-  }
-
-  return Array.from(ids)
-    .map((raw) => raw.trim())
-    .filter(Boolean)
-    .map((raw) => normalizeFeishuTarget(raw) ?? raw)
-    .filter((id) => (q ? id.toLowerCase().includes(q) : true))
-    .slice(0, params.limit && params.limit > 0 ? params.limit : undefined)
-    .map((id) => ({ kind: "user" as const, id }));
-}
-
-export async function listFeishuDirectoryGroups(params: {
-  cfg: ClawdbotConfig;
-  query?: string;
-  limit?: number;
-  accountId?: string;
-}): Promise<FeishuDirectoryGroup[]> {
-  const account = resolveFeishuAccount({ cfg: params.cfg, accountId: params.accountId });
-  const feishuCfg = account.config;
-  const q = params.query?.trim().toLowerCase() || "";
-  const ids = new Set<string>();
-
-  for (const groupId of Object.keys(feishuCfg?.groups ?? {})) {
-    const trimmed = groupId.trim();
-    if (trimmed && trimmed !== "*") {
-      ids.add(trimmed);
-    }
-  }
-
-  for (const entry of feishuCfg?.groupAllowFrom ?? []) {
-    const trimmed = String(entry).trim();
-    if (trimmed && trimmed !== "*") {
-      ids.add(trimmed);
-    }
-  }
-
-  return Array.from(ids)
-    .map((raw) => raw.trim())
-    .filter(Boolean)
-    .filter((id) => (q ? id.toLowerCase().includes(q) : true))
-    .slice(0, params.limit && params.limit > 0 ? params.limit : undefined)
-    .map((id) => ({ kind: "group" as const, id }));
-}
+export { listFeishuDirectoryGroups, listFeishuDirectoryPeers } from "./directory.static.js";
 
 export async function listFeishuDirectoryPeersLive(params: {
   cfg: ClawdbotConfig;

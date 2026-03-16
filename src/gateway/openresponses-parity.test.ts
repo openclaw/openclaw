@@ -54,6 +54,20 @@ describe("OpenResponses Feature Parity", () => {
       expect(result.success).toBe(true);
     });
 
+    it("should validate input_image with HEIC base64 source", async () => {
+      const validImage = {
+        type: "input_image" as const,
+        source: {
+          type: "base64" as const,
+          media_type: "image/heic" as const,
+          data: "aGVpYy1pbWFnZQ==",
+        },
+      };
+
+      const result = InputImageContentPartSchema.safeParse(validImage);
+      expect(result.success).toBe(true);
+    });
+
     it("should reject input_image with invalid mime type", async () => {
       const invalidImage = {
         type: "input_image" as const,

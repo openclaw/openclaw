@@ -1,15 +1,10 @@
 import type { OpenClawConfig, RuntimeEnv } from "openclaw/plugin-sdk/msteams";
 import { describe, expect, it } from "vitest";
+import { createDirectoryTestRuntime, expectDirectorySurface } from "../../test-utils/directory.js";
 import { msteamsPlugin } from "./channel.js";
 
 describe("msteams directory", () => {
-  const runtimeEnv: RuntimeEnv = {
-    log: () => {},
-    error: () => {},
-    exit: (code: number): never => {
-      throw new Error(`exit ${code}`);
-    },
-  };
+  const runtimeEnv = createDirectoryTestRuntime() as RuntimeEnv;
 
   it("lists peers and groups from config", async () => {
     const cfg = {
@@ -29,12 +24,10 @@ describe("msteams directory", () => {
       },
     } as unknown as OpenClawConfig;
 
-    expect(msteamsPlugin.directory).toBeTruthy();
-    expect(msteamsPlugin.directory?.listPeers).toBeTruthy();
-    expect(msteamsPlugin.directory?.listGroups).toBeTruthy();
+    const directory = expectDirectorySurface(msteamsPlugin.directory);
 
     await expect(
-      msteamsPlugin.directory!.listPeers!({
+      directory.listPeers({
         cfg,
         query: undefined,
         limit: undefined,
@@ -50,7 +43,7 @@ describe("msteams directory", () => {
     );
 
     await expect(
-      msteamsPlugin.directory!.listGroups!({
+      directory.listGroups({
         cfg,
         query: undefined,
         limit: undefined,

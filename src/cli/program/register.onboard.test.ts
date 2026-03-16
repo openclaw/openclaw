@@ -9,8 +9,8 @@ const runtime = {
   exit: vi.fn(),
 };
 
-vi.mock("../../commands/auth-choice-options.js", () => ({
-  formatAuthChoiceChoicesForCli: () => "token|oauth",
+vi.mock("../../commands/auth-choice-options.static.js", () => ({
+  formatStaticAuthChoiceChoicesForCli: () => "token|oauth",
 }));
 
 vi.mock("../../commands/onboard-provider-auth-flags.js", () => ({
@@ -123,7 +123,17 @@ describe("registerOnboardCommand", () => {
     await runCli(["onboard", "--mistral-api-key", "sk-mistral-test"]);
     expect(onboardCommandMock).toHaveBeenCalledWith(
       expect.objectContaining({
-        mistralApiKey: "sk-mistral-test",
+        mistralApiKey: "sk-mistral-test", // pragma: allowlist secret
+      }),
+      runtime,
+    );
+  });
+
+  it("forwards --gateway-token-ref-env", async () => {
+    await runCli(["onboard", "--gateway-token-ref-env", "OPENCLAW_GATEWAY_TOKEN"]);
+    expect(onboardCommandMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        gatewayTokenRefEnv: "OPENCLAW_GATEWAY_TOKEN",
       }),
       runtime,
     );

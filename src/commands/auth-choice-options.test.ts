@@ -1,10 +1,19 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { AuthProfileStore } from "../agents/auth-profiles.js";
+import type { ProviderWizardOption } from "../plugins/provider-wizard.js";
 import {
   buildAuthChoiceGroups,
   buildAuthChoiceOptions,
   formatAuthChoiceChoicesForCli,
 } from "./auth-choice-options.js";
+import { formatStaticAuthChoiceChoicesForCli } from "./auth-choice-options.static.js";
+
+const resolveProviderWizardOptions = vi.hoisted(() =>
+  vi.fn<() => ProviderWizardOption[]>(() => []),
+);
+vi.mock("../plugins/provider-wizard.js", () => ({
+  resolveProviderWizardOptions,
+}));
 
 const EMPTY_STORE: AuthProfileStore = { version: 1, profiles: {} };
 
@@ -17,6 +26,29 @@ function getOptions(includeSkip = false) {
 
 describe("buildAuthChoiceOptions", () => {
   it("includes core and provider-specific auth choices", () => {
+    resolveProviderWizardOptions.mockReturnValue([
+      {
+        value: "ollama",
+        label: "Ollama",
+        hint: "Cloud and local open models",
+        groupId: "ollama",
+        groupLabel: "Ollama",
+      },
+      {
+        value: "vllm",
+        label: "vLLM",
+        hint: "Local/self-hosted OpenAI-compatible server",
+        groupId: "vllm",
+        groupLabel: "vLLM",
+      },
+      {
+        value: "sglang",
+        label: "SGLang",
+        hint: "Fast self-hosted OpenAI-compatible server",
+        groupId: "sglang",
+        groupLabel: "SGLang",
+      },
+    ]);
     const options = getOptions();
 
     for (const value of [
@@ -24,9 +56,9 @@ describe("buildAuthChoiceOptions", () => {
       "token",
       "zai-api-key",
       "xiaomi-api-key",
-      "minimax-api",
-      "minimax-api-key-cn",
-      "minimax-api-lightning",
+      "minimax-global-api",
+      "minimax-cn-api",
+      "minimax-global-oauth",
       "moonshot-api-key",
       "moonshot-api-key-cn",
       "kimi-code-api-key",
@@ -41,6 +73,9 @@ describe("buildAuthChoiceOptions", () => {
       "volcengine-api-key",
       "byteplus-api-key",
       "vllm",
+      "opencode-go",
+      "ollama",
+      "sglang",
     ]) {
       expect(options.some((opt) => opt.value === value)).toBe(true);
     }
@@ -70,6 +105,26 @@ describe("buildAuthChoiceOptions", () => {
     expect(cliChoices).toContain("codex-cli");
   });
 
+  it("keeps static cli help choices off the plugin-backed catalog", () => {
+    resolveProviderWizardOptions.mockReturnValue([
+      {
+        value: "ollama",
+        label: "Ollama",
+        hint: "Cloud and local open models",
+        groupId: "ollama",
+        groupLabel: "Ollama",
+      },
+    ]);
+
+    const cliChoices = formatStaticAuthChoiceChoicesForCli({
+      includeLegacyAliases: false,
+      includeSkip: true,
+    }).split("|");
+
+    expect(cliChoices).not.toContain("ollama");
+    expect(cliChoices).toContain("skip");
+  });
+
   it("shows Chutes in grouped provider selection", () => {
     const { groups } = buildAuthChoiceGroups({
       store: EMPTY_STORE,
@@ -79,5 +134,37 @@ describe("buildAuthChoiceOptions", () => {
 
     expect(chutesGroup).toBeDefined();
     expect(chutesGroup?.options.some((opt) => opt.value === "chutes")).toBe(true);
+  });
+
+  it("groups OpenCode Zen and Go under one OpenCode entry", () => {
+    const { groups } = buildAuthChoiceGroups({
+      store: EMPTY_STORE,
+      includeSkip: false,
+    });
+    const openCodeGroup = groups.find((group) => group.value === "opencode");
+
+    expect(openCodeGroup).toBeDefined();
+    expect(openCodeGroup?.options.some((opt) => opt.value === "opencode-zen")).toBe(true);
+    expect(openCodeGroup?.options.some((opt) => opt.value === "opencode-go")).toBe(true);
+  });
+
+  it("shows Ollama in grouped provider selection", () => {
+    resolveProviderWizardOptions.mockReturnValue([
+      {
+        value: "ollama",
+        label: "Ollama",
+        hint: "Cloud and local open models",
+        groupId: "ollama",
+        groupLabel: "Ollama",
+      },
+    ]);
+    const { groups } = buildAuthChoiceGroups({
+      store: EMPTY_STORE,
+      includeSkip: false,
+    });
+    const ollamaGroup = groups.find((group) => group.value === "ollama");
+
+    expect(ollamaGroup).toBeDefined();
+    expect(ollamaGroup?.options.some((opt) => opt.value === "ollama")).toBe(true);
   });
 });

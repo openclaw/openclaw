@@ -27,10 +27,13 @@ const execDockerRawUnavailable: NonNullable<SecurityAuditOptions["execDockerRawF
 };
 
 function stubChannelPlugin(params: {
-  id: "discord" | "slack" | "telegram";
+  id: "discord" | "slack" | "telegram" | "zalouser";
   label: string;
   resolveAccount: (cfg: OpenClawConfig, accountId: string | null | undefined) => unknown;
+  inspectAccount?: (cfg: OpenClawConfig, accountId: string | null | undefined) => unknown;
   listAccountIds?: (cfg: OpenClawConfig) => string[];
+  isConfigured?: (account: unknown, cfg: OpenClawConfig) => boolean;
+  isEnabled?: (account: unknown, cfg: OpenClawConfig) => boolean;
 }): ChannelPlugin {
   return {
     id: params.id,
@@ -54,9 +57,10 @@ function stubChannelPlugin(params: {
           );
           return enabled ? ["default"] : [];
         }),
+      inspectAccount: params.inspectAccount,
       resolveAccount: (cfg, accountId) => params.resolveAccount(cfg, accountId),
-      isEnabled: () => true,
-      isConfigured: () => true,
+      isEnabled: (account, cfg) => params.isEnabled?.(account, cfg) ?? true,
+      isConfigured: (account, cfg) => params.isConfigured?.(account, cfg) ?? true,
     },
   };
 }
@@ -102,6 +106,27 @@ const telegramPlugin = stubChannelPlugin({
     const resolvedAccountId = typeof accountId === "string" && accountId ? accountId : "default";
     const base = cfg.channels?.telegram ?? {};
     const account = cfg.channels?.telegram?.accounts?.[resolvedAccountId] ?? {};
+    return { config: { ...base, ...account } };
+  },
+});
+
+const zalouserPlugin = stubChannelPlugin({
+  id: "zalouser",
+  label: "Zalo Personal",
+  listAccountIds: (cfg) => {
+    const channel = (cfg.channels as Record<string, unknown> | undefined)?.zalouser as
+      | { accounts?: Record<string, unknown> }
+      | undefined;
+    const ids = Object.keys(channel?.accounts ?? {});
+    return ids.length > 0 ? ids : ["default"];
+  },
+  resolveAccount: (cfg, accountId) => {
+    const resolvedAccountId = typeof accountId === "string" && accountId ? accountId : "default";
+    const channel = (cfg.channels as Record<string, unknown> | undefined)?.zalouser as
+      | { accounts?: Record<string, unknown> }
+      | undefined;
+    const base = (channel ?? {}) as Record<string, unknown>;
+    const account = channel?.accounts?.[resolvedAccountId] ?? {};
     return { config: { ...base, ...account } };
   },
 });
@@ -1353,6 +1378,32 @@ description: test skill
     expectFinding(res, "browser.remote_cdp_http", "warn");
   });
 
+  it("warns when remote CDP targets a private/internal host", async () => {
+    const cfg: OpenClawConfig = {
+      browser: {
+        profiles: {
+          remote: {
+            cdpUrl:
+              "http://169.254.169.254:9222/json/version?token=supersecrettokenvalue1234567890",
+            color: "#0066CC",
+          },
+        },
+      },
+    };
+
+    const res = await audit(cfg);
+
+    expectFinding(res, "browser.remote_cdp_private_host", "warn");
+    expect(res.findings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          checkId: "browser.remote_cdp_private_host",
+          detail: expect.stringContaining("token=supers…7890"),
+        }),
+      ]),
+    );
+  });
+
   it("warns when control UI allows insecure auth", async () => {
     const cfg: OpenClawConfig = {
       gateway: {
@@ -1486,7 +1537,7 @@ description: test skill
       channels: {
         feishu: {
           appId: "cli_test",
-          appSecret: "secret_test",
+          appSecret: "secret_test", // pragma: allowlist secret
         },
       },
     };
@@ -1518,7 +1569,7 @@ description: test skill
       channels: {
         feishu: {
           appId: "cli_test",
-          appSecret: "secret_test",
+          appSecret: "secret_test", // pragma: allowlist secret
           tools: { doc: false },
         },
       },
@@ -1837,6 +1888,247 @@ description: test skill
     });
   });
 
+  it("keeps channel security findings when SecretRef credentials are configured but unavailable", async () => {
+    await withChannelSecurityStateDir(async () => {
+      const sourceConfig: OpenClawConfig = {
+        channels: {
+          discord: {
+            enabled: true,
+            token: { source: "env", provider: "default", id: "DISCORD_BOT_TOKEN" },
+            groupPolicy: "allowlist",
+            guilds: {
+              "123": {
+                channels: {
+                  general: { allow: true },
+                },
+              },
+            },
+          },
+        },
+      };
+      const resolvedConfig: OpenClawConfig = {
+        channels: {
+          discord: {
+            enabled: true,
+            groupPolicy: "allowlist",
+            guilds: {
+              "123": {
+                channels: {
+                  general: { allow: true },
+                },
+              },
+            },
+          },
+        },
+      };
+
+      const inspectableDiscordPlugin = stubChannelPlugin({
+        id: "discord",
+        label: "Discord",
+        inspectAccount: (cfg) => {
+          const channel = cfg.channels?.discord ?? {};
+          const token = channel.token;
+          return {
+            accountId: "default",
+            enabled: true,
+            configured:
+              Boolean(token) &&
+              typeof token === "object" &&
+              !Array.isArray(token) &&
+              "source" in token,
+            token: "",
+            tokenSource:
+              Boolean(token) &&
+              typeof token === "object" &&
+              !Array.isArray(token) &&
+              "source" in token
+                ? "config"
+                : "none",
+            tokenStatus:
+              Boolean(token) &&
+              typeof token === "object" &&
+              !Array.isArray(token) &&
+              "source" in token
+                ? "configured_unavailable"
+                : "missing",
+            config: channel,
+          };
+        },
+        resolveAccount: (cfg) => ({ config: cfg.channels?.discord ?? {} }),
+        isConfigured: (account) => Boolean((account as { configured?: boolean }).configured),
+      });
+
+      const res = await runSecurityAudit({
+        config: resolvedConfig,
+        sourceConfig,
+        includeFilesystem: false,
+        includeChannelSecurity: true,
+        plugins: [inspectableDiscordPlugin],
+      });
+
+      expect(res.findings).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            checkId: "channels.discord.commands.native.no_allowlists",
+            severity: "warn",
+          }),
+        ]),
+      );
+    });
+  });
+
+  it("keeps Slack HTTP slash-command findings when resolved inspection only exposes signingSecret status", async () => {
+    await withChannelSecurityStateDir(async () => {
+      const sourceConfig: OpenClawConfig = {
+        channels: {
+          slack: {
+            enabled: true,
+            mode: "http",
+            groupPolicy: "open",
+            slashCommand: { enabled: true },
+          },
+        },
+      };
+      const resolvedConfig: OpenClawConfig = {
+        channels: {
+          slack: {
+            enabled: true,
+            mode: "http",
+            groupPolicy: "open",
+            slashCommand: { enabled: true },
+          },
+        },
+      };
+
+      const inspectableSlackPlugin = stubChannelPlugin({
+        id: "slack",
+        label: "Slack",
+        inspectAccount: (cfg) => {
+          const channel = cfg.channels?.slack ?? {};
+          if (cfg === sourceConfig) {
+            return {
+              accountId: "default",
+              enabled: false,
+              configured: true,
+              mode: "http",
+              botTokenSource: "config",
+              botTokenStatus: "configured_unavailable",
+              signingSecretSource: "config", // pragma: allowlist secret
+              signingSecretStatus: "configured_unavailable", // pragma: allowlist secret
+              config: channel,
+            };
+          }
+          return {
+            accountId: "default",
+            enabled: true,
+            configured: true,
+            mode: "http",
+            botTokenSource: "config",
+            botTokenStatus: "available",
+            signingSecretSource: "config", // pragma: allowlist secret
+            signingSecretStatus: "available", // pragma: allowlist secret
+            config: channel,
+          };
+        },
+        resolveAccount: (cfg) => ({ config: cfg.channels?.slack ?? {} }),
+        isConfigured: (account) => Boolean((account as { configured?: boolean }).configured),
+      });
+
+      const res = await runSecurityAudit({
+        config: resolvedConfig,
+        sourceConfig,
+        includeFilesystem: false,
+        includeChannelSecurity: true,
+        plugins: [inspectableSlackPlugin],
+      });
+
+      expect(res.findings).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            checkId: "channels.slack.commands.slash.no_allowlists",
+            severity: "warn",
+          }),
+        ]),
+      );
+    });
+  });
+
+  it("keeps source-configured Slack HTTP findings when resolved inspection is unconfigured", async () => {
+    await withChannelSecurityStateDir(async () => {
+      const sourceConfig: OpenClawConfig = {
+        channels: {
+          slack: {
+            enabled: true,
+            mode: "http",
+            groupPolicy: "open",
+            slashCommand: { enabled: true },
+          },
+        },
+      };
+      const resolvedConfig: OpenClawConfig = {
+        channels: {
+          slack: {
+            enabled: true,
+            mode: "http",
+            groupPolicy: "open",
+            slashCommand: { enabled: true },
+          },
+        },
+      };
+
+      const inspectableSlackPlugin = stubChannelPlugin({
+        id: "slack",
+        label: "Slack",
+        inspectAccount: (cfg) => {
+          const channel = cfg.channels?.slack ?? {};
+          if (cfg === sourceConfig) {
+            return {
+              accountId: "default",
+              enabled: true,
+              configured: true,
+              mode: "http",
+              botTokenSource: "config",
+              botTokenStatus: "configured_unavailable",
+              signingSecretSource: "config", // pragma: allowlist secret
+              signingSecretStatus: "configured_unavailable", // pragma: allowlist secret
+              config: channel,
+            };
+          }
+          return {
+            accountId: "default",
+            enabled: true,
+            configured: false,
+            mode: "http",
+            botTokenSource: "config",
+            botTokenStatus: "available",
+            signingSecretSource: "config", // pragma: allowlist secret
+            signingSecretStatus: "missing", // pragma: allowlist secret
+            config: channel,
+          };
+        },
+        resolveAccount: (cfg) => ({ config: cfg.channels?.slack ?? {} }),
+        isConfigured: (account) => Boolean((account as { configured?: boolean }).configured),
+      });
+
+      const res = await runSecurityAudit({
+        config: resolvedConfig,
+        sourceConfig,
+        includeFilesystem: false,
+        includeChannelSecurity: true,
+        plugins: [inspectableSlackPlugin],
+      });
+
+      expect(res.findings).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            checkId: "channels.slack.commands.slash.no_allowlists",
+            severity: "warn",
+          }),
+        ]),
+      );
+    });
+  });
+
   it("does not flag Discord slash commands when dm.allowFrom includes a Discord snowflake id", async () => {
     await withChannelSecurityStateDir(async () => {
       const cfg: OpenClawConfig = {
@@ -2076,6 +2368,75 @@ description: test skill
       );
       expect(finding).toBeDefined();
       expect(finding?.detail).toContain("channels.discord.accounts.beta.allowFrom:Alice#1234");
+    });
+  });
+
+  it("warns when Zalouser group routing contains mutable group entries", async () => {
+    await withChannelSecurityStateDir(async () => {
+      const cfg: OpenClawConfig = {
+        channels: {
+          zalouser: {
+            enabled: true,
+            groups: {
+              "Ops Room": { allow: true },
+              "group:g-123": { allow: true },
+            },
+          },
+        },
+      };
+
+      const res = await runSecurityAudit({
+        config: cfg,
+        includeFilesystem: false,
+        includeChannelSecurity: true,
+        plugins: [zalouserPlugin],
+      });
+
+      const finding = res.findings.find(
+        (entry) => entry.checkId === "channels.zalouser.groups.mutable_entries",
+      );
+      expect(finding).toBeDefined();
+      expect(finding?.severity).toBe("warn");
+      expect(finding?.detail).toContain("channels.zalouser.groups:Ops Room");
+      expect(finding?.detail).not.toContain("group:g-123");
+    });
+  });
+
+  it("marks Zalouser mutable group routing as break-glass when dangerous matching is enabled", async () => {
+    await withChannelSecurityStateDir(async () => {
+      const cfg: OpenClawConfig = {
+        channels: {
+          zalouser: {
+            enabled: true,
+            dangerouslyAllowNameMatching: true,
+            groups: {
+              "Ops Room": { allow: true },
+            },
+          },
+        },
+      };
+
+      const res = await runSecurityAudit({
+        config: cfg,
+        includeFilesystem: false,
+        includeChannelSecurity: true,
+        plugins: [zalouserPlugin],
+      });
+
+      const finding = res.findings.find(
+        (entry) => entry.checkId === "channels.zalouser.groups.mutable_entries",
+      );
+      expect(finding).toBeDefined();
+      expect(finding?.severity).toBe("info");
+      expect(finding?.detail).toContain("out-of-scope");
+      expect(res.findings).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            checkId: "channels.zalouser.allowFrom.dangerous_name_matching_enabled",
+            severity: "info",
+          }),
+        ]),
+      );
     });
   });
 
@@ -2409,6 +2770,52 @@ description: test skill
     const res = await audit(cfg);
 
     expectFinding(res, "hooks.default_session_key_unset", "warn");
+  });
+
+  it("scores unrestricted hooks.allowedAgentIds by gateway exposure", async () => {
+    const baseHooks = {
+      enabled: true,
+      token: "shared-gateway-token-1234567890",
+      defaultSessionKey: "hook:ingress",
+    } satisfies NonNullable<OpenClawConfig["hooks"]>;
+    const cases: Array<{
+      name: string;
+      cfg: OpenClawConfig;
+      expectedSeverity: "warn" | "critical";
+    }> = [
+      {
+        name: "local exposure",
+        cfg: { hooks: baseHooks },
+        expectedSeverity: "warn",
+      },
+      {
+        name: "remote exposure",
+        cfg: { gateway: { bind: "lan" }, hooks: baseHooks },
+        expectedSeverity: "critical",
+      },
+    ];
+    await Promise.all(
+      cases.map(async (testCase) => {
+        const res = await audit(testCase.cfg);
+        expect(
+          hasFinding(res, "hooks.allowed_agent_ids_unrestricted", testCase.expectedSeverity),
+          testCase.name,
+        ).toBe(true);
+      }),
+    );
+  });
+
+  it("treats wildcard hooks.allowedAgentIds as unrestricted routing", async () => {
+    const res = await audit({
+      hooks: {
+        enabled: true,
+        token: "shared-gateway-token-1234567890",
+        defaultSessionKey: "hook:ingress",
+        allowedAgentIds: ["*"],
+      },
+    });
+
+    expectFinding(res, "hooks.allowed_agent_ids_unrestricted", "warn");
   });
 
   it("scores hooks request sessionKey override by gateway exposure", async () => {
@@ -3255,6 +3662,36 @@ description: test skill
           expect(getAuth()?.password, testCase.name).toBe(testCase.expectedPassword);
         }),
       );
+    });
+
+    it("adds warning finding when probe auth SecretRef is unavailable", async () => {
+      const cfg: OpenClawConfig = {
+        gateway: {
+          mode: "local",
+          auth: {
+            mode: "token",
+            token: { source: "env", provider: "default", id: "MISSING_GATEWAY_TOKEN" },
+          },
+        },
+        secrets: {
+          providers: {
+            default: { source: "env" },
+          },
+        },
+      };
+
+      const res = await audit(cfg, {
+        deep: true,
+        deepTimeoutMs: 50,
+        probeGatewayFn: async (opts) => successfulProbeResult(opts.url),
+        env: {},
+      });
+
+      const warning = res.findings.find(
+        (finding) => finding.checkId === "gateway.probe_auth_secretref_unavailable",
+      );
+      expect(warning?.severity).toBe("warn");
+      expect(warning?.detail).toContain("gateway.auth.token");
     });
   });
 });
