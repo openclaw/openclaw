@@ -20,7 +20,7 @@ const WIKI_ACCESS_HINT =
 async function listSpaces(client: Lark.Client) {
   const res = await client.wiki.space.list({});
   if (res.code !== 0) {
-    throw new Error(res.msg);
+    throw new Error(`[Wiki] 获取知识空间列表失败：${res.msg}（${WIKI_ACCESS_HINT}）`);
   }
 
   const spaces =
@@ -43,7 +43,7 @@ async function listNodes(client: Lark.Client, spaceId: string, parentNodeToken?:
     params: { parent_node_token: parentNodeToken },
   });
   if (res.code !== 0) {
-    throw new Error(res.msg);
+    throw new Error(`[Wiki] 获取节点列表失败 (space: ${spaceId}): ${res.msg}`);
   }
 
   return {
@@ -63,7 +63,7 @@ async function getNode(client: Lark.Client, token: string) {
     params: { token },
   });
   if (res.code !== 0) {
-    throw new Error(res.msg);
+    throw new Error(`[Wiki] 获取节点详情失败 (token: ${token}): ${res.msg}`);
   }
 
   const node = res.data?.node;
@@ -97,7 +97,7 @@ async function createNode(
     },
   });
   if (res.code !== 0) {
-    throw new Error(res.msg);
+    throw new Error(`[Wiki] 创建节点失败 (space: ${spaceId}, title: ${title}): ${res.msg}`);
   }
 
   const node = res.data?.node;
@@ -124,7 +124,7 @@ async function moveNode(
     },
   });
   if (res.code !== 0) {
-    throw new Error(res.msg);
+    throw new Error(`[Wiki] 移动节点失败 (node: ${nodeToken}): ${res.msg}`);
   }
 
   return {
@@ -139,7 +139,7 @@ async function renameNode(client: Lark.Client, spaceId: string, nodeToken: strin
     data: { title },
   });
   if (res.code !== 0) {
-    throw new Error(res.msg);
+    throw new Error(`[Wiki] 重命名节点失败 (node: ${nodeToken}, new title: ${title}): ${res.msg}`);
   }
 
   return {
