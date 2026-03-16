@@ -1,6 +1,11 @@
 import * as extensionApi from "openclaw/extension-api";
 import * as compatSdk from "openclaw/plugin-sdk/compat";
 import * as coreSdk from "openclaw/plugin-sdk/core";
+import type {
+  ChannelMessageActionContext as CoreChannelMessageActionContext,
+  OpenClawPluginApi as CoreOpenClawPluginApi,
+  PluginRuntime as CorePluginRuntime,
+} from "openclaw/plugin-sdk/core";
 import * as discordSdk from "openclaw/plugin-sdk/discord";
 import * as imessageSdk from "openclaw/plugin-sdk/imessage";
 import * as lineSdk from "openclaw/plugin-sdk/line";
@@ -10,7 +15,15 @@ import * as signalSdk from "openclaw/plugin-sdk/signal";
 import * as slackSdk from "openclaw/plugin-sdk/slack";
 import * as telegramSdk from "openclaw/plugin-sdk/telegram";
 import * as whatsappSdk from "openclaw/plugin-sdk/whatsapp";
-import { describe, expect, it } from "vitest";
+import { describe, expect, expectTypeOf, it } from "vitest";
+import type { ChannelMessageActionContext } from "../channels/plugins/types.js";
+import type { PluginRuntime } from "../plugins/runtime/types.js";
+import type { OpenClawPluginApi } from "../plugins/types.js";
+import type {
+  ChannelMessageActionContext as SharedChannelMessageActionContext,
+  OpenClawPluginApi as SharedOpenClawPluginApi,
+  PluginRuntime as SharedPluginRuntime,
+} from "./channel-plugin-common.js";
 import { pluginSdkSubpaths } from "./entrypoints.js";
 
 const importPluginSdkSubpath = (specifier: string) => import(/* @vite-ignore */ specifier);
@@ -33,6 +46,18 @@ describe("plugin-sdk subpath exports", () => {
     expect(typeof coreSdk.resolveThreadSessionKeys).toBe("function");
     expect(typeof coreSdk.runPassiveAccountLifecycle).toBe("function");
     expect(typeof coreSdk.createLoggerBackedRuntime).toBe("function");
+  });
+
+  it("exports shared core types used by bundled channels", () => {
+    expectTypeOf<CoreOpenClawPluginApi>().toMatchTypeOf<OpenClawPluginApi>();
+    expectTypeOf<CorePluginRuntime>().toMatchTypeOf<PluginRuntime>();
+    expectTypeOf<CoreChannelMessageActionContext>().toMatchTypeOf<ChannelMessageActionContext>();
+  });
+
+  it("keeps core shared types aligned with the channel prelude", () => {
+    expectTypeOf<CoreOpenClawPluginApi>().toMatchTypeOf<SharedOpenClawPluginApi>();
+    expectTypeOf<CorePluginRuntime>().toMatchTypeOf<SharedPluginRuntime>();
+    expectTypeOf<CoreChannelMessageActionContext>().toMatchTypeOf<SharedChannelMessageActionContext>();
   });
 
   it("exports Discord helpers", () => {
