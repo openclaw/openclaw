@@ -8,6 +8,7 @@ import { requestHeartbeatNow } from "../infra/heartbeat-wake.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { getProcessSupervisor } from "../process/supervisor/index.js";
+import { derivePromptTokens, normalizeUsage, type UsageLike } from "./usage.js";
 import { scopedHeartbeatWakeOptions } from "../routing/session-key.js";
 import { resolveSessionAgentIds } from "./agent-scope.js";
 import {
@@ -404,6 +405,27 @@ export async function runCliAgent(params: {
     }
   };
 
+  // Derive lastCallUsage and promptTokens from CLI output usage.
+  // The CLI runner only makes one API call per run, so the output usage IS
+  // the last-call usage — unlike the embedded Pi runner which accumulates
+  // across tool-use loops.
+  const buildAgentMeta = (
+    output: Awaited<ReturnType<typeof executeCliWithSession>>,
+    cliSessionIdFallback?: string,
+  ) => {
+    const usage = output.usage;
+    const lastCallUsage = usage ? normalizeUsage(usage as UsageLike) : undefined;
+    const promptTokens = lastCallUsage ? derivePromptTokens(lastCallUsage) : undefined;
+    return {
+      sessionId: output.sessionId ?? cliSessionIdFallback ?? params.sessionId ?? "",
+      provider: params.provider,
+      model: modelId,
+      ...(usage ? { usage } : {}),
+      ...(lastCallUsage ? { lastCallUsage } : {}),
+      ...(promptTokens ? { promptTokens } : {}),
+    };
+  };
+
   // Try with the provided CLI session ID first
   try {
     const output = await executeCliWithSession(params.cliSessionId);
@@ -415,12 +437,7 @@ export async function runCliAgent(params: {
       meta: {
         durationMs: Date.now() - started,
         systemPromptReport,
-        agentMeta: {
-          sessionId: output.sessionId ?? params.cliSessionId ?? params.sessionId ?? "",
-          provider: params.provider,
-          model: modelId,
-          usage: output.usage,
-        },
+        agentMeta: buildAgentMeta(output, params.cliSessionId),
       },
     };
   } catch (err) {
@@ -445,12 +462,8 @@ export async function runCliAgent(params: {
           meta: {
             durationMs: Date.now() - started,
             systemPromptReport,
-            agentMeta: {
-              sessionId: output.sessionId ?? params.sessionId ?? "",
-              provider: params.provider,
-              model: modelId,
-              usage: output.usage,
-            },
+            // Don't fall back to expired cliSessionId on retry
+            agentMeta: buildAgentMeta(output, undefined),
           },
         };
       }
