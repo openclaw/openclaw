@@ -320,6 +320,8 @@ final class ControlChannel {
         switch source {
         case .deviceToken:
             return "Auth: device token (paired device)"
+        case .bootstrapToken:
+            return "Auth: bootstrap token (setup code)"
         case .sharedToken:
             return "Auth: shared token (\(isRemote ? "gateway.remote.token" : "gateway.auth.token"))"
         case .password:

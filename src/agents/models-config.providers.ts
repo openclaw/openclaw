@@ -4,6 +4,7 @@ import {
   DEFAULT_COPILOT_API_BASE_URL,
   resolveCopilotApiToken,
 } from "../providers/github-copilot-token.js";
+import { isRecord } from "../utils.js";
 import { normalizeOptionalSecretInput } from "../utils/normalize-secret-input.js";
 import { ensureAuthProfileStore, listProfilesForProvider } from "./auth-profiles.js";
 import { discoverBedrockModels } from "./bedrock-discovery.js";
@@ -66,6 +67,11 @@ export { resolveOllamaApiBase } from "./models-config.providers.discovery.js";
 
 type ModelsConfig = NonNullable<OpenClawConfig["models"]>;
 export type ProviderConfig = NonNullable<ModelsConfig["providers"]>[string];
+type SecretDefaults = {
+  env?: string;
+  file?: string;
+  exec?: string;
+};
 
 const ENV_VAR_NAME_RE = /^[A-Z_][A-Z0-9_]*$/;
 
@@ -93,13 +99,7 @@ function resolveAwsSdkApiKeyVarName(env: NodeJS.ProcessEnv = process.env): strin
 
 function normalizeHeaderValues(params: {
   headers: ProviderConfig["headers"] | undefined;
-  secretDefaults:
-    | {
-        env?: string;
-        file?: string;
-        exec?: string;
-      }
-    | undefined;
+  secretDefaults: SecretDefaults | undefined;
 }): { headers: ProviderConfig["headers"] | undefined; mutated: boolean } {
   const { headers } = params;
   if (!headers) {
@@ -272,15 +272,155 @@ function normalizeAntigravityProvider(provider: ProviderConfig): ProviderConfig 
   return normalizeProviderModels(provider, normalizeAntigravityModelId);
 }
 
+function normalizeSourceProviderLookup(
+  providers: ModelsConfig["providers"] | undefined,
+): Record<string, ProviderConfig> {
+  if (!providers) {
+    return {};
+  }
+  const out: Record<string, ProviderConfig> = {};
+  for (const [key, provider] of Object.entries(providers)) {
+    const normalizedKey = key.trim();
+    if (!normalizedKey || !isRecord(provider)) {
+      continue;
+    }
+    out[normalizedKey] = provider;
+  }
+  return out;
+}
+
+function resolveSourceManagedApiKeyMarker(params: {
+  sourceProvider: ProviderConfig | undefined;
+  sourceSecretDefaults: SecretDefaults | undefined;
+}): string | undefined {
+  const sourceApiKeyRef = resolveSecretInputRef({
+    value: params.sourceProvider?.apiKey,
+    defaults: params.sourceSecretDefaults,
+  }).ref;
+  if (!sourceApiKeyRef || !sourceApiKeyRef.id.trim()) {
+    return undefined;
+  }
+  return sourceApiKeyRef.source === "env"
+    ? sourceApiKeyRef.id.trim()
+    : resolveNonEnvSecretRefApiKeyMarker(sourceApiKeyRef.source);
+}
+
+function resolveSourceManagedHeaderMarkers(params: {
+  sourceProvider: ProviderConfig | undefined;
+  sourceSecretDefaults: SecretDefaults | undefined;
+}): Record<string, string> {
+  const sourceHeaders = isRecord(params.sourceProvider?.headers)
+    ? (params.sourceProvider.headers as Record<string, unknown>)
+    : undefined;
+  if (!sourceHeaders) {
+    return {};
+  }
+  const markers: Record<string, string> = {};
+  for (const [headerName, headerValue] of Object.entries(sourceHeaders)) {
+    const sourceHeaderRef = resolveSecretInputRef({
+      value: headerValue,
+      defaults: params.sourceSecretDefaults,
+    }).ref;
+    if (!sourceHeaderRef || !sourceHeaderRef.id.trim()) {
+      continue;
+    }
+    markers[headerName] =
+      sourceHeaderRef.source === "env"
+        ? resolveEnvSecretRefHeaderValueMarker(sourceHeaderRef.id)
+        : resolveNonEnvSecretRefHeaderValueMarker(sourceHeaderRef.source);
+  }
+  return markers;
+}
+
+export function enforceSourceManagedProviderSecrets(params: {
+  providers: ModelsConfig["providers"];
+  sourceProviders: ModelsConfig["providers"] | undefined;
+  sourceSecretDefaults?: SecretDefaults;
+  secretRefManagedProviders?: Set<string>;
+}): ModelsConfig["providers"] {
+  const { providers } = params;
+  if (!providers) {
+    return providers;
+  }
+  const sourceProvidersByKey = normalizeSourceProviderLookup(params.sourceProviders);
+  if (Object.keys(sourceProvidersByKey).length === 0) {
+    return providers;
+  }
+
+  let nextProviders: Record<string, ProviderConfig> | null = null;
+  for (const [providerKey, provider] of Object.entries(providers)) {
+    if (!isRecord(provider)) {
+      continue;
+    }
+    const sourceProvider = sourceProvidersByKey[providerKey.trim()];
+    if (!sourceProvider) {
+      continue;
+    }
+    let nextProvider = provider;
+    let providerMutated = false;
+
+    const sourceApiKeyMarker = resolveSourceManagedApiKeyMarker({
+      sourceProvider,
+      sourceSecretDefaults: params.sourceSecretDefaults,
+    });
+    if (sourceApiKeyMarker) {
+      params.secretRefManagedProviders?.add(providerKey.trim());
+      if (nextProvider.apiKey !== sourceApiKeyMarker) {
+        providerMutated = true;
+        nextProvider = {
+          ...nextProvider,
+          apiKey: sourceApiKeyMarker,
+        };
+      }
+    }
+
+    const sourceHeaderMarkers = resolveSourceManagedHeaderMarkers({
+      sourceProvider,
+      sourceSecretDefaults: params.sourceSecretDefaults,
+    });
+    if (Object.keys(sourceHeaderMarkers).length > 0) {
+      const currentHeaders = isRecord(nextProvider.headers)
+        ? (nextProvider.headers as Record<string, unknown>)
+        : undefined;
+      const nextHeaders = {
+        ...(currentHeaders as Record<string, NonNullable<ProviderConfig["headers"]>[string]>),
+      };
+      let headersMutated = !currentHeaders;
+      for (const [headerName, marker] of Object.entries(sourceHeaderMarkers)) {
+        if (nextHeaders[headerName] === marker) {
+          continue;
+        }
+        headersMutated = true;
+        nextHeaders[headerName] = marker;
+      }
+      if (headersMutated) {
+        providerMutated = true;
+        nextProvider = {
+          ...nextProvider,
+          headers: nextHeaders,
+        };
+      }
+    }
+
+    if (!providerMutated) {
+      continue;
+    }
+    if (!nextProviders) {
+      nextProviders = { ...providers };
+    }
+    nextProviders[providerKey] = nextProvider;
+  }
+
+  return nextProviders ?? providers;
+}
+
 export function normalizeProviders(params: {
   providers: ModelsConfig["providers"];
   agentDir: string;
   env?: NodeJS.ProcessEnv;
-  secretDefaults?: {
-    env?: string;
-    file?: string;
-    exec?: string;
-  };
+  secretDefaults?: SecretDefaults;
+  sourceProviders?: ModelsConfig["providers"];
+  sourceSecretDefaults?: SecretDefaults;
   secretRefManagedProviders?: Set<string>;
 }): ModelsConfig["providers"] {
   const { providers } = params;
@@ -343,6 +483,9 @@ export function normalizeProviders(params: {
           apiKey: normalizedConfiguredApiKey,
         };
       }
+      if (isNonSecretApiKeyMarker(normalizedConfiguredApiKey)) {
+        params.secretRefManagedProviders?.add(normalizedKey);
+      }
       if (
         profileApiKey &&
         profileApiKey.source !== "plaintext" &&
@@ -366,6 +509,7 @@ export function normalizeProviders(params: {
       if (envVarName && env[envVarName] === currentApiKey) {
         mutated = true;
         normalizedProvider = { ...normalizedProvider, apiKey: envVarName };
+        params.secretRefManagedProviders?.add(normalizedKey);
       }
     }
 
@@ -426,7 +570,13 @@ export function normalizeProviders(params: {
     next[normalizedKey] = normalizedProvider;
   }
 
-  return mutated ? next : providers;
+  const normalizedProviders = mutated ? next : providers;
+  return enforceSourceManagedProviderSecrets({
+    providers: normalizedProviders,
+    sourceProviders: params.sourceProviders,
+    sourceSecretDefaults: params.sourceSecretDefaults,
+    secretRefManagedProviders: params.secretRefManagedProviders,
+  });
 }
 
 type ImplicitProviderParams = {

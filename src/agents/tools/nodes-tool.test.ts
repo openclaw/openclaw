@@ -53,6 +53,11 @@ describe("createNodesTool screen_record duration guardrails", () => {
     screenMocks.writeScreenRecordToFile.mockClear();
   });
 
+  it("marks nodes as owner-only", () => {
+    const tool = createNodesTool();
+    expect(tool.ownerOnly).toBe(true);
+  });
+
   it("caps durationMs schema at 300000", () => {
     const tool = createNodesTool();
     const schema = tool.parameters as {

@@ -95,6 +95,7 @@ class GatewaySession(
   private data class DesiredConnection(
     val endpoint: GatewayEndpoint,
     val token: String?,
+    val bootstrapToken: String?,
     val password: String?,
     val options: GatewayConnectOptions,
     val tls: GatewayTlsParams?,
@@ -107,11 +108,12 @@ class GatewaySession(
   fun connect(
     endpoint: GatewayEndpoint,
     token: String?,
+    bootstrapToken: String?,
     password: String?,
     options: GatewayConnectOptions,
     tls: GatewayTlsParams? = null,
   ) {
-    desired = DesiredConnection(endpoint, token, password, options, tls)
+    desired = DesiredConnection(endpoint, token, bootstrapToken, password, options, tls)
     if (job == null) {
       job = scope.launch(Dispatchers.IO) { runLoop() }
     }
@@ -219,6 +221,7 @@ class GatewaySession(
   private inner class Connection(
     private val endpoint: GatewayEndpoint,
     private val token: String?,
+    private val bootstrapToken: String?,
     private val password: String?,
     private val options: GatewayConnectOptions,
     private val tls: GatewayTlsParams?,
@@ -346,9 +349,18 @@ class GatewaySession(
       val identity = identityStore.loadOrCreate()
       val storedToken = deviceAuthStore.loadToken(identity.deviceId, options.role)
       val trimmedToken = token?.trim().orEmpty()
+      val trimmedBootstrapToken = bootstrapToken?.trim().orEmpty()
       // QR/setup/manual shared token must take precedence; stale role tokens can survive re-onboarding.
       val authToken = if (trimmedToken.isNotBlank()) trimmedToken else storedToken.orEmpty()
-      val payload = buildConnectParams(identity, connectNonce, authToken, password?.trim())
+      val authBootstrapToken = if (authToken.isBlank()) trimmedBootstrapToken else ""
+      val payload =
+        buildConnectParams(
+          identity = identity,
+          connectNonce = connectNonce,
+          authToken = authToken,
+          authBootstrapToken = authBootstrapToken,
+          authPassword = password?.trim(),
+        )
       val res = request("connect", payload, timeoutMs = CONNECT_RPC_TIMEOUT_MS)
       if (!res.ok) {
         val msg = res.error?.message ?: "connect failed"
@@ -381,6 +393,7 @@ class GatewaySession(
       identity: DeviceIdentity,
       connectNonce: String,
       authToken: String,
+      authBootstrapToken: String,
       authPassword: String?,
     ): JsonObject {
       val client = options.client
@@ -404,6 +417,10 @@ class GatewaySession(
             buildJsonObject {
               put("token", JsonPrimitive(authToken))
             }
+          authBootstrapToken.isNotEmpty() ->
+            buildJsonObject {
+              put("bootstrapToken", JsonPrimitive(authBootstrapToken))
+            }
           password.isNotEmpty() ->
             buildJsonObject {
               put("password", JsonPrimitive(password))
@@ -420,7 +437,12 @@ class GatewaySession(
           role = options.role,
           scopes = options.scopes,
           signedAtMs = signedAtMs,
-          token = if (authToken.isNotEmpty()) authToken else null,
+          token =
+            when {
+              authToken.isNotEmpty() -> authToken
+              authBootstrapToken.isNotEmpty() -> authBootstrapToken
+              else -> null
+            },
           nonce = connectNonce,
           platform = client.platform,
           deviceFamily = client.deviceFamily,
@@ -622,7 +644,15 @@ class GatewaySession(
   }
 
   private suspend fun connectOnce(target: DesiredConnection) = withContext(Dispatchers.IO) {
-    val conn = Connection(target.endpoint, target.token, target.password, target.options, target.tls)
+    val conn =
+      Connection(
+        target.endpoint,
+        target.token,
+        target.bootstrapToken,
+        target.password,
+        target.options,
+        target.tls,
+      )
     currentConnection = conn
     try {
       conn.connect()

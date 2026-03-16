@@ -174,7 +174,7 @@ describe("nodes-cli coverage", () => {
     expect(invoke?.params?.command).toBe("system.run");
     expect(invoke?.params?.params).toEqual({
       command: ["echo", "hi"],
-      rawCommand: null,
+      rawCommand: "echo hi",
       cwd: "/tmp",
       env: { FOO: "bar" },
       timeoutMs: 1200,
@@ -190,7 +190,8 @@ describe("nodes-cli coverage", () => {
     expect(approval?.params?.["systemRunPlan"]).toEqual({
       argv: ["echo", "hi"],
       cwd: "/tmp",
-      rawCommand: null,
+      rawCommand: "echo hi",
+      commandPreview: null,
       agentId: "main",
       sessionKey: null,
     });
@@ -213,7 +214,7 @@ describe("nodes-cli coverage", () => {
     expect(invoke?.params?.command).toBe("system.run");
     expect(invoke?.params?.params).toMatchObject({
       command: ["/bin/sh", "-lc", "echo hi"],
-      rawCommand: "echo hi",
+      rawCommand: '/bin/sh -lc "echo hi"',
       agentId: "main",
       approved: true,
       approvalDecision: "allow-once",
@@ -224,7 +225,8 @@ describe("nodes-cli coverage", () => {
     expect(approval?.params?.["systemRunPlan"]).toEqual({
       argv: ["/bin/sh", "-lc", "echo hi"],
       cwd: null,
-      rawCommand: "echo hi",
+      rawCommand: '/bin/sh -lc "echo hi"',
+      commandPreview: "echo hi",
       agentId: "main",
       sessionKey: null,
     });

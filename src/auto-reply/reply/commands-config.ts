@@ -1,4 +1,7 @@
-import { resolveChannelConfigWrites } from "../../channels/plugins/config-writes.js";
+import {
+  authorizeConfigWrite,
+  resolveConfigWriteScopesFromPath,
+} from "../../channels/plugins/config-writes.js";
 import { normalizeChannelId } from "../../channels/registry.js";
 import {
   getConfigValueAtPath,
@@ -17,6 +20,7 @@ import {
   setConfigOverride,
   unsetConfigOverride,
 } from "../../config/runtime-overrides.js";
+import { isInternalMessageChannel } from "../../utils/message-channel.js";
 import {
   rejectUnauthorizedCommand,
   requireCommandFlagEnabled,
@@ -52,6 +56,7 @@ export const handleConfigCommand: CommandHandler = async (params, allowTextComma
     };
   }
 
+  let parsedWritePath: string[] | undefined;
   if (configCommand.action === "set" || configCommand.action === "unset") {
     const missingAdminScope = requireGatewayClientScopeForInternalChannel(params, {
       label: "/config write",
@@ -61,17 +66,41 @@ export const handleConfigCommand: CommandHandler = async (params, allowTextComma
     if (missingAdminScope) {
       return missingAdminScope;
     }
+    const parsedPath = parseConfigPath(configCommand.path);
+    if (!parsedPath.ok || !parsedPath.path) {
+      return {
+        shouldContinue: false,
+        reply: { text: `⚠️ ${parsedPath.error ?? "Invalid path."}` },
+      };
+    }
+    parsedWritePath = parsedPath.path;
     const channelId = params.command.channelId ?? normalizeChannelId(params.command.channel);
-    const allowWrites = resolveChannelConfigWrites({
+    const writeAuth = authorizeConfigWrite({
       cfg: params.cfg,
-      channelId,
-      accountId: params.ctx.AccountId,
+      origin: { channelId, accountId: params.ctx.AccountId },
+      ...resolveConfigWriteScopesFromPath(parsedWritePath),
+      allowBypass:
+        isInternalMessageChannel(params.command.channel) &&
+        params.ctx.GatewayClientScopes?.includes("operator.admin") === true,
     });
-    if (!allowWrites) {
-      const channelLabel = channelId ?? "this channel";
-      const hint = channelId
-        ? `channels.${channelId}.configWrites=true`
-        : "channels.<channel>.configWrites=true";
+    if (!writeAuth.allowed) {
+      if (writeAuth.reason === "ambiguous-target") {
+        return {
+          shouldContinue: false,
+          reply: {
+            text: "⚠️ Channel-initiated /config writes cannot replace channels, channel roots, or accounts collections. Use a more specific path or gateway operator.admin.",
+          },
+        };
+      }
+      const blocked = writeAuth.blockedScope?.scope;
+      const channelLabel = blocked?.channelId ?? channelId ?? "this channel";
+      const hint = blocked?.channelId
+        ? blocked?.accountId
+          ? `channels.${blocked.channelId}.accounts.${blocked.accountId}.configWrites=true`
+          : `channels.${blocked.channelId}.configWrites=true`
+        : channelId
+          ? `channels.${channelId}.configWrites=true`
+          : "channels.<channel>.configWrites=true";
       return {
         shouldContinue: false,
         reply: {
@@ -119,14 +148,7 @@ export const handleConfigCommand: CommandHandler = async (params, allowTextComma
   }
 
   if (configCommand.action === "unset") {
-    const parsedPath = parseConfigPath(configCommand.path);
-    if (!parsedPath.ok || !parsedPath.path) {
-      return {
-        shouldContinue: false,
-        reply: { text: `⚠️ ${parsedPath.error ?? "Invalid path."}` },
-      };
-    }
-    const removed = unsetConfigValueAtPath(parsedBase, parsedPath.path);
+    const removed = unsetConfigValueAtPath(parsedBase, parsedWritePath ?? []);
     if (!removed) {
       return {
         shouldContinue: false,
@@ -151,14 +173,7 @@ export const handleConfigCommand: CommandHandler = async (params, allowTextComma
   }
 
   if (configCommand.action === "set") {
-    const parsedPath = parseConfigPath(configCommand.path);
-    if (!parsedPath.ok || !parsedPath.path) {
-      return {
-        shouldContinue: false,
-        reply: { text: `⚠️ ${parsedPath.error ?? "Invalid path."}` },
-      };
-    }
-    setConfigValueAtPath(parsedBase, parsedPath.path, configCommand.value);
+    setConfigValueAtPath(parsedBase, parsedWritePath ?? [], configCommand.value);
     const validated = validateConfigObjectWithPlugins(parsedBase);
     if (!validated.ok) {
       const issue = validated.issues[0];

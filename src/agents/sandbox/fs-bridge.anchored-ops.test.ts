@@ -4,8 +4,6 @@ import { describe, expect, it } from "vitest";
 import {
   createSandbox,
   createSandboxFsBridge,
-  findCallByScriptFragment,
-  findCallsByScriptFragment,
   getDockerArg,
   installFsBridgeTestHarness,
   mockedExecDockerRaw,
@@ -67,54 +65,60 @@ describe("sandbox fs bridge anchored ops", () => {
     });
   });
 
-  const anchoredCases = [
+  const pinnedCases = [
     {
-      name: "mkdirp anchors parent + basename",
+      name: "mkdirp pins mount root + relative path",
       invoke: (bridge: ReturnType<typeof createSandboxFsBridge>) =>
         bridge.mkdirp({ filePath: "nested/leaf" }),
-      scriptFragment: 'mkdir -p -- "$2"',
-      expectedArgs: ["/workspace/nested", "leaf"],
+      expectedArgs: ["mkdirp", "/workspace", "nested/leaf"],
       forbiddenArgs: ["/workspace/nested/leaf"],
-      canonicalProbe: "/workspace/nested",
     },
     {
-      name: "remove anchors parent + basename",
+      name: "remove pins mount root + parent/basename",
       invoke: (bridge: ReturnType<typeof createSandboxFsBridge>) =>
         bridge.remove({ filePath: "nested/file.txt" }),
-      scriptFragment: 'rm -f -- "$2"',
-      expectedArgs: ["/workspace/nested", "file.txt"],
+      expectedArgs: ["remove", "/workspace", "nested", "file.txt", "0", "1"],
       forbiddenArgs: ["/workspace/nested/file.txt"],
-      canonicalProbe: "/workspace/nested",
     },
     {
-      name: "rename anchors both parents + basenames",
+      name: "rename pins both parents + basenames",
       invoke: (bridge: ReturnType<typeof createSandboxFsBridge>) =>
         bridge.rename({ from: "from.txt", to: "nested/to.txt" }),
-      scriptFragment: 'mv -- "$3" "$2/$4"',
-      expectedArgs: ["/workspace", "/workspace/nested", "from.txt", "to.txt"],
+      expectedArgs: ["rename", "/workspace", "", "from.txt", "/workspace", "nested", "to.txt", "1"],
       forbiddenArgs: ["/workspace/from.txt", "/workspace/nested/to.txt"],
-      canonicalProbe: "/workspace/nested",
     },
   ] as const;
 
-  it.each(anchoredCases)("$name", async (testCase) => {
-    const bridge = createSandboxFsBridge({ sandbox: createSandbox() });
+  it.each(pinnedCases)("$name", async (testCase) => {
+    await withTempDir("openclaw-fs-bridge-contract-write-", async (stateDir) => {
+      const workspaceDir = path.join(stateDir, "workspace");
+      await fs.mkdir(path.join(workspaceDir, "nested"), { recursive: true });
+      await fs.writeFile(path.join(workspaceDir, "from.txt"), "hello", "utf8");
+      await fs.writeFile(path.join(workspaceDir, "nested", "file.txt"), "bye", "utf8");
 
-    await testCase.invoke(bridge);
+      const bridge = createSandboxFsBridge({
+        sandbox: createSandbox({
+          workspaceDir,
+          agentWorkspaceDir: workspaceDir,
+        }),
+      });
 
-    const opCall = findCallByScriptFragment(testCase.scriptFragment);
-    expect(opCall).toBeDefined();
-    const args = opCall?.[0] ?? [];
-    testCase.expectedArgs.forEach((value, index) => {
-      expect(getDockerArg(args, index + 1)).toBe(value);
+      await testCase.invoke(bridge);
+
+      const opCall = mockedExecDockerRaw.mock.calls.find(
+        ([args]) =>
+          typeof args[5] === "string" &&
+          args[5].includes("python3 - \"$@\" <<'PY'") &&
+          getDockerArg(args, 1) === testCase.expectedArgs[0],
+      );
+      expect(opCall).toBeDefined();
+      const args = opCall?.[0] ?? [];
+      testCase.expectedArgs.forEach((value, index) => {
+        expect(getDockerArg(args, index + 1)).toBe(value);
+      });
+      testCase.forbiddenArgs.forEach((value) => {
+        expect(args).not.toContain(value);
+      });
     });
-    testCase.forbiddenArgs.forEach((value) => {
-      expect(args).not.toContain(value);
-    });
-
-    const canonicalCalls = findCallsByScriptFragment('readlink -f -- "$cursor"');
-    expect(
-      canonicalCalls.some(([callArgs]) => getDockerArg(callArgs, 1) === testCase.canonicalProbe),
-    ).toBe(true);
   });
 });

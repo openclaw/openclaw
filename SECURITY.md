@@ -37,6 +37,7 @@ For fastest triage, include all of the following:
 - Exact vulnerable path (`file`, function, and line range) on a current revision.
 - Tested version details (OpenClaw version and/or commit SHA).
 - Reproducible PoC against latest `main` or latest released version.
+- If the claim targets a released version, evidence from the shipped tag and published artifact/package for that exact version (not only `main`).
 - Demonstrated impact tied to OpenClaw's documented trust boundaries.
 - For exposed-secret reports: proof the credential is OpenClaw-owned (or grants access to OpenClaw-operated infrastructure/services).
 - Explicit statement that the report does not rely on adversarial operators sharing one gateway host/config.
@@ -65,6 +66,7 @@ These are frequently reported but are typically closed with no code change:
 - Discord inbound webhook signature findings for paths not used by this repo's Discord integration.
 - Claims that Microsoft Teams `fileConsent/invoke` `uploadInfo.uploadUrl` is attacker-controlled without demonstrating one of: auth boundary bypass, a real authenticated Teams/Bot Framework event carrying attacker-chosen URL, or compromise of the Microsoft/Bot trust path.
 - Scanner-only claims against stale/nonexistent paths, or claims without a working repro.
+- Reports that restate an already-fixed issue against later released versions without showing the vulnerable path still exists in the shipped tag or published artifact for that later version.
 
 ### Duplicate Report Handling
 
@@ -144,6 +146,7 @@ OpenClaw security guidance assumes:
 OpenClaw's security model is "personal assistant" (one trusted operator, potentially many agents), not "shared multi-tenant bus."
 
 - If multiple people can message the same tool-enabled agent (for example a shared Slack workspace), they can all steer that agent within its granted permissions.
+- Non-owner sender status only affects owner-only tools/commands. If a non-owner can still access a non-owner-only tool on that same agent (for example `canvas`), that is within the granted tool boundary unless the report demonstrates an auth, policy, allowlist, approval, or sandbox bypass.
 - Session or memory scoping reduces context bleed, but does **not** create per-user host authorization boundaries.
 - For mixed-trust or adversarial users, isolate by OS user/host/gateway and use separate credentials per boundary.
 - A company-shared agent can be a valid setup when users are in the same trust boundary and the agent is strictly business-only.

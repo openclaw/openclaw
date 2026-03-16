@@ -2,6 +2,7 @@ import type { IncomingMessage } from "node:http";
 import os from "node:os";
 import type { WebSocket } from "ws";
 import { loadConfig } from "../../../config/config.js";
+import { verifyDeviceBootstrapToken } from "../../../infra/device-bootstrap.js";
 import {
   deriveDeviceIdFromPublicKey,
   normalizeDevicePublicKeyBase64Url,
@@ -62,7 +63,12 @@ import {
   validateRequestFrame,
 } from "../../protocol/index.js";
 import { parseGatewayRole } from "../../role-policy.js";
-import { MAX_BUFFERED_BYTES, MAX_PAYLOAD_BYTES, TICK_INTERVAL_MS } from "../../server-constants.js";
+import {
+  MAX_BUFFERED_BYTES,
+  MAX_PAYLOAD_BYTES,
+  MAX_PREAUTH_PAYLOAD_BYTES,
+  TICK_INTERVAL_MS,
+} from "../../server-constants.js";
 import { handleGatewayRequest } from "../../server-methods.js";
 import type { GatewayRequestContext, GatewayRequestHandlers } from "../../server-methods/types.js";
 import { formatError } from "../../server-utils.js";
@@ -114,7 +120,7 @@ function resolveHandshakeBrowserSecurityContext(params: {
   );
   return {
     hasBrowserOriginHeader,
-    enforceOriginCheckForAnyClient: hasBrowserOriginHeader && !params.hasProxyHeaders,
+    enforceOriginCheckForAnyClient: hasBrowserOriginHeader,
     rateLimitClientIp:
       hasBrowserOriginHeader && isLoopbackAddress(params.clientIp)
         ? BROWSER_ORIGIN_LOOPBACK_RATE_LIMIT_IP
@@ -181,7 +187,11 @@ function resolveDeviceSignaturePayloadVersion(params: {
     role: params.role,
     scopes: params.scopes,
     signedAtMs: params.signedAtMs,
-    token: params.connectParams.auth?.token ?? params.connectParams.auth?.deviceToken ?? null,
+    token:
+      params.connectParams.auth?.token ??
+      params.connectParams.auth?.deviceToken ??
+      params.connectParams.auth?.bootstrapToken ??
+      null,
     nonce: params.nonce,
     platform: params.connectParams.client.platform,
     deviceFamily: params.connectParams.client.deviceFamily,
@@ -197,7 +207,11 @@ function resolveDeviceSignaturePayloadVersion(params: {
     role: params.role,
     scopes: params.scopes,
     signedAtMs: params.signedAtMs,
-    token: params.connectParams.auth?.token ?? params.connectParams.auth?.deviceToken ?? null,
+    token:
+      params.connectParams.auth?.token ??
+      params.connectParams.auth?.deviceToken ??
+      params.connectParams.auth?.bootstrapToken ??
+      null,
     nonce: params.nonce,
   });
   if (verifyDeviceSignature(params.device.publicKey, payloadV2, params.device.signature)) {
@@ -367,6 +381,18 @@ export function attachGatewayWsMessageHandler(params: {
     if (isClosed()) {
       return;
     }
+
+    const preauthPayloadBytes = !getClient() ? getRawDataByteLength(data) : undefined;
+    if (preauthPayloadBytes !== undefined && preauthPayloadBytes > MAX_PREAUTH_PAYLOAD_BYTES) {
+      setHandshakeState("failed");
+      setCloseCause("preauth-payload-too-large", {
+        payloadBytes: preauthPayloadBytes,
+        limitBytes: MAX_PREAUTH_PAYLOAD_BYTES,
+      });
+      close(1009, "preauth payload too large");
+      return;
+    }
+
     const text = rawDataToString(data);
     try {
       const parsed = JSON.parse(text);
@@ -552,6 +578,7 @@ export function attachGatewayWsMessageHandler(params: {
           authOk,
           authMethod,
           sharedAuthOk,
+          bootstrapTokenCandidate,
           deviceTokenCandidate,
           deviceTokenCandidateSource,
         } = await resolveConnectAuthState({
@@ -571,9 +598,11 @@ export function attachGatewayWsMessageHandler(params: {
               ? "password"
               : connectParams.auth?.token
                 ? "token"
-                : connectParams.auth?.deviceToken
-                  ? "device-token"
-                  : "none",
+                : connectParams.auth?.bootstrapToken
+                  ? "bootstrap-token"
+                  : connectParams.auth?.deviceToken
+                    ? "device-token"
+                    : "none",
             authReason: failedAuth.reason,
             allowTailscale: resolvedAuth.allowTailscale,
           });
@@ -584,9 +613,11 @@ export function attachGatewayWsMessageHandler(params: {
             ? "password"
             : connectParams.auth?.token
               ? "token"
-              : connectParams.auth?.deviceToken
-                ? "device-token"
-                : "none";
+              : connectParams.auth?.bootstrapToken
+                ? "bootstrap-token"
+                : connectParams.auth?.deviceToken
+                  ? "device-token"
+                  : "none";
           const authMessage = formatGatewayAuthFailureMessage({
             authMode: resolvedAuth.mode,
             authProvided,
@@ -733,15 +764,25 @@ export function attachGatewayWsMessageHandler(params: {
             authMethod,
             sharedAuthOk,
             sharedAuthProvided: hasSharedAuth,
+            bootstrapTokenCandidate,
             deviceTokenCandidate,
             deviceTokenCandidateSource,
           },
           hasDeviceIdentity: Boolean(device),
           deviceId: device?.id,
+          publicKey: device?.publicKey,
           role,
           scopes,
           rateLimiter: authRateLimiter,
           clientIp: browserRateLimitClientIp,
+          verifyBootstrapToken: async ({ deviceId, publicKey, token, role, scopes }) =>
+            await verifyDeviceBootstrapToken({
+              deviceId,
+              publicKey,
+              token,
+              role,
+              scopes,
+            }),
           verifyDeviceToken,
         }));
         if (!authOk) {
@@ -1068,6 +1109,7 @@ export function attachGatewayWsMessageHandler(params: {
           canvasCapability,
           canvasCapabilityExpiresAtMs,
         };
+        setSocketMaxPayload(socket, MAX_PAYLOAD_BYTES);
         setClient(nextClient);
         setHandshakeState("connected");
         if (role === "node") {
@@ -1216,4 +1258,24 @@ export function attachGatewayWsMessageHandler(params: {
       }
     }
   });
+}
+
+function getRawDataByteLength(data: unknown): number {
+  if (Buffer.isBuffer(data)) {
+    return data.byteLength;
+  }
+  if (Array.isArray(data)) {
+    return data.reduce((total, chunk) => total + chunk.byteLength, 0);
+  }
+  if (data instanceof ArrayBuffer) {
+    return data.byteLength;
+  }
+  return Buffer.byteLength(String(data));
+}
+
+function setSocketMaxPayload(socket: WebSocket, maxPayload: number): void {
+  const receiver = (socket as { _receiver?: { _maxPayload?: number } })._receiver;
+  if (receiver) {
+    receiver._maxPayload = maxPayload;
+  }
 }

@@ -365,6 +365,7 @@ describe("GatewayClient connect auth payload", () => {
       params?: {
         auth?: {
           token?: string;
+          bootstrapToken?: string;
           deviceToken?: string;
           password?: string;
         };
@@ -437,6 +438,26 @@ describe("GatewayClient connect auth payload", () => {
       token: "stored-device-token",
       deviceToken: "stored-device-token",
     });
+    client.stop();
+  });
+
+  it("uses bootstrap token when no shared or device token is available", () => {
+    loadDeviceAuthTokenMock.mockReturnValue(undefined);
+    const client = new GatewayClient({
+      url: "ws://127.0.0.1:18789",
+      bootstrapToken: "bootstrap-token",
+    });
+
+    client.start();
+    const ws = getLatestWs();
+    ws.emitOpen();
+    emitConnectChallenge(ws);
+
+    expect(connectFrameFrom(ws)).toMatchObject({
+      bootstrapToken: "bootstrap-token",
+    });
+    expect(connectFrameFrom(ws).token).toBeUndefined();
+    expect(connectFrameFrom(ws).deviceToken).toBeUndefined();
     client.stop();
   });
 

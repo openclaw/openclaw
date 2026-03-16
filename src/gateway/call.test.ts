@@ -655,6 +655,7 @@ describe("callGateway password resolution", () => {
     envSnapshot = captureEnv([
       "OPENCLAW_GATEWAY_PASSWORD",
       "OPENCLAW_GATEWAY_TOKEN",
+      "LOCAL_REMOTE_FALLBACK_TOKEN",
       "LOCAL_REF_PASSWORD",
       "REMOTE_REF_TOKEN",
       "REMOTE_REF_PASSWORD",
@@ -662,6 +663,7 @@ describe("callGateway password resolution", () => {
     resetGatewayCallMocks();
     delete process.env.OPENCLAW_GATEWAY_PASSWORD;
     delete process.env.OPENCLAW_GATEWAY_TOKEN;
+    delete process.env.LOCAL_REMOTE_FALLBACK_TOKEN;
     delete process.env.LOCAL_REF_PASSWORD;
     delete process.env.REMOTE_REF_TOKEN;
     delete process.env.REMOTE_REF_PASSWORD;
@@ -811,6 +813,30 @@ describe("callGateway password resolution", () => {
 
     expect(lastClientOptions?.token).toBeUndefined();
     expect(lastClientOptions?.password).toBe("resolved-local-fallback-password"); // pragma: allowlist secret
+  });
+
+  it("fails closed when unresolved local token SecretRef would otherwise fall back to remote token", async () => {
+    process.env.LOCAL_REMOTE_FALLBACK_TOKEN = "resolved-local-remote-fallback-token";
+    loadConfig.mockReturnValue({
+      gateway: {
+        mode: "local",
+        bind: "loopback",
+        auth: {
+          mode: "token",
+          token: { source: "env", provider: "default", id: "MISSING_LOCAL_REF_TOKEN" },
+        },
+        remote: {
+          token: { source: "env", provider: "default", id: "LOCAL_REMOTE_FALLBACK_TOKEN" },
+        },
+      },
+      secrets: {
+        providers: {
+          default: { source: "env" },
+        },
+      },
+    } as unknown as OpenClawConfig);
+
+    await expect(callGateway({ method: "health" })).rejects.toThrow("gateway.auth.token");
   });
 
   it.each(["none", "trusted-proxy"] as const)(

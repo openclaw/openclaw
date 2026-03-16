@@ -513,7 +513,7 @@ export type ToolsConfig = {
         /** Enable Firecrawl fallback (default: true when apiKey is set). */
         enabled?: boolean;
         /** Firecrawl API key (optional; defaults to FIRECRAWL_API_KEY env var). */
-        apiKey?: string;
+        apiKey?: SecretInput;
         /** Firecrawl base URL (default: https://api.firecrawl.dev). */
         baseUrl?: string;
         /** Whether to keep only main content (default: true). */

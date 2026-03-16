@@ -112,6 +112,7 @@ public struct GatewayConnectOptions: Sendable {
 public enum GatewayAuthSource: String, Sendable {
     case deviceToken = "device-token"
     case sharedToken = "shared-token"
+    case bootstrapToken = "bootstrap-token"
     case password = "password"
     case none = "none"
 }
@@ -131,6 +132,26 @@ private let defaultOperatorConnectScopes: [String] = [
     "operator.pairing",
 ]
 
+private extension String {
+    var nilIfEmpty: String? {
+        self.isEmpty ? nil : self
+    }
+}
+
+private enum GatewayConnectErrorCodes {
+    static let authTokenMismatch = GatewayConnectAuthDetailCode.authTokenMismatch.rawValue
+    static let authDeviceTokenMismatch = GatewayConnectAuthDetailCode.authDeviceTokenMismatch.rawValue
+    static let authTokenMissing = GatewayConnectAuthDetailCode.authTokenMissing.rawValue
+    static let authTokenNotConfigured = GatewayConnectAuthDetailCode.authTokenNotConfigured.rawValue
+    static let authPasswordMissing = GatewayConnectAuthDetailCode.authPasswordMissing.rawValue
+    static let authPasswordMismatch = GatewayConnectAuthDetailCode.authPasswordMismatch.rawValue
+    static let authPasswordNotConfigured = GatewayConnectAuthDetailCode.authPasswordNotConfigured.rawValue
+    static let authRateLimited = GatewayConnectAuthDetailCode.authRateLimited.rawValue
+    static let pairingRequired = GatewayConnectAuthDetailCode.pairingRequired.rawValue
+    static let controlUiDeviceIdentityRequired = GatewayConnectAuthDetailCode.controlUiDeviceIdentityRequired.rawValue
+    static let deviceIdentityRequired = GatewayConnectAuthDetailCode.deviceIdentityRequired.rawValue
+}
+
 public actor GatewayChannelActor {
     private let logger = Logger(subsystem: "ai.openclaw", category: "gateway")
     private var task: WebSocketTaskBox?
@@ -140,6 +161,7 @@ public actor GatewayChannelActor {
     private var connectWaiters: [CheckedContinuation<Void, Error>] = []
     private var url: URL
     private var token: String?
+    private var bootstrapToken: String?
     private var password: String?
     private let session: WebSocketSessioning
     private var backoffMs: Double = 500
@@ -160,6 +182,9 @@ public actor GatewayChannelActor {
     private var watchdogTask: Task<Void, Never>?
     private var tickTask: Task<Void, Never>?
     private var keepaliveTask: Task<Void, Never>?
+    private var pendingDeviceTokenRetry = false
+    private var deviceTokenRetryBudgetUsed = false
+    private var reconnectPausedForAuthFailure = false
     private let defaultRequestTimeoutMs: Double = 15000
     private let pushHandler: (@Sendable (GatewayPush) async -> Void)?
     private let connectOptions: GatewayConnectOptions?
@@ -168,6 +193,7 @@ public actor GatewayChannelActor {
     public init(
         url: URL,
         token: String?,
+        bootstrapToken: String? = nil,
         password: String? = nil,
         session: WebSocketSessionBox? = nil,
         pushHandler: (@Sendable (GatewayPush) async -> Void)? = nil,
@@ -176,6 +202,7 @@ public actor GatewayChannelActor {
     {
         self.url = url
         self.token = token
+        self.bootstrapToken = bootstrapToken
         self.password = password
         self.session = session?.session ?? URLSession(configuration: .default)
         self.pushHandler = pushHandler
@@ -232,10 +259,18 @@ public actor GatewayChannelActor {
         while self.shouldReconnect {
             guard await self.sleepUnlessCancelled(nanoseconds: 30 * 1_000_000_000) else { return } // 30s cadence
             guard self.shouldReconnect else { return }
+            if self.reconnectPausedForAuthFailure { continue }
             if self.connected { continue }
             do {
                 try await self.connect()
             } catch {
+                if self.shouldPauseReconnectAfterAuthFailure(error) {
+                    self.reconnectPausedForAuthFailure = true
+                    self.logger.error(
+                        "gateway watchdog reconnect paused for non-recoverable auth failure \(error.localizedDescription, privacy: .public)"
+                    )
+                    continue
+                }
                 let wrapped = self.wrap(error, context: "gateway watchdog reconnect")
                 self.logger.error("gateway watchdog reconnect failed \(wrapped.localizedDescription, privacy: .public)")
             }
@@ -267,7 +302,12 @@ public actor GatewayChannelActor {
                 },
                 operation: { try await self.sendConnect() })
         } catch {
-            let wrapped = self.wrap(error, context: "connect to gateway @ \(self.url.absoluteString)")
+            let wrapped: Error
+            if let authError = error as? GatewayConnectAuthError {
+                wrapped = authError
+            } else {
+                wrapped = self.wrap(error, context: "connect to gateway @ \(self.url.absoluteString)")
+            }
             self.connected = false
             self.task?.cancel(with: .goingAway, reason: nil)
             await self.disconnectHandler?("connect failed: \(wrapped.localizedDescription)")
@@ -281,6 +321,7 @@ public actor GatewayChannelActor {
         }
         self.listen()
         self.connected = true
+        self.reconnectPausedForAuthFailure = false
         self.backoffMs = 500
         self.lastSeq = nil
         self.startKeepalive()
@@ -371,25 +412,44 @@ public actor GatewayChannelActor {
             (includeDeviceIdentity && identity != nil)
                 ? DeviceAuthStore.loadToken(deviceId: identity!.deviceId, role: role)?.token
                 : nil
-        // If we're not sending a device identity, a device token can't be validated server-side.
-        // In that mode we always use the shared gateway token/password.
-        let authToken = includeDeviceIdentity ? (storedToken ?? self.token) : self.token
+        let explicitToken = self.token?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
+        let explicitBootstrapToken =
+            self.bootstrapToken?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
+        let explicitPassword = self.password?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
+        let shouldUseDeviceRetryToken =
+            includeDeviceIdentity && self.pendingDeviceTokenRetry &&
+            storedToken != nil && explicitToken != nil && self.isTrustedDeviceRetryEndpoint()
+        if shouldUseDeviceRetryToken {
+            self.pendingDeviceTokenRetry = false
+        }
+        // Keep shared credentials explicit when provided. Device token retry is attached
+        // only on a bounded second attempt after token mismatch.
+        let authToken = explicitToken ?? (includeDeviceIdentity ? storedToken : nil)
+        let authBootstrapToken = authToken == nil ? explicitBootstrapToken : nil
+        let authDeviceToken = shouldUseDeviceRetryToken ? storedToken : nil
         let authSource: GatewayAuthSource
-        if storedToken != nil {
+        if authDeviceToken != nil || (explicitToken == nil && storedToken != nil) {
             authSource = .deviceToken
         } else if authToken != nil {
             authSource = .sharedToken
-        } else if self.password != nil {
+        } else if authBootstrapToken != nil {
+            authSource = .bootstrapToken
+        } else if explicitPassword != nil {
             authSource = .password
         } else {
             authSource = .none
         }
         self.lastAuthSource = authSource
         self.logger.info("gateway connect auth=\(authSource.rawValue, privacy: .public)")
-        let canFallbackToShared = includeDeviceIdentity && storedToken != nil && self.token != nil
         if let authToken {
-            params["auth"] = ProtoAnyCodable(["token": ProtoAnyCodable(authToken)])
-        } else if let password = self.password {
+            var auth: [String: ProtoAnyCodable] = ["token": ProtoAnyCodable(authToken)]
+            if let authDeviceToken {
+                auth["deviceToken"] = ProtoAnyCodable(authDeviceToken)
+            }
+            params["auth"] = ProtoAnyCodable(auth)
+        } else if let authBootstrapToken {
+            params["auth"] = ProtoAnyCodable(["bootstrapToken": ProtoAnyCodable(authBootstrapToken)])
+        } else if let password = explicitPassword {
             params["auth"] = ProtoAnyCodable(["password": ProtoAnyCodable(password)])
         }
         let signedAtMs = Int(Date().timeIntervalSince1970 * 1000)
@@ -402,7 +462,7 @@ public actor GatewayChannelActor {
                 role: role,
                 scopes: scopes,
                 signedAtMs: signedAtMs,
-                token: authToken,
+                token: authToken ?? authBootstrapToken,
                 nonce: connectNonce,
                 platform: platform,
                 deviceFamily: InstanceIdentity.deviceFamily)
@@ -426,11 +486,24 @@ public actor GatewayChannelActor {
         do {
             let response = try await self.waitForConnectResponse(reqId: reqId)
             try await self.handleConnectResponse(response, identity: identity, role: role)
+            self.pendingDeviceTokenRetry = false
+            self.deviceTokenRetryBudgetUsed = false
         } catch {
-            if canFallbackToShared {
-                if let identity {
-                    DeviceAuthStore.clearToken(deviceId: identity.deviceId, role: role)
-                }
+            let shouldRetryWithDeviceToken = self.shouldRetryWithStoredDeviceToken(
+                error: error,
+                explicitGatewayToken: explicitToken,
+                storedToken: storedToken,
+                attemptedDeviceTokenRetry: authDeviceToken != nil)
+            if shouldRetryWithDeviceToken {
+                self.pendingDeviceTokenRetry = true
+                self.deviceTokenRetryBudgetUsed = true
+                self.backoffMs = min(self.backoffMs, 250)
+            } else if authDeviceToken != nil,
+                let identity,
+                self.shouldClearStoredDeviceTokenAfterRetry(error)
+            {
+                // Retry failed with an explicit device-token mismatch; clear stale local token.
+                DeviceAuthStore.clearToken(deviceId: identity.deviceId, role: role)
             }
             throw error
         }
@@ -443,7 +516,15 @@ public actor GatewayChannelActor {
     ) async throws {
         if res.ok == false {
             let msg = (res.error?["message"]?.value as? String) ?? "gateway connect failed"
-            throw NSError(domain: "Gateway", code: 1008, userInfo: [NSLocalizedDescriptionKey: msg])
+            let details = res.error?["details"]?.value as? [String: ProtoAnyCodable]
+            let detailCode = details?["code"]?.value as? String
+            let canRetryWithDeviceToken = details?["canRetryWithDeviceToken"]?.value as? Bool ?? false
+            let recommendedNextStep = details?["recommendedNextStep"]?.value as? String
+            throw GatewayConnectAuthError(
+                message: msg,
+                detailCodeRaw: detailCode,
+                canRetryWithDeviceToken: canRetryWithDeviceToken,
+                recommendedNextStepRaw: recommendedNextStep)
         }
         guard let payload = res.payload else {
             throw NSError(
@@ -616,17 +697,88 @@ public actor GatewayChannelActor {
 
     private func scheduleReconnect() async {
         guard self.shouldReconnect else { return }
+        guard !self.reconnectPausedForAuthFailure else { return }
         let delay = self.backoffMs / 1000
         self.backoffMs = min(self.backoffMs * 2, 30000)
         guard await self.sleepUnlessCancelled(nanoseconds: UInt64(delay * 1_000_000_000)) else { return }
         guard self.shouldReconnect else { return }
+        guard !self.reconnectPausedForAuthFailure else { return }
         do {
             try await self.connect()
         } catch {
+            if self.shouldPauseReconnectAfterAuthFailure(error) {
+                self.reconnectPausedForAuthFailure = true
+                self.logger.error(
+                    "gateway reconnect paused for non-recoverable auth failure \(error.localizedDescription, privacy: .public)"
+                )
+                return
+            }
             let wrapped = self.wrap(error, context: "gateway reconnect")
             self.logger.error("gateway reconnect failed \(wrapped.localizedDescription, privacy: .public)")
             await self.scheduleReconnect()
         }
+    }
+
+    private func shouldRetryWithStoredDeviceToken(
+        error: Error,
+        explicitGatewayToken: String?,
+        storedToken: String?,
+        attemptedDeviceTokenRetry: Bool
+    ) -> Bool {
+        if self.deviceTokenRetryBudgetUsed {
+            return false
+        }
+        if attemptedDeviceTokenRetry {
+            return false
+        }
+        guard explicitGatewayToken != nil, storedToken != nil else {
+            return false
+        }
+        guard self.isTrustedDeviceRetryEndpoint() else {
+            return false
+        }
+        guard let authError = error as? GatewayConnectAuthError else {
+            return false
+        }
+        return authError.canRetryWithDeviceToken ||
+            authError.detail == .authTokenMismatch
+    }
+
+    private func shouldPauseReconnectAfterAuthFailure(_ error: Error) -> Bool {
+        guard let authError = error as? GatewayConnectAuthError else {
+            return false
+        }
+        if authError.isNonRecoverable {
+            return true
+        }
+        if authError.detail == .authTokenMismatch &&
+            self.deviceTokenRetryBudgetUsed && !self.pendingDeviceTokenRetry
+        {
+            return true
+        }
+        return false
+    }
+
+    private func shouldClearStoredDeviceTokenAfterRetry(_ error: Error) -> Bool {
+        guard let authError = error as? GatewayConnectAuthError else {
+            return false
+        }
+        return authError.detail == .authDeviceTokenMismatch
+    }
+
+    private func isTrustedDeviceRetryEndpoint() -> Bool {
+        // This client currently treats loopback as the only trusted retry target.
+        // Unlike the Node gateway client, it does not yet expose a pinned TLS-fingerprint
+        // trust path for remote retry, so remote fallback remains disabled by default.
+        guard let host = self.url.host?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased(),
+              !host.isEmpty
+        else {
+            return false
+        }
+        if host == "localhost" || host == "::1" || host == "127.0.0.1" || host.hasPrefix("127.") {
+            return true
+        }
+        return false
     }
 
     private nonisolated func sleepUnlessCancelled(nanoseconds: UInt64) async -> Bool {
@@ -713,6 +865,9 @@ public actor GatewayChannelActor {
 
     // Wrap low-level URLSession/WebSocket errors with context so UI can surface them.
     private func wrap(_ error: Error, context: String) -> Error {
+        if error is GatewayConnectAuthError || error is GatewayResponseError || error is GatewayDecodingError {
+            return error
+        }
         if let urlError = error as? URLError {
             let desc = urlError.localizedDescription.isEmpty ? "cancelled" : urlError.localizedDescription
             return NSError(
@@ -756,7 +911,8 @@ public actor GatewayChannelActor {
             return (id: id, data: data)
         } catch {
             self.logger.error(
-                "gateway \(kind) encode failed \(method, privacy: .public) error=\(error.localizedDescription, privacy: .public)")
+                "gateway \(kind) encode failed \(method, privacy: .public) error=\(error.localizedDescription, privacy: .public)"
+            )
             throw error
         }
     }
