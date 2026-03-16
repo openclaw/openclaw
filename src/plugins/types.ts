@@ -1,12 +1,19 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
+import type { TopLevelComponents } from "@buape/carbon";
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
+import type { StreamFn } from "@mariozechner/pi-agent-core";
+import type { Api, Model } from "@mariozechner/pi-ai";
+import type { ModelRegistry } from "@mariozechner/pi-coding-agent";
 import type { Command } from "commander";
 import type {
   ApiKeyCredential,
   AuthProfileCredential,
   OAuthCredential,
 } from "../agents/auth-profiles/types.js";
+import type { ModelCatalogEntry } from "../agents/model-catalog.js";
+import type { ProviderCapabilities } from "../agents/provider-capabilities.js";
 import type { AnyAgentTool } from "../agents/tools/common.js";
+import type { ThinkLevel } from "../auto-reply/thinking.js";
 import type { ReplyPayload } from "../auto-reply/types.js";
 import type { ChannelDock } from "../channels/dock.js";
 import type { ChannelId, ChannelPlugin } from "../channels/plugins/types.js";
@@ -17,7 +24,9 @@ import type { ModelProviderConfig } from "../config/types.js";
 import type { GatewayRequestHandler } from "../gateway/server-methods/types.js";
 import type { InternalHookHandler } from "../hooks/internal-hooks.js";
 import type { HookEntry } from "../hooks/types.js";
+import type { ProviderUsageSnapshot } from "../infra/provider-usage.types.js";
 import type { RuntimeEnv } from "../runtime.js";
+import type { RuntimeWebSearchMetadata } from "../secrets/runtime-web-tools.types.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 import type { PluginRuntime } from "./runtime/types.js";
 
@@ -166,9 +175,9 @@ export type ProviderAuthMethod = {
   ) => Promise<OpenClawConfig | null>;
 };
 
-export type ProviderDiscoveryOrder = "simple" | "profile" | "paired" | "late";
+export type ProviderCatalogOrder = "simple" | "profile" | "paired" | "late";
 
-export type ProviderDiscoveryContext = {
+export type ProviderCatalogContext = {
   config: OpenClawConfig;
   agentDir?: string;
   workspaceDir?: string;
@@ -179,16 +188,281 @@ export type ProviderDiscoveryContext = {
   };
 };
 
-export type ProviderDiscoveryResult =
+export type ProviderCatalogResult =
   | { provider: ModelProviderConfig }
   | { providers: Record<string, ModelProviderConfig> }
   | null
   | undefined;
 
-export type ProviderPluginDiscovery = {
-  order?: ProviderDiscoveryOrder;
-  run: (ctx: ProviderDiscoveryContext) => Promise<ProviderDiscoveryResult>;
+export type ProviderPluginCatalog = {
+  order?: ProviderCatalogOrder;
+  run: (ctx: ProviderCatalogContext) => Promise<ProviderCatalogResult>;
 };
+
+/**
+ * Fully-resolved runtime model shape used by the embedded runner.
+ *
+ * Catalog hooks publish config-time `models.providers` entries.
+ * Runtime hooks below operate on the final `pi-ai` model object after
+ * discovery/override merging, just before inference runs.
+ */
+export type ProviderRuntimeModel = Model<Api>;
+
+export type ProviderRuntimeProviderConfig = {
+  baseUrl?: string;
+  api?: ModelProviderConfig["api"];
+  models?: ModelProviderConfig["models"];
+  headers?: unknown;
+};
+
+/**
+ * Sync hook for provider-owned model ids that are not present in the local
+ * registry/catalog yet.
+ *
+ * Use this for pass-through providers or provider-specific forward-compat
+ * behavior. The hook should be cheap and side-effect free; async refreshes
+ * belong in `prepareDynamicModel`.
+ */
+export type ProviderResolveDynamicModelContext = {
+  config?: OpenClawConfig;
+  agentDir?: string;
+  workspaceDir?: string;
+  provider: string;
+  modelId: string;
+  modelRegistry: ModelRegistry;
+  providerConfig?: ProviderRuntimeProviderConfig;
+};
+
+/**
+ * Optional async warm-up for dynamic model resolution.
+ *
+ * Called only from async model resolution paths, before retrying
+ * `resolveDynamicModel`. This is the place to refresh caches or fetch provider
+ * metadata over the network.
+ */
+export type ProviderPrepareDynamicModelContext = ProviderResolveDynamicModelContext;
+
+/**
+ * Last-chance rewrite hook for provider-owned transport normalization.
+ *
+ * Runs after OpenClaw resolves an explicit/discovered/dynamic model and before
+ * the embedded runner uses it. Typical uses: swap API ids, fix base URLs, or
+ * patch provider-specific compat bits.
+ */
+export type ProviderNormalizeResolvedModelContext = {
+  config?: OpenClawConfig;
+  agentDir?: string;
+  workspaceDir?: string;
+  provider: string;
+  modelId: string;
+  model: ProviderRuntimeModel;
+};
+
+/**
+ * Runtime auth input for providers that need an extra exchange step before
+ * inference. The incoming `apiKey` is the raw credential resolved from auth
+ * profiles/env/config. The returned value should be the actual token/key to use
+ * for the request.
+ */
+export type ProviderPrepareRuntimeAuthContext = {
+  config?: OpenClawConfig;
+  agentDir?: string;
+  workspaceDir?: string;
+  env: NodeJS.ProcessEnv;
+  provider: string;
+  modelId: string;
+  model: ProviderRuntimeModel;
+  apiKey: string;
+  authMode: string;
+  profileId?: string;
+};
+
+/**
+ * Result of `prepareRuntimeAuth`.
+ *
+ * `apiKey` is required and becomes the runtime credential stored in auth
+ * storage. `baseUrl` is optional and lets providers like GitHub Copilot swap to
+ * an entitlement-specific endpoint at request time. `expiresAt` enables generic
+ * background refresh in long-running turns.
+ */
+export type ProviderPreparedRuntimeAuth = {
+  apiKey: string;
+  baseUrl?: string;
+  expiresAt?: number;
+};
+
+/**
+ * Usage/billing auth input for providers that expose quota/usage endpoints.
+ *
+ * This hook is intentionally separate from `prepareRuntimeAuth`: usage
+ * snapshots often need a different credential source than live inference
+ * requests, and they run outside the embedded runner.
+ *
+ * The helper methods cover the common OpenClaw auth resolution paths:
+ *
+ * - `resolveApiKeyFromConfigAndStore`: env/config/plain token/api_key profiles
+ * - `resolveOAuthToken`: oauth/token profiles resolved through the auth store
+ *
+ * Plugins can still do extra provider-specific work on top (for example parse a
+ * token blob, read a legacy credential file, or pick between aliases).
+ */
+export type ProviderResolveUsageAuthContext = {
+  config: OpenClawConfig;
+  agentDir?: string;
+  workspaceDir?: string;
+  env: NodeJS.ProcessEnv;
+  provider: string;
+  resolveApiKeyFromConfigAndStore: (params?: {
+    providerIds?: string[];
+    envDirect?: Array<string | undefined>;
+  }) => string | undefined;
+  resolveOAuthToken: () => Promise<ProviderResolvedUsageAuth | null>;
+};
+
+/**
+ * Result of `resolveUsageAuth`.
+ *
+ * `token` is the credential used for provider usage/billing endpoints.
+ * `accountId` is optional provider-specific metadata used by some usage APIs.
+ */
+export type ProviderResolvedUsageAuth = {
+  token: string;
+  accountId?: string;
+};
+
+/**
+ * Usage/quota snapshot input for providers that own their usage endpoint
+ * fetch/parsing behavior.
+ *
+ * This hook runs after `resolveUsageAuth` succeeds. Core still owns summary
+ * fan-out, timeout wrapping, filtering, and formatting; the provider plugin
+ * owns the provider-specific HTTP request + response normalization.
+ *
+ * Return `null`/`undefined` to fall back to legacy core fetchers.
+ */
+export type ProviderFetchUsageSnapshotContext = {
+  config: OpenClawConfig;
+  agentDir?: string;
+  workspaceDir?: string;
+  env: NodeJS.ProcessEnv;
+  provider: string;
+  token: string;
+  accountId?: string;
+  timeoutMs: number;
+  fetchFn: typeof fetch;
+};
+
+/**
+ * Provider-owned extra-param normalization before OpenClaw builds its generic
+ * stream option wrapper.
+ *
+ * Use this to set provider defaults or rewrite provider-specific config keys
+ * into the merged `extraParams` object. Return the full next extraParams object.
+ */
+export type ProviderPrepareExtraParamsContext = {
+  config?: OpenClawConfig;
+  agentDir?: string;
+  workspaceDir?: string;
+  provider: string;
+  modelId: string;
+  extraParams?: Record<string, unknown>;
+  thinkingLevel?: ThinkLevel;
+};
+
+/**
+ * Provider-owned stream wrapper hook after OpenClaw applies its generic
+ * transport-independent wrappers.
+ *
+ * Use this for provider-specific payload/header/model mutations that still run
+ * through the normal `pi-ai` stream path.
+ */
+export type ProviderWrapStreamFnContext = ProviderPrepareExtraParamsContext & {
+  streamFn?: StreamFn;
+};
+
+/**
+ * Provider-owned prompt-cache eligibility.
+ *
+ * Return `true` or `false` to override OpenClaw's built-in provider cache TTL
+ * detection for this provider. Return `undefined` to fall back to core rules.
+ */
+export type ProviderCacheTtlEligibilityContext = {
+  provider: string;
+  modelId: string;
+};
+
+/**
+ * Provider-owned missing-auth message override.
+ *
+ * Runs only after OpenClaw exhausts normal env/profile/config auth resolution
+ * for the requested provider. Return a custom message to replace the generic
+ * "No API key found" error.
+ */
+export type ProviderBuildMissingAuthMessageContext = {
+  config?: OpenClawConfig;
+  agentDir?: string;
+  workspaceDir?: string;
+  env: NodeJS.ProcessEnv;
+  provider: string;
+  listProfileIds: (providerId: string) => string[];
+};
+
+/**
+ * Built-in model suppression hook.
+ *
+ * Use this when a provider/plugin needs to hide stale upstream catalog rows or
+ * replace them with a vendor-specific hint. This hook is consulted by model
+ * resolution, model listing, and catalog loading.
+ */
+export type ProviderBuiltInModelSuppressionContext = {
+  config?: OpenClawConfig;
+  agentDir?: string;
+  workspaceDir?: string;
+  env: NodeJS.ProcessEnv;
+  provider: string;
+  modelId: string;
+};
+
+export type ProviderBuiltInModelSuppressionResult = {
+  suppress: boolean;
+  errorMessage?: string;
+};
+
+/**
+ * Final catalog augmentation hook.
+ *
+ * Runs after OpenClaw loads the discovered model catalog and merges configured
+ * opt-in providers. Use this for forward-compat rows or vendor-owned synthetic
+ * entries that should appear in `models list` and model pickers even when the
+ * upstream registry has not caught up yet.
+ */
+export type ProviderAugmentModelCatalogContext = {
+  config?: OpenClawConfig;
+  agentDir?: string;
+  workspaceDir?: string;
+  env: NodeJS.ProcessEnv;
+  entries: ModelCatalogEntry[];
+};
+
+/**
+ * @deprecated Use ProviderCatalogOrder.
+ */
+export type ProviderDiscoveryOrder = ProviderCatalogOrder;
+
+/**
+ * @deprecated Use ProviderCatalogContext.
+ */
+export type ProviderDiscoveryContext = ProviderCatalogContext;
+
+/**
+ * @deprecated Use ProviderCatalogResult.
+ */
+export type ProviderDiscoveryResult = ProviderCatalogResult;
+
+/**
+ * @deprecated Use ProviderPluginCatalog.
+ */
+export type ProviderPluginDiscovery = ProviderPluginCatalog;
 
 export type ProviderPluginWizardOnboarding = {
   choiceId?: string;
@@ -227,11 +501,185 @@ export type ProviderPlugin = {
   aliases?: string[];
   envVars?: string[];
   auth: ProviderAuthMethod[];
+  /**
+   * Preferred hook for plugin-defined provider catalogs.
+   * Returns provider config/model definitions that merge into models.providers.
+   */
+  catalog?: ProviderPluginCatalog;
+  /**
+   * Legacy alias for catalog.
+   * Kept for compatibility with existing provider plugins.
+   */
   discovery?: ProviderPluginDiscovery;
+  /**
+   * Sync runtime fallback for model ids not present in the local catalog.
+   *
+   * Hook order:
+   * 1. discovered/static model lookup
+   * 2. plugin `resolveDynamicModel`
+   * 3. core fallback heuristics
+   * 4. generic provider-config fallback
+   *
+   * Keep this hook cheap and deterministic. If you need network I/O first, use
+   * `prepareDynamicModel` to prime state for the async retry path.
+   */
+  resolveDynamicModel?: (
+    ctx: ProviderResolveDynamicModelContext,
+  ) => ProviderRuntimeModel | null | undefined;
+  /**
+   * Optional async prefetch for dynamic model resolution.
+   *
+   * OpenClaw calls this only from async model resolution paths. After it
+   * completes, `resolveDynamicModel` is called again.
+   */
+  prepareDynamicModel?: (ctx: ProviderPrepareDynamicModelContext) => Promise<void>;
+  /**
+   * Provider-owned transport normalization.
+   *
+   * Use this to rewrite a resolved model without forking the generic runner:
+   * swap API ids, update base URLs, or adjust compat flags for a provider's
+   * transport quirks.
+   */
+  normalizeResolvedModel?: (
+    ctx: ProviderNormalizeResolvedModelContext,
+  ) => ProviderRuntimeModel | null | undefined;
+  /**
+   * Static provider capability overrides consumed by shared transcript/tooling
+   * logic.
+   *
+   * Use this when the provider behaves like OpenAI/Anthropic, needs transcript
+   * sanitization quirks, or requires provider-family hints.
+   */
+  capabilities?: Partial<ProviderCapabilities>;
+  /**
+   * Provider-owned extra-param normalization before generic stream option
+   * wrapping.
+   *
+   * Typical uses: set provider-default `transport`, map provider-specific
+   * config aliases, or inject extra request metadata sourced from
+   * `agents.defaults.models.<provider>/<model>.params`.
+   */
+  prepareExtraParams?: (
+    ctx: ProviderPrepareExtraParamsContext,
+  ) => Record<string, unknown> | null | undefined;
+  /**
+   * Provider-owned stream wrapper applied after generic OpenClaw wrappers.
+   *
+   * Typical uses: provider attribution headers, request-body rewrites, or
+   * provider-specific compat payload patches that do not justify a separate
+   * transport implementation.
+   */
+  wrapStreamFn?: (ctx: ProviderWrapStreamFnContext) => StreamFn | null | undefined;
+  /**
+   * Runtime auth exchange hook.
+   *
+   * Called after OpenClaw resolves the raw configured credential but before the
+   * runner stores it in runtime auth storage. This lets plugins exchange a
+   * source credential (for example a GitHub token) into a short-lived runtime
+   * token plus optional base URL override.
+   */
+  prepareRuntimeAuth?: (
+    ctx: ProviderPrepareRuntimeAuthContext,
+  ) => Promise<ProviderPreparedRuntimeAuth | null | undefined>;
+  /**
+   * Usage/billing auth resolution hook.
+   *
+   * Called by provider-usage surfaces (`/usage`, status snapshots, reporting)
+   * before OpenClaw falls back to legacy core auth resolution. Use this when a
+   * provider's usage endpoint needs provider-owned token extraction, blob
+   * parsing, or alias handling.
+   */
+  resolveUsageAuth?: (
+    ctx: ProviderResolveUsageAuthContext,
+  ) =>
+    | Promise<ProviderResolvedUsageAuth | null | undefined>
+    | ProviderResolvedUsageAuth
+    | null
+    | undefined;
+  /**
+   * Usage/quota snapshot fetch hook.
+   *
+   * Called after `resolveUsageAuth` by `/usage` and related reporting surfaces.
+   * Use this when the provider's usage endpoint or payload shape is
+   * provider-specific and you want that logic to live with the provider plugin
+   * instead of the core switchboard.
+   */
+  fetchUsageSnapshot?: (
+    ctx: ProviderFetchUsageSnapshotContext,
+  ) => Promise<ProviderUsageSnapshot | null | undefined> | ProviderUsageSnapshot | null | undefined;
+  /**
+   * Provider-owned cache TTL eligibility.
+   *
+   * Use this when a proxy provider supports Anthropic-style prompt caching for
+   * only a subset of upstream models.
+   */
+  isCacheTtlEligible?: (ctx: ProviderCacheTtlEligibilityContext) => boolean | undefined;
+  /**
+   * Provider-owned missing-auth message override.
+   *
+   * Return a custom message when the provider wants a more specific recovery
+   * hint than OpenClaw's generic auth-store guidance.
+   */
+  buildMissingAuthMessage?: (
+    ctx: ProviderBuildMissingAuthMessageContext,
+  ) => string | null | undefined;
+  /**
+   * Provider-owned built-in model suppression.
+   *
+   * Return `{ suppress: true }` to hide a stale upstream row. Include
+   * `errorMessage` when OpenClaw should surface a provider-specific hint for
+   * direct model resolution failures.
+   */
+  suppressBuiltInModel?: (
+    ctx: ProviderBuiltInModelSuppressionContext,
+  ) => ProviderBuiltInModelSuppressionResult | null | undefined;
+  /**
+   * Provider-owned final catalog augmentation.
+   *
+   * Return extra rows to append to the final catalog after discovery/config
+   * merging. OpenClaw deduplicates by `provider/id`, so plugins only need to
+   * describe the desired supplemental rows.
+   */
+  augmentModelCatalog?: (
+    ctx: ProviderAugmentModelCatalogContext,
+  ) =>
+    | Array<ModelCatalogEntry>
+    | ReadonlyArray<ModelCatalogEntry>
+    | Promise<Array<ModelCatalogEntry> | ReadonlyArray<ModelCatalogEntry> | null | undefined>
+    | null
+    | undefined;
   wizard?: ProviderPluginWizard;
   formatApiKey?: (cred: AuthProfileCredential) => string;
   refreshOAuth?: (cred: OAuthCredential) => Promise<OAuthCredential>;
   onModelSelected?: (ctx: ProviderModelSelectedContext) => Promise<void>;
+};
+
+export type WebSearchProviderId = string;
+
+export type WebSearchProviderToolDefinition = {
+  description: string;
+  parameters: Record<string, unknown>;
+  execute: (args: Record<string, unknown>) => Promise<Record<string, unknown>>;
+};
+
+export type WebSearchProviderContext = {
+  config?: OpenClawConfig;
+  searchConfig?: Record<string, unknown>;
+  runtimeMetadata?: RuntimeWebSearchMetadata;
+};
+
+export type WebSearchProviderPlugin = {
+  id: WebSearchProviderId;
+  label: string;
+  hint: string;
+  envVars: string[];
+  placeholder: string;
+  signupUrl: string;
+  docsUrl?: string;
+  autoDetectOrder?: number;
+  getCredentialValue: (searchConfig?: Record<string, unknown>) => unknown;
+  setCredentialValue: (searchConfigTarget: Record<string, unknown>, value: unknown) => void;
+  createTool: (ctx: WebSearchProviderContext) => WebSearchProviderToolDefinition | null;
 };
 
 export type OpenClawPluginGatewayMethod = {
@@ -269,7 +717,47 @@ export type PluginCommandContext = {
   accountId?: string;
   /** Thread/topic id if available */
   messageThreadId?: number;
+  requestConversationBinding: (
+    params?: PluginConversationBindingRequestParams,
+  ) => Promise<PluginConversationBindingRequestResult>;
+  detachConversationBinding: () => Promise<{ removed: boolean }>;
+  getCurrentConversationBinding: () => Promise<PluginConversationBinding | null>;
 };
+
+export type PluginConversationBindingRequestParams = {
+  summary?: string;
+  detachHint?: string;
+};
+
+export type PluginConversationBinding = {
+  bindingId: string;
+  pluginId: string;
+  pluginName?: string;
+  pluginRoot: string;
+  channel: string;
+  accountId: string;
+  conversationId: string;
+  parentConversationId?: string;
+  threadId?: string | number;
+  boundAt: number;
+  summary?: string;
+  detachHint?: string;
+};
+
+export type PluginConversationBindingRequestResult =
+  | {
+      status: "bound";
+      binding: PluginConversationBinding;
+    }
+  | {
+      status: "pending";
+      approvalId: string;
+      reply: ReplyPayload;
+    }
+  | {
+      status: "error";
+      message: string;
+    };
 
 /**
  * Result returned by a plugin command handler.
@@ -304,6 +792,111 @@ export type OpenClawPluginCommandDefinition = {
   /** The handler function */
   handler: PluginCommandHandler;
 };
+
+export type PluginInteractiveChannel = "telegram" | "discord";
+
+export type PluginInteractiveButtons = Array<
+  Array<{ text: string; callback_data: string; style?: "danger" | "success" | "primary" }>
+>;
+
+export type PluginInteractiveTelegramHandlerResult = {
+  handled?: boolean;
+} | void;
+
+export type PluginInteractiveTelegramHandlerContext = {
+  channel: "telegram";
+  accountId: string;
+  callbackId: string;
+  conversationId: string;
+  parentConversationId?: string;
+  senderId?: string;
+  senderUsername?: string;
+  threadId?: number;
+  isGroup: boolean;
+  isForum: boolean;
+  auth: {
+    isAuthorizedSender: boolean;
+  };
+  callback: {
+    data: string;
+    namespace: string;
+    payload: string;
+    messageId: number;
+    chatId: string;
+    messageText?: string;
+  };
+  respond: {
+    reply: (params: { text: string; buttons?: PluginInteractiveButtons }) => Promise<void>;
+    editMessage: (params: { text: string; buttons?: PluginInteractiveButtons }) => Promise<void>;
+    editButtons: (params: { buttons: PluginInteractiveButtons }) => Promise<void>;
+    clearButtons: () => Promise<void>;
+    deleteMessage: () => Promise<void>;
+  };
+  requestConversationBinding: (
+    params?: PluginConversationBindingRequestParams,
+  ) => Promise<PluginConversationBindingRequestResult>;
+  detachConversationBinding: () => Promise<{ removed: boolean }>;
+  getCurrentConversationBinding: () => Promise<PluginConversationBinding | null>;
+};
+
+export type PluginInteractiveDiscordHandlerResult = {
+  handled?: boolean;
+} | void;
+
+export type PluginInteractiveDiscordHandlerContext = {
+  channel: "discord";
+  accountId: string;
+  interactionId: string;
+  conversationId: string;
+  parentConversationId?: string;
+  guildId?: string;
+  senderId?: string;
+  senderUsername?: string;
+  auth: {
+    isAuthorizedSender: boolean;
+  };
+  interaction: {
+    kind: "button" | "select" | "modal";
+    data: string;
+    namespace: string;
+    payload: string;
+    messageId?: string;
+    values?: string[];
+    fields?: Array<{ id: string; name: string; values: string[] }>;
+  };
+  respond: {
+    acknowledge: () => Promise<void>;
+    reply: (params: { text: string; ephemeral?: boolean }) => Promise<void>;
+    followUp: (params: { text: string; ephemeral?: boolean }) => Promise<void>;
+    editMessage: (params: { text?: string; components?: TopLevelComponents[] }) => Promise<void>;
+    clearComponents: (params?: { text?: string }) => Promise<void>;
+  };
+  requestConversationBinding: (
+    params?: PluginConversationBindingRequestParams,
+  ) => Promise<PluginConversationBindingRequestResult>;
+  detachConversationBinding: () => Promise<{ removed: boolean }>;
+  getCurrentConversationBinding: () => Promise<PluginConversationBinding | null>;
+};
+
+export type PluginInteractiveTelegramHandlerRegistration = {
+  channel: "telegram";
+  namespace: string;
+  handler: (
+    ctx: PluginInteractiveTelegramHandlerContext,
+  ) => Promise<PluginInteractiveTelegramHandlerResult> | PluginInteractiveTelegramHandlerResult;
+};
+
+export type PluginInteractiveDiscordHandlerRegistration = {
+  channel: "discord";
+  namespace: string;
+  handler: (
+    ctx: PluginInteractiveDiscordHandlerContext,
+  ) => Promise<PluginInteractiveDiscordHandlerResult> | PluginInteractiveDiscordHandlerResult;
+};
+
+export type PluginInteractiveHandlerRegistration =
+  | PluginInteractiveTelegramHandlerRegistration
+  | PluginInteractiveDiscordHandlerRegistration;
 
 export type OpenClawPluginHttpRouteAuth = "gateway" | "plugin";
 export type OpenClawPluginHttpRouteMatch = "exact" | "prefix";
@@ -363,12 +956,16 @@ export type OpenClawPluginModule =
   | OpenClawPluginDefinition
   | ((api: OpenClawPluginApi) => void | Promise<void>);
 
+export type PluginRegistrationMode = "full" | "setup-only";
+
 export type OpenClawPluginApi = {
   id: string;
   name: string;
   version?: string;
   description?: string;
   source: string;
+  rootDir?: string;
+  registrationMode: PluginRegistrationMode;
   config: OpenClawConfig;
   pluginConfig?: Record<string, unknown>;
   runtime: PluginRuntime;
@@ -388,6 +985,8 @@ export type OpenClawPluginApi = {
   registerCli: (registrar: OpenClawPluginCliRegistrar, opts?: { commands?: string[] }) => void;
   registerService: (service: OpenClawPluginService) => void;
   registerProvider: (provider: ProviderPlugin) => void;
+  registerWebSearchProvider: (provider: WebSearchProviderPlugin) => void;
+  registerInteractiveHandler: (registration: PluginInteractiveHandlerRegistration) => void;
   /**
    * Register a custom command that bypasses the LLM agent.
    * Plugin commands are processed before built-in commands and before agent invocation.
@@ -410,6 +1009,10 @@ export type OpenClawPluginApi = {
 
 export type PluginOrigin = "bundled" | "global" | "workspace" | "config";
 
+export type PluginFormat = "openclaw" | "bundle";
+
+export type PluginBundleFormat = "codex" | "claude" | "cursor";
+
 export type PluginDiagnostic = {
   level: "warn" | "error";
   message: string;
@@ -431,6 +1034,7 @@ export type PluginHookName =
   | "before_compaction"
   | "after_compaction"
   | "before_reset"
+  | "inbound_claim"
   | "message_received"
   | "message_sending"
   | "message_sent"
@@ -457,6 +1061,7 @@ export const PLUGIN_HOOK_NAMES = [
   "before_compaction",
   "after_compaction",
   "before_reset",
+  "inbound_claim",
   "message_received",
   "message_sending",
   "message_sent",
@@ -663,6 +1268,37 @@ export type PluginHookMessageContext = {
   channelId: string;
   accountId?: string;
   conversationId?: string;
+};
+
+export type PluginHookInboundClaimContext = PluginHookMessageContext & {
+  parentConversationId?: string;
+  senderId?: string;
+  messageId?: string;
+};
+
+export type PluginHookInboundClaimEvent = {
+  content: string;
+  body?: string;
+  bodyForAgent?: string;
+  transcript?: string;
+  timestamp?: number;
+  channel: string;
+  accountId?: string;
+  conversationId?: string;
+  parentConversationId?: string;
+  senderId?: string;
+  senderName?: string;
+  senderUsername?: string;
+  threadId?: string | number;
+  messageId?: string;
+  isGroup: boolean;
+  commandAuthorized?: boolean;
+  wasMentioned?: boolean;
+  metadata?: Record<string, unknown>;
+};
+
+export type PluginHookInboundClaimResult = {
+  handled: boolean;
 };
 
 // message_received hook
@@ -921,6 +1557,10 @@ export type PluginHookHandlerMap = {
     event: PluginHookBeforeResetEvent,
     ctx: PluginHookAgentContext,
   ) => Promise<void> | void;
+  inbound_claim: (
+    event: PluginHookInboundClaimEvent,
+    ctx: PluginHookInboundClaimContext,
+  ) => Promise<PluginHookInboundClaimResult | void> | PluginHookInboundClaimResult | void;
   message_received: (
     event: PluginHookMessageReceivedEvent,
     ctx: PluginHookMessageContext,

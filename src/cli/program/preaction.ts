@@ -67,6 +67,20 @@ function loadPluginRegistryModule() {
   return pluginRegistryModulePromise;
 }
 
+function resolvePluginRegistryScope(commandPath: string[]): "channels" | "all" {
+  return commandPath[0] === "status" || commandPath[0] === "health" ? "channels" : "all";
+}
+
+function shouldLoadPluginsForCommand(commandPath: string[], argv: string[]): boolean {
+  if (!PLUGIN_REQUIRED_COMMANDS.has(commandPath[0])) {
+    return false;
+  }
+  if ((commandPath[0] === "status" || commandPath[0] === "health") && hasFlag(argv, "--json")) {
+    return false;
+  }
+  return true;
+}
+
 function getRootCommand(command: Command): Command {
   let current = command;
   while (current.parent) {
@@ -134,9 +148,9 @@ export function registerPreActionHooks(program: Command, programVersion: string)
       ...(suppressDoctorStdout ? { suppressDoctorStdout: true } : {}),
     });
     // Load plugins for commands that need channel access
-    if (PLUGIN_REQUIRED_COMMANDS.has(commandPath[0])) {
+    if (shouldLoadPluginsForCommand(commandPath, argv)) {
       const { ensurePluginRegistryLoaded } = await loadPluginRegistryModule();
-      ensurePluginRegistryLoaded();
+      ensurePluginRegistryLoaded({ scope: resolvePluginRegistryScope(commandPath) });
     }
   });
 }

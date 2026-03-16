@@ -31,4 +31,43 @@ describe("resolvePluginProviders", () => {
       }),
     );
   });
+
+  it("can augment restrictive allowlists for bundled provider compatibility", () => {
+    resolvePluginProviders({
+      config: {
+        plugins: {
+          allow: ["openrouter"],
+        },
+      },
+      bundledProviderAllowlistCompat: true,
+    });
+
+    expect(loadOpenClawPluginsMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        config: expect.objectContaining({
+          plugins: expect.objectContaining({
+            allow: expect.arrayContaining(["openrouter", "kilocode", "moonshot"]),
+          }),
+        }),
+      }),
+    );
+  });
+
+  it("can enable bundled provider plugins under Vitest when no explicit plugin config exists", () => {
+    resolvePluginProviders({
+      env: { VITEST: "1" } as NodeJS.ProcessEnv,
+      bundledProviderVitestCompat: true,
+    });
+
+    expect(loadOpenClawPluginsMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        config: expect.objectContaining({
+          plugins: expect.objectContaining({
+            enabled: true,
+            allow: expect.arrayContaining(["openai", "moonshot", "zai"]),
+          }),
+        }),
+      }),
+    );
+  });
 });
