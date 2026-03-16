@@ -2,6 +2,7 @@ import { listChannelPlugins } from "../../channels/plugins/index.js";
 import { parseAbsoluteTimeMs } from "../../cron/parse.js";
 import { resolveCronStaggerMs } from "../../cron/stagger.js";
 import type { CronJob, CronSchedule } from "../../cron/types.js";
+import { danger } from "../../globals.js";
 import { formatDurationHuman } from "../../infra/format-time/format-duration.ts";
 import { defaultRuntime } from "../../runtime.js";
 import { colorize, isRich, theme } from "../../terminal/theme.js";
@@ -10,6 +11,15 @@ import { callGatewayFromCli } from "../gateway-rpc.js";
 
 export const getCronChannelOptions = () =>
   ["last", ...listChannelPlugins().map((plugin) => plugin.id)].join("|");
+
+export function printCronJson(value: unknown) {
+  defaultRuntime.log(JSON.stringify(value, null, 2));
+}
+
+export function handleCronCliError(err: unknown) {
+  defaultRuntime.error(danger(String(err)));
+  defaultRuntime.exit(1);
+}
 
 export async function warnIfCronSchedulerDisabled(opts: GatewayRpcOpts) {
   try {
@@ -237,9 +247,9 @@ export function printCronList(jobs: CronJob[], runtime = defaultRuntime) {
     })();
 
     const coloredTarget =
-      job.sessionTarget === "isolated"
-        ? colorize(rich, theme.accentBright, targetLabel)
-        : colorize(rich, theme.accent, targetLabel);
+      job.sessionTarget === "main"
+        ? colorize(rich, theme.accent, targetLabel)
+        : colorize(rich, theme.accentBright, targetLabel);
     const coloredAgent = job.agentId
       ? colorize(rich, theme.info, agentLabel)
       : colorize(rich, theme.muted, agentLabel);

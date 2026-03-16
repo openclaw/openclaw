@@ -1,0 +1,12 @@
+{
+  "id": "huggingface",
+  "providers": ["huggingface"],
+  "providerAuthEnvVars": {
+    "huggingface": ["HUGGINGFACE_HUB_TOKEN", "HF_TOKEN"]
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

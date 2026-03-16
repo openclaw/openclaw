@@ -17,6 +17,10 @@ const DEFAULT_TTL_MS = 2 * 60 * 1000; // 2 minutes
 // Files are intentionally readable by non-owner UIDs so Docker sandbox containers can access
 // inbound media. The containing state/media directories remain 0o700, which is the trust boundary.
 const MEDIA_FILE_MODE = 0o644;
+type CleanOldMediaOptions = {
+  recursive?: boolean;
+  pruneEmptyDirs?: boolean;
+};
 type RequestImpl = typeof httpRequest;
 type ResolvePinnedHostnameImpl = typeof resolvePinnedHostname;
 
@@ -88,42 +92,82 @@ export async function ensureMediaDir() {
   return mediaDir;
 }
 
-export async function cleanOldMedia(ttlMs = DEFAULT_TTL_MS) {
-  const mediaDir = await ensureMediaDir();
-  const entries = await fs.readdir(mediaDir).catch(() => []);
-  const now = Date.now();
-  const removeExpiredFilesInDir = async (dir: string) => {
-    const dirEntries = await fs.readdir(dir).catch(() => []);
-    await Promise.all(
-      dirEntries.map(async (entry) => {
-        const full = path.join(dir, entry);
-        const stat = await fs.stat(full).catch(() => null);
-        if (!stat || !stat.isFile()) {
-          return;
-        }
-        if (now - stat.mtimeMs > ttlMs) {
-          await fs.rm(full).catch(() => {});
-        }
-      }),
-    );
-  };
+function isMissingPathError(err: unknown): err is NodeJS.ErrnoException {
+  return err instanceof Error && "code" in err && err.code === "ENOENT";
+}
 
-  await Promise.all(
-    entries.map(async (file) => {
-      const full = path.join(mediaDir, file);
-      const stat = await fs.stat(full).catch(() => null);
-      if (!stat) {
-        return;
+async function retryAfterRecreatingDir<T>(dir: string, run: () => Promise<T>): Promise<T> {
+  try {
+    return await run();
+  } catch (err) {
+    if (!isMissingPathError(err)) {
+      throw err;
+    }
+    // Recursive cleanup can prune an empty directory between mkdir and the later
+    // file open/write. Recreate once and retry the media write path.
+    await fs.mkdir(dir, { recursive: true, mode: 0o700 });
+    return await run();
+  }
+}
+
+export async function cleanOldMedia(ttlMs = DEFAULT_TTL_MS, options: CleanOldMediaOptions = {}) {
+  const mediaDir = await ensureMediaDir();
+  const now = Date.now();
+  const recursive = options.recursive ?? false;
+  const pruneEmptyDirs = recursive && (options.pruneEmptyDirs ?? false);
+
+  const removeExpiredFilesInDir = async (dir: string): Promise<boolean> => {
+    const dirEntries = await fs.readdir(dir).catch(() => null);
+    if (!dirEntries) {
+      return false;
+    }
+    for (const entry of dirEntries) {
+      const fullPath = path.join(dir, entry);
+      const stat = await fs.lstat(fullPath).catch(() => null);
+      if (!stat || stat.isSymbolicLink()) {
+        continue;
       }
       if (stat.isDirectory()) {
-        await removeExpiredFilesInDir(full);
-        return;
+        if (recursive) {
+          const childIsEmpty = await removeExpiredFilesInDir(fullPath);
+          if (childIsEmpty) {
+            await fs.rmdir(fullPath).catch(() => {});
+          }
+        }
+        continue;
       }
-      if (stat.isFile() && now - stat.mtimeMs > ttlMs) {
-        await fs.rm(full).catch(() => {});
+      if (!stat.isFile()) {
+        continue;
       }
-    }),
-  );
+      if (now - stat.mtimeMs > ttlMs) {
+        await fs.rm(fullPath, { force: true }).catch(() => {});
+      }
+    }
+    if (!pruneEmptyDirs) {
+      return false;
+    }
+    const remainingEntries = await fs.readdir(dir).catch(() => null);
+    return remainingEntries !== null && remainingEntries.length === 0;
+  };
+
+  const entries = await fs.readdir(mediaDir).catch(() => []);
+  for (const file of entries) {
+    const full = path.join(mediaDir, file);
+    const stat = await fs.lstat(full).catch(() => null);
+    if (!stat || stat.isSymbolicLink()) {
+      continue;
+    }
+    if (stat.isDirectory()) {
+      const dirIsEmpty = await removeExpiredFilesInDir(full);
+      if (dirIsEmpty) {
+        await fs.rmdir(full).catch(() => {});
+      }
+      continue;
+    }
+    if (stat.isFile() && now - stat.mtimeMs > ttlMs) {
+      await fs.rm(full, { force: true }).catch(() => {});
+    }
+  }
 }
 
 function looksLikeUrl(src: string) {
@@ -211,6 +255,48 @@ export type SavedMedia = {
   contentType?: string;
 };
 
+function buildSavedMediaId(params: {
+  baseId: string;
+  ext: string;
+  originalFilename?: string;
+}): string {
+  if (!params.originalFilename) {
+    return params.ext ? `${params.baseId}${params.ext}` : params.baseId;
+  }
+
+  const base = path.parse(params.originalFilename).name;
+  const sanitized = sanitizeFilename(base);
+  return sanitized
+    ? `${sanitized}---${params.baseId}${params.ext}`
+    : `${params.baseId}${params.ext}`;
+}
+
+function buildSavedMediaResult(params: {
+  dir: string;
+  id: string;
+  size: number;
+  contentType?: string;
+}): SavedMedia {
+  return {
+    id: params.id,
+    path: path.join(params.dir, params.id),
+    size: params.size,
+    contentType: params.contentType,
+  };
+}
+
+async function writeSavedMediaBuffer(params: {
+  dir: string;
+  id: string;
+  buffer: Buffer;
+}): Promise<string> {
+  const dest = path.join(params.dir, params.id);
+  await retryAfterRecreatingDir(params.dir, () =>
+    fs.writeFile(dest, params.buffer, { mode: MEDIA_FILE_MODE }),
+  );
+  return dest;
+}
+
 export type SaveMediaSourceErrorCode =
   | "invalid-path"
   | "not-found"
@@ -264,31 +350,32 @@ export async function saveMediaSource(
   const baseDir = resolveMediaDir();
   const dir = subdir ? path.join(baseDir, subdir) : baseDir;
   await fs.mkdir(dir, { recursive: true, mode: 0o700 });
-  await cleanOldMedia();
+  await cleanOldMedia(DEFAULT_TTL_MS, { recursive: false });
   const baseId = crypto.randomUUID();
   if (looksLikeUrl(source)) {
     const tempDest = path.join(dir, `${baseId}.tmp`);
-    const { headerMime, sniffBuffer, size } = await downloadToFile(source, tempDest, headers);
+    const { headerMime, sniffBuffer, size } = await retryAfterRecreatingDir(dir, () =>
+      downloadToFile(source, tempDest, headers),
+    );
     const mime = await detectMime({
       buffer: sniffBuffer,
       headerMime,
       filePath: source,
     });
     const ext = extensionForMime(mime) ?? path.extname(new URL(source).pathname);
-    const id = ext ? `${baseId}${ext}` : baseId;
+    const id = buildSavedMediaId({ baseId, ext });
     const finalDest = path.join(dir, id);
     await fs.rename(tempDest, finalDest);
-    return { id, path: finalDest, size, contentType: mime };
+    return buildSavedMediaResult({ dir, id, size, contentType: mime });
   }
   // local path
   try {
     const { buffer, stat } = await readLocalFileSafely({ filePath: source, maxBytes: MAX_BYTES });
     const mime = await detectMime({ buffer, filePath: source });
     const ext = extensionForMime(mime) ?? path.extname(source);
-    const id = ext ? `${baseId}${ext}` : baseId;
-    const dest = path.join(dir, id);
-    await fs.writeFile(dest, buffer, { mode: MEDIA_FILE_MODE });
-    return { id, path: dest, size: stat.size, contentType: mime };
+    const id = buildSavedMediaId({ baseId, ext });
+    await writeSavedMediaBuffer({ dir, id, buffer });
+    return buildSavedMediaResult({ dir, id, size: stat.size, contentType: mime });
   } catch (err) {
     if (err instanceof SafeOpenError) {
       throw toSaveMediaSourceError(err);
@@ -313,19 +400,7 @@ export async function saveMediaBuffer(
   const headerExt = extensionForMime(contentType?.split(";")[0]?.trim() ?? undefined);
   const mime = await detectMime({ buffer, headerMime: contentType });
   const ext = headerExt ?? extensionForMime(mime) ?? "";
-
-  let id: string;
-  if (originalFilename) {
-    // Embed original name: {sanitized}---{uuid}.ext
-    const base = path.parse(originalFilename).name;
-    const sanitized = sanitizeFilename(base);
-    id = sanitized ? `${sanitized}---${uuid}${ext}` : `${uuid}${ext}`;
-  } else {
-    // Legacy: just UUID
-    id = ext ? `${uuid}${ext}` : uuid;
-  }
-
-  const dest = path.join(dir, id);
-  await fs.writeFile(dest, buffer, { mode: MEDIA_FILE_MODE });
-  return { id, path: dest, size: buffer.byteLength, contentType: mime };
+  const id = buildSavedMediaId({ baseId: uuid, ext, originalFilename });
+  await writeSavedMediaBuffer({ dir, id, buffer });
+  return buildSavedMediaResult({ dir, id, size: buffer.byteLength, contentType: mime });
 }

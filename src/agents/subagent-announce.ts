@@ -14,6 +14,7 @@ import type { ConversationRef } from "../infra/outbound/session-binding-service.
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import { normalizeAccountId, normalizeMainKey } from "../routing/session-key.js";
 import { defaultRuntime } from "../runtime.js";
+import { isCronSessionKey } from "../sessions/session-key-utils.js";
 import { extractTextFromChatContent } from "../shared/chat-content.js";
 import {
   type DeliveryContext,
@@ -50,8 +51,9 @@ import { isAnnounceSkip } from "./tools/sessions-send-helpers.js";
 
 const FAST_TEST_MODE = process.env.OPENCLAW_TEST_FAST === "1";
 const FAST_TEST_RETRY_INTERVAL_MS = 8;
-const DEFAULT_SUBAGENT_ANNOUNCE_TIMEOUT_MS = 60_000;
+const DEFAULT_SUBAGENT_ANNOUNCE_TIMEOUT_MS = 90_000;
 const MAX_TIMER_SAFE_TIMEOUT_MS = 2_147_000_000;
+const GATEWAY_TIMEOUT_PATTERN = /gateway timeout/i;
 let subagentRegistryRuntimePromise: Promise<
   typeof import("./subagent-registry-runtime.js")
 > | null = null;
@@ -78,6 +80,10 @@ function resolveSubagentAnnounceTimeoutMs(cfg: ReturnType<typeof loadConfig>): n
   return Math.min(Math.max(1, Math.floor(configured)), MAX_TIMER_SAFE_TIMEOUT_MS);
 }
 
+function isInternalAnnounceRequesterSession(sessionKey: string | undefined): boolean {
+  return getSubagentDepthFromSessionStore(sessionKey) >= 1 || isCronSessionKey(sessionKey);
+}
+
 function summarizeDeliveryError(error: unknown): string {
   if (error instanceof Error) {
     return error.message || "error";
@@ -102,7 +108,7 @@ const TRANSIENT_ANNOUNCE_DELIVERY_ERROR_PATTERNS: readonly RegExp[] = [
   /no active .* listener/i,
   /gateway not connected/i,
   /gateway closed \(1006/i,
-  /gateway timeout/i,
+  GATEWAY_TIMEOUT_PATTERN,
   /\b(econnreset|econnrefused|etimedout|enotfound|ehostunreach|network error)\b/i,
 ];
 
@@ -126,6 +132,11 @@ function isTransientAnnounceDeliveryError(error: unknown): boolean {
     return false;
   }
   return TRANSIENT_ANNOUNCE_DELIVERY_ERROR_PATTERNS.some((re) => re.test(message));
+}
+
+function isGatewayTimeoutError(error: unknown): boolean {
+  const message = summarizeDeliveryError(error);
+  return Boolean(message) && GATEWAY_TIMEOUT_PATTERN.test(message);
 }
 
 async function waitForAnnounceRetryDelay(ms: number, signal?: AbortSignal): Promise<void> {
@@ -155,6 +166,7 @@ async function waitForAnnounceRetryDelay(ms: number, signal?: AbortSignal): Prom
 
 async function runAnnounceDeliveryWithRetry<T>(params: {
   operation: string;
+  noRetryOnGatewayTimeout?: boolean;
   signal?: AbortSignal;
   run: () => Promise<T>;
 }): Promise<T> {
@@ -166,6 +178,9 @@ async function runAnnounceDeliveryWithRetry<T>(params: {
     try {
       return await params.run();
     } catch (err) {
+      if (params.noRetryOnGatewayTimeout && isGatewayTimeoutError(err)) {
+        throw err;
+      }
       const delayMs = DIRECT_ANNOUNCE_TRANSIENT_RETRY_DELAYS_MS[retryIndex];
       if (delayMs == null || !isTransientAnnounceDeliveryError(err) || params.signal?.aborted) {
         throw err;
@@ -580,8 +595,7 @@ async function resolveSubagentCompletionOrigin(params: {
 async function sendAnnounce(item: AnnounceQueueItem) {
   const cfg = loadConfig();
   const announceTimeoutMs = resolveSubagentAnnounceTimeoutMs(cfg);
-  const requesterDepth = getSubagentDepthFromSessionStore(item.sessionKey);
-  const requesterIsSubagent = requesterDepth >= 1;
+  const requesterIsSubagent = isInternalAnnounceRequesterSession(item.sessionKey);
   const origin = item.origin;
   const threadId =
     origin?.threadId != null && origin.threadId !== "" ? String(origin.threadId) : undefined;
@@ -785,6 +799,7 @@ async function sendSubagentAnnounceDirectly(params: {
       operation: params.expectsCompletionMessage
         ? "completion direct announce agent call"
         : "direct announce agent call",
+      noRetryOnGatewayTimeout: params.expectsCompletionMessage && shouldDeliverExternally,
       signal: params.signal,
       run: async () =>
         await callGateway({
@@ -1216,6 +1231,8 @@ export async function runSubagentAnnounceFlow(params: {
     }
 
     let requesterDepth = getSubagentDepthFromSessionStore(targetRequesterSessionKey);
+    const requesterIsInternalSession = () =>
+      requesterDepth >= 1 || isCronSessionKey(targetRequesterSessionKey);
 
     let childCompletionFindings: string | undefined;
     let subagentRegistryRuntime:
@@ -1339,7 +1356,7 @@ export async function runSubagentAnnounceFlow(params: {
     const announceSessionId = childSessionId || "unknown";
     const findings = childCompletionFindings || reply || "(no output)";
 
-    let requesterIsSubagent = requesterDepth >= 1;
+    let requesterIsSubagent = requesterIsInternalSession();
     if (requesterIsSubagent) {
       const {
         isSubagentSessionRunActive,
@@ -1363,7 +1380,7 @@ export async function runSubagentAnnounceFlow(params: {
           targetRequesterOrigin =
             normalizeDeliveryContext(fallback.requesterOrigin) ?? targetRequesterOrigin;
           requesterDepth = getSubagentDepthFromSessionStore(targetRequesterSessionKey);
-          requesterIsSubagent = requesterDepth >= 1;
+          requesterIsSubagent = requesterIsInternalSession();
         }
       }
     }

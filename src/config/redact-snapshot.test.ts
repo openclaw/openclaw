@@ -120,7 +120,7 @@ describe("redactConfigSnapshot", () => {
           serviceAccount: {
             type: "service_account",
             client_email: "bot@example.iam.gserviceaccount.com",
-            private_key: "-----BEGIN PRIVATE KEY-----secret-----END PRIVATE KEY-----",
+            private_key: "-----BEGIN PRIVATE KEY-----secret-----END PRIVATE KEY-----", // pragma: allowlist secret
           },
         },
       },
@@ -161,6 +161,36 @@ describe("redactConfigSnapshot", () => {
     });
     const result = redactConfigSnapshot(snapshot);
     expect(result.config).toEqual(snapshot.config);
+  });
+
+  it("removes embedded credentials from URL-valued endpoint fields", () => {
+    const raw = `{
+  models: {
+    providers: {
+      openai: {
+        baseUrl: "https://alice:secret@example.test/v1",
+      },
+    },
+  },
+}`;
+    const snapshot = makeSnapshot(
+      {
+        models: {
+          providers: {
+            openai: {
+              baseUrl: "https://alice:secret@example.test/v1",
+            },
+          },
+        },
+      },
+      raw,
+    );
+
+    const result = redactConfigSnapshot(snapshot);
+    const cfg = result.config as typeof snapshot.config;
+    expect(cfg.models.providers.openai.baseUrl).toBe(REDACTED_SENTINEL);
+    expect(result.raw).toContain(REDACTED_SENTINEL);
+    expect(result.raw).not.toContain("alice:secret@");
   });
 
   it("does not redact maxTokens-style fields", () => {
@@ -259,7 +289,7 @@ describe("redactConfigSnapshot", () => {
     const config = {
       gateway: {
         mode: "local",
-        auth: { password: "local" },
+        auth: { password: "local" }, // pragma: allowlist secret
       },
     };
     const snapshot = makeSnapshot(config, JSON.stringify(config));
@@ -299,7 +329,7 @@ describe("redactConfigSnapshot", () => {
 
   it("handles overlap fallback and SecretRef in the same snapshot", () => {
     const config = {
-      gateway: { mode: "default", auth: { password: "default" } },
+      gateway: { mode: "default", auth: { password: "default" } }, // pragma: allowlist secret
       models: {
         providers: {
           default: {
@@ -780,7 +810,7 @@ describe("redactConfigSnapshot", () => {
     };
     const snapshot = makeSnapshot({
       env: {
-        GROQ_API_KEY: "gsk-secret-123",
+        GROQ_API_KEY: "gsk-secret-123", // pragma: allowlist secret
         NODE_ENV: "production",
       },
     });
@@ -803,7 +833,7 @@ describe("redactConfigSnapshot", () => {
         entries: {
           web_search: {
             env: {
-              GEMINI_API_KEY: "gemini-secret-456",
+              GEMINI_API_KEY: "gemini-secret-456", // pragma: allowlist secret
               BRAVE_REGION: "us",
             },
           },
@@ -828,14 +858,14 @@ describe("redactConfigSnapshot", () => {
     const hints = mainSchemaHints;
     const snapshot = makeSnapshot({
       env: {
-        GROQ_API_KEY: "gsk-contract-123",
+        GROQ_API_KEY: "gsk-contract-123", // pragma: allowlist secret
         NODE_ENV: "production",
       },
       skills: {
         entries: {
           web_search: {
             env: {
-              GEMINI_API_KEY: "gemini-contract-456",
+              GEMINI_API_KEY: "gemini-contract-456", // pragma: allowlist secret
               BRAVE_REGION: "us",
             },
           },
@@ -890,6 +920,25 @@ describe("redactConfigSnapshot", () => {
 });
 
 describe("restoreRedactedValues", () => {
+  it("restores redacted URL endpoint fields on round-trip", () => {
+    const incoming = {
+      models: {
+        providers: {
+          openai: { baseUrl: REDACTED_SENTINEL },
+        },
+      },
+    };
+    const original = {
+      models: {
+        providers: {
+          openai: { baseUrl: "https://alice:secret@example.test/v1" },
+        },
+      },
+    };
+    const result = restoreRedactedValues(incoming, original, mainSchemaHints);
+    expect(result.models.providers.openai.baseUrl).toBe("https://alice:secret@example.test/v1");
+  });
+
   it("restores sentinel values from original config", () => {
     const incoming = {
       gateway: { auth: { token: REDACTED_SENTINEL } },

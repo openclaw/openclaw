@@ -35,14 +35,25 @@ export function mockOpenAICodexTemplateModel(): void {
 
 export function buildOpenAICodexForwardCompatExpectation(
   id: string = "gpt-5.3-codex",
-): Partial<typeof OPENAI_CODEX_TEMPLATE_MODEL> & { provider: string; id: string } {
+): Partial<ModelDefinitionConfig> & {
+  provider: string;
+  id: string;
+  api: string;
+  baseUrl: string;
+} {
+  const isGpt54 = id === "gpt-5.4";
+  const isSpark = id === "gpt-5.3-codex-spark";
   return {
     provider: "openai-codex",
     id,
     api: "openai-codex-responses",
     baseUrl: "https://chatgpt.com/backend-api",
     reasoning: true,
-    contextWindow: 272000,
+    input: isSpark ? ["text"] : ["text", "image"],
+    cost: isSpark
+      ? { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }
+      : OPENAI_CODEX_TEMPLATE_MODEL.cost,
+    contextWindow: isGpt54 ? 1_050_000 : isSpark ? 128_000 : 272000,
     maxTokens: 128000,
   };
 }

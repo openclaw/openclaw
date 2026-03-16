@@ -107,6 +107,40 @@ describe("doctor config flow", () => {
     ).toBe(false);
   });
 
+  it("warns on mutable Zalouser group entries when dangerous name matching is disabled", async () => {
+    const doctorWarnings = await collectDoctorWarnings({
+      channels: {
+        zalouser: {
+          groups: {
+            "Ops Room": { allow: true },
+          },
+        },
+      },
+    });
+
+    expect(
+      doctorWarnings.some(
+        (line) =>
+          line.includes("mutable allowlist") && line.includes("channels.zalouser.groups: Ops Room"),
+      ),
+    ).toBe(true);
+  });
+
+  it("does not warn on mutable Zalouser group entries when dangerous name matching is enabled", async () => {
+    const doctorWarnings = await collectDoctorWarnings({
+      channels: {
+        zalouser: {
+          dangerouslyAllowNameMatching: true,
+          groups: {
+            "Ops Room": { allow: true },
+          },
+        },
+      },
+    });
+
+    expect(doctorWarnings.some((line) => line.includes("channels.zalouser.groups"))).toBe(false);
+  });
+
   it("warns when imessage group allowlist is empty even if allowFrom is set", async () => {
     const doctorWarnings = await collectDoctorWarnings({
       channels: {

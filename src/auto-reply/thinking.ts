@@ -1,3 +1,9 @@
+import {
+  resolveProviderBinaryThinking,
+  resolveProviderDefaultThinkingLevel,
+  resolveProviderXHighThinking,
+} from "../plugins/provider-runtime.js";
+
 export type ThinkLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "adaptive";
 export type VerboseLevel = "off" | "on" | "full";
 export type NoticeLevel = "off" | "on" | "full";
@@ -5,6 +11,13 @@ export type ElevatedLevel = "off" | "on" | "ask" | "full";
 export type ElevatedMode = "off" | "ask" | "full";
 export type ReasoningLevel = "off" | "on" | "stream";
 export type UsageDisplayLevel = "off" | "tokens" | "full";
+export type ThinkingCatalogEntry = {
+  provider: string;
+  id: string;
+  reasoning?: boolean;
+};
+
+const CLAUDE_46_MODEL_RE = /claude-(?:opus|sonnet)-4(?:\.|-)6(?:$|[-.])/i;
 
 function normalizeProviderId(provider?: string | null): string {
   if (!provider) {
@@ -14,11 +27,30 @@ function normalizeProviderId(provider?: string | null): string {
   if (normalized === "z.ai" || normalized === "z-ai") {
     return "zai";
   }
+  if (normalized === "bedrock" || normalized === "aws-bedrock") {
+    return "amazon-bedrock";
+  }
   return normalized;
 }
 
-export function isBinaryThinkingProvider(provider?: string | null): boolean {
-  return normalizeProviderId(provider) === "zai";
+export function isBinaryThinkingProvider(provider?: string | null, model?: string | null): boolean {
+  const normalizedProvider = normalizeProviderId(provider);
+  if (!normalizedProvider) {
+    return false;
+  }
+
+  const pluginDecision = resolveProviderBinaryThinking({
+    provider: normalizedProvider,
+    context: {
+      provider: normalizedProvider,
+      modelId: model?.trim() ?? "",
+    },
+  });
+  if (typeof pluginDecision === "boolean") {
+    return pluginDecision;
+  }
+
+  return normalizedProvider === "zai";
 }
 
 export const XHIGH_MODEL_REFS = [
@@ -85,7 +117,19 @@ export function supportsXHighThinking(provider?: string | null, model?: string |
   if (!modelKey) {
     return false;
   }
-  const providerKey = provider?.trim().toLowerCase();
+  const providerKey = normalizeProviderId(provider);
+  if (providerKey) {
+    const pluginDecision = resolveProviderXHighThinking({
+      provider: providerKey,
+      context: {
+        provider: providerKey,
+        modelId: modelKey,
+      },
+    });
+    if (typeof pluginDecision === "boolean") {
+      return pluginDecision;
+    }
+  }
   if (providerKey) {
     return XHIGH_MODEL_SET.has(`${providerKey}/${modelKey}`);
   }
@@ -102,7 +146,7 @@ export function listThinkingLevels(provider?: string | null, model?: string | nu
 }
 
 export function listThinkingLevelLabels(provider?: string | null, model?: string | null): string[] {
-  if (isBinaryThinkingProvider(provider)) {
+  if (isBinaryThinkingProvider(provider, model)) {
     return ["off", "on"];
   }
   return listThinkingLevels(provider, model);
@@ -128,6 +172,42 @@ export function formatXHighModelHint(): string {
     return `${refs[0]} or ${refs[1]}`;
   }
   return `${refs.slice(0, -1).join(", ")} or ${refs[refs.length - 1]}`;
+}
+
+export function resolveThinkingDefaultForModel(params: {
+  provider: string;
+  model: string;
+  catalog?: ThinkingCatalogEntry[];
+}): ThinkLevel {
+  const normalizedProvider = normalizeProviderId(params.provider);
+  const modelLower = params.model.trim().toLowerCase();
+  const candidate = params.catalog?.find(
+    (entry) => entry.provider === params.provider && entry.id === params.model,
+  );
+  const pluginDecision = resolveProviderDefaultThinkingLevel({
+    provider: normalizedProvider,
+    context: {
+      provider: normalizedProvider,
+      modelId: params.model,
+      reasoning: candidate?.reasoning,
+    },
+  });
+  if (pluginDecision) {
+    return pluginDecision;
+  }
+
+  const isAnthropicFamilyModel =
+    normalizedProvider === "anthropic" ||
+    normalizedProvider === "amazon-bedrock" ||
+    modelLower.includes("anthropic/") ||
+    modelLower.includes(".anthropic.");
+  if (isAnthropicFamilyModel && CLAUDE_46_MODEL_RE.test(modelLower)) {
+    return "adaptive";
+  }
+  if (candidate?.reasoning) {
+    return "low";
+  }
+  return "off";
 }
 
 type OnOffFullLevel = "off" | "on" | "full";
@@ -182,6 +262,24 @@ export function normalizeUsageDisplay(raw?: string | null): UsageDisplayLevel | 
 
 export function resolveResponseUsageMode(raw?: string | null): UsageDisplayLevel {
   return normalizeUsageDisplay(raw) ?? "off";
+}
+
+// Normalize fast-mode flags used to toggle low-latency model behavior.
+export function normalizeFastMode(raw?: string | boolean | null): boolean | undefined {
+  if (typeof raw === "boolean") {
+    return raw;
+  }
+  if (!raw) {
+    return undefined;
+  }
+  const key = raw.toLowerCase();
+  if (["off", "false", "no", "0", "disable", "disabled", "normal"].includes(key)) {
+    return false;
+  }
+  if (["on", "true", "yes", "1", "enable", "enabled", "fast"].includes(key)) {
+    return true;
+  }
+  return undefined;
 }
 
 // Normalize elevated flags used to toggle elevated bash permissions.

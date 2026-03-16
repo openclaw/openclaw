@@ -1,12 +1,19 @@
 import type { ClawdbotConfig } from "openclaw/plugin-sdk/feishu";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { getMessageFeishu } from "./send.js";
+import {
+  buildStructuredCard,
+  getMessageFeishu,
+  listFeishuThreadMessages,
+  resolveFeishuCardTemplate,
+} from "./send.js";
 
-const { mockClientGet, mockCreateFeishuClient, mockResolveFeishuAccount } = vi.hoisted(() => ({
-  mockClientGet: vi.fn(),
-  mockCreateFeishuClient: vi.fn(),
-  mockResolveFeishuAccount: vi.fn(),
-}));
+const { mockClientGet, mockClientList, mockCreateFeishuClient, mockResolveFeishuAccount } =
+  vi.hoisted(() => ({
+    mockClientGet: vi.fn(),
+    mockClientList: vi.fn(),
+    mockCreateFeishuClient: vi.fn(),
+    mockResolveFeishuAccount: vi.fn(),
+  }));
 
 vi.mock("./client.js", () => ({
   createFeishuClient: mockCreateFeishuClient,
@@ -27,6 +34,7 @@ describe("getMessageFeishu", () => {
       im: {
         message: {
           get: mockClientGet,
+          list: mockClientList,
         },
       },
     });
@@ -162,6 +170,100 @@ describe("getMessageFeishu", () => {
         chatId: "oc_single",
         contentType: "text",
         content: "single payload",
+      }),
+    );
+  });
+
+  it("reuses the same content parsing for thread history messages", async () => {
+    mockClientList.mockResolvedValueOnce({
+      code: 0,
+      data: {
+        items: [
+          {
+            message_id: "om_root",
+            msg_type: "text",
+            body: {
+              content: JSON.stringify({ text: "root starter" }),
+            },
+          },
+          {
+            message_id: "om_card",
+            msg_type: "interactive",
+            body: {
+              content: JSON.stringify({
+                body: {
+                  elements: [{ tag: "markdown", content: "hello from card 2.0" }],
+                },
+              }),
+            },
+            sender: {
+              id: "app_1",
+              sender_type: "app",
+            },
+            create_time: "1710000000000",
+          },
+          {
+            message_id: "om_file",
+            msg_type: "file",
+            body: {
+              content: JSON.stringify({ file_key: "file_v3_123" }),
+            },
+            sender: {
+              id: "ou_1",
+              sender_type: "user",
+            },
+            create_time: "1710000001000",
+          },
+        ],
+      },
+    });
+
+    const result = await listFeishuThreadMessages({
+      cfg: {} as ClawdbotConfig,
+      threadId: "omt_1",
+      rootMessageId: "om_root",
+    });
+
+    expect(result).toEqual([
+      expect.objectContaining({
+        messageId: "om_file",
+        contentType: "file",
+        content: "[file message]",
+      }),
+      expect.objectContaining({
+        messageId: "om_card",
+        contentType: "interactive",
+        content: "hello from card 2.0",
+      }),
+    ]);
+  });
+});
+
+describe("resolveFeishuCardTemplate", () => {
+  it("accepts supported Feishu templates", () => {
+    expect(resolveFeishuCardTemplate(" purple ")).toBe("purple");
+  });
+
+  it("drops unsupported free-form identity themes", () => {
+    expect(resolveFeishuCardTemplate("space lobster")).toBeUndefined();
+  });
+});
+
+describe("buildStructuredCard", () => {
+  it("falls back to blue when the header template is unsupported", () => {
+    const card = buildStructuredCard("hello", {
+      header: {
+        title: "Agent",
+        template: "space lobster",
+      },
+    });
+
+    expect(card).toEqual(
+      expect.objectContaining({
+        header: {
+          title: { tag: "plain_text", content: "Agent" },
+          template: "blue",
+        },
       }),
     );
   });

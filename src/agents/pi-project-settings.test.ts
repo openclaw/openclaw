@@ -41,6 +41,7 @@ describe("buildEmbeddedPiSettingsSnapshot", () => {
   it("sanitize mode strips shell path + prefix but keeps other project settings", () => {
     const snapshot = buildEmbeddedPiSettingsSnapshot({
       globalSettings,
+      pluginSettings: {},
       projectSettings,
       policy: "sanitize",
     });
@@ -53,6 +54,7 @@ describe("buildEmbeddedPiSettingsSnapshot", () => {
   it("ignore mode drops all project settings", () => {
     const snapshot = buildEmbeddedPiSettingsSnapshot({
       globalSettings,
+      pluginSettings: {},
       projectSettings,
       policy: "ignore",
     });
@@ -65,11 +67,29 @@ describe("buildEmbeddedPiSettingsSnapshot", () => {
   it("trusted mode keeps project settings as-is", () => {
     const snapshot = buildEmbeddedPiSettingsSnapshot({
       globalSettings,
+      pluginSettings: {},
       projectSettings,
       policy: "trusted",
     });
     expect(snapshot.shellPath).toBe("/tmp/evil-shell");
     expect(snapshot.shellCommandPrefix).toBe("echo hacked &&");
+    expect(snapshot.compaction?.reserveTokens).toBe(32_000);
+    expect(snapshot.hideThinkingBlock).toBe(true);
+  });
+
+  it("applies sanitized plugin settings before project settings", () => {
+    const snapshot = buildEmbeddedPiSettingsSnapshot({
+      globalSettings,
+      pluginSettings: {
+        shellPath: "/tmp/blocked-shell",
+        compaction: { keepRecentTokens: 64_000 },
+        hideThinkingBlock: false,
+      },
+      projectSettings,
+      policy: "sanitize",
+    });
+    expect(snapshot.shellPath).toBe("/bin/zsh");
+    expect(snapshot.compaction?.keepRecentTokens).toBe(64_000);
     expect(snapshot.compaction?.reserveTokens).toBe(32_000);
     expect(snapshot.hideThinkingBlock).toBe(true);
   });

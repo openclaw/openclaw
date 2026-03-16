@@ -7,7 +7,9 @@ import type {
 } from "openclaw/plugin-sdk/acpx";
 import {
   applyWindowsSpawnProgramPolicy,
+  listKnownProviderAuthEnvVarNames,
   materializeWindowsSpawnProgram,
+  omitEnvKeysCaseInsensitive,
   resolveWindowsSpawnProgramCandidate,
 } from "openclaw/plugin-sdk/acpx";
 
@@ -125,6 +127,7 @@ export function spawnWithResolvedCommand(
     command: string;
     args: string[];
     cwd: string;
+    stripProviderAuthEnvVars?: boolean;
   },
   options?: SpawnCommandOptions,
 ): ChildProcessWithoutNullStreams {
@@ -136,9 +139,15 @@ export function spawnWithResolvedCommand(
     options,
   );
 
+  const childEnv = omitEnvKeysCaseInsensitive(
+    process.env,
+    params.stripProviderAuthEnvVars ? listKnownProviderAuthEnvVarNames() : [],
+  );
+  childEnv.OPENCLAW_SHELL = "acp";
+
   return spawn(resolved.command, resolved.args, {
     cwd: params.cwd,
-    env: { ...process.env, OPENCLAW_SHELL: "acp" },
+    env: childEnv,
     stdio: ["pipe", "pipe", "pipe"],
     shell: resolved.shell,
     windowsHide: resolved.windowsHide,
@@ -180,6 +189,7 @@ export async function spawnAndCollect(
     command: string;
     args: string[];
     cwd: string;
+    stripProviderAuthEnvVars?: boolean;
   },
   options?: SpawnCommandOptions,
   runtime?: {

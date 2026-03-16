@@ -1,10 +1,11 @@
 import { resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { resolveChannelDefaultAccountId } from "../channels/plugins/helpers.js";
 import { getChannelPlugin, listChannelPlugins } from "../channels/plugins/index.js";
-import type { ChannelAccountSnapshot } from "../channels/plugins/types.js";
+import type { ChannelAccountSnapshot, ChannelPlugin } from "../channels/plugins/types.js";
+import { inspectReadOnlyChannelAccount } from "../channels/read-only-account-inspect.js";
 import { withProgress } from "../cli/progress.js";
 import type { OpenClawConfig } from "../config/config.js";
-import { loadConfig } from "../config/config.js";
+import { loadConfig, readBestEffortConfig } from "../config/config.js";
 import { loadSessionStore, resolveStorePath } from "../config/sessions.js";
 import { buildGatewayConnectionDetails, callGateway } from "../gateway/call.js";
 import { info } from "../globals.js";
@@ -161,16 +162,86 @@ const buildSessionSummary = (storePath: string) => {
   } satisfies HealthSummary["sessions"];
 };
 
-const isAccountEnabled = (account: unknown): boolean => {
-  if (!account || typeof account !== "object") {
-    return true;
-  }
-  const enabled = (account as { enabled?: boolean }).enabled;
-  return enabled !== false;
-};
-
 const asRecord = (value: unknown): Record<string, unknown> | null =>
   value && typeof value === "object" ? (value as Record<string, unknown>) : null;
+
+async function inspectHealthAccount(plugin: ChannelPlugin, cfg: OpenClawConfig, accountId: string) {
+  return (
+    plugin.config.inspectAccount?.(cfg, accountId) ??
+    (await inspectReadOnlyChannelAccount({
+      channelId: plugin.id,
+      cfg,
+      accountId,
+    }))
+  );
+}
+
+function readBooleanField(value: unknown, key: string): boolean | undefined {
+  const record = asRecord(value);
+  if (!record) {
+    return undefined;
+  }
+  return typeof record[key] === "boolean" ? record[key] : undefined;
+}
+
+async function resolveHealthAccountContext(params: {
+  plugin: ChannelPlugin;
+  cfg: OpenClawConfig;
+  accountId: string;
+}): Promise<{
+  account: unknown;
+  enabled: boolean;
+  configured: boolean;
+  diagnostics: string[];
+}> {
+  const diagnostics: string[] = [];
+  let account: unknown;
+  try {
+    account = params.plugin.config.resolveAccount(params.cfg, params.accountId);
+  } catch (error) {
+    diagnostics.push(
+      `${params.plugin.id}:${params.accountId}: failed to resolve account (${formatErrorMessage(error)}).`,
+    );
+    account = await inspectHealthAccount(params.plugin, params.cfg, params.accountId);
+  }
+
+  if (!account) {
+    return {
+      account: {},
+      enabled: false,
+      configured: false,
+      diagnostics,
+    };
+  }
+
+  const enabledFallback = readBooleanField(account, "enabled") ?? true;
+  let enabled = enabledFallback;
+  if (params.plugin.config.isEnabled) {
+    try {
+      enabled = params.plugin.config.isEnabled(account, params.cfg);
+    } catch (error) {
+      enabled = enabledFallback;
+      diagnostics.push(
+        `${params.plugin.id}:${params.accountId}: failed to evaluate enabled state (${formatErrorMessage(error)}).`,
+      );
+    }
+  }
+
+  const configuredFallback = readBooleanField(account, "configured") ?? true;
+  let configured = configuredFallback;
+  if (params.plugin.config.isConfigured) {
+    try {
+      configured = await params.plugin.config.isConfigured(account, params.cfg);
+    } catch (error) {
+      configured = configuredFallback;
+      diagnostics.push(
+        `${params.plugin.id}:${params.accountId}: failed to evaluate configured state (${formatErrorMessage(error)}).`,
+      );
+    }
+  }
+
+  return { account, enabled, configured, diagnostics };
+}
 
 const formatProbeLine = (probe: unknown, opts: { botUsernames?: string[] } = {}): string | null => {
   const record = asRecord(probe);
@@ -416,13 +487,14 @@ export async function getHealthSnapshot(params?: {
     const accountSummaries: Record<string, ChannelAccountHealthSummary> = {};
 
     for (const accountId of accountIdsToProbe) {
-      const account = plugin.config.resolveAccount(cfg, accountId);
-      const enabled = plugin.config.isEnabled
-        ? plugin.config.isEnabled(account, cfg)
-        : isAccountEnabled(account);
-      const configured = plugin.config.isConfigured
-        ? await plugin.config.isConfigured(account, cfg)
-        : true;
+      const { account, enabled, configured, diagnostics } = await resolveHealthAccountContext({
+        plugin,
+        cfg,
+        accountId,
+      });
+      if (diagnostics.length > 0) {
+        debugHealth("account.diagnostics", { channel: plugin.id, accountId, diagnostics });
+      }
 
       let probe: unknown;
       let lastProbeAt: number | null = null;
@@ -526,7 +598,7 @@ export async function healthCommand(
   opts: { json?: boolean; timeoutMs?: number; verbose?: boolean; config?: OpenClawConfig },
   runtime: RuntimeEnv,
 ) {
-  const cfg = opts.config ?? loadConfig();
+  const cfg = opts.config ?? (await readBestEffortConfig());
   // Always query the running gateway; do not open a direct Baileys socket here.
   const summary = await withProgress(
     {
@@ -588,16 +660,20 @@ export async function healthCommand(
           `  ${plugin.id}: accounts=${accountIds.join(", ") || "(none)"} default=${defaultAccountId}`,
         );
         for (const accountId of accountIds) {
-          const account = plugin.config.resolveAccount(cfg, accountId);
+          const { account, configured, diagnostics } = await resolveHealthAccountContext({
+            plugin,
+            cfg,
+            accountId,
+          });
           const record = asRecord(account);
           const tokenSource =
             record && typeof record.tokenSource === "string" ? record.tokenSource : undefined;
-          const configured = plugin.config.isConfigured
-            ? await plugin.config.isConfigured(account, cfg)
-            : true;
           runtime.log(
             `    - ${accountId}: configured=${configured}${tokenSource ? ` tokenSource=${tokenSource}` : ""}`,
           );
+          for (const diagnostic of diagnostics) {
+            runtime.log(`      ! ${diagnostic}`);
+          }
         }
       }
       runtime.log(info("[debug] bindings map"));
@@ -691,13 +767,31 @@ export async function healthCommand(
         defaultAccountId,
         boundAccounts,
       });
-      const account = plugin.config.resolveAccount(cfg, accountId);
-      plugin.status.logSelfId({
-        account,
+      const accountContext = await resolveHealthAccountContext({
+        plugin,
         cfg,
-        runtime,
-        includeChannelPrefix: true,
+        accountId,
       });
+      if (!accountContext.enabled || !accountContext.configured) {
+        continue;
+      }
+      if (accountContext.diagnostics.length > 0) {
+        continue;
+      }
+      try {
+        plugin.status.logSelfId({
+          account: accountContext.account,
+          cfg,
+          runtime,
+          includeChannelPrefix: true,
+        });
+      } catch (error) {
+        debugHealth("logSelfId.failed", {
+          channel: plugin.id,
+          accountId,
+          error: formatErrorMessage(error),
+        });
+      }
     }
 
     if (resolvedAgents.length > 0) {

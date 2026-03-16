@@ -3,18 +3,18 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { RuntimeEnv } from "../runtime.js";
 
 const mocks = vi.hoisted(() => ({
-  runInteractiveOnboarding: vi.fn(async () => {}),
-  runNonInteractiveOnboarding: vi.fn(async () => {}),
+  runInteractiveSetup: vi.fn(async () => {}),
+  runNonInteractiveSetup: vi.fn(async () => {}),
   readConfigFileSnapshot: vi.fn(async () => ({ exists: false, valid: false, config: {} })),
   handleReset: vi.fn(async () => {}),
 }));
 
 vi.mock("./onboard-interactive.js", () => ({
-  runInteractiveOnboarding: mocks.runInteractiveOnboarding,
+  runInteractiveSetup: mocks.runInteractiveSetup,
 }));
 
 vi.mock("./onboard-non-interactive.js", () => ({
-  runNonInteractiveOnboarding: mocks.runNonInteractiveOnboarding,
+  runNonInteractiveSetup: mocks.runNonInteractiveSetup,
 }));
 
 vi.mock("../config/config.js", () => ({
@@ -47,7 +47,7 @@ describe("onboardCommand", () => {
 
     await onboardCommand(
       {
-        secretInputMode: "invalid" as never,
+        secretInputMode: "invalid" as never, // pragma: allowlist secret
       },
       runtime,
     );
@@ -56,8 +56,28 @@ describe("onboardCommand", () => {
       'Invalid --secret-input-mode. Use "plaintext" or "ref".',
     );
     expect(runtime.exit).toHaveBeenCalledWith(1);
-    expect(mocks.runInteractiveOnboarding).not.toHaveBeenCalled();
-    expect(mocks.runNonInteractiveOnboarding).not.toHaveBeenCalled();
+    expect(mocks.runInteractiveSetup).not.toHaveBeenCalled();
+    expect(mocks.runNonInteractiveSetup).not.toHaveBeenCalled();
+  });
+
+  it("logs ASCII-safe Windows guidance before onboarding", async () => {
+    const runtime = makeRuntime();
+    const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+
+    try {
+      await onboardCommand({}, runtime);
+
+      expect(runtime.log).toHaveBeenCalledWith(
+        [
+          "Windows detected - OpenClaw runs great on WSL2!",
+          "Native Windows might be trickier.",
+          "Quick setup: wsl --install (one command, one reboot)",
+          "Guide: https://docs.openclaw.ai/windows",
+        ].join("\n"),
+      );
+    } finally {
+      platformSpy.mockRestore();
+    }
   });
 
   it("defaults --reset to config+creds+sessions scope", async () => {
@@ -135,7 +155,7 @@ describe("onboardCommand", () => {
     );
     expect(runtime.exit).toHaveBeenCalledWith(1);
     expect(mocks.handleReset).not.toHaveBeenCalled();
-    expect(mocks.runInteractiveOnboarding).not.toHaveBeenCalled();
-    expect(mocks.runNonInteractiveOnboarding).not.toHaveBeenCalled();
+    expect(mocks.runInteractiveSetup).not.toHaveBeenCalled();
+    expect(mocks.runNonInteractiveSetup).not.toHaveBeenCalled();
   });
 });

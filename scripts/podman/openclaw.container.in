@@ -11,7 +11,7 @@ ContainerName=openclaw
 UserNS=keep-id
 # Keep container UID/GID aligned with the invoking user so mounted config is readable.
 User=%U:%G
-Volume={{OPENCLAW_HOME}}/.openclaw:/home/node/.openclaw
+Volume={{OPENCLAW_HOME}}/.openclaw:/home/node/.openclaw:Z
 EnvironmentFile={{OPENCLAW_HOME}}/.openclaw/.env
 Environment=HOME=/home/node
 Environment=TERM=xterm-256color

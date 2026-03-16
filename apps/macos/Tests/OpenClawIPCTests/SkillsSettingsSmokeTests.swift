@@ -41,7 +41,7 @@ private func makeSkillStatus(
 @Suite(.serialized)
 @MainActor
 struct SkillsSettingsSmokeTests {
-    @Test func skillsSettingsBuildsBodyWithSkillsRemote() {
+    @Test func `skills settings builds body with skills remote`() {
         let model = SkillsSettingsModel()
         model.statusMessage = "Loaded"
         model.skills = [
@@ -103,7 +103,7 @@ struct SkillsSettingsSmokeTests {
         _ = view.body
     }
 
-    @Test func skillsSettingsBuildsBodyWithLocalMode() {
+    @Test func `skills settings builds body with local mode`() {
         let model = SkillsSettingsModel()
         model.skills = [
             makeSkillStatus(
@@ -123,7 +123,7 @@ struct SkillsSettingsSmokeTests {
         _ = view.body
     }
 
-    @Test func skillsSettingsExercisesPrivateViews() {
+    @Test func `skills settings exercises private views`() {
         SkillsSettings.exerciseForTesting()
     }
 }

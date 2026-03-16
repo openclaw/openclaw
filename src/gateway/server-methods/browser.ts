@@ -20,6 +20,26 @@ type BrowserRequestParams = {
   timeoutMs?: number;
 };
 
+function normalizeBrowserRequestPath(value: string): string {
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return trimmed;
+  }
+  const withLeadingSlash = trimmed.startsWith("/") ? trimmed : `/${trimmed}`;
+  if (withLeadingSlash.length <= 1) {
+    return withLeadingSlash;
+  }
+  return withLeadingSlash.replace(/\/+$/, "");
+}
+
+function isPersistentBrowserProfileMutation(method: string, path: string): boolean {
+  const normalizedPath = normalizeBrowserRequestPath(path);
+  if (method === "POST" && normalizedPath === "/profiles/create") {
+    return true;
+  }
+  return method === "DELETE" && /^\/profiles\/[^/]+$/.test(normalizedPath);
+}
+
 function resolveRequestedProfile(params: {
   query?: Record<string, unknown>;
   body?: unknown;
@@ -164,6 +184,17 @@ export const browserHandlers: GatewayRequestHandlers = {
         false,
         undefined,
         errorShape(ErrorCodes.INVALID_REQUEST, "method must be GET, POST, or DELETE"),
+      );
+      return;
+    }
+    if (isPersistentBrowserProfileMutation(methodRaw, path)) {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          "browser.request cannot create or delete persistent browser profiles",
+        ),
       );
       return;
     }
