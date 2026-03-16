@@ -26,6 +26,8 @@ export type TelegramActionConfig = {
   sticker?: boolean;
   /** Enable forum topic creation. */
   createForumTopic?: boolean;
+  /** Enable forum topic editing (rename / change icon). */
+  editForumTopic?: boolean;
 };
 
 export type TelegramNetworkConfig = {
