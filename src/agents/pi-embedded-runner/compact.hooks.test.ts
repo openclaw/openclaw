@@ -80,6 +80,10 @@ vi.mock("../../plugins/hook-runner-global.js", () => ({
   getGlobalHookRunner: () => hookRunner,
 }));
 
+vi.mock("../../plugins/provider-runtime.js", () => ({
+  prepareProviderRuntimeAuth: vi.fn(async () => undefined),
+}));
+
 vi.mock("../runtime-plugins.js", () => ({
   ensureRuntimePluginsLoaded,
 }));
