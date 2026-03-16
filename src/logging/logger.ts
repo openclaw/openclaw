@@ -4,6 +4,7 @@ import { Logger as TsLogger } from "tslog";
 import { getCommandPathWithRootOptions } from "../cli/argv.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
+import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { readLoggingConfig } from "./config.js";
 import type { ConsoleStyle } from "./console.js";
 import { resolveEnvLogLevelOverride } from "./env-log-level.js";
@@ -43,19 +44,10 @@ export type LogTransport = (logObj: LogTransportRecord) => void;
 
 const EXTERNAL_TRANSPORTS_KEY = Symbol.for("openclaw.logging.externalTransports");
 
-type GlobalWithExternalTransports = typeof globalThis & {
-  [EXTERNAL_TRANSPORTS_KEY]?: Set<LogTransport>;
-};
-
-function getExternalTransports(): Set<LogTransport> {
-  const target = globalThis as GlobalWithExternalTransports;
-  if (!target[EXTERNAL_TRANSPORTS_KEY]) {
-    target[EXTERNAL_TRANSPORTS_KEY] = new Set<LogTransport>();
-  }
-  return target[EXTERNAL_TRANSPORTS_KEY];
-}
-
-const externalTransports = getExternalTransports();
+const externalTransports = resolveGlobalSingleton(
+  EXTERNAL_TRANSPORTS_KEY,
+  () => new Set<LogTransport>(),
+);
 
 function shouldSkipLoadConfigFallback(argv: string[] = process.argv): boolean {
   const [primary, secondary] = getCommandPathWithRootOptions(argv, 2);
