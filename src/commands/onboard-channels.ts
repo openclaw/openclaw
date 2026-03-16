@@ -17,6 +17,7 @@ import type { OpenClawConfig } from "../config/config.js";
 import { isChannelConfigured } from "../config/plugin-auto-enable.js";
 import type { DmPolicy } from "../config/types.js";
 import { enablePluginInConfig } from "../plugins/enable.js";
+import { loadPluginManifestRegistry } from "../plugins/manifest-registry.js";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../routing/session-key.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { formatDocsLink } from "../terminal/links.js";
@@ -123,11 +124,16 @@ async function collectChannelStatus(params: {
   installedPlugins?: ReturnType<typeof listChannelSetupPlugins>;
 }): Promise<ChannelStatusSummary> {
   const installedPlugins = params.installedPlugins ?? listChannelSetupPlugins();
-  const installedIds = new Set(installedPlugins.map((plugin) => plugin.id));
   const workspaceDir = resolveAgentWorkspaceDir(params.cfg, resolveDefaultAgentId(params.cfg));
-  const catalogEntries = listChannelPluginCatalogEntries({ workspaceDir }).filter(
-    (entry) => !installedIds.has(entry.id),
+  const allCatalogEntries = listChannelPluginCatalogEntries({ workspaceDir });
+  const installedChannelIds = new Set(
+    loadPluginManifestRegistry({
+      config: params.cfg,
+      workspaceDir,
+      env: process.env,
+    }).plugins.flatMap((plugin) => plugin.channels),
   );
+  const catalogEntries = allCatalogEntries.filter((entry) => !installedChannelIds.has(entry.id));
   const statusEntries = await Promise.all(
     listChannelOnboardingAdapters().map((adapter) =>
       adapter.getStatus({
@@ -151,6 +157,28 @@ async function collectChannelStatus(params: {
         quickstartScore: 0,
       };
     });
+  const discoveredPluginStatuses = allCatalogEntries
+    .filter((entry) => installedChannelIds.has(entry.id))
+    .filter((entry) => !statusByChannel.has(entry.id as ChannelChoice))
+    .map((entry) => {
+      const configured = isChannelConfigured(params.cfg, entry.id);
+      const pluginEnabled =
+        params.cfg.plugins?.entries?.[entry.pluginId ?? entry.id]?.enabled !== false;
+      const statusLabel = configured
+        ? pluginEnabled
+          ? "configured"
+          : "configured (plugin disabled)"
+        : pluginEnabled
+          ? "installed"
+          : "installed (plugin disabled)";
+      return {
+        channel: entry.id as ChannelChoice,
+        configured,
+        statusLines: [`${entry.meta.label}: ${statusLabel}`],
+        selectionHint: statusLabel,
+        quickstartScore: 0,
+      };
+    });
   const catalogStatuses = catalogEntries.map((entry) => ({
     channel: entry.id,
     configured: false,
@@ -158,7 +186,12 @@ async function collectChannelStatus(params: {
     selectionHint: "plugin · install",
     quickstartScore: 0,
   }));
-  const combinedStatuses = [...statusEntries, ...fallbackStatuses, ...catalogStatuses];
+  const combinedStatuses = [
+    ...statusEntries,
+    ...fallbackStatuses,
+    ...discoveredPluginStatuses,
+    ...catalogStatuses,
+  ];
   const mergedStatusByChannel = new Map(combinedStatuses.map((entry) => [entry.channel, entry]));
   const statusLines = combinedStatuses.flatMap((entry) => entry.statusLines);
   return {
@@ -344,7 +377,9 @@ export async function setupChannels(
       ...(pluginId ? { pluginId } : {}),
       workspaceDir: resolveWorkspaceDir(),
     });
-    const plugin = snapshot.channels.find((entry) => entry.plugin.id === channel)?.plugin;
+    const plugin =
+      snapshot.channels.find((entry) => entry.plugin.id === channel)?.plugin ??
+      snapshot.channelSetups.find((entry) => entry.plugin.id === channel)?.plugin;
     if (plugin) {
       rememberScopedPlugin(plugin);
     }

@@ -15,6 +15,7 @@
     "extensions": [
       "./index.ts"
     ],
+    "setupEntry": "./setup-entry.ts",
     "channel": {
       "id": "matrix",
       "label": "Matrix",

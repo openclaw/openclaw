@@ -13,6 +13,7 @@
     "extensions": [
       "./index.ts"
     ],
+    "setupEntry": "./setup-entry.ts",
     "channel": {
       "id": "feishu",
       "label": "Feishu",

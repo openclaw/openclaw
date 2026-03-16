@@ -148,6 +148,7 @@ export type PluginPackageInstall = {
 
 export type OpenClawPackageManifest = {
   extensions?: string[];
+  setupEntry?: string;
   channel?: PluginPackageChannel;
   install?: PluginPackageInstall;
 };
