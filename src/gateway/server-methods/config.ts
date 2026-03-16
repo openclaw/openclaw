@@ -1,4 +1,5 @@
 import { exec } from "node:child_process";
+import path from "node:path";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import { listChannelPlugins } from "../../channels/plugins/index.js";
 import {
@@ -57,6 +58,12 @@ import type { GatewayRequestHandlers, RespondFn } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
 const MAX_CONFIG_ISSUES_IN_ERROR_MESSAGE = 3;
+
+function isPathWithin(targetPath: string, basePath: string): boolean {
+  const resolvedTarget = path.resolve(targetPath);
+  const resolvedBase = path.resolve(basePath);
+  return resolvedTarget.startsWith(resolvedBase + path.sep) || resolvedTarget === resolvedBase;
+}
 
 function requireConfigBaseHash(
   params: unknown,
@@ -537,7 +544,23 @@ export const configHandlers: GatewayRequestHandlers = {
     if (!assertValidParams(params, validateConfigGetParams, "config.openFile", respond)) {
       return;
     }
-    const configPath = createConfigIO().configPath;
+    const configIO = createConfigIO();
+    const configPath = configIO.configPath;
+    const stateDir = path.dirname(configPath);
+
+    if (!isPathWithin(configPath, stateDir)) {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          "config.openFile: attempted to access path outside state directory",
+          { details: { path: configPath, stateDir } },
+        ),
+      );
+      return;
+    }
+
     const platform = process.platform;
     const cmd = platform === "darwin" ? "open" : platform === "win32" ? "start" : "xdg-open";
     exec(`${cmd} ${JSON.stringify(configPath)}`, (err) => {
