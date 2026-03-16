@@ -34,12 +34,14 @@ The **daemon operator** (human) must set up WAIaaS before agents can use it:
 npm install -g @waiaas/cli
 waiaas init
 waiaas start
-waiaas quickset --mode mainnet
+waiaas quickset --mode testnet     # Start with testnet (Solana Devnet + EVM Sepolia)
 ```
 
-`quickset` creates Solana + EVM wallets, issues MCP session tokens, and prints a ready-to-use MCP config.
+`quickset` creates wallets, issues MCP session tokens, and prints a ready-to-use MCP config. Start with `--mode testnet` to verify the setup safely. Switch to `--mode mainnet` only after configuring spending policies.
 
-**Configure spending policies** via Admin UI at `http://127.0.0.1:3100/admin` before connecting agents. WAIaaS uses default-deny — agents cannot transact until policies are configured.
+**Configure spending policies** via Admin UI at `http://localhost:3100/admin` before connecting agents. WAIaaS uses default-deny — agents cannot transact until policies are configured.
+
+> **Warning:** Do not use `--mode mainnet` until you have configured spending limits, token whitelists, and owner approval policies. Mainnet wallets handle real funds.
 
 Connect the MCP server (pass token via environment variable):
 
