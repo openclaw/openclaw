@@ -47,8 +47,11 @@ function resolveCardHeader(
   agentId: string,
   identity: OutboundIdentity | undefined,
 ): CardHeaderConfig {
-  const name = identity?.name?.trim() || agentId;
+  // Fall back to agentId, but suppress the generic "main" default since it
+  // provides no useful information to the end user.
+  const name = identity?.name?.trim() || (agentId === "main" ? "" : agentId);
   const emoji = identity?.emoji?.trim();
+  if (!name && !emoji) return { title: "", template: identity?.theme ?? "blue" };
   return {
     title: emoji ? `${emoji} ${name}` : name,
     template: identity?.theme ?? "blue",
@@ -265,7 +268,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
           replyToMessageId,
           replyInThread: effectiveReplyInThread,
           rootId,
-          header: cardHeader,
+          header: cardHeader.title ? cardHeader : undefined,
           note: cardNote,
         });
       } catch (error) {
@@ -427,7 +430,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
                 replyInThread: effectiveReplyInThread,
                 mentions: first ? mentionTargets : undefined,
                 accountId,
-                header: cardHeader,
+                header: cardHeader.title ? cardHeader : undefined,
                 note: cardNote,
               });
               first = false;
