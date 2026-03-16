@@ -1682,6 +1682,28 @@
   font-size: 11px;
 }
 
+/* Session updated cell with timestamp + preview */
+.session-updated-cell {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+  max-width: 200px;
+}
+
+.session-updated-timestamp {
+  font-size: 13px;
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.session-updated-preview {
+  font-size: 11px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
+}
+
 /* ===========================================
    Data Table
    =========================================== */

@@ -61,6 +61,20 @@ const FAST_LEVELS = [
 const REASONING_LEVELS = ["", "off", "on", "stream"] as const;
 const PAGE_SIZES = [10, 25, 50, 100] as const;
 
+// Preview truncation configuration
+const PREVIEW_MAX_LENGTH = 50;
+
+/**
+ * Truncates preview text with null/undefined safety.
+ * Uses CSS for visual truncation (ellipsis), this is for data safety.
+ */
+function truncatePreview(text: string | null | undefined): string {
+  if (!text) return "";
+  return text.length > PREVIEW_MAX_LENGTH
+    ? text.slice(0, PREVIEW_MAX_LENGTH) + "…"
+    : text;
+}
+
 function normalizeProviderId(provider?: string | null): string {
   if (!provider) {
     return "";
@@ -383,6 +397,8 @@ export function renderSessions(props: SessionsProps) {
   `;
 }
 
+
+
 function renderRow(
   row: GatewaySessionRow,
   basePath: string,
@@ -393,6 +409,7 @@ function renderRow(
   disabled: boolean,
 ) {
   const updated = row.updatedAt ? formatRelativeTimestamp(row.updatedAt) : "n/a";
+  const preview = truncatePreview(row.subject);
   const rawThinking = row.thinkingLevel ?? "";
   const isBinaryThinking = isBinaryThinkingProvider(row.modelProvider);
   const thinking = resolveThinkLevelDisplay(rawThinking, isBinaryThinking);
@@ -453,7 +470,19 @@ function renderRow(
       <td>
         <span class="data-table-badge ${badgeClass}">${row.kind}</span>
       </td>
-      <td>${updated}</td>
+      <td>
+        <div class="session-updated-cell">
+          <div class="session-updated-timestamp">${updated}</div>
+          ${
+            preview
+              ? html`<div 
+                  class="session-updated-preview muted" 
+                  title=${row.subject ?? ""}
+                >${preview}</div>`
+              : nothing
+          }
+        </div>
+      </td>
       <td>${formatSessionTokens(row)}</td>
       <td>
         <select
