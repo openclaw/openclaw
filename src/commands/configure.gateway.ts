@@ -294,11 +294,11 @@ export async function promptGatewayConfig(
 
     const trustedProxiesRaw = guardCancel(
       await text({
-        message: "Trusted proxy IPs (comma-separated)",
-        placeholder: "10.0.1.10,192.168.1.5",
+        message: "Trusted proxy IPs or CIDRs (comma-separated)",
+        placeholder: "10.0.1.10,192.168.1.5,10.0.0.0/8",
         validate: (value) => {
           if (!value || String(value).trim() === "") {
-            return "At least one trusted proxy IP is required";
+            return "At least one trusted proxy IP or CIDR is required";
           }
           return undefined;
         },

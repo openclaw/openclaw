@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { parseByteSize } from "../cli/parse-bytes.js";
 import { parseDurationMs } from "../cli/parse-duration.js";
+import { isValidIpOrCidrEntry } from "../shared/net/ip.js";
 import { ToolsSchema } from "./zod-schema.agent-runtime.js";
 import { AgentsSchema, AudioSchema, BindingsSchema, BroadcastSchema } from "./zod-schema.agents.js";
 import { ApprovalsSchema } from "./zod-schema.approvals.js";
@@ -684,7 +685,15 @@ export const OpenClawSchema = z
           })
           .strict()
           .optional(),
-        trustedProxies: z.array(z.string()).optional(),
+        trustedProxies: z
+          .array(
+            z
+              .string()
+              .refine(isValidIpOrCidrEntry, {
+                message: "Must be a valid IP address or CIDR block",
+              }),
+          )
+          .optional(),
         allowRealIpFallback: z.boolean().optional(),
         tools: z
           .object({
