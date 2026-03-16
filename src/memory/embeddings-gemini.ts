@@ -5,6 +5,7 @@ import {
 import { requireApiKey, resolveApiKeyForProvider } from "../agents/model-auth.js";
 import { parseGeminiAuth } from "../infra/gemini-auth.js";
 import type { SsrFPolicy } from "../infra/net/ssrf.js";
+import { normalizeGeminiBaseUrl } from "../utils/gemini-url.js";
 import type { EmbeddingInput } from "./embedding-inputs.js";
 import { sanitizeAndNormalizeEmbedding } from "./embedding-vectors.js";
 import { debugEmbeddingsLog } from "./embeddings-debug.js";
@@ -201,14 +202,8 @@ async function fetchGeminiEmbeddingPayload(params: {
   });
 }
 
-function normalizeGeminiBaseUrl(raw: string): string {
-  const trimmed = raw.replace(/\/+$/, "");
-  const openAiIndex = trimmed.indexOf("/openai");
-  if (openAiIndex > -1) {
-    return trimmed.slice(0, openAiIndex);
-  }
-  return trimmed;
-}
+// Private normalizeGeminiBaseUrl removed – now using shared
+// normalizeGeminiBaseUrl from src/utils/gemini-url.ts
 
 function buildGeminiModelPath(model: string): string {
   return model.startsWith("models/") ? model : `models/${model}`;
@@ -302,8 +297,10 @@ export async function resolveGeminiEmbeddingClient(
       );
 
   const providerConfig = options.config.models?.providers?.google;
-  const rawBaseUrl = remoteBaseUrl || providerConfig?.baseUrl?.trim() || DEFAULT_GEMINI_BASE_URL;
-  const baseUrl = normalizeGeminiBaseUrl(rawBaseUrl);
+  const baseUrl = normalizeGeminiBaseUrl(
+    remoteBaseUrl || providerConfig?.baseUrl?.trim(),
+    DEFAULT_GEMINI_BASE_URL,
+  );
   const ssrfPolicy = buildRemoteBaseUrlPolicy(baseUrl);
   const headerOverrides = Object.assign({}, providerConfig?.headers, remote?.headers);
   const headers: Record<string, string> = {
@@ -320,7 +317,7 @@ export async function resolveGeminiEmbeddingClient(
     options.outputDimensionality,
   );
   debugEmbeddingsLog("memory embeddings: gemini client", {
-    rawBaseUrl,
+    rawBaseUrl: remoteBaseUrl || providerConfig?.baseUrl?.trim() || DEFAULT_GEMINI_BASE_URL,
     baseUrl,
     model,
     modelPath,

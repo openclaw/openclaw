@@ -1,6 +1,7 @@
 import { normalizeGoogleModelId } from "../../../agents/model-id-normalization.js";
 import { parseGeminiAuth } from "../../../infra/gemini-auth.js";
-import { assertOkOrThrowHttpError, normalizeBaseUrl, postJsonRequest } from "../shared.js";
+import { normalizeGeminiBaseUrl } from "../../../utils/gemini-url.js";
+import { assertOkOrThrowHttpError, postJsonRequest } from "../shared.js";
 
 export async function generateGeminiInlineDataText(params: {
   buffer: Buffer;
@@ -20,7 +21,7 @@ export async function generateGeminiInlineDataText(params: {
   missingTextError: string;
 }): Promise<{ text: string; model: string }> {
   const fetchFn = params.fetchFn ?? fetch;
-  const baseUrl = normalizeBaseUrl(params.baseUrl, params.defaultBaseUrl);
+  const baseUrl = normalizeGeminiBaseUrl(params.baseUrl, params.defaultBaseUrl);
   const allowPrivate = Boolean(params.baseUrl?.trim());
   const model = (() => {
     const trimmed = params.model?.trim();
