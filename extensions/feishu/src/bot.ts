@@ -540,9 +540,10 @@ function normalizeFeishuCommandProbeBody(text: string): string {
  */
 export function decodeFeishuFilename(filename: string | undefined): string {
   if (!filename) return "";
-  // Strip RFC 5987 prefix (case-insensitive)
-  if (filename.toLowerCase().startsWith("filename*=utf-8''")) {
-    filename = filename.replace(/filename*=UTF-8''/i, "");
+  // Strip RFC 5987 prefix (case-insensitive): filename*=UTF-8''encoded
+  const lower = filename.toLowerCase();
+  if (lower.startsWith("filename*=utf-8''")) {
+    filename = filename.substring(17); // Remove "filename*=utf-8''" (17 chars)
   }
   // Only decode if result contains non-ASCII characters.
   // This preserves literal percent signs like "report%202026.pdf".
@@ -554,7 +555,7 @@ export function decodeFeishuFilename(filename: string | undefined): string {
     }
     return filename;
   } catch {
-    return filename; // Fallback to original if decoding fails
+    return filename;
   }
 }
 
