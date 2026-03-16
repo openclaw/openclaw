@@ -816,7 +816,7 @@ export async function collectChannelSecurityFindings(params: {
             "Telegram sender authorization requires numeric Telegram user IDs. " +
             `Found non-numeric allowFrom entries: ${examples.join(", ")}${more}.`,
           remediation:
-            "Replace @username entries with numeric Telegram user IDs (use onboarding to resolve), then re-run the audit.",
+            "Replace @username entries with numeric Telegram user IDs (use setup to resolve), then re-run the audit.",
         });
       }
 

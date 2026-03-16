@@ -77,7 +77,7 @@ export async function runSetupWizard(
 ) {
   const onboardHelpers = await import("../commands/onboard-helpers.js");
   onboardHelpers.printWizardHeader(runtime);
-  await prompter.intro("OpenClaw onboarding");
+  await prompter.intro("OpenClaw setup");
   await requireRiskAcknowledgement({ opts, prompter });
 
   const snapshot = await readConfigFileSnapshot();
@@ -122,7 +122,7 @@ export async function runSetupWizard(
   let flow: WizardFlow =
     explicitFlow ??
     (await prompter.select({
-      message: "Onboarding mode",
+      message: "Setup mode",
       options: [
         { value: "quickstart", label: "QuickStart", hint: quickstartHint },
         { value: "advanced", label: "Manual", hint: manualHint },
@@ -295,7 +295,7 @@ export async function runSetupWizard(
   } catch (error) {
     await prompter.note(
       [
-        "Could not resolve gateway.auth.token SecretRef for onboarding probe.",
+        "Could not resolve gateway.auth.token SecretRef for setup probe.",
         error instanceof Error ? error.message : String(error),
       ].join("\n"),
       "Gateway auth",
@@ -316,7 +316,7 @@ export async function runSetupWizard(
   } catch (error) {
     await prompter.note(
       [
-        "Could not resolve gateway.auth.password SecretRef for onboarding probe.",
+        "Could not resolve gateway.auth.password SecretRef for setup probe.",
         error instanceof Error ? error.message : String(error),
       ].join("\n"),
       "Gateway auth",
@@ -343,7 +343,7 @@ export async function runSetupWizard(
   } catch (error) {
     await prompter.note(
       [
-        "Could not resolve gateway.remote.token SecretRef for onboarding probe.",
+        "Could not resolve gateway.remote.token SecretRef for setup probe.",
         error instanceof Error ? error.message : String(error),
       ].join("\n"),
       "Gateway auth",
