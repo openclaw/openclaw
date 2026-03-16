@@ -1,8 +1,8 @@
 {
-  "name": "@openclaw/web-search-perplexity",
+  "name": "@openclaw/xai-plugin",
   "version": "2026.3.14",
   "private": true,
-  "description": "OpenClaw Perplexity web search provider plugin",
+  "description": "OpenClaw xAI plugin",
   "type": "module",
   "openclaw": {
     "extensions": [

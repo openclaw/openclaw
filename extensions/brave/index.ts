@@ -6,10 +6,10 @@ import {
 import { emptyPluginConfigSchema } from "../../src/plugins/config-schema.js";
 import type { OpenClawPluginApi } from "../../src/plugins/types.js";
 
-const braveSearchPlugin = {
-  id: "web-search-brave",
-  name: "Web Search Brave Provider",
-  description: "Bundled Brave provider for the web_search tool",
+const bravePlugin = {
+  id: "brave",
+  name: "Brave Plugin",
+  description: "Bundled Brave plugin",
   configSchema: emptyPluginConfigSchema(),
   register(api: OpenClawPluginApi) {
     api.registerWebSearchProvider(
@@ -29,4 +29,4 @@ const braveSearchPlugin = {
   },
 };
 
-export default braveSearchPlugin;
+export default bravePlugin;
