@@ -130,25 +130,30 @@ destination = "/data"   # Fly Volume — all state persists here
 
 ## Git Workflow
 
+### Deploying Blink changes (the only workflow you need)
+
+```bash
+# Make your changes inside the openclaw/ submodule, then:
+git add . && git commit -m "feat: ..." && git push origin blink-deploy
+```
+
+GitHub Actions fires automatically on push to `blink-deploy`:
+1. Builds + pushes `registry.fly.io/blink-claw:latest` (~3-5 min with cache)
+2. Updates ALL running `blink-claw-*` Fly machines
+
+**NEVER push Blink work to `main`** — it triggers all upstream OpenClaw CI workflows
+(Docker Release, Install Smoke, CI tests, etc.) which are irrelevant for Blink.
+
 ### Working on Blink-specific changes
 
 ```bash
-# Always work inside the openclaw/ submodule directory
 cd openclaw/
+git checkout blink-deploy   # always start from here
 
-# Create a branch for your changes
-git checkout -b feat/blink-my-feature
-
-# Make changes, commit to our fork
+# make changes, then deploy:
 git add .
 git commit -m "feat: ..."
-git push origin feat/blink-my-feature
-
-# After merge, update auto-engineer to point to new commit
-cd ..
-git add openclaw
-git commit -m "chore: update openclaw submodule to include blink feature"
-git push
+git push origin blink-deploy  # → GitHub Action auto-deploys
 ```
 
 ### Pulling upstream OpenClaw updates
