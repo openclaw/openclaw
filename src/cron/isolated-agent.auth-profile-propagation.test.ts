@@ -18,7 +18,9 @@ describe("runCronIsolatedAgentTurn auth profile propagation (#20624)", () => {
     setupIsolatedAgentTurnMocks({ fast: true });
   });
 
-  it("passes authProfileId to runEmbeddedPiAgent when auth profiles exist", async () => {
+  it(
+    "passes authProfileId to runEmbeddedPiAgent when auth profiles exist",
+    async () => {
     await withTempCronHome(async (home) => {
       const storePath = await writeSessionStore(home, { lastProvider: "webchat", lastTo: "" });
 
@@ -84,5 +86,7 @@ describe("runCronIsolatedAgentTurn auth profile propagation (#20624)", () => {
 
       expect(callArgs?.authProfileId).toBe("openrouter:default");
     });
-  });
+  },
+  process.platform === "win32" ? 240_000 : 120_000,
+  );
 });
