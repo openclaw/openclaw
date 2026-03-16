@@ -178,7 +178,8 @@ export function parseSchtasksQuery(output: string): ScheduledTaskInfo {
   if (lastRunTime) {
     info.lastRunTime = lastRunTime;
   }
-  const lastRunResult = entries["last run result"];
+  // Windows schtasks /Query /V /FO LIST may output "Last Result" (no "Run") in some locales
+  const lastRunResult = entries["last run result"] ?? entries["last result"];
   if (lastRunResult) {
     info.lastRunResult = lastRunResult;
   }
