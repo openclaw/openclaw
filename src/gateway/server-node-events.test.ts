@@ -59,6 +59,13 @@ vi.mock("../infra/device-identity.js", () => ({
 }));
 vi.mock("./session-utils.js", () => ({
   loadSessionEntry: vi.fn((sessionKey: string) => buildSessionLookup(sessionKey)),
+  migrateAndPruneGatewaySessionStoreKey: vi.fn(
+    ({ key, store }: { key: string; store: Record<string, unknown> }) => ({
+      target: { canonicalKey: key, storeKeys: [key] },
+      primaryKey: key,
+      entry: store[key],
+    }),
+  ),
   pruneLegacyStoreKeys: vi.fn(),
   resolveGatewaySessionStoreTarget: vi.fn(({ key }: { key: string }) => ({
     canonicalKey: key,
