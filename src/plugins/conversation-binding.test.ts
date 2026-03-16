@@ -326,11 +326,7 @@ describe("plugin conversation binding approvals", () => {
       }
 
       expect(approved.binding.detachHint).toBe("/codex_detach");
-    } else {
-      expect(request.status).toBe("bound");
-      if (request.status !== "bound") {
-        throw new Error("expected bound request");
-      }
+    } else if (request.status === "bound") {
       expect(request.binding.detachHint).toBe("/codex_detach");
     } else {
       throw new Error(`expected pending or bound request, got ${request.status}`);
