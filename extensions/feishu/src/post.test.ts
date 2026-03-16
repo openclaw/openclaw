@@ -73,6 +73,24 @@ describe("parsePostContent", () => {
     expect(result.mentionedOpenIds).toEqual([]);
   });
 
+  it("adds spaces around anchors and mentions to prevent UI text concatenation", () => {
+    const content = JSON.stringify({
+      title: "",
+      content: [
+        [
+          { tag: "text", text: "打开文档[" },
+          { tag: "a", href: "https://example.com", text: "项目A" },
+          { tag: "text", text: "]并重新理解" },
+        ],
+      ],
+    });
+
+    const result = parsePostContent(content);
+
+    // Should automatically insert spaces around the 'a' tag to prevent the CJK characters from sticking to it
+    expect(result.textContent).toBe("打开文档\\[ [项目A](https://example.com) \\]并重新理解");
+  });
+
   it("supports locale wrappers", () => {
     const wrappedByPost = JSON.stringify({
       post: {
