@@ -454,9 +454,16 @@ describe("handleFeishuMessage delayed ack", () => {
             dispatchReplyFromConfig: slowDispatchReplyFromConfig,
             withReplyDispatcher: vi.fn(
               async ({
+                onSettled,
                 run,
               }: Parameters<PluginRuntime["channel"]["reply"]["withReplyDispatcher"]>[0]) =>
-                await run(),
+                {
+                  try {
+                    return await run();
+                  } finally {
+                    await onSettled?.();
+                  }
+                },
             ) as unknown as PluginRuntime["channel"]["reply"]["withReplyDispatcher"],
           },
           commands: {
@@ -506,6 +513,73 @@ describe("handleFeishuMessage delayed ack", () => {
 
     await vi.advanceTimersByTimeAsync(1_000);
     await pending;
+  });
+
+  it("does not send a delayed acknowledgment for fast direct-message dispatches", async () => {
+    const pending = dispatchMessage({
+      cfg: {
+        session: { mainKey: "main", scope: "per-sender" },
+        channels: { feishu: { enabled: true, allowFrom: ["ou_sender_1"], dmPolicy: "open" } },
+      },
+      event: {
+        sender: { sender_id: { open_id: "ou_sender_1" } },
+        message: {
+          message_id: "msg-fast",
+          chat_id: "oc_dm",
+          chat_type: "p2p",
+          message_type: "text",
+          content: JSON.stringify({ text: "run something fast" }),
+        },
+      },
+    });
+
+    await vi.advanceTimersByTimeAsync(7_999);
+    await pending;
+
+    expect(mockSendMessageFeishu).not.toHaveBeenCalledWith(
+      expect.objectContaining({
+        text: "已收到，开始处理；如果需要较长时间，我会在完成后继续反馈结果。",
+      }),
+    );
+  });
+
+  it("does not send a delayed acknowledgment for group chats", async () => {
+    const pending = dispatchMessage({
+      cfg: {
+        session: { mainKey: "main", scope: "per-sender" },
+        channels: {
+          feishu: {
+            enabled: true,
+            allowFrom: ["ou_sender_1"],
+            groups: {
+              oc_group_chat: {
+                allow: true,
+                requireMention: false,
+              },
+            },
+          },
+        },
+      },
+      event: {
+        sender: { sender_id: { open_id: "ou_sender_1" } },
+        message: {
+          message_id: "msg-group",
+          chat_id: "oc_group_chat",
+          chat_type: "group",
+          message_type: "text",
+          content: JSON.stringify({ text: "run something slow in group" }),
+        },
+      },
+    });
+
+    await vi.advanceTimersByTimeAsync(9_000);
+    await pending;
+
+    expect(mockSendMessageFeishu).not.toHaveBeenCalledWith(
+      expect.objectContaining({
+        text: "已收到，开始处理；如果需要较长时间，我会在完成后继续反馈结果。",
+      }),
+    );
   });
 });
 
