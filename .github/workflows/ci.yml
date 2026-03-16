@@ -247,7 +247,7 @@ jobs:
 
       - name: Run ${{ matrix.task }} (${{ matrix.runtime }})
         if: matrix.runtime != 'bun' || github.event_name != 'pull_request'
-        run: ${{ matrix.command }}
+        run: ${{ matrix.command }} # zizmor: ignore[template-injection]
 
   extension-fast:
     name: "extension-fast (${{ matrix.extension }})"
@@ -270,7 +270,9 @@ jobs:
           use-sticky-disk: "false"
 
       - name: Run changed extension tests
-        run: pnpm test:extension ${{ matrix.extension }}
+        env:
+          EXTENSION: ${{ matrix.extension }}
+        run: pnpm test:extension "$EXTENSION"
 
   # Types, lint, and format check.
   check:
@@ -594,7 +596,7 @@ jobs:
         run: pnpm canvas:a2ui:bundle
 
       - name: Run ${{ matrix.task }} (${{ matrix.runtime }})
-        run: ${{ matrix.command }}
+        run: ${{ matrix.command }} # zizmor: ignore[template-injection]
 
   # Consolidated macOS job: runs TS tests + Swift lint/build/test sequentially
   # on a single runner. GitHub limits macOS concurrent jobs to 5 per org;
@@ -892,4 +894,4 @@ jobs:
 
       - name: Run Android ${{ matrix.task }}
         working-directory: apps/android
-        run: ${{ matrix.command }}
+        run: ${{ matrix.command }} # zizmor: ignore[template-injection]
