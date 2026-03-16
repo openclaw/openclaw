@@ -162,6 +162,7 @@ describe("plugin interactive handlers", () => {
       data: "codex:approve:thread-1",
       interactionId: "slack-ix-1",
       ctx: {
+        channel: "slack" as const,
         accountId: "default",
         interactionId: "slack-ix-1",
         conversationId: "C123",
