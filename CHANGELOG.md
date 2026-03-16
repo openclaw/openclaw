@@ -78,7 +78,6 @@ Docs: https://docs.openclaw.ai
 - Zalo/plugin runtime: export `resolveClientIp` from `openclaw/plugin-sdk/zalo` so installed builds no longer crash on startup when the webhook monitor loads from the packaged extension instead of the monorepo source tree. (#46549) Thanks @No898.
 - Plugins/install precedence: keep bundled plugins ahead of auto-discovered globals by default, but let an explicitly installed plugin record win its own duplicate-id tie so installed channel plugins load from `~/.openclaw/extensions` after `openclaw plugins install`.
 - Plugins/scoped ids: preserve scoped plugin ids during install and config keying, and keep bundled plugins ahead of discovered duplicate ids by default so `@scope/name` plugins no longer collide with unscoped installs. Thanks @vincentkoc.
-- Slack/startup: harden `@slack/bolt` import interop across current bundled runtime shapes so Slack monitors no longer crash with `App is not a constructor` after plugin-sdk bundling changes. (#45953) thanks @merc1305.
 - Gateway/watch mode: restart on bundled-plugin package and manifest metadata changes, rebuild `dist` for extension source and `tsdown.config.ts` changes, and still ignore extension docs. (#47571) thanks @gumadeiras.
 - Gateway/watch mode: recreate bundled plugin runtime metadata after clean or stale `dist` states, so `pnpm gateway:watch` no longer fails on missing `dist/extensions/*/openclaw.plugin.json` manifests after a rebuild. Thanks @gumadeiras.
 - Control UI/chat sessions: show human-readable labels in the grouped session dropdown again, keep unique scoped fallbacks when metadata is missing, and disambiguate duplicate labels only when needed. (#45130) thanks @luzhidong.
@@ -94,6 +93,7 @@ Docs: https://docs.openclaw.ai
 - Nodes/pending actions: re-check queued foreground actions against the current node command policy before returning them to the node. (#46815) Thanks @zpbrent and @vincentkoc.
 - Node/startup: remove leftover debug `console.log("node host PATH: ...")` that printed the resolved PATH on every `openclaw node run` invocation. (#46411)
 - CLI/completion: reduce recursive completion-script string churn and fix nested PowerShell command-path matching so generated nested completions resolve on PowerShell too. (#45537) Thanks @yiShanXin and @vincentkoc.
+- Slack/startup: harden `@slack/bolt` import interop across current bundled runtime shapes so Slack monitors no longer crash with `App is not a constructor` after plugin-sdk bundling changes. (#45953) thanks @merc1305.
 
 ## 2026.3.13
 
