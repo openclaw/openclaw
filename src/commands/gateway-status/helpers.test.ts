@@ -276,10 +276,42 @@ describe("probe reachability classification", () => {
 });
 
 describe("resolveProbeBudgetMs", () => {
-  it("gives local loopback probes enough time for detail RPCs", () => {
-    expect(resolveProbeBudgetMs(10_000, "localLoopback")).toBe(3000);
-    expect(resolveProbeBudgetMs(1200, "localLoopback")).toBe(1200);
-    expect(resolveProbeBudgetMs(10_000, "sshTunnel")).toBe(2000);
-    expect(resolveProbeBudgetMs(10_000, "explicit")).toBe(1500);
+  it("gives loopback probes enough time for detail RPCs", () => {
+    expect(
+      resolveProbeBudgetMs(10_000, {
+        kind: "localLoopback",
+        url: "ws://127.0.0.1:18789",
+      }),
+    ).toBe(3000);
+    expect(
+      resolveProbeBudgetMs(1200, {
+        kind: "localLoopback",
+        url: "ws://127.0.0.1:18789",
+      }),
+    ).toBe(1200);
+    expect(
+      resolveProbeBudgetMs(10_000, {
+        kind: "explicit",
+        url: "ws://127.0.0.1:18789",
+      }),
+    ).toBe(3000);
+    expect(
+      resolveProbeBudgetMs(10_000, {
+        kind: "explicit",
+        url: "wss://localhost:18789/ws",
+      }),
+    ).toBe(3000);
+    expect(
+      resolveProbeBudgetMs(10_000, {
+        kind: "explicit",
+        url: "wss://gateway.example/ws",
+      }),
+    ).toBe(1500);
+    expect(
+      resolveProbeBudgetMs(10_000, {
+        kind: "sshTunnel",
+        url: "wss://gateway.example/ws",
+      }),
+    ).toBe(2000);
   });
 });

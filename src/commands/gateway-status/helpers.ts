@@ -3,6 +3,7 @@ import { resolveGatewayPort } from "../../config/config.js";
 import type { OpenClawConfig, ConfigFileSnapshot } from "../../config/types.js";
 import { hasConfiguredSecretInput } from "../../config/types.secrets.js";
 import { readGatewayPasswordEnv, readGatewayTokenEnv } from "../../gateway/credentials.js";
+import { isLoopbackHost } from "../../gateway/net.js";
 import type { GatewayProbeResult } from "../../gateway/probe.js";
 import { resolveConfiguredSecretInputString } from "../../gateway/resolve-configured-secret-input-string.js";
 import { pickPrimaryTailnetIPv4 } from "../../infra/tailnet.js";
@@ -116,13 +117,28 @@ export function resolveTargets(cfg: OpenClawConfig, explicitUrl?: string): Gatew
   return targets;
 }
 
-export function resolveProbeBudgetMs(overallMs: number, kind: TargetKind): number {
-  if (kind === "localLoopback") {
-    // Full localhost detail probes can take longer than the old 800ms budget,
+function isLoopbackProbeTarget(target: Pick<GatewayStatusTarget, "kind" | "url">): boolean {
+  if (target.kind === "localLoopback") {
+    return true;
+  }
+  try {
+    return isLoopbackHost(new URL(target.url).hostname);
+  } catch {
+    return false;
+  }
+}
+
+export function resolveProbeBudgetMs(
+  overallMs: number,
+  target: Pick<GatewayStatusTarget, "kind" | "url">,
+): number {
+  if (isLoopbackProbeTarget(target)) {
+    // Full localhost detail probes can take longer than the old short budgets,
     // especially when they exercise status + heartbeat + presence RPCs.
+    // Treat explicit loopback URLs the same way as discovered local loopback.
     return Math.min(3000, overallMs);
   }
-  if (kind === "sshTunnel") {
+  if (target.kind === "sshTunnel") {
     return Math.min(2000, overallMs);
   }
   return Math.min(1500, overallMs);
