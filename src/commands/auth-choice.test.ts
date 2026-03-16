@@ -139,6 +139,27 @@ describe("applyAuthChoice", () => {
     await setupTempState();
 
     loginOpenAICodexOAuth.mockRejectedValueOnce(new Error("oauth failed"));
+    resolvePluginProviders.mockReturnValue([
+      {
+        id: "openai-codex",
+        label: "OpenAI Codex",
+        auth: [
+          {
+            id: "oauth",
+            label: "ChatGPT OAuth",
+            kind: "oauth",
+            run: vi.fn(async () => {
+              try {
+                await loginOpenAICodexOAuth();
+              } catch {
+                return { profiles: [] };
+              }
+              return { profiles: [] };
+            }),
+          },
+        ],
+      },
+    ] as never);
 
     const prompter = createPrompter({});
     const runtime = createExitThrowingRuntime();
@@ -163,6 +184,41 @@ describe("applyAuthChoice", () => {
       access: "access-token",
       expires: Date.now() + 60_000,
     });
+    resolvePluginProviders.mockReturnValue([
+      {
+        id: "openai-codex",
+        label: "OpenAI Codex",
+        auth: [
+          {
+            id: "oauth",
+            label: "ChatGPT OAuth",
+            kind: "oauth",
+            run: vi.fn(async () => {
+              const creds = await loginOpenAICodexOAuth();
+              if (!creds) {
+                return { profiles: [] };
+              }
+              return {
+                profiles: [
+                  {
+                    profileId: "openai-codex:user@example.com",
+                    credential: {
+                      type: "oauth",
+                      provider: "openai-codex",
+                      refresh: "refresh-token",
+                      access: "access-token",
+                      expires: creds.expires,
+                      email: "user@example.com",
+                    },
+                  },
+                ],
+                defaultModel: "openai-codex/gpt-5.4",
+              };
+            }),
+          },
+        ],
+      },
+    ] as never);
 
     const prompter = createPrompter({});
     const runtime = createExitThrowingRuntime();
@@ -285,7 +341,7 @@ describe("applyAuthChoice", () => {
       expectedBaseUrl: string;
       expectedModel?: string;
       shouldPromptForEndpoint: boolean;
-      shouldAssertDetectCall?: boolean;
+      expectedDetectCall?: { apiKey: string; endpoint?: "coding-global" | "coding-cn" };
     }> = [
       {
         authChoice: "zai-api-key",
@@ -298,8 +354,16 @@ describe("applyAuthChoice", () => {
       {
         authChoice: "zai-coding-global",
         token: "zai-test-key",
+        detectResult: {
+          endpoint: "coding-global",
+          modelId: "glm-4.7",
+          baseUrl: ZAI_CODING_GLOBAL_BASE_URL,
+          note: "Detected coding-global endpoint with GLM-4.7 fallback",
+        },
         expectedBaseUrl: ZAI_CODING_GLOBAL_BASE_URL,
+        expectedModel: "zai/glm-4.7",
         shouldPromptForEndpoint: false,
+        expectedDetectCall: { apiKey: "zai-test-key", endpoint: "coding-global" },
       },
       {
         authChoice: "zai-api-key",
@@ -313,7 +377,7 @@ describe("applyAuthChoice", () => {
         expectedBaseUrl: ZAI_CODING_GLOBAL_BASE_URL,
         expectedModel: "zai/glm-4.5",
         shouldPromptForEndpoint: false,
-        shouldAssertDetectCall: true,
+        expectedDetectCall: { apiKey: "zai-detected-key" },
       },
     ];
     for (const scenario of scenarios) {
@@ -344,8 +408,8 @@ describe("applyAuthChoice", () => {
         setDefaultModel: true,
       });
 
-      if (scenario.shouldAssertDetectCall) {
-        expect(detectZaiEndpoint).toHaveBeenCalledWith({ apiKey: scenario.token });
+      if (scenario.expectedDetectCall) {
+        expect(detectZaiEndpoint).toHaveBeenCalledWith(scenario.expectedDetectCall);
       }
       if (scenario.shouldPromptForEndpoint) {
         expect(select).toHaveBeenCalledWith(
@@ -1344,7 +1408,7 @@ describe("applyAuthChoice", () => {
 });
 
 describe("resolvePreferredProviderForAuthChoice", () => {
-  it("maps known and unknown auth choices", () => {
+  it("maps known and unknown auth choices", async () => {
     const scenarios = [
       { authChoice: "github-copilot" as const, expectedProvider: "github-copilot" },
       { authChoice: "qwen-portal" as const, expectedProvider: "qwen-portal" },
@@ -1353,9 +1417,9 @@ describe("resolvePreferredProviderForAuthChoice", () => {
       { authChoice: "unknown" as AuthChoice, expectedProvider: undefined },
     ] as const;
     for (const scenario of scenarios) {
-      expect(resolvePreferredProviderForAuthChoice({ choice: scenario.authChoice })).toBe(
-        scenario.expectedProvider,
-      );
+      await expect(
+        resolvePreferredProviderForAuthChoice({ choice: scenario.authChoice }),
+      ).resolves.toBe(scenario.expectedProvider);
     }
   });
 });

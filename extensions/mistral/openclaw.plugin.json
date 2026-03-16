@@ -1,0 +1,12 @@
+{
+  "id": "mistral",
+  "providers": ["mistral"],
+  "providerAuthEnvVars": {
+    "mistral": ["MISTRAL_API_KEY"]
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

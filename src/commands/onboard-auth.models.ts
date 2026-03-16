@@ -1,4 +1,7 @@
-import { QIANFAN_BASE_URL, QIANFAN_DEFAULT_MODEL_ID } from "../agents/models-config.providers.js";
+import {
+  QIANFAN_BASE_URL,
+  QIANFAN_DEFAULT_MODEL_ID,
+} from "../agents/models-config.providers.static.js";
 import type { ModelDefinitionConfig } from "../config/types.js";
 import {
   KILOCODE_DEFAULT_CONTEXT_WINDOW,
@@ -97,6 +100,7 @@ type MinimaxCatalogId = keyof typeof MINIMAX_MODEL_CATALOG;
 
 const ZAI_MODEL_CATALOG = {
   "glm-5": { name: "GLM-5", reasoning: true },
+  "glm-5-turbo": { name: "GLM-5 Turbo", reasoning: true },
   "glm-4.7": { name: "GLM-4.7", reasoning: true },
   "glm-4.7-flash": { name: "GLM-4.7 Flash", reasoning: true },
   "glm-4.7-flashx": { name: "GLM-4.7 FlashX", reasoning: true },

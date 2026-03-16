@@ -10,6 +10,7 @@ import { trimLogTail } from "../../infra/restart-sentinel.js";
 import { parseSemver } from "../../infra/runtime-guard.js";
 import { fetchNpmTagVersion } from "../../infra/update-check.js";
 import {
+  canResolveRegistryVersionForPackageTarget,
   detectGlobalInstallManagerByPresence,
   detectGlobalInstallManagerForRoot,
   type CommandRunner,
@@ -77,6 +78,9 @@ export async function resolveTargetVersion(
   tag: string,
   timeoutMs?: number,
 ): Promise<string | null> {
+  if (!canResolveRegistryVersionForPackageTarget(tag)) {
+    return null;
+  }
   const direct = normalizeVersionTag(tag);
   if (direct) {
     return direct;

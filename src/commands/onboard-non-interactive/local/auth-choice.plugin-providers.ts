@@ -1,13 +1,12 @@
-import { resolveDefaultAgentId, resolveAgentWorkspaceDir } from "../../../agents/agent-scope.js";
+import {
+  resolveAgentDir,
+  resolveDefaultAgentId,
+  resolveAgentWorkspaceDir,
+} from "../../../agents/agent-scope.js";
 import type { ApiKeyCredential } from "../../../agents/auth-profiles/types.js";
 import { resolveDefaultAgentWorkspaceDir } from "../../../agents/workspace.js";
 import type { OpenClawConfig } from "../../../config/config.js";
 import { enablePluginInConfig } from "../../../plugins/enable.js";
-import {
-  PROVIDER_PLUGIN_CHOICE_PREFIX,
-  resolveProviderPluginChoice,
-} from "../../../plugins/provider-wizard.js";
-import { resolvePluginProviders } from "../../../plugins/providers.js";
 import type {
   ProviderNonInteractiveApiKeyCredentialParams,
   ProviderResolveNonInteractiveApiKeyParams,
@@ -15,6 +14,12 @@ import type {
 import type { RuntimeEnv } from "../../../runtime.js";
 import { resolvePreferredProviderForAuthChoice } from "../../auth-choice.preferred-provider.js";
 import type { OnboardOptions } from "../../onboard-types.js";
+
+const PROVIDER_PLUGIN_CHOICE_PREFIX = "provider-plugin:";
+
+async function loadPluginProviderRuntime() {
+  return import("./auth-choice.plugin-providers.runtime.js");
+}
 
 function buildIsolatedProviderResolutionConfig(
   cfg: OpenClawConfig,
@@ -57,6 +62,7 @@ export async function applyNonInteractivePluginProviderChoice(params: {
   ) => ApiKeyCredential | null;
 }): Promise<OpenClawConfig | null | undefined> {
   const agentId = resolveDefaultAgentId(params.nextConfig);
+  const agentDir = resolveAgentDir(params.nextConfig, agentId);
   const workspaceDir =
     resolveAgentWorkspaceDir(params.nextConfig, agentId) ?? resolveDefaultAgentWorkspaceDir();
   const prefixedProviderId = params.authChoice.startsWith(PROVIDER_PLUGIN_CHOICE_PREFIX)
@@ -64,15 +70,16 @@ export async function applyNonInteractivePluginProviderChoice(params: {
     : undefined;
   const preferredProviderId =
     prefixedProviderId ||
-    resolvePreferredProviderForAuthChoice({
+    (await resolvePreferredProviderForAuthChoice({
       choice: params.authChoice,
       config: params.nextConfig,
       workspaceDir,
-    });
+    }));
   const resolutionConfig = buildIsolatedProviderResolutionConfig(
     params.nextConfig,
     preferredProviderId,
   );
+  const { resolveProviderPluginChoice, resolvePluginProviders } = await loadPluginProviderRuntime();
   const providerChoice = resolveProviderPluginChoice({
     providers: resolvePluginProviders({
       config: resolutionConfig,
@@ -114,6 +121,7 @@ export async function applyNonInteractivePluginProviderChoice(params: {
     baseConfig: params.baseConfig,
     opts: params.opts,
     runtime: params.runtime,
+    agentDir,
     workspaceDir,
     resolveApiKey: params.resolveApiKey,
     toApiKeyCredential: params.toApiKeyCredential,

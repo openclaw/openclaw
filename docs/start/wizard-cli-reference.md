@@ -1,16 +1,16 @@
 ---
-summary: "Complete reference for CLI onboarding flow, auth/model setup, outputs, and internals"
+summary: "Complete reference for CLI setup flow, auth/model setup, outputs, and internals"
 read_when:
-  - You need detailed behavior for openclaw onboard
-  - You are debugging onboarding results or integrating onboarding clients
-title: "CLI Onboarding Reference"
+  - You need detailed behavior for `openclaw setup --wizard`
+  - You are debugging setup results or integrating setup clients
+title: "CLI Setup Reference"
 sidebarTitle: "CLI reference"
 ---
 
-# CLI Onboarding Reference
+# CLI Setup Reference
 
-This page is the full reference for `openclaw onboard`.
-For the short guide, see [Onboarding Wizard (CLI)](/start/wizard).
+This page is the full reference for `openclaw setup --wizard`.
+For the short guide, see [Setup Wizard (CLI)](/start/wizard).
 
 ## What the wizard does
 
@@ -51,12 +51,12 @@ It does not install or modify anything on the remote host.
   <Step title="Gateway">
     - Prompts for port, bind, auth mode, and tailscale exposure.
     - Recommended: keep token auth enabled even for loopback so local WS clients must authenticate.
-    - In token mode, interactive onboarding offers:
+    - In token mode, interactive setup offers:
       - **Generate/store plaintext token** (default)
       - **Use SecretRef** (opt-in)
-    - In password mode, interactive onboarding also supports plaintext or SecretRef storage.
+    - In password mode, interactive setup also supports plaintext or SecretRef storage.
     - Non-interactive token SecretRef path: `--gateway-token-ref-env <ENV_VAR>`.
-      - Requires a non-empty env var in the onboarding process environment.
+      - Requires a non-empty env var in the setup process environment.
       - Cannot be combined with `--gateway-token`.
     - Disable auth only if you fully trust every local process.
     - Non-loopback binds still require auth.
@@ -220,21 +220,21 @@ Credential and profile paths:
 
 Credential storage mode:
 
-- Default onboarding behavior persists API keys as plaintext values in auth profiles.
+- Default setup behavior persists API keys as plaintext values in auth profiles.
 - `--secret-input-mode ref` enables reference mode instead of plaintext key storage.
-  In interactive onboarding, you can choose either:
+  In interactive setup, you can choose either:
   - environment variable ref (for example `keyRef: { source: "env", provider: "default", id: "OPENAI_API_KEY" }`)
   - configured provider ref (`file` or `exec`) with provider alias + id
 - Interactive reference mode runs a fast preflight validation before saving.
-  - Env refs: validates variable name + non-empty value in the current onboarding environment.
+  - Env refs: validates variable name + non-empty value in the current setup environment.
   - Provider refs: validates provider config and resolves the requested id.
-  - If preflight fails, onboarding shows the error and lets you retry.
+  - If preflight fails, setup shows the error and lets you retry.
 - In non-interactive mode, `--secret-input-mode ref` is env-backed only.
-  - Set the provider env var in the onboarding process environment.
-  - Inline key flags (for example `--openai-api-key`) require that env var to be set; otherwise onboarding fails fast.
+  - Set the provider env var in the setup process environment.
+  - Inline key flags (for example `--openai-api-key`) require that env var to be set; otherwise setup fails fast.
   - For custom providers, non-interactive `ref` mode stores `models.providers.<id>.apiKey` as `{ source: "env", provider: "default", id: "CUSTOM_API_KEY" }`.
-  - In that custom-provider case, `--custom-api-key` requires `CUSTOM_API_KEY` to be set; otherwise onboarding fails fast.
-- Gateway auth credentials support plaintext and SecretRef choices in interactive onboarding:
+  - In that custom-provider case, `--custom-api-key` requires `CUSTOM_API_KEY` to be set; otherwise setup fails fast.
+- Gateway auth credentials support plaintext and SecretRef choices in interactive setup:
   - Token mode: **Generate/store plaintext token** (default) or **Use SecretRef**.
   - Password mode: plaintext or SecretRef.
 - Non-interactive token SecretRef path: `--gateway-token-ref-env <ENV_VAR>`.
@@ -252,9 +252,9 @@ Typical fields in `~/.openclaw/openclaw.json`:
 
 - `agents.defaults.workspace`
 - `agents.defaults.model` / `models.providers` (if Minimax chosen)
-- `tools.profile` (local onboarding defaults to `"coding"` when unset; existing explicit values are preserved)
+- `tools.profile` (local setup defaults to `"coding"` when unset; existing explicit values are preserved)
 - `gateway.*` (mode, bind, auth, tailscale)
-- `session.dmScope` (local onboarding defaults this to `per-channel-peer` when unset; existing explicit values are preserved)
+- `session.dmScope` (local setup defaults this to `per-channel-peer` when unset; existing explicit values are preserved)
 - `channels.telegram.botToken`, `channels.discord.token`, `channels.signal.*`, `channels.imessage.*`
 - Channel allowlists (Slack, Discord, Matrix, Microsoft Teams) when you opt in during prompts (names resolve to IDs when possible)
 - `skills.install.nodeManager`
@@ -270,7 +270,7 @@ WhatsApp credentials go under `~/.openclaw/credentials/whatsapp/<accountId>/`.
 Sessions are stored under `~/.openclaw/agents/<agentId>/sessions/`.
 
 <Note>
-Some channels are delivered as plugins. When selected during onboarding, the wizard
+Some channels are delivered as plugins. When selected during setup, the wizard
 prompts to install the plugin (npm or local path) before channel configuration.
 </Note>
 
@@ -294,6 +294,6 @@ Signal setup behavior:
 
 ## Related docs
 
-- Onboarding hub: [Onboarding Wizard (CLI)](/start/wizard)
+- Onboarding hub: [Setup Wizard (CLI)](/start/wizard)
 - Automation and scripts: [CLI Automation](/start/wizard-cli-automation)
-- Command reference: [`openclaw onboard`](/cli/onboard)
+- Command reference: [`openclaw setup --wizard`](/cli/setup)

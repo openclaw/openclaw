@@ -1,0 +1,12 @@
+{
+  "id": "synthetic",
+  "providers": ["synthetic"],
+  "providerAuthEnvVars": {
+    "synthetic": ["SYNTHETIC_API_KEY"]
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}
