@@ -280,7 +280,7 @@ async function maybeConfigureDmPolicies(params: {
   resolveAdapter?: (channel: ChannelChoice) => ChannelOnboardingAdapter | undefined;
 }): Promise<OpenClawConfig> {
   const { selection, prompter, accountIdsByChannel } = params;
-  const resolve = params.resolveAdapter;
+  const resolve = params.resolveAdapter ?? (() => undefined);
   const dmPolicies = selection
     .map((channel) => resolve(channel)?.dmPolicy)
     .filter(Boolean) as ChannelOnboardingDmPolicy[];
