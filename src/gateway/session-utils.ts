@@ -887,6 +887,8 @@ export function loadCombinedSessionStoreForGateway(cfg: OpenClawConfig): {
     }
   }
 
+  ensureMainSessionKey(cfg, combined);
+
   const storePath =
     typeof storeConfig === "string" && storeConfig.trim() ? storeConfig.trim() : "(multiple)";
   return { storePath, store: combined };
