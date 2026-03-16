@@ -21,6 +21,12 @@ vi.mock("node:fs/promises", () => ({
       }
     }),
     mkdir: vi.fn(async () => {}),
+    copyFile: vi.fn(async (src: string, dest: string) => {
+      const content = mockFiles.get(src);
+      if (content !== undefined) {
+        mockFiles.set(dest, content);
+      }
+    }),
   },
 }));
 
@@ -153,6 +159,33 @@ describe("oag-memory", () => {
     expect(patterns[0].type).toBe("channel_crash_loop");
     expect(patterns[0].channel).toBe("telegram");
     expect(patterns[0].occurrences).toBe(4);
+  });
+
+  it("recovers from backup when main file is corrupted", async () => {
+    // First save: creates main file (no backup yet)
+    const memory = await loadOagMemory();
+    memory.lifecycles.push({
+      id: "backup-test",
+      startedAt: new Date().toISOString(),
+      stoppedAt: new Date().toISOString(),
+      stopReason: "clean",
+      uptimeMs: 1000,
+      metricsSnapshot: {},
+      incidents: [],
+    });
+    await saveOagMemory(memory);
+
+    // Second save: copies current main file to .bak before overwriting
+    await saveOagMemory(memory);
+
+    // Corrupt main file
+    const mainPath = "/tmp/oag-test/oag-memory.json";
+    mockFiles.set(mainPath, "CORRUPTED{{{");
+
+    // Load should recover from backup
+    const recovered = await loadOagMemory();
+    expect(recovered.lifecycles).toHaveLength(1);
+    expect(recovered.lifecycles[0].id).toBe("backup-test");
   });
 
   it("records evolution and diagnosis", async () => {

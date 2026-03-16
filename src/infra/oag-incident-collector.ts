@@ -2,6 +2,8 @@ import type { OagIncident } from "./oag-memory.js";
 
 const activeIncidents = new Map<string, OagIncident>();
 
+const MAX_ACTIVE_INCIDENTS = 100;
+
 export function recordOagIncident(
   incident: Omit<OagIncident, "firstAt" | "lastAt" | "count">,
 ): void {
@@ -19,6 +21,21 @@ export function recordOagIncident(
       firstAt: now,
       lastAt: now,
     });
+  }
+  if (activeIncidents.size > MAX_ACTIVE_INCIDENTS) {
+    // Evict the oldest incident by firstAt
+    let oldestKey: string | null = null;
+    let oldestTime = Infinity;
+    for (const [k, inc] of activeIncidents) {
+      const t = Date.parse(inc.firstAt);
+      if (t < oldestTime) {
+        oldestTime = t;
+        oldestKey = k;
+      }
+    }
+    if (oldestKey) {
+      activeIncidents.delete(oldestKey);
+    }
   }
 }
 

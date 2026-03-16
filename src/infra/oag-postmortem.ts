@@ -8,6 +8,7 @@ import {
   resolveOagLockStaleMs,
   resolveOagStalePollFactor,
 } from "./oag-config.js";
+import { requestDiagnosis } from "./oag-diagnosis.js";
 import { startEvolutionObservation } from "./oag-evolution-guard.js";
 import { injectEvolutionNote } from "./oag-evolution-notify.js";
 import {
@@ -22,6 +23,8 @@ const log = createSubsystemLogger("oag/postmortem");
 
 // Safety rails
 const MAX_STEP_PERCENT = 50;
+const MAX_EVOLUTION_NOTIFICATIONS_PER_DAY = 3;
+const NOTIFICATION_WINDOW_MS = 24 * 60 * 60_000;
 const MAX_CUMULATIVE_PERCENT = 200;
 const MIN_CRASHES_FOR_ANALYSIS = 2;
 const MIN_PATTERN_OCCURRENCES = 3;
@@ -130,6 +133,12 @@ function analyzePatterns(memory: OagMemory, cfg: OpenClawConfig): EvolutionRecom
   return recommendations;
 }
 
+function hasExceededNotificationLimit(memory: OagMemory): boolean {
+  const cutoff = Date.now() - NOTIFICATION_WINDOW_MS;
+  const recentEvolutions = memory.evolutions.filter((e) => Date.parse(e.appliedAt) > cutoff);
+  return recentEvolutions.length >= MAX_EVOLUTION_NOTIFICATIONS_PER_DAY;
+}
+
 function shouldRunEvolution(memory: OagMemory): boolean {
   if (memory.evolutions.length === 0) {
     return true;
@@ -157,105 +166,148 @@ function buildUserNotification(result: PostmortemResult): string | undefined {
   return parts.join(" ");
 }
 
+let postmortemRunning = false;
+
 export async function runPostRecoveryAnalysis(): Promise<PostmortemResult> {
-  const memory = await loadOagMemory();
-  const cfg = loadConfig();
-  const recentCrashes = getRecentCrashes(memory, ANALYSIS_WINDOW_HOURS);
-
-  const result: PostmortemResult = {
-    analyzed: false,
-    crashCount: recentCrashes.length,
-    patterns: 0,
-    recommendations: [],
-    applied: [],
-    skipped: [],
-  };
-
-  if (recentCrashes.length < MIN_CRASHES_FOR_ANALYSIS) {
-    log.info(
-      `Post-recovery: ${recentCrashes.length} recent crashes (below threshold ${MIN_CRASHES_FOR_ANALYSIS}), skipping analysis`,
-    );
-    return result;
+  if (postmortemRunning) {
+    log.info("Post-recovery: another postmortem is already running, skipping");
+    return {
+      analyzed: false,
+      crashCount: 0,
+      patterns: 0,
+      recommendations: [],
+      applied: [],
+      skipped: [],
+    };
   }
+  postmortemRunning = true;
+  try {
+    const memory = await loadOagMemory();
+    const cfg = loadConfig();
+    const recentCrashes = getRecentCrashes(memory, ANALYSIS_WINDOW_HOURS);
 
-  if (!shouldRunEvolution(memory)) {
-    log.info("Post-recovery: evolution cooldown active, skipping");
-    return result;
-  }
+    const result: PostmortemResult = {
+      analyzed: false,
+      crashCount: recentCrashes.length,
+      patterns: 0,
+      recommendations: [],
+      applied: [],
+      skipped: [],
+    };
 
-  result.analyzed = true;
-  const recommendations = analyzePatterns(memory, cfg);
-  result.recommendations = recommendations;
-  result.patterns = findRecurringIncidentPattern(
-    memory,
-    ANALYSIS_WINDOW_HOURS,
-    MIN_PATTERN_OCCURRENCES,
-  ).length;
-
-  if (recommendations.length === 0) {
-    log.info("Post-recovery: no actionable recommendations from pattern analysis");
-    return result;
-  }
-
-  // Apply low-risk recommendations automatically
-  const applied: EvolutionRecommendation[] = [];
-  const skipped: EvolutionRecommendation[] = [];
-
-  for (const rec of recommendations) {
-    if (rec.risk === "low") {
-      applied.push(rec);
+    if (recentCrashes.length < MIN_CRASHES_FOR_ANALYSIS) {
       log.info(
-        `Post-recovery evolution: ${rec.configPath} ${rec.currentValue} → ${rec.suggestedValue} (${rec.reason})`,
+        `Post-recovery: ${recentCrashes.length} recent crashes (below threshold ${MIN_CRASHES_FOR_ANALYSIS}), skipping analysis`,
       );
-    } else {
-      skipped.push(rec);
-      log.info(
-        `Post-recovery recommendation (needs review): ${rec.configPath} ${rec.currentValue} → ${rec.suggestedValue} (${rec.reason})`,
-      );
+      return result;
     }
-  }
 
-  result.applied = applied;
-  result.skipped = skipped;
+    if (!shouldRunEvolution(memory)) {
+      log.info("Post-recovery: evolution cooldown active, skipping");
+      return result;
+    }
 
-  if (applied.length > 0) {
-    const configChanges = applied.map((r) => ({
-      configPath: r.configPath,
-      value: r.suggestedValue,
-    }));
-    await applyOagConfigChanges(configChanges);
-  }
+    result.analyzed = true;
+    const recommendations = analyzePatterns(memory, cfg);
+    result.recommendations = recommendations;
+    result.patterns = findRecurringIncidentPattern(
+      memory,
+      ANALYSIS_WINDOW_HOURS,
+      MIN_PATTERN_OCCURRENCES,
+    ).length;
 
-  if (applied.length > 0) {
-    await recordEvolution({
-      appliedAt: new Date().toISOString(),
-      source: "adaptive",
-      trigger: `post-recovery analysis (${recentCrashes.length} crashes in ${ANALYSIS_WINDOW_HOURS}h)`,
-      changes: applied.map((r) => ({
+    if (recommendations.length === 0) {
+      log.info("Post-recovery: no actionable recommendations from pattern analysis");
+      // Escalate to agent diagnosis when patterns exist but heuristics produced no recommendations
+      if (result.patterns > 0) {
+        const patternList = findRecurringIncidentPattern(
+          memory,
+          ANALYSIS_WINDOW_HOURS,
+          MIN_PATTERN_OCCURRENCES,
+        );
+        const primary = patternList[0];
+        if (primary) {
+          try {
+            await requestDiagnosis({
+              type: "recurring_pattern",
+              description: `Recurring ${primary.type} pattern (${primary.occurrences} occurrences) with no heuristic recommendation`,
+              patternType: primary.type,
+              channel: primary.channel,
+              occurrences: primary.occurrences,
+            });
+            log.info(
+              "Escalated to agent diagnosis — heuristic analysis found patterns but no actionable recommendations",
+            );
+          } catch (err) {
+            log.warn(`Agent diagnosis request failed: ${String(err)}`);
+          }
+        }
+      }
+      return result;
+    }
+
+    // Apply low-risk recommendations automatically
+    const applied: EvolutionRecommendation[] = [];
+    const skipped: EvolutionRecommendation[] = [];
+
+    for (const rec of recommendations) {
+      if (rec.risk === "low") {
+        applied.push(rec);
+        log.info(
+          `Post-recovery evolution: ${rec.configPath} ${rec.currentValue} → ${rec.suggestedValue} (${rec.reason})`,
+        );
+      } else {
+        skipped.push(rec);
+        log.info(
+          `Post-recovery recommendation (needs review): ${rec.configPath} ${rec.currentValue} → ${rec.suggestedValue} (${rec.reason})`,
+        );
+      }
+    }
+
+    result.applied = applied;
+    result.skipped = skipped;
+
+    if (applied.length > 0) {
+      const configChanges = applied.map((r) => ({
         configPath: r.configPath,
-        from: r.currentValue,
-        to: r.suggestedValue,
-      })),
-      outcome: "pending",
-    });
-    await startEvolutionObservation({
-      appliedAt: new Date().toISOString(),
-      rollbackChanges: applied.map((r) => ({
-        configPath: r.configPath,
-        previousValue: r.currentValue,
-      })),
-    });
+        value: r.suggestedValue,
+      }));
+      await applyOagConfigChanges(configChanges);
+    }
+
+    if (applied.length > 0) {
+      await recordEvolution({
+        appliedAt: new Date().toISOString(),
+        source: "adaptive",
+        trigger: `post-recovery analysis (${recentCrashes.length} crashes in ${ANALYSIS_WINDOW_HOURS}h)`,
+        changes: applied.map((r) => ({
+          configPath: r.configPath,
+          from: r.currentValue,
+          to: r.suggestedValue,
+        })),
+        outcome: "pending",
+      });
+      await startEvolutionObservation({
+        appliedAt: new Date().toISOString(),
+        rollbackChanges: applied.map((r) => ({
+          configPath: r.configPath,
+          previousValue: r.currentValue,
+        })),
+      });
+    }
+
+    result.userNotification = buildUserNotification(result);
+
+    if (result.userNotification && applied.length > 0 && !hasExceededNotificationLimit(memory)) {
+      const evolutionId = `ev-${Date.now()}`;
+      await injectEvolutionNote({
+        message: result.userNotification,
+        evolutionId,
+      });
+    }
+
+    return result;
+  } finally {
+    postmortemRunning = false;
   }
-
-  result.userNotification = buildUserNotification(result);
-
-  if (result.userNotification && applied.length > 0) {
-    const evolutionId = `ev-${Date.now()}`;
-    await injectEvolutionNote({
-      message: result.userNotification,
-      evolutionId,
-    });
-  }
-
-  return result;
 }

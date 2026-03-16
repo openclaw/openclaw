@@ -76,6 +76,70 @@ The current branch wires OAG-related recovery into several paths:
 - Channel monitors publish connected/disconnected and inbound-activity status so health policy can distinguish a dead socket from a quiet but healthy channel.
 - Heartbeat and session updates can localize OAG user-visible notes based on the session’s recent reply language.
 
+## Self-Evolution Operations
+
+OAG automatically analyzes crash patterns and adjusts its own parameters after gateway restarts. This section explains how to inspect and manage the evolution system.
+
+### View evolution history
+
+```bash
+# View all evolution records
+cat ~/.openclaw/sentinel/oag-memory.json | python3 -m json.tool | grep -A 10 ‘"evolutions"’
+
+# Or with jq
+cat ~/.openclaw/sentinel/oag-memory.json | jq ‘.evolutions’
+```
+
+Each evolution record shows:
+
+- `appliedAt`: when the change was applied
+- `source`: `adaptive` (heuristic) or `agent-diagnosis` (AI-assisted)
+- `changes`: list of parameter path + old/new values
+- `outcome`: `effective`, `reverted`, or `pending`
+
+### View diagnosis history
+
+```bash
+cat ~/.openclaw/sentinel/oag-memory.json | jq ‘.diagnoses’
+```
+
+### Manual rollback
+
+If an evolution caused issues, manually reset the parameter:
+
+```bash
+# Check current value
+openclaw config get gateway.oag.delivery.recoveryBudgetMs
+
+# Reset to default
+openclaw config set gateway.oag.delivery.recoveryBudgetMs 60000
+```
+
+### View active observation
+
+After an evolution is applied, OAG monitors for 1 hour. To check:
+
+```bash
+cat ~/.openclaw/sentinel/oag-memory.json | jq ‘.activeObservation’
+```
+
+- `null`: no active observation
+- Object with `evolutionAppliedAt` and `windowMs`: observation in progress
+
+### Disable auto-evolution
+
+To prevent OAG from automatically adjusting parameters, remove the crash history:
+
+```bash
+# Clear all OAG memory (evolution + diagnosis + lifecycle history)
+rm ~/.openclaw/sentinel/oag-memory.json
+
+# Or just clear evolutions
+cat ~/.openclaw/sentinel/oag-memory.json | jq ‘.evolutions = []’ > /tmp/oag-mem.json && mv /tmp/oag-mem.json ~/.openclaw/sentinel/oag-memory.json
+```
+
+OAG will not evolve if there are fewer than 2 crashes in the last 48 hours, and it respects a 4-hour cooldown between evolutions.
+
 ## Basic troubleshooting flow
 
 1. Run `openclaw status` for a quick local readout.

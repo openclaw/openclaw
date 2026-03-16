@@ -35,6 +35,7 @@ import { createExecApprovalForwarder } from "../infra/exec-approval-forwarder.js
 import { onHeartbeatEvent } from "../infra/heartbeat-events.js";
 import { startHeartbeatRunner, type HeartbeatRunner } from "../infra/heartbeat-runner.js";
 import { getMachineDisplayName } from "../infra/machine-name.js";
+import { startFileWatcher, stopFileWatcher } from "../infra/oag-event-bus.js";
 import { checkEvolutionHealth } from "../infra/oag-evolution-guard.js";
 import { collectActiveIncidents, recordOagIncident } from "../infra/oag-incident-collector.js";
 import { recordLifecycleShutdown } from "../infra/oag-memory.js";
@@ -1089,6 +1090,13 @@ export async function startGatewayServer(
       });
 
   if (!minimalTestGateway) {
+    const channelHealthStatePath = `${process.env.HOME ?? ""}/.openclaw/sentinel/channel-health-state.json`;
+    startFileWatcher(channelHealthStatePath, () => {
+      // File watcher callback — future status commands will use cached snapshot
+    });
+  }
+
+  if (!minimalTestGateway) {
     void cron.start().catch((err) => logCron.error(`failed to start: ${String(err)}`));
   }
 
@@ -1462,6 +1470,7 @@ export async function startGatewayServer(
         clearInterval(evolutionCheckInterval);
         evolutionCheckInterval = null;
       }
+      stopFileWatcher();
       await close(opts);
     },
   };

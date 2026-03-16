@@ -90,21 +90,39 @@ function createEmptyMemory(): OagMemory {
 }
 
 export async function loadOagMemory(): Promise<OagMemory> {
+  const filePath = resolveMemoryPath();
+  // Try main file first
   try {
-    const raw = await fs.readFile(resolveMemoryPath(), "utf8");
+    const raw = await fs.readFile(filePath, "utf8");
     const parsed = JSON.parse(raw) as OagMemory;
-    if (!parsed.version || !Array.isArray(parsed.lifecycles)) {
-      return createEmptyMemory();
+    if (parsed.version && Array.isArray(parsed.lifecycles)) {
+      return parsed;
     }
-    return parsed;
   } catch {
-    return createEmptyMemory();
+    // Main file missing or corrupt
   }
+  // Fallback to backup
+  try {
+    const raw = await fs.readFile(`${filePath}.bak`, "utf8");
+    const parsed = JSON.parse(raw) as OagMemory;
+    if (parsed.version && Array.isArray(parsed.lifecycles)) {
+      return parsed;
+    }
+  } catch {
+    // Backup also missing or corrupt
+  }
+  return createEmptyMemory();
 }
 
 export async function saveOagMemory(memory: OagMemory): Promise<void> {
   const filePath = resolveMemoryPath();
   await fs.mkdir(path.dirname(filePath), { recursive: true });
+  // Backup existing file before write
+  try {
+    await fs.copyFile(filePath, `${filePath}.bak`);
+  } catch {
+    // No existing file to backup — first write
+  }
   const tmp = `${filePath}.${process.pid}.tmp`;
   await fs.writeFile(tmp, JSON.stringify(memory, null, 2) + "\n", "utf8");
   await fs.rename(tmp, filePath);
