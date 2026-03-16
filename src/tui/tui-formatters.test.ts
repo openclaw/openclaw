@@ -355,4 +355,18 @@ describe("sanitizeRenderableText", () => {
     // Package name in code block should be preserved exactly
     expect(sanitized).toContain(packageName);
   });
+
+  it("preserves long tokens inside fenced code blocks with CRLF line endings", () => {
+    // Regression test: findCodeFenceRegions() splits on \n, leaving a trailing \r
+    // on each line when input uses CRLF (\r\n). FENCE_CLOSE_RE only allows [ \t]*$
+    // so a closing fence of "```\r" was not recognized, causing the block to be
+    // treated as unclosed and long-token normalization to break prose after it.
+    const packageName = "ubuntu-budgie-desktop-environment"; // exactly 33 chars, would be split
+    // Construct CRLF input: opening fence, content line, closing fence — all with \r\n
+    const crlfInput = "```bash\r\napt install " + packageName + "\r\n```\r\n";
+    const sanitized = sanitizeRenderableText(crlfInput);
+
+    // The package name must be preserved verbatim — not split at char 32
+    expect(sanitized).toContain(packageName);
+  });
 });

@@ -168,7 +168,11 @@ function findCodeFenceRegions(text: string): Array<[number, number]> {
 
   while (i < lines.length) {
     const line = lines[i];
-    const openMatch = FENCE_OPEN_RE.exec(line);
+    // Strip a trailing \r so that CRLF input (\r\n line endings) is handled
+    // correctly — FENCE_OPEN_RE and FENCE_CLOSE_RE use `$` which does not
+    // match a literal \r left over after splitting on \n.
+    const lineNormalized = line.replace(/\r$/, "");
+    const openMatch = FENCE_OPEN_RE.exec(lineNormalized);
     if (openMatch) {
       // Group 2 matches backtick fence run; group 4 matches tilde fence run.
       const fenceRun = openMatch[2] ?? openMatch[4]; // e.g. "```" or "~~~~"
@@ -184,7 +188,9 @@ function findCodeFenceRegions(text: string): Array<[number, number]> {
       let closed = false;
       while (i < lines.length) {
         const inner = lines[i];
-        const closeMatch = FENCE_CLOSE_RE.exec(inner);
+        // Strip trailing \r for CRLF compatibility (same as opening fence)
+        const innerNormalized = inner.replace(/\r$/, "");
+        const closeMatch = FENCE_CLOSE_RE.exec(innerNormalized);
         if (closeMatch && closeMatch[2][0] === fenceChar && closeMatch[2].length >= fenceLen) {
           // Found the closing fence — record the region
           const blockEnd = charPos + inner.length;
