@@ -61,8 +61,8 @@ For Claude marketplace installs, list the marketplace first, then install by
 marketplace entry name:
 
 ```bash
-openclaw plugins marketplace list claude-plugins-official
-openclaw plugins install superpowers@claude-plugins-official
+openclaw plugins marketplace list <marketplace-name>
+openclaw plugins install <plugin-name>@<marketplace-name>
 ```
 
 OpenClaw resolves known Claude marketplace names from

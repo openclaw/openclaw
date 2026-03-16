@@ -259,8 +259,8 @@ openclaw plugins install ./my-codex-bundle
 openclaw plugins install ./my-claude-bundle
 openclaw plugins install ./my-cursor-bundle
 openclaw plugins install ./my-bundle.tgz
-openclaw plugins marketplace list claude-plugins-official
-openclaw plugins install superpowers@claude-plugins-official
+openclaw plugins marketplace list <marketplace-name>
+openclaw plugins install <plugin-name>@<marketplace-name>
 openclaw plugins info my-bundle
 ```
 
