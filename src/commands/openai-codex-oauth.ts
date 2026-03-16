@@ -24,13 +24,13 @@ async function detectOpenAICodexCallbackPortConflict(): Promise<string | null> {
     if (!isErrno(err) || err.code !== "EADDRINUSE") {
       throw err;
     }
-    return (await describePortOwner(OPENAI_CODEX_CALLBACK_PORT)) ?? null;
+    return (await describePortOwner(OPENAI_CODEX_CALLBACK_PORT)) ?? "";
   }
 }
 
 function buildOpenAICodexCallbackPortConflictNote(details?: string | null): string {
   return [
-    "Detected another local process already listening on localhost:1455.",
+    `Detected another local process already listening on localhost:${OPENAI_CODEX_CALLBACK_PORT}.`,
     "OpenAI Codex browser callback will not complete automatically in this state.",
     "Finish sign-in in the browser, then paste the full redirect URL back here.",
     ...(details ? ["", "Port listener details:", details] : []),
@@ -93,8 +93,8 @@ export async function loginOpenAICodexOAuth(params: {
       onProgress: (msg: string) => spin.update(msg),
       onManualCodeInput:
         callbackPortConflict !== null
-          ? async () =>
-              await onPrompt({
+          ? () =>
+              onPrompt({
                 message: "Paste the authorization code (or full redirect URL):",
               })
           : undefined,

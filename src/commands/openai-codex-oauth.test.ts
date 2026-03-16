@@ -167,6 +167,39 @@ describe("loginOpenAICodexOAuth", () => {
     );
   });
 
+  it("enables immediate manual fallback when the callback port is occupied without owner details", async () => {
+    const creds = {
+      provider: "openai-codex" as const,
+      access: "access-token",
+      refresh: "refresh-token",
+      expires: Date.now() + 60_000,
+      email: "user@example.com",
+    };
+    mocks.tryListenOnPort.mockRejectedValue(
+      Object.assign(new Error("address in use"), { code: "EADDRINUSE" }),
+    );
+    mocks.describePortOwner.mockResolvedValue(undefined);
+    mocks.createVpsAwareOAuthHandlers.mockReturnValue({
+      onAuth: vi.fn(),
+      onPrompt: vi.fn(),
+    });
+    mocks.loginOpenAICodex.mockResolvedValue(creds);
+
+    const { prompter } = await runCodexOAuth({ isRemote: false });
+
+    expect(mocks.loginOpenAICodex.mock.calls[0]?.[0]?.onManualCodeInput).toEqual(
+      expect.any(Function),
+    );
+    expect(prompter.note).toHaveBeenCalledWith(
+      expect.stringContaining("localhost:1455"),
+      "OpenAI Codex OAuth",
+    );
+    expect(prompter.note).not.toHaveBeenCalledWith(
+      expect.stringContaining("Port listener details:"),
+      "OpenAI Codex OAuth",
+    );
+  });
+
   it("skips localhost callback preflight in remote mode", async () => {
     const creds = {
       provider: "openai-codex" as const,
