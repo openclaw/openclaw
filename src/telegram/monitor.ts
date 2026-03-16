@@ -184,6 +184,7 @@ export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
       accountId: account.accountId,
       runtime: opts.runtime,
       proxyFetch,
+      network: account.config.network,
       abortSignal: opts.abortSignal,
       runnerOptions: createTelegramRunnerOptions(cfg),
       getLastUpdateId: () => lastUpdateId,

@@ -54,6 +54,8 @@ export type TelegramBotOptions = {
   mediaMaxMb?: number;
   replyToMode?: ReplyToMode;
   proxyFetch?: typeof fetch;
+  /** Pre-resolved fetch to reuse across bot recreations (preserves sticky IPv4 fallback state). */
+  resolvedFetch?: typeof fetch;
   config?: OpenClawConfig;
   /** Signal to abort in-flight Telegram API fetch requests (e.g. getUpdates) on shutdown. */
   fetchAbortSignal?: AbortSignal;
@@ -132,9 +134,13 @@ export function createTelegramBot(opts: TelegramBotOptions) {
     : null;
   const telegramCfg = account.config;
 
-  const fetchImpl = resolveTelegramFetch(opts.proxyFetch, {
-    network: telegramCfg.network,
-  }) as unknown as ApiClientOptions["fetch"];
+  // Reuse pre-resolved fetch when provided to preserve sticky IPv4 fallback state
+  // across polling restarts. Without this, each bot recreation resets the sticky dispatcher,
+  // causing repeated IPv6 connect timeouts on hosts with unstable IPv6 routes.
+  const fetchImpl = (opts.resolvedFetch ??
+    resolveTelegramFetch(opts.proxyFetch, {
+      network: telegramCfg.network,
+    })) as unknown as ApiClientOptions["fetch"];
   const shouldProvideFetch = Boolean(fetchImpl);
   // grammY's ApiClientOptions types still track `node-fetch` types; Node 22+ global fetch
   // (undici) is structurally compatible at runtime but not assignable in TS.

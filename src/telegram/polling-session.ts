@@ -1,9 +1,11 @@
 import { type RunOptions, run } from "@grammyjs/runner";
+import type { TelegramNetworkConfig } from "../config/types.telegram.js";
 import { computeBackoff, sleepWithAbort } from "../infra/backoff.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { formatDurationPrecise } from "../infra/format-time/format-duration.ts";
 import { withTelegramApiErrorLogging } from "./api-logging.js";
 import { createTelegramBot } from "./bot.js";
+import { resolveTelegramFetch } from "./fetch.js";
 import { isRecoverableTelegramNetworkError } from "./network-errors.js";
 
 const TELEGRAM_POLL_RESTART_POLICY = {
@@ -42,6 +44,8 @@ type TelegramPollingSessionOpts = {
   accountId: string;
   runtime: Parameters<typeof createTelegramBot>[0]["runtime"];
   proxyFetch: Parameters<typeof createTelegramBot>[0]["proxyFetch"];
+  /** Telegram account network config; used to resolve transport once for the session. */
+  network?: TelegramNetworkConfig;
   abortSignal?: AbortSignal;
   runnerOptions: RunOptions<unknown>;
   getLastUpdateId: () => number | null;
@@ -55,8 +59,14 @@ export class TelegramPollingSession {
   #forceRestarted = false;
   #activeRunner: ReturnType<typeof run> | undefined;
   #activeFetchAbort: AbortController | undefined;
+  // Resolve fetch once so sticky IPv4 fallback state survives polling restarts.
+  #sharedFetch: typeof fetch;
 
-  constructor(private readonly opts: TelegramPollingSessionOpts) {}
+  constructor(private readonly opts: TelegramPollingSessionOpts) {
+    this.#sharedFetch = resolveTelegramFetch(opts.proxyFetch, {
+      network: opts.network,
+    });
+  }
 
   get activeRunner() {
     return this.#activeRunner;
@@ -128,6 +138,7 @@ export class TelegramPollingSession {
         token: this.opts.token,
         runtime: this.opts.runtime,
         proxyFetch: this.opts.proxyFetch,
+        resolvedFetch: this.#sharedFetch,
         config: this.opts.config,
         accountId: this.opts.accountId,
         fetchAbortSignal: fetchAbortController.signal,
