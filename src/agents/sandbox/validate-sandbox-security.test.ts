@@ -183,6 +183,14 @@ describe("validateBindMounts", () => {
     ).not.toThrow();
   });
 
+  it("enforces blocked host-path policy even when allowed roots include the path", () => {
+    expect(() =>
+      validateBindMounts(["/etc/passwd:/mnt/passwd:ro"], {
+        allowedSourceRoots: ["/etc"],
+      }),
+    ).toThrow(/blocked path "\/etc"/);
+  });
+
   it("allows bind sources outside allowed roots with explicit dangerous override", () => {
     expect(() =>
       validateBindMounts(["/opt/external:/data:ro"], {

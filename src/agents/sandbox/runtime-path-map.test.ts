@@ -58,6 +58,27 @@ describe("runtime path map", () => {
     });
   });
 
+  it("translates docker config allowedSourceRoots entries", () => {
+    expect(
+      translateSandboxDockerConfigToHost(
+        {
+          image: "openclaw-sandbox:tony",
+          containerPrefix: "openclaw-sbx-",
+          workdir: "/workspace",
+          readOnlyRoot: false,
+          tmpfs: ["/tmp"],
+          network: "none",
+          capDrop: ["ALL"],
+          env: { LANG: "C.UTF-8" },
+          allowedSourceRoots: ["/shared-workspace", "/tmp/local-only"],
+        },
+        ENTRIES,
+      ),
+    ).toMatchObject({
+      allowedSourceRoots: ["/Users/franco/.openclaw/workspace", "/tmp/local-only"],
+    });
+  });
+
   it("collects only runtime-mapped bind sources for sandbox allowlists", () => {
     expect(
       collectTranslatedSandboxBindSourceRoots(

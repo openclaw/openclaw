@@ -395,7 +395,7 @@ export async function spawnSubagentDirect(
   if (!requestedAgentId && requestedTeamId) {
     try {
       const { resolveSpecialistTarget } =
-        await import("../operator-control/specialist-resolver.js");
+        await import("../operator-control/specialist-resolver.runtime.js");
       const resolved = resolveSpecialistTarget({
         requesterId: requesterAgentId,
         teamId: requestedTeamId,

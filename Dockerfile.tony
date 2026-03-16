@@ -49,7 +49,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # ─── Python packages (persistent across container restarts) ──────────────────
 # requests — memory-autosync.py, API calls
 # openai   — LLM extraction in memory pipeline
-RUN pip3 install --break-system-packages requests openai
+ARG OPENCLAW_TONY_PIP_PACKAGES="requests openai"
+RUN pip3 install --break-system-packages ${OPENCLAW_TONY_PIP_PACKAGES}
 
 # ─── Homebrew (Linuxbrew — skill installer, package management) ──────────────
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -65,19 +66,22 @@ ENV HOMEBREW_NO_AUTO_UPDATE=1
 
 # ─── acpx CLI (ACP runtime bridge) ───────────────────────────────────────────
 ARG OPENCLAW_ACPX_VERSION=0.1.15
-RUN npm install -g "acpx@${OPENCLAW_ACPX_VERSION}" vercel \
+ARG OPENCLAW_TONY_NPM_PACKAGES="vercel"
+RUN npm install -g "acpx@${OPENCLAW_ACPX_VERSION}" ${OPENCLAW_TONY_NPM_PACKAGES} \
   && acpx --version
 # ─── kubectl ─────────────────────────────────────────────────────────────────
+ARG OPENCLAW_KUBECTL_VERSION=1.30.0
 RUN set -eux; \
     ARCH="$(dpkg --print-architecture)"; \
-    curl -LO "https://dl.k8s.io/release/v1.30.0/bin/linux/${ARCH}/kubectl" \
+    curl -LO "https://dl.k8s.io/release/v${OPENCLAW_KUBECTL_VERSION}/bin/linux/${ARCH}/kubectl" \
   && install -o root -g root -m 0755 kubectl /usr/local/bin/kubectl \
   && rm kubectl
 
 # ─── kustomize ───────────────────────────────────────────────────────────────
+ARG OPENCLAW_KUSTOMIZE_VERSION=5.4.1
 RUN set -eux; \
     ARCH="$(dpkg --print-architecture)"; \
-    curl -Lo kustomize.tar.gz "https://github.com/kubernetes-sigs/kustomize/releases/download/kustomize%2Fv5.4.1/kustomize_v5.4.1_linux_${ARCH}.tar.gz" \
+    curl -Lo kustomize.tar.gz "https://github.com/kubernetes-sigs/kustomize/releases/download/kustomize%2Fv${OPENCLAW_KUSTOMIZE_VERSION}/kustomize_v${OPENCLAW_KUSTOMIZE_VERSION}_linux_${ARCH}.tar.gz" \
   && tar xzf kustomize.tar.gz \
   && install kustomize /usr/local/bin/kustomize \
   && rm kustomize kustomize.tar.gz

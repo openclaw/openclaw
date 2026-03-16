@@ -163,6 +163,7 @@ export async function ensureSandboxBrowser(params: {
     hostWorkspaceDir,
     hostAgentWorkspaceDir,
     ...collectTranslatedSandboxBindSourceRoots(browserDockerCfg.binds),
+    ...(hostBrowserDockerCfg.allowedSourceRoots ?? []),
   ];
   const expectedHash = computeSandboxBrowserConfigHash({
     docker: hostBrowserDockerCfg,

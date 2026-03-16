@@ -2,7 +2,7 @@ import fs from "node:fs";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { ZodError } from "zod";
+import { ZodError, z } from "zod";
 import { openBoundaryFileSync } from "../infra/boundary-file-read.js";
 import {
   isRequestBodyLimitError,
@@ -11,6 +11,10 @@ import {
 } from "../infra/http-body.js";
 import { isWithinDir } from "../infra/path-safety.js";
 import { compileOperatorAgentRegistry } from "../operator-control/agent-registry.js";
+import {
+  operatorContextRefSchema,
+  operatorReplyTargetSchema,
+} from "../operator-control/contracts.js";
 import { syncOperatorTaskToDeb } from "../operator-control/deb-sync.js";
 import { submitOperatorTaskAndDispatch } from "../operator-control/dispatch.js";
 import {
@@ -40,7 +44,9 @@ import {
   isOperatorWorkerClientError,
   listOperatorWorkerTasks,
 } from "../operator-control/worker-client.js";
+import { resolveOperatorReceiptTemplate } from "../operator-control/worker-status.js";
 import { safeEqualSecret } from "../security/secret-equal.js";
+import { DELEGATED_MESSAGE_PATH } from "./angela-http.js";
 import type { AuthRateLimiter } from "./auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
 import { buildControlUiCspHeader } from "./control-ui-csp.js";
@@ -93,6 +99,7 @@ const MISSION_CONTROL_BOOTSTRAP_PATH = `${MISSION_CONTROL_BASE_PATH}/__openclaw/
 const MISSION_CONTROL_API_BASE_PATH = `${MISSION_CONTROL_BASE_PATH}/api`;
 const MISSION_CONTROL_ACPX_MAX_BODY_BYTES = 2 * 1024 * 1024;
 const MISSION_CONTROL_DEB_MAX_BODY_BYTES = 512 * 1024;
+const PROJECT_OPS_TASK_SCHEMA_VERSION = "PawAndOrderTaskV1" as const;
 
 const STATIC_ASSET_EXTENSIONS = new Set([
   ".js",
@@ -108,6 +115,30 @@ const STATIC_ASSET_EXTENSIONS = new Set([
   ".ico",
   ".txt",
 ]);
+
+const missionControlProjectOpsTaskSchema = z.object({
+  schema: z.literal(PROJECT_OPS_TASK_SCHEMA_VERSION).default(PROJECT_OPS_TASK_SCHEMA_VERSION),
+  task_id: z.string().trim().min(1),
+  run_id: z.string().trim().min(1),
+  objective: z.string().trim().min(1),
+  capability: z.string().trim().min(1),
+  team_id: z.string().trim().min(1).nullable().optional(),
+  team_lead: z.string().trim().min(1).nullable().optional(),
+  alias: z.string().trim().min(1).nullable().optional(),
+  specialist_role: z.string().trim().min(1).nullable().optional(),
+  dog_role: z.string().trim().min(1).nullable().optional(),
+  artifact_type: z.string().trim().min(1).nullable().optional(),
+  channel_target: z.string().trim().min(1).nullable().optional(),
+  delivery_mode: z.string().trim().min(1).nullable().optional(),
+  requester: z.object({
+    id: z.string().trim().min(1),
+    kind: z.enum(["operator", "agent", "system"]).default("operator"),
+  }),
+  acceptance_criteria: z.array(z.string().trim().min(1)).min(1),
+  context_refs: z.array(operatorContextRefSchema).default([]),
+  reply_to: operatorReplyTargetSchema.nullable().optional(),
+  inputs: z.record(z.string(), z.unknown()).default({}),
+});
 
 type MissionControlRootState =
   | { kind: "resolved"; path: string }
@@ -187,6 +218,58 @@ function isSafeRelativePath(relPath: string): boolean {
     return false;
   }
   return true;
+}
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return typeof value === "object" && value !== null && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null;
+}
+
+function normalizeBaseUrl(value: string | undefined): string | null {
+  const trimmed = value?.trim();
+  if (!trimmed) {
+    return null;
+  }
+  return trimmed.replace(/\/+$/u, "");
+}
+
+function readMessageFromPayload(payload: unknown): string | null {
+  const record = asRecord(payload);
+  if (!record) {
+    return null;
+  }
+  for (const key of ["message", "status", "output", "error"]) {
+    const value = record[key];
+    if (typeof value === "string" && value.trim()) {
+      return value.trim();
+    }
+  }
+  return null;
+}
+
+function resolveMissionControlDelegatedTransportBaseUrl(): string | null {
+  return normalizeBaseUrl(
+    process.env.OPENCLAW_OPERATOR_INTERNAL_CONTROL_URL ??
+      process.env.OPENCLAW_OPERATOR_CONTROL_PLANE_URL ??
+      process.env.OPENCLAW_OPERATOR_ANGELA_URL,
+  );
+}
+
+function resolveMissionControlDelegatedTransportSharedSecret(): string | null {
+  const secret =
+    process.env.OPENCLAW_OPERATOR_INTERNAL_CONTROL_SHARED_SECRET?.trim() ||
+    process.env.OPENCLAW_OPERATOR_ANGELA_SHARED_SECRET?.trim() ||
+    process.env.OPENCLAW_ANGELA_SHARED_SECRET?.trim();
+  return secret || null;
+}
+
+function buildOperatorReceiptUrl(taskId: string): string | null {
+  const template = resolveOperatorReceiptTemplate();
+  if (!template) {
+    return null;
+  }
+  return template.replace(/\{taskId\}/gu, encodeURIComponent(taskId));
 }
 
 function respondHeadForFile(req: IncomingMessage, res: ServerResponse, filePath: string): boolean {
@@ -385,6 +468,140 @@ function projectOpsAllowHeader(routePath: string): string {
   return routePath === "/project-ops/ready" ? "GET, HEAD" : "POST";
 }
 
+async function handleMissionControlProjectOpsTaskRequest(params: {
+  req: IncomingMessage;
+  res: ServerResponse;
+}): Promise<boolean> {
+  const { req, res } = params;
+
+  try {
+    const payload = await readJsonRequestBody(req, MISSION_CONTROL_DEB_MAX_BODY_BYTES);
+    const parsed = missionControlProjectOpsTaskSchema.parse(payload);
+    const delegatedBaseUrl = resolveMissionControlDelegatedTransportBaseUrl();
+    if (!delegatedBaseUrl) {
+      respondJson(res, 503, req, {
+        error: {
+          message: "Delegated project-ops control path is not configured",
+        },
+      });
+      return true;
+    }
+
+    const callbackUrl = buildOperatorReceiptUrl(parsed.task_id);
+    if (!callbackUrl) {
+      respondJson(res, 503, req, {
+        error: {
+          message: "Operator receipt callback URL is not configured",
+        },
+      });
+      return true;
+    }
+
+    const specialistRole = parsed.specialist_role?.trim() || parsed.dog_role?.trim() || "deb";
+    const dogRole = parsed.dog_role?.trim() || specialistRole;
+    const response = await fetch(`${delegatedBaseUrl}${DELEGATED_MESSAGE_PATH}`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        accept: "application/json",
+        ...(resolveMissionControlDelegatedTransportSharedSecret()
+          ? {
+              authorization: `Bearer ${resolveMissionControlDelegatedTransportSharedSecret()}`,
+            }
+          : {}),
+      },
+      body: JSON.stringify({
+        schema: "AngelaTaskEnvelopeV1",
+        task_id: parsed.task_id,
+        run_id: parsed.run_id,
+        callback_url: callbackUrl,
+        receipt_schema: "AngelaTaskReceiptV1",
+        objective: parsed.objective,
+        capability: parsed.capability,
+        team_id: parsed.team_id?.trim() || "project-ops",
+        team_lead: "deb",
+        alias: "deb",
+        requester: parsed.requester,
+        acceptance_criteria: parsed.acceptance_criteria,
+        context_refs: parsed.context_refs,
+        inputs: {
+          ...parsed.inputs,
+          specialist_role: specialistRole,
+          dog_role: dogRole,
+          artifact_type: parsed.artifact_type ?? null,
+          channel_target: parsed.channel_target ?? null,
+          delivery_mode: parsed.delivery_mode ?? null,
+          requested_alias: parsed.alias ?? null,
+          upstream_task_id: parsed.task_id,
+          upstream_run_id: parsed.run_id,
+          paw_and_order: true,
+          orchestration_source: "mission-control-project-ops-task",
+        },
+        reply_to: parsed.reply_to ?? null,
+        execution: {
+          transport: "delegated-http",
+          runtime: "subagent",
+          durable: true,
+        },
+      }),
+    });
+
+    const rawPayload = await response.text();
+    let upstreamPayload: unknown = null;
+    try {
+      upstreamPayload = rawPayload.trim() ? (JSON.parse(rawPayload) as unknown) : null;
+    } catch {
+      upstreamPayload = rawPayload.trim() || null;
+    }
+
+    if (!response.ok) {
+      respondJson(res, response.status, req, {
+        error: {
+          message:
+            readMessageFromPayload(upstreamPayload) ??
+            (typeof upstreamPayload === "string" && upstreamPayload ? upstreamPayload : null) ??
+            `Project-ops task dispatch failed (${response.status} ${response.statusText})`,
+        },
+      });
+      return true;
+    }
+
+    respondJson(res, 202, req, {
+      ...asRecord(upstreamPayload),
+      ok: true,
+      status: "accepted",
+      owner: "deb",
+      agentId: "deb",
+      taskId: parsed.task_id,
+      runId: parsed.run_id,
+      specialistRole,
+      dogRole,
+      callbackRegistered: true,
+    });
+    return true;
+  } catch (error) {
+    if (error instanceof ZodError) {
+      respondValidationError(res, req, error);
+      return true;
+    }
+    if (error instanceof MissionControlApiRequestError) {
+      respondJson(res, error.statusCode, req, {
+        error: {
+          message: error.message,
+        },
+      });
+      return true;
+    }
+    respondJson(res, 502, req, {
+      error: {
+        message:
+          error instanceof Error ? error.message : "Project-ops task dispatch request failed",
+      },
+    });
+    return true;
+  }
+}
+
 async function handleMissionControlProjectOpsProxyRequest(params: {
   req: IncomingMessage;
   res: ServerResponse;
@@ -408,6 +625,10 @@ async function handleMissionControlProjectOpsProxyRequest(params: {
 
   if (!(await authorizeProjectOpsProxyRequest({ req, res, authContext }))) {
     return true;
+  }
+
+  if (routePath === "/project-ops/task") {
+    return await handleMissionControlProjectOpsTaskRequest({ req, res });
   }
 
   const debBaseUrl = resolveDirectDebBaseUrl();

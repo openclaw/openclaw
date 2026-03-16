@@ -131,6 +131,7 @@ export const SandboxDockerSchema = z
     dns: z.array(z.string()).optional(),
     extraHosts: z.array(z.string()).optional(),
     binds: z.array(z.string()).optional(),
+    allowedSourceRoots: z.array(z.string()).optional(),
     dangerouslyAllowReservedContainerTargets: z.boolean().optional(),
     dangerouslyAllowExternalBindSources: z.boolean().optional(),
     dangerouslyAllowContainerNamespaceJoin: z.boolean().optional(),
@@ -157,6 +158,27 @@ export const SandboxDockerSchema = z
             message:
               `Sandbox security: bind mount "${bind}" uses a non-absolute source path "${source}". ` +
               "Only absolute POSIX paths are supported for sandbox binds.",
+          });
+        }
+      }
+    }
+    if (data.allowedSourceRoots) {
+      for (let i = 0; i < data.allowedSourceRoots.length; i += 1) {
+        const root = data.allowedSourceRoots[i]?.trim() ?? "";
+        if (!root) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ["allowedSourceRoots", i],
+            message:
+              "Sandbox security: allowedSourceRoots entry must be a non-empty absolute POSIX path.",
+          });
+          continue;
+        }
+        if (!root.startsWith("/")) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ["allowedSourceRoots", i],
+            message: `Sandbox security: allowedSourceRoots entry "${root}" is not an absolute POSIX path.`,
           });
         }
       }

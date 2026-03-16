@@ -825,7 +825,9 @@ describe("operator task dispatch", () => {
         actionResponse: {
           ok: true,
           status: "accepted",
-          output: "Paw and Order task accepted for jeffy",
+          output: "Deb accepted task for jeffy",
+          owner: "deb",
+          agentId: "deb",
         },
         actionStatus: 202,
         actionStatusText: "Accepted",
@@ -834,8 +836,8 @@ describe("operator task dispatch", () => {
 
       const result = await withEnvAsync(
         {
-          OPENCLAW_OPERATOR_DEB_URL: "http://deb.internal:3010",
-          OPENCLAW_OPERATOR_DEB_SHARED_SECRET: "top-secret-deb",
+          OPENCLAW_OPERATOR_CONTROL_PLANE_URL: "http://tonya.internal:18789",
+          OPENCLAW_OPERATOR_CONTROL_PLANE_SHARED_SECRET: "top-secret-control-plane",
         },
         async () =>
           await submitOperatorTaskAndDispatch({
@@ -857,13 +859,15 @@ describe("operator task dispatch", () => {
       expect(result.dispatch).toMatchObject({
         attempted: true,
         accepted: true,
-        endpoint: "http://deb.internal:3010/task",
+        endpoint: "http://tonya.internal:18789/mission-control/api/project-ops/task",
         statusCode: 202,
       });
 
       expect(fetchMock).toHaveBeenCalledTimes(2);
       const { init } = getFetchMockCall(fetchMock, 1);
-      expect((init.headers as Record<string, string>).authorization).toBe("Bearer top-secret-deb");
+      expect((init.headers as Record<string, string>).authorization).toBe(
+        "Bearer top-secret-control-plane",
+      );
       expect(
         JSON.parse(typeof init.body === "string" ? init.body : JSON.stringify(init.body)),
       ).toMatchObject({
@@ -876,8 +880,8 @@ describe("operator task dispatch", () => {
       });
 
       const task = getOperatorTask("task-dispatch-paw-and-order");
-      expect(task?.receipt.state).toBe("completed");
-      expect(task?.receipt.owner).toBe("jeffy");
+      expect(task?.receipt.state).toBe("queued");
+      expect(task?.receipt.owner).toBe("deb");
     });
   });
 
@@ -929,7 +933,7 @@ describe("operator task dispatch", () => {
         actionResponse: {
           ok: true,
           status: "accepted",
-          output: "Paw and Order task accepted for jeffy",
+          output: "Deb accepted task for jeffy",
         },
         actionStatus: 202,
         actionStatusText: "Accepted",
@@ -938,8 +942,8 @@ describe("operator task dispatch", () => {
 
       const result = await withEnvAsync(
         {
-          OPENCLAW_OPERATOR_DEB_URL: "http://deb.internal:3010",
-          OPENCLAW_OPERATOR_DEB_SHARED_SECRET: "top-secret-deb",
+          OPENCLAW_OPERATOR_CONTROL_PLANE_URL: "http://tonya.internal:18789",
+          OPENCLAW_OPERATOR_CONTROL_PLANE_SHARED_SECRET: "top-secret-control-plane",
         },
         async () =>
           await submitOperatorTaskAndDispatch({
@@ -961,7 +965,7 @@ describe("operator task dispatch", () => {
       expect(result.dispatch).toMatchObject({
         attempted: true,
         accepted: true,
-        endpoint: "http://deb.internal:3010/task",
+        endpoint: "http://tonya.internal:18789/mission-control/api/project-ops/task",
         statusCode: 202,
       });
     });
@@ -985,8 +989,8 @@ describe("operator task dispatch", () => {
 
       const result = await withEnvAsync(
         {
-          OPENCLAW_OPERATOR_DEB_URL: "http://deb.internal:3010",
-          OPENCLAW_OPERATOR_DEB_SHARED_SECRET: "top-secret-deb",
+          OPENCLAW_OPERATOR_CONTROL_PLANE_URL: "http://tonya.internal:18789",
+          OPENCLAW_OPERATOR_CONTROL_PLANE_SHARED_SECRET: "top-secret-control-plane",
         },
         async () =>
           await submitOperatorTaskAndDispatch({
@@ -1007,7 +1011,7 @@ describe("operator task dispatch", () => {
       expect(result.dispatch).toMatchObject({
         attempted: true,
         accepted: false,
-        endpoint: "http://deb.internal:3010/task",
+        endpoint: "http://tonya.internal:18789/mission-control/api/project-ops/task",
         statusCode: 0,
         message: "network down",
       });

@@ -70,6 +70,10 @@ export function resolveProjectOpsCommandTarget(
     };
   }
 
+  if (command === "task") {
+    return null;
+  }
+
   const debBaseUrl = resolveDirectDebBaseUrl();
   if (!debBaseUrl) {
     return null;

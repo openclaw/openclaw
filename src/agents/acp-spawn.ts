@@ -538,7 +538,7 @@ export async function spawnAcpDirect(
     const requesterAgentId = normalizeAgentId(parseAgentSessionKey(requesterInternalKey)?.agentId);
     try {
       const { resolveSpecialistTarget } =
-        await import("../operator-control/specialist-resolver.js");
+        await import("../operator-control/specialist-resolver.runtime.js");
       const resolved = resolveSpecialistTarget({
         requesterId: requesterAgentId,
         teamId: requestedTeamId,

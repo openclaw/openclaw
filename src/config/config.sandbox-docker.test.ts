@@ -62,6 +62,42 @@ describe("sandbox docker config", () => {
     }
   });
 
+  it("accepts allowedSourceRoots in sandbox.docker config", () => {
+    const res = validateConfigObject({
+      agents: {
+        defaults: {
+          sandbox: {
+            docker: {
+              allowedSourceRoots: ["/shared-workspace", "/tmp/shared-cache"],
+            },
+          },
+        },
+      },
+    });
+    expect(res.ok).toBe(true);
+    if (res.ok) {
+      expect(res.config.agents?.defaults?.sandbox?.docker?.allowedSourceRoots).toEqual([
+        "/shared-workspace",
+        "/tmp/shared-cache",
+      ]);
+    }
+  });
+
+  it("rejects non-absolute allowedSourceRoots entries", () => {
+    const res = validateConfigObject({
+      agents: {
+        defaults: {
+          sandbox: {
+            docker: {
+              allowedSourceRoots: ["relative/path"],
+            },
+          },
+        },
+      },
+    });
+    expect(res.ok).toBe(false);
+  });
+
   it("rejects network host mode via Zod schema validation", () => {
     const res = validateConfigObject({
       agents: {
@@ -131,6 +167,24 @@ describe("sandbox docker config", () => {
       });
       expect(sharedScope[key]).toBe(true);
     }
+  });
+
+  it("merges global and agent allowedSourceRoots", () => {
+    const resolved = resolveSandboxDockerConfig({
+      scope: "agent",
+      globalDocker: { allowedSourceRoots: ["/global-root"] },
+      agentDocker: { allowedSourceRoots: ["/agent-root"] },
+    });
+    expect(resolved.allowedSourceRoots).toEqual(["/global-root", "/agent-root"]);
+  });
+
+  it("ignores agent allowedSourceRoots under shared scope", () => {
+    const resolved = resolveSandboxDockerConfig({
+      scope: "shared",
+      globalDocker: { allowedSourceRoots: ["/global-root"] },
+      agentDocker: { allowedSourceRoots: ["/agent-root"] },
+    });
+    expect(resolved.allowedSourceRoots).toEqual(["/global-root"]);
   });
 
   it("rejects seccomp unconfined via Zod schema validation", () => {

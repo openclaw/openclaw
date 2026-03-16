@@ -551,6 +551,109 @@ describe.sequential("mission-control operator control routes", () => {
     });
   });
 
+  it("routes project-ops Paw and Order tasks into Deb inside Tonya", async () => {
+    await withStateDirEnv("openclaw-mc-project-ops-task-", async () => {
+      const fetchMock = vi.fn().mockResolvedValue({
+        ok: true,
+        status: 202,
+        statusText: "Accepted",
+        text: async () =>
+          JSON.stringify({
+            ok: true,
+            status: "accepted",
+            delegatedRunId: "delegated-deb-1",
+            agentId: "deb",
+            callbackRegistered: true,
+          }),
+      });
+      globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+      await withEnvAsync(
+        {
+          OPENCLAW_OPERATOR_CONTROL_PLANE_SHARED_SECRET: "tonya-control-secret",
+          OPENCLAW_OPERATOR_INTERNAL_CONTROL_URL: "http://tonya.internal:18789",
+          OPENCLAW_OPERATOR_INTERNAL_CONTROL_SHARED_SECRET: "tonya-internal-secret",
+          OPENCLAW_OPERATOR_RECEIPT_BASE_URL: "http://tonya.internal:18789",
+        },
+        async () => {
+          const proxied = await requestMissionControl({
+            method: "POST",
+            url: "/mission-control/api/project-ops/task",
+            body: {
+              schema: "PawAndOrderTaskV1",
+              task_id: "task-project-ops-1",
+              run_id: "run-project-ops-1",
+              objective: "Normalize blockers and ownership",
+              capability: "kanban",
+              team_id: "project-ops",
+              alias: "jeffy",
+              specialist_role: "jeffy",
+              artifact_type: "board_hygiene_packet",
+              delivery_mode: "sync-now",
+              requester: {
+                id: "tonya",
+                kind: "operator",
+              },
+              acceptance_criteria: ["board packet queued through Deb"],
+              context_refs: [],
+              inputs: {
+                blocker_focus: true,
+              },
+            },
+            headers: {
+              authorization: "Bearer tonya-control-secret",
+            },
+          });
+
+          expect(proxied.statusCode).toBe(202);
+          expect(JSON.parse(String(proxied.body))).toMatchObject({
+            ok: true,
+            status: "accepted",
+            owner: "deb",
+            agentId: "deb",
+            taskId: "task-project-ops-1",
+            runId: "run-project-ops-1",
+            specialistRole: "jeffy",
+          });
+        },
+      );
+
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      const { url, init } = getFetchMockCall(fetchMock, 0);
+      expect(url).toBe("http://tonya.internal:18789/api/message");
+      expect((init.headers as Record<string, string>).authorization).toBe(
+        "Bearer tonya-internal-secret",
+      );
+      expect(
+        JSON.parse(typeof init.body === "string" ? init.body : JSON.stringify(init.body)),
+      ).toMatchObject({
+        schema: "AngelaTaskEnvelopeV1",
+        task_id: "task-project-ops-1",
+        run_id: "run-project-ops-1",
+        callback_url:
+          "http://tonya.internal:18789/mission-control/api/tasks/task-project-ops-1/receipts",
+        team_id: "project-ops",
+        team_lead: "deb",
+        alias: "deb",
+        execution: {
+          transport: "delegated-http",
+          runtime: "subagent",
+          durable: true,
+        },
+      });
+      expect(
+        JSON.parse(typeof init.body === "string" ? init.body : JSON.stringify(init.body)).inputs,
+      ).toMatchObject({
+        specialist_role: "jeffy",
+        dog_role: "jeffy",
+        artifact_type: "board_hygiene_packet",
+        delivery_mode: "sync-now",
+        requested_alias: "jeffy",
+        orchestration_source: "mission-control-project-ops-task",
+      });
+    });
+  });
+
   it("rejects stale service-context writes with a client-visible error", async () => {
     await withStateDirEnv("openclaw-mc-operator-http-stale-", async () => {
       const first = await requestMissionControl({

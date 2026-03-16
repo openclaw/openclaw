@@ -119,14 +119,21 @@ describe("config env vars", () => {
           },
         };
 
-        loadDotEnv({ quiet: true });
-        const first = resolveConfigEnvVars(config, process.env) as OpenClawConfig;
-        expect(first.tools?.web?.search?.apiKey).toBe("from-dotenv");
+        // Chdir to stateDir so loadDotEnv's CWD-based load uses our .env, not the project root's.
+        const prevCwd = process.cwd();
+        try {
+          process.chdir(stateDir);
+          loadDotEnv({ quiet: true });
+          const first = resolveConfigEnvVars(config, process.env) as OpenClawConfig;
+          expect(first.tools?.web?.search?.apiKey).toBe("from-dotenv");
 
-        delete process.env.BRAVE_API_KEY;
-        loadDotEnv({ quiet: true });
-        const second = resolveConfigEnvVars(config, process.env) as OpenClawConfig;
-        expect(second.tools?.web?.search?.apiKey).toBe("from-dotenv");
+          delete process.env.BRAVE_API_KEY;
+          loadDotEnv({ quiet: true });
+          const second = resolveConfigEnvVars(config, process.env) as OpenClawConfig;
+          expect(second.tools?.web?.search?.apiKey).toBe("from-dotenv");
+        } finally {
+          process.chdir(prevCwd);
+        }
       });
     });
   });

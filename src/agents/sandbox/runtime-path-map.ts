@@ -118,12 +118,15 @@ export function translateSandboxDockerConfigToHost(
   docker: SandboxDockerConfig,
   entries: RuntimePathMapEntry[] = loadRuntimePathMapEntries(),
 ): SandboxDockerConfig {
-  if (!docker.binds?.length) {
+  if (!docker.binds?.length && !docker.allowedSourceRoots?.length) {
     return docker;
   }
   return {
     ...docker,
-    binds: docker.binds.map((bind) => translateSandboxBindSpecToHostPath(bind, entries)),
+    binds: docker.binds?.map((bind) => translateSandboxBindSpecToHostPath(bind, entries)),
+    allowedSourceRoots: docker.allowedSourceRoots?.map((root) =>
+      translateContainerPathToHostPath(root, entries),
+    ),
   };
 }
 

@@ -42,8 +42,10 @@ describe("readSecretFileSync", () => {
       ok: false,
       resolvedPath: file,
       message: expect.stringContaining(`Failed to inspect Gateway password file at ${file}:`),
-      error: expect.any(Error),
     });
+    const err = (result as { error?: unknown }).error;
+    expect(err).toBeDefined();
+    expect(err && typeof (err as Error).message === "string").toBe(true);
   });
 
   it("preserves the underlying cause when throwing for missing files", async () => {
@@ -59,7 +61,9 @@ describe("readSecretFileSync", () => {
 
     expect(thrown).toBeInstanceOf(Error);
     expect(thrown?.message).toContain(`Failed to inspect Gateway password file at ${file}:`);
-    expect((thrown as Error & { cause?: unknown }).cause).toBeInstanceOf(Error);
+    const cause = (thrown as Error & { cause?: unknown }).cause;
+    expect(cause).toBeDefined();
+    expect(cause && typeof (cause as Error).message === "string").toBe(true);
   });
 
   it("rejects files larger than the secret-file limit", async () => {

@@ -499,7 +499,7 @@ function buildDebPayload(task: OperatorTaskRecord): {
   readyEndpoint: string;
   init: RequestInit;
   owner: string;
-  successState: "completed";
+  successState: "completed" | "queued";
   command: "status" | "sync" | "task" | "update";
   targetMode: ProjectOpsTargetMode;
 } {
@@ -579,8 +579,8 @@ function buildDebPayload(task: OperatorTaskRecord): {
           inputs,
         }),
       },
-      owner: specialistRole,
-      successState: "completed",
+      owner: "deb",
+      successState: "queued",
       command,
       targetMode: projectOpsTarget.mode,
     };

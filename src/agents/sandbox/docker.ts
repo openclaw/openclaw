@@ -457,6 +457,7 @@ async function createSandboxContainer(params: {
     hostWorkspaceDir,
     hostAgentWorkspaceDir,
     ...collectTranslatedSandboxBindSourceRoots(cfg.binds),
+    ...(hostDockerCfg.allowedSourceRoots ?? []),
   ];
   await ensureDockerImage(hostDockerCfg.image);
 
