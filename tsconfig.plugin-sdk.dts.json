@@ -5,9 +5,9 @@
     "declarationMap": false,
     "emitDeclarationOnly": true,
     "noEmit": false,
-    "noEmitOnError": true,
+    "noEmitOnError": false,
     "outDir": "dist/plugin-sdk",
-    "rootDir": "src",
+    "rootDir": ".",
     "tsBuildInfoFile": "dist/plugin-sdk/.tsbuildinfo"
   },
   "include": [
@@ -31,7 +31,6 @@
     "src/plugin-sdk/diagnostics-otel.ts",
     "src/plugin-sdk/diffs.ts",
     "src/plugin-sdk/feishu.ts",
-    "src/plugin-sdk/google-gemini-cli-auth.ts",
     "src/plugin-sdk/googlechat.ts",
     "src/plugin-sdk/irc.ts",
     "src/plugin-sdk/llm-task.ts",

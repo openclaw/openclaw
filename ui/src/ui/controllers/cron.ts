@@ -84,7 +84,7 @@ export type CronModelSuggestionsState = {
 export function supportsAnnounceDelivery(
   form: Pick<CronFormState, "sessionTarget" | "payloadKind">,
 ) {
-  return form.sessionTarget === "isolated" && form.payloadKind === "agentTurn";
+  return form.sessionTarget !== "main" && form.payloadKind === "agentTurn";
 }
 
 export function normalizeCronFormState(form: CronFormState): CronFormState {

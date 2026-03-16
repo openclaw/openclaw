@@ -5,13 +5,25 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { clearPluginManifestRegistryCache } from "../plugins/manifest-registry.js";
 import { validateConfigObjectWithPlugins } from "./config.js";
 
+async function chmodSafeDir(dir: string) {
+  if (process.platform === "win32") {
+    return;
+  }
+  await fs.chmod(dir, 0o755);
+}
+
+async function mkdirSafe(dir: string) {
+  await fs.mkdir(dir, { recursive: true });
+  await chmodSafeDir(dir);
+}
+
 async function writePluginFixture(params: {
   dir: string;
   id: string;
   schema: Record<string, unknown>;
   channels?: string[];
 }) {
-  await fs.mkdir(params.dir, { recursive: true });
+  await mkdirSafe(params.dir);
   await fs.writeFile(
     path.join(params.dir, "index.js"),
     `export default { id: "${params.id}", register() {} };`,
@@ -31,6 +43,35 @@ async function writePluginFixture(params: {
   );
 }
 
+async function writeBundleFixture(params: {
+  dir: string;
+  format: "codex" | "claude";
+  name: string;
+}) {
+  await mkdirSafe(params.dir);
+  const manifestDir = path.join(
+    params.dir,
+    params.format === "codex" ? ".codex-plugin" : ".claude-plugin",
+  );
+  await mkdirSafe(manifestDir);
+  await fs.writeFile(
+    path.join(manifestDir, "plugin.json"),
+    JSON.stringify({ name: params.name }, null, 2),
+    "utf-8",
+  );
+}
+
+async function writeManifestlessClaudeBundleFixture(params: { dir: string }) {
+  await mkdirSafe(params.dir);
+  await mkdirSafe(path.join(params.dir, "commands"));
+  await fs.writeFile(
+    path.join(params.dir, "commands", "review.md"),
+    "---\ndescription: fixture\n---\n",
+    "utf-8",
+  );
+  await fs.writeFile(path.join(params.dir, "settings.json"), '{"hideThinkingBlock":true}', "utf-8");
+}
+
 describe("config plugin validation", () => {
   let fixtureRoot = "";
   let suiteHome = "";
@@ -38,10 +79,15 @@ describe("config plugin validation", () => {
   let enumPluginDir = "";
   let bluebubblesPluginDir = "";
   let voiceCallSchemaPluginDir = "";
+  let bundlePluginDir = "";
+  let manifestlessClaudeBundleDir = "";
   const suiteEnv = () =>
     ({
       ...process.env,
+      HOME: suiteHome,
+      OPENCLAW_HOME: undefined,
       OPENCLAW_STATE_DIR: path.join(suiteHome, ".openclaw"),
+      CLAWDBOT_STATE_DIR: undefined,
       OPENCLAW_PLUGIN_MANIFEST_CACHE_MS: "10000",
     }) satisfies NodeJS.ProcessEnv;
 
@@ -50,8 +96,9 @@ describe("config plugin validation", () => {
 
   beforeAll(async () => {
     fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-config-plugin-validation-"));
+    await chmodSafeDir(fixtureRoot);
     suiteHome = path.join(fixtureRoot, "home");
-    await fs.mkdir(suiteHome, { recursive: true });
+    await mkdirSafe(suiteHome);
     badPluginDir = path.join(suiteHome, "bad-plugin");
     enumPluginDir = path.join(suiteHome, "enum-plugin");
     bluebubblesPluginDir = path.join(suiteHome, "bluebubbles-plugin");
@@ -87,6 +134,16 @@ describe("config plugin validation", () => {
       channels: ["bluebubbles"],
       schema: { type: "object" },
     });
+    bundlePluginDir = path.join(suiteHome, "bundle-plugin");
+    await writeBundleFixture({
+      dir: bundlePluginDir,
+      format: "codex",
+      name: "Bundle Fixture",
+    });
+    manifestlessClaudeBundleDir = path.join(suiteHome, "manifestless-claude-bundle");
+    await writeManifestlessClaudeBundleFixture({
+      dir: manifestlessClaudeBundleDir,
+    });
     voiceCallSchemaPluginDir = path.join(suiteHome, "voice-call-schema-plugin");
     const voiceCallManifestPath = path.join(
       process.cwd(),
@@ -111,7 +168,15 @@ describe("config plugin validation", () => {
     validateInSuite({
       plugins: {
         enabled: false,
-        load: { paths: [badPluginDir, bluebubblesPluginDir, voiceCallSchemaPluginDir] },
+        load: {
+          paths: [
+            badPluginDir,
+            bluebubblesPluginDir,
+            bundlePluginDir,
+            manifestlessClaudeBundleDir,
+            voiceCallSchemaPluginDir,
+          ],
+        },
       },
     });
   });
@@ -155,6 +220,24 @@ describe("config plugin validation", () => {
           "plugin not found: missing-plugin (stale config entry ignored; remove it from plugins config)",
       });
     }
+  });
+
+  it("does not fail validation for the implicit default memory slot when plugins config is explicit", async () => {
+    const res = validateConfigObjectWithPlugins(
+      {
+        agents: { list: [{ id: "pi" }] },
+        plugins: {
+          entries: { acpx: { enabled: true } },
+        },
+      },
+      {
+        env: {
+          ...suiteEnv(),
+          OPENCLAW_BUNDLED_PLUGINS_DIR: path.join(suiteHome, "missing-bundled-plugins"),
+        },
+      },
+    );
+    expect(res.ok).toBe(true);
   });
 
   it("warns for removed legacy plugin ids instead of failing validation", async () => {
@@ -216,6 +299,32 @@ describe("config plugin validation", () => {
       );
       expect(hasIssue).toBe(true);
     }
+  });
+
+  it("does not require native config schemas for enabled bundle plugins", async () => {
+    const res = validateInSuite({
+      agents: { list: [{ id: "pi" }] },
+      plugins: {
+        enabled: true,
+        load: { paths: [bundlePluginDir] },
+        entries: { "bundle-fixture": { enabled: true } },
+      },
+    });
+
+    expect(res.ok).toBe(true);
+  });
+
+  it("accepts enabled manifestless Claude bundles without a native schema", async () => {
+    const res = validateInSuite({
+      agents: { list: [{ id: "pi" }] },
+      plugins: {
+        enabled: true,
+        load: { paths: [manifestlessClaudeBundleDir] },
+        entries: { "manifestless-claude-bundle": { enabled: true } },
+      },
+    });
+
+    expect(res.ok).toBe(true);
   });
 
   it("surfaces allowed enum values for plugin config diagnostics", async () => {

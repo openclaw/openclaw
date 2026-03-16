@@ -358,6 +358,279 @@ describe("wrapStreamFnTrimToolCallNames", () => {
     expect(result).toBe(finalMessage);
   });
 
+  it("infers tool names from malformed toolCallId variants when allowlist is present", async () => {
+    const partialToolCall = { type: "toolCall", id: "functions.read:0", name: "" };
+    const finalToolCallA = { type: "toolCall", id: "functionsread3", name: "" };
+    const finalToolCallB: { type: string; id: string; name?: string } = {
+      type: "toolCall",
+      id: "functionswrite4",
+    };
+    const finalToolCallC = { type: "functionCall", id: "functions.exec2", name: "" };
+    const event = {
+      type: "toolcall_delta",
+      partial: { role: "assistant", content: [partialToolCall] },
+    };
+    const finalMessage = {
+      role: "assistant",
+      content: [finalToolCallA, finalToolCallB, finalToolCallC],
+    };
+    const baseFn = vi.fn(() =>
+      createFakeStream({
+        events: [event],
+        resultMessage: finalMessage,
+      }),
+    );
+
+    const stream = await invokeWrappedStream(baseFn, new Set(["read", "write", "exec"]));
+    for await (const _item of stream) {
+      // drain
+    }
+    const result = await stream.result();
+
+    expect(partialToolCall.name).toBe("read");
+    expect(finalToolCallA.name).toBe("read");
+    expect(finalToolCallB.name).toBe("write");
+    expect(finalToolCallC.name).toBe("exec");
+    expect(result).toBe(finalMessage);
+  });
+
+  it("does not infer names from malformed toolCallId when allowlist is absent", async () => {
+    const finalToolCall: { type: string; id: string; name?: string } = {
+      type: "toolCall",
+      id: "functionsread3",
+    };
+    const finalMessage = { role: "assistant", content: [finalToolCall] };
+    const baseFn = vi.fn(() =>
+      createFakeStream({
+        events: [],
+        resultMessage: finalMessage,
+      }),
+    );
+
+    const stream = await invokeWrappedStream(baseFn);
+    await stream.result();
+
+    expect(finalToolCall.name).toBeUndefined();
+  });
+
+  it("infers malformed non-blank tool names before dispatch", async () => {
+    const partialToolCall = { type: "toolCall", id: "functionsread3", name: "functionsread3" };
+    const finalToolCall = { type: "toolCall", id: "functionsread3", name: "functionsread3" };
+    const event = {
+      type: "toolcall_delta",
+      partial: { role: "assistant", content: [partialToolCall] },
+    };
+    const finalMessage = { role: "assistant", content: [finalToolCall] };
+    const baseFn = vi.fn(() =>
+      createFakeStream({
+        events: [event],
+        resultMessage: finalMessage,
+      }),
+    );
+
+    const stream = await invokeWrappedStream(baseFn, new Set(["read", "write"]));
+    for await (const _item of stream) {
+      // drain
+    }
+    await stream.result();
+
+    expect(partialToolCall.name).toBe("read");
+    expect(finalToolCall.name).toBe("read");
+  });
+
+  it("recovers malformed non-blank names when id is missing", async () => {
+    const finalToolCall = { type: "toolCall", name: "functionsread3" };
+    const finalMessage = { role: "assistant", content: [finalToolCall] };
+    const baseFn = vi.fn(() =>
+      createFakeStream({
+        events: [],
+        resultMessage: finalMessage,
+      }),
+    );
+
+    const stream = await invokeWrappedStream(baseFn, new Set(["read", "write"]));
+    await stream.result();
+
+    expect(finalToolCall.name).toBe("read");
+  });
+
+  it("recovers canonical tool names from canonical ids when name is empty", async () => {
+    const finalToolCall = { type: "toolCall", id: "read", name: "" };
+    const finalMessage = { role: "assistant", content: [finalToolCall] };
+    const baseFn = vi.fn(() =>
+      createFakeStream({
+        events: [],
+        resultMessage: finalMessage,
+      }),
+    );
+
+    const stream = await invokeWrappedStream(baseFn, new Set(["read", "write"]));
+    await stream.result();
+
+    expect(finalToolCall.name).toBe("read");
+  });
+
+  it("recovers tool names from ids when name is whitespace-only", async () => {
+    const finalToolCall = { type: "toolCall", id: "functionswrite4", name: "   " };
+    const finalMessage = { role: "assistant", content: [finalToolCall] };
+    const baseFn = vi.fn(() =>
+      createFakeStream({
+        events: [],
+        resultMessage: finalMessage,
+      }),
+    );
+
+    const stream = await invokeWrappedStream(baseFn, new Set(["read", "write"]));
+    await stream.result();
+
+    expect(finalToolCall.name).toBe("write");
+  });
+
+  it("keeps blank names blank and assigns fallback ids when both name and id are blank", async () => {
+    const finalToolCall = { type: "toolCall", id: "", name: "" };
+    const finalMessage = { role: "assistant", content: [finalToolCall] };
+    const baseFn = vi.fn(() =>
+      createFakeStream({
+        events: [],
+        resultMessage: finalMessage,
+      }),
+    );
+
+    const stream = await invokeWrappedStream(baseFn, new Set(["read", "write"]));
+    await stream.result();
+
+    expect(finalToolCall.name).toBe("");
+    expect(finalToolCall.id).toBe("call_auto_1");
+  });
+
+  it("assigns fallback ids when both name and id are missing", async () => {
+    const finalToolCall: { type: string; name?: string; id?: string } = { type: "toolCall" };
+    const finalMessage = { role: "assistant", content: [finalToolCall] };
+    const baseFn = vi.fn(() =>
+      createFakeStream({
+        events: [],
+        resultMessage: finalMessage,
+      }),
+    );
+
+    const stream = await invokeWrappedStream(baseFn, new Set(["read", "write"]));
+    await stream.result();
+
+    expect(finalToolCall.name).toBeUndefined();
+    expect(finalToolCall.id).toBe("call_auto_1");
+  });
+
+  it("prefers explicit canonical names over conflicting canonical ids", async () => {
+    const finalToolCall = { type: "toolCall", id: "write", name: "read" };
+    const finalMessage = { role: "assistant", content: [finalToolCall] };
+    const baseFn = vi.fn(() =>
+      createFakeStream({
+        events: [],
+        resultMessage: finalMessage,
+      }),
+    );
+
+    const stream = await invokeWrappedStream(baseFn, new Set(["read", "write"]));
+    await stream.result();
+
+    expect(finalToolCall.name).toBe("read");
+    expect(finalToolCall.id).toBe("write");
+  });
+
+  it("prefers explicit trimmed canonical names over conflicting malformed ids", async () => {
+    const finalToolCall = { type: "toolCall", id: "functionswrite4", name: " read " };
+    const finalMessage = { role: "assistant", content: [finalToolCall] };
+    const baseFn = vi.fn(() =>
+      createFakeStream({
+        events: [],
+        resultMessage: finalMessage,
+      }),
+    );
+
+    const stream = await invokeWrappedStream(baseFn, new Set(["read", "write"]));
+    await stream.result();
+
+    expect(finalToolCall.name).toBe("read");
+  });
+
+  it("does not rewrite composite names that mention multiple tools", async () => {
+    const finalToolCall = { type: "toolCall", id: "functionsread3", name: "read write" };
+    const finalMessage = { role: "assistant", content: [finalToolCall] };
+    const baseFn = vi.fn(() =>
+      createFakeStream({
+        events: [],
+        resultMessage: finalMessage,
+      }),
+    );
+
+    const stream = await invokeWrappedStream(baseFn, new Set(["read", "write"]));
+    await stream.result();
+
+    expect(finalToolCall.name).toBe("read write");
+  });
+
+  it("fails closed for malformed non-blank names that are ambiguous", async () => {
+    const finalToolCall = { type: "toolCall", id: "functions.exec2", name: "functions.exec2" };
+    const finalMessage = { role: "assistant", content: [finalToolCall] };
+    const baseFn = vi.fn(() =>
+      createFakeStream({
+        events: [],
+        resultMessage: finalMessage,
+      }),
+    );
+
+    const stream = await invokeWrappedStream(baseFn, new Set(["exec", "exec2"]));
+    await stream.result();
+
+    expect(finalToolCall.name).toBe("functions.exec2");
+  });
+
+  it("matches malformed ids case-insensitively across common separators", async () => {
+    const finalToolCall = { type: "toolCall", id: "Functions.Read_7", name: "" };
+    const finalMessage = { role: "assistant", content: [finalToolCall] };
+    const baseFn = vi.fn(() =>
+      createFakeStream({
+        events: [],
+        resultMessage: finalMessage,
+      }),
+    );
+
+    const stream = await invokeWrappedStream(baseFn, new Set(["read", "write"]));
+    await stream.result();
+
+    expect(finalToolCall.name).toBe("read");
+  });
+  it("does not override explicit non-blank tool names with inferred ids", async () => {
+    const finalToolCall = { type: "toolCall", id: "functionswrite4", name: "someOtherTool" };
+    const finalMessage = { role: "assistant", content: [finalToolCall] };
+    const baseFn = vi.fn(() =>
+      createFakeStream({
+        events: [],
+        resultMessage: finalMessage,
+      }),
+    );
+
+    const stream = await invokeWrappedStream(baseFn, new Set(["read", "write"]));
+    await stream.result();
+
+    expect(finalToolCall.name).toBe("someOtherTool");
+  });
+
+  it("fails closed when malformed ids could map to multiple allowlisted tools", async () => {
+    const finalToolCall = { type: "toolCall", id: "functions.exec2", name: "" };
+    const finalMessage = { role: "assistant", content: [finalToolCall] };
+    const baseFn = vi.fn(() =>
+      createFakeStream({
+        events: [],
+        resultMessage: finalMessage,
+      }),
+    );
+
+    const stream = await invokeWrappedStream(baseFn, new Set(["exec", "exec2"]));
+    await stream.result();
+
+    expect(finalToolCall.name).toBe("");
+  });
   it("does not collapse whitespace-only tool names to empty strings", async () => {
     const partialToolCall = { type: "toolCall", name: "   " };
     const finalToolCall = { type: "toolCall", name: "\t  " };
@@ -428,6 +701,26 @@ describe("wrapStreamFnTrimToolCallNames", () => {
 
     expect(finalToolCall.name).toBe("read");
     expect(finalToolCall.id).toBe("call_42");
+  });
+
+  it("reassigns duplicate tool call ids within a message to unique fallbacks", async () => {
+    const finalToolCallA = { type: "toolCall", name: " read ", id: "  edit:22  " };
+    const finalToolCallB = { type: "toolCall", name: " write ", id: "edit:22" };
+    const finalMessage = { role: "assistant", content: [finalToolCallA, finalToolCallB] };
+    const baseFn = vi.fn(() =>
+      createFakeStream({
+        events: [],
+        resultMessage: finalMessage,
+      }),
+    );
+
+    const stream = await invokeWrappedStream(baseFn);
+    await stream.result();
+
+    expect(finalToolCallA.name).toBe("read");
+    expect(finalToolCallB.name).toBe("write");
+    expect(finalToolCallA.id).toBe("edit:22");
+    expect(finalToolCallB.id).toBe("call_auto_1");
   });
 });
 

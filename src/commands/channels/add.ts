@@ -1,22 +1,15 @@
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import { listChannelPluginCatalogEntries } from "../../channels/plugins/catalog.js";
+import { parseOptionalDelimitedEntries } from "../../channels/plugins/helpers.js";
 import { getChannelPlugin, normalizeChannelId } from "../../channels/plugins/index.js";
 import { moveSingleAccountChannelSectionToDefaultAccount } from "../../channels/plugins/setup-helpers.js";
-import type { ChannelId, ChannelSetupInput } from "../../channels/plugins/types.js";
+import type { ChannelId, ChannelPlugin, ChannelSetupInput } from "../../channels/plugins/types.js";
 import { writeConfigFile, type OpenClawConfig } from "../../config/config.js";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../../routing/session-key.js";
 import { defaultRuntime, type RuntimeEnv } from "../../runtime.js";
-import { resolveTelegramAccount } from "../../telegram/accounts.js";
-import { deleteTelegramUpdateOffset } from "../../telegram/update-offset-store.js";
 import { createClackPrompter } from "../../wizard/clack-prompter.js";
 import { applyAgentBindings, describeBinding } from "../agents.bindings.js";
-import { buildAgentSummaries } from "../agents.config.js";
-import { setupChannels } from "../onboard-channels.js";
 import type { ChannelChoice } from "../onboard-types.js";
-import {
-  ensureOnboardingPluginInstalled,
-  reloadOnboardingPluginRegistry,
-} from "../onboarding/plugin-install.js";
 import { applyAccountName, applyChannelAccountConfig } from "./add-mutators.js";
 import { channelLabel, requireValidConfig, shouldUseWizard } from "./shared.js";
 
@@ -27,17 +20,6 @@ export type ChannelsAddOptions = {
   groupChannels?: string;
   dmAllowlist?: string;
 } & Omit<ChannelSetupInput, "groupChannels" | "dmAllowlist" | "initialSyncLimit">;
-
-function parseList(value: string | undefined): string[] | undefined {
-  if (!value?.trim()) {
-    return undefined;
-  }
-  const parsed = value
-    .split(/[\n,;]+/g)
-    .map((entry) => entry.trim())
-    .filter(Boolean);
-  return parsed.length > 0 ? parsed : undefined;
-}
 
 function resolveCatalogChannelEntry(raw: string, cfg: OpenClawConfig | null) {
   const trimmed = raw.trim().toLowerCase();
@@ -66,9 +48,14 @@ export async function channelsAddCommand(
 
   const useWizard = shouldUseWizard(params);
   if (useWizard) {
+    const [{ buildAgentSummaries }, { setupChannels }] = await Promise.all([
+      import("../agents.config.js"),
+      import("../onboard-channels.js"),
+    ]);
     const prompter = createClackPrompter();
     let selection: ChannelChoice[] = [];
     const accountIds: Partial<Record<ChannelChoice, string>> = {};
+    const resolvedPlugins = new Map<ChannelChoice, ChannelPlugin>();
     await prompter.intro("Channel setup");
     let nextConfig = await setupChannels(cfg, runtime, prompter, {
       allowDisable: false,
@@ -79,6 +66,9 @@ export async function channelsAddCommand(
       },
       onAccountId: (channel, accountId) => {
         accountIds[channel] = accountId;
+      },
+      onResolvedPlugin: (channel, plugin) => {
+        resolvedPlugins.set(channel, plugin);
       },
     });
     if (selection.length === 0) {
@@ -93,7 +83,7 @@ export async function channelsAddCommand(
     if (wantsNames) {
       for (const channel of selection) {
         const accountId = accountIds[channel] ?? DEFAULT_ACCOUNT_ID;
-        const plugin = getChannelPlugin(channel);
+        const plugin = resolvedPlugins.get(channel) ?? getChannelPlugin(channel);
         const account = plugin?.config.resolveAccount(nextConfig, accountId) as
           | { name?: string }
           | undefined;
@@ -109,6 +99,7 @@ export async function channelsAddCommand(
             channel,
             accountId,
             name,
+            plugin,
           });
         }
       }
@@ -184,10 +175,36 @@ export async function channelsAddCommand(
   const rawChannel = String(opts.channel ?? "");
   let channel = normalizeChannelId(rawChannel);
   let catalogEntry = channel ? undefined : resolveCatalogChannelEntry(rawChannel, nextConfig);
+  const resolveWorkspaceDir = () =>
+    resolveAgentWorkspaceDir(nextConfig, resolveDefaultAgentId(nextConfig));
+  // May trigger loadOpenClawPlugins on cache miss (disk scan + jiti import)
+  const loadScopedPlugin = async (
+    channelId: ChannelId,
+    pluginId?: string,
+  ): Promise<ChannelPlugin | undefined> => {
+    const existing = getChannelPlugin(channelId);
+    if (existing) {
+      return existing;
+    }
+    const { loadOnboardingPluginRegistrySnapshotForChannel } =
+      await import("../onboarding/plugin-install.js");
+    const snapshot = loadOnboardingPluginRegistrySnapshotForChannel({
+      cfg: nextConfig,
+      runtime,
+      channel: channelId,
+      ...(pluginId ? { pluginId } : {}),
+      workspaceDir: resolveWorkspaceDir(),
+    });
+    return (
+      snapshot.channels.find((entry) => entry.plugin.id === channelId)?.plugin ??
+      snapshot.channelSetups.find((entry) => entry.plugin.id === channelId)?.plugin
+    );
+  };
 
   if (!channel && catalogEntry) {
+    const { ensureOnboardingPluginInstalled } = await import("../onboarding/plugin-install.js");
     const prompter = createClackPrompter();
-    const workspaceDir = resolveAgentWorkspaceDir(nextConfig, resolveDefaultAgentId(nextConfig));
+    const workspaceDir = resolveWorkspaceDir();
     const result = await ensureOnboardingPluginInstalled({
       cfg: nextConfig,
       entry: catalogEntry,
@@ -199,7 +216,10 @@ export async function channelsAddCommand(
     if (!result.installed) {
       return;
     }
-    reloadOnboardingPluginRegistry({ cfg: nextConfig, runtime, workspaceDir });
+    catalogEntry = {
+      ...catalogEntry,
+      ...(result.pluginId ? { pluginId: result.pluginId } : {}),
+    };
     channel = normalizeChannelId(catalogEntry.id) ?? (catalogEntry.id as ChannelId);
   }
 
@@ -212,7 +232,7 @@ export async function channelsAddCommand(
     return;
   }
 
-  const plugin = getChannelPlugin(channel);
+  const plugin = await loadScopedPlugin(channel, catalogEntry?.pluginId);
   if (!plugin?.setup?.applyAccountConfig) {
     runtime.error(`Channel ${channel} does not support add.`);
     runtime.exit(1);
@@ -225,8 +245,8 @@ export async function channelsAddCommand(
       : typeof opts.initialSyncLimit === "string" && opts.initialSyncLimit.trim()
         ? Number.parseInt(opts.initialSyncLimit, 10)
         : undefined;
-  const groupChannels = parseList(opts.groupChannels);
-  const dmAllowlist = parseList(opts.dmAllowlist);
+  const groupChannels = parseOptionalDelimitedEntries(opts.groupChannels);
+  const dmAllowlist = parseOptionalDelimitedEntries(opts.dmAllowlist);
 
   const input: ChannelSetupInput = {
     name: opts.name,
@@ -279,10 +299,20 @@ export async function channelsAddCommand(
     return;
   }
 
-  const previousTelegramToken =
-    channel === "telegram"
-      ? resolveTelegramAccount({ cfg: nextConfig, accountId }).token.trim()
-      : "";
+  let previousTelegramToken = "";
+  let resolveTelegramAccount:
+    | ((
+        params: Parameters<
+          typeof import("../../../extensions/telegram/src/accounts.js").resolveTelegramAccount
+        >[0],
+      ) => ReturnType<
+        typeof import("../../../extensions/telegram/src/accounts.js").resolveTelegramAccount
+      >)
+    | undefined;
+  if (channel === "telegram") {
+    ({ resolveTelegramAccount } = await import("../../../extensions/telegram/src/accounts.js"));
+    previousTelegramToken = resolveTelegramAccount({ cfg: nextConfig, accountId }).token.trim();
+  }
 
   if (accountId !== DEFAULT_ACCOUNT_ID) {
     nextConfig = moveSingleAccountChannelSectionToDefaultAccount({
@@ -296,9 +326,12 @@ export async function channelsAddCommand(
     channel,
     accountId,
     input,
+    plugin,
   });
 
-  if (channel === "telegram") {
+  if (channel === "telegram" && resolveTelegramAccount) {
+    const { deleteTelegramUpdateOffset } =
+      await import("../../../extensions/telegram/src/update-offset-store.js");
     const nextTelegramToken = resolveTelegramAccount({ cfg: nextConfig, accountId }).token.trim();
     if (previousTelegramToken !== nextTelegramToken) {
       // Clear stale polling offsets after Telegram token rotation.

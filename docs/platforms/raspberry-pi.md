@@ -76,15 +76,15 @@ sudo apt install -y git curl build-essential
 sudo timedatectl set-timezone America/Chicago  # Change to your timezone
 ```
 
-## 4) Install Node.js 22 (ARM64)
+## 4) Install Node.js 24 (ARM64)
 
 ```bash
 # Install Node.js via NodeSource
-curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash -
+curl -fsSL https://deb.nodesource.com/setup_24.x | sudo -E bash -
 sudo apt install -y nodejs
 
 # Verify
-node --version  # Should show v22.x.x
+node --version  # Should show v24.x.x
 npm --version
 ```
 

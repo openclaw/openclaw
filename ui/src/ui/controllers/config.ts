@@ -184,9 +184,17 @@ export async function runUpdate(state: ConfigState) {
   state.updateRunning = true;
   state.lastError = null;
   try {
-    await state.client.request("update.run", {
+    const res = await state.client.request<{
+      ok?: boolean;
+      result?: { status?: string; reason?: string };
+    }>("update.run", {
       sessionKey: state.applySessionKey,
     });
+    if (res && res.ok === false) {
+      const status = res.result?.status ?? "error";
+      const reason = res.result?.reason ?? "Update failed.";
+      state.lastError = `Update ${status}: ${reason}`;
+    }
   } catch (err) {
     state.lastError = String(err);
   } finally {
@@ -254,4 +262,22 @@ export function ensureAgentConfigEntry(state: ConfigState, agentId: string): num
   const nextIndex = Array.isArray(list) ? list.length : 0;
   updateConfigFormValue(state, ["agents", "list", nextIndex, "id"], normalizedAgentId);
   return nextIndex;
+}
+
+export async function openConfigFile(state: ConfigState): Promise<void> {
+  if (!state.client || !state.connected) {
+    return;
+  }
+  try {
+    await state.client.request("config.openFile", {});
+  } catch {
+    const path = state.configSnapshot?.path;
+    if (path) {
+      try {
+        await navigator.clipboard.writeText(path);
+      } catch {
+        // ignore
+      }
+    }
+  }
 }

@@ -114,6 +114,55 @@ describe("loadModelCatalog", () => {
     expect(spark?.reasoning).toBe(true);
   });
 
+  it("filters stale openai gpt-5.3-codex-spark built-ins from the catalog", async () => {
+    mockPiDiscoveryModels([
+      {
+        id: "gpt-5.3-codex-spark",
+        provider: "openai",
+        name: "GPT-5.3 Codex Spark",
+        reasoning: true,
+        contextWindow: 128000,
+        input: ["text", "image"],
+      },
+      {
+        id: "gpt-5.3-codex-spark",
+        provider: "azure-openai-responses",
+        name: "GPT-5.3 Codex Spark",
+        reasoning: true,
+        contextWindow: 128000,
+        input: ["text", "image"],
+      },
+      {
+        id: "gpt-5.3-codex-spark",
+        provider: "openai-codex",
+        name: "GPT-5.3 Codex Spark",
+        reasoning: true,
+        contextWindow: 128000,
+        input: ["text"],
+      },
+    ]);
+
+    const result = await loadModelCatalog({ config: {} as OpenClawConfig });
+    expect(result).not.toContainEqual(
+      expect.objectContaining({
+        provider: "openai",
+        id: "gpt-5.3-codex-spark",
+      }),
+    );
+    expect(result).not.toContainEqual(
+      expect.objectContaining({
+        provider: "azure-openai-responses",
+        id: "gpt-5.3-codex-spark",
+      }),
+    );
+    expect(result).toContainEqual(
+      expect.objectContaining({
+        provider: "openai-codex",
+        id: "gpt-5.3-codex-spark",
+      }),
+    );
+  });
+
   it("adds gpt-5.4 forward-compat catalog entries when template models exist", async () => {
     mockPiDiscoveryModels([
       {

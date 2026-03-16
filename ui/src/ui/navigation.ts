@@ -10,7 +10,16 @@ export const TAB_GROUPS = [
   { label: "agent", tabs: ["agents", "skills", "nodes"] },
   {
     label: "settings",
-    tabs: ["config", "debug", "logs"],
+    tabs: [
+      "config",
+      "communications",
+      "appearance",
+      "automation",
+      "infrastructure",
+      "aiAgents",
+      "debug",
+      "logs",
+    ],
   },
 ] as const;
 
@@ -55,19 +64,7 @@ const TAB_PATHS: Record<Tab, string> = {
   logs: "/logs",
 };
 
-const HIDDEN_SETTINGS_TABS = new Set<Tab>([
-  "communications",
-  "appearance",
-  "automation",
-  "infrastructure",
-  "aiAgents",
-]);
-
-const PATH_TO_TAB = new Map(
-  Object.entries(TAB_PATHS)
-    .filter(([tab]) => !HIDDEN_SETTINGS_TABS.has(tab as Tab))
-    .map(([tab, path]) => [path, tab as Tab]),
-);
+const PATH_TO_TAB = new Map(Object.entries(TAB_PATHS).map(([tab, path]) => [path, tab as Tab]));
 
 export function normalizeBasePath(basePath: string): string {
   if (!basePath) {
