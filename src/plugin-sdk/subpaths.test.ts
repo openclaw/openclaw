@@ -111,6 +111,12 @@ describe("plugin-sdk subpath exports", () => {
     expect(typeof zaloSdk.zaloSetupAdapter).toBe("object");
   });
 
+  it("exports Synology Chat helpers", async () => {
+    const synologyChatSdk = await import("openclaw/plugin-sdk/synology-chat");
+    expect(typeof synologyChatSdk.synologyChatSetupWizard).toBe("object");
+    expect(typeof synologyChatSdk.synologyChatSetupAdapter).toBe("object");
+  });
+
   it("exports Zalouser helpers", async () => {
     const zalouserSdk = await import("openclaw/plugin-sdk/zalouser");
     expect(typeof zalouserSdk.zalouserSetupWizard).toBe("object");
