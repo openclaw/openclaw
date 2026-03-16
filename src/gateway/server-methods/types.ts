@@ -1,3 +1,4 @@
+import type { AcpGatewayStore } from "../../acp/store/file-store.js";
 import type { ModelCatalogEntry } from "../../agents/model-catalog.js";
 import type { createDefaultDeps } from "../../cli/deps.js";
 import type { HealthSummary } from "../../commands/health.js";
@@ -52,6 +53,7 @@ export type GatewayRequestContext = {
   hasConnectedMobileNode: () => boolean;
   hasExecApprovalClients?: () => boolean;
   nodeRegistry: NodeRegistry;
+  acpGatewayStore: AcpGatewayStore;
   agentRunSeq: Map<string, number>;
   chatAbortControllers: Map<string, ChatAbortControllerEntry>;
   chatAbortedRuns: Map<string, number>;

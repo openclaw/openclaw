@@ -41,6 +41,7 @@ import {
   validateNodePairVerifyParams,
   validateNodeRenameParams,
 } from "../protocol/index.js";
+import { handleAcpWorkerNodeEvent, isAcpWorkerNodeEvent } from "../server-node-events-acp.js";
 import { handleNodeInvokeResult } from "./nodes.handlers.invoke-result.js";
 import {
   respondInvalidParams,
@@ -1129,8 +1130,26 @@ export const nodeHandlers: GatewayRequestHandlers = {
           ? JSON.stringify(p.payload)
           : null;
     await respondUnavailableOnThrow(respond, async () => {
-      const { handleNodeEvent } = await import("../server-node-events.js");
       const nodeId = client?.connect?.device?.id ?? client?.connect?.client?.id ?? "node";
+      if (isAcpWorkerNodeEvent(p.event)) {
+        const acpResult = await handleAcpWorkerNodeEvent({
+          context: {
+            acpGatewayStore: context.acpGatewayStore,
+            logGateway: { warn: context.logGateway.warn },
+          },
+          nodeId,
+          event: p.event,
+          payloadJSON,
+        });
+        if (!acpResult.ok) {
+          respond(false, undefined, acpResult.error);
+          return;
+        }
+        respond(true, acpResult.payload, undefined);
+        return;
+      }
+
+      const { handleNodeEvent } = await import("../server-node-events.js");
       const nodeContext = {
         deps: context.deps,
         broadcast: context.broadcast,

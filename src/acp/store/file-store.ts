@@ -585,7 +585,11 @@ export class AcpGatewayStore {
       const conflictingSeq = Object.values(snapshot.events).find(
         (event) => event.runId === input.runId && event.seq === input.finalSeq,
       );
-      if (conflictingSeq && conflictingSeq.eventId !== input.terminalEventId) {
+      if (
+        conflictingSeq &&
+        conflictingSeq.eventId !== input.terminalEventId &&
+        conflictingSeq.kind !== "event"
+      ) {
         return {
           snapshot,
           result: {
