@@ -1,6 +1,7 @@
 import type { PluginRuntime } from "openclaw/plugin-sdk/test-utils";
 import { removeAckReactionAfterReply, shouldAckReaction } from "openclaw/plugin-sdk/test-utils";
 import { vi } from "vitest";
+import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../../src/agents/defaults.js";
 
 type DeepPartial<T> = {
   [K in keyof T]?: T[K] extends (...args: never[]) => unknown
@@ -38,6 +39,50 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
     config: {
       loadConfig: vi.fn(() => ({})) as unknown as PluginRuntime["config"]["loadConfig"],
       writeConfigFile: vi.fn() as unknown as PluginRuntime["config"]["writeConfigFile"],
+    },
+    agent: {
+      defaults: {
+        model: DEFAULT_MODEL,
+        provider: DEFAULT_PROVIDER,
+      },
+      resolveAgentDir: vi.fn(
+        () => "/tmp/agent",
+      ) as unknown as PluginRuntime["agent"]["resolveAgentDir"],
+      resolveAgentWorkspaceDir: vi.fn(
+        () => "/tmp/workspace",
+      ) as unknown as PluginRuntime["agent"]["resolveAgentWorkspaceDir"],
+      resolveAgentIdentity: vi.fn(() => ({
+        name: "test-agent",
+      })) as unknown as PluginRuntime["agent"]["resolveAgentIdentity"],
+      resolveThinkingDefault: vi.fn(
+        () => "off",
+      ) as unknown as PluginRuntime["agent"]["resolveThinkingDefault"],
+      runEmbeddedPiAgent: vi.fn().mockResolvedValue({
+        payloads: [],
+        meta: {},
+      }) as unknown as PluginRuntime["agent"]["runEmbeddedPiAgent"],
+      resolveAgentTimeoutMs: vi.fn(
+        () => 30_000,
+      ) as unknown as PluginRuntime["agent"]["resolveAgentTimeoutMs"],
+      ensureAgentWorkspace: vi
+        .fn()
+        .mockResolvedValue(undefined) as unknown as PluginRuntime["agent"]["ensureAgentWorkspace"],
+      session: {
+        resolveStorePath: vi.fn(
+          () => "/tmp/agent-sessions.json",
+        ) as unknown as PluginRuntime["agent"]["session"]["resolveStorePath"],
+        loadSessionStore: vi.fn(
+          () => ({}),
+        ) as unknown as PluginRuntime["agent"]["session"]["loadSessionStore"],
+        saveSessionStore: vi
+          .fn()
+          .mockResolvedValue(
+            undefined,
+          ) as unknown as PluginRuntime["agent"]["session"]["saveSessionStore"],
+        resolveSessionFilePath: vi.fn(
+          (sessionId: string) => `/tmp/${sessionId}.json`,
+        ) as unknown as PluginRuntime["agent"]["session"]["resolveSessionFilePath"],
+      },
     },
     system: {
       enqueueSystemEvent: vi.fn() as unknown as PluginRuntime["system"]["enqueueSystemEvent"],
