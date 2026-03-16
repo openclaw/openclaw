@@ -207,6 +207,9 @@ jobs:
             task: channels
             command: pnpm test:channels
           - runtime: node
+            task: contracts
+            command: pnpm test:contracts
+          - runtime: node
             task: protocol
             command: pnpm protocol:check
           - runtime: bun
