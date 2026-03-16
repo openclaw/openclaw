@@ -10,6 +10,7 @@ import type {
   AuthProfileCredential,
   OAuthCredential,
 } from "../agents/auth-profiles/types.js";
+import type { ModelCatalogEntry } from "../agents/model-catalog.js";
 import type { ProviderCapabilities } from "../agents/provider-capabilities.js";
 import type { AnyAgentTool } from "../agents/tools/common.js";
 import type { ThinkLevel } from "../auto-reply/thinking.js";
@@ -25,6 +26,7 @@ import type { InternalHookHandler } from "../hooks/internal-hooks.js";
 import type { HookEntry } from "../hooks/types.js";
 import type { ProviderUsageSnapshot } from "../infra/provider-usage.types.js";
 import type { RuntimeEnv } from "../runtime.js";
+import type { RuntimeWebSearchMetadata } from "../secrets/runtime-web-tools.types.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 import type { PluginRuntime } from "./runtime/types.js";
 
@@ -390,6 +392,59 @@ export type ProviderCacheTtlEligibilityContext = {
 };
 
 /**
+ * Provider-owned missing-auth message override.
+ *
+ * Runs only after OpenClaw exhausts normal env/profile/config auth resolution
+ * for the requested provider. Return a custom message to replace the generic
+ * "No API key found" error.
+ */
+export type ProviderBuildMissingAuthMessageContext = {
+  config?: OpenClawConfig;
+  agentDir?: string;
+  workspaceDir?: string;
+  env: NodeJS.ProcessEnv;
+  provider: string;
+  listProfileIds: (providerId: string) => string[];
+};
+
+/**
+ * Built-in model suppression hook.
+ *
+ * Use this when a provider/plugin needs to hide stale upstream catalog rows or
+ * replace them with a vendor-specific hint. This hook is consulted by model
+ * resolution, model listing, and catalog loading.
+ */
+export type ProviderBuiltInModelSuppressionContext = {
+  config?: OpenClawConfig;
+  agentDir?: string;
+  workspaceDir?: string;
+  env: NodeJS.ProcessEnv;
+  provider: string;
+  modelId: string;
+};
+
+export type ProviderBuiltInModelSuppressionResult = {
+  suppress: boolean;
+  errorMessage?: string;
+};
+
+/**
+ * Final catalog augmentation hook.
+ *
+ * Runs after OpenClaw loads the discovered model catalog and merges configured
+ * opt-in providers. Use this for forward-compat rows or vendor-owned synthetic
+ * entries that should appear in `models list` and model pickers even when the
+ * upstream registry has not caught up yet.
+ */
+export type ProviderAugmentModelCatalogContext = {
+  config?: OpenClawConfig;
+  agentDir?: string;
+  workspaceDir?: string;
+  env: NodeJS.ProcessEnv;
+  entries: ModelCatalogEntry[];
+};
+
+/**
  * @deprecated Use ProviderCatalogOrder.
  */
 export type ProviderDiscoveryOrder = ProviderCatalogOrder;
@@ -559,10 +614,72 @@ export type ProviderPlugin = {
    * only a subset of upstream models.
    */
   isCacheTtlEligible?: (ctx: ProviderCacheTtlEligibilityContext) => boolean | undefined;
+  /**
+   * Provider-owned missing-auth message override.
+   *
+   * Return a custom message when the provider wants a more specific recovery
+   * hint than OpenClaw's generic auth-store guidance.
+   */
+  buildMissingAuthMessage?: (
+    ctx: ProviderBuildMissingAuthMessageContext,
+  ) => string | null | undefined;
+  /**
+   * Provider-owned built-in model suppression.
+   *
+   * Return `{ suppress: true }` to hide a stale upstream row. Include
+   * `errorMessage` when OpenClaw should surface a provider-specific hint for
+   * direct model resolution failures.
+   */
+  suppressBuiltInModel?: (
+    ctx: ProviderBuiltInModelSuppressionContext,
+  ) => ProviderBuiltInModelSuppressionResult | null | undefined;
+  /**
+   * Provider-owned final catalog augmentation.
+   *
+   * Return extra rows to append to the final catalog after discovery/config
+   * merging. OpenClaw deduplicates by `provider/id`, so plugins only need to
+   * describe the desired supplemental rows.
+   */
+  augmentModelCatalog?: (
+    ctx: ProviderAugmentModelCatalogContext,
+  ) =>
+    | Array<ModelCatalogEntry>
+    | ReadonlyArray<ModelCatalogEntry>
+    | Promise<Array<ModelCatalogEntry> | ReadonlyArray<ModelCatalogEntry> | null | undefined>
+    | null
+    | undefined;
   wizard?: ProviderPluginWizard;
   formatApiKey?: (cred: AuthProfileCredential) => string;
   refreshOAuth?: (cred: OAuthCredential) => Promise<OAuthCredential>;
   onModelSelected?: (ctx: ProviderModelSelectedContext) => Promise<void>;
+};
+
+export type WebSearchProviderId = string;
+
+export type WebSearchProviderToolDefinition = {
+  description: string;
+  parameters: Record<string, unknown>;
+  execute: (args: Record<string, unknown>) => Promise<Record<string, unknown>>;
+};
+
+export type WebSearchProviderContext = {
+  config?: OpenClawConfig;
+  searchConfig?: Record<string, unknown>;
+  runtimeMetadata?: RuntimeWebSearchMetadata;
+};
+
+export type WebSearchProviderPlugin = {
+  id: WebSearchProviderId;
+  label: string;
+  hint: string;
+  envVars: string[];
+  placeholder: string;
+  signupUrl: string;
+  docsUrl?: string;
+  autoDetectOrder?: number;
+  getCredentialValue: (searchConfig?: Record<string, unknown>) => unknown;
+  setCredentialValue: (searchConfigTarget: Record<string, unknown>, value: unknown) => void;
+  createTool: (ctx: WebSearchProviderContext) => WebSearchProviderToolDefinition | null;
 };
 
 export type OpenClawPluginGatewayMethod = {
@@ -839,6 +956,8 @@ export type OpenClawPluginModule =
   | OpenClawPluginDefinition
   | ((api: OpenClawPluginApi) => void | Promise<void>);
 
+export type PluginRegistrationMode = "full" | "setup-only";
+
 export type OpenClawPluginApi = {
   id: string;
   name: string;
@@ -846,6 +965,7 @@ export type OpenClawPluginApi = {
   description?: string;
   source: string;
   rootDir?: string;
+  registrationMode: PluginRegistrationMode;
   config: OpenClawConfig;
   pluginConfig?: Record<string, unknown>;
   runtime: PluginRuntime;
@@ -865,6 +985,7 @@ export type OpenClawPluginApi = {
   registerCli: (registrar: OpenClawPluginCliRegistrar, opts?: { commands?: string[] }) => void;
   registerService: (service: OpenClawPluginService) => void;
   registerProvider: (provider: ProviderPlugin) => void;
+  registerWebSearchProvider: (provider: WebSearchProviderPlugin) => void;
   registerInteractiveHandler: (registration: PluginInteractiveHandlerRegistration) => void;
   /**
    * Register a custom command that bypasses the LLM agent.

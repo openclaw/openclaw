@@ -110,6 +110,7 @@ export type ChannelSetupWizardTextInput = {
   message: string;
   placeholder?: string;
   required?: boolean;
+  applyEmptyValue?: boolean;
   helpTitle?: string;
   helpLines?: string[];
   confirmCurrentValue?: boolean;
@@ -223,15 +224,49 @@ export type ChannelSetupWizardPrepare = (params: {
       credentialValues?: ChannelSetupWizardCredentialValues;
     } | void>;
 
+export type ChannelSetupWizardFinalize = (params: {
+  cfg: OpenClawConfig;
+  accountId: string;
+  credentialValues: ChannelSetupWizardCredentialValues;
+  runtime: ChannelOnboardingConfigureContext["runtime"];
+  prompter: WizardPrompter;
+  options?: ChannelOnboardingConfigureContext["options"];
+  forceAllowFrom: boolean;
+}) =>
+  | {
+      cfg?: OpenClawConfig;
+      credentialValues?: ChannelSetupWizardCredentialValues;
+    }
+  | void
+  | Promise<{
+      cfg?: OpenClawConfig;
+      credentialValues?: ChannelSetupWizardCredentialValues;
+    } | void>;
+
 export type ChannelSetupWizard = {
   channel: string;
   status: ChannelSetupWizardStatus;
   introNote?: ChannelSetupWizardNote;
   envShortcut?: ChannelSetupWizardEnvShortcut;
+  resolveAccountIdForConfigure?: (params: {
+    cfg: OpenClawConfig;
+    prompter: WizardPrompter;
+    options?: ChannelOnboardingConfigureContext["options"];
+    accountOverride?: string;
+    shouldPromptAccountIds: boolean;
+    listAccountIds: ChannelSetupWizardPlugin["config"]["listAccountIds"];
+    defaultAccountId: string;
+  }) => string | Promise<string>;
+  resolveShouldPromptAccountIds?: (params: {
+    cfg: OpenClawConfig;
+    options?: ChannelOnboardingConfigureContext["options"];
+    shouldPromptAccountIds: boolean;
+  }) => boolean;
   prepare?: ChannelSetupWizardPrepare;
   stepOrder?: "credentials-first" | "text-first";
   credentials: ChannelSetupWizardCredential[];
   textInputs?: ChannelSetupWizardTextInput[];
+  finalize?: ChannelSetupWizardFinalize;
   completionNote?: ChannelSetupWizardNote;
   dmPolicy?: ChannelOnboardingDmPolicy;
   allowFrom?: ChannelSetupWizardAllowFrom;
@@ -384,15 +419,31 @@ export function buildChannelOnboardingAdapterFromSetupWizard(params: {
         plugin.config.defaultAccountId?.(cfg) ??
         plugin.config.listAccountIds(cfg)[0] ??
         DEFAULT_ACCOUNT_ID;
-      const accountId = await resolveAccountIdForConfigure({
-        cfg,
-        prompter,
-        label: plugin.meta.label,
-        accountOverride: accountOverrides[plugin.id],
-        shouldPromptAccountIds,
-        listAccountIds: plugin.config.listAccountIds,
-        defaultAccountId,
-      });
+      const resolvedShouldPromptAccountIds =
+        wizard.resolveShouldPromptAccountIds?.({
+          cfg,
+          options,
+          shouldPromptAccountIds,
+        }) ?? shouldPromptAccountIds;
+      const accountId = await (wizard.resolveAccountIdForConfigure
+        ? wizard.resolveAccountIdForConfigure({
+            cfg,
+            prompter,
+            options,
+            accountOverride: accountOverrides[plugin.id],
+            shouldPromptAccountIds: resolvedShouldPromptAccountIds,
+            listAccountIds: plugin.config.listAccountIds,
+            defaultAccountId,
+          })
+        : resolveAccountIdForConfigure({
+            cfg,
+            prompter,
+            label: plugin.meta.label,
+            accountOverride: accountOverrides[plugin.id],
+            shouldPromptAccountIds: resolvedShouldPromptAccountIds,
+            listAccountIds: plugin.config.listAccountIds,
+            defaultAccountId,
+          }));
 
       let next = cfg;
       let credentialValues = collectCredentialValues({
@@ -650,6 +701,15 @@ export function buildChannelOnboardingAdapterFromSetupWizard(params: {
           );
           const trimmedValue = rawValue.trim();
           if (!trimmedValue && textInput.required === false) {
+            if (textInput.applyEmptyValue) {
+              next = await applyWizardTextInputValue({
+                plugin,
+                input: textInput,
+                cfg: next,
+                accountId,
+                value: "",
+              });
+            }
             delete credentialValues[textInput.inputKey];
             continue;
           }
@@ -759,6 +819,27 @@ export function buildChannelOnboardingAdapterFromSetupWizard(params: {
           accountId,
           allowFrom: unique,
         });
+      }
+
+      if (wizard.finalize) {
+        const finalized = await wizard.finalize({
+          cfg: next,
+          accountId,
+          credentialValues,
+          runtime,
+          prompter,
+          options,
+          forceAllowFrom,
+        });
+        if (finalized?.cfg) {
+          next = finalized.cfg;
+        }
+        if (finalized?.credentialValues) {
+          credentialValues = {
+            ...credentialValues,
+            ...finalized.credentialValues,
+          };
+        }
       }
 
       const shouldShowCompletionNote =

@@ -91,6 +91,8 @@ describe("registerPreActionHooks", () => {
     program.command("agents").action(() => {});
     program.command("configure").action(() => {});
     program.command("onboard").action(() => {});
+    const channels = program.command("channels");
+    channels.command("add").action(() => {});
     program
       .command("update")
       .command("status")
@@ -167,6 +169,31 @@ describe("registerPreActionHooks", () => {
     expect(ensurePluginRegistryLoadedMock).toHaveBeenCalledWith({ scope: "all" });
   });
 
+  it("keeps onboarding and channels add manifest-first", async () => {
+    await runPreAction({
+      parseArgv: ["onboard"],
+      processArgv: ["node", "openclaw", "onboard"],
+    });
+
+    expect(ensureConfigReadyMock).toHaveBeenCalledWith({
+      runtime: runtimeMock,
+      commandPath: ["onboard"],
+    });
+    expect(ensurePluginRegistryLoadedMock).not.toHaveBeenCalled();
+
+    vi.clearAllMocks();
+    await runPreAction({
+      parseArgv: ["channels", "add"],
+      processArgv: ["node", "openclaw", "channels", "add"],
+    });
+
+    expect(ensureConfigReadyMock).toHaveBeenCalledWith({
+      runtime: runtimeMock,
+      commandPath: ["channels", "add"],
+    });
+    expect(ensurePluginRegistryLoadedMock).not.toHaveBeenCalled();
+  });
+
   it("skips help/version preaction and respects banner opt-out", async () => {
     await runPreAction({
       parseArgv: ["status"],
@@ -191,6 +218,19 @@ describe("registerPreActionHooks", () => {
 
   it("applies --json stdout suppression only for explicit JSON output commands", async () => {
     await runPreAction({
+      parseArgv: ["status"],
+      processArgv: ["node", "openclaw", "status", "--json"],
+    });
+
+    expect(ensureConfigReadyMock).toHaveBeenCalledWith({
+      runtime: runtimeMock,
+      commandPath: ["status"],
+      suppressDoctorStdout: true,
+    });
+    expect(ensurePluginRegistryLoadedMock).not.toHaveBeenCalled();
+
+    vi.clearAllMocks();
+    await runPreAction({
       parseArgv: ["update", "status", "--json"],
       processArgv: ["node", "openclaw", "update", "status", "--json"],
     });
@@ -200,6 +240,7 @@ describe("registerPreActionHooks", () => {
       commandPath: ["update", "status"],
       suppressDoctorStdout: true,
     });
+    expect(ensurePluginRegistryLoadedMock).not.toHaveBeenCalled();
 
     vi.clearAllMocks();
     await runPreAction({

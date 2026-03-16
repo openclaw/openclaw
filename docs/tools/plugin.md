@@ -167,8 +167,7 @@ Important trust note:
 - Anthropic provider runtime — bundled as `anthropic` (enabled by default)
 - BytePlus provider catalog — bundled as `byteplus` (enabled by default)
 - Cloudflare AI Gateway provider catalog — bundled as `cloudflare-ai-gateway` (enabled by default)
-- Google Antigravity OAuth (provider auth) — bundled as `google-antigravity-auth` (disabled by default)
-- Gemini CLI OAuth (provider auth) — bundled as `google-gemini-cli-auth` (disabled by default)
+- Google web search + Gemini CLI OAuth — bundled as `google` (web search auto-loads it; provider auth stays opt-in)
 - GitHub Copilot provider runtime — bundled as `github-copilot` (enabled by default)
 - Hugging Face provider catalog — bundled as `huggingface` (enabled by default)
 - Kilo Gateway provider runtime — bundled as `kilocode` (enabled by default)
@@ -179,8 +178,7 @@ Important trust note:
 - Model Studio provider catalog — bundled as `modelstudio` (enabled by default)
 - Moonshot provider runtime — bundled as `moonshot` (enabled by default)
 - NVIDIA provider catalog — bundled as `nvidia` (enabled by default)
-- OpenAI provider runtime — bundled as `openai` (enabled by default)
-- OpenAI Codex provider runtime — bundled as `openai-codex` (enabled by default)
+- OpenAI provider runtime — bundled as `openai` (enabled by default; owns both `openai` and `openai-codex`)
 - OpenCode Go provider capabilities — bundled as `opencode-go` (enabled by default)
 - OpenCode Zen provider capabilities — bundled as `opencode` (enabled by default)
 - OpenRouter provider runtime — bundled as `openrouter` (enabled by default)
@@ -208,7 +206,7 @@ Native OpenClaw plugins can register:
 - Background services
 - Context engines
 - Provider auth flows and model catalogs
-- Provider runtime hooks for dynamic model ids, transport normalization, capability metadata, stream wrapping, cache TTL policy, runtime auth exchange, and usage/billing auth + snapshot resolution
+- Provider runtime hooks for dynamic model ids, transport normalization, capability metadata, stream wrapping, cache TTL policy, missing-auth hints, built-in model suppression, catalog augmentation, runtime auth exchange, and usage/billing auth + snapshot resolution
 - Optional config validation
 - **Skills** (by listing `skills` directories in the plugin manifest)
 - **Auto-reply commands** (execute without invoking the AI agent)
@@ -221,7 +219,7 @@ Tool authoring guide: [Plugin agent tools](/plugins/agent-tools).
 Provider plugins now have two layers:
 
 - config-time hooks: `catalog` / legacy `discovery`
-- runtime hooks: `resolveDynamicModel`, `prepareDynamicModel`, `normalizeResolvedModel`, `capabilities`, `prepareExtraParams`, `wrapStreamFn`, `isCacheTtlEligible`, `prepareRuntimeAuth`, `resolveUsageAuth`, `fetchUsageSnapshot`
+- runtime hooks: `resolveDynamicModel`, `prepareDynamicModel`, `normalizeResolvedModel`, `capabilities`, `prepareExtraParams`, `wrapStreamFn`, `isCacheTtlEligible`, `buildMissingAuthMessage`, `suppressBuiltInModel`, `augmentModelCatalog`, `prepareRuntimeAuth`, `resolveUsageAuth`, `fetchUsageSnapshot`
 
 OpenClaw still owns the generic agent loop, failover, transcript handling, and
 tool policy. These hooks are the seam for provider-specific behavior without
@@ -252,13 +250,20 @@ For model/provider plugins, OpenClaw uses hooks in this rough order:
    Provider-owned stream wrapper after generic wrappers are applied.
 9. `isCacheTtlEligible`
    Provider-owned prompt-cache policy for proxy/backhaul providers.
-10. `prepareRuntimeAuth`
+10. `buildMissingAuthMessage`
+    Provider-owned replacement for the generic missing-auth recovery message.
+11. `suppressBuiltInModel`
+    Provider-owned stale upstream model suppression plus optional user-facing
+    error hint.
+12. `augmentModelCatalog`
+    Provider-owned synthetic/final catalog rows appended after discovery.
+13. `prepareRuntimeAuth`
     Exchanges a configured credential into the actual runtime token/key just
     before inference.
-11. `resolveUsageAuth`
+14. `resolveUsageAuth`
     Resolves usage/billing credentials for `/usage` and related status
     surfaces.
-12. `fetchUsageSnapshot`
+15. `fetchUsageSnapshot`
     Fetches and normalizes provider-specific usage/quota snapshots after auth
     is resolved.
 
@@ -272,6 +277,9 @@ For model/provider plugins, OpenClaw uses hooks in this rough order:
 - `prepareExtraParams`: set provider defaults or normalize provider-specific per-model params before generic stream wrapping
 - `wrapStreamFn`: add provider-specific headers/payload/model compat patches while still using the normal `pi-ai` execution path
 - `isCacheTtlEligible`: decide whether provider/model pairs should use cache TTL metadata
+- `buildMissingAuthMessage`: replace the generic auth-store error with a provider-specific recovery hint
+- `suppressBuiltInModel`: hide stale upstream rows and optionally return a provider-owned error for direct resolution failures
+- `augmentModelCatalog`: append synthetic/final catalog rows after discovery and config merging
 - `prepareRuntimeAuth`: exchange a configured credential into the actual short-lived runtime token/key used for requests
 - `resolveUsageAuth`: resolve provider-owned credentials for usage/billing endpoints without hardcoding token parsing in core
 - `fetchUsageSnapshot`: own provider-specific usage endpoint fetch/parsing while core keeps summary fan-out and formatting
@@ -286,6 +294,9 @@ Rule of thumb:
 - provider needs default request params or per-provider param cleanup: use `prepareExtraParams`
 - provider needs request headers/body/model compat wrappers without a custom transport: use `wrapStreamFn`
 - provider needs proxy-specific cache TTL gating: use `isCacheTtlEligible`
+- provider needs a provider-specific missing-auth recovery hint: use `buildMissingAuthMessage`
+- provider needs to hide stale upstream rows or replace them with a vendor hint: use `suppressBuiltInModel`
+- provider needs synthetic forward-compat rows in `models list` and pickers: use `augmentModelCatalog`
 - provider needs a token exchange or short-lived request credential: use `prepareRuntimeAuth`
 - provider needs custom usage/quota token parsing or a different usage credential: use `resolveUsageAuth`
 - provider needs a provider-specific usage endpoint or payload parser: use `fetchUsageSnapshot`
@@ -355,8 +366,10 @@ api.registerProvider({
   forward-compat, provider-family hints, usage endpoint integration, and
   prompt-cache eligibility.
 - OpenAI uses `resolveDynamicModel`, `normalizeResolvedModel`, and
-  `capabilities` because it owns GPT-5.4 forward-compat plus the direct OpenAI
-  `openai-completions` -> `openai-responses` normalization.
+  `capabilities` plus `buildMissingAuthMessage`, `suppressBuiltInModel`, and
+  `augmentModelCatalog` because it owns GPT-5.4 forward-compat, the direct
+  OpenAI `openai-completions` -> `openai-responses` normalization, Codex-aware
+  auth hints, Spark suppression, and synthetic OpenAI list rows.
 - OpenRouter uses `catalog` plus `resolveDynamicModel` and
   `prepareDynamicModel` because the provider is pass-through and may expose new
   model ids before OpenClaw's static catalog updates.
@@ -364,11 +377,12 @@ api.registerProvider({
   `capabilities` plus `prepareRuntimeAuth` and `fetchUsageSnapshot` because it
   needs model fallback behavior, Claude transcript quirks, a GitHub token ->
   Copilot token exchange, and a provider-owned usage endpoint.
-- OpenAI Codex uses `catalog`, `resolveDynamicModel`, and
-  `normalizeResolvedModel` plus `prepareExtraParams`, `resolveUsageAuth`, and
-  `fetchUsageSnapshot` because it still runs on core OpenAI transports but owns
-  its transport/base URL normalization, default transport choice, and ChatGPT
-  usage endpoint integration.
+- OpenAI Codex uses `catalog`, `resolveDynamicModel`,
+  `normalizeResolvedModel`, and `augmentModelCatalog` plus
+  `prepareExtraParams`, `resolveUsageAuth`, and `fetchUsageSnapshot` because it
+  still runs on core OpenAI transports but owns its transport/base URL
+  normalization, default transport choice, synthetic Codex catalog rows, and
+  ChatGPT usage endpoint integration.
 - Gemini CLI OAuth uses `resolveDynamicModel`, `resolveUsageAuth`, and
   `fetchUsageSnapshot` because it owns Gemini 3.1 forward-compat fallback plus
   the token parsing and quota endpoint wiring needed by `/usage`.
@@ -521,8 +535,7 @@ authoring plugins:
   `openclaw/plugin-sdk/acpx`, `openclaw/plugin-sdk/bluebubbles`,
   `openclaw/plugin-sdk/copilot-proxy`, `openclaw/plugin-sdk/device-pair`,
   `openclaw/plugin-sdk/diagnostics-otel`, `openclaw/plugin-sdk/diffs`,
-  `openclaw/plugin-sdk/feishu`,
-  `openclaw/plugin-sdk/google-gemini-cli-auth`, `openclaw/plugin-sdk/googlechat`,
+  `openclaw/plugin-sdk/feishu`, `openclaw/plugin-sdk/googlechat`,
   `openclaw/plugin-sdk/irc`, `openclaw/plugin-sdk/llm-task`,
   `openclaw/plugin-sdk/lobster`, `openclaw/plugin-sdk/matrix`,
   `openclaw/plugin-sdk/mattermost`, `openclaw/plugin-sdk/memory-core`,
@@ -656,7 +669,7 @@ Default-on bundled plugin examples:
 - `moonshot`
 - `nvidia`
 - `ollama`
-- `openai-codex`
+- `openai`
 - `openrouter`
 - `phone-control`
 - `qianfan`
@@ -736,7 +749,8 @@ A plugin directory may include a `package.json` with `openclaw.extensions`:
 {
   "name": "my-pack",
   "openclaw": {
-    "extensions": ["./src/safety.ts", "./src/tools.ts"]
+    "extensions": ["./src/safety.ts", "./src/tools.ts"],
+    "setupEntry": "./src/setup-entry.ts"
   }
 }
 ```
@@ -754,6 +768,12 @@ rejected.
 Security note: `openclaw plugins install` installs plugin dependencies with
 `npm install --ignore-scripts` (no lifecycle scripts). Keep plugin dependency
 trees "pure JS/TS" and avoid packages that require `postinstall` builds.
+
+Optional: `openclaw.setupEntry` can point at a lightweight setup-only module.
+When OpenClaw needs onboarding/setup surfaces for a disabled channel plugin, it
+loads `setupEntry` instead of the full plugin entry. This keeps startup and
+onboarding lighter when your main plugin entry also wires tools, hooks, or
+other runtime-only code.
 
 ### Channel catalog metadata
 
@@ -1424,16 +1444,6 @@ Preferred setup split:
 - `plugin.setup` owns account-id normalization, validation, and config writes.
 - `plugin.setupWizard` lets the host run the common wizard flow while the channel only supplies status, credential, DM allowlist, and channel-access descriptors.
 
-Use `plugin.onboarding` only when the host-owned setup wizard cannot express the flow and the
-channel needs to fully own prompting.
-
-Wizard precedence:
-
-1. `plugin.setupWizard` (preferred, host-owned prompts)
-2. `plugin.onboarding.configureInteractive`
-3. `plugin.onboarding.configureWhenConfigured` (already-configured channel only)
-4. `plugin.onboarding.configure`
-
 `plugin.setupWizard` is best for channels that fit the shared pattern:
 
 - one account picker driven by `plugin.config.listAccountIds`
@@ -1444,11 +1454,6 @@ Wizard precedence:
 - optional channel/group access allowlist prompts resolved by the host
 - optional DM allowlist resolution (for example `@username` -> numeric id)
 - optional completion note after setup finishes
-
-`plugin.onboarding` hooks still return the same values as before:
-
-- `"skip"` leaves selection and account tracking unchanged.
-- `{ cfg, accountId? }` applies config updates and records account selection.
 
 ### Write a new messaging channel (step‑by‑step)
 
@@ -1659,6 +1664,7 @@ Recommended packaging:
 Publishing contract:
 
 - Plugin `package.json` must include `openclaw.extensions` with one or more entry files.
+- Optional: `openclaw.setupEntry` may point at a lightweight setup-only entry for disabled channel onboarding/setup.
 - Entry files can be `.js` or `.ts` (jiti loads TS at runtime).
 - `openclaw plugins install <npm-spec>` uses `npm pack`, extracts into `~/.openclaw/extensions/<id>/`, and enables it in config.
 - Config key stability: scoped packages are normalized to the **unscoped** id for `plugins.entries.*`.

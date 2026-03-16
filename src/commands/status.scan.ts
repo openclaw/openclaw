@@ -1,3 +1,4 @@
+import { hasPotentialConfiguredChannels } from "../channels/config-presence.js";
 import { resolveCommandSecretRefsViaGateway } from "../cli/command-secret-gateway.js";
 import { getStatusCommandSecretTargetIds } from "../cli/command-secret-targets.js";
 import { withProgress } from "../cli/progress.js";
@@ -45,6 +46,13 @@ type GatewayProbeSnapshot = {
   gatewayProbeAuthWarning?: string;
   gatewayProbe: Awaited<ReturnType<typeof probeGateway>> | null;
 };
+
+let pluginRegistryModulePromise: Promise<typeof import("../cli/plugin-registry.js")> | undefined;
+
+function loadPluginRegistryModule() {
+  pluginRegistryModulePromise ??= import("../cli/plugin-registry.js");
+  return pluginRegistryModulePromise;
+}
 
 function deferResult<T>(promise: Promise<T>): Promise<DeferredResult<T>> {
   return promise.then(
@@ -191,6 +199,10 @@ async function scanStatusJsonFast(opts: {
       targetIds: getStatusCommandSecretTargetIds(),
       mode: "summary",
     });
+  if (hasPotentialConfiguredChannels(cfg)) {
+    const { ensurePluginRegistryLoaded } = await loadPluginRegistryModule();
+    ensurePluginRegistryLoaded({ scope: "channels" });
+  }
   const osSummary = resolveOsSummary();
   const tailscaleMode = cfg.gateway?.tailscale?.mode ?? "off";
   const updateTimeoutMs = opts.all ? 6500 : 2500;

@@ -2,22 +2,31 @@ import { describe, expect, it } from "vitest";
 import type { ProviderPlugin } from "../../src/plugins/types.js";
 import openAIPlugin from "./index.js";
 
-function registerProvider(): ProviderPlugin {
-  let provider: ProviderPlugin | undefined;
+function registerProviders(): ProviderPlugin[] {
+  const providers: ProviderPlugin[] = [];
   openAIPlugin.register({
     registerProvider(nextProvider: ProviderPlugin) {
-      provider = nextProvider;
+      providers.push(nextProvider);
     },
   } as never);
+  return providers;
+}
+
+function requireProvider(id: string): ProviderPlugin {
+  const provider = registerProviders().find((entry) => entry.id === id);
   if (!provider) {
-    throw new Error("provider registration missing");
+    throw new Error(`provider registration missing for ${id}`);
   }
   return provider;
 }
 
 describe("openai plugin", () => {
+  it("registers openai and openai-codex providers from one extension", () => {
+    expect(registerProviders().map((provider) => provider.id)).toEqual(["openai", "openai-codex"]);
+  });
+
   it("owns openai gpt-5.4 forward-compat resolution", () => {
-    const provider = registerProvider();
+    const provider = requireProvider("openai");
     const model = provider.resolveDynamicModel?.({
       provider: "openai",
       modelId: "gpt-5.4-pro",
@@ -51,7 +60,7 @@ describe("openai plugin", () => {
   });
 
   it("owns direct openai transport normalization", () => {
-    const provider = registerProvider();
+    const provider = requireProvider("openai");
     expect(
       provider.normalizeResolvedModel?.({
         provider: "openai",
@@ -71,6 +80,26 @@ describe("openai plugin", () => {
       }),
     ).toMatchObject({
       api: "openai-responses",
+    });
+  });
+
+  it("owns codex-only missing-auth hints and Spark suppression", () => {
+    const provider = requireProvider("openai");
+    expect(
+      provider.buildMissingAuthMessage?.({
+        env: {} as NodeJS.ProcessEnv,
+        provider: "openai",
+        listProfileIds: (providerId) => (providerId === "openai-codex" ? ["p1"] : []),
+      }),
+    ).toContain("openai-codex/gpt-5.4");
+    expect(
+      provider.suppressBuiltInModel?.({
+        env: {} as NodeJS.ProcessEnv,
+        provider: "azure-openai-responses",
+        modelId: "gpt-5.3-codex-spark",
+      }),
+    ).toMatchObject({
+      suppress: true,
     });
   });
 });
