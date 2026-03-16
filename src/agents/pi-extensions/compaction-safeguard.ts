@@ -6,6 +6,7 @@ import { extractSections } from "../../auto-reply/reply/post-compaction-context.
 import { openBoundaryFile } from "../../infra/boundary-file-read.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { extractKeywords, isQueryStopWordToken } from "../../memory/query-expansion.js";
+import { scoreCompactionGuard } from "../compaction-guard.js";
 import {
   BASE_CHUNK_RATIO,
   type CompactionSummarizationInstructions,
@@ -24,6 +25,11 @@ import { wrapUntrustedPromptDataBlock } from "../sanitize-for-prompt.js";
 import { repairToolUseResultPairing } from "../session-transcript-repair.js";
 import { extractToolCallsFromAssistant, extractToolResultId } from "../tool-call-id.js";
 import {
+  detectTranscriptTailSignals,
+  type TranscriptTailEntry,
+} from "../transcript-tail-detector.js";
+import {
+  buildGuardAugmentedCompactionInstructions,
   composeSplitTurnInstructions,
   resolveCompactionInstructions,
 } from "./compaction-instructions.js";
@@ -47,6 +53,7 @@ const MAX_EXTRACTED_IDENTIFIERS = 12;
 const MAX_UNTRUSTED_INSTRUCTION_CHARS = 4000;
 const MAX_ASK_OVERLAP_TOKENS = 12;
 const MIN_ASK_OVERLAP_TOKENS_FOR_DOUBLE_MATCH = 3;
+const MAX_GUARD_TAIL_MESSAGES = 24;
 const REQUIRED_SUMMARY_SECTIONS = [
   "## Decisions",
   "## Open TODOs",
@@ -83,6 +90,98 @@ function resolveQualityGuardMaxRetries(value: unknown): number {
     MAX_QUALITY_GUARD_MAX_RETRIES,
     clampNonNegativeInt(value, DEFAULT_QUALITY_GUARD_MAX_RETRIES),
   );
+}
+
+function resolveCompactionGuardUsageRatio(
+  tokensBefore: unknown,
+  contextWindowTokens: number,
+): number {
+  if (
+    typeof tokensBefore !== "number" ||
+    !Number.isFinite(tokensBefore) ||
+    !Number.isFinite(contextWindowTokens) ||
+    contextWindowTokens <= 0
+  ) {
+    return 0;
+  }
+
+  return Math.max(0, tokensBefore / contextWindowTokens);
+}
+
+function normalizeGuardMessageRole(message: AgentMessage): string | undefined {
+  const role = (message as { role?: unknown }).role;
+  return typeof role === "string" && role.trim().length > 0 ? role : undefined;
+}
+
+function normalizeGuardMessageKind(message: AgentMessage): string | undefined {
+  const kind = (message as { kind?: unknown }).kind;
+  if (typeof kind === "string" && kind.trim().length > 0) {
+    return kind;
+  }
+
+  return normalizeGuardMessageRole(message) === "toolResult" ? "tool-result" : undefined;
+}
+
+function resolveGuardToolStatus(message: AgentMessage): string | undefined {
+  const details = (message as { details?: unknown }).details;
+  if (details && typeof details === "object") {
+    const status = (details as { status?: unknown }).status;
+    if (typeof status === "string" && status.trim().length > 0) {
+      return status;
+    }
+  }
+
+  return (message as { isError?: unknown }).isError === true ? "error" : undefined;
+}
+
+function buildCompactionGuardTailEntries(messages: readonly AgentMessage[]): TranscriptTailEntry[] {
+  const tailEntries = messages.slice(-MAX_GUARD_TAIL_MESSAGES);
+
+  return tailEntries.map((message, index) => {
+    const extractedText = extractMessageText(message);
+    const role = normalizeGuardMessageRole(message);
+    const isError = (message as { isError?: unknown }).isError === true;
+    const toolFailureMeta = isError
+      ? formatToolFailureMeta((message as { details?: unknown }).details)
+      : undefined;
+
+    return {
+      id: `guard-tail-${messages.length - tailEntries.length + index}`,
+      role,
+      kind: normalizeGuardMessageKind(message),
+      text: extractedText || undefined,
+      toolName:
+        typeof (message as { toolName?: unknown }).toolName === "string"
+          ? ((message as { toolName?: unknown }).toolName as string)
+          : undefined,
+      toolStatus: resolveGuardToolStatus(message),
+      errorText: isError ? extractedText || toolFailureMeta : undefined,
+      isError,
+    };
+  });
+}
+
+function logCompactionGuardDecision(params: {
+  usageRatio: number;
+  score: number;
+  action: string;
+  augmented: boolean;
+}): void {
+  const logger = log as {
+    info?: (message: string) => void;
+    debug?: (message: string) => void;
+  };
+  const message =
+    "Compaction safeguard guard: " +
+    `usageRatio=${params.usageRatio.toFixed(3)} ` +
+    `score=${params.score} action=${params.action} augmented=${params.augmented}`;
+
+  if (logger.info) {
+    logger.info(message);
+    return;
+  }
+
+  logger.debug?.(message);
 }
 
 function normalizeFailureText(text: string): string {
@@ -708,18 +807,19 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
       );
       return { cancel: true };
     }
+    const turnPrefixMessages = preparation.turnPrefixMessages ?? [];
     const { readFiles, modifiedFiles } = computeFileLists(preparation.fileOps);
     const fileOpsSummary = formatFileOperations(readFiles, modifiedFiles);
     const toolFailures = collectToolFailures([
       ...preparation.messagesToSummarize,
-      ...preparation.turnPrefixMessages,
+      ...turnPrefixMessages,
     ]);
     const toolFailureSection = formatToolFailuresSection(toolFailures);
 
     // Model resolution: ctx.model is undefined in compact.ts workflow (extensionRunner.initialize() is never called).
     // Fall back to runtime.model which is explicitly passed when building extension paths.
     const runtime = getCompactionSafeguardRuntime(ctx.sessionManager);
-    const customInstructions = resolveCompactionInstructions(
+    const resolvedCustomInstructions = resolveCompactionInstructions(
       eventInstructions,
       runtime?.customInstructions,
     );
@@ -754,7 +854,35 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
     try {
       const modelContextWindow = resolveContextWindowTokens(model);
       const contextWindowTokens = runtime?.contextWindowTokens ?? modelContextWindow;
-      const turnPrefixMessages = preparation.turnPrefixMessages ?? [];
+      const guardEnabled = runtime?.guardEnabled === true;
+      const guardSignal = guardEnabled
+        ? scoreCompactionGuard({
+            usageRatio: resolveCompactionGuardUsageRatio(
+              preparation.tokensBefore,
+              contextWindowTokens,
+            ),
+            transcript: detectTranscriptTailSignals(
+              buildCompactionGuardTailEntries([
+                ...preparation.messagesToSummarize,
+                ...turnPrefixMessages,
+              ]),
+            ),
+          })
+        : null;
+      const customInstructions = buildGuardAugmentedCompactionInstructions({
+        baseInstructions: resolvedCustomInstructions,
+        guardEnabled,
+        guardSignal: guardSignal ?? undefined,
+      });
+      const instructionsAugmented = customInstructions !== resolvedCustomInstructions;
+      if (guardEnabled && guardSignal) {
+        logCompactionGuardDecision({
+          usageRatio: guardSignal.usageRatio,
+          score: guardSignal.score,
+          action: guardSignal.action,
+          augmented: instructionsAugmented,
+        });
+      }
       let messagesToSummarize = preparation.messagesToSummarize;
       const recentTurnsPreserve = resolveRecentTurnsPreserve(runtime?.recentTurnsPreserve);
       const qualityGuardEnabled = runtime?.qualityGuardEnabled ?? false;

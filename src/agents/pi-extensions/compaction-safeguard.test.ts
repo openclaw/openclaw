@@ -113,6 +113,73 @@ const createCompactionEvent = (params: { messageText: string; tokensBefore: numb
   signal: new AbortController().signal,
 });
 
+const createHighRiskGuardEvent = (customInstructions = "Keep security caveats.") => ({
+  preparation: {
+    messagesToSummarize: [
+      {
+        role: "user",
+        content: "Keep the latest user goal grounded and avoid rewriting persistence.",
+        timestamp: 1,
+      },
+      {
+        role: "assistant",
+        content: "Retrying the failing command.",
+        timestamp: 2,
+      } as unknown as AgentMessage,
+      {
+        role: "toolResult",
+        toolCallId: "call-1",
+        toolName: "exec",
+        isError: true,
+        details: { status: "error" },
+        content: [{ type: "text", text: "ENOENT: missing file" }],
+        timestamp: 3,
+      } as unknown as AgentMessage,
+      {
+        role: "assistant",
+        content: "Retrying the failing command.",
+        timestamp: 4,
+      } as unknown as AgentMessage,
+      {
+        role: "toolResult",
+        toolCallId: "call-2",
+        toolName: "exec",
+        isError: true,
+        details: { status: "error" },
+        content: [{ type: "text", text: "ENOENT: missing file" }],
+        timestamp: 5,
+      } as unknown as AgentMessage,
+      {
+        role: "assistant",
+        content: "Retrying the failing command.",
+        timestamp: 6,
+      } as unknown as AgentMessage,
+      {
+        role: "toolResult",
+        toolCallId: "call-3",
+        toolName: "exec",
+        isError: true,
+        details: { status: "error" },
+        content: [{ type: "text", text: "ENOENT: missing file" }],
+        timestamp: 7,
+      } as unknown as AgentMessage,
+    ],
+    turnPrefixMessages: [],
+    firstKeptEntryId: "entry-1",
+    tokensBefore: 180_000,
+    fileOps: {
+      read: [],
+      edited: [],
+      written: [],
+    },
+    settings: { reserveTokens: 4_000 },
+    previousSummary: undefined,
+    isSplitTurn: false,
+  },
+  customInstructions,
+  signal: new AbortController().signal,
+});
+
 const createCompactionContext = (params: {
   sessionManager: ExtensionContext["sessionManager"];
   getApiKeyMock: ReturnType<typeof vi.fn>;
@@ -1111,6 +1178,73 @@ describe("compaction-safeguard recent-turn preservation", () => {
     );
     expect(droppedCall?.customInstructions).toContain("## Decisions");
     expect(droppedCall?.customInstructions).toContain("Keep security caveats.");
+  });
+
+  it("augments summarization instructions when the guard is enabled and risk reaches compact", async () => {
+    mockSummarizeInStages.mockReset();
+    mockSummarizeInStages.mockResolvedValue("guarded summary");
+
+    const sessionManager = stubSessionManager();
+    const model = createAnthropicModelFixture();
+    setCompactionSafeguardRuntime(sessionManager, {
+      model,
+      recentTurnsPreserve: 0,
+      guardEnabled: true,
+    });
+
+    const compactionHandler = createCompactionHandler();
+    const getApiKeyMock = vi.fn().mockResolvedValue("test-key");
+    const mockContext = createCompactionContext({
+      sessionManager,
+      getApiKeyMock,
+    });
+    const event = createHighRiskGuardEvent();
+
+    const result = (await compactionHandler(event, mockContext)) as {
+      cancel?: boolean;
+      compaction?: { summary?: string };
+    };
+
+    expect(result.cancel).not.toBe(true);
+    expect(mockSummarizeInStages).toHaveBeenCalledTimes(1);
+    const summaryCall = mockSummarizeInStages.mock.calls[0]?.[0];
+    expect(summaryCall?.customInstructions).toContain("Keep security caveats.");
+    expect(summaryCall?.customInstructions).toContain("Loop-aware compaction guard:");
+    expect(summaryCall?.customInstructions).toContain("The latest explicit user goal or request.");
+    expect(summaryCall?.customInstructions).toContain("Repeated tool failure pattern:");
+  });
+
+  it("keeps summarization instructions unchanged when the guard is disabled", async () => {
+    mockSummarizeInStages.mockReset();
+    mockSummarizeInStages.mockResolvedValue("unguarded summary");
+
+    const sessionManager = stubSessionManager();
+    const model = createAnthropicModelFixture();
+    setCompactionSafeguardRuntime(sessionManager, {
+      model,
+      recentTurnsPreserve: 0,
+      guardEnabled: false,
+    });
+
+    const compactionHandler = createCompactionHandler();
+    const getApiKeyMock = vi.fn().mockResolvedValue("test-key");
+    const mockContext = createCompactionContext({
+      sessionManager,
+      getApiKeyMock,
+    });
+    const event = createHighRiskGuardEvent();
+
+    const result = (await compactionHandler(event, mockContext)) as {
+      cancel?: boolean;
+      compaction?: { summary?: string };
+    };
+
+    expect(result.cancel).not.toBe(true);
+    expect(mockSummarizeInStages).toHaveBeenCalledTimes(1);
+    const summaryCall = mockSummarizeInStages.mock.calls[0]?.[0];
+    expect(summaryCall?.customInstructions).toBe(
+      buildCompactionStructureInstructions("Keep security caveats."),
+    );
   });
 
   it("does not retry summaries unless quality guard is explicitly enabled", async () => {
