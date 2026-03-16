@@ -1559,6 +1559,111 @@ describe("initSessionState preserves behavior overrides across /new and /reset",
   });
 });
 
+describe("initSessionState browser tab cleanup", () => {
+  let closeTabsSpy: ReturnType<typeof vi.fn>;
+
+  beforeEach(async () => {
+    const mod = await import("../../browser/session-tab-registry.js");
+    closeTabsSpy = vi.spyOn(mod, "closeTrackedBrowserTabsForSessions").mockResolvedValue(0);
+  });
+
+  afterEach(() => {
+    closeTabsSpy.mockRestore();
+  });
+
+  it("closes tracked browser tabs when idle session expires", async () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date(2026, 0, 18, 5, 30, 0));
+      const storePath = await createStorePath("openclaw-tab-cleanup-idle-");
+      const sessionKey = "agent:main:whatsapp:dm:tab-idle";
+      const existingSessionId = "tab-idle-session-id";
+
+      await writeSessionStoreFast(storePath, {
+        [sessionKey]: {
+          sessionId: existingSessionId,
+          updatedAt: new Date(2026, 0, 18, 4, 45, 0).getTime(),
+        },
+      });
+
+      const cfg = {
+        session: {
+          store: storePath,
+          reset: { mode: "daily", atHour: 4, idleMinutes: 30 },
+        },
+      } as OpenClawConfig;
+      const result = await initSessionState({
+        ctx: { Body: "hello", SessionKey: sessionKey },
+        cfg,
+        commandAuthorized: true,
+      });
+
+      expect(result.isNewSession).toBe(true);
+      expect(closeTabsSpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          sessionKeys: expect.arrayContaining([existingSessionId, sessionKey]),
+        }),
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("closes tracked browser tabs on explicit /new reset", async () => {
+    const storePath = await createStorePath("openclaw-tab-cleanup-reset-");
+    const sessionKey = "agent:main:telegram:dm:tab-reset";
+    const existingSessionId = "tab-reset-session-id";
+
+    await writeSessionStoreFast(storePath, {
+      [sessionKey]: {
+        sessionId: existingSessionId,
+        updatedAt: Date.now(),
+      },
+    });
+
+    const cfg = {
+      session: { store: storePath, idleMinutes: 999 },
+    } as OpenClawConfig;
+    const result = await initSessionState({
+      ctx: {
+        Body: "/new",
+        RawBody: "/new",
+        CommandBody: "/new",
+        SessionKey: sessionKey,
+      },
+      cfg,
+      commandAuthorized: true,
+    });
+
+    expect(result.isNewSession).toBe(true);
+    expect(closeTabsSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionKeys: expect.arrayContaining([existingSessionId, sessionKey]),
+      }),
+    );
+  });
+
+  it("does NOT close browser tabs for a fresh session (no previous entry)", async () => {
+    const storePath = await createStorePath("openclaw-tab-cleanup-fresh-");
+    const sessionKey = "agent:main:telegram:dm:tab-fresh";
+
+    const cfg = {
+      session: { store: storePath, idleMinutes: 999 },
+    } as OpenClawConfig;
+    const result = await initSessionState({
+      ctx: {
+        Body: "hello",
+        SessionKey: sessionKey,
+      },
+      cfg,
+      commandAuthorized: true,
+    });
+
+    expect(result.isNewSession).toBe(true);
+    expect(closeTabsSpy).not.toHaveBeenCalled();
+  });
+});
+
 describe("drainFormattedSystemEvents", () => {
   it("adds a local timestamp to queued system events by default", async () => {
     vi.useFakeTimers();
