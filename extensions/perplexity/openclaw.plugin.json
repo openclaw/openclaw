@@ -1,0 +1,8 @@
+{
+  "id": "perplexity",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

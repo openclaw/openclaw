@@ -4,7 +4,7 @@ import { NonEmptyString } from "./primitives.js";
 const ConfigSchemaLookupPathString = Type.String({
   minLength: 1,
   maxLength: 1024,
-  pattern: "^[A-Za-z0-9_.\\[\\]\\-*]+$",
+  pattern: "^[A-Za-z0-9_./\\[\\]\\-*]+$",
 });
 
 export const ConfigGetParamsSchema = Type.Object({}, { additionalProperties: false });

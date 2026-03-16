@@ -23,12 +23,20 @@ export function buildThreadingToolContext(params: {
 }): ChannelThreadingToolContext {
   const { sessionCtx, config, hasRepliedRef } = params;
   const currentMessageId = sessionCtx.MessageSidFull ?? sessionCtx.MessageSid;
+  const originProvider = resolveOriginMessageProvider({
+    originatingChannel: sessionCtx.OriginatingChannel,
+    provider: sessionCtx.Provider,
+  });
+  const originTo = resolveOriginMessageTo({
+    originatingTo: sessionCtx.OriginatingTo,
+    to: sessionCtx.To,
+  });
   if (!config) {
     return {
       currentMessageId,
     };
   }
-  const rawProvider = sessionCtx.Provider?.trim().toLowerCase();
+  const rawProvider = originProvider?.trim().toLowerCase();
   if (!rawProvider) {
     return {
       currentMessageId,
@@ -39,7 +47,7 @@ export function buildThreadingToolContext(params: {
   const dock = provider ? getChannelDock(provider) : undefined;
   if (!dock?.threading?.buildToolContext) {
     return {
-      currentChannelId: sessionCtx.To?.trim() || undefined,
+      currentChannelId: originTo?.trim() || undefined,
       currentChannelProvider: provider ?? (rawProvider as ChannelId),
       currentMessageId,
       hasRepliedRef,
@@ -50,9 +58,9 @@ export function buildThreadingToolContext(params: {
       cfg: config,
       accountId: sessionCtx.AccountId,
       context: {
-        Channel: sessionCtx.Provider,
+        Channel: originProvider,
         From: sessionCtx.From,
-        To: sessionCtx.To,
+        To: originTo,
         ChatType: sessionCtx.ChatType,
         CurrentMessageId: currentMessageId,
         ReplyToId: sessionCtx.ReplyToId,
@@ -166,7 +174,7 @@ export function buildEmbeddedRunBaseParams(params: {
   model: string;
   runId: string;
   authProfile: ReturnType<typeof resolveProviderScopedAuthProfile>;
-  allowRateLimitCooldownProbe?: boolean;
+  allowTransientCooldownProbe?: boolean;
 }) {
   return {
     sessionFile: params.run.sessionFile,
@@ -175,6 +183,7 @@ export function buildEmbeddedRunBaseParams(params: {
     config: params.run.config,
     skillsSnapshot: params.run.skillsSnapshot,
     ownerNumbers: params.run.ownerNumbers,
+    inputProvenance: params.run.inputProvenance,
     senderIsOwner: params.run.senderIsOwner,
     enforceFinalTag: resolveEnforceFinalTag(params.run, params.provider),
     provider: params.provider,
@@ -187,7 +196,7 @@ export function buildEmbeddedRunBaseParams(params: {
     bashElevated: params.run.bashElevated,
     timeoutMs: params.run.timeoutMs,
     runId: params.runId,
-    allowRateLimitCooldownProbe: params.allowRateLimitCooldownProbe,
+    allowTransientCooldownProbe: params.allowTransientCooldownProbe,
   };
 }
 
@@ -251,6 +260,31 @@ export function buildEmbeddedRunContexts(params: {
       hasRepliedRef: params.hasRepliedRef,
     }),
     senderContext: buildTemplateSenderContext(params.sessionCtx),
+  };
+}
+
+export function buildEmbeddedRunExecutionParams(params: {
+  run: FollowupRun["run"];
+  sessionCtx: TemplateContext;
+  hasRepliedRef: { value: boolean } | undefined;
+  provider: string;
+  model: string;
+  runId: string;
+  allowTransientCooldownProbe?: boolean;
+}) {
+  const { authProfile, embeddedContext, senderContext } = buildEmbeddedRunContexts(params);
+  const runBaseParams = buildEmbeddedRunBaseParams({
+    run: params.run,
+    provider: params.provider,
+    model: params.model,
+    runId: params.runId,
+    authProfile,
+    allowTransientCooldownProbe: params.allowTransientCooldownProbe,
+  });
+  return {
+    embeddedContext,
+    senderContext,
+    runBaseParams,
   };
 }
 

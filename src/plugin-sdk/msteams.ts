@@ -12,7 +12,10 @@ export {
 export { isSilentReplyText, SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 export type { ReplyPayload } from "../auto-reply/types.js";
 export { mergeAllowlist, summarizeMapping } from "../channels/allowlists/resolve-utils.js";
-export { resolveControlCommandGate } from "../channels/command-gating.js";
+export {
+  resolveControlCommandGate,
+  resolveDualTextControlCommandGate,
+} from "../channels/command-gating.js";
 export { logInboundDrop, logTypingFailure } from "../channels/logging.js";
 export { resolveMentionGating } from "../channels/mention-gating.js";
 export type { AllowlistMatch } from "../channels/plugins/allowlist-match.js";
@@ -29,15 +32,14 @@ export {
 export { buildChannelConfigSchema } from "../channels/plugins/config-schema.js";
 export { resolveChannelMediaMaxBytes } from "../channels/plugins/media-limits.js";
 export { buildMediaPayload } from "../channels/plugins/media-payload.js";
-export type {
-  ChannelOnboardingAdapter,
-  ChannelOnboardingDmPolicy,
-} from "../channels/plugins/onboarding-types.js";
-export { promptChannelAccessConfig } from "../channels/plugins/onboarding/channel-access.js";
 export {
   addWildcardAllowFrom,
   mergeAllowFromEntries,
-} from "../channels/plugins/onboarding/helpers.js";
+  setTopLevelChannelAllowFrom,
+  setTopLevelChannelDmPolicyWithAllowFrom,
+  setTopLevelChannelGroupPolicy,
+  splitSetupEntries,
+} from "../channels/plugins/setup-flow-helpers.js";
 export { PAIRING_APPROVED_MESSAGE } from "../channels/plugins/pairing-message.js";
 export type {
   BaseProbeResult,
@@ -88,15 +90,21 @@ export {
   resolveDmGroupAccessWithLists,
   resolveEffectiveAllowFromLists,
 } from "../security/dm-policy-shared.js";
+export {
+  evaluateSenderGroupAccessForPolicy,
+  resolveSenderScopedGroupPolicy,
+} from "./group-access.js";
 export { formatDocsLink } from "../terminal/links.js";
 export { sleep } from "../utils.js";
-export { loadWebMedia } from "../web/media.js";
+export { loadWebMedia } from "../../extensions/whatsapp/src/media.js";
 export type { WizardPrompter } from "../wizard/prompts.js";
 export { keepHttpServerTaskAlive } from "./channel-lifecycle.js";
 export { withFileLock } from "./file-lock.js";
+export { dispatchReplyFromConfigWithSettledDispatcher } from "./inbound-reply-dispatch.js";
 export { readJsonFileWithFallback, writeJsonFileAtomically } from "./json-store.js";
 export { loadOutboundMediaFromUrl } from "./outbound-media.js";
 export { createScopedPairingAccess } from "./pairing-access.js";
+export { resolveInboundSessionEnvelopeContext } from "../channels/session-envelope.js";
 export {
   buildHostnameAllowlistPolicyFromSuffixAllowlist,
   isHttpsUrlAllowedByHostnameSuffixAllowlist,
@@ -104,5 +112,10 @@ export {
 } from "./ssrf-policy.js";
 export {
   buildBaseChannelStatusSummary,
+  buildProbeChannelStatusSummary,
+  buildRuntimeAccountStatusSnapshot,
   createDefaultChannelRuntimeState,
 } from "./status-helpers.js";
+export { normalizeStringEntries } from "../shared/string-normalization.js";
+export { msteamsSetupWizard } from "../../extensions/msteams/src/setup-surface.js";
+export { msteamsSetupAdapter } from "../../extensions/msteams/src/setup-core.js";

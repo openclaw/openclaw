@@ -1,6 +1,9 @@
-import { fetchOk } from "./cdp.helpers.js";
+import { fetchOk, normalizeCdpHttpBaseForJsonEndpoints } from "./cdp.helpers.js";
 import { appendCdpPath } from "./cdp.js";
+import { closeChromeMcpTab, focusChromeMcpTab } from "./chrome-mcp.js";
 import type { ResolvedBrowserProfile } from "./config.js";
+import { BrowserTabNotFoundError, BrowserTargetAmbiguousError } from "./errors.js";
+import { getBrowserProfileCapabilities } from "./profile-capabilities.js";
 import type { PwAiModule } from "./pw-ai-module.js";
 import { getPwAiModule } from "./pw-ai-module.js";
 import type { BrowserTab, ProfileRuntimeState } from "./server-context.types.js";
@@ -27,27 +30,38 @@ export function createProfileSelectionOps({
   listTabs,
   openTab,
 }: SelectionDeps): SelectionOps {
+  const cdpHttpBase = normalizeCdpHttpBaseForJsonEndpoints(profile.cdpUrl);
+  const capabilities = getBrowserProfileCapabilities(profile);
+
   const ensureTabAvailable = async (targetId?: string): Promise<BrowserTab> => {
     await ensureBrowserAvailable();
     const profileState = getProfileState();
-    const tabs1 = await listTabs();
+    let tabs1 = await listTabs();
     if (tabs1.length === 0) {
-      if (profile.driver === "extension") {
-        throw new Error(
-          `tab not found (no attached Chrome tabs for profile "${profile.name}"). ` +
-            "Click the OpenClaw Browser Relay toolbar icon on the tab you want to control (badge ON).",
-        );
+      if (capabilities.requiresAttachedTab) {
+        // Chrome extension relay can briefly drop its WebSocket connection (MV3 service worker
+        // lifecycle, relay restart). If we previously had a target selected, wait briefly for
+        // the extension to reconnect and re-announce its attached tabs before failing.
+        if (profileState.lastTargetId?.trim()) {
+          const deadlineAt = Date.now() + 3_000;
+          while (tabs1.length === 0 && Date.now() < deadlineAt) {
+            await new Promise((resolve) => setTimeout(resolve, 200));
+            tabs1 = await listTabs();
+          }
+        }
+        if (tabs1.length === 0) {
+          throw new BrowserTabNotFoundError(
+            `tab not found (no attached Chrome tabs for profile "${profile.name}"). ` +
+              "Click the OpenClaw Browser Relay toolbar icon on the tab you want to control (badge ON).",
+          );
+        }
+      } else {
+        await openTab("about:blank");
       }
-      await openTab("about:blank");
     }
 
     const tabs = await listTabs();
-    // For remote profiles using Playwright's persistent connection, we don't need wsUrl
-    // because we access pages directly through Playwright, not via individual WebSocket URLs.
-    const candidates =
-      profile.driver === "extension" || !profile.cdpIsLoopback
-        ? tabs
-        : tabs.filter((t) => Boolean(t.wsUrl));
+    const candidates = capabilities.supportsPerTabWs ? tabs.filter((t) => Boolean(t.wsUrl)) : tabs;
 
     const resolveById = (raw: string) => {
       const resolved = resolveTargetIdFromTabs(raw, candidates);
@@ -71,22 +85,13 @@ export function createProfileSelectionOps({
       return page ?? candidates.at(0) ?? null;
     };
 
-    let chosen = targetId ? resolveById(targetId) : pickDefault();
-    if (
-      !chosen &&
-      (profile.driver === "extension" || !profile.cdpIsLoopback) &&
-      candidates.length === 1
-    ) {
-      // If an agent passes a stale/foreign targetId but only one candidate remains,
-      // recover by using that tab instead of failing hard.
-      chosen = candidates[0] ?? null;
-    }
+    const chosen = targetId ? resolveById(targetId) : pickDefault();
 
     if (chosen === "AMBIGUOUS") {
-      throw new Error("ambiguous target id prefix");
+      throw new BrowserTargetAmbiguousError();
     }
     if (!chosen) {
-      throw new Error("tab not found");
+      throw new BrowserTabNotFoundError();
     }
     profileState.lastTargetId = chosen.targetId;
     return chosen;
@@ -97,9 +102,9 @@ export function createProfileSelectionOps({
     const resolved = resolveTargetIdFromTabs(targetId, tabs);
     if (!resolved.ok) {
       if (resolved.reason === "ambiguous") {
-        throw new Error("ambiguous target id prefix");
+        throw new BrowserTargetAmbiguousError();
       }
-      throw new Error("tab not found");
+      throw new BrowserTabNotFoundError();
     }
     return resolved.targetId;
   };
@@ -107,7 +112,14 @@ export function createProfileSelectionOps({
   const focusTab = async (targetId: string): Promise<void> => {
     const resolvedTargetId = await resolveTargetIdOrThrow(targetId);
 
-    if (!profile.cdpIsLoopback) {
+    if (capabilities.usesChromeMcp) {
+      await focusChromeMcpTab(profile.name, resolvedTargetId);
+      const profileState = getProfileState();
+      profileState.lastTargetId = resolvedTargetId;
+      return;
+    }
+
+    if (capabilities.usesPersistentPlaywright) {
       const mod = await getPwAiModule({ mode: "strict" });
       const focusPageByTargetIdViaPlaywright = (mod as Partial<PwAiModule> | null)
         ?.focusPageByTargetIdViaPlaywright;
@@ -122,7 +134,7 @@ export function createProfileSelectionOps({
       }
     }
 
-    await fetchOk(appendCdpPath(profile.cdpUrl, `/json/activate/${resolvedTargetId}`));
+    await fetchOk(appendCdpPath(cdpHttpBase, `/json/activate/${resolvedTargetId}`));
     const profileState = getProfileState();
     profileState.lastTargetId = resolvedTargetId;
   };
@@ -130,8 +142,13 @@ export function createProfileSelectionOps({
   const closeTab = async (targetId: string): Promise<void> => {
     const resolvedTargetId = await resolveTargetIdOrThrow(targetId);
 
+    if (capabilities.usesChromeMcp) {
+      await closeChromeMcpTab(profile.name, resolvedTargetId);
+      return;
+    }
+
     // For remote profiles, use Playwright's persistent connection to close tabs
-    if (!profile.cdpIsLoopback) {
+    if (capabilities.usesPersistentPlaywright) {
       const mod = await getPwAiModule({ mode: "strict" });
       const closePageByTargetIdViaPlaywright = (mod as Partial<PwAiModule> | null)
         ?.closePageByTargetIdViaPlaywright;
@@ -144,7 +161,7 @@ export function createProfileSelectionOps({
       }
     }
 
-    await fetchOk(appendCdpPath(profile.cdpUrl, `/json/close/${resolvedTargetId}`));
+    await fetchOk(appendCdpPath(cdpHttpBase, `/json/close/${resolvedTargetId}`));
   };
 
   return {

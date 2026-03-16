@@ -1,5 +1,12 @@
+import { evaluateChromeMcpScript, uploadChromeMcpFile } from "../chrome-mcp.js";
+import { getBrowserProfileCapabilities } from "../profile-capabilities.js";
 import type { BrowserRouteContext } from "../server-context.js";
-import { readBody, resolveTargetIdFromBody, withPlaywrightRouteContext } from "./agent.shared.js";
+import {
+  readBody,
+  requirePwAi,
+  resolveTargetIdFromBody,
+  withRouteTabContext,
+} from "./agent.shared.js";
 import { DEFAULT_UPLOAD_DIR, resolveExistingPathsWithinRoot } from "./path-output.js";
 import type { BrowserRouteRegistrar } from "./types.js";
 import { jsonError, toBoolean, toNumber, toStringArray, toStringOrEmpty } from "./utils.js";
@@ -20,13 +27,12 @@ export function registerBrowserAgentActHookRoutes(
       return jsonError(res, 400, "paths are required");
     }
 
-    await withPlaywrightRouteContext({
+    await withRouteTabContext({
       req,
       res,
       ctx,
       targetId,
-      feature: "file chooser hook",
-      run: async ({ cdpUrl, tab, pw }) => {
+      run: async ({ profileCtx, cdpUrl, tab }) => {
         const uploadPathsResult = await resolveExistingPathsWithinRoot({
           rootDir: DEFAULT_UPLOAD_DIR,
           requestedPaths: paths,
@@ -37,6 +43,39 @@ export function registerBrowserAgentActHookRoutes(
           return;
         }
         const resolvedPaths = uploadPathsResult.paths;
+
+        if (getBrowserProfileCapabilities(profileCtx.profile).usesChromeMcp) {
+          if (element) {
+            return jsonError(
+              res,
+              501,
+              "existing-session file uploads do not support element selectors; use ref/inputRef.",
+            );
+          }
+          if (resolvedPaths.length !== 1) {
+            return jsonError(
+              res,
+              501,
+              "existing-session file uploads currently support one file at a time.",
+            );
+          }
+          const uid = inputRef || ref;
+          if (!uid) {
+            return jsonError(res, 501, "existing-session file uploads require ref or inputRef.");
+          }
+          await uploadChromeMcpFile({
+            profileName: profileCtx.profile.name,
+            targetId: tab.targetId,
+            uid,
+            filePath: resolvedPaths[0] ?? "",
+          });
+          return res.json({ ok: true });
+        }
+
+        const pw = await requirePwAi(res, "file chooser hook");
+        if (!pw) {
+          return;
+        }
 
         if (inputRef || element) {
           if (ref) {
@@ -79,13 +118,69 @@ export function registerBrowserAgentActHookRoutes(
       return jsonError(res, 400, "accept is required");
     }
 
-    await withPlaywrightRouteContext({
+    await withRouteTabContext({
       req,
       res,
       ctx,
       targetId,
-      feature: "dialog hook",
-      run: async ({ cdpUrl, tab, pw }) => {
+      run: async ({ profileCtx, cdpUrl, tab }) => {
+        if (getBrowserProfileCapabilities(profileCtx.profile).usesChromeMcp) {
+          if (timeoutMs) {
+            return jsonError(
+              res,
+              501,
+              "existing-session dialog handling does not support timeoutMs.",
+            );
+          }
+          await evaluateChromeMcpScript({
+            profileName: profileCtx.profile.name,
+            targetId: tab.targetId,
+            fn: `() => {
+              const state = (window.__openclawDialogHook ??= {});
+              if (!state.originals) {
+                state.originals = {
+                  alert: window.alert.bind(window),
+                  confirm: window.confirm.bind(window),
+                  prompt: window.prompt.bind(window),
+                };
+              }
+              const originals = state.originals;
+              const restore = () => {
+                window.alert = originals.alert;
+                window.confirm = originals.confirm;
+                window.prompt = originals.prompt;
+                delete window.__openclawDialogHook;
+              };
+              window.alert = (...args) => {
+                try {
+                  return undefined;
+                } finally {
+                  restore();
+                }
+              };
+              window.confirm = (...args) => {
+                try {
+                  return ${accept ? "true" : "false"};
+                } finally {
+                  restore();
+                }
+              };
+              window.prompt = (...args) => {
+                try {
+                  return ${accept ? JSON.stringify(promptText ?? "") : "null"};
+                } finally {
+                  restore();
+                }
+              };
+              return true;
+            }`,
+          });
+          return res.json({ ok: true });
+        }
+        const pw = await requirePwAi(res, "dialog hook");
+        if (!pw) {
+          return;
+        }
         await pw.armDialogViaPlaywright({
           cdpUrl,
           targetId: tab.targetId,

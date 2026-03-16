@@ -148,6 +148,46 @@ describe("resolveFailureDestination", () => {
     expect(plan).toBeNull();
   });
 
+  it("returns null when webhook failure destination matches the primary webhook target", () => {
+    const plan = resolveFailureDestination(
+      makeJob({
+        sessionTarget: "main",
+        payload: { kind: "systemEvent", text: "tick" },
+        delivery: {
+          mode: "webhook",
+          to: "https://example.invalid/cron",
+          failureDestination: {
+            mode: "webhook",
+            to: "https://example.invalid/cron",
+          },
+        },
+      }),
+      undefined,
+    );
+    expect(plan).toBeNull();
+  });
+
+  it("does not reuse inherited announce recipient when switching failure destination to webhook", () => {
+    const plan = resolveFailureDestination(
+      makeJob({
+        delivery: {
+          mode: "announce",
+          channel: "telegram",
+          to: "111",
+          failureDestination: {
+            mode: "webhook",
+          },
+        },
+      }),
+      {
+        channel: "signal",
+        to: "group-abc",
+        mode: "announce",
+      },
+    );
+    expect(plan).toBeNull();
+  });
+
   it("allows job-level failure destination fields to clear inherited global values", () => {
     const plan = resolveFailureDestination(
       makeJob({

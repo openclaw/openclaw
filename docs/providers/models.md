@@ -32,7 +32,7 @@ model as `provider/model`.
 - [Moonshot AI (Kimi + Kimi Coding)](/providers/moonshot)
 - [Mistral](/providers/mistral)
 - [Synthetic](/providers/synthetic)
-- [OpenCode Zen](/providers/opencode)
+- [OpenCode (Zen + Go)](/providers/opencode)
 - [Z.AI](/providers/zai)
 - [GLM models](/providers/glm)
 - [MiniMax](/providers/minimax)

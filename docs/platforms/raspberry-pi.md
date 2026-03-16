@@ -76,15 +76,15 @@ sudo apt install -y git curl build-essential
 sudo timedatectl set-timezone America/Chicago  # Change to your timezone
 ```
 
-## 4) Install Node.js 22 (ARM64)
+## 4) Install Node.js 24 (ARM64)
 
 ```bash
 # Install Node.js via NodeSource
-curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash -
+curl -fsSL https://deb.nodesource.com/setup_24.x | sudo -E bash -
 sudo apt install -y nodejs
 
 # Verify
-node --version  # Should show v22.x.x
+node --version  # Should show v24.x.x
 npm --version
 ```
 
@@ -153,29 +153,32 @@ sudo systemctl status openclaw
 journalctl -u openclaw -f
 ```
 
-## 9) Access the Dashboard
+## 9) Access the OpenClaw Dashboard
 
-Since the Pi is headless, use an SSH tunnel:
+Replace `user@gateway-host` with your Pi username and hostname or IP address.
 
-```bash
-# From your laptop/desktop
-ssh -L 18789:localhost:18789 user@gateway-host
-
-# Then open in browser
-open http://localhost:18789
-```
-
-Or use Tailscale for always-on access:
+On your computer, ask the Pi to print a fresh dashboard URL:
 
 ```bash
-# On the Pi
-curl -fsSL https://tailscale.com/install.sh | sh
-sudo tailscale up
-
-# Update config
-openclaw config set gateway.bind tailnet
-sudo systemctl restart openclaw
+ssh user@gateway-host 'openclaw dashboard --no-open'
 ```
+
+The command prints `Dashboard URL:`. Depending on how `gateway.auth.token`
+is configured, the URL may be a plain `http://127.0.0.1:18789/` link or one
+that includes `#token=...`.
+
+In another terminal on your computer, create the SSH tunnel:
+
+```bash
+ssh -N -L 18789:127.0.0.1:18789 user@gateway-host
+```
+
+Then open the printed Dashboard URL in your local browser.
+
+If the UI asks for auth, paste the token from `gateway.auth.token`
+(or `OPENCLAW_GATEWAY_TOKEN`) into Control UI settings.
+
+For always-on remote access, see [Tailscale](/gateway/tailscale).
 
 ---
 
@@ -197,7 +200,7 @@ See [Pi USB boot guide](https://www.raspberrypi.com/documentation/computers/rasp
 On lower-power Pi hosts, enable Node's module compile cache so repeated CLI runs are faster:
 
 ```bash
-grep -q 'NODE_COMPILE_CACHE=/var/tmp/openclaw-compile-cache' ~/.bashrc || cat >> ~/.bashrc <<'EOF'
+grep -q 'NODE_COMPILE_CACHE=/var/tmp/openclaw-compile-cache' ~/.bashrc || cat >> ~/.bashrc <<'EOF' # pragma: allowlist secret
 export NODE_COMPILE_CACHE=/var/tmp/openclaw-compile-cache
 mkdir -p /var/tmp/openclaw-compile-cache
 export OPENCLAW_NO_RESPAWN=1

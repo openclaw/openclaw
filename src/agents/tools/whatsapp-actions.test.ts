@@ -8,7 +8,7 @@ const { sendReactionWhatsApp, sendPollWhatsApp } = vi.hoisted(() => ({
   sendPollWhatsApp: vi.fn(async () => ({ messageId: "poll-1", toJid: "jid-1" })),
 }));
 
-vi.mock("../../web/outbound.js", () => ({
+vi.mock("../../../extensions/whatsapp/src/send.js", () => ({
   sendReactionWhatsApp,
   sendPollWhatsApp,
 }));

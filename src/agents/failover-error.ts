@@ -49,6 +49,8 @@ export function resolveFailoverStatus(reason: FailoverReason): number | undefine
       return 402;
     case "rate_limit":
       return 429;
+    case "overloaded":
+      return 503;
     case "auth":
       return 401;
     case "auth_permanent":
@@ -66,7 +68,30 @@ export function resolveFailoverStatus(reason: FailoverReason): number | undefine
   }
 }
 
-function getStatusCode(err: unknown): number | undefined {
+function findErrorProperty<T>(
+  err: unknown,
+  reader: (candidate: unknown) => T | undefined,
+  seen: Set<object> = new Set(),
+): T | undefined {
+  const direct = reader(err);
+  if (direct !== undefined) {
+    return direct;
+  }
+  if (!err || typeof err !== "object") {
+    return undefined;
+  }
+  if (seen.has(err)) {
+    return undefined;
+  }
+  seen.add(err);
+  const candidate = err as { error?: unknown; cause?: unknown };
+  return (
+    findErrorProperty(candidate.error, reader, seen) ??
+    findErrorProperty(candidate.cause, reader, seen)
+  );
+}
+
+function readDirectStatusCode(err: unknown): number | undefined {
   if (!err || typeof err !== "object") {
     return undefined;
   }
@@ -82,38 +107,87 @@ function getStatusCode(err: unknown): number | undefined {
   return undefined;
 }
 
-function getErrorCode(err: unknown): string | undefined {
+function getStatusCode(err: unknown): number | undefined {
+  return findErrorProperty(err, readDirectStatusCode);
+}
+
+function readDirectErrorCode(err: unknown): string | undefined {
   if (!err || typeof err !== "object") {
     return undefined;
   }
-  const candidate = (err as { code?: unknown }).code;
-  if (typeof candidate !== "string") {
+  const directCode = (err as { code?: unknown }).code;
+  if (typeof directCode === "string") {
+    const trimmed = directCode.trim();
+    return trimmed ? trimmed : undefined;
+  }
+  const status = (err as { status?: unknown }).status;
+  if (typeof status !== "string" || /^\d+$/.test(status)) {
     return undefined;
   }
-  const trimmed = candidate.trim();
+  const trimmed = status.trim();
   return trimmed ? trimmed : undefined;
 }
 
-function getErrorMessage(err: unknown): string {
+function getErrorCode(err: unknown): string | undefined {
+  return findErrorProperty(err, readDirectErrorCode);
+}
+
+function readDirectErrorMessage(err: unknown): string | undefined {
   if (err instanceof Error) {
-    return err.message;
+    return err.message || undefined;
   }
   if (typeof err === "string") {
-    return err;
+    return err || undefined;
   }
   if (typeof err === "number" || typeof err === "boolean" || typeof err === "bigint") {
     return String(err);
   }
   if (typeof err === "symbol") {
-    return err.description ?? "";
+    return err.description ?? undefined;
   }
   if (err && typeof err === "object") {
     const message = (err as { message?: unknown }).message;
     if (typeof message === "string") {
-      return message;
+      return message || undefined;
     }
   }
-  return "";
+  return undefined;
+}
+
+function getErrorMessage(err: unknown): string {
+  return findErrorProperty(err, readDirectErrorMessage) ?? "";
+}
+
+function getErrorCause(err: unknown): unknown {
+  if (!err || typeof err !== "object" || !("cause" in err)) {
+    return undefined;
+  }
+  return (err as { cause?: unknown }).cause;
+}
+
+/** Classify rate-limit / overloaded from symbolic error codes like RESOURCE_EXHAUSTED. */
+function classifyFailoverReasonFromSymbolicCode(raw: string | undefined): FailoverReason | null {
+  const normalized = raw?.trim().toUpperCase();
+  if (!normalized) {
+    return null;
+  }
+  switch (normalized) {
+    case "RESOURCE_EXHAUSTED":
+    case "RATE_LIMIT":
+    case "RATE_LIMITED":
+    case "RATE_LIMIT_EXCEEDED":
+    case "TOO_MANY_REQUESTS":
+    case "THROTTLED":
+    case "THROTTLING":
+    case "THROTTLINGEXCEPTION":
+    case "THROTTLING_EXCEPTION":
+      return "rate_limit";
+    case "OVERLOADED":
+    case "OVERLOADED_ERROR":
+      return "overloaded";
+    default:
+      return null;
+  }
 }
 
 function hasTimeoutHint(err: unknown): boolean {
@@ -158,6 +232,12 @@ export function resolveFailoverReasonFromError(err: unknown): FailoverReason | n
     return statusReason;
   }
 
+  // Check symbolic error codes (e.g. RESOURCE_EXHAUSTED from Google APIs)
+  const symbolicCodeReason = classifyFailoverReasonFromSymbolicCode(getErrorCode(err));
+  if (symbolicCodeReason) {
+    return symbolicCodeReason;
+  }
+
   const code = (getErrorCode(err) ?? "").toUpperCase();
   if (
     [
@@ -168,11 +248,23 @@ export function resolveFailoverReasonFromError(err: unknown): FailoverReason | n
       "ECONNREFUSED",
       "ENETUNREACH",
       "EHOSTUNREACH",
+      "EHOSTDOWN",
       "ENETRESET",
+      "EPIPE",
       "EAI_AGAIN",
     ].includes(code)
   ) {
     return "timeout";
+  }
+  // Walk into error cause chain *before* timeout heuristics so that a specific
+  // cause (e.g. RESOURCE_EXHAUSTED wrapped in AbortError) overrides a parent
+  // message-based "timeout" guess from isTimeoutError.
+  const cause = getErrorCause(err);
+  if (cause && cause !== err) {
+    const causeReason = resolveFailoverReasonFromError(cause);
+    if (causeReason) {
+      return causeReason;
+    }
   }
   if (isTimeoutError(err)) {
     return "timeout";

@@ -170,6 +170,24 @@ private actor SeqGapProbe {
 
 struct GatewayNodeSessionTests {
     @Test
+    func normalizeCanvasHostUrlPreservesExplicitSecureCanvasPort() {
+        let normalized = canonicalizeCanvasHostUrl(
+            raw: "https://canvas.example.com:9443/__openclaw__/cap/token",
+            activeURL: URL(string: "wss://gateway.example.com")!)
+
+        #expect(normalized == "https://canvas.example.com:9443/__openclaw__/cap/token")
+    }
+
+    @Test
+    func normalizeCanvasHostUrlBackfillsGatewayHostForLoopbackCanvas() {
+        let normalized = canonicalizeCanvasHostUrl(
+            raw: "http://127.0.0.1:18789/__openclaw__/cap/token",
+            activeURL: URL(string: "wss://gateway.example.com:7443")!)
+
+        #expect(normalized == "https://gateway.example.com:7443/__openclaw__/cap/token")
+    }
+
+    @Test
     func invokeWithTimeoutReturnsUnderlyingResponseBeforeTimeout() async {
         let request = BridgeInvokeRequest(id: "1", command: "x", paramsJSON: nil)
         let response = await GatewayNodeSession.invokeWithTimeout(
@@ -248,6 +266,7 @@ struct GatewayNodeSessionTests {
         try await gateway.connect(
             url: URL(string: "ws://example.invalid")!,
             token: nil,
+            bootstrapToken: nil,
             password: nil,
             connectOptions: options,
             sessionBox: WebSocketSessionBox(session: session),
