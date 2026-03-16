@@ -845,6 +845,17 @@ function mergeSessionEntryIntoCombined(params: {
   }
 }
 
+function ensureMainSessionKey(
+  cfg: OpenClawConfig,
+  combined: Record<string, SessionEntry>,
+): void {
+  const mainKey = resolveMainSessionKey(cfg);
+  if (!mainKey || combined[mainKey]) {
+    return;
+  }
+  combined[mainKey] = { sessionId: "", updatedAt: 0 };
+}
+
 export function loadCombinedSessionStoreForGateway(cfg: OpenClawConfig): {
   storePath: string;
   store: Record<string, SessionEntry>;
