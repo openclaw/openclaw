@@ -15,9 +15,13 @@ private let chatUILogger = Logger(subsystem: "ai.openclaw", category: "OpenClawC
 @MainActor
 @Observable
 public final class OpenClawChatViewModel {
+    public static let defaultModelSelectionID = "__default__"
+
     public private(set) var messages: [OpenClawChatMessage] = []
     public var input: String = ""
-    public var thinkingLevel: String = "off"
+    public private(set) var thinkingLevel: String
+    public private(set) var modelSelectionID: String = "__default__"
+    public private(set) var modelChoices: [OpenClawChatModelChoice] = []
     public private(set) var isLoading = false
     public private(set) var isSending = false
     public private(set) var isAborting = false
@@ -32,6 +36,9 @@ public final class OpenClawChatViewModel {
     public private(set) var pendingToolCalls: [OpenClawChatPendingToolCall] = []
     public private(set) var sessions: [OpenClawChatSessionEntry] = []
     private let transport: any OpenClawChatTransport
+    private var sessionDefaults: OpenClawChatSessionsDefaults?
+    private let prefersExplicitThinkingLevel: Bool
+    private let onThinkingLevelChanged: (@MainActor @Sendable (String) -> Void)?
 
     @ObservationIgnored
     private nonisolated(unsafe) var eventTask: Task<Void, Never>?
@@ -42,6 +49,17 @@ public final class OpenClawChatViewModel {
     @ObservationIgnored
     private nonisolated(unsafe) var pendingRunTimeoutTasks: [String: Task<Void, Never>] = [:]
     private let pendingRunTimeoutMs: UInt64 = 120_000
+    // Session switches can overlap in-flight picker patches, so stale completions
+    // must compare against the latest request and latest desired value for that session.
+    private var nextModelSelectionRequestID: UInt64 = 0
+    private var latestModelSelectionRequestIDsBySession: [String: UInt64] = [:]
+    private var latestModelSelectionIDsBySession: [String: String] = [:]
+    private var lastSuccessfulModelSelectionIDsBySession: [String: String] = [:]
+    private var inFlightModelPatchCountsBySession: [String: Int] = [:]
+    private var modelPatchWaitersBySession: [String: [CheckedContinuation<Void, Never>]] = [:]
+    private var nextThinkingSelectionRequestID: UInt64 = 0
+    private var latestThinkingSelectionRequestIDsBySession: [String: UInt64] = [:]
+    private var latestThinkingLevelsBySession: [String: String] = [:]
 
     private var pendingToolCallsById: [String: OpenClawChatPendingToolCall] = [:] {
         didSet {
@@ -52,9 +70,18 @@ public final class OpenClawChatViewModel {
 
     private var lastHealthPollAt: Date?
 
-    public init(sessionKey: String, transport: any OpenClawChatTransport) {
+    public init(
+        sessionKey: String,
+        transport: any OpenClawChatTransport,
+        initialThinkingLevel: String? = nil,
+        onThinkingLevelChanged: (@MainActor @Sendable (String) -> Void)? = nil)
+    {
         self.sessionKey = sessionKey
         self.transport = transport
+        let normalizedThinkingLevel = Self.normalizedThinkingLevel(initialThinkingLevel)
+        self.thinkingLevel = normalizedThinkingLevel ?? "off"
+        self.prefersExplicitThinkingLevel = normalizedThinkingLevel != nil
+        self.onThinkingLevelChanged = onThinkingLevelChanged
 
         self.eventTask = Task { [weak self] in
             guard let self else { return }
@@ -99,25 +126,35 @@ public final class OpenClawChatViewModel {
         Task { await self.performSwitchSession(to: sessionKey) }
     }
 
+    public func selectThinkingLevel(_ level: String) {
+        Task { await self.performSelectThinkingLevel(level) }
+    }
+
+    public func selectModel(_ selectionID: String) {
+        Task { await self.performSelectModel(selectionID) }
+    }
+
     public var sessionChoices: [OpenClawChatSessionEntry] {
         let now = Date().timeIntervalSince1970 * 1000
         let cutoff = now - (24 * 60 * 60 * 1000)
         let sorted = self.sessions.sorted { ($0.updatedAt ?? 0) > ($1.updatedAt ?? 0) }
+        let mainSessionKey = self.resolvedMainSessionKey
 
         var result: [OpenClawChatSessionEntry] = []
         var included = Set<String>()
 
-        // Always show the main session first, even if it hasn't been updated recently.
-        if let main = sorted.first(where: { $0.key == "main" }) {
+        // Always show the resolved main session first, even if it hasn't been updated recently.
+        if let main = sorted.first(where: { $0.key == mainSessionKey }) {
             result.append(main)
             included.insert(main.key)
         } else {
-            result.append(self.placeholderSession(key: "main"))
-            included.insert("main")
+            result.append(self.placeholderSession(key: mainSessionKey))
+            included.insert(mainSessionKey)
         }
 
         for entry in sorted {
             guard !included.contains(entry.key) else { continue }
+            guard entry.key == self.sessionKey || !Self.isHiddenInternalSession(entry.key) else { continue }
             guard (entry.updatedAt ?? 0) >= cutoff else { continue }
             result.append(entry)
             included.insert(entry.key)
@@ -132,6 +169,29 @@ public final class OpenClawChatViewModel {
         }
 
         return result
+    }
+
+    private var resolvedMainSessionKey: String {
+        let trimmed = self.sessionDefaults?.mainSessionKey?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return (trimmed?.isEmpty == false ? trimmed : nil) ?? "main"
+    }
+
+    private static func isHiddenInternalSession(_ key: String) -> Bool {
+        let trimmed = key.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return false }
+        return trimmed == "onboarding" || trimmed.hasSuffix(":onboarding")
+    }
+
+    public var showsModelPicker: Bool {
+        !self.modelChoices.isEmpty
+    }
+
+    public var defaultModelLabel: String {
+        guard let defaultModelID = self.normalizedModelSelectionID(self.sessionDefaults?.model) else {
+            return "Default"
+        }
+        return "Default: \(self.modelLabel(for: defaultModelID))"
     }
 
     public func addAttachments(urls: [URL]) {
@@ -174,11 +234,14 @@ public final class OpenClawChatViewModel {
                 previous: self.messages,
                 incoming: Self.decodeMessages(payload.messages ?? []))
             self.sessionId = payload.sessionId
-            if let level = payload.thinkingLevel, !level.isEmpty {
+            if !self.prefersExplicitThinkingLevel,
+               let level = Self.normalizedThinkingLevel(payload.thinkingLevel)
+            {
                 self.thinkingLevel = level
             }
             await self.pollHealthIfNeeded(force: true)
             await self.fetchSessions(limit: 50)
+            await self.fetchModels()
             self.errorText = nil
         } catch {
             self.errorText = error.localizedDescription
@@ -316,10 +379,20 @@ public final class OpenClawChatViewModel {
         return "\(message.role)|\(timestamp)|\(text)"
     }
 
+    private static let resetTriggers: Set<String> = ["/new", "/reset", "/clear"]
+
     private func performSend() async {
         guard !self.isSending else { return }
         let trimmed = self.input.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty || !self.attachments.isEmpty else { return }
+
+        if Self.resetTriggers.contains(trimmed.lowercased()) {
+            self.input = ""
+            await self.performReset()
+            return
+        }
+
+        let sessionKey = self.sessionKey
 
         guard self.healthOK else {
             self.errorText = "Gateway health not OK; cannot send"
@@ -330,6 +403,7 @@ public final class OpenClawChatViewModel {
         self.errorText = nil
         let runId = UUID().uuidString
         let messageText = trimmed.isEmpty && !self.attachments.isEmpty ? "See attached." : trimmed
+        let thinkingLevel = self.thinkingLevel
         self.pendingRuns.insert(runId)
         self.armPendingRunTimeout(runId: runId)
         self.pendingToolCallsById = [:]
@@ -382,10 +456,11 @@ public final class OpenClawChatViewModel {
         self.attachments = []
 
         do {
+            await self.waitForPendingModelPatches(in: sessionKey)
             let response = try await self.transport.sendMessage(
-                sessionKey: self.sessionKey,
+                sessionKey: sessionKey,
                 message: messageText,
-                thinking: self.thinkingLevel,
+                thinking: thinkingLevel,
                 idempotencyKey: runId,
                 attachments: encodedAttachments)
             if response.runId != runId {
@@ -422,6 +497,17 @@ public final class OpenClawChatViewModel {
         do {
             let res = try await self.transport.listSessions(limit: limit)
             self.sessions = res.sessions
+            self.sessionDefaults = res.defaults
+            self.syncSelectedModel()
+        } catch {
+            // Best-effort.
+        }
+    }
+
+    private func fetchModels() async {
+        do {
+            self.modelChoices = try await self.transport.listModels()
+            self.syncSelectedModel()
         } catch {
             // Best-effort.
         }
@@ -432,7 +518,122 @@ public final class OpenClawChatViewModel {
         guard !next.isEmpty else { return }
         guard next != self.sessionKey else { return }
         self.sessionKey = next
+        self.modelSelectionID = Self.defaultModelSelectionID
         await self.bootstrap()
+    }
+
+    private func performReset() async {
+        self.isLoading = true
+        self.errorText = nil
+        defer { self.isLoading = false }
+
+        do {
+            try await self.transport.resetSession(sessionKey: self.sessionKey)
+        } catch {
+            self.errorText = error.localizedDescription
+            chatUILogger.error("session reset failed \(error.localizedDescription, privacy: .public)")
+            return
+        }
+
+        await self.bootstrap()
+    }
+
+    private func performSelectThinkingLevel(_ level: String) async {
+        let next = Self.normalizedThinkingLevel(level) ?? "off"
+        guard next != self.thinkingLevel else { return }
+
+        let sessionKey = self.sessionKey
+        self.thinkingLevel = next
+        self.onThinkingLevelChanged?(next)
+        self.nextThinkingSelectionRequestID &+= 1
+        let requestID = self.nextThinkingSelectionRequestID
+        self.latestThinkingSelectionRequestIDsBySession[sessionKey] = requestID
+        self.latestThinkingLevelsBySession[sessionKey] = next
+
+        do {
+            try await self.transport.setSessionThinking(sessionKey: sessionKey, thinkingLevel: next)
+            guard requestID == self.latestThinkingSelectionRequestIDsBySession[sessionKey] else {
+                let latest = self.latestThinkingLevelsBySession[sessionKey] ?? next
+                guard latest != next else { return }
+                try? await self.transport.setSessionThinking(sessionKey: sessionKey, thinkingLevel: latest)
+                return
+            }
+        } catch {
+            guard sessionKey == self.sessionKey,
+                  requestID == self.latestThinkingSelectionRequestIDsBySession[sessionKey]
+            else { return }
+            // Best-effort. Persisting the user's local preference matters more than a patch error here.
+        }
+    }
+
+    private func performSelectModel(_ selectionID: String) async {
+        let next = self.normalizedSelectionID(selectionID)
+        guard next != self.modelSelectionID else { return }
+
+        let sessionKey = self.sessionKey
+        let previous = self.modelSelectionID
+        let previousRequestID = self.latestModelSelectionRequestIDsBySession[sessionKey]
+        self.nextModelSelectionRequestID &+= 1
+        let requestID = self.nextModelSelectionRequestID
+        let nextModelRef = self.modelRef(forSelectionID: next)
+        self.latestModelSelectionRequestIDsBySession[sessionKey] = requestID
+        self.latestModelSelectionIDsBySession[sessionKey] = next
+        self.beginModelPatch(for: sessionKey)
+        self.modelSelectionID = next
+        self.errorText = nil
+        defer { self.endModelPatch(for: sessionKey) }
+
+        do {
+            try await self.transport.setSessionModel(
+                sessionKey: sessionKey,
+                model: nextModelRef)
+            guard requestID == self.latestModelSelectionRequestIDsBySession[sessionKey] else {
+                // Keep older successful patches as rollback state, but do not replay
+                // stale UI/session state over a newer in-flight or completed selection.
+                self.lastSuccessfulModelSelectionIDsBySession[sessionKey] = next
+                return
+            }
+            self.applySuccessfulModelSelection(next, sessionKey: sessionKey, syncSelection: true)
+        } catch {
+            guard requestID == self.latestModelSelectionRequestIDsBySession[sessionKey] else { return }
+            self.latestModelSelectionIDsBySession[sessionKey] = previous
+            if let previousRequestID {
+                self.latestModelSelectionRequestIDsBySession[sessionKey] = previousRequestID
+            } else {
+                self.latestModelSelectionRequestIDsBySession.removeValue(forKey: sessionKey)
+            }
+            if self.lastSuccessfulModelSelectionIDsBySession[sessionKey] == previous {
+                self.applySuccessfulModelSelection(previous, sessionKey: sessionKey, syncSelection: sessionKey == self.sessionKey)
+            }
+            guard sessionKey == self.sessionKey else { return }
+            self.modelSelectionID = previous
+            self.errorText = error.localizedDescription
+            chatUILogger.error("sessions.patch(model) failed \(error.localizedDescription, privacy: .public)")
+        }
+    }
+
+    private func beginModelPatch(for sessionKey: String) {
+        self.inFlightModelPatchCountsBySession[sessionKey, default: 0] += 1
+    }
+
+    private func endModelPatch(for sessionKey: String) {
+        let remaining = max(0, (self.inFlightModelPatchCountsBySession[sessionKey] ?? 0) - 1)
+        if remaining == 0 {
+            self.inFlightModelPatchCountsBySession.removeValue(forKey: sessionKey)
+            let waiters = self.modelPatchWaitersBySession.removeValue(forKey: sessionKey) ?? []
+            for waiter in waiters {
+                waiter.resume()
+            }
+            return
+        }
+        self.inFlightModelPatchCountsBySession[sessionKey] = remaining
+    }
+
+    private func waitForPendingModelPatches(in sessionKey: String) async {
+        guard (self.inFlightModelPatchCountsBySession[sessionKey] ?? 0) > 0 else { return }
+        await withCheckedContinuation { continuation in
+            self.modelPatchWaitersBySession[sessionKey, default: []].append(continuation)
+        }
     }
 
     private func placeholderSession(key: String) -> OpenClawChatSessionEntry {
@@ -453,8 +654,157 @@ public final class OpenClawChatViewModel {
             inputTokens: nil,
             outputTokens: nil,
             totalTokens: nil,
+            modelProvider: nil,
             model: nil,
             contextTokens: nil)
+    }
+
+    private func syncSelectedModel() {
+        let currentSession = self.sessions.first(where: { $0.key == self.sessionKey })
+        let explicitModelID = self.normalizedModelSelectionID(
+            currentSession?.model,
+            provider: currentSession?.modelProvider)
+        if let explicitModelID {
+            self.lastSuccessfulModelSelectionIDsBySession[self.sessionKey] = explicitModelID
+            self.modelSelectionID = explicitModelID
+            return
+        }
+        self.lastSuccessfulModelSelectionIDsBySession[self.sessionKey] = Self.defaultModelSelectionID
+        self.modelSelectionID = Self.defaultModelSelectionID
+    }
+
+    private func normalizedSelectionID(_ selectionID: String) -> String {
+        let trimmed = selectionID.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return Self.defaultModelSelectionID }
+        return trimmed
+    }
+
+    private func normalizedModelSelectionID(_ modelID: String?, provider: String? = nil) -> String? {
+        guard let modelID else { return nil }
+        let trimmed = modelID.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        if let provider = Self.normalizedProvider(provider) {
+            let providerQualified = Self.providerQualifiedModelSelectionID(modelID: trimmed, provider: provider)
+            if let match = self.modelChoices.first(where: {
+                $0.selectionID == providerQualified ||
+                    ($0.modelID == trimmed && Self.normalizedProvider($0.provider) == provider)
+            }) {
+                return match.selectionID
+            }
+            return providerQualified
+        }
+        if self.modelChoices.contains(where: { $0.selectionID == trimmed }) {
+            return trimmed
+        }
+        let matches = self.modelChoices.filter { $0.modelID == trimmed || $0.selectionID == trimmed }
+        if matches.count == 1 {
+            return matches[0].selectionID
+        }
+        return trimmed
+    }
+
+    private func modelRef(forSelectionID selectionID: String) -> String? {
+        let normalized = self.normalizedSelectionID(selectionID)
+        if normalized == Self.defaultModelSelectionID {
+            return nil
+        }
+        return normalized
+    }
+
+    private func modelLabel(for modelID: String) -> String {
+        self.modelChoices.first(where: { $0.selectionID == modelID || $0.modelID == modelID })?.displayLabel ??
+            modelID
+    }
+
+    private func applySuccessfulModelSelection(_ selectionID: String, sessionKey: String, syncSelection: Bool) {
+        self.lastSuccessfulModelSelectionIDsBySession[sessionKey] = selectionID
+        let resolved = self.resolvedSessionModelIdentity(forSelectionID: selectionID)
+        self.updateCurrentSessionModel(
+            modelID: resolved.modelID,
+            modelProvider: resolved.modelProvider,
+            sessionKey: sessionKey,
+            syncSelection: syncSelection)
+    }
+
+    private func resolvedSessionModelIdentity(forSelectionID selectionID: String) -> (modelID: String?, modelProvider: String?) {
+        guard let modelRef = self.modelRef(forSelectionID: selectionID) else {
+            return (nil, nil)
+        }
+        if let choice = self.modelChoices.first(where: { $0.selectionID == modelRef }) {
+            return (choice.modelID, Self.normalizedProvider(choice.provider))
+        }
+        return (modelRef, nil)
+    }
+
+    private static func normalizedProvider(_ provider: String?) -> String? {
+        let trimmed = provider?.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let trimmed, !trimmed.isEmpty else { return nil }
+        return trimmed
+    }
+
+    private static func providerQualifiedModelSelectionID(modelID: String, provider: String) -> String {
+        let providerPrefix = "\(provider)/"
+        if modelID.hasPrefix(providerPrefix) {
+            return modelID
+        }
+        return "\(provider)/\(modelID)"
+    }
+
+    private func updateCurrentSessionModel(
+        modelID: String?,
+        modelProvider: String?,
+        sessionKey: String,
+        syncSelection: Bool)
+    {
+        if let index = self.sessions.firstIndex(where: { $0.key == sessionKey }) {
+            let current = self.sessions[index]
+            self.sessions[index] = OpenClawChatSessionEntry(
+                key: current.key,
+                kind: current.kind,
+                displayName: current.displayName,
+                surface: current.surface,
+                subject: current.subject,
+                room: current.room,
+                space: current.space,
+                updatedAt: current.updatedAt,
+                sessionId: current.sessionId,
+                systemSent: current.systemSent,
+                abortedLastRun: current.abortedLastRun,
+                thinkingLevel: current.thinkingLevel,
+                verboseLevel: current.verboseLevel,
+                inputTokens: current.inputTokens,
+                outputTokens: current.outputTokens,
+                totalTokens: current.totalTokens,
+                modelProvider: modelProvider,
+                model: modelID,
+                contextTokens: current.contextTokens)
+        } else {
+            let placeholder = self.placeholderSession(key: sessionKey)
+            self.sessions.append(
+                OpenClawChatSessionEntry(
+                    key: placeholder.key,
+                    kind: placeholder.kind,
+                    displayName: placeholder.displayName,
+                    surface: placeholder.surface,
+                    subject: placeholder.subject,
+                    room: placeholder.room,
+                    space: placeholder.space,
+                    updatedAt: placeholder.updatedAt,
+                    sessionId: placeholder.sessionId,
+                    systemSent: placeholder.systemSent,
+                    abortedLastRun: placeholder.abortedLastRun,
+                    thinkingLevel: placeholder.thinkingLevel,
+                    verboseLevel: placeholder.verboseLevel,
+                    inputTokens: placeholder.inputTokens,
+                    outputTokens: placeholder.outputTokens,
+                    totalTokens: placeholder.totalTokens,
+                    modelProvider: modelProvider,
+                    model: modelID,
+                    contextTokens: placeholder.contextTokens))
+        }
+        if syncSelection {
+            self.syncSelectedModel()
+        }
     }
 
     private func handleTransportEvent(_ evt: OpenClawChatTransportEvent) {
@@ -573,7 +923,9 @@ public final class OpenClawChatViewModel {
                 previous: self.messages,
                 incoming: Self.decodeMessages(payload.messages ?? []))
             self.sessionId = payload.sessionId
-            if let level = payload.thinkingLevel, !level.isEmpty {
+            if !self.prefersExplicitThinkingLevel,
+               let level = Self.normalizedThinkingLevel(payload.thinkingLevel)
+            {
                 self.thinkingLevel = level
             }
         } catch {
@@ -681,5 +1033,14 @@ public final class OpenClawChatViewModel {
         #else
         nil
         #endif
+    }
+
+    private static func normalizedThinkingLevel(_ level: String?) -> String? {
+        guard let level else { return nil }
+        let trimmed = level.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard ["off", "minimal", "low", "medium", "high", "xhigh", "adaptive"].contains(trimmed) else {
+            return nil
+        }
+        return trimmed
     }
 }

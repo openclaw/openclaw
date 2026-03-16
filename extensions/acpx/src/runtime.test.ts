@@ -1,6 +1,6 @@
 import os from "node:os";
 import path from "node:path";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { runAcpRuntimeAdapterContract } from "../../../src/acp/runtime/adapter-contract.testkit.js";
 import { AcpxRuntime, decodeAcpxRuntimeHandleState } from "./runtime.js";
 import {
@@ -19,13 +19,14 @@ beforeAll(async () => {
     {
       command: "/definitely/missing/acpx",
       allowPluginLocalInstall: false,
+      stripProviderAuthEnvVars: false,
       installCommand: "n/a",
       cwd: process.cwd(),
-      mcpServers: {},
       permissionMode: "approve-reads",
       nonInteractivePermissions: "fail",
       strictWindowsCmdWrapper: true,
       queueOwnerTtlSeconds: 0.1,
+      mcpServers: {},
     },
     { logger: NOOP_LOGGER },
   );
@@ -165,7 +166,7 @@ describe("AcpxRuntime", () => {
     for await (const _event of runtime.runTurn({
       handle,
       text: "describe this image",
-      attachments: [{ mediaType: "image/png", data: "aW1hZ2UtYnl0ZXM=" }],
+      attachments: [{ mediaType: "image/png", data: "aW1hZ2UtYnl0ZXM=" }], // pragma: allowlist secret
       mode: "prompt",
       requestId: "req-image",
     })) {
@@ -184,6 +185,40 @@ describe("AcpxRuntime", () => {
       { type: "text", text: "describe this image" },
       { type: "image", mimeType: "image/png", data: "aW1hZ2UtYnl0ZXM=" },
     ]);
+  });
+
+  it("preserves provider auth env vars when runtime uses a custom acpx command", async () => {
+    vi.stubEnv("OPENAI_API_KEY", "openai-secret"); // pragma: allowlist secret
+    vi.stubEnv("GITHUB_TOKEN", "gh-secret"); // pragma: allowlist secret
+
+    try {
+      const { runtime, logPath } = await createMockRuntimeFixture();
+      const handle = await runtime.ensureSession({
+        sessionKey: "agent:codex:acp:custom-env",
+        agent: "codex",
+        mode: "persistent",
+      });
+
+      for await (const _event of runtime.runTurn({
+        handle,
+        text: "custom-env",
+        mode: "prompt",
+        requestId: "req-custom-env",
+      })) {
+        // Drain events; assertions inspect the mock runtime log.
+      }
+
+      const logs = await readMockRuntimeLogEntries(logPath);
+      const prompt = logs.find(
+        (entry) =>
+          entry.kind === "prompt" &&
+          String(entry.sessionName ?? "") === "agent:codex:acp:custom-env",
+      );
+      expect(prompt?.openaiApiKey).toBe("openai-secret");
+      expect(prompt?.githubToken).toBe("gh-secret");
+    } finally {
+      vi.unstubAllEnvs();
+    }
   });
 
   it("preserves leading spaces across streamed text deltas", async () => {
@@ -395,7 +430,7 @@ describe("AcpxRuntime", () => {
             command: "npx",
             args: ["-y", "mcp-remote@latest", "https://mcp.canva.com/mcp"],
             env: {
-              CANVA_TOKEN: "secret",
+              CANVA_TOKEN: "secret", // pragma: allowlist secret
             },
           },
         },

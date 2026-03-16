@@ -70,7 +70,7 @@ describe("handleAgentEnd", () => {
     });
   });
 
-  it("attaches raw provider error metadata without changing the console message", () => {
+  it("attaches raw provider error metadata and includes model/provider in console output", () => {
     const ctx = createContext({
       role: "assistant",
       stopReason: "error",
@@ -91,7 +91,33 @@ describe("handleAgentEnd", () => {
       error: "The AI service is temporarily overloaded. Please try again in a moment.",
       failoverReason: "overloaded",
       providerErrorType: "overloaded_error",
+      consoleMessage:
+        "embedded run agent end: runId=run-1 isError=true model=claude-test provider=anthropic error=The AI service is temporarily overloaded. Please try again in a moment.",
     });
+  });
+
+  it("sanitizes model and provider before writing consoleMessage", () => {
+    const ctx = createContext({
+      role: "assistant",
+      stopReason: "error",
+      provider: "anthropic\u001b]8;;https://evil.test\u0007",
+      model: "claude\tsonnet\n4",
+      errorMessage: "connection refused",
+      content: [{ type: "text", text: "" }],
+    });
+
+    handleAgentEnd(ctx);
+
+    const warn = vi.mocked(ctx.log.warn);
+    const meta = warn.mock.calls[0]?.[1];
+    expect(meta).toMatchObject({
+      consoleMessage:
+        "embedded run agent end: runId=run-1 isError=true model=claude sonnet 4 provider=anthropic]8;;https://evil.test error=connection refused",
+    });
+    expect(meta?.consoleMessage).not.toContain("\n");
+    expect(meta?.consoleMessage).not.toContain("\r");
+    expect(meta?.consoleMessage).not.toContain("\t");
+    expect(meta?.consoleMessage).not.toContain("\u001b");
   });
 
   it("redacts logged error text before emitting lifecycle events", () => {
