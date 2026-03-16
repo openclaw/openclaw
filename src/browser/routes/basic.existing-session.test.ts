@@ -27,6 +27,7 @@ describe("basic browser routes", () => {
             driver: "existing-session",
             cdpPort: 0,
             cdpUrl: "",
+            userDataDir: "/tmp/brave-profile",
             color: "#00AA00",
             attachOnly: true,
           },
@@ -66,6 +67,7 @@ describe("basic browser routes", () => {
             driver: "existing-session",
             cdpPort: 0,
             cdpUrl: "",
+            userDataDir: "/tmp/brave-profile",
             color: "#00AA00",
             attachOnly: true,
           },
@@ -88,6 +90,7 @@ describe("basic browser routes", () => {
       running: true,
       cdpPort: null,
       cdpUrl: null,
+      userDataDir: "/tmp/brave-profile",
       pid: 4321,
     });
   });

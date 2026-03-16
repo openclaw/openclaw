@@ -91,6 +91,7 @@ Use the built-in `user` profile, or create your own `existing-session` profile:
 ```bash
 openclaw browser --browser-profile user tabs
 openclaw browser create-profile --name chrome-live --driver existing-session
+openclaw browser create-profile --name brave-live --driver existing-session --user-data-dir "~/Library/Application Support/BraveSoftware/Brave-Browser"
 openclaw browser --browser-profile chrome-live tabs
 ```
 

@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { withEnv } from "../test-utils/env.js";
+import { resolveUserPath } from "../utils.js";
 import { resolveBrowserConfig, resolveProfile, shouldStartLocalBrowserServer } from "./config.js";
 import { getBrowserProfileCapabilities } from "./profile-capabilities.js";
 
@@ -26,6 +27,7 @@ describe("browser config", () => {
     expect(user?.driver).toBe("existing-session");
     expect(user?.cdpPort).toBe(0);
     expect(user?.cdpUrl).toBe("");
+    expect(user?.userDataDir).toBeUndefined();
     // chrome-relay is no longer auto-created
     expect(resolveProfile(resolved, "chrome-relay")).toBe(null);
     expect(resolved.remoteCdpTimeoutMs).toBe(1500);
@@ -275,7 +277,27 @@ describe("browser config", () => {
     expect(profile?.cdpPort).toBe(0);
     expect(profile?.cdpUrl).toBe("");
     expect(profile?.cdpIsLoopback).toBe(true);
+    expect(profile?.userDataDir).toBeUndefined();
     expect(profile?.color).toBe("#00AA00");
+  });
+
+  it("expands tilde-prefixed userDataDir for existing-session profiles", () => {
+    const resolved = resolveBrowserConfig({
+      profiles: {
+        brave: {
+          driver: "existing-session",
+          attachOnly: true,
+          userDataDir: "~/Library/Application Support/BraveSoftware/Brave-Browser",
+          color: "#FB542B",
+        },
+      },
+    });
+
+    const profile = resolveProfile(resolved, "brave");
+    expect(profile?.driver).toBe("existing-session");
+    expect(profile?.userDataDir).toBe(
+      resolveUserPath("~/Library/Application Support/BraveSoftware/Brave-Browser"),
+    );
   });
 
   it("sets usesChromeMcp only for existing-session profiles", () => {

@@ -162,6 +162,7 @@ export type BrowserCreateProfileResult = {
   transport?: BrowserTransport;
   cdpPort: number | null;
   cdpUrl: string | null;
+  userDataDir: string | null;
   color: string;
   isRemote: boolean;
 };
@@ -172,6 +173,7 @@ export async function browserCreateProfile(
     name: string;
     color?: string;
     cdpUrl?: string;
+    userDataDir?: string;
     driver?: "openclaw" | "existing-session";
   },
 ): Promise<BrowserCreateProfileResult> {
@@ -184,6 +186,7 @@ export async function browserCreateProfile(
         name: opts.name,
         color: opts.color,
         cdpUrl: opts.cdpUrl,
+        userDataDir: opts.userDataDir,
         driver: opts.driver,
       }),
       timeoutMs: 10000,
