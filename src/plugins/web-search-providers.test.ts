@@ -13,7 +13,7 @@ describe("resolvePluginWebSearchProviders", () => {
     loadOpenClawPluginsMock.mockReturnValue({
       webSearchProviders: [
         {
-          pluginId: "web-search-gemini",
+          pluginId: "google",
           provider: {
             id: "gemini",
             label: "Gemini",
@@ -25,7 +25,7 @@ describe("resolvePluginWebSearchProviders", () => {
           },
         },
         {
-          pluginId: "web-search-brave",
+          pluginId: "brave",
           provider: {
             id: "brave",
             label: "Brave",
@@ -71,11 +71,7 @@ describe("resolvePluginWebSearchProviders", () => {
       expect.objectContaining({
         config: expect.objectContaining({
           plugins: expect.objectContaining({
-            allow: expect.arrayContaining([
-              "openrouter",
-              "web-search-brave",
-              "web-search-perplexity",
-            ]),
+            allow: expect.arrayContaining(["openrouter", "brave", "perplexity"]),
           }),
         }),
       }),
@@ -99,11 +95,11 @@ describe("resolvePluginWebSearchProviders", () => {
           plugins: expect.objectContaining({
             entries: expect.objectContaining({
               openrouter: { enabled: true },
-              "web-search-brave": { enabled: true },
-              "web-search-gemini": { enabled: true },
-              "web-search-grok": { enabled: true },
+              brave: { enabled: true },
+              google: { enabled: true },
               moonshot: { enabled: true },
-              "web-search-perplexity": { enabled: true },
+              perplexity: { enabled: true },
+              xai: { enabled: true },
             }),
           }),
         }),
@@ -116,7 +112,7 @@ describe("resolvePluginWebSearchProviders", () => {
       config: {
         plugins: {
           entries: {
-            "web-search-perplexity": { enabled: false },
+            perplexity: { enabled: false },
           },
         },
       },
@@ -127,7 +123,7 @@ describe("resolvePluginWebSearchProviders", () => {
         config: expect.objectContaining({
           plugins: expect.objectContaining({
             entries: expect.objectContaining({
-              "web-search-perplexity": { enabled: false },
+              perplexity: { enabled: false },
             }),
           }),
         }),

@@ -1,5 +1,5 @@
 {
-  "id": "web-search-perplexity",
+  "id": "perplexity",
   "configSchema": {
     "type": "object",
     "additionalProperties": false,

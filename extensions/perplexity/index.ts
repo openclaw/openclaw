@@ -6,10 +6,10 @@ import {
 import { emptyPluginConfigSchema } from "../../src/plugins/config-schema.js";
 import type { OpenClawPluginApi } from "../../src/plugins/types.js";
 
-const perplexitySearchPlugin = {
-  id: "web-search-perplexity",
-  name: "Web Search Perplexity Provider",
-  description: "Bundled Perplexity provider for the web_search tool",
+const perplexityPlugin = {
+  id: "perplexity",
+  name: "Perplexity Plugin",
+  description: "Bundled Perplexity plugin",
   configSchema: emptyPluginConfigSchema(),
   register(api: OpenClawPluginApi) {
     api.registerWebSearchProvider(
@@ -30,4 +30,4 @@ const perplexitySearchPlugin = {
   },
 };
 
-export default perplexitySearchPlugin;
+export default perplexityPlugin;
