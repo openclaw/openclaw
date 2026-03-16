@@ -51,8 +51,22 @@
             },
             "env": {
               "type": "object",
-              "additionalProperties": { "type": "string" },
-              "description": "Environment variables for the MCP server"
+              "additionalProperties": {
+                "oneOf": [
+                  { "type": "string" },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "source": { "type": "string", "enum": ["env", "file", "exec"] },
+                      "provider": { "type": "string" },
+                      "id": { "type": "string" }
+                    },
+                    "required": ["source", "provider", "id"],
+                    "additionalProperties": false
+                  }
+                ]
+              },
+              "description": "Environment variables for the MCP server. Values can be plain strings or SecretRef objects."
             }
           },
           "required": ["command"]
