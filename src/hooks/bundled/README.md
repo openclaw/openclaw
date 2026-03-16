@@ -247,7 +247,7 @@ handler: handler.mjs
 
 ### Behavior
 
-- Runs **after** `message:received` but **before** the agent run
+- Runs **after** media + link understanding completes and **before** the agent run
 - Multiple enrich handlers merge their metadata (later handlers overwrite on key conflict)
 - Zero overhead when no enrich hooks are registered (`hasEnrichHooks` guard)
 - Errors in enrich hooks are caught and logged — they never block the message

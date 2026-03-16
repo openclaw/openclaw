@@ -450,7 +450,7 @@ export function isMessageEnrichEvent(
   if (!context || typeof context !== "object") {
     return false;
   }
-  return typeof context.from === "string" && typeof context.channelId === "string";
+  return hasStringContextField(context, "content") && hasStringContextField(context, "channelId");
 }
 
 /**

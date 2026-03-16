@@ -58,11 +58,9 @@ import type { FinalizedMsgContext } from "../templating.js";
 import { normalizeVerboseLevel } from "../thinking.js";
 import {
   createInternalHookEvent,
-  hasEnrichHooks,
   loadSessionStore,
   resolveSessionStoreEntry,
   resolveStorePath,
-  triggerEnrichHook,
   triggerInternalHook,
 } from "./dispatch-from-config.runtime.js";
 import type {
@@ -305,7 +303,7 @@ export async function dispatchReplyFromConfig(
   const messageIdForHook =
     ctx.MessageSidFull ?? ctx.MessageSid ?? ctx.MessageSidFirst ?? ctx.MessageSidLast;
   const hookContext = deriveInboundMessageHookContext(ctx, { messageId: messageIdForHook });
-  const { isGroup, groupId, content, channelId, conversationId } = hookContext;
+  const { isGroup, groupId } = hookContext;
   const inboundClaimContext = toPluginInboundClaimContext(hookContext);
   const inboundClaimEvent = toPluginInboundClaimEvent(hookContext, {
     commandAuthorized:
@@ -585,54 +583,6 @@ export async function dispatchReplyFromConfig(
       ),
       "dispatch-from-config: message_received internal hook failed",
     );
-  }
-
-  // Trigger message:enrich hooks (synchronous, awaited) to inject custom metadata
-  // into the per-message context before the agent run. Unlike message:received (fire-and-forget),
-  // enrich hooks can return metadata that gets merged into UntrustedContext.
-  if (sessionKey && hasEnrichHooks()) {
-    try {
-      const enrichEvent = createInternalHookEvent("message", "enrich", sessionKey, {
-        from: ctx.From ?? "",
-        content,
-        timestamp,
-        channelId,
-        accountId: ctx.AccountId,
-        conversationId,
-        messageId: messageIdForHook,
-        sessionKey,
-        metadata: {
-          to: ctx.To,
-          provider: ctx.Provider,
-          surface: ctx.Surface,
-          threadId: ctx.MessageThreadId,
-          senderId: ctx.SenderId,
-          senderName: ctx.SenderName,
-          senderUsername: ctx.SenderUsername,
-          senderE164: ctx.SenderE164,
-        },
-      });
-      const enrichedMetadata = await triggerEnrichHook(enrichEvent);
-      if (Object.keys(enrichedMetadata).length > 0) {
-        const enrichBlock = [
-          "Enriched context (hook-injected metadata):",
-          "```json",
-          JSON.stringify(enrichedMetadata, null, 2),
-          "```",
-        ].join("\n");
-        if (!ctx.UntrustedContext) {
-          ctx.UntrustedContext = [];
-        }
-        if (Array.isArray(ctx.UntrustedContext)) {
-          ctx.UntrustedContext.push(enrichBlock);
-        }
-        logVerbose(
-          `dispatch-from-config: message:enrich injected ${Object.keys(enrichedMetadata).length} metadata key(s)`,
-        );
-      }
-    } catch (err) {
-      logVerbose(`dispatch-from-config: message:enrich hook failed: ${String(err)}`);
-    }
   }
 
   markProcessing();

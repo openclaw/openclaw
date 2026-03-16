@@ -49,6 +49,7 @@ openclaw hooks info session-memory
 | `message:received`       | Inbound message from any channel                 |
 | `message:transcribed`    | After audio transcription completes              |
 | `message:preprocessed`   | After all media and link understanding completes |
+| `message:enrich`         | Awaited metadata injection before the agent runs |
 | `message:sent`           | Outbound message delivered                       |
 
 ## Writing hooks
@@ -121,6 +122,8 @@ Each event includes: `type`, `action`, `sessionKey`, `timestamp`, `messages` (pu
 **Message events** (`message:transcribed`): `context.transcript`, `context.from`, `context.channelId`, `context.mediaPath`.
 
 **Message events** (`message:preprocessed`): `context.bodyForAgent` (final enriched body), `context.from`, `context.channelId`.
+
+**Message events** (`message:enrich`): awaited after media and link understanding and before the agent turn starts. Handlers may return `{ metadata: Record<string, unknown> }`, which OpenClaw appends to the per-message untrusted context block instead of mutating the system prompt.
 
 **Bootstrap events** (`agent:bootstrap`): `context.bootstrapFiles` (mutable array), `context.agentId`.
 

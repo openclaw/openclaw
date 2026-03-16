@@ -6,14 +6,20 @@ import {
   getRegisteredEventKeys,
   isAgentBootstrapEvent,
   isGatewayStartupEvent,
+  isMessageEnrichEvent,
   isMessageReceivedEvent,
   isMessageSentEvent,
+  hasEnrichHooks,
+  registerInternalEnrichHook,
   registerInternalHook,
   setInternalHooksEnabled,
+  triggerEnrichHook,
   triggerInternalHook,
+  unregisterInternalEnrichHook,
   unregisterInternalHook,
   type AgentBootstrapHookContext,
   type GatewayStartupHookContext,
+  type MessageEnrichHookContext,
   type MessageReceivedHookContext,
   type MessageSentHookContext,
 } from "./internal-hooks.js";
@@ -77,6 +83,142 @@ describe("hooks", () => {
 
       const keys = getRegisteredEventKeys();
       expect(keys).not.toContain("command:new");
+    });
+  });
+
+  describe("enrichment hooks", () => {
+    it("registers enrich handlers and exposes their keys", () => {
+      const handler = vi.fn();
+      registerInternalEnrichHook("message:enrich", handler);
+
+      expect(hasEnrichHooks()).toBe(true);
+      expect(getRegisteredEventKeys()).toContain("message:enrich");
+    });
+
+    it("unregisters enrich handlers and clears the hasEnrichHooks guard", () => {
+      const handler = vi.fn();
+      registerInternalEnrichHook("message:enrich", handler);
+
+      unregisterInternalEnrichHook("message:enrich", handler);
+
+      expect(hasEnrichHooks()).toBe(false);
+      expect(getRegisteredEventKeys()).not.toContain("message:enrich");
+    });
+
+    it("merges metadata from general and specific enrich handlers", async () => {
+      registerInternalEnrichHook("message", async () => ({
+        metadata: { source: "general", speed_mps: 18.2 },
+      }));
+      registerInternalEnrichHook("message:enrich", async () => ({
+        metadata: { speed_mps: 21.5, driving: true },
+      }));
+
+      const result = await triggerEnrichHook(
+        createInternalHookEvent("message", "enrich", "test-session", {
+          content: "Hello world",
+          channelId: "whatsapp",
+        } satisfies MessageEnrichHookContext),
+      );
+
+      expect(result).toEqual({
+        source: "general",
+        speed_mps: 21.5,
+        driving: true,
+      });
+    });
+
+    it("continues after enrich handler errors", async () => {
+      registerInternalEnrichHook("message:enrich", async () => {
+        throw new Error("Handler failed");
+      });
+      registerInternalEnrichHook("message:enrich", async () => ({
+        metadata: { ok: true },
+      }));
+
+      const result = await triggerEnrichHook(
+        createInternalHookEvent("message", "enrich", "test-session", {
+          content: "Hello world",
+          channelId: "whatsapp",
+        } satisfies MessageEnrichHookContext),
+      );
+
+      expect(result).toEqual({ ok: true });
+    });
+
+    it("skips enrich execution when internal hooks are disabled", async () => {
+      const handler = vi.fn(async () => ({ metadata: { ok: true } }));
+      registerInternalEnrichHook("message:enrich", handler);
+      setInternalHooksEnabled(false);
+
+      const result = await triggerEnrichHook(
+        createInternalHookEvent("message", "enrich", "test-session", {
+          content: "Hello world",
+          channelId: "whatsapp",
+        } satisfies MessageEnrichHookContext),
+      );
+
+      expect(result).toEqual({});
+      expect(handler).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("enrichment hooks", () => {
+    it("registers enrich handlers and exposes their keys", () => {
+      const handler = vi.fn();
+      registerInternalEnrichHook("message:enrich", handler);
+
+      expect(hasEnrichHooks()).toBe(true);
+      expect(getRegisteredEventKeys()).toContain("message:enrich");
+    });
+
+    it("unregisters enrich handlers and clears the hasEnrichHooks guard", () => {
+      const handler = vi.fn();
+      registerInternalEnrichHook("message:enrich", handler);
+
+      unregisterInternalEnrichHook("message:enrich", handler);
+
+      expect(hasEnrichHooks()).toBe(false);
+      expect(getRegisteredEventKeys()).not.toContain("message:enrich");
+    });
+
+    it("merges metadata from general and specific enrich handlers", async () => {
+      registerInternalEnrichHook("message", async () => ({
+        metadata: { source: "general", speed_mps: 18.2 },
+      }));
+      registerInternalEnrichHook("message:enrich", async () => ({
+        metadata: { speed_mps: 21.5, driving: true },
+      }));
+
+      const result = await triggerEnrichHook(
+        createInternalHookEvent("message", "enrich", "test-session", {
+          content: "hello",
+          channelId: "telegram",
+        } satisfies MessageEnrichHookContext),
+      );
+
+      expect(result).toEqual({
+        source: "general",
+        speed_mps: 21.5,
+        driving: true,
+      });
+    });
+
+    it("continues after enrich handler errors", async () => {
+      registerInternalEnrichHook("message:enrich", async () => {
+        throw new Error("Handler failed");
+      });
+      registerInternalEnrichHook("message:enrich", async () => ({
+        metadata: { ok: true },
+      }));
+
+      const result = await triggerEnrichHook(
+        createInternalHookEvent("message", "enrich", "test-session", {
+          content: "hello",
+          channelId: "telegram",
+        } satisfies MessageEnrichHookContext),
+      );
+
+      expect(result).toEqual({ ok: true });
     });
   });
 
@@ -276,6 +418,36 @@ describe("hooks", () => {
       expected: boolean;
     }>)("$name", ({ event, expected }) => {
       expect(isMessageReceivedEvent(event)).toBe(expected);
+    });
+  });
+
+  describe("isMessageEnrichEvent", () => {
+    it.each([
+      {
+        name: "returns true for message:enrich events with expected context",
+        event: createInternalHookEvent("message", "enrich", "test-session", {
+          content: "Hello world",
+          channelId: "whatsapp",
+          conversationId: "chat-123",
+          timestamp: Date.now(),
+        } satisfies MessageEnrichHookContext),
+        expected: true,
+      },
+      {
+        name: "returns false for message:received events",
+        event: createInternalHookEvent("message", "received", "test-session", {
+          from: "+1234567890",
+          content: "Hello world",
+          channelId: "whatsapp",
+        } satisfies MessageReceivedHookContext),
+        expected: false,
+      },
+    ] satisfies Array<{
+      name: string;
+      event: ReturnType<typeof createInternalHookEvent>;
+      expected: boolean;
+    }>)("$name", ({ event, expected }) => {
+      expect(isMessageEnrichEvent(event)).toBe(expected);
     });
   });
 

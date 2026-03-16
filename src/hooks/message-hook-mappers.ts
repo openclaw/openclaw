@@ -13,6 +13,7 @@ import {
   normalizeOptionalString,
 } from "../shared/string-coerce.js";
 import type {
+  MessageEnrichHookContext,
   MessagePreprocessedHookContext,
   MessageReceivedHookContext,
   MessageSentHookContext,
@@ -360,6 +361,32 @@ export function toInternalMessagePreprocessedContext(
     isGroup: canonical.isGroup,
     groupId: canonical.groupId,
     cfg,
+  };
+}
+
+export function toInternalMessageEnrichContext(
+  canonical: CanonicalInboundMessageHookContext,
+): MessageEnrichHookContext {
+  const shared = toInternalInboundMessageHookContextBase(canonical);
+  return {
+    ...shared,
+    content: canonical.content,
+    accountId: canonical.accountId,
+    transcript: canonical.transcript,
+    isGroup: canonical.isGroup,
+    groupId: canonical.groupId,
+    metadata: {
+      to: canonical.to,
+      provider: canonical.provider,
+      surface: canonical.surface,
+      threadId: canonical.threadId,
+      senderId: canonical.senderId,
+      senderName: canonical.senderName,
+      senderUsername: canonical.senderUsername,
+      senderE164: canonical.senderE164,
+      guildId: canonical.guildId,
+      channelName: canonical.channelName,
+    },
   };
 }
 
