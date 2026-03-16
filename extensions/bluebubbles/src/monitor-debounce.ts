@@ -120,6 +120,7 @@ export function createBlueBubblesDebounceRegistry(params: {
       }
 
       const { account, config, runtime, core } = target;
+      let fallbackSequence = 0;
       const debouncer = core.channel.debounce.createInboundDebouncer<BlueBubblesDebounceEntry>({
         debounceMs: resolveBlueBubblesDebounceMs(config, core),
         buildKey: (entry) => {
@@ -150,7 +151,9 @@ export function createBlueBubblesDebounceRegistry(params: {
             return `bluebubbles:${account.accountId}:${chatKey}:${senderKey}`;
           }
           const timestampKey =
-            typeof msg.timestamp === "number" ? `ts:${msg.timestamp}` : "unknown-sender";
+            typeof msg.timestamp === "number"
+              ? `ts:${msg.timestamp}`
+              : `unknown-sender:${fallbackSequence++}`;
           return `bluebubbles:${account.accountId}:${chatKey}:${timestampKey}`;
         },
         shouldDebounce: (entry) => {
