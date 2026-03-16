@@ -544,17 +544,21 @@ export function decodeFeishuFilename(filename: string | undefined): string {
   const rfcMatch = /^filename\*=utf-8'[^']*'/i.exec(filename);
   if (rfcMatch) {
     filename = filename.substring(rfcMatch[0].length);
+    try {
+      return decodeURIComponent(filename);
+    } catch {
+      return filename;
+    }
   }
-  // Decode only if result contains non-ASCII (likely encoded Chinese)
+  // Plain filename - only decode if result has non-ASCII
   if (/%[0-9A-Fa-f]{2}/.test(filename)) {
     try {
       const decoded = decodeURIComponent(filename);
-      // Only use decoded if it contains non-ASCII characters
       if (decoded && /[^\x00-\x7F]/.test(decoded)) {
         return decoded;
       }
     } catch {
-      // Fall through to return original
+      // Fall through
     }
   }
   return filename;
