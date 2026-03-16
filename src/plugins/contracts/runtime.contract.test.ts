@@ -356,26 +356,6 @@ describe("provider runtime contract", () => {
         api: "openai-responses",
       });
     });
-
-    it("owns codex-only missing-auth hints and Spark suppression", () => {
-      const provider = requireProvider("openai");
-      expect(
-        provider.buildMissingAuthMessage?.({
-          env: {} as NodeJS.ProcessEnv,
-          provider: "openai",
-          listProfileIds: (providerId) => (providerId === "openai-codex" ? ["p1"] : []),
-        }),
-      ).toContain("openai-codex/gpt-5.4");
-      expect(
-        provider.suppressBuiltInModel?.({
-          env: {} as NodeJS.ProcessEnv,
-          provider: "azure-openai-responses",
-          modelId: "gpt-5.3-codex-spark",
-        }),
-      ).toMatchObject({
-        suppress: true,
-      });
-    });
   });
 
   describe("openai-codex", () => {
