@@ -149,7 +149,9 @@ export async function finalizeSetupWizard(
               stdout: process.stdout,
             });
             const restartStatus = describeGatewayServiceRestart("Gateway", restartResult);
-            restartDoneMessage = restartStatus.progressMessage;
+            restartDoneMessage = restartStatus.scheduled
+              ? "网关服务重启已排定。"
+              : restartStatus.progressMessage;
             restartWasScheduled = restartStatus.scheduled;
           },
         );

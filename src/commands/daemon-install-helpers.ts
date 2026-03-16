@@ -105,6 +105,6 @@ export async function buildGatewayInstallPlan(params: {
 
 export function gatewayInstallErrorHint(platform = process.platform): string {
   return platform === "win32"
-    ? "Tip: native Windows now falls back to a per-user Startup-folder login item when Scheduled Task creation is denied; if install still fails, rerun from an elevated PowerShell or skip service install."
-    : `Tip: rerun \`${formatCliCommand("openclaw gateway install")}\` after fixing the error.`;
+    ? "提示：当 Scheduled Task 创建被拒绝时，原生 Windows 现在会回退到当前用户的启动文件夹登录项；如果安装仍然失败，请使用提升权限的 PowerShell 重试，或跳过服务安装。"
+    : `提示：修复错误后，重新运行 \`${formatCliCommand("openclaw gateway install")}\`。`;
 }

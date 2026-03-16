@@ -305,6 +305,6 @@ describe("finalizeSetupWizard", () => {
     expect(gatewayServiceInstall).not.toHaveBeenCalled();
     expect(gatewayServiceUninstall).not.toHaveBeenCalled();
     expect(progressUpdate).toHaveBeenCalledWith("正在重启网关服务…");
-    expect(progressStop).toHaveBeenCalledWith("Gateway service restart scheduled.");
+    expect(progressStop).toHaveBeenCalledWith("网关服务重启已排定。");
   });
 });
