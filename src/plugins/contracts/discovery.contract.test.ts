@@ -75,6 +75,7 @@ function createModelConfig(id: string, name = id): ModelDefinitionConfig {
     maxTokens: 8_192,
   };
 }
+
 describe("provider discovery contract", () => {
   afterEach(() => {
     resolveCopilotApiTokenMock.mockReset();
