@@ -491,6 +491,9 @@ export async function statusCommand(
     ];
     return parts.join(" · ");
   };
+  if (!securityAudit) {
+    throw new Error("security audit is unavailable for non-JSON status output");
+  }
   runtime.log(theme.muted(`Summary: ${fmtSummary(securityAudit.summary)}`));
   const importantFindings = securityAudit.findings.filter(
     (f) => f.severity === "critical" || f.severity === "warn",
