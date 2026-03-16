@@ -73,6 +73,20 @@ function resolveValidatedDiscoveredStorePathSync(params: {
     return isWithinRoot(realStorePath, realAgentsRoot) ? realStorePath : undefined;
   } catch (err) {
     if (shouldSkipDiscoveryError(err)) {
+      // operator1: sessions.json may not exist on disk because sessions are stored in SQLite.
+      // Fall back to checking if the sessions/ directory itself exists and is valid.
+      try {
+        const dirStat = fsSync.lstatSync(params.sessionsDir);
+        if (dirStat.isDirectory() && !dirStat.isSymbolicLink()) {
+          const realDir = fsSync.realpathSync(params.sessionsDir);
+          const realAgentsRoot = params.realAgentsRoot ?? fsSync.realpathSync(params.agentsRoot);
+          if (isWithinRoot(realDir, realAgentsRoot)) {
+            return storePath; // synthetic path — loadSessionStore reads from SQLite
+          }
+        }
+      } catch {
+        // ignore — fall through to undefined
+      }
       return undefined;
     }
     throw err;
@@ -95,6 +109,20 @@ async function resolveValidatedDiscoveredStorePath(params: {
     return isWithinRoot(realStorePath, realAgentsRoot) ? realStorePath : undefined;
   } catch (err) {
     if (shouldSkipDiscoveryError(err)) {
+      // operator1: sessions.json may not exist on disk because sessions are stored in SQLite.
+      // Fall back to checking if the sessions/ directory itself exists and is valid.
+      try {
+        const dirStat = await fs.lstat(params.sessionsDir);
+        if (dirStat.isDirectory() && !dirStat.isSymbolicLink()) {
+          const realDir = await fs.realpath(params.sessionsDir);
+          const realAgentsRoot = params.realAgentsRoot ?? (await fs.realpath(params.agentsRoot));
+          if (isWithinRoot(realDir, realAgentsRoot)) {
+            return storePath; // synthetic path — loadSessionStore reads from SQLite
+          }
+        }
+      } catch {
+        // ignore — fall through to undefined
+      }
       return undefined;
     }
     throw err;
