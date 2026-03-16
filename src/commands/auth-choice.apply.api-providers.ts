@@ -201,16 +201,13 @@ export async function applyAuthChoiceApiProviders(
       password = String(value ?? "").trim();
     }
 
-    await setGigachatApiKey(
-      `${username}:${password}`,
-      params.agentDir,
-      { secretInputMode: requestedSecretInputMode },
-      {
-        authMode: "basic",
-        insecureTls: "false",
-        ...(gigachatBasicScope ? { scope: gigachatBasicScope } : {}),
-      },
-    );
+    const basicMetadata: Record<string, string> = {
+      authMode: "basic",
+      insecureTls: "false",
+      ...(gigachatBasicScope ? { scope: gigachatBasicScope } : {}),
+    };
+
+    await setGigachatApiKey(`${username}:${password}`, params.agentDir, undefined, basicMetadata);
 
     nextConfig = applyAuthProfileConfig(nextConfig, {
       profileId: "gigachat:default",

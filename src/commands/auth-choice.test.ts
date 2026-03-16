@@ -307,6 +307,48 @@ describe("applyAuthChoice", () => {
     });
   });
 
+  it("persists GigaChat Basic credentials even when secret-input-mode is ref", async () => {
+    await setupTempState();
+
+    process.env.GIGACHAT_CREDENTIALS = "env-oauth-credentials"; // pragma: allowlist secret
+    delete process.env.GIGACHAT_USER;
+    delete process.env.GIGACHAT_PASSWORD;
+    delete process.env.GIGACHAT_BASE_URL;
+
+    const text = vi
+      .fn()
+      .mockResolvedValueOnce("https://gigachat.ift.sberdevices.ru/v1")
+      .mockResolvedValueOnce("basic-user")
+      .mockResolvedValueOnce("basic-pass");
+    const { prompter, runtime } = createApiKeyPromptHarness({ text });
+
+    const result = await applyAuthChoice({
+      authChoice: "gigachat-basic",
+      config: {},
+      prompter,
+      runtime,
+      setDefaultModel: false,
+      opts: { secretInputMode: "ref" },
+    });
+
+    expect(result.config.auth?.profiles?.["gigachat:default"]).toMatchObject({
+      provider: "gigachat",
+      mode: "api_key",
+    });
+    expect(result.agentModelOverride).toBe("gigachat/GigaChat-2-Max");
+    expect(resolveAgentModelPrimaryValue(result.config)).toBeUndefined();
+    expect(await readAuthProfile("gigachat:default")).toMatchObject({
+      type: "api_key",
+      provider: "gigachat",
+      key: "basic-user:basic-pass",
+      metadata: {
+        authMode: "basic",
+        insecureTls: "false",
+      },
+    });
+    expect((await readAuthProfile("gigachat:default"))?.keyRef).toBeUndefined();
+  });
+
   it("prompts and writes provider API key for common providers", async () => {
     const scenarios: Array<{
       authChoice:
