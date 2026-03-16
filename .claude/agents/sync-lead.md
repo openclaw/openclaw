@@ -351,10 +351,12 @@ If failures: re-engage code-guard to fix, then re-run qa-runner. Loop until gree
 git push -u origin sync/<targetTag>-<phase>
 ```
 
+**IMPORTANT:** Always create PRs against our fork (`Interstellar-code/operator1`), NOT the upstream repo (`openclaw/openclaw`). Use `--repo Interstellar-code/operator1` flag. The `gh` default may target upstream since this is a fork.
+
 PR title and body per phase:
 
 ```bash
-gh pr create --title "sync(<phase>): cherry-pick upstream <targetTag> <phase> (<N> commits)" --body "$(cat <<'EOF'
+gh pr create --repo Interstellar-code/operator1 --title "sync(<phase>): cherry-pick upstream <targetTag> <phase> (<N> commits)" --body "$(cat <<'EOF'
 ## Summary
 
 Phase <N> of upstream sync from `<fromTag>` → `<targetTag>`.
@@ -377,7 +379,7 @@ EOF
 For `ui-inspiration` phase, open as draft:
 
 ```bash
-gh pr create --draft --title "sync(ui-inspiration): upstream dashboard-v2 reference (<targetTag>)" --body "$(cat <<'EOF'
+gh pr create --repo Interstellar-code/operator1 --draft --title "sync(ui-inspiration): upstream dashboard-v2 reference (<targetTag>)" --body "$(cat <<'EOF'
 ## Summary
 
 Cherry-picked upstream dashboard-v2 UI commits as reference for ui-next development.
@@ -432,7 +434,8 @@ When user says "merge it" / "looks good" / "go ahead":
 
 ```bash
 # Merge with regular merge (preserves cherry-pick -x traceability)
-gh pr merge <pr-number> --merge --delete-branch
+# IMPORTANT: always target our fork, not upstream
+gh pr merge <pr-number> --repo Interstellar-code/operator1 --merge --delete-branch
 
 # Pull merged state
 git checkout main
