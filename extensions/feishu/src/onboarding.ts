@@ -1,7 +1,7 @@
-import { buildChannelOnboardingAdapterFromSetupWizard } from "../../../src/channels/plugins/setup-wizard.js";
+import { buildChannelSetupFlowAdapterFromSetupWizard } from "../../../src/channels/plugins/setup-wizard.js";
 import { feishuPlugin } from "./channel.js";
 
-export const feishuOnboardingAdapter = buildChannelOnboardingAdapterFromSetupWizard({
+export const feishuOnboardingAdapter = buildChannelSetupFlowAdapterFromSetupWizard({
   plugin: feishuPlugin,
   wizard: feishuPlugin.setupWizard!,
 });
