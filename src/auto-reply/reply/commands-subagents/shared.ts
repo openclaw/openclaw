@@ -210,7 +210,9 @@ export function resolveSubagentTarget(
     recentWindowMinutes: RECENT_WINDOW_MINUTES,
     label: (entry) => formatRunLabel(entry),
     isActive: (entry) =>
-      !entry.endedAt || Math.max(0, countPendingDescendantRuns(entry.childSessionKey)) > 0,
+      !entry.endedAt ||
+      (!entry.cleanupCompletedAt && !entry.cleanupHandled && !entry.suppressAnnounceReason) ||
+      Math.max(0, countPendingDescendantRuns(entry.childSessionKey)) > 0,
     errors: {
       missingTarget: "Missing subagent id.",
       invalidIndex: (value) => `Invalid subagent index: ${value}`,
