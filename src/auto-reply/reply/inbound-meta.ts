@@ -12,6 +12,16 @@ function hashSenderId(value: string): string {
   return `user_${hashId(value)}`;
 }
 
+/** E.164 phone number pattern: optional +, 7-15 digits, optionally followed by @... (WhatsApp JID) */
+const E164_PATTERN = /^\+?\d{7,15}(?:@.*)?$/;
+
+function redactSenderLabel(value: string | undefined): string | undefined {
+  if (!value) {
+    return undefined;
+  }
+  return E164_PATTERN.test(value) ? hashSenderId(value) : value;
+}
+
 function hashChatId(value: string): string {
   const colonIdx = value.indexOf(":");
   if (colonIdx > 0) {
@@ -204,7 +214,9 @@ export function buildInboundUserContextPrefix(
         "```json",
         JSON.stringify(
           {
-            sender_label: safeTrim(ctx.ReplyToSender),
+            sender_label: options?.redactPII
+              ? redactSenderLabel(safeTrim(ctx.ReplyToSender))
+              : safeTrim(ctx.ReplyToSender),
             is_quote: ctx.ReplyToIsQuote === true ? true : undefined,
             body: ctx.ReplyToBody,
           },
@@ -223,7 +235,9 @@ export function buildInboundUserContextPrefix(
         "```json",
         JSON.stringify(
           {
-            from: safeTrim(ctx.ForwardedFrom),
+            from: options?.redactPII
+              ? redactSenderLabel(safeTrim(ctx.ForwardedFrom))
+              : safeTrim(ctx.ForwardedFrom),
             type: safeTrim(ctx.ForwardedFromType),
             username: safeTrim(ctx.ForwardedFromUsername),
             title: safeTrim(ctx.ForwardedFromTitle),
@@ -246,7 +260,7 @@ export function buildInboundUserContextPrefix(
         "```json",
         JSON.stringify(
           ctx.InboundHistory.map((entry) => ({
-            sender: entry.sender,
+            sender: options?.redactPII ? redactSenderLabel(entry.sender) : entry.sender,
             timestamp_ms: entry.timestamp,
             body: entry.body,
           })),

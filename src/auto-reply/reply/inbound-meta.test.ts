@@ -453,5 +453,66 @@ describe("buildInboundUserContextPrefix", () => {
       const senderInfo = parseSenderInfoPayload(text);
       expect(senderInfo["e164"]).toBe("+15551234567");
     });
+
+    it("redacts phone-like sender in InboundHistory", () => {
+      const text = buildInboundUserContextPrefix(
+        {
+          ChatType: "group",
+          SenderId: "user-1",
+          InboundHistory: [
+            { sender: "+15559876543", timestamp: 1000, body: "hello" },
+            { sender: "Alice", timestamp: 2000, body: "hi" },
+          ],
+        } as TemplateContext,
+        { redactPII: true },
+      );
+
+      expect(text).not.toContain("+15559876543");
+      expect(text).toContain("Alice");
+      expect(text).toMatch(/user_[a-f0-9]{12}/);
+    });
+
+    it("redacts phone-like ReplyToSender", () => {
+      const text = buildInboundUserContextPrefix(
+        {
+          ChatType: "group",
+          SenderId: "user-1",
+          ReplyToBody: "some message",
+          ReplyToSender: "+15559876543",
+        } as TemplateContext,
+        { redactPII: true },
+      );
+
+      expect(text).not.toContain("+15559876543");
+      expect(text).toMatch(/user_[a-f0-9]{12}/);
+    });
+
+    it("redacts phone-like ForwardedFrom", () => {
+      const text = buildInboundUserContextPrefix(
+        {
+          ChatType: "group",
+          SenderId: "user-1",
+          ForwardedFrom: "+15559876543",
+        } as TemplateContext,
+        { redactPII: true },
+      );
+
+      expect(text).not.toContain("+15559876543");
+      expect(text).toMatch(/user_[a-f0-9]{12}/);
+    });
+
+    it("keeps non-phone ReplyToSender unchanged", () => {
+      const text = buildInboundUserContextPrefix(
+        {
+          ChatType: "group",
+          SenderId: "user-1",
+          ReplyToBody: "some message",
+          ReplyToSender: "Bob",
+        } as TemplateContext,
+        { redactPII: true },
+      );
+
+      expect(text).toContain("Bob");
+    });
   });
 });
