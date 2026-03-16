@@ -14,6 +14,7 @@ import { resolveRuntimeServiceVersion } from "../version.js";
 import type { HeartbeatStatus, SessionStatus, StatusSummary } from "./status.types.js";
 
 let channelSummaryModulePromise: Promise<typeof import("../infra/channel-summary.js")> | undefined;
+let contextTokensModulePromise: Promise<typeof import("../agents/context.js")> | undefined;
 let linkChannelModulePromise: Promise<typeof import("./status.link-channel.js")> | undefined;
 let statusSummaryRuntimeModulePromise:
   | Promise<typeof import("./status.summary.runtime.js")>
@@ -24,6 +25,11 @@ type SessionStoreRow = [string, SessionEntry | undefined];
 function loadChannelSummaryModule() {
   channelSummaryModulePromise ??= import("../infra/channel-summary.js");
   return channelSummaryModulePromise;
+}
+
+function loadContextTokensModule() {
+  contextTokensModulePromise ??= import("../agents/context.js");
+  return contextTokensModulePromise;
 }
 
 function loadLinkChannelModule() {
@@ -255,15 +261,20 @@ export async function getStatusSummary(
     0,
   );
   const needsRuntimeSessionDetails = totalSessions > 0;
-  const needsRuntimeDefaultContextTokens =
-    configContextTokensOverride == null &&
-    (resolvedProvider !== DEFAULT_PROVIDER || configModel !== DEFAULT_MODEL);
-
-  // Keep bare `status --json` on the cheap path when the profile is empty and
-  // defaults are unmodified. The runtime helpers below pull in large session/model
-  // metadata code paths that are only needed once there are real sessions or
-  // model-specific context-token lookups to compute.
-  if (!needsRuntimeSessionDetails && !needsRuntimeDefaultContextTokens) {
+  // Keep bare `status --json` on the cheap path when the profile has no
+  // sessions. We still resolve the default context window through the same
+  // lookup used by the slow path so the payload stays consistent with model-
+  // specific config and discovery data.
+  if (!needsRuntimeSessionDetails) {
+    const { resolveContextTokensForModel } = await loadContextTokensModule();
+    const configContextTokens =
+      resolveContextTokensForModel({
+        cfg,
+        provider: resolvedProvider,
+        model: configModel,
+        contextTokensOverride: configContextTokensOverride,
+        fallbackContextTokens: DEFAULT_CONTEXT_TOKENS,
+      }) ?? DEFAULT_CONTEXT_TOKENS;
     const summary: StatusSummary = {
       runtimeVersion: resolveRuntimeServiceVersion(process.env),
       linkChannel: linkContext
@@ -285,7 +296,7 @@ export async function getStatusSummary(
         count: totalSessions,
         defaults: {
           model: configModel ?? null,
-          contextTokens: configContextTokensOverride ?? DEFAULT_CONTEXT_TOKENS,
+          contextTokens: configContextTokens,
         },
         recent: [],
         byAgent: sessionStoresByAgent.map((agent) => ({

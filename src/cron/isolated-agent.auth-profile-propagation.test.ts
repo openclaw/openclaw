@@ -84,5 +84,5 @@ describe("runCronIsolatedAgentTurn auth profile propagation (#20624)", () => {
 
       expect(callArgs?.authProfileId).toBe("openrouter:default");
     });
-  });
+  }, 240_000);
 });

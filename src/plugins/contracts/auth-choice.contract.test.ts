@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { clearRuntimeAuthProfileStoreSnapshots } from "../../agents/auth-profiles/store.js";
 import { applyAuthChoiceLoadedPluginProvider } from "../../commands/auth-choice.apply.plugin-provider.js";
 import { resolvePreferredProviderForAuthChoice } from "../../commands/auth-choice.preferred-provider.js";
@@ -13,6 +13,7 @@ import {
 } from "../../commands/test-wizard-helpers.js";
 import { createCapturedPluginRegistration } from "../../test-utils/plugin-registration.js";
 import type { OpenClawPluginApi, ProviderPlugin } from "../types.js";
+import { providerContractRegistry } from "./registry.js";
 
 type ResolvePluginProviders =
   typeof import("../../commands/auth-choice.apply.plugin-provider.runtime.js").resolvePluginProviders;
@@ -23,6 +24,7 @@ type RunProviderModelSelectedHook =
 
 const loginQwenPortalOAuthMock = vi.hoisted(() => vi.fn());
 const githubCopilotLoginCommandMock = vi.hoisted(() => vi.fn());
+const resolveBundledProvidersForChoiceMock = vi.hoisted(() => vi.fn());
 const resolvePluginProvidersMock = vi.hoisted(() => vi.fn<ResolvePluginProviders>(() => []));
 const resolveProviderPluginChoiceMock = vi.hoisted(() => vi.fn<ResolveProviderPluginChoice>());
 const runProviderModelSelectedHookMock = vi.hoisted(() =>
@@ -35,6 +37,10 @@ vi.mock("../../../extensions/qwen-portal-auth/oauth.js", () => ({
 
 vi.mock("../../providers/github-copilot-auth.js", () => ({
   githubCopilotLoginCommand: githubCopilotLoginCommandMock,
+}));
+
+vi.mock("../../plugins/providers.js", () => ({
+  resolvePluginProviders: (...args: unknown[]) => resolveBundledProvidersForChoiceMock(...args),
 }));
 
 vi.mock("../../commands/auth-choice.apply.plugin-provider.runtime.js", () => ({
@@ -77,6 +83,13 @@ describe("provider auth-choice contract", () => {
     "PI_CODING_AGENT_DIR",
   ]);
   let activeStateDir: string | null = null;
+
+  beforeEach(() => {
+    resolveBundledProvidersForChoiceMock.mockReset();
+    resolveBundledProvidersForChoiceMock.mockReturnValue(
+      providerContractRegistry.map((entry) => entry.provider),
+    );
+  });
 
   async function setupTempState() {
     if (activeStateDir) {

@@ -73,10 +73,19 @@ describe("loadEnabledBundleMcpConfig", () => {
         cfg: config,
       });
       const resolvedServerPath = await fs.realpath(serverPath);
+      const loadedServerArgs = loaded.config.mcpServers.bundleProbe?.args;
+      const loadedServerArg = Array.isArray(loadedServerArgs) ? loadedServerArgs[0] : undefined;
 
       expect(loaded.diagnostics).toEqual([]);
       expect(loaded.config.mcpServers.bundleProbe?.command).toBe("node");
-      expect(loaded.config.mcpServers.bundleProbe?.args).toEqual([resolvedServerPath]);
+      expect(Array.isArray(loadedServerArgs)).toBe(true);
+      expect(loadedServerArgs).toHaveLength(1);
+      expect(typeof loadedServerArg).toBe("string");
+      if (typeof loadedServerArg !== "string") {
+        throw new Error("expected bundleProbe arg[0] to be a string");
+      }
+      const loadedServerPath = await fs.realpath(loadedServerArg);
+      expect(loadedServerPath).toBe(resolvedServerPath);
     } finally {
       env.restore();
     }

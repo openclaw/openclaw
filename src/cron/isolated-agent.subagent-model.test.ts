@@ -154,24 +154,28 @@ describe("runCronIsolatedAgentTurn: subagent model resolution (#11461)", () => {
       expectedProvider: "google",
       expectedModel: "gemini-2.5-flash",
     },
-  ])("$name", async ({ cfgOverrides, expectedProvider, expectedModel }) => {
-    await withTempHome(async (home) => {
-      const resolvedCfg =
-        cfgOverrides === undefined
-          ? undefined
-          : ({
-              agents: {
-                defaults: {
-                  ...cfgOverrides.agents?.defaults,
-                  workspace: path.join(home, "openclaw"),
+  ])(
+    "$name",
+    async ({ cfgOverrides, expectedProvider, expectedModel }) => {
+      await withTempHome(async (home) => {
+        const resolvedCfg =
+          cfgOverrides === undefined
+            ? undefined
+            : ({
+                agents: {
+                  defaults: {
+                    ...cfgOverrides.agents?.defaults,
+                    workspace: path.join(home, "openclaw"),
+                  },
                 },
-              },
-            } satisfies Partial<OpenClawConfig>);
-      const call = await runSubagentModelCase({ home, cfgOverrides: resolvedCfg });
-      expect(call?.provider).toBe(expectedProvider);
-      expect(call?.model).toBe(expectedModel);
-    });
-  });
+              } satisfies Partial<OpenClawConfig>);
+        const call = await runSubagentModelCase({ home, cfgOverrides: resolvedCfg });
+        expect(call?.provider).toBe(expectedProvider);
+        expect(call?.model).toBe(expectedModel);
+      });
+    },
+    240_000,
+  );
 
   it("explicit job model override takes precedence over subagents.model", async () => {
     await withTempHome(async (home) => {

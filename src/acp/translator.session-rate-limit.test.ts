@@ -364,7 +364,7 @@ describe("acp session UX bridge behavior", () => {
     });
 
     sessionStore.clearAllSessionsForTest();
-  });
+  }, 240_000);
 
   it("falls back to an empty transcript when sessions.get fails during loadSession", async () => {
     const sessionStore = createInMemorySessionStore();

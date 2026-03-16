@@ -1,9 +1,100 @@
+import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { NON_ENV_SECRETREF_MARKER } from "../agents/model-auth-markers.js";
 import { resolveProviderAuths, type ProviderAuth } from "./provider-usage.auth.js";
+
+const resolveProviderUsageAuthWithPluginMock = vi.hoisted(() =>
+  vi.fn(
+    async (params: {
+      provider: string;
+      context: {
+        env: NodeJS.ProcessEnv;
+        resolveApiKeyFromConfigAndStore: (options?: {
+          providerIds?: string[];
+          envDirect?: Array<string | undefined>;
+        }) => string | undefined;
+        resolveOAuthToken: () => Promise<{ token: string; accountId?: string } | null>;
+      };
+    }) => {
+      const resolveToken = (providerIds: string[], envDirect: Array<string | undefined>) => {
+        const token = params.context.resolveApiKeyFromConfigAndStore({
+          providerIds,
+          envDirect,
+        });
+        return token ? { token } : null;
+      };
+
+      switch (params.provider) {
+        case "anthropic":
+          return await params.context.resolveOAuthToken();
+        case "google-gemini-cli": {
+          const auth = await params.context.resolveOAuthToken();
+          if (!auth) {
+            return null;
+          }
+          try {
+            const parsed = JSON.parse(auth.token) as { token?: unknown };
+            if (typeof parsed.token === "string") {
+              return { ...auth, token: parsed.token };
+            }
+          } catch {
+            // ignore
+          }
+          return auth;
+        }
+        case "minimax":
+          return resolveToken(
+            ["minimax"],
+            [params.context.env.MINIMAX_CODE_PLAN_KEY, params.context.env.MINIMAX_API_KEY],
+          );
+        case "xiaomi":
+          return resolveToken(["xiaomi"], [params.context.env.XIAOMI_API_KEY]);
+        case "zai":
+          return (
+            resolveToken(
+              ["zai", "z-ai"],
+              [params.context.env.ZAI_API_KEY, params.context.env.Z_AI_API_KEY],
+            ) ??
+            (() => {
+              const homeDir = params.context.env.HOME ?? params.context.env.USERPROFILE;
+              if (!homeDir) {
+                return null;
+              }
+              try {
+                const authPath = path.join(homeDir, ".pi", "agent", "auth.json");
+                const raw = fsSync.readFileSync(authPath, "utf8");
+                const parsed = JSON.parse(raw) as Record<string, { access?: string }>;
+                const token = parsed["z-ai"]?.access || parsed.zai?.access;
+                return token ? { token } : null;
+              } catch {
+                return null;
+              }
+            })() ??
+            (await params.context.resolveOAuthToken())
+          );
+        default:
+          return resolveToken([params.provider], []) ?? (await params.context.resolveOAuthToken());
+      }
+    },
+  ),
+);
+
+vi.mock("../plugins/provider-runtime.js", () => ({
+  resolveProviderUsageAuthWithPlugin: (params: {
+    provider: string;
+    context: {
+      env: NodeJS.ProcessEnv;
+      resolveApiKeyFromConfigAndStore: (options?: {
+        providerIds?: string[];
+        envDirect?: Array<string | undefined>;
+      }) => string | undefined;
+      resolveOAuthToken: () => Promise<{ token: string; accountId?: string } | null>;
+    };
+  }) => resolveProviderUsageAuthWithPluginMock(params),
+}));
 
 describe("resolveProviderAuths key normalization", () => {
   let suiteRoot = "";

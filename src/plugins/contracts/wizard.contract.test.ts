@@ -1,13 +1,19 @@
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { providerContractRegistry } from "./registry.js";
+
+const resolvePluginProvidersMock = vi.hoisted(() => vi.fn());
+
+vi.mock("../providers.js", () => ({
+  resolvePluginProviders: (...args: unknown[]) => resolvePluginProvidersMock(...args),
+}));
+
 import {
   buildProviderPluginMethodChoice,
   resolveProviderModelPickerEntries,
   resolveProviderPluginChoice,
   resolveProviderWizardOptions,
 } from "../provider-wizard.js";
-import { resolvePluginProviders } from "../providers.js";
 import type { ProviderPlugin } from "../types.js";
-import { providerContractRegistry } from "./registry.js";
 
 function createBundledProviderConfig() {
   return {
@@ -78,12 +84,16 @@ function resolveExpectedModelPickerValues(providers: ProviderPlugin[]) {
 }
 
 describe("provider wizard contract", () => {
+  beforeEach(() => {
+    resolvePluginProvidersMock.mockReset();
+    resolvePluginProvidersMock.mockReturnValue(
+      providerContractRegistry.map((entry) => entry.provider),
+    );
+  });
+
   it("exposes every registered provider setup choice through the shared wizard layer", () => {
     const config = createBundledProviderConfig();
-    const providers = resolvePluginProviders({
-      config,
-      env: process.env,
-    });
+    const providers = resolvePluginProvidersMock();
 
     const options = resolveProviderWizardOptions({
       config,
@@ -100,10 +110,7 @@ describe("provider wizard contract", () => {
 
   it("round-trips every shared wizard choice back to its provider and auth method", () => {
     const config = createBundledProviderConfig();
-    const providers = resolvePluginProviders({
-      config,
-      env: process.env,
-    });
+    const providers = resolvePluginProvidersMock();
 
     for (const option of resolveProviderWizardOptions({ config, env: process.env })) {
       const resolved = resolveProviderPluginChoice({
@@ -118,10 +125,7 @@ describe("provider wizard contract", () => {
 
   it("exposes every registered model-picker entry through the shared wizard layer", () => {
     const config = createBundledProviderConfig();
-    const providers = resolvePluginProviders({
-      config,
-      env: process.env,
-    });
+    const providers = resolvePluginProvidersMock();
 
     const entries = resolveProviderModelPickerEntries({
       config,

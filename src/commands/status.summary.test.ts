@@ -100,8 +100,18 @@ describe("getStatusSummary", () => {
     const summary = await getStatusSummary();
 
     expect(summary.sessions.count).toBe(0);
-    expect(resolveContextTokensForModel).not.toHaveBeenCalled();
+    expect(resolveContextTokensForModel).toHaveBeenCalledTimes(1);
     expect(resolveSessionModelRef).not.toHaveBeenCalled();
+  });
+
+  it("uses the same context-token resolver on the empty-profile fast path", async () => {
+    const { resolveContextTokensForModel } = await import("../agents/context.js");
+    vi.mocked(resolveContextTokensForModel).mockReturnValueOnce(123_456);
+    const { getStatusSummary } = await import("./status.summary.js");
+
+    const summary = await getStatusSummary();
+
+    expect(summary.sessions.defaults.contextTokens).toBe(123_456);
   });
 
   it("skips channel summary imports when no channels are configured", async () => {

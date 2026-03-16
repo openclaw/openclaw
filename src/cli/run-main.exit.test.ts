@@ -7,6 +7,8 @@ const normalizeEnvMock = vi.hoisted(() => vi.fn());
 const ensurePathMock = vi.hoisted(() => vi.fn());
 const assertRuntimeMock = vi.hoisted(() => vi.fn());
 const closeAllMemorySearchManagersMock = vi.hoisted(() => vi.fn(async () => {}));
+const resetMemoryRuntimeUsageMock = vi.hoisted(() => vi.fn());
+const wasMemoryRuntimeUsedMock = vi.hoisted(() => vi.fn(() => true));
 const outputRootHelpMock = vi.hoisted(() => vi.fn());
 const buildProgramMock = vi.hoisted(() => vi.fn());
 
@@ -34,6 +36,11 @@ vi.mock("../memory/search-manager.js", () => ({
   closeAllMemorySearchManagers: closeAllMemorySearchManagersMock,
 }));
 
+vi.mock("../memory/runtime-usage.js", () => ({
+  resetMemoryRuntimeUsage: resetMemoryRuntimeUsageMock,
+  wasMemoryRuntimeUsed: wasMemoryRuntimeUsedMock,
+}));
+
 vi.mock("./program/root-help.js", () => ({
   outputRootHelp: outputRootHelpMock,
 }));
@@ -47,6 +54,7 @@ const { runCli } = await import("./run-main.js");
 describe("runCli exit behavior", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    wasMemoryRuntimeUsedMock.mockReturnValue(true);
   });
 
   it("does not force process.exit after successful routed command", async () => {
@@ -59,6 +67,7 @@ describe("runCli exit behavior", () => {
 
     expect(tryRouteCliMock).toHaveBeenCalledWith(["node", "openclaw", "status"]);
     expect(closeAllMemorySearchManagersMock).toHaveBeenCalledTimes(1);
+    expect(resetMemoryRuntimeUsageMock).toHaveBeenCalledTimes(1);
     expect(exitSpy).not.toHaveBeenCalled();
     exitSpy.mockRestore();
   });
@@ -74,6 +83,7 @@ describe("runCli exit behavior", () => {
     expect(outputRootHelpMock).toHaveBeenCalledTimes(1);
     expect(buildProgramMock).not.toHaveBeenCalled();
     expect(closeAllMemorySearchManagersMock).toHaveBeenCalledTimes(1);
+    expect(resetMemoryRuntimeUsageMock).toHaveBeenCalledTimes(1);
     expect(exitSpy).not.toHaveBeenCalled();
     exitSpy.mockRestore();
   });

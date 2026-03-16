@@ -6,6 +6,13 @@ import { withEnvAsync } from "../test-utils/env.js";
 
 const installPluginFromPathMock = vi.fn();
 
+function normalizePathForAssertion(value: string | undefined): string | undefined {
+  if (!value) {
+    return value;
+  }
+  return value.replace(/\\/g, "/");
+}
+
 vi.mock("./install.js", () => ({
   installPluginFromPath: (...args: unknown[]) => installPluginFromPathMock(...args),
 }));
@@ -45,21 +52,24 @@ describe("marketplace plugins", () => {
 
       const { listMarketplacePlugins } = await import("./marketplace.js");
       const result = await listMarketplacePlugins({ marketplace: rootDir });
-      expect(result).toEqual({
-        ok: true,
-        sourceLabel: expect.stringContaining(".claude-plugin/marketplace.json"),
-        manifest: {
-          name: "Example Marketplace",
-          version: "1.0.0",
-          plugins: [
-            {
-              name: "frontend-design",
-              version: "0.1.0",
-              description: "Design system bundle",
-              source: { kind: "path", path: "./plugins/frontend-design" },
-            },
-          ],
-        },
+      expect(result.ok).toBe(true);
+      if (!result.ok) {
+        throw new Error(result.error);
+      }
+      expect(normalizePathForAssertion(result.sourceLabel)).toContain(
+        ".claude-plugin/marketplace.json",
+      );
+      expect(result.manifest).toEqual({
+        name: "Example Marketplace",
+        version: "1.0.0",
+        plugins: [
+          {
+            name: "frontend-design",
+            version: "0.1.0",
+            description: "Design system bundle",
+            source: { kind: "path", path: "./plugins/frontend-design" },
+          },
+        ],
       });
     });
   });
