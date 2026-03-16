@@ -28,11 +28,6 @@
       "npmSpec": "@openclaw/msteams",
       "localPath": "extensions/msteams",
       "defaultChoice": "npm"
-    },
-    "releaseChecks": {
-      "rootDependencyMirrorAllowlist": [
-        "@microsoft/agents-hosting"
-      ]
     }
   }
 }
