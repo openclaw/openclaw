@@ -19,3 +19,10 @@ Related: [Core retry policy](/concepts/retry)
 
 - Failed items after max retries move to dead-letter queue
 - Must include failure reason + next operator action
+
+## Implementation Path
+
+- **v1 (this PR):** docs/spec contract only.
+- **v1.1:** add a validator to check conformance against these docs.
+- **v1.2:** add an adapter/reference implementation for runtime emit/ingest.
+- **v2:** optional deeper runtime integration, based on maintainer direction.

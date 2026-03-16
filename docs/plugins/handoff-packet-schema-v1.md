@@ -21,3 +21,10 @@ Allow model/agent/plugin swap mid-run without continuity loss.
 - `artifacts[]`
 - `status`
 - `updatedAt`
+
+## Implementation Path
+
+- **v1 (this PR):** docs/spec contract only.
+- **v1.1:** add a validator to check conformance against these docs.
+- **v1.2:** add an adapter/reference implementation for runtime emit/ingest.
+- **v2:** optional deeper runtime integration, based on maintainer direction.
