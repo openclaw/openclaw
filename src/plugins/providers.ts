@@ -1,7 +1,9 @@
+import { normalizeProviderId } from "../agents/model-selection.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { withBundledPluginAllowlistCompat } from "./bundled-compat.js";
 import { loadOpenClawPlugins, type PluginLoadOptions } from "./loader.js";
 import { createPluginLoaderLogger } from "./logger.js";
+import { loadPluginManifestRegistry } from "./manifest-registry.js";
 import type { ProviderPlugin } from "./types.js";
 
 const log = createSubsystemLogger("plugins");
@@ -86,6 +88,32 @@ function withBundledProviderVitestCompat(params: {
     },
   };
 }
+
+export function resolveOwningPluginIdsForProvider(params: {
+  provider: string;
+  config?: PluginLoadOptions["config"];
+  workspaceDir?: string;
+  env?: PluginLoadOptions["env"];
+}): string[] | undefined {
+  const normalizedProvider = normalizeProviderId(params.provider);
+  if (!normalizedProvider) {
+    return undefined;
+  }
+
+  const registry = loadPluginManifestRegistry({
+    config: params.config,
+    workspaceDir: params.workspaceDir,
+    env: params.env,
+  });
+  const pluginIds = registry.plugins
+    .filter((plugin) =>
+      plugin.providers.some((providerId) => normalizeProviderId(providerId) === normalizedProvider),
+    )
+    .map((plugin) => plugin.id);
+
+  return pluginIds.length > 0 ? pluginIds : undefined;
+}
+
 export function resolvePluginProviders(params: {
   config?: PluginLoadOptions["config"];
   workspaceDir?: string;

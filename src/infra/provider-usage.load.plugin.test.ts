@@ -22,7 +22,7 @@ describe("provider-usage.load plugin seam", () => {
     resolveProviderUsageSnapshotWithPluginMock.mockResolvedValue(null);
   });
 
-  it("prefers plugin-owned usage snapshots before the legacy core switch", async () => {
+  it("prefers plugin-owned usage snapshots", async () => {
     resolveProviderUsageSnapshotWithPluginMock.mockResolvedValueOnce({
       provider: "github-copilot",
       displayName: "Copilot",

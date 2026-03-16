@@ -14,6 +14,7 @@ export type PluginManifest = {
   kind?: PluginKind;
   channels?: string[];
   providers?: string[];
+  providerAuthEnvVars?: Record<string, string[]>;
   skills?: string[];
   name?: string;
   description?: string;
@@ -30,6 +31,25 @@ function normalizeStringList(value: unknown): string[] {
     return [];
   }
   return value.map((entry) => (typeof entry === "string" ? entry.trim() : "")).filter(Boolean);
+}
+
+function normalizeStringListRecord(value: unknown): Record<string, string[]> | undefined {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+  const normalized: Record<string, string[]> = {};
+  for (const [key, rawValues] of Object.entries(value)) {
+    const providerId = typeof key === "string" ? key.trim() : "";
+    if (!providerId) {
+      continue;
+    }
+    const values = normalizeStringList(rawValues);
+    if (values.length === 0) {
+      continue;
+    }
+    normalized[providerId] = values;
+  }
+  return Object.keys(normalized).length > 0 ? normalized : undefined;
 }
 
 export function resolvePluginManifestPath(rootDir: string): string {
@@ -93,6 +113,7 @@ export function loadPluginManifest(
   const version = typeof raw.version === "string" ? raw.version.trim() : undefined;
   const channels = normalizeStringList(raw.channels);
   const providers = normalizeStringList(raw.providers);
+  const providerAuthEnvVars = normalizeStringListRecord(raw.providerAuthEnvVars);
   const skills = normalizeStringList(raw.skills);
 
   let uiHints: Record<string, PluginConfigUiHint> | undefined;
@@ -108,6 +129,7 @@ export function loadPluginManifest(
       kind,
       channels,
       providers,
+      providerAuthEnvVars,
       skills,
       name,
       description,

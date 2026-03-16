@@ -41,6 +41,7 @@ export type PluginManifestRecord = {
   kind?: PluginKind;
   channels: string[];
   providers: string[];
+  providerAuthEnvVars?: Record<string, string[]>;
   skills: string[];
   settingsFiles?: string[];
   hooks: string[];
@@ -152,6 +153,7 @@ function buildRecord(params: {
     kind: params.manifest.kind,
     channels: params.manifest.channels ?? [],
     providers: params.manifest.providers ?? [],
+    providerAuthEnvVars: params.manifest.providerAuthEnvVars,
     skills: params.manifest.skills ?? [],
     settingsFiles: [],
     hooks: [],

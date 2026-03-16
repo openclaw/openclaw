@@ -19,6 +19,8 @@ For model selection rules, see [/concepts/models](/concepts/models).
 - Provider plugins can inject model catalogs via `registerProvider({ catalog })`;
   OpenClaw merges that output into `models.providers` before writing
   `models.json`.
+- Provider manifests can declare `providerAuthEnvVars` so generic env-based
+  auth probes do not need to load plugin runtime.
 - Provider plugins can also own provider runtime behavior via
   `resolveDynamicModel`, `prepareDynamicModel`, `normalizeResolvedModel`,
   `capabilities`, `prepareExtraParams`, `wrapStreamFn`,

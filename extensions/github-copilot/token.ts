@@ -1,6 +1,6 @@
 import path from "node:path";
-import { resolveStateDir } from "../config/paths.js";
-import { loadJsonFile, saveJsonFile } from "../infra/json-file.js";
+import { resolveStateDir } from "../../src/config/paths.js";
+import { loadJsonFile, saveJsonFile } from "../../src/infra/json-file.js";
 
 const COPILOT_TOKEN_URL = "https://api.github.com/copilot_internal/v2/token";
 
