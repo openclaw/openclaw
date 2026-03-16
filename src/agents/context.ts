@@ -163,6 +163,10 @@ function ensureContextWindowCacheLoaded(): Promise<void> {
 
   const cfg = primeConfiguredContextWindows();
   if (!cfg) {
+    // If config is not yet available (cold start or backoff after failure),
+    // return immediately without setting loadPromise so the next caller can
+    // retry once the backoff window has elapsed.  resolveContextTokensForModelAsync
+    // will fall back to DEFAULT_CONTEXT_TOKENS for this call.
     return Promise.resolve();
   }
 
