@@ -133,6 +133,27 @@ describe("resolveSpawnCommand", () => {
     });
   });
 
+  it("sets windowsHide on direct exe resolution on windows", async () => {
+    const dir = await createTempDir();
+    const exePath = path.join(dir, "acpx.exe");
+    await writeFile(exePath, "", "utf8");
+
+    const resolved = resolveSpawnCommand(
+      {
+        command: exePath,
+        args: ["--help"],
+      },
+      undefined,
+      winRuntime({}),
+    );
+
+    expect(resolved).toEqual({
+      command: exePath,
+      args: ["--help"],
+      windowsHide: true,
+    });
+  });
+
   it("falls back to shell mode when wrapper cannot be safely unwrapped", async () => {
     const dir = await createTempDir();
     const wrapperPath = path.join(dir, "custom-wrapper.cmd");
@@ -151,6 +172,7 @@ describe("resolveSpawnCommand", () => {
       command: wrapperPath,
       args: ["--arg", "value"],
       shell: true,
+      windowsHide: true,
     });
   });
 
@@ -237,6 +259,7 @@ describe("waitForExit", () => {
   it("resolves when the child already exited before waiting starts", async () => {
     const child = spawn(process.execPath, ["-e", "process.exit(0)"], {
       stdio: ["pipe", "pipe", "pipe"],
+      windowsHide: true,
     });
 
     await new Promise<void>((resolve, reject) => {

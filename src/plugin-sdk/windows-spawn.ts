@@ -249,6 +249,7 @@ export function resolveWindowsSpawnProgramCandidate(
     command: resolvedCommand,
     leadingArgv: [],
     resolution: "direct",
+    windowsHide: true,
   };
 }
 
@@ -271,6 +272,7 @@ export function applyWindowsSpawnProgramPolicy(params: {
       leadingArgv: [],
       resolution: "shell-fallback",
       shell: true,
+      windowsHide: true,
     };
   }
   throw new Error(

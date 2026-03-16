@@ -56,6 +56,7 @@ rl.on("close", () => process.exit(0));
     const child = spawn(process.execPath, [proxyPath, "--payload", payload], {
       stdio: ["pipe", "pipe", "inherit"],
       cwd: process.cwd(),
+      windowsHide: true,
     });
 
     let stdout = "";
