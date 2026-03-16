@@ -185,7 +185,7 @@ export async function startGatewayBonjourAdvertiser(
     if (!cycle) {
       return;
     }
-    const responder = cycle.responder as {
+    const responder = cycle.responder as unknown as {
       advertiseService?: (...args: unknown[]) => unknown;
       announce?: (...args: unknown[]) => unknown;
       probe?: (...args: unknown[]) => unknown;

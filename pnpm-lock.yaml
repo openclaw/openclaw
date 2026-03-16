@@ -125,6 +125,9 @@ importers:
       file-type:
         specifier: 21.3.2
         version: 21.3.2
+      gaxios:
+        specifier: ^7.1.3
+        version: 7.1.3
       grammy:
         specifier: ^1.41.1
         version: 1.41.1
@@ -270,6 +273,8 @@ importers:
       acpx:
         specifier: 0.3.0
         version: 0.3.0(zod@4.3.6)
+
+  extensions/amazon-bedrock: {}
 
   extensions/anthropic: {}
 
