@@ -27,7 +27,41 @@ function expectBearerAuthHeader(fetchMock: { mock: { calls: unknown[][] } }, tok
 }
 
 describe("models-config", () => {
-  it("uses the first github-copilot profile when env tokens are missing", async () => {
+  it("uses auth.order for github-copilot profile selection when env tokens are missing", async () => {
+    await withTempHome(async (home) => {
+      await withUnsetCopilotTokenEnv(async () => {
+        const fetchMock = mockCopilotTokenExchangeSuccess();
+        const agentDir = path.join(home, "agent-profiles");
+        await writeAuthProfiles(agentDir, {
+          "github-copilot:alpha": {
+            type: "token",
+            provider: "github-copilot",
+            token: "alpha-token",
+          },
+          "github-copilot:beta": {
+            type: "token",
+            provider: "github-copilot",
+            token: "beta-token",
+          },
+        });
+
+        await ensureOpenClawModelsJson(
+          {
+            auth: {
+              order: {
+                "github-copilot": ["github-copilot:beta", "github-copilot:alpha"],
+              },
+            },
+            models: { providers: {} },
+          },
+          agentDir,
+        );
+        expectBearerAuthHeader(fetchMock, "beta-token");
+      });
+    });
+  });
+
+  it("falls back to the first github-copilot profile when auth.order is missing", async () => {
     await withTempHome(async (home) => {
       await withUnsetCopilotTokenEnv(async () => {
         const fetchMock = mockCopilotTokenExchangeSuccess();
