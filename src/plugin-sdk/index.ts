@@ -109,6 +109,10 @@ export type {
   PluginLogger,
   ProviderAuthContext,
   ProviderAuthResult,
+  ProviderAugmentModelCatalogContext,
+  ProviderBuiltInModelSuppressionContext,
+  ProviderBuiltInModelSuppressionResult,
+  ProviderBuildMissingAuthMessageContext,
   ProviderCacheTtlEligibilityContext,
   ProviderFetchUsageSnapshotContext,
   ProviderPreparedRuntimeAuth,
@@ -741,7 +745,8 @@ export {
   extractSlackToolSend,
   listSlackMessageActions,
 } from "../../extensions/slack/src/message-actions.js";
-export { slackSetupAdapter, slackSetupWizard } from "../../extensions/slack/src/setup-surface.js";
+export { slackSetupAdapter } from "../../extensions/slack/src/setup-core.js";
+export { slackSetupWizard } from "../../extensions/slack/src/setup-surface.js";
 export {
   looksLikeSlackTargetId,
   normalizeSlackMessagingTarget,

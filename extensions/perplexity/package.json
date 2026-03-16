@@ -1,8 +1,8 @@
 {
-  "name": "@openclaw/openai-codex-provider",
+  "name": "@openclaw/perplexity-plugin",
   "version": "2026.3.14",
   "private": true,
-  "description": "OpenClaw OpenAI Codex provider plugin",
+  "description": "OpenClaw Perplexity plugin",
   "type": "module",
   "openclaw": {
     "extensions": [

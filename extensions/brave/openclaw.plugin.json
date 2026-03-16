@@ -1,6 +1,5 @@
 {
-  "id": "google-gemini-cli-auth",
-  "providers": ["google-gemini-cli"],
+  "id": "brave",
   "configSchema": {
     "type": "object",
     "additionalProperties": false,

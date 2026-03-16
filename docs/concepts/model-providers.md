@@ -22,8 +22,9 @@ For model selection rules, see [/concepts/models](/concepts/models).
 - Provider plugins can also own provider runtime behavior via
   `resolveDynamicModel`, `prepareDynamicModel`, `normalizeResolvedModel`,
   `capabilities`, `prepareExtraParams`, `wrapStreamFn`,
-  `isCacheTtlEligible`, `prepareRuntimeAuth`, `resolveUsageAuth`, and
-  `fetchUsageSnapshot`.
+  `isCacheTtlEligible`, `buildMissingAuthMessage`,
+  `suppressBuiltInModel`, `augmentModelCatalog`, `prepareRuntimeAuth`,
+  `resolveUsageAuth`, and `fetchUsageSnapshot`.
 
 ## Plugin-owned provider behavior
 
@@ -42,6 +43,12 @@ Typical split:
 - `prepareExtraParams`: provider defaults or normalizes per-model request params
 - `wrapStreamFn`: provider applies request headers/body/model compat wrappers
 - `isCacheTtlEligible`: provider decides which upstream model ids support prompt-cache TTL
+- `buildMissingAuthMessage`: provider replaces the generic auth-store error
+  with a provider-specific recovery hint
+- `suppressBuiltInModel`: provider hides stale upstream rows and can return a
+  vendor-owned error for direct resolution failures
+- `augmentModelCatalog`: provider appends synthetic/final catalog rows after
+  discovery and config merging
 - `prepareRuntimeAuth`: provider turns a configured credential into a short
   lived runtime token
 - `resolveUsageAuth`: provider resolves usage/quota credentials for `/usage`
@@ -58,9 +65,8 @@ Current bundled examples:
 - `github-copilot`: forward-compat model fallback, Claude-thinking transcript
   hints, runtime token exchange, and usage endpoint fetching
 - `openai`: GPT-5.4 forward-compat fallback, direct OpenAI transport
-  normalization, and provider-family metadata
-- `openai-codex`: forward-compat model fallback, transport normalization, and
-  default transport params plus usage endpoint fetching
+  normalization, Codex-aware missing-auth hints, Spark suppression, synthetic
+  OpenAI/Codex catalog rows, and provider-family metadata
 - `google-gemini-cli`: Gemini 3.1 forward-compat fallback plus usage-token
   parsing and quota endpoint fetching for usage surfaces
 - `moonshot`: shared transport, plugin-owned thinking payload normalization
@@ -74,6 +80,9 @@ Current bundled examples:
   `synthetic`, `together`, `venice`, `vercel-ai-gateway`, and `volcengine`:
   plugin-owned catalogs only
 - `minimax` and `xiaomi`: plugin-owned catalogs plus usage auth/snapshot logic
+
+The bundled `openai` plugin now owns both provider ids: `openai` and
+`openai-codex`.
 
 That covers providers that still fit OpenClaw's normal transports. A provider
 that needs a totally custom request executor is a separate, deeper extension
@@ -176,16 +185,13 @@ OpenClaw ships with the pi‑ai catalog. These providers require **no**
 - Compatibility: legacy OpenClaw config using `google/gemini-3.1-flash-preview` is normalized to `google/gemini-3-flash-preview`
 - CLI: `openclaw onboard --auth-choice gemini-api-key`
 
-### Google Vertex, Antigravity, and Gemini CLI
+### Google Vertex and Gemini CLI
 
-- Providers: `google-vertex`, `google-antigravity`, `google-gemini-cli`
-- Auth: Vertex uses gcloud ADC; Antigravity/Gemini CLI use their respective auth flows
-- Caution: Antigravity and Gemini CLI OAuth in OpenClaw are unofficial integrations. Some users have reported Google account restrictions after using third-party clients. Review Google terms and use a non-critical account if you choose to proceed.
-- Antigravity OAuth is shipped as a bundled plugin (`google-antigravity-auth`, disabled by default).
-  - Enable: `openclaw plugins enable google-antigravity-auth`
-  - Login: `openclaw models auth login --provider google-antigravity --set-default`
-- Gemini CLI OAuth is shipped as a bundled plugin (`google-gemini-cli-auth`, disabled by default).
-  - Enable: `openclaw plugins enable google-gemini-cli-auth`
+- Providers: `google-vertex`, `google-gemini-cli`
+- Auth: Vertex uses gcloud ADC; Gemini CLI uses its OAuth flow
+- Caution: Gemini CLI OAuth in OpenClaw is an unofficial integration. Some users have reported Google account restrictions after using third-party clients. Review Google terms and use a non-critical account if you choose to proceed.
+- Gemini CLI OAuth is shipped as part of the bundled `google` plugin.
+  - Enable: `openclaw plugins enable google`
   - Login: `openclaw models auth login --provider google-gemini-cli --set-default`
   - Note: you do **not** paste a client id or secret into `openclaw.json`. The CLI login flow stores
     tokens in auth profiles on the gateway host.

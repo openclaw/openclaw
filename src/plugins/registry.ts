@@ -43,9 +43,11 @@ import type {
   PluginLogger,
   PluginOrigin,
   PluginKind,
+  PluginRegistrationMode,
   PluginHookName,
   PluginHookHandlerMap,
   PluginHookRegistration as TypedPluginHookRegistration,
+  WebSearchProviderPlugin,
 } from "./types.js";
 
 export type PluginToolRegistration = {
@@ -102,6 +104,14 @@ export type PluginProviderRegistration = {
   rootDir?: string;
 };
 
+export type PluginWebSearchProviderRegistration = {
+  pluginId: string;
+  pluginName?: string;
+  provider: WebSearchProviderPlugin;
+  source: string;
+  rootDir?: string;
+};
+
 export type PluginHookRegistration = {
   pluginId: string;
   entry: HookEntry;
@@ -146,6 +156,7 @@ export type PluginRecord = {
   hookNames: string[];
   channelIds: string[];
   providerIds: string[];
+  webSearchProviderIds: string[];
   gatewayMethods: string[];
   cliCommands: string[];
   services: string[];
@@ -165,6 +176,7 @@ export type PluginRegistry = {
   channels: PluginChannelRegistration[];
   channelSetups: PluginChannelSetupRegistration[];
   providers: PluginProviderRegistration[];
+  webSearchProviders: PluginWebSearchProviderRegistration[];
   gatewayHandlers: GatewayRequestHandlers;
   httpRoutes: PluginHttpRouteRegistration[];
   cliRegistrars: PluginCliRegistration[];
@@ -185,8 +197,6 @@ export type PluginRegistryParams = {
 type PluginTypedHookPolicy = {
   allowPromptInjection?: boolean;
 };
-
-type PluginRegistrationMode = "full" | "setup-only";
 
 const constrainLegacyPromptInjectionHook = (
   handler: PluginHookHandlerMap["before_agent_start"],
@@ -211,6 +221,7 @@ export function createEmptyPluginRegistry(): PluginRegistry {
     channels: [],
     channelSetups: [],
     providers: [],
+    webSearchProviders: [],
     gatewayHandlers: {},
     httpRoutes: [],
     cliRegistrars: [],
@@ -542,6 +553,37 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     });
   };
 
+  const registerWebSearchProvider = (record: PluginRecord, provider: WebSearchProviderPlugin) => {
+    const id = provider.id.trim();
+    if (!id) {
+      pushDiagnostic({
+        level: "error",
+        pluginId: record.id,
+        source: record.source,
+        message: "web search provider registration missing id",
+      });
+      return;
+    }
+    const existing = registry.webSearchProviders.find((entry) => entry.provider.id === id);
+    if (existing) {
+      pushDiagnostic({
+        level: "error",
+        pluginId: record.id,
+        source: record.source,
+        message: `web search provider already registered: ${id} (${existing.pluginId})`,
+      });
+      return;
+    }
+    record.webSearchProviderIds.push(id);
+    registry.webSearchProviders.push({
+      pluginId: record.id,
+      pluginName: record.name,
+      provider,
+      source: record.source,
+      rootDir: record.rootDir,
+    });
+  };
+
   const registerCli = (
     record: PluginRecord,
     registrar: OpenClawPluginCliRegistrar,
@@ -734,6 +776,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       description: record.description,
       source: record.source,
       rootDir: record.rootDir,
+      registrationMode,
       config: params.config,
       pluginConfig: params.pluginConfig,
       runtime: registryParams.runtime,
@@ -749,6 +792,10 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       registerChannel: (registration) => registerChannel(record, registration, registrationMode),
       registerProvider:
         registrationMode === "full" ? (provider) => registerProvider(record, provider) : () => {},
+      registerWebSearchProvider:
+        registrationMode === "full"
+          ? (provider) => registerWebSearchProvider(record, provider)
+          : () => {},
       registerGatewayMethod:
         registrationMode === "full"
           ? (method, handler) => registerGatewayMethod(record, method, handler)
@@ -818,6 +865,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     registerTool,
     registerChannel,
     registerProvider,
+    registerWebSearchProvider,
     registerGatewayMethod,
     registerCli,
     registerService,

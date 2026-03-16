@@ -1,0 +1,8 @@
+{
+  "id": "xai",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}
