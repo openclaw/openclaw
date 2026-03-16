@@ -3,7 +3,7 @@ import { imessagePlugin } from "../../../extensions/imessage/src/channel.js";
 import { signalPlugin } from "../../../extensions/signal/src/channel.js";
 import { slackPlugin } from "../../../extensions/slack/src/channel.js";
 import { telegramPlugin } from "../../../extensions/telegram/src/channel.js";
-import { whatsappOnboardingAdapter } from "../../../extensions/whatsapp/src/onboarding.js";
+import { whatsappPlugin } from "../../../extensions/whatsapp/src/channel.js";
 import { listChannelSetupPlugins } from "../../channels/plugins/setup-registry.js";
 import { buildChannelOnboardingAdapterFromSetupWizard } from "../../channels/plugins/setup-wizard.js";
 import type { ChannelChoice } from "../onboard-types.js";
@@ -28,6 +28,10 @@ const signalOnboardingAdapter = buildChannelOnboardingAdapterFromSetupWizard({
 const imessageOnboardingAdapter = buildChannelOnboardingAdapterFromSetupWizard({
   plugin: imessagePlugin,
   wizard: imessagePlugin.setupWizard!,
+});
+const whatsappOnboardingAdapter = buildChannelOnboardingAdapterFromSetupWizard({
+  plugin: whatsappPlugin,
+  wizard: whatsappPlugin.setupWizard!,
 });
 
 const BUILTIN_ONBOARDING_ADAPTERS: ChannelOnboardingAdapter[] = [
