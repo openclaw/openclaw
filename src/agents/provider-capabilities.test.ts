@@ -130,6 +130,21 @@ describe("resolveProviderCapabilities", () => {
     expect(resolveTranscriptToolCallIdMode("mistral", "mistral-large-latest")).toBe("strict9");
   });
 
+  it("applies strict9 tool call ID mode for Mistral models through OpenRouter (#47707)", () => {
+    // OpenRouter routes to Mistral models which require strict9 format.
+    // Even when the plugin returns partial capabilities (without transcriptToolCallIdModelHints),
+    // the fallback hints should be merged in.
+    expect(resolveTranscriptToolCallIdMode("openrouter", "mistralai/devstral-2512:free")).toBe(
+      "strict9",
+    );
+    expect(resolveTranscriptToolCallIdMode("openrouter", "mistral-large-latest")).toBe("strict9");
+    expect(resolveTranscriptToolCallIdMode("openrouter", "codestral-latest")).toBe("strict9");
+    // Non-Mistral models should not get strict9
+    expect(
+      resolveTranscriptToolCallIdMode("openrouter", "anthropic/claude-3-opus"),
+    ).toBeUndefined();
+  });
+
   it("treats kimi aliases as native anthropic tool payload providers", () => {
     expect(requiresOpenAiCompatibleAnthropicToolPayload("kimi-coding")).toBe(false);
     expect(requiresOpenAiCompatibleAnthropicToolPayload("kimi-code")).toBe(false);

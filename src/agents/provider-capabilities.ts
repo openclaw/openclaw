@@ -85,10 +85,14 @@ export function resolveProviderCapabilities(provider?: string | null): ProviderC
   const pluginCapabilities = normalized
     ? resolveProviderCapabilitiesWithPlugin({ provider: normalized })
     : undefined;
+  // Merge fallbacks first, then plugin capabilities on top. This ensures
+  // fallback hints (like transcriptToolCallIdModelHints) are applied even
+  // when the plugin provides partial capabilities.
   return {
     ...DEFAULT_PROVIDER_CAPABILITIES,
     ...CORE_PROVIDER_CAPABILITIES[normalized],
-    ...(pluginCapabilities ?? PLUGIN_CAPABILITIES_FALLBACKS[normalized]),
+    ...PLUGIN_CAPABILITIES_FALLBACKS[normalized],
+    ...pluginCapabilities,
   };
 }
 
