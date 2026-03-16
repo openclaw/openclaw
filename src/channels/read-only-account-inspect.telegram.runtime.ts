@@ -1,4 +1,2 @@
-export {
-  inspectTelegramAccount,
-  type InspectedTelegramAccount,
-} from "../../extensions/telegram/src/account-inspect.js";
+export { inspectTelegramAccount } from "../plugin-sdk/telegram.js";
+export type { InspectedTelegramAccount } from "../plugin-sdk/telegram.js";

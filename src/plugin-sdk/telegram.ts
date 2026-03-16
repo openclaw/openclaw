@@ -11,6 +11,10 @@ export type { TelegramAccountConfig, TelegramActionConfig } from "../config/type
 export type { InspectedTelegramAccount } from "../../extensions/telegram/src/account-inspect.js";
 export type { ResolvedTelegramAccount } from "../../extensions/telegram/src/accounts.js";
 export type { TelegramProbe } from "../../extensions/telegram/src/probe.js";
+export type {
+  TelegramButtonStyle,
+  TelegramInlineButtons,
+} from "../../extensions/telegram/src/button-types.js";
 
 export { emptyPluginConfigSchema } from "../plugins/config-schema.js";
 
@@ -32,8 +36,10 @@ export { PAIRING_APPROVED_MESSAGE } from "../channels/plugins/pairing-message.js
 export { getChatChannelMeta } from "../channels/registry.js";
 
 export {
+  createTelegramActionGate,
   listTelegramAccountIds,
   resolveDefaultTelegramAccountId,
+  resolveTelegramPollActionGateState,
   resolveTelegramAccount,
 } from "../../extensions/telegram/src/accounts.js";
 export { inspectTelegramAccount } from "../../extensions/telegram/src/account-inspect.js";
@@ -58,6 +64,24 @@ export {
   normalizeTelegramAllowFromEntry,
 } from "../../extensions/telegram/src/allow-from.js";
 export { fetchTelegramChatId } from "../../extensions/telegram/src/api-fetch.js";
+export {
+  resolveTelegramInlineButtonsScope,
+  resolveTelegramTargetChatType,
+} from "../../extensions/telegram/src/inline-buttons.js";
+export { resolveTelegramReactionLevel } from "../../extensions/telegram/src/reaction-level.js";
+export {
+  createForumTopicTelegram,
+  deleteMessageTelegram,
+  editForumTopicTelegram,
+  editMessageTelegram,
+  reactMessageTelegram,
+  sendMessageTelegram,
+  sendPollTelegram,
+  sendStickerTelegram,
+} from "../../extensions/telegram/src/send.js";
+export { getCacheStats, searchStickers } from "../../extensions/telegram/src/sticker-cache.js";
+export { resolveTelegramToken } from "../../extensions/telegram/src/token.js";
+export { telegramMessageActions } from "../../extensions/telegram/src/channel-actions.js";
 export { collectTelegramStatusIssues } from "../../extensions/telegram/src/status-issues.js";
 export { sendTelegramPayloadMessages } from "../../extensions/telegram/src/outbound-adapter.js";
 export {

@@ -28,6 +28,7 @@ export type {
   ChatSenderAllowParams,
   ParsedChatTarget,
 } from "../../extensions/imessage/src/target-parsing-helpers.js";
+export { sendMessageIMessage } from "../../extensions/imessage/src/send.js";
 
 export {
   resolveAllowlistProviderRuntimeGroupPolicy,

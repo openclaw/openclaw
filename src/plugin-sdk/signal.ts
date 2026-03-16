@@ -13,6 +13,7 @@ export {
   removeReactionSignal,
   sendReactionSignal,
 } from "../../extensions/signal/src/send-reactions.js";
+export { sendMessageSignal } from "../../extensions/signal/src/send.js";
 export {
   looksLikeSignalTargetId,
   normalizeSignalMessagingTarget,
