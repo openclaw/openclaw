@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { parseTelegramTarget } from "../../extensions/telegram/src/targets.js";
 import { HEARTBEAT_PROMPT } from "../auto-reply/heartbeat.js";
 import * as replyModule from "../auto-reply/reply.js";
 import { whatsappOutbound } from "../channels/plugins/outbound/whatsapp.js";
@@ -78,6 +79,20 @@ beforeAll(async () => {
           mediaUrl,
         });
         return { channel: "telegram", messageId: res.messageId, chatId: res.chatId };
+      },
+    },
+    messaging: {
+      parseExplicitTarget: ({ raw }) => {
+        const target = parseTelegramTarget(raw);
+        return {
+          to: target.chatId,
+          threadId: target.messageThreadId,
+          chatType: target.chatType === "unknown" ? undefined : target.chatType,
+        };
+      },
+      inferTargetChatType: ({ to }) => {
+        const target = parseTelegramTarget(to);
+        return target.chatType === "unknown" ? undefined : target.chatType;
       },
     },
   });

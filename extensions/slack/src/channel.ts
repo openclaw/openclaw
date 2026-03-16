@@ -38,6 +38,7 @@ import { resolveOutboundSendDep } from "../../../src/infra/outbound/send-deps.js
 import { buildPassiveProbedChannelStatusSummary } from "../../shared/channel-status-summary.js";
 import { parseSlackBlocksInput } from "./blocks-input.js";
 import type { SlackProbe } from "./probe.js";
+import { resolveSlackUserAllowlist } from "./resolve-users.js";
 import { getSlackRuntime } from "./runtime.js";
 import { fetchSlackScopes } from "./scopes.js";
 import { createSlackSetupWizardProxy, slackSetupAdapter } from "./setup-core.js";
@@ -129,6 +130,17 @@ function resolveSlackAutoThreadId(params: {
   return context.currentThreadTs;
 }
 
+function parseSlackExplicitTarget(raw: string) {
+  const target = parseSlackTarget(raw, { defaultKind: "channel" });
+  if (!target) {
+    return null;
+  }
+  return {
+    to: target.id,
+    chatType: target.kind === "user" ? ("direct" as const) : ("channel" as const),
+  };
+}
+
 function formatSlackScopeDiagnostic(params: {
   tokenType: "bot" | "user";
   result: Awaited<ReturnType<typeof fetchSlackScopes>>;
@@ -142,6 +154,32 @@ function formatSlackScopeDiagnostic(params: {
     text: `${label}: ${params.result.error ?? "scope lookup failed"}`,
     tone: "error",
   } as const;
+}
+
+function readSlackAllowlistConfig(account: ResolvedSlackAccount) {
+  return {
+    dmAllowFrom: (account.config.allowFrom ?? account.config.dm?.allowFrom ?? []).map(String),
+    groupPolicy: account.groupPolicy,
+    groupOverrides: Object.entries(account.channels ?? {})
+      .map(([key, value]) => {
+        const entries = (value?.users ?? []).map(String).filter(Boolean);
+        return entries.length > 0 ? { label: key, entries } : null;
+      })
+      .filter(Boolean) as Array<{ label: string; entries: string[] }>,
+  };
+}
+
+async function resolveSlackAllowlistNames(params: {
+  cfg: Parameters<typeof resolveSlackAccount>[0]["cfg"];
+  accountId?: string | null;
+  entries: string[];
+}) {
+  const account = resolveSlackAccount({ cfg: params.cfg, accountId: params.accountId });
+  const token = account.config.userToken?.trim() || account.botToken?.trim();
+  if (!token) {
+    return [];
+  }
+  return await resolveSlackUserAllowlist({ token, entries: params.entries });
 }
 
 const slackConfigAccessors = createScopedAccountConfigAccessors({
@@ -235,6 +273,23 @@ export const slackPlugin: ChannelPlugin<ResolvedSlackAccount> = {
     }),
     ...slackConfigAccessors,
   },
+  allowlist: {
+    supportsScope: ({ scope }) => scope === "dm",
+    readConfig: ({ cfg, accountId }) =>
+      readSlackAllowlistConfig(resolveSlackAccount({ cfg, accountId })),
+    resolveNames: async ({ cfg, accountId, entries }) =>
+      await resolveSlackAllowlistNames({ cfg, accountId, entries }),
+    resolveConfigEdit: ({ scope, pathPrefix, writeTarget }) =>
+      scope === "dm"
+        ? {
+            pathPrefix,
+            writeTarget,
+            readPaths: [["allowFrom"], ["dm", "allowFrom"]],
+            writePath: ["allowFrom"],
+            cleanupPaths: [["dm", "allowFrom"]],
+          }
+        : null,
+  },
   security: {
     resolveDmPolicy: ({ cfg, accountId, account }) => {
       return buildAccountScopedDmSecurityPolicy({
@@ -301,6 +356,8 @@ export const slackPlugin: ChannelPlugin<ResolvedSlackAccount> = {
   },
   messaging: {
     normalizeTarget: normalizeSlackMessagingTarget,
+    parseExplicitTarget: ({ raw }) => parseSlackExplicitTarget(raw),
+    inferTargetChatType: ({ to }) => parseSlackExplicitTarget(to)?.chatType,
     enableInteractiveReplies: ({ cfg, accountId }) =>
       isSlackInteractiveRepliesEnabled({ cfg, accountId }),
     hasStructuredReplyPayload: ({ payload }) => {
