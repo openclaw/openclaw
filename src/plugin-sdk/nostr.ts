@@ -2,9 +2,11 @@
 // Keep this list additive and scoped to symbols used under extensions/nostr.
 
 export { buildChannelConfigSchema } from "../channels/plugins/config-schema.js";
+export { AllowFromListSchema } from "../channels/plugins/config-schema.js";
 export { formatPairingApproveHint } from "../channels/plugins/helpers.js";
 export type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
 export type { OpenClawConfig } from "../config/config.js";
+export { DmPolicySchema } from "../config/zod-schema.core.js";
 export { MarkdownConfigSchema } from "../config/zod-schema.core.js";
 export { readJsonBodyWithLimit, requestBodyErrorToText } from "../infra/http-body.js";
 export { isBlockedHostnameOrIp } from "../infra/net/ssrf.js";

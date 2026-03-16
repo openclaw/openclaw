@@ -10,7 +10,7 @@ import { probeGateway } from "../gateway/probe.js";
 import { collectChannelStatusIssues } from "../infra/channels-status-issues.js";
 import { resolveOsSummary } from "../infra/os-summary.js";
 import { getTailnetHostname } from "../infra/tailscale.js";
-import { getMemorySearchManager } from "../memory/index.js";
+import { getMemorySearchManager } from "../memory/search-manager.js";
 import type { MemoryProviderStatus } from "../memory/types.js";
 import { runExec } from "../process/exec.js";
 import type { RuntimeEnv } from "../runtime.js";

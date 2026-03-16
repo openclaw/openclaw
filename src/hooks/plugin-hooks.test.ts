@@ -12,6 +12,13 @@ import {
 import { loadInternalHooks } from "./loader.js";
 import { loadWorkspaceHookEntries } from "./workspace.js";
 
+function normalizeTestPath(value: string | undefined): string | undefined {
+  if (!value) {
+    return value;
+  }
+  return path.normalize(value).replace(/\\/g, "/").toLowerCase();
+}
+
 describe("bundle plugin hooks", () => {
   let fixtureRoot = "";
   let caseId = 0;
@@ -106,8 +113,8 @@ describe("bundle plugin hooks", () => {
     expect(entries[0]?.hook.name).toBe("bundle-hook");
     expect(entries[0]?.hook.source).toBe("openclaw-plugin");
     expect(entries[0]?.hook.pluginId).toBe("sample-bundle");
-    expect(entries[0]?.hook.baseDir).toBe(
-      fs.realpathSync.native(path.join(bundleRoot, "hooks", "bundle-hook")),
+    expect(normalizeTestPath(entries[0]?.hook.baseDir)).toBe(
+      normalizeTestPath(fs.realpathSync(path.join(bundleRoot, "hooks", "bundle-hook"))),
     );
     expect(entries[0]?.metadata?.events).toEqual(["command:new"]);
   });

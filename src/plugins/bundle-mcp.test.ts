@@ -24,11 +24,12 @@ afterEach(async () => {
 
 describe("loadEnabledBundleMcpConfig", () => {
   it("loads enabled Claude bundle MCP config and absolutizes relative args", async () => {
-    const env = captureEnv(["HOME"]);
+    const env = captureEnv(["HOME", "OPENCLAW_STATE_DIR"]);
     try {
       const homeDir = await createTempDir("openclaw-bundle-mcp-home-");
       const workspaceDir = await createTempDir("openclaw-bundle-mcp-workspace-");
       process.env.HOME = homeDir;
+      process.env.OPENCLAW_STATE_DIR = path.join(homeDir, ".openclaw");
 
       const pluginRoot = path.join(homeDir, ".openclaw", "extensions", "bundle-probe");
       const serverPath = path.join(pluginRoot, "servers", "probe.mjs");
@@ -80,11 +81,12 @@ describe("loadEnabledBundleMcpConfig", () => {
   });
 
   it("merges inline bundle MCP servers and skips disabled bundles", async () => {
-    const env = captureEnv(["HOME"]);
+    const env = captureEnv(["HOME", "OPENCLAW_STATE_DIR"]);
     try {
       const homeDir = await createTempDir("openclaw-bundle-inline-home-");
       const workspaceDir = await createTempDir("openclaw-bundle-inline-workspace-");
       process.env.HOME = homeDir;
+      process.env.OPENCLAW_STATE_DIR = path.join(homeDir, ".openclaw");
 
       const enabledRoot = path.join(homeDir, ".openclaw", "extensions", "inline-enabled");
       const disabledRoot = path.join(homeDir, ".openclaw", "extensions", "inline-disabled");

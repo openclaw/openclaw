@@ -16,6 +16,13 @@ function makeTempDir() {
 
 const mkdirSafe = mkdirSafeDir;
 
+function normalizeTestPath(value: string | undefined): string | undefined {
+  if (!value) {
+    return value;
+  }
+  return path.normalize(value).replace(/\\/g, "/").toLowerCase();
+}
+
 function buildDiscoveryEnv(stateDir: string): NodeJS.ProcessEnv {
   return {
     OPENCLAW_STATE_DIR: stateDir,
@@ -241,8 +248,8 @@ describe("discoverOpenClawPlugins", () => {
     expect(bundle?.idHint).toBe("sample-bundle");
     expect(bundle?.format).toBe("bundle");
     expect(bundle?.bundleFormat).toBe("codex");
-    expect(bundle?.source).toBe(bundleDir);
-    expect(bundle?.rootDir).toBe(fs.realpathSync.native(bundleDir));
+    expect(normalizeTestPath(bundle?.source)).toBe(normalizeTestPath(bundleDir));
+    expect(normalizeTestPath(bundle?.rootDir)).toBe(normalizeTestPath(fs.realpathSync(bundleDir)));
   });
 
   it("auto-detects manifestless Claude bundles from the default layout", async () => {
@@ -257,7 +264,7 @@ describe("discoverOpenClawPlugins", () => {
     expect(bundle).toBeDefined();
     expect(bundle?.format).toBe("bundle");
     expect(bundle?.bundleFormat).toBe("claude");
-    expect(bundle?.source).toBe(bundleDir);
+    expect(normalizeTestPath(bundle?.source)).toBe(normalizeTestPath(bundleDir));
   });
 
   it("auto-detects Cursor bundles as bundle candidates", async () => {
@@ -279,7 +286,7 @@ describe("discoverOpenClawPlugins", () => {
     expect(bundle).toBeDefined();
     expect(bundle?.format).toBe("bundle");
     expect(bundle?.bundleFormat).toBe("cursor");
-    expect(bundle?.source).toBe(bundleDir);
+    expect(normalizeTestPath(bundle?.source)).toBe(normalizeTestPath(bundleDir));
   });
 
   it("falls back to legacy index discovery when a scanned bundle sidecar is malformed", async () => {
@@ -297,7 +304,9 @@ describe("discoverOpenClawPlugins", () => {
     expect(legacy).toBeDefined();
     expect(legacy?.format).toBe("openclaw");
     expect(
-      result.diagnostics.some((entry) => entry.source?.endsWith(".claude-plugin/plugin.json")),
+      result.diagnostics.some((entry) =>
+        normalizeTestPath(entry.source)?.endsWith(".claude-plugin/plugin.json"),
+      ),
     ).toBe(true);
   });
 
@@ -318,7 +327,9 @@ describe("discoverOpenClawPlugins", () => {
     expect(legacy).toBeDefined();
     expect(legacy?.format).toBe("openclaw");
     expect(
-      result.diagnostics.some((entry) => entry.source?.endsWith(".codex-plugin/plugin.json")),
+      result.diagnostics.some((entry) =>
+        normalizeTestPath(entry.source)?.endsWith(".codex-plugin/plugin.json"),
+      ),
     ).toBe(true);
   });
 

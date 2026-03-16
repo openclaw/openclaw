@@ -6,6 +6,7 @@ import {
   text as clackText,
 } from "@clack/prompts";
 import { stylePromptHint, stylePromptMessage, stylePromptTitle } from "../terminal/prompt-style.js";
+import type { WizardSection } from "./configure.sections.js";
 export {
   CONFIGURE_WIZARD_SECTIONS,
   parseConfigureWizardSections,
