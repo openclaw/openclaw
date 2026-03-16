@@ -426,6 +426,12 @@ export function resolveEnvApiKey(
     if (!envKey) {
       return null;
     }
+    // pi-ai returns "<authenticated>" when ADC is configured (GOOGLE_APPLICATION_CREDENTIALS
+    // + GOOGLE_CLOUD_PROJECT + GOOGLE_CLOUD_LOCATION). Don't pass this marker as a literal
+    // API key — return undefined so the SDK uses ADC token exchange instead. See #48033.
+    if (envKey === "<authenticated>") {
+      return { apiKey: undefined, source: "gcloud adc" };
+    }
     return { apiKey: envKey, source: "gcloud adc" };
   }
   return null;

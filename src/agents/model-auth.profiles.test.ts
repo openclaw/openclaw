@@ -467,4 +467,38 @@ describe("getApiKeyForModel", () => {
       },
     );
   });
+
+  it("resolveEnvApiKey('google-vertex') returns undefined apiKey when ADC marker is returned (#48033)", async () => {
+    // When GOOGLE_APPLICATION_CREDENTIALS + GOOGLE_CLOUD_PROJECT + GOOGLE_CLOUD_LOCATION
+    // are all set, pi-ai's getEnvApiKey("google-vertex") returns "<authenticated>".
+    // We must NOT pass this marker as a literal API key — return undefined so the SDK
+    // uses ADC token exchange instead.
+    const fs = await import("node:fs");
+    const os = await import("node:os");
+    const path = await import("node:path");
+    const tempDir = os.tmpdir();
+    const fakeCredPath = path.join(tempDir, "test-gcloud-adc-creds.json");
+    // Create a fake service account file (pi-ai checks existence)
+    fs.writeFileSync(fakeCredPath, JSON.stringify({ type: "service_account" }), "utf-8");
+    try {
+      await withEnvAsync(
+        {
+          GOOGLE_APPLICATION_CREDENTIALS: fakeCredPath,
+          GOOGLE_CLOUD_PROJECT: "test-project",
+          GOOGLE_CLOUD_LOCATION: "us-central1",
+          GEMINI_API_KEY: undefined,
+          GOOGLE_API_KEY: undefined,
+          GOOGLE_CLOUD_API_KEY: undefined,
+        },
+        async () => {
+          const resolved = resolveEnvApiKey("google-vertex");
+          // apiKey should be undefined (not "<authenticated>") so the SDK uses ADC
+          expect(resolved?.apiKey).toBeUndefined();
+          expect(resolved?.source).toBe("gcloud adc");
+        },
+      );
+    } finally {
+      fs.unlinkSync(fakeCredPath);
+    }
+  });
 });
