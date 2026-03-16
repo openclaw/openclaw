@@ -1,3 +1,3 @@
-import { whatsappPlugin } from "./src/channel.js";
+import { whatsappSetupPlugin } from "./src/channel.setup.js";
 
-export default { plugin: whatsappPlugin };
+export default { plugin: whatsappSetupPlugin };

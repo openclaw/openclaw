@@ -1,3 +1,3 @@
-import { imessagePlugin } from "./src/channel.js";
+import { imessageSetupPlugin } from "./src/channel.setup.js";
 
-export default { plugin: imessagePlugin };
+export default { plugin: imessageSetupPlugin };
