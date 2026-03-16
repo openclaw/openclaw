@@ -13,14 +13,30 @@ function buildInputOptions(options: { onLog?: unknown; [key: string]: unknown })
 
   const previousOnLog = typeof options.onLog === "function" ? options.onLog : undefined;
 
+  function isSuppressedLog(log: {
+    code?: string;
+    message?: string;
+    id?: string;
+    importer?: string;
+  }) {
+    if (log.code === "PLUGIN_TIMINGS") {
+      return true;
+    }
+    if (log.code !== "EVAL") {
+      return false;
+    }
+    const haystack = [log.message, log.id, log.importer].filter(Boolean).join("\n");
+    return haystack.includes("@protobufjs/inquire/index.js");
+  }
+
   return {
     ...options,
     onLog(
       level: string,
-      log: { code?: string },
+      log: { code?: string; message?: string; id?: string; importer?: string },
       defaultHandler: (level: string, log: { code?: string }) => void,
     ) {
-      if (log.code === "PLUGIN_TIMINGS") {
+      if (isSuppressedLog(log)) {
         return;
       }
       if (typeof previousOnLog === "function") {
