@@ -32,6 +32,8 @@ metadata: { "openclaw": { "emoji": "🛠️" } }
   - For repo materialization: if mapped path has no `.git`, call `repo-clone.sh --image <workload>` to create a proper clone before attempting commits.
 - For any PR work requested by a human or triggered by autofix confidence gate, use `autofix-pr.sh` which handles: repo cloning, GitHub App auth, branch creation, commit, PR creation, and Linear linking. Do not attempt manual `git clone` + `git push` + `gh pr create` — the `autofix-pr.sh` pipeline handles all auth and repo bootstrap.
 - No root-cause ranking before one successful live check. Access/runtime failures alone are not enough evidence for hypotheses.
+- Latent corruption investigation: when a corrupt/truncated data file predates the current alert window, investigate what activated the code path that reads it. Check for: recent deploys, config syncs, compaction threshold changes, pod restarts, or feature flag toggles since the file's last-modified timestamp. Include the activation trigger in the RCA.
+- Self-referential incident: when the bot is triaging an alert about its own pod (openclaw-sre), note this in the Status line ("Self-referential incident — runtime responsiveness may be degraded during investigation") and prioritize fast, minimal evidence collection.
 - On blocked investigations:
   - first reply must include exact failing command + exact error text
   - include at most 3 next checks
