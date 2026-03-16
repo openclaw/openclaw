@@ -312,6 +312,24 @@ export function createExecApprovalHandlers(
       }
       const approvalId = resolvedId.id;
       const snapshot = manager.getSnapshot(approvalId);
+      // Security: prevent self-approval — the connection that submitted the request
+      // cannot also resolve it. This blocks prompt-injected agents from immediately
+      // approving their own dangerous command requests without human oversight.
+      if (
+        snapshot?.requestedByConnId != null &&
+        client?.connId != null &&
+        client.connId === snapshot.requestedByConnId
+      ) {
+        respond(
+          false,
+          undefined,
+          errorShape(
+            ErrorCodes.INVALID_REQUEST,
+            "requester cannot approve their own exec request",
+          ),
+        );
+        return;
+      }
       const resolvedBy = client?.connect?.client?.displayName ?? client?.connect?.client?.id;
       const ok = manager.resolve(approvalId, decision, resolvedBy ?? null);
       if (!ok) {
