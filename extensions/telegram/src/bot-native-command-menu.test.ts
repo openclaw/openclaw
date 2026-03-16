@@ -307,10 +307,9 @@ describe("bot-native-command-menu", () => {
     });
 
     it("continues menu sync even with a bare '\\\\?' prefix path account", async () => {
-      // This test verifies that the guard in writeCachedCommandHash rejects
-      // incomplete Windows extended-length prefix paths like "\\?"
-      // We verify this by checking that the function handles it gracefully
-      // (the sync still completes because writeCachedCommandHash is best-effort)
+      // writeCachedCommandHash is best-effort: any path resolution failure (including
+      // malformed OPENCLAW_STATE_DIR) is caught inside the try block and logged.
+      // Menu sync should succeed regardless.
       const setMyCommands = vi.fn(async () => undefined);
       const deleteMyCommands = vi.fn(async () => undefined);
       const runtimeLog = vi.fn();
@@ -327,28 +326,6 @@ describe("bot-native-command-menu", () => {
       await vi.waitFor(() => { expect(setMyCommands).toHaveBeenCalled(); });
       // Menu sync succeeds regardless of path validation in writeCachedCommandHash
       expect(setMyCommands).toHaveBeenCalledWith([{ command: "win_test", description: "Win Test" }]);
-    });
-
-    it("bare Windows prefix patterns are detected by stateDir guard regex", () => {
-      // writeCachedCommandHash validates stateDir *inside* its try block (before
-      // path.join) to catch malformed values like OPENCLAW_STATE_DIR="\?" best-effort.
-      // After path.join, dirPath becomes "\?\telegram" — not a bare prefix — so the
-      // guard must act on stateDir directly. The regex used:
-      const guardRegex = /^\\{1,2}\?[/\\]?$/;
-      expect(guardRegex.test("\\?")).toBe(true);           // single backslash bare prefix
-      expect(guardRegex.test("\\\\?")).toBe(true);        // double backslash bare prefix
-      expect(guardRegex.test("\\\\?\\")).toBe(true);    // with trailing backslash
-      expect(guardRegex.test("C:\\Users\\test")).toBe(false);     // valid Windows path
-      expect(guardRegex.test("\\\\?\\C:\\Users")).toBe(false); // valid extended prefix
-      expect(guardRegex.test("/home/user")).toBe(false);            // Linux path
-    });
-
-    it("path.win32.isAbsolute correctly accepts valid Windows absolute paths", () => {
-      // eslint-disable-next-line @typescript-eslint/no-require-imports
-      const nodePath = require("path") as typeof import("path");
-      expect(nodePath.win32.isAbsolute("C:\\Users\\test")).toBe(true);
-      expect(nodePath.win32.isAbsolute("\\\\?\\C:\\Users\\test")).toBe(true);
-      expect(nodePath.win32.isAbsolute("\\\\server\\share")).toBe(true);
     });
   });
 });
