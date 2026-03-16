@@ -29,6 +29,7 @@ Docs: https://docs.openclaw.ai
 - Docs/Zalo: clarify the Marketplace-bot support matrix and config guidance so the Zalo channel docs match current Bot Creator behavior more closely. (#47552) Thanks @No898.
 - secrets: harden read-only SecretRef command paths and diagnostics. (#47794) Thanks @joshavant.
 - Browser/existing-session: support `browser.profiles.<name>.userDataDir` so Chrome DevTools MCP can attach to Brave, Edge, and other Chromium-based browsers through their own user data directories. (#48170) thanks @velvet-shark.
+- Skills/prompt budget: preserve all registered skills via a compact catalog fallback before dropping entries when the full prompt format exceeds `maxSkillsPromptChars`. (#47553) Thanks @snese.
 
 ### Breaking
 
