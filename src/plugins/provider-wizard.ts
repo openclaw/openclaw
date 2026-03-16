@@ -100,7 +100,7 @@ export function resolveProviderWizardOptions(params: {
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
 }): ProviderWizardOption[] {
-  const providers = resolvePluginProviders(params);
+  const providers = resolvePluginProviders({ ...params, bundledProviderVitestCompat: true });
   const options: ProviderWizardOption[] = [];
 
   for (const provider of providers) {
@@ -169,7 +169,7 @@ export function resolveProviderModelPickerEntries(params: {
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
 }): ProviderModelPickerEntry[] {
-  const providers = resolvePluginProviders(params);
+  const providers = resolvePluginProviders({ ...params, bundledProviderVitestCompat: true });
   const entries: ProviderModelPickerEntry[] = [];
 
   for (const provider of providers) {

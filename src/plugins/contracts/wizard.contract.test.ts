@@ -83,6 +83,7 @@ describe("provider wizard contract", () => {
     const providers = resolvePluginProviders({
       config,
       env: process.env,
+      bundledProviderVitestCompat: true,
     });
 
     const options = resolveProviderWizardOptions({
@@ -103,6 +104,7 @@ describe("provider wizard contract", () => {
     const providers = resolvePluginProviders({
       config,
       env: process.env,
+      bundledProviderVitestCompat: true,
     });
 
     for (const option of resolveProviderWizardOptions({ config, env: process.env })) {
@@ -121,6 +123,7 @@ describe("provider wizard contract", () => {
     const providers = resolvePluginProviders({
       config,
       env: process.env,
+      bundledProviderVitestCompat: true,
     });
 
     const entries = resolveProviderModelPickerEntries({
