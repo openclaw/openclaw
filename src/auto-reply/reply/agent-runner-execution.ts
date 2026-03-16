@@ -510,6 +510,33 @@ export async function runAgentTurnWithFallback(params: {
         }
       }
 
+      // Mid-session provider failure ("An unknown error occurred") — retry once.
+      // pi-ai swallows the real reason when the provider returns "failed" or
+      // "cancelled", but these are almost always transient. A single retry
+      // usually succeeds (the user can already recover by re-sending manually).
+      // The error does NOT land in meta.error (limited to specific kinds);
+      // instead it appears as an isError payload or via stopReason "error".
+      const errorPayload = runResult?.payloads?.find((p) => p.isError);
+      const isUnknownProviderFailure =
+        (errorPayload?.text &&
+          /failed to generate a response|unknown error occurred/i.test(errorPayload.text)) ||
+        (runResult?.meta?.stopReason === "error" && !embeddedError);
+      if (isUnknownProviderFailure && !didRetryTransientHttpError) {
+        didRetryTransientHttpError = true;
+        const errMsg = errorPayload?.text ?? "unknown provider error";
+        defaultRuntime.error(
+          `Mid-session provider failure (${errMsg}). Retrying once in ${TRANSIENT_HTTP_RETRY_DELAY_MS}ms.`,
+        );
+        // Remove the error payload so it doesn't show to the user on retry
+        if (errorPayload && runResult?.payloads) {
+          runResult.payloads = runResult.payloads.filter((p) => p !== errorPayload);
+        }
+        await new Promise<void>((resolve) => {
+          setTimeout(resolve, TRANSIENT_HTTP_RETRY_DELAY_MS);
+        });
+        continue;
+      }
+
       break;
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
@@ -518,6 +545,9 @@ export async function runAgentTurnWithFallback(params: {
       const isSessionCorruption = /function call turn comes immediately after/i.test(message);
       const isRoleOrderingError = /incorrect role information|roles must alternate/i.test(message);
       const isTransientHttp = isTransientHttpError(message);
+      const isUnknownProviderError =
+        /^An unknown error occurred$/i.test(message) ||
+        (/All \d+ model attempts failed/.test(message) && /unknown/.test(message));
 
       if (
         isCompactionFailure &&
@@ -589,14 +619,17 @@ export async function runAgentTurnWithFallback(params: {
         };
       }
 
-      if (isTransientHttp && !didRetryTransientHttpError) {
+      if ((isTransientHttp || isUnknownProviderError) && !didRetryTransientHttpError) {
         didRetryTransientHttpError = true;
         // Retry the full runWithModelFallback() cycle — transient errors
-        // (502/521/etc.) typically affect the whole provider, so falling
-        // back to an alternate model first would not help. Instead we wait
+        // (502/521/etc.) and generic provider failures ("An unknown error
+        // occurred") typically resolve on a second attempt. Wait briefly
         // and retry the complete primary→fallback chain.
+        const label = isUnknownProviderError
+          ? "Unknown provider error"
+          : "Transient HTTP provider error";
         defaultRuntime.error(
-          `Transient HTTP provider error before reply (${message}). Retrying once in ${TRANSIENT_HTTP_RETRY_DELAY_MS}ms.`,
+          `${label} before reply (${message}). Retrying once in ${TRANSIENT_HTTP_RETRY_DELAY_MS}ms.`,
         );
         await new Promise<void>((resolve) => {
           setTimeout(resolve, TRANSIENT_HTTP_RETRY_DELAY_MS);

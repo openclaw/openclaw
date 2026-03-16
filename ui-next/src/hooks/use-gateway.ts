@@ -225,6 +225,7 @@ type ChatEventPayload = {
   activity?: {
     tool?: string;
     args?: Record<string, string>;
+    error?: boolean;
   };
 };
 
@@ -337,14 +338,24 @@ function handleChatEvent(payload: unknown) {
       chatStore.finalizeStream(runId, targetKey, text, evt.message?.usage);
       break;
     }
-    case "error":
-      chatStore.streamError(runId, targetKey, evt.errorMessage);
+    case "error": {
+      let errorText = evt.errorMessage;
+      // Format generic provider errors into user-friendly messages
+      if (errorText && /^An unknown error occurred$/i.test(errorText)) {
+        errorText =
+          "The AI provider failed to respond. This is usually temporary — try sending your message again.";
+      }
+      chatStore.streamError(runId, targetKey, errorText);
       break;
+    }
     case "activity": {
       const tool = evt.activity?.tool ?? "";
       const args = evt.activity?.args;
+      const isToolError = evt.activity?.error === true;
       let label = tool;
-      if (tool === "exec" && args?.command) {
+      if (isToolError) {
+        label = `${tool} failed`;
+      } else if (tool === "exec" && args?.command) {
         label = args.command;
       } else if ((tool === "read" || tool === "write") && (args?.path ?? args?.file_path)) {
         label = `${tool}: ${args.path ?? args.file_path}`;

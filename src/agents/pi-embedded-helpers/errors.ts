@@ -634,6 +634,18 @@ export function formatAssistantErrorText(
     return "LLM request failed with an unknown error.";
   }
 
+  // pi-ai throws a generic "An unknown error occurred" when the provider returns
+  // status "failed" or "cancelled", swallowing the actual reason. Surface a more
+  // actionable message that includes the provider/model so users know what to retry.
+  if (/^An unknown error occurred$/i.test(raw)) {
+    const providerLabel = opts?.provider || "AI provider";
+    const modelLabel = opts?.model ? ` (${opts.model})` : "";
+    return (
+      `${providerLabel}${modelLabel} failed to generate a response. ` +
+      "This is usually a temporary provider-side issue — try sending your message again."
+    );
+  }
+
   const unknownTool =
     raw.match(/unknown tool[:\s]+["']?([a-z0-9_-]+)["']?/i) ??
     raw.match(/tool\s+["']?([a-z0-9_-]+)["']?\s+(?:not found|is not available)/i);
@@ -957,6 +969,12 @@ export function classifyFailoverReason(raw: string): FailoverReason | null {
     return "timeout";
   }
   if (isJsonApiInternalServerError(raw)) {
+    return "timeout";
+  }
+  // pi-ai swallows the actual error and returns this generic message when
+  // the provider reports status "failed" or "cancelled". Treat as a
+  // transient provider failure so the fallback chain can retry.
+  if (/^An unknown error occurred$/i.test(raw)) {
     return "timeout";
   }
   if (isCloudCodeAssistFormatError(raw)) {
