@@ -128,7 +128,7 @@ describe("buildFeishuAgentBody", () => {
     });
 
     expect(body).toBe(
-      '[message_id: msg-42]\nSender Name: [Replying to: "previous message"]\n\nhello world\n\n[System: Your reply will automatically @mention: Target User. Do not write @xxx yourself.]\n\n【⚠️ 飞书权限提示】机器人缺少必要的 API 权限，部分功能可能无法使用。请管理员点击以下链接授权：https://open.feishu.cn/app/cli_test（如链接无法点击，请完整复制到浏览器打开。授权后重试即可。）',
+      '[message_id: msg-42]\nSender Name: [Replying to: "previous message"]\n\nhello world\n\n[System: Your reply will automatically @mention: Target User. Do not write @xxx yourself.]\n\n[System: 【⚠️ 飞书权限提示】机器人缺少必要的 API 权限，部分功能可能无法使用。请管理员点击以下链接授权：https://open.feishu.cn/app/cli_test（如链接无法点击，请完整复制到浏览器打开。授权后重试即可。）]',
     );
   });
 
@@ -150,7 +150,7 @@ describe("buildFeishuAgentBody", () => {
     });
 
     expect(body).toBe(
-      "[message_id: msg-42]\nSender Name: hello world\n\n【⚠️ 飞书权限提示】机器人缺少必要的 API 权限，部分功能可能无法使用。请联系管理员在飞书开放平台为机器人应用添加相应权限。",
+      "[message_id: msg-42]\nSender Name: hello world\n\n[System: 【⚠️ 飞书权限提示】机器人缺少必要的 API 权限，部分功能可能无法使用。请联系管理员在飞书开放平台为机器人应用添加相应权限。]",
     );
   });
 });
