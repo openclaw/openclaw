@@ -901,12 +901,13 @@ export async function startGatewayServer(
     nodeUnsubscribeAll,
     hasConnectedMobileNode: hasMobileNodeConnected,
     hasExecApprovalClients: (excludeConnId?: string | null) => {
-      // Client modes that connect with approval scopes but never act on
-      // approval events. Excluding them avoids false-positive approver
-      // detection that would force the full wait timeout in headless setups.
-      const NON_APPROVER_MODES = new Set(["backend", "node", "probe", "test"]);
+      // Non-interactive modes that will never resolve approval events.
+      // "backend" is NOT excluded because real approval subscribers
+      // (Telegram/Discord exec-approval handlers) connect as backend clients
+      // via createOperatorApprovalsGatewayClient.
+      const NON_APPROVER_MODES = new Set(["probe", "test"]);
       for (const gatewayClient of clients) {
-        // Skip the requester's own connection so backend/self-connections
+        // Skip the requester's own connection so self-connections
         // don't falsely satisfy the "has approver" check.
         if (excludeConnId && gatewayClient.connId === excludeConnId) {
           continue;
