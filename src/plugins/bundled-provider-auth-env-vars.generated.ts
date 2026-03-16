@@ -5,6 +5,7 @@ export const BUNDLED_PROVIDER_AUTH_ENV_VAR_CANDIDATES = {
   brave: ["BRAVE_API_KEY"],
   byteplus: ["BYTEPLUS_API_KEY"],
   chutes: ["CHUTES_API_KEY", "CHUTES_OAUTH_TOKEN"],
+  clawapi: ["CLAWAPI_KEY"],
   "cloudflare-ai-gateway": ["CLOUDFLARE_AI_GATEWAY_API_KEY"],
   deepseek: ["DEEPSEEK_API_KEY"],
   exa: ["EXA_API_KEY"],

@@ -28,6 +28,7 @@ Looking for chat channel docs (WhatsApp/Telegram/Discord/Slack/Mattermost (plugi
 
 - [Amazon Bedrock](/providers/bedrock)
 - [Anthropic (API + Claude Code CLI)](/providers/anthropic)
+- [ClawAPI (crypto-native multi-model gateway)](/providers/clawapi)
 - [Cloudflare AI Gateway](/providers/cloudflare-ai-gateway)
 - [DeepSeek](/providers/deepseek)
 - [GitHub Copilot](/providers/github-copilot)

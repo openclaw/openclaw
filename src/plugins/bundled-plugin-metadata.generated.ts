@@ -392,6 +392,48 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
     },
   },
   {
+    dirName: "clawapi",
+    idHint: "clawapi",
+    source: {
+      source: "./index.ts",
+      built: "index.js",
+    },
+    packageName: "@openclaw/clawapi-provider",
+    packageVersion: "2026.3.14",
+    packageDescription: "OpenClaw ClawAPI provider plugin",
+    packageManifest: {
+      extensions: ["./index.ts"],
+    },
+    manifest: {
+      id: "clawapi",
+      configSchema: {
+        type: "object",
+        additionalProperties: false,
+        properties: {},
+      },
+      providers: ["clawapi"],
+      providerAuthEnvVars: {
+        clawapi: ["CLAWAPI_KEY"],
+      },
+      providerAuthChoices: [
+        {
+          provider: "clawapi",
+          method: "api-key",
+          choiceId: "clawapi-api-key",
+          choiceLabel: "ClawAPI API key",
+          choiceHint: "Crypto-native multi-model gateway",
+          groupId: "clawapi",
+          groupLabel: "ClawAPI",
+          groupHint: "Crypto-native multi-model gateway",
+          optionKey: "clawapiApiKey",
+          cliFlag: "--clawapi-api-key",
+          cliOption: "--clawapi-api-key <key>",
+          cliDescription: "ClawAPI API key",
+        },
+      ],
+    },
+  },
+  {
     dirName: "cloudflare-ai-gateway",
     idHint: "cloudflare-ai-gateway",
     source: {

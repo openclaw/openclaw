@@ -6,6 +6,7 @@ export {
   buildBytePlusCodingProvider,
   buildBytePlusProvider,
 } from "../../extensions/byteplus/provider-catalog.js";
+export { buildClawApiProvider } from "../../extensions/clawapi/provider-catalog.js";
 export { buildDeepSeekProvider } from "../../extensions/deepseek/provider-catalog.js";
 export {
   buildKimiCodingProvider,

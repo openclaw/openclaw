@@ -32,6 +32,7 @@ export const BUNDLED_ENABLED_BY_DEFAULT = new Set<string>([
   "amazon-bedrock",
   "anthropic",
   "byteplus",
+  "clawapi",
   "cloudflare-ai-gateway",
   "deepseek",
   "device-pair",
