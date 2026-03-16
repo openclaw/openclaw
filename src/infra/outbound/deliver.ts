@@ -34,6 +34,7 @@ import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { getAgentScopedMediaLocalRoots } from "../../media/local-roots.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { throwIfAborted } from "./abort.js";
+import { resolveOutboundChannelPlugin } from "./channel-resolution.js";
 import { ackDelivery, enqueueDelivery, failDelivery } from "./delivery-queue.js";
 import type { OutboundIdentity } from "./identity.js";
 import type { DeliveryMirror } from "./mirror.js";
@@ -113,6 +114,13 @@ type ChannelHandlerParams = {
 
 // Channel docking: outbound delivery delegates to plugin.outbound adapters.
 async function createChannelHandler(params: ChannelHandlerParams): Promise<ChannelHandler> {
+  // Recover channel plugins the same way target resolution does so direct cron
+  // delivery still works when a prior test or lazy path left the active plugin
+  // registry empty.
+  resolveOutboundChannelPlugin({
+    channel: params.channel,
+    cfg: params.cfg,
+  });
   const outbound = await loadChannelOutboundAdapter(params.channel);
   const handler = createPluginHandler({ ...params, outbound });
   if (!handler) {

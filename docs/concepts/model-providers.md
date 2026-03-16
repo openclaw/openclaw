@@ -20,7 +20,9 @@ For model selection rules, see [/concepts/models](/concepts/models).
   OpenClaw merges that output into `models.providers` before writing
   `models.json`.
 - Provider manifests can declare `providerAuthEnvVars` so generic env-based
-  auth probes do not need to load plugin runtime.
+  auth probes do not need to load plugin runtime. The remaining core env-var
+  map is now just for non-plugin/core providers and a few generic-precedence
+  cases such as Anthropic API-key-first onboarding.
 - Provider plugins can also own provider runtime behavior via
   `resolveDynamicModel`, `prepareDynamicModel`, `normalizeResolvedModel`,
   `capabilities`, `prepareExtraParams`, `wrapStreamFn`,
@@ -37,6 +39,10 @@ the generic inference loop.
 
 Typical split:
 
+- `auth[].run` / `auth[].runNonInteractive`: provider owns onboarding/login
+  flows for `openclaw onboard`, `openclaw models auth`, and headless setup
+- `wizard.onboarding` / `wizard.modelPicker`: provider owns auth-choice labels,
+  hints, and setup entries in onboarding/model pickers
 - `catalog`: provider appears in `models.providers`
 - `resolveDynamicModel`: provider accepts model ids not present in the local
   static catalog yet
