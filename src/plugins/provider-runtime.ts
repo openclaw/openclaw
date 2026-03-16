@@ -39,6 +39,8 @@ function resolveProviderPluginsForHooks(params: {
 }): ProviderPlugin[] {
   return resolvePluginProviders({
     ...params,
+    activate: false,
+    cache: false,
     bundledProviderAllowlistCompat: true,
     bundledProviderVitestCompat: true,
   });
