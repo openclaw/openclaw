@@ -467,16 +467,26 @@ jq \
             end
           )
       )
-    | .channels.slack.channels["#platform-monitoring"].systemPrompt =
-        (if .channels.slack.channels["#platform-monitoring"].systemPrompt == $monitoring_prompt_marker then $monitoring_prompt else .channels.slack.channels["#platform-monitoring"].systemPrompt end)
-    | .channels.slack.channels["#staging-infra-monitoring"].systemPrompt =
-        ($monitoring_prompt
-          | sub("^Monitoring incident intake mode:"; "Staging monitoring incident intake mode:")
-        )
-    | .channels.slack.channels["#public-api-monitoring"].systemPrompt =
-        ($monitoring_prompt
-          | sub("^Monitoring incident intake mode:"; "Public API monitoring incident intake mode:")
-        )
+    | if .channels.slack.channels["#platform-monitoring"] != null then
+        .channels.slack.channels["#platform-monitoring"].systemPrompt =
+          (if (.channels.slack.channels["#platform-monitoring"].systemPrompt == $monitoring_prompt_marker) or (.channels.slack.channels["#platform-monitoring"].systemPrompt == null) then
+            $monitoring_prompt
+          else
+            .channels.slack.channels["#platform-monitoring"].systemPrompt
+          end)
+      else . end
+    | if .channels.slack.channels["#staging-infra-monitoring"] != null then
+        .channels.slack.channels["#staging-infra-monitoring"].systemPrompt =
+          ($monitoring_prompt
+            | sub("^Monitoring incident intake mode:"; "Staging monitoring incident intake mode:")
+          )
+      else . end
+    | if .channels.slack.channels["#public-api-monitoring"] != null then
+        .channels.slack.channels["#public-api-monitoring"].systemPrompt =
+          ($monitoring_prompt
+            | sub("^Monitoring incident intake mode:"; "Public API monitoring incident intake mode:")
+          )
+      else . end
     | .sre = (.sre // {})
     | .sre.provenance = ((.sre.provenance // {}) + {enabled: $provenance_enabled})
     | .sre.structuredEvidence = ((.sre.structuredEvidence // {}) + {enabled: $structured_evidence_enabled})

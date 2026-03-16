@@ -125,6 +125,43 @@ jq -e '.agents.list[] | select(.id=="sre-verifier").tools.exec.pathPrepend[0] ==
 jq -e '.agents.list[] | select(.id=="sre-k8s").tools.exec.pathPrepend[0] == "/tmp/openclaw-bin"' "$TMP_CONFIG" >/dev/null
 jq -e '.agents.list[] | select(.id=="main") | (.tools.exec.pathPrepend | not)' "$TMP_CONFIG" >/dev/null
 
+# Integration test: monitoring prompt resolution via jq pipeline
+PROMPT_LIB="$REPO_ROOT/scripts/sre-runtime/lib-prompts.sh"
+TEST_PROMPT="$(OPENCLAW_SRE_SKILL_DIR="/test/skills" bash -lc 'source "$1"; build_monitoring_incident_prompt' _ "$PROMPT_LIB")"
+TEST_MARKER="$(bash -lc 'source "$1"; monitoring_incident_prompt_marker' _ "$PROMPT_LIB")"
+
+TMP_PROMPT_CONFIG="$(mktemp)"
+trap 'rm -f "$TMP_CONFIG" "$TMP_PROMPT_CONFIG"' EXIT
+
+jq --arg monitoring_prompt "$TEST_PROMPT" \
+   --arg monitoring_prompt_marker "$TEST_MARKER" '
+  if .channels.slack.channels["#platform-monitoring"] != null then
+    .channels.slack.channels["#platform-monitoring"].systemPrompt =
+      (if (.channels.slack.channels["#platform-monitoring"].systemPrompt == $monitoring_prompt_marker) or (.channels.slack.channels["#platform-monitoring"].systemPrompt == null) then
+        $monitoring_prompt
+      else
+        .channels.slack.channels["#platform-monitoring"].systemPrompt
+      end)
+  else . end
+  | if .channels.slack.channels["#staging-infra-monitoring"] != null then
+      .channels.slack.channels["#staging-infra-monitoring"].systemPrompt =
+        ($monitoring_prompt | sub("^Monitoring incident intake mode:"; "Staging monitoring incident intake mode:"))
+    else . end
+  | if .channels.slack.channels["#public-api-monitoring"] != null then
+      .channels.slack.channels["#public-api-monitoring"].systemPrompt =
+        ($monitoring_prompt | sub("^Monitoring incident intake mode:"; "Public API monitoring incident intake mode:"))
+    else . end
+' "$CONFIG" >"$TMP_PROMPT_CONFIG"
+
+# Verify marker was resolved to real prompt
+jq -e '.channels.slack.channels["#platform-monitoring"].systemPrompt | startswith("Monitoring incident intake mode:")' "$TMP_PROMPT_CONFIG" >/dev/null
+# Verify staging gets prefixed prompt
+jq -e '.channels.slack.channels["#staging-infra-monitoring"].systemPrompt | startswith("Staging monitoring incident intake mode:")' "$TMP_PROMPT_CONFIG" >/dev/null
+# Verify public-api gets prefixed prompt
+jq -e '.channels.slack.channels["#public-api-monitoring"].systemPrompt | startswith("Public API monitoring incident intake mode:")' "$TMP_PROMPT_CONFIG" >/dev/null
+# Verify non-monitoring channel was NOT affected
+jq -e '.channels.slack.channels["#bug-report"].systemPrompt | startswith("Monitoring") | not' "$TMP_PROMPT_CONFIG" >/dev/null
+
 test -f "$ROOT/posthog-mcp.sh"
 test -f "$ROOT/frontend-project-resolver.sh"
 test -f "$ROOT/sentry-cli.sh"

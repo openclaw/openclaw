@@ -4,7 +4,6 @@ set -euo pipefail
 REPO_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"
 ROOT="$REPO_ROOT/skills/morpho-sre"
 CONFIG="$ROOT/config/openclaw.json"
-START_GATEWAY="$REPO_ROOT/scripts/sre-runtime/start-gateway.sh"
 PROMPT_LIB="$REPO_ROOT/scripts/sre-runtime/lib-prompts.sh"
 
 jq -e '
