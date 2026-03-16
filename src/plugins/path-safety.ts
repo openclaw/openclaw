@@ -5,13 +5,18 @@ export function isPathInside(baseDir: string, targetPath: string): boolean {
   return isBoundaryPathInside(baseDir, targetPath);
 }
 
+function resolveRealpathSync(targetPath: string): string {
+  const nativeRealpathSync = fs.realpathSync.native as ((path: string) => string) | undefined;
+  return nativeRealpathSync ? nativeRealpathSync(targetPath) : fs.realpathSync(targetPath);
+}
+
 export function safeRealpathSync(targetPath: string, cache?: Map<string, string>): string | null {
   const cached = cache?.get(targetPath);
   if (cached) {
     return cached;
   }
   try {
-    const resolved = fs.realpathSync(targetPath);
+    const resolved = resolveRealpathSync(targetPath);
     cache?.set(targetPath, resolved);
     return resolved;
   } catch {

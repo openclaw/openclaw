@@ -71,7 +71,10 @@ vi.mock("../commands/configure.js", () => ({
   },
 }));
 vi.mock("../commands/setup.js", () => ({ setupCommand: programMocks.setupCommand }));
-vi.mock("../commands/onboard.js", () => ({ onboardCommand: programMocks.onboardCommand }));
+vi.mock("../commands/onboard.js", () => ({
+  onboardCommand: programMocks.onboardCommand,
+  setupWizardCommand: programMocks.onboardCommand,
+}));
 vi.mock("../runtime.js", () => ({ defaultRuntime: programMocks.runtime }));
 vi.mock("./channel-auth.js", () => ({
   runChannelLogin: programMocks.runChannelLogin,

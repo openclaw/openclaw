@@ -5,6 +5,7 @@ import {
   normalizeUsageDisplay,
   resolveResponseUsageMode,
 } from "../auto-reply/thinking.js";
+import type { OpenClawConfig } from "../config/types.js";
 import type { SessionsPatchResult } from "../gateway/protocol/index.js";
 import { formatRelativeTimestamp } from "../infra/format-time/format-relative.ts";
 import { normalizeAgentId } from "../routing/session-key.js";
@@ -18,7 +19,6 @@ import {
 import type { GatewayChatClient } from "./gateway-chat.js";
 import { sanitizeRenderableText } from "./tui-formatters.js";
 import { formatStatusSummary } from "./tui-status-summary.js";
-import type { OpenClawConfig } from "../config/types.js";
 import type {
   AgentSummary,
   GatewayStatusSummary,

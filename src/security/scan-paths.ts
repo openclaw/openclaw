@@ -10,7 +10,8 @@ export function isPathInside(basePath: string, candidatePath: string): boolean {
 
 function safeRealpathSync(filePath: string): string | null {
   try {
-    return fs.realpathSync(filePath);
+    const nativeRealpathSync = fs.realpathSync.native as ((path: string) => string) | undefined;
+    return nativeRealpathSync ? nativeRealpathSync(filePath) : fs.realpathSync(filePath);
   } catch {
     return null;
   }

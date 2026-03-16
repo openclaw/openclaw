@@ -163,7 +163,8 @@ describe("tui command handlers", () => {
     // /reset still resets the shared session
     expect(resetSession).toHaveBeenCalledTimes(1);
     expect(resetSession).toHaveBeenCalledWith("agent:main:main", "reset");
-    expect(loadHistory).toHaveBeenCalledTimes(1); // /reset calls loadHistory directly; /new does so indirectly via setSession
+    // /reset calls loadHistory directly; /new does so indirectly via setSession.
+    expect(loadHistory).toHaveBeenCalledTimes(1);
   });
 
   it("reports send failures and marks activity status as error", async () => {
@@ -245,6 +246,9 @@ describe("tui command handlers", () => {
       1,
       expect.stringContaining("/think <off|minimal|low|medium|high|xhigh|adaptive>"),
     );
-    expect(addSystem).toHaveBeenNthCalledWith(2, "usage: /think <off|minimal|low|medium|high|xhigh|adaptive>");
+    expect(addSystem).toHaveBeenNthCalledWith(
+      2,
+      "usage: /think <off|minimal|low|medium|high|xhigh|adaptive>",
+    );
   });
 });

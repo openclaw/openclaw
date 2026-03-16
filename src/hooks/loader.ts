@@ -249,7 +249,8 @@ export async function loadInternalHooks(
 
 function resolveExistingRealpath(value: string): string | null {
   try {
-    return fs.realpathSync(value);
+    const nativeRealpathSync = fs.realpathSync.native as ((path: string) => string) | undefined;
+    return nativeRealpathSync ? nativeRealpathSync(value) : fs.realpathSync(value);
   } catch {
     return null;
   }

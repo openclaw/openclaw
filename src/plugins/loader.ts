@@ -1314,7 +1314,8 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
 
 function safeRealpathOrResolve(value: string): string {
   try {
-    return fs.realpathSync(value);
+    const nativeRealpathSync = fs.realpathSync.native as ((path: string) => string) | undefined;
+    return nativeRealpathSync ? nativeRealpathSync(value) : fs.realpathSync(value);
   } catch {
     return path.resolve(value);
   }

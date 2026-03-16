@@ -53,6 +53,10 @@ function expectEscapesPackageDiagnostic(diagnostics: Array<{ message: string }>)
   );
 }
 
+function normalizePathForAssertion(filePath: string | undefined): string {
+  return (filePath ?? "").replaceAll("\\", "/");
+}
+
 afterEach(() => {
   clearPluginDiscoveryCache();
   cleanupTrackedTempDirs(tempDirs);
@@ -297,7 +301,9 @@ describe("discoverOpenClawPlugins", () => {
     expect(legacy).toBeDefined();
     expect(legacy?.format).toBe("openclaw");
     expect(
-      result.diagnostics.some((entry) => entry.source?.endsWith(".claude-plugin/plugin.json")),
+      result.diagnostics.some((entry) =>
+        normalizePathForAssertion(entry.source).endsWith(".claude-plugin/plugin.json"),
+      ),
     ).toBe(true);
   });
 
@@ -318,7 +324,9 @@ describe("discoverOpenClawPlugins", () => {
     expect(legacy).toBeDefined();
     expect(legacy?.format).toBe("openclaw");
     expect(
-      result.diagnostics.some((entry) => entry.source?.endsWith(".codex-plugin/plugin.json")),
+      result.diagnostics.some((entry) =>
+        normalizePathForAssertion(entry.source).endsWith(".codex-plugin/plugin.json"),
+      ),
     ).toBe(true);
   });
 
