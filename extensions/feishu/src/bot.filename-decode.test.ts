@@ -14,9 +14,10 @@ describe("decodeFeishuFilename", () => {
     expect(decodeFeishuFilename("%E6%B5%8B%E8%AF%95.pdf")).toBe("测试.pdf");
   });
 
-  it("preserves literal percent signs in filenames", () => {
-    // Literal % followed by hex should NOT be decoded
+  it("preserves filenames whose decoded form is all-ASCII or malformed", () => {
+    // %20 decodes to a space (all-ASCII), so the original is returned unchanged.
     expect(decodeFeishuFilename("report%202026.pdf")).toBe("report%202026.pdf");
+    // %of is malformed percent-encoding; decodeURIComponent throws, so the original is returned.
     expect(decodeFeishuFilename("50%off.txt")).toBe("50%off.txt");
   });
 
