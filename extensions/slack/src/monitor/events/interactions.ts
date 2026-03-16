@@ -570,6 +570,7 @@ export function registerSlackInteractionEvents(params: { ctx: SlackMonitorContex
             summary: actionSummary,
           }),
           ctx: {
+            channel: "slack",
             accountId: ctx.accountId,
             interactionId: pluginInteractionData,
             conversationId: channelId ?? "",
