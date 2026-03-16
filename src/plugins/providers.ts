@@ -122,6 +122,8 @@ export function resolvePluginProviders(params: {
   bundledProviderAllowlistCompat?: boolean;
   bundledProviderVitestCompat?: boolean;
   onlyPluginIds?: string[];
+  activate?: boolean;
+  cache?: boolean;
 }): ProviderPlugin[] {
   const maybeAllowlistCompat = params.bundledProviderAllowlistCompat
     ? withBundledPluginAllowlistCompat({
@@ -140,6 +142,8 @@ export function resolvePluginProviders(params: {
     workspaceDir: params.workspaceDir,
     env: params.env,
     onlyPluginIds: params.onlyPluginIds,
+    activate: params.activate,
+    cache: params.cache,
     logger: createPluginLoaderLogger(log),
   });
 
