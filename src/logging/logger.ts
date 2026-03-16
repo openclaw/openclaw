@@ -143,6 +143,7 @@ function buildLogger(settings: ResolvedSettings): TsLogger<LogObj> {
   if (isRollingPath(settings.file)) {
     pruneOldRollingLogs(path.dirname(settings.file));
   }
+  let currentFile = settings.file;
   let currentFileBytes = getCurrentLogFileBytes(settings.file);
   let warnedAboutSizeCap = false;
 
@@ -152,22 +153,25 @@ function buildLogger(settings: ResolvedSettings): TsLogger<LogObj> {
     try {
       const logTime = logObj.date ?? new Date();
       const time = formatLocalIsoWithOffset(logTime);
-      
+
       // Check if date has changed for rolling log files
-      let currentFile = settings.file;
       if (isRollingPath(settings.file)) {
         const lastLogDateStr = formatLocalDate(lastLogDate);
         const currentLogDateStr = formatLocalDate(logTime);
         if (lastLogDateStr !== currentLogDateStr) {
-          // Date has changed, recalculate the file path
-          currentFile = defaultRollingPathForToday();
+          // Date has changed, recalculate the file path using logTime
+          currentFile = path.join(
+            DEFAULT_LOG_DIR,
+            `${LOG_PREFIX}-${currentLogDateStr}${LOG_SUFFIX}`,
+          );
           fs.mkdirSync(path.dirname(currentFile), { recursive: true });
+          pruneOldRollingLogs(path.dirname(currentFile));
           currentFileBytes = getCurrentLogFileBytes(currentFile);
           warnedAboutSizeCap = false;
           lastLogDate = logTime;
         }
       }
-      
+
       const line = JSON.stringify({ ...logObj, time });
       const payload = `${line}\n`;
       const payloadBytes = Buffer.byteLength(payload, "utf8");
