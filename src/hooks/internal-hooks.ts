@@ -433,16 +433,16 @@ export async function triggerEnrichHook(
  * Check whether any enrichment handlers are registered for message:enrich
  */
 export function hasEnrichHooks(): boolean {
-  return (enrichHandlers.get("message") ?? []).length > 0 ||
-    (enrichHandlers.get("message:enrich") ?? []).length > 0;
+  return (
+    (enrichHandlers.get("message") ?? []).length > 0 ||
+    (enrichHandlers.get("message:enrich") ?? []).length > 0
+  );
 }
 
 /**
  * Type guard for message:enrich events
  */
-export function isMessageEnrichEvent(
-  event: InternalHookEvent,
-): event is MessageEnrichHookEvent {
+export function isMessageEnrichEvent(event: InternalHookEvent): event is MessageEnrichHookEvent {
   if (event.type !== "message" || event.action !== "enrich") {
     return false;
   }
