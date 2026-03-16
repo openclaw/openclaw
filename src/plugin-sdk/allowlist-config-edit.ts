@@ -183,6 +183,7 @@ function applyAccountScopedAllowlistConfigEdit(params: {
   };
 }
 
+/** Build the default account-scoped allowlist editor used by channel plugins with config-backed lists. */
 export function buildAccountScopedAllowlistConfigEditor(params: {
   channelId: ChannelId;
   normalize: (params: {
