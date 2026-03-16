@@ -27,13 +27,17 @@ export async function statusJsonCommand(
   },
   runtime: RuntimeEnv,
 ) {
-  const scan = await scanStatus({ json: true, timeoutMs: opts.timeoutMs, all: opts.all }, runtime);
+  const scan = await scanStatus(
+    { json: true, deep: opts.deep, timeoutMs: opts.timeoutMs, all: opts.all },
+    runtime,
+  );
   const securityAudit = await loadSecurityAuditModule().then(({ runSecurityAudit }) =>
     runSecurityAudit({
       config: scan.cfg,
       sourceConfig: scan.sourceConfig,
       deep: false,
-      includeFilesystem: true,
+      // Keep the default JSON status path lightweight for startup-sensitive calls.
+      includeFilesystem: opts.deep === true,
       includeChannelSecurity: true,
     }),
   );

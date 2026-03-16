@@ -81,8 +81,12 @@ describe("loadEnabledBundleMcpConfig", () => {
 
       expect(loaded.diagnostics).toEqual([]);
       expect(loaded.config.mcpServers.bundleProbe?.command).toBe("node");
+      expect(Array.isArray(args)).toBe(true);
+      if (!Array.isArray(args)) {
+        throw new Error("bundleProbe args should be an array");
+      }
       expect(args).toHaveLength(1);
-      expect(canonicalExistingPath(String(args?.[0]))).toBe(canonicalExistingPath(serverPath));
+      expect(canonicalExistingPath(String(args[0]))).toBe(canonicalExistingPath(serverPath));
     } finally {
       env.restore();
     }
