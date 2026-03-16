@@ -159,9 +159,10 @@ async function writeCachedCommandHash(
   const filePath = resolveCommandHashPath(accountId, botIdentity);
   try {
     const dirPath = path.dirname(filePath);
-    // Guard against invalid paths from malformed state dir resolution on Windows.
-    // "\\?" (incomplete extended-length prefix) resolves to "\?" via path.resolve
-    // and causes ENOENT on mkdir. Fixes #44199.
+    // Guard against invalid paths. On Windows, when the state directory resolves to
+    // an incomplete extended-length prefix (e.g. "\\?"), path.dirname() may return
+    // "\?" (single backslash) or "\\?" (double backslash) depending on the Node.js
+    // version and OS. Both are invalid mkdir targets. Fixes #44199.
     const isAbsolute = path.isAbsolute(dirPath) || path.win32.isAbsolute(dirPath);
     if (!dirPath || dirPath === "." || /^\\?\\[?][/\\]?$/.test(dirPath) || !isAbsolute) {
       throw new Error(`Invalid directory path for command hash: "${dirPath}"`);
