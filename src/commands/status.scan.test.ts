@@ -51,8 +51,9 @@ vi.mock("../infra/os-summary.js", () => ({
   resolveOsSummary: vi.fn(() => ({ label: "test-os" })),
 }));
 
-vi.mock("../infra/tailscale.js", () => ({
+vi.mock("./status.scan.deps.runtime.js", () => ({
   getTailnetHostname: vi.fn(),
+  getMemorySearchManager: vi.fn(),
 }));
 
 vi.mock("../gateway/call.js", () => ({
@@ -67,10 +68,6 @@ vi.mock("../gateway/probe.js", () => ({
 vi.mock("./status.gateway-probe.js", () => ({
   pickGatewaySelfPresence: vi.fn(() => null),
   resolveGatewayProbeAuthResolution: mocks.resolveGatewayProbeAuthResolution,
-}));
-
-vi.mock("../memory/index.js", () => ({
-  getMemorySearchManager: vi.fn(),
 }));
 
 vi.mock("../process/exec.js", () => ({
