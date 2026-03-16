@@ -105,7 +105,7 @@ export type MemoryState = {
   searchFiles: number | null;
   searchFallback: boolean;
   searchHistory: string[];
-  searchSourceFilter: "all" | "memory" | "docs" | "sessions";
+  searchSourceFilter: "all" | "memory" | "docs" | "sessions" | "projects";
   searchSortBy: "relevance" | "date";
 
   // Index status
@@ -151,7 +151,7 @@ export type MemoryState = {
   setSearchFallback: (fallback: boolean) => void;
   addToSearchHistory: (query: string) => void;
   loadSearchHistory: () => void;
-  setSearchSourceFilter: (filter: "all" | "memory" | "docs" | "sessions") => void;
+  setSearchSourceFilter: (filter: "all" | "memory" | "docs" | "sessions" | "projects") => void;
   setSearchSortBy: (sort: "relevance" | "date") => void;
 
   setAgentId: (id: string | null) => void;

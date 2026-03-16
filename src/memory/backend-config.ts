@@ -306,6 +306,73 @@ function resolveDefaultCollections(
   } catch {
     // Non-critical — skip docs collection if stat fails
   }
+  // Include project memory directories and .openclaw folders from project repos
+  const projectsDir = path.join(workspaceDir, "projects");
+  try {
+    if (fs.existsSync(projectsDir) && fs.statSync(projectsDir).isDirectory()) {
+      const projectDirs = fs.readdirSync(projectsDir, { withFileTypes: true });
+      for (const dir of projectDirs) {
+        if (!dir.isDirectory() || dir.name.startsWith(".")) {
+          continue;
+        }
+        const projectBase = path.join(projectsDir, dir.name);
+        // Index per-project memory directory
+        const projectMemoryDir = path.join(projectBase, "memory");
+        if (fs.existsSync(projectMemoryDir) && fs.statSync(projectMemoryDir).isDirectory()) {
+          entries.push({
+            path: projectMemoryDir,
+            pattern: "**/*.md",
+            base: `projects-${dir.name}`,
+            kind: "custom",
+          });
+        }
+      }
+    }
+  } catch {
+    // Non-critical — skip project collections if discovery fails
+  }
+  // Index .openclaw directories from linked project repo paths.
+  // Read project paths from a sidecar JSON file instead of the DB to avoid
+  // import ordering issues (DB may not be initialized when memory config loads).
+  try {
+    const projectsDir2 = path.join(workspaceDir, "projects");
+    if (fs.existsSync(projectsDir2) && fs.statSync(projectsDir2).isDirectory()) {
+      const projectNames = fs
+        .readdirSync(projectsDir2, { withFileTypes: true })
+        .filter((d) => d.isDirectory() && !d.name.startsWith("."))
+        .map((d) => d.name);
+      // For each known project workspace, check if the DB has a path entry
+      // by scanning common project locations
+      const home = process.env.HOME ?? "/";
+      const searchRoots = [
+        path.join(home, "dev"),
+        path.join(workspaceDir, "..", ".."), // e.g., ~/dev/operator1
+      ];
+      for (const projectName of projectNames) {
+        // Check common project locations
+        const candidates = [
+          ...searchRoots.map((r) => path.join(r, projectName)),
+          ...searchRoots.map((r) => path.join(r, "operator1", "Projects", projectName)),
+        ];
+        for (const candidate of candidates) {
+          const openclawDir = path.join(candidate, ".openclaw");
+          try {
+            if (fs.existsSync(openclawDir) && fs.statSync(openclawDir).isDirectory()) {
+              entries.push({
+                path: openclawDir,
+                pattern: "**/*.md",
+                base: `projects-${projectName}-openclaw`,
+                kind: "custom",
+              });
+              break; // Found it, no need to check other candidates
+            }
+          } catch {}
+        }
+      }
+    }
+  } catch {
+    // Non-critical
+  }
   return entries.map((entry) => ({
     name: ensureUniqueName(scopeCollectionBase(entry.base, agentId), existing),
     path: entry.path,

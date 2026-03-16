@@ -1430,15 +1430,19 @@ function SearchTab() {
     if (searchSourceFilter !== "all") {
       results = results.filter((r) => {
         const isSession = r.source === "sessions" || r.path.startsWith("qmd/sessions-");
-        const isDocs = !isSession && r.path.startsWith("qmd/");
+        const isProject = !isSession && r.path.startsWith("qmd/projects-");
+        const isDocs = !isSession && !isProject && r.path.startsWith("qmd/");
         if (searchSourceFilter === "sessions") {
           return isSession;
+        }
+        if (searchSourceFilter === "projects") {
+          return isProject;
         }
         if (searchSourceFilter === "docs") {
           return isDocs;
         }
-        // "memory" = workspace memory files (not sessions, not native docs)
-        return !isSession && !isDocs;
+        // "memory" = workspace memory files (not sessions, not docs, not projects)
+        return !isSession && !isDocs && !isProject;
       });
     }
     if (searchSortBy === "date") {
@@ -1501,7 +1505,7 @@ function SearchTab() {
           <span className="text-[10px] text-muted-foreground uppercase tracking-wider">
             Source:
           </span>
-          {(["all", "memory", "docs", "sessions"] as const).map((f) => (
+          {(["all", "memory", "docs", "sessions", "projects"] as const).map((f) => (
             <button
               key={f}
               onClick={() => useMemoryStore.getState().setSearchSourceFilter(f)}
@@ -1571,10 +1575,17 @@ function SearchTab() {
           {filteredResults.map((result, i) => {
             const isSession =
               result.source === "sessions" || result.path.startsWith("qmd/sessions-");
-            const isDocs = !isSession && result.path.startsWith("qmd/");
-            const isExpandable = isSession || isDocs;
+            const isProject = !isSession && result.path.startsWith("qmd/projects-");
+            const isDocs = !isSession && !isProject && result.path.startsWith("qmd/");
+            const isExpandable = isSession || isDocs || isProject;
             const isExpanded = expandedResultId === i;
-            const sourceLabel = isSession ? "session" : isDocs ? "docs" : result.source;
+            const sourceLabel = isSession
+              ? "session"
+              : isProject
+                ? "project"
+                : isDocs
+                  ? "docs"
+                  : result.source;
             return (
               <button
                 key={i}
