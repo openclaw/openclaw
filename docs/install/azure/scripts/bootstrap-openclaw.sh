@@ -32,7 +32,10 @@ install_node_24() {
   apt-get install -y curl ca-certificates gnupg apt-transport-https
 
   log "Installing Node.js 24.x."
-  curl -fsSL https://deb.nodesource.com/setup_24.x | bash -
+  # Trust model: fetches the official NodeSource setup script over HTTPS.
+  curl -fsSL https://deb.nodesource.com/setup_24.x -o /tmp/nodesource_setup.sh
+  bash /tmp/nodesource_setup.sh
+  rm -f /tmp/nodesource_setup.sh
   apt-get install -y nodejs
   log "Node installed: $(node -v); npm: $(npm -v)"
 }

@@ -136,6 +136,8 @@ az vm run-command invoke \
   --scripts "curl -fsSL https://raw.githubusercontent.com/openclaw/openclaw/main/docs/install/azure/scripts/bootstrap-openclaw.sh | bash"
 ```
 
+For production, pin the script URL to a commit SHA instead of `main` for reproducibility, or download/review the script and run it with `--scripts @./bootstrap-openclaw.sh`.
+
 ## 9) SSH into the VM through Azure Bastion
 
 ```bash
@@ -157,6 +159,8 @@ openclaw onboard --install-daemon
 ```
 
 Most enterprise Azure teams already have GitHub Copilot licenses. If that is your case, we recommend choosing the GitHub Copilot provider in the OpenClaw onboarding wizard. See [GitHub Copilot provider](/providers/github-copilot).
+
+The included ARM template uses Ubuntu image `version: "latest"` for convenience. If you need reproducible builds, pin a specific image version in `docs/install/azure/templates/azuredeploy.json` (you can list versions with `az vm image list --publisher Canonical --offer ubuntu-24_04-lts --sku server --all -o table`).
 
 ## Next steps
 
