@@ -173,6 +173,18 @@ env PATH="${BIN_NO_CAST}:/usr/bin:/bin" bash "$SCRIPT_PATH" --address "$ADDRESS"
 test "$missing_query_file_status" = "2"
 grep -F 'query file not readable' "$missing_query_file_stderr" >/dev/null
 
+missing_list_query_file_stderr="${TMP}/missing-list-query-file.stderr"
+missing_list_query_file_status=0
+env PATH="${BIN_NO_CAST}:/usr/bin:/bin" bash "$SCRIPT_PATH" --address "$ADDRESS" --chain-id 8453 --query "$QUERY" --list-query-file "${TMP}/missing-list.graphql" > /dev/null 2>"$missing_list_query_file_stderr" || missing_list_query_file_status=$?
+test "$missing_list_query_file_status" = "2"
+grep -F 'list query file not readable' "$missing_list_query_file_stderr" >/dev/null
+
+missing_transactions_query_file_stderr="${TMP}/missing-transactions-query-file.stderr"
+missing_transactions_query_file_status=0
+env PATH="${BIN_NO_CAST}:/usr/bin:/bin" bash "$SCRIPT_PATH" --address "$ADDRESS" --chain-id 8453 --query "$QUERY" --transactions-query-file "${TMP}/missing-transactions.graphql" > /dev/null 2>"$missing_transactions_query_file_stderr" || missing_transactions_query_file_status=$?
+test "$missing_transactions_query_file_status" = "2"
+grep -F 'transactions query file not readable' "$missing_transactions_query_file_stderr" >/dev/null
+
 non_numeric_chain_status=0
 env PATH="${BIN_NO_CAST}:/usr/bin:/bin" bash "$SCRIPT_PATH" --address "$ADDRESS" --chain-id not-a-number --query "$QUERY" >/dev/null 2>&1 || non_numeric_chain_status=$?
 test "$non_numeric_chain_status" = "2"

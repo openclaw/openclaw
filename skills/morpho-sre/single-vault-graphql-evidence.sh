@@ -321,10 +321,12 @@ sanitize_rpc_probe() {
 }
 
 if [[ -n "$LIST_QUERY_FILE" ]]; then
+  require_readable_file "list query file" "$LIST_QUERY_FILE"
   LIST_QUERY_DEFAULT="$(cat "$LIST_QUERY_FILE")"
 fi
 
 if [[ -n "$TRANSACTIONS_QUERY_FILE" ]]; then
+  require_readable_file "transactions query file" "$TRANSACTIONS_QUERY_FILE"
   TRANSACTIONS_QUERY_DEFAULT="$(cat "$TRANSACTIONS_QUERY_FILE")"
 fi
 

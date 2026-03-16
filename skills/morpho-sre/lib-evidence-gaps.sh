@@ -125,6 +125,12 @@ evidence_gaps_assess() {
     fi
   fi
 
+  optional_keys="$(
+    awk 'NR == FNR { if (NF > 0) seen[$0] = 1; next } NF > 0 && !seen[$0]++ { print }' \
+      <(printf '%s\n' "$critical_keys") \
+      <(printf '%s\n' "$optional_keys")
+  )"
+
   while IFS= read -r key; do
     [[ -n "$key" ]] || continue
     total_keys=$((total_keys + 1))
