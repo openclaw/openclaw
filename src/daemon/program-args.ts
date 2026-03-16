@@ -22,8 +22,8 @@ function looksLikeCliEntrypointPath(argv1: string | undefined): boolean {
 }
 
 function looksLikeSourceCliEntrypointPath(entrypointPath: string): boolean {
-  const normalized = entrypointPath.replace(/\\/g, "/");
-  return /\/src\/.+\.(?:[cm]?[jt]s)$/i.test(normalized);
+  const normalized = path.resolve(entrypointPath).replace(/\\/g, "/");
+  return /(?:^|\/)src\/.+\.(?:[cm]?[jt]s)$/i.test(normalized);
 }
 
 async function resolveCliEntrypointPathForService(): Promise<string> {

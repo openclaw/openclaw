@@ -145,6 +145,36 @@ describe("resolveCurrentCliProgramArguments", () => {
     ]);
   });
 
+  it("keeps a relative source entrypoint when no built dist entry exists", async () => {
+    process.argv = ["/usr/local/bin/bun", "src/index.ts"];
+    const normalizedEntrypoint = path.resolve("src/index.ts");
+    fsMocks.realpath.mockResolvedValue(normalizedEntrypoint);
+    fsMocks.access.mockImplementation(async (target: string) => {
+      if (target === normalizedEntrypoint) {
+        return;
+      }
+      throw new Error("missing");
+    });
+
+    const result = await resolveCurrentCliProgramArguments([
+      "--profile",
+      "work",
+      "doctor",
+      "--repair",
+      "--non-interactive",
+    ]);
+
+    expect(result).toEqual([
+      process.execPath,
+      normalizedEntrypoint,
+      "--profile",
+      "work",
+      "doctor",
+      "--repair",
+      "--non-interactive",
+    ]);
+  });
+
   it("still fails for non-source path entrypoints without a built CLI", async () => {
     const npxShim = path.resolve("/tmp/.npm/_npx/63c3/node_modules/.bin/openclaw");
     process.argv = ["/usr/local/bin/node", npxShim];
