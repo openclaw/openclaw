@@ -1078,7 +1078,12 @@ export async function executeJobCore(
           // Without this override, heartbeat target defaults to "none" (since
           // e2362d35) and cron main-session responses are silently swallowed.
           // See: https://github.com/openclaw/openclaw/issues/28508
-          heartbeat: { target: "last" },
+          // Also override every to "1ms" to bypass interval check - this allows
+          // cron jobs to run even when heartbeat.every="0m" (which is the
+          // documented way to disable periodic heartbeats). Without this override,
+          // sessionTarget="main" cron jobs would be incorrectly skipped.
+          // See: https://github.com/openclaw/openclaw/issues/46046
+          heartbeat: { target: "last", every: "1ms" },
         });
         if (
           heartbeatResult.status !== "skipped" ||
