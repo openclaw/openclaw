@@ -120,7 +120,8 @@ Raw provider fields are preserved so nothing is lost.
 - Telegram/WhatsApp: provider-specific numeric/ISO timestamps
 
 If you need local time, convert it downstream using the known timezone.
-If `agents.defaults.userTimezone` is not set, OpenClaw falls back to the host system timezone.
+- `userTimezone` sets the **user-local timezone** for prompt context. If not set, OpenClaw falls back to the host system timezone.
+- `timeFormat` controls **12h/24h display** in the prompt. `auto` follows OS prefs.
 
 ## Related docs
 
