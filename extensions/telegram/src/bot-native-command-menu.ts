@@ -157,14 +157,17 @@ async function writeCachedCommandHash(
   hash: string,
 ): Promise<void> {
   try {
-    // Resolve inside the try so any path issues stay best-effort.
+    // Validate stateDir *before* path.join so we catch malformed values like
+    // OPENCLAW_STATE_DIR="\?" or "\\?" that become "\?\telegram" after join —
+    // a path that is not a bare prefix but is still an invalid mkdir target.
+    // path.win32.isAbsolute cannot be used here (it returns true for bare prefixes).
+    const stateDir = resolveStateDir(process.env, os.homedir);
+    if (/^\\{1,2}\?[/\\]?$/.test(stateDir)) {
+      throw new Error(`Invalid state dir for command hash: "${stateDir}"`);
+    }
     const filePath = resolveCommandHashPath(accountId, botIdentity);
     const dirPath = path.dirname(filePath);
-    // Guard against malformed state dirs (e.g. OPENCLAW_STATE_DIR="\?") that produce
-    // paths like "\?\telegram". path.win32.isAbsolute returns true for bare prefixes,
-    // so we use a regex that matches them directly. Both single and double-backslash
-    // variants are covered: \? and \\? (plus optional trailing slash).
-    if (!dirPath || dirPath === "." || /^\\{1,2}\?[/\\]?$/.test(dirPath)) {
+    if (!dirPath || dirPath === ".") {
       throw new Error(`Invalid directory path for command hash: "${dirPath}"`);
     }
     await fs.mkdir(dirPath, { recursive: true });
