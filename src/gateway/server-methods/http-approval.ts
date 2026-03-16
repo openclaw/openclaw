@@ -130,6 +130,21 @@ export function createHttpApprovalHandlers(
         { dropIfSlow: true },
       );
 
+      // Send the two-phase ack immediately after registration so the caller
+      // does not time out while waiting for chat forwarding I/O.
+      if (twoPhase) {
+        respond(
+          true,
+          {
+            status: "accepted",
+            id: record.id,
+            createdAtMs: record.createdAtMs,
+            expiresAtMs: record.expiresAtMs,
+          },
+          undefined,
+        );
+      }
+
       // Exclude the requester's own socket so backend/self-connections (e.g.
       // callGatewayTool for web_fetch) don't satisfy the approver check.
       const hasApprovalClients = context.hasExecApprovalClients?.(client?.connId ?? null) ?? false;
@@ -150,30 +165,19 @@ export function createHttpApprovalHandlers(
       if (!hasApprovalClients && !forwarded) {
         manager.expire(record.id, "no-approval-route");
         httpRequests.delete(record.id);
-        respond(
-          true,
-          {
-            id: record.id,
-            decision: null,
-            createdAtMs: record.createdAtMs,
-            expiresAtMs: record.expiresAtMs,
-          },
-          undefined,
-        );
+        if (!twoPhase) {
+          respond(
+            true,
+            {
+              id: record.id,
+              decision: null,
+              createdAtMs: record.createdAtMs,
+              expiresAtMs: record.expiresAtMs,
+            },
+            undefined,
+          );
+        }
         return;
-      }
-
-      if (twoPhase) {
-        respond(
-          true,
-          {
-            status: "accepted",
-            id: record.id,
-            createdAtMs: record.createdAtMs,
-            expiresAtMs: record.expiresAtMs,
-          },
-          undefined,
-        );
       }
 
       try {
