@@ -101,6 +101,7 @@ describe("openshell backend manager", () => {
         image: "openclaw",
         configLabelKind: "Source",
       },
+      config: {},
     });
 
     expect(cliMocks.runOpenShellCli).toHaveBeenCalledWith({
