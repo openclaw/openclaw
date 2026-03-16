@@ -1,0 +1,67 @@
+{
+  "id": "gateway-probe",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "probe": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "probeId": {
+            "type": "string",
+            "description": "Unique probe identifier (persistent local UUID if empty)"
+          },
+          "name": {
+            "type": "string",
+            "description": "Human-readable name for this gateway node"
+          }
+        }
+      },
+      "labels": {
+        "type": "object",
+        "description": "Extra labels attached to every emitted event",
+        "additionalProperties": {
+          "type": "string"
+        }
+      },
+      "kafka": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "enabled": {
+            "type": "boolean",
+            "description": "Enable Kafka publishing; disabled by default"
+          },
+          "brokers": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Kafka broker addresses, for example [\"127.0.0.1:9092\"]"
+          },
+          "topic": {
+            "type": "string",
+            "description": "Kafka topic for probe events"
+          },
+          "clientId": {
+            "type": "string",
+            "description": "Kafka client id"
+          },
+          "flushIntervalMs": {
+            "type": "number",
+            "description": "Batch flush interval in milliseconds"
+          },
+          "batchMaxSize": {
+            "type": "number",
+            "description": "Maximum events per Kafka send request"
+          },
+          "maxQueueSize": {
+            "type": "number",
+            "description": "In-memory queue cap before dropping oldest events"
+          }
+        }
+      }
+    }
+  }
+}

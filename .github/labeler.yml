@@ -198,6 +198,10 @@
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/diagnostics-otel/**"
+"extensions: gateway-probe":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/gateway-probe/**"
 "extensions: llm-task":
   - changed-files:
       - any-glob-to-any-file:
