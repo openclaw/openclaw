@@ -251,6 +251,36 @@ env PATH="${BIN_NO_CAST}:/usr/bin:/bin" bash "$SCRIPT_PATH" --address "$ADDRESS"
 test "$missing_transactions_query_file_status" = "2"
 grep -F 'transactions query file not readable' "$missing_transactions_query_file_stderr" >/dev/null
 
+option_like_query_file="${TMP}/--query.graphql"
+option_like_variables_file="${TMP}/--variables.json"
+option_like_list_query_file="${TMP}/--list.graphql"
+option_like_transactions_query_file="${TMP}/--transactions.graphql"
+option_like_list_query='query SingleVaultList($addresses: [String!], $chainIds: [Int!]) { vaultV2s(where: { address_in: $addresses, chainId_in: $chainIds }) { items { address } } }'
+option_like_transactions_query='query SingleVaultTransactions($address: String!, $chainId: Int!) { vaultV2transactions(where: { vaultAddress_in: [$address], chainId_in: [$chainId] }, first: 1) { items { hash } } }'
+printf '%s\n' "$QUERY" >"$option_like_query_file"
+printf '%s\n' "$VARIABLES" >"$option_like_variables_file"
+printf '%s\n' "$option_like_list_query" >"$option_like_list_query_file"
+printf '%s\n' "$option_like_transactions_query" >"$option_like_transactions_query_file"
+
+option_like_file_output="$(
+  env PATH="${BIN_NO_CAST}:/usr/bin:/bin" \
+    MOCK_CURL_MODE=success \
+    bash "$SCRIPT_PATH" \
+      --address "$ADDRESS" \
+      --chain-id 8453 \
+      --query-file "$option_like_query_file" \
+      --variables-file "$option_like_variables_file" \
+      --list-query-file "$option_like_list_query_file" \
+      --transactions-query-file "$option_like_transactions_query_file"
+)"
+
+printf '%s\n' "$option_like_file_output" | jq -e '
+  .status == "ok"
+  and .probes.exact_query_replay.ok == "yes"
+  and .probes.vaultV2s_address_in.ok == "yes"
+  and .probes.vaultV2transactions.ok == "yes"
+' >/dev/null
+
 non_numeric_chain_status=0
 env PATH="${BIN_NO_CAST}:/usr/bin:/bin" bash "$SCRIPT_PATH" --address "$ADDRESS" --chain-id not-a-number --query "$QUERY" >/dev/null 2>&1 || non_numeric_chain_status=$?
 test "$non_numeric_chain_status" = "2"

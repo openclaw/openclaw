@@ -155,7 +155,7 @@ fi
 
 if [[ -n "$QUERY_FILE" ]]; then
   require_readable_file "query file" "$QUERY_FILE"
-  QUERY="$(cat "$QUERY_FILE")"
+  QUERY="$(cat -- "$QUERY_FILE")"
 fi
 
 [[ -n "$QUERY" ]] || {
@@ -165,7 +165,7 @@ fi
 
 if [[ -n "$VARIABLES_FILE" ]]; then
   require_readable_file "variables file" "$VARIABLES_FILE"
-  VARIABLES_JSON="$(cat "$VARIABLES_FILE")"
+  VARIABLES_JSON="$(cat -- "$VARIABLES_FILE")"
 fi
 
 if [[ -z "$VARIABLES_JSON" ]]; then
@@ -229,7 +229,7 @@ graphql_request() {
     printf 'curl did not report an HTTP status\n' >&2
     return 1
   }
-  cat "$response_file"
+  cat -- "$response_file"
   rm -f -- "$response_file"
 }
 
@@ -266,7 +266,7 @@ run_probe() {
       response_summary "$name" "$raw"
       exit 0
     fi
-    err="$(cat "$stderr_file")"
+    err="$(cat -- "$stderr_file")"
     jq -nc \
       --arg name "$name" \
       --arg err "$err" \
@@ -299,7 +299,7 @@ run_cast_probe() {
       status="ok"
     else
       value=""
-      err="$(cat "$stderr_file")"
+      err="$(cat -- "$stderr_file")"
       status="failed"
     fi
     jq -nc \
@@ -345,12 +345,12 @@ sanitize_rpc_probe() {
 
 if [[ -n "$LIST_QUERY_FILE" ]]; then
   require_readable_file "list query file" "$LIST_QUERY_FILE"
-  LIST_QUERY_DEFAULT="$(cat "$LIST_QUERY_FILE")"
+  LIST_QUERY_DEFAULT="$(cat -- "$LIST_QUERY_FILE")"
 fi
 
 if [[ -n "$TRANSACTIONS_QUERY_FILE" ]]; then
   require_readable_file "transactions query file" "$TRANSACTIONS_QUERY_FILE"
-  TRANSACTIONS_QUERY_DEFAULT="$(cat "$TRANSACTIONS_QUERY_FILE")"
+  TRANSACTIONS_QUERY_DEFAULT="$(cat -- "$TRANSACTIONS_QUERY_FILE")"
 fi
 
 control_probe='{"name":"same_chain_control","ok":"skipped","error_count":0,"first_error":null,"data":null}'
