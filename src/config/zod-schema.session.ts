@@ -187,6 +187,17 @@ export const MessagesSchema = z
       .strict()
       .optional(),
     suppressToolErrors: z.boolean().optional(),
+    outbound: z
+      .object({
+        text: z
+          .object({
+            emDash: z.enum(["preserve", "comma"]).optional(),
+          })
+          .strict()
+          .optional(),
+      })
+      .strict()
+      .optional(),
     tts: TtsConfigSchema,
   })
   .strict()

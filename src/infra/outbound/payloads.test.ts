@@ -1,12 +1,21 @@
 import { describe, expect, it } from "vitest";
 import type { ReplyPayload } from "../../auto-reply/types.js";
+import type { OpenClawConfig } from "../../config/config.js";
 import { typedCases } from "../../test-utils/typed-cases.js";
 import {
   formatOutboundPayloadLog,
   normalizeOutboundPayloads,
   normalizeOutboundPayloadsForJson,
   normalizeReplyPayloadsForDelivery,
+  rewriteEmDashesAsCommas,
 } from "./payloads.js";
+
+describe("rewriteEmDashesAsCommas", () => {
+  it("normalizes em dashes into commas with natural spacing", () => {
+    expect(rewriteEmDashesAsCommas("Hello—world — again —")).toBe("Hello, world, again");
+    expect(rewriteEmDashesAsCommas("Wait — really?")).toBe("Wait, really?");
+  });
+});
 
 describe("normalizeReplyPayloadsForDelivery", () => {
   it("parses directives, merges media, and preserves reply metadata", () => {
@@ -69,6 +78,35 @@ describe("normalizeReplyPayloadsForDelivery", () => {
         replyToTag: true,
         audioAsVoice: false,
         channelData: { line: { flexMessage: { altText: "Card", contents: {} } } },
+      },
+    ]);
+  });
+
+  it("applies configured outbound em-dash rewriting", () => {
+    const cfg: OpenClawConfig = {
+      messages: {
+        outbound: {
+          text: {
+            emDash: "comma",
+          },
+        },
+      },
+    };
+
+    expect(
+      normalizeReplyPayloadsForDelivery([{ text: "Hello—world — again" }], {
+        cfg,
+        channel: "imessage",
+      }),
+    ).toEqual([
+      {
+        text: "Hello, world, again",
+        mediaUrls: undefined,
+        mediaUrl: undefined,
+        replyToId: undefined,
+        replyToCurrent: false,
+        replyToTag: false,
+        audioAsVoice: false,
       },
     ]);
   });

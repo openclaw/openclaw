@@ -297,6 +297,31 @@ describe("gateway url override hardening", () => {
     };
     expect(call.params?.agentId).toBe("work");
   });
+
+  it("rewrites em dashes in gateway-mode outbound content when configured", async () => {
+    setMattermostGatewayRegistry();
+
+    callGatewayMock.mockResolvedValueOnce({ messageId: "m-emdash" });
+    await sendMessage({
+      cfg: {
+        messages: {
+          outbound: {
+            text: {
+              emDash: "comma",
+            },
+          },
+        },
+      },
+      to: "channel:town-square",
+      content: "hi — there",
+      channel: "mattermost",
+    });
+
+    const call = callGatewayMock.mock.calls[0]?.[0] as {
+      params?: Record<string, unknown>;
+    };
+    expect(call.params?.message).toBe("hi, there");
+  });
 });
 
 const emptyRegistry = createTestRegistry([]);

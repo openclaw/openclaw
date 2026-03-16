@@ -203,9 +203,14 @@ export const sendHandlers: GatewayRequestHandlers = {
         });
         const deliveryTarget = idLikeTarget?.to ?? resolved.to;
         const outboundDeps = context.deps ? createOutboundSendDeps(context.deps) : undefined;
-        const mirrorPayloads = normalizeReplyPayloadsForDelivery([
-          { text: message, mediaUrl, mediaUrls },
-        ]);
+        const mirrorPayloads = normalizeReplyPayloadsForDelivery(
+          [{ text: message, mediaUrl, mediaUrls }],
+          {
+            cfg,
+            channel,
+            accountId,
+          },
+        );
         const mirrorText = mirrorPayloads
           .map((payload) => payload.text)
           .filter(Boolean)

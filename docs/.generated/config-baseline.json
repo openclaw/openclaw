@@ -42732,6 +42732,52 @@
       "hasChildren": false
     },
     {
+      "path": "messages.outbound",
+      "kind": "core",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Outbound Message Formatting",
+      "help": "Shared outbound formatting and normalization controls applied before messages are sent to channels. Use this section for global reply-text rewrites that should stay consistent across send paths.",
+      "hasChildren": true
+    },
+    {
+      "path": "messages.outbound.text",
+      "kind": "core",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Outbound Text Normalization",
+      "help": "Outbound plain-text normalization settings applied to assistant reply text before channel delivery. Keep these conservative so formatting changes stay predictable across providers.",
+      "hasChildren": true
+    },
+    {
+      "path": "messages.outbound.text.emDash",
+      "kind": "core",
+      "type": "string",
+      "required": false,
+      "enumValues": [
+        "preserve",
+        "comma"
+      ],
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Outbound Em Dash Rewrite",
+      "help": "Controls how outbound Unicode em dashes (`—`) are handled: \"preserve\" keeps existing behavior, while \"comma\" rewrites em dashes to commas with normalized surrounding spacing.",
+      "hasChildren": false
+    },
+    {
       "path": "messages.queue",
       "kind": "core",
       "type": "object",
@@ -58804,7 +58850,7 @@
         "advanced"
       ],
       "label": "Setup Wizard State",
-      "help": "Setup wizard state tracking fields that record the most recent guided onboarding run details. Keep these fields for observability and troubleshooting of setup flows across upgrades.",
+      "help": "Setup wizard state tracking fields that record the most recent guided setup run details. Keep these fields for observability and troubleshooting of setup flows across upgrades.",
       "hasChildren": true
     },
     {
@@ -58818,7 +58864,7 @@
         "advanced"
       ],
       "label": "Wizard Last Run Timestamp",
-      "help": "ISO timestamp for when the setup wizard most recently completed on this host. Use this to confirm onboarding recency during support and operational audits.",
+      "help": "ISO timestamp for when the setup wizard most recently completed on this host. Use this to confirm setup recency during support and operational audits.",
       "hasChildren": false
     },
     {
@@ -58832,7 +58878,7 @@
         "advanced"
       ],
       "label": "Wizard Last Run Command",
-      "help": "Command invocation recorded for the latest wizard run to preserve execution context. Use this to reproduce onboarding steps when verifying setup regressions.",
+      "help": "Command invocation recorded for the latest wizard run to preserve execution context. Use this to reproduce setup steps when verifying setup regressions.",
       "hasChildren": false
     },
     {
@@ -58846,7 +58892,7 @@
         "advanced"
       ],
       "label": "Wizard Last Run Commit",
-      "help": "Source commit identifier recorded for the last wizard execution in development builds. Use this to correlate onboarding behavior with exact source state during debugging.",
+      "help": "Source commit identifier recorded for the last wizard execution in development builds. Use this to correlate setup behavior with exact source state during debugging.",
       "hasChildren": false
     },
     {
@@ -58874,7 +58920,7 @@
         "advanced"
       ],
       "label": "Wizard Last Run Version",
-      "help": "OpenClaw version recorded at the time of the most recent wizard run on this config. Use this when diagnosing behavior differences across version-to-version onboarding changes.",
+      "help": "OpenClaw version recorded at the time of the most recent wizard run on this config. Use this when diagnosing behavior differences across version-to-version setup changes.",
       "hasChildren": false
     }
   ]

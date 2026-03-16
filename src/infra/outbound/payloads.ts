@@ -1,3 +1,4 @@
+import { resolveOutboundEmDashMode } from "../../agents/identity.js";
 import { parseReplyDirectives } from "../../auto-reply/reply/reply-directives.js";
 import {
   formatBtwTextForExternalDelivery,
@@ -5,6 +6,7 @@ import {
   shouldSuppressReasoningPayload,
 } from "../../auto-reply/reply/reply-payloads.js";
 import type { ReplyPayload } from "../../auto-reply/types.js";
+import type { OpenClawConfig } from "../../config/config.js";
 import type { InteractiveReply } from "../../interactive/payload.js";
 
 export type NormalizedOutboundPayload = {
@@ -44,8 +46,41 @@ function mergeMediaUrls(...lists: Array<ReadonlyArray<string | undefined> | unde
   return merged;
 }
 
+export type OutboundTextTransformOptions = {
+  cfg?: OpenClawConfig;
+  channel?: string;
+  accountId?: string;
+};
+
+export function rewriteEmDashesAsCommas(text: string): string {
+  return text
+    .replace(/\s*—\s*/g, ", ")
+    .replace(/,\s+([,.;:!?])/g, "$1")
+    .replace(/,\s*$/g, "");
+}
+
+export function applyOutboundTextTransforms(
+  text: string,
+  opts?: OutboundTextTransformOptions,
+): string {
+  if (!text) {
+    return text;
+  }
+  const emDashMode = opts?.cfg
+    ? resolveOutboundEmDashMode(opts.cfg, {
+        channel: opts.channel,
+        accountId: opts.accountId,
+      })
+    : "preserve";
+  if (emDashMode === "comma") {
+    return rewriteEmDashesAsCommas(text);
+  }
+  return text;
+}
+
 export function normalizeReplyPayloadsForDelivery(
   payloads: readonly ReplyPayload[],
+  opts?: OutboundTextTransformOptions,
 ): ReplyPayload[] {
   const normalized: ReplyPayload[] = [];
   for (const payload of payloads) {
@@ -63,11 +98,13 @@ export function normalizeReplyPayloadsForDelivery(
     const resolvedMediaUrl = hasMultipleMedia ? undefined : explicitMediaUrl;
     const next: ReplyPayload = {
       ...payload,
-      text:
+      text: applyOutboundTextTransforms(
         formatBtwTextForExternalDelivery({
           ...payload,
           text: parsed.text ?? "",
         }) ?? "",
+        opts,
+      ),
       mediaUrls: mergedMedia.length ? mergedMedia : undefined,
       mediaUrl: resolvedMediaUrl,
       replyToId: payload.replyToId ?? parsed.replyToId,

@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
-import { resolveResponsePrefix, resolveEffectiveMessagesConfig } from "./identity.js";
+import {
+  resolveEffectiveMessagesConfig,
+  resolveOutboundEmDashMode,
+  resolveResponsePrefix,
+} from "./identity.js";
 
 const makeConfig = <T extends OpenClawConfig>(cfg: T) => cfg;
 
@@ -295,6 +299,80 @@ describe("resolveResponsePrefix with per-channel override", () => {
       } satisfies OpenClawConfig);
       const result = resolveEffectiveMessagesConfig(cfg, "main");
       expect(result.responsePrefix).toBe("[Global] ");
+    });
+  });
+
+  describe("resolveOutboundEmDashMode", () => {
+    it("defaults to preserve when unset", () => {
+      expect(resolveOutboundEmDashMode(makeConfig({} satisfies OpenClawConfig))).toBe("preserve");
+    });
+
+    it("uses the global outbound text setting", () => {
+      const cfg = makeConfig({
+        messages: {
+          outbound: {
+            text: {
+              emDash: "comma",
+            },
+          },
+        },
+      } satisfies OpenClawConfig);
+      expect(resolveOutboundEmDashMode(cfg)).toBe("comma");
+    });
+
+    it("lets channel overrides win over the global setting", () => {
+      const cfg = makeConfig({
+        messages: {
+          outbound: {
+            text: {
+              emDash: "preserve",
+            },
+          },
+        },
+        channels: {
+          imessage: {
+            outbound: {
+              text: {
+                emDash: "comma",
+              },
+            },
+          },
+        },
+      } as OpenClawConfig);
+      expect(resolveOutboundEmDashMode(cfg, { channel: "imessage" })).toBe("comma");
+    });
+
+    it("lets account overrides win over channel and global settings", () => {
+      const cfg = makeConfig({
+        messages: {
+          outbound: {
+            text: {
+              emDash: "preserve",
+            },
+          },
+        },
+        channels: {
+          telegram: {
+            outbound: {
+              text: {
+                emDash: "preserve",
+              },
+            },
+            accounts: {
+              work: {
+                outbound: {
+                  text: {
+                    emDash: "comma",
+                  },
+                },
+              },
+            },
+          },
+        },
+      } as OpenClawConfig);
+      expect(resolveOutboundEmDashMode(cfg, { channel: "telegram", accountId: "work" })).toBe(
+        "comma",
+      );
     });
   });
 });

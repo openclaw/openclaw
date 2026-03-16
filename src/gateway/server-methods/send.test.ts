@@ -14,6 +14,7 @@ const mocks = vi.hoisted(() => ({
   sendPoll: vi.fn(async () => ({ messageId: "poll-1" })),
   getChannelPlugin: vi.fn(),
   loadOpenClawPlugins: vi.fn(),
+  loadConfig: vi.fn(() => ({})),
 }));
 
 vi.mock("../../config/config.js", async () => {
@@ -21,7 +22,7 @@ vi.mock("../../config/config.js", async () => {
     await vi.importActual<typeof import("../../config/config.js")>("../../config/config.js");
   return {
     ...actual,
-    loadConfig: () => ({}),
+    loadConfig: mocks.loadConfig,
   };
 });
 
@@ -144,6 +145,7 @@ describe("gateway send mirroring", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    mocks.loadConfig.mockReturnValue({});
     registrySeq += 1;
     setActivePluginRegistry(createTestRegistry([]), `send-test-${registrySeq}`);
     mocks.resolveOutboundTarget.mockReturnValue({ ok: true, to: "resolved" });
@@ -175,6 +177,34 @@ describe("gateway send mirroring", () => {
       expect.objectContaining({ messageId: "m-media" }),
       undefined,
       expect.objectContaining({ channel: "slack" }),
+    );
+  });
+
+  it("normalizes mirrored outbound text using the configured em-dash rewrite", async () => {
+    mockDeliverySuccess("m-text");
+
+    mocks.loadConfig.mockReturnValue({
+      messages: {
+        outbound: {
+          text: {
+            emDash: "comma",
+          },
+        },
+      },
+    });
+
+    await runSend({
+      to: "channel:C1",
+      message: "hi — there",
+      channel: "slack",
+      idempotencyKey: "idem-emdash",
+    });
+
+    expect(mocks.deliverOutboundPayloads).toHaveBeenCalledWith(
+      expect.objectContaining({
+        payloads: [expect.objectContaining({ text: "hi — there" })],
+        mirror: expect.objectContaining({ text: "hi, there" }),
+      }),
     );
   });
 

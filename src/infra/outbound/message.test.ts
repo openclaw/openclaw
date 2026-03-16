@@ -104,6 +104,39 @@ describe("sendMessage", () => {
     );
   });
 
+  it("applies outbound em-dash rewriting before mirroring and delivery", async () => {
+    await sendMessage({
+      cfg: {
+        messages: {
+          outbound: {
+            text: {
+              emDash: "comma",
+            },
+          },
+        },
+      },
+      channel: "telegram",
+      to: "123456",
+      content: "hi — there",
+      mirror: {
+        sessionKey: "agent:main:telegram:dm:123456",
+      },
+    });
+
+    expect(mocks.deliverOutboundPayloads).toHaveBeenCalledWith(
+      expect.objectContaining({
+        payloads: [
+          expect.objectContaining({
+            text: "hi, there",
+          }),
+        ],
+        mirror: expect.objectContaining({
+          text: "hi, there",
+        }),
+      }),
+    );
+  });
+
   it("recovers telegram plugin resolution so message/send does not fail with Unknown channel: telegram", async () => {
     const telegramPlugin = {
       outbound: { deliveryMode: "direct" },
