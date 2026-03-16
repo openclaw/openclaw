@@ -33,6 +33,14 @@ function hasDiagnosticSourceSuffix(
   );
 }
 
+function canonicalExistingPath(filePath: string): string {
+  return fs.realpathSync.native(filePath);
+}
+
+function normalizeForSuffixMatch(filePath: string | undefined): string {
+  return (filePath ?? "").replaceAll("\\", "/");
+}
+
 function buildDiscoveryEnv(stateDir: string): NodeJS.ProcessEnv {
   return {
     OPENCLAW_STATE_DIR: stateDir,
@@ -258,10 +266,8 @@ describe("discoverOpenClawPlugins", () => {
     expect(bundle?.idHint).toBe("sample-bundle");
     expect(bundle?.format).toBe("bundle");
     expect(bundle?.bundleFormat).toBe("codex");
-    expect(bundle?.source).toBe(bundleDir);
-    expect(normalizePathForAssertion(bundle?.rootDir)).toBe(
-      normalizePathForAssertion(fs.realpathSync(bundleDir)),
-    );
+    expect(canonicalExistingPath(String(bundle?.source))).toBe(canonicalExistingPath(bundleDir));
+    expect(canonicalExistingPath(String(bundle?.rootDir))).toBe(canonicalExistingPath(bundleDir));
   });
 
   it("auto-detects manifestless Claude bundles from the default layout", async () => {
@@ -276,7 +282,7 @@ describe("discoverOpenClawPlugins", () => {
     expect(bundle).toBeDefined();
     expect(bundle?.format).toBe("bundle");
     expect(bundle?.bundleFormat).toBe("claude");
-    expect(bundle?.source).toBe(bundleDir);
+    expect(canonicalExistingPath(String(bundle?.source))).toBe(canonicalExistingPath(bundleDir));
   });
 
   it("auto-detects Cursor bundles as bundle candidates", async () => {
@@ -298,7 +304,7 @@ describe("discoverOpenClawPlugins", () => {
     expect(bundle).toBeDefined();
     expect(bundle?.format).toBe("bundle");
     expect(bundle?.bundleFormat).toBe("cursor");
-    expect(bundle?.source).toBe(bundleDir);
+    expect(canonicalExistingPath(String(bundle?.source))).toBe(canonicalExistingPath(bundleDir));
   });
 
   it("falls back to legacy index discovery when a scanned bundle sidecar is malformed", async () => {
@@ -316,6 +322,11 @@ describe("discoverOpenClawPlugins", () => {
     expect(legacy).toBeDefined();
     expect(legacy?.format).toBe("openclaw");
     expect(hasDiagnosticSourceSuffix(result.diagnostics, ".claude-plugin/plugin.json")).toBe(true);
+    expect(
+      result.diagnostics.some((entry) =>
+        normalizeForSuffixMatch(entry.source).endsWith(".claude-plugin/plugin.json"),
+      ),
+    ).toBe(true);
   });
 
   it("falls back to legacy index discovery for configured paths with malformed bundle sidecars", async () => {
@@ -335,6 +346,11 @@ describe("discoverOpenClawPlugins", () => {
     expect(legacy).toBeDefined();
     expect(legacy?.format).toBe("openclaw");
     expect(hasDiagnosticSourceSuffix(result.diagnostics, ".codex-plugin/plugin.json")).toBe(true);
+    expect(
+      result.diagnostics.some((entry) =>
+        normalizeForSuffixMatch(entry.source).endsWith(".codex-plugin/plugin.json"),
+      ),
+    ).toBe(true);
   });
 
   it("blocks extension entries that escape package directory", async () => {
