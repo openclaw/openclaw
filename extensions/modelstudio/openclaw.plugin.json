@@ -1,0 +1,12 @@
+{
+  "id": "modelstudio",
+  "providers": ["modelstudio"],
+  "providerAuthEnvVars": {
+    "modelstudio": ["MODELSTUDIO_API_KEY"]
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

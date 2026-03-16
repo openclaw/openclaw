@@ -384,6 +384,7 @@ export async function runExecProcess(opts: {
     typeof opts.timeoutSec === "number" && opts.timeoutSec > 0
       ? Math.floor(opts.timeoutSec * 1000)
       : undefined;
+  let sandboxFinalizeToken: unknown;
 
   const spawnSpec:
     | {
@@ -398,11 +399,18 @@ export async function runExecProcess(opts: {
         childFallbackArgv: string[];
         env: NodeJS.ProcessEnv;
         stdinMode: "pipe-open";
-      } = (() => {
+      } = await (async () => {
     if (opts.sandbox) {
+      const backendExecSpec = await opts.sandbox.buildExecSpec?.({
+        command: execCommand,
+        workdir: opts.containerWorkdir ?? opts.sandbox.containerWorkdir,
+        env: shellRuntimeEnv,
+        usePty: opts.usePty,
+      });
+      sandboxFinalizeToken = backendExecSpec?.finalizeToken;
       return {
         mode: "child" as const,
-        argv: [
+        argv: backendExecSpec?.argv ?? [
           "docker",
           ...buildDockerExecArgs({
             containerName: opts.sandbox.containerName,
@@ -412,8 +420,10 @@ export async function runExecProcess(opts: {
             tty: opts.usePty,
           }),
         ],
-        env: process.env,
-        stdinMode: opts.usePty ? ("pipe-open" as const) : ("pipe-closed" as const),
+        env: backendExecSpec?.env ?? process.env,
+        stdinMode:
+          backendExecSpec?.stdinMode ??
+          (opts.usePty ? ("pipe-open" as const) : ("pipe-closed" as const)),
       };
     }
     const { shell, args: shellArgs } = getShellConfig();
@@ -519,7 +529,7 @@ export async function runExecProcess(opts: {
 
   const promise = managedRun
     .wait()
-    .then((exit): ExecProcessOutcome => {
+    .then(async (exit): Promise<ExecProcessOutcome> => {
       const durationMs = Date.now() - startedAt;
       const isNormalExit = exit.reason === "exit";
       const exitCode = exit.exitCode ?? 0;
@@ -536,6 +546,14 @@ export async function runExecProcess(opts: {
         session.stdin.destroyed = true;
       }
       const aggregated = session.aggregated.trim();
+      if (opts.sandbox?.finalizeExec) {
+        await opts.sandbox.finalizeExec({
+          status,
+          exitCode: exit.exitCode ?? null,
+          timedOut: exit.timedOut,
+          token: sandboxFinalizeToken,
+        });
+      }
       if (status === "completed") {
         const exitMsg = exitCode !== 0 ? `\n\n(Command exited with code ${exitCode})` : "";
         return {

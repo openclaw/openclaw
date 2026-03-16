@@ -364,6 +364,23 @@ describe("failover-error", () => {
     expect(isTimeoutError(err)).toBe(true);
   });
 
+  it("classifies abort-wrapped RESOURCE_EXHAUSTED as rate_limit", () => {
+    const err = Object.assign(new Error("request aborted"), {
+      name: "AbortError",
+      cause: {
+        error: {
+          code: 429,
+          message: GEMINI_RESOURCE_EXHAUSTED_MESSAGE,
+          status: "RESOURCE_EXHAUSTED",
+        },
+      },
+    });
+
+    expect(resolveFailoverReasonFromError(err)).toBe("rate_limit");
+    expect(coerceToFailoverError(err)?.reason).toBe("rate_limit");
+    expect(coerceToFailoverError(err)?.status).toBe(429);
+  });
+
   it("coerces failover-worthy errors into FailoverError with metadata", () => {
     const err = coerceToFailoverError("credit balance too low", {
       provider: "anthropic",

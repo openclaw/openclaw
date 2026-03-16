@@ -1,3 +1,4 @@
+import { hasPotentialConfiguredChannels } from "../channels/config-presence.js";
 import { resolveCommandSecretRefsViaGateway } from "../cli/command-secret-gateway.js";
 import { getStatusCommandSecretTargetIds } from "../cli/command-secret-targets.js";
 import { withProgress } from "../cli/progress.js";
@@ -46,6 +47,13 @@ type GatewayProbeSnapshot = {
   gatewayProbe: Awaited<ReturnType<typeof probeGateway>> | null;
 };
 
+let pluginRegistryModulePromise: Promise<typeof import("../cli/plugin-registry.js")> | undefined;
+
+function loadPluginRegistryModule() {
+  pluginRegistryModulePromise ??= import("../cli/plugin-registry.js");
+  return pluginRegistryModulePromise;
+}
+
 function deferResult<T>(promise: Promise<T>): Promise<DeferredResult<T>> {
   return promise.then(
     (value) => ({ ok: true, value }),
@@ -90,6 +98,7 @@ async function resolveGatewayProbeSnapshot(params: {
         url: gatewayConnection.url,
         auth: gatewayProbeAuthResolution.auth,
         timeoutMs: Math.min(params.opts.all ? 5000 : 2500, params.opts.timeoutMs ?? 10_000),
+        detailLevel: "presence",
       }).catch(() => null);
   if (gatewayProbeAuthWarning && gatewayProbe?.ok === false) {
     gatewayProbe.error = gatewayProbe.error
@@ -189,8 +198,12 @@ async function scanStatusJsonFast(opts: {
       config: loadedRaw,
       commandName: "status --json",
       targetIds: getStatusCommandSecretTargetIds(),
-      mode: "summary",
+      mode: "read_only_status",
     });
+  if (hasPotentialConfiguredChannels(cfg)) {
+    const { ensurePluginRegistryLoaded } = await loadPluginRegistryModule();
+    ensurePluginRegistryLoaded({ scope: "configured-channels" });
+  }
   const osSummary = resolveOsSummary();
   const tailscaleMode = cfg.gateway?.tailscale?.mode ?? "off";
   const updateTimeoutMs = opts.all ? 6500 : 2500;
@@ -235,11 +248,9 @@ async function scanStatusJsonFast(opts: {
   const gatewaySelf = gatewayProbe?.presence
     ? pickGatewaySelfPresence(gatewayProbe.presence)
     : null;
-  const channelsStatusPromise = resolveChannelsStatus({ cfg, gatewayReachable, opts });
   const memoryPlugin = resolveMemoryPluginStatus(cfg);
   const memoryPromise = resolveMemoryStatusSnapshot({ cfg, agentStatus, memoryPlugin });
-  const [channelsStatus, memory] = await Promise.all([channelsStatusPromise, memoryPromise]);
-  const channelIssues = channelsStatus ? collectChannelStatusIssues(channelsStatus) : [];
+  const memory = await memoryPromise;
 
   return {
     cfg,
@@ -258,7 +269,7 @@ async function scanStatusJsonFast(opts: {
     gatewayProbe,
     gatewayReachable,
     gatewaySelf,
-    channelIssues,
+    channelIssues: [],
     agentStatus,
     channels: { rows: [], details: [] },
     summary,
@@ -292,7 +303,7 @@ export async function scanStatus(
           config: loadedRaw,
           commandName: "status",
           targetIds: getStatusCommandSecretTargetIds(),
-          mode: "summary",
+          mode: "read_only_status",
         });
       const osSummary = resolveOsSummary();
       const tailscaleMode = cfg.gateway?.tailscale?.mode ?? "off";

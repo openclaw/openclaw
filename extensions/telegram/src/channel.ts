@@ -7,7 +7,6 @@ import {
   formatAllowFromLowercase,
 } from "openclaw/plugin-sdk/compat";
 import {
-  applyAccountNameToChannelSection,
   buildChannelConfigSchema,
   buildTokenChannelStatusSummary,
   clearAccountEntryFields,
@@ -19,7 +18,6 @@ import {
   listTelegramDirectoryGroupsFromConfig,
   listTelegramDirectoryPeersFromConfig,
   looksLikeTelegramTargetId,
-  migrateBaseNameToDefaultAccount,
   normalizeAccountId,
   normalizeTelegramMessagingTarget,
   PAIRING_APPROVED_MESSAGE,
@@ -32,7 +30,6 @@ import {
   resolveTelegramGroupRequireMention,
   resolveTelegramGroupToolPolicy,
   sendTelegramPayloadMessages,
-  telegramOnboardingAdapter,
   TelegramConfigSchema,
   type ChannelMessageActionAdapter,
   type ChannelPlugin,
@@ -40,7 +37,17 @@ import {
   type ResolvedTelegramAccount,
   type TelegramProbe,
 } from "openclaw/plugin-sdk/telegram";
+import {
+  type OutboundSendDeps,
+  resolveOutboundSendDep,
+} from "../../../src/infra/outbound/send-deps.js";
 import { getTelegramRuntime } from "./runtime.js";
+import { telegramSetupAdapter } from "./setup-core.js";
+import { telegramSetupWizard } from "./setup-surface.js";
+
+type TelegramSendFn = ReturnType<
+  typeof getTelegramRuntime
+>["channel"]["telegram"]["sendMessageTelegram"];
 
 const meta = getChatChannelMeta("telegram");
 
@@ -75,6 +82,61 @@ function formatDuplicateTelegramTokenReason(params: {
   return (
     `Duplicate Telegram bot token: account "${params.accountId}" shares a token with ` +
     `account "${params.ownerAccountId}". Keep one owner account per bot token.`
+  );
+}
+
+type TelegramSendOptions = NonNullable<Parameters<TelegramSendFn>[2]>;
+
+function buildTelegramSendOptions(params: {
+  cfg: OpenClawConfig;
+  mediaUrl?: string | null;
+  mediaLocalRoots?: readonly string[] | null;
+  accountId?: string | null;
+  replyToId?: string | null;
+  threadId?: string | number | null;
+  silent?: boolean | null;
+  forceDocument?: boolean | null;
+}): TelegramSendOptions {
+  return {
+    verbose: false,
+    cfg: params.cfg,
+    ...(params.mediaUrl ? { mediaUrl: params.mediaUrl } : {}),
+    ...(params.mediaLocalRoots?.length ? { mediaLocalRoots: params.mediaLocalRoots } : {}),
+    messageThreadId: parseTelegramThreadId(params.threadId),
+    replyToMessageId: parseTelegramReplyToMessageId(params.replyToId),
+    accountId: params.accountId ?? undefined,
+    silent: params.silent ?? undefined,
+    forceDocument: params.forceDocument ?? undefined,
+  };
+}
+
+async function sendTelegramOutbound(params: {
+  cfg: OpenClawConfig;
+  to: string;
+  text: string;
+  mediaUrl?: string | null;
+  mediaLocalRoots?: readonly string[] | null;
+  accountId?: string | null;
+  deps?: OutboundSendDeps;
+  replyToId?: string | null;
+  threadId?: string | number | null;
+  silent?: boolean | null;
+}) {
+  const send =
+    resolveOutboundSendDep<TelegramSendFn>(params.deps, "telegram") ??
+    getTelegramRuntime().channel.telegram.sendMessageTelegram;
+  return await send(
+    params.to,
+    params.text,
+    buildTelegramSendOptions({
+      cfg: params.cfg,
+      mediaUrl: params.mediaUrl,
+      mediaLocalRoots: params.mediaLocalRoots,
+      accountId: params.accountId,
+      replyToId: params.replyToId,
+      threadId: params.threadId,
+      silent: params.silent,
+    }),
   );
 }
 
@@ -123,7 +185,7 @@ export const telegramPlugin: ChannelPlugin<ResolvedTelegramAccount, TelegramProb
     ...meta,
     quickstartAllowFrom: true,
   },
-  onboarding: telegramOnboardingAdapter,
+  setupWizard: telegramSetupWizard,
   pairing: {
     idLabel: "telegramUserId",
     normalizeAllowEntry: (entry) => entry.replace(/^(telegram|tg):/i, ""),
@@ -234,81 +296,7 @@ export const telegramPlugin: ChannelPlugin<ResolvedTelegramAccount, TelegramProb
     listGroups: async (params) => listTelegramDirectoryGroupsFromConfig(params),
   },
   actions: telegramMessageActions,
-  setup: {
-    resolveAccountId: ({ accountId }) => normalizeAccountId(accountId),
-    applyAccountName: ({ cfg, accountId, name }) =>
-      applyAccountNameToChannelSection({
-        cfg,
-        channelKey: "telegram",
-        accountId,
-        name,
-      }),
-    validateInput: ({ accountId, input }) => {
-      if (input.useEnv && accountId !== DEFAULT_ACCOUNT_ID) {
-        return "TELEGRAM_BOT_TOKEN can only be used for the default account.";
-      }
-      if (!input.useEnv && !input.token && !input.tokenFile) {
-        return "Telegram requires token or --token-file (or --use-env).";
-      }
-      return null;
-    },
-    applyAccountConfig: ({ cfg, accountId, input }) => {
-      const namedConfig = applyAccountNameToChannelSection({
-        cfg,
-        channelKey: "telegram",
-        accountId,
-        name: input.name,
-      });
-      const next =
-        accountId !== DEFAULT_ACCOUNT_ID
-          ? migrateBaseNameToDefaultAccount({
-              cfg: namedConfig,
-              channelKey: "telegram",
-            })
-          : namedConfig;
-      if (accountId === DEFAULT_ACCOUNT_ID) {
-        return {
-          ...next,
-          channels: {
-            ...next.channels,
-            telegram: {
-              ...next.channels?.telegram,
-              enabled: true,
-              ...(input.useEnv
-                ? {}
-                : input.tokenFile
-                  ? { tokenFile: input.tokenFile }
-                  : input.token
-                    ? { botToken: input.token }
-                    : {}),
-            },
-          },
-        };
-      }
-      return {
-        ...next,
-        channels: {
-          ...next.channels,
-          telegram: {
-            ...next.channels?.telegram,
-            enabled: true,
-            accounts: {
-              ...next.channels?.telegram?.accounts,
-              [accountId]: {
-                ...next.channels?.telegram?.accounts?.[accountId],
-                enabled: true,
-                ...(input.tokenFile
-                  ? { tokenFile: input.tokenFile }
-                  : input.token
-                    ? { botToken: input.token }
-                    : {}),
-              },
-            },
-          },
-        },
-      };
-    },
-  },
+  setup: telegramSetupAdapter,
   outbound: {
     deliveryMode: "direct",
     chunker: (text, limit) => getTelegramRuntime().channel.text.chunkMarkdownText(text, limit),
@@ -325,37 +313,37 @@ export const telegramPlugin: ChannelPlugin<ResolvedTelegramAccount, TelegramProb
       replyToId,
       threadId,
       silent,
+      forceDocument,
     }) => {
-      const send = deps?.sendTelegram ?? getTelegramRuntime().channel.telegram.sendMessageTelegram;
-      const replyToMessageId = parseTelegramReplyToMessageId(replyToId);
-      const messageThreadId = parseTelegramThreadId(threadId);
+      const send =
+        resolveOutboundSendDep<TelegramSendFn>(deps, "telegram") ??
+        getTelegramRuntime().channel.telegram.sendMessageTelegram;
       const result = await sendTelegramPayloadMessages({
         send,
         to,
         payload,
-        baseOpts: {
-          verbose: false,
+        baseOpts: buildTelegramSendOptions({
           cfg,
           mediaLocalRoots,
-          messageThreadId,
-          replyToMessageId,
-          accountId: accountId ?? undefined,
-          silent: silent ?? undefined,
-        },
+          accountId,
+          replyToId,
+          threadId,
+          silent,
+          forceDocument,
+        }),
       });
       return { channel: "telegram", ...result };
     },
     sendText: async ({ cfg, to, text, accountId, deps, replyToId, threadId, silent }) => {
-      const send = deps?.sendTelegram ?? getTelegramRuntime().channel.telegram.sendMessageTelegram;
-      const replyToMessageId = parseTelegramReplyToMessageId(replyToId);
-      const messageThreadId = parseTelegramThreadId(threadId);
-      const result = await send(to, text, {
-        verbose: false,
+      const result = await sendTelegramOutbound({
         cfg,
-        messageThreadId,
-        replyToMessageId,
-        accountId: accountId ?? undefined,
-        silent: silent ?? undefined,
+        to,
+        text,
+        accountId,
+        deps,
+        replyToId,
+        threadId,
+        silent,
       });
       return { channel: "telegram", ...result };
     },
@@ -371,18 +359,17 @@ export const telegramPlugin: ChannelPlugin<ResolvedTelegramAccount, TelegramProb
       threadId,
       silent,
     }) => {
-      const send = deps?.sendTelegram ?? getTelegramRuntime().channel.telegram.sendMessageTelegram;
-      const replyToMessageId = parseTelegramReplyToMessageId(replyToId);
-      const messageThreadId = parseTelegramThreadId(threadId);
-      const result = await send(to, text, {
-        verbose: false,
+      const result = await sendTelegramOutbound({
         cfg,
+        to,
+        text,
         mediaUrl,
         mediaLocalRoots,
-        messageThreadId,
-        replyToMessageId,
-        accountId: accountId ?? undefined,
-        silent: silent ?? undefined,
+        accountId,
+        deps,
+        replyToId,
+        threadId,
+        silent,
       });
       return { channel: "telegram", ...result };
     },

@@ -13,8 +13,6 @@ import type {
   OpenClawConfig,
 } from "openclaw/plugin-sdk/zalo";
 import {
-  applyAccountNameToChannelSection,
-  applySetupAccountConfigPatch,
   buildBaseAccountStatusSnapshot,
   buildChannelConfigSchema,
   buildTokenChannelStatusSummary,
@@ -23,9 +21,7 @@ import {
   deleteAccountFromConfigSection,
   chunkTextForOutbound,
   formatAllowFromLowercase,
-  migrateBaseNameToDefaultAccount,
   listDirectoryUserEntriesFromAllowFrom,
-  normalizeAccountId,
   isNumericTargetId,
   PAIRING_APPROVED_MESSAGE,
   resolveOutboundMediaUrls,
@@ -40,11 +36,12 @@ import {
 } from "./accounts.js";
 import { zaloMessageActions } from "./actions.js";
 import { ZaloConfigSchema } from "./config-schema.js";
-import { zaloOnboardingAdapter } from "./onboarding.js";
 import { probeZalo } from "./probe.js";
 import { resolveZaloProxyFetch } from "./proxy.js";
 import { normalizeSecretInputString } from "./secret-input.js";
 import { sendMessageZalo } from "./send.js";
+import { zaloSetupAdapter } from "./setup-core.js";
+import { zaloSetupWizard } from "./setup-surface.js";
 import { collectZaloStatusIssues } from "./status-issues.js";
 
 const meta = {
@@ -92,7 +89,8 @@ export const zaloDock: ChannelDock = {
 export const zaloPlugin: ChannelPlugin<ResolvedZaloAccount> = {
   id: "zalo",
   meta,
-  onboarding: zaloOnboardingAdapter,
+  setup: zaloSetupAdapter,
+  setupWizard: zaloSetupWizard,
   capabilities: {
     chatTypes: ["direct", "group"],
     media: true,
@@ -211,53 +209,6 @@ export const zaloPlugin: ChannelPlugin<ResolvedZaloAccount> = {
       });
     },
     listGroups: async () => [],
-  },
-  setup: {
-    resolveAccountId: ({ accountId }) => normalizeAccountId(accountId),
-    applyAccountName: ({ cfg, accountId, name }) =>
-      applyAccountNameToChannelSection({
-        cfg: cfg,
-        channelKey: "zalo",
-        accountId,
-        name,
-      }),
-    validateInput: ({ accountId, input }) => {
-      if (input.useEnv && accountId !== DEFAULT_ACCOUNT_ID) {
-        return "ZALO_BOT_TOKEN can only be used for the default account.";
-      }
-      if (!input.useEnv && !input.token && !input.tokenFile) {
-        return "Zalo requires token or --token-file (or --use-env).";
-      }
-      return null;
-    },
-    applyAccountConfig: ({ cfg, accountId, input }) => {
-      const namedConfig = applyAccountNameToChannelSection({
-        cfg: cfg,
-        channelKey: "zalo",
-        accountId,
-        name: input.name,
-      });
-      const next =
-        accountId !== DEFAULT_ACCOUNT_ID
-          ? migrateBaseNameToDefaultAccount({
-              cfg: namedConfig,
-              channelKey: "zalo",
-            })
-          : namedConfig;
-      const patch = input.useEnv
-        ? {}
-        : input.tokenFile
-          ? { tokenFile: input.tokenFile }
-          : input.token
-            ? { botToken: input.token }
-            : {};
-      return applySetupAccountConfigPatch({
-        cfg: next,
-        channelKey: "zalo",
-        accountId,
-        patch,
-      });
-    },
   },
   pairing: {
     idLabel: "zaloUserId",

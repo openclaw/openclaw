@@ -84,6 +84,8 @@ export const FIELD_LABELS: Record<string, string> = {
   "gateway.tools.allow": "Gateway Tool Allowlist",
   "gateway.tools.deny": "Gateway Tool Denylist",
   "gateway.channelHealthCheckMinutes": "Gateway Channel Health Check Interval (min)",
+  "gateway.channelStaleEventThresholdMinutes": "Gateway Channel Stale Event Threshold (min)",
+  "gateway.channelMaxRestartsPerHour": "Gateway Channel Max Restarts Per Hour",
   "gateway.tailscale": "Gateway Tailscale",
   "gateway.tailscale.mode": "Gateway Tailscale Mode",
   "gateway.tailscale.resetOnExit": "Gateway Tailscale Reset on Exit",
@@ -219,6 +221,8 @@ export const FIELD_LABELS: Record<string, string> = {
   "tools.web.search.timeoutSeconds": "Web Search Timeout (sec)",
   "tools.web.search.cacheTtlMinutes": "Web Search Cache TTL (min)",
   "tools.web.search.brave.mode": "Brave Search Mode",
+  "tools.web.search.firecrawl.apiKey": "Firecrawl Search API Key", // pragma: allowlist secret
+  "tools.web.search.firecrawl.baseUrl": "Firecrawl Search Base URL",
   "tools.web.search.gemini.apiKey": "Gemini Search API Key", // pragma: allowlist secret
   "tools.web.search.gemini.model": "Gemini Search Model",
   "tools.web.search.grok.apiKey": "Grok Search API Key", // pragma: allowlist secret
@@ -472,6 +476,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "agents.defaults.compaction.qualityGuard.maxRetries": "Compaction Quality Guard Max Retries",
   "agents.defaults.compaction.postIndexSync": "Compaction Post-Index Sync",
   "agents.defaults.compaction.postCompactionSections": "Post-Compaction Context Sections",
+  "agents.defaults.compaction.timeoutSeconds": "Compaction Timeout (Seconds)",
   "agents.defaults.compaction.model": "Compaction Model Override",
   "agents.defaults.compaction.memoryFlush": "Compaction Memory Flush",
   "agents.defaults.compaction.memoryFlush.enabled": "Compaction Memory Flush Enabled",
@@ -654,6 +659,7 @@ export const FIELD_LABELS: Record<string, string> = {
   discovery: "Discovery",
   "discovery.wideArea": "Wide-area Discovery",
   "discovery.wideArea.enabled": "Wide-area Discovery Enabled",
+  "discovery.wideArea.domain": "Wide-area Discovery Domain",
   "discovery.mdns": "mDNS Discovery",
   canvasHost: "Canvas Host",
   "canvasHost.enabled": "Canvas Host Enabled",
@@ -812,6 +818,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "channels.slack.appToken": "Slack App Token",
   "channels.slack.userToken": "Slack User Token",
   "channels.slack.userTokenReadOnly": "Slack User Token Read Only",
+  "channels.slack.capabilities.interactiveReplies": "Slack Interactive Replies",
   "channels.slack.streaming": "Slack Streaming Mode",
   "channels.slack.nativeStreaming": "Slack Native Streaming",
   "channels.slack.streamMode": "Slack Stream Mode (Legacy)",
