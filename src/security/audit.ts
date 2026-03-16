@@ -21,32 +21,7 @@ import {
 } from "../infra/exec-safe-bin-runtime-policy.js";
 import { normalizeTrustedSafeBinDirs } from "../infra/exec-safe-bin-trust.js";
 import { DEFAULT_AGENT_ID } from "../routing/session-key.js";
-import { collectChannelSecurityFindings } from "./audit-channel.js";
-import {
-  collectAttackSurfaceSummaryFindings,
-  collectExposureMatrixFindings,
-  collectGatewayHttpNoAuthFindings,
-  collectGatewayHttpSessionKeyOverrideFindings,
-  collectHooksHardeningFindings,
-  collectIncludeFilePermFindings,
-  collectInstalledSkillsCodeSafetyFindings,
-  collectLikelyMultiUserSetupFindings,
-  collectSandboxBrowserHashLabelFindings,
-  collectMinimalProfileOverrideFindings,
-  collectModelHygieneFindings,
-  collectNodeDangerousAllowCommandFindings,
-  collectNodeDenyCommandPatternFindings,
-  collectSmallModelRiskFindings,
-  collectSandboxDangerousConfigFindings,
-  collectSandboxDockerNoopFindings,
-  collectPluginsTrustFindings,
-  collectSecretsInConfigFindings,
-  collectPluginsCodeSafetyFindings,
-  collectStateDeepFilesystemFindings,
-  collectSyncedFolderFindings,
-  collectWorkspaceSkillSymlinkEscapeFindings,
-  readConfigSnapshotForAudit,
-} from "./audit-extra.js";
+// audit-extra functions accessed via lazy-loaded runtime modules (loadAuditNonDeepModule, loadAuditDeepModule)
 import {
   formatPermissionDetail,
   formatPermissionRemediation,
@@ -133,6 +108,33 @@ type AuditExecutionContext = {
   configSnapshot: ConfigFileSnapshot | null;
   codeSafetySummaryCache: Map<string, Promise<unknown>>;
 };
+
+let channelPluginsModulePromise: Promise<typeof import("../channels/plugins/index.js")> | undefined;
+let auditNonDeepModulePromise: Promise<typeof import("./audit.nondeep.runtime.js")> | undefined;
+let auditDeepModulePromise: Promise<typeof import("./audit.deep.runtime.js")> | undefined;
+let auditChannelModulePromise:
+  | Promise<typeof import("./audit-channel.collect.runtime.js")>
+  | undefined;
+
+async function loadChannelPlugins() {
+  channelPluginsModulePromise ??= import("../channels/plugins/index.js");
+  return await channelPluginsModulePromise;
+}
+
+async function loadAuditNonDeepModule() {
+  auditNonDeepModulePromise ??= import("./audit.nondeep.runtime.js");
+  return await auditNonDeepModulePromise;
+}
+
+async function loadAuditDeepModule() {
+  auditDeepModulePromise ??= import("./audit.deep.runtime.js");
+  return await auditDeepModulePromise;
+}
+
+async function loadAuditChannelModule() {
+  auditChannelModulePromise ??= import("./audit-channel.collect.runtime.js");
+  return await auditChannelModulePromise;
+}
 
 function countBySeverity(findings: SecurityAuditFinding[]): SecurityAuditSummary {
   let critical = 0;
@@ -1263,6 +1265,7 @@ async function createAuditExecutionContext(
   const deepTimeoutMs = Math.max(250, opts.deepTimeoutMs ?? 5000);
   const stateDir = opts.stateDir ?? resolveStateDir(env);
   const configPath = opts.configPath ?? resolveConfigPath(env, stateDir);
+  const { readConfigSnapshotForAudit } = await loadAuditNonDeepModule();
   const configSnapshot = includeFilesystem
     ? opts.configSnapshot !== undefined
       ? opts.configSnapshot
@@ -1292,28 +1295,29 @@ export async function runSecurityAudit(opts: SecurityAuditOptions): Promise<Secu
   const findings: SecurityAuditFinding[] = [];
   const context = await createAuditExecutionContext(opts);
   const { cfg, env, platform, stateDir, configPath } = context;
+  const auditNonDeep = await loadAuditNonDeepModule();
 
-  findings.push(...collectAttackSurfaceSummaryFindings(cfg));
-  findings.push(...collectSyncedFolderFindings({ stateDir, configPath }));
+  findings.push(...auditNonDeep.collectAttackSurfaceSummaryFindings(cfg));
+  findings.push(...auditNonDeep.collectSyncedFolderFindings({ stateDir, configPath }));
 
   findings.push(...collectGatewayConfigFindings(cfg, env));
   findings.push(...collectBrowserControlFindings(cfg, env));
   findings.push(...collectLoggingFindings(cfg));
   findings.push(...collectElevatedFindings(cfg));
   findings.push(...collectExecRuntimeFindings(cfg));
-  findings.push(...collectHooksHardeningFindings(cfg, env));
-  findings.push(...collectGatewayHttpNoAuthFindings(cfg, env));
-  findings.push(...collectGatewayHttpSessionKeyOverrideFindings(cfg));
-  findings.push(...collectSandboxDockerNoopFindings(cfg));
-  findings.push(...collectSandboxDangerousConfigFindings(cfg));
-  findings.push(...collectNodeDenyCommandPatternFindings(cfg));
-  findings.push(...collectNodeDangerousAllowCommandFindings(cfg));
-  findings.push(...collectMinimalProfileOverrideFindings(cfg));
-  findings.push(...collectSecretsInConfigFindings(cfg));
-  findings.push(...collectModelHygieneFindings(cfg));
-  findings.push(...collectSmallModelRiskFindings({ cfg, env }));
-  findings.push(...collectExposureMatrixFindings(cfg));
-  findings.push(...collectLikelyMultiUserSetupFindings(cfg));
+  findings.push(...auditNonDeep.collectHooksHardeningFindings(cfg, env));
+  findings.push(...auditNonDeep.collectGatewayHttpNoAuthFindings(cfg, env));
+  findings.push(...auditNonDeep.collectGatewayHttpSessionKeyOverrideFindings(cfg));
+  findings.push(...auditNonDeep.collectSandboxDockerNoopFindings(cfg));
+  findings.push(...auditNonDeep.collectSandboxDangerousConfigFindings(cfg));
+  findings.push(...auditNonDeep.collectNodeDenyCommandPatternFindings(cfg));
+  findings.push(...auditNonDeep.collectNodeDangerousAllowCommandFindings(cfg));
+  findings.push(...auditNonDeep.collectMinimalProfileOverrideFindings(cfg));
+  findings.push(...auditNonDeep.collectSecretsInConfigFindings(cfg));
+  findings.push(...auditNonDeep.collectModelHygieneFindings(cfg));
+  findings.push(...auditNonDeep.collectSmallModelRiskFindings({ cfg, env }));
+  findings.push(...auditNonDeep.collectExposureMatrixFindings(cfg));
+  findings.push(...auditNonDeep.collectLikelyMultiUserSetupFindings(cfg));
 
   if (context.includeFilesystem) {
     findings.push(
@@ -1327,7 +1331,7 @@ export async function runSecurityAudit(opts: SecurityAuditOptions): Promise<Secu
     );
     if (context.configSnapshot) {
       findings.push(
-        ...(await collectIncludeFilePermFindings({
+        ...(await auditNonDeep.collectIncludeFilePermFindings({
           configSnapshot: context.configSnapshot,
           env,
           platform,
@@ -1336,7 +1340,7 @@ export async function runSecurityAudit(opts: SecurityAuditOptions): Promise<Secu
       );
     }
     findings.push(
-      ...(await collectStateDeepFilesystemFindings({
+      ...(await auditNonDeep.collectStateDeepFilesystemFindings({
         cfg,
         env,
         stateDir,
@@ -1344,22 +1348,23 @@ export async function runSecurityAudit(opts: SecurityAuditOptions): Promise<Secu
         execIcacls: context.execIcacls,
       })),
     );
-    findings.push(...(await collectWorkspaceSkillSymlinkEscapeFindings({ cfg })));
+    findings.push(...(await auditNonDeep.collectWorkspaceSkillSymlinkEscapeFindings({ cfg })));
     findings.push(
-      ...(await collectSandboxBrowserHashLabelFindings({
+      ...(await auditNonDeep.collectSandboxBrowserHashLabelFindings({
         execDockerRawFn: context.execDockerRawFn,
       })),
     );
-    findings.push(...(await collectPluginsTrustFindings({ cfg, stateDir })));
+    findings.push(...(await auditNonDeep.collectPluginsTrustFindings({ cfg, stateDir })));
     if (context.deep) {
+      const auditDeep = await loadAuditDeepModule();
       findings.push(
-        ...(await collectPluginsCodeSafetyFindings({
+        ...(await auditDeep.collectPluginsCodeSafetyFindings({
           stateDir,
           summaryCache: context.codeSafetySummaryCache,
         })),
       );
       findings.push(
-        ...(await collectInstalledSkillsCodeSafetyFindings({
+        ...(await auditDeep.collectInstalledSkillsCodeSafetyFindings({
           cfg,
           stateDir,
           summaryCache: context.codeSafetySummaryCache,
@@ -1368,13 +1373,17 @@ export async function runSecurityAudit(opts: SecurityAuditOptions): Promise<Secu
     }
   }
 
-  if (context.includeChannelSecurity) {
-    const plugins = context.plugins ?? listChannelPlugins();
+  const shouldAuditChannelSecurity =
+    context.includeChannelSecurity &&
+    (context.plugins !== undefined || hasPotentialConfiguredChannels(cfg, env));
+  if (shouldAuditChannelSecurity) {
+    const channelPlugins = context.plugins ?? (await loadChannelPlugins()).listChannelPlugins();
+    const { collectChannelSecurityFindings } = await loadAuditChannelModule();
     findings.push(
       ...(await collectChannelSecurityFindings({
         cfg,
         sourceConfig: context.sourceConfig,
-        plugins,
+        plugins: channelPlugins,
       })),
     );
   }
