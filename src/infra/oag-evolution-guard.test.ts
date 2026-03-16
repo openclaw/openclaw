@@ -43,12 +43,16 @@ vi.mock("./oag-memory.js", () => ({
   }),
 }));
 
-const { startEvolutionObservation, checkEvolutionHealth, clearObservation } =
-  await import("./oag-evolution-guard.js");
+const {
+  startEvolutionObservation,
+  checkEvolutionHealth,
+  clearObservation,
+  restoreObservationFromMemory,
+} = await import("./oag-evolution-guard.js");
 
 describe("oag-evolution-guard", () => {
-  beforeEach(() => {
-    clearObservation();
+  beforeEach(async () => {
+    await clearObservation();
     mockMetrics.current = {
       channelRestarts: 0,
       deliveryRecoveryFailures: 0,
@@ -80,7 +84,7 @@ describe("oag-evolution-guard", () => {
         outcome: "pending",
       },
     ];
-    startEvolutionObservation({
+    await startEvolutionObservation({
       appliedAt: new Date().toISOString(),
       rollbackChanges: [
         { configPath: "gateway.oag.delivery.recoveryBudgetMs", previousValue: 60000 },
@@ -104,7 +108,7 @@ describe("oag-evolution-guard", () => {
         outcome: "pending",
       },
     ];
-    startEvolutionObservation({
+    await startEvolutionObservation({
       appliedAt: new Date(Date.now() - 2 * 60 * 60_000).toISOString(), // 2 hours ago
       rollbackChanges: [],
       windowMs: 60 * 60_000,
@@ -114,12 +118,58 @@ describe("oag-evolution-guard", () => {
   });
 
   it("returns none during active observation with no regression", async () => {
-    startEvolutionObservation({
+    await startEvolutionObservation({
       appliedAt: new Date().toISOString(),
       rollbackChanges: [],
     });
     const result = await checkEvolutionHealth();
     expect(result.action).toBe("none");
+    expect(result.checked).toBe(true);
+  });
+
+  it("persists observation to memory on start", async () => {
+    const { saveOagMemory } = await import("./oag-memory.js");
+    const saveSpy = vi.mocked(saveOagMemory);
+    saveSpy.mockClear();
+
+    await startEvolutionObservation({
+      appliedAt: "2024-01-01T00:00:00.000Z",
+      rollbackChanges: [
+        { configPath: "gateway.oag.delivery.recoveryBudgetMs", previousValue: 60000 },
+      ],
+    });
+
+    expect(saveSpy).toHaveBeenCalled();
+    const savedMemory = saveSpy.mock.calls[saveSpy.mock.calls.length - 1][0] as {
+      activeObservation: { evolutionAppliedAt: string; rollbackChanges: unknown[] };
+    };
+    expect(savedMemory.activeObservation).not.toBeNull();
+    expect(savedMemory.activeObservation?.evolutionAppliedAt).toBe("2024-01-01T00:00:00.000Z");
+    expect(savedMemory.activeObservation?.rollbackChanges).toHaveLength(1);
+  });
+
+  it("restores observation from memory", async () => {
+    mockMemory.current = {
+      ...mockMemory.current,
+      activeObservation: {
+        evolutionAppliedAt: "2024-01-01T00:00:00.000Z",
+        baselineMetrics: {
+          channelRestarts: 0,
+          deliveryRecoveryFailures: 0,
+          stalePollDetections: 0,
+        },
+        rollbackChanges: [
+          { configPath: "gateway.oag.delivery.recoveryBudgetMs", previousValue: 60000 },
+        ],
+        windowMs: 3600000,
+      },
+    } as typeof mockMemory.current;
+
+    const restored = await restoreObservationFromMemory();
+    expect(restored).toBe(true);
+
+    // Observation should now be active
+    const result = await checkEvolutionHealth();
     expect(result.checked).toBe(true);
   });
 });

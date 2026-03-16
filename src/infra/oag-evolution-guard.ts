@@ -19,11 +19,11 @@ export type EvolutionObservation = {
 
 let activeObservation: EvolutionObservation | null = null;
 
-export function startEvolutionObservation(params: {
+export async function startEvolutionObservation(params: {
   appliedAt: string;
   rollbackChanges: Array<{ configPath: string; previousValue: unknown }>;
   windowMs?: number;
-}): void {
+}): Promise<void> {
   const metrics = getOagMetrics();
   activeObservation = {
     evolutionAppliedAt: params.appliedAt,
@@ -38,14 +38,57 @@ export function startEvolutionObservation(params: {
   log.info(
     `Evolution observation started (window: ${Math.round(activeObservation.windowMs / 60_000)}min)`,
   );
+
+  // Persist to survive restarts
+  try {
+    const memory = await loadOagMemory();
+    memory.activeObservation = {
+      evolutionAppliedAt: activeObservation.evolutionAppliedAt,
+      baselineMetrics: activeObservation.baselineMetrics as Record<string, number>,
+      rollbackChanges: activeObservation.rollbackChanges,
+      windowMs: activeObservation.windowMs,
+    };
+    await saveOagMemory(memory);
+  } catch {
+    // Best effort
+  }
 }
 
 export function getActiveObservation(): EvolutionObservation | null {
   return activeObservation;
 }
 
-export function clearObservation(): void {
+export async function clearObservation(): Promise<void> {
   activeObservation = null;
+  try {
+    const memory = await loadOagMemory();
+    memory.activeObservation = null;
+    await saveOagMemory(memory);
+  } catch {
+    // Best effort
+  }
+}
+
+export async function restoreObservationFromMemory(): Promise<boolean> {
+  try {
+    const memory = await loadOagMemory();
+    if (!memory.activeObservation) {
+      return false;
+    }
+    activeObservation = {
+      evolutionAppliedAt: memory.activeObservation.evolutionAppliedAt,
+      baselineMetrics: memory.activeObservation.baselineMetrics as Pick<
+        OagMetricCounters,
+        "channelRestarts" | "deliveryRecoveryFailures" | "stalePollDetections"
+      >,
+      rollbackChanges: memory.activeObservation.rollbackChanges,
+      windowMs: memory.activeObservation.windowMs,
+    };
+    log.info("Restored evolution observation from memory");
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 function detectRegression(observation: EvolutionObservation): {
@@ -109,6 +152,13 @@ export async function checkEvolutionHealth(): Promise<{
     }
 
     activeObservation = null;
+    try {
+      const mem = await loadOagMemory();
+      mem.activeObservation = null;
+      await saveOagMemory(mem);
+    } catch {
+      // Best effort
+    }
     return { checked: true, action: "reverted", reason: regression.reason };
   }
 
@@ -128,6 +178,13 @@ export async function checkEvolutionHealth(): Promise<{
     }
 
     activeObservation = null;
+    try {
+      const mem = await loadOagMemory();
+      mem.activeObservation = null;
+      await saveOagMemory(mem);
+    } catch {
+      // Best effort
+    }
     return { checked: true, action: "confirmed" };
   }
 

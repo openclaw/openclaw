@@ -16,6 +16,7 @@ Current OAG surfaces in this repo:
 - `openclaw health` and `doctor` include the same OAG summaries when the Gateway is healthy enough to answer probes.
 - Session replies can receive one-shot `OAG:` system notes when the runtime performs a recovery action that the user should know about.
 - For external audits or tool-assisted review, use [OAG Review Brief](/gateway/oag-review-brief).
+- For a more formal requirements/progress/checklist document, use [OAG Plan](/gateway/oag-plan).
 
 ## Where state lives
 
@@ -92,3 +93,57 @@ The code now exposes OAG runtime state, but these parts are still intentionally 
 - automatic note localization heuristics for user-visible recovery messages
 
 If those surfaces keep growing, split them into dedicated docs rather than expanding the generic CLI pages further.
+
+## Configuration
+
+OAG behavior can be tuned through the `gateway.oag` configuration section. All values are optional — sensible defaults are used when absent.
+
+### Delivery recovery
+
+| Key                                     | Type   | Default | Description                                                                                                                                 |
+| --------------------------------------- | ------ | ------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
+| `gateway.oag.delivery.maxRetries`       | number | `5`     | Maximum retry attempts for a queued delivery before moving it to the failed directory.                                                      |
+| `gateway.oag.delivery.recoveryBudgetMs` | number | `60000` | Maximum wall-clock time (ms) for delivery recovery on startup or after channel reconnect. Remaining entries are deferred to the next cycle. |
+
+### File lock
+
+| Key                          | Type   | Default | Description                                                                                  |
+| ---------------------------- | ------ | ------- | -------------------------------------------------------------------------------------------- |
+| `gateway.oag.lock.timeoutMs` | number | `2000`  | Maximum time (ms) to wait for the OAG state file lock before giving up.                      |
+| `gateway.oag.lock.staleMs`   | number | `30000` | Age threshold (ms) for considering a lock file stale. Stale locks are automatically cleared. |
+
+### Health policy
+
+| Key                                  | Type   | Default | Description                                                                                                                                                                                                          |
+| ------------------------------------ | ------ | ------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `gateway.oag.health.stalePollFactor` | number | `2`     | Multiplier applied to `staleEventThresholdMs` for polling and webhook channels. A factor of `2` means Telegram and webhook channels use a 60-minute stale threshold when the default socket threshold is 30 minutes. |
+
+### Notes
+
+| Key                                     | Type   | Default | Description                                                                                                  |
+| --------------------------------------- | ------ | ------- | ------------------------------------------------------------------------------------------------------------ |
+| `gateway.oag.notes.dedupWindowMs`       | number | `60000` | Time window (ms) for deduplicating recovery notes with the same action. Set to `0` to disable deduplication. |
+| `gateway.oag.notes.maxDeliveredHistory` | number | `20`    | Maximum number of delivered notes kept in the audit trail. Oldest entries are pruned first.                  |
+
+### Example
+
+```json
+{
+  "gateway": {
+    "oag": {
+      "delivery": {
+        "maxRetries": 8,
+        "recoveryBudgetMs": 120000
+      },
+      "health": {
+        "stalePollFactor": 3
+      },
+      "notes": {
+        "dedupWindowMs": 0
+      }
+    }
+  }
+}
+```
+
+Changes to `gateway.oag` take effect at call time without a gateway restart. Use `openclaw config set gateway.oag.delivery.maxRetries 8` for individual values, or edit `~/.openclaw/config.json` directly and the gateway config reloader will pick up the changes.

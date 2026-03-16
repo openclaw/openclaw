@@ -7,6 +7,7 @@ import { DEFAULT_ACCOUNT_ID } from "../../routing/session-key.js";
 import { resolveOagDeliveryMaxRetries, resolveOagDeliveryRecoveryBudgetMs } from "../oag-config.js";
 import { generateSecureUuid } from "../secure-random.js";
 import type { OutboundMirror } from "./mirror.js";
+import { addToIndex, removeFromIndex, rebuildIndex } from "./delivery-index.js";
 import type { OutboundChannel } from "./targets.js";
 
 const QUEUE_DIRNAME = "delivery-queue";
@@ -150,6 +151,20 @@ export async function enqueueDelivery(
   const json = JSON.stringify(entry, null, 2);
   await fs.promises.writeFile(tmp, json, { encoding: "utf-8", mode: 0o600 });
   await fs.promises.rename(tmp, filePath);
+  try {
+    addToIndex(
+      {
+        id,
+        channel: params.channel,
+        accountId: params.accountId,
+        enqueuedAt: entry.enqueuedAt,
+        lanePriority: entry.lanePriority ?? "user-visible",
+      },
+      stateDir,
+    );
+  } catch {
+    // Best-effort index update — queue file is the source of truth
+  }
   return id;
 }
 
@@ -179,6 +194,11 @@ export async function ackDelivery(id: string, stateDir?: string): Promise<void> 
   }
   // Phase 2: remove the marker file.
   await unlinkBestEffort(deliveredPath);
+  try {
+    removeFromIndex(id, stateDir);
+  } catch {
+    // Best-effort
+  }
 }
 
 /** Update a queue entry after a failed delivery attempt. */
@@ -238,7 +258,7 @@ export async function loadPendingDeliveries(stateDir?: string): Promise<QueuedDe
 
   const entries: QueuedDelivery[] = [];
   for (const file of files) {
-    if (!file.endsWith(".json")) {
+    if (!file.endsWith(".json") || file === "index.json") {
       continue;
     }
     const filePath = path.join(queueDir, file);
@@ -289,6 +309,11 @@ export async function moveToFailed(id: string, stateDir?: string): Promise<void>
   const src = path.join(queueDir, `${id}.json`);
   const dest = path.join(failedDir, `${id}.json`);
   await fs.promises.rename(src, dest);
+  try {
+    removeFromIndex(id, stateDir);
+  } catch {
+    // Best-effort
+  }
 }
 
 /** Compute the backoff delay in ms for a given retry count. */
@@ -402,6 +427,12 @@ export async function recoverPendingDeliveries(opts: {
   /** Maximum wall-clock time for recovery in ms. Remaining entries are deferred to next restart. Default: 60 000. */
   maxRecoveryMs?: number;
 }): Promise<RecoverySummary> {
+  // Rebuild index from disk on recovery (cold start)
+  try {
+    rebuildIndex(opts.stateDir);
+  } catch {
+    // Best-effort — recovery still works without index
+  }
   const pending = (await loadPendingDeliveries(opts.stateDir)).filter((entry) =>
     matchesRecoveryFilter(entry, opts.filter),
   );

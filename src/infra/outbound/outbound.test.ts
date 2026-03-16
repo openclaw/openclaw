@@ -93,7 +93,9 @@ describe("delivery-queue", () => {
 
       // Entry file exists after enqueue.
       const queueDir = path.join(tmpDir, "delivery-queue");
-      const files = fs.readdirSync(queueDir).filter((f) => f.endsWith(".json"));
+      const files = fs
+        .readdirSync(queueDir)
+        .filter((f) => f.endsWith(".json") && f !== "index.json");
       expect(files).toHaveLength(1);
       expect(files[0]).toBe(`${id}.json`);
 
@@ -118,7 +120,9 @@ describe("delivery-queue", () => {
 
       // Ack removes the file.
       await ackDelivery(id, tmpDir);
-      const remaining = fs.readdirSync(queueDir).filter((f) => f.endsWith(".json"));
+      const remaining = fs
+        .readdirSync(queueDir)
+        .filter((f) => f.endsWith(".json") && f !== "index.json");
       expect(remaining).toHaveLength(0);
     });
 

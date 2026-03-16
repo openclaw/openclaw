@@ -35,10 +35,12 @@ import { createExecApprovalForwarder } from "../infra/exec-approval-forwarder.js
 import { onHeartbeatEvent } from "../infra/heartbeat-events.js";
 import { startHeartbeatRunner, type HeartbeatRunner } from "../infra/heartbeat-runner.js";
 import { getMachineDisplayName } from "../infra/machine-name.js";
+import { checkEvolutionHealth } from "../infra/oag-evolution-guard.js";
 import { collectActiveIncidents, recordOagIncident } from "../infra/oag-incident-collector.js";
 import { recordLifecycleShutdown } from "../infra/oag-memory.js";
 import { getOagMetrics, incrementOagMetric } from "../infra/oag-metrics.js";
 import { runPostRecoveryAnalysis } from "../infra/oag-postmortem.js";
+import { createGatewayIdleCheck, runWhenIdle } from "../infra/oag-scheduler.js";
 import { ensureOpenClawCliOnPath } from "../infra/path-env.js";
 import {
   detectPluginInstallPathIssue,
@@ -889,6 +891,19 @@ export async function startGatewayServer(
     }));
   }
 
+  // OAG evolution health check — runs every 5 minutes during observation window
+  let evolutionCheckInterval: ReturnType<typeof setInterval> | null = null;
+  if (!minimalTestGateway) {
+    evolutionCheckInterval = setInterval(() => {
+      void checkEvolutionHealth().catch((err) => {
+        log.warn(`OAG evolution health check failed: ${String(err)}`);
+      });
+    }, 5 * 60_000);
+    if (typeof evolutionCheckInterval === "object" && "unref" in evolutionCheckInterval) {
+      evolutionCheckInterval.unref();
+    }
+  }
+
   const agentUnsub = minimalTestGateway
     ? null
     : onAgentEvent(
@@ -1095,21 +1110,23 @@ export async function startGatewayServer(
       });
     })().catch((err) => log.error(`Delivery recovery failed: ${String(err)}`));
 
-    // Run OAG post-recovery analysis (non-blocking)
-    void (async () => {
-      try {
-        const postmortem = await runPostRecoveryAnalysis();
-        if (postmortem.userNotification) {
-          // Inject evolution notification as a pending OAG note
-          log.info(`OAG evolution: ${postmortem.userNotification}`);
-        }
-        if (postmortem.applied.length > 0) {
-          log.info(`OAG evolution applied ${postmortem.applied.length} parameter adjustments`);
-        }
-      } catch (err) {
-        log.warn(`OAG post-recovery analysis failed: ${String(err)}`);
+    // Run OAG post-recovery analysis when gateway is idle (non-blocking)
+    const gatewayIdleCheck = createGatewayIdleCheck({
+      getQueueSize: () => getTotalQueueSize(),
+      getPendingReplies: () => getTotalPendingReplies(),
+      getActiveRuns: () => getActiveEmbeddedRunCount(),
+    });
+    void runWhenIdle(async () => {
+      const postmortem = await runPostRecoveryAnalysis();
+      if (postmortem.userNotification) {
+        log.info(`OAG evolution: ${postmortem.userNotification}`);
       }
-    })();
+      if (postmortem.applied.length > 0) {
+        log.info(`OAG evolution applied ${postmortem.applied.length} parameter adjustments`);
+      }
+    }, gatewayIdleCheck).catch((err) => {
+      log.warn(`OAG post-recovery analysis failed: ${String(err)}`);
+    });
   }
 
   const execApprovalManager = new ExecApprovalManager();
@@ -1440,6 +1457,10 @@ export async function startGatewayServer(
         });
       } catch (err) {
         log.warn(`OAG lifecycle snapshot failed: ${String(err)}`);
+      }
+      if (evolutionCheckInterval) {
+        clearInterval(evolutionCheckInterval);
+        evolutionCheckInterval = null;
       }
       await close(opts);
     },

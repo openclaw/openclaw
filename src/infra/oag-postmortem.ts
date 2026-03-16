@@ -8,6 +8,7 @@ import {
   resolveOagLockStaleMs,
   resolveOagStalePollFactor,
 } from "./oag-config.js";
+import { startEvolutionObservation } from "./oag-evolution-guard.js";
 import { injectEvolutionNote } from "./oag-evolution-notify.js";
 import {
   type OagMemory,
@@ -236,6 +237,13 @@ export async function runPostRecoveryAnalysis(): Promise<PostmortemResult> {
         to: r.suggestedValue,
       })),
       outcome: "pending",
+    });
+    await startEvolutionObservation({
+      appliedAt: new Date().toISOString(),
+      rollbackChanges: applied.map((r) => ({
+        configPath: r.configPath,
+        previousValue: r.currentValue,
+      })),
     });
   }
 

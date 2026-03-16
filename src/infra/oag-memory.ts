@@ -67,6 +67,12 @@ export type OagMemory = {
   lifecycles: OagLifecycle[];
   evolutions: OagEvolutionRecord[];
   diagnoses: OagDiagnosisRecord[];
+  activeObservation?: {
+    evolutionAppliedAt: string;
+    baselineMetrics: Record<string, number>;
+    rollbackChanges: Array<{ configPath: string; previousValue: unknown }>;
+    windowMs: number;
+  } | null;
 };
 
 function resolveMemoryPath(): string {
@@ -79,6 +85,7 @@ function createEmptyMemory(): OagMemory {
     lifecycles: [],
     evolutions: [],
     diagnoses: [],
+    activeObservation: null,
   };
 }
 
