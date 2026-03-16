@@ -123,28 +123,32 @@ function resolveStorePath(stateDir: string): string {
  * Append (or overwrite by dedup key) a pending inbound entry.
  * Uses atomic write (tmp + rename) following the update-offset-store pattern.
  * Wrapped in a file lock to prevent concurrent read-modify-write races.
+ *
+ * Returns false without writing if the store is already at capacity and the
+ * entry is not a dedup overwrite.  This prevents silent message loss — the
+ * caller can log a warning or take corrective action.
  */
 export async function writePendingInbound(
   stateDir: string,
   entry: PendingInboundEntry,
-): Promise<void> {
+): Promise<boolean> {
   const filePath = resolveStorePath(stateDir);
+  let accepted = true;
   await withInProcessQueue(filePath, () =>
     withFileLock(filePath, PENDING_INBOUND_LOCK_OPTIONS, async () => {
       const existing = await readPendingInboundFile(filePath);
       const key = storeKey(entry);
-      existing.entries[key] = entry;
-      // Prune oldest entries by capturedAt when the store exceeds the cap.
-      const keys = Object.keys(existing.entries);
-      if (keys.length > MAX_PENDING_ENTRIES) {
-        const sorted = keys.toSorted(
-          (a, b) => (existing.entries[a].capturedAt ?? 0) - (existing.entries[b].capturedAt ?? 0),
-        );
-        const pruneCount = sorted.length - MAX_PENDING_ENTRIES;
-        for (let i = 0; i < pruneCount; i++) {
-          delete existing.entries[sorted[i]];
-        }
+      // Allow dedup overwrites (same key already present) even when at capacity.
+      // Reject genuinely new entries when the store is full to avoid silently
+      // dropping oldest messages that were captured first.
+      if (
+        !(key in existing.entries) &&
+        Object.keys(existing.entries).length >= MAX_PENDING_ENTRIES
+      ) {
+        accepted = false;
+        return;
       }
+      existing.entries[key] = entry;
       await writeJsonAtomic(filePath, existing, {
         mode: 0o600,
         trailingNewline: true,
@@ -152,6 +156,7 @@ export async function writePendingInbound(
       });
     }),
   );
+  return accepted;
 }
 
 /**
@@ -226,28 +231,31 @@ export async function clearAllActiveTurns(stateDir: string): Promise<void> {
 /**
  * Upsert an active-turn entry keyed by sessionId.
  * Wrapped in a file lock to prevent concurrent read-modify-write races.
+ *
+ * Returns false without writing if the tracking map is already at capacity
+ * and the entry is genuinely new (not an overwrite of the same sessionId).
+ * This prevents evicting live active turns that are still running — those
+ * entries are critical for crash-recovery and must not be silently pruned.
  */
-export async function writeActiveTurn(stateDir: string, entry: ActiveTurnEntry): Promise<void> {
+export async function writeActiveTurn(stateDir: string, entry: ActiveTurnEntry): Promise<boolean> {
   const filePath = resolveStorePath(stateDir);
+  let accepted = true;
   await withInProcessQueue(filePath, () =>
     withFileLock(filePath, PENDING_INBOUND_LOCK_OPTIONS, async () => {
       const existing = await readPendingInboundFile(filePath);
       if (!existing.activeTurns) {
         existing.activeTurns = {};
       }
-      existing.activeTurns[entry.sessionId] = entry;
-      // Prune oldest active turns by startedAt when the store exceeds the cap.
-      const turnKeys = Object.keys(existing.activeTurns);
-      if (turnKeys.length > MAX_ACTIVE_TURNS) {
-        const sorted = turnKeys.toSorted(
-          (a, b) =>
-            (existing.activeTurns![a].startedAt ?? 0) - (existing.activeTurns![b].startedAt ?? 0),
-        );
-        const pruneCount = sorted.length - MAX_ACTIVE_TURNS;
-        for (let i = 0; i < pruneCount; i++) {
-          delete existing.activeTurns[sorted[i]];
-        }
+      // Allow overwrites (same sessionId) even when at capacity.
+      // Reject genuinely new entries to avoid evicting live active turns.
+      if (
+        !(entry.sessionId in existing.activeTurns) &&
+        Object.keys(existing.activeTurns).length >= MAX_ACTIVE_TURNS
+      ) {
+        accepted = false;
+        return;
       }
+      existing.activeTurns[entry.sessionId] = entry;
       await writeJsonAtomic(filePath, existing, {
         mode: 0o600,
         trailingNewline: true,
@@ -255,6 +263,7 @@ export async function writeActiveTurn(stateDir: string, entry: ActiveTurnEntry):
       });
     }),
   );
+  return accepted;
 }
 
 /**

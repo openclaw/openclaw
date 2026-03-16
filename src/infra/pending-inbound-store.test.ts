@@ -411,42 +411,114 @@ describe("pending-inbound-store", () => {
 
   // --- Bounded store growth (pruning) ---
 
-  it("writePendingInbound prunes oldest entries when exceeding MAX_PENDING_ENTRIES (200)", async () => {
-    // Write 210 entries sequentially — oldest 10 should be pruned.
-    for (let i = 0; i < 210; i++) {
+  it("writePendingInbound rejects new entries when at MAX_PENDING_ENTRIES (200) capacity", async () => {
+    // Write exactly 200 entries to fill the store.
+    for (let i = 0; i < 200; i++) {
+      const accepted = await writePendingInbound(stateDir, {
+        channel: "telegram",
+        id: `fill-${i}`,
+        payload: { index: i },
+        capturedAt: 1700000000000 + i,
+      });
+      expect(accepted).toBe(true);
+    }
+
+    // The 201st entry should be rejected (not silently drop oldest).
+    const rejected = await writePendingInbound(stateDir, {
+      channel: "telegram",
+      id: "overflow-entry",
+      payload: { index: 200 },
+      capturedAt: 1700000000200,
+    });
+    expect(rejected).toBe(false);
+
+    const result = await readPendingInbound(stateDir);
+    expect(result).toHaveLength(200);
+
+    // All original 200 entries are preserved (none silently dropped).
+    const ids = result.map((e) => e.id).toSorted();
+    expect(ids).not.toContain("overflow-entry");
+    expect(ids).toContain("fill-0"); // oldest is still there
+    expect(ids).toContain("fill-199"); // newest is still there
+  });
+
+  it("writePendingInbound allows dedup overwrites even when at capacity", async () => {
+    // Fill the store to capacity.
+    for (let i = 0; i < 200; i++) {
       await writePendingInbound(stateDir, {
         channel: "telegram",
-        id: `prune-${i}`,
+        id: `fill-${i}`,
         payload: { index: i },
         capturedAt: 1700000000000 + i,
       });
     }
 
+    // Overwriting an existing key (same channel:id) should succeed even at capacity.
+    const accepted = await writePendingInbound(stateDir, {
+      channel: "telegram",
+      id: "fill-50",
+      payload: { index: 50, updated: true },
+      capturedAt: 1700000000050,
+    });
+    expect(accepted).toBe(true);
+
     const result = await readPendingInbound(stateDir);
     expect(result).toHaveLength(200);
-
-    // The 10 oldest (capturedAt 1700000000000..1700000000009) should be pruned.
-    const capturedAts = result.map((e) => e.capturedAt).toSorted((a, b) => a - b);
-    expect(capturedAts[0]).toBeGreaterThanOrEqual(1700000000010);
   });
 
-  it("writeActiveTurn prunes oldest turns when exceeding MAX_ACTIVE_TURNS (50)", async () => {
-    // Write 60 turns sequentially — oldest 10 should be pruned.
-    for (let i = 0; i < 60; i++) {
+  it("writeActiveTurn rejects new entries when at MAX_ACTIVE_TURNS (50) capacity", async () => {
+    // Write exactly 50 turns to fill the tracking map.
+    for (let i = 0; i < 50; i++) {
+      const accepted = await writeActiveTurn(stateDir, {
+        sessionId: `sess-fill-${i}`,
+        sessionKey: `telegram:${i}`,
+        channel: "telegram",
+        startedAt: 1700000000000 + i,
+      });
+      expect(accepted).toBe(true);
+    }
+
+    // The 51st entry should be rejected (not evict oldest).
+    const rejected = await writeActiveTurn(stateDir, {
+      sessionId: "sess-overflow",
+      sessionKey: "telegram:overflow",
+      channel: "telegram",
+      startedAt: 1700000000050,
+    });
+    expect(rejected).toBe(false);
+
+    const result = await readStaleActiveTurns(stateDir);
+    expect(result).toHaveLength(50);
+
+    // All original 50 entries are preserved (none silently evicted).
+    const sessionIds = result.map((e) => e.sessionId).toSorted();
+    expect(sessionIds).not.toContain("sess-overflow");
+    expect(sessionIds).toContain("sess-fill-0"); // oldest is still there
+    expect(sessionIds).toContain("sess-fill-49"); // newest is still there
+  });
+
+  it("writeActiveTurn allows overwrites of same sessionId even when at capacity", async () => {
+    // Fill the tracking map to capacity.
+    for (let i = 0; i < 50; i++) {
       await writeActiveTurn(stateDir, {
-        sessionId: `sess-prune-${i}`,
+        sessionId: `sess-fill-${i}`,
         sessionKey: `telegram:${i}`,
         channel: "telegram",
         startedAt: 1700000000000 + i,
       });
     }
 
+    // Overwriting an existing sessionId should succeed even at capacity.
+    const accepted = await writeActiveTurn(stateDir, {
+      sessionId: "sess-fill-25",
+      sessionKey: "telegram:25",
+      channel: "telegram",
+      startedAt: 1700000099999,
+    });
+    expect(accepted).toBe(true);
+
     const result = await readStaleActiveTurns(stateDir);
     expect(result).toHaveLength(50);
-
-    // The 10 oldest (startedAt 1700000000000..1700000000009) should be pruned.
-    const startedAts = result.map((e) => e.startedAt).toSorted((a, b) => a - b);
-    expect(startedAts[0]).toBeGreaterThanOrEqual(1700000000010);
   });
 
   it("concurrent active turn writes do not lose entries", async () => {

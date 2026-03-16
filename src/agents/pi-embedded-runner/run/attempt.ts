@@ -2311,12 +2311,17 @@ export async function runEmbeddedAttempt(
       if (!params.sessionId?.startsWith("probe-")) {
         const runtimeChannel = params.messageChannel ?? params.messageProvider ?? "unknown";
         try {
-          await writeActiveTurn(resolveStateDir(process.env), {
+          const turnAccepted = await writeActiveTurn(resolveStateDir(process.env), {
             sessionId: params.sessionId,
             sessionKey: params.sessionKey ?? params.sessionId,
             channel: runtimeChannel,
             startedAt: Date.now(),
           });
+          if (!turnAccepted) {
+            log.warn(
+              `active-turn tracking at capacity: sessionId=${params.sessionId} — crash-recovery for this turn will not be available`,
+            );
+          }
         } catch (err) {
           log.warn(`active-turn write failed: sessionId=${params.sessionId} ${String(err)}`);
         }

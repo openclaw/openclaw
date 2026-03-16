@@ -1853,7 +1853,7 @@ export const registerTelegramHandlers = ({
           }
         }
 
-        await writePendingInbound(stateDir, {
+        const drainAccepted = await writePendingInbound(stateDir, {
           channel: "telegram",
           // Prefix with accountId to prevent collisions in multi-account deployments where two
           // bot accounts in the same chat can see the same message_id.
@@ -1866,10 +1866,26 @@ export const registerTelegramHandlers = ({
             senderUsername: event.senderUsername,
             isGroup: event.isGroup,
             date: event.msg.date,
+            // Persist voice/media metadata so replay can recover content that
+            // is only available via file_id (e.g. voice notes, photos).
+            // Without these fields, drained media-only messages are replayed
+            // as "(no text)" and the spoken/visual content is lost.
+            ...(event.msg.voice ? { voice: event.msg.voice } : {}),
+            ...(event.msg.audio ? { audio: event.msg.audio } : {}),
+            ...(event.msg.video ? { video: event.msg.video } : {}),
+            ...(event.msg.video_note ? { video_note: event.msg.video_note } : {}),
+            ...(event.msg.photo?.length ? { photo: event.msg.photo } : {}),
+            ...(event.msg.document ? { document: event.msg.document } : {}),
+            ...(event.msg.sticker ? { sticker: event.msg.sticker } : {}),
           },
           capturedAt: Date.now(),
           sessionKey: drainSessionKey,
         });
+        if (!drainAccepted) {
+          logVerbose(
+            `telegram: drain capture rejected for ${event.chatId}:${event.msg.message_id} (pending-inbound store at capacity)`,
+          );
+        }
         return; // provider already got 200, no retry needed
       }
 

@@ -151,7 +151,7 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
       return;
     }
     const stateDir = resolveStateDir(process.env);
-    await writePendingInbound(stateDir, {
+    const drainAccepted = await writePendingInbound(stateDir, {
       channel: "discord",
       id: String(message.id ?? Date.now()),
       accountId,
@@ -171,6 +171,11 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
         drainThreadKeys.sessionKey ??
         baseSessionKey,
     });
+    if (!drainAccepted) {
+      logVerbose(
+        `discord: drain capture rejected for message ${message.id} (pending-inbound store at capacity)`,
+      );
+    }
     return;
   }
 
