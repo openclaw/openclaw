@@ -342,6 +342,10 @@ function deriveIdHint(params: {
       "ollama-provider": "ollama",
       "sglang-provider": "sglang",
       "vllm-provider": "vllm",
+      "brave-plugin": "brave",
+      "google-plugin": "google",
+      "perplexity-plugin": "perplexity",
+      "xai-plugin": "xai",
     }[unscoped] ?? unscoped;
 
   if (!params.hasMultipleExtensions) {
