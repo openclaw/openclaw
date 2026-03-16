@@ -118,6 +118,10 @@ describe("listThinkingLevelLabels", () => {
     expect(listThinkingLevelLabels("zai", "glm-4.7")).toEqual(["off", "on"]);
   });
 
+  it("keeps built-in binary thinking fallback without provider runtime", () => {
+    expect(listThinkingLevelLabels("zai", "glm-4.7")).toEqual(["off", "on"]);
+  });
+
   it("returns full levels for non-ZAI", () => {
     expect(listThinkingLevelLabels("openai", "gpt-4.1-mini")).toContain("low");
     expect(listThinkingLevelLabels("openai", "gpt-4.1-mini")).not.toContain("on");
@@ -144,7 +148,23 @@ describe("resolveThinkingDefaultForModel", () => {
     ).toBe("adaptive");
   });
 
-  it("treats Bedrock Anthropic aliases as adaptive", () => {
+  it("uses provider-advertised adaptive defaults for Bedrock aliases", () => {
+    providerRuntimeMocks.resolveProviderDefaultThinkingLevel.mockImplementation(
+      ({ provider, context }) =>
+        provider === "amazon-bedrock" && context.modelId === "claude-sonnet-4-6"
+          ? "adaptive"
+          : undefined,
+    );
+
+    expect(
+      resolveThinkingDefaultForModel({ provider: "aws-bedrock", model: "claude-sonnet-4-6" }),
+    ).toBe("adaptive");
+  });
+
+  it("keeps built-in adaptive defaults without provider runtime", () => {
+    expect(
+      resolveThinkingDefaultForModel({ provider: "anthropic", model: "claude-opus-4-6" }),
+    ).toBe("adaptive");
     expect(
       resolveThinkingDefaultForModel({ provider: "aws-bedrock", model: "claude-sonnet-4-6" }),
     ).toBe("adaptive");

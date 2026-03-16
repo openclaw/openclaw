@@ -737,6 +737,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "channels.telegram.retry.jitter": "Telegram Retry Jitter",
   "channels.telegram.network.autoSelectFamily": "Telegram autoSelectFamily",
   "channels.telegram.timeoutSeconds": "Telegram API Timeout (seconds)",
+  "channels.telegram.silentErrorReplies": "Telegram Silent Error Replies",
   "channels.telegram.capabilities.inlineButtons": "Telegram Inline Buttons",
   "channels.telegram.execApprovals": "Telegram Exec Approvals",
   "channels.telegram.execApprovals.enabled": "Telegram Exec Approvals Enabled",
@@ -871,4 +872,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "plugins.installs.*.shasum": "Plugin Resolved Shasum",
   "plugins.installs.*.resolvedAt": "Plugin Resolution Time",
   "plugins.installs.*.installedAt": "Plugin Install Time",
+  "plugins.installs.*.marketplaceName": "Plugin Marketplace Name",
+  "plugins.installs.*.marketplaceSource": "Plugin Marketplace Source",
+  "plugins.installs.*.marketplacePlugin": "Plugin Marketplace Plugin",
 };

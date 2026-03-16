@@ -2,7 +2,7 @@ import { constants as fsConstants } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { resolveApiKeyForProvider } from "../agents/model-auth.js";
+import { hasAvailableAuthForProvider } from "../agents/model-auth.js";
 import {
   findModelInCatalog,
   loadModelCatalog,
@@ -362,12 +362,16 @@ async function resolveKeyEntry(params: {
     if (capability === "video" && !provider.describeVideo) {
       return null;
     }
-    try {
-      await resolveApiKeyForProvider({ provider: providerId, cfg, agentDir });
-      return { type: "provider" as const, provider: providerId, model };
-    } catch {
+    if (
+      !(await hasAvailableAuthForProvider({
+        provider: providerId,
+        cfg,
+        agentDir,
+      }))
+    ) {
       return null;
     }
+    return { type: "provider" as const, provider: providerId, model };
   };
 
   if (capability === "image") {
@@ -553,13 +557,12 @@ async function resolveActiveModelEntry(params: {
   if (params.capability === "video" && !provider.describeVideo) {
     return null;
   }
-  try {
-    await resolveApiKeyForProvider({
-      provider: providerId,
-      cfg: params.cfg,
-      agentDir: params.agentDir,
-    });
-  } catch {
+  const hasAuth = await hasAvailableAuthForProvider({
+    provider: providerId,
+    cfg: params.cfg,
+    agentDir: params.agentDir,
+  });
+  if (!hasAuth) {
     return null;
   }
   return {

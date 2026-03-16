@@ -84,6 +84,8 @@ export async function applyNonInteractivePluginProviderChoice(params: {
     providers: resolvePluginProviders({
       config: resolutionConfig,
       workspaceDir,
+      bundledProviderAllowlistCompat: true,
+      bundledProviderVitestCompat: true,
     }),
     choice: params.authChoice,
   });
