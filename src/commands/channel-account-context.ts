@@ -79,11 +79,11 @@ export async function resolveDefaultChannelAccountContext(
 
   const inspected =
     plugin.config.inspectAccount?.(cfg, defaultAccountId) ??
-    inspectReadOnlyChannelAccount({
+    (await inspectReadOnlyChannelAccount({
       channelId: plugin.id,
       cfg,
       accountId: defaultAccountId,
-    });
+    }));
 
   let account = inspected;
   if (!account) {
