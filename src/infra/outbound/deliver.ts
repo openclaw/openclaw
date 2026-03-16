@@ -31,6 +31,7 @@ import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { diagnosticErrorCategory } from "../diagnostic-error-metadata.js";
 import { emitDiagnosticEvent, type DiagnosticMessageDeliveryKind } from "../diagnostic-events.js";
 import { formatErrorMessage } from "../errors.js";
+import { splitOnSplitTags } from "../../utils/split-tag.js";
 import { throwIfAborted } from "./abort.js";
 import type { OutboundDeliveryResult } from "./deliver-types.js";
 import {
@@ -978,27 +979,40 @@ async function deliverOutboundPayloadsCore(
   });
 
   const sendTextChunks = async (text: string, overrides: OutboundMessageSendOverrides = {}) => {
-    const units = planOutboundTextMessageUnits({
-      text,
-      overrides,
-      chunker: handler.chunker,
-      chunkerMode: handler.chunkerMode,
-      textLimit,
-      chunkMode,
-      formatting: params.formatting,
-      consumeReplyTo: (value) =>
-        applyReplyToConsumption(value, {
-          consumeImplicitReply: value.replyToIdSource === "implicit",
-        }),
-    });
-    for (const unit of units) {
-      if (unit.kind !== "text") {
+    const segments = splitOnSplitTags(text);
+    const plannedSegments = segments.length > 0 ? segments : [text];
+    for (let index = 0; index < plannedSegments.length; index += 1) {
+      const segment = plannedSegments[index];
+      if (!segment) {
         continue;
       }
-      throwIfAborted(abortSignal);
-      results.push(await handler.sendText(unit.text, unit.overrides));
+      const segmentOverrides =
+        index === 0
+          ? overrides
+          : { ...overrides, replyToId: undefined, replyToIdSource: undefined };
+      const units = planOutboundTextMessageUnits({
+        text: segment,
+        overrides: segmentOverrides,
+        chunker: handler.chunker,
+        chunkerMode: handler.chunkerMode,
+        textLimit,
+        chunkMode,
+        formatting: params.formatting,
+        consumeReplyTo: (value) =>
+          applyReplyToConsumption(value, {
+            consumeImplicitReply: value.replyToIdSource === "implicit",
+          }),
+      });
+      for (const unit of units) {
+        if (unit.kind !== "text") {
+          continue;
+        }
+        throwIfAborted(abortSignal);
+        results.push(await handler.sendText(unit.text, unit.overrides));
+      }
     }
   };
+
   const normalizedPayloads = normalizePayloadsForChannelDelivery(outboundPayloadPlan, handler);
   const hookRunner = getGlobalHookRunner();
   const sessionKeyForInternalHooks = params.mirror?.sessionKey ?? params.session?.key;
@@ -1236,11 +1250,17 @@ async function deliverOutboundPayloadsCore(
       }
 
       let firstMessageId: string | undefined;
+      // Split caption on [[SPLIT]] - first segment becomes media caption,
+      // remaining segments are sent as separate text-only follow-up bubbles.
+      const captionSegments = splitOnSplitTags(payloadSummary.text);
+      const mediaCaption = captionSegments[0] ?? payloadSummary.text;
+      const trailingTextSegments = captionSegments.length > 1 ? captionSegments.slice(1) : [];
+
       let lastMessageId: string | undefined;
       const beforeCount = results.length;
       const mediaUnits = planOutboundMediaMessageUnits({
         mediaUrls: payloadSummary.mediaUrls,
-        caption: payloadSummary.text,
+        caption: mediaCaption,
         overrides: sendOverrides,
         consumeReplyTo: applySendReplyToConsumption,
       });
@@ -1262,17 +1282,26 @@ async function deliverOutboundPayloadsCore(
         target: deliveryTarget,
         messageId: firstMessageId,
       });
+      const trailingOverrides: OutboundMessageSendOverrides = {
+        ...sendOverrides,
+        replyToId: undefined,
+        replyToIdSource: undefined,
+      };
+      for (const segment of trailingTextSegments) {
+        await sendTextChunks(segment, trailingOverrides);
+      }
+      const deliveredResults = results.slice(beforeCount);
       await maybeNotifyAfterDeliveredPayload({
         handler,
         payload: effectivePayload,
         target: deliveryTarget,
-        results: results.slice(beforeCount),
+        results: deliveredResults,
       });
-      completeDeliveryDiagnostics(results.length - beforeCount);
+      completeDeliveryDiagnostics(deliveredResults.length);
       emitMessageSent({
         success: true,
         content: payloadSummary.hookContent ?? payloadSummary.text,
-        messageId: lastMessageId,
+        messageId: deliveredResults.at(-1)?.messageId ?? lastMessageId,
       });
     } catch (err) {
       errorDeliveryDiagnostics(err);

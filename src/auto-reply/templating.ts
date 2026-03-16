@@ -188,6 +188,14 @@ export type MsgContext = {
   /** Platform bot username when command mentions should be normalized. */
   BotUsername?: string;
   WasMentioned?: boolean;
+  /** WhatsApp JIDs/LIDs mentioned in this message (from protobuf contextInfo.mentionedJid). */
+  MentionedJids?: string[];
+  /** Bot's own WhatsApp JID (may include device suffix, e.g. 57711827927237:0@lid). */
+  SelfJid?: string;
+  /** Bot's own E.164 phone number. */
+  SelfE164?: string;
+  /** Human-readable resolution of mentioned JIDs to display names (e.g. "57711827927237@lid = you (self)"). */
+  MentionedContacts?: string;
   CommandAuthorized?: boolean;
   CommandSource?: "text" | "native";
   CommandTargetSessionKey?: string;
