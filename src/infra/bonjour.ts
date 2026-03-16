@@ -1,3 +1,4 @@
+import type { Responder } from "@homebridge/ciao";
 import { logDebug, logWarn } from "../logger.js";
 import { getLogger } from "../logging.js";
 import { ignoreCiaoCancellationRejection } from "./bonjour-ciao.js";
@@ -59,18 +60,7 @@ type BonjourService = {
 };
 
 type BonjourCycle = {
-  responder: {
-    createService: (options: {
-      name: string;
-      type: string;
-      protocol: unknown;
-      port: number;
-      domain: string;
-      hostname: string;
-      txt: Record<string, string>;
-    }) => unknown;
-    shutdown: () => Promise<void>;
-  };
+  responder: Pick<Responder, "createService" | "shutdown">;
   services: Array<{ label: string; svc: BonjourService }>;
   cleanupUnhandledRejection?: () => void;
 };
