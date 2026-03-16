@@ -152,7 +152,6 @@ export function registerPreActionHooks(program: Command, programVersion: string)
     });
     // Load plugins for commands that need channel access
     if (shouldLoadPluginsForCommand(commandPath, argv)) {
-    if (shouldLoadPluginsForCommand(commandPath, argv)) {
       const { ensurePluginRegistryLoaded } = await loadPluginRegistryModule();
       ensurePluginRegistryLoaded({ scope: resolvePluginRegistryScope(commandPath) });
     }
