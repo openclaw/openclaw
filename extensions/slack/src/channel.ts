@@ -292,6 +292,16 @@ export const slackPlugin: ChannelPlugin<ResolvedSlackAccount> = {
   },
   actions: {
     listActions: ({ cfg }) => listSlackMessageActions(cfg),
+    getCapabilities: ({ cfg }) => {
+      const capabilities = new Set<"interactive" | "blocks">();
+      if (listSlackMessageActions(cfg).includes("send")) {
+        capabilities.add("blocks");
+      }
+      if (isSlackInteractiveRepliesEnabled({ cfg })) {
+        capabilities.add("interactive");
+      }
+      return Array.from(capabilities);
+    },
     extractToolSend: ({ args }) => extractSlackToolSend(args),
     handleAction: async (ctx) =>
       await handleSlackMessageAction({
