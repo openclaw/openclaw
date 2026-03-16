@@ -787,9 +787,9 @@ async function handleDiscordModelPickerInteraction(
   }
 
   if (parsed.action === "model") {
-    const selectedModel = resolveModelPickerSelectionValue(interaction);
+    const selectedModelValue = resolveModelPickerSelectionValue(interaction);
     const provider = parsed.provider;
-    if (!provider || !selectedModel) {
+    if (!provider || !selectedModelValue) {
       await safeDiscordInteractionCall("model picker update", () =>
         interaction.update(
           buildDiscordModelPickerNoticePayload("Sorry, I couldn't read that model selection."),
@@ -797,6 +797,13 @@ async function handleDiscordModelPickerInteraction(
       );
       return;
     }
+
+    // Model dropdown values now include the provider prefix (provider/model).
+    // Strip the prefix to get the bare model ID for index lookup.
+    const providerPrefix = `${provider}/`;
+    const selectedModel = selectedModelValue.startsWith(providerPrefix)
+      ? selectedModelValue.slice(providerPrefix.length)
+      : selectedModelValue;
 
     const modelIndex = resolveDiscordModelPickerModelIndex({
       data: pickerData,

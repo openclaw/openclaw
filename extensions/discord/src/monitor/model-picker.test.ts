@@ -474,7 +474,9 @@ describe("Discord model picker rendering", () => {
     );
     expect(modelSelect).toBeTruthy();
     expect(modelSelect?.options?.length).toBe(3);
-    expect(modelSelect?.options?.find((option) => option.value === "o3")?.default).toBe(true);
+    expect(modelSelect?.options?.find((option) => option.value === "openai/o3")?.default).toBe(
+      true,
+    );
 
     const parsedModelSelectState = parseDiscordModelPickerCustomId(modelSelect?.custom_id ?? "");
     expect(parsedModelSelectState?.action).toBe("model");
@@ -654,5 +656,40 @@ describe("Discord model picker recents view", () => {
 
     const recentBtn = rows[1]?.components?.[0] as { label?: string };
     expect(recentBtn?.label).toContain("anthropic/claude-sonnet-4-5");
+  });
+});
+
+describe("Discord model picker nested provider IDs (#46975)", () => {
+  it("includes provider prefix in model dropdown values", () => {
+    const data = createModelsProviderData({
+      openrouter: ["deepseek/deepseek-v3.2", "anthropic/claude-3-opus", "gpt-4o"],
+    });
+
+    const rows = renderModelsViewRows({
+      command: "model",
+      userId: "42",
+      data,
+      provider: "openrouter",
+      page: 1,
+      providerPage: 1,
+    });
+
+    const modelSelect = rows
+      .flatMap((row) => row.components ?? [])
+      .find(
+        (c) =>
+          c.type === Number(ComponentType.StringSelect) &&
+          c.options?.some((opt) => opt.value?.includes("deepseek")),
+      );
+
+    expect(modelSelect).toBeDefined();
+
+    const deepseekOpt = modelSelect?.options?.find((o) =>
+      o.value?.includes("deepseek/deepseek-v3.2"),
+    );
+    expect(deepseekOpt?.value).toBe("openrouter/deepseek/deepseek-v3.2");
+
+    const gptOpt = modelSelect?.options?.find((o) => o.value?.includes("gpt-4o"));
+    expect(gptOpt?.value).toBe("openrouter/gpt-4o");
   });
 });
