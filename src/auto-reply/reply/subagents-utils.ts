@@ -63,7 +63,8 @@ export function resolveSubagentTargetFromRuns(params: {
   if (trimmed === "last") {
     return { entry: sorted[0] };
   }
-  const isActive = params.isActive ?? ((entry: SubagentRunRecord) => !entry.endedAt);
+  const isActive =
+    params.isActive ?? ((entry: SubagentRunRecord) => !entry.endedAt || !entry.cleanupCompletedAt);
   const recentCutoff = Date.now() - params.recentWindowMinutes * 60_000;
   const numericOrder = [
     ...sorted.filter((entry) => isActive(entry)),
