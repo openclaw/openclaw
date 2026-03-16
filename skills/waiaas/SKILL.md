@@ -48,7 +48,7 @@ Connect the MCP server (pass token via environment variable):
 ```bash
 export WAIAAS_SESSION_TOKEN="<session-token-from-quickset>"
 openclaw config set mcpServers.waiaas.command "npx"
-openclaw config set mcpServers.waiaas.args '["@waiaas/mcp"]'
+openclaw config set mcpServers.waiaas.args '["-y", "@waiaas/mcp"]'
 openclaw config set mcpServers.waiaas.env.WAIAAS_SESSION_TOKEN "\${WAIAAS_SESSION_TOKEN}"
 ```
 
