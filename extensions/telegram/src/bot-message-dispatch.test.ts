@@ -298,6 +298,43 @@ describe("dispatchTelegramMessage draft streaming", () => {
     );
   });
 
+  it("sends error replies silently when silentErrorReplies is enabled", async () => {
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
+      await dispatcherOptions.deliver({ text: "oops", isError: true }, { kind: "final" });
+      return { queuedFinal: true };
+    });
+    deliverReplies.mockResolvedValue({ delivered: true });
+
+    await dispatchWithContext({
+      context: createContext(),
+      telegramCfg: { silentErrorReplies: true },
+    });
+
+    expect(deliverReplies).toHaveBeenCalledWith(
+      expect.objectContaining({
+        silent: true,
+        replies: [expect.objectContaining({ isError: true })],
+      }),
+    );
+  });
+
+  it("keeps error replies notifying by default", async () => {
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
+      await dispatcherOptions.deliver({ text: "oops", isError: true }, { kind: "final" });
+      return { queuedFinal: true };
+    });
+    deliverReplies.mockResolvedValue({ delivered: true });
+
+    await dispatchWithContext({ context: createContext() });
+
+    expect(deliverReplies).toHaveBeenCalledWith(
+      expect.objectContaining({
+        silent: false,
+        replies: [expect.objectContaining({ isError: true })],
+      }),
+    );
+  });
+
   it("keeps block streaming enabled when session reasoning level is on", async () => {
     loadSessionStore.mockReturnValue({
       s1: { reasoningLevel: "on" },
