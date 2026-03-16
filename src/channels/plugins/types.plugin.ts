@@ -4,16 +4,19 @@ import type {
   ChannelCommandAdapter,
   ChannelConfigAdapter,
   ChannelDirectoryAdapter,
+  ChannelExecApprovalAdapter,
   ChannelResolverAdapter,
   ChannelElevatedAdapter,
   ChannelGatewayAdapter,
   ChannelGroupAdapter,
   ChannelHeartbeatAdapter,
+  ChannelLifecycleAdapter,
   ChannelOutboundAdapter,
   ChannelPairingAdapter,
   ChannelSecurityAdapter,
   ChannelSetupAdapter,
   ChannelStatusAdapter,
+  ChannelAllowlistAdapter,
 } from "./types.adapters.js";
 import type {
   ChannelAgentTool,
@@ -71,6 +74,9 @@ export type ChannelPlugin<ResolvedAccount = any, Probe = unknown, Audit = unknow
   auth?: ChannelAuthAdapter;
   elevated?: ChannelElevatedAdapter;
   commands?: ChannelCommandAdapter;
+  lifecycle?: ChannelLifecycleAdapter;
+  execApprovals?: ChannelExecApprovalAdapter;
+  allowlist?: ChannelAllowlistAdapter;
   streaming?: ChannelStreamingAdapter;
   threading?: ChannelThreadingAdapter;
   messaging?: ChannelMessagingAdapter;
