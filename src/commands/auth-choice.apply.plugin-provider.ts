@@ -44,6 +44,7 @@ export async function runProviderPluginAuthMethod(params: {
   emitNotes?: boolean;
   secretInputMode?: OnboardOptions["secretInputMode"];
   allowSecretRefPrompt?: boolean;
+  opts?: Partial<OnboardOptions>;
 }): Promise<{ config: ApplyAuthChoiceParams["config"]; defaultModel?: string }> {
   const agentId = params.agentId ?? resolveDefaultAgentId(params.config);
   const defaultAgentId = resolveDefaultAgentId(params.config);
@@ -64,6 +65,7 @@ export async function runProviderPluginAuthMethod(params: {
     workspaceDir,
     prompter: params.prompter,
     runtime: params.runtime,
+    opts: params.opts,
     secretInputMode: params.secretInputMode,
     allowSecretRefPrompt: params.allowSecretRefPrompt,
     isRemote,
@@ -134,6 +136,7 @@ export async function applyAuthChoiceLoadedPluginProvider(
     workspaceDir,
     secretInputMode: params.opts?.secretInputMode,
     allowSecretRefPrompt: true,
+    opts: params.opts,
   });
 
   let agentModelOverride: string | undefined;
@@ -213,6 +216,7 @@ export async function applyAuthChoicePluginProvider(
     workspaceDir,
     secretInputMode: params.opts?.secretInputMode,
     allowSecretRefPrompt: true,
+    opts: params.opts,
   });
   nextConfig = applied.config;
 

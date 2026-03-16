@@ -120,6 +120,15 @@ export type ProviderAuthContext = {
   prompter: WizardPrompter;
   runtime: RuntimeEnv;
   /**
+   * Optional onboarding CLI options that triggered this auth flow.
+   *
+   * Present for setup/configure/auth-choice flows so provider methods can
+   * honor preseeded flags like `--openai-api-key` or generic
+   * `--token/--token-provider` pairs. Direct `models auth login` usually
+   * leaves this undefined.
+   */
+  opts?: Partial<OnboardOptions>;
+  /**
    * Onboarding secret persistence preference.
    *
    * Interactive wizard flows set this when the caller explicitly requested
@@ -187,6 +196,14 @@ export type ProviderAuthMethod = {
   label: string;
   hint?: string;
   kind: ProviderAuthKind;
+  /**
+   * Optional wizard/onboarding metadata for this specific auth method.
+   *
+   * Use this when one provider exposes multiple setup entries (for example API
+   * key + OAuth, or region-specific login flows). OpenClaw uses this to expose
+   * method-specific auth choices while keeping the provider id stable.
+   */
+  wizard?: ProviderPluginWizardSetup;
   run: (ctx: ProviderAuthContext) => Promise<ProviderAuthResult>;
   runNonInteractive?: (
     ctx: ProviderAuthMethodNonInteractiveContext,
