@@ -1341,6 +1341,12 @@
   display: inline;
 }
 
+.code-block-header + pre {
+  margin-top: 0;
+  border-top-left-radius: 0;
+  border-top-right-radius: 0;
+}
+
 :root[data-theme-mode="light"] .code-block,
 :root[data-theme-mode="light"] .list-item,
 :root[data-theme-mode="light"] .table-row,
