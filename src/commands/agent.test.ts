@@ -689,7 +689,12 @@ describe("agentCommand", () => {
   it("applies per-run provider and model overrides without persisting them", async () => {
     await withTempHome(async (home) => {
       const store = path.join(home, "sessions.json");
-      mockConfig(home, store);
+      mockConfig(home, store, {
+        models: {
+          "anthropic/claude-opus-4-5": {},
+          "openai/gpt-4.1-mini": {},
+        },
+      });
 
       await agentCommand(
         {
