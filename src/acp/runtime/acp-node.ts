@@ -1,5 +1,6 @@
 import type { NodeSession } from "../../gateway/node-registry.js";
 import { AcpGatewayNodeRuntime, type AcpGatewayNodeInvoker } from "../store/gateway-events.js";
+import type { AcpGatewayNodeSessionStatus } from "../store/gateway-events.js";
 import { AcpRuntimeError } from "./errors.js";
 import { registerAcpRuntimeBackend } from "./registry.js";
 import type {
@@ -128,6 +129,23 @@ function parseInvokePayload(result: {
   return source;
 }
 
+function toRuntimeError(
+  error: unknown,
+  code: "ACP_SESSION_INIT_FAILED" | "ACP_TURN_FAILED",
+): AcpRuntimeError {
+  if (error instanceof AcpRuntimeError) {
+    return error;
+  }
+  if (error instanceof Error) {
+    return new AcpRuntimeError(code, error.message, {
+      cause: error,
+    });
+  }
+  return new AcpRuntimeError(code, "ACP node operation failed.", {
+    cause: error,
+  });
+}
+
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -180,15 +198,11 @@ export class AcpNodeRuntime implements AcpRuntime {
         "No connected ACP-capable node is available for the acp-node backend.",
       );
     }
-    const lease =
-      existingLease &&
-      existingLease.nodeId === selectedNode.nodeId &&
-      (existingLease.state === "active" || existingLease.state === "suspect")
-        ? existingLease
-        : await this.gatewayRuntime.store.acquireLease({
-            sessionKey: input.sessionKey,
-            nodeId: selectedNode.nodeId,
-          });
+    const lease = await this.resolveLeaseForEnsure({
+      sessionKey: input.sessionKey,
+      selectedNodeId: selectedNode.nodeId,
+      existingLease,
+    });
     const result = await this.gatewayRuntime.ensureSession({
       invokeNode: this.invokeNode,
       nodeId: selectedNode.nodeId,
@@ -234,35 +248,46 @@ export class AcpNodeRuntime implements AcpRuntime {
       runId,
       requestId: input.requestId,
     });
-    const started = await this.gatewayRuntime.startTurn({
-      invokeNode: this.invokeNode,
-      nodeId: state.nodeId,
-      sessionKey: state.sessionKey,
-      runId,
-      leaseId: state.leaseId,
-      leaseEpoch: state.leaseEpoch,
-      requestId: input.requestId,
-      mode: input.mode,
-      text: input.text,
-      ...(input.attachments ? { attachments: input.attachments } : {}),
-      idempotencyKey: `acp-node:turn:${state.sessionKey}:${input.requestId}`,
-    });
-    if (!started.ok) {
-      throw new AcpRuntimeError(
-        "ACP_TURN_FAILED",
-        started.error?.message ?? "ACP turn start failed.",
-      );
-    }
-    const payload = parseInvokePayload(started) as AcpNodeInvokePayload;
-    if (payload.accepted !== true) {
-      throw new AcpRuntimeError("ACP_TURN_FAILED", payload.message ?? "ACP turn was not accepted.");
+    try {
+      const started = await this.gatewayRuntime.startTurn({
+        invokeNode: this.invokeNode,
+        nodeId: state.nodeId,
+        sessionKey: state.sessionKey,
+        runId,
+        leaseId: state.leaseId,
+        leaseEpoch: state.leaseEpoch,
+        requestId: input.requestId,
+        mode: input.mode,
+        text: input.text,
+        ...(input.attachments ? { attachments: input.attachments } : {}),
+        idempotencyKey: `acp-node:turn:${state.sessionKey}:${input.requestId}`,
+      });
+      if (!started.ok) {
+        throw new AcpRuntimeError(
+          "ACP_TURN_FAILED",
+          started.error?.message ?? "ACP turn start failed.",
+        );
+      }
+      const payload = parseInvokePayload(started) as AcpNodeInvokePayload;
+      if (payload.accepted !== true) {
+        throw new AcpRuntimeError(
+          "ACP_TURN_FAILED",
+          payload.message ?? "ACP turn was not accepted.",
+        );
+      }
+    } catch (error) {
+      const runtimeError = toRuntimeError(error, "ACP_TURN_FAILED");
+      await this.recordRejectedStart({
+        state,
+        runId,
+        message: runtimeError.message,
+      });
+      throw runtimeError;
     }
 
     let nextSeq = 1;
+    let cancelRequested = false;
     for (;;) {
-      if (input.signal?.aborted) {
-        throw new AcpRuntimeError("ACP_TURN_FAILED", "ACP operation aborted.");
-      }
       const events = await this.gatewayRuntime.store.listRunEvents(runId);
       for (const event of events) {
         if (event.seq < nextSeq) {
@@ -292,6 +317,18 @@ export class AcpNodeRuntime implements AcpRuntime {
           ...(run.terminal.stopReason ? { stopReason: run.terminal.stopReason } : {}),
         };
         return;
+      }
+      if (run?.state === "cancelling" || run?.cancelRequestedAt) {
+        cancelRequested = true;
+      }
+      if (input.signal?.aborted && !cancelRequested) {
+        await this.requestCancel({
+          state,
+          runId,
+          reason: "signal-aborted",
+        });
+        cancelRequested = true;
+        continue;
       }
       await sleep(this.pollIntervalMs);
     }
@@ -344,22 +381,11 @@ export class AcpNodeRuntime implements AcpRuntime {
     if (!runId) {
       return;
     }
-    const result = await this.gatewayRuntime.cancelTurn({
-      invokeNode: this.invokeNode,
-      nodeId: state.nodeId,
-      sessionKey: state.sessionKey,
+    await this.requestCancel({
+      state,
       runId,
-      leaseId: state.leaseId,
-      leaseEpoch: state.leaseEpoch,
-      ...(input.reason ? { reason: input.reason } : {}),
-      idempotencyKey: `acp-node:cancel:${state.sessionKey}:${runId}`,
+      reason: input.reason,
     });
-    if (!result.ok) {
-      throw new AcpRuntimeError(
-        "ACP_TURN_FAILED",
-        result.error?.message ?? "ACP node turn cancel failed.",
-      );
-    }
   }
 
   async close(input: { handle: AcpRuntimeHandle; reason: string }): Promise<void> {
@@ -379,6 +405,157 @@ export class AcpNodeRuntime implements AcpRuntime {
         result.error?.message ?? "ACP node session close failed.",
       );
     }
+  }
+
+  private async resolveLeaseForEnsure(params: {
+    sessionKey: string;
+    selectedNodeId: string;
+    existingLease: Awaited<ReturnType<AcpGatewayNodeRuntime["store"]["getActiveLease"]>>;
+  }) {
+    const { sessionKey, selectedNodeId, existingLease } = params;
+    if (!existingLease) {
+      return await this.gatewayRuntime.store.acquireLease({
+        sessionKey,
+        nodeId: selectedNodeId,
+      });
+    }
+    if (existingLease.state === "active" && existingLease.nodeId === selectedNodeId) {
+      return existingLease;
+    }
+    if (existingLease.state === "suspect") {
+      if (existingLease.nodeId !== selectedNodeId) {
+        throw new AcpRuntimeError(
+          "ACP_SESSION_INIT_FAILED",
+          `ACP session ${sessionKey} is waiting for same-node reconcile on ${existingLease.nodeId}.`,
+        );
+      }
+      return await this.reconcileSuspectLeaseOrThrow({
+        sessionKey,
+        nodeId: selectedNodeId,
+        leaseId: existingLease.leaseId,
+        leaseEpoch: existingLease.leaseEpoch,
+      });
+    }
+    return await this.gatewayRuntime.store.acquireLease({
+      sessionKey,
+      nodeId: selectedNodeId,
+    });
+  }
+
+  private async reconcileSuspectLeaseOrThrow(params: {
+    sessionKey: string;
+    nodeId: string;
+    leaseId: string;
+    leaseEpoch: number;
+  }) {
+    let status: AcpGatewayNodeSessionStatus;
+    try {
+      status = await this.gatewayRuntime.querySessionStatus({
+        invokeNode: this.invokeNode,
+        nodeId: params.nodeId,
+        sessionKey: params.sessionKey,
+        leaseId: params.leaseId,
+        leaseEpoch: params.leaseEpoch,
+        idempotencyKey: `acp-node:status:${params.sessionKey}:${params.leaseId}:${params.leaseEpoch}`,
+      });
+    } catch (error) {
+      await this.gatewayRuntime.store.markStatusMismatch({
+        sessionKey: params.sessionKey,
+      });
+      throw new AcpRuntimeError(
+        "ACP_SESSION_INIT_FAILED",
+        error instanceof Error ? error.message : "ACP node status reconcile failed.",
+        {
+          cause: error,
+        },
+      );
+    }
+    if (
+      status.nodeId !== params.nodeId ||
+      status.sessionKey !== params.sessionKey ||
+      status.leaseId !== params.leaseId ||
+      status.leaseEpoch !== params.leaseEpoch ||
+      (status.state !== "idle" && status.state !== "running" && status.state !== "cancelling")
+    ) {
+      await this.gatewayRuntime.store.markStatusMismatch({
+        sessionKey: params.sessionKey,
+      });
+      throw new AcpRuntimeError(
+        "ACP_SESSION_INIT_FAILED",
+        `ACP node status reconcile failed for session ${params.sessionKey}.`,
+      );
+    }
+    return (
+      await this.gatewayRuntime.reconcileSuspectLease({
+        sessionKey: params.sessionKey,
+        nodeId: params.nodeId,
+        leaseId: params.leaseId,
+        leaseEpoch: params.leaseEpoch,
+        state: status.state,
+        ...(status.nodeRuntimeSessionId
+          ? { nodeRuntimeSessionId: status.nodeRuntimeSessionId }
+          : {}),
+        ...(status.nodeWorkerRunId ? { nodeWorkerRunId: status.nodeWorkerRunId } : {}),
+        ...(typeof status.workerProtocolVersion === "number"
+          ? { workerProtocolVersion: status.workerProtocolVersion }
+          : {}),
+      })
+    ).lease;
+  }
+
+  private async recordRejectedStart(params: {
+    state: AcpNodeHandleState;
+    runId: string;
+    message: string;
+  }): Promise<void> {
+    await this.gatewayRuntime.store.resolveTerminal({
+      nodeId: params.state.nodeId,
+      sessionKey: params.state.sessionKey,
+      runId: params.runId,
+      leaseId: params.state.leaseId,
+      leaseEpoch: params.state.leaseEpoch,
+      terminalEventId: `gateway-start-rejected:${params.runId}`,
+      finalSeq: 0,
+      terminal: {
+        kind: "failed",
+        errorCode: "ACP_TURN_FAILED",
+        errorMessage: params.message,
+      },
+    });
+  }
+
+  private async requestCancel(params: {
+    state: AcpNodeHandleState;
+    runId: string;
+    reason?: string;
+  }): Promise<void> {
+    const result = await this.gatewayRuntime.cancelTurn({
+      invokeNode: this.invokeNode,
+      nodeId: params.state.nodeId,
+      sessionKey: params.state.sessionKey,
+      runId: params.runId,
+      leaseId: params.state.leaseId,
+      leaseEpoch: params.state.leaseEpoch,
+      ...(params.reason ? { reason: params.reason } : {}),
+      idempotencyKey: `acp-node:cancel:${params.state.sessionKey}:${params.runId}`,
+    });
+    if (!result.ok) {
+      throw new AcpRuntimeError(
+        "ACP_TURN_FAILED",
+        result.error?.message ?? "ACP node turn cancel failed.",
+      );
+    }
+    const payload = parseInvokePayload(result) as AcpNodeInvokePayload;
+    if (payload.accepted !== true) {
+      throw new AcpRuntimeError(
+        "ACP_TURN_FAILED",
+        payload.message ?? "ACP node turn cancel was not accepted.",
+      );
+    }
+    await this.gatewayRuntime.store.recordCancelRequested({
+      sessionKey: params.state.sessionKey,
+      runId: params.runId,
+    });
   }
 }
 

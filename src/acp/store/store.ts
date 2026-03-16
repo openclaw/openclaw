@@ -321,6 +321,47 @@ export class AcpGatewayStore {
     });
   }
 
+  async recordCancelRequested(params: {
+    sessionKey: string;
+    runId: string;
+    now?: number;
+  }): Promise<AcpGatewayRunRecord> {
+    const now = params.now ?? Date.now();
+    return await this.mutateStore(async (store) => {
+      const session = store.sessions[params.sessionKey];
+      if (!session) {
+        throw new AcpGatewayStoreError(
+          "ACP_NODE_SESSION_NOT_FOUND",
+          `ACP session ${params.sessionKey} does not exist.`,
+        );
+      }
+      const run = store.runs[params.runId];
+      if (!run || run.sessionKey !== params.sessionKey) {
+        throw new AcpGatewayStoreError(
+          "ACP_NODE_RUN_NOT_FOUND",
+          `ACP run ${params.runId} is not known for session ${params.sessionKey}.`,
+        );
+      }
+      if (run.terminal) {
+        return run;
+      }
+      if (session.activeRunId && session.activeRunId !== params.runId) {
+        throw new AcpGatewayStoreError(
+          "ACP_NODE_INVALID_EVENT",
+          `ACP session ${params.sessionKey} already has active run ${session.activeRunId}.`,
+        );
+      }
+      session.activeRunId = params.runId;
+      session.lastRunId = params.runId;
+      session.state = "running";
+      session.updatedAt = now;
+      run.state = "cancelling";
+      run.updatedAt = now;
+      run.cancelRequestedAt ??= now;
+      return run;
+    });
+  }
+
   async appendWorkerEvent(
     params: AcpWorkerEventEnvelope & { now?: number; leaseTtlMs?: number },
   ): Promise<{ record: AcpGatewayRunEventRecord; duplicate: boolean }> {
