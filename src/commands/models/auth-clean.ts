@@ -167,7 +167,26 @@ export async function modelsAuthCleanCommand(
   // Detect them by collecting the set of providers that already have at least one
   // explicitly-configured profile.  Any store profile whose provider is NOT in that
   // set is a store-fallback entry and must be kept.
+  // Compute configured providers from the config itself — not from what
+  // exists in store.profiles.  This ensures a provider counts as "configured"
+  // even when its profile IDs are missing from the store (drifted setups),
+  // allowing stale store entries for that provider to be pruned correctly.
   const configuredProviders = new Set<string>();
+  // 1) Providers declared in cfg.auth.profiles (each entry has a .provider).
+  for (const profile of Object.values(cfg.auth?.profiles ?? {})) {
+    if (profile && typeof profile.provider === "string") {
+      configuredProviders.add(normalizeProviderIdForAuth(profile.provider));
+    }
+  }
+  // 2) Provider keys in cfg.auth.order (keys are provider identifiers).
+  for (const providerKey of Object.keys(cfg.auth?.order ?? {})) {
+    if (providerKey.trim()) {
+      configuredProviders.add(normalizeProviderIdForAuth(providerKey.trim()));
+    }
+  }
+  // 3) Fall back to store-matched providers for profiles referenced by
+  //    store.order or tools.media (these don't carry a .provider field
+  //    themselves, so we still need the store lookup for them).
   for (const profileId of configuredProfiles) {
     const cred = store.profiles[profileId];
     if (cred) {
