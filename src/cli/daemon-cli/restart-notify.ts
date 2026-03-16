@@ -41,6 +41,8 @@ export async function writeRestartSentinelFromEnvIfPresent(
   };
 
   try {
+    const sentinelPath = resolveRestartSentinelPath(env);
+    env.OPENCLAW_RESTART_SENTINEL_PATH = sentinelPath;
     await writeRestartSentinel(payload, env);
     return true;
   } catch {

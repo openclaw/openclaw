@@ -58,6 +58,15 @@ describe("resolveAnnounceTargetFromKey", () => {
     });
   });
 
+  it("prefers ordinary non-account parsing when channel ids start with reserved kind tokens", () => {
+    expect(resolveAnnounceTargetFromKey("agent:main:telegram:channel:direct")).toEqual({
+      channel: "telegram",
+      to: "channel:direct",
+      accountId: undefined,
+      threadId: undefined,
+    });
+  });
+
   it("preserves non-integer thread ids", () => {
     expect(
       resolveAnnounceTargetFromKey("agent:main:slack:channel:C0123ABC:thread:1234567890.123456"),

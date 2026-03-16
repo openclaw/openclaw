@@ -69,32 +69,68 @@ if [ -n "$wait_pid" ] && [ "$wait_pid" -gt 1 ] 2>/dev/null; then
   done
 fi
 `;
+  const clearRestartSentinel = `clear_restart_sentinel() {
+  if [ -z "$OPENCLAW_RESTART_NOTIFY_SESSION_KEY" ] && [ -z "$OPENCLAW_RESTART_SENTINEL_PATH" ]; then
+    return
+  fi
+  sentinel_path="$OPENCLAW_RESTART_SENTINEL_PATH"
+  if [ -z "$sentinel_path" ]; then
+    state_dir="$OPENCLAW_STATE_DIR"
+    if [ -z "$state_dir" ]; then
+      state_dir="$CLAWDBOT_STATE_DIR"
+    fi
+    if [ -z "$state_dir" ]; then
+      state_dir="$HOME/.openclaw"
+    fi
+    sentinel_path="$state_dir/restart-sentinel.json"
+  fi
+  rm -f "$sentinel_path" >/dev/null 2>&1 || true
+}
+`;
 
   if (mode === "kickstart") {
-    return `service_target="$1"
+    return `${clearRestartSentinel}service_target="$1"
 domain="$2"
 plist_path="$3"
 ${waitForCallerPid}
-if ! launchctl kickstart -k "$service_target" >/dev/null 2>&1; then
+restart_ok=0
+if launchctl kickstart -k "$service_target" >/dev/null 2>&1; then
+  restart_ok=1
+else
   launchctl enable "$service_target" >/dev/null 2>&1
   if launchctl bootstrap "$domain" "$plist_path" >/dev/null 2>&1; then
-    launchctl kickstart -k "$service_target" >/dev/null 2>&1 || true
+    if launchctl kickstart -k "$service_target" >/dev/null 2>&1; then
+      restart_ok=1
+    fi
   fi
+fi
+if [ "$restart_ok" -ne 1 ]; then
+  clear_restart_sentinel
 fi
 `;
   }
 
-  return `service_target="$1"
+  return `${clearRestartSentinel}service_target="$1"
 domain="$2"
 plist_path="$3"
 ${waitForCallerPid}
-if ! launchctl start "$service_target" >/dev/null 2>&1; then
+restart_ok=0
+if launchctl start "$service_target" >/dev/null 2>&1; then
+  restart_ok=1
+else
   launchctl enable "$service_target" >/dev/null 2>&1
   if launchctl bootstrap "$domain" "$plist_path" >/dev/null 2>&1; then
-    launchctl start "$service_target" >/dev/null 2>&1 || launchctl kickstart -k "$service_target" >/dev/null 2>&1 || true
+    if launchctl start "$service_target" >/dev/null 2>&1 || launchctl kickstart -k "$service_target" >/dev/null 2>&1; then
+      restart_ok=1
+    fi
   else
-    launchctl kickstart -k "$service_target" >/dev/null 2>&1 || true
+    if launchctl kickstart -k "$service_target" >/dev/null 2>&1; then
+      restart_ok=1
+    fi
   fi
+fi
+if [ "$restart_ok" -ne 1 ]; then
+  clear_restart_sentinel
 fi
 `;
 }

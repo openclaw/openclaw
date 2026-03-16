@@ -23,6 +23,9 @@ describe("writeRestartSentinelFromEnvIfPresent", () => {
         },
         async () => {
           await expect(writeRestartSentinelFromEnvIfPresent(process.env)).resolves.toBe(true);
+          expect(process.env.OPENCLAW_RESTART_SENTINEL_PATH).toBe(
+            path.join(stateDir, "restart-sentinel.json"),
+          );
           const sentinel = await readRestartSentinel(process.env);
           expect(sentinel?.payload.sessionKey).toBe("agent:main:feishu:direct:ou_123");
           expect(sentinel?.payload.deliveryContext).toMatchObject({

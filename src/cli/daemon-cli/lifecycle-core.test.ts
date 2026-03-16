@@ -231,6 +231,23 @@ describe("runServiceRestart token drift", () => {
     expect(onRestartComplete).toHaveBeenCalledTimes(1);
   });
 
+  it("invokes the restart-failed hook when scheduled restart completion throws", async () => {
+    const onRestartFailed = vi.fn();
+    service.restart.mockResolvedValue({ outcome: "scheduled" });
+
+    await expect(
+      runServiceRestart({
+        ...createServiceRunArgs(),
+        onRestartComplete: async () => {
+          throw new Error("handoff failed");
+        },
+        onRestartFailed,
+      }),
+    ).rejects.toThrow("__exit__:1");
+
+    expect(onRestartFailed).toHaveBeenCalledTimes(1);
+  });
+
   it("invokes the restart-failed hook when a prepared direct restart throws", async () => {
     const onBeforeRestart = vi.fn();
     const onRestartFailed = vi.fn();

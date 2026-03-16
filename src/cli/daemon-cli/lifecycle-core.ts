@@ -453,16 +453,18 @@ export async function runServiceRestart(params: {
     }
     let restartStatus = describeGatewayServiceRestart(params.serviceNoun, restartResult);
     if (restartStatus.scheduled) {
+      const emitted = await emitScheduledRestart(restartStatus, loaded);
       cleanupPreparedRestart = false;
-      return await emitScheduledRestart(restartStatus, loaded);
+      return emitted;
     }
     if (params.postRestartCheck) {
       const postRestartResult = await params.postRestartCheck({ json, stdout, warnings, fail });
       if (postRestartResult) {
         restartStatus = describeGatewayServiceRestart(params.serviceNoun, postRestartResult);
         if (restartStatus.scheduled) {
+          const emitted = await emitScheduledRestart(restartStatus, loaded);
           cleanupPreparedRestart = false;
-          return await emitScheduledRestart(restartStatus, loaded);
+          return emitted;
         }
       }
     }

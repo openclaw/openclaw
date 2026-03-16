@@ -37,6 +37,9 @@ describe("scheduleDetachedLaunchdRestartHandoff", () => {
     expect(args[6]).toBe("9876");
     expect(args[1]).toContain('while kill -0 "$wait_pid" >/dev/null 2>&1; do');
     expect(args[1]).toContain('launchctl kickstart -k "$service_target" >/dev/null 2>&1');
+    expect(args[1]).toContain("restart_ok=0");
+    expect(args[1]).toContain("clear_restart_sentinel()");
+    expect(args[1]).toContain('rm -f "$sentinel_path" >/dev/null 2>&1 || true');
     expect(args[1]).not.toContain("sleep 1");
     expect(unrefMock).toHaveBeenCalledTimes(1);
   });

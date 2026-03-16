@@ -41,6 +41,10 @@ function isAnnounceTargetSessionKind(
   return value === "group" || value === "channel" || value === "direct" || value === "dm";
 }
 
+function isDirectAnnounceTargetSessionKind(value: string | undefined): value is "direct" | "dm" {
+  return value === "direct" || value === "dm";
+}
+
 export function resolveAnnounceTargetFromKey(sessionKey: string): AnnounceTarget | null {
   const rawParts = sessionKey.split(":").filter(Boolean);
   const parts = rawParts.length >= 3 && rawParts[0] === "agent" ? rawParts.slice(2) : rawParts;
@@ -49,15 +53,23 @@ export function resolveAnnounceTargetFromKey(sessionKey: string): AnnounceTarget
   }
 
   const [channelRaw, second, third, ...remaining] = parts;
-  const hasAccountScopedKind = isAnnounceTargetSessionKind(third);
-  const hasDirectKind = isAnnounceTargetSessionKind(second);
-  const kind = hasAccountScopedKind ? third : hasDirectKind ? second : null;
+  const hasNonAccountKind = isAnnounceTargetSessionKind(second);
+  const hasAccountScopedKind = isDirectAnnounceTargetSessionKind(third);
+  // buildAgentPeerSessionKey only emits account-scoped keys for direct sessions:
+  //   <channel>:<accountId>:direct:<peerId>
+  // Prefer the ordinary non-account parse when the second token is already a
+  // concrete kind (e.g. <channel>:channel:direct), but still allow account ids
+  // that happen to equal legacy direct-kind tokens (e.g. slack:dm:direct:U123).
+  const useAccountScopedKind =
+    hasAccountScopedKind &&
+    (!hasNonAccountKind || (isDirectAnnounceTargetSessionKind(second) && remaining.length > 0));
+  const kind = useAccountScopedKind ? third : hasNonAccountKind ? second : null;
   if (!kind || !channelRaw) {
     return null;
   }
 
-  const accountId = hasAccountScopedKind ? second?.trim() || undefined : undefined;
-  const rest = hasAccountScopedKind ? remaining : [third, ...remaining].filter(Boolean);
+  const accountId = useAccountScopedKind ? second?.trim() || undefined : undefined;
+  const rest = useAccountScopedKind ? remaining : [third, ...remaining].filter(Boolean);
   const restJoined = rest.join(":").trim();
   if (!restJoined) {
     return null;
