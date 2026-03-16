@@ -385,6 +385,15 @@ function isCancelLikeStopReason(value: string | undefined): boolean {
   return normalized === "cancelled" || normalized === "cancel" || normalized.includes("cancel");
 }
 
+function recordCloseFailure(session: AcpNodeSessionRecord, reason: string, error: unknown): void {
+  session.state = "error";
+  session.closeFailure = {
+    reason,
+    errorMessage: resolveFailureMessage(error),
+  };
+  session.updatedAt = Date.now();
+}
+
 async function closeSessionRecord(session: AcpNodeSessionRecord, reason: string): Promise<void> {
   if (session.activeTurn) {
     session.activeTurn.abortController.abort();
@@ -393,8 +402,9 @@ async function closeSessionRecord(session: AcpNodeSessionRecord, reason: string)
         handle: session.handle,
         reason,
       });
-    } catch {
-      // Best-effort shutdown: replacing a lease must not get stuck on a stale worker.
+    } catch (error) {
+      recordCloseFailure(session, reason, error);
+      throw error;
     }
   }
   try {
@@ -403,12 +413,7 @@ async function closeSessionRecord(session: AcpNodeSessionRecord, reason: string)
       reason,
     });
   } catch (error) {
-    session.state = "error";
-    session.closeFailure = {
-      reason,
-      errorMessage: resolveFailureMessage(error),
-    };
-    session.updatedAt = Date.now();
+    recordCloseFailure(session, reason, error);
     throw error;
   }
 }
@@ -652,13 +657,6 @@ function rememberCompletedTurn(session: AcpNodeSessionRecord, turn: AcpCompleted
     session.completedTurns.delete(turn.runId);
   }
   session.completedTurns.set(turn.runId, turn);
-  while (session.completedTurns.size > 8) {
-    const oldest = session.completedTurns.keys().next().value;
-    if (!oldest) {
-      break;
-    }
-    session.completedTurns.delete(oldest);
-  }
 }
 
 function settleCompletedTurn(session: AcpNodeSessionRecord, activeTurn: AcpNodeActiveTurn): void {

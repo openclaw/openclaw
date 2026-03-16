@@ -35,6 +35,20 @@ type NodeEventCall = {
   payload: unknown;
 };
 
+type TurnSignals = {
+  ready: Deferred<void>;
+  release: Deferred<void>;
+  finished: Deferred<void>;
+};
+
+function createTurnSignals(): TurnSignals {
+  return {
+    ready: createDeferred<void>(),
+    release: createDeferred<void>(),
+    finished: createDeferred<void>(),
+  };
+}
+
 class FakeNodeHostRuntime implements AcpRuntime {
   readonly ensured: AcpRuntimeEnsureInput[] = [];
   readonly turns: AcpRuntimeTurnInput[] = [];
@@ -63,9 +77,9 @@ class FakeNodeHostRuntime implements AcpRuntime {
     },
   ];
 
-  private readonly readyToEmit = createDeferred<void>();
-  private readonly releaseTurn = createDeferred<void>();
-  private readonly finished = createDeferred<void>();
+  private currentTurn: TurnSignals | null = null;
+  private lastStartedTurn: TurnSignals | null = null;
+  private nextTurn: TurnSignals = createTurnSignals();
   private nextStopReason = "done";
 
   async ensureSession(input: AcpRuntimeEnsureInput): Promise<AcpRuntimeHandle> {
@@ -80,9 +94,13 @@ class FakeNodeHostRuntime implements AcpRuntime {
   }
 
   async *runTurn(input: AcpRuntimeTurnInput): AsyncIterable<AcpRuntimeEvent> {
+    const turn = this.nextTurn;
+    this.nextTurn = createTurnSignals();
+    this.currentTurn = turn;
+    this.lastStartedTurn = turn;
     this.turns.push(input);
-    this.readyToEmit.resolve();
-    await this.releaseTurn.promise;
+    turn.ready.resolve();
+    await turn.release.promise;
     try {
       for (const event of this.emittedEvents) {
         if (event.type === "done") {
@@ -95,7 +113,10 @@ class FakeNodeHostRuntime implements AcpRuntime {
         yield event;
       }
     } finally {
-      this.finished.resolve();
+      turn.finished.resolve();
+      if (this.currentTurn === turn) {
+        this.currentTurn = null;
+      }
     }
   }
 
@@ -109,13 +130,14 @@ class FakeNodeHostRuntime implements AcpRuntime {
   }
 
   async cancel(input: { handle: AcpRuntimeHandle; reason?: string }): Promise<void> {
+    const turn = this.currentTurn ?? this.lastStartedTurn ?? this.nextTurn;
     this.cancelled.push(input);
     if (this.rewriteStopReasonOnCancel) {
       this.nextStopReason = input.reason ?? "cancelled";
     }
-    this.releaseTurn.resolve();
+    turn.release.resolve();
     if (this.cancelRejectAfterSettled) {
-      await this.finished.promise;
+      await turn.finished.promise;
     }
     if (this.cancelError) {
       throw this.cancelError;
@@ -130,16 +152,17 @@ class FakeNodeHostRuntime implements AcpRuntime {
   }
 
   async waitForTurnStart() {
-    await this.readyToEmit.promise;
+    await (this.currentTurn ?? this.nextTurn).ready.promise;
   }
 
   releaseTurnToComplete(stopReason = "done") {
+    const turn = this.currentTurn ?? this.lastStartedTurn ?? this.nextTurn;
     this.nextStopReason = stopReason;
-    this.releaseTurn.resolve();
+    turn.release.resolve();
   }
 
   async waitForTurnFinish() {
-    await this.finished.promise;
+    await (this.currentTurn ?? this.lastStartedTurn ?? this.nextTurn).finished.promise;
   }
 }
 
@@ -1575,6 +1598,196 @@ describe("handleAcpInvokeCommand", () => {
       code: "UNAVAILABLE",
       message: expect.stringContaining("failed-close state"),
     });
+  });
+
+  it("does not report active close success when cancel fails and worker traffic can still arrive", async () => {
+    const runtime = new FakeNodeHostRuntime();
+    runtime.cancelError = new Error("cancel backend exploded");
+    registerAcpRuntimeBackend({
+      id: "acpx",
+      runtime,
+    });
+    const nodeEvents: NodeEventCall[] = [];
+
+    await handleAcpInvokeCommand(
+      buildFrame({
+        command: "acp.session.ensure",
+        payload: {
+          sessionKey: "agent:main:acp:test",
+          leaseId: "lease-1",
+          leaseEpoch: 1,
+          agent: "main",
+          mode: "persistent",
+        },
+      }),
+      buildDeps(async (event, payload) => {
+        nodeEvents.push({ event, payload });
+      }),
+    );
+
+    await handleAcpInvokeCommand(
+      buildFrame({
+        command: "acp.turn.start",
+        payload: {
+          sessionKey: "agent:main:acp:test",
+          runId: "run-close-cancel-fail",
+          leaseId: "lease-1",
+          leaseEpoch: 1,
+          requestId: "req-close-cancel-fail",
+          mode: "prompt",
+          text: "close while worker lives",
+        },
+      }),
+      buildDeps(async (event, payload) => {
+        nodeEvents.push({ event, payload });
+      }),
+    );
+
+    await runtime.waitForTurnStart();
+
+    const closeResult = await handleAcpInvokeCommand(
+      buildFrame({
+        command: "acp.session.close",
+        payload: {
+          sessionKey: "agent:main:acp:test",
+          leaseId: "lease-1",
+          leaseEpoch: 1,
+          reason: "cleanup",
+        },
+      }),
+      buildDeps(),
+    );
+
+    expect(closeResult).toMatchObject({
+      handled: true,
+      ok: false,
+      code: "UNAVAILABLE",
+      message: expect.stringContaining("cancel backend exploded"),
+    });
+
+    await runtime.waitForTurnFinish();
+    await vi.waitFor(() => {
+      expect(nodeEvents.at(-1)).toMatchObject({
+        event: "acp.worker.terminal",
+        payload: {
+          runId: "run-close-cancel-fail",
+        },
+      });
+    });
+
+    const status = await handleAcpInvokeCommand(
+      buildFrame({
+        command: "acp.session.status",
+        payload: {
+          sessionKey: "agent:main:acp:test",
+          leaseId: "lease-1",
+          leaseEpoch: 1,
+        },
+      }),
+      buildDeps(),
+    );
+
+    expect(status).toMatchObject({
+      handled: true,
+      ok: true,
+      payload: {
+        state: "error",
+        nodeRuntimeSessionId: "acpx-session-1",
+        details: {
+          reason: "close_failed",
+          closeReason: "cleanup",
+          errorMessage: "cancel backend exploded",
+        },
+      },
+    });
+  });
+
+  it("keeps completed-turn replay idempotent after many later runs", async () => {
+    const runtime = new FakeNodeHostRuntime();
+    registerAcpRuntimeBackend({
+      id: "acpx",
+      runtime,
+    });
+    const nodeEvents: NodeEventCall[] = [];
+
+    await handleAcpInvokeCommand(
+      buildFrame({
+        command: "acp.session.ensure",
+        payload: {
+          sessionKey: "agent:main:acp:test",
+          leaseId: "lease-1",
+          leaseEpoch: 1,
+          agent: "main",
+          mode: "persistent",
+        },
+      }),
+      buildDeps(async (event, payload) => {
+        nodeEvents.push({ event, payload });
+      }),
+    );
+
+    let firstReplay: Awaited<ReturnType<typeof handleAcpInvokeCommand>> | undefined;
+    for (let index = 1; index <= 9; index += 1) {
+      const result = await handleAcpInvokeCommand(
+        buildFrame({
+          command: "acp.turn.start",
+          payload: {
+            sessionKey: "agent:main:acp:test",
+            runId: `run-${index}`,
+            leaseId: "lease-1",
+            leaseEpoch: 1,
+            requestId: `req-${index}`,
+            mode: "prompt",
+            text: `turn ${index}`,
+          },
+        }),
+        buildDeps(async (event, payload) => {
+          nodeEvents.push({ event, payload });
+        }),
+      );
+
+      if (index === 1) {
+        firstReplay = result;
+      }
+      await vi.waitFor(() => {
+        expect(runtime.turns).toHaveLength(index);
+      });
+      runtime.releaseTurnToComplete("end_turn");
+      await vi.waitFor(() => {
+        expect(nodeEvents).toHaveLength(index * 3);
+      });
+    }
+
+    const replay = await handleAcpInvokeCommand(
+      buildFrame({
+        command: "acp.turn.start",
+        payload: {
+          sessionKey: "agent:main:acp:test",
+          runId: "run-1",
+          leaseId: "lease-1",
+          leaseEpoch: 1,
+          requestId: "req-1",
+          mode: "prompt",
+          text: "turn 1",
+        },
+      }),
+      buildDeps(async (event, payload) => {
+        nodeEvents.push({ event, payload });
+      }),
+    );
+
+    const firstPayload = (firstReplay as Extract<typeof firstReplay, { handled: true; ok: true }>)
+      .payload as { nodeWorkerRunId: string };
+
+    expect(replay).toMatchObject({
+      handled: true,
+      ok: true,
+      payload: {
+        accepted: true,
+        nodeWorkerRunId: firstPayload.nodeWorkerRunId,
+      },
+    });
+    expect(runtime.turns).toHaveLength(9);
   });
 
   it("propagates runtime status failure instead of synthesizing a healthy status payload", async () => {
