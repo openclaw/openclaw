@@ -124,13 +124,21 @@ function listBundledPluginBuildEntries(): Record<string, string> {
     if (fs.existsSync(packageJsonPath)) {
       try {
         const packageJson = JSON.parse(fs.readFileSync(packageJsonPath, "utf8")) as {
-          openclaw?: { extensions?: unknown };
+          openclaw?: { extensions?: unknown; setupEntry?: unknown };
         };
         packageEntries = Array.isArray(packageJson.openclaw?.extensions)
           ? packageJson.openclaw.extensions.filter(
               (entry): entry is string => typeof entry === "string" && entry.trim().length > 0,
             )
           : [];
+        const setupEntry =
+          typeof packageJson.openclaw?.setupEntry === "string" &&
+          packageJson.openclaw.setupEntry.trim().length > 0
+            ? packageJson.openclaw.setupEntry
+            : undefined;
+        if (setupEntry) {
+          packageEntries = Array.from(new Set([...packageEntries, setupEntry]));
+        }
       } catch {
         packageEntries = [];
       }
