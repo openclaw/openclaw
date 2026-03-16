@@ -4,6 +4,16 @@ import {
   listDiscordDirectoryPeersLive,
 } from "../../../extensions/discord/src/directory-live.js";
 import { monitorDiscordProvider } from "../../../extensions/discord/src/monitor.js";
+import {
+  getThreadBindingManager,
+  resolveThreadBindingIdleTimeoutMs,
+  resolveThreadBindingInactivityExpiresAt,
+  resolveThreadBindingMaxAgeExpiresAt,
+  resolveThreadBindingMaxAgeMs,
+  setThreadBindingIdleTimeoutBySessionKey,
+  setThreadBindingMaxAgeBySessionKey,
+  unbindThreadBindingsBySessionKey,
+} from "../../../extensions/discord/src/monitor/thread-bindings.js";
 import { probeDiscord } from "../../../extensions/discord/src/probe.js";
 import { resolveDiscordChannelAllowlist } from "../../../extensions/discord/src/resolve-channels.js";
 import { resolveDiscordUserAllowlist } from "../../../extensions/discord/src/resolve-users.js";
@@ -36,6 +46,16 @@ export function createRuntimeDiscord(): PluginRuntimeChannel["discord"] {
     sendMessageDiscord,
     sendPollDiscord,
     monitorDiscordProvider,
+    threadBindings: {
+      getManager: getThreadBindingManager,
+      resolveIdleTimeoutMs: resolveThreadBindingIdleTimeoutMs,
+      resolveInactivityExpiresAt: resolveThreadBindingInactivityExpiresAt,
+      resolveMaxAgeMs: resolveThreadBindingMaxAgeMs,
+      resolveMaxAgeExpiresAt: resolveThreadBindingMaxAgeExpiresAt,
+      setIdleTimeoutBySessionKey: setThreadBindingIdleTimeoutBySessionKey,
+      setMaxAgeBySessionKey: setThreadBindingMaxAgeBySessionKey,
+      unbindBySessionKey: unbindThreadBindingsBySessionKey,
+    },
     typing: {
       pulse: sendTypingDiscord,
       start: async ({ channelId, accountId, cfg, intervalMs }) =>

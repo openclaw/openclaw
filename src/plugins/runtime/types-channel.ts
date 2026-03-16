@@ -98,6 +98,16 @@ export type PluginRuntimeChannel = {
     sendMessageDiscord: typeof import("../../../extensions/discord/src/send.js").sendMessageDiscord;
     sendPollDiscord: typeof import("../../../extensions/discord/src/send.js").sendPollDiscord;
     monitorDiscordProvider: typeof import("../../../extensions/discord/src/monitor.js").monitorDiscordProvider;
+    threadBindings: {
+      getManager: typeof import("../../../extensions/discord/src/monitor/thread-bindings.js").getThreadBindingManager;
+      resolveIdleTimeoutMs: typeof import("../../../extensions/discord/src/monitor/thread-bindings.js").resolveThreadBindingIdleTimeoutMs;
+      resolveInactivityExpiresAt: typeof import("../../../extensions/discord/src/monitor/thread-bindings.js").resolveThreadBindingInactivityExpiresAt;
+      resolveMaxAgeMs: typeof import("../../../extensions/discord/src/monitor/thread-bindings.js").resolveThreadBindingMaxAgeMs;
+      resolveMaxAgeExpiresAt: typeof import("../../../extensions/discord/src/monitor/thread-bindings.js").resolveThreadBindingMaxAgeExpiresAt;
+      setIdleTimeoutBySessionKey: typeof import("../../../extensions/discord/src/monitor/thread-bindings.js").setThreadBindingIdleTimeoutBySessionKey;
+      setMaxAgeBySessionKey: typeof import("../../../extensions/discord/src/monitor/thread-bindings.js").setThreadBindingMaxAgeBySessionKey;
+      unbindBySessionKey: typeof import("../../../extensions/discord/src/monitor/thread-bindings.js").unbindThreadBindingsBySessionKey;
+    };
     typing: {
       pulse: typeof import("../../../extensions/discord/src/send.js").sendTypingDiscord;
       start: (params: {
@@ -138,6 +148,10 @@ export type PluginRuntimeChannel = {
     sendPollTelegram: typeof import("../../../extensions/telegram/src/send.js").sendPollTelegram;
     monitorTelegramProvider: typeof import("../../../extensions/telegram/src/monitor.js").monitorTelegramProvider;
     messageActions: typeof import("../../channels/plugins/actions/telegram.js").telegramMessageActions;
+    threadBindings: {
+      setIdleTimeoutBySessionKey: typeof import("../../../extensions/telegram/src/thread-bindings.js").setTelegramThreadBindingIdleTimeoutBySessionKey;
+      setMaxAgeBySessionKey: typeof import("../../../extensions/telegram/src/thread-bindings.js").setTelegramThreadBindingMaxAgeBySessionKey;
+    };
     typing: {
       pulse: typeof import("../../../extensions/telegram/src/send.js").sendTypingTelegram;
       start: (params: {
