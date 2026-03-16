@@ -7,9 +7,6 @@ import {
   estimateTokens,
   SessionManager,
 } from "@mariozechner/pi-coding-agent";
-import { resolveSignalReactionLevel } from "../../../extensions/signal/src/reaction-level.js";
-import { resolveTelegramInlineButtonsScope } from "../../../extensions/telegram/src/inline-buttons.js";
-import { resolveTelegramReactionLevel } from "../../../extensions/telegram/src/reaction-level.js";
 import { resolveHeartbeatPrompt } from "../../auto-reply/heartbeat.js";
 import type { ReasoningLevel, ThinkLevel } from "../../auto-reply/thinking.js";
 import { resolveChannelCapabilities } from "../../config/channel-capabilities.js";
@@ -22,6 +19,11 @@ import { createInternalHookEvent, triggerInternalHook } from "../../hooks/intern
 import { getMachineDisplayName } from "../../infra/machine-name.js";
 import { generateSecureToken } from "../../infra/secure-random.js";
 import { getMemorySearchManager } from "../../memory/index.js";
+import { resolveSignalReactionLevel } from "../../plugin-sdk-internal/signal.js";
+import {
+  resolveTelegramInlineButtonsScope,
+  resolveTelegramReactionLevel,
+} from "../../plugin-sdk-internal/telegram.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { prepareProviderRuntimeAuth } from "../../plugins/provider-runtime.js";
 import { type enqueueCommand, enqueueCommandInLane } from "../../process/command-queue.js";

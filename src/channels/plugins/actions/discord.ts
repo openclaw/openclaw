@@ -1,2 +1,2 @@
-// Shim: re-exports from extension
-export * from "../../../../extensions/discord/src/channel-actions.js";
+// Public entrypoint for the Discord channel action adapter.
+export * from "../../../plugin-sdk-internal/discord.js";

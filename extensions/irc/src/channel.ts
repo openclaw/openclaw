@@ -36,7 +36,8 @@ import { resolveIrcGroupMatch, resolveIrcRequireMention } from "./policy.js";
 import { probeIrc } from "./probe.js";
 import { getIrcRuntime } from "./runtime.js";
 import { sendMessageIrc } from "./send.js";
-import { ircSetupAdapter, ircSetupWizard } from "./setup-surface.js";
+import { ircSetupAdapter } from "./setup-core.js";
+import { ircSetupWizard } from "./setup-surface.js";
 import type { CoreConfig, IrcProbe } from "./types.js";
 
 const meta = getChatChannelMeta("irc");

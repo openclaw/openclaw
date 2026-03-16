@@ -266,6 +266,7 @@ export const ToolsWebSearchSchema = z
     provider: z
       .union([
         z.literal("brave"),
+        z.literal("firecrawl"),
         z.literal("perplexity"),
         z.literal("grok"),
         z.literal("gemini"),
@@ -298,6 +299,13 @@ export const ToolsWebSearchSchema = z
       .object({
         apiKey: SecretInputSchema.optional().register(sensitive),
         model: z.string().optional(),
+      })
+      .strict()
+      .optional(),
+    firecrawl: z
+      .object({
+        apiKey: SecretInputSchema.optional().register(sensitive),
+        baseUrl: z.string().optional(),
       })
       .strict()
       .optional(),
@@ -493,15 +501,34 @@ const ToolLoopDetectionSchema = z
   })
   .optional();
 
+export const SandboxSshSchema = z
+  .object({
+    target: z.string().min(1).optional(),
+    command: z.string().min(1).optional(),
+    workspaceRoot: z.string().min(1).optional(),
+    strictHostKeyChecking: z.boolean().optional(),
+    updateHostKeys: z.boolean().optional(),
+    identityFile: z.string().min(1).optional(),
+    certificateFile: z.string().min(1).optional(),
+    knownHostsFile: z.string().min(1).optional(),
+    identityData: SecretInputSchema.optional().register(sensitive),
+    certificateData: SecretInputSchema.optional().register(sensitive),
+    knownHostsData: SecretInputSchema.optional().register(sensitive),
+  })
+  .strict()
+  .optional();
+
 export const AgentSandboxSchema = z
   .object({
     mode: z.union([z.literal("off"), z.literal("non-main"), z.literal("all")]).optional(),
+    backend: z.string().min(1).optional(),
     workspaceAccess: z.union([z.literal("none"), z.literal("ro"), z.literal("rw")]).optional(),
     sessionToolsVisibility: z.union([z.literal("spawned"), z.literal("all")]).optional(),
     scope: z.union([z.literal("session"), z.literal("agent"), z.literal("shared")]).optional(),
     perSession: z.boolean().optional(),
     workspaceRoot: z.string().optional(),
     docker: SandboxDockerSchema,
+    ssh: SandboxSshSchema,
     browser: SandboxBrowserSchema,
     prune: SandboxPruneSchema,
   })

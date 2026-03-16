@@ -50,8 +50,11 @@ function resolveGatewayPortFallback(): Promise<number> {
 }
 
 async function assertUnmanagedGatewayRestartEnabled(port: number): Promise<void> {
+  const cfg = await readBestEffortConfig().catch(() => undefined);
+  const tlsEnabled = !!cfg?.gateway?.tls?.enabled;
+  const scheme = tlsEnabled ? "wss" : "ws";
   const probe = await probeGateway({
-    url: `ws://127.0.0.1:${port}`,
+    url: `${scheme}://127.0.0.1:${port}`,
     auth: {
       token: process.env.OPENCLAW_GATEWAY_TOKEN?.trim() || undefined,
       password: process.env.OPENCLAW_GATEWAY_PASSWORD?.trim() || undefined,
