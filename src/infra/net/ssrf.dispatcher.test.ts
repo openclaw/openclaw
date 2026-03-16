@@ -92,9 +92,9 @@ describe("createPinnedDispatcher", () => {
     });
 
     expect(envHttpProxyAgentCtor).toHaveBeenCalledWith({
-      keepAlive: false,
       connect: {
         autoSelectFamily: true,
+        keepAlive: false,
         lookup,
       },
       proxyTls: {
