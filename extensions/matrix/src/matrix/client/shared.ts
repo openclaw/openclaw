@@ -39,15 +39,21 @@ async function createSharedMatrixClient(params: {
   accountId?: string | null;
 }): Promise<SharedMatrixClientState> {
   // Configure proxy before creating Matrix client (supports HTTP_PROXY, HTTPS_PROXY, MATRIX_PROXY)
-  configureMatrixProxy(params.env ?? process.env);
+  const proxyConfigured = configureMatrixProxy(params.env ?? process.env);
+  const effectiveTimeoutMs = proxyConfigured
+    ? Math.min(params.timeoutMs ?? 30_000, 5_000)
+    : params.timeoutMs;
   const client = await createMatrixClient({
     homeserver: params.auth.homeserver,
     userId: params.auth.userId,
     accessToken: params.auth.accessToken,
     encryption: params.auth.encryption,
-    localTimeoutMs: params.timeoutMs,
+    localTimeoutMs: effectiveTimeoutMs,
     accountId: params.accountId,
   });
+  if (typeof effectiveTimeoutMs === "number" && Number.isFinite(effectiveTimeoutMs)) {
+    client.syncingTimeout = effectiveTimeoutMs;
+  }
   return {
     client,
     key: buildSharedClientKey(params.auth, params.accountId),
