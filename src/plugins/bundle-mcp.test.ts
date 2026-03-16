@@ -10,7 +10,8 @@ import { clearPluginManifestRegistryCache } from "./manifest-registry.js";
 const tempDirs: string[] = [];
 
 async function createTempDir(prefix: string): Promise<string> {
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), prefix));
+  const raw = await fs.mkdtemp(path.join(os.tmpdir(), prefix));
+  const dir = await fs.realpath(raw);
   tempDirs.push(dir);
   return dir;
 }

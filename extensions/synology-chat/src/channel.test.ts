@@ -5,13 +5,7 @@ vi.mock("./webhook-handler.js", () => ({
   createWebhookHandler: vi.fn(() => vi.fn()),
 }));
 
-vi.mock("zod", () => ({
-  z: {
-    object: vi.fn(() => ({
-      passthrough: vi.fn(() => ({ _type: "zod-schema" })),
-    })),
-  },
-}));
+// zod is used transitively by config schema imports — no mock needed.
 
 const { createSynologyChatPlugin } = await import("./channel.js");
 
