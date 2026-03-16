@@ -237,6 +237,43 @@ function resolveAliasedParamValue(
   return seen ? resolved : undefined;
 }
 
+/**
+ * Strip `tool_choice` and `parallel_tool_calls` from payloads that lack a
+ * `tools` array.  Per the OpenAI spec, `tool_choice` semantically depends on
+ * `tools` being present.  OpenAI's own API silently ignores the orphaned field,
+ * but strict OpenAI-compatible providers (e.g. vLLM, scnet) correctly reject
+ * it with HTTP 400.
+ *
+ * Applied as a final safety-net after all provider-specific wrappers so that
+ * every source of `tool_choice` is covered.
+ *
+ * Fixes #44110.
+ */
+function createToolChoiceGuardWrapper(baseStreamFn: StreamFn | undefined): StreamFn {
+  const underlying = baseStreamFn ?? streamSimple;
+  return (model, context, options) => {
+    if (model.api !== "openai-completions" && model.api !== "openai-responses") {
+      return underlying(model, context, options);
+    }
+    const originalOnPayload = options?.onPayload;
+    return underlying(model, context, {
+      ...options,
+      onPayload: (payload) => {
+        if (payload && typeof payload === "object") {
+          const p = payload as Record<string, unknown>;
+          const tools = p.tools;
+          const hasTools = Array.isArray(tools) && tools.length > 0;
+          if (!hasTools) {
+            delete p.tool_choice;
+            delete p.parallel_tool_calls;
+          }
+        }
+        return originalOnPayload?.(payload, model);
+      },
+    });
+  };
+}
+
 function createParallelToolCallsWrapper(
   baseStreamFn: StreamFn | undefined,
   enabled: boolean,
@@ -425,4 +462,10 @@ export function applyExtraParamsToAgent(
       log.warn(`ignoring invalid parallel_tool_calls param: ${summary}`);
     }
   }
+
+  // Strip tool_choice and parallel_tool_calls when tools is absent/empty.
+  // Strict OpenAI-compatible providers reject payloads that contain
+  // tool_choice without a corresponding tools array.  Fixes #44110.
+  // Applied last so it catches values injected by any upstream wrapper.
+  agent.streamFn = createToolChoiceGuardWrapper(agent.streamFn);
 }

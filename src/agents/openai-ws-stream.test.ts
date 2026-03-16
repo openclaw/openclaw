@@ -1206,7 +1206,7 @@ describe("createOpenAIWebSocketStreamFn", () => {
     expect(sent.reasoning).toEqual({ effort: "high", summary: "auto" });
   });
 
-  it("forwards topP and toolChoice to response.create", async () => {
+  it("forwards topP to response.create and omits toolChoice when tools are empty", async () => {
     const streamFn = createOpenAIWebSocketStreamFn("sk-test", "sess-topp");
     const opts = { topP: 0.9, toolChoice: "auto" };
     const stream = streamFn(
@@ -1221,6 +1221,48 @@ describe("createOpenAIWebSocketStreamFn", () => {
           MockManager.lastInstance!.simulateEvent({
             type: "response.completed",
             response: makeResponseObject("resp-topp", "Done"),
+          });
+          for await (const _ of await resolveStream(stream)) {
+            /* consume */
+          }
+          resolve();
+        } catch (e) {
+          reject(e);
+        }
+      });
+    });
+    const sent = MockManager.lastInstance!.sentEvents[0] as Record<string, unknown>;
+    expect(sent.type).toBe("response.create");
+    expect(sent.top_p).toBe(0.9);
+    // tool_choice must NOT be sent when tools array is empty (#44110)
+    expect(sent).not.toHaveProperty("tool_choice");
+  });
+
+  it("forwards toolChoice to response.create when tools are present", async () => {
+    const streamFn = createOpenAIWebSocketStreamFn("sk-test", "sess-tc-tools");
+    const contextWithTools = {
+      ...contextStub,
+      tools: [
+        {
+          name: "get_weather",
+          description: "Get weather",
+          inputSchema: { type: "object" as const, properties: {} },
+        },
+      ],
+    };
+    const opts = { topP: 0.9, toolChoice: "auto" };
+    const stream = streamFn(
+      modelStub as Parameters<typeof streamFn>[0],
+      contextWithTools as Parameters<typeof streamFn>[1],
+      opts as unknown as Parameters<typeof streamFn>[2],
+    );
+    await new Promise<void>((resolve, reject) => {
+      queueMicrotask(async () => {
+        try {
+          await new Promise((r) => setImmediate(r));
+          MockManager.lastInstance!.simulateEvent({
+            type: "response.completed",
+            response: makeResponseObject("resp-tc-tools", "Done"),
           });
           for await (const _ of await resolveStream(stream)) {
             /* consume */

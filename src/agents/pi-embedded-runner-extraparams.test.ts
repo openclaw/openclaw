@@ -501,6 +501,7 @@ describe("applyExtraParamsToAgent", () => {
         provider: "nvidia-nim",
         id: "moonshotai/kimi-k2.5",
       } as Model<"openai-completions">,
+      payload: { tools: [{ type: "function", function: { name: "test" } }] },
     });
 
     expect(payload.parallel_tool_calls).toBe(false);
@@ -529,6 +530,7 @@ describe("applyExtraParamsToAgent", () => {
         id: "gpt-5",
         baseUrl: "https://api.openai.com/v1",
       } as unknown as Model<"openai-responses">,
+      payload: { tools: [{ type: "function", function: { name: "test" } }] },
     });
 
     expect(payload.parallel_tool_calls).toBe(true);
@@ -586,6 +588,7 @@ describe("applyExtraParamsToAgent", () => {
         provider: "nvidia-nim",
         id: "moonshotai/kimi-k2.5",
       } as Model<"openai-completions">,
+      payload: { tools: [{ type: "function", function: { name: "test" } }] },
     });
 
     expect(payload.parallel_tool_calls).toBe(false);
@@ -652,6 +655,109 @@ describe("applyExtraParamsToAgent", () => {
     } finally {
       warnSpy.mockRestore();
     }
+  });
+
+  it("strips tool_choice from openai-completions payload when tools is absent (#44110)", () => {
+    const payload: Record<string, unknown> = { tool_choice: "auto" };
+    const baseStreamFn: StreamFn = (model, _context, options) => {
+      options?.onPayload?.(payload, model);
+      return {} as ReturnType<StreamFn>;
+    };
+    const agent = { streamFn: baseStreamFn };
+    applyExtraParamsToAgent(agent, undefined, "scnet", "MiniMax-M2.5");
+    const context: Context = { messages: [] };
+    void agent.streamFn?.(
+      {
+        api: "openai-completions",
+        provider: "scnet",
+        id: "MiniMax-M2.5",
+        baseUrl: "https://api.scnet.cn/api/llm/v1",
+      } as Model<"openai-completions">,
+      context,
+      {},
+    );
+
+    expect(payload).not.toHaveProperty("tool_choice");
+  });
+
+  it("strips tool_choice from openai-completions payload when tools is empty array (#44110)", () => {
+    const payload: Record<string, unknown> = { tool_choice: "auto", tools: [] };
+    const baseStreamFn: StreamFn = (model, _context, options) => {
+      options?.onPayload?.(payload, model);
+      return {} as ReturnType<StreamFn>;
+    };
+    const agent = { streamFn: baseStreamFn };
+    applyExtraParamsToAgent(agent, undefined, "scnet", "MiniMax-M2.5");
+    const context: Context = { messages: [] };
+    void agent.streamFn?.(
+      {
+        api: "openai-completions",
+        provider: "scnet",
+        id: "MiniMax-M2.5",
+        baseUrl: "https://api.scnet.cn/api/llm/v1",
+      } as Model<"openai-completions">,
+      context,
+      {},
+    );
+
+    expect(payload).not.toHaveProperty("tool_choice");
+  });
+
+  it("preserves tool_choice when tools array is non-empty (#44110)", () => {
+    const payload: Record<string, unknown> = {
+      tool_choice: "auto",
+      tools: [{ type: "function", function: { name: "test" } }],
+    };
+    const baseStreamFn: StreamFn = (model, _context, options) => {
+      options?.onPayload?.(payload, model);
+      return {} as ReturnType<StreamFn>;
+    };
+    const agent = { streamFn: baseStreamFn };
+    applyExtraParamsToAgent(agent, undefined, "scnet", "MiniMax-M2.5");
+    const context: Context = { messages: [] };
+    void agent.streamFn?.(
+      {
+        api: "openai-completions",
+        provider: "scnet",
+        id: "MiniMax-M2.5",
+        baseUrl: "https://api.scnet.cn/api/llm/v1",
+      } as Model<"openai-completions">,
+      context,
+      {},
+    );
+
+    expect(payload.tool_choice).toBe("auto");
+  });
+
+  it("strips parallel_tool_calls along with tool_choice when tools absent (#44110)", () => {
+    const payload = runParallelToolCallsPayloadMutationCase({
+      applyProvider: "nvidia-nim",
+      applyModelId: "moonshotai/kimi-k2.5",
+      cfg: {
+        agents: {
+          defaults: {
+            models: {
+              "nvidia-nim/moonshotai/kimi-k2.5": {
+                params: {
+                  parallel_tool_calls: false,
+                },
+              },
+            },
+          },
+        },
+      },
+      model: {
+        api: "openai-completions",
+        provider: "nvidia-nim",
+        id: "moonshotai/kimi-k2.5",
+        baseUrl: "https://integrate.api.nvidia.com/v1",
+      } as Model<"openai-completions">,
+      // payload has no tools → guard should strip parallel_tool_calls
+      payload: { tool_choice: "auto" },
+    });
+
+    expect(payload).not.toHaveProperty("tool_choice");
+    expect(payload).not.toHaveProperty("parallel_tool_calls");
   });
 
   it("normalizes thinking=off to null for SiliconFlow Pro models", () => {
@@ -743,7 +849,10 @@ describe("applyExtraParamsToAgent", () => {
   it("maps non-off thinking levels to Moonshot thinking.type=enabled and normalizes tool_choice", () => {
     const payloads: Record<string, unknown>[] = [];
     const baseStreamFn: StreamFn = (_model, _context, options) => {
-      const payload: Record<string, unknown> = { tool_choice: "required" };
+      const payload: Record<string, unknown> = {
+        tool_choice: "required",
+        tools: [{ type: "function", function: { name: "test" } }],
+      };
       options?.onPayload?.(payload, _model);
       payloads.push(payload);
       return {} as ReturnType<StreamFn>;
@@ -770,6 +879,7 @@ describe("applyExtraParamsToAgent", () => {
     const baseStreamFn: StreamFn = (_model, _context, options) => {
       const payload: Record<string, unknown> = {
         tool_choice: { type: "tool", name: "read" },
+        tools: [{ type: "function", function: { name: "read" } }],
       };
       options?.onPayload?.(payload, _model);
       payloads.push(payload);
@@ -832,7 +942,10 @@ describe("applyExtraParamsToAgent", () => {
   it("applies Moonshot payload compatibility to Ollama Kimi cloud models", () => {
     const payloads: Record<string, unknown>[] = [];
     const baseStreamFn: StreamFn = (_model, _context, options) => {
-      const payload: Record<string, unknown> = { tool_choice: "required" };
+      const payload: Record<string, unknown> = {
+        tool_choice: "required",
+        tools: [{ type: "function", function: { name: "test" } }],
+      };
       options?.onPayload?.(payload, _model);
       payloads.push(payload);
       return {} as ReturnType<StreamFn>;
@@ -883,6 +996,7 @@ describe("applyExtraParamsToAgent", () => {
     const baseStreamFn: StreamFn = (_model, _context, options) => {
       const payload: Record<string, unknown> = {
         tool_choice: { type: "function", function: { name: "read" } },
+        tools: [{ type: "function", function: { name: "read" } }],
       };
       options?.onPayload?.(payload, _model);
       payloads.push(payload);
