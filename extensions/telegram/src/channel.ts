@@ -1,5 +1,6 @@
 import { createScopedChannelConfigBase } from "openclaw/plugin-sdk/compat";
 import {
+  buildAccountScopedAllowlistConfigEditor,
   collectAllowlistProviderGroupPolicyWarnings,
   collectOpenGroupPolicyRouteAllowlistWarnings,
   createScopedAccountConfigAccessors,
@@ -37,6 +38,7 @@ import {
   type ResolvedTelegramAccount,
   type TelegramProbe,
 } from "openclaw/plugin-sdk/telegram";
+import { parseTelegramTopicConversation } from "../../../src/acp/conversation-id.js";
 import { resolveExecApprovalCommandDisplay } from "../../../src/infra/exec-approval-command-display.js";
 import { buildExecApprovalPendingReplyPayload } from "../../../src/infra/exec-approval-reply.js";
 import {
@@ -166,6 +168,52 @@ function resolveTelegramAutoThreadId(params: {
   return context.currentThreadTs;
 }
 
+function normalizeTelegramAcpConversationId(conversationId: string) {
+  const parsed = parseTelegramTopicConversation({ conversationId });
+  if (!parsed || !parsed.chatId.startsWith("-")) {
+    return null;
+  }
+  return {
+    conversationId: parsed.canonicalConversationId,
+    parentConversationId: parsed.chatId,
+  };
+}
+
+function matchTelegramAcpConversation(params: {
+  bindingConversationId: string;
+  conversationId: string;
+  parentConversationId?: string;
+}) {
+  const binding = normalizeTelegramAcpConversationId(params.bindingConversationId);
+  if (!binding) {
+    return null;
+  }
+  const incoming = parseTelegramTopicConversation({
+    conversationId: params.conversationId,
+    parentConversationId: params.parentConversationId,
+  });
+  if (!incoming || !incoming.chatId.startsWith("-")) {
+    return null;
+  }
+  if (binding.conversationId !== incoming.canonicalConversationId) {
+    return null;
+  }
+  return {
+    conversationId: incoming.canonicalConversationId,
+    parentConversationId: incoming.chatId,
+    matchPriority: 2,
+  };
+}
+
+function parseTelegramExplicitTarget(raw: string) {
+  const target = parseTelegramTarget(raw);
+  return {
+    to: target.chatId,
+    threadId: target.messageThreadId,
+    chatType: target.chatType === "unknown" ? undefined : target.chatType,
+  };
+}
+
 function hasTelegramExecApprovalDmRoute(cfg: OpenClawConfig): boolean {
   return listTelegramAccountIds(cfg).some((accountId) => {
     if (!isTelegramExecApprovalClientEnabled({ cfg, accountId })) {
@@ -179,6 +227,8 @@ function hasTelegramExecApprovalDmRoute(cfg: OpenClawConfig): boolean {
 const telegramMessageActions: ChannelMessageActionAdapter = {
   listActions: (ctx) =>
     getTelegramRuntime().channel.telegram.messageActions?.listActions?.(ctx) ?? [],
+  getCapabilities: (ctx) =>
+    getTelegramRuntime().channel.telegram.messageActions?.getCapabilities?.(ctx) ?? [],
   extractToolSend: (ctx) =>
     getTelegramRuntime().channel.telegram.messageActions?.extractToolSend?.(ctx) ?? null,
   handleAction: async (ctx) => {
@@ -214,6 +264,29 @@ const resolveTelegramDmPolicy = createScopedDmSecurityResolver<ResolvedTelegramA
   policyPathSuffix: "dmPolicy",
   normalizeEntry: (raw) => raw.replace(/^(telegram|tg):/i, ""),
 });
+
+function readTelegramAllowlistConfig(account: ResolvedTelegramAccount) {
+  const groupOverrides: Array<{ label: string; entries: string[] }> = [];
+  for (const [groupId, groupCfg] of Object.entries(account.config.groups ?? {})) {
+    const entries = (groupCfg?.allowFrom ?? []).map(String).filter(Boolean);
+    if (entries.length > 0) {
+      groupOverrides.push({ label: groupId, entries });
+    }
+    for (const [topicId, topicCfg] of Object.entries(groupCfg?.topics ?? {})) {
+      const topicEntries = (topicCfg?.allowFrom ?? []).map(String).filter(Boolean);
+      if (topicEntries.length > 0) {
+        groupOverrides.push({ label: `${groupId} topic ${topicId}`, entries: topicEntries });
+      }
+    }
+  }
+  return {
+    dmAllowFrom: (account.config.allowFrom ?? []).map(String),
+    groupAllowFrom: (account.config.groupAllowFrom ?? []).map(String),
+    dmPolicy: account.config.dmPolicy,
+    groupPolicy: account.config.groupPolicy,
+    groupOverrides,
+  };
+}
 
 export const telegramPlugin: ChannelPlugin<ResolvedTelegramAccount, TelegramProbe> = {
   id: "telegram",
@@ -282,6 +355,26 @@ export const telegramPlugin: ChannelPlugin<ResolvedTelegramAccount, TelegramProb
     }),
     ...telegramConfigAccessors,
   },
+  allowlist: {
+    supportsScope: ({ scope }) => scope === "dm" || scope === "group" || scope === "all",
+    readConfig: ({ cfg, accountId }) =>
+      readTelegramAllowlistConfig(resolveTelegramAccount({ cfg, accountId })),
+    applyConfigEdit: buildAccountScopedAllowlistConfigEditor({
+      channelId: "telegram",
+      normalize: ({ cfg, accountId, values }) =>
+        telegramConfigAccessors.formatAllowFrom!({ cfg, accountId, allowFrom: values }),
+      resolvePaths: (scope) => ({
+        readPaths: [[scope === "dm" ? "allowFrom" : "groupAllowFrom"]],
+        writePath: [scope === "dm" ? "allowFrom" : "groupAllowFrom"],
+      }),
+    }),
+  },
+  acpBindings: {
+    normalizeConfiguredBindingTarget: ({ conversationId }) =>
+      normalizeTelegramAcpConversationId(conversationId),
+    matchConfiguredBinding: ({ bindingConversationId, conversationId, parentConversationId }) =>
+      matchTelegramAcpConversation({ bindingConversationId, conversationId, parentConversationId }),
+  },
   security: {
     resolveDmPolicy: resolveTelegramDmPolicy,
     collectWarnings: ({ account, cfg }) => {
@@ -323,6 +416,8 @@ export const telegramPlugin: ChannelPlugin<ResolvedTelegramAccount, TelegramProb
   },
   messaging: {
     normalizeTarget: normalizeTelegramMessagingTarget,
+    parseExplicitTarget: ({ raw }) => parseTelegramExplicitTarget(raw),
+    inferTargetChatType: ({ to }) => parseTelegramExplicitTarget(to).chatType,
     targetResolver: {
       looksLikeId: looksLikeTelegramTargetId,
       hint: "<chatId>",
@@ -421,6 +516,9 @@ export const telegramPlugin: ChannelPlugin<ResolvedTelegramAccount, TelegramProb
     chunkerMode: "markdown",
     textChunkLimit: 4000,
     pollMaxOptions: 10,
+    shouldSkipPlainTextSanitization: ({ payload }) => Boolean(payload.channelData),
+    resolveEffectiveTextChunkLimit: ({ fallbackLimit }) =>
+      typeof fallbackLimit === "number" ? Math.min(fallbackLimit, 4096) : 4096,
     sendPayload: async ({
       cfg,
       to,
