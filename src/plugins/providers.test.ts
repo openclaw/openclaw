@@ -125,6 +125,34 @@ describe("resolvePluginProviders", () => {
     expect(allow).not.toContain("workspace-provider");
   });
 
+  it("scopes bundled provider compat expansion to the requested plugin ids", () => {
+    resolvePluginProviders({
+      config: {
+        plugins: {
+          allow: ["openrouter"],
+        },
+      },
+      bundledProviderAllowlistCompat: true,
+      onlyPluginIds: ["moonshot"],
+    });
+
+    expect(loadOpenClawPluginsMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        onlyPluginIds: ["moonshot"],
+        config: expect.objectContaining({
+          plugins: expect.objectContaining({
+            allow: expect.arrayContaining(["openrouter", "moonshot"]),
+          }),
+        }),
+      }),
+    );
+
+    const call = loadOpenClawPluginsMock.mock.calls.at(-1)?.[0];
+    const allow = call?.config?.plugins?.allow;
+    expect(allow).not.toContain("google");
+    expect(allow).not.toContain("kilocode");
+  });
+
   it("maps provider ids to owning plugin ids via manifests", () => {
     loadPluginManifestRegistryMock.mockReturnValue({
       plugins: [

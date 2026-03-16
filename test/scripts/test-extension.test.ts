@@ -1,7 +1,10 @@
 import { execFileSync } from "node:child_process";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { resolveExtensionTestPlan } from "../../scripts/test-extension.mjs";
+import {
+  detectChangedExtensionIds,
+  resolveExtensionTestPlan,
+} from "../../scripts/test-extension.mjs";
 
 const scriptPath = path.join(process.cwd(), "scripts", "test-extension.mjs");
 
@@ -46,5 +49,16 @@ describe("scripts/test-extension.mjs", () => {
 
     expect(plan.extensionId).toBe("slack");
     expect(plan.extensionDir).toBe("extensions/slack");
+  });
+
+  it("maps changed paths back to extension ids", () => {
+    const extensionIds = detectChangedExtensionIds([
+      "extensions/slack/src/channel.ts",
+      "src/line/message.test.ts",
+      "extensions/firecrawl/package.json",
+      "src/not-a-plugin/file.ts",
+    ]);
+
+    expect(extensionIds).toEqual(["firecrawl", "line", "slack"]);
   });
 });
