@@ -333,10 +333,12 @@ describe("runCronIsolatedAgentTurn — cron model override (#21057)", () => {
     });
     resolveCronSessionMock.mockReturnValue(cronSession);
 
-    // The model ref should be passed as "gpt-4o" with defaultProvider "openai"
+    // The provider override is prepended to raw so the resolver sees "openai/gpt-4o",
+    // and defaultProvider stays aligned with the config default (anthropic) so the
+    // allowlist auto-added key does not create a policy bypass.
     resolveAllowedModelRefMock.mockImplementation(
       (params: { raw: string; defaultProvider: string }) => {
-        if (params.raw === "gpt-4o" && params.defaultProvider === "openai") {
+        if (params.raw === "openai/gpt-4o" && params.defaultProvider === "anthropic") {
           return { ref: { provider: "openai", model: "gpt-4o" }, key: "openai/gpt-4o" };
         }
         return { error: `model not allowed: ${params.raw}` };
