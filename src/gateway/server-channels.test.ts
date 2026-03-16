@@ -259,15 +259,12 @@ describe("server-channels auto restart", () => {
     expect(manager.isHealthMonitorEnabled("discord", DEFAULT_ACCOUNT_ID)).toBe(false);
   });
 
-  it("uses wrapped account config health monitor overrides", () => {
+  it("uses raw account config overrides when resolvers omit health monitor fields", () => {
     installTestRegistry(
       createTestPlugin({
         resolveAccount: () => ({
           enabled: true,
           configured: true,
-          config: {
-            healthMonitor: { enabled: false },
-          },
         }),
       }),
     );
@@ -276,12 +273,57 @@ describe("server-channels auto restart", () => {
       loadConfig: () => ({
         channels: {
           discord: {
-            healthMonitor: { enabled: true },
+            accounts: {
+              [DEFAULT_ACCOUNT_ID]: {
+                healthMonitor: { enabled: false },
+              },
+            },
           },
         },
       }),
     });
 
     expect(manager.isHealthMonitorEnabled("discord", DEFAULT_ACCOUNT_ID)).toBe(false);
+  });
+
+  it("fails closed when account resolution throws during health monitor gating", () => {
+    installTestRegistry(
+      createTestPlugin({
+        resolveAccount: () => {
+          throw new Error("unresolved SecretRef");
+        },
+      }),
+    );
+
+    const manager = createManager();
+
+    expect(manager.isHealthMonitorEnabled("discord", DEFAULT_ACCOUNT_ID)).toBe(false);
+  });
+
+  it("does not treat an empty account id as the default account when matching raw overrides", () => {
+    installTestRegistry(
+      createTestPlugin({
+        resolveAccount: () => ({
+          enabled: true,
+          configured: true,
+        }),
+      }),
+    );
+
+    const manager = createManager({
+      loadConfig: () => ({
+        channels: {
+          discord: {
+            accounts: {
+              default: {
+                healthMonitor: { enabled: false },
+              },
+            },
+          },
+        },
+      }),
+    });
+
+    expect(manager.isHealthMonitorEnabled("discord", "")).toBe(true);
   });
 });

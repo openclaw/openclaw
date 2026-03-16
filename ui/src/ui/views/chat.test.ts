@@ -2,6 +2,7 @@
 
 import { render } from "lit";
 import { describe, expect, it, vi } from "vitest";
+import { getSafeLocalStorage } from "../../local-storage.ts";
 import { renderChatSessionSelect } from "../app-render.helpers.ts";
 import type { AppViewState } from "../app-view-state.ts";
 import type { GatewayBrowserClient } from "../gateway.ts";
@@ -526,7 +527,7 @@ describe("chat view", () => {
 
   it("opens delete confirm on the left for user messages", () => {
     try {
-      localStorage.removeItem("openclaw:skipDeleteConfirm");
+      getSafeLocalStorage()?.removeItem("openclaw:skipDeleteConfirm");
     } catch {
       /* noop */
     }
@@ -559,7 +560,7 @@ describe("chat view", () => {
 
   it("opens delete confirm on the right for assistant messages", () => {
     try {
-      localStorage.removeItem("openclaw:skipDeleteConfirm");
+      getSafeLocalStorage()?.removeItem("openclaw:skipDeleteConfirm");
     } catch {
       /* noop */
     }

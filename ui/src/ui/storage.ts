@@ -1,10 +1,22 @@
 const KEY = "openclaw.control.settings.v1";
 const LEGACY_TOKEN_SESSION_KEY = "openclaw.control.token.v1";
 const TOKEN_SESSION_KEY_PREFIX = "openclaw.control.token.v1:";
+const MAX_SCOPED_SESSION_ENTRIES = 10;
 
-type PersistedUiSettings = Omit<UiSettings, "token"> & { token?: never };
+type ScopedSessionSelection = {
+  sessionKey: string;
+  lastActiveSessionKey: string;
+};
+
+type PersistedUiSettings = Omit<UiSettings, "token" | "sessionKey" | "lastActiveSessionKey"> & {
+  token?: never;
+  sessionKey?: string;
+  lastActiveSessionKey?: string;
+  sessionsByGateway?: Record<string, ScopedSessionSelection>;
+};
 
 import { isSupportedLocale } from "../i18n/index.ts";
+import { getSafeLocalStorage } from "../local-storage.ts";
 import { inferBasePathFromPathname, normalizeBasePath } from "./navigation.ts";
 import { parseThemeSelection, type ThemeMode, type ThemeName } from "./theme.ts";
 
@@ -87,6 +99,41 @@ function tokenSessionKeyForGateway(gatewayUrl: string): string {
   return `${TOKEN_SESSION_KEY_PREFIX}${normalizeGatewayTokenScope(gatewayUrl)}`;
 }
 
+function resolveScopedSessionSelection(
+  gatewayUrl: string,
+  parsed: PersistedUiSettings,
+  defaults: UiSettings,
+): ScopedSessionSelection {
+  const scope = normalizeGatewayTokenScope(gatewayUrl);
+  const scoped = parsed.sessionsByGateway?.[scope];
+  if (
+    scoped &&
+    typeof scoped.sessionKey === "string" &&
+    scoped.sessionKey.trim() &&
+    typeof scoped.lastActiveSessionKey === "string" &&
+    scoped.lastActiveSessionKey.trim()
+  ) {
+    return {
+      sessionKey: scoped.sessionKey.trim(),
+      lastActiveSessionKey: scoped.lastActiveSessionKey.trim(),
+    };
+  }
+
+  const legacySessionKey =
+    typeof parsed.sessionKey === "string" && parsed.sessionKey.trim()
+      ? parsed.sessionKey.trim()
+      : defaults.sessionKey;
+  const legacyLastActiveSessionKey =
+    typeof parsed.lastActiveSessionKey === "string" && parsed.lastActiveSessionKey.trim()
+      ? parsed.lastActiveSessionKey.trim()
+      : legacySessionKey || defaults.lastActiveSessionKey;
+
+  return {
+    sessionKey: legacySessionKey,
+    lastActiveSessionKey: legacyLastActiveSessionKey,
+  };
+}
+
 function loadSessionToken(gatewayUrl: string): string {
   try {
     const storage = getSessionStorage();
@@ -122,6 +169,7 @@ function persistSessionToken(gatewayUrl: string, token: string) {
 
 export function loadSettings(): UiSettings {
   const { pageUrl: pageDerivedUrl, effectiveUrl: defaultUrl } = deriveDefaultGatewayUrl();
+  const storage = getSafeLocalStorage();
 
   const defaults: UiSettings = {
     gatewayUrl: defaultUrl,
@@ -140,16 +188,17 @@ export function loadSettings(): UiSettings {
   };
 
   try {
-    const raw = localStorage.getItem(KEY);
+    const raw = storage?.getItem(KEY);
     if (!raw) {
       return defaults;
     }
-    const parsed = JSON.parse(raw) as Partial<UiSettings>;
+    const parsed = JSON.parse(raw) as PersistedUiSettings;
     const parsedGatewayUrl =
       typeof parsed.gatewayUrl === "string" && parsed.gatewayUrl.trim()
         ? parsed.gatewayUrl.trim()
         : defaults.gatewayUrl;
     const gatewayUrl = parsedGatewayUrl === pageDerivedUrl ? defaultUrl : parsedGatewayUrl;
+    const scopedSessionSelection = resolveScopedSessionSelection(gatewayUrl, parsed, defaults);
     const { theme, mode } = parseThemeSelection(
       (parsed as { theme?: unknown }).theme,
       (parsed as { themeMode?: unknown }).themeMode,
@@ -158,15 +207,8 @@ export function loadSettings(): UiSettings {
       gatewayUrl,
       // Gateway auth is intentionally in-memory only; scrub any legacy persisted token on load.
       token: loadSessionToken(gatewayUrl),
-      sessionKey:
-        typeof parsed.sessionKey === "string" && parsed.sessionKey.trim()
-          ? parsed.sessionKey.trim()
-          : defaults.sessionKey,
-      lastActiveSessionKey:
-        typeof parsed.lastActiveSessionKey === "string" && parsed.lastActiveSessionKey.trim()
-          ? parsed.lastActiveSessionKey.trim()
-          : (typeof parsed.sessionKey === "string" && parsed.sessionKey.trim()) ||
-            defaults.lastActiveSessionKey,
+      sessionKey: scopedSessionSelection.sessionKey,
+      lastActiveSessionKey: scopedSessionSelection.lastActiveSessionKey,
       theme,
       themeMode: mode,
       chatFocusMode:
@@ -212,10 +254,34 @@ export function saveSettings(next: UiSettings) {
 
 function persistSettings(next: UiSettings) {
   persistSessionToken(next.gatewayUrl, next.token);
+  const storage = getSafeLocalStorage();
+  const scope = normalizeGatewayTokenScope(next.gatewayUrl);
+  let existingSessionsByGateway: Record<string, ScopedSessionSelection> = {};
+  try {
+    const raw = storage?.getItem(KEY);
+    if (raw) {
+      const parsed = JSON.parse(raw) as PersistedUiSettings;
+      if (parsed.sessionsByGateway && typeof parsed.sessionsByGateway === "object") {
+        existingSessionsByGateway = parsed.sessionsByGateway;
+      }
+    }
+  } catch {
+    // best-effort
+  }
+  const sessionsByGateway = Object.fromEntries(
+    [
+      ...Object.entries(existingSessionsByGateway).filter(([key]) => key !== scope),
+      [
+        scope,
+        {
+          sessionKey: next.sessionKey,
+          lastActiveSessionKey: next.lastActiveSessionKey,
+        },
+      ],
+    ].slice(-MAX_SCOPED_SESSION_ENTRIES),
+  );
   const persisted: PersistedUiSettings = {
     gatewayUrl: next.gatewayUrl,
-    sessionKey: next.sessionKey,
-    lastActiveSessionKey: next.lastActiveSessionKey,
     theme: next.theme,
     themeMode: next.themeMode,
     chatFocusMode: next.chatFocusMode,
@@ -225,7 +291,8 @@ function persistSettings(next: UiSettings) {
     navCollapsed: next.navCollapsed,
     navWidth: next.navWidth,
     navGroupsCollapsed: next.navGroupsCollapsed,
+    sessionsByGateway,
     ...(next.locale ? { locale: next.locale } : {}),
   };
-  localStorage.setItem(KEY, JSON.stringify(persisted));
+  storage?.setItem(KEY, JSON.stringify(persisted));
 }

@@ -7,18 +7,15 @@ import {
   mapAllowFromEntries,
 } from "openclaw/plugin-sdk/compat";
 import {
-  applyAccountNameToChannelSection,
   buildBaseChannelStatusSummary,
   buildChannelConfigSchema,
   buildRuntimeAccountStatusSnapshot,
   clearAccountEntryFields,
   DEFAULT_ACCOUNT_ID,
   deleteAccountFromConfigSection,
-  normalizeAccountId,
   setAccountEnabledInConfigSection,
   type ChannelPlugin,
   type OpenClawConfig,
-  type ChannelSetupInput,
 } from "openclaw/plugin-sdk/nextcloud-talk";
 import { runStoppablePassiveMonitor } from "../../shared/passive-monitor.js";
 import {
@@ -33,10 +30,11 @@ import {
   looksLikeNextcloudTalkTargetId,
   normalizeNextcloudTalkMessagingTarget,
 } from "./normalize.js";
-import { nextcloudTalkOnboardingAdapter } from "./onboarding.js";
 import { resolveNextcloudTalkGroupToolPolicy } from "./policy.js";
 import { getNextcloudTalkRuntime } from "./runtime.js";
 import { sendMessageNextcloudTalk } from "./send.js";
+import { nextcloudTalkSetupAdapter } from "./setup-core.js";
+import { nextcloudTalkSetupWizard } from "./setup-surface.js";
 import type { CoreConfig } from "./types.js";
 
 const meta = {
@@ -51,17 +49,10 @@ const meta = {
   quickstartAllowFrom: true,
 };
 
-type NextcloudSetupInput = ChannelSetupInput & {
-  baseUrl?: string;
-  secret?: string;
-  secretFile?: string;
-  useEnv?: boolean;
-};
-
 export const nextcloudTalkPlugin: ChannelPlugin<ResolvedNextcloudTalkAccount> = {
   id: "nextcloud-talk",
   meta,
-  onboarding: nextcloudTalkOnboardingAdapter,
+  setupWizard: nextcloudTalkSetupWizard,
   pairing: {
     idLabel: "nextcloudUserId",
     normalizeAllowEntry: (entry) =>
@@ -190,81 +181,7 @@ export const nextcloudTalkPlugin: ChannelPlugin<ResolvedNextcloudTalkAccount> = 
       hint: "<roomToken>",
     },
   },
-  setup: {
-    resolveAccountId: ({ accountId }) => normalizeAccountId(accountId),
-    applyAccountName: ({ cfg, accountId, name }) =>
-      applyAccountNameToChannelSection({
-        cfg: cfg,
-        channelKey: "nextcloud-talk",
-        accountId,
-        name,
-      }),
-    validateInput: ({ accountId, input }) => {
-      const setupInput = input as NextcloudSetupInput;
-      if (setupInput.useEnv && accountId !== DEFAULT_ACCOUNT_ID) {
-        return "NEXTCLOUD_TALK_BOT_SECRET can only be used for the default account.";
-      }
-      if (!setupInput.useEnv && !setupInput.secret && !setupInput.secretFile) {
-        return "Nextcloud Talk requires bot secret or --secret-file (or --use-env).";
-      }
-      if (!setupInput.baseUrl) {
-        return "Nextcloud Talk requires --base-url.";
-      }
-      return null;
-    },
-    applyAccountConfig: ({ cfg, accountId, input }) => {
-      const setupInput = input as NextcloudSetupInput;
-      const namedConfig = applyAccountNameToChannelSection({
-        cfg: cfg,
-        channelKey: "nextcloud-talk",
-        accountId,
-        name: setupInput.name,
-      });
-      if (accountId === DEFAULT_ACCOUNT_ID) {
-        return {
-          ...namedConfig,
-          channels: {
-            ...namedConfig.channels,
-            "nextcloud-talk": {
-              ...namedConfig.channels?.["nextcloud-talk"],
-              enabled: true,
-              baseUrl: setupInput.baseUrl,
-              ...(setupInput.useEnv
-                ? {}
-                : setupInput.secretFile
-                  ? { botSecretFile: setupInput.secretFile }
-                  : setupInput.secret
-                    ? { botSecret: setupInput.secret }
-                    : {}),
-            },
-          },
-        } as OpenClawConfig;
-      }
-      return {
-        ...namedConfig,
-        channels: {
-          ...namedConfig.channels,
-          "nextcloud-talk": {
-            ...namedConfig.channels?.["nextcloud-talk"],
-            enabled: true,
-            accounts: {
-              ...namedConfig.channels?.["nextcloud-talk"]?.accounts,
-              [accountId]: {
-                ...namedConfig.channels?.["nextcloud-talk"]?.accounts?.[accountId],
-                enabled: true,
-                baseUrl: setupInput.baseUrl,
-                ...(setupInput.secretFile
-                  ? { botSecretFile: setupInput.secretFile }
-                  : setupInput.secret
-                    ? { botSecret: setupInput.secret }
-                    : {}),
-              },
-            },
-          },
-        },
-      } as OpenClawConfig;
-    },
-  },
+  setup: nextcloudTalkSetupAdapter,
   outbound: {
     deliveryMode: "direct",
     chunker: (text, limit) => getNextcloudTalkRuntime().channel.text.chunkMarkdownText(text, limit),

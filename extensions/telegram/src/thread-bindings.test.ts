@@ -211,4 +211,40 @@ describe("telegram thread bindings", () => {
     );
     expect(fs.existsSync(statePath)).toBe(false);
   });
+
+  it("persists unbinds before restart so removed bindings do not come back", async () => {
+    stateDirOverride = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-telegram-bindings-"));
+    process.env.OPENCLAW_STATE_DIR = stateDirOverride;
+
+    createTelegramThreadBindingManager({
+      accountId: "default",
+      persist: true,
+      enableSweeper: false,
+    });
+
+    const bound = await getSessionBindingService().bind({
+      targetSessionKey: "plugin-binding:openclaw-codex-app-server:abc123",
+      targetKind: "session",
+      conversation: {
+        channel: "telegram",
+        accountId: "default",
+        conversationId: "8460800771",
+      },
+    });
+
+    await getSessionBindingService().unbind({
+      bindingId: bound.bindingId,
+      reason: "test-detach",
+    });
+
+    __testing.resetTelegramThreadBindingsForTests();
+
+    const reloaded = createTelegramThreadBindingManager({
+      accountId: "default",
+      persist: true,
+      enableSweeper: false,
+    });
+
+    expect(reloaded.getByConversationId("8460800771")).toBeUndefined();
+  });
 });

@@ -594,6 +594,7 @@ function resolveModelOverrideValue(state: AppViewState): string {
     return "";
   }
   // No local override recorded yet — fall back to server data.
+  // Include provider prefix so the value matches option keys (provider/model).
   const activeRow = resolveActiveSessionRow(state);
   if (activeRow) {
     return buildModelRef(activeRow.modelProvider, activeRow.model);
@@ -650,7 +651,10 @@ function renderChatModelSelect(state: AppViewState) {
     currentOverride,
     defaultModel,
   );
-  const defaultLabel = defaultModel ? `Default (${defaultModel})` : "Default model";
+  const defaultDisplay = defaultModel.includes("/")
+    ? `${defaultModel.slice(defaultModel.indexOf("/") + 1)} · ${defaultModel.slice(0, defaultModel.indexOf("/"))}`
+    : defaultModel;
+  const defaultLabel = defaultModel ? `Default (${defaultDisplay})` : "Default model";
   const busy =
     state.chatLoading || state.chatSending || Boolean(state.chatRunId) || state.chatStream !== null;
   const disabled =
