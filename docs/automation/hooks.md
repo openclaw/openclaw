@@ -459,6 +459,38 @@ These hooks are not event-stream listeners; they let plugins synchronously adjus
 
 ### Plugin Hook Events
 
+#### before_tool_call
+
+Runs before each tool call. Plugins can modify parameters, block the call, or request user approval.
+
+Return fields:
+
+- **`params`**: Override tool parameters (merged with original params)
+- **`block`**: Set to `true` to block the tool call
+- **`blockReason`**: Reason shown to the agent when blocked
+- **`requireApproval`**: Pause execution and wait for user approval via channels
+
+The `requireApproval` field triggers native platform approval (Telegram buttons, Discord components, `/approve` command) instead of relying on the agent to cooperate:
+
+```typescript
+{
+  requireApproval: {
+    id: "unique-approval-id",
+    title: "Sensitive operation",
+    description: "This tool call modifies production data",
+    severity: "warning",       // "info" | "warning" | "critical"
+    timeoutMs: 120000,         // default: 120s
+    timeoutBehavior: "deny",   // "allow" | "deny" (default)
+  }
+}
+```
+
+The `pluginId` field is stamped automatically by the hook runner from the plugin registration. When multiple plugins return `requireApproval`, the first one (highest priority) wins.
+
+If the gateway is unavailable or does not support plugin approvals, the tool call falls back to a soft block using the `description` as the block reason.
+
+#### Compaction lifecycle
+
 Compaction lifecycle hooks exposed through the plugin hook runner:
 
 - **`before_compaction`**: Runs before compaction with count/token metadata

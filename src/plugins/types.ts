@@ -1970,6 +1970,16 @@ export type PluginHookBeforeToolCallResult = {
   params?: Record<string, unknown>;
   block?: boolean;
   blockReason?: string;
+  requireApproval?: {
+    id: string;
+    title: string;
+    description: string;
+    severity?: "info" | "warning" | "critical";
+    timeoutMs?: number;
+    timeoutBehavior?: "allow" | "deny";
+    /** Set automatically by the hook runner — plugins should not set this. */
+    pluginId?: string;
+  };
 };
 
 // after_tool_call hook

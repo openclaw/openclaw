@@ -1,0 +1,266 @@
+import type { ExecApprovalForwarder } from "../../infra/exec-approval-forwarder.js";
+import type { ExecApprovalDecision } from "../../infra/exec-approvals.js";
+import type { PluginApprovalRequestPayload } from "../../infra/plugin-approvals.js";
+import { DEFAULT_PLUGIN_APPROVAL_TIMEOUT_MS } from "../../infra/plugin-approvals.js";
+import type { ExecApprovalManager } from "../exec-approval-manager.js";
+import {
+  ErrorCodes,
+  errorShape,
+  formatValidationErrors,
+  validatePluginApprovalRequestParams,
+  validatePluginApprovalResolveParams,
+} from "../protocol/index.js";
+import type { GatewayRequestHandlers } from "./types.js";
+
+export function createPluginApprovalHandlers(
+  manager: ExecApprovalManager<PluginApprovalRequestPayload>,
+  opts?: { forwarder?: ExecApprovalForwarder },
+): GatewayRequestHandlers {
+  return {
+    "plugin.approval.request": async ({ params, respond, context }) => {
+      if (!validatePluginApprovalRequestParams(params)) {
+        respond(
+          false,
+          undefined,
+          errorShape(
+            ErrorCodes.INVALID_REQUEST,
+            `invalid plugin.approval.request params: ${formatValidationErrors(
+              validatePluginApprovalRequestParams.errors,
+            )}`,
+          ),
+        );
+        return;
+      }
+      const p = params as {
+        id?: string;
+        pluginId?: string | null;
+        title: string;
+        description: string;
+        severity?: string | null;
+        toolName?: string | null;
+        toolCallId?: string | null;
+        agentId?: string | null;
+        sessionKey?: string | null;
+        turnSourceChannel?: string | null;
+        turnSourceTo?: string | null;
+        turnSourceAccountId?: string | null;
+        turnSourceThreadId?: string | number | null;
+        timeoutMs?: number;
+        twoPhase?: boolean;
+      };
+      const twoPhase = p.twoPhase === true;
+      const timeoutMs =
+        typeof p.timeoutMs === "number" ? p.timeoutMs : DEFAULT_PLUGIN_APPROVAL_TIMEOUT_MS;
+      const explicitId = typeof p.id === "string" && p.id.trim().length > 0 ? p.id.trim() : null;
+
+      if (explicitId && manager.getSnapshot(explicitId)) {
+        respond(
+          false,
+          undefined,
+          errorShape(ErrorCodes.INVALID_REQUEST, "approval id already pending"),
+        );
+        return;
+      }
+
+      const request: PluginApprovalRequestPayload = {
+        pluginId: p.pluginId ?? null,
+        title: p.title,
+        description: p.description,
+        severity: (p.severity as PluginApprovalRequestPayload["severity"]) ?? null,
+        toolName: p.toolName ?? null,
+        toolCallId: p.toolCallId ?? null,
+        agentId: p.agentId ?? null,
+        sessionKey: p.sessionKey ?? null,
+        turnSourceChannel:
+          typeof p.turnSourceChannel === "string" ? p.turnSourceChannel.trim() || null : null,
+        turnSourceTo: typeof p.turnSourceTo === "string" ? p.turnSourceTo.trim() || null : null,
+        turnSourceAccountId:
+          typeof p.turnSourceAccountId === "string" ? p.turnSourceAccountId.trim() || null : null,
+        turnSourceThreadId: p.turnSourceThreadId ?? null,
+      };
+
+      const record = manager.create(request, timeoutMs, explicitId);
+
+      let decisionPromise: Promise<ExecApprovalDecision | null>;
+      try {
+        decisionPromise = manager.register(record, timeoutMs);
+      } catch (err) {
+        respond(
+          false,
+          undefined,
+          errorShape(ErrorCodes.INVALID_REQUEST, `registration failed: ${String(err)}`),
+        );
+        return;
+      }
+
+      context.broadcast(
+        "plugin.approval.requested",
+        {
+          id: record.id,
+          request: record.request,
+          createdAtMs: record.createdAtMs,
+          expiresAtMs: record.expiresAtMs,
+        },
+        { dropIfSlow: true },
+      );
+
+      let forwarded = false;
+      if (opts?.forwarder?.handlePluginApprovalRequested) {
+        try {
+          forwarded = await opts.forwarder.handlePluginApprovalRequested({
+            id: record.id,
+            request: record.request,
+            createdAtMs: record.createdAtMs,
+            expiresAtMs: record.expiresAtMs,
+          });
+        } catch (err) {
+          context.logGateway?.error?.(`plugin approvals: forward request failed: ${String(err)}`);
+        }
+      }
+
+      const hasApprovalClients = context.hasExecApprovalClients?.() ?? false;
+      if (!hasApprovalClients && !forwarded) {
+        manager.expire(record.id, "no-approval-route");
+        respond(
+          true,
+          {
+            id: record.id,
+            decision: null,
+            createdAtMs: record.createdAtMs,
+            expiresAtMs: record.expiresAtMs,
+          },
+          undefined,
+        );
+        return;
+      }
+
+      if (twoPhase) {
+        respond(
+          true,
+          {
+            status: "accepted",
+            id: record.id,
+            createdAtMs: record.createdAtMs,
+            expiresAtMs: record.expiresAtMs,
+          },
+          undefined,
+        );
+      }
+
+      const decision = await decisionPromise;
+      respond(
+        true,
+        {
+          id: record.id,
+          decision,
+          createdAtMs: record.createdAtMs,
+          expiresAtMs: record.expiresAtMs,
+        },
+        undefined,
+      );
+    },
+
+    "plugin.approval.waitDecision": async ({ params, respond }) => {
+      const p = params as { id?: string };
+      const id = typeof p.id === "string" ? p.id.trim() : "";
+      if (!id) {
+        respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "id is required"));
+        return;
+      }
+      const decisionPromise = manager.awaitDecision(id);
+      if (!decisionPromise) {
+        respond(
+          false,
+          undefined,
+          errorShape(ErrorCodes.INVALID_REQUEST, "approval expired or not found"),
+        );
+        return;
+      }
+      const snapshot = manager.getSnapshot(id);
+      const decision = await decisionPromise;
+      respond(
+        true,
+        {
+          id,
+          decision,
+          createdAtMs: snapshot?.createdAtMs,
+          expiresAtMs: snapshot?.expiresAtMs,
+        },
+        undefined,
+      );
+    },
+
+    "plugin.approval.resolve": async ({ params, respond, client, context }) => {
+      if (!validatePluginApprovalResolveParams(params)) {
+        respond(
+          false,
+          undefined,
+          errorShape(
+            ErrorCodes.INVALID_REQUEST,
+            `invalid plugin.approval.resolve params: ${formatValidationErrors(
+              validatePluginApprovalResolveParams.errors,
+            )}`,
+          ),
+        );
+        return;
+      }
+      const p = params as { id: string; decision: string };
+      const decision = p.decision as ExecApprovalDecision;
+      if (decision !== "allow-once" && decision !== "allow-always" && decision !== "deny") {
+        respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "invalid decision"));
+        return;
+      }
+      const resolvedId = manager.lookupPendingId(p.id);
+      if (resolvedId.kind === "none") {
+        respond(
+          false,
+          undefined,
+          errorShape(ErrorCodes.INVALID_REQUEST, "unknown or expired approval id"),
+        );
+        return;
+      }
+      if (resolvedId.kind === "ambiguous") {
+        const candidates = resolvedId.ids.slice(0, 3).join(", ");
+        const remainder = resolvedId.ids.length > 3 ? ` (+${resolvedId.ids.length - 3} more)` : "";
+        respond(
+          false,
+          undefined,
+          errorShape(
+            ErrorCodes.INVALID_REQUEST,
+            `ambiguous approval id prefix; matches: ${candidates}${remainder}. Use the full id.`,
+          ),
+        );
+        return;
+      }
+      const approvalId = resolvedId.id;
+      const snapshot = manager.getSnapshot(approvalId);
+      const resolvedBy = client?.connect?.client?.displayName ?? client?.connect?.client?.id;
+      const ok = manager.resolve(approvalId, decision, resolvedBy ?? null);
+      if (!ok) {
+        respond(
+          false,
+          undefined,
+          errorShape(ErrorCodes.INVALID_REQUEST, "unknown or expired approval id"),
+        );
+        return;
+      }
+      context.broadcast(
+        "plugin.approval.resolved",
+        { id: approvalId, decision, resolvedBy, ts: Date.now(), request: snapshot?.request },
+        { dropIfSlow: true },
+      );
+      void opts?.forwarder
+        ?.handlePluginApprovalResolved?.({
+          id: approvalId,
+          decision,
+          resolvedBy,
+          ts: Date.now(),
+          request: snapshot?.request,
+        })
+        .catch((err) => {
+          context.logGateway?.error?.(`plugin approvals: forward resolve failed: ${String(err)}`);
+        });
+      respond(true, { ok: true }, undefined);
+    },
+  };
+}
