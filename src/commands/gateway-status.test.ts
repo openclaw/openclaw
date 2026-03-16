@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import type { GatewayProbeResult } from "../gateway/probe.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { withEnvAsync } from "../test-utils/env.js";
 
@@ -33,7 +34,7 @@ const startSshPortForward = vi.fn(async (_opts?: unknown) => ({
   stderr: [],
   stop: sshStop,
 }));
-const probeGateway = vi.fn(async (opts: { url: string }) => {
+const probeGateway = vi.fn(async (opts: { url: string }): Promise<GatewayProbeResult> => {
   const { url } = opts;
   if (url.includes("127.0.0.1")) {
     return {
@@ -52,7 +53,16 @@ const probeGateway = vi.fn(async (opts: { url: string }) => {
         },
         sessions: { count: 0 },
       },
-      presence: [{ mode: "gateway", reason: "self", host: "local", ip: "127.0.0.1" }],
+      presence: [
+        {
+          mode: "gateway",
+          reason: "self",
+          host: "local",
+          ip: "127.0.0.1",
+          text: "Gateway: local (127.0.0.1) · app test · mode gateway · reason self",
+          ts: Date.now(),
+        },
+      ],
       configSnapshot: {
         path: "/tmp/cfg.json",
         exists: true,
@@ -81,7 +91,16 @@ const probeGateway = vi.fn(async (opts: { url: string }) => {
       },
       sessions: { count: 2 },
     },
-    presence: [{ mode: "gateway", reason: "self", host: "remote", ip: "100.64.0.2" }],
+    presence: [
+      {
+        mode: "gateway",
+        reason: "self",
+        host: "remote",
+        ip: "100.64.0.2",
+        text: "Gateway: remote (100.64.0.2) · app test · mode gateway · reason self",
+        ts: Date.now(),
+      },
+    ],
     configSnapshot: {
       path: "/tmp/remote.json",
       exists: true,
@@ -199,6 +218,54 @@ describe("gateway-status command", () => {
     expect(targets.length).toBeGreaterThanOrEqual(2);
     expect(targets[0]?.health).toBeTruthy();
     expect(targets[0]?.summary).toBeTruthy();
+  });
+
+  it("treats missing-scope RPC probe failures as degraded but reachable", async () => {
+    const { runtime, runtimeLogs, runtimeErrors } = createRuntimeCapture();
+    readBestEffortConfig.mockResolvedValueOnce({
+      gateway: {
+        mode: "local",
+        auth: { mode: "token", token: "ltok" },
+      },
+    } as never);
+    probeGateway.mockResolvedValueOnce({
+      ok: false,
+      url: "ws://127.0.0.1:18789",
+      connectLatencyMs: 51,
+      error: "missing scope: operator.read",
+      close: null,
+      health: null,
+      status: null,
+      presence: null,
+      configSnapshot: null,
+    });
+
+    await runGatewayStatus(runtime, { timeout: "1000", json: true });
+
+    expect(runtimeErrors).toHaveLength(0);
+    const parsed = JSON.parse(runtimeLogs.join("\n")) as {
+      ok?: boolean;
+      degraded?: boolean;
+      warnings?: Array<{ code?: string; targetIds?: string[] }>;
+      targets?: Array<{
+        connect?: {
+          ok?: boolean;
+          rpcOk?: boolean;
+          scopeLimited?: boolean;
+        };
+      }>;
+    };
+    expect(parsed.ok).toBe(true);
+    expect(parsed.degraded).toBe(true);
+    expect(parsed.targets?.[0]?.connect).toMatchObject({
+      ok: true,
+      rpcOk: false,
+      scopeLimited: true,
+    });
+    const scopeLimitedWarning = parsed.warnings?.find(
+      (warning) => warning.code === "probe_scope_limited",
+    );
+    expect(scopeLimitedWarning?.targetIds).toContain("localLoopback");
   });
 
   it("surfaces unresolved SecretRef auth diagnostics in warnings", async () => {
@@ -361,7 +428,16 @@ describe("gateway-status command", () => {
         },
         sessions: { count: 1 },
       },
-      presence: [{ mode: "gateway", reason: "self", host: "remote", ip: "100.64.0.2" }],
+      presence: [
+        {
+          mode: "gateway",
+          reason: "self",
+          host: "remote",
+          ip: "100.64.0.2",
+          text: "Gateway: remote (100.64.0.2) · app test · mode gateway · reason self",
+          ts: Date.now(),
+        },
+      ],
       configSnapshot: {
         path: "/tmp/secretref-config.json",
         exists: true,

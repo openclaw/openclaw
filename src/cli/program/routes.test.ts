@@ -32,7 +32,7 @@ describe("program routes", () => {
     await expect(route?.run(argv)).resolves.toBe(false);
   }
 
-  it("matches status route and always loads plugins for security parity", () => {
+  it("matches status route and always preloads plugins", () => {
     const route = expectRoute(["status"]);
     expect(route?.loadPlugins).toBe(true);
   });

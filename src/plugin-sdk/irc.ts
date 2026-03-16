@@ -9,7 +9,10 @@ export {
 } from "../channels/plugins/config-helpers.js";
 export { createAccountListHelpers } from "../channels/plugins/account-helpers.js";
 export { buildChannelConfigSchema } from "../channels/plugins/config-schema.js";
-export { formatPairingApproveHint } from "../channels/plugins/helpers.js";
+export {
+  formatPairingApproveHint,
+  parseOptionalDelimitedEntries,
+} from "../channels/plugins/helpers.js";
 export type {
   ChannelOnboardingAdapter,
   ChannelOnboardingDmPolicy,

@@ -10,9 +10,8 @@ import {
   isPrimarySessionTranscriptFileName,
   loadSessionStore,
   resolveMainSessionKey,
-  resolveSessionFilePath,
-  resolveSessionFilePathOptions,
   resolveSessionTranscriptsDirForAgent,
+  resolveSessionTranscriptPathInDir,
   resolveStorePath,
 } from "../config/sessions.js";
 import { resolveRequiredHomeDir } from "../infra/home-dir.js";
@@ -696,7 +695,6 @@ export async function noteStateIntegrity(
   }
 
   const store = loadSessionStore(storePath);
-  const sessionPathOpts = resolveSessionFilePathOptions({ agentId, storePath });
   const entries = Object.entries(store).filter(([, entry]) => entry && typeof entry === "object");
   if (entries.length > 0) {
     const recent = entries
@@ -713,7 +711,7 @@ export async function noteStateIntegrity(
       if (!sessionId) {
         return false;
       }
-      const transcriptPath = resolveSessionFilePath(sessionId, entry, sessionPathOpts);
+      const transcriptPath = resolveSessionTranscriptPathInDir(sessionId, sessionsDir);
       return !existsFile(transcriptPath);
     });
     if (missing.length > 0) {
@@ -730,11 +728,7 @@ export async function noteStateIntegrity(
     const mainKey = resolveMainSessionKey(cfg);
     const mainEntry = store[mainKey];
     if (mainEntry?.sessionId) {
-      const transcriptPath = resolveSessionFilePath(
-        mainEntry.sessionId,
-        mainEntry,
-        sessionPathOpts,
-      );
+      const transcriptPath = resolveSessionTranscriptPathInDir(mainEntry.sessionId, sessionsDir);
       if (!existsFile(transcriptPath)) {
         warnings.push(
           `- Main session transcript missing (${shortenHomePath(transcriptPath)}). History will appear to reset.`,
@@ -758,7 +752,7 @@ export async function noteStateIntegrity(
       }
       try {
         referencedTranscriptPaths.add(
-          path.resolve(resolveSessionFilePath(entry.sessionId, entry, sessionPathOpts)),
+          path.resolve(resolveSessionTranscriptPathInDir(entry.sessionId, sessionsDir)),
         );
       } catch {
         // ignore invalid legacy paths

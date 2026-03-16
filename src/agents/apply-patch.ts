@@ -270,8 +270,28 @@ function resolvePatchFileOps(options: ApplyPatchOptions): PatchFileOps {
         encoding: "utf8",
       });
     },
-    remove: (filePath) => fs.rm(filePath),
-    mkdirp: (dir) => fs.mkdir(dir, { recursive: true }).then(() => {}),
+    remove: async (filePath) => {
+      if (workspaceOnly) {
+        await assertSandboxPath({
+          filePath,
+          cwd: options.cwd,
+          root: options.cwd,
+          allowFinalSymlinkForUnlink: true,
+          allowFinalHardlinkForUnlink: true,
+        });
+      }
+      await fs.rm(filePath);
+    },
+    mkdirp: async (dir) => {
+      if (workspaceOnly) {
+        await assertSandboxPath({
+          filePath: dir,
+          cwd: options.cwd,
+          root: options.cwd,
+        });
+      }
+      await fs.mkdir(dir, { recursive: true });
+    },
   };
 }
 

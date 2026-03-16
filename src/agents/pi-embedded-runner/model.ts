@@ -8,8 +8,16 @@ import { buildModelAliasLines } from "../model-alias-lines.js";
 import { isSecretRefHeaderValueMarker } from "../model-auth-markers.js";
 import { resolveForwardCompatModel } from "../model-forward-compat.js";
 import { findNormalizedProviderValue, normalizeProviderId } from "../model-selection.js";
+import {
+  buildSuppressedBuiltInModelError,
+  shouldSuppressBuiltInModel,
+} from "../model-suppression.js";
 import { discoverAuthStorage, discoverModels } from "../pi-model-discovery.js";
 import { normalizeResolvedProviderModel } from "./model.provider-normalization.js";
+import {
+  getOpenRouterModelCapabilities,
+  loadOpenRouterModelCapabilities,
+} from "./openrouter-model-capabilities.js";
 
 type InlineModelEntry = ModelDefinitionConfig & {
   provider: string;
@@ -152,25 +160,31 @@ export function buildInlineProviderModels(
   });
 }
 
-export function resolveModelWithRegistry(params: {
+function resolveExplicitModelWithRegistry(params: {
   provider: string;
   modelId: string;
   modelRegistry: ModelRegistry;
   cfg?: OpenClawConfig;
-}): Model<Api> | undefined {
+}): { kind: "resolved"; model: Model<Api> } | { kind: "suppressed" } | undefined {
   const { provider, modelId, modelRegistry, cfg } = params;
+  if (shouldSuppressBuiltInModel({ provider, id: modelId })) {
+    return { kind: "suppressed" };
+  }
   const providerConfig = resolveConfiguredProviderConfig(cfg, provider);
   const model = modelRegistry.find(provider, modelId) as Model<Api> | null;
 
   if (model) {
-    return normalizeResolvedModel({
-      provider,
-      model: applyConfiguredProviderOverrides({
-        discoveredModel: model,
-        providerConfig,
-        modelId,
+    return {
+      kind: "resolved",
+      model: normalizeResolvedModel({
+        provider,
+        model: applyConfiguredProviderOverrides({
+          discoveredModel: model,
+          providerConfig,
+          modelId,
+        }),
       }),
-    });
+    };
   }
 
   const providers = cfg?.models?.providers ?? {};
@@ -180,40 +194,70 @@ export function resolveModelWithRegistry(params: {
     (entry) => normalizeProviderId(entry.provider) === normalizedProvider && entry.id === modelId,
   );
   if (inlineMatch?.api) {
-    return normalizeResolvedModel({ provider, model: inlineMatch as Model<Api> });
+    return {
+      kind: "resolved",
+      model: normalizeResolvedModel({ provider, model: inlineMatch as Model<Api> }),
+    };
   }
 
   // Forward-compat fallbacks must be checked BEFORE the generic providerCfg fallback.
   // Otherwise, configured providers can default to a generic API and break specific transports.
   const forwardCompat = resolveForwardCompatModel(provider, modelId, modelRegistry);
   if (forwardCompat) {
-    return normalizeResolvedModel({
-      provider,
-      model: applyConfiguredProviderOverrides({
-        discoveredModel: forwardCompat,
-        providerConfig,
-        modelId,
+    return {
+      kind: "resolved",
+      model: normalizeResolvedModel({
+        provider,
+        model: applyConfiguredProviderOverrides({
+          discoveredModel: forwardCompat,
+          providerConfig,
+          modelId,
+        }),
       }),
-    });
+    };
   }
+
+  return undefined;
+}
+
+export function resolveModelWithRegistry(params: {
+  provider: string;
+  modelId: string;
+  modelRegistry: ModelRegistry;
+  cfg?: OpenClawConfig;
+}): Model<Api> | undefined {
+  const explicitModel = resolveExplicitModelWithRegistry(params);
+  if (explicitModel?.kind === "suppressed") {
+    return undefined;
+  }
+  if (explicitModel?.kind === "resolved") {
+    return explicitModel.model;
+  }
+
+  const { provider, modelId, cfg } = params;
+  const normalizedProvider = normalizeProviderId(provider);
+  const providerConfig = resolveConfiguredProviderConfig(cfg, provider);
 
   // OpenRouter is a pass-through proxy - any model ID available on OpenRouter
   // should work without being pre-registered in the local catalog.
+  // Try to fetch actual capabilities from the OpenRouter API so that new models
+  // (not yet in the static pi-ai snapshot) get correct image/reasoning support.
   if (normalizedProvider === "openrouter") {
+    const capabilities = getOpenRouterModelCapabilities(modelId);
     return normalizeResolvedModel({
       provider,
       model: {
         id: modelId,
-        name: modelId,
+        name: capabilities?.name ?? modelId,
         api: "openai-completions",
         provider,
         baseUrl: "https://openrouter.ai/api/v1",
-        reasoning: false,
-        input: ["text"],
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-        contextWindow: DEFAULT_CONTEXT_TOKENS,
+        reasoning: capabilities?.reasoning ?? false,
+        input: capabilities?.input ?? ["text"],
+        cost: capabilities?.cost ?? { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: capabilities?.contextWindow ?? DEFAULT_CONTEXT_TOKENS,
         // Align with OPENROUTER_DEFAULT_MAX_TOKENS in models-config.providers.ts
-        maxTokens: 8192,
+        maxTokens: capabilities?.maxTokens ?? 8192,
       } as Model<Api>,
     });
   }
@@ -280,6 +324,46 @@ export function resolveModel(
   };
 }
 
+export async function resolveModelAsync(
+  provider: string,
+  modelId: string,
+  agentDir?: string,
+  cfg?: OpenClawConfig,
+): Promise<{
+  model?: Model<Api>;
+  error?: string;
+  authStorage: AuthStorage;
+  modelRegistry: ModelRegistry;
+}> {
+  const resolvedAgentDir = agentDir ?? resolveOpenClawAgentDir();
+  const authStorage = discoverAuthStorage(resolvedAgentDir);
+  const modelRegistry = discoverModels(authStorage, resolvedAgentDir);
+  const explicitModel = resolveExplicitModelWithRegistry({ provider, modelId, modelRegistry, cfg });
+  if (explicitModel?.kind === "suppressed") {
+    return {
+      error: buildUnknownModelError(provider, modelId),
+      authStorage,
+      modelRegistry,
+    };
+  }
+  if (!explicitModel && normalizeProviderId(provider) === "openrouter") {
+    await loadOpenRouterModelCapabilities(modelId);
+  }
+  const model =
+    explicitModel?.kind === "resolved"
+      ? explicitModel.model
+      : resolveModelWithRegistry({ provider, modelId, modelRegistry, cfg });
+  if (model) {
+    return { model, authStorage, modelRegistry };
+  }
+
+  return {
+    error: buildUnknownModelError(provider, modelId),
+    authStorage,
+    modelRegistry,
+  };
+}
+
 /**
  * Build a more helpful error when the model is not found.
  *
@@ -303,6 +387,10 @@ const LOCAL_PROVIDER_HINTS: Record<string, string> = {
 };
 
 function buildUnknownModelError(provider: string, modelId: string): string {
+  const suppressed = buildSuppressedBuiltInModelError({ provider, id: modelId });
+  if (suppressed) {
+    return suppressed;
+  }
   const base = `Unknown model: ${provider}/${modelId}`;
   const hint = LOCAL_PROVIDER_HINTS[provider.toLowerCase()];
   return hint ? `${base}. ${hint}` : base;
