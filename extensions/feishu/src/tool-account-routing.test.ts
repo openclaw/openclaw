@@ -143,4 +143,21 @@ describe("feishu tool account routing", () => {
     expect(createFeishuClientMock.mock.calls[0]?.[0]?.appId).toBe("app-b");
     expect(createFeishuClientMock.mock.calls[1]?.[0]?.appId).toBe("app-a");
   });
+
+  test("cross-channel: falls back to configured defaultAccount when agentAccountId is not a Feishu account", async () => {
+    const { api, resolveTool } = createToolFactoryHarness(
+      createConfig({
+        defaultAccount: "a",
+        toolsA: { wiki: true },
+        toolsB: { wiki: true },
+      }),
+    );
+    registerFeishuWikiTools(api);
+
+    // "discord-default" is not a known Feishu account → should fall back to defaultAccount "a"
+    const tool = resolveTool("feishu_wiki", { agentAccountId: "discord-default" });
+    await tool.execute("call", { action: "search" });
+
+    expect(createFeishuClientMock.mock.calls.at(-1)?.[0]?.appId).toBe("app-a");
+  });
 });

@@ -1,6 +1,6 @@
 import type * as Lark from "@larksuiteoapi/node-sdk";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/feishu";
-import { resolveFeishuAccount } from "./accounts.js";
+import { listFeishuAccountIds, resolveFeishuAccount } from "./accounts.js";
 import { createFeishuClient } from "./client.js";
 import { resolveToolsConfig } from "./tools-config.js";
 import type { FeishuToolsConfig, ResolvedFeishuAccount } from "./types.js";
@@ -21,6 +21,13 @@ function readConfiguredDefaultAccountId(config: OpenClawPluginApi["config"]): st
   return normalizeOptionalAccountId(value);
 }
 
+function isKnownFeishuAccountId(config: OpenClawPluginApi["config"], accountId?: string): boolean {
+  if (!accountId) return false;
+  const normalized = accountId.trim().toLowerCase();
+  if (!normalized) return false;
+  return listFeishuAccountIds(config).some((id) => id.toLowerCase() === normalized);
+}
+
 export function resolveFeishuToolAccount(params: {
   api: Pick<OpenClawPluginApi, "config">;
   executeParams?: AccountAwareParams;
@@ -33,7 +40,12 @@ export function resolveFeishuToolAccount(params: {
     cfg: params.api.config,
     accountId:
       normalizeOptionalAccountId(params.executeParams?.accountId) ??
-      normalizeOptionalAccountId(params.defaultAccountId) ??
+      // Only use routed account context if it maps to a known Feishu account;
+      // otherwise fall through to the configured default so cross-channel tool
+      // calls (e.g. Discord/Telegram triggering Feishu tools) still work.
+      (isKnownFeishuAccountId(params.api.config, params.defaultAccountId)
+        ? normalizeOptionalAccountId(params.defaultAccountId)
+        : undefined) ??
       readConfiguredDefaultAccountId(params.api.config),
   });
 }
