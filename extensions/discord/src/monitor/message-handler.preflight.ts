@@ -96,12 +96,12 @@ function isBoundThreadBotSystemMessage(params: {
 
 export function resolvePreflightMentionRequirement(params: {
   shouldRequireMention: boolean;
-  isBoundThreadSession: boolean;
+  bypassMentionRequirement: boolean;
 }): boolean {
   if (!params.shouldRequireMention) {
     return false;
   }
-  return !params.isBoundThreadSession;
+  return !params.bypassMentionRequirement;
 }
 
 export function shouldIgnoreBoundThreadWebhookMessage(params: {
@@ -486,6 +486,7 @@ export async function preflightDiscordMessage(
   });
   const boundAgentId = boundSessionKey ? effectiveRoute.agentId : undefined;
   const isBoundThreadSession = Boolean(threadBinding && earlyThreadChannel);
+  const bypassMentionRequirement = isBoundThreadSession || Boolean(configuredBinding);
   if (
     isBoundThreadBotSystemMessage({
       isBoundThreadSession,
@@ -671,7 +672,7 @@ export async function preflightDiscordMessage(
   });
   const shouldRequireMention = resolvePreflightMentionRequirement({
     shouldRequireMention: shouldRequireMentionByConfig,
-    isBoundThreadSession,
+    bypassMentionRequirement,
   });
 
   // Preflight audio transcription for mention detection in guilds.

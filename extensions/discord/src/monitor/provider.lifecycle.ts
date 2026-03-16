@@ -15,6 +15,30 @@ type ExecApprovalsHandler = {
   stop: () => Promise<void>;
 };
 
+const DISCORD_GATEWAY_READY_TIMEOUT_MS = 15_000;
+const DISCORD_GATEWAY_READY_POLL_MS = 250;
+
+async function waitForDiscordGatewayReady(params: {
+  gateway?: Pick<GatewayPlugin, "isConnected">;
+  abortSignal?: AbortSignal;
+  timeoutMs: number;
+}): Promise<boolean> {
+  const deadlineAt = Date.now() + params.timeoutMs;
+  while (!params.abortSignal?.aborted) {
+    if (params.gateway?.isConnected) {
+      return true;
+    }
+    if (Date.now() >= deadlineAt) {
+      return false;
+    }
+    await new Promise<void>((resolve) => {
+      const timeout = setTimeout(resolve, DISCORD_GATEWAY_READY_POLL_MS);
+      timeout.unref?.();
+    });
+  }
+  return false;
+}
+
 export async function runDiscordGatewayLifecycle(params: {
   accountId: string;
   client: Client;
@@ -242,20 +266,6 @@ export async function runDiscordGatewayLifecycle(params: {
   };
   gatewayEmitter?.on("debug", onGatewayDebug);
 
-  // If the gateway is already connected when the lifecycle starts (the
-  // "WebSocket connection opened" debug event was emitted before we
-  // registered the listener above), push the initial connected status now.
-  // Guard against lifecycleStopping: if the abortSignal was already aborted,
-  // onAbort() ran synchronously above and pushed connected: false — don't
-  // contradict it with a spurious connected: true.
-  if (gateway?.isConnected && !lifecycleStopping) {
-    const at = Date.now();
-    pushStatus({
-      ...createConnectedChannelStatusPatch(at),
-      lastDisconnect: null,
-    });
-  }
-
   let sawDisallowedIntents = false;
   const logGatewayError = (err: unknown) => {
     if (params.isDisallowedIntentsError(err)) {
@@ -297,6 +307,70 @@ export async function runDiscordGatewayLifecycle(params: {
         }
         throw err;
       }
+    }
+
+    // Carbon starts the gateway during client construction, before OpenClaw can
+    // attach lifecycle listeners. Require a READY/RESUMED-connected gateway
+    // before continuing so the monitor does not look healthy while silently
+    // missing inbound events.
+    if (gateway && !gateway.isConnected && !lifecycleStopping) {
+      const initialReady = await waitForDiscordGatewayReady({
+        gateway,
+        abortSignal: params.abortSignal,
+        timeoutMs: DISCORD_GATEWAY_READY_TIMEOUT_MS,
+      });
+      if (!initialReady && !lifecycleStopping) {
+        params.runtime.error?.(
+          danger(
+            `discord: gateway was not ready after ${DISCORD_GATEWAY_READY_TIMEOUT_MS}ms; forcing a fresh reconnect`,
+          ),
+        );
+        const startupRetryAt = Date.now();
+        pushStatus({
+          connected: false,
+          lastEventAt: startupRetryAt,
+          lastDisconnect: {
+            at: startupRetryAt,
+            error: "startup-not-ready",
+          },
+        });
+        gateway?.disconnect();
+        gateway?.connect(false);
+        const reconnected = await waitForDiscordGatewayReady({
+          gateway,
+          abortSignal: params.abortSignal,
+          timeoutMs: DISCORD_GATEWAY_READY_TIMEOUT_MS,
+        });
+        if (!reconnected && !lifecycleStopping) {
+          const error = new Error(
+            `discord gateway did not reach READY within ${DISCORD_GATEWAY_READY_TIMEOUT_MS}ms after a forced reconnect`,
+          );
+          const startupFailureAt = Date.now();
+          pushStatus({
+            connected: false,
+            lastEventAt: startupFailureAt,
+            lastDisconnect: {
+              at: startupFailureAt,
+              error: "startup-reconnect-timeout",
+            },
+            lastError: error.message,
+          });
+          throw error;
+        }
+      }
+    }
+
+    // If the gateway is already connected when the lifecycle starts (or becomes
+    // connected during the startup readiness guard), push the initial connected
+    // status now. Guard against lifecycleStopping: if the abortSignal was
+    // already aborted, onAbort() ran synchronously above and pushed connected:
+    // false, so don't contradict it with a spurious connected: true.
+    if (gateway?.isConnected && !lifecycleStopping) {
+      const at = Date.now();
+      pushStatus({
+        ...createConnectedChannelStatusPatch(at),
+        lastDisconnect: null,
+      });
     }
 
     await waitForDiscordGatewayStop({

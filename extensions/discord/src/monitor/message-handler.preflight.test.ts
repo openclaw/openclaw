@@ -229,16 +229,16 @@ describe("resolvePreflightMentionRequirement", () => {
     expect(
       resolvePreflightMentionRequirement({
         shouldRequireMention: true,
-        isBoundThreadSession: false,
+        bypassMentionRequirement: false,
       }),
     ).toBe(true);
   });
 
-  it("disables mention requirement for bound thread sessions", () => {
+  it("disables mention requirement when the route explicitly bypasses mentions", () => {
     expect(
       resolvePreflightMentionRequirement({
         shouldRequireMention: true,
-        isBoundThreadSession: true,
+        bypassMentionRequirement: true,
       }),
     ).toBe(false);
   });
@@ -247,7 +247,7 @@ describe("resolvePreflightMentionRequirement", () => {
     expect(
       resolvePreflightMentionRequirement({
         shouldRequireMention: false,
-        isBoundThreadSession: false,
+        bypassMentionRequirement: false,
       }),
     ).toBe(false);
   });

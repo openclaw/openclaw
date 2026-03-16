@@ -354,6 +354,52 @@ describe("AcpSessionManager", () => {
     expect(runtimeState.runTurn).toHaveBeenCalledTimes(2);
   });
 
+  it("re-ensures cached runtime handles when the backend reports the session is dead", async () => {
+    const runtimeState = createRuntime();
+    runtimeState.getStatus
+      .mockResolvedValueOnce({
+        summary: "status=alive",
+        details: { status: "alive" },
+      })
+      .mockResolvedValueOnce({
+        summary: "status=dead",
+        details: { status: "dead" },
+      })
+      .mockResolvedValueOnce({
+        summary: "status=alive",
+        details: { status: "alive" },
+      });
+    hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
+      id: "acpx",
+      runtime: runtimeState.runtime,
+    });
+    hoisted.readAcpSessionEntryMock.mockReturnValue({
+      sessionKey: "agent:codex:acp:session-1",
+      storeSessionKey: "agent:codex:acp:session-1",
+      acp: readySessionMeta(),
+    });
+
+    const manager = new AcpSessionManager();
+    await manager.runTurn({
+      cfg: baseCfg,
+      sessionKey: "agent:codex:acp:session-1",
+      text: "first",
+      mode: "prompt",
+      requestId: "r1",
+    });
+    await manager.runTurn({
+      cfg: baseCfg,
+      sessionKey: "agent:codex:acp:session-1",
+      text: "second",
+      mode: "prompt",
+      requestId: "r2",
+    });
+
+    expect(runtimeState.ensureSession).toHaveBeenCalledTimes(2);
+    expect(runtimeState.getStatus).toHaveBeenCalledTimes(3);
+    expect(runtimeState.runTurn).toHaveBeenCalledTimes(2);
+  });
+
   it("rehydrates runtime handles after a manager restart", async () => {
     const runtimeState = createRuntime();
     hoisted.requireAcpRuntimeBackendMock.mockReturnValue({

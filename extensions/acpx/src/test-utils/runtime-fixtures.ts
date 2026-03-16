@@ -76,6 +76,17 @@ const setValue = command === "set" ? String(args[commandIndex + 2] || "") : "";
 
 if (command === "sessions" && args[commandIndex + 1] === "ensure") {
   writeLog({ kind: "ensure", agent, args, sessionName: ensureName });
+  if (process.env.MOCK_ACPX_ENSURE_EXIT_1 === "1") {
+    emitJson({
+      jsonrpc: "2.0",
+      id: null,
+      error: {
+        code: -32603,
+        message: "mock ensure failure",
+      },
+    });
+    process.exit(1);
+  }
   if (process.env.MOCK_ACPX_ENSURE_EMPTY === "1") {
     emitJson({ action: "session_ensured", name: ensureName });
   } else {
@@ -385,6 +396,7 @@ export async function readMockRuntimeLogEntries(
 export async function cleanupMockRuntimeFixtures(): Promise<void> {
   delete process.env.MOCK_ACPX_LOG;
   delete process.env.MOCK_ACPX_CONFIG_SHOW_AGENTS;
+  delete process.env.MOCK_ACPX_ENSURE_EXIT_1;
   delete process.env.MOCK_ACPX_STATUS_STATUS;
   delete process.env.MOCK_ACPX_STATUS_SUMMARY;
   sharedMockCliScriptPath = null;

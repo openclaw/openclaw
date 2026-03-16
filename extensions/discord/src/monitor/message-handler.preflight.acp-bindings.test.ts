@@ -161,6 +161,47 @@ describe("preflightDiscordMessage configured ACP bindings", () => {
     expect(result?.boundSessionKey).toBe("agent:codex:acp:binding:discord:default:abc123");
   });
 
+  it("accepts plain messages in configured ACP-bound channels without a mention", async () => {
+    const message = createDiscordMessage({
+      id: "m-no-mention",
+      channelId: CHANNEL_ID,
+      content: "hello",
+      mentionedUsers: [],
+      author: {
+        id: "user-1",
+        bot: false,
+        username: "alice",
+      },
+    });
+
+    const result = await preflightDiscordMessage(
+      createBasePreflightParams({
+        data: createGuildEvent({
+          channelId: CHANNEL_ID,
+          guildId: GUILD_ID,
+          author: message.author,
+          message,
+        }),
+        guildEntries: {
+          [GUILD_ID]: {
+            id: GUILD_ID,
+            channels: {
+              [CHANNEL_ID]: {
+                allow: true,
+                enabled: true,
+                requireMention: true,
+              },
+            },
+          },
+        },
+      }),
+    );
+
+    expect(result).not.toBeNull();
+    expect(ensureConfiguredAcpRouteReadyMock).toHaveBeenCalledTimes(1);
+    expect(result?.boundSessionKey).toBe("agent:codex:acp:binding:discord:default:abc123");
+  });
+
   it("hydrates empty guild message payloads from REST before ensuring configured ACP bindings", async () => {
     const message = createDiscordMessage({
       id: "m-rest",

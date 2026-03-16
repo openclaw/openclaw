@@ -345,6 +345,73 @@ export class AcpxRuntime implements AcpRuntime {
     return false;
   }
 
+  private async recoverEnsureFailure(params: {
+    sessionName: string;
+    agent: string;
+    cwd: string;
+    error: unknown;
+  }): Promise<AcpxJsonObject[] | null> {
+    const errorMessage = summarizeLogText(
+      params.error instanceof Error ? params.error.message : String(params.error),
+    );
+    this.logger?.warn?.(
+      `acpx ensureSession probing named session after ensure failure: session=${params.sessionName} cwd=${params.cwd} error=${errorMessage || "<empty>"}`,
+    );
+    const args = await this.buildVerbArgs({
+      agent: params.agent,
+      cwd: params.cwd,
+      command: ["status", "--session", params.sessionName],
+    });
+    let events: AcpxJsonObject[];
+    try {
+      events = await this.runControlCommand({
+        args,
+        cwd: params.cwd,
+        fallbackCode: "ACP_SESSION_INIT_FAILED",
+        ignoreNoSession: true,
+      });
+    } catch (statusError) {
+      this.logger?.warn?.(
+        `acpx ensureSession status fallback failed: session=${params.sessionName} cwd=${params.cwd} error=${summarizeLogText(statusError instanceof Error ? statusError.message : String(statusError)) || "<empty>"}`,
+      );
+      return null;
+    }
+
+    const noSession = events.some((event) => toAcpxErrorEvent(event)?.code === "NO_SESSION");
+    if (noSession) {
+      this.logger?.warn?.(
+        `acpx ensureSession creating named session after ensure failure and missing status: session=${params.sessionName} cwd=${params.cwd}`,
+      );
+      return await this.createNamedSession({
+        agent: params.agent,
+        cwd: params.cwd,
+        sessionName: params.sessionName,
+      });
+    }
+
+    const detail = events.find((event) => !toAcpxErrorEvent(event));
+    const status = asTrimmedString(detail?.status)?.toLowerCase();
+    if (status === "dead") {
+      this.logger?.warn?.(
+        `acpx ensureSession replacing dead named session after ensure failure: session=${params.sessionName} cwd=${params.cwd}`,
+      );
+      return await this.createNamedSession({
+        agent: params.agent,
+        cwd: params.cwd,
+        sessionName: params.sessionName,
+      });
+    }
+
+    if (status === "alive" || findSessionIdentifierEvent(events)) {
+      this.logger?.warn?.(
+        `acpx ensureSession reusing live named session after ensure failure: session=${params.sessionName} cwd=${params.cwd} status=${status || "unknown"}`,
+      );
+      return events;
+    }
+
+    return null;
+  }
+
   async ensureSession(input: AcpRuntimeEnsureInput): Promise<AcpRuntimeHandle> {
     const sessionName = asTrimmedString(input.sessionKey);
     if (!sessionName) {
@@ -357,14 +424,17 @@ export class AcpxRuntime implements AcpRuntime {
     const cwd = asTrimmedString(input.cwd) || this.config.cwd;
     const mode = input.mode;
     const resumeSessionId = asTrimmedString(input.resumeSessionId);
-    let events = resumeSessionId
-      ? await this.createNamedSession({
-          agent,
-          cwd,
-          sessionName,
-          resumeSessionId,
-        })
-      : await this.runControlCommand({
+    let events: AcpxJsonObject[];
+    if (resumeSessionId) {
+      events = await this.createNamedSession({
+        agent,
+        cwd,
+        sessionName,
+        resumeSessionId,
+      });
+    } else {
+      try {
+        events = await this.runControlCommand({
           args: await this.buildVerbArgs({
             agent,
             cwd,
@@ -373,6 +443,19 @@ export class AcpxRuntime implements AcpRuntime {
           cwd,
           fallbackCode: "ACP_SESSION_INIT_FAILED",
         });
+      } catch (error) {
+        const recovered = await this.recoverEnsureFailure({
+          sessionName,
+          agent,
+          cwd,
+          error,
+        });
+        if (!recovered) {
+          throw error;
+        }
+        events = recovered;
+      }
+    }
     if (events.length === 0) {
       this.logger?.warn?.(
         `acpx ensureSession returned no events after sessions ensure: session=${sessionName} agent=${agent} cwd=${cwd}`,

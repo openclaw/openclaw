@@ -945,7 +945,17 @@ export class AcpSessionManager {
       const agentMatches = cached.agent === agent;
       const modeMatches = cached.mode === mode;
       const cwdMatches = (cached.cwd ?? "") === (cwd ?? "");
-      if (backendMatches && agentMatches && modeMatches && cwdMatches) {
+      if (
+        backendMatches &&
+        agentMatches &&
+        modeMatches &&
+        cwdMatches &&
+        (await this.isCachedRuntimeHandleReusable({
+          sessionKey: params.sessionKey,
+          runtime: cached.runtime,
+          handle: cached.handle,
+        }))
+      ) {
         return {
           runtime: cached.runtime,
           handle: cached.handle,
@@ -1047,6 +1057,49 @@ export class AcpSessionManager {
       handle: nextHandle,
       meta: nextMeta,
     };
+  }
+
+  private async isCachedRuntimeHandleReusable(params: {
+    sessionKey: string;
+    runtime: AcpRuntime;
+    handle: AcpRuntimeHandle;
+  }): Promise<boolean> {
+    if (!params.runtime.getStatus) {
+      return true;
+    }
+    try {
+      const status = await params.runtime.getStatus({
+        handle: params.handle,
+      });
+      if (this.isRuntimeStatusUnavailable(status)) {
+        this.clearCachedRuntimeState(params.sessionKey);
+        logVerbose(
+          `acp-manager: evicting cached runtime handle for ${params.sessionKey} after unhealthy status probe: ${status.summary ?? "status unavailable"}`,
+        );
+        return false;
+      }
+      return true;
+    } catch (error) {
+      this.clearCachedRuntimeState(params.sessionKey);
+      logVerbose(
+        `acp-manager: evicting cached runtime handle for ${params.sessionKey} after status probe failed: ${String(error)}`,
+      );
+      return false;
+    }
+  }
+
+  private isRuntimeStatusUnavailable(status: AcpRuntimeStatus | undefined): boolean {
+    if (!status) {
+      return false;
+    }
+    const detailsStatus =
+      typeof status.details?.status === "string" ? status.details.status.trim().toLowerCase() : "";
+    if (detailsStatus === "dead" || detailsStatus === "no-session") {
+      return true;
+    }
+    const summaryMatch = status.summary?.match(/\bstatus=([^\s]+)/i);
+    const summaryStatus = summaryMatch?.[1]?.trim().toLowerCase() ?? "";
+    return summaryStatus === "dead" || summaryStatus === "no-session";
   }
 
   private async persistRuntimeOptions(params: {
