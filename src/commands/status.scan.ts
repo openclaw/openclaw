@@ -247,11 +247,9 @@ async function scanStatusJsonFast(opts: {
   const gatewaySelf = gatewayProbe?.presence
     ? pickGatewaySelfPresence(gatewayProbe.presence)
     : null;
-  const channelsStatusPromise = resolveChannelsStatus({ cfg, gatewayReachable, opts });
   const memoryPlugin = resolveMemoryPluginStatus(cfg);
   const memoryPromise = resolveMemoryStatusSnapshot({ cfg, agentStatus, memoryPlugin });
-  const [channelsStatus, memory] = await Promise.all([channelsStatusPromise, memoryPromise]);
-  const channelIssues = channelsStatus ? collectChannelStatusIssues(channelsStatus) : [];
+  const memory = await memoryPromise;
 
   return {
     cfg,
@@ -270,7 +268,7 @@ async function scanStatusJsonFast(opts: {
     gatewayProbe,
     gatewayReachable,
     gatewaySelf,
-    channelIssues,
+    channelIssues: [],
     agentStatus,
     channels: { rows: [], details: [] },
     summary,
