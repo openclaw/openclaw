@@ -32,8 +32,10 @@ function looksLikeAuthClose(code: number | undefined, reason: string | undefined
   const normalized = (reason ?? "").toLowerCase();
   return (
     normalized.includes("auth") ||
+    normalized.includes("pairing") ||
     normalized.includes("token") ||
     normalized.includes("password") ||
+    normalized.includes("device identity") ||
     normalized.includes("scope") ||
     normalized.includes("role")
   );
@@ -282,7 +284,7 @@ async function runBoundedStep(params: {
   }
   // Internal controller so we can kill child processes on timeout/abort.
   const stepController = new AbortController();
-  let timer: NodeJS.Timeout | undefined;
+  let timer: ReturnType<typeof setTimeout> | undefined;
   let onAbort: (() => void) | undefined;
   try {
     const runPromise = params.run(stepController.signal).then(

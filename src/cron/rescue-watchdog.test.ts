@@ -347,6 +347,43 @@ describe("runRescueWatchdogJob", () => {
     expect(probeCall?.disableDeviceIdentity).toBe(false);
   });
 
+  it("treats pairing-required closes as healthy for no-auth watchdog probes", async () => {
+    loadConfig.mockReturnValue({
+      gateway: {
+        port: 18_789,
+        bind: "tailnet",
+        auth: {
+          mode: "none",
+        },
+      },
+    });
+    resolveGatewayProbeAuthSafe.mockReturnValue({
+      auth: {},
+    });
+    probeGateway.mockResolvedValue({
+      ok: false,
+      close: { code: 1008, reason: "pairing required" },
+      error: "pairing required",
+    });
+
+    const result = await runRescueWatchdogJob({
+      job: {
+        id: "job-tailnet-pairing-required",
+        name: "rescue",
+        payload: {
+          kind: "rescueWatchdog",
+          monitoredProfile: "work",
+          timeoutSeconds: 120,
+        },
+      } as never,
+      monitoredProfile: "work",
+    });
+
+    expect(result.status).toBe("ok");
+    expect(restartService).not.toHaveBeenCalled();
+    expect(runCommandWithTimeout).not.toHaveBeenCalled();
+  });
+
   it("explicitly keeps device identity enabled for loopback no-auth watchdog probes", async () => {
     loadConfig.mockReturnValue({
       gateway: {

@@ -37,8 +37,11 @@ function normalizePayloadKind(payload: Record<string, unknown>) {
     return false;
   }
   if (raw === "rescuewatchdog") {
-    payload.kind = "rescueWatchdog";
-    return true;
+    if (payload.kind !== "rescueWatchdog") {
+      payload.kind = "rescueWatchdog";
+      return true;
+    }
+    return false;
   }
   if (raw === "systemevent") {
     if (payload.kind !== "systemEvent") {
