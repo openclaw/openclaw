@@ -16,11 +16,20 @@ Allow model/agent/plugin swap mid-run without continuity loss.
 
 - `runId`
 - `goalId`
+- `taskId`
 - `currentStep`
 - `acceptance` — approval record from the `approve` gate (null if not required)
 - `artifacts[]`
 - `status`
+- `origin` (source component/agent)
+- `idempotencyKey`
+- `sequence` (monotonic per `runId`)
 - `updatedAt`
+
+## Single-source-of-truth requirement
+
+- Handoff packets are authoritative continuity records and MUST be persisted in the canonical state plane.
+- Any transport-specific projection MUST be derived from this canonical packet and must not become a second authority.
 
 ## Implementation Path
 

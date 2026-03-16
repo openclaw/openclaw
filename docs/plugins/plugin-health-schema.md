@@ -20,6 +20,13 @@ title: "Plugin Health Schema"
 - `lastError` (nullable)
 - `nextAction` (nullable)
 - `updatedAt`
+- `runId` (nullable if idle)
+- `goalId` (nullable if idle)
+- `sourceOfTruth` (canonical state path/identifier)
+
+## Consistency rule
+
+Health output MUST be computed from canonical run/state records (single source of truth), not from ad-hoc in-memory counters alone.
 
 ## Implementation Path
 

@@ -19,6 +19,12 @@ Related: [Core retry policy](/concepts/retry)
 
 - Failed items after max retries move to dead-letter queue
 - Must include failure reason + next operator action
+- Must preserve canonical ids (`runId`, `goalId`, `taskId`) and the final `idempotencyKey`
+
+## Reconciliation + SSOT
+
+- Retry and dead-letter transitions MUST be written to the same canonical state plane used by execution/handoff.
+- Reconciliation runs MUST emit a drift/conflict artifact and apply a documented precedence policy.
 
 ## Implementation Path
 
