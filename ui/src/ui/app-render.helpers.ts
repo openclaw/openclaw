@@ -850,6 +850,25 @@ export function resolveSessionOptionGroups(
     }
   }
 
+  const allOptions = Array.from(groups.values()).flatMap((group) =>
+    group.options.map((option) => ({ groupLabel: group.label, option })),
+  );
+  const globalCounts = new Map<string, number>();
+  for (const { option } of allOptions) {
+    globalCounts.set(option.label, (globalCounts.get(option.label) ?? 0) + 1);
+  }
+  for (const { groupLabel, option } of allOptions) {
+    if ((globalCounts.get(option.label) ?? 0) <= 1) {
+      continue;
+    }
+    const scopedPrefix = `${groupLabel} / `;
+    if (option.label.startsWith(scopedPrefix)) {
+      continue;
+    }
+    // Keep the agent visible once the native select collapses to a single chosen label.
+    option.label = `${groupLabel} / ${option.label}`;
+  }
+
   return Array.from(groups.values());
 }
 

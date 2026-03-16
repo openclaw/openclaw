@@ -768,4 +768,48 @@ describe("chat view", () => {
     );
     expect(labels).not.toContain("Subagent: cron-config-check");
   });
+
+  it("prefixes duplicate agent session labels with the agent name", () => {
+    const { state } = createChatHeaderState({ omitSessionFromList: true });
+    state.sessionKey = "agent:alpha:main";
+    state.settings.sessionKey = state.sessionKey;
+    state.agentsList = {
+      defaultId: "alpha",
+      mainKey: "agent:alpha:main",
+      scope: "all",
+      agents: [
+        { id: "alpha", name: "Deep Chat" },
+        { id: "beta", name: "Coding" },
+      ],
+    };
+    state.sessionsResult = {
+      ts: 0,
+      path: "",
+      count: 2,
+      defaults: { model: "gpt-5", contextTokens: null },
+      sessions: [
+        {
+          key: "agent:alpha:main",
+          kind: "direct",
+          updatedAt: null,
+        },
+        {
+          key: "agent:beta:main",
+          kind: "direct",
+          updatedAt: null,
+        },
+      ],
+    };
+    const container = document.createElement("div");
+    render(renderChatSessionSelect(state), container);
+
+    const [sessionSelect] = Array.from(container.querySelectorAll<HTMLSelectElement>("select"));
+    const labels = Array.from(sessionSelect?.querySelectorAll("option") ?? []).map((option) =>
+      option.textContent?.trim(),
+    );
+
+    expect(labels).toContain("Deep Chat (alpha) / main");
+    expect(labels).toContain("Coding (beta) / main");
+    expect(labels).not.toContain("main");
+  });
 });
