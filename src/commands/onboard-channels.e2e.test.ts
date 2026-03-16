@@ -472,15 +472,17 @@ describe("setupChannels", () => {
                   )?.accounts?.[accountId] ?? { accountId },
                 setAccountEnabled,
               },
-              onboarding: {
-                getStatus: vi.fn(async ({ cfg }: { cfg: OpenClawConfig }) => ({
-                  channel: "msteams",
-                  configured: Boolean(
-                    (cfg.channels?.msteams as { tenantId?: string } | undefined)?.tenantId,
-                  ),
-                  statusLines: [],
-                  selectionHint: "configured",
-                })),
+              setupWizard: {
+                channel: "msteams",
+                status: {
+                  configuredLabel: "configured",
+                  unconfiguredLabel: "needs setup",
+                  resolveConfigured: ({ cfg }: { cfg: OpenClawConfig }) =>
+                    Boolean((cfg.channels?.msteams as { tenantId?: string } | undefined)?.tenantId),
+                  resolveStatusLines: async () => [],
+                  resolveSelectionHint: async () => "configured",
+                },
+                credentials: [],
               },
               outbound: { deliveryMode: "direct" },
             },

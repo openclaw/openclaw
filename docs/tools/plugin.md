@@ -1437,16 +1437,6 @@ Preferred setup split:
 - `plugin.setup` owns account-id normalization, validation, and config writes.
 - `plugin.setupWizard` lets the host run the common wizard flow while the channel only supplies status, credential, DM allowlist, and channel-access descriptors.
 
-Use `plugin.onboarding` only when the host-owned setup wizard cannot express the flow and the
-channel needs to fully own prompting.
-
-Wizard precedence:
-
-1. `plugin.setupWizard` (preferred, host-owned prompts)
-2. `plugin.onboarding.configureInteractive`
-3. `plugin.onboarding.configureWhenConfigured` (already-configured channel only)
-4. `plugin.onboarding.configure`
-
 `plugin.setupWizard` is best for channels that fit the shared pattern:
 
 - one account picker driven by `plugin.config.listAccountIds`
@@ -1457,11 +1447,6 @@ Wizard precedence:
 - optional channel/group access allowlist prompts resolved by the host
 - optional DM allowlist resolution (for example `@username` -> numeric id)
 - optional completion note after setup finishes
-
-`plugin.onboarding` hooks still return the same values as before:
-
-- `"skip"` leaves selection and account tracking unchanged.
-- `{ cfg, accountId? }` applies config updates and records account selection.
 
 ### Write a new messaging channel (step‑by‑step)
 
