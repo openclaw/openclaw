@@ -25,6 +25,8 @@ const discordPlugin: ChannelPlugin = {
   actions: {
     listActions: () => ["kick"],
     supportsAction: ({ action }) => action === "kick",
+    requiresTrustedRequesterSender: ({ action, toolContext }) =>
+      Boolean(action === "kick" && toolContext),
     handleAction,
   },
 };

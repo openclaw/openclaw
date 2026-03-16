@@ -10,6 +10,7 @@ import {
   type FeishuBotAddedEvent,
 } from "./bot.js";
 import { handleFeishuCardAction, type FeishuCardActionEvent } from "./card-action.js";
+import { maybeHandleFeishuQuickActionMenu } from "./card-ux-launcher.js";
 import { createEventDispatcher } from "./client.js";
 import {
   hasProcessedFeishuMessage,
@@ -513,7 +514,7 @@ function registerEventHandlers(
       try {
         const event = data as {
           event_key?: string;
-          timestamp?: number;
+          timestamp?: string | number;
           operator?: {
             operator_name?: string;
             operator_id?: { open_id?: string; user_id?: string; union_id?: string };
@@ -543,14 +544,28 @@ function registerEventHandlers(
             }),
           },
         };
-        const promise = handleFeishuMessage({
+        const handleLegacyMenu = () =>
+          handleFeishuMessage({
+            cfg,
+            event: syntheticEvent,
+            botOpenId: botOpenIds.get(accountId),
+            botName: botNames.get(accountId),
+            runtime,
+            chatHistories,
+            accountId,
+          });
+
+        const promise = maybeHandleFeishuQuickActionMenu({
           cfg,
-          event: syntheticEvent,
-          botOpenId: botOpenIds.get(accountId),
-          botName: botNames.get(accountId),
+          eventKey,
+          operatorOpenId,
           runtime,
-          chatHistories,
           accountId,
+        }).then((handledMenu) => {
+          if (handledMenu) {
+            return;
+          }
+          return handleLegacyMenu();
         });
         if (fireAndForget) {
           promise.catch((err) => {

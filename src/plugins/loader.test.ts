@@ -348,7 +348,9 @@ afterEach(() => {
 
 describe("bundle plugins", () => {
   it("reports Codex bundles as loaded bundle plugins without importing runtime code", () => {
+    useNoBundledPlugins();
     const workspaceDir = makeTempDir();
+    const stateDir = makeTempDir();
     const bundleRoot = path.join(workspaceDir, ".openclaw", "extensions", "sample-bundle");
     mkdirSafe(path.join(bundleRoot, ".codex-plugin"));
     mkdirSafe(path.join(bundleRoot, "skills"));
@@ -366,19 +368,22 @@ describe("bundle plugins", () => {
       "---\ndescription: fixture\n---\n",
     );
 
-    const registry = loadOpenClawPlugins({
-      workspaceDir,
-      config: {
-        plugins: {
-          entries: {
-            "sample-bundle": {
-              enabled: true,
+    const registry = withEnv({ OPENCLAW_STATE_DIR: stateDir }, () =>
+      loadOpenClawPlugins({
+        workspaceDir,
+        onlyPluginIds: ["sample-bundle"],
+        config: {
+          plugins: {
+            entries: {
+              "sample-bundle": {
+                enabled: true,
+              },
             },
           },
         },
-      },
-      cache: false,
-    });
+        cache: false,
+      }),
+    );
 
     const plugin = registry.plugins.find((entry) => entry.id === "sample-bundle");
     expect(plugin?.status).toBe("loaded");
@@ -388,7 +393,9 @@ describe("bundle plugins", () => {
   });
 
   it("treats Claude command roots and settings as supported bundle surfaces", () => {
+    useNoBundledPlugins();
     const workspaceDir = makeTempDir();
+    const stateDir = makeTempDir();
     const bundleRoot = path.join(workspaceDir, ".openclaw", "extensions", "claude-skills");
     mkdirSafe(path.join(bundleRoot, "commands"));
     fs.writeFileSync(
@@ -397,19 +404,22 @@ describe("bundle plugins", () => {
     );
     fs.writeFileSync(path.join(bundleRoot, "settings.json"), '{"hideThinkingBlock":true}', "utf-8");
 
-    const registry = loadOpenClawPlugins({
-      workspaceDir,
-      config: {
-        plugins: {
-          entries: {
-            "claude-skills": {
-              enabled: true,
+    const registry = withEnv({ OPENCLAW_STATE_DIR: stateDir }, () =>
+      loadOpenClawPlugins({
+        workspaceDir,
+        onlyPluginIds: ["claude-skills"],
+        config: {
+          plugins: {
+            entries: {
+              "claude-skills": {
+                enabled: true,
+              },
             },
           },
         },
-      },
-      cache: false,
-    });
+        cache: false,
+      }),
+    );
 
     const plugin = registry.plugins.find((entry) => entry.id === "claude-skills");
     expect(plugin?.status).toBe("loaded");
@@ -427,7 +437,9 @@ describe("bundle plugins", () => {
   });
 
   it("treats Cursor command roots as supported bundle skill surfaces", () => {
+    useNoBundledPlugins();
     const workspaceDir = makeTempDir();
+    const stateDir = makeTempDir();
     const bundleRoot = path.join(workspaceDir, ".openclaw", "extensions", "cursor-skills");
     mkdirSafe(path.join(bundleRoot, ".cursor-plugin"));
     mkdirSafe(path.join(bundleRoot, ".cursor", "commands"));
@@ -443,19 +455,22 @@ describe("bundle plugins", () => {
       "---\ndescription: fixture\n---\n",
     );
 
-    const registry = loadOpenClawPlugins({
-      workspaceDir,
-      config: {
-        plugins: {
-          entries: {
-            "cursor-skills": {
-              enabled: true,
+    const registry = withEnv({ OPENCLAW_STATE_DIR: stateDir }, () =>
+      loadOpenClawPlugins({
+        workspaceDir,
+        onlyPluginIds: ["cursor-skills"],
+        config: {
+          plugins: {
+            entries: {
+              "cursor-skills": {
+                enabled: true,
+              },
             },
           },
         },
-      },
-      cache: false,
-    });
+        cache: false,
+      }),
+    );
 
     const plugin = registry.plugins.find((entry) => entry.id === "cursor-skills");
     expect(plugin?.status).toBe("loaded");
@@ -2015,6 +2030,223 @@ module.exports = {
     expect(registry.channels).toHaveLength(1);
   });
 
+  it("can prefer setupEntry for configured channel loads during startup", () => {
+    useNoBundledPlugins();
+    const pluginDir = makeTempDir();
+    const fullMarker = path.join(pluginDir, "full-loaded.txt");
+    const setupMarker = path.join(pluginDir, "setup-loaded.txt");
+    fs.writeFileSync(
+      path.join(pluginDir, "package.json"),
+      JSON.stringify(
+        {
+          name: "@openclaw/setup-runtime-preferred-test",
+          openclaw: {
+            extensions: ["./index.cjs"],
+            setupEntry: "./setup-entry.cjs",
+            startup: {
+              deferConfiguredChannelFullLoadUntilAfterListen: true,
+            },
+          },
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+    fs.writeFileSync(
+      path.join(pluginDir, "openclaw.plugin.json"),
+      JSON.stringify(
+        {
+          id: "setup-runtime-preferred-test",
+          configSchema: EMPTY_PLUGIN_SCHEMA,
+          channels: ["setup-runtime-preferred-test"],
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+    fs.writeFileSync(
+      path.join(pluginDir, "index.cjs"),
+      `require("node:fs").writeFileSync(${JSON.stringify(fullMarker)}, "loaded", "utf-8");
+module.exports = {
+  id: "setup-runtime-preferred-test",
+  register(api) {
+    api.registerChannel({
+      plugin: {
+        id: "setup-runtime-preferred-test",
+        meta: {
+          id: "setup-runtime-preferred-test",
+          label: "Setup Runtime Preferred Test",
+          selectionLabel: "Setup Runtime Preferred Test",
+          docsPath: "/channels/setup-runtime-preferred-test",
+          blurb: "full entry should be deferred while startup is still cold",
+        },
+        capabilities: { chatTypes: ["direct"] },
+        config: {
+          listAccountIds: () => ["default"],
+          resolveAccount: () => ({ accountId: "default", token: "configured" }),
+        },
+        outbound: { deliveryMode: "direct" },
+      },
+    });
+  },
+};`,
+      "utf-8",
+    );
+    fs.writeFileSync(
+      path.join(pluginDir, "setup-entry.cjs"),
+      `require("node:fs").writeFileSync(${JSON.stringify(setupMarker)}, "loaded", "utf-8");
+module.exports = {
+  plugin: {
+    id: "setup-runtime-preferred-test",
+    meta: {
+      id: "setup-runtime-preferred-test",
+      label: "Setup Runtime Preferred Test",
+      selectionLabel: "Setup Runtime Preferred Test",
+      docsPath: "/channels/setup-runtime-preferred-test",
+      blurb: "setup runtime preferred",
+    },
+    capabilities: { chatTypes: ["direct"] },
+    config: {
+      listAccountIds: () => ["default"],
+      resolveAccount: () => ({ accountId: "default", token: "configured" }),
+    },
+    outbound: { deliveryMode: "direct" },
+  },
+};`,
+      "utf-8",
+    );
+
+    const registry = loadOpenClawPlugins({
+      cache: false,
+      preferSetupRuntimeForChannelPlugins: true,
+      config: {
+        channels: {
+          "setup-runtime-preferred-test": {
+            enabled: true,
+          },
+        },
+        plugins: {
+          load: { paths: [pluginDir] },
+          allow: ["setup-runtime-preferred-test"],
+        },
+      },
+    });
+
+    expect(fs.existsSync(setupMarker)).toBe(true);
+    expect(fs.existsSync(fullMarker)).toBe(false);
+    expect(registry.channelSetups).toHaveLength(1);
+    expect(registry.channels).toHaveLength(1);
+  });
+
+  it("does not prefer setupEntry for configured channel loads without startup opt-in", () => {
+    useNoBundledPlugins();
+    const pluginDir = makeTempDir();
+    const fullMarker = path.join(makeTempDir(), "full-loaded.txt");
+    const setupMarker = path.join(makeTempDir(), "setup-loaded.txt");
+    fs.writeFileSync(
+      path.join(pluginDir, "package.json"),
+      JSON.stringify(
+        {
+          name: "@openclaw/setup-runtime-not-preferred-test",
+          openclaw: {
+            extensions: ["./index.cjs"],
+            setupEntry: "./setup-entry.cjs",
+          },
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+    fs.writeFileSync(
+      path.join(pluginDir, "openclaw.plugin.json"),
+      JSON.stringify(
+        {
+          id: "setup-runtime-not-preferred-test",
+          configSchema: EMPTY_PLUGIN_SCHEMA,
+          channels: ["setup-runtime-not-preferred-test"],
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+    fs.writeFileSync(
+      path.join(pluginDir, "index.cjs"),
+      `require("node:fs").writeFileSync(${JSON.stringify(fullMarker)}, "loaded", "utf-8");
+module.exports = {
+  id: "setup-runtime-not-preferred-test",
+  register(api) {
+    api.registerChannel({
+      plugin: {
+        id: "setup-runtime-not-preferred-test",
+        meta: {
+          id: "setup-runtime-not-preferred-test",
+          label: "Setup Runtime Not Preferred Test",
+          selectionLabel: "Setup Runtime Not Preferred Test",
+          docsPath: "/channels/setup-runtime-not-preferred-test",
+          blurb: "full entry should still load without explicit startup opt-in",
+        },
+        capabilities: { chatTypes: ["direct"] },
+        config: {
+          listAccountIds: () => ["default"],
+          resolveAccount: () => ({ accountId: "default", token: "configured" }),
+        },
+        outbound: { deliveryMode: "direct" },
+      },
+    });
+  },
+};`,
+      "utf-8",
+    );
+    fs.writeFileSync(
+      path.join(pluginDir, "setup-entry.cjs"),
+      `require("node:fs").writeFileSync(${JSON.stringify(setupMarker)}, "loaded", "utf-8");
+module.exports = {
+  plugin: {
+    id: "setup-runtime-not-preferred-test",
+    meta: {
+      id: "setup-runtime-not-preferred-test",
+      label: "Setup Runtime Not Preferred Test",
+      selectionLabel: "Setup Runtime Not Preferred Test",
+      docsPath: "/channels/setup-runtime-not-preferred-test",
+      blurb: "setup runtime not preferred",
+    },
+    capabilities: { chatTypes: ["direct"] },
+    config: {
+      listAccountIds: () => ["default"],
+      resolveAccount: () => ({ accountId: "default", token: "configured" }),
+    },
+    outbound: { deliveryMode: "direct" },
+  },
+};`,
+      "utf-8",
+    );
+
+    const registry = loadOpenClawPlugins({
+      cache: false,
+      preferSetupRuntimeForChannelPlugins: true,
+      config: {
+        channels: {
+          "setup-runtime-not-preferred-test": {
+            enabled: true,
+          },
+        },
+        plugins: {
+          load: { paths: [pluginDir] },
+          allow: ["setup-runtime-not-preferred-test"],
+        },
+      },
+    });
+
+    expect(fs.existsSync(fullMarker)).toBe(true);
+    expect(fs.existsSync(setupMarker)).toBe(false);
+    expect(registry.channelSetups).toHaveLength(1);
+    expect(registry.channels).toHaveLength(1);
+  });
+
   it("blocks before_prompt_build but preserves legacy model overrides when prompt injection is disabled", async () => {
     useNoBundledPlugins();
     const plugin = writePlugin({
@@ -2785,6 +3017,7 @@ module.exports = {
 
   it("preserves runtime reflection semantics when runtime is lazily initialized", () => {
     useNoBundledPlugins();
+    const stateDir = makeTempDir();
     const plugin = writePlugin({
       id: "runtime-introspection",
       filename: "runtime-introspection.cjs",
@@ -2803,12 +3036,17 @@ module.exports = {
 } };`,
     });
 
-    const registry = loadRegistryFromSinglePlugin({
-      plugin,
-      pluginConfig: {
-        allow: ["runtime-introspection"],
-      },
-    });
+    const registry = withEnv({ OPENCLAW_STATE_DIR: stateDir }, () =>
+      loadRegistryFromSinglePlugin({
+        plugin,
+        pluginConfig: {
+          allow: ["runtime-introspection"],
+        },
+        options: {
+          onlyPluginIds: ["runtime-introspection"],
+        },
+      }),
+    );
 
     const record = registry.plugins.find((entry) => entry.id === "runtime-introspection");
     expect(record?.status).toBe("loaded");

@@ -195,6 +195,58 @@ describe("sendMediaFeishu msg_type routing", () => {
     );
   });
 
+  it("uses msg_type=media for remote mp4 content even when the filename is generic", async () => {
+    loadWebMediaMock.mockResolvedValueOnce({
+      buffer: Buffer.from("remote-video"),
+      fileName: "download",
+      kind: "video",
+      contentType: "video/mp4",
+    });
+
+    await sendMediaFeishu({
+      cfg: {} as any,
+      to: "user:ou_target",
+      mediaUrl: "https://example.com/video",
+    });
+
+    expect(fileCreateMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ file_type: "mp4" }),
+      }),
+    );
+    expect(messageCreateMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ msg_type: "media" }),
+      }),
+    );
+  });
+
+  it("falls back to generic file for unsupported audio formats", async () => {
+    loadWebMediaMock.mockResolvedValueOnce({
+      buffer: Buffer.from("remote-mp3"),
+      fileName: "song.mp3",
+      kind: "audio",
+      contentType: "audio/mpeg",
+    });
+
+    await sendMediaFeishu({
+      cfg: {} as any,
+      to: "user:ou_target",
+      mediaUrl: "https://example.com/song.mp3",
+    });
+
+    expect(fileCreateMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ file_type: "stream" }),
+      }),
+    );
+    expect(messageCreateMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ msg_type: "file" }),
+      }),
+    );
+  });
+
   it("configures the media client timeout for image uploads", async () => {
     await sendMediaFeishu({
       cfg: {} as any,
@@ -519,5 +571,28 @@ describe("downloadMessageResourceFeishu", () => {
     );
     expectMediaTimeoutClientConfigured();
     expect(result.buffer).toBeInstanceOf(Buffer);
+  });
+
+  it("extracts content-type and filename metadata from download headers", async () => {
+    messageResourceGetMock.mockResolvedValueOnce({
+      data: Buffer.from("fake-video-data"),
+      headers: {
+        "content-type": "video/mp4",
+        "content-disposition": `attachment; filename="clip.mp4"`,
+      },
+    });
+
+    const result = await downloadMessageResourceFeishu({
+      cfg: {} as any,
+      messageId: "om_video_msg",
+      fileKey: "file_key_video",
+      type: "file",
+    });
+
+    expect(result).toMatchObject({
+      buffer: Buffer.from("fake-video-data"),
+      contentType: "video/mp4",
+      fileName: "clip.mp4",
+    });
   });
 });

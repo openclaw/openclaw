@@ -77,6 +77,10 @@ export {
 } from "./status-helpers.js";
 export { withTempDownloadPath } from "./temp-path.js";
 export {
+  buildFeishuConversationId,
+  parseFeishuConversationId,
+} from "../../extensions/feishu/src/conversation-id.js";
+export {
   createFixedWindowRateLimiter,
   createWebhookAnomalyTracker,
   WEBHOOK_ANOMALY_COUNTER_DEFAULTS,

@@ -8,6 +8,7 @@ import { readJsonBodyWithLimit, requestBodyErrorToText } from "../infra/http-bod
 import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
 import { normalizeMessageChannel } from "../utils/message-channel.js";
 import { type HookMappingResolved, resolveHookMappings } from "./hooks-mapping.js";
+import { resolveAllowedAgentIds } from "./hooks-policy.js";
 
 const DEFAULT_HOOKS_PATH = "/hooks";
 const DEFAULT_HOOKS_MAX_BODY_BYTES = 256 * 1024;
@@ -98,29 +99,6 @@ function resolveKnownAgentIds(cfg: OpenClawConfig, defaultAgentId: string): Set<
   const known = new Set(listAgentIds(cfg));
   known.add(defaultAgentId);
   return known;
-}
-
-export function resolveAllowedAgentIds(raw: string[] | undefined): Set<string> | undefined {
-  if (!Array.isArray(raw)) {
-    return undefined;
-  }
-  const allowed = new Set<string>();
-  let hasWildcard = false;
-  for (const entry of raw) {
-    const trimmed = entry.trim();
-    if (!trimmed) {
-      continue;
-    }
-    if (trimmed === "*") {
-      hasWildcard = true;
-      break;
-    }
-    allowed.add(normalizeAgentId(trimmed));
-  }
-  if (hasWildcard) {
-    return undefined;
-  }
-  return allowed;
 }
 
 function resolveSessionKey(raw: string | undefined): string | undefined {

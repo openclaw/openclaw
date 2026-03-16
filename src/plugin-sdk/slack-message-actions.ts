@@ -15,6 +15,7 @@ function readSlackBlocksParam(actionParams: Record<string, unknown>) {
   return parseSlackBlocksInput(actionParams.blocks) as Record<string, unknown>[] | undefined;
 }
 
+/** Translate generic channel action requests into Slack-specific tool invocations and payload shapes. */
 export async function handleSlackMessageAction(params: {
   providerId: string;
   ctx: ChannelMessageActionContext;

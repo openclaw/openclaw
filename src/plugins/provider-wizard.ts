@@ -61,6 +61,17 @@ function resolveMethodById(
   return provider.auth.find((method) => method.id.trim().toLowerCase() === normalizedMethodId);
 }
 
+function listMethodWizardSetups(provider: ProviderPlugin): Array<{
+  method: ProviderAuthMethod;
+  wizard: ProviderPluginWizardSetup;
+}> {
+  return provider.auth
+    .map((method) => (method.wizard ? { method, wizard: method.wizard } : null))
+    .filter((entry): entry is { method: ProviderAuthMethod; wizard: ProviderPluginWizardSetup } =>
+      Boolean(entry),
+    );
+}
+
 function buildSetupOptionForMethod(params: {
   provider: ProviderPlugin;
   wizard: ProviderPluginWizardSetup;
@@ -93,6 +104,20 @@ export function resolveProviderWizardOptions(params: {
   const options: ProviderWizardOption[] = [];
 
   for (const provider of providers) {
+    const methodSetups = listMethodWizardSetups(provider);
+    for (const { method, wizard } of methodSetups) {
+      options.push(
+        buildSetupOptionForMethod({
+          provider,
+          wizard,
+          method,
+          value: wizard.choiceId?.trim() || buildProviderPluginMethodChoice(provider.id, method.id),
+        }),
+      );
+    }
+    if (methodSetups.length > 0) {
+      continue;
+    }
     const setup = provider.wizard?.setup;
     if (!setup) {
       continue;
@@ -165,7 +190,11 @@ export function resolveProviderModelPickerEntries(params: {
 export function resolveProviderPluginChoice(params: {
   providers: ProviderPlugin[];
   choice: string;
-}): { provider: ProviderPlugin; method: ProviderAuthMethod } | null {
+}): {
+  provider: ProviderPlugin;
+  method: ProviderAuthMethod;
+  wizard?: ProviderPluginWizardSetup;
+} | null {
   const choice = params.choice.trim();
   if (!choice) {
     return null;
@@ -187,13 +216,20 @@ export function resolveProviderPluginChoice(params: {
   }
 
   for (const provider of params.providers) {
+    for (const { method, wizard } of listMethodWizardSetups(provider)) {
+      const choiceId =
+        wizard.choiceId?.trim() || buildProviderPluginMethodChoice(provider.id, method.id);
+      if (normalizeChoiceId(choiceId) === choice) {
+        return { provider, method, wizard };
+      }
+    }
     const setup = provider.wizard?.setup;
     if (setup) {
       const setupChoiceId = resolveWizardSetupChoiceId(provider, setup);
       if (normalizeChoiceId(setupChoiceId) === choice) {
         const method = resolveMethodById(provider, setup.methodId);
         if (method) {
-          return { provider, method };
+          return { provider, method, wizard: setup };
         }
       }
     }

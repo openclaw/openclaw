@@ -34,6 +34,20 @@ describe("legacy root entry", () => {
     expect(runtimeMocks.runCli).not.toHaveBeenCalled();
   });
 
+  it("keeps library imports free of global window shims", async () => {
+    const originalWindowDescriptor = Object.getOwnPropertyDescriptor(globalThis, "window");
+    Reflect.deleteProperty(globalThis as object, "window");
+
+    try {
+      await import("./index.js");
+      expect("window" in globalThis).toBe(false);
+    } finally {
+      if (originalWindowDescriptor) {
+        Object.defineProperty(globalThis, "window", originalWindowDescriptor);
+      }
+    }
+  });
+
   it("delegates legacy direct-entry execution to run-main", async () => {
     const mod = await import("./index.js");
     const argv = ["node", "dist/index.js", "status"];
