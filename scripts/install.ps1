@@ -207,8 +207,15 @@ function Install-OpenClawNpm {
     Write-Host "Installing OpenClaw ($installSpec)..." -Level info
     
     # First attempt: standard install with SSL verification enabled (default/safe)
-    $output = npm install -g $installSpec --no-fund --no-audit 2>&1
-    $exitCode = $LASTEXITCODE
+    # Wrapped in try/catch so CommandNotFoundException (npm not on PATH) returns
+    # false cleanly instead of aborting the script with a terminating error.
+    try {
+        $output = npm install -g $installSpec --no-fund --no-audit 2>&1
+        $exitCode = $LASTEXITCODE
+    } catch {
+        Write-Host "npm not found or failed to launch: $_" -Level error
+        return $false
+    }
 
     if ($exitCode -eq 0) {
         Write-Host "OpenClaw installed" -Level success
@@ -231,14 +238,31 @@ function Install-OpenClawNpm {
         Write-Host "install only. Ensure you trust your network before proceeding." -Level warn
         Write-Host "" -Level info
 
+        # Detect non-interactive environments (CI, automation, -NonInteractive flag).
+        # In those contexts Read-Host raises a terminating error, so we skip the
+        # prompt and abort with guidance instead of hanging or crashing.
+        $isInteractive = [Environment]::UserInteractive -and
+                         -not ([Console]::IsInputRedirected) -and
+                         ($Host.UI.RawUI -ne $null)
+        if (-not $isInteractive) {
+            Write-Host "Non-interactive environment detected. Aborting TLS fallback." -Level error
+            Write-Host "To install in CI with a corporate proxy, set npm cafile or pass --strict-ssl=false explicitly." -Level info
+            return $false
+        }
+
         $response = Read-Host "Retry installation with --strict-ssl=false? [y/N]"
         if ($response -notmatch '^[Yy]$') {
             Write-Host "Aborted. To fix permanently, update your root CA certificates or run: npm config set cafile <path-to-ca-bundle.pem>" -Level info
             return $false
         }
 
-        $retryOutput = npm install -g $installSpec --no-fund --no-audit --strict-ssl=false 2>&1
-        $retryExitCode = $LASTEXITCODE
+        try {
+            $retryOutput = npm install -g $installSpec --no-fund --no-audit --strict-ssl=false 2>&1
+            $retryExitCode = $LASTEXITCODE
+        } catch {
+            Write-Host "npm not found or failed to launch during retry: $_" -Level error
+            return $false
+        }
 
         if ($retryExitCode -eq 0) {
             Write-Host "OpenClaw installed (TLS fallback used)" -Level success
@@ -249,11 +273,11 @@ function Install-OpenClawNpm {
             return $true
         }
 
-        Write-Host "npm install failed even with --strict-ssl=false: $($retryOutput -join `"`n`")" -Level error
+        Write-Host "npm install failed even with --strict-ssl=false:`n$($retryOutput -join `"`n`")" -Level error
         return $false
     }
 
-    Write-Host "npm install failed: $($output -join `"`n`")" -Level error
+    Write-Host "npm install failed:`n$($output -join `"`n`")" -Level error
     return $false
 }
 
