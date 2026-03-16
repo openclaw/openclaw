@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 import {
   applyConfigOverrides,
   getConfigOverrides,
+  setRuntimeStateContainer,
   resetConfigOverrides,
   setConfigOverride,
   unsetConfigOverride,
@@ -10,6 +11,7 @@ import type { OpenClawConfig } from "./types.js";
 
 describe("runtime overrides", () => {
   beforeEach(() => {
+    setRuntimeStateContainer(null);
     resetConfigOverrides();
   });
 

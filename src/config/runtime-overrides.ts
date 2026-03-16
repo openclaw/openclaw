@@ -5,7 +5,15 @@ import type { OpenClawConfig } from "./types.js";
 
 type OverrideTree = Record<string, unknown>;
 
-let overrides: OverrideTree = {};
+export type RuntimeStateContainer = {
+  configOverrides: OverrideTree;
+};
+
+const DEFAULT_RUNTIME_STATE_CONTAINER: RuntimeStateContainer = {
+  configOverrides: {},
+};
+
+let activeRuntimeStateContainer: RuntimeStateContainer = DEFAULT_RUNTIME_STATE_CONTAINER;
 
 function sanitizeOverrideValue(value: unknown, seen = new WeakSet<object>()): unknown {
   if (Array.isArray(value)) {
@@ -44,11 +52,19 @@ function mergeOverrides(base: unknown, override: unknown): unknown {
 }
 
 export function getConfigOverrides(): OverrideTree {
-  return overrides;
+  return activeRuntimeStateContainer.configOverrides;
 }
 
 export function resetConfigOverrides(): void {
-  overrides = {};
+  activeRuntimeStateContainer.configOverrides = {};
+}
+
+export function getRuntimeStateContainer(): RuntimeStateContainer {
+  return activeRuntimeStateContainer;
+}
+
+export function setRuntimeStateContainer(container: RuntimeStateContainer | null): void {
+  activeRuntimeStateContainer = container ?? DEFAULT_RUNTIME_STATE_CONTAINER;
 }
 
 export function setConfigOverride(
@@ -62,7 +78,11 @@ export function setConfigOverride(
   if (!parsed.ok || !parsed.path) {
     return { ok: false, error: parsed.error ?? "Invalid path." };
   }
-  setConfigValueAtPath(overrides, parsed.path, sanitizeOverrideValue(value));
+  setConfigValueAtPath(
+    activeRuntimeStateContainer.configOverrides,
+    parsed.path,
+    sanitizeOverrideValue(value),
+  );
   return { ok: true };
 }
 
@@ -79,11 +99,12 @@ export function unsetConfigOverride(pathRaw: string): {
       error: parsed.error ?? "Invalid path.",
     };
   }
-  const removed = unsetConfigValueAtPath(overrides, parsed.path);
+  const removed = unsetConfigValueAtPath(activeRuntimeStateContainer.configOverrides, parsed.path);
   return { ok: true, removed };
 }
 
 export function applyConfigOverrides(cfg: OpenClawConfig): OpenClawConfig {
+  const overrides = activeRuntimeStateContainer.configOverrides;
   if (!overrides || Object.keys(overrides).length === 0) {
     return cfg;
   }
