@@ -4,6 +4,7 @@ import { createReplyReferencePlanner } from "../../auto-reply/reply/reply-refere
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
 import type { ReplyPayload } from "../../auto-reply/types.js";
 import type { MarkdownTableMode } from "../../config/types.base.js";
+import { runOutboundMessageHook } from "../../plugins/outbound-hook.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import { markdownToSlackMrkdwnChunks } from "../format.js";
 import { sendMessageSlack } from "../send.js";
@@ -19,6 +20,17 @@ export async function deliverReplies(params: {
   replyToMode: "off" | "first" | "all";
 }) {
   for (const payload of params.replies) {
+    // Apply outbound message hook before chunking/formatting.
+    const _slackHook = await runOutboundMessageHook({
+      to: params.target,
+      content: payload.text ?? "",
+      channel: "slack",
+      accountId: params.accountId,
+    });
+    if (_slackHook === null) {
+      continue;
+    }
+    payload.text = _slackHook.content;
     // Keep reply tags opt-in: when replyToMode is off, explicit reply tags
     // must not force threading.
     const inlineReplyToId = params.replyToMode === "off" ? undefined : payload.replyToId;

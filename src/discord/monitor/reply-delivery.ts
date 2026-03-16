@@ -5,6 +5,7 @@ import type { ReplyPayload } from "../../auto-reply/types.js";
 import { loadConfig } from "../../config/config.js";
 import type { MarkdownTableMode, ReplyToMode } from "../../config/types.base.js";
 import { convertMarkdownTables } from "../../markdown/tables.js";
+import { runOutboundMessageHook } from "../../plugins/outbound-hook.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import { chunkDiscordTextWithMode } from "../chunk.js";
 import { sendMessageDiscord, sendVoiceMessageDiscord, sendWebhookMessageDiscord } from "../send.js";
@@ -162,6 +163,17 @@ export async function deliverDiscordReply(params: {
   });
   const persona = resolveBindingPersona(binding);
   for (const payload of params.replies) {
+    // Apply outbound message hook before chunking/formatting.
+    const _discordHook = await runOutboundMessageHook({
+      to: params.target,
+      content: payload.text ?? "",
+      channel: "discord",
+      accountId: params.accountId,
+    });
+    if (_discordHook === null) {
+      continue;
+    }
+    payload.text = _discordHook.content;
     const mediaList = payload.mediaUrls ?? (payload.mediaUrl ? [payload.mediaUrl] : []);
     const rawText = payload.text ?? "";
     const tableMode = params.tableMode ?? "code";

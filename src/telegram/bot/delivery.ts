@@ -10,6 +10,7 @@ import { mediaKindFromMime } from "../../media/constants.js";
 import { fetchRemoteMedia } from "../../media/fetch.js";
 import { isGifMedia } from "../../media/mime.js";
 import { saveMediaBuffer } from "../../media/store.js";
+import { runOutboundMessageHook } from "../../plugins/outbound-hook.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import { loadWebMedia } from "../../web/media.js";
 import { withTelegramApiErrorLogging } from "../api-logging.js";
@@ -100,6 +101,16 @@ export async function deliverReplies(params: {
     return chunks;
   };
   for (const reply of replies) {
+    // Apply outbound message hook before chunking/formatting.
+    const _tgHook = await runOutboundMessageHook({
+      to: chatId,
+      content: reply.text ?? "",
+      channel: "telegram",
+    });
+    if (_tgHook === null) {
+      continue;
+    }
+    reply.text = _tgHook.content;
     const hasMedia = Boolean(reply?.mediaUrl) || (reply?.mediaUrls?.length ?? 0) > 0;
     if (!reply?.text && !hasMedia) {
       if (reply?.audioAsVoice) {

@@ -4,6 +4,7 @@ import type { MarkdownTableMode } from "../../config/types.base.js";
 import { logVerbose, shouldLogVerbose } from "../../globals.js";
 import { convertMarkdownTables } from "../../markdown/tables.js";
 import { markdownToWhatsApp } from "../../markdown/whatsapp.js";
+import { runOutboundMessageHook } from "../../plugins/outbound-hook.js";
 import { sleep } from "../../utils.js";
 import { loadWebMedia } from "../media.js";
 import { newConnectionId } from "../reconnect.js";
@@ -31,6 +32,16 @@ export async function deliverWebReply(params: {
   const replyStarted = Date.now();
   const tableMode = params.tableMode ?? "code";
   const chunkMode = params.chunkMode ?? "length";
+  // Apply outbound message hook before chunking/formatting.
+  const _webHook = await runOutboundMessageHook({
+    to: msg.from,
+    content: replyResult.text ?? "",
+    channel: "webchat",
+  });
+  if (_webHook === null) {
+    return;
+  }
+  replyResult.text = _webHook.content;
   const convertedText = markdownToWhatsApp(
     convertMarkdownTables(replyResult.text || "", tableMode),
   );
