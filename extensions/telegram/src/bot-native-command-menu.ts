@@ -157,26 +157,14 @@ async function writeCachedCommandHash(
   hash: string,
 ): Promise<void> {
   try {
-    // Validate stateDir *before* path.join so we catch malformed values like
-    // OPENCLAW_STATE_DIR="\?" or "\\?" that become "\?\telegram" after join —
-    // a path that is not a bare prefix but is still an invalid mkdir target.
-    // path.win32.isAbsolute cannot be used here (it returns true for bare prefixes).
-    const stateDir = resolveStateDir(process.env, os.homedir);
-    if (/^\\{1,2}\?[/\\]?$/.test(stateDir)) {
-      throw new Error(`Invalid state dir for command hash: "${stateDir}"`);
-    }
+    // Resolve path inside try so any path issues (e.g. malformed OPENCLAW_STATE_DIR)
+    // are caught best-effort rather than bubbling up to the caller.
     const filePath = resolveCommandHashPath(accountId, botIdentity);
-    const dirPath = path.dirname(filePath);
-    if (!dirPath || dirPath === ".") {
-      throw new Error(`Invalid directory path for command hash: "${dirPath}"`);
-    }
-    await fs.mkdir(dirPath, { recursive: true });
+    await fs.mkdir(path.dirname(filePath), { recursive: true });
     await fs.writeFile(filePath, hash, "utf-8");
   } catch (err) {
     // Best-effort: cache write failure means commands re-sync on next restart.
-    if (err instanceof Error) {
-      logVerbose(`telegram: failed to cache command hash: ${err.message}`);
-    }
+    logVerbose(`telegram: failed to cache command hash: ${err instanceof Error ? err.message : String(err)}`);
   }
 }
 
