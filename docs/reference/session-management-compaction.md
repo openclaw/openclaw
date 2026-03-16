@@ -25,6 +25,7 @@ If you want a higher-level overview first, start with:
 - [/concepts/compaction](/concepts/compaction)
 - [/concepts/session-pruning](/concepts/session-pruning)
 - [/reference/transcript-hygiene](/reference/transcript-hygiene)
+- [/reference/saturated-session-recovery](/reference/saturated-session-recovery)
 
 ---
 
@@ -310,6 +311,38 @@ Notes:
 
 Pi also exposes a `session_before_compact` hook in the extension API, but OpenClaw’s
 flush logic lives on the Gateway side today.
+
+---
+
+## Loop-aware compaction guard (implemented in safeguard mode)
+
+OpenClaw also has a **loop-aware compaction guard** for sessions that are not just large,
+but visibly unhealthy.
+
+It targets failure modes such as:
+
+- the latest user request being ignored
+- duplicate assistant replies or near-duplicate reply clusters
+- repeated failing tool patterns
+- stale reminder/system text resurfacing as if it were the active task
+
+High-level flow:
+
+1. detect transcript-tail risk
+2. score risk + usage pressure
+3. strengthen safeguard compaction instructions for high-risk sessions
+4. validate whether the compaction result preserved the right things
+5. emit a conservative `recommend-reset` diagnostic only when compaction still fails to restore health
+
+Important limits:
+
+- this path is gated by `agents.defaults.compaction.guard.enabled`
+- it currently operates on the **safeguard compaction** path
+- `recommend-reset` is diagnostic only; it does **not** auto-reset the session
+- repeated-compaction window controls are not yet enforced at runtime
+
+For the operator playbook and recovery order, see
+[/reference/saturated-session-recovery](/reference/saturated-session-recovery).
 
 ---
 
