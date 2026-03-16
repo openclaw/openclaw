@@ -25,7 +25,6 @@
         "id": "bodhi",
         "name": "Bodhi",
         "default": true,
-        "workspace": "~/openbodhi/souls/bodhi",
         "identity": {
           "name": "Bodhi",
           "avatar": "🪷",
@@ -41,7 +40,6 @@
       {
         "id": "bo",
         "name": "Bo",
-        "workspace": "~/openbodhi/souls/bo",
         "identity": {
           "name": "Bo",
           "avatar": "🧘",
@@ -61,50 +59,6 @@
           "bodhi-calendar",
           "bodhi-accountability",
           "bodhi-query",
-          "bodhi-switch"
-        ]
-      },
-      {
-        "id": "qenjin",
-        "name": "Qenjin",
-        "workspace": "~/openbodhi/souls/qenjin",
-        "identity": {
-          "name": "Qenjin",
-          "avatar": "⚙️",
-          "bio": "Business operator for qenjin.io. Clipped, military-brief, zero filler. Executes, reports, escalates."
-        },
-        "skills": [
-          "qenjin-crm",
-          "qenjin-content",
-          "qenjin-outreach",
-          "qenjin-n8n",
-          "qenjin-osint",
-          "qenjin-video",
-          "qenjin-mautic",
-          "qenjin-analytics",
-          "qenjin-security",
-          "bodhi-switch"
-        ]
-      },
-      {
-        "id": "moonman",
-        "name": "Moonman",
-        "workspace": "~/openbodhi/souls/moonman",
-        "identity": {
-          "name": "Moonman",
-          "avatar": "🌙",
-          "bio": "Trading bot. Edge hunter. Casual quant. Numbers first, thesis second, feelings never. Paper first, always."
-        },
-        "skills": [
-          "trader-scan",
-          "trader-backtest",
-          "trader-polymarket",
-          "trader-wallet",
-          "trader-ta",
-          "trader-signals",
-          "trader-cron",
-          "trader-risk",
-          "trader-dashboard",
           "bodhi-switch"
         ]
       }
@@ -133,24 +87,6 @@
         "skills/bodhi-substack",
         "skills/bodhi-viz",
         "skills/bodhi-switch",
-        "skills/qenjin-crm",
-        "skills/qenjin-content",
-        "skills/qenjin-outreach",
-        "skills/qenjin-n8n",
-        "skills/qenjin-osint",
-        "skills/qenjin-video",
-        "skills/qenjin-mautic",
-        "skills/qenjin-analytics",
-        "skills/qenjin-security",
-        "skills/trader-scan",
-        "skills/trader-backtest",
-        "skills/trader-polymarket",
-        "skills/trader-wallet",
-        "skills/trader-ta",
-        "skills/trader-signals",
-        "skills/trader-cron",
-        "skills/trader-risk",
-        "skills/trader-dashboard",
         "skills/bodhi-checkin",
         "skills/bodhi-tasks",
         "skills/bodhi-calendar",
@@ -232,48 +168,6 @@
         "schedule": "30 3 * * 0",
         "agent": "bo",
         "prompt": "Run /janitor — weekly vault hygiene check. Scan for orphans, duplicates, broken edges. Report only, no auto-cleanup.",
-        "recurring": true
-      },
-      {
-        "id": "qenjin-weekly-report",
-        "schedule": "0 9 * * 5",
-        "agent": "qenjin",
-        "prompt": "Run /q analytics weekly — compile and send the weekly business report: pipeline value, outreach funnel metrics, content performance, AI spend.",
-        "recurring": true
-      },
-      {
-        "id": "qenjin-content-calendar",
-        "schedule": "0 7 * * 2",
-        "agent": "qenjin",
-        "prompt": "Run /q content plan — send this week's content calendar reminder: what to publish, what clips to record, what to schedule.",
-        "recurring": true
-      },
-      {
-        "id": "qenjin-followup-check",
-        "schedule": "0 14 * * 1-5",
-        "agent": "qenjin",
-        "prompt": "Run /q outreach today — check CRM for LinkedIn connections accepted 24-48h ago and generate personalized DMs for owner review.",
-        "recurring": true
-      },
-      {
-        "id": "moonman-morning-brief",
-        "schedule": "0 9 * * 1-5",
-        "agent": "moonman",
-        "prompt": "Run /t market update — send the morning trading brief: BTC overview, top alt signals, Polymarket hot markets.",
-        "recurring": true
-      },
-      {
-        "id": "moonman-eod-review",
-        "schedule": "0 16 * * 1-5",
-        "agent": "moonman",
-        "prompt": "Run /t signals — end-of-day signal check. Any strategies triggered today? Paper trade P&L update.",
-        "recurring": true
-      },
-      {
-        "id": "moonman-strategy-review",
-        "schedule": "0 10 * * 0",
-        "agent": "moonman",
-        "prompt": "Run /t risk report — weekly strategy performance review: win rate, expectancy, drawdown, edge decay check.",
         "recurring": true
       },
       {

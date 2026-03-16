@@ -29,29 +29,11 @@ log = logging.getLogger(__name__)
 _DEFAULT_SIYUAN_URL = "http://localhost:6806"
 
 DOMAIN_NOTEBOOK: dict[str | None, str] = {
-    # Bo domains — wellness agents
     "wellness": "OpenBodhi-Wellness",
     "fitness": "OpenBodhi-Fitness",
     "health": "OpenBodhi-Health",
     "mental-health": "OpenBodhi-Mental",
     "cognitive": "OpenBodhi-Cognitive",
-    # Qenjin domains — business operations (hard boundary: Bo never writes these)
-    "business": "Qenjin-Clients",
-    "qenjin-clients": "Qenjin-Clients",
-    "qenjin-campaigns": "Qenjin-Campaigns",
-    "qenjin-research": "Qenjin-Research",
-    "qenjin-analytics": "Qenjin-Analytics",
-    "qenjin-workflows": "Qenjin-Workflows",
-    "qenjin-competitors": "Qenjin-Competitors",
-    "qenjin-pipeline": "Qenjin-Pipeline",
-    "qenjin-osint": "Qenjin-OSINT",
-    # Moonman domains — trading (hard boundary: Bo never writes these)
-    "trading": "Trader-Log",
-    "trader-strategies": "Trader-Strategies",
-    "trader-backtests": "Trader-Backtests",
-    "trader-wallets": "Trader-Wallets",
-    "trader-signals": "Trader-Signals",
-    "trader-research": "Trader-Research",
 }
 PEOPLE_NOTEBOOK = "OpenBodhi-People"
 DIGESTS_NOTEBOOK = "OpenBodhi-Digests"
@@ -61,17 +43,6 @@ _BO_NOTEBOOKS = frozenset({
     "OpenBodhi-Wellness", "OpenBodhi-Fitness", "OpenBodhi-Health",
     "OpenBodhi-Mental", "OpenBodhi-Cognitive", "OpenBodhi-People",
     "OpenBodhi-Digests", "OpenBodhi-Substack",
-})
-# Notebooks that belong exclusively to Qenjin
-_QENJIN_NOTEBOOKS = frozenset({
-    "Qenjin-Clients", "Qenjin-Campaigns", "Qenjin-Research",
-    "Qenjin-Analytics", "Qenjin-Workflows", "Qenjin-Competitors",
-    "Qenjin-Pipeline", "Qenjin-OSINT",
-})
-# Notebooks that belong exclusively to Moonman
-_TRADER_NOTEBOOKS = frozenset({
-    "Trader-Log", "Trader-Strategies", "Trader-Backtests",
-    "Trader-Wallets", "Trader-Signals", "Trader-Research",
 })
 
 # ---------------------------------------------------------------------------
@@ -349,40 +320,12 @@ def sync_bo_node(node: dict[str, Any]) -> None:
     """
     Sync a Bo (wellness agent) vault node to SiYuan.
 
-    Identical to sync_to_siyuan but guards against writing to
-    Qenjin or Trader notebooks. Bo may only write to OpenBodhi-* notebooks.
-    Silently drops the sync if the domain maps to a non-Bo notebook.
+    Identical to sync_to_siyuan but guards against writing to notebooks
+    that don't belong to Bo. Silently drops if domain maps outside
+    OpenBodhi-* notebooks.
     """
     target = DOMAIN_NOTEBOOK.get(node.get("domain"))
     if target is not None and target not in _BO_NOTEBOOKS:
         log.debug("sync_bo_node: domain %s maps to %s — not a Bo notebook, skipping", node.get("domain"), target)
         return
     sync_to_siyuan(node)
-
-
-def sync_qenjin_node(node: dict[str, Any]) -> None:
-    """
-    Sync a Qenjin (business agent) vault node to SiYuan.
-
-    Guards against writing to OpenBodhi or Trader notebooks.
-    Qenjin may only write to Qenjin-* notebooks.
-    Falls back to Qenjin-Clients for unknown business domains.
-    """
-    client = _get_client()
-    if client is None:
-        return
-
-    target = DOMAIN_NOTEBOOK.get(node.get("domain"))
-    if target is None:
-        # Unknown domain — default to Qenjin-Clients
-        node = {**node, "domain": "qenjin-clients"}
-        target = "Qenjin-Clients"
-
-    if target not in _QENJIN_NOTEBOOKS:
-        log.debug("sync_qenjin_node: domain %s maps to %s — not a Qenjin notebook, skipping", node.get("domain"), target)
-        return
-
-    try:
-        client.sync_node(node)
-    except Exception as exc:  # noqa: BLE001
-        log.debug("siyuan qenjin sync skipped: %s", exc)

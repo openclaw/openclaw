@@ -141,3 +141,9 @@ vault/chroma/
 **/tasks.md
 packages/bodhi_vault/.venv/
 **/.venv/
+
+# Personal agent configs — not part of the public product
+souls/
+docs/qenjin/
+skills/qenjin-*/
+skills/trader-*/

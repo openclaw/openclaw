@@ -34,14 +34,11 @@ ANTHROPIC_API_KEY=          # From console.anthropic.com
 BODHI_TELEGRAM_USER_ID=     # Your Telegram numeric user ID
 
 # Optional (SiYuan sync — silent no-op if unset)
-SIYUAN_API_TOKEN=           # From si.qenjin.io Settings → API
-SIYUAN_API_URL=https://si.qenjin.io
+SIYUAN_API_TOKEN=           # From your SiYuan instance: Settings → API
+SIYUAN_API_URL=             # e.g. http://localhost:6806 or your self-hosted URL
 
 # Optional (Obsidian sync)
 # OBSIDIAN_VAULT_PATH=/path/to/your/obsidian/vault
-
-# CRM / Qenjin (set when Qenjin agent is active)
-TWENTY_API_KEY=             # From crm.huda20.fun Settings
 ```
 
 Permissions:
@@ -90,13 +87,7 @@ chmod +x ~/openbodhi/docs/bodhi/scripts/*.sh
 sudo ufw allow in on tailscale0 to any port 8085
 ```
 
-## 8. Trader state directories
-
-```bash
-mkdir -p ~/.openclaw/trader/{strategies,backtests,paper-trades,wallets,signals,profiles,dashboard}
-```
-
-## 9. Quick smoke test
+## 8. Quick smoke test
 
 ```bash
 # Test vault write
@@ -122,7 +113,7 @@ print(nudge_status(vault_path=Path.home() / 'openbodhi/vault'))
 "
 ```
 
-## 10. First cron activation
+## 9. First cron activation
 
 After deploying, the cron schedule starts with:
 - `0 6 * * *` — distiller-daily (6am UTC)
