@@ -66,7 +66,7 @@ vi.mock("./ws-log.js", () => ({
 const { AcpGatewayNodeRuntime, __testing: acpGatewayTesting } =
   await import("../acp/store/gateway-events.js");
 const { AcpGatewayStore } = await import("../acp/store/store.js");
-const { handleNodeEvent } = await import("./server-node-events.js");
+const { handleNodeDisconnect, handleNodeEvent } = await import("./server-node-events.js");
 
 function buildCtx(): NodeEventContext {
   return {
@@ -214,7 +214,7 @@ describe("handleNodeEvent ACP worker ingress", () => {
     expect(await runtime.store.listRunEvents("run-1")).toHaveLength(0);
   });
 
-  it("rejects suspect-lease terminals through handleNodeEvent until reconcile", async () => {
+  it("recovers through gateway disconnect plus heartbeat reconnect before accepting a terminal", async () => {
     const runtime = await createRuntime();
     const lease = await runtime.store.acquireLease({
       sessionKey: "agent:main:acp:test-session",
@@ -243,9 +243,7 @@ describe("handleNodeEvent ACP worker ingress", () => {
         },
       }),
     });
-    await runtime.store.markNodeDisconnected({
-      nodeId: "node-1",
-      reason: "node_disconnected",
+    await handleNodeDisconnect("node-1", {
       now: 11,
     });
 
@@ -267,6 +265,57 @@ describe("handleNodeEvent ACP worker ingress", () => {
       }),
     ).rejects.toMatchObject({
       code: "ACP_NODE_ACTIVE_LEASE_MISSING",
+    });
+
+    await handleNodeEvent(buildCtx(), "node-1", {
+      event: "acp.worker.heartbeat",
+      payloadJSON: JSON.stringify({
+        nodeId: "node-1",
+        sessionKey: "agent:main:acp:test-session",
+        runId: "run-1",
+        leaseId: lease.leaseId,
+        leaseEpoch: lease.leaseEpoch,
+        state: "running",
+        nodeRuntimeSessionId: "runtime-1",
+        nodeWorkerRunId: "worker-1",
+        workerProtocolVersion: 1,
+        ts: 12,
+      }),
+    });
+
+    expect(await runtime.store.getActiveLease("agent:main:acp:test-session")).toMatchObject({
+      state: "active",
+      nodeRuntimeSessionId: "runtime-1",
+      nodeWorkerRunId: "worker-1",
+      workerProtocolVersion: 1,
+    });
+    expect(await runtime.store.getRun("run-1")).toMatchObject({
+      state: "running",
+    });
+
+    await expect(
+      handleNodeEvent(buildCtx(), "node-1", {
+        event: "acp.worker.terminal",
+        payloadJSON: JSON.stringify({
+          nodeId: "node-1",
+          sessionKey: "agent:main:acp:test-session",
+          runId: "run-1",
+          leaseId: lease.leaseId,
+          leaseEpoch: lease.leaseEpoch,
+          terminalEventId: "term-1",
+          finalSeq: 1,
+          terminal: {
+            kind: "completed",
+          },
+        }),
+      }),
+    ).resolves.toBeUndefined();
+
+    expect(await runtime.store.getRun("run-1")).toMatchObject({
+      state: "completed",
+      terminal: {
+        terminalEventId: "term-1",
+      },
     });
   });
 });

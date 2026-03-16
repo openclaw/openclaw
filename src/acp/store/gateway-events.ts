@@ -289,6 +289,10 @@ export class AcpGatewayNodeRuntime {
     return await this.store.reconcileSuspectLease(params);
   }
 
+  async expireSuspectLeases(params?: { now?: number }) {
+    return await this.store.expireSuspectLeases(params);
+  }
+
   private assertNodeIdentity(connectionNodeId: string, payloadNodeId: string): void {
     if (connectionNodeId !== payloadNodeId) {
       throw new AcpGatewayStoreError(

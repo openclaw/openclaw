@@ -268,14 +268,6 @@ describe("AcpGatewayStore", () => {
       code: "ACP_NODE_STALE_EPOCH",
     });
 
-    await store.reconcileSuspectLease({
-      sessionKey: "agent:main:acp:test-session",
-      nodeId: "node-1",
-      leaseId: secondLease.leaseId,
-      leaseEpoch: secondLease.leaseEpoch,
-      now: 14,
-    });
-
     await expect(
       store.resolveTerminal({
         nodeId: "node-1",
@@ -288,13 +280,86 @@ describe("AcpGatewayStore", () => {
         terminal: {
           kind: "completed",
         },
-        now: 15,
+        now: 14,
       }),
     ).rejects.toMatchObject({
       code: "ACP_NODE_STALE_EPOCH",
     });
 
     expect(firstLease.leaseEpoch).toBe(1);
+  });
+
+  it("rejects stale heartbeats from a completed run without refreshing the active lease", async () => {
+    const { store } = await createStore();
+    const lease = await store.acquireLease({
+      sessionKey: "agent:main:acp:test-session",
+      nodeId: "node-1",
+      leaseId: "lease-1",
+      now: 10,
+    });
+    await store.startRun({
+      sessionKey: "agent:main:acp:test-session",
+      runId: "run-1",
+      requestId: "req-1",
+      now: 10,
+    });
+    await store.appendWorkerEvent({
+      nodeId: "node-1",
+      sessionKey: "agent:main:acp:test-session",
+      runId: "run-1",
+      leaseId: lease.leaseId,
+      leaseEpoch: lease.leaseEpoch,
+      seq: 1,
+      event: {
+        type: "status",
+        text: "running",
+      },
+      now: 11,
+    });
+    await store.resolveTerminal({
+      nodeId: "node-1",
+      sessionKey: "agent:main:acp:test-session",
+      runId: "run-1",
+      leaseId: lease.leaseId,
+      leaseEpoch: lease.leaseEpoch,
+      terminalEventId: "term-1",
+      finalSeq: 1,
+      terminal: {
+        kind: "completed",
+      },
+      now: 12,
+    });
+    await store.startRun({
+      sessionKey: "agent:main:acp:test-session",
+      runId: "run-2",
+      requestId: "req-2",
+      now: 13,
+    });
+
+    const leaseBefore = await store.getActiveLease("agent:main:acp:test-session");
+
+    await expect(
+      store.recordHeartbeat({
+        nodeId: "node-1",
+        sessionKey: "agent:main:acp:test-session",
+        runId: "run-1",
+        leaseId: lease.leaseId,
+        leaseEpoch: lease.leaseEpoch,
+        state: "running",
+        nodeRuntimeSessionId: "runtime-stale",
+        nodeWorkerRunId: "worker-stale",
+        workerProtocolVersion: 1,
+        ts: 20,
+      }),
+    ).rejects.toMatchObject({
+      code: "ACP_NODE_INVALID_EVENT",
+    });
+
+    expect(await store.getSession("agent:main:acp:test-session")).toMatchObject({
+      activeRunId: "run-2",
+      state: "running",
+    });
+    expect(await store.getActiveLease("agent:main:acp:test-session")).toEqual(leaseBefore);
   });
 
   it("rejects suspect-lease terminals until same-node reconcile reactivates the lease", async () => {
@@ -435,5 +500,73 @@ describe("AcpGatewayStore", () => {
         state: "recovering",
       },
     ]);
+  });
+
+  it("marks suspect leases as lost after grace expiry without auto-failover", async () => {
+    const { store } = await createStore();
+    const lease = await store.acquireLease({
+      sessionKey: "agent:main:acp:test-session",
+      nodeId: "node-1",
+      leaseId: "lease-1",
+      now: 10,
+    });
+    await store.startRun({
+      sessionKey: "agent:main:acp:test-session",
+      runId: "run-1",
+      requestId: "req-1",
+      now: 11,
+    });
+    await store.appendWorkerEvent({
+      nodeId: "node-1",
+      sessionKey: "agent:main:acp:test-session",
+      runId: "run-1",
+      leaseId: lease.leaseId,
+      leaseEpoch: lease.leaseEpoch,
+      seq: 1,
+      event: {
+        type: "status",
+        text: "running",
+      },
+      now: 12,
+    });
+    await store.markNodeDisconnected({
+      nodeId: "node-1",
+      reason: "node_disconnected",
+      now: 20,
+    });
+
+    const expired = await store.expireSuspectLeases({
+      now: 20 + 30_000,
+    });
+
+    expect(expired.leases).toMatchObject([
+      {
+        leaseId: "lease-1",
+        state: "lost",
+      },
+    ]);
+    expect(await store.getActiveLease("agent:main:acp:test-session")).toMatchObject({
+      state: "lost",
+    });
+    expect(await store.getSession("agent:main:acp:test-session")).toMatchObject({
+      state: "recovering",
+      lastRecoveryReason: "lease_expired",
+      activeRunId: "run-1",
+    });
+    expect(await store.getRun("run-1")).toMatchObject({
+      state: "recovering",
+      recoveryReason: "lease_expired",
+    });
+    await expect(
+      store.reconcileSuspectLease({
+        sessionKey: "agent:main:acp:test-session",
+        nodeId: "node-1",
+        leaseId: lease.leaseId,
+        leaseEpoch: lease.leaseEpoch,
+        now: 20 + 30_000,
+      }),
+    ).rejects.toMatchObject({
+      code: "ACP_NODE_ACTIVE_LEASE_MISSING",
+    });
   });
 });

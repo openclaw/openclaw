@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { getAcpGatewayNodeRuntime } from "../acp/store/gateway-events.js";
+import type { AcpGatewayRecoveryReason } from "../acp/store/types.js";
 import { normalizeChannelId } from "../channels/plugins/index.js";
 import { createOutboundSendDeps } from "../cli/outbound-send-deps.js";
 import { agentCommandFromIngress } from "../commands/agent.js";
@@ -632,3 +633,14 @@ export const handleNodeEvent = async (ctx: NodeEventContext, nodeId: string, evt
       return;
   }
 };
+
+export async function handleNodeDisconnect(
+  nodeId: string,
+  params?: { reason?: AcpGatewayRecoveryReason; now?: number },
+): Promise<void> {
+  await getAcpGatewayNodeRuntime().markNodeDisconnected({
+    nodeId,
+    reason: params?.reason ?? "node_disconnected",
+    ...(typeof params?.now === "number" ? { now: params.now } : {}),
+  });
+}
