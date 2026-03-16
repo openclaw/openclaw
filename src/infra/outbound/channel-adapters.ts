@@ -2,6 +2,7 @@ import type { TopLevelComponents } from "@buape/carbon";
 import { getChannelPlugin } from "../../channels/plugins/index.js";
 import type { ChannelId } from "../../channels/plugins/types.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import { resolveBuiltInCrossContextComponentsFactory } from "./built-in-channel-adapters.js";
 
 export type CrossContextComponentsBuilder = (message: string) => TopLevelComponents[];
 
@@ -22,7 +23,9 @@ const DEFAULT_ADAPTER: ChannelMessageAdapter = {
 };
 
 export function getChannelMessageAdapter(channel: ChannelId): ChannelMessageAdapter {
-  const adapter = getChannelPlugin(channel)?.messaging?.buildCrossContextComponents;
+  const adapter =
+    getChannelPlugin(channel)?.messaging?.buildCrossContextComponents ??
+    resolveBuiltInCrossContextComponentsFactory(channel);
   if (adapter) {
     return {
       supportsComponentsV2: true,
