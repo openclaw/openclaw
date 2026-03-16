@@ -174,4 +174,20 @@ describe("resolveStateDir nesting guard (#45765)", () => {
     expect(resolveStateDir(env)).toBe(nestedDir);
     vi.restoreAllMocks();
   });
+
+  it("preserves existing nested legacy dir when OPENCLAW_HOME ends in legacy basename", () => {
+    const env = { OPENCLAW_HOME: "/home/user/.clawdbot" } as NodeJS.ProcessEnv;
+    const nestedDir = path.resolve("/home/user/.clawdbot/.clawdbot");
+    vi.spyOn(fsSync, "existsSync").mockImplementation((p) => String(p) === nestedDir);
+    expect(resolveStateDir(env)).toBe(nestedDir);
+    vi.restoreAllMocks();
+  });
+
+  it("preserves nested .moldbot when OPENCLAW_HOME ends in .clawdbot", () => {
+    const env = { OPENCLAW_HOME: "/home/user/.clawdbot" } as NodeJS.ProcessEnv;
+    const nestedDir = path.resolve("/home/user/.clawdbot/.moldbot");
+    vi.spyOn(fsSync, "existsSync").mockImplementation((p) => String(p) === nestedDir);
+    expect(resolveStateDir(env)).toBe(nestedDir);
+    vi.restoreAllMocks();
+  });
 });
