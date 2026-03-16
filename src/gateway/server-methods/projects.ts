@@ -5,6 +5,10 @@ import {
   readSessionProjectId,
 } from "../../config/sessions/store-sqlite.js";
 import {
+  getCoreSettingFromDb,
+  setCoreSettingInDb,
+} from "../../infra/state-db/core-settings-sqlite.js";
+import {
   createSqliteProjectStore,
   ProjectStoreError,
 } from "../../projects/project-store-sqlite.js";
@@ -45,6 +49,19 @@ function persistProjectId(sessionKey: string, projectId: string | null): void {
 /** Read persisted projectId from session_entries (for rehydrating after restart). */
 function readPersistedProjectId(sessionKey: string): string | undefined {
   return readSessionProjectId(sessionKey);
+}
+
+// ── Root Path Setting ────────────────────────────────────────────────
+
+const PROJECTS_SCOPE = "projects";
+const ROOT_PATH_KEY = "rootPath";
+
+function getRootPath(): string {
+  return getCoreSettingFromDb<string>(PROJECTS_SCOPE, ROOT_PATH_KEY) ?? "";
+}
+
+function setRootPath(rootPath: string): void {
+  setCoreSettingInDb(PROJECTS_SCOPE, ROOT_PATH_KEY, rootPath);
 }
 
 // ── Internal Project Tasks Scanner ──────────────────────────────────
@@ -107,7 +124,13 @@ export const projectsHandlers: GatewayRequestHandlers = {
     try {
       const projects = await getStore().list();
       const internal = scanInternalProjectTasks(projects);
-      respond(true, { projects: [...projects, ...internal] }, undefined);
+      const rootPath = expandHome(getRootPath());
+      // Normalize ~/… paths to absolute so frontend scope comparison is consistent
+      const allProjects = [...projects, ...internal].map((p) => ({
+        ...p,
+        path: expandHome(p.path),
+      }));
+      respond(true, { projects: allProjects, rootPath }, undefined);
     } catch (err) {
       respond(false, undefined, storeErrorToShape(err));
     }
@@ -328,6 +351,26 @@ export const projectsHandlers: GatewayRequestHandlers = {
       return;
     }
     respond(true, { ok: true, chatId, topicId }, undefined);
+  },
+
+  // ── Root Path RPCs ─────────────────────────────────────────────────
+
+  "projects.getRootPath": ({ respond }) => {
+    respond(true, { rootPath: getRootPath() }, undefined);
+  },
+
+  "projects.setRootPath": ({ params, respond }) => {
+    const rootPath = typeof params.rootPath === "string" ? params.rootPath.trim() : "";
+    if (rootPath && !fs.existsSync(expandHome(rootPath))) {
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.INVALID_REQUEST, `Path does not exist: ${rootPath}`),
+      );
+      return;
+    }
+    setRootPath(rootPath);
+    respond(true, { ok: true, rootPath }, undefined);
   },
 
   "projects.getTelegramBindings": async ({ params, respond }) => {

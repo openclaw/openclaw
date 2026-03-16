@@ -115,6 +115,8 @@ const BASE_METHODS = [
   "projects.bindTelegramTopic",
   "projects.unbindTelegramTopic",
   "projects.getTelegramBindings",
+  "projects.getRootPath",
+  "projects.setRootPath",
   "agents.marketplace.browse",
   "agents.marketplace.installed",
   "agents.marketplace.health",

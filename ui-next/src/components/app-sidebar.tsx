@@ -7,6 +7,7 @@ import {
   Database,
   Eye,
   FileText,
+  FolderKanban,
   FolderOpen,
   GitBranch,
   Heart,
@@ -71,6 +72,12 @@ const navData = {
       url: "/sessions",
       icon: FileText,
       subtitle: "Active sessions",
+    },
+    {
+      title: "Projects",
+      url: "/projects",
+      icon: FolderKanban,
+      subtitle: "Registered project workspaces",
     },
     {
       title: "Cron Jobs",

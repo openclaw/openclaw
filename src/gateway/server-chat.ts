@@ -597,6 +597,32 @@ export function createAgentEventHandler({
           { dropIfSlow: true },
         );
       }
+      // Broadcast a tool-error activity so the chat UI shows inline feedback
+      // when a tool fails (e.g. "web_search failed: ..."). The model still
+      // gets the error as a tool result and can recover, but the user sees
+      // why the tool didn't work instead of wondering what happened.
+      if (
+        toolPhase === "result" &&
+        isControlUiVisible &&
+        sessionKey &&
+        !isAborted &&
+        evt.data?.isError
+      ) {
+        const toolName = typeof evt.data?.name === "string" ? evt.data.name : "tool";
+        broadcast(
+          "chat",
+          {
+            runId: clientRunId,
+            sessionKey,
+            state: "activity",
+            activity: {
+              tool: toolName,
+              error: true,
+            },
+          },
+          { dropIfSlow: true },
+        );
+      }
       // Always broadcast tool events to registered WS recipients with
       // tool-events capability, regardless of verboseLevel. The verbose
       // setting only controls whether tool details are sent as channel

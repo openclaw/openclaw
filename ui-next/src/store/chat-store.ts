@@ -658,10 +658,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
       }
       const errorMsg = ensureId({
         role: "system" as const,
-        content:
-          errorMessage === "An unknown error occurred"
-            ? "The model couldn't complete this response. Try rephrasing or breaking the task into smaller steps."
-            : (errorMessage ?? "An error occurred"),
+        content: errorMessage ?? "An error occurred",
         timestamp: Date.now(),
         runId,
         seq: entry.messages.length + 1,
