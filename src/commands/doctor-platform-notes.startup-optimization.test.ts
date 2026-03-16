@@ -86,7 +86,7 @@ describe("noteStartupOptimizationHints", () => {
       {
         NODE_COMPILE_CACHE: "/tmp/openclaw-compile-cache",
       },
-      { platform: "darwin", arch: "arm64", totalMemBytes: 4 * 1024 ** 3, noteFn },
+      { platform: "darwin", arch: "arm64", totalMemBytes: 16 * 1024 ** 3, noteFn },
     );
 
     expect(noteFn).toHaveBeenCalledTimes(1);
