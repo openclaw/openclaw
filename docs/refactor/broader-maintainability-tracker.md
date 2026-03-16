@@ -15,7 +15,7 @@ Current status:
 - Stage 1B complete
 - Stage 2A initial deterministic-read seam complete
 - Stage 2B startup-threaded container seam complete
-- Stage 3A started (config preflight phase extracted)
+- Stage 3A in progress (startup phases extracted and covered with focused tests)
 - Stages 3B to 5 not started
 
 ## Protected runtime slice
@@ -67,7 +67,13 @@ Do not edit these files under this plan:
 
 ### Stage 3A: gateway startup decomposition
 
-- [ ] Split startup into deterministic phases
+- [x] Extract startup config preflight phase
+- [x] Extract startup secrets precheck phase
+- [x] Extract startup auth bootstrap phase
+- [x] Extract startup runtime policy phase
+- [x] Extract control UI root resolution phase
+- [x] Extract secrets activation controller seam
+- [x] Extract runtime config reloader wiring seam
 - [ ] Pass typed context phase to phase
 - [ ] Add phase failure classification tests
 

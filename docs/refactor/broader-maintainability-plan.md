@@ -84,13 +84,16 @@ No user-facing CLI flag removals in stages 1 to 3.
 - Stage 0: complete.
 - Stage 1A: complete with shared preflight helper used by route-first and Commander hooks.
 - Stage 1B: complete with runtime fingerprint diagnostics integrated into startup and status paths.
-- Stages 2 to 5: planned, not started.
+- Stage 2A: complete with deterministic read and mutation seam splits in config paths.
+- Stage 2B: complete with `RuntimeStateContainer` seams threaded through startup/runtime overrides.
+- Stage 3A: in progress with startup phase extractions for config preflight, secrets precheck, auth bootstrap, runtime policy, control-ui root resolution, secrets activation controller, and runtime config reloader wiring.
+- Stages 3B to 5: not started.
 
 ## Highest leverage next steps
 
-1. Stage 2A: isolate pure config load and validation from mutation paths in `src/config/io.ts`.
-2. Stage 2B: introduce `RuntimeStateContainer` and thread it through startup entrypoints.
-3. Stage 3A: split gateway startup into explicit phases with typed context and phase-specific errors.
+1. Stage 3A: introduce typed startup context handoff across extracted phases and centralize phase-specific failure classification.
+2. Stage 3B: define shared `OnboardingPlan` decision graph and keep interactive and non-interactive executors separate.
+3. Stage 4: extract route index matcher and cache boundaries, then narrow plugin runtime surface behind capability subfacades.
 
 ## Verification note
 
