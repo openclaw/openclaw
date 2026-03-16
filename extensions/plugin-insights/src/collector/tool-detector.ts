@@ -112,28 +112,17 @@ export class ToolDetector {
     // Skip built-in agent tools
     if (BUILTIN_TOOLS.has(toolName)) return;
 
-    if (this.knownUnmapped.has(toolName)) {
-      // Already seen this session — just bump the count
-      this.db
-        .prepare(
-          `UPDATE observed_unmapped_tools
-         SET call_count = call_count + 1, last_seen_at = datetime('now')
-         WHERE tool_name = ?`,
-        )
-        .run(toolName);
-    } else {
-      // First time this session (may or may not exist in DB from prior sessions)
-      this.db
-        .prepare(
-          `INSERT INTO observed_unmapped_tools (tool_name, call_count)
+    // Use upsert unconditionally so rows deleted by /insights-reset are recreated
+    this.db
+      .prepare(
+        `INSERT INTO observed_unmapped_tools (tool_name, call_count)
          VALUES (?, 1)
          ON CONFLICT(tool_name) DO UPDATE SET
            call_count = call_count + 1,
            last_seen_at = datetime('now')`,
-        )
-        .run(toolName);
-      this.knownUnmapped.add(toolName);
-    }
+      )
+      .run(toolName);
+    this.knownUnmapped.add(toolName);
   }
 
   /** Get tool names observed at runtime that have no plugin mapping.

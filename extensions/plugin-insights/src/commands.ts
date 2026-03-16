@@ -21,7 +21,8 @@ function parseDays(flags: Record<string, string | boolean>): number | string {
   if (!Number.isFinite(n) || n <= 0) {
     return `Invalid --days value "${raw}". Must be a positive number.`;
   }
-  return Math.floor(n);
+  // Clamp to at least 1 day so fractional values like 0.5 don't become a zero-day window
+  return Math.max(1, Math.floor(n));
 }
 
 /** Parse raw args string into positional args and flags */
