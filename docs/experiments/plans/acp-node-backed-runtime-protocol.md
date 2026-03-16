@@ -70,14 +70,14 @@ This means the ACP-over-node protocol is layered on top of:
 - `node.invoke.result`
 - `node.event`
 
-## Capability advertisement
+## Normative connect contract
 
 A node that supports ACP worker execution must connect with:
 
 ```json
 {
   "role": "node",
-  "caps": ["acp"],
+  "caps": ["system", "acp:v1"],
   "commands": [
     "acp.session.ensure",
     "acp.session.load",
@@ -89,11 +89,18 @@ A node that supports ACP worker execution must connect with:
 }
 ```
 
+Rules:
+
+- `acp:v1` is the compatibility marker the gateway selects on
+- unrelated caps such as `system` may also be present; they do not affect ACP compatibility
+- the authenticated connection identity is the source of truth for `nodeId`
+- every ACP worker `node.event` payload must echo the same `nodeId`
+- `acp.worker.heartbeat` is an event, not a command; polling uses `acp.session.status`
+
 Optional future commands:
 
 - `acp.session.release`
 - `acp.session.snapshot`
-- `acp.worker.heartbeat`
 - `acp.runtime.doctor`
 
 ## Shared identifiers
@@ -240,7 +247,12 @@ This is separate from `ensure` so future implementations can explicitly distingu
 - create-or-bind local runtime state
 - reconstruct from gateway authority
 
-First implementation may internally alias `load` to `ensure` if needed, but the protocol should reserve both concepts.
+Normative v1 use:
+
+- `acp.session.ensure` is for first acquisition or same-lease warm resume on the current node
+- `acp.session.load` is for gateway-driven recovery or explicit rebind after durable state already exists
+
+First implementation may internally alias `load` to `ensure` if needed, but the gateway call sites should remain distinct.
 
 ## `acp.turn.start`
 
@@ -345,6 +357,7 @@ Obtain runtime-side status and identity hints during reconcile/recovery.
 
 ```json
 {
+  "nodeId": "node-123",
   "ok": true,
   "sessionKey": "...",
   "leaseId": "lease-123",
@@ -352,6 +365,7 @@ Obtain runtime-side status and identity hints during reconcile/recovery.
   "state": "idle | running | missing | error",
   "nodeRuntimeSessionId": "...",
   "nodeWorkerRunId": "...",
+  "workerProtocolVersion": 1,
   "details": {
     "summary": "..."
   }
@@ -381,6 +395,7 @@ Stream append-only ACP run events to the gateway.
 
 ```json
 {
+  "nodeId": "node-123",
   "sessionKey": "...",
   "runId": "run-123",
   "leaseId": "lease-123",
@@ -402,7 +417,11 @@ Initial normalized event set should match the ACP runtime event vocabulary alrea
 - `status`
 - `tool_call`
 - `error`
-- `done`
+
+Important rule:
+
+- `acp.worker.event` is non-terminal only
+- `done` is not a valid v1 event type and must be rejected
 
 ### Invariants
 
@@ -420,10 +439,13 @@ Emit an explicit terminal outcome candidate for the run.
 
 ```json
 {
+  "nodeId": "node-123",
   "sessionKey": "...",
   "runId": "run-123",
   "leaseId": "lease-123",
   "leaseEpoch": 4,
+  "terminalEventId": "term-123",
+  "finalSeq": 7,
   "terminal": {
     "kind": "completed | failed | cancelled",
     "stopReason": "optional",
@@ -445,6 +467,12 @@ The gateway determines whether this terminal event becomes canonical based on:
 - cancel-vs-complete resolution rules
 - any required final event ordering checks
 
+Additional invariants:
+
+- `acp.worker.terminal` is the only terminal authority on the wire for v1
+- `finalSeq` must equal the highest accepted non-terminal `seq` for the run, or `0` if none were emitted
+- after `acp.worker.terminal`, the worker must not emit further `acp.worker.event` messages for the run
+
 ## `acp.worker.heartbeat`
 
 ### Purpose
@@ -455,6 +483,7 @@ Keep the lease alive and expose node runtime liveness.
 
 ```json
 {
+  "nodeId": "node-123",
   "sessionKey": "...",
   "runId": "run-123",
   "leaseId": "lease-123",
@@ -462,6 +491,7 @@ Keep the lease alive and expose node runtime liveness.
   "state": "idle | running | cancelling",
   "nodeRuntimeSessionId": "...",
   "nodeWorkerRunId": "...",
+  "workerProtocolVersion": 1,
   "ts": 1740000000000
 }
 ```
@@ -471,6 +501,7 @@ Keep the lease alive and expose node runtime liveness.
 - heartbeat extends the lease liveness window
 - heartbeat does not append to the ACP user-visible transcript
 - heartbeat may trigger reconcile logic if gateway state disagrees with worker state
+- heartbeat is event-driven only; `acp.session.status` is the pollable status path
 
 ## `acp.worker.status`
 
@@ -483,6 +514,12 @@ This is optional and lower priority than `acp.worker.event` and `acp.worker.hear
 ## Fencing rules
 
 These are non-negotiable.
+
+## Rule 0 — node identity binding
+
+Worker messages are accepted only from the connected node that owns the active lease.
+
+If payload `nodeId`, authenticated connection `nodeId`, and lease owner do not all match, reject.
 
 ## Rule 1 — stale epoch rejection
 
@@ -521,7 +558,7 @@ Later terminal candidates from the same or stale lease may be:
 Workers can race with:
 
 - cancel requests
-  n- reconnects
+- reconnects
 - gateway restart
 - stale workers finishing late
 
@@ -530,11 +567,15 @@ So the gateway must have deterministic terminal resolution rules.
 ## Recommended precedence rules
 
 1. reject any terminal candidate from stale lease epoch
-2. if canonical terminal already exists, ignore duplicates unless they conflict, in which case log conflict
-3. if cancel has been requested but no terminal decided yet:
-   - accept the earliest valid durable winner according to persisted ordering/rules
-   - do not special-case cancellation into always winning unless policy explicitly says so
-4. persist canonical terminal before marking run done to projectors
+2. reject any terminal candidate whose `finalSeq` is behind the highest accepted non-terminal `seq` for the run
+3. if canonical terminal already exists:
+   - same `terminalEventId` and same payload => idempotent success
+   - different `terminalEventId` => reject and log conflict
+4. if no canonical terminal exists, the first valid terminal candidate durably persisted for the run wins
+5. `acp.turn.cancel` only records cancel intent and moves the run to `cancelling`; it does not override terminal ordering
+6. if a cancel was requested and the worker later emits a valid `completed`, `failed`, or `cancelled` terminal, that first valid persisted candidate is canonical
+7. if no worker terminal arrives before recovery logic declares the lease lost, the gateway may persist a synthetic terminal according to recovery policy
+8. persist canonical terminal before marking the run terminal for projectors
 
 ## Idempotency rules
 
@@ -550,9 +591,25 @@ Use `(runId, seq)` as the primary idempotency identity for worker events.
 
 ## Terminal idempotency
 
-Terminal outcome should be idempotent on `(runId, leaseEpoch, terminal-kind, final-seq?)` or a dedicated terminal event id.
+Terminal outcome is idempotent on `(runId, terminalEventId)`, with `kind` and `finalSeq` immutable for that id.
 
 ## Recovery model
+
+## Explicit recoverable states
+
+The gateway store must model recoverability explicitly:
+
+- session state `recovering`
+- run state `recovering`
+- lease state `suspect` while a reconnect grace window is still open
+
+Required recovery reasons include:
+
+- `start_accepted_no_events`
+- `node_disconnected`
+- `gateway_restart_reconcile`
+- `status_mismatch`
+- `lease_expired`
 
 ## Replay authority
 
@@ -571,7 +628,12 @@ After restart, the gateway reloads:
 - active/recent leases
 - event log and delivery checkpoints
 
-Then it reconciles with connected nodes via `acp.session.status` or lease heartbeat state.
+Then it:
+
+- moves affected sessions and runs into explicit `recovering` state
+- moves active leases to `suspect` until reconcile succeeds
+- reconciles with connected nodes via `acp.session.status` or lease heartbeat state
+- resumes only after the same node proves the same lease and runtime state is still coherent
 
 ## Node reconnect
 
@@ -580,6 +642,16 @@ When a node reconnects, the gateway may:
 - resume accepting heartbeat and events if lease is still current
 - mark the node stale and reject old worker events if lease has been replaced
 - ask for status and decide whether to continue, recover, or abandon the lease
+
+## Conservative v1 lease-expiry and reconnect policy
+
+Lock this policy now:
+
+- on disconnect or missed heartbeats, move the lease to `suspect` and the run to `recovering`
+- open a reconnect grace window; during this window, do not mint a new epoch and do not automatically move the run to another node
+- only the same node may reclaim the lease during the grace window, and only if `acp.session.status` confirms the same `leaseId` + `leaseEpoch` runtime state
+- if the grace window expires or reconcile is incoherent, mark the lease `lost`
+- v1 does not automatically cross-node fail over an in-flight run; explicit recovery is required to mint a new epoch and call `acp.session.load`
 
 ## Error model
 
@@ -610,8 +682,8 @@ The ACP-over-node protocol should be versioned explicitly.
 
 Recommended shape:
 
-- include protocol version in ACP worker capability advertisement, e.g. `acp:v1`
-- reserve room for `workerProtocolVersion` in status payloads
+- include protocol version in ACP worker capability advertisement as `acp:v1`
+- include `workerProtocolVersion` in status and heartbeat payloads
 
 This avoids hidden breakage between gateway and node releases.
 

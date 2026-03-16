@@ -36,6 +36,17 @@ The implementation is only acceptable if we can prove all of the following:
 6. the backend fits into existing ACP semantics cleanly
 7. node policy/capability checks fail safely and clearly
 
+## Locked v1 contract assumptions
+
+These planning decisions are part of the verification contract:
+
+- `acp.worker.terminal` is the only terminal wire authority; `acp.worker.event` must reject `done`
+- ACP-capable nodes must advertise `acp:v1`
+- worker payload `nodeId` must match the authenticated connection identity and active lease owner
+- heartbeats are `node.event` messages only; pollable status uses `acp.session.status`
+- disconnect or missed heartbeats move the lease to `suspect` and the run to `recovering`
+- same-node reconnect within the grace window may keep the current epoch; v1 does not automatically fail over an in-flight run to another node
+
 ## Tiering model
 
 ### Tier 1 — Autonomous, required
@@ -140,8 +151,10 @@ Tier 1 tests must prove:
 
 ### Required tests
 
-- node without `acp` cap cannot be selected for `acp-node`
+- node without `acp:v1` cap cannot be selected for `acp-node`
 - node with missing required command set is rejected clearly
+- worker payload with mismatched `nodeId` is rejected before state mutation
+- `acp.worker.event` with `done` type is rejected before persistence
 - malformed `acp.worker.event` payload returns structured error and does not mutate state
 - `acp.turn.start` accepted result without follow-up events leaves run in recoverable state, not falsely completed
 
@@ -165,6 +178,9 @@ Tier 1 tests must prove:
 ### Required tests
 
 - complete then duplicate complete → one canonical terminal only
+- terminal without `terminalEventId` or `finalSeq` is rejected
+- duplicate terminal with same `terminalEventId` is idempotent
+- conflicting terminal with different `terminalEventId` after canonical winner exists is rejected
 - cancel request then valid complete from active epoch → deterministic result according to chosen policy
 - stale epoch complete after new lease → rejected
 - terminal persisted before delivery checkpoint update, restart, replay → no duplicate final message
@@ -191,7 +207,9 @@ Tier 1 tests must prove:
 
 - persist run/events/checkpoint, restart manager, verify resumed state and replay cursor
 - reconnect node and resend already-accepted seqs → no duplicated append or projection
-- disconnect after `acp.turn.start` accepted but before first event → run becomes recoverable or error, never completed
+- disconnect after `acp.turn.start` accepted but before first event → run becomes `recovering` with explicit reason, never completed
+- same-node reconnect within grace window keeps the lease epoch after successful status reconcile
+- grace-window expiry marks lease `lost` and does not auto-reassign the in-flight run to a different node
 - restart after event append but before projector checkpoint → projector replays exactly missing suffix
 
 ## Deliverable F — Headless node-host worker e2e
@@ -274,8 +292,11 @@ Without these, restart/replay claims will be weak.
 
 - [ ] acquire active lease
 - [ ] replace active lease
+- [ ] move active lease to `suspect`
 - [ ] reject stale epoch event
 - [ ] reject stale lease id event
+- [ ] same-node reconnect within grace keeps epoch
+- [ ] grace expiry marks lease lost without auto-failover
 - [ ] release active lease
 - [ ] recover lost lease state
 
@@ -355,6 +376,18 @@ The feature must not be considered done if any of the following are missing:
 4. terminal race tests
 5. restart/recovery tests
 6. real headless node-host e2e
+
+## First merge slice proof gate
+
+The first serious implementation slice is not ready to merge unless it proves all of the following:
+
+1. durable ACP store reload for sessions, runs, events, checkpoints, and leases
+2. stale epoch and stale `nodeId` rejection before mutation
+3. `acp.worker.event` rejects `done`
+4. canonical terminal uniqueness with `terminalEventId` + `finalSeq`
+5. deterministic cancel-vs-complete handling
+6. one explicit recoverable-state path for disconnect before first event
+7. one restart-after-checkpoint-gap replay proof
 
 ## Final verification principle
 

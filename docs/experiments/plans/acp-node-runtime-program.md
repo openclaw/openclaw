@@ -281,6 +281,7 @@ Deliverables:
 - [ ] one agent reviews the architecture/program/protocol/verification docs for internal consistency
 - [ ] one agent compares the plan against current OpenClaw ACP + node implementation seams and identifies exact code touchpoints
 - [ ] one agent produces a concrete implementation map (files/modules/types to add/change)
+- [ ] terminal authority, recoverable states, connect contract, and v1 lease-expiry policy are all locked in writing
 
 Acceptance:
 
@@ -510,10 +511,13 @@ Recommended first slice:
 
 - durable ACP store foundation
 - lease epoch model
+- explicit recoverable session/run/lease states with restart loaders
+- canonical terminal resolution module with `acp.worker.terminal` as the only terminal authority
 - fake ACP-capable node worker harness
-- minimal gateway-side event append + stale-epoch rejection path
+- gateway-side validation/append path for `acp.worker.event`, `acp.worker.terminal`, and `acp.worker.heartbeat`
+- proof tests for stale-epoch rejection, duplicate terminal idempotency, cancel-vs-complete determinism, and one recoverable disconnect-before-first-event scenario
 
-That slice gives us real proof that the hardest control-plane pieces are viable before we sink effort into a full runtime worker.
+That slice is the minimum mergeable proof bar. Anything weaker is only a feasibility checkpoint and should not be treated as the first real implementation delivery.
 
 ## PR-readiness expectations
 
