@@ -388,6 +388,127 @@ describe("handleFeishuMessage ACP routing", () => {
   });
 });
 
+describe("handleFeishuMessage delayed ack", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.useFakeTimers();
+    mockResolveConfiguredAcpRoute.mockReset().mockImplementation(
+      ({ route }) =>
+        ({
+          configuredBinding: null,
+          route,
+        }) as any,
+    );
+    mockEnsureConfiguredAcpRouteReady.mockReset().mockResolvedValue({ ok: true });
+    mockResolveBoundConversation.mockReset().mockReturnValue(null);
+    mockTouchBinding.mockReset();
+    mockResolveAgentRoute.mockReset().mockReturnValue({
+      agentId: "main",
+      channel: "feishu",
+      accountId: "default",
+      sessionKey: "agent:main:feishu:direct:ou_sender_1",
+      mainSessionKey: "agent:main:main",
+      matchedBy: "default",
+    });
+    mockSendMessageFeishu.mockReset().mockResolvedValue({ messageId: "ack-msg", chatId: "oc_dm" });
+    mockCreateFeishuReplyDispatcher.mockReset().mockReturnValue({
+      dispatcher: {
+        sendToolResult: vi.fn(),
+        sendBlockReply: vi.fn(),
+        sendFinalReply: vi.fn(),
+        waitForIdle: vi.fn(),
+        getQueuedCounts: vi.fn(() => ({ tool: 0, block: 0, final: 0 })),
+        markComplete: vi.fn(),
+      } as any,
+      replyOptions: {},
+      markDispatchIdle: vi.fn(),
+    });
+
+    const slowDispatchReplyFromConfig = vi.fn(
+      () =>
+        new Promise<{ queuedFinal: boolean; counts: { final: number } }>((resolve) => {
+          setTimeout(() => resolve({ queuedFinal: false, counts: { final: 1 } }), 9_000);
+        }),
+    );
+
+    setFeishuRuntime(
+      createPluginRuntimeMock({
+        channel: {
+          routing: {
+            resolveAgentRoute:
+              mockResolveAgentRoute as unknown as PluginRuntime["channel"]["routing"]["resolveAgentRoute"],
+          },
+          session: {
+            readSessionUpdatedAt:
+              mockReadSessionUpdatedAt as unknown as PluginRuntime["channel"]["session"]["readSessionUpdatedAt"],
+            resolveStorePath:
+              mockResolveStorePath as unknown as PluginRuntime["channel"]["session"]["resolveStorePath"],
+          },
+          reply: {
+            resolveEnvelopeFormatOptions: vi.fn(
+              () => ({}),
+            ) as unknown as PluginRuntime["channel"]["reply"]["resolveEnvelopeFormatOptions"],
+            formatAgentEnvelope: vi.fn((params: { body: string }) => params.body),
+            finalizeInboundContext: ((ctx: unknown) =>
+              ctx) as unknown as PluginRuntime["channel"]["reply"]["finalizeInboundContext"],
+            dispatchReplyFromConfig: slowDispatchReplyFromConfig,
+            withReplyDispatcher: vi.fn(
+              async ({
+                run,
+              }: Parameters<PluginRuntime["channel"]["reply"]["withReplyDispatcher"]>[0]) =>
+                await run(),
+            ) as unknown as PluginRuntime["channel"]["reply"]["withReplyDispatcher"],
+          },
+          commands: {
+            shouldComputeCommandAuthorized: vi.fn(() => false),
+            resolveCommandAuthorizedFromAuthorizers: vi.fn(() => false),
+          },
+          pairing: {
+            readAllowFromStore: vi.fn().mockResolvedValue(["ou_sender_1"]),
+            upsertPairingRequest: vi.fn(),
+            buildPairingReply: vi.fn(),
+          },
+        },
+      }),
+    );
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("sends a delayed acknowledgment for slow direct-message dispatches", async () => {
+    const pending = dispatchMessage({
+      cfg: {
+        session: { mainKey: "main", scope: "per-sender" },
+        channels: { feishu: { enabled: true, allowFrom: ["ou_sender_1"], dmPolicy: "open" } },
+      },
+      event: {
+        sender: { sender_id: { open_id: "ou_sender_1" } },
+        message: {
+          message_id: "msg-slow",
+          chat_id: "oc_dm",
+          chat_type: "p2p",
+          message_type: "text",
+          content: JSON.stringify({ text: "run something slow" }),
+        },
+      },
+    });
+
+    await vi.advanceTimersByTimeAsync(8_000);
+
+    expect(mockSendMessageFeishu).toHaveBeenCalledWith(
+      expect.objectContaining({
+        to: "oc_dm",
+        text: "已收到，开始处理；如果需要较长时间，我会在完成后继续反馈结果。",
+      }),
+    );
+
+    await vi.advanceTimersByTimeAsync(1_000);
+    await pending;
+  });
+});
+
 describe("handleFeishuMessage command authorization", () => {
   const mockFinalizeInboundContext = vi.fn((ctx: unknown) => ctx);
   const mockDispatchReplyFromConfig = vi
