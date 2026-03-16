@@ -203,11 +203,27 @@ function coerceDelivery(delivery: UnknownRecord) {
   } else if ("accountId" in next && typeof next.accountId !== "string") {
     delete next.accountId;
   }
-  // Handle additionalTargets array
+  // Handle additionalTargets array with normalization
   if (Array.isArray(delivery.additionalTargets)) {
-    next.additionalTargets = delivery.additionalTargets.filter(
-      (target) => target && typeof target === "object"
-    );
+    next.additionalTargets = delivery.additionalTargets
+      .filter((target) => target && typeof target === "object")
+      .map((target) => {
+        const normalized: UnknownRecord = {};
+        if (typeof target.channel === "string") {
+          const trimmed = target.channel.trim().toLowerCase();
+          if (trimmed) normalized.channel = trimmed;
+        }
+        if (typeof target.to === "string") {
+          const trimmed = target.to.trim();
+          if (trimmed) normalized.to = trimmed;
+        }
+        if (typeof target.accountId === "string") {
+          const trimmed = target.accountId.trim();
+          if (trimmed) normalized.accountId = trimmed;
+        }
+        return normalized;
+      })
+      .filter((t) => t.channel || t.to || t.accountId);
   }
   return next;
 }

@@ -177,10 +177,25 @@ async function resolveCronDeliveryContext(params: {
     accountId: deliveryPlan.accountId,
     sessionKey: params.job.sessionKey,
   });
+  // Resolve additional targets if present
+  const resolvedAdditionalTargets = deliveryPlan.additionalTargets
+    ? await Promise.all(
+        deliveryPlan.additionalTargets.map(async (target) => ({
+          target,
+          resolved: await resolveDeliveryTarget(params.cfg, params.agentId, {
+            channel: target.channel ?? "last",
+            to: target.to,
+            accountId: target.accountId,
+            sessionKey: params.job.sessionKey,
+          }),
+        }))
+      )
+    : undefined;
   return {
     deliveryPlan,
     deliveryRequested: deliveryPlan.requested,
     resolvedDelivery,
+    resolvedAdditionalTargets,
     toolPolicy: resolveCronToolPolicy({
       deliveryRequested: deliveryPlan.requested,
       resolvedDelivery,
