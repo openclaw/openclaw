@@ -11,6 +11,7 @@
 import { readFileSync, existsSync } from "node:fs";
 import { resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
+import { pluginSdkSubpaths } from "./lib/plugin-sdk-entries.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const distFile = resolve(__dirname, "..", "dist", "plugin-sdk", "index.js");
@@ -40,51 +41,6 @@ const exportedNames = exportMatch[1]
   .filter(Boolean);
 
 const exportSet = new Set(exportedNames);
-
-const requiredSubpathEntries = [
-  "core",
-  "compat",
-  "telegram",
-  "discord",
-  "slack",
-  "signal",
-  "imessage",
-  "whatsapp",
-  "line",
-  "msteams",
-  "acpx",
-  "bluebubbles",
-  "copilot-proxy",
-  "device-pair",
-  "diagnostics-otel",
-  "diffs",
-  "feishu",
-  "googlechat",
-  "irc",
-  "llm-task",
-  "lobster",
-  "matrix",
-  "mattermost",
-  "memory-core",
-  "memory-lancedb",
-  "minimax-portal-auth",
-  "nextcloud-talk",
-  "nostr",
-  "open-prose",
-  "phone-control",
-  "qwen-portal-auth",
-  "synology-chat",
-  "talk-voice",
-  "test-utils",
-  "thread-ownership",
-  "tlon",
-  "twitch",
-  "voice-call",
-  "zalo",
-  "zalouser",
-  "account-id",
-  "keyed-async-queue",
-];
 
 const requiredRuntimeShimEntries = ["root-alias.cjs"];
 
@@ -123,7 +79,7 @@ for (const name of requiredExports) {
   }
 }
 
-for (const entry of requiredSubpathEntries) {
+for (const entry of pluginSdkSubpaths) {
   const jsPath = resolve(__dirname, "..", "dist", "plugin-sdk", `${entry}.js`);
   const dtsPath = resolve(__dirname, "..", "dist", "plugin-sdk", `${entry}.d.ts`);
   if (!existsSync(jsPath)) {
