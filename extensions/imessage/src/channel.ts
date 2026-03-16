@@ -3,19 +3,15 @@ import {
   collectAllowlistProviderRestrictSendersWarnings,
 } from "openclaw/plugin-sdk/compat";
 import {
-  applyAccountNameToChannelSection,
   buildChannelConfigSchema,
   collectStatusIssuesFromLastError,
   DEFAULT_ACCOUNT_ID,
   deleteAccountFromConfigSection,
   formatTrimmedAllowFromEntries,
   getChatChannelMeta,
-  imessageOnboardingAdapter,
   IMessageConfigSchema,
   listIMessageAccountIds,
   looksLikeIMessageTargetId,
-  migrateBaseNameToDefaultAccount,
-  normalizeAccountId,
   normalizeIMessageMessagingTarget,
   PAIRING_APPROVED_MESSAGE,
   resolveChannelMediaMaxBytes,
@@ -32,22 +28,9 @@ import {
 import { resolveOutboundSendDep } from "../../../src/infra/outbound/send-deps.js";
 import { buildPassiveProbedChannelStatusSummary } from "../../shared/channel-status-summary.js";
 import { getIMessageRuntime } from "./runtime.js";
+import { imessageSetupAdapter, imessageSetupWizard } from "./setup-surface.js";
 
 const meta = getChatChannelMeta("imessage");
-
-function buildIMessageSetupPatch(input: {
-  cliPath?: string;
-  dbPath?: string;
-  service?: string;
-  region?: string;
-}) {
-  return {
-    ...(input.cliPath ? { cliPath: input.cliPath } : {}),
-    ...(input.dbPath ? { dbPath: input.dbPath } : {}),
-    ...(input.service ? { service: input.service } : {}),
-    ...(input.region ? { region: input.region } : {}),
-  };
-}
 
 type IMessageSendFn = ReturnType<
   typeof getIMessageRuntime
@@ -90,7 +73,7 @@ export const imessagePlugin: ChannelPlugin<ResolvedIMessageAccount> = {
     aliases: ["imsg"],
     showConfigured: false,
   },
-  onboarding: imessageOnboardingAdapter,
+  setupWizard: imessageSetupWizard,
   pairing: {
     idLabel: "imessageSenderId",
     notifyApproval: async ({ id }) => {
@@ -169,63 +152,7 @@ export const imessagePlugin: ChannelPlugin<ResolvedIMessageAccount> = {
       hint: "<handle|chat_id:ID>",
     },
   },
-  setup: {
-    resolveAccountId: ({ accountId }) => normalizeAccountId(accountId),
-    applyAccountName: ({ cfg, accountId, name }) =>
-      applyAccountNameToChannelSection({
-        cfg,
-        channelKey: "imessage",
-        accountId,
-        name,
-      }),
-    applyAccountConfig: ({ cfg, accountId, input }) => {
-      const namedConfig = applyAccountNameToChannelSection({
-        cfg,
-        channelKey: "imessage",
-        accountId,
-        name: input.name,
-      });
-      const next = (
-        accountId !== DEFAULT_ACCOUNT_ID
-          ? migrateBaseNameToDefaultAccount({
-              cfg: namedConfig,
-              channelKey: "imessage",
-            })
-          : namedConfig
-      ) as typeof cfg;
-      if (accountId === DEFAULT_ACCOUNT_ID) {
-        return {
-          ...next,
-          channels: {
-            ...next.channels,
-            imessage: {
-              ...next.channels?.imessage,
-              enabled: true,
-              ...buildIMessageSetupPatch(input),
-            },
-          },
-        } as typeof cfg;
-      }
-      return {
-        ...next,
-        channels: {
-          ...next.channels,
-          imessage: {
-            ...next.channels?.imessage,
-            enabled: true,
-            accounts: {
-              ...next.channels?.imessage?.accounts,
-              [accountId]: {
-                ...next.channels?.imessage?.accounts?.[accountId],
-                enabled: true,
-                ...buildIMessageSetupPatch(input),
-              },
-            },
-          },
-        },
-      } as typeof cfg;
-    },
-  },
+  setup: imessageSetupAdapter,
   outbound: {
     deliveryMode: "direct",
     chunker: (text, limit) => getIMessageRuntime().channel.text.chunkText(text, limit),

@@ -24,7 +24,10 @@ export {
   resolveIMessageGroupRequireMention,
   resolveIMessageGroupToolPolicy,
 } from "../channels/plugins/group-mentions.js";
-export { imessageOnboardingAdapter } from "../../extensions/imessage/src/onboarding.js";
+export {
+  imessageSetupAdapter,
+  imessageSetupWizard,
+} from "../../extensions/imessage/src/setup-surface.js";
 export { IMessageConfigSchema } from "../config/zod-schema.providers-core.js";
 
 export { resolveChannelMediaMaxBytes } from "../channels/plugins/media-limits.js";
