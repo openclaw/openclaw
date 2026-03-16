@@ -10,7 +10,40 @@ const mockedLogger = vi.hoisted(() => ({
 }));
 
 vi.mock("../logging/subsystem.js", () => ({
-  createSubsystemLogger: () => mockedLogger,
+  createSubsystemLogger: () => ({
+    subsystem: "plugins",
+    isEnabled: () => true,
+    trace: vi.fn(),
+    debug: mockedLogger.debug,
+    info: mockedLogger.info,
+    warn: mockedLogger.warn,
+    error: mockedLogger.error,
+    fatal: vi.fn(),
+    raw: vi.fn(),
+    child: () => ({
+      subsystem: "plugins/child",
+      isEnabled: () => true,
+      trace: vi.fn(),
+      debug: mockedLogger.debug,
+      info: mockedLogger.info,
+      warn: mockedLogger.warn,
+      error: mockedLogger.error,
+      fatal: vi.fn(),
+      raw: vi.fn(),
+      child: () => ({
+        subsystem: "plugins/grandchild",
+        isEnabled: () => true,
+        trace: vi.fn(),
+        debug: mockedLogger.debug,
+        info: mockedLogger.info,
+        warn: mockedLogger.warn,
+        error: mockedLogger.error,
+        fatal: vi.fn(),
+        raw: vi.fn(),
+        child: vi.fn(),
+      }),
+    }),
+  }),
 }));
 
 import { STATE_DIR } from "../config/paths.js";

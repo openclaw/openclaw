@@ -17,8 +17,27 @@ vi.mock("../../../agents/agent-scope.js", () => ({
 }));
 vi.mock("../../../logging/subsystem.js", () => ({
   createSubsystemLogger: () => ({
-    warn: logWarn,
+    subsystem: "hooks/boot-md",
+    isEnabled: () => true,
+    trace: vi.fn(),
     debug: logDebug,
+    info: vi.fn(),
+    warn: logWarn,
+    error: vi.fn(),
+    fatal: vi.fn(),
+    raw: vi.fn(),
+    child: () => ({
+      subsystem: "hooks/boot-md/child",
+      isEnabled: () => true,
+      trace: vi.fn(),
+      debug: logDebug,
+      info: vi.fn(),
+      warn: logWarn,
+      error: vi.fn(),
+      fatal: vi.fn(),
+      raw: vi.fn(),
+      child: vi.fn(),
+    }),
   }),
 }));
 

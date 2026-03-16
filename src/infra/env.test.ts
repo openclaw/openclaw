@@ -7,7 +7,27 @@ const loggerMocks = vi.hoisted(() => ({
 
 vi.mock("../logging/subsystem.js", () => ({
   createSubsystemLogger: () => ({
+    subsystem: "env",
+    isEnabled: () => true,
+    trace: vi.fn(),
+    debug: vi.fn(),
     info: loggerMocks.info,
+    warn: vi.fn(),
+    error: vi.fn(),
+    fatal: vi.fn(),
+    raw: vi.fn(),
+    child: () => ({
+      subsystem: "env/child",
+      isEnabled: () => true,
+      trace: vi.fn(),
+      debug: vi.fn(),
+      info: loggerMocks.info,
+      warn: vi.fn(),
+      error: vi.fn(),
+      fatal: vi.fn(),
+      raw: vi.fn(),
+      child: vi.fn(),
+    }),
   }),
 }));
 

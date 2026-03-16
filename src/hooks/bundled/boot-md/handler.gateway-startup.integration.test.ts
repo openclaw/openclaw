@@ -8,8 +8,27 @@ const runBootOnce = vi.fn();
 vi.mock("../../../gateway/boot.js", () => ({ runBootOnce }));
 vi.mock("../../../logging/subsystem.js", () => ({
   createSubsystemLogger: () => ({
-    warn: vi.fn(),
+    subsystem: "hooks/boot-md",
+    isEnabled: () => true,
+    trace: vi.fn(),
     debug: vi.fn(),
+    info: vi.fn(),
+    warn: vi.fn(),
+    error: vi.fn(),
+    fatal: vi.fn(),
+    raw: vi.fn(),
+    child: () => ({
+      subsystem: "hooks/boot-md/child",
+      isEnabled: () => true,
+      trace: vi.fn(),
+      debug: vi.fn(),
+      info: vi.fn(),
+      warn: vi.fn(),
+      error: vi.fn(),
+      fatal: vi.fn(),
+      raw: vi.fn(),
+      child: vi.fn(),
+    }),
   }),
 }));
 
