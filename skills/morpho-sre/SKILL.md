@@ -334,7 +334,7 @@ metadata: { "openclaw": { "emoji": "🛠️" } }
 - Put unrelated warnings under `*Also watching:*`.
 - Do not open with routing hints, fingerprint changes, raw step names, signal counts, confidence percentages, or `primary/supporting` namespace jargon.
 - Never leak progress chatter, tool-call JSON, exec-approval warnings, or command-construction failures into the thread.
-- Do not send progress-only thread replies like `On it`, `Found it`, or `Let me verify`; wait for net-new evidence, mitigation, validation, or a PR URL.
+- Do not send progress-only replies like `On it`, `Found it`, `Let me verify`, or `Checking...` in any Slack thread; wait for net-new evidence, mitigation, validation, or a PR URL.
 - For recurring indexer freshness alerts on the same workload, answer as one ongoing RCA instead of a fresh transient update.
 - If fix is scoped/reversible and confidence >= `AUTO_PR_MIN_CONFIDENCE`, create PR via `autofix-pr.sh` and post PR URL in-thread.
 - If fix is not open-PR ready yet, still name 1-2 concrete PR candidates with repo/path/title/validation.
@@ -621,15 +621,18 @@ When investigating smart contract, ABI encoding, or SDK-level revert issues:
 - If live verification is blocked (no RPC access, no Foundry), state the blocker explicitly and mark the analysis as `*Unverified theory:*`.
 
 ```bash
-# Verify ABI encoding claim with a live call
-cast call <contract_address> "eip712Domain()" --rpc-url "$RPC_URL"
+# Verify ABI encoding claim with a live token call (requires $RPC_URL)
+cast call <token_address> "eip712Domain()" --rpc-url "${RPC_URL:?RPC_URL not set}"
 
-# Decode revert data
-cast 4byte-decode <revert_selector>
+# If RPC_URL is unavailable, stop and mark the analysis as blocked / unverified.
 
-# Compare struct vs flat return encoding
-cast abi-encode "f()(bytes1,string,string,uint256,address,bytes32,uint256[])" ...
-cast abi-encode "f()((bytes1,string,string,uint256,address,bytes32,uint256[]))" ...
+# Decode revert selector / calldata captured from logs, traces, or Sentry
+cast 4byte <revert_selector>
+cast 4byte-calldata <revert_calldata>
+
+# Compare flat vs tuple encoding layouts with the return types in input position
+cast abi-encode "f(bytes1,string,string,uint256,address,bytes32,uint256[])" 0x0f "name" "version" 1 0x0000000000000000000000000000000000000001 0x0000000000000000000000000000000000000000000000000000000000000000 "[1]"
+cast abi-encode "f((bytes1,string,string,uint256,address,bytes32,uint256[]))" "(0x0f,name,version,1,0x0000000000000000000000000000000000000001,0x0000000000000000000000000000000000000000000000000000000000000000,[1])"
 ```
 
 ## Sentinel Snapshot

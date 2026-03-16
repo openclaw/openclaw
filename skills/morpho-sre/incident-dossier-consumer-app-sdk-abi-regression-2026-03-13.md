@@ -15,7 +15,7 @@ change causing ABI decoding reverts on-chain.
 - What broke: `/ethereum/migrate` RPC calls revert for tokens implementing EIP-5267 `eip712Domain()`
 - Customer impact: ~929 users unable to complete migrations for affected tokens (USDe, sUSDe, others)
 - Detection: Sentry issue MORPHO-CONSUMER-4F7
-- Resolution: pending verification — revert `IERC20Permit.sol` interface change from commit `bb68ca4`
+- Resolution: pending verification as of 2026-03-13 — revert `IERC20Permit.sol` interface change from commit `bb68ca4`
 
 ## Fingerprints
 
@@ -36,9 +36,9 @@ change causing ABI decoding reverts on-chain.
 ## Likely Cause
 
 - Primary: commit `bb68ca4` changed `eip712Domain()` return type in `IERC20Permit.sol` from 7 individual values to a single `Eip5267Domain` struct. The struct contains dynamic types (`string memory`, `uint256[] memory`), which changes ABI encoding layout vs flat returns. On-chain implementations return flat-encoded values, causing the caller-side ABI decoder to misinterpret the data and revert. The revert happens in the caller's decoding, so `catch {}` does not catch it.
-- Contributing: unverified — domain expert challenged the offset-pointer explanation; the dynamic-type angle was not addressed by either party
+- Contributing: unverified — a domain expert challenged the offset-pointer sub-explanation; the main struct-vs-flat ABI mismatch theory still fits the evidence, but the precise dynamic-offset failure mode remains unconfirmed
 - Ruled out: tokens without `eip712Domain()` (WETH, USDC, DAI) — these revert at the call level and are caught by `catch {}`
-- Disproved theories: none yet (investigation incomplete)
+- Disproved theories: none yet; the offset-pointer sub-explanation was challenged but not yet confirmed or disproved
 
 ## Fix
 
@@ -49,9 +49,10 @@ change causing ABI decoding reverts on-chain.
 ## Validation
 
 - Checks:
-  1. `cast call <GetToken_address> "eip712Domain()" --rpc-url <mainnet>` on a USDe/sUSDe token
-  2. Foundry test: call `eip712Domain()` via the reverted interface and verify decode succeeds
-  3. Sentry event rate drops for MORPHO-CONSUMER-4F7 after fix deploy
+  1. `cast call <token_address> "eip712Domain()" --rpc-url <mainnet>` on a USDe/sUSDe token
+  2. Foundry test: call `eip712Domain()` via the reverted interface on the token contract and verify decode succeeds
+  3. SDK/multicall reproduction: call the same token through `GetToken.sol` and confirm the old interface decodes while the struct-return interface reverts
+  4. Sentry event rate drops for MORPHO-CONSUMER-4F7 after fix deploy
 - Expected recovery signal: zero new Sentry events for `RpcRequestError` on `/ethereum/migrate` for EIP-5267 tokens
 
 ## Prevention
@@ -62,7 +63,7 @@ change causing ABI decoding reverts on-chain.
 
 ## References
 
-- PRs: pending
-- Linear: pending
+- PRs: <pending: add fix PR URL once opened>
+- Linear: <pending: add linked Linear ticket once created>
 - Slack thread: https://morpholabs.slack.com/archives/C08AAMKH524/p1773398130482519
 - Source docs/postmortem: Sentry MORPHO-CONSUMER-4F7

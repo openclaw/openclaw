@@ -10,7 +10,7 @@ trim_env_var() {
     echo "trim-env:warning invalid variable name: $var_name" >&2
     return 0
   fi
-  if [[ -v "$var_name" ]]; then
+  if [ "${!var_name+x}" = x ]; then
     raw_value="${!var_name}"
   else
     raw_value=""
@@ -158,8 +158,14 @@ unsigned_token="${header_b64}.${payload_b64}"
 private_key_file="$(mktemp)"
 trap 'rm -f "$private_key_file"' EXIT HUP INT TERM
 # Convert literal \n sequences to real newlines (Vault may store PEM keys either way).
-printf '%s\n' "$private_key" | sed 's/\\n/\
-/g' >"$private_key_file"
+if ! node -e 'const key = process.argv[1] ?? ""; process.stdout.write(key.replace(/\\n/g, "\n"));' "$private_key" >"$private_key_file"; then
+  echo "github-app-token:error failed to process PEM key format" >&2
+  exit 1
+fi
+if ! grep -q '^-----BEGIN ' "$private_key_file" || ! grep -q '^-----END ' "$private_key_file"; then
+  echo "github-app-token:error invalid PEM key format after newline conversion" >&2
+  exit 1
+fi
 chmod 600 "$private_key_file"
 signature_b64="$(
   printf '%s' "$unsigned_token" \
@@ -196,7 +202,7 @@ EOF
   cat >"${wrapper_dir}/gh" <<'EOF'
 #!/bin/sh
 set -eu
-if token="$(/home/node/.openclaw/bin/github-app-token.sh 2>/dev/null)"; then
+if token="$(/home/node/.openclaw/bin/github-app-token.sh)"; then
   export GH_TOKEN="$token"
   export GITHUB_TOKEN="$token"
 else
@@ -209,7 +215,7 @@ EOF
 cat >"${wrapper_dir}/git" <<'EOF'
 #!/bin/sh
 set -eu
-if token="$(/home/node/.openclaw/bin/github-app-token.sh 2>/dev/null)"; then
+if token="$(/home/node/.openclaw/bin/github-app-token.sh)"; then
   git_auth_basic="$(printf 'x-access-token:%s' "$token" | base64 | tr -d '\n')"
   exec /usr/bin/git \
     -c credential.helper= \
