@@ -31,7 +31,7 @@ Control UI/WebSocket auth can use Tailscale identity headers
 the identity by resolving the `x-forwarded-for` address via the local Tailscale
 daemon (`tailscale whois`) and matching it to the header before accepting it.
 OpenClaw only treats a request as Serve when it arrives from loopback with
-Tailscale’s `x-forwarded-for`, `x-forwarded-proto`, and `x-forwarded-host`
+Tailscale's `x-forwarded-for`, `x-forwarded-proto`, and `x-forwarded-host`
 headers.
 HTTP API endpoints (for example `/v1/*`, `/tools/invoke`, and `/api/channels/*`)
 still require token/password auth.
@@ -90,11 +90,55 @@ Note: loopback (`http://127.0.0.1:18789`) will **not** work in this mode.
 
 Prefer `OPENCLAW_GATEWAY_PASSWORD` over committing a password to disk.
 
+## Custom control server (Headscale)
+
+OpenClaw supports connecting to a self-hosted Tailscale-compatible control server such as
+[Headscale](https://headscale.net). Set `gateway.tailscale.controlUrl` to your control
+server's base URL:
+
+```json5
+{
+  gateway: {
+    bind: "tailnet",
+    auth: { mode: "token", token: "your-token" },
+    tailscale: {
+      controlUrl: "https://headscale.example.com",
+    },
+  },
+}
+```
+
+**Important limitations when using a custom control server:**
+
+- `tailscale.mode: "serve"` and `tailscale.mode: "funnel"` are **not supported** with a
+  custom control server. Tailscale Serve and Funnel require official Tailscale infrastructure.
+  OpenClaw will refuse to start if you set `mode: "serve"` or `mode: "funnel"` together with
+  `controlUrl`. Use `gateway.bind: "tailnet"` (direct Tailnet IP bind) instead.
+- `tailscale.mode: "off"` (the default) is fully compatible with custom control servers.
+
+### Connecting to your Headscale server
+
+Before starting the gateway, authenticate the machine against your Headscale server:
+
+```bash
+tailscale up --login-server https://headscale.example.com
+```
+
+After the machine is registered and approved in Headscale, start the gateway normally:
+
+```bash
+openclaw gateway run --bind tailnet --tailscale-control-url https://headscale.example.com
+```
+
+The `--tailscale-control-url` flag (or `gateway.tailscale.controlUrl` in config) records the
+control server URL. Serve and Funnel modes are rejected when this option is set.
+
 ## CLI examples
 
 ```bash
 openclaw gateway --tailscale serve
 openclaw gateway --tailscale funnel --auth password
+openclaw gateway --bind tailnet --tailscale-control-url https://headscale.example.com
 ```
 
 ## Notes
@@ -123,6 +167,8 @@ Avoid Funnel for browser control; treat node pairing like operator access.
 - Funnel requires Tailscale v1.38.3+, MagicDNS, HTTPS enabled, and a funnel node attribute.
 - Funnel only supports ports `443`, `8443`, and `10000` over TLS.
 - Funnel on macOS requires the open-source Tailscale app variant.
+- Tailscale Serve and Funnel are not available with custom control servers (e.g., Headscale).
+  See [Headscale feature support](https://headscale.net/stable/about/features/) for details.
 
 ## Learn more
 
@@ -130,3 +176,4 @@ Avoid Funnel for browser control; treat node pairing like operator access.
 - `tailscale serve` command: [https://tailscale.com/kb/1242/tailscale-serve](https://tailscale.com/kb/1242/tailscale-serve)
 - Tailscale Funnel overview: [https://tailscale.com/kb/1223/tailscale-funnel](https://tailscale.com/kb/1223/tailscale-funnel)
 - `tailscale funnel` command: [https://tailscale.com/kb/1311/tailscale-funnel](https://tailscale.com/kb/1311/tailscale-funnel)
+- Headscale: [https://headscale.net](https://headscale.net)

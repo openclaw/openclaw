@@ -122,6 +122,12 @@ export async function resolveGatewayRuntimeConfig(params: {
     params.cfg.gateway?.controlUi?.dangerouslyAllowHostHeaderOriginFallback === true;
 
   assertGatewayAuthConfigured(resolvedAuth, params.cfg.gateway?.auth);
+  if (tailscaleConfig.controlUrl && (tailscaleMode === "serve" || tailscaleMode === "funnel")) {
+    throw new Error(
+      `tailscale mode=${tailscaleMode} is not supported with a custom control server (tailscale.controlUrl). ` +
+        'Use tailscale.mode="off" and gateway.bind="tailnet" instead.',
+    );
+  }
   if (tailscaleMode === "funnel" && authMode !== "password") {
     throw new Error(
       "tailscale funnel requires gateway auth mode=password (set gateway.auth.password or OPENCLAW_GATEWAY_PASSWORD)",

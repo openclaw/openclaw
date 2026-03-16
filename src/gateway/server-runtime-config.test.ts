@@ -292,4 +292,54 @@ describe("resolveGatewayRuntimeConfig", () => {
       expect(result.strictTransportSecurityHeader).toBe(expected);
     });
   });
+
+  describe("tailscale.controlUrl", () => {
+    it.each(["serve", "funnel"] as const)(
+      "rejects mode=%s when controlUrl is set",
+      async (mode) => {
+        await expect(
+          resolveGatewayRuntimeConfig({
+            cfg: {
+              gateway: {
+                bind: "loopback",
+                auth: { mode: "password", password: "pw" },
+                tailscale: { mode, controlUrl: "https://headscale.example.com" },
+              },
+            },
+            port: 18789,
+          }),
+        ).rejects.toThrow("not supported with a custom control server");
+      },
+    );
+
+    it("allows mode=off with controlUrl", async () => {
+      const result = await resolveGatewayRuntimeConfig({
+        cfg: {
+          gateway: {
+            bind: "loopback",
+            auth: { mode: "none" },
+            tailscale: { mode: "off", controlUrl: "https://headscale.example.com" },
+          },
+        },
+        port: 18789,
+      });
+      expect(result.tailscaleConfig.controlUrl).toBe("https://headscale.example.com");
+      expect(result.tailscaleMode).toBe("off");
+    });
+
+    it("allows missing controlUrl with serve mode", async () => {
+      const result = await resolveGatewayRuntimeConfig({
+        cfg: {
+          gateway: {
+            bind: "loopback",
+            auth: { mode: "none" },
+            tailscale: { mode: "serve" },
+          },
+        },
+        port: 18789,
+      });
+      expect(result.tailscaleMode).toBe("serve");
+      expect(result.tailscaleConfig.controlUrl).toBeUndefined();
+    });
+  });
 });
