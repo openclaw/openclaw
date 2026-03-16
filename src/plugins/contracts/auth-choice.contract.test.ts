@@ -31,9 +31,9 @@ vi.mock("../../providers/github-copilot-auth.js", () => ({
 }));
 
 vi.mock("../../commands/auth-choice.apply.plugin-provider.runtime.js", () => ({
-  resolvePluginProviders: (...args: unknown[]) => resolvePluginProvidersMock(...args),
-  resolveProviderPluginChoice: (...args: unknown[]) => resolveProviderPluginChoiceMock(...args),
-  runProviderModelSelectedHook: (...args: unknown[]) => runProviderModelSelectedHookMock(...args),
+  resolvePluginProviders: resolvePluginProvidersMock,
+  resolveProviderPluginChoice: resolveProviderPluginChoiceMock,
+  runProviderModelSelectedHook: runProviderModelSelectedHookMock,
 }));
 
 type StoredAuthProfile = {
