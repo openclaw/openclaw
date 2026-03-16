@@ -9,6 +9,12 @@ const CORE_PROVIDER_AUTH_ENV_VAR_CANDIDATES = {
   litellm: ["LITELLM_API_KEY"],
 } as const;
 
+const CORE_PROVIDER_SETUP_ENV_VAR_OVERRIDES = {
+  anthropic: ["ANTHROPIC_API_KEY", "ANTHROPIC_OAUTH_TOKEN"],
+  chutes: ["CHUTES_API_KEY", "CHUTES_OAUTH_TOKEN"],
+  "minimax-cn": ["MINIMAX_API_KEY"],
+} as const;
+
 /**
  * Provider auth env candidates used by generic auth resolution.
  *
@@ -24,15 +30,15 @@ export const PROVIDER_AUTH_ENV_VAR_CANDIDATES: Record<string, readonly string[]>
 /**
  * Provider env vars used for setup/default secret refs and broad secret
  * scrubbing. This can include non-model providers and may intentionally choose
- * a different preferred first env var than auth resolution. Keep the
- * anthropic override in core so generic onboarding still prefers API keys over
- * OAuth tokens when both are present.
+ * a different preferred first env var than auth resolution.
+ *
+ * Bundled provider auth envs come from plugin manifests. The override map here
+ * is only for true core/non-plugin providers and a few setup-specific ordering
+ * overrides where generic onboarding wants a different preferred env var.
  */
 export const PROVIDER_ENV_VARS: Record<string, readonly string[]> = {
   ...PROVIDER_AUTH_ENV_VAR_CANDIDATES,
-  anthropic: ["ANTHROPIC_API_KEY", "ANTHROPIC_OAUTH_TOKEN"],
-  chutes: ["CHUTES_API_KEY", "CHUTES_OAUTH_TOKEN"],
-  "minimax-cn": ["MINIMAX_API_KEY"],
+  ...CORE_PROVIDER_SETUP_ENV_VAR_OVERRIDES,
 };
 
 const EXTRA_PROVIDER_AUTH_ENV_VARS = ["MINIMAX_CODE_PLAN_KEY"] as const;
