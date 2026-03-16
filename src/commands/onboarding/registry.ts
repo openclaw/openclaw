@@ -51,17 +51,23 @@ export async function loadBundledChannelOnboardingPlugin(
 ): Promise<ChannelPlugin | undefined> {
   switch (channel) {
     case "discord":
-      return (await import("../../../extensions/discord/setup-entry.js")).default.plugin;
+      return (await import("../../../extensions/discord/setup-entry.js")).default
+        .plugin as ChannelPlugin;
     case "imessage":
-      return (await import("../../../extensions/imessage/setup-entry.js")).default.plugin;
+      return (await import("../../../extensions/imessage/setup-entry.js")).default
+        .plugin as ChannelPlugin;
     case "signal":
-      return (await import("../../../extensions/signal/setup-entry.js")).default.plugin;
+      return (await import("../../../extensions/signal/setup-entry.js")).default
+        .plugin as ChannelPlugin;
     case "slack":
-      return (await import("../../../extensions/slack/setup-entry.js")).default.plugin;
+      return (await import("../../../extensions/slack/setup-entry.js")).default
+        .plugin as ChannelPlugin;
     case "telegram":
-      return (await import("../../../extensions/telegram/setup-entry.js")).default.plugin;
+      return (await import("../../../extensions/telegram/setup-entry.js")).default
+        .plugin as ChannelPlugin;
     case "whatsapp":
-      return (await import("../../../extensions/whatsapp/setup-entry.js")).default.plugin;
+      return (await import("../../../extensions/whatsapp/setup-entry.js")).default
+        .plugin as ChannelPlugin;
     default:
       return undefined;
   }
