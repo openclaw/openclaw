@@ -12,6 +12,14 @@ import { createInMemorySessionStore } from "./session.js";
 import { AcpGatewayAgent } from "./translator.js";
 import { createAcpConnection, createAcpGateway } from "./translator.test-helpers.js";
 
+vi.mock("../auto-reply/thinking.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../auto-reply/thinking.js")>();
+  return {
+    ...actual,
+    supportsXHighThinking: vi.fn().mockReturnValue(true),
+  };
+});
+
 function createNewSessionRequest(cwd = "/tmp"): NewSessionRequest {
   return {
     cwd,
