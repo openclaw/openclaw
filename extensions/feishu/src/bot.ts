@@ -106,6 +106,8 @@ function extractPermissionError(err: unknown): PermissionError | null {
 // Cache display names by sender id (open_id/user_id) to avoid an API call on every message.
 const SENDER_NAME_TTL_MS = 10 * 60 * 1000;
 const senderNameCache = new Map<string, { name: string; expireAt: number }>();
+const LONG_TASK_ACK_DELAY_MS = 8_000;
+const LONG_TASK_ACK_TEXT = "已收到，开始处理；如果需要较长时间，我会在完成后继续反馈结果。";
 
 // Cache permission errors to avoid spamming the user with repeated notifications.
 // Key: appId or "default", Value: timestamp of last notification
@@ -181,6 +183,52 @@ async function resolveFeishuSenderName(params: {
     log(`feishu: failed to resolve sender name for ${normalizedSenderId}: ${String(err)}`);
     return {};
   }
+}
+
+function scheduleDelayedAck(params: {
+  enabled: boolean;
+  cfg: ClawdbotConfig;
+  chatId: string;
+  accountId: string;
+  replyToMessageId?: string;
+  replyInThread?: boolean;
+  log: (...args: any[]) => void;
+}) {
+  if (!params.enabled) {
+    return { cancel: async () => {} };
+  }
+
+  let cancelled = false;
+  let sendPromise: Promise<void> | null = null;
+  const timer = setTimeout(() => {
+    if (cancelled) {
+      return;
+    }
+    sendPromise = sendMessageFeishu({
+      cfg: params.cfg,
+      to: params.chatId,
+      text: LONG_TASK_ACK_TEXT,
+      accountId: params.accountId,
+      replyToMessageId: params.replyToMessageId,
+      replyInThread: params.replyInThread,
+    })
+      .then(() => {
+        params.log(`feishu[${params.accountId}]: delayed ack sent`);
+      })
+      .catch((err) => {
+        params.log(`feishu[${params.accountId}]: delayed ack failed: ${String(err)}`);
+      });
+  }, LONG_TASK_ACK_DELAY_MS);
+
+  return {
+    cancel: async () => {
+      cancelled = true;
+      clearTimeout(timer);
+      if (sendPromise) {
+        await sendPromise;
+      }
+    },
+  };
 }
 
 export type FeishuMessageEvent = {
@@ -1782,19 +1830,34 @@ export async function handleFeishuMessage(params: {
       });
 
       log(`feishu[${account.accountId}]: dispatching to agent (session=${route.sessionKey})`);
-      const { queuedFinal, counts } = await core.channel.reply.withReplyDispatcher({
-        dispatcher,
-        onSettled: () => {
-          markDispatchIdle();
-        },
-        run: () =>
-          core.channel.reply.dispatchReplyFromConfig({
-            ctx: ctxPayload,
-            cfg,
-            dispatcher,
-            replyOptions,
-          }),
+      const delayedAck = scheduleDelayedAck({
+        enabled: ctx.chatType === "p2p" || ctx.chatType === "private",
+        cfg,
+        chatId: ctx.chatId,
+        accountId: account.accountId,
+        replyToMessageId: replyTargetMessageId,
+        replyInThread,
+        log,
       });
+      let queuedFinal;
+      let counts;
+      try {
+        ({ queuedFinal, counts } = await core.channel.reply.withReplyDispatcher({
+          dispatcher,
+          onSettled: () => {
+            markDispatchIdle();
+          },
+          run: () =>
+            core.channel.reply.dispatchReplyFromConfig({
+              ctx: ctxPayload,
+              cfg,
+              dispatcher,
+              replyOptions,
+            }),
+        }));
+      } finally {
+        await delayedAck.cancel();
+      }
 
       if (isGroup && historyKey && chatHistories) {
         clearHistoryEntriesIfEnabled({
