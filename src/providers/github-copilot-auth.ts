@@ -95,10 +95,16 @@ async function pollForAccessToken(params: {
         body: bodyBase,
         signal: AbortSignal.timeout(15_000),
       });
-    } catch {
-      // Single-poll timeout — retry on next interval instead of aborting the flow.
-      await new Promise((r) => setTimeout(r, params.intervalMs));
-      continue;
+    } catch (err) {
+      if (err instanceof DOMException && err.name === "TimeoutError") {
+        // Single-poll timeout — retry on next interval instead of aborting the flow.
+        await new Promise((r) => setTimeout(r, params.intervalMs));
+        continue;
+      }
+      throw new Error(
+        `GitHub token poll failed: ${err instanceof Error ? err.message : String(err)}`,
+        { cause: err },
+      );
     }
 
     if (!res.ok) {
