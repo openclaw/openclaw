@@ -621,6 +621,44 @@ describe("BlueBubbles webhook monitor", () => {
       expect(mockDispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalled();
     });
 
+    it("allows group messages without sender when groupPolicy=open", async () => {
+      const account = createMockAccount({
+        groupPolicy: "open",
+      });
+      const config: OpenClawConfig = {};
+      const core = createMockRuntime();
+      setBlueBubblesRuntime(core);
+
+      unregister = registerBlueBubblesWebhookTarget({
+        account,
+        config,
+        runtime: { log: vi.fn(), error: vi.fn() },
+        core,
+        path: "/bluebubbles-webhook",
+      });
+
+      const payload = {
+        type: "new-message",
+        data: {
+          text: "hello from group",
+          handle: null,
+          isGroup: true,
+          isFromMe: false,
+          guid: "msg-missing-sender-1",
+          chatGuid: "iMessage;+;chat123456",
+          date: Date.now(),
+        },
+      };
+
+      const req = createMockRequest("POST", "/bluebubbles-webhook", payload);
+      const res = createMockResponse();
+
+      await handleBlueBubblesWebhookRequest(req, res);
+      await flushAsync();
+
+      expect(mockDispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalled();
+    });
+
     it("blocks group messages when groupPolicy=disabled", async () => {
       const account = createMockAccount({
         groupPolicy: "disabled",
@@ -723,6 +761,45 @@ describe("BlueBubbles webhook monitor", () => {
           isGroup: true,
           isFromMe: false,
           guid: "msg-1",
+          chatGuid: "iMessage;+;chat123456",
+          date: Date.now(),
+        },
+      };
+
+      const req = createMockRequest("POST", "/bluebubbles-webhook", payload);
+      const res = createMockResponse();
+
+      await handleBlueBubblesWebhookRequest(req, res);
+      await flushAsync();
+
+      expect(mockDispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalled();
+    });
+
+    it("allows group messages without sender when groupAllowFrom matches the chat", async () => {
+      const account = createMockAccount({
+        groupPolicy: "allowlist",
+        groupAllowFrom: ["chat_guid:iMessage;+;chat123456"],
+      });
+      const config: OpenClawConfig = {};
+      const core = createMockRuntime();
+      setBlueBubblesRuntime(core);
+
+      unregister = registerBlueBubblesWebhookTarget({
+        account,
+        config,
+        runtime: { log: vi.fn(), error: vi.fn() },
+        core,
+        path: "/bluebubbles-webhook",
+      });
+
+      const payload = {
+        type: "new-message",
+        data: {
+          text: "hello from allowed group",
+          handle: null,
+          isGroup: true,
+          isFromMe: false,
+          guid: "msg-missing-sender-2",
           chatGuid: "iMessage;+;chat123456",
           date: Date.now(),
         },
@@ -996,6 +1073,53 @@ describe("BlueBubbles webhook monitor", () => {
           sender: { name: undefined, id: "+15551234567" },
         }),
       );
+    });
+
+    it("keeps group messages with missing sender identity and degrades sender metadata", async () => {
+      const account = createMockAccount({ groupPolicy: "open" });
+      const config: OpenClawConfig = {};
+      const core = createMockRuntime();
+      setBlueBubblesRuntime(core);
+
+      unregister = registerBlueBubblesWebhookTarget({
+        account,
+        config,
+        runtime: { log: vi.fn(), error: vi.fn() },
+        core,
+        path: "/bluebubbles-webhook",
+      });
+
+      const payload = {
+        type: "new-message",
+        data: {
+          text: "hello everyone",
+          handle: null,
+          isGroup: true,
+          isFromMe: false,
+          guid: "msg-unknown-sender-1",
+          chatGuid: "iMessage;+;chat123456",
+          chatName: "Family Chat",
+          date: Date.now(),
+        },
+      };
+
+      const req = createMockRequest("POST", "/bluebubbles-webhook", payload);
+      const res = createMockResponse();
+
+      await handleBlueBubblesWebhookRequest(req, res);
+      await flushAsync();
+
+      expect(mockFormatInboundEnvelope).toHaveBeenCalledWith(
+        expect.objectContaining({
+          from: "Family Chat id:iMessage;+;chat123456",
+          chatType: "group",
+          sender: { name: undefined, id: undefined },
+        }),
+      );
+      const callArgs = getFirstDispatchCall();
+      expect(callArgs.ctx.SenderId).toBeUndefined();
+      expect(callArgs.ctx.SenderName).toBeUndefined();
+      expect(callArgs.ctx.ConversationLabel).toBe("Family Chat id:iMessage;+;chat123456");
     });
 
     it("uses sender as from label for DM messages", async () => {

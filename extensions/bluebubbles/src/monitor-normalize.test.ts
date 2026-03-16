@@ -45,7 +45,7 @@ describe("normalizeWebhookMessage", () => {
     expect(result?.senderIdExplicit).toBe(true);
   });
 
-  it("does not infer sender from group chatGuid when sender handle is missing", () => {
+  it("preserves group messages when sender handle is missing", () => {
     const result = normalizeWebhookMessage({
       type: "new-message",
       data: {
@@ -58,7 +58,28 @@ describe("normalizeWebhookMessage", () => {
       },
     });
 
-    expect(result).toBeNull();
+    expect(result).not.toBeNull();
+    expect(result?.senderId).toBe("");
+    expect(result?.senderIdExplicit).toBe(false);
+    expect(result?.isGroup).toBe(true);
+  });
+
+  it("falls back to me for fromMe messages when sender handle is missing", () => {
+    const result = normalizeWebhookMessage({
+      type: "new-message",
+      data: {
+        guid: "msg-fromme-1",
+        text: "hello group",
+        isGroup: true,
+        isFromMe: true,
+        handle: null,
+        chatGuid: "iMessage;+;chat123456",
+      },
+    });
+
+    expect(result).not.toBeNull();
+    expect(result?.senderId).toBe("me");
+    expect(result?.senderIdExplicit).toBe(false);
   });
 
   it("accepts array-wrapped payload data", () => {
@@ -96,5 +117,25 @@ describe("normalizeWebhookReaction", () => {
     expect(result?.senderIdExplicit).toBe(false);
     expect(result?.messageId).toBe("p:0/msg-1");
     expect(result?.action).toBe("added");
+  });
+
+  it("preserves group reactions when sender handle is missing", () => {
+    const result = normalizeWebhookReaction({
+      type: "updated-message",
+      data: {
+        guid: "msg-2",
+        associatedMessageGuid: "p:0/msg-1",
+        associatedMessageType: 2000,
+        isGroup: true,
+        isFromMe: false,
+        handle: null,
+        chatGuid: "iMessage;+;chat123456",
+      },
+    });
+
+    expect(result).not.toBeNull();
+    expect(result?.senderId).toBe("");
+    expect(result?.senderIdExplicit).toBe(false);
+    expect(result?.messageId).toBe("p:0/msg-1");
   });
 });

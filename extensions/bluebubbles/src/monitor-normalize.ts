@@ -673,6 +673,31 @@ function extractMessagePayload(payload: Record<string, unknown>): Record<string,
   return null;
 }
 
+function resolveNormalizedWebhookSender(params: {
+  senderId: string;
+  senderIdExplicit: boolean;
+  isGroup: boolean;
+  chatGuid?: string;
+  fromMe?: boolean;
+}): string | null {
+  const senderFallbackFromChatGuid =
+    !params.senderIdExplicit && !params.isGroup && params.chatGuid
+      ? extractHandleFromChatGuid(params.chatGuid)
+      : null;
+  const normalizedSender = normalizeBlueBubblesHandle(
+    params.senderId || senderFallbackFromChatGuid || "",
+  );
+  if (normalizedSender) {
+    return normalizedSender;
+  }
+  if (params.fromMe) {
+    return "me";
+  }
+  // Preserve group events with missing sender identity so processing can degrade
+  // gracefully instead of dropping the entire message or reaction.
+  return params.isGroup ? "" : null;
+}
+
 export function normalizeWebhookMessage(
   payload: Record<string, unknown>,
 ): NormalizedWebhookMessage | null {
@@ -730,11 +755,14 @@ export function normalizeWebhookMessage(
         : timestampRaw * 1000
       : undefined;
 
-  // BlueBubbles may omit `handle` in webhook payloads; for DM chat GUIDs we can still infer sender.
-  const senderFallbackFromChatGuid =
-    !senderIdExplicit && !isGroup && chatGuid ? extractHandleFromChatGuid(chatGuid) : null;
-  const normalizedSender = normalizeBlueBubblesHandle(senderId || senderFallbackFromChatGuid || "");
-  if (!normalizedSender) {
+  const normalizedSender = resolveNormalizedWebhookSender({
+    senderId,
+    senderIdExplicit,
+    isGroup,
+    chatGuid,
+    fromMe,
+  });
+  if (normalizedSender === null) {
     return null;
   }
   const replyMetadata = extractReplyMetadata(message);
@@ -808,10 +836,14 @@ export function normalizeWebhookReaction(
         : timestampRaw * 1000
       : undefined;
 
-  const senderFallbackFromChatGuid =
-    !senderIdExplicit && !isGroup && chatGuid ? extractHandleFromChatGuid(chatGuid) : null;
-  const normalizedSender = normalizeBlueBubblesHandle(senderId || senderFallbackFromChatGuid || "");
-  if (!normalizedSender) {
+  const normalizedSender = resolveNormalizedWebhookSender({
+    senderId,
+    senderIdExplicit,
+    isGroup,
+    chatGuid,
+    fromMe,
+  });
+  if (normalizedSender === null) {
     return null;
   }
 
