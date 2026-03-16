@@ -1128,19 +1128,39 @@ export async function unpinMessageTelegram(
   };
 }
 
-export async function renameForumTopicTelegram(
+type TelegramEditForumTopicOpts = TelegramDeleteOpts & {
+  name?: string;
+  iconCustomEmojiId?: string;
+};
+
+export async function editForumTopicTelegram(
   chatIdInput: string | number,
   messageThreadIdInput: string | number,
-  name: string,
-  opts: TelegramDeleteOpts = {},
-): Promise<{ ok: true; chatId: string; messageThreadId: number; name: string }> {
-  const trimmedName = name.trim();
-  if (!trimmedName) {
+  opts: TelegramEditForumTopicOpts = {},
+): Promise<{
+  ok: true;
+  chatId: string;
+  messageThreadId: number;
+  name?: string;
+  iconCustomEmojiId?: string;
+}> {
+  const nameProvided = opts.name !== undefined;
+  const trimmedName = opts.name?.trim();
+  if (nameProvided && !trimmedName) {
     throw new Error("Telegram forum topic name is required");
   }
-  if (trimmedName.length > 128) {
+  if (trimmedName && trimmedName.length > 128) {
     throw new Error("Telegram forum topic name must be 128 characters or fewer");
   }
+  const iconProvided = opts.iconCustomEmojiId !== undefined;
+  const trimmedIconCustomEmojiId = opts.iconCustomEmojiId?.trim();
+  if (iconProvided && !trimmedIconCustomEmojiId) {
+    throw new Error("Telegram forum topic icon custom emoji ID is required");
+  }
+  if (!trimmedName && !trimmedIconCustomEmojiId) {
+    throw new Error("Telegram forum topic update requires a name or iconCustomEmojiId");
+  }
+
   const { cfg, account, api } = resolveTelegramApiContext(opts);
   const rawTarget = String(chatIdInput);
   const chatId = await resolveAndPersistChatId({
@@ -1157,16 +1177,39 @@ export async function renameForumTopicTelegram(
     retry: opts.retry,
     verbose: opts.verbose,
   });
+  const payload = {
+    ...(trimmedName ? { name: trimmedName } : {}),
+    ...(trimmedIconCustomEmojiId ? { icon_custom_emoji_id: trimmedIconCustomEmojiId } : {}),
+  };
   await requestWithDiag(
-    () => api.editForumTopic(chatId, messageThreadId, { name: trimmedName }),
+    () => api.editForumTopic(chatId, messageThreadId, payload),
     "editForumTopic",
   );
-  logVerbose(`[telegram] Renamed forum topic ${messageThreadId} in chat ${chatId}`);
+  logVerbose(`[telegram] Edited forum topic ${messageThreadId} in chat ${chatId}`);
   return {
     ok: true,
     chatId,
     messageThreadId,
-    name: trimmedName,
+    ...(trimmedName ? { name: trimmedName } : {}),
+    ...(trimmedIconCustomEmojiId ? { iconCustomEmojiId: trimmedIconCustomEmojiId } : {}),
+  };
+}
+
+export async function renameForumTopicTelegram(
+  chatIdInput: string | number,
+  messageThreadIdInput: string | number,
+  name: string,
+  opts: TelegramDeleteOpts = {},
+): Promise<{ ok: true; chatId: string; messageThreadId: number; name: string }> {
+  const result = await editForumTopicTelegram(chatIdInput, messageThreadIdInput, {
+    ...opts,
+    name,
+  });
+  return {
+    ok: true,
+    chatId: result.chatId,
+    messageThreadId: result.messageThreadId,
+    name: result.name ?? name.trim(),
   };
 }
 

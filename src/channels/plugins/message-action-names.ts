@@ -44,6 +44,7 @@ export const CHANNEL_MESSAGE_ACTION_NAMES = [
   "category-edit",
   "category-delete",
   "topic-create",
+  "topic-edit",
   "voice-status",
   "event-list",
   "event-create",
