@@ -407,6 +407,179 @@ function formatPreservedTurnsSection(messages: AgentMessage[]): string {
   return `\n\n## Recent turns preserved verbatim\n${lines.join("\n")}`;
 }
 
+type ToolResultSummaryTrimStats = {
+  truncatedCount: number;
+  compactedCount: number;
+  beforeChars: number;
+  afterChars: number;
+};
+
+const COMPACTION_SUMMARY_TOOL_RESULT_MAX_CHARS = 2_500;
+const COMPACTION_SUMMARY_TOOL_RESULT_TOTAL_CHARS_BUDGET = 20_000;
+const COMPACTION_SUMMARY_TOOL_RESULT_TRUNCATION_NOTICE =
+  "[...tool result truncated for compaction budget...]";
+const COMPACTION_SUMMARY_TOOL_RESULT_COMPACTED_NOTICE =
+  "[tool result compacted due to global compaction budget]";
+const COMPACTION_SUMMARY_TOOL_RESULT_NON_TEXT_NOTICE = "[non-text tool result content omitted]";
+
+function getToolResultTextFromContent(content: unknown): string {
+  if (!Array.isArray(content)) {
+    return "";
+  }
+  const parts: string[] = [];
+  for (const block of content) {
+    if (!block || typeof block !== "object") {
+      continue;
+    }
+    const text = (block as { text?: unknown }).text;
+    if (typeof text === "string" && text.length > 0) {
+      parts.push(text);
+    }
+  }
+  return parts.join("\n");
+}
+
+function hasNonTextToolResultContent(content: unknown): boolean {
+  if (!Array.isArray(content)) {
+    return false;
+  }
+  return content.some((block) => {
+    if (!block || typeof block !== "object") {
+      return false;
+    }
+    const t = (block as { type?: unknown }).type;
+    return t !== "text";
+  });
+}
+
+function replaceToolResultContentForSummary(msg: AgentMessage, text: string): AgentMessage {
+  return {
+    ...(msg as unknown as Record<string, unknown>),
+    content: [{ type: "text", text }],
+  } as AgentMessage;
+}
+
+function trimToolResultsForSummarization(messages: AgentMessage[]): {
+  messages: AgentMessage[];
+  stats: ToolResultSummaryTrimStats;
+} {
+  const next = [...messages];
+  let truncatedCount = 0;
+  let compactedCount = 0;
+  let beforeChars = 0;
+
+  for (let i = 0; i < next.length; i += 1) {
+    const msg = next[i];
+    if ((msg as { role?: unknown }).role !== "toolResult") {
+      continue;
+    }
+    const content = (msg as { content?: unknown }).content;
+    const text = getToolResultTextFromContent(content);
+    const hasNonText = hasNonTextToolResultContent(content);
+    beforeChars += text.length;
+
+    let normalized = text;
+    if (normalized.length === 0 && hasNonText) {
+      normalized = COMPACTION_SUMMARY_TOOL_RESULT_NON_TEXT_NOTICE;
+    }
+
+    if (normalized.length > COMPACTION_SUMMARY_TOOL_RESULT_MAX_CHARS) {
+      const separator = `\n\n${COMPACTION_SUMMARY_TOOL_RESULT_TRUNCATION_NOTICE}\n\n`;
+      const available = Math.max(0, COMPACTION_SUMMARY_TOOL_RESULT_MAX_CHARS - separator.length);
+      const tailBudget = Math.floor(available * 0.35);
+      const headBudget = Math.max(0, available - tailBudget);
+      const head = normalized.slice(0, headBudget);
+      const tail = tailBudget > 0 ? normalized.slice(-tailBudget) : "";
+      normalized = `${head}${separator}${tail}`;
+      truncatedCount += 1;
+    }
+
+    if (hasNonText || normalized !== text) {
+      next[i] = replaceToolResultContentForSummary(msg, normalized);
+    }
+  }
+
+  let runningChars = 0;
+  for (let i = next.length - 1; i >= 0; i -= 1) {
+    const msg = next[i];
+    if ((msg as { role?: unknown }).role !== "toolResult") {
+      continue;
+    }
+    const text = getToolResultTextFromContent((msg as { content?: unknown }).content);
+    if (runningChars + text.length <= COMPACTION_SUMMARY_TOOL_RESULT_TOTAL_CHARS_BUDGET) {
+      runningChars += text.length;
+      continue;
+    }
+    const placeholderLen = COMPACTION_SUMMARY_TOOL_RESULT_COMPACTED_NOTICE.length;
+    const remainingBudget = Math.max(
+      0,
+      COMPACTION_SUMMARY_TOOL_RESULT_TOTAL_CHARS_BUDGET - runningChars,
+    );
+    const replacementText =
+      remainingBudget >= placeholderLen ? COMPACTION_SUMMARY_TOOL_RESULT_COMPACTED_NOTICE : "";
+    next[i] = replaceToolResultContentForSummary(msg, replacementText);
+    runningChars += replacementText.length;
+    compactedCount += 1;
+  }
+
+  let afterChars = 0;
+  for (const msg of next) {
+    if ((msg as { role?: unknown }).role !== "toolResult") {
+      continue;
+    }
+    afterChars += getToolResultTextFromContent((msg as { content?: unknown }).content).length;
+  }
+
+  return {
+    messages: next,
+    stats: { truncatedCount, compactedCount, beforeChars, afterChars },
+  };
+}
+
+function getToolResultStableId(message: AgentMessage): string | null {
+  if ((message as { role?: unknown }).role !== "toolResult") {
+    return null;
+  }
+  const toolCallId = (message as { toolCallId?: unknown }).toolCallId;
+  if (typeof toolCallId === "string" && toolCallId.length > 0) {
+    return `call:${toolCallId}`;
+  }
+  const toolUseId = (message as { toolUseId?: unknown }).toolUseId;
+  if (typeof toolUseId === "string" && toolUseId.length > 0) {
+    return `use:${toolUseId}`;
+  }
+  return null;
+}
+
+function restoreOriginalToolResultsForKeptMessages(params: {
+  prunedMessages: AgentMessage[];
+  originalMessages: AgentMessage[];
+}): AgentMessage[] {
+  const originalByStableId = new Map<string, AgentMessage[]>();
+  for (const message of params.originalMessages) {
+    const stableId = getToolResultStableId(message);
+    if (!stableId) {
+      continue;
+    }
+    const bucket = originalByStableId.get(stableId) ?? [];
+    bucket.push(message);
+    originalByStableId.set(stableId, bucket);
+  }
+
+  return params.prunedMessages.map((message) => {
+    const stableId = getToolResultStableId(message);
+    if (!stableId) {
+      return message;
+    }
+    const bucket = originalByStableId.get(stableId);
+    if (!bucket || bucket.length === 0) {
+      return message;
+    }
+    const restored = bucket.shift();
+    return restored ?? message;
+  });
+}
+
 function wrapUntrustedInstructionBlock(label: string, text: string): string {
   return wrapUntrustedPromptDataBlock({
     label,
@@ -755,6 +928,18 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
       const modelContextWindow = resolveContextWindowTokens(model);
       const contextWindowTokens = runtime?.contextWindowTokens ?? modelContextWindow;
       const turnPrefixMessages = preparation.turnPrefixMessages ?? [];
+      const prefixTrimmedForBudget = trimToolResultsForSummarization(turnPrefixMessages);
+      if (
+        prefixTrimmedForBudget.stats.truncatedCount > 0 ||
+        prefixTrimmedForBudget.stats.compactedCount > 0
+      ) {
+        log.warn(
+          `Compaction safeguard: pre-trimmed prefix toolResult payloads for budgeting ` +
+            `(truncated=${prefixTrimmedForBudget.stats.truncatedCount}, compacted=${prefixTrimmedForBudget.stats.compactedCount}, ` +
+            `chars=${prefixTrimmedForBudget.stats.beforeChars}->${prefixTrimmedForBudget.stats.afterChars})`,
+        );
+      }
+      const prefixMessagesForSummary = prefixTrimmedForBudget.messages;
       let messagesToSummarize = preparation.messagesToSummarize;
       const recentTurnsPreserve = resolveRecentTurnsPreserve(runtime?.recentTurnsPreserve);
       const qualityGuardEnabled = runtime?.qualityGuardEnabled ?? false;
@@ -774,28 +959,44 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
       let droppedSummary: string | undefined;
 
       if (tokensBefore !== undefined) {
+        const budgetTrimmedForSummary = trimToolResultsForSummarization(messagesToSummarize);
+        if (
+          budgetTrimmedForSummary.stats.truncatedCount > 0 ||
+          budgetTrimmedForSummary.stats.compactedCount > 0
+        ) {
+          log.warn(
+            `Compaction safeguard: pre-trimmed toolResult payloads for budgeting ` +
+              `(truncated=${budgetTrimmedForSummary.stats.truncatedCount}, compacted=${budgetTrimmedForSummary.stats.compactedCount}, ` +
+              `chars=${budgetTrimmedForSummary.stats.beforeChars}->${budgetTrimmedForSummary.stats.afterChars})`,
+          );
+        }
         const summarizableTokens =
-          estimateMessagesTokens(messagesToSummarize) + estimateMessagesTokens(turnPrefixMessages);
+          estimateMessagesTokens(budgetTrimmedForSummary.messages) +
+          estimateMessagesTokens(prefixMessagesForSummary);
         const newContentTokens = Math.max(0, Math.floor(tokensBefore - summarizableTokens));
         // Apply SAFETY_MARGIN so token underestimates don't trigger unnecessary pruning
         const maxHistoryTokens = Math.floor(contextWindowTokens * maxHistoryShare * SAFETY_MARGIN);
 
         if (newContentTokens > maxHistoryTokens) {
+          const originalMessagesBeforePrune = messagesToSummarize;
           const pruned = pruneHistoryForContextShare({
-            messages: messagesToSummarize,
+            messages: budgetTrimmedForSummary.messages,
             maxContextTokens: contextWindowTokens,
             maxHistoryShare,
             parts: 2,
           });
           if (pruned.droppedChunks > 0) {
-            const newContentRatio = (newContentTokens / contextWindowTokens) * 100;
+            const historyRatio = (summarizableTokens / contextWindowTokens) * 100;
             log.warn(
-              `Compaction safeguard: new content uses ${newContentRatio.toFixed(
+              `Compaction safeguard: summarizable history uses ${historyRatio.toFixed(
                 1,
               )}% of context; dropped ${pruned.droppedChunks} older chunk(s) ` +
                 `(${pruned.droppedMessages} messages) to fit history budget.`,
             );
-            messagesToSummarize = pruned.messages;
+            messagesToSummarize = restoreOriginalToolResultsForKeptMessages({
+              prunedMessages: pruned.messages,
+              originalMessages: originalMessagesBeforePrune,
+            });
 
             // Summarize dropped messages so context isn't lost
             if (pruned.droppedMessagesList.length > 0) {
@@ -809,8 +1010,19 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
                   Math.floor(contextWindowTokens * droppedChunkRatio) -
                     SUMMARIZATION_OVERHEAD_TOKENS,
                 );
+                const droppedTrimmed = trimToolResultsForSummarization(pruned.droppedMessagesList);
+                if (
+                  droppedTrimmed.stats.truncatedCount > 0 ||
+                  droppedTrimmed.stats.compactedCount > 0
+                ) {
+                  log.warn(
+                    `Compaction safeguard: trimmed dropped toolResult payloads before summarize ` +
+                      `(truncated=${droppedTrimmed.stats.truncatedCount}, compacted=${droppedTrimmed.stats.compactedCount}, ` +
+                      `chars=${droppedTrimmed.stats.beforeChars}->${droppedTrimmed.stats.afterChars})`,
+                  );
+                }
                 droppedSummary = await summarizeInStages({
-                  messages: pruned.droppedMessagesList,
+                  messages: droppedTrimmed.messages,
                   model,
                   apiKey,
                   signal,
@@ -842,8 +1054,21 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
       });
       messagesToSummarize = summaryTargetMessages;
       const preservedTurnsSection = formatPreservedTurnsSection(preservedRecentMessages);
-      const latestUserAsk = extractLatestUserAsk([...messagesToSummarize, ...turnPrefixMessages]);
-      const identifierSeedText = [...messagesToSummarize, ...turnPrefixMessages]
+      const latestUserAsk = extractLatestUserAsk([
+        ...messagesToSummarize,
+        ...prefixMessagesForSummary,
+      ]);
+      const summaryTrimmed = trimToolResultsForSummarization(messagesToSummarize);
+      if (summaryTrimmed.stats.truncatedCount > 0 || summaryTrimmed.stats.compactedCount > 0) {
+        log.warn(
+          `Compaction safeguard: trimmed toolResult payloads before summarize ` +
+            `(truncated=${summaryTrimmed.stats.truncatedCount}, compacted=${summaryTrimmed.stats.compactedCount}, ` +
+            `chars=${summaryTrimmed.stats.beforeChars}->${summaryTrimmed.stats.afterChars})`,
+        );
+      }
+
+      const identifierSourceMessages = [...summaryTrimmed.messages, ...prefixMessagesForSummary];
+      const identifierSeedText = identifierSourceMessages
         .slice(-10)
         .map((message) => extractMessageText(message))
         .filter(Boolean)
@@ -853,7 +1078,7 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
       // Use adaptive chunk ratio based on message sizes, reserving headroom for
       // the summarization prompt, system prompt, previous summary, and reasoning budget
       // that generateSummary adds on top of the serialized conversation chunk.
-      const allMessages = [...messagesToSummarize, ...turnPrefixMessages];
+      const allMessages = [...summaryTrimmed.messages, ...prefixMessagesForSummary];
       const adaptiveRatio = computeAdaptiveChunkRatio(allMessages, contextWindowTokens);
       const maxChunkTokens = Math.max(
         1,
@@ -875,9 +1100,9 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
         let summaryWithPreservedTurns = "";
         try {
           const historySummary =
-            messagesToSummarize.length > 0
+            summaryTrimmed.messages.length > 0
               ? await summarizeInStages({
-                  messages: messagesToSummarize,
+                  messages: summaryTrimmed.messages,
                   model,
                   apiKey,
                   signal,
@@ -891,9 +1116,9 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
               : buildStructuredFallbackSummary(effectivePreviousSummary, summarizationInstructions);
 
           summaryWithoutPreservedTurns = historySummary;
-          if (preparation.isSplitTurn && turnPrefixMessages.length > 0) {
+          if (preparation.isSplitTurn && prefixMessagesForSummary.length > 0) {
             const prefixSummary = await summarizeInStages({
-              messages: turnPrefixMessages,
+              messages: prefixMessagesForSummary,
               model,
               apiKey,
               signal,
@@ -993,6 +1218,8 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
 export const __testing = {
   collectToolFailures,
   formatToolFailuresSection,
+  trimToolResultsForSummarization,
+  restoreOriginalToolResultsForKeptMessages,
   splitPreservedRecentTurns,
   formatPreservedTurnsSection,
   buildCompactionStructureInstructions,
