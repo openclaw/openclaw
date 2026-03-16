@@ -66,3 +66,7 @@ export { slackSetupWizard } from "../../extensions/slack/src/setup-surface.js";
 export { SlackConfigSchema } from "../config/zod-schema.providers-core.js";
 
 export { handleSlackMessageAction } from "../plugin-sdk/slack-message-actions.js";
+export {
+  isSlackExecApprovalApprover,
+  isSlackExecApprovalClientEnabled,
+} from "../../extensions/slack/src/exec-approvals.js";

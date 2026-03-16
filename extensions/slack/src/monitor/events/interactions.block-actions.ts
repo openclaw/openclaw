@@ -1,5 +1,6 @@
 import type { SlackActionMiddlewareArgs } from "@slack/bolt";
 import type { Block, KnownBlock } from "@slack/web-api";
+import { callGateway } from "../../../../../src/gateway/call.js";
 import { enqueueSystemEvent } from "../../../../../src/infra/system-events.js";
 import {
   buildPluginBindingResolvedText,
@@ -7,7 +8,13 @@ import {
   resolvePluginConversationBindingApproval,
 } from "../../../../../src/plugins/conversation-binding.js";
 import { dispatchPluginInteractiveHandler } from "../../../../../src/plugins/interactive.js";
+import {
+  GATEWAY_CLIENT_MODES,
+  GATEWAY_CLIENT_NAMES,
+} from "../../../../../src/utils/message-channel.js";
 import { SLACK_REPLY_BUTTON_ACTION_ID, SLACK_REPLY_SELECT_ACTION_ID } from "../../blocks-render.js";
+import { SLACK_EXEC_APPROVAL_ACTION_PREFIX } from "../../exec-approvals-handler.js";
+import { isSlackExecApprovalApprover } from "../../exec-approvals.js";
 import { authorizeSlackSystemEventSender } from "../auth.js";
 import type { SlackMonitorContext } from "../context.js";
 import { escapeSlackMrkdwn } from "../mrkdwn.js";
@@ -698,6 +705,82 @@ async function updateSlackLegacyBlockAction(params: {
   }
 }
 
+async function handleSlackExecApprovalAction(params: {
+  ctx: SlackMonitorContext;
+  parsed: ParsedSlackBlockAction;
+  respond?: SlackBlockActionRespond;
+}): Promise<boolean> {
+  const { parsed } = params;
+  if (!parsed.actionId.startsWith(SLACK_EXEC_APPROVAL_ACTION_PREFIX)) {
+    return false;
+  }
+  const decision = parsed.actionId.slice(SLACK_EXEC_APPROVAL_ACTION_PREFIX.length);
+  if (decision !== "allow-once" && decision !== "allow-always" && decision !== "deny") {
+    return false;
+  }
+  const approvalId = parsed.actionSummary.value?.trim();
+  if (!approvalId) {
+    return false;
+  }
+
+  // Only configured approvers can use these buttons.
+  if (
+    !isSlackExecApprovalApprover({
+      cfg: params.ctx.cfg,
+      accountId: params.ctx.accountId,
+      senderId: parsed.userId,
+    })
+  ) {
+    await respondEphemeral(params.respond, "You are not authorized to approve exec requests.");
+    return true;
+  }
+
+  const resolvedBy = `slack:${parsed.userId}`;
+  try {
+    await callGateway({
+      method: "exec.approval.resolve",
+      params: { id: approvalId, decision, resolvedBy },
+      clientName: GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
+      clientDisplayName: `Slack approval (${resolvedBy})`,
+      mode: GATEWAY_CLIENT_MODES.BACKEND,
+    });
+  } catch (err) {
+    await respondEphemeral(params.respond, `Failed to submit approval: ${String(err)}`);
+    return true;
+  }
+
+  const decisionLabel =
+    decision === "allow-once"
+      ? "Allowed (once)"
+      : decision === "allow-always"
+        ? "Allowed (always)"
+        : "Denied";
+
+  // Update the message to remove buttons and show result.
+  try {
+    await updateSlackInteractionMessage({
+      ctx: params.ctx,
+      channelId: parsed.channelId,
+      messageTs: parsed.messageTs,
+      text: `Exec approval resolved: ${decisionLabel}`,
+      blocks: [
+        {
+          type: "section",
+          text: {
+            type: "mrkdwn",
+            text: `:white_check_mark: Exec approval resolved: *${escapeSlackMrkdwn(decisionLabel)}* by <@${parsed.userId}>`,
+          },
+        },
+      ],
+    });
+  } catch {
+    // Best-effort message update.
+  }
+
+  await respondEphemeral(params.respond, `Exec approval ${decision} submitted.`);
+  return true;
+}
+
 async function handleSlackBlockAction(params: {
   ctx: SlackMonitorContext;
   args: SlackActionMiddlewareArgs;
@@ -717,6 +800,19 @@ async function handleSlackBlockAction(params: {
   if (!parsed) {
     return;
   }
+
+  // Handle exec approval buttons before auth gating so we can do our own
+  // approver-specific authorization.
+  if (
+    await handleSlackExecApprovalAction({
+      ctx: params.ctx,
+      parsed,
+      respond,
+    })
+  ) {
+    return;
+  }
+
   const auth = await authorizeSlackBlockAction({
     ctx: params.ctx,
     parsed,
