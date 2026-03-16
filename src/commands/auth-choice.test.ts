@@ -968,6 +968,33 @@ describe("applyAuthChoice", () => {
   it("sets default model when selecting github-copilot", async () => {
     await setupTempState();
 
+    resolvePluginProviders.mockReturnValue([
+      {
+        id: "github-copilot",
+        label: "GitHub Copilot",
+        auth: [
+          {
+            id: "device",
+            label: "GitHub device login",
+            kind: "device_code",
+            run: vi.fn(async () => ({
+              profiles: [
+                {
+                  profileId: "github-copilot:github",
+                  credential: {
+                    type: "token",
+                    provider: "github-copilot",
+                    token: "github-device-token",
+                  },
+                },
+              ],
+              defaultModel: "github-copilot/gpt-4o",
+            })),
+          },
+        ],
+      },
+    ] as never);
+
     const prompter = createPrompter({});
     const runtime = createExitThrowingRuntime();
 
