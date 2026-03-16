@@ -112,11 +112,11 @@ describe("ensureSkillSnapshot skill filter refresh", () => {
     };
     vi.mocked(buildWorkspaceSkillSnapshot).mockReturnValue(refreshedSnapshot);
 
-    const sessionStore = {
+    const sessionStore: Record<string, SessionEntry> = {
       "agent:main:main": {
         sessionId: "session-3",
         updatedAt: 1,
-      } satisfies SessionEntry,
+      },
     };
 
     const result = await ensureSkillSnapshot({
