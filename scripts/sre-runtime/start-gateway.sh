@@ -467,7 +467,14 @@ jq \
             end
           )
       )
-    | .channels.slack.channels["#platform-monitoring"].systemPrompt = $monitoring_prompt
+    | if .channels.slack.channels["#platform-monitoring"] != null then
+        .channels.slack.channels["#platform-monitoring"].systemPrompt =
+          (if (.channels.slack.channels["#platform-monitoring"].systemPrompt == $monitoring_prompt_marker) or (.channels.slack.channels["#platform-monitoring"].systemPrompt == null) then
+            $monitoring_prompt
+          else
+            .channels.slack.channels["#platform-monitoring"].systemPrompt
+          end)
+      else . end
     | .channels.slack.channels["#staging-infra-monitoring"].systemPrompt =
         ($monitoring_prompt
           | sub("^Monitoring incident intake mode:"; "Staging monitoring incident intake mode:")
