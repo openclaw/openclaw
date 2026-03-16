@@ -244,4 +244,17 @@ describe("resolveEffectiveToolPolicy", () => {
     const result = resolveEffectiveToolPolicy({ config: cfg });
     expect(result.profileAlsoAllow).toBeUndefined();
   });
+
+  it("keeps explicit alsoAllow for the minimal profile", () => {
+    const cfg = {
+      tools: {
+        profile: "minimal",
+        alsoAllow: ["web_search"],
+        exec: { host: "sandbox" },
+        fs: { workspaceOnly: true },
+      },
+    } as OpenClawConfig;
+    const result = resolveEffectiveToolPolicy({ config: cfg });
+    expect(result.profileAlsoAllow).toEqual(["web_search"]);
+  });
 });
