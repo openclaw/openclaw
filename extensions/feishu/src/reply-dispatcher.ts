@@ -53,7 +53,7 @@ function resolveCardHeader(
   const emoji = identity?.emoji?.trim();
   if (!name && !emoji) return { title: "", template: identity?.theme ?? "blue" };
   return {
-    title: emoji ? `${emoji} ${name}` : name,
+    title: (emoji ? `${emoji} ${name}` : name).trim(),
     template: identity?.theme ?? "blue",
   };
 }
