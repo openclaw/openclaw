@@ -98,6 +98,16 @@ const zaiPlugin = {
       },
       wrapStreamFn: (ctx) =>
         createZaiToolStreamWrapper(ctx.streamFn, ctx.extraParams?.tool_stream !== false),
+      isBinaryThinking: () => true,
+      isModernModelRef: ({ modelId }) => {
+        const lower = modelId.trim().toLowerCase();
+        return (
+          lower.startsWith("glm-5") ||
+          lower.startsWith("glm-4.7") ||
+          lower.startsWith("glm-4.7-flash") ||
+          lower.startsWith("glm-4.7-flashx")
+        );
+      },
       resolveUsageAuth: async (ctx) => {
         const apiKey = ctx.resolveApiKeyFromConfigAndStore({
           providerIds: [PROVIDER_ID, "z-ai"],

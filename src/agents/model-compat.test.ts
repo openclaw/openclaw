@@ -1,9 +1,16 @@
 import type { Api, Model } from "@mariozechner/pi-ai";
-import type { ModelRegistry } from "@mariozechner/pi-coding-agent";
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+
+const providerRuntimeMocks = vi.hoisted(() => ({
+  resolveProviderModernModelRef: vi.fn(),
+}));
+
+vi.mock("../plugins/provider-runtime.js", () => ({
+  resolveProviderModernModelRef: providerRuntimeMocks.resolveProviderModernModelRef,
+}));
+
 import { isModernModelRef } from "./live-model-filter.js";
 import { normalizeModelCompat } from "./model-compat.js";
-import { resolveForwardCompatModel } from "./model-forward-compat.js";
 
 const baseModel = (): Model<Api> =>
   ({
@@ -32,43 +39,6 @@ function supportsStrictMode(model: Model<Api>): boolean | undefined {
   return (model.compat as { supportsStrictMode?: boolean } | undefined)?.supportsStrictMode;
 }
 
-function createTemplateModel(provider: string, id: string): Model<Api> {
-  return {
-    id,
-    name: id,
-    provider,
-    api: "anthropic-messages",
-    input: ["text"],
-    reasoning: true,
-    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-    contextWindow: 200_000,
-    maxTokens: 8_192,
-  } as Model<Api>;
-}
-
-function createOpenAITemplateModel(id: string): Model<Api> {
-  return {
-    id,
-    name: id,
-    provider: "openai",
-    api: "openai-responses",
-    baseUrl: "https://api.openai.com/v1",
-    input: ["text", "image"],
-    reasoning: true,
-    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-    contextWindow: 400_000,
-    maxTokens: 32_768,
-  } as Model<Api>;
-}
-
-function createRegistry(models: Record<string, Model<Api>>): ModelRegistry {
-  return {
-    find(provider: string, modelId: string) {
-      return models[`${provider}/${modelId}`] ?? null;
-    },
-  } as ModelRegistry;
-}
-
 function expectSupportsDeveloperRoleForcedOff(overrides?: Partial<Model<Api>>): void {
   const model = { ...baseModel(), ...overrides };
   delete (model as { compat?: unknown }).compat;
@@ -90,14 +60,10 @@ function expectSupportsStrictModeForcedOff(overrides?: Partial<Model<Api>>): voi
   expect(supportsStrictMode(normalized)).toBe(false);
 }
 
-function expectResolvedForwardCompat(
-  model: Model<Api> | undefined,
-  expected: { provider: string; id: string },
-): void {
-  expect(model?.id).toBe(expected.id);
-  expect(model?.name).toBe(expected.id);
-  expect(model?.provider).toBe(expected.provider);
-}
+beforeEach(() => {
+  providerRuntimeMocks.resolveProviderModernModelRef.mockReset();
+  providerRuntimeMocks.resolveProviderModernModelRef.mockReturnValue(undefined);
+});
 
 describe("normalizeModelCompat — Anthropic baseUrl", () => {
   const anthropicBase = (): Model<Api> =>
@@ -373,6 +339,12 @@ describe("normalizeModelCompat", () => {
 });
 
 describe("isModernModelRef", () => {
+  it("uses provider runtime hooks before fallback heuristics", () => {
+    providerRuntimeMocks.resolveProviderModernModelRef.mockReturnValue(false);
+
+    expect(isModernModelRef({ provider: "openrouter", id: "claude-opus-4-6" })).toBe(false);
+  });
+
   it("includes OpenAI gpt-5.4 variants in modern selection", () => {
     expect(isModernModelRef({ provider: "openai", id: "gpt-5.4" })).toBe(true);
     expect(isModernModelRef({ provider: "openai", id: "gpt-5.4-pro" })).toBe(true);
@@ -393,73 +365,5 @@ describe("isModernModelRef", () => {
     expect(isModernModelRef({ provider: "opencode-go", id: "kimi-k2.5" })).toBe(true);
     expect(isModernModelRef({ provider: "opencode-go", id: "glm-5" })).toBe(true);
     expect(isModernModelRef({ provider: "opencode-go", id: "minimax-m2.5" })).toBe(true);
-  });
-});
-
-describe("resolveForwardCompatModel", () => {
-  it("resolves openai gpt-5.4 via gpt-5.2 template", () => {
-    const registry = createRegistry({
-      "openai/gpt-5.2": createOpenAITemplateModel("gpt-5.2"),
-    });
-    const model = resolveForwardCompatModel("openai", "gpt-5.4", registry);
-    expectResolvedForwardCompat(model, { provider: "openai", id: "gpt-5.4" });
-    expect(model?.api).toBe("openai-responses");
-    expect(model?.baseUrl).toBe("https://api.openai.com/v1");
-    expect(model?.contextWindow).toBe(1_050_000);
-    expect(model?.maxTokens).toBe(128_000);
-  });
-
-  it("resolves openai gpt-5.4 without templates using normalized fallback defaults", () => {
-    const registry = createRegistry({});
-
-    const model = resolveForwardCompatModel("openai", "gpt-5.4", registry);
-
-    expectResolvedForwardCompat(model, { provider: "openai", id: "gpt-5.4" });
-    expect(model?.api).toBe("openai-responses");
-    expect(model?.baseUrl).toBe("https://api.openai.com/v1");
-    expect(model?.input).toEqual(["text", "image"]);
-    expect(model?.reasoning).toBe(true);
-    expect(model?.contextWindow).toBe(1_050_000);
-    expect(model?.maxTokens).toBe(128_000);
-    expect(model?.cost).toEqual({ input: 0, output: 0, cacheRead: 0, cacheWrite: 0 });
-  });
-
-  it("resolves openai gpt-5.4-pro via template fallback", () => {
-    const registry = createRegistry({
-      "openai/gpt-5.2": createOpenAITemplateModel("gpt-5.2"),
-    });
-    const model = resolveForwardCompatModel("openai", "gpt-5.4-pro", registry);
-    expectResolvedForwardCompat(model, { provider: "openai", id: "gpt-5.4-pro" });
-    expect(model?.api).toBe("openai-responses");
-    expect(model?.baseUrl).toBe("https://api.openai.com/v1");
-    expect(model?.contextWindow).toBe(1_050_000);
-    expect(model?.maxTokens).toBe(128_000);
-  });
-
-  it("resolves anthropic opus 4.6 via 4.5 template", () => {
-    const registry = createRegistry({
-      "anthropic/claude-opus-4-5": createTemplateModel("anthropic", "claude-opus-4-5"),
-    });
-    const model = resolveForwardCompatModel("anthropic", "claude-opus-4-6", registry);
-    expectResolvedForwardCompat(model, { provider: "anthropic", id: "claude-opus-4-6" });
-  });
-
-  it("resolves anthropic sonnet 4.6 dot variant with suffix", () => {
-    const registry = createRegistry({
-      "anthropic/claude-sonnet-4.5-20260219": createTemplateModel(
-        "anthropic",
-        "claude-sonnet-4.5-20260219",
-      ),
-    });
-    const model = resolveForwardCompatModel("anthropic", "claude-sonnet-4.6-20260219", registry);
-    expectResolvedForwardCompat(model, { provider: "anthropic", id: "claude-sonnet-4.6-20260219" });
-  });
-
-  it("does not resolve anthropic 4.6 fallback for other providers", () => {
-    const registry = createRegistry({
-      "anthropic/claude-opus-4-5": createTemplateModel("anthropic", "claude-opus-4-5"),
-    });
-    const model = resolveForwardCompatModel("openai", "claude-opus-4-6", registry);
-    expect(model).toBeUndefined();
   });
 });
