@@ -1,7 +1,6 @@
 import { expect, it, type Mock } from "vitest";
 import type { MsgContext } from "../../../auto-reply/templating.js";
 import type { OpenClawConfig } from "../../../config/config.js";
-import type { ChannelMessageCapability } from "../message-capabilities.js";
 import type {
   ResolveProviderRuntimeGroupPolicyParams,
   RuntimeGroupPolicyResolution,
