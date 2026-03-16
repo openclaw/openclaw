@@ -2822,7 +2822,7 @@ export async function runEmbeddedAttempt(
       }
 
       recordTokenUsage({
-        workspaceDir: params.workspaceDir,
+        workspaceDir: effectiveWorkspace,
         runId: params.runId,
         sessionId: params.sessionId,
         sessionKey: params.sessionKey,
