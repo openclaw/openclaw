@@ -64,7 +64,6 @@ const unitIsolatedFilesRaw = [
   // Skills discovery/snapshot suites are filesystem-heavy and high-variance in vmForks lanes.
   "src/agents/skills.test.ts",
   "src/agents/skills.buildworkspaceskillsnapshot.test.ts",
-  "src/browser/extension-relay.test.ts",
   "extensions/acpx/src/runtime.test.ts",
   // Shell-heavy script harness can contend under vmForks startup bursts.
   "test/scripts/ios-team-id.test.ts",
