@@ -1,10 +1,11 @@
 import fs from "node:fs/promises";
+import path from "node:path";
 import { DEFAULT_BROWSER_EVALUATE_ENABLED } from "../../browser/constants.js";
 import { ensureBrowserControlAuth, resolveBrowserControlAuth } from "../../browser/control-auth.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { loadConfig } from "../../config/config.js";
 import { defaultRuntime } from "../../runtime.js";
-import { resolveUserPath } from "../../utils.js";
+import { CONFIG_DIR, resolveBundledSkillsDir, resolveUserPath } from "../../utils.js";
 import { syncSkillsToWorkspace } from "../skills.js";
 import { DEFAULT_AGENT_WORKSPACE_DIR } from "../workspace.js";
 import { requireSandboxBackendFactory } from "./backend.js";
@@ -46,17 +47,18 @@ async function ensureSandboxWorkspaceLayout(params: {
       agentWorkspaceDir,
       params.config?.agents?.defaults?.skipBootstrap,
     );
-    if (cfg.workspaceAccess !== "rw") {
-      try {
-        await syncSkillsToWorkspace({
-          sourceWorkspaceDir: agentWorkspaceDir,
-          targetWorkspaceDir: sandboxWorkspaceDir,
-          config: params.config,
-        });
-      } catch (error) {
-        const message = error instanceof Error ? error.message : JSON.stringify(error);
-        defaultRuntime.error?.(`Sandbox skill sync failed: ${message}`);
-      }
+    // Always sync skills to sandbox workspace (includes managed & bundled skills)
+    try {
+      await syncSkillsToWorkspace({
+        sourceWorkspaceDir: agentWorkspaceDir,
+        targetWorkspaceDir: sandboxWorkspaceDir,
+        config: params.config,
+        managedSkillsDir: path.join(CONFIG_DIR, "skills"),
+        bundledSkillsDir: resolveBundledSkillsDir(),
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : JSON.stringify(error);
+      defaultRuntime.error?.(`Sandbox skill sync failed: ${message}`);
     }
   } else {
     await fs.mkdir(workspaceDir, { recursive: true });
