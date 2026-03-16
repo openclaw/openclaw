@@ -373,7 +373,12 @@ describe("runGatewayStartupRuntimeConfigPhase", () => {
         context: createGatewayStartupContext(createSnapshot()),
         resolveRuntimeConfig: vi.fn().mockRejectedValue(failure),
       }),
-    ).rejects.toBe(failure);
+    ).rejects.toEqual(
+      expect.objectContaining<Partial<GatewayStartupPreflightError>>({
+        phase: "runtime_config_resolution",
+        message: "runtime config failed",
+      }),
+    );
   });
 });
 
@@ -442,7 +447,12 @@ describe("runGatewayStartupControlUiRootPhase", () => {
         },
         resolveControlUiRootState: vi.fn().mockRejectedValue(failure),
       }),
-    ).rejects.toBe(failure);
+    ).rejects.toEqual(
+      expect.objectContaining<Partial<GatewayStartupPreflightError>>({
+        phase: "control_ui_root_resolution",
+        message: "control ui root failed",
+      }),
+    );
   });
 });
 
@@ -471,6 +481,19 @@ describe("classifyGatewayStartupPreflightError", () => {
     });
   });
 
+  it("classifies serialized runtime startup phase errors", () => {
+    const classified = classifyGatewayStartupPreflightError({
+      name: "GatewayStartupPreflightError",
+      phase: "runtime_config_resolution",
+      message: "runtime config failed",
+    });
+
+    expect(classified).toEqual({
+      phase: "runtime_config_resolution",
+      message: "runtime config failed",
+    });
+  });
+
   it("returns null for non-preflight errors", () => {
     expect(classifyGatewayStartupPreflightError(new Error("boom"))).toBeNull();
   });
@@ -485,6 +508,16 @@ describe("formatGatewayStartupPreflightFailure", () => {
         message: "Invalid config",
       }),
     ).toBe("Gateway startup phase failed (config_validation): Invalid config");
+  });
+
+  it("formats classified runtime startup phase failures", () => {
+    expect(
+      formatGatewayStartupPreflightFailure({
+        name: "GatewayStartupPreflightError",
+        phase: "control_ui_root_resolution",
+        message: "control ui root failed",
+      }),
+    ).toBe("Gateway startup phase failed (control_ui_root_resolution): control ui root failed");
   });
 
   it("returns null for non-classified failures", () => {

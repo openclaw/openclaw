@@ -12,7 +12,9 @@ import type { GatewayRuntimeConfig } from "./server-runtime-config.js";
 export type GatewayStartupPreflightPhase =
   | "config_legacy_migration"
   | "config_validation"
-  | "plugin_auto_enable";
+  | "plugin_auto_enable"
+  | "runtime_config_resolution"
+  | "control_ui_root_resolution";
 
 export type GatewayStartupContext = {
   preflightSnapshot: ConfigFileSnapshot;
@@ -47,8 +49,20 @@ function isGatewayStartupPreflightPhase(value: unknown): value is GatewayStartup
   return (
     value === "config_legacy_migration" ||
     value === "config_validation" ||
-    value === "plugin_auto_enable"
+    value === "plugin_auto_enable" ||
+    value === "runtime_config_resolution" ||
+    value === "control_ui_root_resolution"
   );
+}
+
+function formatStartupPhaseErrorMessage(err: unknown, fallback: string): string {
+  if (err instanceof Error && err.message.trim().length > 0) {
+    return err.message;
+  }
+  if (typeof err === "string" && err.trim().length > 0) {
+    return err;
+  }
+  return fallback;
 }
 
 export function classifyGatewayStartupPreflightError(
@@ -341,10 +355,18 @@ export async function runGatewayStartupRuntimePolicyPhase(
 export async function runGatewayStartupRuntimeConfigPhase(
   deps: GatewayStartupRuntimeConfigPhaseDeps,
 ): Promise<GatewayStartupContext & { runtimeConfig: GatewayRuntimeConfig }> {
-  return {
-    ...deps.context,
-    runtimeConfig: await deps.resolveRuntimeConfig(deps.context.config),
-  };
+  try {
+    return {
+      ...deps.context,
+      runtimeConfig: await deps.resolveRuntimeConfig(deps.context.config),
+    };
+  } catch (err) {
+    throw new GatewayStartupPreflightError(
+      "runtime_config_resolution",
+      formatStartupPhaseErrorMessage(err, "Failed to resolve gateway runtime config."),
+      { cause: err },
+    );
+  }
 }
 
 /**
@@ -358,10 +380,18 @@ export async function runGatewayStartupControlUiRootPhase(
     controlUiRootState: ControlUiRootState | undefined;
   }
 > {
-  return {
-    ...deps.context,
-    controlUiRootState: await deps.resolveControlUiRootState({
-      runtimeConfig: deps.context.runtimeConfig,
-    }),
-  };
+  try {
+    return {
+      ...deps.context,
+      controlUiRootState: await deps.resolveControlUiRootState({
+        runtimeConfig: deps.context.runtimeConfig,
+      }),
+    };
+  } catch (err) {
+    throw new GatewayStartupPreflightError(
+      "control_ui_root_resolution",
+      formatStartupPhaseErrorMessage(err, "Failed to resolve control UI root."),
+      { cause: err },
+    );
+  }
 }
