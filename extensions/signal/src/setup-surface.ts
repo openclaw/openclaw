@@ -24,6 +24,8 @@ import {
   signalSetupAdapter,
 } from "./setup-core.js";
 
+export { normalizeSignalAccountInput, parseSignalAllowFromEntries } from "./setup-core.js";
+
 const channel = "signal" as const;
 const INVALID_SIGNAL_ACCOUNT_ERROR =
   "Invalid E.164 phone number (must start with + and country code, e.g. +15555550123)";
