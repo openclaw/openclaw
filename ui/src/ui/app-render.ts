@@ -1423,6 +1423,7 @@ export function renderApp(state: AppViewState) {
                   });
                   void loadChatHistory(state);
                   void state.loadAssistantIdentity();
+                  void refreshChatAvatar(state);
                 },
                 onNavigateToAgent: () => {
                   state.agentsSelectedId = resolvedAgentId;
