@@ -438,19 +438,21 @@ export function handleAgentEvent(host: ToolStreamHost, payload?: AgentEventPaylo
     // Commit any in-progress streaming text as a segment so it renders
     // above the tool card instead of below it.
     if (host.chatStream && host.chatStream.trim().length > 0) {
-      // Deduplicate: each segment should contain only new text since the last segment.
+      // Deduplicate: each segment should contain only new text since the last commit.
       // This prevents duplicate rendering when streaming text → tool → more text.
-      const lastSegment = host.chatStreamSegments[host.chatStreamSegments.length - 1];
-      const lastText = lastSegment?.text ?? "";
-      // Only commit if we have new content beyond the last segment
-      if (host.chatStream.length > lastText.length && host.chatStream.startsWith(lastText)) {
+      // Track cumulative committed length across all segments (they store deltas).
+      const totalCommittedLength = host.chatStreamSegments.reduce(
+        (sum, seg) => sum + seg.text.length,
+        0,
+      );
+      if (host.chatStream.length > totalCommittedLength) {
         // Current stream is a continuation: only store the new portion
-        const newText = host.chatStream.slice(lastText.length);
+        const newText = host.chatStream.slice(totalCommittedLength);
         if (newText.trim().length > 0) {
           host.chatStreamSegments = [...host.chatStreamSegments, { text: newText, ts: now }];
         }
-      } else if (host.chatStream !== lastText) {
-        // Stream is not a continuation (e.g., first segment or reset): store as-is
+      } else if (totalCommittedLength === 0) {
+        // Fallback: stream doesn't look cumulative, store as-is
         host.chatStreamSegments = [...host.chatStreamSegments, { text: host.chatStream, ts: now }];
       }
       host.chatStream = null;
