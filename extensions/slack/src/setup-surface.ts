@@ -1,29 +1,19 @@
-import type {
-  ChannelOnboardingAdapter,
-  ChannelOnboardingDmPolicy,
-} from "../../../src/channels/plugins/onboarding-types.js";
 import {
   noteChannelLookupFailure,
   noteChannelLookupSummary,
   parseMentionOrPrefixedId,
   patchChannelConfigForAccount,
   promptLegacyChannelAllowFrom,
-  resolveOnboardingAccountId,
+  resolveSetupAccountId,
   setAccountGroupPolicyForChannel,
   setLegacyChannelDmPolicyWithAllowFrom,
-  setOnboardingChannelEnabled,
-} from "../../../src/channels/plugins/onboarding/helpers.js";
-import {
-  applyAccountNameToChannelSection,
-  migrateBaseNameToDefaultAccount,
-} from "../../../src/channels/plugins/setup-helpers.js";
-import {
-  buildChannelOnboardingAdapterFromSetupWizard,
-  type ChannelSetupWizard,
-  type ChannelSetupWizardAllowFromEntry,
+  setSetupChannelEnabled,
+} from "../../../src/channels/plugins/setup-wizard-helpers.js";
+import type { ChannelSetupDmPolicy } from "../../../src/channels/plugins/setup-wizard-types.js";
+import type {
+  ChannelSetupWizard,
+  ChannelSetupWizardAllowFromEntry,
 } from "../../../src/channels/plugins/setup-wizard.js";
-import type { ChannelSetupAdapter } from "../../../src/channels/plugins/types.adapters.js";
-import { getChatChannelMeta } from "../../../src/channels/registry.js";
 import type { OpenClawConfig } from "../../../src/config/config.js";
 import { hasConfiguredSecretInput } from "../../../src/config/types.secrets.js";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../../../src/routing/session-key.js";
@@ -38,6 +28,7 @@ import {
 } from "./accounts.js";
 import { resolveSlackChannelAllowlist } from "./resolve-channels.js";
 import { resolveSlackUserAllowlist } from "./resolve-users.js";
+import { slackSetupAdapter } from "./setup-core.js";
 
 const channel = "slack" as const;
 
@@ -175,7 +166,7 @@ async function promptSlackAllowFrom(params: {
   prompter: WizardPrompter;
   accountId?: string;
 }): Promise<OpenClawConfig> {
-  const accountId = resolveOnboardingAccountId({
+  const accountId = resolveSetupAccountId({
     accountId: params.accountId,
     defaultAccountId: resolveDefaultSlackAccountId(params.cfg),
   });
@@ -219,7 +210,7 @@ async function promptSlackAllowFrom(params: {
   });
 }
 
-const slackDmPolicy: ChannelOnboardingDmPolicy = {
+const slackDmPolicy: ChannelSetupDmPolicy = {
   label: "Slack",
   channel,
   policyKey: "channels.slack.dmPolicy",
@@ -242,78 +233,6 @@ function isSlackAccountConfigured(account: ResolvedSlackAccount): boolean {
     Boolean(account.appToken?.trim()) || hasConfiguredSecretInput(account.config.appToken);
   return hasConfiguredBotToken && hasConfiguredAppToken;
 }
-
-export const slackSetupAdapter: ChannelSetupAdapter = {
-  resolveAccountId: ({ accountId }) => normalizeAccountId(accountId),
-  applyAccountName: ({ cfg, accountId, name }) =>
-    applyAccountNameToChannelSection({
-      cfg,
-      channelKey: channel,
-      accountId,
-      name,
-    }),
-  validateInput: ({ accountId, input }) => {
-    if (input.useEnv && accountId !== DEFAULT_ACCOUNT_ID) {
-      return "Slack env tokens can only be used for the default account.";
-    }
-    if (!input.useEnv && (!input.botToken || !input.appToken)) {
-      return "Slack requires --bot-token and --app-token (or --use-env).";
-    }
-    return null;
-  },
-  applyAccountConfig: ({ cfg, accountId, input }) => {
-    const namedConfig = applyAccountNameToChannelSection({
-      cfg,
-      channelKey: channel,
-      accountId,
-      name: input.name,
-    });
-    const next =
-      accountId !== DEFAULT_ACCOUNT_ID
-        ? migrateBaseNameToDefaultAccount({
-            cfg: namedConfig,
-            channelKey: channel,
-          })
-        : namedConfig;
-    if (accountId === DEFAULT_ACCOUNT_ID) {
-      return {
-        ...next,
-        channels: {
-          ...next.channels,
-          slack: {
-            ...next.channels?.slack,
-            enabled: true,
-            ...(input.useEnv
-              ? {}
-              : {
-                  ...(input.botToken ? { botToken: input.botToken } : {}),
-                  ...(input.appToken ? { appToken: input.appToken } : {}),
-                }),
-          },
-        },
-      };
-    }
-    return {
-      ...next,
-      channels: {
-        ...next.channels,
-        slack: {
-          ...next.channels?.slack,
-          enabled: true,
-          accounts: {
-            ...next.channels?.slack?.accounts,
-            [accountId]: {
-              ...next.channels?.slack?.accounts?.[accountId],
-              enabled: true,
-              ...(input.botToken ? { botToken: input.botToken } : {}),
-              ...(input.appToken ? { appToken: input.appToken } : {}),
-            },
-          },
-        },
-      },
-    };
-  },
-};
 
 export const slackSetupWizard: ChannelSetupWizard = {
   channel,
@@ -505,27 +424,5 @@ export const slackSetupWizard: ChannelSetupWizard = {
     applyAllowlist: ({ cfg, accountId, resolved }) =>
       setSlackChannelAllowlist(cfg, accountId, resolved as string[]),
   },
-  disable: (cfg) => setOnboardingChannelEnabled(cfg, channel, false),
+  disable: (cfg) => setSetupChannelEnabled(cfg, channel, false),
 };
-
-const slackSetupPlugin = {
-  id: channel,
-  meta: {
-    ...getChatChannelMeta(channel),
-    quickstartAllowFrom: true,
-  },
-  config: {
-    listAccountIds: listSlackAccountIds,
-    resolveAccount: (cfg: OpenClawConfig, accountId?: string | null) =>
-      resolveSlackAccount({ cfg, accountId }),
-    resolveAllowFrom: ({ cfg, accountId }: { cfg: OpenClawConfig; accountId?: string | null }) =>
-      resolveSlackAccount({ cfg, accountId }).dm?.allowFrom,
-  },
-  setup: slackSetupAdapter,
-} as const;
-
-export const slackOnboardingAdapter: ChannelOnboardingAdapter =
-  buildChannelOnboardingAdapterFromSetupWizard({
-    plugin: slackSetupPlugin,
-    wizard: slackSetupWizard,
-  });

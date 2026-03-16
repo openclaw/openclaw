@@ -1,9 +1,16 @@
+import type { AuthProfileCredential, OAuthCredential } from "../agents/auth-profiles/types.js";
 import { normalizeProviderId } from "../agents/model-selection.js";
 import type { OpenClawConfig } from "../config/config.js";
-import { resolvePluginProviders } from "./providers.js";
+import { resolveOwningPluginIdsForProvider, resolvePluginProviders } from "./providers.js";
 import type {
+  ProviderAuthDoctorHintContext,
+  ProviderAugmentModelCatalogContext,
+  ProviderBuildMissingAuthMessageContext,
+  ProviderBuiltInModelSuppressionContext,
   ProviderCacheTtlEligibilityContext,
+  ProviderDefaultThinkingPolicyContext,
   ProviderFetchUsageSnapshotContext,
+  ProviderModernModelPolicyContext,
   ProviderPrepareExtraParamsContext,
   ProviderPrepareDynamicModelContext,
   ProviderPrepareRuntimeAuthContext,
@@ -11,6 +18,7 @@ import type {
   ProviderPlugin,
   ProviderResolveDynamicModelContext,
   ProviderRuntimeModel,
+  ProviderThinkingPolicyContext,
   ProviderWrapStreamFnContext,
 } from "./types.js";
 
@@ -25,15 +33,39 @@ function matchesProviderId(provider: ProviderPlugin, providerId: string): boolea
   return (provider.aliases ?? []).some((alias) => normalizeProviderId(alias) === normalized);
 }
 
+function resolveProviderPluginsForHooks(params: {
+  config?: OpenClawConfig;
+  workspaceDir?: string;
+  env?: NodeJS.ProcessEnv;
+  onlyPluginIds?: string[];
+}): ProviderPlugin[] {
+  return resolvePluginProviders({
+    ...params,
+    activate: false,
+    cache: false,
+    bundledProviderAllowlistCompat: true,
+    bundledProviderVitestCompat: true,
+  });
+}
+
 export function resolveProviderRuntimePlugin(params: {
   provider: string;
   config?: OpenClawConfig;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
 }): ProviderPlugin | undefined {
-  return resolvePluginProviders({
+  const owningPluginIds = resolveOwningPluginIdsForProvider({
+    provider: params.provider,
+    config: params.config,
+    workspaceDir: params.workspaceDir,
+    env: params.env,
+  });
+  if (!owningPluginIds || owningPluginIds.length === 0) {
+    return undefined;
+  }
+  return resolveProviderPluginsForHooks({
     ...params,
-    bundledProviderAllowlistCompat: true,
+    onlyPluginIds: owningPluginIds,
   }).find((plugin) => matchesProviderId(plugin, params.provider));
 }
 
@@ -135,6 +167,36 @@ export async function resolveProviderUsageSnapshotWithPlugin(params: {
   return await resolveProviderRuntimePlugin(params)?.fetchUsageSnapshot?.(params.context);
 }
 
+export function formatProviderAuthProfileApiKeyWithPlugin(params: {
+  provider: string;
+  config?: OpenClawConfig;
+  workspaceDir?: string;
+  env?: NodeJS.ProcessEnv;
+  context: AuthProfileCredential;
+}) {
+  return resolveProviderRuntimePlugin(params)?.formatApiKey?.(params.context);
+}
+
+export async function refreshProviderOAuthCredentialWithPlugin(params: {
+  provider: string;
+  config?: OpenClawConfig;
+  workspaceDir?: string;
+  env?: NodeJS.ProcessEnv;
+  context: OAuthCredential;
+}) {
+  return await resolveProviderRuntimePlugin(params)?.refreshOAuth?.(params.context);
+}
+
+export async function buildProviderAuthDoctorHintWithPlugin(params: {
+  provider: string;
+  config?: OpenClawConfig;
+  workspaceDir?: string;
+  env?: NodeJS.ProcessEnv;
+  context: ProviderAuthDoctorHintContext;
+}) {
+  return await resolveProviderRuntimePlugin(params)?.buildAuthDoctorHint?.(params.context);
+}
+
 export function resolveProviderCacheTtlEligibility(params: {
   provider: string;
   config?: OpenClawConfig;
@@ -143,4 +205,88 @@ export function resolveProviderCacheTtlEligibility(params: {
   context: ProviderCacheTtlEligibilityContext;
 }) {
   return resolveProviderRuntimePlugin(params)?.isCacheTtlEligible?.(params.context);
+}
+
+export function resolveProviderBinaryThinking(params: {
+  provider: string;
+  config?: OpenClawConfig;
+  workspaceDir?: string;
+  env?: NodeJS.ProcessEnv;
+  context: ProviderThinkingPolicyContext;
+}) {
+  return resolveProviderRuntimePlugin(params)?.isBinaryThinking?.(params.context);
+}
+
+export function resolveProviderXHighThinking(params: {
+  provider: string;
+  config?: OpenClawConfig;
+  workspaceDir?: string;
+  env?: NodeJS.ProcessEnv;
+  context: ProviderThinkingPolicyContext;
+}) {
+  return resolveProviderRuntimePlugin(params)?.supportsXHighThinking?.(params.context);
+}
+
+export function resolveProviderDefaultThinkingLevel(params: {
+  provider: string;
+  config?: OpenClawConfig;
+  workspaceDir?: string;
+  env?: NodeJS.ProcessEnv;
+  context: ProviderDefaultThinkingPolicyContext;
+}) {
+  return resolveProviderRuntimePlugin(params)?.resolveDefaultThinkingLevel?.(params.context);
+}
+
+export function resolveProviderModernModelRef(params: {
+  provider: string;
+  config?: OpenClawConfig;
+  workspaceDir?: string;
+  env?: NodeJS.ProcessEnv;
+  context: ProviderModernModelPolicyContext;
+}) {
+  return resolveProviderRuntimePlugin(params)?.isModernModelRef?.(params.context);
+}
+
+export function buildProviderMissingAuthMessageWithPlugin(params: {
+  provider: string;
+  config?: OpenClawConfig;
+  workspaceDir?: string;
+  env?: NodeJS.ProcessEnv;
+  context: ProviderBuildMissingAuthMessageContext;
+}) {
+  return (
+    resolveProviderRuntimePlugin(params)?.buildMissingAuthMessage?.(params.context) ?? undefined
+  );
+}
+
+export function resolveProviderBuiltInModelSuppression(params: {
+  config?: OpenClawConfig;
+  workspaceDir?: string;
+  env?: NodeJS.ProcessEnv;
+  context: ProviderBuiltInModelSuppressionContext;
+}) {
+  for (const plugin of resolveProviderPluginsForHooks(params)) {
+    const result = plugin.suppressBuiltInModel?.(params.context);
+    if (result?.suppress) {
+      return result;
+    }
+  }
+  return undefined;
+}
+
+export async function augmentModelCatalogWithProviderPlugins(params: {
+  config?: OpenClawConfig;
+  workspaceDir?: string;
+  env?: NodeJS.ProcessEnv;
+  context: ProviderAugmentModelCatalogContext;
+}) {
+  const supplemental = [] as ProviderAugmentModelCatalogContext["entries"];
+  for (const plugin of resolveProviderPluginsForHooks(params)) {
+    const next = await plugin.augmentModelCatalog?.(params.context);
+    if (!next || next.length === 0) {
+      continue;
+    }
+    supplemental.push(...next);
+  }
+  return supplemental;
 }
