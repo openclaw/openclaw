@@ -2,10 +2,10 @@
 summary: 关于 OpenClaw 安装、配置和使用的常见问题
 title: 常见问题
 x-i18n:
-  generated_at: "2026-03-16T01:39:16Z"
+  generated_at: "2026-03-16T06:52:18Z"
   model: claude-opus-4-5
   provider: pi
-  source_hash: 6e6a4a63fb73dca24dbe77928b51c6b2e5d51ec883fb36c64e2e40ef027050e9
+  source_hash: 94f7c6ea1024d5606379ce80d65a006b3acc12a963d57ca2333fcee3e5a31872
   source_path: help/faq.md
   workflow: 15
 ---

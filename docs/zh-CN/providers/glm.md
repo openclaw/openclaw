@@ -1,26 +1,37 @@
 ---
 read_when:
   - 你想在 OpenClaw 中使用 GLM 模型
-  - 你需要了解模型命名规范和设置方法
-summary: GLM 模型系列概述 + 如何在 OpenClaw 中使用
-title: GLM 模型
+  - 你需要了解模型命名约定和设置方法
+summary: GLM 模型家族概览 + 如何在 OpenClaw 中使用
+title: GLM Models
 x-i18n:
-  generated_at: "2026-02-01T21:34:53Z"
-  model: claude-opus-4-5
-  provider: pi
-  source_hash: 2d7b457f033f26f28c230a9cd2310151f825fc52c3ee4fb814d08fd2d022d041
+  generated_at: "2026-03-16T06:25:10Z"
+  model: gpt-5.4
+  provider: openai
+  source_hash: 061254ebeedec7285d9c0c6e88145f89184ad4ab8d8d6132f1d692c7d3ca03a2
   source_path: providers/glm.md
   workflow: 15
 ---
 
 # GLM 模型
 
-GLM 是一个**模型系列**（而非公司），通过 Z.AI 平台提供。在 OpenClaw 中，GLM 模型通过 `zai` 提供商访问，模型 ID 格式如 `zai/glm-4.7`。
+GLM 是一个**模型家族**（不是公司），可通过 Z.AI 平台使用。在 OpenClaw 中，GLM
+模型通过 `zai` 提供商访问，模型 ID 形式如 `zai/glm-5`。
 
 ## CLI 设置
 
 ```bash
-openclaw onboard --auth-choice zai-api-key
+# Coding Plan Global，推荐给 Coding Plan 用户
+openclaw onboard --auth-choice zai-coding-global
+
+# Coding Plan CN（中国区域），推荐给 Coding Plan 用户
+openclaw onboard --auth-choice zai-coding-cn
+
+# 通用 API
+openclaw onboard --auth-choice zai-global
+
+# 通用 API CN（中国区域）
+openclaw onboard --auth-choice zai-cn
 ```
 
 ## 配置片段
@@ -28,12 +39,12 @@ openclaw onboard --auth-choice zai-api-key
 ```json5
 {
   env: { ZAI_API_KEY: "sk-..." },
-  agents: { defaults: { model: { primary: "zai/glm-4.7" } } },
+  agents: { defaults: { model: { primary: "zai/glm-5" } } },
 }
 ```
 
-## 注意事项
+## 说明
 
-- GLM 版本和可用性可能会变化；请查阅 Z.AI 的文档获取最新信息。
-- 示例模型 ID 包括 `glm-4.7` 和 `glm-4.6`。
-- 有关提供商的详细信息，请参阅 [/providers/zai](/providers/zai)。
+- GLM 版本和可用性可能会变化；请查看 Z.AI 的文档以获取最新信息。
+- 示例模型 ID 包括 `glm-5`、`glm-4.7` 和 `glm-4.6`。
+- 关于提供商详情，请参阅 [/providers/zai](/providers/zai)。
