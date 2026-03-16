@@ -489,6 +489,12 @@ export function renderChatMobileToggle(state: AppViewState) {
 
 function switchChatSession(state: AppViewState, nextSessionKey: string) {
   state.sessionKey = nextSessionKey;
+  // Clear unread count for the session we're switching to
+  if (state.sessionUnreadCounts.has(nextSessionKey)) {
+    const next = new Map(state.sessionUnreadCounts);
+    next.delete(nextSessionKey);
+    state.sessionUnreadCounts = next;
+  }
   state.chatMessage = "";
   state.chatStream = null;
   // P1: Clear queued chat items from the previous session
@@ -827,7 +833,9 @@ export function resolveSessionOptionGroups(
         )
       : ensureGroup("other", "Other Sessions");
     const scopeLabel = parsed?.rest?.trim() || key;
-    const label = resolveSessionScopedOptionLabel(key, row, parsed?.rest);
+    const baseLabel = resolveSessionScopedOptionLabel(key, row, parsed?.rest);
+    const unreadCount = state.sessionUnreadCounts?.get(key) ?? 0;
+    const label = unreadCount > 0 ? `● ${baseLabel}` : baseLabel;
     group.options.push({
       key,
       label,

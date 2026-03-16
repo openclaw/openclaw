@@ -146,6 +146,8 @@ export class OpenClawApp extends LitElement {
   @state() serverVersion: string | null = null;
 
   @state() sessionKey = this.settings.sessionKey;
+  /** Per-session unread counts: incremented when a foreign session receives a final chat event. Cleared on session switch. */
+  @state() sessionUnreadCounts: Map<string, number> = new Map();
   @state() chatLoading = false;
   @state() chatSending = false;
   @state() chatMessage = "";

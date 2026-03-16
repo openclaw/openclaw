@@ -315,8 +315,8 @@ function handleChatGatewayEvent(host: GatewayHost, payload: ChatEventPayload | u
   }
 
   // Foreign chat event: delivery targeted a different session than the one currently viewed.
-  // Instead of silently dropping, trigger a lightweight session-list refresh so the sidebar
-  // stays up to date and the user can see the new activity.
+  // Instead of silently dropping, trigger a lightweight session-list refresh and increment
+  // the per-session unread counter so the session switcher shows a dot.
   const isForeignSession =
     payload?.sessionKey != null &&
     (host as unknown as OpenClawApp).sessionKey !== payload.sessionKey;
@@ -324,6 +324,10 @@ function handleChatGatewayEvent(host: GatewayHost, payload: ChatEventPayload | u
     void loadSessions(host as unknown as OpenClawApp, {
       activeMinutes: CHAT_SESSIONS_ACTIVE_MINUTES,
     });
+    const app = host as unknown as OpenClawApp;
+    const key = payload.sessionKey;
+    const prev = app.sessionUnreadCounts.get(key) ?? 0;
+    app.sessionUnreadCounts = new Map(app.sessionUnreadCounts).set(key, prev + 1);
     return;
   }
 
