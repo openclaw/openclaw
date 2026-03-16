@@ -85,8 +85,8 @@ See [Memory](/concepts/memory).
 - **Kimi (Moonshot)**: `KIMI_API_KEY`, `MOONSHOT_API_KEY`, or `tools.web.search.kimi.apiKey`
 - **Perplexity Search API**: `PERPLEXITY_API_KEY`, `OPENROUTER_API_KEY`, or `tools.web.search.perplexity.apiKey`
 
-**Brave Search free credit:** Each Brave plan includes $5/month in renewing
-free credit. The Search plan costs $5 per 1,000 requests, so the credit covers
+**Brave Search free credit:** Each Brave plan includes \$5/month in renewing
+free credit. The Search plan costs \$5 per 1,000 requests, so the credit covers
 1,000 requests/month at no charge. Set your usage limit in the Brave dashboard
 to avoid unexpected charges.
 

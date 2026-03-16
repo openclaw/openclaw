@@ -1,0 +1,12 @@
+{
+  "id": "kimi-coding",
+  "providers": ["kimi-coding"],
+  "providerAuthEnvVars": {
+    "kimi-coding": ["KIMI_API_KEY", "KIMICODE_API_KEY"]
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}
