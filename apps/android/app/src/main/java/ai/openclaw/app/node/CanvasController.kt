@@ -34,6 +34,7 @@ class CanvasController {
   @Volatile private var debugStatusEnabled: Boolean = false
   @Volatile private var debugStatusTitle: String? = null
   @Volatile private var debugStatusSubtitle: String? = null
+  @Volatile private var homeCanvasStateJson: String? = null
   private val _currentUrl = MutableStateFlow<String?>(null)
   val currentUrl: StateFlow<String?> = _currentUrl.asStateFlow()
 
@@ -56,6 +57,7 @@ class CanvasController {
     this.webView = webView
     reload()
     applyDebugStatus()
+    applyHomeCanvasState()
   }
 
   fun detach(webView: WebView) {
@@ -88,6 +90,12 @@ class CanvasController {
 
   fun onPageFinished() {
     applyDebugStatus()
+    applyHomeCanvasState()
+  }
+
+  fun updateHomeCanvasState(json: String?) {
+    homeCanvasStateJson = json
+    applyHomeCanvasState()
   }
 
   private inline fun withWebViewOnMain(crossinline block: (WebView) -> Unit) {
@@ -135,6 +143,22 @@ class CanvasController {
             if (typeof api.setStatus === 'function') {
               api.setStatus($titleJs, $subtitleJs);
             }
+          } catch (_) {}
+        })();
+      """.trimIndent()
+      wv.evaluateJavascript(js, null)
+    }
+  }
+
+  private fun applyHomeCanvasState() {
+    val payload = homeCanvasStateJson ?: "null"
+    withWebViewOnMain { wv ->
+      val js = """
+        (() => {
+          try {
+            const api = globalThis.__openclaw;
+            if (!api || typeof api.renderHome !== 'function') return;
+            api.renderHome($payload);
           } catch (_) {}
         })();
       """.trimIndent()

@@ -1,6 +1,6 @@
 {
   "name": "@openclaw/mattermost",
-  "version": "2026.3.12",
+  "version": "2026.3.14",
   "description": "OpenClaw Mattermost channel plugin",
   "type": "module",
   "dependencies": {
@@ -11,6 +11,7 @@
     "extensions": [
       "./index.ts"
     ],
+    "setupEntry": "./setup-entry.ts",
     "channel": {
       "id": "mattermost",
       "label": "Mattermost",

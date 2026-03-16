@@ -29,6 +29,56 @@ describe("memory search config", () => {
     });
   }
 
+  function expectEmptyMultimodalConfig(resolved: ReturnType<typeof resolveMemorySearchConfig>) {
+    expect(resolved?.multimodal).toEqual({
+      enabled: true,
+      modalities: [],
+      maxFileBytes: 10 * 1024 * 1024,
+    });
+  }
+
+  function configWithRemoteDefaults(remote: Record<string, unknown>) {
+    return asConfig({
+      agents: {
+        defaults: {
+          memorySearch: {
+            provider: "openai",
+            remote,
+          },
+        },
+        list: [
+          {
+            id: "main",
+            default: true,
+            memorySearch: {
+              remote: {
+                baseUrl: "https://agent.example/v1",
+              },
+            },
+          },
+        ],
+      },
+    });
+  }
+
+  function expectMergedRemoteConfig(
+    resolved: ReturnType<typeof resolveMemorySearchConfig>,
+    apiKey: unknown,
+  ) {
+    expect(resolved?.remote).toEqual({
+      baseUrl: "https://agent.example/v1",
+      apiKey,
+      headers: { "X-Default": "on" },
+      batch: {
+        enabled: false,
+        wait: true,
+        concurrency: 2,
+        pollIntervalMs: 2000,
+        timeoutMinutes: 60,
+      },
+    });
+  }
+
   it("returns null when disabled", () => {
     const cfg = asConfig({
       agents: {
@@ -171,11 +221,7 @@ describe("memory search config", () => {
       },
     });
     const resolved = resolveMemorySearchConfig(cfg, "main");
-    expect(resolved?.multimodal).toEqual({
-      enabled: true,
-      modalities: [],
-      maxFileBytes: 10 * 1024 * 1024,
-    });
+    expectEmptyMultimodalConfig(resolved);
     expect(resolved?.provider).toBe("gemini");
   });
 
@@ -196,11 +242,7 @@ describe("memory search config", () => {
       },
     });
     const resolved = resolveMemorySearchConfig(cfg, "main");
-    expect(resolved?.multimodal).toEqual({
-      enabled: true,
-      modalities: [],
-      maxFileBytes: 10 * 1024 * 1024,
-    });
+    expectEmptyMultimodalConfig(resolved);
   });
 
   it("rejects multimodal memory on unsupported providers", () => {
@@ -289,85 +331,27 @@ describe("memory search config", () => {
   });
 
   it("merges remote defaults with agent overrides", () => {
-    const cfg = asConfig({
-      agents: {
-        defaults: {
-          memorySearch: {
-            provider: "openai",
-            remote: {
-              baseUrl: "https://default.example/v1",
-              apiKey: "default-key", // pragma: allowlist secret
-              headers: { "X-Default": "on" },
-            },
-          },
-        },
-        list: [
-          {
-            id: "main",
-            default: true,
-            memorySearch: {
-              remote: {
-                baseUrl: "https://agent.example/v1",
-              },
-            },
-          },
-        ],
-      },
-    });
-    const resolved = resolveMemorySearchConfig(cfg, "main");
-    expect(resolved?.remote).toEqual({
-      baseUrl: "https://agent.example/v1",
+    const cfg = configWithRemoteDefaults({
+      baseUrl: "https://default.example/v1",
       apiKey: "default-key", // pragma: allowlist secret
       headers: { "X-Default": "on" },
-      batch: {
-        enabled: false,
-        wait: true,
-        concurrency: 2,
-        pollIntervalMs: 2000,
-        timeoutMinutes: 60,
-      },
     });
+    const resolved = resolveMemorySearchConfig(cfg, "main");
+    expectMergedRemoteConfig(resolved, "default-key"); // pragma: allowlist secret
   });
 
   it("preserves SecretRef remote apiKey when merging defaults with agent overrides", () => {
-    const cfg = asConfig({
-      agents: {
-        defaults: {
-          memorySearch: {
-            provider: "openai",
-            remote: {
-              apiKey: { source: "env", provider: "default", id: "OPENAI_API_KEY" }, // pragma: allowlist secret
-              headers: { "X-Default": "on" },
-            },
-          },
-        },
-        list: [
-          {
-            id: "main",
-            default: true,
-            memorySearch: {
-              remote: {
-                baseUrl: "https://agent.example/v1",
-              },
-            },
-          },
-        ],
-      },
+    const cfg = configWithRemoteDefaults({
+      apiKey: { source: "env", provider: "default", id: "OPENAI_API_KEY" }, // pragma: allowlist secret
+      headers: { "X-Default": "on" },
     });
 
     const resolved = resolveMemorySearchConfig(cfg, "main");
 
-    expect(resolved?.remote).toEqual({
-      baseUrl: "https://agent.example/v1",
-      apiKey: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
-      headers: { "X-Default": "on" },
-      batch: {
-        enabled: false,
-        wait: true,
-        concurrency: 2,
-        pollIntervalMs: 2000,
-        timeoutMinutes: 60,
-      },
+    expectMergedRemoteConfig(resolved, {
+      source: "env",
+      provider: "default",
+      id: "OPENAI_API_KEY",
     });
   });
 

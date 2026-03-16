@@ -3,7 +3,7 @@ import { logVerbose } from "../../globals.js";
 import {
   isTelegramExecApprovalApprover,
   isTelegramExecApprovalClientEnabled,
-} from "../../telegram/exec-approvals.js";
+} from "../../plugin-sdk-internal/telegram.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../../utils/message-channel.js";
 import { requireGatewayClientScopeForInternalChannel } from "./command-gates.js";
 import type { CommandHandler } from "./commands-types.js";
