@@ -175,6 +175,17 @@ ${DISPLAY_HIDDEN_PREFIX_END}
 Real user text`;
     expect(stripLeadingInboundMetadata(input)).toBe("Real user text");
   });
+
+  it("strips hidden blocks that follow leading inbound metadata", () => {
+    const input = `${CONV_BLOCK}
+
+${DISPLAY_HIDDEN_PREFIX_START}
+internal prepend
+${DISPLAY_HIDDEN_PREFIX_END}
+
+Real user text`;
+    expect(stripLeadingInboundMetadata(input)).toBe("Real user text");
+  });
 });
 
 describe("wrapHiddenDisplayContext", () => {
@@ -184,6 +195,14 @@ describe("wrapHiddenDisplayContext", () => {
 internal prepend
 ${DISPLAY_HIDDEN_PREFIX_END}`,
     );
+  });
+
+  it("rejects content containing the end marker", () => {
+    expect(() =>
+      wrapHiddenDisplayContext(`line 1
+${DISPLAY_HIDDEN_PREFIX_END}
+line 3`),
+    ).toThrow(`content must not contain the end marker "${DISPLAY_HIDDEN_PREFIX_END}"`);
   });
 });
 

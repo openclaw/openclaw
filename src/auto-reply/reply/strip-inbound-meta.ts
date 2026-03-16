@@ -151,6 +151,11 @@ export function wrapHiddenDisplayContext(text: string): string {
   if (!normalized) {
     return "";
   }
+  if (normalized.includes(DISPLAY_HIDDEN_PREFIX_END)) {
+    throw new Error(
+      `wrapHiddenDisplayContext: content must not contain the end marker "${DISPLAY_HIDDEN_PREFIX_END}"`,
+    );
+  }
   return `${DISPLAY_HIDDEN_PREFIX_START}\n${normalized}\n${DISPLAY_HIDDEN_PREFIX_END}`;
 }
 
