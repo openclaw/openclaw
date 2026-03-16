@@ -274,4 +274,65 @@ describe("set_thinking_level tool", () => {
       loadSessionStore(fixture.storePath, { skipCache: true })[fixture.sessionKey]?.thinkingLevel,
     ).toBe("high");
   });
+
+  it("parses raw skill-dispatch command args", async () => {
+    const fixture = await createSessionFixture();
+    tempRoots.push(fixture.root);
+    const thinking = createThinkingState({ defaultLevel: "off", sessionLevel: "low" });
+    const applied: string[] = [];
+    const tool = createSetThinkingLevelTool({
+      agentSessionKey: fixture.sessionKey,
+      config: fixture.cfg,
+      provider: "openai",
+      modelId: "gpt-5",
+      getRequestedThinkingLevel: thinking.getCurrent,
+      setRequestedThinkingLevelForScope: thinking.setForScope,
+      applyEffectiveThinkingLevel: (level) => applied.push(level),
+      reasoningSupported: true,
+    });
+
+    const result = await tool.execute("call-raw-command", {
+      command: "high turn",
+    });
+
+    expect(result.details).toMatchObject({
+      ok: true,
+      currentRequestedLevel: "high",
+      scope: "turn",
+      effectiveLevel: "high",
+    });
+    expect(thinking.state.turnLevel).toBe("high");
+    expect(applied).toEqual(["high"]);
+  });
+
+  it("parses key=value raw skill-dispatch command args", async () => {
+    const fixture = await createSessionFixture();
+    tempRoots.push(fixture.root);
+    const thinking = createThinkingState({ defaultLevel: "off", sessionLevel: "low" });
+    const tool = createSetThinkingLevelTool({
+      agentSessionKey: fixture.sessionKey,
+      config: fixture.cfg,
+      provider: "openai",
+      modelId: "gpt-5",
+      getRequestedThinkingLevel: thinking.getCurrent,
+      setRequestedThinkingLevelForScope: thinking.setForScope,
+      reasoningSupported: true,
+    });
+
+    const result = await tool.execute("call-raw-keyvalue", {
+      command: "scope=session level=medium",
+    });
+
+    expect(result.details).toMatchObject({
+      ok: true,
+      currentRequestedLevel: "medium",
+      scope: "session",
+      effectiveLevel: "medium",
+      persisted: true,
+    });
+    expect(thinking.state.sessionLevel).toBe("medium");
+    expect(
+      loadSessionStore(fixture.storePath, { skipCache: true })[fixture.sessionKey]?.thinkingLevel,
+    ).toBe("medium");
+  });
 });

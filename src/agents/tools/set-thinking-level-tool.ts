@@ -62,6 +62,55 @@ function resolveToolThinkingScope(raw: string): "turn" | "session" {
   throw new ToolInputError(`Invalid scope "${raw}". Use one of: turn|session.`);
 }
 
+function resolveSetThinkingLevelArgs(args: Record<string, unknown>): {
+  level: string;
+  scope: "turn" | "session";
+} {
+  const structuredLevel = typeof args.level === "string" ? args.level.trim() : "";
+  const structuredScope = typeof args.scope === "string" ? args.scope.trim() : "";
+  if (structuredLevel && structuredScope) {
+    return {
+      level: structuredLevel,
+      scope: resolveToolThinkingScope(structuredScope),
+    };
+  }
+
+  const rawCommand = typeof args.command === "string" ? args.command.trim() : "";
+  if (!rawCommand) {
+    return {
+      level: readStringParam(args, "level", { required: true }),
+      scope: resolveToolThinkingScope(readStringParam(args, "scope", { required: true })),
+    };
+  }
+
+  const tokenMap = new Map<string, string>();
+  const positional: string[] = [];
+  for (const token of rawCommand.split(/\s+/).filter(Boolean)) {
+    const eqIndex = token.indexOf("=");
+    if (eqIndex > 0) {
+      tokenMap.set(token.slice(0, eqIndex).toLowerCase(), token.slice(eqIndex + 1));
+      continue;
+    }
+    positional.push(token);
+  }
+
+  const rawLevel = tokenMap.get("level") ?? positional.find((token) => normalizeThinkLevel(token));
+  const rawScope =
+    tokenMap.get("scope") ?? positional.find((token) => token === "turn" || token === "session");
+
+  if (!rawLevel) {
+    throw new ToolInputError('Missing required parameter "level".');
+  }
+  if (!rawScope) {
+    throw new ToolInputError('Missing required parameter "scope".');
+  }
+
+  return {
+    level: rawLevel,
+    scope: resolveToolThinkingScope(rawScope),
+  };
+}
+
 export function createSetThinkingLevelTool(opts?: {
   agentSessionKey?: string;
   config?: OpenClawConfig;
@@ -81,10 +130,9 @@ export function createSetThinkingLevelTool(opts?: {
     parameters: SetThinkingLevelToolSchema,
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;
-      const scope = resolveToolThinkingScope(readStringParam(params, "scope", { required: true }));
+      const { level: levelRaw, scope } = resolveSetThinkingLevelArgs(params);
       const cfg = options.config ?? loadConfig();
       const priorRequestedLevel = options.getRequestedThinkingLevel?.();
-      const levelRaw = readStringParam(params, "level", { required: true });
       if (
         scope === "turn" &&
         (!options.setRequestedThinkingLevelForScope || !options.applyEffectiveThinkingLevel)

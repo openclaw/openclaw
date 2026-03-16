@@ -1517,7 +1517,9 @@ export async function runEmbeddedAttempt(
         callerRequestedThinkingLevel &&
         callerRequestedThinkingLevel !== storedSessionThinkingLevel
       ) {
-        return callerRequestedThinkingLevel;
+        return callerRequestedThinkingLevel !== initialDefaultThinkingLevel
+          ? callerRequestedThinkingLevel
+          : storedSessionThinkingLevel;
       }
 
       return storedSessionThinkingLevel;
