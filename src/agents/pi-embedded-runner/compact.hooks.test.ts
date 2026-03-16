@@ -307,6 +307,7 @@ vi.mock("./sandbox-info.js", () => ({
 vi.mock("./model.js", () => ({
   buildModelAliasLines: vi.fn(() => []),
   resolveModel: resolveModelMock,
+  resolveModelAsync: vi.fn(async (...args: unknown[]) => resolveModelMock(...args)),
 }));
 
 vi.mock("./session-manager-cache.js", () => ({
@@ -446,6 +447,21 @@ describe("compactEmbeddedPiSessionDirect hooks", () => {
     expect(ensureRuntimePluginsLoaded).toHaveBeenCalledWith({
       config: undefined,
       workspaceDir: "/tmp/workspace",
+    });
+  });
+
+  it("forwards gateway subagent binding opt-in during compaction bootstrap", async () => {
+    await compactEmbeddedPiSessionDirect({
+      sessionId: "session-1",
+      sessionFile: "/tmp/session.jsonl",
+      workspaceDir: "/tmp/workspace",
+      allowGatewaySubagentBinding: true,
+    });
+
+    expect(ensureRuntimePluginsLoaded).toHaveBeenCalledWith({
+      config: undefined,
+      workspaceDir: "/tmp/workspace",
+      allowGatewaySubagentBinding: true,
     });
   });
 

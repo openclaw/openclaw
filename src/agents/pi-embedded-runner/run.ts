@@ -302,6 +302,7 @@ export async function runEmbeddedPiAgent(
       ensureRuntimePluginsLoaded({
         config: params.config,
         workspaceDir: resolvedWorkspace,
+        allowGatewaySubagentBinding: params.allowGatewaySubagentBinding,
       });
       const prevCwd = process.cwd();
 

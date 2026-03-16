@@ -177,9 +177,9 @@ export function loadGatewayPlugins(params: {
   logDiagnostics?: boolean;
 }) {
   // Set the process-global gateway subagent runtime BEFORE loading plugins.
-  // This ensures that even if plugins are loaded (or re-loaded) by non-gateway
-  // code paths that don't pass subagent options, their late-binding subagent
-  // proxy will resolve to the real gateway implementation.
+  // Gateway-owned registries may already exist from schema loads, so the
+  // gateway path opts those runtimes into late binding rather than changing
+  // the default subagent behavior for every plugin runtime in the process.
   const gatewaySubagent = createGatewaySubagentRuntime();
   setGatewaySubagentRuntime(gatewaySubagent);
 
@@ -194,7 +194,7 @@ export function loadGatewayPlugins(params: {
     },
     coreGatewayHandlers: params.coreGatewayHandlers,
     runtimeOptions: {
-      subagent: gatewaySubagent,
+      allowGatewaySubagentBinding: true,
     },
     preferSetupRuntimeForChannelPlugins: params.preferSetupRuntimeForChannelPlugins,
   });
