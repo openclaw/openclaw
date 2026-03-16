@@ -74,16 +74,16 @@ Use `plugin@marketplace` shorthand when the marketplace name exists in Claude's
 local registry cache at `~/.claude/plugins/known_marketplaces.json`:
 
 ```bash
-openclaw plugins marketplace list claude-plugins-official
-openclaw plugins install superpowers@claude-plugins-official
+openclaw plugins marketplace list <marketplace-name>
+openclaw plugins install <plugin-name>@<marketplace-name>
 ```
 
 Use `--marketplace` when you want to pass the marketplace source explicitly:
 
 ```bash
-openclaw plugins install superpowers --marketplace claude-plugins-official
-openclaw plugins install superpowers --marketplace anthropics/claude-plugins-official
-openclaw plugins install superpowers --marketplace ./my-marketplace
+openclaw plugins install <plugin-name> --marketplace <marketplace-name>
+openclaw plugins install <plugin-name> --marketplace <owner/repo>
+openclaw plugins install <plugin-name> --marketplace ./my-marketplace
 ```
 
 Marketplace sources can be:
