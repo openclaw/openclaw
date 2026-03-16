@@ -36,6 +36,9 @@ vi.mock("./openrouter-model-capabilities.js", () => ({
     mockLoadOpenRouterModelCapabilities(modelId),
 }));
 
+const CALL_THROUGH = Symbol("call-through");
+const mockRunProviderDynamicModel = vi.fn<(...args: unknown[]) => unknown>(() => CALL_THROUGH);
+
 import type { OpenClawConfig } from "../../config/config.js";
 import { buildForwardCompatTemplate } from "./model.forward-compat.test-support.js";
 import { buildInlineProviderModels, resolveModel, resolveModelAsync } from "./model.js";
@@ -53,10 +56,12 @@ beforeEach(() => {
   mockGetOpenRouterModelCapabilities.mockReturnValue(undefined);
   mockLoadOpenRouterModelCapabilities.mockReset();
   mockLoadOpenRouterModelCapabilities.mockResolvedValue();
+  mockRunProviderDynamicModel.mockReset();
+  mockRunProviderDynamicModel.mockReturnValue(CALL_THROUGH);
 });
 
 function createRuntimeHooks() {
-  return createProviderRuntimeTestMock({
+  const baseMock = createProviderRuntimeTestMock({
     handledDynamicProviders: [
       "openrouter",
       "github-copilot",
@@ -71,6 +76,19 @@ function createRuntimeHooks() {
       await mockLoadOpenRouterModelCapabilities(modelId);
     },
   });
+  const originalRunProviderDynamicModel = baseMock.runProviderDynamicModel;
+  return {
+    ...baseMock,
+    runProviderDynamicModel: (
+      ...args: Parameters<typeof originalRunProviderDynamicModel>
+    ): ReturnType<typeof originalRunProviderDynamicModel> => {
+      const mockResult = mockRunProviderDynamicModel(...args);
+      if (mockResult !== CALL_THROUGH) {
+        return mockResult as ReturnType<typeof originalRunProviderDynamicModel>;
+      }
+      return originalRunProviderDynamicModel(...args);
+    },
+  };
 }
 
 function resolveModelForTest(
@@ -815,6 +833,188 @@ describe("resolveModel", () => {
       provider: "openrouter",
       id: "openai/gpt-4o",
       input: ["text", "image"],
+    });
+  });
+
+  it("applies vision heuristic to plugin-resolved OpenRouter models", () => {
+    // When the plugin resolves an OpenRouter model with text-only input,
+    // the vision heuristic should augment it with image support for known vision models.
+    mockRunProviderDynamicModel.mockReturnValue({
+      id: "anthropic/claude-sonnet-4-5",
+      name: "Anthropic: Claude Sonnet 4.5",
+      api: "openai-completions",
+      provider: "openrouter",
+      baseUrl: "https://openrouter.ai/api/v1",
+      reasoning: true,
+      input: ["text"],
+      cost: { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75 },
+      contextWindow: 200000,
+      maxTokens: 8192,
+    });
+
+    const result = resolveModel("openrouter", "anthropic/claude-sonnet-4-5", "/tmp/agent");
+
+    expect(result.error).toBeUndefined();
+    expect(result.model).toMatchObject({
+      provider: "openrouter",
+      id: "anthropic/claude-sonnet-4-5",
+      input: ["text", "image"],
+    });
+  });
+
+  it("does not apply vision heuristic to plugin-resolved non-vision OpenRouter models", () => {
+    mockRunProviderDynamicModel.mockReturnValue({
+      id: "deepseek/deepseek-chat",
+      name: "DeepSeek: Chat",
+      api: "openai-completions",
+      provider: "openrouter",
+      baseUrl: "https://openrouter.ai/api/v1",
+      reasoning: false,
+      input: ["text"],
+      cost: { input: 0.14, output: 0.28, cacheRead: 0.014, cacheWrite: 0 },
+      contextWindow: 64000,
+      maxTokens: 8192,
+    });
+
+    const result = resolveModel("openrouter", "deepseek/deepseek-chat", "/tmp/agent");
+
+    expect(result.error).toBeUndefined();
+    expect(result.model).toMatchObject({
+      provider: "openrouter",
+      id: "deepseek/deepseek-chat",
+      input: ["text"],
+    });
+  });
+
+  it("honors explicit config input over vision heuristic for plugin-resolved OpenRouter models", () => {
+    // When explicit config specifies text-only for a model that would match the vision heuristic,
+    // the config should take precedence.
+    mockRunProviderDynamicModel.mockReturnValue({
+      id: "anthropic/claude-3-haiku",
+      name: "Anthropic: Claude 3 Haiku",
+      api: "openai-completions",
+      provider: "openrouter",
+      baseUrl: "https://openrouter.ai/api/v1",
+      reasoning: false,
+      input: ["text"],
+      cost: { input: 0.25, output: 1.25, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 200000,
+      maxTokens: 8192,
+    });
+
+    const cfg = {
+      models: {
+        providers: {
+          openrouter: {
+            models: [
+              {
+                ...makeModel("anthropic/claude-3-haiku"),
+                input: ["text"],
+              },
+            ],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const result = resolveModel("openrouter", "anthropic/claude-3-haiku", "/tmp/agent", cfg);
+
+    expect(result.error).toBeUndefined();
+    expect(result.model).toMatchObject({
+      provider: "openrouter",
+      id: "anthropic/claude-3-haiku",
+      input: ["text"],
+    });
+  });
+
+  it("uses explicit config input with image for plugin-resolved OpenRouter models", () => {
+    // When explicit config specifies image input, it should be honored
+    // even if the plugin returned text-only.
+    mockRunProviderDynamicModel.mockReturnValue({
+      id: "custom/my-vision-model",
+      name: "Custom Vision Model",
+      api: "openai-completions",
+      provider: "openrouter",
+      baseUrl: "https://openrouter.ai/api/v1",
+      reasoning: false,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 128000,
+      maxTokens: 8192,
+    });
+
+    const cfg = {
+      models: {
+        providers: {
+          openrouter: {
+            models: [
+              {
+                ...makeModel("custom/my-vision-model"),
+                input: ["text", "image"],
+              },
+            ],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const result = resolveModel("openrouter", "custom/my-vision-model", "/tmp/agent", cfg);
+
+    expect(result.error).toBeUndefined();
+    expect(result.model).toMatchObject({
+      provider: "openrouter",
+      id: "custom/my-vision-model",
+      input: ["text", "image"],
+    });
+  });
+
+  it("preserves plugin-resolved image input for OpenRouter models", () => {
+    // If the plugin already returns image input, don't overwrite it.
+    mockRunProviderDynamicModel.mockReturnValue({
+      id: "openai/gpt-4o",
+      name: "OpenAI: GPT-4o",
+      api: "openai-completions",
+      provider: "openrouter",
+      baseUrl: "https://openrouter.ai/api/v1",
+      reasoning: false,
+      input: ["text", "image"],
+      cost: { input: 2.5, output: 10, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 128000,
+      maxTokens: 16384,
+    });
+
+    const result = resolveModel("openrouter", "openai/gpt-4o", "/tmp/agent");
+
+    expect(result.error).toBeUndefined();
+    expect(result.model).toMatchObject({
+      provider: "openrouter",
+      id: "openai/gpt-4o",
+      input: ["text", "image"],
+    });
+  });
+
+  it("does not apply vision heuristic to plugin-resolved non-OpenRouter models", () => {
+    // Vision heuristic is OpenRouter-specific; other providers should not be affected.
+    mockRunProviderDynamicModel.mockReturnValue({
+      id: "claude-sonnet-4-5",
+      name: "Claude Sonnet 4.5",
+      api: "anthropic-messages",
+      provider: "anthropic",
+      baseUrl: "https://api.anthropic.com",
+      reasoning: true,
+      input: ["text"],
+      cost: { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75 },
+      contextWindow: 200000,
+      maxTokens: 8192,
+    });
+
+    const result = resolveModel("anthropic", "claude-sonnet-4-5", "/tmp/agent");
+
+    expect(result.error).toBeUndefined();
+    expect(result.model).toMatchObject({
+      provider: "anthropic",
+      id: "claude-sonnet-4-5",
+      input: ["text"],
     });
   });
 

@@ -471,9 +471,26 @@ function resolvePluginDynamicModelWithRegistry(params: {
   if (!pluginDynamicModel) {
     return undefined;
   }
+  let resolvedPluginModel: Model<Api> = pluginDynamicModel;
+  // For OpenRouter, apply vision heuristic even when the plugin catalog resolves the model.
+  // The plugin's capability lookup may return an empty or text-only input list for models
+  // that actually support vision. Honor explicit user config first, then fall back to heuristic.
+  if (normalizedProvider === "openrouter") {
+    const configuredOpenRouterModel = providerConfig?.models?.find(
+      (candidate) => candidate.id === modelId,
+    );
+    const configuredInput = configuredOpenRouterModel?.input
+      ? configuredOpenRouterModel.input.filter((item) => item === "text" || item === "image")
+      : undefined;
+    if (configuredInput && configuredInput.length > 0) {
+      resolvedPluginModel = { ...resolvedPluginModel, input: configuredInput };
+    } else if (!resolvedPluginModel.input?.includes("image") && isLikelyVisionModel(modelId)) {
+      resolvedPluginModel = { ...resolvedPluginModel, input: ["text", "image"] };
+    }
+  }
   const overriddenDynamicModel = applyConfiguredProviderOverrides({
     provider,
-    discoveredModel: pluginDynamicModel,
+    discoveredModel: resolvedPluginModel,
     providerConfig,
     modelId,
     cfg,
