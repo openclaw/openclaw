@@ -192,6 +192,79 @@ function headerValue(value: string | string[] | undefined): string | undefined {
   return Array.isArray(value) ? value[0] : value;
 }
 
+export interface StrictHeaderResult {
+  ok: true;
+  value: string;
+}
+export interface StrictHeaderError {
+  ok: false;
+  reason: "duplicate" | "chain-not-allowed" | "missing";
+}
+export type StrictHeaderParseResult = StrictHeaderResult | StrictHeaderError;
+
+const SENSITIVE_HEADERS = new Set([
+  "host",
+  "origin",
+  "x-forwarded-host",
+  "x-forwarded-proto",
+  "x-forwarded-for",
+  "x-real-ip",
+  "forwarded",
+]);
+
+export function strictHeader(
+  value: string | string[] | undefined,
+  _headerName?: string,
+): StrictHeaderParseResult {
+  if (value === undefined || value === "") {
+    return { ok: false, reason: "missing" };
+  }
+
+  if (Array.isArray(value)) {
+    if (value.length !== 1) {
+      return { ok: false, reason: "duplicate" };
+    }
+    const single = value[0];
+    if (typeof single !== "string" || !single) {
+      return { ok: false, reason: "missing" };
+    }
+    if (single.includes(",")) {
+      return { ok: false, reason: "chain-not-allowed" };
+    }
+    return { ok: true, value: single.trim() };
+  }
+
+  if (typeof value !== "string" || !value) {
+    return { ok: false, reason: "missing" };
+  }
+
+  if (value.includes(",")) {
+    return { ok: false, reason: "chain-not-allowed" };
+  }
+
+  return { ok: true, value: value.trim() };
+}
+
+export function validateSensitiveHeaders(
+  headers: Record<string, string | string[] | undefined>,
+): { ok: false; header: string; reason: string } | { ok: true } {
+  for (const headerName of SENSITIVE_HEADERS) {
+    const value = headers[headerName];
+    if (value === undefined) {
+      continue;
+    }
+    const result = strictHeader(value, headerName);
+    if (!result.ok) {
+      return {
+        ok: false,
+        header: headerName,
+        reason: result.reason,
+      };
+    }
+  }
+  return { ok: true };
+}
+
 export function extractNormalizedHeader(
   headers: Record<string, string | string[] | undefined>,
   name: string,

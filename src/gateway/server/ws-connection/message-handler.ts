@@ -32,11 +32,7 @@ import {
   CANVAS_CAPABILITY_TTL_MS,
   mintCanvasCapabilityToken,
 } from "../../canvas-capability.js";
-import {
-  createSessionCapabilities,
-  hasCapability,
-  validateCapabilityAccess,
-} from "../../capabilities.js";
+import { createSessionCapabilities, validateCapabilityAccess } from "../../capabilities.js";
 import { normalizeDeviceMetadataForAuth } from "../../device-auth.js";
 import { authorizeMessage, createMessageAuthContext } from "../../message-auth.js";
 import {
@@ -45,7 +41,6 @@ import {
   isLoopbackAddress,
   isTrustedProxyAddress,
   resolveClientIp,
-  strictHeader,
   validateSensitiveHeaders,
 } from "../../net.js";
 import { resolveNodeCommandAllowlist } from "../../node-command-policy.js";
@@ -76,7 +71,7 @@ import {
 import { handleGatewayRequest } from "../../server-methods.js";
 import type { GatewayRequestContext, GatewayRequestHandlers } from "../../server-methods/types.js";
 import { formatError } from "../../server-utils.js";
-import { classifyWsEndpoint, getEndpointSecurity, WS_ENDPOINT } from "../../ws-endpoint.js";
+import { classifyWsEndpoint, getEndpointSecurity } from "../../ws-endpoint.js";
 import { formatForLog, logWs } from "../../ws-log.js";
 import {
   createRateLimiterState,

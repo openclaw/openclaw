@@ -13,13 +13,13 @@ This guide covers using Caddy as a secure reverse proxy in front of OpenClaw, pr
 
 ## Why Caddy?
 
-| Feature | Benefit |
-|---------|---------|
-| **Automatic HTTPS** | TLS certificates managed automatically |
-| **mTLS Support** | Client certificate authentication |
-| **OAuth2 Proxy** | Built-in authentication flow |
+| Feature               | Benefit                                    |
+| --------------------- | ------------------------------------------ |
+| **Automatic HTTPS**   | TLS certificates managed automatically     |
+| **mTLS Support**      | Client certificate authentication          |
+| **OAuth2 Proxy**      | Built-in authentication flow               |
 | **WebSocket Support** | Full support for OpenClaw's WS connections |
-| **Zero-config** | Works out of the box |
+| **Zero-config**       | Works out of the box                       |
 
 ## Architecture
 
@@ -28,11 +28,13 @@ Internet → Caddy (mTLS + OAuth) → OpenClaw Gateway
 ```
 
 Caddy handles:
+
 - TLS termination (including mTLS)
 - OAuth2 authentication
 - User identity headers
 
 OpenClaw handles:
+
 - Origin validation
 - Signed token verification
 - Device capability authorization
@@ -46,6 +48,7 @@ Client → [mTLS handshake with Caddy] → Caddy → [plain HTTP] → OpenClaw
 ```
 
 Caddy configuration:
+
 ```Caddyfile
 tls {
     client_auth {
@@ -107,7 +110,7 @@ openclaw.yourdomain.com {
             trusted_ca_cert_file /path/to/ca.crt
         }
     }
-    
+
     reverse_proxy localhost:18789 {
         header_up X-Client-CN "{tls_client.subject_common_name}"
         header_up X-Client-Verified "{tls_client.verified}"
@@ -146,7 +149,7 @@ openclaw.yourdomain.com {
         redirect_url https://openclaw.yourdomain.com/oauth2/callback
         scopes openid email profile
     }
-    
+
     reverse_proxy localhost:18789 {
         header_up X-Forwarded-User "{oauth2.user.name}"
         header_up X-Forwarded-Email "{oauth2.user.email}"
@@ -188,7 +191,7 @@ gateway:
       userHeader: "x-forwarded-user"
       signedTokenHeader: "x-proxy-signed-token"
       sharedSecret: "${OPENCLAW_PROXY_SECRET}"
-      signedTokenRequired: false  # Set true to enforce
+      signedTokenRequired: false # Set true to enforce
 ```
 
 ### 2. Caddy Configuration
@@ -209,6 +212,7 @@ openclaw.yourdomain.com {
 The token is: `base64url(payload).base64url(signature)`
 
 **Payload:**
+
 ```json
 {
   "sub": "user@example.com",
@@ -220,6 +224,7 @@ The token is: `base64url(payload).base64url(signature)`
 ```
 
 **Signature:**
+
 ```
 HMAC-SHA256(sharedSecret, base64url(payload))
 ```
@@ -243,19 +248,19 @@ def create_signed_token(secret, user, origin):
         "exp": int(time.time()) + 300,
         "nonce": os.urandom(16).hex()
     }
-    
+
     payload_b64 = base64.urlsafe_b64encode(
         json.dumps(payload).encode()
     ).decode().rstrip('=')
-    
+
     signature = hmac.new(
         secret.encode(),
         payload_b64.encode(),
         hashlib.sha256
     ).digest()
-    
+
     sig_b64 = base64.urlsafe_b64encode(signature).decode().rstrip('=')
-    
+
     return f"{payload_b64}.{sig_b64}"
 ```
 
@@ -270,7 +275,7 @@ openclaw.yourdomain.com {
             trusted_ca_cert_file /etc/caddy/ca.crt
         }
     }
-    
+
     # OAuth authentication
     oauth {
         client_id your_client_id
@@ -278,13 +283,13 @@ openclaw.yourdomain.com {
         provider keycloak https://keycloak.yourdomain.com/realms/company
         scopes openid email profile
     }
-    
+
     # Reverse proxy with headers
     reverse_proxy localhost:18789 {
         header_up X-Forwarded-User "{oauth2.user.name}"
         header_up X-Forwarded-Email "{oauth2.user.email}"
         header_up X-Forwarded-Proto "{scheme}"
-        
+
         # Signed token for defense-in-depth
         header_up X-Proxy-Signed-Token "{hmac_sha256:your-secret:{http.request.header.Origin}}"
     }
@@ -293,12 +298,12 @@ openclaw.yourdomain.com {
 
 ## Security Comparison
 
-| Setup | Security Level | Use Case |
-|-------|---------------|----------|
-| Basic HTTP + Auth Mode | Standard | Development |
-| TLS + trusted-proxy | Good | Production (team) |
-| TLS + OAuth + trusted-proxy | Better | Production (company) |
-| mTLS + OAuth + signed tokens | **Best** | High-security Enterprise |
+| Setup                        | Security Level | Use Case                 |
+| ---------------------------- | -------------- | ------------------------ |
+| Basic HTTP + Auth Mode       | Standard       | Development              |
+| TLS + trusted-proxy          | Good           | Production (team)        |
+| TLS + OAuth + trusted-proxy  | Better         | Production (company)     |
+| mTLS + OAuth + signed tokens | **Best**       | High-security Enterprise |
 
 ## Troubleshooting
 
