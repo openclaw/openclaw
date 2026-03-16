@@ -8,7 +8,6 @@ export {
   readReactionParams,
   readStringParam,
 } from "../agents/tools/common.js";
-export type { ChannelDock } from "../channels/dock.js";
 export { resolveMentionGatingWithBypass } from "../channels/mention-gating.js";
 export {
   deleteAccountFromConfigSection,

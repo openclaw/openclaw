@@ -1,6 +1,6 @@
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/zalo";
 import { emptyPluginConfigSchema } from "openclaw/plugin-sdk/zalo";
-import { zaloDock, zaloPlugin } from "./src/channel.js";
+import { zaloPlugin } from "./src/channel.js";
 import { setZaloRuntime } from "./src/runtime.js";
 
 const plugin = {
@@ -10,7 +10,7 @@ const plugin = {
   configSchema: emptyPluginConfigSchema(),
   register(api: OpenClawPluginApi) {
     setZaloRuntime(api.runtime);
-    api.registerChannel({ plugin: zaloPlugin, dock: zaloDock });
+    api.registerChannel(zaloPlugin);
   },
 };
 

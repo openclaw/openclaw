@@ -3,11 +3,13 @@ import type { OpenClawConfig } from "../../../config/config.js";
 import type {
   ChannelAccountSnapshot,
   ChannelAccountState,
-  ChannelMessageCapability,
   ChannelSetupInput,
 } from "../types.core.js";
-import type { ChannelPlugin } from "../types.js";
-import type { ChannelMessageActionName } from "../types.js";
+import type {
+  ChannelMessageActionName,
+  ChannelMessageCapability,
+  ChannelPlugin,
+} from "../types.js";
 
 function sortStrings(values: readonly string[]) {
   return [...values].toSorted((left, right) => left.localeCompare(right));

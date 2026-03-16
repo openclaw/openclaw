@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { discordPlugin } from "../../../extensions/discord/src/channel.js";
 import type { ReplyPayload } from "../../auto-reply/types.js";
+import { setDefaultChannelPluginRegistryForTests } from "../../commands/channel-test-helpers.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createTestRegistry } from "../../test-utils/channel-plugins.js";
@@ -888,6 +889,10 @@ const discordConfig = {
 } as OpenClawConfig;
 
 describe("outbound policy", () => {
+  beforeEach(() => {
+    setDefaultChannelPluginRegistryForTests();
+  });
+
   it("allows cross-provider sends when enabled", () => {
     const cfg = {
       ...slackConfig,
@@ -930,6 +935,10 @@ describe("outbound policy", () => {
 });
 
 describe("resolveOutboundSessionRoute", () => {
+  beforeEach(() => {
+    setDefaultChannelPluginRegistryForTests();
+  });
+
   const baseConfig = {} as OpenClawConfig;
 
   it("resolves provider-specific session routes", async () => {

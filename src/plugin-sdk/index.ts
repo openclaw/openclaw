@@ -248,7 +248,6 @@ export {
   buildNestedDmConfigSchema,
   buildCatchallMultiAccountChannelSchema,
 } from "../channels/plugins/config-schema.js";
-export type { ChannelDock } from "../channels/dock.js";
 export { getChatChannelMeta } from "../channels/registry.js";
 export {
   compileAllowlist,
@@ -330,6 +329,7 @@ export {
   normalizeAgentId,
   resolveThreadSessionKeys,
 } from "../routing/session-key.js";
+export { buildAgentSessionKey, type RoutePeer } from "../routing/resolve-route.js";
 export {
   formatAllowFromLowercase,
   formatNormalizedAllowFromEntries,

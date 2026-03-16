@@ -1,6 +1,5 @@
-import { googlechatDock, googlechatPlugin } from "./src/channel.js";
+import { googlechatPlugin } from "./src/channel.js";
 
 export default {
   plugin: googlechatPlugin,
-  dock: googlechatDock,
 };

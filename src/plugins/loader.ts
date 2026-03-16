@@ -2,7 +2,6 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { createJiti } from "jiti";
-import type { ChannelDock } from "../channels/dock.js";
 import type { ChannelPlugin } from "../channels/plugins/types.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { isChannelConfigured } from "../config/plugin-auto-enable.js";
@@ -407,7 +406,6 @@ function resolvePluginModuleExport(moduleExport: unknown): {
 
 function resolveSetupChannelRegistration(moduleExport: unknown): {
   plugin?: ChannelPlugin;
-  dock?: ChannelDock;
 } {
   const resolved =
     moduleExport &&
@@ -420,14 +418,12 @@ function resolveSetupChannelRegistration(moduleExport: unknown): {
   }
   const setup = resolved as {
     plugin?: unknown;
-    dock?: unknown;
   };
   if (!setup.plugin || typeof setup.plugin !== "object") {
     return {};
   }
   return {
     plugin: setup.plugin as ChannelPlugin,
-    ...(setup.dock && typeof setup.dock === "object" ? { dock: setup.dock as ChannelDock } : {}),
   };
 }
 
@@ -1167,10 +1163,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
           hookPolicy: entry?.hooks,
           registrationMode,
         });
-        api.registerChannel({
-          plugin: setupRegistration.plugin,
-          ...(setupRegistration.dock ? { dock: setupRegistration.dock } : {}),
-        });
+        api.registerChannel(setupRegistration.plugin);
         registry.plugins.push(record);
         seenIds.set(pluginId, candidate.origin);
         continue;
