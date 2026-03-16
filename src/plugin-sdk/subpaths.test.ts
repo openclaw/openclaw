@@ -82,6 +82,8 @@ describe("plugin-sdk subpath exports", () => {
   it("exports LINE helpers", () => {
     expect(typeof lineSdk.processLineMessage).toBe("function");
     expect(typeof lineSdk.createInfoCard).toBe("function");
+    expect(typeof lineSdk.lineSetupWizard).toBe("object");
+    expect(typeof lineSdk.lineSetupAdapter).toBe("object");
   });
 
   it("exports Microsoft Teams helpers", () => {
