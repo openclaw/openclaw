@@ -64,7 +64,10 @@ import { ensureRuntimePluginsLoaded } from "../runtime-plugins.js";
 import { resolveSandboxContext } from "../sandbox.js";
 import { repairSessionFileIfNeeded } from "../session-file-repair.js";
 import { guardSessionManager } from "../session-tool-result-guard-wrapper.js";
-import { sanitizeToolUseResultPairing } from "../session-transcript-repair.js";
+import {
+  repairToolUseResultPairing,
+  sanitizeToolUseResultPairing,
+} from "../session-transcript-repair.js";
 import {
   acquireSessionWriteLock,
   resolveSessionLockMaxHoldFromTimeout,
@@ -147,6 +150,8 @@ export type CompactEmbeddedPiSessionParams = {
   extraSystemPrompt?: string;
   ownerNumbers?: string[];
   abortSignal?: AbortSignal;
+  /** Allow runtime plugins for this compaction to late-bind the gateway subagent. */
+  allowGatewaySubagentBinding?: boolean;
 };
 
 type CompactionMessageMetrics = {
@@ -384,6 +389,7 @@ export async function compactEmbeddedPiSessionDirect(
   ensureRuntimePluginsLoaded({
     config: params.config,
     workspaceDir: resolvedWorkspace,
+    allowGatewaySubagentBinding: params.allowGatewaySubagentBinding,
   });
   const prevCwd = process.cwd();
 
@@ -570,6 +576,7 @@ export async function compactEmbeddedPiSessionDirect(
       groupSpace: params.groupSpace,
       spawnedBy: params.spawnedBy,
       senderIsOwner: params.senderIsOwner,
+      allowGatewaySubagentBinding: params.allowGatewaySubagentBinding,
       agentDir,
       workspaceDir: effectiveWorkspace,
       config: params.config,
@@ -950,6 +957,22 @@ export async function compactEmbeddedPiSessionDirect(
             },
           },
         );
+        // Re-run tool_use/tool_result pairing repair after compaction.
+        // Compaction can remove assistant messages containing tool_use blocks
+        // while leaving orphaned tool_result blocks behind, which causes
+        // Anthropic API 400 errors: "unexpected tool_use_id found in tool_result blocks".
+        // See: https://github.com/openclaw/openclaw/issues/15691
+        if (transcriptPolicy.repairToolUseResultPairing) {
+          const postCompactRepair = repairToolUseResultPairing(session.messages);
+          if (postCompactRepair.droppedOrphanCount > 0 || postCompactRepair.moved) {
+            session.agent.replaceMessages(postCompactRepair.messages);
+            log.info(
+              `[compaction] post-compact repair: dropped ${postCompactRepair.droppedOrphanCount} orphaned tool_result(s), ` +
+                `${postCompactRepair.droppedDuplicateCount} duplicate(s) ` +
+                `(sessionKey=${params.sessionKey ?? params.sessionId})`,
+            );
+          }
+        }
         await runPostCompactionSideEffects({
           config: params.config,
           sessionKey: params.sessionKey,
@@ -1086,6 +1109,7 @@ export async function compactEmbeddedPiSession(
       ensureRuntimePluginsLoaded({
         config: params.config,
         workspaceDir: params.workspaceDir,
+        allowGatewaySubagentBinding: params.allowGatewaySubagentBinding,
       });
       ensureContextEnginesInitialized();
       const contextEngine = await resolveContextEngine(params.config);

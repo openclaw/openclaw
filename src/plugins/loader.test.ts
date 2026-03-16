@@ -297,22 +297,6 @@ function createPluginSdkAliasFixture(params?: {
   return { root, srcFile, distFile };
 }
 
-function createExtensionApiAliasFixture(params?: { srcBody?: string; distBody?: string }) {
-  const root = makeTempDir();
-  const srcFile = path.join(root, "src", "extensionAPI.ts");
-  const distFile = path.join(root, "dist", "extensionAPI.js");
-  mkdirSafe(path.dirname(srcFile));
-  mkdirSafe(path.dirname(distFile));
-  fs.writeFileSync(
-    path.join(root, "package.json"),
-    JSON.stringify({ name: "openclaw", type: "module" }, null, 2),
-    "utf-8",
-  );
-  fs.writeFileSync(srcFile, params?.srcBody ?? "export {};\n", "utf-8");
-  fs.writeFileSync(distFile, params?.distBody ?? "export {};\n", "utf-8");
-  return { root, srcFile, distFile };
-}
-
 function createPluginRuntimeAliasFixture(params?: { srcBody?: string; distBody?: string }) {
   const root = makeTempDir();
   const srcFile = path.join(root, "src", "plugins", "runtime", "index.ts");
@@ -940,6 +924,44 @@ module.exports = { id: "skipped", register() { throw new Error("skipped plugin s
 
     expect(second).not.toBe(first);
     expect(third).toBe(second);
+  });
+
+  it("does not reuse cached registries across gateway subagent binding modes", () => {
+    useNoBundledPlugins();
+    const plugin = writePlugin({
+      id: "cache-gateway-bindable",
+      filename: "cache-gateway-bindable.cjs",
+      body: `module.exports = { id: "cache-gateway-bindable", register() {} };`,
+    });
+
+    const options = {
+      workspaceDir: plugin.dir,
+      config: {
+        plugins: {
+          allow: ["cache-gateway-bindable"],
+          load: {
+            paths: [plugin.file],
+          },
+        },
+      },
+    };
+
+    const defaultRegistry = loadOpenClawPlugins(options);
+    const gatewayBindableRegistry = loadOpenClawPlugins({
+      ...options,
+      runtimeOptions: {
+        allowGatewaySubagentBinding: true,
+      },
+    });
+    const gatewayBindableAgain = loadOpenClawPlugins({
+      ...options,
+      runtimeOptions: {
+        allowGatewaySubagentBinding: true,
+      },
+    });
+
+    expect(gatewayBindableRegistry).not.toBe(defaultRegistry);
+    expect(gatewayBindableAgain).toBe(gatewayBindableRegistry);
   });
 
   it("evicts least recently used registries when the loader cache exceeds its cap", () => {
@@ -2125,6 +2147,7 @@ module.exports = {
         channels: {
           "setup-runtime-preferred-test": {
             enabled: true,
+            token: "configured",
           },
         },
         plugins: {
@@ -2232,6 +2255,7 @@ module.exports = {
         channels: {
           "setup-runtime-not-preferred-test": {
             enabled: true,
+            token: "configured",
           },
         },
         plugins: {
@@ -3205,26 +3229,6 @@ module.exports = {
     expect(resolved).toBe(srcFile);
   });
 
-  it("prefers dist extension-api alias when loader runs from dist", () => {
-    const { root, distFile } = createExtensionApiAliasFixture();
-
-    const resolved = __testing.resolveExtensionApiAlias({
-      modulePath: path.join(root, "dist", "plugins", "loader.js"),
-    });
-    expect(resolved).toBe(distFile);
-  });
-
-  it("prefers src extension-api alias when loader runs from src in non-production", () => {
-    const { root, srcFile } = createExtensionApiAliasFixture();
-
-    const resolved = withEnv({ NODE_ENV: undefined }, () =>
-      __testing.resolveExtensionApiAlias({
-        modulePath: path.join(root, "src", "plugins", "loader.ts"),
-      }),
-    );
-    expect(resolved).toBe(srcFile);
-  });
-
   it("resolves plugin-sdk alias from package root when loader runs from transpiler cache path", () => {
     const { root, srcFile } = createPluginSdkAliasFixture();
 
@@ -3232,18 +3236,6 @@ module.exports = {
       __testing.resolvePluginSdkAliasFile({
         srcFile: "index.ts",
         distFile: "index.js",
-        modulePath: "/tmp/tsx-cache/openclaw-loader.js",
-        argv1: path.join(root, "openclaw.mjs"),
-      }),
-    );
-    expect(resolved).toBe(srcFile);
-  });
-
-  it("resolves extension-api alias from package root when loader runs from transpiler cache path", () => {
-    const { root, srcFile } = createExtensionApiAliasFixture();
-
-    const resolved = withEnv({ NODE_ENV: undefined }, () =>
-      __testing.resolveExtensionApiAlias({
         modulePath: "/tmp/tsx-cache/openclaw-loader.js",
         argv1: path.join(root, "openclaw.mjs"),
       }),
