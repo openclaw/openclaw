@@ -2,7 +2,7 @@ import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../../agents/ag
 import { listChannelPluginCatalogEntries } from "../../channels/plugins/catalog.js";
 import { parseOptionalDelimitedEntries } from "../../channels/plugins/helpers.js";
 import { getChannelPlugin, normalizeChannelId } from "../../channels/plugins/index.js";
-import type { ChannelOnboardingSetupPlugin } from "../../channels/plugins/onboarding-types.js";
+import type { ChannelOnboardingSetupPlugin } from "../../channels/plugins/setup-flow-types.js";
 import { moveSingleAccountChannelSectionToDefaultAccount } from "../../channels/plugins/setup-helpers.js";
 import type { ChannelId, ChannelPlugin, ChannelSetupInput } from "../../channels/plugins/types.js";
 import { writeConfigFile, type OpenClawConfig } from "../../config/config.js";
