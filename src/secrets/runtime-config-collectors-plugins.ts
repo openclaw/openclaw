@@ -57,22 +57,10 @@ export function collectPluginConfigAssignments(params: {
       continue;
     }
 
-    // When no loadable-plugin set is available (e.g. secrets apply), treat
-    // entries that are not explicitly enabled as inactive so stale/workspace
-    // plugin config does not cause resolution failures.
-    const explicitlyEnabled = isRecord(entry) && entry.enabled === true;
-    if (!params.loadablePluginIds && !explicitlyEnabled) {
-      collectMcpServerEnvAssignments({
-        pluginId,
-        pluginConfig,
-        active: false,
-        inactiveReason: "plugin not explicitly enabled (no loadable-plugin set available).",
-        defaults: params.defaults,
-        context: params.context,
-      });
-      continue;
-    }
-
+    // Use "config" origin for enable-state checks. This is imprecise for
+    // workspace-origin plugins (they default to disabled unless explicitly
+    // enabled), but we cannot determine the real origin from config alone.
+    // The loadablePluginIds path above handles the gateway case correctly.
     const enableState = resolveEnableState(pluginId, "config", normalizedConfig);
     collectMcpServerEnvAssignments({
       pluginId,
