@@ -1,5 +1,4 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/bluebubbles";
-import { getFileExtension, isAudioFileName, normalizeMimeType } from "../../../src/media/mime.js";
 import {
   DM_GROUP_ACCESS_REASON,
   createScopedPairingAccess,
@@ -18,6 +17,7 @@ import {
   stripMarkdown,
   type HistoryEntry,
 } from "openclaw/plugin-sdk/bluebubbles";
+import { getFileExtension, isAudioFileName, normalizeMimeType } from "../../../src/media/mime.js";
 import { downloadBlueBubblesAttachment } from "./attachments.js";
 import { markBlueBubblesChatRead, sendBlueBubblesTyping } from "./chat.js";
 import { fetchBlueBubblesHistory } from "./history.js";
