@@ -62,10 +62,6 @@ function loadStatusScanRuntimeModule() {
   return statusScanRuntimeModulePromise;
 }
 
-type StatusScanRuntimeModule = Awaited<ReturnType<typeof loadStatusScanRuntimeModule>>;
-type ChannelStatusIssues = ReturnType<StatusScanRuntimeModule["collectChannelStatusIssues"]>;
-type ChannelsTable = Awaited<ReturnType<StatusScanRuntimeModule["buildChannelsTable"]>>;
-
 function deferResult<T>(promise: Promise<T>): Promise<DeferredResult<T>> {
   return promise.then(
     (value) => ({ ok: true, value }),
