@@ -219,7 +219,6 @@
       "host": "gateway",
       "security": "allowlist",
       "ask": "off",
-      "pathPrepend": ["/home/node/.openclaw/bin"],
       "safeBins": [
         "anvil",
         "cast",

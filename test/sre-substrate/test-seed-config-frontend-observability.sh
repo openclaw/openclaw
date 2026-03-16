@@ -79,9 +79,13 @@ jq -e '
 ' "$CONFIG" >/dev/null
 
 jq -e '
-  .tools.exec.pathPrepend == ["/home/node/.openclaw/bin"]
+  .tools.exec.pathPrepend | not
 ' "$CONFIG" >/dev/null
 
+rg -Fq 'wrapper_dir="${OPENCLAW_WRAPPER_BIN_DIR:-/home/node/.openclaw/bin}"' "$START_GATEWAY"
+rg -Fq -- '--arg wrapper_bin_dir "${OPENCLAW_WRAPPER_BIN_DIR:-/home/node/.openclaw/bin}"' "$START_GATEWAY"
+rg -q '\.id == "sre" or \.id == "sre-verifier"' "$START_GATEWAY"
+rg -q '\.tools\.exec\.pathPrepend = ' "$START_GATEWAY"
 rg -q '\.sre\.promptTemplates\.monitoringIncident as \$monitoring_prompt' "$START_GATEWAY"
 rg -q '\.channels\.slack\.channels\["#staging-infra-monitoring"\]\.systemPrompt =' "$START_GATEWAY"
 rg -q '\.channels\.slack\.channels\["#public-api-monitoring"\]\.systemPrompt =' "$START_GATEWAY"

@@ -114,8 +114,8 @@ if [ -z "${VAULT_TOKEN:-}" ] && [ -n "${VAULT_ADDR:-}" ] && command -v curl >/de
 fi
 
 bootstrap_github_cli_wrappers() {
-  wrapper_dir="/home/node/.openclaw/bin"
-  cache_dir="/home/node/.openclaw/state/github"
+  wrapper_dir="${OPENCLAW_WRAPPER_BIN_DIR:-/home/node/.openclaw/bin}"
+  cache_dir="${OPENCLAW_GITHUB_CACHE_DIR:-/home/node/.openclaw/state/github}"
   mkdir -p "$wrapper_dir" "$cache_dir"
 
   cat >"${wrapper_dir}/github-app-token.sh" <<'EOF'
@@ -123,7 +123,7 @@ bootstrap_github_cli_wrappers() {
 set -eu
 umask 077
 
-cache_dir="/home/node/.openclaw/state/github"
+cache_dir="${OPENCLAW_GITHUB_CACHE_DIR:-/home/node/.openclaw/state/github}"
 cache_file="${cache_dir}/token.json"
 
 if [ -f "$cache_file" ]; then
@@ -242,7 +242,8 @@ EOF
 cat >"${wrapper_dir}/gh" <<'EOF'
 #!/bin/sh
 set -eu
-if token="$(/home/node/.openclaw/bin/github-app-token.sh)"; then
+wrapper_dir="${OPENCLAW_WRAPPER_BIN_DIR:-/home/node/.openclaw/bin}"
+if token="$("${wrapper_dir}/github-app-token.sh")"; then
   export GH_TOKEN="$token"
   export GITHUB_TOKEN="$token"
 else
@@ -256,6 +257,7 @@ EOF
 cat >"${wrapper_dir}/git" <<'EOF'
 #!/bin/sh
 set -eu
+wrapper_dir="${OPENCLAW_WRAPPER_BIN_DIR:-/home/node/.openclaw/bin}"
 git_cmd=""
 while [ "$#" -gt 0 ]; do
   case "$1" in
@@ -299,7 +301,7 @@ case "$git_cmd" in
     ;;
 esac
 
-if token="$(/home/node/.openclaw/bin/github-app-token.sh)"; then
+if token="$("${wrapper_dir}/github-app-token.sh")"; then
   git_auth_basic="$(printf 'x-access-token:%s' "$token" | base64 | tr -d '\n')"
   exec /usr/bin/git \
     -c credential.helper= \
@@ -374,6 +376,7 @@ jq \
   --arg plans_dir "${OPENCLAW_SRE_PLANS_DIR:-/home/node/.openclaw/state/sre-plans}" \
   --arg repo_root "${OPENCLAW_SRE_REPO_ROOT:-/srv/openclaw/repos}" \
   --arg ownership_file "${OPENCLAW_SRE_REPO_OWNERSHIP_FILE:-/home/node/.openclaw/state/sre-index/repo-ownership.json}" \
+  --arg wrapper_bin_dir "${OPENCLAW_WRAPPER_BIN_DIR:-/home/node/.openclaw/bin}" \
   --argjson gateway_env_token_enabled "$(bool_from_env "${OPENCLAW_GATEWAY_TOKEN:+1}")" \
   --argjson fallback_enabled "$(bool_from_env "${OPENCLAW_CONTROL_UI_HOST_HEADER_ORIGIN_FALLBACK:-0}")" \
   --argjson insecure_auth_enabled "$(bool_from_env "${OPENCLAW_CONTROL_UI_ALLOW_INSECURE_AUTH:-0}")" \
@@ -422,6 +425,32 @@ jq \
         )
         + (if ($heartbeat_target | length) > 0 then [$heartbeat_target] else [] end)
         | unique
+      )
+    | .agents.list = (
+        (.agents.list // [])
+        | map(
+            if (.id == "sre" or .id == "sre-verifier") then
+              .tools = (.tools // {})
+              | .tools.exec = (
+                  if ((.tools.exec // null) | type) == "object" then
+                    .tools.exec
+                  else
+                    {}
+                  end
+                )
+              | .tools.exec.pathPrepend = (
+                  (
+                    (.tools.exec.pathPrepend // [])
+                    | if type == "array" then . else [] end
+                    | map(select(type == "string"))
+                  )
+                  + [$wrapper_bin_dir]
+                  | unique
+                )
+            else
+              .
+            end
+          )
       )
     | .sre.promptTemplates.monitoringIncident as $monitoring_prompt
     | .channels.slack.channels["#platform-monitoring"].systemPrompt = $monitoring_prompt
