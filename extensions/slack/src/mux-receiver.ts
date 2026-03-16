@@ -3,10 +3,13 @@ import { readFile, readdir } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { WebSocket } from "ws";
-import type { SlackMuxConfig } from "../config/types.slack.ts";
-import { sleepWithAbort } from "../infra/backoff.js";
-import type { RuntimeEnv } from "../runtime.ts";
-import { audienceFromWsUrl, resolveGcpIdentityToken } from "../utils/gcp-metadata-token.ts";
+import type { SlackMuxConfig } from "../../../src/config/types.slack.js";
+import { sleepWithAbort } from "../../../src/infra/backoff.js";
+import type { RuntimeEnv } from "../../../src/runtime.js";
+import {
+  audienceFromWsUrl,
+  resolveGcpIdentityToken,
+} from "../../../src/utils/gcp-metadata-token.js";
 
 type BoltApp = {
   processEvent(event: ReceiverEvent): Promise<void>;

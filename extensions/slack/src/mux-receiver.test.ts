@@ -1,7 +1,7 @@
 import { createServer } from "node:net";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { WebSocket, WebSocketServer } from "ws";
-import type { RuntimeEnv } from "../runtime.js";
+import type { RuntimeEnv } from "../../../src/runtime.js";
 import { MuxReceiver, installMuxApiProxy } from "./mux-receiver.js";
 
 function getAvailablePort(): Promise<number> {
@@ -707,7 +707,7 @@ describe("installMuxApiProxy – convenience method rebinding", () => {
 
 describe("config validation", () => {
   test("SlackConfigSchema rejects account mux mode without mux.url", async () => {
-    const { SlackConfigSchema } = await import("../config/zod-schema.providers-core.js");
+    const { SlackConfigSchema } = await import("../../../src/config/zod-schema.providers-core.js");
     const result = SlackConfigSchema.safeParse({
       accounts: { test: { mode: "mux" } },
     });
@@ -719,7 +719,7 @@ describe("config validation", () => {
   });
 
   test("SlackAccountSchema accepts mux mode with mux.url", async () => {
-    const { SlackAccountSchema } = await import("../config/zod-schema.providers-core.js");
+    const { SlackAccountSchema } = await import("../../../src/config/zod-schema.providers-core.js");
     const result = SlackAccountSchema.safeParse({
       mode: "mux",
       mux: { url: "wss://mux.example.com/ws" },
@@ -728,7 +728,7 @@ describe("config validation", () => {
   });
 
   test("SlackConfigSchema rejects base mux mode without mux.url", async () => {
-    const { SlackConfigSchema } = await import("../config/zod-schema.providers-core.js");
+    const { SlackConfigSchema } = await import("../../../src/config/zod-schema.providers-core.js");
     const result = SlackConfigSchema.safeParse({ mode: "mux" });
     expect(result.success).toBe(false);
     if (!result.success) {
@@ -738,7 +738,7 @@ describe("config validation", () => {
   });
 
   test("SlackConfigSchema rejects account mux mode without mux.url", async () => {
-    const { SlackConfigSchema } = await import("../config/zod-schema.providers-core.js");
+    const { SlackConfigSchema } = await import("../../../src/config/zod-schema.providers-core.js");
     const result = SlackConfigSchema.safeParse({
       accounts: {
         work: { mode: "mux" },
@@ -754,7 +754,7 @@ describe("config validation", () => {
   });
 
   test("SlackConfigSchema accepts account mux with inherited base url", async () => {
-    const { SlackConfigSchema } = await import("../config/zod-schema.providers-core.js");
+    const { SlackConfigSchema } = await import("../../../src/config/zod-schema.providers-core.js");
     const result = SlackConfigSchema.safeParse({
       mux: { url: "wss://mux.example.com/ws" },
       accounts: {
