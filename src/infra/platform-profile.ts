@@ -12,7 +12,7 @@ export function detectResourceProfile(): ResourceProfile {
     return override;
   }
   const totalMB = Math.floor(os.totalmem() / 1024 / 1024);
-  if (totalMB < 2048) {
+  if (totalMB < 2048 || (totalMB < 4096 && isArmDevice())) {
     return "low";
   }
   if (totalMB < 8192) {

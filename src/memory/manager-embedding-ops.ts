@@ -44,7 +44,7 @@ function getEmbeddingIndexConcurrency(): number {
       return parsed;
     }
   }
-  return Math.max(1, getRecommendedConcurrency() * 2);
+  return Math.max(1, getRecommendedConcurrency());
 }
 const EMBEDDING_RETRY_MAX_ATTEMPTS = 3;
 const EMBEDDING_RETRY_BASE_DELAY_MS = 500;

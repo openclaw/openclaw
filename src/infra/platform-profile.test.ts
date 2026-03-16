@@ -29,6 +29,12 @@ describe("platform-profile", () => {
       expect(detectResourceProfile()).toBe("low");
     });
 
+    it("returns low for ARM with <4GB", () => {
+      vi.spyOn(os, "totalmem").mockReturnValue(3 * 1024 * 1024 * 1024);
+      vi.stubGlobal("process", { ...process, arch: "arm64" });
+      expect(detectResourceProfile()).toBe("low");
+    });
+
     it("returns standard for 4GB", () => {
       vi.spyOn(os, "totalmem").mockReturnValue(4 * 1024 * 1024 * 1024);
       expect(detectResourceProfile()).toBe("standard");

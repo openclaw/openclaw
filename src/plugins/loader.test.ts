@@ -3,7 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { withEnv } from "../test-utils/env.js";
 async function importFreshPluginTestModules() {
   vi.resetModules();
@@ -324,8 +324,11 @@ afterEach(() => {
 describe("bundle plugins", () => {
   // Skip scanning the repo's real extensions/ directory (57+ plugins) during discovery.
   // Without this, realpathSync + boundary checks on each extension can exceed the test timeout.
-  const prevBundledDirBundle = process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
-  process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = "/nonexistent/bundled/plugins";
+  let prevBundledDirBundle: string | undefined;
+  beforeAll(() => {
+    prevBundledDirBundle = process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
+    process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = "/nonexistent/bundled/plugins";
+  });
   afterAll(() => {
     if (prevBundledDirBundle === undefined) {
       delete process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
