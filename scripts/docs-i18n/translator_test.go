@@ -3,20 +3,20 @@ package main
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
-
-	pi "github.com/joshp123/pi-golang"
 )
 
 type fakePromptRunner struct {
-	run    func(context.Context, string) (pi.RunResult, error)
+	prompt func(context.Context, string) (string, error)
 	stderr string
 }
 
-func (runner fakePromptRunner) Run(ctx context.Context, message string) (pi.RunResult, error) {
-	return runner.run(ctx, message)
+func (runner fakePromptRunner) Prompt(ctx context.Context, message string) (string, error) {
+	return runner.prompt(ctx, message)
 }
 
 func (runner fakePromptRunner) Stderr() string {
@@ -28,7 +28,7 @@ func TestRunPromptAddsTimeout(t *testing.T) {
 
 	var deadline time.Time
 	client := fakePromptRunner{
-		run: func(ctx context.Context, message string) (pi.RunResult, error) {
+		prompt: func(ctx context.Context, message string) (string, error) {
 			var ok bool
 			deadline, ok = ctx.Deadline()
 			if !ok {
@@ -37,7 +37,7 @@ func TestRunPromptAddsTimeout(t *testing.T) {
 			if message != "Translate me" {
 				t.Fatalf("unexpected message %q", message)
 			}
-			return pi.RunResult{Text: "translated"}, nil
+			return "translated", nil
 		},
 	}
 
@@ -60,8 +60,8 @@ func TestRunPromptIncludesStderr(t *testing.T) {
 
 	rootErr := errors.New("context deadline exceeded")
 	client := fakePromptRunner{
-		run: func(context.Context, string) (pi.RunResult, error) {
-			return pi.RunResult{}, rootErr
+		prompt: func(context.Context, string) (string, error) {
+			return "", rootErr
 		},
 		stderr: "boom",
 	}
@@ -88,5 +88,49 @@ func TestDecoratePromptErrorLeavesCleanErrorsAlone(t *testing.T) {
 	}
 	if got.Error() != rootErr.Error() {
 		t.Fatalf("expected unchanged message, got %v", got)
+	}
+}
+
+func TestResolveDocsPiCommandUsesOverrideEnv(t *testing.T) {
+	t.Setenv(envDocsPiExecutable, "/tmp/custom-pi")
+	t.Setenv(envDocsPiArgs, "--mode rpc --foo bar")
+
+	command, err := resolveDocsPiCommand(context.Background())
+	if err != nil {
+		t.Fatalf("resolveDocsPiCommand returned error: %v", err)
+	}
+
+	if command.Executable != "/tmp/custom-pi" {
+		t.Fatalf("unexpected executable %q", command.Executable)
+	}
+	if strings.Join(command.Args, " ") != "--mode rpc --foo bar" {
+		t.Fatalf("unexpected args %v", command.Args)
+	}
+}
+
+func TestShouldMaterializePiRuntimeForPiMonoWrapper(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	sourceDir := filepath.Join(root, "Projects", "pi-mono", "packages", "coding-agent", "dist")
+	binDir := filepath.Join(root, "bin")
+	if err := os.MkdirAll(sourceDir, 0o755); err != nil {
+		t.Fatalf("mkdir source dir: %v", err)
+	}
+	if err := os.MkdirAll(binDir, 0o755); err != nil {
+		t.Fatalf("mkdir bin dir: %v", err)
+	}
+
+	target := filepath.Join(sourceDir, "cli.js")
+	if err := os.WriteFile(target, []byte("console.log('pi');\n"), 0o644); err != nil {
+		t.Fatalf("write target: %v", err)
+	}
+	link := filepath.Join(binDir, "pi")
+	if err := os.Symlink(target, link); err != nil {
+		t.Fatalf("symlink: %v", err)
+	}
+
+	if !shouldMaterializePiRuntime(link) {
+		t.Fatal("expected pi-mono wrapper to materialize runtime")
 	}
 }
