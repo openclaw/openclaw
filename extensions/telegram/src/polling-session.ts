@@ -4,7 +4,7 @@ import { formatErrorMessage } from "openclaw/plugin-sdk/infra-runtime";
 import { formatDurationPrecise } from "openclaw/plugin-sdk/infra-runtime";
 import { withTelegramApiErrorLogging } from "./api-logging.js";
 import { createTelegramBot } from "./bot.js";
-import { resolveTelegramTransport, type TelegramTransport } from "./fetch.js";
+import { type TelegramTransport } from "./fetch.js";
 import { isRecoverableTelegramNetworkError } from "./network-errors.js";
 
 const TELEGRAM_POLL_RESTART_POLICY = {
