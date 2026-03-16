@@ -109,6 +109,16 @@ const openRouterPlugin = {
         openAiCompatTurnValidation: false,
         geminiThoughtSignatureSanitization: true,
         geminiThoughtSignatureModelHints: ["gemini"],
+        transcriptToolCallIdMode: "strict9",
+        transcriptToolCallIdModelHints: [
+          "mistral",
+          "mixtral",
+          "codestral",
+          "pixtral",
+          "devstral",
+          "ministral",
+          "mistralai",
+        ],
       },
       wrapStreamFn: (ctx) => {
         let streamFn = ctx.streamFn;
