@@ -1,6 +1,12 @@
 // Main browser UI for VioDashboard: chat, telemetry, camera controls, and file browser.
-const DEFAULT_CLAUDE_CWD = '/Users/visen24/MAS/openclaw_fork';
+const DEFAULT_CLAUDE_CWD = '';
 const CLAUDE_TERMINAL_INIT_ERROR = 'Claude terminal failed to initialize; PTY text fallback has been removed.';
+const serverConfig = {
+  defaultClaudeCwd: '',
+  projectRoot: '',
+  openclawRepoRoot: '',
+  appBaseUrl: '',
+};
 const statusEl = document.getElementById('status');
 const runModeChipEl = document.getElementById('runModeChip');
 const moodEl = document.getElementById('mood');
@@ -133,9 +139,13 @@ const runModeState = {
   switching: false,
 };
 
+function getDefaultClaudeCwd() {
+  return serverConfig.defaultClaudeCwd || serverConfig.openclawRepoRoot || serverConfig.projectRoot || DEFAULT_CLAUDE_CWD || '.';
+}
+
 const claude = {
   sessionId: 'claude-default',
-  cwd: DEFAULT_CLAUDE_CWD,
+  cwd: getDefaultClaudeCwd(),
   status: 'idle',
   running: false,
   started: false,
@@ -1254,6 +1264,19 @@ async function submitClaudeComposer() {
   }
 }
 
+async function fetchServerConfig() {
+  try {
+    const res = await fetch('/api/config', { cache: 'no-store' });
+    const data = await res.json();
+    if (!res.ok) {throw new Error(data?.error || 'config fetch failed');}
+    Object.assign(serverConfig, data?.config || {});
+    claude.cwd = claude.cwd || getDefaultClaudeCwd();
+    if (fileBrowserRootEl && serverConfig.projectRoot) {fileBrowserRootEl.textContent = serverConfig.projectRoot;}
+  } catch (error) {
+    addDebugLine(`config fetch failed: ${error?.message || error}`, 'pink');
+  }
+}
+
 function renderClaudeChrome() {
   if (claudeStatusBadgeEl) {
     const nextStatus = claude.status || 'idle';
@@ -1261,7 +1284,7 @@ function renderClaudeChrome() {
     if (claudeStatusBadgeEl.dataset.status !== nextStatus) {claudeStatusBadgeEl.dataset.status = nextStatus;}
   }
   if (claudeCwdInputEl && document.activeElement !== claudeCwdInputEl) {
-    const nextCwd = claude.cwd || DEFAULT_CLAUDE_CWD;
+    const nextCwd = claude.cwd || getDefaultClaudeCwd();
     if (claudeCwdInputEl.value !== nextCwd) {claudeCwdInputEl.value = nextCwd;}
   }
   if (claudeMetaEl) {
@@ -1338,7 +1361,7 @@ function applyClaudeStateData(data) {
 }
 
 async function fetchClaudeState() {
-  const res = await fetch(`/api/claude/state?cwd=${encodeURIComponent(claude.cwd || DEFAULT_CLAUDE_CWD)}`, { cache: 'no-store' });
+  const res = await fetch(`/api/claude/state?cwd=${encodeURIComponent(claude.cwd || getDefaultClaudeCwd())}`, { cache: 'no-store' });
   const data = await res.json();
   if (!res.ok) {throw new Error(data?.error || 'Failed to fetch Claude state');}
   applyClaudeStateData(data);
@@ -1376,7 +1399,7 @@ async function startClaude() {
   claude.loading = true;
   claude.error = '';
   claude.status = 'starting';
-  claude.cwd = (claudeCwdInputEl?.value || DEFAULT_CLAUDE_CWD).trim() || DEFAULT_CLAUDE_CWD;
+  claude.cwd = (claudeCwdInputEl?.value || getDefaultClaudeCwd()).trim() || getDefaultClaudeCwd();
   renderClaudePanel();
   try {
     const res = await fetch('/api/claude/start', {
@@ -1425,7 +1448,7 @@ async function restartClaude() {
   if (claude.inputFlushTimer) {clearTimeout(claude.inputFlushTimer); claude.inputFlushTimer = null;}
   claude.loading = true;
   claude.error = '';
-  claude.cwd = (claudeCwdInputEl?.value || DEFAULT_CLAUDE_CWD).trim() || DEFAULT_CLAUDE_CWD;
+  claude.cwd = (claudeCwdInputEl?.value || getDefaultClaudeCwd()).trim() || getDefaultClaudeCwd();
   renderClaudePanel();
   try {
     const res = await fetch('/api/claude/restart', {
@@ -1556,7 +1579,7 @@ function bindClaudeEvents() {
   if (claudeStopBtnEl) {claudeStopBtnEl.onclick = stopClaude;}
   if (claudeRestartBtnEl) {claudeRestartBtnEl.onclick = restartClaude;}
   claudeCwdInputEl?.addEventListener('change', event => {
-    claude.cwd = String(event.target.value || '').trim() || DEFAULT_CLAUDE_CWD;
+    claude.cwd = String(event.target.value || '').trim() || getDefaultClaudeCwd();
   });
   claudeAutoScrollEl?.addEventListener('change', event => {
     claude.autoScroll = !!event.target.checked;
@@ -2300,6 +2323,7 @@ fileEditorEl?.addEventListener('scroll', syncEditorHighlight);
 resizeComposer();
 resizeClaudeComposer();
 applyLayoutPrefs();
+fetchServerConfig().catch(() => {});
 bindFoldPersistence(cameraFoldEl, 'cameraFoldOpen', false);
 bindFoldPersistence(gestureFoldEl, 'gestureFoldOpen', false);
 setupResizers();

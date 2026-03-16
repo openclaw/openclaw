@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { CLAUDE_RUNTIME_ROOT, DEFAULT_CLAUDE_CWD } from '../config.mjs';
+import { CLAUDE_BIN, CLAUDE_RUNTIME_ROOT, DEFAULT_CLAUDE_CWD } from '../config.mjs';
 import { safeProjectPath } from './filesystem.mjs';
 
 export const CLAUDE_SESSION_ID = 'claude-default';
@@ -25,8 +25,7 @@ function normalizeClaudeCwd(cwdRel) {
 
 function resolveClaudeCommand() {
   const candidates = [
-    process.env.CLAUDE_CLI_PATH,
-    '/Users/visen24/.local/bin/claude',
+    CLAUDE_BIN,
     '/opt/homebrew/bin/claude',
     '/usr/local/bin/claude',
     'claude',

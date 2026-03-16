@@ -10,7 +10,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { spawn, execFile } from 'node:child_process';
 import WebSocket, { WebSocketServer } from 'ws';
-import { APP_DISPLAY_NAME, DASHBOARD_LAUNCHD_ROOT, DATA_DIR, DEBUG_DIR, DEFAULT_CLAUDE_CWD, GATEWAY_PROFILE, LEGACY_VIODASHBOARD_NODE_MODULES, OPENCLAW_BIN, OPENCLAW_DIST_BUILD_INFO, OPENCLAW_REPO_ROOT, PNPM_BIN, ROADMAP_DATA_PATH, ROADMAP_HISTORY_DATA_PATH, ROOT, appRel, wrapperPort } from './config.mjs';
+import { APP_DISPLAY_NAME, CLIENT_CONFIG, DASHBOARD_LAUNCHD_ROOT, DATA_DIR, DEBUG_DIR, DEFAULT_CLAUDE_CWD, GATEWAY_PROFILE, LEGACY_VIODASHBOARD_NODE_MODULES, OPENCLAW_BIN, OPENCLAW_DIST_BUILD_INFO, OPENCLAW_REPO_ROOT, PNPM_BIN, ROADMAP_DATA_PATH, ROADMAP_HISTORY_DATA_PATH, ROOT, appRel, wrapperPort } from './config.mjs';
 import { onAssistantFinal, onAssistantError } from './moodBridge.mjs';
 import { sendJson, sendText } from './server/httpUtils.mjs';
 import { listProjectFiles, readProjectFile, writeProjectFile, safeProjectPath } from './server/filesystem.mjs';
@@ -553,6 +553,11 @@ const server = http.createServer((req, res) => {
     return;
   }
 
+  if (requestUrl.pathname === '/api/config' && req.method === 'GET') {
+    sendJson(res, 200, { ok: true, config: CLIENT_CONFIG });
+    return;
+  }
+
   if (requestUrl.pathname === '/api/dist-info' && req.method === 'GET') {
     const info = loadDistBuildInfo();
     sendJson(res, 200, { ok: true, info });
@@ -564,7 +569,7 @@ const server = http.createServer((req, res) => {
       .then(() => {
         sendJson(res, 202, { ok: true, rebuilding: true });
         setTimeout(() => {
-          execFile('/opt/homebrew/bin/pnpm', ['build'], { cwd: OPENCLAW_FORK_ROOT, env: process.env }, () => {});
+          execFile(PNPM_BIN, ['build'], { cwd: OPENCLAW_REPO_ROOT, env: process.env }, () => {});
         }, 120);
       })
       .catch(error => sendJson(res, 400, { error: error?.message || String(error) }));
