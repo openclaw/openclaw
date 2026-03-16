@@ -35,13 +35,17 @@ import {
 } from "openclaw/plugin-sdk/discord";
 import { resolveOutboundSendDep } from "../../../src/infra/outbound/send-deps.js";
 import { getDiscordRuntime } from "./runtime.js";
-import { discordSetupAdapter, discordSetupWizard } from "./setup-surface.js";
+import { createDiscordSetupWizardProxy, discordSetupAdapter } from "./setup-core.js";
 
 type DiscordSendFn = ReturnType<
   typeof getDiscordRuntime
 >["channel"]["discord"]["sendMessageDiscord"];
 
 const meta = getChatChannelMeta("discord");
+
+async function loadDiscordChannelRuntime() {
+  return await import("./channel.runtime.js");
+}
 
 const discordMessageActions: ChannelMessageActionAdapter = {
   listActions: (ctx) =>
@@ -72,6 +76,10 @@ const discordConfigBase = createScopedChannelConfigBase({
   defaultAccountId: resolveDefaultDiscordAccountId,
   clearBaseFields: ["token", "name"],
 });
+
+const discordSetupWizard = createDiscordSetupWizardProxy(async () => ({
+  discordSetupWizard: (await loadDiscordChannelRuntime()).discordSetupWizard,
+}));
 
 export const discordPlugin: ChannelPlugin<ResolvedDiscordAccount> = {
   id: "discord",

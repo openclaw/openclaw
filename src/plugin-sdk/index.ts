@@ -690,10 +690,8 @@ export {
 export { inspectDiscordAccount } from "../../extensions/discord/src/account-inspect.js";
 export type { InspectedDiscordAccount } from "../../extensions/discord/src/account-inspect.js";
 export { collectDiscordAuditChannelIds } from "../../extensions/discord/src/audit.js";
-export {
-  discordSetupAdapter,
-  discordSetupWizard,
-} from "../../extensions/discord/src/setup-surface.js";
+export { discordSetupWizard } from "../../extensions/discord/src/setup-surface.js";
+export { discordSetupAdapter } from "../../extensions/discord/src/setup-core.js";
 export {
   looksLikeDiscordTargetId,
   normalizeDiscordMessagingTarget,
