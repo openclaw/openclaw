@@ -351,6 +351,40 @@ describe("consumePendingOagSystemNotes", () => {
       },
     ]);
   });
+
+  it("uses Japanese messages for ja language", async () => {
+    setStateFile({
+      pending_user_notes: [
+        {
+          id: "ja-test",
+          action: "recovery_verify",
+          created_at: "2026-03-17T00:00:01.000Z",
+          message: "raw message",
+          targets: [{ sessionKeys: ["telegram:+1234"] }],
+        },
+      ],
+    });
+    inferSessionReplyLanguageMock.mockResolvedValueOnce("ja");
+    const notes = await consumePendingOagSystemNotes("telegram:+1234");
+    expect(notes[0].text).toContain("正常に復旧しなかった");
+  });
+
+  it("uses Korean messages for ko language", async () => {
+    setStateFile({
+      pending_user_notes: [
+        {
+          id: "ko-test",
+          action: "gateway_restart_triggered",
+          created_at: "2026-03-17T00:00:01.000Z",
+          message: "raw message",
+          targets: [{ sessionKeys: ["telegram:+1234"] }],
+        },
+      ],
+    });
+    inferSessionReplyLanguageMock.mockResolvedValueOnce("ko");
+    const notes = await consumePendingOagSystemNotes("telegram:+1234");
+    expect(notes[0].text).toContain("재시작했습니다");
+  });
 });
 
 describe("note deduplication", () => {

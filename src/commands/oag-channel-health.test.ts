@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OagChannelHealthSummary } from "./oag-channel-health.js";
 import {
   formatOagChannelHealthLine,
+  formatOagEvolutionLine,
   formatOagSessionWatchLine,
   formatOagTaskWatchLine,
   readOagChannelHealthSummary,
@@ -558,5 +559,34 @@ describe("formatOagTaskWatchLine", () => {
 
   it("returns unavailable", () => {
     expect(formatOagTaskWatchLine(undefined)).toBe("unavailable");
+  });
+});
+
+describe("formatOagEvolutionLine", () => {
+  it("returns no history when no evolutions", () => {
+    expect(formatOagEvolutionLine(undefined)).toBe("no history");
+    expect(formatOagEvolutionLine({ evolutions: [] })).toBe("no history");
+  });
+
+  it("formats last evolution with outcome and changes", () => {
+    const result = formatOagEvolutionLine({
+      evolutions: [
+        {
+          appliedAt: new Date(Date.now() - 30 * 60_000).toISOString(),
+          source: "adaptive",
+          outcome: "effective",
+          changes: [
+            {
+              configPath: "gateway.oag.delivery.recoveryBudgetMs",
+              from: 60000,
+              to: 90000,
+            },
+          ],
+        },
+      ],
+    });
+    expect(result).toContain("30m ago");
+    expect(result).toContain("effective");
+    expect(result).toContain("recoveryBudgetMs 60000→90000");
   });
 });

@@ -41,6 +41,47 @@ function resolveLocalizedOagMessage(
   if (language === "zh-Hans") {
     return fallback;
   }
+  if (language === "ja") {
+    switch (note.action) {
+      case "recovery_verify":
+        return "正常に復旧しなかったチャンネルの回復チェックを実行しました。";
+      case "gateway_restart_triggered":
+        return "チャンネルの滞留を解消するためにメッセージゲートウェイを再起動しました。";
+      case "gateway_restart_failed":
+        return "ゲートウェイの復旧を試みましたが、再起動に失敗しました。監視を継続します。";
+      case "channel_backlog_cleared":
+      case "channel_congestion_cleared":
+      case "channel_escalation_cleared":
+        return "チャンネルの滞留が解消され、配信が再開されました。";
+      case "channel_watch_note":
+        return "影響を受けたチャンネルが復旧するまで、追加のフォローアップを一時停止しました。";
+      case "oag_evolution":
+        return "最近のインシデントを分析し、復旧パラメータを調整しました。";
+      default:
+        return fallback;
+    }
+  }
+  if (language === "ko") {
+    switch (note.action) {
+      case "recovery_verify":
+        return "정상적으로 복구되지 않은 채널에 대해 복구 확인을 실행했습니다.";
+      case "gateway_restart_triggered":
+        return "채널 백로그를 해소하기 위해 메시지 게이트웨이를 재시작했습니다.";
+      case "gateway_restart_failed":
+        return "게이트웨이 복구를 시도했으나 재시작에 실패했습니다. 모니터링을 계속합니다.";
+      case "channel_backlog_cleared":
+      case "channel_congestion_cleared":
+      case "channel_escalation_cleared":
+        return "채널 백로그가 해소되어 전송이 재개되었습니다.";
+      case "channel_watch_note":
+        return "영향받은 채널이 복구될 때까지 추가 후속 작업을 일시 중지했습니다.";
+      case "oag_evolution":
+        return "최근 인시던트를 분석하고 복구 매개변수를 조정했습니다.";
+      default:
+        return fallback;
+    }
+  }
+  // en and undefined: use English hardcoded messages
   switch (note.action) {
     case "recovery_verify":
       return "I ran a recovery check for a channel that did not recover cleanly.";
@@ -54,6 +95,8 @@ function resolveLocalizedOagMessage(
       return "Channel backlog cleared and delivery resumed.";
     case "channel_watch_note":
       return "I paused extra follow-ups until the affected channel recovers.";
+    case "oag_evolution":
+      return "I analyzed recent incidents and adjusted recovery parameters.";
     default:
       return fallback;
   }

@@ -1,4 +1,5 @@
 import fs from "node:fs/promises";
+import { getCachedHealthSnapshot } from "../infra/oag-event-bus.js";
 
 export type OagChannelHealthSummary = {
   schemaVersion?: number;
@@ -119,242 +120,250 @@ function parseAffectedTargetsV2(raw: unknown[]): OagChannelHealthSummary["affect
     .filter((item) => item.channel.length > 0);
 }
 
+function parseChannelHealthState(parsed: Record<string, unknown>): OagChannelHealthSummary {
+  const schemaVersion = detectSchemaVersion(parsed);
+  const affectedChannels = Array.isArray(parsed.affected_channels)
+    ? parsed.affected_channels.map((item) => String(item).trim()).filter((item) => item.length > 0)
+    : [];
+  const affectedTargets = Array.isArray(parsed.affected_targets)
+    ? schemaVersion >= 2
+      ? parseAffectedTargetsV2(parsed.affected_targets)
+      : // v1: dual-naming fallback for backward compatibility with existing sentinel producers
+        parsed.affected_targets
+          .filter((item): item is Record<string, unknown> =>
+            Boolean(item && typeof item === "object"),
+          )
+          .map((item) => ({
+            channel: readOptionalString(item.channel) ?? "",
+            accountId: readOptionalString(item.account_id) ?? readOptionalString(item.accountId),
+            sessionKeys: (() => {
+              const raw = item.session_keys ?? item.sessionKeys;
+              if (!Array.isArray(raw)) {
+                return [];
+              }
+              return (raw as unknown[])
+                .map((entry) => readOptionalString(entry))
+                .filter((entry): entry is string => typeof entry === "string" && entry.length > 0);
+            })(),
+            pendingDeliveries:
+              typeof (item.pending_deliveries ?? item.pendingDeliveries) === "number"
+                ? Number(item.pending_deliveries ?? item.pendingDeliveries)
+                : undefined,
+            recentFailures:
+              typeof (item.recent_failures ?? item.recentFailures) === "number"
+                ? Number(item.recent_failures ?? item.recentFailures)
+                : undefined,
+          }))
+          .filter((item) => item.channel.length > 0)
+    : [];
+  const sessionWatchRaw =
+    parsed.session_watch && typeof parsed.session_watch === "object"
+      ? (parsed.session_watch as Record<string, unknown>)
+      : undefined;
+  const taskWatchRaw =
+    parsed.task_watch && typeof parsed.task_watch === "object"
+      ? (parsed.task_watch as Record<string, unknown>)
+      : undefined;
+  return {
+    schemaVersion,
+    congested: parsed.congested === true,
+    backloggedAfterRecovery: parsed.backlogged_after_recovery === true,
+    affectedChannels,
+    affectedTargets,
+    pendingDeliveries:
+      typeof parsed.pending_deliveries === "number" ? parsed.pending_deliveries : 0,
+    recentFailureCount:
+      typeof parsed.recent_failure_count === "number" ? parsed.recent_failure_count : 0,
+    backlogAgeMinutes:
+      typeof parsed.backlog_age_minutes === "number" ? parsed.backlog_age_minutes : undefined,
+    escalationRecommended: parsed.escalation_recommended === true,
+    recommendedAction:
+      typeof parsed.recommended_action === "string" && parsed.recommended_action.trim()
+        ? parsed.recommended_action
+        : undefined,
+    verifyAttempts: typeof parsed.verify_attempts === "number" ? parsed.verify_attempts : undefined,
+    lastAction:
+      typeof parsed.last_action === "string" && parsed.last_action.trim()
+        ? parsed.last_action
+        : undefined,
+    lastActionAt:
+      typeof parsed.last_action_at === "string" && parsed.last_action_at.trim()
+        ? parsed.last_action_at
+        : undefined,
+    lastActionDetail:
+      typeof parsed.last_action_detail === "string" && parsed.last_action_detail.trim()
+        ? parsed.last_action_detail
+        : undefined,
+    lastVerifyAt:
+      typeof parsed.last_verify_at === "string" && parsed.last_verify_at.trim()
+        ? parsed.last_verify_at
+        : undefined,
+    lastRestartAt:
+      typeof parsed.last_restart_at === "string" && parsed.last_restart_at.trim()
+        ? parsed.last_restart_at
+        : undefined,
+    lastFailureAt:
+      typeof parsed.last_failure_at === "string" && parsed.last_failure_at.trim()
+        ? parsed.last_failure_at
+        : undefined,
+    lastRecoveredAt:
+      typeof parsed.last_recovered_at === "string" && parsed.last_recovered_at.trim()
+        ? parsed.last_recovered_at
+        : undefined,
+    updatedAt:
+      typeof parsed.updated_at === "string" && parsed.updated_at.trim()
+        ? parsed.updated_at
+        : undefined,
+    sessionWatch: sessionWatchRaw
+      ? {
+          active: sessionWatchRaw.active === true,
+          affectedChannels: Array.isArray(sessionWatchRaw.affected_channels)
+            ? sessionWatchRaw.affected_channels
+                .map((item) => String(item).trim())
+                .filter((item) => item.length > 0)
+            : [],
+          stateCounts:
+            sessionWatchRaw.state_counts &&
+            typeof sessionWatchRaw.state_counts === "object" &&
+            !Array.isArray(sessionWatchRaw.state_counts)
+              ? Object.fromEntries(
+                  Object.entries(sessionWatchRaw.state_counts).map(([key, value]) => [
+                    key,
+                    typeof value === "number" ? value : 0,
+                  ]),
+                )
+              : undefined,
+          affectedSessions: Array.isArray(sessionWatchRaw.affected_sessions)
+            ? sessionWatchRaw.affected_sessions
+                .filter((item): item is Record<string, unknown> =>
+                  Boolean(item && typeof item === "object"),
+                )
+                .map((item) => ({
+                  agentId: readOptionalString(item.agent_id),
+                  sessionKey: readOptionalString(item.session_key) ?? "",
+                  sessionId: readOptionalString(item.session_id),
+                  channel: readOptionalString(item.channel),
+                  accountId: readOptionalString(item.account_id),
+                  state: readOptionalString(item.state),
+                  reason: readOptionalString(item.reason),
+                  silentMinutes:
+                    typeof item.silent_minutes === "number" ? item.silent_minutes : undefined,
+                  blockedRetryCount:
+                    typeof item.blocked_retry_count === "number"
+                      ? item.blocked_retry_count
+                      : undefined,
+                  escalationRecommended: item.escalation_recommended === true,
+                  recommendedAction:
+                    typeof item.recommended_action === "string" && item.recommended_action.trim()
+                      ? item.recommended_action
+                      : undefined,
+                }))
+                .filter((item) => item.sessionKey.length > 0)
+            : [],
+          escalationRecommended: sessionWatchRaw.escalation_recommended === true,
+          recommendedAction:
+            typeof sessionWatchRaw.recommended_action === "string" &&
+            sessionWatchRaw.recommended_action.trim()
+              ? sessionWatchRaw.recommended_action
+              : undefined,
+          lastAction:
+            typeof sessionWatchRaw.last_action === "string" && sessionWatchRaw.last_action.trim()
+              ? sessionWatchRaw.last_action
+              : undefined,
+          lastActionAt:
+            typeof sessionWatchRaw.last_action_at === "string" &&
+            sessionWatchRaw.last_action_at.trim()
+              ? sessionWatchRaw.last_action_at
+              : undefined,
+          lastActionDetail:
+            typeof sessionWatchRaw.last_action_detail === "string" &&
+            sessionWatchRaw.last_action_detail.trim()
+              ? sessionWatchRaw.last_action_detail
+              : undefined,
+          lastNudgeAt:
+            typeof sessionWatchRaw.last_nudge_at === "string" &&
+            sessionWatchRaw.last_nudge_at.trim()
+              ? sessionWatchRaw.last_nudge_at
+              : undefined,
+          updatedAt:
+            typeof sessionWatchRaw.updated_at === "string" && sessionWatchRaw.updated_at.trim()
+              ? sessionWatchRaw.updated_at
+              : undefined,
+        }
+      : undefined,
+    taskWatch: taskWatchRaw
+      ? {
+          active: taskWatchRaw.active === true,
+          counts:
+            taskWatchRaw.counts &&
+            typeof taskWatchRaw.counts === "object" &&
+            !Array.isArray(taskWatchRaw.counts)
+              ? Object.fromEntries(
+                  Object.entries(taskWatchRaw.counts).map(([key, value]) => [
+                    key,
+                    typeof value === "number" ? value : 0,
+                  ]),
+                )
+              : undefined,
+          escalationRecommended: taskWatchRaw.escalation_recommended === true,
+          recommendedAction:
+            typeof taskWatchRaw.recommended_action === "string" &&
+            taskWatchRaw.recommended_action.trim()
+              ? taskWatchRaw.recommended_action
+              : undefined,
+          affectedTasks: Array.isArray(taskWatchRaw.affected_tasks)
+            ? taskWatchRaw.affected_tasks
+                .filter((item): item is Record<string, unknown> =>
+                  Boolean(item && typeof item === "object"),
+                )
+                .map((item) => ({
+                  taskId: readOptionalString(item.task_id) ?? "",
+                  followupType: readOptionalString(item.followup_type),
+                  priority: readOptionalString(item.priority),
+                  escalationCount:
+                    typeof item.escalation_count === "number" ? item.escalation_count : undefined,
+                  currentStep:
+                    typeof item.current_step === "number" ? item.current_step : undefined,
+                  totalSteps: typeof item.total_steps === "number" ? item.total_steps : undefined,
+                  stepTitle: readOptionalString(item.step_title),
+                  progressAgeSeconds:
+                    typeof item.progress_age_seconds === "number"
+                      ? item.progress_age_seconds
+                      : undefined,
+                  terminalStepStuck: item.terminal_step_stuck === true,
+                  deferredBy: readOptionalString(item.deferred_by),
+                  notBefore: readOptionalString(item.not_before),
+                  message: readOptionalString(item.message),
+                }))
+                .filter((item) => item.taskId.length > 0)
+            : [],
+          updatedAt:
+            typeof taskWatchRaw.updated_at === "string" && taskWatchRaw.updated_at.trim()
+              ? taskWatchRaw.updated_at
+              : undefined,
+        }
+      : undefined,
+  };
+}
+
 export async function readOagChannelHealthSummary(): Promise<OagChannelHealthSummary | undefined> {
   const statePath = getOagChannelHealthPath();
   if (!statePath) {
     return undefined;
   }
+  // Fast path: use cached snapshot from event bus if available
+  const cached = getCachedHealthSnapshot();
+  if (cached) {
+    try {
+      return parseChannelHealthState(cached);
+    } catch {
+      // Cache parse failed, fall through to file read
+    }
+  }
   try {
     const raw = await fs.readFile(statePath, "utf8");
     const parsed = JSON.parse(raw) as Record<string, unknown>;
-    const schemaVersion = detectSchemaVersion(parsed);
-    const affectedChannels = Array.isArray(parsed.affected_channels)
-      ? parsed.affected_channels
-          .map((item) => String(item).trim())
-          .filter((item) => item.length > 0)
-      : [];
-    const affectedTargets = Array.isArray(parsed.affected_targets)
-      ? schemaVersion >= 2
-        ? parseAffectedTargetsV2(parsed.affected_targets)
-        : // v1: dual-naming fallback for backward compatibility with existing sentinel producers
-          parsed.affected_targets
-            .filter((item): item is Record<string, unknown> =>
-              Boolean(item && typeof item === "object"),
-            )
-            .map((item) => ({
-              channel: readOptionalString(item.channel) ?? "",
-              accountId: readOptionalString(item.account_id) ?? readOptionalString(item.accountId),
-              sessionKeys: (() => {
-                const raw = item.session_keys ?? item.sessionKeys;
-                if (!Array.isArray(raw)) {
-                  return [];
-                }
-                return (raw as unknown[])
-                  .map((entry) => readOptionalString(entry))
-                  .filter(
-                    (entry): entry is string => typeof entry === "string" && entry.length > 0,
-                  );
-              })(),
-              pendingDeliveries:
-                typeof (item.pending_deliveries ?? item.pendingDeliveries) === "number"
-                  ? Number(item.pending_deliveries ?? item.pendingDeliveries)
-                  : undefined,
-              recentFailures:
-                typeof (item.recent_failures ?? item.recentFailures) === "number"
-                  ? Number(item.recent_failures ?? item.recentFailures)
-                  : undefined,
-            }))
-            .filter((item) => item.channel.length > 0)
-      : [];
-    const sessionWatchRaw =
-      parsed.session_watch && typeof parsed.session_watch === "object"
-        ? (parsed.session_watch as Record<string, unknown>)
-        : undefined;
-    const taskWatchRaw =
-      parsed.task_watch && typeof parsed.task_watch === "object"
-        ? (parsed.task_watch as Record<string, unknown>)
-        : undefined;
-    return {
-      schemaVersion,
-      congested: parsed.congested === true,
-      backloggedAfterRecovery: parsed.backlogged_after_recovery === true,
-      affectedChannels,
-      affectedTargets,
-      pendingDeliveries:
-        typeof parsed.pending_deliveries === "number" ? parsed.pending_deliveries : 0,
-      recentFailureCount:
-        typeof parsed.recent_failure_count === "number" ? parsed.recent_failure_count : 0,
-      backlogAgeMinutes:
-        typeof parsed.backlog_age_minutes === "number" ? parsed.backlog_age_minutes : undefined,
-      escalationRecommended: parsed.escalation_recommended === true,
-      recommendedAction:
-        typeof parsed.recommended_action === "string" && parsed.recommended_action.trim()
-          ? parsed.recommended_action
-          : undefined,
-      verifyAttempts:
-        typeof parsed.verify_attempts === "number" ? parsed.verify_attempts : undefined,
-      lastAction:
-        typeof parsed.last_action === "string" && parsed.last_action.trim()
-          ? parsed.last_action
-          : undefined,
-      lastActionAt:
-        typeof parsed.last_action_at === "string" && parsed.last_action_at.trim()
-          ? parsed.last_action_at
-          : undefined,
-      lastActionDetail:
-        typeof parsed.last_action_detail === "string" && parsed.last_action_detail.trim()
-          ? parsed.last_action_detail
-          : undefined,
-      lastVerifyAt:
-        typeof parsed.last_verify_at === "string" && parsed.last_verify_at.trim()
-          ? parsed.last_verify_at
-          : undefined,
-      lastRestartAt:
-        typeof parsed.last_restart_at === "string" && parsed.last_restart_at.trim()
-          ? parsed.last_restart_at
-          : undefined,
-      lastFailureAt:
-        typeof parsed.last_failure_at === "string" && parsed.last_failure_at.trim()
-          ? parsed.last_failure_at
-          : undefined,
-      lastRecoveredAt:
-        typeof parsed.last_recovered_at === "string" && parsed.last_recovered_at.trim()
-          ? parsed.last_recovered_at
-          : undefined,
-      updatedAt:
-        typeof parsed.updated_at === "string" && parsed.updated_at.trim()
-          ? parsed.updated_at
-          : undefined,
-      sessionWatch: sessionWatchRaw
-        ? {
-            active: sessionWatchRaw.active === true,
-            affectedChannels: Array.isArray(sessionWatchRaw.affected_channels)
-              ? sessionWatchRaw.affected_channels
-                  .map((item) => String(item).trim())
-                  .filter((item) => item.length > 0)
-              : [],
-            stateCounts:
-              sessionWatchRaw.state_counts &&
-              typeof sessionWatchRaw.state_counts === "object" &&
-              !Array.isArray(sessionWatchRaw.state_counts)
-                ? Object.fromEntries(
-                    Object.entries(sessionWatchRaw.state_counts).map(([key, value]) => [
-                      key,
-                      typeof value === "number" ? value : 0,
-                    ]),
-                  )
-                : undefined,
-            affectedSessions: Array.isArray(sessionWatchRaw.affected_sessions)
-              ? sessionWatchRaw.affected_sessions
-                  .filter((item): item is Record<string, unknown> =>
-                    Boolean(item && typeof item === "object"),
-                  )
-                  .map((item) => ({
-                    agentId: readOptionalString(item.agent_id),
-                    sessionKey: readOptionalString(item.session_key) ?? "",
-                    sessionId: readOptionalString(item.session_id),
-                    channel: readOptionalString(item.channel),
-                    accountId: readOptionalString(item.account_id),
-                    state: readOptionalString(item.state),
-                    reason: readOptionalString(item.reason),
-                    silentMinutes:
-                      typeof item.silent_minutes === "number" ? item.silent_minutes : undefined,
-                    blockedRetryCount:
-                      typeof item.blocked_retry_count === "number"
-                        ? item.blocked_retry_count
-                        : undefined,
-                    escalationRecommended: item.escalation_recommended === true,
-                    recommendedAction:
-                      typeof item.recommended_action === "string" && item.recommended_action.trim()
-                        ? item.recommended_action
-                        : undefined,
-                  }))
-                  .filter((item) => item.sessionKey.length > 0)
-              : [],
-            escalationRecommended: sessionWatchRaw.escalation_recommended === true,
-            recommendedAction:
-              typeof sessionWatchRaw.recommended_action === "string" &&
-              sessionWatchRaw.recommended_action.trim()
-                ? sessionWatchRaw.recommended_action
-                : undefined,
-            lastAction:
-              typeof sessionWatchRaw.last_action === "string" && sessionWatchRaw.last_action.trim()
-                ? sessionWatchRaw.last_action
-                : undefined,
-            lastActionAt:
-              typeof sessionWatchRaw.last_action_at === "string" &&
-              sessionWatchRaw.last_action_at.trim()
-                ? sessionWatchRaw.last_action_at
-                : undefined,
-            lastActionDetail:
-              typeof sessionWatchRaw.last_action_detail === "string" &&
-              sessionWatchRaw.last_action_detail.trim()
-                ? sessionWatchRaw.last_action_detail
-                : undefined,
-            lastNudgeAt:
-              typeof sessionWatchRaw.last_nudge_at === "string" &&
-              sessionWatchRaw.last_nudge_at.trim()
-                ? sessionWatchRaw.last_nudge_at
-                : undefined,
-            updatedAt:
-              typeof sessionWatchRaw.updated_at === "string" && sessionWatchRaw.updated_at.trim()
-                ? sessionWatchRaw.updated_at
-                : undefined,
-          }
-        : undefined,
-      taskWatch: taskWatchRaw
-        ? {
-            active: taskWatchRaw.active === true,
-            counts:
-              taskWatchRaw.counts &&
-              typeof taskWatchRaw.counts === "object" &&
-              !Array.isArray(taskWatchRaw.counts)
-                ? Object.fromEntries(
-                    Object.entries(taskWatchRaw.counts).map(([key, value]) => [
-                      key,
-                      typeof value === "number" ? value : 0,
-                    ]),
-                  )
-                : undefined,
-            escalationRecommended: taskWatchRaw.escalation_recommended === true,
-            recommendedAction:
-              typeof taskWatchRaw.recommended_action === "string" &&
-              taskWatchRaw.recommended_action.trim()
-                ? taskWatchRaw.recommended_action
-                : undefined,
-            affectedTasks: Array.isArray(taskWatchRaw.affected_tasks)
-              ? taskWatchRaw.affected_tasks
-                  .filter((item): item is Record<string, unknown> =>
-                    Boolean(item && typeof item === "object"),
-                  )
-                  .map((item) => ({
-                    taskId: readOptionalString(item.task_id) ?? "",
-                    followupType: readOptionalString(item.followup_type),
-                    priority: readOptionalString(item.priority),
-                    escalationCount:
-                      typeof item.escalation_count === "number" ? item.escalation_count : undefined,
-                    currentStep:
-                      typeof item.current_step === "number" ? item.current_step : undefined,
-                    totalSteps: typeof item.total_steps === "number" ? item.total_steps : undefined,
-                    stepTitle: readOptionalString(item.step_title),
-                    progressAgeSeconds:
-                      typeof item.progress_age_seconds === "number"
-                        ? item.progress_age_seconds
-                        : undefined,
-                    terminalStepStuck: item.terminal_step_stuck === true,
-                    deferredBy: readOptionalString(item.deferred_by),
-                    notBefore: readOptionalString(item.not_before),
-                    message: readOptionalString(item.message),
-                  }))
-                  .filter((item) => item.taskId.length > 0)
-              : [],
-            updatedAt:
-              typeof taskWatchRaw.updated_at === "string" && taskWatchRaw.updated_at.trim()
-                ? taskWatchRaw.updated_at
-                : undefined,
-          }
-        : undefined,
-    };
+    return parseChannelHealthState(parsed);
   } catch {
     return undefined;
   }
@@ -479,6 +488,36 @@ export function formatOagTaskWatchLine(summary?: OagChannelHealthSummary): strin
     return `terminal step still running · ${stepLabel} · ${ageMinutes}m${escalationLabel}`;
   }
   return `${primary.followupType ?? "task follow-up"} · ${stepLabel} · ${ageMinutes}m${escalationLabel}`;
+}
+
+export function formatOagEvolutionLine(memory?: {
+  evolutions?: Array<{
+    appliedAt?: string;
+    source?: string;
+    changes?: Array<{ configPath?: string; from?: unknown; to?: unknown }>;
+    outcome?: string;
+  }>;
+}): string {
+  if (!memory?.evolutions || memory.evolutions.length === 0) {
+    return "no history";
+  }
+  const last = memory.evolutions[memory.evolutions.length - 1];
+  if (!last) {
+    return "no history";
+  }
+  const age = last.appliedAt ? Math.round((Date.now() - Date.parse(last.appliedAt)) / 60_000) : 0;
+  const ageLabel = age < 60 ? `${age}m ago` : `${Math.round(age / 60)}h ago`;
+  const outcome = last.outcome ?? "unknown";
+  const changeCount = last.changes?.length ?? 0;
+  const changeSummary =
+    last.changes
+      ?.slice(0, 2)
+      .map((c) => {
+        const param = c.configPath?.split(".").pop() ?? "?";
+        return `${param} ${String(c.from)}→${String(c.to)}`;
+      })
+      .join(", ") ?? "";
+  return `last ${ageLabel} · ${outcome} · ${changeCount} change${changeCount !== 1 ? "s" : ""}${changeSummary ? ` · ${changeSummary}` : ""}`;
 }
 
 export function formatOagTaskWatchAdvice(summary?: OagChannelHealthSummary): string | undefined {
