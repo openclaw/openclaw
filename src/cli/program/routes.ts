@@ -53,6 +53,53 @@ const routeStatus: RouteSpec = {
   },
 };
 
+const routeGatewayStatus: RouteSpec = {
+  match: (path) => path[0] === "gateway" && path[1] === "status",
+  run: async (argv) => {
+    const url = getFlagValue(argv, "--url");
+    if (url === null) {
+      return false;
+    }
+    const token = getFlagValue(argv, "--token");
+    if (token === null) {
+      return false;
+    }
+    const password = getFlagValue(argv, "--password");
+    if (password === null) {
+      return false;
+    }
+    const timeout = getFlagValue(argv, "--timeout");
+    if (timeout === null) {
+      return false;
+    }
+    const ssh = getFlagValue(argv, "--ssh");
+    if (ssh === null) {
+      return false;
+    }
+    const sshIdentity = getFlagValue(argv, "--ssh-identity");
+    if (sshIdentity === null) {
+      return false;
+    }
+    const sshAuto = hasFlag(argv, "--ssh-auto");
+    const json = hasFlag(argv, "--json");
+    const { gatewayStatusCommand } = await import("../../commands/gateway-status.js");
+    await gatewayStatusCommand(
+      {
+        url: url ?? undefined,
+        token: token ?? undefined,
+        password: password ?? undefined,
+        timeout: timeout ?? undefined,
+        json,
+        ssh: ssh ?? undefined,
+        sshIdentity: sshIdentity ?? undefined,
+        sshAuto,
+      },
+      defaultRuntime,
+    );
+    return true;
+  },
+};
+
 const routeSessions: RouteSpec = {
   // Fast-path only bare `sessions`; subcommands (e.g. `sessions cleanup`)
   // must fall through to Commander so nested handlers run.
@@ -251,6 +298,7 @@ const routeModelsStatus: RouteSpec = {
 const routes: RouteSpec[] = [
   routeHealth,
   routeStatus,
+  routeGatewayStatus,
   routeSessions,
   routeAgentsList,
   routeMemoryStatus,
