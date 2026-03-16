@@ -291,6 +291,67 @@ export function normalizeCompatibilityConfigValues(cfg: OpenClawConfig): {
     }
   };
 
+  const normalizeLegacyBrowserProfiles = () => {
+    const rawBrowser = next.browser;
+    if (!isRecord(rawBrowser)) {
+      return;
+    }
+
+    const browser = structuredClone(rawBrowser);
+    let browserChanged = false;
+
+    if ("relayBindHost" in browser) {
+      delete browser.relayBindHost;
+      browserChanged = true;
+      changes.push(
+        "Removed browser.relayBindHost (legacy Chrome extension relay setting; host-local Chrome now uses Chrome MCP existing-session attach).",
+      );
+    }
+
+    const rawProfiles = browser.profiles;
+    if (!isRecord(rawProfiles)) {
+      if (!browserChanged) {
+        return;
+      }
+      next = { ...next, browser };
+      return;
+    }
+
+    const profiles = { ...rawProfiles };
+    let profilesChanged = false;
+    for (const [profileName, rawProfile] of Object.entries(rawProfiles)) {
+      if (!isRecord(rawProfile)) {
+        continue;
+      }
+      const rawDriver = typeof rawProfile.driver === "string" ? rawProfile.driver.trim() : "";
+      if (rawDriver !== "extension") {
+        continue;
+      }
+      profiles[profileName] = {
+        ...rawProfile,
+        driver: "existing-session",
+      };
+      profilesChanged = true;
+      changes.push(
+        `Moved browser.profiles.${profileName}.driver "extension" → "existing-session" (Chrome MCP attach).`,
+      );
+    }
+
+    if (profilesChanged) {
+      browser.profiles = profiles;
+      browserChanged = true;
+    }
+
+    if (!browserChanged) {
+      return;
+    }
+
+    next = {
+      ...next,
+      browser,
+    };
+  };
+
   const seedMissingDefaultAccountsFromSingleAccountBase = () => {
     const channels = next.channels as Record<string, unknown> | undefined;
     if (!channels) {
@@ -365,6 +426,7 @@ export function normalizeCompatibilityConfigValues(cfg: OpenClawConfig): {
   normalizeProvider("slack");
   normalizeProvider("discord");
   seedMissingDefaultAccountsFromSingleAccountBase();
+  normalizeLegacyBrowserProfiles();
 
   const normalizeBrowserSsrFPolicyAlias = () => {
     const rawBrowser = next.browser;

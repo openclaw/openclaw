@@ -136,37 +136,6 @@ describe("BrowserProfilesService", () => {
     );
   });
 
-  it("rejects driver=extension with non-loopback cdpUrl", async () => {
-    const resolved = resolveBrowserConfig({});
-    const { ctx } = createCtx(resolved);
-    vi.mocked(loadConfig).mockReturnValue({ browser: { profiles: {} } });
-
-    const service = createBrowserProfilesService(ctx);
-
-    await expect(
-      service.createProfile({
-        name: "chrome-remote",
-        driver: "extension",
-        cdpUrl: "http://10.0.0.42:9222",
-      }),
-    ).rejects.toThrow(/loopback cdpUrl host/i);
-  });
-
-  it("rejects driver=extension without an explicit cdpUrl", async () => {
-    const resolved = resolveBrowserConfig({});
-    const { ctx } = createCtx(resolved);
-    vi.mocked(loadConfig).mockReturnValue({ browser: { profiles: {} } });
-
-    const service = createBrowserProfilesService(ctx);
-
-    await expect(
-      service.createProfile({
-        name: "chrome-extension",
-        driver: "extension",
-      }),
-    ).rejects.toThrow(/requires an explicit loopback cdpUrl/i);
-  });
-
   it("creates existing-session profiles as attach-only local entries", async () => {
     const resolved = resolveBrowserConfig({});
     const { ctx, state } = createCtx(resolved);

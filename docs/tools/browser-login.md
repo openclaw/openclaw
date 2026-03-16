@@ -24,7 +24,6 @@ For agent browser tool calls:
 
 - Default choice: the agent should use its isolated `openclaw` browser.
 - Use `profile="user"` only when existing logged-in sessions matter and the user is at the computer to click/approve any attach prompt.
-- Use `profile="chrome-relay"` only for the Chrome extension / toolbar-button attach flow.
 - If you have multiple user-browser profiles, specify the profile explicitly instead of guessing.
 
 Two easy ways to access it:

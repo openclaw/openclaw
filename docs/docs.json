@@ -1018,7 +1018,6 @@
                 "pages": [
                   "tools/browser",
                   "tools/browser-login",
-                  "tools/chrome-extension",
                   "tools/browser-linux-troubleshooting"
                 ]
               },
@@ -1613,7 +1612,6 @@
                 "pages": [
                   "zh-CN/tools/browser",
                   "zh-CN/tools/browser-login",
-                  "zh-CN/tools/chrome-extension",
                   "zh-CN/tools/browser-linux-troubleshooting"
                 ]
               },

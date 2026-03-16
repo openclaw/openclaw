@@ -120,7 +120,6 @@ export const FIELD_LABELS: Record<string, string> = {
   "browser.attachOnly": "Browser Attach-only Mode",
   "browser.cdpPortRangeStart": "Browser CDP Port Range Start",
   "browser.defaultProfile": "Browser Default Profile",
-  "browser.relayBindHost": "Browser Relay Bind Address",
   "browser.profiles": "Browser Profiles",
   "browser.profiles.*.cdpPort": "Browser Profile CDP Port",
   "browser.profiles.*.cdpUrl": "Browser Profile CDP URL",
