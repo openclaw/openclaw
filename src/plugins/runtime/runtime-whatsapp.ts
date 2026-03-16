@@ -1,4 +1,3 @@
-import { getActiveWebListener } from "../../channels/whatsapp-active-listener.js";
 import {
   getWebAuthAgeMs,
   logoutWeb,
@@ -7,6 +6,7 @@ import {
   webAuthExists,
 } from "../../../extensions/whatsapp/src/auth-store.js";
 import { createWhatsAppLoginTool } from "../../channels/plugins/agent-tools/whatsapp-login.js";
+import { getActiveWebListener } from "../../channels/whatsapp-active-listener.js";
 import type { PluginRuntime } from "./types.js";
 
 const sendMessageWhatsAppLazy: PluginRuntime["channel"]["whatsapp"]["sendMessageWhatsApp"] = async (
