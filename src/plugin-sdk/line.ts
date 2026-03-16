@@ -27,6 +27,12 @@ export {
   buildTokenChannelStatusSummary,
 } from "./status-helpers.js";
 
+export {
+  listLineAccountIds,
+  normalizeAccountId,
+  resolveDefaultLineAccountId,
+  resolveLineAccount,
+} from "../line/accounts.js";
 export { lineSetupAdapter } from "../../extensions/line/src/setup-core.js";
 export { lineSetupWizard } from "../../extensions/line/src/setup-surface.js";
 export { LineConfigSchema } from "../line/config-schema.js";
