@@ -958,6 +958,8 @@ export async function runEmbeddedPiAgent(
             prompt,
             images: params.images,
             disableTools: params.disableTools,
+            clientTools: params.clientTools,
+            onPreflightPassed: params.onPreflightPassed,
             provider,
             modelId,
             model: applyLocalNoAuthHeaderOverride(effectiveModel, apiKeyInfo),

@@ -20,6 +20,7 @@ import {
 } from "../../../infra/net/undici-global-dispatcher.js";
 import { MAX_IMAGE_BYTES } from "../../../media/constants.js";
 import { getGlobalHookRunner } from "../../../plugins/hook-runner-global.js";
+import { getPluginToolMeta } from "../../../plugins/tools.js";
 import type {
   PluginHookAgentContext,
   PluginHookBeforeAgentStartResult,
@@ -69,7 +70,11 @@ import {
 import { subscribeEmbeddedPiSession } from "../../pi-embedded-subscribe.js";
 import { createPreparedEmbeddedPiSettingsManager } from "../../pi-project-settings.js";
 import { applyPiAutoCompactionGuard } from "../../pi-settings.js";
-import { toClientToolDefinitions } from "../../pi-tool-definition-adapter.js";
+import {
+  createClientToolNameConflictError,
+  findClientToolNameConflicts,
+  toClientToolDefinitions,
+} from "../../pi-tool-definition-adapter.js";
 import { createOpenClawCodingTools, resolveToolLoopDetectionConfig } from "../../pi-tools.js";
 import { resolveSandboxContext } from "../../sandbox.js";
 import { resolveSandboxRuntimeStatus } from "../../sandbox/runtime-status.js";
@@ -1544,6 +1549,26 @@ export async function runEmbeddedAttempt(
       provider: params.provider,
     });
     const clientTools = toolsEnabled ? params.clientTools : undefined;
+    // Collect exact raw names of non-plugin OpenClaw tools. Passed to the
+    // subscriber so filterToolResultMediaUrls only trusts MEDIA: paths from
+    // the concrete built-in tool registrations for this run.
+    const builtinToolNames = new Set(
+      tools.flatMap((tool) => {
+        const name = tool.name.trim();
+        if (!name || getPluginToolMeta(tool)) {
+          return [];
+        }
+        return [name];
+      }),
+    );
+    const clientToolNameConflicts = findClientToolNameConflicts({
+      tools: clientTools ?? [],
+      existingToolNames: builtinToolNames,
+    });
+    if (clientToolNameConflicts.length > 0) {
+      throw createClientToolNameConflictError(clientToolNameConflicts);
+    }
+    await params.onPreflightPassed?.();
     const allowedToolNames = collectAllowedToolNames({
       tools,
       clientTools,
@@ -2235,6 +2260,7 @@ export async function runEmbeddedAttempt(
         sessionKey: sandboxSessionKey,
         sessionId: params.sessionId,
         agentId: sessionAgentId,
+        builtinToolNames,
       });
 
       const {

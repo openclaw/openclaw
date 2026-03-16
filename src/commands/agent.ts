@@ -480,6 +480,7 @@ function runAgentAttempt(params: {
     prompt: effectivePrompt,
     images: params.isFallbackRetry ? undefined : params.opts.images,
     clientTools: params.opts.clientTools,
+    onPreflightPassed: params.opts.onPreflightPassed,
     provider: params.providerOverride,
     model: params.modelOverride,
     authProfileId,

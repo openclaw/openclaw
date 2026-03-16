@@ -87,12 +87,19 @@ export type EmbeddedPiSubscribeContext = {
   blockChunking?: BlockReplyChunking;
   blockChunker: EmbeddedBlockChunker | null;
   hookRunner?: HookRunner;
+  /** Exact raw names of registered non-plugin OpenClaw tools for media trust checks. */
+  builtinToolNames?: ReadonlySet<string>;
   noteLastAssistant: (msg: AgentMessage) => void;
 
   shouldEmitToolResult: () => boolean;
   shouldEmitToolOutput: () => boolean;
   emitToolSummary: (toolName?: string, meta?: string) => void;
-  emitToolOutput: (toolName?: string, meta?: string, output?: string) => void;
+  emitToolOutput: (
+    toolName?: string,
+    meta?: string,
+    output?: string,
+    mediaToolName?: string,
+  ) => void;
   stripBlockTags: (
     text: string,
     state: { thinking: boolean; final: boolean; inlineCode?: InlineCodeState },
@@ -164,11 +171,18 @@ export type ToolHandlerContext = {
   state: ToolHandlerState;
   log: EmbeddedSubscribeLogger;
   hookRunner?: HookRunner;
+  /** Exact raw names of registered non-plugin OpenClaw tools for media trust checks. */
+  builtinToolNames?: ReadonlySet<string>;
   flushBlockReplyBuffer: () => void;
   shouldEmitToolResult: () => boolean;
   shouldEmitToolOutput: () => boolean;
   emitToolSummary: (toolName?: string, meta?: string) => void;
-  emitToolOutput: (toolName?: string, meta?: string, output?: string) => void;
+  emitToolOutput: (
+    toolName?: string,
+    meta?: string,
+    output?: string,
+    mediaToolName?: string,
+  ) => void;
   trimMessagingToolSent: () => void;
 };
 

@@ -8,9 +8,13 @@ import {
 import { withFetchPreconnect } from "../test-utils/fetch-mock.js";
 import { createOpenClawTools } from "./openclaw-tools.js";
 
-vi.mock("../plugins/tools.js", () => ({
-  resolvePluginTools: () => [],
-}));
+vi.mock("../plugins/tools.js", async (importOriginal) => {
+  const mod = await importOriginal<typeof import("../plugins/tools.js")>();
+  return {
+    ...mod,
+    resolvePluginTools: () => [],
+  };
+});
 
 function asConfig(value: unknown): OpenClawConfig {
   return value as OpenClawConfig;

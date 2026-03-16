@@ -220,12 +220,13 @@ function readExecApprovalUnavailableDetails(result: unknown): {
 async function emitToolResultOutput(params: {
   ctx: ToolHandlerContext;
   toolName: string;
+  rawToolName: string;
   meta?: string;
   isToolError: boolean;
   result: unknown;
   sanitizedResult: unknown;
 }) {
-  const { ctx, toolName, meta, isToolError, result, sanitizedResult } = params;
+  const { ctx, toolName, rawToolName, meta, isToolError, result, sanitizedResult } = params;
   if (!ctx.params.onToolResult) {
     return;
   }
@@ -273,7 +274,7 @@ async function emitToolResultOutput(params: {
   if (ctx.shouldEmitToolOutput()) {
     const outputText = extractToolResultText(sanitizedResult);
     if (outputText) {
-      ctx.emitToolOutput(toolName, meta, outputText);
+      ctx.emitToolOutput(toolName, meta, outputText, rawToolName);
     }
     return;
   }
@@ -284,7 +285,11 @@ async function emitToolResultOutput(params: {
 
   // emitToolOutput() already handles MEDIA: directives when enabled; this path
   // only sends raw media URLs for non-verbose delivery mode.
-  const mediaPaths = filterToolResultMediaUrls(toolName, extractToolResultMediaPaths(result));
+  const mediaPaths = filterToolResultMediaUrls(
+    rawToolName,
+    extractToolResultMediaPaths(result),
+    ctx.builtinToolNames,
+  );
   if (mediaPaths.length === 0) {
     return;
   }
@@ -428,7 +433,8 @@ export async function handleToolExecutionEnd(
     result?: unknown;
   },
 ) {
-  const toolName = normalizeToolName(String(evt.toolName));
+  const rawToolName = String(evt.toolName);
+  const toolName = normalizeToolName(rawToolName);
   const toolCallId = String(evt.toolCallId);
   const runId = ctx.params.runId;
   const isError = Boolean(evt.isError);
@@ -545,7 +551,15 @@ export async function handleToolExecutionEnd(
     `embedded run tool end: runId=${ctx.params.runId} tool=${toolName} toolCallId=${toolCallId}`,
   );
 
-  await emitToolResultOutput({ ctx, toolName, meta, isToolError, result, sanitizedResult });
+  await emitToolResultOutput({
+    ctx,
+    toolName,
+    rawToolName,
+    meta,
+    isToolError,
+    result,
+    sanitizedResult,
+  });
 
   // Run after_tool_call plugin hook (fire-and-forget)
   const hookRunnerAfter = ctx.hookRunner ?? getGlobalHookRunner();
