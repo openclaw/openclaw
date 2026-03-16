@@ -29,7 +29,6 @@ import {
 import type { OriginatingChannelType, TemplateContext } from "../templating.js";
 import { resolveResponseUsageMode, type VerboseLevel } from "../thinking.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
-import { runAgentTurnWithFallback } from "./agent-runner-execution.js";
 import {
   createShouldEmitToolOutput,
   createShouldEmitToolResult,
@@ -37,6 +36,7 @@ import {
   isAudioPayload,
   signalTypingIfNeeded,
 } from "./agent-runner-helpers.js";
+import { runAgentTurnWithHooks } from "./agent-runner-hooks.js";
 import { runMemoryFlushIfNeeded } from "./agent-runner-memory.js";
 import { buildReplyPayloads } from "./agent-runner-payloads.js";
 import {
@@ -344,29 +344,47 @@ export async function runReplyAgent(params: {
     });
   try {
     const runStartedAt = Date.now();
-    const runOutcome = await runAgentTurnWithFallback({
-      commandBody,
-      followupRun,
-      sessionCtx,
-      opts,
-      typingSignals,
-      blockReplyPipeline,
-      blockStreamingEnabled,
-      blockReplyChunking,
-      resolvedBlockStreamingBreak,
-      applyReplyToMode,
-      shouldEmitToolResult,
-      shouldEmitToolOutput,
-      pendingToolTasks,
-      resetSessionAfterCompactionFailure,
-      resetSessionAfterRoleOrderingConflict,
-      isHeartbeat,
-      sessionKey,
-      getActiveSessionEntry: () => activeSessionEntry,
-      activeSessionStore,
-      storePath,
-      resolvedVerboseLevel,
-    });
+    const replyToChannelId = replyToChannel ?? sessionCtx.Provider ?? "";
+    const runOutcome = await runAgentTurnWithHooks(
+      {
+        commandBody,
+        followupRun,
+        sessionCtx,
+        opts,
+        typingSignals,
+        blockReplyPipeline,
+        blockStreamingEnabled,
+        blockReplyChunking,
+        resolvedBlockStreamingBreak,
+        applyReplyToMode,
+        shouldEmitToolResult,
+        shouldEmitToolOutput,
+        pendingToolTasks,
+        resetSessionAfterCompactionFailure,
+        resetSessionAfterRoleOrderingConflict,
+        isHeartbeat,
+        sessionKey,
+        getActiveSessionEntry: () => activeSessionEntry,
+        activeSessionStore,
+        storePath,
+        resolvedVerboseLevel,
+      },
+      {
+        channelId: replyToChannelId,
+        channelKey: sessionCtx.AccountId ?? replyToChannelId,
+        agentId: followupRun.run.agentId ?? "",
+        recreateBlockPipeline:
+          blockStreamingEnabled && opts?.onBlockReply
+            ? () =>
+                createBlockReplyPipeline({
+                  onBlockReply: opts.onBlockReply!,
+                  timeoutMs: blockReplyTimeoutMs,
+                  coalescing: blockReplyCoalescing,
+                  buffer: createAudioAsVoiceBuffer({ isAudioPayload }),
+                })
+            : undefined,
+      },
+    );
 
     if (runOutcome.kind === "final") {
       return finalizeWithFollowup(runOutcome.payload, queueKey, runFollowupTurn);
