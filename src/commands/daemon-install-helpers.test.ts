@@ -96,6 +96,13 @@ describe("buildGatewayInstallPlan", () => {
     expect(plan.workingDirectory).toBe("/Users/me");
     expect(plan.environment).toEqual({ OPENCLAW_PORT: "3000" });
     expect(mocks.resolvePreferredNodePath).not.toHaveBeenCalled();
+    expect(mocks.buildServiceEnvironment).toHaveBeenCalledWith(
+      expect.objectContaining({
+        env: {},
+        port: 3000,
+        extraPathDirs: ["/custom"],
+      }),
+    );
   });
 
   it("emits warnings when renderSystemNodeWarning returns one", async () => {

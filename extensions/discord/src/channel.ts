@@ -35,17 +35,18 @@ import {
   resolveDiscordAccount,
   type ResolvedDiscordAccount,
 } from "./accounts.js";
-import { collectDiscordAuditChannelIds } from "./audit.js";
+import { auditDiscordChannelPermissions, collectDiscordAuditChannelIds } from "./audit.js";
 import {
   isDiscordExecApprovalClientEnabled,
   shouldSuppressLocalDiscordExecApprovalPrompt,
 } from "./exec-approvals.js";
+import { monitorDiscordProvider } from "./monitor.js";
 import {
   looksLikeDiscordTargetId,
   normalizeDiscordMessagingTarget,
   normalizeDiscordOutboundTarget,
 } from "./normalize.js";
-import type { DiscordProbe } from "./probe.js";
+import { probeDiscord, type DiscordProbe } from "./probe.js";
 import { resolveDiscordUserAllowlist } from "./resolve-users.js";
 import { getDiscordRuntime } from "./runtime.js";
 import { fetchChannelPermissionsDiscord } from "./send.js";
@@ -514,7 +515,7 @@ export const discordPlugin: ChannelPlugin<ResolvedDiscordAccount> = {
     buildChannelSummary: ({ snapshot }) =>
       buildTokenChannelStatusSummary(snapshot, { includeMode: false }),
     probeAccount: async ({ account, timeoutMs }) =>
-      getDiscordRuntime().channel.discord.probeDiscord(account.token, timeoutMs, {
+      probeDiscord(account.token, timeoutMs, {
         includeApplication: true,
       }),
     formatCapabilitiesProbe: ({ probe }) => {
@@ -620,7 +621,7 @@ export const discordPlugin: ChannelPlugin<ResolvedDiscordAccount> = {
           elapsedMs: 0,
         };
       }
-      const audit = await getDiscordRuntime().channel.discord.auditChannelPermissions({
+      const audit = await auditDiscordChannelPermissions({
         token: botToken,
         accountId: account.accountId,
         channelIds,
@@ -661,7 +662,7 @@ export const discordPlugin: ChannelPlugin<ResolvedDiscordAccount> = {
       const token = account.token.trim();
       let discordBotLabel = "";
       try {
-        const probe = await getDiscordRuntime().channel.discord.probeDiscord(token, 2500, {
+        const probe = await probeDiscord(token, 2500, {
           includeApplication: true,
         });
         const username = probe.ok ? probe.bot?.username?.trim() : null;
@@ -689,7 +690,7 @@ export const discordPlugin: ChannelPlugin<ResolvedDiscordAccount> = {
         }
       }
       ctx.log?.info(`[${account.accountId}] starting provider${discordBotLabel}`);
-      return getDiscordRuntime().channel.discord.monitorDiscordProvider({
+      return monitorDiscordProvider({
         token,
         accountId: account.accountId,
         config: ctx.cfg,

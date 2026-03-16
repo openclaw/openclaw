@@ -1,3 +1,4 @@
+import path from "node:path";
 import {
   loadAuthProfileStoreForSecretsRuntime,
   type AuthProfileStore,
@@ -87,6 +88,9 @@ export async function buildGatewayInstallPlan(params: {
       process.platform === "darwin"
         ? resolveGatewayLaunchAgentLabel(params.env.OPENCLAW_PROFILE)
         : undefined,
+    // Keep npm/pnpm available to the service when the selected daemon node comes from
+    // a version-manager bin directory that isn't covered by static PATH guesses.
+    extraPathDirs: nodePath ? [path.dirname(nodePath)] : undefined,
   });
 
   // Merge config env vars into the service environment (vars + inline env keys).
