@@ -1,4 +1,11 @@
+import JSON5 from "json5";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { stripUrlUserInfo } from "../shared/net/url-userinfo.js";
+import {
+  replaceSensitiveValuesInRaw,
+  shouldFallbackToStructuredRawRedaction,
+} from "./redact-snapshot.raw.js";
+import { isSecretRefShape, redactSecretRefId } from "./redact-snapshot.secret-ref.js";
 import { isSensitiveConfigPath, type ConfigUiHints } from "./schema.hints.js";
 import type { ConfigFileSnapshot } from "./types.openclaw.js";
 
@@ -22,6 +29,10 @@ function isWholeObjectSensitivePath(path: string): boolean {
   return lowered.endsWith("serviceaccount") || lowered.endsWith("serviceaccountref");
 }
 
+function isUserInfoUrlPath(path: string): boolean {
+  return path.endsWith(".baseUrl") || path.endsWith(".httpUrl");
+}
+
 function collectSensitiveStrings(value: unknown, values: string[]): void {
   if (typeof value === "string") {
     if (!isEnvVarPlaceholder(value)) {
@@ -36,7 +47,16 @@ function collectSensitiveStrings(value: unknown, values: string[]): void {
     return;
   }
   if (value && typeof value === "object") {
-    for (const item of Object.values(value as Record<string, unknown>)) {
+    const obj = value as Record<string, unknown>;
+    // SecretRef objects include structural fields like source/provider that are
+    // not secret material and may appear widely in config text.
+    if (isSecretRefShape(obj)) {
+      if (!isEnvVarPlaceholder(obj.id)) {
+        values.push(obj.id);
+      }
+      return;
+    }
+    for (const item of Object.values(obj)) {
       collectSensitiveStrings(item, values);
     }
   }
@@ -175,8 +195,18 @@ function redactObjectWithLookup(
             values.push(value);
           } else if (typeof value === "object" && value !== null) {
             if (hints[candidate]?.sensitive === true && !Array.isArray(value)) {
-              collectSensitiveStrings(value, values);
-              result[key] = REDACTED_SENTINEL;
+              const objectValue = value as Record<string, unknown>;
+              if (isSecretRefShape(objectValue)) {
+                result[key] = redactSecretRefId({
+                  value: objectValue,
+                  values,
+                  redactedSentinel: REDACTED_SENTINEL,
+                  isEnvVarPlaceholder,
+                });
+              } else {
+                collectSensitiveStrings(objectValue, values);
+                result[key] = REDACTED_SENTINEL;
+              }
             } else {
               result[key] = redactObjectWithLookup(value, lookup, candidate, values, hints);
             }
@@ -187,6 +217,14 @@ function redactObjectWithLookup(
           ) {
             // Keep primitives at explicitly-sensitive paths fully redacted.
             result[key] = REDACTED_SENTINEL;
+          } else if (typeof value === "string" && isUserInfoUrlPath(path)) {
+            const scrubbed = stripUrlUserInfo(value);
+            if (scrubbed !== value) {
+              values.push(value);
+              result[key] = REDACTED_SENTINEL;
+            } else {
+              result[key] = value;
+            }
           }
           break;
         }
@@ -204,6 +242,14 @@ function redactObjectWithLookup(
         ) {
           result[key] = REDACTED_SENTINEL;
           values.push(value);
+        } else if (typeof value === "string" && isUserInfoUrlPath(path)) {
+          const scrubbed = stripUrlUserInfo(value);
+          if (scrubbed !== value) {
+            values.push(value);
+            result[key] = REDACTED_SENTINEL;
+          } else {
+            result[key] = value;
+          }
         } else if (typeof value === "object" && value !== null) {
           result[key] = redactObjectGuessing(value, path, values, hints);
         }
@@ -268,6 +314,14 @@ function redactObjectGuessing(
       ) {
         collectSensitiveStrings(value, values);
         result[key] = REDACTED_SENTINEL;
+      } else if (typeof value === "string" && isUserInfoUrlPath(dotPath)) {
+        const scrubbed = stripUrlUserInfo(value);
+        if (scrubbed !== value) {
+          values.push(value);
+          result[key] = REDACTED_SENTINEL;
+        } else {
+          result[key] = value;
+        }
       } else if (typeof value === "object" && value !== null) {
         result[key] = redactObjectGuessing(value, dotPath, values, hints);
       } else {
@@ -286,12 +340,23 @@ function redactObjectGuessing(
  */
 function redactRawText(raw: string, config: unknown, hints?: ConfigUiHints): string {
   const sensitiveValues = collectSensitiveValues(config, hints);
-  sensitiveValues.sort((a, b) => b.length - a.length);
-  let result = raw;
-  for (const value of sensitiveValues) {
-    result = result.replaceAll(value, REDACTED_SENTINEL);
+  return replaceSensitiveValuesInRaw({
+    raw,
+    sensitiveValues,
+    redactedSentinel: REDACTED_SENTINEL,
+  });
+}
+
+let suppressRestoreWarnings = false;
+
+function withRestoreWarningsSuppressed<T>(fn: () => T): T {
+  const prev = suppressRestoreWarnings;
+  suppressRestoreWarnings = true;
+  try {
+    return fn();
+  } finally {
+    suppressRestoreWarnings = prev;
   }
-  return result;
 }
 
 /**
@@ -338,8 +403,21 @@ export function redactConfigSnapshot(
   // readConfigFileSnapshot() does when it creates the snapshot.
 
   const redactedConfig = redactObject(snapshot.config, uiHints) as ConfigFileSnapshot["config"];
-  const redactedRaw = snapshot.raw ? redactRawText(snapshot.raw, snapshot.config, uiHints) : null;
   const redactedParsed = snapshot.parsed ? redactObject(snapshot.parsed, uiHints) : snapshot.parsed;
+  let redactedRaw = snapshot.raw ? redactRawText(snapshot.raw, snapshot.config, uiHints) : null;
+  if (
+    redactedRaw &&
+    shouldFallbackToStructuredRawRedaction({
+      redactedRaw,
+      originalConfig: snapshot.config,
+      restoreParsed: (parsed) =>
+        withRestoreWarningsSuppressed(() =>
+          restoreRedactedValues(parsed, snapshot.config, uiHints),
+        ),
+    })
+  ) {
+    redactedRaw = JSON5.stringify(redactedParsed ?? redactedConfig, null, 2);
+  }
   // Also redact the resolved config (contains values after ${ENV} substitution)
   const redactedResolved = redactConfigObject(snapshot.resolved, uiHints);
 
@@ -420,7 +498,9 @@ function restoreOriginalValueOrThrow(params: {
   if (params.key in params.original) {
     return params.original[params.key];
   }
-  log.warn(`Cannot un-redact config key ${params.path} as it doesn't have any value`);
+  if (!suppressRestoreWarnings) {
+    log.warn(`Cannot un-redact config key ${params.path} as it doesn't have any value`);
+  }
   throw new RedactionError(params.path);
 }
 
@@ -573,7 +653,10 @@ function restoreRedactedValuesWithLookup(
     for (const candidate of [path, wildcardPath]) {
       if (lookup.has(candidate)) {
         matched = true;
-        if (value === REDACTED_SENTINEL) {
+        if (
+          value === REDACTED_SENTINEL &&
+          (hints[candidate]?.sensitive === true || isUserInfoUrlPath(path))
+        ) {
           result[key] = restoreOriginalValueOrThrow({ key, path: candidate, original: orig });
         } else if (typeof value === "object" && value !== null) {
           result[key] = restoreRedactedValuesWithLookup(value, orig[key], lookup, candidate, hints);
@@ -583,7 +666,11 @@ function restoreRedactedValuesWithLookup(
     }
     if (!matched) {
       const markedNonSensitive = isExplicitlyNonSensitivePath(hints, [path, wildcardPath]);
-      if (!markedNonSensitive && isSensitivePath(path) && value === REDACTED_SENTINEL) {
+      if (
+        !markedNonSensitive &&
+        value === REDACTED_SENTINEL &&
+        (isSensitivePath(path) || isUserInfoUrlPath(path))
+      ) {
         result[key] = restoreOriginalValueOrThrow({ key, path, original: orig });
       } else if (typeof value === "object" && value !== null) {
         result[key] = restoreRedactedValuesGuessing(value, orig[key], path, hints);
@@ -623,8 +710,8 @@ function restoreRedactedValuesGuessing(
     const wildcardPath = prefix ? `${prefix}.*` : "*";
     if (
       !isExplicitlyNonSensitivePath(hints, [path, wildcardPath]) &&
-      isSensitivePath(path) &&
-      value === REDACTED_SENTINEL
+      value === REDACTED_SENTINEL &&
+      (isSensitivePath(path) || isUserInfoUrlPath(path))
     ) {
       result[key] = restoreOriginalValueOrThrow({ key, path, original: orig });
     } else if (typeof value === "object" && value !== null) {

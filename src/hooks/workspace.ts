@@ -13,6 +13,7 @@ import {
   resolveOpenClawMetadata,
   resolveHookInvocationPolicy,
 } from "./frontmatter.js";
+import { resolvePluginHookDirs } from "./plugin-hooks.js";
 import type {
   Hook,
   HookEligibilityContext,
@@ -242,6 +243,10 @@ function loadHookEntries(
   const extraDirs = extraDirsRaw
     .map((d) => (typeof d === "string" ? d.trim() : ""))
     .filter(Boolean);
+  const pluginHookDirs = resolvePluginHookDirs({
+    workspaceDir,
+    config: opts?.config,
+  });
 
   const bundledHooks = bundledHooksDir
     ? loadHooksFromDir({
@@ -256,6 +261,13 @@ function loadHookEntries(
       source: "openclaw-workspace", // Extra dirs treated as workspace
     });
   });
+  const pluginHooks = pluginHookDirs.flatMap(({ dir, pluginId }) =>
+    loadHooksFromDir({
+      dir,
+      source: "openclaw-plugin",
+      pluginId,
+    }),
+  );
   const managedHooks = loadHooksFromDir({
     dir: managedHooksDir,
     source: "openclaw-managed",
@@ -266,11 +278,14 @@ function loadHookEntries(
   });
 
   const merged = new Map<string, Hook>();
-  // Precedence: extra < bundled < managed < workspace (workspace wins)
+  // Precedence: extra < bundled < plugin < managed < workspace (workspace wins)
   for (const hook of extraHooks) {
     merged.set(hook.name, hook);
   }
   for (const hook of bundledHooks) {
+    merged.set(hook.name, hook);
+  }
+  for (const hook of pluginHooks) {
     merged.set(hook.name, hook);
   }
   for (const hook of managedHooks) {
@@ -339,6 +354,23 @@ function readBoundaryFileUtf8(params: {
   rootPath: string;
   boundaryLabel: string;
 }): string | null {
+  return withOpenedBoundaryFileSync(params, (opened) => {
+    try {
+      return fs.readFileSync(opened.fd, "utf-8");
+    } catch {
+      return null;
+    }
+  });
+}
+
+function withOpenedBoundaryFileSync<T>(
+  params: {
+    absolutePath: string;
+    rootPath: string;
+    boundaryLabel: string;
+  },
+  read: (opened: { fd: number; path: string }) => T,
+): T | null {
   const opened = openBoundaryFileSync({
     absolutePath: params.absolutePath,
     rootPath: params.rootPath,
@@ -348,9 +380,7 @@ function readBoundaryFileUtf8(params: {
     return null;
   }
   try {
-    return fs.readFileSync(opened.fd, "utf-8");
-  } catch {
-    return null;
+    return read({ fd: opened.fd, path: opened.path });
   } finally {
     fs.closeSync(opened.fd);
   }
@@ -361,15 +391,5 @@ function resolveBoundaryFilePath(params: {
   rootPath: string;
   boundaryLabel: string;
 }): string | null {
-  const opened = openBoundaryFileSync({
-    absolutePath: params.absolutePath,
-    rootPath: params.rootPath,
-    boundaryLabel: params.boundaryLabel,
-  });
-  if (!opened.ok) {
-    return null;
-  }
-  const safePath = opened.path;
-  fs.closeSync(opened.fd);
-  return safePath;
+  return withOpenedBoundaryFileSync(params, (opened) => opened.path);
 }

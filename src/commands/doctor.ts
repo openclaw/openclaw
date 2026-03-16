@@ -12,7 +12,9 @@ import { formatCliCommand } from "../cli/command-format.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { CONFIG_PATH, readConfigFileSnapshot, writeConfigFile } from "../config/config.js";
 import { logConfigUpdated } from "../config/logging.js";
+import { resolveSecretInputRef } from "../config/types.secrets.js";
 import { resolveGatewayService } from "../daemon/service.js";
+import { hasAmbiguousGatewayAuthModeConfig } from "../gateway/auth-mode-policy.js";
 import { resolveGatewayAuth } from "../gateway/auth.js";
 import { buildGatewayConnectionDetails } from "../gateway/call.js";
 import { resolveOpenClawPackageRoot } from "../infra/openclaw-root.js";
@@ -26,8 +28,11 @@ import {
   maybeRepairAnthropicOAuthProfileId,
   noteAuthProfileHealth,
 } from "./doctor-auth.js";
+import { noteBootstrapFileSize } from "./doctor-bootstrap-size.js";
+import { noteChromeMcpBrowserReadiness } from "./doctor-browser.js";
 import { doctorShellCompletion } from "./doctor-completion.js";
 import { loadAndMaybeMigrateDoctorConfig } from "./doctor-config-flow.js";
+import { maybeRepairLegacyCronStore } from "./doctor-cron.js";
 import { maybeRepairGatewayDaemon } from "./doctor-gateway-daemon-flow.js";
 import { checkGatewayHealth, probeGatewayMemoryStatus } from "./doctor-gateway-health.js";
 import {
@@ -40,6 +45,7 @@ import {
   noteMacLaunchAgentOverrides,
   noteMacLaunchctlGatewayEnvOverrides,
   noteDeprecatedLegacyEnvVars,
+  noteStartupOptimizationHints,
 } from "./doctor-platform-notes.js";
 import { createDoctorPrompter, type DoctorOptions } from "./doctor-prompter.js";
 import { maybeRepairSandboxImages, noteSandboxScopeWarnings } from "./doctor-sandbox.js";
@@ -54,6 +60,7 @@ import { maybeRepairUiProtocolFreshness } from "./doctor-ui.js";
 import { maybeOfferUpdateBeforeDoctor } from "./doctor-update.js";
 import { noteWorkspaceStatus } from "./doctor-workspace-status.js";
 import { MEMORY_SYSTEM_PROMPT, shouldSuggestMemorySystem } from "./doctor-workspace.js";
+import { noteOpenAIOAuthTlsPrerequisites } from "./oauth-tls-preflight.js";
 import { applyWizardMetadata, printWizardHeader, randomToken } from "./onboard-helpers.js";
 import { ensureSystemdUserLingerInteractive } from "./systemd-linger.js";
 
@@ -92,6 +99,7 @@ export async function doctorCommand(
   await maybeRepairUiProtocolFreshness(runtime, prompter);
   noteSourceInstallIssues(root);
   noteDeprecatedLegacyEnvVars();
+  noteStartupOptimizationHints();
 
   const configResult = await loadAndMaybeMigrateDoctorConfig({
     options,
@@ -113,6 +121,17 @@ export async function doctorCommand(
     }
     note(lines.join("\n"), "Gateway");
   }
+  if (resolveMode(cfg) === "local" && hasAmbiguousGatewayAuthModeConfig(cfg)) {
+    note(
+      [
+        "gateway.auth.token and gateway.auth.password are both configured while gateway.auth.mode is unset.",
+        "Set an explicit mode to avoid ambiguous auth selection and startup/runtime failures.",
+        `Set token mode: ${formatCliCommand("openclaw config set gateway.auth.mode token")}`,
+        `Set password mode: ${formatCliCommand("openclaw config set gateway.auth.mode password")}`,
+      ].join("\n"),
+      "Gateway auth",
+    );
+  }
 
   cfg = await maybeRepairAnthropicOAuthProfileId(cfg, prompter);
   cfg = await maybeRemoveDeprecatedCliAuthProfiles(cfg, prompter);
@@ -126,39 +145,54 @@ export async function doctorCommand(
     note(gatewayDetails.remoteFallbackNote, "Gateway");
   }
   if (resolveMode(cfg) === "local" && sourceConfigValid) {
+    const gatewayTokenRef = resolveSecretInputRef({
+      value: cfg.gateway?.auth?.token,
+      defaults: cfg.secrets?.defaults,
+    }).ref;
     const auth = resolveGatewayAuth({
       authConfig: cfg.gateway?.auth,
       tailscaleMode: cfg.gateway?.tailscale?.mode ?? "off",
     });
     const needsToken = auth.mode !== "password" && (auth.mode !== "token" || !auth.token);
     if (needsToken) {
-      note(
-        "Gateway auth is off or missing a token. Token auth is now the recommended default (including loopback).",
-        "Gateway auth",
-      );
-      const shouldSetToken =
-        options.generateGatewayToken === true
-          ? true
-          : options.nonInteractive === true
-            ? false
-            : await prompter.confirmRepair({
-                message: "Generate and configure a gateway token now?",
-                initialValue: true,
-              });
-      if (shouldSetToken) {
-        const nextToken = randomToken();
-        cfg = {
-          ...cfg,
-          gateway: {
-            ...cfg.gateway,
-            auth: {
-              ...cfg.gateway?.auth,
-              mode: "token",
-              token: nextToken,
+      if (gatewayTokenRef) {
+        note(
+          [
+            "Gateway token is managed via SecretRef and is currently unavailable.",
+            "Doctor will not overwrite gateway.auth.token with a plaintext value.",
+            "Resolve/rotate the external secret source, then rerun doctor.",
+          ].join("\n"),
+          "Gateway auth",
+        );
+      } else {
+        note(
+          "Gateway auth is off or missing a token. Token auth is now the recommended default (including loopback).",
+          "Gateway auth",
+        );
+        const shouldSetToken =
+          options.generateGatewayToken === true
+            ? true
+            : options.nonInteractive === true
+              ? false
+              : await prompter.confirmRepair({
+                  message: "Generate and configure a gateway token now?",
+                  initialValue: true,
+                });
+        if (shouldSetToken) {
+          const nextToken = randomToken();
+          cfg = {
+            ...cfg,
+            gateway: {
+              ...cfg.gateway,
+              auth: {
+                ...cfg.gateway?.auth,
+                mode: "token",
+                token: nextToken,
+              },
             },
-          },
-        };
-        note("Gateway token configured.", "Gateway auth");
+          };
+          note("Gateway token configured.", "Gateway auth");
+        }
       }
     }
   }
@@ -188,6 +222,11 @@ export async function doctorCommand(
 
   await noteStateIntegrity(cfg, prompter, configResult.path ?? CONFIG_PATH);
   await noteSessionLockHealth({ shouldRepair: prompter.shouldRepair });
+  await maybeRepairLegacyCronStore({
+    cfg,
+    options,
+    prompter,
+  });
 
   cfg = await maybeRepairSandboxImages(cfg, runtime, prompter);
   noteSandboxScopeWarnings(cfg);
@@ -198,6 +237,11 @@ export async function doctorCommand(
   await noteMacLaunchctlGatewayEnvOverrides(cfg);
 
   await noteSecurityWarnings(cfg);
+  await noteChromeMcpBrowserReadiness(cfg);
+  await noteOpenAIOAuthTlsPrerequisites({
+    cfg,
+    deep: options.deep === true,
+  });
 
   if (cfg.hooks?.gmail?.model?.trim()) {
     const hooksModelRef = resolveHooksGmailModel({
@@ -264,6 +308,7 @@ export async function doctorCommand(
   }
 
   noteWorkspaceStatus(cfg);
+  await noteBootstrapFileSize(cfg);
 
   // Check and fix shell completion
   await doctorShellCompletion(runtime, prompter, {

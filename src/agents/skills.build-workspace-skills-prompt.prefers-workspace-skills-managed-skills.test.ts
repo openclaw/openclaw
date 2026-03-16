@@ -115,7 +115,7 @@ describe("buildWorkspaceSkillsPrompt", () => {
         managedSkillsDir,
         config: {
           browser: { enabled: false },
-          skills: { entries: { "env-skill": { apiKey: "ok" } } },
+          skills: { entries: { "env-skill": { apiKey: "ok" } } }, // pragma: allowlist secret
         },
         eligibility: {
           remote: {

@@ -1,4 +1,5 @@
 import { defaultRuntime } from "../../../runtime.js";
+import { resolveGlobalMap } from "../../../shared/global-singleton.js";
 import {
   buildCollectPrompt,
   beginQueueDrain,
@@ -12,6 +13,27 @@ import {
 import { isRoutableChannel } from "../route-reply.js";
 import { FOLLOWUP_QUEUES } from "./state.js";
 import type { FollowupRun } from "./types.js";
+
+// Persists the most recent runFollowup callback per queue key so that
+// enqueueFollowupRun can restart a drain that finished and deleted the queue.
+const FOLLOWUP_DRAIN_CALLBACKS_KEY = Symbol.for("openclaw.followupDrainCallbacks");
+
+const FOLLOWUP_RUN_CALLBACKS = resolveGlobalMap<string, (run: FollowupRun) => Promise<void>>(
+  FOLLOWUP_DRAIN_CALLBACKS_KEY,
+);
+
+export function clearFollowupDrainCallback(key: string): void {
+  FOLLOWUP_RUN_CALLBACKS.delete(key);
+}
+
+/** Restart the drain for `key` if it is currently idle, using the stored callback. */
+export function kickFollowupDrainIfIdle(key: string): void {
+  const cb = FOLLOWUP_RUN_CALLBACKS.get(key);
+  if (!cb) {
+    return;
+  }
+  scheduleFollowupDrain(key, cb);
+}
 
 type OriginRoutingMetadata = Pick<
   FollowupRun,
@@ -54,6 +76,9 @@ export function scheduleFollowupDrain(
   if (!queue) {
     return;
   }
+  // Cache callback only when a drain actually starts. Avoid keeping stale
+  // callbacks around from finalize calls where no queue work is pending.
+  FOLLOWUP_RUN_CALLBACKS.set(key, runFollowup);
   void (async () => {
     try {
       const collectState = { forceIndividualCollect: false };

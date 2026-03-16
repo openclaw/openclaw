@@ -53,6 +53,27 @@ export async function postTranscriptionRequest(params: {
   );
 }
 
+export async function postJsonRequest(params: {
+  url: string;
+  headers: Headers;
+  body: unknown;
+  timeoutMs: number;
+  fetchFn: typeof fetch;
+  allowPrivateNetwork?: boolean;
+}) {
+  return fetchWithTimeoutGuarded(
+    params.url,
+    {
+      method: "POST",
+      headers: params.headers,
+      body: JSON.stringify(params.body),
+    },
+    params.timeoutMs,
+    params.fetchFn,
+    params.allowPrivateNetwork ? { ssrfPolicy: { allowPrivateNetwork: true } } : undefined,
+  );
+}
+
 export async function readErrorResponse(res: Response): Promise<string | undefined> {
   try {
     const text = await res.text();

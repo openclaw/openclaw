@@ -152,7 +152,9 @@ export const MessagesSchema = z
     queue: QueueSchema,
     inbound: InboundDebounceSchema,
     ackReaction: z.string().optional(),
-    ackReactionScope: z.enum(["group-mentions", "group-all", "direct", "all"]).optional(),
+    ackReactionScope: z
+      .enum(["group-mentions", "group-all", "direct", "all", "off", "none"])
+      .optional(),
     removeAckAfterReply: z.boolean().optional(),
     statusReactions: z
       .object({
@@ -167,6 +169,7 @@ export const MessagesSchema = z
             error: z.string().optional(),
             stallSoft: z.string().optional(),
             stallHard: z.string().optional(),
+            compacting: z.string().optional(),
           })
           .strict()
           .optional(),

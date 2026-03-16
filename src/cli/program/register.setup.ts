@@ -1,5 +1,5 @@
 import type { Command } from "commander";
-import { onboardCommand } from "../../commands/onboard.js";
+import { setupWizardCommand } from "../../commands/onboard.js";
 import { setupCommand } from "../../commands/setup.js";
 import { defaultRuntime } from "../../runtime.js";
 import { formatDocsLink } from "../../terminal/links.js";
@@ -35,7 +35,7 @@ export function registerSetupCommand(program: Command) {
           "remoteToken",
         ]);
         if (opts.wizard || hasWizardFlags) {
-          await onboardCommand(
+          await setupWizardCommand(
             {
               workspace: opts.workspace as string | undefined,
               nonInteractive: Boolean(opts.nonInteractive),

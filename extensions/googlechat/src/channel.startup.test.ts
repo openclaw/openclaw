@@ -1,10 +1,10 @@
-import type {
-  ChannelAccountSnapshot,
-  ChannelGatewayContext,
-  OpenClawConfig,
-} from "openclaw/plugin-sdk";
+import type { ChannelAccountSnapshot } from "openclaw/plugin-sdk/googlechat";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createRuntimeEnv } from "../../test-utils/runtime-env.js";
+import {
+  abortStartedAccount,
+  expectPendingUntilAbort,
+  startAccountAndTrackLifecycle,
+} from "../../test-utils/start-account-lifecycle.js";
 import type { ResolvedGoogleChatAccount } from "./accounts.js";
 
 const hoisted = vi.hoisted(() => ({
@@ -20,32 +20,6 @@ vi.mock("./monitor.js", async () => {
 });
 
 import { googlechatPlugin } from "./channel.js";
-
-function createStartAccountCtx(params: {
-  account: ResolvedGoogleChatAccount;
-  abortSignal: AbortSignal;
-  statusPatchSink?: (next: ChannelAccountSnapshot) => void;
-}): ChannelGatewayContext<ResolvedGoogleChatAccount> {
-  const snapshot: ChannelAccountSnapshot = {
-    accountId: params.account.accountId,
-    configured: true,
-    enabled: true,
-    running: false,
-  };
-  return {
-    accountId: params.account.accountId,
-    account: params.account,
-    cfg: {} as OpenClawConfig,
-    runtime: createRuntimeEnv(),
-    abortSignal: params.abortSignal,
-    log: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
-    getStatus: () => snapshot,
-    setStatus: (next) => {
-      Object.assign(snapshot, next);
-      params.statusPatchSink?.(snapshot);
-    },
-  };
-}
 
 describe("googlechatPlugin gateway.startAccount", () => {
   afterEach(() => {
@@ -69,33 +43,25 @@ describe("googlechatPlugin gateway.startAccount", () => {
       },
     };
 
-    const patches: ChannelAccountSnapshot[] = [];
-    const abort = new AbortController();
-    const task = googlechatPlugin.gateway!.startAccount!(
-      createStartAccountCtx({
-        account,
-        abortSignal: abort.signal,
-        statusPatchSink: (next) => patches.push({ ...next }),
-      }),
-    );
-
-    await new Promise((resolve) => setTimeout(resolve, 20));
-
-    let settled = false;
-    void task.then(() => {
-      settled = true;
+    const { abort, patches, task, isSettled } = startAccountAndTrackLifecycle({
+      startAccount: googlechatPlugin.gateway!.startAccount!,
+      account,
     });
-
-    await new Promise((resolve) => setTimeout(resolve, 20));
-    expect(settled).toBe(false);
-
-    expect(hoisted.startGoogleChatMonitor).toHaveBeenCalledOnce();
-    expect(unregister).not.toHaveBeenCalled();
-
-    abort.abort();
-    await task;
-
-    expect(unregister).toHaveBeenCalledOnce();
+    await expectPendingUntilAbort({
+      waitForStarted: () =>
+        vi.waitFor(() => {
+          expect(hoisted.startGoogleChatMonitor).toHaveBeenCalledOnce();
+        }),
+      isSettled,
+      abort,
+      task,
+      assertBeforeAbort: () => {
+        expect(unregister).not.toHaveBeenCalled();
+      },
+      assertAfterAbort: () => {
+        expect(unregister).toHaveBeenCalledOnce();
+      },
+    });
     expect(patches.some((entry) => entry.running === true)).toBe(true);
     expect(patches.some((entry) => entry.running === false)).toBe(true);
   });

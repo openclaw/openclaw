@@ -1,11 +1,13 @@
-import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
-import { emptyPluginConfigSchema } from "openclaw/plugin-sdk";
+import type { OpenClawPluginApi } from "openclaw/plugin-sdk/feishu";
+import { emptyPluginConfigSchema } from "openclaw/plugin-sdk/feishu";
 import { registerFeishuBitableTools } from "./src/bitable.js";
 import { feishuPlugin } from "./src/channel.js";
+import { registerFeishuChatTools } from "./src/chat.js";
 import { registerFeishuDocTools } from "./src/docx.js";
 import { registerFeishuDriveTools } from "./src/drive.js";
 import { registerFeishuPermTools } from "./src/perm.js";
 import { setFeishuRuntime } from "./src/runtime.js";
+import { registerFeishuSubagentHooks } from "./src/subagent-hooks.js";
 import { registerFeishuWikiTools } from "./src/wiki.js";
 
 export { monitorFeishuProvider } from "./src/monitor.js";
@@ -52,7 +54,12 @@ const plugin = {
   register(api: OpenClawPluginApi) {
     setFeishuRuntime(api.runtime);
     api.registerChannel({ plugin: feishuPlugin });
+    if (api.registrationMode !== "full") {
+      return;
+    }
+    registerFeishuSubagentHooks(api);
     registerFeishuDocTools(api);
+    registerFeishuChatTools(api);
     registerFeishuWikiTools(api);
     registerFeishuDriveTools(api);
     registerFeishuPermTools(api);

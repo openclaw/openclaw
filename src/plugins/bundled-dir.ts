@@ -1,11 +1,32 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { resolveOpenClawPackageRootSync } from "../infra/openclaw-root.js";
+import { resolveUserPath } from "../utils.js";
 
-export function resolveBundledPluginsDir(): string | undefined {
-  const override = process.env.OPENCLAW_BUNDLED_PLUGINS_DIR?.trim();
+export function resolveBundledPluginsDir(env: NodeJS.ProcessEnv = process.env): string | undefined {
+  const override = env.OPENCLAW_BUNDLED_PLUGINS_DIR?.trim();
   if (override) {
-    return override;
+    return resolveUserPath(override, env);
+  }
+
+  try {
+    const packageRoots = [
+      resolveOpenClawPackageRootSync({ cwd: process.cwd() }),
+      resolveOpenClawPackageRootSync({ moduleUrl: import.meta.url }),
+    ].filter(
+      (entry, index, all): entry is string => Boolean(entry) && all.indexOf(entry) === index,
+    );
+    for (const packageRoot of packageRoots) {
+      // Local source checkouts stage a runtime-complete bundled plugin tree under
+      // dist-runtime/. Prefer that over release-shaped dist/extensions.
+      const runtimeExtensionsDir = path.join(packageRoot, "dist-runtime", "extensions");
+      if (fs.existsSync(runtimeExtensionsDir)) {
+        return runtimeExtensionsDir;
+      }
+    }
+  } catch {
+    // ignore
   }
 
   // bun --compile: ship a sibling `extensions/` next to the executable.

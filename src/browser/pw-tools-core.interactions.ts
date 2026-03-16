@@ -1,4 +1,4 @@
-import type { BrowserFormField } from "./client-actions-core.js";
+import type { BrowserActRequest, BrowserFormField } from "./client-actions-core.js";
 import { DEFAULT_FILL_FIELD_TYPE } from "./form-fields.js";
 import { DEFAULT_UPLOAD_DIR, resolveStrictExistingPathsWithinRoot } from "./paths.js";
 import {
@@ -8,16 +8,67 @@ import {
   refLocator,
   restoreRoleRefsForTarget,
 } from "./pw-session.js";
-import { normalizeTimeoutMs, requireRef, toAIFriendlyError } from "./pw-tools-core.shared.js";
+import {
+  normalizeTimeoutMs,
+  requireRef,
+  requireRefOrSelector,
+  toAIFriendlyError,
+} from "./pw-tools-core.shared.js";
+import { closePageViaPlaywright, resizeViewportViaPlaywright } from "./pw-tools-core.snapshot.js";
+
+type TargetOpts = {
+  cdpUrl: string;
+  targetId?: string;
+};
+
+const MAX_CLICK_DELAY_MS = 5_000;
+const MAX_WAIT_TIME_MS = 30_000;
+const MAX_BATCH_ACTIONS = 100;
+
+function resolveBoundedDelayMs(value: number | undefined, label: string, maxMs: number): number {
+  const normalized = Math.floor(value ?? 0);
+  if (!Number.isFinite(normalized) || normalized < 0) {
+    throw new Error(`${label} must be >= 0`);
+  }
+  if (normalized > maxMs) {
+    throw new Error(`${label} exceeds maximum of ${maxMs}ms`);
+  }
+  return normalized;
+}
+
+async function getRestoredPageForTarget(opts: TargetOpts) {
+  const page = await getPageForTargetId(opts);
+  ensurePageState(page);
+  restoreRoleRefsForTarget({ cdpUrl: opts.cdpUrl, targetId: opts.targetId, page });
+  return page;
+}
+
+function resolveInteractionTimeoutMs(timeoutMs?: number): number {
+  return Math.max(500, Math.min(60_000, Math.floor(timeoutMs ?? 8000)));
+}
+
+async function awaitEvalWithAbort<T>(
+  evalPromise: Promise<T>,
+  abortPromise?: Promise<never>,
+): Promise<T> {
+  if (!abortPromise) {
+    return await evalPromise;
+  }
+  try {
+    return await Promise.race([evalPromise, abortPromise]);
+  } catch (err) {
+    // If abort wins the race, evaluate may reject later; avoid unhandled rejections.
+    void evalPromise.catch(() => {});
+    throw err;
+  }
+}
 
 export async function highlightViaPlaywright(opts: {
   cdpUrl: string;
   targetId?: string;
   ref: string;
 }): Promise<void> {
-  const page = await getPageForTargetId(opts);
-  ensurePageState(page);
-  restoreRoleRefsForTarget({ cdpUrl: opts.cdpUrl, targetId: opts.targetId, page });
+  const page = await getRestoredPageForTarget(opts);
   const ref = requireRef(opts.ref);
   try {
     await refLocator(page, ref).highlight();
@@ -29,22 +80,27 @@ export async function highlightViaPlaywright(opts: {
 export async function clickViaPlaywright(opts: {
   cdpUrl: string;
   targetId?: string;
-  ref: string;
+  ref?: string;
+  selector?: string;
   doubleClick?: boolean;
   button?: "left" | "right" | "middle";
   modifiers?: Array<"Alt" | "Control" | "ControlOrMeta" | "Meta" | "Shift">;
+  delayMs?: number;
   timeoutMs?: number;
 }): Promise<void> {
-  const page = await getPageForTargetId({
-    cdpUrl: opts.cdpUrl,
-    targetId: opts.targetId,
-  });
-  ensurePageState(page);
-  restoreRoleRefsForTarget({ cdpUrl: opts.cdpUrl, targetId: opts.targetId, page });
-  const ref = requireRef(opts.ref);
-  const locator = refLocator(page, ref);
-  const timeout = Math.max(500, Math.min(60_000, Math.floor(opts.timeoutMs ?? 8000)));
+  const resolved = requireRefOrSelector(opts.ref, opts.selector);
+  const page = await getRestoredPageForTarget(opts);
+  const label = resolved.ref ?? resolved.selector!;
+  const locator = resolved.ref
+    ? refLocator(page, requireRef(resolved.ref))
+    : page.locator(resolved.selector!);
+  const timeout = resolveInteractionTimeoutMs(opts.timeoutMs);
   try {
+    const delayMs = resolveBoundedDelayMs(opts.delayMs, "click delayMs", MAX_CLICK_DELAY_MS);
+    if (delayMs > 0) {
+      await locator.hover({ timeout });
+      await new Promise((resolve) => setTimeout(resolve, delayMs));
+    }
     if (opts.doubleClick) {
       await locator.dblclick({
         timeout,
@@ -59,73 +115,84 @@ export async function clickViaPlaywright(opts: {
       });
     }
   } catch (err) {
-    throw toAIFriendlyError(err, ref);
+    throw toAIFriendlyError(err, label);
   }
 }
 
 export async function hoverViaPlaywright(opts: {
   cdpUrl: string;
   targetId?: string;
-  ref: string;
+  ref?: string;
+  selector?: string;
   timeoutMs?: number;
 }): Promise<void> {
-  const ref = requireRef(opts.ref);
-  const page = await getPageForTargetId(opts);
-  ensurePageState(page);
-  restoreRoleRefsForTarget({ cdpUrl: opts.cdpUrl, targetId: opts.targetId, page });
+  const resolved = requireRefOrSelector(opts.ref, opts.selector);
+  const page = await getRestoredPageForTarget(opts);
+  const label = resolved.ref ?? resolved.selector!;
+  const locator = resolved.ref
+    ? refLocator(page, requireRef(resolved.ref))
+    : page.locator(resolved.selector!);
   try {
-    await refLocator(page, ref).hover({
-      timeout: Math.max(500, Math.min(60_000, opts.timeoutMs ?? 8000)),
+    await locator.hover({
+      timeout: resolveInteractionTimeoutMs(opts.timeoutMs),
     });
   } catch (err) {
-    throw toAIFriendlyError(err, ref);
+    throw toAIFriendlyError(err, label);
   }
 }
 
 export async function dragViaPlaywright(opts: {
   cdpUrl: string;
   targetId?: string;
-  startRef: string;
-  endRef: string;
+  startRef?: string;
+  startSelector?: string;
+  endRef?: string;
+  endSelector?: string;
   timeoutMs?: number;
 }): Promise<void> {
-  const startRef = requireRef(opts.startRef);
-  const endRef = requireRef(opts.endRef);
-  if (!startRef || !endRef) {
-    throw new Error("startRef and endRef are required");
-  }
-  const page = await getPageForTargetId(opts);
-  ensurePageState(page);
-  restoreRoleRefsForTarget({ cdpUrl: opts.cdpUrl, targetId: opts.targetId, page });
+  const resolvedStart = requireRefOrSelector(opts.startRef, opts.startSelector);
+  const resolvedEnd = requireRefOrSelector(opts.endRef, opts.endSelector);
+  const page = await getRestoredPageForTarget(opts);
+  const startLocator = resolvedStart.ref
+    ? refLocator(page, requireRef(resolvedStart.ref))
+    : page.locator(resolvedStart.selector!);
+  const endLocator = resolvedEnd.ref
+    ? refLocator(page, requireRef(resolvedEnd.ref))
+    : page.locator(resolvedEnd.selector!);
+  const startLabel = resolvedStart.ref ?? resolvedStart.selector!;
+  const endLabel = resolvedEnd.ref ?? resolvedEnd.selector!;
   try {
-    await refLocator(page, startRef).dragTo(refLocator(page, endRef), {
-      timeout: Math.max(500, Math.min(60_000, opts.timeoutMs ?? 8000)),
+    await startLocator.dragTo(endLocator, {
+      timeout: resolveInteractionTimeoutMs(opts.timeoutMs),
     });
   } catch (err) {
-    throw toAIFriendlyError(err, `${startRef} -> ${endRef}`);
+    throw toAIFriendlyError(err, `${startLabel} -> ${endLabel}`);
   }
 }
 
 export async function selectOptionViaPlaywright(opts: {
   cdpUrl: string;
   targetId?: string;
-  ref: string;
+  ref?: string;
+  selector?: string;
   values: string[];
   timeoutMs?: number;
 }): Promise<void> {
-  const ref = requireRef(opts.ref);
+  const resolved = requireRefOrSelector(opts.ref, opts.selector);
   if (!opts.values?.length) {
     throw new Error("values are required");
   }
-  const page = await getPageForTargetId(opts);
-  ensurePageState(page);
-  restoreRoleRefsForTarget({ cdpUrl: opts.cdpUrl, targetId: opts.targetId, page });
+  const page = await getRestoredPageForTarget(opts);
+  const label = resolved.ref ?? resolved.selector!;
+  const locator = resolved.ref
+    ? refLocator(page, requireRef(resolved.ref))
+    : page.locator(resolved.selector!);
   try {
-    await refLocator(page, ref).selectOption(opts.values, {
-      timeout: Math.max(500, Math.min(60_000, opts.timeoutMs ?? 8000)),
+    await locator.selectOption(opts.values, {
+      timeout: resolveInteractionTimeoutMs(opts.timeoutMs),
     });
   } catch (err) {
-    throw toAIFriendlyError(err, ref);
+    throw toAIFriendlyError(err, label);
   }
 }
 
@@ -149,19 +216,21 @@ export async function pressKeyViaPlaywright(opts: {
 export async function typeViaPlaywright(opts: {
   cdpUrl: string;
   targetId?: string;
-  ref: string;
+  ref?: string;
+  selector?: string;
   text: string;
   submit?: boolean;
   slowly?: boolean;
   timeoutMs?: number;
 }): Promise<void> {
+  const resolved = requireRefOrSelector(opts.ref, opts.selector);
   const text = String(opts.text ?? "");
-  const page = await getPageForTargetId(opts);
-  ensurePageState(page);
-  restoreRoleRefsForTarget({ cdpUrl: opts.cdpUrl, targetId: opts.targetId, page });
-  const ref = requireRef(opts.ref);
-  const locator = refLocator(page, ref);
-  const timeout = Math.max(500, Math.min(60_000, opts.timeoutMs ?? 8000));
+  const page = await getRestoredPageForTarget(opts);
+  const label = resolved.ref ?? resolved.selector!;
+  const locator = resolved.ref
+    ? refLocator(page, requireRef(resolved.ref))
+    : page.locator(resolved.selector!);
+  const timeout = resolveInteractionTimeoutMs(opts.timeoutMs);
   try {
     if (opts.slowly) {
       await locator.click({ timeout });
@@ -173,7 +242,7 @@ export async function typeViaPlaywright(opts: {
       await locator.press("Enter", { timeout });
     }
   } catch (err) {
-    throw toAIFriendlyError(err, ref);
+    throw toAIFriendlyError(err, label);
   }
 }
 
@@ -183,10 +252,8 @@ export async function fillFormViaPlaywright(opts: {
   fields: BrowserFormField[];
   timeoutMs?: number;
 }): Promise<void> {
-  const page = await getPageForTargetId(opts);
-  ensurePageState(page);
-  restoreRoleRefsForTarget({ cdpUrl: opts.cdpUrl, targetId: opts.targetId, page });
-  const timeout = Math.max(500, Math.min(60_000, opts.timeoutMs ?? 8000));
+  const page = await getRestoredPageForTarget(opts);
+  const timeout = resolveInteractionTimeoutMs(opts.timeoutMs);
   for (const field of opts.fields) {
     const ref = field.ref.trim();
     const type = (field.type || DEFAULT_FILL_FIELD_TYPE).trim() || DEFAULT_FILL_FIELD_TYPE;
@@ -231,9 +298,7 @@ export async function evaluateViaPlaywright(opts: {
   if (!fnText) {
     throw new Error("function is required");
   }
-  const page = await getPageForTargetId(opts);
-  ensurePageState(page);
-  restoreRoleRefsForTarget({ cdpUrl: opts.cdpUrl, targetId: opts.targetId, page });
+  const page = await getRestoredPageForTarget(opts);
   // Clamp evaluate timeout to prevent permanently blocking Playwright's command queue.
   // Without this, a long-running async evaluate blocks all subsequent page operations
   // because Playwright serializes CDP commands per page.
@@ -313,17 +378,7 @@ export async function evaluateViaPlaywright(opts: {
         fnBody: fnText,
         timeoutMs: evaluateTimeout,
       });
-      if (!abortPromise) {
-        return await evalPromise;
-      }
-      try {
-        return await Promise.race([evalPromise, abortPromise]);
-      } catch (err) {
-        // If abort wins the race, the underlying evaluate may reject later; ensure we don't
-        // surface it as an unhandled rejection.
-        void evalPromise.catch(() => {});
-        throw err;
-      }
+      return await awaitEvalWithAbort(evalPromise, abortPromise);
     }
 
     // eslint-disable-next-line @typescript-eslint/no-implied-eval -- required for browser-context eval
@@ -353,15 +408,7 @@ export async function evaluateViaPlaywright(opts: {
       fnBody: fnText,
       timeoutMs: evaluateTimeout,
     });
-    if (!abortPromise) {
-      return await evalPromise;
-    }
-    try {
-      return await Promise.race([evalPromise, abortPromise]);
-    } catch (err) {
-      void evalPromise.catch(() => {});
-      throw err;
-    }
+    return await awaitEvalWithAbort(evalPromise, abortPromise);
   } finally {
     if (signal && abortListener) {
       signal.removeEventListener("abort", abortListener);
@@ -372,20 +419,22 @@ export async function evaluateViaPlaywright(opts: {
 export async function scrollIntoViewViaPlaywright(opts: {
   cdpUrl: string;
   targetId?: string;
-  ref: string;
+  ref?: string;
+  selector?: string;
   timeoutMs?: number;
 }): Promise<void> {
-  const page = await getPageForTargetId(opts);
-  ensurePageState(page);
-  restoreRoleRefsForTarget({ cdpUrl: opts.cdpUrl, targetId: opts.targetId, page });
+  const resolved = requireRefOrSelector(opts.ref, opts.selector);
+  const page = await getRestoredPageForTarget(opts);
   const timeout = normalizeTimeoutMs(opts.timeoutMs, 20_000);
 
-  const ref = requireRef(opts.ref);
-  const locator = refLocator(page, ref);
+  const label = resolved.ref ?? resolved.selector!;
+  const locator = resolved.ref
+    ? refLocator(page, requireRef(resolved.ref))
+    : page.locator(resolved.selector!);
   try {
     await locator.scrollIntoViewIfNeeded({ timeout });
   } catch (err) {
-    throw toAIFriendlyError(err, ref);
+    throw toAIFriendlyError(err, label);
   }
 }
 
@@ -406,7 +455,7 @@ export async function waitForViaPlaywright(opts: {
   const timeout = normalizeTimeoutMs(opts.timeoutMs, 20_000);
 
   if (typeof opts.timeMs === "number" && Number.isFinite(opts.timeMs)) {
-    await page.waitForTimeout(Math.max(0, opts.timeMs));
+    await page.waitForTimeout(resolveBoundedDelayMs(opts.timeMs, "wait timeMs", MAX_WAIT_TIME_MS));
   }
   if (opts.text) {
     await page.getByText(opts.text).first().waitFor({
@@ -654,4 +703,189 @@ export async function setInputFilesViaPlaywright(opts: {
   } catch {
     // Best-effort for sites that don't react to setInputFiles alone.
   }
+}
+
+const MAX_BATCH_DEPTH = 5;
+
+async function executeSingleAction(
+  action: BrowserActRequest,
+  cdpUrl: string,
+  targetId?: string,
+  evaluateEnabled?: boolean,
+  depth = 0,
+): Promise<void> {
+  if (depth > MAX_BATCH_DEPTH) {
+    throw new Error(`Batch nesting depth exceeds maximum of ${MAX_BATCH_DEPTH}`);
+  }
+  const effectiveTargetId = action.targetId ?? targetId;
+  switch (action.kind) {
+    case "click":
+      await clickViaPlaywright({
+        cdpUrl,
+        targetId: effectiveTargetId,
+        ref: action.ref,
+        selector: action.selector,
+        doubleClick: action.doubleClick,
+        button: action.button as "left" | "right" | "middle" | undefined,
+        modifiers: action.modifiers as Array<
+          "Alt" | "Control" | "ControlOrMeta" | "Meta" | "Shift"
+        >,
+        delayMs: action.delayMs,
+        timeoutMs: action.timeoutMs,
+      });
+      break;
+    case "type":
+      await typeViaPlaywright({
+        cdpUrl,
+        targetId: effectiveTargetId,
+        ref: action.ref,
+        selector: action.selector,
+        text: action.text,
+        submit: action.submit,
+        slowly: action.slowly,
+        timeoutMs: action.timeoutMs,
+      });
+      break;
+    case "press":
+      await pressKeyViaPlaywright({
+        cdpUrl,
+        targetId: effectiveTargetId,
+        key: action.key,
+        delayMs: action.delayMs,
+      });
+      break;
+    case "hover":
+      await hoverViaPlaywright({
+        cdpUrl,
+        targetId: effectiveTargetId,
+        ref: action.ref,
+        selector: action.selector,
+        timeoutMs: action.timeoutMs,
+      });
+      break;
+    case "scrollIntoView":
+      await scrollIntoViewViaPlaywright({
+        cdpUrl,
+        targetId: effectiveTargetId,
+        ref: action.ref,
+        selector: action.selector,
+        timeoutMs: action.timeoutMs,
+      });
+      break;
+    case "drag":
+      await dragViaPlaywright({
+        cdpUrl,
+        targetId: effectiveTargetId,
+        startRef: action.startRef,
+        startSelector: action.startSelector,
+        endRef: action.endRef,
+        endSelector: action.endSelector,
+        timeoutMs: action.timeoutMs,
+      });
+      break;
+    case "select":
+      await selectOptionViaPlaywright({
+        cdpUrl,
+        targetId: effectiveTargetId,
+        ref: action.ref,
+        selector: action.selector,
+        values: action.values,
+        timeoutMs: action.timeoutMs,
+      });
+      break;
+    case "fill":
+      await fillFormViaPlaywright({
+        cdpUrl,
+        targetId: effectiveTargetId,
+        fields: action.fields,
+        timeoutMs: action.timeoutMs,
+      });
+      break;
+    case "resize":
+      await resizeViewportViaPlaywright({
+        cdpUrl,
+        targetId: effectiveTargetId,
+        width: action.width,
+        height: action.height,
+      });
+      break;
+    case "wait":
+      if (action.fn && !evaluateEnabled) {
+        throw new Error("wait --fn is disabled by config (browser.evaluateEnabled=false)");
+      }
+      await waitForViaPlaywright({
+        cdpUrl,
+        targetId: effectiveTargetId,
+        timeMs: action.timeMs,
+        text: action.text,
+        textGone: action.textGone,
+        selector: action.selector,
+        url: action.url,
+        loadState: action.loadState,
+        fn: action.fn,
+        timeoutMs: action.timeoutMs,
+      });
+      break;
+    case "evaluate":
+      if (!evaluateEnabled) {
+        throw new Error("act:evaluate is disabled by config (browser.evaluateEnabled=false)");
+      }
+      await evaluateViaPlaywright({
+        cdpUrl,
+        targetId: effectiveTargetId,
+        fn: action.fn,
+        ref: action.ref,
+        timeoutMs: action.timeoutMs,
+      });
+      break;
+    case "close":
+      await closePageViaPlaywright({
+        cdpUrl,
+        targetId: effectiveTargetId,
+      });
+      break;
+    case "batch":
+      await batchViaPlaywright({
+        cdpUrl,
+        targetId: effectiveTargetId,
+        actions: action.actions,
+        stopOnError: action.stopOnError,
+        evaluateEnabled,
+        depth: depth + 1,
+      });
+      break;
+    default:
+      throw new Error(`Unsupported batch action kind: ${(action as { kind: string }).kind}`);
+  }
+}
+
+export async function batchViaPlaywright(opts: {
+  cdpUrl: string;
+  targetId?: string;
+  actions: BrowserActRequest[];
+  stopOnError?: boolean;
+  evaluateEnabled?: boolean;
+  depth?: number;
+}): Promise<{ results: Array<{ ok: boolean; error?: string }> }> {
+  const depth = opts.depth ?? 0;
+  if (depth > MAX_BATCH_DEPTH) {
+    throw new Error(`Batch nesting depth exceeds maximum of ${MAX_BATCH_DEPTH}`);
+  }
+  if (opts.actions.length > MAX_BATCH_ACTIONS) {
+    throw new Error(`Batch exceeds maximum of ${MAX_BATCH_ACTIONS} actions`);
+  }
+  const results: Array<{ ok: boolean; error?: string }> = [];
+  for (const action of opts.actions) {
+    try {
+      await executeSingleAction(action, opts.cdpUrl, opts.targetId, opts.evaluateEnabled, depth);
+      results.push({ ok: true });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      results.push({ ok: false, error: message });
+      if (opts.stopOnError !== false) {
+        break;
+      }
+    }
+  }
+  return { results };
 }

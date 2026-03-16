@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
+import { createSignedCreateMessageRequest } from "./monitor.test-fixtures.js";
 import { startWebhookServer } from "./monitor.test-harness.js";
-import { generateNextcloudTalkSignature } from "./signature.js";
 
 describe("createNextcloudTalkWebhookServer backend allowlist", () => {
   it("rejects requests from unexpected backend origins", async () => {
@@ -11,31 +11,12 @@ describe("createNextcloudTalkWebhookServer backend allowlist", () => {
       onMessage,
     });
 
-    const payload = {
-      type: "Create",
-      actor: { type: "Person", id: "alice", name: "Alice" },
-      object: {
-        type: "Note",
-        id: "msg-1",
-        name: "hello",
-        content: "hello",
-        mediaType: "text/plain",
-      },
-      target: { type: "Collection", id: "room-1", name: "Room 1" },
-    };
-    const body = JSON.stringify(payload);
-    const { random, signature } = generateNextcloudTalkSignature({
-      body,
-      secret: "nextcloud-secret",
+    const { body, headers } = createSignedCreateMessageRequest({
+      backend: "https://nextcloud.unexpected",
     });
     const response = await fetch(harness.webhookUrl, {
       method: "POST",
-      headers: {
-        "content-type": "application/json",
-        "x-nextcloud-talk-random": random,
-        "x-nextcloud-talk-signature": signature,
-        "x-nextcloud-talk-backend": "https://nextcloud.unexpected",
-      },
+      headers,
       body,
     });
 
