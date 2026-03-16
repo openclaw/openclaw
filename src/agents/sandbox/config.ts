@@ -12,6 +12,7 @@ import {
   DEFAULT_SANDBOX_IDLE_HOURS,
   DEFAULT_SANDBOX_IMAGE,
   DEFAULT_SANDBOX_MAX_AGE_DAYS,
+  DEFAULT_SANDBOX_PIDS_LIMIT,
   DEFAULT_SANDBOX_WORKDIR,
   DEFAULT_SANDBOX_WORKSPACE_ROOT,
 } from "./constants.js";
@@ -105,7 +106,7 @@ export function resolveSandboxDockerConfig(params: {
     capDrop: agentDocker?.capDrop ?? globalDocker?.capDrop ?? ["ALL"],
     env,
     setupCommand: agentDocker?.setupCommand ?? globalDocker?.setupCommand,
-    pidsLimit: agentDocker?.pidsLimit ?? globalDocker?.pidsLimit,
+    pidsLimit: agentDocker?.pidsLimit ?? globalDocker?.pidsLimit ?? DEFAULT_SANDBOX_PIDS_LIMIT,
     memory: agentDocker?.memory ?? globalDocker?.memory,
     memorySwap: agentDocker?.memorySwap ?? globalDocker?.memorySwap,
     cpus: agentDocker?.cpus ?? globalDocker?.cpus,
