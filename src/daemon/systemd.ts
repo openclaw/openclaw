@@ -451,8 +451,15 @@ async function assertSystemdAvailable(env: GatewayServiceEnv = process.env as Ga
   throw new Error(`systemctl --user unavailable: ${detail || "unknown error"}`.trim());
 }
 
-function resolveResourceLimits(): SystemdResourceLimits | undefined {
-  const profile = detectResourceProfile();
+function resolveResourceLimits(
+  environment?: Record<string, string | undefined>,
+): SystemdResourceLimits | undefined {
+  // Check service environment first, then fall back to host detection
+  const envProfile = environment?.OPENCLAW_RESOURCE_PROFILE;
+  const profile =
+    envProfile === "low" || envProfile === "standard" || envProfile === "high"
+      ? envProfile
+      : detectResourceProfile();
   if (profile !== "low") {
     return undefined;
   }
@@ -493,7 +500,7 @@ export async function installSystemdService({
     programArguments,
     workingDirectory,
     environment,
-    resourceLimits: resolveResourceLimits(),
+    resourceLimits: resolveResourceLimits(environment),
   });
   await fs.writeFile(unitPath, unit, "utf8");
 
