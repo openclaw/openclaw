@@ -544,22 +544,15 @@ export function decodeFeishuFilename(filename: string | undefined): string {
   const rfcMatch = /^filename\*=utf-8'[^']*'/i.exec(filename);
   if (rfcMatch) {
     filename = filename.substring(rfcMatch[0].length);
-    try {
-      return decodeURIComponent(filename);
-    } catch {
-      return filename;
-    }
   }
-  // Plain filename - only decode if result has non-ASCII
-  if (/%[0-9A-Fa-f]{2}/.test(filename)) {
-    try {
-      const decoded = decodeURIComponent(filename);
-      if (decoded && /[^\x00-\x7F]/.test(decoded)) {
-        return decoded;
-      }
-    } catch {
-      // Fall through
+  // Decode only if result has non-ASCII characters
+  try {
+    const decoded = decodeURIComponent(filename);
+    if (decoded && /[^\x00-\x7F]/.test(decoded)) {
+      return decoded;
     }
+  } catch {
+    // Fall through
   }
   return filename;
 }
