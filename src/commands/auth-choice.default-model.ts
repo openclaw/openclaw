@@ -15,7 +15,7 @@ export async function applyDefaultModelChoice(params: {
   if (params.setDefaultModel) {
     const next = params.applyDefaultConfig(params.config);
     if (params.noteDefault) {
-      await params.prompter.note(`Default model set to ${params.noteDefault}`, "Model configured");
+      await params.prompter.note(`已设置默认模型：${params.noteDefault}`, "模型已配置");
     }
     return { config: next };
   }

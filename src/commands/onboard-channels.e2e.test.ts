@@ -63,10 +63,10 @@ function createQuickstartTelegramSelect(options?: {
   strictUnexpected?: boolean;
 }) {
   return vi.fn(async ({ message }: { message: string }) => {
-    if (message === "Select channel (QuickStart)") {
+    if (message === "选择频道（快速开始）") {
       return "telegram";
     }
-    if (options?.configuredAction && message.includes("already configured")) {
+    if (options?.configuredAction && message.includes("已配置")) {
       return options.configuredAction;
     }
     if (options?.strictUnexpected) {
@@ -272,7 +272,7 @@ describe("setupChannels", () => {
     });
 
     expect(select).toHaveBeenCalledWith(
-      expect.objectContaining({ message: "Select channel (QuickStart)" }),
+      expect.objectContaining({ message: "选择频道（快速开始）" }),
     );
     expect(multiselect).not.toHaveBeenCalled();
   });
@@ -285,7 +285,7 @@ describe("setupChannels", () => {
 
     const note = vi.fn(async (_message?: string, _title?: string) => {});
     const select = vi.fn(async ({ message }: { message: string }) => {
-      if (message === "Select channel (QuickStart)") {
+      if (message === "选择频道（快速开始）") {
         return "telegram";
       }
       return "__done__";
@@ -306,9 +306,7 @@ describe("setupChannels", () => {
     const sawHardStop = note.mock.calls.some((call) => {
       const message = call[0];
       const title = call[1];
-      return (
-        title === "Channel setup" && String(message).trim() === "telegram plugin not available."
-      );
+      return title === "频道设置" && String(message).trim() === "telegram 插件不可用。";
     });
     expect(sawHardStop).toBe(false);
     expect(loadChannelSetupPluginRegistrySnapshotForChannel).not.toHaveBeenCalled();
@@ -331,7 +329,7 @@ describe("setupChannels", () => {
 
     const sawPrimer = note.mock.calls.some(
       ([message, title]) =>
-        title === "How channels work" &&
+        title === "频道工作方式" &&
         String(message).includes('config set session.dmScope "per-channel-peer"'),
     );
     expect(sawPrimer).toBe(true);
@@ -385,7 +383,7 @@ describe("setupChannels", () => {
       },
     );
     const select = vi.fn(async ({ message, options }: { message: string; options: unknown[] }) => {
-      if (message === "Select a channel") {
+      if (message === "选择一个频道") {
         const entries = options as Array<{ value: string; hint?: string }>;
         const msteams = entries.find((entry) => entry.value === "msteams");
         expect(msteams).toBeDefined();
@@ -496,7 +494,7 @@ describe("setupChannels", () => {
 
     let channelSelectionCount = 0;
     const select = vi.fn(async ({ message }: { message: string }) => {
-      if (message === "Select a channel") {
+      if (message === "选择一个频道") {
         channelSelectionCount += 1;
         return channelSelectionCount === 1 ? "msteams" : "__done__";
       }
@@ -611,14 +609,14 @@ describe("setupChannels", () => {
 
     let channelSelectionCount = 0;
     const select = vi.fn(async ({ message, options }: { message: string; options: unknown[] }) => {
-      if (message === "Select a channel") {
+      if (message === "选择一个频道") {
         channelSelectionCount += 1;
         return channelSelectionCount === 1 ? "msteams" : "__done__";
       }
-      if (message.includes("already configured")) {
+      if (message.includes("已配置")) {
         return "disable";
       }
-      if (message === "Microsoft Teams account") {
+      if (message === "Microsoft Teams 账号") {
         const accountOptions = options as Array<{ value: string; label: string }>;
         expect(accountOptions.map((option) => option.value)).toEqual(["default", "work"]);
         return "work";
@@ -685,10 +683,10 @@ describe("setupChannels", () => {
     });
 
     expect(select).toHaveBeenCalledWith(
-      expect.objectContaining({ message: "Select channel (QuickStart)" }),
+      expect.objectContaining({ message: "选择频道（快速开始）" }),
     );
     expect(select).toHaveBeenCalledWith(
-      expect.objectContaining({ message: expect.stringContaining("already configured") }),
+      expect.objectContaining({ message: expect.stringContaining("已配置") }),
     );
     expect(multiselect).not.toHaveBeenCalled();
     expect(text).not.toHaveBeenCalled();
@@ -697,11 +695,11 @@ describe("setupChannels", () => {
   it("adds disabled hint to channel selection when a channel is disabled", async () => {
     let selectionCount = 0;
     const select = vi.fn(async ({ message }: { message: string; options: unknown[] }) => {
-      if (message === "Select a channel") {
+      if (message === "选择一个频道") {
         selectionCount += 1;
         return selectionCount === 1 ? "telegram" : "__done__";
       }
-      if (message.includes("already configured")) {
+      if (message.includes("已配置")) {
         return "skip";
       }
       return "__done__";
@@ -717,14 +715,14 @@ describe("setupChannels", () => {
 
     await runSetupChannels(createTelegramCfg("token", false), prompter);
 
-    expect(select).toHaveBeenCalledWith(expect.objectContaining({ message: "Select a channel" }));
+    expect(select).toHaveBeenCalledWith(expect.objectContaining({ message: "选择一个频道" }));
     const channelSelectCall = select.mock.calls.find(
-      ([params]) => (params as { message?: string }).message === "Select a channel",
+      ([params]) => (params as { message?: string }).message === "选择一个频道",
     );
     const telegramOption = (
       channelSelectCall?.[0] as { options?: Array<{ value: string; hint?: string }> } | undefined
     )?.options?.find((opt) => opt.value === "telegram");
-    expect(telegramOption?.hint).toContain("disabled");
+    expect(telegramOption?.hint).toContain("已禁用");
     expect(multiselect).not.toHaveBeenCalled();
   });
 

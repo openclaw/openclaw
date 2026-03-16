@@ -175,18 +175,18 @@ export async function setupSearch(
 ): Promise<OpenClawConfig> {
   await prompter.note(
     [
-      "Web search lets your agent look things up online.",
-      "Choose a provider and paste your API key.",
-      "Docs: https://docs.openclaw.ai/tools/web",
+      "网页搜索可让你的智能体在线检索信息。",
+      "请选择一个提供方并粘贴 API Key。",
+      "文档：https://docs.openclaw.ai/tools/web",
     ].join("\n"),
-    "Web search",
+    "网页搜索",
   );
 
   const existingProvider = config.tools?.web?.search?.provider;
 
   const options = SEARCH_PROVIDER_OPTIONS.map((entry) => {
     const configured = hasExistingKey(config, entry.value) || hasKeyInEnv(entry);
-    const hint = configured ? `${entry.hint} · configured` : entry.hint;
+    const hint = configured ? `${entry.hint} · 已配置` : entry.hint;
     return { value: entry.value, label: entry.label, hint };
   });
 
@@ -205,13 +205,13 @@ export async function setupSearch(
 
   type PickerValue = SearchProvider | "__skip__";
   const choice = await prompter.select<PickerValue>({
-    message: "Search provider",
+    message: "搜索提供方",
     options: [
       ...options,
       {
         value: "__skip__" as const,
-        label: "Skip for now",
-        hint: "Configure later with openclaw configure --section web",
+        label: "暂时跳过",
+        hint: "稍后可通过 openclaw configure --section web 配置",
       },
     ],
     initialValue: defaultProvider,
@@ -241,23 +241,23 @@ export async function setupSearch(
     const ref = buildSearchEnvRef(choice);
     await prompter.note(
       [
-        "Secret references enabled — OpenClaw will store a reference instead of the API key.",
-        `Env var: ${ref.id}${envAvailable ? " (detected)" : ""}.`,
-        ...(envAvailable ? [] : [`Set ${ref.id} in the Gateway environment.`]),
-        "Docs: https://docs.openclaw.ai/tools/web",
+        "已启用密钥引用，OpenClaw 将保存引用而不是 API Key。",
+        `环境变量：${ref.id}${envAvailable ? "（已检测到）" : ""}。`,
+        ...(envAvailable ? [] : [`请在网关环境中设置 ${ref.id}。`]),
+        "文档：https://docs.openclaw.ai/tools/web",
       ].join("\n"),
-      "Web search",
+      "网页搜索",
     );
     return applySearchKey(config, choice, ref);
   }
 
   const keyInput = await prompter.text({
     message: keyConfigured
-      ? `${entry.label} API key (leave blank to keep current)`
+      ? `${entry.label} API Key（留空则保留当前值）`
       : envAvailable
-        ? `${entry.label} API key (leave blank to use env var)`
-        : `${entry.label} API key`,
-    placeholder: keyConfigured ? "Leave blank to keep current" : entry.placeholder,
+        ? `${entry.label} API Key（留空则使用环境变量）`
+        : `${entry.label} API Key`,
+    placeholder: keyConfigured ? "留空则保留当前值" : entry.placeholder,
   });
 
   const key = keyInput?.trim() ?? "";
@@ -276,11 +276,11 @@ export async function setupSearch(
 
   await prompter.note(
     [
-      "No API key stored — web_search won't work until a key is available.",
-      `Get your key at: ${entry.signupUrl}`,
-      "Docs: https://docs.openclaw.ai/tools/web",
+      "当前未存储 API Key，在提供密钥之前 `web_search` 无法使用。",
+      `获取密钥：${entry.signupUrl}`,
+      "文档：https://docs.openclaw.ai/tools/web",
     ].join("\n"),
-    "Web search",
+    "网页搜索",
   );
 
   return {

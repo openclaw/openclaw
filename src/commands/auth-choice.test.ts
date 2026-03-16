@@ -474,13 +474,20 @@ describe("applyAuthChoice", () => {
         expect(detectZaiEndpoint).toHaveBeenCalledWith(scenario.expectedDetectCall);
       }
       if (scenario.shouldPromptForEndpoint) {
-        expect(select).toHaveBeenCalledWith(
-          expect.objectContaining({ message: "Select Z.AI endpoint", initialValue: "global" }),
-        );
+        expect(
+          select.mock.calls.some(
+            (call) =>
+              (call[0] as { message?: string; initialValue?: string })?.message ===
+                "Select Z.AI endpoint" &&
+              (call[0] as { initialValue?: string })?.initialValue === "global",
+          ),
+        ).toBe(true);
       } else {
-        expect(select).not.toHaveBeenCalledWith(
-          expect.objectContaining({ message: "Select Z.AI endpoint" }),
-        );
+        expect(
+          select.mock.calls.some(
+            (call) => (call[0] as { message?: string })?.message === "Select Z.AI endpoint",
+          ),
+        ).toBe(false);
       }
       expect(result.config.models?.providers?.zai?.baseUrl).toBe(scenario.expectedBaseUrl);
       if (scenario.expectedModel) {
@@ -929,12 +936,12 @@ describe("applyAuthChoice", () => {
       mode: "api_key",
     });
     expect(note).toHaveBeenCalledWith(
-      expect.stringContaining("Could not validate provider reference"),
-      "Reference check failed",
+      expect.stringContaining("无法验证提供方引用"),
+      "引用校验失败",
     );
     expect(note).toHaveBeenCalledWith(
-      expect.stringContaining("Validated environment variable OPENAI_API_KEY."),
-      "Reference validated",
+      expect.stringContaining("已验证环境变量 OPENAI_API_KEY。"),
+      "引用已验证",
     );
     expect(await readAuthProfile("openai:default")).toMatchObject({
       keyRef: { source: "env", provider: "default", id: "OPENAI_API_KEY" },

@@ -155,10 +155,10 @@ describe("setupSkills", () => {
     await setupSkills({} as OpenClawConfig, "/tmp/ws", runtime, prompter);
 
     // OS-mismatched skill should be counted as unsupported, not installable/missing.
-    const status = notes.find((n) => n.title === "Skills status")?.message ?? "";
-    expect(status).toContain("Unsupported on this OS: 1");
+    const status = notes.find((n) => n.title === "技能状态")?.message ?? "";
+    expect(status).toContain("当前操作系统不支持：1");
 
-    const brewNote = notes.find((n) => n.title === "Homebrew recommended");
+    const brewNote = notes.find((n) => n.title === "建议安装 Homebrew");
     expect(brewNote).toBeUndefined();
   });
 
@@ -179,7 +179,7 @@ describe("setupSkills", () => {
     const { prompter, notes } = createPrompter({ multiselect: ["video-frames"] });
     await setupSkills({} as OpenClawConfig, "/tmp/ws", runtime, prompter);
 
-    const brewNote = notes.find((n) => n.title === "Homebrew recommended");
+    const brewNote = notes.find((n) => n.title === "建议安装 Homebrew");
     expect(brewNote).toBeDefined();
   });
 });

@@ -22,26 +22,26 @@ export type AuthChoiceGroup = {
 export const CORE_AUTH_CHOICE_OPTIONS: ReadonlyArray<AuthChoiceOption> = [
   {
     value: "chutes",
-    label: "Chutes (OAuth)",
+    label: "Chutes（OAuth）",
     groupId: "chutes",
     groupLabel: "Chutes",
     groupHint: "OAuth",
   },
   {
     value: "litellm-api-key",
-    label: "LiteLLM API key",
-    hint: "Unified gateway for 100+ LLM providers",
+    label: "LiteLLM API Key",
+    hint: "100+ LLM 提供方统一网关",
     groupId: "litellm",
     groupLabel: "LiteLLM",
-    groupHint: "Unified LLM gateway (100+ providers)",
+    groupHint: "统一 LLM 网关（100+ 提供方）",
   },
   {
     value: "custom-api-key",
-    label: "Custom Provider",
-    hint: "Any OpenAI or Anthropic compatible endpoint",
+    label: "自定义提供方",
+    hint: "任意兼容 OpenAI 或 Anthropic 的端点",
     groupId: "custom",
-    groupLabel: "Custom Provider",
-    groupHint: "Any OpenAI or Anthropic compatible endpoint",
+    groupLabel: "自定义提供方",
+    groupHint: "任意兼容 OpenAI 或 Anthropic 的端点",
   },
 ];
 
