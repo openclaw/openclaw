@@ -84,6 +84,10 @@
       "types": "./dist/plugin-sdk/acpx.d.ts",
       "default": "./dist/plugin-sdk/acpx.js"
     },
+    "./plugin-sdk/airi": {
+      "types": "./dist/plugin-sdk/airi.d.ts",
+      "default": "./dist/plugin-sdk/airi.js"
+    },
     "./plugin-sdk/bluebubbles": {
       "types": "./dist/plugin-sdk/bluebubbles.d.ts",
       "default": "./dist/plugin-sdk/bluebubbles.js"
