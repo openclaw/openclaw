@@ -1,10 +1,10 @@
-import type { ChannelOnboardingDmPolicy } from "../../../src/channels/plugins/onboarding-types.js";
 import {
   addWildcardAllowFrom,
   mergeAllowFromEntries,
   setTopLevelChannelDmPolicyWithAllowFrom,
-  splitOnboardingEntries,
-} from "../../../src/channels/plugins/onboarding/helpers.js";
+  splitSetupEntries,
+} from "../../../src/channels/plugins/setup-flow-helpers.js";
+import type { ChannelSetupDmPolicy } from "../../../src/channels/plugins/setup-flow-types.js";
 import {
   applySetupAccountConfigPatch,
   migrateBaseNameToDefaultAccount,
@@ -48,7 +48,7 @@ function setGoogleChatDmPolicy(cfg: OpenClawConfig, policy: DmPolicy) {
 
 async function promptAllowFrom(params: {
   cfg: OpenClawConfig;
-  prompter: Parameters<NonNullable<ChannelOnboardingDmPolicy["promptAllowFrom"]>>[0]["prompter"];
+  prompter: Parameters<NonNullable<ChannelSetupDmPolicy["promptAllowFrom"]>>[0]["prompter"];
 }): Promise<OpenClawConfig> {
   const current = params.cfg.channels?.googlechat?.dm?.allowFrom ?? [];
   const entry = await params.prompter.text({
@@ -57,7 +57,7 @@ async function promptAllowFrom(params: {
     initialValue: current[0] ? String(current[0]) : undefined,
     validate: (value) => (String(value ?? "").trim() ? undefined : "Required"),
   });
-  const parts = splitOnboardingEntries(String(entry));
+  const parts = splitSetupEntries(String(entry));
   const unique = mergeAllowFromEntries(undefined, parts);
   return {
     ...params.cfg,
@@ -76,7 +76,7 @@ async function promptAllowFrom(params: {
   };
 }
 
-const googlechatDmPolicy: ChannelOnboardingDmPolicy = {
+const googlechatDmPolicy: ChannelSetupDmPolicy = {
   label: "Google Chat",
   channel,
   policyKey: "channels.googlechat.dm.policy",

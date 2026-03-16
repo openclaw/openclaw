@@ -1,9 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../../../config/config.js";
-import { DEFAULT_ACCOUNT_ID } from "../../../routing/session-key.js";
+import type { OpenClawConfig } from "../../config/config.js";
+import { DEFAULT_ACCOUNT_ID } from "../../routing/session-key.js";
 
 const promptAccountIdSdkMock = vi.hoisted(() => vi.fn(async () => "default"));
-vi.mock("../../../plugin-sdk/onboarding.js", () => ({
+vi.mock("../../plugin-sdk/onboarding.js", () => ({
   promptAccountId: promptAccountIdSdkMock,
 }));
 
@@ -14,17 +14,17 @@ import {
   noteChannelLookupFailure,
   noteChannelLookupSummary,
   parseMentionOrPrefixedId,
-  parseOnboardingEntriesAllowingWildcard,
+  parseSetupEntriesAllowingWildcard,
   patchChannelConfigForAccount,
   patchLegacyDmChannelConfig,
   promptLegacyChannelAllowFrom,
-  parseOnboardingEntriesWithParser,
+  parseSetupEntriesWithParser,
   promptParsedAllowFromForScopedChannel,
   promptSingleChannelSecretInput,
   promptSingleChannelToken,
   promptResolvedAllowFrom,
   resolveAccountIdForConfigure,
-  resolveOnboardingAccountId,
+  resolveSetupAccountId,
   setAccountAllowFromForChannel,
   setAccountGroupPolicyForChannel,
   setChannelDmPolicyWithAllowFrom,
@@ -33,9 +33,9 @@ import {
   setTopLevelChannelGroupPolicy,
   setLegacyChannelAllowFrom,
   setLegacyChannelDmPolicyWithAllowFrom,
-  setOnboardingChannelEnabled,
-  splitOnboardingEntries,
-} from "./helpers.js";
+  setSetupChannelEnabled,
+  splitSetupEntries,
+} from "./setup-flow-helpers.js";
 
 function createPrompter(inputs: string[]) {
   return {
@@ -464,7 +464,7 @@ describe("promptParsedAllowFromForScopedChannel", () => {
       message: "msg",
       placeholder: "placeholder",
       parseEntries: (raw) =>
-        parseOnboardingEntriesWithParser(raw, (entry) => ({ value: entry.toLowerCase() })),
+        parseSetupEntriesWithParser(raw, (entry) => ({ value: entry.toLowerCase() })),
       getExistingAllowFrom: ({ cfg }) => cfg.channels?.imessage?.allowFrom ?? [],
     });
 
@@ -748,7 +748,7 @@ describe("patchChannelConfigForAccount", () => {
   });
 });
 
-describe("setOnboardingChannelEnabled", () => {
+describe("setSetupChannelEnabled", () => {
   it("updates enabled and keeps existing channel fields", () => {
     const cfg: OpenClawConfig = {
       channels: {
@@ -759,13 +759,13 @@ describe("setOnboardingChannelEnabled", () => {
       },
     };
 
-    const next = setOnboardingChannelEnabled(cfg, "discord", false);
+    const next = setSetupChannelEnabled(cfg, "discord", false);
     expect(next.channels?.discord?.enabled).toBe(false);
     expect(next.channels?.discord?.token).toBe("abc");
   });
 
   it("creates missing channel config with enabled state", () => {
-    const next = setOnboardingChannelEnabled({}, "signal", true);
+    const next = setSetupChannelEnabled({}, "signal", true);
     expect(next.channels?.signal?.enabled).toBe(true);
   });
 });
@@ -1016,16 +1016,16 @@ describe("setTopLevelChannelGroupPolicy", () => {
   });
 });
 
-describe("splitOnboardingEntries", () => {
+describe("splitSetupEntries", () => {
   it("splits comma/newline/semicolon input and trims blanks", () => {
-    expect(splitOnboardingEntries(" alice, bob \ncarol;  ;\n")).toEqual(["alice", "bob", "carol"]);
+    expect(splitSetupEntries(" alice, bob \ncarol;  ;\n")).toEqual(["alice", "bob", "carol"]);
   });
 });
 
-describe("parseOnboardingEntriesWithParser", () => {
+describe("parseSetupEntriesWithParser", () => {
   it("maps entries and de-duplicates parsed values", () => {
     expect(
-      parseOnboardingEntriesWithParser(" alice, ALICE ; * ", (entry) => {
+      parseSetupEntriesWithParser(" alice, ALICE ; * ", (entry) => {
         if (entry === "*") {
           return { value: "*" };
         }
@@ -1038,7 +1038,7 @@ describe("parseOnboardingEntriesWithParser", () => {
 
   it("returns parser errors and clears parsed entries", () => {
     expect(
-      parseOnboardingEntriesWithParser("ok, bad", (entry) =>
+      parseSetupEntriesWithParser("ok, bad", (entry) =>
         entry === "bad" ? { error: "invalid entry: bad" } : { value: entry },
       ),
     ).toEqual({
@@ -1048,10 +1048,10 @@ describe("parseOnboardingEntriesWithParser", () => {
   });
 });
 
-describe("parseOnboardingEntriesAllowingWildcard", () => {
+describe("parseSetupEntriesAllowingWildcard", () => {
   it("preserves wildcard and delegates non-wildcard entries", () => {
     expect(
-      parseOnboardingEntriesAllowingWildcard(" *, Foo ", (entry) => ({
+      parseSetupEntriesAllowingWildcard(" *, Foo ", (entry) => ({
         value: entry.toLowerCase(),
       })),
     ).toEqual({
@@ -1061,7 +1061,7 @@ describe("parseOnboardingEntriesAllowingWildcard", () => {
 
   it("returns parser errors for non-wildcard entries", () => {
     expect(
-      parseOnboardingEntriesAllowingWildcard("ok,bad", (entry) =>
+      parseSetupEntriesAllowingWildcard("ok,bad", (entry) =>
         entry === "bad" ? { error: "bad entry" } : { value: entry },
       ),
     ).toEqual({
@@ -1129,10 +1129,10 @@ describe("normalizeAllowFromEntries", () => {
   });
 });
 
-describe("resolveOnboardingAccountId", () => {
+describe("resolveSetupAccountId", () => {
   it("normalizes provided account ids", () => {
     expect(
-      resolveOnboardingAccountId({
+      resolveSetupAccountId({
         accountId: " Work Account ",
         defaultAccountId: DEFAULT_ACCOUNT_ID,
       }),
@@ -1141,7 +1141,7 @@ describe("resolveOnboardingAccountId", () => {
 
   it("falls back to default account id when input is blank", () => {
     expect(
-      resolveOnboardingAccountId({
+      resolveSetupAccountId({
         accountId: "   ",
         defaultAccountId: "custom-default",
       }),

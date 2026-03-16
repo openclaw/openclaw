@@ -1,11 +1,11 @@
-import type { ChannelOnboardingDmPolicy } from "../../../src/channels/plugins/onboarding-types.js";
 import {
   addWildcardAllowFrom,
   buildSingleChannelSecretPromptState,
   mergeAllowFromEntries,
   promptSingleChannelSecretInput,
   setTopLevelChannelGroupPolicy,
-} from "../../../src/channels/plugins/onboarding/helpers.js";
+} from "../../../src/channels/plugins/setup-flow-helpers.js";
+import type { ChannelSetupDmPolicy } from "../../../src/channels/plugins/setup-flow-types.js";
 import type { ChannelSetupWizard } from "../../../src/channels/plugins/setup-wizard.js";
 import type { OpenClawConfig } from "../../../src/config/config.js";
 import type { DmPolicy } from "../../../src/config/types.js";
@@ -242,7 +242,7 @@ const matrixGroupAccess: NonNullable<ChannelSetupWizard["groupAccess"]> = {
     setMatrixGroupRooms(cfg as CoreConfig, resolved as string[]),
 };
 
-const matrixDmPolicy: ChannelOnboardingDmPolicy = {
+const matrixDmPolicy: ChannelSetupDmPolicy = {
   label: "Matrix",
   channel,
   policyKey: "channels.matrix.dm.policy",

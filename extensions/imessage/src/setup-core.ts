@@ -1,10 +1,10 @@
-import type { ChannelOnboardingDmPolicy } from "../../../src/channels/plugins/onboarding-types.js";
 import {
-  parseOnboardingEntriesAllowingWildcard,
+  parseSetupEntriesAllowingWildcard,
   promptParsedAllowFromForScopedChannel,
   setChannelDmPolicyWithAllowFrom,
-  setOnboardingChannelEnabled,
-} from "../../../src/channels/plugins/onboarding/helpers.js";
+  setSetupChannelEnabled,
+} from "../../../src/channels/plugins/setup-flow-helpers.js";
+import type { ChannelSetupDmPolicy } from "../../../src/channels/plugins/setup-flow-types.js";
 import {
   applyAccountNameToChannelSection,
   migrateBaseNameToDefaultAccount,
@@ -25,7 +25,7 @@ import { normalizeIMessageHandle } from "./targets.js";
 const channel = "imessage" as const;
 
 export function parseIMessageAllowFromEntries(raw: string): { entries: string[]; error?: string } {
-  return parseOnboardingEntriesAllowingWildcard(raw, (entry) => {
+  return parseSetupEntriesAllowingWildcard(raw, (entry) => {
     const lower = entry.toLowerCase();
     if (lower.startsWith("chat_id:")) {
       const id = entry.slice("chat_id:".length).trim();
@@ -157,7 +157,7 @@ export const imessageSetupAdapter: ChannelSetupAdapter = {
 export function createIMessageSetupWizardProxy(
   loadWizard: () => Promise<{ imessageSetupWizard: ChannelSetupWizard }>,
 ) {
-  const imessageDmPolicy: ChannelOnboardingDmPolicy = {
+  const imessageDmPolicy: ChannelSetupDmPolicy = {
     label: "iMessage",
     channel,
     policyKey: "channels.imessage.dmPolicy",
@@ -231,6 +231,6 @@ export function createIMessageSetupWizardProxy(
       ],
     },
     dmPolicy: imessageDmPolicy,
-    disable: (cfg: OpenClawConfig) => setOnboardingChannelEnabled(cfg, channel, false),
+    disable: (cfg: OpenClawConfig) => setSetupChannelEnabled(cfg, channel, false),
   } satisfies ChannelSetupWizard;
 }
