@@ -358,8 +358,8 @@ export async function refreshChat(host: ChatHost, opts?: { scheduleScroll?: bool
   await Promise.all([
     loadChatHistory(host as unknown as OpenClawApp),
     loadSessions(host as unknown as OpenClawApp, {
-      activeMinutes: 0,
-      limit: 0,
+      activeMinutes: CHAT_SESSIONS_ACTIVE_MINUTES,
+      limit: 40,
       includeGlobal: true,
       includeUnknown: true,
     }),

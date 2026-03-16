@@ -75,21 +75,27 @@ export async function loadChatHistory(state: ChatState) {
   state.chatLoading = true;
   state.lastError = null;
   try {
+    // Request a small batch to avoid huge payloads and main-thread freeze when
+    // parsing JSON and rendering many markdown messages (browser "tab unresponsive").
+    const CHAT_HISTORY_REQUEST_LIMIT = 25;
     const res = await state.client.request<{ messages?: Array<unknown>; thinkingLevel?: string }>(
       "chat.history",
       {
         sessionKey: state.sessionKey,
-        limit: 200,
+        limit: CHAT_HISTORY_REQUEST_LIMIT,
       },
     );
     const messages = Array.isArray(res.messages) ? res.messages : [];
-    state.chatMessages = messages.filter((message) => !isAssistantSilentReply(message));
+    const filtered = messages.filter((message) => !isAssistantSilentReply(message));
     state.chatThinkingLevel = res.thinkingLevel ?? null;
-    // Clear all streaming state — history includes tool results and text
-    // inline, so keeping streaming artifacts would cause duplicates.
     maybeResetToolStream(state);
     state.chatStream = null;
     state.chatStreamStartedAt = null;
+    // Defer applying messages so the UI can paint "Loading chat..." before the heavy render.
+    state.chatLoading = false;
+    requestAnimationFrame(() => {
+      state.chatMessages = filtered;
+    });
   } catch (err) {
     if (isMissingOperatorReadScopeError(err)) {
       state.chatMessages = [];
