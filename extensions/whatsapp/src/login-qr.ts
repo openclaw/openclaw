@@ -279,6 +279,23 @@ export async function waitForWebLogin(
           continue;
         }
       }
+      // Handle 408 timeout - retry with fresh socket
+      if (login.errorStatus === 408 || String(login.errorStatus).includes('408')) {
+        runtime.log(info('WhatsApp login timed out (408), retrying with new socket...'));
+        closeSocket(login.sock);
+        try {
+          login.sock = await createWaSocket(false, login.verbose, {
+            authDir: login.authDir,
+          });
+          login.error = undefined;
+          login.errorStatus = undefined;
+          login.restartAttempted = false;
+          attachLoginWaiter(account.accountId, login);
+          continue;
+        } catch (err) {
+          runtime.log(danger(`Failed to retry after 408: ${err}`));
+        }
+      }
       const message = `WhatsApp login failed: ${login.error}`;
       await resetActiveLogin(account.accountId, message);
       runtime.log(danger(message));

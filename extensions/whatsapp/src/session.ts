@@ -146,6 +146,9 @@ export async function createWaSocket(
                 `WhatsApp session logged out. Run: ${formatCliCommand("openclaw channels login")}`,
               ),
             );
+          } else if (status === DisconnectReason.timedOut) {
+            // Handle 408 timeout - log and trigger reconnect
+            sessionLogger.error({ status }, 'WhatsApp WebSocket connection timed out');
           }
         }
         if (connection === "open" && verbose) {
