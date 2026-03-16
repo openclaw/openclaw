@@ -7,7 +7,7 @@ import type { ApplyAuthChoiceParams, ApplyAuthChoiceResult } from "./auth-choice
 import { applyPrimaryModel } from "./model-picker.js";
 import { applyAuthProfileConfig, setByteplusApiKey } from "./onboard-auth.js";
 
-/** Default model for BytePlus auth onboarding. */
+/** Default model for BytePlus setup auth. */
 export const BYTEPLUS_DEFAULT_MODEL = "byteplus-plan/ark-code-latest";
 
 export async function applyAuthChoiceBytePlus(
