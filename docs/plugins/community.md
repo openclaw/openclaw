@@ -49,3 +49,8 @@ Use this format when adding entries:
   npm: `@icesword760/openclaw-wechat`
   repo: `https://github.com/icesword0760/openclaw-wechat`
   install: `openclaw plugins install @icesword760/openclaw-wechat`
+
+- **Lightcone** — OpenClaw cloud browser automation plugin via Lightcone (Tzafon).
+  npm: `@tzafon/openclaw-lightcone`
+  repo: `https://github.com/tzafon/openclaw-lightcone`
+  install: `openclaw plugins install @tzafon/openclaw-lightcone`
