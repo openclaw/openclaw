@@ -9,9 +9,11 @@ import type { SessionBindingRecord } from "../../infra/outbound/session-binding-
 import { scheduleGatewaySigusr1Restart, triggerOpenClawRestart } from "../../infra/restart.js";
 import {
   formatDoctorNonInteractiveHint,
+  resolveRestartSentinelPath,
   writeRestartSentinel,
   type RestartSentinelPayload,
 } from "../../infra/restart-sentinel.js";
+import fs from "node:fs/promises";
 import { loadCostUsageSummary, loadSessionCostSummary } from "../../infra/session-cost-usage.js";
 import { createPluginRuntime } from "../../plugins/runtime/index.js";
 import { formatTokenCount, formatUsd } from "../../utils/usage-format.js";
@@ -647,9 +649,16 @@ export const handleRestartCommand: CommandHandler = async (params, allowTextComm
       },
     };
   }
-  // Fallback path: only write sentinel after confirming restart will proceed
+  // Fallback path: write sentinel before triggering restart (process may be terminated immediately).
+  // On failure, clean up the orphaned sentinel file.
+  await writeRestartSentinel(sentinelPayload).catch(() => {
+    // ignore: sentinel is best-effort
+  });
   const restartMethod = triggerOpenClawRestart();
   if (!restartMethod.ok) {
+    // Clean up orphaned sentinel so it doesn't fire on next startup
+    const sentinelPath = resolveRestartSentinelPath();
+    await fs.unlink(sentinelPath).catch(() => {});
     const detail = restartMethod.detail ? ` Details: ${restartMethod.detail}` : "";
     return {
       shouldContinue: false,
@@ -658,10 +667,6 @@ export const handleRestartCommand: CommandHandler = async (params, allowTextComm
       },
     };
   }
-  // Restart confirmed — write sentinel now
-  await writeRestartSentinel(sentinelPayload).catch(() => {
-    // ignore: sentinel is best-effort
-  });
   return {
     shouldContinue: false,
     reply: {
