@@ -8,7 +8,7 @@ const triggerOpenClawRestartMock = vi.fn(
 );
 
 vi.mock("../../infra/restart-sentinel.js", async (importOriginal) => {
-  const orig = await importOriginal();
+  const orig: Record<string, unknown> = await importOriginal();
   return {
     ...orig,
     writeRestartSentinel: writeRestartSentinelMock,
@@ -16,7 +16,7 @@ vi.mock("../../infra/restart-sentinel.js", async (importOriginal) => {
 });
 
 vi.mock("../../config/sessions/delivery-info.js", async (importOriginal) => {
-  const orig = await importOriginal();
+  const orig: Record<string, unknown> = await importOriginal();
   return { ...orig };
 });
 
