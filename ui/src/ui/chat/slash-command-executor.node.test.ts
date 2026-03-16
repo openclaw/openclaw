@@ -280,6 +280,31 @@ describe("executeSlashCommand directives", () => {
       if (method === "models.list") {
         return {
           models: [{ id: "gpt-4.1-mini" }, { id: "gpt-4.1" }],
+          sessions: [
+            row("agent:main:main", {
+              model: "gpt-4.1-mini",
+            }),
+          ],
+        };
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+
+    const result = await executeSlashCommand(
+      { request } as unknown as GatewayBrowserClient,
+      "main",
+      "model",
+      "status",
+    );
+
+    expect(result.content).toBe(
+      "**Current model:** `gpt-4.1-mini`\n**Available:** `gpt-4.1-mini`, `gpt-4.1`",
+    );
+    expect(request).toHaveBeenNthCalledWith(1, "sessions.list", {});
+    expect(request).toHaveBeenNthCalledWith(2, "models.list", {});
+    expect(request).not.toHaveBeenCalledWith("sessions.patch", expect.anything());
+  });
+
   it("mirrors resolved provider-qualified model refs after /model changes", async () => {
     const request = vi.fn(async (method: string, _payload?: unknown) => {
       if (method === "sessions.patch") {
@@ -299,15 +324,18 @@ describe("executeSlashCommand directives", () => {
       { request } as unknown as GatewayBrowserClient,
       "main",
       "model",
-      "status",
+      "gpt-5-mini",
     );
 
-    expect(result.content).toBe(
-      "**Current model:** `gpt-4.1-mini`\n**Available:** `gpt-4.1-mini`, `gpt-4.1`",
-    );
-    expect(request).toHaveBeenNthCalledWith(1, "sessions.list", {});
-    expect(request).toHaveBeenNthCalledWith(2, "models.list", {});
-    expect(request).not.toHaveBeenCalledWith("sessions.patch", expect.anything());
+    expect(result.content).toBe("Model set to `gpt-5-mini`.");
+    expect(request).toHaveBeenCalledWith("sessions.patch", {
+      key: "main",
+      model: "gpt-5-mini",
+    });
+    expect(result.sessionPatch?.modelOverride).toEqual({
+      kind: "qualified",
+      value: "openai/gpt-5-mini",
+    });
   });
 
   it("treats /model list as model info instead of a model patch", async () => {
@@ -343,17 +371,6 @@ describe("executeSlashCommand directives", () => {
     expect(request).toHaveBeenNthCalledWith(1, "sessions.list", {});
     expect(request).toHaveBeenNthCalledWith(2, "models.list", {});
     expect(request).not.toHaveBeenCalledWith("sessions.patch", expect.anything());
-      "gpt-5-mini",
-    );
-
-    expect(request).toHaveBeenCalledWith("sessions.patch", {
-      key: "main",
-      model: "gpt-5-mini",
-    });
-    expect(result.sessionPatch?.modelOverride).toEqual({
-      kind: "qualified",
-      value: "openai/gpt-5-mini",
-    });
   });
 
   it("resolves the legacy main alias for /usage", async () => {
