@@ -76,15 +76,10 @@ describe("buildWorkspaceSkillStatus", () => {
 
     expect(report.skills).toHaveLength(2);
 
-    const workspaceResult = report.skills.find(
-      (s) => s.skill.source === "openclaw-workspace",
-    );
-    const bundledResult = report.skills.find(
-      (s) => s.skill.source === "openclaw-bundled",
-    );
+    const workspaceResult = report.skills.find((s) => s.source === "openclaw-workspace");
+    const bundledResult = report.skills.find((s) => s.source === "openclaw-bundled");
 
     expect(workspaceResult?.bundled).toBe(false);
     expect(bundledResult?.bundled).toBe(true);
   });
 });
-
