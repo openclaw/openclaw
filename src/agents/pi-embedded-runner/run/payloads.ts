@@ -277,6 +277,20 @@ export function buildEmbeddedRunPayloads(params: {
     if (!cleanedText && (!mediaUrls || mediaUrls.length === 0) && !audioAsVoice) {
       continue;
     }
+    // Treat ANNOUNCE_SKIP / REPLY_SKIP as silent *before* evaluating
+    // hasUserFacingAssistantReply.  Checking here (not in the trailing .filter())
+    // ensures these tokens never suppress tool-error warnings by being counted
+    // as a user-facing reply.  Text-only payloads are skipped entirely; payloads
+    // that also carry media are kept so the media still reaches the user.
+    if (
+      cleanedText &&
+      !mediaUrls?.length &&
+      !audioAsVoice &&
+      (isSilentReplyText(cleanedText, ANNOUNCE_SKIP_TOKEN) ||
+        isSilentReplyText(cleanedText, REPLY_SKIP_TOKEN))
+    ) {
+      continue;
+    }
     replyItems.push({
       text: cleanedText,
       media: mediaUrls,
