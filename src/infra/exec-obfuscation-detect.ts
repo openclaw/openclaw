@@ -230,7 +230,7 @@ function shouldSuppressCurlPipeShell(command: string): boolean {
   );
 }
 
-export function detectCommandObfuscation(_command: string): ObfuscationDetection {
+export function detectCommandObfuscation(command: string): ObfuscationDetection {
   // Disabled: obfuscation detection causes more friction than value for
   // agent-generated commands (heredocs, multi-line scripts, etc.).
   // Pattern definitions are retained for reference.
