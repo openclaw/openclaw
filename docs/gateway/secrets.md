@@ -288,6 +288,35 @@ Optional per-id errors:
 }
 ```
 
+## Sandbox SSH auth material
+
+The core `ssh` sandbox backend also supports SecretRefs for SSH auth material:
+
+```json5
+{
+  agents: {
+    defaults: {
+      sandbox: {
+        mode: "all",
+        backend: "ssh",
+        ssh: {
+          target: "user@gateway-host:22",
+          identityData: { source: "env", provider: "default", id: "SSH_IDENTITY" },
+          certificateData: { source: "env", provider: "default", id: "SSH_CERTIFICATE" },
+          knownHostsData: { source: "env", provider: "default", id: "SSH_KNOWN_HOSTS" },
+        },
+      },
+    },
+  },
+}
+```
+
+Runtime behavior:
+
+- OpenClaw resolves these refs during sandbox activation, not lazily during each SSH call.
+- Resolved values are written to temp files with restrictive permissions and used in generated SSH config.
+- If the effective sandbox backend is not `ssh`, these refs stay inactive and do not block startup.
+
 ## Supported credential surface
 
 Canonical supported and unsupported credentials are listed in:
