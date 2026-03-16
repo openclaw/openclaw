@@ -250,5 +250,9 @@
   {
     "source": "Retry + Dead-letter Policy",
     "target": "重试与死信策略"
+  },
+  {
+    "source": "Prompt Request Template: Clover Outcome (v1)",
+    "target": "提示请求模板：Clover 结果（v1）"
   }
 ]
