@@ -14,7 +14,6 @@ export { formatPairingApproveHint } from "../channels/plugins/helpers.js";
 export {
   addWildcardAllowFrom,
   mergeAllowFromEntries,
-  promptAccountId,
   setTopLevelChannelDmPolicyWithAllowFrom,
 } from "../channels/plugins/onboarding/helpers.js";
 export {
@@ -55,10 +54,8 @@ export type { WizardPrompter } from "../wizard/prompts.js";
 export { formatAllowFromLowercase } from "./allow-from.js";
 export { resolveSenderCommandAuthorization } from "./command-auth.js";
 export { resolveChannelAccountConfigBasePath } from "./config-paths.js";
-export {
-  zalouserSetupAdapter,
-  zalouserSetupWizard,
-} from "../../extensions/zalouser/src/setup-surface.js";
+export { zalouserSetupAdapter } from "../../extensions/zalouser/src/setup-core.js";
+export { zalouserSetupWizard } from "../../extensions/zalouser/src/setup-surface.js";
 export {
   evaluateGroupRouteAccessForPolicy,
   resolveSenderScopedGroupPolicy,

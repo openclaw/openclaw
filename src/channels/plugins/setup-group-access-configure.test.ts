@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../../../config/config.js";
-import { configureChannelAccessWithAllowlist } from "./channel-access-configure.js";
-import type { ChannelAccessPolicy } from "./channel-access.js";
+import type { OpenClawConfig } from "../../config/config.js";
+import { configureChannelAccessWithAllowlist } from "./setup-group-access-configure.js";
+import type { ChannelAccessPolicy } from "./setup-group-access.js";
 
 function createPrompter(params: { confirm: boolean; policy?: ChannelAccessPolicy; text?: string }) {
   return {
@@ -85,6 +85,41 @@ describe("configureChannelAccessWithAllowlist", () => {
 
     expect(next.channels?.discord?.groupPolicy).toBe("open");
     expect(setPolicy).toHaveBeenCalledWith(cfg, "open");
+    expect(resolveAllowlist).not.toHaveBeenCalled();
+    expect(applyAllowlist).not.toHaveBeenCalled();
+  });
+
+  it("supports allowlist policies without prompting for entries", async () => {
+    const cfg: OpenClawConfig = {};
+    const prompter = createPrompter({
+      confirm: true,
+      policy: "allowlist",
+    });
+    const setPolicy = vi.fn(
+      (next: OpenClawConfig, policy: ChannelAccessPolicy): OpenClawConfig => ({
+        ...next,
+        channels: { twitch: { groupPolicy: policy } },
+      }),
+    );
+    const resolveAllowlist = vi.fn(async () => ["ignored"]);
+    const applyAllowlist = vi.fn((params: { cfg: OpenClawConfig }) => params.cfg);
+
+    const next = await configureChannelAccessWithAllowlist({
+      cfg,
+      // oxlint-disable-next-line typescript/no-explicit-any
+      prompter: prompter as any,
+      label: "Twitch chat",
+      currentPolicy: "disabled",
+      currentEntries: [],
+      placeholder: "",
+      updatePrompt: false,
+      skipAllowlistEntries: true,
+      setPolicy,
+      resolveAllowlist,
+      applyAllowlist,
+    });
+
+    expect(next.channels).toEqual({ twitch: { groupPolicy: "allowlist" } });
     expect(resolveAllowlist).not.toHaveBeenCalled();
     expect(applyAllowlist).not.toHaveBeenCalled();
   });
