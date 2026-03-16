@@ -69,9 +69,8 @@ export function stripDowngradedToolCallText(text: string): string {
   if (!text) {
     return text;
   }
-  if (!/\[Tool (?:Call|Result)/i.test(text) && !/\[Historical context/i.test(text)) {
-    return text;
-  }
+  const stripLeakedFunctionCallPrelude = (input: string): string =>
+    input.replace(/^\s*assistant\s+function\s+call\s*([A-Za-z0-9_.:/-]+)\s*\{\s*/i, "");
 
   const consumeJsonish = (
     input: string,
@@ -157,6 +156,11 @@ export function stripDowngradedToolCallText(text: string): string {
     return end;
   };
 
+  let cleaned = stripLeakedFunctionCallPrelude(text);
+  if (!/\[Tool (?:Call|Result)/i.test(cleaned) && !/\[Historical context/i.test(cleaned)) {
+    return cleaned.trim();
+  }
+
   const stripToolCalls = (input: string): string => {
     const markerRe = /\[Tool Call:[^\]]*\]/gi;
     let result = "";
@@ -213,7 +217,7 @@ export function stripDowngradedToolCallText(text: string): string {
   };
 
   // Remove [Tool Call: name (ID: ...)] blocks and their Arguments.
-  let cleaned = stripToolCalls(text);
+  cleaned = stripToolCalls(cleaned);
 
   // Remove [Tool Result for ID ...] blocks and their content.
   cleaned = cleaned.replace(/\[Tool Result for ID[^\]]*\]\n?[\s\S]*?(?=\n*\[Tool |\n*$)/gi, "");

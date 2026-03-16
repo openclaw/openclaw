@@ -329,6 +329,24 @@ Arguments: { "command": "git status", "timeout": 120000 }`,
     expect(result).toBe("");
   });
 
+  it("strips leaked assistant function-call preludes while preserving user text", () => {
+    const msg = makeAssistantMessage({
+      role: "assistant",
+      content: [
+        {
+          type: "text",
+          text: 'assistant function callrecipient{The task "setup openclaw" has been successfully added to Things. Let me know if you need further assistance!',
+        },
+      ],
+      timestamp: Date.now(),
+    });
+
+    const result = extractAssistantText(msg);
+    expect(result).toBe(
+      'The task "setup openclaw" has been successfully added to Things. Let me know if you need further assistance!',
+    );
+  });
+
   it("strips multiple downgraded tool calls", () => {
     const msg = makeAssistantMessage({
       role: "assistant",
