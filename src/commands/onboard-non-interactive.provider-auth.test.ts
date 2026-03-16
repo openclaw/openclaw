@@ -1,10 +1,16 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, describe, expect, it, vi } from "vitest";
 import { makeTempWorkspace } from "../test-helpers/workspace.js";
 import { withEnvAsync } from "../test-utils/env.js";
-import { MINIMAX_API_BASE_URL, MINIMAX_CN_API_BASE_URL } from "./onboard-auth.js";
+import {
+  MINIMAX_API_BASE_URL,
+  MINIMAX_CN_API_BASE_URL,
+  ZAI_CODING_CN_BASE_URL,
+  ZAI_CODING_GLOBAL_BASE_URL,
+  ZAI_GLOBAL_BASE_URL,
+} from "./onboard-auth.js";
 import {
   createThrowingRuntime,
   readJsonFile,
@@ -18,8 +24,6 @@ type OnboardEnv = {
 };
 
 const ensureWorkspaceAndSessionsMock = vi.hoisted(() => vi.fn(async (..._args: unknown[]) => {}));
-type DetectZaiEndpoint = typeof import("./zai-endpoint-detect.js").detectZaiEndpoint;
-const detectZaiEndpoint = vi.hoisted(() => vi.fn<DetectZaiEndpoint>(async () => null));
 
 vi.mock("./onboard-helpers.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./onboard-helpers.js")>();
@@ -28,10 +32,6 @@ vi.mock("./onboard-helpers.js", async (importOriginal) => {
     ensureWorkspaceAndSessions: ensureWorkspaceAndSessionsMock,
   };
 });
-
-vi.mock("./zai-endpoint-detect.js", () => ({
-  detectZaiEndpoint,
-}));
 
 const { runNonInteractiveSetup } = await import("./onboard-non-interactive.js");
 
@@ -60,6 +60,45 @@ type ProviderAuthConfigSnapshot = {
     >;
   };
 };
+
+function createZaiFetchMock(responses: Record<string, number>): typeof fetch {
+  return vi.fn(async (input, init) => {
+    const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : "";
+    const parsedBody =
+      typeof init?.body === "string" ? (JSON.parse(init.body) as { model?: string }) : {};
+    const key = `${url}::${parsedBody.model ?? ""}`;
+    const status = responses[key] ?? 404;
+    return new Response(
+      JSON.stringify(
+        status === 200 ? { ok: true } : { error: { code: "unsupported", message: "unsupported" } },
+      ),
+      {
+        status,
+        headers: { "content-type": "application/json" },
+      },
+    );
+  }) as typeof fetch;
+}
+
+async function withZaiProbeFetch<T>(
+  responses: Record<string, number>,
+  run: (fetchMock: typeof fetch) => Promise<T>,
+): Promise<T> {
+  const originalVitest = process.env.VITEST;
+  delete process.env.VITEST;
+  const fetchMock = createZaiFetchMock(responses);
+  vi.stubGlobal("fetch", fetchMock);
+  try {
+    return await run(fetchMock);
+  } finally {
+    vi.unstubAllGlobals();
+    if (originalVitest === undefined) {
+      delete process.env.VITEST;
+    } else {
+      process.env.VITEST = originalVitest;
+    }
+  }
+}
 
 async function removeDirWithRetry(dir: string): Promise<void> {
   for (let attempt = 0; attempt < 5; attempt += 1) {
@@ -186,11 +225,6 @@ describe("onboard (non-interactive): provider auth", () => {
     ({ ensureAuthProfileStore, upsertAuthProfile } = await import("../agents/auth-profiles.js"));
   });
 
-  beforeEach(() => {
-    detectZaiEndpoint.mockReset();
-    detectZaiEndpoint.mockResolvedValue(null);
-  });
-
   it("stores MiniMax API key and uses global baseUrl by default", async () => {
     await withOnboardEnv("openclaw-onboard-minimax-", async (env) => {
       const cfg = await runOnboardingAndReadConfig(env, {
@@ -230,62 +264,68 @@ describe("onboard (non-interactive): provider auth", () => {
   });
 
   it("stores Z.AI API key and uses global baseUrl by default", async () => {
-    await withOnboardEnv("openclaw-onboard-zai-", async (env) => {
-      detectZaiEndpoint.mockResolvedValueOnce({
-        endpoint: "global",
-        baseUrl: "https://api.z.ai/api/paas/v4",
-        modelId: "glm-5",
-        note: "Verified GLM-5 on global endpoint.",
-      });
-      const cfg = await runOnboardingAndReadConfig(env, {
-        authChoice: "zai-api-key",
-        zaiApiKey: "zai-test-key", // pragma: allowlist secret
-      });
+    await withZaiProbeFetch(
+      {
+        [`${ZAI_GLOBAL_BASE_URL}/chat/completions::glm-5`]: 200,
+      },
+      async (fetchMock) =>
+        await withOnboardEnv("openclaw-onboard-zai-", async (env) => {
+          const cfg = await runOnboardingAndReadConfig(env, {
+            authChoice: "zai-api-key",
+            zaiApiKey: "zai-test-key", // pragma: allowlist secret
+          });
 
-      expect(cfg.auth?.profiles?.["zai:default"]?.provider).toBe("zai");
-      expect(cfg.auth?.profiles?.["zai:default"]?.mode).toBe("api_key");
-      expect(cfg.models?.providers?.zai?.baseUrl).toBe("https://api.z.ai/api/paas/v4");
-      expect(cfg.agents?.defaults?.model?.primary).toBe("zai/glm-5");
-      await expectApiKeyProfile({ profileId: "zai:default", provider: "zai", key: "zai-test-key" });
-    });
+          expect(cfg.auth?.profiles?.["zai:default"]?.provider).toBe("zai");
+          expect(cfg.auth?.profiles?.["zai:default"]?.mode).toBe("api_key");
+          expect(cfg.models?.providers?.zai?.baseUrl).toBe(ZAI_GLOBAL_BASE_URL);
+          expect(cfg.agents?.defaults?.model?.primary).toBe("zai/glm-5");
+          expect(fetchMock).toHaveBeenCalled();
+          await expectApiKeyProfile({
+            profileId: "zai:default",
+            provider: "zai",
+            key: "zai-test-key",
+          });
+        }),
+    );
   });
 
   it("supports Z.AI CN coding endpoint auth choice", async () => {
-    await withOnboardEnv("openclaw-onboard-zai-cn-", async (env) => {
-      detectZaiEndpoint.mockResolvedValueOnce({
-        endpoint: "coding-cn",
-        baseUrl: "https://open.bigmodel.cn/api/coding/paas/v4",
-        modelId: "glm-4.7",
-        note: "Coding Plan CN endpoint verified, but this key/plan does not expose GLM-5 there. Defaulting to GLM-4.7.",
-      });
-      const cfg = await runOnboardingAndReadConfig(env, {
-        authChoice: "zai-coding-cn",
-        zaiApiKey: "zai-test-key", // pragma: allowlist secret
-      });
+    await withZaiProbeFetch(
+      {
+        [`${ZAI_CODING_CN_BASE_URL}/chat/completions::glm-5`]: 404,
+        [`${ZAI_CODING_CN_BASE_URL}/chat/completions::glm-4.7`]: 200,
+      },
+      async (fetchMock) =>
+        await withOnboardEnv("openclaw-onboard-zai-cn-", async (env) => {
+          const cfg = await runOnboardingAndReadConfig(env, {
+            authChoice: "zai-coding-cn",
+            zaiApiKey: "zai-test-key", // pragma: allowlist secret
+          });
 
-      expect(cfg.models?.providers?.zai?.baseUrl).toBe(
-        "https://open.bigmodel.cn/api/coding/paas/v4",
-      );
-      expect(cfg.agents?.defaults?.model?.primary).toBe("zai/glm-4.7");
-    });
+          expect(cfg.models?.providers?.zai?.baseUrl).toBe(ZAI_CODING_CN_BASE_URL);
+          expect(cfg.agents?.defaults?.model?.primary).toBe("zai/glm-4.7");
+          expect(fetchMock).toHaveBeenCalled();
+        }),
+    );
   });
 
   it("supports Z.AI Coding Plan global endpoint with GLM-5 when available", async () => {
-    await withOnboardEnv("openclaw-onboard-zai-coding-global-", async (env) => {
-      detectZaiEndpoint.mockResolvedValueOnce({
-        endpoint: "coding-global",
-        baseUrl: "https://api.z.ai/api/coding/paas/v4",
-        modelId: "glm-5",
-        note: "Verified GLM-5 on coding-global endpoint.",
-      });
-      const cfg = await runOnboardingAndReadConfig(env, {
-        authChoice: "zai-coding-global",
-        zaiApiKey: "zai-test-key", // pragma: allowlist secret
-      });
+    await withZaiProbeFetch(
+      {
+        [`${ZAI_CODING_GLOBAL_BASE_URL}/chat/completions::glm-5`]: 200,
+      },
+      async (fetchMock) =>
+        await withOnboardEnv("openclaw-onboard-zai-coding-global-", async (env) => {
+          const cfg = await runOnboardingAndReadConfig(env, {
+            authChoice: "zai-coding-global",
+            zaiApiKey: "zai-test-key", // pragma: allowlist secret
+          });
 
-      expect(cfg.models?.providers?.zai?.baseUrl).toBe("https://api.z.ai/api/coding/paas/v4");
-      expect(cfg.agents?.defaults?.model?.primary).toBe("zai/glm-5");
-    });
+          expect(cfg.models?.providers?.zai?.baseUrl).toBe(ZAI_CODING_GLOBAL_BASE_URL);
+          expect(cfg.agents?.defaults?.model?.primary).toBe("zai/glm-5");
+          expect(fetchMock).toHaveBeenCalled();
+        }),
+    );
   });
 
   it("stores xAI API key and sets default model", async () => {

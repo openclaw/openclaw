@@ -24,6 +24,7 @@ export type NormalizedPluginsConfig = {
 };
 
 export const BUNDLED_ENABLED_BY_DEFAULT = new Set<string>([
+  "amazon-bedrock",
   "anthropic",
   "byteplus",
   "cloudflare-ai-gateway",

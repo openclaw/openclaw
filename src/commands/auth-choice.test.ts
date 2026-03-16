@@ -2,11 +2,29 @@ import fs from "node:fs/promises";
 import type { OAuthCredentials } from "@mariozechner/pi-ai";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import anthropicPlugin from "../../extensions/anthropic/index.js";
+import cloudflareAiGatewayPlugin from "../../extensions/cloudflare-ai-gateway/index.js";
+import googlePlugin from "../../extensions/google/index.js";
 import huggingfacePlugin from "../../extensions/huggingface/index.js";
 import kimiCodingPlugin from "../../extensions/kimi-coding/index.js";
+import minimaxPlugin from "../../extensions/minimax/index.js";
+import mistralPlugin from "../../extensions/mistral/index.js";
+import moonshotPlugin from "../../extensions/moonshot/index.js";
 import ollamaPlugin from "../../extensions/ollama/index.js";
 import openAIPlugin from "../../extensions/openai/index.js";
+import opencodeGoPlugin from "../../extensions/opencode-go/index.js";
+import opencodePlugin from "../../extensions/opencode/index.js";
+import openrouterPlugin from "../../extensions/openrouter/index.js";
+import qianfanPlugin from "../../extensions/qianfan/index.js";
+import qwenPortalAuthPlugin from "../../extensions/qwen-portal-auth/index.js";
+import syntheticPlugin from "../../extensions/synthetic/index.js";
 import togetherPlugin from "../../extensions/together/index.js";
+import venicePlugin from "../../extensions/venice/index.js";
+import vercelAiGatewayPlugin from "../../extensions/vercel-ai-gateway/index.js";
+import xaiPlugin from "../../extensions/xai/index.js";
+import xiaomiPlugin from "../../extensions/xiaomi/index.js";
+import { setDetectZaiEndpointForTesting } from "../../extensions/zai/detect.js";
+import zaiPlugin from "../../extensions/zai/index.js";
+import { resolveAgentDir } from "../agents/agent-scope.js";
 import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
 import type { ProviderPlugin } from "../plugins/types.js";
 import { createCapturedPluginRegistration } from "../test-utils/plugin-registration.js";
@@ -67,11 +85,27 @@ function createDefaultProviderPlugins() {
   const captured = createCapturedPluginRegistration();
   for (const plugin of [
     anthropicPlugin,
+    cloudflareAiGatewayPlugin,
+    googlePlugin,
     huggingfacePlugin,
     kimiCodingPlugin,
+    minimaxPlugin,
+    mistralPlugin,
+    moonshotPlugin,
     ollamaPlugin,
     openAIPlugin,
+    opencodeGoPlugin,
+    opencodePlugin,
+    openrouterPlugin,
+    qianfanPlugin,
+    qwenPortalAuthPlugin,
+    syntheticPlugin,
     togetherPlugin,
+    venicePlugin,
+    vercelAiGatewayPlugin,
+    xaiPlugin,
+    xiaomiPlugin,
+    zaiPlugin,
   ]) {
     plugin.register(captured.api);
   }
@@ -153,12 +187,14 @@ describe("applyAuthChoice", () => {
     resolvePluginProviders.mockReturnValue(createDefaultProviderPlugins());
     detectZaiEndpoint.mockReset();
     detectZaiEndpoint.mockResolvedValue(null);
+    setDetectZaiEndpointForTesting(detectZaiEndpoint);
     loginOpenAICodexOAuth.mockReset();
     loginOpenAICodexOAuth.mockResolvedValue(null);
     await lifecycle.cleanup();
     activeStateDir = null;
   });
 
+  setDetectZaiEndpointForTesting(detectZaiEndpoint);
   resolvePluginProviders.mockReturnValue(createDefaultProviderPlugins());
 
   it("does not throw when openai-codex oauth fails", async () => {
@@ -978,10 +1014,22 @@ describe("applyAuthChoice", () => {
           provider: scenario.profileProvider,
           mode: "api_key",
         });
-        expect((await readAuthProfile(scenario.profileId))?.key).toBe(scenario.token);
+        const profileStore =
+          scenario.agentId && scenario.agentId !== "default"
+            ? await readAuthProfilesForAgent<{ profiles?: Record<string, StoredAuthProfile> }>(
+                resolveAgentDir(result.config, scenario.agentId),
+              )
+            : await readAuthProfiles();
+        expect(profileStore.profiles?.[scenario.profileId]?.key).toBe(scenario.token);
       }
       if (scenario.extraProfileId) {
-        expect((await readAuthProfile(scenario.extraProfileId))?.key).toBe(scenario.token);
+        const profileStore =
+          scenario.agentId && scenario.agentId !== "default"
+            ? await readAuthProfilesForAgent<{ profiles?: Record<string, StoredAuthProfile> }>(
+                resolveAgentDir(result.config, scenario.agentId),
+              )
+            : await readAuthProfiles();
+        expect(profileStore.profiles?.[scenario.extraProfileId]?.key).toBe(scenario.token);
       }
       if (scenario.expectProviderConfigUndefined) {
         expect(
@@ -1393,6 +1441,7 @@ describe("applyAuthChoice", () => {
               id: scenario.authId,
               label: scenario.authLabel,
               kind: "device_code",
+              wizard: { choiceId: scenario.authChoice },
               run: vi.fn(async () => ({
                 profiles: [
                   {

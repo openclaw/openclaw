@@ -143,7 +143,10 @@ const cloudflareAiGatewayPlugin = {
             await ensureApiKeyFromOptionEnvOrPrompt({
               token: normalizeOptionalSecretInput(ctx.opts?.cloudflareAiGatewayApiKey),
               tokenProvider: "cloudflare-ai-gateway",
-              secretInputMode: ctx.secretInputMode,
+              secretInputMode:
+                ctx.allowSecretRefPrompt === false
+                  ? (ctx.secretInputMode ?? "plaintext")
+                  : ctx.secretInputMode,
               config: ctx.config,
               expectedProviders: [PROVIDER_ID],
               provider: PROVIDER_ID,

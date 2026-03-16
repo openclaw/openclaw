@@ -144,7 +144,14 @@ describe("resolveThinkingDefaultForModel", () => {
     ).toBe("adaptive");
   });
 
-  it("treats Bedrock Anthropic aliases as adaptive", () => {
+  it("uses provider-advertised adaptive defaults for Bedrock aliases", () => {
+    providerRuntimeMocks.resolveProviderDefaultThinkingLevel.mockImplementation(
+      ({ provider, context }) =>
+        provider === "amazon-bedrock" && context.modelId === "claude-sonnet-4-6"
+          ? "adaptive"
+          : undefined,
+    );
+
     expect(
       resolveThinkingDefaultForModel({ provider: "aws-bedrock", model: "claude-sonnet-4-6" }),
     ).toBe("adaptive");
