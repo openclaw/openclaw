@@ -5,7 +5,7 @@ import { createEmptyPluginRegistry } from "../plugins/registry.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 import {
-  patchChannelOnboardingAdapter,
+  patchChannelSetupFlowAdapter,
   setDefaultChannelPluginRegistryForTests,
 } from "./channel-test-helpers.js";
 import { setupChannels } from "./onboard-channels.js";
@@ -96,8 +96,8 @@ function createTelegramCfg(botToken: string, enabled?: boolean): OpenClawConfig 
   } as OpenClawConfig;
 }
 
-function patchTelegramAdapter(overrides: Parameters<typeof patchChannelOnboardingAdapter>[1]) {
-  return patchChannelOnboardingAdapter("telegram", {
+function patchTelegramAdapter(overrides: Parameters<typeof patchChannelSetupFlowAdapter>[1]) {
+  return patchChannelSetupFlowAdapter("telegram", {
     ...overrides,
     getStatus:
       overrides.getStatus ??
@@ -277,7 +277,7 @@ describe("setupChannels", () => {
     expect(multiselect).not.toHaveBeenCalled();
   });
 
-  it("continues Telegram onboarding even when plugin registry is empty (avoids 'plugin not available' block)", async () => {
+  it("continues Telegram setup when the plugin registry is empty", async () => {
     // Simulate missing registry entries (the scenario reported in #25545).
     setActivePluginRegistry(createEmptyPluginRegistry());
     // Avoid accidental env-token configuration changing the prompt path.
@@ -311,11 +311,7 @@ describe("setupChannels", () => {
       );
     });
     expect(sawHardStop).toBe(false);
-    expect(loadOnboardingPluginRegistrySnapshotForChannel).toHaveBeenCalledWith(
-      expect.objectContaining({
-        channel: "telegram",
-      }),
-    );
+    expect(loadOnboardingPluginRegistrySnapshotForChannel).not.toHaveBeenCalled();
     expect(reloadOnboardingPluginRegistry).not.toHaveBeenCalled();
   });
 

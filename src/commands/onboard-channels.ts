@@ -1,7 +1,7 @@
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { listChannelPluginCatalogEntries } from "../channels/plugins/catalog.js";
 import { resolveChannelDefaultAccountId } from "../channels/plugins/helpers.js";
-import type { ChannelOnboardingSetupPlugin } from "../channels/plugins/onboarding-types.js";
+import type { ChannelOnboardingSetupPlugin } from "../channels/plugins/setup-flow-types.js";
 import {
   getChannelSetupPlugin,
   listChannelSetupPlugins,
@@ -21,23 +21,20 @@ import type { RuntimeEnv } from "../runtime.js";
 import { formatDocsLink } from "../terminal/links.js";
 import type { WizardPrompter, WizardSelectOption } from "../wizard/prompts.js";
 import { resolveChannelSetupEntries } from "./channel-setup/discovery.js";
-import {
-  loadBundledChannelOnboardingPlugin,
-  resolveChannelOnboardingAdapterForPlugin,
-} from "./channel-setup/registry.js";
+import { resolveChannelSetupFlowAdapterForPlugin } from "./channel-setup/registry.js";
+import type {
+  ChannelSetupFlowAdapter,
+  ChannelSetupConfiguredResult,
+  ChannelSetupDmPolicy,
+  ChannelSetupResult,
+  ChannelSetupStatus,
+  SetupChannelsOptions,
+} from "./channel-setup/types.js";
 import type { ChannelChoice } from "./onboard-types.js";
 import {
   ensureOnboardingPluginInstalled,
   loadOnboardingPluginRegistrySnapshotForChannel,
 } from "./onboarding/plugin-install.js";
-import type {
-  ChannelOnboardingAdapter,
-  ChannelOnboardingConfiguredResult,
-  ChannelOnboardingDmPolicy,
-  ChannelOnboardingResult,
-  ChannelOnboardingStatus,
-  SetupChannelsOptions,
-} from "./onboarding/types.js";
 
 type ConfiguredChannelAction = "update" | "disable" | "delete" | "skip";
 
@@ -45,7 +42,7 @@ type ChannelStatusSummary = {
   installedPlugins: ReturnType<typeof listChannelSetupPlugins>;
   catalogEntries: ReturnType<typeof listChannelPluginCatalogEntries>;
   installedCatalogEntries: ReturnType<typeof listChannelPluginCatalogEntries>;
-  statusByChannel: Map<ChannelChoice, ChannelOnboardingStatus>;
+  statusByChannel: Map<ChannelChoice, ChannelSetupStatus>;
   statusLines: string[];
 };
 
@@ -122,7 +119,7 @@ async function collectChannelStatus(params: {
   options?: SetupChannelsOptions;
   accountOverrides: Partial<Record<ChannelChoice, string>>;
   installedPlugins?: ChannelOnboardingSetupPlugin[];
-  resolveAdapter?: (channel: ChannelChoice) => ChannelOnboardingAdapter | undefined;
+  resolveAdapter?: (channel: ChannelChoice) => ChannelSetupFlowAdapter | undefined;
 }): Promise<ChannelStatusSummary> {
   const installedPlugins = params.installedPlugins ?? listChannelSetupPlugins();
   const workspaceDir = resolveAgentWorkspaceDir(params.cfg, resolveDefaultAgentId(params.cfg));
@@ -134,7 +131,7 @@ async function collectChannelStatus(params: {
   const resolveAdapter =
     params.resolveAdapter ??
     ((channel: ChannelChoice) =>
-      resolveChannelOnboardingAdapterForPlugin(
+      resolveChannelSetupFlowAdapterForPlugin(
         installedPlugins.find((plugin) => plugin.id === channel),
       ));
   const statusEntries = await Promise.all(
@@ -274,13 +271,13 @@ async function maybeConfigureDmPolicies(params: {
   selection: ChannelChoice[];
   prompter: WizardPrompter;
   accountIdsByChannel?: Map<ChannelChoice, string>;
-  resolveAdapter?: (channel: ChannelChoice) => ChannelOnboardingAdapter | undefined;
+  resolveAdapter?: (channel: ChannelChoice) => ChannelSetupFlowAdapter | undefined;
 }): Promise<OpenClawConfig> {
   const { selection, prompter, accountIdsByChannel } = params;
   const resolve = params.resolveAdapter ?? (() => undefined);
   const dmPolicies = selection
-    .map((channel) => resolve?.(channel)?.dmPolicy)
-    .filter(Boolean) as ChannelOnboardingDmPolicy[];
+    .map((channel) => resolve(channel)?.dmPolicy)
+    .filter(Boolean) as ChannelSetupDmPolicy[];
   if (dmPolicies.length === 0) {
     return params.cfg;
   }
@@ -294,7 +291,7 @@ async function maybeConfigureDmPolicies(params: {
   }
 
   let cfg = params.cfg;
-  const selectPolicy = async (policy: ChannelOnboardingDmPolicy) => {
+  const selectPolicy = async (policy: ChannelSetupDmPolicy) => {
     await prompter.note(
       [
         "Default: pairing (unknown DMs get a pairing code).",
@@ -337,7 +334,7 @@ async function maybeConfigureDmPolicies(params: {
   return cfg;
 }
 
-// Channel-specific prompts moved into onboarding adapters.
+// Channel-specific prompts moved into setup flow adapters.
 
 export async function setupChannels(
   cfg: OpenClawConfig,
@@ -393,21 +390,17 @@ export async function setupChannels(
       rememberScopedPlugin(plugin);
       return plugin;
     }
-    const bundledPlugin = await loadBundledChannelOnboardingPlugin(channel);
-    if (bundledPlugin) {
-      rememberScopedPlugin(bundledPlugin);
-    }
-    return bundledPlugin;
+    return undefined;
   };
-  const getVisibleOnboardingAdapter = (channel: ChannelChoice) => {
+  const getVisibleSetupFlowAdapter = (channel: ChannelChoice) => {
     const scopedPlugin = scopedPluginsById.get(channel);
     if (scopedPlugin) {
-      return resolveChannelOnboardingAdapterForPlugin(scopedPlugin);
+      return resolveChannelSetupFlowAdapterForPlugin(scopedPlugin);
     }
-    return resolveChannelOnboardingAdapterForPlugin(getChannelSetupPlugin(channel));
+    return resolveChannelSetupFlowAdapterForPlugin(getChannelSetupPlugin(channel));
   };
   const preloadConfiguredExternalPlugins = () => {
-    // Keep onboarding memory bounded by snapshot-loading only configured external plugins.
+    // Keep setup memory bounded by snapshot-loading only configured external plugins.
     const workspaceDir = resolveWorkspaceDir();
     for (const entry of listChannelPluginCatalogEntries({ workspaceDir })) {
       const channel = entry.id as ChannelChoice;
@@ -438,7 +431,7 @@ export async function setupChannels(
     options,
     accountOverrides,
     installedPlugins: listVisibleInstalledPlugins(),
-    resolveAdapter: getVisibleOnboardingAdapter,
+    resolveAdapter: getVisibleSetupFlowAdapter,
   });
   if (!options?.skipStatusNote && statusLines.length > 0) {
     await prompter.note(statusLines.join("\n"), "Channel status");
@@ -493,7 +486,7 @@ export async function setupChannels(
   const accountIdsByChannel = new Map<ChannelChoice, string>();
   const recordAccount = (channel: ChannelChoice, accountId: string) => {
     options?.onAccountId?.(channel, accountId);
-    const adapter = getVisibleOnboardingAdapter(channel);
+    const adapter = getVisibleSetupFlowAdapter(channel);
     adapter?.onAccountRecorded?.(accountId, options);
     accountIdsByChannel.set(channel, accountId);
   };
@@ -566,7 +559,7 @@ export async function setupChannels(
   };
 
   const refreshStatus = async (channel: ChannelChoice) => {
-    const adapter = getVisibleOnboardingAdapter(channel);
+    const adapter = getVisibleSetupFlowAdapter(channel);
     if (!adapter) {
       return;
     }
@@ -589,11 +582,11 @@ export async function setupChannels(
       return false;
     }
     const plugin = await loadScopedChannelPlugin(channel);
-    const adapter = getVisibleOnboardingAdapter(channel);
+    const adapter = getVisibleSetupFlowAdapter(channel);
     if (!plugin) {
       if (adapter) {
         await prompter.note(
-          `${channel} plugin not available (continuing with onboarding). If the channel still doesn't work after setup, run \`${formatCliCommand(
+          `${channel} plugin not available (continuing with setup). If the channel still doesn't work after setup, run \`${formatCliCommand(
             "openclaw plugins list",
           )}\` and \`${formatCliCommand("openclaw plugins enable " + channel)}\`, then restart the gateway.`,
           "Channel setup",
@@ -608,7 +601,7 @@ export async function setupChannels(
     return true;
   };
 
-  const applyOnboardingResult = async (channel: ChannelChoice, result: ChannelOnboardingResult) => {
+  const applySetupResult = async (channel: ChannelChoice, result: ChannelSetupResult) => {
     next = result.cfg;
     if (result.accountId) {
       recordAccount(channel, result.accountId);
@@ -617,21 +610,21 @@ export async function setupChannels(
     await refreshStatus(channel);
   };
 
-  const applyCustomOnboardingResult = async (
+  const applyCustomSetupResult = async (
     channel: ChannelChoice,
-    result: ChannelOnboardingConfiguredResult,
+    result: ChannelSetupConfiguredResult,
   ) => {
     if (result === "skip") {
       return false;
     }
-    await applyOnboardingResult(channel, result);
+    await applySetupResult(channel, result);
     return true;
   };
 
   const configureChannel = async (channel: ChannelChoice) => {
-    const adapter = getVisibleOnboardingAdapter(channel);
+    const adapter = getVisibleSetupFlowAdapter(channel);
     if (!adapter) {
-      await prompter.note(`${channel} does not support onboarding yet.`, "Channel setup");
+      await prompter.note(`${channel} does not support guided setup yet.`, "Channel setup");
       return;
     }
     const result = await adapter.configure({
@@ -643,12 +636,12 @@ export async function setupChannels(
       shouldPromptAccountIds,
       forceAllowFrom: forceAllowFromChannels.has(channel),
     });
-    await applyOnboardingResult(channel, result);
+    await applySetupResult(channel, result);
   };
 
   const handleConfiguredChannel = async (channel: ChannelChoice, label: string) => {
     const plugin = getVisibleChannelPlugin(channel);
-    const adapter = getVisibleOnboardingAdapter(channel);
+    const adapter = getVisibleSetupFlowAdapter(channel);
     if (adapter?.configureWhenConfigured) {
       const custom = await adapter.configureWhenConfigured({
         cfg: next,
@@ -661,7 +654,7 @@ export async function setupChannels(
         configured: true,
         label,
       });
-      if (!(await applyCustomOnboardingResult(channel, custom))) {
+      if (!(await applyCustomSetupResult(channel, custom))) {
         return;
       }
       return;
@@ -772,7 +765,7 @@ export async function setupChannels(
     }
 
     const plugin = getVisibleChannelPlugin(channel);
-    const adapter = getVisibleOnboardingAdapter(channel);
+    const adapter = getVisibleSetupFlowAdapter(channel);
     const label = plugin?.meta.label ?? catalogEntry?.meta.label ?? channel;
     const status = statusByChannel.get(channel);
     const configured = status?.configured ?? false;
@@ -788,7 +781,7 @@ export async function setupChannels(
         configured,
         label,
       });
-      if (!(await applyCustomOnboardingResult(channel, custom))) {
+      if (!(await applyCustomSetupResult(channel, custom))) {
         return;
       }
       return;
@@ -861,7 +854,7 @@ export async function setupChannels(
       selection,
       prompter,
       accountIdsByChannel,
-      resolveAdapter: getVisibleOnboardingAdapter,
+      resolveAdapter: getVisibleSetupFlowAdapter,
     });
   }
 
