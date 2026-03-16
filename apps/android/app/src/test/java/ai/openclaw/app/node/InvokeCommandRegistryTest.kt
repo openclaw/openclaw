@@ -2,6 +2,7 @@ package ai.openclaw.app.node
 
 import ai.openclaw.app.protocol.OpenClawCalendarCommand
 import ai.openclaw.app.protocol.OpenClawCameraCommand
+import ai.openclaw.app.protocol.OpenClawCallLogCommand
 import ai.openclaw.app.protocol.OpenClawCapability
 import ai.openclaw.app.protocol.OpenClawContactsCommand
 import ai.openclaw.app.protocol.OpenClawDeviceCommand
@@ -19,14 +20,13 @@ class InvokeCommandRegistryTest {
   private val coreCapabilities =
     setOf(
       OpenClawCapability.Canvas.rawValue,
-      OpenClawCapability.Screen.rawValue,
       OpenClawCapability.Device.rawValue,
       OpenClawCapability.Notifications.rawValue,
       OpenClawCapability.System.rawValue,
-      OpenClawCapability.AppUpdate.rawValue,
       OpenClawCapability.Photos.rawValue,
       OpenClawCapability.Contacts.rawValue,
       OpenClawCapability.Calendar.rawValue,
+      OpenClawCapability.CallLog.rawValue,
     )
 
   private val optionalCapabilities =
@@ -52,7 +52,7 @@ class InvokeCommandRegistryTest {
       OpenClawContactsCommand.Add.rawValue,
       OpenClawCalendarCommand.Events.rawValue,
       OpenClawCalendarCommand.Add.rawValue,
-      "app.update",
+      OpenClawCallLogCommand.Search.rawValue,
     )
 
   private val optionalCommands =

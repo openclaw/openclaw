@@ -1,17 +1,17 @@
 ---
-summary: "Full reference for the CLI onboarding wizard: every step, flag, and config field"
+summary: "Full reference for the CLI setup wizard: every step, flag, and config field"
 read_when:
   - Looking up a specific wizard step or flag
   - Automating onboarding with non-interactive mode
   - Debugging wizard behavior
-title: "Onboarding Wizard Reference"
+title: "Setup Wizard Reference"
 sidebarTitle: "Wizard Reference"
 ---
 
-# Onboarding Wizard Reference
+# Setup Wizard Reference
 
 This is the full reference for the `openclaw onboard` CLI wizard.
-For a high-level overview, see [Onboarding Wizard](/start/wizard).
+For a high-level overview, see [Setup Wizard](/start/wizard).
 
 ## Flow details (local mode)
 
@@ -38,7 +38,9 @@ For a high-level overview, see [Onboarding Wizard](/start/wizard).
       - Sets `agents.defaults.model` to `openai-codex/gpt-5.2` when model is unset or `openai/*`.
     - **OpenAI API key**: uses `OPENAI_API_KEY` if present or prompts for a key, then stores it in auth profiles.
     - **xAI (Grok) API key**: prompts for `XAI_API_KEY` and configures xAI as a model provider.
-    - **OpenCode Zen (multi-model proxy)**: prompts for `OPENCODE_API_KEY` (or `OPENCODE_ZEN_API_KEY`, get it at https://opencode.ai/auth).
+    - **OpenCode**: prompts for `OPENCODE_API_KEY` (or `OPENCODE_ZEN_API_KEY`, get it at https://opencode.ai/auth) and lets you pick the Zen or Go catalog.
+    - **Ollama**: prompts for the Ollama base URL, offers **Cloud + Local** or **Local** mode, discovers available models, and auto-pulls the selected local model when needed.
+    - More detail: [Ollama](/providers/ollama)
     - **API key**: stores the key for you.
     - **Vercel AI Gateway (multi-model proxy)**: prompts for `AI_GATEWAY_API_KEY`.
     - More detail: [Vercel AI Gateway](/providers/vercel-ai-gateway)
@@ -71,12 +73,12 @@ For a high-level overview, see [Onboarding Wizard](/start/wizard).
   <Step title="Gateway">
     - Port, bind, auth mode, tailscale exposure.
     - Auth recommendation: keep **Token** even for loopback so local WS clients must authenticate.
-    - In token mode, interactive onboarding offers:
+    - In token mode, interactive setup offers:
       - **Generate/store plaintext token** (default)
       - **Use SecretRef** (opt-in)
       - Quickstart reuses existing `gateway.auth.token` SecretRefs across `env`, `file`, and `exec` providers for onboarding probe/dashboard bootstrap.
       - If that SecretRef is configured but cannot be resolved, onboarding fails early with a clear fix message instead of silently degrading runtime auth.
-    - In password mode, interactive onboarding also supports plaintext or SecretRef storage.
+    - In password mode, interactive setup also supports plaintext or SecretRef storage.
     - Non-interactive token SecretRef path: `--gateway-token-ref-env <ENV_VAR>`.
       - Requires a non-empty env var in the onboarding process environment.
       - Cannot be combined with `--gateway-token`.
@@ -165,80 +167,8 @@ openclaw onboard --non-interactive \
 `--json` does **not** imply non-interactive mode. Use `--non-interactive` (and `--workspace`) for scripts.
 </Note>
 
-<AccordionGroup>
-  <Accordion title="Gemini example">
-    ```bash
-    openclaw onboard --non-interactive \
-      --mode local \
-      --auth-choice gemini-api-key \
-      --gemini-api-key "$GEMINI_API_KEY" \
-      --gateway-port 18789 \
-      --gateway-bind loopback
-    ```
-  </Accordion>
-  <Accordion title="Z.AI example">
-    ```bash
-    openclaw onboard --non-interactive \
-      --mode local \
-      --auth-choice zai-api-key \
-      --zai-api-key "$ZAI_API_KEY" \
-      --gateway-port 18789 \
-      --gateway-bind loopback
-    ```
-  </Accordion>
-  <Accordion title="Vercel AI Gateway example">
-    ```bash
-    openclaw onboard --non-interactive \
-      --mode local \
-      --auth-choice ai-gateway-api-key \
-      --ai-gateway-api-key "$AI_GATEWAY_API_KEY" \
-      --gateway-port 18789 \
-      --gateway-bind loopback
-    ```
-  </Accordion>
-  <Accordion title="Cloudflare AI Gateway example">
-    ```bash
-    openclaw onboard --non-interactive \
-      --mode local \
-      --auth-choice cloudflare-ai-gateway-api-key \
-      --cloudflare-ai-gateway-account-id "your-account-id" \
-      --cloudflare-ai-gateway-gateway-id "your-gateway-id" \
-      --cloudflare-ai-gateway-api-key "$CLOUDFLARE_AI_GATEWAY_API_KEY" \
-      --gateway-port 18789 \
-      --gateway-bind loopback
-    ```
-  </Accordion>
-  <Accordion title="Moonshot example">
-    ```bash
-    openclaw onboard --non-interactive \
-      --mode local \
-      --auth-choice moonshot-api-key \
-      --moonshot-api-key "$MOONSHOT_API_KEY" \
-      --gateway-port 18789 \
-      --gateway-bind loopback
-    ```
-  </Accordion>
-  <Accordion title="Synthetic example">
-    ```bash
-    openclaw onboard --non-interactive \
-      --mode local \
-      --auth-choice synthetic-api-key \
-      --synthetic-api-key "$SYNTHETIC_API_KEY" \
-      --gateway-port 18789 \
-      --gateway-bind loopback
-    ```
-  </Accordion>
-  <Accordion title="OpenCode Zen example">
-    ```bash
-    openclaw onboard --non-interactive \
-      --mode local \
-      --auth-choice opencode-zen \
-      --opencode-zen-api-key "$OPENCODE_API_KEY" \
-      --gateway-port 18789 \
-      --gateway-bind loopback
-    ```
-  </Accordion>
-</AccordionGroup>
+Provider-specific command examples live in [CLI Automation](/start/wizard-cli-automation#provider-specific-examples).
+Use this reference page for flag semantics and step ordering.
 
 ### Add agent (non-interactive)
 
@@ -278,7 +208,7 @@ Typical fields in `~/.openclaw/openclaw.json`:
 - `agents.defaults.model` / `models.providers` (if Minimax chosen)
 - `tools.profile` (local onboarding defaults to `"coding"` when unset; existing explicit values are preserved)
 - `gateway.*` (mode, bind, auth, tailscale)
-- `session.dmScope` (behavior details: [CLI Onboarding Reference](/start/wizard-cli-reference#outputs-and-internals))
+- `session.dmScope` (behavior details: [CLI Setup Reference](/start/wizard-cli-reference#outputs-and-internals))
 - `channels.telegram.botToken`, `channels.discord.token`, `channels.signal.*`, `channels.imessage.*`
 - Channel allowlists (Slack/Discord/Matrix/Microsoft Teams) when you opt in during the prompts (names resolve to IDs when possible).
 - `skills.install.nodeManager`
@@ -293,12 +223,12 @@ Typical fields in `~/.openclaw/openclaw.json`:
 WhatsApp credentials go under `~/.openclaw/credentials/whatsapp/<accountId>/`.
 Sessions are stored under `~/.openclaw/agents/<agentId>/sessions/`.
 
-Some channels are delivered as plugins. When you pick one during onboarding, the wizard
+Some channels are delivered as plugins. When you pick one during setup, the wizard
 will prompt to install it (npm or a local path) before it can be configured.
 
 ## Related docs
 
-- Wizard overview: [Onboarding Wizard](/start/wizard)
+- Wizard overview: [Setup Wizard](/start/wizard)
 - macOS app onboarding: [Onboarding](/start/onboarding)
 - Config reference: [Gateway configuration](/gateway/configuration)
 - Providers: [WhatsApp](/channels/whatsapp), [Telegram](/channels/telegram), [Discord](/channels/discord), [Google Chat](/channels/googlechat), [Signal](/channels/signal), [BlueBubbles](/channels/bluebubbles) (iMessage), [iMessage](/channels/imessage) (legacy)

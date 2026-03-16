@@ -96,7 +96,8 @@ pnpm install
 pnpm gateway:watch
 ```
 
-`gateway:watch` runs the gateway in watch mode and reloads on TypeScript changes.
+`gateway:watch` runs the gateway in watch mode and reloads on relevant source,
+config, and bundled-plugin metadata changes.
 
 ### 2) Point the macOS app at your running Gateway
 
@@ -127,7 +128,7 @@ openclaw health
 Use this when debugging auth or deciding what to back up:
 
 - **WhatsApp**: `~/.openclaw/credentials/whatsapp/<accountId>/creds.json`
-- **Telegram bot token**: config/env or `channels.telegram.tokenFile`
+- **Telegram bot token**: config/env or `channels.telegram.tokenFile` (regular file only; symlinks rejected)
 - **Discord bot token**: config/env or SecretRef (env/file/exec providers)
 - **Slack tokens**: config/env (`channels.slack.*`)
 - **Pairing allowlists**:

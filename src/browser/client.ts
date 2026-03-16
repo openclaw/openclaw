@@ -1,14 +1,18 @@
 import { fetchBrowserJson } from "./client-fetch.js";
 
+export type BrowserTransport = "cdp" | "chrome-mcp";
+
 export type BrowserStatus = {
   enabled: boolean;
   profile?: string;
+  driver?: "openclaw" | "existing-session";
+  transport?: BrowserTransport;
   running: boolean;
   cdpReady?: boolean;
   cdpHttp?: boolean;
   pid: number | null;
-  cdpPort: number;
-  cdpUrl?: string;
+  cdpPort: number | null;
+  cdpUrl?: string | null;
   chosenBrowser: string | null;
   detectedBrowser?: string | null;
   detectedExecutablePath?: string | null;
@@ -23,13 +27,17 @@ export type BrowserStatus = {
 
 export type ProfileStatus = {
   name: string;
-  cdpPort: number;
-  cdpUrl: string;
+  transport?: BrowserTransport;
+  cdpPort: number | null;
+  cdpUrl: string | null;
   color: string;
+  driver: "openclaw" | "existing-session";
   running: boolean;
   tabCount: number;
   isDefault: boolean;
   isRemote: boolean;
+  missingFromConfig?: boolean;
+  reconcileReason?: string | null;
 };
 
 export type BrowserResetProfileResult = {
@@ -151,8 +159,10 @@ export async function browserResetProfile(
 export type BrowserCreateProfileResult = {
   ok: true;
   profile: string;
-  cdpPort: number;
-  cdpUrl: string;
+  transport?: BrowserTransport;
+  cdpPort: number | null;
+  cdpUrl: string | null;
+  userDataDir: string | null;
   color: string;
   isRemote: boolean;
 };
@@ -163,7 +173,8 @@ export async function browserCreateProfile(
     name: string;
     color?: string;
     cdpUrl?: string;
-    driver?: "openclaw" | "extension";
+    userDataDir?: string;
+    driver?: "openclaw" | "existing-session";
   },
 ): Promise<BrowserCreateProfileResult> {
   return await fetchBrowserJson<BrowserCreateProfileResult>(
@@ -175,6 +186,7 @@ export async function browserCreateProfile(
         name: opts.name,
         color: opts.color,
         cdpUrl: opts.cdpUrl,
+        userDataDir: opts.userDataDir,
         driver: opts.driver,
       }),
       timeoutMs: 10000,
@@ -276,7 +288,7 @@ export async function browserTabAction(
 export async function browserSnapshot(
   baseUrl: string | undefined,
   opts: {
-    format: "aria" | "ai";
+    format?: "aria" | "ai";
     targetId?: string;
     limit?: number;
     maxChars?: number;
@@ -292,7 +304,9 @@ export async function browserSnapshot(
   },
 ): Promise<SnapshotResult> {
   const q = new URLSearchParams();
-  q.set("format", opts.format);
+  if (opts.format) {
+    q.set("format", opts.format);
+  }
   if (opts.targetId) {
     q.set("targetId", opts.targetId);
   }

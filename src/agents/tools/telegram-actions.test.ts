@@ -18,9 +18,25 @@ const sendStickerTelegram = vi.fn(async () => ({
   chatId: "123",
 }));
 const deleteMessageTelegram = vi.fn(async () => ({ ok: true }));
+const editMessageTelegram = vi.fn(async () => ({
+  ok: true,
+  messageId: "456",
+  chatId: "123",
+}));
+const editForumTopicTelegram = vi.fn(async () => ({
+  ok: true,
+  chatId: "123",
+  messageThreadId: 42,
+  name: "Renamed",
+}));
+const createForumTopicTelegram = vi.fn(async () => ({
+  topicId: 99,
+  name: "Topic",
+  chatId: "123",
+}));
 let envSnapshot: ReturnType<typeof captureEnv>;
 
-vi.mock("../../telegram/send.js", () => ({
+vi.mock("../../../extensions/telegram/src/send.js", () => ({
   reactMessageTelegram: (...args: Parameters<typeof reactMessageTelegram>) =>
     reactMessageTelegram(...args),
   sendMessageTelegram: (...args: Parameters<typeof sendMessageTelegram>) =>
@@ -30,6 +46,12 @@ vi.mock("../../telegram/send.js", () => ({
     sendStickerTelegram(...args),
   deleteMessageTelegram: (...args: Parameters<typeof deleteMessageTelegram>) =>
     deleteMessageTelegram(...args),
+  editMessageTelegram: (...args: Parameters<typeof editMessageTelegram>) =>
+    editMessageTelegram(...args),
+  editForumTopicTelegram: (...args: Parameters<typeof editForumTopicTelegram>) =>
+    editForumTopicTelegram(...args),
+  createForumTopicTelegram: (...args: Parameters<typeof createForumTopicTelegram>) =>
+    createForumTopicTelegram(...args),
 }));
 
 describe("handleTelegramAction", () => {
@@ -90,6 +112,9 @@ describe("handleTelegramAction", () => {
     sendPollTelegram.mockClear();
     sendStickerTelegram.mockClear();
     deleteMessageTelegram.mockClear();
+    editMessageTelegram.mockClear();
+    editForumTopicTelegram.mockClear();
+    createForumTopicTelegram.mockClear();
     process.env.TELEGRAM_BOT_TOKEN = "tok";
   });
 
@@ -377,6 +402,93 @@ describe("handleTelegramAction", () => {
       "Hello with local media",
       expect.objectContaining({ mediaLocalRoots: ["/tmp/agent-root"] }),
     );
+  });
+
+  it.each([
+    {
+      name: "react",
+      params: { action: "react", chatId: "123", messageId: 456, emoji: "✅" },
+      cfg: reactionConfig("minimal"),
+      assertCall: (
+        readCallOpts: (calls: unknown[][], argIndex: number) => Record<string, unknown>,
+      ) => readCallOpts(reactMessageTelegram.mock.calls as unknown[][], 3),
+    },
+    {
+      name: "sendMessage",
+      params: { action: "sendMessage", to: "123", content: "hello" },
+      cfg: telegramConfig(),
+      assertCall: (
+        readCallOpts: (calls: unknown[][], argIndex: number) => Record<string, unknown>,
+      ) => readCallOpts(sendMessageTelegram.mock.calls as unknown[][], 2),
+    },
+    {
+      name: "poll",
+      params: {
+        action: "poll",
+        to: "123",
+        question: "Q?",
+        answers: ["A", "B"],
+      },
+      cfg: telegramConfig(),
+      assertCall: (
+        readCallOpts: (calls: unknown[][], argIndex: number) => Record<string, unknown>,
+      ) => readCallOpts(sendPollTelegram.mock.calls as unknown[][], 2),
+    },
+    {
+      name: "deleteMessage",
+      params: { action: "deleteMessage", chatId: "123", messageId: 1 },
+      cfg: telegramConfig(),
+      assertCall: (
+        readCallOpts: (calls: unknown[][], argIndex: number) => Record<string, unknown>,
+      ) => readCallOpts(deleteMessageTelegram.mock.calls as unknown[][], 2),
+    },
+    {
+      name: "editMessage",
+      params: { action: "editMessage", chatId: "123", messageId: 1, content: "updated" },
+      cfg: telegramConfig(),
+      assertCall: (
+        readCallOpts: (calls: unknown[][], argIndex: number) => Record<string, unknown>,
+      ) => readCallOpts(editMessageTelegram.mock.calls as unknown[][], 3),
+    },
+    {
+      name: "sendSticker",
+      params: { action: "sendSticker", to: "123", fileId: "sticker-1" },
+      cfg: telegramConfig({ actions: { sticker: true } }),
+      assertCall: (
+        readCallOpts: (calls: unknown[][], argIndex: number) => Record<string, unknown>,
+      ) => readCallOpts(sendStickerTelegram.mock.calls as unknown[][], 2),
+    },
+    {
+      name: "createForumTopic",
+      params: { action: "createForumTopic", chatId: "123", name: "Topic" },
+      cfg: telegramConfig({ actions: { createForumTopic: true } }),
+      assertCall: (
+        readCallOpts: (calls: unknown[][], argIndex: number) => Record<string, unknown>,
+      ) => readCallOpts(createForumTopicTelegram.mock.calls as unknown[][], 2),
+    },
+    {
+      name: "editForumTopic",
+      params: { action: "editForumTopic", chatId: "123", messageThreadId: 42, name: "New" },
+      cfg: telegramConfig({ actions: { editForumTopic: true } }),
+      assertCall: (
+        readCallOpts: (calls: unknown[][], argIndex: number) => Record<string, unknown>,
+      ) => readCallOpts(editForumTopicTelegram.mock.calls as unknown[][], 2),
+    },
+  ])("forwards resolved cfg for $name action", async ({ params, cfg, assertCall }) => {
+    const readCallOpts = (calls: unknown[][], argIndex: number): Record<string, unknown> => {
+      const args = calls[0];
+      if (!Array.isArray(args)) {
+        throw new Error("Expected Telegram action call args");
+      }
+      const opts = args[argIndex];
+      if (!opts || typeof opts !== "object") {
+        throw new Error("Expected Telegram action options object");
+      }
+      return opts as Record<string, unknown>;
+    };
+    await handleTelegramAction(params as Record<string, unknown>, cfg);
+    const opts = assertCall(readCallOpts);
+    expect(opts.cfg).toBe(cfg);
   });
 
   it.each([

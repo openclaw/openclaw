@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { parseStrictInteger, parseStrictPositiveInteger } from "../infra/parse-finite-number.js";
 import { splitArgsPreservingQuotes } from "./arg-split.js";
 import {
   LEGACY_GATEWAY_SYSTEMD_SERVICE_NAMES,
@@ -19,6 +20,7 @@ import type {
   GatewayServiceEnvArgs,
   GatewayServiceInstallArgs,
   GatewayServiceManageArgs,
+  GatewayServiceRestartResult,
 } from "./service-types.js";
 import {
   enableSystemdUserLinger,
@@ -231,15 +233,15 @@ export function parseSystemdShow(output: string): SystemdServiceInfo {
   }
   const mainPidValue = entries.mainpid;
   if (mainPidValue) {
-    const pid = Number.parseInt(mainPidValue, 10);
-    if (Number.isFinite(pid) && pid > 0) {
+    const pid = parseStrictPositiveInteger(mainPidValue);
+    if (pid !== undefined) {
       info.mainPid = pid;
     }
   }
   const execMainStatusValue = entries.execmainstatus;
   if (execMainStatusValue) {
-    const status = Number.parseInt(execMainStatusValue, 10);
-    if (Number.isFinite(status)) {
+    const status = parseStrictInteger(execMainStatusValue);
+    if (status !== undefined) {
       info.execMainStatus = status;
     }
   }
@@ -569,13 +571,14 @@ export async function stopSystemdService({
 export async function restartSystemdService({
   stdout,
   env,
-}: GatewayServiceControlArgs): Promise<void> {
+}: GatewayServiceControlArgs): Promise<GatewayServiceRestartResult> {
   await runSystemdServiceAction({
     stdout,
     env,
     action: "restart",
     label: "Restarted systemd service",
   });
+  return { outcome: "completed" };
 }
 
 export async function isSystemdServiceEnabled(args: GatewayServiceEnvArgs): Promise<boolean> {
