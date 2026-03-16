@@ -175,6 +175,17 @@ export type CommandOptions = {
   signal?: AbortSignal;
 };
 
+function tryKillChild(child: ReturnType<typeof spawn>, signal: NodeJS.Signals = "SIGKILL"): void {
+  if (typeof child.kill !== "function") {
+    return;
+  }
+  try {
+    child.kill(signal);
+  } catch {
+    // The child may already be gone or unsignalable by the time a timeout/abort fires.
+  }
+}
+
 export function resolveCommandEnv(params: {
   argv: string[];
   env?: NodeJS.ProcessEnv;
@@ -273,17 +284,13 @@ export async function runCommandWithTimeout(
           return;
         }
         noOutputTimedOut = true;
-        if (typeof child.kill === "function") {
-          child.kill("SIGKILL");
-        }
+        tryKillChild(child);
       }, Math.floor(noOutputTimeoutMs));
     };
 
     const timer = setTimeout(() => {
       timedOut = true;
-      if (typeof child.kill === "function") {
-        child.kill("SIGKILL");
-      }
+      tryKillChild(child);
     }, timeoutMs);
     armNoOutputTimer();
 
@@ -292,9 +299,7 @@ export async function runCommandWithTimeout(
         if (settled) {
           return;
         }
-        if (typeof child.kill === "function") {
-          child.kill("SIGKILL");
-        }
+        tryKillChild(child);
       };
       if (signal.aborted) {
         onAbort();
