@@ -1,6 +1,7 @@
 import { spawnSync } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
+import { loadConfig } from "../config/config.js";
 import {
   resolveGatewayLaunchAgentLabel,
   resolveGatewaySystemdServiceName,
@@ -476,7 +477,11 @@ export function scheduleGatewaySigusr1Restart(opts?: {
         emitGatewayRestart();
         return;
       }
-      deferGatewayRestartUntilIdle({ getPendingCount: pendingCheck });
+      const cfg = loadConfig();
+      deferGatewayRestartUntilIdle({
+        getPendingCount: pendingCheck,
+        maxWaitMs: cfg.gateway?.reload?.deferralTimeoutMs,
+      });
     },
     Math.max(0, requestedDueAt - nowMs),
   );
