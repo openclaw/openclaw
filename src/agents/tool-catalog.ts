@@ -142,7 +142,7 @@ const CORE_TOOL_DEFINITIONS: CoreToolDefinition[] = [
     label: "sessions_broadcast",
     description: "Broadcast to all sessions",
     sectionId: "sessions",
-    profiles: ["coding"],
+    profiles: ["coding", "messaging"],
     includeInOpenClawGroup: true,
   },
   {

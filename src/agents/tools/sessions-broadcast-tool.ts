@@ -127,34 +127,49 @@ export function createSessionsBroadcastTool(opts?: {
         });
       }
 
-      // Fire-and-forget: inject system event into each target session
+      // Dispatch to all target sessions and await results for accurate delivery tracking
+      const promises = targets.map(({ internalKey, displayKey }) =>
+        callGateway({
+          method: "agent",
+          params: {
+            message,
+            sessionKey: internalKey,
+            idempotencyKey: crypto.randomUUID(),
+            deliver: false,
+            channel: INTERNAL_MESSAGE_CHANNEL,
+            lane: AGENT_LANE_NESTED,
+            inputProvenance: {
+              kind: "broadcast",
+              sourceSessionKey: opts?.agentSessionKey,
+              sourceChannel: opts?.agentChannel,
+              sourceTool: "sessions_broadcast",
+            },
+          },
+          timeoutMs: 10_000,
+        })
+          .then(() => ({ displayKey, ok: true as const }))
+          .catch((err: unknown) => ({
+            displayKey,
+            ok: false as const,
+            error: err instanceof Error ? err.message : String(err),
+          })),
+      );
+
+      const results = await Promise.allSettled(promises);
+
       const sentKeys: string[] = [];
       const errors: Array<{ key: string; error: string }> = [];
 
-      for (const { internalKey, displayKey } of targets) {
-        try {
-          void callGateway({
-            method: "agent",
-            params: {
-              message,
-              sessionKey: internalKey,
-              idempotencyKey: crypto.randomUUID(),
-              deliver: false,
-              channel: INTERNAL_MESSAGE_CHANNEL,
-              lane: AGENT_LANE_NESTED,
-              inputProvenance: {
-                kind: "broadcast",
-                sourceSessionKey: opts?.agentSessionKey,
-                sourceChannel: opts?.agentChannel,
-                sourceTool: "sessions_broadcast",
-              },
-            },
-            timeoutMs: 10_000,
-          });
-          sentKeys.push(displayKey);
-        } catch (err) {
-          const msg = err instanceof Error ? err.message : String(err);
-          errors.push({ key: displayKey, error: msg });
+      for (const result of results) {
+        // allSettled never rejects individual items; each resolves to our shaped object
+        const value =
+          result.status === "fulfilled"
+            ? result.value
+            : { ok: false as const, displayKey: "unknown", error: String(result.reason) };
+        if (value.ok) {
+          sentKeys.push(value.displayKey);
+        } else {
+          errors.push({ key: value.displayKey, error: value.error });
         }
       }
 
