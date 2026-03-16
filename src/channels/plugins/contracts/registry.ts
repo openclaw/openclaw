@@ -84,6 +84,17 @@ type SurfaceContractEntry = {
   surfaces: readonly ChannelPluginSurface[];
 };
 
+type ThreadingContractEntry = {
+  id: string;
+  plugin: Pick<ChannelPlugin, "id" | "threading">;
+};
+
+type DirectoryContractEntry = {
+  id: string;
+  plugin: Pick<ChannelPlugin, "id" | "directory">;
+  invokeLookups: boolean;
+};
+
 const telegramListActionsMock = vi.fn();
 const telegramGetCapabilitiesMock = vi.fn();
 const discordListActionsMock = vi.fn();
@@ -672,3 +683,20 @@ export const surfaceContractRegistry: SurfaceContractEntry[] = [
     ],
   },
 ];
+
+export const threadingContractRegistry: ThreadingContractEntry[] = surfaceContractRegistry
+  .filter((entry) => entry.surfaces.includes("threading"))
+  .map((entry) => ({
+    id: entry.id,
+    plugin: entry.plugin,
+  }));
+
+const directoryShapeOnlyIds = new Set(["matrix", "whatsapp", "zalouser"]);
+
+export const directoryContractRegistry: DirectoryContractEntry[] = surfaceContractRegistry
+  .filter((entry) => entry.surfaces.includes("directory"))
+  .map((entry) => ({
+    id: entry.id,
+    plugin: entry.plugin,
+    invokeLookups: !directoryShapeOnlyIds.has(entry.id),
+  }));
