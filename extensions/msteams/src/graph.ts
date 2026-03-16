@@ -74,6 +74,11 @@ export async function listTeamsByName(token: string, query: string): Promise<Gra
   return res.value ?? [];
 }
 
+export async function getTeamById(token: string, teamId: string): Promise<GraphGroup | null> {
+  const path = `/groups/${encodeURIComponent(teamId)}?$select=id,displayName`;
+  return await fetchGraphJson<GraphGroup>({ token, path });
+}
+
 export async function listChannelsForTeam(token: string, teamId: string): Promise<GraphChannel[]> {
   const path = `/teams/${encodeURIComponent(teamId)}/channels?$select=id,displayName`;
   const res = await fetchGraphJson<GraphResponse<GraphChannel>>({ token, path });
