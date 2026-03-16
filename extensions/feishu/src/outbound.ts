@@ -46,7 +46,14 @@ function shouldUseCard(text: string): boolean {
 function resolveReplyToMessageId(params: {
   replyToId?: string | null;
   threadId?: string | number | null;
+  cfg?: import("openclaw/plugin-sdk/feishu").ClawdbotConfig;
 }): string | undefined {
+  // Check replyToMode config - if "off", never reply to messages
+  const replyToMode = params.cfg?.channels?.feishu?.replyToMode;
+  if (replyToMode === "off") {
+    return undefined;
+  }
+  
   const replyToId = params.replyToId?.trim();
   if (replyToId) {
     return replyToId;
@@ -91,7 +98,7 @@ export const feishuOutbound: ChannelOutboundAdapter = {
     mediaLocalRoots,
     identity,
   }) => {
-    const replyToMessageId = resolveReplyToMessageId({ replyToId, threadId });
+    const replyToMessageId = resolveReplyToMessageId({ replyToId, threadId, cfg });
     // Scheme A compatibility shim:
     // when upstream accidentally returns a local image path as plain text,
     // auto-upload and send as Feishu image message instead of leaking path text.
@@ -155,7 +162,7 @@ export const feishuOutbound: ChannelOutboundAdapter = {
     replyToId,
     threadId,
   }) => {
-    const replyToMessageId = resolveReplyToMessageId({ replyToId, threadId });
+    const replyToMessageId = resolveReplyToMessageId({ replyToId, threadId, cfg });
     // Send text first if provided
     if (text?.trim()) {
       await sendOutboundText({
@@ -206,3 +213,5 @@ export const feishuOutbound: ChannelOutboundAdapter = {
     return { channel: "feishu", ...result };
   },
 };
+
+
