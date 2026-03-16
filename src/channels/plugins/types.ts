@@ -9,6 +9,9 @@ export type { ChannelMessageCapability } from "./message-capabilities.js";
 export type {
   ChannelAuthAdapter,
   ChannelCommandAdapter,
+  ChannelCapabilitiesDiagnostics,
+  ChannelCapabilitiesDisplayLine,
+  ChannelCapabilitiesDisplayTone,
   ChannelConfigAdapter,
   ChannelDirectoryAdapter,
   ChannelExecApprovalAdapter,
