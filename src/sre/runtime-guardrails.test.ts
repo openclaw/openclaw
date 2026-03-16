@@ -125,37 +125,51 @@ describe("buildSreRuntimeGuardrailContextFromTranscript", () => {
     }
   });
 
-  it("falls back to the default helper path for blank or relative env overrides", () => {
+  it("falls back to the seeded runtime helper path for blank or relative env overrides", async () => {
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "single-vault-state-"));
+    const helperPath = path.join(
+      tmpDir,
+      "skills",
+      "morpho-sre",
+      "scripts",
+      "single-vault-graphql-evidence.sh",
+    );
+    await fs.mkdir(path.dirname(helperPath), { recursive: true });
+    await fs.writeFile(helperPath, "#!/usr/bin/env bash\n");
+    await fs.chmod(helperPath, 0o755);
+    vi.stubEnv("OPENCLAW_STATE_DIR", tmpDir);
     const transcriptText = `
 {"type":"message","message":{"role":"assistant","content":[{"type":"text","text":"Root cause: vaultByAddress factory.chain is null"}]}}
 {"type":"message","message":{"role":"user","content":[{"type":"text","text":"query VaultV2ByAddress { vaultV2ByAddress(address: \\"0xE18d7f0C6aaba1E600fF680459a357C3B3CfdB34\\", chainId: 999) { apy netApy } } sentryEventId=abc123"}]}}
 `;
-    vi.stubEnv("SINGLE_VAULT_GRAPHQL_EVIDENCE_SCRIPT_PATH", "   ");
+    try {
+      vi.stubEnv("SINGLE_VAULT_GRAPHQL_EVIDENCE_SCRIPT_PATH", "   ");
 
-    const blankOverrideContext = buildSreRuntimeGuardrailContextFromTranscript({
-      agentId: "sre",
-      prompt: "look into this vault v2 graphql apy issue",
-      transcriptText,
-    });
+      const blankOverrideContext = buildSreRuntimeGuardrailContextFromTranscript({
+        agentId: "sre",
+        prompt: "look into this vault v2 graphql apy issue",
+        transcriptText,
+      });
 
-    expect(blankOverrideContext).toContain(
-      "/home/node/.openclaw/skills/morpho-sre/scripts/single-vault-graphql-evidence.sh",
-    );
+      expect(blankOverrideContext).toContain(helperPath);
 
-    vi.stubEnv("SINGLE_VAULT_GRAPHQL_EVIDENCE_SCRIPT_PATH", "relative/helper.sh");
+      vi.stubEnv("SINGLE_VAULT_GRAPHQL_EVIDENCE_SCRIPT_PATH", "relative/helper.sh");
 
-    const relativeOverrideContext = buildSreRuntimeGuardrailContextFromTranscript({
-      agentId: "sre",
-      prompt: "look into this vault v2 graphql apy issue",
-      transcriptText,
-    });
+      const relativeOverrideContext = buildSreRuntimeGuardrailContextFromTranscript({
+        agentId: "sre",
+        prompt: "look into this vault v2 graphql apy issue",
+        transcriptText,
+      });
 
-    expect(relativeOverrideContext).toContain(
-      "/home/node/.openclaw/skills/morpho-sre/scripts/single-vault-graphql-evidence.sh",
-    );
+      expect(relativeOverrideContext).toContain(helperPath);
+    } finally {
+      await fs.rm(tmpDir, { recursive: true, force: true });
+    }
   });
 
-  it("falls back to the default helper path for missing absolute env overrides", () => {
+  it("falls back to the helper basename for missing absolute env overrides", async () => {
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "single-vault-state-"));
+    vi.stubEnv("OPENCLAW_STATE_DIR", tmpDir);
     vi.stubEnv(
       "SINGLE_VAULT_GRAPHQL_EVIDENCE_SCRIPT_PATH",
       path.join(os.tmpdir(), "missing-single-vault-graphql-evidence.sh"),
@@ -165,15 +179,19 @@ describe("buildSreRuntimeGuardrailContextFromTranscript", () => {
 {"type":"message","message":{"role":"assistant","content":[{"type":"text","text":"Root cause: vaultByAddress factory.chain is null"}]}}
 {"type":"message","message":{"role":"user","content":[{"type":"text","text":"query VaultV2ByAddress { vaultV2ByAddress(address: \\"0xE18d7f0C6aaba1E600fF680459a357C3B3CfdB34\\", chainId: 999) { apy netApy } } sentryEventId=abc123"}]}}
 `;
-    const context = buildSreRuntimeGuardrailContextFromTranscript({
-      agentId: "sre",
-      prompt: "look into this vault v2 graphql apy issue",
-      transcriptText,
-    });
+    try {
+      const context = buildSreRuntimeGuardrailContextFromTranscript({
+        agentId: "sre",
+        prompt: "look into this vault v2 graphql apy issue",
+        transcriptText,
+      });
 
-    expect(context).toContain(
-      "/home/node/.openclaw/skills/morpho-sre/scripts/single-vault-graphql-evidence.sh",
-    );
+      expect(context).toContain("single-vault-graphql-evidence.sh");
+      expect(context).not.toContain("/home/node/.openclaw/skills/morpho-sre/scripts/");
+      expect(context).not.toContain(tmpDir);
+    } finally {
+      await fs.rm(tmpDir, { recursive: true, force: true });
+    }
   });
 
   it("normalizes absolute helper overrides before rendering them", async () => {

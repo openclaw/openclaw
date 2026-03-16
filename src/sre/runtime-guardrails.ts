@@ -14,8 +14,15 @@ type TranscriptPreview = { line: number; preview: string; rawText: string };
 const RETRIEVAL_DOC_RE =
   /(knowledge-index\.md|runbook-map\.md|repo-root-model\.md|notion-postmortem-index\.md|incident-dossier)/i;
 const DB_DATA_PLAYBOOK_RE = /db-data-incident-playbook\.md$/i;
-const DEFAULT_SINGLE_VAULT_GRAPHQL_EVIDENCE_SCRIPT =
-  "/home/node/.openclaw/skills/morpho-sre/scripts/single-vault-graphql-evidence.sh";
+const DEFAULT_OPENCLAW_STATE_DIR = "/home/node/.openclaw";
+const SINGLE_VAULT_GRAPHQL_EVIDENCE_SCRIPT_NAME = "single-vault-graphql-evidence.sh";
+const DEFAULT_SINGLE_VAULT_GRAPHQL_EVIDENCE_SCRIPT = path.join(
+  DEFAULT_OPENCLAW_STATE_DIR,
+  "skills",
+  "morpho-sre",
+  "scripts",
+  SINGLE_VAULT_GRAPHQL_EVIDENCE_SCRIPT_NAME,
+);
 const HUMAN_CORRECTION_RE =
   /\b(this is wrong|that is wrong|you(?:'re| are) wrong|actual issue|current lead is|we confirmed|this is connected|my only explanation|not the issue|old lead is stale|previous guess was stale|outdated theory)\b/i;
 const RESOLVER_TOKEN_RE = {
@@ -91,24 +98,55 @@ function hasRelatedHumanCorrection(params: {
   );
 }
 
+function isExecutablePath(scriptPath: string): boolean {
+  try {
+    accessSync(scriptPath, fsConstants.X_OK);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function defaultSingleVaultGraphqlEvidenceScriptPath(): string {
+  const stateDir = process.env.OPENCLAW_STATE_DIR?.trim();
+  const normalizedStateDir =
+    stateDir && path.isAbsolute(stateDir) ? path.resolve(stateDir) : DEFAULT_OPENCLAW_STATE_DIR;
+  const helperPath = path.join(
+    normalizedStateDir,
+    "skills",
+    "morpho-sre",
+    "scripts",
+    SINGLE_VAULT_GRAPHQL_EVIDENCE_SCRIPT_NAME,
+  );
+  if (isExecutablePath(helperPath)) {
+    return helperPath;
+  }
+  if (
+    helperPath !== DEFAULT_SINGLE_VAULT_GRAPHQL_EVIDENCE_SCRIPT &&
+    isExecutablePath(DEFAULT_SINGLE_VAULT_GRAPHQL_EVIDENCE_SCRIPT)
+  ) {
+    return DEFAULT_SINGLE_VAULT_GRAPHQL_EVIDENCE_SCRIPT;
+  }
+  return SINGLE_VAULT_GRAPHQL_EVIDENCE_SCRIPT_NAME;
+}
+
 /**
  * Returns the display path for the single-vault evidence helper.
  *
  * The env override stays opt-in, but it must be an absolute executable path so
- * the rendered guidance does not point at a dead helper.
+ * the rendered guidance does not point at a dead helper. When the seeded
+ * runtime helper is absent, fall back to the bare helper name instead of a
+ * stale absolute path.
  */
 function singleVaultGraphqlEvidenceScriptPath(): string {
   const envPath = process.env.SINGLE_VAULT_GRAPHQL_EVIDENCE_SCRIPT_PATH?.trim();
-  if (!envPath || !path.isAbsolute(envPath)) {
-    return DEFAULT_SINGLE_VAULT_GRAPHQL_EVIDENCE_SCRIPT;
+  if (envPath && path.isAbsolute(envPath)) {
+    const normalizedPath = path.resolve(envPath);
+    if (isExecutablePath(normalizedPath)) {
+      return normalizedPath;
+    }
   }
-  const normalizedPath = path.resolve(envPath);
-  try {
-    accessSync(normalizedPath, fsConstants.X_OK);
-  } catch {
-    return DEFAULT_SINGLE_VAULT_GRAPHQL_EVIDENCE_SCRIPT;
-  }
-  return normalizedPath;
+  return defaultSingleVaultGraphqlEvidenceScriptPath();
 }
 
 /**
