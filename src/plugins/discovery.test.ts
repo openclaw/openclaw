@@ -219,6 +219,43 @@ describe("discoverOpenClawPlugins", () => {
     expect(ids).not.toContain("ollama-provider");
   });
 
+  it("normalizes renamed plugin package ids to canonical plugin ids", async () => {
+    const stateDir = makeTempDir();
+    const cases = [
+      { packageName: "@openclaw/brave-plugin", expectedId: "brave" },
+      { packageName: "@openclaw/google-plugin", expectedId: "google" },
+      { packageName: "@openclaw/perplexity-plugin", expectedId: "perplexity" },
+      { packageName: "@openclaw/xai-plugin", expectedId: "xai" },
+    ];
+
+    for (const [index, testCase] of cases.entries()) {
+      const packageDir = path.join(stateDir, "extensions", `plugin-pack-${index}`);
+      mkdirSafe(path.join(packageDir, "src"));
+      writePluginPackageManifest({
+        packageDir,
+        packageName: testCase.packageName,
+        extensions: ["./src/index.ts"],
+      });
+      fs.writeFileSync(
+        path.join(packageDir, "src", "index.ts"),
+        "export default function () {}",
+        "utf-8",
+      );
+    }
+
+    const { candidates } = await discoverWithStateDir(stateDir, {});
+    const ids = candidates.map((c) => c.idHint);
+
+    expect(ids).toContain("brave");
+    expect(ids).toContain("google");
+    expect(ids).toContain("perplexity");
+    expect(ids).toContain("xai");
+    expect(ids).not.toContain("brave-plugin");
+    expect(ids).not.toContain("google-plugin");
+    expect(ids).not.toContain("perplexity-plugin");
+    expect(ids).not.toContain("xai-plugin");
+  });
+
   it("treats configured directory paths as plugin packages", async () => {
     const stateDir = makeTempDir();
     const packDir = path.join(stateDir, "packs", "demo-plugin-dir");

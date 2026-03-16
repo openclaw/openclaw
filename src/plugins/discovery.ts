@@ -339,9 +339,13 @@ function deriveIdHint(params: {
     : rawPackageName;
   const canonicalPackageId =
     {
+      "brave-plugin": "brave",
+      "google-plugin": "google",
       "ollama-provider": "ollama",
+      "perplexity-plugin": "perplexity",
       "sglang-provider": "sglang",
       "vllm-provider": "vllm",
+      "xai-plugin": "xai",
     }[unscoped] ?? unscoped;
 
   if (!params.hasMultipleExtensions) {
