@@ -22,34 +22,28 @@ const hoisted = vi.hoisted(() => {
   };
 });
 
-vi.mock("../../plugins/runtime/index.js", async () => {
-  const discordThreadBindings = await vi.importActual<
-    typeof import("../../../extensions/discord/src/monitor/thread-bindings.js")
-  >("../../../extensions/discord/src/monitor/thread-bindings.js");
+vi.mock("../../../extensions/discord/src/monitor/thread-bindings.js", async (importOriginal) => {
+  const actual =
+    await importOriginal<
+      typeof import("../../../extensions/discord/src/monitor/thread-bindings.js")
+    >();
   return {
-    createPluginRuntime: () => ({
-      channel: {
-        discord: {
-          threadBindings: {
-            getManager: hoisted.getThreadBindingManagerMock,
-            resolveIdleTimeoutMs: discordThreadBindings.resolveThreadBindingIdleTimeoutMs,
-            resolveInactivityExpiresAt:
-              discordThreadBindings.resolveThreadBindingInactivityExpiresAt,
-            resolveMaxAgeMs: discordThreadBindings.resolveThreadBindingMaxAgeMs,
-            resolveMaxAgeExpiresAt: discordThreadBindings.resolveThreadBindingMaxAgeExpiresAt,
-            setIdleTimeoutBySessionKey: hoisted.setThreadBindingIdleTimeoutBySessionKeyMock,
-            setMaxAgeBySessionKey: hoisted.setThreadBindingMaxAgeBySessionKeyMock,
-            unbindBySessionKey: vi.fn(),
-          },
-        },
-        telegram: {
-          threadBindings: {
-            setIdleTimeoutBySessionKey: hoisted.setTelegramThreadBindingIdleTimeoutBySessionKeyMock,
-            setMaxAgeBySessionKey: hoisted.setTelegramThreadBindingMaxAgeBySessionKeyMock,
-          },
-        },
-      },
-    }),
+    ...actual,
+    getThreadBindingManager: hoisted.getThreadBindingManagerMock,
+    setThreadBindingIdleTimeoutBySessionKey: hoisted.setThreadBindingIdleTimeoutBySessionKeyMock,
+    setThreadBindingMaxAgeBySessionKey: hoisted.setThreadBindingMaxAgeBySessionKeyMock,
+  };
+});
+
+vi.mock("../../../extensions/telegram/src/thread-bindings.js", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../../../extensions/telegram/src/thread-bindings.js")>();
+  return {
+    ...actual,
+    setTelegramThreadBindingIdleTimeoutBySessionKey:
+      hoisted.setTelegramThreadBindingIdleTimeoutBySessionKeyMock,
+    setTelegramThreadBindingMaxAgeBySessionKey:
+      hoisted.setTelegramThreadBindingMaxAgeBySessionKeyMock,
   };
 });
 

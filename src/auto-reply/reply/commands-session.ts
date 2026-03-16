@@ -1,3 +1,16 @@
+import {
+  getThreadBindingManager,
+  resolveThreadBindingIdleTimeoutMs,
+  resolveThreadBindingInactivityExpiresAt,
+  resolveThreadBindingMaxAgeExpiresAt,
+  resolveThreadBindingMaxAgeMs,
+  setThreadBindingIdleTimeoutBySessionKey,
+  setThreadBindingMaxAgeBySessionKey,
+} from "../../../extensions/discord/src/monitor/thread-bindings.js";
+import {
+  setTelegramThreadBindingIdleTimeoutBySessionKey,
+  setTelegramThreadBindingMaxAgeBySessionKey,
+} from "../../../extensions/telegram/src/thread-bindings.js";
 import { resolveFastModeState } from "../../agents/fast-mode.js";
 import { formatThreadBindingDurationLabel } from "../../channels/thread-bindings-messages.js";
 import { parseDurationMs } from "../../cli/parse-duration.js";
@@ -7,7 +20,6 @@ import { getSessionBindingService } from "../../infra/outbound/session-binding-s
 import type { SessionBindingRecord } from "../../infra/outbound/session-binding-service.js";
 import { scheduleGatewaySigusr1Restart, triggerOpenClawRestart } from "../../infra/restart.js";
 import { loadCostUsageSummary, loadSessionCostSummary } from "../../infra/session-cost-usage.js";
-import { createPluginRuntime } from "../../plugins/runtime/index.js";
 import { formatTokenCount, formatUsd } from "../../utils/usage-format.js";
 import { parseActivationCommand } from "../group-activation.js";
 import { parseSendPolicyCommand } from "../send-policy.js";
@@ -22,12 +34,6 @@ const SESSION_COMMAND_PREFIX = "/session";
 const SESSION_DURATION_OFF_VALUES = new Set(["off", "disable", "disabled", "none", "0"]);
 const SESSION_ACTION_IDLE = "idle";
 const SESSION_ACTION_MAX_AGE = "max-age";
-let cachedChannelRuntime: ReturnType<typeof createPluginRuntime>["channel"] | undefined;
-
-function getChannelRuntime() {
-  cachedChannelRuntime ??= createPluginRuntime().channel;
-  return cachedChannelRuntime;
-}
 
 function resolveSessionCommandUsage() {
   return "Usage: /session idle <duration|off> | /session max-age <duration|off> (example: /session idle 24h)";
@@ -378,11 +384,8 @@ export const handleSessionCommand: CommandHandler = async (params, allowTextComm
   const threadId =
     params.ctx.MessageThreadId != null ? String(params.ctx.MessageThreadId).trim() : "";
   const telegramConversationId = onTelegram ? resolveTelegramConversationId(params) : undefined;
-  const channelRuntime = getChannelRuntime();
 
-  const discordManager = onDiscord
-    ? channelRuntime.discord.threadBindings.getManager(accountId)
-    : null;
+  const discordManager = onDiscord ? getThreadBindingManager(accountId) : null;
   if (onDiscord && !discordManager) {
     return {
       shouldContinue: false,
@@ -430,13 +433,13 @@ export const handleSessionCommand: CommandHandler = async (params, allowTextComm
   }
 
   const idleTimeoutMs = onDiscord
-    ? channelRuntime.discord.threadBindings.resolveIdleTimeoutMs({
+    ? resolveThreadBindingIdleTimeoutMs({
         record: discordBinding!,
         defaultIdleTimeoutMs: discordManager!.getIdleTimeoutMs(),
       })
     : resolveTelegramBindingDurationMs(telegramBinding!, "idleTimeoutMs", 24 * 60 * 60 * 1000);
   const idleExpiresAt = onDiscord
-    ? channelRuntime.discord.threadBindings.resolveInactivityExpiresAt({
+    ? resolveThreadBindingInactivityExpiresAt({
         record: discordBinding!,
         defaultIdleTimeoutMs: discordManager!.getIdleTimeoutMs(),
       })
@@ -444,13 +447,13 @@ export const handleSessionCommand: CommandHandler = async (params, allowTextComm
       ? resolveTelegramBindingLastActivityAt(telegramBinding!) + idleTimeoutMs
       : undefined;
   const maxAgeMs = onDiscord
-    ? channelRuntime.discord.threadBindings.resolveMaxAgeMs({
+    ? resolveThreadBindingMaxAgeMs({
         record: discordBinding!,
         defaultMaxAgeMs: discordManager!.getMaxAgeMs(),
       })
     : resolveTelegramBindingDurationMs(telegramBinding!, "maxAgeMs", 0);
   const maxAgeExpiresAt = onDiscord
-    ? channelRuntime.discord.threadBindings.resolveMaxAgeExpiresAt({
+    ? resolveThreadBindingMaxAgeExpiresAt({
         record: discordBinding!,
         defaultMaxAgeMs: discordManager!.getMaxAgeMs(),
       })
@@ -525,24 +528,24 @@ export const handleSessionCommand: CommandHandler = async (params, allowTextComm
   const updatedBindings = (() => {
     if (onDiscord) {
       return action === SESSION_ACTION_IDLE
-        ? channelRuntime.discord.threadBindings.setIdleTimeoutBySessionKey({
+        ? setThreadBindingIdleTimeoutBySessionKey({
             targetSessionKey: discordBinding!.targetSessionKey,
             accountId,
             idleTimeoutMs: durationMs,
           })
-        : channelRuntime.discord.threadBindings.setMaxAgeBySessionKey({
+        : setThreadBindingMaxAgeBySessionKey({
             targetSessionKey: discordBinding!.targetSessionKey,
             accountId,
             maxAgeMs: durationMs,
           });
     }
     return action === SESSION_ACTION_IDLE
-      ? channelRuntime.telegram.threadBindings.setIdleTimeoutBySessionKey({
+      ? setTelegramThreadBindingIdleTimeoutBySessionKey({
           targetSessionKey: telegramBinding!.targetSessionKey,
           accountId,
           idleTimeoutMs: durationMs,
         })
-      : channelRuntime.telegram.threadBindings.setMaxAgeBySessionKey({
+      : setTelegramThreadBindingMaxAgeBySessionKey({
           targetSessionKey: telegramBinding!.targetSessionKey,
           accountId,
           maxAgeMs: durationMs,
