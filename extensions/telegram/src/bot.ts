@@ -134,9 +134,11 @@ export function createTelegramBot(opts: TelegramBotOptions) {
     : null;
   const telegramCfg = account.config;
 
-  const telegramTransport = opts.telegramTransport ?? resolveTelegramTransport(opts.proxyFetch, {
-    network: telegramCfg.network,
-  });
+  const telegramTransport =
+    opts.telegramTransport ??
+    resolveTelegramTransport(opts.proxyFetch, {
+      network: telegramCfg.network,
+    });
   const shouldProvideFetch = Boolean(telegramTransport.fetch);
   // grammY's ApiClientOptions types still track `node-fetch` types; Node 22+ global fetch
   // (undici) is structurally compatible at runtime but not assignable in TS.
