@@ -708,6 +708,10 @@ export function registerHooksCli(program: Command): void {
       const targets = opts.all ? Object.keys(installs) : id ? [id] : [];
 
       if (targets.length === 0) {
+        if (opts.all) {
+          defaultRuntime.log("No npm-installed hooks to update.");
+          return;
+        }
         defaultRuntime.error("Provide a hook id or use --all.");
         process.exit(1);
       }
