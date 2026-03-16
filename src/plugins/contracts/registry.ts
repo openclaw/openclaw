@@ -33,7 +33,6 @@ import xaiPlugin from "../../../extensions/xai/index.js";
 import xiaomiPlugin from "../../../extensions/xiaomi/index.js";
 import zaiPlugin from "../../../extensions/zai/index.js";
 import { createCapturedPluginRegistration } from "../../test-utils/plugin-registration.js";
-import type { OpenClawPluginApi } from "../types.js";
 import type { ProviderPlugin, WebSearchProviderPlugin } from "../types.js";
 
 type RegistrablePlugin = {
