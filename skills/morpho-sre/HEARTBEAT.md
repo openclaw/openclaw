@@ -87,7 +87,8 @@ When a BetterStack alert/update arrives in monitored Slack channels (`#staging-i
 - Create or reuse a Linear follow-up ticket for code/config work and mention it in-thread.
 - Any incident PR must use the Linear ticket `gitBranchName` as the branch and attach the PR URL back to the ticket.
 - If auto-fix is blocked, post blocked reason + exact manual next step.
-- Cross-surface RCA consistency: the Slack thread response and any linked Linear ticket must state the same primary root cause and the same corrupt/affected artifact. If deeper analysis in the Linear ticket reveals a different cause than the initial Slack summary, update the Slack thread with a corrected hypothesis before posting. Never post contradictory RCA across surfaces.
+- Cross-surface RCA consistency: the Slack thread response and any linked Linear ticket must state the same primary root cause and the same corrupt/affected artifact. Never post contradictory RCA across surfaces.
+- RCA correction process: if deeper analysis in the Linear ticket reveals a different cause than the initial Slack summary, update the Slack thread with a corrected hypothesis before posting the Linear update.
 - First four lines must answer: what broke, who feels it, what services are impacted, and what is happening now.
 - If only monitoring/internal tooling is degraded, say exactly: `No confirmed customer impact. Internal observability degraded.`
 - Keep unrelated warnings under `*Also watching:*`.

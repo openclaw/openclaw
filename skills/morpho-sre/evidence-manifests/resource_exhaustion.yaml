@@ -2,7 +2,7 @@ category: resource_exhaustion
 critical:
   - pod_issues
   - prom_critical
-  - log_signals  # hot error/retry loops are a key amplifier for resource exhaustion
+  - log_signals
 optional:
   - argocd_sync
   - changes_in_window

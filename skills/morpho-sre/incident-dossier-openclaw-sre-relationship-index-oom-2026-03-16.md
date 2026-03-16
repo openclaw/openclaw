@@ -1,4 +1,4 @@
-# Incident Dossier: openclaw-sre relationship-index OOM
+# Incident Dossier: openclaw-sre relationship-index OOM (2026-03-16)
 
 ## Title
 
@@ -44,8 +44,7 @@
 
 - Primary: `latest-by-entity.json` truncated at 1 MiB boundary (write interrupted, possibly by prior OOM or filesystem flush failure on 2026-03-13). Every compaction attempt rereads the file and hits `SyntaxError`, causing a hot retry loop that amplifies CPU/memory until OOM.
 - Contributing: No atomic write (temp file + rename) for state snapshots, so partial writes survive pod restarts.
-- Ruled out: `edges.ndjson` corruption was initially hypothesized in the Slack thread but contradicted by the Linear ticket's deeper analysis showing `latest-by-entity.json` as the truncated file.
-- Disproved theories: "edges.ndjson corrupt at line 1614" — the Slack message's hypothesis was inconsistent with the file-level evidence in the Linear ticket.
+- Disproved theories: "edges.ndjson corrupt at line 1614" — initially hypothesized in the Slack thread but contradicted by the Linear ticket's deeper analysis showing `latest-by-entity.json` as the truncated file (file-level evidence confirms 1 MiB boundary truncation).
 
 ## Fix
 
