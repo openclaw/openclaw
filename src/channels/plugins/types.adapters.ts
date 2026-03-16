@@ -481,6 +481,35 @@ export type ChannelExecApprovalAdapter = {
 };
 
 export type ChannelAllowlistAdapter = {
+  applyConfigEdit?: (params: {
+    cfg: OpenClawConfig;
+    parsedConfig: Record<string, unknown>;
+    accountId?: string | null;
+    scope: "dm" | "group";
+    action: "add" | "remove";
+    entry: string;
+  }) =>
+    | {
+        kind: "ok";
+        changed: boolean;
+        pathLabel: string;
+        writeTarget: ConfigWriteTarget;
+      }
+    | {
+        kind: "invalid-entry";
+      }
+    | Promise<
+        | {
+            kind: "ok";
+            changed: boolean;
+            pathLabel: string;
+            writeTarget: ConfigWriteTarget;
+          }
+        | {
+            kind: "invalid-entry";
+          }
+      >
+    | null;
   readConfig?: (params: { cfg: OpenClawConfig; accountId?: string | null }) =>
     | {
         dmAllowFrom?: Array<string | number>;
@@ -504,17 +533,6 @@ export type ChannelAllowlistAdapter = {
   }) =>
     | Array<{ input: string; resolved: boolean; name?: string | null }>
     | Promise<Array<{ input: string; resolved: boolean; name?: string | null }>>;
-  resolveConfigEdit?: (params: {
-    scope: "dm" | "group";
-    pathPrefix: string;
-    writeTarget: ConfigWriteTarget;
-  }) => {
-    pathPrefix: string;
-    writeTarget: ConfigWriteTarget;
-    readPaths: string[][];
-    writePath: string[];
-    cleanupPaths?: string[][];
-  } | null;
   supportsScope?: (params: { scope: "dm" | "group" | "all" }) => boolean;
 };
 
