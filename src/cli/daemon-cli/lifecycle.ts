@@ -229,43 +229,110 @@ export async function runDaemonRestart(opts: DaemonLifecycleOptions = {}): Promi
     }
   }
 
-  const restarted = await runServiceRestart({
-    serviceNoun: "Gateway",
-    service,
-    renderStartHints: renderGatewayServiceStartHints,
-    opts,
-    checkTokenDrift: true,
-    onBeforeRestartAction: markRestartSentinelInProgress,
-    onNotLoaded: async (ctx) => {
-      const handled = await restartGatewayWithoutServiceManager(
-        restartPort,
-        ctx?.onBeforeRestartAction,
-      );
-      if (handled) {
-        restartedWithoutServiceManager = true;
-      }
-      return handled;
-    },
-    postRestartCheck: async ({ warnings, fail, stdout }) => {
-      if (restartedWithoutServiceManager) {
-        const health = await waitForGatewayHealthyListener({
+  let restarted = false;
+  try {
+    restarted = await runServiceRestart({
+      serviceNoun: "Gateway",
+      service,
+      renderStartHints: renderGatewayServiceStartHints,
+      opts,
+      checkTokenDrift: true,
+      onBeforeRestartAction: markRestartSentinelInProgress,
+      onNotLoaded: async (ctx) => {
+        const handled = await restartGatewayWithoutServiceManager(
+          restartPort,
+          ctx?.onBeforeRestartAction,
+        );
+        if (handled) {
+          restartedWithoutServiceManager = true;
+        }
+        return handled;
+      },
+      postRestartCheck: async ({ warnings, fail, stdout }) => {
+        if (restartedWithoutServiceManager) {
+          const health = await waitForGatewayHealthyListener({
+            port: restartPort,
+            attempts: POST_RESTART_HEALTH_ATTEMPTS,
+            delayMs: POST_RESTART_HEALTH_DELAY_MS,
+          });
+          if (health.healthy) {
+            return;
+          }
+
+          const diagnostics = renderGatewayPortHealthDiagnostics(health);
+          const timeoutLine = `Timed out after ${restartWaitSeconds}s waiting for gateway port ${restartPort} to become healthy.`;
+          if (!json) {
+            defaultRuntime.log(theme.warn(timeoutLine));
+            for (const line of diagnostics) {
+              defaultRuntime.log(theme.muted(line));
+            }
+          } else {
+            warnings.push(timeoutLine);
+            warnings.push(...diagnostics);
+          }
+
+          fail(
+            `Gateway restart timed out after ${restartWaitSeconds}s waiting for health checks.`,
+            [
+              formatCliCommand("openclaw gateway status --deep"),
+              formatCliCommand("openclaw doctor"),
+            ],
+          );
+        }
+
+        let health = await waitForGatewayHealthyRestart({
+          service,
           port: restartPort,
           attempts: POST_RESTART_HEALTH_ATTEMPTS,
           delayMs: POST_RESTART_HEALTH_DELAY_MS,
+          includeUnknownListenersAsStale: process.platform === "win32",
         });
+
+        if (!health.healthy && health.staleGatewayPids.length > 0) {
+          const staleMsg = `Found stale gateway process(es): ${health.staleGatewayPids.join(", ")}.`;
+          warnings.push(staleMsg);
+          if (!json) {
+            defaultRuntime.log(theme.warn(staleMsg));
+            defaultRuntime.log(theme.muted("Stopping stale process(es) and retrying restart..."));
+          }
+
+          await terminateStaleGatewayPids(health.staleGatewayPids);
+          const retryRestart = await service.restart({ env: process.env, stdout });
+          if (retryRestart.outcome === "scheduled") {
+            return retryRestart;
+          }
+          health = await waitForGatewayHealthyRestart({
+            service,
+            port: restartPort,
+            attempts: POST_RESTART_HEALTH_ATTEMPTS,
+            delayMs: POST_RESTART_HEALTH_DELAY_MS,
+            includeUnknownListenersAsStale: process.platform === "win32",
+          });
+        }
+
         if (health.healthy) {
           return;
         }
 
-        const diagnostics = renderGatewayPortHealthDiagnostics(health);
+        const diagnostics = renderRestartDiagnostics(health);
         const timeoutLine = `Timed out after ${restartWaitSeconds}s waiting for gateway port ${restartPort} to become healthy.`;
+        const runningNoPortLine =
+          health.runtime.status === "running" && health.portUsage.status === "free"
+            ? `Gateway process is running but port ${restartPort} is still free (startup hang/crash loop or very slow VM startup).`
+            : null;
         if (!json) {
           defaultRuntime.log(theme.warn(timeoutLine));
+          if (runningNoPortLine) {
+            defaultRuntime.log(theme.warn(runningNoPortLine));
+          }
           for (const line of diagnostics) {
             defaultRuntime.log(theme.muted(line));
           }
         } else {
           warnings.push(timeoutLine);
+          if (runningNoPortLine) {
+            warnings.push(runningNoPortLine);
+          }
           warnings.push(...diagnostics);
         }
 
@@ -273,72 +340,22 @@ export async function runDaemonRestart(opts: DaemonLifecycleOptions = {}): Promi
           formatCliCommand("openclaw gateway status --deep"),
           formatCliCommand("openclaw doctor"),
         ]);
-      }
-
-      let health = await waitForGatewayHealthyRestart({
-        service,
-        port: restartPort,
-        attempts: POST_RESTART_HEALTH_ATTEMPTS,
-        delayMs: POST_RESTART_HEALTH_DELAY_MS,
-        includeUnknownListenersAsStale: process.platform === "win32",
-      });
-
-      if (!health.healthy && health.staleGatewayPids.length > 0) {
-        const staleMsg = `Found stale gateway process(es): ${health.staleGatewayPids.join(", ")}.`;
-        warnings.push(staleMsg);
-        if (!json) {
-          defaultRuntime.log(theme.warn(staleMsg));
-          defaultRuntime.log(theme.muted("Stopping stale process(es) and retrying restart..."));
-        }
-
-        await terminateStaleGatewayPids(health.staleGatewayPids);
-        const retryRestart = await service.restart({ env: process.env, stdout });
-        if (retryRestart.outcome === "scheduled") {
-          return retryRestart;
-        }
-        health = await waitForGatewayHealthyRestart({
-          service,
-          port: restartPort,
-          attempts: POST_RESTART_HEALTH_ATTEMPTS,
-          delayMs: POST_RESTART_HEALTH_DELAY_MS,
-          includeUnknownListenersAsStale: process.platform === "win32",
+      },
+    });
+  } catch (err) {
+    if (shouldNotify && restartSentinelMarkedInProgress) {
+      try {
+        await transitionRestartSentinelStatus("error", {
+          allowedCurrentStatuses: ["in-progress"],
         });
+      } catch {
+        // best-effort
       }
+    }
+    throw err;
+  }
 
-      if (health.healthy) {
-        return;
-      }
-
-      const diagnostics = renderRestartDiagnostics(health);
-      const timeoutLine = `Timed out after ${restartWaitSeconds}s waiting for gateway port ${restartPort} to become healthy.`;
-      const runningNoPortLine =
-        health.runtime.status === "running" && health.portUsage.status === "free"
-          ? `Gateway process is running but port ${restartPort} is still free (startup hang/crash loop or very slow VM startup).`
-          : null;
-      if (!json) {
-        defaultRuntime.log(theme.warn(timeoutLine));
-        if (runningNoPortLine) {
-          defaultRuntime.log(theme.warn(runningNoPortLine));
-        }
-        for (const line of diagnostics) {
-          defaultRuntime.log(theme.muted(line));
-        }
-      } else {
-        warnings.push(timeoutLine);
-        if (runningNoPortLine) {
-          warnings.push(runningNoPortLine);
-        }
-        warnings.push(...diagnostics);
-      }
-
-      fail(`Gateway restart timed out after ${restartWaitSeconds}s waiting for health checks.`, [
-        formatCliCommand("openclaw gateway status --deep"),
-        formatCliCommand("openclaw doctor"),
-      ]);
-    },
-  });
-
-  if (shouldNotify && restarted) {
+  if (shouldNotify && restarted && restartSentinelMarkedInProgress) {
     try {
       await transitionRestartSentinelStatus("ok", {
         allowedCurrentStatuses: ["in-progress"],

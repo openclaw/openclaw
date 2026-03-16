@@ -17,7 +17,11 @@ import { deliveryContextFromSession, mergeDeliveryContext } from "../utils/deliv
 import { loadSessionEntry } from "./session-utils.js";
 
 export async function scheduleRestartSentinelWake(_params: { deps: CliDeps }) {
-  await finalizeRestartSentinelForCompletedRestart();
+  try {
+    await finalizeRestartSentinelForCompletedRestart();
+  } catch {
+    // best-effort: sentinel finalization failure should not crash startup
+  }
   const sentinel = await consumeFinalizedRestartSentinel();
   if (!sentinel) {
     return;

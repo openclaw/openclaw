@@ -119,4 +119,12 @@ describe("scheduleRestartSentinelWake", () => {
     );
     expect(mocks.enqueueSystemEvent).not.toHaveBeenCalled();
   });
+
+  it("continues wake flow when finalize throws", async () => {
+    mocks.finalizeRestartSentinelForCompletedRestart.mockRejectedValueOnce(new Error("disk-full"));
+
+    await expect(scheduleRestartSentinelWake({ deps: {} as never })).resolves.toBeUndefined();
+    expect(mocks.consumeFinalizedRestartSentinel).toHaveBeenCalledTimes(1);
+    expect(mocks.deliverOutboundPayloads).toHaveBeenCalledTimes(1);
+  });
 });

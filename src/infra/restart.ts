@@ -485,6 +485,9 @@ export function scheduleGatewaySigusr1Restart(opts?: {
       void (async () => {
         const beforeRestartHooks = pendingBeforeRestartHooks;
         pendingBeforeRestartHooks = [];
+        pendingRestartTimer = null;
+        pendingRestartDueAt = 0;
+        pendingRestartReason = undefined;
         for (const hook of beforeRestartHooks) {
           try {
             await hook();
@@ -492,9 +495,6 @@ export function scheduleGatewaySigusr1Restart(opts?: {
             restartLog.warn(`restart preflight hook failed: ${String(err)}`);
           }
         }
-        pendingRestartTimer = null;
-        pendingRestartDueAt = 0;
-        pendingRestartReason = undefined;
         const pendingCheck = preRestartCheck;
         if (!pendingCheck) {
           emitGatewayRestart();
