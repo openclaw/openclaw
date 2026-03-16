@@ -288,8 +288,22 @@ export async function handleOpenResponsesHttpRequest(
     return true;
   }
 
+  // Normalize input items for AI SDK compatibility:
+  // 1. The AI SDK sends message items without `type: "message"` — add it
+  // 2. The AI SDK sends extra fields (id, phase) that .strict() rejects — strip them
+  const rawBody = handled.body as Record<string, unknown>;
+  if (Array.isArray(rawBody.input)) {
+    rawBody.input = rawBody.input.map((item: Record<string, unknown>) => {
+      if (item && typeof item === "object" && "role" in item && !("type" in item)) {
+        const { role, content } = item;
+        return { type: "message", role, content };
+      }
+      return item;
+    });
+  }
+
   // Validate request body with Zod
-  const parseResult = CreateResponseBodySchema.safeParse(handled.body);
+  const parseResult = CreateResponseBodySchema.safeParse(rawBody);
   if (!parseResult.success) {
     const issue = parseResult.error.issues[0];
     const message = issue ? `${issue.path.join(".")}: ${issue.message}` : "Invalid request body";
@@ -556,6 +570,8 @@ export async function handleOpenResponsesHttpRequest(
   let unsubscribe = () => {};
   let finalUsage: Usage | undefined;
   let finalizeRequested: { status: ResponseResource["status"]; text: string } | null = null;
+  // Track output items: assistant message is at index 0, tool calls get subsequent indices
+  let nextOutputIndex = 1;
 
   const maybeFinalize = () => {
     if (closed) {
@@ -679,6 +695,91 @@ export async function handleOpenResponsesHttpRequest(
         delta: content,
       });
       return;
+    }
+
+    if (evt.stream === "tool") {
+      const phase = evt.data?.phase as string | undefined;
+      const toolName = evt.data?.name as string | undefined;
+      const toolCallId = evt.data?.toolCallId as string | undefined;
+
+      if (!toolName || !toolCallId) {
+        return;
+      }
+
+      if (phase === "start") {
+        const args = evt.data?.args;
+        const argsStr = args ? JSON.stringify(args) : "{}";
+        const callItemId = `fc_${toolCallId}`;
+        const outputIndex = nextOutputIndex++;
+
+        // Emit function_call output item (what the model asked for)
+        const functionCallItem: OutputItem = {
+          type: "function_call",
+          id: callItemId,
+          call_id: toolCallId,
+          name: toolName,
+          arguments: argsStr,
+          status: "in_progress",
+        };
+
+        writeSseEvent(res, {
+          type: "response.output_item.added",
+          output_index: outputIndex,
+          item: functionCallItem,
+        });
+        return;
+      }
+
+      if (phase === "result") {
+        const isError = evt.data?.isError as boolean | undefined;
+        const result = evt.data?.result;
+        const resultStr =
+          result != null ? (typeof result === "string" ? result : JSON.stringify(result)) : "";
+        const callItemId = `fc_${toolCallId}`;
+        const resultItemId = `fco_${toolCallId}`;
+
+        // Complete the function_call item
+        const completedCallItem: OutputItem = {
+          type: "function_call",
+          id: callItemId,
+          call_id: toolCallId,
+          name: toolName,
+          arguments: "{}",
+          status: "completed",
+        };
+
+        // Find the output_index for this call (use a new index for done event)
+        const doneIndex = nextOutputIndex++;
+
+        writeSseEvent(res, {
+          type: "response.output_item.done",
+          output_index: doneIndex,
+          item: completedCallItem,
+        });
+
+        // Emit function_call_output item (the tool result)
+        const resultOutputIndex = nextOutputIndex++;
+        const resultItem: OutputItem = {
+          type: "function_call_output",
+          id: resultItemId,
+          call_id: toolCallId,
+          output: resultStr,
+          status: isError ? "failed" : "completed",
+        };
+
+        writeSseEvent(res, {
+          type: "response.output_item.added",
+          output_index: resultOutputIndex,
+          item: resultItem,
+        });
+
+        writeSseEvent(res, {
+          type: "response.output_item.done",
+          output_index: resultOutputIndex,
+          item: resultItem,
+        });
+        return;
+      }
     }
 
     if (evt.stream === "lifecycle") {
