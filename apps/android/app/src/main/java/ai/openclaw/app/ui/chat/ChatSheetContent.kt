@@ -160,7 +160,10 @@ private fun ChatThreadSelector(
   mainSessionKey: String,
   onSelectSession: (String) -> Unit,
 ) {
-  val sessionOptions = resolveSessionChoices(sessionKey, sessions, mainSessionKey = mainSessionKey)
+  val sessionOptions =
+    remember(sessionKey, sessions, mainSessionKey) {
+      resolveSessionChoices(sessionKey, sessions, mainSessionKey = mainSessionKey)
+    }
 
   Row(
     modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
