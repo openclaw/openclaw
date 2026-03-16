@@ -40,10 +40,10 @@ describe("wrapStreamFnWithToolSurface", () => {
     expect(passedContext.tools[0].name).toBe("read");
   });
 
-  it("passes through unmodified when no hooks", async () => {
+  it("passes through unmodified when tools array is empty", async () => {
     const innerFn = vi.fn().mockResolvedValue({ type: "response" });
     const hookRunner = {
-      hasHooks: vi.fn().mockReturnValue(false),
+      runBeforeToolSurface: vi.fn(),
     };
 
     const wrapped = wrapStreamFnWithToolSurface(
@@ -55,16 +55,13 @@ describe("wrapStreamFnWithToolSurface", () => {
     const context = {
       systemPrompt: "test",
       messages: [],
-      tools: [
-        { name: "read", description: "read", parameters: {} },
-        { name: "message", description: "message", parameters: {} },
-      ],
+      tools: [],
     };
 
     await wrapped({} as unknown, context as unknown, {} as unknown);
 
-    const passedContext = innerFn.mock.calls[0][1] as { tools: Array<{ name: string }> };
-    expect(passedContext.tools).toHaveLength(2);
+    expect(hookRunner.runBeforeToolSurface).not.toHaveBeenCalled();
+    expect(innerFn).toHaveBeenCalledWith({}, context, {});
   });
 
   it("passes through when hook returns no tools override", async () => {

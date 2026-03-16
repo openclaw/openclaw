@@ -10,16 +10,13 @@ type StreamFn = (model: unknown, context: unknown, options: unknown) => unknown;
  */
 export function wrapStreamFnWithToolSurface(
   innerFn: StreamFn,
-  hookRunner: Pick<HookRunner, "hasHooks" | "runBeforeToolSurface">,
+  hookRunner: Pick<HookRunner, "runBeforeToolSurface">,
   hookCtx: PluginHookAgentContext,
 ): StreamFn {
   return async (model: unknown, context: unknown, options: unknown) => {
-    if (!hookRunner.hasHooks("before_tool_surface")) {
-      return innerFn(model, context, options);
-    }
-
     const ctx = context as Record<string, unknown>;
     const tools = ctx?.tools;
+    // 最佳化：未設定任何工具時直接跳過 hook，避免不必要的呼叫
     if (!Array.isArray(tools) || tools.length === 0) {
       return innerFn(model, context, options);
     }
