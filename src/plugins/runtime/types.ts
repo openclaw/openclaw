@@ -1,7 +1,33 @@
+import type { ReplyPayload } from "../../auto-reply/types.js";
+import type { deliverOutboundPayloads } from "../../infra/outbound/deliver-runtime.js";
+import type {
+  NormalizedOutboundPayload,
+  OutboundDeliveryResult,
+} from "../../infra/outbound/deliver.js";
+import type { OutboundIdentity } from "../../infra/outbound/identity.js";
+import type { OutboundChannel } from "../../infra/outbound/targets.js";
 import type { PluginRuntimeChannel } from "./types-channel.js";
 import type { PluginRuntimeCore, RuntimeLogger } from "./types-core.js";
 
-export type { RuntimeLogger };
+export type {
+  NormalizedOutboundPayload,
+  OutboundChannel,
+  OutboundDeliveryResult,
+  OutboundIdentity,
+  ReplyPayload,
+  RuntimeLogger,
+};
+
+// ── Outbound delivery types (plugin-facing) ─────────────────────────
+
+/**
+ * Plugin-facing params for `deliverOutboundPayloads`.
+ * Internal fields (`skipQueue`, `mirror`, `session`, `deps`, `abortSignal`) are excluded.
+ */
+export type PluginDeliverOutboundParams = Omit<
+  Parameters<typeof deliverOutboundPayloads>[0],
+  "skipQueue" | "mirror" | "session" | "deps" | "abortSignal"
+>;
 
 // ── Subagent runtime types ──────────────────────────────────────────
 
@@ -58,6 +84,18 @@ export type PluginRuntime = PluginRuntimeCore & {
     /** @deprecated Use getSessionMessages. */
     getSession: (params: SubagentGetSessionParams) => Promise<SubagentGetSessionResult>;
     deleteSession: (params: SubagentDeleteSessionParams) => Promise<void>;
+  };
+  outbound: {
+    /**
+     * Send payloads through the standard outbound delivery pipeline (chunking, hooks, queue).
+     *
+     * Note: when `bestEffort` is true and no `onError` callback is provided,
+     * per-payload delivery failures are silently swallowed and the returned
+     * results array may be shorter than the input payloads array.
+     */
+    deliverOutboundPayloads: (
+      params: PluginDeliverOutboundParams,
+    ) => Promise<OutboundDeliveryResult[]>;
   };
   channel: PluginRuntimeChannel;
 };

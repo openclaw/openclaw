@@ -8,6 +8,7 @@ import {
   generateImage,
   listRuntimeImageGenerationProviders,
 } from "../../image-generation/runtime.js";
+import { deliverOutboundPayloads } from "../../infra/outbound/deliver-runtime.js";
 import {
   describeImageFile,
   describeImageFileWithModel,
@@ -144,6 +145,26 @@ export function createPluginRuntime(_options: CreatePluginRuntimeOptions = {}): 
       _options.subagent,
       _options.allowGatewaySubagentBinding === true,
     ),
+    outbound: {
+      deliverOutboundPayloads: (params) => {
+        // Strip internal-only fields at runtime so JS/CJS plugins cannot bypass safeguards.
+        const {
+          skipQueue: _sq,
+          mirror: _mi,
+          session: _se,
+          deps: _de,
+          abortSignal: _as,
+          ...publicParams
+        } = params as typeof params & {
+          skipQueue?: unknown;
+          mirror?: unknown;
+          session?: unknown;
+          deps?: unknown;
+          abortSignal?: unknown;
+        };
+        return deliverOutboundPayloads(publicParams);
+      },
+    },
     system: createRuntimeSystem(),
     media: createRuntimeMedia(),
     tts: { textToSpeech, textToSpeechTelephony, listVoices: listSpeechVoices },
