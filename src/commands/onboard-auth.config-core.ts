@@ -32,6 +32,12 @@ import type { OpenClawConfig } from "../config/config.js";
 import type { ModelApi } from "../config/types.models.js";
 import { KILOCODE_BASE_URL } from "../providers/kilocode-shared.js";
 import {
+  ANTHROPIC_AZURE_MODEL_CHOICES,
+  DEFAULT_ANTHROPIC_AZURE_MODEL_ID,
+  buildAnthropicAzureModelDefinition,
+  normalizeAnthropicAzureBaseUrl,
+} from "./anthropic-azure-utils.js";
+import {
   HUGGINGFACE_DEFAULT_MODEL_REF,
   KILOCODE_DEFAULT_MODEL_REF,
   MISTRAL_DEFAULT_MODEL_REF,
@@ -188,6 +194,54 @@ export function applyOpenrouterProviderConfig(cfg: OpenClawConfig): OpenClawConf
 export function applyOpenrouterConfig(cfg: OpenClawConfig): OpenClawConfig {
   const next = applyOpenrouterProviderConfig(cfg);
   return applyAgentDefaultModelPrimary(next, OPENROUTER_DEFAULT_MODEL_REF);
+}
+
+export function applyAnthropicAzureProviderConfig(
+  cfg: OpenClawConfig,
+  params: { baseUrl: string; modelId?: string },
+): OpenClawConfig {
+  const normalizedBaseUrl = normalizeAnthropicAzureBaseUrl(params.baseUrl);
+  const modelId = params.modelId?.trim() || DEFAULT_ANTHROPIC_AZURE_MODEL_ID;
+  const models = { ...cfg.agents?.defaults?.models };
+  const modelRef = `anthropic-azure/${modelId}`;
+  models[modelRef] = {
+    ...models[modelRef],
+    alias: models[modelRef]?.alias ?? "Azure Claude",
+  };
+
+  const providers = { ...cfg.models?.providers };
+  const existingProvider = providers["anthropic-azure"];
+  const catalogModels = ANTHROPIC_AZURE_MODEL_CHOICES.map((choice) =>
+    buildAnthropicAzureModelDefinition({ id: choice.value, label: choice.label }),
+  );
+  const mergedModels = mergeProviderModels(existingProvider, catalogModels);
+  const { apiKey: _existingApiKey, ...rest } = (existingProvider ?? {}) as Record<
+    string,
+    unknown
+  > & {
+    apiKey?: string;
+  };
+  const normalizedApiKey = getNormalizedProviderApiKey(existingProvider);
+
+  providers["anthropic-azure"] = {
+    ...rest,
+    api: "anthropic-messages",
+    baseUrl: normalizedBaseUrl,
+    ...(normalizedApiKey ? { apiKey: normalizedApiKey } : {}),
+    models: mergedModels.length > 0 ? mergedModels : catalogModels,
+  };
+
+  return applyOnboardAuthAgentModelsAndProviders(cfg, { agentModels: models, providers });
+}
+
+export function applyAnthropicAzureConfig(
+  cfg: OpenClawConfig,
+  params: { baseUrl: string; modelId?: string },
+): OpenClawConfig {
+  const modelId = params.modelId?.trim() || DEFAULT_ANTHROPIC_AZURE_MODEL_ID;
+  const modelRef = `anthropic-azure/${modelId}`;
+  const next = applyAnthropicAzureProviderConfig(cfg, params);
+  return applyAgentDefaultModelPrimary(next, modelRef);
 }
 
 export function applyMoonshotProviderConfig(cfg: OpenClawConfig): OpenClawConfig {

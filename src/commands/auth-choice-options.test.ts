@@ -194,6 +194,7 @@ describe("buildAuthChoiceOptions", () => {
     for (const value of [
       "github-copilot",
       "token",
+      "anthropic-azure-api-key",
       "zai-api-key",
       "xiaomi-api-key",
       "minimax-global-api",

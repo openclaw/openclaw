@@ -21,6 +21,14 @@ export type AuthChoiceGroup = {
 
 export const CORE_AUTH_CHOICE_OPTIONS: ReadonlyArray<AuthChoiceOption> = [
   {
+    value: "anthropic-azure-api-key",
+    label: "Azure Claude (AI Foundry)",
+    hint: "Azure AI Foundry resource + Claude API key",
+    groupId: "anthropic",
+    groupLabel: "Anthropic",
+    groupHint: "setup-token + API key",
+  },
+  {
     value: "chutes",
     label: "Chutes (OAuth)",
     groupId: "chutes",

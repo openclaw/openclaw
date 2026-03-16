@@ -1,6 +1,7 @@
 import { BUNDLED_PROVIDER_AUTH_ENV_VAR_CANDIDATES } from "../plugins/bundled-provider-auth-env-vars.js";
 
 const CORE_PROVIDER_AUTH_ENV_VAR_CANDIDATES = {
+  "anthropic-azure": ["ANTHROPIC_FOUNDRY_API_KEY", "AZURE_CLAUDE_API_KEY"],
   chutes: ["CHUTES_OAUTH_TOKEN", "CHUTES_API_KEY"],
   voyage: ["VOYAGE_API_KEY"],
   groq: ["GROQ_API_KEY"],
