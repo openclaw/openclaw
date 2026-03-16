@@ -1,4 +1,5 @@
 import type { RequestClient } from "@buape/carbon";
+import { Routes } from "discord-api-types/v10";
 import { resolveAgentAvatar } from "../../../../src/agents/identity-avatar.js";
 import type { ChunkMode } from "../../../../src/auto-reply/chunk.js";
 import type { ReplyPayload } from "../../../../src/auto-reply/types.js";
@@ -81,6 +82,40 @@ function resolveTargetChannelId(target: string): string | undefined {
   }
   const channelId = target.slice("channel:".length).trim();
   return channelId || undefined;
+}
+
+/**
+ * For DM targets (`user:<userId>`), open (or reuse) the DM channel via the
+ * Discord API and return the resulting channel ID.  This lets the rest of the
+ * delivery pipeline treat DMs the same as guild channels — one POST
+ * /users/@me/channels at the start of the delivery call, then the fast-path
+ * `sendDiscordText` for every subsequent chunk/media send.
+ *
+ * Returns `undefined` when `rest` is absent or the API call fails, so callers
+ * can safely fall back to `sendMessageDiscord` per-chunk (the pre-existing
+ * behavior).
+ */
+async function resolveDmChannelId(
+  target: string,
+  rest: RequestClient | undefined,
+): Promise<string | undefined> {
+  if (!rest || !target.startsWith("user:")) {
+    return undefined;
+  }
+  const userId = target.slice("user:".length).trim();
+  if (!userId) {
+    return undefined;
+  }
+  try {
+    const dmChannel = (await rest.post(Routes.userChannels(), {
+      body: { recipient_id: userId },
+    })) as { id?: string };
+    const channelId = dmChannel?.id ? String(dmChannel.id).trim() : "";
+    return channelId || undefined;
+  } catch {
+    // Fall through — caller will use the per-chunk sendMessageDiscord path.
+    return undefined;
+  }
 }
 
 function resolveBoundThreadBinding(params: {
@@ -280,7 +315,11 @@ export async function deliverDiscordReply(params: {
   // Pre-resolve channel ID and retry runner once to avoid per-chunk overhead.
   // This eliminates redundant channel-type GET requests and client creation that
   // can cause ordering issues when multiple chunks share the RequestClient queue.
-  const channelId = resolveTargetChannelId(params.target);
+  // For DM targets (`user:<id>`), resolveDmChannelId opens the DM channel once
+  // so every subsequent chunk uses the fast sendDiscordText path instead of
+  // issuing a fresh POST /users/@me/channels per chunk.
+  const channelId =
+    resolveTargetChannelId(params.target) ?? (await resolveDmChannelId(params.target, params.rest));
   const account = resolveDiscordAccount({ cfg: params.cfg, accountId: params.accountId });
   const retryConfig = resolveDeliveryRetryConfig(account.config.retry);
   const request: RetryRunner | undefined = channelId

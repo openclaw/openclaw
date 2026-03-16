@@ -316,6 +316,8 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
     message,
     messageChannelId,
     isGuildMessage,
+    isDirectMessage,
+    directUserId: isDirectMessage ? author.id : undefined,
     channelConfig,
     threadChannel,
     channelType: channelInfo?.type,
