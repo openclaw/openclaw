@@ -1,11 +1,12 @@
 ---
 summary: "Delegation protocols for Operator1 — how tasks flow through the agent hierarchy with context passing and session isolation."
+updated: "2026-03-16"
 title: "Delegation"
 ---
 
 # Delegation
 
-Tasks in the Operator1 system flow top-down through a structured hierarchy. Each level adds context, refines requirements, and delegates to the appropriate next level.
+Tasks flow top-down through the agent hierarchy. Each level adds detail, refines the work, and delegates to the next person down the chain.
 
 ## Delegation rules
 

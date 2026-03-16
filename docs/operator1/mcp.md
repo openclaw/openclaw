@@ -1,11 +1,12 @@
 ---
 summary: "MCP (Model Context Protocol) integration — connect external tool servers to Operator1 agents via the open MCP standard."
+updated: "2026-03-16"
 title: "MCP Integration"
 ---
 
 # MCP Integration
 
-Operator1 supports [Model Context Protocol (MCP)](https://modelcontextprotocol.io) servers, allowing agents to use external tools provided by any MCP-compatible server. Tools from MCP servers are automatically discovered and registered as native agent tools.
+Operator1 supports [Model Context Protocol (MCP)](https://modelcontextprotocol.io) servers. This lets agents use external tools from any MCP-compatible server. Tools are automatically discovered and available to all agents.
 
 ## Quick start
 

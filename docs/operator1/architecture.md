@@ -1,11 +1,12 @@
 ---
 summary: "System architecture of the Operator1 multi-agent system — components, tiers, and integration with OpenClaw gateway."
+updated: "2026-03-16"
 title: "Architecture"
 ---
 
 # Architecture
 
-Operator1 is a multi-agent orchestration layer built on top of the OpenClaw gateway. It organizes AI agents into a corporate hierarchy that mirrors a real company structure, enabling autonomous task delegation, execution, and reporting.
+Operator1 is a multi-agent system built on OpenClaw. It organizes AI agents into a corporate hierarchy (similar to how a real company is structured) so they can automatically delegate tasks, execute work, and report results.
 
 ## System overview
 
@@ -51,56 +52,54 @@ flowchart TD
 
 ### Gateway
 
-The OpenClaw gateway is the runtime that hosts all agents. It provides:
+The OpenClaw gateway is the runtime that runs all agents. It handles:
 
-- **WebSocket JSON-RPC server** for config, sessions, memory, and health operations
-- **Channel plugins** (Telegram, WhatsApp, Discord, iMessage) for message ingress/egress
-- **ACP backend** for spawning Claude Code sessions
-- **Session management** with per-agent isolation
-- **MCP integration** for connecting external tool servers
-- **Memory operations** via QMD semantic search
+- Config management and agent sessions
+- Messaging (Telegram, WhatsApp, Discord, iMessage)
+- Spawning Claude Code when needed
+- Connecting external tools
+- Memory and semantic search
 
-All agents share a single gateway process in the current collocated deployment model. See [Gateway Patterns](/operator1/gateway-patterns) for alternatives.
+All agents run in a single gateway process. See [Gateway Patterns](/operator1/gateway-patterns) for other deployment options.
 
 ### Agent runtime
 
-Each agent runs as an isolated session within the gateway:
+Each agent runs in an isolated session. Key components:
 
-| Component       | Scope               | Purpose                                                |
-| --------------- | ------------------- | ------------------------------------------------------ |
-| Workspace       | Per-agent directory | SOUL.md, AGENTS.md, MEMORY.md, and other persona files |
-| Agent directory | Per-agent           | Session logs, state, and runtime data                  |
-| Auth profile    | Per-agent           | API keys and provider credentials                      |
-| Memory          | Per-workspace       | QMD index, daily notes, long-term memory               |
-| Tools           | Per-agent           | Allowed/denied tool lists, sandbox config              |
+| Component    | What it stores                                          |
+| ------------ | ------------------------------------------------------- |
+| Workspace    | SOUL.md, AGENTS.md, MEMORY.md (agent personality files) |
+| Session logs | Events and output from each run                         |
+| Credentials  | API keys and provider access tokens                     |
+| Memory       | Knowledge and previous notes (searchable)               |
+| Tools        | Which capabilities the agent can use                    |
 
 ### Config system
 
-Configuration is split across two files joined by `$include`:
+Two config files work together:
 
 ```
-~/.openclaw/openclaw.json          # Core gateway config (channels, models, auth, etc.)
-    └── $include: ["./matrix-agents.json"]
-              └── matrix-agents.json   # Agent hierarchy definitions
+~/.openclaw/openclaw.json    # Gateway settings (channels, models, auth)
+    ├── Includes: matrix-agents.json
+matrix-agents.json           # Agent definitions (hierarchy, roles, models)
 ```
 
-See [Configuration](/operator1/configuration) for the full reference.
+See [Configuration](/operator1/configuration) for details.
 
 ### State database
 
-All runtime state is persisted in a single SQLite database at `~/.openclaw/operator1.db`:
+All data is stored in `~/.openclaw/operator1.db` (SQLite):
 
 ```
-~/.openclaw/operator1.db           # Unified state (WAL mode, schema v10, 38 tables)
-    ├── op1_config                 # Key-value config overrides
-    ├── op1_projects               # Project definitions
-    ├── agent_scopes               # Marketplace agent scopes
-    ├── session_entries            # Session metadata + project binding
-    ├── core_settings              # Scoped settings
-    └── audit_log                  # Security audit trail
+operator1.db
+├── op1_config      # Config overrides
+├── op1_projects    # Project definitions
+├── session_entries # Session data
+├── core_settings   # Scoped settings
+└── audit_log       # Security events
 ```
 
-The database auto-creates on first gateway startup and self-migrates to the latest schema version. Run `openclaw doctor` to verify DB health.
+The database is created automatically and updates to the latest version on startup. Run `openclaw doctor` to check database health.
 
 ## Three-tier model
 
@@ -168,14 +167,14 @@ flowchart LR
 
 ## Key design principles
 
-**Session isolation** — Each agent runs in its own session with a dedicated workspace. Agents cannot read each other's memory or state directly; communication happens through delegation (spawning) with explicit context passing.
+**Isolation** — Each agent has its own workspace and memory. Agents don't share state directly; they communicate by spawning each other with explicit context.
 
-**Structured delegation** — Tasks flow top-down through the hierarchy. Cross-department requests always route through Operator1 to maintain coordination. See [Delegation](/operator1/delegation).
+**Structured flow** — Tasks move down the hierarchy. Cross-department work routes through Operator1 for coordination.
 
-**Workspace-scoped memory** — Each agent has its own memory files and QMD index. Daily notes capture raw session data, MEMORY.md holds curated long-term knowledge, and QMD provides semantic search. See [Memory System](/operator1/memory-system).
+**Workspace memory** — Each agent stores its own notes, knowledge files, and searchable memory index.
 
-**Config-driven hierarchy** — The entire agent tree is defined in JSON configuration, making it easy to add, remove, or reconfigure agents without code changes. See [Configuration](/operator1/configuration).
+**Config-driven** — The entire hierarchy is defined in JSON, so you can add or remove agents without code changes.
 
-**Unified SQLite state** — All runtime state lives in a single `operator1.db` database using WAL mode for safe concurrent access. This replaces the previous pattern of scattered JSON/YAML state files. Schema migrations run automatically at gateway startup, and `openclaw doctor` validates database health. See [Configuration](/operator1/configuration#state-database-operator1db).
+**Single database** — All state lives in `operator1.db` (SQLite) for reliable concurrent access and automatic schema updates.
 
-**Project-scoped memory** — Projects bind sessions to codebases or workstreams, with isolated memory at `~/.openclaw/workspace/projects/{id}/memory/`. Subagent sessions automatically inherit their parent's project binding. See [Memory System](/operator1/memory-system).
+**Project memory** — Projects isolate memory for different codebases. Sub-agents inherit their parent's project context automatically.

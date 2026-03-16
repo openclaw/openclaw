@@ -3,8 +3,11 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "build": "vite build",
+    "build": "node ../scripts/update-docs-timestamps.mjs docs/operator1 && vite build",
+    "build:with-docs": "node ../scripts/update-docs-timestamps.mjs docs/operator1 && vite build",
     "dev": "trap 'exit 0' INT TERM; vite",
+    "dev:with-docs": "trap 'exit 0' INT TERM; (node ../scripts/update-docs-timestamps.mjs docs/operator1 && vite) &",
+    "docs:update": "node ../scripts/update-docs-timestamps.mjs docs/operator1",
     "preview": "vite preview"
   },
   "dependencies": {

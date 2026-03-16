@@ -1,11 +1,12 @@
 ---
 summary: "Agent workspace file reference — SOUL.md, AGENTS.md, IDENTITY.md, MEMORY.md, and other files that define each agent's persona and behavior."
+updated: "2026-03-16"
 title: "Agent Configs"
 ---
 
 # Agent Configs
 
-Each agent in the Operator1 system has a dedicated workspace directory containing Markdown files that define its persona, behavior, memory, and operational rules.
+Each agent has a workspace folder with Markdown files that define its personality, memory, rules, and how it works.
 
 ## Workspace directory
 

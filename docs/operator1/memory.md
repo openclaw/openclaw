@@ -5,9 +5,9 @@ summary: "Browse, edit, and search an agent's memory files — MEMORY.md, dated 
 
 # Memory
 
-The Memory page gives you direct visibility into and control over an agent's persistent memory system. It has four tabs: **Index Status**, **Files**, **Search**, and **Activity Log**.
+The Memory page shows an agent's persistent knowledge. You can browse files, search, check index health, and view activity.
 
-Navigate to **Memory** in the sidebar to open it.
+Go to **Memory** in the sidebar.
 
 ---
 

@@ -1,11 +1,12 @@
 ---
 summary: "Channel integrations for Operator1 — configuring Telegram, iMessage, and other channels for multi-agent routing."
+updated: "2026-03-16"
 title: "Channels"
 ---
 
 # Channels
 
-Operator1 receives tasks and sends responses through messaging channels connected to the OpenClaw gateway. Multiple agents can share channels or have dedicated channel accounts.
+Operator1 connects to messaging platforms like Telegram, WhatsApp, and Discord. You can route messages to different agents based on the channel.
 
 ## Supported channels
 

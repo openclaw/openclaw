@@ -5,9 +5,9 @@ summary: "The primary interface for sending messages to agents, viewing conversa
 
 # Chat
 
-The Chat page is the primary interface for interacting with Operator1 agents. It combines a session sidebar, a message thread, and a rich input area with voice, attachment, and queue capabilities.
+Chat is where you talk with Operator1 agents. You can see past conversations, send messages, use voice, and attach files.
 
-Navigate to **Chat** in the sidebar to open it.
+Go to **Chat** in the sidebar to start.
 
 ---
 

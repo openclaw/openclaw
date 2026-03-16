@@ -1,11 +1,12 @@
 ---
 summary: "Four-layer memory architecture for Operator1 agents — daily notes, long-term MEMORY.md, project-scoped memory, and QMD semantic search."
+updated: "2026-03-16"
 title: "Memory System"
 ---
 
 # Memory System
 
-Each agent in the Operator1 system has a four-layer memory architecture that balances raw session capture, curated knowledge, project isolation, and semantic search.
+Each agent stores knowledge in four layers: daily notes, long-term memory, project memory, and searchable index. This keeps information organized and easy to find.
 
 ## Four-layer model
 

@@ -1,11 +1,12 @@
 ---
 summary: "Gateway deployment patterns for Operator1 — collocated single-process vs independent multi-gateway setups."
+updated: "2026-03-16"
 title: "Gateway Patterns"
 ---
 
 # Gateway Patterns
 
-The Operator1 system can be deployed in different gateway configurations depending on scale, isolation, and resource requirements.
+Operator1 can run in different deployment styles depending on your needs for scale, isolation, and resource use.
 
 ## Pattern 1: Collocated (current production)
 

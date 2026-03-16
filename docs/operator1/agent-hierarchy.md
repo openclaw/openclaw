@@ -1,11 +1,12 @@
 ---
 summary: "Complete agent hierarchy for the Operator1 system — all 34 agents, their roles, departments, and workspace structure."
+updated: "2026-03-16"
 title: "Agent Hierarchy"
 ---
 
 # Agent Hierarchy
 
-The Operator1 system organizes 34 agents into three tiers across three departments. Each agent has a defined role, dedicated workspace, and specific capabilities.
+Operator1 has 34 agents organized into three tiers: a coordinator, three department heads, and thirty specialist workers. Each agent has a specific role and workspace.
 
 ## Visual Overview
 

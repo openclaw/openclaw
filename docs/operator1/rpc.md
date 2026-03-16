@@ -1,11 +1,12 @@
 ---
 summary: "Complete gateway RPC reference for Operator1 — all ~160 methods, scopes, and params."
+updated: "2026-03-16"
 title: "RPC Reference"
 ---
 
 # RPC Reference
 
-The OpenClaw gateway exposes a WebSocket JSON-RPC interface. All RPC calls use the gateway protocol over WebSocket (default `ws://127.0.0.1:18789`).
+The gateway uses WebSocket JSON-RPC for communication (default `ws://127.0.0.1:18789`). Each method requires a specific permission scope.
 
 ## Scopes
 

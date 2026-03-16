@@ -1,11 +1,12 @@
 ---
 summary: "Configuration reference for the Operator1 multi-agent system — openclaw.json structure, agent definitions, and include directives."
+updated: "2026-03-16"
 title: "Configuration"
 ---
 
 # Configuration
 
-The Operator1 system is configured through JSON files that define the agent hierarchy, gateway behavior, channel integrations, and memory settings.
+Operator1 is configured through JSON files. These define the agent hierarchy, gateway behavior, channels, and how memory is stored.
 
 ## Visual Overview
 
@@ -32,33 +33,32 @@ _The configuration system architecture showing how openclaw.json, $include direc
 
 ## State database: operator1.db
 
-The system persists runtime state in a single SQLite database at `~/.openclaw/operator1.db`. The database is created automatically on first gateway startup and uses WAL (Write-Ahead Logging) mode for concurrent read/write safety.
+All runtime state is stored in `~/.openclaw/operator1.db` (SQLite). The database is created automatically and uses WAL mode for safe concurrent access.
 
-### What lives in SQLite
+### Data stored
 
-| Table / Group     | Purpose                                                             |
-| ----------------- | ------------------------------------------------------------------- |
-| `op1_config`      | Key-value config overrides (registries, project settings)           |
-| `op1_projects`    | Project definitions (internal workspace + external repo references) |
-| `agent_scopes`    | Agent marketplace scope assignments                                 |
-| `agent_locks`     | Agent lock state (previously YAML-based)                            |
-| `session_entries` | Session metadata including `project_id` binding                     |
-| `core_settings`   | Scoped settings (global, agent, project)                            |
-| `audit_log`       | Audit trail for security-sensitive operations                       |
+| What             | Purpose                                 |
+| ---------------- | --------------------------------------- |
+| Config overrides | Registry and project settings           |
+| Projects         | Project definitions and repo references |
+| Agent scopes     | Marketplace scope assignments           |
+| Sessions         | Session metadata and project bindings   |
+| Settings         | Global, agent, and project settings     |
+| Audit log        | Security event history                  |
 
-### Schema versioning
+### Schema versions
 
-The database schema is versioned (current: v10). Migrations run automatically at gateway startup — no manual intervention needed. Run `openclaw doctor` to verify schema health.
+The database auto-updates to the latest schema (current: v10) on startup. Run `openclaw doctor` to check database health.
 
-### Hybrid config reads
+### Config priority
 
-Some settings exist in both `openclaw.json` and SQLite. The resolution order is:
+Settings are checked in this order:
 
-1. SQLite `op1_config` / `core_settings` (if present)
-2. `openclaw.json` values
+1. SQLite (if set)
+2. openclaw.json
 3. Built-in defaults
 
-This allows the gateway to progressively adopt SQLite storage while keeping `openclaw.json` as the human-editable config surface.
+This lets you change settings either way.
 
 ## Primary config: openclaw.json
 

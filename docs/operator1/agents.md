@@ -5,13 +5,13 @@ summary: "The Agents section covers browsing the marketplace, viewing the org ch
 
 # Agents
 
-The **Agents** section of the UI is the control center for the entire agent lifecycle — from discovering new agents in the marketplace to monitoring their runtime health. It has five sub-sections accessible from the sidebar: Browse, Organization, Installed, Registries, and Health.
+The **Agents** section is where you manage all agents. You can browse available agents, view the organization structure, manage installed agents, configure registries, and check health status.
 
 ## Browse
 
 **Path:** `/agents/browse`
 
-The Browse page is the agent marketplace. It lists all agent blueprints available from connected registries, along with any custom bundles you have created.
+Browse is the agent marketplace. See all available agents from connected registries and any bundles you've created.
 
 ### Tier badges
 
@@ -25,9 +25,13 @@ Every agent card shows a tier badge indicating its position in the hierarchy:
 
 ### Agent cards
 
-Each card shows the agent's name, role, department, version, capabilities (up to 3 shown with a "+N more" count), and parent requirement. Click any card to open the **Agent Preview** panel with full details. Install directly from the card with the Install button — the button shows a spinner during install and switches to a green "Installed" badge once done.
+Each card shows:
 
-Deprecated agents display an amber warning with the sunset date and the recommended replacement.
+- Agent name, role, and department
+- Version and key capabilities
+- Install status
+
+Click a card to see full details. Click **Install** to add it (you'll see a spinner while installing). Deprecated agents show a sunset warning.
 
 ### Filtering and search
 
@@ -49,20 +53,13 @@ Toggle between **grid** (card layout) and **table** (sortable columns) using the
 
 ### Bundles
 
-A bundle is a saved set of agents for a common team configuration. Switching to the **Bundles** tab shows all saved bundles.
+A bundle is a saved set of agents for easy team setup. Each bundle card shows agent count, install status, and progress.
 
-Each bundle card shows:
+**Create a bundle:** Click **Create Bundle**, give it a name, and select which agents to include.
 
-- Agent count and install status (all installed / partial `X/N` / none)
-- A progress bar for partial installs
-- Per-agent chips colored green (installed) or grey (not installed)
-- **Install All** / **Install Remaining N** button
+**Edit or delete:** Use the pencil or trash icons on the bundle card. Deleting only removes the bundle definition; installed agents stay.
 
-**Creating a bundle** — click **Create Bundle** (top-right when on the Bundles tab). Set a bundle ID, name, description, then check the agents to include grouped by department. The ID auto-generates from the name but can be edited.
-
-**Editing / deleting a bundle** — use the pencil and trash icons on the bundle card. Deleting a bundle removes the bundle definition only; installed agents are not uninstalled.
-
-**Viewing a bundle in the org chart** — click the branch icon on a bundle card to navigate directly to Organization with that bundle pre-selected as a filter.
+**View in organization chart:** Click the branch icon to filter the org chart to just this bundle's agents.
 
 ---
 
@@ -70,7 +67,7 @@ Each bundle card shows:
 
 **Path:** `/agents/organization`
 
-The Organization page renders the live agent hierarchy as an interactive flow graph using React Flow. Nodes are agents, edges represent the `requires` dependency (which agent a given agent reports to).
+View the entire agent hierarchy as an interactive org chart. Nodes are agents; lines show who reports to whom.
 
 ### Layout
 
@@ -126,7 +123,7 @@ Use **Save as Bundle** (when no filter is active) to create a bundle from the cu
 
 **Path:** `/agents/installed`
 
-The Installed page lists only agents that have been deployed to the local workspace. It is the operational view — as opposed to Browse which shows what is available.
+See which agents are deployed and active on your system. This shows what's running, unlike Browse which shows what's available.
 
 ### Scopes
 
@@ -167,7 +164,7 @@ The **Save as Bundle** button in the toolbar captures the current installed set 
 
 **Path:** `/agents/registries`
 
-Registries are the sources from which agent blueprints are fetched. The built-in registry comes pre-configured. You can add custom or private registries here.
+Registries are sources of agent definitions. You can add custom or private registries here (the default registry is included).
 
 ### Registry fields
 

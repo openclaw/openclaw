@@ -1,11 +1,12 @@
 ---
 summary: "Deployment guide for the Operator1 multi-agent system — prerequisites, new machine setup, and deployment modes."
+updated: "2026-03-16"
 title: "Deployment"
 ---
 
 # Deployment
 
-This guide covers setting up the Operator1 multi-agent system on a new machine, from prerequisites through gateway startup.
+This guide walks you through setting up Operator1 on a new machine, from installing dependencies to starting the system.
 
 ## Prerequisites
 

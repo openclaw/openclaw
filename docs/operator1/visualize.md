@@ -5,9 +5,9 @@ summary: "Real-time Matrix-themed pixel art canvas showing all agents, their act
 
 # Visualize
 
-The Visualize page is a live, interactive pixel art canvas that maps every agent in the Operator1 hierarchy onto a Matrix-inspired world. It updates every 5 seconds and gives you an at-a-glance view of which agents are active, what they are doing, and how work is flowing through the system.
+Visualize is a live pixel art view of all agents in the system. You can see which ones are active, what they're working on, and how work flows.
 
-Navigate to **Visualize** in the sidebar to open it.
+Go to **Visualize** in the sidebar.
 
 ## The canvas
 

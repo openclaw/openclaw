@@ -1,11 +1,12 @@
 ---
 summary: "Sub-agent spawning in Operator1 — sessions_spawn flow, context passing, ACP integration, and session lifecycle."
+updated: "2026-03-16"
 title: "Sub-Agent Spawning"
 ---
 
 # Sub-Agent Spawning
 
-Spawning is the mechanism through which agents delegate tasks to other agents or to Claude Code sessions. It creates isolated execution contexts with explicit input and bounded runtime.
+Spawning is how agents delegate tasks to other agents or Claude Code. Each spawn creates an isolated session with a clear task and time limit.
 
 ## Spawning flow
 
