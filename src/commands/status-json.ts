@@ -1,16 +1,26 @@
-import { callGateway } from "../gateway/call.js";
 import type { HeartbeatEventPayload } from "../infra/heartbeat-events.js";
 import { normalizeUpdateChannel, resolveUpdateChannelDisplay } from "../infra/update-channels.js";
 import type { RuntimeEnv } from "../runtime.js";
-import { runSecurityAudit } from "../security/audit.js";
 import { getDaemonStatusSummary, getNodeDaemonStatusSummary } from "./status.daemon.js";
-import { scanStatus } from "./status.scan.js";
+import { scanStatusJsonFast } from "./status.scan.fast-json.js";
 
 let providerUsagePromise: Promise<typeof import("../infra/provider-usage.js")> | undefined;
+let securityAuditModulePromise: Promise<typeof import("../security/audit.runtime.js")> | undefined;
+let gatewayCallModulePromise: Promise<typeof import("../gateway/call.js")> | undefined;
 
 function loadProviderUsage() {
   providerUsagePromise ??= import("../infra/provider-usage.js");
   return providerUsagePromise;
+}
+
+function loadSecurityAuditModule() {
+  securityAuditModulePromise ??= import("../security/audit.runtime.js");
+  return securityAuditModulePromise;
+}
+
+function loadGatewayCallModule() {
+  gatewayCallModulePromise ??= import("../gateway/call.js");
+  return gatewayCallModulePromise;
 }
 
 export async function statusJsonCommand(
@@ -22,31 +32,37 @@ export async function statusJsonCommand(
   },
   runtime: RuntimeEnv,
 ) {
-  const scan = await scanStatus({ json: true, timeoutMs: opts.timeoutMs, all: opts.all }, runtime);
-  const securityAudit = await runSecurityAudit({
-    config: scan.cfg,
-    sourceConfig: scan.sourceConfig,
-    deep: false,
-    includeFilesystem: true,
-    includeChannelSecurity: true,
-  });
+  const scan = await scanStatusJsonFast({ timeoutMs: opts.timeoutMs, all: opts.all }, runtime);
+  const securityAudit = await loadSecurityAuditModule().then(({ runSecurityAudit }) =>
+    runSecurityAudit({
+      config: scan.cfg,
+      sourceConfig: scan.sourceConfig,
+      deep: false,
+      includeFilesystem: true,
+      includeChannelSecurity: true,
+    }),
+  );
 
   const usage = opts.usage
     ? await loadProviderUsage().then(({ loadProviderUsageSummary }) =>
         loadProviderUsageSummary({ timeoutMs: opts.timeoutMs }),
       )
     : undefined;
-  const health = opts.deep
-    ? await callGateway({
-        method: "health",
-        params: { probe: true },
-        timeoutMs: opts.timeoutMs,
-        config: scan.cfg,
-      }).catch(() => undefined)
-    : undefined;
+  const gatewayCall = opts.deep
+    ? await loadGatewayCallModule().then((mod) => mod.callGateway)
+    : null;
+  const health =
+    gatewayCall != null
+      ? await gatewayCall({
+          method: "health",
+          params: { probe: true },
+          timeoutMs: opts.timeoutMs,
+          config: scan.cfg,
+        }).catch(() => undefined)
+      : undefined;
   const lastHeartbeat =
-    opts.deep && scan.gatewayReachable
-      ? await callGateway<HeartbeatEventPayload | null>({
+    gatewayCall != null && scan.gatewayReachable
+      ? await gatewayCall<HeartbeatEventPayload | null>({
           method: "last-heartbeat",
           params: {},
           timeoutMs: opts.timeoutMs,

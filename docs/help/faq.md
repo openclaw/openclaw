@@ -80,7 +80,7 @@ Quick answers plus deeper troubleshooting for real-world setups (local dev, VPS,
   - [Can OpenClaw run tasks on a schedule or continuously in the background?](#can-openclaw-run-tasks-on-a-schedule-or-continuously-in-the-background)
   - [Can I run Apple macOS-only skills from Linux?](#can-i-run-apple-macos-only-skills-from-linux)
   - [Do you have a Notion or HeyGen integration?](#do-you-have-a-notion-or-heygen-integration)
-  - [How do I install the Chrome extension for browser takeover?](#how-do-i-install-the-chrome-extension-for-browser-takeover)
+  - [How do I use my existing signed-in Chrome with OpenClaw?](#how-do-i-use-my-existing-signed-in-chrome-with-openclaw)
 - [Sandboxing and memory](#sandboxing-and-memory)
   - [Is there a dedicated sandboxing doc?](#is-there-a-dedicated-sandboxing-doc)
   - [How do I bind a host folder into the sandbox?](#how-do-i-bind-a-host-folder-into-the-sandbox)
@@ -321,7 +321,7 @@ The repo recommends running from source and using the setup wizard:
 
 ```bash
 curl -fsSL https://openclaw.ai/install.sh | bash
-openclaw setup --wizard --install-daemon
+openclaw onboard --install-daemon
 ```
 
 The wizard can also build UI assets automatically. After onboarding, you typically run the Gateway on port **18789**.
@@ -334,10 +334,10 @@ cd openclaw
 pnpm install
 pnpm build
 pnpm ui:build # auto-installs UI deps on first run
-openclaw setup --wizard
+openclaw onboard
 ```
 
-If you don't have a global install yet, run it via `pnpm openclaw setup --wizard`.
+If you don't have a global install yet, run it via `pnpm openclaw onboard`.
 
 ### How do I open the dashboard after onboarding
 
@@ -687,7 +687,7 @@ Docs: [Update](/cli/update), [Updating](/install/updating).
 
 ### What does the setup wizard actually do
 
-`openclaw setup --wizard` is the recommended setup path. In **local mode** it walks you through:
+`openclaw onboard` is the recommended setup path. In **local mode** it walks you through:
 
 - **Model/auth setup** (provider OAuth/setup-token flows and API keys supported, plus local model options such as LM Studio)
 - **Workspace** location + bootstrap files
@@ -1214,22 +1214,23 @@ clawhub update --all
 
 ClawHub installs into `./skills` under your current directory (or falls back to your configured OpenClaw workspace); OpenClaw treats that as `<workspace>/skills` on the next session. For shared skills across agents, place them in `~/.openclaw/skills/<name>/SKILL.md`. Some skills expect binaries installed via Homebrew; on Linux that means Linuxbrew (see the Homebrew Linux FAQ entry above). See [Skills](/tools/skills) and [ClawHub](/tools/clawhub).
 
-### How do I install the Chrome extension for browser takeover
+### How do I use my existing signed-in Chrome with OpenClaw
 
-Use the built-in installer, then load the unpacked extension in Chrome:
+Use the built-in `user` browser profile, which attaches through Chrome DevTools MCP:
 
 ```bash
-openclaw browser extension install
-openclaw browser extension path
+openclaw browser --browser-profile user tabs
+openclaw browser --browser-profile user snapshot
 ```
 
-Then Chrome → `chrome://extensions` → enable "Developer mode" → "Load unpacked" → pick that folder.
+If you want a custom name, create an explicit MCP profile:
 
-Full guide (including remote Gateway + security notes): [Chrome extension](/tools/chrome-extension)
+```bash
+openclaw browser create-profile --name chrome-live --driver existing-session
+openclaw browser --browser-profile chrome-live tabs
+```
 
-If the Gateway runs on the same machine as Chrome (default setup), you usually **do not** need anything extra.
-If the Gateway runs elsewhere, run a node host on the browser machine so the Gateway can proxy browser actions.
-You still need to click the extension button on the tab you want to control (it doesn't auto-attach).
+This path is host-local. If the Gateway runs elsewhere, either run a node host on the browser machine or use remote CDP instead.
 
 ## Sandboxing and memory
 
@@ -1665,13 +1666,12 @@ setup is an always-on host plus your laptop as a node.
 - **No inbound SSH required.** Nodes connect out to the Gateway WebSocket and use device pairing.
 - **Safer execution controls.** `system.run` is gated by node allowlists/approvals on that laptop.
 - **More device tools.** Nodes expose `canvas`, `camera`, and `screen` in addition to `system.run`.
-- **Local browser automation.** Keep the Gateway on a VPS, but run Chrome locally and relay control
-  with the Chrome extension + a node host on the laptop.
+- **Local browser automation.** Keep the Gateway on a VPS, but run Chrome locally through a node host on the laptop, or attach to local Chrome on the host via Chrome MCP.
 
 SSH is fine for ad-hoc shell access, but nodes are simpler for ongoing agent workflows and
 device automation.
 
-Docs: [Nodes](/nodes), [Nodes CLI](/cli/nodes), [Chrome extension](/tools/chrome-extension).
+Docs: [Nodes](/nodes), [Nodes CLI](/cli/nodes), [Browser](/tools/browser).
 
 ### Should I install on a second laptop or just add a node
 
@@ -1904,7 +1904,7 @@ openclaw reset --scope full --yes --non-interactive
 Then re-run setup:
 
 ```bash
-openclaw setup --wizard --install-daemon
+openclaw onboard --install-daemon
 ```
 
 Notes:
@@ -2039,18 +2039,18 @@ Yes. Use **Multi-Agent Routing** to run multiple isolated agents and route inbou
 channel/account/peer. Slack is supported as a channel and can be bound to specific agents.
 
 Browser access is powerful but not "do anything a human can" - anti-bot, CAPTCHAs, and MFA can
-still block automation. For the most reliable browser control, use the Chrome extension relay
-on the machine that runs the browser (and keep the Gateway anywhere).
+still block automation. For the most reliable browser control, use local Chrome MCP on the host,
+or use CDP on the machine that actually runs the browser.
 
 Best-practice setup:
 
 - Always-on Gateway host (VPS/Mac mini).
 - One agent per role (bindings).
 - Slack channel(s) bound to those agents.
-- Local browser via extension relay (or a node) when needed.
+- Local browser via Chrome MCP or a node when needed.
 
 Docs: [Multi-Agent Routing](/concepts/multi-agent), [Slack](/channels/slack),
-[Browser](/tools/browser), [Chrome extension](/tools/chrome-extension), [Nodes](/nodes).
+[Browser](/tools/browser), [Nodes](/nodes).
 
 ## Models: defaults, selection, aliases, switching
 
@@ -2092,7 +2092,7 @@ Quickest setup:
 1. Install Ollama from `https://ollama.com/download`
 2. Pull a local model such as `ollama pull glm-4.7-flash`
 3. If you want Ollama Cloud too, run `ollama signin`
-4. Run `openclaw setup --wizard` and choose `Ollama`
+4. Run `openclaw onboard` and choose `Ollama`
 5. Pick `Local` or `Cloud + Local`
 
 Notes:

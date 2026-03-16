@@ -21,9 +21,9 @@ provider id `opencode-go` so upstream per-model routing stays correct.
 ## CLI setup
 
 ```bash
-openclaw setup --wizard --auth-choice opencode-go
+openclaw onboard --auth-choice opencode-go
 # or non-interactive
-openclaw setup --wizard --opencode-go-api-key "$OPENCODE_API_KEY"
+openclaw onboard --opencode-go-api-key "$OPENCODE_API_KEY"
 ```
 
 ## Config snippet

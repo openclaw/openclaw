@@ -4,6 +4,21 @@
   "providerAuthEnvVars": {
     "openrouter": ["OPENROUTER_API_KEY"]
   },
+  "providerAuthChoices": [
+    {
+      "provider": "openrouter",
+      "method": "api-key",
+      "choiceId": "openrouter-api-key",
+      "choiceLabel": "OpenRouter API key",
+      "groupId": "openrouter",
+      "groupLabel": "OpenRouter",
+      "groupHint": "API key",
+      "optionKey": "openrouterApiKey",
+      "cliFlag": "--openrouter-api-key",
+      "cliOption": "--openrouter-api-key <key>",
+      "cliDescription": "OpenRouter API key"
+    }
+  ],
   "configSchema": {
     "type": "object",
     "additionalProperties": false,

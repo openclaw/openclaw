@@ -32,12 +32,21 @@ describe("normalizeRegisteredProvider", () => {
         id: " demo ",
         label: " Demo Provider ",
         aliases: [" alias-one ", "alias-one", ""],
+        deprecatedProfileIds: [" demo:legacy ", "demo:legacy", ""],
         envVars: [" DEMO_API_KEY ", "DEMO_API_KEY"],
         auth: [
           {
             id: " primary ",
             label: " Primary ",
             kind: "custom",
+            wizard: {
+              choiceId: " demo-primary ",
+              modelAllowlist: {
+                allowedKeys: [" demo/model ", "demo/model"],
+                initialSelections: [" demo/model "],
+                message: " Demo models ",
+              },
+            },
             run: async () => ({ profiles: [] }),
           },
           {
@@ -66,8 +75,22 @@ describe("normalizeRegisteredProvider", () => {
       id: "demo",
       label: "Demo Provider",
       aliases: ["alias-one"],
+      deprecatedProfileIds: ["demo:legacy"],
       envVars: ["DEMO_API_KEY"],
-      auth: [{ id: "primary", label: "Primary" }],
+      auth: [
+        {
+          id: "primary",
+          label: "Primary",
+          wizard: {
+            choiceId: "demo-primary",
+            modelAllowlist: {
+              allowedKeys: ["demo/model"],
+              initialSelections: ["demo/model"],
+              message: "Demo models",
+            },
+          },
+        },
+      ],
       wizard: {
         setup: {
           choiceId: "demo-choice",
