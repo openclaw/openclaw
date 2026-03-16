@@ -16,11 +16,14 @@ const {
   buildInlineKeyboard,
   createForumTopicTelegram,
   editMessageTelegram,
+  pinMessageTelegram,
   reactMessageTelegram,
+  renameForumTopicTelegram,
   sendMessageTelegram,
   sendTypingTelegram,
   sendPollTelegram,
   sendStickerTelegram,
+  unpinMessageTelegram,
 } = await importTelegramSendModule();
 
 async function expectChatNotFoundWithChatId(
@@ -212,6 +215,45 @@ describe("sendMessageTelegram", () => {
 
     expect(botApi.sendChatAction).toHaveBeenCalledWith("-1001234567890", "typing", {
       message_thread_id: 271,
+    });
+  });
+
+  it("pins and unpins Telegram messages", async () => {
+    loadConfig.mockReturnValue({
+      channels: {
+        telegram: {
+          botToken: "tok",
+        },
+      },
+    });
+    botApi.pinChatMessage.mockResolvedValue(true);
+    botApi.unpinChatMessage.mockResolvedValue(true);
+
+    await pinMessageTelegram("-1001234567890", 101, { accountId: "default" });
+    await unpinMessageTelegram("-1001234567890", 101, { accountId: "default" });
+
+    expect(botApi.pinChatMessage).toHaveBeenCalledWith("-1001234567890", 101, {
+      disable_notification: true,
+    });
+    expect(botApi.unpinChatMessage).toHaveBeenCalledWith("-1001234567890", 101);
+  });
+
+  it("renames a Telegram forum topic", async () => {
+    loadConfig.mockReturnValue({
+      channels: {
+        telegram: {
+          botToken: "tok",
+        },
+      },
+    });
+    botApi.editForumTopic.mockResolvedValue(true);
+
+    await renameForumTopicTelegram("-1001234567890", 271, "Codex Thread", {
+      accountId: "default",
+    });
+
+    expect(botApi.editForumTopic).toHaveBeenCalledWith("-1001234567890", 271, {
+      name: "Codex Thread",
     });
   });
 

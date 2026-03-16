@@ -15,7 +15,7 @@ import { sparkleBuildFloorsFromShortVersion, type SparkleBuildFloors } from "./s
 export { collectBundledExtensionManifestErrors } from "./lib/bundled-extension-manifest.ts";
 
 type PackFile = { path: string };
-type PackResult = { files?: PackFile[] };
+type PackResult = { files?: PackFile[]; filename?: string; unpackedSize?: number };
 
 const requiredPathGroups = [
   ["dist/index.js", "dist/index.mjs"],
@@ -57,8 +57,6 @@ const requiredPathGroups = [
   "dist/plugin-sdk/diffs.d.ts",
   "dist/plugin-sdk/feishu.js",
   "dist/plugin-sdk/feishu.d.ts",
-  "dist/plugin-sdk/google-gemini-cli-auth.js",
-  "dist/plugin-sdk/google-gemini-cli-auth.d.ts",
   "dist/plugin-sdk/googlechat.js",
   "dist/plugin-sdk/googlechat.d.ts",
   "dist/plugin-sdk/irc.js",
@@ -112,6 +110,10 @@ const requiredPathGroups = [
   "dist/build-info.json",
 ];
 const forbiddenPrefixes = ["dist/OpenClaw.app/"];
+// 2026.3.12 ballooned to ~213.6 MiB unpacked and correlated with low-memory
+// startup/doctor OOM reports. Keep enough headroom for the current pack while
+// failing fast if duplicate/shim content sneaks back into the release artifact.
+const npmPackUnpackedSizeBudgetBytes = 160 * 1024 * 1024;
 const appcastPath = resolve("appcast.xml");
 const laneBuildMin = 1_000_000_000;
 const laneFloorAdoptionDateKey = 20260227;
@@ -226,6 +228,50 @@ export function collectForbiddenPackPaths(paths: Iterable<string>): string[] {
         /(^|\/)node_modules\//.test(path),
     )
     .toSorted();
+}
+
+function formatMiB(bytes: number): string {
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MiB`;
+}
+
+function resolvePackResultLabel(entry: PackResult, index: number): string {
+  return entry.filename?.trim() || `pack result #${index + 1}`;
+}
+
+function formatPackUnpackedSizeBudgetError(params: {
+  label: string;
+  unpackedSize: number;
+}): string {
+  return [
+    `${params.label} unpackedSize ${params.unpackedSize} bytes (${formatMiB(params.unpackedSize)}) exceeds budget ${npmPackUnpackedSizeBudgetBytes} bytes (${formatMiB(npmPackUnpackedSizeBudgetBytes)}).`,
+    "Investigate duplicate channel shims, copied extension trees, or other accidental pack bloat before release.",
+  ].join(" ");
+}
+
+export function collectPackUnpackedSizeErrors(results: Iterable<PackResult>): string[] {
+  const entries = Array.from(results);
+  const errors: string[] = [];
+  let checkedCount = 0;
+
+  for (const [index, entry] of entries.entries()) {
+    if (typeof entry.unpackedSize !== "number" || !Number.isFinite(entry.unpackedSize)) {
+      continue;
+    }
+    checkedCount += 1;
+    if (entry.unpackedSize <= npmPackUnpackedSizeBudgetBytes) {
+      continue;
+    }
+    const label = resolvePackResultLabel(entry, index);
+    errors.push(formatPackUnpackedSizeBudgetError({ label, unpackedSize: entry.unpackedSize }));
+  }
+
+  if (entries.length > 0 && checkedCount === 0) {
+    errors.push(
+      "npm pack --dry-run produced no unpackedSize data; pack size budget was not verified.",
+    );
+  }
+
+  return errors;
 }
 
 function checkPluginVersions() {
@@ -433,8 +479,9 @@ function main() {
     })
     .toSorted();
   const forbidden = collectForbiddenPackPaths(paths);
+  const sizeErrors = collectPackUnpackedSizeErrors(results);
 
-  if (missing.length > 0 || forbidden.length > 0) {
+  if (missing.length > 0 || forbidden.length > 0 || sizeErrors.length > 0) {
     if (missing.length > 0) {
       console.error("release-check: missing files in npm pack:");
       for (const path of missing) {
@@ -445,6 +492,12 @@ function main() {
       console.error("release-check: forbidden files in npm pack:");
       for (const path of forbidden) {
         console.error(`  - ${path}`);
+      }
+    }
+    if (sizeErrors.length > 0) {
+      console.error("release-check: npm pack unpacked size budget exceeded:");
+      for (const error of sizeErrors) {
+        console.error(`  - ${error}`);
       }
     }
     process.exit(1);

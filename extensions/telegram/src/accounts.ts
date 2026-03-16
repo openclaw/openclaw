@@ -1,7 +1,7 @@
 import util from "node:util";
+import type { TelegramAccountConfig, TelegramActionConfig } from "openclaw/plugin-sdk/telegram";
 import { createAccountActionGate } from "../../../src/channels/plugins/account-action-gate.js";
 import type { OpenClawConfig } from "../../../src/config/config.js";
-import type { TelegramAccountConfig, TelegramActionConfig } from "../../../src/config/types.js";
 import { isTruthyEnvValue } from "../../../src/infra/env.js";
 import { createSubsystemLogger } from "../../../src/logging/subsystem.js";
 import {

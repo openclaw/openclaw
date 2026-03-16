@@ -4,17 +4,144 @@ import { createPluginLoaderLogger } from "./logger.js";
 import type { ProviderPlugin } from "./types.js";
 
 const log = createSubsystemLogger("plugins");
+const BUNDLED_PROVIDER_ALLOWLIST_COMPAT_PLUGIN_IDS = [
+  "anthropic",
+  "byteplus",
+  "cloudflare-ai-gateway",
+  "copilot-proxy",
+  "github-copilot",
+  "google",
+  "huggingface",
+  "kilocode",
+  "kimi-coding",
+  "minimax",
+  "minimax-portal-auth",
+  "mistral",
+  "modelstudio",
+  "moonshot",
+  "nvidia",
+  "ollama",
+  "openai",
+  "opencode",
+  "opencode-go",
+  "openrouter",
+  "qianfan",
+  "qwen-portal-auth",
+  "sglang",
+  "synthetic",
+  "together",
+  "venice",
+  "vercel-ai-gateway",
+  "volcengine",
+  "vllm",
+  "xiaomi",
+  "zai",
+] as const;
+
+function hasExplicitPluginConfig(config: PluginLoadOptions["config"]): boolean {
+  const plugins = config?.plugins;
+  if (!plugins) {
+    return false;
+  }
+  if (typeof plugins.enabled === "boolean") {
+    return true;
+  }
+  if (Array.isArray(plugins.allow) && plugins.allow.length > 0) {
+    return true;
+  }
+  if (Array.isArray(plugins.deny) && plugins.deny.length > 0) {
+    return true;
+  }
+  if (Array.isArray(plugins.load?.paths) && plugins.load.paths.length > 0) {
+    return true;
+  }
+  if (plugins.entries && Object.keys(plugins.entries).length > 0) {
+    return true;
+  }
+  if (plugins.slots && Object.keys(plugins.slots).length > 0) {
+    return true;
+  }
+  return false;
+}
+
+function withBundledProviderAllowlistCompat(
+  config: PluginLoadOptions["config"],
+): PluginLoadOptions["config"] {
+  const allow = config?.plugins?.allow;
+  if (!Array.isArray(allow) || allow.length === 0) {
+    return config;
+  }
+
+  const allowSet = new Set(allow.map((entry) => entry.trim()).filter(Boolean));
+  let changed = false;
+  for (const pluginId of BUNDLED_PROVIDER_ALLOWLIST_COMPAT_PLUGIN_IDS) {
+    if (!allowSet.has(pluginId)) {
+      allowSet.add(pluginId);
+      changed = true;
+    }
+  }
+
+  if (!changed) {
+    return config;
+  }
+
+  return {
+    ...config,
+    plugins: {
+      ...config?.plugins,
+      // Backward compat: bundled implicit providers historically stayed
+      // available even when operators kept a restrictive plugin allowlist.
+      allow: [...allowSet],
+    },
+  };
+}
+
+function withBundledProviderVitestCompat(params: {
+  config: PluginLoadOptions["config"];
+  env?: PluginLoadOptions["env"];
+}): PluginLoadOptions["config"] {
+  const env = params.env ?? process.env;
+  if (!env.VITEST || hasExplicitPluginConfig(params.config)) {
+    return params.config;
+  }
+
+  return {
+    ...params.config,
+    plugins: {
+      ...params.config?.plugins,
+      enabled: true,
+      allow: [...BUNDLED_PROVIDER_ALLOWLIST_COMPAT_PLUGIN_IDS],
+      slots: {
+        ...params.config?.plugins?.slots,
+        memory: "none",
+      },
+    },
+  };
+}
 
 export function resolvePluginProviders(params: {
   config?: PluginLoadOptions["config"];
   workspaceDir?: string;
   /** Use an explicit env when plugin roots should resolve independently from process.env. */
   env?: PluginLoadOptions["env"];
+  bundledProviderAllowlistCompat?: boolean;
+  bundledProviderVitestCompat?: boolean;
+  onlyPluginIds?: string[];
 }): ProviderPlugin[] {
+  const maybeAllowlistCompat = params.bundledProviderAllowlistCompat
+    ? withBundledProviderAllowlistCompat(params.config)
+    : params.config;
+  const config = params.bundledProviderVitestCompat
+    ? withBundledProviderVitestCompat({
+        config: maybeAllowlistCompat,
+        env: params.env,
+      })
+    : maybeAllowlistCompat;
   const registry = loadOpenClawPlugins({
-    config: params.config,
+    config,
     workspaceDir: params.workspaceDir,
     env: params.env,
+    onlyPluginIds: params.onlyPluginIds,
     logger: createPluginLoaderLogger(log),
   });
 

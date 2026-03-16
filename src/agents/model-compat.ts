@@ -66,11 +66,11 @@ export function normalizeModelCompat(model: Model<Api>): Model<Api> {
     return model;
   }
   const forcedDeveloperRole = compat?.supportsDeveloperRole === true;
-  const forcedUsageStreaming = compat?.supportsUsageInStreaming === true;
+  const hasStreamingUsageOverride = compat?.supportsUsageInStreaming !== undefined;
   const targetStrictMode = compat?.supportsStrictMode ?? false;
   if (
     compat?.supportsDeveloperRole !== undefined &&
-    compat?.supportsUsageInStreaming !== undefined &&
+    hasStreamingUsageOverride &&
     compat?.supportsStrictMode !== undefined
   ) {
     return model;
@@ -83,7 +83,7 @@ export function normalizeModelCompat(model: Model<Api>): Model<Api> {
       ? {
           ...compat,
           supportsDeveloperRole: forcedDeveloperRole || false,
-          supportsUsageInStreaming: forcedUsageStreaming || false,
+          ...(hasStreamingUsageOverride ? {} : { supportsUsageInStreaming: false }),
           supportsStrictMode: targetStrictMode,
         }
       : {

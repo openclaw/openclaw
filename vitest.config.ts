@@ -27,7 +27,6 @@ const pluginSdkSubpaths = [
   "diagnostics-otel",
   "diffs",
   "feishu",
-  "google-gemini-cli-auth",
   "googlechat",
   "irc",
   "llm-task",
@@ -58,6 +57,10 @@ export default defineConfig({
   resolve: {
     // Keep this ordered: the base `openclaw/plugin-sdk` alias is a prefix match.
     alias: [
+      {
+        find: "openclaw/extension-api",
+        replacement: path.join(repoRoot, "src", "extensionAPI.ts"),
+      },
       ...pluginSdkSubpaths.map((subpath) => ({
         find: `openclaw/plugin-sdk/${subpath}`,
         replacement: path.join(repoRoot, "src", "plugin-sdk", `${subpath}.ts`),
