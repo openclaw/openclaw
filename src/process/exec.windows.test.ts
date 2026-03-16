@@ -111,4 +111,28 @@ describe("windows command wrapper behavior", () => {
       platformSpy.mockRestore();
     }
   });
+
+  it("wraps bunx via cmd.exe in runCommandWithTimeout on Windows", async () => {
+    const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+    const expectedComSpec = process.env.ComSpec ?? "cmd.exe";
+
+    spawnMock.mockImplementation(
+      (_command: string, _args: string[], _options: Record<string, unknown>) => createMockChild(),
+    );
+
+    try {
+      const result = await runCommandWithTimeout(["bunx", "--version"], { timeoutMs: 1000 });
+      expect(result.code).toBe(0);
+      const captured = spawnMock.mock.calls[0] as SpawnCall | undefined;
+      if (!captured) {
+        throw new Error("expected command wrapper to be called");
+      }
+      expect(captured[0]).toBe(expectedComSpec);
+      expect(captured[1].slice(0, 3)).toEqual(["/d", "/s", "/c"]);
+      expect(captured[1][3]).toContain("bunx.cmd --version");
+      expect(captured[2].windowsVerbatimArguments).toBe(true);
+    } finally {
+      platformSpy.mockRestore();
+    }
+  });
 });
