@@ -83,15 +83,9 @@ vi.mock("../../../src/channels/session-meta.js", () => ({
 
 const deliveryMocks = vi.hoisted(() => ({
   deliverReplies: vi.fn(async () => {}),
-  dispatchReplyWithBufferedBlockDispatcher: vi.fn(async () => {}),
 }));
 export const deliverReplies = deliveryMocks.deliverReplies;
-export const dispatchReplyWithBufferedBlockDispatcher =
-  deliveryMocks.dispatchReplyWithBufferedBlockDispatcher;
 vi.mock("./bot/delivery.js", () => ({ deliverReplies: deliveryMocks.deliverReplies }));
-vi.mock("../../../src/auto-reply/reply/provider-dispatcher.js", () => ({
-  dispatchReplyWithBufferedBlockDispatcher: deliveryMocks.dispatchReplyWithBufferedBlockDispatcher,
-}));
 vi.mock("../../../src/pairing/pairing-store.js", () => ({
   readChannelAllowFromStore: vi.fn(async () => []),
 }));
