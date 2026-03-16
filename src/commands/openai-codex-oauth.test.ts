@@ -200,6 +200,34 @@ describe("loginOpenAICodexOAuth", () => {
     );
   });
 
+  it("continues OAuth when the callback port probe fails for a non-conflict reason", async () => {
+    const creds = {
+      provider: "openai-codex" as const,
+      access: "access-token",
+      refresh: "refresh-token",
+      expires: Date.now() + 60_000,
+      email: "user@example.com",
+    };
+    mocks.tryListenOnPort.mockRejectedValue(
+      Object.assign(new Error("address not available"), { code: "EADDRNOTAVAIL" }),
+    );
+    mocks.createVpsAwareOAuthHandlers.mockReturnValue({
+      onAuth: vi.fn(),
+      onPrompt: vi.fn(),
+    });
+    mocks.loginOpenAICodex.mockResolvedValue(creds);
+
+    const { result, prompter } = await runCodexOAuth({ isRemote: false });
+
+    expect(result).toEqual(creds);
+    expect(mocks.describePortOwner).not.toHaveBeenCalled();
+    expect(mocks.loginOpenAICodex.mock.calls[0]?.[0]?.onManualCodeInput).toBeUndefined();
+    expect(prompter.note).not.toHaveBeenCalledWith(
+      expect.stringContaining("Detected another local process already listening"),
+      "OpenAI Codex OAuth",
+    );
+  });
+
   it("skips localhost callback preflight in remote mode", async () => {
     const creds = {
       provider: "openai-codex" as const,

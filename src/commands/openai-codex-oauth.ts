@@ -22,7 +22,7 @@ async function detectOpenAICodexCallbackPortConflict(): Promise<string | null> {
     return null;
   } catch (err) {
     if (!isErrno(err) || err.code !== "EADDRINUSE") {
-      throw err;
+      return null;
     }
     return (await describePortOwner(OPENAI_CODEX_CALLBACK_PORT)) ?? "";
   }
