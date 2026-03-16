@@ -365,9 +365,9 @@ Multi-lingual audio transcription via OpenRouter (Gemini, etc). Available on Cla
 </Card>
 
 <Card title="CrewClaw" icon="rocket" href="https://crewclaw.com">
-  **@mergisi** • `deployment` `templates` `telegram` `docker`
+  **@mergisi** • `deployment` `templates` `docker`
 
-  Agent deployment platform with 162 templates across 24 categories. Generates complete workspaces (SOUL.md, Dockerfile, bot scripts) for single and multi-agent setups.
+  Agent deployment platform with ready-to-use templates. Generates complete workspaces (SOUL.md, Dockerfile, bot scripts) for single and multi-agent setups.
 </Card>
 
 </CardGroup>
