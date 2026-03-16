@@ -70,6 +70,7 @@ export function createEditorSubmitHandler(params: {
       return;
     }
 
+    // Use raw (not trimmed) so a leading space prevents bang-line dispatch.
     if (raw.startsWith("!") && raw !== "!") {
       params.editor.setText("");
       params.editor.addToHistory(raw);
@@ -914,10 +915,19 @@ export async function runTui(opts: TuiOptions) {
     sendMessage,
     handleBangLine: runLocalShellLine,
     isRunActive: () => state.activeChatRunId !== null,
-    onSubmitBlocked: () => {
-      chatLog.addSystem("waiting for response — press Esc to cancel");
-      tui.requestRender();
-    },
+    onSubmitBlocked: (() => {
+      let lastBlockedAt = 0;
+      return () => {
+        const now = Date.now();
+        // Deduplicate: only show the system message once per 2 seconds
+        // to avoid spamming the chat log on repeated Enter presses.
+        if (now - lastBlockedAt > 2000) {
+          chatLog.addSystem("waiting for response — press Esc to cancel");
+        }
+        lastBlockedAt = now;
+        tui.requestRender();
+      };
+    })(),
   });
   editor.onSubmit = createSubmitBurstCoalescer({
     submit: submitHandler,
