@@ -399,6 +399,54 @@ describe("createOllamaStreamFn", () => {
     );
   });
 
+  it("forwards model.parameters into Ollama options and keeps num_ctx from contextWindow", async () => {
+    await withMockNdjsonFetch(
+      [
+        '{"model":"m","created_at":"t","message":{"role":"assistant","content":"ok"},"done":false}',
+        '{"model":"m","created_at":"t","message":{"role":"assistant","content":""},"done":true,"prompt_eval_count":1,"eval_count":1}',
+      ],
+      async (fetchMock) => {
+        const streamFn = createOllamaStreamFn("http://ollama-host:11434", {});
+        const stream = await Promise.resolve(
+          streamFn(
+            {
+              id: "qwen3.5:9b",
+              api: "ollama",
+              provider: "ollama",
+              contextWindow: 32768,
+              parameters: {
+                thinking: false,
+                temperature: 0.7,
+                top_p: 0.9,
+              },
+            } as never,
+            {
+              messages: [{ role: "user", content: "hello" }],
+            } as never,
+            {} as never,
+          ),
+        );
+
+        const events = await collectStreamEvents(stream);
+        expect(events.at(-1)?.type).toBe("done");
+
+        const [, requestInit] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+        if (typeof requestInit.body !== "string") {
+          throw new Error("Expected string request body");
+        }
+        const requestBody = JSON.parse(requestInit.body) as {
+          options: { num_ctx?: number; thinking?: boolean; temperature?: number; top_p?: number };
+        };
+        // num_ctx always comes from model.contextWindow, not from parameters.
+        expect(requestBody.options.num_ctx).toBe(32768);
+        // parameters should be forwarded as-is.
+        expect(requestBody.options.thinking).toBe(false);
+        expect(requestBody.options.temperature).toBe(0.7);
+        expect(requestBody.options.top_p).toBe(0.9);
+      },
+    );
+  });
+
   it("merges default headers and allows request headers to override them", async () => {
     await withMockNdjsonFetch(
       [

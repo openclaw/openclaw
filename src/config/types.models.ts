@@ -47,6 +47,8 @@ export type ModelDefinitionConfig = {
   maxTokens: number;
   headers?: Record<string, string>;
   compat?: ModelCompatConfig;
+  /** Provider-specific model parameters (for example Ollama options like thinking/temperature). */
+  parameters?: Record<string, unknown>;
 };
 
 export type ModelProviderConfig = {

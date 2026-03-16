@@ -450,7 +450,17 @@ export function createOllamaStreamFn(
 
         // Ollama defaults to num_ctx=4096 which is too small for large
         // system prompts + many tool definitions. Use model's contextWindow.
-        const ollamaOptions: Record<string, unknown> = { num_ctx: model.contextWindow ?? 65536 };
+        // Also merge provider-specific model parameters (for example thinking/temperature)
+        // when the config includes them.
+        const modelParams =
+          typeof (model as { parameters?: Record<string, unknown> }).parameters === "object" &&
+          (model as { parameters?: Record<string, unknown> }).parameters !== null
+            ? (model as { parameters?: Record<string, unknown> }).parameters
+            : undefined;
+        const ollamaOptions: Record<string, unknown> = {
+          ...modelParams,
+          num_ctx: model.contextWindow ?? 65536,
+        };
         if (typeof options?.temperature === "number") {
           ollamaOptions.temperature = options.temperature;
         }
