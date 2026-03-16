@@ -65,12 +65,7 @@ function createConfig(): OpenClawConfig {
   } as OpenClawConfig;
 }
 
-function createStatusCommand(cfg: OpenClawConfig) {
-  const commandSpec: NativeCommandSpec = {
-    name: "status",
-    description: "Status",
-    acceptsArgs: false,
-  };
+function createNativeCommand(cfg: OpenClawConfig, commandSpec: NativeCommandSpec) {
   return createDiscordNativeCommand({
     command: commandSpec,
     cfg,
@@ -147,6 +142,13 @@ async function expectPairCommandReply(params: {
   );
 }
 
+function createStatusCommand(cfg: OpenClawConfig) {
+  return createNativeCommand(cfg, {
+    name: "status",
+    description: "Status",
+    acceptsArgs: false,
+  });
+}
 function setConfiguredBinding(channelId: string, boundSessionKey: string) {
   persistentBindingMocks.resolveConfiguredAcpBindingRecord.mockImplementation((params) => ({
     configuredBinding: {
@@ -205,8 +207,8 @@ function expectBoundSessionDispatch(
   };
   expect(dispatchCall.ctx?.SessionKey).toBe(boundSessionKey);
   expect(dispatchCall.ctx?.CommandTargetSessionKey).toBe(boundSessionKey);
-  expect(persistentBindingMocks.resolveConfiguredAcpRoute).toHaveBeenCalledTimes(1);
-  expect(persistentBindingMocks.ensureConfiguredAcpRouteReady).toHaveBeenCalledTimes(1);
+  expect(persistentBindingMocks.resolveConfiguredAcpBindingRecord).toHaveBeenCalledTimes(1);
+  expect(persistentBindingMocks.ensureConfiguredAcpBindingSession).toHaveBeenCalledTimes(1);
 }
 
 async function expectBoundStatusCommandDispatch(params: {
@@ -476,8 +478,8 @@ describe("Discord native plugin command dispatch", () => {
     expect(dispatchCall.ctx?.CommandTargetSessionKey).toBe(
       "agent:qwen:discord:channel:1478836151241412759",
     );
-    expect(persistentBindingMocks.resolveConfiguredAcpRoute).toHaveBeenCalledTimes(1);
-    expect(persistentBindingMocks.ensureConfiguredAcpRouteReady).not.toHaveBeenCalled();
+    expect(persistentBindingMocks.resolveConfiguredAcpBindingRecord).toHaveBeenCalledTimes(1);
+    expect(persistentBindingMocks.ensureConfiguredAcpBindingSession).not.toHaveBeenCalled();
   });
 
   it("routes Discord DM native slash commands through configured ACP bindings", async () => {
@@ -518,5 +520,65 @@ describe("Discord native plugin command dispatch", () => {
       channelId,
       boundSessionKey,
     });
+  });
+
+  it("allows recovery commands through configured ACP bindings even when ensure fails", async () => {
+    const guildId = "1459246755253325866";
+    const channelId = "1479098716916023408";
+    const boundSessionKey = "agent:codex:acp:binding:discord:default:feedface";
+    const cfg = {
+      commands: {
+        useAccessGroups: false,
+      },
+      bindings: [
+        {
+          type: "acp",
+          agentId: "codex",
+          match: {
+            channel: "discord",
+            accountId: "default",
+            peer: { kind: "channel", id: channelId },
+          },
+          acp: {
+            mode: "persistent",
+          },
+        },
+      ],
+    } as OpenClawConfig;
+    const interaction = createInteraction({
+      channelType: ChannelType.GuildText,
+      channelId,
+      guildId,
+      guildName: "Ops",
+    });
+    const command = createNativeCommand(cfg, {
+      name: "new",
+      description: "Start a new session.",
+      acceptsArgs: true,
+    });
+
+    setConfiguredBinding(channelId, boundSessionKey);
+    persistentBindingMocks.ensureConfiguredAcpBindingSession.mockResolvedValue({
+      ok: false,
+      error: "acpx exited with code 1",
+    });
+    vi.spyOn(pluginCommandsModule, "matchPluginCommand").mockReturnValue(null);
+    const dispatchSpy = createDispatchSpy();
+
+    await (command as { run: (interaction: unknown) => Promise<void> }).run(interaction as unknown);
+
+    expect(dispatchSpy).toHaveBeenCalledTimes(1);
+    const dispatchCall = dispatchSpy.mock.calls[0]?.[0] as {
+      ctx?: { SessionKey?: string; CommandTargetSessionKey?: string };
+    };
+    expect(dispatchCall.ctx?.SessionKey).toBe(boundSessionKey);
+    expect(dispatchCall.ctx?.CommandTargetSessionKey).toBe(boundSessionKey);
+    expect(persistentBindingMocks.resolveConfiguredAcpBindingRecord).toHaveBeenCalledTimes(1);
+    expect(persistentBindingMocks.ensureConfiguredAcpBindingSession).not.toHaveBeenCalled();
+    expect(interaction.reply).not.toHaveBeenCalledWith(
+      expect.objectContaining({
+        content: "Configured ACP binding is unavailable right now. Please try again.",
+      }),
+    );
   });
 });

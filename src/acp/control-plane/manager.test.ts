@@ -531,6 +531,61 @@ describe("AcpSessionManager", () => {
     expect(runtimeState.ensureSession).toHaveBeenCalledTimes(2);
   });
 
+  it("drops cached runtime handles when close sees a stale acpx process-exit error", async () => {
+    const runtimeState = createRuntime();
+    runtimeState.close.mockRejectedValueOnce(new Error("acpx exited with code 1"));
+    hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
+      id: "acpx",
+      runtime: runtimeState.runtime,
+    });
+    hoisted.readAcpSessionEntryMock.mockImplementation((paramsUnknown: unknown) => {
+      const sessionKey = (paramsUnknown as { sessionKey?: string }).sessionKey ?? "";
+      return {
+        sessionKey,
+        storeSessionKey: sessionKey,
+        acp: {
+          ...readySessionMeta(),
+          runtimeSessionName: `runtime:${sessionKey}`,
+        },
+      };
+    });
+    const limitedCfg = {
+      acp: {
+        ...baseCfg.acp,
+        maxConcurrentSessions: 1,
+      },
+    } as OpenClawConfig;
+
+    const manager = new AcpSessionManager();
+    await manager.runTurn({
+      cfg: limitedCfg,
+      sessionKey: "agent:codex:acp:session-a",
+      text: "first",
+      mode: "prompt",
+      requestId: "r1",
+    });
+
+    const closeResult = await manager.closeSession({
+      cfg: limitedCfg,
+      sessionKey: "agent:codex:acp:session-a",
+      reason: "manual-close",
+      allowBackendUnavailable: true,
+    });
+    expect(closeResult.runtimeClosed).toBe(false);
+    expect(closeResult.runtimeNotice).toBe("acpx exited with code 1");
+
+    await expect(
+      manager.runTurn({
+        cfg: limitedCfg,
+        sessionKey: "agent:codex:acp:session-b",
+        text: "second",
+        mode: "prompt",
+        requestId: "r2",
+      }),
+    ).resolves.toBeUndefined();
+    expect(runtimeState.ensureSession).toHaveBeenCalledTimes(2);
+  });
+
   it("evicts idle cached runtimes before enforcing max concurrent limits", async () => {
     vi.useFakeTimers();
     try {
@@ -840,6 +895,47 @@ describe("AcpSessionManager", () => {
     const states = extractStatesFromUpserts();
     expect(states).not.toContain("running");
     expect(states.at(-1)).toBe("error");
+  });
+
+  it("retries once with a fresh runtime handle after an early acpx exit", async () => {
+    const runtimeState = createRuntime();
+    hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
+      id: "acpx",
+      runtime: runtimeState.runtime,
+    });
+    hoisted.readAcpSessionEntryMock.mockReturnValue({
+      sessionKey: "agent:codex:acp:session-1",
+      storeSessionKey: "agent:codex:acp:session-1",
+      acp: readySessionMeta(),
+    });
+    runtimeState.runTurn
+      .mockImplementationOnce(async function* () {
+        yield {
+          type: "error" as const,
+          message: "acpx exited with code 1",
+        };
+      })
+      .mockImplementationOnce(async function* () {
+        yield { type: "done" as const };
+      });
+
+    const manager = new AcpSessionManager();
+    await expect(
+      manager.runTurn({
+        cfg: baseCfg,
+        sessionKey: "agent:codex:acp:session-1",
+        text: "do work",
+        mode: "prompt",
+        requestId: "run-1",
+      }),
+    ).resolves.toBeUndefined();
+
+    expect(runtimeState.ensureSession).toHaveBeenCalledTimes(2);
+    expect(runtimeState.runTurn).toHaveBeenCalledTimes(2);
+    const states = extractStatesFromUpserts();
+    expect(states).toContain("running");
+    expect(states).toContain("idle");
+    expect(states).not.toContain("error");
   });
 
   it("persists runtime mode changes through setSessionRuntimeMode", async () => {

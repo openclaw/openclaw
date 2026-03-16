@@ -194,6 +194,11 @@ function buildDiscordCommandOptions(params: {
   }) satisfies CommandOptions;
 }
 
+function shouldBypassConfiguredAcpEnsure(commandName: string): boolean {
+  const normalized = commandName.trim().toLowerCase();
+  return normalized === "acp" || normalized === "new" || normalized === "reset";
+}
+
 function readDiscordCommandArgs(
   interaction: CommandInteraction,
   definitions?: CommandArgDefinition[],
@@ -1627,7 +1632,8 @@ async function dispatchDiscordCommandInteraction(params: {
         })
       : null;
   const configuredBinding = configuredRoute?.configuredBinding ?? null;
-  if (configuredBinding) {
+  const commandName = command.nativeName ?? command.key;
+  if (configuredBinding && !shouldBypassConfiguredAcpEnsure(commandName)) {
     const ensured = await ensureConfiguredAcpRouteReady({
       cfg,
       configuredBinding,
