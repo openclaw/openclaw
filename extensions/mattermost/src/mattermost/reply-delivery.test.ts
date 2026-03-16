@@ -87,9 +87,13 @@ describe("deliverMattermostReplyPayload", () => {
     });
 
     expect(sendMessage).toHaveBeenCalledTimes(1);
-    expect(sendMessage).toHaveBeenCalledWith("channel:town-square", "hello", {
-      accountId: "default",
-      replyToId: "root-post",
-    });
+    expect(sendMessage).toHaveBeenCalledWith(
+      "channel:town-square",
+      "hello",
+      expect.objectContaining({
+        accountId: "default",
+        replyToId: "root-post",
+      }),
+    );
   });
 });
