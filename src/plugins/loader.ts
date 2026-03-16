@@ -71,6 +71,34 @@ const defaultLogger = () => createSubsystemLogger("plugins");
 
 type PluginSdkAliasCandidateKind = "dist" | "src";
 
+type LoaderModuleResolveParams = {
+  modulePath?: string;
+  argv1?: string;
+  cwd?: string;
+  moduleUrl?: string;
+};
+
+function resolveLoaderModulePath(params: LoaderModuleResolveParams = {}): string {
+  return params.modulePath ?? fileURLToPath(params.moduleUrl ?? import.meta.url);
+}
+
+function resolveLoaderPackageRoot(
+  params: LoaderModuleResolveParams & { modulePath: string },
+): string | null {
+  const cwd = params.cwd ?? path.dirname(params.modulePath);
+  const fromModulePath = resolveOpenClawPackageRootSync({ cwd });
+  if (fromModulePath) {
+    return fromModulePath;
+  }
+  const argv1 = params.argv1 ?? process.argv[1];
+  const moduleUrl = params.moduleUrl ?? (params.modulePath ? undefined : import.meta.url);
+  return resolveOpenClawPackageRootSync({
+    cwd,
+    ...(argv1 ? { argv1 } : {}),
+    ...(moduleUrl ? { moduleUrl } : {}),
+  });
+}
+
 function resolvePluginSdkAliasCandidateOrder(params: {
   modulePath: string;
   isProduction: boolean;
@@ -84,11 +112,22 @@ function listPluginSdkAliasCandidates(params: {
   srcFile: string;
   distFile: string;
   modulePath: string;
+  argv1?: string;
+  cwd?: string;
+  moduleUrl?: string;
 }) {
   const orderedKinds = resolvePluginSdkAliasCandidateOrder({
     modulePath: params.modulePath,
     isProduction: process.env.NODE_ENV === "production",
   });
+  const packageRoot = resolveLoaderPackageRoot(params);
+  if (packageRoot) {
+    const candidateMap = {
+      src: path.join(packageRoot, "src", "plugin-sdk", params.srcFile),
+      dist: path.join(packageRoot, "dist", "plugin-sdk", params.distFile),
+    } as const;
+    return orderedKinds.map((kind) => candidateMap[kind]);
+  }
   let cursor = path.dirname(params.modulePath);
   const candidates: string[] = [];
   for (let i = 0; i < 6; i += 1) {
@@ -112,13 +151,19 @@ const resolvePluginSdkAliasFile = (params: {
   srcFile: string;
   distFile: string;
   modulePath?: string;
+  argv1?: string;
+  cwd?: string;
+  moduleUrl?: string;
 }): string | null => {
   try {
-    const modulePath = params.modulePath ?? fileURLToPath(import.meta.url);
+    const modulePath = resolveLoaderModulePath(params);
     for (const candidate of listPluginSdkAliasCandidates({
       srcFile: params.srcFile,
       distFile: params.distFile,
       modulePath,
+      argv1: params.argv1,
+      cwd: params.cwd,
+      moduleUrl: params.moduleUrl,
     })) {
       if (fs.existsSync(candidate)) {
         return candidate;
@@ -133,12 +178,10 @@ const resolvePluginSdkAliasFile = (params: {
 const resolvePluginSdkAlias = (): string | null =>
   resolvePluginSdkAliasFile({ srcFile: "root-alias.cjs", distFile: "root-alias.cjs" });
 
-const resolveExtensionApiAlias = (params: { modulePath?: string } = {}): string | null => {
+const resolveExtensionApiAlias = (params: LoaderModuleResolveParams = {}): string | null => {
   try {
-    const modulePath = params.modulePath ?? fileURLToPath(import.meta.url);
-    const packageRoot = resolveOpenClawPackageRootSync({
-      cwd: path.dirname(modulePath),
-    });
+    const modulePath = resolveLoaderModulePath(params);
+    const packageRoot = resolveLoaderPackageRoot({ ...params, modulePath });
     if (!packageRoot) {
       return null;
     }
@@ -163,14 +206,24 @@ const resolveExtensionApiAlias = (params: { modulePath?: string } = {}): string 
   return null;
 };
 
-function resolvePluginRuntimeModulePath(params: { modulePath?: string } = {}): string | null {
+function resolvePluginRuntimeModulePath(params: LoaderModuleResolveParams = {}): string | null {
   try {
-    const modulePath = params.modulePath ?? fileURLToPath(import.meta.url);
-    const moduleDir = path.dirname(modulePath);
-    const candidates = [
-      path.join(moduleDir, "runtime", "index.ts"),
-      path.join(moduleDir, "runtime", "index.js"),
-    ];
+    const modulePath = resolveLoaderModulePath(params);
+    const orderedKinds = resolvePluginSdkAliasCandidateOrder({
+      modulePath,
+      isProduction: process.env.NODE_ENV === "production",
+    });
+    const packageRoot = resolveLoaderPackageRoot({ ...params, modulePath });
+    const candidates = packageRoot
+      ? orderedKinds.map((kind) =>
+          kind === "src"
+            ? path.join(packageRoot, "src", "plugins", "runtime", "index.ts")
+            : path.join(packageRoot, "dist", "plugins", "runtime", "index.js"),
+        )
+      : [
+          path.join(path.dirname(modulePath), "runtime", "index.ts"),
+          path.join(path.dirname(modulePath), "runtime", "index.js"),
+        ];
     for (const candidate of candidates) {
       if (fs.existsSync(candidate)) {
         return candidate;
@@ -233,6 +286,7 @@ export const __testing = {
   resolveExtensionApiAlias,
   resolvePluginSdkAliasCandidateOrder,
   resolvePluginSdkAliasFile,
+  resolvePluginRuntimeModulePath,
   maxPluginRegistryCacheEntries: MAX_PLUGIN_REGISTRY_CACHE_ENTRIES,
 };
 

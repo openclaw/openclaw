@@ -287,6 +287,11 @@ function createPluginSdkAliasFixture(params?: {
   const distFile = path.join(root, "dist", "plugin-sdk", params?.distFile ?? "index.js");
   mkdirSafe(path.dirname(srcFile));
   mkdirSafe(path.dirname(distFile));
+  fs.writeFileSync(
+    path.join(root, "package.json"),
+    JSON.stringify({ name: "openclaw", type: "module" }, null, 2),
+    "utf-8",
+  );
   fs.writeFileSync(srcFile, params?.srcBody ?? "export {};\n", "utf-8");
   fs.writeFileSync(distFile, params?.distBody ?? "export {};\n", "utf-8");
   return { root, srcFile, distFile };
@@ -305,6 +310,30 @@ function createExtensionApiAliasFixture(params?: { srcBody?: string; distBody?: 
   );
   fs.writeFileSync(srcFile, params?.srcBody ?? "export {};\n", "utf-8");
   fs.writeFileSync(distFile, params?.distBody ?? "export {};\n", "utf-8");
+  return { root, srcFile, distFile };
+}
+
+function createPluginRuntimeAliasFixture(params?: { srcBody?: string; distBody?: string }) {
+  const root = makeTempDir();
+  const srcFile = path.join(root, "src", "plugins", "runtime", "index.ts");
+  const distFile = path.join(root, "dist", "plugins", "runtime", "index.js");
+  mkdirSafe(path.dirname(srcFile));
+  mkdirSafe(path.dirname(distFile));
+  fs.writeFileSync(
+    path.join(root, "package.json"),
+    JSON.stringify({ name: "openclaw", type: "module" }, null, 2),
+    "utf-8",
+  );
+  fs.writeFileSync(
+    srcFile,
+    params?.srcBody ?? "export const createPluginRuntime = () => ({});\n",
+    "utf-8",
+  );
+  fs.writeFileSync(
+    distFile,
+    params?.distBody ?? "export const createPluginRuntime = () => ({});\n",
+    "utf-8",
+  );
   return { root, srcFile, distFile };
 }
 
@@ -2953,6 +2982,44 @@ module.exports = {
     const resolved = withEnv({ NODE_ENV: undefined }, () =>
       __testing.resolveExtensionApiAlias({
         modulePath: path.join(root, "src", "plugins", "loader.ts"),
+      }),
+    );
+    expect(resolved).toBe(srcFile);
+  });
+
+  it("resolves plugin-sdk alias from package root when loader runs from transpiler cache path", () => {
+    const { root, srcFile } = createPluginSdkAliasFixture();
+
+    const resolved = withEnv({ NODE_ENV: undefined }, () =>
+      __testing.resolvePluginSdkAliasFile({
+        srcFile: "index.ts",
+        distFile: "index.js",
+        modulePath: "/tmp/tsx-cache/openclaw-loader.js",
+        argv1: path.join(root, "openclaw.mjs"),
+      }),
+    );
+    expect(resolved).toBe(srcFile);
+  });
+
+  it("resolves extension-api alias from package root when loader runs from transpiler cache path", () => {
+    const { root, srcFile } = createExtensionApiAliasFixture();
+
+    const resolved = withEnv({ NODE_ENV: undefined }, () =>
+      __testing.resolveExtensionApiAlias({
+        modulePath: "/tmp/tsx-cache/openclaw-loader.js",
+        argv1: path.join(root, "openclaw.mjs"),
+      }),
+    );
+    expect(resolved).toBe(srcFile);
+  });
+
+  it("resolves plugin runtime module from package root when loader runs from transpiler cache path", () => {
+    const { root, srcFile } = createPluginRuntimeAliasFixture();
+
+    const resolved = withEnv({ NODE_ENV: undefined }, () =>
+      __testing.resolvePluginRuntimeModulePath({
+        modulePath: "/tmp/tsx-cache/openclaw-loader.js",
+        argv1: path.join(root, "openclaw.mjs"),
       }),
     );
     expect(resolved).toBe(srcFile);
