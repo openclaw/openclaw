@@ -103,6 +103,9 @@ Use one source of truth in your main checkout, then copy into each worktree.
    - `bash scripts/telegram-e2e/lane-up.sh`
 4. Smoke check from that worktree:
    - `scripts/telegram-e2e/userbot-send-live.sh --chat "<chat-id-or-username>" --text "handoff smoke"`
+5. First runtime claim happens on first canonical ensure run:
+   - `scripts/telegram-live-runtime.sh ensure`
+   - This auto-claims a tester bot token for the worktree (or hard-fails if none are available).
 
 Lane auth continuity:
 
@@ -144,34 +147,20 @@ Default remains `openai-codex/gpt-5.3-codex`.
 
 ## Critical runtime rule (prevents false negatives)
 
-Always bring up the lane first:
+Use the canonical runtime entrypoint before live assertions:
 
 ```bash
-bash scripts/telegram-e2e/lane-up.sh
+scripts/telegram-live-runtime.sh ensure
 ```
 
-This binds live E2E to the current worktree's token slot, profile, and port. If another checkout or the shared default gateway is serving Telegram, your result is invalid for this branch.
+This enforces:
 
-The lane gate is strict now: lane-up/preflight only pass when all are true at the same time:
+1. named branch (not detached `HEAD`)
+2. tester token claim/pool guard
+3. deterministic isolated runtime (`runtime_port`, `runtime_state_dir`)
+4. ownership and health proof lines
 
-- `gateway status --deep --require-rpc` is healthy
-- lane port is actually listening
-- runtime ownership matches the current worktree
-- the listener PID is the runtime PID or a child of it (wrapper process is allowed)
-
-If startup is flaky, `lane-up.sh` now does lane-targeted stop/start retries (default: `3`) before failing.
-Override with `OPENCLAW_TG_LANE_START_ATTEMPTS=<n>`.
-Default readiness timeout is `300s` (`OPENCLAW_TG_LANE_RPC_TIMEOUT_SECONDS=<n>` to override).
-If LaunchAgent is unavailable in the current shell context, or the lane still has no listener after the fallback grace window, lane-up falls back to a lane-targeted direct `gateway run` process.
-
-Proof lines include:
-
-- `branch=...`
-- `runtime_worktree=...`
-- `runtime_state_dir=...`
-- `runtime_port=...`
-- `token_fingerprint=...` (masked)
-- `agent_auth_profiles=...`
+Do not manually start `gateway run` for Telegram live tests.
 
 ## Deterministic gateway recovery (main runtime)
 
@@ -239,6 +228,7 @@ scripts/telegram-e2e/run-model-inheritance-e2e.sh \
 ```
 
 Pass signal is `PASS: thread B reports expected model (...)`.
+The runner auto-calls `scripts/telegram-live-runtime.sh handoff-main` on exit.
 
 ## Known behavior and failure recovery
 

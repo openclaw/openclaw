@@ -8,6 +8,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(cd "${SCRIPT_DIR}/../.." && pwd)"
+RUNTIME_CTL="${ROOT_DIR}/scripts/telegram-live-runtime.sh"
 # shellcheck source=scripts/telegram-e2e/userbot-common.sh
 source "${SCRIPT_DIR}/userbot-common.sh"
 
@@ -115,15 +116,18 @@ if [[ ! -x "${TG_BIN}" ]]; then
   exit 1
 fi
 
-# Hard gate: ensure lane profile/port/runtime ownership before live assertions.
-"${ROOT_DIR}/scripts/telegram-live-preflight.sh"
-load_lane_env_if_present
-# Live lane checks must poll/filter against the lane-owned bot token.
-# Use the lane-assigned TELEGRAM_BOT_TOKEN when available, even if a
-# different TG_BOT_TOKEN exists in userbot local env files.
-if [[ -n "${TELEGRAM_BOT_TOKEN:-}" ]]; then
-  TG_BOT_TOKEN="${TELEGRAM_BOT_TOKEN}"
-fi
+# Hard gate: ensure this worktree owns Telegram runtime before live assertions.
+"${RUNTIME_CTL}" ensure
+
+on_exit() {
+  local status=$?
+  trap - EXIT
+  if ! "${RUNTIME_CTL}" handoff-main; then
+    echo "WARN: handoff-main failed (exit status preserved: ${status})" >&2
+  fi
+  exit "$status"
+}
+trap on_exit EXIT
 
 EXPECT_MODEL="${EXPECT_MODEL:-${SET_MODEL}}"
 USERBOT_PYTHON="$(ensure_userbot_python)"

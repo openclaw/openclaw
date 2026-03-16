@@ -228,8 +228,8 @@ Verify recovery: `openclaw gateway status --deep` and `openclaw channels status 
   - You MUST run `bash scripts/telegram-e2e/lane-up.sh` before live Telegram E2E.
   - You MUST confirm the current git branch is named and NOT `HEAD`.
   - You MUST confirm gateway runtime is owned by the current worktree path.
-  - If runtime path mismatches, you MUST restart gateway from the current worktree and re-check runtime ownership before testing.
-  - If `.env.local` is missing, you MUST run `bash scripts/assign-bot.sh` before starting gateway.
+  - Use the canonical gate: `scripts/telegram-live-runtime.sh ensure` (it enforces ownership + health proof and isolated runtime).
+  - Token claiming happens on first `ensure` run; do not pre-claim at worktree creation time.
   - You MUST NOT print raw token values.
   - You MUST emit proof lines in logs/output: `branch=<...>`, `runtime_worktree=<...>`, `runtime_state_dir=<...>`, `runtime_port=<...>`, masked `token_fingerprint=<...>`, and `agent_auth_profiles=<yes|no>`.
   - You MUST NOT use the shared default gateway/profile for parallel Telegram tests.
@@ -246,9 +246,13 @@ Verify recovery: `openclaw gateway status --deep` and `openclaw channels status 
   - Preferred: run `bash scripts/bootstrap-worktree-telegram.sh` in each new worktree.
   - For every new worktree, run:
     - `cp /Users/user/Programming_Projects/openclaw/.env.bots ./.env.bots`
-    - `bash scripts/assign-bot.sh` (creates `.env.local` with this worktree's bot token)
-    - `bash scripts/telegram-e2e/lane-up.sh` (creates the isolated lane profile/port metadata and starts the lane gateway)
-  - `lane-up.sh` also syncs `~/.openclaw/agents/main/agent/auth-profiles.json` into the isolated lane when present, so embedded Codex/Claude runs in that lane inherit real model auth.
+    - `scripts/telegram-live-runtime.sh ensure` (auto-claims/retains this worktree tester bot token)
+  - When a worktree is no longer needed for Telegram live testing, run:
+    - `scripts/telegram-live-runtime.sh release`
+  - Do not use the stable/main bot for worktree live tests.
+  - Do not release a tester bot based on PR merge or chat archive; claims are worktree-scoped.
+  - If stale-claim cleanup becomes necessary, implement garbage collection only for deleted/inactive worktrees.
+  - For full operational details, scaling notes, and live-runner behavior, read `scripts/telegram-e2e/README.md`.
   - If Telegram userbot E2E is needed, copy local-only files (do not commit):
     - `mkdir -p scripts/telegram-e2e/tmp`
     - `cp /Users/user/Programming_Projects/openclaw/scripts/telegram-e2e/.env scripts/telegram-e2e/.env` (if present)
@@ -376,11 +380,10 @@ Verify recovery: `openclaw gateway status --deep` and `openclaw channels status 
 
 BEFORE starting the bot in any worktree:
 
-1. Check if `.env.local` exists in this worktree
-2. If NOT, run: `bash scripts/assign-bot.sh`
-3. This assigns a dedicated test bot token to this worktree
-4. Always start the bot — it will use the assigned token automatically
-5. NEVER use the production token for testing
-6. When done with this worktree, you can delete `.env.local` to free the token
+1. Run: `scripts/telegram-live-runtime.sh ensure`
+2. This auto-claims (first run) or retains (later runs) a dedicated test bot token for this worktree
+3. Always start/testing through that canonical ensure gate
+4. NEVER use the production token for testing
+5. When done with this worktree, you can delete `.env.local` to free the token
 
 DO NOT share tokens between worktrees. Each worktree = one bot.

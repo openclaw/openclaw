@@ -3,8 +3,6 @@ set -euo pipefail
 
 MAIN_REPO_DEFAULT="/Users/user/Programming_Projects/openclaw"
 MAIN_REPO="${OPENCLAW_MAIN_REPO:-$MAIN_REPO_DEFAULT}"
-MAIN_STATE_DIR_DEFAULT="$HOME/.openclaw"
-MAIN_STATE_DIR="${OPENCLAW_MAIN_STATE_DIR:-$MAIN_STATE_DIR_DEFAULT}"
 
 if [[ ! -d "$MAIN_REPO" ]]; then
   echo "Main repo not found: $MAIN_REPO" >&2
@@ -24,41 +22,12 @@ copy_if_exists() {
 }
 
 # Bot token pool for worktree assignment.
+# Claiming now happens on first canonical `telegram-live-runtime.sh ensure` run.
+# Tokens that also exist in the stable/main Telegram config are reserved and
+# rejected during claim to prevent worktree runtime hijacking.
 copy_if_exists "$MAIN_REPO/.env.bots" "./.env.bots"
-
-has_token_claim() {
-  if [[ ! -f "./.env.local" ]]; then
-    return 1
-  fi
-  grep -Eq '^[[:space:]]*TELEGRAM_BOT_TOKEN[[:space:]]*=[[:space:]]*[^[:space:]#]+' "./.env.local"
-}
-
-if [[ -f "./.env.bots" ]]; then
-  if has_token_claim; then
-    echo "skip: existing TELEGRAM_BOT_TOKEN claim found in .env.local"
-  else
-    bash scripts/assign-bot.sh
-  fi
-else
+if [[ ! -f "./.env.bots" ]]; then
   echo "skip: .env.bots missing in main repo"
-fi
-
-# Prepare deterministic lane metadata for live Telegram E2E.
-if [[ -x "./scripts/telegram-e2e/lane-up.sh" ]]; then
-  if ! bash ./scripts/telegram-e2e/lane-up.sh --prepare-only >/dev/null; then
-    echo "skip: lane metadata preparation failed"
-  fi
-fi
-
-if [[ -f "./.telegram-lane.env" ]]; then
-  # Metadata file is script-generated and contains no command substitutions.
-  # shellcheck disable=SC1091
-  source "./.telegram-lane.env"
-  AUTH_SRC="${OPENCLAW_TG_LANE_AUTH_SOURCE:-$MAIN_STATE_DIR/agents/main/agent/auth-profiles.json}"
-  AUTH_DST="$HOME/.openclaw-${OPENCLAW_TG_LANE_PROFILE:-}/agents/main/agent/auth-profiles.json"
-  if [[ -n "${OPENCLAW_TG_LANE_PROFILE:-}" ]]; then
-    copy_if_exists "$AUTH_SRC" "$AUTH_DST"
-  fi
 fi
 
 # Optional userbot E2E files for true inbound Telegram verification.
@@ -74,4 +43,4 @@ elif [[ -f "$MAIN_REPO/scripts/telegram-e2e/userbot.session" ]]; then
     "./scripts/telegram-e2e/tmp/userbot.session"
 fi
 
-echo "telegram bootstrap complete"
+echo "telegram bootstrap complete (token claim deferred to first ensure)"
