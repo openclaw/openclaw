@@ -34,7 +34,7 @@ type InlineProviderConfig = {
   headers?: unknown;
 };
 
-const PLUGIN_FIRST_DYNAMIC_PROVIDERS = new Set(["google-gemini-cli", "zai"]);
+const PLUGIN_FIRST_DYNAMIC_PROVIDERS = new Set(["anthropic", "google-gemini-cli", "openai", "zai"]);
 
 function sanitizeModelHeaders(
   headers: unknown,

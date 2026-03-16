@@ -24,6 +24,7 @@ export type NormalizedPluginsConfig = {
 };
 
 export const BUNDLED_ENABLED_BY_DEFAULT = new Set<string>([
+  "anthropic",
   "byteplus",
   "cloudflare-ai-gateway",
   "device-pair",
@@ -38,6 +39,7 @@ export const BUNDLED_ENABLED_BY_DEFAULT = new Set<string>([
   "moonshot",
   "nvidia",
   "ollama",
+  "openai",
   "openai-codex",
   "opencode",
   "opencode-go",
