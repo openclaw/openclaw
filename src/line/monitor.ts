@@ -285,7 +285,7 @@ export async function monitorLineProvider(
   });
 
   // Register HTTP webhook handler
-  const normalizedPath = normalizePluginHttpPath(webhookPath, "/line/webhook") ?? "/line/webhook";
+  const normalizedPath = (normalizePluginHttpPath(webhookPath, "/line/webhook") ?? "/line/webhook").toLowerCase();
   const unregisterHttp = registerPluginHttpRoute({
     path: normalizedPath,
     auth: "plugin",
