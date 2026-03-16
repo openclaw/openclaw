@@ -3,18 +3,11 @@ import { configureClient } from "@tloncorp/api";
 import type {
   ChannelOutboundAdapter,
   ChannelPlugin,
-  ChannelSetupInput,
   OpenClawConfig,
 } from "openclaw/plugin-sdk/tlon";
-import {
-  applyAccountNameToChannelSection,
-  DEFAULT_ACCOUNT_ID,
-  normalizeAccountId,
-} from "openclaw/plugin-sdk/tlon";
-import { buildTlonAccountFields } from "./account-fields.js";
 import { tlonChannelConfigSchema } from "./config-schema.js";
 import { monitorTlonProvider } from "./monitor/index.js";
-import { tlonOnboardingAdapter } from "./onboarding.js";
+import { tlonSetupAdapter, tlonSetupWizard } from "./setup-surface.js";
 import { formatTargetHint, normalizeShip, parseTlonTarget } from "./targets.js";
 import { resolveTlonAccount, listTlonAccountIds } from "./types.js";
 import { authenticate } from "./urbit/auth.js";
@@ -88,70 +81,6 @@ async function createHttpPokeApi(params: {
 }
 
 const TLON_CHANNEL_ID = "tlon" as const;
-
-type TlonSetupInput = ChannelSetupInput & {
-  ship?: string;
-  url?: string;
-  code?: string;
-  allowPrivateNetwork?: boolean;
-  groupChannels?: string[];
-  dmAllowlist?: string[];
-  autoDiscoverChannels?: boolean;
-  ownerShip?: string;
-};
-
-function applyTlonSetupConfig(params: {
-  cfg: OpenClawConfig;
-  accountId: string;
-  input: TlonSetupInput;
-}): OpenClawConfig {
-  const { cfg, accountId, input } = params;
-  const useDefault = accountId === DEFAULT_ACCOUNT_ID;
-  const namedConfig = applyAccountNameToChannelSection({
-    cfg,
-    channelKey: "tlon",
-    accountId,
-    name: input.name,
-  });
-  const base = namedConfig.channels?.tlon ?? {};
-
-  const payload = buildTlonAccountFields(input);
-
-  if (useDefault) {
-    return {
-      ...namedConfig,
-      channels: {
-        ...namedConfig.channels,
-        tlon: {
-          ...base,
-          enabled: true,
-          ...payload,
-        },
-      },
-    };
-  }
-
-  return {
-    ...namedConfig,
-    channels: {
-      ...namedConfig.channels,
-      tlon: {
-        ...base,
-        enabled: base.enabled ?? true,
-        accounts: {
-          ...(base as { accounts?: Record<string, unknown> }).accounts,
-          [accountId]: {
-            ...(base as { accounts?: Record<string, Record<string, unknown>> }).accounts?.[
-              accountId
-            ],
-            enabled: true,
-            ...payload,
-          },
-        },
-      },
-    },
-  };
-}
 
 type ResolvedTlonAccount = ReturnType<typeof resolveTlonAccount>;
 type ConfiguredTlonAccount = ResolvedTlonAccount & {
@@ -296,7 +225,8 @@ export const tlonPlugin: ChannelPlugin = {
     reply: true,
     threads: true,
   },
-  onboarding: tlonOnboardingAdapter,
+  setup: tlonSetupAdapter,
+  setupWizard: tlonSetupWizard,
   reload: { configPrefixes: ["channels.tlon"] },
   configSchema: tlonChannelConfigSchema,
   config: {
@@ -373,39 +303,6 @@ export const tlonPlugin: ChannelPlugin = {
       ship: account.ship,
       url: account.url,
     }),
-  },
-  setup: {
-    resolveAccountId: ({ accountId }) => normalizeAccountId(accountId),
-    applyAccountName: ({ cfg, accountId, name }) =>
-      applyAccountNameToChannelSection({
-        cfg: cfg,
-        channelKey: "tlon",
-        accountId,
-        name,
-      }),
-    validateInput: ({ cfg, accountId, input }) => {
-      const setupInput = input as TlonSetupInput;
-      const resolved = resolveTlonAccount(cfg, accountId ?? undefined);
-      const ship = setupInput.ship?.trim() || resolved.ship;
-      const url = setupInput.url?.trim() || resolved.url;
-      const code = setupInput.code?.trim() || resolved.code;
-      if (!ship) {
-        return "Tlon requires --ship.";
-      }
-      if (!url) {
-        return "Tlon requires --url.";
-      }
-      if (!code) {
-        return "Tlon requires --code.";
-      }
-      return null;
-    },
-    applyAccountConfig: ({ cfg, accountId, input }) =>
-      applyTlonSetupConfig({
-        cfg: cfg,
-        accountId,
-        input: input as TlonSetupInput,
-      }),
   },
   messaging: {
     normalizeTarget: (target) => {
