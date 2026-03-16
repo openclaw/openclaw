@@ -246,17 +246,22 @@ function hasChannelDataPayload(payload: ReplyPayload): boolean {
   return Boolean(payload.channelData && Object.keys(payload.channelData).length > 0);
 }
 
+function hasInteractivePayload(payload: ReplyPayload): boolean {
+  return (payload.interactive?.blocks.length ?? 0) > 0;
+}
+
 function normalizePayloadForChannelDelivery(
   payload: ReplyPayload,
   channelId: string,
 ): ReplyPayload | null {
   const hasMedia = hasMediaPayload(payload);
   const hasChannelData = hasChannelDataPayload(payload);
+  const hasInteractive = hasInteractivePayload(payload);
   const rawText = typeof payload.text === "string" ? payload.text : "";
   const normalizedText =
     channelId === "whatsapp" ? rawText.replace(/^(?:[ \t]*\r?\n)+/, "") : rawText;
   if (!normalizedText.trim()) {
-    if (!hasMedia && !hasChannelData) {
+    if (!hasMedia && !hasInteractive && !hasChannelData) {
       return null;
     }
     return {
@@ -307,6 +312,7 @@ function buildPayloadSummary(payload: ReplyPayload): NormalizedOutboundPayload {
   return {
     text: payload.text ?? "",
     mediaUrls: payload.mediaUrls ?? (payload.mediaUrl ? [payload.mediaUrl] : []),
+    interactive: payload.interactive,
     channelData: payload.channelData,
   };
 }
@@ -705,7 +711,10 @@ async function deliverOutboundPayloadsCore(
         threadId: params.threadId ?? undefined,
         forceDocument: params.forceDocument,
       };
-      if (handler.sendPayload && effectivePayload.channelData) {
+      if (
+        handler.sendPayload &&
+        (effectivePayload.channelData || hasInteractivePayload(effectivePayload))
+      ) {
         const delivery = await handler.sendPayload(effectivePayload, sendOverrides);
         results.push(delivery);
         emitMessageSent({
