@@ -61,8 +61,13 @@ export const MESSAGE_ACTION_TARGET_MODE: Record<ChannelMessageActionName, Messag
   };
 
 const ACTION_TARGET_ALIASES: Partial<Record<ChannelMessageActionName, string[]>> = {
+  read: ["messageId"],
   unsend: ["messageId"],
   edit: ["messageId"],
+  pin: ["messageId"],
+  unpin: ["messageId"],
+  "list-pins": ["chatId"],
+  "channel-info": ["chatId"],
   react: ["chatGuid", "chatIdentifier", "chatId"],
   renameGroup: ["chatGuid", "chatIdentifier", "chatId"],
   setGroupIcon: ["chatGuid", "chatIdentifier", "chatId"],

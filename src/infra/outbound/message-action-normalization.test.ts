@@ -115,6 +115,28 @@ describe("normalizeMessageActionInput", () => {
     expect("to" in normalized).toBe(false);
   });
 
+  it("keeps Feishu message and chat aliases without forcing canonical targets", () => {
+    const pin = normalizeMessageActionInput({
+      action: "pin",
+      args: {
+        messageId: "om_123",
+      },
+    });
+    const listPins = normalizeMessageActionInput({
+      action: "list-pins",
+      args: {
+        chatId: "oc_123",
+      },
+    });
+
+    expect(pin.messageId).toBe("om_123");
+    expect("target" in pin).toBe(false);
+    expect("to" in pin).toBe(false);
+    expect(listPins.chatId).toBe("oc_123");
+    expect("target" in listPins).toBe(false);
+    expect("to" in listPins).toBe(false);
+  });
+
   it("maps legacy channelId inputs through canonical target for channel-id actions", () => {
     const normalized = normalizeMessageActionInput({
       action: "channel-info",
