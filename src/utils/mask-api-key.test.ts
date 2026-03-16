@@ -7,14 +7,16 @@ describe("maskApiKey", () => {
     expect(maskApiKey("   ")).toBe("missing");
   });
 
-  it("masks short and medium values without returning raw secrets", () => {
-    expect(maskApiKey(" abcdefghijklmnop ")).toBe("ab...op");
-    expect(maskApiKey(" short ")).toBe("s...t");
-    expect(maskApiKey(" a ")).toBe("a...a");
-    expect(maskApiKey(" ab ")).toBe("a...b");
+  it("masks short keys without revealing any characters", () => {
+    expect(maskApiKey(" short ")).toBe("****");
+    expect(maskApiKey(" a ")).toBe("****");
+    expect(maskApiKey(" ab ")).toBe("****");
+    expect(maskApiKey("12345678")).toBe("****");
   });
 
-  it("masks long values with first and last 8 chars", () => {
-    expect(maskApiKey("1234567890abcdefghijklmnop")).toBe("12345678...ijklmnop"); // pragma: allowlist secret
+  it("masks longer keys with only first 4 characters", () => {
+    expect(maskApiKey("123456789")).toBe("1234****");
+    expect(maskApiKey(" abcdefghijklmnop ")).toBe("abcd****");
+    expect(maskApiKey("sk-ant-api03-abcdefghijklmnop")).toBe("sk-a****");
   });
 });
