@@ -33,7 +33,6 @@ export type GatewayCredentialPlan = {
   remoteMode: boolean;
   remoteUrlConfigured: boolean;
   tailscaleRemoteExposure: boolean;
-  remoteEnabled: boolean;
   remoteConfiguredSurface: boolean;
   remoteTokenFallbackActive: boolean;
   remoteTokenActive: boolean;
@@ -187,7 +186,6 @@ export function createGatewayCredentialPlan(params: {
   const remoteUrlConfigured = Boolean(trimToUndefined(remote?.url));
   const tailscaleRemoteExposure =
     gateway?.tailscale?.mode === "serve" || gateway?.tailscale?.mode === "funnel";
-  const remoteEnabled = remote?.enabled !== false;
   const remoteConfiguredSurface = remoteMode || remoteUrlConfigured || tailscaleRemoteExposure;
   const remoteTokenFallbackActive = localTokenCanWin && !envToken && !localToken.configured;
   const remotePasswordFallbackActive = !envPassword && !localPassword.configured && passwordCanWin;
@@ -209,12 +207,10 @@ export function createGatewayCredentialPlan(params: {
     remoteMode,
     remoteUrlConfigured,
     tailscaleRemoteExposure,
-    remoteEnabled,
     remoteConfiguredSurface,
     remoteTokenFallbackActive,
-    remoteTokenActive: remoteEnabled && (remoteConfiguredSurface || remoteTokenFallbackActive),
+    remoteTokenActive: remoteConfiguredSurface || remoteTokenFallbackActive,
     remotePasswordFallbackActive,
-    remotePasswordActive:
-      remoteEnabled && (remoteConfiguredSurface || remotePasswordFallbackActive),
+    remotePasswordActive: remoteConfiguredSurface || remotePasswordFallbackActive,
   };
 }
