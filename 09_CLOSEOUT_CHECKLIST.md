@@ -145,10 +145,29 @@
 - `pnpm -s vitest run src/acp/control-plane/manager.test.ts -t "gates initializeSession on frozen M12 route law and persists the minimal route envelope"`
   - `Test Files 1 passed (1)`
   - `Tests 1 passed | 49 skipped (50)`
+- `pnpm build`
+  - `exit code 0`
+  - existing non-fatal telemetry missing-export warnings observed during build
 
 ### Actual blockers to honest closeout
 
 - None.
+
+### Archive and continuity receipts (M14)
+
+- Where were artifacts archived:
+  - `examples/approval-boundary-bundle/`
+  - `07_HANDOVER_ADDENDUM.md`
+  - `08_DAILY_LOG.md`
+  - `09_CLOSEOUT_CHECKLIST.md`
+  - published branch history at `origin/cyborg/v2026.2.26-pr`
+- Recorded archive path:
+  - `examples/approval-boundary-bundle/`
+- Recorded final mission path:
+  - `/home/spryguy/openclaw-workspace/repos/openclaw` on `cyborg/v2026.2.26-pr` at `165e6d571b9e29080945fc6ad1b9121ec7d29386`
+- Can the next operator rehydrate from artifacts alone:
+  - `YES`
+  - basis: schema contracts + clean/known-bad bundle + proof test + handoff/checklist receipts are all in-repo and versioned
 
 ### Closure decision (M14)
 

@@ -367,3 +367,61 @@ Test Files  1 passed (1) | Tests 1 passed | 49 skipped (50)
 ### One next action
 
 - Run manager closeout review on M14 using this addendum, `09_CLOSEOUT_CHECKLIST.md`, and the published M14 seam SHAs as the authoritative evidence set.
+
+## Session 2026-03-16 M14 strict archival close check
+
+### Final repo-state receipt
+
+- Branch: `cyborg/v2026.2.26-pr`
+- Final closeout SHA: `165e6d571b9e29080945fc6ad1b9121ec7d29386`
+- Final state receipt:
+
+```text
+## cyborg/v2026.2.26-pr...origin/cyborg/v2026.2.26-pr
+165e6d571b9e29080945fc6ad1b9121ec7d29386
+165e6d571b9e29080945fc6ad1b9121ec7d29386
+```
+
+### Archive and continuity receipts
+
+- Where were artifacts archived:
+  - in-repo artifact archive bundle at `examples/approval-boundary-bundle/`
+  - in-repo mission closeout artifacts at `07_HANDOVER_ADDENDUM.md`, `08_DAILY_LOG.md`, and `09_CLOSEOUT_CHECKLIST.md`
+  - published branch history on `origin/cyborg/v2026.2.26-pr`
+- Recorded archive path:
+  - `examples/approval-boundary-bundle/`
+- Recorded final mission path:
+  - `/home/spryguy/openclaw-workspace/repos/openclaw` on branch `cyborg/v2026.2.26-pr` at SHA `165e6d571b9e29080945fc6ad1b9121ec7d29386`
+- Can next operator rehydrate from artifacts alone:
+  - `YES`
+  - evidence: schemas + clean/known-bad bundle + proof test + closeout docs are all committed in the same branch history
+
+### Final validation receipt addition
+
+#### Build receipt
+
+Command run:
+
+```text
+pnpm build
+```
+
+Result summary:
+
+```text
+build completed with exit code 0
+non-fatal existing telemetry missing-export warnings printed during build
+```
+
+### Proof package completeness check
+
+- startup receipt: `YES` (recorded in this file under M14 session start state)
+- validation receipts: `YES` (recorded in this file for proof test, seam tests, and build)
+- key output files: `YES` (recorded in this file under files created/updated)
+- final summary: `YES` (recorded in this file and in `09_CLOSEOUT_CHECKLIST.md` M14 section)
+- final handover addendum: `YES` (`07_HANDOVER_ADDENDUM.md`)
+- branch and SHA proof: `YES` (recorded in this file under final repo-state receipt)
+
+### One next action
+
+- Manager performs strict archival close signoff for M14 using this addendum plus `09_CLOSEOUT_CHECKLIST.md`.

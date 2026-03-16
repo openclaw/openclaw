@@ -27,3 +27,29 @@
   - Vitest: `pnpm exec vitest run --config vitest.unit.config.ts test/m12-route-law-proof.test.ts` passed with `1` file and `4` tests
 - Verified truth: M12 now freezes canonical `child` / `sibling` / `escalation` / `cousin` / `illegal` route classes, cousin-ticket mediation law, artifact-return obligations, and deterministic reject receipts without redefining M11 truth.
 - Next action: let M13 consume these M12 artifacts as the only allowed kinship and cousin-ticket contract surface for orchestration work.
+
+## 2026-03-16 UTC - M14 closeout and archival continuity
+
+- Start state: branch `cyborg/v2026.2.26-pr`, SHA `165e6d571b9e29080945fc6ad1b9121ec7d29386`, clean/synced with `origin`.
+- Verified M14 deliverables exist:
+  - `schemas/artifact-profile.schema.json`
+  - `schemas/approval-checkpoint.schema.json`
+  - `docs/architecture/artifact-contract.md`
+  - `docs/architecture/approval-await-gateway.md`
+  - `docs/architecture/mcp-tool-boundary.md`
+  - `docs/architecture/approval-trace-model.md`
+  - `examples/approval-boundary-bundle/minimal-clean/*`
+  - `examples/approval-boundary-bundle/known-bad/*`
+  - `test/m14-approval-boundary-proof.test.ts`
+- Validation receipts from final closeout state:
+  - `pnpm -s vitest run test/m14-approval-boundary-proof.test.ts` passed (`1` file, `3` tests)
+  - `pnpm -s vitest run src/acp/translator.session-rate-limit.test.ts` passed (`1` file, `20` tests)
+  - `pnpm -s vitest run src/auto-reply/reply/commands-acp.test.ts -t "updates ACP permissions via /acp permissions using the canonical approval key"` passed (`1` file, `1` test, `22` skipped)
+  - `pnpm -s vitest run src/acp/translator.cancel-scoping.test.ts` passed (`1` file, `8` tests)
+  - `pnpm -s vitest run src/acp/control-plane/manager.test.ts -t "gates initializeSession on frozen M12 route law and persists the minimal route envelope"` passed (`1` file, `1` test, `49` skipped)
+  - `pnpm build` exited `0` with known non-fatal telemetry missing-export warnings
+- Archive and continuity truth:
+  - recorded archive path: `examples/approval-boundary-bundle/`
+  - recorded final mission path: `/home/spryguy/openclaw-workspace/repos/openclaw` at `cyborg/v2026.2.26-pr#165e6d571b9e29080945fc6ad1b9121ec7d29386`
+  - rehydrate from artifacts alone: `YES` (schemas + examples + proof test + closeout addendum/checklist committed together)
+- Next action: manager archival close review and signoff for M14.
