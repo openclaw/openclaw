@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { ProviderPlugin } from "../../src/plugins/types.js";
+import { createCapturedPluginRegistration } from "../../src/test-utils/plugin-registration.js";
 import {
   createProviderUsageFetch,
   makeResponse,
@@ -8,22 +9,32 @@ import googlePlugin from "./index.js";
 
 function registerGooglePlugin(): {
   provider: ProviderPlugin;
+  webSearchProvider: {
+    id: string;
+    envVars: string[];
+    label: string;
+  } | null;
   webSearchProviderRegistered: boolean;
 } {
-  let provider: ProviderPlugin | undefined;
-  let webSearchProviderRegistered = false;
-  googlePlugin.register({
-    registerProvider(nextProvider: ProviderPlugin) {
-      provider = nextProvider;
-    },
-    registerWebSearchProvider() {
-      webSearchProviderRegistered = true;
-    },
-  } as never);
+  const captured = createCapturedPluginRegistration();
+  googlePlugin.register(captured.api);
+  const provider = captured.providers[0];
   if (!provider) {
     throw new Error("provider registration missing");
   }
-  return { provider, webSearchProviderRegistered };
+  const webSearchProvider = captured.webSearchProviders[0] ?? null;
+  return {
+    provider,
+    webSearchProviderRegistered: webSearchProvider !== null,
+    webSearchProvider:
+      webSearchProvider === null
+        ? null
+        : {
+            id: webSearchProvider.id,
+            envVars: webSearchProvider.envVars,
+            label: webSearchProvider.label,
+          },
+  };
 }
 
 describe("google plugin", () => {
@@ -32,6 +43,11 @@ describe("google plugin", () => {
 
     expect(result.provider.id).toBe("google-gemini-cli");
     expect(result.webSearchProviderRegistered).toBe(true);
+    expect(result.webSearchProvider).toMatchObject({
+      id: "gemini",
+      label: "Gemini (Google Search)",
+      envVars: ["GEMINI_API_KEY"],
+    });
   });
 
   it("owns gemini 3.1 forward-compat resolution", () => {
