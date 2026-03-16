@@ -71,6 +71,19 @@ cp scripts/telegram-e2e/.env.example scripts/telegram-e2e/.env.local
 
 Fill `scripts/telegram-e2e/.env.local` with your real values.
 
+## AI/operator handoff (credentials continuity)
+
+Use one source of truth in your main checkout, then copy into each worktree.
+
+1. Keep local-only credentials in main checkout:
+   - `scripts/telegram-e2e/.env.local`
+   - `scripts/telegram-e2e/tmp/userbot.session`
+2. Never commit or print raw secrets (`TELEGRAM_API_HASH`, `TG_BOT_TOKEN`, session contents).
+3. For every new worktree, run:
+   - `bash scripts/bootstrap-worktree-telegram.sh`
+4. Smoke check from that worktree:
+   - `scripts/telegram-e2e/userbot-send-live.sh --chat "<chat-id-or-username>" --text "handoff smoke"`
+
 ## Required values and anchors
 
 `scripts/telegram-e2e/.env.local` keys:

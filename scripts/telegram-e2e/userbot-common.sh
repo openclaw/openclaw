@@ -9,6 +9,21 @@ readonly USERBOT_COMMON_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 readonly USERBOT_CANONICAL_SESSION="${USERBOT_COMMON_DIR}/tmp/userbot.session"
 readonly USERBOT_LEGACY_SESSION="${USERBOT_COMMON_DIR}/userbot.session"
 
+require_userbot_credentials() {
+  local api_id="${TELEGRAM_API_ID:-}"
+  local api_hash="${TELEGRAM_API_HASH:-}"
+
+  if [[ -z "${api_id}" || -z "${api_hash}" ]]; then
+    echo "E_MISSING_CREDS: TELEGRAM_API_ID and TELEGRAM_API_HASH are required." >&2
+    return 10
+  fi
+
+  if ! [[ "${api_id}" =~ ^[0-9]+$ ]] || [[ "${api_id}" == "0" ]]; then
+    echo "E_MISSING_CREDS: TELEGRAM_API_ID must be a positive integer." >&2
+    return 10
+  fi
+}
+
 load_userbot_env_if_present() {
   local env_local="${USERBOT_COMMON_DIR}/.env.local"
   if [[ -f "${env_local}" ]]; then
@@ -84,6 +99,7 @@ run_userbot_precheck() {
   local python_bin="$1"
   local session_path="$2"
   local chat="$3"
+  require_userbot_credentials
 
   "${python_bin}" "${USERBOT_COMMON_DIR}/userbot_precheck.py" \
     --api-id "${TELEGRAM_API_ID:-}" \
@@ -154,6 +170,7 @@ USAGE
   fi
 
   load_userbot_env_if_present
+  require_userbot_credentials
   local python_bin
   python_bin="$(ensure_userbot_python)"
   local session_path
