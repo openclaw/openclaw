@@ -381,6 +381,11 @@ const TARGET_KEYS = [
   "agents.defaults.compaction.identifierPolicy",
   "agents.defaults.compaction.identifierInstructions",
   "agents.defaults.compaction.recentTurnsPreserve",
+  "agents.defaults.compaction.guard",
+  "agents.defaults.compaction.guard.enabled",
+  "agents.defaults.compaction.guard.maxCompactionsPerWindow",
+  "agents.defaults.compaction.guard.windowMinutes",
+  "agents.defaults.compaction.guard.escalation",
   "agents.defaults.compaction.qualityGuard",
   "agents.defaults.compaction.qualityGuard.enabled",
   "agents.defaults.compaction.qualityGuard.maxRetries",
@@ -442,6 +447,7 @@ const ENUM_EXPECTATIONS: Record<string, string[]> = {
   "cli.banner.taglineMode": ['"random"', '"default"', '"off"'],
   "update.channel": ['"stable"', '"beta"', '"dev"'],
   "agents.defaults.compaction.mode": ['"default"', '"safeguard"'],
+  "agents.defaults.compaction.guard.escalation": ['"recommend-reset"'],
   "agents.defaults.compaction.identifierPolicy": ['"strict"', '"off"', '"custom"'],
 };
 
@@ -803,7 +809,7 @@ describe("config help copy quality", () => {
     expect(/cooldown|backoff|retry/i.test(authCooldowns)).toBe(true);
   });
 
-  it("documents agent compaction safeguards and memory flush behavior", () => {
+  it("documents agent compaction safeguards, guard scaffolding, and memory flush behavior", () => {
     const mode = FIELD_HELP["agents.defaults.compaction.mode"];
     expect(mode.includes('"default"')).toBe(true);
     expect(mode.includes('"safeguard"')).toBe(true);
@@ -819,6 +825,14 @@ describe("config help copy quality", () => {
     const recentTurnsPreserve = FIELD_HELP["agents.defaults.compaction.recentTurnsPreserve"];
     expect(/recent.*turn|verbatim/i.test(recentTurnsPreserve)).toBe(true);
     expect(/default:\s*3/i.test(recentTurnsPreserve)).toBe(true);
+
+    const guard = FIELD_HELP["agents.defaults.compaction.guard"];
+    expect(/future|reserved|no runtime effect|does not change runtime behavior/i.test(guard)).toBe(
+      true,
+    );
+
+    const guardEscalation = FIELD_HELP["agents.defaults.compaction.guard.escalation"];
+    expect(guardEscalation.includes('"recommend-reset"')).toBe(true);
 
     const postCompactionSections = FIELD_HELP["agents.defaults.compaction.postCompactionSections"];
     expect(/Session Startup|Red Lines/i.test(postCompactionSections)).toBe(true);

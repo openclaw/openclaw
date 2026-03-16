@@ -296,11 +296,22 @@ export type AgentDefaultsConfig = {
 export type AgentCompactionMode = "default" | "safeguard";
 export type AgentCompactionPostIndexSyncMode = "off" | "async" | "await";
 export type AgentCompactionIdentifierPolicy = "strict" | "off" | "custom";
+export type AgentCompactionGuardEscalation = "recommend-reset";
 export type AgentCompactionQualityGuardConfig = {
   /** Enable compaction summary quality audits and regeneration retries. Default: false. */
   enabled?: boolean;
   /** Maximum regeneration retries after a failed quality audit. Default: 1 when enabled. */
   maxRetries?: number;
+};
+export type AgentCompactionGuardConfig = {
+  /** Enable reserved repeated-compaction guard scaffolding. Default: false. */
+  enabled?: boolean;
+  /** Maximum compaction events allowed in the rolling guard window. */
+  maxCompactionsPerWindow?: number;
+  /** Rolling time window in minutes used by the reserved guard. */
+  windowMinutes?: number;
+  /** Escalation mode reserved for future guard trips. */
+  escalation?: AgentCompactionGuardEscalation;
 };
 
 export type AgentCompactionConfig = {
@@ -318,6 +329,8 @@ export type AgentCompactionConfig = {
   customInstructions?: string;
   /** Preserve this many most-recent user/assistant turns verbatim in compaction summary context. */
   recentTurnsPreserve?: number;
+  /** Reserved repeated-compaction guard scaffolding. */
+  guard?: AgentCompactionGuardConfig;
   /** Identifier-preservation instruction policy for compaction summaries. */
   identifierPolicy?: AgentCompactionIdentifierPolicy;
   /** Custom identifier-preservation instructions used when identifierPolicy is "custom". */
