@@ -1,3 +1,5 @@
+import { existsSync } from "node:fs";
+import { resolveMemorySearchConfig } from "../agents/memory-search.js";
 import { hasPotentialConfiguredChannels } from "../channels/config-presence.js";
 import { resolveCommandSecretRefsViaGateway } from "../cli/command-secret-gateway.js";
 import { getStatusCommandSecretTargetIds } from "../cli/command-secret-targets.js";
@@ -32,6 +34,19 @@ type MemoryPluginStatus = {
   slot: string | null;
   reason?: string;
 };
+
+function hasExplicitMemorySearchConfig(cfg: OpenClawConfig, agentId: string): boolean {
+  if (
+    cfg.agents?.defaults &&
+    Object.prototype.hasOwnProperty.call(cfg.agents.defaults, "memorySearch")
+  ) {
+    return true;
+  }
+  const agents = Array.isArray(cfg.agents?.list) ? cfg.agents.list : [];
+  return agents.some(
+    (agent) => agent?.id === agentId && Object.prototype.hasOwnProperty.call(agent, "memorySearch"),
+  );
+}
 
 type DeferredResult<T> = { ok: true; value: T } | { ok: false; error: unknown };
 
@@ -190,6 +205,15 @@ async function resolveMemoryStatusSnapshot(params: {
     return null;
   }
   const agentId = agentStatus.defaultId ?? "main";
+  const resolvedMemory = resolveMemorySearchConfig(cfg, agentId);
+  if (!resolvedMemory) {
+    return null;
+  }
+  const shouldInspectStore =
+    hasExplicitMemorySearchConfig(cfg, agentId) || existsSync(resolvedMemory.store.path);
+  if (!shouldInspectStore) {
+    return null;
+  }
   const { getMemorySearchManager } = await loadStatusScanDepsRuntimeModule();
   const { manager } = await getMemorySearchManager({ cfg, agentId, purpose: "status" });
   if (!manager) {
