@@ -210,22 +210,28 @@ export async function ensureSkillSnapshot(params: {
     systemSent = true;
   }
 
-  const skillsSnapshot = shouldRefreshSnapshot
-    ? buildWorkspaceSkillSnapshot(workspaceDir, {
-        config: cfg,
-        skillFilter,
-        eligibility: { remote: remoteEligibility },
-        snapshotVersion,
-      })
-    : (nextEntry?.skillsSnapshot ??
-      (isFirstTurnInSession
-        ? undefined
-        : buildWorkspaceSkillSnapshot(workspaceDir, {
+  // When shouldRefreshSnapshot is true, we need a fresh snapshot. But if the first-turn
+  // block above already built one with the current snapshotVersion (detectable via version
+  // equality), reuse it to avoid scanning the skills directory twice per first turn.
+  const skillsSnapshot =
+    shouldRefreshSnapshot && nextEntry?.skillsSnapshot?.version === snapshotVersion
+      ? nextEntry.skillsSnapshot
+      : shouldRefreshSnapshot
+        ? buildWorkspaceSkillSnapshot(workspaceDir, {
             config: cfg,
             skillFilter,
             eligibility: { remote: remoteEligibility },
             snapshotVersion,
-          })));
+          })
+        : (nextEntry?.skillsSnapshot ??
+          (isFirstTurnInSession
+            ? undefined
+            : buildWorkspaceSkillSnapshot(workspaceDir, {
+                config: cfg,
+                skillFilter,
+                eligibility: { remote: remoteEligibility },
+                snapshotVersion,
+              })));
   if (
     skillsSnapshot &&
     sessionStore &&

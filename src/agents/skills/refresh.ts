@@ -24,7 +24,12 @@ const log = createSubsystemLogger("gateway/skills");
 const listeners = new Set<(event: SkillsChangeEvent) => void>();
 const workspaceVersions = new Map<string, number>();
 const watchers = new Map<string, SkillsWatchState>();
-let globalVersion = 0;
+// Initialize to Date.now() so each process restart produces a unique starting version.
+// This ensures any snapshot that was cached in a previous run (version = previousStartupTime)
+// is always considered stale after a restart and gets rebuilt on the next agent turn.
+// Without this, globalVersion resets to 0 after every restart and snapshots built with
+// version=0 would never be invalidated (shouldRefresh would see 0 === 0 and skip the rebuild).
+let globalVersion = Date.now();
 
 export const DEFAULT_SKILLS_WATCH_IGNORED: RegExp[] = [
   /(^|[\\/])\.git([\\/]|$)/,
