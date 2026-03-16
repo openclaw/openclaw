@@ -75,7 +75,7 @@ export async function listTeamsByName(token: string, query: string): Promise<Gra
 }
 
 export async function getTeamById(token: string, teamId: string): Promise<GraphGroup | null> {
-  const path = `/groups/${encodeURIComponent(teamId)}?$select=id,displayName`;
+  const path = `/teams/${encodeURIComponent(teamId)}?$select=id,displayName`;
   return await fetchGraphJson<GraphGroup>({ token, path });
 }
 
