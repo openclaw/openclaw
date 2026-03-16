@@ -334,7 +334,9 @@ Give code-guard:
 
 Wait for code-guard to signal completion.
 
-**Step 3.3 — Spawn qa-runner**
+**Step 3.3 — Spawn qa-runner (MANDATORY — do NOT skip)**
+
+**HARD GATE:** The PR MUST NOT be opened until qa-runner has passed. This is the four-eyes principle — code-guard does the cherry-picking, qa-runner independently validates. Even if you already ran `pnpm build` manually during conflict resolution, qa-runner must still run as the independent second reviewer.
 
 Spawn qa-runner on the sync branch. Instruct it to:
 
@@ -344,6 +346,8 @@ Spawn qa-runner on the sync branch. Instruct it to:
 4. For `ui-inspiration` phase: validation is relaxed — build must pass but test failures from incomplete integration are acceptable
 
 If failures: re-engage code-guard to fix, then re-run qa-runner. Loop until green.
+
+**Only proceed to Step 3.4 after qa-runner reports PASS.**
 
 **Step 3.4 — Push branch and open PR**
 

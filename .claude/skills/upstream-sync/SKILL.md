@@ -82,6 +82,7 @@ You: "/upstream-sync v2026.3.12"
     │   │   └── Report pass/fail ─────────────────────────────┘
     │   │
     │   │   (loop: if qa fails → code-guard fixes → qa reruns)
+    │   │   ← HARD GATE: PR cannot open until qa-runner passes (four-eyes)
     │   │
     │   ├── Push branch, open PR, update sync-state.json
     │   ├── STOP — present PR to user for review
