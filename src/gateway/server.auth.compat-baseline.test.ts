@@ -174,7 +174,9 @@ describe("gateway auth compatibility baseline", () => {
         role: "operator",
         scopes: ["operator.admin"],
       });
-      expect(rotated?.token).toBeTruthy();
+      expect(rotated.ok).toBe(true);
+      const rotatedToken = rotated.ok ? rotated.entry.token : "";
+      expect(rotatedToken).toBeTruthy();
 
       const ws = await openWs(port);
       try {
@@ -182,7 +184,7 @@ describe("gateway auth compatibility baseline", () => {
           skipDefaultAuth: true,
           client: { ...BACKEND_GATEWAY_CLIENT },
           deviceIdentityPath: identityPath,
-          deviceToken: String(rotated?.token ?? ""),
+          deviceToken: rotatedToken,
           scopes: ["operator.admin"],
         });
         expect(res.ok).toBe(true);

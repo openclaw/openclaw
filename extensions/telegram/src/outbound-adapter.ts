@@ -8,7 +8,9 @@ import {
   resolveOutboundSendDep,
   type OutboundSendDeps,
 } from "../../../src/infra/outbound/send-deps.js";
+import { resolveInteractiveTextFallback } from "../../../src/interactive/payload.js";
 import type { TelegramInlineButtons } from "./button-types.js";
+import { resolveTelegramInlineButtons } from "./button-types.js";
 import { markdownToTelegramHtmlChunks } from "./format.js";
 import { parseTelegramReplyToMessageId, parseTelegramThreadId } from "./outbound-params.js";
 import { sendMessageTelegram } from "./send.js";
@@ -59,8 +61,16 @@ export async function sendTelegramPayloadMessages(params: {
     | undefined;
   const quoteText =
     typeof telegramData?.quoteText === "string" ? telegramData.quoteText : undefined;
-  const text = params.payload.text ?? "";
+  const text =
+    resolveInteractiveTextFallback({
+      text: params.payload.text,
+      interactive: params.payload.interactive,
+    }) ?? "";
   const mediaUrls = resolvePayloadMediaUrls(params.payload);
+  const buttons = resolveTelegramInlineButtons({
+    buttons: telegramData?.buttons,
+    interactive: params.payload.interactive,
+  });
   const payloadOpts = {
     ...params.baseOpts,
     quoteText,
@@ -69,7 +79,7 @@ export async function sendTelegramPayloadMessages(params: {
   if (mediaUrls.length === 0) {
     return await params.send(params.to, text, {
       ...payloadOpts,
-      buttons: telegramData?.buttons,
+      buttons,
     });
   }
 
@@ -81,7 +91,7 @@ export async function sendTelegramPayloadMessages(params: {
       await params.send(params.to, text, {
         ...payloadOpts,
         mediaUrl,
-        ...(isFirst ? { buttons: telegramData?.buttons } : {}),
+        ...(isFirst ? { buttons } : {}),
       }),
   });
   return finalResult ?? { messageId: "unknown", chatId: params.to };
@@ -141,6 +151,7 @@ export const telegramOutbound: ChannelOutboundAdapter = {
     deps,
     replyToId,
     threadId,
+    forceDocument,
   }) => {
     const { send, baseOpts } = resolveTelegramSendContext({
       cfg,
@@ -156,6 +167,7 @@ export const telegramOutbound: ChannelOutboundAdapter = {
       baseOpts: {
         ...baseOpts,
         mediaLocalRoots,
+        forceDocument: forceDocument ?? false,
       },
     });
     return { channel: "telegram", ...result };

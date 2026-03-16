@@ -235,7 +235,7 @@ describe("executeSlashCommand directives", () => {
     const request = vi.fn(async (method: string, _payload?: unknown) => {
       if (method === "sessions.list") {
         return {
-          defaults: { model: "default-model" },
+          defaults: { modelProvider: "openai", model: "default-model" },
           sessions: [
             row("agent:main:main", {
               model: "gpt-4.1-mini",
@@ -280,6 +280,16 @@ describe("executeSlashCommand directives", () => {
       if (method === "models.list") {
         return {
           models: [{ id: "gpt-4.1-mini" }, { id: "gpt-4.1" }],
+  it("mirrors resolved provider-qualified model refs after /model changes", async () => {
+    const request = vi.fn(async (method: string, _payload?: unknown) => {
+      if (method === "sessions.patch") {
+        return {
+          ok: true,
+          key: "main",
+          resolved: {
+            modelProvider: "openai",
+            model: "gpt-5-mini",
+          },
         };
       }
       throw new Error(`unexpected method: ${method}`);
@@ -333,6 +343,17 @@ describe("executeSlashCommand directives", () => {
     expect(request).toHaveBeenNthCalledWith(1, "sessions.list", {});
     expect(request).toHaveBeenNthCalledWith(2, "models.list", {});
     expect(request).not.toHaveBeenCalledWith("sessions.patch", expect.anything());
+      "gpt-5-mini",
+    );
+
+    expect(request).toHaveBeenCalledWith("sessions.patch", {
+      key: "main",
+      model: "gpt-5-mini",
+    });
+    expect(result.sessionPatch?.modelOverride).toEqual({
+      kind: "qualified",
+      value: "openai/gpt-5-mini",
+    });
   });
 
   it("resolves the legacy main alias for /usage", async () => {

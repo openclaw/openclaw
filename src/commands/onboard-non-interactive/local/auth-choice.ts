@@ -1,14 +1,9 @@
-import { upsertAuthProfile } from "../../../agents/auth-profiles.js";
 import type { ApiKeyCredential } from "../../../agents/auth-profiles/types.js";
-import { normalizeProviderId } from "../../../agents/model-selection.js";
-import { parseDurationMs } from "../../../cli/parse-duration.js";
 import type { OpenClawConfig } from "../../../config/config.js";
 import type { SecretInput } from "../../../config/types.secrets.js";
 import type { RuntimeEnv } from "../../../runtime.js";
 import { resolveDefaultSecretProviderAlias } from "../../../secrets/ref-contract.js";
-import { normalizeSecretInput } from "../../../utils/normalize-secret-input.js";
 import { normalizeSecretInputModeInput } from "../../auth-choice.apply-helpers.js";
-import { buildTokenProfileId, validateAnthropicSetupToken } from "../../auth-token.js";
 import {
   applyAuthProfileConfig,
   applyCloudflareAiGatewayConfig,
@@ -177,61 +172,6 @@ export async function applyNonInteractiveAuthChoice(params: {
   });
   if (pluginProviderChoice !== undefined) {
     return pluginProviderChoice;
-  }
-
-  if (authChoice === "token") {
-    const providerRaw = opts.tokenProvider?.trim();
-    if (!providerRaw) {
-      runtime.error("Missing --token-provider for --auth-choice token.");
-      runtime.exit(1);
-      return null;
-    }
-    const provider = normalizeProviderId(providerRaw);
-    if (provider !== "anthropic") {
-      runtime.error("Only --token-provider anthropic is supported for --auth-choice token.");
-      runtime.exit(1);
-      return null;
-    }
-    const tokenRaw = normalizeSecretInput(opts.token);
-    if (!tokenRaw) {
-      runtime.error("Missing --token for --auth-choice token.");
-      runtime.exit(1);
-      return null;
-    }
-    const tokenError = validateAnthropicSetupToken(tokenRaw);
-    if (tokenError) {
-      runtime.error(tokenError);
-      runtime.exit(1);
-      return null;
-    }
-
-    let expires: number | undefined;
-    const expiresInRaw = opts.tokenExpiresIn?.trim();
-    if (expiresInRaw) {
-      try {
-        expires = Date.now() + parseDurationMs(expiresInRaw, { defaultUnit: "d" });
-      } catch (err) {
-        runtime.error(`Invalid --token-expires-in: ${String(err)}`);
-        runtime.exit(1);
-        return null;
-      }
-    }
-
-    const profileId = opts.tokenProfileId?.trim() || buildTokenProfileId({ provider, name: "" });
-    upsertAuthProfile({
-      profileId,
-      credential: {
-        type: "token",
-        provider,
-        token: tokenRaw.trim(),
-        ...(expires ? { expires } : {}),
-      },
-    });
-    return applyAuthProfileConfig(nextConfig, {
-      profileId,
-      provider,
-      mode: "token",
-    });
   }
 
   const simpleApiKeyChoice = await applySimpleNonInteractiveApiKeyChoice({
@@ -487,7 +427,6 @@ export async function applyNonInteractiveAuthChoice(params: {
   if (
     authChoice === "oauth" ||
     authChoice === "chutes" ||
-    authChoice === "openai-codex" ||
     authChoice === "qwen-portal" ||
     authChoice === "minimax-global-oauth" ||
     authChoice === "minimax-cn-oauth"

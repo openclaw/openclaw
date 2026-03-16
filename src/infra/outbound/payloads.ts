@@ -5,10 +5,17 @@ import {
   shouldSuppressReasoningPayload,
 } from "../../auto-reply/reply/reply-payloads.js";
 import type { ReplyPayload } from "../../auto-reply/types.js";
+import {
+  hasInteractiveReplyBlocks,
+  hasReplyChannelData,
+  hasReplyContent,
+  type InteractiveReply,
+} from "../../interactive/payload.js";
 
 export type NormalizedOutboundPayload = {
   text: string;
   mediaUrls: string[];
+  interactive?: InteractiveReply;
   channelData?: Record<string, unknown>;
 };
 
@@ -16,6 +23,7 @@ export type OutboundPayloadJson = {
   text: string;
   mediaUrl: string | null;
   mediaUrls?: string[];
+  interactive?: InteractiveReply;
   channelData?: Record<string, unknown>;
 };
 
@@ -89,15 +97,25 @@ export function normalizeOutboundPayloads(
   const normalizedPayloads: NormalizedOutboundPayload[] = [];
   for (const payload of normalizeReplyPayloadsForDelivery(payloads)) {
     const mediaUrls = payload.mediaUrls ?? (payload.mediaUrl ? [payload.mediaUrl] : []);
+    const interactive = payload.interactive;
     const channelData = payload.channelData;
-    const hasChannelData = Boolean(channelData && Object.keys(channelData).length > 0);
+    const hasChannelData = hasReplyChannelData(channelData);
+    const hasInteractive = hasInteractiveReplyBlocks(interactive);
     const text = payload.text ?? "";
-    if (!text && mediaUrls.length === 0 && !hasChannelData) {
+    if (
+      !hasReplyContent({
+        text,
+        mediaUrls,
+        interactive,
+        hasChannelData,
+      })
+    ) {
       continue;
     }
     normalizedPayloads.push({
       text,
       mediaUrls,
+      ...(hasInteractive ? { interactive } : {}),
       ...(hasChannelData ? { channelData } : {}),
     });
   }
@@ -113,6 +131,7 @@ export function normalizeOutboundPayloadsForJson(
       text: payload.text ?? "",
       mediaUrl: payload.mediaUrl ?? null,
       mediaUrls: payload.mediaUrls ?? (payload.mediaUrl ? [payload.mediaUrl] : undefined),
+      interactive: payload.interactive,
       channelData: payload.channelData,
     });
   }

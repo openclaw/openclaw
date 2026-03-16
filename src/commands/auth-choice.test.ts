@@ -139,6 +139,27 @@ describe("applyAuthChoice", () => {
     await setupTempState();
 
     loginOpenAICodexOAuth.mockRejectedValueOnce(new Error("oauth failed"));
+    resolvePluginProviders.mockReturnValue([
+      {
+        id: "openai-codex",
+        label: "OpenAI Codex",
+        auth: [
+          {
+            id: "oauth",
+            label: "ChatGPT OAuth",
+            kind: "oauth",
+            run: vi.fn(async () => {
+              try {
+                await loginOpenAICodexOAuth();
+              } catch {
+                return { profiles: [] };
+              }
+              return { profiles: [] };
+            }),
+          },
+        ],
+      },
+    ] as never);
 
     const prompter = createPrompter({});
     const runtime = createExitThrowingRuntime();
@@ -163,6 +184,41 @@ describe("applyAuthChoice", () => {
       access: "access-token",
       expires: Date.now() + 60_000,
     });
+    resolvePluginProviders.mockReturnValue([
+      {
+        id: "openai-codex",
+        label: "OpenAI Codex",
+        auth: [
+          {
+            id: "oauth",
+            label: "ChatGPT OAuth",
+            kind: "oauth",
+            run: vi.fn(async () => {
+              const creds = await loginOpenAICodexOAuth();
+              if (!creds) {
+                return { profiles: [] };
+              }
+              return {
+                profiles: [
+                  {
+                    profileId: "openai-codex:user@example.com",
+                    credential: {
+                      type: "oauth",
+                      provider: "openai-codex",
+                      refresh: "refresh-token",
+                      access: "access-token",
+                      expires: creds.expires,
+                      email: "user@example.com",
+                    },
+                  },
+                ],
+                defaultModel: "openai-codex/gpt-5.4",
+              };
+            }),
+          },
+        ],
+      },
+    ] as never);
 
     const prompter = createPrompter({});
     const runtime = createExitThrowingRuntime();
@@ -912,6 +968,33 @@ describe("applyAuthChoice", () => {
   it("sets default model when selecting github-copilot", async () => {
     await setupTempState();
 
+    resolvePluginProviders.mockReturnValue([
+      {
+        id: "github-copilot",
+        label: "GitHub Copilot",
+        auth: [
+          {
+            id: "device",
+            label: "GitHub device login",
+            kind: "device_code",
+            run: vi.fn(async () => ({
+              profiles: [
+                {
+                  profileId: "github-copilot:github",
+                  credential: {
+                    type: "token",
+                    provider: "github-copilot",
+                    token: "github-device-token",
+                  },
+                },
+              ],
+              defaultModel: "github-copilot/gpt-4o",
+            })),
+          },
+        ],
+      },
+    ] as never);
+
     const prompter = createPrompter({});
     const runtime = createExitThrowingRuntime();
 
@@ -1352,7 +1435,7 @@ describe("applyAuthChoice", () => {
 });
 
 describe("resolvePreferredProviderForAuthChoice", () => {
-  it("maps known and unknown auth choices", () => {
+  it("maps known and unknown auth choices", async () => {
     const scenarios = [
       { authChoice: "github-copilot" as const, expectedProvider: "github-copilot" },
       { authChoice: "qwen-portal" as const, expectedProvider: "qwen-portal" },
@@ -1361,9 +1444,9 @@ describe("resolvePreferredProviderForAuthChoice", () => {
       { authChoice: "unknown" as AuthChoice, expectedProvider: undefined },
     ] as const;
     for (const scenario of scenarios) {
-      expect(resolvePreferredProviderForAuthChoice({ choice: scenario.authChoice })).toBe(
-        scenario.expectedProvider,
-      );
+      await expect(
+        resolvePreferredProviderForAuthChoice({ choice: scenario.authChoice }),
+      ).resolves.toBe(scenario.expectedProvider);
     }
   });
 });

@@ -4,6 +4,7 @@ import {
   shouldEnsureCliPath,
   shouldRegisterPrimarySubcommand,
   shouldSkipPluginCommandRegistration,
+  shouldUseRootHelpFastPath,
 } from "./run-main.js";
 
 describe("rewriteUpdateFlagArgv", () => {
@@ -124,5 +125,14 @@ describe("shouldEnsureCliPath", () => {
     expect(shouldEnsureCliPath(["node", "openclaw", "message", "send"])).toBe(true);
     expect(shouldEnsureCliPath(["node", "openclaw", "voicecall", "status"])).toBe(true);
     expect(shouldEnsureCliPath(["node", "openclaw", "acp", "-v"])).toBe(true);
+  });
+});
+
+describe("shouldUseRootHelpFastPath", () => {
+  it("uses the fast path for root help only", () => {
+    expect(shouldUseRootHelpFastPath(["node", "openclaw", "--help"])).toBe(true);
+    expect(shouldUseRootHelpFastPath(["node", "openclaw", "--profile", "work", "-h"])).toBe(true);
+    expect(shouldUseRootHelpFastPath(["node", "openclaw", "status", "--help"])).toBe(false);
+    expect(shouldUseRootHelpFastPath(["node", "openclaw", "--help", "status"])).toBe(false);
   });
 });
