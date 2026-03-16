@@ -1,0 +1,27 @@
+{
+  "id": "conv-raw",
+  "name": "Conversation Raw Logger",
+  "description": "Records raw conversation history with auto-compaction, enables context injection for all channels",
+  "kind": "context-engine",
+  "version": "1.0.0",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "trackedChats": {
+        "type": "array",
+        "items": { "type": "string" },
+        "description": "Chat IDs to track. Empty = track all."
+      },
+      "thresholds": {
+        "type": "object",
+        "additionalProperties": { "type": "number" },
+        "description": "Per-chat compaction thresholds (message count)"
+      },
+      "defaultThreshold": {
+        "type": "number",
+        "default": 60
+      }
+    }
+  }
+}

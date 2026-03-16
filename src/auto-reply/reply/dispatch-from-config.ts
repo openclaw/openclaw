@@ -49,6 +49,7 @@ import type { ReplyDispatcher, ReplyDispatchKind } from "./reply-dispatcher.js";
 import { shouldSuppressReasoningPayload } from "./reply-payloads.js";
 import { isRoutableChannel, routeReply } from "./route-reply.js";
 import { resolveRunTypingPolicy } from "./typing-policy.js";
+import { tryLogConvRawBotReply } from "../../plugin-sdk/conv-raw-bridge.js";
 
 const AUDIO_PLACEHOLDER_RE = /^<media:audio>(\s*\([^)]*\))?$/i;
 const AUDIO_HEADER_RE = /^\[Audio\b/i;
@@ -674,6 +675,19 @@ export async function dispatchReplyFromConfig(params: {
         }
       } else {
         queuedFinal = dispatcher.sendFinalReply(ttsReply) || queuedFinal;
+      }
+      // Log bot reply to Conv-Raw (via bridge — works for all channels including Feishu)
+      const convRawText = ttsReply?.text;
+      if (convRawText) {
+        const convRawChatId = ctx.To ?? ctx.From ?? sessionKey ?? "unknown";
+        const convRawChannel = normalizeMessageChannel(ctx.Surface ?? ctx.Provider) ?? "unknown";
+        void tryLogConvRawBotReply({
+          chatId: convRawChatId,
+          content: convRawText,
+          channel: convRawChannel,
+          timestamp: Date.now(),
+          cfg,
+        });
       }
     }
 

@@ -1,0 +1,17 @@
+{
+  "name": "@openclaw/conv-raw",
+  "version": "1.0.0",
+  "description": "Conversation Raw Logger - records raw conversation history with auto-compaction",
+  "type": "module",
+  "dependencies": {},
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ],
+    "contextEngine": {
+      "id": "conv-raw",
+      "label": "Conv-Raw",
+      "description": "Chat-level raw conversation history with auto-compaction"
+    }
+  }
+}
