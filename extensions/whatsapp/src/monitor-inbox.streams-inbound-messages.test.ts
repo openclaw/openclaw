@@ -118,7 +118,12 @@ describe("web monitor inbox", () => {
     await tick();
 
     expect(onMessage).toHaveBeenCalledWith(
-      expect.objectContaining({ body: "ping", from: "+999", to: "+123" }),
+      expect.objectContaining({
+        body: "ping",
+        from: "+999",
+        to: "+123",
+        selfLid: "123:1@lid",
+      }),
     );
     expect(sock.readMessages).toHaveBeenCalledWith([
       {
@@ -181,7 +186,12 @@ describe("web monitor inbox", () => {
 
     expect(getPNForLID).toHaveBeenCalledWith("999@lid");
     expect(onMessage).toHaveBeenCalledWith(
-      expect.objectContaining({ body: "ping", from: "+999", to: "+123" }),
+      expect.objectContaining({
+        body: "ping",
+        from: "+999",
+        to: "+123",
+        selfLid: "123:1@lid",
+      }),
     );
 
     await listener.close();

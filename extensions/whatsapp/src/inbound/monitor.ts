@@ -66,6 +66,7 @@ export async function monitorWebInbox(options: {
   }
 
   const selfJid = sock.user?.id;
+  const selfLid = sock.user?.lid;
   const selfE164 = selfJid ? jidToE164(selfJid) : null;
   const debouncer = createInboundDebouncer<WebInboundMessage>({
     debounceMs: options.debounceMs ?? 0,
@@ -372,6 +373,7 @@ export async function monitorWebInbox(options: {
       groupParticipants: inbound.groupParticipants,
       mentionedJids: mentionedJids ?? undefined,
       selfJid,
+      selfLid,
       selfE164,
       fromMe: Boolean(msg.key?.fromMe),
       location: enriched.location ?? undefined,
