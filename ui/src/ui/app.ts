@@ -16,8 +16,10 @@ import {
 } from "./app-channels.ts";
 import {
   handleAbortChat as handleAbortChatInternal,
+  handleCreateThread as handleCreateThreadInternal,
   handleSendChat as handleSendChatInternal,
   removeQueuedMessage as removeQueuedMessageInternal,
+  type CreateThreadInput,
 } from "./app-chat.ts";
 import { DEFAULT_CRON_FORM, DEFAULT_LOG_LEVEL_FILTERS } from "./app-defaults.ts";
 import type { EventLogEntry } from "./app-events.ts";
@@ -596,6 +598,10 @@ export class OpenClawApp extends LitElement {
       messageOverride,
       opts,
     );
+  }
+
+  async handleCreateThread(input: CreateThreadInput) {
+    return await handleCreateThreadInternal(this, input);
   }
 
   async handleWhatsAppStart(force: boolean) {
