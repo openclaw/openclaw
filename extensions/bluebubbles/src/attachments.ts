@@ -33,6 +33,9 @@ export type BlueBubblesAttachmentOpts = {
 const DEFAULT_ATTACHMENT_MAX_BYTES = 8 * 1024 * 1024;
 const AUDIO_MIME_MP3 = new Set(["audio/mpeg", "audio/mp3"]);
 const AUDIO_MIME_CAF = new Set(["audio/x-caf", "audio/caf"]);
+const AUDIO_MIME_M4A = new Set(["audio/x-m4a", "audio/m4a", "audio/mp4"]);
+const AUDIO_MIME_AAC = new Set(["audio/aac"]);
+const AUDIO_MIME_WAV = new Set(["audio/wav", "audio/x-wav", "audio/wave", "audio/vnd.wave"]);
 const AUDIO_MIME_OPUS = new Set(["audio/ogg", "audio/ogg; codecs=opus", "audio/opus"]);
 const VOICE_FFMPEG_TIMEOUT_MS = 15_000;
 const VOICE_FFMPEG_MAX_BUFFER_BYTES = 10 * 1024 * 1024;
@@ -61,9 +64,18 @@ function resolveVoiceInfo(filename: string, contentType?: string) {
     extension === ".caf" || (normalizedType ? AUDIO_MIME_CAF.has(normalizedType) : false);
   const isMp3 =
     extension === ".mp3" || (normalizedType ? AUDIO_MIME_MP3.has(normalizedType) : false);
+  const isM4a =
+    extension === ".m4a" || (normalizedType ? AUDIO_MIME_M4A.has(normalizedType) : false);
+  const isAac =
+    extension === ".aac" || (normalizedType ? AUDIO_MIME_AAC.has(normalizedType) : false);
+  const isWav =
+    extension === ".wav" || (normalizedType ? AUDIO_MIME_WAV.has(normalizedType) : false);
   const isAudio =
     isCaf ||
     isMp3 ||
+    isM4a ||
+    isAac ||
+    isWav ||
     extension === ".ogg" ||
     extension === ".opus" ||
     Boolean(normalizedType?.startsWith("audio/")) ||
@@ -82,6 +94,15 @@ function resolveVoiceInputExtension(filename: string, contentType?: string): str
   }
   if (normalizedType && AUDIO_MIME_MP3.has(normalizedType)) {
     return ".mp3";
+  }
+  if (normalizedType && AUDIO_MIME_M4A.has(normalizedType)) {
+    return ".m4a";
+  }
+  if (normalizedType && AUDIO_MIME_AAC.has(normalizedType)) {
+    return ".aac";
+  }
+  if (normalizedType && AUDIO_MIME_WAV.has(normalizedType)) {
+    return ".wav";
   }
   if (normalizedType && AUDIO_MIME_OPUS.has(normalizedType)) {
     return normalizedType.includes("ogg") ? ".ogg" : ".opus";

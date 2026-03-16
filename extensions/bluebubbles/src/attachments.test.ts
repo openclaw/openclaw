@@ -451,6 +451,58 @@ describe("sendBlueBubblesAttachment", () => {
     expect(execFileMock.mock.calls[0]?.[1]).toEqual(expect.arrayContaining(["-f", "caf"]));
   });
 
+  it.each(["voice.m4a", "voice.aac", "voice.wav"])(
+    "accepts %s voice memos without contentType",
+    async (filename) => {
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        text: () => Promise.resolve(JSON.stringify({ messageId: "msg-voice-ext" })),
+      });
+
+      await sendBlueBubblesAttachment({
+        to: "chat_guid:iMessage;-;+15551234567",
+        buffer: new Uint8Array([1, 2, 3]),
+        filename,
+        asVoice: true,
+        opts: { serverUrl: "http://localhost:1234", password: "test" },
+      });
+
+      const bodyText = expectVoiceAttachmentBody();
+      expect(bodyText).toContain('filename="voice.caf"');
+      const ffmpegArgs = execFileMock.mock.calls[0]?.[1] as string[] | undefined;
+      expect(path.extname(ffmpegArgs?.[2] ?? "")).toBe(path.extname(filename));
+      expect(ffmpegArgs).toContain("-f");
+      expect(ffmpegArgs).toContain("caf");
+    },
+  );
+
+  it.each([
+    ["audio/mp4", ".m4a"],
+    ["audio/aac", ".aac"],
+    ["audio/wav", ".wav"],
+  ])("maps %s voice memos to %s ffmpeg input extension", async (contentType, expectedExt) => {
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      text: () => Promise.resolve(JSON.stringify({ messageId: "msg-voice-mime" })),
+    });
+
+    await sendBlueBubblesAttachment({
+      to: "chat_guid:iMessage;-;+15551234567",
+      buffer: new Uint8Array([1, 2, 3]),
+      filename: "voice",
+      contentType,
+      asVoice: true,
+      opts: { serverUrl: "http://localhost:1234", password: "test" },
+    });
+
+    const bodyText = expectVoiceAttachmentBody();
+    expect(bodyText).toContain('filename="voice.caf"');
+    const ffmpegArgs = execFileMock.mock.calls[0]?.[1] as string[] | undefined;
+    expect(path.extname(ffmpegArgs?.[2] ?? "")).toBe(expectedExt);
+    expect(ffmpegArgs).toContain("-f");
+    expect(ffmpegArgs).toContain("caf");
+  });
+
   it("sanitizes filenames before sending", async () => {
     mockFetch.mockResolvedValueOnce({
       ok: true,
