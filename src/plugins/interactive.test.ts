@@ -147,6 +147,72 @@ describe("plugin interactive handlers", () => {
     );
   });
 
+  it("routes Slack interactions by namespace and dedupes interaction ids", async () => {
+    const handler = vi.fn(async () => ({ handled: true }));
+    expect(
+      registerPluginInteractiveHandler("codex-plugin", {
+        channel: "slack",
+        namespace: "codex",
+        handler,
+      }),
+    ).toEqual({ ok: true });
+
+    const baseParams = {
+      channel: "slack" as const,
+      data: "codex:approve:thread-1",
+      interactionId: "slack-ix-1",
+      ctx: {
+        channel: "slack" as const,
+        accountId: "default",
+        interactionId: "slack-ix-1",
+        conversationId: "C123",
+        parentConversationId: "C123",
+        threadId: "1710000000.000100",
+        senderId: "U123",
+        senderUsername: "ada",
+        auth: { isAuthorizedSender: true },
+        interaction: {
+          kind: "button" as const,
+          actionId: "codex",
+          blockId: "codex_actions",
+          messageTs: "1710000000.000200",
+          threadTs: "1710000000.000100",
+          value: "approve:thread-1",
+          selectedValues: ["approve:thread-1"],
+          selectedLabels: ["Approve"],
+          triggerId: "trigger-1",
+          responseUrl: "https://hooks.slack.test/response",
+        },
+      },
+      respond: {
+        acknowledge: vi.fn(async () => {}),
+        reply: vi.fn(async () => {}),
+        followUp: vi.fn(async () => {}),
+        editMessage: vi.fn(async () => {}),
+      },
+    };
+
+    const first = await dispatchPluginInteractiveHandler(baseParams);
+    const duplicate = await dispatchPluginInteractiveHandler(baseParams);
+
+    expect(first).toEqual({ matched: true, handled: true, duplicate: false });
+    expect(duplicate).toEqual({ matched: true, handled: true, duplicate: true });
+    expect(handler).toHaveBeenCalledTimes(1);
+    expect(handler).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "slack",
+        conversationId: "C123",
+        threadId: "1710000000.000100",
+        interaction: expect.objectContaining({
+          namespace: "codex",
+          payload: "approve:thread-1",
+          actionId: "codex",
+          messageTs: "1710000000.000200",
+        }),
+      }),
+    );
+  });
+
   it("does not consume dedupe keys when a handler throws", async () => {
     const handler = vi
       .fn(async () => ({ handled: true }))

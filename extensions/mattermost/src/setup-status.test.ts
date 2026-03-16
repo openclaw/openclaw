@@ -2,7 +2,7 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/mattermost";
 import { describe, expect, it } from "vitest";
 import { mattermostSetupWizard } from "./setup-surface.js";
 
-describe("mattermost onboarding status", () => {
+describe("mattermost setup status", () => {
   it("treats SecretRef botToken as configured when baseUrl is present", async () => {
     const configured = await mattermostSetupWizard.status.resolveConfigured({
       cfg: {

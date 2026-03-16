@@ -1,5 +1,5 @@
 /**
- * Tests for setup-surface.ts helpers
+ * Tests for setup-surface.ts helpers.
  *
  * Tests cover:
  * - promptToken helper

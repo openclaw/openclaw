@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { parseIMessageAllowFromEntries } from "../../../../extensions/imessage/src/setup-surface.js";
+import { parseIMessageAllowFromEntries } from "./setup-surface.js";
 
 describe("parseIMessageAllowFromEntries", () => {
   it("parses handles and chat targets", () => {
