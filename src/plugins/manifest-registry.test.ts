@@ -199,6 +199,28 @@ describe("loadPluginManifestRegistry", () => {
     ).toBe(true);
   });
 
+  it("preserves provider auth env metadata from plugin manifests", () => {
+    const dir = makeTempDir();
+    writeManifest(dir, {
+      id: "openai",
+      providers: ["openai", "openai-codex"],
+      providerAuthEnvVars: {
+        openai: ["OPENAI_API_KEY"],
+      },
+      configSchema: { type: "object" },
+    });
+
+    const registry = loadSingleCandidateRegistry({
+      idHint: "openai",
+      rootDir: dir,
+      origin: "bundled",
+    });
+
+    expect(registry.plugins[0]?.providerAuthEnvVars).toEqual({
+      openai: ["OPENAI_API_KEY"],
+    });
+  });
+
   it("reports bundled plugins as the duplicate winner for auto-discovered globals", () => {
     const bundledDir = makeTempDir();
     const globalDir = makeTempDir();

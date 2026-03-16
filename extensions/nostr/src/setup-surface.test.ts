@@ -1,6 +1,6 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/nostr";
 import { describe, expect, it, vi } from "vitest";
-import { buildChannelOnboardingAdapterFromSetupWizard } from "../../../src/channels/plugins/setup-wizard.js";
+import { buildChannelSetupWizardAdapterFromSetupWizard } from "../../../src/channels/plugins/setup-wizard.js";
 import type { WizardPrompter } from "../../../src/wizard/prompts.js";
 import { createRuntimeEnv } from "../../test-utils/runtime-env.js";
 import { nostrPlugin } from "./channel.js";
@@ -25,7 +25,7 @@ function createPrompter(overrides: Partial<WizardPrompter>): WizardPrompter {
   };
 }
 
-const nostrConfigureAdapter = buildChannelOnboardingAdapterFromSetupWizard({
+const nostrConfigureAdapter = buildChannelSetupWizardAdapterFromSetupWizard({
   plugin: nostrPlugin,
   wizard: nostrPlugin.setupWizard!,
 });

@@ -34,6 +34,7 @@ import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { getAgentScopedMediaLocalRoots } from "../../media/local-roots.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { throwIfAborted } from "./abort.js";
+import { resolveOutboundChannelPlugin } from "./channel-resolution.js";
 import { ackDelivery, enqueueDelivery, failDelivery } from "./delivery-queue.js";
 import type { OutboundIdentity } from "./identity.js";
 import type { DeliveryMirror } from "./mirror.js";
@@ -113,6 +114,13 @@ type ChannelHandlerParams = {
 
 // Channel docking: outbound delivery delegates to plugin.outbound adapters.
 async function createChannelHandler(params: ChannelHandlerParams): Promise<ChannelHandler> {
+  // Recover channel plugins the same way target resolution does so direct cron
+  // delivery still works when a prior test or lazy path left the active plugin
+  // registry empty.
+  resolveOutboundChannelPlugin({
+    channel: params.channel,
+    cfg: params.cfg,
+  });
   const outbound = await loadChannelOutboundAdapter(params.channel);
   const handler = createPluginHandler({ ...params, outbound });
   if (!handler) {
@@ -238,17 +246,22 @@ function hasChannelDataPayload(payload: ReplyPayload): boolean {
   return Boolean(payload.channelData && Object.keys(payload.channelData).length > 0);
 }
 
+function hasInteractivePayload(payload: ReplyPayload): boolean {
+  return (payload.interactive?.blocks.length ?? 0) > 0;
+}
+
 function normalizePayloadForChannelDelivery(
   payload: ReplyPayload,
   channelId: string,
 ): ReplyPayload | null {
   const hasMedia = hasMediaPayload(payload);
   const hasChannelData = hasChannelDataPayload(payload);
+  const hasInteractive = hasInteractivePayload(payload);
   const rawText = typeof payload.text === "string" ? payload.text : "";
   const normalizedText =
     channelId === "whatsapp" ? rawText.replace(/^(?:[ \t]*\r?\n)+/, "") : rawText;
   if (!normalizedText.trim()) {
-    if (!hasMedia && !hasChannelData) {
+    if (!hasMedia && !hasInteractive && !hasChannelData) {
       return null;
     }
     return {
@@ -299,6 +312,7 @@ function buildPayloadSummary(payload: ReplyPayload): NormalizedOutboundPayload {
   return {
     text: payload.text ?? "",
     mediaUrls: payload.mediaUrls ?? (payload.mediaUrl ? [payload.mediaUrl] : []),
+    interactive: payload.interactive,
     channelData: payload.channelData,
   };
 }
@@ -697,7 +711,10 @@ async function deliverOutboundPayloadsCore(
         threadId: params.threadId ?? undefined,
         forceDocument: params.forceDocument,
       };
-      if (handler.sendPayload && effectivePayload.channelData) {
+      if (
+        handler.sendPayload &&
+        (effectivePayload.channelData || hasInteractivePayload(effectivePayload))
+      ) {
         const delivery = await handler.sendPayload(effectivePayload, sendOverrides);
         results.push(delivery);
         emitMessageSent({

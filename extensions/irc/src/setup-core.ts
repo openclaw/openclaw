@@ -1,11 +1,11 @@
 import {
-  setTopLevelChannelAllowFrom,
-  setTopLevelChannelDmPolicyWithAllowFrom,
-} from "../../../src/channels/plugins/onboarding/helpers.js";
-import {
   applyAccountNameToChannelSection,
   patchScopedAccountConfig,
 } from "../../../src/channels/plugins/setup-helpers.js";
+import {
+  setTopLevelChannelAllowFrom,
+  setTopLevelChannelDmPolicyWithAllowFrom,
+} from "../../../src/channels/plugins/setup-wizard-helpers.js";
 import type { ChannelSetupAdapter } from "../../../src/channels/plugins/types.adapters.js";
 import type { ChannelSetupInput } from "../../../src/channels/plugins/types.core.js";
 import type { DmPolicy } from "../../../src/config/types.js";

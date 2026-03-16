@@ -94,6 +94,7 @@ const qwenPortalPlugin = {
       label: PROVIDER_LABEL,
       docsPath: "/providers/qwen",
       aliases: ["qwen"],
+      envVars: ["QWEN_OAUTH_TOKEN", "QWEN_PORTAL_API_KEY"],
       catalog: {
         run: async (ctx: ProviderCatalogContext) => resolveCatalog(ctx),
       },

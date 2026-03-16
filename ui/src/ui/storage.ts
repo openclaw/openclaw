@@ -16,6 +16,7 @@ type PersistedUiSettings = Omit<UiSettings, "token" | "sessionKey" | "lastActive
 };
 
 import { isSupportedLocale } from "../i18n/index.ts";
+import { getSafeLocalStorage } from "../local-storage.ts";
 import { inferBasePathFromPathname, normalizeBasePath } from "./navigation.ts";
 import { parseThemeSelection, type ThemeMode, type ThemeName } from "./theme.ts";
 
@@ -168,6 +169,7 @@ function persistSessionToken(gatewayUrl: string, token: string) {
 
 export function loadSettings(): UiSettings {
   const { pageUrl: pageDerivedUrl, effectiveUrl: defaultUrl } = deriveDefaultGatewayUrl();
+  const storage = getSafeLocalStorage();
 
   const defaults: UiSettings = {
     gatewayUrl: defaultUrl,
@@ -186,7 +188,7 @@ export function loadSettings(): UiSettings {
   };
 
   try {
-    const raw = localStorage.getItem(KEY);
+    const raw = storage?.getItem(KEY);
     if (!raw) {
       return defaults;
     }
@@ -252,10 +254,11 @@ export function saveSettings(next: UiSettings) {
 
 function persistSettings(next: UiSettings) {
   persistSessionToken(next.gatewayUrl, next.token);
+  const storage = getSafeLocalStorage();
   const scope = normalizeGatewayTokenScope(next.gatewayUrl);
   let existingSessionsByGateway: Record<string, ScopedSessionSelection> = {};
   try {
-    const raw = localStorage.getItem(KEY);
+    const raw = storage?.getItem(KEY);
     if (raw) {
       const parsed = JSON.parse(raw) as PersistedUiSettings;
       if (parsed.sessionsByGateway && typeof parsed.sessionsByGateway === "object") {
@@ -291,5 +294,5 @@ function persistSettings(next: UiSettings) {
     sessionsByGateway,
     ...(next.locale ? { locale: next.locale } : {}),
   };
-  localStorage.setItem(KEY, JSON.stringify(persisted));
+  storage?.setItem(KEY, JSON.stringify(persisted));
 }
