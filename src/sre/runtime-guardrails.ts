@@ -281,7 +281,8 @@ function buildPriorResolverMismatchMessage(params: {
   userResolver: ReturnType<typeof extractResolverFamily>;
   assistantTextLines: AssistantTextLine[];
 }): string | undefined {
-  if (!params.currentUserArtifact || !params.userResolver) {
+  const currentUserArtifact = params.currentUserArtifact;
+  if (!currentUserArtifact || !params.userResolver) {
     return undefined;
   }
   const otherResolver =
@@ -290,7 +291,7 @@ function buildPriorResolverMismatchMessage(params: {
   const otherResolverRe = RESOLVER_TOKEN_RE[otherResolver];
   const priorResolverMismatch = params.assistantTextLines.some(
     (entry) =>
-      entry.line < params.currentUserArtifact.line &&
+      entry.line < currentUserArtifact.line &&
       otherResolverRe.test(entry.text) &&
       !userResolverRe.test(entry.text),
   );
