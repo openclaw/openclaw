@@ -18,7 +18,7 @@ export function patchLineAccountConfig(params: {
   enabled?: boolean;
 }): OpenClawConfig {
   const accountId = normalizeAccountId(params.accountId);
-  const lineConfig = ((params.cfg.channels?.line ?? {}) as LineConfig) ?? {};
+  const lineConfig = (params.cfg.channels?.line ?? {}) as LineConfig;
   const clearFields = params.clearFields ?? [];
 
   if (accountId === DEFAULT_ACCOUNT_ID) {
