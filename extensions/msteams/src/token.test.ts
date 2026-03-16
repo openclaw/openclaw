@@ -37,7 +37,77 @@ describe("resolveMSTeamsCredentials", () => {
       appId: "app-id",
       appPassword: "app-password", // pragma: allowlist secret
       tenantId: "tenant-id",
+      authType: "clientSecret",
     });
+  });
+
+  it("defaults to clientSecret when authType is not specified", () => {
+    const resolved = resolveMSTeamsCredentials({
+      appId: "app-id",
+      appPassword: "secret",
+      tenantId: "tenant-id",
+    });
+
+    expect(resolved?.authType).toBe("clientSecret");
+  });
+
+  it("resolves certificate credentials", () => {
+    const resolved = resolveMSTeamsCredentials({
+      appId: "app-id",
+      tenantId: "tenant-id",
+      authType: "certificate",
+      certPemFile: "/path/to/cert.pem",
+      certKeyFile: "/path/to/key.pem",
+    });
+
+    expect(resolved?.authType).toBe("certificate");
+    expect(resolved?.certPemFile).toBe("/path/to/cert.pem");
+    expect(resolved?.certKeyFile).toBe("/path/to/key.pem");
+  });
+
+  it("returns undefined for certificate auth missing certKeyFile", () => {
+    expect(
+      resolveMSTeamsCredentials({
+        appId: "app-id",
+        tenantId: "tenant-id",
+        authType: "certificate",
+        certPemFile: "/path/to/cert.pem",
+      }),
+    ).toBeUndefined();
+  });
+
+  it("resolves federated credentials with ficClientId", () => {
+    const resolved = resolveMSTeamsCredentials({
+      appId: "app-id",
+      tenantId: "tenant-id",
+      authType: "federatedCredential",
+      ficClientId: "fic-client-id",
+    });
+
+    expect(resolved?.authType).toBe("federatedCredential");
+    expect(resolved?.ficClientId).toBe("fic-client-id");
+  });
+
+  it("resolves federated credentials with widAssertionFile", () => {
+    const resolved = resolveMSTeamsCredentials({
+      appId: "app-id",
+      tenantId: "tenant-id",
+      authType: "federatedCredential",
+      widAssertionFile: "/var/run/secrets/azure/tokens/azure-identity-token",
+    });
+
+    expect(resolved?.authType).toBe("federatedCredential");
+    expect(resolved?.widAssertionFile).toBe("/var/run/secrets/azure/tokens/azure-identity-token");
+  });
+
+  it("returns undefined for federated auth with neither ficClientId nor widAssertionFile", () => {
+    expect(
+      resolveMSTeamsCredentials({
+        appId: "app-id",
+        tenantId: "tenant-id",
+        authType: "federatedCredential",
+      }),
+    ).toBeUndefined();
   });
 
   it("throws when appPassword remains an unresolved SecretRef object", () => {
@@ -68,5 +138,48 @@ describe("hasConfiguredMSTeamsCredentials", () => {
     });
 
     expect(configured).toBe(true);
+  });
+
+  it("detects certificate auth as configured", () => {
+    expect(
+      hasConfiguredMSTeamsCredentials({
+        appId: "app-id",
+        tenantId: "tenant-id",
+        authType: "certificate",
+        certPemFile: "/path/to/cert.pem",
+        certKeyFile: "/path/to/key.pem",
+      }),
+    ).toBe(true);
+  });
+
+  it("rejects certificate auth missing cert files", () => {
+    expect(
+      hasConfiguredMSTeamsCredentials({
+        appId: "app-id",
+        tenantId: "tenant-id",
+        authType: "certificate",
+      }),
+    ).toBe(false);
+  });
+
+  it("detects federated credential auth as configured", () => {
+    expect(
+      hasConfiguredMSTeamsCredentials({
+        appId: "app-id",
+        tenantId: "tenant-id",
+        authType: "federatedCredential",
+        ficClientId: "fic-client-id",
+      }),
+    ).toBe(true);
+  });
+
+  it("rejects federated auth with no credential source", () => {
+    expect(
+      hasConfiguredMSTeamsCredentials({
+        appId: "app-id",
+        tenantId: "tenant-id",
+        authType: "federatedCredential",
+      }),
+    ).toBe(false);
   });
 });
