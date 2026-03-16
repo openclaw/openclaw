@@ -59,13 +59,11 @@ jobs:
 
       # Update every running blink-claw-* machine to the new image.
       # Skips the registry-only app (blink-claw) and the manager.
-      - name: Install Fly CLI
-        run: curl -L https://fly.io/install.sh | sh
-
       - name: Update all running Blink Claw agents
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
         run: |
+          curl -L https://fly.io/install.sh | sh
           export PATH="$HOME/.fly/bin:$PATH"
 
           APPS=$(fly apps list --org blink-new --json \
