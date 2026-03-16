@@ -372,6 +372,7 @@ export type ChannelMessageActionAdapter = {
    */
   listActions?: (params: { cfg: OpenClawConfig }) => ChannelMessageActionName[];
   supportsAction?: (params: { action: ChannelMessageActionName }) => boolean;
+  supportsInteractive?: (params: { cfg: OpenClawConfig }) => boolean;
   supportsButtons?: (params: { cfg: OpenClawConfig }) => boolean;
   supportsCards?: (params: { cfg: OpenClawConfig }) => boolean;
   extractToolSend?: (params: { args: Record<string, unknown> }) => ChannelToolSend | null;
