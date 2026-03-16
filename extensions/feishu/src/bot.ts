@@ -543,9 +543,14 @@ export function decodeFeishuFilename(filename: string | undefined): string {
   // Handle RFC 5987 format: filename*=UTF-8'language'encoded
   const rfcMatch = /^filename\*=utf-8'[^']*'/i.exec(filename);
   if (rfcMatch) {
-    filename = filename.substring(rfcMatch[0].length);
+    // RFC 5987 - always decode
+    try {
+      return decodeURIComponent(filename.substring(rfcMatch[0].length));
+    } catch {
+      return filename;
+    }
   }
-  // Decode only if result has non-ASCII characters
+  // Plain filename - only decode if result has non-ASCII
   try {
     const decoded = decodeURIComponent(filename);
     if (decoded && /[^\x00-\x7F]/.test(decoded)) {
