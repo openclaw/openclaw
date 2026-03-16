@@ -2,16 +2,23 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ProviderPlugin, ProviderRuntimeModel } from "./types.js";
 
 type ResolvePluginProviders = typeof import("./providers.js").resolvePluginProviders;
+type ResolveNonBundledProviderPluginIds =
+  typeof import("./providers.js").resolveNonBundledProviderPluginIds;
 type ResolveOwningPluginIdsForProvider =
   typeof import("./providers.js").resolveOwningPluginIdsForProvider;
 
 const resolvePluginProvidersMock = vi.fn<ResolvePluginProviders>((_) => [] as ProviderPlugin[]);
+const resolveNonBundledProviderPluginIdsMock = vi.fn<ResolveNonBundledProviderPluginIds>(
+  (_) => [] as string[],
+);
 const resolveOwningPluginIdsForProviderMock = vi.fn<ResolveOwningPluginIdsForProvider>(
   (_) => undefined as string[] | undefined,
 );
 
 vi.mock("./providers.js", () => ({
   resolvePluginProviders: (params: unknown) => resolvePluginProvidersMock(params as never),
+  resolveNonBundledProviderPluginIds: (params: unknown) =>
+    resolveNonBundledProviderPluginIdsMock(params as never),
   resolveOwningPluginIdsForProvider: (params: unknown) =>
     resolveOwningPluginIdsForProviderMock(params as never),
 }));
@@ -34,6 +41,7 @@ import {
   normalizeProviderResolvedModelWithPlugin,
   prepareProviderDynamicModel,
   prepareProviderRuntimeAuth,
+  resetProviderRuntimeHookCacheForTest,
   refreshProviderOAuthCredentialWithPlugin,
   resolveProviderRuntimePlugin,
   runProviderDynamicModel,
@@ -55,8 +63,11 @@ const MODEL: ProviderRuntimeModel = {
 
 describe("provider-runtime", () => {
   beforeEach(() => {
+    resetProviderRuntimeHookCacheForTest();
     resolvePluginProvidersMock.mockReset();
     resolvePluginProvidersMock.mockReturnValue([]);
+    resolveNonBundledProviderPluginIdsMock.mockReset();
+    resolveNonBundledProviderPluginIdsMock.mockReturnValue([]);
     resolveOwningPluginIdsForProviderMock.mockReset();
     resolveOwningPluginIdsForProviderMock.mockReturnValue(undefined);
   });
@@ -453,5 +464,45 @@ describe("provider-runtime", () => {
     expect(prepareRuntimeAuth).toHaveBeenCalledTimes(1);
     expect(resolveUsageAuth).toHaveBeenCalledTimes(1);
     expect(fetchUsageSnapshot).toHaveBeenCalledTimes(1);
+  });
+
+  it("resolves bundled catalog hooks without loading provider plugins", async () => {
+    expect(
+      resolveProviderBuiltInModelSuppression({
+        env: process.env,
+        context: {
+          env: process.env,
+          provider: "openai",
+          modelId: "gpt-5.3-codex-spark",
+        },
+      }),
+    ).toMatchObject({
+      suppress: true,
+    });
+
+    await expect(
+      augmentModelCatalogWithProviderPlugins({
+        env: process.env,
+        context: {
+          env: process.env,
+          entries: [
+            { provider: "openai", id: "gpt-5.2", name: "GPT-5.2" },
+            { provider: "openai", id: "gpt-5.2-pro", name: "GPT-5.2 Pro" },
+            { provider: "openai-codex", id: "gpt-5.3-codex", name: "GPT-5.3 Codex" },
+          ],
+        },
+      }),
+    ).resolves.toEqual([
+      { provider: "openai", id: "gpt-5.4", name: "gpt-5.4" },
+      { provider: "openai", id: "gpt-5.4-pro", name: "gpt-5.4-pro" },
+      { provider: "openai-codex", id: "gpt-5.4", name: "gpt-5.4" },
+      {
+        provider: "openai-codex",
+        id: "gpt-5.3-codex-spark",
+        name: "gpt-5.3-codex-spark",
+      },
+    ]);
+
+    expect(resolvePluginProvidersMock).not.toHaveBeenCalled();
   });
 });

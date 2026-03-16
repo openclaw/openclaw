@@ -1,5 +1,5 @@
 import { resolveProviderBuiltInModelSuppression } from "../plugins/provider-runtime.js";
-import { normalizeProviderId } from "./model-selection.js";
+import { normalizeProviderId } from "./provider-id.js";
 
 function resolveBuiltInModelSuppression(params: { provider?: string | null; id?: string | null }) {
   const provider = normalizeProviderId(params.provider?.trim().toLowerCase() ?? "");

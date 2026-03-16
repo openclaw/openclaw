@@ -3,7 +3,7 @@ import {
   type ProviderRuntimeModel,
 } from "openclaw/plugin-sdk/core";
 import { normalizeModelCompat } from "../../src/agents/model-compat.js";
-import { normalizeProviderId } from "../../src/agents/model-selection.js";
+import { normalizeProviderId } from "../../src/agents/provider-id.js";
 import {
   applyOpenAIConfig,
   OPENAI_DEFAULT_MODEL,

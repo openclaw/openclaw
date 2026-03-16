@@ -1,4 +1,4 @@
-import { normalizeProviderId } from "../../src/agents/model-selection.js";
+import { normalizeProviderId } from "../../src/agents/provider-id.js";
 import {
   createPluginBackedWebSearchProvider,
   getScopedCredentialValue,
