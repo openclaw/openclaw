@@ -1,0 +1,51 @@
+{
+  "id": "plugin-insights",
+  "name": "Plugin Insights",
+  "description": "Automatically evaluate how much your installed plugins actually help. Tracks trigger frequency, token overhead, conversation efficiency, and user satisfaction — all locally.",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "enabled": {
+        "type": "boolean",
+        "default": true,
+        "description": "Enable or disable data collection"
+      },
+      "dbPath": {
+        "type": "string",
+        "default": "~/.openclaw/plugin-insights.db",
+        "description": "Path to the local SQLite database"
+      },
+      "retentionDays": {
+        "type": "integer",
+        "default": 90,
+        "description": "How many days of data to retain"
+      },
+      "toolMappings": {
+        "type": "array",
+        "description": "Map tool names to plugin IDs for attribution",
+        "items": {
+          "type": "object",
+          "properties": {
+            "toolName": { "type": "string" },
+            "pluginId": { "type": "string" },
+            "pluginName": { "type": "string" }
+          },
+          "required": ["toolName", "pluginId"]
+        }
+      },
+      "llmJudge": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "enabled": { "type": "boolean", "default": false },
+          "apiKey": { "type": "string" },
+          "baseUrl": { "type": "string", "default": "https://api.openai.com/v1" },
+          "model": { "type": "string", "default": "gpt-4o-mini" },
+          "maxEvalPerDay": { "type": "integer", "default": 20 }
+        },
+        "description": "Optional LLM-as-judge configuration. User must provide their own API key."
+      }
+    }
+  }
+}
