@@ -436,7 +436,7 @@ function extractWindowsExecutablePath(command: string): string | null {
   if (quoted?.[1]) {
     return quoted[1];
   }
-  const unquoted = command.match(/([^\\s]+\.exe)/i);
+  const unquoted = command.match(/([^\s]+\.exe)/i);
   if (unquoted?.[1]) {
     return unquoted[1];
   }
