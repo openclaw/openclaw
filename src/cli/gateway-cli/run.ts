@@ -415,9 +415,14 @@ async function runGatewayCommand(opts: GatewayRunOpts) {
   const tailscaleControlUrlRaw = toOptionString(opts.tailscaleControlUrl);
   if (tailscaleControlUrlRaw) {
     try {
-      new URL(tailscaleControlUrlRaw);
+      const protocol = new URL(tailscaleControlUrlRaw).protocol;
+      if (protocol !== "http:" && protocol !== "https:") {
+        throw new Error("invalid protocol");
+      }
     } catch {
-      defaultRuntime.error("Invalid --tailscale-control-url: must be a valid URL");
+      defaultRuntime.error(
+        "Invalid --tailscale-control-url: must be a valid http:// or https:// URL",
+      );
       defaultRuntime.exit(1);
       return;
     }

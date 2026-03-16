@@ -64,4 +64,17 @@ describe("gateway.tailscale.controlUrl validation", () => {
     });
     expect(result.ok).toBe(false);
   });
+
+  it("rejects controlUrl with non-http scheme", () => {
+    const result = validateConfigObjectRaw({
+      gateway: {
+        bind: "tailnet",
+        auth: { mode: "token", token: "tok" },
+        tailscale: {
+          controlUrl: "ftp://headscale.example.com",
+        },
+      },
+    });
+    expect(result.ok).toBe(false);
+  });
 });
