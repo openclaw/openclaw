@@ -167,7 +167,7 @@ export async function processGatewayAllowlist(
         approvalId,
         command: params.command,
         workdir: params.workdir,
-        host: "gateway",
+        host: effectiveHost,
         security: hostSecurity,
         ask: hostAsk,
         ...buildExecApprovalRequesterContext({
@@ -309,7 +309,7 @@ export async function processGatewayAllowlist(
 
     return {
       pendingResult: buildExecApprovalPendingToolResult({
-        host: "gateway",
+        host: effectiveHost,
         command: params.command,
         cwd: params.workdir,
         warningText,

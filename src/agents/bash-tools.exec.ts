@@ -456,7 +456,15 @@ export function createExecTool(
         });
       }
 
-      if ((host === "gateway" || host === "sandbox") && !bypassApprovals) {
+      // Sandbox exec only goes through allowlist processing when the agent explicitly
+      // requested sandbox via allowedHosts (i.e. requestedHost === "sandbox").
+      // Default sandbox-without-sandbox-runtime (host="sandbox" by fallback, no sandbox config)
+      // must NOT enter this path — it would hit the security=deny guard in
+      // resolveExecHostApprovalContext and block agents that have no exec config at all.
+      const needsAllowlistProcessing =
+        host === "gateway" ||
+        (host === "sandbox" && requestedHost === "sandbox" && defaults?.allowedHosts != null);
+      if (needsAllowlistProcessing && !bypassApprovals) {
         const gatewayResult = await processGatewayAllowlist({
           command: params.command,
           workdir,

@@ -8,6 +8,8 @@ import { requestJsonlSocket } from "./jsonl-socket.js";
 export * from "./exec-approvals-analysis.js";
 export * from "./exec-approvals-allowlist.js";
 
+const warnedLegacyAllowlistAgents = new Set<string>();
+
 export type ExecHost = "sandbox" | "gateway" | "node";
 export type ExecSecurity = "deny" | "allowlist" | "full";
 export type ExecAsk = "off" | "on-miss" | "always";
@@ -338,7 +340,8 @@ export function normalizeExecApprovals(file: ExecApprovalsFile): ExecApprovalsFi
       }
     } else {
       // Legacy array format (or undefined): normalize as flat list.
-      if (Array.isArray(agent.allowlist)) {
+      if (Array.isArray(agent.allowlist) && !warnedLegacyAllowlistAgents.has(key)) {
+        warnedLegacyAllowlistAgents.add(key);
         logWarn(
           `exec-approvals: agent "${key}" uses legacy array allowlist format — run "openclaw doctor" to migrate`,
         );
