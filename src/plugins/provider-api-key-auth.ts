@@ -66,6 +66,7 @@ export function createProviderApiKeyAuthMethod(
       const opts = ctx.opts as Record<string, unknown> | undefined;
       const flagValue = resolveStringOption(opts, params.optionKey);
       let capturedSecretInput: SecretInput | undefined;
+      let capturedCredential = false;
       let capturedMode: "plaintext" | "ref" | undefined;
 
       await ensureApiKeyFromOptionEnvOrPrompt({
@@ -89,13 +90,15 @@ export function createProviderApiKeyAuthMethod(
         noteTitle: params.noteTitle,
         setCredential: async (apiKey, mode) => {
           capturedSecretInput = apiKey;
+          capturedCredential = true;
           capturedMode = mode;
         },
       });
 
-      if (!capturedSecretInput) {
+      if (!capturedCredential) {
         throw new Error(`Missing API key input for provider "${params.providerId}".`);
       }
+      const credentialInput = capturedSecretInput ?? "";
 
       return {
         profiles: [
@@ -103,7 +106,7 @@ export function createProviderApiKeyAuthMethod(
             profileId: resolveProfileId(params),
             credential: buildApiKeyCredential(
               params.providerId,
-              capturedSecretInput,
+              credentialInput,
               params.metadata,
               capturedMode ? { secretInputMode: capturedMode } : undefined,
             ),

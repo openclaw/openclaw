@@ -4,9 +4,12 @@ import {
   getScopedCredentialValue,
   setScopedCredentialValue,
 } from "../../src/agents/tools/web-search-plugin-factory.js";
+import { applyXaiConfig, XAI_DEFAULT_MODEL_REF } from "../../src/commands/onboard-auth.js";
 import { emptyPluginConfigSchema } from "../../src/plugins/config-schema.js";
+import { createProviderApiKeyAuthMethod } from "../../src/plugins/provider-api-key-auth.js";
 import type { OpenClawPluginApi } from "../../src/plugins/types.js";
 
+const PROVIDER_ID = "xai";
 const XAI_MODERN_MODEL_PREFIXES = ["grok-4"] as const;
 
 function matchesModernXaiModel(modelId: string): boolean {
@@ -21,11 +24,32 @@ const xaiPlugin = {
   configSchema: emptyPluginConfigSchema(),
   register(api: OpenClawPluginApi) {
     api.registerProvider({
-      id: "xai",
+      id: PROVIDER_ID,
       label: "xAI",
       docsPath: "/providers/models",
       envVars: ["XAI_API_KEY"],
-      auth: [],
+      auth: [
+        createProviderApiKeyAuthMethod({
+          providerId: PROVIDER_ID,
+          methodId: "api-key",
+          label: "xAI API key",
+          hint: "API key",
+          optionKey: "xaiApiKey",
+          flagName: "--xai-api-key",
+          envVar: "XAI_API_KEY",
+          promptMessage: "Enter xAI API key",
+          defaultModel: XAI_DEFAULT_MODEL_REF,
+          expectedProviders: ["xai"],
+          applyConfig: (cfg) => applyXaiConfig(cfg),
+          wizard: {
+            choiceId: "xai-api-key",
+            choiceLabel: "xAI API key",
+            groupId: "xai",
+            groupLabel: "xAI (Grok)",
+            groupHint: "API key",
+          },
+        }),
+      ],
       isModernModelRef: ({ provider, modelId }) =>
         normalizeProviderId(provider) === "xai" ? matchesModernXaiModel(modelId) : undefined,
     });

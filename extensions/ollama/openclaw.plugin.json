@@ -4,6 +4,18 @@
   "providerAuthEnvVars": {
     "ollama": ["OLLAMA_API_KEY"]
   },
+  "providerAuthChoices": [
+    {
+      "provider": "ollama",
+      "method": "local",
+      "choiceId": "ollama",
+      "choiceLabel": "Ollama",
+      "choiceHint": "Cloud and local open models",
+      "groupId": "ollama",
+      "groupLabel": "Ollama",
+      "groupHint": "Cloud and local open models"
+    }
+  ],
   "configSchema": {
     "type": "object",
     "additionalProperties": false,

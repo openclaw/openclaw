@@ -207,6 +207,14 @@ describe("loadPluginManifestRegistry", () => {
       providerAuthEnvVars: {
         openai: ["OPENAI_API_KEY"],
       },
+      providerAuthChoices: [
+        {
+          provider: "openai",
+          method: "api-key",
+          choiceId: "openai-api-key",
+          choiceLabel: "OpenAI API key",
+        },
+      ],
       configSchema: { type: "object" },
     });
 
@@ -219,6 +227,14 @@ describe("loadPluginManifestRegistry", () => {
     expect(registry.plugins[0]?.providerAuthEnvVars).toEqual({
       openai: ["OPENAI_API_KEY"],
     });
+    expect(registry.plugins[0]?.providerAuthChoices).toEqual([
+      {
+        provider: "openai",
+        method: "api-key",
+        choiceId: "openai-api-key",
+        choiceLabel: "OpenAI API key",
+      },
+    ]);
   });
 
   it("reports bundled plugins as the duplicate winner for auto-discovered globals", () => {

@@ -1,7 +1,15 @@
 import fs from "node:fs/promises";
 import type { OAuthCredentials } from "@mariozechner/pi-ai";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import anthropicPlugin from "../../extensions/anthropic/index.js";
+import huggingfacePlugin from "../../extensions/huggingface/index.js";
+import kimiCodingPlugin from "../../extensions/kimi-coding/index.js";
+import ollamaPlugin from "../../extensions/ollama/index.js";
+import openAIPlugin from "../../extensions/openai/index.js";
+import togetherPlugin from "../../extensions/together/index.js";
 import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
+import type { ProviderPlugin } from "../plugins/types.js";
+import { createCapturedPluginRegistration } from "../test-utils/plugin-registration.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 import { applyAuthChoice, resolvePreferredProviderForAuthChoice } from "./auth-choice.js";
 import { GOOGLE_GEMINI_DEFAULT_MODEL } from "./google-gemini-model-default.js";
@@ -34,7 +42,7 @@ vi.mock("./openai-codex-oauth.js", () => ({
   loginOpenAICodexOAuth,
 }));
 
-const resolvePluginProviders = vi.hoisted(() => vi.fn(() => []));
+const resolvePluginProviders = vi.hoisted(() => vi.fn<() => ProviderPlugin[]>(() => []));
 vi.mock("../plugins/providers.js", () => ({
   resolvePluginProviders,
 }));
@@ -54,6 +62,21 @@ type StoredAuthProfile = {
   email?: string;
   metadata?: Record<string, string>;
 };
+
+function createDefaultProviderPlugins() {
+  const captured = createCapturedPluginRegistration();
+  for (const plugin of [
+    anthropicPlugin,
+    huggingfacePlugin,
+    kimiCodingPlugin,
+    ollamaPlugin,
+    openAIPlugin,
+    togetherPlugin,
+  ]) {
+    plugin.register(captured.api);
+  }
+  return captured.providers;
+}
 
 describe("applyAuthChoice", () => {
   const lifecycle = createAuthTestLifecycle([
@@ -127,6 +150,7 @@ describe("applyAuthChoice", () => {
   afterEach(async () => {
     vi.unstubAllGlobals();
     resolvePluginProviders.mockReset();
+    resolvePluginProviders.mockReturnValue(createDefaultProviderPlugins());
     detectZaiEndpoint.mockReset();
     detectZaiEndpoint.mockResolvedValue(null);
     loginOpenAICodexOAuth.mockReset();
@@ -134,6 +158,8 @@ describe("applyAuthChoice", () => {
     await lifecycle.cleanup();
     activeStateDir = null;
   });
+
+  resolvePluginProviders.mockReturnValue(createDefaultProviderPlugins());
 
   it("does not throw when openai-codex oauth fails", async () => {
     await setupTempState();

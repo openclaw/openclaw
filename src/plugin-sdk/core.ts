@@ -28,6 +28,7 @@ export type {
   ProviderAuthContext,
   ProviderAuthDoctorHintContext,
   ProviderAuthMethodNonInteractiveContext,
+  ProviderAuthMethod,
   ProviderAuthResult,
 } from "../plugins/types.js";
 export type {
