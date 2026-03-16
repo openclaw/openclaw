@@ -100,10 +100,8 @@ const log = createSubsystemLogger("discord/native-command");
 
 function resolveDiscordNativeCommandAllowlistAccess(params: {
   cfg: OpenClawConfig;
-  accountId?: string | null;
   sender: { id: string; name?: string; tag?: string };
-  chatType: "direct" | "group" | "thread" | "channel";
-  conversationId?: string;
+  allowNameMatching?: boolean;
 }) {
   const commandsAllowFrom = params.cfg.commands?.allowFrom;
   if (!commandsAllowFrom || typeof commandsAllowFrom !== "object") {
@@ -111,22 +109,23 @@ function resolveDiscordNativeCommandAllowlistAccess(params: {
   }
   const rawAllowList = Array.isArray(commandsAllowFrom.discord)
     ? commandsAllowFrom.discord
-    : commandsAllowFrom["*"];
-  if (!Array.isArray(rawAllowList)) {
+    : Array.isArray(commandsAllowFrom["*"])
+      ? commandsAllowFrom["*"]
+      : undefined;
+  if (!rawAllowList) {
     return { configured: false, allowed: false } as const;
   }
-  const allowList = normalizeDiscordAllowList(rawAllowList.map(String), [
-    "discord:",
-    "user:",
-    "pk:",
-  ]);
+  const allowList = normalizeDiscordAllowList(
+    rawAllowList.map((entry) => String(entry)),
+    ["discord:", "user:", "pk:"],
+  );
   if (!allowList) {
     return { configured: true, allowed: false } as const;
   }
   const match = resolveDiscordAllowListMatch({
     allowList,
     candidate: params.sender,
-    allowNameMatching: false,
+    allowNameMatching: params.allowNameMatching,
   });
   return { configured: true, allowed: match.allowed } as const;
 }
@@ -1339,20 +1338,12 @@ async function dispatchDiscordCommandInteraction(params: {
   });
   const commandsAllowFromAccess = resolveDiscordNativeCommandAllowlistAccess({
     cfg,
-    accountId,
     sender: {
       id: sender.id,
       name: sender.name,
       tag: sender.tag,
     },
-    chatType: isDirectMessage
-      ? "direct"
-      : isThreadChannel
-        ? "thread"
-        : interaction.guild
-          ? "channel"
-          : "group",
-    conversationId: rawChannelId || undefined,
+    allowNameMatching,
   });
   const guildInfo = resolveDiscordGuildEntry({
     guild: interaction.guild ?? undefined,
