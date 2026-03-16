@@ -421,6 +421,13 @@ describe("nostr-profile-http", () => {
   });
 
   describe("POST /api/channels/nostr/:accountId/profile/import", () => {
+    function expectOkResponse(res: ReturnType<typeof createMockResponse>) {
+      expect(res._getStatusCode()).toBe(200);
+      const data = JSON.parse(res._getData());
+      expect(data.ok).toBe(true);
+      return data;
+    }
+
     function expectImportSuccessResponse(res: ReturnType<typeof createMockResponse>) {
       const data = expectOkResponse(res);
       expect(data.imported.name).toBe("imported");

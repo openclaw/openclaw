@@ -76,12 +76,22 @@ describe("registerMatrixMonitorEvents", () => {
     expect(sendReadReceiptMatrixMock).not.toHaveBeenCalled();
   }
 
+  function createRoomMessageEvent(
+    overrides: Partial<Pick<MatrixRawEvent, "event_id" | "sender">> = {},
+  ): MatrixRawEvent {
+    return {
+      event_id: "$event",
+      sender: "@alice:example.org",
+      type: "m.room.message",
+      origin_server_ts: 0,
+      content: {},
+      ...overrides,
+    } as MatrixRawEvent;
+  }
+
   it("sends read receipt immediately for non-self messages", async () => {
     const { client, onRoomMessage, roomMessageHandler } = createHarness();
-    const event = makeEvent({
-      event_id: "$e1",
-      sender: "@alice:example.org",
-    });
+    const event = createRoomMessageEvent({ event_id: "$e1" });
 
     roomMessageHandler("!room:example.org", event);
 
@@ -93,26 +103,18 @@ describe("registerMatrixMonitorEvents", () => {
 
   it("does not send read receipts for self messages", async () => {
     await expectForwardedWithoutReadReceipt(
-      makeEvent({
-        event_id: "$e2",
-        sender: "@bot:example.org",
-      }),
+      createRoomMessageEvent({ event_id: "$e2", sender: "@bot:example.org" }),
     );
   });
 
   it("skips receipt when message lacks sender or event id", async () => {
-    await expectForwardedWithoutReadReceipt(
-      makeEvent({
-        sender: "@alice:example.org",
-        event_id: "",
-      }),
-    );
+    await expectForwardedWithoutReadReceipt(createRoomMessageEvent({ event_id: undefined }));
   });
 
   it("caches self user id across messages", async () => {
     const { getUserId, roomMessageHandler } = createHarness();
-    const first = makeEvent({ event_id: "$e3", sender: "@alice:example.org" });
-    const second = makeEvent({ event_id: "$e4", sender: "@bob:example.org" });
+    const first = createRoomMessageEvent({ event_id: "$e3" });
+    const second = createRoomMessageEvent({ event_id: "$e4", sender: "@bob:example.org" });
 
     roomMessageHandler("!room:example.org", first);
     roomMessageHandler("!room:example.org", second);
@@ -126,7 +128,7 @@ describe("registerMatrixMonitorEvents", () => {
   it("logs and continues when sending read receipt fails", async () => {
     sendReadReceiptMatrixMock.mockRejectedValueOnce(new Error("network boom"));
     const { roomMessageHandler, onRoomMessage, logVerboseMessage } = createHarness();
-    const event = makeEvent({ event_id: "$e5", sender: "@alice:example.org" });
+    const event = createRoomMessageEvent({ event_id: "$e5" });
 
     roomMessageHandler("!room:example.org", event);
 
@@ -142,7 +144,7 @@ describe("registerMatrixMonitorEvents", () => {
     const { roomMessageHandler, onRoomMessage, getUserId } = createHarness({
       getUserId: vi.fn().mockRejectedValue(new Error("cannot resolve self")),
     });
-    const event = makeEvent({ event_id: "$e6", sender: "@alice:example.org" });
+    const event = createRoomMessageEvent({ event_id: "$e6" });
 
     roomMessageHandler("!room:example.org", event);
 

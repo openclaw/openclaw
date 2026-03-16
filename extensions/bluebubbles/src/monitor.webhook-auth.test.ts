@@ -1,6 +1,7 @@
 import { EventEmitter } from "node:events";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { OpenClawConfig, PluginRuntime } from "openclaw/plugin-sdk/bluebubbles";
+import type { Mock } from "vitest";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createPluginRuntimeMock } from "../../test-utils/plugin-runtime-mock.js";
 import type { ResolvedBlueBubblesAccount } from "./accounts.js";
@@ -38,6 +39,8 @@ vi.mock("./reactions.js", async () => {
     sendBlueBubblesReaction: vi.fn().mockResolvedValue(undefined),
   };
 });
+
+type HangingWebhookDestroy = Mock<IncomingMessage["destroy"]>;
 
 vi.mock("./history.js", () => ({
   fetchBlueBubblesHistory: vi.fn().mockResolvedValue({ entries: [], resolved: true }),
@@ -329,11 +332,15 @@ describe("BlueBubbles webhook monitor", () => {
 
   function createHangingWebhookRequest(url = "/bluebubbles-webhook?password=test-password") {
     const req = new EventEmitter() as IncomingMessage;
-    const destroyMock = vi.fn();
+    const destroyMock: HangingWebhookDestroy = vi.fn<IncomingMessage["destroy"]>(
+      function (this: IncomingMessage) {
+        return this;
+      },
+    );
     req.method = "POST";
     req.url = url;
     req.headers = {};
-    req.destroy = destroyMock as unknown as IncomingMessage["destroy"];
+    req.destroy = destroyMock as IncomingMessage["destroy"];
     setRequestRemoteAddress(req, "127.0.0.1");
     return { req, destroyMock };
   }

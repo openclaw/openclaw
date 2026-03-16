@@ -18,7 +18,7 @@ const DEFAULT_SUCCESS_RESULT = {
   appId: "cli_123",
   botName: "TestBot",
   botOpenId: "ou_abc123",
-} as const;
+} satisfies Awaited<ReturnType<typeof probeFeishu>>;
 const BOT1_RESPONSE = {
   code: 0,
   bot: { bot_name: "Bot1", open_id: "ou_1" },

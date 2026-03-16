@@ -2,7 +2,6 @@ import { EventEmitter } from "node:events";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import type { ResolvedSynologyChatAccount } from "./types.js";
-import type { WebhookHandlerDeps } from "./webhook-handler.js";
 import {
   clearSynologyWebhookRateLimiterStateForTest,
   createWebhookHandler,
@@ -13,6 +12,9 @@ vi.mock("./client.js", () => ({
   sendMessage: vi.fn().mockResolvedValue(true),
   resolveChatUserId: vi.fn().mockResolvedValue(undefined),
 }));
+
+type WebhookDeliver = Parameters<typeof createWebhookHandler>[0]["deliver"];
+type WebhookDeliverMock = ReturnType<typeof vi.fn<WebhookDeliver>>;
 
 function makeAccount(
   overrides: Partial<ResolvedSynologyChatAccount> = {},
@@ -119,9 +121,9 @@ describe("createWebhookHandler", () => {
   async function expectForbiddenByPolicy(params: {
     account: Partial<ResolvedSynologyChatAccount>;
     bodyContains: string;
-    deliver?: WebhookHandlerDeps["deliver"];
+    deliver?: WebhookDeliverMock;
   }) {
-    const deliver = params.deliver ?? vi.fn();
+    const deliver: WebhookDeliverMock = params.deliver ?? vi.fn<WebhookDeliver>(async () => null);
     const handler = createWebhookHandler({
       account: makeAccount(params.account),
       deliver,
