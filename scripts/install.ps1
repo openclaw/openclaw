@@ -225,11 +225,17 @@ function Install-OpenClawNpm {
         Write-Host "" -Level info
         Write-Host "TLS certificate verification failed during npm install." -Level warn
         Write-Host "This is common on Windows when a corporate proxy or outdated root CA" -Level warn
-        Write-Host "intercepts HTTPS traffic. Retrying with --strict-ssl=false..." -Level warn
+        Write-Host "intercepts HTTPS traffic." -Level warn
         Write-Host "" -Level info
         Write-Host "NOTE: --strict-ssl=false disables SSL certificate verification for this" -Level warn
         Write-Host "install only. Ensure you trust your network before proceeding." -Level warn
         Write-Host "" -Level info
+
+        $response = Read-Host "Retry installation with --strict-ssl=false? [y/N]"
+        if ($response -notmatch '^[Yy]$') {
+            Write-Host "Aborted. To fix permanently, update your root CA certificates or run: npm config set cafile <path-to-ca-bundle.pem>" -Level info
+            return $false
+        }
 
         $retryOutput = npm install -g $installSpec --no-fund --no-audit --strict-ssl=false 2>&1
         $retryExitCode = $LASTEXITCODE
@@ -243,11 +249,11 @@ function Install-OpenClawNpm {
             return $true
         }
 
-        Write-Host "npm install failed even with --strict-ssl=false: $($retryOutput -join ' ')" -Level error
+        Write-Host "npm install failed even with --strict-ssl=false: $($retryOutput -join `"`n`")" -Level error
         return $false
     }
 
-    Write-Host "npm install failed: $($output -join ' ')" -Level error
+    Write-Host "npm install failed: $($output -join `"`n`")" -Level error
     return $false
 }
 
