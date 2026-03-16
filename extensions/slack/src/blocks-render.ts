@@ -1,50 +1,43 @@
 import type { Block, KnownBlock } from "@slack/web-api";
+import { reduceInteractiveReply } from "../../../src/channels/plugins/outbound/interactive.js";
 import type { InteractiveReply } from "../../../src/interactive/payload.js";
 import { truncateSlackText } from "./truncate.js";
 
-const SLACK_REPLY_BUTTON_ACTION_ID = "openclaw:reply_button";
-const SLACK_REPLY_SELECT_ACTION_ID = "openclaw:reply_select";
+export const SLACK_REPLY_BUTTON_ACTION_ID = "openclaw:reply_button";
+export const SLACK_REPLY_SELECT_ACTION_ID = "openclaw:reply_select";
 const SLACK_SECTION_TEXT_MAX = 3000;
 const SLACK_PLAIN_TEXT_MAX = 75;
-const SLACK_OPTION_VALUE_MAX = 75;
 
 export type SlackBlock = Block | KnownBlock;
 
-function buildSlackReplyChoiceToken(value: string, index: number): string {
-  const slug = value
-    .trim()
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "_")
-    .replace(/^_+|_+$/g, "");
-  return truncateSlackText(`reply_${index}_${slug || "choice"}`, SLACK_OPTION_VALUE_MAX);
-}
-
 export function buildSlackInteractiveBlocks(interactive?: InteractiveReply): SlackBlock[] {
-  const blocks: SlackBlock[] = [];
-  let buttonIndex = 0;
-  let selectIndex = 0;
-  for (const block of interactive?.blocks ?? []) {
+  const initialState = {
+    blocks: [] as SlackBlock[],
+    buttonIndex: 0,
+    selectIndex: 0,
+  };
+  return reduceInteractiveReply(interactive, initialState, (state, block) => {
     if (block.type === "text") {
       const trimmed = block.text.trim();
       if (!trimmed) {
-        continue;
+        return state;
       }
-      blocks.push({
+      state.blocks.push({
         type: "section",
         text: {
           type: "mrkdwn",
           text: truncateSlackText(trimmed, SLACK_SECTION_TEXT_MAX),
         },
       });
-      continue;
+      return state;
     }
     if (block.type === "buttons") {
       if (block.buttons.length === 0) {
-        continue;
+        return state;
       }
-      blocks.push({
+      state.blocks.push({
         type: "actions",
-        block_id: `openclaw_reply_buttons_${++buttonIndex}`,
+        block_id: `openclaw_reply_buttons_${++state.buttonIndex}`,
         elements: block.buttons.map((button, choiceIndex) => ({
           type: "button",
           action_id: SLACK_REPLY_BUTTON_ACTION_ID,
@@ -53,17 +46,17 @@ export function buildSlackInteractiveBlocks(interactive?: InteractiveReply): Sla
             text: truncateSlackText(button.label, SLACK_PLAIN_TEXT_MAX),
             emoji: true,
           },
-          value: buildSlackReplyChoiceToken(button.value, choiceIndex + 1),
+          value: button.value,
         })),
       });
-      continue;
+      return state;
     }
     if (block.options.length === 0) {
-      continue;
+      return state;
     }
-    blocks.push({
+    state.blocks.push({
       type: "actions",
-      block_id: `openclaw_reply_select_${++selectIndex}`,
+      block_id: `openclaw_reply_select_${++state.selectIndex}`,
       elements: [
         {
           type: "static_select",
@@ -82,11 +75,11 @@ export function buildSlackInteractiveBlocks(interactive?: InteractiveReply): Sla
               text: truncateSlackText(option.label, SLACK_PLAIN_TEXT_MAX),
               emoji: true,
             },
-            value: buildSlackReplyChoiceToken(option.value, choiceIndex + 1),
+            value: option.value,
           })),
         },
       ],
     });
-  }
-  return blocks;
+    return state;
+  }).blocks;
 }

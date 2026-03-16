@@ -10,7 +10,7 @@ import { resolveReactionMessageId } from "../../../../src/channels/plugins/actio
 import type { ChannelMessageActionContext } from "../../../../src/channels/plugins/types.js";
 import { normalizeInteractiveReply } from "../../../../src/interactive/payload.js";
 import { readBooleanParam } from "../../../../src/plugin-sdk/boolean-param.js";
-import { buildDiscordInteractiveComponents } from "../shared-interactive.js";
+import { buildDiscordInteractiveComponents } from "../components.js";
 import { resolveDiscordChannelId } from "../targets.js";
 import { tryHandleDiscordMessageActionGuildAdmin } from "./handle-action.guild-admin.js";
 

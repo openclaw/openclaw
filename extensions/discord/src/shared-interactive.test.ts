@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildDiscordInteractiveComponents } from "./shared-interactive.js";
+import { buildDiscordInteractiveComponents } from "./components.js";
 
 describe("buildDiscordInteractiveComponents", () => {
   it("maps shared buttons and selects into Discord component blocks", () => {
