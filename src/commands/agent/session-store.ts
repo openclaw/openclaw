@@ -65,8 +65,7 @@ export async function updateSessionStoreAfterAgentRun(params: {
     updatedAt: Date.now(),
     contextTokens,
   };
-  const isFromFallback =
-    !result.meta.agentMeta?.model && !!fallbackModel && modelUsed === fallbackModel;
+  const isFromFallback = modelUsed !== defaultModel && !!fallbackModel;
   setSessionRuntimeModel(next, {
     provider: providerUsed,
     model: modelUsed,
