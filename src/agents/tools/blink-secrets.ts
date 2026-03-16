@@ -2,10 +2,12 @@ import { Type } from "@sinclair/typebox";
 import type { AnyAgentTool } from "./common.js";
 import { jsonResult, readStringParam } from "./common.js";
 
-const OPERATIONS = ["set", "get_names", "delete"] as const;
-
 const BlinkSecretsSchema = Type.Object({
-  operation: Type.Union(OPERATIONS.map((op) => Type.Literal(op))),
+  operation: Type.Union([
+    Type.Literal("set"),
+    Type.Literal("get_names"),
+    Type.Literal("delete"),
+  ]),
   key: Type.Optional(Type.String()),
   value: Type.Optional(Type.String()),
 });
@@ -34,10 +36,11 @@ export function createBlinkSecretsTool(): AnyAgentTool | null {
     label: "Blink Secrets",
     name: "blink_claw_secrets",
     description:
-      "Manage this agent's secret vault. Use 'set' to save a secret (API key, token, password), " +
-      "'get_names' to list all stored key names, and 'delete' to remove a secret. " +
-      "Values are encrypted and never returned — only key names are readable. " +
-      "After saving, use $KEY_NAME in shell commands to access the value.",
+      "Manage this agent's encrypted secret vault. Use 'set' to save an API key, token, or password " +
+      "(the value is encrypted and never returned after saving). " +
+      "Use 'get_names' to list all stored key names. " +
+      "Use 'delete' to remove a secret. " +
+      "After saving with 'set', access the value as $KEY_NAME in shell commands.",
     parameters: BlinkSecretsSchema,
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;
@@ -45,7 +48,7 @@ export function createBlinkSecretsTool(): AnyAgentTool | null {
 
       if (operation === "get_names") {
         const res = await fetch(secretsUrl, { headers });
-        if (!res.ok) throw new Error(`Failed to list secrets: ${res.status}`);
+        if (!res.ok) throw new Error(`Failed to list secrets: HTTP ${res.status}`);
         const data = (await res.json()) as { secrets: Array<{ key: string }> };
         const keys = data.secrets.map((s) => s.key);
         return jsonResult({ keys, count: keys.length });
@@ -56,17 +59,18 @@ export function createBlinkSecretsTool(): AnyAgentTool | null {
         .replace(/[^A-Z0-9_]/g, "_");
 
       if (operation === "set") {
-        const value = readStringParam(params, "value", { required: true }) ?? "";
+        // Use allowEmpty: true so the agent can set an empty-string value to clear a secret
+        const value = readStringParam(params, "value", { allowEmpty: true }) ?? "";
         const res = await fetch(secretsUrl, {
           method: "POST",
           headers,
           body: JSON.stringify({ key, value }),
         });
-        if (!res.ok) throw new Error(`Failed to save secret: ${res.status}`);
+        if (!res.ok) throw new Error(`Failed to save secret: HTTP ${res.status}`);
         return jsonResult({
           ok: true,
           key,
-          message: `Secret ${key} saved. Use $${key} in shell commands.`,
+          message: `Secret ${key} saved and synced to agent environment. Use $${key} in shell commands.`,
         });
       }
 
@@ -75,7 +79,7 @@ export function createBlinkSecretsTool(): AnyAgentTool | null {
           method: "DELETE",
           headers,
         });
-        if (!res.ok) throw new Error(`Failed to delete secret: ${res.status}`);
+        if (!res.ok) throw new Error(`Failed to delete secret: HTTP ${res.status}`);
         return jsonResult({ ok: true, key, message: `Secret ${key} deleted.` });
       }
 
