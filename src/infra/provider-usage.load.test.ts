@@ -4,8 +4,22 @@ import { loadProviderUsageSummary } from "./provider-usage.load.js";
 import { ignoredErrors } from "./provider-usage.shared.js";
 
 vi.mock("../plugins/provider-runtime.js", () => ({
-  resolveProviderUsageAuthWithPlugin: vi.fn(async () => null),
-  resolveProviderUsageSnapshotWithPlugin: vi.fn(async () => null),
+  resolveProviderUsageAuthWithPlugin: async (
+    ...args: Parameters<
+      typeof import("./provider-usage.test-mock.js").resolveProviderUsageAuthWithPlugin
+    >
+  ) => {
+    const mod = await import("./provider-usage.test-mock.js");
+    return await mod.resolveProviderUsageAuthWithPlugin(...args);
+  },
+  resolveProviderUsageSnapshotWithPlugin: async (
+    ...args: Parameters<
+      typeof import("./provider-usage.test-mock.js").resolveProviderUsageSnapshotWithPlugin
+    >
+  ) => {
+    const mod = await import("./provider-usage.test-mock.js");
+    return await mod.resolveProviderUsageSnapshotWithPlugin(...args);
+  },
 }));
 
 const usageNow = Date.UTC(2026, 0, 7, 0, 0, 0);

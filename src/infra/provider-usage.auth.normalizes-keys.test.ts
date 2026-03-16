@@ -6,7 +6,14 @@ import { NON_ENV_SECRETREF_MARKER } from "../agents/model-auth-markers.js";
 import { resolveProviderAuths, type ProviderAuth } from "./provider-usage.auth.js";
 
 vi.mock("../plugins/provider-runtime.js", () => ({
-  resolveProviderUsageAuthWithPlugin: vi.fn(async () => null),
+  resolveProviderUsageAuthWithPlugin: async (
+    ...args: Parameters<
+      typeof import("./provider-usage.test-mock.js").resolveProviderUsageAuthWithPlugin
+    >
+  ) => {
+    const mod = await import("./provider-usage.test-mock.js");
+    return await mod.resolveProviderUsageAuthWithPlugin(...args);
+  },
 }));
 
 describe("resolveProviderAuths key normalization", () => {

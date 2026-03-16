@@ -16,11 +16,17 @@ import type { OpenClawPluginApi, ProviderPlugin } from "../types.js";
 
 const loginQwenPortalOAuthMock = vi.hoisted(() => vi.fn());
 const githubCopilotLoginCommandMock = vi.hoisted(() => vi.fn());
-const resolvePluginProvidersMock = vi.hoisted(() => vi.fn<() => ProviderPlugin[]>(() => []));
-const resolveProviderPluginChoiceMock = vi.hoisted(() =>
-  vi.fn<() => { provider: ProviderPlugin; method: ProviderPlugin["auth"][number] } | null>(),
+const resolvePluginProvidersMock = vi.hoisted(() =>
+  vi.fn<(...args: unknown[]) => ProviderPlugin[]>((_args?: unknown) => []),
 );
-const runProviderModelSelectedHookMock = vi.hoisted(() => vi.fn(async () => {}));
+const resolveProviderPluginChoiceMock = vi.hoisted(() =>
+  vi.fn<
+    (
+      ...args: unknown[]
+    ) => { provider: ProviderPlugin; method: ProviderPlugin["auth"][number] } | null
+  >((_args?: unknown) => null),
+);
+const runProviderModelSelectedHookMock = vi.hoisted(() => vi.fn(async (..._args: unknown[]) => {}));
 
 vi.mock("../../../extensions/qwen-portal-auth/oauth.js", () => ({
   loginQwenPortalOAuth: loginQwenPortalOAuthMock,
