@@ -3,14 +3,8 @@ import {
   mergeAllowFromEntries,
   setTopLevelChannelDmPolicyWithAllowFrom,
 } from "../../../src/channels/plugins/onboarding/helpers.js";
-import {
-  applyAccountNameToChannelSection,
-  applySetupAccountConfigPatch,
-  migrateBaseNameToDefaultAccount,
-  patchScopedAccountConfig,
-} from "../../../src/channels/plugins/setup-helpers.js";
+import { patchScopedAccountConfig } from "../../../src/channels/plugins/setup-helpers.js";
 import type { ChannelSetupWizard } from "../../../src/channels/plugins/setup-wizard.js";
-import type { ChannelSetupAdapter } from "../../../src/channels/plugins/types.adapters.js";
 import type { OpenClawConfig } from "../../../src/config/config.js";
 import { formatResolvedUnresolvedNote } from "../../../src/plugin-sdk/resolution-notes.js";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../../../src/routing/session-key.js";
@@ -22,6 +16,7 @@ import {
   checkZcaAuthenticated,
 } from "./accounts.js";
 import { writeQrDataUrlToTempFile } from "./qr-temp-file.js";
+import { zalouserSetupAdapter } from "./setup-core.js";
 import {
   logoutZaloProfile,
   resolveZaloAllowFromEntries,
@@ -169,38 +164,7 @@ const zalouserDmPolicy: ChannelOnboardingDmPolicy = {
   },
 };
 
-export const zalouserSetupAdapter: ChannelSetupAdapter = {
-  resolveAccountId: ({ accountId }) => normalizeAccountId(accountId),
-  applyAccountName: ({ cfg, accountId, name }) =>
-    applyAccountNameToChannelSection({
-      cfg,
-      channelKey: channel,
-      accountId,
-      name,
-    }),
-  validateInput: () => null,
-  applyAccountConfig: ({ cfg, accountId, input }) => {
-    const namedConfig = applyAccountNameToChannelSection({
-      cfg,
-      channelKey: channel,
-      accountId,
-      name: input.name,
-    });
-    const next =
-      accountId !== DEFAULT_ACCOUNT_ID
-        ? migrateBaseNameToDefaultAccount({
-            cfg: namedConfig,
-            channelKey: channel,
-          })
-        : namedConfig;
-    return applySetupAccountConfigPatch({
-      cfg: next,
-      channelKey: channel,
-      accountId,
-      patch: {},
-    });
-  },
-};
+export { zalouserSetupAdapter } from "./setup-core.js";
 
 export const zalouserSetupWizard: ChannelSetupWizard = {
   channel,

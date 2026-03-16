@@ -268,12 +268,44 @@ describe("gateway-status command", () => {
     expect(scopeLimitedWarning?.targetIds).toContain("localLoopback");
   });
 
-  it("surfaces unresolved SecretRef auth diagnostics in warnings", async () => {
+  it("suppresses unresolved SecretRef auth warnings when probe is reachable", async () => {
     const { runtime, runtimeLogs, runtimeErrors } = createRuntimeCapture();
     await withEnvAsync({ MISSING_GATEWAY_TOKEN: undefined }, async () => {
       mockLocalTokenEnvRefConfig();
 
       await runGatewayStatus(runtime, { timeout: "1000", json: true });
+    });
+
+    expect(runtimeErrors).toHaveLength(0);
+    const parsed = JSON.parse(runtimeLogs.join("\n")) as {
+      warnings?: Array<{ code?: string; message?: string; targetIds?: string[] }>;
+    };
+    const unresolvedWarning = parsed.warnings?.find(
+      (warning) =>
+        warning.code === "auth_secretref_unresolved" &&
+        warning.message?.includes("gateway.auth.token SecretRef is unresolved"),
+    );
+    expect(unresolvedWarning).toBeUndefined();
+  });
+
+  it("surfaces unresolved SecretRef auth diagnostics when probe fails", async () => {
+    const { runtime, runtimeLogs, runtimeErrors } = createRuntimeCapture();
+    await withEnvAsync({ MISSING_GATEWAY_TOKEN: undefined }, async () => {
+      mockLocalTokenEnvRefConfig();
+      probeGateway.mockResolvedValueOnce({
+        ok: false,
+        url: "ws://127.0.0.1:18789",
+        connectLatencyMs: null,
+        error: "connection refused",
+        close: null,
+        health: null,
+        status: null,
+        presence: null,
+        configSnapshot: null,
+      });
+      await expect(runGatewayStatus(runtime, { timeout: "1000", json: true })).rejects.toThrow(
+        "__exit__:1",
+      );
     });
 
     expect(runtimeErrors).toHaveLength(0);

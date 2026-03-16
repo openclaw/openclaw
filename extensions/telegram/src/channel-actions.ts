@@ -115,6 +115,9 @@ export const telegramMessageActions: ChannelMessageActionAdapter = {
     if (isEnabled("createForumTopic")) {
       actions.add("topic-create");
     }
+    if (isEnabled("editForumTopic")) {
+      actions.add("topic-edit");
+    }
     return Array.from(actions);
   },
   supportsButtons: ({ cfg }) => {
@@ -282,6 +285,30 @@ export const telegramMessageActions: ChannelMessageActionAdapter = {
           chatId,
           name,
           iconColor: iconColor ?? undefined,
+          iconCustomEmojiId: iconCustomEmojiId ?? undefined,
+          accountId: accountId ?? undefined,
+        },
+        cfg,
+        { mediaLocalRoots },
+      );
+    }
+
+    if (action === "topic-edit") {
+      const chatId = readTelegramChatIdParam(params);
+      const messageThreadId =
+        readNumberParam(params, "messageThreadId", { integer: true }) ??
+        readNumberParam(params, "threadId", { integer: true });
+      if (typeof messageThreadId !== "number") {
+        throw new Error("messageThreadId or threadId is required.");
+      }
+      const name = readStringParam(params, "name");
+      const iconCustomEmojiId = readStringParam(params, "iconCustomEmojiId");
+      return await handleTelegramAction(
+        {
+          action: "editForumTopic",
+          chatId,
+          messageThreadId,
+          name: name ?? undefined,
           iconCustomEmojiId: iconCustomEmojiId ?? undefined,
           accountId: accountId ?? undefined,
         },
