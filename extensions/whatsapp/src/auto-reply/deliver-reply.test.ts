@@ -36,6 +36,18 @@ function makeMsg(): WebInboundMsg {
   } as unknown as WebInboundMsg;
 }
 
+function expectReplyCalledWithQuoteCurrent(
+  msg: WebInboundMsg,
+  callIndex: number,
+  text: string,
+  quoteCurrent: boolean,
+) {
+  expect((msg.reply as unknown as { mock: { calls: unknown[][] } }).mock.calls[callIndex]).toEqual([
+    text,
+    { quoteCurrent },
+  ]);
+}
+
 function mockLoadedImageMedia() {
   (
     loadWebMedia as unknown as { mockResolvedValueOnce: (v: unknown) => void }
@@ -105,8 +117,11 @@ describe("deliverWebReply", () => {
     });
 
     expect(msg.reply).toHaveBeenCalledTimes(1);
-    expect(msg.reply).toHaveBeenCalledWith(
+    expectReplyCalledWithQuoteCurrent(
+      msg,
+      0,
       "Intro line\nReasoning: appears in content but is not a prefix",
+      false,
     );
   });
 
@@ -123,9 +138,41 @@ describe("deliverWebReply", () => {
     });
 
     expect(msg.reply).toHaveBeenCalledTimes(2);
-    expect(msg.reply).toHaveBeenNthCalledWith(1, "aaa");
-    expect(msg.reply).toHaveBeenNthCalledWith(2, "aaa");
+    expectReplyCalledWithQuoteCurrent(msg, 0, "aaa", false);
+    expectReplyCalledWithQuoteCurrent(msg, 1, "aaa", false);
     expect(replyLogger.info).toHaveBeenCalledWith(expect.any(Object), "auto-reply sent (text)");
+  });
+
+  it("quotes the current inbound message when replyToId matches msg.id", async () => {
+    const msg = makeMsg();
+
+    await deliverWebReply({
+      replyResult: { text: "hi", replyToId: "msg-1" },
+      msg,
+      maxMediaBytes: 1024 * 1024,
+      textLimit: 200,
+      replyLogger,
+      skipLog: true,
+    });
+
+    expect(msg.reply).toHaveBeenCalledTimes(1);
+    expectReplyCalledWithQuoteCurrent(msg, 0, "hi", true);
+  });
+
+  it("does not try to quote older explicit reply ids", async () => {
+    const msg = makeMsg();
+
+    await deliverWebReply({
+      replyResult: { text: "hi", replyToId: "older-msg-123" },
+      msg,
+      maxMediaBytes: 1024 * 1024,
+      textLimit: 200,
+      replyLogger,
+      skipLog: true,
+    });
+
+    expect(msg.reply).toHaveBeenCalledTimes(1);
+    expectReplyCalledWithQuoteCurrent(msg, 0, "hi", false);
   });
 
   it.each(["connection closed", "operation timed out"])(
@@ -175,10 +222,34 @@ describe("deliverWebReply", () => {
         caption: "aaa",
         mimetype: "image/jpeg",
       }),
+      { quoteCurrent: false },
     );
-    expect(msg.reply).toHaveBeenCalledWith("aaa");
+    expectReplyCalledWithQuoteCurrent(msg, 0, "aaa", false);
     expect(replyLogger.info).toHaveBeenCalledWith(expect.any(Object), "auto-reply sent (media)");
     expect(logVerbose).toHaveBeenCalled();
+  });
+
+  it("quotes media sends when replying to the current inbound message", async () => {
+    const msg = makeMsg();
+    mockLoadedImageMedia();
+
+    await deliverWebReply({
+      replyResult: { text: "cap", mediaUrl: "http://example.com/img.jpg", replyToId: "msg-1" },
+      msg,
+      maxMediaBytes: 1024 * 1024,
+      textLimit: 200,
+      replyLogger,
+      skipLog: true,
+    });
+
+    expect(msg.sendMedia).toHaveBeenCalledWith(
+      expect.objectContaining({
+        image: expect.any(Buffer),
+        caption: "cap",
+        mimetype: "image/jpeg",
+      }),
+      { quoteCurrent: true },
+    );
   });
 
   it("retries media send on transient failure", async () => {
@@ -252,6 +323,7 @@ describe("deliverWebReply", () => {
         mimetype: "audio/ogg",
         caption: "cap",
       }),
+      { quoteCurrent: false },
     );
   });
 
@@ -280,6 +352,7 @@ describe("deliverWebReply", () => {
         caption: "cap",
         mimetype: "video/mp4",
       }),
+      { quoteCurrent: false },
     );
   });
 
@@ -310,6 +383,7 @@ describe("deliverWebReply", () => {
         caption: "cap",
         mimetype: "application/octet-stream",
       }),
+      { quoteCurrent: false },
     );
   });
 });

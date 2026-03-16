@@ -327,11 +327,11 @@ export async function monitorWebInbox(options: {
         logVerbose(`Presence update failed: ${String(err)}`);
       }
     };
-    const reply = async (text: string) => {
-      await sock.sendMessage(chatJid, { text });
+    const reply = async (text: string, opts?: { quoteCurrent?: boolean }) => {
+      await sock.sendMessage(chatJid, { text }, opts?.quoteCurrent ? { quoted: msg } : undefined);
     };
-    const sendMedia = async (payload: AnyMessageContent) => {
-      await sock.sendMessage(chatJid, payload);
+    const sendMedia = async (payload: AnyMessageContent, opts?: { quoteCurrent?: boolean }) => {
+      await sock.sendMessage(chatJid, payload, opts?.quoteCurrent ? { quoted: msg } : undefined);
     };
     const timestamp = inbound.messageTimestampMs;
     const mentionedJids = extractMentionedJids(msg.message as proto.IMessage | undefined);
