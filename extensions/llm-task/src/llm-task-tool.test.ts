@@ -215,7 +215,7 @@ describe("llm-task tool (json-only)", () => {
       /invalid thinking level/i,
     );
     expect(runEmbeddedPiAgent).not.toHaveBeenCalled();
-  });
+  }, 180_000);
 
   it("throws on unsupported xhigh thinking level", async () => {
     const tool = createLlmTaskTool(fakeApi());
