@@ -15,6 +15,10 @@ import {
   resolveAgentMainSessionKey,
   type SessionEntry,
   updateSessionStore,
+  evaluateSessionFreshness,
+  resolveSessionResetPolicy,
+  resolveSessionResetType,
+  resolveChannelResetConfig,
 } from "../../config/sessions.js";
 import { registerAgentRunContext } from "../../infra/agent-events.js";
 import {
@@ -351,7 +355,29 @@ export const agentHandlers: GatewayRequestHandlers = {
       const { cfg, storePath, entry, canonicalKey } = loadSessionEntry(requestedSessionKey);
       cfgForAgent = cfg;
       const now = Date.now();
-      const sessionId = entry?.sessionId ?? randomUUID();
+
+      // Evaluate session freshness before reusing the existing sessionId.
+      // Without this, the pre-resolved sessionId is passed to resolveSession()
+      // which skips its own freshness check when opts.sessionId is provided,
+      // preventing daily/idle session resets from ever firing.
+      let sessionId: string;
+      if (entry?.sessionId && entry.updatedAt != null) {
+        const sessionCfg = cfg.session;
+        const resetType = resolveSessionResetType({ sessionKey: canonicalKey });
+        const resetOverride = resolveChannelResetConfig({
+          sessionCfg,
+          channel: entry.lastChannel ?? entry.channel,
+        });
+        const policy = resolveSessionResetPolicy({ sessionCfg, resetType, resetOverride });
+        const { fresh } = evaluateSessionFreshness({
+          updatedAt: entry.updatedAt,
+          now,
+          policy,
+        });
+        sessionId = fresh ? entry.sessionId : randomUUID();
+      } else {
+        sessionId = entry?.sessionId ?? randomUUID();
+      }
       const labelValue = request.label?.trim() || entry?.label;
       const sessionAgent = resolveAgentIdFromSessionKey(canonicalKey);
       spawnedByValue = canonicalizeSpawnedByForAgent(cfg, sessionAgent, entry?.spawnedBy);
