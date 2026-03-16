@@ -564,7 +564,32 @@ export function chunkMarkdownSemantic(
 
     // Build chunks section by section
     for (const entry of sectionLines) {
-      const entrySize = (entry.line.trimEnd().length || 0) + 1;
+      const entryLine = entry.line;
+      const entrySize = (entryLine.trimEnd().length || 0) + 1;
+
+      // Check if this single line exceeds the limit
+      if (entrySize > maxChars) {
+        // Flush any existing content first
+        if (currentChunkLines.length > 0) {
+          flushChunk();
+          currentChunkLines = [];
+          currentChars = 0;
+        }
+
+        // Split overly long line into multiple chunks
+        const lineNo = entry.lineNo;
+        for (let start = 0; start < entryLine.length; start += maxChars) {
+          const segment = entryLine.slice(start, start + maxChars);
+          currentChunkLines.push({ line: segment, lineNo });
+          currentChars += segment.length + 1;
+          if (currentChars >= maxChars) {
+            flushChunk();
+            currentChunkLines = [];
+            currentChars = 0;
+          }
+        }
+        continue;
+      }
 
       // Check if adding this line would exceed limit
       if (currentChars + entrySize > maxChars && currentChunkLines.length > 0) {

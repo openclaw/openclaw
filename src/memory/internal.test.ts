@@ -454,4 +454,28 @@ More content.`;
     expect(chunks.length).toBe(1);
     expect(chunks[0].text).toBe(content);
   });
+
+  it("splits overly long lines into max-sized chunks", () => {
+    const chunkTokens = 400;
+    const maxChars = chunkTokens * 4;
+    // Create a very long line (3x maxChars)
+    const longLine = "a".repeat(maxChars * 3);
+    const content = `## Long Line
+
+${longLine}
+
+## Next Section
+
+Some content.`;
+
+    const chunks = chunkMarkdownSemantic(content, { tokens: chunkTokens, overlap: 0 });
+
+    // Should split the long line
+    expect(chunks.length).toBeGreaterThanOrEqual(2);
+    // Each chunk should be within reasonable size
+    for (const chunk of chunks) {
+      // Allow slight overage due to heading and section structure
+      expect(chunk.text.length).toBeLessThanOrEqual(maxChars * 2);
+    }
+  });
 });
