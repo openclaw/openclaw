@@ -434,10 +434,14 @@ export async function preflightDiscordMessage(
   const explicitlyMentionedViaArray = Boolean(
     botId && message.mentionedUsers?.some((user: User) => user.id === botId),
   );
-  // Strip inline and fenced code blocks before text-based mention detection to
-  // avoid false positives from literal <@id> tokens in code snippets.
+  // Strip inline/fenced code blocks and escaped mention literals before text-based
+  // mention detection to avoid false positives from code snippets or intentionally
+  // escaped <@id> tokens (e.g. \<@id>) that Discord renders as literal text.
   const textForMentionCheck = baseText
-    ? baseText.replace(/```[\s\S]*?```/g, "").replace(/`[^`]*`/g, "")
+    ? baseText
+        .replace(/```[\s\S]*?```/g, "")   // fenced code blocks
+        .replace(/`[^`]*`/g, "")            // inline code spans
+        .replace(/\\<@/g, "")              // escaped mention literals \<@
     : undefined;
   const explicitlyMentionedViaText = Boolean(
     botId && textForMentionCheck && getBotMentionRegex(botId).test(textForMentionCheck),
