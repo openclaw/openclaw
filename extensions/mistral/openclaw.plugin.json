@@ -9,14 +9,14 @@
       "provider": "mistral",
       "method": "api-key",
       "choiceId": "mistral-api-key",
-      "choiceLabel": "Mistral API Key",
+      "choiceLabel": "Mistral API key",
       "groupId": "mistral",
       "groupLabel": "Mistral AI",
-      "groupHint": "API Key",
+      "groupHint": "API key",
       "optionKey": "mistralApiKey",
       "cliFlag": "--mistral-api-key",
       "cliOption": "--mistral-api-key <key>",
-      "cliDescription": "Mistral API Key"
+      "cliDescription": "Mistral API key"
     }
   ],
   "configSchema": {

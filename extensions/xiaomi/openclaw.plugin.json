@@ -9,14 +9,14 @@
       "provider": "xiaomi",
       "method": "api-key",
       "choiceId": "xiaomi-api-key",
-      "choiceLabel": "Xiaomi API Key",
+      "choiceLabel": "Xiaomi API key",
       "groupId": "xiaomi",
       "groupLabel": "Xiaomi",
-      "groupHint": "API Key",
+      "groupHint": "API key",
       "optionKey": "xiaomiApiKey",
       "cliFlag": "--xiaomi-api-key",
       "cliOption": "--xiaomi-api-key <key>",
-      "cliDescription": "Xiaomi API Key"
+      "cliDescription": "Xiaomi API key"
     }
   ],
   "configSchema": {

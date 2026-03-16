@@ -91,15 +91,15 @@ async function resolveCloudflareGatewayMetadataInteractive(ctx: {
   let gatewayId = ctx.gatewayId?.trim() ?? "";
   if (!accountId) {
     const value = await ctx.prompter.text({
-      message: "输入 Cloudflare Account ID",
-      validate: (val) => (String(val ?? "").trim() ? undefined : "Account ID 为必填项"),
+      message: "Enter Cloudflare Account ID",
+      validate: (val) => (String(val ?? "").trim() ? undefined : "Account ID is required"),
     });
     accountId = String(value ?? "").trim();
   }
   if (!gatewayId) {
     const value = await ctx.prompter.text({
-      message: "输入 Cloudflare AI Gateway ID",
-      validate: (val) => (String(val ?? "").trim() ? undefined : "Gateway ID 为必填项"),
+      message: "Enter Cloudflare AI Gateway ID",
+      validate: (val) => (String(val ?? "").trim() ? undefined : "Gateway ID is required"),
     });
     gatewayId = String(value ?? "").trim();
   }
@@ -121,15 +121,15 @@ const cloudflareAiGatewayPlugin = {
         {
           id: "api-key",
           label: "Cloudflare AI Gateway",
-          hint: "Account ID + Gateway ID + API Key",
+          hint: "Account ID + Gateway ID + API key",
           kind: "api_key",
           wizard: {
             choiceId: "cloudflare-ai-gateway-api-key",
             choiceLabel: "Cloudflare AI Gateway",
-            choiceHint: "Account ID + Gateway ID + API Key",
+            choiceHint: "Account ID + Gateway ID + API key",
             groupId: "cloudflare-ai-gateway",
             groupLabel: "Cloudflare AI Gateway",
-            groupHint: "Account ID + Gateway ID + API Key",
+            groupHint: "Account ID + Gateway ID + API key",
           },
           run: async (ctx) => {
             const metadata = await resolveCloudflareGatewayMetadataInteractive({
@@ -151,7 +151,7 @@ const cloudflareAiGatewayPlugin = {
               expectedProviders: [PROVIDER_ID],
               provider: PROVIDER_ID,
               envLabel: PROVIDER_ENV_VAR,
-              promptMessage: "输入 Cloudflare AI Gateway API Key",
+              promptMessage: "Enter Cloudflare AI Gateway API key",
               normalize: normalizeApiKeyInput,
               validate: validateApiKeyInput,
               prompter: ctx.prompter,

@@ -9,14 +9,14 @@
       "provider": "xai",
       "method": "api-key",
       "choiceId": "xai-api-key",
-      "choiceLabel": "xAI API Key",
+      "choiceLabel": "xAI API key",
       "groupId": "xai",
       "groupLabel": "xAI (Grok)",
-      "groupHint": "API Key",
+      "groupHint": "API key",
       "optionKey": "xaiApiKey",
       "cliFlag": "--xai-api-key",
       "cliOption": "--xai-api-key <key>",
-      "cliDescription": "xAI API Key"
+      "cliDescription": "xAI API key"
     }
   ],
   "configSchema": {

@@ -9,15 +9,15 @@
       "provider": "huggingface",
       "method": "api-key",
       "choiceId": "huggingface-api-key",
-      "choiceLabel": "Hugging Face API Key",
-      "choiceHint": "Inference API（HF token）",
+      "choiceLabel": "Hugging Face API key",
+      "choiceHint": "Inference API (HF token)",
       "groupId": "huggingface",
       "groupLabel": "Hugging Face",
-      "groupHint": "Inference API（HF token）",
+      "groupHint": "Inference API (HF token)",
       "optionKey": "huggingfaceApiKey",
       "cliFlag": "--huggingface-api-key",
       "cliOption": "--huggingface-api-key <key>",
-      "cliDescription": "Hugging Face API Key（HF token）"
+      "cliDescription": "Hugging Face API key (HF token)"
     }
   ],
   "configSchema": {

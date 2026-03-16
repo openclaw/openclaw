@@ -99,20 +99,20 @@ function resolveZaiDefaultModel(modelIdOverride?: string): string {
 
 async function promptForZaiEndpoint(ctx: ProviderAuthContext): Promise<ZaiEndpointId> {
   return await ctx.prompter.select<ZaiEndpointId>({
-    message: "选择 Z.AI 端点",
+    message: "Select Z.AI endpoint",
     initialValue: "global",
     options: [
-      { value: "global", label: "Global", hint: "Z.AI Global（api.z.ai）" },
-      { value: "cn", label: "CN", hint: "Z.AI CN（open.bigmodel.cn）" },
+      { value: "global", label: "Global", hint: "Z.AI Global (api.z.ai)" },
+      { value: "cn", label: "CN", hint: "Z.AI CN (open.bigmodel.cn)" },
       {
         value: "coding-global",
-        label: "Coding Plan Global",
-        hint: "GLM Coding Plan Global（api.z.ai）",
+        label: "Coding-Plan-Global",
+        hint: "GLM Coding Plan Global (api.z.ai)",
       },
       {
         value: "coding-cn",
-        label: "Coding Plan CN",
-        hint: "GLM Coding Plan CN（open.bigmodel.cn）",
+        label: "Coding-Plan-CN",
+        hint: "GLM Coding Plan CN (open.bigmodel.cn)",
       },
     ],
   });
@@ -145,7 +145,7 @@ async function runZaiApiKeyAuth(
     expectedProviders: [PROVIDER_ID, "z-ai"],
     provider: PROVIDER_ID,
     envLabel: "ZAI_API_KEY",
-    promptMessage: "输入 Z.AI API Key",
+    promptMessage: "Enter Z.AI API key",
     normalize: normalizeApiKeyInput,
     validate: validateApiKeyInput,
     prompter: ctx.prompter,
@@ -271,34 +271,34 @@ const zaiPlugin = {
         buildZaiApiKeyMethod({
           id: "api-key",
           choiceId: "zai-api-key",
-          choiceLabel: "Z.AI API Key",
+          choiceLabel: "Z.AI API key",
         }),
         buildZaiApiKeyMethod({
           id: "coding-global",
           choiceId: "zai-coding-global",
-          choiceLabel: "Coding Plan Global",
-          choiceHint: "GLM Coding Plan Global（api.z.ai）",
+          choiceLabel: "Coding-Plan-Global",
+          choiceHint: "GLM Coding Plan Global (api.z.ai)",
           endpoint: "coding-global",
         }),
         buildZaiApiKeyMethod({
           id: "coding-cn",
           choiceId: "zai-coding-cn",
-          choiceLabel: "Coding Plan CN",
-          choiceHint: "GLM Coding Plan CN（open.bigmodel.cn）",
+          choiceLabel: "Coding-Plan-CN",
+          choiceHint: "GLM Coding Plan CN (open.bigmodel.cn)",
           endpoint: "coding-cn",
         }),
         buildZaiApiKeyMethod({
           id: "global",
           choiceId: "zai-global",
           choiceLabel: "Global",
-          choiceHint: "Z.AI Global（api.z.ai）",
+          choiceHint: "Z.AI Global (api.z.ai)",
           endpoint: "global",
         }),
         buildZaiApiKeyMethod({
           id: "cn",
           choiceId: "zai-cn",
           choiceLabel: "CN",
-          choiceHint: "Z.AI CN（open.bigmodel.cn）",
+          choiceHint: "Z.AI CN (open.bigmodel.cn)",
           endpoint: "cn",
         }),
       ],

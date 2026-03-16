@@ -9,20 +9,20 @@
       "provider": "zai",
       "method": "api-key",
       "choiceId": "zai-api-key",
-      "choiceLabel": "Z.AI API Key",
+      "choiceLabel": "Z.AI API key",
       "groupId": "zai",
       "groupLabel": "Z.AI",
       "groupHint": "GLM Coding Plan / Global / CN",
       "optionKey": "zaiApiKey",
       "cliFlag": "--zai-api-key",
       "cliOption": "--zai-api-key <key>",
-      "cliDescription": "Z.AI API Key"
+      "cliDescription": "Z.AI API key"
     },
     {
       "provider": "zai",
       "method": "coding-global",
       "choiceId": "zai-coding-global",
-      "choiceLabel": "Coding Plan Global",
+      "choiceLabel": "Coding-Plan-Global",
       "choiceHint": "GLM Coding Plan Global (api.z.ai)",
       "groupId": "zai",
       "groupLabel": "Z.AI",
@@ -30,13 +30,13 @@
       "optionKey": "zaiApiKey",
       "cliFlag": "--zai-api-key",
       "cliOption": "--zai-api-key <key>",
-      "cliDescription": "Z.AI API Key"
+      "cliDescription": "Z.AI API key"
     },
     {
       "provider": "zai",
       "method": "coding-cn",
       "choiceId": "zai-coding-cn",
-      "choiceLabel": "Coding Plan CN",
+      "choiceLabel": "Coding-Plan-CN",
       "choiceHint": "GLM Coding Plan CN (open.bigmodel.cn)",
       "groupId": "zai",
       "groupLabel": "Z.AI",
@@ -44,7 +44,7 @@
       "optionKey": "zaiApiKey",
       "cliFlag": "--zai-api-key",
       "cliOption": "--zai-api-key <key>",
-      "cliDescription": "Z.AI API Key"
+      "cliDescription": "Z.AI API key"
     },
     {
       "provider": "zai",
@@ -58,7 +58,7 @@
       "optionKey": "zaiApiKey",
       "cliFlag": "--zai-api-key",
       "cliOption": "--zai-api-key <key>",
-      "cliDescription": "Z.AI API Key"
+      "cliDescription": "Z.AI API key"
     },
     {
       "provider": "zai",
@@ -72,7 +72,7 @@
       "optionKey": "zaiApiKey",
       "cliFlag": "--zai-api-key",
       "cliOption": "--zai-api-key <key>",
-      "cliDescription": "Z.AI API Key"
+      "cliDescription": "Z.AI API key"
     }
   ],
   "configSchema": {

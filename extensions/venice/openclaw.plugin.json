@@ -9,14 +9,14 @@
       "provider": "venice",
       "method": "api-key",
       "choiceId": "venice-api-key",
-      "choiceLabel": "Venice AI API Key",
+      "choiceLabel": "Venice AI API key",
       "groupId": "venice",
       "groupLabel": "Venice AI",
       "groupHint": "Privacy-focused (uncensored models)",
       "optionKey": "veniceApiKey",
       "cliFlag": "--venice-api-key",
       "cliOption": "--venice-api-key <key>",
-      "cliDescription": "Venice API Key"
+      "cliDescription": "Venice API key"
     }
   ],
   "configSchema": {

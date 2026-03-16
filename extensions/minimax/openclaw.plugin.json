@@ -10,8 +10,8 @@
       "provider": "minimax-portal",
       "method": "oauth",
       "choiceId": "minimax-global-oauth",
-      "choiceLabel": "MiniMax OAuth（Global）",
-      "choiceHint": "Global 端点 - api.minimax.io",
+      "choiceLabel": "MiniMax OAuth (Global)",
+      "choiceHint": "Global endpoint - api.minimax.io",
       "groupId": "minimax",
       "groupLabel": "MiniMax",
       "groupHint": "M2.5 (recommended)"
@@ -20,22 +20,22 @@
       "provider": "minimax",
       "method": "api-global",
       "choiceId": "minimax-global-api",
-      "choiceLabel": "MiniMax API Key（Global）",
-      "choiceHint": "Global 端点 - api.minimax.io",
+      "choiceLabel": "MiniMax API key (Global)",
+      "choiceHint": "Global endpoint - api.minimax.io",
       "groupId": "minimax",
       "groupLabel": "MiniMax",
       "groupHint": "M2.5 (recommended)",
       "optionKey": "minimaxApiKey",
       "cliFlag": "--minimax-api-key",
       "cliOption": "--minimax-api-key <key>",
-      "cliDescription": "MiniMax API Key"
+      "cliDescription": "MiniMax API key"
     },
     {
       "provider": "minimax-portal",
       "method": "oauth-cn",
       "choiceId": "minimax-cn-oauth",
-      "choiceLabel": "MiniMax OAuth（CN）",
-      "choiceHint": "CN 端点 - api.minimaxi.com",
+      "choiceLabel": "MiniMax OAuth (CN)",
+      "choiceHint": "CN endpoint - api.minimaxi.com",
       "groupId": "minimax",
       "groupLabel": "MiniMax",
       "groupHint": "M2.5 (recommended)"
@@ -44,15 +44,15 @@
       "provider": "minimax",
       "method": "api-cn",
       "choiceId": "minimax-cn-api",
-      "choiceLabel": "MiniMax API Key（CN）",
-      "choiceHint": "CN 端点 - api.minimaxi.com",
+      "choiceLabel": "MiniMax API key (CN)",
+      "choiceHint": "CN endpoint - api.minimaxi.com",
       "groupId": "minimax",
       "groupLabel": "MiniMax",
       "groupHint": "M2.5 (recommended)",
       "optionKey": "minimaxApiKey",
       "cliFlag": "--minimax-api-key",
       "cliOption": "--minimax-api-key <key>",
-      "cliDescription": "MiniMax API Key"
+      "cliDescription": "MiniMax API key"
     }
   ],
   "configSchema": {

@@ -24,12 +24,12 @@ const byteplusPlugin = {
         createProviderApiKeyAuthMethod({
           providerId: PROVIDER_ID,
           methodId: "api-key",
-          label: "BytePlus API Key",
-          hint: "API Key",
+          label: "BytePlus API key",
+          hint: "API key",
           optionKey: "byteplusApiKey",
           flagName: "--byteplus-api-key",
           envVar: "BYTEPLUS_API_KEY",
-          promptMessage: "输入 BytePlus API Key",
+          promptMessage: "Enter BytePlus API key",
           defaultModel: BYTEPLUS_DEFAULT_MODEL_REF,
           expectedProviders: ["byteplus"],
           applyConfig: (cfg) =>
@@ -39,10 +39,10 @@ const byteplusPlugin = {
             }),
           wizard: {
             choiceId: "byteplus-api-key",
-            choiceLabel: "BytePlus API Key",
+            choiceLabel: "BytePlus API key",
             groupId: "byteplus",
             groupLabel: "BytePlus",
-            groupHint: "API Key",
+            groupHint: "API key",
           },
         }),
       ],
