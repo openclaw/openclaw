@@ -6,8 +6,8 @@ import { telegramPlugin } from "../../extensions/telegram/src/channel.js";
 import { whatsappPlugin } from "../../extensions/whatsapp/src/channel.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { createTestRegistry } from "../test-utils/channel-plugins.js";
+import { getChannelOnboardingAdapter } from "./channel-setup/registry.js";
 import type { ChannelChoice } from "./onboard-types.js";
-import { getChannelOnboardingAdapter } from "./onboarding/registry.js";
 import type { ChannelOnboardingAdapter } from "./onboarding/types.js";
 
 type ChannelOnboardingAdapterPatch = Partial<

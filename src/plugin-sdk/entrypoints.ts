@@ -1,4 +1,4 @@
-import pluginSdkEntryList from "./plugin-sdk-entrypoints.json" with { type: "json" };
+import pluginSdkEntryList from "../../scripts/lib/plugin-sdk-entrypoints.json" with { type: "json" };
 
 export const pluginSdkEntrypoints = [...pluginSdkEntryList];
 

@@ -1,8 +1,29 @@
+import { discordPlugin } from "../../../extensions/discord/src/channel.js";
+import { googlechatPlugin } from "../../../extensions/googlechat/src/channel.js";
+import { imessagePlugin } from "../../../extensions/imessage/src/channel.js";
+import { ircPlugin } from "../../../extensions/irc/src/channel.js";
+import { linePlugin } from "../../../extensions/line/src/channel.js";
+import { signalPlugin } from "../../../extensions/signal/src/channel.js";
+import { slackPlugin } from "../../../extensions/slack/src/channel.js";
+import { telegramPlugin } from "../../../extensions/telegram/src/channel.js";
+import { whatsappPlugin } from "../../../extensions/whatsapp/src/channel.js";
 import { listChannelSetupPlugins } from "../../channels/plugins/setup-registry.js";
 import { buildChannelOnboardingAdapterFromSetupWizard } from "../../channels/plugins/setup-wizard.js";
 import type { ChannelPlugin } from "../../channels/plugins/types.js";
 import type { ChannelChoice } from "../onboard-types.js";
-import type { ChannelOnboardingAdapter } from "./types.js";
+import type { ChannelOnboardingAdapter } from "../onboarding/types.js";
+
+const EMPTY_REGISTRY_FALLBACK_PLUGINS = [
+  telegramPlugin,
+  whatsappPlugin,
+  discordPlugin,
+  ircPlugin,
+  googlechatPlugin,
+  slackPlugin,
+  signalPlugin,
+  imessagePlugin,
+  linePlugin,
+];
 
 const setupWizardAdapters = new WeakMap<object, ChannelOnboardingAdapter>();
 
@@ -26,7 +47,12 @@ export function resolveChannelOnboardingAdapterForPlugin(
 
 const CHANNEL_ONBOARDING_ADAPTERS = () => {
   const adapters = new Map<ChannelChoice, ChannelOnboardingAdapter>();
-  for (const plugin of listChannelSetupPlugins()) {
+  const setupPlugins = listChannelSetupPlugins();
+  const plugins =
+    setupPlugins.length > 0
+      ? setupPlugins
+      : (EMPTY_REGISTRY_FALLBACK_PLUGINS as unknown as ReturnType<typeof listChannelSetupPlugins>);
+  for (const plugin of plugins) {
     const adapter = resolveChannelOnboardingAdapterForPlugin(plugin);
     if (!adapter) {
       continue;
@@ -51,23 +77,23 @@ export async function loadBundledChannelOnboardingPlugin(
 ): Promise<ChannelPlugin | undefined> {
   switch (channel) {
     case "discord":
-      return (await import("../../../extensions/discord/setup-entry.js")).default
-        .plugin as ChannelPlugin;
+      return discordPlugin as ChannelPlugin;
+    case "googlechat":
+      return googlechatPlugin as ChannelPlugin;
     case "imessage":
-      return (await import("../../../extensions/imessage/setup-entry.js")).default
-        .plugin as ChannelPlugin;
+      return imessagePlugin as ChannelPlugin;
+    case "irc":
+      return ircPlugin as ChannelPlugin;
+    case "line":
+      return linePlugin as ChannelPlugin;
     case "signal":
-      return (await import("../../../extensions/signal/setup-entry.js")).default
-        .plugin as ChannelPlugin;
+      return signalPlugin as ChannelPlugin;
     case "slack":
-      return (await import("../../../extensions/slack/setup-entry.js")).default
-        .plugin as ChannelPlugin;
+      return slackPlugin as ChannelPlugin;
     case "telegram":
-      return (await import("../../../extensions/telegram/setup-entry.js")).default
-        .plugin as ChannelPlugin;
+      return telegramPlugin as ChannelPlugin;
     case "whatsapp":
-      return (await import("../../../extensions/whatsapp/setup-entry.js")).default
-        .plugin as ChannelPlugin;
+      return whatsappPlugin as ChannelPlugin;
     default:
       return undefined;
   }
