@@ -52,7 +52,8 @@ import {
   resolveHookChannel,
   resolveHookDeliver,
 } from "./hooks.js";
-import { sendGatewayAuthFailure, setDefaultSecurityHeaders } from "./http-common.js";
+import { sendGatewayAuthFailure, sendText, setDefaultSecurityHeaders } from "./http-common.js";
+import type { RequestRateLimiter } from "./request-rate-limit.js";
 import { getBearerToken } from "./http-utils.js";
 import { resolveRequestClientIp } from "./net.js";
 import { handleOpenAiHttpRequest } from "./openai-http.js";
@@ -729,6 +730,8 @@ export function createGatewayHttpServer(opts: {
   resolvedAuth: ResolvedGatewayAuth;
   /** Optional rate limiter for auth brute-force protection. */
   rateLimiter?: AuthRateLimiter;
+  /** Optional per-IP request rate limiter for general flood protection. */
+  requestRateLimiter?: RequestRateLimiter;
   getReadiness?: ReadinessChecker;
   tlsOptions?: TlsOptions;
 }): HttpServer {
@@ -748,6 +751,7 @@ export function createGatewayHttpServer(opts: {
     shouldEnforcePluginGatewayAuth,
     resolvedAuth,
     rateLimiter,
+    requestRateLimiter,
     getReadiness,
   } = opts;
   const httpServer: HttpServer = opts.tlsOptions
@@ -762,6 +766,17 @@ export function createGatewayHttpServer(opts: {
     setDefaultSecurityHeaders(res, {
       strictTransportSecurity: strictTransportSecurityHeader,
     });
+
+    // General per-IP request rate limiting (flood protection).
+    if (requestRateLimiter) {
+      const result = requestRateLimiter.check(req.socket?.remoteAddress);
+      if (!result.allowed) {
+        const retryAfter = result.retryAfterMs > 0 ? Math.ceil(result.retryAfterMs / 1000) : 1;
+        res.setHeader("Retry-After", String(retryAfter));
+        sendText(res, 429, "Too Many Requests");
+        return;
+      }
+    }
 
     // Don't interfere with WebSocket upgrades; ws handles the 'upgrade' event.
     if (String(req.headers.upgrade ?? "").toLowerCase() === "websocket") {

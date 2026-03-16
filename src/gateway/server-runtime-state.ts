@@ -12,6 +12,7 @@ import {
 } from "../plugins/runtime.js";
 import type { RuntimeEnv } from "../runtime.js";
 import type { AuthRateLimiter } from "./auth-rate-limit.js";
+import type { RequestRateLimiter } from "./request-rate-limit.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
 import type { ChatAbortControllerEntry } from "./chat-abort.js";
 import type { ControlUiRootState } from "./control-ui.js";
@@ -60,6 +61,8 @@ export async function createGatewayRuntimeState(params: {
   resolvedAuth: ResolvedGatewayAuth;
   /** Optional rate limiter for auth brute-force protection. */
   rateLimiter?: AuthRateLimiter;
+  /** Optional per-IP request rate limiter for general flood protection. */
+  requestRateLimiter?: RequestRateLimiter;
   gatewayTls?: GatewayTlsRuntime;
   hooksConfig: () => HooksConfigResolved | null;
   getHookClientIpConfig: () => HookClientIpConfig;
@@ -175,6 +178,7 @@ export async function createGatewayRuntimeState(params: {
         shouldEnforcePluginGatewayAuth,
         resolvedAuth: params.resolvedAuth,
         rateLimiter: params.rateLimiter,
+        requestRateLimiter: params.requestRateLimiter,
         getReadiness: params.getReadiness,
         tlsOptions: params.gatewayTls?.enabled ? params.gatewayTls.tlsOptions : undefined,
       });
