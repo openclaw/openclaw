@@ -51,7 +51,7 @@ export async function sendChunkedTelegramReplyText<
     replyToMessageId?: number;
     replyMarkup?: TReplyMarkup;
     replyQuoteText?: string;
-  }) => Promise<void>;
+  }) => Promise<boolean | void>;
 }): Promise<void> {
   const applyDelivered = params.markDelivered ?? markDelivered;
   for (let i = 0; i < params.chunks.length; i += 1) {
@@ -69,13 +69,19 @@ export async function sendChunkedTelegramReplyText<
       Boolean(replyToMessageId) &&
       Boolean(params.replyQuoteText) &&
       (params.quoteOnlyOnFirstChunk !== true || isFirstChunk);
-    await params.sendChunk({
+    const sent = await params.sendChunk({
       chunk,
       isFirstChunk,
       replyToMessageId,
       replyMarkup: isFirstChunk ? params.replyMarkup : undefined,
       replyQuoteText: shouldAttachQuote ? params.replyQuoteText : undefined,
     });
+    // Skip delivery bookkeeping when the chunk was not actually sent
+    // (e.g. empty-chunk guard returned false). This prevents an unsent
+    // chunk from consuming the reply target or inflating deliveredCount.
+    if (sent === false) {
+      continue;
+    }
     markReplyApplied(params.progress, replyToMessageId);
     applyDelivered(params.progress);
   }

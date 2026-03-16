@@ -34,6 +34,7 @@ import {
   sendTelegramWithThreadFallback,
 } from "./delivery.send.js";
 import { resolveTelegramReplyId, type TelegramThreadSpec } from "./helpers.js";
+import { sendChunkedTelegramReplyText } from "./reply-threading.js";
 const VOICE_FORBIDDEN_RE = /VOICE_MESSAGES_FORBIDDEN/;
 const CAPTION_TOO_LONG_RE = /caption is too long/i;
 
@@ -130,7 +131,7 @@ async function deliverTextReply(params: {
       // would trigger a Telegram API error.
       if (!chunk.html?.trim() && !chunk.text?.trim()) {
         logVerbose("telegram: skipping empty chunk in deliverTextReply");
-        return;
+        return false;
       }
       const messageId = await sendTelegramText(
         params.bot,
@@ -180,7 +181,7 @@ async function sendPendingFollowUpText(params: {
     sendChunk: async ({ chunk, replyToMessageId, replyMarkup }) => {
       if (!chunk.html?.trim() && !chunk.text?.trim()) {
         logVerbose("telegram: skipping empty chunk in sendPendingFollowUpText");
-        return;
+        return false;
       }
       await sendTelegramText(params.bot, params.chatId, chunk.html, params.runtime, {
         replyToMessageId,
