@@ -44,6 +44,7 @@ export type ResolvedBrowserProfile = {
   cdpUrl: string;
   cdpHost: string;
   cdpIsLoopback: boolean;
+  userDataDir?: string;
   color: string;
   driver: "openclaw" | "existing-session";
   attachOnly: boolean;
@@ -328,6 +329,7 @@ export function resolveProfile(
       cdpUrl: "",
       cdpHost: "",
       cdpIsLoopback: true,
+      userDataDir: profile.userDataDir?.trim() || undefined,
       color: profile.color,
       driver,
       attachOnly: true,

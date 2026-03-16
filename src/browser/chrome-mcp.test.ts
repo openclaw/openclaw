@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  buildChromeMcpArgs,
   evaluateChromeMcpScript,
   listChromeMcpTabs,
   openChromeMcpTab,
@@ -100,6 +101,18 @@ describe("chrome MCP page parsing", () => {
         url: "https://github.com/openclaw/openclaw/pull/45318",
         type: "page",
       },
+    ]);
+  });
+
+  it("adds --userDataDir when an explicit Chromium profile path is configured", () => {
+    expect(buildChromeMcpArgs("/tmp/brave-profile")).toEqual([
+      "-y",
+      "chrome-devtools-mcp@latest",
+      "--autoConnect",
+      "--experimentalStructuredContent",
+      "--experimental-page-id-routing",
+      "--userDataDir",
+      "/tmp/brave-profile",
     ]);
   });
 
