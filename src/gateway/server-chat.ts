@@ -29,19 +29,7 @@ function resolveHeartbeatContext(runId: string, sourceRunId?: string) {
     return primary;
   }
 
-  // Case 2: primary is undefined (unregistered) → check sourceRunId for heartbeat context
-  // This preserves existing behavior for chat-linked synthetic clientRunId scenarios
-  if (!primary) {
-    if (sourceRunId && sourceRunId !== runId) {
-      const source = getAgentRunContext(sourceRunId);
-      if (source?.isHeartbeat) {
-        return source;
-      }
-    }
-    return primary;
-  }
-
-  // Case 3: primary exists (isHeartbeat === true or undefined) → check sourceRunId
+  // For all other cases (primary undefined or heartbeat), check sourceRunId fallback
   if (sourceRunId && sourceRunId !== runId) {
     const source = getAgentRunContext(sourceRunId);
     if (source?.isHeartbeat) {
