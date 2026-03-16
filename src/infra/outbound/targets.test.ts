@@ -1,9 +1,13 @@
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
+import { parseTelegramTarget } from "../../../extensions/telegram/src/targets.js";
 import { telegramOutbound } from "../../channels/plugins/outbound/telegram.js";
+import { whatsappOutbound } from "../../channels/plugins/outbound/whatsapp.js";
+import type { ChannelOutboundAdapter } from "../../channels/plugins/types.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
+import { isWhatsAppGroupJid, normalizeWhatsAppTarget } from "../../whatsapp/normalize.js";
 import {
   resolveHeartbeatDeliveryTarget,
   resolveOutboundTarget,
@@ -16,6 +20,76 @@ import {
 } from "./targets.shared-test.js";
 
 runResolveOutboundTargetCoreTests();
+
+const telegramMessaging = {
+  parseExplicitTarget: ({ raw }: { raw: string }) => {
+    const target = parseTelegramTarget(raw);
+    return {
+      to: target.chatId,
+      threadId: target.messageThreadId,
+      chatType: target.chatType === "unknown" ? undefined : target.chatType,
+    };
+  },
+  inferTargetChatType: ({ to }: { to: string }) => {
+    const target = parseTelegramTarget(to);
+    return target.chatType === "unknown" ? undefined : target.chatType;
+  },
+};
+
+const whatsappMessaging = {
+  inferTargetChatType: ({ to }: { to: string }) => {
+    const normalized = normalizeWhatsAppTarget(to);
+    if (!normalized) {
+      return undefined;
+    }
+    return isWhatsAppGroupJid(normalized) ? ("group" as const) : ("direct" as const);
+  },
+};
+
+const noopOutbound = (channel: "discord" | "imessage" | "slack"): ChannelOutboundAdapter => ({
+  deliveryMode: "direct",
+  sendText: async () => ({ channel, messageId: `${channel}-msg` }),
+});
+
+beforeEach(() => {
+  setActivePluginRegistry(
+    createTestRegistry([
+      {
+        pluginId: "discord",
+        plugin: createOutboundTestPlugin({ id: "discord", outbound: noopOutbound("discord") }),
+        source: "test",
+      },
+      {
+        pluginId: "imessage",
+        plugin: createOutboundTestPlugin({ id: "imessage", outbound: noopOutbound("imessage") }),
+        source: "test",
+      },
+      {
+        pluginId: "slack",
+        plugin: createOutboundTestPlugin({ id: "slack", outbound: noopOutbound("slack") }),
+        source: "test",
+      },
+      {
+        pluginId: "telegram",
+        plugin: createOutboundTestPlugin({
+          id: "telegram",
+          outbound: telegramOutbound,
+          messaging: telegramMessaging,
+        }),
+        source: "test",
+      },
+      {
+        pluginId: "whatsapp",
+        plugin: createOutboundTestPlugin({
+          id: "whatsapp",
+          outbound: whatsappOutbound,
+          messaging: whatsappMessaging,
+        }),
+        source: "test",
+      },
+    ]),
+  );
+});
 
 describe("resolveOutboundTarget defaultTo config fallback", () => {
   installResolveOutboundTargetPluginRegistryHooks();
@@ -80,7 +154,11 @@ describe("resolveOutboundTarget defaultTo config fallback", () => {
 
     registry.channels.push({
       pluginId: "telegram",
-      plugin: createOutboundTestPlugin({ id: "telegram", outbound: telegramOutbound }),
+      plugin: createOutboundTestPlugin({
+        id: "telegram",
+        outbound: telegramOutbound,
+        messaging: telegramMessaging,
+      }),
       source: "test",
     });
 

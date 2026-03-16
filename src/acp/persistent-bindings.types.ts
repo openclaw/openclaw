@@ -1,9 +1,10 @@
 import { createHash } from "node:crypto";
+import type { ChannelId } from "../channels/plugins/types.js";
 import type { SessionBindingRecord } from "../infra/outbound/session-binding-service.js";
 import { sanitizeAgentId } from "../routing/session-key.js";
 import type { AcpRuntimeSessionMode } from "./runtime/types.js";
 
-export type ConfiguredAcpBindingChannel = "discord" | "telegram" | "feishu";
+export type ConfiguredAcpBindingChannel = ChannelId;
 
 export type ConfiguredAcpBindingSpec = {
   channel: ConfiguredAcpBindingChannel;

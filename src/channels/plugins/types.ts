@@ -33,6 +33,7 @@ export type {
   ChannelOutboundAdapter,
   ChannelOutboundContext,
   ChannelAllowlistAdapter,
+  ChannelAcpBindingAdapter,
   ChannelPairingAdapter,
   ChannelSecurityAdapter,
   ChannelSetupAdapter,

@@ -124,6 +124,24 @@ export const imessagePlugin: ChannelPlugin<ResolvedIMessageAccount> = {
     formatAllowFrom: ({ allowFrom }) => formatTrimmedAllowFromEntries(allowFrom),
     resolveDefaultTo: ({ cfg, accountId }) => resolveIMessageConfigDefaultTo({ cfg, accountId }),
   },
+  allowlist: {
+    supportsScope: ({ scope }) => scope === "dm" || scope === "group" || scope === "all",
+    readConfig: ({ cfg, accountId }) => {
+      const account = resolveIMessageAccount({ cfg, accountId });
+      return {
+        dmAllowFrom: (account.config.allowFrom ?? []).map(String),
+        groupAllowFrom: (account.config.groupAllowFrom ?? []).map(String),
+        dmPolicy: account.config.dmPolicy,
+        groupPolicy: account.config.groupPolicy,
+      };
+    },
+    resolveConfigEdit: ({ scope, pathPrefix, writeTarget }) => ({
+      pathPrefix,
+      writeTarget,
+      readPaths: [[scope === "dm" ? "allowFrom" : "groupAllowFrom"]],
+      writePath: [scope === "dm" ? "allowFrom" : "groupAllowFrom"],
+    }),
+  },
   security: {
     resolveDmPolicy: ({ cfg, accountId, account }) => {
       return buildAccountScopedDmSecurityPolicy({

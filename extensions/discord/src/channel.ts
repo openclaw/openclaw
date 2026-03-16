@@ -39,6 +39,7 @@ import { resolveOutboundSendDep } from "../../../src/infra/outbound/send-deps.js
 import { normalizeMessageChannel } from "../../../src/utils/message-channel.js";
 import { isDiscordExecApprovalClientEnabled } from "./exec-approvals.js";
 import type { DiscordProbe } from "./probe.js";
+import { resolveDiscordUserAllowlist } from "./resolve-users.js";
 import { getDiscordRuntime } from "./runtime.js";
 import { fetchChannelPermissionsDiscord } from "./send.js";
 import { createDiscordSetupWizardProxy, discordSetupAdapter } from "./setup-core.js";
@@ -116,6 +117,84 @@ function hasDiscordExecApprovalDmRoute(cfg: OpenClawConfig): boolean {
   });
 }
 
+function readDiscordAllowlistConfig(account: ResolvedDiscordAccount) {
+  const groupOverrides: Array<{ label: string; entries: string[] }> = [];
+  for (const [guildKey, guildCfg] of Object.entries(account.config.guilds ?? {})) {
+    const entries = (guildCfg?.users ?? []).map(String).filter(Boolean);
+    if (entries.length > 0) {
+      groupOverrides.push({ label: `guild ${guildKey}`, entries });
+    }
+    for (const [channelKey, channelCfg] of Object.entries(guildCfg?.channels ?? {})) {
+      const channelEntries = (channelCfg?.users ?? []).map(String).filter(Boolean);
+      if (channelEntries.length > 0) {
+        groupOverrides.push({
+          label: `guild ${guildKey} / channel ${channelKey}`,
+          entries: channelEntries,
+        });
+      }
+    }
+  }
+  return {
+    dmAllowFrom: (account.config.allowFrom ?? account.config.dm?.allowFrom ?? []).map(String),
+    groupPolicy: account.config.groupPolicy,
+    groupOverrides,
+  };
+}
+
+async function resolveDiscordAllowlistNames(params: {
+  cfg: Parameters<typeof resolveDiscordAccount>[0]["cfg"];
+  accountId?: string | null;
+  entries: string[];
+}) {
+  const account = resolveDiscordAccount({ cfg: params.cfg, accountId: params.accountId });
+  const token = account.token?.trim();
+  if (!token) {
+    return [];
+  }
+  return await resolveDiscordUserAllowlist({ token, entries: params.entries });
+}
+
+function normalizeDiscordAcpConversationId(conversationId: string) {
+  const normalized = conversationId.trim();
+  return normalized ? { conversationId: normalized } : null;
+}
+
+function matchDiscordAcpConversation(params: {
+  bindingConversationId: string;
+  conversationId: string;
+  parentConversationId?: string;
+}) {
+  if (params.bindingConversationId === params.conversationId) {
+    return { conversationId: params.conversationId, matchPriority: 2 };
+  }
+  if (
+    params.parentConversationId &&
+    params.parentConversationId !== params.conversationId &&
+    params.bindingConversationId === params.parentConversationId
+  ) {
+    return {
+      conversationId: params.parentConversationId,
+      matchPriority: 1,
+    };
+  }
+  return null;
+}
+
+function parseDiscordExplicitTarget(raw: string) {
+  try {
+    const target = parseDiscordTarget(raw, { defaultKind: "channel" });
+    if (!target) {
+      return null;
+    }
+    return {
+      to: target.id,
+      chatType: target.kind === "user" ? ("direct" as const) : ("channel" as const),
+    };
+  } catch {
+    return null;
+  }
+}
+
 const discordConfigAccessors = createScopedAccountConfigAccessors({
   resolveAccount: ({ cfg, accountId }) => resolveDiscordAccount({ cfg, accountId }),
   resolveAllowFrom: (account: ResolvedDiscordAccount) => account.config.dm?.allowFrom,
@@ -176,6 +255,23 @@ export const discordPlugin: ChannelPlugin<ResolvedDiscordAccount> = {
       tokenSource: account.tokenSource,
     }),
     ...discordConfigAccessors,
+  },
+  allowlist: {
+    supportsScope: ({ scope }) => scope === "dm",
+    readConfig: ({ cfg, accountId }) =>
+      readDiscordAllowlistConfig(resolveDiscordAccount({ cfg, accountId })),
+    resolveNames: async ({ cfg, accountId, entries }) =>
+      await resolveDiscordAllowlistNames({ cfg, accountId, entries }),
+    resolveConfigEdit: ({ scope, pathPrefix, writeTarget }) =>
+      scope === "dm"
+        ? {
+            pathPrefix,
+            writeTarget,
+            readPaths: [["allowFrom"], ["dm", "allowFrom"]],
+            writePath: ["allowFrom"],
+            cleanupPaths: [["dm", "allowFrom"]],
+          }
+        : null,
   },
   security: {
     resolveDmPolicy: ({ cfg, accountId, account }) => {
@@ -238,6 +334,8 @@ export const discordPlugin: ChannelPlugin<ResolvedDiscordAccount> = {
   },
   messaging: {
     normalizeTarget: normalizeDiscordMessagingTarget,
+    parseExplicitTarget: ({ raw }) => parseDiscordExplicitTarget(raw),
+    inferTargetChatType: ({ to }) => parseDiscordExplicitTarget(to)?.chatType,
     buildCrossContextComponents: buildDiscordCrossContextComponents,
     targetResolver: {
       looksLikeId: looksLikeDiscordTargetId,
@@ -355,6 +453,12 @@ export const discordPlugin: ChannelPlugin<ResolvedDiscordAccount> = {
         accountId: accountId ?? undefined,
         silent: silent ?? undefined,
       }),
+  },
+  acpBindings: {
+    normalizeConfiguredBindingTarget: ({ conversationId }) =>
+      normalizeDiscordAcpConversationId(conversationId),
+    matchConfiguredBinding: ({ bindingConversationId, conversationId, parentConversationId }) =>
+      matchDiscordAcpConversation({ bindingConversationId, conversationId, parentConversationId }),
   },
   status: {
     defaultRuntime: {

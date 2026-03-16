@@ -1,4 +1,5 @@
 import { discordPlugin } from "../../extensions/discord/src/channel.js";
+import { feishuPlugin } from "../../extensions/feishu/src/channel.js";
 import { imessagePlugin } from "../../extensions/imessage/src/channel.js";
 import { signalPlugin } from "../../extensions/signal/src/channel.js";
 import { slackPlugin } from "../../extensions/slack/src/channel.js";
@@ -27,6 +28,7 @@ type PatchedSetupAdapterFields = {
 export function setDefaultChannelPluginRegistryForTests(): void {
   const channels = [
     { pluginId: "discord", plugin: discordPlugin, source: "test" },
+    { pluginId: "feishu", plugin: feishuPlugin, source: "test" },
     { pluginId: "slack", plugin: slackPlugin, source: "test" },
     { pluginId: "telegram", plugin: telegramPlugin, source: "test" },
     { pluginId: "whatsapp", plugin: whatsappPlugin, source: "test" },
