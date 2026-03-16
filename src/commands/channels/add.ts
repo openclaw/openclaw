@@ -9,6 +9,7 @@ import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../../routing/session-ke
 import { defaultRuntime, type RuntimeEnv } from "../../runtime.js";
 import { createClackPrompter } from "../../wizard/clack-prompter.js";
 import { applyAgentBindings, describeBinding } from "../agents.bindings.js";
+import { isCatalogChannelInstalled } from "../channel-setup/discovery.js";
 import type { ChannelChoice } from "../onboard-types.js";
 import { applyAccountName, applyChannelAccountConfig } from "./add-mutators.js";
 import { channelLabel, requireValidConfig, shouldUseWizard } from "./shared.js";
@@ -202,24 +203,32 @@ export async function channelsAddCommand(
   };
 
   if (!channel && catalogEntry) {
-    const { ensureOnboardingPluginInstalled } = await import("../onboarding/plugin-install.js");
-    const prompter = createClackPrompter();
     const workspaceDir = resolveWorkspaceDir();
-    const result = await ensureOnboardingPluginInstalled({
-      cfg: nextConfig,
-      entry: catalogEntry,
-      prompter,
-      runtime,
-      workspaceDir,
-    });
-    nextConfig = result.cfg;
-    if (!result.installed) {
-      return;
+    if (
+      !isCatalogChannelInstalled({
+        cfg: nextConfig,
+        entry: catalogEntry,
+        workspaceDir,
+      })
+    ) {
+      const { ensureOnboardingPluginInstalled } = await import("../onboarding/plugin-install.js");
+      const prompter = createClackPrompter();
+      const result = await ensureOnboardingPluginInstalled({
+        cfg: nextConfig,
+        entry: catalogEntry,
+        prompter,
+        runtime,
+        workspaceDir,
+      });
+      nextConfig = result.cfg;
+      if (!result.installed) {
+        return;
+      }
+      catalogEntry = {
+        ...catalogEntry,
+        ...(result.pluginId ? { pluginId: result.pluginId } : {}),
+      };
     }
-    catalogEntry = {
-      ...catalogEntry,
-      ...(result.pluginId ? { pluginId: result.pluginId } : {}),
-    };
     channel = normalizeChannelId(catalogEntry.id) ?? (catalogEntry.id as ChannelId);
   }
 
@@ -251,6 +260,7 @@ export async function channelsAddCommand(
   const input: ChannelSetupInput = {
     name: opts.name,
     token: opts.token,
+    privateKey: opts.privateKey,
     tokenFile: opts.tokenFile,
     botToken: opts.botToken,
     appToken: opts.appToken,
@@ -276,6 +286,7 @@ export async function channelsAddCommand(
     useEnv,
     ship: opts.ship,
     url: opts.url,
+    relayUrls: opts.relayUrls,
     code: opts.code,
     groupChannels,
     dmAllowlist,
