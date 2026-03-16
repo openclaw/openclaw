@@ -143,10 +143,12 @@ describe("loadSessions", () => {
     await loadSessions(state);
 
     expect(state.sessionKey).toBe("main");
-    expect(applySettings).toHaveBeenCalledWith({
-      sessionKey: "main",
-      lastActiveSessionKey: "main",
-    });
+    expect(applySettings).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionKey: "main",
+        lastActiveSessionKey: "main",
+      }),
+    );
   });
 
   it("preserves missing grouped sessions so ephemeral subagent selections stay visible", async () => {
@@ -175,6 +177,35 @@ describe("loadSessions", () => {
     await loadSessions(state);
 
     expect(state.sessionKey).toBe("agent:main:subagent:child");
+    expect(applySettings).not.toHaveBeenCalled();
+  });
+
+  it("preserves missing top-level cron sessions so active cron views stay stable", async () => {
+    const request = vi.fn(async (method: string) => {
+      if (method === "sessions.list") {
+        return {
+          ts: 0,
+          path: "",
+          count: 1,
+          defaults: { modelProvider: null, model: null, contextTokens: null },
+          sessions: [{ key: "main", kind: "direct", updatedAt: null }],
+        };
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+    const applySettings = vi.fn();
+    const state = createState(request, {
+      sessionKey: "cron:hourly-check",
+      settings: createSettings({
+        sessionKey: "cron:hourly-check",
+        lastActiveSessionKey: "cron:hourly-check",
+      }),
+      applySettings,
+    });
+
+    await loadSessions(state);
+
+    expect(state.sessionKey).toBe("cron:hourly-check");
     expect(applySettings).not.toHaveBeenCalled();
   });
 });

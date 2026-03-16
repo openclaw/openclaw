@@ -19,7 +19,12 @@ export type SessionsState = {
 };
 
 function shouldPreserveMissingSessionKey(key: string): boolean {
-  return key.includes(":subagent:") || key.includes(":cron:");
+  const normalized = key.trim().toLowerCase();
+  return (
+    normalized.includes(":subagent:") ||
+    normalized.startsWith("cron:") ||
+    normalized.includes(":cron:")
+  );
 }
 
 function normalizeMissingSessionSelection(state: SessionsState, res: SessionsListResult) {
