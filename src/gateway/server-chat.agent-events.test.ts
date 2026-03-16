@@ -821,4 +821,48 @@ describe("agent event handler", () => {
       "Disk usage crossed 95 percent on /data and needs cleanup now.",
     );
   });
+
+  // Regression test: when primary run has isHeartbeat=false (interactive user),
+  // suppress should be false even if sourceRunId has isHeartbeat=true.
+  // This was the bug - old code would fall through to sourceRunId check.
+  it("does NOT suppress when primary isHeartbeat=false but sourceRunId isHeartbeat=true", () => {
+    const { broadcast, chatRunState, handler } = createHarness({
+      now: 2_000,
+      resolveSessionKeyForRun: (runId) => {
+        if (runId === "source-run") {
+          return "session-source";
+        }
+        return undefined;
+      },
+    });
+    // Register client-run as interactive (isHeartbeat=false)
+    registerAgentRunContext("client-run", {
+      sessionKey: "session-client",
+      isHeartbeat: false,
+      verboseLevel: "off",
+    });
+    // Register source-run as heartbeat
+    registerAgentRunContext("source-run", {
+      sessionKey: "session-source",
+      isHeartbeat: true,
+      verboseLevel: "off",
+    });
+    // Chat-link: source-run -> client-run
+    chatRunState.registry.add("source-run", {
+      sessionKey: "session-source",
+      clientRunId: "client-run",
+    });
+
+    // Trigger with source-run (heartbeat source), client is client-run
+    handler({
+      runId: "source-run",
+      seq: 1,
+      stream: "assistant",
+      ts: Date.now(),
+      data: { text: "HEARTBEAT_OK from heartbeat source" },
+    });
+
+    // Should NOT be suppressed - primary has isHeartbeat=false
+    expect(chatBroadcastCalls(broadcast)).toHaveLength(1);
+  });
 });
