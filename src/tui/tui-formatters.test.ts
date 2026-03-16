@@ -283,4 +283,43 @@ describe("sanitizeRenderableText", () => {
 
     expect(sanitized).toBe(input);
   });
+
+  it("preserves long tokens inside fenced code blocks verbatim (no spurious spaces)", () => {
+    // Regression test for #48432: package names like ubuntu-budgie-desktop-environment
+    // (33 chars) were being split with a space inserted at the 32-char boundary.
+    const input =
+      "```bash\napt install ubuntu-budgie-desktop-environment gnome-shell-extensions-ubuntu\n```";
+    const sanitized = sanitizeRenderableText(input);
+
+    expect(sanitized).toBe(input);
+  });
+
+  it("preserves long tokens inside tilde-fenced code blocks verbatim", () => {
+    const input = "~~~python\nsome_very_long_variable_name_that_exceeds_the_limit = True\n~~~";
+    const sanitized = sanitizeRenderableText(input);
+
+    expect(sanitized).toBe(input);
+  });
+
+  it("still normalizes long tokens in prose outside code fences", () => {
+    const longToken = "a".repeat(70);
+    const input = `Before ${longToken} after`;
+    const sanitized = sanitizeRenderableText(input);
+
+    // Token should have been split (no single segment > 32 chars)
+    const longestSegment = Math.max(...sanitized.split(/\s+/).map((s) => s.length));
+    expect(longestSegment).toBeLessThanOrEqual(32);
+  });
+
+  it("normalizes long tokens in prose while preserving adjacent code block intact", () => {
+    const longToken = "a".repeat(70);
+    const packageName = "ubuntu-budgie-desktop-environment"; // exactly 33 chars
+    const input = `Text with ${longToken} token\n\`\`\`bash\napt install ${packageName}\n\`\`\``;
+    const sanitized = sanitizeRenderableText(input);
+
+    // Long token in prose should be split
+    expect(sanitized).not.toContain(longToken);
+    // Package name in code block should be preserved exactly
+    expect(sanitized).toContain(packageName);
+  });
 });

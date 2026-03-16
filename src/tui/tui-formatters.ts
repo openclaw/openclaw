@@ -18,6 +18,10 @@ const BIDI_CONTROL_RE = /[\u202a-\u202e\u2066-\u2069]/;
 const RTL_ISOLATE_START = "\u2067";
 const RTL_ISOLATE_END = "\u2069";
 
+// Matches a fenced code block: opening fence (``` with optional language) through closing fence.
+// Captures the full fence block including delimiters so it can be preserved verbatim.
+const CODE_FENCE_RE = /^(`{3,}|~{3,})[^\n]*\n[\s\S]*?\n\1[ \t]*$/gm;
+
 function hasControlChars(text: string): boolean {
   for (const char of text) {
     const code = char.charCodeAt(0);
@@ -126,6 +130,38 @@ function applyRtlIsolation(text: string): string {
     .join("\n");
 }
 
+/**
+ * Apply long-token normalization only to regions outside fenced code blocks.
+ * Code blocks are meant to be copy-pasted verbatim — inserting spaces into long
+ * tokens (e.g. package names such as "ubuntu-budgie-desktop-environment") would
+ * corrupt the content and break pasted commands or identifiers.
+ */
+function normalizeTokensOutsideCodeFences(text: string): string {
+  if (!LONG_TOKEN_TEST_RE.test(text)) {
+    return text;
+  }
+
+  const parts: string[] = [];
+  let lastIndex = 0;
+  CODE_FENCE_RE.lastIndex = 0;
+
+  let match: RegExpExecArray | null;
+  while ((match = CODE_FENCE_RE.exec(text)) !== null) {
+    // Process the region before this code fence (normalize long tokens)
+    const before = text.slice(lastIndex, match.index);
+    parts.push(before.replace(LONG_TOKEN_RE, normalizeLongTokenForDisplay));
+    // Preserve the code fence region exactly as-is
+    parts.push(match[0]);
+    lastIndex = match.index + match[0].length;
+  }
+
+  // Process any trailing region after the last code fence
+  const tail = text.slice(lastIndex);
+  parts.push(tail.replace(LONG_TOKEN_RE, normalizeLongTokenForDisplay));
+
+  return parts.join("");
+}
+
 export function sanitizeRenderableText(text: string): string {
   if (!text) {
     return text;
@@ -147,9 +183,7 @@ export function sanitizeRenderableText(text: string): string {
         .map((line) => redactBinaryLikeLine(line))
         .join("\n")
     : withoutControlChars;
-  const tokenSafe = LONG_TOKEN_TEST_RE.test(redacted)
-    ? redacted.replace(LONG_TOKEN_RE, normalizeLongTokenForDisplay)
-    : redacted;
+  const tokenSafe = normalizeTokensOutsideCodeFences(redacted);
   return applyRtlIsolation(tokenSafe);
 }
 
