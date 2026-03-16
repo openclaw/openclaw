@@ -2,6 +2,7 @@ import {
   auditTelegramGroupMembership,
   collectTelegramUnmentionedGroupIds,
 } from "../../../extensions/telegram/src/audit.js";
+import { telegramMessageActions } from "../../../extensions/telegram/src/channel-actions.js";
 import { monitorTelegramProvider } from "../../../extensions/telegram/src/monitor.js";
 import { probeTelegram } from "../../../extensions/telegram/src/probe.js";
 import {
@@ -20,7 +21,6 @@ import {
   setTelegramThreadBindingMaxAgeBySessionKey,
 } from "../../../extensions/telegram/src/thread-bindings.js";
 import { resolveTelegramToken } from "../../../extensions/telegram/src/token.js";
-import { telegramMessageActions } from "../../channels/plugins/actions/telegram.js";
 import { createTelegramTypingLease } from "./runtime-telegram-typing.js";
 import type { PluginRuntimeChannel } from "./types-channel.js";
 

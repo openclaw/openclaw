@@ -27,6 +27,12 @@ export {
   listWhatsAppDirectoryPeersFromConfig,
 } from "../channels/plugins/directory-config.js";
 export {
+  hasAnyWhatsAppAuth,
+  listEnabledWhatsAppAccounts,
+  resolveWhatsAppAccount,
+} from "../../extensions/whatsapp/src/accounts.js";
+export { normalizeWhatsAppAllowFromEntries } from "../channels/plugins/normalize/whatsapp.js";
+export {
   collectAllowlistProviderGroupPolicyWarnings,
   collectOpenGroupPolicyRouteAllowlistWarnings,
 } from "../channels/plugins/group-policy-warnings.js";

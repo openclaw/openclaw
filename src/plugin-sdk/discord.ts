@@ -23,9 +23,15 @@ export {
   looksLikeDiscordTargetId,
   normalizeDiscordMessagingTarget,
   normalizeDiscordOutboundTarget,
-} from "../channels/plugins/normalize/discord.js";
+} from "../../extensions/discord/src/normalize.js";
 export { collectDiscordAuditChannelIds } from "../../extensions/discord/src/audit.js";
-export { collectDiscordStatusIssues } from "../channels/plugins/status-issues/discord.js";
+export { collectDiscordStatusIssues } from "../../extensions/discord/src/status-issues.js";
+export {
+  DISCORD_DEFAULT_INBOUND_WORKER_TIMEOUT_MS,
+  DISCORD_DEFAULT_LISTENER_TIMEOUT_MS,
+} from "../../extensions/discord/src/monitor/timeouts.js";
+export { normalizeExplicitDiscordSessionKey } from "../../extensions/discord/src/session-key-normalization.js";
+export type { DiscordPluralKitConfig } from "../../extensions/discord/src/pluralkit.js";
 
 export {
   resolveDefaultGroupPolicy,
