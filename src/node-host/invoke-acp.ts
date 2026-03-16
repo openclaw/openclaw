@@ -416,6 +416,7 @@ async function buildStatusPayload(params: {
   } catch (error) {
     throw new Error(
       `ACP status backend failed for session ${session.sessionKey}: ${resolveFailureMessage(error)}`,
+      { cause: error },
     );
   }
   session.lastStatusSummary =
@@ -733,6 +734,19 @@ function handleTurnStart(
         accepted: true,
         nodeWorkerRunId: session.nodeWorkerRunId,
       },
+    };
+  }
+  if (
+    session.activeTurn &&
+    session.currentRunId === params.runId &&
+    session.currentRequestId &&
+    session.currentRequestId !== params.requestId
+  ) {
+    return {
+      handled: true,
+      ok: false,
+      code: "INVALID_REQUEST",
+      message: `ACP run ${params.runId} is already active on this node for request ${session.currentRequestId}`,
     };
   }
   const completedTurn = session.completedTurns.get(params.runId);

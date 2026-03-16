@@ -631,6 +631,102 @@ describe("handleAcpInvokeCommand", () => {
     });
   });
 
+  it("rejects a conflicting requestId for an already-active run without launching a second worker", async () => {
+    const runtime = new FakeNodeHostRuntime();
+    registerAcpRuntimeBackend({
+      id: "acpx",
+      runtime,
+    });
+    const nodeEvents: NodeEventCall[] = [];
+
+    await handleAcpInvokeCommand(
+      buildFrame({
+        command: "acp.session.ensure",
+        payload: {
+          sessionKey: "agent:main:acp:test",
+          leaseId: "lease-1",
+          leaseEpoch: 1,
+          agent: "main",
+          mode: "persistent",
+        },
+      }),
+      buildDeps(async (event, payload) => {
+        nodeEvents.push({ event, payload });
+      }),
+    );
+
+    const first = await handleAcpInvokeCommand(
+      buildFrame({
+        command: "acp.turn.start",
+        payload: {
+          sessionKey: "agent:main:acp:test",
+          runId: "run-active",
+          leaseId: "lease-1",
+          leaseEpoch: 1,
+          requestId: "req-1",
+          mode: "prompt",
+          text: "first",
+        },
+      }),
+      buildDeps(async (event, payload) => {
+        nodeEvents.push({ event, payload });
+      }),
+    );
+
+    await runtime.waitForTurnStart();
+
+    const conflicting = await handleAcpInvokeCommand(
+      buildFrame({
+        command: "acp.turn.start",
+        payload: {
+          sessionKey: "agent:main:acp:test",
+          runId: "run-active",
+          leaseId: "lease-1",
+          leaseEpoch: 1,
+          requestId: "req-2",
+          mode: "prompt",
+          text: "second",
+        },
+      }),
+      buildDeps(async (event, payload) => {
+        nodeEvents.push({ event, payload });
+      }),
+    );
+
+    expect(first).toMatchObject({
+      handled: true,
+      ok: true,
+      payload: {
+        accepted: true,
+      },
+    });
+    expect(conflicting).toMatchObject({
+      handled: true,
+      ok: false,
+      code: "INVALID_REQUEST",
+      message: expect.stringContaining("req-1"),
+    });
+    expect(runtime.turns).toHaveLength(1);
+    expect(nodeEvents).toHaveLength(0);
+
+    runtime.releaseTurnToComplete("end_turn");
+    await runtime.waitForTurnFinish();
+
+    await vi.waitFor(() => {
+      expect(nodeEvents).toHaveLength(3);
+    });
+    expect(nodeEvents.at(-1)).toMatchObject({
+      event: "acp.worker.terminal",
+      payload: {
+        runId: "run-active",
+        terminal: {
+          kind: "completed",
+          stopReason: "end_turn",
+        },
+      },
+    });
+  });
+
   it("propagates runtime status failure instead of synthesizing a healthy status payload", async () => {
     const runtime = new FakeNodeHostRuntime();
     runtime.statusError = new Error("status backend exploded");
