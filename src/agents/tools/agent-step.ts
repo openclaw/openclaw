@@ -2,6 +2,8 @@ import crypto from "node:crypto";
 import { callGateway } from "../../gateway/call.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel.js";
 import { AGENT_LANE_NESTED } from "../lanes.js";
+import { createHandoffCapsule } from "../zk-handoff.js";
+import { resolveZkSpawnKey } from "../zk-spawn-key.js";
 import { extractAssistantText, stripToolMessages } from "./sessions-helpers.js";
 
 export async function readLatestAssistantReply(params: {
@@ -42,6 +44,31 @@ export async function runAgentStep(params: {
   sourceTool?: string;
 }): Promise<string | undefined> {
   const stepIdem = crypto.randomUUID();
+
+  // Build a ZK handoff capsule for peer-to-peer agent steps so that
+  // inter-session messages are authenticated and logged under [zk-handoff].
+  // Use the full session key as agent ID to match what the gateway verifier
+  // receives as canonicalKey.
+  let zkHandoffCapsule: string | undefined;
+  if (params.sourceSessionKey && params.sourceSessionKey !== params.sessionKey) {
+    try {
+      const capsule = createHandoffCapsule({
+        senderAgentId: params.sourceSessionKey,
+        receiverAgentId: params.sessionKey,
+        task: params.message.slice(0, 200),
+        taskLabel: params.sourceTool ?? "sessions_send",
+        state: { turn: params.sourceTool },
+        authorizedChannelIds: params.sourceChannel ? [params.sourceChannel] : [],
+        authorizedResourceIds: [],
+        gatewayKey: resolveZkSpawnKey(),
+        ttlMs: Math.min(params.timeoutMs + 60_000, 600_000),
+      });
+      zkHandoffCapsule = JSON.stringify(capsule);
+    } catch {
+      // ZK failure must never block the step.
+    }
+  }
+
   const response = await callGateway<{ runId?: string }>({
     method: "agent",
     params: {
@@ -58,6 +85,7 @@ export async function runAgentStep(params: {
         sourceChannel: params.sourceChannel,
         sourceTool: params.sourceTool ?? "sessions_send",
       },
+      ...(zkHandoffCapsule ? { zkHandoffCapsule } : {}),
     },
     timeoutMs: 10_000,
   });

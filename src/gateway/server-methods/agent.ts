@@ -5,7 +5,11 @@ import {
   normalizeSpawnedRunMetadata,
   resolveIngressWorkspaceOverrideForSpawnedRun,
 } from "../../agents/spawned-context.js";
-import { HandoffNonceRegistry, receiveHandoffCapsule } from "../../agents/zk-handoff.js";
+import {
+  HandoffCapsule,
+  HandoffNonceRegistry,
+  receiveHandoffCapsule,
+} from "../../agents/zk-handoff.js";
 import { resolveZkSpawnKey } from "../../agents/zk-spawn-key.js";
 import { buildBareSessionResetPrompt } from "../../auto-reply/reply/session-reset-prompt.js";
 import { agentCommandFromIngress } from "../../commands/agent.js";
@@ -361,8 +365,9 @@ export const agentHandlers: GatewayRequestHandlers = {
       const labelValue = request.label?.trim() || entry?.label;
       const sessionAgent = resolveAgentIdFromSessionKey(canonicalKey);
       spawnedByValue = canonicalizeSpawnedByForAgent(cfg, sessionAgent, entry?.spawnedBy);
-      // Verify ZK handoff capsule when this run was spawned by another agent.
-      if (spawnedByValue && request.zkHandoffCapsule) {
+      // Verify ZK handoff capsule when present — covers both subagent spawns
+      // (parent → child) and peer-to-peer A2A steps (sibling → sibling).
+      if (request.zkHandoffCapsule) {
         try {
           const capsule = JSON.parse(request.zkHandoffCapsule) as Record<string, unknown>;
           const header = capsule?.header as Record<string, unknown> | undefined;
@@ -375,7 +380,11 @@ export const agentHandlers: GatewayRequestHandlers = {
               canonicalKey,
             );
           }
-          receiveHandoffCapsule(capsule, canonicalKey, resolveZkSpawnKey());
+          receiveHandoffCapsule(
+            capsule as unknown as HandoffCapsule,
+            sessionAgent ?? canonicalKey,
+            resolveZkSpawnKey(),
+          );
         } catch {
           // Verification failure must never block agent dispatch.
         }
