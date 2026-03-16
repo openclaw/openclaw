@@ -63,7 +63,7 @@ export async function statusAllCommand(
           readTailscaleStatusJson(runExec, {
             timeoutMs: 1200,
           }),
-          1500,
+          1500, // keep in sync with STATUS_TAILSCALE_TIMEOUT_MS in status.scan.ts
         );
         const backendState = typeof parsed.BackendState === "string" ? parsed.BackendState : null;
         const self =
