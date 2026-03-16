@@ -600,23 +600,84 @@ describe("deliverReplies", () => {
     );
   });
 
-  it("throws when formatted and plain fallback text are both empty", async () => {
+  it("silently skips when formatted and plain fallback text are both empty", async () => {
     const runtime = createRuntime();
     const sendMessage = vi.fn();
     const bot = { api: { sendMessage } } as unknown as Bot;
 
-    await expect(
-      deliverReplies({
-        replies: [{ text: "   " }],
-        chatId: "123",
-        token: "tok",
-        runtime,
-        bot,
-        replyToMode: "off",
-        textLimit: 4000,
-      }),
-    ).rejects.toThrow("empty formatted text and empty plain fallback");
+    const result = await deliverReplies({
+      replies: [{ text: "   " }],
+      chatId: "123",
+      token: "tok",
+      runtime,
+      bot,
+      replyToMode: "off",
+      textLimit: 4000,
+    });
+
     expect(sendMessage).not.toHaveBeenCalled();
+    expect(result.delivered).toBe(false);
+  });
+
+  it("attaches buttons only to the first sent chunk when text spans multiple chunks", async () => {
+    // Verify sentAnyChunk logic: buttons attach to the first chunk that actually
+    // delivers, and not to any subsequent chunks.
+    // Use a small textLimit to force the text into multiple chunks.
+    const runtime = createRuntime();
+    const sendMessage = vi.fn().mockResolvedValue({ message_id: 7, chat: { id: "123" } });
+    const bot = createBot({ sendMessage });
+
+    // "hello world" at textLimit=5 → chunks ["hello", "world"] (each ~5 chars).
+    await deliverWith({
+      replies: [
+        {
+          text: "hello world",
+          channelData: {
+            telegram: {
+              buttons: [[{ text: "Click me", callback_data: "action" }]],
+            },
+          },
+        },
+      ],
+      runtime,
+      bot,
+      textLimit: 5,
+    });
+
+    // Both chunks were sent
+    expect(sendMessage).toHaveBeenCalledTimes(2);
+    // reply_markup on first chunk only
+    const firstCall = sendMessage.mock.calls[0];
+    const secondCall = sendMessage.mock.calls[1];
+    expect(firstCall?.[2]).toHaveProperty("reply_markup");
+    expect(secondCall?.[2]).not.toHaveProperty("reply_markup");
+  });
+
+  it("falls back to plain text when Telegram rejects HTML with 'text must be non-empty'", async () => {
+    // Mode C: Telegram's newer error wording "text must be non-empty" (vs old "message text is empty")
+    // should be caught and retried with plain text, just like an HTML parse error.
+    // Use a text that renders to non-empty HTML (e.g. bold markdown) so sendMessage is
+    // first called with HTML, then plain text on rejection.
+    const runtime = createRuntime();
+    const sendMessage = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("400: Bad Request: text must be non-empty"))
+      .mockResolvedValueOnce({ message_id: 5, chat: { id: "123" } });
+    const bot = createBot({ sendMessage });
+
+    const result = await deliverReplies({
+      replies: [{ text: "**hello**" }],
+      chatId: "123",
+      token: "tok",
+      runtime,
+      bot,
+      replyToMode: "off",
+      textLimit: 4000,
+    });
+
+    expect(result.delivered).toBe(true);
+    // HTML attempt (rejected) + plain-text retry (succeeds)
+    expect(sendMessage).toHaveBeenCalledTimes(2);
   });
 
   it("uses reply_to_message_id when quote text is provided", async () => {

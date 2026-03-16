@@ -29,6 +29,7 @@ import { splitTelegramCaption } from "./caption.js";
 import { resolveTelegramApiBase, resolveTelegramFetch } from "./fetch.js";
 import { renderTelegramHtmlText, splitTelegramHtmlChunks } from "./format.js";
 import {
+  EMPTY_TEXT_ERR_RE,
   isRecoverableTelegramNetworkError,
   isSafeToRetrySendError,
   isTelegramServerError,
@@ -380,6 +381,10 @@ function isTelegramHtmlParseError(err: unknown): boolean {
   return PARSE_ERR_RE.test(formatErrorMessage(err));
 }
 
+function isTelegramEmptyTextError(err: unknown): boolean {
+  return EMPTY_TEXT_ERR_RE.test(formatErrorMessage(err));
+}
+
 function buildTelegramThreadReplyParams(params: {
   targetMessageThreadId?: number;
   messageThreadId?: number;
@@ -423,12 +428,13 @@ async function withTelegramHtmlParseFallback<T>(params: {
   try {
     return await params.requestHtml(params.label);
   } catch (err) {
-    if (!isTelegramHtmlParseError(err)) {
+    if (!isTelegramHtmlParseError(err) && !isTelegramEmptyTextError(err)) {
       throw err;
     }
     if (params.verbose) {
+      const errorKind = isTelegramEmptyTextError(err) ? "empty text" : "HTML parse";
       sendLogger.warn(
-        `telegram ${params.label} failed with HTML parse error, retrying as plain text: ${formatErrorMessage(
+        `telegram ${params.label} failed with ${errorKind} error, retrying as plain text: ${formatErrorMessage(
           err,
         )}`,
       );

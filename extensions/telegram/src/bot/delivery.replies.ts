@@ -34,19 +34,14 @@ import {
   sendTelegramWithThreadFallback,
 } from "./delivery.send.js";
 import { resolveTelegramReplyId, type TelegramThreadSpec } from "./helpers.js";
-import {
-  markReplyApplied,
-  resolveReplyToForSend,
-  sendChunkedTelegramReplyText,
-  type DeliveryProgress as ReplyThreadDeliveryProgress,
-} from "./reply-threading.js";
-
 const VOICE_FORBIDDEN_RE = /VOICE_MESSAGES_FORBIDDEN/;
 const CAPTION_TOO_LONG_RE = /caption is too long/i;
 const GrammyErrorCtor: typeof GrammyError | undefined =
   typeof GrammyError === "function" ? GrammyError : undefined;
 
-type DeliveryProgress = ReplyThreadDeliveryProgress & {
+type DeliveryProgress = {
+  hasReplied: boolean;
+  hasDelivered: boolean;
   deliveredCount: number;
 };
 
@@ -87,6 +82,22 @@ function buildChunkTextResolver(params: {
   };
 }
 
+function resolveReplyToForSend(params: {
+  replyToId?: number;
+  replyToMode: ReplyToMode;
+  progress: DeliveryProgress;
+}): number | undefined {
+  return params.replyToId && (params.replyToMode === "all" || !params.progress.hasReplied)
+    ? params.replyToId
+    : undefined;
+}
+
+function markReplyApplied(progress: DeliveryProgress, replyToId?: number): void {
+  if (replyToId && !progress.hasReplied) {
+    progress.hasReplied = true;
+  }
+}
+
 function markDelivered(progress: DeliveryProgress): void {
   progress.hasDelivered = true;
   progress.deliveredCount += 1;
@@ -117,6 +128,12 @@ async function deliverTextReply(params: {
     replyQuoteText: params.replyQuoteText,
     markDelivered,
     sendChunk: async ({ chunk, replyToMessageId, replyMarkup, replyQuoteText }) => {
+      // Silently skip empty chunks instead of sending a blank message that
+      // would trigger a Telegram API error.
+      if (!chunk.html?.trim() && !chunk.text?.trim()) {
+        logVerbose("telegram: skipping empty chunk in deliverTextReply");
+        return;
+      }
       const messageId = await sendTelegramText(
         params.bot,
         params.chatId,
@@ -163,6 +180,10 @@ async function sendPendingFollowUpText(params: {
     replyMarkup: params.replyMarkup,
     markDelivered,
     sendChunk: async ({ chunk, replyToMessageId, replyMarkup }) => {
+      if (!chunk.html?.trim() && !chunk.text?.trim()) {
+        logVerbose("telegram: skipping empty chunk in sendPendingFollowUpText");
+        return;
+      }
       await sendTelegramText(params.bot, params.chatId, chunk.html, params.runtime, {
         replyToMessageId,
         thread: params.thread,
@@ -205,26 +226,30 @@ async function sendTelegramVoiceFallbackText(opts: {
 }): Promise<number | undefined> {
   let firstDeliveredMessageId: number | undefined;
   const chunks = opts.chunkText(opts.text);
-  let appliedReplyTo = false;
+  let sentAnyChunk = false;
   for (let i = 0; i < chunks.length; i += 1) {
     const chunk = chunks[i];
-    // Only apply reply reference, quote text, and buttons to the first chunk.
-    const replyToForChunk = !appliedReplyTo ? opts.replyToId : undefined;
+    if (!chunk || (!chunk.html?.trim() && !chunk.text?.trim())) {
+      logVerbose("telegram: skipping empty chunk in sendTelegramVoiceFallbackText");
+      continue;
+    }
+    // Only apply reply reference and buttons to the first sent chunk.
+    const replyToForChunk = !sentAnyChunk ? opts.replyToId : undefined;
     const messageId = await sendTelegramText(opts.bot, opts.chatId, chunk.html, opts.runtime, {
       replyToMessageId: replyToForChunk,
-      replyQuoteText: !appliedReplyTo ? opts.replyQuoteText : undefined,
+      replyQuoteText: !sentAnyChunk ? opts.replyQuoteText : undefined,
       thread: opts.thread,
       textMode: "html",
       plainText: chunk.text,
       linkPreview: opts.linkPreview,
       silent: opts.silent,
-      replyMarkup: !appliedReplyTo ? opts.replyMarkup : undefined,
+      replyMarkup: !sentAnyChunk ? opts.replyMarkup : undefined,
     });
-    if (firstDeliveredMessageId == null) {
-      firstDeliveredMessageId = messageId;
-    }
-    if (replyToForChunk) {
-      appliedReplyTo = true;
+    if (messageId != null) {
+      if (firstDeliveredMessageId == null) {
+        firstDeliveredMessageId = messageId;
+      }
+      sentAnyChunk = true;
     }
   }
   return firstDeliveredMessageId;

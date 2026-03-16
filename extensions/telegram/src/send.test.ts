@@ -474,6 +474,34 @@ describe("sendMessageTelegram", () => {
     }
   });
 
+  it("retries with plain text on 'text must be non-empty' error", async () => {
+    loadConfig.mockReturnValue({
+      channels: { telegram: { linkPreview: false } },
+    });
+    // Use bold markdown so HTML is non-empty, ensuring an HTML send attempt first.
+    const sendMessage = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("400: Bad Request: text must be non-empty"))
+      .mockResolvedValueOnce({ message_id: 99, chat: { id: "123" } });
+    const api = { sendMessage } as unknown as { sendMessage: typeof sendMessage };
+    await sendMessageTelegram("123", "**hello**", { token: "tok", api, plainText: "hello" });
+    expect(sendMessage).toHaveBeenCalledTimes(2);
+  });
+
+  it("retries with plain text on 'message text is empty' error", async () => {
+    loadConfig.mockReturnValue({
+      channels: { telegram: { linkPreview: false } },
+    });
+    // Use bold markdown so HTML is non-empty, ensuring an HTML send attempt first.
+    const sendMessage = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("400: Bad Request: message text is empty"))
+      .mockResolvedValueOnce({ message_id: 99, chat: { id: "123" } });
+    const api = { sendMessage } as unknown as { sendMessage: typeof sendMessage };
+    await sendMessageTelegram("123", "**hello**", { token: "tok", api, plainText: "hello" });
+    expect(sendMessage).toHaveBeenCalledTimes(2);
+  });
+
   it("fails when Telegram text send returns no message_id", async () => {
     const sendMessage = vi.fn().mockResolvedValue({
       chat: { id: "123" },
