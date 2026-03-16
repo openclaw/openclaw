@@ -427,6 +427,40 @@ export type ProviderBuiltInModelSuppressionResult = {
 };
 
 /**
+ * Provider-owned thinking policy input.
+ *
+ * Used by shared `/think`, ACP controls, and directive parsing to ask a
+ * provider whether a model supports special reasoning UX such as xhigh or a
+ * binary on/off toggle.
+ */
+export type ProviderThinkingPolicyContext = {
+  provider: string;
+  modelId: string;
+};
+
+/**
+ * Provider-owned default thinking policy input.
+ *
+ * `reasoning` is the merged catalog hint for the selected model when one is
+ * available. Providers can use it to keep "reasoning model => low" behavior
+ * without re-reading the catalog themselves.
+ */
+export type ProviderDefaultThinkingPolicyContext = ProviderThinkingPolicyContext & {
+  reasoning?: boolean;
+};
+
+/**
+ * Provider-owned "modern model" policy input.
+ *
+ * Live smoke/model-profile selection uses this to keep provider-specific
+ * inclusion/exclusion rules out of core.
+ */
+export type ProviderModernModelPolicyContext = {
+  provider: string;
+  modelId: string;
+};
+
+/**
  * Final catalog augmentation hook.
  *
  * Runs after OpenClaw loads the discovered model catalog and merges configured
@@ -651,6 +685,35 @@ export type ProviderPlugin = {
     | Promise<Array<ModelCatalogEntry> | ReadonlyArray<ModelCatalogEntry> | null | undefined>
     | null
     | undefined;
+  /**
+   * Provider-owned binary thinking toggle.
+   *
+   * Return true when the provider exposes a coarse on/off reasoning control
+   * instead of the normal multi-level ladder shown by `/think`.
+   */
+  isBinaryThinking?: (ctx: ProviderThinkingPolicyContext) => boolean | undefined;
+  /**
+   * Provider-owned xhigh reasoning support.
+   *
+   * Return true only for models that should expose the `xhigh` thinking level.
+   */
+  supportsXHighThinking?: (ctx: ProviderThinkingPolicyContext) => boolean | undefined;
+  /**
+   * Provider-owned default thinking level.
+   *
+   * Use this to keep model-family defaults (for example Claude 4.6 =>
+   * adaptive) out of core command logic.
+   */
+  resolveDefaultThinkingLevel?: (
+    ctx: ProviderDefaultThinkingPolicyContext,
+  ) => "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "adaptive" | null | undefined;
+  /**
+   * Provider-owned "modern model" matcher used by live profile/smoke filters.
+   *
+   * Return true when the given provider/model ref should be treated as a
+   * preferred modern model candidate.
+   */
+  isModernModelRef?: (ctx: ProviderModernModelPolicyContext) => boolean | undefined;
   wizard?: ProviderPluginWizard;
   formatApiKey?: (cred: AuthProfileCredential) => string;
   refreshOAuth?: (cred: OAuthCredential) => Promise<OAuthCredential>;
