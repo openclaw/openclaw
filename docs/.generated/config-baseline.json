@@ -44336,6 +44336,16 @@
       "hasChildren": false
     },
     {
+      "path": "models.providers.*.models.*.compat.supportsPromptCacheKey",
+      "kind": "core",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
       "path": "models.providers.*.models.*.compat.supportsReasoningEffort",
       "kind": "core",
       "type": "boolean",

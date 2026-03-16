@@ -119,10 +119,42 @@ function shouldStripResponsesStore(
   return OPENAI_RESPONSES_APIS.has(model.api) && model.compat?.supportsStore === false;
 }
 
+/**
+ * Returns true when the model uses the openai-responses API but is NOT pointing to a direct
+ * OpenAI/Azure endpoint. Non-OpenAI providers (e.g. Volcano Engine, BytePlus, custom proxies)
+ * do not support the `prompt_cache_key` and `prompt_cache_retention` fields that pi-ai
+ * unconditionally injects for openai-responses payloads, causing 400 errors.
+ *
+ * A `compat.supportsPromptCacheKey` override allows per-model opt-in/opt-out.
+ */
+function shouldStripResponsesPromptCacheKey(model: {
+  api?: unknown;
+  baseUrl?: unknown;
+  compat?: unknown;
+}): boolean {
+  if (typeof model.api !== "string" || !OPENAI_RESPONSES_APIS.has(model.api)) {
+    return false;
+  }
+  // Explicit compat override takes highest precedence.
+  const supportsPromptCacheKey =
+    model.compat && typeof model.compat === "object"
+      ? (model.compat as Record<string, unknown>).supportsPromptCacheKey
+      : undefined;
+  if (supportsPromptCacheKey === true) {
+    return false;
+  }
+  if (supportsPromptCacheKey === false) {
+    return true;
+  }
+  // Default: only allow prompt_cache_key for direct OpenAI/Azure endpoints.
+  return !isDirectOpenAIBaseUrl(model.baseUrl);
+}
+
 function applyOpenAIResponsesPayloadOverrides(params: {
   payloadObj: Record<string, unknown>;
   forceStore: boolean;
   stripStore: boolean;
+  stripPromptCacheKey: boolean;
   useServerCompaction: boolean;
   compactThreshold: number;
 }): void {
@@ -131,6 +163,10 @@ function applyOpenAIResponsesPayloadOverrides(params: {
   }
   if (params.stripStore) {
     delete params.payloadObj.store;
+  }
+  if (params.stripPromptCacheKey) {
+    delete params.payloadObj.prompt_cache_key;
+    delete params.payloadObj.prompt_cache_retention;
   }
   if (params.useServerCompaction && params.payloadObj.context_management === undefined) {
     params.payloadObj.context_management = [
@@ -262,7 +298,8 @@ export function createOpenAIResponsesContextManagementWrapper(
     const forceStore = shouldForceResponsesStore(model);
     const useServerCompaction = shouldEnableOpenAIResponsesServerCompaction(model, extraParams);
     const stripStore = shouldStripResponsesStore(model, forceStore);
-    if (!forceStore && !useServerCompaction && !stripStore) {
+    const stripPromptCacheKey = shouldStripResponsesPromptCacheKey(model);
+    if (!forceStore && !useServerCompaction && !stripStore && !stripPromptCacheKey) {
       return underlying(model, context, options);
     }
 
@@ -278,6 +315,7 @@ export function createOpenAIResponsesContextManagementWrapper(
             payloadObj: payload as Record<string, unknown>,
             forceStore,
             stripStore,
+            stripPromptCacheKey,
             useServerCompaction,
             compactThreshold,
           });

@@ -2215,4 +2215,102 @@ describe("applyExtraParamsToAgent", () => {
       expect(run().store).toBe(false);
     },
   );
+
+  // prompt_cache_key stripping for non-OpenAI openai-responses endpoints (#48155)
+
+  it("strips prompt_cache_key and prompt_cache_retention for non-OpenAI openai-responses endpoint (Volcano Engine)", () => {
+    const payload = runResponsesPayloadMutationCase({
+      applyProvider: "volces",
+      applyModelId: "deepseek-v3-2-251201",
+      model: {
+        api: "openai-responses",
+        provider: "volces",
+        id: "deepseek-v3-2-251201",
+        baseUrl: "https://ark.cn-beijing.volces.com/api/v3",
+      } as unknown as Model<"openai-responses">,
+      payload: {
+        store: false,
+        prompt_cache_key: "session-abc",
+        prompt_cache_retention: "24h",
+      },
+    });
+    expect(payload).not.toHaveProperty("prompt_cache_key");
+    expect(payload).not.toHaveProperty("prompt_cache_retention");
+  });
+
+  it("strips prompt_cache_key for arbitrary non-OpenAI openai-responses endpoints", () => {
+    const payload = runResponsesPayloadMutationCase({
+      applyProvider: "custom-proxy",
+      applyModelId: "some-model",
+      model: {
+        api: "openai-responses",
+        provider: "custom-proxy",
+        id: "some-model",
+        baseUrl: "https://my-proxy.example.com/v1",
+      } as unknown as Model<"openai-responses">,
+      payload: {
+        store: false,
+        prompt_cache_key: "session-xyz",
+      },
+    });
+    expect(payload).not.toHaveProperty("prompt_cache_key");
+  });
+
+  it("keeps prompt_cache_key for direct OpenAI openai-responses endpoint", () => {
+    const payload = runResponsesPayloadMutationCase({
+      applyProvider: "openai",
+      applyModelId: "gpt-5",
+      model: {
+        api: "openai-responses",
+        provider: "openai",
+        id: "gpt-5",
+        baseUrl: "https://api.openai.com/v1",
+      } as unknown as Model<"openai-responses">,
+      payload: {
+        store: false,
+        prompt_cache_key: "session-123",
+        prompt_cache_retention: "24h",
+      },
+    });
+    expect(payload.prompt_cache_key).toBe("session-123");
+    expect(payload.prompt_cache_retention).toBe("24h");
+  });
+
+  it("respects compat.supportsPromptCacheKey=true opt-in for non-OpenAI endpoints", () => {
+    const payload = runResponsesPayloadMutationCase({
+      applyProvider: "custom-openai-responses",
+      applyModelId: "my-model",
+      model: {
+        api: "openai-responses",
+        provider: "custom-openai-responses",
+        id: "my-model",
+        baseUrl: "https://my-proxy.example.com/v1",
+        compat: { supportsPromptCacheKey: true },
+      } as unknown as Model<"openai-responses">,
+      payload: {
+        store: false,
+        prompt_cache_key: "session-opt-in",
+      },
+    });
+    expect(payload.prompt_cache_key).toBe("session-opt-in");
+  });
+
+  it("respects compat.supportsPromptCacheKey=false opt-out for direct OpenAI endpoints", () => {
+    const payload = runResponsesPayloadMutationCase({
+      applyProvider: "openai",
+      applyModelId: "gpt-5",
+      model: {
+        api: "openai-responses",
+        provider: "openai",
+        id: "gpt-5",
+        baseUrl: "https://api.openai.com/v1",
+        compat: { supportsPromptCacheKey: false },
+      } as unknown as Model<"openai-responses">,
+      payload: {
+        store: false,
+        prompt_cache_key: "session-opt-out",
+      },
+    });
+    expect(payload).not.toHaveProperty("prompt_cache_key");
+  });
 });
