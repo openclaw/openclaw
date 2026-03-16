@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { normalizeSignalAccountInput } from "../../../extensions/signal/src/onboarding.js";
+import { normalizeSignalAccountInput } from "../../../extensions/signal/src/setup-surface.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { normalizeIMessageMessagingTarget } from "./normalize/imessage.js";
 import { looksLikeSignalTargetId, normalizeSignalMessagingTarget } from "./normalize/signal.js";

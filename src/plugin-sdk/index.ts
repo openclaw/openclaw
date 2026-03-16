@@ -704,7 +704,10 @@ export {
   resolveIMessageAccount,
   type ResolvedIMessageAccount,
 } from "../../extensions/imessage/src/accounts.js";
-export { imessageOnboardingAdapter } from "../../extensions/imessage/src/onboarding.js";
+export {
+  imessageSetupAdapter,
+  imessageSetupWizard,
+} from "../../extensions/imessage/src/setup-surface.js";
 export {
   looksLikeIMessageTargetId,
   normalizeIMessageMessagingTarget,
@@ -776,7 +779,10 @@ export {
   resolveSignalAccount,
   type ResolvedSignalAccount,
 } from "../../extensions/signal/src/accounts.js";
-export { signalOnboardingAdapter } from "../../extensions/signal/src/onboarding.js";
+export {
+  signalSetupAdapter,
+  signalSetupWizard,
+} from "../../extensions/signal/src/setup-surface.js";
 export {
   looksLikeSignalTargetId,
   normalizeSignalMessagingTarget,
