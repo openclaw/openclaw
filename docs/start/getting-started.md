@@ -54,7 +54,7 @@ Check your Node version with `node --version` if you are unsure.
   </Step>
   <Step title="Run the setup wizard">
     ```bash
-    openclaw onboard --install-daemon
+    openclaw setup --wizard --install-daemon
     ```
 
     The wizard configures auth, gateway settings, and optional channels.
