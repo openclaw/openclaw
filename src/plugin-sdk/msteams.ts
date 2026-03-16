@@ -12,7 +12,10 @@ export {
 export { isSilentReplyText, SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 export type { ReplyPayload } from "../auto-reply/types.js";
 export { mergeAllowlist, summarizeMapping } from "../channels/allowlists/resolve-utils.js";
-export { resolveControlCommandGate } from "../channels/command-gating.js";
+export {
+  resolveControlCommandGate,
+  resolveDualTextControlCommandGate,
+} from "../channels/command-gating.js";
 export { logInboundDrop, logTypingFailure } from "../channels/logging.js";
 export { resolveMentionGating } from "../channels/mention-gating.js";
 export type { AllowlistMatch } from "../channels/plugins/allowlist-match.js";
@@ -29,11 +32,6 @@ export {
 export { buildChannelConfigSchema } from "../channels/plugins/config-schema.js";
 export { resolveChannelMediaMaxBytes } from "../channels/plugins/media-limits.js";
 export { buildMediaPayload } from "../channels/plugins/media-payload.js";
-export type {
-  ChannelOnboardingAdapter,
-  ChannelOnboardingDmPolicy,
-} from "../channels/plugins/onboarding-types.js";
-export { promptChannelAccessConfig } from "../channels/plugins/onboarding/channel-access.js";
 export {
   addWildcardAllowFrom,
   mergeAllowFromEntries,
@@ -98,7 +96,7 @@ export {
 } from "./group-access.js";
 export { formatDocsLink } from "../terminal/links.js";
 export { sleep } from "../utils.js";
-export { loadWebMedia } from "../web/media.js";
+export { loadWebMedia } from "../../extensions/whatsapp/src/media.js";
 export type { WizardPrompter } from "../wizard/prompts.js";
 export { keepHttpServerTaskAlive } from "./channel-lifecycle.js";
 export { withFileLock } from "./file-lock.js";
@@ -119,3 +117,7 @@ export {
   createDefaultChannelRuntimeState,
 } from "./status-helpers.js";
 export { normalizeStringEntries } from "../shared/string-normalization.js";
+export {
+  msteamsSetupAdapter,
+  msteamsSetupWizard,
+} from "../../extensions/msteams/src/setup-surface.js";

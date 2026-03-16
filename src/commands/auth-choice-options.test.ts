@@ -6,6 +6,7 @@ import {
   buildAuthChoiceOptions,
   formatAuthChoiceChoicesForCli,
 } from "./auth-choice-options.js";
+import { formatStaticAuthChoiceChoicesForCli } from "./auth-choice-options.static.js";
 
 const resolveProviderWizardOptions = vi.hoisted(() =>
   vi.fn<() => ProviderWizardOption[]>(() => []),
@@ -102,6 +103,26 @@ describe("buildAuthChoiceOptions", () => {
     expect(cliChoices).toContain("oauth");
     expect(cliChoices).toContain("claude-cli");
     expect(cliChoices).toContain("codex-cli");
+  });
+
+  it("keeps static cli help choices off the plugin-backed catalog", () => {
+    resolveProviderWizardOptions.mockReturnValue([
+      {
+        value: "ollama",
+        label: "Ollama",
+        hint: "Cloud and local open models",
+        groupId: "ollama",
+        groupLabel: "Ollama",
+      },
+    ]);
+
+    const cliChoices = formatStaticAuthChoiceChoicesForCli({
+      includeLegacyAliases: false,
+      includeSkip: true,
+    }).split("|");
+
+    expect(cliChoices).not.toContain("ollama");
+    expect(cliChoices).toContain("skip");
   });
 
   it("shows Chutes in grouped provider selection", () => {

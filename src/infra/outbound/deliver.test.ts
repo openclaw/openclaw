@@ -1,12 +1,12 @@
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { markdownToSignalTextChunks } from "../../../extensions/signal/src/format.js";
 import { signalOutbound } from "../../channels/plugins/outbound/signal.js";
 import { telegramOutbound } from "../../channels/plugins/outbound/telegram.js";
 import { whatsappOutbound } from "../../channels/plugins/outbound/whatsapp.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { STATE_DIR } from "../../config/paths.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
-import { markdownToSignalTextChunks } from "../../signal/format.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { createIMessageTestPlugin } from "../../test-utils/imessage-test-plugin.js";
@@ -38,6 +38,15 @@ const logMocks = vi.hoisted(() => ({
 vi.mock("../../config/sessions.js", async () => {
   const actual = await vi.importActual<typeof import("../../config/sessions.js")>(
     "../../config/sessions.js",
+  );
+  return {
+    ...actual,
+    appendAssistantMessageToSessionTranscript: mocks.appendAssistantMessageToSessionTranscript,
+  };
+});
+vi.mock("../../config/sessions/transcript.js", async () => {
+  const actual = await vi.importActual<typeof import("../../config/sessions/transcript.js")>(
+    "../../config/sessions/transcript.js",
   );
   return {
     ...actual,
@@ -87,7 +96,7 @@ async function deliverWhatsAppPayload(params: {
   sendWhatsApp: NonNullable<
     NonNullable<Parameters<typeof deliverOutboundPayloads>[0]["deps"]>["sendWhatsApp"]
   >;
-  payload: { text: string; mediaUrl?: string };
+  payload: DeliverOutboundPayload;
   cfg?: OpenClawConfig;
 }) {
   return deliverOutboundPayloads({
@@ -189,6 +198,7 @@ function expectSuccessfulWhatsAppInternalHookPayload(
 describe("deliverOutboundPayloads", () => {
   beforeEach(() => {
     setActivePluginRegistry(defaultRegistry);
+    mocks.appendAssistantMessageToSessionTranscript.mockClear();
     hookMocks.runner.hasHooks.mockClear();
     hookMocks.runner.hasHooks.mockReturnValue(false);
     hookMocks.runner.runMessageSent.mockClear();
@@ -285,6 +295,24 @@ describe("deliverOutboundPayloads", () => {
       "123",
       "hi",
       expect.objectContaining({ accountId: "default", verbose: false, textMode: "html" }),
+    );
+  });
+
+  it("formats BTW replies prominently for telegram delivery", async () => {
+    const sendTelegram = vi.fn().mockResolvedValue({ messageId: "m1", chatId: "c1" });
+
+    await deliverTelegramPayload({
+      sendTelegram,
+      cfg: {
+        channels: { telegram: { botToken: "tok-1", textChunkLimit: 100 } },
+      },
+      payload: { text: "323", btw: { question: "what is 17 * 19?" } },
+    });
+
+    expect(sendTelegram).toHaveBeenCalledWith(
+      "123",
+      "BTW\nQuestion: what is 17 * 19?\n\n323",
+      expect.objectContaining({ verbose: false, textMode: "html" }),
     );
   });
 
@@ -725,6 +753,21 @@ describe("deliverOutboundPayloads", () => {
     ]);
   });
 
+  it("formats BTW replies prominently for whatsapp delivery", async () => {
+    const sendWhatsApp = vi.fn().mockResolvedValue({ messageId: "w1", toJid: "jid" });
+
+    await deliverWhatsAppPayload({
+      sendWhatsApp,
+      payload: { text: "323", btw: { question: "what is 17 * 19?" } },
+    });
+
+    expect(sendWhatsApp).toHaveBeenCalledWith(
+      "+1555",
+      "BTW\nQuestion: what is 17 * 19?\n\n323",
+      expect.any(Object),
+    );
+  });
+
   it("continues on errors when bestEffort is enabled", async () => {
     const { sendWhatsApp, onError, results } = await runBestEffortPartialFailureDelivery();
 
@@ -869,11 +912,15 @@ describe("deliverOutboundPayloads", () => {
         sessionKey: "agent:main:main",
         text: "caption",
         mediaUrls: ["https://example.com/files/report.pdf?sig=1"],
+        idempotencyKey: "idem-deliver-1",
       },
     });
 
     expect(mocks.appendAssistantMessageToSessionTranscript).toHaveBeenCalledWith(
-      expect.objectContaining({ text: "report.pdf" }),
+      expect.objectContaining({
+        text: "report.pdf",
+        idempotencyKey: "idem-deliver-1",
+      }),
     );
   });
 
