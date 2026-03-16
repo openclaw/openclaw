@@ -256,6 +256,44 @@ describe("usage controller date interpretation params", () => {
     expect(request).toHaveBeenNthCalledWith(8, "usage.status");
   });
 
+  it("forces a usage.status re-probe on refresh even when unsupported is cached", async () => {
+    const storage = createStorageMock();
+    vi.stubGlobal("localStorage", storage as unknown as Storage);
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-03-14T13:30:00Z"));
+
+    let quotaAttempts = 0;
+    const request = vi.fn(async (method: string) => {
+      if (method === "usage.status") {
+        quotaAttempts += 1;
+        if (quotaAttempts === 1) {
+          throw new Error("RPC method not found: usage.status");
+        }
+        return { providers: [{ provider: "anthropic", windows: [] }] };
+      }
+      return {};
+    });
+
+    const state = createState(request, {
+      settings: { gatewayUrl: "ws://127.0.0.1:18789" },
+    });
+
+    await loadUsage(state);
+
+    expect(__test.shouldRequestUsageStatus(state)).toBe(false);
+
+    await loadUsage(state, { refreshProviderQuota: true });
+
+    expect(request).toHaveBeenNthCalledWith(6, "usage.status");
+    expect(state.usageProviderSummary).toEqual({
+      providers: [{ provider: "anthropic", windows: [] }],
+    });
+    expect(__test.shouldRequestUsageStatus(state)).toBe(true);
+
+    vi.unstubAllGlobals();
+    vi.useRealTimers();
+  });
+
   it("retries provider quota after a transient usage.status failure on the next load", async () => {
     let quotaAttempts = 0;
     const request = vi.fn(async (method: string) => {

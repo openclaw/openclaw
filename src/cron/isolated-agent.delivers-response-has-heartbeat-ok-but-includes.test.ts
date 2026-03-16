@@ -73,7 +73,7 @@ async function runTelegramAnnounceTurn(params: {
 
 describe("runCronIsolatedAgentTurn", () => {
   beforeEach(() => {
-    vi.spyOn(modelSelection, "resolveThinkingDefault").mockReturnValue(undefined);
+    vi.spyOn(modelSelection, "resolveThinkingDefault").mockReturnValue(undefined as never);
     setupIsolatedAgentTurnMocks({ fast: true });
   });
 

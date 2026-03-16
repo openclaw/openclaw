@@ -98,11 +98,12 @@ describe("provider-runtime", () => {
   });
 
   it("dispatches runtime hooks for the matched provider", async () => {
-    resolveOwningPluginIdsForProviderMock.mockImplementation((params: { provider?: string }) => {
-      if (params.provider === "demo") {
+    resolveOwningPluginIdsForProviderMock.mockImplementation((params: unknown) => {
+      const provider = (params as { provider?: string }).provider;
+      if (provider === "demo") {
         return ["demo"];
       }
-      if (params.provider === "openai") {
+      if (provider === "openai") {
         return ["openai"];
       }
       return undefined;

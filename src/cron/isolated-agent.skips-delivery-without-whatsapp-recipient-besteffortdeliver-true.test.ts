@@ -262,7 +262,7 @@ async function assertExplicitTelegramTargetDelivery(params: {
 
 describe("runCronIsolatedAgentTurn", () => {
   beforeEach(() => {
-    vi.spyOn(modelSelection, "resolveThinkingDefault").mockReturnValue(undefined);
+    vi.spyOn(modelSelection, "resolveThinkingDefault").mockReturnValue(undefined as never);
     setupIsolatedAgentTurnMocks();
   });
 

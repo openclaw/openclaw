@@ -233,6 +233,14 @@ function rememberLegacyUsageStatus(
   persistLegacyUsageStatusCache(cache, now);
 }
 
+function forgetLegacyUsageStatus(state: UsageState, now: number = Date.now()) {
+  const cache = getLegacyUsageStatusCache(now);
+  if (!cache.delete(resolveGatewayCompatibilityKey(state))) {
+    return;
+  }
+  persistLegacyUsageStatusCache(cache, now);
+}
+
 function isLegacyDateInterpretationUnsupportedError(err: unknown): boolean {
   const message = toErrorMessage(err);
   return (
@@ -317,7 +325,8 @@ export async function loadUsage(
   const loadProviderQuota = async () => {
     const quotaMetaForState = usageQuotaMeta.get(state);
     const shouldRefreshProviderQuota = overrides?.refreshProviderQuota === true;
-    const shouldProbeCompatibility = shouldRequestUsageStatus(state);
+    const shouldProbeCompatibility =
+      shouldRefreshProviderQuota || shouldRequestUsageStatus(state);
     const shouldLoadQuota =
       shouldRefreshProviderQuota ||
       !quotaMetaForState ||
@@ -343,6 +352,7 @@ export async function loadUsage(
       if (state.client !== client) {
         return;
       }
+      forgetLegacyUsageStatus(state);
       state.usageProviderSummary = quotaRes as ProviderUsageSummary;
       state.usageProviderSummaryError = null;
       usageQuotaMeta.set(state, { gatewayKey, status: "loaded" });
@@ -357,6 +367,7 @@ export async function loadUsage(
         usageQuotaMeta.set(state, { gatewayKey, status: "unsupported" });
         return;
       }
+      forgetLegacyUsageStatus(state);
       state.usageProviderSummary = null;
       state.usageProviderSummaryError = toErrorMessage(err);
       usageQuotaMeta.set(state, { gatewayKey, status: "error" });
@@ -429,6 +440,7 @@ export const __test = {
   rememberLegacyDateInterpretation,
   shouldRequestUsageStatus,
   rememberLegacyUsageStatus,
+  forgetLegacyUsageStatus,
   isLegacyUsageStatusUnsupportedError,
   resetLegacyUsageDateParamsCache: () => {
     legacyUsageDateParamsCache = null;

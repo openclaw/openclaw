@@ -149,10 +149,15 @@ export async function stopSlackStream(params: StopSlackStreamParams): Promise<vo
     }`,
   );
 
-  await session.streamer.stop({
-    ...(text ? { markdown_text: text } : {}),
-    ...(blocks?.length ? { blocks } : {}),
-  });
+  const stopParams =
+    text || blocks?.length
+      ? {
+          ...(text ? { markdown_text: text } : {}),
+          ...(blocks?.length ? { blocks } : {}),
+        }
+      : undefined;
+
+  await session.streamer.stop(stopParams);
 
   logVerbose("slack-stream: stream stopped");
 }

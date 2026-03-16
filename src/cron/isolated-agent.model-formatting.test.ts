@@ -126,7 +126,7 @@ async function expectInvalidModel(home: string, model: string) {
 
 describe("cron model formatting and precedence edge cases", () => {
   beforeEach(() => {
-    vi.spyOn(modelSelection, "resolveThinkingDefault").mockReturnValue(undefined);
+    vi.spyOn(modelSelection, "resolveThinkingDefault").mockReturnValue(undefined as never);
     vi.mocked(runEmbeddedPiAgent).mockClear();
     vi.mocked(loadModelCatalog).mockResolvedValue([]);
   });

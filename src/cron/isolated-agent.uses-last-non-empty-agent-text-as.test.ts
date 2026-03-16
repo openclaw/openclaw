@@ -16,9 +16,7 @@ import {
 } from "./isolated-agent.test-harness.js";
 import type { CronJob } from "./types.js";
 
-let resolveThinkingDefaultSpy: ReturnType<
-  typeof vi.spyOn<typeof modelSelection, "resolveThinkingDefault">
->;
+let resolveThinkingDefaultSpy: ReturnType<typeof vi.spyOn>;
 
 function makeDeps(): CliDeps {
   return {
@@ -170,7 +168,7 @@ describe("runCronIsolatedAgentTurn", () => {
   beforeEach(() => {
     resolveThinkingDefaultSpy = vi
       .spyOn(modelSelection, "resolveThinkingDefault")
-      .mockReturnValue(undefined);
+      .mockReturnValue(undefined as never);
     vi.mocked(runEmbeddedPiAgent).mockClear();
     vi.mocked(loadModelCatalog).mockResolvedValue([]);
   });
