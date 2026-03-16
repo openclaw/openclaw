@@ -17,6 +17,22 @@ This document specifies the **internal OpenClaw transport contract** between the
 
 It is intentionally **not** an external public ACP transport standard. The external ACP-facing semantics remain whatever OpenClaw exposes through its ACP translator/server. This protocol only governs how the gateway and nodes coordinate ACP execution over the existing Gateway WebSocket.
 
+## ACP reference baseline
+
+This internal protocol is designed with these ACP references in mind:
+
+- ACP docs / introduction: <https://agentclientprotocol.com>
+- ACP TypeScript library page: <https://agentclientprotocol.com/libraries/typescript>
+- ACP TypeScript SDK package: <https://www.npmjs.com/package/@agentclientprotocol/sdk>
+- ACP TypeScript API reference: <https://agentclientprotocol.github.io/typescript-sdk>
+- ACP docs index: <https://agentclientprotocol.com/llms.txt>
+
+Implementation guidance:
+
+- the node-side worker should reuse ACP primitives and existing TypeScript SDK/client patterns wherever practical
+- this document specifies additional OpenClaw-internal transport semantics needed for gateway-owned durability and node-leased execution
+- these additions must not break the mapping back to ACP concepts like session lifecycle, turn start, streaming updates, cancel, close, and status
+
 ## Scope
 
 This protocol covers:

@@ -88,6 +88,32 @@ That means:
    - use as inspiration for durability, recovery, replay, and terminal resolution behavior
    - do **not** treat external remote gateway transport as the target architecture for this effort
 
+## External ACP reference baseline
+
+These are the main external references for this project and should be treated as the baseline for ACP compatibility and implementation vocabulary:
+
+1. ACP docs / introduction
+   - <https://agentclientprotocol.com>
+
+2. ACP TypeScript library page
+   - <https://agentclientprotocol.com/libraries/typescript>
+
+3. ACP TypeScript SDK package
+   - `@agentclientprotocol/sdk`
+   - <https://www.npmjs.com/package/@agentclientprotocol/sdk>
+
+4. ACP TypeScript API reference
+   - <https://agentclientprotocol.github.io/typescript-sdk>
+
+5. ACP docs index
+   - <https://agentclientprotocol.com/llms.txt>
+
+Project rule:
+
+- the **runtime-facing side** of this effort should stay as close as practical to real ACP primitives and existing ACP TypeScript SDK patterns
+- the **node ↔ gateway transport** we are designing is OpenClaw-internal and extends beyond what ACP has fully standardized for this scenario today
+- even where OpenClaw adds internal machinery (leases, fencing, durable gateway checkpoints, worker transport), the design should remain compatible with ACP’s base concepts rather than drifting into a totally separate model
+
 ## What is in scope
 
 ### In scope

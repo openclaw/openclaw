@@ -55,6 +55,22 @@ The desired end-state is a first-class **node-backed ACP runtime** where:
 - remote ACP execution is mediated through the existing node trust/pairing/policy model
 - the ACP-facing behavior remains consistent with the local and remote backend story
 
+## External ACP compatibility baseline
+
+This architecture should explicitly anchor itself to the public ACP references:
+
+- ACP docs / introduction: <https://agentclientprotocol.com>
+- ACP TypeScript library page: <https://agentclientprotocol.com/libraries/typescript>
+- ACP TypeScript SDK package: <https://www.npmjs.com/package/@agentclientprotocol/sdk>
+- ACP TypeScript API reference: <https://agentclientprotocol.github.io/typescript-sdk>
+- ACP docs index: <https://agentclientprotocol.com/llms.txt>
+
+Interpretation for this project:
+
+- on the **runtime-facing side**, we should reuse real ACP concepts and TypeScript SDK/client patterns wherever practical
+- on the **OpenClaw-internal transport side**, we still need additional machinery that ACP does not fully standardize for this exact topology yet (node leases, fencing, durable gateway-owned replay/checkpoints, canonical terminal resolution)
+- those OpenClaw-specific additions should be designed so they remain compatible with ACP’s base primitives and mental model rather than inventing a completely separate agent protocol
+
 ## Goals
 
 ### Primary goals
