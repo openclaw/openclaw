@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { ProviderPlugin } from "../../src/plugins/types.js";
+import { createCapturedPluginRegistration } from "../../src/test-utils/plugin-registration.js";
 import {
   createProviderUsageFetch,
   makeResponse,
@@ -15,26 +16,25 @@ function registerGooglePlugin(): {
   } | null;
   webSearchProviderRegistered: boolean;
 } {
-  let provider: ProviderPlugin | undefined;
-  let webSearchProviderRegistered = false;
-  let webSearchProvider: {
-    id: string;
-    envVars: string[];
-    label: string;
-  } | null = null;
-  googlePlugin.register({
-    registerProvider(nextProvider: ProviderPlugin) {
-      provider = nextProvider;
-    },
-    registerWebSearchProvider(nextProvider: { id: string; envVars: string[]; label: string }) {
-      webSearchProviderRegistered = true;
-      webSearchProvider = nextProvider;
-    },
-  } as never);
+  const captured = createCapturedPluginRegistration();
+  googlePlugin.register(captured.api);
+  const provider = captured.providers[0];
   if (!provider) {
     throw new Error("provider registration missing");
   }
-  return { provider, webSearchProviderRegistered, webSearchProvider };
+  const webSearchProvider = captured.webSearchProviders[0] ?? null;
+  return {
+    provider,
+    webSearchProviderRegistered: webSearchProvider !== null,
+    webSearchProvider:
+      webSearchProvider === null
+        ? null
+        : {
+            id: webSearchProvider.id,
+            envVars: webSearchProvider.envVars,
+            label: webSearchProvider.label,
+          },
+  };
 }
 
 describe("google plugin", () => {
