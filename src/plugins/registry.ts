@@ -42,6 +42,7 @@ import type {
   PluginFormat,
   PluginLogger,
   PluginOrigin,
+  PluginTrustTier,
   PluginKind,
   PluginRegistrationMode,
   PluginHookName,
@@ -148,6 +149,7 @@ export type PluginRecord = {
   source: string;
   rootDir?: string;
   origin: PluginOrigin;
+  trustTier: PluginTrustTier;
   workspaceDir?: string;
   enabled: boolean;
   status: "loaded" | "disabled" | "error";

@@ -329,6 +329,7 @@ describe("ensureOnboardingPluginInstalled", () => {
       name: "loaded",
       source: "/tmp/loaded.cjs",
       origin: "bundled",
+      trustTier: "native",
       enabled: true,
       status: "loaded",
       toolNames: [],

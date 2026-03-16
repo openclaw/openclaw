@@ -28,6 +28,7 @@ import { setActivePluginRegistry } from "./runtime.js";
 import { createPluginRuntime, type CreatePluginRuntimeOptions } from "./runtime/index.js";
 import type { PluginRuntime } from "./runtime/types.js";
 import { validateJsonSchemaValue } from "./schema-validator.js";
+import { resolveTrustTier } from "./trust.js";
 import type {
   OpenClawPluginDefinition,
   OpenClawPluginModule,
@@ -35,6 +36,7 @@ import type {
   PluginBundleFormat,
   PluginFormat,
   PluginLogger,
+  PluginTrustTier,
 } from "./types.js";
 
 export type PluginLoadResult = PluginRegistry;
@@ -337,6 +339,7 @@ function createPluginRecord(params: {
   source: string;
   rootDir?: string;
   origin: PluginRecord["origin"];
+  trustTier: PluginTrustTier;
   workspaceDir?: string;
   enabled: boolean;
   configSchema: boolean;
@@ -352,6 +355,7 @@ function createPluginRecord(params: {
     source: params.source,
     rootDir: params.rootDir,
     origin: params.origin,
+    trustTier: params.trustTier,
     workspaceDir: params.workspaceDir,
     enabled: params.enabled,
     status: params.enabled ? "loaded" : "disabled",
@@ -842,6 +846,11 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
         source: candidate.source,
         rootDir: candidate.rootDir,
         origin: candidate.origin,
+        trustTier: resolveTrustTier({
+          format: manifestRecord.format,
+          bundleFormat: manifestRecord.bundleFormat,
+          origin: candidate.origin,
+        }),
         workspaceDir: candidate.workspaceDir,
         enabled: false,
         configSchema: Boolean(manifestRecord.configSchema),
@@ -870,6 +879,11 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
       source: candidate.source,
       rootDir: candidate.rootDir,
       origin: candidate.origin,
+      trustTier: resolveTrustTier({
+        format: manifestRecord.format,
+        bundleFormat: manifestRecord.bundleFormat,
+        origin: candidate.origin,
+      }),
       workspaceDir: candidate.workspaceDir,
       enabled: enableState.enabled,
       configSchema: Boolean(manifestRecord.configSchema),
