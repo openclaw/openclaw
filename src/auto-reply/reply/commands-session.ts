@@ -1,3 +1,4 @@
+import fs from "node:fs/promises";
 import { resolveFastModeState } from "../../agents/fast-mode.js";
 import { formatThreadBindingDurationLabel } from "../../channels/thread-bindings-messages.js";
 import { parseDurationMs } from "../../cli/parse-duration.js";
@@ -9,6 +10,7 @@ import type { SessionBindingRecord } from "../../infra/outbound/session-binding-
 import type { RestartSentinelPayload } from "../../infra/restart-sentinel.js";
 import {
   formatDoctorNonInteractiveHint,
+  resolveRestartSentinelPath,
   writeRestartSentinel,
 } from "../../infra/restart-sentinel.js";
 import { scheduleGatewaySigusr1Restart, triggerOpenClawRestart } from "../../infra/restart.js";
@@ -654,8 +656,14 @@ export const handleRestartCommand: CommandHandler = async (params, allowTextComm
       },
     };
   }
+  // Write sentinel before triggerOpenClawRestart() because the OS restart
+  // command (launchctl kickstart, systemctl restart) may kill this process
+  // before an async write after the trigger completes.
+  await writeSentinel();
   const restartMethod = triggerOpenClawRestart();
   if (!restartMethod.ok) {
+    // Clean up stale sentinel since restart didn't actually happen
+    await fs.unlink(resolveRestartSentinelPath()).catch(() => {});
     const detail = restartMethod.detail ? ` Details: ${restartMethod.detail}` : "";
     return {
       shouldContinue: false,
@@ -664,7 +672,6 @@ export const handleRestartCommand: CommandHandler = async (params, allowTextComm
       },
     };
   }
-  await writeSentinel();
   return {
     shouldContinue: false,
     reply: {

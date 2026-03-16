@@ -1,3 +1,4 @@
+import fs from "node:fs/promises";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { HandleCommandsParams } from "./commands-types.js";
 
@@ -104,7 +105,8 @@ describe("handleRestartCommand sentinel", () => {
     expect(result?.reply?.text).toMatch(/Restarting/);
   });
 
-  it("does not write sentinel when restart fails", async () => {
+  it("cleans up sentinel when OS-level restart fails", async () => {
+    const unlinkSpy = vi.spyOn(fs, "unlink").mockResolvedValue();
     triggerOpenClawRestartMock.mockReturnValue({
       ok: false,
       method: "launchctl",
@@ -114,7 +116,11 @@ describe("handleRestartCommand sentinel", () => {
     const result = await handleRestartCommand(makeParams(), true);
 
     expect(result?.reply?.text).toMatch(/Restart failed/);
-    expect(writeRestartSentinelMock).not.toHaveBeenCalled();
+    // Sentinel was written before the trigger attempt
+    expect(writeRestartSentinelMock).toHaveBeenCalledTimes(1);
+    // Then cleaned up after failure
+    expect(unlinkSpy).toHaveBeenCalledTimes(1);
+    unlinkSpy.mockRestore();
   });
 
   it("skips sentinel when command is not /restart", async () => {
