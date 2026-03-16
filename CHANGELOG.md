@@ -103,6 +103,8 @@ Docs: https://docs.openclaw.ai
 - Control UI/model switching: preserve the selected provider prefix when switching models from the chat dropdown, so multi-provider setups no longer send `anthropic/gpt-5.2`-style mismatches when the user picked `openai/gpt-5.2`. (#47581) Thanks @chrishham.
 - Control UI/storage: scope persisted settings keys by gateway base path, with migration from the legacy shared key, so multiple gateways under one domain stop overwriting each other's dashboard preferences. (#47932) Thanks @bobBot-claw.
 - Agents/usage tracking: stop forcing `supportsUsageInStreaming: false` on non-native OpenAI-completions providers so compatible backends report token usage and cost again instead of showing all zeros. (#46500) Fixes #46142. Thanks @ademczuk.
+- Plugins/subagents: preserve gateway-owned plugin subagent access across runtime, tool, and embedded-runner load paths so gateway plugin tools and context engines can still spawn and manage subagents after the loader cache split. (#46648) Thanks @jalehman.
+- Control UI/overview: keep the language dropdown aligned with the persisted locale during dashboard startup so refreshing the page does not fall back to English before locale hydration completes. (#48019) Thanks @git-jxj.
 
 ## 2026.3.13
 
@@ -181,6 +183,7 @@ Docs: https://docs.openclaw.ai
 - Auth/login lockout recovery: clear stale `auth_permanent` and `billing` disabled state for all profiles matching the target provider when `openclaw models auth login` is invoked, so users locked out by expired or revoked OAuth tokens can recover by re-authenticating instead of waiting for the cooldown timer to expire. (#43057)
 - Auto-reply/context-engine compaction: persist the exact embedded-run metadata compaction count for main and followup runner session accounting, so metadata-only auto-compactions no longer undercount multi-compaction runs. (#42629) thanks @uf-hy.
 - Auth/Codex CLI reuse: sync reused Codex CLI credentials into the supported `openai-codex:default` OAuth profile instead of reviving the deprecated `openai-codex:codex-cli` slot, so doctor cleanup no longer loops. (#45353) thanks @Gugu-sugar.
+- WhatsApp/group replies: recognize implicit reply-to-bot mentions when WhatsApp sends the quoted sender in `@lid` format, including device-suffixed self identities. (#23029) Thanks @sparkyrider.
 
 ## 2026.3.12
 
@@ -272,6 +275,7 @@ Docs: https://docs.openclaw.ai
 - Agents/Anthropic replay: drop replayed assistant thinking blocks for native Anthropic and Bedrock Claude providers so persisted follow-up turns no longer fail on stored thinking blocks. (#44843) Thanks @jmcte.
 - Docs/Brave pricing: escape literal dollar signs in Brave Search cost text so the docs render the free credit and per-request pricing correctly. (#44989) Thanks @keelanfh.
 - Feishu/file uploads: preserve literal UTF-8 filenames in `im.file.create` so Chinese and other non-ASCII filenames no longer appear percent-encoded in chat. (#34262) Thanks @fabiaodemianyang and @KangShuaiFu.
+- Agents/compaction safeguard: trim large kept `toolResult` payloads consistently for budgeting, pruning, and identifier seeding, then restore preserved payloads after prune so oversized safeguard summaries stay stable. (#44133) thanks @SayrWolfridge.
 
 ## 2026.3.11
 
