@@ -519,6 +519,82 @@ describe("gateway server cron", () => {
       expect(notifyBody.action).toBe("finished");
       expect(notifyBody.jobId).toBe(notifyJobId);
 
+      const legacyAddRes = await rpcReq(ws, "cron.add", {
+        name: "legacy notify create",
+        enabled: true,
+        notify: true,
+        schedule: { kind: "every", everyMs: 60_000 },
+        sessionTarget: "main",
+        wakeMode: "next-heartbeat",
+        payload: { kind: "systemEvent", text: "legacy add webhook" },
+      });
+      expect(legacyAddRes.ok).toBe(true);
+      const legacyAddJobIdValue = (legacyAddRes.payload as { id?: unknown } | null)?.id;
+      const legacyAddJobId = typeof legacyAddJobIdValue === "string" ? legacyAddJobIdValue : "";
+      expect(legacyAddJobId.length > 0).toBe(true);
+
+      const legacyAddRunRes = await rpcReq(
+        ws,
+        "cron.run",
+        { id: legacyAddJobId, mode: "force" },
+        20_000,
+      );
+      expect(legacyAddRunRes.ok).toBe(true);
+      await waitForCondition(() => fetchMock.mock.calls.length === 2, 5000);
+      const [legacyAddUrl, legacyAddInit] = fetchMock.mock.calls[1] as [
+        string,
+        {
+          method?: string;
+          headers?: Record<string, string>;
+          body?: string;
+        },
+      ];
+      expect(legacyAddUrl).toBe("https://legacy.example.invalid/cron-finished");
+      expect(legacyAddInit.method).toBe("POST");
+      const legacyAddBody = JSON.parse(legacyAddInit.body ?? "{}");
+      expect(legacyAddBody.jobId).toBe(legacyAddJobId);
+
+      const legacyUpdateSeedRes = await rpcReq(ws, "cron.add", {
+        name: "legacy notify update",
+        enabled: true,
+        schedule: { kind: "every", everyMs: 60_000 },
+        sessionTarget: "main",
+        wakeMode: "next-heartbeat",
+        payload: { kind: "systemEvent", text: "legacy update webhook" },
+      });
+      expect(legacyUpdateSeedRes.ok).toBe(true);
+      const legacyUpdateJobIdValue = (legacyUpdateSeedRes.payload as { id?: unknown } | null)?.id;
+      const legacyUpdateJobId =
+        typeof legacyUpdateJobIdValue === "string" ? legacyUpdateJobIdValue : "";
+      expect(legacyUpdateJobId.length > 0).toBe(true);
+
+      const legacyUpdatePatchRes = await rpcReq(ws, "cron.update", {
+        id: legacyUpdateJobId,
+        patch: { notify: true },
+      });
+      expect(legacyUpdatePatchRes.ok).toBe(true);
+
+      const legacyUpdateRunRes = await rpcReq(
+        ws,
+        "cron.run",
+        { id: legacyUpdateJobId, mode: "force" },
+        20_000,
+      );
+      expect(legacyUpdateRunRes.ok).toBe(true);
+      await waitForCondition(() => fetchMock.mock.calls.length === 3, 5000);
+      const [legacyUpdateUrl, legacyUpdateInit] = fetchMock.mock.calls[2] as [
+        string,
+        {
+          method?: string;
+          headers?: Record<string, string>;
+          body?: string;
+        },
+      ];
+      expect(legacyUpdateUrl).toBe("https://legacy.example.invalid/cron-finished");
+      expect(legacyUpdateInit.method).toBe("POST");
+      const legacyUpdateBody = JSON.parse(legacyUpdateInit.body ?? "{}");
+      expect(legacyUpdateBody.jobId).toBe(legacyUpdateJobId);
+
       const legacyRunRes = await rpcReq(
         ws,
         "cron.run",
@@ -526,8 +602,8 @@ describe("gateway server cron", () => {
         20_000,
       );
       expect(legacyRunRes.ok).toBe(true);
-      await waitForCondition(() => fetchMock.mock.calls.length === 2, 5000);
-      const [legacyUrl, legacyInit] = fetchMock.mock.calls[1] as [
+      await waitForCondition(() => fetchMock.mock.calls.length === 4, 5000);
+      const [legacyUrl, legacyInit] = fetchMock.mock.calls[3] as [
         string,
         {
           method?: string;
@@ -559,7 +635,7 @@ describe("gateway server cron", () => {
       expect(silentRunRes.ok).toBe(true);
       await yieldToEventLoop();
       await yieldToEventLoop();
-      expect(fetchMock).toHaveBeenCalledTimes(2);
+      expect(fetchMock).toHaveBeenCalledTimes(4);
 
       cronIsolatedRun.mockResolvedValueOnce({ status: "ok" });
       const noSummaryRes = await rpcReq(ws, "cron.add", {
@@ -585,7 +661,7 @@ describe("gateway server cron", () => {
       expect(noSummaryRunRes.ok).toBe(true);
       await yieldToEventLoop();
       await yieldToEventLoop();
-      expect(fetchMock).toHaveBeenCalledTimes(2);
+      expect(fetchMock).toHaveBeenCalledTimes(4);
     } finally {
       ws.close();
       await server.close();

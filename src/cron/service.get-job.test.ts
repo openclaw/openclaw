@@ -68,6 +68,27 @@ describe("CronService.getJob", () => {
     }
   });
 
+  it("preserves deprecated notify flag on create for legacy webhook fallback", async () => {
+    const { storePath } = await makeStorePath();
+    const cron = createCronService(storePath);
+    await cron.start();
+
+    try {
+      const legacyJob = await cron.add({
+        name: "legacy-notify-job",
+        enabled: true,
+        notify: true,
+        schedule: { kind: "every", everyMs: 60_000 },
+        sessionTarget: "main",
+        wakeMode: "next-heartbeat",
+        payload: { kind: "systemEvent", text: "ping" },
+      });
+      expect(cron.getJob(legacyJob.id)?.notify).toBe(true);
+    } finally {
+      cron.stop();
+    }
+  });
+
   it("rejects invalid webhook delivery target on create", async () => {
     const { storePath } = await makeStorePath();
     const cron = createCronService(storePath);

@@ -71,6 +71,8 @@ export type CronJob = {
   name: string;
   description?: string;
   enabled: boolean;
+  /** Deprecated legacy webhook toggle; preserved for older clients and stored jobs. */
+  notify?: boolean;
   deleteAfterRun?: boolean;
   createdAtMs: number;
   updatedAtMs: number;

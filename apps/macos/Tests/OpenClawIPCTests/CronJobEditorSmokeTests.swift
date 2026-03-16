@@ -90,4 +90,63 @@ struct CronJobEditorSmokeTests {
         let raw = root["deleteAfterRun"] as? Bool
         #expect(raw == true)
     }
+
+    @Test func cronJobEditorPreservesWebhookDeliveryWhenHydratingExistingJob() {
+        let channelsStore = ChannelsStore(isPreview: true)
+        let job = CronJob(
+            id: "job-2",
+            agentId: nil,
+            name: "Webhook main",
+            description: nil,
+            enabled: true,
+            deleteAfterRun: nil,
+            createdAtMs: 1_700_000_000_000,
+            updatedAtMs: 1_700_000_000_000,
+            schedule: .every(everyMs: 3_600_000, anchorMs: 1_700_000_000_000),
+            sessionTarget: .main,
+            wakeMode: .nextHeartbeat,
+            payload: .systemEvent(text: "notify"),
+            delivery: CronDelivery(mode: .webhook, channel: nil, to: "https://example.invalid/cron", bestEffort: nil),
+            state: CronJobState(
+                nextRunAtMs: nil,
+                runningAtMs: nil,
+                lastRunAtMs: nil,
+                lastStatus: nil,
+                lastError: nil,
+                lastDurationMs: nil))
+
+        var view = CronJobEditor(
+            job: job,
+            isSaving: .constant(false),
+            error: .constant(nil),
+            channelsStore: channelsStore,
+            onCancel: {},
+            onSave: { _ in })
+        view.hydrateFromJob()
+
+        #expect(view.deliveryMode == .webhook)
+        #expect(view.to == "https://example.invalid/cron")
+    }
+
+    @Test func cronJobEditorIncludesWebhookDeliveryForMainJobs() throws {
+        let channelsStore = ChannelsStore(isPreview: true)
+        var view = CronJobEditor(
+            job: nil,
+            isSaving: .constant(false),
+            error: .constant(nil),
+            channelsStore: channelsStore,
+            onCancel: {},
+            onSave: { _ in })
+        view.name = "Webhook main"
+        view.sessionTarget = .main
+        view.payloadKind = .systemEvent
+        view.systemEventText = "notify"
+        view.deliveryMode = .webhook
+        view.to = "https://example.invalid/cron"
+
+        let payload = try view.buildPayload()
+        let delivery = payload["delivery"]?.value as? [String: Any]
+        #expect(delivery?["mode"] as? String == "webhook")
+        #expect(delivery?["to"] as? String == "https://example.invalid/cron")
+    }
 }

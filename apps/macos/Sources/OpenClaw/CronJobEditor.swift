@@ -20,9 +20,9 @@ struct CronJobEditor: View {
     static let scheduleKindNote =
         "“At” runs once, “Every” repeats with a duration, “Cron” uses a 5-field Unix expression."
     static let isolatedPayloadNote =
-        "Isolated jobs always run an agent turn. Announce sends a short summary to a channel."
+        "Isolated jobs always run an agent turn. Announce sends a short summary to a channel, and webhook posts the finished event."
     static let mainPayloadNote =
-        "System events are injected into the current main session. Agent turns require an isolated session target."
+        "System events are injected into the current main session. Agent turns require an isolated session target. Main jobs can still deliver finished events to a webhook."
 
     @State var name: String = ""
     @State var description: String = ""
@@ -47,7 +47,7 @@ struct CronJobEditor: View {
     @State var payloadKind: PayloadKind = .systemEvent
     @State var systemEventText: String = ""
     @State var agentMessage: String = ""
-    enum DeliveryChoice: String, CaseIterable, Identifiable { case announce, none; var id: String {
+    enum DeliveryChoice: String, CaseIterable, Identifiable { case announce, webhook, none; var id: String {
         rawValue
     } }
     @State var deliveryMode: DeliveryChoice = .announce
@@ -238,18 +238,20 @@ struct CronJobEditor: View {
                                     }
                                 }
 
-                                switch self.payloadKind {
-                                case .systemEvent:
-                                    TextField("System event text", text: self.$systemEventText, axis: .vertical)
-                                        .textFieldStyle(.roundedBorder)
-                                        .lineLimit(3...7)
-                                        .frame(maxWidth: .infinity)
-                                case .agentTurn:
-                                    self.agentTurnEditor
-                                }
+                            switch self.payloadKind {
+                            case .systemEvent:
+                                TextField("System event text", text: self.$systemEventText, axis: .vertical)
+                                    .textFieldStyle(.roundedBorder)
+                                    .lineLimit(3...7)
+                                    .frame(maxWidth: .infinity)
+                            case .agentTurn:
+                                self.agentTurnEditor
                             }
+
+                            self.deliveryEditor
                         }
                     }
+                }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.vertical, 2)
@@ -295,6 +297,9 @@ struct CronJobEditor: View {
             } else if newValue == .main, self.payloadKind == .agentTurn {
                 self.payloadKind = .systemEvent
             }
+            if newValue == .main, self.deliveryMode == .announce {
+                self.deliveryMode = .none
+            }
         }
     }
 
@@ -320,41 +325,54 @@ struct CronJobEditor: View {
                         .textFieldStyle(.roundedBorder)
                         .frame(width: 180, alignment: .leading)
                 }
-                GridRow {
-                    self.gridLabel("Delivery")
-                    Picker("", selection: self.$deliveryMode) {
+            }
+        }
+    }
+
+    var deliveryEditor: some View {
+        Grid(alignment: .leadingFirstTextBaseline, horizontalSpacing: 14, verticalSpacing: 10) {
+            GridRow {
+                self.gridLabel("Delivery")
+                Picker("", selection: self.$deliveryMode) {
+                    if self.sessionTarget == .isolated {
                         Text("Announce summary").tag(DeliveryChoice.announce)
-                        Text("None").tag(DeliveryChoice.none)
                     }
-                    .labelsHidden()
-                    .pickerStyle(.segmented)
+                    Text("Webhook").tag(DeliveryChoice.webhook)
+                    Text("None").tag(DeliveryChoice.none)
                 }
+                .labelsHidden()
+                .pickerStyle(.segmented)
             }
 
             if self.deliveryMode == .announce {
-                Grid(alignment: .leadingFirstTextBaseline, horizontalSpacing: 14, verticalSpacing: 10) {
-                    GridRow {
-                        self.gridLabel("Channel")
-                        Picker("", selection: self.$channel) {
-                            ForEach(self.channelOptions, id: \.self) { channel in
-                                Text(self.channelLabel(for: channel)).tag(channel)
-                            }
+                GridRow {
+                    self.gridLabel("Channel")
+                    Picker("", selection: self.$channel) {
+                        ForEach(self.channelOptions, id: \.self) { channel in
+                            Text(self.channelLabel(for: channel)).tag(channel)
                         }
-                        .labelsHidden()
-                        .pickerStyle(.segmented)
-                        .frame(maxWidth: .infinity, alignment: .leading)
                     }
-                    GridRow {
-                        self.gridLabel("To")
-                        TextField("Optional override (phone number / chat id / Discord channel)", text: self.$to)
-                            .textFieldStyle(.roundedBorder)
-                            .frame(maxWidth: .infinity)
-                    }
-                    GridRow {
-                        self.gridLabel("Best-effort")
-                        Toggle("Do not fail the job if announce fails", isOn: self.$bestEffortDeliver)
-                            .toggleStyle(.switch)
-                    }
+                    .labelsHidden()
+                    .pickerStyle(.segmented)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                GridRow {
+                    self.gridLabel("To")
+                    TextField("Optional override (phone number / chat id / Discord channel)", text: self.$to)
+                        .textFieldStyle(.roundedBorder)
+                        .frame(maxWidth: .infinity)
+                }
+                GridRow {
+                    self.gridLabel("Best-effort")
+                    Toggle("Do not fail the job if announce fails", isOn: self.$bestEffortDeliver)
+                        .toggleStyle(.switch)
+                }
+            } else if self.deliveryMode == .webhook {
+                GridRow {
+                    self.gridLabel("Webhook URL")
+                    TextField("https://example.invalid/cron", text: self.$to)
+                        .textFieldStyle(.roundedBorder)
+                        .frame(maxWidth: .infinity)
                 }
             }
         }

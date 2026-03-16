@@ -316,6 +316,21 @@ export function normalizeCronJobInput(
     }
   }
 
+  if ("notify" in base) {
+    const notify = base.notify;
+    if (typeof notify === "boolean") {
+      next.notify = notify;
+    } else if (typeof notify === "string") {
+      const trimmed = notify.trim().toLowerCase();
+      if (trimmed === "true") {
+        next.notify = true;
+      }
+      if (trimmed === "false") {
+        next.notify = false;
+      }
+    }
+  }
+
   if ("sessionTarget" in base) {
     const normalized = normalizeSessionTarget(base.sessionTarget);
     if (normalized) {

@@ -46,7 +46,14 @@ extension CronJobEditor {
         }
 
         if let delivery = job.delivery {
-            self.deliveryMode = delivery.mode == .announce ? .announce : .none
+            switch delivery.mode {
+            case .announce:
+                self.deliveryMode = .announce
+            case .webhook:
+                self.deliveryMode = .webhook
+            default:
+                self.deliveryMode = .none
+            }
             let trimmed = (delivery.channel ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
             self.channel = trimmed.isEmpty ? "last" : trimmed
             self.to = delivery.to ?? ""
@@ -92,15 +99,17 @@ extension CronJobEditor {
             root["agentId"] = NSNull()
         }
 
-        if self.sessionTarget == .isolated {
-            root["delivery"] = self.buildDelivery()
-        }
+        root["delivery"] = self.buildDelivery()
 
         return root.mapValues { AnyCodable($0) }
     }
 
     func buildDelivery() -> [String: Any] {
-        let mode = self.deliveryMode == .announce ? "announce" : "none"
+        let mode: String = switch self.deliveryMode {
+        case .announce: "announce"
+        case .webhook: "webhook"
+        case .none: "none"
+        }
         var delivery: [String: Any] = ["mode": mode]
         if self.deliveryMode == .announce {
             let trimmed = self.channel.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -112,6 +121,9 @@ extension CronJobEditor {
             } else if self.job?.delivery?.bestEffort == true {
                 delivery["bestEffort"] = false
             }
+        } else if self.deliveryMode == .webhook {
+            let to = self.to.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !to.isEmpty { delivery["to"] = to }
         }
         return delivery
     }
