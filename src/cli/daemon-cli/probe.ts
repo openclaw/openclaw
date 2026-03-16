@@ -1,5 +1,5 @@
-import { callGateway } from "../../gateway/call.js";
-import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../../utils/message-channel.js";
+import { ensureExplicitGatewayAuth, resolveExplicitGatewayAuth } from "../../gateway/call.js";
+import { probeGateway } from "../../gateway/probe.js";
 import { withProgress } from "../progress.js";
 
 export async function probeGatewayStatus(opts: {
@@ -10,26 +10,48 @@ export async function probeGatewayStatus(opts: {
   timeoutMs: number;
   json?: boolean;
   configPath?: string;
+  requireExplicitAuth?: boolean;
+  allowLoopbackDeviceIdentity?: boolean;
 }) {
   try {
+    if (opts.requireExplicitAuth) {
+      ensureExplicitGatewayAuth({
+        urlOverride: opts.url,
+        urlOverrideSource: "cli",
+        explicitAuth: resolveExplicitGatewayAuth({
+          token: opts.token,
+          password: opts.password,
+        }),
+        resolvedAuth: {
+          token: opts.token,
+          password: opts.password,
+        },
+        errorHint: "Fix: pass --token or --password (or gatewayToken in tools).",
+        configPath: opts.configPath,
+      });
+    }
     await withProgress(
       {
         label: "Checking gateway status...",
         indeterminate: true,
         enabled: opts.json !== true,
       },
-      async () =>
-        await callGateway({
+      async () => {
+        const result = await probeGateway({
           url: opts.url,
-          token: opts.token,
-          password: opts.password,
+          auth: {
+            token: opts.token,
+            password: opts.password,
+          },
           tlsFingerprint: opts.tlsFingerprint,
-          method: "status",
           timeoutMs: opts.timeoutMs,
-          clientName: GATEWAY_CLIENT_NAMES.CLI,
-          mode: GATEWAY_CLIENT_MODES.CLI,
-          ...(opts.configPath ? { configPath: opts.configPath } : {}),
-        }),
+          detailLevel: "health",
+          allowLoopbackDeviceIdentity: opts.allowLoopbackDeviceIdentity,
+        });
+        if (!result.ok) {
+          throw new Error(result.error ?? "gateway probe failed");
+        }
+      },
     );
     return { ok: true } as const;
   } catch (err) {

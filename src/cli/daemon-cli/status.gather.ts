@@ -350,6 +350,8 @@ export async function gatherDaemonStatus(
         timeoutMs,
         json: opts.rpc.json,
         configPath: daemonConfigSummary.path,
+        requireExplicitAuth: probeUrlOverride !== null,
+        allowLoopbackDeviceIdentity: probeUrlOverride === null,
       })
     : undefined;
   if (rpc?.ok) {

@@ -199,7 +199,7 @@ describe("gatherDaemonStatus", () => {
 
   it("does not force local TLS fingerprint when probe URL is explicitly overridden", async () => {
     const status = await gatherDaemonStatus({
-      rpc: { url: "wss://override.example:18790" },
+      rpc: { url: "wss://override.example:18790", token: "override-token" },
       probe: true,
       deep: false,
     });
@@ -208,11 +208,38 @@ describe("gatherDaemonStatus", () => {
     expect(callGatewayStatusProbe).toHaveBeenCalledWith(
       expect.objectContaining({
         url: "wss://override.example:18790",
+        token: "override-token",
         tlsFingerprint: undefined,
+        requireExplicitAuth: true,
       }),
     );
     expect(status.gateway?.probeUrl).toBe("wss://override.example:18790");
     expect(status.rpc?.url).toBe("wss://override.example:18790");
+  });
+
+  it("keeps explicit override probe auth strict when no explicit credentials are provided", async () => {
+    callGatewayStatusProbe.mockResolvedValueOnce({
+      ok: false,
+      error:
+        "gateway url override requires explicit credentials\nFix: pass --token or --password (or gatewayToken in tools).\nConfig: /tmp/openclaw-daemon/openclaw.json",
+      url: "wss://override.example:18790",
+    });
+
+    const status = await gatherDaemonStatus({
+      rpc: { url: "wss://override.example:18790" },
+      probe: true,
+      deep: false,
+    });
+
+    expect(callGatewayStatusProbe).toHaveBeenCalledWith(
+      expect.objectContaining({
+        url: "wss://override.example:18790",
+        token: "daemon-token",
+        requireExplicitAuth: true,
+      }),
+    );
+    expect(status.rpc?.ok).toBe(false);
+    expect(status.rpc?.error).toContain("gateway url override requires explicit credentials");
   });
 
   it("reuses command environment when reading runtime status", async () => {
