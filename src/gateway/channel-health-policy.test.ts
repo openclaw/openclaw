@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { evaluateChannelHealth, resolveChannelRestartReason } from "./channel-health-policy.js";
+import {
+  evaluateChannelHealth,
+  isChannelOperational,
+  resolveChannelRestartReason,
+} from "./channel-health-policy.js";
 
 function evaluateDiscordHealth(
   account: Record<string, unknown>,
@@ -233,6 +237,156 @@ describe("evaluateChannelHealth", () => {
   });
 });
 
+describe("stale-poll detection", () => {
+  it("telegram channel with stale lastInboundAt returns stale-poll", () => {
+    const now = 10 * 60 * 60_000;
+    const evaluation = evaluateChannelHealth(
+      {
+        running: true,
+        connected: true,
+        enabled: true,
+        configured: true,
+        lastInboundAt: now - 61 * 60_000,
+        lastStartAt: now - 120 * 60_000,
+      },
+      {
+        channelId: "telegram",
+        now,
+        channelConnectGraceMs: 120_000,
+        staleEventThresholdMs: 30 * 60_000,
+      },
+    );
+    expect(evaluation).toEqual({ healthy: false, reason: "stale-poll" });
+  });
+
+  it("telegram channel with fresh lastInboundAt returns healthy", () => {
+    const now = 10 * 60 * 60_000;
+    const evaluation = evaluateChannelHealth(
+      {
+        running: true,
+        connected: true,
+        enabled: true,
+        configured: true,
+        lastInboundAt: now - 10 * 60_000,
+        lastStartAt: now - 120 * 60_000,
+      },
+      {
+        channelId: "telegram",
+        now,
+        channelConnectGraceMs: 120_000,
+        staleEventThresholdMs: 30 * 60_000,
+      },
+    );
+    expect(evaluation).toEqual({ healthy: true, reason: "healthy" });
+  });
+
+  it("webhook mode channel with stale lastInboundAt returns stale-poll", () => {
+    const now = 10 * 60 * 60_000;
+    const evaluation = evaluateChannelHealth(
+      {
+        running: true,
+        connected: true,
+        enabled: true,
+        configured: true,
+        mode: "webhook",
+        lastInboundAt: now - 61 * 60_000,
+        lastStartAt: now - 120 * 60_000,
+      },
+      {
+        channelId: "slack",
+        now,
+        channelConnectGraceMs: 120_000,
+        staleEventThresholdMs: 30 * 60_000,
+      },
+    );
+    expect(evaluation).toEqual({ healthy: false, reason: "stale-poll" });
+  });
+
+  it("polling channel without lastInboundAt returns healthy (no false positive)", () => {
+    const now = 10 * 60 * 60_000;
+    const evaluation = evaluateChannelHealth(
+      {
+        running: true,
+        connected: true,
+        enabled: true,
+        configured: true,
+        lastInboundAt: undefined,
+        lastStartAt: now - 120 * 60_000,
+      },
+      {
+        channelId: "telegram",
+        now,
+        channelConnectGraceMs: 120_000,
+        staleEventThresholdMs: 30 * 60_000,
+      },
+    );
+    expect(evaluation).toEqual({ healthy: true, reason: "healthy" });
+  });
+
+  it("telegram channel within startup grace returns startup-connect-grace", () => {
+    const now = 10 * 60 * 60_000;
+    const evaluation = evaluateChannelHealth(
+      {
+        running: true,
+        enabled: true,
+        configured: true,
+        lastStartAt: now - 60_000,
+        lastInboundAt: undefined,
+      },
+      {
+        channelId: "telegram",
+        now,
+        channelConnectGraceMs: 120_000,
+        staleEventThresholdMs: 30 * 60_000,
+      },
+    );
+    expect(evaluation).toEqual({ healthy: true, reason: "startup-connect-grace" });
+  });
+});
+
+describe("isChannelOperational", () => {
+  it("treats startup grace as not yet operational", () => {
+    expect(
+      isChannelOperational(
+        {
+          running: true,
+          connected: true,
+          enabled: true,
+          configured: true,
+          lastStartAt: 95_000,
+        },
+        {
+          channelId: "discord",
+          now: 100_000,
+          channelConnectGraceMs: 10_000,
+          staleEventThresholdMs: 30_000,
+        },
+      ),
+    ).toBe(false);
+  });
+
+  it("treats healthy connected channels as operational", () => {
+    expect(
+      isChannelOperational(
+        {
+          running: true,
+          connected: true,
+          enabled: true,
+          configured: true,
+          lastStartAt: 0,
+          lastEventAt: 50_000,
+        },
+        {
+          channelId: "discord",
+          now: 60_000,
+          channelConnectGraceMs: 10_000,
+          staleEventThresholdMs: 30_000,
+        },
+      ),
+    ).toBe(true);
+  });
+});
+
 describe("resolveChannelRestartReason", () => {
   it("maps not-running + high reconnect attempts to gave-up", () => {
     const reason = resolveChannelRestartReason(
@@ -256,5 +410,18 @@ describe("resolveChannelRestartReason", () => {
       { healthy: false, reason: "disconnected" },
     );
     expect(reason).toBe("disconnected");
+  });
+
+  it("returns stale-poll for stale-poll evaluation", () => {
+    const reason = resolveChannelRestartReason(
+      {
+        running: true,
+        connected: true,
+        enabled: true,
+        configured: true,
+      },
+      { healthy: false, reason: "stale-poll" },
+    );
+    expect(reason).toBe("stale-poll");
   });
 });
