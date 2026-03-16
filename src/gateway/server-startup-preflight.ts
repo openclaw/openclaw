@@ -129,6 +129,31 @@ type GatewayStartupSecretsPrecheckDeps = {
   activateRuntimeSecrets: (config: OpenClawConfig) => Promise<void>;
 };
 
+type StartupAuthBootstrapResult = {
+  cfg: OpenClawConfig;
+  generatedToken?: string;
+  persistedGeneratedToken: boolean;
+};
+
+type GatewayStartupAuthBootstrapDeps = {
+  loadConfig: () => OpenClawConfig;
+  ensureGatewayStartupAuth: (params: {
+    cfg: OpenClawConfig;
+    env: NodeJS.ProcessEnv;
+    authOverride?: unknown;
+    tailscaleOverride?: unknown;
+    persist: true;
+  }) => Promise<StartupAuthBootstrapResult>;
+  activateRuntimeSecrets: (config: OpenClawConfig) => Promise<{ config: OpenClawConfig }>;
+  log: {
+    info: (message: string) => void;
+    warn: (message: string) => void;
+  };
+  env?: NodeJS.ProcessEnv;
+  authOverride?: unknown;
+  tailscaleOverride?: unknown;
+};
+
 /**
  * Startup phase: fail-fast secrets precheck before runtime boot.
  */
@@ -144,4 +169,36 @@ export async function runGatewayStartupSecretsPrecheck(
   }
   const startupPreflightConfig = deps.prepareConfig(freshSnapshot.config);
   await deps.activateRuntimeSecrets(startupPreflightConfig);
+}
+
+/**
+ * Startup phase: resolve gateway auth and activate runtime secrets.
+ */
+export async function runGatewayStartupAuthBootstrap(
+  deps: GatewayStartupAuthBootstrapDeps,
+): Promise<OpenClawConfig> {
+  const env = deps.env ?? process.env;
+
+  let cfgAtStart = deps.loadConfig();
+  const authBootstrap = await deps.ensureGatewayStartupAuth({
+    cfg: cfgAtStart,
+    env,
+    authOverride: deps.authOverride,
+    tailscaleOverride: deps.tailscaleOverride,
+    persist: true,
+  });
+  cfgAtStart = authBootstrap.cfg;
+  if (authBootstrap.generatedToken) {
+    if (authBootstrap.persistedGeneratedToken) {
+      deps.log.info(
+        "Gateway auth token was missing. Generated a new token and saved it to config (gateway.auth.token).",
+      );
+    } else {
+      deps.log.warn(
+        "Gateway auth token was missing. Generated a runtime token for this startup without changing config; restart will generate a different token. Persist one with `openclaw config set gateway.auth.mode token` and `openclaw config set gateway.auth.token <token>`.",
+      );
+    }
+  }
+
+  return (await deps.activateRuntimeSecrets(cfgAtStart)).config;
 }

@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../config/config.js";
 import {
+  runGatewayStartupAuthBootstrap,
   GatewayStartupPreflightError,
   runGatewayStartupConfigPreflight,
   runGatewayStartupSecretsPrecheck,
@@ -152,5 +153,99 @@ describe("runGatewayStartupSecretsPrecheck", () => {
 
     expect(prepareConfig).toHaveBeenCalledWith(snapshot.config);
     expect(activateRuntimeSecrets).toHaveBeenCalledWith(preparedConfig);
+  });
+});
+
+describe("runGatewayStartupAuthBootstrap", () => {
+  it("passes overrides into startup auth bootstrap and returns activated config", async () => {
+    const initialConfig: OpenClawConfig = { gateway: { auth: { mode: "token" } } };
+    const authConfig: OpenClawConfig = { gateway: { auth: { mode: "token", token: "abc123" } } };
+    const activatedConfig: OpenClawConfig = { gateway: { auth: { mode: "none" } } };
+    const env = { OPENCLAW_GATEWAY_PORT: "18789" } as NodeJS.ProcessEnv;
+    const ensureGatewayStartupAuth = vi
+      .fn<
+        (params: {
+          cfg: OpenClawConfig;
+          env: NodeJS.ProcessEnv;
+          authOverride?: unknown;
+          tailscaleOverride?: unknown;
+          persist: true;
+        }) => Promise<{
+          cfg: OpenClawConfig;
+          generatedToken?: string;
+          persistedGeneratedToken: boolean;
+        }>
+      >()
+      .mockResolvedValue({
+        cfg: authConfig,
+        persistedGeneratedToken: false,
+      });
+    const activateRuntimeSecrets = vi
+      .fn<(config: OpenClawConfig) => Promise<{ config: OpenClawConfig }>>()
+      .mockResolvedValue({ config: activatedConfig });
+    const authOverride = { mode: "token", token: "override" };
+    const tailscaleOverride = { enabled: true };
+
+    const result = await runGatewayStartupAuthBootstrap({
+      loadConfig: () => initialConfig,
+      ensureGatewayStartupAuth,
+      activateRuntimeSecrets,
+      log: { info: vi.fn(), warn: vi.fn() },
+      env,
+      authOverride,
+      tailscaleOverride,
+    });
+
+    expect(ensureGatewayStartupAuth).toHaveBeenCalledWith({
+      cfg: initialConfig,
+      env,
+      authOverride,
+      tailscaleOverride,
+      persist: true,
+    });
+    expect(activateRuntimeSecrets).toHaveBeenCalledWith(authConfig);
+    expect(result).toBe(activatedConfig);
+  });
+
+  it("logs info when token generation is persisted", async () => {
+    const info = vi.fn<(message: string) => void>();
+    const warn = vi.fn<(message: string) => void>();
+
+    await runGatewayStartupAuthBootstrap({
+      loadConfig: () => ({}),
+      ensureGatewayStartupAuth: vi.fn().mockResolvedValue({
+        cfg: {},
+        generatedToken: "generated",
+        persistedGeneratedToken: true,
+      }),
+      activateRuntimeSecrets: vi.fn().mockResolvedValue({ config: {} }),
+      log: { info, warn },
+    });
+
+    expect(info).toHaveBeenCalledWith(
+      "Gateway auth token was missing. Generated a new token and saved it to config (gateway.auth.token).",
+    );
+    expect(warn).not.toHaveBeenCalled();
+  });
+
+  it("logs warning when token generation is runtime-only", async () => {
+    const info = vi.fn<(message: string) => void>();
+    const warn = vi.fn<(message: string) => void>();
+
+    await runGatewayStartupAuthBootstrap({
+      loadConfig: () => ({}),
+      ensureGatewayStartupAuth: vi.fn().mockResolvedValue({
+        cfg: {},
+        generatedToken: "generated",
+        persistedGeneratedToken: false,
+      }),
+      activateRuntimeSecrets: vi.fn().mockResolvedValue({ config: {} }),
+      log: { info, warn },
+    });
+
+    expect(warn).toHaveBeenCalledWith(
+      "Gateway auth token was missing. Generated a runtime token for this startup without changing config; restart will generate a different token. Persist one with `openclaw config set gateway.auth.mode token` and `openclaw config set gateway.auth.token <token>`.",
+    );
+    expect(info).not.toHaveBeenCalled();
   });
 });
