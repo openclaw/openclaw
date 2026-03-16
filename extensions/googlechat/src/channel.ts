@@ -7,8 +7,6 @@ import {
   formatNormalizedAllowFromEntries,
 } from "openclaw/plugin-sdk/compat";
 import {
-  applyAccountNameToChannelSection,
-  applySetupAccountConfigPatch,
   buildComputedAccountStatusSnapshot,
   buildChannelConfigSchema,
   DEFAULT_ACCOUNT_ID,
@@ -16,9 +14,7 @@ import {
   getChatChannelMeta,
   listDirectoryGroupEntriesFromMapKeys,
   listDirectoryUserEntriesFromAllowFrom,
-  migrateBaseNameToDefaultAccount,
   missingTargetError,
-  normalizeAccountId,
   PAIRING_APPROVED_MESSAGE,
   resolveChannelMediaMaxBytes,
   resolveGoogleChatGroupRequireMention,
@@ -40,8 +36,8 @@ import {
 import { googlechatMessageActions } from "./actions.js";
 import { sendGoogleChatMessage, uploadGoogleChatAttachment, probeGoogleChat } from "./api.js";
 import { resolveGoogleChatWebhookPath, startGoogleChatMonitor } from "./monitor.js";
-import { googlechatOnboardingAdapter } from "./onboarding.js";
 import { getGoogleChatRuntime } from "./runtime.js";
+import { googlechatSetupAdapter, googlechatSetupWizard } from "./setup-surface.js";
 import {
   isGoogleChatSpaceTarget,
   isGoogleChatUserTarget,
@@ -136,7 +132,8 @@ const googlechatActions: ChannelMessageActionAdapter = {
 export const googlechatPlugin: ChannelPlugin<ResolvedGoogleChatAccount> = {
   id: "googlechat",
   meta: { ...meta },
-  onboarding: googlechatOnboardingAdapter,
+  setup: googlechatSetupAdapter,
+  setupWizard: googlechatSetupWizard,
   pairing: {
     idLabel: "googlechatUserId",
     normalizeAllowEntry: (entry) => formatAllowFromEntry(entry),
@@ -272,64 +269,6 @@ export const googlechatPlugin: ChannelPlugin<ResolvedGoogleChatAccount> = {
     },
   },
   actions: googlechatActions,
-  setup: {
-    resolveAccountId: ({ accountId }) => normalizeAccountId(accountId),
-    applyAccountName: ({ cfg, accountId, name }) =>
-      applyAccountNameToChannelSection({
-        cfg: cfg,
-        channelKey: "googlechat",
-        accountId,
-        name,
-      }),
-    validateInput: ({ accountId, input }) => {
-      if (input.useEnv && accountId !== DEFAULT_ACCOUNT_ID) {
-        return "GOOGLE_CHAT_SERVICE_ACCOUNT env vars can only be used for the default account.";
-      }
-      if (!input.useEnv && !input.token && !input.tokenFile) {
-        return "Google Chat requires --token (service account JSON) or --token-file.";
-      }
-      return null;
-    },
-    applyAccountConfig: ({ cfg, accountId, input }) => {
-      const namedConfig = applyAccountNameToChannelSection({
-        cfg: cfg,
-        channelKey: "googlechat",
-        accountId,
-        name: input.name,
-      });
-      const next =
-        accountId !== DEFAULT_ACCOUNT_ID
-          ? migrateBaseNameToDefaultAccount({
-              cfg: namedConfig,
-              channelKey: "googlechat",
-            })
-          : namedConfig;
-      const patch = input.useEnv
-        ? {}
-        : input.tokenFile
-          ? { serviceAccountFile: input.tokenFile }
-          : input.token
-            ? { serviceAccount: input.token }
-            : {};
-      const audienceType = input.audienceType?.trim();
-      const audience = input.audience?.trim();
-      const webhookPath = input.webhookPath?.trim();
-      const webhookUrl = input.webhookUrl?.trim();
-      const configPatch = {
-        ...patch,
-        ...(audienceType ? { audienceType } : {}),
-        ...(audience ? { audience } : {}),
-        ...(webhookPath ? { webhookPath } : {}),
-        ...(webhookUrl ? { webhookUrl } : {}),
-      };
-      return applySetupAccountConfigPatch({
-        cfg: next,
-        channelKey: "googlechat",
-        accountId,
-        patch: configPatch,
-      });
-    },
-  },
   outbound: {
     deliveryMode: "direct",
     chunker: (text, limit) => getGoogleChatRuntime().channel.text.chunkMarkdownText(text, limit),
