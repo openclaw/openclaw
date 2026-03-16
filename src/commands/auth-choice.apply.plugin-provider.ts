@@ -13,6 +13,7 @@ import { isRemoteEnvironment } from "./oauth-env.js";
 import { createVpsAwareOAuthHandlers } from "./oauth-flow.js";
 import { applyAuthProfileConfig } from "./onboard-auth.js";
 import { openUrl } from "./onboard-helpers.js";
+import type { OnboardOptions } from "./onboard-types.js";
 import {
   applyDefaultModel,
   mergeConfigPatch,
@@ -41,6 +42,9 @@ export async function runProviderPluginAuthMethod(params: {
   agentId?: string;
   workspaceDir?: string;
   emitNotes?: boolean;
+  secretInputMode?: OnboardOptions["secretInputMode"];
+  allowSecretRefPrompt?: boolean;
+  opts?: Partial<OnboardOptions>;
 }): Promise<{ config: ApplyAuthChoiceParams["config"]; defaultModel?: string }> {
   const agentId = params.agentId ?? resolveDefaultAgentId(params.config);
   const defaultAgentId = resolveDefaultAgentId(params.config);
@@ -61,6 +65,9 @@ export async function runProviderPluginAuthMethod(params: {
     workspaceDir,
     prompter: params.prompter,
     runtime: params.runtime,
+    opts: params.opts,
+    secretInputMode: params.secretInputMode,
+    allowSecretRefPrompt: params.allowSecretRefPrompt,
     isRemote,
     openUrl: async (url) => {
       await openUrl(url);
@@ -110,7 +117,12 @@ export async function applyAuthChoiceLoadedPluginProvider(
     resolveAgentWorkspaceDir(params.config, agentId) ?? resolveDefaultAgentWorkspaceDir();
   const { resolvePluginProviders, resolveProviderPluginChoice, runProviderModelSelectedHook } =
     await loadPluginProviderRuntime();
-  const providers = resolvePluginProviders({ config: params.config, workspaceDir });
+  const providers = resolvePluginProviders({
+    config: params.config,
+    workspaceDir,
+    bundledProviderAllowlistCompat: true,
+    bundledProviderVitestCompat: true,
+  });
   const resolved = resolveProviderPluginChoice({
     providers,
     choice: params.authChoice,
@@ -127,6 +139,9 @@ export async function applyAuthChoiceLoadedPluginProvider(
     agentDir: params.agentDir,
     agentId: params.agentId,
     workspaceDir,
+    secretInputMode: params.opts?.secretInputMode,
+    allowSecretRefPrompt: true,
+    opts: params.opts,
   });
 
   let agentModelOverride: string | undefined;
@@ -180,7 +195,12 @@ export async function applyAuthChoicePluginProvider(
 
   const { resolvePluginProviders, runProviderModelSelectedHook } =
     await loadPluginProviderRuntime();
-  const providers = resolvePluginProviders({ config: nextConfig, workspaceDir });
+  const providers = resolvePluginProviders({
+    config: nextConfig,
+    workspaceDir,
+    bundledProviderAllowlistCompat: true,
+    bundledProviderVitestCompat: true,
+  });
   const provider = resolveProviderMatch(providers, options.providerId);
   if (!provider) {
     await params.prompter.note(
@@ -204,6 +224,9 @@ export async function applyAuthChoicePluginProvider(
     agentDir,
     agentId,
     workspaceDir,
+    secretInputMode: params.opts?.secretInputMode,
+    allowSecretRefPrompt: true,
+    opts: params.opts,
   });
   nextConfig = applied.config;
 

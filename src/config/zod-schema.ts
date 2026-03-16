@@ -360,12 +360,7 @@ export const OpenClawSchema = z
                 cdpPort: z.number().int().min(1).max(65535).optional(),
                 cdpUrl: z.string().optional(),
                 driver: z
-                  .union([
-                    z.literal("openclaw"),
-                    z.literal("clawd"),
-                    z.literal("extension"),
-                    z.literal("existing-session"),
-                  ])
+                  .union([z.literal("openclaw"), z.literal("clawd"), z.literal("existing-session")])
                   .optional(),
                 attachOnly: z.boolean().optional(),
                 color: HexColorSchema,
@@ -380,7 +375,6 @@ export const OpenClawSchema = z
           )
           .optional(),
         extraArgs: z.array(z.string()).optional(),
-        relayBindHost: z.union([z.string().ipv4(), z.string().ipv6()]).optional(),
       })
       .strict()
       .optional(),
@@ -728,6 +722,7 @@ export const OpenClawSchema = z
               ])
               .optional(),
             debounceMs: z.number().int().min(0).optional(),
+            deferralTimeoutMs: z.number().int().min(0).optional(),
           })
           .strict()
           .optional(),

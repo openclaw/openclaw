@@ -1,7 +1,6 @@
 process.env.NO_COLOR = "1";
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { fetchSlackScopes } from "../../../extensions/slack/src/scopes.js";
 import { getChannelPlugin, listChannelPlugins } from "../../channels/plugins/index.js";
 import type { ChannelPlugin } from "../../channels/plugins/types.js";
 import { channelsCapabilitiesCommand } from "./capabilities.js";
@@ -19,10 +18,6 @@ vi.mock("./shared.js", () => ({
 vi.mock("../../channels/plugins/index.js", () => ({
   listChannelPlugins: vi.fn(),
   getChannelPlugin: vi.fn(),
-}));
-
-vi.mock("../../../extensions/slack/src/scopes.js", () => ({
-  fetchSlackScopes: vi.fn(),
 }));
 
 const runtime = {
@@ -95,14 +90,22 @@ describe("channelsCapabilitiesCommand", () => {
       },
       probe: { ok: true, bot: { name: "openclaw" }, team: { name: "team" } },
     });
+    plugin.status = {
+      ...plugin.status,
+      formatCapabilitiesProbe: () => [{ text: "Bot: @openclaw" }, { text: "Team: team" }],
+      buildCapabilitiesDiagnostics: async () => ({
+        lines: [
+          { text: "Bot scopes (auth.scopes): chat:write" },
+          { text: "User scopes (auth.scopes): users:read" },
+        ],
+        details: {
+          botScopes: { ok: true, scopes: ["chat:write"], source: "auth.scopes" },
+          userScopes: { ok: true, scopes: ["users:read"], source: "auth.scopes" },
+        },
+      }),
+    };
     vi.mocked(listChannelPlugins).mockReturnValue([plugin]);
     vi.mocked(getChannelPlugin).mockReturnValue(plugin);
-    vi.mocked(fetchSlackScopes).mockImplementation(async (token: string) => {
-      if (token === "xoxp-user") {
-        return { ok: true, scopes: ["users:read"], source: "auth.scopes" };
-      }
-      return { ok: true, scopes: ["chat:write"], source: "auth.scopes" };
-    });
 
     await channelsCapabilitiesCommand({ channel: "slack" }, runtime);
 
@@ -111,8 +114,6 @@ describe("channelsCapabilitiesCommand", () => {
     expect(output).toContain("User scopes");
     expect(output).toContain("chat:write");
     expect(output).toContain("users:read");
-    expect(fetchSlackScopes).toHaveBeenCalledWith("xoxb-bot", expect.any(Number));
-    expect(fetchSlackScopes).toHaveBeenCalledWith("xoxp-user", expect.any(Number));
   });
 
   it("prints Teams Graph permission hints when present", async () => {
@@ -127,6 +128,15 @@ describe("channelsCapabilitiesCommand", () => {
         },
       },
     });
+    plugin.status = {
+      ...plugin.status,
+      formatCapabilitiesProbe: () => [
+        { text: "App: app-id" },
+        {
+          text: "Graph roles: ChannelMessage.Read.All (channel history), Files.Read.All (files (OneDrive))",
+        },
+      ],
+    };
     vi.mocked(listChannelPlugins).mockReturnValue([plugin]);
     vi.mocked(getChannelPlugin).mockReturnValue(plugin);
 

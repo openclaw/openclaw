@@ -20,15 +20,15 @@ export const FIELD_HELP: Record<string, string> = {
   "env.vars":
     "Explicit key/value environment variable overrides merged into runtime process environment for OpenClaw. Use this for deterministic env configuration instead of relying only on shell profile side effects.",
   wizard:
-    "Setup wizard state tracking fields that record the most recent guided onboarding run details. Keep these fields for observability and troubleshooting of setup flows across upgrades.",
+    "Setup wizard state tracking fields that record the most recent guided setup run details. Keep these fields for observability and troubleshooting of setup flows across upgrades.",
   "wizard.lastRunAt":
-    "ISO timestamp for when the setup wizard most recently completed on this host. Use this to confirm onboarding recency during support and operational audits.",
+    "ISO timestamp for when the setup wizard most recently completed on this host. Use this to confirm setup recency during support and operational audits.",
   "wizard.lastRunVersion":
-    "OpenClaw version recorded at the time of the most recent wizard run on this config. Use this when diagnosing behavior differences across version-to-version onboarding changes.",
+    "OpenClaw version recorded at the time of the most recent wizard run on this config. Use this when diagnosing behavior differences across version-to-version setup changes.",
   "wizard.lastRunCommit":
-    "Source commit identifier recorded for the last wizard execution in development builds. Use this to correlate onboarding behavior with exact source state during debugging.",
+    "Source commit identifier recorded for the last wizard execution in development builds. Use this to correlate setup behavior with exact source state during debugging.",
   "wizard.lastRunCommand":
-    "Command invocation recorded for the latest wizard run to preserve execution context. Use this to reproduce onboarding steps when verifying setup regressions.",
+    "Command invocation recorded for the latest wizard run to preserve execution context. Use this to reproduce setup steps when verifying setup regressions.",
   "wizard.lastRunMode":
     'Wizard execution mode recorded as "local" or "remote" for the most recent setup flow. Use this to understand whether setup targeted direct local runtime or remote gateway topology.',
   diagnostics:
@@ -254,8 +254,6 @@ export const FIELD_HELP: Record<string, string> = {
     "Starting local CDP port used for auto-allocated browser profile ports. Increase this when host-level port defaults conflict with other local services.",
   "browser.defaultProfile":
     "Default browser profile name selected when callers do not explicitly choose a profile. Use a stable low-privilege profile as the default to reduce accidental cross-context state use.",
-  "browser.relayBindHost":
-    "Bind IP address for the Chrome extension relay listener. Leave unset for loopback-only access, or set an explicit non-loopback IP such as 0.0.0.0 only when the relay must be reachable across network namespaces (for example WSL2) and the surrounding network is already trusted.",
   "browser.profiles":
     "Named browser profile connection map used for explicit routing to CDP ports or URLs with optional metadata. Keep profile names consistent and avoid overlapping endpoint definitions.",
   "browser.profiles.*.cdpPort":
@@ -263,7 +261,7 @@ export const FIELD_HELP: Record<string, string> = {
   "browser.profiles.*.cdpUrl":
     "Per-profile CDP websocket URL used for explicit remote browser routing by profile name. Use this when profile connections terminate on remote hosts or tunnels.",
   "browser.profiles.*.driver":
-    'Per-profile browser driver mode: "openclaw" (or legacy "clawd") or "extension" depending on connection/runtime strategy. Use the driver that matches your browser control stack to avoid protocol mismatches.',
+    'Per-profile browser driver mode. Use "openclaw" (or legacy "clawd") for CDP-based profiles, or use "existing-session" for host-local Chrome MCP attachment.',
   "browser.profiles.*.attachOnly":
     "Per-profile attach-only override that skips local browser launch and only attaches to an existing CDP endpoint. Useful when one profile is externally managed but others are locally launched.",
   "browser.profiles.*.color":
@@ -427,6 +425,8 @@ export const FIELD_HELP: Record<string, string> = {
   "gateway.reload.mode":
     'Controls how config edits are applied: "off" ignores live edits, "restart" always restarts, "hot" applies in-process, and "hybrid" tries hot then restarts if required. Keep "hybrid" for safest routine updates.',
   "gateway.reload.debounceMs": "Debounce window (ms) before applying config changes.",
+  "gateway.reload.deferralTimeoutMs":
+    "Maximum time (ms) to wait for in-flight operations to complete before forcing a SIGUSR1 restart. Default: 300000 (5 minutes). Lower values risk aborting active subagent LLM calls.",
   "gateway.nodes.browser.mode":
     'Node browser routing ("auto" = pick single connected browser node, "manual" = require node param, "off" = disable).',
   "gateway.nodes.browser.node": "Pin browser routing to a specific node id or name (optional).",

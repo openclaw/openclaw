@@ -14,12 +14,39 @@ export type PluginManifest = {
   kind?: PluginKind;
   channels?: string[];
   providers?: string[];
+  /** Cheap provider-auth env lookup without booting plugin runtime. */
   providerAuthEnvVars?: Record<string, string[]>;
+  /**
+   * Cheap onboarding/auth-choice metadata used by config validation, CLI help,
+   * and non-runtime auth-choice routing before provider runtime loads.
+   */
+  providerAuthChoices?: PluginManifestProviderAuthChoice[];
   skills?: string[];
   name?: string;
   description?: string;
   version?: string;
   uiHints?: Record<string, PluginConfigUiHint>;
+};
+
+export type PluginManifestProviderAuthChoice = {
+  /** Provider id owned by this manifest entry. */
+  provider: string;
+  /** Provider auth method id that this choice should dispatch to. */
+  method: string;
+  /** Stable auth-choice id used by onboarding and other CLI auth flows. */
+  choiceId: string;
+  /** Optional user-facing choice label/hint for grouped onboarding UI. */
+  choiceLabel?: string;
+  choiceHint?: string;
+  /** Optional grouping metadata for auth-choice pickers. */
+  groupId?: string;
+  groupLabel?: string;
+  groupHint?: string;
+  /** Optional CLI flag metadata for one-flag auth flows such as API keys. */
+  optionKey?: string;
+  cliFlag?: string;
+  cliOption?: string;
+  cliDescription?: string;
 };
 
 export type PluginManifestLoadResult =
@@ -50,6 +77,51 @@ function normalizeStringListRecord(value: unknown): Record<string, string[]> | u
     normalized[providerId] = values;
   }
   return Object.keys(normalized).length > 0 ? normalized : undefined;
+}
+
+function normalizeProviderAuthChoices(
+  value: unknown,
+): PluginManifestProviderAuthChoice[] | undefined {
+  if (!Array.isArray(value)) {
+    return undefined;
+  }
+  const normalized: PluginManifestProviderAuthChoice[] = [];
+  for (const entry of value) {
+    if (!isRecord(entry)) {
+      continue;
+    }
+    const provider = typeof entry.provider === "string" ? entry.provider.trim() : "";
+    const method = typeof entry.method === "string" ? entry.method.trim() : "";
+    const choiceId = typeof entry.choiceId === "string" ? entry.choiceId.trim() : "";
+    if (!provider || !method || !choiceId) {
+      continue;
+    }
+    const choiceLabel = typeof entry.choiceLabel === "string" ? entry.choiceLabel.trim() : "";
+    const choiceHint = typeof entry.choiceHint === "string" ? entry.choiceHint.trim() : "";
+    const groupId = typeof entry.groupId === "string" ? entry.groupId.trim() : "";
+    const groupLabel = typeof entry.groupLabel === "string" ? entry.groupLabel.trim() : "";
+    const groupHint = typeof entry.groupHint === "string" ? entry.groupHint.trim() : "";
+    const optionKey = typeof entry.optionKey === "string" ? entry.optionKey.trim() : "";
+    const cliFlag = typeof entry.cliFlag === "string" ? entry.cliFlag.trim() : "";
+    const cliOption = typeof entry.cliOption === "string" ? entry.cliOption.trim() : "";
+    const cliDescription =
+      typeof entry.cliDescription === "string" ? entry.cliDescription.trim() : "";
+    normalized.push({
+      provider,
+      method,
+      choiceId,
+      ...(choiceLabel ? { choiceLabel } : {}),
+      ...(choiceHint ? { choiceHint } : {}),
+      ...(groupId ? { groupId } : {}),
+      ...(groupLabel ? { groupLabel } : {}),
+      ...(groupHint ? { groupHint } : {}),
+      ...(optionKey ? { optionKey } : {}),
+      ...(cliFlag ? { cliFlag } : {}),
+      ...(cliOption ? { cliOption } : {}),
+      ...(cliDescription ? { cliDescription } : {}),
+    });
+  }
+  return normalized.length > 0 ? normalized : undefined;
 }
 
 export function resolvePluginManifestPath(rootDir: string): string {
@@ -114,6 +186,7 @@ export function loadPluginManifest(
   const channels = normalizeStringList(raw.channels);
   const providers = normalizeStringList(raw.providers);
   const providerAuthEnvVars = normalizeStringListRecord(raw.providerAuthEnvVars);
+  const providerAuthChoices = normalizeProviderAuthChoices(raw.providerAuthChoices);
   const skills = normalizeStringList(raw.skills);
 
   let uiHints: Record<string, PluginConfigUiHint> | undefined;
@@ -130,6 +203,7 @@ export function loadPluginManifest(
       channels,
       providers,
       providerAuthEnvVars,
+      providerAuthChoices,
       skills,
       name,
       description,
@@ -140,7 +214,7 @@ export function loadPluginManifest(
   };
 }
 
-// package.json "openclaw" metadata (used for onboarding/catalog)
+// package.json "openclaw" metadata (used for setup/catalog)
 export type PluginPackageChannel = {
   id?: string;
   label?: string;

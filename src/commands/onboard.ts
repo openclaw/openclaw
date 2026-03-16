@@ -12,7 +12,10 @@ import type { OnboardOptions, ResetScope } from "./onboard-types.js";
 
 const VALID_RESET_SCOPES = new Set<ResetScope>(["config", "config+creds+sessions", "full"]);
 
-export async function onboardCommand(opts: OnboardOptions, runtime: RuntimeEnv = defaultRuntime) {
+export async function setupWizardCommand(
+  opts: OnboardOptions,
+  runtime: RuntimeEnv = defaultRuntime,
+) {
   assertSupportedRuntime(runtime);
   const originalAuthChoice = opts.authChoice;
   const normalizedAuthChoice = normalizeLegacyOnboardAuthChoice(originalAuthChoice);
@@ -93,4 +96,7 @@ export async function onboardCommand(opts: OnboardOptions, runtime: RuntimeEnv =
   await runInteractiveSetup(normalizedOpts, runtime);
 }
 
+export const onboardCommand = setupWizardCommand;
+
 export type { OnboardOptions } from "./onboard-types.js";
+export type { OnboardOptions as SetupWizardOptions } from "./onboard-types.js";
