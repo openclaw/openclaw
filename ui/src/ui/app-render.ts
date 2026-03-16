@@ -14,6 +14,8 @@ import {
   renderTab,
   renderSidebarConnectionStatus,
   renderTopbarThemeModeToggle,
+  saveChatDraft,
+  restoreChatDraft,
 } from "./app-render.helpers.ts";
 import type { AppViewState } from "./app-view-state.ts";
 import { loadAgentFileContent, loadAgentFiles, saveAgentFile } from "./controllers/agent-files.ts";
@@ -637,8 +639,9 @@ export function renderApp(state: AppViewState) {
                 onSettingsChange: (next) => state.applySettings(next),
                 onPasswordChange: (next) => (state.password = next),
                 onSessionKeyChange: (next) => {
+                  saveChatDraft(state);
                   state.sessionKey = next;
-                  state.chatMessage = "";
+                  restoreChatDraft(state);
                   state.resetToolStream();
                   state.applySettings({
                     ...state.settings,
@@ -1332,8 +1335,9 @@ export function renderApp(state: AppViewState) {
             ? renderChat({
                 sessionKey: state.sessionKey,
                 onSessionKeyChange: (next) => {
+                  saveChatDraft(state);
                   state.sessionKey = next;
-                  state.chatMessage = "";
+                  restoreChatDraft(state);
                   state.chatAttachments = [];
                   state.chatStream = null;
                   state.chatStreamStartedAt = null;
@@ -1412,7 +1416,9 @@ export function renderApp(state: AppViewState) {
                 agentsList: state.agentsList,
                 currentAgentId: resolvedAgentId ?? "main",
                 onAgentChange: (agentId: string) => {
+                  saveChatDraft(state);
                   state.sessionKey = buildAgentMainSessionKey({ agentId });
+                  restoreChatDraft(state);
                   state.chatMessages = [];
                   state.chatStream = null;
                   state.chatRunId = null;
