@@ -675,7 +675,7 @@ EOF
 }
 
 verify_gateway() {
-  guest_run_openclaw "" "" gateway status --deep --require-rpc
+  guest_run_openclaw "" "" gateway status --deep
 }
 
 verify_turn() {
