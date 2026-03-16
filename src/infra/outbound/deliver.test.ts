@@ -1205,8 +1205,14 @@ describe("deliverOutboundPayloads", () => {
     });
 
     expect(sendMedia).toHaveBeenCalledTimes(2);
-    expect(sendMedia.mock.calls[0]?.[0]).toMatchObject({ audioAsVoice: false });
-    expect(sendMedia.mock.calls[1]?.[0]).toMatchObject({ audioAsVoice: true });
+    expect(sendMedia.mock.calls[0]?.[0]).toMatchObject({
+      contentType: "image/png",
+      audioAsVoice: false,
+    });
+    expect(sendMedia.mock.calls[1]?.[0]).toMatchObject({
+      contentType: "audio/mpeg",
+      audioAsVoice: true,
+    });
     expect(results).toEqual([
       { channel: "matrix", messageId: "mx-image" },
       { channel: "matrix", messageId: "mx-audio" },
