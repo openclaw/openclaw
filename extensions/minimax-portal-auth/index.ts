@@ -6,6 +6,9 @@ import {
   type ProviderAuthResult,
   type ProviderCatalogContext,
 } from "openclaw/plugin-sdk/minimax-portal-auth";
+import { ensureAuthProfileStore, listProfilesForProvider } from "../../src/agents/auth-profiles.js";
+import { MINIMAX_OAUTH_MARKER } from "../../src/agents/model-auth-markers.js";
+import { buildMinimaxPortalProvider } from "../../src/agents/models-config.providers.static.js";
 import { loginMiniMaxPortalOAuth, type MiniMaxRegion } from "./oauth.js";
 
 const PROVIDER_ID = "minimax-portal";
@@ -13,8 +16,6 @@ const PROVIDER_LABEL = "MiniMax";
 const DEFAULT_MODEL = "MiniMax-M2.5";
 const DEFAULT_BASE_URL_CN = "https://api.minimaxi.com/anthropic";
 const DEFAULT_BASE_URL_GLOBAL = "https://api.minimax.io/anthropic";
-const DEFAULT_CONTEXT_WINDOW = 200000;
-const DEFAULT_MAX_TOKENS = 8192;
 
 function getDefaultBaseUrl(region: MiniMaxRegion): string {
   return region === "cn" ? DEFAULT_BASE_URL_CN : DEFAULT_BASE_URL_GLOBAL;
@@ -24,55 +25,24 @@ function modelRef(modelId: string): string {
   return `${PROVIDER_ID}/${modelId}`;
 }
 
-function buildModelDefinition(params: {
-  id: string;
-  name: string;
-  input: Array<"text" | "image">;
-  reasoning?: boolean;
-}) {
-  return {
-    id: params.id,
-    name: params.name,
-    reasoning: params.reasoning ?? false,
-    input: params.input,
-    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-    contextWindow: DEFAULT_CONTEXT_WINDOW,
-    maxTokens: DEFAULT_MAX_TOKENS,
-  };
-}
-
 function buildProviderCatalog(params: { baseUrl: string; apiKey: string }) {
   return {
+    ...buildMinimaxPortalProvider(),
     baseUrl: params.baseUrl,
     apiKey: params.apiKey,
-    api: "anthropic-messages" as const,
-    models: [
-      buildModelDefinition({
-        id: "MiniMax-M2.5",
-        name: "MiniMax M2.5",
-        input: ["text"],
-      }),
-      buildModelDefinition({
-        id: "MiniMax-M2.5-highspeed",
-        name: "MiniMax M2.5 Highspeed",
-        input: ["text"],
-        reasoning: true,
-      }),
-      buildModelDefinition({
-        id: "MiniMax-M2.5-Lightning",
-        name: "MiniMax M2.5 Lightning",
-        input: ["text"],
-        reasoning: true,
-      }),
-    ],
   };
 }
 
 function resolveCatalog(ctx: ProviderCatalogContext) {
   const explicitProvider = ctx.config.models?.providers?.[PROVIDER_ID];
-  const apiKey =
-    ctx.resolveProviderApiKey(PROVIDER_ID).apiKey ??
-    (typeof explicitProvider?.apiKey === "string" ? explicitProvider.apiKey.trim() : undefined);
+  const envApiKey = ctx.resolveProviderApiKey(PROVIDER_ID).apiKey;
+  const authStore = ensureAuthProfileStore(ctx.agentDir, {
+    allowKeychainPrompt: false,
+  });
+  const hasProfiles = listProfilesForProvider(authStore, PROVIDER_ID).length > 0;
+  const explicitApiKey =
+    typeof explicitProvider?.apiKey === "string" ? explicitProvider.apiKey.trim() : undefined;
+  const apiKey = envApiKey ?? explicitApiKey ?? (hasProfiles ? MINIMAX_OAUTH_MARKER : undefined);
   if (!apiKey) {
     return null;
   }
@@ -167,7 +137,6 @@ const minimaxPortalPlugin = {
       id: PROVIDER_ID,
       label: PROVIDER_LABEL,
       docsPath: "/providers/minimax",
-      aliases: ["minimax"],
       catalog: {
         run: async (ctx: ProviderCatalogContext) => resolveCatalog(ctx),
       },

@@ -2,6 +2,15 @@ import { describe, expect, it, vi } from "vitest";
 
 const resolveProviderCapabilitiesWithPluginMock = vi.fn((params: { provider: string }) => {
   switch (params.provider) {
+    case "anthropic":
+      return {
+        providerFamily: "anthropic",
+        dropThinkingBlockModelHints: ["claude"],
+      };
+    case "openai":
+      return {
+        providerFamily: "openai",
+      };
     case "openrouter":
       return {
         openAiCompatTurnValidation: false,
@@ -15,6 +24,15 @@ const resolveProviderCapabilitiesWithPluginMock = vi.fn((params: { provider: str
     case "github-copilot":
       return {
         dropThinkingBlockModelHints: ["claude"],
+      };
+    case "kilocode":
+      return {
+        geminiThoughtSignatureSanitization: true,
+        geminiThoughtSignatureModelHints: ["gemini"],
+      };
+    case "kimi-coding":
+      return {
+        preserveAnthropicThinkingSignatures: false,
       };
     default:
       return undefined;
@@ -38,7 +56,7 @@ import {
 } from "./provider-capabilities.js";
 
 describe("resolveProviderCapabilities", () => {
-  it("returns native anthropic defaults for ordinary providers", () => {
+  it("returns provider-owned anthropic defaults for ordinary providers", () => {
     expect(resolveProviderCapabilities("anthropic")).toEqual({
       anthropicToolSchemaMode: "native",
       anthropicToolChoiceMode: "native",

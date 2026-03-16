@@ -1,4 +1,5 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
+import type { TopLevelComponents } from "@buape/carbon";
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import type { StreamFn } from "@mariozechner/pi-agent-core";
 import type { Api, Model } from "@mariozechner/pi-ai";
@@ -22,6 +23,7 @@ import type { ModelProviderConfig } from "../config/types.js";
 import type { GatewayRequestHandler } from "../gateway/server-methods/types.js";
 import type { InternalHookHandler } from "../hooks/internal-hooks.js";
 import type { HookEntry } from "../hooks/types.js";
+import type { ProviderUsageSnapshot } from "../infra/provider-usage.types.js";
 import type { RuntimeEnv } from "../runtime.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 import type { PluginRuntime } from "./runtime/types.js";
@@ -288,6 +290,67 @@ export type ProviderPreparedRuntimeAuth = {
 };
 
 /**
+ * Usage/billing auth input for providers that expose quota/usage endpoints.
+ *
+ * This hook is intentionally separate from `prepareRuntimeAuth`: usage
+ * snapshots often need a different credential source than live inference
+ * requests, and they run outside the embedded runner.
+ *
+ * The helper methods cover the common OpenClaw auth resolution paths:
+ *
+ * - `resolveApiKeyFromConfigAndStore`: env/config/plain token/api_key profiles
+ * - `resolveOAuthToken`: oauth/token profiles resolved through the auth store
+ *
+ * Plugins can still do extra provider-specific work on top (for example parse a
+ * token blob, read a legacy credential file, or pick between aliases).
+ */
+export type ProviderResolveUsageAuthContext = {
+  config: OpenClawConfig;
+  agentDir?: string;
+  workspaceDir?: string;
+  env: NodeJS.ProcessEnv;
+  provider: string;
+  resolveApiKeyFromConfigAndStore: (params?: {
+    providerIds?: string[];
+    envDirect?: Array<string | undefined>;
+  }) => string | undefined;
+  resolveOAuthToken: () => Promise<ProviderResolvedUsageAuth | null>;
+};
+
+/**
+ * Result of `resolveUsageAuth`.
+ *
+ * `token` is the credential used for provider usage/billing endpoints.
+ * `accountId` is optional provider-specific metadata used by some usage APIs.
+ */
+export type ProviderResolvedUsageAuth = {
+  token: string;
+  accountId?: string;
+};
+
+/**
+ * Usage/quota snapshot input for providers that own their usage endpoint
+ * fetch/parsing behavior.
+ *
+ * This hook runs after `resolveUsageAuth` succeeds. Core still owns summary
+ * fan-out, timeout wrapping, filtering, and formatting; the provider plugin
+ * owns the provider-specific HTTP request + response normalization.
+ *
+ * Return `null`/`undefined` to fall back to legacy core fetchers.
+ */
+export type ProviderFetchUsageSnapshotContext = {
+  config: OpenClawConfig;
+  agentDir?: string;
+  workspaceDir?: string;
+  env: NodeJS.ProcessEnv;
+  provider: string;
+  token: string;
+  accountId?: string;
+  timeoutMs: number;
+  fetchFn: typeof fetch;
+};
+
+/**
  * Provider-owned extra-param normalization before OpenClaw builds its generic
  * stream option wrapper.
  *
@@ -464,6 +527,32 @@ export type ProviderPlugin = {
     ctx: ProviderPrepareRuntimeAuthContext,
   ) => Promise<ProviderPreparedRuntimeAuth | null | undefined>;
   /**
+   * Usage/billing auth resolution hook.
+   *
+   * Called by provider-usage surfaces (`/usage`, status snapshots, reporting)
+   * before OpenClaw falls back to legacy core auth resolution. Use this when a
+   * provider's usage endpoint needs provider-owned token extraction, blob
+   * parsing, or alias handling.
+   */
+  resolveUsageAuth?: (
+    ctx: ProviderResolveUsageAuthContext,
+  ) =>
+    | Promise<ProviderResolvedUsageAuth | null | undefined>
+    | ProviderResolvedUsageAuth
+    | null
+    | undefined;
+  /**
+   * Usage/quota snapshot fetch hook.
+   *
+   * Called after `resolveUsageAuth` by `/usage` and related reporting surfaces.
+   * Use this when the provider's usage endpoint or payload shape is
+   * provider-specific and you want that logic to live with the provider plugin
+   * instead of the core switchboard.
+   */
+  fetchUsageSnapshot?: (
+    ctx: ProviderFetchUsageSnapshotContext,
+  ) => Promise<ProviderUsageSnapshot | null | undefined> | ProviderUsageSnapshot | null | undefined;
+  /**
    * Provider-owned cache TTL eligibility.
    *
    * Use this when a proxy provider supports Anthropic-style prompt caching for
@@ -511,7 +600,47 @@ export type PluginCommandContext = {
   accountId?: string;
   /** Thread/topic id if available */
   messageThreadId?: number;
+  requestConversationBinding: (
+    params?: PluginConversationBindingRequestParams,
+  ) => Promise<PluginConversationBindingRequestResult>;
+  detachConversationBinding: () => Promise<{ removed: boolean }>;
+  getCurrentConversationBinding: () => Promise<PluginConversationBinding | null>;
 };
+
+export type PluginConversationBindingRequestParams = {
+  summary?: string;
+  detachHint?: string;
+};
+
+export type PluginConversationBinding = {
+  bindingId: string;
+  pluginId: string;
+  pluginName?: string;
+  pluginRoot: string;
+  channel: string;
+  accountId: string;
+  conversationId: string;
+  parentConversationId?: string;
+  threadId?: string | number;
+  boundAt: number;
+  summary?: string;
+  detachHint?: string;
+};
+
+export type PluginConversationBindingRequestResult =
+  | {
+      status: "bound";
+      binding: PluginConversationBinding;
+    }
+  | {
+      status: "pending";
+      approvalId: string;
+      reply: ReplyPayload;
+    }
+  | {
+      status: "error";
+      message: string;
+    };
 
 /**
  * Result returned by a plugin command handler.
@@ -546,6 +675,111 @@ export type OpenClawPluginCommandDefinition = {
   /** The handler function */
   handler: PluginCommandHandler;
 };
+
+export type PluginInteractiveChannel = "telegram" | "discord";
+
+export type PluginInteractiveButtons = Array<
+  Array<{ text: string; callback_data: string; style?: "danger" | "success" | "primary" }>
+>;
+
+export type PluginInteractiveTelegramHandlerResult = {
+  handled?: boolean;
+} | void;
+
+export type PluginInteractiveTelegramHandlerContext = {
+  channel: "telegram";
+  accountId: string;
+  callbackId: string;
+  conversationId: string;
+  parentConversationId?: string;
+  senderId?: string;
+  senderUsername?: string;
+  threadId?: number;
+  isGroup: boolean;
+  isForum: boolean;
+  auth: {
+    isAuthorizedSender: boolean;
+  };
+  callback: {
+    data: string;
+    namespace: string;
+    payload: string;
+    messageId: number;
+    chatId: string;
+    messageText?: string;
+  };
+  respond: {
+    reply: (params: { text: string; buttons?: PluginInteractiveButtons }) => Promise<void>;
+    editMessage: (params: { text: string; buttons?: PluginInteractiveButtons }) => Promise<void>;
+    editButtons: (params: { buttons: PluginInteractiveButtons }) => Promise<void>;
+    clearButtons: () => Promise<void>;
+    deleteMessage: () => Promise<void>;
+  };
+  requestConversationBinding: (
+    params?: PluginConversationBindingRequestParams,
+  ) => Promise<PluginConversationBindingRequestResult>;
+  detachConversationBinding: () => Promise<{ removed: boolean }>;
+  getCurrentConversationBinding: () => Promise<PluginConversationBinding | null>;
+};
+
+export type PluginInteractiveDiscordHandlerResult = {
+  handled?: boolean;
+} | void;
+
+export type PluginInteractiveDiscordHandlerContext = {
+  channel: "discord";
+  accountId: string;
+  interactionId: string;
+  conversationId: string;
+  parentConversationId?: string;
+  guildId?: string;
+  senderId?: string;
+  senderUsername?: string;
+  auth: {
+    isAuthorizedSender: boolean;
+  };
+  interaction: {
+    kind: "button" | "select" | "modal";
+    data: string;
+    namespace: string;
+    payload: string;
+    messageId?: string;
+    values?: string[];
+    fields?: Array<{ id: string; name: string; values: string[] }>;
+  };
+  respond: {
+    acknowledge: () => Promise<void>;
+    reply: (params: { text: string; ephemeral?: boolean }) => Promise<void>;
+    followUp: (params: { text: string; ephemeral?: boolean }) => Promise<void>;
+    editMessage: (params: { text?: string; components?: TopLevelComponents[] }) => Promise<void>;
+    clearComponents: (params?: { text?: string }) => Promise<void>;
+  };
+  requestConversationBinding: (
+    params?: PluginConversationBindingRequestParams,
+  ) => Promise<PluginConversationBindingRequestResult>;
+  detachConversationBinding: () => Promise<{ removed: boolean }>;
+  getCurrentConversationBinding: () => Promise<PluginConversationBinding | null>;
+};
+
+export type PluginInteractiveTelegramHandlerRegistration = {
+  channel: "telegram";
+  namespace: string;
+  handler: (
+    ctx: PluginInteractiveTelegramHandlerContext,
+  ) => Promise<PluginInteractiveTelegramHandlerResult> | PluginInteractiveTelegramHandlerResult;
+};
+
+export type PluginInteractiveDiscordHandlerRegistration = {
+  channel: "discord";
+  namespace: string;
+  handler: (
+    ctx: PluginInteractiveDiscordHandlerContext,
+  ) => Promise<PluginInteractiveDiscordHandlerResult> | PluginInteractiveDiscordHandlerResult;
+};
+
+export type PluginInteractiveHandlerRegistration =
+  | PluginInteractiveTelegramHandlerRegistration
+  | PluginInteractiveDiscordHandlerRegistration;
 
 export type OpenClawPluginHttpRouteAuth = "gateway" | "plugin";
 export type OpenClawPluginHttpRouteMatch = "exact" | "prefix";
@@ -611,6 +845,7 @@ export type OpenClawPluginApi = {
   version?: string;
   description?: string;
   source: string;
+  rootDir?: string;
   config: OpenClawConfig;
   pluginConfig?: Record<string, unknown>;
   runtime: PluginRuntime;
@@ -630,6 +865,7 @@ export type OpenClawPluginApi = {
   registerCli: (registrar: OpenClawPluginCliRegistrar, opts?: { commands?: string[] }) => void;
   registerService: (service: OpenClawPluginService) => void;
   registerProvider: (provider: ProviderPlugin) => void;
+  registerInteractiveHandler: (registration: PluginInteractiveHandlerRegistration) => void;
   /**
    * Register a custom command that bypasses the LLM agent.
    * Plugin commands are processed before built-in commands and before agent invocation.
@@ -652,6 +888,10 @@ export type OpenClawPluginApi = {
 
 export type PluginOrigin = "bundled" | "global" | "workspace" | "config";
 
+export type PluginFormat = "openclaw" | "bundle";
+
+export type PluginBundleFormat = "codex" | "claude" | "cursor";
+
 export type PluginDiagnostic = {
   level: "warn" | "error";
   message: string;
@@ -673,6 +913,7 @@ export type PluginHookName =
   | "before_compaction"
   | "after_compaction"
   | "before_reset"
+  | "inbound_claim"
   | "message_received"
   | "message_sending"
   | "message_sent"
@@ -699,6 +940,7 @@ export const PLUGIN_HOOK_NAMES = [
   "before_compaction",
   "after_compaction",
   "before_reset",
+  "inbound_claim",
   "message_received",
   "message_sending",
   "message_sent",
@@ -905,6 +1147,37 @@ export type PluginHookMessageContext = {
   channelId: string;
   accountId?: string;
   conversationId?: string;
+};
+
+export type PluginHookInboundClaimContext = PluginHookMessageContext & {
+  parentConversationId?: string;
+  senderId?: string;
+  messageId?: string;
+};
+
+export type PluginHookInboundClaimEvent = {
+  content: string;
+  body?: string;
+  bodyForAgent?: string;
+  transcript?: string;
+  timestamp?: number;
+  channel: string;
+  accountId?: string;
+  conversationId?: string;
+  parentConversationId?: string;
+  senderId?: string;
+  senderName?: string;
+  senderUsername?: string;
+  threadId?: string | number;
+  messageId?: string;
+  isGroup: boolean;
+  commandAuthorized?: boolean;
+  wasMentioned?: boolean;
+  metadata?: Record<string, unknown>;
+};
+
+export type PluginHookInboundClaimResult = {
+  handled: boolean;
 };
 
 // message_received hook
@@ -1163,6 +1436,10 @@ export type PluginHookHandlerMap = {
     event: PluginHookBeforeResetEvent,
     ctx: PluginHookAgentContext,
   ) => Promise<void> | void;
+  inbound_claim: (
+    event: PluginHookInboundClaimEvent,
+    ctx: PluginHookInboundClaimContext,
+  ) => Promise<PluginHookInboundClaimResult | void> | PluginHookInboundClaimResult | void;
   message_received: (
     event: PluginHookMessageReceivedEvent,
     ctx: PluginHookMessageContext,

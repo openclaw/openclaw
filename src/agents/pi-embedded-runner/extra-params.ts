@@ -20,8 +20,8 @@ import {
 import { log } from "./logger.js";
 import {
   createMoonshotThinkingWrapper,
-  createSiliconFlowThinkingWrapper,
   resolveMoonshotThinkingType,
+  createSiliconFlowThinkingWrapper,
   shouldApplyMoonshotPayloadCompat,
   shouldApplySiliconFlowThinkingOffCompat,
 } from "./moonshot-stream-wrappers.js";
@@ -33,7 +33,7 @@ import {
   resolveOpenAIFastMode,
   resolveOpenAIServiceTier,
 } from "./openai-stream-wrappers.js";
-import { createKilocodeWrapper, isProxyReasoningUnsupported } from "./proxy-stream-wrappers.js";
+import { createZaiToolStreamWrapper } from "./zai-stream-wrappers.js";
 
 /**
  * Resolve provider-specific extra params from model config.
@@ -215,39 +215,6 @@ function createGoogleThinkingPayloadWrapper(
   };
 }
 
-/**
- * Create a streamFn wrapper that injects tool_stream=true for Z.AI providers.
- *
- * Z.AI's API supports the `tool_stream` parameter to enable real-time streaming
- * of tool call arguments and reasoning content. When enabled, the API returns
- * progressive tool_call deltas, allowing users to see tool execution in real-time.
- *
- * @see https://docs.z.ai/api-reference#streaming
- */
-function createZaiToolStreamWrapper(
-  baseStreamFn: StreamFn | undefined,
-  enabled: boolean,
-): StreamFn {
-  const underlying = baseStreamFn ?? streamSimple;
-  return (model, context, options) => {
-    if (!enabled) {
-      return underlying(model, context, options);
-    }
-
-    const originalOnPayload = options?.onPayload;
-    return underlying(model, context, {
-      ...options,
-      onPayload: (payload) => {
-        if (payload && typeof payload === "object") {
-          // Inject tool_stream: true for Z.AI API
-          (payload as Record<string, unknown>).tool_stream = true;
-        }
-        return originalOnPayload?.(payload, model);
-      },
-    });
-  };
-}
-
 function resolveAliasedParamValue(
   sources: Array<Record<string, unknown> | undefined>,
   snakeCaseKey: string,
@@ -366,42 +333,33 @@ export function applyExtraParamsToAgent(
     agent.streamFn = createSiliconFlowThinkingWrapper(agent.streamFn);
   }
 
-  if (shouldApplyMoonshotPayloadCompat({ provider, modelId })) {
-    const moonshotThinkingType = resolveMoonshotThinkingType({
+  agent.streamFn = createAnthropicToolPayloadCompatibilityWrapper(agent.streamFn);
+  const providerStreamBase = agent.streamFn;
+  const pluginWrappedStreamFn = wrapProviderStreamFn({
+    provider,
+    config: cfg,
+    context: {
+      config: cfg,
+      provider,
+      modelId,
+      extraParams: effectiveExtraParams,
+      thinkingLevel,
+      streamFn: providerStreamBase,
+    },
+  });
+  agent.streamFn = pluginWrappedStreamFn ?? providerStreamBase;
+  const providerWrapperHandled =
+    pluginWrappedStreamFn !== undefined && pluginWrappedStreamFn !== providerStreamBase;
+
+  if (!providerWrapperHandled && shouldApplyMoonshotPayloadCompat({ provider, modelId })) {
+    // Preserve the legacy Moonshot compatibility path when no plugin wrapper
+    // actually handled the stream function. This covers tests/disabled plugins
+    // and Ollama Cloud Kimi models until they gain a dedicated runtime hook.
+    const thinkingType = resolveMoonshotThinkingType({
       configuredThinking: effectiveExtraParams?.thinking,
       thinkingLevel,
     });
-    if (moonshotThinkingType) {
-      log.debug(
-        `applying Moonshot thinking=${moonshotThinkingType} payload wrapper for ${provider}/${modelId}`,
-      );
-    }
-    agent.streamFn = createMoonshotThinkingWrapper(agent.streamFn, moonshotThinkingType);
-  }
-
-  agent.streamFn = createAnthropicToolPayloadCompatibilityWrapper(agent.streamFn);
-  agent.streamFn =
-    wrapProviderStreamFn({
-      provider,
-      config: cfg,
-      context: {
-        config: cfg,
-        provider,
-        modelId,
-        extraParams: effectiveExtraParams,
-        thinkingLevel,
-        streamFn: agent.streamFn,
-      },
-    }) ?? agent.streamFn;
-
-  if (provider === "kilocode") {
-    log.debug(`applying Kilocode feature header for ${provider}/${modelId}`);
-    // kilo/auto is a dynamic routing model — skip reasoning injection
-    // (same rationale as OpenRouter "auto"). See: openclaw/openclaw#24851
-    // Also skip for models known to reject reasoning.effort (e.g. x-ai/*).
-    const kilocodeThinkingLevel =
-      modelId === "kilo/auto" || isProxyReasoningUnsupported(modelId) ? undefined : thinkingLevel;
-    agent.streamFn = createKilocodeWrapper(agent.streamFn, kilocodeThinkingLevel);
+    agent.streamFn = createMoonshotThinkingWrapper(agent.streamFn, thinkingType);
   }
 
   if (provider === "amazon-bedrock" && !isAnthropicBedrockModel(modelId)) {

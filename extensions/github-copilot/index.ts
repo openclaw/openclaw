@@ -8,6 +8,7 @@ import { listProfilesForProvider } from "../../src/agents/auth-profiles/profiles
 import { ensureAuthProfileStore } from "../../src/agents/auth-profiles/store.js";
 import { normalizeModelCompat } from "../../src/agents/model-compat.js";
 import { coerceSecretRef } from "../../src/config/types.secrets.js";
+import { fetchCopilotUsage } from "../../src/infra/provider-usage.fetch.js";
 import {
   DEFAULT_COPILOT_API_BASE_URL,
   resolveCopilotApiToken,
@@ -130,6 +131,9 @@ const githubCopilotPlugin = {
           expiresAt: token.expiresAt,
         };
       },
+      resolveUsageAuth: async (ctx) => await ctx.resolveOAuthToken(),
+      fetchUsageSnapshot: async (ctx) =>
+        await fetchCopilotUsage(ctx.token, ctx.timeoutMs, ctx.fetchFn),
     });
   },
 };

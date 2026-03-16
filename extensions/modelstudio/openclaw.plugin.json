@@ -1,0 +1,9 @@
+{
+  "id": "modelstudio",
+  "providers": ["modelstudio"],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

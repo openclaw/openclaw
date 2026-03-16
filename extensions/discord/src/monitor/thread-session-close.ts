@@ -47,6 +47,9 @@ export async function closeDiscordThreadSessions(params: {
       if (!entry || !sessionKeyContainsThreadId(key)) {
         continue;
       }
+      if (entry.updatedAt === 0) {
+        continue;
+      }
       // Setting updatedAt to 0 signals that this session is stale.
       // evaluateSessionFreshness will create a new session on the next message.
       entry.updatedAt = 0;
