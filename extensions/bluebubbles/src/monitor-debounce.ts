@@ -150,9 +150,12 @@ export function createBlueBubblesDebounceRegistry(params: {
           if (senderKey) {
             return `bluebubbles:${account.accountId}:${chatKey}:${senderKey}`;
           }
+          // In the fully degraded unknown-sender path, favor keeping events distinct over
+          // coalescing by a weak timestamp heuristic. BlueBubbles payloads can fall back to
+          // second-resolution timestamps, which would otherwise merge unrelated messages.
           const timestampKey =
             typeof msg.timestamp === "number"
-              ? `ts:${msg.timestamp}`
+              ? `ts:${msg.timestamp}:${fallbackSequence++}`
               : `unknown-sender:${fallbackSequence++}`;
           return `bluebubbles:${account.accountId}:${chatKey}:${timestampKey}`;
         },
