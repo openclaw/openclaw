@@ -1,7 +1,18 @@
+import type {
+  DeliverOutboundPayloadsParams,
+  OutboundDeliveryResult,
+} from "../../infra/outbound/deliver.js";
 import type { PluginRuntimeChannel } from "./types-channel.js";
 import type { PluginRuntimeCore, RuntimeLogger } from "./types-core.js";
 
 export type { RuntimeLogger };
+
+// ── Plugin-safe outbound delivery params (internal fields stripped) ──
+
+type PluginDeliverOutboundParams = Omit<
+  DeliverOutboundPayloadsParams,
+  "skipQueue" | "mirror" | "session" | "deps"
+>;
 
 // ── Subagent runtime types ──────────────────────────────────────────
 
@@ -61,7 +72,9 @@ export type PluginRuntime = PluginRuntimeCore & {
   };
   outbound: {
     /** Send payloads through the standard outbound delivery pipeline (chunking, hooks, queue). */
-    deliverOutboundPayloads: typeof import("../../infra/outbound/deliver.js").deliverOutboundPayloads;
+    deliverOutboundPayloads: (
+      params: PluginDeliverOutboundParams,
+    ) => Promise<OutboundDeliveryResult[]>;
   };
   channel: PluginRuntimeChannel;
 };
