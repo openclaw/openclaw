@@ -32,8 +32,14 @@ function isKnownFeishuAccountId(config: OpenClawPluginApi["config"], accountId?:
   return listFeishuAccountIds(config).some((id) => id.toLowerCase() === normalized);
 }
 
-function isFeishuMessageChannel(messageChannel?: string): boolean {
-  return messageChannel?.trim().toLowerCase() === "feishu";
+/**
+ * Returns true when the channel hint is either absent (no hint — trust the
+ * account ID alone) or explicitly "feishu". Returns false for any other
+ * explicit non-Feishu channel to prevent cross-channel account collision.
+ */
+function isCompatibleFeishuChannel(messageChannel?: string): boolean {
+  if (!messageChannel?.trim()) return true;
+  return messageChannel.trim().toLowerCase() === "feishu";
 }
 
 export function resolveFeishuToolAccount(params: {
@@ -55,10 +61,10 @@ export function resolveFeishuToolAccount(params: {
 
 /**
  * Channel-aware account resolution.
- * Only trusts the routed `agentAccountId` when the request originates from Feishu
- * and the ID maps to a known Feishu account; otherwise falls back to the
- * configured default. This prevents cross-channel pollution (e.g. a Discord
- * session's accountId colliding with a Feishu account name).
+ * Trusts the routed `agentAccountId` when the channel hint is absent or
+ * explicitly "feishu", AND the ID maps to a known Feishu account.
+ * Rejects only explicit non-Feishu channels (e.g. Discord) to prevent
+ * cross-channel account-name collisions.
  */
 export function resolveFeishuToolAccountFromContext(params: {
   api: Pick<OpenClawPluginApi, "config">;
@@ -67,7 +73,7 @@ export function resolveFeishuToolAccountFromContext(params: {
 }): ResolvedFeishuAccount {
   const routedAccountId = params.toolContext?.agentAccountId;
   const feishuRoutedAccountId =
-    isFeishuMessageChannel(params.toolContext?.messageChannel) &&
+    isCompatibleFeishuChannel(params.toolContext?.messageChannel) &&
     isKnownFeishuAccountId(params.api.config, routedAccountId)
       ? routedAccountId
       : undefined;
