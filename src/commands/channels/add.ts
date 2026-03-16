@@ -321,12 +321,6 @@ export async function channelsAddCommand(
     });
   }
 
-  let previousTelegramToken = "";
-  if (channel === "telegram") {
-    const { resolveTelegramAccount } = await import("../../../extensions/telegram/src/accounts.js");
-    previousTelegramToken = resolveTelegramAccount({ cfg: prevConfig, accountId }).token.trim();
-  }
-
   nextConfig = applyChannelAccountConfig({
     cfg: nextConfig,
     channel,
@@ -340,16 +334,6 @@ export async function channelsAddCommand(
     accountId,
     runtime,
   });
-  if (channel === "telegram") {
-    const [{ resolveTelegramAccount }, { deleteTelegramUpdateOffset }] = await Promise.all([
-      import("../../../extensions/telegram/src/accounts.js"),
-      import("../../../extensions/telegram/src/update-offset-store.js"),
-    ]);
-    const nextTelegramToken = resolveTelegramAccount({ cfg: nextConfig, accountId }).token.trim();
-    if (previousTelegramToken !== nextTelegramToken) {
-      await deleteTelegramUpdateOffset({ accountId });
-    }
-  }
 
   await writeConfigFile(nextConfig);
   runtime.log(`Added ${channelLabel(channel)} account "${accountId}".`);
