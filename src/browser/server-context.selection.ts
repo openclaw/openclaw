@@ -1,6 +1,5 @@
 import { fetchOk, normalizeCdpHttpBaseForJsonEndpoints } from "./cdp.helpers.js";
 import { appendCdpPath } from "./cdp.js";
-import { closeChromeMcpTab, focusChromeMcpTab } from "./chrome-mcp.js";
 import type { ResolvedBrowserProfile } from "./config.js";
 import { BrowserTabNotFoundError, BrowserTargetAmbiguousError } from "./errors.js";
 import { getBrowserProfileCapabilities } from "./profile-capabilities.js";
@@ -112,13 +111,6 @@ export function createProfileSelectionOps({
   const focusTab = async (targetId: string): Promise<void> => {
     const resolvedTargetId = await resolveTargetIdOrThrow(targetId);
 
-    if (capabilities.usesChromeMcp) {
-      await focusChromeMcpTab(profile.name, resolvedTargetId);
-      const profileState = getProfileState();
-      profileState.lastTargetId = resolvedTargetId;
-      return;
-    }
-
     if (capabilities.usesPersistentPlaywright) {
       const mod = await getPwAiModule({ mode: "strict" });
       const focusPageByTargetIdViaPlaywright = (mod as Partial<PwAiModule> | null)
@@ -141,11 +133,6 @@ export function createProfileSelectionOps({
 
   const closeTab = async (targetId: string): Promise<void> => {
     const resolvedTargetId = await resolveTargetIdOrThrow(targetId);
-
-    if (capabilities.usesChromeMcp) {
-      await closeChromeMcpTab(profile.name, resolvedTargetId);
-      return;
-    }
 
     // For remote profiles, use Playwright's persistent connection to close tabs
     if (capabilities.usesPersistentPlaywright) {
