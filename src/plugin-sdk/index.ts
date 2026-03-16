@@ -782,10 +782,8 @@ export {
   resolveSignalAccount,
   type ResolvedSignalAccount,
 } from "../../extensions/signal/src/accounts.js";
-export {
-  signalSetupAdapter,
-  signalSetupWizard,
-} from "../../extensions/signal/src/setup-surface.js";
+export { signalSetupWizard } from "../../extensions/signal/src/setup-surface.js";
+export { signalSetupAdapter } from "../../extensions/signal/src/setup-core.js";
 export {
   looksLikeSignalTargetId,
   normalizeSignalMessagingTarget,
