@@ -10,6 +10,14 @@ describe("gaxios fetch compat", () => {
   });
 
   it("uses native fetch without defining window or importing node-fetch", async () => {
+    type MockRequestConfig = RequestInit & {
+      fetchImplementation?: typeof fetch;
+      responseType?: string;
+      url: string;
+    };
+    let MockGaxiosCtor!: new () => {
+      request(config: MockRequestConfig): Promise<{ data: string } & object>;
+    };
     const fetchMock = vi.fn<typeof fetch>(async () => {
       return new Response("ok", {
         headers: { "content-type": "text/plain" },
@@ -23,18 +31,19 @@ describe("gaxios fetch compat", () => {
     });
     vi.doMock("gaxios", () => {
       class MockGaxios {
-        async request(config: RequestInit & { responseType?: string; url: string }) {
-          const response = await MockGaxios.prototype._defaultAdapter.call(this, config);
+        _defaultAdapter!: (config: MockRequestConfig) => Promise<Response>;
+
+        async request(config: MockRequestConfig) {
+          const response = await this._defaultAdapter(config);
           return {
             ...(response as object),
-            data: await (response as Response).text(),
+            data: await response.text(),
           };
         }
       }
+      MockGaxiosCtor = MockGaxios;
 
-      MockGaxios.prototype._defaultAdapter = async (
-        config: RequestInit & { fetchImplementation?: typeof fetch; url: string },
-      ) => {
+      MockGaxios.prototype._defaultAdapter = async (config: MockRequestConfig) => {
         const fetchImplementation = config.fetchImplementation ?? fetch;
         return await fetchImplementation(config.url, config);
       };
@@ -43,11 +52,10 @@ describe("gaxios fetch compat", () => {
     });
 
     const { installGaxiosFetchCompat } = await import("./gaxios-fetch-compat.js");
-    const { Gaxios } = await import("gaxios");
 
     await installGaxiosFetchCompat();
 
-    const res = await new Gaxios().request({
+    const res = await new MockGaxiosCtor().request({
       responseType: "text",
       url: "https://example.com",
     });

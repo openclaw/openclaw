@@ -455,13 +455,17 @@ jobs:
         run: pre-commit run --all-files detect-private-key
 
       - name: Audit changed GitHub workflows with zizmor
+        env:
+          CI_EVENT_NAME: ${{ github.event_name }}
+          CI_PUSH_BASE_SHA: ${{ github.event.before || '' }}
+          CI_PR_BASE_SHA: ${{ github.event.pull_request.base.sha || '' }}
         run: |
           set -euo pipefail
 
-          if [ "${{ github.event_name }}" = "push" ]; then
-            BASE="${{ github.event.before }}"
+          if [ "$CI_EVENT_NAME" = "push" ]; then
+            BASE="$CI_PUSH_BASE_SHA"
           else
-            BASE="${{ github.event.pull_request.base.sha }}"
+            BASE="$CI_PR_BASE_SHA"
           fi
 
           mapfile -t workflow_files < <(git diff --name-only "$BASE" HEAD -- '.github/workflows/*.yml' '.github/workflows/*.yaml')

@@ -1,4 +1,6 @@
+import { createRequire } from "node:module";
 import type { ConnectionOptions } from "node:tls";
+import { pathToFileURL } from "node:url";
 import type { Dispatcher } from "undici";
 import { Agent as UndiciAgent, ProxyAgent } from "undici";
 
@@ -165,8 +167,15 @@ function buildDispatcher(init: GaxiosFetchRequestInit, url: URL): Dispatcher | u
 }
 
 function isModuleNotFoundError(err: unknown): err is NodeJS.ErrnoException {
+  return isRecord(err) && (err.code === "ERR_MODULE_NOT_FOUND" || err.code === "MODULE_NOT_FOUND");
+}
+
+function hasGaxiosConstructorShape(value: unknown): value is GaxiosConstructor {
   return (
-    Boolean(err) && typeof err === "object" && "code" in err && err.code === "ERR_MODULE_NOT_FOUND"
+    typeof value === "function" &&
+    "prototype" in value &&
+    isRecord(value.prototype) &&
+    typeof value.prototype._defaultAdapter === "function"
   );
 }
 
@@ -179,12 +188,14 @@ function isDirectGaxiosImportMiss(err: unknown): boolean {
 
 async function loadGaxiosConstructor(): Promise<GaxiosConstructor | null> {
   try {
-    const mod = await import("gaxios");
-    const candidate = mod.Gaxios;
-    if (typeof candidate !== "function" || !("prototype" in candidate)) {
+    const require = createRequire(import.meta.url);
+    const resolvedPath = require.resolve("gaxios");
+    const mod = await import(pathToFileURL(resolvedPath).href);
+    const candidate = isRecord(mod) ? mod.Gaxios : undefined;
+    if (!hasGaxiosConstructorShape(candidate)) {
       throw new Error("gaxios: missing Gaxios export");
     }
-    return candidate as GaxiosConstructor;
+    return candidate;
   } catch (err) {
     if (isDirectGaxiosImportMiss(err)) {
       return null;
@@ -245,7 +256,7 @@ export async function installGaxiosFetchCompat(): Promise<void> {
   const compatFetch = createGaxiosCompatFetch();
 
   prototype._defaultAdapter = function patchedDefaultAdapter(
-    this: Gaxios,
+    this: unknown,
     config: GaxiosFetchRequestInit,
   ): Promise<unknown> {
     if (config.fetchImplementation) {
