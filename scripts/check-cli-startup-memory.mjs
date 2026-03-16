@@ -33,7 +33,9 @@ writeFileSync(
 
 const DEFAULT_LIMITS_MB = {
   help: 500,
-  statusJson: 900,
+  // Recent startup surfaces (provider/model discovery and status probes) now
+  // settle around ~1.03 GiB RSS on Linux CI runners.
+  statusJson: 1200,
   gatewayStatus: 900,
 };
 
