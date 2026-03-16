@@ -1,6 +1,6 @@
 {
-  "name": "@openclaw/ollama-provider",
-  "version": "2026.3.12",
+  "name": "@openclaw/ollama",
+  "version": "2026.3.11",
   "private": true,
   "description": "OpenClaw Ollama provider plugin",
   "type": "module",
