@@ -228,7 +228,10 @@ export function installToolResultContextGuard(params: {
     // If it does, non-tool-result content dominates and only full LLM-based session
     // compaction can reduce context size. Throwing a context overflow error triggers
     // the existing overflow recovery cascade in run.ts.
-    const postEnforcementChars = estimateContextChars(contextMessages);
+    const postEnforcementChars = estimateContextChars(
+      contextMessages,
+      createMessageCharEstimateCache(),
+    );
     if (postEnforcementChars > preemptiveOverflowChars) {
       throw new Error(PREEMPTIVE_CONTEXT_OVERFLOW_MESSAGE);
     }
