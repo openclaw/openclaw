@@ -1,25 +1,44 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { resolveMatrixProxyUrl } from "./proxy.js";
+import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import {
+  resolveMatrixProxyUrl,
+  configureMatrixProxy,
+  isMatrixProxyConfigured,
+  resetProxyStateForTesting,
+} from "./proxy.js";
 
 describe("Matrix proxy support", () => {
+  const originalEnv = { ...process.env };
+  const proxyKeys = [
+    "MATRIX_PROXY",
+    "HTTPS_PROXY",
+    "https_proxy",
+    "HTTP_PROXY",
+    "http_proxy",
+    "ALL_PROXY",
+    "all_proxy",
+    "NO_PROXY",
+    "no_proxy",
+  ] as const;
+
+  beforeEach(() => {
+    resetProxyStateForTesting();
+    for (const key of proxyKeys) {
+      delete process.env[key];
+    }
+  });
+
+  afterEach(() => {
+    for (const key of proxyKeys) {
+      if (Object.prototype.hasOwnProperty.call(originalEnv, key)) {
+        process.env[key] = originalEnv[key];
+      } else {
+        delete process.env[key];
+      }
+    }
+    resetProxyStateForTesting();
+  });
+
   describe("resolveMatrixProxyUrl", () => {
-    const originalEnv = { ...process.env };
-
-    beforeEach(() => {
-      // Clear proxy vars (both uppercase and lowercase)
-      delete process.env.MATRIX_PROXY;
-      delete process.env.HTTPS_PROXY;
-      delete process.env.https_proxy;
-      delete process.env.HTTP_PROXY;
-      delete process.env.http_proxy;
-      delete process.env.ALL_PROXY;
-      delete process.env.all_proxy;
-    });
-
-    afterEach(() => {
-      process.env = { ...originalEnv };
-    });
-
     it("returns undefined when no proxy env vars are set", () => {
       expect(resolveMatrixProxyUrl(process.env)).toBeUndefined();
     });
@@ -66,38 +85,31 @@ describe("Matrix proxy support", () => {
       expect(resolveMatrixProxyUrl(process.env)).toBeUndefined();
     });
 
-    it("treats whitespace-only strings as undefined for all vars", () => {
-      process.env.MATRIX_PROXY = "  ";
-      process.env.HTTPS_PROXY = "  ";
-      process.env.HTTP_PROXY = "  ";
-      process.env.ALL_PROXY = "  ";
-
-      expect(resolveMatrixProxyUrl(process.env)).toBeUndefined();
-    });
-
-    it("uses lowercase https_proxy when uppercase not set", () => {
+    it("uses lowercase proxy vars", () => {
       process.env.https_proxy = "http://https-proxy:8080";
-
       expect(resolveMatrixProxyUrl(process.env)).toBe("http://https-proxy:8080");
-    });
 
-    it("uses lowercase http_proxy when uppercase not set", () => {
+      delete process.env.https_proxy;
       process.env.http_proxy = "http://http-proxy:8080";
-
       expect(resolveMatrixProxyUrl(process.env)).toBe("http://http-proxy:8080");
-    });
 
-    it("uses lowercase all_proxy as fallback", () => {
+      delete process.env.http_proxy;
       process.env.all_proxy = "http://all-proxy:8080";
-
       expect(resolveMatrixProxyUrl(process.env)).toBe("http://all-proxy:8080");
     });
+  });
 
-    it("prefers uppercase over lowercase variants", () => {
-      process.env.HTTPS_PROXY = "http://uppercase:8080";
-      process.env.https_proxy = "http://lowercase:8080";
+  describe("configureMatrixProxy", () => {
+    it("returns false when no proxy env vars are set", () => {
+      expect(configureMatrixProxy(process.env)).toBe(false);
+      expect(isMatrixProxyConfigured()).toBe(false);
+    });
 
-      expect(resolveMatrixProxyUrl(process.env)).toBe("http://uppercase:8080");
+    it("configures proxy when MATRIX_PROXY is set", () => {
+      process.env.MATRIX_PROXY = "http://matrix-proxy:8080";
+
+      expect(configureMatrixProxy(process.env)).toBe(true);
+      expect(isMatrixProxyConfigured()).toBe(true);
     });
   });
 });

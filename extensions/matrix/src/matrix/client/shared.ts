@@ -34,11 +34,12 @@ function buildSharedClientKey(auth: MatrixAuth, accountId?: string | null): stri
 
 async function createSharedMatrixClient(params: {
   auth: MatrixAuth;
+  env?: NodeJS.ProcessEnv;
   timeoutMs?: number;
   accountId?: string | null;
 }): Promise<SharedMatrixClientState> {
   // Configure proxy before creating Matrix client (supports HTTP_PROXY, HTTPS_PROXY, MATRIX_PROXY)
-  configureMatrixProxy();
+  configureMatrixProxy(params.env ?? process.env);
   const client = await createMatrixClient({
     homeserver: params.auth.homeserver,
     userId: params.auth.userId,
@@ -155,6 +156,7 @@ export async function resolveSharedMatrixClient(
   // Create a new client for this account
   const createPromise = createSharedMatrixClient({
     auth,
+    env: params.env,
     timeoutMs: params.timeoutMs,
     accountId,
   });

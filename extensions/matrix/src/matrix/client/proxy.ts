@@ -1,4 +1,4 @@
-import { setGlobalDispatcher, ProxyAgent, EnvHttpProxyAgent, type Dispatcher } from "undici";
+import { setGlobalDispatcher, EnvHttpProxyAgent, type Dispatcher } from "undici";
 import { getMatrixLogService } from "../sdk-runtime.js";
 
 let proxyConfigured = false;
@@ -12,7 +12,7 @@ function sanitizeProxyUrlForLogging(proxyUrl: string): string {
     const url = new URL(proxyUrl);
     if (url.username || url.password) {
       url.username = "***";
-      url.password = "";
+      url.password = "***";
     }
     return url.toString();
   } catch {
@@ -72,8 +72,13 @@ export function configureMatrixProxy(env: NodeJS.ProcessEnv = process.env): bool
   }
 
   try {
-    // Use EnvHttpProxyAgent which respects NO_PROXY/no_proxy bypass rules
-    const proxyAgent = new EnvHttpProxyAgent();
+    // Use EnvHttpProxyAgent and pass explicit proxy values so MATRIX_PROXY / ALL_PROXY
+    // are honored even though they are not native EnvHttpProxyAgent env names.
+    const proxyAgent = new EnvHttpProxyAgent({
+      httpProxy: proxyUrl,
+      httpsProxy: proxyUrl,
+      noProxy: env.NO_PROXY ?? env.no_proxy,
+    });
     setGlobalDispatcher(proxyAgent as Dispatcher);
     proxyConfigured = true;
 
