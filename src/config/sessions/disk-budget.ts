@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { isPrimarySessionTranscriptFileName, isSessionArchiveArtifactName } from "./artifacts.js";
 import { resolveSessionFilePath } from "./paths.js";
+import { SESSION_STORE_SERIALIZATION_REPLACER } from "./store-serialization.js";
 import type { SessionEntry } from "./types.js";
 
 export type SessionDiskBudgetConfig = {
@@ -48,11 +49,15 @@ function canonicalizePathForComparison(filePath: string): string {
 }
 
 function measureStoreBytes(store: Record<string, SessionEntry>): number {
-  return Buffer.byteLength(JSON.stringify(store, null, 2), "utf-8");
+  return Buffer.byteLength(JSON.stringify(store, SESSION_STORE_SERIALIZATION_REPLACER, 2), "utf-8");
 }
 
 function measureStoreEntryChunkBytes(key: string, entry: SessionEntry): number {
-  const singleEntryStore = JSON.stringify({ [key]: entry }, null, 2);
+  const singleEntryStore = JSON.stringify(
+    { [key]: entry },
+    SESSION_STORE_SERIALIZATION_REPLACER,
+    2,
+  );
   if (!singleEntryStore.startsWith("{\n") || !singleEntryStore.endsWith("\n}")) {
     return measureStoreBytes({ [key]: entry }) - 4;
   }
