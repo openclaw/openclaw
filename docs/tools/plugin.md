@@ -800,7 +800,7 @@ trees "pure JS/TS" and avoid packages that require `postinstall` builds.
 Optional: `openclaw.setupEntry` can point at a lightweight setup-only module.
 When OpenClaw needs setup surfaces for a disabled channel plugin, or
 when a channel plugin is enabled but still unconfigured, it loads `setupEntry`
-instead of the full plugin entry. This keeps startup and onboarding lighter
+instead of the full plugin entry. This keeps startup and setup lighter
 when your main plugin entry also wires tools, hooks, or other runtime-only
 code.
 
@@ -1177,11 +1177,11 @@ A provider plugin can participate in five distinct phases:
    `auth[].run(ctx)` performs OAuth, API-key capture, device code, or custom
    setup and returns auth profiles plus optional config patches.
 2. **Non-interactive setup**
-   `auth[].runNonInteractive(ctx)` handles `openclaw onboard --non-interactive`
+   `auth[].runNonInteractive(ctx)` handles `openclaw setup --wizard --non-interactive`
    without prompts. Use this when the provider needs custom headless setup
    beyond the built-in simple API-key paths.
 3. **Wizard integration**
-   `wizard.onboarding` adds an entry to `openclaw onboard`.
+   `wizard.setup` adds an entry to `openclaw setup --wizard`.
    `wizard.modelPicker` adds a setup entry to the model picker.
 4. **Implicit discovery**
    `discovery.run(ctx)` can contribute provider config automatically during
@@ -1230,7 +1230,8 @@ The non-interactive context includes:
 - the current and base config
 - parsed onboarding CLI options
 - runtime logging/error helpers
-- agent/workspace dirs
+- agent/workspace dirs so the provider can persist auth into the same scoped
+  store used by the rest of onboarding
 - `resolveApiKey(...)` to read provider keys from flags, env, or existing auth
   profiles while honoring `--secret-input-mode`
 - `toApiKeyCredential(...)` to convert a resolved key into an auth-profile
@@ -1247,7 +1248,7 @@ errors instead.
 
 ### Provider wizard metadata
 
-`wizard.onboarding` controls how the provider appears in grouped onboarding:
+`wizard.setup` controls how the provider appears in grouped onboarding:
 
 - `choiceId`: auth-choice value
 - `choiceLabel`: option label
@@ -1341,7 +1342,7 @@ or more auth methods (OAuth, API key, device code, etc.). Those methods can
 power:
 
 - `openclaw models auth login --provider <id> [--method <id>]`
-- `openclaw onboard`
+- `openclaw setup --wizard`
 - model-picker “custom provider” setup entries
 - implicit provider discovery during model resolution/listing
 
@@ -1377,7 +1378,7 @@ api.registerProvider({
     },
   ],
   wizard: {
-    onboarding: {
+    setup: {
       choiceId: "acme",
       choiceLabel: "AcmeAI",
       groupId: "acme",
@@ -1407,13 +1408,16 @@ api.registerProvider({
 Notes:
 
 - `run` receives a `ProviderAuthContext` with `prompter`, `runtime`,
-  `openUrl`, and `oauth.createVpsAwareHandlers` helpers.
+  `openUrl`, `oauth.createVpsAwareHandlers`, `secretInputMode`, and
+  `allowSecretRefPrompt` helpers/state. Onboarding/configure flows can use
+  these to honor `--secret-input-mode` or offer env/file/exec secret-ref
+  capture, while `openclaw models auth` keeps a tighter prompt surface.
 - `runNonInteractive` receives a `ProviderAuthMethodNonInteractiveContext`
-  with `opts`, `resolveApiKey`, and `toApiKeyCredential` helpers for
-  headless onboarding.
+  with `opts`, `agentDir`, `resolveApiKey`, and `toApiKeyCredential` helpers
+  for headless onboarding.
 - Return `configPatch` when you need to add default models or provider config.
 - Return `defaultModel` so `--set-default` can update agent defaults.
-- `wizard.onboarding` adds a provider choice to `openclaw onboard`.
+- `wizard.setup` adds a provider choice to `openclaw setup --wizard`.
 - `wizard.modelPicker` adds a “setup this provider” entry to the model picker.
 - `discovery.run` returns either `{ provider }` for the plugin’s own provider id
   or `{ providers }` for multi-provider discovery.

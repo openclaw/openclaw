@@ -50,6 +50,9 @@ importers:
       '@homebridge/ciao':
         specifier: ^1.3.5
         version: 1.3.5
+      '@lancedb/lancedb':
+        specifier: ^0.26.2
+        version: 0.26.2(apache-arrow@18.1.0)
       '@larksuiteoapi/node-sdk':
         specifier: ^1.59.0
         version: 1.59.0
@@ -268,11 +271,19 @@ importers:
         specifier: 0.3.0
         version: 0.3.0(zod@4.3.6)
 
+  extensions/anthropic: {}
+
   extensions/bluebubbles:
     dependencies:
       zod:
         specifier: ^4.3.6
         version: 4.3.6
+
+  extensions/brave: {}
+
+  extensions/byteplus: {}
+
+  extensions/cloudflare-ai-gateway: {}
 
   extensions/copilot-proxy: {}
 
@@ -341,7 +352,11 @@ importers:
         specifier: ^4.3.6
         version: 4.3.6
 
-  extensions/google-gemini-cli-auth: {}
+  extensions/firecrawl: {}
+
+  extensions/github-copilot: {}
+
+  extensions/google: {}
 
   extensions/googlechat:
     dependencies:
@@ -352,6 +367,8 @@ importers:
         specifier: '>=2026.3.11'
         version: 2026.3.13(@discordjs/opus@0.10.0)(@napi-rs/canvas@0.1.95)(@types/express@5.0.6)(audio-decode@2.2.3)(node-llama-cpp@3.16.2(typescript@5.9.3))
 
+  extensions/huggingface: {}
+
   extensions/imessage: {}
 
   extensions/irc:
@@ -359,6 +376,10 @@ importers:
       zod:
         specifier: ^4.3.6
         version: 4.3.6
+
+  extensions/kilocode: {}
+
+  extensions/kimi-coding: {}
 
   extensions/line: {}
 
@@ -425,7 +446,13 @@ importers:
         specifier: ^6.29.0
         version: 6.29.0(ws@8.19.0)(zod@4.3.6)
 
-  extensions/minimax-portal-auth: {}
+  extensions/minimax: {}
+
+  extensions/mistral: {}
+
+  extensions/modelstudio: {}
+
+  extensions/moonshot: {}
 
   extensions/msteams:
     dependencies:
@@ -451,9 +478,25 @@ importers:
         specifier: ^4.3.6
         version: 4.3.6
 
+  extensions/nvidia: {}
+
   extensions/ollama: {}
 
   extensions/open-prose: {}
+
+  extensions/openai: {}
+
+  extensions/opencode: {}
+
+  extensions/opencode-go: {}
+
+  extensions/openrouter: {}
+
+  extensions/openshell: {}
+
+  extensions/perplexity: {}
+
+  extensions/qianfan: {}
 
   extensions/sglang: {}
 
@@ -466,6 +509,8 @@ importers:
       zod:
         specifier: ^4.3.6
         version: 4.3.6
+
+  extensions/synthetic: {}
 
   extensions/telegram: {}
 
@@ -484,6 +529,8 @@ importers:
         specifier: ^4.3.6
         version: 4.3.6
 
+  extensions/together: {}
+
   extensions/twitch:
     dependencies:
       '@twurple/api':
@@ -498,6 +545,10 @@ importers:
       zod:
         specifier: ^4.3.6
         version: 4.3.6
+
+  extensions/venice: {}
+
+  extensions/vercel-ai-gateway: {}
 
   extensions/vllm: {}
 
@@ -516,7 +567,15 @@ importers:
         specifier: ^4.3.6
         version: 4.3.6
 
+  extensions/volcengine: {}
+
   extensions/whatsapp: {}
+
+  extensions/xai: {}
+
+  extensions/xiaomi: {}
+
+  extensions/zai: {}
 
   extensions/zalo:
     dependencies:

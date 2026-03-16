@@ -118,6 +118,23 @@ export type ProviderAuthContext = {
   workspaceDir?: string;
   prompter: WizardPrompter;
   runtime: RuntimeEnv;
+  /**
+   * Onboarding secret persistence preference.
+   *
+   * Interactive wizard flows set this when the caller explicitly requested
+   * plaintext or env/file/exec ref storage. Ad-hoc `models auth login` flows
+   * usually leave it undefined.
+   */
+  secretInputMode?: OnboardOptions["secretInputMode"];
+  /**
+   * Whether the provider auth flow should offer the onboarding secret-storage
+   * mode picker when `secretInputMode` is unset.
+   *
+   * This is true for onboarding/configure flows and false for direct
+   * `models auth` commands, which should keep a tighter, provider-owned prompt
+   * surface.
+   */
+  allowSecretRefPrompt?: boolean;
   isRemote: boolean;
   openUrl: (url: string) => Promise<void>;
   oauth: {
@@ -496,7 +513,7 @@ export type ProviderDiscoveryResult = ProviderCatalogResult;
  */
 export type ProviderPluginDiscovery = ProviderPluginCatalog;
 
-export type ProviderPluginWizardOnboarding = {
+export type ProviderPluginWizardSetup = {
   choiceId?: string;
   choiceLabel?: string;
   choiceHint?: string;
@@ -513,7 +530,7 @@ export type ProviderPluginWizardModelPicker = {
 };
 
 export type ProviderPluginWizard = {
-  onboarding?: ProviderPluginWizardOnboarding;
+  setup?: ProviderPluginWizardSetup;
   modelPicker?: ProviderPluginWizardModelPicker;
 };
 
@@ -532,7 +549,7 @@ export type ProviderPlugin = {
   docsPath?: string;
   aliases?: string[];
   /**
-   * Provider-related env vars shown in onboarding/search/help surfaces.
+   * Provider-related env vars shown in setup/search/help surfaces.
    *
    * Keep entries in preferred display order. This can include direct auth env
    * vars or setup inputs such as OAuth client id/secret vars.
@@ -859,7 +876,7 @@ export type OpenClawPluginCommandDefinition = {
   handler: PluginCommandHandler;
 };
 
-export type PluginInteractiveChannel = "telegram" | "discord";
+export type PluginInteractiveChannel = "telegram" | "discord" | "slack";
 
 export type PluginInteractiveButtons = Array<
   Array<{ text: string; callback_data: string; style?: "danger" | "success" | "primary" }>
@@ -944,6 +961,53 @@ export type PluginInteractiveDiscordHandlerContext = {
   getCurrentConversationBinding: () => Promise<PluginConversationBinding | null>;
 };
 
+export type PluginInteractiveSlackHandlerResult = {
+  handled?: boolean;
+} | void;
+
+export type PluginInteractiveSlackHandlerContext = {
+  channel: "slack";
+  accountId: string;
+  interactionId: string;
+  conversationId: string;
+  parentConversationId?: string;
+  senderId?: string;
+  senderUsername?: string;
+  threadId?: string;
+  auth: {
+    isAuthorizedSender: boolean;
+  };
+  interaction: {
+    kind: "button" | "select";
+    data: string;
+    namespace: string;
+    payload: string;
+    actionId: string;
+    blockId?: string;
+    messageTs?: string;
+    threadTs?: string;
+    value?: string;
+    selectedValues?: string[];
+    selectedLabels?: string[];
+    triggerId?: string;
+    responseUrl?: string;
+  };
+  respond: {
+    acknowledge: () => Promise<void>;
+    reply: (params: { text: string; responseType?: "ephemeral" | "in_channel" }) => Promise<void>;
+    followUp: (params: {
+      text: string;
+      responseType?: "ephemeral" | "in_channel";
+    }) => Promise<void>;
+    editMessage: (params: { text?: string; blocks?: unknown[] }) => Promise<void>;
+  };
+  requestConversationBinding: (
+    params?: PluginConversationBindingRequestParams,
+  ) => Promise<PluginConversationBindingRequestResult>;
+  detachConversationBinding: () => Promise<{ removed: boolean }>;
+  getCurrentConversationBinding: () => Promise<PluginConversationBinding | null>;
+};
+
 export type PluginInteractiveTelegramHandlerRegistration = {
   channel: "telegram";
   namespace: string;
@@ -960,9 +1024,18 @@ export type PluginInteractiveDiscordHandlerRegistration = {
   ) => Promise<PluginInteractiveDiscordHandlerResult> | PluginInteractiveDiscordHandlerResult;
 };
 
+export type PluginInteractiveSlackHandlerRegistration = {
+  channel: "slack";
+  namespace: string;
+  handler: (
+    ctx: PluginInteractiveSlackHandlerContext,
+  ) => Promise<PluginInteractiveSlackHandlerResult> | PluginInteractiveSlackHandlerResult;
+};
+
 export type PluginInteractiveHandlerRegistration =
   | PluginInteractiveTelegramHandlerRegistration
-  | PluginInteractiveDiscordHandlerRegistration;
+  | PluginInteractiveDiscordHandlerRegistration
+  | PluginInteractiveSlackHandlerRegistration;
 
 export type OpenClawPluginHttpRouteAuth = "gateway" | "plugin";
 export type OpenClawPluginHttpRouteMatch = "exact" | "prefix";

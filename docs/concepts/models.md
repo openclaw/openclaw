@@ -36,10 +36,10 @@ Related:
 
 ## Setup wizard (recommended)
 
-If you don’t want to hand-edit config, run the onboarding wizard:
+If you don’t want to hand-edit config, run the setup wizard:
 
 ```bash
-openclaw onboard
+openclaw setup --wizard
 ```
 
 It can set up model + auth for common providers, including **OpenAI Code (Codex)
