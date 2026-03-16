@@ -2,6 +2,7 @@ import fs from "node:fs";
 import { writeJsonAtomic } from "../infra/json-files.js";
 import { safeParseJson } from "../utils.js";
 
+/** Read JSON from disk and fall back cleanly when the file is missing or invalid. */
 export async function readJsonFileWithFallback<T>(
   filePath: string,
   fallback: T,
@@ -22,6 +23,7 @@ export async function readJsonFileWithFallback<T>(
   }
 }
 
+/** Write JSON with secure file permissions and atomic replacement semantics. */
 export async function writeJsonFileAtomically(filePath: string, value: unknown): Promise<void> {
   await writeJsonAtomic(filePath, value, {
     mode: 0o600,

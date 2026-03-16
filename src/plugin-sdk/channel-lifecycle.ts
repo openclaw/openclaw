@@ -11,6 +11,7 @@ type PassiveAccountLifecycleParams<Handle> = {
   onStop?: () => void | Promise<void>;
 };
 
+/** Bind a fixed account id into a status writer so lifecycle code can emit partial snapshots. */
 export function createAccountStatusSink(params: {
   accountId: string;
   setStatus: (next: ChannelAccountSnapshot) => void;
