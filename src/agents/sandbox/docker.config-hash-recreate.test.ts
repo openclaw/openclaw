@@ -91,6 +91,7 @@ function createSandboxConfig(
 ): SandboxConfig {
   return {
     mode: "all",
+    backend: "docker",
     scope: "shared",
     workspaceAccess,
     workspaceRoot: "~/.openclaw/sandboxes",
@@ -107,6 +108,12 @@ function createSandboxConfig(
       extraHosts: ["host.docker.internal:host-gateway"],
       binds: binds ?? ["/tmp/workspace:/workspace:rw"],
       dangerouslyAllowReservedContainerTargets: true,
+    },
+    ssh: {
+      command: "ssh",
+      workspaceRoot: "/tmp/openclaw-sandboxes",
+      strictHostKeyChecking: true,
+      updateHostKeys: true,
     },
     browser: {
       enabled: false,

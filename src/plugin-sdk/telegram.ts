@@ -48,13 +48,31 @@ export {
 export {
   looksLikeTelegramTargetId,
   normalizeTelegramMessagingTarget,
-} from "../channels/plugins/normalize/telegram.js";
+} from "../../extensions/telegram/src/normalize.js";
 export {
   parseTelegramReplyToMessageId,
   parseTelegramThreadId,
 } from "../../extensions/telegram/src/outbound-params.js";
-export { collectTelegramStatusIssues } from "../channels/plugins/status-issues/telegram.js";
-export { sendTelegramPayloadMessages } from "../channels/plugins/outbound/telegram.js";
+export {
+  isNumericTelegramUserId,
+  normalizeTelegramAllowFromEntry,
+} from "../../extensions/telegram/src/allow-from.js";
+export { fetchTelegramChatId } from "../../extensions/telegram/src/api-fetch.js";
+export { collectTelegramStatusIssues } from "../../extensions/telegram/src/status-issues.js";
+export { sendTelegramPayloadMessages } from "../../extensions/telegram/src/outbound-adapter.js";
+export {
+  buildBrowseProvidersButton,
+  buildModelsKeyboard,
+  buildProviderKeyboard,
+  calculateTotalPages,
+  getModelsPageSize,
+  type ProviderInfo,
+} from "../../extensions/telegram/src/model-buttons.js";
+export {
+  isTelegramExecApprovalApprover,
+  isTelegramExecApprovalClientEnabled,
+} from "../../extensions/telegram/src/exec-approvals.js";
+export type { StickerMetadata } from "../../extensions/telegram/src/bot/types.js";
 
 export {
   resolveAllowlistProviderRuntimeGroupPolicy,
@@ -64,10 +82,8 @@ export {
   resolveTelegramGroupRequireMention,
   resolveTelegramGroupToolPolicy,
 } from "../channels/plugins/group-mentions.js";
-export {
-  telegramSetupAdapter,
-  telegramSetupWizard,
-} from "../../extensions/telegram/src/setup-surface.js";
+export { telegramSetupWizard } from "../../extensions/telegram/src/setup-surface.js";
+export { telegramSetupAdapter } from "../../extensions/telegram/src/setup-core.js";
 export { TelegramConfigSchema } from "../config/zod-schema.providers-core.js";
 
 export { buildTokenChannelStatusSummary } from "./status-helpers.js";

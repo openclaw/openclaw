@@ -51,7 +51,7 @@ describe("probeGateway", () => {
     });
 
     expect(gatewayClientState.options?.scopes).toEqual(["operator.read"]);
-    expect(gatewayClientState.options?.deviceIdentity).toBeNull();
+    expect(gatewayClientState.options?.deviceIdentity).toBeUndefined();
     expect(gatewayClientState.requests).toEqual([
       "health",
       "status",
@@ -71,6 +71,15 @@ describe("probeGateway", () => {
     expect(gatewayClientState.options?.deviceIdentity).toBeUndefined();
   });
 
+  it("keeps device identity disabled for unauthenticated loopback probes", async () => {
+    await probeGateway({
+      url: "ws://127.0.0.1:18789",
+      timeoutMs: 1_000,
+    });
+
+    expect(gatewayClientState.options?.deviceIdentity).toBeNull();
+  });
+
   it("skips detail RPCs for lightweight reachability probes", async () => {
     const result = await probeGateway({
       url: "ws://127.0.0.1:18789",
@@ -80,5 +89,19 @@ describe("probeGateway", () => {
 
     expect(result.ok).toBe(true);
     expect(gatewayClientState.requests).toEqual([]);
+  });
+
+  it("fetches only presence for presence-only probes", async () => {
+    const result = await probeGateway({
+      url: "ws://127.0.0.1:18789",
+      timeoutMs: 1_000,
+      detailLevel: "presence",
+    });
+
+    expect(result.ok).toBe(true);
+    expect(gatewayClientState.requests).toEqual(["system-presence"]);
+    expect(result.health).toBeNull();
+    expect(result.status).toBeNull();
+    expect(result.configSnapshot).toBeNull();
   });
 });

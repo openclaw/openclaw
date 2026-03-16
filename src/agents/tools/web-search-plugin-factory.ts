@@ -2,6 +2,10 @@ import type { OpenClawConfig } from "../../config/config.js";
 import type { WebSearchProviderPlugin } from "../../plugins/types.js";
 import { createWebSearchTool as createLegacyWebSearchTool } from "./web-search-core.js";
 
+type ConfiguredWebSearchProvider = NonNullable<
+  NonNullable<NonNullable<OpenClawConfig["tools"]>["web"]>["search"]
+>["provider"];
+
 function cloneWithDescriptors<T extends object>(value: T | undefined): T {
   const next = Object.create(Object.getPrototypeOf(value ?? {})) as T;
   if (value) {
@@ -10,7 +14,10 @@ function cloneWithDescriptors<T extends object>(value: T | undefined): T {
   return next;
 }
 
-function withForcedProvider(config: OpenClawConfig | undefined, provider: string): OpenClawConfig {
+function withForcedProvider(
+  config: OpenClawConfig | undefined,
+  provider: ConfiguredWebSearchProvider,
+): OpenClawConfig {
   const next = cloneWithDescriptors(config ?? {});
   const tools = cloneWithDescriptors(next.tools ?? {});
   const web = cloneWithDescriptors(tools.web ?? {});
@@ -25,7 +32,9 @@ function withForcedProvider(config: OpenClawConfig | undefined, provider: string
 }
 
 export function createPluginBackedWebSearchProvider(
-  provider: Omit<WebSearchProviderPlugin, "createTool">,
+  provider: Omit<WebSearchProviderPlugin, "createTool"> & {
+    id: ConfiguredWebSearchProvider;
+  },
 ): WebSearchProviderPlugin {
   return {
     ...provider,

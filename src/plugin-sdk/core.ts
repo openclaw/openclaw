@@ -1,11 +1,18 @@
 export type {
   AnyAgentTool,
   OpenClawPluginApi,
+  OpenClawPluginConfigSchema,
   ProviderDiscoveryContext,
   ProviderCatalogContext,
   ProviderCatalogResult,
+  ProviderAugmentModelCatalogContext,
+  ProviderBuiltInModelSuppressionContext,
+  ProviderBuiltInModelSuppressionResult,
+  ProviderBuildMissingAuthMessageContext,
   ProviderCacheTtlEligibilityContext,
+  ProviderDefaultThinkingPolicyContext,
   ProviderFetchUsageSnapshotContext,
+  ProviderModernModelPolicyContext,
   ProviderPreparedRuntimeAuth,
   ProviderResolvedUsageAuth,
   ProviderPrepareExtraParamsContext,
@@ -15,12 +22,36 @@ export type {
   ProviderResolveDynamicModelContext,
   ProviderNormalizeResolvedModelContext,
   ProviderRuntimeModel,
+  ProviderThinkingPolicyContext,
   ProviderWrapStreamFnContext,
   OpenClawPluginService,
   ProviderAuthContext,
+  ProviderAuthDoctorHintContext,
   ProviderAuthMethodNonInteractiveContext,
+  ProviderAuthMethod,
   ProviderAuthResult,
 } from "../plugins/types.js";
+export type {
+  CreateSandboxBackendParams,
+  RemoteShellSandboxHandle,
+  RunSshSandboxCommandParams,
+  SandboxBackendCommandParams,
+  SandboxBackendCommandResult,
+  SandboxBackendExecSpec,
+  SandboxBackendFactory,
+  SandboxFsBridge,
+  SandboxFsStat,
+  SandboxBackendHandle,
+  SandboxBackendId,
+  SandboxBackendManager,
+  SandboxBackendRegistration,
+  SandboxBackendRuntimeInfo,
+  SandboxContext,
+  SandboxResolvedPath,
+  SandboxSshConfig,
+  SshSandboxSession,
+  SshSandboxSettings,
+} from "../agents/sandbox.js";
 export type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
 export type { PluginRuntime } from "../plugins/runtime/types.js";
 export type { OpenClawConfig } from "../config/config.js";
@@ -32,6 +63,22 @@ export type {
 } from "../infra/provider-usage.types.js";
 
 export { emptyPluginConfigSchema } from "../plugins/config-schema.js";
+export {
+  buildExecRemoteCommand,
+  buildRemoteCommand,
+  buildSshSandboxArgv,
+  createRemoteShellSandboxFsBridge,
+  createSshSandboxSessionFromConfigText,
+  createSshSandboxSessionFromSettings,
+  disposeSshSandboxSession,
+  getSandboxBackendFactory,
+  getSandboxBackendManager,
+  registerSandboxBackend,
+  runSshSandboxCommand,
+  shellEscape,
+  uploadDirectoryToSshTarget,
+  requireSandboxBackendFactory,
+} from "../agents/sandbox.js";
 export { buildOauthProviderAuthResult } from "./provider-auth-result.js";
 export {
   applyProviderDefaultModel,
@@ -91,3 +138,11 @@ export type {
   TailscaleStatusCommandResult,
   TailscaleStatusCommandRunner,
 } from "../shared/tailscale-status.js";
+export {
+  buildAgentSessionKey,
+  type RoutePeer,
+  type RoutePeerKind,
+} from "../routing/resolve-route.js";
+export { resolveThreadSessionKeys } from "../routing/session-key.js";
+export { runPassiveAccountLifecycle } from "./channel-lifecycle.js";
+export { createLoggerBackedRuntime } from "./runtime.js";

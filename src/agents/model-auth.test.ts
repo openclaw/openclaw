@@ -1,5 +1,6 @@
 import { streamSimpleOpenAICompletions, type Model } from "@mariozechner/pi-ai";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { withFetchPreconnect } from "../test-utils/fetch-mock.js";
 import type { AuthProfileStore } from "./auth-profiles.js";
 import { CUSTOM_LOCAL_AUTH_MARKER, NON_ENV_SECRETREF_MARKER } from "./model-auth-markers.js";
 import {
@@ -503,16 +504,18 @@ describe("applyLocalNoAuthHeaderOverride", () => {
     const requestSeen = new Promise<void>((resolve) => {
       resolveRequest = resolve;
     });
-    globalThis.fetch = vi.fn(async (_input, init) => {
-      const headers = new Headers(init?.headers);
-      capturedAuthorization = headers.get("Authorization");
-      capturedXTest = headers.get("X-Test");
-      resolveRequest?.();
-      return new Response(JSON.stringify({ error: { message: "unauthorized" } }), {
-        status: 401,
-        headers: { "content-type": "application/json" },
-      });
-    }) as typeof fetch;
+    globalThis.fetch = withFetchPreconnect(
+      vi.fn(async (_input, init) => {
+        const headers = new Headers(init?.headers);
+        capturedAuthorization = headers.get("Authorization");
+        capturedXTest = headers.get("X-Test");
+        resolveRequest?.();
+        return new Response(JSON.stringify({ error: { message: "unauthorized" } }), {
+          status: 401,
+          headers: { "content-type": "application/json" },
+        });
+      }),
+    );
 
     const model = applyLocalNoAuthHeaderOverride(
       {

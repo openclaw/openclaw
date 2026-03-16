@@ -9,12 +9,13 @@ import type {
   ApiKeyCredential,
   AuthProfileCredential,
   OAuthCredential,
+  AuthProfileStore,
 } from "../agents/auth-profiles/types.js";
+import type { ModelCatalogEntry } from "../agents/model-catalog.js";
 import type { ProviderCapabilities } from "../agents/provider-capabilities.js";
 import type { AnyAgentTool } from "../agents/tools/common.js";
 import type { ThinkLevel } from "../auto-reply/thinking.js";
 import type { ReplyPayload } from "../auto-reply/types.js";
-import type { ChannelDock } from "../channels/dock.js";
 import type { ChannelId, ChannelPlugin } from "../channels/plugins/types.js";
 import type { createVpsAwareOAuthHandlers } from "../commands/oauth-flow.js";
 import type { OnboardOptions } from "../commands/onboard-types.js";
@@ -117,6 +118,32 @@ export type ProviderAuthContext = {
   workspaceDir?: string;
   prompter: WizardPrompter;
   runtime: RuntimeEnv;
+  /**
+   * Optional onboarding CLI options that triggered this auth flow.
+   *
+   * Present for setup/configure/auth-choice flows so provider methods can
+   * honor preseeded flags like `--openai-api-key` or generic
+   * `--token/--token-provider` pairs. Direct `models auth login` usually
+   * leaves this undefined.
+   */
+  opts?: Partial<OnboardOptions>;
+  /**
+   * Onboarding secret persistence preference.
+   *
+   * Interactive wizard flows set this when the caller explicitly requested
+   * plaintext or env/file/exec ref storage. Ad-hoc `models auth login` flows
+   * usually leave it undefined.
+   */
+  secretInputMode?: OnboardOptions["secretInputMode"];
+  /**
+   * Whether the provider auth flow should offer the onboarding secret-storage
+   * mode picker when `secretInputMode` is unset.
+   *
+   * This is true for onboarding/configure flows and false for direct
+   * `models auth` commands, which should keep a tighter, provider-owned prompt
+   * surface.
+   */
+  allowSecretRefPrompt?: boolean;
   isRemote: boolean;
   openUrl: (url: string) => Promise<void>;
   oauth: {
@@ -168,6 +195,14 @@ export type ProviderAuthMethod = {
   label: string;
   hint?: string;
   kind: ProviderAuthKind;
+  /**
+   * Optional wizard/onboarding metadata for this specific auth method.
+   *
+   * Use this when one provider exposes multiple setup entries (for example API
+   * key + OAuth, or region-specific login flows). OpenClaw uses this to expose
+   * method-specific auth choices while keeping the provider id stable.
+   */
+  wizard?: ProviderPluginWizardSetup;
   run: (ctx: ProviderAuthContext) => Promise<ProviderAuthResult>;
   runNonInteractive?: (
     ctx: ProviderAuthMethodNonInteractiveContext,
@@ -336,8 +371,6 @@ export type ProviderResolvedUsageAuth = {
  * This hook runs after `resolveUsageAuth` succeeds. Core still owns summary
  * fan-out, timeout wrapping, filtering, and formatting; the provider plugin
  * owns the provider-specific HTTP request + response normalization.
- *
- * Return `null`/`undefined` to fall back to legacy core fetchers.
  */
 export type ProviderFetchUsageSnapshotContext = {
   config: OpenClawConfig;
@@ -349,6 +382,20 @@ export type ProviderFetchUsageSnapshotContext = {
   accountId?: string;
   timeoutMs: number;
   fetchFn: typeof fetch;
+};
+
+/**
+ * Provider-owned auth-doctor hint input.
+ *
+ * Called when OAuth refresh fails and OpenClaw wants a provider-specific repair
+ * hint to append to the generic re-auth message. Use this for legacy profile-id
+ * migrations or other provider-owned auth-store cleanup guidance.
+ */
+export type ProviderAuthDoctorHintContext = {
+  config?: OpenClawConfig;
+  store: AuthProfileStore;
+  provider: string;
+  profileId?: string;
 };
 
 /**
@@ -391,6 +438,93 @@ export type ProviderCacheTtlEligibilityContext = {
 };
 
 /**
+ * Provider-owned missing-auth message override.
+ *
+ * Runs only after OpenClaw exhausts normal env/profile/config auth resolution
+ * for the requested provider. Return a custom message to replace the generic
+ * "No API key found" error.
+ */
+export type ProviderBuildMissingAuthMessageContext = {
+  config?: OpenClawConfig;
+  agentDir?: string;
+  workspaceDir?: string;
+  env: NodeJS.ProcessEnv;
+  provider: string;
+  listProfileIds: (providerId: string) => string[];
+};
+
+/**
+ * Built-in model suppression hook.
+ *
+ * Use this when a provider/plugin needs to hide stale upstream catalog rows or
+ * replace them with a vendor-specific hint. This hook is consulted by model
+ * resolution, model listing, and catalog loading.
+ */
+export type ProviderBuiltInModelSuppressionContext = {
+  config?: OpenClawConfig;
+  agentDir?: string;
+  workspaceDir?: string;
+  env: NodeJS.ProcessEnv;
+  provider: string;
+  modelId: string;
+};
+
+export type ProviderBuiltInModelSuppressionResult = {
+  suppress: boolean;
+  errorMessage?: string;
+};
+
+/**
+ * Provider-owned thinking policy input.
+ *
+ * Used by shared `/think`, ACP controls, and directive parsing to ask a
+ * provider whether a model supports special reasoning UX such as xhigh or a
+ * binary on/off toggle.
+ */
+export type ProviderThinkingPolicyContext = {
+  provider: string;
+  modelId: string;
+};
+
+/**
+ * Provider-owned default thinking policy input.
+ *
+ * `reasoning` is the merged catalog hint for the selected model when one is
+ * available. Providers can use it to keep "reasoning model => low" behavior
+ * without re-reading the catalog themselves.
+ */
+export type ProviderDefaultThinkingPolicyContext = ProviderThinkingPolicyContext & {
+  reasoning?: boolean;
+};
+
+/**
+ * Provider-owned "modern model" policy input.
+ *
+ * Live smoke/model-profile selection uses this to keep provider-specific
+ * inclusion/exclusion rules out of core.
+ */
+export type ProviderModernModelPolicyContext = {
+  provider: string;
+  modelId: string;
+};
+
+/**
+ * Final catalog augmentation hook.
+ *
+ * Runs after OpenClaw loads the discovered model catalog and merges configured
+ * opt-in providers. Use this for forward-compat rows or vendor-owned synthetic
+ * entries that should appear in `models list` and model pickers even when the
+ * upstream registry has not caught up yet.
+ */
+export type ProviderAugmentModelCatalogContext = {
+  config?: OpenClawConfig;
+  agentDir?: string;
+  workspaceDir?: string;
+  env: NodeJS.ProcessEnv;
+  entries: ModelCatalogEntry[];
+};
+
+/**
  * @deprecated Use ProviderCatalogOrder.
  */
 export type ProviderDiscoveryOrder = ProviderCatalogOrder;
@@ -410,7 +544,7 @@ export type ProviderDiscoveryResult = ProviderCatalogResult;
  */
 export type ProviderPluginDiscovery = ProviderPluginCatalog;
 
-export type ProviderPluginWizardOnboarding = {
+export type ProviderPluginWizardSetup = {
   choiceId?: string;
   choiceLabel?: string;
   choiceHint?: string;
@@ -418,6 +552,18 @@ export type ProviderPluginWizardOnboarding = {
   groupLabel?: string;
   groupHint?: string;
   methodId?: string;
+  /**
+   * Optional model-allowlist prompt policy applied after this auth choice is
+   * selected in configure/onboarding flows.
+   *
+   * Keep this UI-facing and static. Provider logic that needs runtime state
+   * should stay in `run`/`runNonInteractive`.
+   */
+  modelAllowlist?: {
+    allowedKeys?: string[];
+    initialSelections?: string[];
+    message?: string;
+  };
 };
 
 export type ProviderPluginWizardModelPicker = {
@@ -427,7 +573,7 @@ export type ProviderPluginWizardModelPicker = {
 };
 
 export type ProviderPluginWizard = {
-  onboarding?: ProviderPluginWizardOnboarding;
+  setup?: ProviderPluginWizardSetup;
   modelPicker?: ProviderPluginWizardModelPicker;
 };
 
@@ -445,6 +591,12 @@ export type ProviderPlugin = {
   label: string;
   docsPath?: string;
   aliases?: string[];
+  /**
+   * Provider-related env vars shown in setup/search/help surfaces.
+   *
+   * Keep entries in preferred display order. This can include direct auth env
+   * vars or setup inputs such as OAuth client id/secret vars.
+   */
   envVars?: string[];
   auth: ProviderAuthMethod[];
   /**
@@ -530,10 +682,9 @@ export type ProviderPlugin = {
   /**
    * Usage/billing auth resolution hook.
    *
-   * Called by provider-usage surfaces (`/usage`, status snapshots, reporting)
-   * before OpenClaw falls back to legacy core auth resolution. Use this when a
-   * provider's usage endpoint needs provider-owned token extraction, blob
-   * parsing, or alias handling.
+   * Called by provider-usage surfaces (`/usage`, status snapshots, reporting).
+   * Use this when a provider's usage endpoint needs provider-owned token
+   * extraction, blob parsing, or alias handling.
    */
   resolveUsageAuth?: (
     ctx: ProviderResolveUsageAuthContext,
@@ -560,9 +711,106 @@ export type ProviderPlugin = {
    * only a subset of upstream models.
    */
   isCacheTtlEligible?: (ctx: ProviderCacheTtlEligibilityContext) => boolean | undefined;
+  /**
+   * Provider-owned missing-auth message override.
+   *
+   * Return a custom message when the provider wants a more specific recovery
+   * hint than OpenClaw's generic auth-store guidance.
+   */
+  buildMissingAuthMessage?: (
+    ctx: ProviderBuildMissingAuthMessageContext,
+  ) => string | null | undefined;
+  /**
+   * Provider-owned built-in model suppression.
+   *
+   * Return `{ suppress: true }` to hide a stale upstream row. Include
+   * `errorMessage` when OpenClaw should surface a provider-specific hint for
+   * direct model resolution failures.
+   */
+  suppressBuiltInModel?: (
+    ctx: ProviderBuiltInModelSuppressionContext,
+  ) => ProviderBuiltInModelSuppressionResult | null | undefined;
+  /**
+   * Provider-owned final catalog augmentation.
+   *
+   * Return extra rows to append to the final catalog after discovery/config
+   * merging. OpenClaw deduplicates by `provider/id`, so plugins only need to
+   * describe the desired supplemental rows.
+   */
+  augmentModelCatalog?: (
+    ctx: ProviderAugmentModelCatalogContext,
+  ) =>
+    | Array<ModelCatalogEntry>
+    | ReadonlyArray<ModelCatalogEntry>
+    | Promise<Array<ModelCatalogEntry> | ReadonlyArray<ModelCatalogEntry> | null | undefined>
+    | null
+    | undefined;
+  /**
+   * Provider-owned binary thinking toggle.
+   *
+   * Return true when the provider exposes a coarse on/off reasoning control
+   * instead of the normal multi-level ladder shown by `/think`.
+   */
+  isBinaryThinking?: (ctx: ProviderThinkingPolicyContext) => boolean | undefined;
+  /**
+   * Provider-owned xhigh reasoning support.
+   *
+   * Return true only for models that should expose the `xhigh` thinking level.
+   */
+  supportsXHighThinking?: (ctx: ProviderThinkingPolicyContext) => boolean | undefined;
+  /**
+   * Provider-owned default thinking level.
+   *
+   * Use this to keep model-family defaults (for example Claude 4.6 =>
+   * adaptive) out of core command logic.
+   */
+  resolveDefaultThinkingLevel?: (
+    ctx: ProviderDefaultThinkingPolicyContext,
+  ) => "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "adaptive" | null | undefined;
+  /**
+   * Provider-owned "modern model" matcher used by live profile/smoke filters.
+   *
+   * Return true when the given provider/model ref should be treated as a
+   * preferred modern model candidate.
+   */
+  isModernModelRef?: (ctx: ProviderModernModelPolicyContext) => boolean | undefined;
   wizard?: ProviderPluginWizard;
+  /**
+   * Provider-owned auth-profile API-key formatter.
+   *
+   * OpenClaw uses this when a stored auth profile is already valid and needs to
+   * be converted into the runtime `apiKey` string expected by the provider. Use
+   * this for providers whose auth profile stores extra metadata alongside the
+   * bearer token (for example Gemini CLI's `{ token, projectId }` payload).
+   */
   formatApiKey?: (cred: AuthProfileCredential) => string;
+  /**
+   * Legacy auth-profile ids that should be retired by `openclaw doctor`.
+   *
+   * Use this when a provider plugin replaces an older core-managed profile id
+   * and wants cleanup/migration messaging to live with the provider instead of
+   * in hardcoded doctor tables.
+   */
+  deprecatedProfileIds?: string[];
+  /**
+   * Provider-owned OAuth refresh.
+   *
+   * OpenClaw calls this before falling back to the shared `pi-ai` OAuth
+   * refreshers. Use it when the provider has a custom refresh endpoint, or when
+   * the provider needs custom refresh-failure behavior that should stay out of
+   * core auth-profile code.
+   */
   refreshOAuth?: (cred: OAuthCredential) => Promise<OAuthCredential>;
+  /**
+   * Provider-owned auth-doctor hint.
+   *
+   * Return a multiline repair hint when OAuth refresh fails and the provider
+   * wants to steer users toward a specific auth-profile migration or recovery
+   * path. Return nothing to keep OpenClaw's generic error text.
+   */
+  buildAuthDoctorHint?: (
+    ctx: ProviderAuthDoctorHintContext,
+  ) => string | Promise<string | null | undefined> | null | undefined;
   onModelSelected?: (ctx: ProviderModelSelectedContext) => Promise<void>;
 };
 
@@ -705,7 +953,7 @@ export type OpenClawPluginCommandDefinition = {
   handler: PluginCommandHandler;
 };
 
-export type PluginInteractiveChannel = "telegram" | "discord";
+export type PluginInteractiveChannel = "telegram" | "discord" | "slack";
 
 export type PluginInteractiveButtons = Array<
   Array<{ text: string; callback_data: string; style?: "danger" | "success" | "primary" }>
@@ -790,6 +1038,53 @@ export type PluginInteractiveDiscordHandlerContext = {
   getCurrentConversationBinding: () => Promise<PluginConversationBinding | null>;
 };
 
+export type PluginInteractiveSlackHandlerResult = {
+  handled?: boolean;
+} | void;
+
+export type PluginInteractiveSlackHandlerContext = {
+  channel: "slack";
+  accountId: string;
+  interactionId: string;
+  conversationId: string;
+  parentConversationId?: string;
+  senderId?: string;
+  senderUsername?: string;
+  threadId?: string;
+  auth: {
+    isAuthorizedSender: boolean;
+  };
+  interaction: {
+    kind: "button" | "select";
+    data: string;
+    namespace: string;
+    payload: string;
+    actionId: string;
+    blockId?: string;
+    messageTs?: string;
+    threadTs?: string;
+    value?: string;
+    selectedValues?: string[];
+    selectedLabels?: string[];
+    triggerId?: string;
+    responseUrl?: string;
+  };
+  respond: {
+    acknowledge: () => Promise<void>;
+    reply: (params: { text: string; responseType?: "ephemeral" | "in_channel" }) => Promise<void>;
+    followUp: (params: {
+      text: string;
+      responseType?: "ephemeral" | "in_channel";
+    }) => Promise<void>;
+    editMessage: (params: { text?: string; blocks?: unknown[] }) => Promise<void>;
+  };
+  requestConversationBinding: (
+    params?: PluginConversationBindingRequestParams,
+  ) => Promise<PluginConversationBindingRequestResult>;
+  detachConversationBinding: () => Promise<{ removed: boolean }>;
+  getCurrentConversationBinding: () => Promise<PluginConversationBinding | null>;
+};
+
 export type PluginInteractiveTelegramHandlerRegistration = {
   channel: "telegram";
   namespace: string;
@@ -806,9 +1101,18 @@ export type PluginInteractiveDiscordHandlerRegistration = {
   ) => Promise<PluginInteractiveDiscordHandlerResult> | PluginInteractiveDiscordHandlerResult;
 };
 
+export type PluginInteractiveSlackHandlerRegistration = {
+  channel: "slack";
+  namespace: string;
+  handler: (
+    ctx: PluginInteractiveSlackHandlerContext,
+  ) => Promise<PluginInteractiveSlackHandlerResult> | PluginInteractiveSlackHandlerResult;
+};
+
 export type PluginInteractiveHandlerRegistration =
   | PluginInteractiveTelegramHandlerRegistration
-  | PluginInteractiveDiscordHandlerRegistration;
+  | PluginInteractiveDiscordHandlerRegistration
+  | PluginInteractiveSlackHandlerRegistration;
 
 export type OpenClawPluginHttpRouteAuth = "gateway" | "plugin";
 export type OpenClawPluginHttpRouteMatch = "exact" | "prefix";
@@ -850,7 +1154,6 @@ export type OpenClawPluginService = {
 
 export type OpenClawPluginChannelRegistration = {
   plugin: ChannelPlugin;
-  dock?: ChannelDock;
 };
 
 export type OpenClawPluginDefinition = {
@@ -868,7 +1171,7 @@ export type OpenClawPluginModule =
   | OpenClawPluginDefinition
   | ((api: OpenClawPluginApi) => void | Promise<void>);
 
-export type PluginRegistrationMode = "full" | "setup-only";
+export type PluginRegistrationMode = "full" | "setup-only" | "setup-runtime";
 
 export type OpenClawPluginApi = {
   id: string;
