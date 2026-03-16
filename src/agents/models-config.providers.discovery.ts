@@ -18,8 +18,15 @@ import {
   resolveOllamaApiBase,
   type OllamaTagsResponse,
 } from "./ollama-models.js";
+import {
+  SELF_HOSTED_DEFAULT_CONTEXT_WINDOW,
+  SELF_HOSTED_DEFAULT_COST,
+  SELF_HOSTED_DEFAULT_MAX_TOKENS,
+} from "./self-hosted-provider-defaults.js";
+import { SGLANG_DEFAULT_BASE_URL, SGLANG_PROVIDER_LABEL } from "./sglang-defaults.js";
 import { discoverVeniceModels, VENICE_BASE_URL } from "./venice-models.js";
 import { discoverVercelAiGatewayModels, VERCEL_AI_GATEWAY_BASE_URL } from "./vercel-ai-gateway.js";
+import { VLLM_DEFAULT_BASE_URL, VLLM_PROVIDER_LABEL } from "./vllm-defaults.js";
 
 export { resolveOllamaApiBase } from "./ollama-models.js";
 
@@ -30,19 +37,6 @@ const log = createSubsystemLogger("agents/model-providers");
 
 const OLLAMA_SHOW_CONCURRENCY = 8;
 const OLLAMA_SHOW_MAX_MODELS = 200;
-
-const OPENAI_COMPAT_LOCAL_DEFAULT_CONTEXT_WINDOW = 128000;
-const OPENAI_COMPAT_LOCAL_DEFAULT_MAX_TOKENS = 8192;
-const OPENAI_COMPAT_LOCAL_DEFAULT_COST = {
-  input: 0,
-  output: 0,
-  cacheRead: 0,
-  cacheWrite: 0,
-};
-
-const SGLANG_BASE_URL = "http://127.0.0.1:30000/v1";
-
-const VLLM_BASE_URL = "http://127.0.0.1:8000/v1";
 
 type OpenAICompatModelsResponse = {
   data?: Array<{
@@ -140,9 +134,9 @@ async function discoverOpenAICompatibleLocalModels(params: {
           name: modelId,
           reasoning: isReasoningModelHeuristic(modelId),
           input: ["text"],
-          cost: OPENAI_COMPAT_LOCAL_DEFAULT_COST,
-          contextWindow: params.contextWindow ?? OPENAI_COMPAT_LOCAL_DEFAULT_CONTEXT_WINDOW,
-          maxTokens: params.maxTokens ?? OPENAI_COMPAT_LOCAL_DEFAULT_MAX_TOKENS,
+          cost: SELF_HOSTED_DEFAULT_COST,
+          contextWindow: params.contextWindow ?? SELF_HOSTED_DEFAULT_CONTEXT_WINDOW,
+          maxTokens: params.maxTokens ?? SELF_HOSTED_DEFAULT_MAX_TOKENS,
         } satisfies ModelDefinitionConfig;
       });
   } catch (error) {
@@ -197,11 +191,11 @@ export async function buildVllmProvider(params?: {
   baseUrl?: string;
   apiKey?: string;
 }): Promise<ProviderConfig> {
-  const baseUrl = (params?.baseUrl?.trim() || VLLM_BASE_URL).replace(/\/+$/, "");
+  const baseUrl = (params?.baseUrl?.trim() || VLLM_DEFAULT_BASE_URL).replace(/\/+$/, "");
   const models = await discoverOpenAICompatibleLocalModels({
     baseUrl,
     apiKey: params?.apiKey,
-    label: "vLLM",
+    label: VLLM_PROVIDER_LABEL,
   });
   return {
     baseUrl,
@@ -214,11 +208,11 @@ export async function buildSglangProvider(params?: {
   baseUrl?: string;
   apiKey?: string;
 }): Promise<ProviderConfig> {
-  const baseUrl = (params?.baseUrl?.trim() || SGLANG_BASE_URL).replace(/\/+$/, "");
+  const baseUrl = (params?.baseUrl?.trim() || SGLANG_DEFAULT_BASE_URL).replace(/\/+$/, "");
   const models = await discoverOpenAICompatibleLocalModels({
     baseUrl,
     apiKey: params?.apiKey,
-    label: "SGLang",
+    label: SGLANG_PROVIDER_LABEL,
   });
   return {
     baseUrl,

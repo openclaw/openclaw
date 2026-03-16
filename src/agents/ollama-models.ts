@@ -1,7 +1,6 @@
 import type { ModelDefinitionConfig } from "../config/types.models.js";
-import { OLLAMA_NATIVE_BASE_URL } from "./ollama-stream.js";
+import { OLLAMA_DEFAULT_BASE_URL } from "./ollama-defaults.js";
 
-export const OLLAMA_DEFAULT_BASE_URL = OLLAMA_NATIVE_BASE_URL;
 export const OLLAMA_DEFAULT_CONTEXT_WINDOW = 128000;
 export const OLLAMA_DEFAULT_MAX_TOKENS = 8192;
 export const OLLAMA_DEFAULT_COST = {
