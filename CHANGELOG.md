@@ -103,6 +103,7 @@ Docs: https://docs.openclaw.ai
 - Control UI/model switching: preserve the selected provider prefix when switching models from the chat dropdown, so multi-provider setups no longer send `anthropic/gpt-5.2`-style mismatches when the user picked `openai/gpt-5.2`. (#47581) Thanks @chrishham.
 - Control UI/storage: scope persisted settings keys by gateway base path, with migration from the legacy shared key, so multiple gateways under one domain stop overwriting each other's dashboard preferences. (#47932) Thanks @bobBot-claw.
 - Agents/usage tracking: stop forcing `supportsUsageInStreaming: false` on non-native OpenAI-completions providers so compatible backends report token usage and cost again instead of showing all zeros. (#46500) Fixes #46142. Thanks @ademczuk.
+- Control UI/overview: keep the language dropdown aligned with the persisted locale during dashboard startup so refreshing the page does not fall back to English before locale hydration completes. (#48019) Thanks @git-jxj.
 
 ## 2026.3.13
 
