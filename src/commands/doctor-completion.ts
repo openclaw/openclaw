@@ -56,8 +56,6 @@ async function generateCompletionCache(): Promise<boolean> {
     console.error("Completion cache generation failed:", error);
     return false;
   }
-
-  return result.status === 0;
 }
 
 export type ShellCompletionStatus = {
