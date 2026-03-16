@@ -10,10 +10,10 @@ import {
 } from "../../../src/infra/outbound/send-deps.js";
 import { resolveInteractiveTextFallback } from "../../../src/interactive/payload.js";
 import type { TelegramInlineButtons } from "./button-types.js";
+import { buildTelegramInteractiveButtons } from "./button-types.js";
 import { markdownToTelegramHtmlChunks } from "./format.js";
 import { parseTelegramReplyToMessageId, parseTelegramThreadId } from "./outbound-params.js";
 import { sendMessageTelegram } from "./send.js";
-import { buildTelegramInteractiveButtons } from "./shared-interactive.js";
 
 type TelegramSendFn = typeof sendMessageTelegram;
 type TelegramSendOpts = Parameters<TelegramSendFn>[2];

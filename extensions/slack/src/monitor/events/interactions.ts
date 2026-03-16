@@ -1,7 +1,13 @@
 import type { SlackActionMiddlewareArgs } from "@slack/bolt";
 import type { Block, KnownBlock } from "@slack/web-api";
 import { enqueueSystemEvent } from "../../../../../src/infra/system-events.js";
+import {
+  buildPluginBindingResolvedText,
+  parsePluginBindingApprovalCustomId,
+  resolvePluginConversationBindingApproval,
+} from "../../../../../src/plugins/conversation-binding.js";
 import { dispatchPluginInteractiveHandler } from "../../../../../src/plugins/interactive.js";
+import { SLACK_REPLY_BUTTON_ACTION_ID, SLACK_REPLY_SELECT_ACTION_ID } from "../../blocks-render.js";
 import { truncateSlackText } from "../../truncate.js";
 import { authorizeSlackSystemEventSender } from "../auth.js";
 import type { SlackMonitorContext } from "../context.js";
@@ -430,6 +436,9 @@ function buildSlackPluginInteractionData(params: {
     params.summary.value?.trim() ||
     params.summary.selectedValues?.map((value) => value.trim()).find(Boolean) ||
     "";
+  if (actionId === SLACK_REPLY_BUTTON_ACTION_ID || actionId === SLACK_REPLY_SELECT_ACTION_ID) {
+    return payload || null;
+  }
   return payload ? `${actionId}:${payload}` : actionId;
 }
 
@@ -559,20 +568,52 @@ export function registerSlackInteractionEvents(params: { ctx: SlackMonitorContex
         summary: actionSummary,
       });
       if (pluginInteractionData) {
+        const pluginInteractionId = buildSlackPluginInteractionId({
+          userId,
+          channelId,
+          messageTs,
+          actionId,
+          summary: actionSummary,
+        });
+        const pluginBindingApproval = parsePluginBindingApprovalCustomId(pluginInteractionData);
+        if (pluginBindingApproval) {
+          const resolved = await resolvePluginConversationBindingApproval({
+            approvalId: pluginBindingApproval.approvalId,
+            decision: pluginBindingApproval.decision,
+            senderId: userId,
+          });
+          if (channelId && messageTs) {
+            try {
+              await ctx.app.client.chat.update({
+                channel: channelId,
+                ts: messageTs,
+                text: typedBody.message?.text ?? "",
+                blocks: [],
+              });
+            } catch {
+              // Best-effort cleanup only; continue with follow-up feedback.
+            }
+          }
+          if (respond) {
+            try {
+              await respond({
+                text: buildPluginBindingResolvedText(resolved),
+                response_type: "ephemeral",
+              });
+            } catch {
+              // Best-effort feedback only.
+            }
+          }
+          return;
+        }
         const pluginResult = await dispatchPluginInteractiveHandler({
           channel: "slack",
           data: pluginInteractionData,
-          interactionId: buildSlackPluginInteractionId({
-            userId,
-            channelId,
-            messageTs,
-            actionId,
-            summary: actionSummary,
-          }),
+          interactionId: pluginInteractionId,
           ctx: {
             channel: "slack",
             accountId: ctx.accountId,
-            interactionId: pluginInteractionData,
+            interactionId: pluginInteractionId,
             conversationId: channelId ?? "",
             parentConversationId: undefined,
             threadId: threadTs,
