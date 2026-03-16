@@ -400,9 +400,9 @@ export function createExecTool(
       }
 
       // Per-invocation env only: expose current agent sessionKey to skill scripts without touching global process.env.
-      // This allows tools to discover the openclaw sessionKey via OPENCLAW_SESSION_KEY.
+      // This allows tools to discover the openclaw sessionKey via OPENCLAW_SESSION_KEY, but preserves any explicit caller override.
       const injectedSessionKey = defaults?.sessionKey?.trim();
-      if (injectedSessionKey) {
+      if (injectedSessionKey && !env.OPENCLAW_SESSION_KEY) {
         env.OPENCLAW_SESSION_KEY = injectedSessionKey;
       }
 
