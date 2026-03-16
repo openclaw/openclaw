@@ -64,4 +64,47 @@ describe("check-sre-skill-guardrails", () => {
     expect(issues.map((issue) => issue.id)).toContain("retract-after-contradiction");
     expect(issues.map((issue) => issue.id)).toContain("single-vault-provenance-gate");
   });
+
+  it("requires public-surface comparisons in resolver order", () => {
+    const issues = validateMorphoSreSkillText(`
+## Hard Rules
+- Hard preflight before diagnosis:
+  - \`command -v kubectl aws jq git gh\`
+- Shell portability:
+  - use \`bash -lc\`
+- No root-cause ranking before one successful live check.
+- if user provides an exact query, event ID, trace ID, address, or says the prior answer is wrong, replay that exact artifact first
+- use Sentry event IDs only after a live lookup, or explicitly say creds are unavailable
+- do not reuse a prior incident unless operation name, schema object, failing fields, chain, and address pattern match
+- do not send progress-only replies
+- Before claiming repo/tool access is unavailable, run one live probe
+- If a human questions the proposed fix or PR in-thread, re-open RCA
+- If current code or live evidence disproves an earlier theory, say \`Disproved theory:\`
+- RBAC-aware fallback:
+  - \`pods/exec forbidden\`
+- Before broad repo/code reads, load at least one retrieval surface:
+  - \`knowledge-index.md\`
+  - \`runbook-map.md\`
+
+## Rewards / Provider Incidents
+- before naming a stale-row/write-path cause or opening a PR, include one live DB row/provenance fact
+- include one exact consuming repo/path fact
+- same reward token appears on both supply and borrow
+
+## Single-Vault API / GraphQL Data Incidents
+- use \`single-vault-graphql-evidence.sh\` before RCA ranking when possible
+- compare against one healthy control vault on the same chain
+- compare public surfaces:
+  - \`vaultV2transactions\`
+  - \`vaultV2ByAddress\`
+  - \`vaultV2s\`
+- explicitly retract the outdated theory when new evidence contradicts a prior theory
+- do not call an ingestion/provenance root cause confirmed until you add one DB row/provenance fact and one job-path or simulation fact
+
+## Blocked Mode Reply Contract
+- \`*Evidence:* <exact command> -> <exact error>\`
+`);
+
+    expect(issues.map((issue) => issue.id)).toContain("public-surface-compare");
+  });
 });

@@ -30,6 +30,10 @@ cat >"${BIN_WITH_CAST}/curl" <<'EOF'
 set -euo pipefail
 
 payload="$(cat)"
+if ! jq -e . >/dev/null 2>&1 <<<"$payload"; then
+  printf '%s\n' 'curl: invalid JSON payload' >&2
+  exit 22
+fi
 url=""
 output_file=""
 write_out=""
@@ -309,7 +313,7 @@ invalid_address_stderr="${TMP}/invalid-address.stderr"
 invalid_address_status=0
 env PATH="${BIN_NO_CAST}:/usr/bin:/bin" bash "$SCRIPT_PATH" --address 0x123 --chain-id 8453 --query "$QUERY" > /dev/null 2>"$invalid_address_stderr" || invalid_address_status=$?
 test "$invalid_address_status" = "2"
-grep -F 'address must be a valid Ethereum address' "$invalid_address_stderr" >/dev/null
+grep -F 'address must be a valid Ethereum address (0x followed by exactly 40 hexadecimal characters)' "$invalid_address_stderr" >/dev/null
 
 insecure_rpc_url_stderr="${TMP}/insecure-rpc-url.stderr"
 insecure_rpc_url_status=0

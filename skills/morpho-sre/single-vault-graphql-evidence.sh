@@ -63,7 +63,7 @@ require_evm_address() {
   local label="${1:?label required}"
   local address="${2:?address required}"
   [[ "$address" =~ ^0x[a-fA-F0-9]{40}$ ]] || {
-    printf '%s must be a valid Ethereum address (0x + 40 hex chars)\n' "$label" >&2
+    printf '%s must be a valid Ethereum address (0x followed by exactly 40 hexadecimal characters)\n' "$label" >&2
     exit 2
   }
 }
@@ -310,9 +310,10 @@ run_cast_probe() {
   (
     local selector="${1:?selector required}"
     local value stderr_file err status
+    local cast_args=("call" "--rpc-url" "$RPC_URL" "--" "$ADDRESS" "$selector")
     stderr_file="$(mktemp)"
     trap "rm -f -- '$stderr_file'" EXIT INT TERM
-    if value="$(cast call --rpc-url "$RPC_URL" -- "$ADDRESS" "$selector" 2>"$stderr_file")"; then
+    if value="$(cast "${cast_args[@]}" 2>"$stderr_file")"; then
       err=""
       status="ok"
     else

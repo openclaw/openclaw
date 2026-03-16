@@ -9,7 +9,27 @@ export type SkillGuardrailIssue = {
   message: string;
 };
 
-const REQUIRED_RULES: Array<{ id: string; re: RegExp; message: string }> = [
+type SkillGuardrailRule = {
+  id: string;
+  message: string;
+  re?: RegExp;
+  matches?: (text: string) => boolean;
+};
+
+function includesInOrder(text: string, parts: string[]): boolean {
+  let offset = 0;
+  const haystack = text.toLowerCase();
+  for (const part of parts) {
+    const index = haystack.indexOf(part.toLowerCase(), offset);
+    if (index === -1) {
+      return false;
+    }
+    offset = index + part.length;
+  }
+  return true;
+}
+
+const REQUIRED_RULES: SkillGuardrailRule[] = [
   {
     id: "hard-preflight",
     re: /Hard preflight before diagnosis:/,
@@ -137,7 +157,8 @@ const REQUIRED_RULES: Array<{ id: string; re: RegExp; message: string }> = [
   },
   {
     id: "public-surface-compare",
-    re: /vaultV2ByAddress[\s\S]*vaultV2s[\s\S]*vaultV2transactions/i,
+    matches: (text) =>
+      includesInOrder(text, ["vaultV2ByAddress", "vaultV2s", "vaultV2transactions"]),
     message: "missing public-surface comparison guidance for single-vault incidents",
   },
   {
@@ -156,7 +177,8 @@ const REQUIRED_RULES: Array<{ id: string; re: RegExp; message: string }> = [
 export function validateMorphoSreSkillText(text: string): SkillGuardrailIssue[] {
   const issues: SkillGuardrailIssue[] = [];
   for (const rule of REQUIRED_RULES) {
-    if (!rule.re.test(text)) {
+    const matched = rule.re?.test(text) ?? rule.matches?.(text) ?? false;
+    if (!matched) {
       issues.push({ id: rule.id, message: rule.message });
     }
   }
