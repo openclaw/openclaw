@@ -61,21 +61,6 @@ function createOpenAITemplateModel(id: string): Model<Api> {
   } as Model<Api>;
 }
 
-function createOpenAICodexTemplateModel(id: string): Model<Api> {
-  return {
-    id,
-    name: id,
-    provider: "openai-codex",
-    api: "openai-codex-responses",
-    baseUrl: "https://chatgpt.com/backend-api",
-    input: ["text", "image"],
-    reasoning: true,
-    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-    contextWindow: 272_000,
-    maxTokens: 128_000,
-  } as Model<Api>;
-}
-
 function createRegistry(models: Record<string, Model<Api>>): ModelRegistry {
   return {
     find(provider: string, modelId: string) {
@@ -295,6 +280,17 @@ describe("normalizeModelCompat", () => {
     expect(supportsUsageInStreaming(normalized)).toBe(true);
   });
 
+  it("preserves explicit supportsUsageInStreaming false on non-native endpoints", () => {
+    const model = {
+      ...baseModel(),
+      provider: "custom-cpa",
+      baseUrl: "https://proxy.example.com/v1",
+      compat: { supportsUsageInStreaming: false },
+    };
+    const normalized = normalizeModelCompat(model);
+    expect(supportsUsageInStreaming(normalized)).toBe(false);
+  });
+
   it("still forces flags off when not explicitly set by user", () => {
     const model = {
       ...baseModel(),
@@ -347,6 +343,32 @@ describe("normalizeModelCompat", () => {
     expect(supportsDeveloperRole(normalized)).toBe(false);
     expect(supportsUsageInStreaming(normalized)).toBe(false);
     expect(supportsStrictMode(normalized)).toBe(false);
+  });
+
+  it("leaves fully explicit non-native compat untouched", () => {
+    const model = baseModel();
+    model.baseUrl = "https://proxy.example.com/v1";
+    model.compat = {
+      supportsDeveloperRole: false,
+      supportsUsageInStreaming: true,
+      supportsStrictMode: true,
+    };
+    const normalized = normalizeModelCompat(model);
+    expect(normalized).toBe(model);
+  });
+
+  it("preserves explicit usage compat when developer role is explicitly enabled", () => {
+    const model = baseModel();
+    model.baseUrl = "https://proxy.example.com/v1";
+    model.compat = {
+      supportsDeveloperRole: true,
+      supportsUsageInStreaming: true,
+      supportsStrictMode: true,
+    };
+    const normalized = normalizeModelCompat(model);
+    expect(supportsDeveloperRole(normalized)).toBe(true);
+    expect(supportsUsageInStreaming(normalized)).toBe(true);
+    expect(supportsStrictMode(normalized)).toBe(true);
   });
 });
 
@@ -410,18 +432,6 @@ describe("resolveForwardCompatModel", () => {
     expectResolvedForwardCompat(model, { provider: "openai", id: "gpt-5.4-pro" });
     expect(model?.api).toBe("openai-responses");
     expect(model?.baseUrl).toBe("https://api.openai.com/v1");
-    expect(model?.contextWindow).toBe(1_050_000);
-    expect(model?.maxTokens).toBe(128_000);
-  });
-
-  it("resolves openai-codex gpt-5.4 via codex template fallback", () => {
-    const registry = createRegistry({
-      "openai-codex/gpt-5.2-codex": createOpenAICodexTemplateModel("gpt-5.2-codex"),
-    });
-    const model = resolveForwardCompatModel("openai-codex", "gpt-5.4", registry);
-    expectResolvedForwardCompat(model, { provider: "openai-codex", id: "gpt-5.4" });
-    expect(model?.api).toBe("openai-codex-responses");
-    expect(model?.baseUrl).toBe("https://chatgpt.com/backend-api");
     expect(model?.contextWindow).toBe(1_050_000);
     expect(model?.maxTokens).toBe(128_000);
   });

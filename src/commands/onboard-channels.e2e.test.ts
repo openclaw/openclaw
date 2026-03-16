@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { ChannelPluginCatalogEntry } from "../channels/plugins/catalog.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { createEmptyPluginRegistry } from "../plugins/registry.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
@@ -8,7 +9,15 @@ import {
   setDefaultChannelPluginRegistryForTests,
 } from "./channel-test-helpers.js";
 import { setupChannels } from "./onboard-channels.js";
+import {
+  loadOnboardingPluginRegistrySnapshotForChannel,
+  reloadOnboardingPluginRegistry,
+} from "./onboarding/plugin-install.js";
 import { createExitThrowingRuntime, createWizardPrompter } from "./test-wizard-helpers.js";
+
+const catalogMocks = vi.hoisted(() => ({
+  listChannelPluginCatalogEntries: vi.fn(),
+}));
 
 function createPrompter(overrides: Partial<WizardPrompter>): WizardPrompter {
   return createWizardPrompter(
@@ -174,6 +183,20 @@ vi.mock("../channel-web.js", () => ({
   loginWeb: vi.fn(async () => {}),
 }));
 
+vi.mock("../channels/plugins/catalog.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../channels/plugins/catalog.js")>();
+  return {
+    ...actual,
+    listChannelPluginCatalogEntries: ((...args) => {
+      const implementation = catalogMocks.listChannelPluginCatalogEntries.getMockImplementation();
+      if (implementation) {
+        return catalogMocks.listChannelPluginCatalogEntries(...args);
+      }
+      return actual.listChannelPluginCatalogEntries(...args);
+    }) as typeof actual.listChannelPluginCatalogEntries,
+  };
+});
+
 vi.mock("./onboard-helpers.js", () => ({
   detectBinary: vi.fn(async () => false),
 }));
@@ -183,6 +206,7 @@ vi.mock("./onboarding/plugin-install.js", async (importOriginal) => {
   return {
     ...(actual as Record<string, unknown>),
     // Allow tests to simulate an empty plugin registry during onboarding.
+    loadOnboardingPluginRegistrySnapshotForChannel: vi.fn(() => createEmptyPluginRegistry()),
     reloadOnboardingPluginRegistry: vi.fn(() => {}),
   };
 });
@@ -190,6 +214,9 @@ vi.mock("./onboarding/plugin-install.js", async (importOriginal) => {
 describe("setupChannels", () => {
   beforeEach(() => {
     setDefaultChannelPluginRegistryForTests();
+    catalogMocks.listChannelPluginCatalogEntries.mockReset();
+    vi.mocked(loadOnboardingPluginRegistrySnapshotForChannel).mockClear();
+    vi.mocked(reloadOnboardingPluginRegistry).mockClear();
   });
   it("QuickStart uses single-select (no multiselect) and doesn't prompt for Telegram token when WhatsApp is chosen", async () => {
     const select = vi.fn(async () => "whatsapp");
@@ -257,6 +284,12 @@ describe("setupChannels", () => {
       );
     });
     expect(sawHardStop).toBe(false);
+    expect(loadOnboardingPluginRegistrySnapshotForChannel).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "telegram",
+      }),
+    );
+    expect(reloadOnboardingPluginRegistry).not.toHaveBeenCalled();
   });
 
   it("shows explicit dmScope config command in channel primer", async () => {
@@ -279,6 +312,243 @@ describe("setupChannels", () => {
         String(message).includes('config set session.dmScope "per-channel-peer"'),
     );
     expect(sawPrimer).toBe(true);
+    expect(multiselect).not.toHaveBeenCalled();
+  });
+
+  it("keeps configured external plugin channels visible when the active registry starts empty", async () => {
+    setActivePluginRegistry(createEmptyPluginRegistry());
+    catalogMocks.listChannelPluginCatalogEntries.mockReturnValue([
+      {
+        id: "msteams",
+        pluginId: "@openclaw/msteams-plugin",
+        meta: {
+          id: "msteams",
+          label: "Microsoft Teams",
+          selectionLabel: "Microsoft Teams",
+          docsPath: "/channels/msteams",
+          blurb: "teams channel",
+        },
+        install: {
+          npmSpec: "@openclaw/msteams",
+        },
+      } satisfies ChannelPluginCatalogEntry,
+    ]);
+    vi.mocked(loadOnboardingPluginRegistrySnapshotForChannel).mockImplementation(
+      ({ channel }: { channel: string }) => {
+        const registry = createEmptyPluginRegistry();
+        if (channel === "msteams") {
+          registry.channels.push({
+            pluginId: "@openclaw/msteams-plugin",
+            source: "test",
+            plugin: {
+              id: "msteams",
+              meta: {
+                id: "msteams",
+                label: "Microsoft Teams",
+                selectionLabel: "Microsoft Teams",
+                docsPath: "/channels/msteams",
+                blurb: "teams channel",
+              },
+              capabilities: { chatTypes: ["direct"] },
+              config: {
+                listAccountIds: () => [],
+                resolveAccount: () => ({ accountId: "default" }),
+              },
+              outbound: { deliveryMode: "direct" },
+            },
+          } as never);
+        }
+        return registry;
+      },
+    );
+    const select = vi.fn(async ({ message, options }: { message: string; options: unknown[] }) => {
+      if (message === "Select a channel") {
+        const entries = options as Array<{ value: string; hint?: string }>;
+        const msteams = entries.find((entry) => entry.value === "msteams");
+        expect(msteams).toBeDefined();
+        expect(msteams?.hint ?? "").not.toContain("plugin");
+        expect(msteams?.hint ?? "").not.toContain("install");
+        return "__done__";
+      }
+      return "__done__";
+    });
+    const { multiselect, text } = createUnexpectedPromptGuards();
+    const prompter = createPrompter({
+      select: select as unknown as WizardPrompter["select"],
+      multiselect,
+      text,
+    });
+
+    await runSetupChannels(
+      {
+        channels: {
+          msteams: {
+            tenantId: "tenant-1",
+          },
+        },
+        plugins: {
+          entries: {
+            "@openclaw/msteams-plugin": { enabled: true },
+          },
+        },
+      } as OpenClawConfig,
+      prompter,
+    );
+
+    expect(loadOnboardingPluginRegistrySnapshotForChannel).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "msteams",
+        pluginId: "@openclaw/msteams-plugin",
+      }),
+    );
+    expect(multiselect).not.toHaveBeenCalled();
+  });
+
+  it("uses scoped plugin accounts when disabling a configured external channel", async () => {
+    setActivePluginRegistry(createEmptyPluginRegistry());
+    const setAccountEnabled = vi.fn(
+      ({
+        cfg,
+        accountId,
+        enabled,
+      }: {
+        cfg: OpenClawConfig;
+        accountId: string;
+        enabled: boolean;
+      }) => ({
+        ...cfg,
+        channels: {
+          ...cfg.channels,
+          msteams: {
+            ...(cfg.channels?.msteams as Record<string, unknown> | undefined),
+            accounts: {
+              ...(cfg.channels?.msteams as { accounts?: Record<string, unknown> } | undefined)
+                ?.accounts,
+              [accountId]: {
+                ...(
+                  cfg.channels?.msteams as
+                    | {
+                        accounts?: Record<string, Record<string, unknown>>;
+                      }
+                    | undefined
+                )?.accounts?.[accountId],
+                enabled,
+              },
+            },
+          },
+        },
+      }),
+    );
+    vi.mocked(loadOnboardingPluginRegistrySnapshotForChannel).mockImplementation(
+      ({ channel }: { channel: string }) => {
+        const registry = createEmptyPluginRegistry();
+        if (channel === "msteams") {
+          registry.channels.push({
+            pluginId: "msteams",
+            source: "test",
+            plugin: {
+              id: "msteams",
+              meta: {
+                id: "msteams",
+                label: "Microsoft Teams",
+                selectionLabel: "Microsoft Teams",
+                docsPath: "/channels/msteams",
+                blurb: "teams channel",
+              },
+              capabilities: { chatTypes: ["direct"] },
+              config: {
+                listAccountIds: (cfg: OpenClawConfig) =>
+                  Object.keys(
+                    (cfg.channels?.msteams as { accounts?: Record<string, unknown> } | undefined)
+                      ?.accounts ?? {},
+                  ),
+                resolveAccount: (cfg: OpenClawConfig, accountId: string) =>
+                  (
+                    cfg.channels?.msteams as
+                      | {
+                          accounts?: Record<string, Record<string, unknown>>;
+                        }
+                      | undefined
+                  )?.accounts?.[accountId] ?? { accountId },
+                setAccountEnabled,
+              },
+              onboarding: {
+                getStatus: vi.fn(async ({ cfg }: { cfg: OpenClawConfig }) => ({
+                  channel: "msteams",
+                  configured: Boolean(
+                    (cfg.channels?.msteams as { tenantId?: string } | undefined)?.tenantId,
+                  ),
+                  statusLines: [],
+                  selectionHint: "configured",
+                })),
+              },
+              outbound: { deliveryMode: "direct" },
+            },
+          } as never);
+        }
+        return registry;
+      },
+    );
+
+    let channelSelectionCount = 0;
+    const select = vi.fn(async ({ message, options }: { message: string; options: unknown[] }) => {
+      if (message === "Select a channel") {
+        channelSelectionCount += 1;
+        return channelSelectionCount === 1 ? "msteams" : "__done__";
+      }
+      if (message.includes("already configured")) {
+        return "disable";
+      }
+      if (message === "Microsoft Teams account") {
+        const accountOptions = options as Array<{ value: string; label: string }>;
+        expect(accountOptions.map((option) => option.value)).toEqual(["default", "work"]);
+        return "work";
+      }
+      return "__done__";
+    });
+    const { multiselect, text } = createUnexpectedPromptGuards();
+    const prompter = createPrompter({
+      select: select as unknown as WizardPrompter["select"],
+      multiselect,
+      text,
+    });
+
+    const next = await runSetupChannels(
+      {
+        channels: {
+          msteams: {
+            tenantId: "tenant-1",
+            accounts: {
+              default: { enabled: true },
+              work: { enabled: true },
+            },
+          },
+        },
+        plugins: {
+          entries: {
+            msteams: { enabled: true },
+          },
+        },
+      } as OpenClawConfig,
+      prompter,
+      { allowDisable: true },
+    );
+
+    expect(loadOnboardingPluginRegistrySnapshotForChannel).toHaveBeenCalledWith(
+      expect.objectContaining({ channel: "msteams" }),
+    );
+    expect(setAccountEnabled).toHaveBeenCalledWith(
+      expect.objectContaining({ accountId: "work", enabled: false }),
+    );
+    expect(
+      (
+        next.channels?.msteams as
+          | {
+              accounts?: Record<string, { enabled?: boolean }>;
+            }
+          | undefined
+      )?.accounts?.work?.enabled,
+    ).toBe(false);
     expect(multiselect).not.toHaveBeenCalled();
   });
 
@@ -307,12 +577,9 @@ describe("setupChannels", () => {
 
   it("adds disabled hint to channel selection when a channel is disabled", async () => {
     let selectionCount = 0;
-    const select = vi.fn(async ({ message, options }: { message: string; options: unknown[] }) => {
+    const select = vi.fn(async ({ message }: { message: string; options: unknown[] }) => {
       if (message === "Select a channel") {
         selectionCount += 1;
-        const opts = options as Array<{ value: string; hint?: string }>;
-        const telegram = opts.find((opt) => opt.value === "telegram");
-        expect(telegram?.hint).toContain("disabled");
         return selectionCount === 1 ? "telegram" : "__done__";
       }
       if (message.includes("already configured")) {
@@ -332,6 +599,13 @@ describe("setupChannels", () => {
     await runSetupChannels(createTelegramCfg("token", false), prompter);
 
     expect(select).toHaveBeenCalledWith(expect.objectContaining({ message: "Select a channel" }));
+    const channelSelectCall = select.mock.calls.find(
+      ([params]) => (params as { message?: string }).message === "Select a channel",
+    );
+    const telegramOption = (
+      channelSelectCall?.[0] as { options?: Array<{ value: string; hint?: string }> } | undefined
+    )?.options?.find((opt) => opt.value === "telegram");
+    expect(telegramOption?.hint).toContain("disabled");
     expect(multiselect).not.toHaveBeenCalled();
   });
 

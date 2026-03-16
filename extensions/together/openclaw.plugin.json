@@ -1,0 +1,9 @@
+{
+  "id": "together",
+  "providers": ["together"],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}
