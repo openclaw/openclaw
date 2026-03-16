@@ -7,6 +7,8 @@ const mocks = vi.hoisted(() => ({
   createVpsAwareOAuthHandlers: vi.fn(),
   runOpenAIOAuthTlsPreflight: vi.fn(),
   formatOpenAIOAuthTlsPreflightFix: vi.fn(),
+  tryListenOnPort: vi.fn(),
+  describePortOwner: vi.fn(),
 }));
 
 vi.mock("@mariozechner/pi-ai/oauth", () => ({
@@ -20,6 +22,14 @@ vi.mock("./oauth-flow.js", () => ({
 vi.mock("./oauth-tls-preflight.js", () => ({
   runOpenAIOAuthTlsPreflight: mocks.runOpenAIOAuthTlsPreflight,
   formatOpenAIOAuthTlsPreflightFix: mocks.formatOpenAIOAuthTlsPreflightFix,
+}));
+
+vi.mock("../infra/ports-probe.js", () => ({
+  tryListenOnPort: mocks.tryListenOnPort,
+}));
+
+vi.mock("../infra/ports.js", () => ({
+  describePortOwner: mocks.describePortOwner,
 }));
 
 import { loginOpenAICodexOAuth } from "./openai-codex-oauth.js";
@@ -60,6 +70,8 @@ describe("loginOpenAICodexOAuth", () => {
     vi.clearAllMocks();
     mocks.runOpenAIOAuthTlsPreflight.mockResolvedValue({ ok: true });
     mocks.formatOpenAIOAuthTlsPreflightFix.mockReturnValue("tls fix");
+    mocks.tryListenOnPort.mockResolvedValue(undefined);
+    mocks.describePortOwner.mockResolvedValue(undefined);
   });
 
   it("returns credentials on successful oauth login", async () => {
@@ -80,6 +92,12 @@ describe("loginOpenAICodexOAuth", () => {
 
     expect(result).toEqual(creds);
     expect(mocks.loginOpenAICodex).toHaveBeenCalledOnce();
+    expect(mocks.tryListenOnPort).toHaveBeenCalledWith({
+      port: 1455,
+      host: "127.0.0.1",
+      exclusive: true,
+    });
+    expect(mocks.loginOpenAICodex.mock.calls[0]?.[0]?.onManualCodeInput).toBeUndefined();
     expect(spin.stop).toHaveBeenCalledWith("OpenAI OAuth complete");
     expect(runtime.error).not.toHaveBeenCalled();
   });
@@ -113,6 +131,60 @@ describe("loginOpenAICodexOAuth", () => {
     expect(event.url).toBe(
       "https://auth.openai.com/oauth/authorize?scope=openid+profile+email+offline_access&state=abc",
     );
+  });
+
+  it("enables immediate manual fallback when localhost callback port is already occupied", async () => {
+    const creds = {
+      provider: "openai-codex" as const,
+      access: "access-token",
+      refresh: "refresh-token",
+      expires: Date.now() + 60_000,
+      email: "user@example.com",
+    };
+    mocks.tryListenOnPort.mockRejectedValue(
+      Object.assign(new Error("address in use"), { code: "EADDRINUSE" }),
+    );
+    mocks.describePortOwner.mockResolvedValue("Code Helper (Plugin)");
+    mocks.createVpsAwareOAuthHandlers.mockReturnValue({
+      onAuth: vi.fn(),
+      onPrompt: vi.fn(),
+    });
+    mocks.loginOpenAICodex.mockResolvedValue(creds);
+
+    const { prompter } = await runCodexOAuth({ isRemote: false });
+
+    expect(mocks.describePortOwner).toHaveBeenCalledWith(1455);
+    expect(mocks.loginOpenAICodex.mock.calls[0]?.[0]?.onManualCodeInput).toEqual(
+      expect.any(Function),
+    );
+    expect(prompter.note).toHaveBeenCalledWith(
+      expect.stringContaining("localhost:1455"),
+      "OpenAI Codex OAuth",
+    );
+    expect(prompter.note).toHaveBeenCalledWith(
+      expect.stringContaining("Code Helper (Plugin)"),
+      "OpenAI Codex OAuth",
+    );
+  });
+
+  it("skips localhost callback preflight in remote mode", async () => {
+    const creds = {
+      provider: "openai-codex" as const,
+      access: "access-token",
+      refresh: "refresh-token",
+      expires: Date.now() + 60_000,
+      email: "user@example.com",
+    };
+    mocks.createVpsAwareOAuthHandlers.mockReturnValue({
+      onAuth: vi.fn(),
+      onPrompt: vi.fn(),
+    });
+    mocks.loginOpenAICodex.mockResolvedValue(creds);
+
+    await runCodexOAuth({ isRemote: true });
+
+    expect(mocks.tryListenOnPort).not.toHaveBeenCalled();
+    expect(mocks.describePortOwner).not.toHaveBeenCalled();
   });
 
   it("reports oauth errors and rethrows", async () => {

@@ -1,4 +1,7 @@
 import { loginOpenAICodex, type OAuthCredentials } from "@mariozechner/pi-ai/oauth";
+import { isErrno } from "../infra/errors.js";
+import { describePortOwner } from "../infra/ports.js";
+import { tryListenOnPort } from "../infra/ports-probe.js";
 import type { RuntimeEnv } from "../runtime.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 import { createVpsAwareOAuthHandlers } from "./oauth-flow.js";
@@ -6,6 +9,33 @@ import {
   formatOpenAIOAuthTlsPreflightFix,
   runOpenAIOAuthTlsPreflight,
 } from "./oauth-tls-preflight.js";
+
+const OPENAI_CODEX_CALLBACK_PORT = 1455;
+
+async function detectOpenAICodexCallbackPortConflict(): Promise<string | null> {
+  try {
+    await tryListenOnPort({
+      port: OPENAI_CODEX_CALLBACK_PORT,
+      host: "127.0.0.1",
+      exclusive: true,
+    });
+    return null;
+  } catch (err) {
+    if (!isErrno(err) || err.code !== "EADDRINUSE") {
+      throw err;
+    }
+    return (await describePortOwner(OPENAI_CODEX_CALLBACK_PORT)) ?? null;
+  }
+}
+
+function buildOpenAICodexCallbackPortConflictNote(details?: string | null): string {
+  return [
+    "Detected another local process already listening on localhost:1455.",
+    "OpenAI Codex browser callback will not complete automatically in this state.",
+    "Finish sign-in in the browser, then paste the full redirect URL back here.",
+    ...(details ? ["", "Port listener details:", details] : []),
+  ].join("\n");
+}
 
 export async function loginOpenAICodexOAuth(params: {
   prompter: WizardPrompter;
@@ -23,6 +53,8 @@ export async function loginOpenAICodexOAuth(params: {
     throw new Error(preflight.message);
   }
 
+  const callbackPortConflict = isRemote ? null : await detectOpenAICodexCallbackPortConflict();
+
   await prompter.note(
     isRemote
       ? [
@@ -37,6 +69,12 @@ export async function loginOpenAICodexOAuth(params: {
         ].join("\n"),
     "OpenAI Codex OAuth",
   );
+  if (callbackPortConflict !== null) {
+    await prompter.note(
+      buildOpenAICodexCallbackPortConflictNote(callbackPortConflict),
+      "OpenAI Codex OAuth",
+    );
+  }
 
   const spin = prompter.progress("Starting OAuth flow…");
   try {
@@ -53,6 +91,13 @@ export async function loginOpenAICodexOAuth(params: {
       onAuth: baseOnAuth,
       onPrompt,
       onProgress: (msg: string) => spin.update(msg),
+      onManualCodeInput:
+        callbackPortConflict !== null
+          ? async () =>
+              await onPrompt({
+                message: "Paste the authorization code (or full redirect URL):",
+              })
+          : undefined,
     });
     spin.stop("OpenAI OAuth complete");
     return creds ?? null;
