@@ -1,5 +1,4 @@
 import type { Command } from "commander";
-import { formatCliCommand } from "../../cli/command-format.js";
 import { formatStaticAuthChoiceChoicesForCli } from "../../commands/auth-choice-options.static.js";
 import type { GatewayDaemonRuntime } from "../../commands/daemon-runtime.js";
 import { ONBOARD_PROVIDER_AUTH_FLAGS } from "../../commands/onboard-provider-auth-flags.js";
@@ -50,14 +49,11 @@ const AUTH_CHOICE_HELP = formatStaticAuthChoiceChoicesForCli({
 export function registerOnboardCommand(program: Command) {
   const command = program
     .command("onboard")
-    .description('Legacy alias for "openclaw setup --wizard"')
-    .addHelpText("after", () =>
-      [
-        "",
-        `${theme.muted("Docs:")} ${formatDocsLink("/cli/setup", "docs.openclaw.ai/cli/setup")}`,
-        `${theme.muted("Prefer:")} ${formatCliCommand("openclaw setup --wizard")}`,
-        "",
-      ].join("\n"),
+    .description("Interactive wizard to set up the gateway, workspace, and skills")
+    .addHelpText(
+      "after",
+      () =>
+        `\n${theme.muted("Docs:")} ${formatDocsLink("/cli/onboard", "docs.openclaw.ai/cli/onboard")}\n`,
     )
     .option("--workspace <dir>", "Agent workspace directory (default: ~/.openclaw/workspace)")
     .option(
