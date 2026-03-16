@@ -280,6 +280,26 @@ describe("sendMessageTelegram", () => {
     });
   });
 
+  it("strips topic suffixes before editing a Telegram forum topic", async () => {
+    loadConfig.mockReturnValue({
+      channels: {
+        telegram: {
+          botToken: "tok",
+        },
+      },
+    });
+    botApi.editForumTopic.mockResolvedValue(true);
+
+    await editForumTopicTelegram("telegram:group:-1001234567890:topic:271", 271, {
+      accountId: "default",
+      name: "Codex Thread",
+    });
+
+    expect(botApi.editForumTopic).toHaveBeenCalledWith("-1001234567890", 271, {
+      name: "Codex Thread",
+    });
+  });
+
   it("rejects empty topic edits", async () => {
     await expect(
       editForumTopicTelegram("-1001234567890", 271, {
