@@ -10,6 +10,11 @@ vi.mock("@mariozechner/pi-ai", async (importOriginal) => {
   };
 });
 
+vi.mock("@mariozechner/pi-ai/oauth", () => ({
+  getOAuthApiKey: () => undefined,
+  getOAuthProviders: () => [],
+}));
+
 // Ensure Vitest environment is properly set
 process.env.VITEST = "true";
 // Config validation walks plugin manifests; keep an aggressive cache in tests to avoid
