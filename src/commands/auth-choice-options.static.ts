@@ -29,6 +29,12 @@ export const AUTH_CHOICE_GROUP_DEFS: {
     choices: ["openai-codex", "openai-api-key"],
   },
   {
+    value: "azure-openai",
+    label: "Azure",
+    hint: "Responses API + API key",
+    choices: ["azure-openai-api-key"],
+  },
+  {
     value: "anthropic",
     label: "Anthropic",
     hint: "setup-token + API key",

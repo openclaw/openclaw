@@ -463,7 +463,7 @@ describe("onboard (non-interactive): provider auth", () => {
   it("fails Azure OpenAI onboarding when base URL/model ID flags are missing", async () => {
     await withOnboardEnv("openclaw-onboard-azure-openai-missing-flags-", async ({ runtime }) => {
       await expect(
-        runNonInteractiveOnboardingWithDefaults(runtime, {
+        runNonInteractiveSetupWithDefaults(runtime, {
           authChoice: "azure-openai-api-key",
           azureOpenaiApiKey: "azure-test-key",
           skipSkills: true,
@@ -479,7 +479,7 @@ describe("onboard (non-interactive): provider auth", () => {
   it("fails Azure OpenAI onboarding when base URL is not an Azure endpoint", async () => {
     await withOnboardEnv("openclaw-onboard-azure-openai-invalid-base-url-", async ({ runtime }) => {
       await expect(
-        runNonInteractiveOnboardingWithDefaults(runtime, {
+        runNonInteractiveSetupWithDefaults(runtime, {
           authChoice: "azure-openai-api-key",
           azureOpenaiApiKey: "azure-test-key",
           azureOpenaiBaseUrl: "https://api.openai.com/v1",

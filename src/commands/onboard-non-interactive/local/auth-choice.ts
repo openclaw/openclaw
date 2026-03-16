@@ -4,7 +4,6 @@ import type { SecretInput } from "../../../config/types.secrets.js";
 import type { RuntimeEnv } from "../../../runtime.js";
 import { resolveDefaultSecretProviderAlias } from "../../../secrets/ref-contract.js";
 import { normalizeSecretInputModeInput } from "../../auth-choice.apply-helpers.js";
-import { buildTokenProfileId, validateAnthropicSetupToken } from "../../auth-token.js";
 import {
   applyAzureOpenAIConfig,
   normalizeAzureOpenAIBaseUrl,
