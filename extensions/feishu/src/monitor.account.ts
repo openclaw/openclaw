@@ -24,6 +24,7 @@ import { botNames, botOpenIds } from "./monitor.state.js";
 import { monitorWebhook, monitorWebSocket } from "./monitor.transport.js";
 import { getFeishuRuntime } from "./runtime.js";
 import { getMessageFeishu } from "./send.js";
+import { createFeishuThreadBindingManager } from "./thread-bindings.js";
 import type { FeishuChatType, ResolvedFeishuAccount } from "./types.js";
 
 const FEISHU_REACTION_VERIFY_TIMEOUT_MS = 1_500;
@@ -631,19 +632,25 @@ export async function monitorSingleAccount(params: MonitorSingleAccountParams): 
     log(`feishu[${accountId}]: dedup warmup loaded ${warmupCount} entries from disk`);
   }
 
-  const eventDispatcher = createEventDispatcher(account);
-  const chatHistories = new Map<string, HistoryEntry[]>();
+  let threadBindingManager: ReturnType<typeof createFeishuThreadBindingManager> | null = null;
+  try {
+    const eventDispatcher = createEventDispatcher(account);
+    const chatHistories = new Map<string, HistoryEntry[]>();
+    threadBindingManager = createFeishuThreadBindingManager({ accountId, cfg });
 
-  registerEventHandlers(eventDispatcher, {
-    cfg,
-    accountId,
-    runtime,
-    chatHistories,
-    fireAndForget: true,
-  });
+    registerEventHandlers(eventDispatcher, {
+      cfg,
+      accountId,
+      runtime,
+      chatHistories,
+      fireAndForget: true,
+    });
 
-  if (connectionMode === "webhook") {
-    return monitorWebhook({ account, accountId, runtime, abortSignal, eventDispatcher });
+    if (connectionMode === "webhook") {
+      return await monitorWebhook({ account, accountId, runtime, abortSignal, eventDispatcher });
+    }
+    return await monitorWebSocket({ account, accountId, runtime, abortSignal, eventDispatcher });
+  } finally {
+    threadBindingManager?.stop();
   }
-  return monitorWebSocket({ account, accountId, runtime, abortSignal, eventDispatcher });
 }

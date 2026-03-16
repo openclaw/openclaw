@@ -2,6 +2,20 @@ export type {
   AnyAgentTool,
   OpenClawPluginApi,
   ProviderDiscoveryContext,
+  ProviderCatalogContext,
+  ProviderCatalogResult,
+  ProviderCacheTtlEligibilityContext,
+  ProviderFetchUsageSnapshotContext,
+  ProviderPreparedRuntimeAuth,
+  ProviderResolvedUsageAuth,
+  ProviderPrepareExtraParamsContext,
+  ProviderPrepareDynamicModelContext,
+  ProviderPrepareRuntimeAuthContext,
+  ProviderResolveUsageAuthContext,
+  ProviderResolveDynamicModelContext,
+  ProviderNormalizeResolvedModelContext,
+  ProviderRuntimeModel,
+  ProviderWrapStreamFnContext,
   OpenClawPluginService,
   ProviderAuthContext,
   ProviderAuthMethodNonInteractiveContext,
@@ -11,6 +25,11 @@ export type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
 export type { PluginRuntime } from "../plugins/runtime/types.js";
 export type { OpenClawConfig } from "../config/config.js";
 export type { GatewayRequestHandlerOptions } from "../gateway/server-methods/types.js";
+export type {
+  ProviderUsageSnapshot,
+  UsageProviderId,
+  UsageWindow,
+} from "../infra/provider-usage.types.js";
 
 export { emptyPluginConfigSchema } from "../plugins/config-schema.js";
 export { buildOauthProviderAuthResult } from "./provider-auth-result.js";
