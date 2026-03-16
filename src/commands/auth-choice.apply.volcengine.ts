@@ -7,7 +7,7 @@ import type { ApplyAuthChoiceParams, ApplyAuthChoiceResult } from "./auth-choice
 import { applyPrimaryModel } from "./model-picker.js";
 import { applyAuthProfileConfig, setVolcengineApiKey } from "./onboard-auth.js";
 
-/** Default model for Volcano Engine auth onboarding. */
+/** Default model for Volcano Engine setup auth. */
 export const VOLCENGINE_DEFAULT_MODEL = "volcengine-plan/ark-code-latest";
 
 export async function applyAuthChoiceVolcengine(
