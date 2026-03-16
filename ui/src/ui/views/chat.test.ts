@@ -775,6 +775,44 @@ describe("chat view", () => {
     vi.unstubAllGlobals();
   });
 
+  it("formats fallback model labels when the current model is not present in the catalog", () => {
+    const { state } = createChatHeaderState({
+      models: [],
+    });
+    state.sessionsResult = {
+      ts: 0,
+      path: "",
+      count: 1,
+      defaults: {
+        modelProvider: "openrouter",
+        model: "google/gemini-2.5-flash",
+        contextTokens: null,
+      },
+      sessions: [
+        {
+          key: "main",
+          kind: "direct",
+          updatedAt: null,
+          modelProvider: "openrouter",
+          model: "google/gemini-2.5-flash",
+        },
+      ],
+    };
+
+    const container = document.createElement("div");
+    render(renderChatSessionSelect(state), container);
+
+    const modelSelect = container.querySelector<HTMLSelectElement>(
+      'select[data-chat-model-select="true"]',
+    );
+    expect(modelSelect).not.toBeNull();
+
+    const optionLabels = Array.from(modelSelect?.querySelectorAll("option") ?? []).map((option) =>
+      option.textContent?.trim(),
+    );
+    expect(optionLabels).toContain("gemini-2.5-flash · openrouter");
+  });
+
   it("normalizes cached bare /model overrides to the matching catalog option", () => {
     const { state } = createChatHeaderState();
     state.chatModelOverrides = { main: { kind: "raw", value: "gpt-5-mini" } };

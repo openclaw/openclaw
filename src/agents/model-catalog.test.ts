@@ -216,6 +216,98 @@ describe("loadModelCatalog", () => {
     );
   });
 
+  it("prefers the configured provider key over a shared transport provider in the catalog", async () => {
+    mockPiDiscoveryModels([
+      {
+        id: "google/gemini-2.5-flash",
+        provider: "google",
+        name: "Gemini 2.5 Flash",
+        api: "google-generative-ai",
+      },
+    ]);
+
+    const result = await loadModelCatalog({
+      config: {
+        models: {
+          providers: {
+            openrouter: {
+              baseUrl: "https://openrouter.ai/api/v1",
+              api: "google-generative-ai",
+              models: [
+                {
+                  id: "google/gemini-2.5-flash",
+                  name: "Gemini 2.5 Flash",
+                  input: ["text", "image"],
+                  reasoning: true,
+                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                  contextWindow: 1_048_576,
+                  maxTokens: 65_536,
+                },
+              ],
+            },
+          },
+        },
+      } as OpenClawConfig,
+    });
+
+    expect(result).toContainEqual(
+      expect.objectContaining({
+        provider: "openrouter",
+        id: "google/gemini-2.5-flash",
+        name: "Gemini 2.5 Flash",
+      }),
+    );
+    expect(result).not.toContainEqual(
+      expect.objectContaining({
+        provider: "google",
+        id: "google/gemini-2.5-flash",
+      }),
+    );
+  });
+
+  it("keeps the raw provider when multiple configured providers share the same model id", async () => {
+    mockPiDiscoveryModels([
+      {
+        id: "gpt-5-mini",
+        provider: "openai",
+        name: "GPT-5 Mini",
+        api: "openai-responses",
+      },
+    ]);
+
+    const result = await loadModelCatalog({
+      config: {
+        models: {
+          providers: {
+            openai: {
+              baseUrl: "https://api.openai.com/v1",
+              api: "openai-responses",
+              models: [{ id: "gpt-5-mini", name: "GPT-5 Mini" }],
+            },
+            openrouter: {
+              baseUrl: "https://openrouter.ai/api/v1",
+              api: "openai-responses",
+              models: [{ id: "gpt-5-mini", name: "GPT-5 Mini" }],
+            },
+          },
+        },
+      } as OpenClawConfig,
+    });
+
+    expect(result).toContainEqual(
+      expect.objectContaining({
+        provider: "openai",
+        id: "gpt-5-mini",
+      }),
+    );
+    expect(result).not.toContainEqual(
+      expect.objectContaining({
+        provider: "openrouter",
+        id: "gpt-5-mini",
+      }),
+    );
+  });
+
   it("merges configured models for opted-in non-pi-native providers", async () => {
     mockSingleOpenAiCatalogModel();
 

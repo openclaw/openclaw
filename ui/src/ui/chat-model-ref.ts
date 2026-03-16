@@ -72,6 +72,15 @@ export function resolveServerChatModelValue(
   return buildQualifiedChatModelValue(model, provider);
 }
 
+function formatChatModelName(modelRef: string): string {
+  const trimmed = modelRef.trim();
+  if (!trimmed) {
+    return "";
+  }
+  const separator = trimmed.lastIndexOf("/");
+  return separator >= 0 ? trimmed.slice(separator + 1) : trimmed;
+}
+
 export function formatChatModelDisplay(value: string): string {
   const trimmed = value.trim();
   if (!trimmed) {
@@ -81,13 +90,13 @@ export function formatChatModelDisplay(value: string): string {
   if (separator <= 0) {
     return trimmed;
   }
-  return `${trimmed.slice(separator + 1)} · ${trimmed.slice(0, separator)}`;
+  return `${formatChatModelName(trimmed.slice(separator + 1))} \u00b7 ${trimmed.slice(0, separator)}`;
 }
 
 export function buildChatModelOption(entry: ModelCatalogEntry): { value: string; label: string } {
   const provider = entry.provider?.trim();
   return {
     value: buildQualifiedChatModelValue(entry.id, provider),
-    label: provider ? `${entry.id} · ${provider}` : entry.id,
+    label: provider ? `${formatChatModelName(entry.id)} \u00b7 ${provider}` : entry.id,
   };
 }

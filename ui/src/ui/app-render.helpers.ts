@@ -575,10 +575,10 @@ function buildChatModelOptions(
   }
 
   if (currentOverride) {
-    addOption(currentOverride);
+    addOption(currentOverride, formatChatModelDisplay(currentOverride));
   }
   if (defaultModel) {
-    addOption(defaultModel);
+    addOption(defaultModel, formatChatModelDisplay(defaultModel));
   }
   return options;
 }

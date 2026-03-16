@@ -59,6 +59,10 @@ function normalizeResolvedModel(params: {
   cfg?: OpenClawConfig;
   agentDir?: string;
 }): Model<Api> {
+  const resolvedProviderModel = {
+    ...params.model,
+    provider: params.provider,
+  } as Model<Api>;
   const pluginNormalized = normalizeProviderResolvedModelWithPlugin({
     provider: params.provider,
     config: params.cfg,
@@ -66,14 +70,20 @@ function normalizeResolvedModel(params: {
       config: params.cfg,
       agentDir: params.agentDir,
       provider: params.provider,
-      modelId: params.model.id,
-      model: params.model,
+      modelId: resolvedProviderModel.id,
+      model: resolvedProviderModel,
     },
   });
   if (pluginNormalized) {
-    return normalizeModelCompat(pluginNormalized);
+    return normalizeModelCompat({
+      ...pluginNormalized,
+      provider: params.provider,
+    } as Model<Api>);
   }
-  return normalizeResolvedProviderModel(params);
+  return normalizeResolvedProviderModel({
+    provider: params.provider,
+    model: resolvedProviderModel,
+  });
 }
 
 export { buildModelAliasLines };

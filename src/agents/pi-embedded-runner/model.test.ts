@@ -220,6 +220,52 @@ describe("buildInlineProviderModels", () => {
 });
 
 describe("resolveModel", () => {
+  it("keeps the requested provider key when discovery returns a shared transport provider", () => {
+    mockDiscoveredModel({
+      provider: "openrouter",
+      modelId: "google/gemini-2.5-flash",
+      templateModel: {
+        id: "google/gemini-2.5-flash",
+        name: "Gemini 2.5 Flash",
+        provider: "google",
+        api: "google-generative-ai",
+        baseUrl: "https://generativelanguage.googleapis.com/v1beta",
+        reasoning: true,
+        input: ["text", "image"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 1_048_576,
+        maxTokens: 65_536,
+      },
+    });
+
+    const cfg = {
+      models: {
+        providers: {
+          openrouter: {
+            baseUrl: "https://openrouter.ai/api/v1",
+            api: "google-generative-ai",
+            models: [
+              {
+                id: "google/gemini-2.5-flash",
+                name: "Gemini 2.5 Flash",
+              },
+            ],
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    const result = resolveModel("openrouter", "google/gemini-2.5-flash", "/tmp/agent", cfg);
+
+    expect(result.error).toBeUndefined();
+    expect(result.model).toMatchObject({
+      provider: "openrouter",
+      id: "google/gemini-2.5-flash",
+      api: "google-generative-ai",
+      baseUrl: "https://openrouter.ai/api/v1",
+    });
+  });
+
   it("defaults model input to text when discovery omits input", () => {
     mockDiscoveredModel({
       provider: "custom",

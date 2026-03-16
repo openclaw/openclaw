@@ -131,6 +131,45 @@ function mergeConfiguredOptInProviderModels(params: {
   }
 }
 
+function resolveConfiguredCatalogProvider(params: {
+  config: OpenClawConfig;
+  rawProvider: string;
+  modelId: string;
+}): string {
+  const configuredProviders = params.config.models?.providers ?? {};
+  const matches: string[] = [];
+  const normalizedModelId = params.modelId.toLowerCase();
+  const normalizedRawProvider = params.rawProvider.toLowerCase();
+
+  for (const [providerKey, providerCfg] of Object.entries(configuredProviders)) {
+    if (!providerCfg || !Array.isArray((providerCfg as { models?: unknown }).models)) {
+      continue;
+    }
+    const hasModel = providerCfg.models.some(
+      (model) =>
+        String((model as { id?: unknown })?.id ?? "")
+          .trim()
+          .toLowerCase() === normalizedModelId,
+    );
+    if (hasModel) {
+      matches.push(providerKey);
+    }
+  }
+
+  if (matches.length === 0) {
+    return params.rawProvider;
+  }
+
+  const rawProviderMatch = matches.find(
+    (providerKey) => providerKey.trim().toLowerCase() === normalizedRawProvider,
+  );
+  if (rawProviderMatch) {
+    return rawProviderMatch;
+  }
+
+  return matches.length === 1 ? matches[0] : params.rawProvider;
+}
+
 export function resetModelCatalogCacheForTest() {
   modelCatalogPromise = null;
   hasLoggedModelCatalogError = false;
@@ -192,11 +231,26 @@ export async function loadModelCatalog(params?: {
         if (!id) {
           continue;
         }
-        const provider = String(entry?.provider ?? "").trim();
-        if (!provider) {
+        const rawProvider = String(entry?.provider ?? "").trim();
+        if (!rawProvider) {
           continue;
         }
-        if (shouldSuppressBuiltInModel({ provider, id })) {
+        // Prefer the configured provider key when the model is explicitly listed
+        // in the runtime models configuration. This avoids showing an API/transport
+        // name (for example "google-generative-ai") as the provider in the UI
+        // when the model is actually provided by an adapter like "openrouter".
+        let provider = rawProvider;
+        try {
+          provider = resolveConfiguredCatalogProvider({
+            config: cfg,
+            rawProvider,
+            modelId: id,
+          });
+        } catch {
+          // best-effort; fall back to rawProvider if anything goes wrong
+          provider = rawProvider;
+        }
+        if (shouldSuppressBuiltInModel({ provider: rawProvider, id })) {
           continue;
         }
         const name = String(entry?.name ?? id).trim() || id;
