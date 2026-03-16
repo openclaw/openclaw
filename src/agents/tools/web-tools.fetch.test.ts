@@ -540,7 +540,7 @@ describe("web_fetch extraction fallbacks", () => {
 
   it("uses parallel extract for HTML when enabled", async () => {
     const fetchSpy = installMockFetch((input: RequestInfo | URL) => {
-      const url = requestUrl(input);
+      const url = resolveRequestUrl(input);
       if (url.includes("api.parallel.ai")) {
         return Promise.resolve({
           ok: true,
@@ -569,14 +569,14 @@ describe("web_fetch extraction fallbacks", () => {
     expect(details.extractor).toBe("parallel");
     expect(details.text).toContain("Extracted via Parallel");
     const parallelCall = fetchSpy.mock.calls.find((call) =>
-      requestUrl(call[0]).includes("api.parallel.ai"),
+      resolveRequestUrl(call[0]).includes("api.parallel.ai"),
     );
     expect(parallelCall).toBeTruthy();
   });
 
   it("falls back to readability when parallel extract fails", async () => {
     installMockFetch((input: RequestInfo | URL) => {
-      const url = requestUrl(input);
+      const url = resolveRequestUrl(input);
       if (url.includes("api.parallel.ai")) {
         return Promise.resolve({
           ok: false,
@@ -602,7 +602,7 @@ describe("web_fetch extraction fallbacks", () => {
 
   it("skips parallel extract when disabled", async () => {
     const fetchSpy = installMockFetch((input: RequestInfo | URL) => {
-      const url = requestUrl(input);
+      const url = resolveRequestUrl(input);
       return Promise.resolve(
         htmlResponse(
           "<html><head><title>Page</title></head><body><article><p>Content.</p></article></body></html>",
@@ -618,14 +618,14 @@ describe("web_fetch extraction fallbacks", () => {
     const details = result?.details as { extractor?: string };
     expect(details.extractor).not.toBe("parallel");
     const parallelCall = fetchSpy.mock.calls.find((call) =>
-      requestUrl(call[0]).includes("api.parallel.ai"),
+      resolveRequestUrl(call[0]).includes("api.parallel.ai"),
     );
     expect(parallelCall).toBeUndefined();
   });
 
   it("uses parallel extract when direct fetch returns non-ok", async () => {
     installMockFetch((input: RequestInfo | URL) => {
-      const url = requestUrl(input);
+      const url = resolveRequestUrl(input);
       if (url.includes("api.parallel.ai")) {
         return Promise.resolve({
           ok: true,
@@ -645,7 +645,7 @@ describe("web_fetch extraction fallbacks", () => {
         ok: false,
         status: 403,
         url,
-        headers: makeHeaders({ "content-type": "text/html" }),
+        headers: makeFetchHeaders({ "content-type": "text/html" }),
         text: async () => "blocked",
       } as Response);
     });
@@ -661,7 +661,7 @@ describe("web_fetch extraction fallbacks", () => {
 
   it("respects extractMode=text for parallel extract", async () => {
     installMockFetch((input: RequestInfo | URL) => {
-      const url = requestUrl(input);
+      const url = resolveRequestUrl(input);
       if (url.includes("api.parallel.ai")) {
         return Promise.resolve({
           ok: true,

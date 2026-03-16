@@ -1,0 +1,12 @@
+{
+  "name": "@openclaw/parallel-plugin",
+  "version": "2026.3.14",
+  "private": true,
+  "description": "OpenClaw Parallel plugin",
+  "type": "module",
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}

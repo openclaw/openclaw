@@ -899,9 +899,11 @@ async function runWebFetch(params: WebFetchRuntimeParams): Promise<Record<string
                 "basic HTML cleanup",
               ].filter(Boolean) as string[];
               const triedStr =
-                tried.length > 1
-                  ? `${tried.slice(0, -1).join(", ")} and ${tried[tried.length - 1]}`
-                  : (tried[0] ?? "");
+                tried.length > 2
+                  ? `${tried.slice(0, -1).join(", ")}, and ${tried[tried.length - 1]}`
+                  : tried.length === 2
+                    ? `${tried[0]} and ${tried[1]}`
+                    : (tried[0] ?? "");
               throw new Error(`Web fetch extraction failed: ${triedStr} returned no content.`);
             }
           }
