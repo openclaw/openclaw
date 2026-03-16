@@ -90,6 +90,7 @@ Current source-of-truth:
 Built-in commands available today:
 
 - `/new [model]` starts a new session; `/reset` is the reset alias.
+- `/resume [id|#]` resumes a previous session; omit arg to list recent sessions, provide 8-char session ID or list index to switch.
 - `/compact [instructions]` compacts the session context. See [/concepts/compaction](/concepts/compaction).
 - `/stop` aborts the current run.
 - `/session idle <duration|off>` and `/session max-age <duration|off>` manage thread-binding expiry.

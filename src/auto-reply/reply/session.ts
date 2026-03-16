@@ -24,9 +24,12 @@ import {
   DEFAULT_RESET_TRIGGERS,
   type GroupKeyResolution,
   type SessionEntry,
+  MAX_SESSION_HISTORY,
+  type SessionHistoryEntry,
   type SessionScope,
 } from "../../config/sessions/types.js";
 import type { TtsAutoMode } from "../../config/types.tts.js";
+import { resolveSessionEntryLabel } from "../../gateway/session-utils.fs.js";
 import { getSessionBindingService } from "../../infra/outbound/session-binding-service.js";
 import { deliverSessionMaintenanceWarning } from "../../infra/session-maintenance-warning.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
@@ -212,6 +215,25 @@ function resolveBoundConversationSessionKey(params: {
   return binding.targetSessionKey;
 }
 
+function buildUpdatedHistory(
+  entry: SessionEntry,
+  storePath: string | undefined,
+  agentId: string | undefined,
+): SessionHistoryEntry[] {
+  const prev: SessionHistoryEntry[] = entry.history ?? [];
+  const newEntry: SessionHistoryEntry = {
+    sessionId: entry.sessionId,
+    sessionFile: entry.sessionFile,
+    updatedAt: entry.updatedAt,
+    label: resolveSessionEntryLabel(entry, storePath, agentId),
+    systemSent: entry.systemSent,
+  };
+  return [newEntry, ...prev.filter((h) => h.sessionId !== newEntry.sessionId)].slice(
+    0,
+    MAX_SESSION_HISTORY,
+  );
+}
+
 export async function initSessionState(params: {
   ctx: MsgContext;
   cfg: OpenClawConfig;
@@ -296,6 +318,7 @@ export async function initSessionState(params: {
   let persistedSubagentRole: SessionEntry["subagentRole"];
   let persistedSubagentControlScope: SessionEntry["subagentControlScope"];
   let persistedDisplayName: SessionEntry["displayName"];
+  let updatedHistory: SessionHistoryEntry[] | undefined;
 
   const normalizedChatType = normalizeChatType(ctx.ChatType);
   const isGroup =
@@ -471,6 +494,12 @@ export async function initSessionState(params: {
       persistedSubagentRole = entry.subagentRole;
       persistedSubagentControlScope = entry.subagentControlScope;
       persistedDisplayName = entry.displayName;
+      // Build updated history: prepend the session being archived, cap at MAX_SESSION_HISTORY.
+      updatedHistory = buildUpdatedHistory(entry, storePath, agentId);
+    } else if (entry) {
+      // Daily/idle timeout: session expired passively. Transcript stays on disk
+      // as-is (not archived), but record it in history so /resume can find it.
+      updatedHistory = buildUpdatedHistory(entry, storePath, agentId);
     }
   }
 
@@ -545,6 +574,7 @@ export async function initSessionState(params: {
     spawnDepth: persistedSpawnDepth ?? baseEntry?.spawnDepth,
     subagentRole: persistedSubagentRole ?? baseEntry?.subagentRole,
     subagentControlScope: persistedSubagentControlScope ?? baseEntry?.subagentControlScope,
+    history: updatedHistory ?? baseEntry?.history,
     sendPolicy: baseEntry?.sendPolicy,
     queueMode: baseEntry?.queueMode,
     queueDebounceMs: baseEntry?.queueDebounceMs,

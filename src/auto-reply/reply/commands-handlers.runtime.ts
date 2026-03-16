@@ -17,6 +17,7 @@ import { handleMcpCommand } from "./commands-mcp.js";
 import { handleModelsCommand } from "./commands-models.js";
 import { handlePluginCommand } from "./commands-plugin.js";
 import { handlePluginsCommand } from "./commands-plugins.js";
+import { handleResumeCommand } from "./commands-session-resume.js";
 import {
   handleAbortTrigger,
   handleActivationCommand,
@@ -64,6 +65,7 @@ export function loadCommandHandlers(): CommandHandler[] {
     handleModelsCommand,
     handleStopCommand,
     handleCompactCommand,
+    handleResumeCommand,
     handleAbortTrigger,
   ];
 }
