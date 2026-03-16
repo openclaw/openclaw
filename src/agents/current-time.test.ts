@@ -28,4 +28,12 @@ describe("appendCronStyleCurrentTimeLine", () => {
   it("returns whitespace-only string as empty", () => {
     expect(appendCronStyleCurrentTimeLine("   ", cfg, nowMs)).toBe("");
   });
+
+  it("does not replace user-authored Current time lines", () => {
+    const base = "Current time: check the clock on the wall";
+    const result = appendCronStyleCurrentTimeLine(base, cfg, nowMs);
+    // User line preserved, runtime timestamp appended separately
+    expect(result).toContain("Current time: check the clock on the wall");
+    expect(result.split("\n").filter((l) => l.startsWith("Current time:")).length).toBe(2);
+  });
 });
