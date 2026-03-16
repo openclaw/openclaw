@@ -33,7 +33,7 @@ For VPS/cloud hosts, avoid third-party "1-click" marketplace images when possibl
 
 <AccordionGroup>
   <Accordion title="Installer script" icon="rocket" defaultOpen>
-    Downloads the CLI, installs it globally via npm, and launches the onboarding wizard.
+    Downloads the CLI, installs it globally via npm, and launches the setup wizard.
 
     <Tabs>
       <Tab title="macOS / Linux / WSL2">
@@ -101,6 +101,16 @@ For VPS/cloud hosts, avoid third-party "1-click" marketplace images when possibl
         </Note>
       </Tab>
     </Tabs>
+
+    Want the current GitHub `main` head with a package-manager install?
+
+    ```bash
+    npm install -g github:openclaw/openclaw#main
+    ```
+
+    ```bash
+    pnpm add -g github:openclaw/openclaw#main
+    ```
 
   </Accordion>
 

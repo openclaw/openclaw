@@ -11,6 +11,7 @@ import {
   type ProviderAuthResult,
   type ProviderDiscoveryContext,
 } from "openclaw/plugin-sdk/core";
+import { resolveOllamaApiBase } from "../../src/agents/models-config.providers.discovery.js";
 
 const PROVIDER_ID = "ollama";
 const DEFAULT_API_KEY = "ollama-local";
@@ -72,7 +73,7 @@ const ollamaPlugin = {
                 ...explicit,
                 baseUrl:
                   typeof explicit.baseUrl === "string" && explicit.baseUrl.trim()
-                    ? explicit.baseUrl.trim().replace(/\/+$/, "")
+                    ? resolveOllamaApiBase(explicit.baseUrl)
                     : OLLAMA_DEFAULT_BASE_URL,
                 api: explicit.api ?? "ollama",
                 apiKey: ollamaKey ?? explicit.apiKey ?? DEFAULT_API_KEY,
@@ -95,7 +96,7 @@ const ollamaPlugin = {
         },
       },
       wizard: {
-        onboarding: {
+        setup: {
           choiceId: "ollama",
           choiceLabel: "Ollama",
           choiceHint: "Cloud and local open models",

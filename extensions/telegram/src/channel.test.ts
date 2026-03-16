@@ -3,10 +3,10 @@ import type {
   ChannelGatewayContext,
   OpenClawConfig,
   PluginRuntime,
-  ResolvedTelegramAccount,
 } from "openclaw/plugin-sdk/telegram";
 import { describe, expect, it, vi } from "vitest";
 import { createRuntimeEnv } from "../../test-utils/runtime-env.js";
+import type { ResolvedTelegramAccount } from "./accounts.js";
 import { telegramPlugin } from "./channel.js";
 import { setTelegramRuntime } from "./runtime.js";
 
@@ -400,6 +400,33 @@ describe("telegramPlugin duplicate token guard", () => {
       expect.objectContaining({
         token: "",
       }),
+    );
+  });
+});
+
+describe("telegramPlugin outbound sendPayload forceDocument", () => {
+  it("forwards forceDocument to the underlying send call when channelData is present", async () => {
+    const sendMessageTelegram = installSendMessageRuntime(
+      vi.fn(async () => ({ messageId: "tg-fd" })),
+    );
+
+    await telegramPlugin.outbound!.sendPayload!({
+      cfg: createCfg(),
+      to: "12345",
+      text: "",
+      payload: {
+        text: "here is an image",
+        mediaUrls: ["https://example.com/photo.png"],
+        channelData: { telegram: {} },
+      },
+      accountId: "ops",
+      forceDocument: true,
+    });
+
+    expect(sendMessageTelegram).toHaveBeenCalledWith(
+      "12345",
+      expect.any(String),
+      expect.objectContaining({ forceDocument: true }),
     );
   });
 });

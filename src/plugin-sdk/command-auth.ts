@@ -33,6 +33,7 @@ export type ResolveSenderCommandAuthorizationWithRuntimeParams = Omit<
   runtime: CommandAuthorizationRuntime;
 };
 
+/** Fast-path DM command authorization when only policy and sender allowlist state matter. */
 export function resolveDirectDmAuthorizationOutcome(params: {
   isGroup: boolean;
   dmPolicy: string;
@@ -50,6 +51,7 @@ export function resolveDirectDmAuthorizationOutcome(params: {
   return "allowed";
 }
 
+/** Runtime-backed wrapper around sender command authorization for grouped helper surfaces. */
 export async function resolveSenderCommandAuthorizationWithRuntime(
   params: ResolveSenderCommandAuthorizationWithRuntimeParams,
 ): ReturnType<typeof resolveSenderCommandAuthorization> {
@@ -60,6 +62,7 @@ export async function resolveSenderCommandAuthorizationWithRuntime(
   });
 }
 
+/** Compute effective allowlists and command authorization for one inbound sender. */
 export async function resolveSenderCommandAuthorization(
   params: ResolveSenderCommandAuthorizationParams,
 ): Promise<{

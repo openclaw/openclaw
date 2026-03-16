@@ -82,9 +82,9 @@ export type GatewayConnectionDetails = {
 };
 
 function resolveDeviceIdentityForGatewayCall() {
-  // Even when local CLI calls authenticate with a shared gateway token/password,
-  // we still want to attach device identity so paired operator scopes remain
-  // available for detail RPCs such as status / system-presence / last-heartbeat.
+  // Shared-auth local calls should still stay device-bound so operator scopes
+  // remain available for detail RPCs such as status / system-presence /
+  // last-heartbeat.
   try {
     return loadOrCreateDeviceIdentity();
   } catch {
@@ -327,11 +327,8 @@ async function resolveGatewaySecretInputString(params: {
     value: params.value,
     env: params.env,
     normalize: trimToUndefined,
-    onResolveRefError: (error) => {
-      const detail = error instanceof Error ? error.message : String(error);
-      throw new Error(`${params.path} secret reference could not be resolved: ${detail}`, {
-        cause: error,
-      });
+    onResolveRefError: () => {
+      throw new GatewaySecretRefUnavailableError(params.path);
     },
   });
   if (!value) {

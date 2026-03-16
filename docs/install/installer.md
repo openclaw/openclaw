@@ -116,6 +116,11 @@ The script exits with code `2` for invalid method selection or invalid `--instal
     curl -fsSL --proto '=https' --tlsv1.2 https://openclaw.ai/install.sh | bash -s -- --install-method git
     ```
   </Tab>
+  <Tab title="GitHub main via npm">
+    ```bash
+    curl -fsSL --proto '=https' --tlsv1.2 https://openclaw.ai/install.sh | bash -s -- --version main
+    ```
+  </Tab>
   <Tab title="Dry run">
     ```bash
     curl -fsSL --proto '=https' --tlsv1.2 https://openclaw.ai/install.sh | bash -s -- --dry-run
@@ -126,39 +131,39 @@ The script exits with code `2` for invalid method selection or invalid `--instal
 <AccordionGroup>
   <Accordion title="Flags reference">
 
-| Flag                            | Description                                                |
-| ------------------------------- | ---------------------------------------------------------- |
-| `--install-method npm\|git`     | Choose install method (default: `npm`). Alias: `--method`  |
-| `--npm`                         | Shortcut for npm method                                    |
-| `--git`                         | Shortcut for git method. Alias: `--github`                 |
-| `--version <version\|dist-tag>` | npm version or dist-tag (default: `latest`)                |
-| `--beta`                        | Use beta dist-tag if available, else fallback to `latest`  |
-| `--git-dir <path>`              | Checkout directory (default: `~/openclaw`). Alias: `--dir` |
-| `--no-git-update`               | Skip `git pull` for existing checkout                      |
-| `--no-prompt`                   | Disable prompts                                            |
-| `--no-onboard`                  | Skip onboarding                                            |
-| `--onboard`                     | Enable onboarding                                          |
-| `--dry-run`                     | Print actions without applying changes                     |
-| `--verbose`                     | Enable debug output (`set -x`, npm notice-level logs)      |
-| `--help`                        | Show usage (`-h`)                                          |
+| Flag                                  | Description                                                |
+| ------------------------------------- | ---------------------------------------------------------- |
+| `--install-method npm\|git`           | Choose install method (default: `npm`). Alias: `--method`  |
+| `--npm`                               | Shortcut for npm method                                    |
+| `--git`                               | Shortcut for git method. Alias: `--github`                 |
+| `--version <version\|dist-tag\|spec>` | npm version, dist-tag, or package spec (default: `latest`) |
+| `--beta`                              | Use beta dist-tag if available, else fallback to `latest`  |
+| `--git-dir <path>`                    | Checkout directory (default: `~/openclaw`). Alias: `--dir` |
+| `--no-git-update`                     | Skip `git pull` for existing checkout                      |
+| `--no-prompt`                         | Disable prompts                                            |
+| `--no-onboard`                        | Skip onboarding                                            |
+| `--onboard`                           | Enable onboarding                                          |
+| `--dry-run`                           | Print actions without applying changes                     |
+| `--verbose`                           | Enable debug output (`set -x`, npm notice-level logs)      |
+| `--help`                              | Show usage (`-h`)                                          |
 
   </Accordion>
 
   <Accordion title="Environment variables reference">
 
-| Variable                                    | Description                                   |
-| ------------------------------------------- | --------------------------------------------- |
-| `OPENCLAW_INSTALL_METHOD=git\|npm`          | Install method                                |
-| `OPENCLAW_VERSION=latest\|next\|<semver>`   | npm version or dist-tag                       |
-| `OPENCLAW_BETA=0\|1`                        | Use beta if available                         |
-| `OPENCLAW_GIT_DIR=<path>`                   | Checkout directory                            |
-| `OPENCLAW_GIT_UPDATE=0\|1`                  | Toggle git updates                            |
-| `OPENCLAW_NO_PROMPT=1`                      | Disable prompts                               |
-| `OPENCLAW_NO_ONBOARD=1`                     | Skip onboarding                               |
-| `OPENCLAW_DRY_RUN=1`                        | Dry run mode                                  |
-| `OPENCLAW_VERBOSE=1`                        | Debug mode                                    |
-| `OPENCLAW_NPM_LOGLEVEL=error\|warn\|notice` | npm log level                                 |
-| `SHARP_IGNORE_GLOBAL_LIBVIPS=0\|1`          | Control sharp/libvips behavior (default: `1`) |
+| Variable                                                | Description                                   |
+| ------------------------------------------------------- | --------------------------------------------- |
+| `OPENCLAW_INSTALL_METHOD=git\|npm`                      | Install method                                |
+| `OPENCLAW_VERSION=latest\|next\|main\|<semver>\|<spec>` | npm version, dist-tag, or package spec        |
+| `OPENCLAW_BETA=0\|1`                                    | Use beta if available                         |
+| `OPENCLAW_GIT_DIR=<path>`                               | Checkout directory                            |
+| `OPENCLAW_GIT_UPDATE=0\|1`                              | Toggle git updates                            |
+| `OPENCLAW_NO_PROMPT=1`                                  | Disable prompts                               |
+| `OPENCLAW_NO_ONBOARD=1`                                 | Skip onboarding                               |
+| `OPENCLAW_DRY_RUN=1`                                    | Dry run mode                                  |
+| `OPENCLAW_VERBOSE=1`                                    | Debug mode                                    |
+| `OPENCLAW_NPM_LOGLEVEL=error\|warn\|notice`             | npm log level                                 |
+| `SHARP_IGNORE_GLOBAL_LIBVIPS=0\|1`                      | Control sharp/libvips behavior (default: `1`) |
 
   </Accordion>
 </AccordionGroup>
@@ -276,6 +281,11 @@ Designed for environments where you want everything under a local prefix (defaul
     & ([scriptblock]::Create((iwr -useb https://openclaw.ai/install.ps1))) -InstallMethod git
     ```
   </Tab>
+  <Tab title="GitHub main via npm">
+    ```powershell
+    & ([scriptblock]::Create((iwr -useb https://openclaw.ai/install.ps1))) -Tag main
+    ```
+  </Tab>
   <Tab title="Custom git directory">
     ```powershell
     & ([scriptblock]::Create((iwr -useb https://openclaw.ai/install.ps1))) -InstallMethod git -GitDir "C:\openclaw"
@@ -299,14 +309,14 @@ Designed for environments where you want everything under a local prefix (defaul
 <AccordionGroup>
   <Accordion title="Flags reference">
 
-| Flag                      | Description                                            |
-| ------------------------- | ------------------------------------------------------ |
-| `-InstallMethod npm\|git` | Install method (default: `npm`)                        |
-| `-Tag <tag>`              | npm dist-tag (default: `latest`)                       |
-| `-GitDir <path>`          | Checkout directory (default: `%USERPROFILE%\openclaw`) |
-| `-NoOnboard`              | Skip onboarding                                        |
-| `-NoGitUpdate`            | Skip `git pull`                                        |
-| `-DryRun`                 | Print actions only                                     |
+| Flag                        | Description                                                |
+| --------------------------- | ---------------------------------------------------------- |
+| `-InstallMethod npm\|git`   | Install method (default: `npm`)                            |
+| `-Tag <tag\|version\|spec>` | npm dist-tag, version, or package spec (default: `latest`) |
+| `-GitDir <path>`            | Checkout directory (default: `%USERPROFILE%\openclaw`)     |
+| `-NoOnboard`                | Skip onboarding                                            |
+| `-NoGitUpdate`              | Skip `git pull`                                            |
+| `-DryRun`                   | Print actions only                                         |
 
   </Accordion>
 
