@@ -54,6 +54,47 @@ Notes:
 - If the same person contacts you on multiple channels, use `session.identityLinks` to collapse their DM sessions into one canonical identity.
 - You can verify your DM settings with `openclaw security audit` (see [security](/cli/security)).
 
+## Named DM sessions
+
+> **Note:** Named DM sessions are infrastructure added in preparation for the `/resume` command. The routing layer is not yet wired; this section documents the underlying primitives for contributors.
+
+OpenClaw supports **named DM sessions** — lightweight named contexts within a single DM peer's session space. Where the default DM session key is `agent:<agentId>:<mainKey>` (e.g. `agent:main:main`), a named session lives at:
+
+```
+agent:<agentId>:dm-named:<peerId>:<name>
+```
+
+For example: `agent:main:dm-named:123456789:valorant`
+
+Named sessions are isolated from the main session. They have their own conversation history and context window. The same peer can have multiple named sessions.
+
+### Key format helpers (`src/sessions/session-key-utils.ts`)
+
+| Helper                                              | Description                                                                                                                       |
+| --------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
+| `buildNamedDmSessionKey({ agentId, peerId, name })` | Builds a named DM key. Throws if `agentId`, `peerId`, or `name` contain `:` or are empty. All inputs are normalized to lowercase. |
+| `parseNamedDmSessionKey(key)`                       | Returns `{ agentId, peerId, name }` or `null` if the key is not a named DM key.                                                   |
+| `isNamedDmSessionKey(key)`                          | Returns `true` if the key matches the `dm-named` format.                                                                          |
+
+All three helpers accept `null` or `undefined` input and fail safely.
+
+### Active session state (`src/config/sessions/types.ts`)
+
+`SessionEntry` carries an optional `activeNamedSession?: string` field. When set on the main session entry for a peer, it signals that the peer's DM traffic should route to the named session instead of main.
+
+The value is the session **name only** (e.g. `"valorant"`) — not the full key.
+
+### Store helpers (`src/gateway/session-utils.ts`)
+
+| Helper                                                     | Description                                                                                                                                                                                     |
+| ---------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `setActiveNamedSession({ mainEntry, name })`               | Sets or clears `activeNamedSession`. Returns `true` if the state changed, `false` if it was already the same (idempotent). Throws if `name` contains `:`. Passing `null`/`""` clears the field. |
+| `getActiveNamedSessionKey({ mainEntry, agentId, peerId })` | Returns the full named session key for the peer if one is active, or `null`.                                                                                                                    |
+
+### Routing contract
+
+Named DM session routing is enforced at the session-resolution layer — not by the channel adapters. The peer ID used in the key is the normalized platform-agnostic identifier, not the raw provider address. Colon-containing platform identifiers (e.g. Matrix `@user:server`) must be resolved to a stable internal peer ID before being passed to these helpers.
+
 ## Gateway is the source of truth
 
 All session state is **owned by the gateway** (the “master” OpenClaw). UI clients (macOS app, WebChat, etc.) must query the gateway for session lists and token counts instead of reading local files.
