@@ -1,46 +1,42 @@
-import { discordPlugin } from "../../extensions/discord/src/channel.js";
-import { imessagePlugin } from "../../extensions/imessage/src/channel.js";
-import { signalPlugin } from "../../extensions/signal/src/channel.js";
-import { slackPlugin } from "../../extensions/slack/src/channel.js";
-import { telegramPlugin } from "../../extensions/telegram/src/channel.js";
-import { whatsappPlugin } from "../../extensions/whatsapp/src/channel.js";
+import { requireBundledChannelPlugin } from "../channels/plugins/bundled.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { createTestRegistry } from "../test-utils/channel-plugins.js";
-import { getChannelSetupFlowAdapter } from "./channel-setup/registry.js";
-import type { ChannelSetupFlowAdapter } from "./channel-setup/types.js";
+import { getChannelSetupWizardAdapter } from "./channel-setup/registry.js";
+import type { ChannelSetupWizardAdapter } from "./channel-setup/types.js";
 import type { ChannelChoice } from "./onboard-types.js";
 
-type ChannelSetupFlowAdapterPatch = Partial<
+type ChannelSetupWizardAdapterPatch = Partial<
   Pick<
-    ChannelSetupFlowAdapter,
+    ChannelSetupWizardAdapter,
     "configure" | "configureInteractive" | "configureWhenConfigured" | "getStatus"
   >
 >;
 
 type PatchedSetupAdapterFields = {
-  configure?: ChannelSetupFlowAdapter["configure"];
-  configureInteractive?: ChannelSetupFlowAdapter["configureInteractive"];
-  configureWhenConfigured?: ChannelSetupFlowAdapter["configureWhenConfigured"];
-  getStatus?: ChannelSetupFlowAdapter["getStatus"];
+  configure?: ChannelSetupWizardAdapter["configure"];
+  configureInteractive?: ChannelSetupWizardAdapter["configureInteractive"];
+  configureWhenConfigured?: ChannelSetupWizardAdapter["configureWhenConfigured"];
+  getStatus?: ChannelSetupWizardAdapter["getStatus"];
 };
 
 export function setDefaultChannelPluginRegistryForTests(): void {
   const channels = [
-    { pluginId: "discord", plugin: discordPlugin, source: "test" },
-    { pluginId: "slack", plugin: slackPlugin, source: "test" },
-    { pluginId: "telegram", plugin: telegramPlugin, source: "test" },
-    { pluginId: "whatsapp", plugin: whatsappPlugin, source: "test" },
-    { pluginId: "signal", plugin: signalPlugin, source: "test" },
-    { pluginId: "imessage", plugin: imessagePlugin, source: "test" },
+    { pluginId: "discord", plugin: requireBundledChannelPlugin("discord"), source: "test" },
+    { pluginId: "feishu", plugin: requireBundledChannelPlugin("feishu"), source: "test" },
+    { pluginId: "slack", plugin: requireBundledChannelPlugin("slack"), source: "test" },
+    { pluginId: "telegram", plugin: requireBundledChannelPlugin("telegram"), source: "test" },
+    { pluginId: "whatsapp", plugin: requireBundledChannelPlugin("whatsapp"), source: "test" },
+    { pluginId: "signal", plugin: requireBundledChannelPlugin("signal"), source: "test" },
+    { pluginId: "imessage", plugin: requireBundledChannelPlugin("imessage"), source: "test" },
   ] as unknown as Parameters<typeof createTestRegistry>[0];
   setActivePluginRegistry(createTestRegistry(channels));
 }
 
-export function patchChannelSetupFlowAdapter(
+export function patchChannelSetupWizardAdapter(
   channel: ChannelChoice,
-  patch: ChannelSetupFlowAdapterPatch,
+  patch: ChannelSetupWizardAdapterPatch,
 ): () => void {
-  const adapter = getChannelSetupFlowAdapter(channel);
+  const adapter = getChannelSetupWizardAdapter(channel);
   if (!adapter) {
     throw new Error(`missing setup adapter for ${channel}`);
   }

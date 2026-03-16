@@ -8,24 +8,69 @@ echo "Building Docker image..."
 docker build -t "$IMAGE_NAME" -f "$ROOT_DIR/scripts/e2e/Dockerfile" "$ROOT_DIR"
 
 echo "Running plugins Docker E2E..."
-	docker run --rm -t "$IMAGE_NAME" bash -lc '
-	  set -euo pipefail
-	  if [ -f dist/index.mjs ]; then
-	    OPENCLAW_ENTRY="dist/index.mjs"
-	  elif [ -f dist/index.js ]; then
-	    OPENCLAW_ENTRY="dist/index.js"
-	  else
-	    echo "Missing dist/index.(m)js (build output):"
-	    ls -la dist || true
-	    exit 1
-	  fi
-	  export OPENCLAW_ENTRY
+docker run --rm -i "$IMAGE_NAME" bash -s <<'EOF'
+set -euo pipefail
 
-	  home_dir=$(mktemp -d "/tmp/openclaw-plugins-e2e.XXXXXX")
-	  export HOME="$home_dir"
-  mkdir -p "$HOME/.openclaw/extensions/demo-plugin"
+if [ -f dist/index.mjs ]; then
+  OPENCLAW_ENTRY="dist/index.mjs"
+elif [ -f dist/index.js ]; then
+  OPENCLAW_ENTRY="dist/index.js"
+else
+  echo "Missing dist/index.(m)js (build output):"
+  ls -la dist || true
+  exit 1
+fi
+export OPENCLAW_ENTRY
 
-  cat > "$HOME/.openclaw/extensions/demo-plugin/index.js" <<'"'"'JS'"'"'
+home_dir=$(mktemp -d "/tmp/openclaw-plugins-e2e.XXXXXX")
+export HOME="$home_dir"
+
+write_fixture_plugin() {
+  local dir="$1"
+  local id="$2"
+  local version="$3"
+  local method="$4"
+  local name="$5"
+
+  mkdir -p "$dir"
+  cat > "$dir/package.json" <<JSON
+{
+  "name": "@openclaw/$id",
+  "version": "$version",
+  "openclaw": { "extensions": ["./index.js"] }
+}
+JSON
+  cat > "$dir/index.js" <<JS
+module.exports = {
+  id: "$id",
+  name: "$name",
+  register(api) {
+    api.registerGatewayMethod("$method", async () => ({ ok: true }));
+  },
+};
+JS
+  cat > "$dir/openclaw.plugin.json" <<'JSON'
+{
+  "id": "placeholder",
+  "configSchema": {
+    "type": "object",
+    "properties": {}
+  }
+}
+JSON
+  node - <<'NODE' "$dir/openclaw.plugin.json" "$id"
+const fs = require("node:fs");
+const file = process.argv[2];
+const id = process.argv[3];
+const parsed = JSON.parse(fs.readFileSync(file, "utf8"));
+parsed.id = id;
+fs.writeFileSync(file, `${JSON.stringify(parsed, null, 2)}\n`);
+NODE
+}
+
+mkdir -p "$HOME/.openclaw/extensions/demo-plugin"
+
+cat > "$HOME/.openclaw/extensions/demo-plugin/index.js" <<'JS'
 module.exports = {
   id: "demo-plugin",
   name: "Demo Plugin",
@@ -38,7 +83,7 @@ module.exports = {
   },
 };
 JS
-  cat > "$HOME/.openclaw/extensions/demo-plugin/openclaw.plugin.json" <<'"'"'JSON'"'"'
+cat > "$HOME/.openclaw/extensions/demo-plugin/openclaw.plugin.json" <<'JSON'
 {
   "id": "demo-plugin",
   "configSchema": {
@@ -48,9 +93,9 @@ JS
 }
 JSON
 
-	  node "$OPENCLAW_ENTRY" plugins list --json > /tmp/plugins.json
+node "$OPENCLAW_ENTRY" plugins list --json > /tmp/plugins.json
 
-  node - <<'"'"'NODE'"'"'
+node - <<'NODE'
 const fs = require("node:fs");
 
 const data = JSON.parse(fs.readFileSync("/tmp/plugins.json", "utf8"));
@@ -79,17 +124,17 @@ if (diagErrors.length > 0) {
 console.log("ok");
 NODE
 
-  echo "Testing tgz install flow..."
-  pack_dir="$(mktemp -d "/tmp/openclaw-plugin-pack.XXXXXX")"
-  mkdir -p "$pack_dir/package"
-  cat > "$pack_dir/package/package.json" <<'"'"'JSON'"'"'
+echo "Testing tgz install flow..."
+pack_dir="$(mktemp -d "/tmp/openclaw-plugin-pack.XXXXXX")"
+mkdir -p "$pack_dir/package"
+cat > "$pack_dir/package/package.json" <<'JSON'
 {
   "name": "@openclaw/demo-plugin-tgz",
   "version": "0.0.1",
   "openclaw": { "extensions": ["./index.js"] }
 }
 JSON
-  cat > "$pack_dir/package/index.js" <<'"'"'JS'"'"'
+cat > "$pack_dir/package/index.js" <<'JS'
 module.exports = {
   id: "demo-plugin-tgz",
   name: "Demo Plugin TGZ",
@@ -98,7 +143,7 @@ module.exports = {
   },
 };
 JS
-  cat > "$pack_dir/package/openclaw.plugin.json" <<'"'"'JSON'"'"'
+cat > "$pack_dir/package/openclaw.plugin.json" <<'JSON'
 {
   "id": "demo-plugin-tgz",
   "configSchema": {
@@ -107,12 +152,12 @@ JS
   }
 }
 JSON
-  tar -czf /tmp/demo-plugin-tgz.tgz -C "$pack_dir" package
+tar -czf /tmp/demo-plugin-tgz.tgz -C "$pack_dir" package
 
-	  node "$OPENCLAW_ENTRY" plugins install /tmp/demo-plugin-tgz.tgz
-	  node "$OPENCLAW_ENTRY" plugins list --json > /tmp/plugins2.json
+node "$OPENCLAW_ENTRY" plugins install /tmp/demo-plugin-tgz.tgz
+node "$OPENCLAW_ENTRY" plugins list --json > /tmp/plugins2.json
 
-  node - <<'"'"'NODE'"'"'
+node - <<'NODE'
 const fs = require("node:fs");
 
 const data = JSON.parse(fs.readFileSync("/tmp/plugins2.json", "utf8"));
@@ -127,16 +172,16 @@ if (!Array.isArray(plugin.gatewayMethods) || !plugin.gatewayMethods.includes("de
 console.log("ok");
 NODE
 
-  echo "Testing install from local folder (plugins.load.paths)..."
-  dir_plugin="$(mktemp -d "/tmp/openclaw-plugin-dir.XXXXXX")"
-  cat > "$dir_plugin/package.json" <<'"'"'JSON'"'"'
+echo "Testing install from local folder (plugins.load.paths)..."
+dir_plugin="$(mktemp -d "/tmp/openclaw-plugin-dir.XXXXXX")"
+cat > "$dir_plugin/package.json" <<'JSON'
 {
   "name": "@openclaw/demo-plugin-dir",
   "version": "0.0.1",
   "openclaw": { "extensions": ["./index.js"] }
 }
 JSON
-  cat > "$dir_plugin/index.js" <<'"'"'JS'"'"'
+cat > "$dir_plugin/index.js" <<'JS'
 module.exports = {
   id: "demo-plugin-dir",
   name: "Demo Plugin DIR",
@@ -145,7 +190,7 @@ module.exports = {
   },
 };
 JS
-  cat > "$dir_plugin/openclaw.plugin.json" <<'"'"'JSON'"'"'
+cat > "$dir_plugin/openclaw.plugin.json" <<'JSON'
 {
   "id": "demo-plugin-dir",
   "configSchema": {
@@ -155,10 +200,10 @@ JS
 }
 JSON
 
-	  node "$OPENCLAW_ENTRY" plugins install "$dir_plugin"
-	  node "$OPENCLAW_ENTRY" plugins list --json > /tmp/plugins3.json
+node "$OPENCLAW_ENTRY" plugins install "$dir_plugin"
+node "$OPENCLAW_ENTRY" plugins list --json > /tmp/plugins3.json
 
-  node - <<'"'"'NODE'"'"'
+node - <<'NODE'
 const fs = require("node:fs");
 
 const data = JSON.parse(fs.readFileSync("/tmp/plugins3.json", "utf8"));
@@ -173,17 +218,17 @@ if (!Array.isArray(plugin.gatewayMethods) || !plugin.gatewayMethods.includes("de
 console.log("ok");
 NODE
 
-  echo "Testing install from npm spec (file:)..."
-  file_pack_dir="$(mktemp -d "/tmp/openclaw-plugin-filepack.XXXXXX")"
-  mkdir -p "$file_pack_dir/package"
-  cat > "$file_pack_dir/package/package.json" <<'"'"'JSON'"'"'
+echo "Testing install from npm spec (file:)..."
+file_pack_dir="$(mktemp -d "/tmp/openclaw-plugin-filepack.XXXXXX")"
+mkdir -p "$file_pack_dir/package"
+cat > "$file_pack_dir/package/package.json" <<'JSON'
 {
   "name": "@openclaw/demo-plugin-file",
   "version": "0.0.1",
   "openclaw": { "extensions": ["./index.js"] }
 }
 JSON
-  cat > "$file_pack_dir/package/index.js" <<'"'"'JS'"'"'
+cat > "$file_pack_dir/package/index.js" <<'JS'
 module.exports = {
   id: "demo-plugin-file",
   name: "Demo Plugin FILE",
@@ -192,7 +237,7 @@ module.exports = {
   },
 };
 JS
-  cat > "$file_pack_dir/package/openclaw.plugin.json" <<'"'"'JSON'"'"'
+cat > "$file_pack_dir/package/openclaw.plugin.json" <<'JSON'
 {
   "id": "demo-plugin-file",
   "configSchema": {
@@ -202,10 +247,10 @@ JS
 }
 JSON
 
-	  node "$OPENCLAW_ENTRY" plugins install "file:$file_pack_dir/package"
-	  node "$OPENCLAW_ENTRY" plugins list --json > /tmp/plugins4.json
+node "$OPENCLAW_ENTRY" plugins install "file:$file_pack_dir/package"
+node "$OPENCLAW_ENTRY" plugins list --json > /tmp/plugins4.json
 
-  node - <<'"'"'NODE'"'"'
+node - <<'NODE'
 const fs = require("node:fs");
 
 const data = JSON.parse(fs.readFileSync("/tmp/plugins4.json", "utf8"));
@@ -220,8 +265,155 @@ if (!Array.isArray(plugin.gatewayMethods) || !plugin.gatewayMethods.includes("de
 console.log("ok");
 NODE
 
-  echo "Running bundle MCP CLI-agent e2e..."
-  pnpm exec vitest run --config vitest.e2e.config.ts src/agents/cli-runner.bundle-mcp.e2e.test.ts
-'
+echo "Testing marketplace install and update flows..."
+marketplace_root="$HOME/.claude/plugins/marketplaces/fixture-marketplace"
+mkdir -p "$HOME/.claude/plugins" "$marketplace_root/.claude-plugin"
+write_fixture_plugin \
+  "$marketplace_root/plugins/marketplace-shortcut" \
+  "marketplace-shortcut" \
+  "0.0.1" \
+  "demo.marketplace.shortcut.v1" \
+  "Marketplace Shortcut"
+write_fixture_plugin \
+  "$marketplace_root/plugins/marketplace-direct" \
+  "marketplace-direct" \
+  "0.0.1" \
+  "demo.marketplace.direct.v1" \
+  "Marketplace Direct"
+cat > "$marketplace_root/.claude-plugin/marketplace.json" <<'JSON'
+{
+  "name": "Fixture Marketplace",
+  "version": "1.0.0",
+  "plugins": [
+    {
+      "name": "marketplace-shortcut",
+      "version": "0.0.1",
+      "description": "Shortcut install fixture",
+      "source": "./plugins/marketplace-shortcut"
+    },
+    {
+      "name": "marketplace-direct",
+      "version": "0.0.1",
+      "description": "Explicit marketplace fixture",
+      "source": {
+        "type": "path",
+        "path": "./plugins/marketplace-direct"
+      }
+    }
+  ]
+}
+JSON
+cat > "$HOME/.claude/plugins/known_marketplaces.json" <<JSON
+{
+  "claude-fixtures": {
+    "installLocation": "$marketplace_root",
+    "source": {
+      "type": "github",
+      "repo": "openclaw/fixture-marketplace"
+    }
+  }
+}
+JSON
+
+node "$OPENCLAW_ENTRY" plugins marketplace list claude-fixtures --json > /tmp/marketplace-list.json
+
+node - <<'NODE'
+const fs = require("node:fs");
+
+const data = JSON.parse(fs.readFileSync("/tmp/marketplace-list.json", "utf8"));
+const names = (data.plugins || []).map((entry) => entry.name).sort();
+if (data.name !== "Fixture Marketplace") {
+  throw new Error(`unexpected marketplace name: ${data.name}`);
+}
+if (!names.includes("marketplace-shortcut") || !names.includes("marketplace-direct")) {
+  throw new Error(`unexpected marketplace plugins: ${names.join(", ")}`);
+}
+console.log("ok");
+NODE
+
+node "$OPENCLAW_ENTRY" plugins install marketplace-shortcut@claude-fixtures
+node "$OPENCLAW_ENTRY" plugins install marketplace-direct --marketplace claude-fixtures
+node "$OPENCLAW_ENTRY" plugins list --json > /tmp/plugins-marketplace.json
+
+node - <<'NODE'
+const fs = require("node:fs");
+
+const data = JSON.parse(fs.readFileSync("/tmp/plugins-marketplace.json", "utf8"));
+const getPlugin = (id) => {
+  const plugin = (data.plugins || []).find((entry) => entry.id === id);
+  if (!plugin) throw new Error(`plugin not found: ${id}`);
+  if (plugin.status !== "loaded") {
+    throw new Error(`unexpected status for ${id}: ${plugin.status}`);
+  }
+  return plugin;
+};
+
+const shortcut = getPlugin("marketplace-shortcut");
+const direct = getPlugin("marketplace-direct");
+if (shortcut.version !== "0.0.1") {
+  throw new Error(`unexpected shortcut version: ${shortcut.version}`);
+}
+if (direct.version !== "0.0.1") {
+  throw new Error(`unexpected direct version: ${direct.version}`);
+}
+if (!shortcut.gatewayMethods.includes("demo.marketplace.shortcut.v1")) {
+  throw new Error("expected marketplace shortcut gateway method");
+}
+if (!direct.gatewayMethods.includes("demo.marketplace.direct.v1")) {
+  throw new Error("expected marketplace direct gateway method");
+}
+console.log("ok");
+NODE
+
+node - <<'NODE'
+const fs = require("node:fs");
+const path = require("node:path");
+
+const configPath = path.join(process.env.HOME, ".openclaw", "openclaw.json");
+const config = JSON.parse(fs.readFileSync(configPath, "utf8"));
+for (const id of ["marketplace-shortcut", "marketplace-direct"]) {
+  const record = config.plugins?.installs?.[id];
+  if (!record) throw new Error(`missing install record for ${id}`);
+  if (record.source !== "marketplace") {
+    throw new Error(`unexpected source for ${id}: ${record.source}`);
+  }
+  if (record.marketplaceSource !== "claude-fixtures") {
+    throw new Error(`unexpected marketplace source for ${id}: ${record.marketplaceSource}`);
+  }
+  if (record.marketplacePlugin !== id) {
+    throw new Error(`unexpected marketplace plugin for ${id}: ${record.marketplacePlugin}`);
+  }
+}
+console.log("ok");
+NODE
+
+write_fixture_plugin \
+  "$marketplace_root/plugins/marketplace-shortcut" \
+  "marketplace-shortcut" \
+  "0.0.2" \
+  "demo.marketplace.shortcut.v2" \
+  "Marketplace Shortcut"
+node "$OPENCLAW_ENTRY" plugins update marketplace-shortcut --dry-run
+node "$OPENCLAW_ENTRY" plugins update marketplace-shortcut
+node "$OPENCLAW_ENTRY" plugins list --json > /tmp/plugins-marketplace-updated.json
+
+node - <<'NODE'
+const fs = require("node:fs");
+
+const data = JSON.parse(fs.readFileSync("/tmp/plugins-marketplace-updated.json", "utf8"));
+const plugin = (data.plugins || []).find((entry) => entry.id === "marketplace-shortcut");
+if (!plugin) throw new Error("updated marketplace plugin not found");
+if (plugin.version !== "0.0.2") {
+  throw new Error(`unexpected updated version: ${plugin.version}`);
+}
+if (!plugin.gatewayMethods.includes("demo.marketplace.shortcut.v2")) {
+  throw new Error(`expected updated gateway method, got ${plugin.gatewayMethods.join(", ")}`);
+}
+console.log("ok");
+NODE
+
+echo "Running bundle MCP CLI-agent e2e..."
+pnpm exec vitest run --config vitest.e2e.config.ts src/agents/cli-runner.bundle-mcp.e2e.test.ts
+EOF
 
 echo "OK"

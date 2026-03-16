@@ -138,6 +138,7 @@ async function releaseHeldLock(normalizedFile: string): Promise<void> {
   await fs.rm(current.lockPath, { force: true }).catch(() => undefined);
 }
 
+/** Acquire a re-entrant process-local file lock backed by a `.lock` sidecar file. */
 export async function acquireFileLock(
   filePath: string,
   options: FileLockOptions,
@@ -227,6 +228,7 @@ export async function acquireFileLock(
   throw new Error(`file lock timeout for ${normalizedFile}`);
 }
 
+/** Run an async callback while holding a file lock, always releasing the lock afterward. */
 export async function withFileLock<T>(
   filePath: string,
   options: FileLockOptions,

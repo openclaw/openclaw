@@ -1,17 +1,9 @@
-import { discordSetupPlugin } from "../../../extensions/discord/src/channel.setup.js";
-import { googlechatPlugin } from "../../../extensions/googlechat/src/channel.js";
-import { imessageSetupPlugin } from "../../../extensions/imessage/src/channel.setup.js";
-import { ircPlugin } from "../../../extensions/irc/src/channel.js";
-import { lineSetupPlugin } from "../../../extensions/line/src/channel.setup.js";
-import { signalSetupPlugin } from "../../../extensions/signal/src/channel.setup.js";
-import { slackSetupPlugin } from "../../../extensions/slack/src/channel.setup.js";
-import { telegramSetupPlugin } from "../../../extensions/telegram/src/channel.setup.js";
-import { whatsappSetupPlugin } from "../../../extensions/whatsapp/src/channel.setup.js";
 import {
   getActivePluginRegistryVersion,
   requireActivePluginRegistry,
 } from "../../plugins/runtime.js";
 import { CHAT_CHANNEL_ORDER, type ChatChannelId } from "../registry.js";
+import { bundledChannelSetupPlugins } from "./bundled.js";
 import type { ChannelId, ChannelPlugin } from "./types.js";
 
 type CachedChannelSetupPlugins = {
@@ -27,18 +19,6 @@ const EMPTY_CHANNEL_SETUP_CACHE: CachedChannelSetupPlugins = {
 };
 
 let cachedChannelSetupPlugins = EMPTY_CHANNEL_SETUP_CACHE;
-
-const BUNDLED_CHANNEL_SETUP_PLUGINS = [
-  telegramSetupPlugin,
-  whatsappSetupPlugin,
-  discordSetupPlugin,
-  ircPlugin,
-  googlechatPlugin,
-  slackSetupPlugin,
-  signalSetupPlugin,
-  imessageSetupPlugin,
-  lineSetupPlugin,
-] as ChannelPlugin[];
 
 function dedupeSetupPlugins(plugins: ChannelPlugin[]): ChannelPlugin[] {
   const seen = new Set<string>();
@@ -77,7 +57,7 @@ function resolveCachedChannelSetupPlugins(): CachedChannelSetupPlugins {
 
   const registryPlugins = (registry.channelSetups ?? []).map((entry) => entry.plugin);
   const sorted = sortChannelSetupPlugins(
-    registryPlugins.length > 0 ? registryPlugins : BUNDLED_CHANNEL_SETUP_PLUGINS,
+    registryPlugins.length > 0 ? registryPlugins : bundledChannelSetupPlugins,
   );
   const byId = new Map<string, ChannelPlugin>();
   for (const plugin of sorted) {

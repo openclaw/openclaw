@@ -1,15 +1,5 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { inspectTelegramAccount } from "../../extensions/telegram/src/account-inspect.js";
-import {
-  listTelegramAccountIds,
-  resolveTelegramAccount,
-} from "../../extensions/telegram/src/accounts.js";
-import {
-  isNumericTelegramUserId,
-  normalizeTelegramAllowFromEntry,
-} from "../../extensions/telegram/src/allow-from.js";
-import { fetchTelegramChatId } from "../../extensions/telegram/src/api-fetch.js";
 import { normalizeChatChannelId } from "../channels/registry.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { resolveCommandSecretRefsViaGateway } from "../cli/command-secret-gateway.js";
@@ -32,6 +22,14 @@ import {
   normalizeTrustedSafeBinDirs,
 } from "../infra/exec-safe-bin-trust.js";
 import { readChannelAllowFromStore } from "../pairing/pairing-store.js";
+import {
+  fetchTelegramChatId,
+  inspectTelegramAccount,
+  isNumericTelegramUserId,
+  listTelegramAccountIds,
+  normalizeTelegramAllowFromEntry,
+  resolveTelegramAccount,
+} from "../plugin-sdk-internal/telegram.js";
 import {
   formatChannelAccountsDefaultPath,
   formatSetExplicitDefaultInstruction,
@@ -352,7 +350,7 @@ async function maybeRepairTelegramAllowFromUsernames(cfg: OpenClawConfig): Promi
       changes: [
         hasConfiguredUnavailableToken
           ? `- Telegram allowFrom contains @username entries, but configured Telegram bot credentials are unavailable in this command path; cannot auto-resolve (start the gateway or make the secret source available, then rerun doctor --fix).`
-          : `- Telegram allowFrom contains @username entries, but no Telegram bot token is configured; cannot auto-resolve (run onboarding or replace with numeric sender IDs).`,
+          : `- Telegram allowFrom contains @username entries, but no Telegram bot token is configured; cannot auto-resolve (run setup or replace with numeric sender IDs).`,
       ],
     };
   }
