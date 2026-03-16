@@ -138,6 +138,39 @@ describe("Feishu bot menu handler", () => {
     expect(handleFeishuMessageMock).not.toHaveBeenCalled();
   });
 
+  it("does not block bot-menu handling on quick-action launcher send", async () => {
+    const onBotMenu = await registerHandlers();
+    let resolveSend: (() => void) | undefined;
+    sendCardFeishuMock.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveSend = () => resolve({ messageId: "m1", chatId: "c1" });
+        }),
+    );
+
+    const pending = onBotMenu({
+      event_key: "quick-actions",
+      timestamp: "1700000000000",
+      operator: {
+        operator_id: {
+          open_id: "ou_user1",
+          user_id: "user_1",
+          union_id: "union_1",
+        },
+      },
+    });
+    let settled = false;
+    pending.finally(() => {
+      settled = true;
+    });
+
+    await Promise.resolve();
+    expect(settled).toBe(true);
+
+    resolveSend?.();
+    await pending;
+  });
+
   it("falls back to the legacy /menu synthetic message path for unrelated bot menu keys", async () => {
     const onBotMenu = await registerHandlers();
 
@@ -181,14 +214,16 @@ describe("Feishu bot menu handler", () => {
       },
     });
 
-    expect(handleFeishuMessageMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        event: expect.objectContaining({
-          message: expect.objectContaining({
-            content: '{"text":"/menu quick-actions"}',
+    await vi.waitFor(() => {
+      expect(handleFeishuMessageMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          event: expect.objectContaining({
+            message: expect.objectContaining({
+              content: '{"text":"/menu quick-actions"}',
+            }),
           }),
         }),
-      }),
-    );
+      );
+    });
   });
 });

@@ -525,16 +525,6 @@ function registerEventHandlers(
         if (!operatorOpenId || !eventKey) {
           return;
         }
-        const handledMenu = await maybeHandleFeishuQuickActionMenu({
-          cfg,
-          eventKey,
-          operatorOpenId,
-          runtime,
-          accountId,
-        });
-        if (handledMenu) {
-          return;
-        }
         const syntheticEvent: FeishuMessageEvent = {
           sender: {
             sender_id: {
@@ -554,14 +544,28 @@ function registerEventHandlers(
             }),
           },
         };
-        const promise = handleFeishuMessage({
+        const handleLegacyMenu = () =>
+          handleFeishuMessage({
+            cfg,
+            event: syntheticEvent,
+            botOpenId: botOpenIds.get(accountId),
+            botName: botNames.get(accountId),
+            runtime,
+            chatHistories,
+            accountId,
+          });
+
+        const promise = maybeHandleFeishuQuickActionMenu({
           cfg,
-          event: syntheticEvent,
-          botOpenId: botOpenIds.get(accountId),
-          botName: botNames.get(accountId),
+          eventKey,
+          operatorOpenId,
           runtime,
-          chatHistories,
           accountId,
+        }).then((handledMenu) => {
+          if (handledMenu) {
+            return;
+          }
+          return handleLegacyMenu();
         });
         if (fireAndForget) {
           promise.catch((err) => {
