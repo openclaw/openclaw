@@ -71,6 +71,11 @@ describe("runEmbeddedPiAgent usage reporting", () => {
       workspaceDir: "/tmp/workspace",
       allowGatewaySubagentBinding: true,
     });
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledWith(
+      expect.objectContaining({
+        allowGatewaySubagentBinding: true,
+      }),
+    );
   });
 
   it("forwards sender identity fields into embedded attempts", async () => {
