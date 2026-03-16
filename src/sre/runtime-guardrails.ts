@@ -10,6 +10,26 @@ import {
 
 type GuardrailFailureFamily = "shell" | "rbac" | "git_auth" | "model_auth";
 type TranscriptPreview = { line: number; preview: string; rawText: string };
+type HumanCorrectionPreview = { line: number; preview: string };
+type AssistantTextLine = { line: number; text: string };
+type TranscriptScan = {
+  sawRetrievalDoc: boolean;
+  sawDbDataPlaybook: boolean;
+  sawRepoRead: boolean;
+  latestHumanCorrection?: HumanCorrectionPreview;
+  latestUserArtifact?: TranscriptPreview;
+  latestDataIncidentText?: string;
+  failureCounts: Map<GuardrailFailureFamily, number>;
+  assistantTextLines: AssistantTextLine[];
+};
+type GuardrailSignals = {
+  promptHasHumanCorrection: boolean;
+  currentUserArtifact?: TranscriptPreview;
+  currentHumanCorrection?: HumanCorrectionPreview;
+  hasDataIncidentSignal: boolean;
+  hasExactArtifactSignal: boolean;
+  userResolver: ReturnType<typeof extractResolverFamily>;
+};
 
 const RETRIEVAL_DOC_RE =
   /(knowledge-index\.md|runbook-map\.md|repo-root-model\.md|notion-postmortem-index\.md|incident-dossier)/i;
@@ -63,6 +83,14 @@ function cleanLine(text: string, maxChars = 220): string {
   return normalized.length <= maxChars ? normalized : `${normalized.slice(0, maxChars - 1)}…`;
 }
 
+function hasPromptGuardrailSignal(prompt: string): boolean {
+  return (
+    DATA_INCIDENT_RE.test(prompt) ||
+    EXACT_ARTIFACT_RE.test(prompt) ||
+    HUMAN_CORRECTION_RE.test(prompt)
+  );
+}
+
 function formatInlineCode(text: string): string {
   const longestBacktickRun = Math.max(
     0,
@@ -82,7 +110,7 @@ function isErrnoCode(err: unknown, code: string): err is NodeJS.ErrnoException {
 }
 
 function hasRelatedHumanCorrection(params: {
-  currentHumanCorrection?: { line: number; preview: string };
+  currentHumanCorrection?: HumanCorrectionPreview;
   currentUserArtifact?: TranscriptPreview;
   promptHasHumanCorrection: boolean;
 }): boolean {
@@ -149,45 +177,17 @@ function singleVaultGraphqlEvidenceScriptPath(): string {
   return defaultSingleVaultGraphqlEvidenceScriptPath();
 }
 
-/**
- * Builds inline SRE runtime guardrails from a JSONL transcript plus the current
- * prompt.
- *
- * `params.transcriptText` should be the raw session transcript where each line
- * is one JSON event. Returns a formatted guardrail block when the transcript or
- * prompt implies extra operator guidance, otherwise `undefined`.
- */
-export function buildSreRuntimeGuardrailContextFromTranscript(params: {
-  agentId: string;
-  prompt: string;
-  transcriptText: string;
-}): string | undefined {
-  if (!isSreAgent(params.agentId)) {
-    return undefined;
-  }
-  const lines = params.transcriptText
-    .split(/\r?\n/)
-    .map((line) => line.trim())
-    .filter(Boolean);
-  if (
-    lines.length === 0 &&
-    !(
-      DATA_INCIDENT_RE.test(params.prompt) ||
-      EXACT_ARTIFACT_RE.test(params.prompt) ||
-      HUMAN_CORRECTION_RE.test(params.prompt)
-    )
-  ) {
-    return undefined;
-  }
-
-  let sawRetrievalDoc = false;
-  let sawDbDataPlaybook = false;
-  let sawRepoRead = false;
-  let latestHumanCorrection: { line: number; preview: string } | undefined;
-  let latestUserArtifact: TranscriptPreview | undefined;
-  let latestDataIncidentText: string | undefined;
-  const failureCounts = new Map<GuardrailFailureFamily, number>();
-  const assistantTextLines: Array<{ line: number; text: string }> = [];
+function scanTranscriptLines(lines: string[]): TranscriptScan {
+  const scan: TranscriptScan = {
+    sawRetrievalDoc: false,
+    sawDbDataPlaybook: false,
+    sawRepoRead: false,
+    latestHumanCorrection: undefined,
+    latestUserArtifact: undefined,
+    latestDataIncidentText: undefined,
+    failureCounts: new Map<GuardrailFailureFamily, number>(),
+    assistantTextLines: [],
+  };
 
   for (const [index, line] of lines.entries()) {
     const lineNo = index + 1;
@@ -195,13 +195,13 @@ export function buildSreRuntimeGuardrailContextFromTranscript(params: {
       for (const pathMatch of line.matchAll(/"path":"([^"]+)"/g)) {
         const readPath = pathMatch[1] ?? "";
         if (RETRIEVAL_DOC_RE.test(readPath)) {
-          sawRetrievalDoc = true;
+          scan.sawRetrievalDoc = true;
         }
         if (DB_DATA_PLAYBOOK_RE.test(readPath)) {
-          sawDbDataPlaybook = true;
+          scan.sawDbDataPlaybook = true;
         }
         if (/\/repos\/|morpho-infra|morpho-api|openclaw-sre\//i.test(readPath)) {
-          sawRepoRead = true;
+          scan.sawRepoRead = true;
         }
       }
     }
@@ -210,13 +210,13 @@ export function buildSreRuntimeGuardrailContextFromTranscript(params: {
       const text = extractInlineJsonTextValue(line) ?? "";
       const preview = cleanLine(text);
       if (HUMAN_CORRECTION_RE.test(text)) {
-        latestHumanCorrection = { line: lineNo, preview };
+        scan.latestHumanCorrection = { line: lineNo, preview };
       }
       if (DATA_INCIDENT_RE.test(text)) {
-        latestDataIncidentText = text;
+        scan.latestDataIncidentText = text;
       }
       if (EXACT_ARTIFACT_RE.test(text)) {
-        latestUserArtifact = { line: lineNo, preview, rawText: text };
+        scan.latestUserArtifact = { line: lineNo, preview, rawText: text };
       }
     }
 
@@ -224,109 +224,92 @@ export function buildSreRuntimeGuardrailContextFromTranscript(params: {
       const normalized = line.replace(/\\"/g, '"');
       const family = classifyFailure(normalized);
       if (family) {
-        failureCounts.set(family, (failureCounts.get(family) ?? 0) + 1);
+        scan.failureCounts.set(family, (scan.failureCounts.get(family) ?? 0) + 1);
       }
     }
 
     if (line.includes('"role":"assistant"')) {
       const assistantText = extractInlineJsonTextValue(line);
       if (assistantText) {
-        assistantTextLines.push({ line: lineNo, text: assistantText });
+        scan.assistantTextLines.push({ line: lineNo, text: assistantText });
       }
     }
   }
 
-  const guidance: string[] = [];
-  const promptPreview = cleanLine(params.prompt);
+  return scan;
+}
+
+function buildPromptArtifact(prompt: string): TranscriptPreview | undefined {
+  if (!EXACT_ARTIFACT_RE.test(prompt)) {
+    return undefined;
+  }
+  return {
+    line: Number.POSITIVE_INFINITY,
+    preview: cleanLine(prompt),
+    rawText: prompt,
+  };
+}
+
+function resolveGuardrailSignals(params: {
+  prompt: string;
+  latestDataIncidentText?: string;
+  latestUserArtifact?: TranscriptPreview;
+  latestHumanCorrection?: HumanCorrectionPreview;
+}): GuardrailSignals {
   const promptHasHumanCorrection = HUMAN_CORRECTION_RE.test(params.prompt);
-  const promptArtifact = EXACT_ARTIFACT_RE.test(params.prompt)
-    ? ({
-        line: Number.POSITIVE_INFINITY,
-        preview: promptPreview,
-        rawText: params.prompt,
-      } satisfies TranscriptPreview)
-    : undefined;
-  const currentUserArtifact = promptArtifact ?? latestUserArtifact;
+  const promptArtifact = buildPromptArtifact(params.prompt);
+  const currentUserArtifact = promptArtifact ?? params.latestUserArtifact;
   const currentHumanCorrection = promptHasHumanCorrection
-    ? { line: Number.POSITIVE_INFINITY, preview: promptPreview }
-    : latestHumanCorrection;
+    ? { line: Number.POSITIVE_INFINITY, preview: cleanLine(params.prompt) }
+    : params.latestHumanCorrection;
   const currentArtifactText = currentUserArtifact?.rawText ?? params.prompt;
-  const hasDataIncidentSignal = DATA_INCIDENT_RE.test(
-    `${params.prompt}\n${latestDataIncidentText ?? ""}\n${currentArtifactText}`,
+
+  return {
+    promptHasHumanCorrection,
+    currentUserArtifact,
+    currentHumanCorrection,
+    hasDataIncidentSignal: DATA_INCIDENT_RE.test(
+      `${params.prompt}\n${params.latestDataIncidentText ?? ""}\n${currentArtifactText}`,
+    ),
+    hasExactArtifactSignal: EXACT_ARTIFACT_RE.test(currentArtifactText),
+    userResolver: extractResolverFamily(currentArtifactText),
+  };
+}
+
+function buildPriorResolverMismatchMessage(params: {
+  currentUserArtifact?: TranscriptPreview;
+  userResolver: ReturnType<typeof extractResolverFamily>;
+  assistantTextLines: AssistantTextLine[];
+}): string | undefined {
+  if (!params.currentUserArtifact || !params.userResolver) {
+    return undefined;
+  }
+  const otherResolver =
+    params.userResolver === "vaultV2ByAddress" ? "vaultByAddress" : "vaultV2ByAddress";
+  const userResolverRe = RESOLVER_TOKEN_RE[params.userResolver];
+  const otherResolverRe = RESOLVER_TOKEN_RE[otherResolver];
+  const priorResolverMismatch = params.assistantTextLines.some(
+    (entry) =>
+      entry.line < params.currentUserArtifact.line &&
+      otherResolverRe.test(entry.text) &&
+      !userResolverRe.test(entry.text),
   );
-  const hasExactArtifactSignal = EXACT_ARTIFACT_RE.test(currentArtifactText);
-  const userResolver = extractResolverFamily(currentArtifactText);
-  let priorResolverMismatchMessage: string | undefined;
 
-  if (currentUserArtifact && userResolver) {
-    const otherResolver =
-      userResolver === "vaultV2ByAddress" ? "vaultByAddress" : "vaultV2ByAddress";
-    const userResolverRe = RESOLVER_TOKEN_RE[userResolver];
-    const otherResolverRe = RESOLVER_TOKEN_RE[otherResolver];
-    const priorResolverMismatch = assistantTextLines.some(
-      (entry) =>
-        entry.line < currentUserArtifact.line &&
-        otherResolverRe.test(entry.text) &&
-        !userResolverRe.test(entry.text),
-    );
-    if (priorResolverMismatch) {
-      priorResolverMismatchMessage = `- Resolver mismatch detected: older thread content mentions \`${otherResolver}\` while the latest user artifact is \`${userResolver}\`. Re-prove the path from the latest query before naming a cause.`;
-    }
+  if (!priorResolverMismatch) {
+    return undefined;
   }
+  return `- Resolver mismatch detected: older thread content mentions \`${otherResolver}\` while the latest user artifact is \`${params.userResolver}\`. Re-prove the path from the latest query before naming a cause.`;
+}
 
-  if (currentHumanCorrection) {
-    guidance.push(
-      `- Latest human correction overrides older bot theories unless disproved by newer live evidence: "${currentHumanCorrection.preview}"`,
-    );
-  }
+function appendRepeatedFailureGuidance(
+  guidance: string[],
+  failureCounts: Map<GuardrailFailureFamily, number>,
+): GuardrailFailureFamily[] {
+  const repeatedFamilies = [...failureCounts.entries()]
+    .filter(([, count]) => count >= 2)
+    .map(([family]) => family);
 
-  if (
-    hasExactArtifactSignal &&
-    (hasRelatedHumanCorrection({
-      currentHumanCorrection,
-      currentUserArtifact,
-      promptHasHumanCorrection,
-    }) ||
-      priorResolverMismatchMessage)
-  ) {
-    guidance.push(
-      "- New evidence contradicted an older theory. Explicitly retract the outdated theory in-thread before continuing from fresh live evidence.",
-    );
-  }
-
-  if (hasExactArtifactSignal) {
-    guidance.push(
-      "- Latest user-supplied exact artifact detected. Replay that exact query/event/address first, then isolate the minimal failing field set before reusing older theories.",
-    );
-  }
-
-  if (currentUserArtifact && hasDataIncidentSignal) {
-    const singleVaultGraphqlEvidenceScript = formatInlineCode(
-      singleVaultGraphqlEvidenceScriptPath(),
-    );
-    guidance.push(
-      "- For single-vault API/data incidents, compare one healthy same-chain control vault, direct onchain values, and public surfaces (`vaultV2ByAddress`, `vaultV2s`, `vaultV2transactions`) before calling it chain-wide.",
-    );
-    guidance.push(
-      `- Use ${singleVaultGraphqlEvidenceScript} when possible so the exact query replay, healthy control, and public-surface split are captured before RCA ranking.`,
-    );
-    guidance.push(
-      "- Do not call an ingestion/provenance root cause confirmed until you add one DB row/provenance fact and one job-path or simulation fact for the affected entity.",
-    );
-  }
-
-  if (hasDataIncidentSignal && !sawDbDataPlaybook) {
-    guidance.push(
-      "- Data-incident retrieval gate: read `references/db-data-incident-playbook.md` before more repo/code spelunking.",
-    );
-  }
-
-  if (priorResolverMismatchMessage) {
-    guidance.push(priorResolverMismatchMessage);
-  }
-
-  const repeatedFamilies = [...failureCounts.entries()].filter(([, count]) => count >= 2);
-  for (const [family] of repeatedFamilies) {
+  for (const family of repeatedFamilies) {
     if (family === "shell") {
       guidance.push(
         "- Repeated shell/runtime failures detected. Avoid re-running the same shell pattern; use blocked mode or an explicit `bash -lc` wrapper if Bash-only syntax is required.",
@@ -352,7 +335,100 @@ export function buildSreRuntimeGuardrailContextFromTranscript(params: {
     }
   }
 
-  if (sawRepoRead && !sawRetrievalDoc) {
+  return repeatedFamilies;
+}
+
+/**
+ * Builds inline SRE runtime guardrails from a JSONL transcript plus the current
+ * prompt.
+ *
+ * `params.transcriptText` should be the raw session transcript where each line
+ * is one JSON event. Returns a formatted guardrail block when the transcript or
+ * prompt implies extra operator guidance, otherwise `undefined`.
+ */
+export function buildSreRuntimeGuardrailContextFromTranscript(params: {
+  agentId: string;
+  prompt: string;
+  transcriptText: string;
+}): string | undefined {
+  if (!isSreAgent(params.agentId)) {
+    return undefined;
+  }
+  const lines = params.transcriptText
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+  if (lines.length === 0 && !hasPromptGuardrailSignal(params.prompt)) {
+    return undefined;
+  }
+  const transcriptScan = scanTranscriptLines(lines);
+  const guidance: string[] = [];
+  const guardrailSignals = resolveGuardrailSignals({
+    prompt: params.prompt,
+    latestDataIncidentText: transcriptScan.latestDataIncidentText,
+    latestUserArtifact: transcriptScan.latestUserArtifact,
+    latestHumanCorrection: transcriptScan.latestHumanCorrection,
+  });
+  const priorResolverMismatchMessage = buildPriorResolverMismatchMessage({
+    currentUserArtifact: guardrailSignals.currentUserArtifact,
+    userResolver: guardrailSignals.userResolver,
+    assistantTextLines: transcriptScan.assistantTextLines,
+  });
+
+  if (guardrailSignals.currentHumanCorrection) {
+    guidance.push(
+      `- Latest human correction overrides older bot theories unless disproved by newer live evidence: "${guardrailSignals.currentHumanCorrection.preview}"`,
+    );
+  }
+
+  if (
+    guardrailSignals.hasExactArtifactSignal &&
+    (hasRelatedHumanCorrection({
+      currentHumanCorrection: guardrailSignals.currentHumanCorrection,
+      currentUserArtifact: guardrailSignals.currentUserArtifact,
+      promptHasHumanCorrection: guardrailSignals.promptHasHumanCorrection,
+    }) ||
+      priorResolverMismatchMessage)
+  ) {
+    guidance.push(
+      "- New evidence contradicted an older theory. Explicitly retract the outdated theory in-thread before continuing from fresh live evidence.",
+    );
+  }
+
+  if (guardrailSignals.hasExactArtifactSignal) {
+    guidance.push(
+      "- Latest user-supplied exact artifact detected. Replay that exact query/event/address first, then isolate the minimal failing field set before reusing older theories.",
+    );
+  }
+
+  if (guardrailSignals.currentUserArtifact && guardrailSignals.hasDataIncidentSignal) {
+    const singleVaultGraphqlEvidenceScript = formatInlineCode(
+      singleVaultGraphqlEvidenceScriptPath(),
+    );
+    guidance.push(
+      "- For single-vault API/data incidents, compare one healthy same-chain control vault, direct onchain values, and public surfaces (`vaultV2ByAddress`, `vaultV2s`, `vaultV2transactions`) before calling it chain-wide.",
+    );
+    guidance.push(
+      `- Use ${singleVaultGraphqlEvidenceScript} when possible so the exact query replay, healthy control, and public-surface split are captured before RCA ranking.`,
+    );
+    guidance.push(
+      "- Do not call an ingestion/provenance root cause confirmed until you add one DB row/provenance fact and one job-path or simulation fact for the affected entity.",
+    );
+  }
+
+  if (guardrailSignals.hasDataIncidentSignal && !transcriptScan.sawDbDataPlaybook) {
+    guidance.push(
+      "- Data-incident retrieval gate: read `references/db-data-incident-playbook.md` before more repo/code spelunking.",
+    );
+  }
+
+  if (priorResolverMismatchMessage) {
+    guidance.push(priorResolverMismatchMessage);
+  }
+
+  const repeatedFamilies = appendRepeatedFailureGuidance(guidance, transcriptScan.failureCounts);
+
+  if (transcriptScan.sawRepoRead && !transcriptScan.sawRetrievalDoc) {
     guidance.push(
       "- Retrieval gate: before more repo/code spelunking, read one of `knowledge-index.md`, `runbook-map.md`, or `repo-root-model.md`.",
     );
