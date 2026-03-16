@@ -561,9 +561,17 @@ export async function onTimer(state: CronServiceState) {
         if (changed) {
           await persist(state);
         }
+        state.deps.log.debug(
+          { jobCount: state.store?.jobs.length ?? 0, nextWakeAtMs: nextWakeAtMs(state) ?? null },
+          "cron: timer tick — no due jobs",
+        );
         return [];
       }
 
+      state.deps.log.info(
+        { dueCount: due.length, jobIds: due.map((j) => j.id) },
+        "cron: timer tick — dispatching due jobs",
+      );
       const now = state.deps.nowMs();
       for (const job of due) {
         job.state.runningAtMs = now;
@@ -584,12 +592,29 @@ export async function onTimer(state: CronServiceState) {
       const { id, job } = params;
       const startedAt = state.deps.nowMs();
       job.state.runningAtMs = startedAt;
+      state.deps.log.info(
+        {
+          jobId: id,
+          jobName: job.name,
+          sessionTarget: job.sessionTarget,
+          schedule: job.schedule.kind,
+        },
+        "cron: job started",
+      );
       emit(state, { jobId: job.id, action: "started", runAtMs: startedAt });
       const jobTimeoutMs = resolveCronJobTimeoutMs(job);
 
       try {
         const result = await executeJobCoreWithTimeout(state, job);
-        return { jobId: id, ...result, startedAt, endedAt: state.deps.nowMs() };
+        const endedAt = state.deps.nowMs();
+        const durationMs = endedAt - startedAt;
+        if (result.status === "ok" || result.status === "skipped") {
+          state.deps.log.info(
+            { jobId: id, jobName: job.name, status: result.status, durationMs },
+            "cron: job completed",
+          );
+        }
+        return { jobId: id, ...result, startedAt, endedAt };
       } catch (err) {
         const errorText = isAbortError(err) ? timeoutErrorMessage() : String(err);
         state.deps.log.warn(

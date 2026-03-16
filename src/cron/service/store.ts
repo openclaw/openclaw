@@ -252,9 +252,19 @@ export async function ensureLoaded(
   const loaded = await loadCronStore(state.deps.storePath);
   const jobs = (loaded.jobs ?? []) as unknown as Array<Record<string, unknown>>;
   let mutated = false;
+  // Capture the logger before the loop to avoid shadowing by the inner `jobState` rename.
+  const { log } = state.deps;
+  log.debug(
+    {
+      storePath: state.deps.storePath,
+      jobCount: jobs.length,
+      forceReload: opts?.forceReload ?? false,
+    },
+    "cron: store loaded from disk",
+  );
   for (const raw of jobs) {
-    const state = raw.state;
-    if (!state || typeof state !== "object" || Array.isArray(state)) {
+    const jobState = raw.state;
+    if (!jobState || typeof jobState !== "object" || Array.isArray(jobState)) {
       raw.state = {};
       mutated = true;
     }
@@ -491,13 +501,28 @@ export async function ensureLoaded(
     const normalizedSessionTarget =
       typeof raw.sessionTarget === "string" ? raw.sessionTarget.trim().toLowerCase() : "";
     if (normalizedSessionTarget === "main" || normalizedSessionTarget === "isolated") {
+      // Preserve the existing valid sessionTarget; only normalize casing.
       if (raw.sessionTarget !== normalizedSessionTarget) {
         raw.sessionTarget = normalizedSessionTarget;
         mutated = true;
       }
     } else {
+      // sessionTarget is missing or unrecognized — infer from payload kind.
+      // Log when we overwrite a previously-set (but invalid) value so that
+      // manual config edits that conflict with payload kind are observable.
       const inferredSessionTarget = payloadKind === "agentTurn" ? "isolated" : "main";
       if (raw.sessionTarget !== inferredSessionTarget) {
+        if (raw.sessionTarget !== undefined && raw.sessionTarget !== null) {
+          log.warn(
+            {
+              jobId: typeof raw.id === "string" ? raw.id : "unknown",
+              previousSessionTarget: raw.sessionTarget,
+              inferredSessionTarget,
+              payloadKind: payloadKind || "unknown",
+            },
+            "cron: store migration: sessionTarget reset to inferred value (config edit conflict)",
+          );
+        }
         raw.sessionTarget = inferredSessionTarget;
         mutated = true;
       }
@@ -543,6 +568,10 @@ export async function ensureLoaded(
   }
 
   if (mutated) {
+    log.info(
+      { storePath: state.deps.storePath, jobCount: jobs.length },
+      "cron: store migration applied; persisting updated store",
+    );
     await persist(state);
   }
 }
@@ -568,4 +597,8 @@ export async function persist(state: CronServiceState) {
   await saveCronStore(state.deps.storePath, state.store);
   // Update file mtime after save to prevent immediate reload
   state.storeFileMtimeMs = await getFileMtimeMs(state.deps.storePath);
+  state.deps.log.debug(
+    { storePath: state.deps.storePath, jobCount: state.store.jobs.length },
+    "cron: store persisted",
+  );
 }
