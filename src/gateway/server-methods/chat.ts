@@ -970,19 +970,26 @@ export const chatHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-    const { sessionKey, limit } = params as {
+    const { sessionKey, limit, offset } = params as {
       sessionKey: string;
       limit?: number;
+      offset?: number;
     };
     const { cfg, storePath, entry } = loadSessionEntry(sessionKey);
     const sessionId = entry?.sessionId;
     const rawMessages =
       sessionId && storePath ? readSessionMessages(sessionId, storePath, entry?.sessionFile) : [];
+    const total = rawMessages.length;
     const hardMax = 1000;
     const defaultLimit = 200;
     const requested = typeof limit === "number" ? limit : defaultLimit;
     const max = Math.min(hardMax, requested);
-    const sliced = rawMessages.length > max ? rawMessages.slice(-max) : rawMessages;
+    const requestedOffset = typeof offset === "number" ? Math.max(0, offset) : 0;
+    // Pagination: slice from the end (most recent messages)
+    // offset=0 means the most recent messages
+    const startIndex = Math.max(0, rawMessages.length - requestedOffset - max);
+    const endIndex = rawMessages.length - requestedOffset;
+    const sliced = rawMessages.slice(startIndex, endIndex);
     const sanitized = stripEnvelopeFromMessages(sliced);
     const normalized = sanitizeChatHistoryMessages(sanitized);
     const maxHistoryBytes = getMaxChatHistoryMessagesBytes();
@@ -1017,6 +1024,7 @@ export const chatHandlers: GatewayRequestHandlers = {
       sessionKey,
       sessionId,
       messages: bounded.messages,
+      total,
       thinkingLevel,
       fastMode: entry?.fastMode,
       verboseLevel,

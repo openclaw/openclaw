@@ -20,6 +20,7 @@ import {
 const SessionsHistoryToolSchema = Type.Object({
   sessionKey: Type.String(),
   limit: Type.Optional(Type.Number({ minimum: 1 })),
+  offset: Type.Optional(Type.Number({ minimum: 0 })),
   includeTools: Type.Optional(Type.Boolean()),
 });
 
@@ -237,10 +238,14 @@ export function createSessionsHistoryTool(opts?: {
         typeof params.limit === "number" && Number.isFinite(params.limit)
           ? Math.max(1, Math.floor(params.limit))
           : undefined;
+      const offset =
+        typeof params.offset === "number" && Number.isFinite(params.offset)
+          ? Math.max(0, Math.floor(params.offset))
+          : undefined;
       const includeTools = Boolean(params.includeTools);
-      const result = await callGateway<{ messages: Array<unknown> }>({
+      const result = await callGateway<{ messages: Array<unknown>; total?: number }>({
         method: "chat.history",
-        params: { sessionKey: resolvedKey, limit },
+        params: { sessionKey: resolvedKey, limit, offset },
       });
       const rawMessages = Array.isArray(result?.messages) ? result.messages : [];
       const selectedMessages = includeTools ? rawMessages : stripToolMessages(rawMessages);
@@ -260,6 +265,7 @@ export function createSessionsHistoryTool(opts?: {
       return jsonResult({
         sessionKey: displayKey,
         messages: hardened.items,
+        total: result?.total,
         truncated: droppedMessages || contentTruncated || hardened.hardCapped,
         droppedMessages: droppedMessages || hardened.hardCapped,
         contentTruncated,
