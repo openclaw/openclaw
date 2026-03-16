@@ -502,4 +502,91 @@ describe("deliverDiscordReply", () => {
       expect.objectContaining({ token: "token", accountId: "default" }),
     );
   });
+
+  describe("DM target pre-resolution (user:<id>)", () => {
+    it("resolves DM channel once and uses fast path for all chunks", async () => {
+      const postMock = vi.fn().mockResolvedValue({ id: "dm-channel-99" });
+      const fakeRest = { post: postMock } as unknown as import("@buape/carbon").RequestClient;
+      const callOrder: string[] = [];
+      sendDiscordTextMock.mockImplementation(
+        async (_rest: unknown, _channelId: unknown, text: string) => {
+          callOrder.push(text);
+          return { id: `msg-${callOrder.length}`, channel_id: "dm-channel-99" };
+        },
+      );
+
+      await deliverDiscordReply({
+        replies: [{ text: "1234567890" }],
+        target: "user:user-42",
+        token: "token",
+        rest: fakeRest,
+        runtime,
+        cfg,
+        textLimit: 5,
+      });
+
+      // POST /users/@me/channels must be called exactly once regardless of chunk count.
+      expect(postMock).toHaveBeenCalledTimes(1);
+      expect(postMock).toHaveBeenCalledWith(
+        expect.stringContaining("channels"),
+        expect.objectContaining({ body: { recipient_id: "user-42" } }),
+      );
+
+      // All chunks sent via the fast path (sendDiscordText), not sendMessageDiscord.
+      expect(sendMessageDiscordMock).not.toHaveBeenCalled();
+      expect(sendDiscordTextMock).toHaveBeenCalledTimes(2);
+      // Channel ID passed to sendDiscordText must be the resolved DM channel, not the user id.
+      expect(sendDiscordTextMock.mock.calls[0]?.[1]).toBe("dm-channel-99");
+      expect(sendDiscordTextMock.mock.calls[1]?.[1]).toBe("dm-channel-99");
+      expect(callOrder).toEqual(["12345", "67890"]);
+    });
+
+    it("falls back to sendMessageDiscord per-chunk when DM channel resolution fails", async () => {
+      const postMock = vi.fn().mockRejectedValue(new Error("network error"));
+      const fakeRest = { post: postMock } as unknown as import("@buape/carbon").RequestClient;
+      sendMessageDiscordMock.mockResolvedValue(undefined);
+
+      await deliverDiscordReply({
+        replies: [{ text: "hello DM" }],
+        target: "user:user-42",
+        token: "token",
+        rest: fakeRest,
+        runtime,
+        cfg,
+        textLimit: 2000,
+      });
+
+      // Resolution was attempted.
+      expect(postMock).toHaveBeenCalledTimes(1);
+      // Fast path unavailable — falls back to sendMessageDiscord.
+      expect(sendMessageDiscordMock).toHaveBeenCalledTimes(1);
+      expect(sendMessageDiscordMock).toHaveBeenCalledWith(
+        "user:user-42",
+        "hello DM",
+        expect.objectContaining({ token: "token" }),
+      );
+      expect(sendDiscordTextMock).not.toHaveBeenCalled();
+    });
+
+    it("falls back to sendMessageDiscord when rest is not provided", async () => {
+      sendMessageDiscordMock.mockResolvedValue(undefined);
+
+      await deliverDiscordReply({
+        replies: [{ text: "hello DM" }],
+        target: "user:user-42",
+        token: "token",
+        runtime,
+        cfg,
+        textLimit: 2000,
+      });
+
+      expect(sendMessageDiscordMock).toHaveBeenCalledTimes(1);
+      expect(sendMessageDiscordMock).toHaveBeenCalledWith(
+        "user:user-42",
+        "hello DM",
+        expect.objectContaining({ token: "token" }),
+      );
+      expect(sendDiscordTextMock).not.toHaveBeenCalled();
+    });
+  });
 });
