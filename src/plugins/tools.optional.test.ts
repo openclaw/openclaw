@@ -170,4 +170,22 @@ describe("resolvePluginTools optional tools", () => {
       }),
     );
   });
+
+  it("forwards gateway subagent binding to plugin runtime options", () => {
+    setOptionalDemoRegistry();
+
+    resolvePluginTools({
+      context: createContext() as never,
+      allowGatewaySubagentBinding: true,
+      toolAllowlist: ["optional_tool"],
+    });
+
+    expect(loadOpenClawPluginsMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        runtimeOptions: {
+          allowGatewaySubagentBinding: true,
+        },
+      }),
+    );
+  });
 });
