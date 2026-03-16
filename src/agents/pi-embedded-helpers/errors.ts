@@ -339,11 +339,30 @@ function classify402Message(message: string): PaymentRequiredFailoverReason {
   return "billing";
 }
 
+function hasBareLeading402Signal(raw: string): boolean {
+  const leading = extractLeadingHttpStatus(raw.trim());
+  if (leading?.code !== 402 || !leading.rest) {
+    return false;
+  }
+  const normalized = leading.rest.trim().toLowerCase();
+  if (!normalized) {
+    return false;
+  }
+  return (
+    hasQuotaRefreshWindowSignal(normalized) ||
+    hasExplicit402BillingSignal(normalized) ||
+    hasRetryable402TransientSignal(normalized) ||
+    isRateLimitErrorMessage(normalized) ||
+    isBillingErrorMessage(normalized)
+  );
+}
+
 function classifyFailoverReasonFrom402Text(raw: string): PaymentRequiredFailoverReason | null {
-  if (!RAW_402_MARKER_RE.test(raw)) {
+  const trimmed = raw.trim();
+  if (!RAW_402_MARKER_RE.test(trimmed) && !hasBareLeading402Signal(trimmed)) {
     return null;
   }
-  return classify402Message(raw);
+  return classify402Message(trimmed);
 }
 
 function extractLeadingHttpStatus(raw: string): { code: number; rest: string } | null {

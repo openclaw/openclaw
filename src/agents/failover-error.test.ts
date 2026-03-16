@@ -252,6 +252,12 @@ describe("failover-error", () => {
     ).toBe("rate_limit");
     expect(
       resolveFailoverReasonFromError({
+        message:
+          "402 You have reached your subscription quota limit. Please wait for automatic quota refresh in the rolling time window, upgrade to a higher plan, or use a Pay-As-You-Go API Key for unlimited access.",
+      }),
+    ).toBe("rate_limit");
+    expect(
+      resolveFailoverReasonFromError({
         status: 402,
         message: `${"x".repeat(520)} insufficient credits. Monthly spend limit reached.`,
       }),
