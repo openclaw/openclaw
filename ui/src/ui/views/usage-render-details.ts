@@ -25,6 +25,21 @@ function pct(part: number, total: number): number {
   return (part / total) * 100;
 }
 
+/** Get display label for a bootstrap file with fallback chain. */
+function getFileLabel(file: { name?: string; path?: string }): string {
+  // Fallback chain: name -> path -> basename of path -> generic placeholder
+  if (file.name && file.name.trim()) {
+    return file.name.trim();
+  }
+  if (file.path && file.path.trim()) {
+    const path = file.path.trim();
+    // Extract basename from path (handle both / and \)
+    const baseName = path.includes("/") ? path.split("/").pop() : path.includes("\\") ? path.split("\\").pop() : path;
+    return baseName || path;
+  }
+  return "(virtual bootstrap file)";
+}
+
 function renderEmptyDetailState() {
   return nothing;
 }
@@ -857,7 +872,7 @@ function renderContextPanel(
                       ${filesTop.map(
                         (f) => html`
                           <div class="context-breakdown-item">
-                            <span class="mono">${f.name}</span>
+                            <span class="mono">${getFileLabel(f)}</span>
                             <span class="muted">~${formatTokens(charsToTokens(f.injectedChars))}</span>
                           </div>
                         `,
