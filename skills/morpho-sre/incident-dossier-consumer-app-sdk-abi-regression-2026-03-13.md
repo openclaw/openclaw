@@ -35,7 +35,7 @@ change causing ABI decoding reverts on-chain.
 
 ## Likely Cause
 
-- Primary: commit `bb68ca4` changed `eip712Domain()` return type in `IERC20Permit.sol` from 7 individual values to a single `Eip5267Domain` struct. The struct contains dynamic types (`string memory`, `uint256[] memory`), which changes ABI encoding layout vs flat returns. On-chain implementations return flat-encoded values, causing the caller-side ABI decoder to misinterpret the data and revert. The revert happens in the caller's decoding, so `catch {}` does not catch it.
+- Primary: commit `bb68ca4` changed `eip712Domain()` return type in `IERC20Permit.sol` from 7 individual values to a single `Eip5267Domain` struct. The struct contains dynamic types (`string memory`, `uint256[] memory`), which changes ABI encoding layout vs flat returns. On-chain implementations return flat-encoded values, causing the caller-side ABI decoder to misinterpret the data and revert. That failure is only outside `catch {}` when decoding happens after the external call boundary (for example a low-level call followed by separate decode logic), so the exact call site still needs live confirmation.
 - Contributing: unverified — a domain expert challenged the offset-pointer sub-explanation; the main struct-vs-flat ABI mismatch theory still fits the evidence, but the precise dynamic-offset failure mode remains unconfirmed
 - Ruled out: tokens without `eip712Domain()` (WETH, USDC, DAI) — these revert at the call level and are caught by `catch {}`
 - Disproved theories: none yet; the offset-pointer sub-explanation was challenged but not yet confirmed or disproved
@@ -63,7 +63,5 @@ change causing ABI decoding reverts on-chain.
 
 ## References
 
-- PRs: <pending: add fix PR URL once opened>
-- Linear: <pending: add linked Linear ticket once created>
 - Slack thread: https://morpholabs.slack.com/archives/C08AAMKH524/p1773398130482519
 - Source docs/postmortem: Sentry MORPHO-CONSUMER-4F7
