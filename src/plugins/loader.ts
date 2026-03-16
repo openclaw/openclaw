@@ -467,9 +467,21 @@ function shouldLoadChannelPluginInSetupRuntime(params: {
   ) {
     return true;
   }
-  return !params.manifestChannels.some((channelId) =>
-    isChannelConfigured(params.cfg, channelId, params.env),
-  );
+  const channels = params.cfg.channels as Record<string, unknown> | undefined;
+  return !params.manifestChannels.some((channelId) => {
+    if (isChannelConfigured(params.cfg, channelId, params.env)) {
+      return true;
+    }
+    // Also treat an explicit `enabled: true` entry as configured — the user has opted
+    // in this channel even if they haven't yet filled in credentials.
+    const entry = channels?.[channelId];
+    return (
+      entry !== null &&
+      typeof entry === "object" &&
+      !Array.isArray(entry) &&
+      (entry as Record<string, unknown>).enabled === true
+    );
+  });
 }
 
 function createPluginRecord(params: {
