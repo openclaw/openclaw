@@ -28,8 +28,9 @@ const withTempHome = withTempCronHome;
  */
 function lastEmbeddedCall(): { provider?: string; model?: string } {
   const calls = vi.mocked(runEmbeddedPiAgent).mock.calls;
-  expect(calls.length).toBeGreaterThan(0);
-  return calls.at(-1)?.[0] as { provider?: string; model?: string };
+  const last = calls.at(-1)?.[0] as { provider?: string; model?: string } | undefined;
+  if (!last) throw new Error("runEmbeddedPiAgent was never called");
+  return last;
 }
 
 async function runCronWithModel(
