@@ -8,7 +8,6 @@ import { type ChannelId, listChannelPlugins } from "../channels/plugins/index.js
 import { createDefaultDeps } from "../cli/deps.js";
 import { isRestartEnabled } from "../config/commands.js";
 import {
-  CONFIG_PATH,
   type OpenClawConfig,
   isNixMode,
   loadConfig,
@@ -52,7 +51,6 @@ import {
 import { runOnboardingWizard } from "../wizard/onboarding.js";
 import { createAuthRateLimiter, type AuthRateLimiter } from "./auth-rate-limit.js";
 import { startChannelHealthMonitor } from "./channel-health-monitor.js";
-import { startGatewayConfigReloader } from "./config-reload.js";
 import type { ControlUiRootState } from "./control-ui.js";
 import {
   GATEWAY_EVENT_UPDATE_AVAILABLE,
@@ -68,6 +66,7 @@ import type { startBrowserControlServerIfEnabled } from "./server-browser.js";
 import { createChannelManager } from "./server-channels.js";
 import { createAgentEventHandler } from "./server-chat.js";
 import { createGatewayCloseHandler } from "./server-close.js";
+import { startGatewayRuntimeConfigReloader } from "./server-config-reloader-runtime.js";
 import { resolveGatewayControlUiRootState } from "./server-control-ui-root-state.js";
 import { buildGatewayCronService } from "./server-cron.js";
 import { startGatewayDiscovery } from "./server-discovery-runtime.js";
@@ -859,36 +858,18 @@ export async function startGatewayServer(
             startChannelHealthMonitor({ channelManager, checkIntervalMs }),
         });
 
-        return startGatewayConfigReloader({
+        return startGatewayRuntimeConfigReloader({
           initialConfig: cfgAtStart,
           readSnapshot: readConfigFileSnapshot,
-          onHotReload: async (plan, nextConfig) => {
-            const previousSnapshot = runtimeState.secretsRuntime.getActive();
-            const prepared = await activateRuntimeSecrets(nextConfig, {
-              reason: "reload",
-              activate: true,
-            });
-            try {
-              await applyHotReload(plan, prepared.config);
-            } catch (err) {
-              if (previousSnapshot) {
-                runtimeState.secretsRuntime.activate(previousSnapshot);
-              } else {
-                runtimeState.secretsRuntime.clear();
-              }
-              throw err;
-            }
-          },
-          onRestart: async (plan, nextConfig) => {
-            await activateRuntimeSecrets(nextConfig, { reason: "restart-check", activate: false });
-            requestGatewayRestart(plan, nextConfig);
-          },
+          activateRuntimeSecrets,
+          applyHotReload,
+          requestGatewayRestart,
+          secretsRuntime: runtimeState.secretsRuntime,
           log: {
             info: (msg) => logReload.info(msg),
             warn: (msg) => logReload.warn(msg),
             error: (msg) => logReload.error(msg),
           },
-          watchPath: CONFIG_PATH,
         });
       })();
 
