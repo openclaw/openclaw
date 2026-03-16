@@ -88,15 +88,6 @@ export const SLASH_COMMANDS: SlashCommandDef[] = [
     executeLocal: true,
     argOptions: ["on", "off", "full"],
   },
-  {
-    name: "fast",
-    description: "Toggle fast mode",
-    args: "<status|on|off>",
-    icon: "zap",
-    category: "model",
-    executeLocal: true,
-    argOptions: ["status", "on", "off"],
-  },
 
   // ── Tools ──
   {
