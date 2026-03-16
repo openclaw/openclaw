@@ -846,6 +846,10 @@ export function resolveSessionModelIdentityRef(
 /**
  * Get the active named session key for a DM peer, if one is set.
  * Returns the full named session key if active, or null otherwise.
+ *
+ * @throws {Error} if `agentId` or `peerId` are empty or contain ":".
+ *   Callers must normalise raw platform identifiers to stable internal IDs
+ *   before calling this helper.
  */
 export function getActiveNamedSessionKey(params: {
   mainEntry: SessionEntry | undefined;
@@ -885,7 +889,7 @@ export function setActiveNamedSession(params: {
   }
   const normalized = trimmed.toLowerCase();
   if (normalized.includes(":")) {
-    throw new Error(`setActiveNamedSession: name must not contain ":" (got: "${normalized}")`);
+    throw new Error(`setActiveNamedSession: name must not contain ":" (got: "${trimmed}")`);
   }
   if (params.mainEntry.activeNamedSession !== normalized) {
     params.mainEntry.activeNamedSession = normalized;
