@@ -7,7 +7,7 @@
     "properties": {
       "controllerHost": {
         "type": "string",
-        "description": "ABB robot controller IP address or hostname"
+        "description": "ABB robot controller IP address or hostname (real mode)"
       },
       "controllerPort": {
         "type": "number",
@@ -26,6 +26,17 @@
       "rapidProgramPath": {
         "type": "string",
         "description": "Path on controller to store generated RAPID programs"
+      },
+      "defaultMode": {
+        "type": "string",
+        "description": "Default operation mode: virtual, real, or auto",
+        "enum": ["virtual", "real", "auto"]
+      },
+      "wsBridgePort": {
+        "type": "number",
+        "description": "WebSocket bridge port for virtual 3D viewer mode (default: 9877)",
+        "minimum": 1,
+        "maximum": 65535
       }
     }
   }

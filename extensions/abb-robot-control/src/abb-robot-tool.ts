@@ -14,7 +14,7 @@ import {
   type RobotConfig,
 } from "./robot-config-loader.js";
 
-const ABB_PLUGIN_VERSION = "1.0.1-movj.1";
+const ABB_PLUGIN_VERSION = "1.0.2";
 
 // ── Global state ─────────────────────────────────────────────────────────────
 

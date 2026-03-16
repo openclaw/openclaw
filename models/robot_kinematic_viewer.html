@@ -1683,7 +1683,7 @@
                     const iid = msg.instanceId || wsInstanceId;
                     wsStatusText.textContent = `已连接 ${rid}/${iid}`;
                 }
-                if (msg.cmd === 'set_joints' && Array.isArray(msg.joints)) { setJoints(msg.joints); sendWsReply({cmd:'ok'}); }
+                if (msg.cmd === 'set_joints' && Array.isArray(msg.joints)) { setJoints(msg.joints); sendWsReply({cmd:'ok', joints:getJoints()}); }
                 else if (msg.cmd === 'movj' && Array.isArray(msg.joints)) {
                     const speed = Number(msg.speed ?? 45);
                     const startJoints = Array.isArray(msg.start_joints) ? msg.start_joints : null;
@@ -1695,7 +1695,7 @@
                                 cancelled: !!result.cancelled,
                                 speed: result.speed,
                                 durationMs: result.durationMs,
-                                joints: getJoints(),
+                                joints: result.joints,
                             });
                         })
                         .catch((err) => {
