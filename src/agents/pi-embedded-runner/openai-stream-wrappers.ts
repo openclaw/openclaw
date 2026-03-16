@@ -130,16 +130,13 @@ function shouldStripResponsesStore(
 function shouldStripResponsesPromptCacheKey(model: {
   api?: unknown;
   baseUrl?: unknown;
-  compat?: unknown;
+  compat?: { supportsPromptCacheKey?: boolean };
 }): boolean {
   if (typeof model.api !== "string" || !OPENAI_RESPONSES_APIS.has(model.api)) {
     return false;
   }
   // Explicit compat override takes highest precedence.
-  const supportsPromptCacheKey =
-    model.compat && typeof model.compat === "object"
-      ? (model.compat as Record<string, unknown>).supportsPromptCacheKey
-      : undefined;
+  const supportsPromptCacheKey = model.compat?.supportsPromptCacheKey;
   if (supportsPromptCacheKey === true) {
     return false;
   }
