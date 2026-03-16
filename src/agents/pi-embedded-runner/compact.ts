@@ -43,12 +43,15 @@ import { ensureCustomApiRegistered } from "../custom-api-registry.js";
 import { formatUserTime, resolveUserTimeFormat, resolveUserTimezone } from "../date-time.js";
 import { DEFAULT_CONTEXT_TOKENS, DEFAULT_MODEL, DEFAULT_PROVIDER } from "../defaults.js";
 import { resolveOpenClawDocsPath } from "../docs-path.js";
+import { createGigachatStreamFn } from "../gigachat-stream.js";
 import { resolveMemorySearchConfig } from "../memory-search.js";
 import {
   applyLocalNoAuthHeaderOverride,
+  ensureAuthProfileStore,
   getApiKeyForModel,
   resolveModelAuthMode,
 } from "../model-auth.js";
+import { normalizeProviderId } from "../model-selection.js";
 import { supportsModelTools } from "../model-tool-support.js";
 import { ensureOpenClawModelsJson } from "../models-config.js";
 import { createConfiguredOllamaStreamFn } from "../ollama-stream.js";
@@ -794,6 +797,25 @@ export async function compactEmbeddedPiSessionDirect(
             providerBaseUrl,
           }),
         );
+      } else if (normalizeProviderId(provider) === "gigachat") {
+        const providerConfig = params.config?.models?.providers?.[provider];
+        const baseUrl =
+          (typeof providerConfig?.baseUrl === "string" ? providerConfig.baseUrl : undefined) ??
+          (typeof model.baseUrl === "string" ? model.baseUrl : undefined) ??
+          process.env.GIGACHAT_BASE_URL?.trim() ??
+          "https://gigachat.devices.sberbank.ru/api/v1";
+        const gigachatStore = ensureAuthProfileStore(agentDir, { allowKeychainPrompt: false });
+        const profileId = authProfileId?.trim() || "gigachat:default";
+        const gigachatCred =
+          gigachatStore.profiles[profileId] ?? gigachatStore.profiles["gigachat:default"];
+        const gigachatMeta = gigachatCred?.type === "api_key" ? gigachatCred.metadata : undefined;
+
+        session.agent.streamFn = createGigachatStreamFn({
+          baseUrl,
+          authMode: (gigachatMeta?.authMode as "oauth" | "basic") ?? "oauth",
+          insecureTls: gigachatMeta?.insecureTls === "true",
+          scope: gigachatMeta?.scope,
+        });
       }
 
       try {

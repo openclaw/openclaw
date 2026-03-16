@@ -6,6 +6,7 @@ const {
   ensureRuntimePluginsLoaded,
   resolveContextEngineMock,
   resolveModelMock,
+  ensureAuthProfileStoreMock,
   sessionCompactImpl,
   triggerInternalHook,
   sanitizeSessionHistoryMock,
@@ -15,6 +16,10 @@ const {
   resolveSessionAgentIdMock,
   estimateTokensMock,
   sessionAbortCompactionMock,
+  createGigachatStreamFnMock,
+  gigachatStreamFn,
+  lastCreatedSession,
+  lastInitialStreamFn,
 } = vi.hoisted(() => {
   const contextEngineCompactMock = vi.fn(async () => ({
     ok: true as boolean,
@@ -67,6 +72,10 @@ const {
     resolveSessionAgentIdMock: vi.fn(() => "main"),
     estimateTokensMock: vi.fn((_message?: unknown) => 10),
     sessionAbortCompactionMock: vi.fn(),
+    createGigachatStreamFnMock: vi.fn(),
+    gigachatStreamFn: vi.fn(),
+    lastCreatedSession: { current: null as null | { agent: { streamFn: unknown } } },
+    lastInitialStreamFn: { current: null as unknown },
   };
 });
 
@@ -98,6 +107,7 @@ vi.mock("@mariozechner/pi-coding-agent", () => {
     AuthStorage: class AuthStorage {},
     ModelRegistry: class ModelRegistry {},
     createAgentSession: vi.fn(async () => {
+      const initialStreamFn = vi.fn();
       const session = {
         sessionId: "session-1",
         messages: [
@@ -116,7 +126,7 @@ vi.mock("@mariozechner/pi-coding-agent", () => {
           replaceMessages: vi.fn((messages: unknown[]) => {
             session.messages = [...(messages as typeof session.messages)];
           }),
-          streamFn: vi.fn(),
+          streamFn: initialStreamFn,
         },
         compact: vi.fn(async () => {
           // simulate compaction trimming to a single message
@@ -126,6 +136,8 @@ vi.mock("@mariozechner/pi-coding-agent", () => {
         abortCompaction: sessionAbortCompactionMock,
         dispose: vi.fn(),
       };
+      lastCreatedSession.current = session;
+      lastInitialStreamFn.current = initialStreamFn;
       return { session };
     }),
     SessionManager: {
@@ -155,8 +167,13 @@ vi.mock("../models-config.js", () => ({
 
 vi.mock("../model-auth.js", () => ({
   applyLocalNoAuthHeaderOverride: vi.fn((model: unknown) => model),
+  ensureAuthProfileStore: ensureAuthProfileStoreMock,
   getApiKeyForModel: vi.fn(async () => ({ apiKey: "test", mode: "env" })),
   resolveModelAuthMode: vi.fn(() => "env"),
+}));
+
+vi.mock("../gigachat-stream.js", () => ({
+  createGigachatStreamFn: createGigachatStreamFnMock,
 }));
 
 vi.mock("../sandbox.js", () => ({
@@ -425,6 +442,12 @@ describe("compactEmbeddedPiSessionDirect hooks", () => {
     estimateTokensMock.mockReset();
     estimateTokensMock.mockReturnValue(10);
     sessionAbortCompactionMock.mockReset();
+    ensureAuthProfileStoreMock.mockReset();
+    ensureAuthProfileStoreMock.mockReturnValue({ profiles: {} });
+    createGigachatStreamFnMock.mockReset();
+    createGigachatStreamFnMock.mockReturnValue(gigachatStreamFn);
+    lastCreatedSession.current = null;
+    lastInitialStreamFn.current = null;
     unregisterApiProviders(getCustomApiRegistrySourceId("ollama"));
   });
 
@@ -794,6 +817,62 @@ describe("compactEmbeddedPiSessionDirect hooks", () => {
     expect(result.ok).toBe(false);
     expect(result.reason).toContain("request timed out");
     expect(sessionAbortCompactionMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("installs the GigaChat stream for compaction-created sessions", async () => {
+    resolveModelMock.mockReturnValue({
+      model: {
+        provider: "gigachat",
+        api: "openai-completions",
+        id: "GigaChat-2-Max",
+        input: ["text"],
+        baseUrl: "https://gigachat.devices.sberbank.ru/api/v1",
+      },
+      error: null,
+      authStorage: { setRuntimeApiKey: vi.fn() },
+      modelRegistry: {},
+    } as never);
+    ensureAuthProfileStoreMock.mockReturnValue({
+      profiles: {
+        "gigachat:business": {
+          type: "api_key",
+          metadata: {
+            authMode: "basic",
+            insecureTls: "true",
+            scope: "GIGACHAT_API_PERS",
+          },
+        },
+      },
+    });
+    sessionCompactImpl.mockImplementation(async () => {
+      expect(createGigachatStreamFnMock).toHaveBeenCalledWith({
+        baseUrl: "https://gigachat.devices.sberbank.ru/api/v1",
+        authMode: "basic",
+        insecureTls: true,
+        scope: "GIGACHAT_API_PERS",
+      });
+      expect(lastCreatedSession.current?.agent.streamFn).toBe(gigachatStreamFn);
+      expect(lastCreatedSession.current?.agent.streamFn).not.toBe(lastInitialStreamFn.current);
+      return {
+        summary: "summary",
+        firstKeptEntryId: "entry-1",
+        tokensBefore: 120,
+        details: { ok: true },
+      };
+    });
+
+    const result = await compactEmbeddedPiSessionDirect({
+      sessionId: "session-1",
+      sessionKey: "agent:main:session-1",
+      sessionFile: "/tmp/session.jsonl",
+      workspaceDir: "/tmp",
+      provider: "gigachat",
+      model: "GigaChat-2-Max",
+      authProfileId: "gigachat:business",
+      customInstructions: "focus on decisions",
+    });
+
+    expect(result.ok).toBe(true);
   });
 });
 
