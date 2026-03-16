@@ -37,6 +37,31 @@ OpenClaw handles:
 - Signed token verification
 - Device capability authorization
 
+## Important: mTLS is Handled by Caddy
+
+**No OpenClaw code changes required** for mTLS. Caddy terminates the mutual TLS connection and passes client identity to OpenClaw via HTTP headers:
+
+```
+Client → [mTLS handshake with Caddy] → Caddy → [plain HTTP] → OpenClaw
+```
+
+Caddy configuration:
+```Caddyfile
+tls {
+    client_auth {
+        mode require_and_verify
+        trusted_ca_cert_file /etc/caddy/ca.crt
+    }
+}
+
+reverse_proxy localhost:18789 {
+    header_up X-Client-CN "{tls_client.subject_common_name}"
+    header_up X-Client-Verified "{tls_client.verified}"
+}
+```
+
+OpenClaw receives regular HTTP and reads identity from headers. The mTLS security happens entirely at the Caddy layer.
+
 ## Basic Setup
 
 ### 1. OpenClaw Configuration
