@@ -79,7 +79,7 @@ export async function editChannelDiscord(
       ...(t.emoji_name !== undefined && { emoji_name: t.emoji_name }),
     }));
   }
-  if (payload.appliedTags?.length) {
+  if (payload.appliedTags !== undefined) {
     body.applied_tags = payload.appliedTags;
   }
   return (await rest.patch(Routes.channel(payload.channelId), {
