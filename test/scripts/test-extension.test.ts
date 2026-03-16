@@ -3,6 +3,7 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   detectChangedExtensionIds,
+  listAvailableExtensionIds,
   resolveExtensionTestPlan,
 } from "../../scripts/test-extension.mjs";
 
@@ -60,5 +61,15 @@ describe("scripts/test-extension.mjs", () => {
     ]);
 
     expect(extensionIds).toEqual(["firecrawl", "line", "slack"]);
+  });
+
+  it("lists available extension ids", () => {
+    const extensionIds = listAvailableExtensionIds();
+
+    expect(extensionIds).toContain("slack");
+    expect(extensionIds).toContain("firecrawl");
+    expect(extensionIds).toEqual(
+      [...extensionIds].toSorted((left, right) => left.localeCompare(right)),
+    );
   });
 });
