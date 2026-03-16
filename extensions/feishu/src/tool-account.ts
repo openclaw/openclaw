@@ -6,6 +6,10 @@ import { resolveToolsConfig } from "./tools-config.js";
 import type { FeishuToolsConfig, ResolvedFeishuAccount } from "./types.js";
 
 type AccountAwareParams = { accountId?: string };
+type FeishuToolRuntimeContext = {
+  agentAccountId?: string;
+  messageChannel?: string;
+};
 
 function normalizeOptionalAccountId(value: string | undefined): string | undefined {
   const trimmed = value?.trim();
@@ -28,10 +32,15 @@ function isKnownFeishuAccountId(config: OpenClawPluginApi["config"], accountId?:
   return listFeishuAccountIds(config).some((id) => id.toLowerCase() === normalized);
 }
 
+function isFeishuMessageChannel(messageChannel?: string): boolean {
+  return messageChannel?.trim().toLowerCase() === "feishu";
+}
+
 export function resolveFeishuToolAccount(params: {
   api: Pick<OpenClawPluginApi, "config">;
   executeParams?: AccountAwareParams;
   defaultAccountId?: string;
+  messageChannel?: string;
 }): ResolvedFeishuAccount {
   if (!params.api.config) {
     throw new Error("Feishu config unavailable");
@@ -40,13 +49,25 @@ export function resolveFeishuToolAccount(params: {
     cfg: params.api.config,
     accountId:
       normalizeOptionalAccountId(params.executeParams?.accountId) ??
-      // Only use routed account context if it maps to a known Feishu account;
-      // otherwise fall through to the configured default so cross-channel tool
-      // calls (e.g. Discord/Telegram triggering Feishu tools) still work.
-      (isKnownFeishuAccountId(params.api.config, params.defaultAccountId)
+      // Only trust routed account context for Feishu-originated sessions.
+      (isFeishuMessageChannel(params.messageChannel) &&
+      isKnownFeishuAccountId(params.api.config, params.defaultAccountId)
         ? normalizeOptionalAccountId(params.defaultAccountId)
         : undefined) ??
       readConfiguredDefaultAccountId(params.api.config),
+  });
+}
+
+export function resolveFeishuToolAccountFromContext(params: {
+  api: Pick<OpenClawPluginApi, "config">;
+  executeParams?: AccountAwareParams;
+  toolContext?: FeishuToolRuntimeContext;
+}): ResolvedFeishuAccount {
+  return resolveFeishuToolAccount({
+    api: params.api,
+    executeParams: params.executeParams,
+    defaultAccountId: params.toolContext?.agentAccountId,
+    messageChannel: params.toolContext?.messageChannel,
   });
 }
 
@@ -54,8 +75,17 @@ export function createFeishuToolClient(params: {
   api: Pick<OpenClawPluginApi, "config">;
   executeParams?: AccountAwareParams;
   defaultAccountId?: string;
+  messageChannel?: string;
 }): Lark.Client {
   return createFeishuClient(resolveFeishuToolAccount(params));
+}
+
+export function createFeishuToolClientFromContext(params: {
+  api: Pick<OpenClawPluginApi, "config">;
+  executeParams?: AccountAwareParams;
+  toolContext?: FeishuToolRuntimeContext;
+}): Lark.Client {
+  return createFeishuClient(resolveFeishuToolAccountFromContext(params));
 }
 
 export function resolveAnyEnabledFeishuToolsConfig(

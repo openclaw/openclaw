@@ -19,9 +19,9 @@ import {
 } from "./docx-table-ops.js";
 import { getFeishuRuntime } from "./runtime.js";
 import {
-  createFeishuToolClient,
+  createFeishuToolClientFromContext,
   resolveAnyEnabledFeishuToolsConfig,
-  resolveFeishuToolAccount,
+  resolveFeishuToolAccountFromContext,
 } from "./tool-account.js";
 
 // ============ Helpers ============
@@ -1245,14 +1245,16 @@ export function registerFeishuDocTools(api: OpenClawPluginApi) {
   const registered: string[] = [];
   type FeishuDocExecuteParams = FeishuDocParams & { accountId?: string };
 
-  const getClient = (params: { accountId?: string } | undefined, defaultAccountId?: string) =>
-    createFeishuToolClient({ api, executeParams: params, defaultAccountId });
+  const getClient = (
+    params: { accountId?: string } | undefined,
+    toolContext?: { agentAccountId?: string; messageChannel?: string },
+  ) => createFeishuToolClientFromContext({ api, executeParams: params, toolContext });
 
   const getMediaMaxBytes = (
     params: { accountId?: string } | undefined,
-    defaultAccountId?: string,
+    toolContext?: { agentAccountId?: string; messageChannel?: string },
   ) =>
-    (resolveFeishuToolAccount({ api, executeParams: params, defaultAccountId }).config
+    (resolveFeishuToolAccountFromContext({ api, executeParams: params, toolContext }).config
       ?.mediaMaxMb ?? 30) *
     1024 *
     1024;
@@ -1261,7 +1263,10 @@ export function registerFeishuDocTools(api: OpenClawPluginApi) {
   if (toolsCfg.doc) {
     api.registerTool(
       (ctx) => {
-        const defaultAccountId = ctx.agentAccountId;
+        const toolContext = {
+          agentAccountId: ctx.agentAccountId,
+          messageChannel: ctx.messageChannel,
+        };
         const trustedRequesterOpenId =
           ctx.messageChannel === "feishu" ? ctx.requesterSenderId?.trim() || undefined : undefined;
         return {
@@ -1273,7 +1278,7 @@ export function registerFeishuDocTools(api: OpenClawPluginApi) {
           async execute(_toolCallId, params) {
             const p = params as FeishuDocExecuteParams;
             try {
-              const client = getClient(p, defaultAccountId);
+              const client = getClient(p, toolContext);
               switch (p.action) {
                 case "read":
                   return json(await readDoc(client, p.doc_token));
@@ -1283,7 +1288,7 @@ export function registerFeishuDocTools(api: OpenClawPluginApi) {
                       client,
                       p.doc_token,
                       p.content,
-                      getMediaMaxBytes(p, defaultAccountId),
+                      getMediaMaxBytes(p, toolContext),
                       api.logger,
                     ),
                   );
@@ -1293,7 +1298,7 @@ export function registerFeishuDocTools(api: OpenClawPluginApi) {
                       client,
                       p.doc_token,
                       p.content,
-                      getMediaMaxBytes(p, defaultAccountId),
+                      getMediaMaxBytes(p, toolContext),
                       api.logger,
                     ),
                   );
@@ -1304,7 +1309,7 @@ export function registerFeishuDocTools(api: OpenClawPluginApi) {
                       p.doc_token,
                       p.content,
                       p.after_block_id,
-                      getMediaMaxBytes(p, defaultAccountId),
+                      getMediaMaxBytes(p, toolContext),
                       api.logger,
                     ),
                   );
@@ -1355,7 +1360,7 @@ export function registerFeishuDocTools(api: OpenClawPluginApi) {
                     await uploadImageBlock(
                       client,
                       p.doc_token,
-                      getMediaMaxBytes(p, defaultAccountId),
+                      getMediaMaxBytes(p, toolContext),
                       p.url,
                       p.file_path,
                       p.parent_block_id,
@@ -1369,7 +1374,7 @@ export function registerFeishuDocTools(api: OpenClawPluginApi) {
                     await uploadFileBlock(
                       client,
                       p.doc_token,
-                      getMediaMaxBytes(p, defaultAccountId),
+                      getMediaMaxBytes(p, toolContext),
                       p.url,
                       p.file_path,
                       p.parent_block_id,
@@ -1442,7 +1447,12 @@ export function registerFeishuDocTools(api: OpenClawPluginApi) {
         parameters: Type.Object({}),
         async execute() {
           try {
-            const result = await listAppScopes(getClient(undefined, ctx.agentAccountId));
+            const result = await listAppScopes(
+              getClient(undefined, {
+                agentAccountId: ctx.agentAccountId,
+                messageChannel: ctx.messageChannel,
+              }),
+            );
             return json(result);
           } catch (err) {
             return json({ error: err instanceof Error ? err.message : String(err) });

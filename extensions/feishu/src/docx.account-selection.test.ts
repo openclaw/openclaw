@@ -41,8 +41,8 @@ describe("feishu_doc account selection", () => {
     const { api, resolveTool } = createToolFactoryHarness(cfg);
     registerFeishuDocTools(api);
 
-    const docToolA = resolveTool("feishu_doc", { agentAccountId: "a" });
-    const docToolB = resolveTool("feishu_doc", { agentAccountId: "b" });
+    const docToolA = resolveTool("feishu_doc", { agentAccountId: "a", messageChannel: "feishu" });
+    const docToolB = resolveTool("feishu_doc", { agentAccountId: "b", messageChannel: "feishu" });
 
     await docToolA.execute("call-a", { action: "list_blocks", doc_token: "d" });
     await docToolB.execute("call-b", { action: "list_blocks", doc_token: "d" });
@@ -58,7 +58,7 @@ describe("feishu_doc account selection", () => {
     const { api, resolveTool } = createToolFactoryHarness(cfg);
     registerFeishuDocTools(api);
 
-    const docTool = resolveTool("feishu_doc", { agentAccountId: "b" });
+    const docTool = resolveTool("feishu_doc", { agentAccountId: "b", messageChannel: "feishu" });
     await docTool.execute("call-override", {
       action: "list_blocks",
       doc_token: "d",
