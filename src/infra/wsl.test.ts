@@ -37,6 +37,9 @@ describe("wsl detection", () => {
     envSnapshot = captureEnv(["WSL_INTEROP", "WSL_DISTRO_NAME", "WSLENV"]);
     readFileSyncMock.mockReset();
     readFileMock.mockReset();
+    delete process.env.WSL_INTEROP;
+    delete process.env.WSL_DISTRO_NAME;
+    delete process.env.WSLENV;
     setPlatform("linux");
   });
 
