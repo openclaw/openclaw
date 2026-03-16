@@ -156,5 +156,5 @@ export function createSessionSlug(isTaken?: (id: string) => boolean): string {
   }
   // Use cryptographically secure random for fallback slug with 3-character suffix to maintain format compatibility
   const fallback = `${createSlugBase(3)}-${randomUUID().replace(/-/g, "").slice(0, 3)}`;
-  return isIdTaken(fallback) ? `${fallback}-${Date.now().toString(36).slice(0, 3)}` : fallback;
+  return isIdTaken(fallback) ? `${fallback}-${Date.now().toString(36).slice(-3)}` : fallback;
 }

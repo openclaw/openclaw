@@ -28,7 +28,7 @@ describe("session slug", () => {
     // With getRandomValues mocked to return 0, both word selections pick index 0
     // This makes "amber-atlas" the deterministic result
     const slug = createSessionSlug((id) => id === "amber-atlas");
-    expect(slug).toMatch(/^[a-z]+-[a-z]+-\d+$/);
+    expect(slug).toBe("amber-atlas-2");
   });
 
   it("falls back to three words when collisions persist", () => {
