@@ -1,4 +1,5 @@
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { withBundledPluginAllowlistCompat } from "./bundled-compat.js";
 import { loadOpenClawPlugins, type PluginLoadOptions } from "./loader.js";
 import { createPluginLoaderLogger } from "./logger.js";
 import type { ProviderPlugin } from "./types.js";
@@ -64,38 +65,6 @@ function hasExplicitPluginConfig(config: PluginLoadOptions["config"]): boolean {
   return false;
 }
 
-function withBundledProviderAllowlistCompat(
-  config: PluginLoadOptions["config"],
-): PluginLoadOptions["config"] {
-  const allow = config?.plugins?.allow;
-  if (!Array.isArray(allow) || allow.length === 0) {
-    return config;
-  }
-
-  const allowSet = new Set(allow.map((entry) => entry.trim()).filter(Boolean));
-  let changed = false;
-  for (const pluginId of BUNDLED_PROVIDER_ALLOWLIST_COMPAT_PLUGIN_IDS) {
-    if (!allowSet.has(pluginId)) {
-      allowSet.add(pluginId);
-      changed = true;
-    }
-  }
-
-  if (!changed) {
-    return config;
-  }
-
-  return {
-    ...config,
-    plugins: {
-      ...config?.plugins,
-      // Backward compat: bundled implicit providers historically stayed
-      // available even when operators kept a restrictive plugin allowlist.
-      allow: [...allowSet],
-    },
-  };
-}
-
 function withBundledProviderVitestCompat(params: {
   config: PluginLoadOptions["config"];
   env?: PluginLoadOptions["env"];
@@ -118,7 +87,6 @@ function withBundledProviderVitestCompat(params: {
     },
   };
 }
-
 export function resolvePluginProviders(params: {
   config?: PluginLoadOptions["config"];
   workspaceDir?: string;
@@ -129,7 +97,10 @@ export function resolvePluginProviders(params: {
   onlyPluginIds?: string[];
 }): ProviderPlugin[] {
   const maybeAllowlistCompat = params.bundledProviderAllowlistCompat
-    ? withBundledProviderAllowlistCompat(params.config)
+    ? withBundledPluginAllowlistCompat({
+        config: params.config,
+        pluginIds: BUNDLED_PROVIDER_ALLOWLIST_COMPAT_PLUGIN_IDS,
+      })
     : params.config;
   const config = params.bundledProviderVitestCompat
     ? withBundledProviderVitestCompat({
