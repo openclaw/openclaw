@@ -135,7 +135,7 @@ export function createMoonshotThinkingWrapper(
             if (payloadObj.tool_choice === "required") {
               payloadObj.tool_choice = "auto";
             } else if (isPinnedToolChoice(payloadObj.tool_choice)) {
-              payloadObj.thinking = { type: "disabled" };
+              payloadObj.tool_choice = "auto";
             }
           }
         }

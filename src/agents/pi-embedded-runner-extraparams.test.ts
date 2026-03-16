@@ -1,73 +1,6 @@
 import type { StreamFn } from "@mariozechner/pi-agent-core";
 import type { Context, Model, SimpleStreamOptions } from "@mariozechner/pi-ai";
 import { describe, expect, it, vi } from "vitest";
-
-vi.mock("../plugins/provider-runtime.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../plugins/provider-runtime.js")>();
-  const {
-    createOpenRouterSystemCacheWrapper,
-    createOpenRouterWrapper,
-    isProxyReasoningUnsupported,
-  } = await import("./pi-embedded-runner/proxy-stream-wrappers.js");
-
-  return {
-    ...actual,
-    prepareProviderExtraParams: (params: {
-      provider: string;
-      context: { extraParams?: Record<string, unknown> };
-    }) => {
-      if (params.provider !== "openai-codex") {
-        return undefined;
-      }
-      const transport = params.context.extraParams?.transport;
-      if (transport === "auto" || transport === "sse" || transport === "websocket") {
-        return params.context.extraParams;
-      }
-      return {
-        ...params.context.extraParams,
-        transport: "auto",
-      };
-    },
-    wrapProviderStreamFn: (params: {
-      provider: string;
-      context: {
-        modelId: string;
-        thinkingLevel?: import("../auto-reply/thinking.js").ThinkLevel;
-        extraParams?: Record<string, unknown>;
-        streamFn?: StreamFn;
-      };
-    }) => {
-      if (params.provider !== "openrouter") {
-        return params.context.streamFn;
-      }
-
-      const providerRouting =
-        params.context.extraParams?.provider != null &&
-        typeof params.context.extraParams.provider === "object"
-          ? (params.context.extraParams.provider as Record<string, unknown>)
-          : undefined;
-      let streamFn = params.context.streamFn;
-      if (providerRouting) {
-        const underlying = streamFn;
-        streamFn = (model, context, options) =>
-          (underlying as StreamFn)(
-            {
-              ...model,
-              compat: { ...model.compat, openRouterRouting: providerRouting },
-            },
-            context,
-            options,
-          );
-      }
-
-      const skipReasoningInjection =
-        params.context.modelId === "auto" || isProxyReasoningUnsupported(params.context.modelId);
-      const thinkingLevel = skipReasoningInjection ? undefined : params.context.thinkingLevel;
-      return createOpenRouterSystemCacheWrapper(createOpenRouterWrapper(streamFn, thinkingLevel));
-    },
-  };
-});
-
 import { applyExtraParamsToAgent, resolveExtraParams } from "./pi-embedded-runner.js";
 import { log } from "./pi-embedded-runner/logger.js";
 
@@ -765,7 +698,7 @@ describe("applyExtraParamsToAgent", () => {
     expect(payloads[0]?.tool_choice).toBe("auto");
   });
 
-  it("disables thinking instead of broadening pinned Moonshot tool_choice", () => {
+  it("falls back to auto tool_choice instead of disabling thinking for pinned Moonshot tool_choice", () => {
     const payloads: Record<string, unknown>[] = [];
     const baseStreamFn: StreamFn = (_model, _context, options) => {
       const payload: Record<string, unknown> = {
@@ -788,8 +721,8 @@ describe("applyExtraParamsToAgent", () => {
     void agent.streamFn?.(model, context, {});
 
     expect(payloads).toHaveLength(1);
-    expect(payloads[0]?.thinking).toEqual({ type: "disabled" });
-    expect(payloads[0]?.tool_choice).toEqual({ type: "tool", name: "read" });
+    expect(payloads[0]?.thinking).toEqual({ type: "enabled" });
+    expect(payloads[0]?.tool_choice).toBe("auto");
   });
 
   it("respects explicit Moonshot thinking param from model config", () => {
@@ -878,7 +811,7 @@ describe("applyExtraParamsToAgent", () => {
     expect(payloads[0]?.thinking).toEqual({ type: "disabled" });
   });
 
-  it("disables thinking instead of broadening pinned Ollama Kimi cloud tool_choice", () => {
+  it("falls back to auto tool_choice instead of disabling thinking for pinned Ollama Kimi cloud tool_choice", () => {
     const payloads: Record<string, unknown>[] = [];
     const baseStreamFn: StreamFn = (_model, _context, options) => {
       const payload: Record<string, unknown> = {
@@ -901,11 +834,8 @@ describe("applyExtraParamsToAgent", () => {
     void agent.streamFn?.(model, context, {});
 
     expect(payloads).toHaveLength(1);
-    expect(payloads[0]?.thinking).toEqual({ type: "disabled" });
-    expect(payloads[0]?.tool_choice).toEqual({
-      type: "function",
-      function: { name: "read" },
-    });
+    expect(payloads[0]?.thinking).toEqual({ type: "enabled" });
+    expect(payloads[0]?.tool_choice).toBe("auto");
   });
 
   it("does not rewrite tool schema for kimi-coding (native Anthropic format)", () => {
