@@ -3,13 +3,14 @@ import path from "node:path";
 import type { ReplyPayload } from "../../auto-reply/types.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { resolveStateDir } from "../../config/paths.js";
+import { DEFAULT_ACCOUNT_ID } from "../../routing/session-key.js";
+import { resolveOagDeliveryMaxRetries, resolveOagDeliveryRecoveryBudgetMs } from "../oag-config.js";
 import { generateSecureUuid } from "../secure-random.js";
 import type { OutboundMirror } from "./mirror.js";
 import type { OutboundChannel } from "./targets.js";
 
 const QUEUE_DIRNAME = "delivery-queue";
 const FAILED_DIRNAME = "failed";
-const MAX_RETRIES = 5;
 
 /** Backoff delays in milliseconds indexed by retry count (1-based). */
 const BACKOFF_MS: readonly number[] = [
@@ -53,6 +54,11 @@ export type RecoverySummary = {
   failed: number;
   skippedMaxRetries: number;
   deferredBackoff: number;
+};
+
+type RecoveryFilterOptions = {
+  channel?: Exclude<OutboundChannel, "none">;
+  accountId?: string;
 };
 
 function resolveLanePriority(params: QueuedDeliveryPayload): DeliveryLanePriority {
@@ -367,6 +373,22 @@ export interface RecoveryLogger {
   error(msg: string): void;
 }
 
+function matchesRecoveryFilter(entry: QueuedDelivery, filter?: RecoveryFilterOptions): boolean {
+  if (!filter) {
+    return true;
+  }
+  if (filter.channel && entry.channel !== filter.channel) {
+    return false;
+  }
+  if (filter.accountId === undefined) {
+    return true;
+  }
+  if (entry.accountId === filter.accountId) {
+    return true;
+  }
+  return filter.accountId === DEFAULT_ACCOUNT_ID && !entry.accountId;
+}
+
 /**
  * On gateway startup, scan the delivery queue and retry any pending entries.
  * Uses exponential backoff and moves entries that exceed MAX_RETRIES to failed/.
@@ -376,10 +398,13 @@ export async function recoverPendingDeliveries(opts: {
   log: RecoveryLogger;
   cfg: OpenClawConfig;
   stateDir?: string;
+  filter?: RecoveryFilterOptions;
   /** Maximum wall-clock time for recovery in ms. Remaining entries are deferred to next restart. Default: 60 000. */
   maxRecoveryMs?: number;
 }): Promise<RecoverySummary> {
-  const pending = await loadPendingDeliveries(opts.stateDir);
+  const pending = (await loadPendingDeliveries(opts.stateDir)).filter((entry) =>
+    matchesRecoveryFilter(entry, opts.filter),
+  );
   if (pending.length === 0) {
     return { recovered: 0, failed: 0, skippedMaxRetries: 0, deferredBackoff: 0 };
   }
@@ -395,7 +420,8 @@ export async function recoverPendingDeliveries(opts: {
 
   opts.log.info(`Found ${pending.length} pending delivery entries — starting recovery`);
 
-  const deadline = Date.now() + (opts.maxRecoveryMs ?? 60_000);
+  const deadline =
+    Date.now() + (opts.maxRecoveryMs ?? resolveOagDeliveryRecoveryBudgetMs(opts.cfg));
 
   let recovered = 0;
   let failed = 0;
@@ -409,9 +435,10 @@ export async function recoverPendingDeliveries(opts: {
       opts.log.warn(`Recovery time budget exceeded — ${deferred} entries deferred to next restart`);
       break;
     }
-    if (entry.retryCount >= MAX_RETRIES) {
+    const maxRetries = resolveOagDeliveryMaxRetries(opts.cfg);
+    if (entry.retryCount >= maxRetries) {
       opts.log.warn(
-        `Delivery ${entry.id} exceeded max retries (${entry.retryCount}/${MAX_RETRIES}) — moving to failed/`,
+        `Delivery ${entry.id} exceeded max retries (${entry.retryCount}/${maxRetries}) — moving to failed/`,
       );
       try {
         await moveToFailed(entry.id, opts.stateDir);
@@ -478,7 +505,8 @@ export async function recoverPendingDeliveries(opts: {
   return { recovered, failed, skippedMaxRetries, deferredBackoff };
 }
 
-export { MAX_RETRIES };
+/** Default max retries — equivalent to calling resolveOagDeliveryMaxRetries() with no config. */
+export const MAX_RETRIES = resolveOagDeliveryMaxRetries();
 
 const PERMANENT_ERROR_PATTERNS: readonly RegExp[] = [
   /no conversation reference found/i,

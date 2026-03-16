@@ -156,6 +156,12 @@ export function startChannelHealthMonitor(deps: ChannelHealthMonitorDeps): Chann
 
           const reason = resolveChannelRestartReason(status, health);
 
+          if (reason === "stale-socket") {
+            incrementOagMetric("staleSocketDetections");
+          } else if (reason === "stale-poll") {
+            incrementOagMetric("stalePollDetections");
+          }
+
           log.info?.(`[${channelId}:${accountId}] health-monitor: restarting (reason: ${reason})`);
 
           try {

@@ -80,6 +80,7 @@ import {
   resolveHeartbeatDeliveryTarget,
   resolveHeartbeatSenderContext,
 } from "./outbound/targets.js";
+import { inferSessionReplyLanguage, type SessionReplyLanguage } from "./session-language.js";
 import { peekSystemEventEntries } from "./system-events.js";
 
 export type HeartbeatDeps = OutboundSendDeps &
@@ -179,15 +180,31 @@ function resolveHeartbeatSession(
   const resolvedAgentId = normalizeAgentId(agentId ?? resolveDefaultAgentId(cfg));
   const mainSessionKey =
     scope === "global" ? "global" : resolveAgentMainSessionKey({ cfg, agentId: resolvedAgentId });
+  const defaultHeartbeatSessionKey =
+    scope === "global"
+      ? "global"
+      : toAgentStoreSessionKey({
+          agentId: resolvedAgentId,
+          requestKey: "heartbeat",
+          mainKey: cfg.session?.mainKey,
+        });
   const storeAgentId = scope === "global" ? resolveDefaultAgentId(cfg) : resolvedAgentId;
   const storePath = resolveStorePath(sessionCfg?.store, {
     agentId: storeAgentId,
   });
   const store = loadSessionStore(storePath);
   const mainEntry = store[mainSessionKey];
+  const heartbeatEntry = store[defaultHeartbeatSessionKey];
 
   if (scope === "global") {
-    return { sessionKey: mainSessionKey, storePath, store, entry: mainEntry };
+    return {
+      sessionKey: mainSessionKey,
+      eventSessionKey: mainSessionKey,
+      storePath,
+      store,
+      entry: mainEntry,
+      contextEntry: mainEntry,
+    };
   }
 
   const forced = forcedSessionKey?.trim();
@@ -207,9 +224,11 @@ function resolveHeartbeatSession(
       if (sessionAgentId === normalizeAgentId(resolvedAgentId)) {
         return {
           sessionKey: forcedCanonical,
+          eventSessionKey: forcedCanonical,
           storePath,
           store,
           entry: store[forcedCanonical],
+          contextEntry: store[forcedCanonical] ?? mainEntry,
         };
       }
     }
@@ -217,12 +236,26 @@ function resolveHeartbeatSession(
 
   const trimmed = heartbeat?.session?.trim() ?? "";
   if (!trimmed) {
-    return { sessionKey: mainSessionKey, storePath, store, entry: mainEntry };
+    return {
+      sessionKey: defaultHeartbeatSessionKey,
+      eventSessionKey: mainSessionKey,
+      storePath,
+      store,
+      entry: heartbeatEntry,
+      contextEntry: mainEntry,
+    };
   }
 
   const normalized = trimmed.toLowerCase();
   if (normalized === "main" || normalized === "global") {
-    return { sessionKey: mainSessionKey, storePath, store, entry: mainEntry };
+    return {
+      sessionKey: mainSessionKey,
+      eventSessionKey: mainSessionKey,
+      storePath,
+      store,
+      entry: mainEntry,
+      contextEntry: mainEntry,
+    };
   }
 
   const candidate = toAgentStoreSessionKey({
@@ -240,14 +273,23 @@ function resolveHeartbeatSession(
     if (sessionAgentId === normalizeAgentId(resolvedAgentId)) {
       return {
         sessionKey: canonical,
+        eventSessionKey: canonical,
         storePath,
         store,
         entry: store[canonical],
+        contextEntry: store[canonical] ?? mainEntry,
       };
     }
   }
 
-  return { sessionKey: mainSessionKey, storePath, store, entry: mainEntry };
+  return {
+    sessionKey: mainSessionKey,
+    eventSessionKey: mainSessionKey,
+    storePath,
+    store,
+    entry: mainEntry,
+    contextEntry: mainEntry,
+  };
 }
 
 function resolveHeartbeatReasoningPayloads(
@@ -426,7 +468,7 @@ async function resolveHeartbeatPreflight(params: {
     params.heartbeat,
     params.forcedSessionKey,
   );
-  const pendingEventEntries = peekSystemEventEntries(session.sessionKey);
+  const pendingEventEntries = peekSystemEventEntries(session.eventSessionKey ?? session.sessionKey);
   const hasTaggedCronEvents = pendingEventEntries.some((event) =>
     event.contextKey?.startsWith("cron:"),
   );
@@ -490,12 +532,30 @@ function appendHeartbeatWorkspacePathHint(prompt: string, workspaceDir: string):
   return `${prompt}\n${hint}`;
 }
 
+function appendHeartbeatReplyLanguageHint(
+  prompt: string,
+  language: SessionReplyLanguage | undefined,
+): string {
+  if (!language) {
+    return prompt;
+  }
+  const hint =
+    language === "zh-Hans"
+      ? "Reply in Simplified Chinese for any user-visible message. Keep HEARTBEAT_OK unchanged."
+      : "Reply in English for any user-visible message. Keep HEARTBEAT_OK unchanged.";
+  if (prompt.includes(hint)) {
+    return prompt;
+  }
+  return `${prompt}\n${hint}`;
+}
+
 function resolveHeartbeatRunPrompt(params: {
   cfg: OpenClawConfig;
   heartbeat?: HeartbeatConfig;
   preflight: HeartbeatPreflight;
   canRelayToUser: boolean;
   workspaceDir: string;
+  replyLanguage?: SessionReplyLanguage;
 }): HeartbeatPromptResolution {
   const pendingEventEntries = params.preflight.pendingEventEntries;
   const pendingEvents = params.preflight.shouldInspectPendingEvents
@@ -511,9 +571,15 @@ function resolveHeartbeatRunPrompt(params: {
   const hasExecCompletion = pendingEvents.some(isExecCompletionEvent);
   const hasCronEvents = cronEvents.length > 0;
   const basePrompt = hasExecCompletion
-    ? buildExecEventPrompt({ deliverToUser: params.canRelayToUser })
+    ? buildExecEventPrompt({
+        deliverToUser: params.canRelayToUser,
+        replyLanguage: params.replyLanguage,
+      })
     : hasCronEvents
-      ? buildCronEventPrompt(cronEvents, { deliverToUser: params.canRelayToUser })
+      ? buildCronEventPrompt(cronEvents, {
+          deliverToUser: params.canRelayToUser,
+          replyLanguage: params.replyLanguage,
+        })
       : resolveHeartbeatPrompt(params.cfg, params.heartbeat);
   const prompt = appendHeartbeatWorkspacePathHint(basePrompt, params.workspaceDir);
 
@@ -572,7 +638,7 @@ export async function runHeartbeatOnce(opts: {
     });
     return { status: "skipped", reason: preflight.skipReason };
   }
-  const { entry, sessionKey, storePath } = preflight.session;
+  const { entry, contextEntry, sessionKey, storePath } = preflight.session;
   const previousUpdatedAt = entry?.updatedAt;
 
   // When isolatedSession is enabled, create a fresh session via the same
@@ -598,7 +664,8 @@ export async function runHeartbeatOnce(opts: {
     runStorePath = cronSession.storePath;
   }
 
-  const delivery = resolveHeartbeatDeliveryTarget({ cfg, entry, heartbeat });
+  const heartbeatMetaEntry = entry ?? contextEntry;
+  const delivery = resolveHeartbeatDeliveryTarget({ cfg, entry: contextEntry ?? entry, heartbeat });
   const heartbeatAccountId = heartbeat?.accountId?.trim();
   if (delivery.reason === "unknown-account") {
     log.warn("heartbeat: unknown accountId", {
@@ -620,7 +687,7 @@ export async function runHeartbeatOnce(opts: {
           accountId: delivery.accountId,
         })
       : { showOk: false, showAlerts: true, useIndicator: true };
-  const { sender } = resolveHeartbeatSenderContext({ cfg, entry, delivery });
+  const { sender } = resolveHeartbeatSenderContext({ cfg, entry: contextEntry ?? entry, delivery });
   const responsePrefix = resolveEffectiveMessagesConfig(cfg, agentId, {
     channel: delivery.channel !== "none" ? delivery.channel : undefined,
     accountId: delivery.accountId,
@@ -630,15 +697,23 @@ export async function runHeartbeatOnce(opts: {
     delivery.channel !== "none" && delivery.to && visibility.showAlerts,
   );
   const workspaceDir = resolveAgentWorkspaceDir(cfg, agentId);
+  const replyLanguage = await inferSessionReplyLanguage({
+    sessionKey,
+    storePath,
+    entry: contextEntry ?? entry,
+    agentId,
+  });
   const { prompt, hasExecCompletion, hasCronEvents } = resolveHeartbeatRunPrompt({
     cfg,
     heartbeat,
     preflight,
     canRelayToUser,
     workspaceDir,
+    replyLanguage,
   });
+  const localizedPrompt = appendHeartbeatReplyLanguageHint(prompt, replyLanguage);
   const ctx = {
-    Body: appendCronStyleCurrentTimeLine(prompt, cfg, startedAt),
+    Body: appendCronStyleCurrentTimeLine(localizedPrompt, cfg, startedAt),
     From: sender,
     To: sender,
     OriginatingChannel: delivery.channel !== "none" ? delivery.channel : undefined,
@@ -786,9 +861,13 @@ export async function runHeartbeatOnce(opts: {
     // Suppress duplicate heartbeats (same payload) within a short window.
     // This prevents "nagging" when nothing changed but the model repeats the same items.
     const prevHeartbeatText =
-      typeof entry?.lastHeartbeatText === "string" ? entry.lastHeartbeatText : "";
+      typeof heartbeatMetaEntry?.lastHeartbeatText === "string"
+        ? heartbeatMetaEntry.lastHeartbeatText
+        : "";
     const prevHeartbeatAt =
-      typeof entry?.lastHeartbeatSentAt === "number" ? entry.lastHeartbeatSentAt : undefined;
+      typeof heartbeatMetaEntry?.lastHeartbeatSentAt === "number"
+        ? heartbeatMetaEntry.lastHeartbeatSentAt
+        : undefined;
     const isDuplicateMain =
       !shouldSkipMain &&
       !mediaUrls.length &&

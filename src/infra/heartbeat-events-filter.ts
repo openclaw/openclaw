@@ -1,4 +1,5 @@
 import { HEARTBEAT_TOKEN } from "../auto-reply/tokens.js";
+import type { SessionReplyLanguage } from "./session-language.js";
 
 // Build a dynamic prompt for cron events by embedding the actual event content.
 // This ensures the model sees the reminder text directly instead of relying on
@@ -7,9 +8,11 @@ export function buildCronEventPrompt(
   pendingEvents: string[],
   opts?: {
     deliverToUser?: boolean;
+    replyLanguage?: SessionReplyLanguage;
   },
 ): string {
   const deliverToUser = opts?.deliverToUser ?? true;
+  const replyLanguage = opts?.replyLanguage;
   const eventText = pendingEvents.join("\n").trim();
   if (!eventText) {
     if (!deliverToUser) {
@@ -30,25 +33,41 @@ export function buildCronEventPrompt(
       "\n\nHandle this reminder internally. Do not relay it to the user unless explicitly requested."
     );
   }
+  if (replyLanguage === "zh-Hans") {
+    return (
+      "系统触发了一条定时提醒。提醒内容如下：\n\n" +
+      eventText +
+      "\n\n请用简体中文把这条提醒清楚转达给用户，保持简洁、自然。"
+    );
+  }
   return (
     "A scheduled reminder has been triggered. The reminder content is:\n\n" +
     eventText +
-    "\n\nPlease relay this reminder to the user in a helpful and friendly way."
+    "\n\nPlease relay this reminder to the user clearly and naturally in English."
   );
 }
 
-export function buildExecEventPrompt(opts?: { deliverToUser?: boolean }): string {
+export function buildExecEventPrompt(opts?: {
+  deliverToUser?: boolean;
+  replyLanguage?: SessionReplyLanguage;
+}): string {
   const deliverToUser = opts?.deliverToUser ?? true;
+  const replyLanguage = opts?.replyLanguage;
   if (!deliverToUser) {
     return (
       "An async command you ran earlier has completed. The result is shown in the system messages above. " +
       "Handle the result internally. Do not relay it to the user unless explicitly requested."
     );
   }
+  if (replyLanguage === "zh-Hans") {
+    return (
+      "你之前运行的异步命令已经完成，结果已显示在上方系统消息中。 " +
+      "请用简体中文把结果清楚告诉用户：成功就给出关键结果，失败就简要说明原因。"
+    );
+  }
   return (
     "An async command you ran earlier has completed. The result is shown in the system messages above. " +
-    "Please relay the command output to the user in a helpful way. If the command succeeded, share the relevant output. " +
-    "If it failed, explain what went wrong."
+    "Please relay the result clearly in English. If it succeeded, share the key output. If it failed, explain what went wrong."
   );
 }
 

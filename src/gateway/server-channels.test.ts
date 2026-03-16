@@ -103,6 +103,7 @@ function createManager(options?: {
   channelRuntime?: PluginRuntime["channel"];
   resolveChannelRuntime?: () => PluginRuntime["channel"];
   loadConfig?: () => Record<string, unknown>;
+  onChannelRecovered?: Parameters<typeof createChannelManager>[0]["onChannelRecovered"];
 }) {
   const log = createSubsystemLogger("gateway/server-channels-test");
   const channelLogs = { discord: log } as Record<ChannelId, SubsystemLogger>;
@@ -112,6 +113,7 @@ function createManager(options?: {
     loadConfig: () => options?.loadConfig?.() ?? {},
     channelLogs,
     channelRuntimeEnvs,
+    ...(options?.onChannelRecovered ? { onChannelRecovered: options.onChannelRecovered } : {}),
     ...(options?.channelRuntime ? { channelRuntime: options.channelRuntime } : {}),
     ...(options?.resolveChannelRuntime
       ? { resolveChannelRuntime: options.resolveChannelRuntime }
@@ -408,5 +410,33 @@ describe("server-channels auto restart", () => {
     });
 
     expect(manager.isHealthMonitorEnabled("discord", "")).toBe(true);
+  });
+
+  it("fires the recovery hook when a channel reports connected after a disconnect", async () => {
+    const onChannelRecovered = vi.fn();
+    installTestRegistry(
+      createTestPlugin({
+        startAccount: async (ctx) => {
+          ctx.setStatus({ accountId: DEFAULT_ACCOUNT_ID, connected: false });
+          setTimeout(() => {
+            ctx.setStatus({ accountId: DEFAULT_ACCOUNT_ID, connected: true });
+          }, 20);
+          await new Promise(() => {});
+        },
+      }),
+    );
+    const manager = createManager({ onChannelRecovered });
+
+    await manager.startChannels();
+    await vi.advanceTimersByTimeAsync(20);
+
+    expect(onChannelRecovered).toHaveBeenCalledTimes(1);
+    expect(onChannelRecovered).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channelId: "discord",
+        accountId: DEFAULT_ACCOUNT_ID,
+        snapshot: expect.objectContaining({ connected: true }),
+      }),
+    );
   });
 });

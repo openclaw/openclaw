@@ -601,6 +601,52 @@ describe("delivery-queue", () => {
       expect(remaining[0]?.id).toBe(blockedId);
     });
 
+    it("can recover only entries for a specific channel/account target", async () => {
+      await enqueueDelivery(
+        { channel: "telegram", accountId: "default", to: "2", payloads: [{ text: "keep" }] },
+        tmpDir,
+      );
+      await enqueueDelivery(
+        { channel: "telegram", accountId: "ops", to: "3", payloads: [{ text: "skip" }] },
+        tmpDir,
+      );
+      await enqueueDelivery(
+        { channel: "whatsapp", to: "+1", payloads: [{ text: "skip-too" }] },
+        tmpDir,
+      );
+
+      const deliver = vi.fn().mockResolvedValue([]);
+      const result = await recoverPendingDeliveries({
+        deliver: deliver as DeliverFn,
+        log: createLog(),
+        cfg: baseCfg,
+        stateDir: tmpDir,
+        filter: { channel: "telegram", accountId: "default" },
+      });
+
+      expect(result).toEqual({
+        recovered: 1,
+        failed: 0,
+        skippedMaxRetries: 0,
+        deferredBackoff: 0,
+      });
+      expect(deliver).toHaveBeenCalledTimes(1);
+      expect(deliver).toHaveBeenCalledWith(
+        expect.objectContaining({
+          channel: "telegram",
+          accountId: "default",
+          to: "2",
+          skipQueue: true,
+        }),
+      );
+
+      const remaining = await loadPendingDeliveries(tmpDir);
+      expect(remaining).toHaveLength(2);
+      expect(
+        remaining.map((entry) => `${entry.channel}:${entry.accountId ?? "-"}`).toSorted(),
+      ).toEqual(["telegram:ops", "whatsapp:-"]);
+    });
+
     it("recovers user-visible entries ahead of older internal followup entries", async () => {
       const internalId = await enqueueDelivery(
         {

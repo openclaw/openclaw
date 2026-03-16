@@ -1,5 +1,12 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { loadConfig } from "../config/config.js";
+import {
+  resolveOagLockStaleMs,
+  resolveOagLockTimeoutMs,
+  resolveOagMaxDeliveredNotes,
+  resolveOagNoteDedupWindowMs,
+} from "./oag-config.js";
 import { incrementOagMetric } from "./oag-metrics.js";
 import { inferSessionReplyLanguage, type SessionReplyLanguage } from "./session-language.js";
 
@@ -22,12 +29,9 @@ type OagChannelHealthState = {
   delivered_user_notes?: OagPendingUserNote[];
 };
 
-const MAX_DELIVERED_NOTES = 20;
 const MAX_NOTE_LENGTH = 96;
 const OAG_STATE_LOCK_SUFFIX = ".lock";
 const OAG_STATE_LOCK_RETRY_MS = 25;
-const OAG_STATE_LOCK_TIMEOUT_MS = 2_000;
-const OAG_STATE_LOCK_STALE_MS = 30_000;
 
 function resolveLocalizedOagMessage(
   note: OagPendingUserNote,
@@ -64,7 +68,7 @@ async function sleep(ms: number): Promise<void> {
   await new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-async function isLockStale(lockPath: string): Promise<boolean> {
+async function isLockStale(lockPath: string, staleMs: number): Promise<boolean> {
   try {
     const content = await fs.readFile(lockPath, "utf8");
     const lines = content.trim().split("\n");
@@ -77,7 +81,7 @@ async function isLockStale(lockPath: string): Promise<boolean> {
       process.kill(pid, 0);
       // Process exists — check lock age as a fallback safety net.
       const stat = await fs.stat(lockPath);
-      return Date.now() - stat.mtimeMs > OAG_STATE_LOCK_STALE_MS;
+      return Date.now() - stat.mtimeMs > staleMs;
     } catch {
       // Process does not exist — lock is stale.
       return true;
@@ -89,9 +93,12 @@ async function isLockStale(lockPath: string): Promise<boolean> {
 }
 
 async function withOagStateLock<T>(statePath: string, fn: () => Promise<T>): Promise<T> {
+  const cfg = loadConfig();
+  const lockTimeoutMs = resolveOagLockTimeoutMs(cfg);
+  const lockStaleMs = resolveOagLockStaleMs(cfg);
   const lockPath = `${statePath}${OAG_STATE_LOCK_SUFFIX}`;
   await fs.mkdir(path.dirname(lockPath), { recursive: true });
-  const deadline = Date.now() + OAG_STATE_LOCK_TIMEOUT_MS;
+  const deadline = Date.now() + lockTimeoutMs;
   let fd: import("node:fs/promises").FileHandle | null = null;
   while (true) {
     try {
@@ -104,7 +111,7 @@ async function withOagStateLock<T>(statePath: string, fn: () => Promise<T>): Pro
       if (code !== "EEXIST") {
         throw error;
       }
-      if (await isLockStale(lockPath)) {
+      if (await isLockStale(lockPath, lockStaleMs)) {
         await fs.unlink(lockPath).catch(() => {});
         incrementOagMetric("lockStalRecoveries");
         continue;
@@ -158,9 +165,10 @@ function resolveNoteTimestamp(note: OagPendingUserNote): number {
   return Number.isNaN(parsed) ? 0 : parsed;
 }
 
-const OAG_NOTE_DEDUP_WINDOW_MS = 60_000;
-
-function deduplicateNotesByAction(notes: OagPendingUserNote[]): OagPendingUserNote[] {
+function deduplicateNotesByAction(
+  notes: OagPendingUserNote[],
+  dedupWindowMs: number,
+): OagPendingUserNote[] {
   if (notes.length <= 1) {
     return notes;
   }
@@ -199,7 +207,7 @@ function deduplicateNotesByAction(notes: OagPendingUserNote[]): OagPendingUserNo
     const newestTs = resolveNoteTimestamp(newest);
     // Only deduplicate notes within the time window of the newest
     const deduped = group.filter(
-      (note) => note === newest || newestTs - resolveNoteTimestamp(note) > OAG_NOTE_DEDUP_WINDOW_MS,
+      (note) => note === newest || newestTs - resolveNoteTimestamp(note) > dedupWindowMs,
     );
     result.push(...deduped);
   }
@@ -255,14 +263,14 @@ export async function consumePendingOagSystemNotes(sessionKey: string): Promise<
         delivered_at: deliveredAt,
         delivered_session_key: normalizedSessionKey,
       })),
-    ].slice(-MAX_DELIVERED_NOTES);
+    ].slice(-resolveOagMaxDeliveredNotes(loadConfig()));
     await fs.writeFile(path, JSON.stringify(parsed, null, 2) + "\n", "utf8");
     return consumed;
   });
   if (matched.length === 0) {
     return [];
   }
-  const deduplicated = deduplicateNotesByAction(matched);
+  const deduplicated = deduplicateNotesByAction(matched, resolveOagNoteDedupWindowMs(loadConfig()));
   if (matched.length - deduplicated.length > 0) {
     incrementOagMetric("noteDeduplications", matched.length - deduplicated.length);
   }

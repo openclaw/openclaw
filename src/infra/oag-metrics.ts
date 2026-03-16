@@ -1,4 +1,4 @@
-type OagMetricCounters = {
+export type OagMetricCounters = {
   channelRestarts: number;
   deliveryRecoveries: number;
   deliveryRecoveryFailures: number;

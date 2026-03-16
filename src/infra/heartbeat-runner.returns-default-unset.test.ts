@@ -14,7 +14,7 @@ import {
   resolveStorePath,
 } from "../config/sessions.js";
 import { getActivePluginRegistry, setActivePluginRegistry } from "../plugins/runtime.js";
-import { buildAgentPeerSessionKey } from "../routing/session-key.js";
+import { buildAgentPeerSessionKey, toAgentStoreSessionKey } from "../routing/session-key.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../test-utils/channel-plugins.js";
 import { typedCases } from "../test-utils/typed-cases.js";
 import {
@@ -618,6 +618,10 @@ describe("runHeartbeatOnce", () => {
         session: { store: storePath },
       };
       const sessionKey = resolveAgentMainSessionKey({ cfg, agentId: "ops" });
+      const heartbeatSessionKey = toAgentStoreSessionKey({
+        agentId: "ops",
+        requestKey: "heartbeat",
+      });
 
       await fs.writeFile(
         storePath,
@@ -657,7 +661,7 @@ describe("runHeartbeatOnce", () => {
       expect(replySpy).toHaveBeenCalledWith(
         expect.objectContaining({
           Body: expect.stringMatching(/Ops check[\s\S]*Current time: /),
-          SessionKey: sessionKey,
+          SessionKey: heartbeatSessionKey,
           From: "120363401234567890@g.us",
           To: "120363401234567890@g.us",
           OriginatingChannel: "whatsapp",
@@ -696,6 +700,10 @@ describe("runHeartbeatOnce", () => {
         session: { store: storeTemplate },
       };
       const sessionKey = resolveAgentMainSessionKey({ cfg, agentId });
+      const heartbeatSessionKey = toAgentStoreSessionKey({
+        agentId,
+        requestKey: "heartbeat",
+      });
       const storePath = resolveStorePath(storeTemplate, { agentId });
       const sessionsDir = path.dirname(storePath);
       const sessionId = "sid-ops";
@@ -744,7 +752,7 @@ describe("runHeartbeatOnce", () => {
       );
       expect(replySpy).toHaveBeenCalledWith(
         expect.objectContaining({
-          SessionKey: sessionKey,
+          SessionKey: heartbeatSessionKey,
           From: "120363401234567890@g.us",
           To: "120363401234567890@g.us",
           Provider: "heartbeat",
@@ -874,6 +882,73 @@ describe("runHeartbeatOnce", () => {
           cfg,
         );
       }
+    } finally {
+      replySpy.mockRestore();
+    }
+  });
+
+  it("uses a dedicated heartbeat session by default but keeps main-session delivery context", async () => {
+    const tmpDir = await createCaseDir("hb-default-dedicated-session");
+    const storePath = path.join(tmpDir, "sessions.json");
+    const replySpy = vi.spyOn(replyModule, "getReplyFromConfig");
+    try {
+      const cfg: OpenClawConfig = {
+        agents: {
+          defaults: {
+            workspace: tmpDir,
+            heartbeat: {
+              every: "5m",
+              target: "last",
+            },
+          },
+        },
+        channels: { whatsapp: { allowFrom: ["*"] } },
+        session: { store: storePath },
+      };
+      const mainSessionKey = resolveMainSessionKey(cfg);
+      const heartbeatSessionKey = toAgentStoreSessionKey({
+        agentId: resolveAgentIdFromSessionKey(mainSessionKey),
+        requestKey: "heartbeat",
+      });
+
+      await fs.writeFile(
+        storePath,
+        JSON.stringify({
+          [mainSessionKey]: {
+            sessionId: "sid-main",
+            updatedAt: Date.now(),
+            lastChannel: "whatsapp",
+            lastTo: "120363401234567890@g.us",
+          },
+        }),
+      );
+
+      replySpy.mockResolvedValue([{ text: "Dedicated heartbeat" }]);
+      const sendWhatsApp = vi
+        .fn<NonNullable<HeartbeatDeps["sendWhatsApp"]>>()
+        .mockResolvedValue({ messageId: "m1", toJid: "jid" });
+
+      await runHeartbeatOnce({
+        cfg,
+        deps: createHeartbeatDeps(sendWhatsApp),
+      });
+
+      expect(sendWhatsApp).toHaveBeenCalledTimes(1);
+      expect(sendWhatsApp).toHaveBeenCalledWith(
+        "120363401234567890@g.us",
+        "Dedicated heartbeat",
+        expect.any(Object),
+      );
+      expect(replySpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          SessionKey: heartbeatSessionKey,
+          From: "120363401234567890@g.us",
+          To: "120363401234567890@g.us",
+          Provider: "heartbeat",
+        }),
+        expect.objectContaining({ isHeartbeat: true, suppressToolErrorWarnings: false }),
+        cfg,
+      );
     } finally {
       replySpy.mockRestore();
     }
@@ -1074,6 +1149,157 @@ describe("runHeartbeatOnce", () => {
         "120363401234567890@g.us",
         "Hello from heartbeat",
         expect.any(Object),
+      );
+    } finally {
+      replySpy.mockRestore();
+    }
+  });
+
+  it("adds a Simplified Chinese reply hint when the latest user message is Chinese", async () => {
+    const tmpDir = await createCaseDir("hb-language-zh");
+    const storePath = path.join(tmpDir, "sessions.json");
+    const sessionFile = path.join(tmpDir, "sid.jsonl");
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: {
+          workspace: tmpDir,
+          heartbeat: { every: "5m", target: "whatsapp", prompt: "Ops check" },
+        },
+      },
+      channels: { whatsapp: { allowFrom: ["*"] } },
+      session: { store: storePath },
+    };
+    const sessionKey = resolveMainSessionKey(cfg);
+    await fs.writeFile(
+      sessionFile,
+      [
+        JSON.stringify({
+          type: "session",
+          version: 3,
+          id: "sid",
+          timestamp: new Date().toISOString(),
+          cwd: process.cwd(),
+        }),
+        JSON.stringify({
+          type: "message",
+          id: "m1",
+          parentId: null,
+          timestamp: new Date().toISOString(),
+          message: { role: "user", content: "请用中文给我汇报记忆整理结果" },
+        }),
+      ].join("\n"),
+      "utf-8",
+    );
+    await fs.writeFile(
+      storePath,
+      JSON.stringify({
+        [sessionKey]: {
+          sessionId: "sid",
+          sessionFile,
+          updatedAt: Date.now(),
+          lastChannel: "whatsapp",
+          lastTo: "120363401234567890@g.us",
+        },
+      }),
+    );
+
+    const replySpy = vi.spyOn(replyModule, "getReplyFromConfig");
+    replySpy.mockResolvedValue({ text: "记忆整理已完成" });
+    const sendWhatsApp = vi.fn<NonNullable<HeartbeatDeps["sendWhatsApp"]>>().mockResolvedValue({
+      messageId: "m1",
+      toJid: "jid",
+    });
+
+    try {
+      await runHeartbeatOnce({
+        cfg,
+        deps: createHeartbeatDeps(sendWhatsApp),
+      });
+      expect(replySpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          Body: expect.stringContaining(
+            "Reply in Simplified Chinese for any user-visible message. Keep HEARTBEAT_OK unchanged.",
+          ),
+        }),
+        expect.objectContaining({ isHeartbeat: true, suppressToolErrorWarnings: false }),
+        cfg,
+      );
+    } finally {
+      replySpy.mockRestore();
+    }
+  });
+
+  it("adds an English reply hint when the latest user message is English", async () => {
+    const tmpDir = await createCaseDir("hb-language-en");
+    const storePath = path.join(tmpDir, "sessions.json");
+    const sessionFile = path.join(tmpDir, "sid.jsonl");
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: {
+          workspace: tmpDir,
+          heartbeat: { every: "5m", target: "whatsapp", prompt: "Ops check" },
+        },
+      },
+      channels: { whatsapp: { allowFrom: ["*"] } },
+      session: { store: storePath },
+    };
+    const sessionKey = resolveMainSessionKey(cfg);
+    await fs.writeFile(
+      sessionFile,
+      [
+        JSON.stringify({
+          type: "session",
+          version: 3,
+          id: "sid",
+          timestamp: new Date().toISOString(),
+          cwd: process.cwd(),
+        }),
+        JSON.stringify({
+          type: "message",
+          id: "m1",
+          parentId: null,
+          timestamp: new Date().toISOString(),
+          message: {
+            role: "user",
+            content: "Please send the memory consolidation summary in English.",
+          },
+        }),
+      ].join("\n"),
+      "utf-8",
+    );
+    await fs.writeFile(
+      storePath,
+      JSON.stringify({
+        [sessionKey]: {
+          sessionId: "sid",
+          sessionFile,
+          updatedAt: Date.now(),
+          lastChannel: "whatsapp",
+          lastTo: "120363401234567890@g.us",
+        },
+      }),
+    );
+
+    const replySpy = vi.spyOn(replyModule, "getReplyFromConfig");
+    replySpy.mockResolvedValue({ text: "Memory consolidation completed." });
+    const sendWhatsApp = vi.fn<NonNullable<HeartbeatDeps["sendWhatsApp"]>>().mockResolvedValue({
+      messageId: "m1",
+      toJid: "jid",
+    });
+
+    try {
+      await runHeartbeatOnce({
+        cfg,
+        deps: createHeartbeatDeps(sendWhatsApp),
+      });
+      expect(replySpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          Body: expect.stringContaining(
+            "Reply in English for any user-visible message. Keep HEARTBEAT_OK unchanged.",
+          ),
+        }),
+        expect.objectContaining({ isHeartbeat: true, suppressToolErrorWarnings: false }),
+        cfg,
       );
     } finally {
       replySpy.mockRestore();

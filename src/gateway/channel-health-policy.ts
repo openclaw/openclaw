@@ -1,4 +1,5 @@
 import type { ChannelId } from "../channels/plugins/types.js";
+import { resolveOagStalePollFactor } from "../infra/oag-config.js";
 
 export type ChannelHealthSnapshot = {
   running?: boolean;
@@ -37,6 +38,7 @@ export type ChannelHealthPolicy = {
   now: number;
   staleEventThresholdMs: number;
   channelConnectGraceMs: number;
+  stalePollFactor?: number;
 };
 
 export type ChannelRestartReason =
@@ -64,9 +66,6 @@ const BUSY_ACTIVITY_STALE_THRESHOLD_MS = 25 * 60_000;
 // probes so both surfaces evaluate channel lifecycle windows consistently.
 export const DEFAULT_CHANNEL_STALE_EVENT_THRESHOLD_MS = 30 * 60_000;
 export const DEFAULT_CHANNEL_CONNECT_GRACE_MS = 120_000;
-// Polling/webhook channels use a more generous inbound-activity threshold
-// because poll intervals are typically longer than WebSocket event rates.
-const STALE_POLL_THRESHOLD_FACTOR = 2;
 
 export function evaluateChannelHealth(
   snapshot: ChannelHealthSnapshot,
@@ -147,7 +146,8 @@ export function evaluateChannelHealth(
         ? snapshot.lastInboundAt
         : null;
     if (lastInboundAt != null) {
-      const stalePollThresholdMs = policy.staleEventThresholdMs * STALE_POLL_THRESHOLD_FACTOR;
+      const stalePollThresholdMs =
+        policy.staleEventThresholdMs * (policy.stalePollFactor ?? resolveOagStalePollFactor());
       if (lastStartAt != null && lastInboundAt < lastStartAt) {
         const lifecycleGap = Math.max(0, policy.now - lastStartAt);
         if (lifecycleGap <= stalePollThresholdMs) {
