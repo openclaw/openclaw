@@ -10,6 +10,10 @@ import {
   buildModelsProviderData,
   formatModelsAvailableHeader,
 } from "../../../src/auto-reply/reply/commands-models.js";
+import {
+  buildMentionRegexes,
+  matchesMentionPatterns,
+} from "../../../src/auto-reply/reply/mentions.js";
 import { resolveStoredModelOverride } from "../../../src/auto-reply/reply/model-selection.js";
 import { listSkillCommandsForAgents } from "../../../src/auto-reply/skill-commands.js";
 import { buildCommandsMessagePaginated } from "../../../src/auto-reply/status.js";
@@ -1024,16 +1028,28 @@ export const registerTelegramHandlers = ({
       // Don't send the error reply for group messages where requireMention is set
       // and the bot was not mentioned — the bot would have silently skipped this
       // message anyway, so responding with an error is unexpected and noisy.
-      // Check both explicit @bot mentions AND implicit mentions (replies to bot
-      // messages) to mirror the actual mention gate in bot-message-context.body.ts.
+      // Mirrors the actual mention gate in bot-message-context.body.ts: explicit
+      // @bot, regex patterns (agent name/emoji), implicit reply-to-bot, and
+      // authorized control-command bypass.
       const botUsername = ctx.me?.username;
       const botId = ctx.me?.id;
       const replyToBotMessage = botId != null && msg.reply_to_message?.from?.id === botId;
+      const messageTextParts = getTelegramTextParts(msg);
+      const mentionRegexes = buildMentionRegexes(loadConfig());
+      const regexMentioned = matchesMentionPatterns(messageTextParts.text, mentionRegexes);
+      const textContent = messageTextParts.text.trim();
+      const senderId = msg.from?.id ? String(msg.from.id) : "";
+      const commandBypass =
+        textContent.startsWith("/") &&
+        (storeAllowFrom.length === 0 || storeAllowFrom.includes(senderId));
+      const canDetectMention = Boolean(botUsername) || mentionRegexes.length > 0;
       const wouldSkipMention =
         groupConfig?.requireMention === true &&
-        botUsername != null &&
-        !hasBotMention(msg, botUsername) &&
-        !replyToBotMessage;
+        canDetectMention &&
+        !(botUsername ? hasBotMention(msg, botUsername) : false) &&
+        !replyToBotMessage &&
+        !regexMentioned &&
+        !commandBypass;
       if (!wouldSkipMention) {
         await withTelegramApiErrorLogging({
           operation: "sendMessage",
