@@ -23,7 +23,15 @@ RUN --mount=type=cache,id=openclaw-sandbox-bookworm-apt-cache,target=/var/cache/
     x11vnc \
     xvfb
 
+RUN curl -o /root/ttf-mscorefonts-installer.deb http://ftp.debian.org/debian/pool/contrib/m/msttcorefonts/ttf-mscorefonts-installer_3.8.1_all.deb
+RUN --mount=type=cache,id=openclaw-sandbox-bookworm-apt-cache,target=/var/cache/apt,sharing=locked \
+        --mount=type=cache,id=openclaw-sandbox-bookworm-apt-lists,target=/var/lib/apt,sharing=locked \
+        apt install -y /root/ttf-mscorefonts-installer.deb
+RUN fc-cache -fv
+
 COPY --chmod=755 scripts/sandbox-browser-entrypoint.sh /usr/local/bin/openclaw-sandbox-browser
+RUN mkdir -p /tmp/openclaw-home
+RUN chmod -R 777 /tmp/openclaw-home
 
 RUN useradd --create-home --shell /bin/bash sandbox
 USER sandbox
