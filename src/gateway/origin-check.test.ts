@@ -515,4 +515,96 @@ describe("checkBrowserOrigin", () => {
       expect(result.ok).toBe(true);
     });
   });
+
+  describe("port normalization for allowlist matching", () => {
+    it("accepts origin with default HTTPS port when allowlist omits port", () => {
+      const result = checkBrowserOrigin({
+        requestHost: "example.com:443",
+        origin: "https://example.com:443",
+        allowedOrigins: ["https://example.com"],
+      });
+      expect(result.ok).toBe(true);
+      if (result.ok) {
+        expect(result.matchedBy).toBe("allowlist");
+      }
+    });
+
+    it("accepts origin without default HTTPS port when allowlist includes port", () => {
+      const result = checkBrowserOrigin({
+        requestHost: "example.com:443",
+        origin: "https://example.com",
+        allowedOrigins: ["https://example.com:443"],
+      });
+      expect(result.ok).toBe(true);
+      if (result.ok) {
+        expect(result.matchedBy).toBe("allowlist");
+      }
+    });
+
+    it("accepts origin with default HTTP port when allowlist omits port", () => {
+      const result = checkBrowserOrigin({
+        requestHost: "example.com:80",
+        origin: "http://example.com:80",
+        allowedOrigins: ["http://example.com"],
+      });
+      expect(result.ok).toBe(true);
+      if (result.ok) {
+        expect(result.matchedBy).toBe("allowlist");
+      }
+    });
+
+    it("accepts origin without default HTTP port when allowlist includes port", () => {
+      const result = checkBrowserOrigin({
+        requestHost: "example.com:80",
+        origin: "http://example.com",
+        allowedOrigins: ["http://example.com:80"],
+      });
+      expect(result.ok).toBe(true);
+      if (result.ok) {
+        expect(result.matchedBy).toBe("allowlist");
+      }
+    });
+
+    it("preserves non-standard port matching", () => {
+      const result = checkBrowserOrigin({
+        requestHost: "example.com:8443",
+        origin: "https://example.com:8443",
+        allowedOrigins: ["https://example.com:8443"],
+      });
+      expect(result.ok).toBe(true);
+      if (result.ok) {
+        expect(result.matchedBy).toBe("allowlist");
+      }
+    });
+
+    it("rejects non-standard port when allowlist has standard port", () => {
+      const result = checkBrowserOrigin({
+        requestHost: "example.com:8443",
+        origin: "https://example.com:8443",
+        allowedOrigins: ["https://example.com:443"],
+      });
+      expect(result.ok).toBe(false);
+    });
+
+    it("handles mixed port representations in allowlist", () => {
+      const result = checkBrowserOrigin({
+        requestHost: "example.com:443",
+        origin: "https://example.com:443",
+        allowedOrigins: ["https://example.com", "https://example.com:443"],
+      });
+      expect(result.ok).toBe(true);
+    });
+
+    it("normalizes both origin and allowlist consistently", () => {
+      const result = checkBrowserOrigin({
+        requestHost: "example.com:443",
+        origin: "HTTPS://EXAMPLE.COM:443",
+        allowedOrigins: ["https://example.com"],
+      });
+      expect(result.ok).toBe(true);
+      if (result.ok) {
+        expect(result.matchedBy).toBe("allowlist");
+      }
+    });
+  });
 });

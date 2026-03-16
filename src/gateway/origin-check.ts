@@ -20,7 +20,21 @@ type OriginCheckParams = {
   isTrustedProxy?: boolean;
   forwardedHeader?: string | string[];
   strictProtoValidation?: boolean;
+  disableLocalhostPrivilege?: boolean;
 };
+
+function normalizeOriginToMatchUrlHost(origin: string): string | null {
+  try {
+    const url = new URL(origin);
+    const normalizedHost = normalizeHostToMatchUrlHost(url.host);
+    if (!normalizedHost) {
+      return null;
+    }
+    return `${url.protocol.replace(":", "")}://${normalizedHost}`.toLowerCase();
+  } catch {
+    return null;
+  }
+}
 
 function parseOrigin(
   originRaw?: string,
@@ -73,7 +87,14 @@ export function checkBrowserOrigin(params: OriginCheckParams): OriginCheckResult
   const allowlistOrigins = (params.allowedOrigins ?? [])
     .map((value) => value.trim().toLowerCase())
     .filter(Boolean);
+
   const allowlist = new Set(allowlistOrigins);
+
+  const normalizedOrigin = normalizeOriginToMatchUrlHost(parsedOrigin.origin);
+  const normalizedAllowlistOrigins = allowlistOrigins
+    .map((o) => normalizeOriginToMatchUrlHost(o))
+    .filter((o): o is string => o !== null);
+  const normalizedAllowlist = new Set(normalizedAllowlistOrigins);
 
   const requestForwardedHost = normalizeHostToMatchUrlHost(params.requestForwardedHost);
 
@@ -98,7 +119,11 @@ export function checkBrowserOrigin(params: OriginCheckParams): OriginCheckResult
   }
 
   const wildcardMatched = allowlist.has("*");
-  if (wildcardMatched || allowlist.has(parsedOrigin.origin)) {
+  if (
+    wildcardMatched ||
+    allowlist.has(parsedOrigin.origin) ||
+    (normalizedOrigin && normalizedAllowlist.has(normalizedOrigin))
+  ) {
     return { ok: true, matchedBy: "allowlist", wildcardMatched };
   }
 
@@ -117,7 +142,11 @@ export function checkBrowserOrigin(params: OriginCheckParams): OriginCheckResult
     return { ok: true, matchedBy: "host-header-fallback", wildcardMatched: false };
   }
 
-  if (params.isLocalClient && isLoopbackHost(parsedOrigin.hostname)) {
+  if (
+    params.disableLocalhostPrivilege !== true &&
+    params.isLocalClient &&
+    isLoopbackHost(parsedOrigin.hostname)
+  ) {
     return { ok: true, matchedBy: "local-loopback", wildcardMatched: false };
   }
 
