@@ -400,12 +400,13 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       return [];
     }
     const sourceFilter = this.buildSourceFilter();
-    // In FTS-only mode (no provider), search all models; otherwise filter by current provider's model
-    const providerModel = this.provider?.model;
+    // FTS search always returns all keyword matches regardless of provider/model.
+    // The provider model is only used for vector embeddings in hybrid mode.
+    // Filtering by model would exclude relevant hits from previous indexing sessions
+    // that used different embedding providers/models.
     const results = await searchKeyword({
       db: this.db,
       ftsTable: FTS_TABLE,
-      providerModel,
       query,
       limit,
       snippetMaxChars: SNIPPET_MAX_CHARS,
