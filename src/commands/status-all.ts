@@ -28,6 +28,7 @@ import { checkUpdateStatus, formatGitInstallLabel } from "../infra/update-check.
 import { runExec } from "../process/exec.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { VERSION } from "../version.js";
+import { isScopeLimitedProbeFailure } from "./gateway-status/helpers.ts";
 import { resolveControlUiLinks } from "./onboard-helpers.js";
 import { getAgentLocalStatuses } from "./status-all/agents.js";
 import { buildChannelsTable } from "./status-all/channels.js";
@@ -253,9 +254,11 @@ export async function statusAllCommand(
     const gatewayTarget = remoteUrlMissing ? `fallback ${connection.url}` : connection.url;
     const gatewayStatus = gatewayReachable
       ? `reachable ${formatDurationPrecise(gatewayProbe?.connectLatencyMs ?? 0)}`
-      : gatewayProbe?.error
-        ? `unreachable (${gatewayProbe.error})`
-        : "unreachable";
+      : gatewayProbe && isScopeLimitedProbeFailure(gatewayProbe)
+        ? "reachable (diagnostics limited)"
+        : gatewayProbe?.error
+          ? `unreachable (${gatewayProbe.error})`
+          : "unreachable";
     const gatewayAuth = gatewayReachable ? ` · auth ${formatGatewayAuthUsed(probeAuth)}` : "";
     const gatewaySelfLine =
       gatewaySelf?.host || gatewaySelf?.ip || gatewaySelf?.version || gatewaySelf?.platform

@@ -493,6 +493,23 @@ describe("statusCommand", () => {
     });
   });
 
+  it("treats missing operator.read as reachable with limited diagnostics", async () => {
+    mockProbeGatewayResult({
+      ok: false,
+      connectLatencyMs: 51,
+      error: "missing scope: operator.read",
+      health: null,
+      status: null,
+      presence: null,
+    });
+
+    const logs = await runStatusAndGetLogs();
+    expect(logs.some((line) => line.includes("reachable (diagnostics limited)"))).toBe(true);
+    expect(logs.some((line) => line.includes("unreachable (missing scope: operator.read)"))).toBe(
+      false,
+    );
+  });
+
   it("warns instead of crashing when gateway auth SecretRef is unresolved for probe auth", async () => {
     mocks.loadConfig.mockReturnValue({
       session: {},
