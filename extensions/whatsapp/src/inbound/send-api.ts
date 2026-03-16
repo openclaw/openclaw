@@ -41,11 +41,8 @@ export function createWebSendApi(params: {
             caption: text || undefined,
             mimetype: mediaType,
           };
-        } else if (mediaType.startsWith("audio/")) {
-          const mimetype =
-            typeof mediaType === "string" && mediaType.includes("opus")
-              ? "audio/ogg; codecs=opus"
-              : mediaType;
+        } else if (mediaType && mediaType.startsWith("audio/")) {
+          const mimetype = mediaType.includes("opus") ? "audio/ogg; codecs=opus" : mediaType;
 
           payload = {
             audio: mediaBuffer,
