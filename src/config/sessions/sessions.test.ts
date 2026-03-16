@@ -6,6 +6,7 @@ import { upsertAcpSessionMeta } from "../../acp/runtime/session-meta.js";
 import * as jsonFiles from "../../infra/json-files.js";
 import { createSuiteTempRootTracker, withTempDirSync } from "../../test-helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config.js";
+
 import type { SessionConfig } from "../types.base.js";
 import { resolveSessionLifecycleTimestamps } from "./lifecycle.js";
 import {
@@ -18,7 +19,7 @@ import { evaluateSessionFreshness, resolveSessionResetPolicy } from "./reset.js"
 import { resolveAndPersistSessionFile } from "./session-file.js";
 import { clearSessionStoreCacheForTest, loadSessionStore, updateSessionStore } from "./store.js";
 import { useTempSessionsFixture } from "./test-helpers.js";
-import { mergeSessionEntry, type SessionEntry } from "./types.js";
+import { mergeSessionEntry, setSessionRuntimeModel, type SessionEntry } from "./types.js";
 
 describe("session path safety", () => {
   it("rejects unsafe session IDs", () => {
@@ -529,5 +530,73 @@ describe("resolveAndPersistSessionFile", () => {
 
     const saved = loadSessionStore(fixture.storePath(), { skipCache: true });
     expect(saved[sessionKey]?.sessionFile).toBe(expectedNextSessionFile);
+  });
+});
+
+describe("setSessionRuntimeModel", () => {
+  it("sets model and provider on session entry", () => {
+    const entry: SessionEntry = { sessionId: "s1", updatedAt: Date.now() };
+
+    const result = setSessionRuntimeModel(entry, {
+      provider: "anthropic",
+      model: "claude-opus-4-6",
+    });
+
+    expect(result).toBe(true);
+    expect(entry.modelProvider).toBe("anthropic");
+    expect(entry.model).toBe("claude-opus-4-6");
+    expect(entry.modelIsFromFallback).toBe(false);
+  });
+
+  it("sets modelIsFromFallback when isFromFallback is true (#47705)", () => {
+    const entry: SessionEntry = { sessionId: "s1", updatedAt: Date.now() };
+
+    setSessionRuntimeModel(entry, {
+      provider: "xai",
+      model: "grok-4-1-fast-reasoning",
+      isFromFallback: true,
+    });
+
+    expect(entry.modelIsFromFallback).toBe(true);
+  });
+
+  it("clears modelIsFromFallback when isFromFallback is false", () => {
+    const entry: SessionEntry = {
+      sessionId: "s1",
+      updatedAt: Date.now(),
+      modelIsFromFallback: true,
+    };
+
+    setSessionRuntimeModel(entry, {
+      provider: "openai-codex",
+      model: "gpt-5.3-codex",
+      isFromFallback: false,
+    });
+
+    expect(entry.modelIsFromFallback).toBe(false);
+  });
+
+  it("returns false for empty provider", () => {
+    const entry: SessionEntry = { sessionId: "s1", updatedAt: Date.now() };
+
+    const result = setSessionRuntimeModel(entry, {
+      provider: "",
+      model: "claude-opus-4-6",
+    });
+
+    expect(result).toBe(false);
+    expect(entry.model).toBeUndefined();
+  });
+
+  it("returns false for empty model", () => {
+    const entry: SessionEntry = { sessionId: "s1", updatedAt: Date.now() };
+
+    const result = setSessionRuntimeModel(entry, {
+      provider: "anthropic",
+      model: "",
+    });
+
+    expect(result).toBe(false);
+    expect(entry.modelProvider).toBeUndefined();
   });
 });

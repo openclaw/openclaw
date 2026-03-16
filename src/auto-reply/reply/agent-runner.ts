@@ -1298,6 +1298,8 @@ export async function runReplyAgent(params: {
       }) ??
       DEFAULT_CONTEXT_TOKENS;
 
+    // Model is from fallback if the successfully-used provider/model differs from the primary.
+    const isFromFallback = providerUsed !== selectedProvider || modelUsed !== selectedModel;
     await persistRunSessionUsage({
       storePath,
       sessionKey,
@@ -1307,6 +1309,7 @@ export async function runReplyAgent(params: {
       promptTokens,
       modelUsed,
       providerUsed,
+      isFromFallback,
       contextTokensUsed,
       systemPromptReport: runResult.meta?.systemPromptReport,
       cliSessionId,

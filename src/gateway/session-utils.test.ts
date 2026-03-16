@@ -879,6 +879,58 @@ describe("resolveSessionModelRef", () => {
 
     expect(resolved).toEqual({ provider: "anthropic", model: "claude-sonnet-4-6" });
   });
+
+  test("ignores session-stored model when modelIsFromFallback is true (#47705)", () => {
+    // When a fallback model is stored in the session, resolveSessionModelRef should
+    // skip it and return the configured primary model instead, so the primary is
+    // retried on subsequent requests.
+    const cfg = createModelDefaultsConfig({
+      primary: "openai-codex/gpt-5.3-codex",
+    });
+
+    const resolved = resolveSessionModelRef(cfg, {
+      sessionId: "fallback-session",
+      updatedAt: Date.now(),
+      modelProvider: "xai",
+      model: "grok-4-1-fast-reasoning",
+      modelIsFromFallback: true,
+    });
+
+    expect(resolved).toEqual({ provider: "openai-codex", model: "gpt-5.3-codex" });
+  });
+
+  test("uses session-stored model when modelIsFromFallback is false", () => {
+    // When the model was explicitly set (not from fallback), it should be used.
+    const cfg = createModelDefaultsConfig({
+      primary: "openai-codex/gpt-5.3-codex",
+    });
+
+    const resolved = resolveSessionModelRef(cfg, {
+      sessionId: "explicit-session",
+      updatedAt: Date.now(),
+      modelProvider: "anthropic",
+      model: "claude-opus-4-6",
+      modelIsFromFallback: false,
+    });
+
+    expect(resolved).toEqual({ provider: "anthropic", model: "claude-opus-4-6" });
+  });
+
+  test("uses session-stored model when modelIsFromFallback is undefined (legacy)", () => {
+    // Legacy sessions without the flag should still work as before.
+    const cfg = createModelDefaultsConfig({
+      primary: "openai-codex/gpt-5.3-codex",
+    });
+
+    const resolved = resolveSessionModelRef(cfg, {
+      sessionId: "legacy-session",
+      updatedAt: Date.now(),
+      modelProvider: "anthropic",
+      model: "claude-opus-4-6",
+    });
+
+    expect(resolved).toEqual({ provider: "anthropic", model: "claude-opus-4-6" });
+  });
 });
 
 describe("listSessionsFromStore selected model display", () => {

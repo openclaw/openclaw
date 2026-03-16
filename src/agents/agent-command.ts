@@ -1081,6 +1081,8 @@ async function agentCommandInternal(
     // Update token+model fields in the session store.
     if (sessionStore && sessionKey) {
       const { updateSessionStoreAfterAgentRun } = await loadSessionStoreRuntime();
+      // Model is from fallback if the successfully-used provider/model differs from the primary.
+      const isFromFallback = fallbackProvider !== provider || fallbackModel !== model;
       await updateSessionStoreAfterAgentRun({
         cfg,
         contextTokensOverride: agentCfg?.contextTokens,
@@ -1092,6 +1094,7 @@ async function agentCommandInternal(
         defaultModel: model,
         fallbackProvider,
         fallbackModel,
+        isFromFallback,
         result,
         touchInteraction:
           opts.bootstrapContextRunKind !== "cron" &&

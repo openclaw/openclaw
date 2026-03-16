@@ -240,6 +240,13 @@ export type SessionEntry = {
    */
   agentHarnessId?: string;
   /**
+   * True when the session's runtime model was selected by the fallback chain
+   * rather than being the configured primary. Used to prevent fallback models
+   * from being persisted back to agent config and to ensure the primary model
+   * is retried on subsequent requests.
+   */
+  modelIsFromFallback?: boolean;
+  /**
    * Last selected/runtime model pair for which a fallback notice was emitted.
    * Used to avoid repeating the same fallback notice every turn.
    */
@@ -353,7 +360,7 @@ export function normalizeSessionRuntimeModelFields(entry: SessionEntry): Session
 
 export function setSessionRuntimeModel(
   entry: SessionEntry,
-  runtime: { provider: string; model: string },
+  runtime: { provider: string; model: string; isFromFallback?: boolean },
 ): boolean {
   const provider = runtime.provider.trim();
   const model = runtime.model.trim();
@@ -362,6 +369,7 @@ export function setSessionRuntimeModel(
   }
   entry.modelProvider = provider;
   entry.model = model;
+  entry.modelIsFromFallback = runtime.isFromFallback ?? false;
   return true;
 }
 

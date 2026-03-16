@@ -51,6 +51,10 @@ export type CronExecutionResult = {
   runResult: CronPromptRunResult;
   fallbackProvider: string;
   fallbackModel: string;
+  /** Provider from config/model-selection before any fallback. Updated on LiveSessionModelSwitchError. */
+  configuredProvider: string;
+  /** Model from config/model-selection before any fallback. Updated on LiveSessionModelSwitchError. */
+  configuredModel: string;
   runStartedAt: number;
   runEndedAt: number;
   liveSelection: CronLiveSelection;
@@ -312,6 +316,11 @@ export async function executeCronRun(params: {
   });
 
   const runStartedAt = params.runStartedAt ?? Date.now();
+  // Snapshot the configured provider/model before the retry loop so we can
+  // detect fallback usage later. Updated on LiveSessionModelSwitchError
+  // (model switch = new configured target, not a fallback).
+  let configuredProvider = params.liveSelection.provider;
+  let configuredModel = params.liveSelection.model;
   const MAX_MODEL_SWITCH_RETRIES = 2;
   let modelSwitchRetries = 0;
   while (true) {
@@ -335,6 +344,9 @@ export async function executeCronRun(params: {
       params.liveSelection.authProfileIdSource = err.authProfileId
         ? err.authProfileIdSource
         : undefined;
+      // A model switch changes the configured target, not a fallback.
+      configuredProvider = err.provider;
+      configuredModel = err.model;
       syncCronSessionLiveSelection({
         entry: params.cronSession.sessionEntry,
         liveSelection: params.liveSelection,
@@ -408,6 +420,8 @@ export async function executeCronRun(params: {
     runResult,
     fallbackProvider,
     fallbackModel,
+    configuredProvider,
+    configuredModel,
     runStartedAt,
     runEndedAt,
     liveSelection: params.liveSelection,

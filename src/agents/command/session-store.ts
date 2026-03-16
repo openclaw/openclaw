@@ -48,6 +48,8 @@ export async function updateSessionStoreAfterAgentRun(params: {
   defaultModel: string;
   fallbackProvider?: string;
   fallbackModel?: string;
+  /** True when the model was selected by the fallback chain rather than being the primary. */
+  isFromFallback?: boolean;
   result: RunResult;
   touchInteraction?: boolean;
 }) {
@@ -102,6 +104,7 @@ export async function updateSessionStoreAfterAgentRun(params: {
   setSessionRuntimeModel(next, {
     provider: providerUsed,
     model: modelUsed,
+    isFromFallback: params.isFromFallback ?? false,
   });
   if (agentHarnessId) {
     next.agentHarnessId = agentHarnessId;

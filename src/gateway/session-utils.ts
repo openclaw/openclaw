@@ -1066,7 +1066,10 @@ export function resolveSessionModelRef(
   cfg: OpenClawConfig,
   entry?:
     | SessionEntry
-    | Pick<SessionEntry, "model" | "modelProvider" | "modelOverride" | "providerOverride">,
+    | Pick<
+        SessionEntry,
+        "model" | "modelProvider" | "modelOverride" | "providerOverride" | "modelIsFromFallback"
+      >,
   agentId?: string,
 ): { provider: string; model: string } {
   const resolved = agentId
@@ -1082,13 +1085,21 @@ export function resolveSessionModelRef(
     modelOverride: entry?.modelOverride,
   });
 
-  const persisted = resolvePersistedSelectedModelRef({
-    defaultProvider: resolved.provider || DEFAULT_PROVIDER,
-    runtimeProvider: entry?.modelProvider,
-    runtimeModel: entry?.model,
-    overrideProvider: normalizedOverride.providerOverride,
-    overrideModel: normalizedOverride.modelOverride,
-  });
+  // Skip session-stored runtime model if it came from the fallback chain.
+  // This ensures the primary model is retried on subsequent requests rather
+  // than permanently sticking with the fallback. See #47705.
+  const isFromFallback =
+    entry && "modelIsFromFallback" in entry && entry.modelIsFromFallback === true;
+
+  const persisted = isFromFallback
+    ? null
+    : resolvePersistedSelectedModelRef({
+        defaultProvider: resolved.provider || DEFAULT_PROVIDER,
+        runtimeProvider: entry?.modelProvider,
+        runtimeModel: entry?.model,
+        overrideProvider: normalizedOverride.providerOverride,
+        overrideModel: normalizedOverride.modelOverride,
+      });
   if (persisted) {
     return persisted;
   }
