@@ -40,7 +40,7 @@ les nouveaux e-mails au lieu d'interroger périodiquement.
         // OU définir les identifiants inline (non recommandé)
         serviceAccount: {
           client_email: "openclaw@my-gcp-project.iam.gserviceaccount.com",
-          private_key: "-----BEGIN PRIVATE KEY-----\n...",
+          private_key: "EXAMPLE_KEY",
         },
 
         // Expire la montre Gmail et la réenregistre au démarrage (par défaut : false)
