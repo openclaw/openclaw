@@ -5,7 +5,12 @@ import type { Api, Model } from "@mariozechner/pi-ai";
 import { describe, expect, it } from "vitest";
 import { withEnvAsync } from "../test-utils/env.js";
 import { ensureAuthProfileStore } from "./auth-profiles.js";
-import { getApiKeyForModel, resolveApiKeyForProvider, resolveEnvApiKey } from "./model-auth.js";
+import {
+  getApiKeyForModel,
+  hasAvailableAuthForProvider,
+  resolveApiKeyForProvider,
+  resolveEnvApiKey,
+} from "./model-auth.js";
 
 const envVar = (...parts: string[]) => parts.join("_");
 
@@ -202,6 +207,40 @@ describe("getApiKeyForModel", () => {
         });
         expect(resolved.apiKey).toBe("zai-test-key");
         expect(resolved.source).toContain("Z_AI_API_KEY");
+      },
+    );
+  });
+
+  it("hasAvailableAuthForProvider('google') accepts GOOGLE_API_KEY fallback", async () => {
+    await withEnvAsync(
+      {
+        GEMINI_API_KEY: undefined,
+        GOOGLE_API_KEY: "google-test-key", // pragma: allowlist secret
+      },
+      async () => {
+        await expect(
+          hasAvailableAuthForProvider({
+            provider: "google",
+            store: { version: 1, profiles: {} },
+          }),
+        ).resolves.toBe(true);
+      },
+    );
+  });
+
+  it("hasAvailableAuthForProvider returns false when no provider auth is available", async () => {
+    await withEnvAsync(
+      {
+        ZAI_API_KEY: undefined,
+        Z_AI_API_KEY: undefined,
+      },
+      async () => {
+        await expect(
+          hasAvailableAuthForProvider({
+            provider: "zai",
+            store: { version: 1, profiles: {} },
+          }),
+        ).resolves.toBe(false);
       },
     );
   });
