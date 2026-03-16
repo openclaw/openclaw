@@ -38,7 +38,12 @@ import {
 import { parsePostContent } from "./post.js";
 import { createFeishuReplyDispatcher } from "./reply-dispatcher.js";
 import { getFeishuRuntime } from "./runtime.js";
-import { getMessageFeishu, listFeishuThreadMessages, sendMessageFeishu } from "./send.js";
+import {
+  getMessageFeishu,
+  listFeishuThreadMessages,
+  parseInteractiveCardContent,
+  sendMessageFeishu,
+} from "./send.js";
 import type { FeishuMessageContext, FeishuMediaInfo, ResolvedFeishuAccount } from "./types.js";
 import type { DynamicAgentCreationConfig } from "./types.js";
 
@@ -370,6 +375,9 @@ function parseMessageContent(content: string, messageType: string): string {
       // Return placeholder; actual content fetched asynchronously in handleFeishuMessage
       return "[Merged and Forwarded Message - loading...]";
     }
+    if (messageType === "interactive") {
+      return parseInteractiveCardContent(parsed);
+    }
     return content;
   } catch {
     return content;
@@ -471,6 +479,8 @@ function formatSubMessageContent(content: string, contentType: string): string {
         return "[Sticker]";
       case "merge_forward":
         return "[Nested Merged Forward]";
+      case "interactive":
+        return parseInteractiveCardContent(parsed);
       default:
         return `[${contentType}]`;
     }

@@ -174,41 +174,168 @@ async function sendReplyOrFallbackDirect(
   return toFeishuSendResult(response, params.directParams.receiveId);
 }
 
-function parseInteractiveCardContent(parsed: unknown): string {
+/**
+ * Recursively extract readable text from a Feishu interactive card element tree.
+ * Handles v1 (flat elements[]) and v2 (schema 2.0, body.elements[]) card formats,
+ * including nested structures like column_set, note, action buttons, etc.
+ */
+export function extractCardElementTexts(elements: unknown[]): string[] {
+  const texts: string[] = [];
+  for (const element of elements) {
+    if (!element || typeof element !== "object") continue;
+    const el = element as Record<string, unknown>;
+    const tag = el.tag as string | undefined;
+
+    // markdown element: { tag: "markdown", content: "..." }
+    if (tag === "markdown" && typeof el.content === "string") {
+      texts.push(el.content);
+      continue;
+    }
+
+    // div element: { tag: "div", text: { content: "..." } }
+    if (tag === "div") {
+      const text = el.text as { content?: string; tag?: string } | undefined;
+      if (typeof text?.content === "string") {
+        texts.push(text.content);
+      }
+      // div can also have extra[] (additional text/image elements)
+      if (Array.isArray(el.extra)) {
+        texts.push(...extractCardElementTexts(el.extra));
+      }
+      continue;
+    }
+
+    // plain_text / lark_md text objects (used inside div, note, etc.)
+    if ((tag === "plain_text" || tag === "lark_md") && typeof el.content === "string") {
+      texts.push(el.content);
+      continue;
+    }
+
+    // hr (horizontal rule) — skip silently
+    if (tag === "hr") continue;
+
+    // img element: { tag: "img", alt: { content: "..." } }
+    if (tag === "img") {
+      const alt = el.alt as { content?: string } | undefined;
+      if (typeof alt?.content === "string" && alt.content.trim()) {
+        texts.push(`[Image: ${alt.content}]`);
+      } else {
+        texts.push("[Image]");
+      }
+      continue;
+    }
+
+    // note element: { tag: "note", elements: [...] }
+    if (tag === "note" && Array.isArray(el.elements)) {
+      const noteTexts = extractCardElementTexts(el.elements as unknown[]);
+      if (noteTexts.length > 0) {
+        texts.push(`[Note: ${noteTexts.join(" ")}]`);
+      }
+      continue;
+    }
+
+    // action element: { tag: "action", actions: [...] }
+    if (tag === "action" && Array.isArray(el.actions)) {
+      for (const action of el.actions) {
+        if (!action || typeof action !== "object") continue;
+        const act = action as Record<string, unknown>;
+        const actText = act.text as { content?: string } | undefined;
+        if (typeof actText?.content === "string") {
+          texts.push(`[Button: ${actText.content}]`);
+        }
+      }
+      continue;
+    }
+
+    // column_set element: { tag: "column_set", columns: [{ elements: [...] }] }
+    if (tag === "column_set" && Array.isArray(el.columns)) {
+      for (const col of el.columns) {
+        if (!col || typeof col !== "object") continue;
+        const column = col as { elements?: unknown[] };
+        if (Array.isArray(column.elements)) {
+          texts.push(...extractCardElementTexts(column.elements));
+        }
+      }
+      continue;
+    }
+
+    // collapsible_panel: { tag: "collapsible_panel", elements: [...], header: {...} }
+    if (tag === "collapsible_panel") {
+      if (el.header && typeof el.header === "object") {
+        const header = el.header as { title?: { content?: string } };
+        if (typeof header.title?.content === "string") {
+          texts.push(header.title.content);
+        }
+      }
+      if (Array.isArray(el.elements)) {
+        texts.push(...extractCardElementTexts(el.elements as unknown[]));
+      }
+      continue;
+    }
+
+    // table element: { tag: "table", columns: [...], rows: [...] }
+    if (tag === "table") {
+      const columns = el.columns as Array<{ name?: string; display_name?: string }> | undefined;
+      const rows = el.rows as Array<Record<string, unknown>> | undefined;
+      if (Array.isArray(columns) && Array.isArray(rows)) {
+        const colNames = columns.map((c) => c.display_name || c.name || "");
+        texts.push(`| ${colNames.join(" | ")} |`);
+        for (const row of rows) {
+          const vals = columns.map((c) => {
+            const key = c.name || "";
+            const val = row[key];
+            return typeof val === "string" ? val : val != null ? String(val) : "";
+          });
+          texts.push(`| ${vals.join(" | ")} |`);
+        }
+      }
+      continue;
+    }
+
+    // Generic fallback: if element has nested elements[], recurse
+    if (Array.isArray(el.elements)) {
+      texts.push(...extractCardElementTexts(el.elements as unknown[]));
+      continue;
+    }
+
+    // Fallback: try to extract any text/content field
+    if (typeof el.content === "string" && el.content.trim()) {
+      texts.push(el.content);
+    } else if (typeof (el.text as { content?: string })?.content === "string") {
+      texts.push((el.text as { content: string }).content);
+    }
+  }
+  return texts;
+}
+
+export function parseInteractiveCardContent(parsed: unknown): string {
   if (!parsed || typeof parsed !== "object") {
     return "[Interactive Card]";
   }
 
-  // Support both schema 1.0 (top-level `elements`) and 2.0 (`body.elements`).
-  const candidate = parsed as { elements?: unknown; body?: { elements?: unknown } };
-  const elements = Array.isArray(candidate.elements)
-    ? candidate.elements
-    : Array.isArray(candidate.body?.elements)
-      ? candidate.body!.elements
-      : null;
-  if (!elements) {
-    return "[Interactive Card]";
+  const card = parsed as Record<string, unknown>;
+  const parts: string[] = [];
+
+  // Extract header title (both v1 and v2)
+  if (card.header && typeof card.header === "object") {
+    const header = card.header as { title?: { content?: string; tag?: string } };
+    if (typeof header.title?.content === "string" && header.title.content.trim()) {
+      parts.push(`**${header.title.content.trim()}**`);
+    }
   }
 
-  const texts: string[] = [];
-  for (const element of elements) {
-    if (!element || typeof element !== "object") {
-      continue;
-    }
-    const item = element as {
-      tag?: string;
-      content?: string;
-      text?: { content?: string };
-    };
-    if (item.tag === "div" && typeof item.text?.content === "string") {
-      texts.push(item.text.content);
-      continue;
-    }
-    if (item.tag === "markdown" && typeof item.content === "string") {
-      texts.push(item.content);
-    }
+  // v2 cards: body.elements[]
+  const body = card.body as { elements?: unknown[] } | undefined;
+  if (body && Array.isArray(body.elements)) {
+    parts.push(...extractCardElementTexts(body.elements));
   }
-  return texts.join("\n").trim() || "[Interactive Card]";
+
+  // v1 cards: elements[] at top level
+  if (Array.isArray(card.elements)) {
+    parts.push(...extractCardElementTexts(card.elements as unknown[]));
+  }
+
+  return parts.join("\n").trim() || "[Interactive Card]";
 }
 
 function parseFeishuMessageContent(rawContent: string, msgType: string): string {
