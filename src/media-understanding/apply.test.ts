@@ -13,14 +13,14 @@ import { clearMediaUnderstandingBinaryCacheForTests } from "./runner.js";
 import { createSafeAudioFixtureBuffer } from "./runner.test-utils.js";
 
 const resolveApiKeyForProviderMock = vi.hoisted(() =>
-  vi.fn(async () => ({
+  vi.fn<typeof resolveApiKeyForProvider>(async () => ({
     apiKey: "test-key", // pragma: allowlist secret
     source: "test",
     mode: "api-key",
   })),
 );
 const hasAvailableAuthForProviderMock = vi.hoisted(() =>
-  vi.fn(async (...args: unknown[]) => {
+  vi.fn(async (...args: Parameters<typeof resolveApiKeyForProvider>) => {
     const resolved = await resolveApiKeyForProviderMock(...args);
     return Boolean(resolved?.apiKey);
   }),
