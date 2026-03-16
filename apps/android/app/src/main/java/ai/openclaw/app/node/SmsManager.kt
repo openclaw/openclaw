@@ -552,7 +552,8 @@ class SmsManager(private val context: Context) {
             null
         }
 
-        // Query SMS
+        // Query SMS with SQL-level LIMIT and OFFSET to avoid loading all matching rows
+        val sortOrder = "${Telephony.Sms.DATE} DESC LIMIT ${params.limit} OFFSET ${params.offset}"
         val cursor = context.contentResolver.query(
             Telephony.Sms.CONTENT_URI,
             arrayOf(
@@ -569,7 +570,7 @@ class SmsManager(private val context: Context) {
             ),
             selection,
             selectionArgsArray,
-            "${Telephony.Sms.DATE} DESC"
+            sortOrder
         )
 
         cursor?.use {
@@ -583,11 +584,6 @@ class SmsManager(private val context: Context) {
             val typeIndex = it.getColumnIndex(Telephony.Sms.TYPE)
             val bodyIndex = it.getColumnIndex(Telephony.Sms.BODY)
             val statusIndex = it.getColumnIndex(Telephony.Sms.STATUS)
-
-            // Skip offset rows
-            if (params.offset > 0 && it.moveToPosition(params.offset - 1)) {
-                // Successfully moved to offset position
-            }
 
             var count = 0
             while (it.moveToNext() && count < params.limit) {
