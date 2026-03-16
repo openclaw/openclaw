@@ -60,6 +60,7 @@ class FakeNodeHostRuntime implements AcpRuntime {
   cancelRejectAfterSettled = false;
   cancelReleasesTurn = true;
   cancelNeverResolves = false;
+  cancelDelayMs = 0;
   rewriteStopReasonOnCancel = true;
   emittedEvents: AcpRuntimeEvent[] = [
     {
@@ -139,6 +140,9 @@ class FakeNodeHostRuntime implements AcpRuntime {
     }
     if (this.cancelNeverResolves) {
       await new Promise<void>(() => {});
+    }
+    if (this.cancelDelayMs > 0) {
+      await new Promise((resolve) => setTimeout(resolve, this.cancelDelayMs));
     }
     if (this.cancelReleasesTurn) {
       turn.release.resolve();
@@ -865,6 +869,154 @@ describe("handleAcpInvokeCommand", () => {
           },
         },
       });
+    });
+  });
+
+  it("preserves cancel intent after cancel-ack timeout so a late silent exit resolves as cancelled", async () => {
+    __testing.setActiveCancelAcknowledgementTimeoutMsForTests(50);
+    const runtime = new FakeNodeHostRuntime();
+    runtime.cancelDelayMs = 100;
+    runtime.emittedEvents = [];
+    registerAcpRuntimeBackend({
+      id: "acpx",
+      runtime,
+    });
+    const nodeEvents: NodeEventCall[] = [];
+
+    await handleAcpInvokeCommand(
+      buildFrame({
+        command: "acp.session.ensure",
+        payload: {
+          sessionKey: "agent:main:acp:test",
+          leaseId: "lease-1",
+          leaseEpoch: 1,
+          agent: "main",
+          mode: "persistent",
+        },
+      }),
+      buildDeps(async (event, payload) => {
+        nodeEvents.push({ event, payload });
+      }),
+    );
+
+    await handleAcpInvokeCommand(
+      buildFrame({
+        command: "acp.turn.start",
+        payload: {
+          sessionKey: "agent:main:acp:test",
+          runId: "run-late-silent-cancel",
+          leaseId: "lease-1",
+          leaseEpoch: 1,
+          requestId: "req-late-silent-cancel",
+          mode: "prompt",
+          text: "late silent cancel",
+        },
+      }),
+      buildDeps(async (event, payload) => {
+        nodeEvents.push({ event, payload });
+      }),
+    );
+
+    await runtime.waitForTurnStart();
+
+    const cancelResult = await handleAcpInvokeCommand(
+      buildFrame({
+        command: "acp.turn.cancel",
+        payload: {
+          sessionKey: "agent:main:acp:test",
+          runId: "run-late-silent-cancel",
+          leaseId: "lease-1",
+          leaseEpoch: 1,
+          reason: "manual-cancel",
+        },
+      }),
+      buildDeps(),
+    );
+
+    expect(cancelResult).toMatchObject({
+      handled: true,
+      ok: false,
+      code: "UNAVAILABLE",
+      message: expect.stringContaining("timed out waiting for cancel acknowledgement"),
+    });
+
+    await runtime.waitForTurnFinish();
+    await vi.waitFor(() => {
+      expect(nodeEvents).toHaveLength(1);
+    });
+    expect(nodeEvents.at(0)).toMatchObject({
+      event: "acp.worker.terminal",
+      payload: {
+        runId: "run-late-silent-cancel",
+        finalSeq: 0,
+        terminal: {
+          kind: "cancelled",
+          stopReason: "manual-cancel",
+        },
+      },
+    });
+  });
+
+  it("keeps a normal silent runtime exit classified as completed when no cancel intent exists", async () => {
+    const runtime = new FakeNodeHostRuntime();
+    runtime.emittedEvents = [];
+    registerAcpRuntimeBackend({
+      id: "acpx",
+      runtime,
+    });
+    const nodeEvents: NodeEventCall[] = [];
+
+    await handleAcpInvokeCommand(
+      buildFrame({
+        command: "acp.session.ensure",
+        payload: {
+          sessionKey: "agent:main:acp:test",
+          leaseId: "lease-1",
+          leaseEpoch: 1,
+          agent: "main",
+          mode: "persistent",
+        },
+      }),
+      buildDeps(async (event, payload) => {
+        nodeEvents.push({ event, payload });
+      }),
+    );
+
+    await handleAcpInvokeCommand(
+      buildFrame({
+        command: "acp.turn.start",
+        payload: {
+          sessionKey: "agent:main:acp:test",
+          runId: "run-silent-complete",
+          leaseId: "lease-1",
+          leaseEpoch: 1,
+          requestId: "req-silent-complete",
+          mode: "prompt",
+          text: "silent complete",
+        },
+      }),
+      buildDeps(async (event, payload) => {
+        nodeEvents.push({ event, payload });
+      }),
+    );
+
+    await runtime.waitForTurnStart();
+    runtime.releaseTurnToComplete();
+    await runtime.waitForTurnFinish();
+
+    await vi.waitFor(() => {
+      expect(nodeEvents).toHaveLength(1);
+    });
+    expect(nodeEvents.at(0)).toMatchObject({
+      event: "acp.worker.terminal",
+      payload: {
+        runId: "run-silent-complete",
+        finalSeq: 0,
+        terminal: {
+          kind: "completed",
+          stopReason: "done",
+        },
+      },
     });
   });
 

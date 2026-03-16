@@ -1099,8 +1099,6 @@ async function handleTurnCancel(params: AcpTurnCancelParams): Promise<AcpInvokeC
       };
     }
     session.state = "running";
-    activeTurn.cancelRequested = false;
-    activeTurn.cancelReason = undefined;
     return {
       handled: true,
       ok: false,
