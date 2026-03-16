@@ -7,6 +7,7 @@ import {
 } from "../config/port-defaults.js";
 import { isLoopbackHost } from "../gateway/net.js";
 import type { SsrFPolicy } from "../infra/net/ssrf.js";
+import { resolveUserPath } from "../utils.js";
 import {
   DEFAULT_OPENCLAW_BROWSER_COLOR,
   DEFAULT_OPENCLAW_BROWSER_ENABLED,
@@ -36,7 +37,6 @@ export type ResolvedBrowserConfig = {
   profiles: Record<string, BrowserProfileConfig>;
   ssrfPolicy?: SsrFPolicy;
   extraArgs: string[];
-  relayBindHost?: string;
 };
 
 export type ResolvedBrowserProfile = {
@@ -45,8 +45,9 @@ export type ResolvedBrowserProfile = {
   cdpUrl: string;
   cdpHost: string;
   cdpIsLoopback: boolean;
+  userDataDir?: string;
   color: string;
-  driver: "openclaw" | "extension" | "existing-session";
+  driver: "openclaw" | "existing-session";
   attachOnly: boolean;
 };
 
@@ -279,8 +280,6 @@ export function resolveBrowserConfig(
     ? cfg.extraArgs.filter((a): a is string => typeof a === "string" && a.trim().length > 0)
     : [];
   const ssrfPolicy = resolveBrowserSsrFPolicy(cfg);
-  const relayBindHost = cfg?.relayBindHost?.trim() || undefined;
-
   return {
     enabled,
     evaluateEnabled,
@@ -301,7 +300,6 @@ export function resolveBrowserConfig(
     profiles,
     ssrfPolicy,
     extraArgs,
-    relayBindHost,
   };
 }
 
@@ -322,12 +320,7 @@ export function resolveProfile(
   let cdpHost = resolved.cdpHost;
   let cdpPort = profile.cdpPort ?? 0;
   let cdpUrl = "";
-  const driver =
-    profile.driver === "extension"
-      ? "extension"
-      : profile.driver === "existing-session"
-        ? "existing-session"
-        : "openclaw";
+  const driver = profile.driver === "existing-session" ? "existing-session" : "openclaw";
 
   if (driver === "existing-session") {
     // existing-session uses Chrome MCP auto-connect; no CDP port/URL needed
@@ -337,6 +330,7 @@ export function resolveProfile(
       cdpUrl: "",
       cdpHost: "",
       cdpIsLoopback: true,
+      userDataDir: resolveUserPath(profile.userDataDir?.trim() || "") || undefined,
       color: profile.color,
       driver,
       attachOnly: true,

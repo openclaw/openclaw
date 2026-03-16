@@ -91,6 +91,42 @@ describe("browser manage output", () => {
     expect(output).not.toContain("cdpUrl:");
   });
 
+  it("shows configured userDataDir for existing-session status", async () => {
+    mocks.callBrowserRequest.mockImplementation(async (_opts: unknown, req: { path?: string }) =>
+      req.path === "/"
+        ? {
+            enabled: true,
+            profile: "brave-live",
+            driver: "existing-session",
+            transport: "chrome-mcp",
+            running: true,
+            cdpReady: true,
+            cdpHttp: true,
+            pid: 4321,
+            cdpPort: null,
+            cdpUrl: null,
+            chosenBrowser: null,
+            userDataDir: "/Users/test/Library/Application Support/BraveSoftware/Brave-Browser",
+            color: "#FB542B",
+            headless: false,
+            noSandbox: false,
+            executablePath: null,
+            attachOnly: true,
+          }
+        : {},
+    );
+
+    const program = createProgram();
+    await program.parseAsync(["browser", "--browser-profile", "brave-live", "status"], {
+      from: "user",
+    });
+
+    const output = mocks.runtimeLog.mock.calls.at(-1)?.[0] as string;
+    expect(output).toContain(
+      "userDataDir: /Users/test/Library/Application Support/BraveSoftware/Brave-Browser",
+    );
+  });
+
   it("shows chrome-mcp transport in browser profiles output", async () => {
     mocks.callBrowserRequest.mockImplementation(async (_opts: unknown, req: { path?: string }) =>
       req.path === "/profiles"
@@ -131,6 +167,7 @@ describe("browser manage output", () => {
             transport: "chrome-mcp",
             cdpPort: null,
             cdpUrl: null,
+            userDataDir: null,
             color: "#00AA00",
             isRemote: false,
           }
@@ -147,5 +184,43 @@ describe("browser manage output", () => {
     expect(output).toContain('Created profile "chrome-live"');
     expect(output).toContain("transport: chrome-mcp");
     expect(output).not.toContain("port: 0");
+  });
+
+  it("redacts sensitive remote cdpUrl details in status output", async () => {
+    mocks.callBrowserRequest.mockImplementation(async (_opts: unknown, req: { path?: string }) =>
+      req.path === "/"
+        ? {
+            enabled: true,
+            profile: "remote",
+            driver: "openclaw",
+            transport: "cdp",
+            running: true,
+            cdpReady: true,
+            cdpHttp: true,
+            pid: null,
+            cdpPort: 9222,
+            cdpUrl:
+              "https://alice:supersecretpasswordvalue1234@example.com/chrome?token=supersecrettokenvalue1234567890",
+            chosenBrowser: null,
+            userDataDir: null,
+            color: "#00AA00",
+            headless: false,
+            noSandbox: false,
+            executablePath: null,
+            attachOnly: true,
+          }
+        : {},
+    );
+
+    const program = createProgram();
+    await program.parseAsync(["browser", "--browser-profile", "remote", "status"], {
+      from: "user",
+    });
+
+    const output = mocks.runtimeLog.mock.calls.at(-1)?.[0] as string;
+    expect(output).toContain("cdpUrl: https://example.com/chrome?token=supers…7890");
+    expect(output).not.toContain("alice");
+    expect(output).not.toContain("supersecretpasswordvalue1234");
+    expect(output).not.toContain("supersecrettokenvalue1234567890");
   });
 });

@@ -91,6 +91,7 @@ function installTestRegistry(plugin: ChannelPlugin<TestAccount>) {
 
 function createManager(options?: {
   channelRuntime?: PluginRuntime["channel"];
+  resolveChannelRuntime?: () => PluginRuntime["channel"];
   loadConfig?: () => Record<string, unknown>;
 }) {
   const log = createSubsystemLogger("gateway/server-channels-test");
@@ -102,6 +103,9 @@ function createManager(options?: {
     channelLogs,
     channelRuntimeEnvs,
     ...(options?.channelRuntime ? { channelRuntime: options.channelRuntime } : {}),
+    ...(options?.resolveChannelRuntime
+      ? { resolveChannelRuntime: options.resolveChannelRuntime }
+      : {}),
   });
 }
 
@@ -136,7 +140,7 @@ describe("server-channels auto restart", () => {
     const snapshot = manager.getRuntimeSnapshot();
     const account = snapshot.channelAccounts.discord?.[DEFAULT_ACCOUNT_ID];
     expect(account?.running).toBe(false);
-    expect(account?.reconnectAttempts).toBe(10);
+    expect(account?.reconnectAttempts).toBe(11);
 
     await vi.advanceTimersByTimeAsync(200);
     expect(startAccount).toHaveBeenCalledTimes(11);
@@ -182,6 +186,29 @@ describe("server-channels auto restart", () => {
     const manager = createManager({ channelRuntime });
 
     await manager.startChannels();
+    expect(startAccount).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not resolve channelRuntime until a channel starts", async () => {
+    const channelRuntime = {
+      marker: "lazy-channel-runtime",
+    } as unknown as PluginRuntime["channel"];
+    const resolveChannelRuntime = vi.fn(() => channelRuntime);
+    const startAccount = vi.fn(async (ctx) => {
+      expect(ctx.channelRuntime).toBe(channelRuntime);
+    });
+
+    installTestRegistry(createTestPlugin({ startAccount }));
+    const manager = createManager({ resolveChannelRuntime });
+
+    expect(resolveChannelRuntime).not.toHaveBeenCalled();
+
+    void manager.getRuntimeSnapshot();
+    expect(resolveChannelRuntime).not.toHaveBeenCalled();
+
+    await manager.startChannels();
+
+    expect(resolveChannelRuntime).toHaveBeenCalledTimes(1);
     expect(startAccount).toHaveBeenCalledTimes(1);
   });
 
@@ -259,15 +286,12 @@ describe("server-channels auto restart", () => {
     expect(manager.isHealthMonitorEnabled("discord", DEFAULT_ACCOUNT_ID)).toBe(false);
   });
 
-  it("uses wrapped account config health monitor overrides", () => {
+  it("uses raw account config overrides when resolvers omit health monitor fields", () => {
     installTestRegistry(
       createTestPlugin({
         resolveAccount: () => ({
           enabled: true,
           configured: true,
-          config: {
-            healthMonitor: { enabled: false },
-          },
         }),
       }),
     );
@@ -276,12 +300,57 @@ describe("server-channels auto restart", () => {
       loadConfig: () => ({
         channels: {
           discord: {
-            healthMonitor: { enabled: true },
+            accounts: {
+              [DEFAULT_ACCOUNT_ID]: {
+                healthMonitor: { enabled: false },
+              },
+            },
           },
         },
       }),
     });
 
     expect(manager.isHealthMonitorEnabled("discord", DEFAULT_ACCOUNT_ID)).toBe(false);
+  });
+
+  it("fails closed when account resolution throws during health monitor gating", () => {
+    installTestRegistry(
+      createTestPlugin({
+        resolveAccount: () => {
+          throw new Error("unresolved SecretRef");
+        },
+      }),
+    );
+
+    const manager = createManager();
+
+    expect(manager.isHealthMonitorEnabled("discord", DEFAULT_ACCOUNT_ID)).toBe(false);
+  });
+
+  it("does not treat an empty account id as the default account when matching raw overrides", () => {
+    installTestRegistry(
+      createTestPlugin({
+        resolveAccount: () => ({
+          enabled: true,
+          configured: true,
+        }),
+      }),
+    );
+
+    const manager = createManager({
+      loadConfig: () => ({
+        channels: {
+          discord: {
+            accounts: {
+              default: {
+                healthMonitor: { enabled: false },
+              },
+            },
+          },
+        },
+      }),
+    });
+
+    expect(manager.isHealthMonitorEnabled("discord", "")).toBe(true);
   });
 });

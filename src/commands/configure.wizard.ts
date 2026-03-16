@@ -10,8 +10,8 @@ import { defaultRuntime } from "../runtime.js";
 import { note } from "../terminal/note.js";
 import { resolveUserPath } from "../utils.js";
 import { createClackPrompter } from "../wizard/clack-prompter.js";
-import { resolveOnboardingSecretInputString } from "../wizard/onboarding.secret-input.js";
 import { WizardCancelledError } from "../wizard/prompts.js";
+import { resolveSetupSecretInputString } from "../wizard/setup.secret-input.js";
 import { removeChannelConfigWizard } from "./configure.channels.js";
 import { maybeInstallDaemon } from "./configure.daemon.js";
 import { promptAuthConfig } from "./configure.gateway-auth.js";
@@ -54,7 +54,7 @@ async function resolveGatewaySecretInputForWizard(params: {
   path: string;
 }): Promise<string | undefined> {
   try {
-    return await resolveOnboardingSecretInputString({
+    return await resolveSetupSecretInputString({
       config: params.cfg,
       value: params.value,
       path: params.path,
@@ -174,6 +174,10 @@ async function promptWebToolsConfig(
     hasKeyInEnv,
   } = await import("./onboard-search.js");
   type SP = (typeof SEARCH_PROVIDER_OPTIONS)[number]["value"];
+  const defaultProvider = SEARCH_PROVIDER_OPTIONS[0]?.value;
+  if (!defaultProvider) {
+    throw new Error("No web search providers are registered.");
+  }
 
   const hasKeyForProvider = (provider: string): boolean => {
     const entry = SEARCH_PROVIDER_OPTIONS.find((e) => e.value === provider);
@@ -183,14 +187,13 @@ async function promptWebToolsConfig(
     return hasExistingKey(nextConfig, provider as SP) || hasKeyInEnv(entry);
   };
 
-  const existingProvider: string = (() => {
+  const existingProvider: SP = (() => {
     const stored = existingSearch?.provider;
     if (stored && SEARCH_PROVIDER_OPTIONS.some((e) => e.value === stored)) {
-      return stored;
+      return stored as SP;
     }
     return (
-      SEARCH_PROVIDER_OPTIONS.find((e) => hasKeyForProvider(e.value))?.value ??
-      SEARCH_PROVIDER_OPTIONS[0].value
+      SEARCH_PROVIDER_OPTIONS.find((e) => hasKeyForProvider(e.value))?.value ?? defaultProvider
     );
   })();
 

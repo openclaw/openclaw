@@ -5,6 +5,7 @@ export type OutboundReplyPayload = {
   replyToId?: string;
 };
 
+/** Extract the supported outbound reply fields from loose tool or agent payload objects. */
 export function normalizeOutboundReplyPayload(
   payload: Record<string, unknown>,
 ): OutboundReplyPayload {
@@ -24,6 +25,7 @@ export function normalizeOutboundReplyPayload(
   };
 }
 
+/** Wrap a deliverer so callers can hand it arbitrary payloads while channels receive normalized data. */
 export function createNormalizedOutboundDeliverer(
   handler: (payload: OutboundReplyPayload) => Promise<void>,
 ): (payload: unknown) => Promise<void> {
@@ -36,6 +38,7 @@ export function createNormalizedOutboundDeliverer(
   };
 }
 
+/** Prefer multi-attachment payloads, then fall back to the legacy single-media field. */
 export function resolveOutboundMediaUrls(payload: {
   mediaUrls?: string[];
   mediaUrl?: string;
@@ -49,6 +52,7 @@ export function resolveOutboundMediaUrls(payload: {
   return [];
 }
 
+/** Send media-first payloads intact, or chunk text-only payloads through the caller's transport hooks. */
 export async function sendPayloadWithChunkedTextAndMedia<
   TContext extends { payload: object },
   TResult,
@@ -90,6 +94,7 @@ export async function sendPayloadWithChunkedTextAndMedia<
   return lastResult!;
 }
 
+/** Detect numeric-looking target ids for channels that distinguish ids from handles. */
 export function isNumericTargetId(raw: string): boolean {
   const trimmed = raw.trim();
   if (!trimmed) {
@@ -98,6 +103,7 @@ export function isNumericTargetId(raw: string): boolean {
   return /^\d{3,}$/.test(trimmed);
 }
 
+/** Append attachment links to plain text when the channel cannot send media inline. */
 export function formatTextWithAttachmentLinks(
   text: string | undefined,
   mediaUrls: string[],
@@ -118,6 +124,7 @@ export function formatTextWithAttachmentLinks(
   return `${trimmedText}\n\n${mediaBlock}`;
 }
 
+/** Send a caption with only the first media item, mirroring caption-limited channel transports. */
 export async function sendMediaWithLeadingCaption(params: {
   mediaUrls: string[];
   caption: string;

@@ -171,6 +171,27 @@ async function resolveCronDeliveryContext(params: {
   deliveryContract: IsolatedDeliveryContract;
 }) {
   const deliveryPlan = resolveCronDeliveryPlan(params.job);
+  if (!deliveryPlan.requested) {
+    const resolvedDelivery = {
+      ok: false as const,
+      channel: undefined,
+      to: undefined,
+      accountId: undefined,
+      threadId: undefined,
+      mode: "implicit" as const,
+      error: new Error("cron delivery not requested"),
+    };
+    return {
+      deliveryPlan,
+      deliveryRequested: false,
+      resolvedDelivery,
+      toolPolicy: resolveCronToolPolicy({
+        deliveryRequested: false,
+        resolvedDelivery,
+        deliveryContract: params.deliveryContract,
+      }),
+    };
+  }
   const resolvedDelivery = await resolveDeliveryTarget(params.cfg, params.agentId, {
     channel: deliveryPlan.channel ?? "last",
     to: deliveryPlan.to,
