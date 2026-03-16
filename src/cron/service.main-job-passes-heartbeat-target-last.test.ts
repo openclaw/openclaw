@@ -16,6 +16,7 @@ describe("cron main job passes heartbeat target=last", () => {
     now: number;
     id: string;
     wakeMode: CronJob["wakeMode"];
+    delivery?: CronJob["delivery"];
   }): CronJob {
     return {
       id: params.id,
@@ -28,6 +29,7 @@ describe("cron main job passes heartbeat target=last", () => {
       wakeMode: params.wakeMode,
       payload: { kind: "systemEvent", text: "Check in" },
       state: { nextRunAtMs: params.now - 1 },
+      ...(params.delivery ? { delivery: params.delivery } : {}),
     };
   }
 
@@ -57,10 +59,13 @@ describe("cron main job passes heartbeat target=last", () => {
     const { storePath } = await makeStorePath();
     const now = Date.now();
 
+    // [IRIS-FIX] Job must have delivery.mode "announce" for heartbeat target
+    // to be set to "last". Jobs with delivery.mode "none" skip heartbeat delivery.
     const job = createMainCronJob({
       now,
       id: "test-main-delivery",
       wakeMode: "now",
+      delivery: { mode: "announce" },
     });
 
     await writeCronStoreSnapshot({ storePath, jobs: [job] });
@@ -86,6 +91,41 @@ describe("cron main job passes heartbeat target=last", () => {
     expect(callArgs).toBeDefined();
     expect(callArgs?.heartbeat).toBeDefined();
     expect(callArgs?.heartbeat?.target).toBe("last");
+  });
+
+  // [IRIS-FIX] Crons with delivery.mode "none" should NOT force heartbeat
+  // target "last" — they handle their own delivery via message tool.
+  it("should not pass heartbeat target for delivery.mode=none wakeMode=now main jobs", async () => {
+    const { storePath } = await makeStorePath();
+    const now = Date.now();
+
+    const job = createMainCronJob({
+      now,
+      id: "test-no-delivery",
+      wakeMode: "now",
+      delivery: { mode: "none" },
+    });
+
+    await writeCronStoreSnapshot({ storePath, jobs: [job] });
+
+    const runHeartbeatOnce = vi.fn<RunHeartbeatOnce>(async () => ({
+      status: "ran" as const,
+      durationMs: 50,
+    }));
+
+    const { cron } = createCronWithSpies({
+      storePath,
+      runHeartbeatOnce,
+    });
+
+    await runSingleTick(cron);
+
+    expect(runHeartbeatOnce).toHaveBeenCalled();
+
+    const callArgs = runHeartbeatOnce.mock.calls[0]?.[0];
+    expect(callArgs).toBeDefined();
+    // heartbeat should NOT be passed when delivery.mode is "none"
+    expect(callArgs?.heartbeat).toBeUndefined();
   });
 
   it("should not pass heartbeat target for wakeMode=next-heartbeat main jobs", async () => {

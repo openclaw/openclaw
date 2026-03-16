@@ -1070,15 +1070,19 @@ export async function executeJobCore(
         if (abortSignal?.aborted) {
           return resolveAbortError();
         }
+        // [IRIS-FIX] Respect delivery.mode: only force target "last" when the cron
+        // actually wants automatic delivery. Crons with delivery.mode "none" handle
+        // their own delivery via message tool; forcing "last" causes the heartbeat
+        // to duplicate-send output to the last active chat.
+        // Original upstream always passes { target: "last" } per issue #28508.
+        const cronDeliveryPlan = resolveCronDeliveryPlan(job);
+        const heartbeatTarget = cronDeliveryPlan.requested ? "last" : undefined;
+
         heartbeatResult = await state.deps.runHeartbeatOnce({
           reason,
           agentId: job.agentId,
           sessionKey: targetMainSessionKey,
-          // Cron-triggered heartbeats should deliver to the last active channel.
-          // Without this override, heartbeat target defaults to "none" (since
-          // e2362d35) and cron main-session responses are silently swallowed.
-          // See: https://github.com/openclaw/openclaw/issues/28508
-          heartbeat: { target: "last" },
+          ...(heartbeatTarget ? { heartbeat: { target: heartbeatTarget } } : {}),
         });
         if (
           heartbeatResult.status !== "skipped" ||

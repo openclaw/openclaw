@@ -17,7 +17,7 @@ import {
   stripHeartbeatToken,
 } from "../auto-reply/heartbeat.js";
 import { getReplyFromConfig } from "../auto-reply/reply.js";
-import { HEARTBEAT_TOKEN } from "../auto-reply/tokens.js";
+import { HEARTBEAT_TOKEN, isSilentReplyText } from "../auto-reply/tokens.js";
 import type { ReplyPayload } from "../auto-reply/types.js";
 import { getChannelPlugin } from "../channels/plugins/index.js";
 import type { ChannelHeartbeatDeps } from "../channels/plugins/types.js";
@@ -822,7 +822,13 @@ export async function runHeartbeatOnce(opts: {
       normalized.text = execFallbackText;
       normalized.shouldSkip = false;
     }
-    const shouldSkipMain = normalized.shouldSkip && !normalized.hasMedia && !hasExecCompletion;
+    // [IRIS-FIX] Also treat NO_REPLY (SILENT_REPLY_TOKEN) as a skip signal.
+    // The heartbeat only recognizes HEARTBEAT_OK via stripHeartbeatToken, but
+    // cron agents that handle their own delivery return NO_REPLY which should
+    // also suppress heartbeat delivery.
+    const isSilentReply = isSilentReplyText(replyPayload?.text);
+    const shouldSkipMain =
+      (normalized.shouldSkip || isSilentReply) && !normalized.hasMedia && !hasExecCompletion;
     if (shouldSkipMain && reasoningPayloads.length === 0) {
       await restoreHeartbeatUpdatedAt({
         storePath,
