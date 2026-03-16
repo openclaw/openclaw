@@ -208,6 +208,7 @@ describe("memory plugin e2e", () => {
       expect(embeddingsCreate).toHaveBeenCalledWith({
         model: "text-embedding-3-small",
         input: "hello dimensions",
+        encoding_format: "float",
         dimensions: 1024,
       });
     } finally {
