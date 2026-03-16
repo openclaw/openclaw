@@ -16,13 +16,24 @@ import {
   listAgentsForGateway,
   resolveSessionModelRef,
 } from "../gateway/session-utils.js";
-import { buildChannelSummary } from "../infra/channel-summary.js";
 import { resolveHeartbeatSummaryForAgent } from "../infra/heartbeat-runner.js";
 import { peekSystemEvents } from "../infra/system-events.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
 import { resolveRuntimeServiceVersion } from "../version.js";
-import { resolveLinkChannelContext } from "./status.link-channel.js";
 import type { HeartbeatStatus, SessionStatus, StatusSummary } from "./status.types.js";
+
+let channelSummaryModulePromise: Promise<typeof import("../infra/channel-summary.js")> | undefined;
+let linkChannelModulePromise: Promise<typeof import("./status.link-channel.js")> | undefined;
+
+function loadChannelSummaryModule() {
+  channelSummaryModulePromise ??= import("../infra/channel-summary.js");
+  return channelSummaryModulePromise;
+}
+
+function loadLinkChannelModule() {
+  linkChannelModulePromise ??= import("./status.link-channel.js");
+  return linkChannelModulePromise;
+}
 
 const buildFlags = (entry?: SessionEntry): string[] => {
   if (!entry) {
@@ -91,7 +102,11 @@ export async function getStatusSummary(
   const { includeSensitive = true } = options;
   const cfg = options.config ?? loadConfig();
   const needsChannelPlugins = hasPotentialConfiguredChannels(cfg);
-  const linkContext = needsChannelPlugins ? await resolveLinkChannelContext(cfg) : null;
+  const linkContext = needsChannelPlugins
+    ? await loadLinkChannelModule().then(({ resolveLinkChannelContext }) =>
+        resolveLinkChannelContext(cfg),
+      )
+    : null;
   const agentList = listAgentsForGateway(cfg);
   const heartbeatAgents: HeartbeatStatus[] = agentList.agents.map((agent) => {
     const summary = resolveHeartbeatSummaryForAgent(cfg, agent.id);
@@ -103,11 +118,13 @@ export async function getStatusSummary(
     } satisfies HeartbeatStatus;
   });
   const channelSummary = needsChannelPlugins
-    ? await buildChannelSummary(cfg, {
-        colorize: true,
-        includeAllowFrom: true,
-        sourceConfig: options.sourceConfig,
-      })
+    ? await loadChannelSummaryModule().then(({ buildChannelSummary }) =>
+        buildChannelSummary(cfg, {
+          colorize: true,
+          includeAllowFrom: true,
+          sourceConfig: options.sourceConfig,
+        }),
+      )
     : [];
   const mainSessionKey = resolveMainSessionKey(cfg);
   const queuedSystemEvents = peekSystemEvents(mainSessionKey);
