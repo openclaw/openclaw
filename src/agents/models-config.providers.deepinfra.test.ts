@@ -7,10 +7,10 @@ import { resolveImplicitProvidersForTest } from "./models-config.e2e-harness.ts"
 import { buildDeepInfraStaticProvider } from "./models-config.providers.ts";
 
 const DEEPINFRA_MODEL_IDS = [
-    "openai/gpt-oss-120b",
-    "minimaxai/minimax-m2.5",
-    "zai-org/glm-5",
-    "moonshotai/kimi-k2.5"
+  "openai/gpt-oss-120b",
+  "minimaxai/minimax-m2.5",
+  "zai-org/glm-5",
+  "moonshotai/kimi-k2.5",
 ];
 
 describe("DeepInfra implicit provider", () => {
@@ -52,7 +52,7 @@ describe("DeepInfra implicit provider", () => {
   it("should include the default deepinfra model", () => {
     const provider = buildDeepInfraStaticProvider();
     const modelIds = provider.models.map((m) => m.id);
-    expect(modelIds).toContain("deepinfra/openai/gpt-oss-120b");
+    expect(modelIds).toContain("openai/gpt-oss-120b");
   });
 
   it("should include the static fallback catalog", () => {
