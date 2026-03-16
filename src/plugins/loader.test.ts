@@ -7,13 +7,13 @@ import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { withEnv } from "../test-utils/env.js";
 async function importFreshPluginTestModules() {
   vi.resetModules();
-  vi.unmock("node:fs");
-  vi.unmock("node:fs/promises");
-  vi.unmock("node:module");
-  vi.unmock("./hook-runner-global.js");
-  vi.unmock("./hooks.js");
-  vi.unmock("./loader.js");
-  vi.unmock("jiti");
+  vi.doUnmock("node:fs");
+  vi.doUnmock("node:fs/promises");
+  vi.doUnmock("node:module");
+  vi.doUnmock("./hook-runner-global.js");
+  vi.doUnmock("./hooks.js");
+  vi.doUnmock("./loader.js");
+  vi.doUnmock("jiti");
   const [loader, hookRunnerGlobal, hooks, runtime, registry] = await Promise.all([
     import("./loader.js"),
     import("./hook-runner-global.js"),

@@ -1,3 +1,5 @@
+import { getSafeLocalStorage } from "../../local-storage.ts";
+
 const PREFIX = "openclaw:pinned:";
 
 export class PinnedMessages {
@@ -42,7 +44,7 @@ export class PinnedMessages {
 
   private load(): void {
     try {
-      const raw = localStorage.getItem(this.key);
+      const raw = getSafeLocalStorage()?.getItem(this.key);
       if (!raw) {
         return;
       }
@@ -57,7 +59,7 @@ export class PinnedMessages {
 
   private save(): void {
     try {
-      localStorage.setItem(this.key, JSON.stringify([...this._indices]));
+      getSafeLocalStorage()?.setItem(this.key, JSON.stringify([...this._indices]));
     } catch {
       // ignore
     }
