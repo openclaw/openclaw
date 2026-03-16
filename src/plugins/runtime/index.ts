@@ -4,6 +4,7 @@ import {
   resolveApiKeyForProvider as resolveApiKeyForProviderRaw,
 } from "../../agents/model-auth.js";
 import { resolveStateDir } from "../../config/paths.js";
+import { deliverOutboundPayloads } from "../../infra/outbound/deliver-runtime.js";
 import { transcribeAudioFile } from "../../media-understanding/transcribe-audio.js";
 import { textToSpeechTelephony } from "../../tts/tts.js";
 import { createRuntimeChannel } from "./runtime-channel.js";
@@ -54,6 +55,21 @@ export function createPluginRuntime(_options: CreatePluginRuntimeOptions = {}): 
     version: resolveVersion(),
     config: createRuntimeConfig(),
     subagent: _options.subagent ?? createUnavailableSubagentRuntime(),
+    outbound: {
+      deliverOutboundPayloads: (params) => {
+        // Strip internal-only fields at runtime so JS/CJS plugins cannot bypass safeguards.
+        const {
+          skipQueue: _sq,
+          mirror: _mi,
+          session: _se,
+          deps: _de,
+          ...publicParams
+        } = params as Record<string, unknown>;
+        return deliverOutboundPayloads(
+          publicParams as Parameters<typeof deliverOutboundPayloads>[0],
+        );
+      },
+    },
     system: createRuntimeSystem(),
     media: createRuntimeMedia(),
     tts: { textToSpeechTelephony },

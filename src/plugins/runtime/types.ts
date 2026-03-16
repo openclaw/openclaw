@@ -1,7 +1,20 @@
+import type { OutboundDeliveryResult } from "../../infra/outbound/deliver.js";
+import type { deliverOutboundPayloads } from "../../infra/outbound/deliver.js";
 import type { PluginRuntimeChannel } from "./types-channel.js";
 import type { PluginRuntimeCore, RuntimeLogger } from "./types-core.js";
 
 export type { RuntimeLogger };
+
+// ── Outbound delivery types (plugin-facing) ─────────────────────────
+
+/**
+ * Plugin-facing params for `deliverOutboundPayloads`.
+ * Internal fields (`skipQueue`, `mirror`, `session`, `deps`) are excluded.
+ */
+export type PluginDeliverOutboundParams = Omit<
+  Parameters<typeof deliverOutboundPayloads>[0],
+  "skipQueue" | "mirror" | "session" | "deps"
+>;
 
 // ── Subagent runtime types ──────────────────────────────────────────
 
@@ -58,6 +71,12 @@ export type PluginRuntime = PluginRuntimeCore & {
     /** @deprecated Use getSessionMessages. */
     getSession: (params: SubagentGetSessionParams) => Promise<SubagentGetSessionResult>;
     deleteSession: (params: SubagentDeleteSessionParams) => Promise<void>;
+  };
+  outbound: {
+    /** Send payloads through the standard outbound delivery pipeline (chunking, hooks, queue). */
+    deliverOutboundPayloads: (
+      params: PluginDeliverOutboundParams,
+    ) => Promise<OutboundDeliveryResult[]>;
   };
   channel: PluginRuntimeChannel;
 };
