@@ -644,15 +644,59 @@ async function ensureNodeSatisfiesUpdatedVersion(params: {
       return; // Can't check — skip gracefully
     }
 
-    // Import the freshly updated runtime guard
-    const guard = await import(guardPath);
-    const details = guard.detectRuntime?.();
-    if (!details || guard.runtimeSatisfies?.(details)) {
+    // Run the version check in a child process to bypass Node's module cache.
+    // The current process already loaded runtime-guard.js at startup, so
+    // `await import(guardPath)` would return the stale pre-update module.
+    const checkScript = [
+      `const g = require(${JSON.stringify(guardPath)});`,
+      `const d = g.detectRuntime?.();`,
+      `if (!d || g.runtimeSatisfies?.(d)) { process.exit(0); }`,
+      `process.stdout.write(JSON.stringify({ version: d.version }));`,
+      `process.exit(1);`,
+    ].join(" ");
+
+    const checkRes = await runCommandWithTimeout(
+      [process.execPath, "-e", checkScript],
+      { timeoutMs: 5_000 },
+    );
+
+    if (checkRes.code === 0) {
       return; // Current Node satisfies the new version — all good
     }
 
+    // Parse current version from child process output
+    let currentVersion = "unknown";
+    try {
+      const parsed = JSON.parse(checkRes.stdout.trim()) as { version?: string };
+      currentVersion = parsed.version ?? "unknown";
+    } catch {
+      // Fall through with "unknown"
+    }
+
+    // Detect platform
+    const os = await import("node:os");
+    const platform = os.platform();
+    const arch = os.arch();
+
+    // Windows: no POSIX toolchain — tell the user what to do instead of silently failing
+    if (platform === "win32") {
+      if (!params.jsonMode) {
+        defaultRuntime.log("");
+        defaultRuntime.log(
+          theme.warn(
+            `Node ${currentVersion} is too old for the updated OpenClaw.`,
+          ),
+        );
+        defaultRuntime.log(
+          theme.warn(
+            `Auto-upgrade is not supported on Windows. Please update Node manually: https://nodejs.org/en/download`,
+          ),
+        );
+      }
+      return;
+    }
+
     // Node is too old for the updated version — attempt auto-upgrade
-    const currentVersion = details.version ?? "unknown";
     if (!params.jsonMode) {
       defaultRuntime.log("");
       defaultRuntime.log(
@@ -661,11 +705,6 @@ async function ensureNodeSatisfiesUpdatedVersion(params: {
         ),
       );
     }
-
-    // Detect platform
-    const os = await import("node:os");
-    const platform = os.platform();
-    const arch = os.arch();
 
     const nodeArch = arch === "arm64" ? "arm64" : "x64";
     const nodePlatform = platform === "darwin" ? "darwin" : "linux";
@@ -685,16 +724,18 @@ async function ensureNodeSatisfiesUpdatedVersion(params: {
     const nodeDir = path.join(os.homedir(), ".local", "node");
     const dist = `node-${targetNodeVersion}-${nodePlatform}-${nodeArch}`;
     const url = `https://nodejs.org/dist/${targetNodeVersion}/${dist}.tar.xz`;
+    const tmpFile = "/tmp/node-upgrade.tar.xz";
 
     const upgradeRes = await runCommandWithTimeout(
       [
         "sh",
         "-c",
+        // trap ensures temp file is always cleaned up, even if tar/mkdir fails
+        `trap 'rm -f ${tmpFile}' EXIT; ` +
         [
           `mkdir -p "${nodeDir}"`,
-          `curl -fsSL "${url}" -o /tmp/node-upgrade.tar.xz`,
-          `tar -xJf /tmp/node-upgrade.tar.xz -C "${nodeDir}" --strip-components=1`,
-          `rm -f /tmp/node-upgrade.tar.xz`,
+          `curl -fsSL "${url}" -o ${tmpFile}`,
+          `tar -xJf ${tmpFile} -C "${nodeDir}" --strip-components=1`,
         ].join(" && "),
       ],
       { timeoutMs: 120_000 },
