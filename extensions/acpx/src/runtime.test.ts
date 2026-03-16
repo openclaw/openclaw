@@ -381,13 +381,9 @@ describe("AcpxRuntime", () => {
     expect(events).toContainEqual(
       expect.objectContaining({
         type: "error",
-        message: expect.stringContaining("ACP backend exited after signaling done:"),
-      }),
-    );
-    expect(events).toContainEqual(
-      expect.objectContaining({
-        type: "error",
-        message: expect.stringContaining("backend exited after done"),
+        message: expect.stringContaining(
+          "ACP backend exited after signaling done: backend exited after done",
+        ),
       }),
     );
   });
