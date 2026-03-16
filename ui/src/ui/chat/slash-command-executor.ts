@@ -5,15 +5,13 @@
 
 import type { ModelCatalogEntry } from "../../../../src/agents/model-catalog.js";
 import {
-<<<<<<< HEAD
-  formatThinkingLevels,
-  normalizeThinkLevel,
-  normalizeVerboseLevel,
-  resolveThinkingDefaultForModel,
-} from "../../../../src/auto-reply/thinking.shared.js";
+import type { ModelCatalogEntry } from "../../../../src/agents/model-catalog.js";
 import {
-=======
->>>>>>> 52fd848f2 (fix(ui): keep slash command thinking helpers browser-safe)
+  DEFAULT_AGENT_ID,
+  DEFAULT_MAIN_KEY,
+  isSubagentSessionKey,
+  parseAgentSessionKey,
+} from "../../../../src/routing/session-key.js";
   DEFAULT_AGENT_ID,
   DEFAULT_MAIN_KEY,
   isSubagentSessionKey,
