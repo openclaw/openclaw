@@ -40,7 +40,8 @@ function stripRuntimeModelState(entry?: SessionEntry): SessionEntry | undefined 
     ...entry,
     model: undefined,
     modelProvider: undefined,
-    contextTokens: undefined,
+    // contextTokens is preserved — it's model metadata, not runtime state.
+    // Clearing it breaks context window reporting after session reset.
     systemPromptReport: undefined,
   };
 }
