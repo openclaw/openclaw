@@ -1,6 +1,7 @@
 import { resolveContextTokensForModel } from "../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS, DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { resolveConfiguredModelRef } from "../agents/model-selection.js";
+import { hasPotentialConfiguredChannels } from "../channels/config-presence.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { loadConfig } from "../config/config.js";
 import {
@@ -89,7 +90,8 @@ export async function getStatusSummary(
 ): Promise<StatusSummary> {
   const { includeSensitive = true } = options;
   const cfg = options.config ?? loadConfig();
-  const linkContext = await resolveLinkChannelContext(cfg);
+  const needsChannelPlugins = hasPotentialConfiguredChannels(cfg);
+  const linkContext = needsChannelPlugins ? await resolveLinkChannelContext(cfg) : null;
   const agentList = listAgentsForGateway(cfg);
   const heartbeatAgents: HeartbeatStatus[] = agentList.agents.map((agent) => {
     const summary = resolveHeartbeatSummaryForAgent(cfg, agent.id);
@@ -100,11 +102,13 @@ export async function getStatusSummary(
       everyMs: summary.everyMs,
     } satisfies HeartbeatStatus;
   });
-  const channelSummary = await buildChannelSummary(cfg, {
-    colorize: true,
-    includeAllowFrom: true,
-    sourceConfig: options.sourceConfig,
-  });
+  const channelSummary = needsChannelPlugins
+    ? await buildChannelSummary(cfg, {
+        colorize: true,
+        includeAllowFrom: true,
+        sourceConfig: options.sourceConfig,
+      })
+    : [];
   const mainSessionKey = resolveMainSessionKey(cfg);
   const queuedSystemEvents = peekSystemEvents(mainSessionKey);
 
